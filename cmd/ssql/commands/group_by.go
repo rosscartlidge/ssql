@@ -24,7 +24,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("FIELDS").
 			String().
 			Variadic().
-			Completer(cf.NoCompleter{Hint: "<field-name>"}).
+			FieldsFromFlag("").
 			Global().
 			Help("Fields to group by").
 		Done().
@@ -35,28 +35,28 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Count records (result field name)").
 		Done().
 		Flag("-sum").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
+			Arg("field").FieldsFromFlag("").Done().
 			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
 			Accumulate().
 			Global().
 			Help("Sum field values (field name, result name)").
 		Done().
 		Flag("-avg").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
+			Arg("field").FieldsFromFlag("").Done().
 			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
 			Accumulate().
 			Global().
 			Help("Average field values (field name, result name)").
 		Done().
 		Flag("-min").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
+			Arg("field").FieldsFromFlag("").Done().
 			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
 			Accumulate().
 			Global().
 			Help("Minimum field value (field name, result name)").
 		Done().
 		Flag("-max").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
+			Arg("field").FieldsFromFlag("").Done().
 			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
 			Accumulate().
 			Global().

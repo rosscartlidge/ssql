@@ -37,20 +37,20 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-on").
 			String().
-			Completer(cf.NoCompleter{Hint: "<field-name>"}).
+			FieldsFromFlag("FILE").
 			Accumulate().
 			Local().
 			Help("Field name for equality join (same name in both sides)").
 		Done().
 		Flag("-left-field").
 			String().
-			Completer(cf.NoCompleter{Hint: "<left-field>"}).
+			FieldsFromFlag("FILE").
 			Local().
 			Help("Field name from left side").
 		Done().
 		Flag("-right-field").
 			String().
-			Completer(cf.NoCompleter{Hint: "<right-field>"}).
+			FieldsFromFlag("-right").
 			Local().
 			Help("Field name from right side").
 		Done().

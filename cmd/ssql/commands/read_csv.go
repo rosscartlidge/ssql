@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v3"
 	"github.com/rosscartlidge/ssql/v2"
@@ -28,6 +29,7 @@ func RegisterReadCSV(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Default("").
 			Help("Input CSV file (or stdin if not specified)").
 		Done().
+		CacheFieldsFrom("FILE").
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var generate bool
@@ -46,14 +48,41 @@ func RegisterReadCSV(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read CSV from file or stdin
-			var records iter.Seq[ssql.Record]
+			var originalRecords iter.Seq[ssql.Record]
 			if inputFile == "" {
-				records = ssql.ReadCSVFromReader(os.Stdin)
+				originalRecords = ssql.ReadCSVFromReader(os.Stdin)
 			} else {
 				var err error
-				records, err = ssql.ReadCSV(inputFile)
+				originalRecords, err = ssql.ReadCSV(inputFile)
 				if err != nil {
 					return fmt.Errorf("reading CSV: %w", err)
+				}
+			}
+
+			// Cache field names for completion in pipelines
+			// We peek at the first record to extract fields, then reconstruct the iterator
+			var firstRecord *ssql.Record
+			var fieldNames []string
+			records := func(yield func(ssql.Record) bool) {
+				for r := range originalRecords {
+					if firstRecord == nil {
+						// Capture first record and extract field names
+						firstRecord = &r
+						for k := range r.All() {
+							fieldNames = append(fieldNames, k)
+						}
+						// Set environment variable for completion
+						os.Setenv("AUTOCLI_FIELDS", strings.Join(fieldNames, ","))
+						if inputFile != "" {
+							// Also set file-specific cache
+							cleanName := strings.ReplaceAll(inputFile, ".", "_")
+							cleanName = strings.ReplaceAll(cleanName, "/", "_")
+							os.Setenv("AUTOCLI_FIELDS_"+cleanName, strings.Join(fieldNames, ","))
+						}
+					}
+					if !yield(r) {
+						return
+					}
 				}
 			}
 

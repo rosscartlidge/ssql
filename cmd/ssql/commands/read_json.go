@@ -3,8 +3,10 @@ package commands
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v3"
+	"github.com/rosscartlidge/ssql/v2"
 	"github.com/rosscartlidge/ssql/v2/cmd/ssql/lib"
 )
 
@@ -26,6 +28,7 @@ func RegisterReadJSON(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Required().
 			Help("Input JSON/JSONL file").
 		Done().
+		CacheFieldsFrom("FILE").
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var generate bool
@@ -52,7 +55,34 @@ func RegisterReadJSON(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 			defer input.Close()
 
-			records := lib.ReadJSON(input)
+			originalRecords := lib.ReadJSON(input)
+
+			// Cache field names for completion in pipelines
+			// We peek at the first record to extract fields, then reconstruct the iterator
+			var firstRecord *ssql.Record
+			var fieldNames []string
+			records := func(yield func(ssql.Record) bool) {
+				for r := range originalRecords {
+					if firstRecord == nil {
+						// Capture first record and extract field names
+						firstRecord = &r
+						for k := range r.All() {
+							fieldNames = append(fieldNames, k)
+						}
+						// Set environment variable for completion
+						os.Setenv("AUTOCLI_FIELDS", strings.Join(fieldNames, ","))
+						if inputFile != "" {
+							// Also set file-specific cache
+							cleanName := strings.ReplaceAll(inputFile, ".", "_")
+							cleanName = strings.ReplaceAll(cleanName, "/", "_")
+							os.Setenv("AUTOCLI_FIELDS_"+cleanName, strings.Join(fieldNames, ","))
+						}
+					}
+					if !yield(r) {
+						return
+					}
+				}
+			}
 
 			// Write as JSONL to stdout
 			if err := lib.WriteJSONL(os.Stdout, records); err != nil {

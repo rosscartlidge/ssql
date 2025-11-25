@@ -567,9 +567,9 @@ This approach eliminates runtime panics and makes generated code robust and main
 
 This library emphasizes functional composition with Go 1.23+ iterators while providing comprehensive data visualization capabilities.
 
-## CLI Tools Architecture (autocli v3.0.1+)
+## CLI Tools Architecture (autocli v3.2.0+)
 
-ssql CLI uses **autocli v3.0.1+** for native subcommand support with auto-generated help and tab completion. All 14 commands migrated as of v1.2.0. Migrated to autocli v3.0.0 as of ssql v1.13.4, updated to v3.0.1 as of ssql v1.14.1.
+ssql CLI uses **autocli v3.2.0+** for native subcommand support with auto-generated help and tab completion. All 14 commands migrated as of v1.2.0. Migrated to autocli v3.0.0 as of ssql v1.13.4, updated to v3.0.1 as of ssql v1.14.1, updated to v3.2.0 for pipeline field caching support.
 
 **Architecture Overview:**
 - `cmd/ssql/main.go` - All subcommands defined using autocli builder API
@@ -746,6 +746,53 @@ When designing CLI commands with autocli, follow these principles:
      fi
    done
    ```
+
+9. **Pipeline Field Completion with CacheFieldsFrom()**
+   - **NEW in autocli v3.2.0**: Enable field completion in pipelines where the first command reads a data file
+   - **The Problem**: In pipelines like `ssql read-csv users.csv | ssql where -match <TAB>`, the first command doesn't have flags with `FieldsFromFlag()`, so field names aren't available for completion in downstream commands
+   - **The Solution**: Use `CacheFieldsFrom("FILE")` on commands that read data files but don't need field completion themselves
+   - **Pattern:**
+   ```go
+   Subcommand("read-csv").
+       Description("Read CSV file and output JSONL stream").
+
+       Flag("FILE").
+           String().
+           FilePattern("*.csv").
+           Help("Input CSV file").
+           Done().
+
+       CacheFieldsFrom("FILE").  // Creates hidden -cache flag for pipeline support
+
+       Handler(func(ctx *cf.Context) error {
+           // Read and output CSV...
+           return nil
+       }).
+       Done()
+   ```
+   - **How It Works**:
+     1. `CacheFieldsFrom("FILE")` creates a hidden `-cache` flag
+     2. When users tab-complete `-cache <TAB>`, it reads the file and extracts field names
+     3. Returns a cache directive (`__AUTOCLI_CACHE__:field1,field2,field3`) and completion `DONE`
+     4. The bash completion script sets `AUTOCLI_FIELDS` environment variable
+     5. Downstream commands with `FieldsFromFlag()` can use this cached list
+   - **Usage Pattern**:
+   ```bash
+   # User types this to populate field cache for the pipeline:
+   ssql read-csv users.csv -cache DONE | ssql where -match <TAB>
+   #                       ^^^^^^^^^^^
+   # The -cache DONE triggers field extraction and caching
+   # Now -match can complete: name, age, email, status, etc.
+   ```
+   - **When to Use**:
+     - ✅ Commands that read data files (CSV, JSON, JSONL) as first command in pipeline
+     - ✅ Commands where field completion isn't needed for the command itself, only for piped commands
+     - ❌ Commands that already have flags with `FieldsFromFlag()` (cache is set automatically)
+     - ❌ Commands that don't read data files
+   - **Benefits**:
+     - Eliminates need to duplicate filename in downstream commands: `where -input users.csv -match <TAB>`
+     - Makes pipelines more ergonomic and Unix-like
+     - Users only specify the data file once at the start of the pipeline
 
 **Completionflags Subcommand Pattern:**
 

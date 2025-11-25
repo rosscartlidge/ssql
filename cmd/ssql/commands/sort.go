@@ -19,7 +19,7 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("FIELD").
 			String().
 			Required().
-			Completer(cf.NoCompleter{Hint: "<field-name>"}).
+			FieldsFromFlag("").
 			Global().
 			Help("Field to sort by").
 		Done().

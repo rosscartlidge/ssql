@@ -22,7 +22,7 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Generate Go code instead of executing").
 		Done().
 		Flag("-as").
-			Arg("old-field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
+			Arg("old-field").FieldsFromFlag("").Done().
 			Arg("new-field").Completer(cf.NoCompleter{Hint: "<new-name>"}).Done().
 			Accumulate().
 			Global().

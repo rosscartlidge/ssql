@@ -24,7 +24,7 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("FIELDS").
 			String().
 			Variadic().
-			Completer(cf.NoCompleter{Hint: "<field-name>"}).
+			FieldsFromFlag("").
 			Global().
 			Help("Fields to include").
 		Done().

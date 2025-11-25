@@ -21,13 +21,13 @@ func RegisterChart(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-x").
 			String().
-			Completer(cf.NoCompleter{Hint: "<field-name>"}).
+			FieldsFromFlag("").
 			Global().
 			Help("X-axis field").
 		Done().
 		Flag("-y").
 			String().
-			Completer(cf.NoCompleter{Hint: "<field-name>"}).
+			FieldsFromFlag("").
 			Global().
 			Help("Y-axis field").
 		Done().
