@@ -567,9 +567,9 @@ This approach eliminates runtime panics and makes generated code robust and main
 
 This library emphasizes functional composition with Go 1.23+ iterators while providing comprehensive data visualization capabilities.
 
-## CLI Tools Architecture (autocli v3.2.0+)
+## CLI Tools Architecture (autocli v4.0.0+)
 
-ssql CLI uses **autocli v3.2.0+** for native subcommand support with auto-generated help and tab completion. All 14 commands migrated as of v1.2.0. Migrated to autocli v3.0.0 as of ssql v1.13.4, updated to v3.0.1 as of ssql v1.14.1, updated to v3.2.0 for pipeline field caching support.
+ssql CLI uses **autocli v4.0.0+** for native subcommand support with auto-generated help and tab completion. All 14 commands migrated as of v1.2.0. Migrated to autocli v3.0.0 as of ssql v1.13.4, updated to v3.0.1 as of ssql v1.14.1, updated to v3.2.0 for pipeline field caching support, updated to v4.0.0 for field value completion.
 
 **Architecture Overview:**
 - `cmd/ssql/main.go` - All subcommands defined using autocli builder API
@@ -793,6 +793,54 @@ When designing CLI commands with autocli, follow these principles:
      - Eliminates need to duplicate filename in downstream commands: `where -input users.csv -match <TAB>`
      - Makes pipelines more ergonomic and Unix-like
      - Users only specify the data file once at the start of the pipeline
+
+10. **Field Value Completion with FieldValuesFrom()**
+   - **NEW in autocli v4.0.0**: Complete with actual data values from files, not just field names
+   - **The Problem**: When filtering or matching data, users must type exact values manually
+   - **The Solution**: Use `FieldValuesFrom("FILE", "field")` to complete with actual data values sampled from the file
+   - **Pattern:**
+   ```go
+   Flag("-match").
+       Arg("field").
+           FieldsFromFlag("FILE").     // Complete field names
+           Done().
+       Arg("operator").
+           Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt"}}).
+           Done().
+       Arg("value").
+           FieldValuesFrom("FILE", "field").  // Complete with actual values from that field!
+           Done().
+       Done()
+   ```
+   - **How It Works**:
+     1. User completes field name: `-match status <TAB>` → shows operators
+     2. User completes operator: `-match status eq <TAB>`
+     3. The completer reads the file, samples unique values from the "status" column
+     4. Returns JSON directive with values + filtered completions
+     5. Shows actual data: `active`, `pending`, `archived`, etc.
+   - **Real Example from ssql:**
+   ```bash
+   # User workflow with tab completion
+   ssql where FILE users.csv -match status <TAB>
+   # Shows operators: eq, ne, gt, ge, lt, le, contains, startswith, endswith
+
+   ssql where FILE users.csv -match status eq <TAB>
+   # Shows actual data from status column: active  pending  archived
+
+   ssql where FILE users.csv -match name eq Al<TAB>
+   # Filters and completes: Alice
+
+   # Final command
+   ssql where FILE users.csv -match name eq Alice
+   ```
+   - **Performance**: Samples up to 100 unique values from first 10,000 records (configurable)
+   - **Special Characters**: Handles spaces, quotes, commas correctly via JSON encoding
+   - **Current Implementation**: Added to `where` and `update` commands for `-match` and `-set` flags
+   - **Benefits**:
+     - Users don't need to remember exact values
+     - Reduces typos and errors
+     - Faster data exploration and filtering
+     - Works with CSV, TSV, JSON, and JSONL files
 
 **Completionflags Subcommand Pattern:**
 

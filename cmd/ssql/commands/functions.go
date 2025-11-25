@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	cf "github.com/rosscartlidge/autocli/v3"
+	cf "github.com/rosscartlidge/autocli/v4"
 )
 
 // RegisterFunctions registers the functions subcommand

@@ -5,7 +5,7 @@ import (
 	"iter"
 	"os"
 
-	cf "github.com/rosscartlidge/autocli/v3"
+	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v2"
 	"github.com/rosscartlidge/ssql/v2/cmd/ssql/lib"
 )

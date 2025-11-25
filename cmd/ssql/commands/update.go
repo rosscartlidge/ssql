@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	cf "github.com/rosscartlidge/autocli/v3"
+	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v2"
 	"github.com/rosscartlidge/ssql/v2/cmd/ssql/lib"
 )
@@ -31,14 +31,14 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-match", "-m").
 			Arg("field").FieldsFromFlag("FILE").Done().
 			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "pattern", "regexp", "regex"}}).Done().
-			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
+			Arg("value").FieldValuesFrom("FILE", "field").Done().
 			Accumulate().
 			Local().
 			Help("Condition to check: -match <field> <operator> <value>").
 		Done().
 		Flag("-set", "-s").
 			Arg("field").FieldsFromFlag("FILE").Done().
-			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
+			Arg("value").FieldValuesFrom("FILE", "field").Done().
 			Accumulate().
 			Local().
 			Help("Set field to literal value: -set <field> <value>").

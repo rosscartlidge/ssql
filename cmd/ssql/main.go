@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	cf "github.com/rosscartlidge/autocli/v3"
+	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v2/cmd/ssql/commands"
 	"github.com/rosscartlidge/ssql/v2/cmd/ssql/version"
 )
