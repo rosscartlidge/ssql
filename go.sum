@@ -1,4 +1,4 @@
 github.com/expr-lang/expr v1.17.6 h1:1h6i8ONk9cexhDmowO/A64VPxHScu7qfSl2k8OlINec=
 github.com/expr-lang/expr v1.17.6/go.mod h1:8/vRC7+7HBzESEqt5kKpYXxrxkr31SaO8r40VO/1IT4=
-github.com/rosscartlidge/autocli/v4 v4.1.1 h1:rXB4uhr9+zSA7OZCTQqXQN3PXPn7nY+ImOcFmzb/Uy0=
-github.com/rosscartlidge/autocli/v4 v4.1.1/go.mod h1:HxyY8xr+3Pv7GHcxo7nWeqptLZvF2/8Vd7oPh1QJZuY=
+github.com/rosscartlidge/autocli/v4 v4.2.0 h1:gjrJJ0lr/Z7/iWo48s+e2Nhya6XtG9vRd59dU2lR9GI=
+github.com/rosscartlidge/autocli/v4 v4.2.0/go.mod h1:HxyY8xr+3Pv7GHcxo7nWeqptLZvF2/8Vd7oPh1QJZuY=
