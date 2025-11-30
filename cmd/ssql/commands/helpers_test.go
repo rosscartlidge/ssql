@@ -3,7 +3,7 @@ package commands
 import (
 	"testing"
 
-	"github.com/rosscartlidge/ssql/v2"
+	"github.com/rosscartlidge/ssql/v3"
 )
 
 func TestApplyValueToRecord(t *testing.T) {

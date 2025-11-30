@@ -5,8 +5,8 @@ import (
 	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v2/cmd/ssql/commands"
-	"github.com/rosscartlidge/ssql/v2/cmd/ssql/version"
+	"github.com/rosscartlidge/ssql/v3/cmd/ssql/commands"
+	"github.com/rosscartlidge/ssql/v3/cmd/ssql/version"
 )
 
 func buildRootCommand() *cf.Command {

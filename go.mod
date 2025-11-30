@@ -1,4 +1,4 @@
-module github.com/rosscartlidge/ssql/v2
+module github.com/rosscartlidge/ssql/v3
 
 go 1.24.8
 

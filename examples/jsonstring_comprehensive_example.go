@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/rosscartlidge/ssql/v2"
+	"github.com/rosscartlidge/ssql/v3"
 	"slices"
 )
 

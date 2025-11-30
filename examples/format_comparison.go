@@ -6,7 +6,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
-	"github.com/rosscartlidge/ssql/v2"
+	"github.com/rosscartlidge/ssql/v3"
 	"time"
 )
 

@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/rosscartlidge/ssql/v2/cmd/ssql/version"
+	"github.com/rosscartlidge/ssql/v3/cmd/ssql/version"
 )
 
 // CodeFragment represents a piece of generated Go code in a pipeline
@@ -184,7 +184,7 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 
 	// Collect all imports and deduplicate
 	importSet := make(map[string]bool)
-	importSet["github.com/rosscartlidge/ssql/v2"] = true // Always needed
+	importSet["github.com/rosscartlidge/ssql/v3"] = true // Always needed
 
 	// If there are no final fragments, we'll auto-add JSONL output
 	if len(finalFragments) == 0 {

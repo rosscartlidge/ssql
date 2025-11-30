@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rosscartlidge/ssql/v2"
-	"github.com/rosscartlidge/ssql/v2/cmd/ssql/lib"
-	"github.com/rosscartlidge/ssql/v2/cmd/ssql/lib/runtime"
+	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v3/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v3/cmd/ssql/lib/runtime"
 )
 
 // Helper functions for command handlers

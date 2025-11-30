@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v2/cmd/ssql/version"
+	"github.com/rosscartlidge/ssql/v3/cmd/ssql/version"
 )
 
 // RegisterVersion registers the version subcommand

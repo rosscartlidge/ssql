@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v2"
-	"github.com/rosscartlidge/ssql/v2/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v3/cmd/ssql/lib"
 )
 
 // RegisterJoin registers the join subcommand
@@ -252,7 +252,7 @@ func generateJoinCode(rightFile, joinType string, onFields []string, leftField, 
 	}
 	defer rightFile_%s.Close()
 	%s := lib.ReadJSONL(rightFile_%s)`, rightVarName, rightFile, rightVarName, rightVarName, rightVarName)
-		initImports = append(initImports, "fmt", "os", "github.com/rosscartlidge/ssql/v2/cmd/ssql/lib")
+		initImports = append(initImports, "fmt", "os", "github.com/rosscartlidge/ssql/v3/cmd/ssql/lib")
 	}
 
 	// Write init fragment (note: empty command string since join command will be on stmt fragment)

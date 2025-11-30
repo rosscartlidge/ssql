@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v2"
-	"github.com/rosscartlidge/ssql/v2/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v3/cmd/ssql/lib"
 )
 
 // RegisterWhere registers the where subcommand
@@ -322,7 +322,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 	}
 
 	if len(preCompileVars) > 0 {
-		imports = append(imports, "github.com/rosscartlidge/ssql/v2/cmd/ssql/lib/runtime")
+		imports = append(imports, "github.com/rosscartlidge/ssql/v3/cmd/ssql/lib/runtime")
 	}
 
 	// Combine clauses with OR

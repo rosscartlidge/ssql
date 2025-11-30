@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/expr-lang/expr"
-	"github.com/rosscartlidge/ssql/v2"
+	"github.com/rosscartlidge/ssql/v3"
 )
 
 // CompileExprFilter compiles a boolean expression once and returns a filter function.
