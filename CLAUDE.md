@@ -226,6 +226,25 @@ ssql -help    # Should work without errors
 
 ## Project History
 
+**ssql v3.0.0 (November 2025):** SQL-aligned flag naming and operator consolidation
+- **Breaking Changes:**
+  - `where` command: `-match` → `-where`, `-expr` → `-where-expr`
+  - `update` command: `-match` → `-where`, added `-where-expr` flag
+  - Regex operators: Removed `pattern` and `regexp` aliases, kept only `regex`
+- **Reason**: Better SQL alignment (WHERE clause) and reduced confusion from duplicate operator names
+- **Migration**: Replace `-match` with `-where` and `-expr` with `-where-expr` in pipelines
+- **Example**:
+  ```bash
+  # Old (v2.x)
+  ssql where -match age gt 18 -expr 'verified == true'
+  ssql update -match status eq pending -set status approved
+
+  # New (v3.0+)
+  ssql where -where age gt 18 -where-expr 'verified == true'
+  ssql update -where status eq pending -set status approved
+  ssql update -where-expr 'total > 1000' -set-expr discount 'total * 0.1'
+  ```
+
 **ssql v1.14.0 (November 2025):** Renamed from streamv3 to ssql
 - **Repository**: `streamv3` → `ssql`
 - **Module path**: `github.com/rosscartlidge/streamv3` → `github.com/rosscartlidge/ssql`
@@ -596,7 +615,7 @@ When designing CLI commands with autocli, follow these principles:
 2. **Use Multi-Argument Flags Properly**
    - For flags with multiple related arguments, use `.Arg()` fluent API:
    ```go
-   Flag("-match").
+   Flag("-where").
        Arg("field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
        Arg("operator").Completer(&cf.StaticCompleter{Options: operators}).Done().
        Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
@@ -604,11 +623,11 @@ When designing CLI commands with autocli, follow these principles:
    - This enables proper completion for each argument position
    - Always provide hints via `NoCompleter{Hint: "..."}` when no completion is available
    - Use `StaticCompleter{Options: [...]}` for constrained values
-   - ❌ Don't use `.String()` and require quoting: `-match "field op value"`
-   - ✅ Use separate arguments: `-match field op value`
+   - ❌ Don't use `.String()` and require quoting: `-where "field op value"`
+   - ✅ Use separate arguments: `-where field op value`
 
 3. **Use `.Accumulate()` for Repeated Flags**
-   - When a flag can appear multiple times (e.g., `-match age gt 30 -match dept eq Sales`)
+   - When a flag can appear multiple times (e.g., `-where age gt 30 -where dept eq Sales`)
    - Enables building complex filters with AND/OR logic
    - The framework provides a slice of all flag occurrences
 
@@ -704,7 +723,7 @@ When designing CLI commands with autocli, follow these principles:
    - **Consistency examples:**
    ```bash
    # ✅ GOOD - All work with pipelines
-   ssql read-csv data.csv | ssql where -match age gt 25 | ssql write-csv output.csv
+   ssql read-csv data.csv | ssql where -where age gt 25 | ssql write-csv output.csv
    ssql read-csv data.csv | ssql include name age | ssql write-json
    cat data.csv | ssql read-csv | ssql limit 10 | ssql table
 
@@ -749,7 +768,7 @@ When designing CLI commands with autocli, follow these principles:
 
 9. **Pipeline Field Completion with CacheFieldsFrom()**
    - **NEW in autocli v3.2.0**: Enable field completion in pipelines where the first command reads a data file
-   - **The Problem**: In pipelines like `ssql read-csv users.csv | ssql where -match <TAB>`, the first command doesn't have flags with `FieldsFromFlag()`, so field names aren't available for completion in downstream commands
+   - **The Problem**: In pipelines like `ssql read-csv users.csv | ssql where -where <TAB>`, the first command doesn't have flags with `FieldsFromFlag()`, so field names aren't available for completion in downstream commands
    - **The Solution**: Use `CacheFieldsFrom("FILE")` on commands that read data files but don't need field completion themselves
    - **Pattern:**
    ```go
@@ -779,10 +798,10 @@ When designing CLI commands with autocli, follow these principles:
    - **Usage Pattern**:
    ```bash
    # User types this to populate field cache for the pipeline:
-   ssql read-csv users.csv -cache DONE | ssql where -match <TAB>
+   ssql read-csv users.csv -cache DONE | ssql where -where <TAB>
    #                       ^^^^^^^^^^^
    # The -cache DONE triggers field extraction and caching
-   # Now -match can complete: name, age, email, status, etc.
+   # Now -where can complete: name, age, email, status, etc.
    ```
    - **When to Use**:
      - ✅ Commands that read data files (CSV, JSON, JSONL) as first command in pipeline
@@ -790,7 +809,7 @@ When designing CLI commands with autocli, follow these principles:
      - ❌ Commands that already have flags with `FieldsFromFlag()` (cache is set automatically)
      - ❌ Commands that don't read data files
    - **Benefits**:
-     - Eliminates need to duplicate filename in downstream commands: `where -input users.csv -match <TAB>`
+     - Eliminates need to duplicate filename in downstream commands: `where -input users.csv -where <TAB>`
      - Makes pipelines more ergonomic and Unix-like
      - Users only specify the data file once at the start of the pipeline
 
@@ -800,7 +819,7 @@ When designing CLI commands with autocli, follow these principles:
    - **The Solution**: Use `FieldValuesFrom("FILE", "field")` to complete with actual data values sampled from the file
    - **Pattern:**
    ```go
-   Flag("-match").
+   Flag("-where").
        Arg("field").
            FieldsFromFlag("FILE").     // Complete field names
            Done().
@@ -813,29 +832,29 @@ When designing CLI commands with autocli, follow these principles:
        Done()
    ```
    - **How It Works**:
-     1. User completes field name: `-match status <TAB>` → shows operators
-     2. User completes operator: `-match status eq <TAB>`
+     1. User completes field name: `-where status <TAB>` → shows operators
+     2. User completes operator: `-where status eq <TAB>`
      3. The completer reads the file, samples unique values from the "status" column
      4. Returns JSON directive with values + filtered completions
      5. Shows actual data: `active`, `pending`, `archived`, etc.
    - **Real Example from ssql:**
    ```bash
    # User workflow with tab completion
-   ssql where FILE users.csv -match status <TAB>
+   ssql where FILE users.csv -where status <TAB>
    # Shows operators: eq, ne, gt, ge, lt, le, contains, startswith, endswith
 
-   ssql where FILE users.csv -match status eq <TAB>
+   ssql where FILE users.csv -where status eq <TAB>
    # Shows actual data from status column: active  pending  archived
 
-   ssql where FILE users.csv -match name eq Al<TAB>
+   ssql where FILE users.csv -where name eq Al<TAB>
    # Filters and completes: Alice
 
    # Final command
-   ssql where FILE users.csv -match name eq Alice
+   ssql where FILE users.csv -where name eq Alice
    ```
    - **Performance**: Samples up to 100 unique values from first 10,000 records (configurable)
    - **Special Characters**: Handles spaces, quotes, commas correctly via JSON encoding
-   - **Current Implementation**: Added to `where` and `update` commands for `-match` and `-set` flags
+   - **Current Implementation**: Added to `where` and `update` commands for `-where` and `-set` flags
    - **Benefits**:
      - Users don't need to remember exact values
      - Reduces typos and errors
@@ -1048,10 +1067,10 @@ Two ways to enable generation mode:
 ```bash
 # Method 1: Environment variable (affects entire pipeline)
 export SSQLGO=1
-ssql read-csv data.csv | ssql where -match age gt 25 | ssql generate-go
+ssql read-csv data.csv | ssql where -where age gt 25 | ssql generate-go
 
 # Method 2: -generate flag per command
-ssql read-csv -generate data.csv | ssql where -generate -match age gt 25 | ssql generate-go
+ssql read-csv -generate data.csv | ssql where -generate -where age gt 25 | ssql generate-go
 ```
 
 The environment variable approach is preferred for full pipelines.
@@ -1236,7 +1255,7 @@ echo '{"type":"init","var":"records"}' | ./ssql my-command -arg1 test
 # Test full pipeline
 export SSQLGO=1
 ./ssql read-csv data.csv | \
-  ./ssql where -match age gt 25 | \
+  ./ssql where -where age gt 25 | \
   ./ssql my-command -arg1 test | \
   ./ssql generate-go > program.go
 

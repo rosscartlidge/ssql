@@ -16,10 +16,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("update").
 		Description("Conditionally update record fields with new values").
 
-		Example("ssql read-csv users.csv | ssql update -match status eq pending -set status approved", "Update status from pending to approved").
+		Example("ssql read-csv users.csv | ssql update -where status eq pending -set status approved", "Update status from pending to approved").
 		Example("ssql read-csv sales.csv | ssql update -set-expr total 'price * qty'", "Calculate total using expression").
-		Example("ssql read-csv data.csv | ssql update -match age lt 18 -set category minor + -match age ge 18 -set category adult", "Categorize by age using if-else logic").
-		Example("ssql read-csv sales.csv | ssql update -set-expr discount 'total > 1000 ? total * 0.1 : 0'", "Apply conditional discount (ternary operator)").
+		Example("ssql read-csv data.csv | ssql update -where age lt 18 -set category minor + -where age ge 18 -set category adult", "Categorize by age using if-else logic").
+		Example("ssql read-csv sales.csv | ssql update -where-expr 'total > 1000' -set-expr discount 'total * 0.1'", "Apply conditional discount").
 		Example("ssql read-csv users.csv | ssql update -set-expr email 'lower(trim(email))'", "Normalize email addresses").
 		Example("ssql read-csv data.csv | ssql update -set-expr tier 'revenue > 10000 ? \"gold\" : (revenue > 5000 ? \"silver\" : \"bronze\")'", "Multi-tier categorization").
 		ClauseDescription("Clauses are evaluated in order using if-then-else logic.\nSeparators: +, -\nThe FIRST matching clause applies its updates, then processing stops (first-match-wins).\nThis is different from 'where' which uses OR logic - all clauses are evaluated.").
@@ -28,13 +28,19 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Global().
 			Help("Generate Go code instead of executing").
 		Done().
-		Flag("-match", "-m").
+		Flag("-where", "-w").
 			Arg("field").FieldsFromFlag("FILE").Done().
-			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "pattern", "regexp", "regex"}}).Done().
+			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
 			Arg("value").FieldValuesFrom("FILE", "field").Done().
 			Accumulate().
 			Local().
-			Help("Condition to check: -match <field> <operator> <value>").
+			Help("Condition to check: -where <field> <operator> <value>").
+		Done().
+		Flag("-where-expr", "-x").
+			Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
+			Accumulate().
+			Local().
+			Help("Condition using boolean expression: -where-expr <expression>").
 		Done().
 		Flag("-set", "-s").
 			Arg("field").FieldsFromFlag("FILE").Done().
@@ -74,13 +80,14 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateUpdateCode(ctx, inputFile)
 			}
 
-			// Parse clauses - each clause has optional -match conditions and required -set/-set-expr operations
+			// Parse clauses - each clause has optional -where/-where-expr conditions and required -set/-set-expr operations
 			type updateClause struct {
 				conditions []struct {
 					field string
 					op    string
 					value string
 				}
+			whereExprEvals []func(ssql.Record) (any, error)  // For -where-expr (pre-compiled)
 				updates []struct {
 					field     string
 					literal   string                              // For -set
@@ -95,7 +102,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				uc := updateClause{}
 
 				// Parse -match conditions (optional)
-				if matchesRaw, ok := clause.Flags["-match"]; ok && matchesRaw != nil {
+				if matchesRaw, ok := clause.Flags["-where"]; ok && matchesRaw != nil {
 					matches, ok := matchesRaw.([]any)
 					if ok {
 						for _, matchRaw := range matches {
@@ -118,6 +125,26 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						}
 					}
 				}
+
+			// Parse -where-expr conditions and compile expressions ONCE
+			if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
+				exprs, ok := exprsRaw.([]any)
+				if ok {
+					for _, exprRaw := range exprs {
+						expression, ok := exprRaw.(string)
+						if !ok || expression == "" {
+							continue
+						}
+
+						// Compile the expression ONCE
+						eval, err := compileExpression(expression)
+						if err != nil {
+							return fmt.Errorf("compiling where-expr %q: %w", expression, err)
+						}
+						uc.whereExprEvals = append(uc.whereExprEvals, eval)
+					}
+				}
+			}
 
 				// Parse -set operations (literal values)
 				if setOpsRaw, ok := clause.Flags["-set"]; ok && setOpsRaw != nil {
@@ -208,6 +235,30 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						}
 					}
 
+				// Check where-expr conditions
+				if allMatch {
+					for _, eval := range clause.whereExprEvals {
+						result, err := eval(frozen)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "Error evaluating where-expr: %v\n", err)
+							allMatch = false
+							break
+						}
+
+						boolResult, ok := result.(bool)
+						if !ok {
+							fmt.Fprintf(os.Stderr, "Where-expr must return boolean, got %T\n", result)
+							allMatch = false
+							break
+						}
+
+						if !boolResult {
+							allMatch = false
+							break
+						}
+					}
+				}
+
 					// If clause matches (or has no conditions), apply updates and stop
 					if allMatch {
 						for _, upd := range clause.updates {
@@ -283,6 +334,7 @@ func generateUpdateCode(ctx *cf.Context, inputFile string) error {
 			op    string
 			value string
 		}
+		whereExprs []string  // For -where-expr expressions
 		updates []struct {
 			field  string
 			value  string
@@ -296,7 +348,7 @@ func generateUpdateCode(ctx *cf.Context, inputFile string) error {
 		uc := updateClause{}
 
 		// Parse -match conditions (optional)
-		if matchesRaw, ok := clause.Flags["-match"]; ok && matchesRaw != nil {
+		if matchesRaw, ok := clause.Flags["-where"]; ok && matchesRaw != nil {
 			matches, ok := matchesRaw.([]any)
 			if ok {
 				for _, matchRaw := range matches {
@@ -318,6 +370,19 @@ func generateUpdateCode(ctx *cf.Context, inputFile string) error {
 					}
 				}
 			}
+
+		// Parse -where-expr conditions (boolean expressions)
+		if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
+			exprs, ok := exprsRaw.([]any)
+			if ok {
+				for _, exprRaw := range exprs {
+					expression, ok := exprRaw.(string)
+					if ok && expression != "" {
+						uc.whereExprs = append(uc.whereExprs, expression)
+					}
+				}
+			}
+		}
 		}
 
 		// Parse -set operations (literal values)
@@ -389,8 +454,8 @@ func generateUpdateCode(ctx *cf.Context, inputFile string) error {
 	// Check if we need frozen (for reading in conditions or evaluating expressions)
 	needsFrozen := false
 	for _, clause := range clauses {
-		// Need frozen if there are conditions
-		if len(clause.conditions) > 0 {
+		// Need frozen if there are conditions or where-exprs
+		if len(clause.conditions) > 0 || len(clause.whereExprs) > 0 {
 			needsFrozen = true
 			break
 		}
@@ -415,7 +480,7 @@ func generateUpdateCode(ctx *cf.Context, inputFile string) error {
 		indent := "\t\t"
 
 		// Generate condition check for this clause
-		if len(clause.conditions) > 0 {
+		if len(clause.conditions) > 0 || len(clause.whereExprs) > 0 {
 			if i == 0 {
 				codeBody.WriteString(indent + "if ")
 			} else {
@@ -423,20 +488,37 @@ func generateUpdateCode(ctx *cf.Context, inputFile string) error {
 			}
 
 			// Generate all conditions with AND logic
-			for j, cond := range clause.conditions {
-				if j > 0 {
+			condCount := 0
+			for _, cond := range clause.conditions {
+				if condCount > 0 {
 					codeBody.WriteString(" && ")
 				}
 				codeBody.WriteString(generateConditionCode(cond.field, cond.op, cond.value))
+				condCount++
 
 				// Track which imports are needed
 				switch cond.op {
 				case "contains", "startswith", "endswith":
 					needsStrings = true
-				case "pattern", "regexp", "regex":
+				case "regex":
 					needsRegexp = true
 				}
 			}
+
+			// Generate where-expr conditions
+			for _, whereExpr := range clause.whereExprs {
+				if condCount > 0 {
+					codeBody.WriteString(" && ")
+				}
+				needsRuntime = true
+				exprCounter++
+				varName := fmt.Sprintf("exprFilter%d", exprCounter)
+				preCompileVars = append(preCompileVars,
+					fmt.Sprintf("var %s = runtime.MustCompileExprFilter(%q)", varName, whereExpr))
+				codeBody.WriteString(varName + "(frozen)")
+				condCount++
+			}
+
 			codeBody.WriteString(" {\n")
 			indent = "\t\t\t"
 		} else if i > 0 {
@@ -572,7 +654,7 @@ func generateConditionCode(field, op, value string) string {
 	case "endswith":
 		return fmt.Sprintf("strings.HasSuffix(ssql.GetOr(frozen, %q, \"\"), %s)",
 			field, getComparisonValue(value))
-	case "pattern", "regexp", "regex":
+	case "regex":
 		// For regexp, we need to compile the pattern
 		return fmt.Sprintf("regexp.MustCompile(%s).MatchString(ssql.GetOr(frozen, %q, \"\"))",
 			getComparisonValue(value), field)

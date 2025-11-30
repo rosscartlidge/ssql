@@ -52,7 +52,7 @@ func applyOperator(fieldValue any, op string, compareValue string) bool {
 		return compareStartsWith(fieldValue, compareValue)
 	case "endswith":
 		return compareEndsWith(fieldValue, compareValue)
-	case "pattern", "regexp", "regex":
+	case "regex":
 		return comparePattern(fieldValue, compareValue)
 	default:
 		return false

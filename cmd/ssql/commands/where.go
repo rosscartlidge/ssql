@@ -16,30 +16,31 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("where").
 		Description("Filter records based on field conditions").
 
-		Example("ssql read-csv data.csv | ssql where -match age gt 18", "Filter records where age > 18").
-		Example("ssql read-csv sales.csv | ssql where -expr 'price * qty > 1000'", "Filter using expression (price * qty > 1000)").
-		Example("ssql read-csv users.csv | ssql where -match dept eq Sales + -match dept eq Marketing", "Sales OR Marketing departments").
-		Example("ssql read-csv users.csv | ssql where -expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
-		Example("ssql read-csv data.csv | ssql where -expr 'has(\"email\") and contains(email, \"@\")'", "Validate email field exists and format").
-		Example("ssql read-csv sales.csv | ssql where -expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
+		Example("ssql read-csv data.csv | ssql where -where age gt 18", "Filter records where age > 18").
+		Example("ssql read-csv sales.csv | ssql where -where-expr 'price * qty > 1000'", "Filter using expression (price * qty > 1000)").
+		Example("ssql read-csv users.csv | ssql where -where dept eq Sales + -where dept eq Marketing", "Sales OR Marketing departments").
+		Example("ssql read-csv users.csv | ssql where -where-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
+		Example("ssql read-csv data.csv | ssql where -where-expr 'has(\"email\") and contains(email, \"@\")'", "Validate email field exists and format").
+		Example("ssql read-csv sales.csv | ssql where -where-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
+
 		Flag("-generate", "-g").
 			Bool().
 			Global().
 			Help("Generate Go code instead of executing").
 		Done().
-		Flag("-match", "-m").
+		Flag("-where", "-w").
 			Arg("field").FieldsFromFlag("FILE").Done().
-			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "pattern", "regexp", "regex"}}).Done().
+			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
 			Arg("value").FieldValuesFrom("FILE", "field").Done().
 			Accumulate().
 			Local().
-			Help("Filter condition: -match <field> <operator> <value>").
+			Help("Filter condition: -where <field> <operator> <value>").
 		Done().
-		Flag("-expr", "-x").
+		Flag("-where-expr", "-x").
 			Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
 			Accumulate().
 			Local().
-			Help("Filter using boolean expression: -expr <expression>").
+			Help("Filter using boolean expression: -where-expr <expression>").
 		Done().
 		Flag("FILE").
 			String().
@@ -79,16 +80,16 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			for _, clause := range ctx.Clauses {
 				// Skip empty clauses
-				hasMatch := clause.Flags["-match"] != nil
-				hasExpr := clause.Flags["-expr"] != nil
-				if !hasMatch && !hasExpr {
+				hasWhere := clause.Flags["-where"] != nil
+				hasWhereExpr := clause.Flags["-where-expr"] != nil
+				if !hasWhere && !hasWhereExpr {
 					continue
 				}
 
 				cd := clauseData{}
 
-				// Parse -match conditions
-				if matchesRaw, ok := clause.Flags["-match"]; ok && matchesRaw != nil {
+				// Parse -where conditions
+				if matchesRaw, ok := clause.Flags["-where"]; ok && matchesRaw != nil {
 					matches, ok := matchesRaw.([]any)
 					if ok {
 						for _, matchRaw := range matches {
@@ -110,8 +111,8 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				}
 
-				// Parse and compile -expr conditions ONCE
-				if exprsRaw, ok := clause.Flags["-expr"]; ok && exprsRaw != nil {
+				// Parse and compile -where-expr conditions ONCE
+				if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
 					exprs, ok := exprsRaw.([]any)
 					if ok {
 						for _, exprRaw := range exprs {
@@ -143,7 +144,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				for _, clause := range clauses {
 					clauseMatches := true
 
-					// Check -match conditions
+					// Check -where conditions
 					for _, match := range clause.matches {
 						fieldValue, exists := ssql.Get[any](r, match.field)
 						if !exists || !applyOperator(fieldValue, match.op, match.value) {
@@ -152,7 +153,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						}
 					}
 
-					// Check -expr conditions (using pre-compiled expressions)
+					// Check -where-expr conditions (using pre-compiled expressions)
 					if clauseMatches {
 						for _, eval := range clause.exprEvals {
 							result, err := eval(r)
@@ -261,8 +262,8 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 	for _, clause := range clauses {
 		var andConditions []string
 
-		// Process -match conditions
-		if matchesRaw, ok := clause.Flags["-match"]; ok && matchesRaw != nil {
+		// Process -where conditions
+		if matchesRaw, ok := clause.Flags["-where"]; ok && matchesRaw != nil {
 			matches, ok := matchesRaw.([]any)
 			if ok && len(matches) > 0 {
 				for _, matchRaw := range matches {
@@ -287,8 +288,8 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 			}
 		}
 
-		// Process -expr conditions
-		if exprsRaw, ok := clause.Flags["-expr"]; ok && exprsRaw != nil {
+		// Process -where-expr conditions
+		if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
 			exprs, ok := exprsRaw.([]any)
 			if ok && len(exprs) > 0 {
 				for _, exprRaw := range exprs {
@@ -385,7 +386,7 @@ func generateCondition(field, op, value string) (string, []string) {
 		imports = append(imports, "strings")
 		return fmt.Sprintf("strings.HasSuffix(ssql.GetOr(r, %q, \"\"), %q)", field, value), imports
 
-	case "pattern", "regexp", "regex":
+	case "regex":
 		imports = append(imports, "regexp")
 		return fmt.Sprintf("regexp.MustCompile(%q).MatchString(ssql.GetOr(r, %q, \"\"))", value, field), imports
 
