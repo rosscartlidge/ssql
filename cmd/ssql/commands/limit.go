@@ -13,8 +13,8 @@ import (
 func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("limit").
 		Description("Take first N records (SQL LIMIT)").
-		Example("ssql read-csv data.csv | ssql limit 10", "Show first 10 records").
-		Example("ssql read-csv large.csv | ssql limit 100 | ssql table", "Preview first 100 records").
+		Example("ssql from data.csv | ssql limit 10", "Show first 10 records").
+		Example("ssql from large.csv | ssql limit 100 | ssql to table", "Preview first 100 records").
 		Flag("-generate", "-g").
 			Bool().
 			Global().

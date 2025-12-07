@@ -22,18 +22,18 @@ func TestGenerationWithEnvVar(t *testing.T) {
 		want    string // substring that should appear in output
 	}{
 		{
-			name:    "read-csv generation",
-			cmdLine: "export SSQLGO=1 && /tmp/ssql_test read-csv test.csv",
+			name:    "from generation",
+			cmdLine: "export SSQLGO=1 && /tmp/ssql_test from test.csv",
 			want:    `"type":"init"`,
 		},
 		{
 			name:    "where generation",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test where -match age gt 18`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test where -where age gt 18`,
 			want:    `"type":"stmt"`,
 		},
 		{
-			name:    "write-csv generation",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test write-csv out.csv`,
+			name:    "to csv generation",
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to csv out.csv`,
 			want:    `"type":"final"`,
 		},
 	}
@@ -66,7 +66,7 @@ func TestGenerationFlag(t *testing.T) {
 	}
 	defer os.Remove("/tmp/ssql_test")
 
-	cmd := exec.Command("/tmp/ssql_test", "read-csv", "-generate", "test.csv")
+	cmd := exec.Command("/tmp/ssql_test", "from", "-generate", "test.csv")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("Command output: %s", output)
@@ -99,8 +99,8 @@ func TestFullPipeline(t *testing.T) {
 	}
 	defer os.Remove("/tmp/ssql_test")
 
-	// Run pipeline: read-csv | where | generate-go
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test read-csv ` + tmpFile + ` | /tmp/ssql_test where -match age gt 25 | /tmp/ssql_test generate-go`
+	// Run pipeline: from | where | generate-go
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -where age gt 25 | /tmp/ssql_test generate-go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -143,7 +143,7 @@ func TestGeneratedCodeCompiles(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// Generate code
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test read-csv ` + tmpFile + ` | /tmp/ssql_test where -match age gt 25 | /tmp/ssql_test generate-go`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -where age gt 25 | /tmp/ssql_test generate-go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -199,17 +199,17 @@ func TestLimitOffsetSortDistinct(t *testing.T) {
 	}{
 		{
 			name:    "limit command",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test limit -n 5`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test limit 5`,
 			want:    []string{`"type":"stmt"`, `"var":"limited"`, `Limit[ssql.Record](5)`},
 		},
 		{
 			name:    "offset command",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test offset -n 10`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test offset 10`,
 			want:    []string{`"type":"stmt"`, `"var":"skipped"`, `Offset[ssql.Record](10)`},
 		},
 		{
 			name:    "sort command",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test sort -field age`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test sort age`,
 			want:    []string{`"type":"stmt"`, `"var":"sorted"`, `SortBy`, `age`},
 		},
 		{
@@ -219,7 +219,7 @@ func TestLimitOffsetSortDistinct(t *testing.T) {
 		},
 		{
 			name:    "pipeline with all commands",
-			cmdLine: `export SSQLGO=1 && /tmp/ssql_test read-csv ` + tmpFile + ` | /tmp/ssql_test where -match age gt 25 | /tmp/ssql_test limit -n 5 | /tmp/ssql_test offset -n 1 | /tmp/ssql_test sort -field age -desc | /tmp/ssql_test distinct | /tmp/ssql_test generate-go`,
+			cmdLine: `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -where age gt 25 | /tmp/ssql_test limit 5 | /tmp/ssql_test offset 1 | /tmp/ssql_test sort age -desc | /tmp/ssql_test distinct | /tmp/ssql_test generate-go`,
 			want:    []string{"package main", "ssql.ReadCSV", "ssql.Where", "ssql.Limit", "ssql.Offset", "ssql.SortBy", "ssql.DistinctBy"},
 		},
 	}
@@ -267,32 +267,32 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 		wantSubstring  string // substring to verify in generated code
 	}{
 		{
-			name:           "read-csv",
-			cmdLine:        "SSQLGO=1 /tmp/ssql_test read-csv " + tmpFile,
+			name:           "from",
+			cmdLine:        "SSQLGO=1 /tmp/ssql_test from " + tmpFile,
 			expectFragment: true,
 			wantSubstring:  `"type":"init"`,
 		},
 		{
 			name:           "where",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test where -match age gt 25`,
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test where -where age gt 25`,
 			expectFragment: true,
 			wantSubstring:  `ssql.Where`,
 		},
 		{
 			name:           "limit",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test limit -n 10`,
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test limit 10`,
 			expectFragment: true,
 			wantSubstring:  `ssql.Limit`,
 		},
 		{
 			name:           "offset",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test offset -n 5`,
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test offset 5`,
 			expectFragment: true,
 			wantSubstring:  `ssql.Offset`,
 		},
 		{
 			name:           "sort",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test sort -field age`,
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test sort age`,
 			expectFragment: true,
 			wantSubstring:  `ssql.SortBy`,
 		},
@@ -304,19 +304,19 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 		},
 		{
 			name:           "group-by",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by -by dept -func count -result count`,
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -count total`,
 			expectFragment: true,
 			wantSubstring:  `ssql.GroupByFields`,
 		},
 		{
-			name:           "write-csv",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test write-csv /tmp/out.csv`,
+			name:           "to csv",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to csv /tmp/out.csv`,
 			expectFragment: true,
 			wantSubstring:  `ssql.WriteCSV`,
 		},
 		{
 			name:           "chart",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test chart -x age -y salary`,
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to chart -x age -y salary`,
 			expectFragment: true,
 			wantSubstring:  `ssql.QuickChart`,
 		},
@@ -359,7 +359,7 @@ func TestChartGeneration(t *testing.T) {
 	defer os.Remove("/tmp/ssql_test")
 
 	// Test that chart generates code when SSQLGO=1
-	cmdLine := `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test chart -x z_kind -y count`
+	cmdLine := `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to chart -x z_kind -y count`
 	cmd := exec.Command("bash", "-c", cmdLine)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -470,7 +470,7 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 	}{
 		{
 			name:    "simple conditional - single clause",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -match age gt 30 -set priority high`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -where age gt 30 -set priority high`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.Update`,
@@ -481,7 +481,7 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 		},
 		{
 			name:    "multiple clauses - first match wins",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -match purchases gt 5000 -set tier Gold + -match purchases gt 1000 -set tier Silver + -set tier Bronze`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -where purchases gt 5000 -set tier Gold + -where purchases gt 1000 -set tier Silver + -set tier Bronze`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.Update`,
@@ -494,7 +494,7 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 		},
 		{
 			name:    "AND logic within clause",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -match status eq active -match age gt 30 -set priority high`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -where status eq active -where age gt 30 -set priority high`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.Update`,
@@ -506,7 +506,7 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 		},
 		{
 			name:    "multiple updates per clause",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -match tier eq Gold -set discount 0.2 -set priority high`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -where tier eq Gold -set discount 0.2 -set priority high`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.Update`,
@@ -553,7 +553,7 @@ func TestTableGeneration(t *testing.T) {
 	}{
 		{
 			name:    "basic table generation",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test table`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to table`,
 			wantStrs: []string{
 				`"type":"final"`,
 				`ssql.DisplayTable`,
@@ -563,7 +563,7 @@ func TestTableGeneration(t *testing.T) {
 		},
 		{
 			name:    "table with max-width",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test table -max-width 30`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to table -max-width 30`,
 			wantStrs: []string{
 				`"type":"final"`,
 				`ssql.DisplayTable`,
@@ -611,7 +611,7 @@ func TestIncludeGeneration(t *testing.T) {
 				`"type":"stmt"`,
 				`"var":"included"`,
 				`ssql.Select`,
-				`[]string{\"name\", \"age\"}`,
+				`includedMap`,
 			},
 		},
 		{
@@ -620,7 +620,9 @@ func TestIncludeGeneration(t *testing.T) {
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`"var":"included"`,
-				`[]string{\"field1\", \"field2\", \"field3\"}`,
+				`field1`,
+				`field2`,
+				`field3`,
 			},
 		},
 	}
@@ -664,7 +666,9 @@ func TestExcludeGeneration(t *testing.T) {
 				`"type":"stmt"`,
 				`"var":"excluded"`,
 				`ssql.Select`,
-				`map[string]bool{\"salary\": true, \"city\": true}`,
+				`Delete`,
+				`salary`,
+				`city`,
 			},
 		},
 		{
@@ -673,9 +677,10 @@ func TestExcludeGeneration(t *testing.T) {
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`"var":"excluded"`,
-				`\"field1\": true`,
-				`\"field2\": true`,
-				`\"field3\": true`,
+				`Delete`,
+				`field1`,
+				`field2`,
+				`field3`,
 			},
 		},
 	}
@@ -719,9 +724,9 @@ func TestRenameGeneration(t *testing.T) {
 				`"type":"stmt"`,
 				`"var":"renamed"`,
 				`ssql.Select`,
-				`map[string]string{`,
-				`\"name\": \"full_name\"`,
-				`\"age\": \"years\"`,
+				`Rename`,
+				`name`,
+				`full_name`,
 			},
 		},
 		{
@@ -730,7 +735,9 @@ func TestRenameGeneration(t *testing.T) {
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`"var":"renamed"`,
-				`\"old\": \"new\"`,
+				`Rename`,
+				`old`,
+				`new`,
 			},
 		},
 	}
@@ -754,7 +761,7 @@ func TestRenameGeneration(t *testing.T) {
 	}
 }
 
-// TestReadJSONGeneration tests code generation for the read-json command
+// TestReadJSONGeneration tests code generation for the from command
 func TestReadJSONGeneration(t *testing.T) {
 	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
 	if err := buildCmd.Run(); err != nil {
@@ -768,8 +775,8 @@ func TestReadJSONGeneration(t *testing.T) {
 		wantStrs []string
 	}{
 		{
-			name:    "read-json basic",
-			cmdLine: `SSQLGO=1 /tmp/ssql_test read-json /tmp/test.json`,
+			name:    "from basic",
+			cmdLine: `SSQLGO=1 /tmp/ssql_test from /tmp/test.json`,
 			wantStrs: []string{
 				`"type":"init"`,
 				`"var":"records"`,
@@ -798,7 +805,7 @@ func TestReadJSONGeneration(t *testing.T) {
 	}
 }
 
-// TestWriteJSONGeneration tests code generation for the write-json command
+// TestWriteJSONGeneration tests code generation for the to json command
 func TestWriteJSONGeneration(t *testing.T) {
 	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
 	if err := buildCmd.Run(); err != nil {
@@ -812,8 +819,8 @@ func TestWriteJSONGeneration(t *testing.T) {
 		wantStrs []string
 	}{
 		{
-			name:    "write-json JSONL mode",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test write-json /tmp/output.jsonl`,
+			name:    "to json JSONL mode",
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to json /tmp/output.jsonl`,
 			wantStrs: []string{
 				`"type":"final"`,
 				`ssql.WriteJSON`,
@@ -821,8 +828,8 @@ func TestWriteJSONGeneration(t *testing.T) {
 			},
 		},
 		{
-			name:    "write-json pretty mode",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test write-json -pretty /tmp/output.json`,
+			name:    "to json pretty mode",
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to json -pretty /tmp/output.json`,
 			wantStrs: []string{
 				`"type":"final"`,
 				`ssql.WriteJSONPretty`,
@@ -879,7 +886,7 @@ func TestJoinGeneration(t *testing.T) {
 	}{
 		{
 			name:    "join basic with -on",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -right /tmp/test_orders.csv -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.csv -on user_id`,
 			wantStrs: []string{
 				`"type":"init"`,
 				`rightRecords`,
@@ -894,7 +901,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with -type left",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type left -right /tmp/test_orders.csv -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type left /tmp/test_orders.csv -on user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.LeftJoin`,
@@ -902,7 +909,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with -type right",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type right -right /tmp/test_orders.csv -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type right /tmp/test_orders.csv -on user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.RightJoin`,
@@ -910,7 +917,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with -type full",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type full -right /tmp/test_orders.csv -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type full /tmp/test_orders.csv -on user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.FullJoin`,
@@ -918,7 +925,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with multiple -on fields",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -right /tmp/test_orders.csv -on field1 -on field2`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.csv -on field1 -on field2`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.OnFields`,
@@ -970,7 +977,7 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 	defer os.Remove("/tmp/test_orders.csv")
 
 	// Test full pipeline with join
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test read-csv /tmp/test_users.csv | /tmp/ssql_test join -right /tmp/test_orders.csv -on user_id | /tmp/ssql_test generate-go`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join /tmp/test_orders.csv -on user_id | /tmp/ssql_test generate-go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

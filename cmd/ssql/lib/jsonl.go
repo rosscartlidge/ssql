@@ -81,20 +81,8 @@ func WriteJSONL(w io.Writer, records iter.Seq[ssql.Record]) error {
 	return writer.Flush()
 }
 
-// OpenInput opens an input source (file or stdin)
-func OpenInput(filename string) (io.ReadCloser, error) {
-	if filename == "" || filename == "-" {
-		// Check if stdin has data
-		stat, err := os.Stdin.Stat()
-		if err != nil {
-			return nil, fmt.Errorf("checking stdin: %w", err)
-		}
-		if (stat.Mode() & os.ModeCharDevice) != 0 {
-			return nil, fmt.Errorf("no input provided (use file or pipe data to stdin)")
-		}
-		return os.Stdin, nil
-	}
-
+// OpenInputFile opens a file for input (not stdin - use os.Stdin directly for that)
+func OpenInputFile(filename string) (io.ReadCloser, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("opening file %s: %w", filename, err)
@@ -123,16 +111,13 @@ func setValueFromJSON(record ssql.MutableRecord, key string, v interface{}) ssql
 		// Skip nil values - don't set the field
 		return record
 	case []interface{}:
-		// Convert array to JSON string for storage
-		jsonBytes, err := json.Marshal(val)
-		if err != nil {
-			return record.String(key, fmt.Sprintf("%v", val))
+		// Convert array to []any for storage (preserves as proper slice, not JSONString)
+		// This allows the array to be serialized back as a JSON array
+		result := make([]any, len(val))
+		for i, elem := range val {
+			result[i] = elem
 		}
-		jsonStr, err := ssql.NewJSONString(jsonBytes)
-		if err != nil {
-			return record.String(key, string(jsonBytes))
-		}
-		return record.JSONString(key, jsonStr)
+		return ssql.Set(record, key, result)
 	case map[string]interface{}:
 		// Nested object - convert to Record recursively
 		nested := ssql.MakeMutableRecord()
@@ -169,6 +154,13 @@ func convertRecordValue(v interface{}) interface{} {
 	case int64, float64, bool, string, nil:
 		// Canonical types pass through
 		return val
+	case []any:
+		// Convert slice elements recursively (for Collect aggregation results)
+		result := make([]interface{}, len(val))
+		for i, elem := range val {
+			result[i] = convertRecordValue(elem)
+		}
+		return result
 	default:
 		// For sequences and other types, try to convert to simple representation
 		return fmt.Sprintf("%v", v)

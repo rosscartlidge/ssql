@@ -44,7 +44,7 @@ echo "    ssql where -match department eq Engineering | \\"
 echo "    ssql select -field name + -field age + -field salary | \\"
 echo "    ssql sort -field salary -desc | \\"
 echo "    ssql limit -n 3 | \\"
-echo "    ssql write-csv > /tmp/top_engineers.csv"
+echo "    ssql to csv > /tmp/top_engineers.csv"
 echo
 
 ssql read-csv /tmp/employees.csv | \
@@ -52,7 +52,7 @@ ssql read-csv /tmp/employees.csv | \
   ssql select -field name + -field age + -field salary | \
   ssql sort -field salary -desc | \
   ssql limit -n 3 | \
-  ssql write-csv > /tmp/top_engineers.csv
+  ssql to csv > /tmp/top_engineers.csv
 
 echo "Output saved to: /tmp/top_engineers.csv"
 echo

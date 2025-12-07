@@ -16,12 +16,12 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("update").
 		Description("Conditionally update record fields with new values").
 
-		Example("ssql read-csv users.csv | ssql update -where status eq pending -set status approved", "Update status from pending to approved").
-		Example("ssql read-csv sales.csv | ssql update -set-expr total 'price * qty'", "Calculate total using expression").
-		Example("ssql read-csv data.csv | ssql update -where age lt 18 -set category minor + -where age ge 18 -set category adult", "Categorize by age using if-else logic").
-		Example("ssql read-csv sales.csv | ssql update -where-expr 'total > 1000' -set-expr discount 'total * 0.1'", "Apply conditional discount").
-		Example("ssql read-csv users.csv | ssql update -set-expr email 'lower(trim(email))'", "Normalize email addresses").
-		Example("ssql read-csv data.csv | ssql update -set-expr tier 'revenue > 10000 ? \"gold\" : (revenue > 5000 ? \"silver\" : \"bronze\")'", "Multi-tier categorization").
+		Example("ssql from users.csv | ssql update -where status eq pending -set status approved", "Update status from pending to approved").
+		Example("ssql from sales.csv | ssql update -set-expr total 'price * qty'", "Calculate total using expression").
+		Example("ssql from data.csv | ssql update -where age lt 18 -set category minor + -where age ge 18 -set category adult", "Categorize by age using if-else logic").
+		Example("ssql from sales.csv | ssql update -where-expr 'total > 1000' -set-expr discount 'total * 0.1'", "Apply conditional discount").
+		Example("ssql from users.csv | ssql update -set-expr email 'lower(trim(email))'", "Normalize email addresses").
+		Example("ssql from data.csv | ssql update -set-expr tier 'revenue > 10000 ? \"gold\" : (revenue > 5000 ? \"silver\" : \"bronze\")'", "Multi-tier categorization").
 		ClauseDescription("Clauses are evaluated in order using if-then-else logic.\nSeparators: +, -\nThe FIRST matching clause applies its updates, then processing stops (first-match-wins).\nThis is different from 'where' which uses OR logic - all clauses are evaluated.").
 		Flag("-generate", "-g").
 			Bool().
@@ -29,9 +29,9 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Generate Go code instead of executing").
 		Done().
 		Flag("-where", "-w").
-			Arg("field").FieldsFromFlag("FILE").Done().
+			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
 			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
-			Arg("value").FieldValuesFrom("FILE", "field").Done().
+			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
 			Accumulate().
 			Local().
 			Help("Condition to check: -where <field> <operator> <value>").
@@ -43,33 +43,21 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Condition using boolean expression: -where-expr <expression>").
 		Done().
 		Flag("-set", "-s").
-			Arg("field").FieldsFromFlag("FILE").Done().
-			Arg("value").FieldValuesFrom("FILE", "field").Done().
+			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
+			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
 			Accumulate().
 			Local().
 			Help("Set field to literal value: -set <field> <value>").
 		Done().
 		Flag("-set-expr", "-e").
-			Arg("field").FieldsFromFlag("FILE").Done().
+			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
 			Arg("expression").Completer(cf.NoCompleter{Hint: "<expression>"}).Done().
 			Accumulate().
 			Local().
 			Help("Set field to expression result: -set-expr <field> <expression>").
 		Done().
-		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-			Global().
-			Default("").
-			Help("Input JSONL file (or stdin if not specified)").
-		Done().
 		Handler(func(ctx *cf.Context) error {
-			var inputFile string
 			var generate bool
-
-			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
-			}
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
@@ -77,7 +65,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateUpdateCode(ctx, inputFile)
+				return generateUpdateCode(ctx)
 			}
 
 			// Parse clauses - each clause has optional -where/-where-expr conditions and required -set/-set-expr operations
@@ -210,14 +198,8 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("no -set or -set-expr operations specified")
 			}
 
-			// Read JSONL from stdin or file
-			input, err := lib.OpenInput(inputFile)
-			if err != nil {
-				return err
-			}
-			defer input.Close()
-
-			records := lib.ReadJSONL(input)
+			// Read JSONL from stdin
+			records := lib.ReadJSONL(os.Stdin)
 
 			// Build update filter with first-match-wins clause evaluation (using pre-compiled expressions)
 			updateFilter := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
@@ -305,7 +287,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // generateUpdateCode generates Go code for the update command with conditional clauses
-func generateUpdateCode(ctx *cf.Context, inputFile string) error {
+func generateUpdateCode(ctx *cf.Context) error {
 	// Read all previous code fragments from stdin
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {

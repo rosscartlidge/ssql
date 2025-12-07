@@ -34,7 +34,7 @@ echo "  ssql read-csv /tmp/employees.csv | \\"
 echo "    ssql select -field name + -field salary | \\"
 echo "    ssql sort -field salary -desc | \\"
 echo "    ssql limit -n 3 | \\"
-echo "    ssql write-csv"
+echo "    ssql to csv"
 echo
 echo "Results:"
 
@@ -42,7 +42,7 @@ ssql read-csv /tmp/employees.csv | \
   ssql select -field name + -field salary | \
   ssql sort -field salary -desc | \
   ssql limit -n 3 | \
-  ssql write-csv
+  ssql to csv
 
 echo
 echo "Top 3 earners:"

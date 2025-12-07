@@ -16,12 +16,12 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("where").
 		Description("Filter records based on field conditions").
 
-		Example("ssql read-csv data.csv | ssql where -where age gt 18", "Filter records where age > 18").
-		Example("ssql read-csv sales.csv | ssql where -where-expr 'price * qty > 1000'", "Filter using expression (price * qty > 1000)").
-		Example("ssql read-csv users.csv | ssql where -where dept eq Sales + -where dept eq Marketing", "Sales OR Marketing departments").
-		Example("ssql read-csv users.csv | ssql where -where-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
-		Example("ssql read-csv data.csv | ssql where -where-expr 'has(\"email\") and contains(email, \"@\")'", "Validate email field exists and format").
-		Example("ssql read-csv sales.csv | ssql where -where-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
+		Example("ssql from data.csv | ssql where -where age gt 18", "Filter records where age > 18").
+		Example("ssql from sales.csv | ssql where -where-expr 'price * qty > 1000'", "Filter using expression (price * qty > 1000)").
+		Example("ssql from users.csv | ssql where -where dept eq Sales + -where dept eq Marketing", "Sales OR Marketing departments").
+		Example("ssql from users.csv | ssql where -where-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
+		Example("ssql from data.csv | ssql where -where-expr 'has(\"email\") and contains(email, \"@\")'", "Validate email field exists and format").
+		Example("ssql from sales.csv | ssql where -where-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
 
 		Flag("-generate", "-g").
 			Bool().
@@ -29,9 +29,9 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Generate Go code instead of executing").
 		Done().
 		Flag("-where", "-w").
-			Arg("field").FieldsFromFlag("FILE").Done().
+			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
 			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
-			Arg("value").FieldValuesFrom("FILE", "field").Done().
+			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
 			Accumulate().
 			Local().
 			Help("Filter condition: -where <field> <operator> <value>").
@@ -42,20 +42,8 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Local().
 			Help("Filter using boolean expression: -where-expr <expression>").
 		Done().
-		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-			Global().
-			Default("").
-			Help("Input JSONL file (or stdin if not specified)").
-		Done().
 		Handler(func(ctx *cf.Context) error {
-			var inputFile string
 			var generate bool
-
-			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
-			}
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
@@ -63,7 +51,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateWhereCode(ctx, inputFile)
+				return generateWhereCode(ctx)
 			}
 
 			// Pre-compile all expressions ONCE before processing records
@@ -185,14 +173,8 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return false
 			}
 
-			// Read JSONL from stdin or file
-			input, err := lib.OpenInput(inputFile)
-			if err != nil {
-				return err
-			}
-			defer input.Close()
-
-			records := lib.ReadJSONL(input)
+			// Read JSONL from stdin
+			records := lib.ReadJSONL(os.Stdin)
 
 			// Apply filter
 			filtered := ssql.Where(filter)(records)
@@ -209,7 +191,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // generateWhereCode generates Go code for the where command
-func generateWhereCode(ctx *cf.Context, inputFile string) error {
+func generateWhereCode(ctx *cf.Context) error {
 	// Read all previous code fragments from stdin (if any)
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {

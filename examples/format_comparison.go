@@ -16,6 +16,9 @@ func main() {
 
 	// Create test data that represents realistic pipeline data
 	// (after JSON round-trip, iter.Seq becomes []interface{})
+	tagsJSON1, _ := ssql.NewJSONString([]string{"electronics", "mobile", "premium"})
+	tagsJSON2, _ := ssql.NewJSONString([]string{"electronics", "computer", "professional"})
+
 	testData := []ssql.Record{
 		ssql.MakeMutableRecord().
 			String("id", "PRODUCT-001").
@@ -24,7 +27,7 @@ func main() {
 			Float("price", 1199.99).
 			Int("stock", int64(150)).
 			String("description", "Latest flagship smartphone with advanced camera system and A17 Pro chip").
-			JSON("tags", ssql.NewJSONString([]string{"electronics", "mobile", "premium"})).
+			JSONString("tags", tagsJSON1).
 			Int("_line_number", int64(0)).
 			Freeze(),
 		ssql.MakeMutableRecord().
@@ -34,7 +37,7 @@ func main() {
 			Float("price", 2499.99).
 			Int("stock", int64(75)).
 			String("description", "Professional laptop with M3 Max chip, 32GB RAM, and 1TB SSD storage").
-			JSON("tags", ssql.NewJSONString([]string{"electronics", "computer", "professional"})).
+			JSONString("tags", tagsJSON2).
 			Int("_line_number", int64(1)).
 			Freeze(),
 	}

@@ -8,6 +8,7 @@ import (
 	"iter"
 	"maps"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -133,6 +134,33 @@ func ChainWithErrors[T any](filters ...FilterWithErrors[T, T]) FilterWithErrors[
 	}
 }
 
+// Concat combines multiple sequences into a single sequence.
+// Elements are yielded in order: all elements from the first sequence,
+// then all from the second, etc. Supports early termination.
+//
+// This is useful for combining data from multiple sources (SQL UNION ALL):
+//
+//	combined := ssql.Concat(
+//	    ssql.ReadCSV("2023.csv"),
+//	    ssql.ReadCSV("2024.csv"),
+//	    ssql.ReadCSV("2025.csv"),
+//	)
+//
+// For UNION (with deduplication), combine with DistinctBy:
+//
+//	result := ssql.DistinctBy(ssql.RecordKey)(combined)
+func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for _, seq := range seqs {
+			for item := range seq {
+				if !yield(item) {
+					return
+				}
+			}
+		}
+	}
+}
+
 // ============================================================================
 // RECORD SYSTEM
 // ============================================================================
@@ -240,10 +268,13 @@ type Value interface {
 		// JSON and Record types for structured data
 		JSONString | Record |
 
+		// Slice type for aggregation results (e.g., Collect)
+		[]any |
+
 		// Iterator types - common types for ergonomics with slices.Values()
 		iter.Seq[int] | iter.Seq[int64] | iter.Seq[float64] |
 		iter.Seq[bool] | iter.Seq[string] | iter.Seq[time.Time] |
-		iter.Seq[Record]
+		iter.Seq[Record] | iter.Seq[any]
 }
 
 // ============================================================================
@@ -837,6 +868,34 @@ func convertToTime(val any) (time.Time, bool) {
 	default:
 		return time.Time{}, false
 	}
+}
+
+// ============================================================================
+// RECORD UTILITY FUNCTIONS
+// ============================================================================
+
+// RecordKey returns a unique string key for a Record based on all its fields.
+// This is useful for deduplication with DistinctBy (e.g., SQL UNION):
+//
+//	distinct := ssql.DistinctBy(ssql.RecordKey)
+//	result := distinct(combined)
+func RecordKey(r Record) string {
+	// Use JSON-like representation for consistent, deterministic keys
+	// Sort keys for deterministic output
+	keys := r.Keys() // Already returns sorted keys
+	sort.Strings(keys)
+
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		v := r.fields[k]
+		fmt.Fprintf(&b, "%q:%v", k, v)
+	}
+	b.WriteByte('}')
+	return b.String()
 }
 
 // ============================================================================

@@ -4,11 +4,11 @@
 
 Built on Go 1.23+ with first-class support for iterators, generics, and functional composition.
 
-> **⚠️ Important:** ssql v2 introduces compile-time type safety improvements. Use `/v2` import path:
+> **⚠️ Important:** ssql v3 introduces SQL-aligned flag naming. Use `/v3` import path:
 > ```go
-> import "github.com/rosscartlidge/ssql/v2"
+> import "github.com/rosscartlidge/ssql/v3"
 > ```
-> **v1 users:** See [migration guide](#migrating-from-v1-to-v2) below.
+> **v2 users:** See [migration guide](#migrating-from-v2-to-v3) below.
 
 ## ✨ What Makes ssql Special
 
@@ -45,7 +45,7 @@ package main
 import (
     "log"
     "os"
-    "github.com/rosscartlidge/ssql/v2"
+    "github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
@@ -99,13 +99,13 @@ West,Gadget,3100`
 **Or use the CLI:**
 ```bash
 # Prototype with Unix-style pipelines, then generate production Go code
-ssql exec -- ps -efl | \
+ssql from -- ps -efl | \
   ssql group -by UID -function count -result process_count | \
-  ssql chart -x UID -y process_count -output chart.html
+  ssql to chart -x UID -y process_count -output chart.html
 
 # Debug pipelines with jq (JSONL streaming format)
-ssql read-csv data.csv | jq '.' | head -5  # Inspect data
-ssql read-csv data.csv | ssql where -match age gt 30 | jq -s 'length'  # Count results
+ssql from data.csv | jq '.' | head -5  # Inspect data
+ssql from data.csv | ssql where -where age gt 30 | jq -s 'length'  # Count results
 ```
 
 [**Try the CLI →**](doc/cli/codelab-cli.md) | [**Debug with jq →**](doc/cli/debugging_pipelines.md)
@@ -144,7 +144,7 @@ ssql.QuickChart(data, "month", "revenue", "chart.html")  // One line = full dash
 
 ```bash
 # Install the command-line tool (v2)
-go install github.com/rosscartlidge/ssql/v2/cmd/ssql@latest
+go install github.com/rosscartlidge/ssql/v3/cmd/ssql@latest
 
 # Verify installation
 ssql version
@@ -152,7 +152,7 @@ ssql version
 # Try it out
 echo "name,age,salary
 Alice,30,95000
-Bob,25,65000" | ssql read-csv | ssql where -match age gt 28
+Bob,25,65000" | ssql from | ssql where -where age gt 28
 ```
 
 [**See CLI Tutorial →**](doc/cli/codelab-cli.md)
@@ -168,7 +168,7 @@ go mod init myproject  # Initialize Go module (required!)
 
 **Step 2: Install ssql v2**
 ```bash
-go get github.com/rosscartlidge/ssql/v2
+go get github.com/rosscartlidge/ssql/v3
 ```
 
 ### Hello ssql
@@ -178,7 +178,7 @@ package main
 import (
     "fmt"
     "slices"
-    "github.com/rosscartlidge/ssql/v2"
+    "github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
@@ -203,7 +203,7 @@ package main
 
 import (
     "slices"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
@@ -289,7 +289,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
@@ -352,7 +352,7 @@ import (
     "fmt"
     "log"
     "time"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
@@ -404,7 +404,7 @@ package main
 import (
     "log"
     "slices"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
@@ -458,7 +458,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
@@ -515,7 +515,7 @@ ssql v2.1.0+ supports powerful expression evaluation for computed fields and com
 # Calculated fields
 echo 'name,price,qty
 Widget,10.50,3
-Gadget,25.00,2' | ssql read-csv | \
+Gadget,25.00,2' | ssql from | \
   ssql update -set-expr total 'price * qty' | \
   ssql update -set-expr discount 'total > 50 ? total * 0.1 : 0'
 
@@ -523,13 +523,13 @@ Gadget,25.00,2' | ssql read-csv | \
 echo 'name,age,email,status
 Alice,30,alice@example.com,active
 Bob,17,bob@example.com,pending
-Carol,25,carol@example.com,active' | ssql read-csv | \
+Carol,25,carol@example.com,active' | ssql from | \
   ssql where -expr 'age >= 18 and status == "active" and has("email")'
 
 # String manipulation
 echo 'email
   ALICE@EXAMPLE.COM
-bob@test.com' | ssql read-csv | \
+bob@test.com' | ssql from | \
   ssql update -set-expr email 'lower(trim(email))'
 ```
 
@@ -540,8 +540,8 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql/v2"
-    "github.com/rosscartlidge/ssql/v2/cmd/ssql/lib/runtime"
+    "github.com/rosscartlidge/ssql/v3"
+    "github.com/rosscartlidge/ssql/v3/cmd/ssql/lib/runtime"
 )
 
 func main() {
@@ -591,11 +591,11 @@ func main() {
 **Performance:**
 ```bash
 # CLI execution (~1ms overhead for 1M records)
-ssql read-csv huge.csv | ssql where -expr 'price * qty > 1000'
+ssql from huge.csv | ssql where -expr 'price * qty > 1000'
 
 # Code generation (10-100x faster, zero compilation overhead)
 export SSQLGO=1
-ssql read-csv huge.csv | \
+ssql from huge.csv | \
   ssql where -expr 'price * qty > 1000' | \
   ssql update -set-expr total 'price * qty' | \
   ssql generate-go > optimized.go
@@ -647,81 +647,74 @@ go run examples/early_termination_example.go
 4. **[Try the AI Assistant](doc/ai-human-guide.md)** for code generation
 5. **[Explore Advanced Patterns](doc/advanced-tutorial.md)** for production use
 
-## 🔄 Migrating from v1 to v2
+## 🔄 Migrating from v2 to v3
 
-ssql v2 introduces **complete compile-time type safety** with breaking changes. Migration is straightforward:
+ssql v3 introduces **SQL-aligned flag naming** in the CLI. Migration is straightforward:
 
 ### Installation
 
-**v1 (old):**
-```bash
-go get github.com/rosscartlidge/ssql
-go install github.com/rosscartlidge/ssql/cmd/ssql@latest
-```
-
-**v2 (new):**
+**v2 (old):**
 ```bash
 go get github.com/rosscartlidge/ssql/v2
 go install github.com/rosscartlidge/ssql/v2/cmd/ssql@latest
 ```
 
-### Import Path
-
-Update all imports to include `/v2`:
-
-```go
-// v1 (old)
-import "github.com/rosscartlidge/ssql"
-
-// v2 (new)
-import "github.com/rosscartlidge/ssql/v2"
+**v3 (new):**
+```bash
+go get github.com/rosscartlidge/ssql/v3
+go install github.com/rosscartlidge/ssql/v3/cmd/ssql@latest
 ```
 
-### Breaking Changes
+### Import Path
 
-1. **Removed `SetAny()` method** - Use typed methods instead:
-   ```go
-   // v1 (old)
-   record.SetAny("name", "Alice")
-   record.SetAny("age", 30)
+Update all imports to include `/v3`:
 
-   // v2 (new)
-   record.String("name", "Alice")
-   record.Int("age", int64(30))
+```go
+// v2 (old)
+import "github.com/rosscartlidge/ssql/v2"
+
+// v3 (new)
+import "github.com/rosscartlidge/ssql/v3"
+```
+
+### Breaking Changes (CLI)
+
+1. **`where` command flag changes:**
+   ```bash
+   # v2 (old)
+   ssql where -match age gt 18 -expr 'verified == true'
+
+   # v3 (new)
+   ssql where -where age gt 18 -where-expr 'verified == true'
    ```
 
-2. **Aggregation functions require type parameters:**
-   ```go
-   // v1 (old)
-   First("name")
-   Last("status")
+2. **`update` command flag changes:**
+   ```bash
+   # v2 (old)
+   ssql update -match status eq pending -set status approved
 
-   // v2 (new)
-   First[string]("name")
-   Last[string]("status")
+   # v3 (new)
+   ssql update -where status eq pending -set status approved
    ```
 
-3. **Copying record fields:**
-   ```go
-   // v1 (old)
-   result := ssql.MakeMutableRecord()
-   for k, v := range record.All() {
-       result.SetAny(k, v)
-   }
+3. **Regex operators consolidated:**
+   ```bash
+   # v2 (old) - multiple aliases
+   ssql where -match name pattern "^A"
+   ssql where -match name regexp "^A"
 
-   // v2 (new)
-   result := record.ToMutable()  // One line!
+   # v3 (new) - only 'regex'
+   ssql where -where name regex "^A"
    ```
 
-### Benefits of v2
+### Benefits of v3
 
-- ✅ **All type errors caught at compile time** (no runtime panics)
-- ✅ **Better IDE autocomplete and type inference**
-- ✅ **Impossible to add invalid types to records**
-- ✅ **Zero runtime type checking overhead**
-- ✅ **More maintainable and refactorable code**
+- ✅ **SQL-aligned naming** (`-where` mirrors SQL WHERE clause)
+- ✅ **Cleaner operator set** (no confusing aliases)
+- ✅ **Consistent flag naming** across commands
+- ✅ **Better discoverability** (SQL users feel at home)
 
-**Note:** v1.x remains available at `github.com/rosscartlidge/ssql` (without `/v2`), but v2 is recommended for all new projects.
+**Note:** v2.x remains available at `github.com/rosscartlidge/ssql/v2`, but v3 is recommended for all new projects.
 
 ## 📚 Documentation
 

@@ -708,6 +708,13 @@ func formatValue(value any) string {
 		return strconv.FormatFloat(v, 'g', -1, 64)
 	case bool:
 		return strconv.FormatBool(v)
+	case []any:
+		// Format slice as comma-separated values (for Collect aggregation results)
+		var stringValues []string
+		for _, val := range v {
+			stringValues = append(stringValues, fmt.Sprintf("%v", val))
+		}
+		return strings.Join(stringValues, ",")
 	default:
 		// Check if it's an iter.Seq type and materialize it
 		if isIterSeq(value) {

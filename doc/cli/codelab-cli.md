@@ -32,7 +32,7 @@
 
 ```bash
 # Install the CLI tool
-go install github.com/rosscartlidge/ssql/cmd/ssql@latest
+go install github.com/rosscartlidge/ssql/v3/cmd/ssql@latest
 
 # Verify installation
 ssql -version
@@ -51,8 +51,8 @@ David,28,Sales,70000
 EOF
 
 # Process it with a pipeline
-ssql read-csv employees.csv | \
-  ssql where -match department eq Engineering | \
+ssql from employees.csv | \
+  ssql where -where department eq Engineering | \
   ssql include name salary
 ```
 
@@ -77,13 +77,13 @@ The ssql CLI brings Unix pipeline philosophy to structured data processing. It p
 
 **Command Chaining**
 ```bash
-ssql read-csv data.csv | ssql where ... | ssql group ... | ssql chart ...
+ssql from data.csv | ssql where ... | ssql group ... | ssql to chart ...
 ```
 
 **Self-Generating Commands**
 Every command supports `-generate` flag to emit Go code instead of executing:
 ```bash
-ssql read-csv -generate data.csv | ssql generate-go
+ssql from -generate data.csv | ssql generate-go
 ```
 
 **Universal Data Format**
@@ -92,8 +92,8 @@ All commands use JSONL (JSON Lines) for inter-command communication, enabling co
 **Debugging with jq**
 Since all commands communicate via JSONL, you can inspect data at any stage with `jq`:
 ```bash
-ssql read-csv data.csv | jq '.' | head -5          # Pretty-print data
-ssql read-csv data.csv | jq '.age | type' | head   # Check field types
+ssql from data.csv | jq '.' | head -5          # Pretty-print data
+ssql from data.csv | jq '.age | type' | head   # Check field types
 ssql ... | ssql where ... | jq -s 'length'      # Count results
 ```
 [**See full debugging guide →**](debugging_pipelines.md)
@@ -109,7 +109,7 @@ ssql ... | ssql where ... | jq -s 'length'      # Count results
 Read CSV files and output as JSONL:
 
 ```bash
-ssql read-csv employees.csv
+ssql from employees.csv
 ```
 
 Output (JSONL):
@@ -125,16 +125,16 @@ Filter records based on conditions:
 
 ```bash
 # Single condition
-ssql read-csv employees.csv | \
-  ssql where -match salary gt 70000
+ssql from employees.csv | \
+  ssql where -where salary gt 70000
 
 # Multiple conditions (AND)
-ssql read-csv employees.csv | \
-  ssql where -match age gt 25 -match department eq Engineering
+ssql from employees.csv | \
+  ssql where -where age gt 25 -where department eq Engineering
 
 # Multiple conditions (OR) - use + separator
-ssql read-csv employees.csv | \
-  ssql where -match department eq Engineering + -match department eq Sales
+ssql from employees.csv | \
+  ssql where -where department eq Engineering + -where department eq Sales
 ```
 
 **Available Operators:**
@@ -154,11 +154,11 @@ Select specific fields or rename them:
 
 ```bash
 # Select fields
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql include name salary
 
 # Rename fields
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql include name salary | \
   ssql rename -as name employee_name -as salary annual_salary
 ```
@@ -169,31 +169,31 @@ Update record fields conditionally using if-elseif-else logic:
 
 ```bash
 # Unconditional update - all records
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql update -set status "active"
 
 # Conditional update - only matching records
-ssql read-csv employees.csv | \
-  ssql update -match salary gt 100000 -set bracket "high"
+ssql from employees.csv | \
+  ssql update -where salary gt 100000 -set bracket "high"
 
 # Multiple conditions (AND logic)
-ssql read-csv employees.csv | \
-  ssql update -match status eq pending -match priority eq urgent -set assignee "alice"
+ssql from employees.csv | \
+  ssql update -where status eq pending -where priority eq urgent -set assignee "alice"
 
 # If-elseif-else with + separator (first match wins)
-ssql read-csv customers.csv | \
+ssql from customers.csv | \
   ssql update \
-    -match purchases gt 5000 -set tier "Gold" -set discount 0.2 + \
-    -match purchases gt 1000 -set tier "Silver" -set discount 0.1 + \
+    -where purchases gt 5000 -set tier "Gold" -set discount 0.2 + \
+    -where purchases gt 1000 -set tier "Silver" -set discount 0.1 + \
     -set tier "Bronze" -set discount 0.0
 ```
 
 **How It Works:**
-- **Without `-match`**: Updates all records
-- **With `-match`**: Only updates records matching conditions, others pass through unchanged
-- **Multiple `-match` flags**: AND logic (all must match)
+- **Without `-where`**: Updates all records
+- **With `-where`**: Only updates records matching conditions, others pass through unchanged
+- **Multiple `-where` flags**: AND logic (all must match)
 - **`+` separator**: Creates clauses for if-elseif-else logic (first matching clause wins)
-- **Default clause**: Clause with no `-match` acts as else (catches all remaining records)
+- **Default clause**: Clause with no `-where` acts as else (catches all remaining records)
 
 **Type Inference:**
 The `update` command automatically infers types from string values:
@@ -206,11 +206,11 @@ The `update` command automatically infers types from string values:
 **Complex Example:**
 ```bash
 # Set priority based on multiple conditions
-ssql read-csv orders.csv | \
+ssql from orders.csv | \
   ssql update \
-    -match status eq pending -match amount gt 10000 -set priority "critical" -set sla 24 + \
-    -match status eq pending -match amount gt 1000 -set priority "high" -set sla 48 + \
-    -match status eq pending -set priority "normal" -set sla 72 + \
+    -where status eq pending -where amount gt 10000 -set priority "critical" -set sla 24 + \
+    -where status eq pending -where amount gt 1000 -set priority "high" -set sla 48 + \
+    -where status eq pending -set priority "normal" -set sla 72 + \
     -set priority "low" -set sla 168
 ```
 
@@ -221,9 +221,9 @@ This keeps ALL records while selectively updating fields based on conditions.
 Write results to CSV:
 
 ```bash
-ssql read-csv employees.csv | \
-  ssql where -match department eq Engineering | \
-  ssql write-csv engineers.csv
+ssql from employees.csv | \
+  ssql where -where department eq Engineering | \
+  ssql to csv engineers.csv
 ```
 
 ### Displaying Data as Tables
@@ -232,24 +232,24 @@ Display records in a formatted table on the terminal:
 
 ```bash
 # Simple table display
-ssql read-csv employees.csv | ssql table
+ssql from employees.csv | ssql to table
 
 # With filtering
-ssql read-csv employees.csv | \
-  ssql where -match department eq Engineering | \
+ssql from employees.csv | \
+  ssql where -where department eq Engineering | \
   ssql table
 
 # Limit column width to prevent wrapping
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql table -max-width 30
 
 # Complex pipeline with updates and filtering
-ssql read-csv customers.csv | \
+ssql from customers.csv | \
   ssql update \
-    -match purchases gt 5000 -set tier "Gold" + \
-    -match purchases gt 1000 -set tier "Silver" + \
+    -where purchases gt 5000 -set tier "Gold" + \
+    -where purchases gt 1000 -set tier "Silver" + \
     -set tier "Bronze" | \
-  ssql where -match tier eq Gold | \
+  ssql where -where tier eq Gold | \
   ssql table
 ```
 
@@ -279,8 +279,8 @@ Execute shell commands and parse their output:
 
 ```bash
 # Analyze process information
-ssql exec -- ps -efl | \
-  ssql where -match CMD contains chrome | \
+ssql from -- ps -efl | \
+  ssql where -where CMD contains chrome | \
   ssql include PID USER CMD
 ```
 
@@ -292,10 +292,10 @@ Find memory-intensive processes:
 
 ```bash
 # Get top memory users
-ssql exec -- ps aux | \
-  ssql where -match USER eq root | \
+ssql from -- ps aux | \
+  ssql where -where USER eq root | \
   ssql include PID MEM CMD | \
-  ssql write-csv system_processes.csv
+  ssql to csv system_processes.csv
 ```
 
 ---
@@ -308,7 +308,7 @@ Group data and calculate statistics:
 
 ```bash
 # Count records by department
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql group-by department -count total
 ```
 
@@ -324,7 +324,7 @@ Output:
 Specify multiple aggregations in one command:
 
 ```bash
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql group-by department \
     -count employee_count \
     -avg salary avg_salary \
@@ -357,7 +357,7 @@ Skip and take records for pagination:
 
 ```bash
 # Skip first 20 records, take next 10 (records 21-30)
-ssql read-csv data.csv | \
+ssql from data.csv | \
   ssql offset 20 | \
   ssql limit 10
 ```
@@ -373,10 +373,10 @@ Remove duplicate records:
 
 ```bash
 # Distinct on all fields
-ssql read-csv data.csv | ssql distinct
+ssql from data.csv | ssql distinct
 
 # Distinct by specific fields
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql distinct -by department -by location
 ```
 
@@ -391,16 +391,16 @@ Join two data sources on common fields:
 
 ```bash
 # Inner join on same field name
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql join -type inner -right departments.csv -on dept_id
 
 # Left join with different field names
-ssql read-csv orders.csv | \
+ssql from orders.csv | \
   ssql join -type left -right customers.csv \
     -left-field customer_id -right-field id
 
 # Join on multiple fields (composite key)
-ssql read-csv sales.csv | \
+ssql from sales.csv | \
   ssql join -right products.csv \
     -on product_id -on region
 ```
@@ -423,11 +423,11 @@ Combine multiple data sources:
 
 ```bash
 # UNION (remove duplicates)
-ssql read-csv customers.csv | \
+ssql from customers.csv | \
   ssql union -file suppliers.csv
 
 # UNION ALL (keep duplicates)
-ssql read-csv file1.csv | \
+ssql from file1.csv | \
   ssql union -all -file file2.csv -file file3.csv
 ```
 
@@ -447,7 +447,7 @@ Generate interactive HTML charts with Chart.js:
 ### Simple Chart
 
 ```bash
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql chart -x department -y salary -output salary_chart.html
 ```
 
@@ -460,7 +460,7 @@ Opens `salary_chart.html` with an interactive chart featuring:
 ### Chart with Aggregations
 
 ```bash
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql group-by department -avg salary avg_salary | \
   ssql chart -x department -y avg_salary -output dept_salaries.html
 ```
@@ -474,10 +474,10 @@ Every command supports the `-generate` flag to output Go code instead of executi
 ### Generate Code from Pipeline
 
 ```bash
-ssql read-csv -generate employees.csv | \
-  ssql where -generate -match department eq Engineering | \
+ssql from -generate employees.csv | \
+  ssql where -generate -where department eq Engineering | \
   ssql include name salary | \
-  ssql write-csv -generate output.csv | \
+  ssql to csv -generate output.csv | \
   ssql generate-go
 ```
 
@@ -486,19 +486,22 @@ Output:
 package main
 
 import (
-	"github.com/rosscartlidge/ssql"
+	"github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
-	records := ssql.ReadCSV("employees.csv")
+	records, err := ssql.ReadCSV("employees.csv")
+	if err != nil {
+		panic(err)
+	}
 	filtered := ssql.Where(func(r ssql.Record) bool {
-		return r["department"].(string) == "Engineering"
+		return ssql.GetOr(r, "department", "") == "Engineering"
 	})(records)
 	selected := ssql.Select(func(r ssql.Record) ssql.Record {
-		result := make(ssql.Record)
-		result["name"] = r["name"]
-		result["salary"] = r["salary"]
-		return result
+		return ssql.MakeMutableRecord().
+			SetAny("name", ssql.GetOr(r, "name", "")).
+			SetAny("salary", ssql.GetOr(r, "salary", float64(0))).
+			Freeze()
 	})(filtered)
 	ssql.WriteCSV(selected, "output.csv")
 }
@@ -508,7 +511,7 @@ func main() {
 
 ```bash
 # Generate code to file
-ssql read-csv -generate data.csv | \
+ssql from -generate data.csv | \
   ssql group-by -generate region -sum sales total | \
   ssql generate-go > analysis.go
 
@@ -516,7 +519,7 @@ ssql read-csv -generate data.csv | \
 cat > go.mod << 'EOF'
 module analysis
 go 1.23
-require github.com/rosscartlidge/ssql latest
+require github.com/rosscartlidge/ssql/v3 latest
 EOF
 
 # Build and run
@@ -530,12 +533,12 @@ When you use multiple transformation commands, the generated code automatically 
 
 ```bash
 # Complex pipeline: filter, select, sort, limit
-ssql read-csv -generate sales.csv | \
-  ssql where -match revenue gt 1000 -generate | \
+ssql from -generate sales.csv | \
+  ssql where -where revenue gt 1000 -generate | \
   ssql include salesperson revenue | \
   ssql sort revenue -desc -generate | \
   ssql limit 10 -generate | \
-  ssql write-csv -generate top_performers.csv | \
+  ssql to csv -generate top_performers.csv | \
   ssql generate-go > report.go
 ```
 
@@ -546,54 +549,29 @@ package main
 import (
 	"fmt"
 	"os"
-	"github.com/rosscartlidge/ssql"
+	"github.com/rosscartlidge/ssql/v3"
 )
-
-// asFloat64 converts Record values to float64 for numeric comparisons
-// Handles both int64 (from CSV parsing integers) and float64
-func asFloat64(v any) float64 {
-	switch val := v.(type) {
-	case int64:
-		return float64(val)
-	case float64:
-		return val
-	default:
-		return 0
-	}
-}
 
 func main() {
 	records, err := ssql.ReadCSV("sales.csv")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading CSV: %w", err))
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Multiple operations composed with Chain()
 	result := ssql.Chain(
 		ssql.Where(func(r ssql.Record) bool {
-			return asFloat64(r["revenue"]) > 1000
+			return ssql.GetOr(r, "revenue", float64(0)) > 1000
 		}),
 		ssql.Select(func(r ssql.Record) ssql.Record {
-			result := make(ssql.Record)
-			if val, exists := r["salesperson"]; exists {
-				result["salesperson"] = val
-			}
-			if val, exists := r["revenue"]; exists {
-				result["revenue"] = val
-			}
-			return result
+			return ssql.MakeMutableRecord().
+				SetAny("salesperson", ssql.GetOr(r, "salesperson", "")).
+				SetAny("revenue", ssql.GetOr(r, "revenue", float64(0))).
+				Freeze()
 		}),
 		ssql.SortBy(func(r ssql.Record) float64 {
-			val, _ := r["revenue"]
-			switch v := val.(type) {
-			case int64:
-				return -float64(v)  // Negative for descending
-			case float64:
-				return -v
-			default:
-				return 0
-			}
+			return -ssql.GetOr(r, "revenue", float64(0))  // Negative for descending
 		}),
 		ssql.Limit[ssql.Record](10),
 	)(records)
@@ -626,13 +604,13 @@ cat top_performers.csv
 Generate code for GROUP BY with multiple aggregations:
 
 ```bash
-ssql read-csv -generate sales.csv | \
+ssql from -generate sales.csv | \
   ssql group-by -generate region \
     -count num_sales \
     -sum revenue total_revenue \
     -avg revenue avg_revenue | \
   ssql sort -generate total_revenue -desc | \
-  ssql write-csv -generate region_report.csv | \
+  ssql to csv -generate region_report.csv | \
   ssql generate-go > region_analysis.go
 ```
 
@@ -643,7 +621,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"github.com/rosscartlidge/ssql"
+	"github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
@@ -682,7 +660,7 @@ Let's build a comprehensive data analysis pipeline:
 
 ```bash
 # Execute the pipeline
-ssql exec -- ps -efl | \
+ssql from -- ps -efl | \
   ssql group-by UID -count process_count | \
   ssql chart -x UID -y process_count -output /tmp/processes_by_user.html
 ```
@@ -711,11 +689,17 @@ Generated code in `monitor.go`:
 package main
 
 import (
-	"github.com/rosscartlidge/ssql"
+	"fmt"
+	"os"
+	"github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
-	records := ssql.ExecCommand("ps", []string{"-efl"})
+	records, err := ssql.ExecCommand("ps", []string{"-efl"})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	grouped := ssql.GroupByFields("_group", "UID")(records)
 	aggregated := ssql.Aggregate("_group", map[string]ssql.AggregateFunc{
 		"process_count": ssql.Count(),
@@ -728,7 +712,7 @@ Compile and run:
 ```bash
 # Setup module
 go mod init monitor
-go get github.com/rosscartlidge/ssql
+go get github.com/rosscartlidge/ssql/v3
 
 # Build and run
 go build -o monitor monitor.go
@@ -740,14 +724,16 @@ go build -o monitor monitor.go
 ## Available Commands
 
 ### Data Sources
-- `read-csv [file]` - Read CSV file (or stdin)
-- `exec -- [command] [args...]` - Execute command and parse output
+- `from [file]` - Read data from CSV, JSON, or JSONL file (auto-detects format)
+- `from -- [command] [args...]` - Execute command and parse output
 
 ### Transformations
-- `where` - Filter records by conditions
-- `select` - Select/rename fields
+- `where` - Filter records by conditions (`-where field op value`)
+- `include` - Select specific fields
+- `exclude` - Remove specific fields
+- `rename` - Rename fields (`-as old new`)
 - `update` - Conditionally update field values (if-elseif-else logic)
-- `group` - Group and aggregate data
+- `group-by` - Group and aggregate data
 - `sort` - Sort records by field
 - `limit` - Take first N records
 - `offset` - Skip first N records (SQL OFFSET)
@@ -757,13 +743,18 @@ go build -o monitor monitor.go
 - `join` - Join two data sources (SQL JOIN - inner/left/right/full)
 - `union` - Combine multiple data sources (SQL UNION/UNION ALL)
 
-### Outputs
-- `write-csv [file]` - Write CSV file (or stdout)
-- `table` - Display records as formatted table
-- `chart` - Create interactive HTML chart
+### Outputs (using `to` subcommands)
+- `to table` - Display records as formatted table
+- `to csv [file]` - Write CSV file (or stdout)
+- `to json [file]` - Write JSON/JSONL file (or stdout)
+- `to chart` - Create interactive HTML chart
 
 ### Code Generation
 - `generate-go` - Assemble code fragments into Go program
+
+### Utilities
+- `functions` - Show available expression functions and operators
+- `version` - Show version information
 
 ### Getting Help
 
@@ -772,10 +763,10 @@ go build -o monitor monitor.go
 ssql -help
 
 # Show command-specific help
-ssql read-csv -help
+ssql from -help
 ssql where -help
-ssql group -help
-ssql chart -help
+ssql group-by -help
+ssql to chart -help
 ```
 
 ### Bash Completion
@@ -797,8 +788,8 @@ source ~/.bashrc
 Now you can tab-complete:
 ```bash
 ssql <TAB>          # Shows all commands
-ssql where <TAB>    # Shows flags like -match, -help
-ssql read-csv <TAB> # Completes .csv files
+ssql where <TAB>    # Shows flags like -where, -help
+ssql from <TAB>     # Completes .csv, .json, .jsonl files
 ```
 
 ### Understanding Command Structure (Advanced)
@@ -810,7 +801,7 @@ Commands that support multiple items use `+` as a separator to create "clauses".
 
 ```bash
 # Multiple WHERE conditions (OR logic) - each clause after + is independent
-ssql where -match age gt 30 + -match salary gt 100000
+ssql where -where age gt 30 + -where salary gt 100000
 
 # Multiple aggregations - specify multiple flags
 ssql group-by department \
@@ -855,12 +846,12 @@ This pattern makes complex aggregations readable while maintaining type safety a
 
 1. **Prototype with CLI** - Quickly explore your data
    ```bash
-   ssql read-csv data.csv | ssql where ... | ssql chart ...
+   ssql from data.csv | ssql where ... | ssql to chart ...
    ```
 
 2. **Generate Code** - Convert to Go when satisfied
    ```bash
-   ssql read-csv -generate data.csv | ... | ssql generate-go > app.go
+   ssql from -generate data.csv | ... | ssql generate-go > app.go
    ```
 
 3. **Refine and Deploy** - Edit generated code, add error handling, deploy

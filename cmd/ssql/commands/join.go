@@ -15,8 +15,8 @@ import (
 func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("join").
 		Description("Join records from two data sources (SQL JOIN)").
-		Example("ssql read-csv users.csv | ssql join -right orders.csv -on user_id", "Inner join users and orders on user_id").
-		Example("ssql read-csv employees.csv | ssql join -type left -right departments.csv -on dept_id", "Left join employees with departments").
+		Example("ssql from users.csv | ssql join orders.csv -on user_id", "Inner join users and orders on user_id").
+		Example("ssql from employees.csv | ssql join -type left departments.csv -on dept_id", "Left join employees with departments").
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -29,47 +29,38 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Default("inner").
 			Help("Join type: inner, left, right, full (default: inner)").
 		Done().
-		Flag("-right", "-r").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.{csv,jsonl}"}).
-			Global().
-			Help("Right-side file to join with (CSV or JSONL)").
-		Done().
 		Flag("-on").
 			String().
-			FieldsFromFlag("FILE").
+			Completer(cf.NoCompleter{Hint: "<field>"}).
 			Accumulate().
 			Local().
 			Help("Field name for equality join (same name in both sides)").
 		Done().
 		Flag("-left-field").
 			String().
-			FieldsFromFlag("FILE").
+			Completer(cf.NoCompleter{Hint: "<field>"}).
 			Local().
 			Help("Field name from left side").
 		Done().
 		Flag("-right-field").
 			String().
-			FieldsFromFlag("-right").
+			Completer(cf.NoCompleter{Hint: "<field>"}).
 			Local().
 			Help("Field name from right side").
 		Done().
 		Flag("FILE").
 			String().
-			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
+			Completer(&cf.FileCompleter{Pattern: "*.{csv,jsonl}"}).
 			Global().
-			Default("").
-			Help("Left-side input JSONL file (or stdin if not specified)").
+			Required().
+			Help("Right-side file to join with (CSV or JSONL)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var inputFile, rightFile, joinType string
+			var rightFile, joinType string
 			var generate bool
 
 			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
-			}
-			if rightVal, ok := ctx.GlobalFlags["-right"]; ok {
-				rightFile = rightVal.(string)
+				rightFile = fileVal.(string)
 			}
 			if typeVal, ok := ctx.GlobalFlags["-type"]; ok {
 				joinType = typeVal.(string)
@@ -80,9 +71,9 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				generate = genVal.(bool)
 			}
 
-			// Validate required flags
+			// Validate required file
 			if rightFile == "" {
-				return fmt.Errorf("right-side file required (use -right)")
+				return fmt.Errorf("right-side file required")
 			}
 
 			// Parse join condition from first clause
@@ -125,14 +116,8 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateJoinCode(rightFile, joinType, onFields, leftField, rightField)
 			}
 
-			// Read left-side input (stdin or file)
-			leftInput, err := lib.OpenInput(inputFile)
-			if err != nil {
-				return fmt.Errorf("opening left input: %w", err)
-			}
-			defer leftInput.Close()
-
-			leftRecords := lib.ReadJSONL(leftInput)
+			// Read left-side input from stdin
+			leftRecords := lib.ReadJSONL(os.Stdin)
 
 			// Read right-side file
 			var rightSeq iter.Seq[ssql.Record]

@@ -165,6 +165,8 @@ func buildAggregator(function, field string) (ssql.AggregateFunc, error) {
 		return ssql.Min[float64](field), nil
 	case "max":
 		return ssql.Max[float64](field), nil
+	case "collect":
+		return ssql.Collect(field), nil
 	default:
 		return nil, fmt.Errorf("unknown aggregation function: %s", function)
 	}
@@ -232,7 +234,7 @@ func shouldGenerate(flagValue bool) bool {
 
 // getCommandString returns the command line that invoked this command
 // Filters out the -generate flag since it's implied by the code generation context
-// Returns something like "ssql read-csv data.csv" or "ssql where -match age gt 18"
+// Returns something like "ssql from data.csv" or "ssql where -where age gt 18"
 // Properly quotes arguments that contain shell special characters
 func getCommandString() string {
 	// Filter out -generate and -g flags

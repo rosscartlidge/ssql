@@ -32,13 +32,13 @@ echo "Pipeline: Find Engineering employees over 30"
 echo "Command:"
 echo "  ssql read-csv /tmp/employees.csv | \\"
 echo "    ssql where -match age gt 30 -match department eq Engineering | \\"
-echo "    ssql write-csv"
+echo "    ssql to csv"
 echo
 echo "Results:"
 
 ssql read-csv /tmp/employees.csv | \
   ssql where -match age gt 30 -match department eq Engineering | \
-  ssql write-csv
+  ssql to csv
 
 echo
 echo "This filters to:"

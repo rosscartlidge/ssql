@@ -55,7 +55,7 @@ section() {
 section "1. Verifying Exported Functions are Documented"
 
 # Get all exported functions from the package
-exported_funcs=$(go doc github.com/rosscartlidge/ssql | grep "^func " | awk '{print $2}' | cut -d'(' -f1 | sort -u)
+exported_funcs=$(go doc github.com/rosscartlidge/ssql/v3 | grep "^func " | awk '{print $2}' | cut -d'(' -f1 | sort -u)
 
 # Check if each is mentioned in LLM docs
 llm_files="doc/ai-code-generation.md doc/ai-human-guide.md"
@@ -68,7 +68,7 @@ for func in $exported_funcs; do
 
     found=0
     for doc_file in $llm_files; do
-        if grep -q "streamv3\.$func" "$doc_file" 2>/dev/null; then
+        if grep -q "ssql\.$func" "$doc_file" 2>/dev/null; then
             found=1
             break
         fi
@@ -84,7 +84,7 @@ done
 # Check 2: Verify types are documented
 section "2. Verifying Exported Types are Documented"
 
-exported_types=$(go doc github.com/rosscartlidge/ssql | grep "^type " | awk '{print $2}' | sort -u)
+exported_types=$(go doc github.com/rosscartlidge/ssql/v3 | grep "^type " | awk '{print $2}' | sort -u)
 
 for type in $exported_types; do
     # Skip generic type parameters
@@ -123,7 +123,7 @@ critical_funcs=(
 
 for func in "${critical_funcs[@]}"; do
     # Get the godoc for this function
-    doc_output=$(go doc "github.com/rosscartlidge/ssql.$func" 2>/dev/null || echo "")
+    doc_output=$(go doc "github.com/rosscartlidge/ssql/v3.$func" 2>/dev/null || echo "")
 
     if echo "$doc_output" | grep -q "Example:"; then
         pass "godoc has example: $func"
@@ -140,7 +140,7 @@ check_funcs=("Select" "Where" "GroupByFields" "Aggregate")
 
 for func in "${check_funcs[@]}"; do
     # Get signature from godoc
-    godoc_sig=$(go doc "github.com/rosscartlidge/ssql.$func" 2>/dev/null | grep "^func $func" | head -1)
+    godoc_sig=$(go doc "github.com/rosscartlidge/ssql/v3.$func" 2>/dev/null | grep "^func $func" | head -1)
 
     if [[ -z "$godoc_sig" ]]; then
         warn "Could not find godoc signature for $func"
@@ -149,7 +149,7 @@ for func in "${check_funcs[@]}"; do
 
     # Check if LLM docs mention the function with similar signature
     # This is a basic check - just verify the function is mentioned
-    if grep -q "streamv3\.$func" doc/ai-code-generation.md; then
+    if grep -q "ssql\.$func" doc/ai-code-generation.md; then
         pass "Function signature documented: $func"
     else
         warn "Function signature may be missing: $func"

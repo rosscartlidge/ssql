@@ -13,8 +13,8 @@ import (
 func RegisterOffset(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("offset").
 		Description("Skip first N records (SQL OFFSET)").
-		Example("ssql read-csv data.csv | ssql offset 10", "Skip first 10 records").
-		Example("ssql read-csv data.csv | ssql offset 100 | ssql limit 10", "Get records 101-110 (pagination)").
+		Example("ssql from data.csv | ssql offset 10", "Skip first 10 records").
+		Example("ssql from data.csv | ssql offset 100 | ssql limit 10", "Get records 101-110 (pagination)").
 		Flag("-generate", "-g").
 			Bool().
 			Global().

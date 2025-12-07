@@ -30,13 +30,13 @@ echo "Example 6a: Find emails containing 'engineering'"
 echo "Command:"
 echo "  ssql read-csv /tmp/users.csv | \\"
 echo "    ssql where -match email contains engineering | \\"
-echo "    ssql write-csv"
+echo "    ssql to csv"
 echo
 echo "Results:"
 
 ssql read-csv /tmp/users.csv | \
   ssql where -match email contains engineering | \
-  ssql write-csv
+  ssql to csv
 
 echo
 echo "---"
@@ -47,13 +47,13 @@ echo "Example 6b: Find emails ending with '.org'"
 echo "Command:"
 echo "  ssql read-csv /tmp/users.csv | \\"
 echo "    ssql where -match email endswith .org | \\"
-echo "    ssql write-csv"
+echo "    ssql to csv"
 echo
 echo "Results:"
 
 ssql read-csv /tmp/users.csv | \
   ssql where -match email endswith .org | \
-  ssql write-csv
+  ssql to csv
 
 echo
 echo "---"
@@ -64,13 +64,13 @@ echo "Example 6c: Find names starting with 'C'"
 echo "Command:"
 echo "  ssql read-csv /tmp/users.csv | \\"
 echo "    ssql where -match name startswith C | \\"
-echo "    ssql write-csv"
+echo "    ssql to csv"
 echo
 echo "Results:"
 
 ssql read-csv /tmp/users.csv | \
   ssql where -match name startswith C | \
-  ssql write-csv
+  ssql to csv
 
 echo
 echo "String operators available:"

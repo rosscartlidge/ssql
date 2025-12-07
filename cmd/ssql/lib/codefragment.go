@@ -16,51 +16,13 @@ type CodeFragment struct {
 	Input   string   `json:"input"`   // Input variable name from previous command
 	Code    string   `json:"code"`    // Go code for this operation
 	Imports []string `json:"imports"` // Required imports (e.g., ["strings", "log"])
-	Command string   `json:"command"` // The ssql command that generated this fragment (e.g., "ssql read-csv")
-}
-
-// ReadCodeFragment reads a code fragment from stdin
-// Returns nil if stdin is empty (first command in pipeline)
-func ReadCodeFragment() (*CodeFragment, error) {
-	// Check if stdin has data
-	stat, err := os.Stdin.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("checking stdin: %w", err)
-	}
-
-	// If stdin is empty (no pipe), return nil (we're the first command)
-	if (stat.Mode() & os.ModeCharDevice) != 0 {
-		return nil, nil
-	}
-
-	// Try to read a code fragment
-	var frag CodeFragment
-	decoder := json.NewDecoder(os.Stdin)
-	if err := decoder.Decode(&frag); err != nil {
-		if err == io.EOF {
-			return nil, nil // Empty stdin
-		}
-		return nil, fmt.Errorf("decoding code fragment: %w", err)
-	}
-
-	return &frag, nil
+	Command string   `json:"command"` // The ssql command that generated this fragment (e.g., "ssql from")
 }
 
 // ReadAllCodeFragments reads all code fragments from stdin
-// Returns empty slice if stdin is empty (first command in pipeline)
+// Returns empty slice if stdin is empty (EOF immediately)
 func ReadAllCodeFragments() ([]*CodeFragment, error) {
-	// Check if stdin has data
-	stat, err := os.Stdin.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("checking stdin: %w", err)
-	}
-
-	// If stdin is empty (no pipe), return empty slice (we're the first command)
-	if (stat.Mode() & os.ModeCharDevice) != 0 {
-		return nil, nil
-	}
-
-	// Read all fragments
+	// Read all fragments - return empty slice on immediate EOF
 	var fragments []*CodeFragment
 	decoder := json.NewDecoder(os.Stdin)
 
@@ -87,7 +49,7 @@ func WriteCodeFragment(frag *CodeFragment) error {
 	return nil
 }
 
-// NewInitFragment creates the first fragment in a pipeline (e.g., read-csv)
+// NewInitFragment creates the first fragment in a pipeline (e.g., from)
 func NewInitFragment(varName, code string, imports []string, command string) *CodeFragment {
 	return &CodeFragment{
 		Type:    "init",
@@ -129,19 +91,6 @@ func (f *CodeFragment) GetInputVar() string {
 		return "records"
 	}
 	return f.Input
-}
-
-// NextVarName generates the next variable name in sequence
-// Pattern: records -> filtered0 -> filtered1 -> selected0 -> limited0 -> sorted0
-func NextVarName(prefix string, input *CodeFragment) string {
-	if input == nil {
-		return "records"
-	}
-
-	// Count how many operations we've done
-	// This is a simple approach - just use a counter suffix
-	// For now, use the prefix with a 0 suffix
-	return prefix + "0"
 }
 
 // AssembleCodeFragments reads all code fragments from stdin and assembles them into a complete Go program
@@ -411,28 +360,6 @@ func findString(s, substr string) int {
 		}
 	}
 	return -1
-}
-
-// findLastParen finds the last opening parenthesis (for extracting filter from "filter(input)")
-func findLastParen(s string, start int) int {
-	depth := 0
-	lastOpen := -1
-
-	for i := start; i < len(s); i++ {
-		if s[i] == '(' {
-			if depth == 0 {
-				lastOpen = i
-			}
-			depth++
-		} else if s[i] == ')' {
-			depth--
-			if depth == 0 {
-				return lastOpen
-			}
-		}
-	}
-
-	return lastOpen
 }
 
 // fixErrorHandling fixes "return fmt.Errorf(...)" to proper main() error handling

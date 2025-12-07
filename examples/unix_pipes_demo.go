@@ -22,7 +22,6 @@ func main() {
 		processedStream := ssql.Select(func(record ssql.Record) ssql.Record {
 			// Create a mutable copy with all fields from the input
 			result := record.ToMutable()
-			}
 
 			// Add processed timestamp
 			result = result.String("processed_at", "2024-01-01T10:00:00Z")
@@ -105,12 +104,6 @@ func main() {
 	// Step 2: Process Stream (simulating: program1 | program2)
 	var processedRecords []ssql.Record
 	for record := range stream1 {
-		// Create new record with category field added
-		// Create new record with category field added
-		result := record.ToMutable()
-		result := record.ToMutable()
-		// Create new record with category field added
-		result := record.ToMutable()
 		// Create new record with category field added
 		result := record.ToMutable()
 

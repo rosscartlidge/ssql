@@ -53,6 +53,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - But still avoid creating them - use `/tmp/` for test programs
 - Main `ssql` binary is built in root but ignored by git
 
+## Documentation Maintenance (CRITICAL)
+
+**⚠️ IMPORTANT: Keep documentation in sync with API and CLI changes!**
+
+When making changes to the library API or CLI commands, you MUST also update the relevant documentation:
+
+**Documentation files that must stay in sync:**
+- `README.md` - Main library documentation, examples, and installation instructions
+- `doc/api-reference.md` - Complete API reference with examples
+- `doc/cli/codelab-cli.md` - CLI tutorial with command examples
+- `doc/cli/debugging_pipelines.md` - CLI debugging examples
+- `doc/cli/troubleshooting.md` - Common issues and solutions
+- `doc/EXPRESSIONS.md` - Expression language documentation
+- `doc/ai-code-generation.md` - AI code generation examples
+- `doc/ai-human-guide.md` - Human-AI collaboration guide
+
+**What to update when changing:**
+- **Module path changes (v2 → v3)**: Update all import statements and `go get` commands
+- **CLI command changes**: Update command names, flags, and examples in CLI docs
+- **API signature changes**: Update function signatures and examples in api-reference.md
+- **New features**: Add documentation and examples
+
+**Validation:**
+- Run `make doc-check` to validate documentation (Level 1: fast checks)
+- Run `make doc-test` to test code examples compile (Level 2: medium checks)
+- Run `make doc-verify` for comprehensive verification (Level 3: deep checks)
+- All three levels must pass before releasing
+
+**Common mistakes to avoid:**
+- ❌ Changing API without updating doc/api-reference.md
+- ❌ Changing CLI commands without updating doc/cli/*.md
+- ❌ Using old import paths (`ssql/v2` instead of `ssql/v3`)
+- ❌ Using old command names (`read-csv` instead of `from`, `write-csv` instead of `to csv`)
+- ❌ Using old flag names (`-match` instead of `-where`, `-expr` instead of `-where-expr`)
+
 ## Development Principles (CRITICAL)
 
 ### Compile-Time Type Safety Over Runtime
@@ -153,6 +188,7 @@ func setValidated(field string, value any) {
 - Tests are in `*_test.go` files using standard Go testing
 - Main test files: `example_test.go`, `chart_demo_test.go`, `benchmark_test.go`
 - No custom test runners or frameworks - use standard `go test`
+- **Testing examples:** `go test -v -tags examples` - builds each example file individually to verify they compile
 
 **Git Operations:**
 - `git remote -v` - Show remote repository configuration
@@ -225,6 +261,30 @@ ssql -help    # Should work without errors
 ```
 
 ## Project History
+
+**ssql v3.1.0 (December 2025):** Stdin-only transform commands (Unix philosophy)
+- **Breaking Changes:**
+  - `where` command: Removed `FILE` parameter - now reads from stdin only
+  - `update` command: Removed `FILE` parameter - now reads from stdin only
+  - `chart` command: Removed `FILE` parameter - now reads from stdin only
+  - `union` command: Removed `-input` parameter - now reads from stdin only
+  - `join` command: Changed from `-right FILE` to positional `FILE` for right-side file
+- **Design Philosophy**:
+  - Source command (`from`): Read from files, stdin, or command output
+  - Transform commands (`where`, `update`, etc.): Pure filters - stdin only
+  - This aligns with Unix philosophy of composable pipeline filters
+- **Migration**:
+  ```bash
+  # Old (v3.0.x)
+  ssql where FILE data.jsonl -where age gt 18
+  ssql update FILE data.jsonl -set status done
+  ssql join FILE left.jsonl -right right.csv -on id
+
+  # New (v3.1.0)
+  ssql from data.csv | ssql where -where age gt 18
+  ssql from data.csv | ssql update -set status done
+  ssql from left.csv | ssql join right.csv -on id
+  ```
 
 **ssql v3.0.0 (November 2025):** SQL-aligned flag naming and operator consolidation
 - **Breaking Changes:**
@@ -723,12 +783,12 @@ When designing CLI commands with autocli, follow these principles:
    - **Consistency examples:**
    ```bash
    # ✅ GOOD - All work with pipelines
-   ssql read-csv data.csv | ssql where -where age gt 25 | ssql write-csv output.csv
-   ssql read-csv data.csv | ssql include name age | ssql write-json
-   cat data.csv | ssql read-csv | ssql limit 10 | ssql table
+   ssql from data.csv | ssql where -where age gt 25 | ssql to csv output.csv
+   ssql from data.csv | ssql include name age | ssql to json
+   cat data.csv | ssql from | ssql limit 10 | ssql to table
 
    # ❌ BAD - Requiring files breaks pipelines
-   ssql read-csv data.csv | ssql write-json output.json  # If FILE was required!
+   ssql from data.csv | ssql to json output.json  # If FILE was required!
    ```
    - **FILE parameter guidelines:**
      - Input commands: FILE should be optional (default to stdin) or allow `-` for stdin
@@ -768,23 +828,23 @@ When designing CLI commands with autocli, follow these principles:
 
 9. **Pipeline Field Completion with CacheFieldsFrom()**
    - **NEW in autocli v3.2.0**: Enable field completion in pipelines where the first command reads a data file
-   - **The Problem**: In pipelines like `ssql read-csv users.csv | ssql where -where <TAB>`, the first command doesn't have flags with `FieldsFromFlag()`, so field names aren't available for completion in downstream commands
+   - **The Problem**: In pipelines like `ssql from users.csv | ssql where -where <TAB>`, the first command doesn't have flags with `FieldsFromFlag()`, so field names aren't available for completion in downstream commands
    - **The Solution**: Use `CacheFieldsFrom("FILE")` on commands that read data files but don't need field completion themselves
    - **Pattern:**
    ```go
-   Subcommand("read-csv").
-       Description("Read CSV file and output JSONL stream").
+   Subcommand("from").
+       Description("Read data from file (auto-detects CSV, JSON, JSONL)").
 
        Flag("FILE").
            String().
-           FilePattern("*.csv").
-           Help("Input CSV file").
+           FilePattern("*.{csv,json,jsonl}").
+           Help("Input file").
            Done().
 
        CacheFieldsFrom("FILE").  // Creates hidden -cache flag for pipeline support
 
        Handler(func(ctx *cf.Context) error {
-           // Read and output CSV...
+           // Read and output data...
            return nil
        }).
        Done()
@@ -798,8 +858,8 @@ When designing CLI commands with autocli, follow these principles:
    - **Usage Pattern**:
    ```bash
    # User types this to populate field cache for the pipeline:
-   ssql read-csv users.csv -cache DONE | ssql where -where <TAB>
-   #                       ^^^^^^^^^^^
+   ssql from users.csv -cache DONE | ssql where -where <TAB>
+   #                   ^^^^^^^^^^^
    # The -cache DONE triggers field extraction and caching
    # Now -where can complete: name, age, email, status, etc.
    ```
@@ -884,7 +944,7 @@ Subcommand("command-name").
             }
         }
 
-        // 3. For commands with -- separator (like exec)
+        // 3. For commands with -- separator (like from with command execution)
         if len(ctx.RemainingArgs) > 0 {
             command := ctx.RemainingArgs[0]
             args := ctx.RemainingArgs[1:]
@@ -931,7 +991,7 @@ Subcommand("command-name").
    - Enables dynamic flag handling and accumulation
 
 5. **-- separator support** - Requires autocli v3.0+
-   - Use for commands that pass args to other programs (like `exec`)
+   - Use for commands that pass args to other programs (like `from -- command args`)
    - Access via `ctx.RemainingArgs` slice
 
 ### autocli Migration History
@@ -1067,10 +1127,10 @@ Two ways to enable generation mode:
 ```bash
 # Method 1: Environment variable (affects entire pipeline)
 export SSQLGO=1
-ssql read-csv data.csv | ssql where -where age gt 25 | ssql generate-go
+ssql from data.csv | ssql where -where age gt 25 | ssql generate-go
 
 # Method 2: -generate flag per command
-ssql read-csv -generate data.csv | ssql where -generate -where age gt 25 | ssql generate-go
+ssql from -generate data.csv | ssql where -generate -where age gt 25 | ssql generate-go
 ```
 
 The environment variable approach is preferred for full pipelines.
@@ -1084,7 +1144,7 @@ The environment variable approach is preferred for full pipelines.
 - Fragments are passed through the pipeline, with each command adding its own
 
 **Fragment Types:**
-- `init` - First command (e.g., read-csv), creates initial variable, no input
+- `init` - First command (e.g., from), creates initial variable, no input
 - `stmt` - Middle command (e.g., where, group-by), has input and output variable
 - `final` - Last command (e.g., write-csv), has input but no output variable
 
@@ -1093,21 +1153,27 @@ The environment variable approach is preferred for full pipelines.
 - `getCommandString()` - Returns command line that invoked the command (filters out -generate flag)
 - `shellQuote(s string)` - Quotes arguments for shell safety
 
-### Generation Support Status (as of v1.2.4)
+### Generation Support Status (as of v3.1.0)
 
-**✅ Commands with -generate support (9/14):**
-1. `read-csv` - Generates init fragment with `ssql.ReadCSV()`
+**✅ Commands with -generate support:**
+1. `from` - Generates init fragment with `ssql.ReadCSV()` or `lib.ReadJSON()`
 2. `where` - Generates stmt fragment with filter predicate
-3. `write-csv` - Generates final fragment with `ssql.WriteCSV()`
-4. `limit` - Generates stmt fragment with `ssql.Limit[ssql.Record](n)`
-5. `offset` - Generates stmt fragment with `ssql.Offset[ssql.Record](n)`
-6. `sort` - Generates stmt fragment with `ssql.SortBy()`
-7. `distinct` - Generates stmt fragment with `ssql.DistinctBy()`
-8. `group-by` - Generates TWO stmt fragments (GroupByFields + Aggregate)
-9. `chart` - Generates final fragment with `ssql.QuickChart()`
+3. `to csv` - Generates final fragment with `ssql.WriteCSV()`
+4. `to json` - Generates final fragment with `ssql.WriteJSON()`
+5. `to table` - Generates final fragment with `ssql.DisplayTable()`
+6. `to chart` - Generates final fragment with `ssql.QuickChart()`
+7. `limit` - Generates stmt fragment with `ssql.Limit[ssql.Record](n)`
+8. `offset` - Generates stmt fragment with `ssql.Offset[ssql.Record](n)`
+9. `sort` - Generates stmt fragment with `ssql.SortBy()`
+10. `distinct` - Generates stmt fragment with `ssql.DistinctBy()`
+11. `group-by` - Generates TWO stmt fragments (GroupByFields + Aggregate)
+12. `union` - Generates stmt fragment with `ssql.Concat()` and optionally `ssql.DistinctBy(ssql.RecordKey)`
+13. `join` - Generates stmt fragment with `ssql.Join()`
 
-**❌ Commands WITHOUT -generate support yet (5/14):**
-- `select`, `join`, `union`, `exec`, `generate-go` (doesn't need it)
+**Commands that don't need -generate:**
+- `generate-go` - it's the assembler that produces the final Go code
+- `functions` - displays help information only
+- `version` - displays version only
 
 **⚠️ IMPORTANT:** Commands without generation support will break pipelines in generation mode. Always add generation support when creating new commands.
 
@@ -1254,7 +1320,7 @@ echo '{"type":"init","var":"records"}' | ./ssql my-command -arg1 test
 
 # Test full pipeline
 export SSQLGO=1
-./ssql read-csv data.csv | \
+./ssql from data.csv | \
   ./ssql where -where age gt 25 | \
   ./ssql my-command -arg1 test | \
   ./ssql generate-go > program.go

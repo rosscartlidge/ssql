@@ -14,8 +14,8 @@ import (
 func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("rename").
 		Description("Rename fields").
-		Example("ssql read-csv data.csv | ssql rename -as oldname newname", "Rename a single field").
-		Example("ssql read-csv users.csv | ssql rename -as first_name firstName -as last_name lastName", "Rename multiple fields to camelCase").
+		Example("ssql from data.csv | ssql rename -as oldname newname", "Rename a single field").
+		Example("ssql from users.csv | ssql rename -as first_name firstName -as last_name lastName", "Rename multiple fields to camelCase").
 		Flag("-generate", "-g").
 			Bool().
 			Global().

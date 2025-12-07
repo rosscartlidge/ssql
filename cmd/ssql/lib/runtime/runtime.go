@@ -84,6 +84,63 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 	}, nil
 }
 
+// CompileExprWithFields compiles an expression with known field names.
+// This is useful when you know the field names ahead of time and want to
+// ensure they shadow any built-in functions with the same names.
+// The returned function can be used repeatedly on different records.
+func CompileExprWithFields(expression string, fields []string) (func(ssql.Record) (any, error), error) {
+	// Build sample environment with placeholder values for all fields
+	// This ensures field names shadow any built-in functions with the same name
+	sampleEnv := make(map[string]interface{})
+
+	// Add placeholders for all known fields (using nil as placeholder)
+	for _, field := range fields {
+		sampleEnv[field] = nil
+	}
+
+	// Add helper functions
+	sampleEnv["has"] = func(field string) bool { return false }
+	sampleEnv["getOr"] = func(field string, defaultValue any) any { return defaultValue }
+
+	program, err := expr.Compile(expression,
+		expr.Env(sampleEnv),
+		expr.AllowUndefinedVariables(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("compile expression: %w", err)
+	}
+
+	// Return a closure that evaluates the compiled program on a record
+	return func(record ssql.Record) (any, error) {
+		// Build environment with all record fields
+		env := make(map[string]interface{})
+		for k, v := range record.All() {
+			env[k] = v
+		}
+
+		// Add helper functions that close over the record
+		env["has"] = func(field string) bool {
+			_, exists := ssql.Get[any](record, field)
+			return exists
+		}
+
+		env["getOr"] = func(field string, defaultValue any) any {
+			if val, exists := ssql.Get[any](record, field); exists {
+				return val
+			}
+			return defaultValue
+		}
+
+		// Execute the pre-compiled program with this record's environment
+		result, err := expr.Run(program, env)
+		if err != nil {
+			return nil, fmt.Errorf("execute expression: %w", err)
+		}
+
+		return result, nil
+	}, nil
+}
+
 // MustCompileExpr is like CompileExpr but panics on error.
 // Use this in generated code to fail fast at program startup if expressions are invalid.
 func MustCompileExpr(expression string) func(ssql.Record) (any, error) {

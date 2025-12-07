@@ -2,7 +2,7 @@
 
 *Complete reference for all ssql types, functions, and methods*
 
-> 📖 **Documentation Note**: This is a learning-focused API reference with examples and best practices. For raw API documentation directly from source code, use `go doc github.com/rosscartlidge/ssql` or browse specific functions with `go doc github.com/rosscartlidge/ssql.FunctionName`
+> 📖 **Documentation Note**: This is a learning-focused API reference with examples and best practices. For raw API documentation directly from source code, use `go doc github.com/rosscartlidge/ssql/v3` or browse specific functions with `go doc github.com/rosscartlidge/ssql/v3.FunctionName`
 
 ## Table of Contents
 
@@ -87,7 +87,7 @@ go mod init myproject
 ### Step 3: Install ssql
 
 ```bash
-go get github.com/rosscartlidge/ssql
+go get github.com/rosscartlidge/ssql/v3
 ```
 
 This will:
@@ -104,7 +104,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v3"
 )
 
 func main() {
@@ -230,7 +230,7 @@ records := []ssql.Record{
 - `.FloatSeq(field, value)` - Set float sequence (Float32Seq, Float64Seq)
 - `.StringSeq(field, value)` - Set string sequence
 - `.RecordSeq(field, value)` - Set Record sequence
-- `.SetAny(field, value)` - **DEPRECATED** (bypasses type safety, will be removed in v2.0.0)
+- `.SetAny(field, value)` - Set any value (use typed methods when possible for type safety)
 - `.Delete(field)` - Remove a field
 - `.Freeze()` - Convert to immutable Record
 - `.Len()` - Get number of fields
@@ -285,17 +285,19 @@ type Value interface {
     ~int64 | ~float64 |
     ~bool | string | time.Time |
     JSONString | Record |
+    []any |  // For Collect aggregation results
     iter.Seq[int] | iter.Seq[int8] | iter.Seq[int16] | iter.Seq[int32] | iter.Seq[int64] |
     iter.Seq[uint] | iter.Seq[uint8] | iter.Seq[uint16] | iter.Seq[uint32] | iter.Seq[uint64] |
     iter.Seq[float32] | iter.Seq[float64] |
     iter.Seq[bool] | iter.Seq[string] | iter.Seq[time.Time] |
-    iter.Seq[Record]
+    iter.Seq[Record] | iter.Seq[any]  // iter.Seq[any] for CollectSeq results
 }
 ```
 
 This interface defines all valid types that can be stored in a Record. Uses a **hybrid approach**:
 - **Canonical scalars**: `int64` and `float64` only (not `int`, `int32`, `float32`, etc.)
 - **Flexible sequences**: Any numeric iterator type allowed (e.g., `iter.Seq[int]`, `iter.Seq[int32]`, etc.)
+- **Collection types**: `[]any` for `Collect` results and `iter.Seq[any]` for `CollectSeq[T]` results
 
 This design eliminates type ambiguity for scalar values while maintaining compatibility with Go's standard library for sequences.
 
@@ -825,18 +827,44 @@ func Max[T cmp.Ordered](field string) AggregateFunc
 ```
 Finds minimum/maximum field values.
 
-#### First / Last
+#### First[T] / Last[T]
 ```go
-func First(field string) AggregateFunc
-func Last(field string) AggregateFunc
+func First[T Value](field string) AggregateFunc
+func Last[T Value](field string) AggregateFunc
 ```
-Gets first/last field value in group.
+Gets first/last field value in group. Requires type parameter for compile-time type safety.
+
+**Example:**
+```go
+aggregations := map[string]ssql.AggregateFunc{
+    "first_name": ssql.First[string]("name"),
+    "last_sale":  ssql.Last[float64]("amount"),
+}
+```
 
 #### Collect
 ```go
 func Collect(field string) AggregateFunc
 ```
-Collects all field values into an array.
+Collects all field values into a `[]any` array. Useful when you need the collected values as a slice for further processing or JSON serialization.
+
+#### CollectSeq[T]
+```go
+func CollectSeq[T Value](field string) AggregateFunc
+```
+Collects all field values into an `iter.Seq[any]` iterator. Requires type parameter for compile-time type safety during collection - values that don't match type T are skipped. Returns an iterator (rather than a slice) for memory efficiency with large groups.
+
+**Example:**
+```go
+aggregations := map[string]ssql.AggregateFunc{
+    "all_names":   ssql.Collect("name"),                    // Returns []any
+    "all_amounts": ssql.CollectSeq[float64]("amount"),      // Returns iter.Seq[any], type-safe collection
+}
+```
+
+**When to use:**
+- Use `Collect` when you need a slice (e.g., for JSON output, indexing, or length checks)
+- Use `CollectSeq[T]` when you want type-safe collection and will iterate over results
 
 #### Aggregate
 ```go

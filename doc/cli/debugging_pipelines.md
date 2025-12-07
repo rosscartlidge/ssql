@@ -19,38 +19,38 @@ ssql uses JSONL (JSON Lines) for inter-process communication, making it easy to 
 
 ```bash
 # See first 5 records after reading CSV
-ssql read-csv data.csv | head -5
+ssql from data.csv | head -5
 
 # Pretty-print with jq
-ssql read-csv data.csv | jq '.' | head -5
+ssql from data.csv | jq '.' | head -5
 
 # Check what's passing through a filter
-ssql read-csv data.csv | ssql where -match age gt 30 | jq '.'
+ssql from data.csv | ssql where -where age gt 30 | jq '.'
 ```
 
 ### 2. Count Records at Each Stage
 
 ```bash
 # Count input records
-ssql read-csv data.csv | wc -l
+ssql from data.csv | wc -l
 
 # Count after filtering
-ssql read-csv data.csv | ssql where -match status eq active | wc -l
+ssql from data.csv | ssql where -where status eq active | wc -l
 
 # Use jq for exact count (handles empty lines)
-ssql read-csv data.csv | jq -s 'length'
+ssql from data.csv | jq -s 'length'
 ```
 
 ### 3. Sample Data During Development
 
 ```bash
 # Work with small dataset while developing
-ssql read-csv large_file.csv | ssql limit 100 | \
-  ssql where -match ... | \
+ssql from large_file.csv | ssql limit 100 | \
+  ssql where -where ... | \
   jq '.'
 
 # Test with just first 10 records
-ssql read-csv data.csv | head -10 | ssql where ...
+ssql from data.csv | head -10 | ssql where ...
 ```
 
 ---
@@ -77,37 +77,37 @@ sudo apt-get install jq
 
 ```bash
 # Pretty-print all records
-ssql read-csv data.csv | jq '.'
+ssql from data.csv | jq '.'
 
 # With color, paginated
-ssql read-csv data.csv | jq -C '.' | less -R
+ssql from data.csv | jq -C '.' | less -R
 
 # Compact format (one line per record)
-ssql read-csv data.csv | jq -c '.'
+ssql from data.csv | jq -c '.'
 ```
 
 #### Extract Specific Fields
 
 ```bash
 # Single field
-ssql read-csv data.csv | jq '.name'
+ssql from data.csv | jq '.name'
 
 # Multiple fields
-ssql read-csv data.csv | jq '{name, age, department}'
+ssql from data.csv | jq '{name, age, department}'
 
 # Field with computed value
-ssql read-csv data.csv | jq '{name, annual_salary: (.salary * 12)}'
+ssql from data.csv | jq '{name, annual_salary: (.salary * 12)}'
 ```
 
 #### Filter Records
 
 ```bash
 # Filter in jq (alternative to ssql where command)
-ssql read-csv data.csv | jq 'select(.age > 30)'
+ssql from data.csv | jq 'select(.age > 30)'
 
 # Combine with ssql filters
-ssql read-csv data.csv | \
-  ssql where -match department eq Engineering | \
+ssql from data.csv | \
+  ssql where -where department eq Engineering | \
   jq 'select(.salary > 80000)'
 ```
 
@@ -115,48 +115,48 @@ ssql read-csv data.csv | \
 
 ```bash
 # See type of entire record
-ssql read-csv data.csv | head -1 | jq 'type'
+ssql from data.csv | head -1 | jq 'type'
 
 # See types of all fields
-ssql read-csv data.csv | head -1 | jq 'to_entries | map({key, type: .value | type})'
+ssql from data.csv | head -1 | jq 'to_entries | map({key, type: .value | type})'
 
 # Check specific field type
-ssql read-csv data.csv | jq '.age | type' | head -5
+ssql from data.csv | jq '.age | type' | head -5
 ```
 
 #### Analyze Arrays and Nested Data
 
 ```bash
 # Inspect GROUP BY results
-ssql read-csv data.csv | \
+ssql from data.csv | \
   ssql group-by department -function count -result total | \
   jq '.'
 
 # Extract nested fields
-ssql read-csv data.csv | jq '.metadata.created'
+ssql from data.csv | jq '.metadata.created'
 
 # Flatten nested structure
-ssql read-csv data.csv | jq 'flatten'
+ssql from data.csv | jq 'flatten'
 ```
 
 #### Statistical Analysis
 
 ```bash
 # Count records
-ssql read-csv data.csv | jq -s 'length'
+ssql from data.csv | jq -s 'length'
 
 # Sum a field
-ssql read-csv data.csv | jq -s 'map(.salary) | add'
+ssql from data.csv | jq -s 'map(.salary) | add'
 
 # Average
-ssql read-csv data.csv | jq -s 'map(.salary) | add / length'
+ssql from data.csv | jq -s 'map(.salary) | add / length'
 
 # Min/Max
-ssql read-csv data.csv | jq -s 'map(.age) | min'
-ssql read-csv data.csv | jq -s 'map(.age) | max'
+ssql from data.csv | jq -s 'map(.age) | min'
+ssql from data.csv | jq -s 'map(.age) | max'
 
 # Unique values
-ssql read-csv data.csv | jq -r '.department' | sort -u
+ssql from data.csv | jq -r '.department' | sort -u
 ```
 
 ### Advanced jq Debugging
@@ -165,33 +165,33 @@ ssql read-csv data.csv | jq -r '.department' | sort -u
 
 ```bash
 # Count before filter
-echo "Before: $(ssql read-csv data.csv | wc -l)"
+echo "Before: $(ssql from data.csv | wc -l)"
 
 # Count after filter
-echo "After: $(ssql read-csv data.csv | ssql where -match age gt 30 | wc -l)"
+echo "After: $(ssql from data.csv | ssql where -where age gt 30 | wc -l)"
 
 # See what was filtered out
-ssql read-csv data.csv | jq 'select(.age <= 30)'
+ssql from data.csv | jq 'select(.age <= 30)'
 ```
 
 #### Validate Field Presence
 
 ```bash
 # Find records missing required fields
-ssql read-csv data.csv | jq 'select(.email == null or .email == "")'
+ssql from data.csv | jq 'select(.email == null or .email == "")'
 
 # Check for unexpected nulls
-ssql read-csv data.csv | jq 'select(has("required_field") | not)'
+ssql from data.csv | jq 'select(has("required_field") | not)'
 ```
 
 #### Debug Type Mismatches
 
 ```bash
 # Find non-numeric values in numeric field
-ssql read-csv data.csv | jq 'select(.age | type != "number")'
+ssql from data.csv | jq 'select(.age | type != "number")'
 
 # Show records where field has unexpected type
-ssql read-csv data.csv | jq 'select(.salary | type == "string")'
+ssql from data.csv | jq 'select(.salary | type == "string")'
 ```
 
 ---
@@ -202,68 +202,68 @@ ssql read-csv data.csv | jq 'select(.salary | type == "string")'
 
 ```bash
 # Step 1: See what data looks like
-ssql read-csv data.csv | jq '.' | head -3
+ssql from data.csv | jq '.' | head -3
 
 # Step 2: Check the specific field
-ssql read-csv data.csv | jq '.age' | head -10
+ssql from data.csv | jq '.age' | head -10
 
 # Step 3: Check field type
-ssql read-csv data.csv | jq '.age | type' | head -5
+ssql from data.csv | jq '.age | type' | head -5
 
 # Step 4: Test filter manually
-ssql read-csv data.csv | jq 'select(.age > 30)' | head -5
+ssql from data.csv | jq 'select(.age > 30)' | head -5
 
 # Step 5: Compare with ssql filter
-ssql read-csv data.csv | ssql where -match age gt 30 | jq '.' | head -5
+ssql from data.csv | ssql where -where age gt 30 | jq '.' | head -5
 ```
 
 ### Pattern 2: "My GROUP BY results look wrong"
 
 ```bash
 # Step 1: Verify grouping field values
-ssql read-csv data.csv | jq -r '.department' | sort | uniq -c
+ssql from data.csv | jq -r '.department' | sort | uniq -c
 
 # Step 2: See raw GROUP BY output
-ssql read-csv data.csv | \
+ssql from data.csv | \
   ssql group-by department -function count -result total | \
   jq '.'
 
 # Step 3: Check specific group
-ssql read-csv data.csv | \
+ssql from data.csv | \
   ssql group-by department -function count -result total | \
   jq 'select(.department == "Engineering")'
 
 # Step 4: Verify counts manually
-ssql read-csv data.csv | jq 'select(.department == "Engineering")' | wc -l
+ssql from data.csv | jq 'select(.department == "Engineering")' | wc -l
 ```
 
 ### Pattern 3: "Field values are wrong type"
 
 ```bash
 # Diagnose: Check CSV parsing
-ssql read-csv data.csv | head -1 | jq '.'
+ssql from data.csv | head -1 | jq '.'
 
 # Common issue: Numbers parsed as strings
 # Solution: CSV auto-parses to int64/float64, but manual data might not
 
 # Fix in jq if needed:
-ssql read-csv data.csv | jq '.age = (.age | tonumber)' | \
-  ssql where -match age gt 30
+ssql from data.csv | jq '.age = (.age | tonumber)' | \
+  ssql where -where age gt 30
 ```
 
 ### Pattern 4: "Pipeline is too slow"
 
 ```bash
 # Test with small sample first
-time (ssql read-csv large.csv | head -1000 | ssql where ...)
+time (ssql from large.csv | head -1000 | ssql where ...)
 
 # Profile each stage
-time ssql read-csv large.csv > /dev/null
-time (ssql read-csv large.csv | ssql where -match age gt 30 > /dev/null)
-time (ssql read-csv large.csv | ssql where ... | ssql group ... > /dev/null)
+time ssql from large.csv > /dev/null
+time (ssql from large.csv | ssql where -where age gt 30 > /dev/null)
+time (ssql from large.csv | ssql where ... | ssql group ... > /dev/null)
 
 # Use limit to stop early
-ssql read-csv large.csv | ssql where ... | ssql limit 100
+ssql from large.csv | ssql where ... | ssql limit 100
 ```
 
 ---
@@ -274,14 +274,14 @@ ssql read-csv large.csv | ssql where ... | ssql limit 100
 
 ```bash
 # Time entire pipeline
-time (ssql read-csv data.csv | \
-  ssql where -match age gt 30 | \
+time (ssql from data.csv | \
+  ssql where -where age gt 30 | \
   ssql group-by department -function count -result total | \
-  ssql write-csv output.csv)
+  ssql to csv output.csv)
 
 # Time individual commands
-time ssql read-csv data.csv > /tmp/stage1.jsonl
-time (cat /tmp/stage1.jsonl | ssql where -match age gt 30 > /tmp/stage2.jsonl)
+time ssql from data.csv > /tmp/stage1.jsonl
+time (cat /tmp/stage1.jsonl | ssql where -where age gt 30 > /tmp/stage2.jsonl)
 time (cat /tmp/stage2.jsonl | ssql group ... > /tmp/stage3.jsonl)
 ```
 
@@ -289,22 +289,22 @@ time (cat /tmp/stage2.jsonl | ssql group ... > /tmp/stage3.jsonl)
 
 ```bash
 # Ensure no data loss between stages
-echo "Input: $(ssql read-csv data.csv | wc -l)"
-echo "After filter: $(ssql read-csv data.csv | ssql where -match age gt 30 | wc -l)"
-echo "After group: $(ssql read-csv data.csv | ssql where -match age gt 30 | ssql group-by dept -function count -result n | wc -l)"
+echo "Input: $(ssql from data.csv | wc -l)"
+echo "After filter: $(ssql from data.csv | ssql where -where age gt 30 | wc -l)"
+echo "After group: $(ssql from data.csv | ssql where -where age gt 30 | ssql group-by dept -function count -result n | wc -l)"
 ```
 
 ### Sample Large Datasets
 
 ```bash
 # Random sample (requires gnu coreutils shuf)
-ssql read-csv huge.csv | shuf | head -1000 | ssql where ...
+ssql from huge.csv | shuf | head -1000 | ssql where ...
 
 # Every Nth record
-ssql read-csv huge.csv | awk 'NR % 100 == 0' | ssql where ...
+ssql from huge.csv | awk 'NR % 100 == 0' | ssql where ...
 
 # First N records
-ssql read-csv huge.csv | ssql limit 1000 | ssql where ...
+ssql from huge.csv | ssql limit 1000 | ssql where ...
 ```
 
 ---
@@ -319,12 +319,12 @@ ssql read-csv huge.csv | ssql limit 1000 | ssql where ...
 ls -lh data.csv
 
 # Check if input is readable
-ssql read-csv data.csv | head -1
+ssql from data.csv | head -1
 
 # Check each stage
-ssql read-csv data.csv | tee /tmp/stage1.jsonl | \
-  ssql where -match age gt 30 | tee /tmp/stage2.jsonl | \
-  ssql write-csv output.csv
+ssql from data.csv | tee /tmp/stage1.jsonl | \
+  ssql where -where age gt 30 | tee /tmp/stage2.jsonl | \
+  ssql to csv output.csv
 ```
 
 **Common causes:**
@@ -338,13 +338,13 @@ ssql read-csv data.csv | tee /tmp/stage1.jsonl | \
 **Diagnosis:**
 ```bash
 # Count at each stage
-ssql read-csv data.csv | tee >(wc -l >&2) | \
-  ssql where -match age gt 30 | tee >(wc -l >&2) | \
-  ssql write-csv output.csv
+ssql from data.csv | tee >(wc -l >&2) | \
+  ssql where -where age gt 30 | tee >(wc -l >&2) | \
+  ssql to csv output.csv
 
 # Or step by step
-echo "Input: $(ssql read-csv data.csv | wc -l)"
-echo "Filtered: $(ssql read-csv data.csv | ssql where -match age gt 30 | wc -l)"
+echo "Input: $(ssql from data.csv | wc -l)"
+echo "Filtered: $(ssql from data.csv | ssql where -where age gt 30 | wc -l)"
 ```
 
 ### Issue: "Field not found errors"
@@ -352,13 +352,13 @@ echo "Filtered: $(ssql read-csv data.csv | ssql where -match age gt 30 | wc -l)"
 **Diagnosis:**
 ```bash
 # List all field names
-ssql read-csv data.csv | head -1 | jq 'keys'
+ssql from data.csv | head -1 | jq 'keys'
 
 # Check for whitespace in field names
-ssql read-csv data.csv | head -1 | jq 'keys | map(length)'
+ssql from data.csv | head -1 | jq 'keys | map(length)'
 
 # Look for the field you think exists
-ssql read-csv data.csv | head -1 | jq 'keys | map(select(contains("age")))'
+ssql from data.csv | head -1 | jq 'keys | map(select(contains("age")))'
 ```
 
 **Common causes:**
@@ -371,16 +371,16 @@ ssql read-csv data.csv | head -1 | jq 'keys | map(select(contains("age")))'
 **Diagnosis:**
 ```bash
 # Check field types
-ssql read-csv data.csv | jq '.age | type' | sort | uniq -c
+ssql from data.csv | jq '.age | type' | sort | uniq -c
 
 # Find mixed types
-ssql read-csv data.csv | jq 'select(.age | type != "number")'
+ssql from data.csv | jq 'select(.age | type != "number")'
 ```
 
 **Solution:**
 ```bash
 # CSV auto-parsing should handle this, but if you have manual JSONL:
-ssql read-json data.jsonl | jq '.age |= tonumber' | ssql where -match age gt 30
+ssql from data.jsonl | jq '.age |= tonumber' | ssql where -where age gt 30
 ```
 
 ### Issue: "GROUP BY produces unexpected results"
@@ -388,15 +388,15 @@ ssql read-json data.jsonl | jq '.age |= tonumber' | ssql where -match age gt 30
 **Diagnosis:**
 ```bash
 # Check grouping key values
-ssql read-csv data.csv | jq -r '.department' | sort | uniq -c
+ssql from data.csv | jq -r '.department' | sort | uniq -c
 
 # Look for null/empty values
-ssql read-csv data.csv | jq 'select(.department == null or .department == "")'
+ssql from data.csv | jq 'select(.department == null or .department == "")'
 
 # Verify manual count matches GROUP BY count
 DEPT="Engineering"
-echo "Manual count: $(ssql read-csv data.csv | jq "select(.department == \"$DEPT\")" | wc -l)"
-echo "GROUP BY count: $(ssql read-csv data.csv | ssql group-by department -function count -result n | jq "select(.department == \"$DEPT\") | .n")"
+echo "Manual count: $(ssql from data.csv | jq "select(.department == \"$DEPT\")" | wc -l)"
+echo "GROUP BY count: $(ssql from data.csv | ssql group-by department -function count -result n | jq "select(.department == \"$DEPT\") | .n")"
 ```
 
 ---
@@ -407,7 +407,7 @@ echo "GROUP BY count: $(ssql read-csv data.csv | ssql group-by department -funct
 
 ```bash
 # Save intermediate results
-ssql read-csv data.csv | ssql where -match age gt 30 > /tmp/filtered.jsonl
+ssql from data.csv | ssql where -where age gt 30 > /tmp/filtered.jsonl
 
 # Explore interactively with jq
 jq '.' /tmp/filtered.jsonl | less
@@ -421,21 +421,21 @@ jq 'group_by(.department) | map({dept: .[0].department, count: length})' /tmp/fi
 
 ```bash
 # Start simple
-ssql read-csv data.csv | jq '.'
+ssql from data.csv | jq '.'
 
 # Add one filter
-ssql read-csv data.csv | ssql where -match age gt 30 | jq '.'
+ssql from data.csv | ssql where -where age gt 30 | jq '.'
 
 # Add another filter
-ssql read-csv data.csv | \
-  ssql where -match age gt 30 | \
-  ssql where -match department eq Engineering | \
+ssql from data.csv | \
+  ssql where -where age gt 30 | \
+  ssql where -where department eq Engineering | \
   jq '.'
 
 # Add aggregation
-ssql read-csv data.csv | \
-  ssql where -match age gt 30 | \
-  ssql where -match department eq Engineering | \
+ssql from data.csv | \
+  ssql where -where age gt 30 | \
+  ssql where -where department eq Engineering | \
   ssql group-by department -function avg -field salary -result avg_salary | \
   jq '.'
 ```
@@ -448,23 +448,23 @@ ssql read-csv data.csv | \
 
 ```bash
 # Before building complex pipeline, look at the data
-ssql read-csv data.csv | jq '.' | head -3
+ssql from data.csv | jq '.' | head -3
 ```
 
 ### 2. Test Filters Incrementally
 
 ```bash
 # Add filters one at a time, checking counts
-ssql read-csv data.csv | wc -l
-ssql read-csv data.csv | ssql where -match age gt 30 | wc -l
-ssql read-csv data.csv | ssql where -match age gt 30 | ssql where -match status eq active | wc -l
+ssql from data.csv | wc -l
+ssql from data.csv | ssql where -where age gt 30 | wc -l
+ssql from data.csv | ssql where -where age gt 30 | ssql where -where status eq active | wc -l
 ```
 
 ### 3. Use Limit During Development
 
 ```bash
 # Work with small sample while developing
-ssql read-csv huge.csv | ssql limit 100 | \
+ssql from huge.csv | ssql limit 100 | \
   ssql where ... | \
   ssql group ... | \
   jq '.'
@@ -474,8 +474,8 @@ ssql read-csv huge.csv | ssql limit 100 | \
 
 ```bash
 # Save stages for debugging
-ssql read-csv data.csv > /tmp/1-input.jsonl
-cat /tmp/1-input.jsonl | ssql where -match age gt 30 > /tmp/2-filtered.jsonl
+ssql from data.csv > /tmp/1-input.jsonl
+cat /tmp/1-input.jsonl | ssql where -where age gt 30 > /tmp/2-filtered.jsonl
 cat /tmp/2-filtered.jsonl | ssql group-by dept -function count -result n > /tmp/3-grouped.jsonl
 
 # Inspect any stage
@@ -486,10 +486,10 @@ jq '.' /tmp/2-filtered.jsonl | less
 
 ```bash
 # Count records at each stage
-ssql read-csv data.csv | tee >(wc -l >&2) | \
-  ssql where -match age gt 30 | tee >(wc -l >&2) | \
+ssql from data.csv | tee >(wc -l >&2) | \
+  ssql where -where age gt 30 | tee >(wc -l >&2) | \
   ssql group-by dept -function count -result n | tee >(wc -l >&2) | \
-  ssql write-csv output.csv
+  ssql to csv output.csv
 ```
 
 ---
@@ -540,19 +540,19 @@ jq -s 'group_by(.field) | map({key: .[0].field, count: length})'
 
 ```bash
 # Inspect pipeline
-ssql read-csv data.csv | ssql where ... | jq '.'
+ssql from data.csv | ssql where ... | jq '.'
 
 # Count results
-ssql read-csv data.csv | ssql where ... | jq -s 'length'
+ssql from data.csv | ssql where ... | jq -s 'length'
 
 # Extract single field
-ssql read-csv data.csv | jq -r '.name'
+ssql from data.csv | jq -r '.name'
 
 # Validate GROUP BY
 ssql ... | ssql group ... | jq 'select(.department == "Engineering")'
 
 # Debug type issues
-ssql read-csv data.csv | jq '.age | type' | sort | uniq -c
+ssql from data.csv | jq '.age | type' | sort | uniq -c
 ```
 
 ---

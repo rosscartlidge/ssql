@@ -141,8 +141,8 @@ func main() {
 			"total_sales":   ssql.Sum("amount"),
 			"avg_amount":    ssql.Avg("amount"),
 			"count":         ssql.Count(),
-			"first_product": ssql.First("product"),
-			"last_product":  ssql.Last("product"),
+			"first_product": ssql.First[string]("product"),
+			"last_product":  ssql.Last[string]("product"),
 		}),
 	)(complexPipeline)
 
@@ -157,6 +157,45 @@ func main() {
 
 		fmt.Printf("  %s: $%.0f total, $%.0f avg (%d sales) [%s...%s]\n",
 			region, totalSales, avgAmount, count, firstProduct, lastProduct)
+	}
+
+	// Test 5: Collect and CollectSeq aggregations
+	fmt.Println("\n🔍 Test 5: Collect vs CollectSeq - Gathering All Values")
+	fmt.Println(strings.Repeat("-", 55))
+
+	results5 := ssql.Chain(
+		ssql.GroupByFields("group_data", "region"),
+		ssql.Aggregate("group_data", map[string]ssql.AggregateFunc{
+			"count":           ssql.Count(),
+			"all_products":    ssql.Collect("product"),            // Returns []any
+			"all_amounts_seq": ssql.CollectSeq[float64]("amount"), // Returns iter.Seq[any], type-safe
+		}),
+	)(slices.Values(salesData))
+
+	fmt.Println("Collected Values by Region:")
+	for result := range results5 {
+		region := ssql.GetOr(result, "region", "")
+		count := ssql.GetOr(result, "count", int64(0))
+
+		// Collect returns []any - can check length, index directly
+		products := ssql.GetOr(result, "all_products", []any{})
+		fmt.Printf("  %s (%d sales):\n", region, count)
+		fmt.Printf("    Products (Collect []any): %v\n", products)
+
+		// CollectSeq returns iter.Seq[any] - iterate to access values
+		amountsSeq, ok := ssql.Get[func(func(any) bool)](result, "all_amounts_seq")
+		if ok {
+			fmt.Printf("    Amounts (CollectSeq iter.Seq): ")
+			first := true
+			for amount := range amountsSeq {
+				if !first {
+					fmt.Print(", ")
+				}
+				fmt.Printf("$%.0f", amount)
+				first = false
+			}
+			fmt.Println()
+		}
 	}
 
 	fmt.Println("\n✅ All tests completed! You can modify this code to test your ideas.")

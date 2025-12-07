@@ -32,13 +32,13 @@ echo "Pipeline: (age > 30 AND department = Engineering) OR (salary < 70000)"
 echo "Command:"
 echo "  ssql read-csv /tmp/employees.csv | \\"
 echo "    ssql where -match age gt 30 -match department eq Engineering + -match salary lt 70000 | \\"
-echo "    ssql write-csv"
+echo "    ssql to csv"
 echo
 echo "Results:"
 
 ssql read-csv /tmp/employees.csv | \
   ssql where -match age gt 30 -match department eq Engineering + -match salary lt 70000 | \
-  ssql write-csv
+  ssql to csv
 
 echo
 echo "This matches:"

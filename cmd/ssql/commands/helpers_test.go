@@ -253,10 +253,10 @@ func TestEvaluateExpression_Math(t *testing.T) {
 		},
 		{
 			name:       "division",
-			expression: "total / count",
+			expression: "total / item_count",
 			record: ssql.MakeMutableRecord().
 				Float("total", 100.0).
-				Float("count", 4.0).
+				Float("item_count", 4.0).
 				Freeze(),
 			want:    25.0,
 			wantErr: false,
@@ -339,10 +339,10 @@ func TestEvaluateExpression_Strings(t *testing.T) {
 	}{
 		{
 			name:       "string concatenation",
-			expression: "first + \" \" + last",
+			expression: "first_name + \" \" + last_name",
 			record: ssql.MakeMutableRecord().
-				String("first", "John").
-				String("last", "Doe").
+				String("first_name", "John").
+				String("last_name", "Doe").
 				Freeze(),
 			want:    "John Doe",
 			wantErr: false,

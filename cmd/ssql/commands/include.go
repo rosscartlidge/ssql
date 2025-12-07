@@ -14,8 +14,8 @@ import (
 func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("include").
 		Description("Include only specified fields").
-		Example("ssql read-csv data.csv | ssql include name age", "Select only name and age columns").
-		Example("ssql read-json users.json | ssql include email status | ssql write-csv out.csv", "Extract email and status to CSV").
+		Example("ssql from data.csv | ssql include name age", "Select only name and age columns").
+		Example("ssql from users.json | ssql include email status | ssql to csv out.csv", "Extract email and status to CSV").
 		Flag("-generate", "-g").
 			Bool().
 			Global().

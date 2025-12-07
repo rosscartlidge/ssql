@@ -88,7 +88,7 @@ ssql read-csv employees.csv | \
   ssql include name age salary | \
   ssql sort salary -desc | \
   ssql limit 3 | \
-  ssql write-csv > output.csv
+  ssql to csv > output.csv
 ```
 - Chains multiple operations
 - Each step transforms the stream

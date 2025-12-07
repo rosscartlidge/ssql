@@ -13,27 +13,15 @@ import (
 func RegisterDistinct(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("distinct").
 		Description("Remove duplicate records").
-		Example("ssql read-csv data.csv | ssql distinct", "Remove duplicate records").
-		Example("ssql read-csv users.csv | ssql include email | ssql distinct", "Get unique email addresses").
+		Example("ssql from data.csv | ssql distinct", "Remove duplicate records").
+		Example("ssql from users.csv | ssql include email | ssql distinct", "Get unique email addresses").
 		Flag("-generate", "-g").
 			Bool().
 			Global().
 			Help("Generate Go code instead of executing").
 		Done().
-		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-			Global().
-			Default("").
-			Help("Input JSONL file (or stdin if not specified)").
-		Done().
 		Handler(func(ctx *cf.Context) error {
-			var inputFile string
 			var generate bool
-
-			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
-			}
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
@@ -44,14 +32,8 @@ func RegisterDistinct(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateDistinctCode()
 			}
 
-			// Read JSONL from stdin or file
-			input, err := lib.OpenInput(inputFile)
-			if err != nil {
-				return err
-			}
-			defer input.Close()
-
-			records := lib.ReadJSONL(input)
+			// Read JSONL from stdin
+			records := lib.ReadJSONL(os.Stdin)
 
 			// Apply distinct using DistinctBy with JSON serialization for comparison
 			distinct := ssql.DistinctBy(func(r ssql.Record) string {

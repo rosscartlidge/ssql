@@ -13,9 +13,10 @@ import (
 func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("group-by").
 		Description("Group records by fields and apply aggregations").
-		Example("ssql read-csv sales.csv | ssql group-by region -count total", "Count records by region").
-		Example("ssql read-csv sales.csv | ssql group-by region -sum amount total_sales", "Sum sales amount by region").
-		Example("ssql read-csv data.csv | ssql group-by dept -count num_employees -avg salary avg_salary -sum hours total_hours", "Multiple aggregations in one command").
+		Example("ssql from sales.csv | ssql group-by region -count total", "Count records by region").
+		Example("ssql from sales.csv | ssql group-by region -sum amount total_sales", "Sum sales amount by region").
+		Example("ssql from data.csv | ssql group-by dept -count num_employees -avg salary avg_salary -sum hours total_hours", "Multiple aggregations in one command").
+		Example("ssql from data.csv | ssql group-by dept -collect name all_names", "Collect all names into array per department").
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -61,6 +62,13 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Accumulate().
 			Global().
 			Help("Maximum field value (field name, result name)").
+		Done().
+		Flag("-collect").
+			Arg("field").FieldsFromFlag("").Done().
+			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+			Accumulate().
+			Global().
+			Help("Collect all field values into array (field name, result name)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var groupByFields []string
@@ -192,8 +200,26 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
+			// Parse -collect flags (field and result name)
+			if collectVals, ok := ctx.GlobalFlags["-collect"]; ok {
+				collects, _ := collectVals.([]any)
+				for _, collectVal := range collects {
+					if argsMap, ok := collectVal.(map[string]any); ok {
+						field, _ := argsMap["field"].(string)
+						result, _ := argsMap["result-name"].(string)
+						if field != "" && result != "" {
+							aggSpecs = append(aggSpecs, aggSpec{
+								function: "collect",
+								field:    field,
+								result:   result,
+							})
+						}
+					}
+				}
+			}
+
 			if len(aggSpecs) == 0 {
-				return fmt.Errorf("no aggregations specified (use -count, -sum, -avg, -min, or -max)")
+				return fmt.Errorf("no aggregations specified (use -count, -sum, -avg, -min, -max, or -collect)")
 			}
 
 			// Read JSONL from stdin
@@ -350,8 +376,26 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		}
 	}
 
+	// Parse -collect flags (field and result name)
+	if collectVals, ok := ctx.GlobalFlags["-collect"]; ok {
+		collects, _ := collectVals.([]any)
+		for _, collectVal := range collects {
+			if argsMap, ok := collectVal.(map[string]any); ok {
+				field, _ := argsMap["field"].(string)
+				result, _ := argsMap["result-name"].(string)
+				if field != "" && result != "" {
+					aggSpecs = append(aggSpecs, aggSpec{
+						function: "collect",
+						field:    field,
+						result:   result,
+					})
+				}
+			}
+		}
+	}
+
 	if len(aggSpecs) == 0 {
-		return fmt.Errorf("no aggregations specified (use -count, -sum, -avg, -min, or -max)")
+		return fmt.Errorf("no aggregations specified (use -count, -sum, -avg, -min, -max, or -collect)")
 	}
 
 	// Generate TWO fragments: one for GroupByFields, one for Aggregate
@@ -401,6 +445,8 @@ func generateAggregatorCode(spec struct {
 		return fmt.Sprintf("ssql.Min[float64](%q)", spec.field)
 	case "max":
 		return fmt.Sprintf("ssql.Max[float64](%q)", spec.field)
+	case "collect":
+		return fmt.Sprintf("ssql.Collect(%q)", spec.field)
 	default:
 		return ""
 	}

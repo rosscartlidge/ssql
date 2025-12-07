@@ -14,8 +14,8 @@ import (
 func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("sort").
 		Description("Sort records by field").
-		Example("ssql read-csv data.csv | ssql sort age", "Sort by age ascending").
-		Example("ssql read-csv sales.csv | ssql sort amount -desc", "Sort by amount descending").
+		Example("ssql from data.csv | ssql sort age", "Sort by age ascending").
+		Example("ssql from sales.csv | ssql sort amount -desc", "Sort by amount descending").
 		Flag("FIELD").
 			String().
 			Required().

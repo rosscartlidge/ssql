@@ -6,21 +6,21 @@ ssql supports powerful expression evaluation via the [expr-lang](https://expr-la
 
 **Commands with expression support:**
 - `ssql update -set-expr <field> '<expression>'` - Set field to computed value
-- `ssql where -expr '<boolean-expression>'` - Filter with complex conditions
+- `ssql where -where-expr '<boolean-expression>'` - Filter with complex conditions
 
 **Quick examples:**
 ```bash
 # Calculate derived fields
-ssql read-csv sales.csv | ssql update -set-expr total 'price * qty'
+ssql from sales.csv | ssql update -set-expr total 'price * qty'
 
 # Complex filtering
-ssql read-csv users.csv | ssql where -expr 'age >= 18 and status == "active"'
+ssql from users.csv | ssql where -where-expr 'age >= 18 and status == "active"'
 
 # Conditional logic
-ssql read-csv sales.csv | ssql update -set-expr tier 'revenue > 10000 ? "gold" : "silver"'
+ssql from sales.csv | ssql update -set-expr tier 'revenue > 10000 ? "gold" : "silver"'
 
 # String manipulation
-ssql read-csv data.csv | ssql update -set-expr email 'lower(trim(email))'
+ssql from data.csv | ssql update -set-expr email 'lower(trim(email))'
 ```
 
 ## Operators
@@ -132,7 +132,7 @@ ssql update -set-expr diff 'abs(actual - expected)'
 **Examples:**
 ```bash
 # Check if all scores are passing
-ssql where -expr 'all(scores, {# >= 60})'
+ssql where -where-expr 'all(scores, {# >= 60})'
 
 # Count high-value items
 ssql update -set-expr high_count 'count(filter(prices, {# > 100}))'
@@ -172,7 +172,7 @@ ssql provides additional helper functions for safe field access:
 **Examples:**
 ```bash
 # Only process records with email
-ssql where -expr 'has("email") and contains(email, "@")'
+ssql where -where-expr 'has("email") and contains(email, "@")'
 
 # Use default values for missing fields
 ssql update -set-expr total 'getOr("price", 0) * getOr("qty", 1)'
@@ -187,17 +187,17 @@ ssql update -set-expr status 'has("verified") ? "active" : "pending"'
 
 **Check email format:**
 ```bash
-ssql where -expr 'has("email") and contains(email, "@") and contains(email, ".")'
+ssql where -where-expr 'has("email") and contains(email, "@") and contains(email, ".")'
 ```
 
 **Validate required fields:**
 ```bash
-ssql where -expr 'has("name") and has("email") and has("age")'
+ssql where -where-expr 'has("name") and has("email") and has("age")'
 ```
 
 **Check value ranges:**
 ```bash
-ssql where -expr 'age >= 0 and age <= 120 and salary >= 0'
+ssql where -where-expr 'age >= 0 and age <= 120 and salary >= 0'
 ```
 
 ### 2. Data Cleaning
@@ -217,7 +217,7 @@ ssql update -set-expr qty 'getOr("qty", 0)'
 
 **Remove invalid data:**
 ```bash
-ssql where -expr 'getOr("price", 0) > 0 and getOr("qty", 0) > 0'
+ssql where -where-expr 'getOr("price", 0) > 0 and getOr("qty", 0) > 0'
 ```
 
 ### 3. Calculations
@@ -245,22 +245,22 @@ ssql update -set-expr bmi 'round(weight / (height ** 2))'
 
 **Multiple conditions (AND):**
 ```bash
-ssql where -expr 'age >= 18 and age <= 65 and status == "active"'
+ssql where -where-expr 'age >= 18 and age <= 65 and status == "active"'
 ```
 
 **Multiple conditions (OR):**
 ```bash
-ssql where -expr 'dept == "Sales" or dept == "Marketing" or dept == "Support"'
+ssql where -where-expr 'dept == "Sales" or dept == "Marketing" or dept == "Support"'
 ```
 
 **Nested conditions:**
 ```bash
-ssql where -expr '(age >= 18 and status == "active") or role == "admin"'
+ssql where -where-expr '(age >= 18 and status == "active") or role == "admin"'
 ```
 
 **Pattern matching:**
 ```bash
-ssql where -expr 'startsWith(email, "admin@") or endsWith(email, "@company.com")'
+ssql where -where-expr 'startsWith(email, "admin@") or endsWith(email, "@company.com")'
 ```
 
 ### 5. String Manipulation
@@ -304,10 +304,10 @@ ssql update -set-expr level 'revenue > 10000 ? "gold" : (revenue > 5000 ? "silve
 **Complex business rules:**
 ```bash
 # Eligible if: (age >= 18 AND has email) OR is admin
-ssql where -expr '(age >= 18 and has("email")) or role == "admin"'
+ssql where -where-expr '(age >= 18 and has("email")) or role == "admin"'
 
 # Active customer: has recent order AND good standing
-ssql where -expr 'days_since_order <= 90 and balance >= 0 and status != "suspended"'
+ssql where -where-expr 'days_since_order <= 90 and balance >= 0 and status != "suspended"'
 ```
 
 ### 8. Null/Missing Field Handling
@@ -319,7 +319,7 @@ ssql update -set-expr total 'getOr("price", 0) * getOr("qty", 1) + getOr("tax", 
 
 **Conditional on field existence:**
 ```bash
-ssql where -expr 'has("premium") and premium == true'
+ssql where -where-expr 'has("premium") and premium == true'
 ssql update -set-expr type 'has("premium") ? "premium" : "standard"'
 ```
 
@@ -328,11 +328,11 @@ ssql update -set-expr type 'has("premium") ? "premium" : "standard"'
 **Combine with other ssql commands:**
 ```bash
 # Read, filter with expression, calculate fields, filter again
-ssql read-csv sales.csv | \
-  ssql where -expr 'region == "West" and year == 2024' | \
+ssql from sales.csv | \
+  ssql where -where-expr 'region == "West" and year == 2024' | \
   ssql update -set-expr commission 'sales * 0.05' | \
-  ssql where -expr 'commission > 1000' | \
-  ssql write-csv high_performers.csv
+  ssql where -where-expr 'commission > 1000' | \
+  ssql to csv high_performers.csv
 ```
 
 ### 10. Code Generation
@@ -343,8 +343,8 @@ ssql read-csv sales.csv | \
 export SSQLGO=1
 
 # Build pipeline with expressions
-ssql read-csv data.csv | \
-  ssql where -expr 'price * qty > 1000' | \
+ssql from data.csv | \
+  ssql where -where-expr 'price * qty > 1000' | \
   ssql update -set-expr total 'price * qty' | \
   ssql update -set-expr tier 'total > 5000 ? "premium" : "standard"' | \
   ssql generate-go > program.go
@@ -378,7 +378,7 @@ go run program.go
 
 **Best Practices:**
 1. ✅ Use expressions for complex logic (vs. multiple commands)
-2. ✅ Pre-filter with simple `-match` before expensive expressions
+2. ✅ Pre-filter with simple `-where` before expensive expressions
 3. ✅ Use code generation for production workloads
 4. ✅ Profile with `SSQLGO=1` to generate optimized programs
 
@@ -402,26 +402,26 @@ ssql update -set-expr margin '((revenue - cost) / revenue) * 100'
 
 ```bash
 # Active users with recent activity
-ssql where -expr 'status == "active" and days_since_login <= 30'
+ssql where -where-expr 'status == "active" and days_since_login <= 30'
 
 # VIP customers
-ssql where -expr 'total_purchases > 10000 or subscription == "premium"'
+ssql where -where-expr 'total_purchases > 10000 or subscription == "premium"'
 
 # At-risk customers
-ssql where -expr 'days_since_purchase > 90 and lifetime_value > 1000'
+ssql where -where-expr 'days_since_purchase > 90 and lifetime_value > 1000'
 ```
 
 ### Data Quality
 
 ```bash
 # Valid email addresses
-ssql where -expr 'has("email") and contains(email, "@") and len(email) > 5'
+ssql where -where-expr 'has("email") and contains(email, "@") and len(email) > 5'
 
 # Complete profiles
-ssql where -expr 'has("name") and has("email") and has("phone") and has("address")'
+ssql where -where-expr 'has("name") and has("email") and has("phone") and has("address")'
 
 # Reasonable values
-ssql where -expr 'age >= 0 and age <= 120 and salary >= 0 and salary <= 10000000'
+ssql where -where-expr 'age >= 0 and age <= 120 and salary >= 0 and salary <= 10000000'
 ```
 
 ### Text Processing
@@ -493,7 +493,7 @@ Expressions do **not** support comments. Keep expressions concise and use comman
 **Features:**
 - Set multiple fields with multiple `-set-expr` flags
 - Combine with `-set` for literal values
-- Use `-match` for conditional updates (first-match-wins)
+- Use `-where` for conditional updates (first-where-wins)
 - Clause separators: `+` (OR), `-` (exclusive OR)
 
 **Examples:**
@@ -505,37 +505,37 @@ ssql update -set-expr total 'price * qty'
 ssql update -set-expr total 'price * qty' -set-expr tax 'total * 0.08'
 
 # Conditional with expression
-ssql update -match dept eq Sales -set-expr commission 'revenue * 0.05'
+ssql update -where dept eq Sales -set-expr commission 'revenue * 0.05'
 
 # If-else logic with clauses
 ssql update \
-  -match age lt 18 -set-expr category 'minor' + \
-  -match age ge 18 -set-expr category 'adult'
+  -where age lt 18 -set-expr category 'minor' + \
+  -where age ge 18 -set-expr category 'adult'
 ```
 
 ### where command
 
-**Syntax:** `ssql where -expr '<boolean-expression>'`
+**Syntax:** `ssql where -where-expr '<boolean-expression>'`
 
 **Features:**
 - Expression must return boolean value
-- Combine with `-match` conditions using OR logic
+- Combine with `-where` conditions using OR logic
 - Multiple `-expr` within clause use AND logic
 - Clause separators: `+` (OR)
 
 **Examples:**
 ```bash
 # Single expression filter
-ssql where -expr 'price * qty > 1000'
+ssql where -where-expr 'price * qty > 1000'
 
 # Multiple expressions (AND within clause)
-ssql where -expr 'age >= 18' -expr 'status == "active"'
+ssql where -where-expr 'age >= 18' -expr 'status == "active"'
 
 # Multiple clauses (OR between clauses)
-ssql where -expr 'dept == "Sales"' + -expr 'dept == "Marketing"'
+ssql where -where-expr 'dept == "Sales"' + -expr 'dept == "Marketing"'
 
-# Combine with -match
-ssql where -match verified eq true -expr 'age >= 18'
+# Combine with -where
+ssql where -where verified eq true -expr 'age >= 18'
 ```
 
 ## Error Handling
@@ -546,7 +546,7 @@ ssql where -match verified eq true -expr 'age >= 18'
 - CLI exits with error code
 
 ```bash
-$ ssql where -expr 'age >'
+$ ssql where -where-expr 'age >'
 Error: compiling expression "age >": unexpected end of expression
 ```
 

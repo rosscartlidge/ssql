@@ -1,7 +1,7 @@
 package lib
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,61 +12,98 @@ import (
 
 // ReadJSON reads JSON from a reader and returns an iterator of Records.
 // Auto-detects JSON array format ([{...}, {...}]) vs JSONL ({...}\n{...}\n)
+// Streams data to support early termination.
 func ReadJSON(r io.Reader) iter.Seq[ssql.Record] {
 	return func(yield func(ssql.Record) bool) {
-		// Read all input to detect format
-		data, err := io.ReadAll(r)
-		if err != nil {
-			return // Fail silently in streaming context
+		// Use buffered reader to peek at first non-whitespace byte
+		br := bufio.NewReader(r)
+
+		// Skip leading whitespace and peek at first character to detect format
+		for {
+			b, err := br.Peek(1)
+			if err != nil {
+				return // EOF or error
+			}
+			if b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r' {
+				br.ReadByte() // consume whitespace
+				continue
+			}
+			break
 		}
 
-		// Trim whitespace
-		data = bytes.TrimSpace(data)
-		if len(data) == 0 {
+		firstByte, err := br.Peek(1)
+		if err != nil {
 			return
 		}
 
-		// Check if it starts with '[' (JSON array)
-		if data[0] == '[' {
-			// Parse as JSON array
-			var records []map[string]interface{}
-			if err := json.Unmarshal(data, &records); err != nil {
-				return // Fail silently
-			}
-
-			for _, rec := range records {
-				record := ssql.MakeMutableRecord()
-				for k, v := range rec {
-					record = setValueFromJSON(record, k, v)
-				}
-
-				if !yield(record.Freeze()) {
-					return
-				}
-			}
+		if firstByte[0] == '[' {
+			// JSON array - use streaming decoder
+			readJSONArray(br, yield)
 		} else {
-			// Parse as JSONL (line by line)
-			lines := bytes.Split(data, []byte("\n"))
-			for _, line := range lines {
-				line = bytes.TrimSpace(line)
-				if len(line) == 0 {
-					continue
-				}
+			// JSONL - use line-by-line streaming
+			readJSONLines(br, yield)
+		}
+	}
+}
 
-				var rec map[string]interface{}
-				if err := json.Unmarshal(line, &rec); err != nil {
-					continue // Skip malformed lines
-				}
+// readJSONArray streams a JSON array using json.Decoder
+func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
+	decoder := json.NewDecoder(r)
 
-				record := ssql.MakeMutableRecord()
-				for k, v := range rec {
-					record = setValueFromJSON(record, k, v)
-				}
+	// Read opening bracket
+	token, err := decoder.Token()
+	if err != nil {
+		return
+	}
+	if delim, ok := token.(json.Delim); !ok || delim != '[' {
+		return // Not a JSON array
+	}
 
-				if !yield(record.Freeze()) {
-					return
-				}
-			}
+	// Read array elements
+	for decoder.More() {
+		var rec map[string]interface{}
+		if err := decoder.Decode(&rec); err != nil {
+			continue // Skip malformed elements
+		}
+
+		record := ssql.MakeMutableRecord()
+		for k, v := range rec {
+			record = setValueFromJSON(record, k, v)
+		}
+
+		if !yield(record.Freeze()) {
+			return // Early termination
+		}
+	}
+}
+
+// readJSONLines streams JSONL format line by line
+func readJSONLines(r io.Reader, yield func(ssql.Record) bool) {
+	scanner := bufio.NewScanner(r)
+
+	// Increase buffer size for large lines
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024) // 1MB max token size
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue // Skip empty lines
+		}
+
+		// Parse JSON object
+		var rec map[string]interface{}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue // Skip malformed lines
+		}
+
+		record := ssql.MakeMutableRecord()
+		for k, v := range rec {
+			record = setValueFromJSON(record, k, v)
+		}
+
+		if !yield(record.Freeze()) {
+			return // Early termination
 		}
 	}
 }

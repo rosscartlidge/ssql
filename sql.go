@@ -1046,3 +1046,66 @@ func Last[T Value](field string) AggregateFunc {
 	}
 }
 
+// Collect gathers all values from a field into a slice (SQL GROUP_CONCAT/ARRAY_AGG).
+// Returns a []any slice containing all non-nil values from the specified field.
+//
+// Example:
+//
+//	aggregations := map[string]ssql.AggregateFunc{
+//	    "all_names": ssql.Collect("name"),
+//	    "products":  ssql.Collect("product"),
+//	}
+func Collect(field string) AggregateFunc {
+	return func(records []Record) AggregateResult {
+		var result []any
+		for _, record := range records {
+			if val, ok := record.fields[field]; ok && val != nil {
+				result = append(result, val)
+			}
+		}
+		if result == nil {
+			result = []any{}
+		}
+		return AggResult[[]any]{val: result}
+	}
+}
+
+// CollectSeq gathers all values from a field into a typed iterator (SQL GROUP_CONCAT/ARRAY_AGG).
+// Returns an iter.Seq[any] containing all values from the specified field that match the type T.
+// Requires specifying the type parameter for compile-time type safety during collection.
+// Values that don't match type T are skipped.
+//
+// Example:
+//
+//	aggregations := map[string]ssql.AggregateFunc{
+//	    "all_names":    ssql.CollectSeq[string]("name"),
+//	    "all_amounts":  ssql.CollectSeq[float64]("amount"),
+//	    "all_products": ssql.CollectSeq[ssql.Record]("product"),
+//	}
+//
+// To iterate with type safety, use type assertion:
+//
+//	for val := range result {
+//	    name := val.(string)  // Safe if you used CollectSeq[string]
+//	}
+func CollectSeq[T Value](field string) AggregateFunc {
+	return func(records []Record) AggregateResult {
+		// Collect values into a slice first (records slice is consumed during aggregation)
+		var values []T
+		for _, record := range records {
+			if val, ok := Get[T](record, field); ok {
+				values = append(values, val)
+			}
+		}
+		// Return an iterator over the collected values as iter.Seq[any]
+		seq := func(yield func(any) bool) {
+			for _, v := range values {
+				if !yield(v) {
+					return
+				}
+			}
+		}
+		return AggResult[iter.Seq[any]]{val: seq}
+	}
+}
+
