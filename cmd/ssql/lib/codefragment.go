@@ -22,9 +22,14 @@ type CodeFragment struct {
 // ReadAllCodeFragments reads all code fragments from stdin
 // Returns empty slice if stdin is empty (EOF immediately)
 func ReadAllCodeFragments() ([]*CodeFragment, error) {
-	// Read all fragments - return empty slice on immediate EOF
+	return ReadCodeFragmentsFromReader(os.Stdin)
+}
+
+// ReadCodeFragmentsFromReader reads code fragments from any io.Reader
+// Returns empty slice if reader is empty (EOF immediately)
+func ReadCodeFragmentsFromReader(r io.Reader) ([]*CodeFragment, error) {
 	var fragments []*CodeFragment
-	decoder := json.NewDecoder(os.Stdin)
+	decoder := json.NewDecoder(r)
 
 	for {
 		var frag CodeFragment
@@ -38,6 +43,17 @@ func ReadAllCodeFragments() ([]*CodeFragment, error) {
 	}
 
 	return fragments, nil
+}
+
+// ReadCodeFragmentsFromFile reads code fragments from a file
+// Used for reading fragments from process substitution paths (/dev/fd/N)
+func ReadCodeFragmentsFromFile(filename string) ([]*CodeFragment, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return ReadCodeFragmentsFromReader(f)
 }
 
 // WriteCodeFragment writes a code fragment to stdout as JSONL
@@ -217,31 +233,84 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		code += "\t" + fixErrorHandling(frag.Code) + "\n"
 	}
 
-	// Build Chain() call if we have multiple stmt fragments
-	if len(stmtFragments) > 1 {
-		// Extract the input variable (from first init fragment, which is the main data source)
-		var inputVar string
-		if len(initFragments) > 0 {
-			inputVar = initFragments[0].Var
-		} else {
-			inputVar = "records"
-		}
+	// Separate stmt fragments into main pipeline vs side computations
+	// Main pipeline fragments trace back to first init through their input chain
+	// Side computation fragments (e.g., from process substitution) should be emitted directly
+	var mainPipelineFragments []*CodeFragment
+	var sideFragments []*CodeFragment
 
-		// Extract the output variable (from last stmt fragment)
-		outputVar := stmtFragments[len(stmtFragments)-1].Var
+	// Build a map of variable names to their producing fragments
+	varProducers := make(map[string]*CodeFragment)
+	for _, frag := range initFragments {
+		varProducers[frag.Var] = frag
+	}
+	for _, frag := range stmtFragments {
+		varProducers[frag.Var] = frag
+	}
+
+	// The main pipeline root is the first init fragment's variable
+	var mainPipelineRoot string
+	if len(initFragments) > 0 {
+		mainPipelineRoot = initFragments[0].Var
+	} else {
+		mainPipelineRoot = "records"
+	}
+
+	// Helper to trace if a variable chains back to main pipeline root
+	tracesToMain := func(varName string) bool {
+		visited := make(map[string]bool)
+		current := varName
+		for {
+			if current == mainPipelineRoot {
+				return true
+			}
+			if current == "" {
+				// Reached a root that is NOT the main pipeline root
+				return false
+			}
+			if visited[current] {
+				return false // cycle detection
+			}
+			visited[current] = true
+			frag, ok := varProducers[current]
+			if !ok {
+				return false
+			}
+			current = frag.Input
+		}
+	}
+
+	// Categorize stmt fragments
+	for _, frag := range stmtFragments {
+		if tracesToMain(frag.Input) {
+			mainPipelineFragments = append(mainPipelineFragments, frag)
+		} else {
+			sideFragments = append(sideFragments, frag)
+		}
+	}
+
+	// Emit side computation fragments first (they produce variables used by main pipeline)
+	for _, frag := range sideFragments {
+		code += "\t" + fixErrorHandling(frag.Code) + "\n"
+	}
+
+	// Build Chain() call if we have multiple main pipeline fragments
+	if len(mainPipelineFragments) > 1 {
+		// Extract the output variable (from last main pipeline fragment)
+		outputVar := mainPipelineFragments[len(mainPipelineFragments)-1].Var
 
 		// Build filters array
 		code += "\t" + outputVar + " := ssql.Chain(\n"
-		for _, frag := range stmtFragments {
+		for _, frag := range mainPipelineFragments {
 			// Extract just the filter function from the code
 			// Pattern: "var := filter(input)" -> "filter"
 			filterCode := extractFilter(frag.Code)
 			code += "\t\t" + filterCode + ",\n"
 		}
-		code += "\t)(" + inputVar + ")\n"
-	} else if len(stmtFragments) == 1 {
+		code += "\t)(" + mainPipelineRoot + ")\n"
+	} else if len(mainPipelineFragments) == 1 {
 		// Single transformation - use directly
-		code += "\t" + fixErrorHandling(stmtFragments[0].Code) + "\n"
+		code += "\t" + fixErrorHandling(mainPipelineFragments[0].Code) + "\n"
 	}
 
 	// Add final fragments (e.g., write-csv)
@@ -251,12 +320,12 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		}
 	} else {
 		// No final fragment - auto-add JSONL output
-		// Find the last output variable
+		// Find the last output variable from the main pipeline
 		var outputVar string
-		if len(stmtFragments) > 0 {
-			outputVar = stmtFragments[len(stmtFragments)-1].Var
+		if len(mainPipelineFragments) > 0 {
+			outputVar = mainPipelineFragments[len(mainPipelineFragments)-1].Var
 		} else if len(initFragments) > 0 {
-			outputVar = initFragments[len(initFragments)-1].Var
+			outputVar = initFragments[0].Var // main pipeline root
 		} else {
 			outputVar = "records"
 		}

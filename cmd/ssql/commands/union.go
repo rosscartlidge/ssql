@@ -14,9 +14,10 @@ import (
 // RegisterUnion registers the union subcommand
 func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("union").
-		Description("Combine records from multiple sources (SQL UNION)").
-		Example("ssql from 2023.csv | ssql union -file 2024.csv", "Combine two years of data (removes duplicates)").
-		Example("ssql from east.csv | ssql union -all -file west.csv -file south.csv", "Combine three regions keeping all records (UNION ALL)").
+		Description("Combine records from multiple sources (SQL UNION). Additional files must be JSONL.").
+		Example("ssql from 2023.jsonl | ssql union -file 2024.jsonl", "Combine two JSONL files (removes duplicates)").
+		Example("ssql from 2023.csv | ssql union -file <(ssql from csv 2024.csv)", "Combine CSV files via process substitution").
+		Example("ssql from east.csv | ssql union -all -file <(ssql from csv west.csv) -file <(ssql from csv south.csv)", "Combine multiple CSV files (UNION ALL)").
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -24,10 +25,10 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-file", "-f").
 			String().
-			Completer(&cf.FileCompleter{Pattern: "*.{csv,jsonl}"}).
+			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
 			Accumulate().
 			Local().
-			Help("Additional file to union (CSV or JSONL)").
+			Help("Additional JSONL file. For CSV: -file <(ssql from csv FILE)").
 		Done().
 		Flag("-all", "-a").
 			Bool().
@@ -98,6 +99,9 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // generateUnionCode generates Go code for the union command
+// Handles two scenarios for each additional file:
+// 1. Direct JSONL file: generates code to read the file
+// 2. Process substitution (/dev/fd/N): reads fragments from it and incorporates them
 func generateUnionCode(additionalFiles []string, unionAll bool) error {
 	// Read all previous code fragments from stdin
 	fragments, err := lib.ReadAllCodeFragments()
@@ -123,26 +127,82 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 	// Build code to read additional files and combine with Concat
 	var codeLines []string
 	var readVars []string
+	needsLibImport := false // Only true if we generate lib.ReadJSONL code
 
 	for i, file := range additionalFiles {
 		varName := fmt.Sprintf("records%d", i+1)
-		readVars = append(readVars, varName)
 
-		// Detect file type by extension
-		if strings.HasSuffix(strings.ToLower(file), ".csv") {
-			codeLines = append(codeLines, fmt.Sprintf(`%s, err := ssql.ReadCSV(%q)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading %s: %%v\n", err)
-		os.Exit(1)
-	}`, varName, file, file))
-		} else {
-			// JSON/JSONL
-			codeLines = append(codeLines, fmt.Sprintf(`%s, err := ssql.ReadJSONAuto(%q)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading %s: %%v\n", err)
-		os.Exit(1)
-	}`, varName, file, file))
+		// Check if this is a process substitution path (/dev/fd/N)
+		// In generation mode, these contain code fragments from the inner command
+		if strings.HasPrefix(file, "/dev/fd/") {
+			fileFragments, err := lib.ReadCodeFragmentsFromFile(file)
+			if err == nil && len(fileFragments) > 0 {
+				// Rename all variables in secondary fragments to avoid collision
+				// We assign new names per fragment index, then track what each original var maps to
+				prefix := fmt.Sprintf("union%d_", i+1)
+				newVarNames := make([]string, len(fileFragments))
+				varRename := make(map[string]string) // maps old var name to new (updated per fragment)
+
+				for j, frag := range fileFragments {
+					if frag.Var != "" {
+						var newName string
+						if j == len(fileFragments)-1 {
+							// Last fragment's output becomes recordsN
+							newName = varName
+						} else {
+							// Intermediate variables get unique prefixed names
+							newName = fmt.Sprintf("%s%s_%d", prefix, frag.Var, j)
+						}
+						newVarNames[j] = newName
+						varRename[frag.Var] = newName
+					}
+				}
+
+				// Apply renames to all fragments
+				for j, frag := range fileFragments {
+					// First, rename input variable reference using the mapping built so far
+					// (must happen before we update the map with this fragment's output)
+					if frag.Input != "" {
+						if newInput, ok := varRename[frag.Input]; ok {
+							oldInput := frag.Input
+							frag.Input = newInput
+							// Update code to reference renamed input
+							frag.Code = strings.Replace(frag.Code, ")("+oldInput+")", ")("+newInput+")", 1)
+						}
+					}
+
+					// Then, rename output variable
+					if newVarNames[j] != "" {
+						oldVar := frag.Var
+						newVar := newVarNames[j]
+						frag.Var = newVar
+						// Update code to use new variable name
+						frag.Code = strings.Replace(frag.Code, oldVar+", err :=", newVar+", err :=", 1)
+						frag.Code = strings.Replace(frag.Code, oldVar+" :=", newVar+" :=", 1)
+						// Update varRename for subsequent fragments that reference this output
+						varRename[oldVar] = newVar
+					}
+
+					if err := lib.WriteCodeFragment(frag); err != nil {
+						return fmt.Errorf("writing fragment from %s: %w", file, err)
+					}
+				}
+				readVars = append(readVars, varName)
+				continue // Skip to next file
+			}
+			// If reading fragments failed, fall through to normal file handling
 		}
+
+		// Generate JSONL reading code
+		needsLibImport = true
+		readVars = append(readVars, varName)
+		codeLines = append(codeLines, fmt.Sprintf(`%sFile, err := os.Open(%q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
+		os.Exit(1)
+	}
+	defer %sFile.Close()
+	%s := lib.ReadJSONL(%sFile)`, varName, file, file, varName, varName, varName))
 	}
 
 	// Build Concat call
@@ -160,7 +220,10 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 	}
 
 	code := strings.Join(codeLines, "\n\t")
-	imports := []string{"fmt", "os"}
+	var imports []string
+	if needsLibImport {
+		imports = []string{"fmt", "os", "github.com/rosscartlidge/ssql/v3/cmd/ssql/lib"}
+	}
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
 	return lib.WriteCodeFragment(frag)

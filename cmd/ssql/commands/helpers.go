@@ -152,7 +152,7 @@ func contains(str, substr string) bool {
 	return false
 }
 
-// buildAggregator builds a StreamV3 AggregateFunc from a spec (for group-by command)
+// buildAggregator builds an ssql AggregateFunc from a spec (for group-by command)
 func buildAggregator(function, field string) (ssql.AggregateFunc, error) {
 	switch function {
 	case "count":
@@ -178,7 +178,10 @@ func unionRecordToKey(r ssql.Record) string {
 	return fmt.Sprintf("%v", r)
 }
 
-// chainRecords chains multiple data sources into a single stream (for union command)
+// chainRecords chains multiple JSONL data sources into a single stream (for union command)
+// Secondary sources must be JSONL format. For CSV files, use process substitution:
+//
+//	ssql from data1.csv | ssql union -file <(ssql from csv data2.csv)
 func chainRecords(firstRecords iter.Seq[ssql.Record], additionalFiles []string) iter.Seq[ssql.Record] {
 	return func(yield func(ssql.Record) bool) {
 		// Yield from first stream
@@ -188,34 +191,27 @@ func chainRecords(firstRecords iter.Seq[ssql.Record], additionalFiles []string) 
 			}
 		}
 
-		// Yield from each additional file
+		// Yield from each additional file (JSONL only)
 		for _, file := range additionalFiles {
-			var records iter.Seq[ssql.Record]
-
-			if strings.HasSuffix(file, ".csv") {
-				// Read CSV
-				csvRecords, err := ssql.ReadCSV(file)
-				if err != nil {
-					// Skip file on error
-					continue
+			f, err := os.Open(file)
+			if err != nil {
+				// Provide helpful error for non-JSONL files
+				if !strings.HasPrefix(file, "/dev/fd/") && !strings.HasSuffix(strings.ToLower(file), ".jsonl") {
+					fmt.Fprintf(os.Stderr, "Warning: cannot open %s: %v\nFor CSV files use: -file <(ssql from csv %s)\n", file, err, file)
+				} else {
+					fmt.Fprintf(os.Stderr, "Warning: cannot open %s: %v\n", file, err)
 				}
-				records = csvRecords
-			} else {
-				// Read JSONL
-				f, err := os.Open(file)
-				if err != nil {
-					continue
-				}
-				records = lib.ReadJSONL(f)
-				defer f.Close()
+				continue
 			}
 
-			// Yield from this file
+			records := lib.ReadJSONL(f)
 			for record := range records {
 				if !yield(record) {
+					f.Close()
 					return
 				}
 			}
+			f.Close()
 		}
 	}
 }

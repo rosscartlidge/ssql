@@ -15,7 +15,7 @@ import (
 )
 
 // ============================================================================
-// STREAMV3 - PURE ITER.SEQ DESIGN WITH DUAL ERROR HANDLING
+// SSQL - PURE ITER.SEQ DESIGN WITH DUAL ERROR HANDLING
 // ============================================================================
 
 // ============================================================================
@@ -23,7 +23,7 @@ import (
 // ============================================================================
 
 // Filter transforms one iterator to another with full type flexibility.
-// This is the core type for composable stream operations in StreamV3.
+// This is the core type for composable stream operations in ssql.
 //
 // Example:
 //
@@ -54,7 +54,7 @@ type FilterWithErrors[T, U any] func(iter.Seq2[T, error]) iter.Seq2[U, error]
 // ============================================================================
 
 // Pipe composes two filters sequentially (T -> U -> V).
-// This is the fundamental way to chain operations with type changes in StreamV3.
+// This is the fundamental way to chain operations with type changes in ssql.
 //
 // Example:
 //

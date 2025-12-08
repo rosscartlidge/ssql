@@ -140,7 +140,7 @@ Once implemented, `Flag("FILE")` (no leading `-`) will automatically:
 
 2. Update dependency:
    ```bash
-   cd /home/rossc/src/streamv3
+   cd /home/rossc/src/ssql
    go get github.com/rosscartlidge/completionflags@latest
    go mod tidy
    ```

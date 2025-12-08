@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	fmt.Println("🪟 StreamV3 Windowing Operations Demo")
+	fmt.Println("🪟 ssql Windowing Operations Demo")
 	fmt.Println("=====================================\n")
 
 	// Test 1: CountWindow - Fixed-size windows

@@ -104,7 +104,7 @@ Each test checks:
 ### 1. Import Path
 ```go
 ✅ import "github.com/rosscartlidge/ssql"
-❌ import "github.com/rocketlaunchr/streamv3"  // Wrong!
+❌ import "github.com/rocketlaunchr/ssql"  // Wrong!
 ```
 
 ### 2. SQL-Style Naming

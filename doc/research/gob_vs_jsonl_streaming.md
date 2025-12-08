@@ -165,7 +165,7 @@ This is insignificant for typical CLI usage where:
 ssql read-csv data.csv | ssql where -match age gt 30
 
 # Opt-in Gob mode for performance (internal only)
-export STREAMV3_INTERNAL_FORMAT=gob
+export SSQL_INTERNAL_FORMAT=gob
 ssql read-csv data.csv | ssql where -match age gt 30
 ```
 

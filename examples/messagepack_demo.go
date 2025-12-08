@@ -44,7 +44,7 @@ func main() {
 	fmt.Println("cat data.csv | myprogram | otherprogram > output.json")
 	fmt.Println("")
 
-	fmt.Println("# High performance (MessagePack) - StreamV3 to StreamV3")
+	fmt.Println("# High performance (MessagePack) - ssql to ssql")
 	fmt.Println("cat data.csv | myprogram --format=msgpack | otherprogram --format=msgpack")
 	fmt.Println("")
 
@@ -64,7 +64,7 @@ func main() {
 	fmt.Println("   Use when: Integrating with other tools, debugging, unknown downstream consumers")
 	fmt.Println("")
 	fmt.Println("⚡ **Performance + Compatibility**: MessagePack")
-	fmt.Println("   Use when: StreamV3-heavy pipelines, performance matters, other tools support MessagePack")
+	fmt.Println("   Use when: ssql-heavy pipelines, performance matters, other tools support MessagePack")
 	fmt.Println("")
 	fmt.Println("🔧 **Go Ecosystem Only**: gob")
 	fmt.Println("   Use when: Pure Go pipelines, maximum efficiency, no external tool integration")
@@ -75,7 +75,7 @@ func main() {
 	fmt.Println("\n💡 Smart Default Strategy:")
 	fmt.Println("===========================")
 	fmt.Println("1. **Auto-detect**: If stdin is a tty, default to JSON (human debugging)")
-	fmt.Println("2. **Environment variable**: STREAMV3_FORMAT=msgpack")
+	fmt.Println("2. **Environment variable**: SSQL_FORMAT=msgpack")
 	fmt.Println("3. **Content negotiation**: Detect format from input stream")
 	fmt.Println("4. **Command line flag**: --format=json|msgpack|gob|gzip")
 

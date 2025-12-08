@@ -16,7 +16,7 @@ Migrate ssql from custom subcommand routing to native completionflags subcommand
 
 - [ ] Update completionflags to latest version
   ```bash
-  cd /home/rossc/src/streamv3
+  cd /home/rossc/src/ssql
   go get github.com/rosscartlidge/completionflags@latest
   go mod tidy
   ```
@@ -112,7 +112,7 @@ Create `cmd/ssql/main_v2.go` with root command and 3 simple subcommands.
   func buildRootCommand() *cf.Command {
       var verbose bool
 
-      return cf.NewCommand("streamv3").
+      return cf.NewCommand("ssql").
           Version(version.Version).
           Description("Unix-style data processing tools").
 
@@ -180,12 +180,12 @@ Create `cmd/ssql/main_v2.go` with root command and 3 simple subcommands.
 - [ ] Test limit subcommand
   ```bash
   # Build with POC
-  go build -o streamv3_v2 -tags=v2 ./cmd/ssql
+  go build -o ssql_v2 -tags=v2 ./cmd/ssql
 
   # Test
   echo '{"id":1}
   {"id":2}
-  {"id":3}' | ./streamv3_v2 limit -n 2
+  {"id":3}' | ./ssql_v2 limit -n 2
 
   # Expected: First 2 records only
   ```
@@ -202,7 +202,7 @@ Create `cmd/ssql/main_v2.go` with root command and 3 simple subcommands.
   ```bash
   echo '{"id":1}
   {"id":2}
-  {"id":3}' | ./streamv3_v2 offset -n 1
+  {"id":3}' | ./ssql_v2 offset -n 1
 
   # Expected: Last 2 records (skip first)
   ```
@@ -219,7 +219,7 @@ Create `cmd/ssql/main_v2.go` with root command and 3 simple subcommands.
   ```bash
   echo '{"name":"Alice"}
   {"name":"Bob"}
-  {"name":"Alice"}' | ./streamv3_v2 distinct
+  {"name":"Alice"}' | ./ssql_v2 distinct
 
   # Expected: Only unique records
   ```
@@ -232,31 +232,31 @@ Create `cmd/ssql/main_v2.go` with root command and 3 simple subcommands.
 
 - [ ] Generate completion script
   ```bash
-  ./streamv3_v2 -completion-script > /tmp/streamv3_v2_completion.sh
+  ./ssql_v2 -completion-script > /tmp/ssql_v2_completion.sh
   ```
 
 - [ ] Source completion script
   ```bash
-  source /tmp/streamv3_v2_completion.sh
+  source /tmp/ssql_v2_completion.sh
   ```
 
 - [ ] Test subcommand completion
   ```bash
-  streamv3_v2 lim<TAB>    # Should complete to "limit"
-  streamv3_v2 off<TAB>    # Should complete to "offset"
-  streamv3_v2 dis<TAB>    # Should complete to "distinct"
+  ssql_v2 lim<TAB>    # Should complete to "limit"
+  ssql_v2 off<TAB>    # Should complete to "offset"
+  ssql_v2 dis<TAB>    # Should complete to "distinct"
   ```
 
 - [ ] Test flag completion
   ```bash
-  streamv3_v2 limit -<TAB>    # Should show "-n" and "-help"
-  streamv3_v2 -<TAB>          # Should show "-verbose", "-version", etc.
+  ssql_v2 limit -<TAB>    # Should show "-n" and "-help"
+  ssql_v2 -<TAB>          # Should show "-verbose", "-version", etc.
   ```
 
 - [ ] Test help
   ```bash
-  streamv3_v2 -help           # Should show all subcommands
-  streamv3_v2 limit -help     # Should show limit-specific help
+  ssql_v2 -help           # Should show all subcommands
+  ssql_v2 limit -help     # Should show limit-specific help
   ```
 
 **Expected Output:** All completion and help working correctly
@@ -273,7 +273,7 @@ Create `cmd/ssql/main_v2.go` with root command and 3 simple subcommands.
 
 - [ ] Test POC in pipeline
   ```bash
-  cat data.jsonl | ./streamv3_v2 limit -n 10 | ./streamv3_v2 offset -n 5
+  cat data.jsonl | ./ssql_v2 limit -n 10 | ./ssql_v2 offset -n 5
   ```
 
 - [ ] Document findings in `doc/migration/poc_results.md`
@@ -330,11 +330,11 @@ Subcommand("select").
 ```
 
 - [ ] Migrate `select` command
-- [ ] Test: `echo '{"a":1,"b":2}' | streamv3_v2 select -field a`
+- [ ] Test: `echo '{"a":1,"b":2}' | ssql_v2 select -field a`
 - [ ] Migrate `sort` command
-- [ ] Test: `cat data.jsonl | streamv3_v2 sort -field age -desc`
+- [ ] Test: `cat data.jsonl | ssql_v2 sort -field age -desc`
 - [ ] Migrate `reverse` command
-- [ ] Test: `cat data.jsonl | streamv3_v2 reverse`
+- [ ] Test: `cat data.jsonl | ssql_v2 reverse`
 
 **Expected Output:** 6 commands migrated (limit, offset, distinct, select, sort, reverse)
 
@@ -356,9 +356,9 @@ Commands that read/write files.
 - Handle stdin/stdout defaults
 
 - [ ] Migrate `read-csv` command
-- [ ] Test: `streamv3_v2 read-csv -file data.csv`
+- [ ] Test: `ssql_v2 read-csv -file data.csv`
 - [ ] Migrate `write-csv` command
-- [ ] Test: `cat data.jsonl | streamv3_v2 write-csv -file out.csv`
+- [ ] Test: `cat data.jsonl | ssql_v2 write-csv -file out.csv`
 - [ ] Migrate `read-jsonl` command
 - [ ] Migrate `write-jsonl` command
 
@@ -404,11 +404,11 @@ Subcommand("where").
 ```
 
 - [ ] Migrate `where` command
-- [ ] Test simple: `cat data.jsonl | streamv3_v2 where -match age gt 30`
-- [ ] Test AND: `cat data.jsonl | streamv3_v2 where -match age gt 30 -match dept eq Eng`
-- [ ] Test OR: `cat data.jsonl | streamv3_v2 where -match age gt 30 + -match salary gt 100000`
+- [ ] Test simple: `cat data.jsonl | ssql_v2 where -match age gt 30`
+- [ ] Test AND: `cat data.jsonl | ssql_v2 where -match age gt 30 -match dept eq Eng`
+- [ ] Test OR: `cat data.jsonl | ssql_v2 where -match age gt 30 + -match salary gt 100000`
 - [ ] Migrate `group-by` command
-- [ ] Test: `cat data.jsonl | streamv3_v2 group-by -field dept -aggregate salary sum`
+- [ ] Test: `cat data.jsonl | ssql_v2 group-by -field dept -aggregate salary sum`
 
 **Expected Output:** 12 commands migrated total
 
@@ -424,11 +424,11 @@ Subcommand("where").
 - [ ] Migrate `join` command
   - Note: Already uses `OnFields()` and `OnCondition()` correctly!
   - Should work with minimal changes
-- [ ] Test join: `cat left.jsonl | streamv3_v2 join -right right.jsonl -on id`
+- [ ] Test join: `cat left.jsonl | ssql_v2 join -right right.jsonl -on id`
 - [ ] Migrate `chart` command
-- [ ] Test chart: `cat data.jsonl | streamv3_v2 chart -x date -y value -file chart.html`
+- [ ] Test chart: `cat data.jsonl | ssql_v2 chart -x date -y value -file chart.html`
 - [ ] Migrate `exec` command
-- [ ] Test exec: `streamv3_v2 exec -cmd "seq 1 10"`
+- [ ] Test exec: `ssql_v2 exec -cmd "seq 1 10"`
 
 **Expected Output:** All 15 commands migrated!
 
@@ -507,8 +507,8 @@ Subcommand("where").
 
 - [ ] Test completion
   ```bash
-  ssql -completion-script > /tmp/streamv3_completion.sh
-  source /tmp/streamv3_completion.sh
+  ssql -completion-script > /tmp/ssql_completion.sh
+  source /tmp/ssql_completion.sh
 
   # Test completion works
   ssql wh<TAB>

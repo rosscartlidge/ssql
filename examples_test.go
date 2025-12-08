@@ -147,7 +147,7 @@ func TestSpecificExamples(t *testing.T) {
 			name: "tee_methods",
 			file: "examples/tee_methods_example.go",
 			contains: []string{
-				"StreamV3 Tee Methods Comparison",
+				"ssql Tee Methods Comparison",
 				"Method 1: Using standalone Tee function",
 				"Method 2: Using Stream.Tee() method",
 			},

@@ -104,7 +104,7 @@ results := ssql.Aggregate("analysis", aggs)(grouped)  // Different!
 
 **What LLMs use:**
 ```go
-❌ import "github.com/rocketlaunchr/streamv3"  // Wrong project!
+❌ import "github.com/rocketlaunchr/ssql"  // Wrong project!
 ```
 
 **Why it happens:**

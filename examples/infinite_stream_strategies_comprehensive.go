@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	fmt.Println("🌊 StreamV3 Infinite Stream Strategies - Comprehensive Demo")
+	fmt.Println("🌊 ssql Infinite Stream Strategies - Comprehensive Demo")
 	fmt.Println("===========================================================\n")
 
 	// Demonstrate all four strategies working together

@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	fmt.Println("📊 StreamV3 Serialization Format Comparison")
+	fmt.Println("📊 ssql Serialization Format Comparison")
 	fmt.Println("==========================================\n")
 
 	// Create test data that represents realistic pipeline data
@@ -88,7 +88,7 @@ func main() {
 	fmt.Println("\n💡 Recommendations:")
 	fmt.Println("===================")
 	fmt.Println("🌐 **Default: JSON** - For maximum compatibility and debugging")
-	fmt.Println("🔧 **Go-to-Go: gob** - When chaining only StreamV3 programs")
+	fmt.Println("🔧 **Go-to-Go: gob** - When chaining only ssql programs")
 	fmt.Println("🗜️  **Large datasets: Compressed JSON** - Best of both worlds")
 	fmt.Println("⚡ **High performance: Custom binary** - When every byte/microsecond counts")
 

@@ -1,4 +1,4 @@
-# My ideas for streamv3
+# My ideas for ssql
 
 ## Summary
 

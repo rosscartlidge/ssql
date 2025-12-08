@@ -29,7 +29,9 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("table").
 		Description("Display as formatted table").
 		Example("ssql from data.csv | ssql to table", "Display CSV as formatted table").
-		Example("ssql from data.csv | ssql where -where age gt 21 | ssql to table -max-width 30", "Filter and display with custom column width").
+		Example("ssql from data.csv | ssql to table name age city", "Display with name, age, city first, then other fields").
+		Example("ssql from data.csv | ssql to table -only name age", "Display only name and age columns").
+		Example("ssql from data.csv | ssql to table -max-width 30", "Display with custom column width").
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -41,9 +43,22 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 			Default(50).
 			Help("Maximum column width (truncate longer values)").
 		Done().
+		Flag("-only").
+			Bool().
+			Global().
+			Help("Only show specified fields (hide others)").
+		Done().
+		Flag("FIELDS").
+			String().
+			Variadic().
+			Global().
+			Help("Field names to display first (in order)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 			var maxWidth int
+			var onlySpecified bool
+			var fields []string
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
@@ -53,14 +68,28 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 				maxWidth = widthVal.(int)
 			}
 
+			if onlyVal, ok := ctx.GlobalFlags["-only"]; ok {
+				onlySpecified = onlyVal.(bool)
+			}
+
+			if fieldsVal, ok := ctx.GlobalFlags["FIELDS"]; ok {
+				if fieldsSlice, ok := fieldsVal.([]any); ok {
+					for _, f := range fieldsSlice {
+						if s, ok := f.(string); ok && s != "" {
+							fields = append(fields, s)
+						}
+					}
+				}
+			}
+
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateToTableCode(maxWidth)
+				return generateToTableCode(maxWidth, fields, onlySpecified)
 			}
 
 			// Read all records from stdin and display as table
 			records := lib.ReadJSONL(os.Stdin)
-			ssql.DisplayTable(records, maxWidth)
+			ssql.DisplayTableWithFields(records, maxWidth, fields, onlySpecified)
 			return nil
 		}).
 		Done()
@@ -255,7 +284,7 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 
 // Code generation functions
 
-func generateToTableCode(maxWidth int) error {
+func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -274,9 +303,33 @@ func generateToTableCode(maxWidth int) error {
 		inputVar = "records"
 	}
 
-	code := fmt.Sprintf("\tssql.DisplayTable(%s, %d)\n", inputVar, maxWidth)
+	var code string
+	if len(fields) > 0 {
+		// Generate code with field ordering
+		quotedFields := make([]string, len(fields))
+		for i, f := range fields {
+			quotedFields[i] = fmt.Sprintf("%q", f)
+		}
+		fieldsStr := "[]string{" + joinStrings(quotedFields, ", ") + "}"
+		code = fmt.Sprintf("\tssql.DisplayTableWithFields(%s, %d, %s, %t)\n", inputVar, maxWidth, fieldsStr, onlySpecified)
+	} else {
+		// No fields specified - use simple DisplayTable
+		code = fmt.Sprintf("\tssql.DisplayTable(%s, %d)\n", inputVar, maxWidth)
+	}
 	frag := lib.NewFinalFragment(inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)
+}
+
+// joinStrings joins strings with a separator (avoiding strings import for simple case)
+func joinStrings(strs []string, sep string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	result := strs[0]
+	for _, s := range strs[1:] {
+		result += sep + s
+	}
+	return result
 }
 
 func generateToCSVCode(filename string) error {

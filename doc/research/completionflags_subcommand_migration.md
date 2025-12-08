@@ -27,7 +27,7 @@ With completionflags native subcommand support, we can eliminate all custom rout
 
 **Structure:**
 ```go
-root := cf.NewCommand("streamv3").
+root := cf.NewCommand("ssql").
     Description("Unix-style data processing tools").
     Flag("-verbose").Global().Bool().Done().
     Subcommand("read-csv").
@@ -119,7 +119,7 @@ Start with 2-3 simple commands:
 
 ### Step 3: Add feature flag
 ```go
-useNativeSubcommands := os.Getenv("STREAMV3_NATIVE_SUBCOMMANDS") == "1"
+useNativeSubcommands := os.Getenv("SSQL_NATIVE_SUBCOMMANDS") == "1"
 if useNativeSubcommands {
     // Use main_v2.go logic
 } else {
@@ -177,7 +177,7 @@ func (c *whereCommand) Execute(ctx context.Context, args []string) error {
 **main.go:**
 ```go
 func main() {
-    root := cf.NewCommand("streamv3").
+    root := cf.NewCommand("ssql").
         Description("Unix-style data processing tools").
         Flag("-verbose").Global().Bool().Done().
         Subcommand("where").
@@ -286,8 +286,8 @@ Internal only - user-facing CLI unchanged (except completion flag).
 ssql read-csv data.csv | ssql where -match age gt 30
 
 # Test new system
-STREAMV3_NATIVE_SUBCOMMANDS=1 ssql read-csv data.csv | \
-  STREAMV3_NATIVE_SUBCOMMANDS=1 ssql where -match age gt 30
+SSQL_NATIVE_SUBCOMMANDS=1 ssql read-csv data.csv | \
+  SSQL_NATIVE_SUBCOMMANDS=1 ssql where -match age gt 30
 ```
 
 ### Phase 2: Integration Tests

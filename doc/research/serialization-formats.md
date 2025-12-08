@@ -182,7 +182,7 @@ Implement intelligent format selection:
 ```go
 func selectDefaultFormat() SerializationFormat {
     // 1. Check environment variable
-    if format := os.Getenv("STREAMV3_FORMAT"); format != "" {
+    if format := os.Getenv("SSQL_FORMAT"); format != "" {
         return parseFormat(format)
     }
 
@@ -210,7 +210,7 @@ func selectDefaultFormat() SerializationFormat {
 **Example:**
 ```bash
 # Standard data processing with jq integration
-cat sales.csv | streamv3_analyze | jq '.[] | select(.revenue > 1000)' | streamv3_report
+cat sales.csv | ssql_analyze | jq '.[] | select(.revenue > 1000)' | ssql_report
 ```
 
 #### ⚡ MessagePack
@@ -223,7 +223,7 @@ cat sales.csv | streamv3_analyze | jq '.[] | select(.revenue > 1000)' | streamv3
 **Example:**
 ```bash
 # High-throughput real-time processing
-kafka_consumer | streamv3_process --format=msgpack | streamv3_aggregate --format=msgpack | kafka_producer
+kafka_consumer | ssql_process --format=msgpack | ssql_aggregate --format=msgpack | kafka_producer
 ```
 
 #### 📦 Compressed JSON
@@ -236,8 +236,8 @@ kafka_consumer | streamv3_process --format=msgpack | streamv3_aggregate --format
 **Example:**
 ```bash
 # Large dataset archival processing
-cat massive_logs.csv | streamv3_clean | gzip | aws s3 cp - s3://data-lake/processed/
-cat backup.json.gz | gunzip | streamv3_restore | streamv3_validate
+cat massive_logs.csv | ssql_clean | gzip | aws s3 cp - s3://data-lake/processed/
+cat backup.json.gz | gunzip | ssql_restore | ssql_validate
 ```
 
 #### 🔧 Go gob
@@ -259,15 +259,15 @@ Set system-wide preferences:
 
 ```bash
 # Performance-focused environment
-export STREAMV3_FORMAT=msgpack
+export SSQL_FORMAT=msgpack
 
 # Development environment
-export STREAMV3_FORMAT=json
-export STREAMV3_DEBUG=true
+export SSQL_FORMAT=json
+export SSQL_DEBUG=true
 
 # Production data pipeline
-export STREAMV3_INPUT_FORMAT=auto
-export STREAMV3_OUTPUT_FORMAT=gzip
+export SSQL_INPUT_FORMAT=auto
+export SSQL_OUTPUT_FORMAT=gzip
 ```
 
 ### Migration Strategy

@@ -70,7 +70,7 @@ func main() {
 	types := slices.Values([]string{"bug", "feature"})
 
 	record2 := ssql.MakeMutableRecord().
-		String("project", "StreamV3").
+		String("project", "ssql").
 		StringSeq("priorities", priorities).
 		StringSeq("types", types).
 		Freeze()

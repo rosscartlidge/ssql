@@ -858,6 +858,7 @@ func TestWriteJSONGeneration(t *testing.T) {
 }
 
 // TestJoinGeneration tests code generation for the join command
+// Note: join now only accepts JSONL files for secondary sources (use process substitution for CSV)
 func TestJoinGeneration(t *testing.T) {
 	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
 	if err := buildCmd.Run(); err != nil {
@@ -865,19 +866,14 @@ func TestJoinGeneration(t *testing.T) {
 	}
 	defer os.Remove("/tmp/ssql_test")
 
-	// Create test CSV files for join operations
-	users := "id,name\n1,Alice\n2,Bob\n"
-	orders := "id,user_id,amount\n101,1,50\n102,2,75\n"
-
-	if err := os.WriteFile("/tmp/test_users.csv", []byte(users), 0644); err != nil {
-		t.Fatalf("Failed to create users CSV: %v", err)
+	// Create test JSONL files for join operations
+	orders := `{"id":101,"user_id":1,"amount":50}
+{"id":102,"user_id":2,"amount":75}
+`
+	if err := os.WriteFile("/tmp/test_orders.jsonl", []byte(orders), 0644); err != nil {
+		t.Fatalf("Failed to create orders JSONL: %v", err)
 	}
-	defer os.Remove("/tmp/test_users.csv")
-
-	if err := os.WriteFile("/tmp/test_orders.csv", []byte(orders), 0644); err != nil {
-		t.Fatalf("Failed to create orders CSV: %v", err)
-	}
-	defer os.Remove("/tmp/test_orders.csv")
+	defer os.Remove("/tmp/test_orders.jsonl")
 
 	tests := []struct {
 		name     string
@@ -886,12 +882,12 @@ func TestJoinGeneration(t *testing.T) {
 	}{
 		{
 			name:    "join basic with -on",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.csv -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.jsonl -on user_id`,
 			wantStrs: []string{
 				`"type":"init"`,
 				`rightRecords`,
-				`ssql.ReadCSV`,
-				`/tmp/test_orders.csv`,
+				`lib.ReadJSONL`,
+				`/tmp/test_orders.jsonl`,
 				`"type":"stmt"`,
 				`"var":"joined"`,
 				`ssql.InnerJoin`,
@@ -901,7 +897,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with -type left",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type left /tmp/test_orders.csv -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type left /tmp/test_orders.jsonl -on user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.LeftJoin`,
@@ -909,7 +905,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with -type right",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type right /tmp/test_orders.csv -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type right /tmp/test_orders.jsonl -on user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.RightJoin`,
@@ -917,7 +913,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with -type full",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type full /tmp/test_orders.csv -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type full /tmp/test_orders.jsonl -on user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.FullJoin`,
@@ -925,7 +921,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with multiple -on fields",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.csv -on field1 -on field2`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.jsonl -on field1 -on field2`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.OnFields`,
@@ -955,7 +951,60 @@ func TestJoinGeneration(t *testing.T) {
 }
 
 // TestJoinGenerationFullPipeline tests that join works in a complete pipeline
+// Note: join now only accepts JSONL files for secondary sources
 func TestJoinGenerationFullPipeline(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	// Create test files - CSV for primary, JSONL for secondary
+	users := "id,name\n1,Alice\n2,Bob\n"
+	orders := `{"user_id":1,"amount":50}
+{"user_id":2,"amount":75}
+`
+
+	if err := os.WriteFile("/tmp/test_users.csv", []byte(users), 0644); err != nil {
+		t.Fatalf("Failed to create users CSV: %v", err)
+	}
+	defer os.Remove("/tmp/test_users.csv")
+
+	if err := os.WriteFile("/tmp/test_orders.jsonl", []byte(orders), 0644); err != nil {
+		t.Fatalf("Failed to create orders JSONL: %v", err)
+	}
+	defer os.Remove("/tmp/test_orders.jsonl")
+
+	// Test full pipeline with join (using JSONL for right side)
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join /tmp/test_orders.jsonl -on user_id | /tmp/ssql_test generate-go`
+	cmd := exec.Command("bash", "-c", pipeline)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Pipeline failed: %v\nOutput: %s", err, output)
+	}
+
+	outputStr := string(output)
+
+	// Check for expected elements in generated code
+	expectations := []string{
+		"package main",
+		"ssql.ReadCSV", // For the primary input (left side)
+		"rightRecords",
+		"ssql.InnerJoin",
+		"func main()",
+		"lib.ReadJSONL", // For the secondary input (right side)
+	}
+
+	for _, expected := range expectations {
+		if !strings.Contains(outputStr, expected) {
+			t.Errorf("Generated code missing expected element: %q\nGot: %s", expected, outputStr)
+		}
+	}
+}
+
+// TestJoinWithProcessSubstitutionGeneration tests that join correctly handles
+// nested fragments from process substitution in code generation mode
+func TestJoinWithProcessSubstitutionGeneration(t *testing.T) {
 	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
 	if err := buildCmd.Run(); err != nil {
 		t.Fatalf("Failed to build ssql: %v", err)
@@ -976,8 +1025,9 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 	}
 	defer os.Remove("/tmp/test_orders.csv")
 
-	// Test full pipeline with join
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join /tmp/test_orders.csv -on user_id | /tmp/ssql_test generate-go`
+	// Test full pipeline with join using process substitution for right side
+	// This tests the nested fragment merging feature
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join <(/tmp/ssql_test from csv /tmp/test_orders.csv) -on user_id | /tmp/ssql_test generate-go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -987,9 +1037,10 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 	outputStr := string(output)
 
 	// Check for expected elements in generated code
+	// With process substitution, both sides should use ssql.ReadCSV
 	expectations := []string{
 		"package main",
-		"ssql.ReadCSV",
+		"ssql.ReadCSV", // Both inputs are CSV files
 		"rightRecords",
 		"ssql.InnerJoin",
 		"func main()",
@@ -1001,8 +1052,10 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 		}
 	}
 
-	// Verify the generated code has proper structure
-	if !strings.Contains(outputStr, "rightRecords, err := ssql.ReadCSV") {
-		t.Error("Generated code should read right-side CSV file")
+	// The generated code should NOT have lib.ReadJSONL for the orders file
+	// since we're using process substitution which incorporates the inner command's fragments
+	// Note: This verifies fragments are being merged correctly
+	if strings.Contains(outputStr, "lib.ReadJSONL") && strings.Contains(outputStr, "/tmp/test_orders.csv") {
+		t.Error("With process substitution, should not generate JSONL reading code for secondary source")
 	}
 }

@@ -164,7 +164,7 @@ ssql update -set "tier = CASE WHEN purchases > 5000 THEN 'Gold' ELSE 'Silver' EN
 **Rationale:**
 1. **-set covers the most common use case**: Setting status flags, dates, categories
 2. **Computed values can be done in Go**: Users who need `total = price * qty` can write a simple Go program
-3. **Conditional updates can use where**: `streamv3where -match amount gt 1000 | ssql update -set priority "high"`
+3. **Conditional updates can use where**: `ssqlwhere -match amount gt 1000 | ssql update -set priority "high"`
 4. **Simpler is better**: Following Unix philosophy - do one thing well
 5. **Easy to extend**: Can add -compute later without breaking changes
 

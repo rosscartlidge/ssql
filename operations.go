@@ -18,7 +18,7 @@ import (
 // ============================================================================
 
 // Select transforms each element using the provided function (SQL SELECT).
-// This is the fundamental transformation operation in StreamV3.
+// This is the fundamental transformation operation in ssql.
 //
 // Example:
 //
@@ -119,7 +119,7 @@ func SelectSafe[T, U any](fn func(T) (U, error)) FilterWithErrors[T, U] {
 }
 
 // SelectMany flattens nested sequences into a single stream (SQL SELECT with UNNEST).
-// This is StreamV3's equivalent to FlatMap in functional programming.
+// This is ssql's equivalent to FlatMap in functional programming.
 // Use this for one-to-many transformations where each input produces multiple outputs.
 //
 // Example:
@@ -166,7 +166,7 @@ func SelectMany[T, U any](fn func(T) iter.Seq[U]) Filter[T, U] {
 // ============================================================================
 
 // Where filters elements based on a predicate (equivalent to SQL WHERE).
-// This is the fundamental filtering operation in StreamV3.
+// This is the fundamental filtering operation in ssql.
 //
 // Example:
 //

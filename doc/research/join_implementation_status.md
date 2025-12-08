@@ -163,7 +163,7 @@ pred := OnCondition(func(l, r Record) bool { return true })
 **File:** `join_benchmark_test.go` (new file)
 
 ```go
-package streamv3
+package ssql
 
 import (
 	"slices"

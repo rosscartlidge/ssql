@@ -713,7 +713,7 @@ func GroupBy[K comparable](sequenceField string, keyField string, keyFn func(Rec
 // Returns Records with grouping fields + a sequence field containing group members.
 // Use with Aggregate to compute aggregations over each group.
 //
-// This is the most common grouping operation in StreamV3.
+// This is the most common grouping operation in ssql.
 //
 // Example:
 //

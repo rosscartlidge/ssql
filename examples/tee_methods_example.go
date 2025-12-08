@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	fmt.Println("🔀 StreamV3 Tee Methods Comparison")
+	fmt.Println("🔀 ssql Tee Methods Comparison")
 	fmt.Println("==================================\n")
 
 	// Create sample data

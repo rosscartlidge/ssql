@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	fmt.Println("🔄 StreamV3 Safe/Unsafe Filter Mixing Examples")
+	fmt.Println("🔄 ssql Safe/Unsafe Filter Mixing Examples")
 	fmt.Println("===============================================\n")
 
 	// Pattern 1: Start Normal, Add Error Handling, Continue Normal

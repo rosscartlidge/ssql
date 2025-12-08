@@ -247,7 +247,7 @@ func WriteCSVToWriter(sb iter.Seq[Record], writer io.Writer, config ...CSVConfig
 // ============================================================================
 
 // ReadCSV reads CSV from a file and returns an iterator of Records.
-// This is the primary way to load CSV data in StreamV3.
+// This is the primary way to load CSV data in ssql.
 //
 // CSV values are automatically parsed to appropriate types:
 //   - Integers (like "1", "42", "-100") become int64
@@ -896,6 +896,23 @@ func ReadCommandOutputSafe(filename string, config ...CommandConfig) iter.Seq2[R
 //	records := ssql.ReadCSV("data.csv")
 //	ssql.DisplayTable(records, 50)
 func DisplayTable(records iter.Seq[Record], maxWidth int) {
+	DisplayTableWithFields(records, maxWidth, nil, false)
+}
+
+// DisplayTableWithFields formats and prints records as a table with field ordering control.
+// If fieldOrder is non-empty, those fields appear first in the specified order.
+// If onlySpecified is true, only the fields in fieldOrder are displayed.
+// Otherwise, remaining fields are appended in alphabetical order.
+// Long values are truncated with "..." if they exceed maxWidth.
+//
+// Example:
+//
+//	records := ssql.ReadCSV("data.csv")
+//	// Show name and age first, then other fields alphabetically
+//	ssql.DisplayTableWithFields(records, 50, []string{"name", "age"}, false)
+//	// Show only name and age
+//	ssql.DisplayTableWithFields(records, 50, []string{"name", "age"}, true)
+func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder []string, onlySpecified bool) {
 	// Collect records and determine columns
 	var allRecords []Record
 	columnSet := make(map[string]bool)
@@ -911,12 +928,37 @@ func DisplayTable(records iter.Seq[Record], maxWidth int) {
 		return // No records to display
 	}
 
-	// Get sorted column names for consistent ordering
-	columns := make([]string, 0, len(columnSet))
-	for col := range columnSet {
-		columns = append(columns, col)
+	// Build column list based on field ordering options
+	var columns []string
+	if len(fieldOrder) > 0 {
+		// Add specified fields first (in order), only if they exist in data
+		specifiedSet := make(map[string]bool)
+		for _, field := range fieldOrder {
+			if columnSet[field] {
+				columns = append(columns, field)
+				specifiedSet[field] = true
+			}
+		}
+
+		// Add remaining fields alphabetically (unless onlySpecified)
+		if !onlySpecified {
+			var remaining []string
+			for col := range columnSet {
+				if !specifiedSet[col] {
+					remaining = append(remaining, col)
+				}
+			}
+			slices.Sort(remaining)
+			columns = append(columns, remaining...)
+		}
+	} else {
+		// No field order specified - sort alphabetically (original behavior)
+		columns = make([]string, 0, len(columnSet))
+		for col := range columnSet {
+			columns = append(columns, col)
+		}
+		slices.Sort(columns)
 	}
-	slices.Sort(columns)
 
 	// Calculate max width for each column
 	colWidths := make(map[string]int)
@@ -1453,7 +1495,7 @@ func addJSONField(record MutableRecord, key string, value interface{}) MutableRe
 	}
 }
 
-// convertRecordValueForJSON converts StreamV3 Record values to JSON-friendly types
+// convertRecordValueForJSON converts ssql Record values to JSON-friendly types
 func convertRecordValueForJSON(v interface{}) interface{} {
 	switch val := v.(type) {
 	case Record:

@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	fmt.Println("=== StreamV3 Update Examples ===\n")
+	fmt.Println("=== ssql Update Examples ===\n")
 
 	// Example 1: Update single field
 	fmt.Println("Example 1: Update status field")

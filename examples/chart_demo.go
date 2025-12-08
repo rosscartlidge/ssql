@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	fmt.Println("🎨 StreamV3 Interactive Chart Demo")
+	fmt.Println("🎨 ssql Interactive Chart Demo")
 	fmt.Println("=====================================")
 
 	// Create output directory in /tmp

@@ -611,7 +611,7 @@ ai-code-validator/
     pattern_analyzer.go   # Error pattern detection
 
   examples/
-    streamv3/            # Our implementation
+    ssql/            # Our implementation
     react/               # Example for React
     sqlalchemy/          # Example for SQLAlchemy
 

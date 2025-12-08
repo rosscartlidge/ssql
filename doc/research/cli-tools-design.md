@@ -1175,7 +1175,7 @@ func ParsePipeline(input string) (*Pipeline, error) {
 func parseCommand(cmdLine string) (Command, error) {
     // Parse: ssql where -field age -op gt -value 18
     fields := strings.Fields(cmdLine)
-    if len(fields) < 2 || fields[0] != "streamv3" {
+    if len(fields) < 2 || fields[0] != "ssql" {
         return Command{}, fmt.Errorf("invalid command: %s", cmdLine)
     }
 
@@ -1551,7 +1551,7 @@ time ./myproject
 
 ## References
 
-- ssql Library: `/home/rossc/src/streamv3/`
+- ssql Library: `/home/rossc/src/ssql/`
 - gs Framework: `/home/rossc/tsv/gogstools/gs/`
 - JSONL Specification: https://jsonlines.org/
 - Unix Philosophy: https://en.wikipedia.org/wiki/Unix_philosophy

@@ -141,7 +141,7 @@ func setValueFromJSON(record ssql.MutableRecord, key string, v interface{}) ssql
 	}
 }
 
-// convertRecordValue converts StreamV3 Record values to JSON-friendly types
+// convertRecordValue converts ssql Record values to JSON-friendly types
 func convertRecordValue(v interface{}) interface{} {
 	switch val := v.(type) {
 	case ssql.Record:

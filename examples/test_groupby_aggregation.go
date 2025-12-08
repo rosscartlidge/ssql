@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	fmt.Println("🧪 StreamV3 GroupBy and Aggregation Test")
+	fmt.Println("🧪 ssql GroupBy and Aggregation Test")
 	fmt.Println("========================================\n")
 
 	// Create sample sales data
