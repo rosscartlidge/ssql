@@ -622,10 +622,14 @@ func WriteCSV(sb iter.Seq[Record], filename string, config ...CSVConfig) error {
 // ============================================================================
 
 // ReadJSONFromReader reads JSON records from an io.Reader (one JSON object per line)
+// Field types are inferred from the first record and applied consistently to all records.
 func ReadJSONFromReader(reader io.Reader) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
 		scanner := bufio.NewScanner(reader)
 		lineNumber := int64(0)
+
+		// Track field types from first record
+		var fieldTypes map[string]FieldType
 
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
@@ -634,29 +638,140 @@ func ReadJSONFromReader(reader io.Reader) iter.Seq[Record] {
 				continue
 			}
 
-			var record Record
-			if err := json.Unmarshal([]byte(line), &record); err != nil {
+			var rawRecord Record
+			if err := json.Unmarshal([]byte(line), &rawRecord); err != nil {
 				// For simple API, skip invalid JSON lines
 				lineNumber++
 				continue
+			}
+
+			// First valid record - infer field types
+			if fieldTypes == nil {
+				fieldTypes = make(map[string]FieldType)
+				for key, value := range rawRecord.fields {
+					fieldTypes[key] = inferJSONFieldType(value)
+				}
+			}
+
+			// Coerce fields to consistent types
+			record := MakeMutableRecord()
+			for key, value := range rawRecord.fields {
+				if ft, ok := fieldTypes[key]; ok {
+					record.fields[key] = coerceToType(value, ft)
+				} else {
+					// New field not seen in first record - infer and lock its type
+					fieldTypes[key] = inferJSONFieldType(value)
+					record.fields[key] = value
+				}
 			}
 
 			// Add line number metadata
 			record.fields["_line_number"] = lineNumber
 			lineNumber++
 
-			if !yield(record) {
+			if !yield(record.Freeze()) {
 				return
 			}
 		}
 	}
 }
 
+// inferJSONFieldType determines FieldType from a JSON-parsed value
+func inferJSONFieldType(value any) FieldType {
+	switch value.(type) {
+	case float64:
+		return FieldTypeFloat // JSON numbers are always float64
+	case bool:
+		return FieldTypeBool
+	case string:
+		return FieldTypeString
+	case []any, map[string]any, Record:
+		return FieldTypeAuto // Preserve complex types as-is
+	default:
+		return FieldTypeAuto // Preserve unknown types as-is
+	}
+}
+
+// coerceToType converts a value to the target FieldType
+func coerceToType(value any, targetType FieldType) any {
+	switch targetType {
+	case FieldTypeFloat:
+		switch v := value.(type) {
+		case float64:
+			return v
+		case bool:
+			if v {
+				return float64(1)
+			}
+			return float64(0)
+		case string:
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				return f
+			}
+			return float64(0)
+		default:
+			return float64(0)
+		}
+	case FieldTypeInt:
+		switch v := value.(type) {
+		case float64:
+			return int64(v)
+		case int64:
+			return v
+		case bool:
+			if v {
+				return int64(1)
+			}
+			return int64(0)
+		case string:
+			if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+				return i
+			}
+			return int64(0)
+		default:
+			return int64(0)
+		}
+	case FieldTypeBool:
+		switch v := value.(type) {
+		case bool:
+			return v
+		case float64:
+			return v != 0
+		case string:
+			switch strings.ToLower(v) {
+			case "true", "1", "yes", "y", "on":
+				return true
+			default:
+				return false
+			}
+		default:
+			return false
+		}
+	case FieldTypeString:
+		switch v := value.(type) {
+		case string:
+			return v
+		case float64:
+			return strconv.FormatFloat(v, 'g', -1, 64)
+		case bool:
+			return strconv.FormatBool(v)
+		default:
+			return fmt.Sprintf("%v", v)
+		}
+	default:
+		return value
+	}
+}
+
 // ReadJSONSafeFromReader reads JSON records from an io.Reader with error handling
+// Field types are inferred from the first record and applied consistently to all records.
 func ReadJSONSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 	return func(yield func(Record, error) bool) {
 		scanner := bufio.NewScanner(reader)
 		lineNumber := int64(0)
+
+		// Track field types from first record
+		var fieldTypes map[string]FieldType
 
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
@@ -665,8 +780,8 @@ func ReadJSONSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 				continue
 			}
 
-			var record Record
-			if err := json.Unmarshal([]byte(line), &record); err != nil {
+			var rawRecord Record
+			if err := json.Unmarshal([]byte(line), &rawRecord); err != nil {
 				if !yield(Record{}, fmt.Errorf("failed to parse JSON on line %d: %w", lineNumber, err)) {
 					return
 				}
@@ -674,10 +789,30 @@ func ReadJSONSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 				continue
 			}
 
+			// First valid record - infer field types
+			if fieldTypes == nil {
+				fieldTypes = make(map[string]FieldType)
+				for key, value := range rawRecord.fields {
+					fieldTypes[key] = inferJSONFieldType(value)
+				}
+			}
+
+			// Coerce fields to consistent types
+			record := MakeMutableRecord()
+			for key, value := range rawRecord.fields {
+				if ft, ok := fieldTypes[key]; ok {
+					record.fields[key] = coerceToType(value, ft)
+				} else {
+					// New field not seen in first record - infer and lock its type
+					fieldTypes[key] = inferJSONFieldType(value)
+					record.fields[key] = value
+				}
+			}
+
 			record.fields["_line_number"] = lineNumber
 			lineNumber++
 
-			if !yield(record, nil) {
+			if !yield(record.Freeze(), nil) {
 				return
 			}
 		}

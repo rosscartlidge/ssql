@@ -7,6 +7,8 @@ import (
 	"io"
 	"iter"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/rosscartlidge/ssql/v3"
 )
@@ -138,6 +140,91 @@ func setValueFromJSON(record ssql.MutableRecord, key string, v interface{}) ssql
 	default:
 		// Unknown type (shouldn't happen with valid JSON) - convert to string
 		return record.String(key, fmt.Sprintf("%v", v))
+	}
+}
+
+// inferJSONFieldType determines the FieldType from a JSON-parsed value
+func inferJSONFieldType(value interface{}) ssql.FieldType {
+	switch value.(type) {
+	case float64:
+		return ssql.FieldTypeFloat // JSON numbers are always float64
+	case bool:
+		return ssql.FieldTypeBool
+	case string:
+		return ssql.FieldTypeString
+	case []interface{}, map[string]interface{}, ssql.Record:
+		return ssql.FieldTypeAuto // Preserve complex types as-is
+	default:
+		return ssql.FieldTypeAuto // Preserve unknown types as-is
+	}
+}
+
+// setValueWithType sets a field on a MutableRecord, coercing to the target type
+func setValueWithType(record ssql.MutableRecord, key string, v interface{}, targetType ssql.FieldType) ssql.MutableRecord {
+	switch targetType {
+	case ssql.FieldTypeFloat:
+		switch val := v.(type) {
+		case float64:
+			return record.Float(key, val)
+		case bool:
+			if val {
+				return record.Float(key, 1)
+			}
+			return record.Float(key, 0)
+		case string:
+			if f, err := strconv.ParseFloat(val, 64); err == nil {
+				return record.Float(key, f)
+			}
+			return record.Float(key, 0)
+		default:
+			return record.Float(key, 0)
+		}
+	case ssql.FieldTypeInt:
+		switch val := v.(type) {
+		case float64:
+			return record.Int(key, int64(val))
+		case bool:
+			if val {
+				return record.Int(key, 1)
+			}
+			return record.Int(key, 0)
+		case string:
+			if i, err := strconv.ParseInt(val, 10, 64); err == nil {
+				return record.Int(key, i)
+			}
+			return record.Int(key, 0)
+		default:
+			return record.Int(key, 0)
+		}
+	case ssql.FieldTypeBool:
+		switch val := v.(type) {
+		case bool:
+			return record.Bool(key, val)
+		case float64:
+			return record.Bool(key, val != 0)
+		case string:
+			switch strings.ToLower(val) {
+			case "true", "1", "yes", "y", "on":
+				return record.Bool(key, true)
+			default:
+				return record.Bool(key, false)
+			}
+		default:
+			return record.Bool(key, false)
+		}
+	case ssql.FieldTypeString:
+		switch val := v.(type) {
+		case string:
+			return record.String(key, val)
+		case float64:
+			return record.String(key, strconv.FormatFloat(val, 'g', -1, 64))
+		case bool:
+			return record.String(key, strconv.FormatBool(val))
+		default:
+			return record.String(key, fmt.Sprintf("%v", v))
+		}
+	default:
+		return setValueFromJSON(record, key, v)
 	}
 }
 

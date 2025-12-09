@@ -47,6 +47,7 @@ func ReadJSON(r io.Reader) iter.Seq[ssql.Record] {
 }
 
 // readJSONArray streams a JSON array using json.Decoder
+// Field types are inferred from the first record and applied consistently.
 func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 	decoder := json.NewDecoder(r)
 
@@ -59,6 +60,9 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 		return // Not a JSON array
 	}
 
+	// Track field types from first record for consistency
+	var fieldTypes map[string]ssql.FieldType
+
 	// Read array elements
 	for decoder.More() {
 		var rec map[string]interface{}
@@ -66,9 +70,24 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 			continue // Skip malformed elements
 		}
 
+		// First valid record - infer field types
+		if fieldTypes == nil {
+			fieldTypes = make(map[string]ssql.FieldType)
+			for k, v := range rec {
+				fieldTypes[k] = inferJSONFieldType(v)
+			}
+		}
+
+		// Build record with consistent types
 		record := ssql.MakeMutableRecord()
 		for k, v := range rec {
-			record = setValueFromJSON(record, k, v)
+			if ft, ok := fieldTypes[k]; ok {
+				record = setValueWithType(record, k, v, ft)
+			} else {
+				// New field - infer and lock its type
+				fieldTypes[k] = inferJSONFieldType(v)
+				record = setValueFromJSON(record, k, v)
+			}
 		}
 
 		if !yield(record.Freeze()) {
@@ -78,12 +97,16 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 }
 
 // readJSONLines streams JSONL format line by line
+// Field types are inferred from the first record and applied consistently.
 func readJSONLines(r io.Reader, yield func(ssql.Record) bool) {
 	scanner := bufio.NewScanner(r)
 
 	// Increase buffer size for large lines
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024) // 1MB max token size
+
+	// Track field types from first record for consistency
+	var fieldTypes map[string]ssql.FieldType
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -97,9 +120,24 @@ func readJSONLines(r io.Reader, yield func(ssql.Record) bool) {
 			continue // Skip malformed lines
 		}
 
+		// First valid record - infer field types
+		if fieldTypes == nil {
+			fieldTypes = make(map[string]ssql.FieldType)
+			for k, v := range rec {
+				fieldTypes[k] = inferJSONFieldType(v)
+			}
+		}
+
+		// Build record with consistent types
 		record := ssql.MakeMutableRecord()
 		for k, v := range rec {
-			record = setValueFromJSON(record, k, v)
+			if ft, ok := fieldTypes[k]; ok {
+				record = setValueWithType(record, k, v, ft)
+			} else {
+				// New field - infer and lock its type
+				fieldTypes[k] = inferJSONFieldType(v)
+				record = setValueFromJSON(record, k, v)
+			}
 		}
 
 		if !yield(record.Freeze()) {
