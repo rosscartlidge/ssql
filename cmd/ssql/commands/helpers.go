@@ -357,6 +357,148 @@ func isExpression(value string) bool {
 	return false
 }
 
+// applyValueToRecordWithTypeCheck applies a value to a mutable record, coercing to the existing field's type.
+// If the field exists, the new value is coerced to match the existing type.
+// If the field doesn't exist, the value is applied with its natural type.
+// Returns the modified record and true if a type coercion occurred.
+func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value any, existingValue any, exists bool) (ssql.MutableRecord, bool) {
+	if !exists {
+		// Field doesn't exist, apply with natural type
+		return applyValueToRecord(mut, field, value), false
+	}
+
+	// Determine the target type from existing value
+	var coerced bool
+	switch existingValue.(type) {
+	case int64:
+		coercedVal, didCoerce := coerceToInt64(value)
+		if didCoerce {
+			coerced = true
+		}
+		return mut.Int(field, coercedVal), coerced
+
+	case float64:
+		coercedVal, didCoerce := coerceToFloat64(value)
+		if didCoerce {
+			coerced = true
+		}
+		return mut.Float(field, coercedVal), coerced
+
+	case bool:
+		coercedVal, didCoerce := coerceToBool(value)
+		if didCoerce {
+			coerced = true
+		}
+		return mut.Bool(field, coercedVal), coerced
+
+	case string:
+		coercedVal, didCoerce := coerceToString(value)
+		if didCoerce {
+			coerced = true
+		}
+		return mut.String(field, coercedVal), coerced
+
+	default:
+		// Unknown existing type, apply with natural type
+		return applyValueToRecord(mut, field, value), false
+	}
+}
+
+// coerceToInt64 converts a value to int64, returning whether coercion occurred
+func coerceToInt64(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int64:
+		return v, false
+	case int:
+		return int64(v), false // Same logical type
+	case float64:
+		return int64(v), true
+	case string:
+		if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return i, true
+		}
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return int64(f), true
+		}
+		return 0, true
+	case bool:
+		if v {
+			return 1, true
+		}
+		return 0, true
+	default:
+		return 0, true
+	}
+}
+
+// coerceToFloat64 converts a value to float64, returning whether coercion occurred
+func coerceToFloat64(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, false
+	case float32:
+		return float64(v), false // Same logical type
+	case int64:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case string:
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f, true
+		}
+		return 0, true
+	case bool:
+		if v {
+			return 1, true
+		}
+		return 0, true
+	default:
+		return 0, true
+	}
+}
+
+// coerceToBool converts a value to bool, returning whether coercion occurred
+func coerceToBool(value any) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, false
+	case int64:
+		return v != 0, true
+	case int:
+		return v != 0, true
+	case float64:
+		return v != 0, true
+	case string:
+		lower := strings.ToLower(v)
+		switch lower {
+		case "true", "1", "yes", "y", "on":
+			return true, true
+		default:
+			return false, true
+		}
+	default:
+		return false, true
+	}
+}
+
+// coerceToString converts a value to string, returning whether coercion occurred
+func coerceToString(value any) (string, bool) {
+	switch v := value.(type) {
+	case string:
+		return v, false
+	case int64:
+		return strconv.FormatInt(v, 10), true
+	case int:
+		return strconv.Itoa(v), true
+	case float64:
+		return strconv.FormatFloat(v, 'g', -1, 64), true
+	case bool:
+		return strconv.FormatBool(v), true
+	default:
+		return fmt.Sprintf("%v", v), true
+	}
+}
+
 // applyValueToRecord applies a value to a mutable record with automatic type inference
 // Handles type conversions (int→int64, float32→float64) and defaults unknown types to string
 func applyValueToRecord(mut ssql.MutableRecord, field string, value any) ssql.MutableRecord {

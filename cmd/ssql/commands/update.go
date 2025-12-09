@@ -201,6 +201,9 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Read JSONL from stdin
 			records := lib.ReadJSONL(os.Stdin)
 
+			// Track which fields have already been warned about type coercion
+			warnedFields := make(map[string]bool)
+
 			// Build update filter with first-match-wins clause evaluation (using pre-compiled expressions)
 			updateFilter := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 				frozen := mut.Freeze()
@@ -262,8 +265,16 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 								parsedValue = parseValue(upd.literal)
 							}
 
-							// Apply the value to the record with automatic type inference
-							mut = applyValueToRecord(mut, upd.field, parsedValue)
+							// Get existing value to check type
+							existingValue, exists := ssql.Get[any](frozen, upd.field)
+
+							// Apply the value, coercing to existing type if needed
+							var coerced bool
+							mut, coerced = applyValueToRecordWithTypeCheck(mut, upd.field, parsedValue, existingValue, exists)
+							if coerced && !warnedFields[upd.field] {
+								fmt.Fprintf(os.Stderr, "Warning: field %q value coerced to match existing type (use 'ssql cast' for explicit type conversion)\n", upd.field)
+								warnedFields[upd.field] = true
+							}
 						}
 						break // First match wins
 					}

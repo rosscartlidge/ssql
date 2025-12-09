@@ -31,6 +31,7 @@ func buildRootCommand() *cf.Command {
 	cmd = commands.RegisterDistinct(cmd)
 	cmd = commands.RegisterWhere(cmd)
 	cmd = commands.RegisterUpdate(cmd)
+	cmd = commands.RegisterCast(cmd)
 	cmd = commands.RegisterInclude(cmd)
 	cmd = commands.RegisterExclude(cmd)
 	cmd = commands.RegisterRename(cmd)
