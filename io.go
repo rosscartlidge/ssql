@@ -25,19 +25,69 @@ import (
 
 // CSVConfig configures CSV reading and writing
 type CSVConfig struct {
-	HasHeaders bool
-	Delimiter  rune
-	Comment    rune
-	Fields     []string // Optional: fields to write (nil = auto-detect all fields in alphabetical order)
+	HasHeaders  bool
+	Delimiter   rune
+	Comment     rune
+	Fields      []string          // Optional: fields to write (nil = auto-detect all fields in alphabetical order)
+	TypeOverrides map[string]FieldType // Optional: override auto-detection for specific fields
+	DefaultType FieldType         // Optional: default type for all fields (FieldTypeAuto = auto-detect)
 }
+
+// FieldType represents the type to use when parsing CSV fields
+type FieldType int
+
+const (
+	FieldTypeAuto   FieldType = iota // Auto-detect type (default)
+	FieldTypeString                  // Always treat as string
+	FieldTypeInt                     // Parse as int64
+	FieldTypeFloat                   // Parse as float64
+	FieldTypeBool                    // Parse as bool
+)
 
 // DefaultCSVConfig provides sensible defaults for CSV processing
 func DefaultCSVConfig() CSVConfig {
 	return CSVConfig{
-		HasHeaders: true,
-		Delimiter:  ',',
-		Comment:    '#',
-		Fields:     nil, // Auto-detect fields
+		HasHeaders:    true,
+		Delimiter:    ',',
+		Comment:      '#',
+		Fields:       nil,           // Auto-detect fields
+		TypeOverrides: nil,          // No overrides
+		DefaultType:  FieldTypeAuto, // Auto-detect types
+	}
+}
+
+// ParseFieldType converts a string type name to FieldType
+// Supported values: "auto", "string", "int", "float", "bool"
+func ParseFieldType(s string) (FieldType, error) {
+	switch strings.ToLower(s) {
+	case "auto":
+		return FieldTypeAuto, nil
+	case "string", "str", "text":
+		return FieldTypeString, nil
+	case "int", "integer", "int64":
+		return FieldTypeInt, nil
+	case "float", "float64", "double", "number":
+		return FieldTypeFloat, nil
+	case "bool", "boolean":
+		return FieldTypeBool, nil
+	default:
+		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, float, bool)", s)
+	}
+}
+
+// FieldTypeName returns the string name for a FieldType
+func (ft FieldType) String() string {
+	switch ft {
+	case FieldTypeString:
+		return "string"
+	case FieldTypeInt:
+		return "int"
+	case FieldTypeFloat:
+		return "float"
+	case FieldTypeBool:
+		return "bool"
+	default:
+		return "auto"
 	}
 }
 
@@ -68,6 +118,16 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 			headers = headerRow
 		}
 
+		// Pre-compute field parsers for each column (fast path)
+		// This avoids map lookups on every row
+		var fieldParsers []func(string) any
+		if cfg.HasHeaders && len(headers) > 0 {
+			fieldParsers = make([]func(string) any, len(headers))
+			for i, header := range headers {
+				fieldParsers[i] = getFieldParser(header, cfg.TypeOverrides, cfg.DefaultType)
+			}
+		}
+
 		rowIndex := int64(0)
 		for {
 			row, err := csvReader.Read()
@@ -77,16 +137,18 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 
 			record := MakeMutableRecord()
 			if cfg.HasHeaders && len(headers) > 0 {
-				// Use headers as field names
+				// Use headers as field names with pre-computed parsers
 				for i, value := range row {
 					if i < len(headers) {
-						record.fields[headers[i]] = parseValue(value)
+						record.fields[headers[i]] = fieldParsers[i](value)
 					}
 				}
 			} else {
 				// Generate column names: col_0, col_1, etc.
+				// Use default type for all columns
+				parser := getFieldParser("", nil, cfg.DefaultType)
 				for i, value := range row {
-					record.fields[fmt.Sprintf("col_%d", i)] = parseValue(value)
+					record.fields[fmt.Sprintf("col_%d", i)] = parser(value)
 				}
 			}
 
@@ -98,6 +160,74 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 				return
 			}
 		}
+	}
+}
+
+// getFieldParser returns the appropriate parser function for a field
+// This is called once per column during setup, not per row
+func getFieldParser(fieldName string, overrides map[string]FieldType, defaultType FieldType) func(string) any {
+	// Check for field-specific override
+	fieldType := defaultType
+	if overrides != nil {
+		if ft, ok := overrides[fieldName]; ok {
+			fieldType = ft
+		}
+	}
+
+	// Return optimized parser for the field type
+	switch fieldType {
+	case FieldTypeString:
+		return parseAsString
+	case FieldTypeInt:
+		return parseAsInt
+	case FieldTypeFloat:
+		return parseAsFloat
+	case FieldTypeBool:
+		return parseAsBool
+	default: // FieldTypeAuto
+		return parseValue
+	}
+}
+
+// Fast type-specific parsers (no type detection overhead)
+
+// parseAsString returns the value as-is (trimmed)
+func parseAsString(s string) any {
+	return strings.TrimSpace(s)
+}
+
+// parseAsInt parses as int64, returns 0 on error
+func parseAsInt(s string) any {
+	s = strings.TrimSpace(s)
+	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return i
+	}
+	// If it looks like a float, truncate it
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return int64(f)
+	}
+	return int64(0)
+}
+
+// parseAsFloat parses as float64, returns 0.0 on error
+func parseAsFloat(s string) any {
+	s = strings.TrimSpace(s)
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	return float64(0)
+}
+
+// parseAsBool parses as bool (true/false, 1/0, yes/no), returns false on error
+func parseAsBool(s string) any {
+	s = strings.TrimSpace(s)
+	switch strings.ToLower(s) {
+	case "true", "1", "yes", "y", "on":
+		return true
+	case "false", "0", "no", "n", "off":
+		return false
+	default:
+		return false
 	}
 }
 
@@ -125,6 +255,15 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 			headers = headerRow
 		}
 
+		// Pre-compute field parsers for each column (fast path)
+		var fieldParsers []func(string) any
+		if cfg.HasHeaders && len(headers) > 0 {
+			fieldParsers = make([]func(string) any, len(headers))
+			for i, header := range headers {
+				fieldParsers[i] = getFieldParser(header, cfg.TypeOverrides, cfg.DefaultType)
+			}
+		}
+
 		rowIndex := int64(0)
 		for {
 			row, err := csvReader.Read()
@@ -142,12 +281,13 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 			if cfg.HasHeaders && len(headers) > 0 {
 				for i, value := range row {
 					if i < len(headers) {
-						record.fields[headers[i]] = parseValue(value)
+						record.fields[headers[i]] = fieldParsers[i](value)
 					}
 				}
 			} else {
+				parser := getFieldParser("", nil, cfg.DefaultType)
 				for i, value := range row {
-					record.fields[fmt.Sprintf("col_%d", i)] = parseValue(value)
+					record.fields[fmt.Sprintf("col_%d", i)] = parser(value)
 				}
 			}
 
