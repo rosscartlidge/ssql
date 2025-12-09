@@ -805,77 +805,147 @@ func TestReadCSVHeaderOnly(t *testing.T) {
 }
 
 // TestCSVTypeParsing tests that CSV parsing correctly identifies types
-// Regression test for bug where "1" was parsed as bool(true) instead of int64(1)
+// Types are inferred from the first row and applied consistently to all rows
 func TestCSVTypeParsing(t *testing.T) {
-	csvData := `value,type
-1,integer
-0,integer
-true,boolean
-false,boolean
-1.5,float
-hello,string`
+	// Test 1: Integer column stays integer (regression for bug where "1" became bool(true))
+	t.Run("integers_not_bools", func(t *testing.T) {
+		csvData := `value
+1
+0
+42`
+		reader := strings.NewReader(csvData)
+		seq := ReadCSVFromReader(reader)
+		result := slices.Collect(seq)
 
-	reader := strings.NewReader(csvData)
-	seq := ReadCSVFromReader(reader)
-	result := slices.Collect(seq)
+		for i, r := range result {
+			val := r.fields["value"]
+			if _, ok := val.(int64); !ok {
+				t.Errorf("Row %d: value should be int64, got %T(%v)", i, val, val)
+			}
+		}
+		// Verify specific values
+		if result[0].fields["value"] != int64(1) {
+			t.Errorf("Expected 1, got %v", result[0].fields["value"])
+		}
+		if result[1].fields["value"] != int64(0) {
+			t.Errorf("Expected 0, got %v", result[1].fields["value"])
+		}
+	})
 
-	if len(result) != 6 {
-		t.Fatalf("Expected 6 records, got %d", len(result))
-	}
+	// Test 2: Boolean column inferred from first row
+	t.Run("booleans_consistent", func(t *testing.T) {
+		csvData := `active
+true
+false
+yes
+no
+1
+0`
+		reader := strings.NewReader(csvData)
+		seq := ReadCSVFromReader(reader)
+		result := slices.Collect(seq)
 
-	// Test case 1: "1" should be int64, NOT bool
-	val1 := result[0].fields["value"]
-	if _, ok := val1.(int64); !ok {
-		t.Errorf("Value '1' should parse as int64, got %T(%v)", val1, val1)
-	}
-	if val1 != int64(1) {
-		t.Errorf("Value '1' should equal int64(1), got %v", val1)
-	}
+		// All values should be parsed as bool since first row is "true"
+		expected := []bool{true, false, true, false, true, false}
+		for i, r := range result {
+			val := r.fields["active"]
+			if _, ok := val.(bool); !ok {
+				t.Errorf("Row %d: value should be bool, got %T(%v)", i, val, val)
+			}
+			if val != expected[i] {
+				t.Errorf("Row %d: expected %v, got %v", i, expected[i], val)
+			}
+		}
+	})
 
-	// Test case 2: "0" should be int64, NOT bool
-	val0 := result[1].fields["value"]
-	if _, ok := val0.(int64); !ok {
-		t.Errorf("Value '0' should parse as int64, got %T(%v)", val0, val0)
-	}
-	if val0 != int64(0) {
-		t.Errorf("Value '0' should equal int64(0), got %v", val0)
-	}
+	// Test 3: Float column stays float
+	t.Run("floats_consistent", func(t *testing.T) {
+		csvData := `price
+1.5
+2.0
+3`
+		reader := strings.NewReader(csvData)
+		seq := ReadCSVFromReader(reader)
+		result := slices.Collect(seq)
 
-	// Test case 3: "true" should be bool
-	valTrue := result[2].fields["value"]
-	if _, ok := valTrue.(bool); !ok {
-		t.Errorf("Value 'true' should parse as bool, got %T(%v)", valTrue, valTrue)
-	}
-	if valTrue != true {
-		t.Errorf("Value 'true' should equal true, got %v", valTrue)
-	}
+		for i, r := range result {
+			val := r.fields["price"]
+			if _, ok := val.(float64); !ok {
+				t.Errorf("Row %d: value should be float64, got %T(%v)", i, val, val)
+			}
+		}
+	})
 
-	// Test case 4: "false" should be bool
-	valFalse := result[3].fields["value"]
-	if _, ok := valFalse.(bool); !ok {
-		t.Errorf("Value 'false' should parse as bool, got %T(%v)", valFalse, valFalse)
-	}
-	if valFalse != false {
-		t.Errorf("Value 'false' should equal false, got %v", valFalse)
-	}
+	// Test 4: String column stays string
+	t.Run("strings_consistent", func(t *testing.T) {
+		csvData := `name
+Alice
+Bob
+123`
+		reader := strings.NewReader(csvData)
+		seq := ReadCSVFromReader(reader)
+		result := slices.Collect(seq)
 
-	// Test case 5: "1.5" should be float64
-	val15 := result[4].fields["value"]
-	if _, ok := val15.(float64); !ok {
-		t.Errorf("Value '1.5' should parse as float64, got %T(%v)", val15, val15)
-	}
-	if val15 != float64(1.5) {
-		t.Errorf("Value '1.5' should equal float64(1.5), got %v", val15)
-	}
+		for i, r := range result {
+			val := r.fields["name"]
+			if _, ok := val.(string); !ok {
+				t.Errorf("Row %d: value should be string, got %T(%v)", i, val, val)
+			}
+		}
+		// Even "123" stays string since first row was string
+		if result[2].fields["name"] != "123" {
+			t.Errorf("Expected '123' as string, got %v", result[2].fields["name"])
+		}
+	})
 
-	// Test case 6: "hello" should be string
-	valHello := result[5].fields["value"]
-	if _, ok := valHello.(string); !ok {
-		t.Errorf("Value 'hello' should parse as string, got %T(%v)", valHello, valHello)
-	}
-	if valHello != "hello" {
-		t.Errorf("Value 'hello' should equal 'hello', got %v", valHello)
-	}
+	// Test 5: Type overrides work
+	t.Run("type_overrides", func(t *testing.T) {
+		csvData := `zipcode,age
+01234,30
+00123,25`
+		reader := strings.NewReader(csvData)
+		config := CSVConfig{
+			HasHeaders:    true,
+			Delimiter:     ',',
+			TypeOverrides: map[string]FieldType{"zipcode": FieldTypeString},
+		}
+		seq := ReadCSVFromReader(reader, config)
+		result := slices.Collect(seq)
+
+		// zipcode should be string (preserving leading zeros)
+		if result[0].fields["zipcode"] != "01234" {
+			t.Errorf("Expected '01234', got %v", result[0].fields["zipcode"])
+		}
+		if result[1].fields["zipcode"] != "00123" {
+			t.Errorf("Expected '00123', got %v", result[1].fields["zipcode"])
+		}
+		// age should still be auto-detected as int
+		if result[0].fields["age"] != int64(30) {
+			t.Errorf("Expected int64(30), got %T(%v)", result[0].fields["age"], result[0].fields["age"])
+		}
+	})
+
+	// Test 6: Default type works
+	t.Run("default_type", func(t *testing.T) {
+		csvData := `zipcode,age
+01234,30`
+		reader := strings.NewReader(csvData)
+		config := CSVConfig{
+			HasHeaders:  true,
+			Delimiter:   ',',
+			DefaultType: FieldTypeString,
+		}
+		seq := ReadCSVFromReader(reader, config)
+		result := slices.Collect(seq)
+
+		// Both should be strings
+		if _, ok := result[0].fields["zipcode"].(string); !ok {
+			t.Errorf("zipcode should be string, got %T", result[0].fields["zipcode"])
+		}
+		if _, ok := result[0].fields["age"].(string); !ok {
+			t.Errorf("age should be string, got %T", result[0].fields["age"])
+		}
+	})
 }
 
 func TestReadEmptyJSON(t *testing.T) {

@@ -118,17 +118,68 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 			headers = headerRow
 		}
 
-		// Pre-compute field parsers for each column (fast path)
-		// This avoids map lookups on every row
+		// Read first data row to infer types (when using auto-detection)
+		firstRow, err := csvReader.Read()
+		if err != nil {
+			return // Empty file or error
+		}
+
+		// Determine parsers: either from config or inferred from first row
 		var fieldParsers []func(string) any
 		if cfg.HasHeaders && len(headers) > 0 {
 			fieldParsers = make([]func(string) any, len(headers))
 			for i, header := range headers {
-				fieldParsers[i] = getFieldParser(header, cfg.TypeOverrides, cfg.DefaultType)
+				// Check for explicit override first
+				if cfg.TypeOverrides != nil {
+					if ft, ok := cfg.TypeOverrides[header]; ok {
+						fieldParsers[i] = getParserForType(ft)
+						continue
+					}
+				}
+				// If default type is specified (not auto), use it
+				if cfg.DefaultType != FieldTypeAuto {
+					fieldParsers[i] = getParserForType(cfg.DefaultType)
+					continue
+				}
+				// Auto-detect: infer type from first row value, then lock it
+				if i < len(firstRow) {
+					fieldParsers[i] = getParserForType(inferFieldType(firstRow[i]))
+				} else {
+					fieldParsers[i] = parseAsString
+				}
+			}
+		} else {
+			// No headers - infer from first row
+			fieldParsers = make([]func(string) any, len(firstRow))
+			for i, value := range firstRow {
+				if cfg.DefaultType != FieldTypeAuto {
+					fieldParsers[i] = getParserForType(cfg.DefaultType)
+				} else {
+					fieldParsers[i] = getParserForType(inferFieldType(value))
+				}
 			}
 		}
 
-		rowIndex := int64(0)
+		// Process first row
+		record := MakeMutableRecord()
+		if cfg.HasHeaders && len(headers) > 0 {
+			for i, value := range firstRow {
+				if i < len(headers) {
+					record.fields[headers[i]] = fieldParsers[i](value)
+				}
+			}
+		} else {
+			for i, value := range firstRow {
+				record.fields[fmt.Sprintf("col_%d", i)] = fieldParsers[i](value)
+			}
+		}
+		record.fields["_row_number"] = int64(0)
+		if !yield(record.Freeze()) {
+			return
+		}
+
+		// Process remaining rows with locked-in parsers
+		rowIndex := int64(1)
 		for {
 			row, err := csvReader.Read()
 			if err != nil {
@@ -137,22 +188,19 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 
 			record := MakeMutableRecord()
 			if cfg.HasHeaders && len(headers) > 0 {
-				// Use headers as field names with pre-computed parsers
 				for i, value := range row {
 					if i < len(headers) {
 						record.fields[headers[i]] = fieldParsers[i](value)
 					}
 				}
 			} else {
-				// Generate column names: col_0, col_1, etc.
-				// Use default type for all columns
-				parser := getFieldParser("", nil, cfg.DefaultType)
 				for i, value := range row {
-					record.fields[fmt.Sprintf("col_%d", i)] = parser(value)
+					if i < len(fieldParsers) {
+						record.fields[fmt.Sprintf("col_%d", i)] = fieldParsers[i](value)
+					}
 				}
 			}
 
-			// Add row number
 			record.fields["_row_number"] = rowIndex
 			rowIndex++
 
@@ -163,19 +211,32 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 	}
 }
 
-// getFieldParser returns the appropriate parser function for a field
-// This is called once per column during setup, not per row
-func getFieldParser(fieldName string, overrides map[string]FieldType, defaultType FieldType) func(string) any {
-	// Check for field-specific override
-	fieldType := defaultType
-	if overrides != nil {
-		if ft, ok := overrides[fieldName]; ok {
-			fieldType = ft
-		}
+// inferFieldType determines the FieldType from a sample value
+func inferFieldType(s string) FieldType {
+	s = strings.TrimSpace(s)
+
+	// Try integer
+	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return FieldTypeInt
 	}
 
-	// Return optimized parser for the field type
-	switch fieldType {
+	// Try float
+	if _, err := strconv.ParseFloat(s, 64); err == nil {
+		return FieldTypeFloat
+	}
+
+	// Try boolean (explicit true/false only)
+	if s == "true" || s == "false" {
+		return FieldTypeBool
+	}
+
+	// Default to string
+	return FieldTypeString
+}
+
+// getParserForType returns the parser function for a specific FieldType
+func getParserForType(ft FieldType) func(string) any {
+	switch ft {
 	case FieldTypeString:
 		return parseAsString
 	case FieldTypeInt:
@@ -184,8 +245,8 @@ func getFieldParser(fieldName string, overrides map[string]FieldType, defaultTyp
 		return parseAsFloat
 	case FieldTypeBool:
 		return parseAsBool
-	default: // FieldTypeAuto
-		return parseValue
+	default:
+		return parseValue // Should not happen, but fallback to auto
 	}
 }
 
@@ -255,16 +316,72 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 			headers = headerRow
 		}
 
-		// Pre-compute field parsers for each column (fast path)
+		// Read first data row to infer types (when using auto-detection)
+		firstRow, err := csvReader.Read()
+		if err == io.EOF {
+			return // Empty file
+		}
+		if err != nil {
+			yield(Record{}, fmt.Errorf("failed to read first CSV row: %w", err))
+			return
+		}
+
+		// Determine parsers: either from config or inferred from first row
 		var fieldParsers []func(string) any
 		if cfg.HasHeaders && len(headers) > 0 {
 			fieldParsers = make([]func(string) any, len(headers))
 			for i, header := range headers {
-				fieldParsers[i] = getFieldParser(header, cfg.TypeOverrides, cfg.DefaultType)
+				// Check for explicit override first
+				if cfg.TypeOverrides != nil {
+					if ft, ok := cfg.TypeOverrides[header]; ok {
+						fieldParsers[i] = getParserForType(ft)
+						continue
+					}
+				}
+				// If default type is specified (not auto), use it
+				if cfg.DefaultType != FieldTypeAuto {
+					fieldParsers[i] = getParserForType(cfg.DefaultType)
+					continue
+				}
+				// Auto-detect: infer type from first row value, then lock it
+				if i < len(firstRow) {
+					fieldParsers[i] = getParserForType(inferFieldType(firstRow[i]))
+				} else {
+					fieldParsers[i] = parseAsString
+				}
+			}
+		} else {
+			// No headers - infer from first row
+			fieldParsers = make([]func(string) any, len(firstRow))
+			for i, value := range firstRow {
+				if cfg.DefaultType != FieldTypeAuto {
+					fieldParsers[i] = getParserForType(cfg.DefaultType)
+				} else {
+					fieldParsers[i] = getParserForType(inferFieldType(value))
+				}
 			}
 		}
 
-		rowIndex := int64(0)
+		// Process first row
+		record := MakeMutableRecord()
+		if cfg.HasHeaders && len(headers) > 0 {
+			for i, value := range firstRow {
+				if i < len(headers) {
+					record.fields[headers[i]] = fieldParsers[i](value)
+				}
+			}
+		} else {
+			for i, value := range firstRow {
+				record.fields[fmt.Sprintf("col_%d", i)] = fieldParsers[i](value)
+			}
+		}
+		record.fields["_row_number"] = int64(0)
+		if !yield(record.Freeze(), nil) {
+			return
+		}
+
+		// Process remaining rows with locked-in parsers
+		rowIndex := int64(1)
 		for {
 			row, err := csvReader.Read()
 			if err == io.EOF {
@@ -285,9 +402,10 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 					}
 				}
 			} else {
-				parser := getFieldParser("", nil, cfg.DefaultType)
 				for i, value := range row {
-					record.fields[fmt.Sprintf("col_%d", i)] = parser(value)
+					if i < len(fieldParsers) {
+						record.fields[fmt.Sprintf("col_%d", i)] = fieldParsers[i](value)
+					}
 				}
 			}
 
