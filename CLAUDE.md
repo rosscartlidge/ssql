@@ -65,9 +65,13 @@ When making changes to the library API or CLI commands, you MUST also update the
 - `doc/cli/codelab-cli.md` - CLI tutorial with command examples
 - `doc/cli/debugging_pipelines.md` - CLI debugging examples
 - `doc/cli/troubleshooting.md` - Common issues and solutions
-- `doc/EXPRESSIONS.md` - Expression language documentation
+- `doc/EXPRESSIONS.md` - Expression language documentation (user-facing)
 - `doc/ai-code-generation.md` - AI code generation examples
 - `doc/ai-human-guide.md` - Human-AI collaboration guide
+
+**Research documents (internal reference):**
+- `doc/research/expr-lang-reference.md` - Comprehensive expr-lang v1.17 reference (compile-time type checking, all functions, ssql integration patterns)
+- `doc/research/jsonl-schema-header.md` - Design for JSONL schema headers and pipeline field completion
 
 **What to update when changing:**
 - **Module path changes (v2 → v3)**: Update all import statements and `go get` commands
