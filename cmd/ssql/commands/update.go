@@ -201,14 +201,42 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Read JSONL from stdin
 			records := lib.ReadJSONL(os.Stdin)
 
+			// Track schema from first record
+			var schemaFields map[string]any // field -> sample value (for type inference)
+			var isFirstRecord = true
+
 			// Track which fields have already been warned about type coercion
 			warnedFields := make(map[string]bool)
+
+			// Track new fields and their types (determined from first assignment)
+			newFieldTypes := make(map[string]any) // field -> default value for type
+
+			// Collect all fields being set across all clauses
+			allSetFields := make(map[string]bool)
+			for _, clause := range clauses {
+				for _, upd := range clause.updates {
+					allSetFields[upd.field] = true
+				}
+			}
 
 			// Build update filter with first-match-wins clause evaluation (using pre-compiled expressions)
 			updateFilter := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 				frozen := mut.Freeze()
 
+				// On first record, capture the schema
+				if isFirstRecord {
+					schemaFields = make(map[string]any)
+					for k, v := range frozen.All() {
+						schemaFields[k] = v
+					}
+					isFirstRecord = false
+				}
+
+				// Track which new fields get set in this record
+				newFieldsSetThisRecord := make(map[string]bool)
+
 				// Evaluate clauses in order - first match wins
+				clauseMatched := false
 				for _, clause := range clauses {
 					// Check all conditions in this clause (AND logic)
 					allMatch := true
@@ -246,6 +274,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 					// If clause matches (or has no conditions), apply updates and stop
 					if allMatch {
+						clauseMatched = true
 						for _, upd := range clause.updates {
 							var parsedValue any
 
@@ -265,18 +294,53 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 								parsedValue = parseValue(upd.literal)
 							}
 
-							// Get existing value to check type
-							existingValue, exists := ssql.Get[any](frozen, upd.field)
+							// Check if this is a new field (not in original schema)
+							_, existsInSchema := schemaFields[upd.field]
+							existingValue, existsInRecord := ssql.Get[any](frozen, upd.field)
 
-							// Apply the value, coercing to existing type if needed
-							var coerced bool
-							mut, coerced = applyValueToRecordWithTypeCheck(mut, upd.field, parsedValue, existingValue, exists)
-							if coerced && !warnedFields[upd.field] {
-								fmt.Fprintf(os.Stderr, "Warning: field %q value coerced to match existing type (use 'ssql cast' for explicit type conversion)\n", upd.field)
-								warnedFields[upd.field] = true
+							if !existsInSchema {
+								// New field - track its type for defaults
+								if _, typeKnown := newFieldTypes[upd.field]; !typeKnown {
+									newFieldTypes[upd.field] = getDefaultForValue(parsedValue)
+								}
+								newFieldsSetThisRecord[upd.field] = true
+								mut = applyValueToRecord(mut, upd.field, parsedValue)
+							} else {
+								// Existing field - coerce to existing type if needed
+								var coerced bool
+								mut, coerced = applyValueToRecordWithTypeCheck(mut, upd.field, parsedValue, existingValue, existsInRecord)
+								if coerced && !warnedFields[upd.field] {
+									fmt.Fprintf(os.Stderr, "Warning: field %q value coerced to match existing type (use 'ssql cast' for explicit type conversion)\n", upd.field)
+									warnedFields[upd.field] = true
+								}
 							}
 						}
 						break // First match wins
+					}
+				}
+
+				// For new fields that weren't set in this record, apply defaults
+				for field, defaultVal := range newFieldTypes {
+					if !newFieldsSetThisRecord[field] {
+						// Check if field already exists in record (set by previous records processing)
+						if _, exists := ssql.Get[any](frozen, field); !exists {
+							mut = applyValueToRecord(mut, field, defaultVal)
+						}
+					}
+				}
+
+				// If no clause matched but we have new fields being introduced,
+				// we still need to add defaults for new fields
+				if !clauseMatched {
+					for field := range allSetFields {
+						if _, existsInSchema := schemaFields[field]; !existsInSchema {
+							// This is a new field - if we have a type for it, add default
+							if defaultVal, hasType := newFieldTypes[field]; hasType {
+								if _, exists := ssql.Get[any](frozen, field); !exists {
+									mut = applyValueToRecord(mut, field, defaultVal)
+								}
+							}
+						}
 					}
 				}
 

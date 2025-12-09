@@ -499,6 +499,22 @@ func coerceToString(value any) (string, bool) {
 	}
 }
 
+// getDefaultForValue returns the default/zero value for the same type as the input value
+func getDefaultForValue(value any) any {
+	switch value.(type) {
+	case int64, int, int32, int16, int8, uint, uint64, uint32, uint16, uint8:
+		return int64(0)
+	case float64, float32:
+		return float64(0)
+	case bool:
+		return false
+	case string:
+		return ""
+	default:
+		return ""
+	}
+}
+
 // applyValueToRecord applies a value to a mutable record with automatic type inference
 // Handles type conversions (int→int64, float32→float64) and defaults unknown types to string
 func applyValueToRecord(mut ssql.MutableRecord, field string, value any) ssql.MutableRecord {
