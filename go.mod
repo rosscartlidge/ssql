@@ -2,6 +2,6 @@ module github.com/rosscartlidge/ssql/v3
 
 go 1.24.8
 
-require github.com/rosscartlidge/autocli/v4 v4.2.0
+require github.com/rosscartlidge/autocli/v4 v4.2.1
 
 require github.com/expr-lang/expr v1.17.6
