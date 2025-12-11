@@ -132,9 +132,10 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 	for i, file := range additionalFiles {
 		varName := fmt.Sprintf("records%d", i+1)
 
-		// Check if this is a process substitution path (/dev/fd/N)
+		// Check if this is a non-regular file (e.g., /dev/fd/N, named pipe)
 		// In generation mode, these contain code fragments from the inner command
-		if strings.HasPrefix(file, "/dev/fd/") {
+		fileInfo, statErr := os.Stat(file)
+		if statErr == nil && !fileInfo.Mode().IsRegular() {
 			fileFragments, err := lib.ReadCodeFragmentsFromFile(file)
 			if err == nil && len(fileFragments) > 0 {
 				// Rename all variables in secondary fragments to avoid collision

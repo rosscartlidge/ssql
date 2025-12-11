@@ -217,9 +217,10 @@ func generateJoinCode(rightFile, joinType string, onFields []string, leftField, 
 		}
 	}
 
-	// Check if rightFile is a process substitution path (/dev/fd/N)
+	// Check if rightFile is a non-regular file (e.g., /dev/fd/N, named pipe)
 	// In generation mode, these contain code fragments from the inner command
-	if strings.HasPrefix(rightFile, "/dev/fd/") {
+	fileInfo, statErr := os.Stat(rightFile)
+	if statErr == nil && !fileInfo.Mode().IsRegular() {
 		rightFragments, err := lib.ReadCodeFragmentsFromFile(rightFile)
 		if err == nil && len(rightFragments) > 0 {
 			// Rename all variables in secondary fragments to avoid collision with primary pipeline

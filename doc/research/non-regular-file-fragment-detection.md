@@ -1,6 +1,6 @@
 # Plan: Non-Regular File Fragment Detection
 
-**Status**: Planned
+**Status**: Implemented (v3.5.2)
 **Author**: Ross Cartlidge
 **Date**: December 2025
 
