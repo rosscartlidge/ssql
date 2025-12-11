@@ -31,7 +31,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-where", "-w").
 			Arg("field").FieldsFromFlag("").Done().
 			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
-			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
+			Arg("value").FieldValuesFrom("", "field").Done().
 			Accumulate().
 			Local().
 			Help("Filter condition: -where <field> <operator> <value>").

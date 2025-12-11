@@ -31,7 +31,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-where", "-w").
 			Arg("field").FieldsFromFlag("").Done().
 			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
-			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
+			Arg("value").FieldValuesFrom("", "field").Done().
 			Accumulate().
 			Local().
 			Help("Condition to check: -where <field> <operator> <value>").
@@ -44,7 +44,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-set", "-s").
 			Arg("field").FieldsFromFlag("").Done().
-			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
+			Arg("value").FieldValuesFrom("", "field").Done().
 			Accumulate().
 			Local().
 			Help("Set field to literal value: -set <field> <value>").
