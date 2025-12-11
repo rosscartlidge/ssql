@@ -29,7 +29,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Generate Go code instead of executing").
 		Done().
 		Flag("-where", "-w").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
+			Arg("field").FieldsFromFlag("").Done().
 			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
 			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
 			Accumulate().
