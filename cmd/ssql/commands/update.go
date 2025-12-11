@@ -29,7 +29,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Generate Go code instead of executing").
 		Done().
 		Flag("-where", "-w").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
+			Arg("field").FieldsFromFlag("").Done().
 			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
 			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
 			Accumulate().
@@ -43,14 +43,14 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Condition using boolean expression: -where-expr <expression>").
 		Done().
 		Flag("-set", "-s").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
+			Arg("field").FieldsFromFlag("").Done().
 			Arg("value").Completer(cf.NoCompleter{Hint: "<value>"}).Done().
 			Accumulate().
 			Local().
 			Help("Set field to literal value: -set <field> <value>").
 		Done().
 		Flag("-set-expr", "-e").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field>"}).Done().
+			Arg("field").FieldsFromFlag("").Done().
 			Arg("expression").Completer(cf.NoCompleter{Hint: "<expression>"}).Done().
 			Accumulate().
 			Local().

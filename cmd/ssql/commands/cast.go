@@ -26,7 +26,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Generate Go code instead of executing").
 		Done().
 		Flag("-type", "-t").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
+			Arg("field").FieldsFromFlag("").Done().
 			Arg("type").Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool"}}).Done().
 			Accumulate().
 			Global().
