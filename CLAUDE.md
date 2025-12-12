@@ -94,6 +94,28 @@ When making changes to the library API or CLI commands, you MUST also update the
 
 ## Development Principles (CRITICAL)
 
+### If It's Not Tested, It Will Break
+
+**⚠️ Features without tests will eventually be removed or broken during refactoring.**
+
+This was learned the hard way when field/value completion was accidentally removed in v3.2.0 during a refactor. The feature worked, but had no test coverage, so when code was reorganized the completion configuration was lost.
+
+**Rules:**
+- ✅ Add tests for any feature you want to keep
+- ✅ Tests act as documentation of expected behavior
+- ✅ Tests catch accidental removal during refactoring
+- ❌ Don't assume "obvious" features will survive refactoring
+
+**Example - Completion Configuration Test:**
+```go
+// TestFieldCompletionConfiguration verifies that all commands that accept field names
+// have proper field completion configured (FieldsFromFlag) instead of NoCompleter.
+// This test prevents regression where field completion is accidentally removed.
+func TestFieldCompletionConfiguration(t *testing.T) {
+    // ... verifies FieldCompleter is used, not NoCompleter
+}
+```
+
 ### Compile-Time Type Safety Over Runtime
 
 **⚠️ ALWAYS prefer compile-time type safety over runtime validation.**
