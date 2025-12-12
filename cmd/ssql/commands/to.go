@@ -51,6 +51,7 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 		Flag("FIELDS").
 			String().
 			Variadic().
+			FieldsFromFlag("").
 			Global().
 			Help("Field names to display first (in order)").
 		Done().

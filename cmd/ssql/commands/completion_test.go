@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"strings"
 	"testing"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -66,6 +67,14 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-max":     {0}, // field is arg 0
 			"-collect": {0}, // field is arg 0
 			// Note: -count only takes result-name, not a field to count
+		},
+		// Nested subcommands use "parent/child" notation
+		"to/table": {
+			"FIELDS": {0}, // fields to display (variadic)
+		},
+		"to/chart": {
+			"-x": {0}, // x-axis field
+			"-y": {0}, // y-axis field
 		},
 	}
 
@@ -164,8 +173,29 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 }
 
 // findSubcommand finds a subcommand by name in the command tree
+// Supports nested paths like "to/table" for nested subcommands
 func findSubcommand(cmd *cf.Command, name string) *cf.Subcommand {
-	return cmd.GetSubcommand(name)
+	parts := strings.Split(name, "/")
+	if len(parts) == 1 {
+		return cmd.GetSubcommand(name)
+	}
+
+	// Handle nested subcommands
+	parent := cmd.GetSubcommand(parts[0])
+	if parent == nil {
+		return nil
+	}
+	for _, part := range parts[1:] {
+		if parent.Subcommands == nil {
+			return nil
+		}
+		child, ok := parent.Subcommands[part]
+		if !ok {
+			return nil
+		}
+		parent = child
+	}
+	return parent
 }
 
 // findFlag finds a flag by name in a subcommand
