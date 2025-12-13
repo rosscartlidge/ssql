@@ -178,8 +178,8 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 // generateJoinCode generates Go code for the join command
 // Handles two scenarios:
-// 1. Direct JSONL file: generates init fragment to read the file
-// 2. Process substitution (/dev/fd/N): reads fragments from it and incorporates them
+// 1. Direct JSONL file: generates a simple function to read the file
+// 2. Process substitution (/dev/fd/N): wraps subprocess fragments into a function
 func generateJoinCode(rightFile, joinType string, onFields []string, leftField, rightField string) error {
 	// Read all previous code fragments from stdin (if any)
 	fragments, err := lib.ReadAllCodeFragments()
@@ -202,20 +202,15 @@ func generateJoinCode(rightFile, joinType string, onFields []string, leftField, 
 		inputVar = "records"
 	}
 
-	// Generate unique variable name for right records
-	rightVarName := "rightRecords"
-	if len(fragments) > 0 {
-		// Count how many init fragments exist to create unique names
-		initCount := 0
-		for _, f := range fragments {
-			if f.Type == "init" {
-				initCount++
-			}
-		}
-		if initCount > 1 {
-			rightVarName = fmt.Sprintf("rightRecords_%d", initCount-1)
+	// Generate unique function name for the right source
+	// Count existing func fragments to ensure unique naming across the pipeline
+	funcCount := 1
+	for _, frag := range fragments {
+		if frag.Type == "func" {
+			funcCount++
 		}
 	}
+	funcName := fmt.Sprintf("rightSource%d", funcCount)
 
 	// Check if rightFile is a non-regular file (e.g., /dev/fd/N, named pipe)
 	// In generation mode, these contain code fragments from the inner command
@@ -223,86 +218,83 @@ func generateJoinCode(rightFile, joinType string, onFields []string, leftField, 
 	if statErr == nil && !fileInfo.Mode().IsRegular() {
 		rightFragments, err := lib.ReadCodeFragmentsFromFile(rightFile)
 		if err == nil && len(rightFragments) > 0 {
-			// Rename all variables in secondary fragments to avoid collision with primary pipeline
-			// We assign new names per fragment index, then track what each original var maps to
-			// for updating input references
-			newVarNames := make([]string, len(rightFragments))
-			varRename := make(map[string]string) // maps old var name to new (updated per fragment)
-
-			for i, frag := range rightFragments {
-				if frag.Var != "" {
-					var newName string
-					if i == len(rightFragments)-1 {
-						// Last fragment's output becomes rightRecords (or rightRecords_N)
-						newName = rightVarName
-					} else {
-						// Intermediate variables get unique "right_" prefixed names
-						newName = fmt.Sprintf("right_%s_%d", frag.Var, i)
-					}
-					newVarNames[i] = newName
-					varRename[frag.Var] = newName // Track latest mapping for this var name
+			// Build command string from subprocess fragments
+			var subCommands []string
+			for _, frag := range rightFragments {
+				if frag.Command != "" {
+					subCommands = append(subCommands, frag.Command)
 				}
 			}
+			subCommandStr := strings.Join(subCommands, " | ")
 
-			// Apply renames to all fragments
-			for i, frag := range rightFragments {
-				// First, rename input variable reference using the mapping built so far
-				// (must happen before we update the map with this fragment's output)
-				if frag.Input != "" {
-					if newInput, ok := varRename[frag.Input]; ok {
-						oldInput := frag.Input
-						frag.Input = newInput
-						// Update code to reference renamed input
-						frag.Code = strings.Replace(frag.Code, ")("+oldInput+")", ")("+newInput+")", 1)
-					}
-				}
-
-				// Then, rename output variable
-				if newVarNames[i] != "" {
-					oldVar := frag.Var
-					newVar := newVarNames[i]
-					frag.Var = newVar
-					// Update code to use new variable name
-					frag.Code = strings.Replace(frag.Code, oldVar+", err :=", newVar+", err :=", 1)
-					frag.Code = strings.Replace(frag.Code, oldVar+" :=", newVar+" :=", 1)
-					// Update varRename for subsequent fragments that reference this output
-					varRename[oldVar] = newVar
-				}
-
-				if err := lib.WriteCodeFragment(frag); err != nil {
-					return fmt.Errorf("writing secondary fragment: %w", err)
-				}
+			// Create a func fragment that wraps the subprocess pipeline
+			funcFrag := lib.NewFuncFragment(funcName, rightFragments, subCommandStr)
+			if err := lib.WriteCodeFragment(funcFrag); err != nil {
+				return fmt.Errorf("writing func fragment: %w", err)
 			}
-			// Skip to generating join statement (no file-reading init needed)
-			return generateJoinStmt(inputVar, rightVarName, joinType, onFields, leftField, rightField)
+
+			// Generate join statement using the function call
+			return generateJoinStmtWithFunc(inputVar, funcName, joinType, onFields, leftField, rightField)
 		}
 		// If reading fragments failed, fall through to normal file handling
 	}
 
-	// Fragment 1: Init fragment to read right file (JSONL only)
-	rightVarInit := fmt.Sprintf(`rightFile_%s, err := os.Open(%q)
+	// For regular files, create a simple func fragment that reads the file
+	// Build init fragment for the file read
+	initCode := fmt.Sprintf(`records, err := ssql.ReadCSV(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening: %%v\n", err)
-		os.Exit(1)
-	}
-	defer rightFile_%s.Close()
-	%s := lib.ReadJSONL(rightFile_%s)`, rightVarName, rightFile, rightVarName, rightVarName, rightVarName)
-	initImports := []string{"fmt", "os", "github.com/rosscartlidge/ssql/v3/cmd/ssql/lib"}
+		return nil
+	}`, rightFile)
+	initFrag := lib.NewInitFragment("records", initCode, nil, fmt.Sprintf("ssql from %s", rightFile))
 
-	// Write init fragment (note: empty command string since join command will be on stmt fragment)
-	initFrag := lib.NewInitFragment(rightVarName, rightVarInit, initImports, "")
-	if err := lib.WriteCodeFragment(initFrag); err != nil {
-		return fmt.Errorf("writing init fragment: %w", err)
+	// Create func fragment with just the init
+	funcFrag := lib.NewFuncFragment(funcName, []*lib.CodeFragment{initFrag}, fmt.Sprintf("ssql from %s", rightFile))
+	if err := lib.WriteCodeFragment(funcFrag); err != nil {
+		return fmt.Errorf("writing func fragment: %w", err)
 	}
 
-	return generateJoinStmt(inputVar, rightVarName, joinType, onFields, leftField, rightField)
+	return generateJoinStmtWithFunc(inputVar, funcName, joinType, onFields, leftField, rightField)
 }
 
-// generateJoinStmt generates the join statement fragment
+// generateJoinStmtWithFunc generates a join statement that calls a function for the right source
+func generateJoinStmtWithFunc(inputVar, funcName, joinType string, onFields []string, leftField, rightField string) error {
+	// Generate predicate code
+	predicateCode, stmtImports := generateJoinPredicate(onFields, leftField, rightField)
+
+	// Generate join function call
+	joinFunc := getJoinFunc(joinType)
+
+	// Build stmt code using function call: ssql.InnerJoin(funcName(), predicate)
+	outputVar := "joined"
+	stmtCode := fmt.Sprintf("%s := %s(%s(), %s)(%s)", outputVar, joinFunc, funcName, predicateCode, inputVar)
+
+	// Write stmt fragment
+	stmtFrag := lib.NewStmtFragment(outputVar, inputVar, stmtCode, stmtImports, getCommandString())
+	return lib.WriteCodeFragment(stmtFrag)
+}
+
+// generateJoinStmt generates the join statement fragment (legacy, for direct variable reference)
 func generateJoinStmt(inputVar, rightVarName, joinType string, onFields []string, leftField, rightField string) error {
 	// Generate predicate code
+	predicateCode, stmtImports := generateJoinPredicate(onFields, leftField, rightField)
+
+	// Generate join function call
+	joinFunc := getJoinFunc(joinType)
+
+	// Build stmt code (simple assignment that can be extracted for Chain())
+	outputVar := "joined"
+	stmtCode := fmt.Sprintf("%s := %s(%s, %s)(%s)", outputVar, joinFunc, rightVarName, predicateCode, inputVar)
+
+	// Write stmt fragment
+	stmtFrag := lib.NewStmtFragment(outputVar, inputVar, stmtCode, stmtImports, getCommandString())
+	return lib.WriteCodeFragment(stmtFrag)
+}
+
+// generateJoinPredicate generates the predicate code for a join
+func generateJoinPredicate(onFields []string, leftField, rightField string) (string, []string) {
 	var predicateCode string
-	var stmtImports []string
+	var imports []string
+
 	if len(onFields) > 0 {
 		// Simple OnFields predicate
 		quotedFields := make([]string, len(onFields))
@@ -320,27 +312,22 @@ func generateJoinStmt(inputVar, rightVarName, joinType string, onFields []string
 		}
 		return fmt.Sprintf("%%v", leftVal) == fmt.Sprintf("%%v", rightVal)
 	})`, leftField, rightField)
-		stmtImports = append(stmtImports, "fmt")
+		imports = append(imports, "fmt")
 	}
 
-	// Generate join function call
-	var joinFunc string
+	return predicateCode, imports
+}
+
+// getJoinFunc returns the ssql join function name for the given join type
+func getJoinFunc(joinType string) string {
 	switch joinType {
 	case "left":
-		joinFunc = "ssql.LeftJoin"
+		return "ssql.LeftJoin"
 	case "right":
-		joinFunc = "ssql.RightJoin"
+		return "ssql.RightJoin"
 	case "full":
-		joinFunc = "ssql.FullJoin"
+		return "ssql.FullJoin"
 	default:
-		joinFunc = "ssql.InnerJoin"
+		return "ssql.InnerJoin"
 	}
-
-	// Build stmt code (simple assignment that can be extracted for Chain())
-	outputVar := "joined"
-	stmtCode := fmt.Sprintf("%s := %s(%s, %s)(%s)", outputVar, joinFunc, rightVarName, predicateCode, inputVar)
-
-	// Write stmt fragment
-	stmtFrag := lib.NewStmtFragment(outputVar, inputVar, stmtCode, stmtImports, getCommandString())
-	return lib.WriteCodeFragment(stmtFrag)
 }

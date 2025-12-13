@@ -312,10 +312,10 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 			quotedFields[i] = fmt.Sprintf("%q", f)
 		}
 		fieldsStr := "[]string{" + joinStrings(quotedFields, ", ") + "}"
-		code = fmt.Sprintf("\tssql.DisplayTableWithFields(%s, %d, %s, %t)\n", inputVar, maxWidth, fieldsStr, onlySpecified)
+		code = fmt.Sprintf("ssql.DisplayTableWithFields(%s, %d, %s, %t)", inputVar, maxWidth, fieldsStr, onlySpecified)
 	} else {
 		// No fields specified - use simple DisplayTable
-		code = fmt.Sprintf("\tssql.DisplayTable(%s, %d)\n", inputVar, maxWidth)
+		code = fmt.Sprintf("ssql.DisplayTable(%s, %d)", inputVar, maxWidth)
 	}
 	frag := lib.NewFinalFragment(inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)

@@ -5,18 +5,32 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 
 	"github.com/rosscartlidge/ssql/v3/cmd/ssql/version"
 )
 
+// funcCounter is used to generate unique function names across all process substitutions
+var funcCounter atomic.Int32
+
+// NextFuncName returns the next unique function name for subprocess functions
+func NextFuncName() string {
+	n := funcCounter.Add(1)
+	return fmt.Sprintf("rightSource%d", n)
+}
+
 // CodeFragment represents a piece of generated Go code in a pipeline
 type CodeFragment struct {
-	Type    string   `json:"type"`    // "stmt" (statement), "final" (no output var), "init" (first in chain)
+	Type    string   `json:"type"`    // "stmt" (statement), "final" (no output var), "init" (first in chain), "func" (subprocess function)
 	Var     string   `json:"var"`     // Output variable name (e.g., "filtered0")
 	Input   string   `json:"input"`   // Input variable name from previous command
 	Code    string   `json:"code"`    // Go code for this operation
 	Imports []string `json:"imports"` // Required imports (e.g., ["strings", "log"])
 	Command string   `json:"command"` // The ssql command that generated this fragment (e.g., "ssql from")
+
+	// For "func" type fragments (subprocess functions from process substitution)
+	FuncName string             `json:"func_name,omitempty"` // Function name (e.g., "rightSource1")
+	FuncBody []*CodeFragment    `json:"func_body,omitempty"` // Fragments that make up the function body
 }
 
 // ReadAllCodeFragments reads all code fragments from stdin
@@ -101,6 +115,35 @@ func NewFinalFragment(inputVar, code string, imports []string, command string) *
 	}
 }
 
+// NewFuncFragment creates a function fragment from subprocess fragments (process substitution)
+// The function returns iter.Seq[ssql.Record] and encapsulates a complete sub-pipeline
+func NewFuncFragment(funcName string, bodyFragments []*CodeFragment, command string) *CodeFragment {
+	// Collect all imports from body fragments
+	importSet := make(map[string]bool)
+	for _, frag := range bodyFragments {
+		for _, imp := range frag.Imports {
+			if imp != "" {
+				importSet[imp] = true
+			}
+		}
+	}
+	var imports []string
+	for imp := range importSet {
+		imports = append(imports, imp)
+	}
+
+	return &CodeFragment{
+		Type:     "func",
+		Var:      funcName, // The function name is used as the "variable" it produces
+		Input:    "",
+		Code:     "",       // Code is generated from FuncBody during assembly
+		Imports:  imports,
+		Command:  command,
+		FuncName: funcName,
+		FuncBody: bodyFragments,
+	}
+}
+
 // GetInputVar returns the input variable name, or "records" if this is the first command
 func (f *CodeFragment) GetInputVar() string {
 	if f == nil || f.Input == "" {
@@ -110,7 +153,7 @@ func (f *CodeFragment) GetInputVar() string {
 }
 
 // AssembleCodeFragments reads all code fragments from stdin and assembles them into a complete Go program
-// using ssql.Chain() for better readability
+// using ssql.Chain() for better readability. Handles func fragments for process substitution.
 func AssembleCodeFragments(input io.Reader) (string, error) {
 	// Read all fragments from stdin
 	var fragments []*CodeFragment
@@ -131,10 +174,11 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		return "", fmt.Errorf("no code fragments received")
 	}
 
-	// Separate init fragments (setup) from stmt fragments (transformations)
+	// Separate fragments by type
 	var initFragments []*CodeFragment
 	var stmtFragments []*CodeFragment
 	var finalFragments []*CodeFragment
+	var funcFragments []*CodeFragment
 
 	for _, frag := range fragments {
 		switch frag.Type {
@@ -144,12 +188,15 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 			stmtFragments = append(stmtFragments, frag)
 		case "final":
 			finalFragments = append(finalFragments, frag)
+		case "func":
+			funcFragments = append(funcFragments, frag)
 		}
 	}
 
 	// Collect all imports and deduplicate
 	importSet := make(map[string]bool)
 	importSet["github.com/rosscartlidge/ssql/v3"] = true // Always needed
+	importSet["iter"] = true                              // For iter.Seq return type
 
 	// If there are no final fragments, we'll auto-add JSONL output
 	if len(finalFragments) == 0 {
@@ -157,19 +204,19 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		importSet["fmt"] = true
 	}
 
-	// If any init fragments have error handling (contain "return fmt.Errorf"), we need os
-	for _, frag := range initFragments {
-		if findString(frag.Code, "return fmt.Errorf") != -1 {
-			importSet["os"] = true
-			importSet["fmt"] = true
-			break
-		}
-	}
-
+	// Collect imports from all fragments (including func body fragments)
 	for _, frag := range fragments {
 		for _, imp := range frag.Imports {
 			if imp != "" {
 				importSet[imp] = true
+			}
+		}
+		// Also collect from func body fragments
+		for _, bodyFrag := range frag.FuncBody {
+			for _, imp := range bodyFrag.Imports {
+				if imp != "" {
+					importSet[imp] = true
+				}
 			}
 		}
 	}
@@ -179,15 +226,13 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 	for imp := range importSet {
 		imports = append(imports, imp)
 	}
-
-	// Sort imports for consistent output
 	sortImports(imports)
 
 	// Build the complete program
 	var code string
 	code += "package main\n\n"
 
-	// Add command pipeline as block comment for easy copy-paste
+	// Add command pipeline as block comment
 	var commands []string
 	for _, frag := range fragments {
 		if frag.Command != "" {
@@ -199,8 +244,7 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		code += fmt.Sprintf("Generated by ssql %s:\n\n", version.Version)
 		code += "export SSQLGO=1\n"
 		for _, cmd := range commands {
-			code += cmd
-			code += " |\n"
+			code += cmd + " |\n"
 		}
 		code += "ssql generate-go\n"
 		code += "unset SSQLGO\n"
@@ -218,6 +262,9 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 
 	// Extract and add package-level pre-compile vars (from expr filters)
 	preCompileVars := extractPreCompileVars(fragments)
+	for _, funcFrag := range funcFragments {
+		preCompileVars = append(preCompileVars, extractPreCompileVars(funcFrag.FuncBody)...)
+	}
 	if len(preCompileVars) > 0 {
 		for _, varDecl := range preCompileVars {
 			code += varDecl + "\n"
@@ -225,27 +272,18 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		code += "\n"
 	}
 
+	// Generate subprocess functions (from process substitution)
+	for _, funcFrag := range funcFragments {
+		code += generateSubprocessFunction(funcFrag)
+		code += "\n"
+	}
+
 	// Add main function
 	code += "func main() {\n"
 
-	// Add init fragments (with proper error handling)
+	// Add init fragments (the main data source)
 	for _, frag := range initFragments {
 		code += "\t" + fixErrorHandling(frag.Code) + "\n"
-	}
-
-	// Separate stmt fragments into main pipeline vs side computations
-	// Main pipeline fragments trace back to first init through their input chain
-	// Side computation fragments (e.g., from process substitution) should be emitted directly
-	var mainPipelineFragments []*CodeFragment
-	var sideFragments []*CodeFragment
-
-	// Build a map of variable names to their producing fragments
-	varProducers := make(map[string]*CodeFragment)
-	for _, frag := range initFragments {
-		varProducers[frag.Var] = frag
-	}
-	for _, frag := range stmtFragments {
-		varProducers[frag.Var] = frag
 	}
 
 	// The main pipeline root is the first init fragment's variable
@@ -256,84 +294,42 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		mainPipelineRoot = "records"
 	}
 
-	// Helper to trace if a variable chains back to main pipeline root
-	tracesToMain := func(varName string) bool {
-		visited := make(map[string]bool)
-		current := varName
-		for {
-			if current == mainPipelineRoot {
-				return true
-			}
-			if current == "" {
-				// Reached a root that is NOT the main pipeline root
-				return false
-			}
-			if visited[current] {
-				return false // cycle detection
-			}
-			visited[current] = true
-			frag, ok := varProducers[current]
-			if !ok {
-				return false
-			}
-			current = frag.Input
-		}
-	}
+	// Build Chain() call if we have stmt fragments
+	if len(stmtFragments) > 0 {
+		outputVar := stmtFragments[len(stmtFragments)-1].Var
 
-	// Categorize stmt fragments
-	for _, frag := range stmtFragments {
-		if tracesToMain(frag.Input) {
-			mainPipelineFragments = append(mainPipelineFragments, frag)
+		if len(stmtFragments) > 1 {
+			code += "\t" + outputVar + " := ssql.Chain(\n"
+			for _, frag := range stmtFragments {
+				filterCode := extractFilter(frag.Code)
+				code += "\t\t" + filterCode + ",\n"
+			}
+			code += "\t)(" + mainPipelineRoot + ")\n"
 		} else {
-			sideFragments = append(sideFragments, frag)
+			// Single transformation
+			code += "\t" + fixErrorHandling(stmtFragments[0].Code) + "\n"
 		}
 	}
 
-	// Emit side computation fragments first (they produce variables used by main pipeline)
-	for _, frag := range sideFragments {
-		code += "\t" + fixErrorHandling(frag.Code) + "\n"
-	}
-
-	// Build Chain() call if we have multiple main pipeline fragments
-	if len(mainPipelineFragments) > 1 {
-		// Extract the output variable (from last main pipeline fragment)
-		outputVar := mainPipelineFragments[len(mainPipelineFragments)-1].Var
-
-		// Build filters array
-		code += "\t" + outputVar + " := ssql.Chain(\n"
-		for _, frag := range mainPipelineFragments {
-			// Extract just the filter function from the code
-			// Pattern: "var := filter(input)" -> "filter"
-			filterCode := extractFilter(frag.Code)
-			code += "\t\t" + filterCode + ",\n"
-		}
-		code += "\t)(" + mainPipelineRoot + ")\n"
-	} else if len(mainPipelineFragments) == 1 {
-		// Single transformation - use directly
-		code += "\t" + fixErrorHandling(mainPipelineFragments[0].Code) + "\n"
-	}
-
-	// Add final fragments (e.g., write-csv)
+	// Add final fragments (e.g., to table, to csv)
 	if len(finalFragments) > 0 {
 		for _, frag := range finalFragments {
 			code += "\t" + fixErrorHandling(frag.Code) + "\n"
 		}
 	} else {
 		// No final fragment - auto-add JSONL output
-		// Find the last output variable from the main pipeline
 		var outputVar string
-		if len(mainPipelineFragments) > 0 {
-			outputVar = mainPipelineFragments[len(mainPipelineFragments)-1].Var
+		if len(stmtFragments) > 0 {
+			outputVar = stmtFragments[len(stmtFragments)-1].Var
 		} else if len(initFragments) > 0 {
-			outputVar = initFragments[0].Var // main pipeline root
+			outputVar = initFragments[0].Var
 		} else {
 			outputVar = "records"
 		}
 
-		// Add JSONL output code using ssql.WriteJSONToWriter
 		code += "\t// Output records as JSONL\n"
 		code += fmt.Sprintf("\tif err := ssql.WriteJSONToWriter(%s, os.Stdout); err != nil {\n", outputVar)
-		code += "\t\tfmt.Fprintf(os.Stderr, \"Error writing output: %v\\n\", err)\n"
+		code += "\t\tfmt.Fprintf(os.Stderr, \"Error writing output: %%v\\n\", err)\n"
 		code += "\t\tos.Exit(1)\n"
 		code += "\t}\n"
 	}
@@ -341,6 +337,112 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 	code += "}\n"
 
 	return code, nil
+}
+
+// generateSubprocessFunction generates a function from a func fragment
+// Each subprocess (process substitution) becomes its own function returning iter.Seq[ssql.Record]
+func generateSubprocessFunction(funcFrag *CodeFragment) string {
+	var code string
+
+	// Add comment with the subprocess command
+	if funcFrag.Command != "" {
+		code += fmt.Sprintf("// %s\n", funcFrag.Command)
+	}
+
+	code += fmt.Sprintf("func %s() iter.Seq[ssql.Record] {\n", funcFrag.FuncName)
+
+	// Separate body fragments by type
+	var initFrags []*CodeFragment
+	var stmtFrags []*CodeFragment
+
+	for _, frag := range funcFrag.FuncBody {
+		switch frag.Type {
+		case "init":
+			initFrags = append(initFrags, frag)
+		case "stmt":
+			stmtFrags = append(stmtFrags, frag)
+		}
+	}
+
+	// Add init fragments
+	for _, frag := range initFrags {
+		// For functions, convert error handling to return nil
+		initCode := frag.Code
+		// Simple replacement for common patterns
+		initCode = replaceForFuncReturn(initCode)
+		code += "\t" + initCode + "\n"
+	}
+
+	// Get the root variable
+	var rootVar string
+	if len(initFrags) > 0 {
+		rootVar = initFrags[0].Var
+	} else {
+		rootVar = "records"
+	}
+
+	// Generate Chain if multiple stmt fragments, otherwise direct
+	if len(stmtFrags) > 1 {
+		code += "\treturn ssql.Chain(\n"
+		for _, frag := range stmtFrags {
+			filterCode := extractFilter(frag.Code)
+			code += "\t\t" + filterCode + ",\n"
+		}
+		code += "\t)(" + rootVar + ")\n"
+	} else if len(stmtFrags) == 1 {
+		// Single transformation - extract filter and apply
+		filterCode := extractFilter(stmtFrags[0].Code)
+		code += fmt.Sprintf("\treturn %s(%s)\n", filterCode, rootVar)
+	} else {
+		// No transformations, just return the init result
+		code += fmt.Sprintf("\treturn %s\n", rootVar)
+	}
+
+	code += "}\n"
+
+	return code
+}
+
+// replaceForFuncReturn converts main() error handling to function return nil
+func replaceForFuncReturn(code string) string {
+	// Replace patterns like "if err != nil { ... os.Exit(1) }" with "if err != nil { return nil }"
+	// This is a simple heuristic - in practice the error handling should be cleaner
+
+	// For now, just replace the error block pattern
+	if findString(code, "if err != nil") != -1 {
+		// Find and replace the error block
+		start := findString(code, "if err != nil")
+		if start != -1 {
+			// Find the closing brace of the if block
+			depth := 0
+			inBlock := false
+			blockStart := -1
+			blockEnd := -1
+
+			for i := start; i < len(code); i++ {
+				if code[i] == '{' {
+					if !inBlock {
+						inBlock = true
+						blockStart = i
+					}
+					depth++
+				} else if code[i] == '}' {
+					depth--
+					if depth == 0 && inBlock {
+						blockEnd = i
+						break
+					}
+				}
+			}
+
+			if blockStart != -1 && blockEnd != -1 {
+				// Replace the entire if block with simpler return nil
+				code = code[:start] + "if err != nil {\n\t\treturn nil\n\t}" + code[blockEnd+1:]
+			}
+		}
+	}
+
+	return code
 }
 
 // extractPreCompileVars extracts package-level variable declarations from code fragments
