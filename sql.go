@@ -64,21 +64,29 @@ func innerJoinNested(
 	for left := range leftSeq {
 		for _, right := range rightRecords {
 			if predicate.Match(left, right) {
-				joined := MakeMutableRecord()
-				// Copy left record
-				for k, v := range left.All() {
-					joined.fields[k] = v
-				}
-				// Copy right record
-				for k, v := range right.All() {
-					joined.fields[k] = v
-				}
-				if !yield(joined.Freeze()) {
+				if !yield(mergeRecords(left, right)) {
 					return
 				}
 			}
 		}
 	}
+}
+
+// mergeRecords creates a new Record by merging left and right fields directly.
+// This is optimized for high-throughput join operations by avoiding the
+// MutableRecord -> Freeze() copy overhead.
+func mergeRecords(left, right Record) Record {
+	// Pre-allocate with combined capacity
+	merged := make(map[string]any, len(left.fields)+len(right.fields))
+	// Copy left fields directly
+	for k, v := range left.fields {
+		merged[k] = v
+	}
+	// Copy right fields (may override left on field name collision)
+	for k, v := range right.fields {
+		merged[k] = v
+	}
+	return Record{fields: merged}
 }
 
 // innerJoinHash performs O(n+m) hash-based inner join
@@ -110,16 +118,7 @@ func innerJoinHash(
 			for _, right := range matches {
 				// Verify with Match() for correctness (handles hash collisions)
 				if predicate.Match(left, right) {
-					joined := MakeMutableRecord()
-					// Copy left record
-					for k, v := range left.All() {
-						joined.fields[k] = v
-					}
-					// Copy right record
-					for k, v := range right.All() {
-						joined.fields[k] = v
-					}
-					if !yield(joined.Freeze()) {
+					if !yield(mergeRecords(left, right)) {
 						return
 					}
 				}
@@ -189,16 +188,7 @@ func leftJoinNested(
 		matched := false
 		for _, right := range rightRecords {
 			if predicate.Match(left, right) {
-				joined := MakeMutableRecord()
-				// Copy left record
-				for k, v := range left.All() {
-					joined.fields[k] = v
-				}
-				// Copy right record
-				for k, v := range right.All() {
-					joined.fields[k] = v
-				}
-				if !yield(joined.Freeze()) {
+				if !yield(mergeRecords(left, right)) {
 					return
 				}
 				matched = true
@@ -241,16 +231,7 @@ func leftJoinHash(
 				for _, right := range matches {
 					// Verify with Match() for correctness
 					if predicate.Match(left, right) {
-						joined := MakeMutableRecord()
-						// Copy left record
-						for k, v := range left.All() {
-							joined.fields[k] = v
-						}
-						// Copy right record
-						for k, v := range right.All() {
-							joined.fields[k] = v
-						}
-						if !yield(joined.Freeze()) {
+						if !yield(mergeRecords(left, right)) {
 							return
 						}
 						matched = true
@@ -309,16 +290,7 @@ func rightJoinNested(
 	for _, left := range leftRecords {
 		for i, right := range rightRecords {
 			if predicate.Match(left, right) {
-				joined := MakeMutableRecord()
-				// Copy left record
-				for k, v := range left.All() {
-					joined.fields[k] = v
-				}
-				// Copy right record
-				for k, v := range right.All() {
-					joined.fields[k] = v
-				}
-				if !yield(joined.Freeze()) {
+				if !yield(mergeRecords(left, right)) {
 					return
 				}
 				matched[i] = true
@@ -369,16 +341,7 @@ func rightJoinHash(
 				for _, left := range leftMatches {
 					// Verify with Match() for correctness
 					if predicate.Match(left, right) {
-						joined := MakeMutableRecord()
-						// Copy left record
-						for k, v := range left.All() {
-							joined.fields[k] = v
-						}
-						// Copy right record
-						for k, v := range right.All() {
-							joined.fields[k] = v
-						}
-						if !yield(joined.Freeze()) {
+						if !yield(mergeRecords(left, right)) {
 							return
 						}
 						matched[i] = true
@@ -440,16 +403,7 @@ func fullJoinNested(
 	for i, left := range leftRecords {
 		for j, right := range rightRecords {
 			if predicate.Match(left, right) {
-				joined := MakeMutableRecord()
-				// Copy left record
-				for k, v := range left.All() {
-					joined.fields[k] = v
-				}
-				// Copy right record
-				for k, v := range right.All() {
-					joined.fields[k] = v
-				}
-				if !yield(joined.Freeze()) {
+				if !yield(mergeRecords(left, right)) {
 					return
 				}
 				leftMatched[i] = true
@@ -516,16 +470,7 @@ func fullJoinHash(
 					right := rightRecords[j]
 					// Verify with Match() for correctness
 					if predicate.Match(left, right) {
-						joined := MakeMutableRecord()
-						// Copy left record
-						for k, v := range left.All() {
-							joined.fields[k] = v
-						}
-						// Copy right record
-						for k, v := range right.All() {
-							joined.fields[k] = v
-						}
-						if !yield(joined.Freeze()) {
+						if !yield(mergeRecords(left, right)) {
 							return
 						}
 						leftMatched[i] = true
