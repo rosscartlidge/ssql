@@ -52,7 +52,6 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Default("").
 			Help("Input file (CSV, JSON, or JSONL). Reads from stdin if not specified.").
 		Done().
-		CacheFieldsFrom("FILE").
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var format string

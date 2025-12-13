@@ -852,52 +852,37 @@ When designing CLI commands with autocli, follow these principles:
    done
    ```
 
-9. **Pipeline Field Completion with CacheFieldsFrom()**
-   - **NEW in autocli v3.2.0**: Enable field completion in pipelines where the first command reads a data file
+9. **Automatic Pipeline Field Caching (NEW in autocli v4.1.0)**
    - **The Problem**: In pipelines like `ssql from users.csv | ssql where -where <TAB>`, the first command doesn't have flags with `FieldsFromFlag()`, so field names aren't available for completion in downstream commands
-   - **The Solution**: Use `CacheFieldsFrom("FILE")` on commands that read data files but don't need field completion themselves
-   - **Pattern:**
-   ```go
-   Subcommand("from").
-       Description("Read data from file (auto-detects CSV, JSON, JSONL)").
-
-       Flag("FILE").
-           String().
-           FilePattern("*.{csv,json,jsonl}").
-           Help("Input file").
-           Done().
-
-       CacheFieldsFrom("FILE").  // Creates hidden -cache flag for pipeline support
-
-       Handler(func(ctx *cf.Context) error {
-           // Read and output data...
-           return nil
-       }).
-       Done()
-   ```
+   - **The Solution**: Automatic! When `FileCompleter` completes to a single data file, it automatically extracts and caches field names
    - **How It Works**:
-     1. `CacheFieldsFrom("FILE")` creates a hidden `-cache` flag
-     2. When users tab-complete `-cache <TAB>`, it reads the file and extracts field names
-     3. Returns a cache directive (`__AUTOCLI_CACHE__:field1,field2,field3`) and completion `DONE`
-     4. The bash completion script sets `AUTOCLI_FIELDS` environment variable
+     1. User types `ssql from user<TAB>` which narrows to `users.csv`
+     2. `FileCompleter` detects single data file match
+     3. Automatically extracts field names and emits cache directive
+     4. Bash completion script sets `AUTOCLI_FIELDS` environment variable
      5. Downstream commands with `FieldsFromFlag()` can use this cached list
    - **Usage Pattern**:
    ```bash
-   # User types this to populate field cache for the pipeline:
-   ssql from users.csv -cache DONE | ssql where -where <TAB>
-   #                   ^^^^^^^^^^^
-   # The -cache DONE triggers field extraction and caching
-   # Now -where can complete: name, age, email, status, etc.
+   # Tab complete the filename (narrows to single file)
+   ssql from user<TAB>
+   # Completes to: users.csv
+   # Automatically caches fields: name, age, email, status
+
+   # Now pipeline completion works!
+   ssql from users.csv | ssql where -where <TAB>
+   # Completes with: name, age, email, status
    ```
-   - **When to Use**:
-     - ✅ Commands that read data files (CSV, JSON, JSONL) as first command in pipeline
-     - ✅ Commands where field completion isn't needed for the command itself, only for piped commands
-     - ❌ Commands that already have flags with `FieldsFromFlag()` (cache is set automatically)
-     - ❌ Commands that don't read data files
+   - **No Configuration Needed**: Just use `FilePattern()` with data file extensions:
+   ```go
+   Flag("FILE").
+       String().
+       FilePattern("*.{csv,json,jsonl}").
+       Done()
+   ```
    - **Benefits**:
-     - Eliminates need to duplicate filename in downstream commands: `where -input users.csv -where <TAB>`
-     - Makes pipelines more ergonomic and Unix-like
-     - Users only specify the data file once at the start of the pipeline
+     - No special flags or workflow needed (the old `-cache DONE` pattern is obsolete)
+     - Works automatically with any `FileCompleter` for data files
+     - Seamless integration with Unix pipeline workflows
 
 10. **Field Value Completion with FieldValuesFrom()**
    - **NEW in autocli v4.0.0**: Complete with actual data values from files, not just field names
