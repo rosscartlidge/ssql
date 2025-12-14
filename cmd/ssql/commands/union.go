@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v3"
-	"github.com/rosscartlidge/ssql/v3/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
 // RegisterUnion registers the union subcommand
@@ -223,7 +223,7 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 	code := strings.Join(codeLines, "\n\t")
 	var imports []string
 	if needsLibImport {
-		imports = []string{"fmt", "os", "github.com/rosscartlidge/ssql/v3/cmd/ssql/lib"}
+		imports = []string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}
 	}
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())

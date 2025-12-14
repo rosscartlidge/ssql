@@ -581,6 +581,207 @@ func OnCondition(condition func(left, right Record) bool) JoinPredicate {
 	return &customJoinPredicate{fn: condition}
 }
 
+// OnFieldPair creates a join predicate that matches records where leftField = rightField.
+// This is used when the field names differ between the left and right sides.
+// Supports hash join optimization (O(n+m) complexity).
+//
+// Example:
+//
+//	// Join where left.a_kind = right.kind
+//	joined := ssql.InnerJoin(
+//	    kindRecords,
+//	    ssql.OnFieldPair("a_kind", "kind"),
+//	)(leftRecords)
+func OnFieldPair(leftField, rightField string) JoinPredicate {
+	return &fieldPairJoinPredicate{leftField: leftField, rightField: rightField}
+}
+
+// fieldPairJoinPredicate implements JoinPredicate and KeyExtractor for
+// equality joins where field names differ between left and right.
+type fieldPairJoinPredicate struct {
+	leftField  string
+	rightField string
+}
+
+// Match implements JoinPredicate for fieldPairJoinPredicate
+func (p *fieldPairJoinPredicate) Match(left, right Record) bool {
+	leftVal, leftExists := left.fields[p.leftField]
+	rightVal, rightExists := right.fields[p.rightField]
+	if !leftExists || !rightExists {
+		return false
+	}
+	return fmt.Sprintf("%v", leftVal) == fmt.Sprintf("%v", rightVal)
+}
+
+// ExtractKey implements KeyExtractor for hash join optimization.
+// Note: This works by using a "mode" - we extract from leftField for left records
+// and rightField for right records. Since the hash join builds on right and probes
+// with left, we need a way to know which field to use.
+// IMPORTANT: This only works correctly because innerJoinHash/leftJoinHash etc.
+// build hash table from RIGHT records and probe with LEFT records.
+func (p *fieldPairJoinPredicate) ExtractKey(r Record) (string, bool) {
+	// Try left field first (for probe phase)
+	if val, exists := r.fields[p.leftField]; exists {
+		return fmt.Sprintf("%v", val), true
+	}
+	// Fall back to right field (for build phase)
+	if val, exists := r.fields[p.rightField]; exists {
+		return fmt.Sprintf("%v", val), true
+	}
+	return "", false
+}
+
+// ============================================================================
+// LOOKUP JOIN - Multi-clause join for enrichment operations
+// ============================================================================
+
+// LookupClause defines a single lookup operation within a LookupJoin.
+// Each clause specifies which fields to match on and how to rename fields from the right side.
+type LookupClause struct {
+	LeftField    string            // Field name in the left record to match on
+	RightField   string            // Field name in the right record to match on
+	FieldRenames map[string]string // Map of right_field -> new_name for fields to bring in
+}
+
+// Lookup creates a LookupClause for joining on specified fields with optional renames.
+// The renames parameter is a list of old, new field name pairs.
+//
+// Example:
+//
+//	// Join on a_kind=kind, rename kind_name to a_kind_name
+//	ssql.Lookup("a_kind", "kind", "kind_name", "a_kind_name")
+//
+//	// Join on id=id, bring all fields (no renames)
+//	ssql.Lookup("id", "id")
+func Lookup(leftField, rightField string, renames ...string) LookupClause {
+	clause := LookupClause{
+		LeftField:    leftField,
+		RightField:   rightField,
+		FieldRenames: make(map[string]string),
+	}
+	// Parse rename pairs
+	for i := 0; i+1 < len(renames); i += 2 {
+		clause.FieldRenames[renames[i]] = renames[i+1]
+	}
+	return clause
+}
+
+// LookupJoin performs multiple lookup operations on the same right-side data.
+// This is more efficient than multiple separate joins when enriching records
+// from a single lookup table.
+//
+// For each left record, LookupJoin processes each clause in order:
+//   - Finds matching right record(s) by comparing leftField to rightField
+//   - Copies fields from right record, applying renames from FieldRenames
+//   - If multiple right records match, produces multiple output records (multiply behavior)
+//
+// If no FieldRenames are specified for a clause, ALL fields from the right record
+// are merged (existing behavior).
+//
+// Example:
+//
+//	// Lookup a_kind and z_kind from kind.csv in one pass
+//	clauses := []ssql.LookupClause{
+//	    {LeftField: "a_kind", RightField: "kind", FieldRenames: map[string]string{"kind_name": "a_kind_name"}},
+//	    {LeftField: "z_kind", RightField: "kind", FieldRenames: map[string]string{"kind_name": "z_kind_name"}},
+//	}
+//	enriched := ssql.LookupJoin(kindRecords, clauses)(leftRecords)
+func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record, Record] {
+	return func(leftSeq iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			// Materialize right side once
+			var rightRecords []Record
+			for r := range rightSeq {
+				rightRecords = append(rightRecords, r)
+			}
+
+			// Build hash indices for each clause (by rightField)
+			indices := make([]map[string][]Record, len(clauses))
+			for i, clause := range clauses {
+				indices[i] = make(map[string][]Record)
+				for _, r := range rightRecords {
+					if val, exists := r.fields[clause.RightField]; exists {
+						key := fmt.Sprintf("%v", val)
+						indices[i][key] = append(indices[i][key], r)
+					}
+				}
+			}
+
+			// Process each left record
+			for left := range leftSeq {
+				// Start with the original left record
+				currentRecords := []Record{left}
+
+				// Apply each clause
+				for i, clause := range clauses {
+					var nextRecords []Record
+
+					for _, current := range currentRecords {
+						// Get the lookup key from the left field
+						leftVal, exists := current.fields[clause.LeftField]
+						if !exists {
+							// No match possible, keep current record unchanged
+							nextRecords = append(nextRecords, current)
+							continue
+						}
+
+						key := fmt.Sprintf("%v", leftVal)
+						matches, found := indices[i][key]
+
+						if !found || len(matches) == 0 {
+							// No match, keep current record unchanged
+							nextRecords = append(nextRecords, current)
+							continue
+						}
+
+						// For each match, create a new record with merged fields
+						for _, right := range matches {
+							merged := mergeWithRenames(current, right, clause.FieldRenames)
+							nextRecords = append(nextRecords, merged)
+						}
+					}
+
+					currentRecords = nextRecords
+				}
+
+				// Yield all resulting records
+				for _, r := range currentRecords {
+					if !yield(r) {
+						return
+					}
+				}
+			}
+		}
+	}
+}
+
+// mergeWithRenames creates a new record by copying left and adding selected/renamed fields from right.
+// If renames is empty, all right fields are copied (standard merge behavior).
+// If renames has entries, only those fields are copied with the specified new names.
+func mergeWithRenames(left, right Record, renames map[string]string) Record {
+	// Start with a copy of left
+	merged := make(map[string]any, len(left.fields)+len(renames))
+	for k, v := range left.fields {
+		merged[k] = v
+	}
+
+	if len(renames) == 0 {
+		// No renames specified - copy all right fields (standard merge)
+		for k, v := range right.fields {
+			merged[k] = v
+		}
+	} else {
+		// Only copy specified fields with new names
+		for rightField, newName := range renames {
+			if val, exists := right.fields[rightField]; exists {
+				merged[newName] = val
+			}
+		}
+	}
+
+	return Record{fields: merged}
+}
+
 // ============================================================================
 // GROUPBY OPERATIONS
 // ============================================================================

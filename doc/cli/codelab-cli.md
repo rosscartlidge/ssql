@@ -32,7 +32,7 @@
 
 ```bash
 # Install the CLI tool
-go install github.com/rosscartlidge/ssql/v3/cmd/ssql@latest
+go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 
 # Verify installation
 ssql -version
@@ -390,20 +390,28 @@ SELECT DISTINCT department, location FROM employees
 Join two data sources on common fields:
 
 ```bash
-# Inner join on same field name
+# Inner join on same field name (use -using)
 ssql from employees.csv | \
-  ssql join -type inner -right departments.csv -on dept_id
+  ssql join <(ssql from departments.csv) -using dept_id
 
-# Left join with different field names
+# Join with different field names (use -on LEFT RIGHT)
 ssql from orders.csv | \
-  ssql join -type left -right customers.csv \
-    -left-field customer_id -right-field id
+  ssql join <(ssql from customers.csv) -type left -on customer_id id
 
-# Join on multiple fields (composite key)
-ssql from sales.csv | \
-  ssql join -right products.csv \
-    -on product_id -on region
+# Multiple lookups from same file with field renaming
+# (Reads kind.csv once, performs two lookups)
+ssql from data.csv | ssql join <(ssql from kind.csv) \
+  -on a_kind kind -as kind_name a_kind_name \
+  - \
+  -on z_kind kind -as kind_name z_kind_name
 ```
+
+**Join Flags:**
+- `-using FIELD` - Join on same field name in both sides
+- `-on LEFT RIGHT` - Join on different field names
+- `-as OLD NEW` - Rename field from right side when bringing it in
+- `-type TYPE` - Join type: inner (default), left, right, full
+- `-` - Clause separator for multiple lookups from same file
 
 **Join Types:**
 - `inner` - Only matching records (default)
@@ -486,7 +494,7 @@ Output:
 package main
 
 import (
-	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -519,7 +527,7 @@ ssql from -generate data.csv | \
 cat > go.mod << 'EOF'
 module analysis
 go 1.23
-require github.com/rosscartlidge/ssql/v3 latest
+require github.com/rosscartlidge/ssql/v4 latest
 EOF
 
 # Build and run
@@ -549,7 +557,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -621,7 +629,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -691,7 +699,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -712,7 +720,7 @@ Compile and run:
 ```bash
 # Setup module
 go mod init monitor
-go get github.com/rosscartlidge/ssql/v3
+go get github.com/rosscartlidge/ssql/v4
 
 # Build and run
 go build -o monitor monitor.go

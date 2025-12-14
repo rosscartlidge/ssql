@@ -7,7 +7,7 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/rosscartlidge/ssql/v3/cmd/ssql/version"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"
 )
 
 // funcCounter is used to generate unique function names across all process substitutions
@@ -195,8 +195,12 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 
 	// Collect all imports and deduplicate
 	importSet := make(map[string]bool)
-	importSet["github.com/rosscartlidge/ssql/v3"] = true // Always needed
-	importSet["iter"] = true                              // For iter.Seq return type
+	importSet["github.com/rosscartlidge/ssql/v4"] = true // Always needed
+
+	// iter import only needed for subprocess functions (process substitution)
+	if len(funcFragments) > 0 {
+		importSet["iter"] = true // For iter.Seq return type in subprocess functions
+	}
 
 	// If there are no final fragments, we'll auto-add JSONL output
 	if len(finalFragments) == 0 {

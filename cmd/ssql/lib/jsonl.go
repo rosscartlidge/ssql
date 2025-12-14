@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // Stdout is a convenience variable for writing to stdout

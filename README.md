@@ -4,11 +4,11 @@
 
 Built on Go 1.23+ with first-class support for iterators, generics, and functional composition.
 
-> **⚠️ Important:** ssql v3 introduces SQL-aligned flag naming. Use `/v3` import path:
+> **⚠️ Important:** ssql v4 introduces enhanced join syntax with multi-clause support. Use `/v4` import path:
 > ```go
-> import "github.com/rosscartlidge/ssql/v3"
+> import "github.com/rosscartlidge/ssql/v4"
 > ```
-> **v2 users:** See [migration guide](#migrating-from-v2-to-v3) below.
+> **v3 users:** The `join` command now uses `-using` for same-field joins (was `-on`), and `-on LEFT RIGHT` for different-field joins (was `-left-field`/`-right-field`).
 
 ## ✨ What Makes ssql Special
 
@@ -45,7 +45,7 @@ package main
 import (
     "log"
     "os"
-    "github.com/rosscartlidge/ssql/v3"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -144,7 +144,7 @@ ssql.QuickChart(data, "month", "revenue", "chart.html")  // One line = full dash
 
 ```bash
 # Install the command-line tool (v2)
-go install github.com/rosscartlidge/ssql/v3/cmd/ssql@latest
+go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 
 # Verify installation
 ssql version
@@ -168,7 +168,7 @@ go mod init myproject  # Initialize Go module (required!)
 
 **Step 2: Install ssql v2**
 ```bash
-go get github.com/rosscartlidge/ssql/v3
+go get github.com/rosscartlidge/ssql/v4
 ```
 
 ### Hello ssql
@@ -178,7 +178,7 @@ package main
 import (
     "fmt"
     "slices"
-    "github.com/rosscartlidge/ssql/v3"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -203,7 +203,7 @@ package main
 
 import (
     "slices"
-    "github.com/rosscartlidge/ssql/v3"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -289,7 +289,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql/v3"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -352,7 +352,7 @@ import (
     "fmt"
     "log"
     "time"
-    "github.com/rosscartlidge/ssql/v3"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -404,7 +404,7 @@ package main
 import (
     "log"
     "slices"
-    "github.com/rosscartlidge/ssql/v3"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -458,7 +458,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql/v3"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -540,8 +540,8 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql/v3"
-    "github.com/rosscartlidge/ssql/v3/cmd/ssql/lib/runtime"
+    "github.com/rosscartlidge/ssql/v4"
+    "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
 )
 
 func main() {
@@ -661,8 +661,8 @@ go install github.com/rosscartlidge/ssql/v2/cmd/ssql@latest
 
 **v3 (new):**
 ```bash
-go get github.com/rosscartlidge/ssql/v3
-go install github.com/rosscartlidge/ssql/v3/cmd/ssql@latest
+go get github.com/rosscartlidge/ssql/v4
+go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 ```
 
 ### Import Path
@@ -674,7 +674,7 @@ Update all imports to include `/v3`:
 import "github.com/rosscartlidge/ssql/v2"
 
 // v3 (new)
-import "github.com/rosscartlidge/ssql/v3"
+import "github.com/rosscartlidge/ssql/v4"
 ```
 
 ### Breaking Changes (CLI)

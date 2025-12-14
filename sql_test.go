@@ -185,6 +185,150 @@ func TestOnCondition(t *testing.T) {
 	}
 }
 
+func TestOnFieldPair(t *testing.T) {
+	predicate := OnFieldPair("user_id", "id")
+
+	left := Record{fields: map[string]any{"user_id": int64(1), "name": "Alice"}}
+	right := Record{fields: map[string]any{"id": int64(1), "dept": "Eng"}}
+
+	if !predicate.Match(left, right) {
+		t.Error("OnFieldPair should match records with user_id=id")
+	}
+
+	right2 := Record{fields: map[string]any{"id": int64(2), "dept": "Sales"}}
+	if predicate.Match(left, right2) {
+		t.Error("OnFieldPair should not match records with different ids")
+	}
+}
+
+func TestLookup(t *testing.T) {
+	// Test with renames
+	clause := Lookup("a_kind", "kind", "kind_name", "a_kind_name")
+	if clause.LeftField != "a_kind" {
+		t.Errorf("Lookup LeftField = %q, want %q", clause.LeftField, "a_kind")
+	}
+	if clause.RightField != "kind" {
+		t.Errorf("Lookup RightField = %q, want %q", clause.RightField, "kind")
+	}
+	if clause.FieldRenames["kind_name"] != "a_kind_name" {
+		t.Errorf("Lookup FieldRenames[kind_name] = %q, want %q", clause.FieldRenames["kind_name"], "a_kind_name")
+	}
+
+	// Test without renames
+	clause2 := Lookup("id", "id")
+	if len(clause2.FieldRenames) != 0 {
+		t.Errorf("Lookup without renames should have empty FieldRenames, got %v", clause2.FieldRenames)
+	}
+}
+
+func TestLookupJoin(t *testing.T) {
+	// Left side: records with a_kind and z_kind
+	left := slices.Values([]Record{
+		{fields: map[string]any{"name": "Alice", "a_kind": int64(1), "z_kind": int64(2)}},
+		{fields: map[string]any{"name": "Bob", "a_kind": int64(2), "z_kind": int64(1)}},
+	})
+
+	// Right side: kind lookup table
+	right := slices.Values([]Record{
+		{fields: map[string]any{"kind": int64(1), "kind_name": "Premium"}},
+		{fields: map[string]any{"kind": int64(2), "kind_name": "Standard"}},
+	})
+
+	// Two clauses: lookup a_kind and z_kind with different renames
+	clauses := []LookupClause{
+		Lookup("a_kind", "kind", "kind_name", "a_kind_name"),
+		Lookup("z_kind", "kind", "kind_name", "z_kind_name"),
+	}
+
+	result := slices.Collect(LookupJoin(right, clauses)(left))
+
+	if len(result) != 2 {
+		t.Fatalf("LookupJoin should return 2 records, got %d", len(result))
+	}
+
+	// Check Alice: a_kind=1 -> Premium, z_kind=2 -> Standard
+	alice := result[0]
+	if alice.fields["name"] != "Alice" {
+		t.Errorf("First record should be Alice, got %v", alice.fields["name"])
+	}
+	if alice.fields["a_kind_name"] != "Premium" {
+		t.Errorf("Alice a_kind_name should be Premium, got %v", alice.fields["a_kind_name"])
+	}
+	if alice.fields["z_kind_name"] != "Standard" {
+		t.Errorf("Alice z_kind_name should be Standard, got %v", alice.fields["z_kind_name"])
+	}
+
+	// Check Bob: a_kind=2 -> Standard, z_kind=1 -> Premium
+	bob := result[1]
+	if bob.fields["a_kind_name"] != "Standard" {
+		t.Errorf("Bob a_kind_name should be Standard, got %v", bob.fields["a_kind_name"])
+	}
+	if bob.fields["z_kind_name"] != "Premium" {
+		t.Errorf("Bob z_kind_name should be Premium, got %v", bob.fields["z_kind_name"])
+	}
+}
+
+func TestLookupJoinNoMatch(t *testing.T) {
+	left := slices.Values([]Record{
+		{fields: map[string]any{"name": "Alice", "kind_id": int64(99)}}, // No match
+	})
+
+	right := slices.Values([]Record{
+		{fields: map[string]any{"kind": int64(1), "kind_name": "Premium"}},
+	})
+
+	clauses := []LookupClause{
+		Lookup("kind_id", "kind", "kind_name", "kind_name"),
+	}
+
+	result := slices.Collect(LookupJoin(right, clauses)(left))
+
+	// Record should pass through unchanged when no match
+	if len(result) != 1 {
+		t.Fatalf("LookupJoin should return 1 record, got %d", len(result))
+	}
+
+	if result[0].fields["name"] != "Alice" {
+		t.Error("Record should preserve original fields")
+	}
+	if _, exists := result[0].fields["kind_name"]; exists {
+		t.Error("Record should not have kind_name when no match")
+	}
+}
+
+func TestLookupJoinMultipleMatches(t *testing.T) {
+	left := slices.Values([]Record{
+		{fields: map[string]any{"name": "Alice", "dept": "Eng"}},
+	})
+
+	// Multiple employees in Eng department
+	right := slices.Values([]Record{
+		{fields: map[string]any{"dept": "Eng", "employee": "Bob"}},
+		{fields: map[string]any{"dept": "Eng", "employee": "Charlie"}},
+	})
+
+	clauses := []LookupClause{
+		Lookup("dept", "dept", "employee", "colleague"),
+	}
+
+	result := slices.Collect(LookupJoin(right, clauses)(left))
+
+	// Should produce 2 records (one for each match)
+	if len(result) != 2 {
+		t.Fatalf("LookupJoin should return 2 records for multiple matches, got %d", len(result))
+	}
+
+	colleagues := make(map[string]bool)
+	for _, r := range result {
+		if c, ok := r.fields["colleague"].(string); ok {
+			colleagues[c] = true
+		}
+	}
+	if !colleagues["Bob"] || !colleagues["Charlie"] {
+		t.Error("LookupJoin should include all matching records")
+	}
+}
+
 // ============================================================================
 // GROUPBY OPERATIONS TESTS
 // ============================================================================

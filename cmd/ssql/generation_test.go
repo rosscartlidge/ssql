@@ -881,12 +881,12 @@ func TestJoinGeneration(t *testing.T) {
 		wantStrs []string
 	}{
 		{
-			name:    "join basic with -on",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.jsonl -on user_id`,
+			name:    "join basic with -using",
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.jsonl -using user_id`,
 			wantStrs: []string{
-				`"type":"init"`,
-				`rightRecords`,
-				`lib.ReadJSONL`,
+				`"type":"func"`,
+				`rightSource1`,
+				`ssql.ReadJSON`,
 				`/tmp/test_orders.jsonl`,
 				`"type":"stmt"`,
 				`"var":"joined"`,
@@ -897,7 +897,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with -type left",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type left /tmp/test_orders.jsonl -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type left /tmp/test_orders.jsonl -using user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.LeftJoin`,
@@ -905,7 +905,7 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with -type right",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type right /tmp/test_orders.jsonl -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type right /tmp/test_orders.jsonl -using user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.RightJoin`,
@@ -913,20 +913,30 @@ func TestJoinGeneration(t *testing.T) {
 		},
 		{
 			name:    "join with -type full",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type full /tmp/test_orders.jsonl -on user_id`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join -type full /tmp/test_orders.jsonl -using user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.FullJoin`,
 			},
 		},
 		{
-			name:    "join with multiple -on fields",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.jsonl -on field1 -on field2`,
+			name:    "join with -on different fields",
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.jsonl -on id user_id`,
 			wantStrs: []string{
 				`"type":"stmt"`,
-				`ssql.OnFields`,
-				`field1`,
-				`field2`,
+				`ssql.OnFieldPair`,
+				`id`,
+				`user_id`,
+			},
+		},
+		{
+			name:    "join with -as rename",
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test join /tmp/test_orders.jsonl -on id user_id -as amount order_amount`,
+			wantStrs: []string{
+				`"type":"stmt"`,
+				`ssql.LookupJoin`,
+				`ssql.Lookup`,
+				`order_amount`,
 			},
 		},
 	}
@@ -976,7 +986,8 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 	defer os.Remove("/tmp/test_orders.jsonl")
 
 	// Test full pipeline with join (using JSONL for right side)
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join /tmp/test_orders.jsonl -on user_id | /tmp/ssql_test generate-go`
+	// Note: v4 uses -using for same field name, -on for different field names
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join /tmp/test_orders.jsonl -on id user_id | /tmp/ssql_test generate-go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -988,11 +999,12 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 	// Check for expected elements in generated code
 	expectations := []string{
 		"package main",
-		"ssql.ReadCSV", // For the primary input (left side)
-		"rightRecords",
-		"ssql.InnerJoin",
+		"ssql.ReadCSV",      // For the primary input (left side)
+		"rightSource1",      // Function for right side
+		"ssql.InnerJoin",    // Join function
+		"ssql.OnFieldPair",  // Different field names predicate
 		"func main()",
-		"lib.ReadJSONL", // For the secondary input (right side)
+		"ssql.ReadJSON",     // For the secondary input (right side)
 	}
 
 	for _, expected := range expectations {
@@ -1027,7 +1039,8 @@ func TestJoinWithProcessSubstitutionGeneration(t *testing.T) {
 
 	// Test full pipeline with join using process substitution for right side
 	// This tests the nested fragment merging feature
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join <(/tmp/ssql_test from csv /tmp/test_orders.csv) -on user_id | /tmp/ssql_test generate-go`
+	// Note: v4 uses -on LEFT RIGHT for different field names
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join <(/tmp/ssql_test from csv /tmp/test_orders.csv) -on id user_id | /tmp/ssql_test generate-go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1040,9 +1053,10 @@ func TestJoinWithProcessSubstitutionGeneration(t *testing.T) {
 	// With process substitution, both sides should use ssql.ReadCSV
 	expectations := []string{
 		"package main",
-		"ssql.ReadCSV", // Both inputs are CSV files
-		"rightRecords",
-		"ssql.InnerJoin",
+		"ssql.ReadCSV",     // Both inputs are CSV files
+		"rightSource1",     // Function wrapping the subprocess
+		"ssql.InnerJoin",   // Join function
+		"ssql.OnFieldPair", // Different field names
 		"func main()",
 	}
 
@@ -1050,12 +1064,5 @@ func TestJoinWithProcessSubstitutionGeneration(t *testing.T) {
 		if !strings.Contains(outputStr, expected) {
 			t.Errorf("Generated code missing expected element: %q\nGot: %s", expected, outputStr)
 		}
-	}
-
-	// The generated code should NOT have lib.ReadJSONL for the orders file
-	// since we're using process substitution which incorporates the inner command's fragments
-	// Note: This verifies fragments are being merged correctly
-	if strings.Contains(outputStr, "lib.ReadJSONL") && strings.Contains(outputStr, "/tmp/test_orders.csv") {
-		t.Error("With process substitution, should not generate JSONL reading code for secondary source")
 	}
 }

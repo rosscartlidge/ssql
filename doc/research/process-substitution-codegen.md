@@ -203,7 +203,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {

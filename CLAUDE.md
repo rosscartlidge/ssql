@@ -288,6 +288,35 @@ ssql -help    # Should work without errors
 
 ## Project History
 
+**ssql v4.0.0 (December 2025):** Enhanced join command with multi-clause lookup support
+- **Breaking Changes:**
+  - `join` command: `-on FIELD` (same name both sides) → `-using FIELD`
+  - `join` command: `-left-field`/`-right-field` removed → `-on LEFT RIGHT` (two args)
+  - Module path: `github.com/rosscartlidge/ssql/v3` → `github.com/rosscartlidge/ssql/v4`
+- **New Features:**
+  - `-using FIELD`: Join on same field name in both sides (what `-on` used to do)
+  - `-on LEFT RIGHT`: Join on different field names (replaces `-left-field`/`-right-field`)
+  - `-as OLD NEW`: Rename fields from right side when bringing them in
+  - Clause support with `-` separator: Multiple lookups from same file in one pass
+  - `LookupJoin()` core library function for efficient multi-clause joins
+- **Reason**: Enables efficient enrichment from lookup tables without reading the file multiple times
+- **Migration**:
+  ```bash
+  # Old (v3.x)
+  ssql from users.csv | ssql join orders.jsonl -on user_id
+  ssql from users.csv | ssql join orders.jsonl -left-field user_id -right-field customer_id
+
+  # New (v4.0+)
+  ssql from users.csv | ssql join orders.jsonl -using user_id
+  ssql from users.csv | ssql join orders.jsonl -on user_id customer_id
+
+  # New multi-clause feature
+  ssql from data.csv | ssql join <(ssql from kind.csv) \
+    -on a_kind kind -as kind_name a_kind_name \
+    - \
+    -on z_kind kind -as kind_name z_kind_name
+  ```
+
 **ssql v3.1.0 (December 2025):** Stdin-only transform commands (Unix philosophy)
 - **Breaking Changes:**
   - `where` command: Removed `FILE` parameter - now reads from stdin only

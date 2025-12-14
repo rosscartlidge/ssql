@@ -2,7 +2,7 @@
 
 *Complete reference for all ssql types, functions, and methods*
 
-> 📖 **Documentation Note**: This is a learning-focused API reference with examples and best practices. For raw API documentation directly from source code, use `go doc github.com/rosscartlidge/ssql/v3` or browse specific functions with `go doc github.com/rosscartlidge/ssql/v3.FunctionName`
+> 📖 **Documentation Note**: This is a learning-focused API reference with examples and best practices. For raw API documentation directly from source code, use `go doc github.com/rosscartlidge/ssql/v4` or browse specific functions with `go doc github.com/rosscartlidge/ssql/v4.FunctionName`
 
 ## Table of Contents
 
@@ -87,7 +87,7 @@ go mod init myproject
 ### Step 3: Install ssql
 
 ```bash
-go get github.com/rosscartlidge/ssql/v3
+go get github.com/rosscartlidge/ssql/v4
 ```
 
 This will:
@@ -104,7 +104,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql/v3"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -763,12 +763,60 @@ func OnCondition(condition func(left, right Record) bool) JoinPredicate
 ```
 Creates custom join predicate.
 
+##### OnFieldPair
+```go
+func OnFieldPair(leftField, rightField string) JoinPredicate
+```
+Creates join predicate for different field names on left and right sides.
+
 **Example:**
 ```go
+// Join where left.user_id equals right.customer_id
 joined := ssql.InnerJoin(
     rightStream,
-    ssql.OnFields("user_id")
+    ssql.OnFieldPair("user_id", "customer_id")
 )(leftStream)
+```
+
+#### LookupJoin
+
+```go
+func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record, Record]
+```
+
+Performs multiple lookup operations from the same right-side data in a single pass. More efficient than multiple separate joins when enriching records from a single lookup table.
+
+**LookupClause:**
+```go
+type LookupClause struct {
+    LeftField    string            // Field name in the left record to match on
+    RightField   string            // Field name in the right record to match on
+    FieldRenames map[string]string // Map of right_field -> new_name for fields to bring in
+}
+```
+
+**Lookup Helper:**
+```go
+func Lookup(leftField, rightField string, renames ...string) LookupClause
+```
+Creates a LookupClause with optional field renames (pairs of old, new names).
+
+**Example:**
+```go
+// Enrich products with category names for both origin and destination
+clauses := []ssql.LookupClause{
+    ssql.Lookup("origin_cat", "cat_id", "cat_name", "origin_name"),
+    ssql.Lookup("dest_cat", "cat_id", "cat_name", "dest_name"),
+}
+enriched := ssql.LookupJoin(categories, clauses)(products)
+```
+
+**CLI equivalent:**
+```bash
+ssql from products.csv | ssql join <(ssql from categories.csv) \
+    -on origin_cat cat_id -as cat_name origin_name \
+    - \
+    -on dest_cat cat_id -as cat_name dest_name
 ```
 
 ### GroupBy Operations

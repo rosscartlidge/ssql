@@ -43,9 +43,8 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-type": {0}, // field is arg 0
 		},
 		"join": {
-			"-on":          {0}, // field (single arg)
-			"-left-field":  {0},
-			"-right-field": {0},
+			"-using": {0}, // same field name both sides
+			"-on":    {0}, // left-field is arg 0 (right-field is arg 1, not completed from fields)
 		},
 		"include": {
 			"FIELDS": {0}, // variadic fields

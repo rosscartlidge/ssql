@@ -251,7 +251,7 @@ if typedMode {
 
     // Generate imports including reflect (for CSV parsing)
     imports := mergeImports(fragments)
-    imports = append(imports, "github.com/rosscartlidge/ssql/v3/typed")
+    imports = append(imports, "github.com/rosscartlidge/ssql/v4/typed")
 
     // Output struct definitions first
     for _, def := range structDefs {
@@ -308,7 +308,7 @@ ssql-optimize input.go > optimized.go
 ```go
 package main
 
-import "github.com/rosscartlidge/ssql/v3"
+import "github.com/rosscartlidge/ssql/v4"
 
 func main() {
     records, _ := ssql.ReadCSV("employees.csv")
@@ -330,7 +330,7 @@ func main() {
 package main
 
 import (
-    "github.com/rosscartlidge/ssql/v3/typed"
+    "github.com/rosscartlidge/ssql/v4/typed"
     "iter"
 )
 

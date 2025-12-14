@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/rosscartlidge/ssql/v3"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {

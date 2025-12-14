@@ -7,8 +7,8 @@ import (
 	"time"
 
 	cf "github.com/rosscartlidge/autocli/v4"
-	"github.com/rosscartlidge/ssql/v3"
-	"github.com/rosscartlidge/ssql/v3/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
 // RegisterUpdate registers the update subcommand
@@ -681,7 +681,7 @@ func generateUpdateCode(ctx *cf.Context) error {
 		imports = append(imports, "regexp")
 	}
 	if needsRuntime {
-		imports = append(imports, "github.com/rosscartlidge/ssql/v3/cmd/ssql/lib/runtime")
+		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime")
 	}
 
 	// Create and write fragment
