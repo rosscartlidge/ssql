@@ -647,19 +647,12 @@ go run examples/early_termination_example.go
 4. **[Try the AI Assistant](doc/ai-human-guide.md)** for code generation
 5. **[Explore Advanced Patterns](doc/advanced-tutorial.md)** for production use
 
-## 🔄 Migrating from v2 to v3
+## 🔄 Migrating to v4
 
-ssql v3 introduces **SQL-aligned flag naming** in the CLI. Migration is straightforward:
+ssql v4 introduces **enhanced join with multi-clause lookup support**. Migration is straightforward:
 
 ### Installation
 
-**v2 (old):**
-```bash
-go get github.com/rosscartlidge/ssql/v2
-go install github.com/rosscartlidge/ssql/v2/cmd/ssql@latest
-```
-
-**v3 (new):**
 ```bash
 go get github.com/rosscartlidge/ssql/v4
 go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
@@ -667,54 +660,47 @@ go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 
 ### Import Path
 
-Update all imports to include `/v3`:
-
 ```go
-// v2 (old)
-import "github.com/rosscartlidge/ssql/v2"
-
-// v3 (new)
 import "github.com/rosscartlidge/ssql/v4"
 ```
 
-### Breaking Changes (CLI)
+### Breaking Changes (CLI) - v3 to v4
 
-1. **`where` command flag changes:**
+1. **`join` command: `-on` becomes `-using` for same-field joins:**
    ```bash
-   # v2 (old)
-   ssql where -match age gt 18 -expr 'verified == true'
+   # v3 (old)
+   ssql join file.csv -on id
 
-   # v3 (new)
-   ssql where -where age gt 18 -where-expr 'verified == true'
+   # v4 (new)
+   ssql join file.csv -using id
    ```
 
-2. **`update` command flag changes:**
+2. **`join` command: `-left-field`/`-right-field` becomes `-on LEFT RIGHT`:**
    ```bash
-   # v2 (old)
-   ssql update -match status eq pending -set status approved
+   # v3 (old)
+   ssql join file.csv -left-field a_id -right-field b_id
 
-   # v3 (new)
-   ssql update -where status eq pending -set status approved
+   # v4 (new)
+   ssql join file.csv -on a_id b_id
    ```
 
-3. **Regex operators consolidated:**
+3. **New: Multi-clause joins with `-` separator:**
    ```bash
-   # v2 (old) - multiple aliases
-   ssql where -match name pattern "^A"
-   ssql where -match name regexp "^A"
-
-   # v3 (new) - only 'regex'
-   ssql where -where name regex "^A"
+   # Multiple lookups from same file in one pass
+   ssql join <(ssql from kind.csv) \
+     -on a_kind kind -as kind_name a_kind_name \
+     - \
+     -on z_kind kind -as kind_name z_kind_name
    ```
 
-### Benefits of v3
+### Benefits of v4
 
-- ✅ **SQL-aligned naming** (`-where` mirrors SQL WHERE clause)
-- ✅ **Cleaner operator set** (no confusing aliases)
-- ✅ **Consistent flag naming** across commands
-- ✅ **Better discoverability** (SQL users feel at home)
+- ✅ **Multi-clause joins** - Multiple lookups from same file in one pass
+- ✅ **Field renaming** - `-as OLD NEW` renames right-side fields
+- ✅ **SQL-aligned syntax** - `-using` for same-field, `-on LEFT RIGHT` for different fields
+- ✅ **Performance** - Read lookup file once, build indexes for all clauses
 
-**Note:** v2.x remains available at `github.com/rosscartlidge/ssql/v2`, but v3 is recommended for all new projects.
+**Note:** v3.x remains available at `github.com/rosscartlidge/ssql/v3` for existing projects.
 
 ## 📚 Documentation
 
