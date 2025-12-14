@@ -6,3 +6,5 @@ github.com/rosscartlidge/autocli/v4 v4.3.1 h1:F3by3Yg8G3r7doziVERyy2U1yLbLyvlwHK
 github.com/rosscartlidge/autocli/v4 v4.3.1/go.mod h1:HxyY8xr+3Pv7GHcxo7nWeqptLZvF2/8Vd7oPh1QJZuY=
 github.com/rosscartlidge/autocli/v4 v4.3.2 h1:b/SWB2FBvPm6cOfj6tJcVDYiQdQ4rytaCUBr6tTAXw8=
 github.com/rosscartlidge/autocli/v4 v4.3.2/go.mod h1:HxyY8xr+3Pv7GHcxo7nWeqptLZvF2/8Vd7oPh1QJZuY=
+github.com/rosscartlidge/autocli/v4 v4.3.3 h1:tLzEkaM7MnrFJpHzYJFfZ1DAYRKqgqgtJwbUz6MmGUI=
+github.com/rosscartlidge/autocli/v4 v4.3.3/go.mod h1:HxyY8xr+3Pv7GHcxo7nWeqptLZvF2/8Vd7oPh1QJZuY=
