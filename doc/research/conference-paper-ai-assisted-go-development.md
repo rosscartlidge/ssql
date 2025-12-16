@@ -62,7 +62,7 @@ This paper documents the methodologies, problems solved, and lessons learned.
 
 - **ssql**: 56 releases (v1.0.0 to v4.0.0)
 - **autocli**: 17 releases (v1.0.0 to v4.3.3)
-- **Major rewrites**: 4 (module path changes v2→v3→v4)
+- **Major rewrites**: 4 (module path changes v2 to v3 to v4)
 - **Breaking changes**: Documented and migrated cleanly each time
 
 ---
@@ -93,17 +93,17 @@ We created CLAUDE.md files in each repository—comprehensive documents that pro
 
 ### If It's Not Tested, It Will Break
 
-**⚠️ Features without tests will eventually be removed or broken during refactoring.**
+Features without tests will eventually be removed or broken during refactoring.
 
 This was learned the hard way when field/value completion was accidentally
 removed in v3.2.0 during a refactor. The feature worked, but had no test
 coverage, so when code was reorganized the completion configuration was lost.
 
 **Rules:**
-- ✅ Add tests for any feature you want to keep
-- ✅ Tests act as documentation of expected behavior
-- ✅ Tests catch accidental removal during refactoring
-- ❌ Don't assume "obvious" features will survive refactoring
+- Add tests for any feature you want to keep
+- Tests act as documentation of expected behavior
+- Tests catch accidental removal during refactoring
+- Don't assume "obvious" features will survive refactoring
 ```
 
 ### 3.3 Impact
@@ -200,16 +200,11 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 
 ### 5.3 CLAUDE.md Principle
 
-```markdown
-### If It's Not Tested, It Will Break
+The lesson was immediately documented in CLAUDE.md to prevent repetition:
 
-**Example - Completion Configuration Test:**
-```go
-// TestFieldCompletionConfiguration verifies that all commands that
-// accept field names have proper field completion configured.
-// This test prevents regression where field completion is
-// accidentally removed.
-```
+> **If It's Not Tested, It Will Break**
+>
+> This test prevents regression where field completion is accidentally removed.
 
 ---
 
@@ -248,12 +243,20 @@ type CodeFragment struct {
 
 ### 6.3 Performance Results
 
-Real-world benchmark (enriching 10M+ records):
+Real-world benchmark (enriching 10M+ records with multiple joins):
 
 | Method | Time | Speedup |
 |--------|------|---------|
 | CLI pipeline | 2m 15s | baseline |
 | Generated Go | 52s | **2.6x faster** |
+
+The CLI overhead comes from:
+- Process spawning for each pipe stage
+- JSON serialization/deserialization between stages
+- Process substitution spawning subshells
+- Repeated file parsing
+
+The generated Go code eliminates all of this—direct function calls, in-memory data structures, single-pass file reads.
 
 ### 6.4 Why It Matters
 
@@ -295,14 +298,26 @@ ssql where FILE users.csv -where status eq <TAB>
 # Shows: active, pending, archived (actual data values!)
 ```
 
-### 7.2 CLAUDE.md Patterns
+### 7.2 Features Developed
+
+Over 17 releases, autocli evolved to include:
+
+- **Nested subcommands** - git-style multi-level commands (remote add, container exec)
+- **Three-level flag scoping** - Root global, subcommand global, and local (per-clause)
+- **Field-aware completion** - Reads CSV/JSON files to suggest field names
+- **Value completion** - Samples actual data to suggest filter values
+- **Process substitution handling** - Special completion for `<(...)` paths
+- **Multi-argument flags** - Per-argument completers with position awareness
+
+### 7.3 CLAUDE.md Patterns
 
 The autocli CLAUDE.md (496 lines) documents:
 
-- Builder pattern implementation
-- Three-level flag scoping (root global, subcommand global, local)
-- Completion script architecture
-- Common pitfalls (parser temporary commands, position calculations)
+- Builder pattern implementation with Done() return types
+- Three-level flag scoping and when to use each
+- Completion script architecture and position calculation
+- Common pitfalls (parser temporary commands, COMP_WORDS indexing)
+- Builder interface over-application (a mistake we made and fixed)
 
 ---
 
@@ -367,26 +382,38 @@ func main() {
 3. Updates AI prompt with anti-patterns
 4. Re-validates to confirm improvement
 
-```markdown
-### ⛔ CRITICAL ANTI-PATTERNS
+The anti-patterns section was added to the AI code generation prompt:
 
-**LLMs often hallucinate these WRONG APIs - DO NOT USE:**
+> **CRITICAL ANTI-PATTERNS**
+>
+> LLMs often hallucinate these WRONG APIs - DO NOT USE:
+>
+> **Wrong:** Combined GroupBy + Aggregate API (doesn't exist!)
+> **Correct:** Separate GroupBy and Aggregate calls
 
-#### ❌ Wrong: Combined GroupBy + Aggregate API (doesn't exist!)
+This created a feedback loop where AI mistakes improved the prompt, which reduced future mistakes.
+
+### 8.4 Case Study: Record Encapsulation (v1.0.0)
+
+**Problem**: The original `Record` type was `map[string]any`, which allowed invalid types to be inserted and made it hard to enforce type safety.
+
+**Solution Process**:
+1. AI proposed encapsulating Record as a struct with private fields
+2. Human approved the breaking change for v1.0.0
+3. AI implemented MutableRecord builder pattern
+4. AI added GetOr(), Get[T]() accessor methods
+5. AI updated all 40+ example files
+6. Human verified compile-time safety was enforced
+
 ```go
-result := ssql.GroupByFields(
-    []string{"department"},
-    []ssql.Aggregation{ssql.Count("count")},  // WRONG!
-)
-```
+// Before (v0.x): Any type could be stored
+record["age"] = "not a number"  // Compiles but wrong
 
-#### ✅ Correct: Separate GroupBy and Aggregate
-```go
-grouped := ssql.GroupByFields("analysis", "department")(data)
-result := ssql.Aggregate("analysis", map[string]ssql.AggregateFunc{
-    "count": ssql.Count(),  // No parameters!
-})(grouped)
-```
+// After (v1.0+): Type-safe accessors
+record := ssql.MakeMutableRecord().
+    Int("age", int64(30)).
+    Freeze()
+age := ssql.GetOr(record, "age", int64(0))
 ```
 
 ---
@@ -395,24 +422,45 @@ result := ssql.Aggregate("analysis", map[string]ssql.AggregateFunc{
 
 ### 9.1 Human-AI Collaboration Pattern
 
-1. **Human**: Describes feature goal and constraints
-2. **AI**: Proposes implementation approach
-3. **Human**: Reviews, requests modifications
-4. **AI**: Implements with tests and documentation
-5. **Human**: Verifies tests pass, code is readable
-6. **AI**: Updates CLAUDE.md with lessons learned
-7. **Both**: Document breaking changes in CHANGELOG
+The collaboration followed a consistent pattern across hundreds of development sessions:
+
+**Phase 1: Problem Definition (Human-Led)**
+- Human describes the feature goal and business context
+- Human identifies constraints (backward compatibility, performance requirements)
+- Human provides examples of desired behavior
+
+**Phase 2: Design Exploration (AI-Led, Human-Reviewed)**
+- AI proposes implementation approaches with trade-offs
+- AI identifies affected files and potential breaking changes
+- Human selects approach or requests alternatives
+- For complex features, AI writes design doc before coding
+
+**Phase 3: Implementation (AI-Led)**
+- AI implements feature with tests
+- AI updates documentation alongside code
+- AI ensures all existing tests still pass
+
+**Phase 4: Review and Refinement (Human-Led)**
+- Human reviews generated code for readability
+- Human runs tests and verifies behavior
+- Human requests specific changes ("make this more readable", "add error handling")
+- AI iterates until human approves
+
+**Phase 5: Knowledge Capture (Both)**
+- AI updates CLAUDE.md with lessons learned
+- Human verifies CLAUDE.md captures key decisions
+- Both document breaking changes in CHANGELOG
 
 ### 9.2 Quality Gates
 
 Before merging any AI-generated code:
 
-- [ ] All existing tests pass
-- [ ] New tests added for new features
-- [ ] Code is readable (not over-abstracted)
-- [ ] Documentation updated
-- [ ] CLAUDE.md updated if patterns discovered
-- [ ] Breaking changes documented with migration path
+- All existing tests pass
+- New tests added for new features
+- Code is readable (not over-abstracted)
+- Documentation updated
+- CLAUDE.md updated if patterns discovered
+- Breaking changes documented with migration path
 
 ### 9.3 Version Control Discipline
 
@@ -420,6 +468,19 @@ Before merging any AI-generated code:
 - **Descriptive messages**: Include context for future AI sessions
 - **Annotated tags**: Full release notes in tag messages
 - **Clean main branch**: No local `replace` directives in go.mod
+- **Semantic versioning**: Breaking changes get major version bumps
+
+### 9.4 Communication Patterns
+
+Effective prompts to the AI included:
+
+- "Have you checked the code generation for the new feature?"
+- "Are you making sure the generated code is simple by adding helpers to the ssql package?"
+- "Are there tests for this new feature?"
+- "Have the docs been updated?"
+- "Is it pushed to GitHub?"
+
+These prompts established a checklist that the AI learned to anticipate.
 
 ---
 
@@ -427,35 +488,43 @@ Before merging any AI-generated code:
 
 ### 10.1 What Worked
 
-1. **CLAUDE.md as AI memory** - Essential for multi-session consistency
-2. **Test-driven features** - If it's not tested, AI will eventually break it
-3. **Helper functions over inline code** - Keeps generated code readable
-4. **Incremental complexity** - Start simple, add features gradually
-5. **Human review of architecture** - AI handles implementation, human guides design
-6. **Anti-pattern documentation** - Prevents repeated AI mistakes
+1. **CLAUDE.md as AI memory** - Essential for multi-session consistency. The 1,407-line ssql CLAUDE.md became the authoritative source for project conventions.
+
+2. **Test-driven features** - If it's not tested, AI will eventually break it. This was learned painfully with the v3.2.0 completion regression.
+
+3. **Helper functions over inline code** - Keeps generated code readable and maintainable. The `Lookup()` helper is a perfect example.
+
+4. **Incremental complexity** - Start simple, add features gradually. Each ssql release built on the previous one.
+
+5. **Human review of architecture** - AI handles implementation, human guides design. AI is excellent at generating code but needs direction on structure.
+
+6. **Anti-pattern documentation** - Prevents repeated AI mistakes. The AI code generation prompt's anti-patterns section was crucial.
+
+7. **Comprehensive documentation** - 40,000+ lines of docs meant the AI always had context for generating correct code.
 
 ### 10.2 What Didn't Work
 
-1. **Trusting AI "improvements"** - Always verify refactoring doesn't break features
-2. **Complex inline generation** - Generated code became unreadable
-3. **Missing context** - Without CLAUDE.md, AI made inconsistent choices
-4. **Skipping tests** - Led to silent regressions
+1. **Trusting AI "improvements"** - Always verify refactoring doesn't break features. AI eagerly refactors but doesn't always preserve behavior.
+
+2. **Complex inline generation** - Generated code became unreadable. Had to retrofit helper functions.
+
+3. **Missing context** - Without CLAUDE.md, AI made inconsistent choices between sessions.
+
+4. **Skipping tests** - Led to silent regressions that were only discovered by users.
+
+5. **Over-abstraction** - AI tends to over-engineer. Had to explicitly request simpler solutions.
 
 ### 10.3 Key Principles
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  AI-ASSISTED DEVELOPMENT PRINCIPLES                             │
-├─────────────────────────────────────────────────────────────────┤
-│  1. Document everything in CLAUDE.md - it's AI memory           │
-│  2. Test everything you want to keep                            │
-│  3. Prefer compile-time type safety over runtime validation     │
-│  4. Keep generated code simple and readable                     │
-│  5. Human reviews architecture, AI implements                   │
-│  6. Atomic changes with comprehensive commit messages           │
-│  7. Update documentation alongside code                         │
-└─────────────────────────────────────────────────────────────────┘
-```
+**AI-ASSISTED DEVELOPMENT PRINCIPLES**
+
+1. Document everything in CLAUDE.md - it's AI memory
+2. Test everything you want to keep
+3. Prefer compile-time type safety over runtime validation
+4. Keep generated code simple and readable
+5. Human reviews architecture, AI implements
+6. Atomic changes with comprehensive commit messages
+7. Update documentation alongside code
 
 ---
 
@@ -463,16 +532,23 @@ Before merging any AI-generated code:
 
 ### 11.1 Planned Enhancements
 
-- **GPU acceleration** for large dataset processing
+- **GPU acceleration** for large dataset processing using Go's upcoming GPU support
 - **Schema-aware records** with compile-time field validation
-- **Streaming aggregations** for unbounded data
-- **WASM compilation** for browser-based processing
+- **Streaming aggregations** for unbounded data sources
+- **WASM compilation** for browser-based data processing
 
 ### 11.2 AI Collaboration Improvements
 
-- **Automated CLAUDE.md updates** from test failures
-- **Pattern library** of successful AI prompts
-- **Regression detection** comparing generated code across versions
+- **Automated CLAUDE.md updates** - Parse test failures to auto-generate anti-patterns
+- **Pattern library** - Curated collection of successful AI prompts
+- **Regression detection** - Compare generated code across versions for drift
+- **Multi-model collaboration** - Use different models for different tasks (design vs implementation)
+
+### 11.3 Open Questions
+
+- How do we handle AI context limits as CLAUDE.md grows?
+- Can we train custom models on our codebase?
+- What's the right granularity for AI-generated commits?
 
 ---
 
@@ -485,73 +561,63 @@ The results speak for themselves:
 - **40,000+ lines** of documentation
 - **2.6x performance improvement** from code generation
 - **Clean API evolution** through 4 major versions
+- **73 releases** over several months
 
 The methodology presented—CLAUDE.md files, comprehensive testing, helper functions for generated code, and iterative human-AI collaboration—provides a template for other teams exploring AI-assisted development.
+
+The collaboration was genuinely productive. The AI handled tedious tasks (updating 40+ example files for API changes), caught issues the human missed (incomplete error handling), and proposed creative solutions (the code fragment system for generation). The human provided direction, caught architectural issues, and ensured code quality.
+
+This is not AI replacing developers—it's AI augmenting them. The human-AI team produced more, faster, with higher quality than either could alone.
 
 ---
 
 ## Appendix A: Code Statistics Summary
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│  COMBINED PROJECT STATISTICS                                   │
-├────────────────────────────────────────────────────────────────┤
-│  Go source code:           27,663 lines                        │
-│  Test code:                 6,305 lines                        │
-│  Documentation:            39,709 lines                        │
-│  Examples:                  7,815 lines                        │
-│  ─────────────────────────────────────────                     │
-│  Total:                    81,492 lines                        │
-│                                                                 │
-│  ssql releases:                56                              │
-│  autocli releases:             17                              │
-│  Total releases:               73                              │
-└────────────────────────────────────────────────────────────────┘
-```
+**COMBINED PROJECT STATISTICS**
+
+| Category | Lines |
+|----------|-------|
+| Go source code | 27,663 |
+| Test code | 6,305 |
+| Documentation | 39,709 |
+| Examples | 7,815 |
+| **Total** | **81,492** |
+
+| Metric | Count |
+|--------|-------|
+| ssql releases | 56 |
+| autocli releases | 17 |
+| **Total releases** | **73** |
 
 ## Appendix B: Repository Links
 
-- **ssql**: `github.com/rosscartlidge/ssql`
-- **autocli**: `github.com/rosscartlidge/autocli`
+- **ssql**: github.com/rosscartlidge/ssql
+- **autocli**: github.com/rosscartlidge/autocli
 
-## Appendix C: Sample CLAUDE.md Sections
+## Appendix C: Sample CLAUDE.md Structure
 
-### Record Field Access Pattern
+A well-structured CLAUDE.md includes:
 
-```markdown
-## Record Field Access (CRITICAL)
+1. **Project Overview** - What the project does
+2. **Repository Hygiene** - Where files should go
+3. **Development Principles** - Hard-won lessons
+4. **API Conventions** - Naming patterns, type rules
+5. **CLI Design Patterns** - For tools with CLIs
+6. **Code Generation Rules** - If applicable
+7. **Testing Strategy** - What to test and how
+8. **Common Pitfalls** - Mistakes to avoid
+9. **Version History** - Breaking changes and migrations
+10. **References** - Links to detailed docs
 
-**⚠️ ALWAYS use `Get()` or `GetOr()` methods to read fields from Records.**
+## Appendix D: Recommended Reading
 
-**Correct Field Access:**
-```go
-name := ssql.GetOr(r, "name", "")
-age := ssql.GetOr(r, "age", int64(0))
-```
-
-**Wrong Field Access:**
-```go
-// ❌ WRONG - Direct map access with type assertion (WILL PANIC!)
-name := r["name"].(string)
-```
-```
-
-### Code Generation Principle
-
-```markdown
-## Code Generation System (CRITICAL FEATURE)
-
-**⚠️ CRITICAL: This is a core feature that enables 10-100x faster execution.**
-
-**Generated Code Readability:**
-1. Move complexity to helper functions
-2. Generated code should be self-documenting
-3. When adding new commands:
-   - First: Add helper function to ssql package
-   - Then: Generate code that calls the helper
-   - Test: Read the generated code - is the intent clear?
-```
+- "Prompt Engineering Guide" - Best practices for AI prompts
+- "Working Effectively with Legacy Code" - Patterns for safe refactoring
+- "Release It!" - Production-ready software patterns
+- Go 1.23 Release Notes - Iterator (iter.Seq) documentation
 
 ---
 
 *Paper prepared for Go Programming Conference 2026*
+
+*The ssql and autocli projects are open source and available on GitHub.*
