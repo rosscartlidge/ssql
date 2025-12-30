@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -13,6 +14,7 @@ import (
 func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("group-by").
 		Description("Group records by fields and apply aggregations").
+		Example("ssql from sales.csv | ssql group-by region", "Get unique values of region field").
 		Example("ssql from sales.csv | ssql group-by region -count total", "Count records by region").
 		Example("ssql from sales.csv | ssql group-by region -sum amount total_sales", "Sum sales amount by region").
 		Example("ssql from data.csv | ssql group-by dept -count num_employees -avg salary avg_salary -sum hours total_hours", "Multiple aggregations in one command").
@@ -218,12 +220,43 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
-			if len(aggSpecs) == 0 {
-				return fmt.Errorf("no aggregations specified (use -count, -sum, -avg, -min, -max, or -collect)")
-			}
-
 			// Read JSONL from stdin
 			records := lib.ReadJSONL(os.Stdin)
+
+			// If no aggregations, output unique groupings (DISTINCT on grouped fields)
+			if len(aggSpecs) == 0 {
+				// Build key function for distinct
+				keyFn := func(r ssql.Record) string {
+					var parts []string
+					for _, field := range groupByFields {
+						parts = append(parts, fmt.Sprintf("%v", ssql.GetOr(r, field, "")))
+					}
+					return strings.Join(parts, "\x00")
+				}
+
+				// Build set of fields to keep
+				keepFields := make(map[string]bool)
+				for _, field := range groupByFields {
+					keepFields[field] = true
+				}
+
+				// Get distinct records and project only grouped fields
+				distinct := ssql.DistinctBy(keyFn)(records)
+				projected := ssql.Select(func(r ssql.Record) ssql.Record {
+					mut := r.ToMutable()
+					for k := range r.All() {
+						if !keepFields[k] {
+							mut = mut.Delete(k)
+						}
+					}
+					return mut.Freeze()
+				})(distinct)
+
+				if err := lib.WriteJSONL(os.Stdout, projected); err != nil {
+					return fmt.Errorf("writing output: %w", err)
+				}
+				return nil
+			}
 
 			// Apply GroupByFields
 			grouped := ssql.GroupByFields("_group", groupByFields...)(records)
@@ -394,8 +427,38 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		}
 	}
 
+	// If no aggregations, generate code for DISTINCT on grouped fields
 	if len(aggSpecs) == 0 {
-		return fmt.Errorf("no aggregations specified (use -count, -sum, -avg, -min, -max, or -collect)")
+		// Build field list for key function
+		var fieldList strings.Builder
+		for i, field := range groupByFields {
+			if i > 0 {
+				fieldList.WriteString(", ")
+			}
+			fieldList.WriteString(fmt.Sprintf("%q", field))
+		}
+
+		code := fmt.Sprintf(`keepFields := map[string]bool{%s}
+	distinctKey := func(r ssql.Record) string {
+		var parts []string
+		for field := range keepFields {
+			parts = append(parts, fmt.Sprintf("%%v", ssql.GetOr(r, field, "")))
+		}
+		return strings.Join(parts, "\x00")
+	}
+	distinct := ssql.DistinctBy(distinctKey)(%s)
+	grouped := ssql.Select(func(r ssql.Record) ssql.Record {
+		mut := r.ToMutable()
+		for k := range r.All() {
+			if !keepFields[k] {
+				mut = mut.Delete(k)
+			}
+		}
+		return mut.Freeze()
+	})(distinct)`, buildMapLiteral(groupByFields), inputVar)
+
+		frag := lib.NewStmtFragment("grouped", inputVar, code, []string{"fmt", "strings"}, getCommandString())
+		return lib.WriteCodeFragment(frag)
 	}
 
 	// Generate TWO fragments: one for GroupByFields, one for Aggregate
@@ -450,4 +513,13 @@ func generateAggregatorCode(spec struct {
 	default:
 		return ""
 	}
+}
+
+// buildMapLiteral builds a Go map literal string like: "field1": true, "field2": true
+func buildMapLiteral(fields []string) string {
+	var parts []string
+	for _, field := range fields {
+		parts = append(parts, fmt.Sprintf("%q: true", field))
+	}
+	return strings.Join(parts, ", ")
 }
