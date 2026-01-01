@@ -955,7 +955,8 @@ func GroupByFields(sequenceField string, fields ...string) Filter[Record, Record
 // This ensures at compile time that aggregation results satisfy the Value constraint
 type AggregateResult interface {
 	getValue() any
-	sealed() // Prevents external implementations
+	GetValue() any // Public getter for external use
+	sealed()       // Prevents external implementations
 }
 
 // AggResult wraps an aggregation result with compile-time type safety
@@ -964,8 +965,9 @@ type AggResult[V Value] struct {
 	val V
 }
 
-func (a AggResult[V]) getValue() any { return a.val }
-func (a AggResult[V]) sealed()       {}
+func (a AggResult[V]) getValue() any  { return a.val }
+func (a AggResult[V]) GetValue() any  { return a.val }
+func (a AggResult[V]) sealed()        {}
 
 // AggregateFunc defines an aggregation function over a group of records.
 // Takes a slice of records and returns an AggregateResult.

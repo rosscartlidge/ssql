@@ -83,6 +83,33 @@ func WriteJSONL(w io.Writer, records iter.Seq[ssql.Record]) error {
 	return writer.Flush()
 }
 
+// WriteJSONLRecord writes a single Record to a writer as JSONL (JSON Lines)
+func WriteJSONLRecord(w io.Writer, record ssql.Record) error {
+	// Convert Record to map for JSON encoding
+	data := make(map[string]interface{})
+
+	// Extract all fields from record
+	for k, v := range record.All() {
+		data[k] = convertRecordValue(v)
+	}
+
+	// Encode as JSON
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("encoding record as JSON: %w", err)
+	}
+
+	// Write line
+	if _, err := w.Write(jsonBytes); err != nil {
+		return fmt.Errorf("writing JSON line: %w", err)
+	}
+	if _, err := w.Write([]byte("\n")); err != nil {
+		return fmt.Errorf("writing newline: %w", err)
+	}
+
+	return nil
+}
+
 // OpenInputFile opens a file for input (not stdin - use os.Stdin directly for that)
 func OpenInputFile(filename string) (io.ReadCloser, error) {
 	file, err := os.Open(filename)

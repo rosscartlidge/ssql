@@ -19,6 +19,8 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from sales.csv | ssql group-by region -sum amount total_sales", "Sum sales amount by region").
 		Example("ssql from data.csv | ssql group-by dept -count num_employees -avg salary avg_salary -sum hours total_hours", "Multiple aggregations in one command").
 		Example("ssql from data.csv | ssql group-by dept -collect name all_names", "Collect all names into array per department").
+		Example("ssql from data.csv | ssql group-by dept -expr 'sum(salary * bonus)' total_comp", "Custom expression aggregation").
+		Example("ssql from huge.csv | ssql group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total", "Memory-efficient streaming aggregation").
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -72,6 +74,22 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Global().
 			Help("Collect all field values into array (field name, result name)").
 		Done().
+		Flag("-expr", "-e").
+			Arg("expression").Completer(cf.NoCompleter{Hint: "<expression>"}).Done().
+			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+			Accumulate().
+			Global().
+			Help("Custom aggregation expression: -expr 'sum(salary * bonus)' total").
+		Done().
+		Flag("-stream-expr").
+			Arg("init").Completer(cf.NoCompleter{Hint: "<init-expr>"}).Done().
+			Arg("every").Completer(cf.NoCompleter{Hint: "<every-expr>"}).Done().
+			Arg("final").Completer(cf.NoCompleter{Hint: "<final-expr>"}).Done().
+			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+			Accumulate().
+			Global().
+			Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var groupByFields []string
 			var generate bool
@@ -112,7 +130,21 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				result   string
 			}
 
+			// Expression aggregation specs
+			type exprSpec struct {
+				expression string
+				result     string
+			}
+			type streamExprSpec struct {
+				initExpr  string
+				everyExpr string
+				finalExpr string
+				result    string
+			}
+
 			var aggSpecs []aggSpec
+			var exprSpecs []exprSpec
+			var streamExprSpecs []streamExprSpec
 
 			// Parse -count flags (only result name)
 			if countVals, ok := ctx.GlobalFlags["-count"]; ok {
@@ -220,11 +252,52 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
+			// Parse -expr flags (expression and result name)
+			if exprVals, ok := ctx.GlobalFlags["-expr"]; ok {
+				exprs, _ := exprVals.([]any)
+				for _, exprVal := range exprs {
+					if argsMap, ok := exprVal.(map[string]any); ok {
+						expression, _ := argsMap["expression"].(string)
+						result, _ := argsMap["result-name"].(string)
+						if expression != "" && result != "" {
+							exprSpecs = append(exprSpecs, exprSpec{
+								expression: expression,
+								result:     result,
+							})
+						}
+					}
+				}
+			}
+
+			// Parse -stream-expr flags (init, every, final, result name)
+			if streamVals, ok := ctx.GlobalFlags["-stream-expr"]; ok {
+				streams, _ := streamVals.([]any)
+				for _, streamVal := range streams {
+					if argsMap, ok := streamVal.(map[string]any); ok {
+						initExpr, _ := argsMap["init"].(string)
+						everyExpr, _ := argsMap["every"].(string)
+						finalExpr, _ := argsMap["final"].(string)
+						result, _ := argsMap["result-name"].(string)
+						if initExpr != "" && everyExpr != "" && finalExpr != "" && result != "" {
+							streamExprSpecs = append(streamExprSpecs, streamExprSpec{
+								initExpr:  initExpr,
+								everyExpr: everyExpr,
+								finalExpr: finalExpr,
+								result:    result,
+							})
+						}
+					}
+				}
+			}
+
 			// Read JSONL from stdin
 			records := lib.ReadJSONL(os.Stdin)
 
+			// Check if we have any aggregations
+			hasAnyAgg := len(aggSpecs) > 0 || len(exprSpecs) > 0 || len(streamExprSpecs) > 0
+
 			// If no aggregations, output unique groupings (DISTINCT on grouped fields)
-			if len(aggSpecs) == 0 {
+			if !hasAnyAgg {
 				// Build key function for distinct
 				keyFn := func(r ssql.Record) string {
 					var parts []string
@@ -258,6 +331,78 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return nil
 			}
 
+			// If we have custom expressions, use manual grouping to collect records
+			if len(exprSpecs) > 0 || len(streamExprSpecs) > 0 {
+				// Manual grouping: collect records per group
+				groups := make(map[string][]ssql.Record)
+				groupKeys := make(map[string]ssql.Record) // Keep first record for key values
+
+				for record := range records {
+					// Build group key
+					var parts []string
+					for _, field := range groupByFields {
+						parts = append(parts, fmt.Sprintf("%v", ssql.GetOr(record, field, "")))
+					}
+					key := strings.Join(parts, "\x00")
+
+					if _, exists := groups[key]; !exists {
+						groupKeys[key] = record
+					}
+					groups[key] = append(groups[key], record)
+				}
+
+				// Process each group
+				for key, groupRecords := range groups {
+					// Start with group key fields
+					mut := ssql.MakeMutableRecord()
+					keyRecord := groupKeys[key]
+					for _, field := range groupByFields {
+						val := ssql.GetOr[any](keyRecord, field, nil)
+						mut = applyValueToRecord(mut, field, val)
+					}
+
+					// Apply built-in aggregations
+					for _, spec := range aggSpecs {
+						agg, err := buildAggregator(spec.function, spec.field)
+						if err != nil {
+							return err
+						}
+						result := agg(groupRecords)
+						mut = applyValueToRecord(mut, spec.result, result.GetValue())
+					}
+
+					// Apply batch expressions
+					for _, spec := range exprSpecs {
+						result, err := EvalBatchExpr(spec.expression, groupRecords)
+						if err != nil {
+							return fmt.Errorf("evaluating -expr %q: %w", spec.expression, err)
+						}
+						mut = applyValueToRecord(mut, spec.result, result)
+					}
+
+					// Apply streaming expressions
+					for _, spec := range streamExprSpecs {
+						result, err := EvalStreamExpr(StreamExprSpec{
+							InitExpr:  spec.initExpr,
+							EveryExpr: spec.everyExpr,
+							FinalExpr: spec.finalExpr,
+							Result:    spec.result,
+						}, groupRecords)
+						if err != nil {
+							return fmt.Errorf("evaluating -stream-expr: %w", err)
+						}
+						mut = applyValueToRecord(mut, spec.result, result)
+					}
+
+					// Write result
+					if err := lib.WriteJSONLRecord(os.Stdout, mut.Freeze()); err != nil {
+						return fmt.Errorf("writing output: %w", err)
+					}
+				}
+				return nil
+			}
+
+			// Standard path: use ssql.Aggregate for built-in aggregations only
 			// Apply GroupByFields
 			grouped := ssql.GroupByFields("_group", groupByFields...)(records)
 
@@ -424,6 +569,18 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 					})
 				}
 			}
+		}
+	}
+
+	// Check for custom expression flags (not supported in code generation yet)
+	if exprVals, ok := ctx.GlobalFlags["-expr"]; ok {
+		if exprs, ok := exprVals.([]any); ok && len(exprs) > 0 {
+			return fmt.Errorf("-expr flag is not yet supported with -generate; use built-in aggregations or run without -generate")
+		}
+	}
+	if streamVals, ok := ctx.GlobalFlags["-stream-expr"]; ok {
+		if streams, ok := streamVals.([]any); ok && len(streams) > 0 {
+			return fmt.Errorf("-stream-expr flag is not yet supported with -generate; use built-in aggregations or run without -generate")
 		}
 	}
 
