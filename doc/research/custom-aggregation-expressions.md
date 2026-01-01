@@ -144,7 +144,15 @@ Done().
 
 ### 2. Batch Mode Implementation
 
+Uses AST patching to transform natural syntax. See `doc/research/expr-ast-patching.md` for full design and POC results.
+
 ```go
+// AggPatcher transforms natural aggregation syntax to predicate form
+// e.g., sum(salary * bonus) → sum(_records, .salary * .bonus)
+type AggPatcher struct {
+    Fields map[string]bool
+}
+
 // Build environment with field arrays and _records
 func buildBatchEnv(records []ssql.Record) map[string]any {
     env := make(map[string]any)
@@ -171,13 +179,21 @@ func buildBatchEnv(records []ssql.Record) map[string]any {
     env["_records"] = recordMaps
     env["_count"] = len(records)
 
+    // Dummy functions to satisfy type-checker before patching
+    env["count"] = func() int { return 0 }
+    env["avg"] = func(arr []float64) float64 { return 0 }
+
     return env
 }
 
-// Evaluate batch expression
-func evalBatchExpr(expression string, records []ssql.Record) (any, error) {
+// Evaluate batch expression with AST patching
+func evalBatchExpr(expression string, records []ssql.Record, fields map[string]bool) (any, error) {
     env := buildBatchEnv(records)
-    program, err := expr.Compile(expression)
+    patcher := &AggPatcher{Fields: fields}
+    program, err := expr.Compile(expression,
+        expr.Env(env),
+        expr.Patch(patcher),
+    )
     if err != nil {
         return nil, err
     }
