@@ -965,9 +965,9 @@ type AggResult[V Value] struct {
 	val V
 }
 
-func (a AggResult[V]) getValue() any  { return a.val }
-func (a AggResult[V]) GetValue() any  { return a.val }
-func (a AggResult[V]) sealed()        {}
+func (a AggResult[V]) getValue() any { return a.val }
+func (a AggResult[V]) GetValue() any { return a.val }
+func (a AggResult[V]) sealed()       {}
 
 // AggregateFunc defines an aggregation function over a group of records.
 // Takes a slice of records and returns an AggregateResult.
@@ -1256,4 +1256,3 @@ func CollectSeq[T Value](field string) AggregateFunc {
 		return AggResult[iter.Seq[any]]{val: seq}
 	}
 }
-

@@ -16,15 +16,15 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql limit 10", "Show first 10 records").
 		Example("ssql from large.csv | ssql limit 100 | ssql to table", "Preview first 100 records").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("N").
-			Int().
-			Required().
-			Global().
-			Help("Number of records to take").
+		Int().
+		Required().
+		Global().
+		Help("Number of records to take").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var n int
@@ -50,14 +50,15 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateLimitCode(n)
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
 			// Apply limit
 			limited := ssql.Limit[ssql.Record](n)(records)
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, limited); err != nil {
+			// Write output as JSONL (preserving schema if present)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, limited); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

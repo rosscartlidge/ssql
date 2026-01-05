@@ -84,7 +84,7 @@ func TestIsExpression(t *testing.T) {
 		{name: "boolean string", value: "true", want: false},
 		{name: "string with dash", value: "foo-bar", want: false},
 		{name: "string with underscore", value: "foo_bar", want: false},
-		{name: "email", value: "user@example.com", want: false},  // @ is not an operator we check
+		{name: "email", value: "user@example.com", want: false}, // @ is not an operator we check
 		{name: "url", value: "https://example.com", want: false},
 	}
 

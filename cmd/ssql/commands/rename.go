@@ -17,16 +17,16 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql rename -as oldname newname", "Rename a single field").
 		Example("ssql from users.csv | ssql rename -as first_name firstName -as last_name lastName", "Rename multiple fields to camelCase").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("-as").
-			Arg("old-field").FieldsFromFlag("").Done().
-			Arg("new-field").Completer(cf.NoCompleter{Hint: "<new-name>"}).Done().
-			Accumulate().
-			Global().
-			Help("Rename old-field to new-field").
+		Arg("old-field").FieldsFromFlag("").Done().
+		Arg("new-field").Completer(cf.NoCompleter{Hint: "<new-name>"}).Done().
+		Accumulate().
+		Global().
+		Help("Rename old-field to new-field").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -65,8 +65,9 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateRenameCode(renames)
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
 			// Build renamer function using Rename()
 			renamer := func(r ssql.Record) ssql.Record {
@@ -80,8 +81,17 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Apply rename
 			renamed := ssql.Select(renamer)(records)
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, renamed); err != nil {
+			// Update schema to rename fields
+			var outputSchema *lib.Schema
+			if schemaAndRecords.Schema != nil {
+				outputSchema = schemaAndRecords.Schema.Clone()
+				for _, ren := range renames {
+					outputSchema.RenameField(ren.oldField, ren.newField)
+				}
+			}
+
+			// Write output as JSONL (preserving schema if present)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, renamed); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

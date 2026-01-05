@@ -15,7 +15,6 @@ import (
 func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("update").
 		Description("Conditionally update record fields with new values").
-
 		Example("ssql from users.csv | ssql update -where status eq pending -set status approved", "Update status from pending to approved").
 		Example("ssql from sales.csv | ssql update -set-expr total 'price * qty'", "Calculate total using expression").
 		Example("ssql from data.csv | ssql update -where age lt 18 -set category minor + -where age ge 18 -set category adult", "Categorize by age using if-else logic").
@@ -24,37 +23,37 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql update -set-expr tier 'revenue > 10000 ? \"gold\" : (revenue > 5000 ? \"silver\" : \"bronze\")'", "Multi-tier categorization").
 		ClauseDescription("Clauses are evaluated in order using if-then-else logic.\nSeparators: +, -\nThe FIRST matching clause applies its updates, then processing stops (first-match-wins).\nThis is different from 'where' which uses OR logic - all clauses are evaluated.").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("-where", "-w").
-			Arg("field").FieldsFromFlag("").Done().
-			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
-			Arg("value").FieldValuesFrom("", "field").Done().
-			Accumulate().
-			Local().
-			Help("Condition to check: -where <field> <operator> <value>").
+		Arg("field").FieldsFromFlag("").Done().
+		Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
+		Arg("value").FieldValuesFrom("", "field").Done().
+		Accumulate().
+		Local().
+		Help("Condition to check: -where <field> <operator> <value>").
 		Done().
 		Flag("-where-expr", "-x").
-			Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
-			Accumulate().
-			Local().
-			Help("Condition using boolean expression: -where-expr <expression>").
+		Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
+		Accumulate().
+		Local().
+		Help("Condition using boolean expression: -where-expr <expression>").
 		Done().
 		Flag("-set", "-s").
-			Arg("field").FieldsFromFlag("").Done().
-			Arg("value").FieldValuesFrom("", "field").Done().
-			Accumulate().
-			Local().
-			Help("Set field to literal value: -set <field> <value>").
+		Arg("field").FieldsFromFlag("").Done().
+		Arg("value").FieldValuesFrom("", "field").Done().
+		Accumulate().
+		Local().
+		Help("Set field to literal value: -set <field> <value>").
 		Done().
 		Flag("-set-expr", "-e").
-			Arg("field").FieldsFromFlag("").Done().
-			Arg("expression").Completer(cf.NoCompleter{Hint: "<expression>"}).Done().
-			Accumulate().
-			Local().
-			Help("Set field to expression result: -set-expr <field> <expression>").
+		Arg("field").FieldsFromFlag("").Done().
+		Arg("expression").Completer(cf.NoCompleter{Hint: "<expression>"}).Done().
+		Accumulate().
+		Local().
+		Help("Set field to expression result: -set-expr <field> <expression>").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -75,12 +74,12 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					op    string
 					value string
 				}
-			whereExprEvals []func(ssql.Record) (any, error)  // For -where-expr (pre-compiled)
-				updates []struct {
-					field     string
-					literal   string                              // For -set
-					exprEval  func(ssql.Record) (any, error)      // For -set-expr (pre-compiled)
-					isExpr    bool
+				whereExprEvals []func(ssql.Record) (any, error) // For -where-expr (pre-compiled)
+				updates        []struct {
+					field    string
+					literal  string                         // For -set
+					exprEval func(ssql.Record) (any, error) // For -set-expr (pre-compiled)
+					isExpr   bool
 				}
 			}
 
@@ -114,25 +113,25 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				}
 
-			// Parse -where-expr conditions and compile expressions ONCE
-			if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
-				exprs, ok := exprsRaw.([]any)
-				if ok {
-					for _, exprRaw := range exprs {
-						expression, ok := exprRaw.(string)
-						if !ok || expression == "" {
-							continue
-						}
+				// Parse -where-expr conditions and compile expressions ONCE
+				if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
+					exprs, ok := exprsRaw.([]any)
+					if ok {
+						for _, exprRaw := range exprs {
+							expression, ok := exprRaw.(string)
+							if !ok || expression == "" {
+								continue
+							}
 
-						// Compile the expression ONCE
-						eval, err := compileExpression(expression)
-						if err != nil {
-							return fmt.Errorf("compiling where-expr %q: %w", expression, err)
+							// Compile the expression ONCE
+							eval, err := compileExpression(expression)
+							if err != nil {
+								return fmt.Errorf("compiling where-expr %q: %w", expression, err)
+							}
+							uc.whereExprEvals = append(uc.whereExprEvals, eval)
 						}
-						uc.whereExprEvals = append(uc.whereExprEvals, eval)
 					}
 				}
-			}
 
 				// Parse -set operations (literal values)
 				if setOpsRaw, ok := clause.Flags["-set"]; ok && setOpsRaw != nil {
@@ -149,10 +148,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 							if field != "" {
 								uc.updates = append(uc.updates, struct {
-									field     string
-									literal   string
-									exprEval  func(ssql.Record) (any, error)
-									isExpr    bool
+									field    string
+									literal  string
+									exprEval func(ssql.Record) (any, error)
+									isExpr   bool
 								}{field: field, literal: value, isExpr: false})
 							}
 						}
@@ -179,10 +178,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 									return fmt.Errorf("compiling expression %q: %w", expression, err)
 								}
 								uc.updates = append(uc.updates, struct {
-									field     string
-									literal   string
-									exprEval  func(ssql.Record) (any, error)
-									isExpr    bool
+									field    string
+									literal  string
+									exprEval func(ssql.Record) (any, error)
+									isExpr   bool
 								}{field: field, exprEval: eval, isExpr: true})
 							}
 						}
@@ -198,8 +197,9 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("no -set or -set-expr operations specified")
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
 			// Track schema from first record
 			var schemaFields map[string]any // field -> sample value (for type inference)
@@ -248,29 +248,29 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						}
 					}
 
-				// Check where-expr conditions
-				if allMatch {
-					for _, eval := range clause.whereExprEvals {
-						result, err := eval(frozen)
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "Error evaluating where-expr: %v\n", err)
-							allMatch = false
-							break
-						}
+					// Check where-expr conditions
+					if allMatch {
+						for _, eval := range clause.whereExprEvals {
+							result, err := eval(frozen)
+							if err != nil {
+								fmt.Fprintf(os.Stderr, "Error evaluating where-expr: %v\n", err)
+								allMatch = false
+								break
+							}
 
-						boolResult, ok := result.(bool)
-						if !ok {
-							fmt.Fprintf(os.Stderr, "Where-expr must return boolean, got %T\n", result)
-							allMatch = false
-							break
-						}
+							boolResult, ok := result.(bool)
+							if !ok {
+								fmt.Fprintf(os.Stderr, "Where-expr must return boolean, got %T\n", result)
+								allMatch = false
+								break
+							}
 
-						if !boolResult {
-							allMatch = false
-							break
+							if !boolResult {
+								allMatch = false
+								break
+							}
 						}
 					}
-				}
 
 					// If clause matches (or has no conditions), apply updates and stop
 					if allMatch {
@@ -350,8 +350,13 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Apply update
 			updated := updateFilter(records)
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, updated); err != nil {
+			// For update, we pass through the schema unchanged
+			// (update modifies values but doesn't fundamentally change schema structure)
+			// Note: new fields added via -set are not reflected in schema
+			// This is a known limitation - use 'from -schema' after update to regenerate
+
+			// Write output as JSONL (preserving schema if present)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, updated); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -391,8 +396,8 @@ func generateUpdateCode(ctx *cf.Context) error {
 			op    string
 			value string
 		}
-		whereExprs []string  // For -where-expr expressions
-		updates []struct {
+		whereExprs []string // For -where-expr expressions
+		updates    []struct {
 			field  string
 			value  string
 			isExpr bool
@@ -428,18 +433,18 @@ func generateUpdateCode(ctx *cf.Context) error {
 				}
 			}
 
-		// Parse -where-expr conditions (boolean expressions)
-		if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
-			exprs, ok := exprsRaw.([]any)
-			if ok {
-				for _, exprRaw := range exprs {
-					expression, ok := exprRaw.(string)
-					if ok && expression != "" {
-						uc.whereExprs = append(uc.whereExprs, expression)
+			// Parse -where-expr conditions (boolean expressions)
+			if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
+				exprs, ok := exprsRaw.([]any)
+				if ok {
+					for _, exprRaw := range exprs {
+						expression, ok := exprRaw.(string)
+						if ok && expression != "" {
+							uc.whereExprs = append(uc.whereExprs, expression)
+						}
 					}
 				}
 			}
-		}
 		}
 
 		// Parse -set operations (literal values)
@@ -773,4 +778,3 @@ func getComparisonValue(value string) string {
 		return fmt.Sprintf("%q", value)
 	}
 }
-

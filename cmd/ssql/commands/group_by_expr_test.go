@@ -249,10 +249,10 @@ func TestCombinedExpressions(t *testing.T) {
 		expr     string
 		expected float64
 	}{
-		{"sum(a) + sum(b)", 35.0},     // 30 + 5
-		{"sum(a) * 2", 60.0},          // 30 * 2
-		{"avg(a) + avg(b)", 17.5},     // 15 + 2.5
-		{"sum(a) / count()", 15.0},    // 30 / 2
+		{"sum(a) + sum(b)", 35.0},      // 30 + 5
+		{"sum(a) * 2", 60.0},           // 30 * 2
+		{"avg(a) + avg(b)", 17.5},      // 15 + 2.5
+		{"sum(a) / count()", 15.0},     // 30 / 2
 		{"sum(a * b) / count()", 40.0}, // 80 / 2
 	}
 
@@ -296,7 +296,7 @@ func TestEvalStreamExprErrors(t *testing.T) {
 			ssql.MakeMutableRecord().Float("x", 1).Freeze(),
 		}
 		_, err := EvalStreamExpr(StreamExprSpec{
-			InitExpr:  "{s: }",  // Invalid syntax
+			InitExpr:  "{s: }", // Invalid syntax
 			EveryExpr: "{s: s + x}",
 			FinalExpr: "s",
 		}, records)

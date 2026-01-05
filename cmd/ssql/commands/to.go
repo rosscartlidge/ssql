@@ -33,27 +33,27 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.csv | ssql to table -only name age", "Display only name and age columns").
 		Example("ssql from data.csv | ssql to table -max-width 30", "Display with custom column width").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("-max-width").
-			Int().
-			Global().
-			Default(50).
-			Help("Maximum column width (truncate longer values)").
+		Int().
+		Global().
+		Default(50).
+		Help("Maximum column width (truncate longer values)").
 		Done().
 		Flag("-only").
-			Bool().
-			Global().
-			Help("Only show specified fields (hide others)").
+		Bool().
+		Global().
+		Help("Only show specified fields (hide others)").
 		Done().
 		Flag("FIELDS").
-			String().
-			Variadic().
-			FieldsFromFlag("").
-			Global().
-			Help("Field names to display first (in order)").
+		String().
+		Variadic().
+		FieldsFromFlag("").
+		Global().
+		Help("Field names to display first (in order)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -88,8 +88,15 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 				return generateToTableCode(maxWidth, fields, onlySpecified)
 			}
 
-			// Read all records from stdin and display as table
-			records := lib.ReadJSONL(os.Stdin)
+			// Read all records from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
+
+			// If no fields specified but schema is present, use schema field order
+			if len(fields) == 0 && schemaAndRecords.Schema != nil {
+				fields = schemaAndRecords.Schema.Fields
+			}
+
 			ssql.DisplayTableWithFields(records, maxWidth, fields, onlySpecified)
 			return nil
 		}).
@@ -103,16 +110,16 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.json | ssql to csv output.csv", "Convert JSON to CSV").
 		Example("ssql from data.csv | ssql where -where status eq active | ssql to csv active.csv", "Filter and save to CSV").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
-			Global().
-			Default("").
-			Help("Output CSV file (or stdout if not specified)").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+		Global().
+		Default("").
+		Help("Output CSV file (or stdout if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
@@ -131,14 +138,21 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 				return generateToCSVCode(outputFile)
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
-			// Write as CSV
+			// Build CSV config with field order from schema if present
+			config := ssql.DefaultCSVConfig()
+			if schemaAndRecords.Schema != nil {
+				config.Fields = schemaAndRecords.Schema.Fields
+			}
+
+			// Write as CSV with field order
 			if outputFile == "" {
-				return ssql.WriteCSVToWriter(records, os.Stdout)
+				return ssql.WriteCSVToWriter(records, os.Stdout, config)
 			} else {
-				return ssql.WriteCSV(records, outputFile)
+				return ssql.WriteCSV(records, outputFile, config)
 			}
 		}).
 		Done()
@@ -151,21 +165,21 @@ func registerToJSON(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.csv | ssql to json", "Convert CSV to JSONL").
 		Example("ssql from data.csv | ssql to json -pretty > output.json", "Convert CSV to pretty JSON array").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("-pretty", "-p").
-			Bool().
-			Global().
-			Help("Pretty-print as JSON array (default: JSONL)").
+		Bool().
+		Global().
+		Help("Pretty-print as JSON array (default: JSONL)").
 		Done().
 		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
-			Global().
-			Default("").
-			Help("Output JSON/JSONL file (or stdout if not specified)").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
+		Global().
+		Default("").
+		Help("Output JSON/JSONL file (or stdout if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
@@ -189,19 +203,26 @@ func registerToJSON(cmd *cf.SubcommandBuilder) {
 				return generateToJSONCode(outputFile, pretty)
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
+
+			// Get field order from schema if present
+			var fieldOrder []string
+			if schemaAndRecords.Schema != nil {
+				fieldOrder = schemaAndRecords.Schema.Fields
+			}
 
 			// Write to stdout or file
 			if outputFile == "" {
-				return lib.WriteJSON(os.Stdout, records, pretty)
+				return lib.WriteJSONWithFieldOrder(os.Stdout, records, pretty, fieldOrder)
 			} else {
 				output, err := lib.OpenOutput(outputFile)
 				if err != nil {
 					return err
 				}
 				defer output.Close()
-				return lib.WriteJSON(output, records, pretty)
+				return lib.WriteJSONWithFieldOrder(output, records, pretty, fieldOrder)
 			}
 		}).
 		Done()
@@ -214,28 +235,28 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.csv | ssql to chart -x date -y revenue", "Create line chart of revenue over time").
 		Example("ssql from sales.csv | ssql to chart -x product -y sales -output sales.html", "Create chart with custom output file").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("-x").
-			String().
-			FieldsFromFlag("").
-			Global().
-			Help("X-axis field").
+		String().
+		FieldsFromFlag("").
+		Global().
+		Help("X-axis field").
 		Done().
 		Flag("-y").
-			String().
-			FieldsFromFlag("").
-			Global().
-			Help("Y-axis field").
+		String().
+		FieldsFromFlag("").
+		Global().
+		Help("Y-axis field").
 		Done().
 		Flag("-output", "-o").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.html"}).
-			Global().
-			Default("chart.html").
-			Help("Output HTML file (default: chart.html)").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.html"}).
+		Global().
+		Default("chart.html").
+		Help("Output HTML file (default: chart.html)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var xField, yField, outputFile string
@@ -269,8 +290,9 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 				return fmt.Errorf("Y-axis field required (use -y)")
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present - consumes schema header)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
 			// Create chart
 			if err := ssql.QuickChart(records, xField, yField, outputFile); err != nil {

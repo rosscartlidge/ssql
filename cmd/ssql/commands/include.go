@@ -17,16 +17,16 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql include name age", "Select only name and age columns").
 		Example("ssql from users.json | ssql include email status | ssql to csv out.csv", "Extract email and status to CSV").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("FIELDS").
-			String().
-			Variadic().
-			FieldsFromFlag("").
-			Global().
-			Help("Fields to include").
+		String().
+		Variadic().
+		FieldsFromFlag("").
+		Global().
+		Help("Fields to include").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -60,8 +60,9 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateIncludeCode(fields)
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
 			// Build included fields map
 			includedMap := make(map[string]bool)
@@ -83,8 +84,19 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Apply inclusion
 			included := ssql.Select(includer)(records)
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, included); err != nil {
+			// Update schema to only include specified fields (in specified order)
+			var outputSchema *lib.Schema
+			if schemaAndRecords.Schema != nil {
+				outputSchema = lib.NewSchema()
+				for _, field := range fields {
+					if schemaAndRecords.Schema.HasField(field) {
+						outputSchema.AddField(field, schemaAndRecords.Schema.TypeOf(field))
+					}
+				}
+			}
+
+			// Write output as JSONL (preserving schema if present)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, included); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

@@ -17,21 +17,21 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql sort age", "Sort by age ascending").
 		Example("ssql from sales.csv | ssql sort amount -desc", "Sort by amount descending").
 		Flag("FIELD").
-			String().
-			Required().
-			FieldsFromFlag("").
-			Global().
-			Help("Field to sort by").
+		String().
+		Required().
+		FieldsFromFlag("").
+		Global().
+		Help("Field to sort by").
 		Done().
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("-desc", "-d").
-			Bool().
-			Global().
-			Help("Sort descending").
+		Bool().
+		Global().
+		Help("Sort descending").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var field string
@@ -59,8 +59,9 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateSortCode(field, desc)
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
 			// Build sort key extractor and apply sort
 			var result iter.Seq[ssql.Record]
@@ -80,8 +81,8 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				result = sorter(records)
 			}
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, result); err != nil {
+			// Write output as JSONL (preserving schema if present)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, result); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

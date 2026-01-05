@@ -19,44 +19,44 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql join <(ssql from kind.csv) -on a_kind kind -as kind_name a_kind_name - -on z_kind kind -as kind_name z_kind_name", "Multiple lookups from same file").
 		ClauseDescription("Each clause performs a separate lookup from the right-side file").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("-type", "-t").
-			String().
-			Completer(&cf.StaticCompleter{Options: []string{"inner", "left", "right", "full"}}).
-			Global().
-			Default("inner").
-			Help("Join type: inner, left, right, full (default: inner)").
+		String().
+		Completer(&cf.StaticCompleter{Options: []string{"inner", "left", "right", "full"}}).
+		Global().
+		Default("inner").
+		Help("Join type: inner, left, right, full (default: inner)").
 		Done().
 		Flag("-using").
-			String().
-			FieldsFromFlag("").
-			Accumulate().
-			Local().
-			Help("Field name for equality join (same name in both sides)").
+		String().
+		FieldsFromFlag("").
+		Accumulate().
+		Local().
+		Help("Field name for equality join (same name in both sides)").
 		Done().
 		Flag("-on").
-			Arg("left-field").FieldsFromFlag("").Done().
-			Arg("right-field").Completer(&cf.NoCompleter{Hint: "<right-field>"}).Done().
-			Accumulate().
-			Local().
-			Help("Join on different field names: -on <left> <right>").
+		Arg("left-field").FieldsFromFlag("").Done().
+		Arg("right-field").Completer(&cf.NoCompleter{Hint: "<right-field>"}).Done().
+		Accumulate().
+		Local().
+		Help("Join on different field names: -on <left> <right>").
 		Done().
 		Flag("-as").
-			Arg("right-field").Completer(&cf.NoCompleter{Hint: "<right-field>"}).Done().
-			Arg("new-name").Completer(&cf.NoCompleter{Hint: "<new-name>"}).Done().
-			Accumulate().
-			Local().
-			Help("Rename field from right side: -as <old> <new>").
+		Arg("right-field").Completer(&cf.NoCompleter{Hint: "<right-field>"}).Done().
+		Arg("new-name").Completer(&cf.NoCompleter{Hint: "<new-name>"}).Done().
+		Accumulate().
+		Local().
+		Help("Rename field from right side: -as <old> <new>").
 		Done().
 		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
-			Global().
-			Required().
-			Help("Right-side file (JSONL/JSON). For CSV: ssql join <(ssql from FILE) ...").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
+		Global().
+		Required().
+		Help("Right-side file (JSONL/JSON). For CSV: ssql join <(ssql from FILE) ...").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var rightFile, joinType string
@@ -92,8 +92,10 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateJoinCode(rightFile, joinType, clauses)
 			}
 
-			// Read left-side input from stdin
-			leftRecords := lib.ReadJSONL(os.Stdin)
+			// Read left-side input from stdin (with schema if present)
+			leftSchemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			leftRecords := leftSchemaAndRecords.Records
+			leftSchema := leftSchemaAndRecords.Schema
 
 			// Read right-side file (JSONL only - use process substitution for CSV)
 			rightInput, err := os.Open(rightFile)
@@ -104,7 +106,9 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("opening right file: %w", err)
 			}
 			defer rightInput.Close()
-			rightSeq := lib.ReadJSONL(rightInput)
+			rightSchemaAndRecords := lib.ReadJSONLWithSchema(rightInput)
+			rightSeq := rightSchemaAndRecords.Records
+			rightSchema := rightSchemaAndRecords.Schema
 
 			// For single clause without -as, use traditional join for full merge
 			// For multiple clauses or clauses with -as, use LookupJoin
@@ -133,7 +137,28 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 
 				joined := joinFilter(leftRecords)
-				if err := lib.WriteJSONL(os.Stdout, joined); err != nil {
+
+				// Build output schema by merging left and right schemas
+				var outputSchema *lib.Schema
+				if leftSchema != nil || rightSchema != nil {
+					outputSchema = lib.NewSchema()
+					// Add all fields from left schema
+					if leftSchema != nil {
+						for _, field := range leftSchema.Fields {
+							outputSchema.AddField(field, leftSchema.TypeOf(field))
+						}
+					}
+					// Add fields from right schema (if not already present)
+					if rightSchema != nil {
+						for _, field := range rightSchema.Fields {
+							if !outputSchema.HasField(field) {
+								outputSchema.AddField(field, rightSchema.TypeOf(field))
+							}
+						}
+					}
+				}
+
+				if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, joined); err != nil {
 					return fmt.Errorf("writing output: %w", err)
 				}
 				return nil
@@ -141,7 +166,33 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Multi-clause or selective field lookup
 			joined := ssql.LookupJoin(rightSeq, clauses)(leftRecords)
-			if err := lib.WriteJSONL(os.Stdout, joined); err != nil {
+
+			// Build output schema: left schema + fields from -as renames
+			var outputSchema *lib.Schema
+			if leftSchema != nil || rightSchema != nil {
+				outputSchema = lib.NewSchema()
+				// Add all fields from left schema
+				if leftSchema != nil {
+					for _, field := range leftSchema.Fields {
+						outputSchema.AddField(field, leftSchema.TypeOf(field))
+					}
+				}
+				// Add renamed fields from clauses
+				for _, clause := range clauses {
+					for rightField, newName := range clause.FieldRenames {
+						// Get type from right schema if available
+						typ := "string" // default
+						if rightSchema != nil && rightSchema.HasField(rightField) {
+							typ = rightSchema.TypeOf(rightField)
+						}
+						if !outputSchema.HasField(newName) {
+							outputSchema.AddField(newName, typ)
+						}
+					}
+				}
+			}
+
+			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, joined); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 			return nil

@@ -999,12 +999,12 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 	// Check for expected elements in generated code
 	expectations := []string{
 		"package main",
-		"ssql.ReadCSV",      // For the primary input (left side)
-		"rightSource1",      // Function for right side
-		"ssql.InnerJoin",    // Join function
-		"ssql.OnFieldPair",  // Different field names predicate
+		"ssql.ReadCSV",     // For the primary input (left side)
+		"rightSource1",     // Function for right side
+		"ssql.InnerJoin",   // Join function
+		"ssql.OnFieldPair", // Different field names predicate
 		"func main()",
-		"ssql.ReadJSON",     // For the secondary input (right side)
+		"ssql.ReadJSON", // For the secondary input (right side)
 	}
 
 	for _, expected := range expectations {

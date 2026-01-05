@@ -15,32 +15,30 @@ import (
 func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("where").
 		Description("Filter records based on field conditions").
-
 		Example("ssql from data.csv | ssql where -where age gt 18", "Filter records where age > 18").
 		Example("ssql from sales.csv | ssql where -where-expr 'price * qty > 1000'", "Filter using expression (price * qty > 1000)").
 		Example("ssql from users.csv | ssql where -where dept eq Sales + -where dept eq Marketing", "Sales OR Marketing departments").
 		Example("ssql from users.csv | ssql where -where-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
 		Example("ssql from data.csv | ssql where -where-expr 'has(\"email\") and contains(email, \"@\")'", "Validate email field exists and format").
 		Example("ssql from sales.csv | ssql where -where-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("-where", "-w").
-			Arg("field").FieldsFromFlag("").Done().
-			Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
-			Arg("value").FieldValuesFrom("", "field").Done().
-			Accumulate().
-			Local().
-			Help("Filter condition: -where <field> <operator> <value>").
+		Arg("field").FieldsFromFlag("").Done().
+		Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
+		Arg("value").FieldValuesFrom("", "field").Done().
+		Accumulate().
+		Local().
+		Help("Filter condition: -where <field> <operator> <value>").
 		Done().
 		Flag("-where-expr", "-x").
-			Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
-			Accumulate().
-			Local().
-			Help("Filter using boolean expression: -where-expr <expression>").
+		Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
+		Accumulate().
+		Local().
+		Help("Filter using boolean expression: -where-expr <expression>").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -173,14 +171,15 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return false
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
 			// Apply filter
 			filtered := ssql.Where(filter)(records)
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, filtered); err != nil {
+			// Write output as JSONL (preserving schema if present)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, filtered); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -389,4 +388,3 @@ func dedupeImports(imports []string) []string {
 	}
 	return result
 }
-

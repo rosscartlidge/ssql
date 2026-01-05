@@ -2,6 +2,7 @@ package lib
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -279,4 +280,228 @@ func convertRecordValue(v interface{}) interface{} {
 		// For sequences and other types, try to convert to simple representation
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// SchemaAndRecords holds the result of reading JSONL with an optional schema header.
+type SchemaAndRecords struct {
+	Schema  *Schema
+	Records iter.Seq[ssql.Record]
+}
+
+// ReadJSONLWithSchema reads JSONL from a reader, detecting and extracting a schema header if present.
+// If the first line is a schema header (contains "_schema" key), it is parsed and returned.
+// Otherwise, returns nil schema and all records including the first line.
+func ReadJSONLWithSchema(r io.Reader) *SchemaAndRecords {
+	br := bufio.NewReader(r)
+
+	// Read first line to check for schema
+	firstLine, err := br.ReadBytes('\n')
+	if err != nil && len(firstLine) == 0 {
+		// Empty or error - return empty iterator
+		return &SchemaAndRecords{
+			Schema:  nil,
+			Records: func(yield func(ssql.Record) bool) {},
+		}
+	}
+
+	// Try to parse first line as JSON
+	var firstRecord map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(firstLine), &firstRecord); err != nil {
+		// Invalid JSON - return empty iterator
+		return &SchemaAndRecords{
+			Schema:  nil,
+			Records: func(yield func(ssql.Record) bool) {},
+		}
+	}
+
+	// Check if first line is a schema header
+	if schema, ok := ParseSchemaHeader(firstRecord); ok {
+		// Schema found - read remaining records with type coercion
+		return &SchemaAndRecords{
+			Schema:  schema,
+			Records: readJSONLWithSchema(br, schema),
+		}
+	}
+
+	// First line is data - prepend it back and read all records
+	combined := io.MultiReader(bytes.NewReader(firstLine), br)
+	return &SchemaAndRecords{
+		Schema:  nil,
+		Records: ReadJSONL(combined),
+	}
+}
+
+// readJSONLWithSchema reads JSONL using schema for type coercion.
+func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
+	return func(yield func(ssql.Record) bool) {
+		scanner := bufio.NewScanner(r)
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
+
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+
+			var rec map[string]any
+			if err := json.Unmarshal(line, &rec); err != nil {
+				continue
+			}
+
+			record := ssql.MakeMutableRecord()
+			for k, v := range rec {
+				if schema != nil {
+					if typ := schema.TypeOf(k); typ != "" {
+						record = setValueWithType(record, k, v, SchemaTypeToFieldType(typ))
+					} else {
+						record = setValueFromJSON(record, k, v)
+					}
+				} else {
+					record = setValueFromJSON(record, k, v)
+				}
+			}
+
+			if !yield(record.Freeze()) {
+				return
+			}
+		}
+	}
+}
+
+// WriteJSONLWithSchema writes a schema header (if provided) followed by records.
+// If schema is nil, behaves like WriteJSONL (no schema header).
+func WriteJSONLWithSchema(w io.Writer, schema *Schema, records iter.Seq[ssql.Record]) error {
+	writer := bufio.NewWriter(w)
+	defer writer.Flush()
+
+	// Write schema header if provided
+	if schema != nil {
+		if err := schema.WriteHeader(writer); err != nil {
+			return fmt.Errorf("writing schema header: %w", err)
+		}
+	}
+
+	// Write records
+	for record := range records {
+		data := make(map[string]any)
+		for k, v := range record.All() {
+			data[k] = convertRecordValue(v)
+		}
+
+		jsonBytes, err := json.Marshal(data)
+		if err != nil {
+			return fmt.Errorf("encoding record: %w", err)
+		}
+
+		if _, err := writer.Write(jsonBytes); err != nil {
+			return err
+		}
+		if _, err := writer.Write([]byte("\n")); err != nil {
+			return err
+		}
+	}
+
+	return writer.Flush()
+}
+
+// WriteJSONLWithSchemaOrdered writes records with fields in schema order.
+// If schema is nil, fields are written in iteration order (non-deterministic).
+func WriteJSONLWithSchemaOrdered(w io.Writer, schema *Schema, records iter.Seq[ssql.Record]) error {
+	writer := bufio.NewWriter(w)
+	defer writer.Flush()
+
+	// Write schema header if provided
+	if schema != nil {
+		if err := schema.WriteHeader(writer); err != nil {
+			return fmt.Errorf("writing schema header: %w", err)
+		}
+	}
+
+	// Write records with ordered fields
+	for record := range records {
+		var jsonBytes []byte
+		var err error
+
+		if schema != nil && len(schema.Fields) > 0 {
+			// Build ordered map using schema field order
+			jsonBytes, err = marshalOrderedRecord(record, schema.Fields)
+		} else {
+			// No schema - use default marshaling
+			data := make(map[string]any)
+			for k, v := range record.All() {
+				data[k] = convertRecordValue(v)
+			}
+			jsonBytes, err = json.Marshal(data)
+		}
+
+		if err != nil {
+			return fmt.Errorf("encoding record: %w", err)
+		}
+
+		if _, err := writer.Write(jsonBytes); err != nil {
+			return err
+		}
+		if _, err := writer.Write([]byte("\n")); err != nil {
+			return err
+		}
+	}
+
+	return writer.Flush()
+}
+
+// marshalOrderedRecord marshals a record with fields in the specified order.
+func marshalOrderedRecord(record ssql.Record, fieldOrder []string) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+
+	first := true
+	written := make(map[string]bool)
+
+	// Write fields in order
+	for _, field := range fieldOrder {
+		if v, ok := ssql.Get[any](record, field); ok {
+			if !first {
+				buf.WriteByte(',')
+			}
+			first = false
+			written[field] = true
+
+			// Write key
+			keyBytes, _ := json.Marshal(field)
+			buf.Write(keyBytes)
+			buf.WriteByte(':')
+
+			// Write value
+			valBytes, err := json.Marshal(convertRecordValue(v))
+			if err != nil {
+				return nil, err
+			}
+			buf.Write(valBytes)
+		}
+	}
+
+	// Write any remaining fields not in the order list
+	for k, v := range record.All() {
+		if written[k] {
+			continue
+		}
+		if !first {
+			buf.WriteByte(',')
+		}
+		first = false
+
+		keyBytes, _ := json.Marshal(k)
+		buf.Write(keyBytes)
+		buf.WriteByte(':')
+
+		valBytes, err := json.Marshal(convertRecordValue(v))
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(valBytes)
+	}
+
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
 }

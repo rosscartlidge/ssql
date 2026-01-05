@@ -16,9 +16,9 @@ func buildRootCommand() *cf.Command {
 
 		// Root global flags
 		Flag("-verbose", "-v").
-			Bool().
-			Global().
-			Help("Enable verbose output").
+		Bool().
+		Global().
+		Help("Enable verbose output").
 		Done()
 
 	// Register all subcommands

@@ -16,9 +16,9 @@ func RegisterDistinct(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql distinct", "Remove duplicate records").
 		Example("ssql from users.csv | ssql include email | ssql distinct", "Get unique email addresses").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -32,8 +32,9 @@ func RegisterDistinct(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateDistinctCode()
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
 			// Apply distinct using DistinctBy with JSON serialization for comparison
 			distinct := ssql.DistinctBy(func(r ssql.Record) string {
@@ -43,8 +44,8 @@ func RegisterDistinct(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return json
 			})(records)
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, distinct); err != nil {
+			// Write output as JSONL (preserving schema if present)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, distinct); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

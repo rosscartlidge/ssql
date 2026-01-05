@@ -182,3 +182,147 @@ func WriteJSON(w io.Writer, records iter.Seq[ssql.Record], pretty bool) error {
 
 	return nil
 }
+
+// WriteJSONWithFieldOrder writes Records as JSON with fields in specified order.
+// If pretty is true, writes as a pretty-printed JSON array.
+// If pretty is false, writes as JSONL (one record per line) with fields in order.
+// If fieldOrder is nil or empty, fields are written in default (iteration) order.
+func WriteJSONWithFieldOrder(w io.Writer, records iter.Seq[ssql.Record], pretty bool, fieldOrder []string) error {
+	if !pretty {
+		// Write as JSONL with field order
+		return writeJSONLOrdered(w, records, fieldOrder)
+	}
+
+	// Collect all records into ordered format
+	var recordMaps []map[string]interface{}
+	for record := range records {
+		data := make(map[string]interface{})
+		for k, v := range record.All() {
+			data[k] = convertRecordValue(v)
+		}
+		recordMaps = append(recordMaps, data)
+	}
+
+	if len(recordMaps) == 0 {
+		// Empty array
+		if _, err := w.Write([]byte("[]\n")); err != nil {
+			return fmt.Errorf("writing JSON: %w", err)
+		}
+		return nil
+	}
+
+	// For pretty output with field order, build ordered JSON manually
+	if len(fieldOrder) > 0 {
+		return writePrettyJSONOrdered(w, recordMaps, fieldOrder)
+	}
+
+	// No field order - use standard marshaling
+	jsonBytes, err := json.MarshalIndent(recordMaps, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding records as JSON: %w", err)
+	}
+
+	if _, err := w.Write(jsonBytes); err != nil {
+		return fmt.Errorf("writing JSON: %w", err)
+	}
+
+	if _, err := w.Write([]byte("\n")); err != nil {
+		return fmt.Errorf("writing newline: %w", err)
+	}
+
+	return nil
+}
+
+// writeJSONLOrdered writes JSONL with fields in specified order.
+func writeJSONLOrdered(w io.Writer, records iter.Seq[ssql.Record], fieldOrder []string) error {
+	writer := bufio.NewWriter(w)
+	defer writer.Flush()
+
+	for record := range records {
+		var jsonBytes []byte
+		var err error
+
+		if len(fieldOrder) > 0 {
+			jsonBytes, err = marshalOrderedRecord(record, fieldOrder)
+		} else {
+			data := make(map[string]any)
+			for k, v := range record.All() {
+				data[k] = convertRecordValue(v)
+			}
+			jsonBytes, err = json.Marshal(data)
+		}
+
+		if err != nil {
+			return fmt.Errorf("encoding record: %w", err)
+		}
+
+		if _, err := writer.Write(jsonBytes); err != nil {
+			return err
+		}
+		if _, err := writer.Write([]byte("\n")); err != nil {
+			return err
+		}
+	}
+
+	return writer.Flush()
+}
+
+// writePrettyJSONOrdered writes pretty JSON array with fields in specified order.
+func writePrettyJSONOrdered(w io.Writer, recordMaps []map[string]interface{}, fieldOrder []string) error {
+	writer := bufio.NewWriter(w)
+	defer writer.Flush()
+
+	writer.WriteString("[\n")
+
+	for i, data := range recordMaps {
+		writer.WriteString("  {\n")
+
+		first := true
+		written := make(map[string]bool)
+
+		// Write fields in order
+		for _, field := range fieldOrder {
+			if v, ok := data[field]; ok {
+				if !first {
+					writer.WriteString(",\n")
+				}
+				first = false
+				written[field] = true
+
+				keyBytes, _ := json.Marshal(field)
+				valBytes, _ := json.Marshal(v)
+				writer.WriteString("    ")
+				writer.Write(keyBytes)
+				writer.WriteString(": ")
+				writer.Write(valBytes)
+			}
+		}
+
+		// Write remaining fields not in order
+		for k, v := range data {
+			if written[k] {
+				continue
+			}
+			if !first {
+				writer.WriteString(",\n")
+			}
+			first = false
+
+			keyBytes, _ := json.Marshal(k)
+			valBytes, _ := json.Marshal(v)
+			writer.WriteString("    ")
+			writer.Write(keyBytes)
+			writer.WriteString(": ")
+			writer.Write(valBytes)
+		}
+
+		writer.WriteString("\n  }")
+		if i < len(recordMaps)-1 {
+			writer.WriteString(",")
+		}
+		writer.WriteString("\n")
+	}
+
+	writer.WriteString("]\n")
+	return writer.Flush()
+}

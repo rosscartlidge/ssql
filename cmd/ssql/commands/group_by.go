@@ -22,73 +22,73 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql group-by dept -expr 'sum(salary * bonus)' total_comp", "Custom expression aggregation").
 		Example("ssql from huge.csv | ssql group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total", "Memory-efficient streaming aggregation").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("FIELDS").
-			String().
-			Variadic().
-			FieldsFromFlag("").
-			Global().
-			Help("Fields to group by").
+		String().
+		Variadic().
+		FieldsFromFlag("").
+		Global().
+		Help("Fields to group by").
 		Done().
 		Flag("-count").
-			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-			Accumulate().
-			Global().
-			Help("Count records (result field name)").
+		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+		Accumulate().
+		Global().
+		Help("Count records (result field name)").
 		Done().
 		Flag("-sum").
-			Arg("field").FieldsFromFlag("").Done().
-			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-			Accumulate().
-			Global().
-			Help("Sum field values (field name, result name)").
+		Arg("field").FieldsFromFlag("").Done().
+		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+		Accumulate().
+		Global().
+		Help("Sum field values (field name, result name)").
 		Done().
 		Flag("-avg").
-			Arg("field").FieldsFromFlag("").Done().
-			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-			Accumulate().
-			Global().
-			Help("Average field values (field name, result name)").
+		Arg("field").FieldsFromFlag("").Done().
+		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+		Accumulate().
+		Global().
+		Help("Average field values (field name, result name)").
 		Done().
 		Flag("-min").
-			Arg("field").FieldsFromFlag("").Done().
-			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-			Accumulate().
-			Global().
-			Help("Minimum field value (field name, result name)").
+		Arg("field").FieldsFromFlag("").Done().
+		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+		Accumulate().
+		Global().
+		Help("Minimum field value (field name, result name)").
 		Done().
 		Flag("-max").
-			Arg("field").FieldsFromFlag("").Done().
-			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-			Accumulate().
-			Global().
-			Help("Maximum field value (field name, result name)").
+		Arg("field").FieldsFromFlag("").Done().
+		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+		Accumulate().
+		Global().
+		Help("Maximum field value (field name, result name)").
 		Done().
 		Flag("-collect").
-			Arg("field").FieldsFromFlag("").Done().
-			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-			Accumulate().
-			Global().
-			Help("Collect all field values into array (field name, result name)").
+		Arg("field").FieldsFromFlag("").Done().
+		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+		Accumulate().
+		Global().
+		Help("Collect all field values into array (field name, result name)").
 		Done().
 		Flag("-expr", "-e").
-			Arg("expression").Completer(cf.NoCompleter{Hint: "<expression>"}).Done().
-			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-			Accumulate().
-			Global().
-			Help("Custom aggregation expression: -expr 'sum(salary * bonus)' total").
+		Arg("expression").Completer(cf.NoCompleter{Hint: "<expression>"}).Done().
+		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+		Accumulate().
+		Global().
+		Help("Custom aggregation expression: -expr 'sum(salary * bonus)' total").
 		Done().
 		Flag("-stream-expr").
-			Arg("init").Completer(cf.NoCompleter{Hint: "<init-expr>"}).Done().
-			Arg("every").Completer(cf.NoCompleter{Hint: "<every-expr>"}).Done().
-			Arg("final").Completer(cf.NoCompleter{Hint: "<final-expr>"}).Done().
-			Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-			Accumulate().
-			Global().
-			Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
+		Arg("init").Completer(cf.NoCompleter{Hint: "<init-expr>"}).Done().
+		Arg("every").Completer(cf.NoCompleter{Hint: "<every-expr>"}).Done().
+		Arg("final").Completer(cf.NoCompleter{Hint: "<final-expr>"}).Done().
+		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
+		Accumulate().
+		Global().
+		Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var groupByFields []string
@@ -290,8 +290,10 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
+			inputSchema := schemaAndRecords.Schema
 
 			// Check if we have any aggregations
 			hasAnyAgg := len(aggSpecs) > 0 || len(exprSpecs) > 0 || len(streamExprSpecs) > 0
@@ -325,7 +327,18 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					return mut.Freeze()
 				})(distinct)
 
-				if err := lib.WriteJSONL(os.Stdout, projected); err != nil {
+				// Build output schema with only group-by fields
+				var outputSchema *lib.Schema
+				if inputSchema != nil {
+					outputSchema = lib.NewSchema()
+					for _, field := range groupByFields {
+						if inputSchema.HasField(field) {
+							outputSchema.AddField(field, inputSchema.TypeOf(field))
+						}
+					}
+				}
+
+				if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, projected); err != nil {
 					return fmt.Errorf("writing output: %w", err)
 				}
 				return nil
@@ -349,6 +362,35 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						groupKeys[key] = record
 					}
 					groups[key] = append(groups[key], record)
+				}
+
+				// Build output schema: group-by fields + aggregation result fields
+				var outputSchema *lib.Schema
+				if inputSchema != nil {
+					outputSchema = lib.NewSchema()
+					// Add group-by fields with their input types
+					for _, field := range groupByFields {
+						if inputSchema.HasField(field) {
+							outputSchema.AddField(field, inputSchema.TypeOf(field))
+						}
+					}
+					// Add aggregation result fields
+					for _, spec := range aggSpecs {
+						outputSchema.AddField(spec.result, aggResultType(spec.function))
+					}
+					for _, spec := range exprSpecs {
+						outputSchema.AddField(spec.result, "float") // expr results are typically numeric
+					}
+					for _, spec := range streamExprSpecs {
+						outputSchema.AddField(spec.result, "float") // stream-expr results are typically numeric
+					}
+				}
+
+				// Write schema header if present
+				if outputSchema != nil {
+					if err := outputSchema.WriteHeader(os.Stdout); err != nil {
+						return fmt.Errorf("writing schema header: %w", err)
+					}
 				}
 
 				// Process each group
@@ -419,8 +461,24 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Apply Aggregate
 			aggregated := ssql.Aggregate("_group", aggregations)(grouped)
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, aggregated); err != nil {
+			// Build output schema: group-by fields + aggregation result fields
+			var outputSchema *lib.Schema
+			if inputSchema != nil {
+				outputSchema = lib.NewSchema()
+				// Add group-by fields with their input types
+				for _, field := range groupByFields {
+					if inputSchema.HasField(field) {
+						outputSchema.AddField(field, inputSchema.TypeOf(field))
+					}
+				}
+				// Add aggregation result fields
+				for _, spec := range aggSpecs {
+					outputSchema.AddField(spec.result, aggResultType(spec.function))
+				}
+			}
+
+			// Write output as JSONL (preserving schema if present)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, aggregated); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -679,4 +737,18 @@ func buildMapLiteral(fields []string) string {
 		parts = append(parts, fmt.Sprintf("%q: true", field))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// aggResultType returns the schema type for an aggregation function result
+func aggResultType(function string) string {
+	switch function {
+	case "count":
+		return "int"
+	case "sum", "avg", "min", "max":
+		return "float"
+	case "collect":
+		return "json"
+	default:
+		return "float"
+	}
 }

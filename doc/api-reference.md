@@ -1068,6 +1068,39 @@ result := pipeline(numbers)
 
 > 📁 **Practical Examples**: See file processing patterns in the [Getting Started Guide](codelab-intro.md#working-with-data) and production I/O strategies in the [Advanced Tutorial](advanced-tutorial.md#performance-optimization).
 
+### JSONL Schema Headers (CLI Feature)
+
+The ssql CLI uses JSONL (JSON Lines) format for inter-command communication. When using the `-schema` flag with the `from` command, a schema header is emitted that preserves field order and types through pipelines.
+
+**Schema Header Format:**
+```json
+{"_schema":{"fields":["name","age","department"],"types":{"name":"string","age":"int","department":"string"}}}
+```
+
+The schema header contains:
+- `fields`: Array of field names in order (preserves original CSV column order)
+- `types`: Map of field names to their inferred types (`string`, `int`, `float`, `bool`)
+
+**CLI Usage:**
+```bash
+# Emit schema header to preserve field order
+ssql from data.csv -schema | ssql where -where age gt 25 | ssql to csv output.csv
+```
+
+**How Schema Flows Through Pipelines:**
+1. `from -schema` emits schema header as first line
+2. Transform commands (`where`, `update`, `sort`, etc.) pass records and schema through unchanged
+3. Output commands (`to csv`, `to json`, `to table`) consume schema for field ordering
+4. Final output has consistent field order matching the input
+
+**Note**: The schema header feature is primarily for CLI pipelines. The Go library uses `CSVConfig.Fields` to control CSV field ordering directly:
+```go
+config := ssql.CSVConfig{
+    Fields: []string{"name", "age", "department"},  // Explicit field order
+}
+ssql.WriteCSV(records, "output.csv", config)
+```
+
 ### CSV Operations
 
 **⚠️ Important: CSV Auto-Parsing Behavior**

@@ -29,8 +29,8 @@ type CodeFragment struct {
 	Command string   `json:"command"` // The ssql command that generated this fragment (e.g., "ssql from")
 
 	// For "func" type fragments (subprocess functions from process substitution)
-	FuncName string             `json:"func_name,omitempty"` // Function name (e.g., "rightSource1")
-	FuncBody []*CodeFragment    `json:"func_body,omitempty"` // Fragments that make up the function body
+	FuncName string          `json:"func_name,omitempty"` // Function name (e.g., "rightSource1")
+	FuncBody []*CodeFragment `json:"func_body,omitempty"` // Fragments that make up the function body
 }
 
 // ReadAllCodeFragments reads all code fragments from stdin
@@ -136,7 +136,7 @@ func NewFuncFragment(funcName string, bodyFragments []*CodeFragment, command str
 		Type:     "func",
 		Var:      funcName, // The function name is used as the "variable" it produces
 		Input:    "",
-		Code:     "",       // Code is generated from FuncBody during assembly
+		Code:     "", // Code is generated from FuncBody during assembly
 		Imports:  imports,
 		Command:  command,
 		FuncName: funcName,

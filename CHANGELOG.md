@@ -60,6 +60,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatic dispatch based on `KeyExtractor` interface support
 - Maintains backward compatibility for all `OnFields()` and `OnCondition()` usage
 
+## [v4.2.0] - 2025-01-05
+
+### New Features
+- **Schema Headers (`-schema` flag)**: Preserve field order and types through CLI pipelines
+  - `ssql from data.csv -schema` emits a schema header as first line of JSONL output
+  - Schema contains field names in order and their inferred types (string, int, float, bool)
+  - Output commands (`to csv`, `to json`, `to table`) use schema for consistent field ordering
+  - Solves non-deterministic JSON field order issue in pipelines
+
+### Added
+- Schema header format: `{"_schema":{"fields":["name","age"],"types":{"name":"string","age":"int"}}}`
+- `ReadJSONLWithSchema()` in lib package for reading JSONL with schema headers
+- `WriteJSONLWithSchemaOrdered()` for writing JSONL with schema and field ordering
+- `WriteJSONWithFieldOrder()` for ordered JSON/JSONL output
+- `InferFromRecordOrdered()` for schema inference with field ordering
+
+### Documentation
+- Updated README.md with `-schema` flag example
+- Added "Schema Headers" section to CLI tutorial (doc/cli/codelab-cli.md)
+- Added "JSONL Schema Headers" section to API reference (doc/api-reference.md)
+- Documented all `from` command flags: `-schema`, `-type`, `-default-type`, `-format`
+
+## [v4.1.0] - 2025-01-04
+
+### New Features
+- **Custom Aggregation Expressions**: `group-by` now supports `-expr` flag for custom aggregations
+  - `ssql group-by region -expr 'sum(revenue) / count()' avg_revenue`
+  - Uses expr-lang for powerful aggregation expressions
+  - Access group records via `records` variable in expressions
+
 ## [v1.0.5] - 2024-11-02
 
 ### Changed
@@ -79,6 +109,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MutableRecord builder for efficient record construction
 - Comprehensive test suite
 
-[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.2.0...HEAD
+[v4.2.0]: https://github.com/rosscartlidge/ssql/compare/v4.1.0...v4.2.0
+[v4.1.0]: https://github.com/rosscartlidge/ssql/compare/v1.0.5...v4.1.0
 [v1.0.5]: https://github.com/rosscartlidge/ssql/compare/v1.0.0...v1.0.5
 [v1.0.0]: https://github.com/rosscartlidge/ssql/releases/tag/v1.0.0

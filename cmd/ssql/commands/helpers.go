@@ -30,7 +30,6 @@ func extractNumeric(val any) float64 {
 	}
 }
 
-
 // applyOperator applies a comparison operator for where command
 func applyOperator(fieldValue any, op string, compareValue string) bool {
 	switch op {
@@ -341,11 +340,11 @@ func isExpression(value string) bool {
 
 	// Quick checks for common operators
 	operators := []string{
-		" + ", " - ", " * ", " / ", " % ",  // Math (with spaces to avoid false positives)
-		">", "<", "==", "!=", ">=", "<=",    // Comparison
-		"&&", "||",                          // Logical
-		"?",                                 // Ternary
-		"(",                                 // Function call
+		" + ", " - ", " * ", " / ", " % ", // Math (with spaces to avoid false positives)
+		">", "<", "==", "!=", ">=", "<=", // Comparison
+		"&&", "||", // Logical
+		"?", // Ternary
+		"(", // Function call
 	}
 
 	for _, op := range operators {
@@ -577,4 +576,3 @@ func evaluateExpression(expression string, record ssql.Record) (any, error) {
 	}
 	return eval(record)
 }
-

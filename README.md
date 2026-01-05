@@ -103,6 +103,9 @@ ssql from -- ps -efl | \
   ssql group -by UID -function count -result process_count | \
   ssql to chart -x UID -y process_count -output chart.html
 
+# Preserve field order with schema headers (-schema flag)
+ssql from data.csv -schema | ssql where -where age gt 30 | ssql to csv output.csv
+
 # Debug pipelines with jq (JSONL streaming format)
 ssql from data.csv | jq '.' | head -5  # Inspect data
 ssql from data.csv | ssql where -where age gt 30 | jq -s 'length'  # Count results

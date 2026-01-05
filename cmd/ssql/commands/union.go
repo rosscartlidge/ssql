@@ -19,21 +19,21 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from 2023.csv | ssql union -file <(ssql from csv 2024.csv)", "Combine CSV files via process substitution").
 		Example("ssql from east.csv | ssql union -all -file <(ssql from csv west.csv) -file <(ssql from csv south.csv)", "Combine multiple CSV files (UNION ALL)").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("-file", "-f").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-			Accumulate().
-			Local().
-			Help("Additional JSONL file. For CSV: -file <(ssql from csv FILE)").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
+		Accumulate().
+		Local().
+		Help("Additional JSONL file. For CSV: -file <(ssql from csv FILE)").
 		Done().
 		Flag("-all", "-a").
-			Bool().
-			Global().
-			Help("Keep duplicates (UNION ALL instead of UNION)").
+		Bool().
+		Global().
+		Help("Keep duplicates (UNION ALL instead of UNION)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var unionAll bool
@@ -71,8 +71,9 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateUnionCode(additionalFiles, unionAll)
 			}
 
-			// Read first input from stdin
-			firstRecords := lib.ReadJSONL(os.Stdin)
+			// Read first input from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			firstRecords := schemaAndRecords.Records
 
 			// Chain all iterators together
 			combined := chainRecords(firstRecords, additionalFiles)
@@ -87,8 +88,8 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				result = distinct(combined)
 			}
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, result); err != nil {
+			// Write output as JSONL (preserving schema from first input)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, result); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

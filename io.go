@@ -25,12 +25,12 @@ import (
 
 // CSVConfig configures CSV reading and writing
 type CSVConfig struct {
-	HasHeaders  bool
-	Delimiter   rune
-	Comment     rune
-	Fields      []string          // Optional: fields to write (nil = auto-detect all fields in alphabetical order)
+	HasHeaders    bool
+	Delimiter     rune
+	Comment       rune
+	Fields        []string             // Optional: fields to write (nil = auto-detect all fields in alphabetical order)
 	TypeOverrides map[string]FieldType // Optional: override auto-detection for specific fields
-	DefaultType FieldType         // Optional: default type for all fields (FieldTypeAuto = auto-detect)
+	DefaultType   FieldType            // Optional: default type for all fields (FieldTypeAuto = auto-detect)
 }
 
 // FieldType represents the type to use when parsing CSV fields
@@ -48,11 +48,11 @@ const (
 func DefaultCSVConfig() CSVConfig {
 	return CSVConfig{
 		HasHeaders:    true,
-		Delimiter:    ',',
-		Comment:      '#',
-		Fields:       nil,           // Auto-detect fields
-		TypeOverrides: nil,          // No overrides
-		DefaultType:  FieldTypeAuto, // Auto-detect types
+		Delimiter:     ',',
+		Comment:       '#',
+		Fields:        nil,           // Auto-detect fields
+		TypeOverrides: nil,           // No overrides
+		DefaultType:   FieldTypeAuto, // Auto-detect types
 	}
 }
 

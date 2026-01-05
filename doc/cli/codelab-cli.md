@@ -119,6 +119,42 @@ Output (JSONL):
 ...
 ```
 
+### Schema Headers (-schema flag)
+
+Use the `-schema` flag to emit a schema header that preserves field order and types through pipelines:
+
+```bash
+ssql from employees.csv -schema
+```
+
+Output (JSONL with schema header):
+```json
+{"_schema":{"fields":["name","age","department","salary"],"types":{"name":"string","age":"int","department":"string","salary":"int"}}}
+{"_row_number":0,"name":"Alice","age":30,"department":"Engineering","salary":95000}
+{"_row_number":1,"name":"Bob","age":25,"department":"Marketing","salary":65000}
+...
+```
+
+**Why use `-schema`?**
+- **Field order preservation**: Without schema, JSON field order is non-deterministic. With `-schema`, output commands maintain the original CSV column order.
+- **Type information**: Schema carries type information (string, int, float, bool) through the pipeline.
+- **Better CSV output**: `ssql to csv` uses schema to output columns in the same order as the input.
+
+**Example: Full pipeline with schema**
+```bash
+# Input CSV has columns: name, age, department, salary
+ssql from employees.csv -schema | \
+  ssql where -where age gt 25 | \
+  ssql to csv output.csv
+
+# Output CSV has same column order: name, age, department, salary
+```
+
+**Schema flows through all commands:**
+- Transform commands (`where`, `update`, `sort`, etc.) pass schema through unchanged
+- Output commands (`to csv`, `to json`, `to table`) use schema for field ordering
+- The schema header is automatically consumed and not included in final output
+
 ### Filtering Data
 
 Filter records based on conditions:
@@ -733,6 +769,10 @@ go build -o monitor monitor.go
 
 ### Data Sources
 - `from [file]` - Read data from CSV, JSON, or JSONL file (auto-detects format)
+  - `-schema` / `-s` - Emit schema header with field names and types (preserves field order through pipelines)
+  - `-type field type` - Override type for a field: `-type zipcode string -type age int`
+  - `-default-type type` - Default type for all fields: `auto` (default), `string`, `int`, `float`, `bool`
+  - `-format fmt` - Input format for stdin: `csv` (default), `json`, `jsonl`
 - `from -- [command] [args...]` - Execute command and parse output
 
 ### Transformations

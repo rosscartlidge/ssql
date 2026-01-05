@@ -17,16 +17,16 @@ func RegisterExclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql exclude id created_at updated_at", "Remove metadata fields").
 		Example("ssql from api.json | ssql exclude password token secret_key", "Remove sensitive fields").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
 		Done().
 		Flag("FIELDS").
-			String().
-			Variadic().
-			FieldsFromFlag("").
-			Global().
-			Help("Fields to exclude").
+		String().
+		Variadic().
+		FieldsFromFlag("").
+		Global().
+		Help("Fields to exclude").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -60,8 +60,9 @@ func RegisterExclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateExcludeCode(fields)
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
 
 			// Build exclusion function - delete excluded fields
 			excluder := func(r ssql.Record) ssql.Record {
@@ -75,8 +76,17 @@ func RegisterExclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Apply exclusion
 			excludedRecords := ssql.Select(excluder)(records)
 
-			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, excludedRecords); err != nil {
+			// Update schema to remove excluded fields
+			var outputSchema *lib.Schema
+			if schemaAndRecords.Schema != nil {
+				outputSchema = schemaAndRecords.Schema.Clone()
+				for _, field := range fields {
+					outputSchema.RemoveField(field)
+				}
+			}
+
+			// Write output as JSONL (preserving schema if present)
+			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, excludedRecords); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

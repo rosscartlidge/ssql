@@ -1,9 +1,11 @@
 package commands
 
 import (
+	"encoding/csv"
 	"fmt"
 	"iter"
 	"os"
+	"sort"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -16,46 +18,53 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("from").
 		Description("Read data from file or command output (auto-detects CSV, JSON, JSONL)").
 		Example("ssql from data.csv | ssql where -where age gt 18", "Read CSV file").
+		Example("ssql from data.csv -schema | ssql where ...", "Emit schema header with field names and types").
 		Example("ssql from data.csv -type zipcode string -type phone string", "Force fields to string (preserve leading zeros)").
 		Example("ssql from data.csv -default-type string", "Treat all fields as strings (no auto-detection)").
 		Example("ssql from -- ps aux | ssql where -where USER eq root", "Execute command and parse output").
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
+		Flag("-schema", "-s").
+		Bool().
+		Global().
+		Help("Emit schema header line with field names and types").
 		Done().
 		Flag("-format", "-f").
-			String().
-			Global().
-			Default("").
-			Completer(&cf.StaticCompleter{Options: []string{"csv", "json", "jsonl"}}).
-			Help("Input format for stdin: csv (default), json, jsonl").
+		String().
+		Global().
+		Default("").
+		Completer(&cf.StaticCompleter{Options: []string{"csv", "json", "jsonl"}}).
+		Help("Input format for stdin: csv (default), json, jsonl").
 		Done().
 		Flag("-type", "-t").
-			Arg("field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
-			Arg("type").Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "auto"}}).Done().
-			Accumulate().
-			Global().
-			Help("Override type for field: -type zipcode string -type age int").
+		Arg("field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
+		Arg("type").Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "auto"}}).Done().
+		Accumulate().
+		Global().
+		Help("Override type for field: -type zipcode string -type age int").
 		Done().
 		Flag("-default-type", "-dt").
-			String().
-			Global().
-			Default("auto").
-			Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
-			Help("Default type for all fields: auto (default), string, int, float, bool").
+		String().
+		Global().
+		Default("auto").
+		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
+		Help("Default type for all fields: auto (default), string, int, float, bool").
 		Done().
 		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.{csv,json,jsonl}"}).
-			Global().
-			Default("").
-			Help("Input file (CSV, JSON, or JSONL). Reads from stdin if not specified.").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.{csv,json,jsonl}"}).
+		Global().
+		Default("").
+		Help("Input file (CSV, JSON, or JSONL). Reads from stdin if not specified.").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var format string
 			var generate bool
+			var emitSchema bool
 			var defaultType string
 			typeOverrides := make(map[string]string)
 
@@ -69,6 +78,10 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
+			}
+
+			if schemaVal, ok := ctx.GlobalFlags["-schema"]; ok {
+				emitSchema = schemaVal.(bool)
 			}
 
 			if dtVal, ok := ctx.GlobalFlags["-default-type"]; ok {
@@ -105,7 +118,10 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					return fmt.Errorf("executing command: %w", err)
 				}
 
-				// Write as JSONL to stdout
+				// Write as JSONL to stdout (with schema if requested)
+				if emitSchema {
+					return writeWithInferredSchema(records)
+				}
 				if err := lib.WriteJSONL(os.Stdout, records); err != nil {
 					return fmt.Errorf("writing JSONL: %w", err)
 				}
@@ -126,6 +142,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Detect format and read
 			var originalRecords iter.Seq[ssql.Record]
+			var csvHeaders []string // Track CSV headers for schema field order
 
 			if inputFile == "" {
 				// Reading from stdin - use -format flag or default to CSV
@@ -140,6 +157,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				lower := strings.ToLower(inputFile)
 				switch {
 				case strings.HasSuffix(lower, ".csv"):
+					// Read CSV headers for schema field ordering
+					csvHeaders, _ = readCSVHeaders(inputFile)
 					originalRecords, err = ssql.ReadCSV(inputFile, csvConfig)
 					if err != nil {
 						return fmt.Errorf("reading file: %w", err)
@@ -186,7 +205,10 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
-			// Write as JSONL to stdout
+			// Write as JSONL to stdout (with schema if requested)
+			if emitSchema {
+				return writeWithInferredSchema(records, csvHeaders)
+			}
 			if err := lib.WriteJSONL(os.Stdout, records); err != nil {
 				return fmt.Errorf("writing JSONL: %w", err)
 			}
@@ -336,6 +358,74 @@ func capitalizeFieldType(typeName string) string {
 	default:
 		return "Auto"
 	}
+}
+
+// readCSVHeaders reads just the header row from a CSV file
+func readCSVHeaders(filename string) ([]string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	headers, err := reader.Read()
+	if err != nil {
+		return nil, err
+	}
+	return headers, nil
+}
+
+// writeWithInferredSchema infers schema from first record and writes with schema header
+// If fieldOrder is provided, uses that order; otherwise uses sorted field names for determinism
+// Only buffers first record (O(1) memory), then streams remaining records.
+func writeWithInferredSchema(records iter.Seq[ssql.Record], fieldOrder ...[]string) error {
+	// Use pull-style iteration to peek at first record
+	next, stop := iter.Pull(records)
+	defer stop()
+
+	// Get first record to infer schema
+	firstRecord, ok := next()
+	if !ok {
+		// No records - nothing to write
+		return nil
+	}
+
+	// Determine field order
+	var order []string
+	if len(fieldOrder) > 0 && len(fieldOrder[0]) > 0 {
+		order = fieldOrder[0]
+	} else {
+		// Use sorted field names for deterministic output
+		for k := range firstRecord.All() {
+			order = append(order, k)
+		}
+		sort.Strings(order)
+	}
+
+	// Infer schema from first record
+	schema := lib.InferFromRecordOrdered(firstRecord, order)
+
+	// Create streaming iterator: first record + remaining records
+	allRecords := func(yield func(ssql.Record) bool) {
+		// Yield first record
+		if !yield(firstRecord) {
+			return
+		}
+		// Stream remaining records
+		for {
+			r, ok := next()
+			if !ok {
+				return
+			}
+			if !yield(r) {
+				return
+			}
+		}
+	}
+
+	// Write with schema header and ordered fields (streams without buffering)
+	return lib.WriteJSONLWithSchemaOrdered(os.Stdout, schema, allRecords)
 }
 
 // generateFromExecCode generates Go code for from command with command execution
