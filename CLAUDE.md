@@ -263,6 +263,7 @@ ssql version  # Should show: ssql vX.Y.Z
 - **No replace directive**: `go.mod` must NOT contain `replace` line (breaks `go install`)
 - **Annotated tags only**: Use `git tag -a vX.Y.Z -m "..."` not `git tag vX.Y.Z`
 - **Test install**: Always verify with `GOPROXY=direct go install` before announcing release
+- **Major version bumps**: Only bump major version (e.g., v4 → v5) when explicitly requested by the user. Major bumps require updating the module path (`/v4` → `/v5`) throughout the codebase. Use minor/patch versions for most releases.
 
 **How It Works:**
 - Version stored in `cmd/ssql/version/version.txt` (plain text, without "v")
@@ -1386,6 +1387,53 @@ go run program.go
 - New commands include -generate support
 - Tests cover generation mode
 - Changes to helpers.go don't break fragment system
+
+### Code Generation Requirements (CRITICAL)
+
+**⚠️ NEVER release a ssql command that doesn't support code generation!**
+
+Every data-processing command MUST support code generation (`-generate` flag / `SSQLGO=1`). This is non-negotiable because:
+- Users rely on the CLI-to-compiled-Go workflow for production systems
+- A single command without generation support breaks entire pipelines
+- The feature is invisible until users try to generate code, then it fails
+
+**Before releasing any new command:**
+1. ✅ Implement `-generate` flag support
+2. ✅ Add generation tests to `cmd/ssql/generation_test.go`
+3. ✅ Test full pipeline: `SSQLGO=1 ssql from ... | ssql new-command ... | ssql generate-go`
+4. ✅ Verify generated code compiles and runs correctly
+
+**Exception:** Commands that don't process data (like `version`, `functions`, `generate-go` itself) don't need generation support.
+
+### Error Handling Requirements (CRITICAL)
+
+**⚠️ All errors MUST cause pipeline failure with clear error messages!**
+
+This applies to BOTH execution mode AND code generation mode:
+
+**Execution Mode:**
+- Errors must be returned, not silently ignored
+- Error messages must be clear and actionable
+- Pipeline must stop on first error (fail-fast)
+
+**Code Generation Mode:**
+- Unsupported features must emit error fragments (`"type":"error"`)
+- `generate-go` must detect error fragments and fail (no partial code output)
+- Error messages must explain what's unsupported and suggest alternatives
+
+**Example - Proper error fragment emission:**
+```go
+if unsupportedFeature {
+    frag := lib.NewErrorFragment("feature X is not yet supported with -generate", getCommandString())
+    lib.WriteCodeFragment(frag)
+    return fmt.Errorf("feature X is not yet supported with -generate")
+}
+```
+
+**Tests for error handling are in `cmd/ssql/generation_test.go`:**
+- `TestGenerationErrorHandling` - errors prevent partial code
+- `TestErrorFragmentPropagation` - errors propagate through pipeline
+- `TestErrorFragmentFormat` - error fragments have correct format
 
 - ai_generation
 - doc_improvement
