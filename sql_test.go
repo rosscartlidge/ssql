@@ -651,6 +651,123 @@ func TestLastEmpty(t *testing.T) {
 }
 
 // ============================================================================
+// EXPRESSION AGGREGATION TESTS
+// ============================================================================
+
+func TestExprAggSum(t *testing.T) {
+	records := []Record{
+		{fields: map[string]any{"value": int64(10)}},
+		{fields: map[string]any{"value": int64(20)}},
+		{fields: map[string]any{"value": int64(30)}},
+	}
+
+	exprFn := ExprAgg("sum(value)")
+	result := exprFn(records).getValue()
+
+	if result != float64(60) {
+		t.Errorf("ExprAgg sum should return 60, got %v", result)
+	}
+}
+
+func TestExprAggCount(t *testing.T) {
+	records := []Record{
+		{fields: map[string]any{"name": "Alice"}},
+		{fields: map[string]any{"name": "Bob"}},
+		{fields: map[string]any{"name": "Charlie"}},
+	}
+
+	exprFn := ExprAgg("count()")
+	result := exprFn(records).getValue()
+
+	if result != float64(3) {
+		t.Errorf("ExprAgg count should return 3, got %v", result)
+	}
+}
+
+func TestExprAggAvg(t *testing.T) {
+	records := []Record{
+		{fields: map[string]any{"value": int64(10)}},
+		{fields: map[string]any{"value": int64(20)}},
+		{fields: map[string]any{"value": int64(30)}},
+	}
+
+	exprFn := ExprAgg("avg(value)")
+	result := exprFn(records).getValue()
+
+	if result != float64(20) {
+		t.Errorf("ExprAgg avg should return 20, got %v", result)
+	}
+}
+
+func TestExprAggComplexExpression(t *testing.T) {
+	records := []Record{
+		{fields: map[string]any{"qty": int64(2), "price": int64(10)}},
+		{fields: map[string]any{"qty": int64(3), "price": int64(20)}},
+		{fields: map[string]any{"qty": int64(4), "price": int64(30)}},
+	}
+
+	// sum(qty * price) = 2*10 + 3*20 + 4*30 = 20 + 60 + 120 = 200
+	exprFn := ExprAgg("sum(qty * price)")
+	result := exprFn(records).getValue()
+
+	if result != float64(200) {
+		t.Errorf("ExprAgg sum(qty * price) should return 200, got %v", result)
+	}
+}
+
+func TestExprAggWithAggregate(t *testing.T) {
+	// Test ExprAgg works with Aggregate function
+	input := slices.Values([]Record{
+		{fields: map[string]any{"dept": "Eng", "salary": int64(100000), "bonus": int64(10000)}},
+		{fields: map[string]any{"dept": "Eng", "salary": int64(110000), "bonus": int64(12000)}},
+		{fields: map[string]any{"dept": "Sales", "salary": int64(90000), "bonus": int64(8000)}},
+	})
+
+	grouped := GroupByFields("employees", "dept")(input)
+
+	// Use ExprAgg for complex expression aggregation
+	aggregated := Aggregate("employees", map[string]AggregateFunc{
+		"count":      Count(),
+		"total_comp": ExprAgg("sum(salary + bonus)"),
+	})(grouped)
+
+	result := slices.Collect(aggregated)
+
+	if len(result) != 2 {
+		t.Fatalf("Should return 2 groups, got %d", len(result))
+	}
+
+	// Find Engineering department
+	for _, r := range result {
+		if r.fields["dept"] == "Eng" {
+			if r.fields["count"] != int64(2) {
+				t.Errorf("Eng count should be 2, got %v", r.fields["count"])
+			}
+			// total_comp = (100000+10000) + (110000+12000) = 110000 + 122000 = 232000
+			if r.fields["total_comp"] != float64(232000) {
+				t.Errorf("Eng total_comp should be 232000, got %v", r.fields["total_comp"])
+			}
+		}
+	}
+}
+
+func TestExprAggMean(t *testing.T) {
+	// Test that mean() is an alias for avg()
+	records := []Record{
+		{fields: map[string]any{"value": int64(10)}},
+		{fields: map[string]any{"value": int64(20)}},
+		{fields: map[string]any{"value": int64(30)}},
+	}
+
+	exprFn := ExprAgg("mean(value)")
+	result := exprFn(records).getValue()
+
+	if result != float64(20) {
+		t.Errorf("ExprAgg mean should return 20, got %v", result)
+	}
+}
+
+// ============================================================================
 // COMPLEX SQL-STYLE PIPELINE TESTS
 // ============================================================================
 

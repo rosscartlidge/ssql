@@ -1388,6 +1388,45 @@ go run program.go
 - Tests cover generation mode
 - Changes to helpers.go don't break fragment system
 
+### CLI Commands Must Use ssql Package Primitives (CRITICAL)
+
+**⚠️ CLI commands must ALWAYS be implemented using ssql package functions, not raw Go code!**
+
+The ssql CLI exists to make the ssql package accessible from the command line. Every CLI command should:
+1. Map directly to one or more ssql package functions
+2. Generate code that calls those same functions
+3. Use minimal glue code between commands
+
+**If a CLI feature requires logic that doesn't exist in the ssql package:**
+- ✅ CORRECT: Add the functionality to the ssql package first, then use it in CLI
+- ❌ WRONG: Generate raw Go code (loops, maps, custom logic) in the CLI
+
+**Why this matters:**
+- Users of the ssql package get the same functionality as CLI users
+- Generated code is readable and educational
+- Code can be composed with Chain() and other ssql primitives
+- Maintenance is centralized in the ssql package
+
+**Example - group-by with expressions:**
+```go
+// ❌ WRONG - Generated raw loops and maps
+groups := make(map[string][]ssql.Record)
+for record := range records {
+    // ... manual grouping logic
+}
+
+// ✅ CORRECT - Use ssql package functions
+grouped := ssql.GroupByFields("_group", "dept")(records)
+aggregated := ssql.Aggregate("_group", map[string]ssql.AggregateFunc{
+    "total": ssql.ExprAgg("sum(salary * bonus)"),  // Add ExprAgg to ssql package
+})(grouped)
+```
+
+**When adding new CLI features:**
+1. First: Design and implement the ssql package function
+2. Then: Update CLI to use that function
+3. Finally: Update code generation to emit calls to that function
+
 ### Code Generation Requirements (CRITICAL)
 
 **⚠️ NEVER release a ssql command that doesn't support code generation!**

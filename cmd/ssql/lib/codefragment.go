@@ -372,58 +372,22 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		mainPipelineRoot = "records"
 	}
 
-	// Build code from stmt fragments
-	// Handle standalone fragments (multi-line code) differently from chainable fragments
+	// Build code from stmt fragments using Chain for multiple filters
 	if len(stmtFragments) > 0 {
-		// Group consecutive chainable fragments together
-		currentInput := mainPipelineRoot
-		var chainableGroup []*CodeFragment
+		outputVar := stmtFragments[len(stmtFragments)-1].Var
 
-		flushChainableGroup := func() {
-			if len(chainableGroup) == 0 {
-				return
+		if len(stmtFragments) > 1 {
+			code += "\t" + outputVar + " := ssql.Chain(\n"
+			for _, frag := range stmtFragments {
+				filterCode := extractFilter(frag.Code)
+				code += "\t\t" + filterCode + ",\n"
 			}
-
-			outputVar := chainableGroup[len(chainableGroup)-1].Var
-
-			if len(chainableGroup) > 1 {
-				code += "\t" + outputVar + " := ssql.Chain(\n"
-				for _, frag := range chainableGroup {
-					filterCode := extractFilter(frag.Code)
-					code += "\t\t" + filterCode + ",\n"
-				}
-				code += "\t)(" + currentInput + ")\n"
-			} else {
-				// Single chainable fragment - apply directly
-				filterCode := extractFilter(chainableGroup[0].Code)
-				code += "\t" + outputVar + " := " + filterCode + "(" + currentInput + ")\n"
-			}
-
-			currentInput = outputVar
-			chainableGroup = nil
+			code += "\t)(" + mainPipelineRoot + ")\n"
+		} else {
+			// Single fragment - apply directly
+			filterCode := extractFilter(stmtFragments[0].Code)
+			code += "\t" + outputVar + " := " + filterCode + "(" + mainPipelineRoot + ")\n"
 		}
-
-		for _, frag := range stmtFragments {
-			if isStandaloneFragment(frag.Code) {
-				// Flush any pending chainable fragments first
-				flushChainableGroup()
-
-				// Output standalone fragment as-is (replacing input variable if needed)
-				standaloneCode := frag.Code
-				// Replace the input variable reference in standalone code
-				if currentInput != frag.Input && frag.Input != "" {
-					standaloneCode = replaceInputVar(standaloneCode, frag.Input, currentInput)
-				}
-				code += "\t" + fixErrorHandling(standaloneCode) + "\n"
-				currentInput = frag.Var
-			} else {
-				// Accumulate chainable fragments
-				chainableGroup = append(chainableGroup, frag)
-			}
-		}
-
-		// Flush any remaining chainable fragments
-		flushChainableGroup()
 	}
 
 	// Add final fragments (e.g., to table, to csv)
@@ -582,42 +546,6 @@ func extractPreCompileVars(fragments []*CodeFragment) []string {
 	}
 
 	return vars
-}
-
-// isStandaloneFragment checks if a fragment contains multi-line code that can't be used in Chain()
-// Standalone fragments have multiple statements, loops, or complex logic
-func isStandaloneFragment(code string) bool {
-	// Remove pre-compile var lines first
-	var filteredLines []string
-	lines := splitLines(code)
-	for _, line := range lines {
-		trimmed := trimSpace(line)
-		// Skip var declarations with runtime.MustCompile*
-		if startsWith(trimmed, "var ") && findString(trimmed, "runtime.MustCompile") != -1 {
-			continue
-		}
-		// Skip empty lines and comments
-		if trimmed == "" || startsWith(trimmed, "//") {
-			continue
-		}
-		filteredLines = append(filteredLines, trimmed)
-	}
-
-	// If more than one non-empty line, it's standalone
-	if len(filteredLines) > 1 {
-		return true
-	}
-
-	// Also check for patterns that indicate complex code
-	if len(filteredLines) == 1 {
-		line := filteredLines[0]
-		// Check for make(), for loops, etc.
-		if startsWith(line, "groups :=") || startsWith(line, "for ") || findString(line, "make(map") != -1 {
-			return true
-		}
-	}
-
-	return false
 }
 
 // extractFilter extracts the filter function from a statement like "var := filter(input)"
@@ -801,38 +729,6 @@ func trimSpace(s string) string {
 	}
 
 	return s[start:end]
-}
-
-// replaceInputVar replaces occurrences of oldVar with newVar in code
-// Used to chain standalone fragments with different input variable names
-func replaceInputVar(code, oldVar, newVar string) string {
-	if oldVar == "" || newVar == "" || oldVar == newVar {
-		return code
-	}
-
-	result := ""
-	i := 0
-	for i < len(code) {
-		// Look for oldVar as a word boundary
-		if i+len(oldVar) <= len(code) && code[i:i+len(oldVar)] == oldVar {
-			// Check if it's a word boundary (not part of a larger identifier)
-			prevOK := i == 0 || !isIdentChar(code[i-1])
-			nextOK := i+len(oldVar) == len(code) || !isIdentChar(code[i+len(oldVar)])
-			if prevOK && nextOK {
-				result += newVar
-				i += len(oldVar)
-				continue
-			}
-		}
-		result += string(code[i])
-		i++
-	}
-	return result
-}
-
-// isIdentChar checks if a character is valid in a Go identifier
-func isIdentChar(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
 }
 
 // startsWith checks if string starts with prefix
