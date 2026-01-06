@@ -21,16 +21,35 @@ func NextFuncName() string {
 
 // CodeFragment represents a piece of generated Go code in a pipeline
 type CodeFragment struct {
-	Type    string   `json:"type"`    // "stmt" (statement), "final" (no output var), "init" (first in chain), "func" (subprocess function)
+	Type    string   `json:"type"`    // "stmt" (statement), "final" (no output var), "init" (first in chain), "func" (subprocess function), "error" (generation failed)
 	Var     string   `json:"var"`     // Output variable name (e.g., "filtered0")
 	Input   string   `json:"input"`   // Input variable name from previous command
 	Code    string   `json:"code"`    // Go code for this operation
 	Imports []string `json:"imports"` // Required imports (e.g., ["strings", "log"])
 	Command string   `json:"command"` // The ssql command that generated this fragment (e.g., "ssql from")
+	Error   string   `json:"error,omitempty"` // Error message for "error" type fragments
 
 	// For "func" type fragments (subprocess functions from process substitution)
 	FuncName string          `json:"func_name,omitempty"` // Function name (e.g., "rightSource1")
 	FuncBody []*CodeFragment `json:"func_body,omitempty"` // Fragments that make up the function body
+}
+
+// NewErrorFragment creates an error fragment that signals code generation failure
+func NewErrorFragment(command string, err error) *CodeFragment {
+	return &CodeFragment{
+		Type:    "error",
+		Command: command,
+		Error:   err.Error(),
+	}
+}
+
+// WriteErrorAndExit writes an error fragment and returns the error
+// This should be used when code generation fails - it ensures the error
+// propagates through the pipeline so generate-go can detect it
+func WriteErrorAndExit(command string, err error) error {
+	frag := NewErrorFragment(command, err)
+	WriteCodeFragment(frag)
+	return err
 }
 
 // ReadAllCodeFragments reads all code fragments from stdin
@@ -41,6 +60,7 @@ func ReadAllCodeFragments() ([]*CodeFragment, error) {
 
 // ReadCodeFragmentsFromReader reads code fragments from any io.Reader
 // Returns empty slice if reader is empty (EOF immediately)
+// Returns error if an error fragment is encountered (pipeline generation failed)
 func ReadCodeFragmentsFromReader(r io.Reader) ([]*CodeFragment, error) {
 	var fragments []*CodeFragment
 	decoder := json.NewDecoder(r)
@@ -53,6 +73,12 @@ func ReadCodeFragmentsFromReader(r io.Reader) ([]*CodeFragment, error) {
 			}
 			return nil, fmt.Errorf("decoding fragment: %w", err)
 		}
+
+		// Check for error fragment - pipeline generation failed
+		if frag.Type == "error" {
+			return nil, fmt.Errorf("code generation failed in %s: %s", frag.Command, frag.Error)
+		}
+
 		fragments = append(fragments, &frag)
 	}
 
@@ -99,6 +125,22 @@ func NewStmtFragment(varName, inputVar, code string, imports []string, command s
 		Input:   inputVar,
 		Code:    code,
 		Imports: imports,
+		Command: command,
+	}
+}
+
+// NewStmtFragmentWithRuntimeImport creates a statement fragment that requires the runtime package
+// The runtime package provides EvalBatchAgg for expression evaluation in generated code
+func NewStmtFragmentWithRuntimeImport(varName, inputVar, code string, imports []string, command string) *CodeFragment {
+	// Add runtime import to the imports list
+	runtimeImport := "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
+	allImports := append(imports, runtimeImport)
+	return &CodeFragment{
+		Type:    "stmt",
+		Var:     varName,
+		Input:   inputVar,
+		Code:    code,
+		Imports: allImports,
 		Command: command,
 	}
 }
@@ -154,6 +196,7 @@ func (f *CodeFragment) GetInputVar() string {
 
 // AssembleCodeFragments reads all code fragments from stdin and assembles them into a complete Go program
 // using ssql.Chain() for better readability. Handles func fragments for process substitution.
+// Returns error if any error fragments are encountered (code generation failed in pipeline).
 func AssembleCodeFragments(input io.Reader) (string, error) {
 	// Read all fragments from stdin
 	var fragments []*CodeFragment
@@ -167,6 +210,12 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 			}
 			return "", fmt.Errorf("decoding fragment: %w", err)
 		}
+
+		// Check for error fragment - pipeline generation failed
+		if frag.Type == "error" {
+			return "", fmt.Errorf("code generation failed in %s: %s", frag.Command, frag.Error)
+		}
+
 		fragments = append(fragments, &frag)
 	}
 

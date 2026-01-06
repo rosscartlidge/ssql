@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Breaking Changes
+- **Mandatory Schema Headers**: `ssql from` now ALWAYS emits schema headers
+  - Removed `-schema` flag - schema is now automatic
+  - Enables strongly-typed pipelines and future GPU acceleration optimizations
+  - No migration needed - downstream commands already handle schema headers
+  - **Reason**: Schema information is essential for type-aware operations
+
 - **JOIN API Change**: `JoinPredicate` changed from function type to interface
   - **Migration Required**: Custom join predicates must now use `OnCondition()` wrapper
   - **No Impact**: Code using `OnFields()` or `OnCondition()` remains unchanged
@@ -44,12 +50,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic optimization - no code changes needed for existing `OnFields()` usage
 
 ### New Features
+- **`-expr` Code Generation**: `group-by -expr` now supports code generation
+  - `SSQLGO=1 ssql group-by dept -expr 'sum(salary * bonus)' total` generates compilable Go code
+  - Uses `runtime.EvalBatchAgg()` for expression evaluation in generated code
+  - Combined with built-in aggregations: `-count num -expr 'sum(salary)' total`
+
 - Added `KeyExtractor` interface for custom optimized join predicates
   - Advanced users can implement both `JoinPredicate` and `KeyExtractor`
   - Enables custom hash-based join optimizations beyond field equality
   - See documentation for examples
 
+### Fixed
+- **Code Generation Error Handling**: Errors now prevent partial code output
+  - Added error fragment type to code generation pipeline
+  - `generate-go` detects errors and fails cleanly instead of outputting broken code
+  - Unsupported features now fail fast with clear error messages
+
 ### Added
+- **Runtime Package**: `cmd/ssql/lib/runtime` for generated code helpers
+  - `EvalBatchAgg()` for evaluating aggregation expressions on record groups
+  - `ApplyValue()` for type-safe value assignment in generated code
+  - Enables `-expr` code generation without duplicating complex logic
+
 - Comprehensive benchmark suite (`join_benchmark_test.go`)
   - Compares hash vs nested loop performance
   - Tests various dataset sizes (100, 1K, 10K records)

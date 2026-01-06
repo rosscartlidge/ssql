@@ -1014,6 +1014,123 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 	}
 }
 
+// TestGenerationErrorHandling tests that code generation errors prevent partial code output
+func TestGenerationErrorHandling(t *testing.T) {
+	// Build the binary first
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	tests := []struct {
+		name            string
+		cmdLine         string
+		expectError     bool
+		errorSubstring  string  // Expected substring in error message
+		notInOutput     string  // Should NOT appear in output (no partial code)
+	}{
+		{
+			name:            "stream-expr not supported in generation",
+			cmdLine:         `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total | /tmp/ssql_test generate-go`,
+			expectError:     true,
+			errorSubstring:  "not yet supported",
+			notInOutput:     "package main", // No partial Go code should be output
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", tt.cmdLine)
+			output, err := cmd.CombinedOutput()
+			outputStr := string(output)
+
+			if tt.expectError {
+				// Should have an error
+				if err == nil {
+					t.Errorf("Expected error but got none. Output: %s", outputStr)
+				}
+
+				// Error message should contain expected substring
+				if !strings.Contains(outputStr, tt.errorSubstring) {
+					t.Errorf("Expected error message to contain %q, got: %s", tt.errorSubstring, outputStr)
+				}
+
+				// Should NOT contain partial code
+				if strings.Contains(outputStr, tt.notInOutput) {
+					t.Errorf("Output should NOT contain %q when there's an error (no partial code), got: %s", tt.notInOutput, outputStr)
+				}
+			}
+		})
+	}
+}
+
+// TestErrorFragmentPropagation tests that error fragments propagate through pipeline
+func TestErrorFragmentPropagation(t *testing.T) {
+	// Build the binary first
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	// Create a test CSV
+	csvContent := "name,age,dept\nAlice,30,Engineering\nBob,25,Sales\n"
+	tmpFile := "/tmp/test_error_prop.csv"
+	if err := os.WriteFile(tmpFile, []byte(csvContent), 0644); err != nil {
+		t.Fatalf("Failed to create test CSV: %v", err)
+	}
+	defer os.Remove(tmpFile)
+
+	// Test that an error in middle of pipeline prevents generate-go from producing code
+	// The where command would succeed, but if an error fragment was introduced,
+	// generate-go should fail
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total | /tmp/ssql_test where -where age gt 25 | /tmp/ssql_test generate-go 2>&1`
+	cmd := exec.Command("bash", "-c", pipeline)
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	// Should fail due to unsupported -stream-expr
+	if err == nil {
+		t.Errorf("Expected error from unsupported feature, got none. Output: %s", outputStr)
+	}
+
+	// Should NOT produce partial code
+	if strings.Contains(outputStr, "package main") {
+		t.Errorf("Should not produce partial Go code when there's an error. Output: %s", outputStr)
+	}
+
+	// Should contain error message
+	if !strings.Contains(outputStr, "not yet supported") {
+		t.Errorf("Expected 'not yet supported' error message, got: %s", outputStr)
+	}
+}
+
+// TestErrorFragmentFormat tests that error fragments have correct JSON format
+func TestErrorFragmentFormat(t *testing.T) {
+	// Build the binary first
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	// Test that error fragments are valid JSON with expected fields
+	cmdLine := `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total 2>&1`
+	cmd := exec.Command("bash", "-c", cmdLine)
+	output, _ := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	// Should contain error fragment markers
+	if !strings.Contains(outputStr, `"type":"error"`) {
+		t.Errorf("Expected error fragment with type 'error', got: %s", outputStr)
+	}
+
+	if !strings.Contains(outputStr, `"error":`) {
+		t.Errorf("Expected error fragment with 'error' field, got: %s", outputStr)
+	}
+}
+
 // TestJoinWithProcessSubstitutionGeneration tests that join correctly handles
 // nested fragments from process substitution in code generation mode
 func TestJoinWithProcessSubstitutionGeneration(t *testing.T) {

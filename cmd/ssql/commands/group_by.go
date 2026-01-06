@@ -10,6 +10,19 @@ import (
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
+// aggSpec represents a built-in aggregation specification
+type aggSpec struct {
+	function string
+	field    string
+	result   string
+}
+
+// exprSpec represents a custom expression aggregation specification
+type exprSpec struct {
+	expression string
+	result     string
+}
+
 // RegisterGroupBy registers the group-by subcommand
 func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("group-by").
@@ -124,17 +137,8 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Parse aggregation specifications from new flag format
-			type aggSpec struct {
-				function string
-				field    string
-				result   string
-			}
+			// Types aggSpec and exprSpec are defined at package level
 
-			// Expression aggregation specs
-			type exprSpec struct {
-				expression string
-				result     string
-			}
 			type streamExprSpec struct {
 				initExpr  string
 				everyExpr string
@@ -517,11 +521,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	}
 
 	// Parse aggregation specifications from new flag format
-	type aggSpec struct {
-		function string
-		field    string
-		result   string
-	}
+	// Type aggSpec is defined at package level
 
 	var aggSpecs []aggSpec
 
@@ -630,20 +630,36 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		}
 	}
 
-	// Check for custom expression flags (not supported in code generation yet)
+	// Expression aggregation specs (type defined at package level)
+	var exprSpecs []exprSpec
+
+	// Parse -expr flags (expression and result name)
 	if exprVals, ok := ctx.GlobalFlags["-expr"]; ok {
-		if exprs, ok := exprVals.([]any); ok && len(exprs) > 0 {
-			return fmt.Errorf("-expr flag is not yet supported with -generate; use built-in aggregations or run without -generate")
-		}
-	}
-	if streamVals, ok := ctx.GlobalFlags["-stream-expr"]; ok {
-		if streams, ok := streamVals.([]any); ok && len(streams) > 0 {
-			return fmt.Errorf("-stream-expr flag is not yet supported with -generate; use built-in aggregations or run without -generate")
+		exprs, _ := exprVals.([]any)
+		for _, exprVal := range exprs {
+			if argsMap, ok := exprVal.(map[string]any); ok {
+				expression, _ := argsMap["expression"].(string)
+				result, _ := argsMap["result-name"].(string)
+				if expression != "" && result != "" {
+					exprSpecs = append(exprSpecs, exprSpec{
+						expression: expression,
+						result:     result,
+					})
+				}
+			}
 		}
 	}
 
-	// If no aggregations, generate code for DISTINCT on grouped fields
-	if len(aggSpecs) == 0 {
+	// Check for -stream-expr flags (not supported in code generation yet)
+	if streamVals, ok := ctx.GlobalFlags["-stream-expr"]; ok {
+		if streams, ok := streamVals.([]any); ok && len(streams) > 0 {
+			err := fmt.Errorf("-stream-expr flag is not yet supported with -generate; use built-in aggregations or run without -generate")
+			return lib.WriteErrorAndExit("ssql group-by", err)
+		}
+	}
+
+	// If no aggregations at all, generate code for DISTINCT on grouped fields
+	if len(aggSpecs) == 0 && len(exprSpecs) == 0 {
 		// Build field list for key function
 		var fieldList strings.Builder
 		for i, field := range groupByFields {
@@ -676,7 +692,12 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		return lib.WriteCodeFragment(frag)
 	}
 
-	// Generate TWO fragments: one for GroupByFields, one for Aggregate
+	// If we have expression specs, generate manual grouping code with runtime.EvalBatchAgg
+	if len(exprSpecs) > 0 {
+		return generateGroupByWithExprCode(groupByFields, aggSpecs, exprSpecs, inputVar)
+	}
+
+	// Standard path: Generate TWO fragments for GroupByFields + Aggregate
 	// This allows each to be extracted cleanly for Chain()
 
 	// Fragment 1: GroupByFields
@@ -706,12 +727,68 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	return lib.WriteCodeFragment(frag2)
 }
 
+// generateGroupByWithExprCode generates code for group-by with custom expressions
+func generateGroupByWithExprCode(groupByFields []string, aggSpecs []aggSpec, exprSpecs []exprSpec, inputVar string) error {
+	// Build key generation code
+	var keyParts strings.Builder
+	for _, field := range groupByFields {
+		keyParts.WriteString(fmt.Sprintf("\n\t\tkeyParts = append(keyParts, fmt.Sprintf(\"%%v\", ssql.GetOr(record, %q, \"\")))", field))
+	}
+
+	// Build group-by field assignment code
+	var groupFieldAssign strings.Builder
+	for _, field := range groupByFields {
+		groupFieldAssign.WriteString(fmt.Sprintf("\n\t\tmut = runtime.ApplyValue(mut, %q, ssql.GetOr[any](keyRecord, %q, nil))", field, field))
+	}
+
+	// Build built-in aggregation code
+	var builtinAggCode strings.Builder
+	for i, spec := range aggSpecs {
+		varName := fmt.Sprintf("agg%d", i)
+		builtinAggCode.WriteString(fmt.Sprintf("\n\t\t%s := %s", varName, generateAggregatorCode(spec)))
+		builtinAggCode.WriteString(fmt.Sprintf("\n\t\t%sResult := %s(groupRecords)", varName, varName))
+		builtinAggCode.WriteString(fmt.Sprintf("\n\t\tmut = runtime.ApplyValue(mut, %q, %sResult.GetValue())", spec.result, varName))
+	}
+
+	// Build expression evaluation code
+	var exprEvalCode strings.Builder
+	for _, spec := range exprSpecs {
+		exprEvalCode.WriteString(fmt.Sprintf(`
+		expr%sResult, expr%sErr := runtime.EvalBatchAgg(%q, groupRecords)
+		if expr%sErr != nil {
+			fmt.Fprintf(os.Stderr, "Error evaluating expression: %%v\n", expr%sErr)
+			os.Exit(1)
+		}
+		mut = runtime.ApplyValue(mut, %q, expr%sResult)`, spec.result, spec.result, spec.expression, spec.result, spec.result, spec.result, spec.result))
+	}
+
+	code := fmt.Sprintf(`// Manual grouping with expression evaluation
+	groups := make(map[string][]ssql.Record)
+	groupKeys := make(map[string]ssql.Record)
+	for record := range %s {
+		var keyParts []string%s
+		key := strings.Join(keyParts, "\x00")
+		if _, exists := groups[key]; !exists {
+			groupKeys[key] = record
+		}
+		groups[key] = append(groups[key], record)
+	}
+
+	var resultRecords []ssql.Record
+	for key, groupRecords := range groups {
+		mut := ssql.MakeMutableRecord()
+		keyRecord := groupKeys[key]%s%s%s
+		resultRecords = append(resultRecords, mut.Freeze())
+	}
+	aggregated := slices.Values(resultRecords)`, inputVar, keyParts.String(), groupFieldAssign.String(), builtinAggCode.String(), exprEvalCode.String())
+
+	imports := []string{"fmt", "os", "strings", "slices"}
+	frag := lib.NewStmtFragmentWithRuntimeImport("aggregated", inputVar, code, imports, getCommandString())
+	return lib.WriteCodeFragment(frag)
+}
+
 // generateAggregatorCode generates code for a single aggregator
-func generateAggregatorCode(spec struct {
-	function string
-	field    string
-	result   string
-}) string {
+func generateAggregatorCode(spec aggSpec) string {
 	switch spec.function {
 	case "count":
 		return "ssql.Count()"

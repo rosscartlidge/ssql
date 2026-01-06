@@ -14,11 +14,12 @@ import (
 )
 
 // RegisterFrom registers the from subcommand (SQL-style source command)
+// Note: Schema headers are ALWAYS emitted. This enables strongly-typed pipelines
+// and future optimizations like GPU acceleration.
 func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("from").
-		Description("Read data from file or command output (auto-detects CSV, JSON, JSONL)").
-		Example("ssql from data.csv | ssql where -where age gt 18", "Read CSV file").
-		Example("ssql from data.csv -schema | ssql where ...", "Emit schema header with field names and types").
+		Description("Read data from file or command output (auto-detects CSV, JSON, JSONL). Always emits schema header.").
+		Example("ssql from data.csv | ssql where -where age gt 18", "Read CSV file (schema header included)").
 		Example("ssql from data.csv -type zipcode string -type phone string", "Force fields to string (preserve leading zeros)").
 		Example("ssql from data.csv -default-type string", "Treat all fields as strings (no auto-detection)").
 		Example("ssql from -- ps aux | ssql where -where USER eq root", "Execute command and parse output").
@@ -26,11 +27,6 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
-		Done().
-		Flag("-schema", "-s").
-		Bool().
-		Global().
-		Help("Emit schema header line with field names and types").
 		Done().
 		Flag("-format", "-f").
 		String().
@@ -64,7 +60,6 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			var inputFile string
 			var format string
 			var generate bool
-			var emitSchema bool
 			var defaultType string
 			typeOverrides := make(map[string]string)
 
@@ -78,10 +73,6 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
-			}
-
-			if schemaVal, ok := ctx.GlobalFlags["-schema"]; ok {
-				emitSchema = schemaVal.(bool)
 			}
 
 			if dtVal, ok := ctx.GlobalFlags["-default-type"]; ok {
@@ -118,15 +109,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					return fmt.Errorf("executing command: %w", err)
 				}
 
-				// Write as JSONL to stdout (with schema if requested)
-				if emitSchema {
-					return writeWithInferredSchema(records)
-				}
-				if err := lib.WriteJSONL(os.Stdout, records); err != nil {
-					return fmt.Errorf("writing JSONL: %w", err)
-				}
-
-				return nil
+				// Always write with schema header
+				return writeWithInferredSchema(records)
 			}
 
 			// Check if generation is enabled (flag or env var)
@@ -205,15 +189,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
-			// Write as JSONL to stdout (with schema if requested)
-			if emitSchema {
-				return writeWithInferredSchema(records, csvHeaders)
-			}
-			if err := lib.WriteJSONL(os.Stdout, records); err != nil {
-				return fmt.Errorf("writing JSONL: %w", err)
-			}
-
-			return nil
+			// Always write with schema header
+			return writeWithInferredSchema(records, csvHeaders)
 		}).
 		Done()
 	return cmd
