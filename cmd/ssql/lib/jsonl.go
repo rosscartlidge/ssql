@@ -331,9 +331,13 @@ func WriteJSONLWithSchema(w io.Writer, schema *Schema, records iter.Seq[ssql.Rec
 		}
 	}
 
+	// Pre-allocate buffer for reuse across records
+	buf := make([]byte, 0, 4096)
+
 	// Write records using fast encoding
 	for record := range records {
-		buf := record.AppendJSON(nil)
+		buf = buf[:0] // Reset buffer, keep capacity
+		buf = record.AppendJSON(buf)
 		buf = append(buf, '\n')
 
 		if _, err := writer.Write(buf); err != nil {
@@ -358,20 +362,19 @@ func WriteJSONLWithSchemaOrdered(w io.Writer, schema *Schema, records iter.Seq[s
 		}
 	}
 
+	// Pre-allocate buffer for reuse across records
+	buf := make([]byte, 0, 4096)
+
 	// Write records with ordered fields
 	for record := range records {
-		var buf []byte
+		buf = buf[:0] // Reset buffer, keep capacity
 
 		if schema != nil && len(schema.Fields) > 0 {
-			// Build ordered map using schema field order (custom marshaling needed)
-			var err error
-			buf, err = marshalOrderedRecord(record, schema.Fields)
-			if err != nil {
-				return fmt.Errorf("encoding record: %w", err)
-			}
+			// Build ordered map using schema field order
+			buf = record.AppendJSONOrdered(buf, schema.Fields)
 		} else {
 			// No schema - use fast encoding
-			buf = record.AppendJSON(nil)
+			buf = record.AppendJSON(buf)
 		}
 
 		buf = append(buf, '\n')
@@ -384,57 +387,7 @@ func WriteJSONLWithSchemaOrdered(w io.Writer, schema *Schema, records iter.Seq[s
 }
 
 // marshalOrderedRecord marshals a record with fields in the specified order.
+// Uses fast encoding via Record.AppendJSONOrdered for performance.
 func marshalOrderedRecord(record ssql.Record, fieldOrder []string) ([]byte, error) {
-	var buf bytes.Buffer
-	buf.WriteByte('{')
-
-	first := true
-	written := make(map[string]bool)
-
-	// Write fields in order
-	for _, field := range fieldOrder {
-		if v, ok := ssql.Get[any](record, field); ok {
-			if !first {
-				buf.WriteByte(',')
-			}
-			first = false
-			written[field] = true
-
-			// Write key
-			keyBytes, _ := json.Marshal(field)
-			buf.Write(keyBytes)
-			buf.WriteByte(':')
-
-			// Write value
-			valBytes, err := json.Marshal(convertRecordValue(v))
-			if err != nil {
-				return nil, err
-			}
-			buf.Write(valBytes)
-		}
-	}
-
-	// Write any remaining fields not in the order list
-	for k, v := range record.All() {
-		if written[k] {
-			continue
-		}
-		if !first {
-			buf.WriteByte(',')
-		}
-		first = false
-
-		keyBytes, _ := json.Marshal(k)
-		buf.Write(keyBytes)
-		buf.WriteByte(':')
-
-		valBytes, err := json.Marshal(convertRecordValue(v))
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(valBytes)
-	}
-
-	buf.WriteByte('}')
-	return buf.Bytes(), nil
+	return record.AppendJSONOrdered(nil, fieldOrder), nil
 }

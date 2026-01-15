@@ -1110,6 +1110,53 @@ func (r Record) AppendJSON(buf []byte) []byte {
 	return buf
 }
 
+// AppendJSONOrdered appends the JSON representation with fields in the specified order.
+// Fields not in the order list are appended at the end. Uses fast encoding.
+func (r Record) AppendJSONOrdered(buf []byte, fieldOrder []string) []byte {
+	if r.schema == nil {
+		return append(buf, '{', '}')
+	}
+
+	buf = append(buf, '{')
+	first := true
+	written := make([]bool, r.schema.width)
+
+	// Write fields in specified order
+	for _, field := range fieldOrder {
+		idx := r.schema.Index(field)
+		if idx < 0 {
+			continue // Field not in record
+		}
+		v := r.values[idx]
+		if v == nil {
+			continue // Skip nil values
+		}
+		if !first {
+			buf = append(buf, ',')
+		}
+		first = false
+		written[idx] = true
+		buf = append(buf, r.schema.jsonPrefixes[idx]...)
+		buf = appendJSONValue(buf, v)
+	}
+
+	// Write remaining fields not in order list
+	for i, v := range r.values {
+		if written[i] || v == nil {
+			continue
+		}
+		if !first {
+			buf = append(buf, ',')
+		}
+		first = false
+		buf = append(buf, r.schema.jsonPrefixes[i]...)
+		buf = appendJSONValue(buf, v)
+	}
+
+	buf = append(buf, '}')
+	return buf
+}
+
 // appendJSONValue appends a JSON-encoded value to buf.
 // Handles all common types efficiently without reflection.
 func appendJSONValue(buf []byte, v any) []byte {

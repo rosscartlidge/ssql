@@ -242,19 +242,18 @@ func writeJSONLOrdered(w io.Writer, records iter.Seq[ssql.Record], fieldOrder []
 	writer := bufio.NewWriter(w)
 	defer writer.Flush()
 
+	// Pre-allocate buffer for reuse across records
+	buf := make([]byte, 0, 4096)
+
 	for record := range records {
-		var buf []byte
+		buf = buf[:0] // Reset buffer, keep capacity
 
 		if len(fieldOrder) > 0 {
-			// Need custom ordering - use manual marshaling
-			var err error
-			buf, err = marshalOrderedRecord(record, fieldOrder)
-			if err != nil {
-				return fmt.Errorf("encoding record: %w", err)
-			}
+			// Need custom ordering - use fast ordered encoding
+			buf = record.AppendJSONOrdered(buf, fieldOrder)
 		} else {
 			// No ordering - use fast encoding
-			buf = record.AppendJSON(nil)
+			buf = record.AppendJSON(buf)
 		}
 
 		buf = append(buf, '\n')
