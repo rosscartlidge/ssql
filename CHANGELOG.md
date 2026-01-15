@@ -82,6 +82,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatic dispatch based on `KeyExtractor` interface support
 - Maintains backward compatibility for all `OnFields()` and `OnCondition()` usage
 
+## [v4.6.2] - 2025-01-15
+
+### Performance Improvements
+- **Comprehensive Schema Caching**: Extended schema sharing to all readers
+  - `ReadCSVSafeFromReader`: Now shares schema across all records
+  - `ReadJSONFastFromReader`: Added schema caching for consecutive records
+  - `ReadJSONFastSafeFromReader`: Added schema caching for consecutive records
+  - CLI `readJSONLines`: Fixed double schema creation (was calling Freeze twice)
+  - Ensures consistent performance across all reading paths
+
 ## [v4.6.1] - 2025-01-15
 
 ### Performance Improvements
@@ -189,7 +199,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MutableRecord builder for efficient record construction
 - Comprehensive test suite
 
-[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.6.1...HEAD
+[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.6.2...HEAD
+[v4.6.2]: https://github.com/rosscartlidge/ssql/compare/v4.6.1...v4.6.2
 [v4.6.1]: https://github.com/rosscartlidge/ssql/compare/v4.6.0...v4.6.1
 [v4.6.0]: https://github.com/rosscartlidge/ssql/compare/v4.5.1...v4.6.0
 [v4.5.1]: https://github.com/rosscartlidge/ssql/compare/v4.5.0...v4.5.1

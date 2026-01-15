@@ -99,6 +99,7 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 // readJSONLines streams JSONL format line by line
 // Uses fast JSON parsing for better performance.
 // Field types are inferred from the first record and applied consistently.
+// Shares schema across records with the same fields for performance.
 func readJSONLines(r io.Reader, yield func(ssql.Record) bool) {
 	scanner := bufio.NewScanner(r)
 
@@ -109,44 +110,106 @@ func readJSONLines(r io.Reader, yield func(ssql.Record) bool) {
 	// Track field types from first record for consistency
 	var fieldTypes map[string]ssql.FieldType
 
+	// Schema caching: reuse schema when fields match
+	var cachedSchema *ssql.Schema
+	var cachedFields []string
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue // Skip empty lines
 		}
 
-		// Use fast parser
+		// Use fast parser - returns MutableRecord
 		parsed, err := ssql.ParseJSONLine(line)
 		if err != nil {
 			continue // Skip malformed lines
 		}
 
-		frozenParsed := parsed.Freeze()
+		// Freeze to get a Record we can work with
+		parsedRecord := parsed.Freeze()
 
 		// First valid record - infer field types
 		if fieldTypes == nil {
 			fieldTypes = make(map[string]ssql.FieldType)
-			for k, v := range frozenParsed.All() {
+			for k, v := range parsedRecord.All() {
 				fieldTypes[k] = inferJSONFieldType(v)
 			}
 		}
 
-		// Build record with consistent types
-		record := ssql.MakeMutableRecord()
-		for k, v := range frozenParsed.All() {
-			if ft, ok := fieldTypes[k]; ok {
-				record = setValueWithType(record, k, v, ft)
-			} else {
-				// New field - infer and lock its type
-				fieldTypes[k] = inferJSONFieldType(v)
-				record = setValueFromJSON(record, k, v)
+		// Check if we can reuse the cached schema
+		var record ssql.Record
+		if cachedSchema != nil && parsedRecord.Len() == len(cachedFields) {
+			allMatch := true
+			for _, f := range cachedFields {
+				if _, ok := ssql.Get[any](parsedRecord, f); !ok {
+					allMatch = false
+					break
+				}
+			}
+			if allMatch {
+				// Reuse cached schema - build values slice directly
+				values := make([]any, cachedSchema.Width())
+				for i, f := range cachedFields {
+					if v, ok := ssql.Get[any](parsedRecord, f); ok {
+						// Apply type coercion
+						if ft, ok := fieldTypes[f]; ok {
+							values[i] = coerceValueToType(v, ft)
+						} else {
+							values[i] = v
+						}
+					}
+				}
+				record = ssql.NewRecordFromSchema(cachedSchema, values)
 			}
 		}
 
-		if !yield(record.Freeze()) {
+		// If we couldn't reuse, create new record and cache schema
+		if record.Schema() == nil {
+			// Build record with consistent types
+			mut := ssql.MakeMutableRecord()
+			for k, v := range parsedRecord.All() {
+				if ft, ok := fieldTypes[k]; ok {
+					mut = setValueWithType(mut, k, v, ft)
+				} else {
+					// New field - infer and lock its type
+					fieldTypes[k] = inferJSONFieldType(v)
+					mut = setValueFromJSON(mut, k, v)
+				}
+			}
+			record = mut.Freeze()
+			// Cache schema for potential reuse
+			cachedSchema = record.Schema()
+			if cachedSchema != nil {
+				cachedFields = cachedSchema.Fields()
+			}
+		}
+
+		if !yield(record) {
 			return // Early termination
 		}
 	}
+}
+
+// coerceValueToType converts a value to the target field type
+func coerceValueToType(v any, ft ssql.FieldType) any {
+	switch ft {
+	case ssql.FieldTypeInt:
+		switch val := v.(type) {
+		case int64:
+			return val
+		case float64:
+			return int64(val)
+		}
+	case ssql.FieldTypeFloat:
+		switch val := v.(type) {
+		case float64:
+			return val
+		case int64:
+			return float64(val)
+		}
+	}
+	return v
 }
 
 // WriteJSON writes Records as JSON.

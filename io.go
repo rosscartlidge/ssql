@@ -359,6 +359,39 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 			return
 		}
 
+		// Determine field names
+		var fieldNames []string
+		if cfg.HasHeaders && len(headers) > 0 {
+			fieldNames = make([]string, len(headers)+1)
+			copy(fieldNames, headers)
+			fieldNames[len(headers)] = "_row_number"
+		} else {
+			fieldNames = make([]string, len(firstRow)+1)
+			for i := range firstRow {
+				fieldNames[i] = fmt.Sprintf("col_%d", i)
+			}
+			fieldNames[len(firstRow)] = "_row_number"
+		}
+
+		// Sort field names and create shared schema ONCE
+		slices.Sort(fieldNames)
+		schema := NewSchema(fieldNames)
+
+		// Build index map: original field position -> schema position
+		var fieldIndices []int
+		if cfg.HasHeaders && len(headers) > 0 {
+			fieldIndices = make([]int, len(headers))
+			for i, h := range headers {
+				fieldIndices[i] = schema.Index(h)
+			}
+		} else {
+			fieldIndices = make([]int, len(firstRow))
+			for i := range firstRow {
+				fieldIndices[i] = schema.Index(fmt.Sprintf("col_%d", i))
+			}
+		}
+		rowNumIdx := schema.Index("_row_number")
+
 		// Determine parsers: either from config or inferred from first row
 		var fieldParsers []func(string) any
 		if cfg.HasHeaders && len(headers) > 0 {
@@ -395,26 +428,21 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 			}
 		}
 
-		// Process first row
-		record := MakeMutableRecord()
-		if cfg.HasHeaders && len(headers) > 0 {
-			for i, value := range firstRow {
-				if i < len(headers) {
-					record.fields[headers[i]] = fieldParsers[i](value)
-				}
-			}
-		} else {
-			for i, value := range firstRow {
-				record.fields[fmt.Sprintf("col_%d", i)] = fieldParsers[i](value)
+		// Process first row using shared schema
+		values := make([]any, schema.Width())
+		for i, value := range firstRow {
+			if i < len(fieldIndices) {
+				values[fieldIndices[i]] = fieldParsers[i](value)
 			}
 		}
-		record.fields["_row_number"] = int64(0)
-		if !yield(record.Freeze(), nil) {
+		values[rowNumIdx] = int64(0)
+		if !yield(NewRecordFromSchema(schema, values), nil) {
 			return
 		}
 
-		// Process remaining rows with locked-in parsers
+		// Process remaining rows with shared schema
 		rowIndex := int64(1)
+		numFields := schema.Width()
 		for {
 			row, err := csvReader.Read()
 			if err == io.EOF {
@@ -427,25 +455,20 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 				continue
 			}
 
-			record := MakeMutableRecord()
-			if cfg.HasHeaders && len(headers) > 0 {
-				for i, value := range row {
-					if i < len(headers) {
-						record.fields[headers[i]] = fieldParsers[i](value)
-					}
-				}
-			} else {
-				for i, value := range row {
-					if i < len(fieldParsers) {
-						record.fields[fmt.Sprintf("col_%d", i)] = fieldParsers[i](value)
-					}
+			// Allocate new values slice per record (schema is shared)
+			values := make([]any, numFields)
+
+			// Parse values into correct schema positions
+			for i, value := range row {
+				if i < len(fieldIndices) {
+					values[fieldIndices[i]] = fieldParsers[i](value)
 				}
 			}
-
-			record.fields["_row_number"] = rowIndex
+			values[rowNumIdx] = rowIndex
 			rowIndex++
 
-			if !yield(record.Freeze(), nil) {
+			// Create record with shared schema
+			if !yield(NewRecordFromSchema(schema, values), nil) {
 				return
 			}
 		}
@@ -1055,6 +1078,7 @@ func WriteJSONFast(sb iter.Seq[Record], filename string) error {
 // ReadJSONFastFromReader reads JSONL from an io.Reader using fast parsing (no reflection).
 // This is 3-5x faster than ReadJSONFromReader for typical workloads.
 // Uses manual JSON parsing instead of encoding/json reflection-based unmarshaling.
+// Caches and reuses schemas when consecutive records have the same fields.
 func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
 		scanner := bufio.NewScanner(reader)
@@ -1062,6 +1086,10 @@ func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record] {
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		lineNumber := int64(0)
 
+		// Schema caching: reuse schema when fields match
+		var cachedSchema *Schema
+		var cachedFields []string // sorted field names of cached schema
+
 		for scanner.Scan() {
 			line := scanner.Bytes()
 
@@ -1079,7 +1107,7 @@ func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record] {
 			}
 
 			// Parse using fast parser
-			record, err := ParseJSONLine(line)
+			mutableRecord, err := ParseJSONLine(line)
 			if err != nil {
 				// Skip invalid JSON lines (matching behavior of ReadJSONFromReader)
 				lineNumber++
@@ -1087,10 +1115,41 @@ func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record] {
 			}
 
 			// Add line number metadata
-			record.fields["_line_number"] = lineNumber
+			mutableRecord.fields["_line_number"] = lineNumber
 			lineNumber++
 
-			if !yield(record.Freeze()) {
+			// Check if we can reuse the cached schema
+			var record Record
+			if cachedSchema != nil && len(mutableRecord.fields) == len(cachedFields) {
+				// Check if fields match (quick check: same count, then verify all fields exist)
+				allMatch := true
+				for _, f := range cachedFields {
+					if _, ok := mutableRecord.fields[f]; !ok {
+						allMatch = false
+						break
+					}
+				}
+				if allMatch {
+					// Reuse cached schema
+					values := make([]any, cachedSchema.Width())
+					for i, f := range cachedSchema.fields {
+						values[i] = mutableRecord.fields[f]
+					}
+					record = Record{schema: cachedSchema, values: values}
+				}
+			}
+
+			// If we couldn't reuse, create new schema and cache it
+			if record.schema == nil {
+				record = mutableRecord.Freeze()
+				// Cache this schema for potential reuse
+				cachedSchema = record.schema
+				if cachedSchema != nil {
+					cachedFields = cachedSchema.fields
+				}
+			}
+
+			if !yield(record) {
 				return
 			}
 		}
@@ -1098,12 +1157,17 @@ func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record] {
 }
 
 // ReadJSONFastSafeFromReader reads JSONL with error handling using fast parsing.
+// Caches and reuses schemas when consecutive records have the same fields.
 func ReadJSONFastSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 	return func(yield func(Record, error) bool) {
 		scanner := bufio.NewScanner(reader)
 		// Increase buffer size for long lines
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		lineNumber := int64(0)
+
+		// Schema caching: reuse schema when fields match
+		var cachedSchema *Schema
+		var cachedFields []string
 
 		for scanner.Scan() {
 			line := scanner.Bytes()
@@ -1122,7 +1186,7 @@ func ReadJSONFastSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 			}
 
 			// Parse using fast parser
-			record, err := ParseJSONLine(line)
+			mutableRecord, err := ParseJSONLine(line)
 			if err != nil {
 				if !yield(Record{}, fmt.Errorf("failed to parse JSON on line %d: %w", lineNumber, err)) {
 					return
@@ -1132,10 +1196,37 @@ func ReadJSONFastSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 			}
 
 			// Add line number metadata
-			record.fields["_line_number"] = lineNumber
+			mutableRecord.fields["_line_number"] = lineNumber
 			lineNumber++
 
-			if !yield(record.Freeze(), nil) {
+			// Check if we can reuse the cached schema
+			var record Record
+			if cachedSchema != nil && len(mutableRecord.fields) == len(cachedFields) {
+				allMatch := true
+				for _, f := range cachedFields {
+					if _, ok := mutableRecord.fields[f]; !ok {
+						allMatch = false
+						break
+					}
+				}
+				if allMatch {
+					values := make([]any, cachedSchema.Width())
+					for i, f := range cachedSchema.fields {
+						values[i] = mutableRecord.fields[f]
+					}
+					record = Record{schema: cachedSchema, values: values}
+				}
+			}
+
+			if record.schema == nil {
+				record = mutableRecord.Freeze()
+				cachedSchema = record.schema
+				if cachedSchema != nil {
+					cachedFields = cachedSchema.fields
+				}
+			}
+
+			if !yield(record, nil) {
 				return
 			}
 		}
