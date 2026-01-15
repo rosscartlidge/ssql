@@ -210,13 +210,210 @@ Prototype benchmarks on 14.6M rows:
 - **Con**: Loses flexibility, requires code gen step
 - **Verdict**: Against ssql philosophy of dynamic schemas
 
+## Implementation Results (v4.5.0 - v4.6.2)
+
+The optimization was implemented across versions v4.5.0 through v4.6.2. This section documents the actual changes made and results achieved.
+
+### Actual Performance Achieved
+
+| Version | Operation | Time (14.6M rows) | Improvement |
+|---------|-----------|-------------------|-------------|
+| Pre-v4.5.0 | `from shuffled.csv` | 43s | baseline |
+| v4.5.0 | Record refactor + fast JSON | 43s | (no change - write path) |
+| v4.5.1 | `AppendJSONOrdered()` | 23.5s | 1.8x faster |
+| v4.6.0 | CSV schema sharing | 10.4s | 4.1x faster |
+| v4.6.1 | JSONL schema sharing | 15.8s | 2.7x faster (pipeline) |
+| v4.6.2 | Comprehensive schema caching | 15.7s | consistent |
+
+**Final result: 43s → 10.4s for CSV read (4.1x faster), 47s → 15.8s for pipeline (3x faster)**
+
+### What Was Actually Implemented
+
+#### Phase 1: Core Record Refactor (v4.5.0)
+
+**Changes to `core.go`:**
+
+```go
+// New Schema type with pre-computed JSON prefixes
+type Schema struct {
+    fields       []string          // Sorted field names
+    index        map[string]int    // Field name → index
+    jsonPrefixes [][]byte          // Pre-computed `"field":` for each field
+    width        int
+}
+
+// Record now uses schema + values slice
+type Record struct {
+    schema *Schema
+    values []any
+}
+
+// NewRecordFromSchema for efficient record creation with shared schema
+func NewRecordFromSchema(schema *Schema, values []any) Record
+```
+
+**Key insight**: The schema stores pre-computed JSON field prefixes (`"field":`) to avoid string allocation during JSON encoding.
+
+#### Phase 2: Fast JSON Encoder (v4.5.0)
+
+**Changes to `core.go`:**
+
+```go
+// AppendJSON writes JSON directly to buffer without reflection
+func (r Record) AppendJSON(buf []byte) []byte {
+    buf = append(buf, '{')
+    for i, v := range r.values {
+        if v == nil { continue }
+        if !first { buf = append(buf, ',') }
+        buf = append(buf, r.schema.jsonPrefixes[i]...)  // Pre-computed prefix
+        buf = appendJSONValue(buf, v)  // Direct type switch, no reflection
+    }
+    buf = append(buf, '}')
+    return buf
+}
+```
+
+**Benchmark**: 3x faster, 7x less memory, 2238x fewer allocations vs `encoding/json`.
+
+#### Phase 3: Fast JSON Decoder (v4.5.0)
+
+**Changes to `core.go`:**
+
+```go
+// ParseJSONLine manually parses JSON without reflection
+func ParseJSONLine(line []byte) (MutableRecord, error) {
+    // Manual parsing with type detection:
+    // - Numbers: detect int64 vs float64 during parse
+    // - Strings: direct slice reference when possible
+    // - No intermediate map[string]interface{}
+}
+
+// ParseJSONLineWithSchema parses directly into shared schema (v4.6.1)
+func ParseJSONLineWithSchema(line []byte, schema *Schema) (Record, error) {
+    values := make([]any, schema.Width())
+    // Parse JSON, placing values directly at schema indices
+    return Record{schema: schema, values: values}, nil
+}
+```
+
+#### Phase 4: Schema Sharing - The Critical Optimization (v4.6.0 - v4.6.2)
+
+**The key insight**: Creating a schema involves sorting field names and building an index map. This is expensive when done per-record.
+
+**v4.6.0 - CSV Schema Sharing (`io.go`):**
+
+```go
+func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
+    return func(yield func(Record) bool) {
+        // Create schema ONCE before the loop
+        fieldNames := append(headers, "_row_number")
+        slices.Sort(fieldNames)
+        schema := NewSchema(fieldNames)
+
+        // Pre-compute field index mapping
+        fieldIndices := make([]int, len(headers))
+        for i, h := range headers {
+            fieldIndices[i] = schema.Index(h)
+        }
+        rowNumIdx := schema.Index("_row_number")
+
+        // For each row - create values slice, not schema
+        for row := range csvReader {
+            values := make([]any, schema.Width())
+            for i, value := range row {
+                values[fieldIndices[i]] = parse(value)
+            }
+            values[rowNumIdx] = rowNumber
+            yield(NewRecordFromSchema(schema, values))  // Reuse schema!
+        }
+    }
+}
+```
+
+**Result: 43s → 10.4s (4.1x faster)**
+
+**v4.6.1 - JSONL Schema Sharing (`cmd/ssql/lib/jsonl.go`):**
+
+For JSONL with schema headers, the schema is parsed once and shared:
+
+```go
+func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
+    // Create ssql.Schema once from lib.Schema
+    ssqlSchema := ssql.NewSchema(schema.Fields)
+
+    for line := range lines {
+        // Use fast parser that populates shared schema directly
+        record, _ := ssql.ParseJSONLineWithSchema(line, ssqlSchema)
+        yield(record)
+    }
+}
+```
+
+**Result: 47s → 15.8s for `from | group-by` pipeline (3x faster)**
+
+**v4.6.2 - Comprehensive Schema Caching:**
+
+Extended schema caching to ALL reader functions:
+
+1. **`ReadCSVSafeFromReader`** - Same pattern as `ReadCSVFromReader`
+2. **`ReadJSONFastFromReader`** - Cache schema for consecutive records:
+   ```go
+   var cachedSchema *Schema
+   var cachedFields []string
+
+   for line := range lines {
+       mutableRecord := ParseJSONLine(line)
+
+       // Check if we can reuse cached schema
+       if cachedSchema != nil && fieldsMatch(mutableRecord, cachedFields) {
+           values := make([]any, cachedSchema.Width())
+           for i, f := range cachedSchema.fields {
+               values[i] = mutableRecord.fields[f]
+           }
+           record = Record{schema: cachedSchema, values: values}
+       } else {
+           record = mutableRecord.Freeze()  // Creates new schema
+           cachedSchema = record.schema
+           cachedFields = cachedSchema.fields
+       }
+   }
+   ```
+3. **`ReadJSONFastSafeFromReader`** - Same caching pattern
+4. **CLI `readJSONLines`** - Fixed double schema creation (was calling Freeze() twice)
+
+### Key Lessons Learned
+
+1. **Schema creation is expensive**: `NewSchema()` sorts fields and builds index map. Do it once, not per-record.
+
+2. **Look for hidden allocations**: The old `readJSONLines` was:
+   - Calling `ParseJSONLine()` which creates a MutableRecord
+   - Calling `Freeze()` on that to get a Record with schema
+   - Then building a NEW MutableRecord with type coercion
+   - Calling `Freeze()` AGAIN - creating a SECOND schema!
+
+3. **Profile before optimizing**: CPU profiling (`go tool pprof`) revealed:
+   - 28% in `NewSchema` - not JSON encoding as expected
+   - Led directly to the schema sharing fix
+
+4. **Buffer reuse matters**: Pre-allocating buffers and using `buf = buf[:0]` to reset without reallocation.
+
+5. **Pre-compute where possible**: JSON field prefixes (`"field":`) stored in schema, computed once.
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `core.go` | New Schema type, Record refactor, AppendJSON(), AppendJSONOrdered(), ParseJSONLine(), ParseJSONLineWithSchema() |
+| `io.go` | ReadCSVFromReader schema sharing, ReadCSVSafeFromReader, ReadJSONFastFromReader caching, ReadJSONFastSafeFromReader caching |
+| `cmd/ssql/lib/json.go` | writeJSONLOrdered buffer reuse, readJSONLines schema caching |
+| `cmd/ssql/lib/jsonl.go` | readJSONLWithSchema using ParseJSONLineWithSchema, WriteJSONLWithSchemaOrdered buffer reuse |
+
 ## Conclusion
 
 The slice-based Record with custom JSON encoding offers the best balance of:
-- **Performance**: 4-7x improvement achievable
+- **Performance**: 4.1x improvement achieved (target was 4.6x)
 - **Compatibility**: API unchanged, output identical
 - **Maintainability**: Simpler than alternatives
 - **Philosophy**: Maintains ssql's dynamic, streaming nature
 
-Recommended implementation order: Phase 1 → Phase 2 → Phase 4 → Phase 3
-(Core refactor, then fast writing, then CLI, then fast reading)
+**Critical takeaway**: Schema sharing was the biggest win. The fast JSON encoder/decoder helped, but sharing schemas across records in a stream was the key optimization that achieved the 4x speedup.
