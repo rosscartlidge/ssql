@@ -48,6 +48,7 @@ type Schema struct {
     Fields  []string         // ["name", "age", "salary"]
     Indices map[string]int   // {"name": 0, "age": 1, "salary": 2}
     Types   []FieldType      // [String, Int, Float]
+    Width   int              // len(Fields) - for exact allocation
 }
 
 type Record struct {
@@ -59,6 +60,24 @@ type Record struct {
 idx := record.schema.Indices["field_name"]
 value := record.values[idx]  // Array index (O(1), no hash)
 ```
+
+### Allocation Efficiency
+
+With known schema, we allocate exactly the right size:
+
+```go
+// Current: map with overhead (buckets, hash table, ~50 bytes + per-entry overhead)
+fields := make(map[string]any)  // Unknown size, grows dynamically
+
+// Proposed: exact slice size (24 bytes header + 16 bytes per element)
+values := make([]any, schema.Width)  // Exact size, no growth
+```
+
+**Memory per record (8 fields):**
+- `map[string]any`: ~200-300 bytes (header + buckets + 8 entries with string keys)
+- `[]any`: ~152 bytes (24 byte header + 8×16 byte elements)
+
+**~50% memory reduction** plus elimination of hash table operations.
 
 ### Custom JSON Encoder
 
