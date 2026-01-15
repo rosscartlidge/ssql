@@ -82,6 +82,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatic dispatch based on `KeyExtractor` interface support
 - Maintains backward compatibility for all `OnFields()` and `OnCondition()` usage
 
+## [v4.5.0] - 2025-01-15
+
+### Performance Improvements
+- **Record Refactor**: Internal representation changed from `map[string]any` to `*Schema + []any`
+  - Shared schema across records reduces memory per record
+  - O(1) field lookup via schema index map
+  - Eliminates per-record map allocation overhead
+
+- **Fast JSON Encoder**: 3x faster, 7x less memory, 2238x fewer allocations
+  - Pre-computed JSON field prefixes (`"field":`) stored in schema
+  - Direct `[]byte` buffer manipulation with `strconv.AppendInt/AppendFloat`
+  - `sync.Pool` buffer reuse eliminates allocation per record
+  - New `Record.AppendJSON(buf []byte) []byte` method for zero-copy encoding
+
+- **Fast JSON Decoder**: 3.7x faster, 1.7x less memory, 2x fewer allocations
+  - Manual JSON parsing via `ParseJSONLine()` avoids reflection
+  - Direct type detection during parsing (int64 vs float64)
+  - Streaming scanner with configurable buffer size
+
+### Added
+- `Record.AppendJSON()` - Append JSON representation to existing buffer
+- `WriteJSONFastToWriter()` / `WriteJSONFast()` - Fast JSON writing functions
+- `ReadJSONFastFromReader()` / `ReadJSONFast()` - Fast JSON reading functions
+- `ParseJSONLine()` - Manual JSON line parser returning MutableRecord
+
+### Internal Changes
+- Schema now stores `jsonPrefixes [][]byte` for pre-computed field prefixes
+- `jsonBufferPool` using `sync.Pool` for buffer reuse across records
+- CLI `lib/jsonl.go` and `lib/json.go` updated to use fast JSON functions
+- Type inference handles both `int64` (fast parser) and `float64` (json.Unmarshal)
+
 ## [v4.2.0] - 2025-01-05
 
 ### New Features
@@ -131,7 +162,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MutableRecord builder for efficient record construction
 - Comprehensive test suite
 
-[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.2.0...HEAD
+[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.5.0...HEAD
+[v4.5.0]: https://github.com/rosscartlidge/ssql/compare/v4.2.0...v4.5.0
 [v4.2.0]: https://github.com/rosscartlidge/ssql/compare/v4.1.0...v4.2.0
 [v4.1.0]: https://github.com/rosscartlidge/ssql/compare/v1.0.5...v4.1.0
 [v1.0.5]: https://github.com/rosscartlidge/ssql/compare/v1.0.0...v1.0.5
