@@ -82,6 +82,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatic dispatch based on `KeyExtractor` interface support
 - Maintains backward compatibility for all `OnFields()` and `OnCondition()` usage
 
+## [v4.6.0] - 2025-01-15
+
+### Performance Improvements
+- **CSV Schema Sharing**: 4.1x faster CSV reading
+  - Schema created once and shared across all records (was created per-record)
+  - Eliminated per-record schema creation, key sorting, and map allocation
+  - Use `NewRecordFromSchema()` with pre-computed field index mapping
+  - **Benchmark (14.6M records, 1.2GB)**: 43s → 10.4s
+
+## [v4.5.1] - 2025-01-15
+
+### Performance Improvements
+- **Ordered JSON Output**: Eliminated reflection in field-ordered JSON output
+  - Added `Record.AppendJSONOrdered()` for fast field-ordered JSON encoding
+  - Replaced `json.Marshal()` with fast encoding in CLI output paths
+  - Added buffer reuse to eliminate per-record allocations
+  - **Benchmark**: 43s → 23.5s (1.8x faster)
+
 ## [v4.5.0] - 2025-01-15
 
 ### Performance Improvements
@@ -162,7 +180,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MutableRecord builder for efficient record construction
 - Comprehensive test suite
 
-[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.5.0...HEAD
+[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.6.0...HEAD
+[v4.6.0]: https://github.com/rosscartlidge/ssql/compare/v4.5.1...v4.6.0
+[v4.5.1]: https://github.com/rosscartlidge/ssql/compare/v4.5.0...v4.5.1
 [v4.5.0]: https://github.com/rosscartlidge/ssql/compare/v4.2.0...v4.5.0
 [v4.2.0]: https://github.com/rosscartlidge/ssql/compare/v4.1.0...v4.2.0
 [v4.1.0]: https://github.com/rosscartlidge/ssql/compare/v1.0.5...v4.1.0
