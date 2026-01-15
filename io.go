@@ -134,6 +134,39 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 			return // Empty file or error
 		}
 
+		// Determine field names
+		var fieldNames []string
+		if cfg.HasHeaders && len(headers) > 0 {
+			fieldNames = make([]string, len(headers)+1)
+			copy(fieldNames, headers)
+			fieldNames[len(headers)] = "_row_number"
+		} else {
+			fieldNames = make([]string, len(firstRow)+1)
+			for i := range firstRow {
+				fieldNames[i] = fmt.Sprintf("col_%d", i)
+			}
+			fieldNames[len(firstRow)] = "_row_number"
+		}
+
+		// Sort field names and create shared schema ONCE
+		slices.Sort(fieldNames)
+		schema := NewSchema(fieldNames)
+
+		// Build index map: original field position -> schema position
+		var fieldIndices []int // maps CSV column index to schema index
+		if cfg.HasHeaders && len(headers) > 0 {
+			fieldIndices = make([]int, len(headers))
+			for i, h := range headers {
+				fieldIndices[i] = schema.Index(h)
+			}
+		} else {
+			fieldIndices = make([]int, len(firstRow))
+			for i := range firstRow {
+				fieldIndices[i] = schema.Index(fmt.Sprintf("col_%d", i))
+			}
+		}
+		rowNumIdx := schema.Index("_row_number")
+
 		// Determine parsers: either from config or inferred from first row
 		var fieldParsers []func(string) any
 		if cfg.HasHeaders && len(headers) > 0 {
@@ -170,51 +203,41 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 			}
 		}
 
-		// Process first row
-		record := MakeMutableRecord()
-		if cfg.HasHeaders && len(headers) > 0 {
-			for i, value := range firstRow {
-				if i < len(headers) {
-					record.fields[headers[i]] = fieldParsers[i](value)
-				}
-			}
-		} else {
-			for i, value := range firstRow {
-				record.fields[fmt.Sprintf("col_%d", i)] = fieldParsers[i](value)
+		// Process first row using shared schema
+		values := make([]any, schema.Width())
+		for i, value := range firstRow {
+			if i < len(fieldIndices) {
+				values[fieldIndices[i]] = fieldParsers[i](value)
 			}
 		}
-		record.fields["_row_number"] = int64(0)
-		if !yield(record.Freeze()) {
+		values[rowNumIdx] = int64(0)
+		if !yield(NewRecordFromSchema(schema, values)) {
 			return
 		}
 
-		// Process remaining rows with locked-in parsers
+		// Process remaining rows with shared schema
 		rowIndex := int64(1)
+		numFields := schema.Width()
 		for {
 			row, err := csvReader.Read()
 			if err != nil {
 				return // EOF or error
 			}
 
-			record := MakeMutableRecord()
-			if cfg.HasHeaders && len(headers) > 0 {
-				for i, value := range row {
-					if i < len(headers) {
-						record.fields[headers[i]] = fieldParsers[i](value)
-					}
-				}
-			} else {
-				for i, value := range row {
-					if i < len(fieldParsers) {
-						record.fields[fmt.Sprintf("col_%d", i)] = fieldParsers[i](value)
-					}
+			// Allocate new values slice per record (schema is shared)
+			values := make([]any, numFields)
+
+			// Parse values into correct schema positions
+			for i, value := range row {
+				if i < len(fieldIndices) {
+					values[fieldIndices[i]] = fieldParsers[i](value)
 				}
 			}
-
-			record.fields["_row_number"] = rowIndex
+			values[rowNumIdx] = rowIndex
 			rowIndex++
 
-			if !yield(record.Freeze()) {
+			// Create record with shared schema (no allocation for schema)
+			if !yield(NewRecordFromSchema(schema, values)) {
 				return
 			}
 		}
