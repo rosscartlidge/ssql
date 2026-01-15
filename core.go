@@ -1377,6 +1377,108 @@ func ParseJSONLine(line []byte) (MutableRecord, error) {
 	return record, nil
 }
 
+// ParseJSONLineWithSchema parses a JSON line using a pre-existing schema.
+// This is much faster than ParseJSONLine().Freeze() when processing many records
+// with the same fields, as it avoids creating a new schema per record.
+// Fields not in the schema are silently ignored.
+func ParseJSONLineWithSchema(line []byte, schema *Schema) (Record, error) {
+	values := make([]any, schema.Width())
+	pos := 0
+	n := len(line)
+
+	// Skip leading whitespace
+	for pos < n && isJSONWhitespace(line[pos]) {
+		pos++
+	}
+
+	if pos >= n {
+		return Record{schema: schema, values: values}, nil // Empty line
+	}
+
+	// Expect opening brace
+	if line[pos] != '{' {
+		return Record{}, fmt.Errorf("expected '{' at position %d", pos)
+	}
+	pos++
+
+	// Parse fields
+	for {
+		// Skip whitespace
+		for pos < n && isJSONWhitespace(line[pos]) {
+			pos++
+		}
+
+		if pos >= n {
+			return Record{}, fmt.Errorf("unexpected end of JSON")
+		}
+
+		// Check for closing brace (empty object or end)
+		if line[pos] == '}' {
+			break
+		}
+
+		// Parse field name (must be a string)
+		if line[pos] != '"' {
+			return Record{}, fmt.Errorf("expected '\"' for field name at position %d", pos)
+		}
+
+		fieldName, newPos, err := parseJSONStringValue(line, pos)
+		if err != nil {
+			return Record{}, err
+		}
+		pos = newPos
+
+		// Skip whitespace
+		for pos < n && isJSONWhitespace(line[pos]) {
+			pos++
+		}
+
+		// Expect colon
+		if pos >= n || line[pos] != ':' {
+			return Record{}, fmt.Errorf("expected ':' after field name at position %d", pos)
+		}
+		pos++
+
+		// Skip whitespace
+		for pos < n && isJSONWhitespace(line[pos]) {
+			pos++
+		}
+
+		// Parse value
+		value, newPos, err := parseJSONValue(line, pos)
+		if err != nil {
+			return Record{}, err
+		}
+		pos = newPos
+
+		// Store value at schema index (if field is in schema)
+		if idx := schema.Index(fieldName); idx >= 0 && value != nil {
+			values[idx] = value
+		}
+
+		// Skip whitespace
+		for pos < n && isJSONWhitespace(line[pos]) {
+			pos++
+		}
+
+		if pos >= n {
+			return Record{}, fmt.Errorf("unexpected end of JSON")
+		}
+
+		// Check for comma or closing brace
+		if line[pos] == ',' {
+			pos++
+			continue
+		} else if line[pos] == '}' {
+			break
+		} else {
+			return Record{}, fmt.Errorf("expected ',' or '}' at position %d, got '%c'", pos, line[pos])
+		}
+	}
+
+	return Record{schema: schema, values: values}, nil
+}
+
 // isJSONWhitespace returns true for JSON whitespace characters
 func isJSONWhitespace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'

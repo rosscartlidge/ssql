@@ -277,11 +277,18 @@ func ReadJSONLWithSchema(r io.Reader) *SchemaAndRecords {
 
 // readJSONLWithSchema reads JSONL using schema for type coercion.
 // Uses fast JSON parsing with schema-based type coercion.
+// Shares a single ssql.Schema across all records for performance.
 func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
 	return func(yield func(ssql.Record) bool) {
 		scanner := bufio.NewScanner(r)
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024)
+
+		// Create shared ssql.Schema from lib.Schema fields
+		var ssqlSchema *ssql.Schema
+		if schema != nil && len(schema.Fields) > 0 {
+			ssqlSchema = ssql.NewSchema(schema.Fields)
+		}
 
 		for scanner.Scan() {
 			line := scanner.Bytes()
@@ -289,26 +296,21 @@ func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
 				continue
 			}
 
-			// Use fast parser
-			parsed, err := ssql.ParseJSONLine(line)
-			if err != nil {
-				continue
-			}
-
-			// Apply schema type coercion if needed
-			if schema != nil {
-				record := ssql.MakeMutableRecord()
-				for k, v := range parsed.Freeze().All() {
-					if typ := schema.TypeOf(k); typ != "" {
-						record = setValueWithType(record, k, v, SchemaTypeToFieldType(typ))
-					} else {
-						record = setValueFromJSON(record, k, v)
-					}
+			// Use fast parser with shared schema
+			if ssqlSchema != nil {
+				record, err := ssql.ParseJSONLineWithSchema(line, ssqlSchema)
+				if err != nil {
+					continue
 				}
-				if !yield(record.Freeze()) {
+				if !yield(record) {
 					return
 				}
 			} else {
+				// No schema - fall back to creating schema per record
+				parsed, err := ssql.ParseJSONLine(line)
+				if err != nil {
+					continue
+				}
 				if !yield(parsed.Freeze()) {
 					return
 				}
