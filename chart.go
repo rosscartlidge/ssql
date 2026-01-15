@@ -349,7 +349,7 @@ func analyzeData(records []Record, _ ChartConfig) ChartData {
 func extractFieldValues(records []Record, field string) []any {
 	values := make([]any, 0, len(records))
 	for _, record := range records {
-		if value, exists := record.fields[field]; exists {
+		if value, exists := Get[any](record, field); exists {
 			values = append(values, value)
 		}
 	}
@@ -508,7 +508,7 @@ func getNumericValue(value any) float64 {
 
 // getFieldAsTime safely converts a field value to time.Time
 func getFieldAsTime(record Record, field string) time.Time {
-	value, exists := record.fields[field]
+	value, exists := Get[any](record, field)
 	if !exists {
 		return time.Time{}
 	}

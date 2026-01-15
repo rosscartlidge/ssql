@@ -97,6 +97,7 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 }
 
 // readJSONLines streams JSONL format line by line
+// Uses fast JSON parsing for better performance.
 // Field types are inferred from the first record and applied consistently.
 func readJSONLines(r io.Reader, yield func(ssql.Record) bool) {
 	scanner := bufio.NewScanner(r)
@@ -114,23 +115,25 @@ func readJSONLines(r io.Reader, yield func(ssql.Record) bool) {
 			continue // Skip empty lines
 		}
 
-		// Parse JSON object
-		var rec map[string]interface{}
-		if err := json.Unmarshal(line, &rec); err != nil {
+		// Use fast parser
+		parsed, err := ssql.ParseJSONLine(line)
+		if err != nil {
 			continue // Skip malformed lines
 		}
+
+		frozenParsed := parsed.Freeze()
 
 		// First valid record - infer field types
 		if fieldTypes == nil {
 			fieldTypes = make(map[string]ssql.FieldType)
-			for k, v := range rec {
+			for k, v := range frozenParsed.All() {
 				fieldTypes[k] = inferJSONFieldType(v)
 			}
 		}
 
 		// Build record with consistent types
 		record := ssql.MakeMutableRecord()
-		for k, v := range rec {
+		for k, v := range frozenParsed.All() {
 			if ft, ok := fieldTypes[k]; ok {
 				record = setValueWithType(record, k, v, ft)
 			} else {
@@ -234,32 +237,28 @@ func WriteJSONWithFieldOrder(w io.Writer, records iter.Seq[ssql.Record], pretty 
 }
 
 // writeJSONLOrdered writes JSONL with fields in specified order.
+// Uses fast JSON encoding when no ordering is required.
 func writeJSONLOrdered(w io.Writer, records iter.Seq[ssql.Record], fieldOrder []string) error {
 	writer := bufio.NewWriter(w)
 	defer writer.Flush()
 
 	for record := range records {
-		var jsonBytes []byte
-		var err error
+		var buf []byte
 
 		if len(fieldOrder) > 0 {
-			jsonBytes, err = marshalOrderedRecord(record, fieldOrder)
-		} else {
-			data := make(map[string]any)
-			for k, v := range record.All() {
-				data[k] = convertRecordValue(v)
+			// Need custom ordering - use manual marshaling
+			var err error
+			buf, err = marshalOrderedRecord(record, fieldOrder)
+			if err != nil {
+				return fmt.Errorf("encoding record: %w", err)
 			}
-			jsonBytes, err = json.Marshal(data)
+		} else {
+			// No ordering - use fast encoding
+			buf = record.AppendJSON(nil)
 		}
 
-		if err != nil {
-			return fmt.Errorf("encoding record: %w", err)
-		}
-
-		if _, err := writer.Write(jsonBytes); err != nil {
-			return err
-		}
-		if _, err := writer.Write([]byte("\n")); err != nil {
+		buf = append(buf, '\n')
+		if _, err := writer.Write(buf); err != nil {
 			return err
 		}
 	}

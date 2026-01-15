@@ -18,94 +18,26 @@ import (
 var Stdout io.WriteCloser = os.Stdout
 
 // ReadJSONL reads JSONL (JSON Lines) from a reader and returns an iterator of Records
+// Uses fast JSON parsing (avoids reflection) for better performance.
 func ReadJSONL(r io.Reader) iter.Seq[ssql.Record] {
-	return func(yield func(ssql.Record) bool) {
-		scanner := bufio.NewScanner(r)
-
-		// Increase buffer size for large lines
-		buf := make([]byte, 0, 64*1024)
-		scanner.Buffer(buf, 1024*1024) // 1MB max token size
-
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			if len(line) == 0 {
-				continue // Skip empty lines
-			}
-
-			// Parse JSON object
-			var data map[string]interface{}
-			if err := json.Unmarshal(line, &data); err != nil {
-				// Skip malformed lines silently in streaming context
-				continue
-			}
-
-			// Convert to Record directly (not using TypedRecord builder)
-			record := ssql.MakeMutableRecord()
-			for k, v := range data {
-				record = setValueFromJSON(record, k, v)
-			}
-
-			if !yield(record.Freeze()) {
-				return
-			}
-		}
-	}
+	return ssql.ReadJSONFastFromReader(r)
 }
 
 // WriteJSONL writes Records to a writer as JSONL (JSON Lines)
+// Uses fast JSON encoding (avoids reflection) for better performance.
 func WriteJSONL(w io.Writer, records iter.Seq[ssql.Record]) error {
-	writer := bufio.NewWriter(w)
-	defer writer.Flush()
-
-	for record := range records {
-		// Convert Record to map for JSON encoding
-		data := make(map[string]interface{})
-
-		// Extract all fields from record
-		for k, v := range record.All() {
-			data[k] = convertRecordValue(v)
-		}
-
-		// Encode as JSON
-		jsonBytes, err := json.Marshal(data)
-		if err != nil {
-			return fmt.Errorf("encoding record as JSON: %w", err)
-		}
-
-		// Write line
-		if _, err := writer.Write(jsonBytes); err != nil {
-			return fmt.Errorf("writing JSON line: %w", err)
-		}
-		if _, err := writer.Write([]byte("\n")); err != nil {
-			return fmt.Errorf("writing newline: %w", err)
-		}
-	}
-
-	return writer.Flush()
+	return ssql.WriteJSONFastToWriter(records, w)
 }
 
 // WriteJSONLRecord writes a single Record to a writer as JSONL (JSON Lines)
+// Uses fast JSON encoding (avoids reflection) for better performance.
 func WriteJSONLRecord(w io.Writer, record ssql.Record) error {
-	// Convert Record to map for JSON encoding
-	data := make(map[string]interface{})
+	// Use fast encoding
+	buf := record.AppendJSON(nil)
+	buf = append(buf, '\n')
 
-	// Extract all fields from record
-	for k, v := range record.All() {
-		data[k] = convertRecordValue(v)
-	}
-
-	// Encode as JSON
-	jsonBytes, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("encoding record as JSON: %w", err)
-	}
-
-	// Write line
-	if _, err := w.Write(jsonBytes); err != nil {
+	if _, err := w.Write(buf); err != nil {
 		return fmt.Errorf("writing JSON line: %w", err)
-	}
-	if _, err := w.Write([]byte("\n")); err != nil {
-		return fmt.Errorf("writing newline: %w", err)
 	}
 
 	return nil
@@ -172,15 +104,18 @@ func setValueFromJSON(record ssql.MutableRecord, key string, v interface{}) ssql
 }
 
 // inferJSONFieldType determines the FieldType from a JSON-parsed value
+// Handles both json.Unmarshal types (float64 for all numbers) and fast parser types (int64/float64)
 func inferJSONFieldType(value interface{}) ssql.FieldType {
 	switch value.(type) {
+	case int64:
+		return ssql.FieldTypeInt // Fast parser returns integers as int64
 	case float64:
-		return ssql.FieldTypeFloat // JSON numbers are always float64
+		return ssql.FieldTypeFloat // JSON numbers or decimals
 	case bool:
 		return ssql.FieldTypeBool
 	case string:
 		return ssql.FieldTypeString
-	case []interface{}, map[string]interface{}, ssql.Record:
+	case []interface{}, map[string]interface{}, ssql.Record, ssql.JSONString:
 		return ssql.FieldTypeAuto // Preserve complex types as-is
 	default:
 		return ssql.FieldTypeAuto // Preserve unknown types as-is
@@ -188,12 +123,15 @@ func inferJSONFieldType(value interface{}) ssql.FieldType {
 }
 
 // setValueWithType sets a field on a MutableRecord, coercing to the target type
+// Handles both json.Unmarshal types (float64 for all numbers) and fast parser types (int64/float64)
 func setValueWithType(record ssql.MutableRecord, key string, v interface{}, targetType ssql.FieldType) ssql.MutableRecord {
 	switch targetType {
 	case ssql.FieldTypeFloat:
 		switch val := v.(type) {
 		case float64:
 			return record.Float(key, val)
+		case int64:
+			return record.Float(key, float64(val))
 		case bool:
 			if val {
 				return record.Float(key, 1)
@@ -209,6 +147,8 @@ func setValueWithType(record ssql.MutableRecord, key string, v interface{}, targ
 		}
 	case ssql.FieldTypeInt:
 		switch val := v.(type) {
+		case int64:
+			return record.Int(key, val)
 		case float64:
 			return record.Int(key, int64(val))
 		case bool:
@@ -228,6 +168,8 @@ func setValueWithType(record ssql.MutableRecord, key string, v interface{}, targ
 		switch val := v.(type) {
 		case bool:
 			return record.Bool(key, val)
+		case int64:
+			return record.Bool(key, val != 0)
 		case float64:
 			return record.Bool(key, val != 0)
 		case string:
@@ -244,6 +186,8 @@ func setValueWithType(record ssql.MutableRecord, key string, v interface{}, targ
 		switch val := v.(type) {
 		case string:
 			return record.String(key, val)
+		case int64:
+			return record.String(key, strconv.FormatInt(val, 10))
 		case float64:
 			return record.String(key, strconv.FormatFloat(val, 'g', -1, 64))
 		case bool:
@@ -332,6 +276,7 @@ func ReadJSONLWithSchema(r io.Reader) *SchemaAndRecords {
 }
 
 // readJSONLWithSchema reads JSONL using schema for type coercion.
+// Uses fast JSON parsing with schema-based type coercion.
 func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
 	return func(yield func(ssql.Record) bool) {
 		scanner := bufio.NewScanner(r)
@@ -344,26 +289,29 @@ func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
 				continue
 			}
 
-			var rec map[string]any
-			if err := json.Unmarshal(line, &rec); err != nil {
+			// Use fast parser
+			parsed, err := ssql.ParseJSONLine(line)
+			if err != nil {
 				continue
 			}
 
-			record := ssql.MakeMutableRecord()
-			for k, v := range rec {
-				if schema != nil {
+			// Apply schema type coercion if needed
+			if schema != nil {
+				record := ssql.MakeMutableRecord()
+				for k, v := range parsed.Freeze().All() {
 					if typ := schema.TypeOf(k); typ != "" {
 						record = setValueWithType(record, k, v, SchemaTypeToFieldType(typ))
 					} else {
 						record = setValueFromJSON(record, k, v)
 					}
-				} else {
-					record = setValueFromJSON(record, k, v)
 				}
-			}
-
-			if !yield(record.Freeze()) {
-				return
+				if !yield(record.Freeze()) {
+					return
+				}
+			} else {
+				if !yield(parsed.Freeze()) {
+					return
+				}
 			}
 		}
 	}
@@ -371,6 +319,7 @@ func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
 
 // WriteJSONLWithSchema writes a schema header (if provided) followed by records.
 // If schema is nil, behaves like WriteJSONL (no schema header).
+// Uses fast JSON encoding (avoids reflection) for better performance.
 func WriteJSONLWithSchema(w io.Writer, schema *Schema, records iter.Seq[ssql.Record]) error {
 	writer := bufio.NewWriter(w)
 	defer writer.Flush()
@@ -382,22 +331,12 @@ func WriteJSONLWithSchema(w io.Writer, schema *Schema, records iter.Seq[ssql.Rec
 		}
 	}
 
-	// Write records
+	// Write records using fast encoding
 	for record := range records {
-		data := make(map[string]any)
-		for k, v := range record.All() {
-			data[k] = convertRecordValue(v)
-		}
+		buf := record.AppendJSON(nil)
+		buf = append(buf, '\n')
 
-		jsonBytes, err := json.Marshal(data)
-		if err != nil {
-			return fmt.Errorf("encoding record: %w", err)
-		}
-
-		if _, err := writer.Write(jsonBytes); err != nil {
-			return err
-		}
-		if _, err := writer.Write([]byte("\n")); err != nil {
+		if _, err := writer.Write(buf); err != nil {
 			return err
 		}
 	}
@@ -407,6 +346,7 @@ func WriteJSONLWithSchema(w io.Writer, schema *Schema, records iter.Seq[ssql.Rec
 
 // WriteJSONLWithSchemaOrdered writes records with fields in schema order.
 // If schema is nil, fields are written in iteration order (non-deterministic).
+// Uses fast JSON encoding when no ordering is required.
 func WriteJSONLWithSchemaOrdered(w io.Writer, schema *Schema, records iter.Seq[ssql.Record]) error {
 	writer := bufio.NewWriter(w)
 	defer writer.Flush()
@@ -420,29 +360,22 @@ func WriteJSONLWithSchemaOrdered(w io.Writer, schema *Schema, records iter.Seq[s
 
 	// Write records with ordered fields
 	for record := range records {
-		var jsonBytes []byte
-		var err error
+		var buf []byte
 
 		if schema != nil && len(schema.Fields) > 0 {
-			// Build ordered map using schema field order
-			jsonBytes, err = marshalOrderedRecord(record, schema.Fields)
-		} else {
-			// No schema - use default marshaling
-			data := make(map[string]any)
-			for k, v := range record.All() {
-				data[k] = convertRecordValue(v)
+			// Build ordered map using schema field order (custom marshaling needed)
+			var err error
+			buf, err = marshalOrderedRecord(record, schema.Fields)
+			if err != nil {
+				return fmt.Errorf("encoding record: %w", err)
 			}
-			jsonBytes, err = json.Marshal(data)
+		} else {
+			// No schema - use fast encoding
+			buf = record.AppendJSON(nil)
 		}
 
-		if err != nil {
-			return fmt.Errorf("encoding record: %w", err)
-		}
-
-		if _, err := writer.Write(jsonBytes); err != nil {
-			return err
-		}
-		if _, err := writer.Write([]byte("\n")); err != nil {
+		buf = append(buf, '\n')
+		if _, err := writer.Write(buf); err != nil {
 			return err
 		}
 	}

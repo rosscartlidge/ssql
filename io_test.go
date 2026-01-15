@@ -42,12 +42,12 @@ Charlie,35,SF`
 		t.Fatalf("Expected 3 records, got %d", len(result))
 	}
 
-	if result[0].fields["name"] != "Alice" {
-		t.Errorf("First record name should be Alice, got %v", result[0].fields["name"])
+	if GetOr(result[0], "name", "") != "Alice" {
+		t.Errorf("First record name should be Alice, got %v", GetOr(result[0], "name", ""))
 	}
 	// CSV parsing converts numbers automatically
-	if result[1].fields["age"] != int64(25) {
-		t.Errorf("Second record age should be 25 (int64), got %v (type %T)", result[1].fields["age"], result[1].fields["age"])
+	if GetOr(result[1], "age", int64(0)) != int64(25) {
+		t.Errorf("Second record age should be 25 (int64), got %v (type %T)", GetOr(result[1], "age", int64(0)), GetOr(result[1], "age", int64(0)))
 	}
 }
 
@@ -67,8 +67,8 @@ Bob|25|LA`
 		t.Fatalf("Expected 2 records, got %d", len(result))
 	}
 
-	if result[0].fields["name"] != "Alice" {
-		t.Errorf("Name should be Alice, got %v", result[0].fields["name"])
+	if GetOr(result[0], "name", "") != "Alice" {
+		t.Errorf("Name should be Alice, got %v", GetOr(result[0], "name", ""))
 	}
 }
 
@@ -153,8 +153,8 @@ func TestReadWriteCSV(t *testing.T) {
 		t.Fatalf("Expected 2 records, got %d", len(result))
 	}
 
-	if result[0].fields["name"] != "Alice" {
-		t.Errorf("Name should be Alice, got %v", result[0].fields["name"])
+	if GetOr(result[0], "name", "") != "Alice" {
+		t.Errorf("Name should be Alice, got %v", GetOr(result[0], "name", ""))
 	}
 }
 
@@ -201,8 +201,8 @@ func TestReadJSONFromReader(t *testing.T) {
 		t.Fatalf("Expected 3 records, got %d", len(result))
 	}
 
-	if result[0].fields["name"] != "Alice" {
-		t.Errorf("First record name should be Alice, got %v", result[0].fields["name"])
+	if GetOr(result[0], "name", "") != "Alice" {
+		t.Errorf("First record name should be Alice, got %v", GetOr(result[0], "name", ""))
 	}
 }
 
@@ -283,8 +283,8 @@ func TestReadWriteJSON(t *testing.T) {
 		t.Fatalf("Expected 2 records, got %d", len(result))
 	}
 
-	if result[0].fields["name"] != "Alice" {
-		t.Errorf("Name should be Alice, got %v", result[0].fields["name"])
+	if GetOr(result[0], "name", "") != "Alice" {
+		t.Errorf("Name should be Alice, got %v", GetOr(result[0], "name", ""))
 	}
 }
 
@@ -342,8 +342,8 @@ func TestReadLines(t *testing.T) {
 		t.Fatalf("Expected 3 records, got %d", len(result))
 	}
 
-	if result[0].fields["line"] != "line1" {
-		t.Errorf("First line should be 'line1', got %v", result[0].fields["line"])
+	if GetOr(result[0], "line", "") != "line1" {
+		t.Errorf("First line should be 'line1', got %v", GetOr(result[0], "line", ""))
 	}
 }
 
@@ -691,7 +691,7 @@ func TestJSONPipeline(t *testing.T) {
 		t.Fatalf("ReadJSON failed: %v", err)
 	}
 	filtered := Where(func(r Record) bool {
-		value, ok := r.fields["value"].(float64)
+		value, ok := Get[float64](r, "value")
 		return ok && value >= 150
 	})(input)
 
@@ -818,17 +818,21 @@ func TestCSVTypeParsing(t *testing.T) {
 		result := slices.Collect(seq)
 
 		for i, r := range result {
-			val := r.fields["value"]
+			val, ok := Get[any](r, "value")
+			if !ok {
+				t.Errorf("Row %d: value field not found", i)
+				continue
+			}
 			if _, ok := val.(int64); !ok {
 				t.Errorf("Row %d: value should be int64, got %T(%v)", i, val, val)
 			}
 		}
 		// Verify specific values
-		if result[0].fields["value"] != int64(1) {
-			t.Errorf("Expected 1, got %v", result[0].fields["value"])
+		if GetOr(result[0], "value", int64(0)) != int64(1) {
+			t.Errorf("Expected 1, got %v", GetOr(result[0], "value", int64(0)))
 		}
-		if result[1].fields["value"] != int64(0) {
-			t.Errorf("Expected 0, got %v", result[1].fields["value"])
+		if GetOr(result[1], "value", int64(0)) != int64(0) {
+			t.Errorf("Expected 0, got %v", GetOr(result[1], "value", int64(0)))
 		}
 	})
 
@@ -848,7 +852,11 @@ no
 		// All values should be parsed as bool since first row is "true"
 		expected := []bool{true, false, true, false, true, false}
 		for i, r := range result {
-			val := r.fields["active"]
+			val, ok := Get[any](r, "active")
+			if !ok {
+				t.Errorf("Row %d: active field not found", i)
+				continue
+			}
 			if _, ok := val.(bool); !ok {
 				t.Errorf("Row %d: value should be bool, got %T(%v)", i, val, val)
 			}
@@ -869,7 +877,11 @@ no
 		result := slices.Collect(seq)
 
 		for i, r := range result {
-			val := r.fields["price"]
+			val, ok := Get[any](r, "price")
+			if !ok {
+				t.Errorf("Row %d: price field not found", i)
+				continue
+			}
 			if _, ok := val.(float64); !ok {
 				t.Errorf("Row %d: value should be float64, got %T(%v)", i, val, val)
 			}
@@ -887,14 +899,18 @@ Bob
 		result := slices.Collect(seq)
 
 		for i, r := range result {
-			val := r.fields["name"]
+			val, ok := Get[any](r, "name")
+			if !ok {
+				t.Errorf("Row %d: name field not found", i)
+				continue
+			}
 			if _, ok := val.(string); !ok {
 				t.Errorf("Row %d: value should be string, got %T(%v)", i, val, val)
 			}
 		}
 		// Even "123" stays string since first row was string
-		if result[2].fields["name"] != "123" {
-			t.Errorf("Expected '123' as string, got %v", result[2].fields["name"])
+		if GetOr(result[2], "name", "") != "123" {
+			t.Errorf("Expected '123' as string, got %v", GetOr(result[2], "name", ""))
 		}
 	})
 
@@ -913,15 +929,15 @@ Bob
 		result := slices.Collect(seq)
 
 		// zipcode should be string (preserving leading zeros)
-		if result[0].fields["zipcode"] != "01234" {
-			t.Errorf("Expected '01234', got %v", result[0].fields["zipcode"])
+		if GetOr(result[0], "zipcode", "") != "01234" {
+			t.Errorf("Expected '01234', got %v", GetOr(result[0], "zipcode", ""))
 		}
-		if result[1].fields["zipcode"] != "00123" {
-			t.Errorf("Expected '00123', got %v", result[1].fields["zipcode"])
+		if GetOr(result[1], "zipcode", "") != "00123" {
+			t.Errorf("Expected '00123', got %v", GetOr(result[1], "zipcode", ""))
 		}
 		// age should still be auto-detected as int
-		if result[0].fields["age"] != int64(30) {
-			t.Errorf("Expected int64(30), got %T(%v)", result[0].fields["age"], result[0].fields["age"])
+		if GetOr(result[0], "age", int64(0)) != int64(30) {
+			t.Errorf("Expected int64(30), got %T(%v)", GetOr(result[0], "age", int64(0)), GetOr(result[0], "age", int64(0)))
 		}
 	})
 
@@ -939,11 +955,13 @@ Bob
 		result := slices.Collect(seq)
 
 		// Both should be strings
-		if _, ok := result[0].fields["zipcode"].(string); !ok {
-			t.Errorf("zipcode should be string, got %T", result[0].fields["zipcode"])
+		if _, ok := Get[string](result[0], "zipcode"); !ok {
+			val, _ := Get[any](result[0], "zipcode")
+			t.Errorf("zipcode should be string, got %T", val)
 		}
-		if _, ok := result[0].fields["age"].(string); !ok {
-			t.Errorf("age should be string, got %T", result[0].fields["age"])
+		if _, ok := Get[string](result[0], "age"); !ok {
+			val, _ := Get[any](result[0], "age")
+			t.Errorf("age should be string, got %T", val)
 		}
 	})
 }
@@ -1042,30 +1060,33 @@ func TestJSONComplexTypesRoundTrip(t *testing.T) {
 	}
 
 	// Verify basic fields are preserved
-	if reconstructedRecords[0].fields["id"] != "TASK-001" {
-		t.Errorf("ID should be TASK-001, got %v", reconstructedRecords[0].fields["id"])
+	if GetOr(reconstructedRecords[0], "id", "") != "TASK-001" {
+		t.Errorf("ID should be TASK-001, got %v", GetOr(reconstructedRecords[0], "id", ""))
 	}
 
-	if reconstructedRecords[0].fields["title"] != "Security Update" {
-		t.Errorf("Title should be 'Security Update', got %v", reconstructedRecords[0].fields["title"])
+	if GetOr(reconstructedRecords[0], "title", "") != "Security Update" {
+		t.Errorf("Title should be 'Security Update', got %v", GetOr(reconstructedRecords[0], "title", ""))
 	}
 
 	// Verify numeric fields (JSON converts to float64)
-	scoreValue, ok := reconstructedRecords[0].fields["score"].(float64)
+	scoreValue, ok := Get[float64](reconstructedRecords[0], "score")
 	if !ok || scoreValue != 95.5 {
-		t.Errorf("Score should be 95.5 (float64), got %v (%T)", reconstructedRecords[0].fields["score"], reconstructedRecords[0].fields["score"])
+		val, _ := Get[any](reconstructedRecords[0], "score")
+		t.Errorf("Score should be 95.5 (float64), got %v (%T)", val, val)
 	}
 
 	// Verify boolean field
-	completed, ok := reconstructedRecords[0].fields["completed"].(bool)
+	completed, ok := Get[bool](reconstructedRecords[0], "completed")
 	if !ok || completed != false {
-		t.Errorf("Completed should be false (bool), got %v (%T)", reconstructedRecords[0].fields["completed"], reconstructedRecords[0].fields["completed"])
+		val, _ := Get[any](reconstructedRecords[0], "completed")
+		t.Errorf("Completed should be false (bool), got %v (%T)", val, val)
 	}
 
 	// Verify iter.Seq fields become arrays
-	tagsValue, ok := reconstructedRecords[0].fields["tags"].([]any)
+	tagsValue, ok := Get[[]any](reconstructedRecords[0], "tags")
 	if !ok {
-		t.Errorf("Tags should be array after round-trip, got %T", reconstructedRecords[0].fields["tags"])
+		val, _ := Get[any](reconstructedRecords[0], "tags")
+		t.Errorf("Tags should be array after round-trip, got %T", val)
 	} else {
 		if len(tagsValue) != 2 {
 			t.Errorf("Tags should have 2 elements, got %d", len(tagsValue))
@@ -1076,9 +1097,10 @@ func TestJSONComplexTypesRoundTrip(t *testing.T) {
 	}
 
 	// Verify Record fields become map[string]any
-	metadataValue, ok := reconstructedRecords[0].fields["metadata"].(map[string]any)
+	metadataValue, ok := Get[map[string]any](reconstructedRecords[0], "metadata")
 	if !ok {
-		t.Errorf("Metadata should be map after round-trip, got %T", reconstructedRecords[0].fields["metadata"])
+		val, _ := Get[any](reconstructedRecords[0], "metadata")
+		t.Errorf("Metadata should be map after round-trip, got %T", val)
 	} else {
 		if metadataValue["priority"] != "high" {
 			t.Errorf("Metadata priority should be 'high', got %v", metadataValue["priority"])
@@ -1086,9 +1108,10 @@ func TestJSONComplexTypesRoundTrip(t *testing.T) {
 	}
 
 	// Verify JSONString is parsed (not double-encoded)
-	configValue, ok := reconstructedRecords[0].fields["config"].(map[string]any)
+	configValue, ok := Get[map[string]any](reconstructedRecords[0], "config")
 	if !ok {
-		t.Errorf("Config should be parsed map, got %T", reconstructedRecords[0].fields["config"])
+		val, _ := Get[any](reconstructedRecords[0], "config")
+		t.Errorf("Config should be parsed map, got %T", val)
 	} else {
 		// JSON converts all numbers to float64
 		if timeout, ok := configValue["timeout"].(float64); !ok || timeout != 30 {
@@ -1166,7 +1189,7 @@ func TestJSONStreamProcessing(t *testing.T) {
 	}
 
 	// Verify calculated field exists
-	if _, ok := finalRecords[0].fields["total_value"]; !ok {
+	if !finalRecords[0].Has("total_value") {
 		t.Error("total_value field should be added during filtering")
 	}
 
@@ -1263,7 +1286,7 @@ func TestFunctionalPipelineComposition(t *testing.T) {
 		}
 
 		// Verify average was calculated
-		if _, ok := result.fields["avg_amount"]; !ok {
+		if !result.Has("avg_amount") {
 			t.Errorf("avg_amount should be present for region %s", region)
 		}
 	}

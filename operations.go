@@ -674,7 +674,8 @@ func RunningCount(fieldName string) Filter[Record, Record] {
 
 			for record := range input {
 				// Convert field value to string for counting
-				value := fmt.Sprintf("%v", record.fields[fieldName])
+				fieldValue, _ := Get[any](record, fieldName)
+				value := fmt.Sprintf("%v", fieldValue)
 				counts[value]++
 				totalCount++
 
@@ -890,7 +891,7 @@ func SlidingTimeWindow[T any](windowDuration, slideDuration time.Duration, timeF
 func extractTimestamp(value any, timeField string) time.Time {
 	// Handle Record type specifically
 	if record, ok := value.(Record); ok {
-		if timeValue, exists := record.fields[timeField]; exists {
+		if timeValue, exists := Get[any](record, timeField); exists {
 			return parseTimeValue(timeValue)
 		}
 	}

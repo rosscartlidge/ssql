@@ -77,16 +77,16 @@ func innerJoinNested(
 // MutableRecord -> Freeze() copy overhead.
 func mergeRecords(left, right Record) Record {
 	// Pre-allocate with combined capacity
-	merged := make(map[string]any, len(left.fields)+len(right.fields))
+	merged := make(map[string]any, left.Len()+right.Len())
 	// Copy left fields directly
-	for k, v := range left.fields {
+	for k, v := range left.All() {
 		merged[k] = v
 	}
 	// Copy right fields (may override left on field name collision)
-	for k, v := range right.fields {
+	for k, v := range right.All() {
 		merged[k] = v
 	}
-	return Record{fields: merged}
+	return NewRecord(merged)
 }
 
 // innerJoinHash performs O(n+m) hash-based inner join
@@ -544,8 +544,8 @@ func OnFields(fields ...string) JoinPredicate {
 // Match implements JoinPredicate for fieldsJoinPredicate
 func (p *fieldsJoinPredicate) Match(left, right Record) bool {
 	for _, field := range p.fields {
-		leftVal, leftExists := left.fields[field]
-		rightVal, rightExists := right.fields[field]
+		leftVal, leftExists := Get[any](left, field)
+		rightVal, rightExists := Get[any](right, field)
 		if !leftExists || !rightExists || leftVal != rightVal {
 			return false
 		}
@@ -557,7 +557,7 @@ func (p *fieldsJoinPredicate) Match(left, right Record) bool {
 func (p *fieldsJoinPredicate) ExtractKey(r Record) (string, bool) {
 	var parts []string
 	for _, field := range p.fields {
-		val, exists := r.fields[field]
+		val, exists := Get[any](r, field)
 		if !exists {
 			return "", false
 		}
@@ -605,8 +605,8 @@ type fieldPairJoinPredicate struct {
 
 // Match implements JoinPredicate for fieldPairJoinPredicate
 func (p *fieldPairJoinPredicate) Match(left, right Record) bool {
-	leftVal, leftExists := left.fields[p.leftField]
-	rightVal, rightExists := right.fields[p.rightField]
+	leftVal, leftExists := Get[any](left, p.leftField)
+	rightVal, rightExists := Get[any](right, p.rightField)
 	if !leftExists || !rightExists {
 		return false
 	}
@@ -621,11 +621,11 @@ func (p *fieldPairJoinPredicate) Match(left, right Record) bool {
 // build hash table from RIGHT records and probe with LEFT records.
 func (p *fieldPairJoinPredicate) ExtractKey(r Record) (string, bool) {
 	// Try left field first (for probe phase)
-	if val, exists := r.fields[p.leftField]; exists {
+	if val, exists := Get[any](r, p.leftField); exists {
 		return fmt.Sprintf("%v", val), true
 	}
 	// Fall back to right field (for build phase)
-	if val, exists := r.fields[p.rightField]; exists {
+	if val, exists := Get[any](r, p.rightField); exists {
 		return fmt.Sprintf("%v", val), true
 	}
 	return "", false
@@ -700,7 +700,7 @@ func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record
 			for i, clause := range clauses {
 				indices[i] = make(map[string][]Record)
 				for _, r := range rightRecords {
-					if val, exists := r.fields[clause.RightField]; exists {
+					if val, exists := Get[any](r, clause.RightField); exists {
 						key := fmt.Sprintf("%v", val)
 						indices[i][key] = append(indices[i][key], r)
 					}
@@ -718,7 +718,7 @@ func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record
 
 					for _, current := range currentRecords {
 						// Get the lookup key from the left field
-						leftVal, exists := current.fields[clause.LeftField]
+						leftVal, exists := Get[any](current, clause.LeftField)
 						if !exists {
 							// No match possible, keep current record unchanged
 							nextRecords = append(nextRecords, current)
@@ -760,26 +760,26 @@ func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record
 // If renames has entries, only those fields are copied with the specified new names.
 func mergeWithRenames(left, right Record, renames map[string]string) Record {
 	// Start with a copy of left
-	merged := make(map[string]any, len(left.fields)+len(renames))
-	for k, v := range left.fields {
+	merged := make(map[string]any, left.Len()+len(renames))
+	for k, v := range left.All() {
 		merged[k] = v
 	}
 
 	if len(renames) == 0 {
 		// No renames specified - copy all right fields (standard merge)
-		for k, v := range right.fields {
+		for k, v := range right.All() {
 			merged[k] = v
 		}
 	} else {
 		// Only copy specified fields with new names
 		for rightField, newName := range renames {
-			if val, exists := right.fields[rightField]; exists {
+			if val, exists := Get[any](right, rightField); exists {
 				merged[newName] = val
 			}
 		}
 	}
 
-	return Record{fields: merged}
+	return NewRecord(merged)
 }
 
 // ============================================================================
@@ -890,7 +890,7 @@ func GroupByFields(sequenceField string, fields ...string) Filter[Record, Record
 				hasComplexField := false
 
 				for _, field := range fields {
-					if val, exists := record.fields[field]; exists {
+					if val, exists := Get[any](record, field); exists {
 						// Validate that the field value is simple (no iter.Seq or Record)
 						if !isSimpleValue(val) {
 							// Skip this entire record if any grouping field is complex
@@ -1010,7 +1010,7 @@ func Aggregate(sequenceField string, aggregations map[string]AggregateFunc) Filt
 				}
 
 				// Extract the sequence from the specified field
-				if seqValue, exists := record.fields[sequenceField]; exists {
+				if seqValue, exists := Get[any](record, sequenceField); exists {
 					if seq, ok := seqValue.(iter.Seq[Record]); ok {
 						// Materialize the sequence for aggregation functions
 						var records []Record
@@ -1207,7 +1207,7 @@ func Collect(field string) AggregateFunc {
 	return func(records []Record) AggregateResult {
 		var result []any
 		for _, record := range records {
-			if val, ok := record.fields[field]; ok && val != nil {
+			if val, ok := Get[any](record, field); ok && val != nil {
 				result = append(result, val)
 			}
 		}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
-	"maps"
 	"reflect"
 	"sort"
 	"strconv"
@@ -165,9 +164,70 @@ func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T] {
 // RECORD SYSTEM
 // ============================================================================
 
+// Schema defines the structure of records - field names, indices, and types.
+// A Schema is shared across all records in a stream, avoiding per-record
+// allocation of field name strings and enabling O(1) field access by index.
+//
+// Example:
+//
+//	schema := ssql.NewSchema([]string{"name", "age", "salary"})
+//	// schema.Width == 3
+//	// schema.Index("age") == 1
+type Schema struct {
+	fields      []string       // Field names in order
+	indices     map[string]int // Field name → index for O(1) lookup
+	width       int            // Number of fields (len(fields))
+	jsonPrefixes [][]byte      // Pre-computed JSON prefixes: `"field":`
+}
+
+// NewSchema creates a Schema from field names.
+// The order of fields is preserved for consistent iteration.
+func NewSchema(fields []string) *Schema {
+	indices := make(map[string]int, len(fields))
+	jsonPrefixes := make([][]byte, len(fields))
+	for i, f := range fields {
+		indices[f] = i
+		// Pre-compute JSON prefix: `"field_name":`
+		jsonPrefixes[i] = appendJSONString(nil, f)
+		jsonPrefixes[i] = append(jsonPrefixes[i], ':')
+	}
+	return &Schema{
+		fields:       fields,
+		indices:      indices,
+		width:        len(fields),
+		jsonPrefixes: jsonPrefixes,
+	}
+}
+
+// Fields returns a copy of the field names in order
+func (s *Schema) Fields() []string {
+	result := make([]string, len(s.fields))
+	copy(result, s.fields)
+	return result
+}
+
+// Index returns the index of a field, or -1 if not found
+func (s *Schema) Index(field string) int {
+	if idx, ok := s.indices[field]; ok {
+		return idx
+	}
+	return -1
+}
+
+// Has returns true if the schema contains the field
+func (s *Schema) Has(field string) bool {
+	_, ok := s.indices[field]
+	return ok
+}
+
+// Width returns the number of fields
+func (s *Schema) Width() int {
+	return s.width
+}
+
 // Record represents structured data with native Go types.
 // This is the primary data structure for working with CSV/JSON data and command output.
-// Records use an encapsulated map to enforce type safety and canonical type conventions.
+// Records use a slice-based storage with shared Schema for high performance.
 //
 // Key features:
 //   - Type-safe field access with Get/GetOr
@@ -176,6 +236,8 @@ func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T] {
 //   - Supports sequences (iter.Seq[T])
 //   - Immutable updates via Record methods (creates copies)
 //   - maps-style API (All, Keys, Values) for iteration
+//   - Shared Schema across all records in a stream (memory efficient)
+//   - O(1) field access via schema index lookup
 //
 // Example:
 //
@@ -198,7 +260,20 @@ func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T] {
 //	// Immutable updates (creates new Record)
 //	updated := record.Int("age", int64(31))
 type Record struct {
-	fields map[string]any
+	schema *Schema // Shared across all records in stream (for field name → index mapping)
+	values []any   // Field values in schema order (exact size: schema.width)
+}
+
+// NewRecordFromSchema creates a Record with a pre-existing Schema.
+// This is the efficient path used by CSV/JSON readers where schema is known upfront.
+// The values slice is used directly (not copied) for efficiency.
+func NewRecordFromSchema(schema *Schema, values []any) Record {
+	return Record{schema: schema, values: values}
+}
+
+// Schema returns the record's schema (may be nil for empty records)
+func (r Record) Schema() *Schema {
+	return r.schema
 }
 
 // JSONString represents a string containing valid JSON data.
@@ -323,27 +398,47 @@ func MakeMutableRecordWithCapacity(capacity int) MutableRecord {
 	return MutableRecord{fields: make(map[string]any, capacity)}
 }
 
-// NewRecord creates a Record from a map (for compatibility)
+// NewRecord creates a Record from a map (for compatibility).
+// This creates a Schema from the map keys for the new slice-based storage.
+// For high-performance scenarios, use NewRecordFromSchema with a pre-existing Schema.
 func NewRecord(fields map[string]any) Record {
-	// Copy the map to maintain encapsulation
-	m := make(map[string]any, len(fields))
-	maps.Copy(m, fields)
-	return Record{fields: m}
+	if len(fields) == 0 {
+		return Record{schema: nil, values: nil}
+	}
+
+	// Extract sorted keys for consistent schema ordering
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Create schema and values slice
+	schema := NewSchema(keys)
+	values := make([]any, len(keys))
+	for i, k := range keys {
+		values[i] = fields[k]
+	}
+
+	return Record{schema: schema, values: values}
 }
 
-// Freeze converts a MutableRecord to an immutable Record
-// Creates a copy to ensure mutations don't leak
+// Freeze converts a MutableRecord to an immutable Record.
+// Creates a new Schema and values slice from the MutableRecord's map.
 func (m MutableRecord) Freeze() Record {
-	frozen := make(map[string]any, len(m.fields))
-	maps.Copy(frozen, m.fields)
-	return Record{fields: frozen}
+	return NewRecord(m.fields)
 }
 
-// ToMutable creates a mutable copy of a Record for modification
-// This preserves immutability by creating a shallow copy of the original Record
+// ToMutable creates a mutable copy of a Record for modification.
+// This preserves immutability by creating a map copy from the Record's values.
 func (r Record) ToMutable() MutableRecord {
-	m := make(map[string]any, len(r.fields))
-	maps.Copy(m, r.fields)
+	if r.schema == nil {
+		return MutableRecord{fields: make(map[string]any)}
+	}
+	m := make(map[string]any, r.schema.width)
+	for i, field := range r.schema.fields {
+		m[field] = r.values[i]
+	}
 	return MutableRecord{fields: m}
 }
 
@@ -377,11 +472,17 @@ func (r Record) ToMutable() MutableRecord {
 //	// Field doesn't exist
 //	missing, ok := ssql.Get[string](record, "missing")  // "", false
 func Get[T any](r Record, field string) (T, bool) {
-	val, exists := r.fields[field]
-	if !exists {
-		var zero T
+	var zero T
+	if r.schema == nil {
 		return zero, false
 	}
+
+	idx := r.schema.Index(field)
+	if idx < 0 || idx >= len(r.values) {
+		return zero, false
+	}
+
+	val := r.values[idx]
 
 	// Direct type assertion first (fast path)
 	if typed, ok := val.(T); ok {
@@ -393,7 +494,6 @@ func Get[T any](r Record, field string) (T, bool) {
 		return converted, true
 	}
 
-	var zero T
 	return zero, false
 }
 
@@ -426,54 +526,70 @@ func GetOr[T any](r Record, field string, defaultVal T) T {
 
 // Has checks if a field exists
 func (r Record) Has(field string) bool {
-	_, exists := r.fields[field]
-	return exists
+	if r.schema == nil {
+		return false
+	}
+	return r.schema.Has(field)
 }
 
 // Len returns the number of fields in the record
 func (r Record) Len() int {
-	return len(r.fields)
+	if r.schema == nil {
+		return 0
+	}
+	return r.schema.width
 }
 
-// Keys returns all field names as a slice
+// Keys returns all field names as a slice (in schema order)
 func (r Record) Keys() []string {
-	keys := make([]string, 0, len(r.fields))
-	for k := range r.fields {
-		keys = append(keys, k)
+	if r.schema == nil {
+		return nil
 	}
-	return keys
+	return r.schema.Fields() // Returns a copy
 }
 
 // ============================================================================
 // MAPS-STYLE ITERATOR API
 // ============================================================================
 
-// All returns an iterator over key-value pairs (matches maps.All)
+// All returns an iterator over key-value pairs (matches maps.All).
+// Iterates in schema order (consistent ordering).
 func (r Record) All() iter.Seq2[string, any] {
 	return func(yield func(string, any) bool) {
-		for k, v := range r.fields {
-			if !yield(k, v) {
+		if r.schema == nil {
+			return
+		}
+		for i, field := range r.schema.fields {
+			if !yield(field, r.values[i]) {
 				return
 			}
 		}
 	}
 }
 
-// KeysIter returns an iterator over field names (matches maps.Keys)
+// KeysIter returns an iterator over field names (matches maps.Keys).
+// Iterates in schema order.
 func (r Record) KeysIter() iter.Seq[string] {
 	return func(yield func(string) bool) {
-		for k := range r.fields {
-			if !yield(k) {
+		if r.schema == nil {
+			return
+		}
+		for _, field := range r.schema.fields {
+			if !yield(field) {
 				return
 			}
 		}
 	}
 }
 
-// Values returns an iterator over field values (matches maps.Values)
+// Values returns an iterator over field values (matches maps.Values).
+// Iterates in schema order.
 func (r Record) Values() iter.Seq[any] {
 	return func(yield func(any) bool) {
-		for _, v := range r.fields {
+		if r.schema == nil {
+			return
+		}
+		for _, v := range r.values {
 			if !yield(v) {
 				return
 			}
@@ -481,26 +597,60 @@ func (r Record) Values() iter.Seq[any] {
 	}
 }
 
-// Clone creates a shallow copy of the record (matches maps.Clone)
+// Clone creates a shallow copy of the record (matches maps.Clone).
+// The cloned record shares the same Schema (schema is immutable).
 func (r Record) Clone() Record {
-	cloned := make(map[string]any, len(r.fields))
-	maps.Copy(cloned, r.fields)
-	return Record{fields: cloned}
+	if r.schema == nil {
+		return Record{schema: nil, values: nil}
+	}
+	cloned := make([]any, len(r.values))
+	copy(cloned, r.values)
+	return Record{schema: r.schema, values: cloned}
 }
 
 // Equal checks if two records have the same fields and values (matches maps.Equal)
 func (r Record) Equal(other Record) bool {
-	return maps.Equal(r.fields, other.fields)
+	// Both nil schemas means both empty
+	if r.schema == nil && other.schema == nil {
+		return true
+	}
+	// One nil, one not
+	if r.schema == nil || other.schema == nil {
+		return false
+	}
+	// Different number of fields
+	if r.schema.width != other.schema.width {
+		return false
+	}
+	// Check that all fields match
+	for i, field := range r.schema.fields {
+		otherIdx := other.schema.Index(field)
+		if otherIdx < 0 {
+			return false
+		}
+		if r.values[i] != other.values[otherIdx] {
+			return false
+		}
+	}
+	return true
 }
 
 // ============================================================================
 // JSON MARSHALING
 // ============================================================================
 
-// MarshalJSON implements json.Marshaler
-// Records marshal as {"name": "Alice", "age": 30} not {"fields": {...}}
+// MarshalJSON implements json.Marshaler.
+// Records marshal as {"name": "Alice", "age": 30} not {"schema": ..., "values": ...}
 func (r Record) MarshalJSON() ([]byte, error) {
-	return json.Marshal(r.fields)
+	if r.schema == nil {
+		return []byte("{}"), nil
+	}
+	// Build a map for JSON encoding
+	m := make(map[string]any, r.schema.width)
+	for i, field := range r.schema.fields {
+		m[field] = r.values[i]
+	}
+	return json.Marshal(m)
 }
 
 // UnmarshalJSON implements json.Unmarshaler
@@ -509,7 +659,8 @@ func (r *Record) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	r.fields = fields
+	// Use NewRecord to create schema and values
+	*r = NewRecord(fields)
 	return nil
 }
 
@@ -599,12 +750,43 @@ func (m MutableRecord) Nested(field string, value Record) MutableRecord {
 // RECORD FIELD METHODS - IMMUTABLE UPDATES (CREATES COPIES)
 // ============================================================================
 
-// SetImmutable adds a field with compile-time type safety - creates new Record (immutable)
+// SetImmutable adds a field with compile-time type safety - creates new Record (immutable).
+// If the field exists, updates its value. If not, creates a new schema with the field.
 func SetImmutable[V Value](r Record, field string, value V) Record {
-	result := make(map[string]any, len(r.fields)+1)
-	maps.Copy(result, r.fields)
-	result[field] = value
-	return Record{fields: result}
+	if r.schema == nil {
+		// Empty record - create new with single field
+		schema := NewSchema([]string{field})
+		return Record{schema: schema, values: []any{value}}
+	}
+
+	idx := r.schema.Index(field)
+	if idx >= 0 {
+		// Field exists - update value (same schema)
+		newValues := make([]any, len(r.values))
+		copy(newValues, r.values)
+		newValues[idx] = value
+		return Record{schema: r.schema, values: newValues}
+	}
+
+	// Field doesn't exist - create new schema with additional field
+	newFields := make([]string, len(r.schema.fields)+1)
+	copy(newFields, r.schema.fields)
+	newFields[len(r.schema.fields)] = field
+	sort.Strings(newFields)
+
+	newSchema := NewSchema(newFields)
+	newValues := make([]any, newSchema.width)
+
+	// Copy existing values to their new positions
+	for i, f := range r.schema.fields {
+		newIdx := newSchema.Index(f)
+		newValues[newIdx] = r.values[i]
+	}
+	// Set the new field value
+	newIdx := newSchema.Index(field)
+	newValues[newIdx] = value
+
+	return Record{schema: newSchema, values: newValues}
 }
 
 // String adds a string field (creates new Record)
@@ -880,22 +1062,537 @@ func convertToTime(val any) (time.Time, bool) {
 //	distinct := ssql.DistinctBy(ssql.RecordKey)
 //	result := distinct(combined)
 func RecordKey(r Record) string {
-	// Use JSON-like representation for consistent, deterministic keys
-	// Sort keys for deterministic output
-	keys := r.Keys() // Already returns sorted keys
-	sort.Strings(keys)
+	if r.schema == nil {
+		return "{}"
+	}
 
+	// Use JSON-like representation for consistent, deterministic keys
+	// Schema.fields is already in sorted order from NewSchema
 	var b strings.Builder
 	b.WriteByte('{')
-	for i, k := range keys {
+	for i, k := range r.schema.fields {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		v := r.fields[k]
-		fmt.Fprintf(&b, "%q:%v", k, v)
+		fmt.Fprintf(&b, "%q:%v", k, r.values[i])
 	}
 	b.WriteByte('}')
 	return b.String()
+}
+
+// ============================================================================
+// FAST JSON ENCODING
+// ============================================================================
+
+// AppendJSON appends the JSON representation of this Record to buf.
+// This is much faster than encoding/json because it uses pre-computed
+// field prefixes and avoids reflection.
+func (r Record) AppendJSON(buf []byte) []byte {
+	if r.schema == nil {
+		return append(buf, '{', '}')
+	}
+
+	buf = append(buf, '{')
+	first := true
+	for i, v := range r.values {
+		if v == nil {
+			continue // Skip nil values
+		}
+		if !first {
+			buf = append(buf, ',')
+		}
+		first = false
+		// Use pre-computed prefix: `"field":`
+		buf = append(buf, r.schema.jsonPrefixes[i]...)
+		buf = appendJSONValue(buf, v)
+	}
+	buf = append(buf, '}')
+	return buf
+}
+
+// appendJSONValue appends a JSON-encoded value to buf.
+// Handles all common types efficiently without reflection.
+func appendJSONValue(buf []byte, v any) []byte {
+	switch val := v.(type) {
+	case nil:
+		return append(buf, "null"...)
+	case string:
+		return appendJSONString(buf, val)
+	case int64:
+		return strconv.AppendInt(buf, val, 10)
+	case float64:
+		return strconv.AppendFloat(buf, val, 'g', -1, 64)
+	case bool:
+		if val {
+			return append(buf, "true"...)
+		}
+		return append(buf, "false"...)
+	case int:
+		return strconv.AppendInt(buf, int64(val), 10)
+	case int32:
+		return strconv.AppendInt(buf, int64(val), 10)
+	case float32:
+		return strconv.AppendFloat(buf, float64(val), 'g', -1, 32)
+	case JSONString:
+		// JSONString is already valid JSON - append raw
+		return append(buf, string(val)...)
+	case []any:
+		return appendJSONArray(buf, val)
+	case map[string]any:
+		return appendJSONMap(buf, val)
+	case Record:
+		return val.AppendJSON(buf)
+	case time.Time:
+		buf = append(buf, '"')
+		buf = val.AppendFormat(buf, time.RFC3339Nano)
+		buf = append(buf, '"')
+		return buf
+	default:
+		// Fallback: use encoding/json for unknown types
+		data, err := json.Marshal(val)
+		if err != nil {
+			return append(buf, "null"...)
+		}
+		return append(buf, data...)
+	}
+}
+
+// appendJSONString appends a JSON-escaped string to buf.
+func appendJSONString(buf []byte, s string) []byte {
+	buf = append(buf, '"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '"':
+			buf = append(buf, '\\', '"')
+		case '\\':
+			buf = append(buf, '\\', '\\')
+		case '\n':
+			buf = append(buf, '\\', 'n')
+		case '\r':
+			buf = append(buf, '\\', 'r')
+		case '\t':
+			buf = append(buf, '\\', 't')
+		default:
+			if c < 0x20 {
+				// Control character - encode as \uXXXX
+				buf = append(buf, '\\', 'u', '0', '0')
+				buf = append(buf, "0123456789abcdef"[c>>4])
+				buf = append(buf, "0123456789abcdef"[c&0xf])
+			} else {
+				buf = append(buf, c)
+			}
+		}
+	}
+	buf = append(buf, '"')
+	return buf
+}
+
+// appendJSONArray appends a JSON array to buf.
+func appendJSONArray(buf []byte, arr []any) []byte {
+	buf = append(buf, '[')
+	for i, v := range arr {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = appendJSONValue(buf, v)
+	}
+	buf = append(buf, ']')
+	return buf
+}
+
+// appendJSONMap appends a JSON object to buf.
+// Keys are sorted for consistent output.
+func appendJSONMap(buf []byte, m map[string]any) []byte {
+	// Sort keys for consistent output
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	buf = append(buf, '{')
+	for i, k := range keys {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = appendJSONString(buf, k)
+		buf = append(buf, ':')
+		buf = appendJSONValue(buf, m[k])
+	}
+	buf = append(buf, '}')
+	return buf
+}
+
+// ============================================================================
+// FAST JSON PARSING (AVOIDS REFLECTION)
+// ============================================================================
+
+// ParseJSONLine parses a single JSON line into a MutableRecord.
+// This is 3-5x faster than json.Unmarshal for typical JSONL records.
+// Handles: strings, numbers (int64/float64), booleans, null, arrays, objects.
+// Arrays and nested objects are stored as JSONString for later parsing if needed.
+func ParseJSONLine(line []byte) (MutableRecord, error) {
+	record := MakeMutableRecord()
+	pos := 0
+	n := len(line)
+
+	// Skip leading whitespace
+	for pos < n && isJSONWhitespace(line[pos]) {
+		pos++
+	}
+
+	if pos >= n {
+		return record, nil // Empty line
+	}
+
+	// Expect opening brace
+	if line[pos] != '{' {
+		return record, fmt.Errorf("expected '{' at position %d", pos)
+	}
+	pos++
+
+	// Parse fields
+	for {
+		// Skip whitespace
+		for pos < n && isJSONWhitespace(line[pos]) {
+			pos++
+		}
+
+		if pos >= n {
+			return record, fmt.Errorf("unexpected end of JSON")
+		}
+
+		// Check for closing brace (empty object or end)
+		if line[pos] == '}' {
+			break
+		}
+
+		// Parse field name (must be a string)
+		if line[pos] != '"' {
+			return record, fmt.Errorf("expected '\"' for field name at position %d", pos)
+		}
+
+		fieldName, newPos, err := parseJSONStringValue(line, pos)
+		if err != nil {
+			return record, err
+		}
+		pos = newPos
+
+		// Skip whitespace
+		for pos < n && isJSONWhitespace(line[pos]) {
+			pos++
+		}
+
+		// Expect colon
+		if pos >= n || line[pos] != ':' {
+			return record, fmt.Errorf("expected ':' after field name at position %d", pos)
+		}
+		pos++
+
+		// Skip whitespace
+		for pos < n && isJSONWhitespace(line[pos]) {
+			pos++
+		}
+
+		// Parse value
+		value, newPos, err := parseJSONValue(line, pos)
+		if err != nil {
+			return record, err
+		}
+		pos = newPos
+
+		// Add field to record (skip nil values from JSON null)
+		if value != nil {
+			record.fields[fieldName] = value
+		}
+
+		// Skip whitespace
+		for pos < n && isJSONWhitespace(line[pos]) {
+			pos++
+		}
+
+		if pos >= n {
+			return record, fmt.Errorf("unexpected end of JSON")
+		}
+
+		// Check for comma or closing brace
+		if line[pos] == ',' {
+			pos++
+			continue
+		} else if line[pos] == '}' {
+			break
+		} else {
+			return record, fmt.Errorf("expected ',' or '}' at position %d, got '%c'", pos, line[pos])
+		}
+	}
+
+	return record, nil
+}
+
+// isJSONWhitespace returns true for JSON whitespace characters
+func isJSONWhitespace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+// parseJSONStringValue parses a JSON string starting at pos (which must be at '"')
+// Returns the unescaped string value and the position after the closing quote
+func parseJSONStringValue(line []byte, pos int) (string, int, error) {
+	if pos >= len(line) || line[pos] != '"' {
+		return "", pos, fmt.Errorf("expected '\"' at position %d", pos)
+	}
+	pos++ // Skip opening quote
+
+	// Fast path: check if string has no escapes
+	start := pos
+	for pos < len(line) {
+		c := line[pos]
+		if c == '"' {
+			// Simple string without escapes
+			return string(line[start:pos]), pos + 1, nil
+		}
+		if c == '\\' {
+			// Has escapes, use slow path
+			break
+		}
+		pos++
+	}
+
+	// Slow path: handle escapes
+	var buf []byte
+	buf = append(buf, line[start:pos]...)
+
+	for pos < len(line) {
+		c := line[pos]
+		if c == '"' {
+			return string(buf), pos + 1, nil
+		}
+		if c == '\\' {
+			pos++
+			if pos >= len(line) {
+				return "", pos, fmt.Errorf("unexpected end of string escape")
+			}
+			switch line[pos] {
+			case '"', '\\', '/':
+				buf = append(buf, line[pos])
+			case 'b':
+				buf = append(buf, '\b')
+			case 'f':
+				buf = append(buf, '\f')
+			case 'n':
+				buf = append(buf, '\n')
+			case 'r':
+				buf = append(buf, '\r')
+			case 't':
+				buf = append(buf, '\t')
+			case 'u':
+				// Unicode escape: \uXXXX
+				if pos+4 >= len(line) {
+					return "", pos, fmt.Errorf("invalid unicode escape")
+				}
+				r, err := strconv.ParseUint(string(line[pos+1:pos+5]), 16, 16)
+				if err != nil {
+					return "", pos, fmt.Errorf("invalid unicode escape: %w", err)
+				}
+				buf = append(buf, string(rune(r))...)
+				pos += 4
+			default:
+				return "", pos, fmt.Errorf("invalid escape character '\\%c'", line[pos])
+			}
+			pos++
+		} else {
+			buf = append(buf, c)
+			pos++
+		}
+	}
+
+	return "", pos, fmt.Errorf("unterminated string")
+}
+
+// parseJSONValue parses any JSON value starting at pos
+// Returns the parsed value (or nil for null) and the position after the value
+func parseJSONValue(line []byte, pos int) (any, int, error) {
+	if pos >= len(line) {
+		return nil, pos, fmt.Errorf("unexpected end of JSON value")
+	}
+
+	c := line[pos]
+
+	switch {
+	case c == '"':
+		// String
+		s, newPos, err := parseJSONStringValue(line, pos)
+		return s, newPos, err
+
+	case c == '-' || (c >= '0' && c <= '9'):
+		// Number
+		return parseJSONNumber(line, pos)
+
+	case c == 't':
+		// true
+		if pos+4 <= len(line) && string(line[pos:pos+4]) == "true" {
+			return true, pos + 4, nil
+		}
+		return nil, pos, fmt.Errorf("invalid JSON value at position %d", pos)
+
+	case c == 'f':
+		// false
+		if pos+5 <= len(line) && string(line[pos:pos+5]) == "false" {
+			return false, pos + 5, nil
+		}
+		return nil, pos, fmt.Errorf("invalid JSON value at position %d", pos)
+
+	case c == 'n':
+		// null
+		if pos+4 <= len(line) && string(line[pos:pos+4]) == "null" {
+			return nil, pos + 4, nil
+		}
+		return nil, pos, fmt.Errorf("invalid JSON value at position %d", pos)
+
+	case c == '[':
+		// Array - capture as JSONString
+		return parseJSONRawValue(line, pos)
+
+	case c == '{':
+		// Nested object - capture as JSONString
+		return parseJSONRawValue(line, pos)
+
+	default:
+		return nil, pos, fmt.Errorf("unexpected character '%c' at position %d", c, pos)
+	}
+}
+
+// parseJSONNumber parses a JSON number starting at pos
+// Returns int64 for integers, float64 for decimals
+func parseJSONNumber(line []byte, pos int) (any, int, error) {
+	start := pos
+	n := len(line)
+
+	// Handle negative sign
+	if pos < n && line[pos] == '-' {
+		pos++
+	}
+
+	// Parse integer part
+	if pos >= n {
+		return nil, pos, fmt.Errorf("invalid number at position %d", start)
+	}
+
+	if line[pos] == '0' {
+		pos++
+	} else if line[pos] >= '1' && line[pos] <= '9' {
+		for pos < n && line[pos] >= '0' && line[pos] <= '9' {
+			pos++
+		}
+	} else {
+		return nil, pos, fmt.Errorf("invalid number at position %d", start)
+	}
+
+	// Check for decimal point or exponent
+	isFloat := false
+	if pos < n && line[pos] == '.' {
+		isFloat = true
+		pos++
+		// Must have at least one digit after decimal
+		if pos >= n || line[pos] < '0' || line[pos] > '9' {
+			return nil, pos, fmt.Errorf("invalid number: expected digit after decimal at position %d", pos)
+		}
+		for pos < n && line[pos] >= '0' && line[pos] <= '9' {
+			pos++
+		}
+	}
+
+	// Check for exponent
+	if pos < n && (line[pos] == 'e' || line[pos] == 'E') {
+		isFloat = true
+		pos++
+		if pos < n && (line[pos] == '+' || line[pos] == '-') {
+			pos++
+		}
+		if pos >= n || line[pos] < '0' || line[pos] > '9' {
+			return nil, pos, fmt.Errorf("invalid number: expected digit in exponent at position %d", pos)
+		}
+		for pos < n && line[pos] >= '0' && line[pos] <= '9' {
+			pos++
+		}
+	}
+
+	numStr := string(line[start:pos])
+
+	if isFloat {
+		f, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			return nil, pos, fmt.Errorf("invalid float: %w", err)
+		}
+		return f, pos, nil
+	}
+
+	i, err := strconv.ParseInt(numStr, 10, 64)
+	if err != nil {
+		// Fall back to float for very large integers
+		f, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			return nil, pos, fmt.Errorf("invalid number: %w", err)
+		}
+		return f, pos, nil
+	}
+	return i, pos, nil
+}
+
+// parseJSONRawValue captures a raw JSON array or object as JSONString
+// Used for nested structures that we don't need to parse immediately
+func parseJSONRawValue(line []byte, pos int) (JSONString, int, error) {
+	if pos >= len(line) {
+		return "", pos, fmt.Errorf("unexpected end of JSON")
+	}
+
+	start := pos
+	c := line[pos]
+
+	if c != '[' && c != '{' {
+		return "", pos, fmt.Errorf("expected '[' or '{' at position %d", pos)
+	}
+
+	closeChar := byte(']')
+	if c == '{' {
+		closeChar = '}'
+	}
+
+	depth := 1
+	pos++
+	inString := false
+
+	for pos < len(line) && depth > 0 {
+		c := line[pos]
+
+		if inString {
+			if c == '\\' && pos+1 < len(line) {
+				pos += 2 // Skip escaped character
+				continue
+			}
+			if c == '"' {
+				inString = false
+			}
+			pos++
+			continue
+		}
+
+		switch c {
+		case '"':
+			inString = true
+		case '[', '{':
+			depth++
+		case ']', '}':
+			depth--
+		}
+		pos++
+	}
+
+	if depth != 0 {
+		return "", pos, fmt.Errorf("unterminated %c at position %d", closeChar, start)
+	}
+
+	return JSONString(line[start:pos]), pos, nil
 }
 
 // ============================================================================
@@ -947,7 +1644,8 @@ func isValueType(value any) bool {
 
 // Field creates a single-field Record with compile-time type safety
 func Field[V Value](key string, value V) Record {
-	return Record{fields: map[string]any{key: value}}
+	schema := NewSchema([]string{key})
+	return Record{schema: schema, values: []any{value}}
 }
 
 // ============================================================================
@@ -1089,24 +1787,29 @@ func Materialize(sourceField, targetField, separator string) Filter[Record, Reco
 	return func(input iter.Seq[Record]) iter.Seq[Record] {
 		return func(yield func(Record) bool) {
 			for record := range input {
-				result := record.Clone()
-
 				// Materialize the source field if it's an iter.Seq
-				if sourceValue, exists := record.fields[sourceField]; exists && isIterSeq(sourceValue) {
+				sourceValue, exists := Get[any](record, sourceField)
+				if exists && isIterSeq(sourceValue) {
 					values := materializeSequence(sourceValue)
 					var stringValues []string
 					for _, val := range values {
 						stringValues = append(stringValues, fmt.Sprintf("%v", val))
 					}
-					result.fields[targetField] = strings.Join(stringValues, separator)
+					result := SetImmutable(record, targetField, strings.Join(stringValues, separator))
+					if !yield(result) {
+						return
+					}
 				} else if exists {
 					// Source field exists but isn't a sequence - convert to string
-					result.fields[targetField] = fmt.Sprintf("%v", sourceValue)
-				}
-				// If source field doesn't exist, don't add target field
-
-				if !yield(result) {
-					return
+					result := SetImmutable(record, targetField, fmt.Sprintf("%v", sourceValue))
+					if !yield(result) {
+						return
+					}
+				} else {
+					// If source field doesn't exist, pass through unchanged
+					if !yield(record) {
+						return
+					}
 				}
 			}
 		}
@@ -1120,20 +1823,22 @@ func MaterializeJSON(sourceField, targetField string) Filter[Record, Record] {
 	return func(input iter.Seq[Record]) iter.Seq[Record] {
 		return func(yield func(Record) bool) {
 			for record := range input {
-				result := record.Clone()
-
 				// Materialize the source field if it exists
-				if sourceValue, exists := record.fields[sourceField]; exists {
+				sourceValue, exists := Get[any](record, sourceField)
+				var result Record
+				if exists {
 					// Convert any complex field to JSON representation
 					jsonValue := convertToJSONValue(sourceValue)
 					if jsonBytes, err := json.Marshal(jsonValue); err == nil {
-						result.fields[targetField] = JSONString(jsonBytes)
+						result = SetImmutable(record, targetField, JSONString(jsonBytes))
 					} else {
 						// Fallback to string representation if JSON fails
-						result.fields[targetField] = fmt.Sprintf("%v", sourceValue)
+						result = SetImmutable(record, targetField, fmt.Sprintf("%v", sourceValue))
 					}
+				} else {
+					// If source field doesn't exist, pass through unchanged
+					result = record
 				}
-				// If source field doesn't exist, don't add target field
 
 				if !yield(result) {
 					return
@@ -1159,10 +1864,10 @@ func Hash(sourceField, targetField string) Filter[Record, Record] {
 	return func(input iter.Seq[Record]) iter.Seq[Record] {
 		return func(yield func(Record) bool) {
 			for record := range input {
-				result := record.Clone()
-
 				// Hash the source field if it exists
-				if sourceValue, exists := record.fields[sourceField]; exists {
+				sourceValue, exists := Get[any](record, sourceField)
+				var result Record
+				if exists {
 					// Convert value to string
 					var strValue string
 					if str, ok := sourceValue.(string); ok {
@@ -1175,9 +1880,11 @@ func Hash(sourceField, targetField string) Filter[Record, Record] {
 					// Compute SHA256 hash
 					hash := sha256.Sum256([]byte(strValue))
 					// Encode as hex string (64 characters, human-readable)
-					result.fields[targetField] = hex.EncodeToString(hash[:])
+					result = SetImmutable(record, targetField, hex.EncodeToString(hash[:]))
+				} else {
+					// If source field doesn't exist, pass through unchanged
+					result = record
 				}
-				// If source field doesn't exist, don't add target field
 
 				if !yield(result) {
 					return
@@ -1274,7 +1981,10 @@ func dotFlattenRecord(record Record, prefix, separator string, fields ...string)
 		// If the value is a nested record, flatten it recursively
 		if nestedRecord, ok := value.(Record); ok && shouldFlatten {
 			flattened := dotFlattenRecord(nestedRecord, newKey, separator)
-			maps.Copy(result.fields, flattened.fields)
+			// Copy all fields from flattened record to result
+			for k, v := range flattened.All() {
+				result.fields[k] = v
+			}
 		} else {
 			// For non-record values (including sequences), or fields not to be flattened, keep as-is
 			result.fields[newKey] = value
@@ -1313,7 +2023,10 @@ func dotFlattenRecordWithSeqs(record Record, prefix, separator string, fields ..
 		// If the value is a nested record, flatten it recursively
 		if nestedRecord, ok := value.(Record); ok && shouldFlatten {
 			flattened := dotFlattenRecord(nestedRecord, newKey, separator)
-			maps.Copy(nonSeqRecord.fields, flattened.fields)
+			// Copy all fields from flattened record
+			for k, v := range flattened.All() {
+				nonSeqRecord.fields[k] = v
+			}
 		} else if shouldFlatten && isIterSeq(value) {
 			// This is an iter.Seq field - collect its values for dot product expansion
 			values := materializeSequence(value)
@@ -1345,8 +2058,10 @@ func dotFlattenRecordWithSeqs(record Record, prefix, separator string, fields ..
 	for i := range minLen {
 		result := MakeMutableRecord()
 
-		// Copy non-sequence fields
-		maps.Copy(result.fields, nonSeqRecord.fields)
+		// Copy non-sequence fields from nonSeqRecord
+		for k, v := range nonSeqRecord.fields {
+			result.fields[k] = v
+		}
 
 		// Add corresponding element from each sequence
 		for j, fieldName := range seqFields {
@@ -1383,8 +2098,7 @@ func crossFlattenRecord(r Record, _ string, fields ...string) []Record {
 				var rs []Record
 				for _, val := range values {
 					// Create a record with this sequence value
-					newRecord := Record{fields: map[string]any{f: val}}
-					rs = append(rs, newRecord)
+					rs = append(rs, NewRecord(map[string]any{f: val}))
 				}
 				if len(rs) > 0 {
 					columns = append(columns, rs)
@@ -1407,14 +2121,19 @@ func crossFlattenRecord(r Record, _ string, fields ...string) []Record {
 	// Create cartesian product of expanded fields
 	crs := cartesianProduct(columns)
 
-	// Add non-sequence fields to each result record
+	// Add non-sequence fields to each result record - need to rebuild records
+	var results []Record
 	for _, cr := range crs {
+		mut := cr.ToMutable()
 		for _, f := range nonSeqFields {
-			cr.fields[f] = r.fields[f]
+			if val, ok := Get[any](r, f); ok {
+				mut.fields[f] = val
+			}
 		}
+		results = append(results, mut.Freeze())
 	}
 
-	return crs
+	return results
 }
 
 // cartesianProduct performs cartesian product of record slices
@@ -1429,8 +2148,13 @@ func cartesianProduct(columns [][]Record) []Record {
 	for _, lr := range cartesianProduct(columns[1:]) {
 		for _, rr := range columns[0] {
 			r := MakeMutableRecord()
-			maps.Copy(r.fields, rr.fields)
-			maps.Copy(r.fields, lr.fields)
+			// Copy fields from both records
+			for k, v := range rr.All() {
+				r.fields[k] = v
+			}
+			for k, v := range lr.All() {
+				r.fields[k] = v
+			}
 			rs = append(rs, r.Freeze())
 		}
 	}
