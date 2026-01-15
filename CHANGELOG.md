@@ -82,6 +82,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatic dispatch based on `KeyExtractor` interface support
 - Maintains backward compatibility for all `OnFields()` and `OnCondition()` usage
 
+## [v4.6.1] - 2025-01-15
+
+### Performance Improvements
+- **JSONL Schema Sharing**: 3x faster pipeline processing
+  - Added `ParseJSONLineWithSchema()` for shared-schema JSON parsing
+  - CLI's JSONL reader now shares schema from header across all records
+  - Eliminates per-record schema creation in `from | group-by` pipelines
+  - **Benchmark (14.6M records)**: `from | group-by` 47s → 15.8s
+
 ## [v4.6.0] - 2025-01-15
 
 ### Performance Improvements
@@ -180,7 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MutableRecord builder for efficient record construction
 - Comprehensive test suite
 
-[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.6.0...HEAD
+[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.6.1...HEAD
+[v4.6.1]: https://github.com/rosscartlidge/ssql/compare/v4.6.0...v4.6.1
 [v4.6.0]: https://github.com/rosscartlidge/ssql/compare/v4.5.1...v4.6.0
 [v4.5.1]: https://github.com/rosscartlidge/ssql/compare/v4.5.0...v4.5.1
 [v4.5.0]: https://github.com/rosscartlidge/ssql/compare/v4.2.0...v4.5.0
