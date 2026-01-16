@@ -174,10 +174,9 @@ func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T] {
 //	// schema.Width == 3
 //	// schema.Index("age") == 1
 type Schema struct {
-	fields      []string       // Field names in order
-	indices     map[string]int // Field name → index for O(1) lookup
-	width       int            // Number of fields (len(fields))
-	jsonPrefixes [][]byte      // Pre-computed JSON prefixes: `"field":`
+	fields       []string       // Field names in order
+	indices      map[string]int // Field name → index for O(1) lookup
+	jsonPrefixes [][]byte       // Pre-computed JSON prefixes: `"field":`
 }
 
 // NewSchema creates a Schema from field names.
@@ -194,7 +193,6 @@ func NewSchema(fields []string) *Schema {
 	return &Schema{
 		fields:       fields,
 		indices:      indices,
-		width:        len(fields),
 		jsonPrefixes: jsonPrefixes,
 	}
 }
@@ -222,7 +220,7 @@ func (s *Schema) Has(field string) bool {
 
 // Width returns the number of fields
 func (s *Schema) Width() int {
-	return s.width
+	return len(s.fields)
 }
 
 // Record represents structured data with native Go types.
@@ -261,7 +259,7 @@ func (s *Schema) Width() int {
 //	updated := record.Int("age", int64(31))
 type Record struct {
 	schema *Schema // Shared across all records in stream (for field name → index mapping)
-	values []any   // Field values in schema order (exact size: schema.width)
+	values []any   // Field values in schema order (exact size: len(schema.fields))
 }
 
 // NewRecordFromSchema creates a Record with a pre-existing Schema.
@@ -435,7 +433,7 @@ func (r Record) ToMutable() MutableRecord {
 	if r.schema == nil {
 		return MutableRecord{fields: make(map[string]any)}
 	}
-	m := make(map[string]any, r.schema.width)
+	m := make(map[string]any, len(r.schema.fields))
 	for i, field := range r.schema.fields {
 		m[field] = r.values[i]
 	}
@@ -537,7 +535,7 @@ func (r Record) Len() int {
 	if r.schema == nil {
 		return 0
 	}
-	return r.schema.width
+	return len(r.schema.fields)
 }
 
 // Keys returns all field names as a slice (in schema order)
@@ -619,7 +617,7 @@ func (r Record) Equal(other Record) bool {
 		return false
 	}
 	// Different number of fields
-	if r.schema.width != other.schema.width {
+	if len(r.schema.fields) != len(other.schema.fields) {
 		return false
 	}
 	// Check that all fields match
@@ -646,7 +644,7 @@ func (r Record) MarshalJSON() ([]byte, error) {
 		return []byte("{}"), nil
 	}
 	// Build a map for JSON encoding
-	m := make(map[string]any, r.schema.width)
+	m := make(map[string]any, len(r.schema.fields))
 	for i, field := range r.schema.fields {
 		m[field] = r.values[i]
 	}
@@ -775,7 +773,7 @@ func SetImmutable[V Value](r Record, field string, value V) Record {
 	sort.Strings(newFields)
 
 	newSchema := NewSchema(newFields)
-	newValues := make([]any, newSchema.width)
+	newValues := make([]any, len(newSchema.fields))
 
 	// Copy existing values to their new positions
 	for i, f := range r.schema.fields {
@@ -1119,7 +1117,7 @@ func (r Record) AppendJSONOrdered(buf []byte, fieldOrder []string) []byte {
 
 	buf = append(buf, '{')
 	first := true
-	written := make([]bool, r.schema.width)
+	written := make([]bool, len(r.schema.fields))
 
 	// Write fields in specified order
 	for _, field := range fieldOrder {
