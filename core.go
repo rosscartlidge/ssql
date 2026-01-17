@@ -1995,15 +1995,115 @@ func MaterializeJSON(sourceField, targetField string) Filter[Record, Record] {
 	}
 }
 
-// Hash creates a SHA256 hash of a string field for efficient grouping.
-// Useful for grouping on long strings or when you need fixed-length grouping keys.
+// StableKey produces a stable, canonical string representation of any value.
+// Unlike fmt.Sprintf("%v", ...), this function guarantees consistent output
+// for the same logical value, regardless of map iteration order.
+//
+// For Records: fields are sorted alphabetically and serialized as JSON-like string
+// For slices: elements are serialized in order
+// For simple types: uses standard string conversion
+//
+// Example:
+//
+//	StableKey(record) → `{"age":30,"name":"Alice"}`  // Always sorted
+//	StableKey([]any{1, "a"}) → `[1,"a"]`
+//	StableKey(int64(42)) → `42`
+func StableKey(value any) string {
+	return stableKeyAppend(nil, value)
+}
+
+// stableKeyAppend appends the stable key representation to a byte slice
+func stableKeyAppend(buf []byte, value any) string {
+	switch v := value.(type) {
+	case nil:
+		return string(append(buf, "null"...))
+	case bool:
+		if v {
+			return string(append(buf, "true"...))
+		}
+		return string(append(buf, "false"...))
+	case int64:
+		return string(strconv.AppendInt(buf, v, 10))
+	case float64:
+		return string(strconv.AppendFloat(buf, v, 'g', -1, 64))
+	case string:
+		// JSON-escape the string
+		buf = append(buf, '"')
+		for _, r := range v {
+			switch r {
+			case '"':
+				buf = append(buf, '\\', '"')
+			case '\\':
+				buf = append(buf, '\\', '\\')
+			case '\n':
+				buf = append(buf, '\\', 'n')
+			case '\r':
+				buf = append(buf, '\\', 'r')
+			case '\t':
+				buf = append(buf, '\\', 't')
+			default:
+				buf = append(buf, string(r)...)
+			}
+		}
+		buf = append(buf, '"')
+		return string(buf)
+	case Record:
+		// Get all fields and sort them
+		fields := make([]string, 0)
+		values := make(map[string]any)
+		for k, val := range v.All() {
+			fields = append(fields, k)
+			values[k] = val
+		}
+		sort.Strings(fields)
+
+		buf = append(buf, '{')
+		for i, field := range fields {
+			if i > 0 {
+				buf = append(buf, ',')
+			}
+			// Add field name (JSON-escaped)
+			buf = append(buf, '"')
+			buf = append(buf, field...)
+			buf = append(buf, '"', ':')
+			// Recursively add value
+			buf = []byte(stableKeyAppend(buf, values[field]))
+		}
+		buf = append(buf, '}')
+		return string(buf)
+	case []any:
+		buf = append(buf, '[')
+		for i, elem := range v {
+			if i > 0 {
+				buf = append(buf, ',')
+			}
+			buf = []byte(stableKeyAppend(buf, elem))
+		}
+		buf = append(buf, ']')
+		return string(buf)
+	case JSONString:
+		// JSONString is already JSON - use as-is
+		return string(append(buf, string(v)...))
+	default:
+		// Fallback for other types
+		return string(append(buf, fmt.Sprintf("%v", v)...))
+	}
+}
+
+// Hash creates a SHA256 hash of a field value for efficient grouping.
+// Useful for grouping on long strings or complex values when you need fixed-length keys.
 // The hash is hex-encoded (64 characters) for readability and compatibility.
 //
+// Uses StableKey internally to ensure consistent hashing regardless of field order
+// in nested Records.
+//
 // Example: {"url": "https://example.com/very/long/path"} → {"url_hash": "a3f2c8b1..."}
+// Example: {"user": {"name": "Alice", "age": 30}} → {"user_hash": "b7d4e2f9..."} (stable)
 //
 // Use cases:
 //   - Group by long text fields without massive memory overhead
-//   - Create stable, fixed-length keys for any string value
+//   - Group by complex nested Records or arrays
+//   - Create stable, fixed-length keys for any value type
 //   - Avoid separator ambiguity issues (unlike Materialize with commas)
 //
 // Note: This is a one-way operation - you cannot reconstruct the original value from the hash.
@@ -2015,14 +2115,8 @@ func Hash(sourceField, targetField string) Filter[Record, Record] {
 				sourceValue, exists := Get[any](record, sourceField)
 				var result Record
 				if exists {
-					// Convert value to string
-					var strValue string
-					if str, ok := sourceValue.(string); ok {
-						strValue = str
-					} else {
-						// Convert other types to string representation
-						strValue = fmt.Sprintf("%v", sourceValue)
-					}
+					// Use StableKey for consistent string representation
+					strValue := StableKey(sourceValue)
 
 					// Compute SHA256 hash
 					hash := sha256.Sum256([]byte(strValue))
