@@ -877,71 +877,172 @@ func GroupBy[K comparable](sequenceField string, keyField string, keyFn func(Rec
 //	// Group by multiple fields
 //	grouped := ssql.GroupByFields("orders", "region", "product_category")(sales)
 func GroupByFields(sequenceField string, fields ...string) Filter[Record, Record] {
+	// Dispatch to optimized implementation based on number of fields
+	switch len(fields) {
+	case 1:
+		return groupByOneField(sequenceField, fields[0])
+	case 2:
+		return groupByTwoFields(sequenceField, fields[0], fields[1])
+	default:
+		return groupByMultipleFields(sequenceField, fields)
+	}
+}
+
+// groupByOneField is optimized for single-field grouping using map[any][]Record
+// No string conversion needed - uses values directly as keys
+func groupByOneField(sequenceField, field string) Filter[Record, Record] {
 	return func(input iter.Seq[Record]) iter.Seq[Record] {
 		return func(yield func(Record) bool) {
-			groups := make(map[string][]Record)
-			groupFields := make(map[string]Record)
-			var keys []string
+			groups := make(map[any][]Record)
+			var keys []any // Maintain insertion order
 
-			// Collect all records into groups
 			for record := range input {
-				var keyParts []string
-				groupingFields := MakeMutableRecord()
-				hasComplexField := false
-
-				for _, field := range fields {
-					if val, exists := Get[any](record, field); exists {
-						// Validate that the field value is simple (no iter.Seq or Record)
-						if !isSimpleValue(val) {
-							// Skip this entire record if any grouping field is complex
-							hasComplexField = true
-							break
-						}
-						keyParts = append(keyParts, fmt.Sprintf("%v", val))
-						groupingFields.fields[field] = val
-					} else {
-						keyParts = append(keyParts, "<nil>")
-						groupingFields.fields[field] = nil
-					}
+				val, exists := Get[any](record, field)
+				if !exists {
+					val = nil
+				} else if !isSimpleValue(val) {
+					continue // Skip complex values
 				}
 
-				// Skip records with complex grouping field values
-				if hasComplexField {
-					continue
+				if _, exists := groups[val]; !exists {
+					keys = append(keys, val)
 				}
-
-				key := fmt.Sprintf("[%s]", strings.Join(keyParts, ","))
-				if _, exists := groups[key]; !exists {
-					keys = append(keys, key)
-					groupFields[key] = groupingFields.Freeze()
-				}
-				groups[key] = append(groups[key], record)
+				groups[val] = append(groups[val], record)
 			}
 
-			// Yield records with grouping fields + sequence field
+			// Yield grouped records
 			for _, key := range keys {
-				result := MakeMutableRecord()
-
-				// Copy the grouping field values
-				for k, v := range groupFields[key].All() {
-					result.fields[k] = v
-				}
-
-				// Add the sequence of group members as an iter.Seq[Record]
 				groupRecords := groups[key]
-				result.fields[sequenceField] = func() iter.Seq[Record] {
-					return func(yield func(Record) bool) {
-						for _, record := range groupRecords {
-							if !yield(record) {
-								return
-							}
-						}
-					}
-				}()
+				result := MakeMutableRecord()
+				result.fields[field] = key
+				result.fields[sequenceField] = recordsToSeq(groupRecords)
 
 				if !yield(result.Freeze()) {
 					return
 				}
+			}
+		}
+	}
+}
+
+// groupKey2 is a comparable key for two-field grouping
+type groupKey2 [2]any
+
+// groupByTwoFields is optimized for two-field grouping using array keys
+func groupByTwoFields(sequenceField, field1, field2 string) Filter[Record, Record] {
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			groups := make(map[groupKey2][]Record)
+			var keys []groupKey2
+
+			for record := range input {
+				var key groupKey2
+				skip := false
+
+				if val, exists := Get[any](record, field1); exists {
+					if !isSimpleValue(val) {
+						skip = true
+					} else {
+						key[0] = val
+					}
+				}
+				if !skip {
+					if val, exists := Get[any](record, field2); exists {
+						if !isSimpleValue(val) {
+							skip = true
+						} else {
+							key[1] = val
+						}
+					}
+				}
+
+				if skip {
+					continue
+				}
+
+				if _, exists := groups[key]; !exists {
+					keys = append(keys, key)
+				}
+				groups[key] = append(groups[key], record)
+			}
+
+			for _, key := range keys {
+				groupRecords := groups[key]
+				result := MakeMutableRecord()
+				result.fields[field1] = key[0]
+				result.fields[field2] = key[1]
+				result.fields[sequenceField] = recordsToSeq(groupRecords)
+
+				if !yield(result.Freeze()) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// groupKeyN is a comparable key for N-field grouping (up to 8 fields)
+type groupKeyN [8]any
+
+// groupByMultipleFields handles 3+ fields using fixed-size array keys
+func groupByMultipleFields(sequenceField string, fields []string) Filter[Record, Record] {
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			groups := make(map[groupKeyN][]Record)
+			var keys []groupKeyN
+
+			for record := range input {
+				var key groupKeyN
+				skip := false
+
+				for i, field := range fields {
+					if i >= 8 {
+						break // Safety limit
+					}
+					if val, exists := Get[any](record, field); exists {
+						if !isSimpleValue(val) {
+							skip = true
+							break
+						}
+						key[i] = val
+					}
+				}
+
+				if skip {
+					continue
+				}
+
+				if _, exists := groups[key]; !exists {
+					keys = append(keys, key)
+				}
+				groups[key] = append(groups[key], record)
+			}
+
+			for _, key := range keys {
+				groupRecords := groups[key]
+				result := MakeMutableRecord()
+				for i, field := range fields {
+					if i >= 8 {
+						break
+					}
+					result.fields[field] = key[i]
+				}
+				result.fields[sequenceField] = recordsToSeq(groupRecords)
+
+				if !yield(result.Freeze()) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// recordsToSeq converts a slice of records to an iter.Seq[Record]
+func recordsToSeq(records []Record) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		for _, record := range records {
+			if !yield(record) {
+				return
 			}
 		}
 	}
