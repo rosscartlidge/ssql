@@ -122,6 +122,40 @@ This document summarizes unimplemented features from the research documents, ran
 
 ---
 
+### 2.3 Arrow Integration (I/O + Columnar)
+
+**Source:** `arrow-integration-proposal.md`
+
+**Status:** Design complete, phased approach ready
+
+**Features:**
+- Phase 1: Arrow file I/O (`from`/`to arrow`) - 10-20x faster file reads
+- Phase 2: Columnar `Table` type for batch operations
+- Phase 3: Columnar operations (filter, aggregate, sort, join)
+- Phase 4: Code generation targeting columnar representation
+
+**Value:** Very High
+- 10-20x I/O improvement (Phase 1 alone)
+- 2-10x processing speedup with columnar ops
+- Foundation for GPU acceleration
+- Python/Pandas/Spark interoperability
+
+**Effort:**
+- Phase 1: 1-2 weeks (Arrow I/O only)
+- Full implementation: 8-12 weeks
+
+**Implementation Order:**
+1. Phase 1: Add `ssql from *.arrow` and `ssql to arrow` (1-2 weeks)
+2. Phase 2: Internal `Table` type with Arrow backing (2-3 weeks)
+3. Phase 3: Columnar filter/aggregate/sort/join (3-4 weeks)
+4. Phase 4: Code generation with columnar target (2-3 weeks)
+
+**Dependencies:** None. Provides foundation for GPU acceleration.
+
+**Recommendation:** Start with Phase 1 (Arrow I/O) to validate value before deeper integration.
+
+---
+
 ## Priority 3: High Value, High Effort
 
 ### 3.1 Schema-Aware Records (Performance)
@@ -153,25 +187,28 @@ This document summarizes unimplemented features from the research documents, ran
 
 **Source:** `gpu-acceleration.md`
 
-**Status:** Research complete, very high effort
+**Status:** Research complete, requires Arrow integration first
 
 **Features:**
 - 100-1000x speedup for numeric operations
 - Automatic CPU/GPU query planning
-- Arrow format for efficient GPU transfer
+- CUDA kernels for filter, aggregate, sort, join
 
-**Value:** Very High for suitable workloads
+**Value:** Very High for suitable workloads (numeric-heavy, >1M rows)
 
-**Effort:** 6-9 developer-months (21-30 weeks)
-- Phase 1: Columnar/Arrow storage (4-6 weeks)
-- Phase 2: GPU infrastructure (4-6 weeks)
-- Phase 3: Query planner (3-4 weeks)
-- Phase 4: Advanced GPU operations (6-8 weeks)
-- Phase 5: Production hardening (4-6 weeks)
+**Effort:** 4-6 developer-months (after Arrow integration)
+- Phase 1: GPU infrastructure + basic kernels (4-6 weeks)
+- Phase 2: Query planner (3-4 weeks)
+- Phase 3: Advanced GPU operations (6-8 weeks)
+- Phase 4: Production hardening (4-6 weeks)
+
+**Dependencies:** Arrow Integration (Priority 2.3) - columnar storage required for GPU
 
 **Recommendation:**
-- Start with Phase 1 (Arrow format) - provides 10-20x I/O benefit standalone
-- Evaluate GPU phases based on user demand and resource availability
+- Complete Arrow integration first (Priority 2.3)
+- Evaluate GPU phases based on user demand and hardware availability
+- GPU best for: numeric filter/aggregate (100-1000x), sort (50-100x), join (20-50x)
+- GPU poor for: string operations (2-10x), regex (1-3x), small data (<100K rows)
 
 ---
 
@@ -243,19 +280,31 @@ This document summarizes unimplemented features from the research documents, ran
    - Foundation for typed code generation
    - Improves type safety throughout
 
-### Phase C: Performance (2-4 weeks)
+### Phase C: Performance - Typed Code Gen (2-4 weeks)
 
 3. **Typed Code Generation** (Priority 2.1)
    - 35x speedup for generated programs
    - Makes code generation production-viable
    - Major differentiator
 
-### Phase D: Future (as needed)
+### Phase D: Performance - Arrow Integration (1-2 weeks minimum)
 
-4. **Autocli Improvements** - When autocli updated
-5. **Arrow Format** - First step toward GPU
-6. **Schema-Aware Records** - If join performance critical
-7. **GPU Acceleration** - If user demand exists
+4. **Arrow I/O** (Priority 2.3, Phase 1)
+   - 10-20x faster file I/O
+   - Python/Pandas interoperability
+   - Foundation for columnar operations and GPU
+
+5. **Arrow Columnar Operations** (Priority 2.3, Phases 2-4) - Optional
+   - 2-10x processing speedup
+   - Only if I/O benefits prove valuable
+
+### Phase E: Future (as needed)
+
+6. **GPU Acceleration** (Priority 3.2) - Requires Arrow
+   - 100-1000x for numeric operations
+   - Only for users with NVIDIA GPUs
+7. **Autocli Improvements** - When autocli updated
+8. **Schema-Aware Records** - If join performance critical
 
 ---
 
@@ -266,9 +315,11 @@ This document summarizes unimplemented features from the research documents, ran
 | Custom Aggregation Expr | High | 2-3 days | ✅ Yes | **Start here** |
 | Schema Headers | Very High | 2-3 weeks | ✅ Yes | **Next** |
 | Typed Code Gen | Very High | 2-4 weeks | ✅ Yes | **Then this** |
+| Arrow I/O (Phase 1) | Very High | 1-2 weeks | ✅ Yes | **After typed code gen** |
+| Arrow Columnar (Full) | High | 8-12 weeks | ✅ Yes | If I/O proves valuable |
 | Autocli Helpers | Medium | 1-2 days | ⚠️ Need autocli | When convenient |
 | Schema-Aware Records | High | 3-4 weeks | ⚠️ Breaking | Defer |
-| GPU Acceleration | Very High | 6-9 months | ⚠️ Major project | Evaluate later |
+| GPU Acceleration | Very High | 4-6 months | ⚠️ Needs Arrow | After Arrow integration |
 | Parallelization | Medium | 2-4 weeks | ❌ No design | Research needed |
 
 ---
@@ -288,3 +339,18 @@ This document summarizes unimplemented features from the research documents, ran
    - Simple typed helper library
    - Schema inference from one CSV file
    - Typed where command as proof of concept
+
+4. **Implement Arrow I/O** (after typed code gen or in parallel)
+   - Add `github.com/apache/arrow/go/v14` dependency
+   - Implement `ssql from *.arrow` and `ssql to arrow`
+   - Benchmark against CSV/JSON on real workloads
+   - Design is complete in `arrow-integration-proposal.md`
+
+5. **Evaluate Arrow columnar operations** based on I/O results
+   - If 10-20x I/O improvement confirmed, proceed to columnar Table type
+   - If not, defer deeper integration
+
+6. **Evaluate GPU acceleration** after Arrow integration
+   - Requires NVIDIA GPU availability in target user base
+   - Best for numeric-heavy workloads (filter, aggregate, sort)
+   - Design is complete in `gpu-acceleration.md`
