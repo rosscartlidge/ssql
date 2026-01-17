@@ -18,11 +18,12 @@ import (
 // and future optimizations like GPU acceleration.
 func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("from").
-		Description("Read data from file or command output (auto-detects CSV, JSON, JSONL). Always emits schema header.").
+		Description("Read data from file or command output (auto-detects CSV, JSON, JSONL, Arrow). Always emits schema header.").
 		Example("ssql from data.csv | ssql where -where age gt 18", "Read CSV file (schema header included)").
 		Example("ssql from data.csv -type zipcode string -type phone string", "Force fields to string (preserve leading zeros)").
 		Example("ssql from data.csv -default-type string", "Treat all fields as strings (no auto-detection)").
 		Example("ssql from -- ps aux | ssql where -where USER eq root", "Execute command and parse output").
+		Example("ssql from data.arrow | ssql where -where age gt 18", "Read Arrow file (10-20x faster than CSV)").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -32,8 +33,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		String().
 		Global().
 		Default("").
-		Completer(&cf.StaticCompleter{Options: []string{"csv", "json", "jsonl"}}).
-		Help("Input format for stdin: csv (default), json, jsonl").
+		Completer(&cf.StaticCompleter{Options: []string{"csv", "json", "jsonl", "arrow"}}).
+		Help("Input format for stdin: csv (default), json, jsonl, arrow").
 		Done().
 		Flag("-type", "-t").
 		Arg("field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
@@ -51,10 +52,10 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("FILE").
 		String().
-		Completer(&cf.FileCompleter{Pattern: "*.{csv,json,jsonl}"}).
+		Completer(&cf.FileCompleter{Pattern: "*.{csv,json,jsonl,arrow}"}).
 		Global().
 		Default("").
-		Help("Input file (CSV, JSON, or JSONL). Reads from stdin if not specified.").
+		Help("Input file (CSV, JSON, JSONL, or Arrow). Reads from stdin if not specified.").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
@@ -133,6 +134,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				switch format {
 				case "json", "jsonl":
 					originalRecords = lib.ReadJSON(os.Stdin)
+				case "arrow":
+					originalRecords = ssql.ReadArrowFromReader(os.Stdin)
 				default: // "csv" or empty
 					originalRecords = ssql.ReadCSVFromReader(os.Stdin, csvConfig)
 				}
@@ -154,6 +157,12 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 					defer file.Close()
 					originalRecords = lib.ReadJSON(file)
+				case strings.HasSuffix(lower, ".arrow"):
+					var rerr error
+					originalRecords, rerr = ssql.ReadArrow(inputFile)
+					if rerr != nil {
+						return fmt.Errorf("reading Arrow file: %w", rerr)
+					}
 				default:
 					// Try to auto-detect by peeking at content
 					file, ferr := lib.OpenInputFile(inputFile)
@@ -239,6 +248,9 @@ func generateFromCode(filename, format string, typeOverrides map[string]string, 
 		case "json", "jsonl":
 			code = `records := ssql.ReadJSONFromReader(os.Stdin)`
 			imports = []string{"os"}
+		case "arrow":
+			code = `records := ssql.ReadArrowFromReader(os.Stdin)`
+			imports = []string{"os"}
 		default:
 			if hasConfig {
 				code = configCode + "\n\trecords := ssql.ReadCSVFromReader(os.Stdin, csvConfig)"
@@ -271,6 +283,13 @@ func generateFromCode(filename, format string, typeOverrides map[string]string, 
 			code = fmt.Sprintf(`records, err := ssql.ReadJSONAuto(%q)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading JSON: %%w", err))
+		os.Exit(1)
+	}`, filename)
+			imports = []string{"fmt", "os"}
+		case strings.HasSuffix(lower, ".arrow"):
+			code = fmt.Sprintf(`records, err := ssql.ReadArrow(%q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading Arrow: %%w", err))
 		os.Exit(1)
 	}`, filename)
 			imports = []string{"fmt", "os"}
