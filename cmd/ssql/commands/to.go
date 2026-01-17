@@ -430,7 +430,7 @@ func generateToJSONCode(filename string, pretty bool) error {
 	}
 	os.Stdout.Write([]byte("\n"))`, inputVar)
 		} else {
-			code = fmt.Sprintf(`	if err := ssql.WriteJSONToWriter(%s, os.Stdout); err != nil {
+			code = fmt.Sprintf(`	if err := ssql.WriteJSONFastToWriter(%s, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing JSON: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)

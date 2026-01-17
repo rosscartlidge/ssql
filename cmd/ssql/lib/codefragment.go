@@ -407,7 +407,7 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		}
 
 		code += "\t// Output records as JSONL\n"
-		code += fmt.Sprintf("\tif err := ssql.WriteJSONToWriter(%s, os.Stdout); err != nil {\n", outputVar)
+		code += fmt.Sprintf("\tif err := ssql.WriteJSONFastToWriter(%s, os.Stdout); err != nil {\n", outputVar)
 		code += "\t\tfmt.Fprintf(os.Stderr, \"Error writing output: %%v\\n\", err)\n"
 		code += "\t\tos.Exit(1)\n"
 		code += "\t}\n"
