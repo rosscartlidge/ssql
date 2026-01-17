@@ -122,6 +122,92 @@ func generateSalesData() []ssql.Record {
 
 > 📚 **API Reference**: See [GroupBy Operations](api-reference.md#groupby-operations) and [Aggregation Functions](api-reference.md#aggregation-functions) for all available options.
 
+### Grouping on Complex Fields
+
+By default, `GroupByFields` only works with simple scalar values (strings, numbers, booleans). To group on complex fields like nested Records or arrays, use `Hash` with `StableKey` to create a consistent grouping key:
+
+```go
+package main
+
+import (
+    "fmt"
+    "slices"
+    "github.com/rosscartlidge/ssql/v4"
+)
+
+func main() {
+    // Data with nested "address" records
+    people := []ssql.Record{
+        ssql.MakeMutableRecord().
+            String("name", "Alice").
+            Freeze(),
+        ssql.MakeMutableRecord().
+            String("name", "Bob").
+            Freeze(),
+        ssql.MakeMutableRecord().
+            String("name", "Carol").
+            Freeze(),
+        ssql.MakeMutableRecord().
+            String("name", "David").
+            Freeze(),
+    }
+
+    // Add nested address records
+    nyc := ssql.MakeMutableRecord().String("city", "NYC").String("state", "NY").Freeze()
+    la := ssql.MakeMutableRecord().String("city", "LA").String("state", "CA").Freeze()
+
+    people[0] = ssql.SetImmutable(people[0], "address", nyc)
+    people[1] = ssql.SetImmutable(people[1], "address", la)
+    people[2] = ssql.SetImmutable(people[2], "address", nyc)  // Same as Alice
+    people[3] = ssql.SetImmutable(people[3], "address", la)   // Same as Bob
+
+    // Hash the complex "address" field to create a grouping key
+    // StableKey ensures identical Records always produce the same hash
+    pipeline := ssql.Chain(
+        ssql.Hash("address", "_address_key"),  // Creates stable hash of nested Record
+        ssql.GroupByFields("_group", "_address_key"),
+        ssql.Aggregate("_group", map[string]ssql.AggregateFunc{
+            "count":    ssql.Count(),
+            "names":    ssql.Collect("name"),
+        }),
+    )
+
+    fmt.Println("People grouped by address:")
+    for result := range pipeline(slices.Values(people)) {
+        names := ssql.GetOr(result, "names", []any{})
+        count := ssql.GetOr(result, "count", int64(0))
+        fmt.Printf("  %d people: %v\n", count, names)
+    }
+
+    // You can also use StableKey directly to see the canonical representation
+    fmt.Println("\nStableKey representations:")
+    fmt.Printf("  NYC address: %s\n", ssql.StableKey(nyc))
+    fmt.Printf("  LA address:  %s\n", ssql.StableKey(la))
+}
+```
+
+Output:
+```
+People grouped by address:
+  2 people: [Alice Carol]
+  2 people: [Bob David]
+
+StableKey representations:
+  NYC address: {"city":"NYC","state":"NY"}
+  LA address:  {"city":"LA","state":"CA"}
+```
+
+Key points:
+- **`Hash(sourceField, targetField)`** - Creates a SHA256 hash of any field value
+- **`StableKey(value)`** - Produces a canonical string representation (sorted fields for Records)
+- Hash uses StableKey internally, ensuring identical complex values always hash the same
+- The hash is a 64-character hex string, suitable for grouping
+
+This pattern is useful when:
+- Grouping by nested configuration objects
+- Aggregating events with complex metadata
+- Deduplicating records with structured fields
+
 ### Rolling Window Analytics
 
 Implement time-based moving averages and trend analysis:
