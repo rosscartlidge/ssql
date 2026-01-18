@@ -202,8 +202,13 @@ func WriteArrowToWriter(records iter.Seq[Record], w io.Writer) error {
 		return nil // Nothing to write
 	}
 
-	// Create file writer
-	fw, err := ipc.NewFileWriter(w, ipc.WithSchema(schema), ipc.WithAllocator(mem))
+	// Create file writer with ZSTD compression
+	fw, err := ipc.NewFileWriter(w,
+		ipc.WithSchema(schema),
+		ipc.WithAllocator(mem),
+		ipc.WithCompressConcurrency(1),
+		ipc.WithZstd(),
+	)
 	if err != nil {
 		return fmt.Errorf("creating Arrow writer: %w", err)
 	}
