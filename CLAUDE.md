@@ -1634,10 +1634,11 @@ if unsupportedFeature {
 |-----------|-----|-----|--------|
 | Sum (1M float64) | 86μs | 601μs | **CPU 7x faster** |
 | Filter+Sum (10M float64) | 0.8ms | 5.3ms | **CPU 6.6x faster** |
+| Convolve (100K × 1K) | 195ms | 603μs | **GPU 320x faster** |
 | FFT (1K points) | 5.2ms | 0.25ms | **GPU 21x faster** |
 | FFT (1M points) | hours | 2.9ms | **GPU ∞ faster** |
 
-**Key finding:** GPU only wins for compute-heavy operations like FFT. For memory-bound operations (aggregations), even chained operations lose to a fast CPU.
+**Key finding:** GPU wins big for compute-heavy operations (convolution: 18-320x, FFT: 21-100x+). For memory-bound operations (aggregations), CPU wins.
 
 ### Why GPU Loses for Aggregations
 
@@ -1690,6 +1691,10 @@ LD_LIBRARY_PATH=./gpu go test -tags gpu ./gpu/   # Run GPU tests
 ### What Works Now
 
 ```go
+// Convolution (18-320x speedup) - compute-heavy
+gpu.ConvolveDirect(signal, kernel)  // Best for kernel < 10K
+gpu.ConvolveFFT(signal, kernel)     // Best for very large kernels
+
 // FFT (21-100x+ speedup) - genuinely compute-bound
 gpu.FFTMagnitude(data)
 gpu.FFTMagnitudePhase(data)
