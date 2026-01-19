@@ -1624,6 +1624,119 @@ if unsupportedFeature {
 - `TestErrorFragmentPropagation` - errors propagate through pipeline
 - `TestErrorFragmentFormat` - error fragments have correct format
 
+## GPU Acceleration (Experimental)
+
+**⚠️ GPU acceleration has been implemented and benchmarked. Results were surprising.**
+
+### Actual Benchmark Results (RTX 5090 + Intel Core Ultra 9 275HX)
+
+| Operation | CPU | GPU | Result |
+|-----------|-----|-----|--------|
+| Sum (1M float64) | 86μs | 601μs | **CPU 7x faster** |
+| Filter+Sum (10M float64) | 0.8ms | 5.3ms | **CPU 6.6x faster** |
+| FFT (1K points) | 5.2ms | 0.25ms | **GPU 21x faster** |
+| FFT (1M points) | hours | 2.9ms | **GPU ∞ faster** |
+
+**Key finding:** GPU only wins for compute-heavy operations like FFT. For memory-bound operations (aggregations), even chained operations lose to a fast CPU.
+
+### Why GPU Loses for Aggregations
+
+PCIe transfer overhead dominates:
+
+```
+1M float64 values (8MB):
+  PCIe to GPU:    ~500μs+
+  GPU sum:        ~0.1ms
+  PCIe from GPU:  ~0.01ms
+  Total GPU:      ~600μs
+
+  CPU sum:        ~86μs (no transfer, fast memory)
+```
+
+Modern CPUs have 50-100 GB/s memory bandwidth. For simple arithmetic, the CPU finishes before the GPU transfer completes.
+
+### The Record Extraction Problem
+
+ssql's `Record` type uses Schema + `[]any`. Extracting values requires CPU work:
+
+```go
+// This is CPU-bound and often slower than the aggregation itself
+values := make([]float64, len(records))
+for i, r := range records {
+    values[i] = ssql.GetOr(r, "price", 0.0)
+}
+```
+
+**Arrow columnar format bypasses this** - data is already contiguous.
+
+### Current GPU Implementation
+
+```
+gpu/
+├── sum.cu           # CUDA kernels (sum, filter, FFT)
+├── gpu.go           # Go wrappers (build tag: gpu)
+├── gpu_stub.go      # Stubs for non-GPU builds
+├── gpu_test.go      # Tests and benchmarks
+└── Makefile         # Builds libssqlgpu.so
+```
+
+**Building with GPU support:**
+```bash
+cd gpu && make                                    # Build CUDA library
+LD_LIBRARY_PATH=./gpu go build -tags gpu ./...   # Build with GPU
+LD_LIBRARY_PATH=./gpu go test -tags gpu ./gpu/   # Run GPU tests
+```
+
+### What Works Now
+
+```go
+// FFT (21-100x+ speedup) - genuinely compute-bound
+gpu.FFTMagnitude(data)
+gpu.FFTMagnitudePhase(data)
+```
+
+### Don't Use GPU For
+
+- **Simple aggregations** (sum, avg, count, min, max) - CPU is 7x faster
+- **Chained filter operations** - CPU still wins on fast hardware
+- **Small datasets** (<100K elements) - kernel launch overhead dominates
+- **Anything memory-bound** - fast CPUs win
+
+### Future GPU Opportunities
+
+1. **FFT CLI command** - leverage existing cuFFT implementation
+2. **Arrow → GPU direct transfer** - bypass Record extraction entirely
+3. **Compute-heavy operations** - matrix ops, convolution, spectral analysis
+
+**Reference:** See `doc/research/gpu-arrow-learnings.md` for detailed analysis and benchmark data.
+
+## Arrow Format Support
+
+ssql supports Apache Arrow format for high-performance I/O:
+
+**Benefits:**
+- 10-20x faster than CSV/JSON
+- Zero-copy memory mapping
+- Columnar layout (cache-friendly)
+- ZSTD compression support
+- GPU-ready (contiguous numeric arrays)
+
+**Usage:**
+```bash
+ssql from data.arrow | ssql where -where age gt 25 | ssql to arrow output.arrow
+```
+
+**When to use Arrow:**
+- Large datasets (>100K records)
+- Repeated processing of same data
+- GPU acceleration (data already columnar)
+- Inter-process data sharing
+
+**When to use CSV/JSON:**
+- Human-readable output needed
+- Small datasets
+- Interop with non-Arrow tools
+
 - ai_generation
 - doc_improvement
 - llm_test
