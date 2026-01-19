@@ -1,8 +1,10 @@
 # What We Learned: GPU Acceleration and Arrow Integration
 
-**Date:** January 2025
-**Status:** Implemented and tested
-**Summary:** GPU acceleration provides 10-100x speedup for FFT but no benefit for simple aggregations. Arrow I/O is 10-20x faster and enables future GPU integration.
+| | |
+|---|---|
+| **Date** | January 2025 |
+| **Status** | Implemented and tested |
+| **Summary** | GPU acceleration provides 10-100x speedup for FFT but no benefit for simple aggregations. Arrow I/O is 10-20x faster and enables future GPU integration. |
 
 ## Executive Summary
 
@@ -42,18 +44,18 @@ For simple aggregations, the operation is memory-bound, not compute-bound. The C
 
 ### The Record Extraction Problem
 
-ssql's `Record` type compounds this:
+ssql's `Record` type uses a Schema + `[]any` values slice internally. Extracting values for GPU requires:
 
 ```go
-// Records are map[string]any - extracting values requires:
+// Records use Schema + []any - extracting values requires:
 values := make([]float64, len(records))
 for i, r := range records {
-    values[i] = GetOr(r, "price", 0.0)  // Map lookup + type assertion
+    values[i] = GetOr(r, "price", 0.0)  // Schema index lookup + type assertion
 }
 // This extraction often takes LONGER than the aggregation itself
 ```
 
-Even if GPU aggregation were instant, extracting values from `map[string]any` to contiguous float64 arrays is CPU-bound work that cannot be parallelized.
+Even if GPU aggregation were instant, extracting values from `[]any` to contiguous float64 arrays is CPU-bound work that cannot be parallelized.
 
 ---
 
@@ -188,10 +190,10 @@ Arrow:
 │ qty:   [10, 5, 8, 12, ...]       │  ← Contiguous int64[]
 └─────────────────────────────────┘
 
-vs Record (map[string]any):
+vs Record (Schema + []any):
 ┌──────────────────────────────────┐
-│ {price: 1.5, qty: 10}            │  ← Each record is a map
-│ {price: 2.3, qty: 5}             │  ← Random memory layout
+│ {price: 1.5, qty: 10}            │  ← Each record has []any values
+│ {price: 2.3, qty: 5}             │  ← Values are boxed (any)
 │ ...                              │
 └──────────────────────────────────┘
 ```
