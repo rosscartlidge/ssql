@@ -3,6 +3,7 @@ package ssql
 import (
 	"iter"
 	"math"
+	"math/cmplx"
 )
 
 // Signal represents a time-domain signal as a sequence of float64 values.
@@ -391,54 +392,105 @@ func convolveImpl(signal, kernel Signal) (Signal, error) {
 }
 
 // ============================================================================
-// CPU Implementations (fallback)
+// CPU Implementations - Cooley-Tukey FFT O(n log n)
 // ============================================================================
 
-// fftMagnitudeCPU computes FFT magnitude on CPU using naive DFT.
-// This is O(n²) - only use for small signals or as fallback.
+// fftCooleyTukey performs in-place Cooley-Tukey radix-2 FFT.
+// Input must be power-of-2 length.
+func fftCooleyTukey(x []complex128) {
+	n := len(x)
+	if n <= 1 {
+		return
+	}
+
+	// Bit-reversal permutation
+	j := 0
+	for i := 0; i < n-1; i++ {
+		if i < j {
+			x[i], x[j] = x[j], x[i]
+		}
+		k := n / 2
+		for k <= j {
+			j -= k
+			k /= 2
+		}
+		j += k
+	}
+
+	// Cooley-Tukey iterative FFT
+	for size := 2; size <= n; size *= 2 {
+		halfSize := size / 2
+		step := -2 * math.Pi / float64(size)
+		for i := 0; i < n; i += size {
+			for k := 0; k < halfSize; k++ {
+				w := cmplx.Exp(complex(0, step*float64(k)))
+				even := x[i+k]
+				odd := w * x[i+k+halfSize]
+				x[i+k] = even + odd
+				x[i+k+halfSize] = even - odd
+			}
+		}
+	}
+}
+
+// nextPowerOf2 returns the smallest power of 2 >= n.
+func nextPowerOf2(n int) int {
+	p := 1
+	for p < n {
+		p *= 2
+	}
+	return p
+}
+
+// fftMagnitudeCPU computes FFT magnitude on CPU using Cooley-Tukey O(n log n).
 func fftMagnitudeCPU(signal Signal) []float64 {
 	n := len(signal)
 	if n == 0 {
 		return []float64{}
 	}
 
-	// For real input, only need n/2+1 positive frequencies
+	// Pad to power of 2 for Cooley-Tukey
+	size := nextPowerOf2(n)
+	x := make([]complex128, size)
+	for i := 0; i < n; i++ {
+		x[i] = complex(signal[i], 0)
+	}
+
+	fftCooleyTukey(x)
+
+	// Extract magnitudes (positive frequencies only)
 	outN := n/2 + 1
 	magnitude := make([]float64, outN)
-
-	for k := 0; k < outN; k++ {
-		var real, imag float64
-		for t := 0; t < n; t++ {
-			angle := -2 * math.Pi * float64(k) * float64(t) / float64(n)
-			real += signal[t] * math.Cos(angle)
-			imag += signal[t] * math.Sin(angle)
-		}
-		magnitude[k] = math.Sqrt(real*real + imag*imag)
+	for i := 0; i < outN; i++ {
+		magnitude[i] = cmplx.Abs(x[i])
 	}
 
 	return magnitude
 }
 
-// fftMagnitudePhaseCPU computes FFT magnitude and phase on CPU.
+// fftMagnitudePhaseCPU computes FFT magnitude and phase on CPU using Cooley-Tukey.
 func fftMagnitudePhaseCPU(signal Signal) ([]float64, []float64) {
 	n := len(signal)
 	if n == 0 {
 		return []float64{}, []float64{}
 	}
 
+	// Pad to power of 2 for Cooley-Tukey
+	size := nextPowerOf2(n)
+	x := make([]complex128, size)
+	for i := 0; i < n; i++ {
+		x[i] = complex(signal[i], 0)
+	}
+
+	fftCooleyTukey(x)
+
+	// Extract magnitudes and phases (positive frequencies only)
 	outN := n/2 + 1
 	magnitude := make([]float64, outN)
 	phase := make([]float64, outN)
-
-	for k := 0; k < outN; k++ {
-		var real, imag float64
-		for t := 0; t < n; t++ {
-			angle := -2 * math.Pi * float64(k) * float64(t) / float64(n)
-			real += signal[t] * math.Cos(angle)
-			imag += signal[t] * math.Sin(angle)
-		}
-		magnitude[k] = math.Sqrt(real*real + imag*imag)
-		phase[k] = math.Atan2(imag, real)
+	for i := 0; i < outN; i++ {
+		magnitude[i] = cmplx.Abs(x[i])
+		phase[i] = cmplx.Phase(x[i])
 	}
 
 	return magnitude, phase
