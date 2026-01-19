@@ -410,6 +410,70 @@ func ConvolveFilter(field, outputField string, kernel Signal, same bool) Filter[
 	}
 }
 
+// CorrelateFilter returns a filter that computes cross-correlation between two fields.
+// Use same=true to output same length as first field (values added to original records).
+// Use same=false to output full correlation result (new records with index and value).
+func CorrelateFilter(fieldA, fieldB, outputField string, same bool) Filter[Record, Record] {
+	return func(records iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			// Collect all records
+			collected := make([]Record, 0)
+			for r := range records {
+				collected = append(collected, r)
+			}
+
+			// Extract signals from both fields
+			signalA := ExtractSignalFromSlice(collected, fieldA)
+			signalB := ExtractSignalFromSlice(collected, fieldB)
+
+			if len(signalA) == 0 || len(signalB) == 0 {
+				return
+			}
+
+			// Apply correlation
+			var result Signal
+			var err error
+			if same {
+				result, err = CorrelateSame(signalA, signalB)
+			} else {
+				result, err = Correlate(signalA, signalB)
+			}
+			if err != nil {
+				return
+			}
+
+			if same {
+				// Same length - add to original records
+				for i, r := range collected {
+					mut := r.ToMutable()
+					if i < len(result) {
+						mut = mut.Float(outputField, result[i])
+					}
+					if !yield(mut.Freeze()) {
+						return
+					}
+				}
+			} else {
+				// Full correlation - create new records with index and value
+				for i, v := range result {
+					mut := MakeMutableRecord()
+					mut = mut.Int("index", int64(i))
+					mut = mut.Float(outputField, v)
+					if !yield(mut.Freeze()) {
+						return
+					}
+				}
+			}
+		}
+	}
+}
+
+// AutoCorrelateFilter returns a filter that computes autocorrelation of a field.
+// Autocorrelation measures how similar a signal is to a delayed copy of itself.
+func AutoCorrelateFilter(field, outputField string, same bool) Filter[Record, Record] {
+	return CorrelateFilter(field, field, outputField, same)
+}
+
 // ============================================================================
 // Internal Implementations
 // ============================================================================
