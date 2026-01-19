@@ -84,6 +84,17 @@ result, err := gpu.ConvolveFFT(signal, kernel)
 
 Larger kernels show bigger speedups because more compute is done per transfer.
 
+**Why convolution wins where aggregations lose:**
+
+| Operation | Work per element | Bottleneck | GPU benefit |
+|-----------|------------------|------------|-------------|
+| Sum/Avg | 1 add | Memory bandwidth | None (CPU wins) |
+| Convolution (100 kernel) | 100 multiply-adds | Compute | **18-50x** |
+| Convolution (1K kernel) | 1000 multiply-adds | Compute | **120-320x** |
+| FFT | O(log n) trig ops | Compute | **21-100x+** |
+
+The key metric is **compute-to-transfer ratio**. Convolution with a 1K kernel does 1000 operations per output element - enough compute to justify the PCIe transfer overhead.
+
 ### FFT (10-100x Speedup)
 
 Fast Fourier Transform involves O(n log n) operations with transcendental functions (sin, cos). This is genuinely compute-bound:
@@ -410,6 +421,203 @@ ssql.WriteArrow(filtered, "output.arrow")
 7. **Don't trust theoretical speedups** - "100-1000x speedup potential" from research papers assumes data already on GPU. Real-world includes transfer.
 
 8. **Modern CPUs are remarkably fast** - Memory bandwidth on modern desktop CPUs (50-100 GB/s) approaches older GPU transfer speeds.
+
+---
+
+## Implementation Plan: FFT and Convolution in ssql
+
+### Overview
+
+Add FFT and convolution as first-class operations in the ssql package and CLI. These are the operations where GPU acceleration provides genuine benefit (21-320x speedup).
+
+### Phase 1: Core Library (ssql package)
+
+**New types in `signal.go`:**
+
+```go
+// Signal represents a time-domain signal as a sequence of float64 values
+type Signal []float64
+
+// Spectrum represents frequency-domain data (magnitude and optional phase)
+type Spectrum struct {
+    Frequencies []float64  // Frequency bins (Hz, if sample rate known)
+    Magnitude   []float64  // Magnitude at each frequency
+    Phase       []float64  // Phase in radians (optional)
+}
+```
+
+**New functions:**
+
+```go
+// FFT operations
+func FFT(signal Signal) (*Spectrum, error)
+func FFTMagnitude(signal Signal) ([]float64, error)
+func FFTMagnitudePhase(signal Signal) (mag, phase []float64, err error)
+
+// Convolution operations
+func Convolve(signal, kernel Signal) (Signal, error)
+func ConvolveFFT(signal, kernel Signal) (Signal, error)  // For large kernels
+
+// Common kernels
+func GaussianKernel(size int, sigma float64) Signal
+func MovingAverageKernel(size int) Signal
+func SobelKernel() Signal  // Edge detection
+```
+
+**GPU acceleration (transparent):**
+
+```go
+// Internal: automatically uses GPU if available and beneficial
+func fftImpl(signal Signal) (*Spectrum, error) {
+    if gpu.Available() && len(signal) >= 1024 {
+        return fftGPU(signal)
+    }
+    return fftCPU(signal)
+}
+
+func convolveImpl(signal, kernel Signal) (Signal, error) {
+    if gpu.Available() && len(kernel) >= 64 {
+        return convolveGPU(signal, kernel)
+    }
+    return convolveCPU(signal, kernel)
+}
+```
+
+### Phase 2: Record Integration
+
+**Extract signal from records:**
+
+```go
+// ExtractSignal extracts a float64 field as a Signal
+func ExtractSignal(records iter.Seq[Record], field string) Signal
+
+// Example usage:
+prices := ssql.ExtractSignal(records, "price")
+smoothed := ssql.Convolve(prices, ssql.MovingAverageKernel(10))
+```
+
+**Apply signal back to records:**
+
+```go
+// WithSignal adds a signal as a new field to records
+func WithSignal(records iter.Seq[Record], field string, signal Signal) iter.Seq[Record]
+```
+
+### Phase 3: CLI Commands
+
+**`ssql fft` command:**
+
+```bash
+# Compute FFT magnitude spectrum
+ssql from sensor_data.csv | ssql fft -field temperature -output spectrum.csv
+
+# Output columns: frequency, magnitude, phase (optional)
+ssql from audio.csv | ssql fft -field amplitude --phase -output freq.csv
+
+# Inline: add spectrum as new fields
+ssql from data.csv | ssql fft -field signal -as-fields freq_,mag_
+```
+
+**`ssql convolve` command:**
+
+```bash
+# Smooth with moving average
+ssql from prices.csv | ssql convolve -field price -kernel avg:10 -as smoothed
+
+# Gaussian smoothing
+ssql from sensor.csv | ssql convolve -field value -kernel gaussian:5:1.5 -as filtered
+
+# Custom kernel from file
+ssql from data.csv | ssql convolve -field signal -kernel-file impulse.csv -as response
+
+# Edge detection (derivative)
+ssql from image_row.csv | ssql convolve -field intensity -kernel diff -as edges
+```
+
+**Built-in kernels:**
+
+| Kernel | Syntax | Description |
+|--------|--------|-------------|
+| Moving average | `avg:N` | N-point moving average |
+| Gaussian | `gaussian:N:sigma` | Gaussian smoothing |
+| Derivative | `diff` | `[-1, 1]` edge detection |
+| Laplacian | `laplacian` | `[1, -2, 1]` second derivative |
+| Custom | `-kernel-file FILE` | Load from CSV/JSON |
+
+### Phase 4: Code Generation
+
+**Generated code for FFT:**
+
+```go
+// ssql from data.csv | ssql fft -field signal | ssql to csv
+signal := ssql.ExtractSignal(records, "signal")
+spectrum, _ := ssql.FFT(signal)
+// ... output spectrum as records
+```
+
+**Generated code for convolution:**
+
+```go
+// ssql from prices.csv | ssql convolve -field price -kernel avg:10 -as smoothed
+prices := ssql.ExtractSignal(records, "price")
+kernel := ssql.MovingAverageKernel(10)
+smoothed := ssql.Convolve(prices, kernel)
+records = ssql.WithSignal(records, "smoothed", smoothed)
+```
+
+### Implementation Order
+
+| Step | Task | Effort | Dependencies |
+|------|------|--------|--------------|
+| 1 | Add `Signal` type and CPU implementations | 1 day | None |
+| 2 | Integrate existing GPU code into ssql package | 1 day | Step 1 |
+| 3 | Add `ExtractSignal`/`WithSignal` helpers | 0.5 day | Step 1 |
+| 4 | Add `fft` CLI command | 1 day | Steps 1-3 |
+| 5 | Add `convolve` CLI command with built-in kernels | 1 day | Steps 1-3 |
+| 6 | Add code generation support | 1 day | Steps 4-5 |
+| 7 | Documentation and examples | 0.5 day | Steps 4-6 |
+
+**Total: ~6 days**
+
+### Design Decisions
+
+1. **Transparent GPU acceleration** - Users don't need to know about GPU. The library automatically uses GPU when beneficial.
+
+2. **Threshold-based GPU selection:**
+   - FFT: Use GPU for signals ≥ 1024 points
+   - Convolution: Use GPU for kernels ≥ 64 points
+   - Always fall back to CPU if GPU unavailable
+
+3. **Signal as separate type** - Don't try to stream FFT/convolution. These operations need the full signal in memory.
+
+4. **Built-in kernels** - Common smoothing/filtering kernels should be easy to use without creating separate files.
+
+5. **CLI outputs records** - FFT outputs frequency/magnitude/phase as records (one per frequency bin). Convolution outputs modified records with new field.
+
+### Example Workflows
+
+**Spectral analysis:**
+```bash
+# Find dominant frequencies in sensor data
+ssql from sensor.csv | ssql fft -field value | ssql sort -by magnitude -desc | ssql limit 10
+```
+
+**Signal smoothing:**
+```bash
+# Smooth noisy price data
+ssql from prices.csv | ssql convolve -field close -kernel gaussian:21:3 -as smoothed | ssql to csv
+```
+
+**Pipeline with other operations:**
+```bash
+# Filter, smooth, then analyze
+ssql from data.csv \
+  | ssql where -where quality eq good \
+  | ssql convolve -field signal -kernel avg:5 -as smoothed \
+  | ssql fft -field smoothed \
+  | ssql where -where magnitude gt 0.1 \
+  | ssql to json
+```
 
 ---
 
