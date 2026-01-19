@@ -1,11 +1,31 @@
 package runtime
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/expr-lang/expr"
 	"github.com/rosscartlidge/ssql/v4"
 )
+
+// Hash functions for expressions
+func hashSHA256(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+func hashSHA1(s string) string {
+	h := sha1.Sum([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+func hashMD5(s string) string {
+	h := md5.Sum([]byte(s))
+	return hex.EncodeToString(h[:])
+}
 
 // CompileExprFilter compiles a boolean expression once and returns a filter function.
 // The returned function can be used repeatedly on different records.
@@ -44,6 +64,9 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 	sampleEnv := make(map[string]interface{})
 	sampleEnv["has"] = func(field string) bool { return false }
 	sampleEnv["getOr"] = func(field string, defaultValue any) any { return defaultValue }
+	sampleEnv["sha256"] = hashSHA256
+	sampleEnv["sha1"] = hashSHA1
+	sampleEnv["md5"] = hashMD5
 
 	program, err := expr.Compile(expression,
 		expr.Env(sampleEnv),
@@ -73,6 +96,11 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 			}
 			return defaultValue
 		}
+
+		// Add hash functions
+		env["sha256"] = hashSHA256
+		env["sha1"] = hashSHA1
+		env["md5"] = hashMD5
 
 		// Execute the pre-compiled program with this record's environment
 		result, err := expr.Run(program, env)
@@ -101,6 +129,9 @@ func CompileExprWithFields(expression string, fields []string) (func(ssql.Record
 	// Add helper functions
 	sampleEnv["has"] = func(field string) bool { return false }
 	sampleEnv["getOr"] = func(field string, defaultValue any) any { return defaultValue }
+	sampleEnv["sha256"] = hashSHA256
+	sampleEnv["sha1"] = hashSHA1
+	sampleEnv["md5"] = hashMD5
 
 	program, err := expr.Compile(expression,
 		expr.Env(sampleEnv),
@@ -130,6 +161,11 @@ func CompileExprWithFields(expression string, fields []string) (func(ssql.Record
 			}
 			return defaultValue
 		}
+
+		// Add hash functions
+		env["sha256"] = hashSHA256
+		env["sha1"] = hashSHA1
+		env["md5"] = hashMD5
 
 		// Execute the pre-compiled program with this record's environment
 		result, err := expr.Run(program, env)

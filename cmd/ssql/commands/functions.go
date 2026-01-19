@@ -16,7 +16,7 @@ func RegisterFunctions(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql functions -examples", "Show common expression patterns").
 		Flag("-category", "-c").
 		String().
-		Completer(&cf.StaticCompleter{Options: []string{"string", "math", "array", "type", "operators", "helpers"}}).
+		Completer(&cf.StaticCompleter{Options: []string{"string", "math", "array", "type", "hash", "operators", "helpers"}}).
 		Global().
 		Default("").
 		Help("Show detailed help for a category (string, math, array, type, operators, helpers)").
@@ -67,6 +67,9 @@ func printAllCategories() error {
 	fmt.Println("Type Conversion (3):")
 	fmt.Println("  int, float, string")
 	fmt.Println()
+	fmt.Println("Hash Functions (3):")
+	fmt.Println("  sha256, sha1, md5")
+	fmt.Println()
 	fmt.Println("Helpers (2):")
 	fmt.Println("  has, getOr")
 	fmt.Println()
@@ -87,6 +90,8 @@ func printCategory(category string) error {
 		return printArrayFunctions()
 	case "type":
 		return printTypeFunctions()
+	case "hash":
+		return printHashFunctions()
 	case "operators":
 		return printOperators()
 	case "helpers":
@@ -94,7 +99,7 @@ func printCategory(category string) error {
 	default:
 		fmt.Printf("Unknown category: %s\n", category)
 		fmt.Println()
-		fmt.Println("Available categories: string, math, array, type, operators, helpers")
+		fmt.Println("Available categories: string, math, array, type, hash, operators, helpers")
 		return nil
 	}
 }
@@ -207,6 +212,27 @@ func printTypeFunctions() error {
 	fmt.Println("Common Usage:")
 	fmt.Println("  ssql update -set-expr age_num 'int(age_str)'")
 	fmt.Println("  ssql update -set-expr label 'string(round(value * 100)) + \"%\"'")
+	return nil
+}
+
+func printHashFunctions() error {
+	fmt.Println("HASH FUNCTIONS:")
+	fmt.Println()
+	fmt.Println("  sha256(str)    SHA-256 hash (64 hex characters)")
+	fmt.Println("    Example: sha256(\"hello\") → \"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\"")
+	fmt.Println()
+	fmt.Println("  sha1(str)      SHA-1 hash (40 hex characters)")
+	fmt.Println("    Example: sha1(\"hello\") → \"aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d\"")
+	fmt.Println()
+	fmt.Println("  md5(str)       MD5 hash (32 hex characters)")
+	fmt.Println("    Example: md5(\"hello\") → \"5d41402abc4b2a76b9719d911017c592\"")
+	fmt.Println()
+	fmt.Println("Common Usage:")
+	fmt.Println("  ssql update -set-expr email_hash 'sha256(email)'")
+	fmt.Println("  ssql update -set-expr id 'sha256(name + \":\" + email)'")
+	fmt.Println("  ssql update -set-expr checksum 'md5(content)'")
+	fmt.Println()
+	fmt.Println("Note: For security-sensitive applications, prefer sha256 over md5/sha1.")
 	return nil
 }
 
