@@ -151,21 +151,14 @@ func contains(str, substr string) bool {
 	return false
 }
 
-// buildAggregator builds an ssql AggregateFunc from a spec (for group-by command)
-// If useGPU is true, uses GPU-accelerated versions for sum and avg.
-func buildAggregator(function, field string, useGPU bool) (ssql.AggregateFunc, error) {
+// buildAggregator creates an aggregation function for the given function name and field.
+func buildAggregator(function, field string) (ssql.AggregateFunc, error) {
 	switch function {
 	case "count":
 		return ssql.Count(), nil
 	case "sum":
-		if useGPU {
-			return ssql.SumGPU(field), nil
-		}
 		return ssql.Sum(field), nil
 	case "avg":
-		if useGPU {
-			return ssql.AvgGPU(field), nil
-		}
 		return ssql.Avg(field), nil
 	case "min":
 		return ssql.Min[float64](field), nil
