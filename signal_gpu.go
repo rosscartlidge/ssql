@@ -11,16 +11,6 @@ func gpuAvailableForSignal() bool {
 	return gpu.Available()
 }
 
-// fftMagnitudeGPU computes FFT magnitude on GPU using cuFFT.
-func fftMagnitudeGPU(signal Signal) ([]float64, error) {
-	return gpu.FFTMagnitude([]float64(signal))
-}
-
-// fftMagnitudePhaseGPU computes FFT magnitude and phase on GPU.
-func fftMagnitudePhaseGPU(signal Signal) ([]float64, []float64, error) {
-	return gpu.FFTMagnitudePhase([]float64(signal))
-}
-
 // convolveGPU computes convolution on GPU.
 // Uses direct convolution for kernels < 10K, FFT-based for larger.
 func convolveGPU(signal, kernel Signal) (Signal, error) {

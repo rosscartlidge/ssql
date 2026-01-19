@@ -364,20 +364,14 @@ func ConvolveFilter(field, outputField string, kernel Signal, same bool) Filter[
 // Internal Implementations
 // ============================================================================
 
-// fftMagnitudeImpl computes FFT magnitude, using GPU if available.
+// fftMagnitudeImpl computes FFT magnitude using Cooley-Tukey O(n log n).
+// Note: GPU acceleration removed - Cooley-Tukey matches cuFFT performance.
 func fftMagnitudeImpl(signal Signal) ([]float64, error) {
-	// GPU threshold: use GPU for signals >= 1024 points
-	if gpuAvailableForSignal() && len(signal) >= 1024 {
-		return fftMagnitudeGPU(signal)
-	}
 	return fftMagnitudeCPU(signal), nil
 }
 
-// fftMagnitudePhaseImpl computes FFT magnitude and phase, using GPU if available.
+// fftMagnitudePhaseImpl computes FFT magnitude and phase using Cooley-Tukey.
 func fftMagnitudePhaseImpl(signal Signal) ([]float64, []float64, error) {
-	if gpuAvailableForSignal() && len(signal) >= 1024 {
-		return fftMagnitudePhaseGPU(signal)
-	}
 	mag, phase := fftMagnitudePhaseCPU(signal)
 	return mag, phase, nil
 }
