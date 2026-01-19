@@ -103,9 +103,15 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
 		Done().
+		Flag("-gpu").
+		Bool().
+		Global().
+		Help("Use GPU acceleration for sum/avg aggregations (requires -tags gpu build)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var groupByFields []string
 			var generate bool
+			var useGPU bool
 
 			// Extract group-by fields from variadic positional
 			if fieldsVal, ok := ctx.GlobalFlags["FIELDS"]; ok {
@@ -125,6 +131,10 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
+			}
+
+			if gpuVal, ok := ctx.GlobalFlags["-gpu"]; ok {
+				useGPU = gpuVal.(bool)
 			}
 
 			if len(groupByFields) == 0 {
@@ -410,7 +420,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 					// Apply built-in aggregations
 					for _, spec := range aggSpecs {
-						agg, err := buildAggregator(spec.function, spec.field)
+						agg, err := buildAggregator(spec.function, spec.field, useGPU)
 						if err != nil {
 							return err
 						}
@@ -456,7 +466,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Build aggregations map
 			aggregations := make(map[string]ssql.AggregateFunc)
 			for _, spec := range aggSpecs {
-				agg, err := buildAggregator(spec.function, spec.field)
+				agg, err := buildAggregator(spec.function, spec.field, useGPU)
 				if err != nil {
 					return err
 				}

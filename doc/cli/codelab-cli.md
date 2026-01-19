@@ -18,6 +18,7 @@
 - [Working with Real Data](#working-with-real-data)
 - [Grouping and Aggregations](#grouping-and-aggregations)
 - [SQL-Like Operations](#sql-like-operations)
+- [Signal Processing](#signal-processing)
 - [Creating Visualizations](#creating-visualizations)
 - [Code Generation](#code-generation)
 - [Complete Example](#complete-example)
@@ -484,6 +485,92 @@ SELECT * FROM suppliers
 
 ---
 
+## Signal Processing
+
+ssql includes signal processing commands for frequency analysis and filtering.
+
+### FFT (Fast Fourier Transform)
+
+Compute frequency spectrum from time-domain signals:
+
+```bash
+# Basic FFT of a signal field
+ssql from signal.csv | \
+  ssql fft -field amplitude
+
+# FFT with sample rate for frequency calculation
+ssql from audio.csv | \
+  ssql fft -field sample -rate 44100
+
+# Include phase information
+ssql from signal.csv | \
+  ssql fft -field value -phase
+```
+
+Output includes:
+- `index` - Frequency bin index
+- `frequency` - Frequency in Hz (if sample rate specified)
+- `magnitude` - Signal strength at each frequency
+- `phase` - Phase angle in radians (if `-phase` flag used)
+
+**Example: Analyze audio frequencies**
+```bash
+# Find dominant frequencies in audio data
+ssql from audio_samples.csv | \
+  ssql fft -field amplitude -rate 44100 | \
+  ssql sort magnitude -desc | \
+  ssql limit 10 | \
+  ssql to table
+```
+
+### Convolution
+
+Apply convolution filters for smoothing, edge detection, and custom filtering:
+
+```bash
+# Moving average smoothing (5-point)
+ssql from sensor.csv | \
+  ssql convolve -field reading -kernel avg -size 5
+
+# Gaussian smoothing
+ssql from data.csv | \
+  ssql convolve -field value -kernel gaussian -size 11 -sigma 2.0
+
+# Edge detection with difference kernel
+ssql from signal.csv | \
+  ssql convolve -field value -kernel diff
+
+# Custom kernel weights
+ssql from data.csv | \
+  ssql convolve -field value -custom 0.25,0.5,0.25
+```
+
+**Built-in Kernels:**
+- `avg` - Moving average (smoothing)
+- `gaussian` - Gaussian smoothing (configurable sigma)
+- `diff` - First derivative (edge detection)
+- `laplacian` - Second derivative
+- `sobel` - Sobel operator
+
+**Flags:**
+- `-field` / `-f` - Input field name (required)
+- `-output` / `-o` - Output field name (default: `field_convolved`)
+- `-kernel` / `-k` - Built-in kernel name
+- `-size` / `-s` - Kernel size for avg/gaussian (default: 5)
+- `-sigma` - Sigma for Gaussian kernel (default: 1.0)
+- `-custom` / `-c` - Custom kernel as comma-separated values
+- `-same` - Output same length as input (truncate edges)
+
+**Example: Noise reduction pipeline**
+```bash
+# Read noisy sensor data, smooth it, then visualize
+ssql from noisy_sensor.csv | \
+  ssql convolve -field reading -kernel gaussian -size 7 -sigma 1.5 -same | \
+  ssql chart -x timestamp -y reading_convolved -output smoothed.html
+```
+
+---
+
 ## Creating Visualizations
 
 Generate interactive HTML charts with Chart.js:
@@ -790,6 +877,10 @@ go build -o monitor monitor.go
 ### Multi-Table Operations
 - `join` - Join two data sources (SQL JOIN - inner/left/right/full)
 - `union` - Combine multiple data sources (SQL UNION/UNION ALL)
+
+### Signal Processing
+- `fft` - Fast Fourier Transform for frequency analysis (`-field`, `-rate`, `-phase`)
+- `convolve` - Apply convolution filters (`-field`, `-kernel`, `-custom`, `-same`)
 
 ### Outputs (using `to` subcommands)
 - `to table` - Display records as formatted table

@@ -38,6 +38,8 @@ func buildRootCommand() *cf.Command {
 	cmd = commands.RegisterGroupBy(cmd)
 	cmd = commands.RegisterJoin(cmd)
 	cmd = commands.RegisterUnion(cmd)
+	cmd = commands.RegisterFFT(cmd)
+	cmd = commands.RegisterConvolve(cmd)
 	cmd = commands.RegisterTo(cmd)
 	cmd = commands.RegisterGenerateGo(cmd)
 

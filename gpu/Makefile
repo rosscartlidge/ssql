@@ -17,7 +17,7 @@ LIBNAME = libssqlgpu.so
 all: $(LIBNAME)
 
 $(LIBNAME): sum.cu
-	$(NVCC) $(NVCC_FLAGS) -shared -o $@ $< -lcudart
+	$(NVCC) $(NVCC_FLAGS) -shared -o $@ $< -lcudart -lcufft
 
 clean:
 	rm -f $(LIBNAME)

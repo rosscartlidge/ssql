@@ -1,5 +1,121 @@
 # GPU Acceleration for ssql: Research and Implementation Plan
 
+## Experimental Findings (January 2025)
+
+**We implemented GPU acceleration and tested it. Here's what we learned:**
+
+### Reality Check: Initial Projections Were Too Optimistic
+
+The original projections below (100-1000x speedups for aggregations) assumed:
+1. Data already in GPU-friendly format
+2. Compute-bound operations
+3. No Record extraction overhead
+
+**Actual findings from implementation:**
+
+| Operation | Projected Speedup | Actual Speedup | Why |
+|-----------|------------------|----------------|-----|
+| Simple Sum | 50-200x | **1x (no benefit)** | Memory-bound, transfer dominates |
+| Simple Avg | 50-200x | **1x (no benefit)** | Memory-bound, transfer dominates |
+| Batched Sums | 10-50x | **<1x (slower)** | Copy overhead to flatten data |
+| Filter+Sum | 20-50x | **5-7x** | Data stays on GPU between ops |
+| FFT | 10-100x | **10-100x** | Compute-bound, as expected |
+
+### The Transfer Overhead Problem
+
+For 1M float64 values (8MB):
+```
+PCIe transfer to GPU:    ~1-2ms
+GPU sum computation:     ~0.1ms
+PCIe transfer from GPU:  ~0.01ms
+Total GPU time:          ~2-3ms
+
+CPU sum time:            ~2ms (no transfer)
+```
+
+**GPU loses because transfer time > compute time for simple operations.**
+
+### The Record Extraction Problem
+
+ssql's `Record` type is `map[string]any`. Extracting values for GPU requires:
+```go
+values := make([]float64, len(records))
+for i, r := range records {
+    values[i] = ssql.GetOr(r, "price", 0.0)  // Map lookup per record
+}
+```
+
+This extraction is CPU-bound and often takes longer than the actual aggregation.
+
+### What Actually Works
+
+1. **Chained Operations (5-7x speedup)**
+   - `FilterThenSum`: Filter + aggregate in one GPU pass
+   - Data stays on GPU between operations
+   - Transfer cost amortized across multiple operations
+
+2. **Compute-Heavy Operations (10-100x speedup)**
+   - FFT: O(n log n) with lots of trig operations
+   - Matrix multiplication: O(n³) operations
+   - Signal convolution
+
+3. **Arrow Columnar Format (not yet implemented)**
+   - Bypasses Record extraction
+   - Data already contiguous
+   - Direct GPU transfer possible
+
+### Current Implementation Status
+
+```
+gpu/
+├── sum.cu           # CUDA kernels
+├── gpu.go           # Go wrappers (build tag: gpu)
+├── gpu_stub.go      # Stubs for non-GPU builds
+├── gpu_test.go      # Tests and benchmarks
+├── Makefile         # Builds libssqlgpu.so
+└── libssqlgpu.so    # Compiled library
+```
+
+**Available Functions:**
+```go
+// Basic operations (limited benefit - transfer overhead dominates)
+gpu.SumFloat64(data []float64) (float64, error)
+gpu.SumInt64(data []int64) (int64, error)
+
+// Chained operations (good benefit - data stays on GPU)
+gpu.FilterThenSum(data []float64, threshold float64) (float64, error)
+
+// Compute-heavy operations (excellent benefit)
+gpu.FFTMagnitude(data []float64) ([]float64, error)
+gpu.FFTMagnitudePhase(data []float64) ([]float64, []float64, error)
+```
+
+### Recommendations
+
+**Do pursue:**
+1. FFT-based operations (spectral analysis, filtering, convolution)
+2. Chained operation pipelines (filter→sort→aggregate)
+3. Arrow columnar integration (bypass Record extraction)
+
+**Don't pursue:**
+1. Simple aggregations (sum, avg, count, min, max)
+2. Single-operation GPU calls
+3. Small datasets (<100K elements)
+
+### Future Priorities
+
+1. **Add FFT CLI command** - leverage existing GPU FFT implementation
+2. **Arrow columnar reader** - direct GPU transfer without Record extraction
+3. **Pipeline fusion** - compile multiple operations to single GPU kernel
+
+---
+
+## Original Planning Document
+
+The sections below contain the original theoretical analysis. The experimental findings above supersede the projected speedups for simple aggregations.
+
+---
+
 ## Executive Summary
 
 This document explores GPU acceleration for ssql data processing pipelines. With modern GPUs like the RTX 5090 offering 33 TFLOPs of compute, there's potential for **100-1000x speedups** over current CPU-based processing for suitable workloads.

@@ -441,6 +441,77 @@ func main() {
 
 </details>
 
+### **Signal Processing**
+
+**Quick view:**
+```go
+// FFT analysis and smoothing
+spectrum, _ := ssql.FFT(signal)
+smoothed, _ := ssql.Convolve(signal, ssql.GaussianKernel(11, 2.0))
+```
+
+<details>
+<summary>📋 <b>Click for complete, runnable code</b></summary>
+
+```go
+package main
+
+import (
+    "fmt"
+    "math"
+    "github.com/rosscartlidge/ssql/v4"
+)
+
+func main() {
+    // Create sample signal: 10Hz + 25Hz sine waves
+    sampleRate := 100.0 // 100 samples per second
+    signal := make(ssql.Signal, 256)
+    for i := range signal {
+        t := float64(i) / sampleRate
+        signal[i] = math.Sin(2*math.Pi*10*t) + 0.5*math.Sin(2*math.Pi*25*t)
+    }
+
+    // FFT to find frequency components
+    spectrum, err := ssql.FFT(signal)
+    if err != nil {
+        panic(err)
+    }
+
+    // Find peak frequencies
+    fmt.Println("Top frequencies:")
+    for i, mag := range spectrum.Magnitude {
+        if mag > 50 { // Threshold for significant peaks
+            freq := spectrum.FrequencyBin(i, sampleRate)
+            fmt.Printf("  %.1f Hz: magnitude %.1f\n", freq, mag)
+        }
+    }
+
+    // Smooth with Gaussian kernel
+    smoothed, err := ssql.ConvolveSame(signal, ssql.GaussianKernel(11, 2.0))
+    if err != nil {
+        panic(err)
+    }
+    fmt.Printf("\nSmoothed signal: %d points\n", len(smoothed))
+}
+```
+
+</details>
+
+**CLI Usage:**
+```bash
+# FFT analysis
+ssql from audio.csv | ssql fft -field amplitude -rate 44100 | ssql to table
+
+# Smoothing with convolution
+ssql from sensor.csv | ssql convolve -field reading -kernel gaussian -size 11 -same
+```
+
+**Features:**
+- **FFT** - Fast Fourier Transform for frequency analysis
+- **Convolution** - Signal filtering with built-in kernels (avg, gaussian, diff, laplacian, sobel)
+- **GPU Acceleration** - Automatic GPU usage for large signals (>=1024 points FFT, >=64 point kernels)
+- **Pipeline Integration** - Works with ssql's record-based pipelines
+
 ### **Data Integration**
 
 **Quick view:**

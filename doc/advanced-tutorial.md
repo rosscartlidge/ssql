@@ -14,6 +14,12 @@
   - [Multi-Level Grouping](#multi-level-grouping)
   - [Rolling Window Analytics](#rolling-window-analytics)
   - [Statistical Analysis](#statistical-analysis)
+- [Signal Processing](#signal-processing)
+  - [Fast Fourier Transform (FFT)](#fast-fourier-transform-fft)
+  - [Convolution and Filtering](#convolution-and-filtering)
+  - [Built-in Kernels](#built-in-kernels)
+  - [Pipeline Integration](#pipeline-integration)
+  - [GPU Acceleration](#gpu-acceleration)
 - [Stream Joins](#stream-joins)
   - [Inner Join Patterns](#inner-join-patterns)
   - [Left Join with Defaults](#left-join-with-defaults)
@@ -336,6 +342,225 @@ func generateNumericData() []ssql.Record {
 ```
 
 > 📚 **Reference**: See [Aggregation & Analysis](api-reference.md#aggregation--analysis) for running statistical operations.
+
+---
+
+## Signal Processing
+
+ssql provides built-in signal processing capabilities with GPU acceleration for FFT and convolution operations. These are useful for time-series analysis, audio processing, sensor data analysis, and more.
+
+### Fast Fourier Transform (FFT)
+
+Compute frequency-domain analysis of time-series data:
+
+```go
+package main
+
+import (
+    "fmt"
+    "math"
+    "slices"
+    "github.com/rosscartlidge/ssql/v4"
+)
+
+func main() {
+    // Generate a signal with two frequency components
+    n := 1024
+    sampleRate := 1000.0 // 1000 Hz sample rate
+    signal := make(ssql.Signal, n)
+
+    for i := range signal {
+        t := float64(i) / sampleRate
+        // 50 Hz sine wave + 120 Hz sine wave
+        signal[i] = math.Sin(2*math.Pi*50*t) + 0.5*math.Sin(2*math.Pi*120*t)
+    }
+
+    // Compute FFT
+    spectrum, err := ssql.FFT(signal)
+    if err != nil {
+        panic(err)
+    }
+
+    // Find dominant frequencies
+    fmt.Println("Frequency Analysis:")
+    for i := 0; i < spectrum.Len(); i++ {
+        freq := spectrum.FrequencyBin(i, sampleRate)
+        mag := spectrum.Magnitude[i]
+
+        // Only show significant peaks
+        if mag > 100 {
+            fmt.Printf("  Peak at %.1f Hz (magnitude: %.1f)\n", freq, mag)
+        }
+    }
+}
+```
+
+Output:
+```
+Frequency Analysis:
+  Peak at 50.0 Hz (magnitude: 512.0)
+  Peak at 120.0 Hz (magnitude: 256.0)
+```
+
+### FFT with Phase Information
+
+Get both magnitude and phase for complete spectral analysis:
+
+```go
+func demonstrateFFTWithPhase() {
+    // Create a phase-shifted signal
+    n := 256
+    signal := make(ssql.Signal, n)
+
+    for i := range signal {
+        // Cosine wave (phase = 0 at frequency bin 5)
+        signal[i] = math.Cos(2 * math.Pi * 5 * float64(i) / float64(n))
+    }
+
+    spectrum, err := ssql.FFTWithPhase(signal)
+    if err != nil {
+        panic(err)
+    }
+
+    // Phase at bin 5 should be ~0 for cosine
+    fmt.Printf("Phase at dominant frequency: %.3f radians\n", spectrum.Phase[5])
+    fmt.Printf("Magnitude at dominant frequency: %.1f\n", spectrum.Magnitude[5])
+}
+```
+
+### Convolution and Filtering
+
+Apply convolution for smoothing, edge detection, and other filters:
+
+```go
+func demonstrateConvolution() {
+    // Noisy signal
+    signal := ssql.Signal{1, 2, 5, 3, 8, 4, 9, 5, 7, 3, 6, 2}
+
+    // Apply 3-point moving average for smoothing
+    kernel := ssql.MovingAverageKernel(3)
+    smoothed, err := ssql.ConvolveSame(signal, kernel)
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Println("Original:", signal)
+    fmt.Println("Smoothed:", smoothed)
+
+    // Apply Gaussian smoothing
+    gaussian := ssql.GaussianKernel(5, 1.0)
+    gaussianSmoothed, _ := ssql.ConvolveSame(signal, gaussian)
+    fmt.Println("Gaussian Smoothed:", gaussianSmoothed)
+
+    // Edge detection with difference kernel
+    diff := ssql.DiffKernel()
+    edges, _ := ssql.Convolve(signal, diff)
+    fmt.Println("Edges (derivatives):", edges)
+}
+```
+
+### Built-in Kernels
+
+ssql provides several pre-built convolution kernels:
+
+```go
+// Moving average - smoothing
+avgKernel := ssql.MovingAverageKernel(5)  // [0.2, 0.2, 0.2, 0.2, 0.2]
+
+// Gaussian - smooth noise reduction
+gaussianKernel := ssql.GaussianKernel(11, 2.0)  // Bell curve, sigma=2.0
+
+// Difference - first derivative / edge detection
+diffKernel := ssql.DiffKernel()  // [-1, 1]
+
+// Laplacian - second derivative / sharp edge detection
+laplacianKernel := ssql.LaplacianKernel()  // [1, -2, 1]
+
+// Sobel - edge detection with smoothing
+sobelKernel := ssql.SobelKernel()  // [-1, 0, 1]
+```
+
+### Pipeline Integration
+
+Use FFT and convolution in record pipelines:
+
+```go
+func demonstratePipelineIntegration() {
+    // Sensor readings over time
+    records := []ssql.Record{
+        ssql.MakeMutableRecord().Float("time", 0.0).Float("value", 1.2).Freeze(),
+        ssql.MakeMutableRecord().Float("time", 0.1).Float("value", 2.5).Freeze(),
+        ssql.MakeMutableRecord().Float("time", 0.2).Float("value", 1.8).Freeze(),
+        ssql.MakeMutableRecord().Float("time", 0.3).Float("value", 3.1).Freeze(),
+        // ... more readings
+    }
+
+    // Extract signal from records
+    signal := ssql.ExtractSignalFromSlice(records, "value")
+
+    // Apply smoothing
+    smoothed, _ := ssql.ConvolveSame(signal, ssql.MovingAverageKernel(3))
+
+    // Add smoothed values back to records
+    enriched := ssql.WithSignal(slices.Values(records), "smoothed_value", smoothed)
+
+    fmt.Println("Records with smoothed values:")
+    for r := range enriched {
+        time := ssql.GetOr(r, "time", 0.0)
+        original := ssql.GetOr(r, "value", 0.0)
+        smooth := ssql.GetOr(r, "smoothed_value", 0.0)
+        fmt.Printf("  t=%.1f: original=%.2f, smoothed=%.2f\n", time, original, smooth)
+    }
+}
+```
+
+### FFT Pipeline Filter
+
+Use the `FFTFilter` for composable pipelines:
+
+```go
+func demonstrateFFTFilter() {
+    // Read sensor data
+    records := ssql.ReadCSV("sensor_data.csv")
+
+    // Process with FFT and chain with other operations
+    pipeline := ssql.Chain(
+        ssql.FFTFilter("amplitude", 1000.0, false),  // FFT at 1000 Hz sample rate
+        ssql.Where(func(r ssql.Record) bool {
+            // Only keep significant frequency components
+            mag := ssql.GetOr(r, "magnitude", 0.0)
+            return mag > 10.0
+        }),
+        ssql.Limit[ssql.Record](20),  // Top 20 frequencies
+    )
+
+    results := pipeline(records)
+
+    fmt.Println("Dominant frequencies:")
+    for r := range results {
+        freq := ssql.GetOr(r, "frequency", 0.0)
+        mag := ssql.GetOr(r, "magnitude", 0.0)
+        fmt.Printf("  %.1f Hz: %.2f\n", freq, mag)
+    }
+}
+```
+
+### GPU Acceleration
+
+FFT and convolution automatically use GPU when available and beneficial:
+
+- **FFT**: GPU used for signals >= 1024 points (10-100x speedup)
+- **Convolution**: GPU used for kernels >= 64 points (18-320x speedup)
+
+Build with GPU support:
+```bash
+cd gpu && make                                    # Build CUDA library
+LD_LIBRARY_PATH=./gpu go build -tags gpu ./...   # Build with GPU
+```
+
+The functions automatically fall back to CPU implementations when GPU is unavailable.
+
+> 📚 **Reference**: See [Signal Processing](api-reference.md#signal-processing) for complete function documentation.
 
 ---
 
