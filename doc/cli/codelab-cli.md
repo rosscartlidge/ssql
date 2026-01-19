@@ -569,6 +569,38 @@ ssql from noisy_sensor.csv | \
   ssql chart -x timestamp -y reading_convolved -output smoothed.html
 ```
 
+### CPU vs GPU Processing
+
+Signal processing works out of the box using CPU implementations - no special setup required:
+
+```bash
+# Standard install - works everywhere
+go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
+
+# All signal processing commands work immediately
+ssql from signal.csv | ssql fft -field value
+ssql from sensor.csv | ssql convolve -field reading -kernel gaussian
+```
+
+**Optional GPU Acceleration:**
+
+For large datasets, CUDA GPU acceleration provides 10-100x speedup. This requires:
+1. NVIDIA GPU with CUDA support
+2. CUDA toolkit installed
+3. Building with GPU support:
+
+```bash
+# Build GPU-accelerated version
+cd gpu && make                           # Build CUDA library
+go build -tags gpu -o ssql ./cmd/ssql    # Build with GPU support
+```
+
+GPU is used automatically when beneficial:
+- FFT: signals >= 1024 points
+- Convolution: kernels >= 64 points
+
+Smaller signals use CPU (faster due to GPU transfer overhead).
+
 ---
 
 ## Creating Visualizations

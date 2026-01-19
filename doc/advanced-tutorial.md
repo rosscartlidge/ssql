@@ -547,18 +547,23 @@ func demonstrateFFTFilter() {
 
 ### GPU Acceleration
 
-FFT and convolution automatically use GPU when available and beneficial:
-
-- **FFT**: GPU used for signals >= 1024 points (10-100x speedup)
-- **Convolution**: GPU used for kernels >= 64 points (18-320x speedup)
-
-Build with GPU support:
+**CPU works out of the box** - no special setup required:
 ```bash
-cd gpu && make                                    # Build CUDA library
-LD_LIBRARY_PATH=./gpu go build -tags gpu ./...   # Build with GPU
+# Standard install works everywhere
+go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 ```
 
-The functions automatically fall back to CPU implementations when GPU is unavailable.
+**Optional GPU acceleration** for large datasets (requires CUDA toolkit):
+```bash
+cd gpu && make                                    # Build CUDA library
+go build -tags gpu -o ssql ./cmd/ssql            # Build with GPU support
+```
+
+GPU is used automatically when beneficial:
+- **FFT**: signals >= 1024 points (10-100x speedup)
+- **Convolution**: kernels >= 64 points (18-320x speedup)
+
+Smaller signals always use CPU (faster due to GPU transfer overhead).
 
 > 📚 **Reference**: See [Signal Processing](api-reference.md#signal-processing) for complete function documentation.
 

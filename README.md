@@ -509,8 +509,20 @@ ssql from sensor.csv | ssql convolve -field reading -kernel gaussian -size 11 -s
 **Features:**
 - **FFT** - Fast Fourier Transform for frequency analysis
 - **Convolution** - Signal filtering with built-in kernels (avg, gaussian, diff, laplacian, sobel)
-- **GPU Acceleration** - Automatic GPU usage for large signals (>=1024 points FFT, >=64 point kernels)
 - **Pipeline Integration** - Works with ssql's record-based pipelines
+- **Works everywhere** - CPU implementations included, no special setup required
+
+**GPU Acceleration (optional):**
+Signal processing works out of the box using CPU. For large datasets, optional CUDA GPU acceleration provides 10-100x speedup:
+```bash
+# Standard install - uses CPU (works everywhere)
+go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
+
+# GPU-accelerated build (requires CUDA toolkit)
+cd gpu && make
+go build -tags gpu -o ssql ./cmd/ssql
+```
+GPU is used automatically when available for FFT >= 1024 points or convolution kernels >= 64 points.
 
 ### **Data Integration**
 
