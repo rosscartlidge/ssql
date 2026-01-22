@@ -129,7 +129,7 @@ ssql from data.csv | jq '.age | type' | head -5
 ```bash
 # Inspect GROUP BY results
 ssql from data.csv | \
-  ssql group-by department -function count -result total | \
+  ssql group-by department -count total | \
   jq '.'
 
 # Extract nested fields
@@ -225,12 +225,12 @@ ssql from data.csv | jq -r '.department' | sort | uniq -c
 
 # Step 2: See raw GROUP BY output
 ssql from data.csv | \
-  ssql group-by department -function count -result total | \
+  ssql group-by department -count total | \
   jq '.'
 
 # Step 3: Check specific group
 ssql from data.csv | \
-  ssql group-by department -function count -result total | \
+  ssql group-by department -count total | \
   jq 'select(.department == "Engineering")'
 
 # Step 4: Verify counts manually
@@ -276,7 +276,7 @@ ssql from large.csv | ssql where ... | ssql limit 100
 # Time entire pipeline
 time (ssql from data.csv | \
   ssql where -where age gt 30 | \
-  ssql group-by department -function count -result total | \
+  ssql group-by department -count total | \
   ssql to csv output.csv)
 
 # Time individual commands
@@ -291,7 +291,7 @@ time (cat /tmp/stage2.jsonl | ssql group ... > /tmp/stage3.jsonl)
 # Ensure no data loss between stages
 echo "Input: $(ssql from data.csv | wc -l)"
 echo "After filter: $(ssql from data.csv | ssql where -where age gt 30 | wc -l)"
-echo "After group: $(ssql from data.csv | ssql where -where age gt 30 | ssql group-by dept -function count -result n | wc -l)"
+echo "After group: $(ssql from data.csv | ssql where -where age gt 30 | ssql group-by dept -count n | wc -l)"
 ```
 
 ### Sample Large Datasets
@@ -396,7 +396,7 @@ ssql from data.csv | jq 'select(.department == null or .department == "")'
 # Verify manual count matches GROUP BY count
 DEPT="Engineering"
 echo "Manual count: $(ssql from data.csv | jq "select(.department == \"$DEPT\")" | wc -l)"
-echo "GROUP BY count: $(ssql from data.csv | ssql group-by department -function count -result n | jq "select(.department == \"$DEPT\") | .n")"
+echo "GROUP BY count: $(ssql from data.csv | ssql group-by department -count n | jq "select(.department == \"$DEPT\") | .n")"
 ```
 
 ---
@@ -436,7 +436,7 @@ ssql from data.csv | \
 ssql from data.csv | \
   ssql where -where age gt 30 | \
   ssql where -where department eq Engineering | \
-  ssql group-by department -function avg -field salary -result avg_salary | \
+  ssql group-by department -avg salary avg_salary | \
   jq '.'
 ```
 
@@ -476,7 +476,7 @@ ssql from huge.csv | ssql limit 100 | \
 # Save stages for debugging
 ssql from data.csv > /tmp/1-input.jsonl
 cat /tmp/1-input.jsonl | ssql where -where age gt 30 > /tmp/2-filtered.jsonl
-cat /tmp/2-filtered.jsonl | ssql group-by dept -function count -result n > /tmp/3-grouped.jsonl
+cat /tmp/2-filtered.jsonl | ssql group-by dept -count n > /tmp/3-grouped.jsonl
 
 # Inspect any stage
 jq '.' /tmp/2-filtered.jsonl | less
@@ -488,7 +488,7 @@ jq '.' /tmp/2-filtered.jsonl | less
 # Count records at each stage
 ssql from data.csv | tee >(wc -l >&2) | \
   ssql where -where age gt 30 | tee >(wc -l >&2) | \
-  ssql group-by dept -function count -result n | tee >(wc -l >&2) | \
+  ssql group-by dept -count n | tee >(wc -l >&2) | \
   ssql to csv output.csv
 ```
 
@@ -570,6 +570,6 @@ ssql from data.csv | jq '.age | type' | sort | uniq -c
 
 If you encounter issues not covered here:
 
-1. Check the [troubleshooting guide](./troubleshooting.md)
+1. Check the [troubleshooting guide](./cli-troubleshooting.md)
 2. Look at [examples](../examples/)
 3. File an issue: https://github.com/rosscartlidge/ssql/issues

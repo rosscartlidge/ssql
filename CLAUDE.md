@@ -62,9 +62,9 @@ When making changes to the library API or CLI commands, you MUST also update the
 **Documentation files that must stay in sync:**
 - `README.md` - Main library documentation, examples, and installation instructions
 - `doc/api-reference.md` - Complete API reference with examples
-- `doc/cli/codelab-cli.md` - CLI tutorial with command examples
-- `doc/cli/debugging_pipelines.md` - CLI debugging examples
-- `doc/cli/troubleshooting.md` - Common issues and solutions
+- `doc/cli-codelab.md` - CLI tutorial with command examples
+- `doc/cli-debugging.md` - CLI debugging examples
+- `doc/cli-troubleshooting.md` - Common issues and solutions
 - `doc/EXPRESSIONS.md` - Expression language documentation (user-facing)
 - `doc/ai-code-generation.md` - AI code generation examples
 - `doc/ai-human-guide.md` - Human-AI collaboration guide
@@ -87,7 +87,7 @@ When making changes to the library API or CLI commands, you MUST also update the
 
 **Common mistakes to avoid:**
 - ❌ Changing API without updating doc/api-reference.md
-- ❌ Changing CLI commands without updating doc/cli/*.md
+- ❌ Changing CLI commands without updating doc/cli-*.md
 - ❌ Using old import paths (`ssql/v2` instead of `ssql/v3`)
 - ❌ Using old command names (`read-csv` instead of `from`, `write-csv` instead of `to csv`)
 - ❌ Using old flag names (`-match` instead of `-where`, `-expr` instead of `-where-expr`)

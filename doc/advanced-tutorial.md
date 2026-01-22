@@ -16,7 +16,9 @@
   - [Statistical Analysis](#statistical-analysis)
 - [Signal Processing](#signal-processing)
   - [Fast Fourier Transform (FFT)](#fast-fourier-transform-fft)
+  - [Inverse FFT (IFFT)](#inverse-fft-ifft)
   - [Convolution and Filtering](#convolution-and-filtering)
+  - [Correlation](#correlation)
   - [Built-in Kernels](#built-in-kernels)
   - [Pipeline Integration](#pipeline-integration)
   - [GPU Acceleration](#gpu-acceleration)
@@ -74,7 +76,7 @@ package main
 import (
     "fmt"
     "time"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -225,7 +227,7 @@ import (
     "fmt"
     "slices"
     "time"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -285,7 +287,7 @@ import (
     "fmt"
     "math"
     "slices"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -428,6 +430,73 @@ func demonstrateFFTWithPhase() {
 }
 ```
 
+### Inverse FFT (IFFT)
+
+Reconstruct time-domain signals from frequency-domain data:
+
+```go
+func demonstrateIFFT() {
+    // Create a test signal
+    n := 256
+    sampleRate := 1000.0
+    signal := make(ssql.Signal, n)
+
+    for i := range signal {
+        t := float64(i) / sampleRate
+        signal[i] = math.Sin(2*math.Pi*50*t) + 0.5*math.Sin(2*math.Pi*120*t)
+    }
+
+    // Forward FFT with phase
+    spectrum, err := ssql.FFTWithPhase(signal)
+    if err != nil {
+        panic(err)
+    }
+
+    // Inverse FFT to reconstruct the signal
+    reconstructed, err := ssql.IFFT(spectrum.Magnitude, spectrum.Phase)
+    if err != nil {
+        panic(err)
+    }
+
+    // Verify reconstruction (signals should be nearly identical)
+    maxError := 0.0
+    for i := range signal {
+        diff := math.Abs(signal[i] - reconstructed[i])
+        if diff > maxError {
+            maxError = diff
+        }
+    }
+    fmt.Printf("Max reconstruction error: %.10f\n", maxError)
+}
+```
+
+Use IFFT for frequency-domain filtering:
+
+```go
+func demonstrateFrequencyFiltering() {
+    // Read signal data
+    records, _ := ssql.ReadCSV("signal.csv")
+    signal := ssql.ExtractSignalFromSlice(records, "amplitude")
+    sampleRate := 1000.0
+
+    // Forward FFT
+    spectrum, _ := ssql.FFTWithPhase(signal)
+
+    // Zero out frequencies above 100 Hz (low-pass filter)
+    for i := 0; i < len(spectrum.Magnitude); i++ {
+        freq := spectrum.FrequencyBin(i, sampleRate)
+        if freq > 100 {
+            spectrum.Magnitude[i] = 0
+            spectrum.Phase[i] = 0
+        }
+    }
+
+    // Inverse FFT to get filtered signal
+    filtered, _ := ssql.IFFT(spectrum.Magnitude, spectrum.Phase)
+    fmt.Printf("Filtered signal has %d samples\n", len(filtered))
+}
+```
+
 ### Convolution and Filtering
 
 Apply convolution for smoothing, edge detection, and other filters:
@@ -478,6 +547,64 @@ laplacianKernel := ssql.LaplacianKernel()  // [1, -2, 1]
 
 // Sobel - edge detection with smoothing
 sobelKernel := ssql.SobelKernel()  // [-1, 0, 1]
+```
+
+### Correlation
+
+Compute cross-correlation to measure signal similarity or find patterns:
+
+```go
+func demonstrateCorrelation() {
+    // Two signals to compare
+    signal1 := ssql.Signal{1, 2, 3, 4, 5, 4, 3, 2, 1}
+    signal2 := ssql.Signal{0, 0, 1, 2, 3, 4, 5, 0, 0}  // Similar pattern, shifted
+
+    // Cross-correlation
+    corr, err := ssql.Correlate(signal1, signal2)
+    if err != nil {
+        panic(err)
+    }
+
+    // Find peak correlation (indicates best alignment)
+    maxCorr := 0.0
+    maxIdx := 0
+    for i, c := range corr {
+        if c > maxCorr {
+            maxCorr = c
+            maxIdx = i
+        }
+    }
+    fmt.Printf("Peak correlation %.2f at lag %d\n", maxCorr, maxIdx-len(signal1)+1)
+
+    // Autocorrelation (signal with itself)
+    auto, _ := ssql.Correlate(signal1, signal1)
+    fmt.Printf("Autocorrelation peak (center): %.2f\n", auto[len(auto)/2])
+}
+```
+
+Use correlation in pipelines to find similar patterns:
+
+```go
+func demonstrateCorrelationPipeline() {
+    // Template pattern to search for
+    template := ssql.Signal{1, 2, 3, 2, 1}  // Triangular pulse
+
+    // Process sensor data looking for the pattern
+    records, _ := ssql.ReadCSV("sensor_data.csv")
+    signal := ssql.ExtractSignal(slices.Values(records), "reading")
+
+    // Correlate with template
+    corr, _ := ssql.Correlate(signal, template)
+
+    // Find peaks above threshold (pattern matches)
+    threshold := 0.8 * slices.Max(corr)
+    fmt.Println("Pattern found at positions:")
+    for i, c := range corr {
+        if c > threshold {
+            fmt.Printf("  Position %d (correlation: %.2f)\n", i, c)
+        }
+    }
+}
 ```
 
 ### Pipeline Integration
@@ -581,7 +708,7 @@ package main
 import (
     "fmt"
     "slices"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -711,7 +838,7 @@ package main
 import (
     "fmt"
     "time"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -879,7 +1006,7 @@ import (
     "fmt"
     "time"
     "slices"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func demonstrateCountWindows() {
@@ -1210,7 +1337,7 @@ import (
     "fmt"
     "math/rand"
     "time"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -1412,7 +1539,7 @@ package main
 import (
     "fmt"
     "iter"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -1573,7 +1700,7 @@ import (
     "strconv"
     "strings"
     "time"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -1963,7 +2090,7 @@ import (
     "encoding/json"
     "fmt"
     "os"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 type Config struct {
@@ -2113,7 +2240,7 @@ import (
     "fmt"
     "slices"
     "testing"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func TestStreamProcessing(t *testing.T) {

@@ -111,7 +111,7 @@ ssql from data.csv | jq '.' | head -5  # Inspect data
 ssql from data.csv | ssql where -where age gt 30 | jq -s 'length'  # Count results
 ```
 
-[**Try the CLI →**](doc/cli/codelab-cli.md) | [**Debug with jq →**](doc/cli/debugging_pipelines.md)
+[**Try the CLI →**](doc/cli-codelab.md) | [**Debug with jq →**](doc/cli-debugging.md)
 
 ### 🤖 **AI-Powered Code Generation**
 Describe what you want in plain English, get working ssql code:
@@ -158,7 +158,7 @@ Alice,30,95000
 Bob,25,65000" | ssql from | ssql where -where age gt 28
 ```
 
-[**See CLI Tutorial →**](doc/cli/codelab-cli.md)
+[**See CLI Tutorial →**](doc/cli-codelab.md)
 
 #### Option 1b: CLI Tool with GPU Acceleration (optional)
 
@@ -261,13 +261,13 @@ func main() {
 
 **New to ssql?** We've got you covered with step-by-step guides:
 
-### 1. ⚡ **[CLI Tutorial](doc/cli/codelab-cli.md)** *(In Development)*
+### 1. ⚡ **[CLI Tutorial](doc/cli-codelab.md)** *(In Development)*
 *Prototype fast with Unix-style pipelines, generate production code*
 - Quick data exploration with command-line tools
 - Process system commands (ps, df, etc.)
 - Create visualizations with one command
 - Generate Go code from CLI pipelines
-- **Debug pipelines with jq** - [See debugging guide →](doc/cli/debugging_pipelines.md)
+- **Debug pipelines with jq** - [See debugging guide →](doc/cli-debugging.md)
 - **Perfect for rapid prototyping!**
 
 ### 2. 📚 **[Getting Started Guide](doc/codelab-intro.md)**
@@ -760,7 +760,7 @@ go run examples/early_termination_example.go
 ## 🚀 What's Next?
 
 1. **[Install ssql](#installation)** and try the quick start
-2. **[Try the CLI](doc/cli/codelab-cli.md)** for rapid prototyping *(in development)*
+2. **[Try the CLI](doc/cli-codelab.md)** for rapid prototyping *(in development)*
 3. **[Follow the Getting Started Guide](doc/codelab-intro.md)** for library fundamentals
 4. **[Try the AI Assistant](doc/ai-human-guide.md)** for code generation
 5. **[Explore Advanced Patterns](doc/advanced-tutorial.md)** for production use
@@ -822,10 +822,10 @@ import "github.com/rosscartlidge/ssql/v4"
 
 ## 📚 Documentation
 
-- **[Debugging Pipelines](doc/cli/debugging_pipelines.md)** - Debug with jq, inspect data, profile performance
-- **[Troubleshooting Guide](doc/cli/troubleshooting.md)** - Common issues and quick solutions
+- **[Debugging Pipelines](doc/cli-debugging.md)** - Debug with jq, inspect data, profile performance
+- **[Troubleshooting Guide](doc/cli-troubleshooting.md)** - Common issues and quick solutions
 - **[API Reference](doc/api-reference.md)** - Complete function documentation
-- **[CLI Tutorial](doc/cli/codelab-cli.md)** - Command-line tool guide
+- **[CLI Tutorial](doc/cli-codelab.md)** - Command-line tool guide
 - **[AI Code Generation](doc/ai-human-guide.md)** - Natural language to code
   - **[For LLMs](doc/ai-code-generation.md)** - Copy this prompt into your LLM
   - **[For Maintainers](doc/AI-PROMPT-README.md)** - Maintaining the AI prompt

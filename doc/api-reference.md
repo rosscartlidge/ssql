@@ -8,6 +8,8 @@
 
 ### Documentation Navigation
 - [Getting Started Guide](codelab-intro.md) - Learn ssql basics step-by-step
+- [CLI Tutorial](cli-codelab.md) - Command-line data processing
+- [Signal Processing](cli-signal-processing.md) - FFT, convolution, and GPU acceleration
 - [Advanced Tutorial](advanced-tutorial.md) - Complex patterns and real-world examples
 
 ### API Reference Sections
@@ -33,6 +35,8 @@
   - [JSON Operations](#json-operations)
   - [Line Operations](#line-operations)
   - [Command Output Operations](#command-output-operations)
+  - [Arrow Operations](#arrow-operations)
+- [Signal Processing](#signal-processing)
 - [Chart & Visualization](#chart--visualization)
 - [Helper Functions](#helper-functions)
   - [Record Access](#record-access)
@@ -1394,6 +1398,246 @@ type CommandConfig struct {
     TrimSpaces     bool
     MinColumnWidth int
 }
+```
+
+### Arrow Operations
+
+Apache Arrow format provides high-performance columnar I/O, ideal for large datasets.
+
+#### ReadArrow
+```go
+func ReadArrow(filename string) (iter.Seq[Record], error)
+```
+Reads records from an Arrow file (.arrow or .feather format).
+
+**Example:**
+```go
+records, err := ssql.ReadArrow("data.arrow")
+if err != nil {
+    log.Fatal(err)
+}
+for r := range records {
+    fmt.Println(ssql.GetOr(r, "name", ""))
+}
+```
+
+#### ReadArrowFromReader
+```go
+func ReadArrowFromReader(r io.Reader) iter.Seq[Record]
+```
+Reads Arrow data from an io.Reader.
+
+#### WriteArrow
+```go
+func WriteArrow(records iter.Seq[Record], filename string) error
+```
+Writes records to an Arrow file with ZSTD compression.
+
+**Example:**
+```go
+err := ssql.WriteArrow(records, "output.arrow")
+```
+
+#### WriteArrowToWriter
+```go
+func WriteArrowToWriter(records iter.Seq[Record], w io.Writer) error
+```
+Writes Arrow data to an io.Writer.
+
+**When to use Arrow:**
+- Large datasets (>100K records) - 10-20x faster than CSV/JSON
+- Repeated processing of same data
+- Inter-process data sharing
+- GPU acceleration (data already columnar)
+
+---
+
+## Signal Processing
+
+> 📈 **Tutorial**: See the [Signal Processing Codelab](cli-signal-processing.md) for hands-on examples with charts.
+
+ssql provides GPU-accelerated signal processing operations for frequency analysis, filtering, and pattern detection.
+
+### Signal Type
+```go
+type Signal []float64
+```
+Represents a time-domain signal as a sequence of float64 values.
+
+### Spectrum Type
+```go
+type Spectrum struct {
+    Magnitude []float64 // Magnitude at each frequency bin
+    Phase     []float64 // Phase in radians (optional, may be nil)
+    N         int       // Original signal length
+}
+```
+Represents frequency-domain data from an FFT.
+
+**Methods:**
+```go
+func (s *Spectrum) FrequencyBin(index int, sampleRate float64) float64
+func (s *Spectrum) Len() int
+```
+
+### FFT Operations
+
+#### FFT
+```go
+func FFT(signal Signal) (*Spectrum, error)
+```
+Computes the Fast Fourier Transform. Returns magnitude only.
+Uses GPU automatically for signals >= 16K samples (28-54x faster).
+
+**Example:**
+```go
+signal := ssql.Signal{1, 2, 3, 4, 5, 6, 7, 8}
+spectrum, err := ssql.FFT(signal)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("DC component magnitude: %f\n", spectrum.Magnitude[0])
+```
+
+#### FFTWithPhase
+```go
+func FFTWithPhase(signal Signal) (*Spectrum, error)
+```
+Computes FFT with both magnitude and phase (needed for IFFT reconstruction).
+
+#### FFTMagnitude
+```go
+func FFTMagnitude(signal Signal) ([]float64, error)
+```
+Returns just the magnitude array (convenience function).
+
+#### IFFT
+```go
+func IFFT(magnitude, phase []float64) (Signal, error)
+```
+Inverse FFT - reconstructs time-domain signal from frequency-domain data.
+Both magnitude and phase are required for accurate reconstruction.
+
+**Example:**
+```go
+// Round-trip: FFT then IFFT
+spectrum, _ := ssql.FFTWithPhase(signal)
+reconstructed, _ := ssql.IFFT(spectrum.Magnitude, spectrum.Phase)
+```
+
+#### IFFTToLength
+```go
+func IFFTToLength(magnitude, phase []float64, length int) (Signal, error)
+```
+IFFT with specified output length (useful when original length is known).
+
+### Convolution Operations
+
+#### Convolve
+```go
+func Convolve(signal, kernel Signal) (Signal, error)
+```
+Computes convolution. Output length is len(signal) + len(kernel) - 1.
+Uses GPU automatically for kernels >= 16 points (4-500x faster).
+
+**Example:**
+```go
+signal := ssql.Signal{1, 2, 3, 4, 5}
+kernel := ssql.MovingAverageKernel(3)
+smoothed, _ := ssql.Convolve(signal, kernel)
+```
+
+#### ConvolveSame
+```go
+func ConvolveSame(signal, kernel Signal) (Signal, error)
+```
+Convolution with same-length output (like numpy's "same" mode).
+
+#### AutoConvolve / AutoConvolveSame
+```go
+func AutoConvolve(signal Signal) (Signal, error)
+func AutoConvolveSame(signal Signal) (Signal, error)
+```
+Convolve a signal with itself.
+
+### Correlation Operations
+
+#### Correlate
+```go
+func Correlate(a, b Signal) (Signal, error)
+```
+Computes cross-correlation. Measures similarity as a function of lag.
+
+**Example:**
+```go
+// Find where pattern appears in signal
+correlation, _ := ssql.Correlate(signal, pattern)
+// Peaks indicate pattern matches
+```
+
+#### CorrelateSame
+```go
+func CorrelateSame(a, b Signal) (Signal, error)
+```
+Cross-correlation with same-length output.
+
+#### AutoCorrelate
+```go
+func AutoCorrelate(signal Signal) (Signal, error)
+```
+Autocorrelation - measures how similar a signal is to delayed copies of itself.
+Useful for finding repeating patterns and periodicities.
+
+#### AutoCorrelateMax
+```go
+func AutoCorrelateMax(signal Signal, maxLag int) (Signal, error)
+```
+Autocorrelation up to a maximum lag. More efficient than full autocorrelation
+when searching for periodicity below a certain period.
+
+### Built-in Kernels
+
+```go
+func MovingAverageKernel(size int) Signal
+func GaussianKernel(size int, sigma float64) Signal
+func DiffKernel() Signal      // First derivative: [-1, 1]
+func LaplacianKernel() Signal // Second derivative: [1, -2, 1]
+func SobelKernel() Signal     // Edge detection: [-1, 0, 1]
+```
+
+### Record Integration
+
+#### ExtractSignal
+```go
+func ExtractSignal(records iter.Seq[Record], field string) Signal
+func ExtractSignalFromSlice(records []Record, field string) Signal
+```
+Extract numeric field values from records as a Signal.
+
+#### WithSignal
+```go
+func WithSignal(records iter.Seq[Record], field string, signal Signal) iter.Seq[Record]
+```
+Add signal values as a new field to records.
+
+#### SpectrumToRecords
+```go
+func SpectrumToRecords(spectrum *Spectrum, sampleRate float64) iter.Seq[Record]
+```
+Convert spectrum to records with index, frequency, magnitude, and phase fields.
+
+### Pipeline Filters
+
+For use with `Chain()` and code generation:
+
+```go
+func FFTFilter(field string, sampleRate float64, includePhase bool) Filter[Record, Record]
+func IFFTFilter(magnitudeField, phaseField, outputField string) Filter[Record, Record]
+func ConvolveFilter(field, outputField string, kernel Signal, same bool) Filter[Record, Record]
+func AutoConvolveFilter(field, outputField string, same bool) Filter[Record, Record]
+func CorrelateFilter(fieldA, fieldB, outputField string, same bool) Filter[Record, Record]
+func AutoCorrelateFilter(field, outputField string, same bool) Filter[Record, Record]
+func AutoCorrelateMaxFilter(field, outputField string, maxLag int) Filter[Record, Record]
 ```
 
 ---

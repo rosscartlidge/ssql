@@ -45,7 +45,7 @@ ssql from data.csv | jq -r '.department' | sort | uniq -c
 ssql from data.csv | jq 'select(.department == null or .department == "")'
 
 # Inspect GROUP BY output
-ssql from data.csv | ssql group-by dept -function count -result n | jq '.'
+ssql from data.csv | ssql group-by dept -count n | jq '.'
 ```
 
 ---
@@ -202,7 +202,7 @@ ssql from data.csv | jq -r '.status' | sort | uniq -c
 **Symptoms:**
 ```bash
 # GROUP BY shows more groups than expected
-$ ssql from data.csv | ssql group-by department -function count -result n | jq -s 'length'
+$ ssql from data.csv | ssql group-by department -count n | jq -s 'length'
 12  # Expected only 5 departments
 ```
 
@@ -232,7 +232,7 @@ ssql from data.csv | jq -r '.department' | sort -f | uniq -i -c
 # Normalize in jq before GROUP BY
 ssql from data.csv | \
   jq '.department |= (. // "" | ascii_downcase | gsub("^\\s+|\\s+$"; ""))' | \
-  ssql group-by department -function count -result n
+  ssql group-by department -count n
 
 # Check grouping manually
 ssql from data.csv | jq -r '.department' | sort | uniq -c
@@ -318,7 +318,7 @@ split -l 10000 huge.csv chunk_
 for f in chunk_*; do ssql from $f | ssql where ...; done
 ```
 
-**Note:** ssql v0.2.4+ has buffered I/O for better performance.
+**Note:** ssql uses buffered I/O for efficient performance with large files.
 
 ---
 
@@ -508,8 +508,8 @@ done
 ### I/O bottlenecks
 
 ```bash
-# Ensure v0.2.4+ for buffered I/O
-ssql --version
+# Check version
+ssql version
 
 # Use SSD not network drives for temp files
 export TMPDIR=/local/ssd/tmp
@@ -585,7 +585,7 @@ ssql -help
 
 ### Documentation
 
-- [Debugging Guide](./debugging_pipelines.md) - Comprehensive debugging techniques
+- [Debugging Guide](./cli-debugging.md) - Comprehensive debugging techniques
 - [README](../README.md) - Quick start and overview
 - [Examples](../examples/) - Working code examples
 

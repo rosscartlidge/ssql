@@ -8,8 +8,8 @@
 - **[API Reference](api-reference.md)** - Complete function reference
 - **[Getting Started Guide](codelab-intro.md)** - Learn the library fundamentals
 - **[Advanced Tutorial](advanced-tutorial.md)** - Complex patterns and optimization
-- **[Debugging Pipelines](debugging_pipelines.md)** - Debug with jq, inspect data, profile performance
-- **[Troubleshooting Guide](troubleshooting.md)** - Common issues and quick solutions
+- **[Debugging Pipelines](cli-debugging.md)** - Debug with jq, inspect data, profile performance
+- **[Troubleshooting Guide](cli-troubleshooting.md)** - Common issues and quick solutions
 
 ### Learning Path
 - [Quick Start](#quick-start)
@@ -99,7 +99,7 @@ ssql from data.csv | jq '.' | head -5          # Pretty-print data
 ssql from data.csv | jq '.age | type' | head   # Check field types
 ssql ... | ssql where ... | jq -s 'length'      # Count results
 ```
-[**See full debugging guide →**](debugging_pipelines.md)
+[**See full debugging guide →**](cli-debugging.md)
 
 > ⚠️ **Development Status**: The CLI is under active development. Commands and flags may change. Use `-help` on any command to see current options.
 
@@ -915,6 +915,7 @@ go build -o monitor monitor.go
 - `include` - Select specific fields
 - `exclude` - Remove specific fields
 - `rename` - Rename fields (`-as old new`)
+- `cast` - Convert field types (`-type field type`)
 - `update` - Conditionally update field values (if-elseif-else logic)
 - `group-by` - Group and aggregate data
 - `sort` - Sort records by field
@@ -928,12 +929,15 @@ go build -o monitor monitor.go
 
 ### Signal Processing
 - `fft` - Fast Fourier Transform for frequency analysis (`-field`, `-rate`, `-phase`)
+- `ifft` - Inverse FFT to reconstruct time-domain signal (`-magnitude`, `-phase`)
 - `convolve` - Apply convolution filters (`-field`, `-kernel`, `-custom`, `-same`)
+- `correlate` - Cross-correlation or autocorrelation (`-field`, `-with`)
 
 ### Outputs (using `to` subcommands)
 - `to table` - Display records as formatted table
 - `to csv [file]` - Write CSV file (or stdout)
 - `to json [file]` - Write JSON/JSONL file (or stdout)
+- `to arrow [file]` - Write Apache Arrow IPC file (10-20x faster I/O)
 - `to chart` - Create interactive HTML chart
 
 ### Code Generation
@@ -981,7 +985,7 @@ ssql from <TAB>     # Completes .csv, .json, .jsonl files
 
 ### Understanding Command Structure (Advanced)
 
-ssql CLI uses the **completionflags** framework for declarative command definitions. This enables powerful features:
+ssql CLI uses the **autocli** framework for declarative command definitions. This enables powerful features:
 
 **Clause Pattern:**
 Commands that support multiple items use `+` as a separator to create "clauses". Each clause can have its own set of flags:
@@ -1052,29 +1056,19 @@ This pattern makes complex aggregations readable while maintaining type safety a
 - **[Getting Started Guide](codelab-intro.md)** - Learn the ssql library directly
 - **[Advanced Tutorial](advanced-tutorial.md)** - Production patterns and optimization
 
-### Recently Added (v0.7.0)
+### Key Features
 
-ssql now supports essential SQL operations:
-- ✅ `join` - All JOIN types (INNER, LEFT, RIGHT, FULL)
-- ✅ `distinct` - Remove duplicates
-- ✅ `offset` - Skip N records for pagination
-- ✅ `union` - Combine datasets with UNION/UNION ALL
-- ✅ `sort` - Sort by single field
-- ✅ `limit` - Take first N records
-
-### Coming Soon (Phase 2)
-
-The CLI is actively being developed. Upcoming features:
-- Multi-field sorting with mixed ASC/DESC order
-- `having` - Post-aggregation filtering (like SQL HAVING)
-- More aggregation functions
-- Better error messages
-- Tab completion improvements
+ssql supports comprehensive data processing:
+- **SQL Operations**: `join`, `distinct`, `offset`, `union`, `sort`, `limit`, `group-by`
+- **Signal Processing**: `fft`, `ifft`, `convolve`, `correlate` (with optional GPU acceleration)
+- **Multiple Formats**: CSV, JSON/JSONL, Apache Arrow
+- **Code Generation**: Convert CLI pipelines to standalone Go programs
+- **Interactive Charts**: Chart.js visualizations with zoom/pan/export
 
 ### Need Help?
 
-- **[Debugging Guide](debugging_pipelines.md)** - Learn to debug pipelines with jq
-- **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
+- **[Debugging Guide](cli-debugging.md)** - Learn to debug pipelines with jq
+- **[Troubleshooting](cli-troubleshooting.md)** - Common issues and solutions
 - **[GitHub Issues](https://github.com/rosscartlidge/ssql/issues)** - Report bugs
 - **Examples** - Check `examples/` directory
 - **API Reference** - Full library documentation

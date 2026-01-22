@@ -612,4 +612,4 @@ done
 
 - [API Reference](../api-reference.md) - Use signal processing in Go code
 - [GPU Acceleration Details](../research/gpu-acceleration.md) - Technical deep-dive
-- [CLI Tutorial](codelab-cli.md) - General ssql usage
+- [CLI Tutorial](cli-codelab.md) - General ssql usage

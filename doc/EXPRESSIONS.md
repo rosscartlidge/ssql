@@ -573,9 +573,9 @@ Error: compiling expression "age >": unexpected end of expression
 
 **ssql Documentation:**
 - Getting Started: [doc/codelab-intro.md](codelab-intro.md)
-- CLI Tutorial: [doc/cli/codelab-cli.md](cli/codelab-cli.md)
+- CLI Tutorial: [doc/cli-codelab.md](cli-codelab.md)
 - API Reference: [doc/api-reference.md](api-reference.md)
-- Debugging Pipelines: [doc/cli/debugging_pipelines.md](cli/debugging_pipelines.md)
+- Debugging Pipelines: [doc/cli-debugging.md](cli-debugging.md)
 
 **Implementation Details:**
 - Expression Integration: [doc/research/expr-integration.md](research/expr-integration.md)
