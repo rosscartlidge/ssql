@@ -226,8 +226,8 @@ jobs:
 make release  # Runs: fmt, vet, test, doc-check, doc-test, doc-verify
 
 # 2. If passed, create release
-git tag v0.6.0
-git push origin v0.6.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 ---
