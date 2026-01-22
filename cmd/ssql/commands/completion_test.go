@@ -27,6 +27,8 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	RegisterSort(cmd)
 	RegisterGroupBy(cmd)
 	RegisterTo(cmd)
+	RegisterConvolve(cmd)
+	RegisterCorrelate(cmd)
 
 	// Define expected field completion for each command
 	// Format: command -> flag -> arg index that should have field completion
@@ -74,6 +76,13 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 		"to/chart": {
 			"-x": {0}, // x-axis field
 			"-y": {0}, // y-axis field
+		},
+		"convolve": {
+			"-field": {0}, // signal field
+		},
+		"correlate": {
+			"-field": {0}, // primary signal field
+			"-with":  {0}, // second signal field
 		},
 	}
 

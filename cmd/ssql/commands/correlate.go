@@ -21,11 +21,13 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		String().
 		Global().
 		Required().
+		FieldsFromFlag("").
 		Help("Primary field containing numeric signal").
 		Done().
 		Flag("-with", "-w").
 		String().
 		Global().
+		FieldsFromFlag("").
 		Help("Second field to correlate with (for cross-correlation)").
 		Done().
 		Flag("-auto", "-a").
