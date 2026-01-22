@@ -29,6 +29,7 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	RegisterTo(cmd)
 	RegisterConvolve(cmd)
 	RegisterCorrelate(cmd)
+	RegisterFFT(cmd)
 
 	// Define expected field completion for each command
 	// Format: command -> flag -> arg index that should have field completion
@@ -83,6 +84,9 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 		"correlate": {
 			"-field": {0}, // primary signal field
 			"-with":  {0}, // second signal field
+		},
+		"fft": {
+			"-field": {0}, // signal field
 		},
 	}
 

@@ -21,6 +21,7 @@ func RegisterFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		String().
 		Global().
 		Required().
+		FieldsFromFlag("").
 		Help("Field containing numeric signal values").
 		Done().
 		Flag("-rate", "-r").
