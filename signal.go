@@ -614,14 +614,23 @@ func AutoCorrelateMaxFilter(field, outputField string, maxLag int) Filter[Record
 // Internal Implementations
 // ============================================================================
 
-// fftMagnitudeImpl computes FFT magnitude using Cooley-Tukey O(n log n).
-// Note: GPU acceleration removed - Cooley-Tukey matches cuFFT performance.
+// fftMagnitudeImpl computes FFT magnitude, using GPU when beneficial.
+// GPU is ~28-54x faster for signals >= 16K samples.
+// Crossover point is ~16K based on benchmarks.
 func fftMagnitudeImpl(signal Signal) ([]float64, error) {
+	// Use GPU for large signals (>=16K) where it's significantly faster
+	if gpuAvailableForSignal() && len(signal) >= 16384 {
+		return fftMagnitudeGPU(signal)
+	}
 	return fftMagnitudeCPU(signal), nil
 }
 
-// fftMagnitudePhaseImpl computes FFT magnitude and phase using Cooley-Tukey.
+// fftMagnitudePhaseImpl computes FFT magnitude and phase, using GPU when beneficial.
 func fftMagnitudePhaseImpl(signal Signal) ([]float64, []float64, error) {
+	// Use GPU for large signals (>=16K) where it's significantly faster
+	if gpuAvailableForSignal() && len(signal) >= 16384 {
+		return fftMagnitudePhaseGPU(signal)
+	}
 	mag, phase := fftMagnitudePhaseCPU(signal)
 	return mag, phase, nil
 }

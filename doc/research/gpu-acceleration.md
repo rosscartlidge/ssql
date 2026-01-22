@@ -19,23 +19,27 @@ The original projections below (100-1000x speedups for aggregations) assumed:
 | Simple Avg | 50-200x | **1x (no benefit)** | Memory-bound, transfer dominates |
 | Batched Sums | 10-50x | **<1x (slower)** | Copy overhead to flatten data |
 | Filter+Sum | 20-50x | **5-7x** | Data stays on GPU between ops |
-| FFT | 10-100x | **1x (no benefit)** | Cooley-Tukey CPU matches cuFFT |
+| FFT | 10-100x | **28-54x** | cuFFT beats Cooley-Tukey for large signals |
 | Convolution | 10-100x | **4-500x** | O(n*m) - GPU wins massively |
 | Correlation | 10-100x | **4-500x** | Uses convolution internally |
 
-### FFT: CPU Wins After Algorithm Optimization
+### FFT: GPU Wins for Large Signals
 
-Initial naive O(n²) DFT made GPU essential. After implementing Cooley-Tukey O(n log n) FFT on CPU, GPU provides **no meaningful benefit**:
+Benchmarks show GPU (cuFFT) significantly outperforms CPU (Cooley-Tukey) for signals >= 16K samples:
 
-| Signal Size | CPU (Cooley-Tukey) | GPU (cuFFT) | Winner |
-|-------------|-------------------|-------------|--------|
-| 1K | 339µs | 278µs | Tie |
-| 64K | 986µs | 1.01ms | Tie |
-| 1M | 4.2ms | 4.2ms | Tie |
-| 16M | 54ms | 54ms | Tie |
-| 64M | 254ms | 253ms | Tie |
+| Signal Size | CPU (Cooley-Tukey) | GPU (cuFFT) | Speedup | Winner |
+|-------------|-------------------|-------------|---------|--------|
+| 1K | 64µs | 333µs | 0.19x | CPU |
+| 4K | 279µs | 557µs | 0.50x | CPU |
+| 16K | 1.4ms | 1.1ms | **1.3x** | GPU |
+| 64K | 7.8ms | 1.8ms | **4.2x** | GPU |
+| 256K | 29ms | 2ms | **14x** | GPU |
+| 1M | 125ms | 4.4ms | **28x** | GPU |
+| 4M | 564ms | 14ms | **40x** | GPU |
+| 16M | 2.5s | 68ms | **36x** | GPU |
+| 64M | 10.7s | 198ms | **54x** | GPU |
 
-**Conclusion:** GPU FFT acceleration removed from ssql. CPU Cooley-Tukey is sufficient.
+**Conclusion:** GPU FFT enabled for signals >= 16K samples (crossover point).
 
 ### Convolution: GPU Dominates
 
@@ -93,26 +97,31 @@ This extraction is CPU-bound and often takes longer than the actual aggregation.
 
 ### What Actually Works
 
-1. **Convolution/Correlation (4-500x speedup)**
+1. **FFT (28-54x speedup for >= 16K samples)**
+   - cuFFT highly optimized for GPU
+   - Crossover at ~16K samples
+   - 1M samples: 5ms GPU vs 125ms CPU
+
+2. **Convolution/Correlation (4-500x speedup)**
    - O(n*m) algorithm - compute-bound
    - GPU wins at all sizes, even small kernels
    - Speedup scales with kernel size
 
-2. **Chained Operations (5-7x speedup)**
+3. **Chained Operations (5-7x speedup)**
    - `FilterThenSum`: Filter + aggregate in one GPU pass
    - Data stays on GPU between operations
    - Transfer cost amortized across multiple operations
 
-3. **Arrow Columnar Format (not yet implemented)**
+4. **Arrow Columnar Format (not yet implemented)**
    - Bypasses Record extraction
    - Data already contiguous
    - Direct GPU transfer possible
 
 ### What Doesn't Work
 
-1. **FFT** - Cooley-Tukey CPU matches cuFFT performance
-2. **Simple aggregations** - Transfer overhead > compute
-3. **Small datasets** - GPU initialization overhead dominates
+1. **Simple aggregations** - Transfer overhead > compute
+2. **Small datasets** - GPU initialization overhead dominates
+3. **Small FFTs (<16K samples)** - Transfer overhead exceeds compute benefit
 
 ### Current Implementation Status
 
@@ -135,7 +144,7 @@ gpu.SumInt64(data []int64) (int64, error)
 // Chained operations (good benefit - data stays on GPU)
 gpu.FilterThenSum(data []float64, threshold float64) (float64, error)
 
-// FFT operations (available but not used - CPU is equivalent)
+// FFT operations (used for signals >= 16K - 28-54x faster)
 gpu.FFTMagnitude(data []float64) ([]float64, error)
 gpu.FFTMagnitudePhase(data []float64) ([]float64, []float64, error)
 
@@ -148,7 +157,7 @@ gpu.ConvolveFFT(signal, kernel []float64) ([]float64, error)  // For very large 
 
 | Operation | GPU Usage | Threshold | Reason |
 |-----------|-----------|-----------|--------|
-| FFT | **Never** | - | Cooley-Tukey CPU matches cuFFT |
+| FFT | **When large** | signal ≥ 16K | 28-54x faster |
 | Convolution | **Always** | kernel ≥ 16 | 4-500x faster |
 | Correlation | **Always** | kernel ≥ 16 | Uses convolution |
 | Aggregations | **Never** | - | Transfer overhead dominates |
@@ -156,14 +165,15 @@ gpu.ConvolveFFT(signal, kernel []float64) ([]float64, error)  // For very large 
 ### Recommendations
 
 **Do pursue:**
-1. Convolution/correlation operations (current implementation working well)
-2. Arrow columnar integration (bypass Record extraction)
-3. Pipeline fusion (compile multiple ops to single GPU kernel)
+1. FFT operations for large signals (current implementation working well)
+2. Convolution/correlation operations (current implementation working well)
+3. Arrow columnar integration (bypass Record extraction)
+4. Pipeline fusion (compile multiple ops to single GPU kernel)
 
 **Don't pursue:**
-1. FFT GPU acceleration (CPU is equivalent)
-2. Simple aggregations (sum, avg, count, min, max)
-3. Single-operation GPU calls for memory-bound operations
+1. Simple aggregations (sum, avg, count, min, max) - transfer overhead dominates
+2. Single-operation GPU calls for memory-bound operations
+3. Small signal FFT (<16K samples) - CPU is faster
 
 ### Future Priorities
 

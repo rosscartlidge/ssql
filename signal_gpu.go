@@ -11,6 +11,17 @@ func gpuAvailableForSignal() bool {
 	return gpu.Available()
 }
 
+// fftMagnitudeGPU computes FFT magnitude on GPU.
+// Benchmarks show GPU wins at >= 16K samples (up to 54x faster at 64M).
+func fftMagnitudeGPU(signal Signal) ([]float64, error) {
+	return gpu.FFTMagnitude([]float64(signal))
+}
+
+// fftMagnitudePhaseGPU computes FFT magnitude and phase on GPU.
+func fftMagnitudePhaseGPU(signal Signal) ([]float64, []float64, error) {
+	return gpu.FFTMagnitudePhase([]float64(signal))
+}
+
 // convolveGPU computes convolution on GPU.
 // Uses direct convolution for kernels < 2K, FFT-based for larger.
 // Benchmarks show FFT wins at kernel >= 2K for 1M+ signals.
