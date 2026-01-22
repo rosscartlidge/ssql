@@ -12,10 +12,12 @@ func gpuAvailableForSignal() bool {
 }
 
 // convolveGPU computes convolution on GPU.
-// Uses direct convolution for kernels < 10K, FFT-based for larger.
+// Uses direct convolution for kernels < 2K, FFT-based for larger.
+// Benchmarks show FFT wins at kernel >= 2K for 1M+ signals.
 func convolveGPU(signal, kernel Signal) (Signal, error) {
-	// FFT-based convolution is better for very large kernels
-	if len(kernel) >= 10000 {
+	// FFT-based convolution is better for large kernels
+	// Crossover point is ~2K based on benchmarks
+	if len(kernel) >= 2048 {
 		result, err := gpu.ConvolveFFT([]float64(signal), []float64(kernel))
 		return Signal(result), err
 	}
