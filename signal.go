@@ -174,6 +174,37 @@ func AutoCorrelate(signal Signal) (Signal, error) {
 	return Correlate(signal, signal)
 }
 
+// AutoCorrelateMax computes autocorrelation up to a maximum lag.
+// Returns maxLag+1 values for lags 0 to maxLag.
+// This is more efficient than full autocorrelation when searching for
+// periodicity below a certain period (maxLag samples).
+// Uses direct computation O(n * maxLag) which beats FFT when maxLag << n.
+func AutoCorrelateMax(signal Signal, maxLag int) (Signal, error) {
+	n := len(signal)
+	if n == 0 {
+		return Signal{}, nil
+	}
+	if maxLag < 0 {
+		maxLag = 0
+	}
+	if maxLag >= n {
+		maxLag = n - 1
+	}
+
+	result := make(Signal, maxLag+1)
+
+	// Direct computation: R(k) = sum(signal[i] * signal[i+k]) for i = 0 to n-k-1
+	for lag := 0; lag <= maxLag; lag++ {
+		sum := 0.0
+		for i := 0; i < n-lag; i++ {
+			sum += signal[i] * signal[i+lag]
+		}
+		result[lag] = sum
+	}
+
+	return result, nil
+}
+
 // ============================================================================
 // Built-in Kernels
 // ============================================================================
@@ -540,6 +571,43 @@ func CorrelateFilter(fieldA, fieldB, outputField string, same bool) Filter[Recor
 // Autocorrelation measures how similar a signal is to a delayed copy of itself.
 func AutoCorrelateFilter(field, outputField string, same bool) Filter[Record, Record] {
 	return CorrelateFilter(field, field, outputField, same)
+}
+
+// AutoCorrelateMaxFilter returns a filter that computes autocorrelation up to maxLag.
+// More efficient than full autocorrelation when searching for periodicity below maxLag samples.
+func AutoCorrelateMaxFilter(field, outputField string, maxLag int) Filter[Record, Record] {
+	return func(records iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			// Collect all records
+			collected := make([]Record, 0)
+			for r := range records {
+				collected = append(collected, r)
+			}
+
+			// Extract signal from field
+			signal := ExtractSignalFromSlice(collected, field)
+
+			if len(signal) == 0 {
+				return
+			}
+
+			// Compute autocorrelation with max lag
+			result, err := AutoCorrelateMax(signal, maxLag)
+			if err != nil {
+				return
+			}
+
+			// Output records with lag and correlation value
+			for lag, v := range result {
+				mut := MakeMutableRecord()
+				mut = mut.Int("lag", int64(lag))
+				mut = mut.Float(outputField, v)
+				if !yield(mut.Freeze()) {
+					return
+				}
+			}
+		}
+	}
 }
 
 // ============================================================================

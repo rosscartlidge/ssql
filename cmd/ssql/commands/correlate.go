@@ -15,6 +15,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("correlate").
 		Description("Compute cross-correlation or autocorrelation of numeric fields").
 		Example("ssql from signal.csv | ssql correlate -field value -auto", "Compute autocorrelation to find repeating patterns").
+		Example("ssql from signal.csv | ssql correlate -field value -auto -max-lag 1000", "Find periodicity up to 1000 samples (faster)").
 		Example("ssql from data.csv | ssql correlate -field signal -with template", "Find where template pattern occurs in signal").
 		Example("ssql from sensors.csv | ssql correlate -field sensor1 -with sensor2 -same", "Cross-correlate two sensor readings").
 		Flag("-field", "-f").
@@ -35,6 +36,12 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("Compute autocorrelation (correlate field with itself)").
 		Done().
+		Flag("-max-lag", "-m").
+		Int().
+		Default(0).
+		Global().
+		Help("Maximum lag for autocorrelation (0 = full, requires -auto)").
+		Done().
 		Flag("-output", "-o").
 		String().
 		Global().
@@ -53,6 +60,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Handler(func(ctx *cf.Context) error {
 			var field, withField, outputField string
 			var auto, same, generate bool
+			var maxLag int
 
 			if val, ok := ctx.GlobalFlags["-field"]; ok {
 				field = val.(string)
@@ -62,6 +70,9 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 			if val, ok := ctx.GlobalFlags["-auto"]; ok {
 				auto = val.(bool)
+			}
+			if val, ok := ctx.GlobalFlags["-max-lag"]; ok {
+				maxLag = val.(int)
 			}
 			if val, ok := ctx.GlobalFlags["-output"]; ok {
 				outputField = val.(string)
@@ -85,6 +96,14 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("cannot use both -auto and -with")
 			}
 
+			if maxLag > 0 && !auto {
+				return fmt.Errorf("-max-lag requires -auto")
+			}
+
+			if maxLag > 0 && same {
+				return fmt.Errorf("cannot use both -max-lag and -same")
+			}
+
 			if outputField == "" {
 				outputField = "correlation"
 			}
@@ -95,7 +114,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			if shouldGenerate(generate) {
-				return generateCorrelateCode(field, withField, outputField, auto, same)
+				return generateCorrelateCode(field, withField, outputField, auto, same, maxLag)
 			}
 
 			// Read all records from stdin
@@ -104,22 +123,30 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Extract signals from fields
 			signalA := ssql.ExtractSignalFromSlice(records, field)
-			signalB := ssql.ExtractSignalFromSlice(records, withField)
 
 			if len(signalA) == 0 {
 				return fmt.Errorf("no signal data found in field %q", field)
-			}
-			if len(signalB) == 0 {
-				return fmt.Errorf("no signal data found in field %q", withField)
 			}
 
 			// Compute correlation
 			var result ssql.Signal
 			var err error
-			if same {
-				result, err = ssql.CorrelateSame(signalA, signalB)
+
+			if auto && maxLag > 0 {
+				// Autocorrelation with max lag limit
+				result, err = ssql.AutoCorrelateMax(signalA, maxLag)
 			} else {
-				result, err = ssql.Correlate(signalA, signalB)
+				// Cross-correlation or full autocorrelation
+				signalB := ssql.ExtractSignalFromSlice(records, withField)
+				if len(signalB) == 0 {
+					return fmt.Errorf("no signal data found in field %q", withField)
+				}
+
+				if same {
+					result, err = ssql.CorrelateSame(signalA, signalB)
+				} else {
+					result, err = ssql.Correlate(signalA, signalB)
+				}
 			}
 			if err != nil {
 				return fmt.Errorf("computing correlation: %w", err)
@@ -134,6 +161,14 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					if i < len(result) {
 						mut = mut.Float(outputField, result[i])
 					}
+					output = append(output, mut.Freeze())
+				}
+			} else if auto && maxLag > 0 {
+				// Max-lag autocorrelation - output lag and value
+				for lag, v := range result {
+					mut := ssql.MakeMutableRecord()
+					mut = mut.Int("lag", int64(lag))
+					mut = mut.Float(outputField, v)
 					output = append(output, mut.Freeze())
 				}
 			} else {
@@ -158,7 +193,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // generateCorrelateCode generates Go code for the correlate command
-func generateCorrelateCode(fieldA, fieldB, outputField string, auto, same bool) error {
+func generateCorrelateCode(fieldA, fieldB, outputField string, auto, same bool, maxLag int) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -179,7 +214,10 @@ func generateCorrelateCode(fieldA, fieldB, outputField string, auto, same bool) 
 	outputVar := "correlatedRecords"
 
 	var code string
-	if auto {
+	if auto && maxLag > 0 {
+		code = fmt.Sprintf(`%s := ssql.AutoCorrelateMaxFilter(%q, %q, %d)(%s)`,
+			outputVar, fieldA, outputField, maxLag, inputVar)
+	} else if auto {
 		code = fmt.Sprintf(`%s := ssql.AutoCorrelateFilter(%q, %q, %v)(%s)`,
 			outputVar, fieldA, outputField, same, inputVar)
 	} else {
