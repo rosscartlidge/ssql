@@ -313,54 +313,66 @@ ssql from /tmp/noisy_steps.csv | \
 
 Cross-correlation finds where a pattern appears in a signal. Autocorrelation finds repeating patterns.
 
-### Finding a Pattern in a Signal
+### Cross-Correlating Two Sensors
+
+Cross-correlation finds the time delay or similarity between two signals. This is useful for:
+- Finding time lag between sensors
+- Detecting signal propagation delays
+- Comparing similar signals for alignment
 
 ```bash
-# Create a signal with a known pattern embedded
-cat > /tmp/pattern_signal.py << 'EOF'
+# Create two related sensor signals with a time delay
+cat > /tmp/two_sensors.py << 'EOF'
+import math
 import random
-print("index,value")
+print("index,sensor1,sensor2")
 
-# The pattern we're looking for
-pattern = [0, 1, 2, 3, 2, 1, 0]
-
+# sensor2 is sensor1 delayed by 20 samples + noise
+delay = 20
 for i in range(500):
-    # Embed pattern at positions 100, 250, 400
-    if i >= 100 and i < 107:
-        val = pattern[i - 100] * 10
-    elif i >= 250 and i < 257:
-        val = pattern[i - 250] * 10
-    elif i >= 400 and i < 407:
-        val = pattern[i - 400] * 10
+    # Base signal: sine wave with some variation
+    base = math.sin(2 * math.pi * i / 50) + 0.5 * math.sin(2 * math.pi * i / 23)
+
+    sensor1 = base + 0.2 * random.gauss(0, 1)
+
+    # sensor2 sees the same signal, but delayed
+    delayed_i = i - delay
+    if delayed_i >= 0:
+        delayed_base = math.sin(2 * math.pi * delayed_i / 50) + 0.5 * math.sin(2 * math.pi * delayed_i / 23)
+        sensor2 = delayed_base + 0.2 * random.gauss(0, 1)
     else:
-        val = random.gauss(0, 1)
-    print(f"{i},{val:.2f}")
+        sensor2 = 0.2 * random.gauss(0, 1)
+
+    print(f"{i},{sensor1:.4f},{sensor2:.4f}")
 EOF
 
-python3 /tmp/pattern_signal.py > /tmp/pattern_signal.csv
+python3 /tmp/two_sensors.py > /tmp/two_sensors.csv
 
-# View the signal
-ssql from /tmp/pattern_signal.csv | \
-  ssql to chart -x index -y value -output /tmp/pattern_signal.html
+# View both sensors
+ssql from /tmp/two_sensors.csv | \
+  ssql limit 200 | \
+  ssql to chart -x index -y sensor1 -output /tmp/sensor1.html
 
-# Create the pattern template
-cat > /tmp/pattern.csv << 'EOF'
-index,template
-0,0
-1,1
-2,2
-3,3
-4,2
-5,1
-6,0
-EOF
+ssql from /tmp/two_sensors.csv | \
+  ssql limit 200 | \
+  ssql to chart -x index -y sensor2 -output /tmp/sensor2.html
 
-# Cross-correlate to find pattern locations
-ssql from /tmp/pattern_signal.csv | \
-  ssql correlate -field value -with-file /tmp/pattern.csv -with-field template | \
-  ssql to chart -x index -y correlation -output /tmp/correlation.html
+# Cross-correlate to find the delay
+ssql from /tmp/two_sensors.csv | \
+  ssql correlate -field sensor1 -with sensor2 | \
+  ssql to chart -x lag -y correlation -output /tmp/cross_corr.html
 
-echo "Peaks in /tmp/correlation.html show where the pattern appears"
+echo "Peak in /tmp/cross_corr.html shows the 20-sample delay"
+```
+
+**Finding the exact delay:**
+```bash
+# Find the lag with maximum correlation
+ssql from /tmp/two_sensors.csv | \
+  ssql correlate -field sensor1 -with sensor2 | \
+  ssql sort -desc correlation | \
+  ssql limit 1 | \
+  ssql to table
 ```
 
 ### Autocorrelation for Periodicity Detection
@@ -594,7 +606,7 @@ done
 | `fft` | Time to frequency domain | `-field`, `-rate`, `-phase` |
 | `ifft` | Frequency to time domain | `-magnitude`, `-phase`, `-output` |
 | `convolve` | Apply filter kernel | `-field`, `-kernel`, `-size`, `-same` |
-| `correlate` | Cross/auto correlation | `-field`, `-with-file`, `-auto`, `-max-lag` |
+| `correlate` | Cross/auto correlation | `-field`, `-with`, `-auto`, `-max-lag` |
 
 ### Built-in Kernels for Convolution
 
