@@ -181,6 +181,39 @@ gpu.ConvolveFFT(signal, kernel []float64) ([]float64, error)  // For very large 
 2. **Pipeline fusion** - compile multiple operations to single GPU kernel
 3. **Batched convolution** - multiple convolutions in single GPU call
 
+### Future Optimization: Pinned Memory for DMA
+
+**Current state (January 2026):**
+- Using standard `cudaMemcpy` with pageable memory
+- Achieving ~11 GB/s bandwidth (vs ~20 GB/s practical PCIe 4.0 max)
+- Transfer is 6-24% of total GPU time (compute dominates)
+
+**Transfer overhead by signal size:**
+| Size | Transfer % | Compute % |
+|------|------------|-----------|
+| 16K | 6.8% | 93.2% |
+| 64K | 10.3% | 89.7% |
+| 256K | 18.1% | 81.9% |
+| 1M | 16.4% | 83.6% |
+| 4M | 23.9% | 76.1% |
+
+**Potential improvement:** Pinned memory could double transfer speed → 5-12% faster overall.
+
+**Risks of pinned memory:**
+1. **Memory pressure** - Pinned memory cannot be swapped to disk, reducing available RAM
+2. **System limits** - Linux `ulimit -l` often defaults to 64KB; exceeding causes failures
+3. **Concurrent operations** - Multiple FFTs compound the issue (4× 64M FFT = 2GB pinned)
+4. **Go GC complications** - Need manual lifecycle management, risk of leaks
+5. **OOM scenarios** - Can starve other processes, trigger OOM killer
+
+**Mitigations (if implemented):**
+- Use a pinned memory pool with hard cap (e.g., max 1GB)
+- Reuse pinned buffers instead of allocating/freeing repeatedly
+- Fall back to unpinned transfers if pinned allocation fails
+- Only use pinned memory for sizes where it actually helps
+
+**Conclusion:** Not urgent given 28-54x speedup already achieved. Implement later if extra 5-12% is needed.
+
 ---
 
 ## Original Planning Document
