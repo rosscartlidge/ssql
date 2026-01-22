@@ -127,13 +127,43 @@ This extraction is CPU-bound and often takes longer than the actual aggregation.
 
 ```
 gpu/
-├── sum.cu           # CUDA kernels (sum, filter, FFT, convolution)
+├── sum.cu           # CUDA kernels (sum, filter, FFT, IFFT, convolution)
 ├── gpu.go           # Go wrappers (build tag: gpu)
 ├── gpu_stub.go      # Stubs for non-GPU builds
 ├── gpu_test.go      # Tests and benchmarks
 ├── Makefile         # Builds libssqlgpu.so
 └── libssqlgpu.so    # Compiled library
 ```
+
+**Building with GPU Support:**
+
+Requirements:
+- NVIDIA GPU with CUDA support
+- CUDA Toolkit installed (`nvcc` compiler available in PATH)
+
+```bash
+# Clone the repository
+git clone https://github.com/rosscartlidge/ssql.git
+cd ssql
+
+# Build the CUDA shared library
+cd gpu && make && cd ..
+
+# Build ssql with GPU support (requires library path for linking)
+LD_LIBRARY_PATH=./gpu go build -tags gpu -o ssql_gpu ./cmd/ssql
+
+# Install to Go bin directory
+cp ssql_gpu ~/go/bin/
+
+# Add alias to ~/.bashrc for runtime library path
+echo 'alias ssql_gpu="LD_LIBRARY_PATH=/path/to/ssql/gpu ~/go/bin/ssql_gpu"' >> ~/.bashrc
+source ~/.bashrc
+
+# Run tests (optional)
+LD_LIBRARY_PATH=./gpu go test -tags gpu ./gpu/
+```
+
+**Note:** The standard `go install` command installs ssql without GPU support. The GPU version requires building from source as shown above.
 
 **Available Functions:**
 ```go
@@ -147,6 +177,7 @@ gpu.FilterThenSum(data []float64, threshold float64) (float64, error)
 // FFT operations (used for signals >= 16K - 28-54x faster)
 gpu.FFTMagnitude(data []float64) ([]float64, error)
 gpu.FFTMagnitudePhase(data []float64) ([]float64, []float64, error)
+gpu.IFFT(magnitude, phase []float64) ([]float64, error)
 
 // Convolution operations (excellent benefit - always use GPU)
 gpu.ConvolveDirect(signal, kernel []float64) ([]float64, error)
@@ -158,6 +189,7 @@ gpu.ConvolveFFT(signal, kernel []float64) ([]float64, error)  // For very large 
 | Operation | GPU Usage | Threshold | Reason |
 |-----------|-----------|-----------|--------|
 | FFT | **When large** | signal ≥ 16K | 28-54x faster |
+| IFFT | **When large** | bins ≥ 16K | Same as FFT |
 | Convolution | **Always** | kernel ≥ 16 | 4-500x faster |
 | Correlation | **Always** | kernel ≥ 16 | Uses convolution |
 | Aggregations | **Never** | - | Transfer overhead dominates |

@@ -146,7 +146,7 @@ ssql.QuickChart(data, "month", "revenue", "chart.html")  // One line = full dash
 #### Option 1: CLI Tool (for rapid prototyping)
 
 ```bash
-# Install the command-line tool (v2)
+# Install the command-line tool
 go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 
 # Verify installation
@@ -159,6 +159,38 @@ Bob,25,65000" | ssql from | ssql where -where age gt 28
 ```
 
 [**See CLI Tutorial →**](doc/cli/codelab-cli.md)
+
+#### Option 1b: CLI Tool with GPU Acceleration (optional)
+
+For 10-50x faster FFT, convolution, and correlation on large signals:
+
+**Requirements:**
+- NVIDIA GPU with CUDA support
+- CUDA Toolkit installed (`nvcc` compiler)
+
+```bash
+# Clone the repository
+git clone https://github.com/rosscartlidge/ssql.git
+cd ssql
+
+# Build the CUDA library
+cd gpu && make && cd ..
+
+# Build ssql with GPU support
+go build -tags gpu -o ssql_gpu ./cmd/ssql
+
+# Install to your Go bin directory
+cp ssql_gpu ~/go/bin/
+
+# Add alias to ~/.bashrc for convenience (adjusts library path)
+echo 'alias ssql_gpu="LD_LIBRARY_PATH=/path/to/ssql/gpu ~/go/bin/ssql_gpu"' >> ~/.bashrc
+source ~/.bashrc
+
+# Verify GPU is detected
+ssql_gpu version
+```
+
+**Note:** The GPU version falls back to CPU automatically when GPU is unavailable or for small datasets where CPU is faster.
 
 #### Option 2: Go Library (for application development)
 

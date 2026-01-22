@@ -36,8 +36,10 @@
 go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 
 # Verify installation
-ssql -version
+ssql version
 ```
+
+For GPU-accelerated signal processing (FFT, convolution, correlation), see [GPU Acceleration](#signal-processing-fft-convolution-correlation) below.
 
 ### Your First Pipeline
 
@@ -584,20 +586,34 @@ ssql from sensor.csv | ssql convolve -field reading -kernel gaussian
 
 **Optional GPU Acceleration:**
 
-For large datasets, CUDA GPU acceleration provides 10-100x speedup. This requires:
+For large datasets, CUDA GPU acceleration provides 10-50x speedup. This requires:
 1. NVIDIA GPU with CUDA support
-2. CUDA toolkit installed
+2. CUDA toolkit installed (`nvcc` compiler)
 3. Building with GPU support:
 
 ```bash
-# Build GPU-accelerated version
-cd gpu && make                           # Build CUDA library
-go build -tags gpu -o ssql ./cmd/ssql    # Build with GPU support
+# Clone and build GPU-accelerated version
+git clone https://github.com/rosscartlidge/ssql.git
+cd ssql
+
+# Build CUDA library
+cd gpu && make && cd ..
+
+# Build ssql with GPU support
+go build -tags gpu -o ssql_gpu ./cmd/ssql
+
+# Install to Go bin directory
+cp ssql_gpu ~/go/bin/
+
+# Add alias to ~/.bashrc (adjusts library path automatically)
+echo 'alias ssql_gpu="LD_LIBRARY_PATH=/path/to/ssql/gpu ~/go/bin/ssql_gpu"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 GPU is used automatically when beneficial:
-- FFT: signals >= 1024 points
-- Convolution: kernels >= 64 points
+- FFT/IFFT: signals >= 16K samples (28-54x faster)
+- Convolution: kernels >= 16 points
+- Correlation: same as convolution
 
 Smaller signals use CPU (faster due to GPU transfer overhead).
 
