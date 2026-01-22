@@ -20,8 +20,8 @@ Write code that humans can quickly read and verify - no clever tricks. Always pr
 
 For complete, always-current API documentation, use:
 ```bash
-go doc github.com/rosscartlidge/ssql
-go doc github.com/rosscartlidge/ssql.FunctionName
+go doc github.com/rosscartlidge/ssql/v4
+go doc github.com/rosscartlidge/ssql/v4.FunctionName
 ```
 
 The godoc is generated directly from the source code and is always in sync with the actual implementation. When in doubt, consult `go doc`.
@@ -38,7 +38,7 @@ The godoc is generated directly from the source code and is always in sync with 
 import (
     "fmt"                                    // When using fmt.Printf, fmt.Println
     "log"                                    // When using log.Fatal, log.Printf
-    "github.com/rosscartlidge/ssql"     // ✅ CORRECT import path!
+    "github.com/rosscartlidge/ssql/v4"     // ✅ CORRECT import path!
 )
 
 // Additional imports - ONLY when actually used:
@@ -53,13 +53,13 @@ import (
 **⚠️ Common Import Mistakes:**
 - ❌ `github.com/rocketlaunchr/ssql` - Wrong! Different project
 - ❌ `github.com/ssql/v3` - Wrong! Doesn't exist
-- ✅ `github.com/rosscartlidge/ssql` - Correct!
+- ✅ `github.com/rosscartlidge/ssql/v4` - Correct!
 
 ### Core Types & Creation
 
 - `iter.Seq[T]` / `iter.Seq2[T, error]` - Go 1.23+ lazy iterators
-- `Record` - Map-based data: `map[string]any`
-- `ssql.MakeMutableRecord().String("key", "val").Int("num", 42).Freeze()` - Build records
+- `Record` - Encapsulated struct (NOT a map) - use `GetOr()` to read, `MakeMutableRecord()` to create
+- `ssql.MakeMutableRecord().String("key", "val").Int("num", int64(42)).Freeze()` - Build records
 
 ### Reading Data (Always Check Errors!)
 
@@ -168,6 +168,36 @@ ssql.Collect("field")
 ```
 
 **Important**: After `Aggregate()`, grouping fields retain their original names.
+
+### Signal Processing
+
+```go
+// FFT analysis
+spectrum, err := ssql.FFT(signal)
+spectrumWithPhase, err := ssql.FFTWithPhase(signal)
+
+// Inverse FFT (signal reconstruction)
+reconstructed, err := ssql.IFFT(magnitude, phase)
+
+// Convolution with built-in kernels
+smoothed, err := ssql.ConvolveSame(signal, ssql.GaussianKernel(11, 2.0))
+edges, err := ssql.Convolve(signal, ssql.DiffKernel())
+
+// Cross-correlation
+corr, err := ssql.Correlate(signal1, signal2)
+
+// Built-in kernels: MovingAverageKernel, GaussianKernel, DiffKernel, LaplacianKernel, SobelKernel
+```
+
+### Arrow I/O (High Performance)
+
+```go
+// Read Arrow IPC format (10-20x faster than CSV)
+data, err := ssql.ReadArrow("data.arrow")
+
+// Write Arrow format
+err = ssql.WriteArrow(records, "output.arrow")
+```
 
 ---
 
@@ -315,7 +345,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -362,7 +392,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -410,7 +440,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -468,7 +498,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -538,7 +568,7 @@ package main
 import (
     "fmt"
     "slices"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -596,7 +626,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -718,4 +748,4 @@ Generated code should have:
 
 ---
 
-*For complete API documentation: `go doc github.com/rosscartlidge/ssql`*
+*For complete API documentation: `go doc github.com/rosscartlidge/ssql/v4`*

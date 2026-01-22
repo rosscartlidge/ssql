@@ -95,7 +95,7 @@ ssql.Max[T]("field")
 **What validation detects:**
 ```go
 ❌ "github.com/rocketlaunchr/ssql"
-✅ "github.com/rosscartlidge/ssql"
+✅ "github.com/rosscartlidge/ssql/v4"
 ```
 
 **Current prompt coverage:** Line 38 shows correct import
@@ -109,7 +109,7 @@ ssql.Max[T]("field")
 **⚠️ IMPORTANT: Use the correct import path!**
 
 ```go
-import "github.com/rosscartlidge/ssql"  // ✅ CORRECT
+import "github.com/rosscartlidge/ssql/v4"  // ✅ CORRECT
 ```
 
 **Common mistakes:**
@@ -117,7 +117,7 @@ import "github.com/rosscartlidge/ssql"  // ✅ CORRECT
 - ❌ `github.com/ssql/v3` - Doesn't exist
 - ❌ `ssql` - Not in stdlib
 
-**Why this matters:** LLMs trained on public code might confuse this with other stream libraries. Always use `github.com/rosscartlidge/ssql`.
+**Why this matters:** LLMs trained on public code might confuse this with other stream libraries. Always use `github.com/rosscartlidge/ssql/v4`.
 ```
 
 ## 4. Descending Sort Pattern

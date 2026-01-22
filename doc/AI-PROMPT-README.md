@@ -2,7 +2,7 @@
 
 **File:** `doc/ai-code-generation.md`
 **Status:** ✅ Production Ready
-**Last Updated:** 2025-10-23
+**Last Updated:** 2026-01-22
 
 ---
 
@@ -189,7 +189,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {

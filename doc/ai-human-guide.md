@@ -79,8 +79,8 @@ This project uses ssql for stream processing.
 
 For complete API documentation, use:
 ```bash
-go doc github.com/rosscartlidge/ssql
-go doc github.com/rosscartlidge/ssql.FunctionName
+go doc github.com/rosscartlidge/ssql/v4
+go doc github.com/rosscartlidge/ssql/v4.FunctionName
 ```
 
 ## Quick Rules
