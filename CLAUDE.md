@@ -85,6 +85,15 @@ When making changes to the library API or CLI commands, you MUST also update the
 - Run `make doc-verify` for comprehensive verification (Level 3: deep checks)
 - All three levels must pass before releasing
 
+**Periodic documentation review:**
+- Every 2-3 minor releases, review ALL docs in `doc/` for:
+  - Outdated import paths (e.g., missing `/v4` suffix)
+  - Missing new features (Signal Processing, Arrow I/O, new commands)
+  - Old API patterns or command syntax
+  - Broken cross-references after file moves
+- Files to review: `doc/*.md`, `README.md`, `CLAUDE.md`
+- Last full review: v4.8.12 (January 2026)
+
 **Common mistakes to avoid:**
 - ❌ Changing API without updating doc/api-reference.md
 - ❌ Changing CLI commands without updating doc/cli-*.md
