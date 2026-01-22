@@ -27,3 +27,9 @@ func fftMagnitudePhaseGPU(signal Signal) ([]float64, []float64, error) {
 func convolveGPU(signal, kernel Signal) (Signal, error) {
 	return nil, fmt.Errorf("GPU support not compiled in - build with -tags gpu")
 }
+
+// ifftGPU computes inverse FFT on GPU.
+// Stub version: returns error when GPU support not compiled in.
+func ifftGPU(magnitude, phase []float64) (Signal, error) {
+	return nil, fmt.Errorf("GPU support not compiled in - build with -tags gpu")
+}

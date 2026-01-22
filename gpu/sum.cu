@@ -1080,4 +1080,157 @@ int gpuConvolveFFT(const double* hostSignal, int64_t signalLen,
     return 0;
 }
 
+// Kernel to reconstruct complex values from magnitude and phase
+__global__ void reconstructComplexKernel(const double* magnitude, const double* phase,
+                                          cufftDoubleComplex* complex, int64_t n) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        double mag = magnitude[idx];
+        double phi = phase[idx];
+        complex[idx].x = mag * cos(phi);  // real part
+        complex[idx].y = mag * sin(phi);  // imaginary part
+    }
+}
+
+// Kernel to set conjugate symmetric values for negative frequencies
+__global__ void setConjugateSymmetryKernel(cufftDoubleComplex* complex, int64_t numBins, int64_t n) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    // For k = 1 to numBins-2 (skip DC and Nyquist), set complex[n-k] = conj(complex[k])
+    int64_t k = idx + 1;  // Start from 1
+    if (k < numBins - 1 && k < n) {
+        int64_t mirrorIdx = n - k;
+        if (mirrorIdx < n && mirrorIdx != k) {
+            complex[mirrorIdx].x = complex[k].x;
+            complex[mirrorIdx].y = -complex[k].y;  // conjugate
+        }
+    }
+}
+
+// gpuIFFT - Compute inverse FFT from magnitude and phase spectra
+// Input: numBins magnitude values and numBins phase values
+// Output: reconstructed time-domain signal of length 2*(numBins-1)
+int gpuIFFT(const double* hostMagnitude, const double* hostPhase, int64_t numBins,
+            double** hostOutput, int64_t* outLen) {
+    if (numBins <= 0) {
+        *outLen = 0;
+        *hostOutput = nullptr;
+        return 0;
+    }
+
+    // Output signal length: n = 2 * (numBins - 1)
+    // If numBins = n/2 + 1, then n = 2*(numBins-1)
+    int64_t n = 2 * (numBins - 1);
+    if (n == 0) {
+        // Special case: single bin means single sample
+        *outLen = 1;
+        *hostOutput = (double*)malloc(sizeof(double));
+        (*hostOutput)[0] = hostMagnitude[0] * cos(hostPhase[0]);
+        return 0;
+    }
+    *outLen = n;
+
+    cudaError_t cudaErr;
+    cufftResult fftErr;
+
+    // Find next power of 2 for FFT
+    int64_t fftSize = 1;
+    while (fftSize < n) fftSize *= 2;
+
+    // Complex bins needed for this FFT size
+    int64_t complexN = fftSize / 2 + 1;
+
+    // Allocate device memory for magnitude and phase
+    double* devMagnitude = nullptr;
+    double* devPhase = nullptr;
+    cudaErr = cudaMalloc(&devMagnitude, numBins * sizeof(double));
+    if (cudaErr != cudaSuccess) return -1;
+
+    cudaErr = cudaMalloc(&devPhase, numBins * sizeof(double));
+    if (cudaErr != cudaSuccess) {
+        cudaFree(devMagnitude);
+        return -2;
+    }
+
+    // Copy magnitude and phase to device
+    cudaMemcpy(devMagnitude, hostMagnitude, numBins * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(devPhase, hostPhase, numBins * sizeof(double), cudaMemcpyHostToDevice);
+
+    // Allocate complex array for FFT (may be larger if fftSize > n)
+    cufftDoubleComplex* devComplex = nullptr;
+    cudaErr = cudaMalloc(&devComplex, complexN * sizeof(cufftDoubleComplex));
+    if (cudaErr != cudaSuccess) {
+        cudaFree(devMagnitude);
+        cudaFree(devPhase);
+        return -3;
+    }
+
+    // Initialize to zero (important for padding)
+    cudaMemset(devComplex, 0, complexN * sizeof(cufftDoubleComplex));
+
+    // Reconstruct complex values from magnitude and phase
+    int blockSize = 256;
+    int numBlocks = (numBins + blockSize - 1) / blockSize;
+    reconstructComplexKernel<<<numBlocks, blockSize>>>(devMagnitude, devPhase, devComplex, numBins);
+
+    cudaFree(devMagnitude);
+    cudaFree(devPhase);
+
+    cudaErr = cudaDeviceSynchronize();
+    if (cudaErr != cudaSuccess) {
+        cudaFree(devComplex);
+        return -4;
+    }
+
+    // Allocate output array
+    double* devOutput = nullptr;
+    cudaErr = cudaMalloc(&devOutput, fftSize * sizeof(double));
+    if (cudaErr != cudaSuccess) {
+        cudaFree(devComplex);
+        return -5;
+    }
+
+    // Create inverse FFT plan (complex-to-real)
+    cufftHandle plan;
+    fftErr = cufftPlan1d(&plan, fftSize, CUFFT_Z2D, 1);
+    if (fftErr != CUFFT_SUCCESS) {
+        cudaFree(devComplex);
+        cudaFree(devOutput);
+        return -6;
+    }
+
+    // Execute inverse FFT
+    fftErr = cufftExecZ2D(plan, devComplex, devOutput);
+    cufftDestroy(plan);
+    cudaFree(devComplex);
+
+    if (fftErr != CUFFT_SUCCESS) {
+        cudaFree(devOutput);
+        return -7;
+    }
+
+    cudaErr = cudaDeviceSynchronize();
+    if (cudaErr != cudaSuccess) {
+        cudaFree(devOutput);
+        return -8;
+    }
+
+    // Allocate host output and copy (only n elements, not full fftSize)
+    *hostOutput = (double*)malloc(n * sizeof(double));
+    if (*hostOutput == nullptr) {
+        cudaFree(devOutput);
+        return -9;
+    }
+
+    cudaMemcpy(*hostOutput, devOutput, n * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaFree(devOutput);
+
+    // Normalize by FFT size (cuFFT doesn't normalize)
+    double scale = 1.0 / fftSize;
+    for (int64_t i = 0; i < n; i++) {
+        (*hostOutput)[i] *= scale;
+    }
+
+    return 0;
+}
+
 } // extern "C"

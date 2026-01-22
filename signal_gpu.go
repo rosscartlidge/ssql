@@ -35,3 +35,10 @@ func convolveGPU(signal, kernel Signal) (Signal, error) {
 	result, err := gpu.ConvolveDirect([]float64(signal), []float64(kernel))
 	return Signal(result), err
 }
+
+// ifftGPU computes inverse FFT on GPU.
+// Takes magnitude and phase arrays and reconstructs the time-domain signal.
+func ifftGPU(magnitude, phase []float64) (Signal, error) {
+	result, err := gpu.IFFT(magnitude, phase)
+	return Signal(result), err
+}

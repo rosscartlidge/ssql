@@ -1,6 +1,7 @@
 package ssql
 
 import (
+	"fmt"
 	"iter"
 	"math"
 	"math/cmplx"
@@ -74,6 +75,40 @@ func FFTWithPhase(signal Signal) (*Spectrum, error) {
 // This is a convenience function equivalent to FFT(signal).Magnitude.
 func FFTMagnitude(signal Signal) ([]float64, error) {
 	return fftMagnitudeImpl(signal)
+}
+
+// ============================================================================
+// Inverse FFT Operations
+// ============================================================================
+
+// IFFT computes the Inverse Fast Fourier Transform from magnitude and phase.
+// Reconstructs the original time-domain signal from frequency-domain data.
+// magnitude and phase must have the same length (N/2 + 1 frequency bins).
+// Returns a signal of length 2*(len(magnitude)-1).
+// Automatically uses GPU acceleration when available and beneficial.
+func IFFT(magnitude, phase []float64) (Signal, error) {
+	if len(magnitude) == 0 {
+		return Signal{}, nil
+	}
+	if len(magnitude) != len(phase) {
+		return nil, fmt.Errorf("magnitude and phase must have same length: %d != %d", len(magnitude), len(phase))
+	}
+
+	return ifftImpl(magnitude, phase)
+}
+
+// IFFTToLength computes IFFT and returns a signal of specified length.
+// This is useful when the original signal length is known.
+func IFFTToLength(magnitude, phase []float64, length int) (Signal, error) {
+	signal, err := IFFT(magnitude, phase)
+	if err != nil {
+		return nil, err
+	}
+
+	if length <= 0 || length > len(signal) {
+		return signal, nil
+	}
+	return signal[:length], nil
 }
 
 // ============================================================================
@@ -387,6 +422,50 @@ func FFTFilter(field string, sampleRate float64, includePhase bool) Filter[Recor
 					mut = mut.Float("phase", spectrum.Phase[i])
 				}
 
+				if !yield(mut.Freeze()) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// IFFTFilter returns a filter that computes inverse FFT from magnitude and phase fields.
+// This reconstructs the time-domain signal from frequency-domain data.
+// Output records have index and the specified outputField.
+func IFFTFilter(magnitudeField, phaseField, outputField string) Filter[Record, Record] {
+	return func(records iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			// Collect all records
+			collected := make([]Record, 0)
+			for r := range records {
+				collected = append(collected, r)
+			}
+
+			// Extract magnitude and phase from fields
+			magnitude := make([]float64, len(collected))
+			phase := make([]float64, len(collected))
+			for i, r := range collected {
+				magnitude[i] = GetOr(r, magnitudeField, 0.0)
+				phase[i] = GetOr(r, phaseField, 0.0)
+			}
+
+			if len(magnitude) == 0 {
+				return
+			}
+
+			// Compute inverse FFT
+			signal, err := IFFT(magnitude, phase)
+			if err != nil {
+				// Can't return error from iterator, just return empty
+				return
+			}
+
+			// Yield signal records
+			for i, v := range signal {
+				mut := MakeMutableRecord()
+				mut = mut.Int("index", int64(i))
+				mut = mut.Float(outputField, v)
 				if !yield(mut.Freeze()) {
 					return
 				}
@@ -769,5 +848,96 @@ func convolveCPU(signal, kernel Signal) Signal {
 	}
 
 	return result
+}
+
+// ifftImpl computes inverse FFT, using GPU when beneficial.
+func ifftImpl(magnitude, phase []float64) (Signal, error) {
+	// Use GPU for large spectra (>=16K bins) where it's significantly faster
+	if gpuAvailableForSignal() && len(magnitude) >= 16384 {
+		return ifftGPU(magnitude, phase)
+	}
+	return ifftCPU(magnitude, phase), nil
+}
+
+// ifftCPU computes inverse FFT on CPU using Cooley-Tukey.
+// Takes magnitude and phase arrays (N/2 + 1 positive frequency bins),
+// reconstructs the full complex spectrum, and applies inverse FFT.
+func ifftCPU(magnitude, phase []float64) Signal {
+	numBins := len(magnitude)
+	if numBins == 0 {
+		return Signal{}
+	}
+
+	// Original signal length: if we have N/2 + 1 bins, original was N = 2*(numBins-1)
+	n := 2 * (numBins - 1)
+	if n == 0 {
+		// Special case: single bin means single sample
+		return Signal{magnitude[0]}
+	}
+
+	// Pad to power of 2 for Cooley-Tukey
+	size := nextPowerOf2(n)
+	x := make([]complex128, size)
+
+	// Reconstruct complex spectrum from magnitude and phase
+	// Positive frequencies: bins 0 to N/2
+	for i := 0; i < numBins; i++ {
+		x[i] = cmplx.Rect(magnitude[i], phase[i])
+	}
+
+	// Negative frequencies: conjugate symmetry
+	// x[N-k] = conj(x[k]) for k = 1 to N/2-1
+	for k := 1; k < numBins-1; k++ {
+		x[n-k] = cmplx.Conj(x[k])
+	}
+
+	// Apply inverse FFT
+	ifftCooleyTukey(x)
+
+	// Extract real part and normalize
+	result := make(Signal, n)
+	for i := 0; i < n; i++ {
+		result[i] = real(x[i]) / float64(size)
+	}
+
+	return result
+}
+
+// ifftCooleyTukey performs in-place inverse Cooley-Tukey radix-2 FFT.
+// This is the same as forward FFT with conjugate twiddle factors.
+func ifftCooleyTukey(x []complex128) {
+	n := len(x)
+	if n <= 1 {
+		return
+	}
+
+	// Bit-reversal permutation
+	j := 0
+	for i := 0; i < n-1; i++ {
+		if i < j {
+			x[i], x[j] = x[j], x[i]
+		}
+		k := n / 2
+		for k <= j {
+			j -= k
+			k /= 2
+		}
+		j += k
+	}
+
+	// Cooley-Tukey iterative IFFT (positive angle for inverse)
+	for size := 2; size <= n; size *= 2 {
+		halfSize := size / 2
+		step := 2 * math.Pi / float64(size) // Positive for IFFT (vs negative for FFT)
+		for i := 0; i < n; i += size {
+			for k := 0; k < halfSize; k++ {
+				w := cmplx.Exp(complex(0, step*float64(k)))
+				even := x[i+k]
+				odd := w * x[i+k+halfSize]
+				x[i+k] = even + odd
+				x[i+k+halfSize] = even - odd
+			}
+		}
+	}
 }
 

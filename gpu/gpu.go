@@ -27,6 +27,7 @@ int gpuFFTMagnitudePhase(const double* hostData, int64_t n, double** hostMagnitu
 void gpuFFTFree(double* ptr);
 int gpuConvolveDirect(const double* hostSignal, int64_t signalLen, const double* hostKernel, int64_t kernelLen, double** hostOutput, int64_t* outLen);
 int gpuConvolveFFT(const double* hostSignal, int64_t signalLen, const double* hostKernel, int64_t kernelLen, double** hostOutput, int64_t* outLen);
+int gpuIFFT(const double* hostMagnitude, const double* hostPhase, int64_t numBins, double** hostOutput, int64_t* outLen);
 const char* gpuGetLastError();
 */
 import "C"
@@ -432,4 +433,47 @@ func ConvolveCPU(signal, kernel []float64) []float64 {
 	}
 
 	return result
+}
+
+// IFFT computes the inverse FFT from magnitude and phase spectra.
+// Input: numBins magnitude values and numBins phase values (in radians)
+// Output: reconstructed time-domain signal of length 2*(numBins-1)
+// This reconstructs the original signal from frequency-domain data.
+func IFFT(magnitude, phase []float64) ([]float64, error) {
+	if !Available() {
+		return nil, fmt.Errorf("GPU not available")
+	}
+
+	if len(magnitude) == 0 {
+		return []float64{}, nil
+	}
+
+	if len(magnitude) != len(phase) {
+		return nil, fmt.Errorf("magnitude and phase must have same length: %d != %d", len(magnitude), len(phase))
+	}
+
+	var output *C.double
+	var outLen C.int64_t
+
+	ret := C.gpuIFFT(
+		(*C.double)(unsafe.Pointer(&magnitude[0])),
+		(*C.double)(unsafe.Pointer(&phase[0])),
+		C.int64_t(len(magnitude)),
+		&output,
+		&outLen,
+	)
+
+	if ret != 0 {
+		return nil, fmt.Errorf("GPU IFFT failed (code %d): %s", int(ret), LastError())
+	}
+
+	// Copy result to Go slice and free C memory
+	n := int(outLen)
+	result := make([]float64, n)
+	for i := 0; i < n; i++ {
+		result[i] = float64(*(*C.double)(unsafe.Pointer(uintptr(unsafe.Pointer(output)) + uintptr(i)*8)))
+	}
+	C.gpuFFTFree(output)
+
+	return result, nil
 }
