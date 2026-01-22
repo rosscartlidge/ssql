@@ -101,7 +101,7 @@ Think of it as the Unix pipeline philosophy applied to structured data, with bui
 ### Core Concepts
 
 1. **Streams**: Lazy sequences of data that can be processed efficiently
-2. **Records**: Flexible map-based structures for heterogeneous data
+2. **Records**: Encapsulated structs for heterogeneous data (access via `GetOr()`, `All()`)
 3. **Functional Operations**: Composable functions like `Select`, `Where`, `GroupBy`
 4. **Interactive Visualization**: Built-in charting with zero configuration
 
