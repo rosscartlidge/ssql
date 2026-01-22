@@ -112,6 +112,18 @@ func ConvolveSame(signal, kernel Signal) (Signal, error) {
 	return full[start:end], nil
 }
 
+// AutoConvolve computes the convolution of a signal with itself.
+// Useful for probability distribution analysis and signal energy calculations.
+// Output length is 2*len(signal) - 1.
+func AutoConvolve(signal Signal) (Signal, error) {
+	return Convolve(signal, signal)
+}
+
+// AutoConvolveSame computes auto-convolution with same-length output.
+func AutoConvolveSame(signal Signal) (Signal, error) {
+	return ConvolveSame(signal, signal)
+}
+
 // ============================================================================
 // Correlation Operations
 // ============================================================================
@@ -397,6 +409,62 @@ func ConvolveFilter(field, outputField string, kernel Signal, same bool) Filter[
 				}
 			} else {
 				// Full convolution - create new records with index and value
+				for i, v := range result {
+					mut := MakeMutableRecord()
+					mut = mut.Int("index", int64(i))
+					mut = mut.Float(outputField, v)
+					if !yield(mut.Freeze()) {
+						return
+					}
+				}
+			}
+		}
+	}
+}
+
+// AutoConvolveFilter returns a filter that computes auto-convolution of a field.
+// Auto-convolution convolves a signal with itself.
+func AutoConvolveFilter(field, outputField string, same bool) Filter[Record, Record] {
+	return func(records iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			// Collect all records
+			collected := make([]Record, 0)
+			for r := range records {
+				collected = append(collected, r)
+			}
+
+			// Extract signal from field
+			signal := ExtractSignalFromSlice(collected, field)
+
+			if len(signal) == 0 {
+				return
+			}
+
+			// Apply auto-convolution
+			var result Signal
+			var err error
+			if same {
+				result, err = AutoConvolveSame(signal)
+			} else {
+				result, err = AutoConvolve(signal)
+			}
+			if err != nil {
+				return
+			}
+
+			if same {
+				// Same length - add to original records
+				for i, r := range collected {
+					mut := r.ToMutable()
+					if i < len(result) {
+						mut = mut.Float(outputField, result[i])
+					}
+					if !yield(mut.Freeze()) {
+						return
+					}
+				}
+			} else {
+				// Full auto-convolution - create new records with index and value
 				for i, v := range result {
 					mut := MakeMutableRecord()
 					mut = mut.Int("index", int64(i))
