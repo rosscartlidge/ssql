@@ -6,6 +6,8 @@
 
 ### Documentation Navigation
 - **[API Reference](api-reference.md)** - Complete function reference and examples
+- **[CLI Tutorial](cli-codelab.md)** - Command-line data processing
+- **[Signal Processing](cli-signal-processing.md)** - FFT, convolution, and GPU acceleration
 - **[Advanced Tutorial](advanced-tutorial.md)** - Complex patterns and optimization techniques
 
 ### Learning Path
@@ -34,7 +36,7 @@ import (
     "fmt"
     "math/rand"
     "time"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -117,7 +119,7 @@ package main
 import (
     "fmt"
     "slices"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -161,7 +163,7 @@ package main
 import (
     "fmt"
     "slices"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -210,7 +212,7 @@ package main
 import (
     "fmt"
     "slices"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -287,7 +289,7 @@ package main
 import (
     "fmt"
     "log"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -350,7 +352,7 @@ import (
     "os/exec"
     "slices"
     "strings"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {
@@ -467,7 +469,7 @@ package main
 import (
     "fmt"
     "math/rand"
-    "github.com/rosscartlidge/ssql"
+    "github.com/rosscartlidge/ssql/v4"
 )
 
 func main() {

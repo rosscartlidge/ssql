@@ -106,6 +106,9 @@ ssql from -- ps -efl | \
 # Preserve field order with schema headers (-schema flag)
 ssql from data.csv -schema | ssql where -where age gt 30 | ssql to csv output.csv
 
+# High-performance Arrow format (10-20x faster I/O)
+ssql from data.arrow | ssql where -where age gt 30 | ssql to arrow output.arrow
+
 # Debug pipelines with jq (JSONL streaming format)
 ssql from data.csv | jq '.' | head -5  # Inspect data
 ssql from data.csv | ssql where -where age gt 30 | jq -s 'length'  # Count results
@@ -273,10 +276,17 @@ func main() {
 ### 2. 📚 **[Getting Started Guide](doc/codelab-intro.md)**
 *Learn the Go library fundamentals with hands-on examples*
 - Basic operations (Select, Where, Limit)
-- Working with CSV/JSON data
+- Working with CSV/JSON/Arrow data
   - **⚠️ Note**: CSV auto-parses `"25"` → `int64(25)`, use correct types with `GetOr()`
 - Creating your first visualizations
 - Real-world examples
+
+### 2b. 📊 **[Signal Processing Guide](doc/cli-signal-processing.md)**
+*FFT, filtering, and GPU-accelerated analysis*
+- Frequency analysis with FFT/IFFT
+- Convolution for smoothing and edge detection
+- Cross-correlation for pattern matching
+- Optional GPU acceleration (10-100x speedup)
 
 ### 3. 📖 **[API Reference](doc/api-reference.md)**
 *Complete function documentation with examples*
@@ -477,9 +487,11 @@ func main() {
 
 **Quick view:**
 ```go
-// FFT analysis and smoothing
-spectrum, _ := ssql.FFT(signal)
+// FFT analysis, filtering, and reconstruction
+spectrum, _ := ssql.FFTWithPhase(signal)
+reconstructed, _ := ssql.IFFT(spectrum.Magnitude, spectrum.Phase)
 smoothed, _ := ssql.Convolve(signal, ssql.GaussianKernel(11, 2.0))
+corr, _ := ssql.Correlate(signal1, signal2)  // Find pattern matches
 ```
 
 <details>
@@ -534,13 +546,20 @@ func main() {
 # FFT analysis
 ssql from audio.csv | ssql fft -field amplitude -rate 44100 | ssql to table
 
+# Inverse FFT for signal reconstruction
+ssql from spectrum.csv | ssql ifft -magnitude mag -phase phase | ssql to csv filtered.csv
+
 # Smoothing with convolution
 ssql from sensor.csv | ssql convolve -field reading -kernel gaussian -size 11 -same
+
+# Cross-correlation to find patterns
+ssql from signal.csv | ssql correlate -field reading -with template.csv
 ```
 
 **Features:**
-- **FFT** - Fast Fourier Transform for frequency analysis
+- **FFT/IFFT** - Forward and inverse FFT for frequency analysis and signal reconstruction
 - **Convolution** - Signal filtering with built-in kernels (avg, gaussian, diff, laplacian, sobel)
+- **Correlation** - Cross-correlation and autocorrelation for pattern matching
 - **Pipeline Integration** - Works with ssql's record-based pipelines
 - **Works everywhere** - CPU implementations included, no special setup required
 
@@ -751,7 +770,7 @@ go run examples/early_termination_example.go
 
 ## 🎯 Perfect For
 
-- **Data Scientists** - Analyze CSV/JSON files with ease
+- **Data Scientists** - Analyze CSV/JSON/Arrow files with ease
 - **DevOps Engineers** - Monitor systems and create dashboards
 - **Business Analysts** - Generate reports and visualizations
 - **Developers** - Build ETL pipelines and data processing tools
