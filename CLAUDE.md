@@ -1707,6 +1707,28 @@ gpu.FFTMagnitudePhase(data)
 - **Small datasets** (<100K elements) - kernel launch overhead dominates
 - **Anything memory-bound** - fast CPUs win
 
+### Benchmark Validation Lesson (January 2026)
+
+**⚠️ Always sanity-check benchmark results against theoretical expectations.**
+
+We incorrectly concluded "GPU FFT provides no benefit" based on flawed benchmarks showing:
+```
+Old (WRONG):  1M-point FFT = 4.2ms CPU, 4.2ms GPU  → "Tie"
+New (CORRECT): 1M-point FFT = 125ms CPU, 4.4ms GPU → GPU 28x faster
+```
+
+The old CPU benchmark was **30x too fast** - likely due to:
+- Compiler optimizing away unused results
+- Measuring setup/allocation instead of actual computation
+- Some other measurement error
+
+**How to catch this:** A 1M-point Cooley-Tukey FFT performs ~20M complex multiply-adds. At 125ms, that's ~6ns per operation (reasonable with cache effects). At 4.2ms, that would be 0.2ns per operation (faster than a single CPU cycle - impossible).
+
+**Rule:** If benchmark results seem too good, they probably are. Verify that:
+1. Results are actually being used (prevent dead code elimination)
+2. You're timing the right code path
+3. Numbers make sense given algorithm complexity
+
 ### Future GPU Opportunities
 
 1. **FFT CLI command** - leverage existing cuFFT implementation
