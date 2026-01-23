@@ -4,11 +4,10 @@
 
 Built on Go 1.23+ with first-class support for iterators, generics, and functional composition.
 
-> **⚠️ Important:** ssql v4 introduces enhanced join syntax with multi-clause support. Use `/v4` import path:
+> **⚠️ Important:** ssql v4 requires the `/v4` import path:
 > ```go
 > import "github.com/rosscartlidge/ssql/v4"
 > ```
-> **v3 users:** The `join` command now uses `-using` for same-field joins (was `-on`), and `-on LEFT RIGHT` for different-field joins (was `-left-field`/`-right-field`).
 
 ## ✨ What Makes ssql Special
 
@@ -100,11 +99,11 @@ West,Gadget,3100`
 ```bash
 # Prototype with Unix-style pipelines, then generate production Go code
 ssql from -- ps -efl | \
-  ssql group -by UID -function count -result process_count | \
+  ssql group-by UID -count process_count | \
   ssql to chart -x UID -y process_count -output chart.html
 
-# Preserve field order with schema headers (-schema flag)
-ssql from data.csv -schema | ssql where -where age gt 30 | ssql to csv output.csv
+# Schema headers are automatic - preserves field order through pipelines
+ssql from data.csv | ssql where -where age gt 30 | ssql to csv output.csv
 
 # High-performance Arrow format (10-20x faster I/O)
 ssql from data.arrow | ssql where -where age gt 30 | ssql to arrow output.arrow
@@ -204,7 +203,7 @@ cd my-project
 go mod init myproject  # Initialize Go module (required!)
 ```
 
-**Step 2: Install ssql v2**
+**Step 2: Install ssql v4**
 ```bash
 go get github.com/rosscartlidge/ssql/v4
 ```
@@ -645,7 +644,7 @@ ssql where -expr 'age >= 18 and status == "active"'
 <details>
 <summary>📋 <b>Click for complete, runnable code and features</b></summary>
 
-ssql v2.1.0+ supports powerful expression evaluation for computed fields and complex filters using the [expr-lang](https://expr-lang.org/) library.
+ssql supports powerful expression evaluation for computed fields and complex filters using the [expr-lang](https://expr-lang.org/) library.
 
 **CLI Examples:**
 ```bash
@@ -837,7 +836,7 @@ import "github.com/rosscartlidge/ssql/v4"
 - ✅ **SQL-aligned syntax** - `-using` for same-field, `-on LEFT RIGHT` for different fields
 - ✅ **Performance** - Read lookup file once, build indexes for all clauses
 
-**Note:** v3.x remains available at `github.com/rosscartlidge/ssql/v3` for existing projects.
+**Note:** Previous versions remain available at their respective import paths (e.g., `github.com/rosscartlidge/ssql/v3`) for existing projects.
 
 ## 📚 Documentation
 
