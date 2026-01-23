@@ -253,7 +253,7 @@ func main() {
 
         timestamp := ssql.GetOr(record, "timestamp", "")
         value := ssql.GetOr(record, "value", 0.0)
-        avg := ssql.GetOr(record, "running_avg", 0.0)
+        avg := ssql.GetOr(record, "moving_avg", 0.0)
         sum := ssql.GetOr(record, "running_sum", 0.0)
 
         fmt.Printf("  %s: %.2f (avg: %.2f, sum: %.2f)\n",
@@ -876,7 +876,7 @@ func main() {
             status = "NORMAL"
         }
 
-        return ssql.SetField(r, "status", status)
+        return ssql.SetImmutable(r, "status", status)
     })(limited)
 
     // Filter alerts
@@ -1562,7 +1562,7 @@ func demonstrateMemoryEfficientProcessing() {
         // Transform only what's needed
         transformed := ssql.Select(func(r ssql.Record) ssql.Record {
             amount := ssql.GetOr(r, "amount", 0.0)
-            return ssql.SetField(r, "category", categorizeAmount(amount))
+            return ssql.SetImmutable(r, "category", categorizeAmount(amount))
         })(filtered)
 
         // Limit results to control memory usage
@@ -1717,7 +1717,7 @@ func demonstrateRobustProcessing() {
             return 0, fmt.Errorf("empty string")
         }
         return strconv.Atoi(s)
-    })(slices.Values(rawData))
+    })(ssql.Safe(slices.Values(rawData)))
 
     fmt.Println("Robust processing with error handling:")
     validCount := 0
@@ -1774,7 +1774,7 @@ func demonstrateFaultTolerantPipeline() {
             Build()
 
         return result, nil
-    })(slices.Values(unreliableData))
+    })(ssql.Safe(slices.Values(unreliableData)))
 
     fmt.Println("Fault-tolerant pipeline results:")
     for record, err := range processed {
@@ -1830,9 +1830,9 @@ func demonstrateDataValidation() {
         }
 
         // Add validation timestamp
-        result := ssql.SetField(r, "validated_at", time.Now())
+        result := ssql.SetImmutable(r, "validated_at", time.Now())
         return result, nil
-    })(slices.Values(customerData))
+    })(ssql.Safe(slices.Values(customerData)))
 
     fmt.Println("Data validation results:")
     for record, err := range validated {
@@ -2208,7 +2208,7 @@ func demonstrateMonitoring() {
         time.Sleep(1 * time.Millisecond)
 
         // Add processing metadata
-        result := ssql.SetField(r, "processed_at", time.Now())
+        result := ssql.SetImmutable(r, "processed_at", time.Now())
         return result
     })(slices.Values(data))
 

@@ -576,7 +576,7 @@ ssql from data.csv | \
 ```bash
 # Command-specific help
 ssql where -help
-ssql group -help
+ssql group-by -help
 ssql from -help
 
 # General help

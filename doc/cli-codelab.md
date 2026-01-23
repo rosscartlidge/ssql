@@ -122,12 +122,12 @@ Output (JSONL):
 ...
 ```
 
-### Schema Headers (-schema flag)
+### Schema Headers (Automatic)
 
-Use the `-schema` flag to emit a schema header that preserves field order and types through pipelines:
+The `from` command automatically emits a schema header that preserves field order and types through pipelines:
 
 ```bash
-ssql from employees.csv -schema
+ssql from employees.csv
 ```
 
 Output (JSONL with schema header):
@@ -138,15 +138,15 @@ Output (JSONL with schema header):
 ...
 ```
 
-**Why use `-schema`?**
-- **Field order preservation**: Without schema, JSON field order is non-deterministic. With `-schema`, output commands maintain the original CSV column order.
+**Benefits of automatic schema:**
+- **Field order preservation**: Schema ensures output commands maintain the original CSV column order.
 - **Type information**: Schema carries type information (string, int, float, bool) through the pipeline.
 - **Better CSV output**: `ssql to csv` uses schema to output columns in the same order as the input.
 
 **Example: Full pipeline with schema**
 ```bash
 # Input CSV has columns: name, age, department, salary
-ssql from employees.csv -schema | \
+ssql from employees.csv | \
   ssql where -where age gt 25 | \
   ssql to csv output.csv
 
@@ -276,11 +276,11 @@ ssql from employees.csv | ssql to table
 # With filtering
 ssql from employees.csv | \
   ssql where -where department eq Engineering | \
-  ssql table
+  ssql to table
 
 # Limit column width to prevent wrapping
 ssql from employees.csv | \
-  ssql table -max-width 30
+  ssql to table -max-width 30
 
 # Complex pipeline with updates and filtering
 ssql from customers.csv | \
@@ -414,9 +414,10 @@ Remove duplicate records:
 # Distinct on all fields
 ssql from data.csv | ssql distinct
 
-# Distinct by specific fields
+# Distinct by specific fields (select fields first, then distinct)
 ssql from employees.csv | \
-  ssql distinct -by department -by location
+  ssql include department location | \
+  ssql distinct
 ```
 
 Equivalent SQL:
@@ -903,8 +904,7 @@ go build -o monitor monitor.go
 ## Available Commands
 
 ### Data Sources
-- `from [file]` - Read data from CSV, JSON, or JSONL file (auto-detects format)
-  - `-schema` / `-s` - Emit schema header with field names and types (preserves field order through pipelines)
+- `from [file]` - Read data from CSV, JSON, or JSONL file (auto-detects format, always emits schema header)
   - `-type field type` - Override type for a field: `-type zipcode string -type age int`
   - `-default-type type` - Default type for all fields: `auto` (default), `string`, `int`, `float`, `bool`
   - `-format fmt` - Input format for stdin: `csv` (default), `json`, `jsonl`

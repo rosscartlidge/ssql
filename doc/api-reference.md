@@ -1074,7 +1074,7 @@ result := pipeline(numbers)
 
 ### JSONL Schema Headers (CLI Feature)
 
-The ssql CLI uses JSONL (JSON Lines) format for inter-command communication. When using the `-schema` flag with the `from` command, a schema header is emitted that preserves field order and types through pipelines.
+The ssql CLI uses JSONL (JSON Lines) format for inter-command communication. The `from` command automatically emits a schema header that preserves field order and types through pipelines.
 
 **Schema Header Format:**
 ```json
@@ -1087,12 +1087,12 @@ The schema header contains:
 
 **CLI Usage:**
 ```bash
-# Emit schema header to preserve field order
-ssql from data.csv -schema | ssql where -where age gt 25 | ssql to csv output.csv
+# Schema header is emitted automatically to preserve field order
+ssql from data.csv | ssql where -where age gt 25 | ssql to csv output.csv
 ```
 
 **How Schema Flows Through Pipelines:**
-1. `from -schema` emits schema header as first line
+1. `from` emits schema header as first line (automatic)
 2. Transform commands (`where`, `update`, `sort`, etc.) pass records and schema through unchanged
 3. Output commands (`to csv`, `to json`, `to table`) consume schema for field ordering
 4. Final output has consistent field order matching the input
