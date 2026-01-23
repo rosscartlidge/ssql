@@ -585,16 +585,45 @@ ssql from huge_signal.csv | \
 
 ### 5. GPU Memory Considerations
 
-For very large signals (>100M samples), process in chunks:
+**Memory estimation:** FFT requires approximately `signal_samples × 24 bytes` of GPU memory (input + complex output + workspace). For a 24GB GPU, this means ~1 billion samples max; for 8GB, ~330 million samples.
 
+**If your signal exceeds GPU memory**, you have several options:
+
+**Option A: Spectrogram (frequency content over time)**
 ```bash
-# Process 1M samples at a time
-for offset in 0 1000000 2000000; do
+# Create spectrogram with 1M-sample windows, labeled by time offset
+window=1000000
+for offset in $(seq 0 $window 10000000); do
+  ssql from huge.csv | \
+    ssql offset $offset | \
+    ssql limit $window | \
+    ssql_gpu fft -field value -rate 1000 | \
+    ssql update -set window_start $offset
+done > /tmp/spectrogram.jsonl
+
+# Analyze: find peak frequency in each time window
+cat /tmp/spectrogram.jsonl | \
+  ssql group-by window_start -max magnitude peak_magnitude
+```
+
+**Option B: Extract summary statistics per chunk**
+```bash
+# Get dominant frequency from each chunk (no need to store full spectrum)
+for offset in $(seq 0 1000000 10000000); do
   ssql from huge.csv | \
     ssql offset $offset | \
     ssql limit 1000000 | \
-    ssql_gpu fft -field value >> /tmp/spectra.jsonl
-done
+    ssql_gpu fft -field value -rate 1000 | \
+    ssql sort magnitude -desc | \
+    ssql limit 1 | \
+    ssql update -set chunk_offset $offset
+done > /tmp/dominant_frequencies.jsonl
+```
+
+**Option C: Use CPU for very large single-shot FFT**
+```bash
+# CPU can use system RAM (slower but no VRAM limit)
+ssql from huge.csv | ssql fft -field value -rate 1000
 ```
 
 ---
