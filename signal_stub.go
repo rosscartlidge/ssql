@@ -4,6 +4,12 @@ package ssql
 
 import "fmt"
 
+// GPUAvailable returns true if GPU support is compiled in and a GPU is detected.
+// Stub version: always returns false when GPU support not compiled in.
+func GPUAvailable() bool {
+	return false
+}
+
 // gpuAvailableForSignal checks if GPU is available for signal processing.
 // Stub version: always returns false when GPU support not compiled in.
 func gpuAvailableForSignal() bool {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	cf "github.com/rosscartlidge/autocli/v4"
+	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"
 )
 
@@ -13,7 +14,11 @@ func RegisterVersion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("Show version information").
 		Example("ssql version", "Display the current ssql version").
 		Handler(func(ctx *cf.Context) error {
-			fmt.Printf("ssql v%s\n", version.Version)
+			gpuStatus := "no"
+			if ssql.GPUAvailable() {
+				gpuStatus = "yes"
+			}
+			fmt.Printf("ssql v%s (gpu: %s)\n", version.Version, gpuStatus)
 			return nil
 		}).
 		Done()

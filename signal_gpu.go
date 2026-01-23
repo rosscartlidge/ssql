@@ -6,6 +6,12 @@ import (
 	"github.com/rosscartlidge/ssql/v4/gpu"
 )
 
+// GPUAvailable returns true if GPU support is compiled in and a GPU is detected.
+// Use this to check GPU capability at runtime.
+func GPUAvailable() bool {
+	return gpu.Available()
+}
+
 // gpuAvailableForSignal checks if GPU is available for signal processing.
 func gpuAvailableForSignal() bool {
 	return gpu.Available()
