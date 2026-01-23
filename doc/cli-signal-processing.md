@@ -626,6 +626,49 @@ done > /tmp/dominant_frequencies.jsonl
 ssql from huge.csv | ssql fft -field value -rate 1000
 ```
 
+### 6. Compiling Generated Code with GPU Support
+
+When you generate Go code from CLI pipelines, the code uses ssql library functions that automatically use GPU when available. To enable GPU acceleration in generated programs:
+
+**Step 1: Generate the code**
+```bash
+SSQLGO=1 ssql from signal.csv | \
+  ssql fft -field value -rate 1000 | \
+  ssql generate-go > fft_program.go
+```
+
+**Step 2: Build with GPU support**
+```bash
+# Set library path and build with gpu tag
+LD_LIBRARY_PATH=/path/to/ssql/gpu go build -tags gpu -o fft_program fft_program.go
+```
+
+**Step 3: Run with library path**
+```bash
+LD_LIBRARY_PATH=/path/to/ssql/gpu ./fft_program < input.csv
+```
+
+**Convenience: Create an alias**
+```bash
+# Add to ~/.bashrc
+export SSQL_GPU_LIB=/path/to/ssql/gpu
+alias go-gpu='LD_LIBRARY_PATH=$SSQL_GPU_LIB go'
+
+# Then use:
+go-gpu build -tags gpu -o fft_program fft_program.go
+go-gpu run -tags gpu fft_program.go
+```
+
+**Without `-tags gpu`:** Code still works but uses CPU only. This is useful for:
+- Systems without NVIDIA GPU
+- Small signals where CPU is fast enough
+- Portability (no CUDA dependency)
+
+**Automatic GPU selection:** The library automatically uses GPU when:
+- Built with `-tags gpu`
+- Signal >= 16K samples (FFT) or kernel >= 16 points (convolution)
+- Smaller signals use CPU (faster due to no transfer overhead)
+
 ---
 
 ## Command Reference
