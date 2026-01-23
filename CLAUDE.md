@@ -48,6 +48,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Essential docs: `README.md`, `CHANGELOG.md` only
 - Build files: `go.mod`, `go.sum`, `Makefile`, `.gitignore`
 
+## Development Journal (CRITICAL)
+
+**⚠️ IMPORTANT: Maintain weekly journal entries in `journal/`**
+
+The journal tracks development work for continuity across sessions.
+
+**File naming:** `journal/YYYY-WNN.md` (e.g., `2026-W04.md` for week 4 of 2026)
+
+**When to update:**
+- At the end of each work session
+- When completing significant tasks
+- When making commits
+
+**What to record:**
+```markdown
+## YYYY-MM-DD (Day)
+
+### Brief Description of Work
+
+- Files modified
+- Issues found and how they were resolved
+- Commits made (hash and brief message)
+- Decisions or learnings worth noting
+```
+
+**Example entry:**
+```markdown
+## 2026-01-23 (Thursday)
+
+### Documentation Verification and Fixes
+
+Tested CLI examples and fixed outdated references.
+
+**Files modified:**
+- doc/cli-codelab.md - removed non-existent -schema flag
+- doc/advanced-tutorial.md - fixed SetField -> SetImmutable
+
+**Commits:**
+- `36ba82f` - docs: fix incorrect examples in CLI and advanced tutorial docs
+```
+
+**At start of new week:** Create a new file for the current week.
+
+**Why this matters:** Provides context for future sessions about recent work, decisions made, and issues encountered.
+
 **Compiled Binaries:**
 - The `.gitignore` prevents compiled examples from being committed
 - But still avoid creating them - use `/tmp/` for test programs
