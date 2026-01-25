@@ -1,0 +1,28 @@
+# Docker ignore file for ssql GPU builds
+
+# Pre-built binaries - must be rebuilt inside container
+*.so
+*.dylib
+ssql
+ssql_gpu
+cmd/ssql/ssql
+
+# Development artifacts
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Test outputs
+*.html
+*.out
+*.test
+
+# Documentation (not needed for build)
+doc/research/
+doc/archive/
+journal/
+
+# OS files
+.DS_Store
+Thumbs.db
