@@ -66,6 +66,12 @@ import "github.com/rosscartlidge/ssql/v4"
 
 The journal tracks development work for continuity across sessions.
 
+**On session startup:** Read the latest journal file to understand recent work:
+```bash
+ls -t journal/*.md | head -1 | xargs cat
+```
+This provides context about what was done in previous sessions, decisions made, and work in progress.
+
 **File naming:** `journal/YYYY-WNN.md` (e.g., `2026-W04.md` for week 4 of 2026)
 
 **When to update:**
