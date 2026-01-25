@@ -168,7 +168,30 @@ For 10-50x faster FFT, convolution, and correlation on large signals:
 
 **Requirements:**
 - NVIDIA GPU with CUDA support
-- CUDA Toolkit installed (`nvcc` compiler)
+- Docker with nvidia-container-toolkit, OR CUDA Toolkit installed locally
+
+**Method 1: Docker Build (Recommended - no local CUDA needed)**
+
+```bash
+# Clone the repository
+git clone https://github.com/rosscartlidge/ssql.git
+cd ssql
+
+# Build and extract the GPU-enabled binary
+make docker-gpu-extract
+
+# Install the library system-wide
+sudo cp libssqlgpu.so /usr/local/lib && sudo ldconfig
+
+# Install the binary
+cp ssql_gpu ~/go/bin/
+
+# Verify GPU is detected
+ssql_gpu version
+# Output: ssql vX.Y.Z (gpu: yes)
+```
+
+**Method 2: Local CUDA Toolkit Build**
 
 ```bash
 # Clone the repository
@@ -182,11 +205,8 @@ cd gpu && make && cd ..
 go build -tags gpu -o ssql_gpu ./cmd/ssql
 
 # Install to your Go bin directory
+sudo make install-gpu  # Installs libssqlgpu.so to /usr/local/lib
 cp ssql_gpu ~/go/bin/
-
-# Add alias to ~/.bashrc for convenience (adjusts library path)
-echo 'alias ssql_gpu="LD_LIBRARY_PATH=/path/to/ssql/gpu ~/go/bin/ssql_gpu"' >> ~/.bashrc
-source ~/.bashrc
 
 # Verify GPU is detected
 ssql_gpu version
@@ -563,15 +583,8 @@ ssql from signal.csv | ssql correlate -field reading -with template.csv
 - **Works everywhere** - CPU implementations included, no special setup required
 
 **GPU Acceleration (optional):**
-Signal processing works out of the box using CPU. For large datasets, optional CUDA GPU acceleration provides 10-100x speedup:
-```bash
-# Standard install - uses CPU (works everywhere)
-go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
+Signal processing works out of the box using CPU. For large datasets, optional CUDA GPU acceleration provides 10-100x speedup. See [GPU installation instructions](#option-1b-cli-tool-with-gpu-acceleration-optional) for setup via Docker (recommended) or local CUDA toolkit.
 
-# GPU-accelerated build (requires CUDA toolkit)
-cd gpu && make
-go build -tags gpu -o ssql ./cmd/ssql
-```
 GPU is used automatically when available for FFT >= 1024 points or convolution kernels >= 64 points.
 
 ### **Data Integration**
