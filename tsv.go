@@ -78,17 +78,21 @@ func ReadTSVFromReaderWithSeparator(r io.Reader, sep rune) iter.Seq[Record] {
 		if sep == 0 {
 			sep = DetectTSVSeparator(header)
 		}
-		sepStr := string(sep)
+		sepByte := byte(sep)
 
-		// Parse field names
-		fields := strings.Split(header, sepStr)
+		// Parse field names - only allocate once for header
+		fields := strings.Split(header, string(sep))
+		numFields := len(fields)
 
 		// Create shared schema for all records
 		schema := NewSchema(fields)
-		fieldIndices := make([]int, len(fields))
+		fieldIndices := make([]int, numFields)
 		for i, f := range fields {
 			fieldIndices[i] = schema.Index(f)
 		}
+
+		// Pre-allocate values slice (reused across records)
+		width := schema.Width()
 
 		// Read data lines
 		for scanner.Scan() {
@@ -97,14 +101,19 @@ func ReadTSVFromReaderWithSeparator(r io.Reader, sep rune) iter.Seq[Record] {
 				continue
 			}
 
-			parts := strings.Split(line, sepStr)
-			values := make([]any, schema.Width())
+			// Parse fields inline without allocating a slice
+			values := make([]any, width)
+			fieldIdx := 0
+			start := 0
 
-			for i, part := range parts {
-				if i >= len(fieldIndices) {
-					break
+			for i := 0; i <= len(line); i++ {
+				if i == len(line) || line[i] == sepByte {
+					if fieldIdx < numFields {
+						values[fieldIndices[fieldIdx]] = parseTSVValue(line[start:i])
+					}
+					fieldIdx++
+					start = i + 1
 				}
-				values[fieldIndices[i]] = parseTSVValue(part)
 			}
 
 			if !yield(NewRecordFromSchema(schema, values)) {
@@ -115,24 +124,58 @@ func ReadTSVFromReaderWithSeparator(r io.Reader, sep rune) iter.Seq[Record] {
 }
 
 // parseTSVValue parses a TSV field value, converting to appropriate types.
+// Optimized to avoid allocations from failed strconv calls.
 func parseTSVValue(s string) any {
-	// Try integer first
-	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return i
+	if len(s) == 0 {
+		return s
 	}
-	// Try float
-	if f, err := strconv.ParseFloat(s, 64); err == nil {
-		return f
+
+	// Quick check: does it look like a number?
+	first := s[0]
+	if (first >= '0' && first <= '9') || first == '-' || first == '+' || first == '.' {
+		// Might be a number - check more carefully
+		if looksLikeInt(s) {
+			if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return i
+			}
+		}
+		// Try float (includes scientific notation)
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return f
+		}
 	}
-	// Try boolean
+
+	// Check boolean
 	if s == "true" {
 		return true
 	}
 	if s == "false" {
 		return false
 	}
+
 	// Return as string
 	return s
+}
+
+// looksLikeInt checks if a string looks like an integer (digits with optional leading sign).
+// This avoids the allocation from ParseInt's error when parsing non-integers.
+func looksLikeInt(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	start := 0
+	if s[0] == '-' || s[0] == '+' {
+		start = 1
+		if len(s) == 1 {
+			return false
+		}
+	}
+	for i := start; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // WriteTSV writes records to a TSV file with tab separator.
