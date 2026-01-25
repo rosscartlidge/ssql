@@ -292,3 +292,69 @@ func TestArrowInternalFieldsSkipped(t *testing.T) {
 		t.Error("Internal field _row_number should not be written to Arrow")
 	}
 }
+
+func TestExtractSignalFromArrow(t *testing.T) {
+	// Create test records with signal data
+	records := []Record{
+		MakeMutableRecord().Float("amplitude", 1.0).Int("index", int64(0)).Freeze(),
+		MakeMutableRecord().Float("amplitude", 2.5).Int("index", int64(1)).Freeze(),
+		MakeMutableRecord().Float("amplitude", -0.5).Int("index", int64(2)).Freeze(),
+		MakeMutableRecord().Float("amplitude", 3.0).Int("index", int64(3)).Freeze(),
+		MakeMutableRecord().Float("amplitude", 0.0).Int("index", int64(4)).Freeze(),
+	}
+
+	// Write to Arrow format in memory
+	var buf bytes.Buffer
+	err := WriteArrowToWriter(slices.Values(records), &buf)
+	if err != nil {
+		t.Fatalf("WriteArrowToWriter failed: %v", err)
+	}
+
+	// Write to temp file for testing file-based extraction
+	tmpFile, err := os.CreateTemp("", "signal_test_*.arrow")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(buf.Bytes()); err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Test ExtractSignalFromArrow
+	signal, err := ExtractSignalFromArrow(tmpFile.Name(), "amplitude")
+	if err != nil {
+		t.Fatalf("ExtractSignalFromArrow failed: %v", err)
+	}
+
+	expected := Signal{1.0, 2.5, -0.5, 3.0, 0.0}
+	if len(signal) != len(expected) {
+		t.Fatalf("Expected %d samples, got %d", len(expected), len(signal))
+	}
+
+	for i, v := range expected {
+		if signal[i] != v {
+			t.Errorf("Sample %d: expected %v, got %v", i, v, signal[i])
+		}
+	}
+
+	// Test extracting integer field (should convert to float64)
+	indexSignal, err := ExtractSignalFromArrow(tmpFile.Name(), "index")
+	if err != nil {
+		t.Fatalf("ExtractSignalFromArrow for index failed: %v", err)
+	}
+
+	expectedIndex := Signal{0.0, 1.0, 2.0, 3.0, 4.0}
+	for i, v := range expectedIndex {
+		if indexSignal[i] != v {
+			t.Errorf("Index sample %d: expected %v, got %v", i, v, indexSignal[i])
+		}
+	}
+
+	// Test non-existent field
+	_, err = ExtractSignalFromArrow(tmpFile.Name(), "nonexistent")
+	if err == nil {
+		t.Error("Expected error for non-existent field")
+	}
+}

@@ -33,7 +33,30 @@ All signal processing commands work immediately with CPU. GPU acceleration is op
 
 **Requirements:**
 - NVIDIA GPU with CUDA support
-- CUDA Toolkit installed (`nvcc` compiler in PATH)
+- Docker with nvidia-container-toolkit, OR CUDA Toolkit installed locally
+
+**Method 1: Docker Build (Recommended - no local CUDA needed)**
+
+```bash
+# Clone the repository
+git clone https://github.com/rosscartlidge/ssql.git
+cd ssql
+
+# Build and extract the GPU-enabled binary
+make docker-gpu-extract
+
+# Install the library system-wide
+sudo cp libssqlgpu.so /usr/local/lib && sudo ldconfig
+
+# Install the binary
+cp ssql_gpu ~/go/bin/
+
+# Verify GPU is detected
+ssql_gpu version
+# Output: ssql vX.Y.Z (gpu: yes)
+```
+
+**Method 2: Local CUDA Toolkit Build**
 
 ```bash
 # Clone the repository
@@ -47,13 +70,10 @@ cd gpu && make && cd ..
 go build -tags gpu -o ssql_gpu ./cmd/ssql
 
 # Install to your Go bin directory
+sudo make install-gpu  # Installs libssqlgpu.so to /usr/local/lib
 cp ssql_gpu ~/go/bin/
 
-# Add alias to ~/.bashrc for convenience
-echo 'alias ssql_gpu="LD_LIBRARY_PATH='$(pwd)'/gpu ~/go/bin/ssql_gpu"' >> ~/.bashrc
-source ~/.bashrc
-
-# Verify GPU version works
+# Verify GPU is detected
 ssql_gpu version
 ```
 
@@ -630,33 +650,27 @@ ssql from huge.csv | ssql fft -field value -rate 1000
 
 When you generate Go code from CLI pipelines, the code uses ssql library functions that automatically use GPU when available. To enable GPU acceleration in generated programs:
 
-**Step 1: Generate the code**
+**Step 1: Install the GPU library (one-time setup)**
+```bash
+# If you haven't already, install the CUDA library system-wide
+cd /path/to/ssql
+sudo make install-gpu  # Copies libssqlgpu.so to /usr/local/lib
+```
+
+**Step 2: Generate the code**
 ```bash
 SSQLGO=1 ssql from signal.csv | \
   ssql fft -field value -rate 1000 | \
   ssql generate-go > fft_program.go
 ```
 
-**Step 2: Build with GPU support**
+**Step 3: Build and run with GPU support**
 ```bash
-# Set library path and build with gpu tag
-LD_LIBRARY_PATH=/path/to/ssql/gpu go build -tags gpu -o fft_program fft_program.go
-```
+# Build with gpu tag
+go build -tags gpu -o fft_program fft_program.go
 
-**Step 3: Run with library path**
-```bash
-LD_LIBRARY_PATH=/path/to/ssql/gpu ./fft_program < input.csv
-```
-
-**Convenience: Create an alias**
-```bash
-# Add to ~/.bashrc
-export SSQL_GPU_LIB=/path/to/ssql/gpu
-alias go-gpu='LD_LIBRARY_PATH=$SSQL_GPU_LIB go'
-
-# Then use:
-go-gpu build -tags gpu -o fft_program fft_program.go
-go-gpu run -tags gpu fft_program.go
+# Run normally (library is in system path)
+./fft_program < input.csv
 ```
 
 **Without `-tags gpu`:** Code still works but uses CPU only. This is useful for:

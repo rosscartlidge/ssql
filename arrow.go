@@ -346,3 +346,194 @@ func appendValueToBuilder(builder array.Builder, val any) {
 		builder.AppendNull()
 	}
 }
+
+// ============================================================================
+// Direct Signal Extraction from Arrow (GPU-optimized)
+// ============================================================================
+
+// ExtractSignalFromArrow reads an Arrow file and extracts a numeric field as a Signal.
+// This bypasses Record conversion for efficient GPU processing.
+// Returns the signal and the number of samples extracted.
+func ExtractSignalFromArrow(filename string, field string) (Signal, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("opening Arrow file: %w", err)
+	}
+	defer file.Close()
+
+	return ExtractSignalFromArrowReader(file, field)
+}
+
+// ExtractSignalFromArrowReader extracts a numeric field from Arrow data as a Signal.
+// For IPC File format, the reader must implement ReadAtSeeker.
+func ExtractSignalFromArrowReader(r io.Reader, field string) (Signal, error) {
+	// Try file reader first for random access
+	if ra, ok := r.(ReadAtSeeker); ok {
+		return extractSignalFromArrowFile(ra, field)
+	}
+	return extractSignalFromArrowStream(r, field)
+}
+
+// extractSignalFromArrowFile extracts a signal from an Arrow IPC file.
+func extractSignalFromArrowFile(r ReadAtSeeker, field string) (Signal, error) {
+	fr, err := ipc.NewFileReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("opening Arrow reader: %w", err)
+	}
+	defer fr.Close()
+
+	schema := fr.Schema()
+	fieldIndices := schema.FieldIndices(field)
+	if len(fieldIndices) == 0 {
+		return nil, fmt.Errorf("field %q not found in Arrow schema", field)
+	}
+	fieldIdx := fieldIndices[0]
+
+	// Pre-allocate by counting total rows
+	totalRows := 0
+	for i := 0; i < fr.NumRecords(); i++ {
+		rec, err := fr.Record(i)
+		if err != nil {
+			continue
+		}
+		totalRows += int(rec.NumRows())
+	}
+
+	signal := make(Signal, 0, totalRows)
+
+	// Extract values directly from Arrow arrays
+	for i := 0; i < fr.NumRecords(); i++ {
+		rec, err := fr.Record(i)
+		if err != nil {
+			continue
+		}
+
+		col := rec.Column(fieldIdx)
+		signal = appendArrowColumnToSignal(signal, col)
+	}
+
+	return signal, nil
+}
+
+// extractSignalFromArrowStream extracts a signal from an Arrow IPC stream.
+func extractSignalFromArrowStream(r io.Reader, field string) (Signal, error) {
+	sr, err := ipc.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("opening Arrow stream: %w", err)
+	}
+	defer sr.Release()
+
+	schema := sr.Schema()
+	fieldIndices := schema.FieldIndices(field)
+	if len(fieldIndices) == 0 {
+		return nil, fmt.Errorf("field %q not found in Arrow schema", field)
+	}
+	fieldIdx := fieldIndices[0]
+
+	var signal Signal
+
+	for sr.Next() {
+		rec := sr.Record()
+		col := rec.Column(fieldIdx)
+		signal = appendArrowColumnToSignal(signal, col)
+	}
+
+	return signal, nil
+}
+
+// appendArrowColumnToSignal appends values from an Arrow array to a Signal.
+// Handles various numeric types by converting to float64.
+func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
+	n := col.Len()
+
+	switch arr := col.(type) {
+	case *array.Float64:
+		// Direct access to float64 values - most efficient path
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, arr.Value(i))
+			}
+		}
+	case *array.Float32:
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, float64(arr.Value(i)))
+			}
+		}
+	case *array.Int64:
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, float64(arr.Value(i)))
+			}
+		}
+	case *array.Int32:
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, float64(arr.Value(i)))
+			}
+		}
+	case *array.Int16:
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, float64(arr.Value(i)))
+			}
+		}
+	case *array.Int8:
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, float64(arr.Value(i)))
+			}
+		}
+	case *array.Uint64:
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, float64(arr.Value(i)))
+			}
+		}
+	case *array.Uint32:
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, float64(arr.Value(i)))
+			}
+		}
+	case *array.Uint16:
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, float64(arr.Value(i)))
+			}
+		}
+	case *array.Uint8:
+		for i := 0; i < n; i++ {
+			if arr.IsNull(i) {
+				signal = append(signal, 0)
+			} else {
+				signal = append(signal, float64(arr.Value(i)))
+			}
+		}
+	default:
+		// For unsupported types, append zeros
+		for i := 0; i < n; i++ {
+			signal = append(signal, 0)
+		}
+	}
+
+	return signal
+}
