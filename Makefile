@@ -1,6 +1,7 @@
 # ssql Makefile
 
 .PHONY: help test build clean doc-check doc-test doc-verify doc-update fmt vet all ci install-hooks
+.PHONY: gpu build-gpu install-gpu docker-gpu docker-gpu-image docker-gpu-extract
 
 # Default target
 help:
@@ -11,6 +12,15 @@ help:
 	@echo "  make build        - Build the project"
 	@echo "  make fmt          - Format all Go code"
 	@echo "  make vet          - Run go vet"
+	@echo ""
+	@echo "GPU Build (requires CUDA toolkit locally):"
+	@echo "  make gpu          - Build CUDA library (gpu/libssqlgpu.so)"
+	@echo "  make build-gpu    - Build ssql_gpu binary with GPU support"
+	@echo "  make install-gpu  - Install CUDA library to /usr/local/lib (requires sudo)"
+	@echo ""
+	@echo "GPU Build via Docker (no local CUDA needed):"
+	@echo "  make docker-gpu-image   - Build Docker image with ssql_gpu"
+	@echo "  make docker-gpu-extract - Build and extract ssql_gpu binary to current dir"
 	@echo ""
 	@echo "Documentation Validation (3 levels):"
 	@echo "  make doc-check    - Level 1: Fast checks (syntax, links, patterns)"
@@ -80,6 +90,8 @@ clean:
 	@echo "Cleaning build artifacts..."
 	go clean ./...
 	rm -f cmd/ssql/ssql
+	rm -f ssql_gpu libssqlgpu.so
+	cd gpu && $(MAKE) clean 2>/dev/null || true
 
 # Run all quality checks (pre-push)
 all: fmt vet test doc-check
@@ -105,3 +117,61 @@ install-hooks:
 	@echo 'make doc-check' >> .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
 	@echo "✓ Pre-commit hook installed (runs doc-check before each commit)"
+
+# =============================================================================
+# GPU Build Targets
+# =============================================================================
+
+# Build CUDA library locally (requires CUDA toolkit)
+gpu:
+	@echo "Building CUDA library..."
+	cd gpu && $(MAKE)
+	@echo "✓ Built gpu/libssqlgpu.so"
+
+# Build ssql with GPU support locally (requires CUDA toolkit)
+build-gpu: gpu
+	@echo "Building ssql_gpu..."
+	CGO_ENABLED=1 \
+	CGO_LDFLAGS="-L$(PWD)/gpu -L/usr/local/cuda/lib64" \
+	LD_LIBRARY_PATH="$(PWD)/gpu:/usr/local/cuda/lib64" \
+	go build -tags gpu -o ssql_gpu ./cmd/ssql
+	@echo "✓ Built ssql_gpu"
+	@echo ""
+	@echo "To run: LD_LIBRARY_PATH=$(PWD)/gpu ./ssql_gpu version"
+	@echo "Or install the library: sudo make install-gpu"
+
+# Install CUDA library system-wide (one-time setup)
+install-gpu: gpu
+	@echo "Installing CUDA library to /usr/local/lib..."
+	sudo cp gpu/libssqlgpu.so /usr/local/lib/
+	sudo ldconfig
+	@echo "✓ Installed libssqlgpu.so"
+	@echo ""
+	@echo "You can now build and run without LD_LIBRARY_PATH:"
+	@echo "  go build -tags gpu -o ssql_gpu ./cmd/ssql"
+	@echo "  ./ssql_gpu version"
+
+# Build Docker image with GPU support
+docker-gpu-image:
+	@echo "Building Docker image with GPU support..."
+	docker build -f Dockerfile.gpu -t ssql:gpu .
+	@echo "✓ Built ssql:gpu image"
+	@echo ""
+	@echo "Run with: docker run --gpus all ssql:gpu version"
+
+# Build and extract ssql_gpu binary using Docker (no local CUDA needed)
+docker-gpu-extract:
+	@echo "Building ssql_gpu via Docker..."
+	docker build -f Dockerfile.gpu -t ssql:gpu-builder .
+	@echo "Extracting binary..."
+	docker create --name ssql-gpu-extract ssql:gpu-builder
+	docker cp ssql-gpu-extract:/usr/local/bin/ssql_gpu ./ssql_gpu
+	docker cp ssql-gpu-extract:/usr/local/lib/libssqlgpu.so ./libssqlgpu.so
+	docker rm ssql-gpu-extract
+	@echo "✓ Extracted ssql_gpu and libssqlgpu.so"
+	@echo ""
+	@echo "To run: LD_LIBRARY_PATH=. ./ssql_gpu version"
+	@echo "Or install: sudo cp libssqlgpu.so /usr/local/lib && sudo ldconfig"
+
+# Shortcut for docker build
+docker-gpu: docker-gpu-extract

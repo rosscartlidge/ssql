@@ -1,0 +1,52 @@
+# Dockerfile for building ssql with GPU support
+#
+# Usage:
+#   docker build -f Dockerfile.gpu -o . .
+#   ./ssql_gpu version
+#
+# This builds the CUDA library and Go binary inside the container,
+# then extracts just the binary. No local CUDA toolkit required.
+
+FROM nvidia/cuda:12.4.0-devel-ubuntu22.04 AS builder
+
+# Install Go 1.24+ (required by ssql)
+RUN apt-get update && apt-get install -y wget && \
+    wget -q https://go.dev/dl/go1.24.1.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go1.24.1.linux-amd64.tar.gz && \
+    rm go1.24.1.linux-amd64.tar.gz
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+WORKDIR /src
+COPY . .
+
+# Build CUDA library
+RUN cd gpu && make
+
+# Build Go binary with GPU support
+# Link against the local GPU library and CUDA runtime
+ENV CGO_ENABLED=1
+ENV CGO_LDFLAGS="-L/src/gpu -L/usr/local/cuda/lib64"
+ENV LD_LIBRARY_PATH="/src/gpu:/usr/local/cuda/lib64"
+
+RUN go build -tags gpu -o ssql_gpu ./cmd/ssql
+
+# Verify it built correctly
+RUN ./ssql_gpu version
+
+# Output stage - extract just the binary
+# Use runtime image which includes CUDA libraries (cuFFT, cuBLAS, etc.)
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+
+# Install cuFFT runtime library (not included in base runtime)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcufft-12-4 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/ssql_gpu /usr/local/bin/ssql_gpu
+COPY --from=builder /src/gpu/libssqlgpu.so /usr/local/lib/libssqlgpu.so
+
+# Update library cache
+RUN ldconfig
+
+ENTRYPOINT ["/usr/local/bin/ssql_gpu"]

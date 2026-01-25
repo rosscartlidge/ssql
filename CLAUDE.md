@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Current Version
+
+**ssql v4 is the current major version.** Always use the `/v4` module path:
+
+```bash
+# Install the CLI
+go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
+
+# Import in Go code
+import "github.com/rosscartlidge/ssql/v4"
+```
+
 ## Repository Hygiene (CRITICAL)
 
 **⚠️ IMPORTANT: Keep the root directory clean!**
@@ -1735,11 +1747,67 @@ gpu/
 └── Makefile         # Builds libssqlgpu.so
 ```
 
-**Building with GPU support:**
+### Building with GPU Support
+
+**Option 1: Docker Build (Recommended - no local CUDA needed)**
+
 ```bash
-cd gpu && make                                    # Build CUDA library
-LD_LIBRARY_PATH=./gpu go build -tags gpu ./...   # Build with GPU
-LD_LIBRARY_PATH=./gpu go test -tags gpu ./gpu/   # Run GPU tests
+git clone https://github.com/rosscartlidge/ssql
+cd ssql
+
+# Build and extract the binary
+make docker-gpu-extract
+
+# Install the library and run
+sudo cp libssqlgpu.so /usr/local/lib && sudo ldconfig
+./ssql_gpu version
+```
+
+**Option 2: Local CUDA Toolkit**
+
+Requires CUDA toolkit installed locally (nvcc compiler).
+
+```bash
+git clone https://github.com/rosscartlidge/ssql
+cd ssql
+
+# Build everything
+make build-gpu
+
+# Install library system-wide (one-time)
+sudo make install-gpu
+
+# Now ssql_gpu works without LD_LIBRARY_PATH
+./ssql_gpu version
+```
+
+**Option 3: Docker Image (for container workflows)**
+
+```bash
+make docker-gpu-image
+docker run --gpus all ssql:gpu version
+docker run --gpus all -v $(pwd):/data ssql:gpu from /data/input.csv
+```
+
+**Available Makefile Targets:**
+
+| Target | Description |
+|--------|-------------|
+| `make gpu` | Build CUDA library only (gpu/libssqlgpu.so) |
+| `make build-gpu` | Build ssql_gpu binary with GPU support |
+| `make install-gpu` | Install library to /usr/local/lib (requires sudo) |
+| `make docker-gpu-image` | Build Docker image with ssql_gpu |
+| `make docker-gpu-extract` | Build via Docker and extract binary |
+| `make docker-gpu` | Alias for docker-gpu-extract |
+
+**Running GPU Tests:**
+```bash
+# With local CUDA
+make install-gpu
+go test -tags gpu ./gpu/
+
+# Or with LD_LIBRARY_PATH
+LD_LIBRARY_PATH=./gpu go test -tags gpu ./gpu/
 ```
 
 ### What Works Now
