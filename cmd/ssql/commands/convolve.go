@@ -17,15 +17,21 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("convolve").
 		Description("Apply convolution to a numeric field using a kernel or itself").
 		Example("ssql from signal.csv | ssql convolve -field value -kernel avg -size 5", "Apply 5-point moving average").
-		Example("ssql from data.csv | ssql convolve -field price -kernel gaussian -size 11 -sigma 2.0", "Apply Gaussian smoothing").
+		Example("ssql convolve -file signal.arrow -field value -kernel gaussian -size 11", "Direct Arrow read (fastest)").
 		Example("ssql from sensor.csv | ssql convolve -field reading -kernel diff", "Compute first derivative").
 		Example("ssql from signal.csv | ssql convolve -field value -custom 0.25,0.5,0.25", "Apply custom kernel").
 		Example("ssql from signal.csv | ssql convolve -field value -auto", "Compute auto-convolution (signal with itself)").
+		Flag("-file").
+		String().
+		Global().
+		Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
+		Help("Input file (Arrow files use optimized direct signal extraction)").
+		Done().
 		Flag("-field", "-f").
 		String().
 		Global().
 		Required().
-		FieldsFromFlag("").
+		FieldsFromFlag("-file").
 		Help("Field containing numeric signal values").
 		Done().
 		Flag("-output", "-o").
@@ -72,11 +78,14 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Help("Generate Go code instead of executing").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var field, outputField, kernelName, customKernel string
+			var inputFile, field, outputField, kernelName, customKernel string
 			var size int = 5
 			var sigma float64 = 1.0
 			var auto, same, generate bool
 
+			if val, ok := ctx.GlobalFlags["-file"]; ok {
+				inputFile = val.(string)
+			}
 			if val, ok := ctx.GlobalFlags["-field"]; ok {
 				field = val.(string)
 			}
@@ -126,15 +135,53 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			if shouldGenerate(generate) {
-				return generateConvolveCode(field, outputField, kernelName, size, sigma, customKernel, auto, same)
+				return generateConvolveCode(inputFile, field, outputField, kernelName, size, sigma, customKernel, auto, same)
 			}
 
-			// Read all records from stdin
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
-			records := slices.Collect(schemaAndRecords.Records)
+			// Extract signal based on input source
+			var signal ssql.Signal
+			var records []ssql.Record
+			var err error
 
-			// Extract signal from field
-			signal := ssql.ExtractSignalFromSlice(records, field)
+			if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
+				// Optimized path: direct Arrow signal extraction
+				signal, err = ssql.ExtractSignalFromArrow(inputFile, field)
+				if err != nil {
+					return fmt.Errorf("extracting signal from Arrow: %w", err)
+				}
+			} else if inputFile != "" {
+				// Read from other file formats via Records
+				lower := strings.ToLower(inputFile)
+				switch {
+				case strings.HasSuffix(lower, ".csv"):
+					recs, rerr := ssql.ReadCSV(inputFile)
+					if rerr != nil {
+						return fmt.Errorf("reading CSV: %w", rerr)
+					}
+					records = slices.Collect(recs)
+				case strings.HasSuffix(lower, ".json"):
+					recs, rerr := ssql.ReadJSON(inputFile)
+					if rerr != nil {
+						return fmt.Errorf("reading JSON: %w", rerr)
+					}
+					records = slices.Collect(recs)
+				case strings.HasSuffix(lower, ".jsonl"):
+					file, ferr := os.Open(inputFile)
+					if ferr != nil {
+						return fmt.Errorf("opening JSONL file: %w", ferr)
+					}
+					defer file.Close()
+					records = slices.Collect(lib.ReadJSONL(file))
+				default:
+					return fmt.Errorf("unsupported file format: %s", inputFile)
+				}
+				signal = ssql.ExtractSignalFromSlice(records, field)
+			} else {
+				// Read from stdin (pipeline mode)
+				schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+				records = slices.Collect(schemaAndRecords.Records)
+				signal = ssql.ExtractSignalFromSlice(records, field)
+			}
 
 			if len(signal) == 0 {
 				return fmt.Errorf("no signal data found in field %q", field)
@@ -142,7 +189,6 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Apply convolution
 			var result ssql.Signal
-			var err error
 
 			if auto {
 				// Auto-convolution
@@ -240,7 +286,7 @@ func buildKernel(name string, size int, sigma float64) ssql.Signal {
 }
 
 // generateConvolveCode generates Go code for the convolve command
-func generateConvolveCode(field, outputField, kernelName string, size int, sigma float64, customKernel string, auto, same bool) error {
+func generateConvolveCode(inputFile, field, outputField, kernelName string, size int, sigma float64, customKernel string, auto, same bool) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -251,23 +297,9 @@ func generateConvolveCode(field, outputField, kernelName string, size int, sigma
 		}
 	}
 
-	var inputVar string
-	if len(fragments) > 0 {
-		inputVar = fragments[len(fragments)-1].Var
-	} else {
-		inputVar = "records"
-	}
-
-	outputVar := "convolvedRecords"
-
-	var code string
-	if auto {
-		// Auto-convolution
-		code = fmt.Sprintf(`%s := ssql.AutoConvolveFilter(%q, %q, %v)(%s)`,
-			outputVar, field, outputField, same, inputVar)
-	} else {
-		// Build kernel expression
-		var kernelExpr string
+	// Build kernel expression for non-auto modes
+	var kernelExpr string
+	if !auto {
 		if customKernel != "" {
 			kernelExpr = fmt.Sprintf(`ssql.Signal{%s}`, customKernel)
 		} else {
@@ -284,7 +316,62 @@ func generateConvolveCode(field, outputField, kernelName string, size int, sigma
 				kernelExpr = `ssql.SobelKernel()`
 			}
 		}
+	}
 
+	// If reading directly from Arrow file, generate optimized code
+	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
+		var convolveCall string
+		if auto {
+			if same {
+				convolveCall = `ssql.AutoConvolveSame(signal)`
+			} else {
+				convolveCall = `ssql.AutoConvolve(signal)`
+			}
+		} else {
+			if same {
+				convolveCall = fmt.Sprintf(`ssql.ConvolveSame(signal, %s)`, kernelExpr)
+			} else {
+				convolveCall = fmt.Sprintf(`ssql.Convolve(signal, %s)`, kernelExpr)
+			}
+		}
+
+		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error extracting signal: %%v\n", err)
+		os.Exit(1)
+	}
+
+	result, err := %s
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error computing convolution: %%v\n", err)
+		os.Exit(1)
+	}
+
+	convolvedRecords := signalToRecordsFunc(result, %q)`,
+			inputFile, field,
+			convolveCall,
+			outputField)
+
+		frag := lib.NewInitFragment("convolvedRecords", code, []string{"os"}, getCommandString())
+		return lib.WriteCodeFragment(frag)
+	}
+
+	// Standard pipeline mode
+	var inputVar string
+	if len(fragments) > 0 {
+		inputVar = fragments[len(fragments)-1].Var
+	} else {
+		inputVar = "records"
+	}
+
+	outputVar := "convolvedRecords"
+
+	var code string
+	if auto {
+		// Auto-convolution
+		code = fmt.Sprintf(`%s := ssql.AutoConvolveFilter(%q, %q, %v)(%s)`,
+			outputVar, field, outputField, same, inputVar)
+	} else {
 		// Use the ConvolveFilter function that works with the code generation system
 		code = fmt.Sprintf(`%s := ssql.ConvolveFilter(%q, %q, %s, %v)(%s)`,
 			outputVar, field, outputField, kernelExpr, same, inputVar)

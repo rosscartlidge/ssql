@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -15,20 +16,26 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("correlate").
 		Description("Compute cross-correlation or autocorrelation of numeric fields").
 		Example("ssql from signal.csv | ssql correlate -field value -auto", "Compute autocorrelation to find repeating patterns").
-		Example("ssql from signal.csv | ssql correlate -field value -auto -max-lag 1000", "Find periodicity up to 1000 samples (faster)").
+		Example("ssql correlate -file signal.arrow -field value -auto -max-lag 1000", "Direct Arrow read (fastest)").
 		Example("ssql from data.csv | ssql correlate -field signal -with template", "Find where template pattern occurs in signal").
 		Example("ssql from sensors.csv | ssql correlate -field sensor1 -with sensor2 -same", "Cross-correlate two sensor readings").
+		Flag("-file").
+		String().
+		Global().
+		Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
+		Help("Input file (Arrow files use optimized direct signal extraction)").
+		Done().
 		Flag("-field", "-f").
 		String().
 		Global().
 		Required().
-		FieldsFromFlag("").
+		FieldsFromFlag("-file").
 		Help("Primary field containing numeric signal").
 		Done().
 		Flag("-with", "-w").
 		String().
 		Global().
-		FieldsFromFlag("").
+		FieldsFromFlag("-file").
 		Help("Second field to correlate with (for cross-correlation)").
 		Done().
 		Flag("-auto", "-a").
@@ -58,10 +65,13 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Help("Generate Go code instead of executing").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var field, withField, outputField string
+			var inputFile, field, withField, outputField string
 			var auto, same, generate bool
 			var maxLag int
 
+			if val, ok := ctx.GlobalFlags["-file"]; ok {
+				inputFile = val.(string)
+			}
 			if val, ok := ctx.GlobalFlags["-field"]; ok {
 				field = val.(string)
 			}
@@ -114,15 +124,66 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			if shouldGenerate(generate) {
-				return generateCorrelateCode(field, withField, outputField, auto, same, maxLag)
+				return generateCorrelateCode(inputFile, field, withField, outputField, auto, same, maxLag)
 			}
 
-			// Read all records from stdin
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
-			records := slices.Collect(schemaAndRecords.Records)
+			// Extract signals based on input source
+			var signalA, signalB ssql.Signal
+			var records []ssql.Record
+			var err error
 
-			// Extract signals from fields
-			signalA := ssql.ExtractSignalFromSlice(records, field)
+			if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
+				// Optimized path: direct Arrow signal extraction
+				signalA, err = ssql.ExtractSignalFromArrow(inputFile, field)
+				if err != nil {
+					return fmt.Errorf("extracting signal from Arrow: %w", err)
+				}
+				if !auto || maxLag == 0 {
+					// Need second signal for cross-correlation or full autocorrelation
+					signalB, err = ssql.ExtractSignalFromArrow(inputFile, withField)
+					if err != nil {
+						return fmt.Errorf("extracting second signal from Arrow: %w", err)
+					}
+				}
+			} else if inputFile != "" {
+				// Read from other file formats via Records
+				lower := strings.ToLower(inputFile)
+				switch {
+				case strings.HasSuffix(lower, ".csv"):
+					recs, rerr := ssql.ReadCSV(inputFile)
+					if rerr != nil {
+						return fmt.Errorf("reading CSV: %w", rerr)
+					}
+					records = slices.Collect(recs)
+				case strings.HasSuffix(lower, ".json"):
+					recs, rerr := ssql.ReadJSON(inputFile)
+					if rerr != nil {
+						return fmt.Errorf("reading JSON: %w", rerr)
+					}
+					records = slices.Collect(recs)
+				case strings.HasSuffix(lower, ".jsonl"):
+					file, ferr := os.Open(inputFile)
+					if ferr != nil {
+						return fmt.Errorf("opening JSONL file: %w", ferr)
+					}
+					defer file.Close()
+					records = slices.Collect(lib.ReadJSONL(file))
+				default:
+					return fmt.Errorf("unsupported file format: %s", inputFile)
+				}
+				signalA = ssql.ExtractSignalFromSlice(records, field)
+				if !auto || maxLag == 0 {
+					signalB = ssql.ExtractSignalFromSlice(records, withField)
+				}
+			} else {
+				// Read from stdin (pipeline mode)
+				schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+				records = slices.Collect(schemaAndRecords.Records)
+				signalA = ssql.ExtractSignalFromSlice(records, field)
+				if !auto || maxLag == 0 {
+					signalB = ssql.ExtractSignalFromSlice(records, withField)
+				}
+			}
 
 			if len(signalA) == 0 {
 				return fmt.Errorf("no signal data found in field %q", field)
@@ -130,14 +191,12 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Compute correlation
 			var result ssql.Signal
-			var err error
 
 			if auto && maxLag > 0 {
 				// Autocorrelation with max lag limit
 				result, err = ssql.AutoCorrelateMax(signalA, maxLag)
 			} else {
 				// Cross-correlation or full autocorrelation
-				signalB := ssql.ExtractSignalFromSlice(records, withField)
 				if len(signalB) == 0 {
 					return fmt.Errorf("no signal data found in field %q", withField)
 				}
@@ -193,7 +252,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // generateCorrelateCode generates Go code for the correlate command
-func generateCorrelateCode(fieldA, fieldB, outputField string, auto, same bool, maxLag int) error {
+func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, same bool, maxLag int) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -204,6 +263,59 @@ func generateCorrelateCode(fieldA, fieldB, outputField string, auto, same bool, 
 		}
 	}
 
+	// If reading directly from Arrow file, generate optimized code
+	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
+		var correlateCall string
+		if auto && maxLag > 0 {
+			correlateCall = fmt.Sprintf(`ssql.AutoCorrelateMax(signalA, %d)`, maxLag)
+		} else if auto {
+			if same {
+				correlateCall = `ssql.CorrelateSame(signalA, signalA)`
+			} else {
+				correlateCall = `ssql.Correlate(signalA, signalA)`
+			}
+		} else {
+			if same {
+				correlateCall = `ssql.CorrelateSame(signalA, signalB)`
+			} else {
+				correlateCall = `ssql.Correlate(signalA, signalB)`
+			}
+		}
+
+		var signalBExtract string
+		if !auto {
+			signalBExtract = fmt.Sprintf(`signalB, err := ssql.ExtractSignalFromArrow(%q, %q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error extracting second signal: %%v\n", err)
+		os.Exit(1)
+	}
+
+	`, inputFile, fieldB)
+		}
+
+		code := fmt.Sprintf(`signalA, err := ssql.ExtractSignalFromArrow(%q, %q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error extracting signal: %%v\n", err)
+		os.Exit(1)
+	}
+
+	%sresult, err := %s
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error computing correlation: %%v\n", err)
+		os.Exit(1)
+	}
+
+	correlatedRecords := signalToRecordsFunc(result, %q)`,
+			inputFile, fieldA,
+			signalBExtract,
+			correlateCall,
+			outputField)
+
+		frag := lib.NewInitFragment("correlatedRecords", code, []string{"os"}, getCommandString())
+		return lib.WriteCodeFragment(frag)
+	}
+
+	// Standard pipeline mode
 	var inputVar string
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
