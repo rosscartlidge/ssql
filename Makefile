@@ -154,7 +154,7 @@ install-gpu: gpu
 # Build Docker image with GPU support
 docker-gpu-image:
 	@echo "Building Docker image with GPU support..."
-	DOCKER_BUILDKIT=1 docker build -f Dockerfile.gpu -t ssql:gpu .
+	docker build -f Dockerfile.gpu -t ssql:gpu .
 	@echo "✓ Built ssql:gpu image"
 	@echo ""
 	@echo "Run with: docker run --gpus all ssql:gpu version"
@@ -162,7 +162,7 @@ docker-gpu-image:
 # Build and extract ssql_gpu binary using Docker (no local CUDA needed)
 docker-gpu-extract:
 	@echo "Building ssql_gpu via Docker..."
-	DOCKER_BUILDKIT=1 docker build -f Dockerfile.gpu -t ssql:gpu-builder .
+	docker build -f Dockerfile.gpu -t ssql:gpu-builder .
 	@echo "Extracting binary..."
 	docker create --name ssql-gpu-extract ssql:gpu-builder
 	docker cp ssql-gpu-extract:/usr/local/bin/ssql_gpu ./ssql_gpu
