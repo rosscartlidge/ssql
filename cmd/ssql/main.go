@@ -42,6 +42,7 @@ func buildRootCommand() *cf.Command {
 	cmd = commands.RegisterIFFT(cmd)
 	cmd = commands.RegisterConvolve(cmd)
 	cmd = commands.RegisterCorrelate(cmd)
+	cmd = commands.RegisterSpectrogram(cmd)
 	cmd = commands.RegisterTo(cmd)
 	cmd = commands.RegisterGenerateGo(cmd)
 

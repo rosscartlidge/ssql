@@ -39,3 +39,9 @@ func convolveGPU(signal, kernel Signal) (Signal, error) {
 func ifftGPU(magnitude, phase []float64) (Signal, error) {
 	return nil, fmt.Errorf("GPU support not compiled in - build with -tags gpu")
 }
+
+// batchedFFTMagnitudeGPU computes FFT magnitude for multiple frames in a single GPU call.
+// Stub version: returns error when GPU support not compiled in.
+func batchedFFTMagnitudeGPU(frames []float64, windowSize, numFrames int, window []float64) ([]float64, int, error) {
+	return nil, 0, fmt.Errorf("GPU support not compiled in - build with -tags gpu")
+}

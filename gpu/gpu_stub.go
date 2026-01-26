@@ -89,6 +89,11 @@ func SumFloat64BatchCPU(columns [][]float64) []float64 {
 	return results
 }
 
+// BatchedFFTMagnitude returns an error when GPU support is not compiled in.
+func BatchedFFTMagnitude(frames []float64, windowSize, numFrames int, window []float64) ([]float64, int, error) {
+	return nil, 0, ErrNotCompiled
+}
+
 // FFTMagnitude returns an error when GPU support is not compiled in.
 func FFTMagnitude(data []float64) ([]float64, error) {
 	return nil, ErrNotCompiled

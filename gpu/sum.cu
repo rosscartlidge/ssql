@@ -1233,4 +1233,191 @@ int gpuIFFT(const double* hostMagnitude, const double* hostPhase, int64_t numBin
     return 0;
 }
 
+// ============================================================================
+// Batched FFT for Spectrogram (STFT)
+// ============================================================================
+
+// Kernel to apply a window function to all frames simultaneously.
+// Each thread handles one sample in one frame.
+// frames: contiguous frames [frame0[0..ws-1], frame1[0..ws-1], ...]
+// window: window coefficients [0..ws-1]
+// output: windowed frames (same layout)
+__global__ void applyWindowBatchKernel(const double* frames, const double* window,
+                                        double* output, int64_t windowSize, int64_t totalSamples) {
+    int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < totalSamples) {
+        int64_t withinFrame = idx % windowSize;
+        output[idx] = frames[idx] * window[withinFrame];
+    }
+}
+
+// Batched FFT magnitude for spectrogram (STFT).
+// Computes FFT of multiple frames in a single GPU operation.
+//
+// hostFrames: all frames laid out contiguously [frame0, frame1, ...] each of windowSize
+// windowSize: size of each FFT frame
+// numFrames: number of frames
+// hostWindow: window function coefficients (windowSize elements), or nullptr for no windowing
+// hostMagnitudes: output pointer, receives all magnitude arrays contiguous
+//                 [mag0[0..freqBins-1], mag1[0..freqBins-1], ...]
+// outBinsPerFrame: receives number of frequency bins per frame (windowSize/2+1)
+//
+// Returns 0 on success.
+int gpuBatchedFFTMagnitude(const double* hostFrames, int64_t windowSize, int numFrames,
+                            const double* hostWindow,
+                            double** hostMagnitudes, int64_t* outBinsPerFrame) {
+    if (windowSize <= 0 || numFrames <= 0) {
+        *outBinsPerFrame = 0;
+        *hostMagnitudes = nullptr;
+        return 0;
+    }
+
+    cudaError_t cudaErr;
+    cufftResult fftErr;
+
+    int64_t totalSamples = windowSize * (int64_t)numFrames;
+    int64_t freqBins = windowSize / 2 + 1;
+    *outBinsPerFrame = freqBins;
+
+    // Allocate device memory for input frames
+    double* devFrames = nullptr;
+    cudaErr = cudaMalloc(&devFrames, totalSamples * sizeof(double));
+    if (cudaErr != cudaSuccess) return -1;
+
+    // Copy frames to device
+    cudaErr = cudaMemcpy(devFrames, hostFrames, totalSamples * sizeof(double), cudaMemcpyHostToDevice);
+    if (cudaErr != cudaSuccess) {
+        cudaFree(devFrames);
+        return -2;
+    }
+
+    // Apply window function if provided
+    double* devWindowed = devFrames;  // Use same buffer if no window
+    if (hostWindow != nullptr) {
+        // Copy window to device
+        double* devWindow = nullptr;
+        cudaErr = cudaMalloc(&devWindow, windowSize * sizeof(double));
+        if (cudaErr != cudaSuccess) {
+            cudaFree(devFrames);
+            return -3;
+        }
+        cudaErr = cudaMemcpy(devWindow, hostWindow, windowSize * sizeof(double), cudaMemcpyHostToDevice);
+        if (cudaErr != cudaSuccess) {
+            cudaFree(devFrames);
+            cudaFree(devWindow);
+            return -4;
+        }
+
+        // Allocate output for windowed frames
+        devWindowed = nullptr;
+        cudaErr = cudaMalloc(&devWindowed, totalSamples * sizeof(double));
+        if (cudaErr != cudaSuccess) {
+            cudaFree(devFrames);
+            cudaFree(devWindow);
+            return -5;
+        }
+
+        // Apply window to all frames
+        int blockSize = 256;
+        int numBlocks = (totalSamples + blockSize - 1) / blockSize;
+        applyWindowBatchKernel<<<numBlocks, blockSize>>>(devFrames, devWindow, devWindowed, windowSize, totalSamples);
+
+        cudaErr = cudaDeviceSynchronize();
+        cudaFree(devWindow);
+        cudaFree(devFrames);  // Original frames no longer needed
+        devFrames = nullptr;
+
+        if (cudaErr != cudaSuccess) {
+            cudaFree(devWindowed);
+            return -6;
+        }
+    }
+
+    // Allocate complex output array for all frames
+    // Each frame produces freqBins complex values
+    int64_t totalComplexOut = freqBins * (int64_t)numFrames;
+    cufftDoubleComplex* devComplex = nullptr;
+    cudaErr = cudaMalloc(&devComplex, totalComplexOut * sizeof(cufftDoubleComplex));
+    if (cudaErr != cudaSuccess) {
+        cudaFree(devWindowed);
+        return -7;
+    }
+
+    // Create batched cuFFT plan using cufftPlanMany
+    // This is the key optimization: one plan for ALL frames
+    cufftHandle plan;
+    int rank = 1;
+    int n_arr[1] = { (int)windowSize };
+    int inembed[1] = { (int)windowSize };
+    int onembed[1] = { (int)freqBins };
+
+    fftErr = cufftPlanMany(
+        &plan,
+        rank,           // 1D transforms
+        n_arr,          // transform size
+        inembed,        // input dimensions
+        1,              // input stride
+        (int)windowSize, // input distance between batches
+        onembed,        // output dimensions
+        1,              // output stride
+        (int)freqBins,  // output distance between batches
+        CUFFT_D2Z,      // double real to double complex
+        numFrames       // batch count
+    );
+    if (fftErr != CUFFT_SUCCESS) {
+        cudaFree(devWindowed);
+        cudaFree(devComplex);
+        return -8;
+    }
+
+    // Execute batched FFT - all frames at once
+    fftErr = cufftExecD2Z(plan, devWindowed, devComplex);
+    cufftDestroy(plan);
+    cudaFree(devWindowed);
+
+    if (fftErr != CUFFT_SUCCESS) {
+        cudaFree(devComplex);
+        return -9;
+    }
+
+    // Allocate device memory for magnitude output
+    double* devMagnitudes = nullptr;
+    cudaErr = cudaMalloc(&devMagnitudes, totalComplexOut * sizeof(double));
+    if (cudaErr != cudaSuccess) {
+        cudaFree(devComplex);
+        return -10;
+    }
+
+    // Compute magnitudes for all frames in one kernel launch
+    int blockSize = 256;
+    int numBlocks = (totalComplexOut + blockSize - 1) / blockSize;
+    computeMagnitudeKernel<<<numBlocks, blockSize>>>(devComplex, devMagnitudes, totalComplexOut);
+
+    cudaErr = cudaDeviceSynchronize();
+    cudaFree(devComplex);
+
+    if (cudaErr != cudaSuccess) {
+        cudaFree(devMagnitudes);
+        return -11;
+    }
+
+    // Allocate host output and copy all magnitudes back in one transfer
+    *hostMagnitudes = (double*)malloc(totalComplexOut * sizeof(double));
+    if (*hostMagnitudes == nullptr) {
+        cudaFree(devMagnitudes);
+        return -12;
+    }
+
+    cudaErr = cudaMemcpy(*hostMagnitudes, devMagnitudes, totalComplexOut * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaFree(devMagnitudes);
+
+    if (cudaErr != cudaSuccess) {
+        free(*hostMagnitudes);
+        *hostMagnitudes = nullptr;
+        return -13;
+    }
+
+    return 0;
+}
+
 } // extern "C"

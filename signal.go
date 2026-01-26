@@ -303,6 +303,309 @@ func SobelKernel() Signal {
 }
 
 // ============================================================================
+// Window Functions (for Spectrogram / STFT)
+// ============================================================================
+
+// HannWindow generates a Hann (raised cosine) window of length n.
+// w[k] = 0.5 - 0.5*cos(2πk/(n-1))
+func HannWindow(n int) Signal {
+	if n <= 0 {
+		return Signal{}
+	}
+	if n == 1 {
+		return Signal{1}
+	}
+	w := make(Signal, n)
+	for k := 0; k < n; k++ {
+		w[k] = 0.5 - 0.5*math.Cos(2*math.Pi*float64(k)/float64(n-1))
+	}
+	return w
+}
+
+// HammingWindow generates a Hamming window of length n.
+// w[k] = 0.54 - 0.46*cos(2πk/(n-1))
+func HammingWindow(n int) Signal {
+	if n <= 0 {
+		return Signal{}
+	}
+	if n == 1 {
+		return Signal{1}
+	}
+	w := make(Signal, n)
+	for k := 0; k < n; k++ {
+		w[k] = 0.54 - 0.46*math.Cos(2*math.Pi*float64(k)/float64(n-1))
+	}
+	return w
+}
+
+// BlackmanWindow generates a Blackman window of length n.
+// w[k] = 0.42 - 0.5*cos(2πk/(n-1)) + 0.08*cos(4πk/(n-1))
+func BlackmanWindow(n int) Signal {
+	if n <= 0 {
+		return Signal{}
+	}
+	if n == 1 {
+		return Signal{1}
+	}
+	w := make(Signal, n)
+	for k := 0; k < n; k++ {
+		w[k] = 0.42 - 0.5*math.Cos(2*math.Pi*float64(k)/float64(n-1)) + 0.08*math.Cos(4*math.Pi*float64(k)/float64(n-1))
+	}
+	return w
+}
+
+// ApplyWindow multiplies a signal by a window function element-wise.
+// If the signal and window have different lengths, the shorter length is used.
+func ApplyWindow(signal, window Signal) Signal {
+	n := len(signal)
+	if len(window) < n {
+		n = len(window)
+	}
+	result := make(Signal, n)
+	for i := 0; i < n; i++ {
+		result[i] = signal[i] * window[i]
+	}
+	return result
+}
+
+// ============================================================================
+// Spectrogram (Short-Time Fourier Transform)
+// ============================================================================
+
+// SpectrogramOptions configures the STFT computation.
+type SpectrogramOptions struct {
+	WindowSize int     // FFT window size (default: 1024)
+	HopSize    int     // Samples between windows (default: WindowSize/4)
+	Window     string  // "hann", "hamming", "blackman", "none" (default: "hann")
+	SampleRate float64 // For frequency axis (default: 1.0)
+}
+
+// SpectrogramBin represents a single time-frequency magnitude value.
+type SpectrogramBin struct {
+	TimeIndex int
+	TimeStart float64 // start sample / sampleRate
+	FreqIndex int
+	Frequency float64
+	Magnitude float64
+}
+
+// Spectrogram computes the Short-Time Fourier Transform (STFT) of a signal.
+// Returns a slice of SpectrogramBin representing the time × frequency × magnitude output.
+// Each time frame is windowed, then FFT'd to produce magnitude values.
+//
+// Automatically uses GPU acceleration when available. The batched GPU path processes
+// all frames in a single GPU call using cufftPlanMany, which amortizes PCIe transfer
+// overhead across all frames. This provides significant speedup for spectrograms with
+// many frames (e.g., 1700 frames of audio at 44.1kHz).
+func Spectrogram(signal Signal, opts SpectrogramOptions) ([]SpectrogramBin, error) {
+	// Apply defaults
+	if opts.WindowSize <= 0 {
+		opts.WindowSize = 1024
+	}
+	if opts.HopSize <= 0 {
+		opts.HopSize = opts.WindowSize / 4
+	}
+	if opts.SampleRate <= 0 {
+		opts.SampleRate = 1.0
+	}
+
+	n := len(signal)
+	if n == 0 {
+		return nil, nil
+	}
+	if opts.WindowSize > n {
+		opts.WindowSize = n
+	}
+
+	// Build window
+	var window Signal
+	switch opts.Window {
+	case "hamming":
+		window = HammingWindow(opts.WindowSize)
+	case "blackman":
+		window = BlackmanWindow(opts.WindowSize)
+	case "none", "rectangular", "rect":
+		window = nil // No windowing
+	default: // "hann" or empty
+		window = HannWindow(opts.WindowSize)
+	}
+
+	// Compute number of frames
+	numFrames := 0
+	for start := 0; start+opts.WindowSize <= n; start += opts.HopSize {
+		numFrames++
+	}
+	if numFrames == 0 {
+		return nil, nil
+	}
+
+	// Try batched GPU path: use GPU when there are enough frames to amortize transfer overhead.
+	// Even small windows (1024) benefit when there are many frames (e.g., 100+).
+	// Threshold: total samples across all frames >= 32K (e.g., 32 frames × 1024 window).
+	totalFrameSamples := numFrames * opts.WindowSize
+	if gpuAvailableForSignal() && totalFrameSamples >= 32768 {
+		bins, err := spectrogramGPU(signal, opts, window, numFrames)
+		if err == nil {
+			return bins, nil
+		}
+		// GPU failed, fall through to CPU path
+	}
+
+	return spectrogramCPU(signal, opts, window, numFrames)
+}
+
+// spectrogramGPU computes spectrogram using batched GPU FFT.
+// All frames are extracted, laid out contiguously, and processed in a single GPU call.
+func spectrogramGPU(signal Signal, opts SpectrogramOptions, window Signal, numFrames int) ([]SpectrogramBin, error) {
+	n := len(signal)
+	freqBins := opts.WindowSize/2 + 1
+
+	// Extract all frames into a contiguous buffer for GPU transfer
+	frames := make([]float64, numFrames*opts.WindowSize)
+	frameIdx := 0
+	for start := 0; start+opts.WindowSize <= n; start += opts.HopSize {
+		copy(frames[frameIdx*opts.WindowSize:], signal[start:start+opts.WindowSize])
+		frameIdx++
+	}
+
+	// Call batched GPU FFT (windowing is applied on GPU if window is non-nil)
+	var windowArg []float64
+	if window != nil {
+		windowArg = []float64(window)
+	}
+	magnitudes, binsPerFrame, err := batchedFFTMagnitudeGPU(frames, opts.WindowSize, numFrames, windowArg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build SpectrogramBin results from flat magnitude array
+	bins := make([]SpectrogramBin, numFrames*binsPerFrame)
+	binIdx := 0
+	start := 0
+	for ti := 0; ti < numFrames; ti++ {
+		timeStart := float64(start) / opts.SampleRate
+		magOffset := ti * binsPerFrame
+		for fi := 0; fi < binsPerFrame; fi++ {
+			freq := float64(fi) * opts.SampleRate / float64(opts.WindowSize)
+			bins[binIdx] = SpectrogramBin{
+				TimeIndex: ti,
+				TimeStart: timeStart,
+				FreqIndex: fi,
+				Frequency: freq,
+				Magnitude: magnitudes[magOffset+fi],
+			}
+			binIdx++
+		}
+		start += opts.HopSize
+	}
+
+	// Trim in case binsPerFrame differs from expected freqBins
+	if binIdx < len(bins) {
+		bins = bins[:binIdx]
+	}
+	_ = freqBins // used for documentation, GPU returns actual binsPerFrame
+
+	return bins, nil
+}
+
+// spectrogramCPU computes spectrogram using per-frame CPU FFT.
+func spectrogramCPU(signal Signal, opts SpectrogramOptions, window Signal, numFrames int) ([]SpectrogramBin, error) {
+	n := len(signal)
+	freqBins := opts.WindowSize/2 + 1
+
+	bins := make([]SpectrogramBin, 0, numFrames*freqBins)
+
+	timeIdx := 0
+	for start := 0; start+opts.WindowSize <= n; start += opts.HopSize {
+		frame := signal[start : start+opts.WindowSize]
+
+		// Apply window
+		if window != nil {
+			frame = ApplyWindow(frame, window)
+		}
+
+		// Compute FFT magnitude for this frame
+		mag, err := FFTMagnitude(frame)
+		if err != nil {
+			return nil, fmt.Errorf("FFT at frame %d (sample %d): %w", timeIdx, start, err)
+		}
+
+		timeStart := float64(start) / opts.SampleRate
+
+		for fi := 0; fi < len(mag); fi++ {
+			freq := float64(fi) * opts.SampleRate / float64(opts.WindowSize)
+			bins = append(bins, SpectrogramBin{
+				TimeIndex: timeIdx,
+				TimeStart: timeStart,
+				FreqIndex: fi,
+				Frequency: freq,
+				Magnitude: mag[fi],
+			})
+		}
+
+		timeIdx++
+	}
+
+	return bins, nil
+}
+
+// SpectrogramToRecords converts spectrogram bins to a sequence of Records.
+// Each record has: time_index, time, frequency, magnitude.
+func SpectrogramToRecords(bins []SpectrogramBin) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		for _, bin := range bins {
+			mut := MakeMutableRecord()
+			mut = mut.Int("time_index", int64(bin.TimeIndex))
+			mut = mut.Float("time", bin.TimeStart)
+			mut = mut.Float("frequency", bin.Frequency)
+			mut = mut.Float("magnitude", bin.Magnitude)
+			if !yield(mut.Freeze()) {
+				return
+			}
+		}
+	}
+}
+
+// SpectrogramFilter returns a filter that computes a spectrogram on a field
+// and returns time × frequency × magnitude records.
+func SpectrogramFilter(field string, opts SpectrogramOptions) Filter[Record, Record] {
+	return func(records iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			// Collect all records to extract signal
+			collected := make([]Record, 0)
+			for r := range records {
+				collected = append(collected, r)
+			}
+
+			// Extract signal from field
+			signal := ExtractSignalFromSlice(collected, field)
+
+			if len(signal) == 0 {
+				return
+			}
+
+			// Compute spectrogram
+			bins, err := Spectrogram(signal, opts)
+			if err != nil {
+				return
+			}
+
+			// Yield spectrogram records
+			for _, bin := range bins {
+				mut := MakeMutableRecord()
+				mut = mut.Int("time_index", int64(bin.TimeIndex))
+				mut = mut.Float("time", bin.TimeStart)
+				mut = mut.Float("frequency", bin.Frequency)
+				mut = mut.Float("magnitude", bin.Magnitude)
+				if !yield(mut.Freeze()) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// ============================================================================
 // Record Integration
 // ============================================================================
 

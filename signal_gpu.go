@@ -48,3 +48,13 @@ func ifftGPU(magnitude, phase []float64) (Signal, error) {
 	result, err := gpu.IFFT(magnitude, phase)
 	return Signal(result), err
 }
+
+// batchedFFTMagnitudeGPU computes FFT magnitude for multiple frames in a single GPU call.
+// frames: contiguous frame data [frame0, frame1, ...]
+// windowSize: size of each frame
+// numFrames: number of frames
+// window: window function coefficients (or nil for no windowing)
+// Returns flat magnitude array and number of frequency bins per frame.
+func batchedFFTMagnitudeGPU(frames []float64, windowSize, numFrames int, window []float64) ([]float64, int, error) {
+	return gpu.BatchedFFTMagnitude(frames, windowSize, numFrames, window)
+}

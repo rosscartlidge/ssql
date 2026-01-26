@@ -642,3 +642,138 @@ func BenchmarkConvolveFFTGPU(b *testing.B) {
 		})
 	}
 }
+
+func TestBatchedFFTMagnitude(t *testing.T) {
+	if !Available() {
+		t.Skip("GPU not available")
+	}
+
+	// Create 4 frames of size 256, each a pure sine at different frequencies
+	windowSize := 256
+	numFrames := 4
+	frames := make([]float64, windowSize*numFrames)
+	for f := 0; f < numFrames; f++ {
+		freq := float64(f+1) * 10.0 // 10, 20, 30, 40 Hz
+		offset := f * windowSize
+		for i := 0; i < windowSize; i++ {
+			frames[offset+i] = math.Sin(2 * math.Pi * freq * float64(i) / float64(windowSize))
+		}
+	}
+
+	// No window function
+	magnitudes, binsPerFrame, err := BatchedFFTMagnitude(frames, windowSize, numFrames, nil)
+	if err != nil {
+		t.Fatalf("BatchedFFTMagnitude: %v", err)
+	}
+
+	expectedBins := windowSize/2 + 1
+	if binsPerFrame != expectedBins {
+		t.Fatalf("binsPerFrame = %d, want %d", binsPerFrame, expectedBins)
+	}
+	if len(magnitudes) != numFrames*binsPerFrame {
+		t.Fatalf("len(magnitudes) = %d, want %d", len(magnitudes), numFrames*binsPerFrame)
+	}
+
+	// Each frame should have a peak at its frequency bin
+	for f := 0; f < numFrames; f++ {
+		freqBin := (f + 1) * 10 // Expected peak bin
+		offset := f * binsPerFrame
+
+		// Find the peak bin for this frame
+		peakBin := 0
+		peakVal := 0.0
+		for i := 0; i < binsPerFrame; i++ {
+			if magnitudes[offset+i] > peakVal {
+				peakVal = magnitudes[offset+i]
+				peakBin = i
+			}
+		}
+
+		if peakBin != freqBin {
+			t.Errorf("frame %d: peak at bin %d, want %d", f, peakBin, freqBin)
+		}
+	}
+}
+
+func TestBatchedFFTMagnitudeWithWindow(t *testing.T) {
+	if !Available() {
+		t.Skip("GPU not available")
+	}
+
+	windowSize := 512
+	numFrames := 8
+	frames := make([]float64, windowSize*numFrames)
+	for f := 0; f < numFrames; f++ {
+		offset := f * windowSize
+		for i := 0; i < windowSize; i++ {
+			frames[offset+i] = math.Sin(2 * math.Pi * 50 * float64(i) / float64(windowSize))
+		}
+	}
+
+	// Hann window
+	window := make([]float64, windowSize)
+	for i := 0; i < windowSize; i++ {
+		window[i] = 0.5 * (1 - math.Cos(2*math.Pi*float64(i)/float64(windowSize-1)))
+	}
+
+	magnitudes, binsPerFrame, err := BatchedFFTMagnitude(frames, windowSize, numFrames, window)
+	if err != nil {
+		t.Fatalf("BatchedFFTMagnitude with window: %v", err)
+	}
+
+	// All frames are the same signal, so all should have same peak
+	for f := 0; f < numFrames; f++ {
+		offset := f * binsPerFrame
+		peakBin := 0
+		peakVal := 0.0
+		for i := 0; i < binsPerFrame; i++ {
+			if magnitudes[offset+i] > peakVal {
+				peakVal = magnitudes[offset+i]
+				peakBin = i
+			}
+		}
+		if peakBin != 50 {
+			t.Errorf("frame %d: peak at bin %d, want 50", f, peakBin)
+		}
+	}
+}
+
+func BenchmarkBatchedFFTMagnitudeGPU(b *testing.B) {
+	if !Available() {
+		b.Skip("GPU not available")
+	}
+
+	cases := []struct {
+		windowSize int
+		numFrames  int
+	}{
+		{256, 172},    // ~1s @ 44.1kHz, hop=256
+		{1024, 172},   // ~1s @ 44.1kHz, hop=256
+		{1024, 1718},  // ~10s @ 44.1kHz, hop=256
+		{4096, 172},   // ~1s @ 44.1kHz, hop=256
+		{4096, 1718},  // ~10s @ 44.1kHz, hop=256
+	}
+
+	for _, c := range cases {
+		frames := make([]float64, c.windowSize*c.numFrames)
+		for i := range frames {
+			frames[i] = math.Sin(2 * math.Pi * float64(i) / float64(c.windowSize) * 10)
+		}
+
+		// Hann window
+		window := make([]float64, c.windowSize)
+		for i := 0; i < c.windowSize; i++ {
+			window[i] = 0.5 * (1 - math.Cos(2*math.Pi*float64(i)/float64(c.windowSize-1)))
+		}
+
+		// Warmup
+		BatchedFFTMagnitude(frames, c.windowSize, c.numFrames, window)
+
+		name := toString(c.windowSize) + "x" + toString(c.numFrames) + "f"
+		b.Run(name, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				BatchedFFTMagnitude(frames, c.windowSize, c.numFrames, window)
+			}
+		})
+	}
+}

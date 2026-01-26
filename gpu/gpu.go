@@ -25,6 +25,7 @@ int gpuSumFloat64Batch(const double* flatData, int numColumns, int64_t n, double
 int gpuFFTMagnitude(const double* hostData, int64_t n, double** hostMagnitude, int64_t* outN);
 int gpuFFTMagnitudePhase(const double* hostData, int64_t n, double** hostMagnitude, double** hostPhase, int64_t* outN);
 void gpuFFTFree(double* ptr);
+int gpuBatchedFFTMagnitude(const double* hostFrames, int64_t windowSize, int numFrames, const double* hostWindow, double** hostMagnitudes, int64_t* outBinsPerFrame);
 int gpuConvolveDirect(const double* hostSignal, int64_t signalLen, const double* hostKernel, int64_t kernelLen, double** hostOutput, int64_t* outLen);
 int gpuConvolveFFT(const double* hostSignal, int64_t signalLen, const double* hostKernel, int64_t kernelLen, double** hostOutput, int64_t* outLen);
 int gpuIFFT(const double* hostMagnitude, const double* hostPhase, int64_t numBins, double** hostOutput, int64_t* outLen);
@@ -476,4 +477,63 @@ func IFFT(magnitude, phase []float64) ([]float64, error) {
 	C.gpuFFTFree(output)
 
 	return result, nil
+}
+
+// BatchedFFTMagnitude computes FFT magnitude for multiple frames in a single GPU operation.
+// This is the key optimization for spectrogram: instead of N separate GPU calls (each with
+// PCIe transfer overhead), all frames are processed in one batched cuFFT call.
+//
+// frames: all frames laid out contiguously [frame0[0..windowSize-1], frame1[0..windowSize-1], ...]
+// windowSize: size of each FFT frame
+// numFrames: number of frames
+// window: window function coefficients (windowSize elements), or nil for no windowing
+//
+// Returns: flat magnitude array [mag0[0..bins-1], mag1[0..bins-1], ...], bins per frame, error
+func BatchedFFTMagnitude(frames []float64, windowSize, numFrames int, window []float64) ([]float64, int, error) {
+	if !Available() {
+		return nil, 0, fmt.Errorf("GPU not available")
+	}
+
+	if len(frames) == 0 || windowSize <= 0 || numFrames <= 0 {
+		return []float64{}, 0, nil
+	}
+
+	expectedLen := windowSize * numFrames
+	if len(frames) < expectedLen {
+		return nil, 0, fmt.Errorf("frames slice too short: got %d, need %d (%d frames × %d window)",
+			len(frames), expectedLen, numFrames, windowSize)
+	}
+
+	var windowPtr *C.double
+	if len(window) > 0 {
+		windowPtr = (*C.double)(unsafe.Pointer(&window[0]))
+	}
+
+	var magnitudes *C.double
+	var binsPerFrame C.int64_t
+
+	ret := C.gpuBatchedFFTMagnitude(
+		(*C.double)(unsafe.Pointer(&frames[0])),
+		C.int64_t(windowSize),
+		C.int(numFrames),
+		windowPtr,
+		&magnitudes,
+		&binsPerFrame,
+	)
+
+	if ret != 0 {
+		return nil, 0, fmt.Errorf("GPU batched FFT failed (code %d): %s", int(ret), LastError())
+	}
+
+	bins := int(binsPerFrame)
+	totalOut := bins * numFrames
+
+	// Copy result to Go slice and free C memory
+	result := make([]float64, totalOut)
+	for i := 0; i < totalOut; i++ {
+		result[i] = float64(*(*C.double)(unsafe.Pointer(uintptr(unsafe.Pointer(magnitudes)) + uintptr(i)*8)))
+	}
+	C.gpuFFTFree(magnitudes)
+
+	return result, bins, nil
 }
