@@ -149,13 +149,16 @@ When making changes to the library API or CLI commands, you MUST also update the
 - All three levels must pass before releasing
 
 **Periodic documentation review:**
-- Every 2-3 minor releases, review ALL docs in `doc/` for:
+- Every 2-3 minor releases, run `make doc-verify` and ensure it passes with zero warnings
+  - If new exported functions/types cause warnings, add them to the exclusion list in `scripts/doc-test.sh` or document them in the LLM guides
+  - If cross-reference checks fail, update the module paths or negative-example lists in `scripts/doc-verify.sh`
+- Also review ALL docs in `doc/` for:
   - Outdated import paths (e.g., missing `/v4` suffix)
   - Missing new features (Signal Processing, Arrow I/O, new commands)
   - Old API patterns or command syntax
   - Broken cross-references after file moves
 - Files to review: `doc/*.md`, `README.md`, `CLAUDE.md`
-- Last full review: v4.8.12 (January 2026)
+- Last full review: v4.11.0 (January 2026)
 
 **Common mistakes to avoid:**
 - ❌ Changing API without updating doc/api-reference.md
