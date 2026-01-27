@@ -165,7 +165,7 @@ chart_docs=$(grep -l "QuickChart\|InteractiveChart" doc/*.md README.md)
 
 for doc in $chart_docs; do
     # Verify chart functions are called correctly
-    if grep "QuickChart\|InteractiveChart" "$doc" | grep -q "streamv3\."; then
+    if grep "QuickChart\|InteractiveChart" "$doc" | grep -q "ssql\."; then
         pass "Chart examples in $(basename $doc) use correct package prefix"
     else
         warn "Chart examples in $(basename $doc) may be missing package prefix"
