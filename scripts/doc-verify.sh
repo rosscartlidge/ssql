@@ -205,10 +205,10 @@ fi
 section "7. Checking go.mod"
 
 if [[ -f "go.mod" ]]; then
-    if grep -q "go 1.23" go.mod; then
+    if grep -qE "^go 1\.(2[3-9]|[3-9][0-9])" go.mod; then
         pass "go.mod specifies Go 1.23+"
     else
-        warn "go.mod may not specify Go 1.23+"
+        warn "go.mod does not specify Go 1.23+"
     fi
 else
     fail "go.mod not found"
