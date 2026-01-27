@@ -14,7 +14,7 @@ NC='\033[0m'
 ERRORS=0
 WARNINGS=0
 
-echo -e "${BLUE}StreamV3 Documentation Verification (Level 3)${NC}"
+echo -e "${BLUE}ssql Documentation Verification (Level 3)${NC}"
 echo "================================================="
 echo ""
 
@@ -102,16 +102,23 @@ echo "(Most API reference examples are documentation snippets, not complete prog
 section "2. Cross-Referencing Documented Functions"
 
 # Extract function names mentioned in LLM docs
-doc_funcs=$(grep -oh "streamv3\.[A-Z][a-zA-Z]*" doc/ai-code-generation.md doc/ai-human-guide.md | sort -u | sed 's/streamv3\.//')
+doc_funcs=$(grep -oh "ssql\.[A-Z][a-zA-Z]*" doc/ai-code-generation.md doc/ai-human-guide.md | sort -u | sed 's/ssql\.//')
 
 # Get actual exported functions and types (use -all to include all exports)
-actual_funcs=$(go doc -all github.com/rosscartlidge/ssql 2>/dev/null | grep -E "^(func|type) " | awk '{print $2}' | cut -d'(' -f1 | cut -d'[' -f1 | cut -d' ' -f1 | sort -u)
+actual_funcs=$(go doc -all github.com/rosscartlidge/ssql/v4 2>/dev/null | grep -E "^(func|type) " | awk '{print $2}' | cut -d'(' -f1 | cut -d'[' -f1 | cut -d' ' -f1 | sort -u)
+
+# Names used only in negative examples (showing what NOT to do)
+negative_examples="Aggregation Map Take"
 
 for func in $doc_funcs; do
+    # Skip names that only appear in negative examples
+    if echo "$negative_examples" | grep -qw "$func"; then
+        continue
+    fi
+
     if echo "$actual_funcs" | grep -q "^${func}$"; then
         pass "Documented function exists: $func"
     else
-        # Use warning instead of error - may be false positive from negative examples
         warn "Documented reference not found: $func (may be in negative example or outdated)"
     fi
 done

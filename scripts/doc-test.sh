@@ -14,7 +14,7 @@ NC='\033[0m'
 ERRORS=0
 WARNINGS=0
 
-echo -e "${BLUE}StreamV3 Documentation Testing (Level 2)${NC}"
+echo -e "${BLUE}ssql Documentation Testing (Level 2)${NC}"
 echo "=============================================="
 echo ""
 
@@ -60,9 +60,75 @@ exported_funcs=$(go doc github.com/rosscartlidge/ssql/v4 | grep "^func " | awk '
 # Check if each is mentioned in LLM docs
 llm_files="doc/ai-code-generation.md doc/ai-human-guide.md"
 
+# Functions intentionally excluded from LLM guides:
+# - *FromReader/*ToWriter variants: streaming variants of core I/O, documented in api-reference.md
+# - *Safe variants: error-aware versions, documented in api-reference.md
+# - *Fast variants: optimized JSON I/O, documented in api-reference.md
+# - Display*: table display helpers, used internally by CLI
+# - Detect*/Extract*: format-specific utilities
+# - *Key/Validate*: internal helpers exposed for advanced use
+# - GPU/signal internals: documented in cli-signal-processing.md
+# - Exec*/ReadCommand*: command execution, documented in api-reference.md
+# - ReadLines/WriteLines: line-oriented I/O
+excluded_funcs="
+DetectTSVSeparator
+DisplayTable
+DisplayTableWithFields
+ExecCommand
+ExecCommandSafe
+ExtractFieldsFromTSV
+ExtractSignalFromArrow
+FFTMagnitude
+GPUAvailable
+ReadArrowFromReader
+ReadCommandOutput
+ReadCommandOutputSafe
+ReadCSVFromReader
+ReadCSVSafe
+ReadCSVSafeFromReader
+ReadJSONAuto
+ReadJSONFast
+ReadJSONFastFromReader
+ReadJSONFastSafe
+ReadJSONFastSafeFromReader
+ReadJSONFromReader
+ReadJSONSafe
+ReadJSONSafeFromReader
+ReadLines
+ReadLinesSafe
+ReadTSV
+ReadTSVFromReader
+ReadTSVFromReaderWithSeparator
+RecordKey
+SpectrogramToRecords
+SpectrumToRecords
+StableKey
+TimeSeriesChart
+ValidateRecord
+WithSignal
+WriteArrowToWriter
+WriteCSV
+WriteCSVToWriter
+WriteJSON
+WriteJSONFast
+WriteJSONFastToWriter
+WriteJSONPretty
+WriteJSONToWriter
+WriteLines
+WriteTSV
+WriteTSVToWriter
+WriteTSVToWriterWithSeparator
+WriteTSVWithSeparator
+"
+
 for func in $exported_funcs; do
     # Skip generic type parameters
     if [[ "$func" =~ \[ ]]; then
+        continue
+    fi
+
+    # Skip intentionally excluded functions
+    if echo "$excluded_funcs" | grep -qw "$func"; then
         continue
     fi
 
@@ -86,9 +152,46 @@ section "2. Verifying Exported Types are Documented"
 
 exported_types=$(go doc github.com/rosscartlidge/ssql/v4 | grep "^type " | awk '{print $2}' | sort -u)
 
+# Types intentionally excluded from LLM guides:
+# - Config types: ChartConfig, CSVConfig, CommandConfig - used internally
+# - Chart internals: ChartData, ChartSummary - documented in api-reference.md
+# - Constraint interfaces: Comparable, OrderedValue - used by generics
+# - Internal types: Schema, ReadAtSeeker, ColumnInfo, FieldType, JSONString
+# - Join types: JoinPredicate, LookupClause, KeyExtractor - documented in api-reference.md
+# - Signal types: Spectrum, SpectrogramBin, SpectrogramOptions - documented in cli-signal-processing.md
+# - Sealed types: AggregateResult - implementation detail
+# - Stats: NumericStat - documented in api-reference.md
+excluded_types="
+AggregateResult
+ChartConfig
+ChartData
+ChartSummary
+ColumnInfo
+CommandConfig
+Comparable
+CSVConfig
+FieldType
+JoinPredicate
+JSONString
+KeyExtractor
+LookupClause
+NumericStat
+OrderedValue
+ReadAtSeeker
+Schema
+SpectrogramBin
+SpectrogramOptions
+Spectrum
+"
+
 for type in $exported_types; do
     # Skip generic type parameters
     if [[ "$type" =~ \[ ]]; then
+        continue
+    fi
+
+    # Skip intentionally excluded types
+    if echo "$excluded_types" | grep -qw "$type"; then
         continue
     fi
 
