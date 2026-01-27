@@ -708,6 +708,6 @@ go build -tags gpu -o fft_program fft_program.go
 
 ## Next Steps
 
-- [API Reference](../api-reference.md) - Use signal processing in Go code
-- [GPU Acceleration Details](../research/gpu-acceleration.md) - Technical deep-dive
+- [API Reference](api-reference.md) - Use signal processing in Go code
+- [GPU Acceleration Details](research/gpu-acceleration.md) - Technical deep-dive
 - [CLI Tutorial](cli-codelab.md) - General ssql usage
