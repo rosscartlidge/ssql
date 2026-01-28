@@ -1,5 +1,6 @@
 #!/bin/bash
-# Validates that code follows StreamV3 best practices and API patterns
+# Validates that generated Go code follows ssql best practices and API patterns
+# Usage: ./scripts/validate-ai-patterns.sh <go-file>
 
 # Colors
 RED='\033[0;31m'
@@ -20,62 +21,107 @@ if [ ! -f "$FILE" ]; then
     exit 1
 fi
 
-echo -e "${BLUE}Validating StreamV3 patterns in: $FILE${NC}"
+echo -e "${BLUE}Validating ssql patterns in: $FILE${NC}"
 echo ""
 
 ERRORS=0
 WARNINGS=0
 
-# Check 1: Correct import path
+# Check 1: Correct import path (v4)
 echo -n "Checking import path... "
-if grep -q '"github.com/rosscartlidge/ssql"' "$FILE"; then
+if grep -q '"github.com/rosscartlidge/ssql/v4"' "$FILE"; then
     echo -e "${GREEN}✓${NC}"
 else
-    echo -e "${RED}✗${NC}"
-    echo "  Error: Must import github.com/rosscartlidge/ssql"
-    ((ERRORS++))
+    if grep -q '"github.com/rosscartlidge/ssql"' "$FILE"; then
+        echo -e "${RED}✗${NC}"
+        echo "  Error: Import path missing /v4 suffix (found ssql without version)"
+        ((ERRORS++))
+    elif grep -q '"github.com/rosscartlidge/ssql/v3"' "$FILE"; then
+        echo -e "${RED}✗${NC}"
+        echo "  Error: Using old v3 import path (should be /v4)"
+        ((ERRORS++))
+    else
+        echo -e "${RED}✗${NC}"
+        echo "  Error: Must import github.com/rosscartlidge/ssql/v4"
+        ((ERRORS++))
+    fi
 fi
 
 # Check 2: No wrong import paths
 echo -n "Checking for wrong imports... "
-if grep -q '"github.com/rocketlaunchr/streamv3"' "$FILE"; then
+WRONG_IMPORTS=0
+if grep -q '"github.com/rocketlaunchr/' "$FILE"; then
     echo -e "${RED}✗${NC}"
     echo "  Error: Found wrong import path (rocketlaunchr instead of rosscartlidge)"
     ((ERRORS++))
-else
+    WRONG_IMPORTS=1
+fi
+if grep -q '"github.com/rosscartlidge/streamv3"' "$FILE"; then
+    echo -e "${RED}✗${NC}"
+    echo "  Error: Found old streamv3 import path (should be ssql/v4)"
+    ((ERRORS++))
+    WRONG_IMPORTS=1
+fi
+if [ $WRONG_IMPORTS -eq 0 ]; then
     echo -e "${GREEN}✓${NC}"
 fi
 
-# Check 3: SQL-style naming (Where not Filter)
+# Check 3: SQL-style naming (Where not Filter, Select not Map)
 echo -n "Checking SQL-style API usage... "
-FILTER_USAGE=$(grep -c "streamv3\.Filter(" "$FILE" || true)
-if [ "$FILTER_USAGE" -gt 0 ]; then
+NAMING_ISSUES=0
+if grep -q 'ssql\.Filter(' "$FILE"; then
     echo -e "${YELLOW}⚠${NC}"
     echo "  Warning: Found ssql.Filter() - should use ssql.Where() for filtering"
     ((WARNINGS++))
-else
+    NAMING_ISSUES=1
+fi
+if grep -qP 'ssql\.FlatMap\(' "$FILE"; then
+    echo -e "${YELLOW}⚠${NC}"
+    echo "  Warning: Found ssql.FlatMap() - should use ssql.SelectMany()"
+    ((WARNINGS++))
+    NAMING_ISSUES=1
+fi
+if grep -qP 'ssql\.Take\(' "$FILE"; then
+    echo -e "${YELLOW}⚠${NC}"
+    echo "  Warning: Found ssql.Take() - should use ssql.Limit()"
+    ((WARNINGS++))
+    NAMING_ISSUES=1
+fi
+if grep -qP 'ssql\.Skip\(' "$FILE"; then
+    echo -e "${YELLOW}⚠${NC}"
+    echo "  Warning: Found ssql.Skip() - should use ssql.Offset()"
+    ((WARNINGS++))
+    NAMING_ISSUES=1
+fi
+if [ $NAMING_ISSUES -eq 0 ]; then
     echo -e "${GREEN}✓${NC}"
 fi
 
-# Check 4: Error handling for ReadCSV
+# Check 4: Error handling for I/O operations
 echo -n "Checking error handling... "
-if grep -q "ReadCSV(" "$FILE"; then
+IO_OPS=0
+IO_HANDLED=0
+for op in ReadCSV ReadJSON ReadJSONFast ReadArrow; do
+    if grep -q "${op}(" "$FILE"; then
+        ((IO_OPS++))
+    fi
+done
+if [ $IO_OPS -gt 0 ]; then
     if grep -q "if err != nil" "$FILE"; then
         echo -e "${GREEN}✓${NC}"
     else
         echo -e "${RED}✗${NC}"
-        echo "  Error: ReadCSV used but no error handling found"
+        echo "  Error: I/O operations found but no error handling"
         ((ERRORS++))
     fi
 else
-    echo -e "${BLUE}N/A${NC} (no CSV reading)"
+    echo -e "${BLUE}N/A${NC} (no I/O operations)"
 fi
 
 # Check 5: Proper GroupByFields usage
 echo -n "Checking GroupByFields usage... "
 if grep -q "GroupByFields(" "$FILE"; then
-    # Check for wrong API: GroupByFields([]string{...}, []Aggregation{...})
-    if grep -q 'GroupByFields(\s*\[\]string{' "$FILE"; then
+    if grep -qP 'GroupByFields\(\s*\[\]string\{' "$FILE"; then
         echo -e "${RED}✗${NC}"
         echo "  Error: Wrong GroupByFields API - should be GroupByFields(namespace, field1, field2, ...)"
         ((ERRORS++))
@@ -89,20 +135,16 @@ fi
 # Check 6: Proper Aggregate usage
 echo -n "Checking Aggregate usage... "
 if grep -q "Aggregate(" "$FILE"; then
-    # Check for wrong Count syntax: Count("field_name")
-    if grep -q 'Count("' "$FILE" && ! grep -q 'Count()' "$FILE"; then
+    if grep -qP 'Count\("[^"]+"\)' "$FILE" && ! grep -q 'Count()' "$FILE"; then
         echo -e "${RED}✗${NC}"
-        echo "  Error: Wrong Count() syntax - should be Count() without field name in map"
+        echo "  Error: Wrong Count() syntax - Count() takes no parameters, field name is the map key"
         ((ERRORS++))
+    elif grep -q 'map\[string\]ssql\.AggregateFunc{' "$FILE"; then
+        echo -e "${GREEN}✓${NC}"
     else
-        # Check for proper map syntax
-        if grep -q 'map\[string\]streamv3\.AggregateFunc{' "$FILE"; then
-            echo -e "${GREEN}✓${NC}"
-        else
-            echo -e "${YELLOW}⚠${NC}"
-            echo "  Warning: Should use map[string]ssql.AggregateFunc{...}"
-            ((WARNINGS++))
-        fi
+        echo -e "${YELLOW}⚠${NC}"
+        echo "  Warning: Should use map[string]ssql.AggregateFunc{...}"
+        ((WARNINGS++))
     fi
 else
     echo -e "${BLUE}N/A${NC} (no aggregation)"
@@ -110,26 +152,110 @@ fi
 
 # Check 7: Proper use of Chain or Pipe
 echo -n "Checking composition style... "
-if grep -q "Chain(" "$FILE" || grep -q "Pipe(" "$FILE"; then
-    echo -e "${GREEN}✓${NC}"
-elif grep -q "streamv3\.Where\|streamv3\.Select\|streamv3\.GroupByFields" "$FILE"; then
-    echo -e "${YELLOW}⚠${NC}"
-    echo "  Warning: Consider using Chain() for better readability"
-    ((WARNINGS++))
+MULTI_OPS=$(grep -cP 'ssql\.(Where|Select|GroupByFields|Aggregate|SortBy|Limit|Offset|Update|InnerJoin|LeftJoin|DistinctBy)\(' "$FILE" || true)
+if [ "$MULTI_OPS" -ge 2 ]; then
+    if grep -q "Chain(" "$FILE" || grep -q "Pipe(" "$FILE"; then
+        echo -e "${GREEN}✓${NC}"
+    else
+        echo -e "${YELLOW}⚠${NC}"
+        echo "  Warning: Multiple operations found - consider using Chain() for readability"
+        ((WARNINGS++))
+    fi
+elif [ "$MULTI_OPS" -ge 1 ]; then
+    echo -e "${GREEN}✓${NC} (single operation, Chain() not required)"
 else
-    echo -e "${BLUE}N/A${NC} (simple pipeline)"
+    echo -e "${BLUE}N/A${NC} (no stream operations)"
 fi
 
-# Check 8: Compilation test
-echo -n "Checking compilation... "
-if go build -o /tmp/validate_test "$FILE" 2>/dev/null; then
+# Check 8: Record access patterns
+echo -n "Checking Record access... "
+RECORD_ISSUES=0
+if grep -qP 'record\["|r\["|rec\["' "$FILE"; then
+    echo -e "${RED}✗${NC}"
+    echo "  Error: Direct map access on Record (use GetOr/Get instead)"
+    ((ERRORS++))
+    RECORD_ISSUES=1
+fi
+if grep -qP '\.\(string\)|\.\(int64\)|\.\(float64\)' "$FILE"; then
+    echo -e "${YELLOW}⚠${NC}"
+    echo "  Warning: Type assertion found - prefer GetOr() for safe field access"
+    ((WARNINGS++))
+    RECORD_ISSUES=1
+fi
+if grep -q 'SetAny(' "$FILE"; then
+    echo -e "${RED}✗${NC}"
+    echo "  Error: SetAny() was removed in v2 - use typed setters (.String(), .Int(), .Float())"
+    ((ERRORS++))
+    RECORD_ISSUES=1
+fi
+if [ $RECORD_ISSUES -eq 0 ]; then
     echo -e "${GREEN}✓${NC}"
-    rm -f /tmp/validate_test
+fi
+
+# Check 9: Join function usage
+echo -n "Checking Join usage... "
+if grep -qP 'ssql\.Join\(' "$FILE" && ! grep -qP 'ssql\.(Inner|Left|Right|Full|Lookup)Join\(' "$FILE"; then
+    echo -e "${RED}✗${NC}"
+    echo "  Error: Bare ssql.Join() doesn't exist - use InnerJoin, LeftJoin, etc."
+    ((ERRORS++))
+elif grep -qP 'ssql\.(Inner|Left|Right|Full|Lookup)Join\(' "$FILE"; then
+    echo -e "${GREEN}✓${NC}"
+else
+    echo -e "${BLUE}N/A${NC} (no joins)"
+fi
+
+# Check 10: Signal processing patterns
+echo -n "Checking signal processing patterns... "
+if grep -q 'ssql\.FFT\|ssql\.Spectrogram\|ssql\.Convolve\|ssql\.Correlate' "$FILE"; then
+    SIGNAL_ISSUES=0
+    if grep -q 'ssql\.FFT(' "$FILE" && ! grep -q 'ssql\.ExtractSignal\|ssql\.Signal' "$FILE"; then
+        echo -e "${YELLOW}⚠${NC}"
+        echo "  Warning: FFT used but no signal extraction found - ensure input is ssql.Signal type"
+        ((WARNINGS++))
+        SIGNAL_ISSUES=1
+    fi
+    if [ $SIGNAL_ISSUES -eq 0 ]; then
+        echo -e "${GREEN}✓${NC}"
+    fi
+else
+    echo -e "${BLUE}N/A${NC} (no signal processing)"
+fi
+
+# Check 11: Expression language patterns (CLI-specific, check in Go context)
+echo -n "Checking for CLI-only patterns in Go code... "
+if grep -q 'ExprAgg(' "$FILE"; then
+    echo -e "${RED}✗${NC}"
+    echo "  Error: ExprAgg() doesn't exist in ssql package - expressions are CLI-only"
+    ((ERRORS++))
+else
+    echo -e "${GREEN}✓${NC}"
+fi
+
+# Check 12: Compilation test
+echo -n "Checking compilation... "
+COMPILE_DIR="/tmp/ssql-ai-validate-$$"
+mkdir -p "$COMPILE_DIR"
+cp "$FILE" "$COMPILE_DIR/main.go"
+
+cat > "$COMPILE_DIR/go.mod" << 'GOMOD'
+module ssql-ai-validate
+
+go 1.23
+
+require github.com/rosscartlidge/ssql/v4 v4.11.0
+GOMOD
+
+if (cd "$COMPILE_DIR" && go mod tidy 2>/dev/null && go build -o /dev/null . 2>/dev/null); then
+    echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗${NC}"
     echo "  Error: Code does not compile"
+    (cd "$COMPILE_DIR" && go build . 2>&1 | head -10) | while IFS= read -r line; do
+        echo "  $line"
+    done
     ((ERRORS++))
 fi
+rm -rf "$COMPILE_DIR"
 
 echo ""
 echo -e "${BLUE}Validation Summary:${NC}"

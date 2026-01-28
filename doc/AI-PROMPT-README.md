@@ -1,20 +1,36 @@
-# AI Code Generation Prompt
+# AI Prompt Engineering System
 
-**File:** `doc/ai-code-generation.md`
-**Status:** ✅ Production Ready
-**Last Updated:** 2026-01-22
+**Status:** Production Ready
+**Last Updated:** 2026-01-28
 
 ---
 
 ## Overview
 
-This prompt enables LLMs to generate correct, idiomatic ssql code from natural language descriptions.
+ssql uses a **two-prompt system** for AI code generation:
 
-**Test Results:**
-- ✅ 100% API correctness (0 hallucinations across 15 test cases)
-- ✅ 100% compilation success
-- ✅ 100% runtime success
-- ✅ Consistent Chain() usage for multi-step pipelines
+| Prompt | File | Purpose |
+|--------|------|---------|
+| **Go Code Generation** | `doc/ai-code-generation.md` | Generate Go programs using the ssql library |
+| **CLI Pipeline Generation** | `doc/ai-cli-generation.md` | Generate ssql CLI pipelines (Unix-style) |
+
+Both prompts are validated against structured test cases using the Ralph Wiggum methodology for iterative improvement.
+
+---
+
+## When to Use Which
+
+| Scenario | Use |
+|----------|-----|
+| Building a Go application | Go Code prompt |
+| Processing data interactively | CLI Pipeline prompt |
+| Prototyping a pipeline | CLI Pipeline prompt |
+| Generating production code | Go Code prompt |
+| Quick one-off data analysis | CLI Pipeline prompt |
+| Teaching ssql patterns | Go Code prompt |
+| FFT/signal analysis | Either (both cover signal processing) |
+
+**Decision rule:** If the output should be a `.go` file, use the Go prompt. If the output should be a shell command, use the CLI prompt.
 
 ---
 
@@ -22,283 +38,192 @@ This prompt enables LLMs to generate correct, idiomatic ssql code from natural l
 
 ### For LLMs (Claude, GPT-4, etc.)
 
-Copy the entire contents of `doc/ai-code-generation.md` into your LLM conversation, then describe what you want to build in natural language.
+Copy the entire contents of the appropriate prompt file into your LLM conversation, then describe what you want.
 
-**Example:**
 ```
-[Paste full ai-code-generation.md contents]
+[Paste full doc/ai-code-generation.md or doc/ai-cli-generation.md]
 
-Now generate a Go program that:
-- Reads employee data from employees.csv
-- Filters for employees with salary over $80,000
-- Groups by department
-- Counts employees per department
+Now generate: <your natural language description>
 ```
 
 ### For Developers
 
-Use this prompt when you need to:
+Use the prompts when you need to:
 - Generate ssql code examples
 - Create data processing pipelines
 - Build prototypes quickly
-- Learn ssql patterns
+- Learn ssql patterns and API conventions
 
 ---
 
-## What's Included
+## Ralph Wiggum Methodology
 
-### 1. Core API Reference
-- Imports (with critical "only use what you need" rule)
-- Core types and creation
-- Reading data with error handling
-- Core operations (SQL-style naming)
-- Record access
-- Aggregation functions
+The prompts are improved using an iterative feedback loop:
 
-### 2. ⛔ CRITICAL ANTI-PATTERNS
-Explicit examples showing what NOT to do:
-- ❌ Combined GroupBy + Aggregate API (doesn't exist!)
-- ❌ Count() with parameters
-- ❌ Mismatched namespaces
-- ✅ Correct alternatives for each
-
-### 3. Composition Style - CRITICAL RULE
-**🎯 ALWAYS Use Chain() for 2+ Operations**
-- Clear rule: 2+ operations on same type → use Chain()
-- Shows correct Chain() examples
-- Shows wrong sequential step examples
-- Includes decision checklist
-
-### 4. Complete Examples (5 patterns)
-1. Basic Filtering and Aggregation
-2. Top N Analysis
-3. Data Enrichment with Transformation
-4. Join Analysis
-5. Chart Creation
-
-### 5. Code Generation Rules
-- Core principles
-- Comprehensiveness guidance
-- Pattern recognition
-- Critical reminders
-- Validation checklist
-
----
-
-## Key Features
-
-### Prevents API Hallucination
-
-The prompt explicitly shows wrong APIs that LLMs tend to hallucinate:
-
-```go
-// ❌ This doesn't exist - LLMs often hallucinate this!
-result := ssql.GroupByFields(
-    []string{"department"},
-    []ssql.Aggregation{
-        ssql.Count("count"),
-    },
-)
-
-// ✅ This is correct
-grouped := ssql.GroupByFields("analysis", "department")(data)
-results := ssql.Aggregate("analysis", map[string]ssql.AggregateFunc{
-    "employee_count": ssql.Count(),
-})(grouped)
+```
+┌─────────────────────────────────────────┐
+│  1. Run test cases against prompt       │
+│  2. Validate output (compile / parse)   │
+│  3. Collect failures                    │
+│  4. Feed failures back to LLM          │
+│  5. LLM updates the prompt             │
+│  6. Repeat until all tests pass         │
+└─────────────────────────────────────────┘
 ```
 
-### Enforces Chain() Usage
-
-Strong guidance ensures readable, idiomatic code:
-
-```go
-// ✅ ALWAYS use Chain() for 2+ operations
-result := ssql.Chain(
-    ssql.GroupByFields("sales", "product"),
-    ssql.Aggregate("sales", map[string]ssql.AggregateFunc{
-        "total": ssql.Sum("amount"),
-    }),
-)(data)
-```
-
-### Comprehensive Examples
-
-5 complete, runnable examples covering common patterns:
-- Filter → Group → Aggregate
-- Group → Aggregate → Sort → Limit
-- Select (transformation) → Group → Aggregate
-- Join → Group → Aggregate → Where
-- Group → Aggregate → Chart
+**Key properties:**
+- **Objective validation**: Go code must compile; CLI pipelines must match expected patterns
+- **Filesystem as memory**: Prompts live on disk, results in `/tmp`, changes tracked by git
+- **Convergence**: Max iteration limit prevents infinite loops
+- **Transparency**: `git diff` shows exactly what changed between iterations
 
 ---
 
-## Testing and Validation
-
-### Test Coverage
-
-The prompt was tested with 15 test cases:
-- 5 tests with original anti-patterns prompt
-- 5 tests with detailed examples prompt
-- 5 tests with final hybrid prompt
-
-**Results:**
-- 100% API correctness across all tests
-- 100% compilation success
-- 100% runtime success
-- Chain() usage improved from 0% → 100% after strengthening guidance
-
-### Validation Script
-
-Automated validation with `scripts/validate-ai-patterns.sh`:
-- ✅ Correct import path
-- ✅ No wrong imports
-- ✅ SQL-style API usage
-- ✅ Error handling present
-- ✅ Correct GroupByFields usage
-- ✅ Correct Aggregate usage
-- ✅ Chain() composition (when applicable)
-- ✅ Code compiles
-
----
-
-## Performance Metrics
-
-| Metric | Result |
-|--------|--------|
-| **API Hallucinations** | 0 / 15 tests (0%) |
-| **Compilation Errors** | 0 / 15 tests (0%) |
-| **Runtime Errors** | 0 / 15 tests (0%) |
-| **Chain() Usage** | 15 / 15 applicable (100%) |
-| **Validation Pass Rate** | 100% (8/8 checks) |
-| **Prompt Size** | 602 lines |
-
----
-
-## Example Output
-
-**Input:**
-```
-Find the top 5 products by revenue from sales data.
-Group by product name and show the total revenue for each.
-```
-
-**Generated Code:**
-```go
-package main
-
-import (
-    "fmt"
-    "log"
-    "github.com/rosscartlidge/ssql/v4"
-)
-
-func main() {
-    sales, err := ssql.ReadCSV("sales.csv")
-    if err != nil {
-        log.Fatalf("Failed to read CSV: %v", err)
-    }
-
-    top5 := ssql.Chain(
-        ssql.GroupByFields("product_analysis", "product_name"),
-        ssql.Aggregate("product_analysis", map[string]ssql.AggregateFunc{
-            "total_revenue": ssql.Sum("revenue"),
-        }),
-        ssql.SortBy(func(r ssql.Record) float64 {
-            return -ssql.GetOr(r, "total_revenue", 0.0)
-        }),
-        ssql.Limit[ssql.Record](5),
-    )(sales)
-
-    fmt.Println("Top 5 products by revenue:")
-    rank := 1
-    for product := range top5 {
-        name := ssql.GetOr(product, "product_name", "")
-        revenue := ssql.GetOr(product, "total_revenue", 0.0)
-        fmt.Printf("%d. %s: $%.2f\n", rank, name, revenue)
-        rank++
-    }
-}
-```
-
-**Result:**
-- ✅ Compiles successfully
-- ✅ Uses Chain() correctly
-- ✅ Correct API usage
-- ✅ Proper error handling
-- ✅ Clean, readable code
-
----
-
-## Maintenance
-
-### Updating the Prompt
-
-When you discover new error patterns:
-
-1. Add to **⛔ CRITICAL ANTI-PATTERNS** section
-2. Show ❌ WRONG example
-3. Show ✅ CORRECT alternative
-4. Test with validation script
-5. Update this README with new metrics
-
-### Testing New Versions
+## Running Tests
 
 ```bash
-# Test with a natural language prompt
-echo "YOUR NATURAL LANGUAGE REQUEST" | \
-  # (pipe through your LLM with the prompt) \
-  tee test-output/generated.go
+# Run all tests (Go + CLI)
+make ai-test
 
-# Validate
-./scripts/validate-ai-patterns.sh test-output/generated.go
+# Run only Go code generation tests
+make ai-test-go
 
-# Run
-go run test-output/generated.go
+# Run only CLI pipeline generation tests
+make ai-test-cli
+
+# Dry run (show test cases without executing)
+./scripts/test-ai-prompts.sh all --dry-run
+
+# Direct invocation with options
+./scripts/test-ai-prompts.sh go --max-iterations 3
 ```
 
----
+### Prerequisites
 
-## History
-
-### Version 3.0 (Current) - 2025-10-23
-- **Strengthened Chain() guidance** from "PREFERRED" to "ALWAYS"
-- **Updated Example 2** to use full Chain()
-- **Added explicit ❌ WRONG sequential step examples**
-- **Added Chain() checklist** for decision making
-- **Result:** 100% Chain() usage, 100% API correctness
-
-### Version 2.0 - 2025-10-23
-- Hybrid approach combining anti-patterns + examples
-- 5 complete examples (curated from 8)
-- Comprehensiveness guidance added
-- Chain() guidance (initial version: "PREFERRED")
-
-### Version 1.0 - 2025-10-22
-- Original anti-patterns prompt (476 lines)
-- Separate detailed examples prompt (1001 lines)
-- Initial testing showing 100% API correctness
+- `claude` CLI installed (`claude -p` for non-interactive mode)
+- `go` compiler (for Go code validation)
+- ssql built (`go build ./cmd/ssql`)
 
 ---
 
-## Files
+## Test Case Catalog
 
-- **`doc/ai-code-generation.md`** - Main prompt file ← **USE THIS**
-- `doc/AI-PROMPT-README.md` - This file
-- `scripts/validate-ai-patterns.sh` - Validation script
-- `test-ai-generation-cases.md` - Test cases
-- `test-output/agent-tests/` - Test results and analysis
+Test cases are defined in `doc/ai-test-cases.md` with 20 structured tests:
+
+### Go Code Tests (10 cases)
+
+| ID | Description | Key Patterns |
+|----|-------------|-------------|
+| GO-01 | Basic filter + aggregate | Where, GroupByFields, Count, Chain |
+| GO-02 | Top N with sort | SortBy, Limit, descending |
+| GO-03 | Signal processing FFT | FFT, SpectrumToRecords, ExtractSignal |
+| GO-04 | Spectrogram analysis | Spectrogram, SpectrogramOptions, HannWindow |
+| GO-05 | Update with computed fields | Update, MutableRecord, Freeze |
+| GO-06 | Join with lookup | InnerJoin/LeftJoin, OnFields/OnFieldPair |
+| GO-07 | Conditional update | Update, conditional logic, String setter |
+| GO-08 | JSON I/O pipeline | ReadJSON, WriteJSON, Where |
+| GO-09 | Convolution pipeline | ConvolveSame, GaussianKernel, ExtractSignal |
+| GO-10 | Distinct + union | DistinctBy, Concat, RecordKey |
+
+### CLI Pipeline Tests (10 cases)
+
+| ID | Description | Key Patterns |
+|----|-------------|-------------|
+| CLI-01 | Basic filter pipeline | from, where, include, to table |
+| CLI-02 | Group-by with aggregation | group-by, -count, -sum, -avg |
+| CLI-03 | Update if-else clauses | update, -where, -set, + separator |
+| CLI-04 | Signal processing FFT | fft, -field, -rate |
+| CLI-05 | Spectrogram | spectrogram, -window-size, -rate |
+| CLI-06 | Join with rename | join, -on, -as |
+| CLI-07 | Expression filter | -where-expr, -set-expr |
+| CLI-08 | Sort + limit + offset | sort, limit, offset |
+| CLI-09 | Code generation | SSQLGO=1, generate-go |
+| CLI-10 | Multi-format pipeline | from CSV, to json |
 
 ---
 
-## Support
+## Improvement Cycle
 
-For issues or improvements:
-1. Test the prompt with your use case
-2. Run validation script
-3. Document any errors or hallucinations
-4. Update anti-patterns section
-5. Re-test to verify fix
+When a test fails:
+
+1. **Identify the failure**: Pattern missing? Wrong pattern present? Compile error?
+2. **Diagnose the root cause**: Is the prompt unclear? Missing an example? Missing an anti-pattern?
+3. **Update the prompt**: Add the missing pattern, clarify the instruction, or add a new example
+4. **Re-run tests**: `make ai-test` to verify the fix
+5. **Check for regressions**: Ensure fixing one test doesn't break others
+
+The Ralph Wiggum loop automates steps 1-4, but manual review is recommended for understanding why failures occur.
 
 ---
 
-**The prompt is production-ready and maintains 100% API correctness! 🎉**
+## Validation Script
+
+`scripts/validate-ai-patterns.sh` performs static checks on generated Go code:
+
+| Check | What it validates |
+|-------|-------------------|
+| Import path | Uses `ssql/v4` (not v3, not unversioned) |
+| Wrong imports | No rocketlaunchr or streamv3 paths |
+| SQL naming | Where not Filter, Limit not Take |
+| Error handling | I/O operations have `if err != nil` |
+| GroupByFields | Correct API (namespace, fields...) |
+| Aggregate | Count() parameterless, proper map syntax |
+| Composition | Chain() used for multi-step pipelines |
+| Record access | No direct map access, no SetAny |
+| Join functions | InnerJoin/LeftJoin, not bare Join |
+| Signal processing | ExtractSignal used with FFT |
+| CLI-only patterns | No ExprAgg in Go code |
+| Compilation | Code compiles successfully |
+
+Run manually: `./scripts/validate-ai-patterns.sh <file.go>`
+
+---
+
+## Version Tracking
+
+| Version | Date | Go Pass Rate | CLI Pass Rate | Changes |
+|---------|------|-------------|---------------|---------|
+| 4.0 | 2026-01-28 | - | - | Two-prompt system, Ralph Wiggum loop, signal processing, join patterns |
+| 3.0 | 2025-10-23 | 100% | N/A | Chain() enforcement, anti-patterns |
+| 2.0 | 2025-10-23 | 100% | N/A | Hybrid prompt, 5 examples |
+| 1.0 | 2025-10-22 | 100% | N/A | Initial anti-patterns prompt |
+
+---
+
+## File Inventory
+
+| File | Purpose |
+|------|---------|
+| `doc/ai-code-generation.md` | Go code generation prompt |
+| `doc/ai-cli-generation.md` | CLI pipeline generation prompt |
+| `doc/AI-PROMPT-README.md` | This file - system documentation |
+| `doc/ai-test-cases.md` | Structured test cases (20 tests) |
+| `doc/ai-test-results.md` | Latest test run results (generated) |
+| `scripts/test-ai-prompts.sh` | Ralph Wiggum loop runner |
+| `scripts/validate-ai-patterns.sh` | Static validation for Go code |
+
+---
+
+## What's Covered
+
+### Go Code Prompt (`ai-code-generation.md`)
+
+- Core API reference (types, creation, access)
+- I/O operations (CSV, JSON)
+- All operations (Where, Select, Update, GroupByFields, Aggregate, Sort, Limit, etc.)
+- Signal processing (FFT, Spectrogram, Convolution, Correlation, Kernels)
+- Join operations (InnerJoin, LeftJoin, LookupJoin, OnFields, OnFieldPair)
+- Distinct and Union (DistinctBy, Concat, RecordKey)
+- Anti-patterns (hallucinated APIs, wrong names, old paths)
+- Composition rules (Chain for multi-step, Pipe for type changes)
+- 7 complete examples
+- Pattern recognition table
+
+### CLI Pipeline Prompt (`ai-cli-generation.md`)
+
+- Pipeline architecture (Source -> Transform -> Sink)
+- All 21 data commands with flags
+- Critical patterns (I/O, where clauses, update if-else, join multi-clause, signal processing, code generation)
+- Anti-patterns (old commands, old flags, file args on transforms)
+- 8 complete examples
+- Pattern recognition table (natural language -> ssql commands)

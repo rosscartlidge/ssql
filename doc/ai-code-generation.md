@@ -173,8 +173,12 @@ ssql.Collect("field")
 
 ```go
 // FFT analysis
-spectrum, err := ssql.FFT(signal)
-spectrumWithPhase, err := ssql.FFTWithPhase(signal)
+spectrum, err := ssql.FFT(signal)                    // Magnitude only
+spectrumWithPhase, err := ssql.FFTWithPhase(signal)  // Magnitude + phase
+
+// Convert spectrum to records (for output/charting)
+specRecords := ssql.SpectrumToRecords(spectrum, sampleRate)
+// Each record: {index, frequency, magnitude, [phase]}
 
 // Inverse FFT (signal reconstruction)
 reconstructed, err := ssql.IFFT(magnitude, phase)
@@ -189,14 +193,93 @@ corr, err := ssql.Correlate(signal1, signal2)
 // Built-in kernels: MovingAverageKernel, GaussianKernel, DiffKernel, LaplacianKernel, SobelKernel
 ```
 
-### Arrow I/O (High Performance)
+### Signal Processing - Record Integration
 
 ```go
-// Read Arrow IPC format (10-20x faster than CSV)
-data, err := ssql.ReadArrow("data.arrow")
+// Extract signal from records
+signal := ssql.ExtractSignal(records, "voltage")     // From iter.Seq[Record]
+signal := ssql.ExtractSignalFromSlice(recSlice, "v") // From []Record
 
-// Write Arrow format
-err = ssql.WriteArrow(records, "output.arrow")
+// Add signal back to records
+withSmoothed := ssql.WithSignal(records, "smoothed", smoothedSignal)
+```
+
+### Spectrogram (STFT)
+
+```go
+// Compute spectrogram with options
+opts := ssql.SpectrogramOptions{
+    WindowSize: 1024,
+    HopSize:    512,
+    Window:     "hann",     // "hann", "hamming", "blackman"
+    SampleRate: 44100.0,
+}
+bins, err := ssql.Spectrogram(signal, opts)
+
+// Convert to records for output
+spectrogramRecords := ssql.SpectrogramToRecords(bins)
+// Each record: {time_index, time, frequency, magnitude}
+
+// Window functions (for custom use)
+window := ssql.HannWindow(1024)
+window := ssql.HammingWindow(1024)
+window := ssql.BlackmanWindow(1024)
+windowed := ssql.ApplyWindow(signal, window)
+```
+
+### JSON I/O
+
+```go
+// Read JSON/JSONL
+data, err := ssql.ReadJSON("data.jsonl")
+data, err := ssql.ReadJSONFast("data.jsonl")  // 2-5x faster, schema caching
+
+// Write JSON/JSONL
+err = ssql.WriteJSON(records, "output.jsonl")
+err = ssql.WriteJSONFast(records, "output.jsonl")  // 2-5x faster
+```
+
+### Distinct and Union
+
+```go
+// Remove duplicates by key function
+unique := ssql.DistinctBy(func(r ssql.Record) string {
+    return ssql.GetOr(r, "email", "")
+})(records)
+
+// Remove duplicates by all fields (uses SHA256 hash)
+unique := ssql.DistinctBy(ssql.RecordKey)(records)
+
+// Combine multiple sequences (SQL UNION ALL)
+combined := ssql.Concat(seq1, seq2, seq3)
+
+// UNION (distinct) = Concat + DistinctBy
+allRecords := ssql.DistinctBy(ssql.RecordKey)(ssql.Concat(seq1, seq2))
+```
+
+### Join Operations
+
+```go
+// Inner join on same field name
+joined := ssql.InnerJoin(rightSeq, ssql.OnFields("user_id"))(leftSeq)
+
+// Inner join on different field names
+joined := ssql.InnerJoin(rightSeq, ssql.OnFieldPair("dept_id", "id"))(leftSeq)
+
+// Left join (keep all left records)
+joined := ssql.LeftJoin(rightSeq, ssql.OnFields("id"))(leftSeq)
+
+// Custom join condition
+joined := ssql.InnerJoin(rightSeq, ssql.OnCondition(func(l, r ssql.Record) bool {
+    return ssql.GetOr(l, "dept", "") == ssql.GetOr(r, "department", "")
+}))(leftSeq)
+
+// Lookup join (multi-clause enrichment from same lookup table)
+enriched := ssql.LookupJoin(lookupSeq, []ssql.LookupClause{
+    ssql.Lookup("source_type", "type", "description", "source_desc"),
+    ssql.Lookup("dest_type", "type", "description", "dest_desc"),
+})(records)
+// Lookup(leftField, rightField, renameOld, renameNew)
 ```
 
 ---
@@ -249,6 +332,41 @@ results := ssql.Aggregate("analysis", aggs)(grouped)  // ❌ Won't work!
 ```go
 grouped := ssql.GroupByFields("sales", "region")(data)
 results := ssql.Aggregate("sales", aggs)(grouped)  // ✅ Same namespace
+```
+
+### ❌ Wrong: Bare Join() function
+```go
+joined := ssql.Join(left, right, "id")  // ❌ Doesn't exist!
+```
+
+### ✅ Correct: Use typed join functions
+```go
+joined := ssql.InnerJoin(rightSeq, ssql.OnFields("id"))(leftSeq)  // ✅
+joined := ssql.LeftJoin(rightSeq, ssql.OnFieldPair("dept_id", "id"))(leftSeq)  // ✅
+```
+
+### ❌ Wrong: Old import path
+```go
+import "github.com/rosscartlidge/ssql"      // ❌ Missing /v4!
+import "github.com/rosscartlidge/ssql/v3"    // ❌ Old version!
+```
+
+### ✅ Correct: v4 import path
+```go
+import "github.com/rosscartlidge/ssql/v4"    // ✅ Current version
+```
+
+### ❌ Wrong: Using SetAny (removed in v2)
+```go
+mut.SetAny("field", value)  // ❌ Removed!
+```
+
+### ✅ Correct: Use typed setters
+```go
+mut.String("name", "Alice")    // ✅
+mut.Int("count", int64(42))    // ✅
+mut.Float("price", 99.99)     // ✅
+mut.Bool("active", true)      // ✅
 ```
 
 ---
@@ -655,6 +773,87 @@ func main() {
 }
 ```
 
+### Example 6: Signal Processing Pipeline
+
+**Natural Language**: "Read a sensor signal from sensor_data.csv (field 'voltage'), compute the FFT at 1000 Hz sample rate, and create a chart of the frequency spectrum"
+
+**ssql Code**:
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+    "github.com/rosscartlidge/ssql/v4"
+)
+
+func main() {
+    // Read sensor data
+    data, err := ssql.ReadCSV("sensor_data.csv")
+    if err != nil {
+        log.Fatalf("Failed to read CSV: %v", err)
+    }
+
+    // Extract signal from records
+    signal := ssql.ExtractSignal(data, "voltage")
+
+    // Compute FFT
+    spectrum, err := ssql.FFT(signal)
+    if err != nil {
+        log.Fatalf("Failed to compute FFT: %v", err)
+    }
+
+    // Convert spectrum to records with frequency labels
+    spectrumRecords := ssql.SpectrumToRecords(spectrum, 1000.0)
+
+    // Create interactive frequency chart
+    err = ssql.QuickChart(spectrumRecords, "frequency", "magnitude", "spectrum.html")
+    if err != nil {
+        log.Fatalf("Failed to create chart: %v", err)
+    }
+
+    fmt.Println("Spectrum chart created: spectrum.html")
+}
+```
+
+### Example 7: Distinct and Union
+
+**Natural Language**: "Read data from file_a.csv and file_b.csv, combine them, and remove duplicates"
+
+**ssql Code**:
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+    "github.com/rosscartlidge/ssql/v4"
+)
+
+func main() {
+    // Read both files
+    fileA, err := ssql.ReadCSV("file_a.csv")
+    if err != nil {
+        log.Fatalf("Failed to read file_a.csv: %v", err)
+    }
+
+    fileB, err := ssql.ReadCSV("file_b.csv")
+    if err != nil {
+        log.Fatalf("Failed to read file_b.csv: %v", err)
+    }
+
+    // Combine and deduplicate (SQL UNION)
+    combined := ssql.DistinctBy(ssql.RecordKey)(ssql.Concat(fileA, fileB))
+
+    for record := range combined {
+        for k, v := range record.All() {
+            fmt.Printf("%s=%v ", k, v)
+        }
+        fmt.Println()
+    }
+}
+```
+
 ---
 
 ## Code Generation Rules
@@ -709,19 +908,27 @@ When processing natural language requests, map phrases to ssql operations:
 
 1. **"filter/where/only"** → `ssql.Where(predicate)`
 2. **"transform/convert"** → `ssql.Select(transformFn)`
-3. **"group by X"** → `ssql.GroupByFields("groupName", "X")`
-4. **"count/sum/average"** → `ssql.Aggregate("groupName", aggregations)`
-5. **"top N/first N"** → `ssql.Limit(n)` with `SortBy()`
-6. **"sort by/order by"** → `ssql.SortBy(keyFn)` (negative for descending)
-7. **"join/combine"** → `ssql.InnerJoin(rightSeq, ssql.OnFields(...))`
-8. **"chart/visualize"** → `ssql.QuickChart()` or `ssql.InteractiveChart()`
+3. **"update/set field/add field"** → `ssql.Update(func(MutableRecord) MutableRecord)`
+4. **"group by X"** → `ssql.GroupByFields("groupName", "X")`
+5. **"count/sum/average"** → `ssql.Aggregate("groupName", aggregations)`
+6. **"top N/first N"** → `ssql.Limit(n)` with `SortBy()`
+7. **"sort by/order by"** → `ssql.SortBy(keyFn)` (negative for descending)
+8. **"join/combine/lookup"** → `ssql.InnerJoin(rightSeq, ssql.OnFields(...))` or `ssql.LookupJoin()`
+9. **"left join/keep all"** → `ssql.LeftJoin(rightSeq, predicate)`
+10. **"chart/visualize"** → `ssql.QuickChart()` or `ssql.InteractiveChart()`
+11. **"FFT/frequency analysis"** → `ssql.FFT(signal)` + `ssql.SpectrumToRecords()`
+12. **"spectrogram/STFT"** → `ssql.Spectrogram(signal, opts)` + `ssql.SpectrogramToRecords()`
+13. **"smooth/convolve"** → `ssql.ConvolveSame(signal, kernel)`
+14. **"deduplicate/unique"** → `ssql.DistinctBy(keyFn)` or `ssql.DistinctBy(ssql.RecordKey)`
+15. **"combine/union"** → `ssql.Concat()` + optionally `ssql.DistinctBy()`
+16. **"extract signal"** → `ssql.ExtractSignal(records, field)`
 
 ---
 
 ## Critical Reminders
 
 1. **🚨 Record Access**: CANNOT use `record["field"]` - MUST use `MakeMutableRecord()` to create, `GetOr()` to read
-2. **Error Handling**: ALWAYS check errors from `ReadCSV()`, `ReadJSON()`, etc.
+2. **Error Handling**: ALWAYS check errors from `ReadCSV()`, `ReadJSON()`, `FFT()`, etc.
 3. **CSV Types**: Numeric CSV values are `int64`/`float64`, not strings
 4. **SQL Names**: Use `Select`, `Where`, `Limit` (not Map, Filter, Take)
 5. **Imports**: Only import packages actually used in the code
@@ -729,6 +936,10 @@ When processing natural language requests, map phrases to ssql operations:
 7. **Count()**: Parameterless! Field name is the map key
 8. **Namespaces**: Must match between `GroupByFields` and `Aggregate`
 9. **Separate Steps**: `GroupByFields` and `Aggregate` are separate operations
+10. **Import Path**: Always `github.com/rosscartlidge/ssql/v4` (not `/v3`, not without version)
+11. **Join Functions**: Use `InnerJoin`, `LeftJoin`, `RightJoin`, `FullJoin` - bare `Join()` doesn't exist
+12. **Signal Types**: `ssql.Signal` is `[]float64`, `ssql.Spectrum` has `.Magnitude` and `.Phase` fields
+13. **Update vs Select**: Use `Update()` when adding/modifying fields on records. Use `Select()` for arbitrary transformations
 
 ---
 

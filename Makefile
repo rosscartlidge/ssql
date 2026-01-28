@@ -2,6 +2,7 @@
 
 .PHONY: help test build clean doc-check doc-test doc-verify doc-update fmt vet all ci install-hooks
 .PHONY: gpu build-gpu install-gpu docker-gpu docker-gpu-image docker-gpu-extract
+.PHONY: ai-test ai-test-go ai-test-cli
 
 # Default target
 help:
@@ -27,6 +28,11 @@ help:
 	@echo "  make doc-test     - Level 2: Medium checks (godoc, exports, run examples)"
 	@echo "  make doc-verify   - Level 3: Deep verification (all API refs, consistency)"
 	@echo "  make doc-update   - Update godoc and run validation"
+	@echo ""
+	@echo "AI Prompt Testing:"
+	@echo "  make ai-test      - Test AI prompts (Go + CLI, requires 'claude' CLI)"
+	@echo "  make ai-test-go   - Test Go code generation prompt only"
+	@echo "  make ai-test-cli  - Test CLI pipeline generation prompt only"
 	@echo ""
 	@echo "Workflows:"
 	@echo "  make all          - Run fmt, vet, test, doc-check (pre-push)"
@@ -117,6 +123,22 @@ install-hooks:
 	@echo 'make doc-check' >> .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
 	@echo "✓ Pre-commit hook installed (runs doc-check before each commit)"
+
+# =============================================================================
+# AI Prompt Testing Targets
+# =============================================================================
+
+# Test all AI prompts (Go + CLI)
+ai-test:
+	@./scripts/test-ai-prompts.sh all
+
+# Test Go code generation prompt only
+ai-test-go:
+	@./scripts/test-ai-prompts.sh go
+
+# Test CLI pipeline generation prompt only
+ai-test-cli:
+	@./scripts/test-ai-prompts.sh cli
 
 # =============================================================================
 # GPU Build Targets
