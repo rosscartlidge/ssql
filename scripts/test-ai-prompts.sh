@@ -277,7 +277,8 @@ Generate a complete Go program for this task. Output ONLY the Go code, no explan
 $prompt"
 
     local generated
-    generated=$(claude -p "$full_prompt" 2>/dev/null || echo "ERROR: claude failed")
+    # Note: < /dev/null prevents claude from consuming stdin meant for the test loop
+    generated=$(claude -p "$full_prompt" < /dev/null 2>/dev/null || echo "ERROR: claude failed")
 
     # Extract Go code from markdown code blocks if present
     if echo "$generated" | grep -q '```go'; then
@@ -294,7 +295,7 @@ $prompt"
     # Check expected patterns
     while IFS= read -r pattern; do
         [ -z "$pattern" ] && continue
-        if ! grep -qF "$pattern" "$output_file" 2>/dev/null; then
+        if ! grep -qF -- "$pattern" "$output_file" 2>/dev/null; then
             failures+=("missing: $pattern")
         fi
     done <<< "$expected"
@@ -302,7 +303,7 @@ $prompt"
     # Check negative patterns
     while IFS= read -r pattern; do
         [ -z "$pattern" ] && continue
-        if grep -qF "$pattern" "$output_file" 2>/dev/null; then
+        if grep -qF -- "$pattern" "$output_file" 2>/dev/null; then
             failures+=("found forbidden: $pattern")
         fi
     done <<< "$negative"
@@ -369,7 +370,8 @@ Generate an ssql CLI pipeline for this task. Output ONLY the pipeline command(s)
 $prompt"
 
     local generated
-    generated=$(claude -p "$full_prompt" 2>/dev/null || echo "ERROR: claude failed")
+    # Note: < /dev/null prevents claude from consuming stdin meant for the test loop
+    generated=$(claude -p "$full_prompt" < /dev/null 2>/dev/null || echo "ERROR: claude failed")
 
     # Extract shell code from markdown code blocks if present
     if echo "$generated" | grep -q '```bash'; then
@@ -388,7 +390,7 @@ $prompt"
     # Check expected patterns
     while IFS= read -r pattern; do
         [ -z "$pattern" ] && continue
-        if ! grep -qF "$pattern" "$output_file" 2>/dev/null; then
+        if ! grep -qF -- "$pattern" "$output_file" 2>/dev/null; then
             failures+=("missing: $pattern")
         fi
     done <<< "$expected"
@@ -396,7 +398,7 @@ $prompt"
     # Check negative patterns
     while IFS= read -r pattern; do
         [ -z "$pattern" ] && continue
-        if grep -qF "$pattern" "$output_file" 2>/dev/null; then
+        if grep -qF -- "$pattern" "$output_file" 2>/dev/null; then
             failures+=("found forbidden: $pattern")
         fi
     done <<< "$negative"
