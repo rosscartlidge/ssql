@@ -292,10 +292,19 @@ $prompt"
     # Validate patterns
     local failures=()
 
-    # Check expected patterns
+    # Check expected patterns (handles "or" alternatives like `patternA` or `patternB`)
     while IFS= read -r pattern; do
         [ -z "$pattern" ] && continue
-        if ! grep -qF -- "$pattern" "$output_file" 2>/dev/null; then
+        local found=false
+        # Split on "` or `" to handle alternatives
+        IFS='|' read -ra alternatives <<< "${pattern//\` or \`/|}"
+        for alt in "${alternatives[@]}"; do
+            if grep -qF -- "$alt" "$output_file" 2>/dev/null; then
+                found=true
+                break
+            fi
+        done
+        if ! $found; then
             failures+=("missing: $pattern")
         fi
     done <<< "$expected"
@@ -387,10 +396,19 @@ $prompt"
     # Validate patterns
     local failures=()
 
-    # Check expected patterns
+    # Check expected patterns (handles "or" alternatives like `patternA` or `patternB`)
     while IFS= read -r pattern; do
         [ -z "$pattern" ] && continue
-        if ! grep -qF -- "$pattern" "$output_file" 2>/dev/null; then
+        local found=false
+        # Split on "` or `" to handle alternatives
+        IFS='|' read -ra alternatives <<< "${pattern//\` or \`/|}"
+        for alt in "${alternatives[@]}"; do
+            if grep -qF -- "$alt" "$output_file" 2>/dev/null; then
+                found=true
+                break
+            fi
+        done
+        if ! $found; then
             failures+=("missing: $pattern")
         fi
     done <<< "$expected"

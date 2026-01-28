@@ -365,7 +365,8 @@ Each test case specifies:
 - `|`
 
 **Negative patterns**:
-- `-expr` (old flag name without -where or -set prefix)
+- `where -expr` (old flag: use -where-expr instead)
+- `update -expr` (old flag: use -set-expr instead)
 - `-match` (old flag name)
 
 **Validation**: parse
