@@ -178,10 +178,10 @@ parse_test_cases() {
         fi
 
         # Parse fields
-        if [[ "$line" == "**Prompt"*: ]]; then
+        if [[ "$line" == "**Prompt"*":"* ]]; then
             reading_field="prompt"
-            # Check if prompt is on the same line after the colon
-            local after_colon="${line#*: }"
+            # Extract prompt text after "**Prompt**: "
+            local after_colon="${line#***: }"
             if [ "$after_colon" != "$line" ] && [ -n "$after_colon" ]; then
                 current_prompt="$after_colon"
             fi
@@ -192,7 +192,7 @@ parse_test_cases() {
         elif [[ "$line" == "**Negative patterns"* ]]; then
             reading_field="negative"
             continue
-        elif [[ "$line" == "**Validation"*: ]]; then
+        elif [[ "$line" == "**Validation"*":"* ]]; then
             reading_field=""
             if [[ "$line" == *"compile"* ]]; then
                 current_validation="compile"
