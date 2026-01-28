@@ -139,8 +139,8 @@ parse_test_cases() {
             continue
         fi
 
-        # Detect section end (next ## heading)
-        if $in_section && [[ "$line" =~ ^##\  ]] && [[ "$line" != "$section_marker" ]]; then
+        # Detect section end (next ## heading, but NOT ### subheadings)
+        if $in_section && [[ "$line" =~ ^##\  ]] && [[ ! "$line" =~ ^###\  ]] && [[ "$line" != "$section_marker" ]]; then
             # Emit final test if any
             if [ -n "$current_id" ]; then
                 emit_test "$current_id" "$current_prompt" "$current_validation" \
@@ -314,14 +314,18 @@ $prompt"
         mkdir -p "$compile_dir"
         cp "$output_file" "$compile_dir/main.go"
 
-        # Create a go.mod for compilation
-        cat > "$compile_dir/go.mod" << 'GOMOD'
+        # Create a go.mod that uses local source (no network needed)
+        cat > "$compile_dir/go.mod" << GOMOD
 module ssql-ai-test
 
-go 1.23
+go 1.24.8
 
 require github.com/rosscartlidge/ssql/v4 v4.11.0
+
+replace github.com/rosscartlidge/ssql/v4 => ${PROJECT_DIR}
 GOMOD
+        # Copy go.sum from project for dependency resolution
+        cp "$PROJECT_DIR/go.sum" "$compile_dir/go.sum" 2>/dev/null || true
 
         if ! (cd "$compile_dir" && go mod tidy 2>/dev/null && go build -o /dev/null . 2>"$RESULTS_DIR/${id}.compile_err"); then
             compile_result=$(cat "$RESULTS_DIR/${id}.compile_err" 2>/dev/null | head -5)

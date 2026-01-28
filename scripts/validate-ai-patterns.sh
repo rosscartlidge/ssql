@@ -237,13 +237,19 @@ COMPILE_DIR="/tmp/ssql-ai-validate-$$"
 mkdir -p "$COMPILE_DIR"
 cp "$FILE" "$COMPILE_DIR/main.go"
 
-cat > "$COMPILE_DIR/go.mod" << 'GOMOD'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cat > "$COMPILE_DIR/go.mod" << GOMOD
 module ssql-ai-validate
 
-go 1.23
+go 1.24.8
 
 require github.com/rosscartlidge/ssql/v4 v4.11.0
+
+replace github.com/rosscartlidge/ssql/v4 => ${PROJECT_DIR}
 GOMOD
+cp "$PROJECT_DIR/go.sum" "$COMPILE_DIR/go.sum" 2>/dev/null || true
 
 if (cd "$COMPILE_DIR" && go mod tidy 2>/dev/null && go build -o /dev/null . 2>/dev/null); then
     echo -e "${GREEN}✓${NC}"
