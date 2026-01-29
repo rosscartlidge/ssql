@@ -50,6 +50,8 @@ APPLY_FIXES=false
 LLM_COMMAND="claude"  # LLM CLI to use (claude, gemini, etc.)
 ALL_LLMS=false  # Test with all supported LLMs
 SUPPORTED_LLMS=("claude" "gemini")
+INTEGRATION=false  # Run integration tests (actually execute generated code)
+TEST_DATA_DIR="$PROJECT_DIR/test-data"
 
 # Detailed failure tracking for fix requests
 declare -a DETAILED_FAILURES=()
@@ -81,8 +83,12 @@ while [[ $# -gt 0 ]]; do
             ALL_LLMS=true
             shift
             ;;
+        --integration)
+            INTEGRATION=true
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 [go|cli|all] [--max-iterations N] [--dry-run] [--apply-fixes] [--llm CMD] [--all-llms]"
+            echo "Usage: $0 [go|cli|all] [--max-iterations N] [--dry-run] [--apply-fixes] [--llm CMD] [--all-llms] [--integration]"
             echo ""
             echo "Modes:"
             echo "  go   - Test Go code generation prompt only"
@@ -95,6 +101,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --apply-fixes       Run Claude Code interactively to fix prompt failures"
             echo "  --llm CMD           LLM command to use (default: claude)"
             echo "  --all-llms          Test with all supported LLMs (claude, gemini)"
+            echo "  --integration       Run integration tests (execute generated code with test data)"
             exit 0
             ;;
         *)
@@ -146,7 +153,7 @@ check_prerequisites() {
 }
 
 # Parse test cases from markdown
-# Extracts: ID, prompt, expected patterns, negative patterns, validation type
+# Extracts: ID, prompt, expected patterns, negative patterns, validation type, test data, expected output
 # Searches the entire file for test cases matching the mode prefix (GO- or CLI-)
 parse_test_cases() {
     local mode="$1"  # "go" or "cli"
@@ -156,6 +163,8 @@ parse_test_cases() {
     local current_expected=()
     local current_negative=()
     local current_validation=""
+    local current_test_data=""
+    local current_expected_output=()
     local reading_field=""
 
     # Determine the ID prefix to look for
@@ -176,7 +185,9 @@ parse_test_cases() {
             if [ -n "$current_id" ] && [[ "$current_id" == "${id_prefix}-"* ]]; then
                 emit_test "$current_id" "$current_prompt" "$current_validation" \
                     "$(printf '%s\n' "${current_expected[@]}")" \
-                    "$(printf '%s\n' "${current_negative[@]}")"
+                    "$(printf '%s\n' "${current_negative[@]}")" \
+                    "$current_test_data" \
+                    "$(printf '%s\n' "${current_expected_output[@]}")"
             fi
 
             # Start new test
@@ -185,6 +196,8 @@ parse_test_cases() {
             current_expected=()
             current_negative=()
             current_validation=""
+            current_test_data=""
+            current_expected_output=()
             reading_field=""
             in_test=true
             continue
@@ -217,6 +230,18 @@ parse_test_cases() {
                 current_validation="parse"
             fi
             continue
+        elif [[ "$line" == "**Test Data"*":"* ]]; then
+            reading_field="testdata"
+            # Extract test data after "**Test Data**: "
+            local after_colon="${line#***: }"
+            if [ "$after_colon" != "$line" ] && [ -n "$after_colon" ]; then
+                # Remove backticks if present
+                current_test_data="${after_colon//\`/}"
+            fi
+            continue
+        elif [[ "$line" == "**Expected Output"* ]]; then
+            reading_field="expectedoutput"
+            continue
         elif [[ "$line" == "---" ]]; then
             reading_field=""
             continue
@@ -239,6 +264,14 @@ parse_test_cases() {
                     current_negative+=("${BASH_REMATCH[1]}")
                 fi
                 ;;
+            expectedoutput)
+                if [[ "$line" =~ ^-\ \`(.+)\` ]]; then
+                    current_expected_output+=("${BASH_REMATCH[1]}")
+                elif [[ "$line" =~ ^-\ (.+) ]]; then
+                    # Also accept patterns without backticks (for comments like "any numeric output")
+                    current_expected_output+=("${BASH_REMATCH[1]}")
+                fi
+                ;;
         esac
 
     done < "$TEST_CASES"
@@ -247,7 +280,9 @@ parse_test_cases() {
     if [ -n "$current_id" ] && [[ "$current_id" == "${id_prefix}-"* ]]; then
         emit_test "$current_id" "$current_prompt" "$current_validation" \
             "$(printf '%s\n' "${current_expected[@]}")" \
-            "$(printf '%s\n' "${current_negative[@]}")"
+            "$(printf '%s\n' "${current_negative[@]}")" \
+            "$current_test_data" \
+            "$(printf '%s\n' "${current_expected_output[@]}")"
     fi
 }
 
@@ -258,16 +293,22 @@ emit_test() {
     local validation="$3"
     local expected="$4"
     local negative="$5"
+    local test_data="${6:-}"
+    local expected_output="${7:-}"
 
     echo "TEST_ID=$id"
     echo "TEST_PROMPT=$prompt"
     echo "TEST_VALIDATION=$validation"
+    echo "TEST_DATA=$test_data"
     echo "TEST_EXPECTED<<EXPECTED_EOF"
     echo "$expected"
     echo "EXPECTED_EOF"
     echo "TEST_NEGATIVE<<NEGATIVE_EOF"
     echo "$negative"
     echo "NEGATIVE_EOF"
+    echo "TEST_EXPECTED_OUTPUT<<OUTPUT_EOF"
+    echo "$expected_output"
+    echo "OUTPUT_EOF"
     echo "---TEST_END---"
 }
 
@@ -395,6 +436,8 @@ run_go_test() {
     local prompt="$2"
     local expected="$3"
     local negative="$4"
+    local test_data="${5:-}"
+    local expected_output="${6:-}"
     local output_file="$RESULTS_DIR/${id}.go"
 
     echo -ne "  ${CYAN}$id${NC}: "
@@ -452,10 +495,10 @@ $prompt"
         fi
     done <<< "$negative"
 
-    # Try to compile
+    # Try to compile (and optionally run for integration testing)
     local compile_result=""
+    local compile_dir="/tmp/ssql-ai-compile-${id}"
     if [ ${#failures[@]} -eq 0 ]; then
-        local compile_dir="/tmp/ssql-ai-compile-${id}"
         mkdir -p "$compile_dir"
         cp "$output_file" "$compile_dir/main.go"
 
@@ -472,12 +515,51 @@ GOMOD
         # Copy go.sum from project for dependency resolution
         cp "$PROJECT_DIR/go.sum" "$compile_dir/go.sum" 2>/dev/null || true
 
-        if ! (cd "$compile_dir" && go mod tidy 2>/dev/null && go build -o /dev/null . 2>"$RESULTS_DIR/${id}.compile_err"); then
+        if ! (cd "$compile_dir" && go mod tidy 2>/dev/null && go build -o test_program . 2>"$RESULTS_DIR/${id}.compile_err"); then
             compile_result=$(cat "$RESULTS_DIR/${id}.compile_err" 2>/dev/null | head -5)
             failures+=("compile error: $compile_result")
         fi
-        rm -rf "$compile_dir"
     fi
+
+    # Integration test: actually run the compiled program and check output
+    if [ ${#failures[@]} -eq 0 ] && $INTEGRATION && [ -n "$test_data" ] && [ -n "$expected_output" ]; then
+        # Copy test data files to compile directory
+        # test_data might be comma-separated list of files
+        local data_files="${test_data//,/ }"
+        for data_file in $data_files; do
+            local src_file="$TEST_DATA_DIR/$(basename "$data_file")"
+            if [ -f "$src_file" ]; then
+                cp "$src_file" "$compile_dir/"
+            fi
+        done
+
+        # Run the program and capture output
+        local run_output
+        run_output=$(cd "$compile_dir" && timeout 10 ./test_program 2>&1) || true
+        echo "$run_output" > "$RESULTS_DIR/${id}.run_output"
+
+        # Check expected output patterns
+        while IFS= read -r pattern; do
+            [ -z "$pattern" ] && continue
+            # Skip comment-like patterns that start with (
+            [[ "$pattern" == "("* ]] && continue
+            local found=false
+            # Split on "` or `" to handle alternatives
+            IFS='|' read -ra alternatives <<< "${pattern//\` or \`/|}"
+            for alt in "${alternatives[@]}"; do
+                if echo "$run_output" | grep -qF -- "$alt" 2>/dev/null; then
+                    found=true
+                    break
+                fi
+            done
+            if ! $found; then
+                failures+=("output missing: $pattern")
+            fi
+        done <<< "$expected_output"
+    fi
+
+    # Cleanup
+    rm -rf "$compile_dir"
 
     if [ ${#failures[@]} -eq 0 ]; then
         echo -e "${GREEN}PASS${NC}"
@@ -503,6 +585,8 @@ run_cli_test() {
     local prompt="$2"
     local expected="$3"
     local negative="$4"
+    local test_data="${5:-}"
+    local expected_output="${6:-}"
     local output_file="$RESULTS_DIR/${id}.sh"
 
     echo -ne "  ${CYAN}$id${NC}: "
@@ -562,6 +646,51 @@ $prompt"
         fi
     done <<< "$negative"
 
+    # Integration test: actually run the pipeline and check output
+    if [ ${#failures[@]} -eq 0 ] && $INTEGRATION && [ -n "$test_data" ] && [ -n "$expected_output" ]; then
+        local run_dir="/tmp/ssql-ai-run-${id}"
+        mkdir -p "$run_dir"
+
+        # Copy test data files to run directory
+        local data_files="${test_data//,/ }"
+        for data_file in $data_files; do
+            local src_file="$TEST_DATA_DIR/$(basename "$data_file")"
+            if [ -f "$src_file" ]; then
+                cp "$src_file" "$run_dir/"
+            fi
+        done
+
+        # Prepare the pipeline command - replace relative file paths with test data dir
+        local pipeline_cmd
+        pipeline_cmd=$(cat "$output_file")
+
+        # Run the pipeline and capture output
+        local run_output
+        run_output=$(cd "$run_dir" && timeout 10 bash -c "$pipeline_cmd" 2>&1) || true
+        echo "$run_output" > "$RESULTS_DIR/${id}.run_output"
+
+        # Check expected output patterns
+        while IFS= read -r pattern; do
+            [ -z "$pattern" ] && continue
+            # Skip comment-like patterns that start with (
+            [[ "$pattern" == "("* ]] && continue
+            local found=false
+            # Split on "` or `" to handle alternatives
+            IFS='|' read -ra alternatives <<< "${pattern//\` or \`/|}"
+            for alt in "${alternatives[@]}"; do
+                if echo "$run_output" | grep -qF -- "$alt" 2>/dev/null; then
+                    found=true
+                    break
+                fi
+            done
+            if ! $found; then
+                failures+=("output missing: $pattern")
+            fi
+        done <<< "$expected_output"
+
+        rm -rf "$run_dir"
+    fi
+
     if [ ${#failures[@]} -eq 0 ]; then
         echo -e "${GREEN}PASS${NC}"
         return 0
@@ -587,13 +716,19 @@ run_tests() {
     local passed=0
     local failed_cases=()
 
-    echo -e "${BLUE}Running $mode tests...${NC}"
+    if $INTEGRATION; then
+        echo -e "${BLUE}Running $mode tests (with integration)...${NC}"
+    else
+        echo -e "${BLUE}Running $mode tests...${NC}"
+    fi
 
     local test_id=""
     local test_prompt=""
     local test_validation=""
     local test_expected=""
     local test_negative=""
+    local test_data=""
+    local test_expected_output=""
     local reading=""
 
     while IFS= read -r line; do
@@ -603,6 +738,8 @@ run_tests() {
             test_prompt="${line#TEST_PROMPT=}"
         elif [[ "$line" == "TEST_VALIDATION="* ]]; then
             test_validation="${line#TEST_VALIDATION=}"
+        elif [[ "$line" == "TEST_DATA="* ]]; then
+            test_data="${line#TEST_DATA=}"
         elif [[ "$line" == "TEST_EXPECTED<<EXPECTED_EOF" ]]; then
             reading="expected"
             test_expected=""
@@ -613,6 +750,11 @@ run_tests() {
             test_negative=""
         elif [[ "$line" == "NEGATIVE_EOF" ]]; then
             reading=""
+        elif [[ "$line" == "TEST_EXPECTED_OUTPUT<<OUTPUT_EOF" ]]; then
+            reading="expectedoutput"
+            test_expected_output=""
+        elif [[ "$line" == "OUTPUT_EOF" ]]; then
+            reading=""
         elif [[ "$line" == "---TEST_END---" ]]; then
             # Execute test
             ((total++))
@@ -622,13 +764,16 @@ run_tests() {
                 echo "    validation: $test_validation"
                 echo "    expected patterns: $(echo "$test_expected" | grep -c . || echo 0)"
                 echo "    negative patterns: $(echo "$test_negative" | grep -c . || echo 0)"
+                if [ -n "$test_data" ]; then
+                    echo "    test data: $test_data"
+                fi
                 ((passed++))
             else
                 local result=0
                 if [ "$mode" = "go" ]; then
-                    run_go_test "$test_id" "$test_prompt" "$test_expected" "$test_negative" || result=1
+                    run_go_test "$test_id" "$test_prompt" "$test_expected" "$test_negative" "$test_data" "$test_expected_output" || result=1
                 else
-                    run_cli_test "$test_id" "$test_prompt" "$test_expected" "$test_negative" || result=1
+                    run_cli_test "$test_id" "$test_prompt" "$test_expected" "$test_negative" "$test_data" "$test_expected_output" || result=1
                 fi
 
                 if [ $result -eq 0 ]; then
@@ -637,6 +782,10 @@ run_tests() {
                     failed_cases+=("$test_id: $test_prompt")
                 fi
             fi
+
+            # Reset for next test
+            test_data=""
+            test_expected_output=""
         elif [ "$reading" = "expected" ]; then
             if [ -n "$test_expected" ]; then
                 test_expected="$test_expected
@@ -650,6 +799,13 @@ $line"
 $line"
             else
                 test_negative="$line"
+            fi
+        elif [ "$reading" = "expectedoutput" ]; then
+            if [ -n "$test_expected_output" ]; then
+                test_expected_output="$test_expected_output
+$line"
+            else
+                test_expected_output="$line"
             fi
         fi
     done < <(parse_test_cases "$mode")

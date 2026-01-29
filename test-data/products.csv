@@ -1,0 +1,5 @@
+product_id,name,category,price
+P1,Widget,Electronics,25.00
+P2,Gadget,Electronics,30.00
+P3,Gizmo,Tools,25.00
+P4,Doohickey,Tools,15.00

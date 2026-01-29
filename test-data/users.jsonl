@@ -1,0 +1,8 @@
+{"name":"Alice","age":35,"dept":"Engineering","email":"alice@example.com","salary":95000,"status":"active"}
+{"name":"Bob","age":28,"dept":"Sales","email":"bob@example.com","salary":65000,"status":"active"}
+{"name":"Carol","age":42,"dept":"Engineering","email":"carol@example.com","salary":105000,"status":"active"}
+{"name":"David","age":31,"dept":"Marketing","email":"david@example.com","salary":72000,"status":"inactive"}
+{"name":"Eve","age":29,"dept":"Sales","email":"eve@example.com","salary":68000,"status":"active"}
+{"name":"Frank","age":45,"dept":"Engineering","email":"frank@example.com","salary":115000,"status":"active"}
+{"name":"Grace","age":33,"dept":"Marketing","email":"grace@example.com","salary":78000,"status":"active"}
+{"name":"Henry","age":26,"dept":"Sales","email":"henry@example.com","salary":62000,"status":"active"}

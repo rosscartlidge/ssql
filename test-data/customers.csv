@@ -1,0 +1,4 @@
+customer_id,name,city,tier
+C1,Acme Corp,NYC,gold
+C2,Beta Inc,LA,silver
+C3,Gamma LLC,Chicago,bronze

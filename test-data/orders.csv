@@ -1,0 +1,6 @@
+order_id,customer_id,product_id,quantity,total
+1001,C1,P1,2,50.00
+1002,C2,P2,1,30.00
+1003,C1,P3,3,75.00
+1004,C3,P1,1,25.00
+1005,C2,P2,2,60.00

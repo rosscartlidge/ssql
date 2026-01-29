@@ -1,0 +1,9 @@
+name,age,dept,email,salary,status
+Alice,35,Engineering,alice@example.com,95000,active
+Bob,28,Sales,bob@example.com,65000,active
+Carol,42,Engineering,carol@example.com,105000,active
+David,31,Marketing,david@example.com,72000,inactive
+Eve,29,Sales,eve@example.com,68000,active
+Frank,45,Engineering,frank@example.com,115000,active
+Grace,33,Marketing,grace@example.com,78000,active
+Henry,26,Sales,henry@example.com,62000,active

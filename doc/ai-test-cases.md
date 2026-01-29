@@ -1,6 +1,6 @@
 # AI Prompt Test Cases
 
-Structured test catalog for validating both the Go code generation prompt and the CLI pipeline generation prompt. Each test case has objective validation criteria that can be checked automatically.
+Structured test catalog for validating both the Go code generation prompt and the CLI pipeline generation prompt. Each test case has objective validation criteria that can be checked automatically, including **integration tests** that run the generated code and verify output.
 
 ---
 
@@ -11,6 +11,8 @@ Each test case specifies:
 - **Expected patterns**: Strings that MUST appear in the output
 - **Negative patterns**: Strings that MUST NOT appear in the output
 - **Validation**: `compile` (Go code must compile) or `parse` (CLI patterns must match)
+- **Test Data**: Input file(s) from `test-data/` directory
+- **Expected Output**: Patterns or exact values that must appear in execution output
 
 ---
 
@@ -18,7 +20,7 @@ Each test case specifies:
 
 ### GO-01: Basic Filter and Aggregate
 
-**Prompt**: Read employee data from employees.csv, filter for employees with salary over 80000, group by department, and count employees per department.
+**Prompt**: Read employee data from employees.csv, filter for employees with salary over 80000, group by the dept field, and count employees per dept. Write the results as JSON to os.Stdout.
 
 **Expected patterns**:
 - `ssql.ReadCSV("employees.csv")`
@@ -28,7 +30,7 @@ Each test case specifies:
 - `ssql.Aggregate(`
 - `ssql.Count()`
 - `ssql.Chain(`
-- `if err != nil`
+- `os.Stdout`
 - `github.com/rosscartlidge/ssql/v4`
 
 **Negative patterns**:
@@ -40,20 +42,26 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/employees.csv`
+
+**Expected Output**:
+- `dept`
+- `Engineering`
+
 ---
 
 ### GO-02: Top N with Sort
 
-**Prompt**: Find the top 5 products by total revenue from sales.csv. Group by product_name and show the total revenue for each.
+**Prompt**: Read orders.csv, group by product_id, compute total quantity sold for each product, sort by total descending, and show the top 3 products. Write the results as JSON to os.Stdout.
 
 **Expected patterns**:
-- `ssql.ReadCSV("sales.csv")`
+- `ssql.ReadCSV("orders.csv")`
 - `ssql.GroupByFields(`
-- `ssql.Sum("revenue")`
+- `ssql.Sum(`
 - `ssql.SortBy(`
-- `ssql.Limit[ssql.Record](5)`
+- `ssql.Limit[ssql.Record](3)`
 - `ssql.Chain(`
-- `-ssql.GetOr(` (negative for descending sort)
+- `os.Stdout`
 
 **Negative patterns**:
 - `ssql.Take(` (wrong name)
@@ -62,18 +70,23 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/orders.csv`
+
+**Expected Output**:
+- `product_id`
+- `P2` or `P1`
+
 ---
 
 ### GO-03: Signal Processing FFT
 
-**Prompt**: Read a signal from sensor_data.csv (field name "voltage"), compute the FFT, convert the spectrum to records with frequency and magnitude, and write the result to spectrum.csv.
+**Prompt**: Read a signal from measurements.csv (field name "value"), compute the FFT with sample rate 10 Hz, convert the spectrum to records with frequency and magnitude, and write the result as JSON to stdout.
 
 **Expected patterns**:
-- `ssql.ReadCSV("sensor_data.csv")`
+- `ssql.ReadCSV("measurements.csv")`
 - `ssql.ExtractSignal(`
 - `ssql.FFT(` or `ssql.FFTWithPhase(`
 - `ssql.SpectrumToRecords(`
-- `ssql.WriteCSV(`
 
 **Negative patterns**:
 - `fft.Transform(` (wrong package)
@@ -81,14 +94,20 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/measurements.csv`
+
+**Expected Output**:
+- `frequency`
+- `magnitude`
+
 ---
 
 ### GO-04: Spectrogram Analysis
 
-**Prompt**: Compute a spectrogram of a signal from audio.csv (field "amplitude", sample rate 44100 Hz) using a Hann window of size 1024 with hop size 512. Output the result to spectrogram.csv.
+**Prompt**: Compute a spectrogram of a signal from measurements.csv (field "value", sample rate 10 Hz) using a Hann window of size 4 with hop size 2. Output the first 5 bins as JSON to stdout.
 
 **Expected patterns**:
-- `ssql.ReadCSV("audio.csv")`
+- `ssql.ReadCSV("measurements.csv")`
 - `ssql.ExtractSignal(`
 - `ssql.Spectrogram(`
 - `ssql.SpectrogramOptions`
@@ -103,11 +122,18 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/measurements.csv`
+
+**Expected Output**:
+- `time_index`
+- `frequency`
+- `magnitude`
+
 ---
 
 ### GO-05: Update with Computed Fields
 
-**Prompt**: Read orders.csv, add a total field computed from price * quantity, then add a tax field at 8% of total.
+**Prompt**: Read orders.csv, add a "total" field computed from quantity * 25 (assuming fixed price of 25), then output as JSON to stdout.
 
 **Expected patterns**:
 - `ssql.ReadCSV("orders.csv")`
@@ -115,25 +141,31 @@ Each test case specifies:
 - `MutableRecord`
 - `.Freeze()`
 - `ssql.GetOr(`
-- `.Float(`
+- `.Float(` or `.Int(`
 
 **Negative patterns**:
 - `record["` (direct map access)
 - `SetAny(` (removed in v2)
-- `r["price"]` (direct map access)
+- `r["quantity"]` (direct map access)
 
 **Validation**: compile
+
+**Test Data**: `test-data/orders.csv`
+
+**Expected Output**:
+- `total`
+- `50` or `75` or `25`
 
 ---
 
 ### GO-06: Join with Lookup
 
-**Prompt**: Join user data from users.csv with department data from departments.csv using the dept_id field, keeping all users even if they have no matching department.
+**Prompt**: Join orders from orders.csv with customer data from customers.csv using the customer_id field, output as JSON to stdout.
 
 **Expected patterns**:
 - `ssql.ReadCSV(`
 - `ssql.LeftJoin(` or `ssql.InnerJoin(`
-- `ssql.OnFields("dept_id")` or `ssql.OnFieldPair(`
+- `ssql.OnFields("customer_id")` or `ssql.OnFieldPair(`
 
 **Negative patterns**:
 - `record["` (direct map access)
@@ -142,39 +174,51 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/orders.csv`, `test-data/customers.csv`
+
+**Expected Output**:
+- `customer_id`
+- `name`
+- `Acme Corp` or `Beta Inc`
+
 ---
 
 ### GO-07: Update with Conditional Logic
 
-**Prompt**: Read customers.csv and add a tier field: "Gold" if total_purchases > 5000, "Silver" if >= 1000, otherwise "Bronze".
+**Prompt**: Read orders.csv and add a "size" field: "large" if quantity > 2, "medium" if quantity == 2, otherwise "small". Output as JSON to stdout.
 
 **Expected patterns**:
-- `ssql.ReadCSV("customers.csv")`
+- `ssql.ReadCSV("orders.csv")`
 - `ssql.Update(`
 - `MutableRecord`
 - `ssql.GetOr(`
-- `Gold`
-- `Silver`
-- `Bronze`
+- `large`
+- `medium` or `small`
 - `.String(`
 
 **Negative patterns**:
 - `record["` (direct map access)
-- `r["total_purchases"]` (direct map access)
+- `r["quantity"]` (direct map access)
 
 **Validation**: compile
+
+**Test Data**: `test-data/orders.csv`
+
+**Expected Output**:
+- `size`
+- `large`
+- `small`
 
 ---
 
 ### GO-08: JSON I/O Pipeline
 
-**Prompt**: Read data from input.jsonl, filter records where status equals "active", and write the result to output.jsonl.
+**Prompt**: Read data from users.jsonl (JSONL format), filter records where status equals "active", and write the result as JSON to stdout.
 
 **Expected patterns**:
-- `ssql.ReadJSON("input.jsonl")`
+- `ssql.ReadJSON(`
 - `ssql.Where(`
 - `ssql.GetOr(`
-- `ssql.WriteJSON(`
 - `if err != nil`
 
 **Negative patterns**:
@@ -184,17 +228,23 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/users.jsonl`
+
+**Expected Output**:
+- `active`
+- `name`
+
 ---
 
 ### GO-09: Convolution Pipeline
 
-**Prompt**: Read a signal from measurements.csv (field "value"), smooth it with a Gaussian kernel of size 11 and sigma 2.0, and write the smoothed signal back to smoothed.csv.
+**Prompt**: Read a signal from measurements.csv (field "value"), smooth it with a Gaussian kernel of size 5 and sigma 1.0, and output the smoothed values as JSON to stdout.
 
 **Expected patterns**:
 - `ssql.ReadCSV("measurements.csv")`
-- `ssql.ExtractSignal(`
+- `ssql.ExtractSignal(` or `ssql.ExtractSignalFromSlice(`
 - `ssql.ConvolveSame(` or `ssql.Convolve(`
-- `ssql.GaussianKernel(11`
+- `ssql.GaussianKernel(5`
 
 **Negative patterns**:
 - `record["` (direct map access)
@@ -203,11 +253,16 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/measurements.csv`
+
+**Expected Output**:
+- (any numeric output indicates successful convolution)
+
 ---
 
 ### GO-10: Distinct and Union
 
-**Prompt**: Read data from file_a.csv and file_b.csv, combine them, and remove duplicate records.
+**Prompt**: Read data from source_a.csv and source_b.csv, combine them, remove duplicates based on all fields, and output unique records as JSON to stdout.
 
 **Expected patterns**:
 - `ssql.ReadCSV(`
@@ -221,19 +276,26 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/source_a.csv`, `test-data/source_b.csv`
+
+**Expected Output**:
+- `Alpha`
+- `Delta`
+- `Gamma`
+
 ---
 
 ## CLI Pipeline Generation Tests
 
 ### CLI-01: Basic Filter Pipeline
 
-**Prompt**: Read users.csv, filter for users older than 25, show only name and email columns, output as a table.
+**Prompt**: Read users.csv, filter for users older than 30, show only name and email columns, output as a table.
 
 **Expected patterns**:
 - `ssql from users.csv`
 - `ssql where`
 - `-where age`
-- `gt 25`
+- `gt 30`
 - `ssql include`
 - `name`
 - `email`
@@ -248,101 +310,136 @@ Each test case specifies:
 
 **Validation**: parse
 
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `Alice`
+- `Carol`
+- `Frank`
+- `alice@example.com`
+
 ---
 
 ### CLI-02: Group-By with Aggregation
 
-**Prompt**: Read sales.csv, group by region, compute the count, total amount, and average amount per region.
+**Prompt**: Read users.csv, group by dept, count the number of users in each department. The group-by command takes field names as positional arguments.
 
 **Expected patterns**:
-- `ssql from sales.csv`
+- `ssql from users.csv`
 - `ssql group-by`
-- `-field region` or `-fields region`
+- `dept`
 - `-count`
-- `-sum amount`
-- `-avg amount`
 - `|`
 
 **Negative patterns**:
 - `read-csv` (old command)
 - `-match` (old flag)
-- `ssql group-by sales.csv` (transform commands don't take FILE)
+- `ssql group-by users.csv` (transform commands don't take FILE)
+- `-field` (wrong - use positional args)
 
 **Validation**: parse
+
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `Engineering`
+- `Sales`
+- `Marketing`
+- `3`
+- `2`
 
 ---
 
 ### CLI-03: Update with If-Else Clauses
 
-**Prompt**: Read data.csv and set status to "premium" where revenue > 10000, set status to "standard" where revenue > 1000, otherwise set status to "basic".
+**Prompt**: Read users.csv and set tier to "senior" where age >= 40, set tier to "mid" where age >= 30, otherwise set tier to "junior".
 
 **Expected patterns**:
-- `ssql from data.csv`
+- `ssql from users.csv`
 - `ssql update`
 - `-where`
-- `-set status`
-- `premium`
-- `standard`
-- `basic`
+- `-set tier`
+- `senior`
+- `mid` or `junior`
 - `+` (clause separator)
 - `|`
 
 **Negative patterns**:
 - `-match` (old flag name)
-- `ssql update data.csv` (transform commands don't take FILE)
+- `ssql update users.csv` (transform commands don't take FILE)
 
 **Validation**: parse
+
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `tier`
+- `senior`
+- `mid`
 
 ---
 
 ### CLI-04: Signal Processing FFT
 
-**Prompt**: Read sensor.csv and compute the FFT of the voltage field at a sample rate of 1000 Hz, output as a table.
+**Prompt**: Read measurements.csv and compute the FFT of the value field at a sample rate of 10 Hz, output as a table.
 
 **Expected patterns**:
-- `ssql from sensor.csv`
+- `ssql from measurements.csv`
 - `ssql fft`
-- `-field voltage`
-- `-rate 1000`
+- `-field value`
+- `-rate 10`
 - `ssql to table`
 - `|`
 
 **Negative patterns**:
-- `ssql fft sensor.csv` (transform commands don't take FILE)
+- `ssql fft measurements.csv` (transform commands don't take FILE)
 
 **Validation**: parse
+
+**Test Data**: `test-data/measurements.csv`
+
+**Expected Output**:
+- `frequency`
+- `magnitude`
 
 ---
 
 ### CLI-05: Spectrogram
 
-**Prompt**: Compute a spectrogram of the amplitude field from audio.csv with a window size of 2048, sample rate 44100.
+**Prompt**: Compute a spectrogram of the value field from measurements.csv with a window size of 4, sample rate 10.
 
 **Expected patterns**:
-- `ssql from audio.csv`
+- `ssql from measurements.csv`
 - `ssql spectrogram`
-- `-field amplitude`
-- `-window-size 2048`
-- `-rate 44100`
+- `-field value`
+- `-window-size 4`
+- `-rate 10`
 - `|`
 
 **Negative patterns**:
-- `ssql spectrogram audio.csv` (transform commands don't take FILE)
+- `ssql spectrogram measurements.csv` (transform commands don't take FILE)
 - `stft` (wrong command name)
 
 **Validation**: parse
+
+**Test Data**: `test-data/measurements.csv`
+
+**Expected Output**:
+- `time_index`
+- `frequency`
+- `magnitude`
 
 ---
 
 ### CLI-06: Join with Rename
 
-**Prompt**: Join users.csv with departments.csv matching user dept_id to department id, and rename the department name field to dept_name.
+**Prompt**: Join orders.csv with customers.csv matching customer_id field on both sides, and rename the customer name field to customer_name.
 
 **Expected patterns**:
-- `ssql from users.csv`
-- `ssql join departments.csv`
-- `-on dept_id id` or `-using`
-- `-as name dept_name` or `-as`
+- `ssql from orders.csv`
+- `ssql join customers.csv`
+- `-using customer_id` or `-on customer_id`
+- `-as name customer_name` or `-as`
 - `|`
 
 **Negative patterns**:
@@ -352,16 +449,21 @@ Each test case specifies:
 
 **Validation**: parse
 
+**Test Data**: `test-data/orders.csv`, `test-data/customers.csv`
+
+**Expected Output**:
+- `customer_id`
+- `order_id`
+
 ---
 
 ### CLI-07: Expression Filter and Compute
 
-**Prompt**: Read transactions.csv, filter where amount * quantity > 500, and add a total field computed as amount * quantity.
+**Prompt**: Read orders.csv, filter where quantity * 25 > 60, and add a total field computed as quantity * 25.
 
 **Expected patterns**:
-- `ssql from transactions.csv`
+- `ssql from orders.csv`
 - `-where-expr` or `-set-expr`
-- `amount`
 - `quantity`
 - `|`
 
@@ -372,42 +474,54 @@ Each test case specifies:
 
 **Validation**: parse
 
+**Test Data**: `test-data/orders.csv`
+
+**Expected Output**:
+- `total`
+- `75`
+
 ---
 
 ### CLI-08: Sort, Limit, Offset
 
-**Prompt**: Read products.csv, sort by price descending, skip the first 10, and show the next 5 products.
+**Prompt**: Read users.csv, sort by salary descending, skip the first 2, and show the next 3 users.
 
 **Expected patterns**:
-- `ssql from products.csv`
+- `ssql from users.csv`
 - `ssql sort`
-- `price`
+- `salary`
 - `-desc` or `desc`
 - `ssql offset`
-- `10`
+- `2`
 - `ssql limit`
-- `5`
+- `3`
 - `|`
 
 **Negative patterns**:
-- `ssql sort products.csv` (transform commands don't take FILE)
+- `ssql sort users.csv` (transform commands don't take FILE)
 - `OFFSET` (SQL keyword, not ssql flag)
 - `LIMIT` (SQL keyword, not ssql flag)
 
 **Validation**: parse
 
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- (should show 3 users after skipping top 2 salaries)
+
 ---
 
 ### CLI-09: Code Generation Pipeline
 
-**Prompt**: Generate a standalone Go program from this pipeline: read data.csv, filter where status equals active, group by category, count per category, output to result.csv.
+**Prompt**: Generate a standalone Go program from this pipeline: read users.csv, filter where status equals active, group by dept (as positional arg), count per dept, output to stdout.
 
 **Expected patterns**:
 - `SSQLGO=1`
-- `ssql from data.csv`
+- `ssql from users.csv`
 - `ssql where`
 - `-where status eq active`
 - `ssql group-by`
+- `dept`
 - `-count`
 - `ssql generate-go`
 - `|`
@@ -415,14 +529,21 @@ Each test case specifies:
 **Negative patterns**:
 - `-generate` (prefer SSQLGO=1 for full pipelines)
 - `read-csv` (old command)
+- `-field` (wrong - use positional args for group-by)
 
 **Validation**: parse
+
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `package main`
+- `ssql.ReadCSV`
 
 ---
 
 ### CLI-10: Multi-Format Pipeline
 
-**Prompt**: Read data from a CSV file, filter and transform it, then write the output as JSON.
+**Prompt**: Read data from users.csv, filter for active users, then write the output as JSON.
 
 **Expected patterns**:
 - `ssql from`
@@ -437,38 +558,49 @@ Each test case specifies:
 
 **Validation**: parse
 
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `"status":"active"`
+- `"name"`
+
 ---
 
-## Extended Tests - Error Handling and Edge Cases
+## Extended Tests
 
 ### GO-11: Multi-Stage Pipeline with Chain
 
-**Prompt**: Read logs.csv, filter for ERROR level entries, extract the timestamp and message fields, sort by timestamp descending, take the first 100, and write to recent_errors.csv.
+**Prompt**: Read users.csv, filter for active status, sort by salary descending, take the first 3, and output as JSON to stdout.
 
 **Expected patterns**:
-- `ssql.ReadCSV("logs.csv")`
+- `ssql.ReadCSV("users.csv")`
 - `ssql.Where(`
-- `ssql.Select(` or `ssql.Update(`
 - `ssql.SortBy(`
-- `ssql.Limit[ssql.Record](100)` or `ssql.Take[ssql.Record](100)`
+- `ssql.Limit[ssql.Record](3)` or `ssql.Take[ssql.Record](3)`
 - `ssql.Chain(`
-- `ssql.WriteCSV(`
 
 **Negative patterns**:
 - `record["` (direct map access)
-- `ssql.Limit(100)` (missing type parameter)
+- `ssql.Limit(3)` (missing type parameter)
 - `Pipe(` (wrong function, use Chain)
 
 **Validation**: compile
+
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `Frank`
+- `Carol`
+- `Alice`
 
 ---
 
 ### GO-12: Update with Computed Fields
 
-**Prompt**: Read inventory.csv and add a "value" field computed as quantity * unit_price, then add a "status" field set to "low" if quantity < 10, otherwise "ok".
+**Prompt**: Read users.csv and add a "bonus" field computed as salary * 0.1, then add a "level" field set to "senior" if age >= 35, otherwise "standard". Output as JSON to stdout.
 
 **Expected patterns**:
-- `ssql.ReadCSV("inventory.csv")`
+- `ssql.ReadCSV("users.csv")`
 - `ssql.Update(`
 - `ssql.MutableRecord` or `MutableRecord`
 - `ssql.GetOr(`
@@ -482,55 +614,71 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `bonus`
+- `level`
+- `senior`
+- `standard`
+
 ---
 
 ### GO-13: Safe Field Access with Defaults
 
-**Prompt**: Read users.csv where the age field might be missing for some records. Calculate the average age, treating missing ages as 0.
+**Prompt**: Read users.csv and calculate the average salary using GetOr with a default of 0 for missing values. Output the average as a simple number to stdout.
 
 **Expected patterns**:
 - `ssql.ReadCSV("users.csv")`
 - `ssql.GetOr(`
 - `int64(0)` or `float64(0)` or `, 0)` or `, 0.0)`
-- `ssql.Avg(` or `Sum(`
 
 **Negative patterns**:
-- `record["age"]` (unsafe direct access)
-- `r["age"]` (unsafe direct access)
+- `record["salary"]` (unsafe direct access)
+- `r["salary"]` (unsafe direct access)
 - `.(int)` (type assertion without GetOr)
 - `.(float64)` (type assertion without GetOr)
 
 **Validation**: compile
 
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- (any numeric output for average)
+
 ---
 
 ### GO-14: Early Limit for Performance
 
-**Prompt**: Read a large file huge_data.csv and get just the first 10 records that match a filter where status equals "active".
+**Prompt**: Read users.csv and get just the first 2 records that match a filter where status equals "active". Output as JSON to stdout.
 
 **Expected patterns**:
-- `ssql.ReadCSV("huge_data.csv")`
+- `ssql.ReadCSV("users.csv")`
 - `ssql.Where(`
-- `ssql.Limit[ssql.Record](10)` or `ssql.Take[ssql.Record](10)`
+- `ssql.Limit[ssql.Record](2)` or `ssql.Take[ssql.Record](2)`
 - `ssql.Chain(`
 
 **Negative patterns**:
-- `ssql.Limit(10)` (missing type parameter)
+- `ssql.Limit(2)` (missing type parameter)
 - `Collect(` (don't collect before limit for large files)
 
 **Validation**: compile
 
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `active`
+- (should have exactly 2 records)
+
 ---
 
-### GO-15: JSON Input with Nested Fields
+### GO-15: JSON Input with Filter
 
-**Prompt**: Read events from events.jsonl, filter where the event type is "click", and count events per user_id.
+**Prompt**: Read events from users.jsonl (JSONL format), filter where status equals "active", and count total matching records. Output the count to stdout.
 
 **Expected patterns**:
-- `ssql.ReadJSON("events.jsonl")` or `ssql.ReadJSONFast(`
+- `ssql.ReadJSON("users.jsonl")` or `ssql.ReadJSONFast(`
 - `ssql.Where(`
-- `ssql.GroupByFields(`
-- `ssql.Count()`
 
 **Negative patterns**:
 - `json.Unmarshal` (use ssql.ReadJSON)
@@ -538,78 +686,106 @@ Each test case specifies:
 
 **Validation**: compile
 
+**Test Data**: `test-data/users.jsonl`
+
+**Expected Output**:
+- (a number representing count of active users)
+
 ---
 
 ### CLI-11: Complex Multi-Stage Pipeline
 
-**Prompt**: Read sales.csv, filter for 2024 transactions, group by product and region, compute total and average sales, sort by total descending, take top 20, output as a table.
+**Prompt**: Read users.csv, filter for active status, group by dept (as positional arg), compute count and average salary, sort by count descending, output as a table.
 
 **Expected patterns**:
-- `ssql from sales.csv`
+- `ssql from users.csv`
 - `ssql where`
 - `ssql group-by`
-- `-sum` or `-avg`
+- `dept`
+- `-count` or `-avg`
 - `ssql sort`
 - `-desc`
-- `ssql limit 20`
 - `ssql to table`
 - `|`
 
 **Negative patterns**:
 - `read-csv` (old command)
 - `write-table` (old command)
+- `-field` (wrong - use positional args for group-by)
 
 **Validation**: parse
+
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `Engineering`
+- `Sales`
+- `count`
 
 ---
 
 ### CLI-12: Chart Visualization
 
-**Prompt**: Read sensor.csv and create a line chart showing temperature over time, save to sensor_chart.html.
+**Prompt**: Read users.csv and create a chart showing salary by name, save to chart.html.
 
 **Expected patterns**:
-- `ssql from sensor.csv`
+- `ssql from users.csv`
 - `ssql to chart`
 - `-x` or `-y`
 - `.html`
 - `|`
 
 **Negative patterns**:
-- `chart sensor.csv` (chart doesn't take FILE argument)
+- `chart users.csv` (chart doesn't take FILE argument)
 - `write-chart` (old command)
 
 **Validation**: parse
+
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `<!DOCTYPE html>` or `<html` or `Chart`
 
 ---
 
 ### CLI-13: Distinct with Union
 
-**Prompt**: Combine records from source_a.csv and source_b.csv, removing any duplicates.
+**Prompt**: Combine records from source_a.csv and source_b.csv, removing any duplicates. Use ssql union with -file flag for the second file (wrapped in process substitution for CSV).
 
 **Expected patterns**:
 - `ssql from source_a.csv`
 - `ssql union`
+- `-file`
 - `source_b.csv`
-- `-distinct` or `ssql distinct`
 - `|`
 
 **Negative patterns**:
 - `concat` (union handles both files)
 - `UNION` (SQL keyword, not ssql)
+- `-distinct` (wrong - union deduplicates by default)
 
 **Validation**: parse
+
+**Test Data**: `test-data/source_a.csv`, `test-data/source_b.csv`
+
+**Expected Output**:
+- `Alpha`
+- `Beta`
+- `Gamma`
+- `Delta`
+- `Epsilon`
 
 ---
 
 ### CLI-14: Offset and Pagination
 
-**Prompt**: Read products.csv, sort by name, skip the first 50 records, and show the next 25.
+**Prompt**: Read users.csv, sort by name, skip the first 3 records, and show the next 2.
 
 **Expected patterns**:
-- `ssql from products.csv`
+- `ssql from users.csv`
 - `ssql sort`
-- `ssql offset 50`
-- `ssql limit 25`
+- `ssql offset 3`
+- `ssql limit 2`
 - `|`
 
 **Negative patterns**:
@@ -619,18 +795,22 @@ Each test case specifies:
 
 **Validation**: parse
 
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- (should show 2 users after alphabetical skip)
+
 ---
 
 ### CLI-15: Include/Exclude Field Selection
 
-**Prompt**: Read employees.csv and output only the name, email, and department fields.
+**Prompt**: Read users.csv and output only the name and dept fields.
 
 **Expected patterns**:
-- `ssql from employees.csv`
+- `ssql from users.csv`
 - `ssql include` or `ssql exclude`
 - `name`
-- `email`
-- `department`
+- `dept`
 - `|`
 
 **Negative patterns**:
@@ -640,13 +820,24 @@ Each test case specifies:
 
 **Validation**: parse
 
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `name`
+- `dept`
+- `Alice`
+- `Engineering`
+
 ---
 
 ## Running Tests
 
 ```bash
-# Run all tests
+# Run all tests (pattern matching only)
 ./scripts/test-ai-prompts.sh all
+
+# Run all tests with integration testing
+./scripts/test-ai-prompts.sh all --integration
 
 # Run only Go code tests
 ./scripts/test-ai-prompts.sh go
@@ -656,6 +847,7 @@ Each test case specifies:
 
 # Run via Makefile
 make ai-test
+make ai-test-integration
 ```
 
 ## Adding New Test Cases
@@ -663,7 +855,8 @@ make ai-test
 To add a new test case:
 
 1. Choose the appropriate section (Go or CLI)
-2. Use the next sequential ID (GO-11, CLI-11, etc.)
+2. Use the next sequential ID (GO-16, CLI-16, etc.)
 3. Include all required fields: Prompt, Expected patterns, Negative patterns, Validation
-4. Run `./scripts/test-ai-prompts.sh` to verify the test works
-5. If the test fails, update the corresponding prompt file to fix it
+4. Add Test Data and Expected Output for integration testing
+5. Run `./scripts/test-ai-prompts.sh --integration` to verify the test works
+6. If the test fails, update the corresponding prompt file to fix it

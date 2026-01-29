@@ -140,6 +140,10 @@ ai-test-go:
 ai-test-cli:
 	@./scripts/test-ai-prompts.sh cli
 
+# Run AI tests with integration (actually execute generated code)
+ai-test-integration:
+	@./scripts/test-ai-prompts.sh all --integration
+
 # =============================================================================
 # GPU Build Targets
 # =============================================================================
