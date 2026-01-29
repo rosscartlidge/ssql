@@ -48,6 +48,8 @@ DRY_RUN=false
 TEST_MODE="all"  # go, cli, or all
 APPLY_FIXES=false
 LLM_COMMAND="claude"  # LLM CLI to use (claude, gemini, etc.)
+ALL_LLMS=false  # Test with all supported LLMs
+SUPPORTED_LLMS=("claude" "gemini")
 
 # Detailed failure tracking for fix requests
 declare -a DETAILED_FAILURES=()
@@ -75,8 +77,12 @@ while [[ $# -gt 0 ]]; do
             LLM_COMMAND="$2"
             shift 2
             ;;
+        --all-llms)
+            ALL_LLMS=true
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 [go|cli|all] [--max-iterations N] [--dry-run] [--apply-fixes] [--llm CMD]"
+            echo "Usage: $0 [go|cli|all] [--max-iterations N] [--dry-run] [--apply-fixes] [--llm CMD] [--all-llms]"
             echo ""
             echo "Modes:"
             echo "  go   - Test Go code generation prompt only"
@@ -87,7 +93,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --max-iterations N  Maximum Ralph Wiggum iterations (default: 5)"
             echo "  --dry-run           Parse test cases and show what would be tested"
             echo "  --apply-fixes       Run Claude Code interactively to fix prompt failures"
-            echo "  --llm CMD           LLM command to use (default: claude, also: gemini)"
+            echo "  --llm CMD           LLM command to use (default: claude)"
+            echo "  --all-llms          Test with all supported LLMs (claude, gemini)"
             exit 0
             ;;
         *)
@@ -766,34 +773,25 @@ EOF
     echo -e "${BLUE}Results written to: $RESULTS_FILE${NC}"
 }
 
-# Main execution
-main() {
-    echo -e "${BLUE}ssql AI Prompt Test Runner (Ralph Wiggum Loop)${NC}"
-    echo -e "${BLUE}===============================================${NC}"
-    echo -e "${CYAN}LLM: $LLM_COMMAND${NC}"
-    echo ""
-
-    check_prerequisites
-
-    if $DRY_RUN; then
-        echo -e "${YELLOW}DRY RUN - showing test cases without executing${NC}"
-        echo ""
-    fi
-
-    local go_total=0 go_passed=0
-    local cli_total=0 cli_passed=0
-    local total_failures=0
+# Run tests for a single LLM
+# Sets: LLM_GO_TOTAL, LLM_GO_PASSED, LLM_CLI_TOTAL, LLM_CLI_PASSED, LLM_FAILURES
+run_single_llm_tests() {
+    LLM_GO_TOTAL=0
+    LLM_GO_PASSED=0
+    LLM_CLI_TOTAL=0
+    LLM_CLI_PASSED=0
+    LLM_FAILURES=0
 
     if [ "$TEST_MODE" = "go" ] || [ "$TEST_MODE" = "all" ]; then
         if $DRY_RUN; then
             run_tests "go" || true
-            go_total=$LAST_TOTAL
-            go_passed=$LAST_PASSED
+            LLM_GO_TOTAL=$LAST_TOTAL
+            LLM_GO_PASSED=$LAST_PASSED
         else
             ralph_wiggum_loop "go" || true
-            go_total=$LAST_TOTAL
-            go_passed=$LAST_PASSED
-            total_failures=$(( total_failures + LAST_TOTAL - LAST_PASSED ))
+            LLM_GO_TOTAL=$LAST_TOTAL
+            LLM_GO_PASSED=$LAST_PASSED
+            LLM_FAILURES=$(( LLM_FAILURES + LAST_TOTAL - LAST_PASSED ))
         fi
         echo ""
     fi
@@ -801,29 +799,111 @@ main() {
     if [ "$TEST_MODE" = "cli" ] || [ "$TEST_MODE" = "all" ]; then
         if $DRY_RUN; then
             run_tests "cli" || true
-            cli_total=$LAST_TOTAL
-            cli_passed=$LAST_PASSED
+            LLM_CLI_TOTAL=$LAST_TOTAL
+            LLM_CLI_PASSED=$LAST_PASSED
         else
             ralph_wiggum_loop "cli" || true
-            cli_total=$LAST_TOTAL
-            cli_passed=$LAST_PASSED
-            total_failures=$(( total_failures + LAST_TOTAL - LAST_PASSED ))
+            LLM_CLI_TOTAL=$LAST_TOTAL
+            LLM_CLI_PASSED=$LAST_PASSED
+            LLM_FAILURES=$(( LLM_FAILURES + LAST_TOTAL - LAST_PASSED ))
         fi
         echo ""
     fi
+}
 
-    write_results "$go_total" "$go_passed" "$cli_total" "$cli_passed" "$MAX_ITERATIONS"
+# Main execution
+main() {
+    echo -e "${BLUE}ssql AI Prompt Test Runner (Ralph Wiggum Loop)${NC}"
+    echo -e "${BLUE}===============================================${NC}"
+
+    if $DRY_RUN; then
+        echo -e "${YELLOW}DRY RUN - showing test cases without executing${NC}"
+        echo ""
+        # For dry run, just show test cases once
+        LLM_COMMAND="claude"
+        check_prerequisites
+        run_single_llm_tests
+        exit 0
+    fi
+
+    # Determine which LLMs to test
+    local llms_to_test=()
+    if $ALL_LLMS; then
+        for llm in "${SUPPORTED_LLMS[@]}"; do
+            if command -v "$llm" &>/dev/null; then
+                llms_to_test+=("$llm")
+            else
+                echo -e "${YELLOW}Warning: $llm not found, skipping${NC}"
+            fi
+        done
+        if [ ${#llms_to_test[@]} -eq 0 ]; then
+            echo -e "${RED}Error: No supported LLMs found${NC}"
+            exit 1
+        fi
+    else
+        llms_to_test=("$LLM_COMMAND")
+    fi
+
+    # Track results per LLM
+    declare -A llm_go_passed llm_go_total llm_cli_passed llm_cli_total llm_failures
+    local grand_total_failures=0
+
+    for llm in "${llms_to_test[@]}"; do
+        LLM_COMMAND="$llm"
+        echo ""
+        echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║  Testing with: ${CYAN}$LLM_COMMAND${BLUE}$(printf '%*s' $((28 - ${#LLM_COMMAND})) '')║${NC}"
+        echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+        echo ""
+
+        check_prerequisites
+
+        # Clear results directory for this LLM
+        rm -rf "$RESULTS_DIR"
+        mkdir -p "$RESULTS_DIR"
+
+        # Clear detailed failures
+        DETAILED_FAILURES=()
+
+        run_single_llm_tests
+
+        llm_go_passed[$llm]=$LLM_GO_PASSED
+        llm_go_total[$llm]=$LLM_GO_TOTAL
+        llm_cli_passed[$llm]=$LLM_CLI_PASSED
+        llm_cli_total[$llm]=$LLM_CLI_TOTAL
+        llm_failures[$llm]=$LLM_FAILURES
+        grand_total_failures=$(( grand_total_failures + LLM_FAILURES ))
+    done
+
+    # Final summary
+    echo ""
+    echo -e "${BLUE}╔═══════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║           FINAL SUMMARY (All LLMs)            ║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════╝${NC}"
+    echo ""
+    printf "%-12s %10s %10s %10s\n" "LLM" "Go" "CLI" "Total"
+    printf "%-12s %10s %10s %10s\n" "---" "--" "---" "-----"
+
+    for llm in "${llms_to_test[@]}"; do
+        local go_result="${llm_go_passed[$llm]}/${llm_go_total[$llm]}"
+        local cli_result="${llm_cli_passed[$llm]}/${llm_cli_total[$llm]}"
+        local total_passed=$(( llm_go_passed[$llm] + llm_cli_passed[$llm] ))
+        local total_tests=$(( llm_go_total[$llm] + llm_cli_total[$llm] ))
+        local total_result="$total_passed/$total_tests"
+
+        if [ "${llm_failures[$llm]}" -eq 0 ]; then
+            printf "${GREEN}%-12s %10s %10s %10s${NC}\n" "$llm" "$go_result" "$cli_result" "$total_result"
+        else
+            printf "${RED}%-12s %10s %10s %10s${NC}\n" "$llm" "$go_result" "$cli_result" "$total_result"
+        fi
+    done
 
     echo ""
-    echo -e "${BLUE}=== Final Summary ===${NC}"
-    echo -e "Go:  $go_passed/$go_total passed"
-    echo -e "CLI: $cli_passed/$cli_total passed"
-
-    if [ $total_failures -eq 0 ]; then
-        echo -e "${GREEN}All tests passed!${NC}"
+    if [ $grand_total_failures -eq 0 ]; then
+        echo -e "${GREEN}All tests passed on all LLMs!${NC}"
         exit 0
     else
-        echo -e "${RED}$total_failures test(s) failed${NC}"
+        echo -e "${RED}$grand_total_failures total test failure(s) across all LLMs${NC}"
         exit 1
     fi
 }
