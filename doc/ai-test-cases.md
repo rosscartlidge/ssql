@@ -513,10 +513,10 @@ Each test case specifies:
 
 ### CLI-09: Code Generation Pipeline
 
-**Prompt**: Generate a standalone Go program from this pipeline: read users.csv, filter where status equals active, group by dept (as positional arg), count per dept, output to stdout.
+**Prompt**: Generate a standalone Go program from this pipeline: read users.csv, filter where status equals active, group by dept (as positional arg), count per dept, output to stdout. Remember to export SSQLGO=1 so all pipeline commands see it.
 
 **Expected patterns**:
-- `SSQLGO=1`
+- `export SSQLGO=1`
 - `ssql from users.csv`
 - `ssql where`
 - `-where status eq active`
