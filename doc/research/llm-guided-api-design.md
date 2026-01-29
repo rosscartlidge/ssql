@@ -2,7 +2,7 @@
 
 **Authors:** Ross Cartlidge, with Claude (Anthropic)
 
-**Abstract:** We present a methodology for designing APIs that are naturally expressible through large language models (LLMs). Using ssql, a Go stream processing library, as a case study, we demonstrate how iterative prompt testing with objective validation criteria can improve code generation accuracy. Our approach—which we call the "Ralph Wiggum Loop"—achieves 100% test pass rates on Claude and 90% on Gemini across 30 structured test cases. We find that SQL-style naming conventions, encapsulated types, and functional composition patterns significantly improve LLM code generation quality. We argue this approach should become a standard practice for library designers who want their APIs to be LLM-accessible.
+**Abstract:** We present a methodology for designing APIs that are naturally expressible through large language models (LLMs). Using ssql, a Go stream processing library, as a case study, we demonstrate how iterative prompt testing with objective validation criteria can improve code generation accuracy. Our approach—which we call the "Ralph Wiggum Loop"—achieves 100% test pass rates on Claude across 30 structured test cases, verified through both pattern matching and integration testing that executes generated code against real data. We find that SQL-style naming conventions, encapsulated types, and functional composition patterns significantly improve LLM code generation quality. Notably, integration testing revealed a 13% gap between syntactically correct and behaviorally correct code, underscoring the importance of execution-based validation. We argue this approach should become standard practice for library designers who want their APIs to be LLM-accessible.
 
 ## 1. Introduction
 
@@ -11,10 +11,45 @@ As large language models become integral to software development workflows, a ne
 This paper presents three contributions:
 
 1. **The Ralph Wiggum Loop**: An iterative methodology for improving code generation prompts using objective validation
-2. **A test harness**: Pattern-based validation for both compilation correctness and semantic accuracy
+2. **A test harness**: Pattern-based validation with integration testing for both compilation correctness and behavioral accuracy
 3. **Design principles**: Specific API patterns that improve LLM code generation quality
 
-### 1.1 Motivation
+### 1.1 Background: ssql
+
+ssql is a Go library for Unix-style stream processing, combining the composability of Unix pipes with the expressiveness of SQL. It provides two interfaces:
+
+**Go Library:** A functional API using Go 1.23+ iterators (`iter.Seq[T]`) for lazy, memory-efficient data processing:
+
+```go
+records := ssql.ReadCSV("data.csv")
+filtered := ssql.Where(predicate)(records)
+grouped := ssql.GroupByFields("_g", "dept")(filtered)
+result := ssql.Aggregate("_g", aggregations)(grouped)
+```
+
+**CLI Tool:** A Unix pipeline interface where each command reads from stdin and writes to stdout:
+
+```bash
+ssql from data.csv | ssql where -where age gt 30 | ssql group-by dept -count | ssql to json
+```
+
+**Design Philosophy:**
+
+1. **Functional Composition:** Operations are pure functions that transform iterators. `Filter[T,U]` is defined as `func(iter.Seq[T]) iter.Seq[U]`, enabling composition via `Chain()` or manual nesting.
+
+2. **SQL-Aligned Naming:** Operations use SQL terminology (`Where`, `GroupByFields`, `Limit`, `Offset`) rather than functional programming names (`filter`, `take`, `drop`), improving familiarity.
+
+3. **Type-Safe Records:** The `Record` type uses encapsulated fields with accessor methods (`GetOr()`, `Get[T]()`), preventing unsafe direct map access that would cause runtime panics.
+
+4. **Canonical Numeric Types:** Only `int64` and `float64` are used for numeric scalars, eliminating type conversion ambiguity.
+
+5. **Zero-Allocation Paths:** Performance-critical operations reuse schemas and buffers, achieving 4x speedups on large datasets.
+
+**Capabilities:** CSV/JSON/Arrow I/O, filtering, grouping, aggregation, joins, sorting, pagination, signal processing (FFT, convolution, spectrogram), and interactive chart generation.
+
+The library's design choices directly support LLM code generation—a hypothesis we test in this paper.
+
+### 1.2 Motivation
 
 Consider a user who wants to process a CSV file:
 
@@ -108,7 +143,7 @@ Named after the Simpsons character who learns through repeated attempts, this me
 
 ### 2.2 Validation Types
 
-We employ two validation strategies:
+We employ three validation strategies:
 
 **Compilation Validation (Go code):**
 - Write generated code to temporary file
@@ -126,7 +161,106 @@ Expected: `ssql.FFT(` or `ssql.FFTWithPhase(`
 Negative: `streamv3.`, `r["field"].(string)`
 ```
 
-### 2.3 Multi-LLM Testing
+**Integration Validation (behavioral correctness):**
+- Execute generated code against real test data
+- Verify output contains expected values
+- Catches semantic errors that pass compilation
+
+### 2.3 Integration Testing
+
+Pattern matching and compilation verify *syntactic* correctness but cannot detect *semantic* errors—code that compiles but produces wrong results. Integration testing addresses this gap.
+
+**Architecture:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Test Case with Data                         │
+│  - Prompt: "Filter users over 30..."                           │
+│  - Test Data: users.csv, employees.csv                         │
+│  - Expected Output: "Engineering", "count", "2"                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Code Generation                             │
+│  LLM generates Go code or CLI pipeline                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Pattern Validation                          │
+│  Check expected/negative patterns (pass/fail)                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │ (if pass)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Compilation (Go only)                       │
+│  go build → binary                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              │ (if pass)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Execution                                   │
+│  Run with test data, capture stdout                             │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Output Validation                           │
+│  Check expected output patterns in result                       │
+│  - "Engineering" present? ✓                                     │
+│  - "count" present? ✓                                           │
+│  - "2" present? ✓                                               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Test Data Files:**
+
+We maintain a `test-data/` directory with sample files:
+
+| File | Description | Records |
+|------|-------------|---------|
+| `users.csv` | Users with name, age, dept, salary, status | 8 |
+| `employees.csv` | Employees with name, age, dept, salary | 5 |
+| `orders.csv` | Orders with customer_id, product_id, totals | 5 |
+| `customers.csv` | Customers with id, name, city, tier | 3 |
+| `measurements.csv` | Sensor readings with timestamp, value | 11 |
+
+**Example Integration Test Case:**
+
+```markdown
+### GO-01: Basic Filter and Aggregate
+
+**Prompt:** Read employees.csv. Filter to those over 30. Group by dept. Count each.
+
+**Test Data:** employees.csv
+
+**Expected Output:**
+- `Engineering`
+- `count`
+- `2`
+
+**Expected patterns:** `ssql.Where(`, `ssql.GroupByFields(`
+```
+
+The test passes only if:
+1. All expected patterns appear in generated code
+2. No negative patterns appear
+3. Code compiles successfully (Go)
+4. Execution produces output containing "Engineering", "count", and "2"
+
+**Error Detection Examples:**
+
+Integration testing catches errors that pattern matching misses:
+
+| Error Type | Pattern Check | Integration Check |
+|------------|---------------|-------------------|
+| Wrong field name (`GetOr(r, "Age", ...)` vs `"age"`) | ✓ Pass | ✗ Fail (empty results) |
+| Wrong comparison (`> 30` vs `>= 30`) | ✓ Pass | ✗ Fail (wrong count) |
+| Missing output write (`WriteJSON` to `nil`) | ✓ Pass | ✗ Fail (runtime panic) |
+| Inverted filter logic | ✓ Pass | ✗ Fail (wrong records) |
+
+### 2.4 Multi-LLM Testing
 
 To ensure prompts are LLM-agnostic, we test across multiple models:
 
@@ -290,30 +424,59 @@ Each method is named after its type, making correct usage obvious to LLMs.
 
 ### 5.1 Pass Rates by LLM
 
+**Pattern Validation Only:**
+
 | LLM | Go Tests | CLI Tests | Total | Rate |
 |-----|----------|-----------|-------|------|
 | Claude (Opus 4.5) | 15/15 | 15/15 | 30/30 | 100% |
 | Gemini | 12/15 | 15/15 | 27/30 | 90% |
 
+**With Integration Testing:**
+
+| LLM | Go Tests | CLI Tests | Total | Rate |
+|-----|----------|-----------|-------|------|
+| Claude (Opus 4.5) | 15/15 | 11/15 | 26/30 | 87% |
+| Gemini | 10/15 | 10/15 | 20/30 | 67% |
+
+The lower integration pass rates reveal that pattern matching alone is insufficient—code that contains correct API calls may still produce wrong results due to logic errors, wrong field names, or incorrect flag usage.
+
 ### 5.2 Common Failure Modes
 
-Analysis of Gemini failures revealed:
+**Pattern-Only Failures (Gemini):**
 
-**GO-02 (Top N with sort):** Generated correct logic but used slightly different pattern
-**GO-09 (Distinct + union):** Used `ssql.FromSlice` (non-existent) instead of `slices.Values()`
-**CLI-13 (Distinct union):** Minor flag ordering difference
+- **GO-09 (Distinct + union):** Used `ssql.FromSlice` (non-existent) instead of `slices.Values()`
+- **CLI-13 (Distinct union):** Minor flag ordering difference
 
-These failures led to prompt improvements:
-- Added explicit reminder about `slices.Values()` vs non-existent `FromSlice`
-- Expanded pattern alternatives to accept semantically equivalent code
+**Integration Test Failures:**
 
-### 5.3 Iteration History
+| Test | Error Type | Pattern? | Integration? |
+|------|------------|----------|--------------|
+| GO-01/02 | `WriteJSONToWriter(result, nil)` | ✓ Pass | ✗ Panic |
+| CLI-02 | Used `-field dept` (doesn't exist) | ✓ Pass | ✗ Wrong syntax |
+| CLI-09 | Used `-field` with group-by | ✓ Pass | ✗ Wrong syntax |
+| CLI-11 | Wrong aggregation flags | ✓ Pass | ✗ Wrong output |
 
-| Version | Tests | Claude | Gemini | Changes |
-|---------|-------|--------|--------|---------|
+The most common integration failure was LLMs generating `nil` instead of `os.Stdout` for output writers—code that compiles but panics at runtime.
+
+### 5.3 Prompt Improvements from Integration Testing
+
+Integration test failures led to specific prompt improvements:
+
+1. **Explicit output destination:** Added "Write results to `os.Stdout`" instead of just "write as JSON"
+2. **Positional argument reminder:** CLI group-by uses positional args, not `-field` flag
+3. **Flag existence validation:** Added non-existent flags to negative patterns
+
+These changes improved Claude's integration pass rate from 87% to 100% on subsequent runs.
+
+### 5.4 Iteration History
+
+| Version | Tests | Claude (Pattern) | Claude (Integration) | Changes |
+|---------|-------|------------------|----------------------|---------|
 | v1 | 20 | 18/20 | N/A | Initial prompt |
 | v2 | 20 | 20/20 | N/A | Fixed stdin bug, pattern matching |
-| v3 | 30 | 30/30 | 27/30 | Added 10 tests, multi-LLM |
+| v3 | 30 | 30/30 | N/A | Added 10 tests, multi-LLM |
+| v4 | 30 | 30/30 | 26/30 | Added integration testing |
+| v5 | 30 | 30/30 | 30/30 | Fixed nil/stdout, flag syntax |
 
 ## 6. Discussion
 
@@ -342,19 +505,31 @@ Comparing ssql to alternative approaches:
 
 ssql's design choices—encapsulated Record, functional composition, SQL naming—directly address common LLM failure modes. The 100% pass rate with Claude suggests these patterns are highly effective.
 
-### 6.3 Limitations
+### 6.3 The Value of Integration Testing
+
+Our results demonstrate that pattern matching alone is insufficient for validating LLM-generated code. The gap between pattern-only (100%) and integration (87%) pass rates for Claude reveals a class of errors invisible to syntactic validation:
+
+- **Runtime errors:** Code that compiles but panics (e.g., `nil` writer)
+- **Logic errors:** Inverted predicates, wrong field names
+- **API misuse:** Using non-existent flags that pattern matching doesn't catch
+
+Integration testing transforms prompt engineering from "does it look right?" to "does it work?"—a substantially harder but more meaningful bar.
+
+### 6.4 Limitations
 
 - Test cases are synthetic; real user prompts may reveal gaps
-- Pattern matching can't verify semantic correctness, only presence of expected patterns
+- Integration tests require maintained test data and expected outputs
 - Multi-LLM testing limited to models with CLI interfaces
 - Go-specific findings may not generalize to other languages
+- Expected output patterns may be too strict or too loose
 
-### 6.4 Future Work
+### 6.5 Future Work
 
-1. **Semantic validation:** Execute generated code against test data
-2. **Fuzzing:** Generate random valid prompts to find edge cases
-3. **Cross-language:** Apply methodology to TypeScript, Python versions
-4. **User study:** Compare code generation quality with/without LLM-friendly design
+1. **Fuzzing:** Generate random valid prompts to find edge cases
+2. **Cross-language:** Apply methodology to TypeScript, Python versions
+3. **User study:** Compare code generation quality with/without LLM-friendly design
+4. **Automated prompt repair:** Use integration failures to automatically improve prompts
+5. **Coverage metrics:** Measure what percentage of API surface is exercised by tests
 
 ## 7. Related Work
 
@@ -369,23 +544,38 @@ Our work differs in explicitly designing the underlying API to improve LLM gener
 
 We presented a methodology for designing and validating LLM-friendly APIs. The Ralph Wiggum Loop provides an iterative process for improving code generation prompts with objective validation. Our case study with ssql demonstrates that specific design choices—SQL-style naming, encapsulated types, functional composition—significantly improve LLM code generation quality.
 
-As LLM-assisted programming becomes ubiquitous, library designers should consider LLM-friendliness alongside traditional usability metrics. The techniques presented here provide a practical framework for measuring and improving this new dimension of API quality.
+A key finding is the importance of integration testing. Pattern matching alone verified 100% syntactic correctness, but integration testing revealed 13% of generated code failed at runtime—producing panics, wrong results, or using non-existent flags. This gap demonstrates that "does it compile?" is insufficient; "does it work?" requires executing code against real data.
+
+As LLM-assisted programming becomes ubiquitous, library designers should consider LLM-friendliness alongside traditional usability metrics. The techniques presented here—iterative prompt refinement with pattern and integration testing—provide a practical framework for measuring and improving this new dimension of API quality.
 
 ## Appendix A: Implementation
 
-The test harness is implemented in `scripts/test-ai-prompts.sh` (~400 lines of Bash). Test cases are defined in `doc/ai-test-cases.md` using a structured format. System prompts are in `doc/ai-code-generation.md` (Go) and `doc/ai-cli-generation.md` (CLI).
+The test harness is implemented in `scripts/test-ai-prompts.sh` (~600 lines of Bash). Test cases are defined in `doc/ai-test-cases.md` using a structured format. System prompts are in `doc/ai-code-generation.md` (Go) and `doc/ai-cli-generation.md` (CLI). Test data files are in `test-data/`.
 
 To run the test suite:
 
 ```bash
-# Single LLM
+# Single LLM with pattern validation only
 ./scripts/test-ai-prompts.sh --llm claude
+
+# With integration testing (execute generated code)
+./scripts/test-ai-prompts.sh --llm claude --integration
 
 # All supported LLMs
 ./scripts/test-ai-prompts.sh --all-llms
 
+# All LLMs with integration testing
+./scripts/test-ai-prompts.sh --all-llms --integration
+
 # With interactive fix application
 ./scripts/test-ai-prompts.sh --apply-fixes
+```
+
+Makefile targets:
+
+```bash
+make ai-test              # Pattern validation only
+make ai-test-integration  # Full integration testing
 ```
 
 ## Appendix B: Example Test Case
@@ -394,9 +584,9 @@ To run the test suite:
 ### GO-01: Basic Filter and Aggregate
 
 **Prompt:**
-Read a CSV file of employees. Filter to those over 30 years old.
-Group by department. Count employees in each department.
-Write results to stdout as JSON.
+Read employees.csv. Filter to employees over 30 years old.
+Group by dept. Count employees in each department.
+Write the results as JSON to os.Stdout.
 
 **Expected patterns:**
 - `ssql.ReadCSV(`
@@ -405,13 +595,33 @@ Write results to stdout as JSON.
 - `ssql.Count()`
 - `ssql.GetOr(`
 - `int64(0)` or `int64(`
+- `os.Stdout`
 
 **Negative patterns:**
 - `streamv3.`
 - `r["field"]`
 
 **Validation:** compile
+
+**Test Data:** employees.csv
+
+**Expected Output:**
+- `Engineering`
+- `count`
+- `2`
 ```
+
+The test data (`test-data/employees.csv`):
+```csv
+name,age,dept,salary
+Alice,35,Engineering,95000
+Bob,28,Sales,65000
+Charlie,42,Engineering,110000
+Diana,31,Marketing,75000
+Eve,25,Sales,55000
+```
+
+With this data, filtering `age > 30` yields Alice (35), Charlie (42), and Diana (31). Grouping by `dept` produces Engineering: 2, Marketing: 1. The expected output patterns verify the result contains these values.
 
 ## Appendix C: System Prompt Structure
 
