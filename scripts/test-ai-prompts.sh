@@ -47,6 +47,7 @@ MAX_ITERATIONS=5
 DRY_RUN=false
 TEST_MODE="all"  # go, cli, or all
 APPLY_FIXES=false
+LLM_COMMAND="claude"  # LLM CLI to use (claude, gemini, etc.)
 
 # Detailed failure tracking for fix requests
 declare -a DETAILED_FAILURES=()
@@ -70,8 +71,12 @@ while [[ $# -gt 0 ]]; do
             APPLY_FIXES=true
             shift
             ;;
+        --llm)
+            LLM_COMMAND="$2"
+            shift 2
+            ;;
         --help|-h)
-            echo "Usage: $0 [go|cli|all] [--max-iterations N] [--dry-run] [--apply-fixes]"
+            echo "Usage: $0 [go|cli|all] [--max-iterations N] [--dry-run] [--apply-fixes] [--llm CMD]"
             echo ""
             echo "Modes:"
             echo "  go   - Test Go code generation prompt only"
@@ -82,6 +87,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --max-iterations N  Maximum Ralph Wiggum iterations (default: 5)"
             echo "  --dry-run           Parse test cases and show what would be tested"
             echo "  --apply-fixes       Run Claude Code interactively to fix prompt failures"
+            echo "  --llm CMD           LLM command to use (default: claude, also: gemini)"
             exit 0
             ;;
         *)
@@ -98,8 +104,8 @@ mkdir -p "$RESULTS_DIR"
 check_prerequisites() {
     local missing=0
 
-    if ! command -v claude &>/dev/null; then
-        echo -e "${RED}Error: 'claude' CLI not found. Install from https://claude.ai/code${NC}"
+    if ! command -v "$LLM_COMMAND" &>/dev/null; then
+        echo -e "${RED}Error: '$LLM_COMMAND' CLI not found${NC}"
         missing=1
     fi
 
@@ -400,7 +406,7 @@ $prompt"
 
     local generated
     # Note: < /dev/null prevents claude from consuming stdin meant for the test loop
-    generated=$(claude -p "$full_prompt" < /dev/null 2>/dev/null || echo "ERROR: claude failed")
+    generated=$($LLM_COMMAND -p "$full_prompt" < /dev/null 2>/dev/null || echo "ERROR: $LLM_COMMAND failed")
 
     # Extract Go code from markdown code blocks if present
     if echo "$generated" | grep -q '```go'; then
@@ -508,7 +514,7 @@ $prompt"
 
     local generated
     # Note: < /dev/null prevents claude from consuming stdin meant for the test loop
-    generated=$(claude -p "$full_prompt" < /dev/null 2>/dev/null || echo "ERROR: claude failed")
+    generated=$($LLM_COMMAND -p "$full_prompt" < /dev/null 2>/dev/null || echo "ERROR: $LLM_COMMAND failed")
 
     # Extract shell code from markdown code blocks if present
     if echo "$generated" | grep -q '```bash'; then
@@ -764,6 +770,7 @@ EOF
 main() {
     echo -e "${BLUE}ssql AI Prompt Test Runner (Ralph Wiggum Loop)${NC}"
     echo -e "${BLUE}===============================================${NC}"
+    echo -e "${CYAN}LLM: $LLM_COMMAND${NC}"
     echo ""
 
     check_prerequisites
