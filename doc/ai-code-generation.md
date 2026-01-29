@@ -940,6 +940,7 @@ When processing natural language requests, map phrases to ssql operations:
 11. **Join Functions**: Use `InnerJoin`, `LeftJoin`, `RightJoin`, `FullJoin` - bare `Join()` doesn't exist
 12. **Signal Types**: `ssql.Signal` is `[]float64`, `ssql.Spectrum` has `.Magnitude` and `.Phase` fields
 13. **Update vs Select**: Use `Update()` when adding/modifying fields on records. Use `Select()` for arbitrary transformations
+14. **Slice to Iterator**: Use `slices.Values(slice)` from standard library - there is NO `ssql.FromSlice`
 
 ---
 

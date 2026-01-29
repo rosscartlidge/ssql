@@ -199,6 +199,7 @@ Each test case specifies:
 **Negative patterns**:
 - `record["` (direct map access)
 - `convolve(` (wrong casing)
+- `ssql.FromSlice` (doesn't exist, use slices.Values)
 
 **Validation**: compile
 
@@ -433,6 +434,209 @@ Each test case specifies:
 - `write-csv` (old command)
 - `write-json` (old command)
 - `> output.json` (should use ssql to json, not shell redirect)
+
+**Validation**: parse
+
+---
+
+## Extended Tests - Error Handling and Edge Cases
+
+### GO-11: Multi-Stage Pipeline with Chain
+
+**Prompt**: Read logs.csv, filter for ERROR level entries, extract the timestamp and message fields, sort by timestamp descending, take the first 100, and write to recent_errors.csv.
+
+**Expected patterns**:
+- `ssql.ReadCSV("logs.csv")`
+- `ssql.Where(`
+- `ssql.Select(` or `ssql.Update(`
+- `ssql.SortBy(`
+- `ssql.Limit[ssql.Record](100)` or `ssql.Take[ssql.Record](100)`
+- `ssql.Chain(`
+- `ssql.WriteCSV(`
+
+**Negative patterns**:
+- `record["` (direct map access)
+- `ssql.Limit(100)` (missing type parameter)
+- `Pipe(` (wrong function, use Chain)
+
+**Validation**: compile
+
+---
+
+### GO-12: Update with Computed Fields
+
+**Prompt**: Read inventory.csv and add a "value" field computed as quantity * unit_price, then add a "status" field set to "low" if quantity < 10, otherwise "ok".
+
+**Expected patterns**:
+- `ssql.ReadCSV("inventory.csv")`
+- `ssql.Update(`
+- `ssql.MutableRecord` or `MutableRecord`
+- `ssql.GetOr(`
+- `Float(` or `Int(`
+- `String(`
+
+**Negative patterns**:
+- `record["` (direct map access)
+- `SetAny(` (removed in v2)
+- `.Set(` (wrong method, use typed setters)
+
+**Validation**: compile
+
+---
+
+### GO-13: Safe Field Access with Defaults
+
+**Prompt**: Read users.csv where the age field might be missing for some records. Calculate the average age, treating missing ages as 0.
+
+**Expected patterns**:
+- `ssql.ReadCSV("users.csv")`
+- `ssql.GetOr(`
+- `int64(0)` or `float64(0)` or `, 0)` or `, 0.0)`
+- `ssql.Avg(` or `Sum(`
+
+**Negative patterns**:
+- `record["age"]` (unsafe direct access)
+- `r["age"]` (unsafe direct access)
+- `.(int)` (type assertion without GetOr)
+- `.(float64)` (type assertion without GetOr)
+
+**Validation**: compile
+
+---
+
+### GO-14: Early Limit for Performance
+
+**Prompt**: Read a large file huge_data.csv and get just the first 10 records that match a filter where status equals "active".
+
+**Expected patterns**:
+- `ssql.ReadCSV("huge_data.csv")`
+- `ssql.Where(`
+- `ssql.Limit[ssql.Record](10)` or `ssql.Take[ssql.Record](10)`
+- `ssql.Chain(`
+
+**Negative patterns**:
+- `ssql.Limit(10)` (missing type parameter)
+- `Collect(` (don't collect before limit for large files)
+
+**Validation**: compile
+
+---
+
+### GO-15: JSON Input with Nested Fields
+
+**Prompt**: Read events from events.jsonl, filter where the event type is "click", and count events per user_id.
+
+**Expected patterns**:
+- `ssql.ReadJSON("events.jsonl")` or `ssql.ReadJSONFast(`
+- `ssql.Where(`
+- `ssql.GroupByFields(`
+- `ssql.Count()`
+
+**Negative patterns**:
+- `json.Unmarshal` (use ssql.ReadJSON)
+- `record["` (direct map access)
+
+**Validation**: compile
+
+---
+
+### CLI-11: Complex Multi-Stage Pipeline
+
+**Prompt**: Read sales.csv, filter for 2024 transactions, group by product and region, compute total and average sales, sort by total descending, take top 20, output as a table.
+
+**Expected patterns**:
+- `ssql from sales.csv`
+- `ssql where`
+- `ssql group-by`
+- `-sum` or `-avg`
+- `ssql sort`
+- `-desc`
+- `ssql limit 20`
+- `ssql to table`
+- `|`
+
+**Negative patterns**:
+- `read-csv` (old command)
+- `write-table` (old command)
+
+**Validation**: parse
+
+---
+
+### CLI-12: Chart Visualization
+
+**Prompt**: Read sensor.csv and create a line chart showing temperature over time, save to sensor_chart.html.
+
+**Expected patterns**:
+- `ssql from sensor.csv`
+- `ssql to chart`
+- `-x` or `-y`
+- `.html`
+- `|`
+
+**Negative patterns**:
+- `chart sensor.csv` (chart doesn't take FILE argument)
+- `write-chart` (old command)
+
+**Validation**: parse
+
+---
+
+### CLI-13: Distinct with Union
+
+**Prompt**: Combine records from source_a.csv and source_b.csv, removing any duplicates.
+
+**Expected patterns**:
+- `ssql from source_a.csv`
+- `ssql union`
+- `source_b.csv`
+- `-distinct` or `ssql distinct`
+- `|`
+
+**Negative patterns**:
+- `concat` (union handles both files)
+- `UNION` (SQL keyword, not ssql)
+
+**Validation**: parse
+
+---
+
+### CLI-14: Offset and Pagination
+
+**Prompt**: Read products.csv, sort by name, skip the first 50 records, and show the next 25.
+
+**Expected patterns**:
+- `ssql from products.csv`
+- `ssql sort`
+- `ssql offset 50`
+- `ssql limit 25`
+- `|`
+
+**Negative patterns**:
+- `OFFSET` (SQL keyword)
+- `LIMIT` (SQL keyword)
+- `skip` (wrong command, use offset)
+
+**Validation**: parse
+
+---
+
+### CLI-15: Include/Exclude Field Selection
+
+**Prompt**: Read employees.csv and output only the name, email, and department fields.
+
+**Expected patterns**:
+- `ssql from employees.csv`
+- `ssql include` or `ssql exclude`
+- `name`
+- `email`
+- `department`
+- `|`
+
+**Negative patterns**:
+- `SELECT` (SQL keyword)
+- `select` (wrong command, use include/exclude)
+- `-fields` (wrong flag for include)
 
 **Validation**: parse
 

@@ -6,7 +6,17 @@
 # prompt improvement.
 #
 # Usage:
-#   ./scripts/test-ai-prompts.sh [go|cli|all] [--max-iterations N] [--dry-run]
+#   ./scripts/test-ai-prompts.sh [go|cli|all] [--max-iterations N] [--dry-run] [--apply-fixes]
+#
+# Modes:
+#   go          Run Go code generation tests only
+#   cli         Run CLI pipeline tests only
+#   all         Run both (default)
+#
+# Options:
+#   --max-iterations N  Maximum improvement iterations (default: 5)
+#   --dry-run           Show test cases without running them
+#   --apply-fixes       After collecting failures, run Claude Code to fix prompts
 #
 # Requirements:
 #   - claude CLI (claude -p for non-interactive mode)
@@ -31,10 +41,15 @@ GO_PROMPT="$PROJECT_DIR/doc/ai-code-generation.md"
 CLI_PROMPT="$PROJECT_DIR/doc/ai-cli-generation.md"
 RESULTS_DIR="/tmp/ssql-ai-test-results"
 RESULTS_FILE="$PROJECT_DIR/doc/ai-test-results.md"
+FIX_REQUEST_FILE="$PROJECT_DIR/doc/ai-fix-request.md"
 
 MAX_ITERATIONS=5
 DRY_RUN=false
 TEST_MODE="all"  # go, cli, or all
+APPLY_FIXES=false
+
+# Detailed failure tracking for fix requests
+declare -a DETAILED_FAILURES=()
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -51,8 +66,12 @@ while [[ $# -gt 0 ]]; do
             DRY_RUN=true
             shift
             ;;
+        --apply-fixes)
+            APPLY_FIXES=true
+            shift
+            ;;
         --help|-h)
-            echo "Usage: $0 [go|cli|all] [--max-iterations N] [--dry-run]"
+            echo "Usage: $0 [go|cli|all] [--max-iterations N] [--dry-run] [--apply-fixes]"
             echo ""
             echo "Modes:"
             echo "  go   - Test Go code generation prompt only"
@@ -62,6 +81,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --max-iterations N  Maximum Ralph Wiggum iterations (default: 5)"
             echo "  --dry-run           Parse test cases and show what would be tested"
+            echo "  --apply-fixes       Run Claude Code interactively to fix prompt failures"
             exit 0
             ;;
         *)
@@ -114,9 +134,9 @@ check_prerequisites() {
 
 # Parse test cases from markdown
 # Extracts: ID, prompt, expected patterns, negative patterns, validation type
+# Searches the entire file for test cases matching the mode prefix (GO- or CLI-)
 parse_test_cases() {
     local mode="$1"  # "go" or "cli"
-    local in_section=false
     local in_test=false
     local current_id=""
     local current_prompt=""
@@ -125,45 +145,29 @@ parse_test_cases() {
     local current_validation=""
     local reading_field=""
 
-    local section_marker
+    # Determine the ID prefix to look for
+    local id_prefix
     if [ "$mode" = "go" ]; then
-        section_marker="## Go Code Generation Tests"
+        id_prefix="GO"
     else
-        section_marker="## CLI Pipeline Generation Tests"
+        id_prefix="CLI"
     fi
 
     while IFS= read -r line; do
-        # Detect section start
-        if [[ "$line" == "$section_marker" ]]; then
-            in_section=true
-            continue
-        fi
-
-        # Detect section end (next ## heading, but NOT ### subheadings)
-        if $in_section && [[ "$line" =~ ^##\  ]] && [[ ! "$line" =~ ^###\  ]] && [[ "$line" != "$section_marker" ]]; then
-            # Emit final test if any
-            if [ -n "$current_id" ]; then
-                emit_test "$current_id" "$current_prompt" "$current_validation" \
-                    "$(printf '%s\n' "${current_expected[@]}")" \
-                    "$(printf '%s\n' "${current_negative[@]}")"
-            fi
-            in_section=false
-            continue
-        fi
-
-        if ! $in_section; then
-            continue
-        fi
-
         # Detect test case start (### GO-01 or ### CLI-01)
         if [[ "$line" =~ ^###\ (GO|CLI)-([0-9]+): ]]; then
-            # Emit previous test if any
-            if [ -n "$current_id" ]; then
+            local test_type="${BASH_REMATCH[1]}"
+            local test_num="${BASH_REMATCH[2]}"
+
+            # Emit previous test if it matches our mode
+            if [ -n "$current_id" ] && [[ "$current_id" == "${id_prefix}-"* ]]; then
                 emit_test "$current_id" "$current_prompt" "$current_validation" \
                     "$(printf '%s\n' "${current_expected[@]}")" \
                     "$(printf '%s\n' "${current_negative[@]}")"
             fi
-            current_id="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
+
+            # Start new test
+            current_id="${test_type}-${test_num}"
             current_prompt=""
             current_expected=()
             current_negative=()
@@ -226,8 +230,8 @@ parse_test_cases() {
 
     done < "$TEST_CASES"
 
-    # Emit final test
-    if [ -n "$current_id" ] && $in_section; then
+    # Emit final test if it matches our mode
+    if [ -n "$current_id" ] && [[ "$current_id" == "${id_prefix}-"* ]]; then
         emit_test "$current_id" "$current_prompt" "$current_validation" \
             "$(printf '%s\n' "${current_expected[@]}")" \
             "$(printf '%s\n' "${current_negative[@]}")"
@@ -252,6 +256,124 @@ emit_test() {
     echo "$negative"
     echo "NEGATIVE_EOF"
     echo "---TEST_END---"
+}
+
+# Record a detailed failure for fix request generation
+# Arguments: mode, test_id, prompt, failures_list, output_file
+record_detailed_failure() {
+    local mode="$1"
+    local test_id="$2"
+    local prompt="$3"
+    local failures="$4"
+    local output_file="$5"
+
+    local output_content=""
+    if [ -f "$output_file" ]; then
+        output_content=$(cat "$output_file")
+    fi
+
+    # Store as a structured entry (using ||| as field separator)
+    DETAILED_FAILURES+=("${mode}|||${test_id}|||${prompt}|||${failures}|||${output_content}")
+}
+
+# Generate a fix request markdown file from collected failures
+generate_fix_request() {
+    local mode="$1"
+    local prompt_file
+    if [ "$mode" = "go" ]; then
+        prompt_file="$GO_PROMPT"
+    else
+        prompt_file="$CLI_PROMPT"
+    fi
+
+    cat > "$FIX_REQUEST_FILE" << EOF
+# AI Prompt Fix Request
+
+**Generated**: $(date '+%Y-%m-%d %H:%M')
+**Mode**: $mode
+**Prompt file**: $prompt_file
+
+## Summary
+
+The following test cases failed. Please update the prompt file to fix these issues.
+
+**Rules:**
+- Do NOT modify the test cases in \`doc/ai-test-cases.md\`
+- Only modify the prompt file: \`$prompt_file\`
+- Focus on adding missing patterns, clarifying instructions, or adding examples
+- Keep changes minimal and targeted to fix the specific failures
+
+---
+
+EOF
+
+    local count=0
+    for entry in "${DETAILED_FAILURES[@]}"; do
+        # Parse the entry
+        IFS='|||' read -r entry_mode entry_id entry_prompt entry_failures entry_output <<< "$entry"
+
+        # Only include failures for the current mode
+        if [ "$entry_mode" != "$mode" ]; then
+            continue
+        fi
+
+        ((count++))
+
+        # Determine file extension and code language
+        local ext="sh"
+        local lang="bash"
+        if [ "$mode" = "go" ]; then
+            ext="go"
+            lang="go"
+        fi
+
+        cat >> "$FIX_REQUEST_FILE" << EOF
+## Failure $count: $entry_id
+
+**Prompt**: $entry_prompt
+
+**Issues found**:
+\`\`\`
+$entry_failures
+\`\`\`
+
+**Generated output** (\`$RESULTS_DIR/${entry_id}.${ext}\`):
+\`\`\`${lang}
+$entry_output
+\`\`\`
+
+---
+
+EOF
+    done
+
+    if [ $count -eq 0 ]; then
+        echo "No failures to fix!" >> "$FIX_REQUEST_FILE"
+    fi
+
+    echo -e "${BLUE}Fix request written to: $FIX_REQUEST_FILE${NC}"
+}
+
+# Apply fixes using interactive Claude Code
+apply_fixes() {
+    local mode="$1"
+    local prompt_file
+    if [ "$mode" = "go" ]; then
+        prompt_file="$GO_PROMPT"
+    else
+        prompt_file="$CLI_PROMPT"
+    fi
+
+    if [ ! -f "$FIX_REQUEST_FILE" ]; then
+        echo -e "${RED}No fix request file found. Run tests first.${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}Launching Claude Code to apply fixes...${NC}"
+    echo ""
+
+    # Use claude (interactive) with a prompt that references the fix request
+    claude "Please read the fix request file at $FIX_REQUEST_FILE and apply the necessary changes to $prompt_file to fix the test failures. Follow the rules in the fix request - only modify the prompt file, not the test cases."
 }
 
 # Run a single Go test case
@@ -352,6 +474,12 @@ GOMOD
         for f in "${failures[@]}"; do
             echo -e "    ${RED}- $f${NC}"
         done
+        # Record detailed failure for fix request
+        local failures_str=""
+        for f in "${failures[@]}"; do
+            failures_str="${failures_str}${f}"$'\n'
+        done
+        record_detailed_failure "go" "$id" "$prompt" "$failures_str" "$output_file"
         return 1
     fi
 }
@@ -429,6 +557,12 @@ $prompt"
         for f in "${failures[@]}"; do
             echo -e "    ${RED}- $f${NC}"
         done
+        # Record detailed failure for fix request
+        local failures_str=""
+        for f in "${failures[@]}"; do
+            failures_str="${failures_str}${f}"$'\n'
+        done
+        record_detailed_failure "cli" "$id" "$prompt" "$failures_str" "$output_file"
         return 1
     fi
 }
@@ -545,35 +679,37 @@ ralph_wiggum_loop() {
         echo -e "${YELLOW}--- Iteration $((iteration + 1))/$MAX_ITERATIONS ---${NC}"
         echo ""
 
+        # Clear previous detailed failures for this iteration
+        DETAILED_FAILURES=()
+
         run_tests "$mode" || true
         failures=$(( LAST_TOTAL - LAST_PASSED ))
 
-        if [ $failures -gt 0 ] && [ $iteration -lt $((MAX_ITERATIONS - 1)) ]; then
+        if [ $failures -gt 0 ]; then
             echo ""
-            echo -e "${YELLOW}Feeding failures back to improve prompt...${NC}"
 
-            local failed_list=""
-            for fc in "${LAST_FAILED_CASES[@]}"; do
-                failed_list="$failed_list
-- $fc"
-            done
+            # Generate fix request file with detailed failure info
+            generate_fix_request "$mode"
 
-            local improve_prompt="The following test cases failed when using the prompt in $prompt_file:
-$failed_list
-
-The test case definitions are in $TEST_CASES.
-
-Please update the prompt file ($prompt_file) to fix these failures.
-Rules:
-- Do NOT change the test cases
-- Only modify the prompt file
-- Focus on adding missing patterns, fixing anti-patterns, or clarifying instructions
-- Keep changes minimal and targeted"
-
-            claude -p "$improve_prompt" 2>/dev/null || true
-
-            echo -e "${YELLOW}Prompt updated. Re-running tests...${NC}"
-            echo ""
+            if [ $iteration -lt $((MAX_ITERATIONS - 1)) ]; then
+                if $APPLY_FIXES; then
+                    echo ""
+                    echo -e "${YELLOW}Applying fixes using Claude Code...${NC}"
+                    apply_fixes "$mode"
+                    echo ""
+                    echo -e "${YELLOW}Fixes applied. Re-running tests...${NC}"
+                    echo ""
+                else
+                    echo ""
+                    echo -e "${YELLOW}To apply fixes interactively, run:${NC}"
+                    echo -e "  ${CYAN}claude 'Read $FIX_REQUEST_FILE and fix the issues in $prompt_file'${NC}"
+                    echo ""
+                    echo -e "${YELLOW}Or re-run with --apply-fixes to auto-apply:${NC}"
+                    echo -e "  ${CYAN}$0 $mode --apply-fixes${NC}"
+                    # Without --apply-fixes, we exit after first iteration to let user fix manually
+                    break
+                fi
+            fi
         fi
 
         ((iteration++))
