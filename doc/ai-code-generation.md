@@ -139,6 +139,10 @@ for key, value := range record.All() {
     fmt.Printf("%s: %v\n", key, value)
 }
 
+// WARNING: record.All() returns iter.Seq2, not a map!
+// WRONG: json.Marshal(record.All())  // Won't work - iterators can't be JSON encoded
+// RIGHT: ssql.WriteJSONToWriter(records, os.Stdout)  // Use ssql's JSON writer
+
 // Getting keys - Use .KeysIter()
 for key := range record.KeysIter() {
     fmt.Println(key)
@@ -234,10 +238,19 @@ windowed := ssql.ApplyWindow(signal, window)
 data, err := ssql.ReadJSON("data.jsonl")
 data, err := ssql.ReadJSONFast("data.jsonl")  // 2-5x faster, schema caching
 
-// Write JSON/JSONL
+// Write JSON/JSONL to file
 err = ssql.WriteJSON(records, "output.jsonl")
 err = ssql.WriteJSONFast(records, "output.jsonl")  // 2-5x faster
+
+// Write JSON to stdout (IMPORTANT: use WriteJSONToWriter, not WriteJSON!)
+import "os"
+err = ssql.WriteJSONToWriter(records, os.Stdout)
+
+// WRONG - WriteJSON takes a filename, not os.Stdout!
+// err = ssql.WriteJSON(records, os.Stdout)  // WON'T COMPILE
 ```
+
+**CRITICAL:** When writing to stdout, use `ssql.WriteJSONToWriter(records, os.Stdout)`. The function `ssql.WriteJSON()` takes a filename string, not an io.Writer.
 
 ### Distinct and Union
 
@@ -320,6 +333,33 @@ results := ssql.Aggregate("analysis", map[string]ssql.AggregateFunc{
 ### ✅ Correct: Count() is parameterless
 ```go
 "employee_count": ssql.Count()  // ✅ Field name is the map key
+```
+
+### ❌ Wrong: WriteJSON to stdout
+```go
+// These WON'T COMPILE - WriteJSON takes filename string, not io.Writer!
+ssql.WriteJSON(records, os.Stdout)     // ❌ Wrong!
+ssql.WriteJSON(records, "/dev/stdout") // ❌ Wrong! (even if it runs, not portable)
+```
+
+### ✅ Correct: WriteJSONToWriter for stdout
+```go
+import "os"
+ssql.WriteJSONToWriter(records, os.Stdout)  // ✅ Correct!
+```
+
+### ❌ Wrong: Manual JSON encoding with record.All()
+```go
+// record.All() returns iter.Seq2, not a map - can't be JSON encoded!
+for record := range records {
+    json.Marshal(record.All())           // ❌ Won't work!
+    json.NewEncoder(w).Encode(record.All())  // ❌ Won't work!
+}
+```
+
+### ✅ Correct: Use ssql's JSON writer
+```go
+ssql.WriteJSONToWriter(records, os.Stdout)  // ✅ Handles iteration correctly
 ```
 
 ### ❌ Wrong: Different namespaces
