@@ -147,7 +147,26 @@ Named after the Simpsons character who learns through repeated attempts, this me
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Validation Types
+### 2.2 Experimental Setup
+
+**Models Tested:**
+
+| LLM | Model Version | CLI Tool | Notes |
+|-----|---------------|----------|-------|
+| Claude | claude-opus-4-5-20251101 (Opus 4.5) | `claude` v1.0.x | Anthropic's most capable model |
+| Gemini | gemini-2.0-flash | `gemini` v0.26.0 | Google's fast multimodal model |
+
+**Testing Date:** January-February 2026
+
+**Hardware:** Tests run on Intel Core Ultra 9 275HX, Ubuntu Linux
+
+**Invocation:** Both models were invoked via their respective CLI tools in non-interactive mode:
+- Claude: `claude -p "$prompt" < /dev/null`
+- Gemini: `gemini --prompt "$prompt"`
+
+No custom temperature or sampling parameters were used; both CLIs used their default settings.
+
+### 2.3 Validation Types
 
 We employ three validation strategies:
 
@@ -172,7 +191,7 @@ Negative: `streamv3.`, `r["field"].(string)`
 - Verify output contains expected values
 - Catches semantic errors that pass compilation
 
-### 2.3 Integration Testing
+### 2.4 Integration Testing
 
 Pattern matching and compilation verify *syntactic* correctness but cannot detect *semantic* errors—code that compiles but produces wrong results. Integration testing addresses this gap.
 
@@ -266,7 +285,7 @@ Integration testing catches errors that pattern matching misses:
 | Missing output write (`WriteJSON` to `nil`) | ✓ Pass | ✗ Fail (runtime panic) |
 | Inverted filter logic | ✓ Pass | ✗ Fail (wrong records) |
 
-### 2.4 Multi-LLM Testing
+### 2.5 Multi-LLM Testing
 
 To ensure prompts are LLM-agnostic, we test across multiple models:
 
