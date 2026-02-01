@@ -204,8 +204,21 @@ corr, err := ssql.Correlate(signal1, signal2)
 signal := ssql.ExtractSignal(records, "voltage")     // From iter.Seq[Record]
 signal := ssql.ExtractSignalFromSlice(recSlice, "v") // From []Record
 
-// Add signal back to records
+// Add signal back to records (appends new field to each record)
 withSmoothed := ssql.WithSignal(records, "smoothed", smoothedSignal)
+// Output using ssql.WriteJSONToWriter(withSmoothed, os.Stdout)
+
+// Output a signal slice directly as JSON (without records)
+import "encoding/json"
+json.NewEncoder(os.Stdout).Encode(smoothedSignal) // Signal is []float64, JSON-encodable
+```
+
+**NOTE:** There is NO `ssql.Range()` function. To iterate with index, use standard Go:
+```go
+for i, v := range signal {
+    record := ssql.MakeMutableRecord().Int("i", int64(i)).Float("v", v).Freeze()
+    // ...
+}
 ```
 
 ### Spectrogram (STFT)

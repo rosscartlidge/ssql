@@ -250,6 +250,7 @@ Each test case specifies:
 - `record["` (direct map access)
 - `convolve(` (wrong casing)
 - `ssql.FromSlice` (doesn't exist, use slices.Values)
+- `ssql.Range` (doesn't exist)
 
 **Validation**: compile
 
