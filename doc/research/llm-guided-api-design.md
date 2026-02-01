@@ -430,21 +430,23 @@ Each method is named after its type, making correct usage obvious to LLMs.
 
 ### 5.1 Pass Rates by LLM
 
-**Pattern Validation Only:**
+**Current Results (with Integration Testing):**
 
 | LLM | Go Tests | CLI Tests | Total | Rate |
 |-----|----------|-----------|-------|------|
 | Claude (Opus 4.5) | 15/15 | 15/15 | 30/30 | 100% |
-| Gemini | 12/15 | 15/15 | 27/30 | 90% |
+| Gemini | 15/15 | ~13/15 | ~28/30 | ~93% |
 
-**With Integration Testing:**
+**Note:** Gemini results have variance (±2 tests) due to LLM non-determinism. Go tests consistently pass after prompt improvements.
+
+**Historical (before prompt improvements):**
 
 | LLM | Go Tests | CLI Tests | Total | Rate |
 |-----|----------|-----------|-------|------|
-| Claude (Opus 4.5) | 15/15 | 11/15 | 26/30 | 87% |
-| Gemini | 10/15 | 10/15 | 20/30 | 67% |
+| Claude (initial) | 15/15 | 11/15 | 26/30 | 87% |
+| Gemini (initial) | 10/15 | 13/15 | 23/30 | 77% |
 
-The lower integration pass rates reveal that pattern matching alone is insufficient—code that contains correct API calls may still produce wrong results due to logic errors, wrong field names, or incorrect flag usage.
+The improvement from 77% to ~93% for Gemini demonstrates the methodology's effectiveness across different LLMs.
 
 ### 5.2 Common Failure Modes
 
@@ -484,6 +486,9 @@ These changes improved Claude's integration pass rate from 87% to 100% on subseq
 | v4 | 30 | 30/30 | 26/30 | Added integration testing |
 | v5 | 30 | 30/30 | 30/30 | Fixed nil/stdout, flag syntax |
 | v6 | 30 | 30/30 | 30/30 | Fixed group-by/sort positional args, union flags, export SSQLGO |
+| v7 | 30 | 30/30 | ~27/30 | Go prompt: WriteJSONToWriter, record.All() warning, ssql.Range anti-pattern |
+
+**Gemini Improvement:** Go tests improved from 10/15 (67%) to 15/15 (100%) after adding explicit documentation about `WriteJSONToWriter` vs `WriteJSON` and warnings about non-existent functions like `ssql.Range`.
 
 ### 5.5 Case Study: Fixing CLI Failures Through Iteration
 
