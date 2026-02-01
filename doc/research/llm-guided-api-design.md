@@ -154,7 +154,7 @@ Named after the Simpsons character who learns through repeated attempts, this me
 | LLM | Model Version | CLI Tool | Notes |
 |-----|---------------|----------|-------|
 | Claude | claude-opus-4-5-20251101 (Opus 4.5) | `claude` v1.0.x | Anthropic's most capable model |
-| Gemini | gemini-2.0-flash | `gemini` v0.26.0 | Google's fast multimodal model |
+| Gemini | gemini-3.0 (via auto) | `gemini` v0.26.0 | Google's most capable model (auto-selected) |
 
 **Testing Date:** January-February 2026
 
