@@ -435,9 +435,9 @@ Each method is named after its type, making correct usage obvious to LLMs.
 | LLM | Go Tests | CLI Tests | Total | Rate |
 |-----|----------|-----------|-------|------|
 | Claude (Opus 4.5) | 15/15 | 15/15 | 30/30 | 100% |
-| Gemini | 15/15 | ~13/15 | ~28/30 | ~93% |
+| Gemini | 15/15 | 15/15 | 30/30 | 100% |
 
-**Note:** Gemini results have variance (±2 tests) due to LLM non-determinism. Go tests consistently pass after prompt improvements.
+Both LLMs achieve 100% pass rate after iterative prompt improvements.
 
 **Historical (before prompt improvements):**
 
@@ -487,8 +487,11 @@ These changes improved Claude's integration pass rate from 87% to 100% on subseq
 | v5 | 30 | 30/30 | 30/30 | Fixed nil/stdout, flag syntax |
 | v6 | 30 | 30/30 | 30/30 | Fixed group-by/sort positional args, union flags, export SSQLGO |
 | v7 | 30 | 30/30 | ~27/30 | Go prompt: WriteJSONToWriter, record.All() warning, ssql.Range anti-pattern |
+| v8 | 30 | 30/30 | 30/30 | CLI-03 workaround for update schema bug (use raw JSONL output) |
 
-**Gemini Improvement:** Go tests improved from 10/15 (67%) to 15/15 (100%) after adding explicit documentation about `WriteJSONToWriter` vs `WriteJSON` and warnings about non-existent functions like `ssql.Range`.
+**Gemini Improvement:** Achieved 100% pass rate (30/30) after iterative prompt improvements:
+- Go tests: 10/15 → 15/15 (WriteJSONToWriter docs, record.All() warning, ssql.Range anti-pattern)
+- CLI tests: ~13/15 → 15/15 (CLI-03 workaround for schema header bug in update command)
 
 ### 5.5 Case Study: Fixing CLI Failures Through Iteration
 
