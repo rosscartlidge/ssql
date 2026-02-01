@@ -2,7 +2,7 @@
 
 **Authors:** Ross Cartlidge, with Claude (Anthropic)
 
-**Abstract:** We present a methodology for designing APIs that are naturally expressible through large language models (LLMs). Using ssql, a Go stream processing library, as a case study, we demonstrate how iterative prompt testing with objective validation criteria can improve code generation accuracy. Our approach—which we call the "Ralph Wiggum Loop"—achieves 100% test pass rates on Claude across 30 structured test cases, verified through both pattern matching and integration testing that executes generated code against real data. We find that SQL-style naming conventions, encapsulated types, and functional composition patterns significantly improve LLM code generation quality. Notably, integration testing revealed a 13% gap between syntactically correct and behaviorally correct code, underscoring the importance of execution-based validation. We argue this approach should become standard practice for library designers who want their APIs to be LLM-accessible.
+**Abstract:** We present a methodology for designing APIs that are naturally expressible through large language models (LLMs). Using ssql, a Go stream processing library, as a case study, we demonstrate how iterative prompt testing with objective validation criteria can improve code generation accuracy. Our approach—which we call the "Ralph Wiggum Loop"—achieves 100% test pass rates across 30 structured test cases on both Claude and Gemini, verified through integration testing that executes generated code against real data. We find that SQL-style naming conventions, encapsulated types, and functional composition patterns significantly improve LLM code generation quality. Notably, integration testing revealed a 13% gap between syntactically correct and behaviorally correct code. Our comparative analysis shows that different LLMs require different teaching strategies: Claude reached 100% in 2 iterations through positive examples, while Gemini required 5 iterations and explicit anti-patterns to address function hallucination and type confusion. We argue this multi-LLM testing approach should become standard practice for library designers who want their APIs to be broadly LLM-accessible.
 
 ## 1. Introduction
 
@@ -566,7 +566,100 @@ Integration testing transforms prompt engineering from "does it look right?" to 
 - Go-specific findings may not generalize to other languages
 - Expected output patterns may be too strict or too loose
 
-### 6.5 Future Work
+### 6.5 Comparative Analysis: Teaching Claude vs Gemini
+
+Our iterative improvement process revealed distinct learning characteristics between Claude and Gemini. Both achieved 100% pass rates, but the path to get there differed substantially.
+
+**Convergence Speed:**
+
+| LLM | Initial Rate | Iterations to 100% | Primary Blockers |
+|-----|--------------|-------------------|------------------|
+| Claude | 87% | 2 | Output destination (nil vs os.Stdout), CLI flag syntax |
+| Gemini | 77% | 5 | Function hallucination, signature confusion, type misunderstanding |
+
+Claude reached 100% faster, requiring fewer prompt iterations and less explicit negative documentation.
+
+**Failure Mode Analysis:**
+
+*Claude's failures* were primarily about implicit context:
+- Used `nil` instead of `os.Stdout` when prompt said "write JSON" without explicit destination
+- CLI flag ordering differences (minor)
+
+These failures were easy to fix—adding explicit output destinations resolved them immediately.
+
+*Gemini's failures* revealed deeper comprehension gaps:
+
+1. **Function hallucination:** Gemini generated calls to `ssql.Range()` and `ssql.FromSlice()`—functions that don't exist but *sound* like they should. Claude never hallucinated API functions.
+
+2. **Signature confusion:** Gemini used `ssql.WriteJSON(records, os.Stdout)` despite documentation showing `WriteJSON` takes a filename string. It conflated `WriteJSON` with `WriteJSONToWriter`. Claude correctly distinguished between these.
+
+3. **Type system misunderstanding:** Gemini attempted `json.Marshal(record.All())`, not recognizing that `All()` returns an iterator (`iter.Seq2`), not a materialised map. This suggests weaker inference about Go's type system.
+
+4. **Standard library preference:** Gemini more aggressively reached for Go standard library patterns (manual loops, json.Encoder) even when ssql provided idiomatic alternatives.
+
+**Teaching Strategy Differences:**
+
+| Aspect | Claude | Gemini |
+|--------|--------|--------|
+| Positive examples | Highly effective | Effective |
+| Negative examples | Occasionally needed | Essential |
+| Explicit "DO NOT" warnings | Rarely needed | Critical |
+| Function signature docs | Inferred well | Needed explicit detail |
+| Anti-pattern section | Nice to have | Must have |
+
+To teach Gemini effectively, we found these patterns essential:
+
+```markdown
+// WRONG - WriteJSON takes a filename, not a writer!
+err = ssql.WriteJSON(records, os.Stdout)  // WON'T COMPILE
+
+// CORRECT - Use WriteJSONToWriter for io.Writer
+err = ssql.WriteJSONToWriter(records, os.Stdout)
+
+**NOTE:** There is NO `ssql.Range()` function. Use standard Go:
+for i, v := range signal { ... }
+```
+
+Claude rarely needed such explicit warnings—it inferred constraints from positive examples.
+
+**Why the Difference?**
+
+We hypothesise several factors:
+
+1. **Training data composition:** Gemini may have more exposure to general Go codebases where `Range()` functions are common (e.g., Python's `range()` influence). Claude may weight documentation more heavily.
+
+2. **Uncertainty handling:** Claude appears more conservative—when uncertain, it sticks to documented patterns. Gemini is more exploratory, attempting familiar patterns even when not documented.
+
+3. **Context prioritisation:** Claude seems to give system prompts higher weight relative to pre-training knowledge. Gemini may allow pre-training to "leak through" more readily.
+
+4. **Type inference:** Claude showed stronger understanding of Go's type system, correctly inferring that `iter.Seq2` cannot be JSON-encoded. Gemini treated types more loosely.
+
+**Practical Implications:**
+
+For prompt engineers targeting multiple LLMs:
+
+1. **Start with Gemini:** If your prompt works with Gemini, it will likely work with Claude. The reverse is not true.
+
+2. **Include explicit anti-patterns:** Document what NOT to do, with concrete WRONG/CORRECT examples.
+
+3. **Be explicit about function signatures:** Don't assume LLMs will infer parameter types correctly.
+
+4. **Warn about non-existent functions:** If your API lacks a commonly-expected function (like `Range`), say so explicitly.
+
+5. **Test iteratively:** Use Gemini for development iteration (faster, cheaper) and validate with Claude before release.
+
+**Is One Better?**
+
+Neither LLM is definitively "better"—they have different strengths:
+
+- **Claude:** More reliable for documentation-heavy tasks, fewer surprises, faster convergence
+- **Gemini:** More creative exploration, may find novel solutions, but requires more guardrails
+
+For code generation from domain-specific APIs, Claude's conservative approach is advantageous—it's less likely to generate plausible-looking but incorrect code. For open-ended tasks where exploration is valuable, Gemini's tendency to try familiar patterns might occasionally discover better solutions.
+
+The key insight is that **prompt portability across LLMs is not guaranteed**. A prompt achieving 100% on Claude may score 77% on Gemini. Multi-LLM testing isn't optional—it's essential for robust prompt engineering.
+
+### 6.6 Future Work
 
 1. **Fuzzing:** Generate random valid prompts to find edge cases
 2. **Cross-language:** Apply methodology to TypeScript, Python versions
@@ -589,7 +682,9 @@ We presented a methodology for designing and validating LLM-friendly APIs. The R
 
 A key finding is the importance of integration testing. Pattern matching alone verified 100% syntactic correctness, but integration testing revealed 13% of generated code failed at runtime—producing panics, wrong results, or using non-existent flags. This gap demonstrates that "does it compile?" is insufficient; "does it work?" requires executing code against real data.
 
-As LLM-assisted programming becomes ubiquitous, library designers should consider LLM-friendliness alongside traditional usability metrics. The techniques presented here—iterative prompt refinement with pattern and integration testing—provide a practical framework for measuring and improving this new dimension of API quality.
+Our comparative analysis of Claude and Gemini revealed that **prompt portability across LLMs is not guaranteed**. Claude reached 100% pass rate in 2 iterations; Gemini required 5. The failure modes differed qualitatively: Claude's failures were about implicit context (output destinations), while Gemini hallucinated non-existent functions, confused similar API signatures, and misunderstood Go's type system. Teaching Gemini required explicit anti-patterns and "DO NOT" warnings that Claude inferred from positive examples alone. For multi-LLM robustness, we recommend developing prompts against Gemini (the more demanding target) and validating with Claude.
+
+As LLM-assisted programming becomes ubiquitous, library designers should consider LLM-friendliness alongside traditional usability metrics. The techniques presented here—iterative prompt refinement with pattern and integration testing across multiple LLMs—provide a practical framework for measuring and improving this new dimension of API quality.
 
 ## Appendix A: Implementation
 
