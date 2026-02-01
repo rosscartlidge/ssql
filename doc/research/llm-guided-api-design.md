@@ -600,21 +600,20 @@ The test harness is implemented in `scripts/test-ai-prompts.sh` (~600 lines of B
 To run the test suite:
 
 ```bash
-# Single LLM with pattern validation only
-./scripts/test-ai-prompts.sh --llm claude
+# Development iteration: use Gemini to save Claude quota
+./scripts/test-ai-prompts.sh --llm gemini --integration
 
-# With integration testing (execute generated code)
+# Final validation: test with Claude
 ./scripts/test-ai-prompts.sh --llm claude --integration
 
-# All supported LLMs
-./scripts/test-ai-prompts.sh --all-llms
-
-# All LLMs with integration testing
+# Or test all supported LLMs
 ./scripts/test-ai-prompts.sh --all-llms --integration
 
 # With interactive fix application
 ./scripts/test-ai-prompts.sh --apply-fixes
 ```
+
+**Recommended workflow:** Use `--llm gemini` during iterative development (cheaper/faster), then validate with `--llm claude` or `--all-llms` before finalizing prompt changes.
 
 Makefile targets:
 
