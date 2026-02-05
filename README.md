@@ -214,6 +214,26 @@ ssql_gpu version
 
 **Note:** The GPU version falls back to CPU automatically when GPU is unavailable or for small datasets where CPU is faster.
 
+#### Option 1c: Pre-built Debian Packages (easiest install)
+
+Pre-built `.deb` packages are available for amd64 Linux systems:
+
+**Standard version (no GPU dependencies):**
+```bash
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.11.0_amd64.deb
+sudo dpkg -i ssql_4.11.0_amd64.deb
+ssql version
+```
+
+**GPU-accelerated version (requires NVIDIA CUDA runtime):**
+```bash
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.11.0_amd64.deb
+sudo dpkg -i ssql-gpu_4.11.0_amd64.deb
+ssql version
+```
+
+The GPU package requires `libcudart` (CUDA runtime) which is typically installed with NVIDIA drivers.
+
 #### Option 2: Go Library (for application development)
 
 **Step 1: Create a new project**
