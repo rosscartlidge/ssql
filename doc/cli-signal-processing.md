@@ -553,6 +553,98 @@ echo "Compare /tmp/ecg_raw.html and /tmp/ecg_filtered.html"
 echo "Autocorrelation peak in /tmp/ecg_autocorr.html shows beat interval"
 ```
 
+### Example 4: Processing Audio Files (MP3, WAV)
+
+ssql natively reads WAV files. For MP3 and other formats, use `ffmpeg` to convert first.
+
+**Reading a WAV file directly:**
+```bash
+# Read WAV and analyze frequency content
+ssql from song.wav | \
+  ssql fft -field amplitude | \
+  ssql where -where frequency le 5000 | \
+  ssql to chart -x frequency -y magnitude -output /tmp/song_spectrum.html
+
+# The schema header includes sample_rate automatically
+ssql from song.wav | head -1
+# {"_schema":{"fields":["sample","amplitude"],"types":...,"sample_rate":44100}}
+```
+
+**Converting MP3 to WAV with ffmpeg:**
+```bash
+# Convert MP3 to WAV (mono, 44.1kHz)
+ffmpeg -i song.mp3 -ac 1 -ar 44100 song.wav
+
+# Now process with ssql
+ssql from song.wav | \
+  ssql fft -field amplitude | \
+  ssql where -where frequency ge 20 | \
+  ssql where -where frequency le 4000 | \
+  ssql to chart -x frequency -y magnitude -output /tmp/mp3_spectrum.html
+```
+
+**One-liner with process substitution (no intermediate file):**
+```bash
+# Stream MP3 through ffmpeg directly to ssql
+ssql from <(ffmpeg -i song.mp3 -ac 1 -ar 44100 -f wav - 2>/dev/null) | \
+  ssql fft -field amplitude | \
+  ssql where -where frequency le 2000 | \
+  ssql to table | head -20
+```
+
+**Finding the dominant frequencies in a song:**
+```bash
+# Convert and analyze
+ffmpeg -i song.mp3 -ac 1 -ar 44100 /tmp/song.wav 2>/dev/null
+
+# Find top 10 frequency peaks (skip DC component)
+ssql from /tmp/song.wav | \
+  ssql fft -field amplitude | \
+  ssql where -where frequency gt 20 | \
+  ssql sort -desc magnitude | \
+  ssql limit 10 | \
+  ssql to table
+```
+
+**Extracting a specific time segment:**
+```bash
+# Extract 5 seconds starting at 30 seconds, then analyze
+ffmpeg -i song.mp3 -ss 30 -t 5 -ac 1 -ar 44100 /tmp/segment.wav 2>/dev/null
+
+ssql from /tmp/segment.wav | \
+  ssql fft -field amplitude | \
+  ssql where -where frequency le 1000 | \
+  ssql to chart -x frequency -y magnitude -output /tmp/segment_spectrum.html
+```
+
+**Applying audio effects and saving:**
+```bash
+# Read WAV, apply smoothing filter, save result
+ssql from input.wav | \
+  ssql convolve -field amplitude -kernel gaussian -size 11 -same | \
+  ssql update -set amplitude convolved | \
+  ssql include sample amplitude | \
+  ssql to wav -rate 44100 smoothed.wav
+
+# Convert back to MP3 if needed
+ffmpeg -i smoothed.wav -b:a 192k smoothed.mp3
+```
+
+**Comparing two audio files:**
+```bash
+# Cross-correlate to find if one is a time-shifted version of another
+ssql from file1.wav > /tmp/f1.jsonl
+ssql from file2.wav > /tmp/f2.jsonl
+
+# Join on sample index and correlate
+ssql from /tmp/f1.jsonl | \
+  ssql join /tmp/f2.jsonl -using sample -as amplitude amplitude2 | \
+  ssql correlate -field amplitude -with amplitude2 | \
+  ssql sort -desc correlation | \
+  ssql limit 5 | \
+  ssql to table
+```
+
 ---
 
 ## Performance Tips
