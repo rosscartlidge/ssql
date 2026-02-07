@@ -18,13 +18,15 @@ import (
 // and future optimizations like GPU acceleration.
 func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("from").
-		Description("Read data from file or command output (auto-detects CSV, TSV, JSON, JSONL, Arrow). Always emits schema header.").
+		Description("Read data from file or command output (auto-detects CSV, TSV, JSON, JSONL, Arrow, WAV). Always emits schema header.").
 		Example("ssql from data.csv | ssql where -where age gt 18", "Read CSV file (schema header included)").
 		Example("ssql from data.tsv | ssql where -where age gt 18", "Read TSV file (auto-detects separator)").
 		Example("ssql from data.csv -type zipcode string -type phone string", "Force fields to string (preserve leading zeros)").
 		Example("ssql from data.csv -default-type string", "Treat all fields as strings (no auto-detection)").
 		Example("ssql from -- ps aux | ssql where -where USER eq root", "Execute command and parse output").
 		Example("ssql from data.arrow | ssql where -where age gt 18", "Read Arrow file (10-20x faster than CSV)").
+		Example("ssql from audio.wav | ssql fft -field amplitude", "Read WAV audio file (sample_rate in schema header)").
+		Example("ssql from stereo.wav -channel 0 | ssql to table", "Read left channel only from stereo WAV").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -34,8 +36,14 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		String().
 		Global().
 		Default("").
-		Completer(&cf.StaticCompleter{Options: []string{"csv", "tsv", "json", "jsonl", "arrow"}}).
-		Help("Input format for stdin: csv (default), tsv, json, jsonl, arrow").
+		Completer(&cf.StaticCompleter{Options: []string{"csv", "tsv", "json", "jsonl", "arrow", "wav"}}).
+		Help("Input format for stdin: csv (default), tsv, json, jsonl, arrow, wav").
+		Done().
+		Flag("-channel", "-ch").
+		Int().
+		Global().
+		Default(-1).
+		Help("For stereo WAV: extract specific channel (0=left, 1=right). Default: mix to mono.").
 		Done().
 		Flag("-type", "-t").
 		Arg("field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
@@ -53,16 +61,17 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("FILE").
 		String().
-		Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow}"}).
+		Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,wav}"}).
 		Global().
 		Default("").
-		Help("Input file (CSV, TSV, JSON, JSONL, or Arrow). Reads from stdin if not specified.").
+		Help("Input file (CSV, TSV, JSON, JSONL, Arrow, or WAV). Reads from stdin if not specified.").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var format string
 			var generate bool
 			var defaultType string
+			var channel int = -1 // -1 means mix to mono
 			typeOverrides := make(map[string]string)
 
 			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
@@ -79,6 +88,10 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if dtVal, ok := ctx.GlobalFlags["-default-type"]; ok {
 				defaultType = dtVal.(string)
+			}
+
+			if chVal, ok := ctx.GlobalFlags["-channel"]; ok {
+				channel = chVal.(int)
 			}
 
 			// Parse -type flag accumulations
@@ -112,12 +125,12 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 
 				// Always write with schema header
-				return writeWithInferredSchema(records)
+				return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
 			}
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateFromCode(inputFile, format, typeOverrides, defaultType)
+				return generateFromCode(inputFile, format, typeOverrides, defaultType, channel)
 			}
 
 			// Build CSV config with type overrides
@@ -128,7 +141,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Detect format and read
 			var originalRecords iter.Seq[ssql.Record]
-			var csvHeaders []string // Track CSV headers for schema field order
+			var csvHeaders []string    // Track CSV headers for schema field order
+			var wavMeta *ssql.WAVMetadata // Track WAV metadata for sample_rate
 
 			if inputFile == "" {
 				// Reading from stdin - use -format flag or default to CSV
@@ -139,6 +153,12 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					originalRecords = ssql.ReadArrowFromReader(os.Stdin)
 				case "tsv":
 					originalRecords = ssql.ReadTSVFromReader(os.Stdin)
+				case "wav":
+					var werr error
+					originalRecords, wavMeta, werr = ssql.ReadWAVFromReader(os.Stdin)
+					if werr != nil {
+						return fmt.Errorf("reading WAV from stdin: %w", werr)
+					}
 				default: // "csv" or empty
 					originalRecords = ssql.ReadCSVFromReader(os.Stdin, csvConfig)
 				}
@@ -170,6 +190,16 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					originalRecords, rerr = ssql.ReadArrow(inputFile)
 					if rerr != nil {
 						return fmt.Errorf("reading Arrow file: %w", rerr)
+					}
+				case strings.HasSuffix(lower, ".wav"):
+					var werr error
+					if channel >= 0 {
+						originalRecords, wavMeta, werr = ssql.ReadWAVChannel(inputFile, channel)
+					} else {
+						originalRecords, wavMeta, werr = ssql.ReadWAV(inputFile)
+					}
+					if werr != nil {
+						return fmt.Errorf("reading WAV file: %w", werr)
 					}
 				default:
 					// Try to auto-detect by peeking at content
@@ -207,7 +237,11 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Always write with schema header
-			return writeWithInferredSchema(records, csvHeaders)
+			opts := writeWithInferredSchemaOptions{fieldOrder: csvHeaders}
+			if wavMeta != nil {
+				opts.sampleRate = wavMeta.SampleRate
+			}
+			return writeWithInferredSchema(records, opts)
 		}).
 		Done()
 	return cmd
@@ -242,7 +276,7 @@ func buildCSVConfig(typeOverrides map[string]string, defaultType string) (ssql.C
 }
 
 // generateFromCode generates Go code for the from command
-func generateFromCode(filename, format string, typeOverrides map[string]string, defaultType string) error {
+func generateFromCode(filename, format string, typeOverrides map[string]string, defaultType string, channel int) error {
 	var code string
 	var imports []string
 
@@ -262,6 +296,13 @@ func generateFromCode(filename, format string, typeOverrides map[string]string, 
 		case "tsv":
 			code = `records := ssql.ReadTSVFromReader(os.Stdin)`
 			imports = []string{"os"}
+		case "wav":
+			code = `records, _, err := ssql.ReadWAVFromReader(os.Stdin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading WAV: %w", err))
+		os.Exit(1)
+	}`
+			imports = []string{"fmt", "os"}
 		default:
 			if hasConfig {
 				code = configCode + "\n\trecords := ssql.ReadCSVFromReader(os.Stdin, csvConfig)"
@@ -310,6 +351,21 @@ func generateFromCode(filename, format string, typeOverrides map[string]string, 
 		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading Arrow: %%w", err))
 		os.Exit(1)
 	}`, filename)
+			imports = []string{"fmt", "os"}
+		case strings.HasSuffix(lower, ".wav"):
+			if channel >= 0 {
+				code = fmt.Sprintf(`records, _, err := ssql.ReadWAVChannel(%q, %d)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading WAV: %%w", err))
+		os.Exit(1)
+	}`, filename, channel)
+			} else {
+				code = fmt.Sprintf(`records, _, err := ssql.ReadWAV(%q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading WAV: %%w", err))
+		os.Exit(1)
+	}`, filename)
+			}
 			imports = []string{"fmt", "os"}
 		default:
 			// Default to JSON/JSONL
@@ -390,10 +446,20 @@ func readCSVHeaders(filename string) ([]string, error) {
 	return headers, nil
 }
 
+// writeWithInferredSchemaOptions configures writeWithInferredSchema behavior
+type writeWithInferredSchemaOptions struct {
+	fieldOrder []string
+	sampleRate int // For audio data (0 means not audio)
+}
+
 // writeWithInferredSchema infers schema from first record and writes with schema header
 // If fieldOrder is provided, uses that order; otherwise uses sorted field names for determinism
 // Only buffers first record (O(1) memory), then streams remaining records.
-func writeWithInferredSchema(records iter.Seq[ssql.Record], fieldOrder ...[]string) error {
+func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInferredSchemaOptions) error {
+	var options writeWithInferredSchemaOptions
+	if len(opts) > 0 {
+		options = opts[0]
+	}
 	// Use pull-style iteration to peek at first record
 	next, stop := iter.Pull(records)
 	defer stop()
@@ -407,8 +473,8 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], fieldOrder ...[]stri
 
 	// Determine field order
 	var order []string
-	if len(fieldOrder) > 0 && len(fieldOrder[0]) > 0 {
-		order = fieldOrder[0]
+	if len(options.fieldOrder) > 0 {
+		order = options.fieldOrder
 	} else {
 		// Use sorted field names for deterministic output
 		for k := range firstRecord.All() {
@@ -419,6 +485,11 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], fieldOrder ...[]stri
 
 	// Infer schema from first record
 	schema := lib.InferFromRecordOrdered(firstRecord, order)
+
+	// Set sample rate for audio data
+	if options.sampleRate > 0 {
+		schema.SampleRate = options.sampleRate
+	}
 
 	// Create streaming iterator: first record + remaining records
 	allRecords := func(yield func(ssql.Record) bool) {

@@ -21,8 +21,9 @@ const (
 
 // Schema represents the structure of JSONL records with ordered fields and types.
 type Schema struct {
-	Fields []string          `json:"fields"` // Ordered field names
-	Types  map[string]string `json:"types"`  // Field -> type string
+	Fields     []string          `json:"fields"`                // Ordered field names
+	Types      map[string]string `json:"types"`                 // Field -> type string
+	SampleRate int               `json:"sample_rate,omitempty"` // Audio sample rate (0 if not audio)
 }
 
 // NewSchema creates an empty schema.
@@ -102,16 +103,18 @@ type schemaHeader struct {
 }
 
 type schemaContent struct {
-	Fields []string          `json:"fields"`
-	Types  map[string]string `json:"types"`
+	Fields     []string          `json:"fields"`
+	Types      map[string]string `json:"types"`
+	SampleRate int               `json:"sample_rate,omitempty"` // Audio sample rate (0 if not audio)
 }
 
 // WriteHeader writes the schema as a JSONL header line.
 func (s *Schema) WriteHeader(w io.Writer) error {
 	header := schemaHeader{
 		Schema: schemaContent{
-			Fields: s.Fields,
-			Types:  s.Types,
+			Fields:     s.Fields,
+			Types:      s.Types,
+			SampleRate: s.SampleRate,
 		},
 	}
 	data, err := json.Marshal(header)
@@ -128,8 +131,9 @@ func (s *Schema) WriteHeader(w io.Writer) error {
 // MarshalJSON implements json.Marshaler for Schema.
 func (s *Schema) MarshalJSON() ([]byte, error) {
 	return json.Marshal(schemaContent{
-		Fields: s.Fields,
-		Types:  s.Types,
+		Fields:     s.Fields,
+		Types:      s.Types,
+		SampleRate: s.SampleRate,
 	})
 }
 
@@ -171,6 +175,11 @@ func ParseSchemaHeader(data map[string]any) (*Schema, bool) {
 				schema.Types[k] = typ
 			}
 		}
+	}
+
+	// Extract sample_rate (for audio data)
+	if sampleRate, ok := schemaMap["sample_rate"].(float64); ok {
+		schema.SampleRate = int(sampleRate)
 	}
 
 	return schema, true
