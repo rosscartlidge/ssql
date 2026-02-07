@@ -220,15 +220,15 @@ Pre-built `.deb` packages are available for amd64 Linux systems:
 
 **Standard version (no GPU dependencies):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.11.0_amd64.deb
-sudo dpkg -i ssql_4.11.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.12.0_amd64.deb
+sudo dpkg -i ssql_4.12.0_amd64.deb
 ssql version
 ```
 
 **GPU-accelerated version (requires NVIDIA CUDA runtime):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.11.0_amd64.deb
-sudo dpkg -i ssql-gpu_4.11.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.12.0_amd64.deb
+sudo dpkg -i ssql-gpu_4.12.0_amd64.deb
 ssql version
 ```
 
