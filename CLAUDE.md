@@ -473,10 +473,40 @@ git tag -a vX.Y.Z -m "Release notes..."
 # 5. Push everything
 git push && git push --tags
 
-# 6. CRITICAL: Verify go.mod has NO replace directive
+# 6. Build and push debian packages
+# Standard package
+mkdir -p /tmp/ssql-deb/DEBIAN /tmp/ssql-deb/usr/bin
+go build -o /tmp/ssql-deb/usr/bin/ssql ./cmd/ssql
+cat > /tmp/ssql-deb/DEBIAN/control << EOF
+Package: ssql
+Version: X.Y.Z
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: libc6
+Maintainer: Ross Cartlidge <ross@cartlidge.com>
+Description: Unix-style data processing tools
+Homepage: https://github.com/rosscartlidge/ssql
+EOF
+dpkg-deb --build /tmp/ssql-deb ssql_X.Y.Z_amd64.deb
+
+# GPU package (if libssqlgpu.so exists)
+mkdir -p /tmp/ssql-gpu-deb/DEBIAN /tmp/ssql-gpu-deb/usr/bin /tmp/ssql-gpu-deb/usr/lib
+CGO_ENABLED=1 go build -tags gpu -o /tmp/ssql-gpu-deb/usr/bin/ssql ./cmd/ssql
+cp gpu/libssqlgpu.so /tmp/ssql-gpu-deb/usr/lib/
+# Create control file with libcudart dependency, postinst/postrm for ldconfig
+dpkg-deb --build /tmp/ssql-gpu-deb ssql-gpu_X.Y.Z_amd64.deb
+
+# Remove old packages, add new ones, update README URLs
+rm ssql_OLD.deb ssql-gpu_OLD.deb
+git add ssql_X.Y.Z_amd64.deb ssql-gpu_X.Y.Z_amd64.deb README.md
+git commit -m "release: add ssql vX.Y.Z debian packages"
+git push
+
+# 7. CRITICAL: Verify go.mod has NO replace directive
 cat go.mod  # Should NOT contain "replace" line
 
-# 7. Verify install works from GitHub
+# 8. Verify install works from GitHub
 GOPROXY=direct go install github.com/rosscartlidge/ssql/cmd/ssql@vX.Y.Z
 ssql version  # Should show: ssql vX.Y.Z
 ```
@@ -488,6 +518,7 @@ ssql version  # Should show: ssql vX.Y.Z
 - **No replace directive**: `go.mod` must NOT contain `replace` line (breaks `go install`)
 - **Annotated tags only**: Use `git tag -a vX.Y.Z -m "..."` not `git tag vX.Y.Z`
 - **Test install**: Always verify with `GOPROXY=direct go install` before announcing release
+- **Debian packages**: Always build and push updated `.deb` packages for minor/major releases
 - **Major version bumps**: Only bump major version (e.g., v4 → v5) when explicitly requested by the user. Major bumps require updating the module path (`/v4` → `/v5`) throughout the codebase. Use minor/patch versions for most releases.
 
 **How It Works:**
