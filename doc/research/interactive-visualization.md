@@ -183,7 +183,110 @@ output/
 
 ---
 
-### Approach 4: Hybrid (HTML + Optional Server)
+### Approach 4: Go/WASM in Browser
+
+**How it works:**
+- Compile ssql to WebAssembly using Go's WASM target
+- Load WASM module in browser
+- Run ssql operations (filter, aggregate, FFT, etc.) client-side
+- No server needed, even for complex transformations
+
+**Pros:**
+- Full ssql power in the browser
+- No server required
+- Works offline
+- Same code for CLI and browser
+- Can handle moderate data sizes (limited by browser memory)
+
+**Cons:**
+- WASM binary size (~15-30MB for full ssql)
+- Initial load time
+- Memory constraints (browser tab limit ~2-4GB)
+- Some Go features don't work in WASM (e.g., file system)
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────┐
+│                    Browser                       │
+│  ┌──────────────┐    ┌─────────────────────┐   │
+│  │  React UI    │◄──►│  ssql.wasm          │   │
+│  │  - Tables    │    │  - ReadCSV          │   │
+│  │  - Charts    │    │  - Where/Filter     │   │
+│  │  - Controls  │    │  - GroupBy/Agg      │   │
+│  └──────────────┘    │  - FFT/Spectrogram  │   │
+│                      │  - Join/Union       │   │
+│                      └─────────────────────┘   │
+└─────────────────────────────────────────────────┘
+```
+
+**JavaScript ↔ Go/WASM interface:**
+```go
+// Go side - exported to WASM
+//go:export filterRecords
+func filterRecords(jsonData string, field string, op string, value string) string {
+    records := parseJSON(jsonData)
+    filtered := ssql.Where(func(r ssql.Record) bool {
+        return compare(ssql.GetOr(r, field, ""), op, value)
+    })(records)
+    return toJSON(filtered)
+}
+
+//go:export computeFFT
+func computeFFT(jsonData string, field string, sampleRate int) string {
+    records := parseJSON(jsonData)
+    result := ssql.FFT(field, sampleRate)(records)
+    return toJSON(result)
+}
+```
+
+```javascript
+// JavaScript side
+const go = new Go();
+const result = await WebAssembly.instantiateStreaming(
+    fetch('ssql.wasm'), go.importObject
+);
+go.run(result.instance);
+
+// Call ssql functions
+const filtered = window.filterRecords(jsonData, "age", "gt", "18");
+const spectrum = window.computeFFT(audioData, "amplitude", 44100);
+```
+
+**Build process:**
+```bash
+# Compile ssql to WASM
+GOOS=js GOARCH=wasm go build -o ssql.wasm ./cmd/ssql-wasm
+
+# Copy Go's WASM support file
+cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" .
+```
+
+**WASM-specific ssql module:**
+Would need a dedicated `cmd/ssql-wasm` that:
+- Exports key functions for JS interop
+- Removes file system dependencies
+- Optimizes for code size (exclude unused commands)
+- Uses `syscall/js` for browser integration
+
+**Size optimization:**
+```bash
+# Full ssql: ~30MB WASM
+# Optimized build with TinyGo: ~5-10MB
+# With compression (gzip): ~3-5MB
+
+# Build with TinyGo for smaller output
+tinygo build -o ssql.wasm -target wasm ./cmd/ssql-wasm
+```
+
+**Performance considerations:**
+- WASM is ~1.5-2x slower than native Go
+- But no network latency (all client-side)
+- For interactive use, likely fast enough
+- FFT on 10K samples: ~50ms in WASM vs ~25ms native
+
+---
+
+### Approach 5: Hybrid (HTML + Optional Server)
 
 **How it works:**
 - Generate standalone HTML for small datasets
@@ -387,12 +490,23 @@ canvas.onclick = (e) => {
 **Effort:** 5-7 days
 **Output:** Long-running server process
 
-### Phase 5: Full Analysis Workbench
+### Phase 5: Go/WASM Integration
+- Compile ssql core to WebAssembly
+- Export key functions (filter, aggregate, FFT, etc.)
+- JavaScript bridge for React components
+- Enable in-browser data transformations
+- No server needed for complex operations
+
+**Effort:** 3-5 days
+**Output:** ssql.wasm (~5-10MB) + JS bindings
+
+### Phase 6: Full Analysis Workbench
 - Pivot table functionality
 - Multiple linked visualizations
 - Dashboard layout
 - Save/load analysis sessions
 - Export to PDF/PNG
+- WASM-powered transformations
 
 **Effort:** 5-10 days
 **Output:** Full-featured analysis app
@@ -422,6 +536,11 @@ canvas.onclick = (e) => {
 4. **Build system?**
    - Recommend: None for Phase 1-3 (CDN + inline)
    - Esbuild for Phase 4+ (embedded in Go binary)
+
+5. **Go/WASM for in-browser transformations?**
+   - High potential - runs ssql operations without server
+   - Consider for Phase 3+ when interactive filtering/aggregation needed
+   - Could be optional: load WASM only if user wants to transform data
 
 ---
 
@@ -469,3 +588,8 @@ canvas.onclick = (e) => {
 5. Target users?
    - Developers: OK with npm commands
    - Analysts: Prefer just opening HTML file
+
+6. Go/WASM priority?
+   - Enables powerful client-side transformations
+   - Tradeoff: larger initial download (~5-10MB)
+   - Could lazy-load: basic view first, WASM on demand
