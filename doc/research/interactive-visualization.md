@@ -451,65 +451,275 @@ canvas.onclick = (e) => {
 ## Implementation Phases
 
 ### Phase 1: Enhanced Chart Output
-- Add heatmap chart type to existing `to chart`
-- Support Z-axis (color) field
-- Multiple Y-series on same chart
-- Logarithmic axis option
+
+Extend `to chart` with heatmaps, multi-series, and better axis control.
+
+**New commands:**
+```bash
+# Heatmap from any X/Y/Z data (color = Z value)
+ssql from data.csv | ssql to chart -x time -y category -z value -type heatmap
+
+# Multiple Y-series on same chart
+ssql from data.csv | ssql to chart -x date -y revenue -y expenses -y profit
+
+# Logarithmic axes
+ssql from data.csv | ssql to chart -x frequency -y magnitude -log-y
+
+# Color by third variable (scatter)
+ssql from data.csv | ssql to chart -x age -y income -color region -type scatter
+```
+
+**Existing command (unchanged):**
+```bash
+ssql from data.csv | ssql to chart -x date -y sales -output sales.html
+```
 
 **Effort:** 1-2 days
 **Output:** Same HTML format, more chart types
 
-### Phase 2: Interactive Data Explorer (Standalone HTML)
-- New command: `ssql to explore output.html`
-- Embedded React app with:
-  - Data table with sort/filter
-  - Chart panel with field selection
-  - Basic aggregation UI
-- All in single HTML file
+---
+
+### Phase 2: Interactive Data Explorer
+
+New `to explore` command generates a React-based data exploration app.
+
+**New commands:**
+```bash
+# Generate interactive explorer (data table + charts)
+ssql from sales.csv | ssql to explore output.html
+
+# With initial chart configuration
+ssql from sales.csv | ssql to explore -x date -y revenue output.html
+
+# From any pipeline
+ssql from logs.jsonl | ssql where -where level eq ERROR | ssql to explore errors.html
+```
+
+**What the generated HTML provides:**
+- Sortable/filterable data table
+- Field selector dropdowns for X/Y axes
+- Chart type switcher (line, bar, scatter, pie)
+- Basic aggregation UI (group by field, apply sum/avg/count)
+- Export filtered data as CSV
+
+**Example workflow:**
+```bash
+# Generate explorer
+ssql from customers.csv | ssql to explore customers.html
+
+# Open in browser - then interactively:
+# 1. Filter table: status = "active"
+# 2. Group by: region
+# 3. Aggregate: count, avg(lifetime_value)
+# 4. Chart: bar chart of count by region
+```
 
 **Effort:** 3-5 days
-**Output:** Single HTML file, ~500KB + data
+**Output:** Single HTML file (~500KB + data)
 
-### Phase 3: Spectrogram Visualization
-- New command: `ssql to spectrogram output.html`
-- Canvas-based heatmap rendering
-- Color scale selection
-- Zoom/pan interaction
-- Cursor readout
+---
+
+### Phase 3: Heatmap/Spectrogram Visualization
+
+New `to heatmap` command for visualizing 2D data grids (spectrograms, matrices, etc.).
+
+**New commands:**
+```bash
+# Spectrogram visualization (uses existing spectrogram command output)
+ssql from audio.wav | \
+  ssql spectrogram -field amplitude -rate 44100 | \
+  ssql to heatmap -x time -y frequency -z magnitude output.html
+
+# With options
+ssql from audio.wav | \
+  ssql spectrogram -field amplitude -rate 44100 -output db | \
+  ssql to heatmap -x time -y frequency -z magnitude \
+    -colorscale viridis \
+    -zmin -80 -zmax 0 \
+    output.html
+
+# Any X/Y/Z data works (not just spectrograms)
+ssql from matrix.csv | ssql to heatmap -x row -y col -z value output.html
+
+# Correlation matrix
+ssql from data.csv | ssql correlate-matrix | ssql to heatmap output.html
+```
+
+**Existing commands used as input:**
+```bash
+# spectrogram command already exists - outputs time, frequency, magnitude
+ssql from audio.wav | ssql spectrogram -field amplitude -rate 44100 | ssql to table
+# time        frequency   magnitude
+# 0.023       0.000       0.001
+# 0.023       43.066      0.234
+# ...
+```
+
+**What the generated HTML provides:**
+- Canvas-based heatmap (fast rendering for large grids)
+- Color scale selector (viridis, plasma, inferno, etc.)
+- Zoom and pan (mouse wheel, drag)
+- Cursor crosshairs with value readout
+- Adjustable color range (min/max sliders)
+- Logarithmic frequency axis option (for audio)
+- Export as PNG
 
 **Effort:** 2-3 days
-**Output:** Specialized HTML for spectrogram data
+**Output:** Specialized HTML for heatmap visualization
+
+---
 
 ### Phase 4: Server Mode
-- New command: `ssql serve -port 8080`
-- REST API for data access
-- WebSocket for streaming
-- React app served from Go binary
-- Handles unlimited data sizes
+
+New `ssql serve` command for large datasets and real-time streaming.
+
+**New commands:**
+```bash
+# Serve a data file (opens browser automatically)
+ssql serve data.csv
+
+# Specify port
+ssql serve -port 8080 data.csv
+
+# Serve from pipeline (buffers data)
+ssql from logs.jsonl | ssql where -where level eq ERROR | ssql serve -port 3000
+
+# Stream live data (WebSocket)
+tail -f /var/log/app.log | ssql from -format jsonl | ssql serve -stream
+
+# Multiple data sources
+ssql serve -port 8080 \
+  -data sales:sales.csv \
+  -data products:products.csv \
+  -data customers:customers.csv
+```
+
+**API endpoints provided:**
+```bash
+# REST API for data access
+GET  /api/data?limit=100&offset=0     # Paginated data
+GET  /api/schema                       # Field names and types
+POST /api/query                        # Run ssql query on data
+POST /api/aggregate                    # Group by + aggregate
+WS   /ws/stream                        # WebSocket for live data
+```
+
+**Example workflow:**
+```bash
+# Terminal 1: Start server
+ssql serve -port 8080 big_data.csv
+
+# Terminal 2: Query via API
+curl 'http://localhost:8080/api/data?limit=10'
+curl -X POST 'http://localhost:8080/api/query' \
+  -d '{"where": "age > 30", "fields": ["name", "age"]}'
+
+# Or just open browser to http://localhost:8080 for UI
+```
 
 **Effort:** 5-7 days
-**Output:** Long-running server process
+**Output:** Long-running HTTP server with React UI
+
+---
 
 ### Phase 5: Go/WASM Integration
-- Compile ssql core to WebAssembly
-- Export key functions (filter, aggregate, FFT, etc.)
-- JavaScript bridge for React components
-- Enable in-browser data transformations
-- No server needed for complex operations
+
+Compile ssql to WebAssembly for in-browser transformations.
+
+**New commands:**
+```bash
+# Generate explorer with WASM support (enables in-browser transformations)
+ssql from data.csv | ssql to explore -wasm output.html
+
+# Or explicitly include WASM module
+ssql to explore -wasm -include-wasm output.html
+```
+
+**What WASM enables in the browser (no server needed):**
+```javascript
+// User clicks "Filter" button in the UI
+const filtered = ssql.where(data, "age", "gt", "30");
+
+// User selects aggregation
+const grouped = ssql.groupBy(data, "region", {
+  count: "count",
+  total_sales: "sum(sales)"
+});
+
+// User runs FFT on selected column
+const spectrum = ssql.fft(data, "amplitude", 44100);
+
+// All runs client-side via WASM - no server round-trip
+```
+
+**Build outputs:**
+```bash
+# Standard explore (no WASM, ~500KB)
+ssql from data.csv | ssql to explore output.html
+
+# With WASM (~5MB, but enables transformations)
+ssql from data.csv | ssql to explore -wasm output.html
+```
 
 **Effort:** 3-5 days
 **Output:** ssql.wasm (~5-10MB) + JS bindings
 
+---
+
 ### Phase 6: Full Analysis Workbench
-- Pivot table functionality
-- Multiple linked visualizations
-- Dashboard layout
+
+Complete data analysis environment with dashboards and persistence.
+
+**New commands:**
+```bash
+# Launch full workbench
+ssql workbench data.csv
+
+# With multiple data sources
+ssql workbench -data sales:sales.csv -data products:products.csv
+
+# Load saved analysis session
+ssql workbench -session my_analysis.json
+
+# Generate standalone dashboard from session
+ssql workbench -session my_analysis.json -export dashboard.html
+```
+
+**Workbench features:**
+- Pivot tables (drag-and-drop row/column/value fields)
+- Multiple linked charts (click one to filter others)
+- Dashboard layout (arrange charts in grid)
 - Save/load analysis sessions
 - Export to PDF/PNG
 - WASM-powered transformations
+- SQL query editor
+
+**Example session file:**
+```json
+{
+  "data_sources": ["sales.csv"],
+  "views": [
+    {
+      "type": "pivot",
+      "rows": ["region"],
+      "columns": ["quarter"],
+      "values": [{"field": "revenue", "agg": "sum"}]
+    },
+    {
+      "type": "chart",
+      "chart_type": "bar",
+      "x": "region",
+      "y": "revenue"
+    }
+  ],
+  "filters": [
+    {"field": "year", "op": "eq", "value": "2024"}
+  ]
+}
+```
 
 **Effort:** 5-10 days
-**Output:** Full-featured analysis app
+**Output:** Full-featured analysis application
 
 ---
 
@@ -517,10 +727,35 @@ canvas.onclick = (e) => {
 
 **For immediate value with minimal complexity:**
 
-1. **Start with Phase 1** - Enhanced charts are quick wins
-2. **Then Phase 3** - Spectrogram is high-value for audio work
-3. **Then Phase 2** - Data explorer for general analysis
-4. **Phase 4 later** - Only if data sizes require it
+1. **Start with Phase 1** - Enhanced `to chart` with heatmaps and multi-series
+   ```bash
+   ssql from data.csv | ssql to chart -x time -y temp -y humidity
+   ```
+
+2. **Then Phase 3** - `to heatmap` for spectrogram visualization
+   ```bash
+   ssql from audio.wav | ssql spectrogram ... | ssql to heatmap output.html
+   ```
+
+3. **Then Phase 2** - `to explore` for interactive data analysis
+   ```bash
+   ssql from sales.csv | ssql to explore output.html
+   ```
+
+4. **Phase 5 (WASM)** - When users need in-browser transformations
+   ```bash
+   ssql from data.csv | ssql to explore -wasm output.html
+   ```
+
+5. **Phase 4 (Server)** - Only if data sizes exceed browser limits
+   ```bash
+   ssql serve big_data.csv  # Handles GB+ datasets
+   ```
+
+6. **Phase 6 (Workbench)** - Full analysis environment
+   ```bash
+   ssql workbench -data sales.csv -data products.csv
+   ```
 
 **Key decisions needed:**
 
