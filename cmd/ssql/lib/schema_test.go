@@ -361,9 +361,9 @@ func TestInferTypeString(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := inferTypeString(tt.value)
+		got := InferTypeString(tt.value)
 		if got != tt.expected {
-			t.Errorf("inferTypeString(%T) = %q, expected %q", tt.value, got, tt.expected)
+			t.Errorf("InferTypeString(%T) = %q, expected %q", tt.value, got, tt.expected)
 		}
 	}
 }

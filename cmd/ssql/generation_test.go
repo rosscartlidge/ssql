@@ -1195,3 +1195,55 @@ func TestJoinWithProcessSubstitutionGeneration(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdateSchemaNewField tests that update -set with a new field updates the schema header
+func TestUpdateSchemaNewField(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	// Input with schema header - no "tier" field
+	input := `{"_schema":{"fields":["name","status"],"types":{"name":"string","status":"string"}}}
+{"name":"Alice","status":"pending"}
+{"name":"Bob","status":"active"}
+`
+	if err := os.WriteFile("/tmp/test_update_schema.jsonl", []byte(input), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+	defer os.Remove("/tmp/test_update_schema.jsonl")
+
+	cmdLine := `/tmp/ssql_test update -set tier gold < /tmp/test_update_schema.jsonl`
+	cmd := exec.Command("bash", "-c", cmdLine)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("Command failed: %v\nOutput: %s", err, output)
+	}
+
+	outputStr := string(output)
+	lines := strings.Split(strings.TrimSpace(outputStr), "\n")
+
+	if len(lines) < 1 {
+		t.Fatalf("Expected at least 1 line of output, got: %s", outputStr)
+	}
+
+	// First line should be the schema header with "tier" added
+	schemaLine := lines[0]
+	if !strings.Contains(schemaLine, `"_schema"`) {
+		t.Fatalf("First line should be schema header, got: %s", schemaLine)
+	}
+	if !strings.Contains(schemaLine, `"tier"`) {
+		t.Errorf("Schema header should include new field 'tier', got: %s", schemaLine)
+	}
+
+	// Data lines should contain tier field
+	for i, line := range lines[1:] {
+		if !strings.Contains(line, `"tier"`) {
+			t.Errorf("Data line %d should contain 'tier' field, got: %s", i+1, line)
+		}
+		if !strings.Contains(line, `"gold"`) {
+			t.Errorf("Data line %d should contain 'gold' value, got: %s", i+1, line)
+		}
+	}
+}

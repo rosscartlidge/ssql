@@ -350,13 +350,34 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Apply update
 			updated := updateFilter(records)
 
-			// For update, we pass through the schema unchanged
-			// (update modifies values but doesn't fundamentally change schema structure)
-			// Note: new fields added via -set are not reflected in schema
-			// This is a known limitation - use 'from -schema' after update to regenerate
+			// Update schema to include any new fields added by -set/-set-expr
+			outputSchema := schemaAndRecords.Schema
+			if outputSchema != nil {
+				hasNewFields := false
+				for field := range allSetFields {
+					if !outputSchema.HasField(field) {
+						hasNewFields = true
+						break
+					}
+				}
+				if hasNewFields {
+					outputSchema = outputSchema.Clone()
+					for _, clause := range clauses {
+						for _, upd := range clause.updates {
+							if !outputSchema.HasField(upd.field) {
+								if upd.isExpr {
+									outputSchema.AddField(upd.field, lib.TypeString)
+								} else {
+									outputSchema.AddField(upd.field, lib.InferTypeString(parseValue(upd.literal)))
+								}
+							}
+						}
+					}
+				}
+			}
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, updated); err != nil {
+			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, updated); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

@@ -200,7 +200,7 @@ func ParseSchemaHeaderFromBytes(data []byte) (*Schema, bool) {
 func InferFromRecord(record ssql.Record) *Schema {
 	schema := NewSchema()
 	for k, v := range record.All() {
-		schema.AddField(k, inferTypeString(v))
+		schema.AddField(k, InferTypeString(v))
 	}
 	return schema
 }
@@ -213,22 +213,22 @@ func InferFromRecordOrdered(record ssql.Record, fieldOrder []string) *Schema {
 	// Add fields in specified order first
 	for _, field := range fieldOrder {
 		if v, ok := ssql.Get[any](record, field); ok {
-			schema.AddField(field, inferTypeString(v))
+			schema.AddField(field, InferTypeString(v))
 		}
 	}
 
 	// Add any remaining fields (in iteration order, which is random)
 	for k, v := range record.All() {
 		if !schema.HasField(k) {
-			schema.AddField(k, inferTypeString(v))
+			schema.AddField(k, InferTypeString(v))
 		}
 	}
 
 	return schema
 }
 
-// inferTypeString returns the schema type string for a value.
-func inferTypeString(v any) string {
+// InferTypeString returns the schema type string for a value.
+func InferTypeString(v any) string {
 	switch v.(type) {
 	case int64:
 		return TypeInt
