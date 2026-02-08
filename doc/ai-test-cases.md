@@ -353,7 +353,7 @@ Each test case specifies:
 
 ### CLI-03: Update with If-Else Clauses
 
-**Prompt**: Read users.csv and set tier to "senior" where age >= 40, set tier to "mid" where age >= 30, otherwise set tier to "junior". Output raw JSONL (no 'to' command needed - default output is JSONL which preserves new fields).
+**Prompt**: Read users.csv and set tier to "senior" where age >= 40, set tier to "mid" where age >= 30, otherwise set tier to "junior".
 
 **Expected patterns**:
 - `ssql from users.csv`
@@ -368,8 +368,6 @@ Each test case specifies:
 **Negative patterns**:
 - `-match` (old flag name)
 - `ssql update users.csv` (transform commands don't take FILE)
-- `to table` (doesn't show new fields from update due to schema bug)
-- `to json` (also affected by schema bug)
 
 **Validation**: parse
 
