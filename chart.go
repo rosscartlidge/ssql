@@ -346,6 +346,218 @@ func EnhancedChart(sb iter.Seq[Record], config ChartConfig, filename string) err
 	return generateEnhancedHTML(chartData, config, filename)
 }
 
+// HeatmapConfig configures specialized heatmap/spectrogram visualization.
+// Provides fine-grained control over color scales, axis types, and value ranges.
+type HeatmapConfig struct {
+	Title      string  `json:"title"`
+	XField     string  `json:"xField"`     // X-axis field (e.g., "time")
+	YField     string  `json:"yField"`     // Y-axis field (e.g., "frequency")
+	ZField     string  `json:"zField"`     // Color value field (e.g., "magnitude")
+	ColorScale string  `json:"colorScale"` // viridis, plasma, inferno, magma, cividis, turbo
+	ZMin       float64 `json:"zMin"`       // Minimum value for color scale (0 = auto)
+	ZMax       float64 `json:"zMax"`       // Maximum value for color scale (0 = auto)
+	LogFreq    bool    `json:"logFreq"`    // Use logarithmic Y-axis (for frequency)
+	Theme      string  `json:"theme"`      // light or dark
+	Width      int     `json:"width"`
+	Height     int     `json:"height"`
+}
+
+// DefaultHeatmapConfig returns sensible defaults for heatmap visualization.
+func DefaultHeatmapConfig() HeatmapConfig {
+	return HeatmapConfig{
+		Title:      "Heatmap",
+		ColorScale: "viridis",
+		ZMin:       0, // 0 = auto
+		ZMax:       0, // 0 = auto
+		LogFreq:    false,
+		Theme:      "light",
+		Width:      1200,
+		Height:     600,
+	}
+}
+
+// HeatmapChart creates a specialized heatmap visualization optimized for spectrograms.
+// Provides features like adjustable color range, logarithmic frequency axis, and
+// interactive cursor readout.
+//
+// Example - Spectrogram visualization:
+//
+//	config := ssql.DefaultHeatmapConfig()
+//	config.XField = "time"
+//	config.YField = "frequency"
+//	config.ZField = "magnitude"
+//	config.ColorScale = "viridis"
+//	config.ZMin = -80  // dB scale
+//	config.ZMax = 0
+//	config.LogFreq = true  // Logarithmic frequency axis
+//	ssql.HeatmapChart(spectrogramData, config, "spectrogram.html")
+//
+// Example - Correlation matrix:
+//
+//	config := ssql.DefaultHeatmapConfig()
+//	config.XField = "var1"
+//	config.YField = "var2"
+//	config.ZField = "correlation"
+//	config.ZMin = -1
+//	config.ZMax = 1
+//	config.ColorScale = "RdBu"
+//	ssql.HeatmapChart(corrMatrix, config, "correlation.html")
+func HeatmapChart(sb iter.Seq[Record], config HeatmapConfig, filename string) error {
+	// Collect all records
+	var records []Record
+	for record := range sb {
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		return fmt.Errorf("no data to chart")
+	}
+
+	if config.XField == "" {
+		return fmt.Errorf("X-axis field required (XField)")
+	}
+	if config.YField == "" {
+		return fmt.Errorf("Y-axis field required (YField)")
+	}
+	if config.ZField == "" {
+		return fmt.Errorf("Z-axis field required (ZField)")
+	}
+
+	return generateSpecializedHeatmapHTML(records, config, filename)
+}
+
+// generateSpecializedHeatmapHTML creates optimized heatmap HTML with advanced features
+func generateSpecializedHeatmapHTML(records []Record, config HeatmapConfig, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("creating file %s: %w", filename, err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	xField := config.XField
+	yField := config.YField
+	zField := config.ZField
+
+	// Extract unique X and Y values and build value grid
+	xValues := make(map[string]int)
+	yValues := make(map[string]int)
+	var xLabels, yLabels []string
+	var yNumeric []float64 // For log scale
+
+	for _, record := range records {
+		xVal := fmt.Sprintf("%v", GetOr(record, xField, ""))
+		yVal := fmt.Sprintf("%v", GetOr(record, yField, ""))
+
+		if _, exists := xValues[xVal]; !exists {
+			xValues[xVal] = len(xLabels)
+			xLabels = append(xLabels, xVal)
+		}
+		if _, exists := yValues[yVal]; !exists {
+			yValues[yVal] = len(yLabels)
+			yLabels = append(yLabels, yVal)
+			// Try to parse Y as numeric for log scale
+			if f := getNumericValue(GetOr(record, yField, 0.0)); !math.IsNaN(f) {
+				yNumeric = append(yNumeric, f)
+			}
+		}
+	}
+
+	// Create 2D grid initialized with NaN
+	grid := make([][]float64, len(yLabels))
+	for i := range grid {
+		grid[i] = make([]float64, len(xLabels))
+		for j := range grid[i] {
+			grid[i][j] = math.NaN()
+		}
+	}
+
+	// Fill grid with Z values and track min/max
+	zMin := math.Inf(1)
+	zMax := math.Inf(-1)
+	for _, record := range records {
+		xVal := fmt.Sprintf("%v", GetOr(record, xField, ""))
+		yVal := fmt.Sprintf("%v", GetOr(record, yField, ""))
+		zVal := getNumericValue(GetOr(record, zField, 0.0))
+
+		xi := xValues[xVal]
+		yi := yValues[yVal]
+		grid[yi][xi] = zVal
+
+		if !math.IsNaN(zVal) {
+			if zVal < zMin {
+				zMin = zVal
+			}
+			if zVal > zMax {
+				zMax = zVal
+			}
+		}
+	}
+
+	// Use config zmin/zmax if set, otherwise use detected values
+	if config.ZMin != 0 || config.ZMax != 0 {
+		if config.ZMin != 0 {
+			zMin = config.ZMin
+		}
+		if config.ZMax != 0 {
+			zMax = config.ZMax
+		}
+	}
+
+	// Convert grid to JSON-safe format (NaN -> null)
+	gridJSON, err := json.Marshal(nanToNullGrid(grid))
+	if err != nil {
+		return fmt.Errorf("marshaling grid data: %w", err)
+	}
+
+	xLabelsJSON, err := json.Marshal(xLabels)
+	if err != nil {
+		return fmt.Errorf("marshaling x labels: %w", err)
+	}
+
+	yLabelsJSON, err := json.Marshal(yLabels)
+	if err != nil {
+		return fmt.Errorf("marshaling y labels: %w", err)
+	}
+
+	// Execute template
+	tmpl := template.Must(template.New("spectrogram").Parse(spectrogramHTMLTemplate))
+	templateData := struct {
+		Title      string
+		XField     string
+		YField     string
+		ZField     string
+		XLabels    template.JS
+		YLabels    template.JS
+		GridData   template.JS
+		ColorScale string
+		ZMin       float64
+		ZMax       float64
+		LogFreq    bool
+		Theme      string
+	}{
+		Title:      config.Title,
+		XField:     xField,
+		YField:     yField,
+		ZField:     zField,
+		XLabels:    template.JS(xLabelsJSON),
+		YLabels:    template.JS(yLabelsJSON),
+		GridData:   template.JS(gridJSON),
+		ColorScale: config.ColorScale,
+		ZMin:       zMin,
+		ZMax:       zMax,
+		LogFreq:    config.LogFreq,
+		Theme:      config.Theme,
+	}
+
+	if err := tmpl.Execute(writer, templateData); err != nil {
+		return err
+	}
+
+	return writer.Flush()
+}
+
 // generateHeatmapHTML creates an HTML file with Plotly.js heatmap visualization
 func generateHeatmapHTML(records []Record, config ChartConfig, filename string) error {
 	file, err := os.Create(filename)
@@ -411,8 +623,8 @@ func generateHeatmapHTML(records []Record, config ChartConfig, filename string) 
 		grid[yi][xi] = zVal
 	}
 
-	// Convert grid to JSON
-	gridJSON, err := json.Marshal(grid)
+	// Convert grid to JSON-safe format (NaN -> null)
+	gridJSON, err := json.Marshal(nanToNullGrid(grid))
 	if err != nil {
 		return fmt.Errorf("marshaling grid data: %w", err)
 	}
@@ -708,6 +920,23 @@ func calculateNumericStats(values []any) NumericStat {
 		StdDev: stdDev,
 		Count:  len(nums),
 	}
+}
+
+// nanToNullGrid converts a 2D float64 grid with NaN values to a grid where NaN is represented as nil
+// This is necessary because JSON doesn't support NaN, but the JavaScript side handles null values
+func nanToNullGrid(grid [][]float64) [][]any {
+	result := make([][]any, len(grid))
+	for i, row := range grid {
+		result[i] = make([]any, len(row))
+		for j, val := range row {
+			if math.IsNaN(val) {
+				result[i][j] = nil
+			} else {
+				result[i][j] = val
+			}
+		}
+	}
+	return result
 }
 
 // getNumericValue safely converts any value to float64
@@ -1951,6 +2180,305 @@ const enhancedChartHTMLTemplate = `<!DOCTYPE html>
             }
 
             summaryDiv.innerHTML = html;
+        }
+    </script>
+</body>
+</html>`
+
+// spectrogramHTMLTemplate is specialized for spectrogram/heatmap with advanced controls
+const spectrogramHTMLTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+
+    <!-- Plotly.js for heatmaps -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+    <!-- UI Framework -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-color: {{if eq .Theme "dark"}}#1a1a1a{{else}}#ffffff{{end}};
+            --text-color: {{if eq .Theme "dark"}}#ffffff{{else}}#333333{{end}};
+            --border-color: {{if eq .Theme "dark"}}#444444{{else}}#dee2e6{{end}};
+            --panel-bg: {{if eq .Theme "dark"}}#2d2d2d{{else}}#f8f9fa{{end}};
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        .control-panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .chart-container {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        #heatmapChart {
+            width: 100%;
+            height: 500px;
+        }
+
+        .stats-panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .cursor-info {
+            font-family: monospace;
+            padding: 8px 12px;
+            background-color: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            min-height: 40px;
+        }
+
+        .range-slider {
+            width: 100%;
+        }
+
+        .slider-value {
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid p-3">
+        <div class="row mb-2">
+            <div class="col-12">
+                <h4 class="text-center mb-0">{{.Title}}</h4>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="control-panel">
+                    <div class="row g-3 align-items-end">
+                        <!-- Color Scale -->
+                        <div class="col-md-2">
+                            <label class="form-label mb-1">Color Scale</label>
+                            <select id="colorScale" class="form-select form-select-sm" onchange="updateColorScale()">
+                                <option value="Viridis" {{if eq .ColorScale "viridis"}}selected{{end}}>Viridis</option>
+                                <option value="Plasma" {{if eq .ColorScale "plasma"}}selected{{end}}>Plasma</option>
+                                <option value="Inferno" {{if eq .ColorScale "inferno"}}selected{{end}}>Inferno</option>
+                                <option value="Magma" {{if eq .ColorScale "magma"}}selected{{end}}>Magma</option>
+                                <option value="Cividis" {{if eq .ColorScale "cividis"}}selected{{end}}>Cividis</option>
+                                <option value="Turbo" {{if eq .ColorScale "turbo"}}selected{{end}}>Turbo</option>
+                                <option value="Hot">Hot</option>
+                                <option value="Blues">Blues</option>
+                                <option value="RdBu">Red-Blue</option>
+                                <option value="Greys">Greys</option>
+                            </select>
+                        </div>
+
+                        <!-- Z Min -->
+                        <div class="col-md-2">
+                            <label class="form-label mb-1">Z Min: <span id="zMinValue" class="slider-value">{{printf "%.2f" .ZMin}}</span></label>
+                            <input type="range" id="zMinSlider" class="form-range range-slider"
+                                   min="{{printf "%.2f" .ZMin}}" max="{{printf "%.2f" .ZMax}}"
+                                   value="{{printf "%.2f" .ZMin}}" step="0.01" onchange="updateZRange()">
+                        </div>
+
+                        <!-- Z Max -->
+                        <div class="col-md-2">
+                            <label class="form-label mb-1">Z Max: <span id="zMaxValue" class="slider-value">{{printf "%.2f" .ZMax}}</span></label>
+                            <input type="range" id="zMaxSlider" class="form-range range-slider"
+                                   min="{{printf "%.2f" .ZMin}}" max="{{printf "%.2f" .ZMax}}"
+                                   value="{{printf "%.2f" .ZMax}}" step="0.01" onchange="updateZRange()">
+                        </div>
+
+                        <!-- Log Frequency Toggle -->
+                        <div class="col-md-2">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="logFreq" {{if .LogFreq}}checked{{end}} onchange="updateLogFreq()">
+                                <label class="form-check-label" for="logFreq">Log Y-Axis</label>
+                            </div>
+                        </div>
+
+                        <!-- Actions -->
+                        <div class="col-md-2">
+                            <div class="btn-group" role="group">
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="resetView()">
+                                    <i class="bi bi-zoom-out"></i> Reset
+                                </button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="exportChart()">
+                                    <i class="bi bi-download"></i> PNG
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Cursor Info -->
+                        <div class="col-md-2">
+                            <div id="cursorInfo" class="cursor-info">
+                                Hover for values
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="chart-container">
+                    <div id="heatmapChart"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="stats-panel">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <strong>{{.XField}}:</strong> <span id="xCount"></span> points
+                        </div>
+                        <div class="col-md-3">
+                            <strong>{{.YField}}:</strong> <span id="yCount"></span> points
+                        </div>
+                        <div class="col-md-3">
+                            <strong>{{.ZField}} Range:</strong> <span id="zRange"></span>
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Grid Size:</strong> <span id="gridSize"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const xLabels = {{.XLabels}};
+        const yLabels = {{.YLabels}};
+        const gridData = {{.GridData}};
+        const initialZMin = {{printf "%.6f" .ZMin}};
+        const initialZMax = {{printf "%.6f" .ZMax}};
+        const initialLogFreq = {{.LogFreq}};
+
+        // Display stats
+        document.getElementById('xCount').textContent = xLabels.length;
+        document.getElementById('yCount').textContent = yLabels.length;
+        document.getElementById('zRange').textContent = initialZMin.toFixed(2) + ' to ' + initialZMax.toFixed(2);
+        document.getElementById('gridSize').textContent = xLabels.length + ' × ' + yLabels.length + ' = ' + (xLabels.length * yLabels.length).toLocaleString();
+
+        // Create initial plot
+        const trace = {
+            z: gridData,
+            x: xLabels,
+            y: yLabels,
+            type: 'heatmap',
+            colorscale: 'Viridis',
+            zmin: initialZMin,
+            zmax: initialZMax,
+            colorbar: {
+                title: '{{.ZField}}',
+                titleside: 'right'
+            },
+            hoverongaps: false,
+            hovertemplate: '{{.XField}}: %{x}<br>{{.YField}}: %{y}<br>{{.ZField}}: %{z:.4f}<extra></extra>'
+        };
+
+        const layout = {
+            title: '',
+            xaxis: {
+                title: '{{.XField}}',
+                tickangle: -45
+            },
+            yaxis: {
+                title: '{{.YField}}',
+                type: initialLogFreq ? 'log' : 'linear'
+            },
+            margin: {
+                l: 70,
+                r: 50,
+                t: 20,
+                b: 80
+            }
+        };
+
+        const config = {
+            responsive: true,
+            scrollZoom: true,
+            modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+            displaylogo: false
+        };
+
+        Plotly.newPlot('heatmapChart', [trace], layout, config);
+
+        // Update cursor info on hover
+        document.getElementById('heatmapChart').on('plotly_hover', function(data) {
+            const pt = data.points[0];
+            document.getElementById('cursorInfo').innerHTML =
+                '<strong>{{.XField}}:</strong> ' + pt.x +
+                '<br><strong>{{.YField}}:</strong> ' + pt.y +
+                '<br><strong>{{.ZField}}:</strong> ' + (pt.z !== null ? pt.z.toFixed(4) : 'N/A');
+        });
+
+        document.getElementById('heatmapChart').on('plotly_unhover', function() {
+            document.getElementById('cursorInfo').innerHTML = 'Hover for values';
+        });
+
+        function updateColorScale() {
+            const colorScale = document.getElementById('colorScale').value;
+            Plotly.restyle('heatmapChart', {colorscale: colorScale});
+        }
+
+        function updateZRange() {
+            const zMin = parseFloat(document.getElementById('zMinSlider').value);
+            const zMax = parseFloat(document.getElementById('zMaxSlider').value);
+            document.getElementById('zMinValue').textContent = zMin.toFixed(2);
+            document.getElementById('zMaxValue').textContent = zMax.toFixed(2);
+            Plotly.restyle('heatmapChart', {zmin: zMin, zmax: zMax});
+        }
+
+        function updateLogFreq() {
+            const logFreq = document.getElementById('logFreq').checked;
+            Plotly.relayout('heatmapChart', {'yaxis.type': logFreq ? 'log' : 'linear'});
+        }
+
+        function resetView() {
+            // Reset sliders
+            document.getElementById('zMinSlider').value = initialZMin;
+            document.getElementById('zMaxSlider').value = initialZMax;
+            document.getElementById('zMinValue').textContent = initialZMin.toFixed(2);
+            document.getElementById('zMaxValue').textContent = initialZMax.toFixed(2);
+
+            Plotly.update('heatmapChart',
+                {zmin: initialZMin, zmax: initialZMax},
+                {'xaxis.autorange': true, 'yaxis.autorange': true}
+            );
+        }
+
+        function exportChart() {
+            Plotly.downloadImage('heatmapChart', {
+                format: 'png',
+                width: 1920,
+                height: 1080,
+                filename: 'heatmap'
+            });
         }
     </script>
 </body>

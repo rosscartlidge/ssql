@@ -320,6 +320,12 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			expectFragment: true,
 			wantSubstring:  `ssql.EnhancedChart`,
 		},
+		{
+			name:           "heatmap",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to heatmap -x age -y salary -z dept`,
+			expectFragment: true,
+			wantSubstring:  `ssql.HeatmapChart`,
+		},
 	}
 
 	for _, tt := range tests {

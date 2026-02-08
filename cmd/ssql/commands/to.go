@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -12,7 +13,7 @@ import (
 // RegisterTo registers the to subcommand with nested format subcommands
 func RegisterTo(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	toCmd := cmd.Subcommand("to").
-		Description("Write output in various formats (table, csv, tsv, json, chart, wav)")
+		Description("Write output in various formats (table, csv, tsv, json, chart, heatmap, wav)")
 
 	// Register nested subcommands
 	registerToTable(toCmd)
@@ -22,6 +23,7 @@ func RegisterTo(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	registerToArrow(toCmd)
 	registerToWAV(toCmd)
 	registerToChart(toCmd)
+	registerToHeatmap(toCmd)
 
 	toCmd.Done()
 	return cmd
@@ -596,6 +598,166 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 		Done()
 }
 
+// registerToHeatmap registers the "to heatmap" subcommand
+func registerToHeatmap(cmd *cf.SubcommandBuilder) {
+	colorScales := []string{"viridis", "plasma", "inferno", "magma", "cividis", "turbo"}
+
+	cmd.Subcommand("heatmap").
+		Description("Create specialized heatmap visualization (spectrograms, matrices)").
+		Example("ssql from audio.wav | ssql spectrogram ... | ssql to heatmap -x time -y frequency -z magnitude", "Spectrogram from audio").
+		Example("ssql from matrix.csv | ssql to heatmap -x row -y col -z value -zmin -1 -zmax 1", "Correlation matrix with fixed range").
+		Example("ssql from data.csv | ssql to heatmap -x time -y freq -z db -log-freq -colorscale plasma", "Log frequency axis with plasma colors").
+		Flag("-generate", "-g").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
+		Flag("-x").
+		String().
+		FieldsFromFlag("").
+		Global().
+		Required().
+		Help("X-axis field (e.g., time)").
+		Done().
+		Flag("-y").
+		String().
+		FieldsFromFlag("").
+		Global().
+		Required().
+		Help("Y-axis field (e.g., frequency)").
+		Done().
+		Flag("-z").
+		String().
+		FieldsFromFlag("").
+		Global().
+		Required().
+		Help("Z-axis field for color values (e.g., magnitude)").
+		Done().
+		Flag("-colorscale").
+		String().
+		Completer(&cf.StaticCompleter{Options: colorScales}).
+		Global().
+		Default("viridis").
+		Help("Color scale: viridis, plasma, inferno, magma, cividis, turbo").
+		Done().
+		Flag("-zmin").
+		String().
+		Global().
+		Default("").
+		Help("Minimum value for color scale (empty = auto)").
+		Done().
+		Flag("-zmax").
+		String().
+		Global().
+		Default("").
+		Help("Maximum value for color scale (empty = auto)").
+		Done().
+		Flag("-log-freq").
+		Bool().
+		Global().
+		Help("Use logarithmic Y-axis (for frequency spectrograms)").
+		Done().
+		Flag("-output", "-o").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.html"}).
+		Global().
+		Default("heatmap.html").
+		Help("Output HTML file (default: heatmap.html)").
+		Done().
+		Handler(func(ctx *cf.Context) error {
+			var xField, yField, zField, colorScale, outputFile string
+			var zMinStr, zMaxStr string
+			var zMin, zMax float64
+			var logFreq, generate bool
+
+			if xVal, ok := ctx.GlobalFlags["-x"]; ok {
+				xField = xVal.(string)
+			}
+			if yVal, ok := ctx.GlobalFlags["-y"]; ok {
+				yField = yVal.(string)
+			}
+			if zVal, ok := ctx.GlobalFlags["-z"]; ok {
+				zField = zVal.(string)
+			}
+			if csVal, ok := ctx.GlobalFlags["-colorscale"]; ok {
+				colorScale = csVal.(string)
+			} else {
+				colorScale = "viridis"
+			}
+			if zMinVal, ok := ctx.GlobalFlags["-zmin"]; ok {
+				zMinStr = zMinVal.(string)
+			}
+			if zMaxVal, ok := ctx.GlobalFlags["-zmax"]; ok {
+				zMaxStr = zMaxVal.(string)
+			}
+			// Parse zMin/zMax as floats (empty string = 0 = auto)
+			if zMinStr != "" {
+				if v, err := parseFloat(zMinStr); err == nil {
+					zMin = v
+				} else {
+					return fmt.Errorf("invalid -zmin value: %s", zMinStr)
+				}
+			}
+			if zMaxStr != "" {
+				if v, err := parseFloat(zMaxStr); err == nil {
+					zMax = v
+				} else {
+					return fmt.Errorf("invalid -zmax value: %s", zMaxStr)
+				}
+			}
+			if logVal, ok := ctx.GlobalFlags["-log-freq"]; ok {
+				logFreq = logVal.(bool)
+			}
+			if outVal, ok := ctx.GlobalFlags["-output"]; ok {
+				outputFile = outVal.(string)
+			} else {
+				outputFile = "heatmap.html"
+			}
+			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
+				generate = genVal.(bool)
+			}
+
+			// Check if generation is enabled (flag or env var)
+			if shouldGenerate(generate) {
+				return generateToHeatmapCode(xField, yField, zField, colorScale, zMin, zMax, logFreq, outputFile)
+			}
+
+			// Validate required fields
+			if xField == "" {
+				return fmt.Errorf("X-axis field required (use -x)")
+			}
+			if yField == "" {
+				return fmt.Errorf("Y-axis field required (use -y)")
+			}
+			if zField == "" {
+				return fmt.Errorf("Z-axis field required (use -z)")
+			}
+
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
+
+			// Build heatmap config
+			config := ssql.DefaultHeatmapConfig()
+			config.XField = xField
+			config.YField = yField
+			config.ZField = zField
+			config.ColorScale = colorScale
+			config.ZMin = zMin
+			config.ZMax = zMax
+			config.LogFreq = logFreq
+
+			// Create heatmap
+			if err := ssql.HeatmapChart(records, config, outputFile); err != nil {
+				return fmt.Errorf("creating heatmap: %w", err)
+			}
+
+			fmt.Printf("Heatmap created: %s\n", outputFile)
+			return nil
+		}).
+		Done()
+}
+
 // Code generation functions
 
 func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) error {
@@ -907,6 +1069,74 @@ func generateToChartCode(xField string, yFields []string, zField, chartType stri
 		return fmt.Errorf("creating chart: %%w", err)
 	}
 	fmt.Printf("Chart created: %%s\n", %q)`, joinStrings(configLines, "\n"), inputVar, outputFile, outputFile)
+
+	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
+	return lib.WriteCodeFragment(frag)
+}
+
+// parseFloat parses a string as float64
+func parseFloat(s string) (float64, error) {
+	return strconv.ParseFloat(s, 64)
+}
+
+func generateToHeatmapCode(xField, yField, zField, colorScale string, zMin, zMax float64, logFreq bool, outputFile string) error {
+	fragments, err := lib.ReadAllCodeFragments()
+	if err != nil {
+		return fmt.Errorf("reading code fragments: %w", err)
+	}
+
+	for _, frag := range fragments {
+		if err := lib.WriteCodeFragment(frag); err != nil {
+			return fmt.Errorf("writing previous fragment: %w", err)
+		}
+	}
+
+	var inputVar string
+	if len(fragments) > 0 {
+		inputVar = fragments[len(fragments)-1].Var
+	} else {
+		inputVar = "records"
+	}
+
+	if xField == "" {
+		return fmt.Errorf("X-axis field required (use -x)")
+	}
+	if yField == "" {
+		return fmt.Errorf("Y-axis field required (use -y)")
+	}
+	if zField == "" {
+		return fmt.Errorf("Z-axis field required (use -z)")
+	}
+
+	if outputFile == "" {
+		outputFile = "heatmap.html"
+	}
+
+	// Build config setup code
+	var configLines []string
+	configLines = append(configLines, "config := ssql.DefaultHeatmapConfig()")
+	configLines = append(configLines, fmt.Sprintf("\tconfig.XField = %q", xField))
+	configLines = append(configLines, fmt.Sprintf("\tconfig.YField = %q", yField))
+	configLines = append(configLines, fmt.Sprintf("\tconfig.ZField = %q", zField))
+
+	if colorScale != "" && colorScale != "viridis" {
+		configLines = append(configLines, fmt.Sprintf("\tconfig.ColorScale = %q", colorScale))
+	}
+	if zMin != 0 {
+		configLines = append(configLines, fmt.Sprintf("\tconfig.ZMin = %v", zMin))
+	}
+	if zMax != 0 {
+		configLines = append(configLines, fmt.Sprintf("\tconfig.ZMax = %v", zMax))
+	}
+	if logFreq {
+		configLines = append(configLines, "\tconfig.LogFreq = true")
+	}
+
+	code := fmt.Sprintf(`%s
+	if err := ssql.HeatmapChart(%s, config, %q); err != nil {
+		return fmt.Errorf("creating heatmap: %%w", err)
+	}
+	fmt.Printf("Heatmap created: %%s\n", %q)`, joinStrings(configLines, "\n"), inputVar, outputFile, outputFile)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
 	return lib.WriteCodeFragment(frag)

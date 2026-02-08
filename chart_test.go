@@ -989,3 +989,271 @@ func TestEnhancedChartEmptyData(t *testing.T) {
 		t.Error("EnhancedChart with empty data should return error")
 	}
 }
+
+// ============================================================================
+// SPECIALIZED HEATMAP CHART TESTS
+// ============================================================================
+
+func TestHeatmapChartBasic(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "heatmap_basic.html")
+
+	// Create spectrogram-like data: time x frequency -> magnitude
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["time"] = float64(0.0)
+			r.fields["frequency"] = float64(100)
+			r.fields["magnitude"] = float64(0.5)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["time"] = float64(0.0)
+			r.fields["frequency"] = float64(200)
+			r.fields["magnitude"] = float64(0.8)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["time"] = float64(0.1)
+			r.fields["frequency"] = float64(100)
+			r.fields["magnitude"] = float64(0.6)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["time"] = float64(0.1)
+			r.fields["frequency"] = float64(200)
+			r.fields["magnitude"] = float64(0.3)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultHeatmapConfig()
+	config.XField = "time"
+	config.YField = "frequency"
+	config.ZField = "magnitude"
+
+	err := HeatmapChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("HeatmapChart failed: %v", err)
+	}
+
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		t.Error("Heatmap file was not created")
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read heatmap file: %v", err)
+	}
+
+	htmlContent := string(content)
+	// Verify it's using Plotly
+	if !strings.Contains(htmlContent, "Plotly") {
+		t.Error("Heatmap should use Plotly.js")
+	}
+	// Verify heatmap type
+	if !strings.Contains(htmlContent, "heatmap") {
+		t.Error("Should contain heatmap chart type")
+	}
+}
+
+func TestHeatmapChartWithColorScale(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "heatmap_plasma.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["x"] = float64(0)
+			r.fields["y"] = float64(0)
+			r.fields["z"] = float64(1.0)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["x"] = float64(1)
+			r.fields["y"] = float64(1)
+			r.fields["z"] = float64(0.5)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultHeatmapConfig()
+	config.XField = "x"
+	config.YField = "y"
+	config.ZField = "z"
+	config.ColorScale = "plasma"
+
+	err := HeatmapChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("HeatmapChart with color scale failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read heatmap file: %v", err)
+	}
+
+	htmlContent := string(content)
+	if !strings.Contains(htmlContent, "Plasma") {
+		t.Error("Heatmap should use Plasma color scale")
+	}
+}
+
+func TestHeatmapChartWithLogFreq(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "heatmap_log.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["time"] = float64(0)
+			r.fields["freq"] = float64(100)
+			r.fields["mag"] = float64(0.5)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["time"] = float64(0)
+			r.fields["freq"] = float64(1000)
+			r.fields["mag"] = float64(0.8)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultHeatmapConfig()
+	config.XField = "time"
+	config.YField = "freq"
+	config.ZField = "mag"
+	config.LogFreq = true
+
+	err := HeatmapChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("HeatmapChart with log freq failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read heatmap file: %v", err)
+	}
+
+	htmlContent := string(content)
+	if !strings.Contains(htmlContent, "log") {
+		t.Error("Heatmap should use logarithmic y-axis")
+	}
+}
+
+func TestHeatmapChartWithZRange(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "heatmap_zrange.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["x"] = float64(0)
+			r.fields["y"] = float64(0)
+			r.fields["z"] = float64(50)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["x"] = float64(1)
+			r.fields["y"] = float64(1)
+			r.fields["z"] = float64(150)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultHeatmapConfig()
+	config.XField = "x"
+	config.YField = "y"
+	config.ZField = "z"
+	config.ZMin = 0
+	config.ZMax = 200
+
+	err := HeatmapChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("HeatmapChart with Z range failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read heatmap file: %v", err)
+	}
+
+	htmlContent := string(content)
+	if !strings.Contains(htmlContent, "zmin") || !strings.Contains(htmlContent, "zmax") {
+		t.Error("Heatmap should contain Z range configuration")
+	}
+}
+
+func TestHeatmapChartEmptyData(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "heatmap_empty.html")
+
+	empty := func(yield func(Record) bool) {
+		// Yield nothing
+	}
+
+	config := DefaultHeatmapConfig()
+	config.XField = "x"
+	config.YField = "y"
+	config.ZField = "z"
+
+	err := HeatmapChart(iter.Seq[Record](empty), config, filename)
+	if err == nil {
+		t.Error("HeatmapChart with empty data should return error")
+	}
+}
+
+func TestHeatmapChartMissingZField(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "heatmap_no_z.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["x"] = float64(0)
+			r.fields["y"] = float64(0)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultHeatmapConfig()
+	config.XField = "x"
+	config.YField = "y"
+	config.ZField = "z" // Field doesn't exist in records
+
+	err := HeatmapChart(input, config, filename)
+	// Should still create the file (with null values) or handle gracefully
+	// The function should not panic
+	if err != nil {
+		// If it returns an error for missing Z values, that's acceptable
+		if !strings.Contains(err.Error(), "z") && !strings.Contains(err.Error(), "Z") {
+			t.Logf("HeatmapChart returned error for missing Z field: %v", err)
+		}
+	}
+}
+
+func TestDefaultHeatmapConfig(t *testing.T) {
+	config := DefaultHeatmapConfig()
+
+	if config.ColorScale != "viridis" {
+		t.Errorf("Default color scale should be viridis, got %s", config.ColorScale)
+	}
+	if config.Width != 1200 {
+		t.Errorf("Default width should be 1200, got %d", config.Width)
+	}
+	if config.Height != 600 {
+		t.Errorf("Default height should be 600, got %d", config.Height)
+	}
+	if config.Theme != "light" {
+		t.Errorf("Default theme should be light, got %s", config.Theme)
+	}
+	if config.LogFreq != false {
+		t.Error("Default LogFreq should be false")
+	}
+}
