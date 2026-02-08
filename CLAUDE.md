@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## On Startup (DO THIS FIRST)
+
+**⚠️ ALWAYS read the latest journal entry before doing anything else:**
+```bash
+ls -t journal/*.md | head -1 | xargs cat
+```
+This gives you context about recent work, decisions made, and what's in progress.
+
 ## Current Version
 
 **ssql v4 is the current major version.** Always use the `/v4` module path:
