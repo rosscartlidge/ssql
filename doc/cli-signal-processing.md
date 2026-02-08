@@ -10,8 +10,9 @@ This codelab teaches you how to use ssql's signal processing commands for freque
 4. [Frequency Domain Filtering](#frequency-domain-filtering)
 5. [Smoothing with Convolution](#smoothing-with-convolution)
 6. [Pattern Detection with Correlation](#pattern-detection-with-correlation)
-7. [Real-World Examples](#real-world-examples)
-8. [Performance Tips](#performance-tips)
+7. [Spectrogram Analysis (STFT)](#spectrogram-analysis-stft)
+8. [Real-World Examples](#real-world-examples)
+9. [Performance Tips](#performance-tips)
 
 ---
 
@@ -422,6 +423,177 @@ ssql from /tmp/periodic.csv | \
   ssql to chart -x lag -y correlation -output /tmp/autocorr.html
 
 echo "Peaks at lag=50, 100, 150... show period of 50 samples"
+```
+
+---
+
+## Spectrogram Analysis (STFT)
+
+While FFT shows frequency content of an entire signal, a **spectrogram** shows how frequencies change over time. This uses the Short-Time Fourier Transform (STFT) - applying FFT to overlapping windows.
+
+### Basic Spectrogram
+
+```bash
+# Create a signal with changing frequency (chirp)
+cat > /tmp/chirp.py << 'EOF'
+import math
+print("index,amplitude")
+sample_rate = 1000
+duration = 2.0
+
+for i in range(int(sample_rate * duration)):
+    t = i / sample_rate
+    # Frequency increases from 10 Hz to 100 Hz over 2 seconds
+    freq = 10 + 45 * t  # Linear chirp
+    amp = math.sin(2 * math.pi * freq * t)
+    print(f"{i},{amp:.6f}")
+EOF
+
+python3 /tmp/chirp.py > /tmp/chirp.csv
+
+# Compute spectrogram
+ssql from /tmp/chirp.csv | \
+  ssql spectrogram -field amplitude -window-size 256 -rate 1000 | \
+  ssql to table | head -20
+```
+
+Output shows time, frequency, and magnitude for each window:
+```
+time        frequency   magnitude
+0.128       0           0.0012
+0.128       3.906       0.0089
+0.128       7.812       0.0234
+0.128       11.718      0.8912    <- Peak near 10 Hz at start
+...
+```
+
+### Visualizing Frequency Changes Over Time
+
+```bash
+# Create spectrogram visualization
+ssql from /tmp/chirp.csv | \
+  ssql spectrogram -field amplitude -window-size 256 -hop 64 -rate 1000 | \
+  ssql where -where frequency le 150 | \
+  ssql to chart -x time -y frequency -output /tmp/spectrogram.html
+
+echo "Open /tmp/spectrogram.html - shows frequency rising from 10 to 100 Hz"
+```
+
+### Window Functions
+
+Different window functions trade off frequency resolution vs. spectral leakage:
+
+```bash
+# Compare window types
+for window in hann hamming blackman none; do
+  ssql from /tmp/chirp.csv | \
+    ssql spectrogram -field amplitude -window-size 512 -window-type $window -rate 1000 | \
+    ssql where -where time eq 1.0 | \
+    ssql sort -desc magnitude | \
+    ssql limit 3 | \
+    ssql update -set window $window
+done | ssql to table
+```
+
+| Window | Best For |
+|--------|----------|
+| `hann` | General purpose (default) |
+| `hamming` | Speech processing |
+| `blackman` | High dynamic range |
+| `none` | Maximum frequency resolution |
+
+### Spectrogram Parameters
+
+```bash
+# High time resolution (small window, small hop)
+ssql from /tmp/chirp.csv | \
+  ssql spectrogram -field amplitude -window-size 128 -hop 32 -rate 1000 | \
+  ssql where -where frequency le 150 | \
+  ssql to chart -x time -y frequency -output /tmp/spec_time_res.html
+
+# High frequency resolution (large window)
+ssql from /tmp/chirp.csv | \
+  ssql spectrogram -field amplitude -window-size 1024 -hop 256 -rate 1000 | \
+  ssql where -where frequency le 150 | \
+  ssql to chart -x time -y frequency -output /tmp/spec_freq_res.html
+
+echo "Compare the two - tradeoff between time and frequency resolution"
+```
+
+### Output Formats
+
+```bash
+# Magnitude (default) - linear scale
+ssql from /tmp/chirp.csv | \
+  ssql spectrogram -field amplitude -output magnitude -rate 1000
+
+# Power - magnitude squared (energy)
+ssql from /tmp/chirp.csv | \
+  ssql spectrogram -field amplitude -output power -rate 1000
+
+# Decibels - logarithmic scale (best for visualization)
+ssql from /tmp/chirp.csv | \
+  ssql spectrogram -field amplitude -output db -rate 1000 | \
+  ssql where -where frequency le 150 | \
+  ssql to chart -x time -y frequency -output /tmp/spec_db.html
+```
+
+### Audio File Spectrogram
+
+```bash
+# Analyze a WAV file
+ssql from song.wav | \
+  ssql spectrogram -field amplitude -window-size 2048 -hop 512 -rate 44100 -output db | \
+  ssql where -where frequency le 4000 | \
+  ssql where -where magnitude gt -60 | \
+  ssql to chart -x time -y frequency -output /tmp/song_spectrogram.html
+
+# Find when specific frequencies appear
+ssql from song.wav | \
+  ssql spectrogram -field amplitude -window-size 2048 -rate 44100 | \
+  ssql where -where frequency ge 430 | \
+  ssql where -where frequency le 450 | \
+  ssql sort -desc magnitude | \
+  ssql limit 10 | \
+  ssql to table
+# Shows times when ~440 Hz (A4 note) is loudest
+```
+
+### Detecting Frequency Transitions
+
+```bash
+# Create a signal that switches between two frequencies
+cat > /tmp/freq_switch.py << 'EOF'
+import math
+print("index,amplitude")
+sample_rate = 1000
+
+for i in range(3000):
+    t = i / sample_rate
+    # Switch from 50 Hz to 120 Hz at t=1.5s
+    freq = 50 if t < 1.5 else 120
+    amp = math.sin(2 * math.pi * freq * t)
+    print(f"{i},{amp:.6f}")
+EOF
+
+python3 /tmp/freq_switch.py > /tmp/freq_switch.csv
+
+# Spectrogram clearly shows the transition
+ssql from /tmp/freq_switch.csv | \
+  ssql spectrogram -field amplitude -window-size 256 -rate 1000 | \
+  ssql where -where frequency le 200 | \
+  ssql to chart -x time -y frequency -output /tmp/freq_transition.html
+
+# Find the transition time programmatically
+ssql from /tmp/freq_switch.csv | \
+  ssql spectrogram -field amplitude -window-size 256 -rate 1000 | \
+  ssql where -where frequency ge 100 | \
+  ssql where -where frequency le 140 | \
+  ssql where -where magnitude gt 50 | \
+  ssql sort time | \
+  ssql limit 1 | \
+  ssql to table
+# Shows first time when 120 Hz appears
 ```
 
 ---
