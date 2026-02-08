@@ -1257,3 +1257,233 @@ func TestDefaultHeatmapConfig(t *testing.T) {
 		t.Error("Default LogFreq should be false")
 	}
 }
+
+// ============================================================================
+// DATA EXPLORER TESTS
+// ============================================================================
+
+func TestDefaultExploreConfig(t *testing.T) {
+	config := DefaultExploreConfig()
+
+	if config.Title != "Data Explorer" {
+		t.Errorf("Default title should be 'Data Explorer', got %s", config.Title)
+	}
+	if config.Theme != "light" {
+		t.Errorf("Default theme should be light, got %s", config.Theme)
+	}
+	if config.PageSize != 50 {
+		t.Errorf("Default page size should be 50, got %d", config.PageSize)
+	}
+	if config.Width != 1400 {
+		t.Errorf("Default width should be 1400, got %d", config.Width)
+	}
+	if config.Height != 800 {
+		t.Errorf("Default height should be 800, got %d", config.Height)
+	}
+}
+
+func TestDataExploreBasic(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "explore.html")
+
+	// Create test data
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["name"] = "Alice"
+			r.fields["age"] = int64(30)
+			r.fields["salary"] = float64(75000)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["name"] = "Bob"
+			r.fields["age"] = int64(25)
+			r.fields["salary"] = float64(65000)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["name"] = "Charlie"
+			r.fields["age"] = int64(35)
+			r.fields["salary"] = float64(85000)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultExploreConfig()
+
+	err := DataExplore(input, config, filename)
+	if err != nil {
+		t.Fatalf("DataExplore failed: %v", err)
+	}
+
+	// Verify file was created
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		t.Error("Explorer file was not created")
+	}
+
+	// Read and verify content
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read explorer file: %v", err)
+	}
+
+	htmlContent := string(content)
+
+	// Verify React and AG-Grid are included
+	if !strings.Contains(htmlContent, "react@18") {
+		t.Error("Explorer should include React")
+	}
+	if !strings.Contains(htmlContent, "ag-grid") {
+		t.Error("Explorer should include AG-Grid")
+	}
+	if !strings.Contains(htmlContent, "Plotly") || !strings.Contains(htmlContent, "plotly") {
+		t.Error("Explorer should include Plotly.js")
+	}
+	if !strings.Contains(htmlContent, "Data Explorer") {
+		t.Error("Explorer should contain default title")
+	}
+}
+
+func TestDataExploreWithInitialFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "explore_fields.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["date"] = "2024-01-01"
+			r.fields["revenue"] = float64(1000)
+			r.fields["profit"] = float64(200)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["date"] = "2024-01-02"
+			r.fields["revenue"] = float64(1200)
+			r.fields["profit"] = float64(300)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultExploreConfig()
+	config.Title = "Sales Explorer"
+	config.InitialXField = "date"
+	config.InitialYField = "revenue"
+
+	err := DataExplore(input, config, filename)
+	if err != nil {
+		t.Fatalf("DataExplore with initial fields failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read explorer file: %v", err)
+	}
+
+	htmlContent := string(content)
+	if !strings.Contains(htmlContent, "Sales Explorer") {
+		t.Error("Explorer should contain custom title")
+	}
+	if !strings.Contains(htmlContent, "initialXField") {
+		t.Error("Explorer should contain initial X field config")
+	}
+}
+
+func TestDataExploreEmptyData(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "empty_explore.html")
+
+	empty := func(yield func(Record) bool) {
+		// Yield nothing
+	}
+
+	config := DefaultExploreConfig()
+
+	err := DataExplore(iter.Seq[Record](empty), config, filename)
+	if err == nil {
+		t.Error("DataExplore with empty data should return error")
+	}
+}
+
+func TestDataExploreTheme(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	themes := []string{"light", "dark"}
+
+	for _, theme := range themes {
+		t.Run(theme, func(t *testing.T) {
+			filename := filepath.Join(tmpDir, theme+"_explore.html")
+
+			input := slices.Values([]Record{
+				func() Record {
+					r := MakeMutableRecord()
+					r.fields["x"] = int64(1)
+					r.fields["y"] = int64(10)
+					return r.Freeze()
+				}(),
+			})
+
+			config := DefaultExploreConfig()
+			config.Theme = theme
+
+			err := DataExplore(input, config, filename)
+			if err != nil {
+				t.Fatalf("DataExplore with %s theme failed: %v", theme, err)
+			}
+
+			content, err := os.ReadFile(filename)
+			if err != nil {
+				t.Fatalf("Failed to read explorer file: %v", err)
+			}
+
+			htmlContent := string(content)
+			// For dark theme, check that dark colors are used
+			if theme == "dark" {
+				if !strings.Contains(htmlContent, "#1a1a1a") {
+					t.Error("Dark theme should use dark background color")
+				}
+			} else {
+				if !strings.Contains(htmlContent, "#f8f9fa") {
+					t.Error("Light theme should use light background color")
+				}
+			}
+		})
+	}
+}
+
+func TestDataExploreWithMixedTypes(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "mixed_explore.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["id"] = int64(1)
+			r.fields["name"] = "Alice"
+			r.fields["score"] = float64(95.5)
+			r.fields["active"] = true
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["id"] = int64(2)
+			r.fields["name"] = "Bob"
+			r.fields["score"] = float64(87.3)
+			r.fields["active"] = false
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultExploreConfig()
+
+	err := DataExplore(input, config, filename)
+	if err != nil {
+		t.Fatalf("DataExplore with mixed types failed: %v", err)
+	}
+
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		t.Error("Mixed types explorer file was not created")
+	}
+}

@@ -326,6 +326,12 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			expectFragment: true,
 			wantSubstring:  `ssql.HeatmapChart`,
 		},
+		{
+			name:           "explore",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to explore`,
+			expectFragment: true,
+			wantSubstring:  `ssql.DataExplore`,
+		},
 	}
 
 	for _, tt := range tests {

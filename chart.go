@@ -2483,3 +2483,795 @@ const spectrogramHTMLTemplate = `<!DOCTYPE html>
     </script>
 </body>
 </html>`
+
+// ============================================================================
+// INTERACTIVE DATA EXPLORER
+// ============================================================================
+
+// ExploreConfig configures the interactive data explorer.
+// Provides control over the explorer's appearance and initial state.
+//
+// Use DefaultExploreConfig() to get sensible defaults, then customize as needed.
+type ExploreConfig struct {
+	Title         string `json:"title"`
+	Theme         string `json:"theme"`         // "light" or "dark"
+	InitialXField string `json:"initialXField"` // Optional initial X axis field
+	InitialYField string `json:"initialYField"` // Optional initial Y axis field
+	PageSize      int    `json:"pageSize"`      // Rows per page in table (default 50)
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+}
+
+// DefaultExploreConfig provides sensible defaults for interactive data exploration.
+// Returns an ExploreConfig with common settings that work well for most use cases.
+//
+// Example:
+//
+//	// Use defaults as-is
+//	ssql.DataExplore(data, ssql.DefaultExploreConfig(), "explore.html")
+//
+//	// Customize from defaults
+//	config := ssql.DefaultExploreConfig()
+//	config.Title = "Sales Data Explorer"
+//	config.Theme = "dark"
+//	ssql.DataExplore(data, config, "sales_explorer.html")
+func DefaultExploreConfig() ExploreConfig {
+	return ExploreConfig{
+		Title:    "Data Explorer",
+		Theme:    "light",
+		PageSize: 50,
+		Width:    1400,
+		Height:   800,
+	}
+}
+
+// DataExplore creates an interactive HTML data exploration app.
+// Generates a self-contained React-based explorer with:
+//   - Sortable/filterable data table (AG-Grid Community)
+//   - Field selector dropdowns for X/Y axes
+//   - Chart type switcher (line, bar, scatter, pie)
+//   - Basic aggregation UI (group by, sum/avg/count)
+//   - Export filtered data as CSV
+//
+// Example:
+//
+//	// Create interactive explorer with default settings
+//	data, _ := ssql.ReadCSV("data.csv")
+//	ssql.DataExplore(data, ssql.DefaultExploreConfig(), "explore.html")
+//
+//	// Customize the explorer
+//	config := ssql.DefaultExploreConfig()
+//	config.Title = "Customer Analysis"
+//	config.InitialXField = "date"
+//	config.InitialYField = "revenue"
+//	ssql.DataExplore(data, config, "customers.html")
+func DataExplore(records iter.Seq[Record], config ExploreConfig, filename string) error {
+	// Collect all records
+	var recordSlice []Record
+	for record := range records {
+		recordSlice = append(recordSlice, record)
+	}
+	if len(recordSlice) == 0 {
+		return fmt.Errorf("no data to explore")
+	}
+
+	// Analyze data structure
+	chartData := analyzeData(recordSlice, ChartConfig{})
+
+	return generateExploreHTML(recordSlice, chartData, config, filename)
+}
+
+// generateExploreHTML creates the interactive explorer HTML file
+func generateExploreHTML(records []Record, chartData ChartData, config ExploreConfig, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("creating file %s: %w", filename, err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	// Convert records to JSON-safe map format
+	var recordMaps []map[string]any
+	for _, record := range records {
+		m := make(map[string]any)
+		for k, v := range record.All() {
+			m[k] = v
+		}
+		recordMaps = append(recordMaps, m)
+	}
+
+	// Convert data to JSON
+	dataJSON, err := json.Marshal(recordMaps)
+	if err != nil {
+		return fmt.Errorf("marshaling data: %w", err)
+	}
+
+	schemaJSON, err := json.Marshal(chartData)
+	if err != nil {
+		return fmt.Errorf("marshaling schema: %w", err)
+	}
+
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	// Execute template
+	tmpl := template.Must(template.New("explore").Parse(exploreHTMLTemplate))
+	templateData := struct {
+		Title      string
+		DataJSON   template.JS
+		SchemaJSON template.JS
+		ConfigJSON template.JS
+		Theme      string
+	}{
+		Title:      config.Title,
+		DataJSON:   template.JS(dataJSON),
+		SchemaJSON: template.JS(schemaJSON),
+		ConfigJSON: template.JS(configJSON),
+		Theme:      config.Theme,
+	}
+
+	if err := tmpl.Execute(writer, templateData); err != nil {
+		return err
+	}
+
+	return writer.Flush()
+}
+
+// exploreHTMLTemplate is the HTML template for the interactive data explorer
+const exploreHTMLTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+
+    <!-- React -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+
+    <!-- AG-Grid -->
+    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-grid.css">
+    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-theme-alpine.css">
+    <script src="https://unpkg.com/ag-grid-community/dist/ag-grid-community.min.noStyle.js"></script>
+
+    <!-- Plotly for charts -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+    <!-- Bootstrap -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-color: {{if eq .Theme "dark"}}#1a1a1a{{else}}#f8f9fa{{end}};
+            --text-color: {{if eq .Theme "dark"}}#e9ecef{{else}}#212529{{end}};
+            --border-color: {{if eq .Theme "dark"}}#495057{{else}}#dee2e6{{end}};
+            --panel-bg: {{if eq .Theme "dark"}}#212529{{else}}#ffffff{{end}};
+            --hover-bg: {{if eq .Theme "dark"}}#343a40{{else}}#e9ecef{{end}};
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        .explorer-container {
+            display: flex;
+            height: 100vh;
+        }
+
+        .left-panel {
+            width: 280px;
+            background: var(--panel-bg);
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            padding: 16px;
+            flex-shrink: 0;
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 16px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 16px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+
+        .chart-controls {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+            padding: 16px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .control-group label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: {{if eq .Theme "dark"}}#adb5bd{{else}}#6c757d{{end}};
+        }
+
+        .control-group select {
+            padding: 6px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-color);
+            color: var(--text-color);
+            min-width: 140px;
+        }
+
+        .chart-area {
+            height: 350px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+
+        .table-area {
+            flex: 1;
+            min-height: 200px;
+        }
+
+        .section-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: {{if eq .Theme "dark"}}#adb5bd{{else}}#6c757d{{end}};
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .field-list {
+            list-style: none;
+            padding: 0;
+            margin: 0 0 24px 0;
+        }
+
+        .field-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            cursor: pointer;
+        }
+
+        .field-item:hover {
+            background: var(--hover-bg);
+        }
+
+        .field-name {
+            font-weight: 500;
+        }
+
+        .field-type {
+            font-size: 0.75rem;
+            color: {{if eq .Theme "dark"}}#6c757d{{else}}#adb5bd{{end}};
+            background: {{if eq .Theme "dark"}}#343a40{{else}}#e9ecef{{end}};
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 0.875rem;
+        }
+
+        .stat-label {
+            color: {{if eq .Theme "dark"}}#adb5bd{{else}}#6c757d{{end}};
+        }
+
+        .stat-value {
+            font-weight: 500;
+        }
+
+        .agg-panel {
+            background: var(--hover-bg);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 16px;
+        }
+
+        .agg-panel select, .agg-panel button {
+            width: 100%;
+            margin-bottom: 8px;
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--panel-bg);
+            color: var(--text-color);
+        }
+
+        .agg-panel button {
+            background: #0d6efd;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .agg-panel button:hover {
+            background: #0b5ed7;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            padding: 6px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--panel-bg);
+            color: var(--text-color);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .btn:hover {
+            background: var(--hover-bg);
+        }
+
+        .btn-primary {
+            background: #0d6efd;
+            color: white;
+            border-color: #0d6efd;
+        }
+
+        .btn-primary:hover {
+            background: #0b5ed7;
+        }
+
+        {{if eq .Theme "dark"}}
+        .ag-theme-alpine {
+            --ag-background-color: #212529;
+            --ag-header-background-color: #343a40;
+            --ag-odd-row-background-color: #2b3035;
+            --ag-foreground-color: #e9ecef;
+            --ag-border-color: #495057;
+            --ag-header-foreground-color: #e9ecef;
+        }
+        {{end}}
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script>
+        // Data from the pipeline
+        const DATA = {{.DataJSON}};
+        const SCHEMA = {{.SchemaJSON}};
+        const CONFIG = {{.ConfigJSON}};
+
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        function App() {
+            const [chartType, setChartType] = useState('line');
+            const [xField, setXField] = useState(CONFIG.initialXField || (SCHEMA.fields && SCHEMA.fields[0]) || '');
+            const [yField, setYField] = useState(CONFIG.initialYField || (SCHEMA.numericFields && SCHEMA.numericFields[0]) || '');
+            const [aggGroupBy, setAggGroupBy] = useState('');
+            const [aggFunc, setAggFunc] = useState('count');
+            const [aggValueField, setAggValueField] = useState('');
+            const [displayData, setDisplayData] = useState(DATA);
+            const [isAggregated, setIsAggregated] = useState(false);
+            const chartRef = useRef(null);
+            const gridRef = useRef(null);
+            const gridApiRef = useRef(null);
+
+            // Column definitions for AG-Grid
+            const columnDefs = useMemo(() => {
+                if (!displayData || displayData.length === 0) return [];
+                const fields = Object.keys(displayData[0]);
+                return fields.map(field => ({
+                    field: field,
+                    headerName: field,
+                    sortable: true,
+                    filter: true,
+                    resizable: true,
+                    minWidth: 100,
+                    flex: 1
+                }));
+            }, [displayData]);
+
+            // Grid options
+            const gridOptions = useMemo(() => ({
+                defaultColDef: {
+                    sortable: true,
+                    filter: true,
+                    resizable: true,
+                    minWidth: 100
+                },
+                animateRows: true,
+                pagination: true,
+                paginationPageSize: CONFIG.pageSize || 50,
+                paginationPageSizeSelector: [20, 50, 100, 500],
+                rowSelection: 'multiple',
+                onGridReady: (params) => {
+                    gridApiRef.current = params.api;
+                }
+            }), []);
+
+            // Initialize AG-Grid
+            useEffect(() => {
+                if (gridRef.current && !gridApiRef.current) {
+                    agGrid.createGrid(gridRef.current, {
+                        ...gridOptions,
+                        columnDefs: columnDefs,
+                        rowData: displayData
+                    });
+                } else if (gridApiRef.current) {
+                    gridApiRef.current.setGridOption('columnDefs', columnDefs);
+                    gridApiRef.current.setGridOption('rowData', displayData);
+                }
+            }, [displayData, columnDefs]);
+
+            // Update chart when fields or data change
+            useEffect(() => {
+                if (!chartRef.current || !displayData || displayData.length === 0) return;
+
+                const xValues = displayData.map(row => row[xField]);
+                const yValues = displayData.map(row => {
+                    const val = row[yField];
+                    return typeof val === 'number' ? val : parseFloat(val) || 0;
+                });
+
+                let trace;
+                switch (chartType) {
+                    case 'bar':
+                        trace = {
+                            x: xValues,
+                            y: yValues,
+                            type: 'bar',
+                            marker: { color: '#0d6efd' }
+                        };
+                        break;
+                    case 'scatter':
+                        trace = {
+                            x: xValues,
+                            y: yValues,
+                            mode: 'markers',
+                            type: 'scatter',
+                            marker: { color: '#0d6efd', size: 8 }
+                        };
+                        break;
+                    case 'pie':
+                        trace = {
+                            labels: xValues,
+                            values: yValues,
+                            type: 'pie'
+                        };
+                        break;
+                    default: // line
+                        trace = {
+                            x: xValues,
+                            y: yValues,
+                            type: 'scatter',
+                            mode: 'lines+markers',
+                            line: { color: '#0d6efd' }
+                        };
+                }
+
+                const layout = {
+                    margin: { t: 30, r: 30, b: 50, l: 60 },
+                    xaxis: { title: xField },
+                    yaxis: { title: yField },
+                    paper_bgcolor: 'transparent',
+                    plot_bgcolor: 'transparent',
+                    font: { color: '{{if eq .Theme "dark"}}#e9ecef{{else}}#212529{{end}}' }
+                };
+
+                const config = {
+                    responsive: true,
+                    displaylogo: false,
+                    modeBarButtonsToRemove: ['lasso2d', 'select2d']
+                };
+
+                Plotly.react(chartRef.current, [trace], layout, config);
+            }, [chartType, xField, yField, displayData]);
+
+            // Apply aggregation
+            const applyAggregation = () => {
+                if (!aggGroupBy) {
+                    setDisplayData(DATA);
+                    setIsAggregated(false);
+                    return;
+                }
+
+                const groups = {};
+                DATA.forEach(row => {
+                    const key = String(row[aggGroupBy] || '');
+                    if (!groups[key]) {
+                        groups[key] = [];
+                    }
+                    groups[key].push(row);
+                });
+
+                const aggregated = Object.entries(groups).map(([key, rows]) => {
+                    const result = { [aggGroupBy]: key };
+
+                    switch (aggFunc) {
+                        case 'count':
+                            result['count'] = rows.length;
+                            break;
+                        case 'sum':
+                            result['sum'] = rows.reduce((acc, r) => acc + (parseFloat(r[aggValueField]) || 0), 0);
+                            break;
+                        case 'avg':
+                            const sum = rows.reduce((acc, r) => acc + (parseFloat(r[aggValueField]) || 0), 0);
+                            result['avg'] = rows.length > 0 ? sum / rows.length : 0;
+                            break;
+                        case 'min':
+                            result['min'] = Math.min(...rows.map(r => parseFloat(r[aggValueField]) || 0));
+                            break;
+                        case 'max':
+                            result['max'] = Math.max(...rows.map(r => parseFloat(r[aggValueField]) || 0));
+                            break;
+                    }
+
+                    return result;
+                });
+
+                setDisplayData(aggregated);
+                setIsAggregated(true);
+
+                // Update chart fields for aggregated data
+                setXField(aggGroupBy);
+                setYField(aggFunc === 'count' ? 'count' : aggFunc);
+            };
+
+            // Reset to original data
+            const resetData = () => {
+                setDisplayData(DATA);
+                setIsAggregated(false);
+                setAggGroupBy('');
+                if (SCHEMA.fields && SCHEMA.fields.length > 0) {
+                    setXField(SCHEMA.fields[0]);
+                }
+                if (SCHEMA.numericFields && SCHEMA.numericFields.length > 0) {
+                    setYField(SCHEMA.numericFields[0]);
+                }
+            };
+
+            // Export filtered data as CSV
+            const exportCSV = () => {
+                if (!displayData || displayData.length === 0) return;
+
+                const headers = Object.keys(displayData[0]);
+                const csvContent = [
+                    headers.join(','),
+                    ...displayData.map(row =>
+                        headers.map(h => {
+                            const val = row[h];
+                            if (val === null || val === undefined) return '';
+                            if (typeof val === 'string' && (val.includes(',') || val.includes('"'))) {
+                                return '"' + val.replace(/"/g, '""') + '"';
+                            }
+                            return String(val);
+                        }).join(',')
+                    )
+                ].join('\n');
+
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = 'exported_data.csv';
+                link.click();
+            };
+
+            // Export chart as PNG
+            const exportChart = () => {
+                if (chartRef.current) {
+                    Plotly.downloadImage(chartRef.current, {
+                        format: 'png',
+                        width: 1200,
+                        height: 600,
+                        filename: 'chart'
+                    });
+                }
+            };
+
+            // Get available fields for dropdowns
+            const allFields = useMemo(() => {
+                if (!displayData || displayData.length === 0) return [];
+                return Object.keys(displayData[0]);
+            }, [displayData]);
+
+            return React.createElement('div', { className: 'explorer-container' },
+                // Left Panel
+                React.createElement('div', { className: 'left-panel' },
+                    React.createElement('div', { className: 'section-title' }, 'Fields'),
+                    React.createElement('ul', { className: 'field-list' },
+                        (SCHEMA.fields || []).map(field =>
+                            React.createElement('li', {
+                                key: field,
+                                className: 'field-item',
+                                onClick: () => setXField(field)
+                            },
+                                React.createElement('span', { className: 'field-name' }, field),
+                                React.createElement('span', { className: 'field-type' },
+                                    SCHEMA.summary.fieldTypes[field] || 'string'
+                                )
+                            )
+                        )
+                    ),
+
+                    React.createElement('div', { className: 'section-title' }, 'Statistics'),
+                    React.createElement('div', null,
+                        React.createElement('div', { className: 'stat-item' },
+                            React.createElement('span', { className: 'stat-label' }, 'Records'),
+                            React.createElement('span', { className: 'stat-value' }, displayData.length.toLocaleString())
+                        ),
+                        React.createElement('div', { className: 'stat-item' },
+                            React.createElement('span', { className: 'stat-label' }, 'Fields'),
+                            React.createElement('span', { className: 'stat-value' }, allFields.length)
+                        ),
+                        React.createElement('div', { className: 'stat-item' },
+                            React.createElement('span', { className: 'stat-label' }, 'Numeric'),
+                            React.createElement('span', { className: 'stat-value' }, (SCHEMA.numericFields || []).length)
+                        )
+                    ),
+
+                    React.createElement('div', { className: 'section-title', style: { marginTop: '24px' } }, 'Aggregation'),
+                    React.createElement('div', { className: 'agg-panel' },
+                        React.createElement('select', {
+                            value: aggGroupBy,
+                            onChange: (e) => setAggGroupBy(e.target.value)
+                        },
+                            React.createElement('option', { value: '' }, '-- Group By --'),
+                            ...(SCHEMA.fields || []).map(f =>
+                                React.createElement('option', { key: f, value: f }, f)
+                            )
+                        ),
+                        React.createElement('select', {
+                            value: aggFunc,
+                            onChange: (e) => setAggFunc(e.target.value)
+                        },
+                            React.createElement('option', { value: 'count' }, 'Count'),
+                            React.createElement('option', { value: 'sum' }, 'Sum'),
+                            React.createElement('option', { value: 'avg' }, 'Average'),
+                            React.createElement('option', { value: 'min' }, 'Min'),
+                            React.createElement('option', { value: 'max' }, 'Max')
+                        ),
+                        aggFunc !== 'count' && React.createElement('select', {
+                            value: aggValueField,
+                            onChange: (e) => setAggValueField(e.target.value)
+                        },
+                            React.createElement('option', { value: '' }, '-- Value Field --'),
+                            ...(SCHEMA.numericFields || []).map(f =>
+                                React.createElement('option', { key: f, value: f }, f)
+                            )
+                        ),
+                        React.createElement('button', { onClick: applyAggregation }, 'Apply'),
+                        isAggregated && React.createElement('button', {
+                            onClick: resetData,
+                            style: { background: '#6c757d' }
+                        }, 'Reset')
+                    )
+                ),
+
+                // Main Content
+                React.createElement('div', { className: 'main-content' },
+                    // Header
+                    React.createElement('div', { className: 'header' },
+                        React.createElement('h1', null, CONFIG.title || 'Data Explorer'),
+                        React.createElement('div', { className: 'btn-group' },
+                            React.createElement('button', {
+                                className: 'btn',
+                                onClick: exportCSV,
+                                title: 'Export data as CSV'
+                            },
+                                React.createElement('i', { className: 'bi bi-download' }),
+                                ' CSV'
+                            ),
+                            React.createElement('button', {
+                                className: 'btn',
+                                onClick: exportChart,
+                                title: 'Export chart as PNG'
+                            },
+                                React.createElement('i', { className: 'bi bi-image' }),
+                                ' PNG'
+                            )
+                        )
+                    ),
+
+                    // Chart Controls
+                    React.createElement('div', { className: 'chart-controls' },
+                        React.createElement('div', { className: 'control-group' },
+                            React.createElement('label', null, 'Chart Type'),
+                            React.createElement('select', {
+                                value: chartType,
+                                onChange: (e) => setChartType(e.target.value)
+                            },
+                                React.createElement('option', { value: 'line' }, 'Line'),
+                                React.createElement('option', { value: 'bar' }, 'Bar'),
+                                React.createElement('option', { value: 'scatter' }, 'Scatter'),
+                                React.createElement('option', { value: 'pie' }, 'Pie')
+                            )
+                        ),
+                        React.createElement('div', { className: 'control-group' },
+                            React.createElement('label', null, 'X-Axis'),
+                            React.createElement('select', {
+                                value: xField,
+                                onChange: (e) => setXField(e.target.value)
+                            },
+                                ...allFields.map(f =>
+                                    React.createElement('option', { key: f, value: f }, f)
+                                )
+                            )
+                        ),
+                        React.createElement('div', { className: 'control-group' },
+                            React.createElement('label', null, 'Y-Axis'),
+                            React.createElement('select', {
+                                value: yField,
+                                onChange: (e) => setYField(e.target.value)
+                            },
+                                ...allFields.map(f =>
+                                    React.createElement('option', { key: f, value: f }, f)
+                                )
+                            )
+                        )
+                    ),
+
+                    // Chart Area
+                    React.createElement('div', {
+                        className: 'chart-area',
+                        ref: chartRef
+                    }),
+
+                    // Table Area
+                    React.createElement('div', {
+                        className: 'table-area ag-theme-alpine',
+                        ref: gridRef,
+                        style: { width: '100%', height: '100%' }
+                    })
+                )
+            );
+        }
+
+        // Mount the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>`
