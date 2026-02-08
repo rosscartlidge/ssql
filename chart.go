@@ -26,7 +26,7 @@ type ChartConfig struct {
 	Title              string            `json:"title"`
 	Width              int               `json:"width"`
 	Height             int               `json:"height"`
-	ChartType          string            `json:"chartType"`  // line, bar, scatter, pie, doughnut, radar, polarArea
+	ChartType          string            `json:"chartType"`  // line, bar, scatter, pie, doughnut, radar, polarArea, heatmap
 	TimeFormat         string            `json:"timeFormat"` // For time-based X axis
 	XAxisType          string            `json:"xAxisType"`  // linear, logarithmic, time, category
 	YAxisType          string            `json:"yAxisType"`  // linear, logarithmic
@@ -43,6 +43,13 @@ type ChartConfig struct {
 	ExportFormats      []string          `json:"exportFormats"`      // png, svg, pdf, csv
 	CustomCSS          string            `json:"customCSS"`
 	Fields             map[string]string `json:"fields"` // field -> data type hints
+
+	// Extended fields for advanced chart types
+	XField     string   `json:"xField"`     // Explicit X-axis field
+	YFields    []string `json:"yFields"`    // Multiple Y-axis fields for multi-series charts
+	ZField     string   `json:"zField"`     // Z-axis field for heatmaps (color value)
+	ColorField string   `json:"colorField"` // Field for point colors in scatter plots
+	ColorScale string   `json:"colorScale"` // Color scale for heatmaps: viridis, plasma, inferno, magma
 }
 
 // DefaultChartConfig provides sensible defaults for interactive chart generation.
@@ -85,6 +92,7 @@ func DefaultChartConfig() ChartConfig {
 		Theme:              "light",
 		ExportFormats:      []string{"png", "csv"},
 		Fields:             make(map[string]string),
+		ColorScale:         "viridis",
 	}
 }
 
@@ -276,6 +284,223 @@ func TimeSeriesChart(sb iter.Seq[Record], timeField string, valueFields []string
 
 	chartData := analyzeData(records, cfg)
 	return generateInteractiveHTML(chartData, cfg, filename)
+}
+
+// EnhancedChart creates an interactive chart with extended features including:
+//   - Multiple Y-axis fields (multi-series)
+//   - Heatmaps with Z-axis color values (uses Plotly.js)
+//   - Logarithmic axes
+//   - Color-by-field for scatter plots
+//
+// Example:
+//
+//	// Multi-series line chart
+//	config := ssql.DefaultChartConfig()
+//	config.XField = "date"
+//	config.YFields = []string{"revenue", "expenses", "profit"}
+//	ssql.EnhancedChart(data, config, "multi_series.html")
+//
+//	// Heatmap from spectrogram
+//	config := ssql.DefaultChartConfig()
+//	config.ChartType = "heatmap"
+//	config.XField = "time"
+//	config.YFields = []string{"frequency"}  // Y-axis for heatmap
+//	config.ZField = "magnitude"              // Color values
+//	config.ColorScale = "viridis"
+//	ssql.EnhancedChart(spectrogramData, config, "spectrogram.html")
+//
+//	// Scatter plot with categorical coloring
+//	config := ssql.DefaultChartConfig()
+//	config.ChartType = "scatter"
+//	config.XField = "age"
+//	config.YFields = []string{"income"}
+//	config.ColorField = "region"  // Color points by region
+//	ssql.EnhancedChart(customerData, config, "customers.html")
+func EnhancedChart(sb iter.Seq[Record], config ChartConfig, filename string) error {
+	// Collect all records
+	var records []Record
+	for record := range sb {
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		return fmt.Errorf("no data to chart")
+	}
+
+	// For heatmaps, use Plotly.js
+	if config.ChartType == "heatmap" {
+		return generateHeatmapHTML(records, config, filename)
+	}
+
+	// For other chart types, use Chart.js with enhanced config
+	chartData := analyzeData(records, config)
+
+	// Override fields if explicitly specified
+	if config.XField != "" {
+		if len(config.YFields) > 0 {
+			fields := []string{config.XField}
+			fields = append(fields, config.YFields...)
+			chartData.Fields = fields
+		}
+	}
+
+	return generateEnhancedHTML(chartData, config, filename)
+}
+
+// generateHeatmapHTML creates an HTML file with Plotly.js heatmap visualization
+func generateHeatmapHTML(records []Record, config ChartConfig, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("creating file %s: %w", filename, err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	// Pivot data into 2D grid
+	xField := config.XField
+	yField := ""
+	if len(config.YFields) > 0 {
+		yField = config.YFields[0]
+	}
+	zField := config.ZField
+
+	if yField == "" {
+		return fmt.Errorf("Y-axis field required for heatmap (use -y)")
+	}
+	if zField == "" {
+		return fmt.Errorf("Z-axis field required for heatmap (use -z)")
+	}
+
+	// Extract unique X and Y values and build value grid
+	xValues := make(map[string]int)
+	yValues := make(map[string]int)
+	var xLabels, yLabels []string
+
+	for _, record := range records {
+		xVal := fmt.Sprintf("%v", GetOr(record, xField, ""))
+		yVal := fmt.Sprintf("%v", GetOr(record, yField, ""))
+
+		if _, exists := xValues[xVal]; !exists {
+			xValues[xVal] = len(xLabels)
+			xLabels = append(xLabels, xVal)
+		}
+		if _, exists := yValues[yVal]; !exists {
+			yValues[yVal] = len(yLabels)
+			yLabels = append(yLabels, yVal)
+		}
+	}
+
+	// Create 2D grid initialized with NaN
+	grid := make([][]float64, len(yLabels))
+	for i := range grid {
+		grid[i] = make([]float64, len(xLabels))
+		for j := range grid[i] {
+			grid[i][j] = math.NaN()
+		}
+	}
+
+	// Fill grid with Z values
+	for _, record := range records {
+		xVal := fmt.Sprintf("%v", GetOr(record, xField, ""))
+		yVal := fmt.Sprintf("%v", GetOr(record, yField, ""))
+		zVal := getNumericValue(GetOr(record, zField, 0.0))
+
+		xi := xValues[xVal]
+		yi := yValues[yVal]
+		grid[yi][xi] = zVal
+	}
+
+	// Convert grid to JSON
+	gridJSON, err := json.Marshal(grid)
+	if err != nil {
+		return fmt.Errorf("marshaling grid data: %w", err)
+	}
+
+	xLabelsJSON, err := json.Marshal(xLabels)
+	if err != nil {
+		return fmt.Errorf("marshaling x labels: %w", err)
+	}
+
+	yLabelsJSON, err := json.Marshal(yLabels)
+	if err != nil {
+		return fmt.Errorf("marshaling y labels: %w", err)
+	}
+
+	// Execute template
+	tmpl := template.Must(template.New("heatmap").Parse(heatmapHTMLTemplate))
+	templateData := struct {
+		Title      string
+		XField     string
+		YField     string
+		ZField     string
+		XLabels    template.JS
+		YLabels    template.JS
+		GridData   template.JS
+		ColorScale string
+		Theme      string
+	}{
+		Title:      config.Title,
+		XField:     xField,
+		YField:     yField,
+		ZField:     zField,
+		XLabels:    template.JS(xLabelsJSON),
+		YLabels:    template.JS(yLabelsJSON),
+		GridData:   template.JS(gridJSON),
+		ColorScale: config.ColorScale,
+		Theme:      config.Theme,
+	}
+
+	if err := tmpl.Execute(writer, templateData); err != nil {
+		return err
+	}
+
+	return writer.Flush()
+}
+
+// generateEnhancedHTML creates Chart.js HTML with extended features
+func generateEnhancedHTML(data ChartData, config ChartConfig, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("creating file %s: %w", filename, err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	// Convert data to JSON
+	dataJSON, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshaling data: %w", err)
+	}
+
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	// Execute template
+	tmpl := template.Must(template.New("chart").Parse(enhancedChartHTMLTemplate))
+	templateData := struct {
+		Title      string
+		DataJSON   template.JS
+		ConfigJSON template.JS
+		Theme      string
+		CustomCSS  string
+	}{
+		Title:      config.Title,
+		DataJSON:   template.JS(dataJSON),
+		ConfigJSON: template.JS(configJSON),
+		Theme:      config.Theme,
+		CustomCSS:  config.CustomCSS,
+	}
+
+	if err := tmpl.Execute(writer, templateData); err != nil {
+		return err
+	}
+
+	return writer.Flush()
 }
 
 // ============================================================================
@@ -1028,6 +1253,690 @@ const chartHTMLTemplate = `<!DOCTYPE html>
             ` + "`" + `;
 
             // Add numeric statistics
+            for (const [field, stats] of Object.entries(chartData.summary.numericStats)) {
+                html += ` + "`" + `
+                    <div class="col-md-12 mt-2">
+                        <small><strong>${field}:</strong>
+                        Min: ${stats.min.toFixed(2)},
+                        Max: ${stats.max.toFixed(2)},
+                        Mean: ${stats.mean.toFixed(2)},
+                        StdDev: ${stats.stdDev.toFixed(2)}
+                        </small>
+                    </div>
+                ` + "`" + `;
+            }
+
+            summaryDiv.innerHTML = html;
+        }
+    </script>
+</body>
+</html>`
+
+// heatmapHTMLTemplate is the HTML template for Plotly.js heatmap visualization
+const heatmapHTMLTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+
+    <!-- Plotly.js for heatmaps -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+    <!-- UI Framework -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-color: {{if eq .Theme "dark"}}#1a1a1a{{else}}#ffffff{{end}};
+            --text-color: {{if eq .Theme "dark"}}#ffffff{{else}}#333333{{end}};
+            --border-color: {{if eq .Theme "dark"}}#444444{{else}}#dee2e6{{end}};
+            --panel-bg: {{if eq .Theme "dark"}}#2d2d2d{{else}}#f8f9fa{{end}};
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .control-panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .chart-container {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .stats-panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+
+        #heatmapChart {
+            width: 100%;
+            height: 600px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row mt-3">
+            <div class="col-12">
+                <h1 class="text-center">{{.Title}}</h1>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="control-panel">
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <label class="form-label">Color Scale</label>
+                            <select id="colorScale" class="form-select" onchange="updateColorScale()">
+                                <option value="Viridis" {{if eq .ColorScale "viridis"}}selected{{end}}>Viridis</option>
+                                <option value="Plasma" {{if eq .ColorScale "plasma"}}selected{{end}}>Plasma</option>
+                                <option value="Inferno" {{if eq .ColorScale "inferno"}}selected{{end}}>Inferno</option>
+                                <option value="Magma" {{if eq .ColorScale "magma"}}selected{{end}}>Magma</option>
+                                <option value="Cividis" {{if eq .ColorScale "cividis"}}selected{{end}}>Cividis</option>
+                                <option value="Turbo" {{if eq .ColorScale "turbo"}}selected{{end}}>Turbo</option>
+                                <option value="Hot">Hot</option>
+                                <option value="Blues">Blues</option>
+                                <option value="RdBu">Red-Blue</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Actions</label>
+                            <div class="btn-group d-block" role="group">
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="resetView()">
+                                    <i class="bi bi-zoom-out"></i> Reset Zoom
+                                </button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="exportChart()">
+                                    <i class="bi bi-download"></i> Export PNG
+                                </button>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Cursor Position</label>
+                            <div id="cursorInfo" class="form-control-plaintext">Hover over heatmap to see values</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="chart-container">
+                    <div id="heatmapChart"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="stats-panel">
+                    <h5>Data Summary</h5>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <strong>X-Axis ({{.XField}}):</strong> <span id="xCount"></span> values
+                        </div>
+                        <div class="col-md-4">
+                            <strong>Y-Axis ({{.YField}}):</strong> <span id="yCount"></span> values
+                        </div>
+                        <div class="col-md-4">
+                            <strong>Z-Values ({{.ZField}}):</strong> Min: <span id="zMin"></span>, Max: <span id="zMax"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const xLabels = {{.XLabels}};
+        const yLabels = {{.YLabels}};
+        const gridData = {{.GridData}};
+
+        // Calculate Z-axis statistics
+        let zMin = Infinity, zMax = -Infinity;
+        for (const row of gridData) {
+            for (const val of row) {
+                if (!isNaN(val) && val !== null) {
+                    if (val < zMin) zMin = val;
+                    if (val > zMax) zMax = val;
+                }
+            }
+        }
+
+        document.getElementById('xCount').textContent = xLabels.length;
+        document.getElementById('yCount').textContent = yLabels.length;
+        document.getElementById('zMin').textContent = zMin.toFixed(4);
+        document.getElementById('zMax').textContent = zMax.toFixed(4);
+
+        const trace = {
+            z: gridData,
+            x: xLabels,
+            y: yLabels,
+            type: 'heatmap',
+            colorscale: '{{.ColorScale | js}}' || 'Viridis',
+            colorbar: {
+                title: '{{.ZField}}'
+            },
+            hoverongaps: false,
+            hovertemplate: '{{.XField}}: %{x}<br>{{.YField}}: %{y}<br>{{.ZField}}: %{z:.4f}<extra></extra>'
+        };
+
+        const layout = {
+            title: '',
+            xaxis: {
+                title: '{{.XField}}',
+                tickangle: -45
+            },
+            yaxis: {
+                title: '{{.YField}}'
+            },
+            margin: {
+                l: 80,
+                r: 50,
+                t: 30,
+                b: 100
+            }
+        };
+
+        const config = {
+            responsive: true,
+            scrollZoom: true,
+            modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+            displaylogo: false
+        };
+
+        Plotly.newPlot('heatmapChart', [trace], layout, config);
+
+        // Update cursor info on hover
+        document.getElementById('heatmapChart').on('plotly_hover', function(data) {
+            const pt = data.points[0];
+            document.getElementById('cursorInfo').innerHTML =
+                ` + "`" + `<strong>{{.XField}}:</strong> ${pt.x} | <strong>{{.YField}}:</strong> ${pt.y} | <strong>{{.ZField}}:</strong> ${pt.z?.toFixed(4) || 'N/A'}` + "`" + `;
+        });
+
+        function updateColorScale() {
+            const colorScale = document.getElementById('colorScale').value;
+            Plotly.restyle('heatmapChart', {colorscale: colorScale});
+        }
+
+        function resetView() {
+            Plotly.relayout('heatmapChart', {
+                'xaxis.autorange': true,
+                'yaxis.autorange': true
+            });
+        }
+
+        function exportChart() {
+            Plotly.downloadImage('heatmapChart', {
+                format: 'png',
+                width: 1920,
+                height: 1080,
+                filename: 'heatmap'
+            });
+        }
+    </script>
+</body>
+</html>`
+
+// enhancedChartHTMLTemplate is the Chart.js template with multi-series and advanced features
+const enhancedChartHTMLTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+
+    <!-- Chart.js and plugins -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+
+    <!-- UI Framework -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-color: {{if eq .Theme "dark"}}#1a1a1a{{else}}#ffffff{{end}};
+            --text-color: {{if eq .Theme "dark"}}#ffffff{{else}}#333333{{end}};
+            --border-color: {{if eq .Theme "dark"}}#444444{{else}}#dee2e6{{end}};
+            --panel-bg: {{if eq .Theme "dark"}}#2d2d2d{{else}}#f8f9fa{{end}};
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .control-panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .chart-container {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 20px;
+            position: relative;
+            height: 600px;
+        }
+
+        .stats-panel {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+
+        .field-selector {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 10px;
+        }
+
+        .btn-outline-primary {
+            color: var(--text-color);
+            border-color: var(--border-color);
+        }
+
+        .btn-outline-primary:hover {
+            background-color: #0d6efd;
+            border-color: #0d6efd;
+            color: white;
+        }
+
+        {{.CustomCSS}}
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row mt-3">
+            <div class="col-12">
+                <h1 class="text-center">{{.Title}}</h1>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="control-panel">
+                    <div class="row g-3">
+                        <div class="col-md-2">
+                            <label class="form-label">Chart Type</label>
+                            <select id="chartType" class="form-select">
+                                <option value="line">Line</option>
+                                <option value="bar">Bar</option>
+                                <option value="scatter">Scatter</option>
+                                <option value="pie">Pie</option>
+                                <option value="doughnut">Doughnut</option>
+                                <option value="radar">Radar</option>
+                            </select>
+                        </div>
+
+                        <div class="col-md-2">
+                            <label class="form-label">X-Axis Field</label>
+                            <select id="xField" class="form-select"></select>
+                        </div>
+
+                        <div class="col-md-3">
+                            <label class="form-label">Y-Axis Fields</label>
+                            <div id="yFields" class="field-selector"></div>
+                        </div>
+
+                        <div class="col-md-2">
+                            <label class="form-label">Options</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showTrendLine">
+                                <label class="form-check-label" for="showTrendLine">Trend Line</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="showMovingAvg">
+                                <label class="form-check-label" for="showMovingAvg">Moving Average</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="stackedMode">
+                                <label class="form-check-label" for="stackedMode">Stacked</label>
+                            </div>
+                        </div>
+
+                        <div class="col-md-3">
+                            <label class="form-label">Actions</label>
+                            <div class="btn-group d-block" role="group">
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="updateChart()">
+                                    <i class="bi bi-arrow-clockwise"></i> Update
+                                </button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="resetZoom()">
+                                    <i class="bi bi-zoom-out"></i> Reset Zoom
+                                </button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" onclick="exportChart()">
+                                    <i class="bi bi-download"></i> Export
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="chart-container">
+                    <canvas id="mainChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="stats-panel">
+                    <h5>Data Summary</h5>
+                    <div id="dataSummary" class="row"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let chartData = {{.DataJSON}};
+        let chartConfig = {{.ConfigJSON}};
+        let mainChart = null;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeControls();
+            createChart();
+            updateDataSummary();
+        });
+
+        function initializeControls() {
+            const xFieldSelect = document.getElementById('xField');
+            const yFieldsDiv = document.getElementById('yFields');
+
+            chartData.fields.forEach(field => {
+                const option = document.createElement('option');
+                option.value = field;
+                option.textContent = field;
+                xFieldSelect.appendChild(option);
+
+                const checkDiv = document.createElement('div');
+                checkDiv.className = 'form-check';
+                checkDiv.innerHTML = ` + "`" + `
+                    <input class="form-check-input" type="checkbox" id="y_${field}" value="${field}">
+                    <label class="form-check-label" for="y_${field}">${field}</label>
+                ` + "`" + `;
+                yFieldsDiv.appendChild(checkDiv);
+            });
+
+            // Set initial X field from config
+            if (chartConfig.xField) {
+                xFieldSelect.value = chartConfig.xField;
+            } else if (chartData.fields.length > 0) {
+                xFieldSelect.value = chartData.fields[0];
+            }
+
+            // Set initial Y fields from config or auto-select numeric fields
+            if (chartConfig.yFields && chartConfig.yFields.length > 0) {
+                chartConfig.yFields.forEach(field => {
+                    const checkbox = document.getElementById(` + "`" + `y_${field}` + "`" + `);
+                    if (checkbox) checkbox.checked = true;
+                });
+            } else {
+                chartData.numericFields.forEach(field => {
+                    const checkbox = document.getElementById(` + "`" + `y_${field}` + "`" + `);
+                    if (checkbox) checkbox.checked = true;
+                });
+            }
+
+            document.getElementById('chartType').value = chartConfig.chartType;
+        }
+
+        function createChart() {
+            const ctx = document.getElementById('mainChart').getContext('2d');
+
+            if (mainChart) {
+                mainChart.destroy();
+            }
+
+            const chartType = document.getElementById('chartType').value;
+            const xField = document.getElementById('xField').value;
+            const selectedYFields = getSelectedYFields();
+            const showTrendLine = document.getElementById('showTrendLine').checked;
+            const showMovingAvg = document.getElementById('showMovingAvg').checked;
+            const stackedMode = document.getElementById('stackedMode').checked;
+
+            const labels = chartData.records.map(record => record[xField]);
+            const datasets = [];
+            const colors = generateColors(selectedYFields.length);
+
+            // Check if we have a color field for scatter plots
+            const colorField = chartConfig.colorField;
+            const hasColorField = colorField && chartType === 'scatter';
+
+            if (hasColorField) {
+                // Group data by color field value
+                const groups = {};
+                chartData.records.forEach(record => {
+                    const groupKey = record[colorField] || 'Other';
+                    if (!groups[groupKey]) groups[groupKey] = [];
+                    groups[groupKey].push(record);
+                });
+
+                const groupKeys = Object.keys(groups);
+                const groupColors = generateColors(groupKeys.length);
+
+                groupKeys.forEach((groupKey, index) => {
+                    const groupRecords = groups[groupKey];
+                    selectedYFields.forEach(yField => {
+                        const data = groupRecords.map(record => ({
+                            x: getNumericValue(record[xField]),
+                            y: getNumericValue(record[yField])
+                        }));
+
+                        datasets.push({
+                            label: ` + "`" + `${yField} (${groupKey})` + "`" + `,
+                            data: data,
+                            backgroundColor: groupColors[index] + '80',
+                            borderColor: groupColors[index],
+                            borderWidth: 1,
+                            pointRadius: 4
+                        });
+                    });
+                });
+            } else {
+                selectedYFields.forEach((field, index) => {
+                    const data = chartData.records.map(record => {
+                        const value = record[field];
+                        return typeof value === 'number' ? value : parseFloat(value) || 0;
+                    });
+
+                    datasets.push({
+                        label: field,
+                        data: data,
+                        backgroundColor: colors[index] + '80',
+                        borderColor: colors[index],
+                        borderWidth: 2,
+                        fill: chartType === 'area',
+                        tension: 0.4
+                    });
+
+                    if (showMovingAvg && data.length > 5) {
+                        const movingAvgData = calculateMovingAverage(data, 5);
+                        datasets.push({
+                            label: ` + "`" + `${field} (5-period MA)` + "`" + `,
+                            data: movingAvgData,
+                            backgroundColor: 'transparent',
+                            borderColor: colors[index],
+                            borderWidth: 1,
+                            borderDash: [5, 5],
+                            fill: false,
+                            tension: 0.1,
+                            pointRadius: 0
+                        });
+                    }
+                });
+            }
+
+            // Determine scale types
+            const xAxisType = chartConfig.xAxisType === 'logarithmic' ? 'logarithmic' :
+                              (chartData.dateFields.includes(xField) ? 'time' : 'category');
+            const yAxisType = chartConfig.yAxisType === 'logarithmic' ? 'logarithmic' : 'linear';
+
+            const config = {
+                type: chartType,
+                data: {
+                    labels: labels,
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: xAxisType,
+                            title: {
+                                display: true,
+                                text: xField
+                            }
+                        },
+                        y: {
+                            type: yAxisType,
+                            stacked: stackedMode,
+                            title: {
+                                display: true,
+                                text: 'Values'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: chartConfig.showLegend
+                        },
+                        tooltip: {
+                            enabled: chartConfig.showTooltips,
+                            mode: 'index',
+                            intersect: false
+                        },
+                        zoom: {
+                            zoom: {
+                                wheel: { enabled: chartConfig.enableZoom },
+                                pinch: { enabled: chartConfig.enableZoom },
+                                mode: 'xy'
+                            },
+                            pan: {
+                                enabled: chartConfig.enablePan,
+                                mode: 'xy'
+                            }
+                        }
+                    },
+                    animation: {
+                        duration: chartConfig.enableAnimations ? 1000 : 0
+                    }
+                }
+            };
+
+            mainChart = new Chart(ctx, config);
+        }
+
+        function getSelectedYFields() {
+            const checkboxes = document.querySelectorAll('#yFields input[type="checkbox"]:checked');
+            return Array.from(checkboxes).map(cb => cb.value);
+        }
+
+        function generateColors(count) {
+            const colors = [
+                '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF',
+                '#FF9F40', '#FF6384', '#C9CBCF', '#4BC0C0', '#36A2EB'
+            ];
+            const result = [];
+            for (let i = 0; i < count; i++) {
+                result.push(colors[i % colors.length]);
+            }
+            return result;
+        }
+
+        function getNumericValue(value) {
+            if (typeof value === 'number') return value;
+            const parsed = parseFloat(value);
+            return isNaN(parsed) ? 0 : parsed;
+        }
+
+        function calculateMovingAverage(data, period) {
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < period - 1) {
+                    result.push(null);
+                } else {
+                    const sum = data.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
+                    result.push(sum / period);
+                }
+            }
+            return result;
+        }
+
+        function updateChart() {
+            createChart();
+        }
+
+        function resetZoom() {
+            if (mainChart) {
+                mainChart.resetZoom();
+            }
+        }
+
+        function exportChart() {
+            if (mainChart) {
+                const url = mainChart.toBase64Image();
+                const link = document.createElement('a');
+                link.download = 'chart.png';
+                link.href = url;
+                link.click();
+            }
+        }
+
+        function updateDataSummary() {
+            const summaryDiv = document.getElementById('dataSummary');
+            let html = ` + "`" + `
+                <div class="col-md-3">
+                    <strong>Records:</strong> ${chartData.summary.recordCount}
+                </div>
+                <div class="col-md-3">
+                    <strong>Fields:</strong> ${chartData.fields.length}
+                </div>
+                <div class="col-md-3">
+                    <strong>Numeric Fields:</strong> ${chartData.numericFields.length}
+                </div>
+                <div class="col-md-3">
+                    <strong>Date Fields:</strong> ${chartData.dateFields.length}
+                </div>
+            ` + "`" + `;
+
             for (const [field, stats] of Object.entries(chartData.summary.numericStats)) {
                 html += ` + "`" + `
                     <div class="col-md-12 mt-2">

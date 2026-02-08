@@ -1715,6 +1715,59 @@ err := ssql.InteractiveChart(
 )
 ```
 
+#### EnhancedChart
+```go
+func EnhancedChart(data iter.Seq[Record], config ChartConfig, filename string) error
+```
+Creates advanced charts with support for:
+- Multiple Y-axis fields (multi-series charts)
+- Heatmaps with Z-axis color values (uses Plotly.js)
+- Logarithmic axes
+- Color-by-field for scatter plots
+
+**Example - Multi-series chart:**
+```go
+config := ssql.DefaultChartConfig()
+config.XField = "month"
+config.YFields = []string{"revenue", "expenses", "profit"}
+
+err := ssql.EnhancedChart(salesData, config, "multi_series.html")
+```
+
+**Example - Heatmap:**
+```go
+config := ssql.DefaultChartConfig()
+config.ChartType = "heatmap"
+config.XField = "time"
+config.YFields = []string{"frequency"}  // Y-axis for heatmap
+config.ZField = "magnitude"              // Color values
+config.ColorScale = "viridis"            // viridis, plasma, inferno, magma
+
+err := ssql.EnhancedChart(spectrogramData, config, "spectrogram.html")
+```
+
+**Example - Logarithmic axes:**
+```go
+config := ssql.DefaultChartConfig()
+config.XField = "frequency"
+config.YFields = []string{"magnitude"}
+config.XAxisType = "logarithmic"
+config.YAxisType = "logarithmic"
+
+err := ssql.EnhancedChart(spectrumData, config, "log_plot.html")
+```
+
+**Example - Color by field (scatter):**
+```go
+config := ssql.DefaultChartConfig()
+config.ChartType = "scatter"
+config.XField = "age"
+config.YFields = []string{"income"}
+config.ColorField = "region"  // Points colored by region category
+
+err := ssql.EnhancedChart(customerData, config, "customers.html")
+```
+
 ---
 
 ## Helper Functions

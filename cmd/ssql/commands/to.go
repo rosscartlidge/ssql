@@ -425,10 +425,16 @@ func registerToWAV(cmd *cf.SubcommandBuilder) {
 
 // registerToChart registers the "to chart" subcommand
 func registerToChart(cmd *cf.SubcommandBuilder) {
+	chartTypes := []string{"line", "bar", "scatter", "pie", "doughnut", "radar", "heatmap"}
+	colorScales := []string{"viridis", "plasma", "inferno", "magma", "cividis", "turbo"}
+
 	cmd.Subcommand("chart").
 		Description("Create interactive HTML chart").
 		Example("ssql from data.csv | ssql to chart -x date -y revenue", "Create line chart of revenue over time").
-		Example("ssql from sales.csv | ssql to chart -x product -y sales -output sales.html", "Create chart with custom output file").
+		Example("ssql from sales.csv | ssql to chart -x product -y sales -y profit", "Create multi-series chart with sales and profit").
+		Example("ssql from spectro.jsonl | ssql to chart -x time -y frequency -z magnitude -type heatmap", "Create heatmap from spectrogram data").
+		Example("ssql from data.csv | ssql to chart -x frequency -y magnitude -log-x", "Create chart with logarithmic X-axis").
+		Example("ssql from customers.csv | ssql to chart -x age -y spend -color region -type scatter", "Scatter plot with points colored by region").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -444,7 +450,44 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 		String().
 		FieldsFromFlag("").
 		Global().
-		Help("Y-axis field").
+		Accumulate().
+		Help("Y-axis field (can specify multiple times for multi-series)").
+		Done().
+		Flag("-z").
+		String().
+		FieldsFromFlag("").
+		Global().
+		Help("Z-axis field (for heatmap color values)").
+		Done().
+		Flag("-type", "-t").
+		String().
+		Completer(&cf.StaticCompleter{Options: chartTypes}).
+		Global().
+		Default("line").
+		Help("Chart type: line, bar, scatter, pie, doughnut, radar, heatmap").
+		Done().
+		Flag("-log-x").
+		Bool().
+		Global().
+		Help("Use logarithmic scale for X-axis").
+		Done().
+		Flag("-log-y").
+		Bool().
+		Global().
+		Help("Use logarithmic scale for Y-axis").
+		Done().
+		Flag("-color").
+		String().
+		FieldsFromFlag("").
+		Global().
+		Help("Color-by field for scatter plots (categorical coloring)").
+		Done().
+		Flag("-colorscale").
+		String().
+		Completer(&cf.StaticCompleter{Options: colorScales}).
+		Global().
+		Default("viridis").
+		Help("Color scale for heatmaps: viridis, plasma, inferno, magma, cividis, turbo").
 		Done().
 		Flag("-output", "-o").
 		String().
@@ -454,14 +497,49 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 		Help("Output HTML file (default: chart.html)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var xField, yField, outputFile string
-			var generate bool
+			var xField, zField, colorField, colorScale, chartType, outputFile string
+			var yFields []string
+			var generate, logX, logY bool
 
 			if xVal, ok := ctx.GlobalFlags["-x"]; ok {
 				xField = xVal.(string)
 			}
+			// Handle accumulated -y flags
 			if yVal, ok := ctx.GlobalFlags["-y"]; ok {
-				yField = yVal.(string)
+				switch v := yVal.(type) {
+				case []any:
+					for _, y := range v {
+						if s, ok := y.(string); ok && s != "" {
+							yFields = append(yFields, s)
+						}
+					}
+				case string:
+					if v != "" {
+						yFields = append(yFields, v)
+					}
+				}
+			}
+			if zVal, ok := ctx.GlobalFlags["-z"]; ok {
+				zField = zVal.(string)
+			}
+			if typeVal, ok := ctx.GlobalFlags["-type"]; ok {
+				chartType = typeVal.(string)
+			} else {
+				chartType = "line"
+			}
+			if logXVal, ok := ctx.GlobalFlags["-log-x"]; ok {
+				logX = logXVal.(bool)
+			}
+			if logYVal, ok := ctx.GlobalFlags["-log-y"]; ok {
+				logY = logYVal.(bool)
+			}
+			if colorVal, ok := ctx.GlobalFlags["-color"]; ok {
+				colorField = colorVal.(string)
+			}
+			if csVal, ok := ctx.GlobalFlags["-colorscale"]; ok {
+				colorScale = csVal.(string)
+			} else {
+				colorScale = "viridis"
 			}
 			if outVal, ok := ctx.GlobalFlags["-output"]; ok {
 				outputFile = outVal.(string)
@@ -474,23 +552,41 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateToChartCode(xField, yField, outputFile)
+				return generateToChartCode(xField, yFields, zField, chartType, logX, logY, colorField, colorScale, outputFile)
 			}
 
 			// Validate required fields
 			if xField == "" {
 				return fmt.Errorf("X-axis field required (use -x)")
 			}
-			if yField == "" {
+			if len(yFields) == 0 && chartType != "heatmap" {
 				return fmt.Errorf("Y-axis field required (use -y)")
+			}
+			if chartType == "heatmap" && zField == "" {
+				return fmt.Errorf("Z-axis field required for heatmap (use -z)")
 			}
 
 			// Read JSONL from stdin (with schema if present - consumes schema header)
 			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
 			records := schemaAndRecords.Records
 
-			// Create chart
-			if err := ssql.QuickChart(records, xField, yField, outputFile); err != nil {
+			// Build chart config
+			config := ssql.DefaultChartConfig()
+			config.ChartType = chartType
+			config.XField = xField
+			config.YFields = yFields
+			config.ZField = zField
+			config.ColorField = colorField
+			config.ColorScale = colorScale
+			if logX {
+				config.XAxisType = "logarithmic"
+			}
+			if logY {
+				config.YAxisType = "logarithmic"
+			}
+
+			// Create chart using enhanced function
+			if err := ssql.EnhancedChart(records, config, outputFile); err != nil {
 				return fmt.Errorf("creating chart: %w", err)
 			}
 
@@ -746,7 +842,7 @@ func generateToTSVCode(filename string, sep rune) error {
 	return lib.WriteCodeFragment(frag)
 }
 
-func generateToChartCode(xField, yField, outputFile string) error {
+func generateToChartCode(xField string, yFields []string, zField, chartType string, logX, logY bool, colorField, colorScale, outputFile string) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -768,7 +864,7 @@ func generateToChartCode(xField, yField, outputFile string) error {
 	if xField == "" {
 		return fmt.Errorf("X-axis field required (use -x)")
 	}
-	if yField == "" {
+	if len(yFields) == 0 && chartType != "heatmap" {
 		return fmt.Errorf("Y-axis field required (use -y)")
 	}
 
@@ -776,10 +872,41 @@ func generateToChartCode(xField, yField, outputFile string) error {
 		outputFile = "chart.html"
 	}
 
-	code := fmt.Sprintf(`if err := ssql.QuickChart(%s, %q, %q, %q); err != nil {
+	// Build config setup code
+	var configLines []string
+	configLines = append(configLines, "config := ssql.DefaultChartConfig()")
+	configLines = append(configLines, fmt.Sprintf("\tconfig.ChartType = %q", chartType))
+	configLines = append(configLines, fmt.Sprintf("\tconfig.XField = %q", xField))
+
+	if len(yFields) > 0 {
+		quotedFields := make([]string, len(yFields))
+		for i, f := range yFields {
+			quotedFields[i] = fmt.Sprintf("%q", f)
+		}
+		configLines = append(configLines, fmt.Sprintf("\tconfig.YFields = []string{%s}", joinStrings(quotedFields, ", ")))
+	}
+
+	if zField != "" {
+		configLines = append(configLines, fmt.Sprintf("\tconfig.ZField = %q", zField))
+	}
+	if colorField != "" {
+		configLines = append(configLines, fmt.Sprintf("\tconfig.ColorField = %q", colorField))
+	}
+	if colorScale != "" && colorScale != "viridis" {
+		configLines = append(configLines, fmt.Sprintf("\tconfig.ColorScale = %q", colorScale))
+	}
+	if logX {
+		configLines = append(configLines, "\tconfig.XAxisType = \"logarithmic\"")
+	}
+	if logY {
+		configLines = append(configLines, "\tconfig.YAxisType = \"logarithmic\"")
+	}
+
+	code := fmt.Sprintf(`%s
+	if err := ssql.EnhancedChart(%s, config, %q); err != nil {
 		return fmt.Errorf("creating chart: %%w", err)
 	}
-	fmt.Printf("Chart created: %%s\n", %q)`, inputVar, xField, yField, outputFile, outputFile)
+	fmt.Printf("Chart created: %%s\n", %q)`, joinStrings(configLines, "\n"), inputVar, outputFile, outputFile)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
 	return lib.WriteCodeFragment(frag)

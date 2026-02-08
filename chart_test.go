@@ -714,3 +714,278 @@ func TestChartConfigOptions(t *testing.T) {
 		t.Error("Chart should contain custom title")
 	}
 }
+
+// ============================================================================
+// ENHANCED CHART TESTS
+// ============================================================================
+
+func TestEnhancedChartMultiSeries(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "enhanced_multi_series.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["month"] = "Jan"
+			r.fields["sales"] = int64(1000)
+			r.fields["profit"] = int64(200)
+			r.fields["costs"] = int64(800)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["month"] = "Feb"
+			r.fields["sales"] = int64(1200)
+			r.fields["profit"] = int64(350)
+			r.fields["costs"] = int64(850)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["month"] = "Mar"
+			r.fields["sales"] = int64(1100)
+			r.fields["profit"] = int64(280)
+			r.fields["costs"] = int64(820)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultChartConfig()
+	config.Title = "Multi-Series Test"
+	config.XField = "month"
+	config.YFields = []string{"sales", "profit", "costs"}
+
+	err := EnhancedChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("EnhancedChart multi-series failed: %v", err)
+	}
+
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		t.Error("Multi-series chart file was not created")
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read chart file: %v", err)
+	}
+
+	htmlContent := string(content)
+	if !strings.Contains(htmlContent, "Multi-Series Test") {
+		t.Error("Chart should contain title")
+	}
+	if !strings.Contains(htmlContent, "canvas") {
+		t.Error("Chart should contain canvas element")
+	}
+}
+
+func TestEnhancedChartHeatmap(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "heatmap.html")
+
+	// Create spectrogram-like data
+	var records []Record
+	for x := 0; x < 10; x++ {
+		for y := 0; y < 5; y++ {
+			r := MakeMutableRecord()
+			r.fields["time"] = float64(x) * 0.1
+			r.fields["frequency"] = float64(y) * 100
+			r.fields["magnitude"] = float64((x + y) * 10)
+			records = append(records, r.Freeze())
+		}
+	}
+
+	input := slices.Values(records)
+
+	config := DefaultChartConfig()
+	config.Title = "Heatmap Test"
+	config.ChartType = "heatmap"
+	config.XField = "time"
+	config.YFields = []string{"frequency"}
+	config.ZField = "magnitude"
+	config.ColorScale = "viridis"
+
+	err := EnhancedChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("EnhancedChart heatmap failed: %v", err)
+	}
+
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		t.Error("Heatmap file was not created")
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read heatmap file: %v", err)
+	}
+
+	htmlContent := string(content)
+	if !strings.Contains(htmlContent, "Plotly") {
+		t.Error("Heatmap should use Plotly.js")
+	}
+	if !strings.Contains(htmlContent, "heatmap") {
+		t.Error("Heatmap should contain heatmap type")
+	}
+	if !strings.Contains(htmlContent, "Viridis") && !strings.Contains(htmlContent, "viridis") {
+		t.Error("Heatmap should contain color scale")
+	}
+}
+
+func TestEnhancedChartLogarithmicAxes(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "log_axes.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frequency"] = int64(10)
+			r.fields["magnitude"] = int64(100)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frequency"] = int64(100)
+			r.fields["magnitude"] = int64(10)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frequency"] = int64(1000)
+			r.fields["magnitude"] = int64(1)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultChartConfig()
+	config.Title = "Logarithmic Test"
+	config.XField = "frequency"
+	config.YFields = []string{"magnitude"}
+	config.XAxisType = "logarithmic"
+	config.YAxisType = "logarithmic"
+
+	err := EnhancedChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("EnhancedChart log axes failed: %v", err)
+	}
+
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		t.Error("Log axes chart file was not created")
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read chart file: %v", err)
+	}
+
+	htmlContent := string(content)
+	if !strings.Contains(htmlContent, "logarithmic") {
+		t.Error("Chart should contain logarithmic axis configuration")
+	}
+}
+
+func TestEnhancedChartColorByField(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "color_by_field.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["age"] = int64(25)
+			r.fields["income"] = int64(50000)
+			r.fields["region"] = "North"
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["age"] = int64(35)
+			r.fields["income"] = int64(75000)
+			r.fields["region"] = "South"
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["age"] = int64(45)
+			r.fields["income"] = int64(90000)
+			r.fields["region"] = "North"
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["age"] = int64(30)
+			r.fields["income"] = int64(60000)
+			r.fields["region"] = "West"
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultChartConfig()
+	config.Title = "Color By Field Test"
+	config.ChartType = "scatter"
+	config.XField = "age"
+	config.YFields = []string{"income"}
+	config.ColorField = "region"
+
+	err := EnhancedChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("EnhancedChart color by field failed: %v", err)
+	}
+
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		t.Error("Color by field chart was not created")
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read chart file: %v", err)
+	}
+
+	htmlContent := string(content)
+	if !strings.Contains(htmlContent, "colorField") {
+		t.Error("Chart should contain colorField configuration")
+	}
+}
+
+func TestHeatmapMissingZField(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "missing_z.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["x"] = int64(1)
+			r.fields["y"] = int64(2)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultChartConfig()
+	config.ChartType = "heatmap"
+	config.XField = "x"
+	config.YFields = []string{"y"}
+	// ZField intentionally not set
+
+	err := EnhancedChart(input, config, filename)
+	if err == nil {
+		t.Error("Heatmap without ZField should return error")
+	}
+	if err != nil && !strings.Contains(err.Error(), "Z-axis") {
+		t.Errorf("Error should mention Z-axis, got: %v", err)
+	}
+}
+
+func TestEnhancedChartEmptyData(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "empty_enhanced.html")
+
+	empty := func(yield func(Record) bool) {
+		// Yield nothing
+	}
+
+	config := DefaultChartConfig()
+	config.XField = "x"
+	config.YFields = []string{"y"}
+
+	err := EnhancedChart(iter.Seq[Record](empty), config, filename)
+	if err == nil {
+		t.Error("EnhancedChart with empty data should return error")
+	}
+}

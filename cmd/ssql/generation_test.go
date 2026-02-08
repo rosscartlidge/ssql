@@ -318,7 +318,7 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			name:           "chart",
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to chart -x age -y salary`,
 			expectFragment: true,
-			wantSubstring:  `ssql.QuickChart`,
+			wantSubstring:  `ssql.EnhancedChart`,
 		},
 	}
 
@@ -373,9 +373,9 @@ func TestChartGeneration(t *testing.T) {
 		t.Errorf("Chart command did not generate a final fragment.\nOutput: %s", outputStr)
 	}
 
-	// Should contain QuickChart call
-	if !strings.Contains(outputStr, `ssql.QuickChart`) {
-		t.Errorf("Chart fragment missing QuickChart call.\nOutput: %s", outputStr)
+	// Should contain EnhancedChart call (used for multi-series/advanced features)
+	if !strings.Contains(outputStr, `ssql.EnhancedChart`) {
+		t.Errorf("Chart fragment missing EnhancedChart call.\nOutput: %s", outputStr)
 	}
 
 	// Verify chart.html was NOT created (generation shouldn't execute)
