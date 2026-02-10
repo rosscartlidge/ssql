@@ -29,6 +29,10 @@ go.work
 # HTML test outputs
 /*.html
 
+# WASM build artifacts
+/cmd/ssql-wasm/ssql.wasm
+/cmd/ssql-wasm/js/wasm_exec.js
+
 # IDE and editor files
 .vscode/
 .idea/

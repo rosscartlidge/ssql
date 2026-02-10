@@ -186,4 +186,3 @@ func MustCompileExpr(expression string) func(ssql.Record) (any, error) {
 	}
 	return eval
 }
-

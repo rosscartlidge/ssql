@@ -3,6 +3,7 @@
 .PHONY: help test build clean doc-check doc-test doc-verify doc-update fmt vet all ci install-hooks
 .PHONY: gpu build-gpu install-gpu docker-gpu docker-gpu-image docker-gpu-extract
 .PHONY: ai-test ai-test-go ai-test-cli
+.PHONY: wasm
 
 # Default target
 help:
@@ -22,6 +23,9 @@ help:
 	@echo "GPU Build via Docker (no local CUDA needed):"
 	@echo "  make docker-gpu-image   - Build Docker image with ssql_gpu"
 	@echo "  make docker-gpu-extract - Build and extract ssql_gpu binary to current dir"
+	@echo ""
+	@echo "WASM Build:"
+	@echo "  make wasm         - Build ssql.wasm + copy wasm_exec.js"
 	@echo ""
 	@echo "Documentation Validation (3 levels):"
 	@echo "  make doc-check    - Level 1: Fast checks (syntax, links, patterns)"
@@ -97,6 +101,7 @@ clean:
 	go clean ./...
 	rm -f cmd/ssql/ssql
 	rm -f ssql_gpu libssqlgpu.so
+	rm -f cmd/ssql-wasm/ssql.wasm
 	cd gpu && $(MAKE) clean 2>/dev/null || true
 
 # Run all quality checks (pre-push)
@@ -201,3 +206,16 @@ docker-gpu-extract:
 
 # Shortcut for docker build
 docker-gpu: docker-gpu-extract
+
+# =============================================================================
+# WASM Build Targets
+# =============================================================================
+
+# Build WASM module for browser-based ssql operations
+wasm:
+	@echo "Building ssql.wasm..."
+	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o cmd/ssql-wasm/ssql.wasm ./cmd/ssql-wasm
+	rm -f cmd/ssql-wasm/js/wasm_exec.js
+	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/ssql-wasm/js/
+	@echo "✓ Built cmd/ssql-wasm/ssql.wasm ($$(du -h cmd/ssql-wasm/ssql.wasm | cut -f1) raw)"
+	@echo "✓ Copied wasm_exec.js to cmd/ssql-wasm/js/"

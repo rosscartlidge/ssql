@@ -21,12 +21,12 @@ func NextFuncName() string {
 
 // CodeFragment represents a piece of generated Go code in a pipeline
 type CodeFragment struct {
-	Type    string   `json:"type"`    // "stmt" (statement), "final" (no output var), "init" (first in chain), "func" (subprocess function), "error" (generation failed)
-	Var     string   `json:"var"`     // Output variable name (e.g., "filtered0")
-	Input   string   `json:"input"`   // Input variable name from previous command
-	Code    string   `json:"code"`    // Go code for this operation
-	Imports []string `json:"imports"` // Required imports (e.g., ["strings", "log"])
-	Command string   `json:"command"` // The ssql command that generated this fragment (e.g., "ssql from")
+	Type    string   `json:"type"`            // "stmt" (statement), "final" (no output var), "init" (first in chain), "func" (subprocess function), "error" (generation failed)
+	Var     string   `json:"var"`             // Output variable name (e.g., "filtered0")
+	Input   string   `json:"input"`           // Input variable name from previous command
+	Code    string   `json:"code"`            // Go code for this operation
+	Imports []string `json:"imports"`         // Required imports (e.g., ["strings", "log"])
+	Command string   `json:"command"`         // The ssql command that generated this fragment (e.g., "ssql from")
 	Error   string   `json:"error,omitempty"` // Error message for "error" type fragments
 
 	// For "func" type fragments (subprocess functions from process substitution)

@@ -8,6 +8,7 @@ import (
 	"iter"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -2500,6 +2501,9 @@ type ExploreConfig struct {
 	PageSize      int    `json:"pageSize"`      // Rows per page in table (default 50)
 	Width         int    `json:"width"`
 	Height        int    `json:"height"`
+	WasmEnabled   bool   `json:"wasmEnabled"` // Load ssql.wasm for client-side transforms
+	WasmExecJS    string `json:"-"`           // Content of wasm_exec.js (inlined in HTML)
+	SsqlWasmJS    string `json:"-"`           // Content of ssql-wasm.js (inlined in HTML)
 }
 
 // DefaultExploreConfig provides sensible defaults for interactive data exploration.
@@ -2601,17 +2605,23 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 	// Execute template
 	tmpl := template.Must(template.New("explore").Parse(exploreHTMLTemplate))
 	templateData := struct {
-		Title      string
-		DataJSON   template.JS
-		SchemaJSON template.JS
-		ConfigJSON template.JS
-		Theme      string
+		Title       string
+		DataJSON    template.JS
+		SchemaJSON  template.JS
+		ConfigJSON  template.JS
+		Theme       string
+		WasmEnabled bool
+		WasmExecJS  template.JS
+		SsqlWasmJS  template.JS
 	}{
-		Title:      config.Title,
-		DataJSON:   template.JS(dataJSON),
-		SchemaJSON: template.JS(schemaJSON),
-		ConfigJSON: template.JS(configJSON),
-		Theme:      config.Theme,
+		Title:       config.Title,
+		DataJSON:    template.JS(dataJSON),
+		SchemaJSON:  template.JS(schemaJSON),
+		ConfigJSON:  template.JS(configJSON),
+		Theme:       config.Theme,
+		WasmEnabled: config.WasmEnabled,
+		WasmExecJS:  template.JS(config.WasmExecJS),
+		SsqlWasmJS:  template.JS(config.SsqlWasmJS),
 	}
 
 	if err := tmpl.Execute(writer, templateData); err != nil {
@@ -2619,6 +2629,22 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 	}
 
 	return writer.Flush()
+}
+
+// CopyExploreWasmFile copies ssql.wasm to the same directory as the output HTML file.
+// The JS runtime files (wasm_exec.js, ssql-wasm.js) are inlined in the HTML template.
+func CopyExploreWasmFile(htmlPath string, wasmPath string) error {
+	dir := filepath.Dir(htmlPath)
+
+	wasmData, err := os.ReadFile(wasmPath)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", wasmPath, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ssql.wasm"), wasmData, 0644); err != nil {
+		return fmt.Errorf("writing ssql.wasm: %w", err)
+	}
+
+	return nil
 }
 
 // exploreHTMLTemplate is the HTML template for the interactive data explorer
@@ -2644,6 +2670,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
     <!-- Bootstrap -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+
+    {{if .WasmEnabled}}
+    <script>{{.WasmExecJS}}</script>
+    <script>{{.SsqlWasmJS}}</script>
+    {{end}}
 
     <style>
         :root {
@@ -2884,6 +2915,23 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         const SCHEMA = {{.SchemaJSON}};
         const CONFIG = {{.ConfigJSON}};
 
+        // WASM module (initialized asynchronously if enabled)
+        let ssqlWasm = null;
+        {{if .WasmEnabled}}
+        (async function() {
+            try {
+                ssqlWasm = new SsqlWasm();
+                await ssqlWasm.init('./ssql.wasm');
+                console.log('ssql WASM module loaded');
+                const badge = document.getElementById('wasm-badge');
+                if (badge) { badge.style.display = 'inline'; badge.textContent = 'WASM'; }
+            } catch(e) {
+                console.warn('ssql WASM failed to load, using JS fallback:', e);
+                ssqlWasm = null;
+            }
+        })();
+        {{end}}
+
         const { useState, useEffect, useRef, useMemo } = React;
 
         function App() {
@@ -3010,7 +3058,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 Plotly.react(chartRef.current, [trace], layout, config);
             }, [chartType, xField, yField, displayData]);
 
-            // Apply aggregation
+            // Apply aggregation (uses WASM when available, JS fallback)
             const applyAggregation = () => {
                 if (!aggGroupBy) {
                     setDisplayData(DATA);
@@ -3018,39 +3066,19 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     return;
                 }
 
-                const groups = {};
-                DATA.forEach(row => {
-                    const key = String(row[aggGroupBy] || '');
-                    if (!groups[key]) {
-                        groups[key] = [];
+                let aggregated;
+
+                if (ssqlWasm) {
+                    // Use WASM for aggregation (real ssql GroupBy + Aggregate)
+                    try {
+                        aggregated = ssqlWasm.groupBy(DATA, aggGroupBy, aggValueField || '', aggFunc);
+                    } catch(e) {
+                        console.warn('WASM aggregation failed, falling back to JS:', e);
+                        aggregated = jsAggregation(DATA, aggGroupBy, aggFunc, aggValueField);
                     }
-                    groups[key].push(row);
-                });
-
-                const aggregated = Object.entries(groups).map(([key, rows]) => {
-                    const result = { [aggGroupBy]: key };
-
-                    switch (aggFunc) {
-                        case 'count':
-                            result['count'] = rows.length;
-                            break;
-                        case 'sum':
-                            result['sum'] = rows.reduce((acc, r) => acc + (parseFloat(r[aggValueField]) || 0), 0);
-                            break;
-                        case 'avg':
-                            const sum = rows.reduce((acc, r) => acc + (parseFloat(r[aggValueField]) || 0), 0);
-                            result['avg'] = rows.length > 0 ? sum / rows.length : 0;
-                            break;
-                        case 'min':
-                            result['min'] = Math.min(...rows.map(r => parseFloat(r[aggValueField]) || 0));
-                            break;
-                        case 'max':
-                            result['max'] = Math.max(...rows.map(r => parseFloat(r[aggValueField]) || 0));
-                            break;
-                    }
-
-                    return result;
-                });
+                } else {
+                    aggregated = jsAggregation(DATA, aggGroupBy, aggFunc, aggValueField);
+                }
 
                 setDisplayData(aggregated);
                 setIsAggregated(true);
@@ -3059,6 +3087,39 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 setXField(aggGroupBy);
                 setYField(aggFunc === 'count' ? 'count' : aggFunc);
             };
+
+            // JS fallback aggregation
+            function jsAggregation(data, groupBy, func_, valueField) {
+                const groups = {};
+                data.forEach(row => {
+                    const key = String(row[groupBy] || '');
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(row);
+                });
+
+                return Object.entries(groups).map(([key, rows]) => {
+                    const result = { [groupBy]: key };
+                    switch (func_) {
+                        case 'count':
+                            result['count'] = rows.length;
+                            break;
+                        case 'sum':
+                            result['sum'] = rows.reduce((acc, r) => acc + (parseFloat(r[valueField]) || 0), 0);
+                            break;
+                        case 'avg':
+                            const s = rows.reduce((acc, r) => acc + (parseFloat(r[valueField]) || 0), 0);
+                            result['avg'] = rows.length > 0 ? s / rows.length : 0;
+                            break;
+                        case 'min':
+                            result['min'] = Math.min(...rows.map(r => parseFloat(r[valueField]) || 0));
+                            break;
+                        case 'max':
+                            result['max'] = Math.max(...rows.map(r => parseFloat(r[valueField]) || 0));
+                            break;
+                    }
+                    return result;
+                });
+            }
 
             // Reset to original data
             const resetData = () => {
@@ -3194,7 +3255,15 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 React.createElement('div', { className: 'main-content' },
                     // Header
                     React.createElement('div', { className: 'header' },
-                        React.createElement('h1', null, CONFIG.title || 'Data Explorer'),
+                        React.createElement('h1', null,
+                            CONFIG.title || 'Data Explorer',
+                            {{if .WasmEnabled}}
+                            React.createElement('span', {
+                                id: 'wasm-badge',
+                                style: { display: 'none', fontSize: '0.5em', marginLeft: '8px', padding: '2px 8px', borderRadius: '4px', background: '#198754', color: 'white', verticalAlign: 'middle' }
+                            }, 'WASM')
+                            {{end}}
+                        ),
                         React.createElement('div', { className: 'btn-group' },
                             React.createElement('button', {
                                 className: 'btn',

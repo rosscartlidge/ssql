@@ -45,10 +45,10 @@ func TestIsIdentifierChar(t *testing.T) {
 		{'A', true, true},
 		{'Z', true, true},
 		{'_', true, true},
-		{'0', true, false},  // digit not allowed first
-		{'9', true, false},  // digit not allowed first
-		{'0', false, true},  // digit allowed after first
-		{'9', false, true},  // digit allowed after first
+		{'0', true, false}, // digit not allowed first
+		{'9', true, false}, // digit not allowed first
+		{'0', false, true}, // digit allowed after first
+		{'9', false, true}, // digit allowed after first
 		{'\t', true, false},
 		{' ', true, false},
 		{'|', true, false},

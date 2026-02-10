@@ -1243,4 +1243,3 @@ func ifftCooleyTukey(x []complex128) {
 		}
 	}
 }
-

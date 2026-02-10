@@ -141,7 +141,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Detect format and read
 			var originalRecords iter.Seq[ssql.Record]
-			var csvHeaders []string    // Track CSV headers for schema field order
+			var csvHeaders []string       // Track CSV headers for schema field order
 			var wavMeta *ssql.WAVMetadata // Track WAV metadata for sample_rate
 
 			if inputFile == "" {

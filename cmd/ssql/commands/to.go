@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -1147,27 +1148,23 @@ func generateToHeatmapCode(xField, yField, zField, colorScale string, zMin, zMax
 func registerToExplore(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("explore").
 		Description("Create interactive data exploration app with table, charts, and aggregation").
-
 		Example("ssql from data.csv | ssql to explore output.html",
 			"Generate explorer from CSV data").
 		Example("ssql from logs.jsonl | ssql where -where level eq ERROR | ssql to explore errors.html",
 			"Explore filtered error logs").
-		Example("ssql from sales.csv | ssql to explore -x date -y revenue -theme dark analysis.html",
-			"Explorer with initial fields and dark theme").
-
+		Example("ssql from sales.csv | ssql to explore -wasm path/to/ssql.wasm -theme dark analysis.html",
+			"Explorer with WASM-powered transforms").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
 		Done().
-
 		Flag("-title").
 		String().
 		Global().
 		Default("Data Explorer").
 		Help("Page title").
 		Done().
-
 		Flag("-theme").
 		String().
 		Global().
@@ -1175,28 +1172,30 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 		Completer(&cf.StaticCompleter{Options: []string{"light", "dark"}}).
 		Help("Theme: light or dark").
 		Done().
-
 		Flag("-x").
 		String().
 		FieldsFromFlag("").
 		Global().
 		Help("Initial X-axis field").
 		Done().
-
 		Flag("-y").
 		String().
 		FieldsFromFlag("").
 		Global().
 		Help("Initial Y-axis field").
 		Done().
-
 		Flag("-pagesize").
 		Int().
 		Global().
 		Default(50).
 		Help("Rows per page in table (default 50)").
 		Done().
-
+		Flag("-wasm").
+		String().
+		Global().
+		Completer(&cf.FileCompleter{Pattern: "*.wasm"}).
+		Help("Path to ssql.wasm for client-side transforms (build with: make wasm)").
+		Done().
 		Flag("FILE").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.html"}).
@@ -1204,9 +1203,8 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 		Default("explore.html").
 		Help("Output HTML file (default: explore.html)").
 		Done().
-
 		Handler(func(ctx *cf.Context) error {
-			var title, theme, xField, yField, outputFile string
+			var title, theme, xField, yField, outputFile, wasmPath string
 			var pageSize int
 			var generate bool
 
@@ -1239,6 +1237,9 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
+			if wasmVal, ok := ctx.GlobalFlags["-wasm"]; ok {
+				wasmPath = wasmVal.(string)
+			}
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
@@ -1257,15 +1258,59 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			config.InitialYField = yField
 			config.PageSize = pageSize
 
+			// Enable WASM if path provided
+			if wasmPath != "" {
+				jsContent, err := loadWasmJSFiles(wasmPath)
+				if err != nil {
+					return err
+				}
+				config.WasmEnabled = true
+				config.WasmExecJS = jsContent.wasmExecJS
+				config.SsqlWasmJS = jsContent.ssqlWasmJS
+			}
+
 			// Create explorer
 			if err := ssql.DataExplore(records, config, outputFile); err != nil {
 				return fmt.Errorf("creating explorer: %w", err)
 			}
 
-			fmt.Printf("Explorer created: %s\n", outputFile)
+			// Copy ssql.wasm alongside the HTML
+			if wasmPath != "" {
+				if err := ssql.CopyExploreWasmFile(outputFile, wasmPath); err != nil {
+					return fmt.Errorf("copying WASM file: %w", err)
+				}
+				fmt.Printf("Explorer created: %s (with WASM)\n", outputFile)
+			} else {
+				fmt.Printf("Explorer created: %s\n", outputFile)
+			}
 			return nil
 		}).
 		Done()
+}
+
+type wasmJSContent struct {
+	wasmExecJS string
+	ssqlWasmJS string
+}
+
+// loadWasmJSFiles reads the JS support files from the same directory as the WASM file.
+func loadWasmJSFiles(wasmPath string) (*wasmJSContent, error) {
+	dir := filepath.Dir(wasmPath)
+
+	wasmExecJS, err := os.ReadFile(filepath.Join(dir, "js", "wasm_exec.js"))
+	if err != nil {
+		return nil, fmt.Errorf("reading wasm_exec.js (expected in %s/js/): %w", dir, err)
+	}
+
+	ssqlWasmJS, err := os.ReadFile(filepath.Join(dir, "js", "ssql-wasm.js"))
+	if err != nil {
+		return nil, fmt.Errorf("reading ssql-wasm.js (expected in %s/js/): %w", dir, err)
+	}
+
+	return &wasmJSContent{
+		wasmExecJS: string(wasmExecJS),
+		ssqlWasmJS: string(ssqlWasmJS),
+	}, nil
 }
 
 func generateToExploreCode(title, theme, xField, yField string, pageSize int, outputFile string) error {

@@ -1036,18 +1036,18 @@ func TestGenerationErrorHandling(t *testing.T) {
 	defer os.Remove("/tmp/ssql_test")
 
 	tests := []struct {
-		name            string
-		cmdLine         string
-		expectError     bool
-		errorSubstring  string  // Expected substring in error message
-		notInOutput     string  // Should NOT appear in output (no partial code)
+		name           string
+		cmdLine        string
+		expectError    bool
+		errorSubstring string // Expected substring in error message
+		notInOutput    string // Should NOT appear in output (no partial code)
 	}{
 		{
-			name:            "stream-expr not supported in generation",
-			cmdLine:         `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total | /tmp/ssql_test generate-go`,
-			expectError:     true,
-			errorSubstring:  "not yet supported",
-			notInOutput:     "package main", // No partial Go code should be output
+			name:           "stream-expr not supported in generation",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total | /tmp/ssql_test generate-go`,
+			expectError:    true,
+			errorSubstring: "not yet supported",
+			notInOutput:    "package main", // No partial Go code should be output
 		},
 	}
 

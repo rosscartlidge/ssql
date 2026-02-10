@@ -184,8 +184,8 @@ func TestReadWAVChannel(t *testing.T) {
 
 	// Left channel = positive values, right channel = negative values
 	for i := 0; i < numSamples; i++ {
-		leftSample := int16(i * 100)    // Increasing positive values
-		rightSample := int16(-i * 100)  // Increasing negative values
+		leftSample := int16(i * 100)   // Increasing positive values
+		rightSample := int16(-i * 100) // Increasing negative values
 		binary.Write(&buf, binary.LittleEndian, leftSample)
 		binary.Write(&buf, binary.LittleEndian, rightSample)
 	}
