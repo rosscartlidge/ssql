@@ -628,7 +628,7 @@ Generate interactive HTML charts with Chart.js:
 
 ```bash
 ssql from employees.csv | \
-  ssql chart -x department -y salary -output salary_chart.html
+  ssql to chart -x department -y salary salary_chart.html
 ```
 
 Opens `salary_chart.html` with an interactive chart featuring:
@@ -642,8 +642,36 @@ Opens `salary_chart.html` with an interactive chart featuring:
 ```bash
 ssql from employees.csv | \
   ssql group-by department -avg salary avg_salary | \
-  ssql chart -x department -y avg_salary -output dept_salaries.html
+  ssql to chart -x department -y avg_salary dept_salaries.html
 ```
+
+### Interactive Data Explorer
+
+Generate a self-contained HTML app with sortable tables, charts, and aggregation UI:
+
+```bash
+# Basic exploration
+ssql from sales.csv | ssql to explore output.html
+
+# With initial chart fields and dark theme
+ssql from sales.csv | ssql to explore -x date -y revenue -theme dark analysis.html
+```
+
+### Explorer with WASM Transforms
+
+Build the WASM module once, then use `-wasm` to enable client-side ssql operations
+(Where, Sort, GroupBy, Distinct, Limit) powered by the same Go code as the CLI:
+
+```bash
+# Build the WASM module (one-time)
+make wasm
+
+# Generate explorer with WASM-powered transforms
+ssql from sales.csv | ssql to explore -wasm cmd/ssql-wasm/ssql.wasm output.html
+```
+
+The explorer falls back to JavaScript if WASM fails to load. A green "WASM" badge
+appears in the header when the module is active.
 
 ---
 
@@ -939,6 +967,10 @@ go build -o monitor monitor.go
 - `to json [file]` - Write JSON/JSONL file (or stdout)
 - `to arrow [file]` - Write Apache Arrow IPC file (10-20x faster I/O)
 - `to chart` - Create interactive HTML chart
+- `to heatmap` - Create heatmap/spectrogram visualization (Plotly.js)
+- `to explore [file]` - Create interactive data explorer (table + charts + aggregation)
+  - `-wasm path/to/ssql.wasm` - Enable client-side WASM transforms (build with `make wasm`)
+- `to wav [file]` - Write WAV audio file
 
 ### Code Generation
 - `generate-go` - Assemble code fragments into Go program

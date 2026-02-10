@@ -38,6 +38,7 @@
   - [Arrow Operations](#arrow-operations)
 - [Signal Processing](#signal-processing)
 - [Chart & Visualization](#chart--visualization)
+  - [Data Explorer](#data-explorer)
 - [Helper Functions](#helper-functions)
   - [Record Access](#record-access)
 - [Error Handling](#error-handling)
@@ -1767,6 +1768,65 @@ config.ColorField = "region"  // Points colored by region category
 
 err := ssql.EnhancedChart(customerData, config, "customers.html")
 ```
+
+### Data Explorer
+
+#### ExploreConfig
+```go
+type ExploreConfig struct {
+    Title         string // Page title
+    Theme         string // "light" or "dark"
+    InitialXField string // Optional initial X axis field
+    InitialYField string // Optional initial Y axis field
+    PageSize      int    // Rows per page in table (default 50)
+    Width         int    // Explorer width
+    Height        int    // Explorer height
+    WasmEnabled   bool   // Enable client-side ssql WASM transforms
+    WasmExecJS    string // Content of wasm_exec.js (inlined in HTML)
+    SsqlWasmJS    string // Content of ssql-wasm.js (inlined in HTML)
+}
+```
+
+#### DefaultExploreConfig
+```go
+func DefaultExploreConfig() ExploreConfig
+```
+Returns sensible defaults (light theme, 50 rows per page, 1400x800).
+
+#### DataExplore
+```go
+func DataExplore(records iter.Seq[Record], config ExploreConfig, filename string) error
+```
+Creates a self-contained HTML data exploration app with:
+- Sortable/filterable data table (AG-Grid)
+- Chart type switcher (line, bar, scatter, pie)
+- Field selector dropdowns
+- Aggregation UI (group by with sum/avg/count/min/max)
+- Export as CSV or PNG
+
+**Example - Basic explorer:**
+```go
+data, _ := ssql.ReadCSV("sales.csv")
+ssql.DataExplore(data, ssql.DefaultExploreConfig(), "explore.html")
+```
+
+**Example - Customized explorer:**
+```go
+config := ssql.DefaultExploreConfig()
+config.Title = "Sales Analysis"
+config.Theme = "dark"
+config.InitialXField = "date"
+config.InitialYField = "revenue"
+
+data, _ := ssql.ReadCSV("sales.csv")
+ssql.DataExplore(data, config, "sales_explorer.html")
+```
+
+#### CopyExploreWasmFile
+```go
+func CopyExploreWasmFile(htmlPath string, wasmPath string) error
+```
+Copies `ssql.wasm` to the same directory as the output HTML file. The JS runtime files are inlined in the HTML template when `WasmEnabled` is true.
 
 ---
 
