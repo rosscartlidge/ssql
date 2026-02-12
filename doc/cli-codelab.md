@@ -673,6 +673,41 @@ ssql from sales.csv | ssql to explore -wasm cmd/ssql-wasm/ssql.wasm output.html
 The explorer falls back to JavaScript if WASM fails to load. A green "WASM" badge
 appears in the header when the module is active.
 
+### Animated Frequency Spectrum from WAV
+
+Use `to animate` to watch how the frequency spectrum of an audio file evolves over time.
+The spectrogram command splits the signal into overlapping windows; we use 1-second
+windows (`-window-size 44100` at 44.1 kHz) so each frame is one second of audio:
+
+```bash
+# Animate frequency magnitude in 1-second time slots
+ssql from recording.wav | \
+  ssql spectrogram -field sample -window-size 44100 -hop 44100 -rate 44100 -output db | \
+  ssql to animate -frame time -x frequency -y magnitude -type histogram
+```
+
+This creates `animate.html` — a self-contained page with play/pause, scrubber, and
+speed controls. Each frame shows the frequency spectrum (magnitude in dB) for one
+second of audio.
+
+For a heatmap view (time on X, frequency on Y, colour = magnitude):
+
+```bash
+ssql from recording.wav | \
+  ssql spectrogram -field sample -window-size 44100 -hop 44100 -rate 44100 -output db | \
+  ssql to animate -frame time -x frequency -y magnitude -z magnitude \
+    -type heatmap -fps 2 -colorscale plasma -loop
+```
+
+Smaller windows give finer time resolution at the cost of more frames:
+
+```bash
+# 0.5-second windows, overlapping by 50%
+ssql from recording.wav | \
+  ssql spectrogram -field sample -window-size 22050 -hop 11025 -rate 44100 -output db | \
+  ssql to animate -frame time -x frequency -y magnitude -type histogram -fps 4
+```
+
 ---
 
 ## Code Generation
@@ -968,6 +1003,7 @@ go build -o monitor monitor.go
 - `to arrow [file]` - Write Apache Arrow IPC file (10-20x faster I/O)
 - `to chart` - Create interactive HTML chart
 - `to heatmap` - Create heatmap/spectrogram visualization (Plotly.js)
+- `to animate` - Create animated heatmap or histogram with video-player controls
 - `to explore [file]` - Create interactive data explorer (table + charts + aggregation)
   - `-wasm path/to/ssql.wasm` - Enable client-side WASM transforms (build with `make wasm`)
 - `to wav [file]` - Write WAV audio file
