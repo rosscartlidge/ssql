@@ -1259,6 +1259,359 @@ func TestDefaultHeatmapConfig(t *testing.T) {
 }
 
 // ============================================================================
+// ANIMATION TESTS
+// ============================================================================
+
+func TestAnimateChartHeatmapBasic(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "animate_heatmap.html")
+
+	// 3 frames, 2x2 grid each
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(1)
+			r.fields["x"] = "a"
+			r.fields["y"] = "p"
+			r.fields["z"] = float64(10)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(1)
+			r.fields["x"] = "b"
+			r.fields["y"] = "p"
+			r.fields["z"] = float64(20)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(2)
+			r.fields["x"] = "a"
+			r.fields["y"] = "p"
+			r.fields["z"] = float64(15)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(2)
+			r.fields["x"] = "b"
+			r.fields["y"] = "p"
+			r.fields["z"] = float64(25)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(3)
+			r.fields["x"] = "a"
+			r.fields["y"] = "p"
+			r.fields["z"] = float64(30)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(3)
+			r.fields["x"] = "b"
+			r.fields["y"] = "p"
+			r.fields["z"] = float64(5)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultAnimateConfig()
+	config.FrameField = "frame"
+	config.XField = "x"
+	config.YField = "y"
+	config.ZField = "z"
+	config.ChartType = "heatmap"
+
+	err := AnimateChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("AnimateChart failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read file: %v", err)
+	}
+	html := string(content)
+
+	if !strings.Contains(html, "Plotly") {
+		t.Error("Should use Plotly.js")
+	}
+	if !strings.Contains(html, "heatmap") {
+		t.Error("Should contain heatmap chart type")
+	}
+	if !strings.Contains(html, "player-bar") {
+		t.Error("Should contain player controls")
+	}
+}
+
+func TestAnimateChartHistogramBasic(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "animate_histogram.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["year"] = "2020"
+			r.fields["bin"] = "0-10"
+			r.fields["count"] = float64(5)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["year"] = "2020"
+			r.fields["bin"] = "10-20"
+			r.fields["count"] = float64(12)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["year"] = "2021"
+			r.fields["bin"] = "0-10"
+			r.fields["count"] = float64(7)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["year"] = "2021"
+			r.fields["bin"] = "10-20"
+			r.fields["count"] = float64(15)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["year"] = "2022"
+			r.fields["bin"] = "0-10"
+			r.fields["count"] = float64(3)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["year"] = "2022"
+			r.fields["bin"] = "10-20"
+			r.fields["count"] = float64(18)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultAnimateConfig()
+	config.FrameField = "year"
+	config.XField = "bin"
+	config.YField = "count"
+	config.ChartType = "histogram"
+
+	err := AnimateChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("AnimateChart failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read file: %v", err)
+	}
+	html := string(content)
+
+	if !strings.Contains(html, "bar") {
+		t.Error("Histogram should use bar chart type")
+	}
+	if !strings.Contains(html, "player-bar") {
+		t.Error("Should contain player controls")
+	}
+}
+
+func TestAnimateChartDefaultConfig(t *testing.T) {
+	config := DefaultAnimateConfig()
+
+	if config.ChartType != "heatmap" {
+		t.Errorf("Default chart type should be heatmap, got %s", config.ChartType)
+	}
+	if config.FPS != 5 {
+		t.Errorf("Default FPS should be 5, got %d", config.FPS)
+	}
+	if config.ColorScale != "viridis" {
+		t.Errorf("Default color scale should be viridis, got %s", config.ColorScale)
+	}
+	if config.Loop != false {
+		t.Error("Default loop should be false")
+	}
+	if config.Width != 1200 {
+		t.Errorf("Default width should be 1200, got %d", config.Width)
+	}
+	if config.Height != 700 {
+		t.Errorf("Default height should be 700, got %d", config.Height)
+	}
+	if config.Theme != "light" {
+		t.Errorf("Default theme should be light, got %s", config.Theme)
+	}
+}
+
+func TestAnimateChartMissingFrameField(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "animate_no_frame.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["x"] = "a"
+			r.fields["y"] = "b"
+			r.fields["z"] = float64(1)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultAnimateConfig()
+	config.XField = "x"
+	config.YField = "y"
+	config.ZField = "z"
+	// FrameField intentionally left empty
+
+	err := AnimateChart(input, config, filename)
+	if err == nil {
+		t.Error("AnimateChart should return error when FrameField is empty")
+	}
+	if !strings.Contains(err.Error(), "frame") {
+		t.Errorf("Error should mention frame field, got: %v", err)
+	}
+}
+
+func TestAnimateChartMissingZFieldForHeatmap(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "animate_no_z.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(1)
+			r.fields["x"] = "a"
+			r.fields["y"] = "b"
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultAnimateConfig()
+	config.FrameField = "frame"
+	config.XField = "x"
+	config.YField = "y"
+	config.ChartType = "heatmap"
+	// ZField intentionally left empty
+
+	err := AnimateChart(input, config, filename)
+	if err == nil {
+		t.Error("AnimateChart should return error when ZField is empty for heatmap")
+	}
+	if !strings.Contains(err.Error(), "Z") {
+		t.Errorf("Error should mention Z field, got: %v", err)
+	}
+}
+
+func TestAnimateChartEmptyData(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "animate_empty.html")
+
+	empty := func(yield func(Record) bool) {}
+
+	config := DefaultAnimateConfig()
+	config.FrameField = "frame"
+	config.XField = "x"
+	config.YField = "y"
+	config.ZField = "z"
+
+	err := AnimateChart(iter.Seq[Record](empty), config, filename)
+	if err == nil {
+		t.Error("AnimateChart with empty data should return error")
+	}
+}
+
+func TestAnimateChartSingleFrame(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "animate_single.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(1)
+			r.fields["x"] = "a"
+			r.fields["y"] = "b"
+			r.fields["z"] = float64(42)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultAnimateConfig()
+	config.FrameField = "frame"
+	config.XField = "x"
+	config.YField = "y"
+	config.ZField = "z"
+
+	err := AnimateChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("Single-frame animation should succeed: %v", err)
+	}
+
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		t.Error("File was not created")
+	}
+}
+
+func TestAnimateChartHTMLContainsPlayerControls(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "animate_controls.html")
+
+	input := slices.Values([]Record{
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(1)
+			r.fields["x"] = "a"
+			r.fields["y"] = "b"
+			r.fields["z"] = float64(10)
+			return r.Freeze()
+		}(),
+		func() Record {
+			r := MakeMutableRecord()
+			r.fields["frame"] = int64(2)
+			r.fields["x"] = "a"
+			r.fields["y"] = "b"
+			r.fields["z"] = float64(20)
+			return r.Freeze()
+		}(),
+	})
+
+	config := DefaultAnimateConfig()
+	config.FrameField = "frame"
+	config.XField = "x"
+	config.YField = "y"
+	config.ZField = "z"
+
+	err := AnimateChart(input, config, filename)
+	if err != nil {
+		t.Fatalf("AnimateChart failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatalf("Failed to read file: %v", err)
+	}
+	html := string(content)
+
+	controls := []string{"btn-play", "btn-prev", "btn-next", "btn-first", "btn-last", "scrubber", "speed-select", "btn-loop"}
+	for _, ctrl := range controls {
+		if !strings.Contains(html, ctrl) {
+			t.Errorf("HTML should contain player control %q", ctrl)
+		}
+	}
+
+	// Check keyboard shortcuts
+	if !strings.Contains(html, "keydown") {
+		t.Error("HTML should have keyboard event listener")
+	}
+	if !strings.Contains(html, "Space") {
+		t.Error("HTML should support Space key for play/pause")
+	}
+}
+
+// ============================================================================
 // DATA EXPLORER TESTS
 // ============================================================================
 

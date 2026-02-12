@@ -327,6 +327,12 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			wantSubstring:  `ssql.HeatmapChart`,
 		},
 		{
+			name:           "animate",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to animate -frame time -x x -y y -z val -type heatmap`,
+			expectFragment: true,
+			wantSubstring:  `ssql.AnimateChart`,
+		},
+		{
 			name:           "explore",
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to explore`,
 			expectFragment: true,

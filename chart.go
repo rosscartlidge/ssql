@@ -559,6 +559,528 @@ func generateSpecializedHeatmapHTML(records []Record, config HeatmapConfig, file
 	return writer.Flush()
 }
 
+// AnimateConfig configures animated heatmap or histogram visualization.
+// Records are grouped by a frame field and played back with video-player controls.
+type AnimateConfig struct {
+	Title      string `json:"title"`
+	FrameField string `json:"frameField"` // field that partitions into frames
+	XField     string `json:"xField"`
+	YField     string `json:"yField"`
+	ZField     string `json:"zField"`     // heatmap only
+	ChartType  string `json:"chartType"`  // "heatmap" or "histogram"
+	FPS        int    `json:"fps"`        // playback frames per second
+	Loop       bool   `json:"loop"`       // loop playback
+	ColorScale string `json:"colorScale"` // Plotly color scale (heatmap only)
+	Theme      string `json:"theme"`      // light or dark
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+}
+
+// DefaultAnimateConfig returns sensible defaults for animated visualization.
+func DefaultAnimateConfig() AnimateConfig {
+	return AnimateConfig{
+		Title:      "Animation",
+		ChartType:  "heatmap",
+		FPS:        5,
+		Loop:       false,
+		ColorScale: "viridis",
+		Theme:      "light",
+		Width:      1200,
+		Height:     700,
+	}
+}
+
+// AnimateChart creates an animated visualization where a heatmap or histogram
+// evolves frame-by-frame with video-player controls (play/pause, scrub, speed).
+//
+// Example - Animated heatmap (spectrogram over segments):
+//
+//	config := ssql.DefaultAnimateConfig()
+//	config.FrameField = "segment"
+//	config.XField = "freq"
+//	config.YField = "time"
+//	config.ZField = "magnitude"
+//	config.ChartType = "heatmap"
+//	ssql.AnimateChart(data, config, "animation.html")
+//
+// Example - Animated histogram (distribution changing over time):
+//
+//	config := ssql.DefaultAnimateConfig()
+//	config.FrameField = "year"
+//	config.XField = "bin"
+//	config.YField = "count"
+//	config.ChartType = "histogram"
+//	ssql.AnimateChart(data, config, "animation.html")
+func AnimateChart(sb iter.Seq[Record], config AnimateConfig, filename string) error {
+	var records []Record
+	for record := range sb {
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		return fmt.Errorf("no data to animate")
+	}
+
+	if config.FrameField == "" {
+		return fmt.Errorf("frame field required (FrameField)")
+	}
+	if config.XField == "" {
+		return fmt.Errorf("X-axis field required (XField)")
+	}
+	if config.YField == "" {
+		return fmt.Errorf("Y-axis field required (YField)")
+	}
+	if config.ChartType == "heatmap" && config.ZField == "" {
+		return fmt.Errorf("Z-axis field required for heatmap (ZField)")
+	}
+	if config.ChartType == "" {
+		config.ChartType = "heatmap"
+	}
+	if config.FPS <= 0 {
+		config.FPS = 5
+	}
+
+	return generateAnimateHTML(records, config, filename)
+}
+
+// animateFrameGroup groups records belonging to one animation frame.
+type animateFrameGroup struct {
+	label   string
+	records []Record
+}
+
+// generateAnimateHTML builds the animated HTML visualization
+func generateAnimateHTML(records []Record, config AnimateConfig, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("creating file %s: %w", filename, err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	defer writer.Flush()
+
+	// Group records by frame, preserving insertion order
+	frameOrder := make(map[string]int)
+	var frames []animateFrameGroup
+
+	for _, record := range records {
+		label := fmt.Sprintf("%v", GetOr(record, config.FrameField, ""))
+		if idx, exists := frameOrder[label]; exists {
+			frames[idx].records = append(frames[idx].records, record)
+		} else {
+			frameOrder[label] = len(frames)
+			frames = append(frames, animateFrameGroup{label: label, records: []Record{record}})
+		}
+	}
+
+	if config.ChartType == "heatmap" {
+		return generateAnimateHeatmapHTML(writer, frames, config)
+	}
+	return generateAnimateHistogramHTML(writer, frames, config)
+}
+
+// generateAnimateHeatmapHTML creates animated heatmap HTML
+func generateAnimateHeatmapHTML(writer *bufio.Writer, frames []animateFrameGroup, config AnimateConfig) error {
+	// Collect global X/Y label sets
+	xSet := make(map[string]int)
+	ySet := make(map[string]int)
+	var xLabels, yLabels []string
+
+	for _, frame := range frames {
+		for _, record := range frame.records {
+			xVal := fmt.Sprintf("%v", GetOr(record, config.XField, ""))
+			yVal := fmt.Sprintf("%v", GetOr(record, config.YField, ""))
+			if _, exists := xSet[xVal]; !exists {
+				xSet[xVal] = len(xLabels)
+				xLabels = append(xLabels, xVal)
+			}
+			if _, exists := ySet[yVal]; !exists {
+				ySet[yVal] = len(yLabels)
+				yLabels = append(yLabels, yVal)
+			}
+		}
+	}
+
+	// Build per-frame grids, track global zMin/zMax
+	type heatmapFrame struct {
+		Label string      `json:"label"`
+		Grid  [][]any     `json:"grid"`
+	}
+	globalZMin := math.Inf(1)
+	globalZMax := math.Inf(-1)
+
+	var jsonFrames []heatmapFrame
+	for _, frame := range frames {
+		grid := make([][]float64, len(yLabels))
+		for i := range grid {
+			grid[i] = make([]float64, len(xLabels))
+			for j := range grid[i] {
+				grid[i][j] = math.NaN()
+			}
+		}
+		for _, record := range frame.records {
+			xVal := fmt.Sprintf("%v", GetOr(record, config.XField, ""))
+			yVal := fmt.Sprintf("%v", GetOr(record, config.YField, ""))
+			zVal := getNumericValue(GetOr(record, config.ZField, 0.0))
+
+			xi := xSet[xVal]
+			yi := ySet[yVal]
+			grid[yi][xi] = zVal
+
+			if !math.IsNaN(zVal) {
+				if zVal < globalZMin {
+					globalZMin = zVal
+				}
+				if zVal > globalZMax {
+					globalZMax = zVal
+				}
+			}
+		}
+		jsonFrames = append(jsonFrames, heatmapFrame{
+			Label: frame.label,
+			Grid:  nanToNullGrid(grid),
+		})
+	}
+
+	if math.IsInf(globalZMin, 1) {
+		globalZMin = 0
+	}
+	if math.IsInf(globalZMax, -1) {
+		globalZMax = 1
+	}
+
+	framesJSON, err := json.Marshal(jsonFrames)
+	if err != nil {
+		return fmt.Errorf("marshaling frame data: %w", err)
+	}
+	xLabelsJSON, err := json.Marshal(xLabels)
+	if err != nil {
+		return fmt.Errorf("marshaling x labels: %w", err)
+	}
+	yLabelsJSON, err := json.Marshal(yLabels)
+	if err != nil {
+		return fmt.Errorf("marshaling y labels: %w", err)
+	}
+
+	tmpl := template.Must(template.New("animate").Parse(animateHTMLTemplate))
+	templateData := struct {
+		Title      string
+		ChartType  string
+		FrameField string
+		XField     string
+		YField     string
+		ZField     string
+		Frames     template.JS
+		XLabels    template.JS
+		YLabels    template.JS
+		ZMin       float64
+		ZMax       float64
+		FPS        int
+		Loop       bool
+		ColorScale string
+		Theme      string
+	}{
+		Title:      config.Title,
+		ChartType:  "heatmap",
+		FrameField: config.FrameField,
+		XField:     config.XField,
+		YField:     config.YField,
+		ZField:     config.ZField,
+		Frames:     template.JS(framesJSON),
+		XLabels:    template.JS(xLabelsJSON),
+		YLabels:    template.JS(yLabelsJSON),
+		ZMin:       globalZMin,
+		ZMax:       globalZMax,
+		FPS:        config.FPS,
+		Loop:       config.Loop,
+		ColorScale: config.ColorScale,
+		Theme:      config.Theme,
+	}
+
+	if err := tmpl.Execute(writer, templateData); err != nil {
+		return err
+	}
+	return writer.Flush()
+}
+
+// generateAnimateHistogramHTML creates animated histogram HTML
+func generateAnimateHistogramHTML(writer *bufio.Writer, frames []animateFrameGroup, config AnimateConfig) error {
+	type histogramFrame struct {
+		Label string    `json:"label"`
+		X     []string  `json:"x"`
+		Y     []float64 `json:"y"`
+	}
+
+	globalYMax := 0.0
+	var jsonFrames []histogramFrame
+	for _, frame := range frames {
+		var xs []string
+		var ys []float64
+		for _, record := range frame.records {
+			xVal := fmt.Sprintf("%v", GetOr(record, config.XField, ""))
+			yVal := getNumericValue(GetOr(record, config.YField, 0.0))
+			if math.IsNaN(yVal) {
+				yVal = 0
+			}
+			xs = append(xs, xVal)
+			ys = append(ys, yVal)
+			if yVal > globalYMax {
+				globalYMax = yVal
+			}
+		}
+		jsonFrames = append(jsonFrames, histogramFrame{
+			Label: frame.label,
+			X:     xs,
+			Y:     ys,
+		})
+	}
+
+	framesJSON, err := json.Marshal(jsonFrames)
+	if err != nil {
+		return fmt.Errorf("marshaling frame data: %w", err)
+	}
+
+	tmpl := template.Must(template.New("animate").Parse(animateHTMLTemplate))
+	templateData := struct {
+		Title      string
+		ChartType  string
+		FrameField string
+		XField     string
+		YField     string
+		ZField     string
+		Frames     template.JS
+		XLabels    template.JS
+		YLabels    template.JS
+		ZMin       float64
+		ZMax       float64
+		FPS        int
+		Loop       bool
+		ColorScale string
+		Theme      string
+	}{
+		Title:      config.Title,
+		ChartType:  "histogram",
+		FrameField: config.FrameField,
+		XField:     config.XField,
+		YField:     config.YField,
+		ZField:     "",
+		Frames:     template.JS(framesJSON),
+		XLabels:    template.JS("[]"),
+		YLabels:    template.JS("[]"),
+		ZMin:       0,
+		ZMax:       globalYMax,
+		FPS:        config.FPS,
+		Loop:       config.Loop,
+		ColorScale: config.ColorScale,
+		Theme:      config.Theme,
+	}
+
+	if err := tmpl.Execute(writer, templateData); err != nil {
+		return err
+	}
+	return writer.Flush()
+}
+
+const animateHTMLTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: system-ui, sans-serif; }
+        #chart { width: 100%; height: calc(100vh - 80px); }
+        .player-bar {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            height: 80px; background: #1a1a2e; color: #fff;
+            display: flex; align-items: center; padding: 0 20px; gap: 12px;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.3); z-index: 1000;
+        }
+        .player-bar button {
+            background: none; border: 1px solid #555; color: #fff;
+            width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; transition: background 0.15s;
+        }
+        .player-bar button:hover { background: #333; }
+        .player-bar button.play-btn { width: 44px; height: 44px; font-size: 18px; border-color: #7c3aed; }
+        .player-bar button.play-btn:hover { background: #7c3aed; }
+        .scrubber { flex: 1; }
+        .scrubber input[type=range] {
+            width: 100%; height: 6px; -webkit-appearance: none; appearance: none;
+            background: #333; border-radius: 3px; outline: none;
+        }
+        .scrubber input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 16px; height: 16px;
+            background: #7c3aed; border-radius: 50%; cursor: pointer;
+        }
+        .frame-info { font-size: 13px; white-space: nowrap; min-width: 160px; text-align: right; }
+        .speed-select {
+            background: #1a1a2e; color: #fff; border: 1px solid #555;
+            border-radius: 4px; padding: 4px 8px; font-size: 13px; cursor: pointer;
+        }
+        .loop-btn.active { border-color: #7c3aed; color: #7c3aed; }
+    </style>
+</head>
+<body>
+    <div id="chart"></div>
+    <div class="player-bar">
+        <button id="btn-first" title="First frame (Home)">&#x23EE;</button>
+        <button id="btn-prev" title="Previous frame (Left)">&#x23F4;</button>
+        <button id="btn-play" class="play-btn" title="Play/Pause (Space)">&#x25B6;</button>
+        <button id="btn-next" title="Next frame (Right)">&#x23F5;</button>
+        <button id="btn-last" title="Last frame (End)">&#x23ED;</button>
+        <div class="scrubber">
+            <input type="range" id="scrubber" min="0" max="0" value="0">
+        </div>
+        <div class="frame-info" id="frame-info">Frame 1/1</div>
+        <select class="speed-select" id="speed-select">
+            <option value="0.25">0.25x</option>
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="4">4x</option>
+            <option value="8">8x</option>
+        </select>
+        <button id="btn-loop" class="loop-btn{{if .Loop}} active{{end}}" title="Toggle loop (L)">&#x1F501;</button>
+    </div>
+    <script>
+        const CHART_TYPE = '{{.ChartType}}';
+        const FRAMES = {{.Frames}};
+        const X_LABELS = {{.XLabels}};
+        const Y_LABELS = {{.YLabels}};
+        const GLOBAL_ZMIN = {{.ZMin}};
+        const GLOBAL_ZMAX = {{.ZMax}};
+        const BASE_FPS = {{.FPS}};
+        const COLOR_SCALE = '{{.ColorScale}}';
+        const FRAME_FIELD = '{{.FrameField}}';
+        const X_FIELD = '{{.XField}}';
+        const Y_FIELD = '{{.YField}}';
+        const Z_FIELD = '{{.ZField}}';
+
+        let currentFrame = 0;
+        let playing = false;
+        let playInterval = null;
+        let speedMultiplier = 1;
+        let loopEnabled = {{if .Loop}}true{{else}}false{{end}};
+
+        const chartDiv = document.getElementById('chart');
+        const scrubber = document.getElementById('scrubber');
+        const frameInfo = document.getElementById('frame-info');
+        const btnPlay = document.getElementById('btn-play');
+        const btnLoop = document.getElementById('btn-loop');
+
+        scrubber.max = FRAMES.length - 1;
+
+        function getTraceData(idx) {
+            const frame = FRAMES[idx];
+            if (CHART_TYPE === 'heatmap') {
+                return [{
+                    z: frame.grid,
+                    x: X_LABELS,
+                    y: Y_LABELS,
+                    type: 'heatmap',
+                    colorscale: COLOR_SCALE,
+                    zmin: GLOBAL_ZMIN,
+                    zmax: GLOBAL_ZMAX,
+                    colorbar: { title: Z_FIELD }
+                }];
+            } else {
+                return [{
+                    x: frame.x,
+                    y: frame.y,
+                    type: 'bar',
+                    marker: { color: '#7c3aed' }
+                }];
+            }
+        }
+
+        function getLayout(idx) {
+            const frame = FRAMES[idx];
+            const layout = {
+                title: frame.label,
+                margin: { t: 50, b: 60, l: 60, r: 30 },
+                xaxis: { title: X_FIELD },
+            };
+            if (CHART_TYPE === 'heatmap') {
+                layout.yaxis = { title: Y_FIELD };
+            } else {
+                layout.yaxis = { title: Y_FIELD, range: [0, GLOBAL_ZMAX * 1.1] };
+            }
+            return layout;
+        }
+
+        // Initial render
+        Plotly.newPlot(chartDiv, getTraceData(0), getLayout(0), { responsive: true });
+
+        function showFrame(idx) {
+            if (idx < 0 || idx >= FRAMES.length) return;
+            currentFrame = idx;
+            Plotly.react(chartDiv, getTraceData(idx), getLayout(idx));
+            scrubber.value = idx;
+            frameInfo.textContent = 'Frame ' + (idx + 1) + '/' + FRAMES.length + ' (' + FRAMES[idx].label + ')';
+        }
+
+        function startPlayback() {
+            if (playing) return;
+            playing = true;
+            btnPlay.innerHTML = '&#x23F8;';
+            const interval = 1000 / (BASE_FPS * speedMultiplier);
+            playInterval = setInterval(() => {
+                let next = currentFrame + 1;
+                if (next >= FRAMES.length) {
+                    if (loopEnabled) { next = 0; } else { stopPlayback(); return; }
+                }
+                showFrame(next);
+            }, interval);
+        }
+
+        function stopPlayback() {
+            playing = false;
+            btnPlay.innerHTML = '&#x25B6;';
+            if (playInterval) { clearInterval(playInterval); playInterval = null; }
+        }
+
+        function restartPlayback() {
+            if (playing) { stopPlayback(); startPlayback(); }
+        }
+
+        // Controls
+        document.getElementById('btn-play').addEventListener('click', () => playing ? stopPlayback() : startPlayback());
+        document.getElementById('btn-first').addEventListener('click', () => { stopPlayback(); showFrame(0); });
+        document.getElementById('btn-last').addEventListener('click', () => { stopPlayback(); showFrame(FRAMES.length - 1); });
+        document.getElementById('btn-prev').addEventListener('click', () => showFrame(Math.max(0, currentFrame - 1)));
+        document.getElementById('btn-next').addEventListener('click', () => showFrame(Math.min(FRAMES.length - 1, currentFrame + 1)));
+        scrubber.addEventListener('input', (e) => showFrame(parseInt(e.target.value)));
+        document.getElementById('speed-select').addEventListener('change', (e) => {
+            speedMultiplier = parseFloat(e.target.value);
+            restartPlayback();
+        });
+        document.getElementById('btn-loop').addEventListener('click', () => {
+            loopEnabled = !loopEnabled;
+            btnLoop.classList.toggle('active', loopEnabled);
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'SELECT') return;
+            switch(e.code) {
+                case 'Space': e.preventDefault(); playing ? stopPlayback() : startPlayback(); break;
+                case 'ArrowLeft': e.preventDefault(); showFrame(Math.max(0, currentFrame - 1)); break;
+                case 'ArrowRight': e.preventDefault(); showFrame(Math.min(FRAMES.length - 1, currentFrame + 1)); break;
+                case 'Home': e.preventDefault(); showFrame(0); break;
+                case 'End': e.preventDefault(); showFrame(FRAMES.length - 1); break;
+                case 'KeyL': loopEnabled = !loopEnabled; btnLoop.classList.toggle('active', loopEnabled); break;
+            }
+        });
+
+        showFrame(0);
+    </script>
+</body>
+</html>`
+
 // generateHeatmapHTML creates an HTML file with Plotly.js heatmap visualization
 func generateHeatmapHTML(records []Record, config ChartConfig, filename string) error {
 	file, err := os.Create(filename)
