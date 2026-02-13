@@ -265,6 +265,29 @@ ssql from employees.csv | \
   ssql to csv engineers.csv
 ```
 
+### Working with Excel Files
+
+Read and write Excel (.xlsx) files:
+
+```bash
+# Read an Excel file
+ssql from sales.xlsx | ssql to table
+
+# Read a specific sheet
+ssql from sales.xlsx -sheet "Q4 Results" | ssql to table
+
+# Filter Excel data and write to a new spreadsheet
+ssql from sales.xlsx | \
+  ssql where -where revenue gt 50000 | \
+  ssql to xlsx top_performers.xlsx
+
+# Convert CSV to Excel
+ssql from data.csv | ssql to xlsx data.xlsx
+
+# Write to a named sheet
+ssql from data.csv | ssql to xlsx report.xlsx -sheet Summary
+```
+
 ### Displaying Data as Tables
 
 Display records in a formatted table on the terminal:
