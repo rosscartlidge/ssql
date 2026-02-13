@@ -1,0 +1,614 @@
+# Distributed Processing via SSH
+
+**Status:** Research / Design Proposal
+**Date:** February 2026
+**ssql version:** v4.15.0+
+
+## Problem Statement
+
+Data processing pipelines break down when data is remote:
+
+```bash
+# Today: download 50GB, then process locally
+scp server:/data/logs.csv .
+ssql from logs.csv | ssql where -where status eq error | ssql group-by -field service -count
+
+# Tomorrow: process where the data lives, stream 200 bytes of results
+ssql from ssh://server/data/logs.csv | ssql where -where status eq error | ssql group-by -field service -count
+```
+
+Moving data is slow, expensive, and often unnecessary. Most pipelines reduce — filtering, aggregating, grouping — so the result is orders of magnitude smaller than the input. The ideal architecture processes data where it lives and streams only the reduced result back to the local machine.
+
+This is especially true for GPU-accelerated workloads: the machine with the GPU has the data (or should), and the machine requesting the analysis probably doesn't have a GPU at all.
+
+## SSH as Transport
+
+SSH is the right choice for this because it's already everywhere:
+
+- **Authentication is solved.** SSH keys, agents, `~/.ssh/config` — users already have this working.
+- **Encryption is solved.** Everything over the wire is encrypted by default.
+- **No new infrastructure.** No daemons, no ports to open, no service discovery, no certificates to manage.
+- **Firewall-friendly.** Port 22 is open on virtually every server.
+- **Multiplexing exists.** `ControlMaster` reuses connections for zero-latency follow-up commands.
+- **It composes.** Jump hosts, tunnels, proxying — all handled by SSH config, invisible to ssql.
+
+The alternative — a dedicated ssql daemon with gRPC or HTTP — adds operational complexity for marginal benefit. SSH gives us authenticated, encrypted, bidirectional streaming for free.
+
+## What Already Works Today
+
+ssql's `from -- command` pattern already supports a degenerate form of distributed processing:
+
+```bash
+# This works RIGHT NOW — runs ssql on the remote machine, streams JSONL back
+ssql from -- ssh server 'ssql from /data/logs.csv | ssql where -where status eq error' \
+  | ssql group-by -field service -count \
+  | ssql to table
+```
+
+This is powerful but verbose. The proposed syntax is sugar over this pattern, with optimizations that the explicit form can't achieve.
+
+Similarly, `join` already handles process substitution, which is structurally identical to a remote data source:
+
+```bash
+# Process substitution — subprocess as data source (works today)
+ssql from local.csv | ssql join <(ssql from lookup.csv) -on id
+
+# Remote source — structurally the same
+ssql from local.csv | ssql join <(ssh server 'ssql from /data/lookup.csv') -on id
+```
+
+The pieces exist. The design is about making them seamless.
+
+## Proposed Syntax
+
+### Remote file references
+
+The simplest extension: a `ssh://` prefix on file paths.
+
+```bash
+# Read a remote file — runs ssql on the remote machine
+ssql from ssh://server/data/logs.csv
+
+# With explicit user
+ssql from ssh://alice@analytics-box/data/sales.csv
+
+# SSH config alias (most common in practice)
+ssql from ssh://prod-db/export/users.csv
+```
+
+This desugars to:
+
+```bash
+ssql from -- ssh server 'ssql from /data/logs.csv'
+```
+
+### Remote pipeline segments
+
+When `from` is followed by transform commands, the optimizer can push filters and aggregations to the remote side:
+
+```bash
+# Naive: stream all records, filter locally
+ssql from ssh://server/data/logs.csv | ssql where -where status eq error
+
+# Optimized: filter remotely, stream only matching records
+# Internally becomes:
+# ssh server 'ssql from /data/logs.csv | ssql where -where status eq error'
+```
+
+The key insight: any chain of commands between a remote `from` and a local-only command (like `to chart`, `join` with a local file, or `to explore`) can be pushed to the remote side.
+
+### Explicit remote blocks
+
+For complex cases, an explicit `--remote` / `--local` boundary:
+
+```bash
+ssql from ssh://server/data/logs.csv \
+  --remote 'where -where status eq error | group-by -field service -count' \
+  | ssql to table
+```
+
+This makes the split point unambiguous. Everything in `--remote` runs on the server; everything after the pipe runs locally.
+
+### Multi-source pipelines
+
+Remote sources in joins and unions:
+
+```bash
+# Join local data with remote lookup table
+ssql from local_orders.csv \
+  | ssql join ssh://warehouse/data/products.csv -on product_id -as name product_name
+
+# Union data from multiple servers
+ssql union \
+  <(ssql from ssh://server1/data/events.csv) \
+  <(ssql from ssh://server2/data/events.csv) \
+  <(ssql from ssh://server3/data/events.csv) \
+  | ssql group-by -field event_type -count
+```
+
+### GPU-aware remote execution
+
+When the remote machine has `ssql_gpu`:
+
+```bash
+# Explicitly request GPU pipeline
+ssql from ssh://gpu-box/data/signal.csv --gpu \
+  | ssql fft -field amplitude \
+  | ssql to chart -x frequency -y magnitude
+
+# Auto-detect: if remote has ssql_gpu, use it
+ssql from ssh://gpu-box/data/signal.csv \
+  | ssql convolve -field signal -kernel lowpass.csv
+```
+
+The `--gpu` flag tells the remote side to use `ssql_gpu` instead of `ssql`. Auto-detection is a nice-to-have: `ssh server 'which ssql_gpu'` on first connection, cached in `~/.ssh/ssql-capabilities`.
+
+## Wire Format
+
+JSONL with schema headers — ssql's existing inter-process format — is the wire protocol. No new format needed.
+
+### Why JSONL schema headers are ideal
+
+The schema header is already the first line emitted by every `from` command:
+
+```json
+{"_schema":{"fields":["name","age","dept"],"types":{"name":"string","age":"int","dept":"string"}}}
+{"name":"Alice","age":30,"dept":"Engineering"}
+{"name":"Bob","age":25,"dept":"Sales"}
+```
+
+This gives us:
+
+1. **Self-describing streams.** The receiver knows field names and types before the first data record arrives.
+2. **Type-safe merging.** When joining local and remote data, types are known at both ends.
+3. **Streaming.** Records flow one per line — no buffering the entire dataset.
+4. **Human-debuggable.** Pipe through `head` or `jq` to inspect what's flowing.
+5. **Compression-friendly.** JSONL compresses well with SSH's built-in compression (`-C` flag) or zstd.
+
+### Schema negotiation
+
+For push-down optimization, the local side can send a "wanted fields" hint:
+
+```json
+{"_request":{"fields":["name","age"],"where":"status eq error"}}
+```
+
+The remote side can honour this (projection push-down, predicate push-down) or ignore it and send everything. The local side handles both cases — it already does, since `include` and `where` are idempotent.
+
+### Performance envelope
+
+On a typical SSH connection:
+
+| Scenario | Records/sec | Bandwidth |
+|----------|------------|-----------|
+| LAN (1 Gbps) | ~2M | ~100 MB/s |
+| WAN (100 Mbps) | ~200K | ~10 MB/s |
+| WAN + SSH -C (compression) | ~500K | ~10 MB/s (compressed) |
+| Arrow over SSH (future) | ~5M | ~100 MB/s |
+
+For reduced results (post-aggregation), even WAN is fast enough — a `group-by` over 100M records might produce 50 result rows, which transfers in microseconds.
+
+## Implementation Phases
+
+### Phase 1: ssh:// URL support in `from` (minimal)
+
+Add `ssh://` URL parsing to the `from` command. No optimization — just syntactic sugar over `from -- ssh`.
+
+**Changes:**
+- `cmd/ssql/commands/from.go` — detect `ssh://` prefix, parse host/path, construct SSH command
+- Code generation: emit `ssql.ExecCommand("ssh", []string{host, "ssql from " + path})`
+
+```go
+// In from.go handler, before file format detection:
+if strings.HasPrefix(filename, "ssh://") {
+    host, remotePath := parseSSHURL(filename)
+    if shouldGenerate(generate) {
+        return generateFromSSHCode(host, remotePath)
+    }
+    // Execute: ssh host 'ssql from /remote/path'
+    records, err = ssql.ExecCommand("ssh", []string{host, fmt.Sprintf("ssql from %s", shellQuote(remotePath))})
+    return writeWithInferredSchema(records, ...)
+}
+```
+
+**Effort:** Small. URL parsing + SSH command construction.
+
+**What it enables:** `ssql from ssh://server/data/file.csv | ssql where ...` works, with all processing happening locally after the remote `from`.
+
+### Phase 2: Pipeline push-down
+
+Push contiguous transform commands to the remote side.
+
+**Strategy:** When `SSQLGO=1` is set, each command already emits code fragments. For remote pipelines, the `from` command collects subsequent fragment types and constructs the remote command string.
+
+In practice, this requires a new mechanism: the `from` command doesn't know what comes after it in the pipeline (Unix pipes are unidirectional). Two approaches:
+
+**Approach A: Two-pass execution.** First pass with `SSQLPUSHDOWN=1` collects the pipeline description; second pass executes with the remote portion pushed down. This is complex.
+
+**Approach B: Explicit remote block.** The user specifies what runs remotely via `--remote`. Simple, predictable, no magic.
+
+**Recommendation:** Start with Approach B. Users who understand their pipeline can make the split explicit. Approach A is a future optimization.
+
+```bash
+# Explicit push-down
+ssql from ssh://server/data/logs.csv \
+  --remote 'where -where status eq error | group-by -field service -count' \
+  | ssql to table
+```
+
+**Implementation:**
+- Parse `--remote` flag value as a pipeline string
+- Construct: `ssh host 'ssql from /path | ssql <remote-pipeline>'`
+- Stream the result (post-aggregation JSONL) back to local stdin
+
+### Phase 3: Remote source in join/union
+
+Enable `ssh://` URLs as the right-side file in `join` and as sources in `union`.
+
+**For join:**
+```go
+// In join.go, when rightFile starts with "ssh://":
+host, remotePath := parseSSHURL(rightFile)
+// Read right side via SSH
+rightRecords := ssql.ExecCommand("ssh", []string{host, fmt.Sprintf("ssql from %s", shellQuote(remotePath))})
+```
+
+This is structurally identical to how join already handles process substitution — the right-side records come from a subprocess instead of a file.
+
+**For union:**
+```bash
+# Each source can be local or remote
+ssql union \
+  <(ssql from ssh://server1/data/part1.csv) \
+  <(ssql from local_part2.csv) \
+  | ssql to json
+```
+
+This already works with the Phase 1 `from` changes, since `<(ssql from ssh://...)` is just process substitution.
+
+### Phase 4: Code generation for remote pipelines
+
+Extend `generate-go` to handle remote fragments.
+
+**For simple remote reads:**
+```go
+// Generated code for: ssql from ssh://server/data/logs.csv
+records, err := ssql.ExecCommand("ssh", []string{"server", "ssql from /data/logs.csv"})
+if err != nil {
+    fmt.Fprintf(os.Stderr, "error: %v\n", err)
+    os.Exit(1)
+}
+```
+
+**For push-down pipelines:**
+```go
+// Generated code for: ssql from ssh://server/data/logs.csv --remote 'where -where status eq error'
+records, err := ssql.ExecCommand("ssh", []string{
+    "server",
+    "ssql from /data/logs.csv | ssql where -where status eq error",
+})
+```
+
+This is straightforward because `ExecCommand` already exists and handles subprocess output parsing. The generated code is a faithful reproduction of the SSH pipeline.
+
+### Phase 5: SSH connection management
+
+Optimize repeated connections (e.g., join reading a remote lookup table while streaming remote primary data).
+
+**Approach:** Leverage SSH `ControlMaster` multiplexing — no ssql code needed.
+
+```bash
+# User's ~/.ssh/config:
+Host analytics-*
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 60
+```
+
+With this config, the first `ssh` spawns a master connection; subsequent `ssh` commands to the same host reuse it with near-zero latency. ssql doesn't need to manage connections — SSH already handles this.
+
+For ssql to *hint* at this:
+- Document the recommended SSH config in CLI help
+- Optionally: `ssql ssh-setup` command that configures ControlMaster for a given host
+
+## GPU Awareness
+
+Remote GPU processing extends naturally from the syntax:
+
+```bash
+# Remote FFT on GPU server
+ssql from ssh://gpu-server/data/signal.wav \
+  --remote 'fft -field amplitude' \
+  | ssql to chart -x frequency -y magnitude
+```
+
+Internally:
+```bash
+ssh gpu-server 'ssql_gpu from /data/signal.wav | ssql_gpu fft -field amplitude'
+```
+
+### Capability detection
+
+First time connecting to a remote host, probe for capabilities:
+
+```bash
+ssh server 'ssql version 2>/dev/null; ssql_gpu version 2>/dev/null'
+```
+
+Cache results in `~/.cache/ssql/hosts.json`:
+
+```json
+{
+  "gpu-server": {
+    "ssql": "4.15.0",
+    "ssql_gpu": "4.15.0",
+    "probed": "2026-02-13T10:00:00Z"
+  },
+  "analytics-box": {
+    "ssql": "4.15.0",
+    "ssql_gpu": null,
+    "probed": "2026-02-13T09:30:00Z"
+  }
+}
+```
+
+**Auto-selection logic:**
+1. If `--gpu` flag: use `ssql_gpu`, fail if not available
+2. If command benefits from GPU (fft, convolve): use `ssql_gpu` if available
+3. Otherwise: use `ssql`
+
+## Mixed Pipeline Patterns
+
+### Pattern 1: Remote filter, local presentation
+
+The most common case. Filter/aggregate on the server, visualize locally.
+
+```bash
+ssql from ssh://prod/data/access_log.csv \
+  --remote 'where -where response_code ge 500 | group-by -field endpoint -count' \
+  | ssql sort -field count -desc \
+  | ssql to chart -x endpoint -y count -type bar
+```
+
+Data flow:
+```
+[prod server]                          [local machine]
+access_log.csv (50GB)
+  → where response_code >= 500
+  → group-by endpoint, count
+  → JSONL (50 rows, ~2KB)  ──SSH──→  sort, chart
+                                       → output.html
+```
+
+### Pattern 2: Fan-out aggregation
+
+Process the same dataset with different aggregations in parallel.
+
+```bash
+# Three aggregations, one SSH connection (with ControlMaster)
+ssql union \
+  <(ssql from ssh://server/data/sales.csv --remote 'group-by -field region -sum revenue') \
+  <(ssql from ssh://server/data/sales.csv --remote 'group-by -field product -avg price') \
+  <(ssql from ssh://server/data/sales.csv --remote 'group-by -field month -count') \
+  | ssql to explore output.html
+```
+
+With SSH multiplexing, all three read from the same server over one TCP connection.
+
+### Pattern 3: Remote enrichment (join)
+
+Local stream enriched with remote lookup data.
+
+```bash
+ssql from local_events.csv \
+  | ssql join ssh://warehouse/data/products.csv -on product_id -as name product_name \
+  | ssql to table
+```
+
+The join command fetches the remote lookup table once, builds an index, then matches against the local stream. The lookup table travels over SSH; the local stream never leaves.
+
+### Pattern 4: Cross-server correlation
+
+Join data from two different servers.
+
+```bash
+ssql from ssh://web-server/logs/access.csv \
+  --remote 'where -where status ge 500' \
+  | ssql join <(ssh db-server 'ssql from /logs/queries.csv | ssql where -where duration gt 1000') \
+    -on request_id \
+  | ssql to table
+```
+
+Both servers filter locally; only matching records travel to the local machine for the join.
+
+### Pattern 5: GPU processing with local visualization
+
+Offload compute to GPU server, visualize locally.
+
+```bash
+ssql from ssh://gpu-box/data/audio.wav \
+  --remote 'fft -field amplitude | to animate -frame segment -x freq -y time -z magnitude' \
+  | ssql to table
+```
+
+Wait — this doesn't quite work. The `to animate` generates HTML, not JSONL. Better:
+
+```bash
+# FFT on GPU, stream frequency data locally, visualize locally
+ssql from ssh://gpu-box/data/audio.wav \
+  --remote 'fft -field amplitude' \
+  | ssql to animate -frame segment -x freq -y time -z magnitude
+```
+
+The FFT runs on the GPU. The frequency-domain data (much smaller than raw audio) streams back for local visualization.
+
+## Code Generation for Remote Pipelines
+
+Code generation (`SSQLGO=1 ... | ssql generate-go`) handles remote pipelines by generating `ExecCommand("ssh", ...)` calls.
+
+### Simple remote read
+
+```bash
+SSQLGO=1 ssql from ssh://server/data/logs.csv | ssql where -where status eq error | ssql generate-go
+```
+
+Generated:
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+
+    ssql "github.com/rosscartlidge/ssql/v4"
+)
+
+func main() {
+    // ssql from ssh://server/data/logs.csv
+    records, err := ssql.ExecCommand("ssh", []string{"server", "ssql from /data/logs.csv"})
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "error: %v\n", err)
+        os.Exit(1)
+    }
+
+    // ssql where -where status eq error
+    filtered := ssql.Where(func(r ssql.Record) bool {
+        return ssql.GetOr(r, "status", "") == "error"
+    })(records)
+
+    ssql.WriteJSONFastToWriter(filtered, os.Stdout)
+}
+```
+
+### With push-down
+
+```bash
+SSQLGO=1 ssql from ssh://server/data/logs.csv \
+  --remote 'where -where status eq error' \
+  | ssql group-by -field service -count \
+  | ssql generate-go
+```
+
+Generated:
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+
+    ssql "github.com/rosscartlidge/ssql/v4"
+)
+
+func main() {
+    // ssql from ssh://server/data/logs.csv --remote 'where -where status eq error'
+    records, err := ssql.ExecCommand("ssh", []string{
+        "server",
+        "ssql from /data/logs.csv | ssql where -where status eq error",
+    })
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "error: %v\n", err)
+        os.Exit(1)
+    }
+
+    // ssql group-by -field service -count
+    grouped := ssql.GroupByFields("_group", "service")(records)
+    aggregated := ssql.Aggregate("_group", map[string]ssql.AggregateFunc{
+        "count": ssql.Count(),
+    })(grouped)
+
+    ssql.WriteJSONFastToWriter(aggregated, os.Stdout)
+}
+```
+
+The remote portion becomes a single `ExecCommand` call — opaque to the generated program. The local portion is compiled Go. This is the right boundary: network I/O is inherently dynamic, but local processing benefits from compilation.
+
+## Security Considerations
+
+### No new attack surface
+
+ssql adds zero new network surface. All communication goes through SSH:
+
+- Authentication: SSH keys / agents (existing infrastructure)
+- Encryption: SSH transport layer (existing infrastructure)
+- Authorization: SSH `authorized_keys`, `Match` blocks, `ForceCommand` (existing infrastructure)
+- Auditing: SSH logs (existing infrastructure)
+
+### Command injection prevention
+
+The remote command string is constructed by ssql, not user input. However, filenames come from users:
+
+```go
+// SAFE: shellQuote escapes the path
+cmd := fmt.Sprintf("ssql from %s", shellQuote(remotePath))
+
+// UNSAFE: direct interpolation (never do this)
+cmd := fmt.Sprintf("ssql from %s", remotePath)
+```
+
+`shellQuote` (already in `cmd/ssql/helpers.go`) handles this. The same function is used for code generation.
+
+### Restricted remote execution
+
+For environments that want to limit what ssql can do remotely, SSH's `ForceCommand` or a restricted shell works:
+
+```bash
+# ~/.ssh/authorized_keys on server:
+command="/usr/bin/ssql-restricted $SSH_ORIGINAL_COMMAND" ssh-rsa AAAA...
+
+# ssql-restricted validates the command is a read-only ssql pipeline
+```
+
+This is standard SSH operational practice — ssql doesn't need to implement access control.
+
+### Secret management
+
+No secrets are managed by ssql. SSH agent forwarding, key files, and SSH config are the user's responsibility. ssql never sees credentials.
+
+## Comparison with Alternatives
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **SSH (proposed)** | Zero infrastructure, existing auth, encrypted, composable | Requires ssql on remote, SSH overhead per connection |
+| **ssql daemon (gRPC)** | Persistent connection, potential query optimization | New daemon to deploy/manage, new port to open, TLS certs, auth system |
+| **ssql daemon (HTTP)** | REST familiarity, easy debugging | Same as gRPC plus higher overhead, no streaming without SSE/WebSocket |
+| **rsync + local** | Simple, no remote execution needed | Moves all data, slow for large datasets, no incremental processing |
+| **Database (Postgres/DuckDB)** | SQL optimizer, indexes, query planning | Requires data loading, schema management, separate tool |
+| **Spark/Flink** | Built for distributed processing | Massive operational overhead, JVM, cluster management |
+
+SSH wins for ssql's use case: ad-hoc exploration of data on remote machines by individual users or small teams. The other approaches serve different audiences (databases for structured querying, Spark for cluster-scale batch processing).
+
+## Design Principles
+
+1. **No new infrastructure.** SSH is already there. Don't make users install daemons.
+2. **Explicit is better than magic.** Users declare what runs remotely. No invisible optimization that changes semantics.
+3. **Degrade gracefully.** If SSH is slow, the pipeline still works — just slower. If the remote lacks ssql, `from --` with explicit commands still works.
+4. **Compose with Unix.** `ssh`, process substitution, pipes — these are the building blocks. ssql adds convenience syntax, not a new paradigm.
+5. **Generate honest code.** Code generation produces `ExecCommand("ssh", ...)` — the same thing the CLI does. No hidden complexity.
+
+## Open Questions
+
+1. **Arrow over SSH?** Binary Arrow format is 10-20x faster than JSONL. Worth adding `--format arrow` for the SSH transport? Requires Arrow support on both ends.
+2. **Parallel SSH?** For fan-out patterns, should ssql manage parallel SSH sessions, or leave that to shell parallelism (`&`, `xargs -P`)?
+3. **Progress reporting?** Long-running remote pipelines are silent. Should the remote side emit progress on stderr?
+4. **Version mismatch?** What happens when local ssql is v4.15 but remote is v4.10? Schema headers should be compatible, but new commands won't exist.
+5. **Windows/PowerShell?** SSH syntax assumes bash on the remote side. Windows remotes would need different quoting.
+
+## Summary
+
+Distributed processing in ssql is not a new architecture — it's a thin layer over patterns that already work:
+
+- `from -- ssh server 'ssql ...'` already executes remote pipelines
+- JSONL schema headers already carry type information between processes
+- Process substitution already treats subprocesses as data sources
+- Code generation already wraps subprocesses into standalone functions
+
+The proposal adds:
+1. **Syntactic sugar** (`ssh://` URLs) to make remote sources first-class
+2. **Pipeline push-down** (`--remote`) to reduce data transfer
+3. **GPU awareness** (auto-detect `ssql_gpu` on remote hosts)
+4. **Connection optimization** (documentation + optional tooling for SSH ControlMaster)
+
+The result: distributed processing that feels like local processing, with SSH handling all the hard parts (auth, encryption, multiplexing) that ssql shouldn't reinvent.
