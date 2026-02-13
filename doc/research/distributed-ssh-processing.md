@@ -588,6 +588,130 @@ SSH wins for ssql's use case: ad-hoc exploration of data on remote machines by i
 4. **Compose with Unix.** `ssh`, process substitution, pipes — these are the building blocks. ssql adds convenience syntax, not a new paradigm.
 5. **Generate honest code.** Code generation produces `ExecCommand("ssh", ...)` — the same thing the CLI does. No hidden complexity.
 
+## Browser-Initiated Processing
+
+The SSH design assumes a terminal context — a user with shell access and SSH keys. But ssql also runs in the browser: `to explore` generates self-contained HTML apps, and the WASM module executes real ssql transforms client-side. A browser cannot open SSH connections. This section addresses that gap.
+
+### The problem
+
+A user opens an explorer HTML file in their browser and wants to query remote data interactively — filter a 50GB dataset on a server, pull back matching rows, update the chart. The browser has no access to SSH, no access to the local filesystem, and no way to spawn subprocesses.
+
+### Approach: Local relay via `ssql serve`
+
+The minimal addition is a local relay process that bridges browser WebSocket to SSH:
+
+```
+[Browser]  ──WebSocket──→  [ssql serve :9090]  ──SSH──→  [Remote server]
+   HTML/WASM                  localhost only               ssql on data
+```
+
+The browser talks to `localhost:9090` over WebSocket. The relay SSHs to remote machines on the browser's behalf. The user's existing SSH keys and config are used — no new auth system.
+
+**Why WebSocket:** Bidirectional streaming. The relay pushes JSONL records as they arrive from the remote side. The browser renders incrementally. HTTP request/response would require buffering the entire result.
+
+**Why localhost only:** The relay binds to `127.0.0.1` by default. It's not a server — it's a local bridge. No new attack surface beyond what the user already has via their terminal.
+
+### Proposed `ssql serve` command
+
+```bash
+# Start local relay (binds to localhost:9090)
+ssql serve
+
+# Custom port
+ssql serve -port 8080
+
+# Allow specific remote hosts only
+ssql serve -allow prod-server,analytics-box
+```
+
+The relay accepts WebSocket connections and exposes a simple JSON protocol:
+
+```json
+// Browser → relay: execute remote pipeline
+{"action": "query", "id": "q1", "host": "prod-server", "pipeline": "from /data/logs.csv | where -where status eq error | group-by -field service -count"}
+
+// Relay → browser: schema header
+{"id": "q1", "type": "schema", "data": {"fields": ["service", "count"], "types": {"service": "string", "count": "int"}}}
+
+// Relay → browser: result records (streamed)
+{"id": "q1", "type": "record", "data": {"service": "auth", "count": 1247}}
+{"id": "q1", "type": "record", "data": {"service": "api", "count": 893}}
+
+// Relay → browser: done
+{"id": "q1", "type": "done", "records": 2}
+```
+
+Internally, the relay runs: `ssh prod-server 'ssql from /data/logs.csv | ssql where -where status eq error | ssql group-by -field service -count'` and streams the JSONL output back over the WebSocket.
+
+### Explorer integration
+
+The `to explore` HTML app gains an optional remote data panel:
+
+```bash
+# Generate explorer with relay support
+ssql from ssh://server/data/sample.csv \
+  | ssql to explore -relay localhost:9090 output.html
+```
+
+The generated HTML:
+1. Loads the initial sample data (embedded or fetched at generation time)
+2. Shows a "Remote Query" panel with a pipeline builder
+3. Sends queries to `ws://localhost:9090` when the user adjusts filters
+4. Streams results into the AG-Grid table and Plotly chart incrementally
+
+Without `-relay`, the explorer works as it does today — fully self-contained, no network access needed.
+
+### WASM + relay interaction
+
+The WASM module handles local transforms (sort, filter on already-fetched data). The relay handles remote fetches. They compose naturally:
+
+```
+User adjusts filter in browser
+  → WASM checks: can this filter run on local data? (already fetched)
+    → Yes: apply locally, instant
+    → No (new remote source): send query to relay
+      → Relay SSHs to server, streams results
+      → WASM receives records, applies any local transforms
+      → UI updates incrementally
+```
+
+This keeps the common case fast (local WASM) while enabling remote queries when needed.
+
+### Security constraints
+
+The relay inherits the terminal user's SSH access — it can reach exactly the hosts the user can already reach. Additional safeguards:
+
+- **Localhost binding:** Default `127.0.0.1` only. No remote access to the relay.
+- **Host allowlist:** `-allow` flag restricts which remote hosts can be queried.
+- **Read-only pipelines:** The relay could validate that pipelines contain only read operations (`from`, `where`, `group-by`, etc.) and reject mutations.
+- **No credential storage:** SSH agent handles auth. The relay never sees private keys.
+- **Origin checking:** WebSocket accepts connections only from `file://` or `localhost` origins.
+
+### Alternative: Pre-fetch with refresh
+
+A simpler approach that avoids the relay entirely:
+
+```bash
+# Generate explorer with a refresh script
+ssql from ssh://server/data/logs.csv \
+  --remote 'where -where status eq error' \
+  | ssql to explore -refresh-script refresh.sh output.html
+```
+
+The `refresh.sh` script re-runs the remote pipeline and regenerates the HTML. The user clicks "Refresh" in the browser, which... can't run shell scripts. So this only works with a file watcher or manual re-run.
+
+This is adequate for dashboards that refresh periodically but not for interactive exploration.
+
+### Recommendation
+
+Implement in two stages:
+
+1. **Pre-fetch (Phase 1):** `ssql from ssh://... | ssql to explore` fetches remote data at generation time. The explorer is fully self-contained. Simple, works today with Phase 1 SSH support.
+
+2. **Live relay (Phase 6):** `ssql serve` + `-relay` flag for interactive remote querying. Only needed when datasets are too large to pre-fetch or when the user needs real-time data.
+
+Most users will be well-served by pre-fetch. The relay is for power users who need interactive exploration of data that can't leave the server.
+
 ## Open Questions
 
 1. **Arrow over SSH?** Binary Arrow format is 10-20x faster than JSONL. Worth adding `--format arrow` for the SSH transport? Requires Arrow support on both ends.
