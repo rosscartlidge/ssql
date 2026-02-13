@@ -260,6 +260,14 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 	}
 	defer os.Remove(tmpFile)
 
+	// Create test XLSX file (convert CSV to XLSX using the built binary)
+	xlsxFile := "/tmp/test_all_commands.xlsx"
+	createXLSX := exec.Command("bash", "-c", `/tmp/ssql_test from `+tmpFile+` | /tmp/ssql_test to xlsx `+xlsxFile)
+	if out, err := createXLSX.CombinedOutput(); err != nil {
+		t.Logf("Failed to create test XLSX (may affect xlsx tests): %v\n%s", err, out)
+	}
+	defer os.Remove(xlsxFile)
+
 	tests := []struct {
 		name           string
 		cmdLine        string
@@ -337,6 +345,18 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to explore`,
 			expectFragment: true,
 			wantSubstring:  `ssql.DataExplore`,
+		},
+		{
+			name:           "from xlsx",
+			cmdLine:        "SSQLGO=1 /tmp/ssql_test from /tmp/test_all_commands.xlsx",
+			expectFragment: true,
+			wantSubstring:  `ssql.ReadXLSX`,
+		},
+		{
+			name:           "to xlsx",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to xlsx /tmp/out.xlsx`,
+			expectFragment: true,
+			wantSubstring:  `ssql.WriteXLSX`,
 		},
 	}
 

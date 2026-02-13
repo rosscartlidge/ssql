@@ -36,6 +36,7 @@
   - [Line Operations](#line-operations)
   - [Command Output Operations](#command-output-operations)
   - [Arrow Operations](#arrow-operations)
+  - [XLSX Operations](#xlsx-operations)
 - [Signal Processing](#signal-processing)
 - [Chart & Visualization](#chart--visualization)
   - [Data Explorer](#data-explorer)
@@ -1450,6 +1451,71 @@ Writes Arrow data to an io.Writer.
 - Repeated processing of same data
 - Inter-process data sharing
 - GPU acceleration (data already columnar)
+
+### XLSX Operations
+
+Excel XLSX format support for reading and writing spreadsheets.
+
+#### ReadXLSX
+```go
+func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error)
+```
+Reads records from an Excel XLSX file. Row 1 is treated as headers (field names),
+remaining rows are data. Types are inferred from cell values.
+
+**Example:**
+```go
+// Read first sheet (default)
+records, err := ssql.ReadXLSX("data.xlsx")
+if err != nil {
+    log.Fatal(err)
+}
+for r := range records {
+    name := ssql.GetOr(r, "name", "")
+    age := ssql.GetOr(r, "age", int64(0))
+    fmt.Printf("%s: %d\n", name, age)
+}
+
+// Read a specific sheet
+records, err := ssql.ReadXLSX("workbook.xlsx", ssql.XLSXConfig{SheetName: "Sales"})
+```
+
+#### WriteXLSX
+```go
+func WriteXLSX(records iter.Seq[Record], filename string, config ...XLSXConfig) error
+```
+Writes records to an Excel XLSX file. Field names become headers in row 1.
+
+**Example:**
+```go
+err := ssql.WriteXLSX(records, "output.xlsx")
+
+// Write to a specific sheet
+err := ssql.WriteXLSX(records, "output.xlsx", ssql.XLSXConfig{SheetName: "Results"})
+```
+
+#### XLSXConfig
+```go
+type XLSXConfig struct {
+    SheetName string // Sheet to read/write (default: first sheet for read, "Sheet1" for write)
+}
+```
+
+#### ReadXLSXSheetNames
+```go
+func ReadXLSXSheetNames(filename string) ([]string, error)
+```
+Returns the list of sheet names in an XLSX file. Useful for exploring multi-sheet workbooks.
+
+**When to use XLSX:**
+- Sharing data with Excel users
+- Multi-sheet workbooks with related datasets
+- Preserving numeric types (integers stay integers, unlike CSV)
+
+**When to use CSV instead:**
+- Streaming/pipeline processing (XLSX requires loading entire file)
+- Very large datasets (CSV is more memory-efficient)
+- Simple text-based workflows
 
 ---
 

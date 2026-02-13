@@ -14,7 +14,7 @@ import (
 // RegisterTo registers the to subcommand with nested format subcommands
 func RegisterTo(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	toCmd := cmd.Subcommand("to").
-		Description("Write output in various formats (table, csv, tsv, json, chart, heatmap, animate, explore, wav)")
+		Description("Write output in various formats (table, csv, tsv, json, xlsx, chart, heatmap, animate, explore, wav)")
 
 	// Register nested subcommands
 	registerToTable(toCmd)
@@ -23,6 +23,7 @@ func RegisterTo(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	registerToJSON(toCmd)
 	registerToArrow(toCmd)
 	registerToWAV(toCmd)
+	registerToXLSX(toCmd)
 	registerToChart(toCmd)
 	registerToHeatmap(toCmd)
 	registerToAnimate(toCmd)
@@ -421,6 +422,76 @@ func registerToWAV(cmd *cf.SubcommandBuilder) {
 			// Write as WAV
 			if err := ssql.WriteWAV(records, outputFile, sampleRate); err != nil {
 				return fmt.Errorf("writing WAV file: %w", err)
+			}
+
+			return nil
+		}).
+		Done()
+}
+
+// registerToXLSX registers the "to xlsx" subcommand
+func registerToXLSX(cmd *cf.SubcommandBuilder) {
+	cmd.Subcommand("xlsx").
+		Description("Write as Excel XLSX file").
+		Example("ssql from data.csv | ssql to xlsx output.xlsx", "Convert CSV to Excel").
+		Example("ssql from data.json | ssql to xlsx -sheet Sales output.xlsx", "Convert JSON to Excel with custom sheet name").
+		Flag("-generate", "-g").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
+		Flag("-sheet").
+		String().
+		Global().
+		Default("").
+		Help("Sheet name (default: Sheet1)").
+		Done().
+		Flag("FILE").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.xlsx"}).
+		Global().
+		Required().
+		Help("Output XLSX file (required)").
+		Done().
+		Handler(func(ctx *cf.Context) error {
+			var outputFile string
+			var sheet string
+			var generate bool
+
+			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
+				outputFile = fileVal.(string)
+			}
+
+			if sheetVal, ok := ctx.GlobalFlags["-sheet"]; ok {
+				sheet = sheetVal.(string)
+			}
+
+			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
+				generate = genVal.(bool)
+			}
+
+			if outputFile == "" {
+				return fmt.Errorf("output file required")
+			}
+
+			// Check if generation is enabled (flag or env var)
+			if shouldGenerate(generate) {
+				return generateToXLSXCode(outputFile, sheet)
+			}
+
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
+
+			// Build XLSX config
+			var xlsxConfig []ssql.XLSXConfig
+			if sheet != "" {
+				xlsxConfig = append(xlsxConfig, ssql.XLSXConfig{SheetName: sheet})
+			}
+
+			// Write as XLSX
+			if err := ssql.WriteXLSX(records, outputFile, xlsxConfig...); err != nil {
+				return fmt.Errorf("writing XLSX file: %w", err)
 			}
 
 			return nil
@@ -970,6 +1041,42 @@ func generateToWAVCode(filename string, sampleRate int) error {
 		fmt.Fprintf(os.Stderr, "Error writing WAV: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, filename, sampleRate)
+
+	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	return lib.WriteCodeFragment(frag)
+}
+
+func generateToXLSXCode(filename string, sheet string) error {
+	fragments, err := lib.ReadAllCodeFragments()
+	if err != nil {
+		return fmt.Errorf("reading code fragments: %w", err)
+	}
+
+	for _, frag := range fragments {
+		if err := lib.WriteCodeFragment(frag); err != nil {
+			return fmt.Errorf("writing previous fragment: %w", err)
+		}
+	}
+
+	var inputVar string
+	if len(fragments) > 0 {
+		inputVar = fragments[len(fragments)-1].Var
+	} else {
+		inputVar = "records"
+	}
+
+	var code string
+	if sheet != "" {
+		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, %q, ssql.XLSXConfig{SheetName: %q}); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing XLSX: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar, filename, sheet)
+	} else {
+		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, %q); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing XLSX: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar, filename)
+	}
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
 	return lib.WriteCodeFragment(frag)

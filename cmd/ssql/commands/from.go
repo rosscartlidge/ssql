@@ -18,7 +18,7 @@ import (
 // and future optimizations like GPU acceleration.
 func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("from").
-		Description("Read data from file or command output (auto-detects CSV, TSV, JSON, JSONL, Arrow, WAV). Always emits schema header.").
+		Description("Read data from file or command output (auto-detects CSV, TSV, JSON, JSONL, Arrow, WAV, XLSX). Always emits schema header.").
 		Example("ssql from data.csv | ssql where -where age gt 18", "Read CSV file (schema header included)").
 		Example("ssql from data.tsv | ssql where -where age gt 18", "Read TSV file (auto-detects separator)").
 		Example("ssql from data.csv -type zipcode string -type phone string", "Force fields to string (preserve leading zeros)").
@@ -27,6 +27,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.arrow | ssql where -where age gt 18", "Read Arrow file (10-20x faster than CSV)").
 		Example("ssql from audio.wav | ssql fft -field amplitude", "Read WAV audio file (sample_rate in schema header)").
 		Example("ssql from stereo.wav -channel 0 | ssql to table", "Read left channel only from stereo WAV").
+		Example("ssql from data.xlsx | ssql to table", "Read Excel spreadsheet").
+		Example("ssql from workbook.xlsx -sheet Sales | ssql to csv", "Read specific sheet from Excel workbook").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -36,14 +38,20 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		String().
 		Global().
 		Default("").
-		Completer(&cf.StaticCompleter{Options: []string{"csv", "tsv", "json", "jsonl", "arrow", "wav"}}).
-		Help("Input format for stdin: csv (default), tsv, json, jsonl, arrow, wav").
+		Completer(&cf.StaticCompleter{Options: []string{"csv", "tsv", "json", "jsonl", "arrow", "wav", "xlsx"}}).
+		Help("Input format for stdin: csv (default), tsv, json, jsonl, arrow, wav, xlsx").
 		Done().
 		Flag("-channel", "-ch").
 		Int().
 		Global().
 		Default(-1).
 		Help("For stereo WAV: extract specific channel (0=left, 1=right). Default: mix to mono.").
+		Done().
+		Flag("-sheet").
+		String().
+		Global().
+		Default("").
+		Help("For XLSX: sheet name to read (default: first sheet)").
 		Done().
 		Flag("-type", "-t").
 		Arg("field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
@@ -61,10 +69,10 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("FILE").
 		String().
-		Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,wav}"}).
+		Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,wav,xlsx}"}).
 		Global().
 		Default("").
-		Help("Input file (CSV, TSV, JSON, JSONL, Arrow, or WAV). Reads from stdin if not specified.").
+		Help("Input file (CSV, TSV, JSON, JSONL, Arrow, WAV, or XLSX). Reads from stdin if not specified.").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
@@ -72,6 +80,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			var generate bool
 			var defaultType string
 			var channel int = -1 // -1 means mix to mono
+			var sheet string
 			typeOverrides := make(map[string]string)
 
 			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
@@ -92,6 +101,10 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if chVal, ok := ctx.GlobalFlags["-channel"]; ok {
 				channel = chVal.(int)
+			}
+
+			if sheetVal, ok := ctx.GlobalFlags["-sheet"]; ok {
+				sheet = sheetVal.(string)
 			}
 
 			// Parse -type flag accumulations
@@ -130,7 +143,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateFromCode(inputFile, format, typeOverrides, defaultType, channel)
+				return generateFromCode(inputFile, format, typeOverrides, defaultType, channel, sheet)
 			}
 
 			// Build CSV config with type overrides
@@ -159,6 +172,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					if werr != nil {
 						return fmt.Errorf("reading WAV from stdin: %w", werr)
 					}
+				case "xlsx":
+					return fmt.Errorf("XLSX format cannot be read from stdin (it requires random file access); use a file path instead")
 				default: // "csv" or empty
 					originalRecords = ssql.ReadCSVFromReader(os.Stdin, csvConfig)
 				}
@@ -200,6 +215,15 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 					if werr != nil {
 						return fmt.Errorf("reading WAV file: %w", werr)
+					}
+				case strings.HasSuffix(lower, ".xlsx"):
+					var xlsxConfig []ssql.XLSXConfig
+					if sheet != "" {
+						xlsxConfig = append(xlsxConfig, ssql.XLSXConfig{SheetName: sheet})
+					}
+					originalRecords, err = ssql.ReadXLSX(inputFile, xlsxConfig...)
+					if err != nil {
+						return fmt.Errorf("reading XLSX file: %w", err)
 					}
 				default:
 					// Try to auto-detect by peeking at content
@@ -276,7 +300,7 @@ func buildCSVConfig(typeOverrides map[string]string, defaultType string) (ssql.C
 }
 
 // generateFromCode generates Go code for the from command
-func generateFromCode(filename, format string, typeOverrides map[string]string, defaultType string, channel int) error {
+func generateFromCode(filename, format string, typeOverrides map[string]string, defaultType string, channel int, sheet string) error {
 	var code string
 	var imports []string
 
@@ -303,6 +327,8 @@ func generateFromCode(filename, format string, typeOverrides map[string]string, 
 		os.Exit(1)
 	}`
 			imports = []string{"fmt", "os"}
+		case "xlsx":
+			return fmt.Errorf("XLSX format cannot be read from stdin (it requires random file access); use a file path instead")
 		default:
 			if hasConfig {
 				code = configCode + "\n\trecords := ssql.ReadCSVFromReader(os.Stdin, csvConfig)"
@@ -363,6 +389,21 @@ func generateFromCode(filename, format string, typeOverrides map[string]string, 
 				code = fmt.Sprintf(`records, _, err := ssql.ReadWAV(%q)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading WAV: %%w", err))
+		os.Exit(1)
+	}`, filename)
+			}
+			imports = []string{"fmt", "os"}
+		case strings.HasSuffix(lower, ".xlsx"):
+			if sheet != "" {
+				code = fmt.Sprintf(`records, err := ssql.ReadXLSX(%q, ssql.XLSXConfig{SheetName: %q})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading XLSX: %%w", err))
+		os.Exit(1)
+	}`, filename, sheet)
+			} else {
+				code = fmt.Sprintf(`records, err := ssql.ReadXLSX(%q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading XLSX: %%w", err))
 		os.Exit(1)
 	}`, filename)
 			}

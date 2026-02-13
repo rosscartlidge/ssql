@@ -967,10 +967,11 @@ go build -o monitor monitor.go
 ## Available Commands
 
 ### Data Sources
-- `from [file]` - Read data from CSV, JSON, or JSONL file (auto-detects format, always emits schema header)
+- `from [file]` - Read data from CSV, TSV, JSON, JSONL, Arrow, WAV, or XLSX file (auto-detects format, always emits schema header)
   - `-type field type` - Override type for a field: `-type zipcode string -type age int`
   - `-default-type type` - Default type for all fields: `auto` (default), `string`, `int`, `float`, `bool`
-  - `-format fmt` - Input format for stdin: `csv` (default), `json`, `jsonl`
+  - `-format fmt` - Input format for stdin: `csv` (default), `tsv`, `json`, `jsonl`, `arrow`, `wav`
+  - `-sheet name` - For XLSX files: sheet name to read (default: first sheet)
 - `from -- [command] [args...]` - Execute command and parse output
 
 ### Transformations
@@ -1001,6 +1002,7 @@ go build -o monitor monitor.go
 - `to csv [file]` - Write CSV file (or stdout)
 - `to json [file]` - Write JSON/JSONL file (or stdout)
 - `to arrow [file]` - Write Apache Arrow IPC file (10-20x faster I/O)
+- `to xlsx [file]` - Write Excel XLSX file
 - `to chart` - Create interactive HTML chart
 - `to heatmap` - Create heatmap/spectrogram visualization (Plotly.js)
 - `to animate` - Create animated heatmap or histogram with video-player controls
@@ -1129,7 +1131,7 @@ This pattern makes complex aggregations readable while maintaining type safety a
 ssql supports comprehensive data processing:
 - **SQL Operations**: `join`, `distinct`, `offset`, `union`, `sort`, `limit`, `group-by`
 - **Signal Processing**: `fft`, `ifft`, `convolve`, `correlate` (with optional GPU acceleration)
-- **Multiple Formats**: CSV, JSON/JSONL, Apache Arrow
+- **Multiple Formats**: CSV, TSV, JSON/JSONL, Apache Arrow, XLSX, WAV
 - **Code Generation**: Convert CLI pipelines to standalone Go programs
 - **Interactive Charts**: Chart.js visualizations with zoom/pan/export
 
