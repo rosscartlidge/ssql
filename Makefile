@@ -1,7 +1,7 @@
 # ssql Makefile
 
 .PHONY: help test build clean doc-check doc-test doc-verify doc-update fmt vet all ci install-hooks
-.PHONY: gpu build-gpu install-gpu docker-gpu docker-gpu-image docker-gpu-extract
+.PHONY: gpu build-gpu install-gpu docker-gpu docker-gpu-image docker-gpu-extract deb
 .PHONY: ai-test ai-test-go ai-test-cli
 .PHONY: wasm
 
@@ -42,6 +42,7 @@ help:
 	@echo "  make all          - Run fmt, vet, test, doc-check (pre-push)"
 	@echo "  make ci           - Full CI pipeline (all + doc-test)"
 	@echo "  make release      - Release validation (ci + doc-verify)"
+	@echo "  make deb          - Build .deb packages for current version"
 	@echo ""
 	@echo "Setup:"
 	@echo "  make install-hooks - Install git pre-commit hook"
@@ -119,6 +120,36 @@ release: ci doc-verify
 	@echo ""
 	@echo "✓ Release validation complete!"
 	@echo "✓ Ready for release!"
+	@echo ""
+	@echo "Don't forget: make deb"
+
+# Build debian packages for current version
+VERSION := $(shell cat cmd/ssql/version/version.txt)
+
+deb: build-gpu
+	@echo "Building debian packages for v$(VERSION)..."
+	@# Remove old debs
+	rm -f ssql_*_amd64.deb ssql-gpu_*_amd64.deb
+	@# Standard package
+	rm -rf /tmp/ssql-deb
+	mkdir -p /tmp/ssql-deb/DEBIAN /tmp/ssql-deb/usr/bin
+	go build -o /tmp/ssql-deb/usr/bin/ssql ./cmd/ssql
+	printf 'Package: ssql\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: amd64\nDepends: libc6\nMaintainer: Ross Cartlidge <ross@cartlidge.com>\nDescription: Unix-style data processing tools\nHomepage: https://github.com/rosscartlidge/ssql\n' > /tmp/ssql-deb/DEBIAN/control
+	dpkg-deb --build /tmp/ssql-deb ssql_$(VERSION)_amd64.deb
+	@# GPU package
+	rm -rf /tmp/ssql-gpu-deb
+	mkdir -p /tmp/ssql-gpu-deb/DEBIAN /tmp/ssql-gpu-deb/usr/bin /tmp/ssql-gpu-deb/usr/lib
+	cp ssql_gpu /tmp/ssql-gpu-deb/usr/bin/ssql_gpu
+	cp gpu/libssqlgpu.so /tmp/ssql-gpu-deb/usr/lib/
+	printf 'Package: ssql-gpu\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: amd64\nDepends: libc6, libcudart12\nMaintainer: Ross Cartlidge <ross@cartlidge.com>\nDescription: Unix-style data processing tools (GPU-accelerated)\nHomepage: https://github.com/rosscartlidge/ssql\n' > /tmp/ssql-gpu-deb/DEBIAN/control
+	printf '#!/bin/sh\nldconfig\n' > /tmp/ssql-gpu-deb/DEBIAN/postinst
+	chmod 755 /tmp/ssql-gpu-deb/DEBIAN/postinst
+	printf '#!/bin/sh\nldconfig\n' > /tmp/ssql-gpu-deb/DEBIAN/postrm
+	chmod 755 /tmp/ssql-gpu-deb/DEBIAN/postrm
+	dpkg-deb --build /tmp/ssql-gpu-deb ssql-gpu_$(VERSION)_amd64.deb
+	@echo ""
+	@echo "✓ Built ssql_$(VERSION)_amd64.deb"
+	@echo "✓ Built ssql-gpu_$(VERSION)_amd64.deb"
 
 # Install git hooks
 install-hooks:
