@@ -108,6 +108,9 @@ ssql from data.csv | ssql where -where age gt 30 | ssql to csv output.csv
 # High-performance Arrow format (10-20x faster I/O)
 ssql from data.arrow | ssql where -where age gt 30 | ssql to arrow output.arrow
 
+# Excel files — read and write .xlsx directly
+ssql from sales.xlsx -sheet "Q4 Results" | ssql where -where revenue gt 50000 | ssql to xlsx top.xlsx
+
 # Debug pipelines with jq (JSONL streaming format)
 ssql from data.csv | jq '.' | head -5  # Inspect data
 ssql from data.csv | ssql where -where age gt 30 | jq -s 'length'  # Count results
@@ -220,15 +223,15 @@ Pre-built `.deb` packages are available for amd64 Linux systems:
 
 **Standard version (no GPU dependencies):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.12.0_amd64.deb
-sudo dpkg -i ssql_4.12.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.16.0_amd64.deb
+sudo dpkg -i ssql_4.16.0_amd64.deb
 ssql version
 ```
 
 **GPU-accelerated version (requires NVIDIA CUDA runtime):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.12.0_amd64.deb
-sudo dpkg -i ssql-gpu_4.12.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.16.0_amd64.deb
+sudo dpkg -i ssql-gpu_4.16.0_amd64.deb
 ssql version
 ```
 
@@ -315,7 +318,7 @@ func main() {
 ### 2. 📚 **[Getting Started Guide](doc/codelab-intro.md)**
 *Learn the Go library fundamentals with hands-on examples*
 - Basic operations (Select, Where, Limit)
-- Working with CSV/JSON/Arrow data
+- Working with CSV/JSON/Arrow/XLSX data
   - **⚠️ Note**: CSV auto-parses `"25"` → `int64(25)`, use correct types with `GetOr()`
 - Creating your first visualizations
 - Real-world examples
@@ -802,7 +805,7 @@ go run examples/early_termination_example.go
 
 ## 🎯 Perfect For
 
-- **Data Scientists** - Analyze CSV/JSON/Arrow files with ease
+- **Data Scientists** - Analyze CSV/JSON/Arrow/XLSX files with ease
 - **DevOps Engineers** - Monitor systems and create dashboards
 - **Business Analysts** - Generate reports and visualizations
 - **Developers** - Build ETL pipelines and data processing tools
