@@ -75,6 +75,45 @@ data, err := ssql.ReadJSON("file.jsonl")
 if err != nil {
     log.Fatalf("Failed to read JSON: %v", err)
 }
+
+// Arrow reading (10-20x faster than CSV for large datasets)
+data, err := ssql.ReadArrow("file.arrow")
+if err != nil {
+    log.Fatalf("Failed to read Arrow: %v", err)
+}
+
+// Excel (XLSX) reading
+data, err := ssql.ReadXLSX("file.xlsx")
+if err != nil {
+    log.Fatalf("Failed to read XLSX: %v", err)
+}
+
+// XLSX with specific sheet
+data, err := ssql.ReadXLSX("file.xlsx", ssql.XLSXConfig{SheetName: "Sales"})
+
+// List sheet names
+sheets, err := ssql.ReadXLSXSheetNames("file.xlsx")
+
+// WAV audio reading (returns records with amplitude field)
+data, err := ssql.ExtractSignalFromWAV("audio.wav")
+if err != nil {
+    log.Fatalf("Failed to read WAV: %v", err)
+}
+```
+
+### Writing Data
+
+```go
+// Write Arrow (10-20x faster than CSV)
+err = ssql.WriteArrow(records, "output.arrow")
+
+// Write XLSX
+err = ssql.WriteXLSX(records, "output.xlsx")
+err = ssql.WriteXLSX(records, "output.xlsx", ssql.XLSXConfig{SheetName: "Results"})
+
+// Write WAV audio
+metadata := ssql.WAVMetadata{SampleRate: 44100, Channels: 1, BitsPerSample: 16}
+err = ssql.WriteWAV(signal, "output.wav", metadata)
 ```
 
 **⚠️ CSV Auto-Parsing**: Numeric strings become `int64`/`float64`, not strings!
@@ -869,6 +908,44 @@ func main() {
 }
 ```
 
+### Visualization Functions
+
+Beyond `QuickChart` and `InteractiveChart`, ssql provides specialized visualization:
+
+```go
+// Enhanced chart with multi-series, heatmap, log axes, color-by-field
+config := ssql.DefaultChartConfig()
+config.Title = "Revenue vs Expenses"
+config.ChartType = "line"   // line, bar, scatter, pie, radar, heatmap
+config.YFields = []string{"revenue", "expenses"}  // Multi-series
+config.LogX = true          // Logarithmic X axis
+config.LogY = true          // Logarithmic Y axis
+config.ColorField = "region"  // Color scatter points by field
+err := ssql.EnhancedChart(records, "chart.html", config)
+
+// Heatmap/spectrogram visualization (Plotly.js) - uses HeatmapConfig
+hConfig := ssql.DefaultHeatmapConfig()
+hConfig.ColorScale = "viridis"  // viridis, plasma, inferno, etc.
+hConfig.LogFreq = true          // Logarithmic frequency axis
+err := ssql.HeatmapChart(records, "xField", "yField", "zField", "heatmap.html", hConfig)
+
+// Interactive data explorer (AG-Grid + Plotly.js) - uses ExploreConfig
+eConfig := ssql.DefaultExploreConfig()
+eConfig.Title = "Sales Explorer"
+eConfig.Theme = "dark"            // "light" or "dark"
+eConfig.InitialXField = "date"
+eConfig.InitialYField = "revenue"
+err := ssql.DataExplore(records, "explorer.html", eConfig)
+
+// Animated visualization (video-player controls) - uses AnimateConfig
+aConfig := ssql.DefaultAnimateConfig()
+aConfig.ChartType = "heatmap"     // "heatmap" or "histogram"
+aConfig.FPS = 10
+aConfig.Loop = true
+aConfig.ColorScale = "plasma"
+err := ssql.AnimateChart(records, "animation.html", aConfig)
+```
+
 ### Example 7: Distinct and Union
 
 **Natural Language**: "Read data from file_a.csv and file_b.csv, combine them, and remove duplicates"
@@ -968,13 +1045,18 @@ When processing natural language requests, map phrases to ssql operations:
 7. **"sort by/order by"** → `ssql.SortBy(keyFn)` (negative for descending)
 8. **"join/combine/lookup"** → `ssql.InnerJoin(rightSeq, ssql.OnFields(...))` or `ssql.LookupJoin()`
 9. **"left join/keep all"** → `ssql.LeftJoin(rightSeq, predicate)`
-10. **"chart/visualize"** → `ssql.QuickChart()` or `ssql.InteractiveChart()`
-11. **"FFT/frequency analysis"** → `ssql.FFT(signal)` + `ssql.SpectrumToRecords()`
-12. **"spectrogram/STFT"** → `ssql.Spectrogram(signal, opts)` + `ssql.SpectrogramToRecords()`
-13. **"smooth/convolve"** → `ssql.ConvolveSame(signal, kernel)`
-14. **"deduplicate/unique"** → `ssql.DistinctBy(keyFn)` or `ssql.DistinctBy(ssql.RecordKey)`
-15. **"combine/union"** → `ssql.Concat()` + optionally `ssql.DistinctBy()`
-16. **"extract signal"** → `ssql.ExtractSignal(records, field)`
+10. **"chart/visualize"** → `ssql.QuickChart()`, `ssql.EnhancedChart()`, or `ssql.InteractiveChart()`
+11. **"heatmap/spectrogram"** → `ssql.HeatmapChart()`
+12. **"explore/dashboard"** → `ssql.DataExplore()`
+13. **"animate/animation"** → `ssql.AnimateChart()`
+14. **"FFT/frequency analysis"** → `ssql.FFT(signal)` + `ssql.SpectrumToRecords()`
+15. **"spectrogram/STFT"** → `ssql.Spectrogram(signal, opts)` + `ssql.SpectrogramToRecords()`
+16. **"smooth/convolve"** → `ssql.ConvolveSame(signal, kernel)`
+17. **"deduplicate/unique"** → `ssql.DistinctBy(keyFn)` or `ssql.DistinctBy(ssql.RecordKey)`
+18. **"combine/union"** → `ssql.Concat()` + optionally `ssql.DistinctBy()`
+19. **"extract signal"** → `ssql.ExtractSignal(records, field)`
+20. **"read/write excel"** → `ssql.ReadXLSX()`, `ssql.WriteXLSX()`
+21. **"read/write arrow"** → `ssql.ReadArrow()`, `ssql.WriteArrow()`
 
 ---
 
