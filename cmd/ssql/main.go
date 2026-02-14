@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/commands"
@@ -52,8 +53,9 @@ func buildRootCommand() *cf.Command {
 		fmt.Println()
 		fmt.Println("Use -help to see available subcommands")
 		fmt.Println()
+		binaryName := filepath.Base(os.Args[0])
 		fmt.Println("To enable tab completion, add to your ~/.bashrc:")
-		fmt.Println("  eval \"$(ssql -completion-script)\"")
+		fmt.Printf("  eval \"$(%s -completion-script)\"\n", binaryName)
 		return nil
 	}).Build()
 }
