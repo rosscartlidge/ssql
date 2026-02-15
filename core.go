@@ -916,7 +916,12 @@ func convertTo[T any](val any) (T, bool) {
 	sourceVal := reflect.ValueOf(val)
 
 	// Try direct conversion for basic types
-	if sourceVal.Type().ConvertibleTo(targetType) {
+	// Exclude numeric→string: Go's reflect converts int(100) to rune "d", not "100"
+	sourceKind := sourceVal.Kind()
+	targetKind := targetType.Kind()
+	numericToString := targetKind == reflect.String &&
+		(sourceKind >= reflect.Int && sourceKind <= reflect.Float64)
+	if !numericToString && sourceVal.Type().ConvertibleTo(targetType) {
 		converted := sourceVal.Convert(targetType)
 		return converted.Interface().(T), true
 	}
