@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -40,7 +41,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Default("").
 		Completer(&cf.StaticCompleter{Options: []string{"csv", "tsv", "json", "jsonl", "arrow", "wav", "xlsx"}}).
-		Help("Input format: csv (default), tsv, json, jsonl, arrow, wav, xlsx. Overrides extension detection for files.").
+		Help("Input format: csv, tsv, json, jsonl (default for stdin), arrow, wav, xlsx. Overrides extension detection for files.").
 		Done().
 		Flag("-channel", "-ch").
 		Int().
@@ -159,10 +160,10 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			var wavMeta *ssql.WAVMetadata // Track WAV metadata for sample_rate
 
 			if inputFile == "" {
-				// Reading from stdin - use -format flag or default to CSV
+				// Reading from stdin - use -format flag or default to JSONL
 				switch format {
-				case "json", "jsonl":
-					originalRecords = lib.ReadJSON(os.Stdin)
+				case "csv":
+					originalRecords = ssql.ReadCSVFromReader(os.Stdin, csvConfig)
 				case "arrow":
 					originalRecords = ssql.ReadArrowFromReader(os.Stdin)
 				case "tsv":
@@ -175,8 +176,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				case "xlsx":
 					return fmt.Errorf("XLSX format cannot be read from stdin (it requires random file access); use a file path instead")
-				default: // "csv" or empty
-					originalRecords = ssql.ReadCSVFromReader(os.Stdin, csvConfig)
+				default: // "json", "jsonl", or empty
+					originalRecords = readJSONSchemaAware(os.Stdin)
 				}
 			} else {
 				// Use -format flag if provided, otherwise detect from extension
@@ -229,7 +230,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						return ferr
 					}
 					defer file.Close()
-					originalRecords = lib.ReadJSON(file)
+					originalRecords = readJSONSchemaAware(file)
 				case "arrow":
 					var rerr error
 					originalRecords, rerr = ssql.ReadArrow(inputFile)
@@ -492,6 +493,33 @@ func capitalizeFieldType(typeName string) string {
 	default:
 		return "Auto"
 	}
+}
+
+// readJSONSchemaAware reads JSON/JSONL input, stripping any _schema header.
+// Handles JSON arrays (starts with '[') and JSONL (one object per line).
+// When a _schema header is present, it is consumed and records are type-coerced.
+func readJSONSchemaAware(r io.Reader) iter.Seq[ssql.Record] {
+	br := bufio.NewReader(r)
+
+	// Peek at first non-whitespace byte to detect JSON array vs JSONL
+	for {
+		b, err := br.Peek(1)
+		if err != nil {
+			return func(yield func(ssql.Record) bool) {}
+		}
+		if b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r' {
+			br.ReadByte()
+			continue
+		}
+		if b[0] == '[' {
+			// JSON array — no schema headers possible, use standard reader
+			return lib.ReadJSON(br)
+		}
+		break
+	}
+
+	// JSONL — use schema-aware reader that strips _schema headers
+	return lib.ReadJSONLWithSchema(br).Records
 }
 
 // readCSVHeadersFromReader reads just the header row from a reader
