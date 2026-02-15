@@ -713,13 +713,16 @@ This creates `animate.html` — a self-contained page with play/pause, scrubber,
 speed controls. Each frame shows the frequency spectrum (magnitude in dB) for one
 second of audio.
 
-For a heatmap view (time on X, frequency on Y, colour = magnitude):
+For a heatmap view that scrolls through a long recording, split the spectrogram
+into 10-second segments.  Each animated frame shows a full time × frequency
+heatmap for that segment:
 
 ```bash
-ssql from recording.wav | \
-  ssql spectrogram -field amplitude -window-size 44100 -hop 44100 -rate 44100 -output db | \
-  ssql to animate -frame time -x frequency -y magnitude -z magnitude \
-    -type heatmap -fps 2 -colorscale plasma -loop
+ssql from long_recording.wav | \
+  ssql spectrogram -field amplitude -window-size 4410 -hop 4410 -rate 44100 -output db | \
+  ssql update -set-expr segment 'int(time / 10)' | \
+  ssql to animate -frame segment -x time -y frequency -z magnitude \
+    -type heatmap -fps 1 -colorscale plasma -loop
 ```
 
 Smaller windows give finer time resolution at the cost of more frames:
