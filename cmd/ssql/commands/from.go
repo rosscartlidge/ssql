@@ -3,6 +3,7 @@ package commands
 import (
 	"encoding/csv"
 	"fmt"
+	"io"
 	"iter"
 	"os"
 	"sort"
@@ -39,7 +40,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Default("").
 		Completer(&cf.StaticCompleter{Options: []string{"csv", "tsv", "json", "jsonl", "arrow", "wav", "xlsx"}}).
-		Help("Input format for stdin: csv (default), tsv, json, jsonl, arrow, wav, xlsx").
+		Help("Input format: csv (default), tsv, json, jsonl, arrow, wav, xlsx. Overrides extension detection for files.").
 		Done().
 		Flag("-channel", "-ch").
 		Int().
@@ -178,35 +179,64 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					originalRecords = ssql.ReadCSVFromReader(os.Stdin, csvConfig)
 				}
 			} else {
-				// Detect format from extension
-				lower := strings.ToLower(inputFile)
-				switch {
-				case strings.HasSuffix(lower, ".csv"):
-					// Read CSV headers for schema field ordering
-					csvHeaders, _ = readCSVHeaders(inputFile)
-					originalRecords, err = ssql.ReadCSV(inputFile, csvConfig)
-					if err != nil {
-						return fmt.Errorf("reading file: %w", err)
+				// Use -format flag if provided, otherwise detect from extension
+				effectiveFormat := format
+				if effectiveFormat == "" {
+					lower := strings.ToLower(inputFile)
+					switch {
+					case strings.HasSuffix(lower, ".csv"):
+						effectiveFormat = "csv"
+					case strings.HasSuffix(lower, ".tsv"):
+						effectiveFormat = "tsv"
+					case strings.HasSuffix(lower, ".json"), strings.HasSuffix(lower, ".jsonl"):
+						effectiveFormat = "json"
+					case strings.HasSuffix(lower, ".arrow"):
+						effectiveFormat = "arrow"
+					case strings.HasSuffix(lower, ".wav"):
+						effectiveFormat = "wav"
+					case strings.HasSuffix(lower, ".xlsx"):
+						effectiveFormat = "xlsx"
+					default:
+						effectiveFormat = "json" // fallback: try JSON/JSONL auto-detect
 					}
-				case strings.HasSuffix(lower, ".tsv"):
-					originalRecords, err = ssql.ReadTSV(inputFile)
-					if err != nil {
-						return fmt.Errorf("reading TSV file: %w", err)
+				}
+				switch effectiveFormat {
+				case "csv":
+					file, ferr := os.Open(inputFile)
+					if ferr != nil {
+						return fmt.Errorf("reading file: %w", ferr)
 					}
-				case strings.HasSuffix(lower, ".json"), strings.HasSuffix(lower, ".jsonl"):
+					defer file.Close()
+					// Check if file is seekable (regular file vs pipe/process substitution)
+					if _, serr := file.Seek(0, 0); serr == nil {
+						// Seekable: read headers separately for field ordering, then reset
+						csvHeaders, _ = readCSVHeadersFromReader(file)
+						file.Seek(0, 0)
+					}
+					// Non-seekable files (pipes, process substitution) skip header
+					// ordering but still read correctly
+					originalRecords = ssql.ReadCSVFromReader(file, csvConfig)
+				case "tsv":
+					tsvFile, tsvErr := os.Open(inputFile)
+					if tsvErr != nil {
+						return fmt.Errorf("reading TSV file: %w", tsvErr)
+					}
+					defer tsvFile.Close()
+					originalRecords = ssql.ReadTSVFromReader(tsvFile)
+				case "json", "jsonl":
 					file, ferr := lib.OpenInputFile(inputFile)
 					if ferr != nil {
 						return ferr
 					}
 					defer file.Close()
 					originalRecords = lib.ReadJSON(file)
-				case strings.HasSuffix(lower, ".arrow"):
+				case "arrow":
 					var rerr error
 					originalRecords, rerr = ssql.ReadArrow(inputFile)
 					if rerr != nil {
 						return fmt.Errorf("reading Arrow file: %w", rerr)
 					}
-				case strings.HasSuffix(lower, ".wav"):
+				case "wav":
 					var werr error
 					if channel >= 0 {
 						originalRecords, wavMeta, werr = ssql.ReadWAVChannel(inputFile, channel)
@@ -216,7 +246,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					if werr != nil {
 						return fmt.Errorf("reading WAV file: %w", werr)
 					}
-				case strings.HasSuffix(lower, ".xlsx"):
+				case "xlsx":
 					var xlsxConfig []ssql.XLSXConfig
 					if sheet != "" {
 						xlsxConfig = append(xlsxConfig, ssql.XLSXConfig{SheetName: sheet})
@@ -226,14 +256,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						return fmt.Errorf("reading XLSX file: %w", err)
 					}
 				default:
-					// Try to auto-detect by peeking at content
-					file, ferr := lib.OpenInputFile(inputFile)
-					if ferr != nil {
-						return ferr
-					}
-					defer file.Close()
-					// Default to JSON/JSONL reader which auto-detects array vs lines
-					originalRecords = lib.ReadJSON(file)
+					return fmt.Errorf("unsupported format %q; supported formats: csv, tsv, json, jsonl, arrow, wav, xlsx", effectiveFormat)
 				}
 			}
 
@@ -471,15 +494,9 @@ func capitalizeFieldType(typeName string) string {
 	}
 }
 
-// readCSVHeaders reads just the header row from a CSV file
-func readCSVHeaders(filename string) ([]string, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	reader := csv.NewReader(file)
+// readCSVHeadersFromReader reads just the header row from a reader
+func readCSVHeadersFromReader(r io.Reader) ([]string, error) {
+	reader := csv.NewReader(r)
 	headers, err := reader.Read()
 	if err != nil {
 		return nil, err
