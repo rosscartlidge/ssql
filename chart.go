@@ -811,7 +811,9 @@ func generateAnimateHistogramHTML(writer *bufio.Writer, frames []animateFrameGro
 		Y     []float64 `json:"y"`
 	}
 
+	globalYMin := 0.0
 	globalYMax := 0.0
+	first := true
 	var jsonFrames []histogramFrame
 	for _, frame := range frames {
 		var xs []string
@@ -824,9 +826,13 @@ func generateAnimateHistogramHTML(writer *bufio.Writer, frames []animateFrameGro
 			}
 			xs = append(xs, xVal)
 			ys = append(ys, yVal)
-			if yVal > globalYMax {
+			if first || yVal > globalYMax {
 				globalYMax = yVal
 			}
+			if first || yVal < globalYMin {
+				globalYMin = yVal
+			}
+			first = false
 		}
 		jsonFrames = append(jsonFrames, histogramFrame{
 			Label: frame.label,
@@ -867,7 +873,7 @@ func generateAnimateHistogramHTML(writer *bufio.Writer, frames []animateFrameGro
 		Frames:     template.JS(framesJSON),
 		XLabels:    template.JS("[]"),
 		YLabels:    template.JS("[]"),
-		ZMin:       0,
+		ZMin:       globalYMin,
 		ZMax:       globalYMax,
 		FPS:        config.FPS,
 		Loop:       config.Loop,
@@ -1007,7 +1013,8 @@ const animateHTMLTemplate = `<!DOCTYPE html>
             if (CHART_TYPE === 'heatmap') {
                 layout.yaxis = { title: Y_FIELD };
             } else {
-                layout.yaxis = { title: Y_FIELD, range: [0, GLOBAL_ZMAX * 1.1] };
+                const yPad = (GLOBAL_ZMAX - GLOBAL_ZMIN) * 0.05;
+                layout.yaxis = { title: Y_FIELD, range: [GLOBAL_ZMIN - yPad, GLOBAL_ZMAX + yPad] };
             }
             return layout;
         }
