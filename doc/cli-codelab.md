@@ -719,7 +719,7 @@ heatmap for that segment:
 
 ```bash
 ssql from long_recording.wav | \
-  ssql spectrogram -field amplitude -window-size 4410 -hop 4410 -rate 44100 -output db | \
+  ssql spectrogram -field amplitude -window-size 4096 -hop 4096 -rate 44100 -output db | \
   ssql update -set-expr segment 'int(time / 10)' | \
   ssql to animate -frame segment -x time -y frequency -z magnitude \
     -type heatmap -fps 1 -colorscale plasma -loop
