@@ -526,7 +526,7 @@ ssql from signal.csv | \
 
 # FFT with sample rate for frequency calculation
 ssql from audio.csv | \
-  ssql fft -field sample -rate 44100
+  ssql fft -field amplitude -rate 44100
 
 # Include phase information
 ssql from signal.csv | \
@@ -705,7 +705,7 @@ windows (`-window-size 44100` at 44.1 kHz) so each frame is one second of audio:
 ```bash
 # Animate frequency magnitude in 1-second time slots
 ssql from recording.wav | \
-  ssql spectrogram -field sample -window-size 44100 -hop 44100 -rate 44100 -output db | \
+  ssql spectrogram -field amplitude -window-size 44100 -hop 44100 -rate 44100 -output db | \
   ssql to animate -frame time -x frequency -y magnitude -type histogram
 ```
 
@@ -717,7 +717,7 @@ For a heatmap view (time on X, frequency on Y, colour = magnitude):
 
 ```bash
 ssql from recording.wav | \
-  ssql spectrogram -field sample -window-size 44100 -hop 44100 -rate 44100 -output db | \
+  ssql spectrogram -field amplitude -window-size 44100 -hop 44100 -rate 44100 -output db | \
   ssql to animate -frame time -x frequency -y magnitude -z magnitude \
     -type heatmap -fps 2 -colorscale plasma -loop
 ```
@@ -727,7 +727,7 @@ Smaller windows give finer time resolution at the cost of more frames:
 ```bash
 # 0.5-second windows, overlapping by 50%
 ssql from recording.wav | \
-  ssql spectrogram -field sample -window-size 22050 -hop 11025 -rate 44100 -output db | \
+  ssql spectrogram -field amplitude -window-size 22050 -hop 11025 -rate 44100 -output db | \
   ssql to animate -frame time -x frequency -y magnitude -type histogram -fps 4
 ```
 
