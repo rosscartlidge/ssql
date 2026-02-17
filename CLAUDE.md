@@ -492,7 +492,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Depends: libc6
-Maintainer: Ross Cartlidge <ross@cartlidge.com>
+Maintainer: Ross Cartlidge <rosscartlidge@gmail.com>
 Description: Unix-style data processing tools
 Homepage: https://github.com/rosscartlidge/ssql
 EOF
