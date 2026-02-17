@@ -1,216 +1,202 @@
-//go:build js && wasm
-
+// Data transformation operations for the WASM module.
+// Self-contained — no ssql/v4 dependency.
 package main
 
 import (
-	"cmp"
 	"fmt"
-	"regexp"
-	"slices"
-	"strconv"
+	"math"
+	"sort"
 	"strings"
-
-	"github.com/rosscartlidge/ssql/v4"
 )
 
-// applyWhere filters records using the same comparison logic as the CLI.
-func applyWhere(records []ssql.Record, field, op, value string) []ssql.Record {
-	predicate := func(r ssql.Record) bool {
-		fieldValue, ok := ssql.Get[any](r, field)
-		if !ok {
-			return false
+// where filters rows matching a comparison condition.
+func (ds dataset) where(field, op, value string) dataset {
+	var rows []record
+	for _, r := range ds.rows {
+		fv := r.mustGet(field)
+		if fv == nil {
+			continue
 		}
-		return applyOperator(fieldValue, op, value)
+		if applyOperator(fv, op, value) {
+			rows = append(rows, r)
+		}
 	}
-	filtered := ssql.Where(predicate)(slices.Values(records))
-	return slices.Collect(filtered)
+	return dataset{s: ds.s, rows: rows}
 }
 
-// applySort sorts records by a field in ascending or descending order.
-func applySort(records []ssql.Record, field string, descending bool) []ssql.Record {
-	sorted := slices.SortedFunc(slices.Values(records), func(a, b ssql.Record) int {
-		av := ssql.GetOr[any](a, field, nil)
-		bv := ssql.GetOr[any](b, field, nil)
+// sortBy sorts rows by a field in ascending or descending order.
+func (ds dataset) sortBy(field string, desc bool) dataset {
+	rows := make([]record, len(ds.rows))
+	copy(rows, ds.rows)
+	sort.SliceStable(rows, func(i, j int) bool {
+		av := rows[i].mustGet(field)
+		bv := rows[j].mustGet(field)
 		c := compareValues(av, bv)
-		if descending {
-			return -c
+		if desc {
+			return c > 0
 		}
-		return c
+		return c < 0
 	})
-	return sorted
+	return dataset{s: ds.s, rows: rows}
 }
 
-// applyGroupBy groups records by a field and applies an aggregation function.
-func applyGroupBy(records []ssql.Record, groupField, aggField, aggFunc string) []ssql.Record {
-	grouped := ssql.GroupByFields("_group", groupField)(slices.Values(records))
+// groupBy groups rows by a field and applies an aggregation function.
+// Preserves first-seen group order.
+func (ds dataset) groupBy(groupField, aggField, aggFunc string) dataset {
+	type group struct {
+		key  any
+		rows []record
+	}
 
-	aggFn, err := buildAggregator(aggFunc, aggField)
-	if err != nil {
+	// Collect groups preserving insertion order
+	groupMap := make(map[string]*group)
+	var order []string
+	for _, r := range ds.rows {
+		key := r.mustGet(groupField)
+		keyStr := fmt.Sprintf("%v", key)
+		if g, ok := groupMap[keyStr]; ok {
+			g.rows = append(g.rows, r)
+		} else {
+			groupMap[keyStr] = &group{key: key, rows: []record{r}}
+			order = append(order, keyStr)
+		}
+	}
+
+	// Build result schema: groupField + aggFunc
+	resultFields := []string{groupField, aggFunc}
+	resultSchema := newSchema(resultFields)
+
+	var resultRows []record
+	for _, keyStr := range order {
+		g := groupMap[keyStr]
+		aggVal := aggregate(g.rows, aggField, aggFunc)
+		values := []any{g.key, aggVal}
+		resultRows = append(resultRows, record{s: resultSchema, values: values})
+	}
+
+	return dataset{s: resultSchema, rows: resultRows}
+}
+
+// aggregate computes an aggregation over a set of rows.
+func aggregate(rows []record, field, fn string) any {
+	switch strings.ToLower(fn) {
+	case "count":
+		return int64(len(rows))
+	case "sum":
+		return sumField(rows, field)
+	case "avg":
+		s := sumField(rows, field)
+		if len(rows) == 0 {
+			return float64(0)
+		}
+		return s / float64(len(rows))
+	case "min":
+		return minField(rows, field)
+	case "max":
+		return maxField(rows, field)
+	default:
 		return nil
 	}
-
-	aggregated := ssql.Aggregate("_group", map[string]ssql.AggregateFunc{
-		aggFunc: aggFn,
-	})(grouped)
-
-	return slices.Collect(aggregated)
 }
 
-// applyDistinct deduplicates records by a field's value.
-func applyDistinct(records []ssql.Record, field string) []ssql.Record {
-	keyFn := func(r ssql.Record) string {
-		return fmt.Sprintf("%v", ssql.GetOr[any](r, field, nil))
+func sumField(rows []record, field string) float64 {
+	var sum float64
+	for _, r := range rows {
+		if f, ok := toFloat64(r.mustGet(field)); ok {
+			sum += f
+		}
 	}
-	result := ssql.DistinctBy(keyFn)(slices.Values(records))
-	return slices.Collect(result)
+	return sum
 }
 
-// applyLimit returns up to n records, optionally skipping offset records first.
-func applyLimit(records []ssql.Record, n, offset int) []ssql.Record {
-	seq := slices.Values(records)
+func minField(rows []record, field string) any {
+	var minVal float64
+	found := false
+	for _, r := range rows {
+		if f, ok := toFloat64(r.mustGet(field)); ok {
+			if !found || f < minVal {
+				minVal = f
+				found = true
+			}
+		}
+	}
+	if !found {
+		return nil
+	}
+	// Return int64 if it's a whole number
+	if minVal == math.Trunc(minVal) && minVal >= math.MinInt64 && minVal <= math.MaxInt64 {
+		return int64(minVal)
+	}
+	return minVal
+}
+
+func maxField(rows []record, field string) any {
+	var maxVal float64
+	found := false
+	for _, r := range rows {
+		if f, ok := toFloat64(r.mustGet(field)); ok {
+			if !found || f > maxVal {
+				maxVal = f
+				found = true
+			}
+		}
+	}
+	if !found {
+		return nil
+	}
+	if maxVal == math.Trunc(maxVal) && maxVal >= math.MinInt64 && maxVal <= math.MaxInt64 {
+		return int64(maxVal)
+	}
+	return maxVal
+}
+
+// distinct deduplicates rows by a field value.
+func (ds dataset) distinct(field string) dataset {
+	seen := make(map[string]bool)
+	var rows []record
+	for _, r := range ds.rows {
+		key := fmt.Sprintf("%v", r.mustGet(field))
+		if !seen[key] {
+			seen[key] = true
+			rows = append(rows, r)
+		}
+	}
+	return dataset{s: ds.s, rows: rows}
+}
+
+// limit returns up to n rows, optionally skipping offset rows first.
+func (ds dataset) limit(n, offset int) dataset {
+	rows := ds.rows
 	if offset > 0 {
-		seq = ssql.Offset[ssql.Record](offset)(seq)
+		if offset >= len(rows) {
+			return dataset{s: ds.s, rows: nil}
+		}
+		rows = rows[offset:]
 	}
-	if n > 0 {
-		seq = ssql.Limit[ssql.Record](n)(seq)
+	if n > 0 && n < len(rows) {
+		rows = rows[:n]
 	}
-	return slices.Collect(seq)
+	return dataset{s: ds.s, rows: rows}
 }
 
-// buildAggregator creates an AggregateFunc from a function name and field.
-func buildAggregator(function, field string) (ssql.AggregateFunc, error) {
-	switch strings.ToLower(function) {
-	case "count":
-		return ssql.Count(), nil
-	case "sum":
-		return ssql.Sum(field), nil
-	case "avg":
-		return ssql.Avg(field), nil
-	case "min":
-		return ssql.Min[float64](field), nil
-	case "max":
-		return ssql.Max[float64](field), nil
-	default:
-		return nil, fmt.Errorf("unknown aggregation function: %s", function)
-	}
-}
-
-// compareValues compares two record field values, handling mixed types.
-func compareValues(a, b any) int {
-	if a == nil && b == nil {
-		return 0
-	}
-	if a == nil {
-		return -1
-	}
-	if b == nil {
-		return 1
-	}
-
-	// Try numeric comparison
-	af, aOk := toFloat64(a)
-	bf, bOk := toFloat64(b)
-	if aOk && bOk {
-		return cmp.Compare(af, bf)
-	}
-
-	// Fall back to string comparison
-	return cmp.Compare(fmt.Sprintf("%v", a), fmt.Sprintf("%v", b))
-}
-
-func toFloat64(v any) (float64, bool) {
-	switch val := v.(type) {
-	case float64:
-		return val, true
-	case int64:
-		return float64(val), true
-	case int:
-		return float64(val), true
-	default:
-		return 0, false
-	}
-}
-
-// applyOperator applies a comparison operator (same logic as CLI helpers.go).
-func applyOperator(fieldValue any, op string, compareValue string) bool {
-	switch op {
-	case "eq":
-		return compareEqual(fieldValue, compareValue)
-	case "ne":
-		return !compareEqual(fieldValue, compareValue)
-	case "gt":
-		return compareGreater(fieldValue, compareValue)
-	case "ge":
-		return compareGreater(fieldValue, compareValue) || compareEqual(fieldValue, compareValue)
-	case "lt":
-		return compareLess(fieldValue, compareValue)
-	case "le":
-		return compareLess(fieldValue, compareValue) || compareEqual(fieldValue, compareValue)
-	case "contains":
-		return strings.Contains(fmt.Sprintf("%v", fieldValue), compareValue)
-	case "startswith":
-		return strings.HasPrefix(fmt.Sprintf("%v", fieldValue), compareValue)
-	case "endswith":
-		return strings.HasSuffix(fmt.Sprintf("%v", fieldValue), compareValue)
-	case "regex":
-		re, err := regexp.Compile(compareValue)
-		if err != nil {
-			return false
-		}
-		return re.MatchString(fmt.Sprintf("%v", fieldValue))
-	default:
-		return false
-	}
-}
-
-func compareEqual(fieldValue any, compareValue string) bool {
-	switch v := fieldValue.(type) {
-	case string:
-		return v == compareValue
-	case int64:
-		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
-			return v == num
-		}
-	case float64:
-		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
-			return v == num
-		}
-	case bool:
-		if b, err := strconv.ParseBool(compareValue); err == nil {
-			return v == b
+// pipeline executes a sequence of operations.
+func (ds dataset) pipeline(ops []pipelineOp) (dataset, error) {
+	result := ds
+	for _, op := range ops {
+		switch op.Op {
+		case "where":
+			result = result.where(op.Field, op.Operator, op.Value)
+		case "sort":
+			result = result.sortBy(op.Field, op.Desc)
+		case "group_by":
+			result = result.groupBy(op.GroupField, op.AggField, op.AggFunc)
+		case "distinct":
+			result = result.distinct(op.Field)
+		case "limit":
+			result = result.limit(op.N, op.Offset)
+		default:
+			return dataset{}, fmt.Errorf("unknown operation: %s", op.Op)
 		}
 	}
-	return fmt.Sprintf("%v", fieldValue) == compareValue
-}
-
-func compareGreater(fieldValue any, compareValue string) bool {
-	switch v := fieldValue.(type) {
-	case int64:
-		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
-			return v > num
-		}
-	case float64:
-		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
-			return v > num
-		}
-	case string:
-		return v > compareValue
-	}
-	return false
-}
-
-func compareLess(fieldValue any, compareValue string) bool {
-	switch v := fieldValue.(type) {
-	case int64:
-		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
-			return v < num
-		}
-	case float64:
-		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
-			return v < num
-		}
-	case string:
-		return v < compareValue
-	}
-	return false
+	return result, nil
 }
