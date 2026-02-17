@@ -1135,6 +1135,139 @@ func Aggregate(sequenceField string, aggregations map[string]AggregateFunc) Filt
 	}
 }
 
+// Pivot creates a cross-tabulation (pivot table): unique values of colField become columns.
+// Each cell contains the result of applying aggFunc to valField values grouped by (rowField, colField).
+// Supported aggFunc values: "count", "sum", "avg", "min", "max".
+//
+// Example:
+//
+//	// Input: dept, quarter, revenue
+//	// Output: dept, Q1, Q2, Q3, Q4 (with aggregated revenue values)
+//	pivoted := ssql.Pivot("dept", "quarter", "revenue", "sum")(records)
+func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] {
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			// Materialize all records (pivot needs two passes)
+			var all []Record
+			for r := range input {
+				all = append(all, r)
+			}
+			if len(all) == 0 {
+				return
+			}
+
+			// Collect unique column values in first-seen order
+			colSeen := make(map[string]bool)
+			var colOrder []string
+			for _, r := range all {
+				cv := fmt.Sprintf("%v", GetOr(r, colField, ""))
+				if !colSeen[cv] {
+					colSeen[cv] = true
+					colOrder = append(colOrder, cv)
+				}
+			}
+
+			// Group by (rowField, colField) pair
+			type cellKey struct{ row, col string }
+			cells := make(map[cellKey][]float64)
+			rowOriginal := make(map[string]any) // preserve original row key values
+			var rowOrder []string
+			rowSeen := make(map[string]bool)
+
+			for _, r := range all {
+				rv := GetOr[any](r, rowField, "")
+				rvStr := fmt.Sprintf("%v", rv)
+				cv := fmt.Sprintf("%v", GetOr(r, colField, ""))
+
+				ck := cellKey{rvStr, cv}
+				if aggFunc == "count" {
+					cells[ck] = append(cells[ck], 1)
+				} else {
+					if v, ok := Get[float64](r, valField); ok {
+						cells[ck] = append(cells[ck], v)
+					}
+				}
+
+				if !rowSeen[rvStr] {
+					rowSeen[rvStr] = true
+					rowOriginal[rvStr] = rv
+					rowOrder = append(rowOrder, rvStr)
+				}
+			}
+
+			// Emit one record per row value
+			for _, rvStr := range rowOrder {
+				mut := MakeMutableRecord()
+				// Set row field preserving original type
+				rowVal := rowOriginal[rvStr]
+				switch v := rowVal.(type) {
+				case string:
+					mut = mut.String(rowField, v)
+				case int64:
+					mut = mut.Int(rowField, v)
+				case float64:
+					mut = mut.Float(rowField, v)
+				default:
+					mut = mut.String(rowField, fmt.Sprintf("%v", v))
+				}
+
+				for _, cv := range colOrder {
+					ck := cellKey{rvStr, cv}
+					vals := cells[ck]
+					switch aggFunc {
+					case "count":
+						mut = mut.Int(cv, int64(len(vals)))
+					case "sum":
+						var sum float64
+						for _, v := range vals {
+							sum += v
+						}
+						mut = mut.Float(cv, sum)
+					case "avg":
+						var sum float64
+						for _, v := range vals {
+							sum += v
+						}
+						if len(vals) > 0 {
+							mut = mut.Float(cv, sum/float64(len(vals)))
+						} else {
+							mut = mut.Float(cv, 0)
+						}
+					case "min":
+						if len(vals) > 0 {
+							min := vals[0]
+							for _, v := range vals[1:] {
+								if v < min {
+									min = v
+								}
+							}
+							mut = mut.Float(cv, min)
+						} else {
+							mut = mut.Float(cv, 0)
+						}
+					case "max":
+						if len(vals) > 0 {
+							max := vals[0]
+							for _, v := range vals[1:] {
+								if v > max {
+									max = v
+								}
+							}
+							mut = mut.Float(cv, max)
+						} else {
+							mut = mut.Float(cv, 0)
+						}
+					}
+				}
+
+				if !yield(mut.Freeze()) {
+					return
+				}
+			}
+		}
+	}
+}
+
 // ============================================================================
 // COMMON AGGREGATION FUNCTIONS
 // ============================================================================

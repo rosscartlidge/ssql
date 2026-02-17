@@ -926,6 +926,137 @@ func TestGroupByEmptyInput(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// PIVOT OPERATIONS TESTS
+// ============================================================================
+
+func TestPivot(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "Eng", "quarter": "Q1", "revenue": float64(100)}),
+		NewRecord(map[string]any{"dept": "Eng", "quarter": "Q2", "revenue": float64(200)}),
+		NewRecord(map[string]any{"dept": "Sales", "quarter": "Q1", "revenue": float64(150)}),
+	})
+
+	result := slices.Collect(Pivot("dept", "quarter", "revenue", "sum")(input))
+
+	if len(result) != 2 {
+		t.Fatalf("Pivot should return 2 rows, got %d", len(result))
+	}
+
+	// Check Eng row
+	eng := result[0]
+	if GetOr(eng, "dept", "") != "Eng" {
+		t.Errorf("First row dept should be Eng, got %v", GetOr(eng, "dept", ""))
+	}
+	if GetOr(eng, "Q1", float64(0)) != 100 {
+		t.Errorf("Eng/Q1 should be 100, got %v", GetOr(eng, "Q1", float64(0)))
+	}
+	if GetOr(eng, "Q2", float64(0)) != 200 {
+		t.Errorf("Eng/Q2 should be 200, got %v", GetOr(eng, "Q2", float64(0)))
+	}
+
+	// Check Sales row
+	sales := result[1]
+	if GetOr(sales, "dept", "") != "Sales" {
+		t.Errorf("Second row dept should be Sales, got %v", GetOr(sales, "dept", ""))
+	}
+	if GetOr(sales, "Q1", float64(0)) != 150 {
+		t.Errorf("Sales/Q1 should be 150, got %v", GetOr(sales, "Q1", float64(0)))
+	}
+}
+
+func TestPivotCount(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "Eng", "quarter": "Q1", "revenue": float64(100)}),
+		NewRecord(map[string]any{"dept": "Eng", "quarter": "Q1", "revenue": float64(50)}),
+		NewRecord(map[string]any{"dept": "Eng", "quarter": "Q2", "revenue": float64(200)}),
+		NewRecord(map[string]any{"dept": "Sales", "quarter": "Q1", "revenue": float64(150)}),
+	})
+
+	result := slices.Collect(Pivot("dept", "quarter", "revenue", "count")(input))
+
+	if len(result) != 2 {
+		t.Fatalf("Pivot count should return 2 rows, got %d", len(result))
+	}
+
+	eng := result[0]
+	if GetOr(eng, "Q1", int64(0)) != int64(2) {
+		t.Errorf("Eng/Q1 count should be 2, got %v", GetOr(eng, "Q1", int64(0)))
+	}
+	if GetOr(eng, "Q2", int64(0)) != int64(1) {
+		t.Errorf("Eng/Q2 count should be 1, got %v", GetOr(eng, "Q2", int64(0)))
+	}
+
+	sales := result[1]
+	if GetOr(sales, "Q1", int64(0)) != int64(1) {
+		t.Errorf("Sales/Q1 count should be 1, got %v", GetOr(sales, "Q1", int64(0)))
+	}
+}
+
+func TestPivotMissingCells(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "Eng", "quarter": "Q1", "revenue": float64(100)}),
+		NewRecord(map[string]any{"dept": "Eng", "quarter": "Q2", "revenue": float64(200)}),
+		NewRecord(map[string]any{"dept": "Sales", "quarter": "Q1", "revenue": float64(150)}),
+		// Sales/Q2 is missing - should be zero-filled
+	})
+
+	result := slices.Collect(Pivot("dept", "quarter", "revenue", "sum")(input))
+
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(result))
+	}
+
+	// Sales/Q2 should be 0
+	sales := result[1]
+	if GetOr(sales, "Q2", float64(-1)) != 0 {
+		t.Errorf("Sales/Q2 (missing) should be 0, got %v", GetOr(sales, "Q2", float64(-1)))
+	}
+}
+
+func TestPivotPreservesOrder(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "Charlie", "q": "B", "v": float64(1)}),
+		NewRecord(map[string]any{"dept": "Alice", "q": "A", "v": float64(2)}),
+		NewRecord(map[string]any{"dept": "Bob", "q": "B", "v": float64(3)}),
+		NewRecord(map[string]any{"dept": "Alice", "q": "B", "v": float64(4)}),
+	})
+
+	result := slices.Collect(Pivot("dept", "q", "v", "sum")(input))
+
+	if len(result) != 3 {
+		t.Fatalf("Expected 3 rows, got %d", len(result))
+	}
+
+	// Row order should be first-seen: Charlie, Alice, Bob
+	if GetOr(result[0], "dept", "") != "Charlie" {
+		t.Errorf("First row should be Charlie, got %s", GetOr(result[0], "dept", ""))
+	}
+	if GetOr(result[1], "dept", "") != "Alice" {
+		t.Errorf("Second row should be Alice, got %s", GetOr(result[1], "dept", ""))
+	}
+	if GetOr(result[2], "dept", "") != "Bob" {
+		t.Errorf("Third row should be Bob, got %s", GetOr(result[2], "dept", ""))
+	}
+
+	// Column order should be first-seen: B, A
+	// Verify Alice has both columns
+	if GetOr(result[1], "A", float64(0)) != 2 {
+		t.Errorf("Alice/A should be 2, got %v", GetOr(result[1], "A", float64(0)))
+	}
+	if GetOr(result[1], "B", float64(0)) != 4 {
+		t.Errorf("Alice/B should be 4, got %v", GetOr(result[1], "B", float64(0)))
+	}
+}
+
+func TestPivotEmpty(t *testing.T) {
+	empty := func(yield func(Record) bool) {}
+	result := slices.Collect(Pivot("dept", "q", "v", "sum")(empty))
+	if len(result) != 0 {
+		t.Errorf("Pivot on empty should return 0 rows, got %d", len(result))
+	}
+}
+
 func TestAggregateNoSequenceField(t *testing.T) {
 	input := slices.Values([]Record{
 		NewRecord(map[string]any{"dept": "Eng", "count": int64(5)}), // No sequence field

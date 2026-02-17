@@ -317,6 +317,12 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			wantSubstring:  `ssql.GroupByFields`,
 		},
 		{
+			name:           "pivot",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test pivot -row dept -col quarter -val revenue -func sum`,
+			expectFragment: true,
+			wantSubstring:  `ssql.Pivot`,
+		},
+		{
 			name:           "to csv",
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to csv /tmp/out.csv`,
 			expectFragment: true,
