@@ -495,6 +495,13 @@ func errorJSON(msg string) string {
 	return buf.String()
 }
 
+// aggSpec describes one aggregation in a group_by_multi operation.
+type aggSpec struct {
+	Field string
+	Func  string
+	Alias string
+}
+
 // pipelineOp describes one operation in a pipeline.
 type pipelineOp struct {
 	Op         string
@@ -507,6 +514,16 @@ type pipelineOp struct {
 	AggFunc    string
 	N          int
 	Offset     int
+	// group_by_multi
+	GroupFields []string
+	Aggs        []aggSpec
+	// compute
+	Name string
+	Expr string
+	// pivot
+	RowField string
+	ColField string
+	ValField string
 }
 
 // parsePipelineOps parses a JSON array of pipeline operation objects.
@@ -565,6 +582,20 @@ func parsePipelineOps(jsonStr string) ([]pipelineOp, error) {
 				op.N = toInt(vals[i])
 			case "offset":
 				op.Offset = toInt(vals[i])
+			case "groupFields":
+				op.GroupFields = parseStringArray(vals[i])
+			case "aggs":
+				op.Aggs = parseAggSpecs(vals[i])
+			case "name":
+				op.Name, _ = vals[i].(string)
+			case "expr":
+				op.Expr, _ = vals[i].(string)
+			case "rowField":
+				op.RowField, _ = vals[i].(string)
+			case "colField":
+				op.ColField, _ = vals[i].(string)
+			case "valField":
+				op.ValField, _ = vals[i].(string)
 			}
 		}
 		ops = append(ops, op)
@@ -577,4 +608,99 @@ func parsePipelineOps(jsonStr string) ([]pipelineOp, error) {
 	}
 
 	return ops, nil
+}
+
+// parseStringArray extracts a []string from a rawJSON array value.
+func parseStringArray(v any) []string {
+	raw, ok := v.(rawJSON)
+	if !ok {
+		return nil
+	}
+	b := []byte(string(raw))
+	pos := 0
+	n := len(b)
+	pos = skipWS(b, pos, n)
+	if pos >= n || b[pos] != '[' {
+		return nil
+	}
+	pos++
+	var result []string
+	for {
+		pos = skipWS(b, pos, n)
+		if pos >= n {
+			return result
+		}
+		if b[pos] == ']' {
+			return result
+		}
+		if b[pos] == '"' {
+			s, newPos, err := parseString(b, pos, n)
+			if err != nil {
+				return result
+			}
+			result = append(result, s)
+			pos = newPos
+		} else {
+			pos++
+			continue
+		}
+		pos = skipWS(b, pos, n)
+		if pos < n && b[pos] == ',' {
+			pos++
+		}
+	}
+}
+
+// parseAggSpecs extracts []aggSpec from a rawJSON array of objects.
+func parseAggSpecs(v any) []aggSpec {
+	raw, ok := v.(rawJSON)
+	if !ok {
+		return nil
+	}
+	b := []byte(string(raw))
+	pos := 0
+	n := len(b)
+	pos = skipWS(b, pos, n)
+	if pos >= n || b[pos] != '[' {
+		return nil
+	}
+	pos++
+	var result []aggSpec
+	for {
+		pos = skipWS(b, pos, n)
+		if pos >= n {
+			return result
+		}
+		if b[pos] == ']' {
+			return result
+		}
+		if b[pos] != '{' {
+			pos++
+			continue
+		}
+		fields, vals, newPos, err := parseObject(b, pos, n)
+		if err != nil {
+			return result
+		}
+		pos = newPos
+		spec := aggSpec{}
+		for i, f := range fields {
+			switch f {
+			case "field":
+				spec.Field, _ = vals[i].(string)
+			case "func":
+				spec.Func, _ = vals[i].(string)
+			case "alias":
+				spec.Alias, _ = vals[i].(string)
+			}
+		}
+		if spec.Alias == "" {
+			spec.Alias = spec.Func
+		}
+		result = append(result, spec)
+		pos = skipWS(b, pos, n)
+		if pos < n && b[pos] == ',' {
+			pos++
+		}
+	}
 }

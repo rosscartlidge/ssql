@@ -150,6 +150,58 @@ func maxField(rows []record, field string) any {
 	return maxVal
 }
 
+// groupByMulti groups rows by multiple fields and applies multiple aggregations.
+// Preserves first-seen group order.
+func (ds dataset) groupByMulti(groupFields []string, aggs []aggSpec) dataset {
+	type group struct {
+		keys []any
+		rows []record
+	}
+
+	groupMap := make(map[string]*group)
+	var order []string
+	for _, r := range ds.rows {
+		// Build composite key
+		var keyParts []string
+		var keys []any
+		for _, gf := range groupFields {
+			v := r.mustGet(gf)
+			keys = append(keys, v)
+			keyParts = append(keyParts, fmt.Sprintf("%v", v))
+		}
+		keyStr := strings.Join(keyParts, "\x00")
+		if g, ok := groupMap[keyStr]; ok {
+			g.rows = append(g.rows, r)
+		} else {
+			groupMap[keyStr] = &group{keys: keys, rows: []record{r}}
+			order = append(order, keyStr)
+		}
+	}
+
+	// Build result schema: groupFields... + agg aliases...
+	resultFields := make([]string, 0, len(groupFields)+len(aggs))
+	resultFields = append(resultFields, groupFields...)
+	for _, a := range aggs {
+		resultFields = append(resultFields, a.Alias)
+	}
+	resultSchema := newSchema(resultFields)
+
+	var resultRows []record
+	for _, keyStr := range order {
+		g := groupMap[keyStr]
+		values := make([]any, len(resultFields))
+		// Copy group key values
+		copy(values, g.keys)
+		// Compute each aggregation
+		for i, a := range aggs {
+			values[len(groupFields)+i] = aggregate(g.rows, a.Field, a.Func)
+		}
+		resultRows = append(resultRows, record{s: resultSchema, values: values})
+	}
+
+	return dataset{s: resultSchema, rows: resultRows}
+}
+
 // distinct deduplicates rows by a field value.
 func (ds dataset) distinct(field string) dataset {
 	seen := make(map[string]bool)
@@ -179,6 +231,113 @@ func (ds dataset) limit(n, offset int) dataset {
 	return dataset{s: ds.s, rows: rows}
 }
 
+// compute adds a derived field computed from an arithmetic expression.
+func (ds dataset) compute(name, expression string) (dataset, error) {
+	expr, err := parseExpr(expression)
+	if err != nil {
+		return dataset{}, fmt.Errorf("parse expression %q: %w", expression, err)
+	}
+
+	// Build expanded schema: original fields + new computed field
+	newFields := make([]string, len(ds.s.fields)+1)
+	copy(newFields, ds.s.fields)
+	newFields[len(ds.s.fields)] = name
+	newSchema := newSchema(newFields)
+
+	rows := make([]record, len(ds.rows))
+	for i, r := range ds.rows {
+		val, err := expr.eval(r)
+		if err != nil {
+			// On eval error, set field to nil
+			values := make([]any, len(newFields))
+			copy(values, r.values)
+			rows[i] = record{s: newSchema, values: values}
+			continue
+		}
+		values := make([]any, len(newFields))
+		copy(values, r.values)
+		// Store as int64 if it's a whole number, else float64
+		if val == math.Trunc(val) && val >= math.MinInt64 && val <= math.MaxInt64 && !math.IsNaN(val) && !math.IsInf(val, 0) {
+			values[len(ds.s.fields)] = int64(val)
+		} else {
+			values[len(ds.s.fields)] = val
+		}
+		rows[i] = record{s: newSchema, values: values}
+	}
+
+	return dataset{s: newSchema, rows: rows}, nil
+}
+
+// pivot creates a cross-tabulation: unique values of colField become columns.
+func (ds dataset) pivot(rowField, colField, valField, aggFunc string) dataset {
+	// Collect unique column values in first-seen order
+	colMap := make(map[string]bool)
+	var colOrder []string
+	for _, r := range ds.rows {
+		cv := fmt.Sprintf("%v", r.mustGet(colField))
+		if !colMap[cv] {
+			colMap[cv] = true
+			colOrder = append(colOrder, cv)
+		}
+	}
+
+	// Group by (rowField, colField) pair
+	type cellKey struct {
+		row, col string
+	}
+	type cell struct {
+		rows []record
+	}
+	cells := make(map[cellKey]*cell)
+	rowMap := make(map[string]any) // preserve original row key values
+	var rowOrder []string
+	rowSeen := make(map[string]bool)
+	for _, r := range ds.rows {
+		rv := r.mustGet(rowField)
+		rvStr := fmt.Sprintf("%v", rv)
+		cv := fmt.Sprintf("%v", r.mustGet(colField))
+		ck := cellKey{rvStr, cv}
+		if c, ok := cells[ck]; ok {
+			c.rows = append(c.rows, r)
+		} else {
+			cells[ck] = &cell{rows: []record{r}}
+		}
+		if !rowSeen[rvStr] {
+			rowSeen[rvStr] = true
+			rowMap[rvStr] = rv
+			rowOrder = append(rowOrder, rvStr)
+		}
+	}
+
+	// Build result schema: rowField + each colField value
+	resultFields := make([]string, 0, 1+len(colOrder))
+	resultFields = append(resultFields, rowField)
+	resultFields = append(resultFields, colOrder...)
+	resultSchema := newSchema(resultFields)
+
+	var resultRows []record
+	for _, rvStr := range rowOrder {
+		values := make([]any, len(resultFields))
+		values[0] = rowMap[rvStr]
+		for i, cv := range colOrder {
+			ck := cellKey{rvStr, cv}
+			if c, ok := cells[ck]; ok {
+				values[i+1] = aggregate(c.rows, valField, aggFunc)
+			} else {
+				// No data for this cell — default to 0 for numeric aggs, nil for count
+				if aggFunc == "count" {
+					values[i+1] = int64(0)
+				} else {
+					values[i+1] = float64(0)
+				}
+			}
+		}
+		resultRows = append(resultRows, record{s: resultSchema, values: values})
+	}
+
+	return dataset{s: resultSchema, rows: resultRows}
+}
+
 // pipeline executes a sequence of operations.
 func (ds dataset) pipeline(ops []pipelineOp) (dataset, error) {
 	result := ds
@@ -190,10 +349,20 @@ func (ds dataset) pipeline(ops []pipelineOp) (dataset, error) {
 			result = result.sortBy(op.Field, op.Desc)
 		case "group_by":
 			result = result.groupBy(op.GroupField, op.AggField, op.AggFunc)
+		case "group_by_multi":
+			result = result.groupByMulti(op.GroupFields, op.Aggs)
 		case "distinct":
 			result = result.distinct(op.Field)
 		case "limit":
 			result = result.limit(op.N, op.Offset)
+		case "compute":
+			var err error
+			result, err = result.compute(op.Name, op.Expr)
+			if err != nil {
+				return dataset{}, fmt.Errorf("compute %q: %w", op.Name, err)
+			}
+		case "pivot":
+			result = result.pivot(op.RowField, op.ColField, op.ValField, op.AggFunc)
 		default:
 			return dataset{}, fmt.Errorf("unknown operation: %s", op.Op)
 		}

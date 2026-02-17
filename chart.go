@@ -3363,33 +3363,105 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             font-weight: 500;
         }
 
-        .agg-panel {
-            background: var(--hover-bg);
-            border-radius: 8px;
-            padding: 12px;
-            margin-top: 16px;
+        .pipeline-panel {
+            margin-top: 8px;
         }
 
-        .agg-panel select, .agg-panel button {
-            width: 100%;
-            margin-bottom: 8px;
+        .pipeline-step {
+            background: var(--hover-bg);
+            border-radius: 6px;
             padding: 8px;
+            margin-bottom: 6px;
+        }
+
+        .pipeline-step-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .pipeline-step-type {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: #0d6efd;
+        }
+
+        .pipeline-step-remove {
+            background: none;
+            border: none;
+            color: #dc3545;
+            cursor: pointer;
+            font-size: 1rem;
+            padding: 0 4px;
+            line-height: 1;
+        }
+
+        .pipeline-step select, .pipeline-step input {
+            width: 100%;
+            margin-bottom: 4px;
+            padding: 6px;
             border: 1px solid var(--border-color);
             border-radius: 4px;
             background: var(--panel-bg);
             color: var(--text-color);
+            font-size: 0.8125rem;
         }
 
-        .agg-panel button {
+        .pipeline-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .pipeline-actions select, .pipeline-actions button {
+            padding: 6px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--panel-bg);
+            color: var(--text-color);
+            font-size: 0.8125rem;
+            cursor: pointer;
+        }
+
+        .pipeline-result {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+            padding: 6px 10px;
+            background: var(--hover-bg);
+            border-radius: 4px;
+            font-size: 0.8125rem;
+        }
+
+        .pipeline-result-badge {
+            background: #198754;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 0.75rem;
+        }
+
+        .btn-run {
             background: #0d6efd;
             color: white;
             border: none;
             cursor: pointer;
             font-weight: 500;
+            flex: 1;
         }
 
-        .agg-panel button:hover {
+        .btn-run:hover {
             background: #0b5ed7;
+        }
+
+        .btn-reset {
+            background: #6c757d;
+            color: white;
+            border: none;
+            cursor: pointer;
         }
 
         .btn-group {
@@ -3467,14 +3539,14 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             const [chartType, setChartType] = useState('line');
             const [xField, setXField] = useState(CONFIG.initialXField || (SCHEMA.fields && SCHEMA.fields[0]) || '');
             const [yField, setYField] = useState(CONFIG.initialYField || (SCHEMA.numericFields && SCHEMA.numericFields[0]) || '');
-            const [aggGroupBy, setAggGroupBy] = useState('');
-            const [aggFunc, setAggFunc] = useState('count');
-            const [aggValueField, setAggValueField] = useState('');
             const [displayData, setDisplayData] = useState(DATA);
-            const [isAggregated, setIsAggregated] = useState(false);
+            const [pipelineSteps, setPipelineSteps] = useState([]);
+            const [pipelineResult, setPipelineResult] = useState(null);
             const chartRef = useRef(null);
             const gridRef = useRef(null);
             const gridApiRef = useRef(null);
+            const gridOpsRef = useRef([]);  // Current grid filter/sort ops
+            const suppressGridEvents = useRef(false);  // Prevent re-entrant updates
 
             // Column definitions for AG-Grid
             const columnDefs = useMemo(() => {
@@ -3491,6 +3563,71 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 }));
             }, [displayData]);
 
+            // Convert AG-Grid filter model to WASM where ops
+            const convertFilterModelToOps = (filterModel) => {
+                const opMap = {
+                    equals: 'eq', notEqual: 'ne',
+                    greaterThan: 'gt', greaterThanOrEqual: 'ge',
+                    lessThan: 'lt', lessThanOrEqual: 'le',
+                    contains: 'contains', startsWith: 'startswith', endsWith: 'endswith'
+                };
+                const ops = [];
+                for (const [field, filter] of Object.entries(filterModel)) {
+                    if (filter.operator && filter.conditions) {
+                        // Combined filter (AND/OR) — use first condition
+                        for (const cond of filter.conditions) {
+                            const wasmOp = opMap[cond.type];
+                            if (wasmOp && (cond.filter !== undefined && cond.filter !== null)) {
+                                ops.push({ op: 'where', field, operator: wasmOp, value: String(cond.filter) });
+                            }
+                        }
+                    } else {
+                        const wasmOp = opMap[filter.type];
+                        if (wasmOp && (filter.filter !== undefined && filter.filter !== null)) {
+                            ops.push({ op: 'where', field, operator: wasmOp, value: String(filter.filter) });
+                        }
+                    }
+                }
+                return ops;
+            };
+
+            // Convert AG-Grid sort model to WASM sort ops
+            const convertSortModelToOps = (colState) => {
+                return colState
+                    .filter(c => c.sort)
+                    .map(c => ({ op: 'sort', field: c.colId, desc: c.sort === 'desc' }));
+            };
+
+            // Run combined grid + pipeline ops through WASM
+            const runCombinedPipeline = (newGridOps) => {
+                gridOpsRef.current = newGridOps;
+                if (!ssqlWasm) return; // Only works with WASM
+                const allOps = [...newGridOps, ...pipelineSteps.map(step => {
+                    switch (step.type) {
+                        case 'where': return { op: 'where', field: step.field, operator: step.operator, value: step.value };
+                        case 'sort': return { op: 'sort', field: step.field, desc: step.desc };
+                        case 'group_by': return { op: 'group_by', groupField: step.groupField, aggField: step.aggField, aggFunc: step.aggFunc };
+                        case 'group_by_multi': return { op: 'group_by_multi', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
+                        case 'distinct': return { op: 'distinct', field: step.field };
+                        case 'limit': return { op: 'limit', n: step.n, offset: step.offset };
+                        case 'compute': return { op: 'compute', name: step.name, expr: step.expr };
+                        case 'pivot': return { op: 'pivot', rowField: step.rowField, colField: step.colField, valField: step.valField, aggFunc: step.aggFunc };
+                    }
+                })];
+                if (allOps.length === 0) return;
+                try {
+                    const result = ssqlWasm.pipeline(DATA, allOps);
+                    suppressGridEvents.current = true;
+                    if (gridApiRef.current) {
+                        gridApiRef.current.setGridOption('rowData', result);
+                    }
+                    setPipelineResult({ inputCount: DATA.length, outputCount: result.length });
+                    setTimeout(() => { suppressGridEvents.current = false; }, 0);
+                } catch(e) {
+                    console.warn('WASM grid pipeline failed:', e);
+                }
+            };
+
             // Grid options
             const gridOptions = useMemo(() => ({
                 defaultColDef: {
@@ -3506,6 +3643,22 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 rowSelection: 'multiple',
                 onGridReady: (params) => {
                     gridApiRef.current = params.api;
+                },
+                onFilterChanged: (params) => {
+                    if (!ssqlWasm || suppressGridEvents.current) return;
+                    const filterModel = params.api.getFilterModel();
+                    const filterOps = convertFilterModelToOps(filterModel);
+                    const colState = params.api.getColumnState() || [];
+                    const sortOps = convertSortModelToOps(colState);
+                    runCombinedPipeline([...filterOps, ...sortOps]);
+                },
+                onSortChanged: (params) => {
+                    if (!ssqlWasm || suppressGridEvents.current) return;
+                    const filterModel = params.api.getFilterModel();
+                    const filterOps = convertFilterModelToOps(filterModel);
+                    const colState = params.api.getColumnState() || [];
+                    const sortOps = convertSortModelToOps(colState);
+                    runCombinedPipeline([...filterOps, ...sortOps]);
                 }
             }), []);
 
@@ -3587,37 +3740,217 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 Plotly.react(chartRef.current, [trace], layout, config);
             }, [chartType, xField, yField, displayData]);
 
-            // Apply aggregation (uses WASM when available, JS fallback)
-            const applyAggregation = () => {
-                if (!aggGroupBy) {
+            // Pipeline step management
+            const addStep = (type) => {
+                const defaults = {
+                    where: { type: 'where', field: '', operator: 'eq', value: '' },
+                    sort: { type: 'sort', field: '', desc: false },
+                    group_by: { type: 'group_by', groupField: '', aggField: '', aggFunc: 'count' },
+                    group_by_multi: { type: 'group_by_multi', groupFields: [''], aggs: [{ field: '', func: 'count', alias: 'count' }] },
+                    distinct: { type: 'distinct', field: '' },
+                    limit: { type: 'limit', n: 100, offset: 0 },
+                    compute: { type: 'compute', name: '', expr: '' },
+                    pivot: { type: 'pivot', rowField: '', colField: '', valField: '', aggFunc: 'sum' }
+                };
+                setPipelineSteps([...pipelineSteps, defaults[type]]);
+            };
+
+            const updateStep = (index, updates) => {
+                const newSteps = [...pipelineSteps];
+                newSteps[index] = { ...newSteps[index], ...updates };
+                setPipelineSteps(newSteps);
+            };
+
+            const removeStep = (index) => {
+                setPipelineSteps(pipelineSteps.filter((_, i) => i !== index));
+            };
+
+            // Render type-specific step config fields
+            const renderStepFields = (step, idx) => {
+                const fields = SCHEMA.fields || [];
+                const numFields = SCHEMA.numericFields || [];
+                switch (step.type) {
+                    case 'where':
+                        return [
+                            React.createElement('select', { key: 'f', value: step.field, onChange: (e) => updateStep(idx, { field: e.target.value }) },
+                                React.createElement('option', { value: '' }, '-- Field --'),
+                                ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                            ),
+                            React.createElement('select', { key: 'op', value: step.operator, onChange: (e) => updateStep(idx, { operator: e.target.value }) },
+                                ...['eq','ne','gt','ge','lt','le','contains','startswith','endswith'].map(op =>
+                                    React.createElement('option', { key: op, value: op }, op)
+                                )
+                            ),
+                            React.createElement('input', { key: 'v', type: 'text', placeholder: 'Value', value: step.value, onChange: (e) => updateStep(idx, { value: e.target.value }) })
+                        ];
+                    case 'sort':
+                        return [
+                            React.createElement('select', { key: 'f', value: step.field, onChange: (e) => updateStep(idx, { field: e.target.value }) },
+                                React.createElement('option', { value: '' }, '-- Field --'),
+                                ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                            ),
+                            React.createElement('select', { key: 'd', value: step.desc ? 'desc' : 'asc', onChange: (e) => updateStep(idx, { desc: e.target.value === 'desc' }) },
+                                React.createElement('option', { value: 'asc' }, 'Ascending'),
+                                React.createElement('option', { value: 'desc' }, 'Descending')
+                            )
+                        ];
+                    case 'group_by':
+                        return [
+                            React.createElement('select', { key: 'gf', value: step.groupField, onChange: (e) => updateStep(idx, { groupField: e.target.value }) },
+                                React.createElement('option', { value: '' }, '-- Group Field --'),
+                                ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                            ),
+                            React.createElement('select', { key: 'af', value: step.aggFunc, onChange: (e) => updateStep(idx, { aggFunc: e.target.value }) },
+                                ...['count','sum','avg','min','max'].map(fn =>
+                                    React.createElement('option', { key: fn, value: fn }, fn)
+                                )
+                            ),
+                            step.aggFunc !== 'count' && React.createElement('select', { key: 'vf', value: step.aggField, onChange: (e) => updateStep(idx, { aggField: e.target.value }) },
+                                React.createElement('option', { value: '' }, '-- Value Field --'),
+                                ...numFields.map(f => React.createElement('option', { key: f, value: f }, f))
+                            )
+                        ].filter(Boolean);
+                    case 'distinct':
+                        return [
+                            React.createElement('select', { key: 'f', value: step.field, onChange: (e) => updateStep(idx, { field: e.target.value }) },
+                                React.createElement('option', { value: '' }, '-- Field --'),
+                                ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                            )
+                        ];
+                    case 'limit':
+                        return [
+                            React.createElement('input', { key: 'n', type: 'number', placeholder: 'Limit (n)', value: step.n, onChange: (e) => updateStep(idx, { n: parseInt(e.target.value) || 0 }) }),
+                            React.createElement('input', { key: 'o', type: 'number', placeholder: 'Offset', value: step.offset, onChange: (e) => updateStep(idx, { offset: parseInt(e.target.value) || 0 }) })
+                        ];
+                    case 'group_by_multi': {
+                        const addGroupField = () => updateStep(idx, { groupFields: [...step.groupFields, ''] });
+                        const removeGroupField = (gi) => updateStep(idx, { groupFields: step.groupFields.filter((_, i) => i !== gi) });
+                        const updateGroupField = (gi, val) => {
+                            const gf = [...step.groupFields]; gf[gi] = val;
+                            updateStep(idx, { groupFields: gf });
+                        };
+                        const addAgg = () => updateStep(idx, { aggs: [...step.aggs, { field: '', func: 'count', alias: '' }] });
+                        const removeAgg = (ai) => updateStep(idx, { aggs: step.aggs.filter((_, i) => i !== ai) });
+                        const updateAgg = (ai, updates) => {
+                            const a = [...step.aggs]; a[ai] = { ...a[ai], ...updates };
+                            if (!a[ai].alias || ['count','sum','avg','min','max'].includes(a[ai].alias)) a[ai].alias = a[ai].func;
+                            updateStep(idx, { aggs: a });
+                        };
+                        return [
+                            React.createElement('div', { key: 'gf-label', style: { fontSize: '0.7rem', fontWeight: 600, color: '#6c757d', marginBottom: '2px' } }, 'GROUP FIELDS'),
+                            ...step.groupFields.map((gf, gi) =>
+                                React.createElement('div', { key: 'gf-' + gi, style: { display: 'flex', gap: '4px', marginBottom: '4px' } },
+                                    React.createElement('select', { style: { flex: 1 }, value: gf, onChange: (e) => updateGroupField(gi, e.target.value) },
+                                        React.createElement('option', { value: '' }, '-- Field --'),
+                                        ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                                    ),
+                                    step.groupFields.length > 1 && React.createElement('button', {
+                                        style: { background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', padding: '0 4px' },
+                                        onClick: () => removeGroupField(gi)
+                                    }, '\u00d7')
+                                )
+                            ),
+                            React.createElement('button', { key: 'add-gf', onClick: addGroupField, style: { fontSize: '0.75rem', padding: '2px 8px', marginBottom: '8px' } }, '+ Field'),
+                            React.createElement('div', { key: 'agg-label', style: { fontSize: '0.7rem', fontWeight: 600, color: '#6c757d', marginBottom: '2px' } }, 'AGGREGATIONS'),
+                            ...step.aggs.map((agg, ai) =>
+                                React.createElement('div', { key: 'agg-' + ai, style: { display: 'flex', gap: '4px', marginBottom: '4px', flexWrap: 'wrap' } },
+                                    React.createElement('select', { style: { flex: 1 }, value: agg.func, onChange: (e) => updateAgg(ai, { func: e.target.value }) },
+                                        ...['count','sum','avg','min','max'].map(fn => React.createElement('option', { key: fn, value: fn }, fn))
+                                    ),
+                                    agg.func !== 'count' && React.createElement('select', { style: { flex: 1 }, value: agg.field, onChange: (e) => updateAgg(ai, { field: e.target.value }) },
+                                        React.createElement('option', { value: '' }, '-- Value --'),
+                                        ...numFields.map(f => React.createElement('option', { key: f, value: f }, f))
+                                    ),
+                                    React.createElement('input', { style: { flex: 1 }, type: 'text', placeholder: 'Alias', value: agg.alias, onChange: (e) => updateAgg(ai, { alias: e.target.value }) }),
+                                    step.aggs.length > 1 && React.createElement('button', {
+                                        style: { background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', padding: '0 4px' },
+                                        onClick: () => removeAgg(ai)
+                                    }, '\u00d7')
+                                )
+                            ),
+                            React.createElement('button', { key: 'add-agg', onClick: addAgg, style: { fontSize: '0.75rem', padding: '2px 8px' } }, '+ Aggregation')
+                        ].filter(Boolean);
+                    }
+                    case 'compute':
+                        return [
+                            React.createElement('input', { key: 'name', type: 'text', placeholder: 'Field name', value: step.name, onChange: (e) => updateStep(idx, { name: e.target.value }) }),
+                            React.createElement('input', { key: 'expr', type: 'text', placeholder: 'Expression (e.g. salary * 12)', value: step.expr, onChange: (e) => updateStep(idx, { expr: e.target.value }) })
+                        ];
+                    case 'pivot':
+                        return [
+                            React.createElement('select', { key: 'rf', value: step.rowField, onChange: (e) => updateStep(idx, { rowField: e.target.value }) },
+                                React.createElement('option', { value: '' }, '-- Row Field --'),
+                                ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                            ),
+                            React.createElement('select', { key: 'cf', value: step.colField, onChange: (e) => updateStep(idx, { colField: e.target.value }) },
+                                React.createElement('option', { value: '' }, '-- Column Field --'),
+                                ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                            ),
+                            React.createElement('select', { key: 'vf', value: step.valField, onChange: (e) => updateStep(idx, { valField: e.target.value }) },
+                                React.createElement('option', { value: '' }, '-- Value Field --'),
+                                ...numFields.map(f => React.createElement('option', { key: f, value: f }, f))
+                            ),
+                            React.createElement('select', { key: 'af', value: step.aggFunc, onChange: (e) => updateStep(idx, { aggFunc: e.target.value }) },
+                                ...['sum','count','avg','min','max'].map(fn =>
+                                    React.createElement('option', { key: fn, value: fn }, fn)
+                                )
+                            )
+                        ];
+                    default:
+                        return [];
+                }
+            };
+
+            // Run pipeline (uses WASM when available, JS fallback for group_by)
+            const runPipeline = () => {
+                if (pipelineSteps.length === 0) {
                     setDisplayData(DATA);
-                    setIsAggregated(false);
+                    setPipelineResult(null);
                     return;
                 }
 
-                let aggregated;
+                const ops = pipelineSteps.map(step => {
+                    switch (step.type) {
+                        case 'where': return { op: 'where', field: step.field, operator: step.operator, value: step.value };
+                        case 'sort': return { op: 'sort', field: step.field, desc: step.desc };
+                        case 'group_by': return { op: 'group_by', groupField: step.groupField, aggField: step.aggField, aggFunc: step.aggFunc };
+                        case 'group_by_multi': return { op: 'group_by_multi', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
+                        case 'distinct': return { op: 'distinct', field: step.field };
+                        case 'limit': return { op: 'limit', n: step.n, offset: step.offset };
+                        case 'compute': return { op: 'compute', name: step.name, expr: step.expr };
+                        case 'pivot': return { op: 'pivot', rowField: step.rowField, colField: step.colField, valField: step.valField, aggFunc: step.aggFunc };
+                    }
+                });
 
+                let result;
                 if (ssqlWasm) {
-                    // Use WASM for aggregation (real ssql GroupBy + Aggregate)
                     try {
-                        aggregated = ssqlWasm.groupBy(DATA, aggGroupBy, aggValueField || '', aggFunc);
+                        result = ssqlWasm.pipeline(DATA, ops);
                     } catch(e) {
-                        console.warn('WASM aggregation failed, falling back to JS:', e);
-                        aggregated = jsAggregation(DATA, aggGroupBy, aggFunc, aggValueField);
+                        console.warn('WASM pipeline failed:', e);
+                        if (pipelineSteps.length === 1 && pipelineSteps[0].type === 'group_by') {
+                            const step = pipelineSteps[0];
+                            result = jsAggregation(DATA, step.groupField, step.aggFunc, step.aggField);
+                        } else {
+                            alert('Pipeline execution failed: ' + e.message);
+                            return;
+                        }
                     }
                 } else {
-                    aggregated = jsAggregation(DATA, aggGroupBy, aggFunc, aggValueField);
+                    if (pipelineSteps.length === 1 && pipelineSteps[0].type === 'group_by') {
+                        const step = pipelineSteps[0];
+                        result = jsAggregation(DATA, step.groupField, step.aggFunc, step.aggField);
+                    } else {
+                        alert('Complex pipelines require WASM. Only single group-by is supported without WASM.');
+                        return;
+                    }
                 }
 
-                setDisplayData(aggregated);
-                setIsAggregated(true);
-
-                // Update chart fields for aggregated data
-                setXField(aggGroupBy);
-                setYField(aggFunc === 'count' ? 'count' : aggFunc);
+                setPipelineResult({ inputCount: DATA.length, outputCount: result.length });
+                setDisplayData(result);
             };
 
-            // JS fallback aggregation
+            // JS fallback aggregation (group_by only)
             function jsAggregation(data, groupBy, func_, valueField) {
                 const groups = {};
                 data.forEach(row => {
@@ -3650,11 +3983,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 });
             }
 
-            // Reset to original data
-            const resetData = () => {
+            // Reset pipeline and restore original data
+            const resetPipeline = () => {
+                setPipelineSteps([]);
+                setPipelineResult(null);
                 setDisplayData(DATA);
-                setIsAggregated(false);
-                setAggGroupBy('');
                 if (SCHEMA.fields && SCHEMA.fields.length > 0) {
                     setXField(SCHEMA.fields[0]);
                 }
@@ -3742,41 +4075,42 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         )
                     ),
 
-                    React.createElement('div', { className: 'section-title', style: { marginTop: '24px' } }, 'Aggregation'),
-                    React.createElement('div', { className: 'agg-panel' },
-                        React.createElement('select', {
-                            value: aggGroupBy,
-                            onChange: (e) => setAggGroupBy(e.target.value)
-                        },
-                            React.createElement('option', { value: '' }, '-- Group By --'),
-                            ...(SCHEMA.fields || []).map(f =>
-                                React.createElement('option', { key: f, value: f }, f)
+                    React.createElement('div', { className: 'section-title', style: { marginTop: '24px' } }, 'Pipeline'),
+                    React.createElement('div', { className: 'pipeline-panel' },
+                        ...pipelineSteps.map((step, idx) =>
+                            React.createElement('div', { key: idx, className: 'pipeline-step' },
+                                React.createElement('div', { className: 'pipeline-step-header' },
+                                    React.createElement('span', { className: 'pipeline-step-type' }, step.type.replace('_', ' ')),
+                                    React.createElement('button', { className: 'pipeline-step-remove', onClick: () => removeStep(idx) }, '\u00d7')
+                                ),
+                                ...renderStepFields(step, idx)
                             )
                         ),
-                        React.createElement('select', {
-                            value: aggFunc,
-                            onChange: (e) => setAggFunc(e.target.value)
-                        },
-                            React.createElement('option', { value: 'count' }, 'Count'),
-                            React.createElement('option', { value: 'sum' }, 'Sum'),
-                            React.createElement('option', { value: 'avg' }, 'Average'),
-                            React.createElement('option', { value: 'min' }, 'Min'),
-                            React.createElement('option', { value: 'max' }, 'Max')
-                        ),
-                        aggFunc !== 'count' && React.createElement('select', {
-                            value: aggValueField,
-                            onChange: (e) => setAggValueField(e.target.value)
-                        },
-                            React.createElement('option', { value: '' }, '-- Value Field --'),
-                            ...(SCHEMA.numericFields || []).map(f =>
-                                React.createElement('option', { key: f, value: f }, f)
+                        React.createElement('div', { className: 'pipeline-actions' },
+                            React.createElement('select', {
+                                value: '',
+                                onChange: (e) => { if (e.target.value) { addStep(e.target.value); e.target.value = ''; } }
+                            },
+                                React.createElement('option', { value: '' }, '+ Add Step'),
+                                React.createElement('option', { value: 'where' }, 'Where'),
+                                React.createElement('option', { value: 'sort' }, 'Sort'),
+                                React.createElement('option', { value: 'group_by' }, 'Group By'),
+                                React.createElement('option', { value: 'group_by_multi' }, 'Multi-Group'),
+                                React.createElement('option', { value: 'distinct' }, 'Distinct'),
+                                React.createElement('option', { value: 'limit' }, 'Limit'),
+                                React.createElement('option', { value: 'compute' }, 'Computed Column'),
+                                React.createElement('option', { value: 'pivot' }, 'Pivot')
                             )
                         ),
-                        React.createElement('button', { onClick: applyAggregation }, 'Apply'),
-                        isAggregated && React.createElement('button', {
-                            onClick: resetData,
-                            style: { background: '#6c757d' }
-                        }, 'Reset')
+                        pipelineSteps.length > 0 && React.createElement('div', { className: 'pipeline-actions' },
+                            React.createElement('button', { className: 'btn-run', onClick: runPipeline }, 'Run Pipeline'),
+                            React.createElement('button', { className: 'btn-reset', onClick: resetPipeline }, 'Reset')
+                        ),
+                        pipelineResult && React.createElement('div', { className: 'pipeline-result' },
+                            React.createElement('span', null, pipelineResult.inputCount.toLocaleString() + ' rows'),
+                            React.createElement('span', null, '\u2192'),
+                            React.createElement('span', { className: 'pipeline-result-badge' }, pipelineResult.outputCount.toLocaleString() + ' rows')
+                        )
                     )
                 ),
 

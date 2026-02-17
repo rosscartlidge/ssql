@@ -363,6 +363,47 @@ func TestParsePipelineOps(t *testing.T) {
 	}
 }
 
+func TestParsePipelineOpsNewTypes(t *testing.T) {
+	input := `[
+		{"op": "group_by_multi", "groupFields": ["dept", "region"], "aggs": [{"field": "salary", "func": "sum", "alias": "total"}, {"field": "", "func": "count", "alias": "n"}]},
+		{"op": "compute", "name": "annual", "expr": "salary * 12"},
+		{"op": "pivot", "rowField": "dept", "colField": "quarter", "valField": "revenue", "aggFunc": "sum"}
+	]`
+
+	ops, err := parsePipelineOps(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(ops) != 3 {
+		t.Fatalf("expected 3 ops, got %d", len(ops))
+	}
+
+	// group_by_multi
+	if ops[0].Op != "group_by_multi" {
+		t.Errorf("expected group_by_multi, got %q", ops[0].Op)
+	}
+	if len(ops[0].GroupFields) != 2 || ops[0].GroupFields[0] != "dept" || ops[0].GroupFields[1] != "region" {
+		t.Errorf("groupFields wrong: %v", ops[0].GroupFields)
+	}
+	if len(ops[0].Aggs) != 2 || ops[0].Aggs[0].Field != "salary" || ops[0].Aggs[0].Func != "sum" || ops[0].Aggs[0].Alias != "total" {
+		t.Errorf("aggs wrong: %+v", ops[0].Aggs)
+	}
+	if ops[0].Aggs[1].Func != "count" || ops[0].Aggs[1].Alias != "n" {
+		t.Errorf("agg count wrong: %+v", ops[0].Aggs[1])
+	}
+
+	// compute
+	if ops[1].Op != "compute" || ops[1].Name != "annual" || ops[1].Expr != "salary * 12" {
+		t.Errorf("compute op wrong: %+v", ops[1])
+	}
+
+	// pivot
+	if ops[2].Op != "pivot" || ops[2].RowField != "dept" || ops[2].ColField != "quarter" || ops[2].ValField != "revenue" || ops[2].AggFunc != "sum" {
+		t.Errorf("pivot op wrong: %+v", ops[2])
+	}
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================

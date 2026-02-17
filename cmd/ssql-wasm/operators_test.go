@@ -444,6 +444,321 @@ func TestPipelineUnknownOp(t *testing.T) {
 }
 
 // ============================================================================
+// GroupByMulti
+// ============================================================================
+
+func TestGroupByMultiTwoFields(t *testing.T) {
+	ds := makeTestDataset([]string{"dept", "region", "salary"}, [][]any{
+		{"eng", "us", int64(100)},
+		{"eng", "us", int64(120)},
+		{"eng", "eu", int64(110)},
+		{"sales", "us", int64(80)},
+	})
+
+	result := ds.groupByMulti(
+		[]string{"dept", "region"},
+		[]aggSpec{
+			{Field: "salary", Func: "sum", Alias: "total_salary"},
+			{Field: "salary", Func: "count", Alias: "headcount"},
+		},
+	)
+
+	if len(result.rows) != 3 {
+		t.Fatalf("expected 3 groups, got %d", len(result.rows))
+	}
+
+	// eng/us: sum=220, count=2
+	if result.rows[0].mustGet("dept") != "eng" {
+		t.Errorf("expected eng first, got %v", result.rows[0].mustGet("dept"))
+	}
+	if result.rows[0].mustGet("region") != "us" {
+		t.Errorf("expected us, got %v", result.rows[0].mustGet("region"))
+	}
+	if v, ok := toFloat64(result.rows[0].mustGet("total_salary")); !ok || v != 220 {
+		t.Errorf("expected sum 220, got %v", result.rows[0].mustGet("total_salary"))
+	}
+	if result.rows[0].mustGet("headcount") != int64(2) {
+		t.Errorf("expected count 2, got %v", result.rows[0].mustGet("headcount"))
+	}
+}
+
+func TestGroupByMultiSingleField(t *testing.T) {
+	ds := makeTestDataset([]string{"dept", "salary"}, [][]any{
+		{"eng", int64(100)},
+		{"eng", int64(120)},
+		{"sales", int64(80)},
+	})
+
+	result := ds.groupByMulti(
+		[]string{"dept"},
+		[]aggSpec{
+			{Field: "salary", Func: "avg", Alias: "avg_salary"},
+		},
+	)
+
+	if len(result.rows) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(result.rows))
+	}
+	avg := result.rows[0].mustGet("avg_salary")
+	if f, ok := avg.(float64); !ok || f != 110 {
+		t.Errorf("expected avg 110, got %v (%T)", avg, avg)
+	}
+}
+
+func TestGroupByMultiPreservesOrder(t *testing.T) {
+	ds := makeTestDataset([]string{"dept", "val"}, [][]any{
+		{"zebra", int64(1)},
+		{"apple", int64(2)},
+		{"mango", int64(3)},
+	})
+
+	result := ds.groupByMulti(
+		[]string{"dept"},
+		[]aggSpec{{Field: "val", Func: "count", Alias: "n"}},
+	)
+
+	if result.rows[0].mustGet("dept") != "zebra" {
+		t.Errorf("expected first-seen order (zebra), got %v", result.rows[0].mustGet("dept"))
+	}
+}
+
+// ============================================================================
+// Compute
+// ============================================================================
+
+func TestComputeBasic(t *testing.T) {
+	ds := makeTestDataset([]string{"salary"}, [][]any{
+		{int64(5000)},
+		{int64(6000)},
+	})
+
+	result, err := ds.compute("annual", "salary * 12")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.s.fields) != 2 {
+		t.Fatalf("expected 2 fields, got %d: %v", len(result.s.fields), result.s.fields)
+	}
+	if result.s.fields[1] != "annual" {
+		t.Errorf("expected field 'annual', got %q", result.s.fields[1])
+	}
+
+	annual := result.rows[0].mustGet("annual")
+	if annual != int64(60000) {
+		t.Errorf("expected 60000, got %v (%T)", annual, annual)
+	}
+}
+
+func TestComputeMultiField(t *testing.T) {
+	ds := makeTestDataset([]string{"revenue", "cost"}, [][]any{
+		{float64(10000), float64(7000)},
+	})
+
+	result, err := ds.compute("profit", "revenue - cost")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	profit := result.rows[0].mustGet("profit")
+	if v, ok := toFloat64(profit); !ok || v != 3000 {
+		t.Errorf("expected profit 3000, got %v", profit)
+	}
+}
+
+func TestComputeInvalidExpr(t *testing.T) {
+	ds := makeTestDataset([]string{"x"}, [][]any{{int64(1)}})
+	_, err := ds.compute("bad", "(x +")
+	if err == nil {
+		t.Error("expected error for invalid expression")
+	}
+}
+
+func TestComputeNilField(t *testing.T) {
+	ds := makeTestDataset([]string{"x"}, [][]any{
+		{nil},
+		{int64(10)},
+	})
+
+	result, err := ds.compute("doubled", "x * 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First row: nil field → computed value should be nil
+	if result.rows[0].mustGet("doubled") != nil {
+		t.Errorf("expected nil for nil field, got %v", result.rows[0].mustGet("doubled"))
+	}
+	// Second row: normal computation
+	if result.rows[1].mustGet("doubled") != int64(20) {
+		t.Errorf("expected 20, got %v", result.rows[1].mustGet("doubled"))
+	}
+}
+
+// ============================================================================
+// Pivot
+// ============================================================================
+
+func TestPivotBasic(t *testing.T) {
+	ds := makeTestDataset([]string{"dept", "quarter", "revenue"}, [][]any{
+		{"eng", "Q1", int64(100)},
+		{"eng", "Q2", int64(150)},
+		{"sales", "Q1", int64(80)},
+		{"sales", "Q2", int64(90)},
+	})
+
+	result := ds.pivot("dept", "quarter", "revenue", "sum")
+
+	// Should have 2 rows (eng, sales) and 3 columns (dept, Q1, Q2)
+	if len(result.rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.rows))
+	}
+	if len(result.s.fields) != 3 {
+		t.Fatalf("expected 3 fields (dept, Q1, Q2), got %d: %v", len(result.s.fields), result.s.fields)
+	}
+
+	// eng row
+	if result.rows[0].mustGet("dept") != "eng" {
+		t.Errorf("expected eng, got %v", result.rows[0].mustGet("dept"))
+	}
+	q1Val := result.rows[0].mustGet("Q1")
+	if v, ok := toFloat64(q1Val); !ok || v != 100 {
+		t.Errorf("expected eng Q1=100, got %v", q1Val)
+	}
+	q2Val := result.rows[0].mustGet("Q2")
+	if v, ok := toFloat64(q2Val); !ok || v != 150 {
+		t.Errorf("expected eng Q2=150, got %v", q2Val)
+	}
+
+	// sales row
+	if result.rows[1].mustGet("dept") != "sales" {
+		t.Errorf("expected sales, got %v", result.rows[1].mustGet("dept"))
+	}
+}
+
+func TestPivotCount(t *testing.T) {
+	ds := makeTestDataset([]string{"dept", "quarter", "id"}, [][]any{
+		{"eng", "Q1", int64(1)},
+		{"eng", "Q1", int64(2)},
+		{"eng", "Q2", int64(3)},
+		{"sales", "Q1", int64(4)},
+	})
+
+	result := ds.pivot("dept", "quarter", "id", "count")
+
+	// eng: Q1=2, Q2=1; sales: Q1=1, Q2=0
+	engQ1 := result.rows[0].mustGet("Q1")
+	if engQ1 != int64(2) {
+		t.Errorf("expected eng Q1 count=2, got %v (%T)", engQ1, engQ1)
+	}
+	engQ2 := result.rows[0].mustGet("Q2")
+	if engQ2 != int64(1) {
+		t.Errorf("expected eng Q2 count=1, got %v (%T)", engQ2, engQ2)
+	}
+	salesQ2 := result.rows[1].mustGet("Q2")
+	if salesQ2 != int64(0) {
+		t.Errorf("expected sales Q2 count=0, got %v (%T)", salesQ2, salesQ2)
+	}
+}
+
+func TestPivotMissingCells(t *testing.T) {
+	ds := makeTestDataset([]string{"dept", "quarter", "val"}, [][]any{
+		{"eng", "Q1", int64(100)},
+		{"sales", "Q2", int64(200)},
+	})
+
+	result := ds.pivot("dept", "quarter", "val", "sum")
+
+	// eng: Q1=100, Q2=0 (missing)
+	// sales: Q1=0 (missing), Q2=200
+	engQ2 := result.rows[0].mustGet("Q2")
+	if v, ok := toFloat64(engQ2); !ok || v != 0 {
+		t.Errorf("expected eng Q2=0 (missing), got %v", engQ2)
+	}
+	salesQ1 := result.rows[1].mustGet("Q1")
+	if v, ok := toFloat64(salesQ1); !ok || v != 0 {
+		t.Errorf("expected sales Q1=0 (missing), got %v", salesQ1)
+	}
+}
+
+// ============================================================================
+// Pipeline with new operations
+// ============================================================================
+
+func TestPipelineGroupByMulti(t *testing.T) {
+	ds := makeTestDataset([]string{"dept", "salary"}, [][]any{
+		{"eng", int64(100)},
+		{"eng", int64(120)},
+		{"sales", int64(80)},
+	})
+
+	ops := []pipelineOp{{
+		Op:          "group_by_multi",
+		GroupFields: []string{"dept"},
+		Aggs: []aggSpec{
+			{Field: "salary", Func: "sum", Alias: "total"},
+			{Field: "", Func: "count", Alias: "n"},
+		},
+	}}
+
+	result, err := ds.pipeline(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.rows))
+	}
+}
+
+func TestPipelineCompute(t *testing.T) {
+	ds := makeTestDataset([]string{"x"}, [][]any{
+		{int64(5)},
+		{int64(10)},
+	})
+
+	ops := []pipelineOp{{
+		Op:   "compute",
+		Name: "doubled",
+		Expr: "x * 2",
+	}}
+
+	result, err := ds.pipeline(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.rows[0].mustGet("doubled") != int64(10) {
+		t.Errorf("expected 10, got %v", result.rows[0].mustGet("doubled"))
+	}
+}
+
+func TestPipelinePivot(t *testing.T) {
+	ds := makeTestDataset([]string{"dept", "quarter", "revenue"}, [][]any{
+		{"eng", "Q1", int64(100)},
+		{"eng", "Q2", int64(200)},
+		{"sales", "Q1", int64(50)},
+	})
+
+	ops := []pipelineOp{{
+		Op:       "pivot",
+		RowField: "dept",
+		ColField: "quarter",
+		ValField: "revenue",
+		AggFunc:  "sum",
+	}}
+
+	result, err := ds.pipeline(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(result.rows))
+	}
+	if len(result.s.fields) != 3 {
+		t.Fatalf("expected 3 fields, got %d: %v", len(result.s.fields), result.s.fields)
+	}
+}
+
+// ============================================================================
 // Round-trip integration: parse → operate → serialize
 // ============================================================================
 
