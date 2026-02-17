@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1615,6 +1616,13 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 				config.WasmEnabled = true
 				config.WasmExecJS = jsContent.wasmExecJS
 				config.SsqlWasmJS = jsContent.ssqlWasmJS
+
+				// Read and base64-encode WASM binary for embedding
+				wasmBytes, err := os.ReadFile(wasmPath)
+				if err != nil {
+					return fmt.Errorf("reading WASM binary: %w", err)
+				}
+				config.WasmBinary = base64.StdEncoding.EncodeToString(wasmBytes)
 			}
 
 			// Create explorer
@@ -1622,12 +1630,8 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 				return fmt.Errorf("creating explorer: %w", err)
 			}
 
-			// Copy ssql.wasm alongside the HTML
 			if wasmPath != "" {
-				if err := ssql.CopyExploreWasmFile(outputFile, wasmPath); err != nil {
-					return fmt.Errorf("copying WASM file: %w", err)
-				}
-				fmt.Printf("Explorer created: %s (with WASM)\n", outputFile)
+				fmt.Printf("Explorer created: %s (with embedded WASM)\n", outputFile)
 			} else {
 				fmt.Printf("Explorer created: %s\n", outputFile)
 			}

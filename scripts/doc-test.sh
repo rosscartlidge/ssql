@@ -70,11 +70,10 @@ llm_files="doc/ai-code-generation.md doc/ai-human-guide.md"
 # - GPU/signal internals: documented in cli-signal-processing.md
 # - Exec*/ReadCommand*: command execution, documented in api-reference.md
 # - ReadLines/WriteLines: line-oriented I/O
-# - CopyExploreWasmFile: internal WASM setup helper
+# (CopyExploreWasmFile removed in v4.18 - WASM is now embedded in HTML)
 # - ExtractSignalFromWAVChannel: advanced WAV variant
 # - WriteWAVToWriter: ToWriter streaming variant
 excluded_funcs="
-CopyExploreWasmFile
 ExtractSignalFromWAVChannel
 WriteWAVToWriter
 DetectTSVSeparator

@@ -1888,12 +1888,6 @@ data, _ := ssql.ReadCSV("sales.csv")
 ssql.DataExplore(data, config, "sales_explorer.html")
 ```
 
-#### CopyExploreWasmFile
-```go
-func CopyExploreWasmFile(htmlPath string, wasmPath string) error
-```
-Copies `ssql.wasm` to the same directory as the output HTML file. The JS runtime files are inlined in the HTML template when `WasmEnabled` is true.
-
 ---
 
 ## Helper Functions

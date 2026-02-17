@@ -6,7 +6,7 @@ class SsqlWasm {
         this._go = null;
     }
 
-    // init loads the WASM module. Call once before using any other methods.
+    // init loads the WASM module from a URL. Call once before using any other methods.
     // wasmUrl: path to ssql.wasm (default: './ssql.wasm')
     // Returns a promise that resolves when the module is ready.
     async init(wasmUrl = './ssql.wasm') {
@@ -25,6 +25,23 @@ class SsqlWasm {
         this._go.run(result.instance);
 
         // Wait for ssqlReady flag set by Go main()
+        await this._waitReady();
+        this._ready = true;
+    }
+
+    // initFromBytes loads the WASM module from an ArrayBuffer of bytes.
+    // Use this when the WASM binary is embedded (e.g. base64-decoded) rather than fetched.
+    async initFromBytes(wasmBytes) {
+        if (this._ready) return;
+
+        if (typeof Go === 'undefined') {
+            throw new Error('wasm_exec.js must be loaded before ssql-wasm.js');
+        }
+
+        this._go = new Go();
+        const result = await WebAssembly.instantiate(wasmBytes, this._go.importObject);
+        this._go.run(result.instance);
+
         await this._waitReady();
         this._ready = true;
     }

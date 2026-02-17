@@ -8,7 +8,6 @@ import (
 	"iter"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -3033,6 +3032,7 @@ type ExploreConfig struct {
 	WasmEnabled   bool   `json:"wasmEnabled"` // Load ssql.wasm for client-side transforms
 	WasmExecJS    string `json:"-"`           // Content of wasm_exec.js (inlined in HTML)
 	SsqlWasmJS    string `json:"-"`           // Content of ssql-wasm.js (inlined in HTML)
+	WasmBinary    string `json:"-"`           // Base64-encoded ssql.wasm (embedded in HTML)
 }
 
 // DefaultExploreConfig provides sensible defaults for interactive data exploration.
@@ -3142,6 +3142,7 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 		WasmEnabled bool
 		WasmExecJS  template.JS
 		SsqlWasmJS  template.JS
+		WasmBinary  template.JS
 	}{
 		Title:       config.Title,
 		DataJSON:    template.JS(dataJSON),
@@ -3151,6 +3152,7 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 		WasmEnabled: config.WasmEnabled,
 		WasmExecJS:  template.JS(config.WasmExecJS),
 		SsqlWasmJS:  template.JS(config.SsqlWasmJS),
+		WasmBinary:  template.JS(config.WasmBinary),
 	}
 
 	if err := tmpl.Execute(writer, templateData); err != nil {
@@ -3160,21 +3162,6 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 	return writer.Flush()
 }
 
-// CopyExploreWasmFile copies ssql.wasm to the same directory as the output HTML file.
-// The JS runtime files (wasm_exec.js, ssql-wasm.js) are inlined in the HTML template.
-func CopyExploreWasmFile(htmlPath string, wasmPath string) error {
-	dir := filepath.Dir(htmlPath)
-
-	wasmData, err := os.ReadFile(wasmPath)
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", wasmPath, err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "ssql.wasm"), wasmData, 0644); err != nil {
-		return fmt.Errorf("writing ssql.wasm: %w", err)
-	}
-
-	return nil
-}
 
 // exploreHTMLTemplate is the HTML template for the interactive data explorer
 const exploreHTMLTemplate = `<!DOCTYPE html>
@@ -3522,8 +3509,10 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         (async function() {
             try {
                 ssqlWasm = new SsqlWasm();
-                await ssqlWasm.init('./ssql.wasm');
-                console.log('ssql WASM module loaded');
+                const wasmBase64 = '{{.WasmBinary}}';
+                const wasmBytes = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0));
+                await ssqlWasm.initFromBytes(wasmBytes.buffer);
+                console.log('ssql WASM module loaded (embedded)');
                 const badge = document.getElementById('wasm-badge');
                 if (badge) { badge.style.display = 'inline'; badge.textContent = 'WASM'; }
             } catch(e) {
