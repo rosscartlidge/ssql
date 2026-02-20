@@ -3350,6 +3350,26 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             font-weight: 500;
         }
 
+        .pipeline-string-input {
+            width: 100%;
+            padding: 6px 8px;
+            margin-top: 8px;
+            margin-bottom: 4px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--panel-bg);
+            color: var(--text-color);
+            font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
+            font-size: 0.75rem;
+            box-sizing: border-box;
+            transition: border-color 0.15s;
+        }
+
+        .pipeline-string-input:focus {
+            outline: none;
+            border-color: #0d6efd;
+        }
+
         .pipeline-panel {
             margin-top: 8px;
         }
@@ -3524,6 +3544,179 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
 
         const { useState, useEffect, useRef, useMemo } = React;
 
+        // Serialize pipeline steps to CLI-style string
+        const stepsToString = (steps) => {
+            return steps.map(step => {
+                switch (step.type) {
+                    case 'where':
+                        return 'ssql where -where ' + step.field + ' ' + step.operator + ' ' + step.value;
+                    case 'sort':
+                        return 'ssql sort ' + step.field + (step.desc ? ' -desc' : '');
+                    case 'group_by': {
+                        const alias = step.alias || step.aggFunc;
+                        if (step.aggFunc === 'count')
+                            return 'ssql group-by ' + step.groupField + ' -count ' + alias;
+                        return 'ssql group-by ' + step.groupField + ' -' + step.aggFunc + ' ' + step.aggField + ' ' + alias;
+                    }
+                    case 'group_by_multi': {
+                        const fields = step.groupFields.filter(f => f).join(' ');
+                        const aggs = step.aggs.map(a => {
+                            if (a.func === 'count') return '-count ' + (a.alias || 'count');
+                            return '-' + a.func + ' ' + a.field + ' ' + (a.alias || a.func);
+                        }).join(' ');
+                        return 'ssql group-by ' + fields + ' ' + aggs;
+                    }
+                    case 'distinct':
+                        return 'ssql distinct';
+                    case 'limit':
+                        return 'ssql limit ' + step.n;
+                    case 'compute': {
+                        const expr = step.expr.includes(' ') ? "'" + step.expr + "'" : step.expr;
+                        return 'ssql update -set-expr ' + step.name + ' ' + expr;
+                    }
+                    case 'pivot': {
+                        let s = 'ssql pivot -row ' + step.rowField + ' -col ' + step.colField + ' -val ' + step.valField;
+                        if (step.aggFunc && step.aggFunc !== 'sum') s += ' -func ' + step.aggFunc;
+                        return s;
+                    }
+                    default: return '';
+                }
+            }).filter(Boolean).join(' | ');
+        };
+
+        // Tokenize a command string, respecting single-quoted strings
+        const tokenize = (str) => {
+            const tokens = [];
+            let i = 0;
+            while (i < str.length) {
+                while (i < str.length && str[i] === ' ') i++;
+                if (i >= str.length) break;
+                if (str[i] === "'") {
+                    i++;
+                    let tok = '';
+                    while (i < str.length && str[i] !== "'") { tok += str[i]; i++; }
+                    if (i < str.length) i++; // skip closing quote
+                    tokens.push(tok);
+                } else {
+                    let tok = '';
+                    while (i < str.length && str[i] !== ' ') { tok += str[i]; i++; }
+                    tokens.push(tok);
+                }
+            }
+            return tokens;
+        };
+
+        // Parse CLI-style pipeline string back into step objects
+        const parseString = (str) => {
+            if (!str.trim()) return [];
+            const commands = str.split(' | ');
+            return commands.map(cmdStr => {
+                let tokens = tokenize(cmdStr.trim());
+                if (tokens.length === 0) return null;
+                if (tokens[0] === 'ssql') tokens = tokens.slice(1);
+                if (tokens.length === 0) return null;
+                const cmd = tokens[0];
+
+                switch (cmd) {
+                    case 'where': {
+                        // where -where field op value
+                        let field = '', operator = 'eq', value = '';
+                        const wi = tokens.indexOf('-where');
+                        if (wi !== -1 && wi + 3 < tokens.length) {
+                            field = tokens[wi + 1];
+                            operator = tokens[wi + 2];
+                            value = tokens[wi + 3];
+                        }
+                        return { type: 'where', field, operator, value };
+                    }
+                    case 'sort': {
+                        // sort field [-desc]
+                        const field = tokens.length > 1 ? tokens[1] : '';
+                        const desc = tokens.includes('-desc');
+                        return { type: 'sort', field, desc };
+                    }
+                    case 'group-by': {
+                        // Collect group fields (non-flag tokens after command name)
+                        // and aggregations (-count alias, -sum field alias, etc.)
+                        const groupFields = [];
+                        const aggs = [];
+                        const aggFuncs = ['count', 'sum', 'avg', 'min', 'max'];
+                        let i = 1;
+                        // Collect group fields until we hit a flag
+                        while (i < tokens.length && !tokens[i].startsWith('-')) {
+                            groupFields.push(tokens[i]);
+                            i++;
+                        }
+                        // Collect aggregations
+                        while (i < tokens.length) {
+                            const flag = tokens[i].replace(/^-/, '');
+                            if (aggFuncs.includes(flag)) {
+                                if (flag === 'count') {
+                                    const alias = (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) ? tokens[i + 1] : 'count';
+                                    aggs.push({ field: '', func: 'count', alias });
+                                    i += (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) ? 2 : 1;
+                                } else {
+                                    const field = (i + 1 < tokens.length) ? tokens[i + 1] : '';
+                                    const alias = (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? tokens[i + 2] : flag;
+                                    aggs.push({ field, func: flag, alias });
+                                    i += (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? 3 : 2;
+                                }
+                            } else {
+                                i++;
+                            }
+                        }
+                        // Single group field + single agg → group_by, otherwise group_by_multi
+                        if (groupFields.length <= 1 && aggs.length <= 1) {
+                            const agg = aggs[0] || { func: 'count', alias: 'count', field: '' };
+                            return {
+                                type: 'group_by',
+                                groupField: groupFields[0] || '',
+                                aggFunc: agg.func,
+                                aggField: agg.field,
+                                alias: agg.alias
+                            };
+                        }
+                        return {
+                            type: 'group_by_multi',
+                            groupFields: groupFields.length > 0 ? groupFields : [''],
+                            aggs: aggs.length > 0 ? aggs : [{ field: '', func: 'count', alias: 'count' }]
+                        };
+                    }
+                    case 'distinct':
+                        return { type: 'distinct', field: '' };
+                    case 'limit': {
+                        const n = tokens.length > 1 ? (parseInt(tokens[1]) || 0) : 100;
+                        return { type: 'limit', n, offset: 0 };
+                    }
+                    case 'update': {
+                        // update -set-expr name expr
+                        let name = '', expr = '';
+                        const si = tokens.indexOf('-set-expr');
+                        if (si !== -1 && si + 2 < tokens.length) {
+                            name = tokens[si + 1];
+                            expr = tokens[si + 2];
+                        }
+                        return { type: 'compute', name, expr };
+                    }
+                    case 'pivot': {
+                        // pivot -row R -col C -val V [-func F]
+                        let rowField = '', colField = '', valField = '', aggFunc = 'sum';
+                        const ri = tokens.indexOf('-row');
+                        if (ri !== -1 && ri + 1 < tokens.length) rowField = tokens[ri + 1];
+                        const ci = tokens.indexOf('-col');
+                        if (ci !== -1 && ci + 1 < tokens.length) colField = tokens[ci + 1];
+                        const vi = tokens.indexOf('-val');
+                        if (vi !== -1 && vi + 1 < tokens.length) valField = tokens[vi + 1];
+                        const fi = tokens.indexOf('-func');
+                        if (fi !== -1 && fi + 1 < tokens.length) aggFunc = tokens[fi + 1];
+                        return { type: 'pivot', rowField, colField, valField, aggFunc };
+                    }
+                    default:
+                        return null;
+                }
+            }).filter(Boolean);
+        };
+
         function App() {
             const [chartType, setChartType] = useState('line');
             const [xField, setXField] = useState(CONFIG.initialXField || (SCHEMA.fields && SCHEMA.fields[0]) || '');
@@ -3531,11 +3724,14 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             const [displayData, setDisplayData] = useState(DATA);
             const [pipelineSteps, setPipelineSteps] = useState([]);
             const [pipelineResult, setPipelineResult] = useState(null);
+            const [pipelineString, setPipelineString] = useState('');
+            const [pipelineParseError, setPipelineParseError] = useState(false);
             const chartRef = useRef(null);
             const gridRef = useRef(null);
             const gridApiRef = useRef(null);
             const gridOpsRef = useRef([]);  // Current grid filter/sort ops
             const suppressGridEvents = useRef(false);  // Prevent re-entrant updates
+            const syncSource = useRef(null);  // 'steps' or 'string' to prevent circular updates
 
             // Column definitions for AG-Grid
             const columnDefs = useMemo(() => {
@@ -3595,7 +3791,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     switch (step.type) {
                         case 'where': return { op: 'where', field: step.field, operator: step.operator, value: step.value };
                         case 'sort': return { op: 'sort', field: step.field, desc: step.desc };
-                        case 'group_by': return { op: 'group_by', groupField: step.groupField, aggField: step.aggField, aggFunc: step.aggFunc };
+                        case 'group_by': return { op: 'group_by', groupField: step.groupField, aggField: step.aggField, aggFunc: step.aggFunc, alias: step.alias };
                         case 'group_by_multi': return { op: 'group_by_multi', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
                         case 'distinct': return { op: 'distinct', field: step.field };
                         case 'limit': return { op: 'limit', n: step.n, offset: step.offset };
@@ -3729,12 +3925,78 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 Plotly.react(chartRef.current, [trace], layout, config);
             }, [chartType, xField, yField, displayData]);
 
+            // Sync pipeline steps → string (when steps change from UI)
+            useEffect(() => {
+                if (syncSource.current === 'string') {
+                    syncSource.current = null;
+                    return;
+                }
+                const str = stepsToString(pipelineSteps);
+                setPipelineString(str);
+                setPipelineParseError(false);
+                // Update URL hash
+                if (str) {
+                    window.location.hash = encodeURIComponent(str);
+                } else {
+                    if (window.location.hash) history.replaceState(null, '', window.location.pathname + window.location.search);
+                }
+            }, [pipelineSteps]);
+
+            // Load pipeline from URL hash on mount
+            useEffect(() => {
+                const loadFromHash = () => {
+                    const hash = window.location.hash.slice(1);
+                    if (hash) {
+                        try {
+                            const str = decodeURIComponent(hash);
+                            const steps = parseString(str);
+                            if (steps.length > 0) {
+                                syncSource.current = 'string';
+                                setPipelineString(str);
+                                setPipelineSteps(steps);
+                                setPipelineParseError(false);
+                            }
+                        } catch(e) {
+                            console.warn('Failed to parse pipeline from URL hash:', e);
+                        }
+                    }
+                };
+                loadFromHash();
+                window.addEventListener('hashchange', loadFromHash);
+                return () => window.removeEventListener('hashchange', loadFromHash);
+            }, []);
+
+            // Handle pipeline string input change
+            const onPipelineStringChange = (newStr) => {
+                setPipelineString(newStr);
+                if (!newStr.trim()) {
+                    syncSource.current = 'string';
+                    setPipelineSteps([]);
+                    setPipelineParseError(false);
+                    if (window.location.hash) history.replaceState(null, '', window.location.pathname + window.location.search);
+                    return;
+                }
+                try {
+                    const steps = parseString(newStr);
+                    if (steps.length > 0) {
+                        syncSource.current = 'string';
+                        setPipelineSteps(steps);
+                        setPipelineParseError(false);
+                        window.location.hash = encodeURIComponent(newStr);
+                    } else {
+                        setPipelineParseError(true);
+                    }
+                } catch(e) {
+                    setPipelineParseError(true);
+                }
+            };
+
             // Pipeline step management
             const addStep = (type) => {
                 const defaults = {
                     where: { type: 'where', field: '', operator: 'eq', value: '' },
                     sort: { type: 'sort', field: '', desc: false },
-                    group_by: { type: 'group_by', groupField: '', aggField: '', aggFunc: 'count' },
+                    group_by: { type: 'group_by', groupField: '', aggField: '', aggFunc: 'count', alias: 'count' },
                     group_by_multi: { type: 'group_by_multi', groupFields: [''], aggs: [{ field: '', func: 'count', alias: 'count' }] },
                     distinct: { type: 'distinct', field: '' },
                     limit: { type: 'limit', n: 100, offset: 0 },
@@ -3754,10 +4016,61 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 setPipelineSteps(pipelineSteps.filter((_, i) => i !== index));
             };
 
+            // Infer available fields at a given pipeline step index
+            const getAvailableFields = (stepIndex) => {
+                let fields = [...(SCHEMA.fields || [])];
+                let numericFields = [...(SCHEMA.numericFields || [])];
+
+                for (let i = 0; i < stepIndex; i++) {
+                    const step = pipelineSteps[i];
+                    switch (step.type) {
+                        case 'where': case 'sort': case 'distinct': case 'limit':
+                            break;
+                        case 'compute':
+                            if (step.name && !fields.includes(step.name)) {
+                                fields.push(step.name);
+                                numericFields.push(step.name);
+                            }
+                            break;
+                        case 'group_by': {
+                            const nf = [];
+                            const nn = [];
+                            if (step.groupField) nf.push(step.groupField);
+                            const aggName = step.alias || step.aggFunc;
+                            if (aggName) {
+                                nf.push(aggName);
+                                nn.push(aggName);
+                            }
+                            fields = nf;
+                            numericFields = nn;
+                            break;
+                        }
+                        case 'group_by_multi': {
+                            const nf = [...step.groupFields.filter(f => f)];
+                            const nn = [];
+                            nf.forEach(f => { if (numericFields.includes(f)) nn.push(f); });
+                            step.aggs.forEach(a => {
+                                if (a.alias) { nf.push(a.alias); nn.push(a.alias); }
+                            });
+                            fields = nf;
+                            numericFields = nn;
+                            break;
+                        }
+                        case 'pivot': {
+                            const nf = [];
+                            if (step.rowField) nf.push(step.rowField);
+                            fields = nf;
+                            numericFields = [];
+                            break;
+                        }
+                    }
+                }
+                return { fields, numericFields };
+            };
+
             // Render type-specific step config fields
             const renderStepFields = (step, idx) => {
-                const fields = SCHEMA.fields || [];
-                const numFields = SCHEMA.numericFields || [];
+                const { fields, numericFields: numFields } = getAvailableFields(idx);
                 switch (step.type) {
                     case 'where':
                         return [
@@ -3789,7 +4102,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                                 React.createElement('option', { value: '' }, '-- Group Field --'),
                                 ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
                             ),
-                            React.createElement('select', { key: 'af', value: step.aggFunc, onChange: (e) => updateStep(idx, { aggFunc: e.target.value }) },
+                            React.createElement('select', { key: 'af', value: step.aggFunc, onChange: (e) => {
+                                const updates = { aggFunc: e.target.value };
+                                if (!step.alias || step.alias === step.aggFunc) updates.alias = e.target.value;
+                                updateStep(idx, updates);
+                            } },
                                 ...['count','sum','avg','min','max'].map(fn =>
                                     React.createElement('option', { key: fn, value: fn }, fn)
                                 )
@@ -3797,7 +4114,8 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                             step.aggFunc !== 'count' && React.createElement('select', { key: 'vf', value: step.aggField, onChange: (e) => updateStep(idx, { aggField: e.target.value }) },
                                 React.createElement('option', { value: '' }, '-- Value Field --'),
                                 ...numFields.map(f => React.createElement('option', { key: f, value: f }, f))
-                            )
+                            ),
+                            React.createElement('input', { key: 'alias', type: 'text', placeholder: 'Alias', value: step.alias || '', onChange: (e) => updateStep(idx, { alias: e.target.value }) })
                         ].filter(Boolean);
                     case 'distinct':
                         return [
@@ -3902,7 +4220,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     switch (step.type) {
                         case 'where': return { op: 'where', field: step.field, operator: step.operator, value: step.value };
                         case 'sort': return { op: 'sort', field: step.field, desc: step.desc };
-                        case 'group_by': return { op: 'group_by', groupField: step.groupField, aggField: step.aggField, aggFunc: step.aggFunc };
+                        case 'group_by': return { op: 'group_by', groupField: step.groupField, aggField: step.aggField, aggFunc: step.aggFunc, alias: step.alias };
                         case 'group_by_multi': return { op: 'group_by_multi', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
                         case 'distinct': return { op: 'distinct', field: step.field };
                         case 'limit': return { op: 'limit', n: step.n, offset: step.offset };
@@ -3937,6 +4255,19 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
 
                 setPipelineResult({ inputCount: DATA.length, outputCount: result.length });
                 setDisplayData(result);
+
+                // Auto-select X/Y fields from the pipeline result
+                if (result.length > 0) {
+                    const resultFields = Object.keys(result[0]);
+                    const numResult = resultFields.filter(f => typeof result[0][f] === 'number');
+                    if (!resultFields.includes(xField)) {
+                        const nonNumeric = resultFields.filter(f => typeof result[0][f] !== 'number');
+                        setXField(nonNumeric[0] || resultFields[0] || '');
+                    }
+                    if (!resultFields.includes(yField)) {
+                        setYField(numResult[0] || resultFields[1] || '');
+                    }
+                }
             };
 
             // JS fallback aggregation (group_by only)
@@ -3975,8 +4306,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             // Reset pipeline and restore original data
             const resetPipeline = () => {
                 setPipelineSteps([]);
+                setPipelineString('');
+                setPipelineParseError(false);
                 setPipelineResult(null);
                 setDisplayData(DATA);
+                if (window.location.hash) history.replaceState(null, '', window.location.pathname + window.location.search);
                 if (SCHEMA.fields && SCHEMA.fields.length > 0) {
                     setXField(SCHEMA.fields[0]);
                 }
@@ -4034,7 +4368,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 React.createElement('div', { className: 'left-panel' },
                     React.createElement('div', { className: 'section-title' }, 'Fields'),
                     React.createElement('ul', { className: 'field-list' },
-                        (SCHEMA.fields || []).map(field =>
+                        allFields.map(field =>
                             React.createElement('li', {
                                 key: field,
                                 className: 'field-item',
@@ -4042,7 +4376,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                             },
                                 React.createElement('span', { className: 'field-name' }, field),
                                 React.createElement('span', { className: 'field-type' },
-                                    SCHEMA.summary.fieldTypes[field] || 'string'
+                                    SCHEMA.summary.fieldTypes[field] || (typeof (displayData[0] || {})[field] === 'number' ? 'number' : 'string')
                                 )
                             )
                         )
@@ -4060,11 +4394,19 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         ),
                         React.createElement('div', { className: 'stat-item' },
                             React.createElement('span', { className: 'stat-label' }, 'Numeric'),
-                            React.createElement('span', { className: 'stat-value' }, (SCHEMA.numericFields || []).length)
+                            React.createElement('span', { className: 'stat-value' }, allFields.filter(f => displayData.length > 0 && typeof displayData[0][f] === 'number').length)
                         )
                     ),
 
                     React.createElement('div', { className: 'section-title', style: { marginTop: '24px' } }, 'Pipeline'),
+                    React.createElement('input', {
+                        type: 'text',
+                        className: 'pipeline-string-input',
+                        value: pipelineString,
+                        placeholder: 'ssql where -where age gt 25 | ssql sort salary -desc',
+                        onChange: (e) => onPipelineStringChange(e.target.value),
+                        style: pipelineParseError ? { borderColor: '#dc3545' } : {}
+                    }),
                     React.createElement('div', { className: 'pipeline-panel' },
                         ...pipelineSteps.map((step, idx) =>
                             React.createElement('div', { key: idx, className: 'pipeline-step' },
