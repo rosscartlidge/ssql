@@ -495,6 +495,31 @@ func generateSpecializedHeatmapHTML(records []Record, config HeatmapConfig, file
 		}
 	}
 
+	// Sort Y values numerically when all are numeric (required for log scale)
+	if len(yNumeric) == len(yLabels) {
+		// Build sort index
+		indices := make([]int, len(yNumeric))
+		for i := range indices {
+			indices[i] = i
+		}
+		sort.Slice(indices, func(a, b int) bool {
+			return yNumeric[indices[a]] < yNumeric[indices[b]]
+		})
+
+		// Reorder yNumeric, yLabels, and grid rows
+		sortedNumeric := make([]float64, len(yNumeric))
+		sortedLabels := make([]string, len(yLabels))
+		sortedGrid := make([][]float64, len(grid))
+		for newIdx, oldIdx := range indices {
+			sortedNumeric[newIdx] = yNumeric[oldIdx]
+			sortedLabels[newIdx] = yLabels[oldIdx]
+			sortedGrid[newIdx] = grid[oldIdx]
+		}
+		yNumeric = sortedNumeric
+		yLabels = sortedLabels
+		grid = sortedGrid
+	}
+
 	// Use config zmin/zmax if set, otherwise use detected values
 	if config.ZMin != 0 || config.ZMax != 0 {
 		if config.ZMin != 0 {
@@ -516,13 +541,22 @@ func generateSpecializedHeatmapHTML(records []Record, config HeatmapConfig, file
 		return fmt.Errorf("marshaling x labels: %w", err)
 	}
 
-	yLabelsJSON, err := json.Marshal(yLabels)
+	// Use numeric Y values when all values are numeric (needed for log scale)
+	var yLabelsJSON []byte
+	if len(yNumeric) == len(yLabels) {
+		yLabelsJSON, err = json.Marshal(yNumeric)
+	} else {
+		yLabelsJSON, err = json.Marshal(yLabels)
+	}
 	if err != nil {
 		return fmt.Errorf("marshaling y labels: %w", err)
 	}
 
 	// Execute template
 	tmpl := template.Must(template.New("spectrogram").Parse(spectrogramHTMLTemplate))
+	zMinStr := fmt.Sprintf("%g", zMin)
+	zMaxStr := fmt.Sprintf("%g", zMax)
+
 	templateData := struct {
 		Title      string
 		XField     string
@@ -532,8 +566,8 @@ func generateSpecializedHeatmapHTML(records []Record, config HeatmapConfig, file
 		YLabels    template.JS
 		GridData   template.JS
 		ColorScale string
-		ZMin       float64
-		ZMax       float64
+		ZMin       string
+		ZMax       string
 		LogFreq    bool
 		Theme      string
 	}{
@@ -545,8 +579,8 @@ func generateSpecializedHeatmapHTML(records []Record, config HeatmapConfig, file
 		YLabels:    template.JS(yLabelsJSON),
 		GridData:   template.JS(gridJSON),
 		ColorScale: config.ColorScale,
-		ZMin:       zMin,
-		ZMax:       zMax,
+		ZMin:       zMinStr,
+		ZMax:       zMaxStr,
 		LogFreq:    config.LogFreq,
 		Theme:      config.Theme,
 	}
@@ -2824,18 +2858,18 @@ const spectrogramHTMLTemplate = `<!DOCTYPE html>
 
                         <!-- Z Min -->
                         <div class="col-md-2">
-                            <label class="form-label mb-1">Z Min: <span id="zMinValue" class="slider-value">{{printf "%.2f" .ZMin}}</span></label>
+                            <label class="form-label mb-1">Z Min: <span id="zMinValue" class="slider-value">{{.ZMin}}</span></label>
                             <input type="range" id="zMinSlider" class="form-range range-slider"
-                                   min="{{printf "%.2f" .ZMin}}" max="{{printf "%.2f" .ZMax}}"
-                                   value="{{printf "%.2f" .ZMin}}" step="0.01" onchange="updateZRange()">
+                                   min="{{.ZMin}}" max="{{.ZMax}}"
+                                   value="{{.ZMin}}" step="0.01" onchange="updateZRange()">
                         </div>
 
                         <!-- Z Max -->
                         <div class="col-md-2">
-                            <label class="form-label mb-1">Z Max: <span id="zMaxValue" class="slider-value">{{printf "%.2f" .ZMax}}</span></label>
+                            <label class="form-label mb-1">Z Max: <span id="zMaxValue" class="slider-value">{{.ZMax}}</span></label>
                             <input type="range" id="zMaxSlider" class="form-range range-slider"
-                                   min="{{printf "%.2f" .ZMin}}" max="{{printf "%.2f" .ZMax}}"
-                                   value="{{printf "%.2f" .ZMax}}" step="0.01" onchange="updateZRange()">
+                                   min="{{.ZMin}}" max="{{.ZMax}}"
+                                   value="{{.ZMax}}" step="0.01" onchange="updateZRange()">
                         </div>
 
                         <!-- Log Frequency Toggle -->
@@ -2903,8 +2937,8 @@ const spectrogramHTMLTemplate = `<!DOCTYPE html>
         const xLabels = {{.XLabels}};
         const yLabels = {{.YLabels}};
         const gridData = {{.GridData}};
-        const initialZMin = {{printf "%.6f" .ZMin}};
-        const initialZMax = {{printf "%.6f" .ZMax}};
+        const initialZMin = parseFloat("{{.ZMin}}");
+        const initialZMax = parseFloat("{{.ZMax}}");
         const initialLogFreq = {{.LogFreq}};
 
         // Display stats
@@ -2934,11 +2968,12 @@ const spectrogramHTMLTemplate = `<!DOCTYPE html>
             title: '',
             xaxis: {
                 title: '{{.XField}}',
+                type: 'category',
                 tickangle: -45
             },
             yaxis: {
                 title: '{{.YField}}',
-                type: initialLogFreq ? 'log' : 'linear'
+                type: initialLogFreq ? 'log' : 'category'
             },
             margin: {
                 l: 70,
@@ -2985,7 +3020,7 @@ const spectrogramHTMLTemplate = `<!DOCTYPE html>
 
         function updateLogFreq() {
             const logFreq = document.getElementById('logFreq').checked;
-            Plotly.relayout('heatmapChart', {'yaxis.type': logFreq ? 'log' : 'linear'});
+            Plotly.relayout('heatmapChart', {'yaxis.type': logFreq ? 'log' : 'category'});
         }
 
         function resetView() {
