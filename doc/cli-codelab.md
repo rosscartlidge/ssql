@@ -1029,8 +1029,7 @@ go build -o monitor monitor.go
 - `to json [file]` - Write JSON/JSONL file (or stdout)
 - `to arrow [file]` - Write Apache Arrow IPC file (10-20x faster I/O)
 - `to xlsx [file]` - Write Excel XLSX file
-- `to chart` - Create interactive HTML chart
-- `to heatmap` - Create heatmap/spectrogram visualization (Plotly.js)
+- `to chart` - Create interactive HTML chart (including heatmaps via `-type heatmap`)
 - `to animate` - Create animated heatmap or histogram with video-player controls
 - `to explore [file]` - Create interactive data explorer (table + charts + aggregation)
   - `-wasm path/to/ssql.wasm` - Enable client-side WASM transforms (build with `make wasm`)

@@ -336,7 +336,7 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 		},
 		{
 			name:           "heatmap",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to heatmap -x age -y salary -z dept`,
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to chart -type heatmap -x age -y salary -z dept`,
 			expectFragment: true,
 			wantSubstring:  `ssql.HeatmapChart`,
 		},
