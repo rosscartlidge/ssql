@@ -1269,6 +1269,206 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 }
 
 // ============================================================================
+// ROLLUP / CUBE OPERATIONS
+// ============================================================================
+
+// RollupMode specifies which grouping sets to compute.
+type RollupMode int
+
+const (
+	// RollupHierarchical produces grouping sets by peeling fields from the right:
+	// [], [a], [a,b], [a,b,c] — like SQL GROUP BY ROLLUP(a,b,c).
+	RollupHierarchical RollupMode = iota
+
+	// RollupCube produces all 2^n subsets of fields:
+	// [], [a], [b], [a,b] — like SQL GROUP BY CUBE(a,b).
+	RollupCube
+)
+
+// RollupConfig specifies the fields, aggregations, and mode for a rollup operation.
+type RollupConfig struct {
+	Fields       []string                 // Group-by fields in order
+	Aggregations map[string]AggregateFunc // Named aggregation functions
+	Mode         RollupMode               // Rollup or Cube
+}
+
+// Rollup performs hierarchical or cube aggregation, enriching each detail-level row
+// with parent-level aggregation results using a field naming convention.
+//
+// For each detail-level group (all fields), the output record contains:
+//   - The group key fields (e.g., a_kind, z_kind)
+//   - Detail-level aggregations with full prefix: a_kind_z_kind_count
+//   - Parent-level aggregations with shorter prefixes: a_kind_count, count
+//
+// Field naming rule for grouping set [f1, f2, ...] and aggregation result name R:
+//   - ()           → R           (e.g., "count")
+//   - (a)          → a_R         (e.g., "a_kind_count")
+//   - (a, b)       → a_b_R       (e.g., "a_kind_z_kind_count")
+//
+// Example:
+//
+//	config := ssql.RollupConfig{
+//	    Fields:       []string{"dept", "region"},
+//	    Aggregations: map[string]ssql.AggregateFunc{"count": ssql.Count()},
+//	    Mode:         ssql.RollupHierarchical,
+//	}
+//	enriched := ssql.Rollup(config)(records)
+//	// Each row: dept, region, dept_region_count, dept_count, count
+func Rollup(config RollupConfig) Filter[Record, Record] {
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			// 1. Materialize all input records
+			var allRecords []Record
+			for r := range input {
+				allRecords = append(allRecords, r)
+			}
+			if len(allRecords) == 0 {
+				return
+			}
+
+			// 2. Compute grouping sets
+			sets := computeGroupingSets(config.Fields, config.Mode)
+
+			// 3. For each grouping set, group records and compute aggregations
+			// Store results: groupingSetIndex → groupKey → aggName → value
+			type aggResults map[string]any
+			type groupResults map[string]aggResults
+			setResults := make([]groupResults, len(sets))
+
+			for i, setFields := range sets {
+				setResults[i] = make(groupResults)
+
+				// Group records by these fields
+				groups := make(map[string][]Record)
+				var groupOrder []string
+
+				for _, r := range allRecords {
+					key := buildGroupKey(r, setFields)
+					if _, exists := groups[key]; !exists {
+						groupOrder = append(groupOrder, key)
+					}
+					groups[key] = append(groups[key], r)
+				}
+
+				// Compute aggregations for each group
+				for _, key := range groupOrder {
+					members := groups[key]
+					results := make(aggResults)
+					for name, aggFn := range config.Aggregations {
+						results[name] = aggFn(members).getValue()
+					}
+					setResults[i][key] = results
+				}
+			}
+
+			// 4. Emit output: iterate over the most detailed level (last set = all fields)
+			detailSetIdx := len(sets) - 1
+			detailFields := sets[detailSetIdx]
+
+			// Group records at detail level to get key values
+			detailGroups := make(map[string]Record) // key → first record (for field values)
+			var detailOrder []string
+
+			for _, r := range allRecords {
+				key := buildGroupKey(r, detailFields)
+				if _, exists := detailGroups[key]; !exists {
+					detailGroups[key] = r
+					detailOrder = append(detailOrder, key)
+				}
+			}
+
+			for _, detailKey := range detailOrder {
+				representative := detailGroups[detailKey]
+				mut := MakeMutableRecord()
+
+				// Set group key fields from the representative record
+				for _, field := range config.Fields {
+					val, exists := Get[any](representative, field)
+					if exists {
+						mut.fields[field] = val
+					}
+				}
+
+				// For each grouping set, look up the aggregation results and add with prefix
+				for i, setFields := range sets {
+					// Build the lookup key for this grouping set from the detail record
+					lookupKey := buildGroupKey(representative, setFields)
+					prefix := groupingSetPrefix(setFields)
+
+					if results, ok := setResults[i][lookupKey]; ok {
+						for aggName, value := range results {
+							fieldName := prefix + aggName
+							mut.fields[fieldName] = value
+						}
+					}
+				}
+
+				if !yield(mut.Freeze()) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// computeGroupingSets returns the list of field subsets for the given mode.
+//
+// For RollupHierarchical with fields [a, b, c]:
+//
+//	[], [a], [a,b], [a,b,c]
+//
+// For RollupCube with fields [a, b]:
+//
+//	[], [a], [b], [a,b]
+func computeGroupingSets(fields []string, mode RollupMode) [][]string {
+	switch mode {
+	case RollupCube:
+		n := len(fields)
+		sets := make([][]string, 0, 1<<n)
+		for mask := 0; mask < (1 << n); mask++ {
+			var subset []string
+			for i := range n {
+				if mask&(1<<i) != 0 {
+					subset = append(subset, fields[i])
+				}
+			}
+			sets = append(sets, subset)
+		}
+		return sets
+	default: // RollupHierarchical
+		sets := make([][]string, len(fields)+1)
+		sets[0] = []string{} // grand total
+		for i := 1; i <= len(fields); i++ {
+			sets[i] = make([]string, i)
+			copy(sets[i], fields[:i])
+		}
+		return sets
+	}
+}
+
+// groupingSetPrefix joins field names with "_" and appends "_".
+// Returns empty string for the grand total (empty field list).
+func groupingSetPrefix(fields []string) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Join(fields, "_") + "_"
+}
+
+// buildGroupKey concatenates field values as a lookup key for a grouping set.
+func buildGroupKey(record Record, fields []string) string {
+	if len(fields) == 0 {
+		return "" // grand total — single group
+	}
+	var parts []string
+	for _, field := range fields {
+		val, _ := Get[any](record, field)
+		parts = append(parts, fmt.Sprintf("%v", val))
+	}
+	return strings.Join(parts, "\x00")
+}
+
+// ============================================================================
 // COMMON AGGREGATION FUNCTIONS
 // ============================================================================
 

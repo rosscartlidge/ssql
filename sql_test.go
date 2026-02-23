@@ -1077,3 +1077,294 @@ func TestAggregateNoSequenceField(t *testing.T) {
 		t.Error("Should not have aggregation when sequence field is missing")
 	}
 }
+
+// ============================================================================
+// ROLLUP / CUBE TESTS
+// ============================================================================
+
+func TestRollupBasic(t *testing.T) {
+	// 2 fields, 1 aggregation (count)
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"a": int64(1), "z": int64(10)}),
+		NewRecord(map[string]any{"a": int64(1), "z": int64(10)}),
+		NewRecord(map[string]any{"a": int64(1), "z": int64(20)}),
+		NewRecord(map[string]any{"a": int64(2), "z": int64(10)}),
+	})
+
+	config := RollupConfig{
+		Fields:       []string{"a", "z"},
+		Aggregations: map[string]AggregateFunc{"count": Count()},
+		Mode:         RollupHierarchical,
+	}
+
+	result := slices.Collect(Rollup(config)(input))
+
+	// Should have 3 detail groups: (1,10), (1,20), (2,10)
+	if len(result) != 3 {
+		t.Fatalf("Rollup should return 3 detail rows, got %d", len(result))
+	}
+
+	// Check each row has count (grand total), a_count (per-a), a_z_count (detail)
+	for _, r := range result {
+		if !r.Has("count") {
+			t.Error("Each row should have count (grand total)")
+		}
+		if !r.Has("a_count") {
+			t.Error("Each row should have a_count (per-a subtotal)")
+		}
+		if !r.Has("a_z_count") {
+			t.Error("Each row should have a_z_count (detail)")
+		}
+	}
+
+	// Grand total should be 4 for all rows
+	for _, r := range result {
+		if GetOr(r, "count", int64(0)) != int64(4) {
+			t.Errorf("Grand total count should be 4, got %v", GetOr(r, "count", int64(0)))
+		}
+	}
+
+	// Find the (a=1, z=10) row
+	for _, r := range result {
+		if GetOr(r, "a", int64(0)) == int64(1) && GetOr(r, "z", int64(0)) == int64(10) {
+			// a=1 subtotal: 3 records have a=1
+			if GetOr(r, "a_count", int64(0)) != int64(3) {
+				t.Errorf("a=1 subtotal should be 3, got %v", GetOr(r, "a_count", int64(0)))
+			}
+			// detail: 2 records have a=1, z=10
+			if GetOr(r, "a_z_count", int64(0)) != int64(2) {
+				t.Errorf("(a=1,z=10) count should be 2, got %v", GetOr(r, "a_z_count", int64(0)))
+			}
+		}
+	}
+}
+
+func TestRollupMultipleAggs(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "eng", "salary": float64(100)}),
+		NewRecord(map[string]any{"dept": "eng", "salary": float64(200)}),
+		NewRecord(map[string]any{"dept": "sales", "salary": float64(150)}),
+	})
+
+	config := RollupConfig{
+		Fields: []string{"dept"},
+		Aggregations: map[string]AggregateFunc{
+			"n":     Count(),
+			"total": Sum("salary"),
+		},
+		Mode: RollupHierarchical,
+	}
+
+	result := slices.Collect(Rollup(config)(input))
+
+	if len(result) != 2 {
+		t.Fatalf("Should have 2 detail rows (eng, sales), got %d", len(result))
+	}
+
+	// Each row should have: dept_n, dept_total, n, total
+	for _, r := range result {
+		if !r.Has("dept_n") {
+			t.Error("Should have dept_n (detail)")
+		}
+		if !r.Has("dept_total") {
+			t.Error("Should have dept_total (detail)")
+		}
+		if !r.Has("n") {
+			t.Error("Should have n (grand total)")
+		}
+		if !r.Has("total") {
+			t.Error("Should have total (grand total)")
+		}
+	}
+
+	// Grand totals: n=3, total=450
+	for _, r := range result {
+		if GetOr(r, "n", int64(0)) != int64(3) {
+			t.Errorf("Grand total n should be 3, got %v", GetOr(r, "n", int64(0)))
+		}
+		if GetOr(r, "total", float64(0)) != float64(450) {
+			t.Errorf("Grand total total should be 450, got %v", GetOr(r, "total", float64(0)))
+		}
+	}
+
+	// Find eng row
+	for _, r := range result {
+		if GetOr(r, "dept", "") == "eng" {
+			if GetOr(r, "dept_n", int64(0)) != int64(2) {
+				t.Errorf("eng dept_n should be 2, got %v", GetOr(r, "dept_n", int64(0)))
+			}
+			if GetOr(r, "dept_total", float64(0)) != float64(300) {
+				t.Errorf("eng dept_total should be 300, got %v", GetOr(r, "dept_total", float64(0)))
+			}
+		}
+	}
+}
+
+func TestCubeBasic(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"a": int64(1), "z": int64(10)}),
+		NewRecord(map[string]any{"a": int64(1), "z": int64(10)}),
+		NewRecord(map[string]any{"a": int64(1), "z": int64(20)}),
+		NewRecord(map[string]any{"a": int64(2), "z": int64(10)}),
+	})
+
+	config := RollupConfig{
+		Fields:       []string{"a", "z"},
+		Aggregations: map[string]AggregateFunc{"count": Count()},
+		Mode:         RollupCube,
+	}
+
+	result := slices.Collect(Rollup(config)(input))
+
+	// Same 3 detail rows as rollup
+	if len(result) != 3 {
+		t.Fatalf("Cube should return 3 detail rows, got %d", len(result))
+	}
+
+	// Cube should have z_count in addition to rollup fields
+	for _, r := range result {
+		if !r.Has("count") {
+			t.Error("Should have count (grand total)")
+		}
+		if !r.Has("a_count") {
+			t.Error("Should have a_count")
+		}
+		if !r.Has("z_count") {
+			t.Error("Should have z_count (cube-specific)")
+		}
+		if !r.Has("a_z_count") {
+			t.Error("Should have a_z_count (detail)")
+		}
+	}
+
+	// Check z_count for the (a=1, z=10) row: z=10 has 3 records
+	for _, r := range result {
+		if GetOr(r, "a", int64(0)) == int64(1) && GetOr(r, "z", int64(0)) == int64(10) {
+			if GetOr(r, "z_count", int64(0)) != int64(3) {
+				t.Errorf("z=10 count should be 3, got %v", GetOr(r, "z_count", int64(0)))
+			}
+		}
+	}
+}
+
+func TestRollupSingleField(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "eng"}),
+		NewRecord(map[string]any{"dept": "eng"}),
+		NewRecord(map[string]any{"dept": "sales"}),
+	})
+
+	config := RollupConfig{
+		Fields:       []string{"dept"},
+		Aggregations: map[string]AggregateFunc{"count": Count()},
+		Mode:         RollupHierarchical,
+	}
+
+	result := slices.Collect(Rollup(config)(input))
+
+	if len(result) != 2 {
+		t.Fatalf("Should have 2 groups, got %d", len(result))
+	}
+
+	// Each row: dept, dept_count, count
+	for _, r := range result {
+		if !r.Has("dept_count") {
+			t.Error("Should have dept_count")
+		}
+		if !r.Has("count") {
+			t.Error("Should have count (grand total)")
+		}
+	}
+
+	// eng: dept_count=2, count=3
+	for _, r := range result {
+		if GetOr(r, "dept", "") == "eng" {
+			if GetOr(r, "dept_count", int64(0)) != int64(2) {
+				t.Errorf("eng dept_count should be 2, got %v", GetOr(r, "dept_count", int64(0)))
+			}
+			if GetOr(r, "count", int64(0)) != int64(3) {
+				t.Errorf("Grand total count should be 3, got %v", GetOr(r, "count", int64(0)))
+			}
+		}
+	}
+}
+
+func TestRollupEmpty(t *testing.T) {
+	empty := func(yield func(Record) bool) {}
+
+	config := RollupConfig{
+		Fields:       []string{"a", "b"},
+		Aggregations: map[string]AggregateFunc{"count": Count()},
+		Mode:         RollupHierarchical,
+	}
+
+	result := slices.Collect(Rollup(config)(empty))
+	if len(result) != 0 {
+		t.Errorf("Rollup on empty should return 0 rows, got %d", len(result))
+	}
+}
+
+func TestRollupThreeFields(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"a": "x", "b": "y", "c": "z"}),
+		NewRecord(map[string]any{"a": "x", "b": "y", "c": "w"}),
+		NewRecord(map[string]any{"a": "x", "b": "q", "c": "z"}),
+	})
+
+	config := RollupConfig{
+		Fields:       []string{"a", "b", "c"},
+		Aggregations: map[string]AggregateFunc{"n": Count()},
+		Mode:         RollupHierarchical,
+	}
+
+	result := slices.Collect(Rollup(config)(input))
+
+	// 3 detail groups: (x,y,z), (x,y,w), (x,q,z)
+	if len(result) != 3 {
+		t.Fatalf("Should have 3 detail rows, got %d", len(result))
+	}
+
+	// Each row should have 4 levels: n, a_n, a_b_n, a_b_c_n
+	for _, r := range result {
+		if !r.Has("n") {
+			t.Error("Should have n (grand total)")
+		}
+		if !r.Has("a_n") {
+			t.Error("Should have a_n")
+		}
+		if !r.Has("a_b_n") {
+			t.Error("Should have a_b_n")
+		}
+		if !r.Has("a_b_c_n") {
+			t.Error("Should have a_b_c_n (detail)")
+		}
+	}
+
+	// Grand total n should be 3
+	for _, r := range result {
+		if GetOr(r, "n", int64(0)) != int64(3) {
+			t.Errorf("Grand total n should be 3, got %v", GetOr(r, "n", int64(0)))
+		}
+	}
+
+	// a_n should be 3 for all (only one a value "x")
+	for _, r := range result {
+		if GetOr(r, "a_n", int64(0)) != int64(3) {
+			t.Errorf("a_n should be 3 (all records have a=x), got %v", GetOr(r, "a_n", int64(0)))
+		}
+	}
+
+	// a_b_n: (x,y)=2, (x,q)=1
+	for _, r := range result {
+		if GetOr(r, "b", "") == "y" {
+			if GetOr(r, "a_b_n", int64(0)) != int64(2) {
+				t.Errorf("(x,y) a_b_n should be 2, got %v", GetOr(r, "a_b_n", int64(0)))
+			}
+		}
+		if GetOr(r, "b", "") == "q" {
+			if GetOr(r, "a_b_n", int64(0)) != int64(1) {
+				t.Errorf("(x,q) a_b_n should be 1, got %v", GetOr(r, "a_b_n", int64(0)))
+			}
+		}
+	}
+}

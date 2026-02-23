@@ -204,6 +204,14 @@ ssql from sales.csv | ssql group-by region product -sum revenue total -count cou
 
 # Group-by with collect (gather all values)
 ssql from logs.csv | ssql group-by user -count count -collect timestamp timestamps
+
+# Rollup: enrich rows with parent-level aggregations (grand total + subtotals)
+ssql from sales.csv | ssql group-by region product -count n -sum revenue total -rollup
+# Each row gets: region_product_n, region_product_total, region_n, region_total, n, total
+
+# Cube: like rollup but adds all cross-dimensional combinations
+ssql from sales.csv | ssql group-by region product -count n -cube
+# Each row also gets: product_n (in addition to rollup fields)
 ```
 
 ### 6. Signal Processing Pipeline

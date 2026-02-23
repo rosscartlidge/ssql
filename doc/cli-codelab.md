@@ -407,6 +407,43 @@ Output:
 - `min` - Minimum value
 - `max` - Maximum value
 
+### Rollup and Cube
+
+Enrich each row with parent-level aggregations using `-rollup` or `-cube`:
+
+```bash
+# Hierarchical rollup: grand total + per-department subtotals
+ssql from employees.csv | \
+  ssql group-by department -count n -sum salary total -rollup
+```
+
+Output (each row carries its own subtotal AND the grand total):
+```json
+{"department":"Engineering","department_n":3,"department_total":295000,"n":6,"total":495000}
+{"department":"Marketing","department_n":2,"department_total":130000,"n":6,"total":495000}
+{"department":"Sales","department_n":1,"department_total":70000,"n":6,"total":495000}
+```
+
+With two grouping fields, rollup adds intermediate subtotals:
+
+```bash
+# department + level rollup
+ssql from employees.csv | \
+  ssql group-by department level -count n -rollup
+```
+
+Each row gets: `department_level_n` (detail), `department_n` (subtotal), `n` (grand total).
+
+Use `-cube` for all combinations (adds cross-dimensional subtotals):
+
+```bash
+# Cube: adds level_n in addition to rollup fields
+ssql from employees.csv | \
+  ssql group-by department level -count n -cube
+```
+
+Each row gets: `department_level_n`, `department_n`, `level_n`, `n`.
+
 ---
 
 ## SQL-Like Operations

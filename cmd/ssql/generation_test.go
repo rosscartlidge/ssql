@@ -317,6 +317,18 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			wantSubstring:  `ssql.GroupByFields`,
 		},
 		{
+			name:           "group-by-rollup",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by a_kind z_kind -count count -rollup`,
+			expectFragment: true,
+			wantSubstring:  `ssql.Rollup`,
+		},
+		{
+			name:           "group-by-cube",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by a_kind z_kind -count count -cube`,
+			expectFragment: true,
+			wantSubstring:  `ssql.RollupCube`,
+		},
+		{
 			name:           "pivot",
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test pivot -row dept -col quarter -val revenue -func sum`,
 			expectFragment: true,

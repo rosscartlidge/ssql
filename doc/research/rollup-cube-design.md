@@ -1,5 +1,7 @@
 # ROLLUP and CUBE Aggregation Design
 
+**Status: Implemented** — Option B chosen (`-rollup`/`-cube` flags on `group-by` with enriched field naming).
+
 ## Problem
 
 `group-by a_kind z_kind -count count` only produces one level of aggregation — the full (a_kind, z_kind) combination. Users often need counts at every level:

@@ -935,6 +935,49 @@ results := ssql.Aggregate("sales_data", map[string]ssql.AggregateFunc{
 })(groupedRecords)
 ```
 
+#### Rollup
+```go
+func Rollup(config RollupConfig) Filter[Record, Record]
+```
+Performs hierarchical or cube aggregation, enriching each detail-level row with parent-level aggregation results using a field naming convention.
+
+**Types:**
+```go
+type RollupMode int
+const (
+    RollupHierarchical RollupMode = iota // (), (a), (a,b), (a,b,c)
+    RollupCube                           // all 2^n combinations
+)
+
+type RollupConfig struct {
+    Fields       []string                 // Group-by fields in order
+    Aggregations map[string]AggregateFunc // Named aggregation functions
+    Mode         RollupMode               // Rollup or Cube
+}
+```
+
+**Field naming rule:** For grouping set `[f1, f2, ...]` and aggregation result name `R`:
+- `()` → `R` (e.g., `count`)
+- `(dept)` → `dept_R` (e.g., `dept_count`)
+- `(dept, region)` → `dept_region_R` (e.g., `dept_region_count`)
+
+**Example:**
+```go
+config := ssql.RollupConfig{
+    Fields:       []string{"dept", "region"},
+    Aggregations: map[string]ssql.AggregateFunc{
+        "count": ssql.Count(),
+        "total": ssql.Sum("salary"),
+    },
+    Mode: ssql.RollupHierarchical,
+}
+enriched := ssql.Rollup(config)(records)
+// Each row: dept, region, dept_region_count, dept_region_total,
+//           dept_count, dept_total, count, total
+```
+
+Use `RollupCube` mode to add all 2^n field combinations (e.g., adds `region_count` and `region_total`).
+
 ---
 
 ## Composition Operations

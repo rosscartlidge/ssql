@@ -34,6 +34,8 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql group-by dept -collect name all_names", "Collect all names into array per department").
 		Example("ssql from data.csv | ssql group-by dept -expr 'sum(salary * bonus)' total_comp", "Custom expression aggregation").
 		Example("ssql from huge.csv | ssql group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total", "Memory-efficient streaming aggregation").
+		Example("ssql from data.csv | ssql group-by a_kind z_kind -count count -rollup", "Hierarchical rollup with parent-level counts").
+		Example("ssql from data.csv | ssql group-by a_kind z_kind -count count -cube", "Full cube with all combination counts").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -103,9 +105,20 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
 		Done().
+		Flag("-rollup").
+		Bool().
+		Global().
+		Help("Hierarchical rollup: enrich rows with parent-level aggregations").
+		Done().
+		Flag("-cube").
+		Bool().
+		Global().
+		Help("Full cube: enrich rows with all combination aggregations").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var groupByFields []string
 			var generate bool
+			var rollup, cube bool
 
 			// Extract group-by fields from variadic positional
 			if fieldsVal, ok := ctx.GlobalFlags["FIELDS"]; ok {
@@ -126,9 +139,19 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
+			if val, ok := ctx.GlobalFlags["-rollup"]; ok {
+				rollup = val.(bool)
+			}
+			if val, ok := ctx.GlobalFlags["-cube"]; ok {
+				cube = val.(bool)
+			}
 
 			if len(groupByFields) == 0 {
 				return fmt.Errorf("no group-by fields specified")
+			}
+
+			if rollup && cube {
+				return fmt.Errorf("cannot use both -rollup and -cube; choose one")
 			}
 
 			// Check if generation is enabled (flag or env var)
@@ -301,6 +324,66 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Check if we have any aggregations
 			hasAnyAgg := len(aggSpecs) > 0 || len(exprSpecs) > 0 || len(streamExprSpecs) > 0
+
+			// Validate rollup/cube requires aggregations
+			if (rollup || cube) && !hasAnyAgg {
+				return fmt.Errorf("-rollup/-cube requires at least one aggregation (-count, -sum, etc.)")
+			}
+
+			// Rollup/cube path: use ssql.Rollup()
+			if (rollup || cube) && hasAnyAgg {
+				mode := ssql.RollupHierarchical
+				if cube {
+					mode = ssql.RollupCube
+				}
+
+				aggregations := make(map[string]ssql.AggregateFunc)
+				for _, spec := range aggSpecs {
+					agg, err := buildAggregator(spec.function, spec.field)
+					if err != nil {
+						return err
+					}
+					aggregations[spec.result] = agg
+				}
+				for _, spec := range exprSpecs {
+					aggregations[spec.result] = ssql.ExprAgg(spec.expression)
+				}
+
+				config := ssql.RollupConfig{
+					Fields:       groupByFields,
+					Aggregations: aggregations,
+					Mode:         mode,
+				}
+
+				result := ssql.Rollup(config)(records)
+
+				// Build output schema
+				var outputSchema *lib.Schema
+				if inputSchema != nil {
+					outputSchema = lib.NewSchema()
+					for _, field := range groupByFields {
+						if inputSchema.HasField(field) {
+							outputSchema.AddField(field, inputSchema.TypeOf(field))
+						}
+					}
+					// Add all prefixed aggregation fields
+					sets := computeGroupingSetsForSchema(groupByFields, mode)
+					for _, setFields := range sets {
+						prefix := groupingSetPrefixForSchema(setFields)
+						for _, spec := range aggSpecs {
+							outputSchema.AddField(prefix+spec.result, aggResultType(spec.function))
+						}
+						for _, spec := range exprSpecs {
+							outputSchema.AddField(prefix+spec.result, "float")
+						}
+					}
+				}
+
+				if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, result); err != nil {
+					return fmt.Errorf("writing output: %w", err)
+				}
+				return nil
+			}
 
 			// If no aggregations, output unique groupings (DISTINCT on grouped fields)
 			if !hasAnyAgg {
@@ -667,6 +750,65 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		}
 	}
 
+	// Extract rollup/cube flags for code generation
+	var rollup, cube bool
+	if val, ok := ctx.GlobalFlags["-rollup"]; ok {
+		rollup = val.(bool)
+	}
+	if val, ok := ctx.GlobalFlags["-cube"]; ok {
+		cube = val.(bool)
+	}
+
+	if rollup && cube {
+		return fmt.Errorf("cannot use both -rollup and -cube; choose one")
+	}
+
+	// Rollup/cube code generation path
+	if (rollup || cube) && (len(aggSpecs) > 0 || len(exprSpecs) > 0) {
+		modeStr := "ssql.RollupHierarchical"
+		if cube {
+			modeStr = "ssql.RollupCube"
+		}
+
+		// Build fields list
+		var fieldsList string
+		for i, field := range groupByFields {
+			if i > 0 {
+				fieldsList += ", "
+			}
+			fieldsList += fmt.Sprintf("%q", field)
+		}
+
+		// Build aggregations map
+		var aggLines string
+		first := true
+		for _, spec := range aggSpecs {
+			if !first {
+				aggLines += ",\n"
+			}
+			first = false
+			aggLines += fmt.Sprintf("\t\t\t%q: %s", spec.result, generateAggregatorCode(spec))
+		}
+		for _, spec := range exprSpecs {
+			if !first {
+				aggLines += ",\n"
+			}
+			first = false
+			aggLines += fmt.Sprintf("\t\t\t%q: ssql.ExprAgg(%q)", spec.result, spec.expression)
+		}
+
+		code := fmt.Sprintf(`rollupResult := ssql.Rollup(ssql.RollupConfig{
+		Fields: []string{%s},
+		Aggregations: map[string]ssql.AggregateFunc{
+%s,
+		},
+		Mode: %s,
+	})(%s)`, fieldsList, aggLines, modeStr, inputVar)
+
+		frag := lib.NewStmtFragment("rollupResult", inputVar, code, nil, getCommandString())
+		return lib.WriteCodeFragment(frag)
+	}
+
 	// If no aggregations at all, generate code for DISTINCT on grouped fields
 	if len(aggSpecs) == 0 && len(exprSpecs) == 0 {
 		// Build field list for key function
@@ -768,6 +910,41 @@ func buildMapLiteral(fields []string) string {
 		parts = append(parts, fmt.Sprintf("%q: true", field))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// computeGroupingSetsForSchema mirrors ssql.computeGroupingSets for schema building.
+func computeGroupingSetsForSchema(fields []string, mode ssql.RollupMode) [][]string {
+	switch mode {
+	case ssql.RollupCube:
+		n := len(fields)
+		sets := make([][]string, 0, 1<<n)
+		for mask := range 1 << n {
+			var subset []string
+			for i := range n {
+				if mask&(1<<i) != 0 {
+					subset = append(subset, fields[i])
+				}
+			}
+			sets = append(sets, subset)
+		}
+		return sets
+	default: // RollupHierarchical
+		sets := make([][]string, len(fields)+1)
+		sets[0] = []string{}
+		for i := 1; i <= len(fields); i++ {
+			sets[i] = make([]string, i)
+			copy(sets[i], fields[:i])
+		}
+		return sets
+	}
+}
+
+// groupingSetPrefixForSchema mirrors ssql.groupingSetPrefix for schema building.
+func groupingSetPrefixForSchema(fields []string) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Join(fields, "_") + "_"
 }
 
 // aggResultType returns the schema type for an aggregation function result
