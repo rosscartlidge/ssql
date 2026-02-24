@@ -623,9 +623,118 @@ Maintains running count statistics.
 
 ---
 
-## Window Operations
+## SQL Window / Analytic Functions
 
-*Functions for windowing and batching streams*
+*Compute rankings, offsets, and aggregates over partitions without collapsing rows*
+
+Every input row comes out enriched with computed values — unlike `GroupByFields` which collapses rows.
+
+### Window
+```go
+func Window(configs []WindowConfig) Filter[Record, Record]
+```
+Applies one or more window function configurations to a record stream. Each `WindowConfig` can define its own partitioning, ordering, frame, and set of window functions.
+
+**Types:**
+```go
+type OrderField struct {
+    Field string
+    Desc  bool
+}
+
+type WindowFrame struct {
+    Preceding int  // rows before current (-1 = UNBOUNDED PRECEDING)
+    Following int  // rows after current (-1 = UNBOUNDED FOLLOWING)
+}
+
+type WindowSpec struct {
+    Function   WindowFunc  // The window function to apply
+    ResultName string      // Output field name
+}
+
+type WindowConfig struct {
+    PartitionBy []string      // PARTITION BY fields (empty = whole input)
+    OrderBy     []OrderField  // ORDER BY fields
+    Frame       WindowFrame   // Frame specification
+    Specs       []WindowSpec  // Window functions to compute
+}
+```
+
+**Window Function Constructors:**
+
+| Constructor | SQL Equivalent | Description |
+|-------------|---------------|-------------|
+| `WRowNumber()` | `ROW_NUMBER()` | Sequential number within partition |
+| `WRank()` | `RANK()` | Rank with gaps on ties (1,2,2,4) |
+| `WDenseRank()` | `DENSE_RANK()` | Rank without gaps (1,2,2,3) |
+| `WNtile(n)` | `NTILE(n)` | Distribute into n buckets |
+| `WPercentRank()` | `PERCENT_RANK()` | Relative rank as 0..1 |
+| `WLag(field, n)` | `LAG(field, n)` | Value n rows before |
+| `WLead(field, n)` | `LEAD(field, n)` | Value n rows after |
+| `WFirst(field)` | `FIRST_VALUE(field)` | First value in frame |
+| `WLast(field)` | `LAST_VALUE(field)` | Last value in frame |
+| `WSum(field)` | `SUM(field)` | Sum over frame |
+| `WAvg(field)` | `AVG(field)` | Average over frame |
+| `WCount()` | `COUNT(*)` | Count of rows in frame |
+| `WMin(field)` | `MIN(field)` | Minimum in frame |
+| `WMax(field)` | `MAX(field)` | Maximum in frame |
+
+**Example — Row numbering within partitions:**
+```go
+// Rank employees by salary within each department
+ranked := ssql.Window([]ssql.WindowConfig{{
+    PartitionBy: []string{"dept"},
+    OrderBy:     []ssql.OrderField{{Field: "salary", Desc: true}},
+    Frame:       ssql.WindowFrame{Preceding: -1, Following: 0},
+    Specs: []ssql.WindowSpec{
+        {Function: ssql.WRowNumber(), ResultName: "rank"},
+    },
+}})(employees)
+```
+
+**Example — Running total and lag:**
+```go
+// Running revenue total + previous month's revenue
+enriched := ssql.Window([]ssql.WindowConfig{{
+    PartitionBy: []string{"dept"},
+    OrderBy:     []ssql.OrderField{{Field: "date"}},
+    Frame:       ssql.WindowFrame{Preceding: -1, Following: 0},
+    Specs: []ssql.WindowSpec{
+        {Function: ssql.WSum("revenue"), ResultName: "running_total"},
+        {Function: ssql.WLag("revenue", 1), ResultName: "prev_revenue"},
+    },
+}})(sales)
+```
+
+**Example — Moving average with custom frame:**
+```go
+// 7-day moving average: ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+smoothed := ssql.Window([]ssql.WindowConfig{{
+    OrderBy: []ssql.OrderField{{Field: "date"}},
+    Frame:   ssql.WindowFrame{Preceding: 6, Following: 0},
+    Specs: []ssql.WindowSpec{
+        {Function: ssql.WAvg("price"), ResultName: "ma7"},
+    },
+}})(prices)
+```
+
+### CompareAny
+```go
+func CompareAny(a, b any) int
+```
+Compares two values of any type. Returns -1, 0, or 1. Handles nil (sorts first), cross-type numeric comparison, and string fallback.
+
+### CompareRecordFields
+```go
+func CompareRecordFields(a, b Record, orderBy []OrderField) int
+```
+Compares two records by multiple order fields with ascending/descending support.
+
+---
+
+## Batch Window Operations
+
+*Functions for windowing and batching streams into slices*
 
 > 🔄 **Infinite Stream Patterns**: Learn advanced windowing for real-time processing in the [Advanced Tutorial](advanced-tutorial.md#windowing-for-infinite-streams).
 

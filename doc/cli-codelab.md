@@ -548,6 +548,101 @@ SELECT * FROM suppliers
 
 ---
 
+## Window Functions
+
+Window functions compute rankings, offsets, and aggregates **without collapsing rows** — every input row comes out enriched with computed values. This is the key difference from `group-by`, which reduces rows.
+
+### Row Numbering
+
+Number rows within a partition:
+
+```bash
+# Rank employees by salary within each department
+ssql from employees.csv | \
+  ssql window -row-number rn -partition dept -order salary -desc | \
+  ssql to table
+```
+
+### Top-N Per Group
+
+Combine `window` with `where` to get top records per group:
+
+```bash
+# Top 3 highest-paid per department
+ssql from employees.csv | \
+  ssql window -row-number rn -partition dept -order salary -desc | \
+  ssql where -where rn le 3 | \
+  ssql exclude rn | \
+  ssql to table
+```
+
+### Running Totals and Aggregates
+
+Compute cumulative values using aggregate window functions:
+
+```bash
+# Running revenue total per department
+ssql from sales.csv | \
+  ssql window -sum revenue running_total -partition dept -order date
+
+# 7-day moving average
+ssql from prices.csv | \
+  ssql window -avg price ma7 -order date -rows 6,0
+```
+
+The `-rows P,F` flag controls the frame: `P` rows preceding and `F` rows following. Use `*` for unbounded. The default is `*,0` (unbounded preceding to current row).
+
+### Lag and Lead
+
+Access values from previous or subsequent rows:
+
+```bash
+# Month-over-month revenue change
+ssql from monthly.csv | \
+  ssql window -lag revenue 1 prev_revenue -order month | \
+  ssql update -set-expr change 'revenue - prev_revenue'
+```
+
+### Multiple Windows with Clauses
+
+Use `+` to define different window specs with different partitions or ordering:
+
+```bash
+# Salary rank within dept + lag by date (different orderings)
+ssql from employees.csv | \
+  ssql window \
+    -rank salary_rank -partition dept -order salary -desc \
+    + \
+    -lag hire_date 1 prev_hire -order hire_date
+```
+
+### Available Window Functions
+
+| Flag | SQL Equivalent | Args |
+|------|---------------|------|
+| `-row-number` | `ROW_NUMBER()` | result |
+| `-rank` | `RANK()` | result |
+| `-dense-rank` | `DENSE_RANK()` | result |
+| `-ntile` | `NTILE(n)` | n result |
+| `-percent-rank` | `PERCENT_RANK()` | result |
+| `-lag` | `LAG(field, n)` | field n result |
+| `-lead` | `LEAD(field, n)` | field n result |
+| `-first` | `FIRST_VALUE()` | field result |
+| `-last` | `LAST_VALUE()` | field result |
+| `-sum` | `SUM()` | field result |
+| `-avg` | `AVG()` | field result |
+| `-count` | `COUNT(*)` | result |
+| `-min` | `MIN()` | field result |
+| `-max` | `MAX()` | field result |
+
+Equivalent SQL:
+```sql
+SELECT *, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn
+FROM employees
+```
+
+---
+
 ## Signal Processing
 
 ssql includes signal processing commands for frequency analysis and filtering.
@@ -1050,6 +1145,10 @@ go build -o monitor monitor.go
 - `offset` - Skip first N records (SQL OFFSET)
 - `distinct` - Remove duplicate records (SQL DISTINCT)
 
+### Analytics
+- `window` - SQL-style window functions (ranking, lag/lead, running aggregates)
+- `pivot` - Cross-tabulation (pivot table)
+
 ### Multi-Table Operations
 - `join` - Join two data sources (SQL JOIN - inner/left/right/full)
 - `union` - Combine multiple data sources (SQL UNION/UNION ALL)
@@ -1191,7 +1290,7 @@ This pattern makes complex aggregations readable while maintaining type safety a
 ### Key Features
 
 ssql supports comprehensive data processing:
-- **SQL Operations**: `join`, `distinct`, `offset`, `union`, `sort`, `limit`, `group-by`
+- **SQL Operations**: `join`, `distinct`, `offset`, `union`, `sort`, `limit`, `group-by`, `window`, `pivot`
 - **Signal Processing**: `fft`, `ifft`, `convolve`, `correlate` (with optional GPU acceleration)
 - **Multiple Formats**: CSV, TSV, JSON/JSONL, Apache Arrow, XLSX, WAV
 - **Code Generation**: Convert CLI pipelines to standalone Go programs

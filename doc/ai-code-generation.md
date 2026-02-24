@@ -134,7 +134,8 @@ err = ssql.WriteWAV(signal, "output.wav", metadata)
 - **Group**: `GroupByFields("groupName", "field1", "field2", ...)`
 - **Aggregate**: `Aggregate("groupName", map[string]AggregateFunc{...})`
 - **Join**: `InnerJoin(rightSeq, predicate)`, `LeftJoin()`, `RightJoin()`, `FullJoin()`
-- **Window**: `CountWindow[T](size)`, `TimeWindow[T](duration, "timeField")`
+- **Window (analytic)**: `Window([]WindowConfig{...})` — rankings, lag/lead, running aggregates without collapsing rows
+- **Window (batching)**: `CountWindow[T](size)`, `TimeWindow[T](duration, "timeField")`
 
 **Common Naming Mistakes:**
 - ❌ `FlatMap` → ✅ `SelectMany`
@@ -1057,6 +1058,11 @@ When processing natural language requests, map phrases to ssql operations:
 19. **"extract signal"** → `ssql.ExtractSignal(records, field)`
 20. **"read/write excel"** → `ssql.ReadXLSX()`, `ssql.WriteXLSX()`
 21. **"read/write arrow"** → `ssql.ReadArrow()`, `ssql.WriteArrow()`
+22. **"rank/row number/top N per group"** → `ssql.Window([]ssql.WindowConfig{{Specs: []ssql.WindowSpec{{Function: ssql.WRowNumber(), ...}}}})`
+23. **"running total/cumulative sum"** → `ssql.Window(...)` with `ssql.WSum(field)`
+24. **"moving average/rolling"** → `ssql.Window(...)` with `ssql.WAvg(field)` and custom `Frame`
+25. **"lag/lead/previous/next row"** → `ssql.Window(...)` with `ssql.WLag(field, n)` or `ssql.WLead(field, n)`
+26. **"pivot/cross-tab"** → `ssql.Pivot(rowField, colField, valField, aggFunc)`
 
 ---
 

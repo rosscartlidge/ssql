@@ -102,6 +102,9 @@ ssql from -- ps -efl | \
   ssql group-by UID -count process_count | \
   ssql to chart -x UID -y process_count -output chart.html
 
+# Window functions — rankings, running totals, lag/lead without collapsing rows
+ssql from employees.csv | ssql window -row-number rn -partition dept -order salary -desc
+
 # Schema headers are automatic - preserves field order through pipelines
 ssql from data.csv | ssql where -where age gt 30 | ssql to csv output.csv
 
