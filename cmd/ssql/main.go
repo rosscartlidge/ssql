@@ -38,6 +38,7 @@ func buildRootCommand() *cf.Command {
 	cmd = commands.RegisterRename(cmd)
 	cmd = commands.RegisterGroupBy(cmd)
 	cmd = commands.RegisterPivot(cmd)
+	cmd = commands.RegisterWindow(cmd)
 	cmd = commands.RegisterJoin(cmd)
 	cmd = commands.RegisterUnion(cmd)
 	cmd = commands.RegisterFFT(cmd)

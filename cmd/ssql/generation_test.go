@@ -335,6 +335,18 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			wantSubstring:  `ssql.Pivot`,
 		},
 		{
+			name:           "window-row-number",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test window -row-number rn -order salary -desc`,
+			expectFragment: true,
+			wantSubstring:  `ssql.WRowNumber()`,
+		},
+		{
+			name:           "window-partition-sum",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test window -sum amount total -partition dept -order date`,
+			expectFragment: true,
+			wantSubstring:  `ssql.WSum`,
+		},
+		{
 			name:           "to csv",
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to csv /tmp/out.csv`,
 			expectFragment: true,

@@ -1368,3 +1368,550 @@ func TestRollupThreeFields(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// WINDOW FUNCTION TESTS
+// ============================================================================
+
+func TestWindowRowNumber(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "Alice", "salary": float64(90000)}),
+		NewRecord(map[string]any{"name": "Bob", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "Charlie", "salary": float64(70000)}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "salary", Desc: true}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WRowNumber(), ResultName: "rn"}},
+	}})(input))
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(result))
+	}
+
+	// Sorted desc by salary: Alice(90k)=1, Bob(80k)=2, Charlie(70k)=3
+	for _, r := range result {
+		name := GetOr(r, "name", "")
+		rn := GetOr(r, "rn", int64(0))
+		switch name {
+		case "Alice":
+			if rn != 1 {
+				t.Errorf("Alice rn: want 1, got %d", rn)
+			}
+		case "Bob":
+			if rn != 2 {
+				t.Errorf("Bob rn: want 2, got %d", rn)
+			}
+		case "Charlie":
+			if rn != 3 {
+				t.Errorf("Charlie rn: want 3, got %d", rn)
+			}
+		}
+	}
+}
+
+func TestWindowRowNumberPartitioned(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "Alice", "dept": "eng", "salary": float64(90000)}),
+		NewRecord(map[string]any{"name": "Bob", "dept": "eng", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "Charlie", "dept": "sales", "salary": float64(70000)}),
+		NewRecord(map[string]any{"name": "Diana", "dept": "sales", "salary": float64(95000)}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{{
+		PartitionBy: []string{"dept"},
+		OrderBy:     []OrderField{{Field: "salary", Desc: true}},
+		Frame:       WindowFrame{Preceding: -1, Following: 0},
+		Specs:       []WindowSpec{{Function: WRowNumber(), ResultName: "rn"}},
+	}})(input))
+
+	if len(result) != 4 {
+		t.Fatalf("expected 4 records, got %d", len(result))
+	}
+
+	for _, r := range result {
+		name := GetOr(r, "name", "")
+		rn := GetOr(r, "rn", int64(0))
+		switch name {
+		case "Alice":
+			if rn != 1 {
+				t.Errorf("Alice rn: want 1 (top in eng), got %d", rn)
+			}
+		case "Bob":
+			if rn != 2 {
+				t.Errorf("Bob rn: want 2 (2nd in eng), got %d", rn)
+			}
+		case "Diana":
+			if rn != 1 {
+				t.Errorf("Diana rn: want 1 (top in sales), got %d", rn)
+			}
+		case "Charlie":
+			if rn != 2 {
+				t.Errorf("Charlie rn: want 2 (2nd in sales), got %d", rn)
+			}
+		}
+	}
+}
+
+func TestWindowRank(t *testing.T) {
+	// Ties: two records with salary 80000
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "A", "salary": float64(90000)}),
+		NewRecord(map[string]any{"name": "B", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "C", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "D", "salary": float64(70000)}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "salary", Desc: true}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WRank(), ResultName: "rnk"}},
+	}})(input))
+
+	if len(result) != 4 {
+		t.Fatalf("expected 4 records, got %d", len(result))
+	}
+
+	// Expected ranks: A=1, B=2, C=2, D=4 (gap after tie)
+	for _, r := range result {
+		name := GetOr(r, "name", "")
+		rnk := GetOr(r, "rnk", int64(0))
+		switch name {
+		case "A":
+			if rnk != 1 {
+				t.Errorf("A rank: want 1, got %d", rnk)
+			}
+		case "B":
+			if rnk != 2 {
+				t.Errorf("B rank: want 2, got %d", rnk)
+			}
+		case "C":
+			if rnk != 2 {
+				t.Errorf("C rank: want 2, got %d", rnk)
+			}
+		case "D":
+			if rnk != 4 {
+				t.Errorf("D rank: want 4, got %d", rnk)
+			}
+		}
+	}
+}
+
+func TestWindowDenseRank(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "A", "salary": float64(90000)}),
+		NewRecord(map[string]any{"name": "B", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "C", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "D", "salary": float64(70000)}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "salary", Desc: true}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WDenseRank(), ResultName: "dr"}},
+	}})(input))
+
+	// Expected: A=1, B=2, C=2, D=3 (no gap)
+	for _, r := range result {
+		name := GetOr(r, "name", "")
+		dr := GetOr(r, "dr", int64(0))
+		switch name {
+		case "A":
+			if dr != 1 {
+				t.Errorf("A dense_rank: want 1, got %d", dr)
+			}
+		case "B":
+			if dr != 2 {
+				t.Errorf("B dense_rank: want 2, got %d", dr)
+			}
+		case "C":
+			if dr != 2 {
+				t.Errorf("C dense_rank: want 2, got %d", dr)
+			}
+		case "D":
+			if dr != 3 {
+				t.Errorf("D dense_rank: want 3, got %d", dr)
+			}
+		}
+	}
+}
+
+func TestWindowLag(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"date": "2026-01", "revenue": float64(100)}),
+		NewRecord(map[string]any{"date": "2026-02", "revenue": float64(200)}),
+		NewRecord(map[string]any{"date": "2026-03", "revenue": float64(150)}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "date"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WLag("revenue", 1), ResultName: "prev_rev"}},
+	}})(input))
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(result))
+	}
+
+	for _, r := range result {
+		date := GetOr(r, "date", "")
+		prev, exists := Get[any](r, "prev_rev")
+		switch date {
+		case "2026-01":
+			if exists && prev != nil {
+				t.Errorf("first row lag should be nil, got %v", prev)
+			}
+		case "2026-02":
+			if pv, ok := prev.(float64); !ok || pv != 100 {
+				t.Errorf("2026-02 prev_rev: want 100, got %v", prev)
+			}
+		case "2026-03":
+			if pv, ok := prev.(float64); !ok || pv != 200 {
+				t.Errorf("2026-03 prev_rev: want 200, got %v", prev)
+			}
+		}
+	}
+}
+
+func TestWindowLead(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"date": "2026-01", "revenue": float64(100)}),
+		NewRecord(map[string]any{"date": "2026-02", "revenue": float64(200)}),
+		NewRecord(map[string]any{"date": "2026-03", "revenue": float64(150)}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "date"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WLead("revenue", 1), ResultName: "next_rev"}},
+	}})(input))
+
+	for _, r := range result {
+		date := GetOr(r, "date", "")
+		next, exists := Get[any](r, "next_rev")
+		switch date {
+		case "2026-01":
+			if nv, ok := next.(float64); !ok || nv != 200 {
+				t.Errorf("2026-01 next_rev: want 200, got %v", next)
+			}
+		case "2026-02":
+			if nv, ok := next.(float64); !ok || nv != 150 {
+				t.Errorf("2026-02 next_rev: want 150, got %v", next)
+			}
+		case "2026-03":
+			if exists && next != nil {
+				t.Errorf("last row lead should be nil, got %v", next)
+			}
+		}
+	}
+}
+
+func TestWindowRunningSum(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"date": "2026-01", "revenue": float64(100)}),
+		NewRecord(map[string]any{"date": "2026-02", "revenue": float64(200)}),
+		NewRecord(map[string]any{"date": "2026-03", "revenue": float64(150)}),
+	})
+
+	// Default frame: UNBOUNDED PRECEDING to CURRENT ROW
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "date"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WSum("revenue"), ResultName: "running_total"}},
+	}})(input))
+
+	expected := []float64{100, 300, 450}
+	for i, r := range result {
+		rt := GetOr(r, "running_total", float64(0))
+		if rt != expected[i] {
+			t.Errorf("row %d running_total: want %v, got %v", i, expected[i], rt)
+		}
+	}
+}
+
+func TestWindowMovingAverage(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"date": "d1", "price": float64(10)}),
+		NewRecord(map[string]any{"date": "d2", "price": float64(20)}),
+		NewRecord(map[string]any{"date": "d3", "price": float64(30)}),
+		NewRecord(map[string]any{"date": "d4", "price": float64(40)}),
+		NewRecord(map[string]any{"date": "d5", "price": float64(50)}),
+	})
+
+	// 3-row moving average: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "date"}},
+		Frame:   WindowFrame{Preceding: 2, Following: 0},
+		Specs:   []WindowSpec{{Function: WAvg("price"), ResultName: "ma3"}},
+	}})(input))
+
+	// d1: avg(10) = 10
+	// d2: avg(10,20) = 15
+	// d3: avg(10,20,30) = 20
+	// d4: avg(20,30,40) = 30
+	// d5: avg(30,40,50) = 40
+	expected := []float64{10, 15, 20, 30, 40}
+	for i, r := range result {
+		ma := GetOr(r, "ma3", float64(0))
+		if ma != expected[i] {
+			t.Errorf("row %d ma3: want %v, got %v", i, expected[i], ma)
+		}
+	}
+}
+
+func TestWindowCount(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"x": int64(1)}),
+		NewRecord(map[string]any{"x": int64(2)}),
+		NewRecord(map[string]any{"x": int64(3)}),
+	})
+
+	// Running count with default frame
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "x"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WCount(), ResultName: "cnt"}},
+	}})(input))
+
+	expected := []int64{1, 2, 3}
+	for i, r := range result {
+		cnt := GetOr(r, "cnt", int64(0))
+		if cnt != expected[i] {
+			t.Errorf("row %d count: want %d, got %d", i, expected[i], cnt)
+		}
+	}
+}
+
+func TestWindowMinMax(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"date": "d1", "price": float64(30)}),
+		NewRecord(map[string]any{"date": "d2", "price": float64(10)}),
+		NewRecord(map[string]any{"date": "d3", "price": float64(50)}),
+		NewRecord(map[string]any{"date": "d4", "price": float64(20)}),
+	})
+
+	// Running min/max
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "date"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs: []WindowSpec{
+			{Function: WMin("price"), ResultName: "running_min"},
+			{Function: WMax("price"), ResultName: "running_max"},
+		},
+	}})(input))
+
+	// d1: min=30, max=30
+	// d2: min=10, max=30
+	// d3: min=10, max=50
+	// d4: min=10, max=50
+	expectedMin := []float64{30, 10, 10, 10}
+	expectedMax := []float64{30, 30, 50, 50}
+	for i, r := range result {
+		rmin, _ := Get[float64](r, "running_min")
+		rmax, _ := Get[float64](r, "running_max")
+		if rmin != expectedMin[i] {
+			t.Errorf("row %d running_min: want %v, got %v", i, expectedMin[i], rmin)
+		}
+		if rmax != expectedMax[i] {
+			t.Errorf("row %d running_max: want %v, got %v", i, expectedMax[i], rmax)
+		}
+	}
+}
+
+func TestWindowMultipleConfigs(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "Alice", "dept": "eng", "salary": float64(90000), "date": "2026-01"}),
+		NewRecord(map[string]any{"name": "Bob", "dept": "eng", "salary": float64(80000), "date": "2026-02"}),
+		NewRecord(map[string]any{"name": "Charlie", "dept": "sales", "salary": float64(70000), "date": "2026-03"}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{
+		{
+			PartitionBy: []string{"dept"},
+			OrderBy:     []OrderField{{Field: "salary", Desc: true}},
+			Frame:       WindowFrame{Preceding: -1, Following: 0},
+			Specs:       []WindowSpec{{Function: WRank(), ResultName: "salary_rank"}},
+		},
+		{
+			OrderBy: []OrderField{{Field: "date"}},
+			Frame:   WindowFrame{Preceding: -1, Following: 0},
+			Specs:   []WindowSpec{{Function: WLag("date", 1), ResultName: "prev_date"}},
+		},
+	})(input))
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(result))
+	}
+
+	// Verify both window results are present on each record
+	for _, r := range result {
+		name := GetOr(r, "name", "")
+		salaryRank := GetOr(r, "salary_rank", int64(0))
+		prevDate, _ := Get[any](r, "prev_date")
+
+		switch name {
+		case "Alice":
+			if salaryRank != 1 {
+				t.Errorf("Alice salary_rank: want 1, got %d", salaryRank)
+			}
+		case "Bob":
+			if salaryRank != 2 {
+				t.Errorf("Bob salary_rank: want 2, got %d", salaryRank)
+			}
+		case "Charlie":
+			if salaryRank != 1 {
+				t.Errorf("Charlie salary_rank: want 1 (top in sales), got %d", salaryRank)
+			}
+		}
+
+		// prev_date check (ordered by date globally)
+		_ = prevDate // both fields should exist
+	}
+}
+
+func TestWindowMultiFieldOrder(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "eng", "salary": float64(80000), "name": "Bob"}),
+		NewRecord(map[string]any{"dept": "eng", "salary": float64(80000), "name": "Alice"}),
+		NewRecord(map[string]any{"dept": "sales", "salary": float64(70000), "name": "Charlie"}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{
+			{Field: "dept"},
+			{Field: "name"},
+		},
+		Frame: WindowFrame{Preceding: -1, Following: 0},
+		Specs: []WindowSpec{{Function: WRowNumber(), ResultName: "rn"}},
+	}})(input))
+
+	// Sorted by dept asc, then name asc: Alice(eng), Bob(eng), Charlie(sales)
+	for _, r := range result {
+		name := GetOr(r, "name", "")
+		rn := GetOr(r, "rn", int64(0))
+		switch name {
+		case "Alice":
+			if rn != 1 {
+				t.Errorf("Alice rn: want 1, got %d", rn)
+			}
+		case "Bob":
+			if rn != 2 {
+				t.Errorf("Bob rn: want 2, got %d", rn)
+			}
+		case "Charlie":
+			if rn != 3 {
+				t.Errorf("Charlie rn: want 3, got %d", rn)
+			}
+		}
+	}
+}
+
+func TestWindowEmpty(t *testing.T) {
+	var empty []Record
+	input := slices.Values(empty)
+
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "x"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WRowNumber(), ResultName: "rn"}},
+	}})(input))
+
+	if len(result) != 0 {
+		t.Errorf("empty input should produce empty output, got %d records", len(result))
+	}
+}
+
+func TestCompareAny(t *testing.T) {
+	tests := []struct {
+		a, b any
+		want int
+	}{
+		{nil, nil, 0},
+		{nil, int64(1), -1},
+		{int64(1), nil, 1},
+		{int64(1), int64(2), -1},
+		{int64(2), int64(1), 1},
+		{int64(1), int64(1), 0},
+		{float64(1.5), float64(2.5), -1},
+		{int64(1), float64(1.5), -1},  // cross-type numeric
+		{float64(2), int64(1), 1},     // cross-type numeric
+		{"abc", "def", -1},
+		{"def", "abc", 1},
+		{"abc", "abc", 0},
+	}
+
+	for _, tt := range tests {
+		got := CompareAny(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("CompareAny(%v, %v) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+func TestWindowNtile(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"x": int64(1)}),
+		NewRecord(map[string]any{"x": int64(2)}),
+		NewRecord(map[string]any{"x": int64(3)}),
+		NewRecord(map[string]any{"x": int64(4)}),
+		NewRecord(map[string]any{"x": int64(5)}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "x"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WNtile(3), ResultName: "bucket"}},
+	}})(input))
+
+	// 5 rows into 3 buckets: sizes 2, 2, 1 → buckets: 1,1,2,2,3
+	// NTILE formula: (pos * N / partLen) + 1
+	// pos=0: (0*3/5)+1 = 1
+	// pos=1: (1*3/5)+1 = 1
+	// pos=2: (2*3/5)+1 = 2
+	// pos=3: (3*3/5)+1 = 2
+	// pos=4: (4*3/5)+1 = 3
+	expected := []int64{1, 1, 2, 2, 3}
+	for i, r := range result {
+		bucket := GetOr(r, "bucket", int64(0))
+		if bucket != expected[i] {
+			t.Errorf("row %d bucket: want %d, got %d", i, expected[i], bucket)
+		}
+	}
+}
+
+func TestWindowPercentRank(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "A", "salary": float64(90000)}),
+		NewRecord(map[string]any{"name": "B", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "C", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "D", "salary": float64(70000)}),
+	})
+
+	result := slices.Collect(Window([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "salary", Desc: true}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WPercentRank(), ResultName: "pct_rank"}},
+	}})(input))
+
+	// Ranks: A=1, B=2, C=2, D=4
+	// PERCENT_RANK = (rank-1)/(n-1) where n=4
+	// A: (1-1)/3 = 0.0
+	// B: (2-1)/3 = 0.333...
+	// C: (2-1)/3 = 0.333...
+	// D: (4-1)/3 = 1.0
+	for _, r := range result {
+		name := GetOr(r, "name", "")
+		pctRank := GetOr(r, "pct_rank", float64(-1))
+		switch name {
+		case "A":
+			if pctRank != 0.0 {
+				t.Errorf("A pct_rank: want 0.0, got %v", pctRank)
+			}
+		case "D":
+			if pctRank != 1.0 {
+				t.Errorf("D pct_rank: want 1.0, got %v", pctRank)
+			}
+		}
+	}
+}

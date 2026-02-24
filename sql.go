@@ -3,6 +3,8 @@ package ssql
 import (
 	"fmt"
 	"iter"
+	"math"
+	"sort"
 	"strings"
 )
 
@@ -1688,5 +1690,491 @@ func CollectSeq[T Value](field string) AggregateFunc {
 			}
 		}
 		return AggResult[iter.Seq[any]]{val: seq}
+	}
+}
+
+// ============================================================================
+// WINDOW / ANALYTIC FUNCTIONS
+// ============================================================================
+
+// OrderField specifies a field and sort direction for window ORDER BY.
+type OrderField struct {
+	Field string
+	Desc  bool
+}
+
+// WindowFrame specifies the frame boundaries for aggregate window functions.
+// Preceding/Following of -1 means UNBOUNDED.
+type WindowFrame struct {
+	Preceding int // rows before current (-1 = UNBOUNDED PRECEDING)
+	Following int // rows after current (-1 = UNBOUNDED FOLLOWING)
+}
+
+// WindowSpec defines a single window function computation and its result field name.
+type WindowSpec struct {
+	Function   WindowFunc
+	ResultName string
+}
+
+// WindowConfig defines the partitioning, ordering, frame, and window functions for one clause.
+type WindowConfig struct {
+	PartitionBy []string
+	OrderBy     []OrderField
+	Frame       WindowFrame
+	Specs       []WindowSpec
+}
+
+// WindowFunc is a sealed interface for window function types.
+type WindowFunc interface {
+	windowFunc()
+}
+
+// Ranking functions
+type wRowNumber struct{}
+type wRank struct{}
+type wDenseRank struct{}
+type wNtile struct{ N int }
+type wPercentRank struct{}
+
+// Offset functions
+type wLag struct {
+	Field  string
+	Offset int
+}
+type wLead struct {
+	Field  string
+	Offset int
+}
+type wFirst struct{ Field string }
+type wLast struct{ Field string }
+
+// Aggregate window functions
+type wSum struct{ Field string }
+type wAvg struct{ Field string }
+type wCount struct{}
+type wMin struct{ Field string }
+type wMax struct{ Field string }
+
+func (wRowNumber) windowFunc()   {}
+func (wRank) windowFunc()        {}
+func (wDenseRank) windowFunc()   {}
+func (wNtile) windowFunc()       {}
+func (wPercentRank) windowFunc() {}
+func (wLag) windowFunc()         {}
+func (wLead) windowFunc()        {}
+func (wFirst) windowFunc()       {}
+func (wLast) windowFunc()        {}
+func (wSum) windowFunc()         {}
+func (wAvg) windowFunc()         {}
+func (wCount) windowFunc()       {}
+func (wMin) windowFunc()         {}
+func (wMax) windowFunc()         {}
+
+// Constructors
+
+// WRowNumber creates a ROW_NUMBER() window function.
+func WRowNumber() WindowFunc { return wRowNumber{} }
+
+// WRank creates a RANK() window function.
+func WRank() WindowFunc { return wRank{} }
+
+// WDenseRank creates a DENSE_RANK() window function.
+func WDenseRank() WindowFunc { return wDenseRank{} }
+
+// WNtile creates a NTILE(n) window function.
+func WNtile(n int) WindowFunc { return wNtile{N: n} }
+
+// WPercentRank creates a PERCENT_RANK() window function.
+func WPercentRank() WindowFunc { return wPercentRank{} }
+
+// WLag creates a LAG(field, offset) window function.
+func WLag(field string, offset int) WindowFunc { return wLag{Field: field, Offset: offset} }
+
+// WLead creates a LEAD(field, offset) window function.
+func WLead(field string, offset int) WindowFunc { return wLead{Field: field, Offset: offset} }
+
+// WFirst creates a FIRST_VALUE(field) window function.
+func WFirst(field string) WindowFunc { return wFirst{Field: field} }
+
+// WLast creates a LAST_VALUE(field) window function.
+func WLast(field string) WindowFunc { return wLast{Field: field} }
+
+// WSum creates a windowed SUM(field) function.
+func WSum(field string) WindowFunc { return wSum{Field: field} }
+
+// WAvg creates a windowed AVG(field) function.
+func WAvg(field string) WindowFunc { return wAvg{Field: field} }
+
+// WCount creates a windowed COUNT(*) function.
+func WCount() WindowFunc { return wCount{} }
+
+// WMin creates a windowed MIN(field) function.
+func WMin(field string) WindowFunc { return wMin{Field: field} }
+
+// WMax creates a windowed MAX(field) function.
+func WMax(field string) WindowFunc { return wMax{Field: field} }
+
+// CompareAny compares two values of any type for sorting.
+// Returns -1, 0, or 1. nil sorts before non-nil. Numeric types are compared cross-type.
+// Falls back to string comparison.
+func CompareAny(a, b any) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+
+	// Try numeric comparison
+	af, aOk := toFloat(a)
+	bf, bOk := toFloat(b)
+	if aOk && bOk {
+		if af < bf {
+			return -1
+		}
+		if af > bf {
+			return 1
+		}
+		return 0
+	}
+
+	// Fall back to string comparison
+	as := fmt.Sprintf("%v", a)
+	bs := fmt.Sprintf("%v", b)
+	if as < bs {
+		return -1
+	}
+	if as > bs {
+		return 1
+	}
+	return 0
+}
+
+// toFloat converts any numeric value to float64.
+func toFloat(v any) (float64, bool) {
+	switch val := v.(type) {
+	case float64:
+		return val, true
+	case int64:
+		return float64(val), true
+	case int:
+		return float64(val), true
+	default:
+		return 0, false
+	}
+}
+
+// CompareRecordFields compares two records by multiple order fields.
+func CompareRecordFields(a, b Record, orderBy []OrderField) int {
+	for _, of := range orderBy {
+		av, _ := Get[any](a, of.Field)
+		bv, _ := Get[any](b, of.Field)
+		cmp := CompareAny(av, bv)
+		if of.Desc {
+			cmp = -cmp
+		}
+		if cmp != 0 {
+			return cmp
+		}
+	}
+	return 0
+}
+
+// Window applies window functions to a record stream without collapsing rows.
+// Each WindowConfig defines a partition/order/frame context and a set of window functions.
+// The result fields are added to every output record.
+func Window(configs []WindowConfig) Filter[Record, Record] {
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			// 1. Materialize all input records with original indices
+			var all []Record
+			for r := range input {
+				all = append(all, r)
+			}
+			if len(all) == 0 {
+				return
+			}
+
+			n := len(all)
+
+			// results[originalIndex][resultFieldName] = computed value
+			results := make([]map[string]any, n)
+			for i := range results {
+				results[i] = make(map[string]any)
+			}
+
+			// Track output order from first config that has OrderBy
+			var outputOrder []int
+			orderDecided := false
+
+			// 2. Process each config (clause)
+			for _, cfg := range configs {
+				frame := cfg.Frame
+
+				// Partition records
+				// partitions maps group key -> list of original indices
+				partitions := make(map[string][]int)
+				var partOrder []string // preserve first-seen order of partition keys
+
+				for i, r := range all {
+					key := buildGroupKey(r, cfg.PartitionBy)
+					if _, exists := partitions[key]; !exists {
+						partOrder = append(partOrder, key)
+					}
+					partitions[key] = append(partitions[key], i)
+				}
+
+				// Process each partition
+				for _, pkey := range partOrder {
+					indices := partitions[pkey]
+
+					// Sort indices by OrderBy fields
+					if len(cfg.OrderBy) > 0 {
+						sort.SliceStable(indices, func(a, b int) bool {
+							return CompareRecordFields(all[indices[a]], all[indices[b]], cfg.OrderBy) < 0
+						})
+					}
+
+					// Record output order from first config
+					if !orderDecided {
+						outputOrder = append(outputOrder, indices...)
+					}
+
+					partLen := len(indices)
+
+					// For each row in the sorted partition, compute all specs
+					for pos, origIdx := range indices {
+						for _, spec := range cfg.Specs {
+							val := computeWindowFunc(spec.Function, all, indices, pos, partLen, frame, cfg.OrderBy)
+							results[origIdx][spec.ResultName] = val
+						}
+					}
+				}
+
+				if !orderDecided {
+					orderDecided = true
+				}
+			}
+
+			// If no config had OrderBy, use original input order
+			if outputOrder == nil {
+				outputOrder = make([]int, n)
+				for i := range outputOrder {
+					outputOrder[i] = i
+				}
+			}
+
+			// 3. Emit records in output order with computed fields
+			for _, origIdx := range outputOrder {
+				r := all[origIdx]
+				mut := r.ToMutable()
+				for field, val := range results[origIdx] {
+					if val == nil {
+						mut.fields[field] = nil
+					} else {
+						mut = applyWindowValue(mut, field, val)
+					}
+				}
+				if !yield(mut.Freeze()) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// computeWindowFunc computes a single window function value for one row.
+// indices is the sorted partition (original record indices).
+// pos is the position within the sorted partition.
+func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen int, frame WindowFrame, orderBy []OrderField) any {
+	switch f := fn.(type) {
+	case wRowNumber:
+		return int64(pos + 1)
+
+	case wRank:
+		// Same as pos+1, but ties get the same rank
+		rank := 1
+		for i := 0; i < pos; i++ {
+			if CompareRecordFields(all[indices[i]], all[indices[pos]], orderBy) != 0 {
+				rank = i + 1
+			}
+		}
+		if pos > 0 && CompareRecordFields(all[indices[pos-1]], all[indices[pos]], orderBy) == 0 {
+			// Same as previous — find the rank of the first in this tie group
+			for i := pos - 1; i >= 0; i-- {
+				if i == 0 || CompareRecordFields(all[indices[i-1]], all[indices[pos]], orderBy) != 0 {
+					rank = i + 1
+					break
+				}
+			}
+		} else {
+			rank = pos + 1
+		}
+		return int64(rank)
+
+	case wDenseRank:
+		denseRank := 1
+		for i := 1; i <= pos; i++ {
+			if CompareRecordFields(all[indices[i-1]], all[indices[i]], orderBy) != 0 {
+				denseRank++
+			}
+		}
+		return int64(denseRank)
+
+	case wNtile:
+		if f.N <= 0 {
+			return int64(1)
+		}
+		// NTILE distributes rows into f.N roughly-equal buckets
+		return int64((pos*f.N)/partLen) + 1
+
+	case wPercentRank:
+		if partLen <= 1 {
+			return float64(0)
+		}
+		// PERCENT_RANK = (rank - 1) / (partition_size - 1)
+		// Compute rank first (same logic as wRank)
+		rank := pos + 1
+		if pos > 0 && CompareRecordFields(all[indices[pos-1]], all[indices[pos]], orderBy) == 0 {
+			for i := pos - 1; i >= 0; i-- {
+				if i == 0 || CompareRecordFields(all[indices[i-1]], all[indices[pos]], orderBy) != 0 {
+					rank = i + 1
+					break
+				}
+			}
+		}
+		return float64(rank-1) / float64(partLen-1)
+
+	case wLag:
+		// LAG ignores frame — always indexes into full partition
+		srcPos := pos - f.Offset
+		if srcPos < 0 || srcPos >= partLen {
+			return nil
+		}
+		v, _ := Get[any](all[indices[srcPos]], f.Field)
+		return v
+
+	case wLead:
+		srcPos := pos + f.Offset
+		if srcPos < 0 || srcPos >= partLen {
+			return nil
+		}
+		v, _ := Get[any](all[indices[srcPos]], f.Field)
+		return v
+
+	case wFirst:
+		start := frameStart(pos, partLen, frame)
+		v, _ := Get[any](all[indices[start]], f.Field)
+		return v
+
+	case wLast:
+		end := frameEnd(pos, partLen, frame)
+		v, _ := Get[any](all[indices[end]], f.Field)
+		return v
+
+	case wSum:
+		start := frameStart(pos, partLen, frame)
+		end := frameEnd(pos, partLen, frame)
+		var sum float64
+		for i := start; i <= end; i++ {
+			if v, ok := Get[float64](all[indices[i]], f.Field); ok {
+				sum += v
+			}
+		}
+		return sum
+
+	case wAvg:
+		start := frameStart(pos, partLen, frame)
+		end := frameEnd(pos, partLen, frame)
+		var sum float64
+		var count int
+		for i := start; i <= end; i++ {
+			if v, ok := Get[float64](all[indices[i]], f.Field); ok {
+				sum += v
+				count++
+			}
+		}
+		if count == 0 {
+			return float64(0)
+		}
+		return sum / float64(count)
+
+	case wCount:
+		start := frameStart(pos, partLen, frame)
+		end := frameEnd(pos, partLen, frame)
+		return int64(end - start + 1)
+
+	case wMin:
+		start := frameStart(pos, partLen, frame)
+		end := frameEnd(pos, partLen, frame)
+		var minVal any
+		for i := start; i <= end; i++ {
+			v, _ := Get[any](all[indices[i]], f.Field)
+			if minVal == nil || CompareAny(v, minVal) < 0 {
+				minVal = v
+			}
+		}
+		return minVal
+
+	case wMax:
+		start := frameStart(pos, partLen, frame)
+		end := frameEnd(pos, partLen, frame)
+		var maxVal any
+		for i := start; i <= end; i++ {
+			v, _ := Get[any](all[indices[i]], f.Field)
+			if maxVal == nil || CompareAny(v, maxVal) > 0 {
+				maxVal = v
+			}
+		}
+		return maxVal
+	}
+
+	return nil
+}
+
+// frameStart returns the first index in the frame for position pos.
+func frameStart(pos, partLen int, frame WindowFrame) int {
+	if frame.Preceding < 0 {
+		return 0 // UNBOUNDED PRECEDING
+	}
+	start := pos - frame.Preceding
+	if start < 0 {
+		return 0
+	}
+	return start
+}
+
+// frameEnd returns the last index (inclusive) in the frame for position pos.
+func frameEnd(pos, partLen int, frame WindowFrame) int {
+	if frame.Following < 0 {
+		return partLen - 1 // UNBOUNDED FOLLOWING
+	}
+	end := pos + frame.Following
+	if end >= partLen {
+		return partLen - 1
+	}
+	return end
+}
+
+// applyWindowValue sets a computed window value on a mutable record with appropriate type.
+func applyWindowValue(mut MutableRecord, field string, val any) MutableRecord {
+	switch v := val.(type) {
+	case int64:
+		return mut.Int(field, v)
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return mut.Float(field, v)
+		}
+		return mut.Float(field, v)
+	case string:
+		return mut.String(field, v)
+	case bool:
+		return mut.Bool(field, v)
+	default:
+		mut.fields[field] = val
+		return mut
 	}
 }
