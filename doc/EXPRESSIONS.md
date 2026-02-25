@@ -79,6 +79,8 @@ ssql from data.csv | ssql update -set-expr email 'lower(trim(email))'
 | `startsWith(str, prefix)` | Check if starts with prefix | `startsWith("hello", "he")` → `true` |
 | `endsWith(str, suffix)` | Check if ends with suffix | `endsWith("world", "ld")` → `true` |
 | `contains(str, substr)` | Check if contains substring | `contains("hello", "ll")` → `true` |
+| `replace(str, old, new)` | Replace all occurrences | `replace("hello world", "world", "there")` → `"hello there"` |
+| `replaceRegex(str, pattern, repl)` | Regex replace with capture groups | `replaceRegex("abc 123", "[^0-9]", "")` → `"123"` |
 
 **Examples:**
 ```bash
@@ -90,6 +92,13 @@ ssql update -set-expr domain 'split(email, "@")[1]'
 
 # Create display name
 ssql update -set-expr display 'upper(first) + " " + upper(last)'
+
+# Regex replacement (use \\ for regex backslashes)
+ssql update -set-expr clean 'replaceRegex(name, "[^a-zA-Z]", "_")'
+ssql update -set-expr digits 'replaceRegex(code, "[^0-9]", "")'
+
+# Capture group expansion ($1, $2, ${name})
+ssql update -set-expr fmt_phone 'replaceRegex(phone, "(\\d{3})(\\d{3})(\\d{4})", "($1) $2-$3")'
 ```
 
 ### Math Functions

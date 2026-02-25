@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 
 	"github.com/expr-lang/expr"
 	"github.com/rosscartlidge/ssql/v4"
@@ -25,6 +26,15 @@ func hashSHA1(s string) string {
 func hashMD5(s string) string {
 	h := md5.Sum([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+// replaceRegex replaces all matches of a regex pattern in a string.
+func replaceRegex(s, pattern, replacement string) string {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return s
+	}
+	return re.ReplaceAllString(s, replacement)
 }
 
 // CompileExprFilter compiles a boolean expression once and returns a filter function.
@@ -67,6 +77,7 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 	sampleEnv["sha256"] = hashSHA256
 	sampleEnv["sha1"] = hashSHA1
 	sampleEnv["md5"] = hashMD5
+	sampleEnv["replaceRegex"] = replaceRegex
 
 	program, err := expr.Compile(expression,
 		expr.Env(sampleEnv),
@@ -101,6 +112,7 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 		env["sha256"] = hashSHA256
 		env["sha1"] = hashSHA1
 		env["md5"] = hashMD5
+		env["replaceRegex"] = replaceRegex
 
 		// Execute the pre-compiled program with this record's environment
 		result, err := expr.Run(program, env)
@@ -132,6 +144,7 @@ func CompileExprWithFields(expression string, fields []string) (func(ssql.Record
 	sampleEnv["sha256"] = hashSHA256
 	sampleEnv["sha1"] = hashSHA1
 	sampleEnv["md5"] = hashMD5
+	sampleEnv["replaceRegex"] = replaceRegex
 
 	program, err := expr.Compile(expression,
 		expr.Env(sampleEnv),
@@ -166,6 +179,7 @@ func CompileExprWithFields(expression string, fields []string) (func(ssql.Record
 		env["sha256"] = hashSHA256
 		env["sha1"] = hashSHA1
 		env["md5"] = hashMD5
+		env["replaceRegex"] = replaceRegex
 
 		// Execute the pre-compiled program with this record's environment
 		result, err := expr.Run(program, env)
