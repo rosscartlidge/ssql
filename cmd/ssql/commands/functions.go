@@ -65,7 +65,7 @@ func printAllCategories() error {
 	fmt.Println("Math Functions (6):")
 	fmt.Println("  round(num), floor(num), ceil(num), abs(num), min(a, b), max(a, b)")
 	fmt.Println()
-	fmt.Println("Array Functions (21):")
+	fmt.Println("Array Functions (26):")
 	fmt.Println("  len(arr), first(arr), last(arr), take(arr, n), reverse(arr),")
 	fmt.Println("  sort(arr), sortBy(arr, pred), uniq(arr), flatten(arr), concat(a, b),")
 	fmt.Println("  filter(arr, pred), map(arr, fn), reduce(arr, pred, init),")
