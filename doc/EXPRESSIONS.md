@@ -74,13 +74,21 @@ ssql from data.csv | ssql update -set-expr email 'lower(trim(email))'
 | `upper(str)` | Convert to uppercase | `upper("hello")` → `"HELLO"` |
 | `lower(str)` | Convert to lowercase | `lower("WORLD")` → `"world"` |
 | `trim(str)` | Remove leading/trailing whitespace | `trim("  text  ")` → `"text"` |
+| `trimPrefix(str, prefix)` | Remove prefix from string | `trimPrefix("hello world", "hello ")` → `"world"` |
+| `trimSuffix(str, suffix)` | Remove suffix from string | `trimSuffix("file.csv", ".csv")` → `"file"` |
 | `split(str, sep)` | Split string into array | `split("a,b,c", ",")` → `["a", "b", "c"]` |
+| `splitAfter(str, sep)` | Split, keeping separator attached | `splitAfter("a,b,c", ",")` → `["a,", "b,", "c"]` |
 | `join(arr, sep)` | Join array into string | `join(["a", "b"], ",")` → `"a,b"` |
-| `startsWith(str, prefix)` | Check if starts with prefix | `startsWith("hello", "he")` → `true` |
-| `endsWith(str, suffix)` | Check if ends with suffix | `endsWith("world", "ld")` → `true` |
-| `contains(str, substr)` | Check if contains substring | `contains("hello", "ll")` → `true` |
 | `replace(str, old, new)` | Replace all occurrences | `replace("hello world", "world", "there")` → `"hello there"` |
-| `replaceRegex(str, pattern, repl)` | Regex replace with capture groups | `replaceRegex("abc 123", "[^0-9]", "")` → `"123"` |
+| `replaceRegex(str, pat, repl)` | Regex replace with capture groups | `replaceRegex("abc 123", "[^0-9]", "")` → `"123"` |
+| `repeat(str, n)` | Repeat string n times | `repeat("ab", 3)` → `"ababab"` |
+| `indexOf(str, sub)` | First index of substring (-1 if missing) | `indexOf("hello", "ll")` → `2` |
+| `lastIndexOf(str, sub)` | Last index of substring (-1 if missing) | `lastIndexOf("hello", "l")` → `3` |
+| `hasPrefix(str, prefix)` | Check if starts with prefix | `hasPrefix("hello", "he")` → `true` |
+| `hasSuffix(str, suffix)` | Check if ends with suffix | `hasSuffix("world", "ld")` → `true` |
+| `contains(str, substr)` | Check if contains substring | `contains("hello", "ll")` → `true` |
+
+**Note:** `contains`, `startsWith`, `endsWith` also work as infix operators: `name startsWith "A"`.
 
 **Examples:**
 ```bash
@@ -90,8 +98,8 @@ ssql update -set-expr email 'lower(trim(email))'
 # Extract domain from email
 ssql update -set-expr domain 'split(email, "@")[1]'
 
-# Create display name
-ssql update -set-expr display 'upper(first) + " " + upper(last)'
+# Remove file extension
+ssql update -set-expr base 'trimSuffix(filename, ".csv")'
 
 # Regex replacement (use \\ for regex backslashes)
 ssql update -set-expr clean 'replaceRegex(name, "[^a-zA-Z]", "_")'
@@ -126,34 +134,109 @@ ssql update -set-expr diff 'abs(actual - expected)'
 
 ### Array Functions
 
+**Access:**
+
 | Function | Description | Example |
 |----------|-------------|---------|
 | `len(arr)` | Length of array/string | `len([1, 2, 3])` → `3` |
-| `all(arr, predicate)` | Check if all elements match | `all([2, 4, 6], {# % 2 == 0})` → `true` |
-| `any(arr, predicate)` | Check if any element matches | `any([1, 2, 3], {# > 2})` → `true` |
-| `filter(arr, predicate)` | Filter array elements | `filter([1, 2, 3], {# > 1})` → `[2, 3]` |
-| `map(arr, transform)` | Transform array elements | `map([1, 2, 3], {# * 2})` → `[2, 4, 6]` |
-| `sum(arr)` | Sum of array elements | `sum([1, 2, 3])` → `6` |
-| `count(arr)` | Count of array elements | `count([1, 2, 3])` → `3` |
+| `first(arr)` | First element | `first([10, 20, 30])` → `10` |
+| `last(arr)` | Last element | `last([10, 20, 30])` → `30` |
+| `get(v, key)` | Safe access (nil if missing) | `get({"a": 1}, "z")` → `nil` |
 
-**Note:** In predicates, `#` represents the current element.
+**Transform:**
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `take(arr, n)` | First n elements | `take([1, 2, 3, 4], 2)` → `[1, 2]` |
+| `reverse(arr)` | Reverse array | `reverse([1, 2, 3])` → `[3, 2, 1]` |
+| `sort(arr)` | Sort ascending | `sort([3, 1, 2])` → `[1, 2, 3]` |
+| `sortBy(arr, pred)` | Sort by predicate | `sortBy([{"n":3},{"n":1}], {.n})` |
+| `uniq(arr)` | Remove duplicates | `uniq([1, 1, 2, 3])` → `[1, 2, 3]` |
+| `flatten(arr)` | Flatten nested arrays | `flatten([[1,2],[3,4]])` → `[1,2,3,4]` |
+| `concat(a, b)` | Concatenate arrays | `concat([1,2], [3,4])` → `[1,2,3,4]` |
+| `map(arr, fn)` | Transform each element | `map([1, 2, 3], {# * 2})` → `[2, 4, 6]` |
+
+**Filter & Search:**
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `filter(arr, pred)` | Filter elements | `filter([1, 2, 3], {# > 1})` → `[2, 3]` |
+| `find(arr, pred)` | First matching element | `find([1, 2, 3], {# > 1})` → `2` |
+| `findIndex(arr, pred)` | Index of first match | `findIndex([1, 2, 3], {# > 1})` → `1` |
+| `findLast(arr, pred)` | Last matching element | `findLast([1, 2, 3], {# < 3})` → `2` |
+| `findLastIndex(arr, pred)` | Index of last match | `findLastIndex([1, 2, 3], {# < 3})` → `1` |
+| `groupBy(arr, pred)` | Group by predicate result | `groupBy([1,2,3,4], {# % 2 == 0 ? "even" : "odd"})` |
+
+**Test:**
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `all(arr, pred)` | All elements match | `all([2, 4, 6], {# % 2 == 0})` → `true` |
+| `any(arr, pred)` | At least one matches | `any([1, 2, 3], {# > 2})` → `true` |
+| `one(arr, pred)` | Exactly one matches | `one([1, 2, 3], {# == 2})` → `true` |
+| `none(arr, pred)` | No elements match | `none([1, 2, 3], {# > 5})` → `true` |
+
+**Aggregate:**
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `count(arr)` | Count of elements | `count([1, 2, 3])` → `3` |
+| `sum(arr)` | Sum of elements | `sum([1, 2, 3])` → `6` |
+| `mean(arr)` | Average of elements | `mean([1, 2, 3, 4, 5])` → `3` |
+| `median(arr)` | Median of elements | `median([1, 2, 3, 4, 5])` → `3` |
+| `reduce(arr, pred, init)` | Reduce to single value | `reduce([1,2,3,4], {# + #acc}, 0)` → `10` |
+
+**Note:** In predicates, `#` represents the current element, `#acc` the accumulator in reduce.
 
 **Examples:**
 ```bash
 # Check if all scores are passing
 ssql where -where-expr 'all(scores, {# >= 60})'
 
+# Average score
+ssql update -set-expr avg_score 'mean(scores)'
+
+# Top 3 scores
+ssql update -set-expr top3 'take(sort(scores), 3)'
+
 # Count high-value items
 ssql update -set-expr high_count 'count(filter(prices, {# > 100}))'
+
+# Check no failures
+ssql where -where-expr 'none(scores, {# < 60})'
 ```
 
-### Type Conversion
+### Type & Encoding Functions
+
+**Type Conversion:**
 
 | Function | Description | Example |
 |----------|-------------|---------|
 | `int(value)` | Convert to integer | `int("123")` → `123` |
 | `float(value)` | Convert to float | `float("3.14")` → `3.14` |
 | `string(value)` | Convert to string | `string(123)` → `"123"` |
+| `type(value)` | Get type name as string | `type(42)` → `"int"` |
+
+**JSON:**
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `toJSON(value)` | Serialize to JSON string | `toJSON({"a": 1})` → `'{"a":1}'` |
+| `fromJSON(str)` | Parse JSON string to value | `fromJSON('{"a":1}')` → `{"a": 1}` |
+
+**Base64:**
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `toBase64(str)` | Encode to Base64 | `toBase64("hello")` → `"aGVsbG8="` |
+| `fromBase64(str)` | Decode from Base64 | `fromBase64("aGVsbG8=")` → `"hello"` |
+
+**Map Conversion:**
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `toPairs(map)` | Map to key-value pairs | `toPairs({"a":1})` → `[["a", 1]]` |
+| `fromPairs(arr)` | Key-value pairs to map | `fromPairs([["a",1]])` → `{"a": 1}` |
 
 **Examples:**
 ```bash
@@ -162,6 +245,58 @@ ssql update -set-expr age_num 'int(age_str)'
 
 # Format numbers as strings with calculations
 ssql update -set-expr label 'string(round(value * 100)) + "%"'
+
+# Encode/decode
+ssql update -set-expr encoded 'toBase64(email)'
+ssql update -set-expr payload 'toJSON({"name": name, "age": age})'
+```
+
+### Date Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `now()` | Current date/time | `now()` → `2026-02-25T10:30:00+11:00` |
+| `date(str)` | Parse date string | `date("2026-01-15")` |
+| `duration(str)` | Parse duration (ns, us, ms, s, m, h) | `duration("1h30m")` → `1h30m0s` |
+| `timezone(str)` | Get timezone location | `timezone("America/New_York")` |
+
+**Examples:**
+```bash
+# Add timestamp
+ssql update -set-expr timestamp 'string(now())'
+
+# Filter by date
+ssql where -where-expr 'date(created) > date("2026-01-01")'
+```
+
+### Map Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `keys(map)` | Get all keys | `keys({"a":1, "b":2})` → `["a", "b"]` |
+| `values(map)` | Get all values | `values({"a":1, "b":2})` → `[1, 2]` |
+| `get(v, key)` | Safe access (nil if missing) | `get({"a":1}, "z")` → `nil` |
+
+### Bitwise Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `bitand(a, b)` | Bitwise AND | `bitand(0xFF, 0x0F)` → `15` |
+| `bitor(a, b)` | Bitwise OR | `bitor(0xF0, 0x0F)` → `255` |
+| `bitxor(a, b)` | Bitwise XOR | `bitxor(0xFF, 0x0F)` → `240` |
+| `bitnand(a, b)` | Bitwise AND NOT | `bitnand(0xFF, 0x0F)` → `240` |
+| `bitnot(a)` | Bitwise NOT | `bitnot(0)` → `-1` |
+| `bitshl(a, n)` | Left shift | `bitshl(1, 4)` → `16` |
+| `bitshr(a, n)` | Right shift | `bitshr(16, 4)` → `1` |
+| `bitushr(a, n)` | Unsigned right shift | |
+
+**Examples:**
+```bash
+# Check permission flags
+ssql where -where-expr 'bitand(permissions, 4) != 0'
+
+# Mask bits
+ssql update -set-expr masked 'bitand(flags, 0x0F)'
 ```
 
 ## Helper Functions (ssql-specific)
