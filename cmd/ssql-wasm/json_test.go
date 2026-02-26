@@ -329,7 +329,7 @@ func TestParsePipelineOps(t *testing.T) {
 	input := `[
 		{"op":"where","field":"age","operator":"gt","value":"25"},
 		{"op":"sort","field":"name","desc":true},
-		{"op":"group_by","groupField":"dept","aggField":"salary","aggFunc":"sum"},
+		{"op":"group_by","groupFields":["dept"],"aggs":[{"field":"salary","func":"sum","alias":"total"}]},
 		{"op":"distinct","field":"name"},
 		{"op":"limit","n":10,"offset":5}
 	]`
@@ -350,8 +350,11 @@ func TestParsePipelineOps(t *testing.T) {
 		t.Errorf("sort op wrong: %+v", ops[1])
 	}
 	// group_by
-	if ops[2].Op != "group_by" || ops[2].GroupField != "dept" || ops[2].AggField != "salary" || ops[2].AggFunc != "sum" {
+	if ops[2].Op != "group_by" || len(ops[2].GroupFields) != 1 || ops[2].GroupFields[0] != "dept" {
 		t.Errorf("group_by op wrong: %+v", ops[2])
+	}
+	if len(ops[2].Aggs) != 1 || ops[2].Aggs[0].Func != "sum" || ops[2].Aggs[0].Alias != "total" {
+		t.Errorf("group_by aggs wrong: %+v", ops[2].Aggs)
 	}
 	// distinct
 	if ops[3].Op != "distinct" || ops[3].Field != "name" {
@@ -365,7 +368,7 @@ func TestParsePipelineOps(t *testing.T) {
 
 func TestParsePipelineOpsNewTypes(t *testing.T) {
 	input := `[
-		{"op": "group_by_multi", "groupFields": ["dept", "region"], "aggs": [{"field": "salary", "func": "sum", "alias": "total"}, {"field": "", "func": "count", "alias": "n"}]},
+		{"op": "group_by", "groupFields": ["dept", "region"], "aggs": [{"field": "salary", "func": "sum", "alias": "total"}, {"field": "", "func": "count", "alias": "n"}]},
 		{"op": "compute", "name": "annual", "expr": "salary * 12"},
 		{"op": "pivot", "rowField": "dept", "colField": "quarter", "valField": "revenue", "aggFunc": "sum"}
 	]`
@@ -379,9 +382,9 @@ func TestParsePipelineOpsNewTypes(t *testing.T) {
 		t.Fatalf("expected 3 ops, got %d", len(ops))
 	}
 
-	// group_by_multi
-	if ops[0].Op != "group_by_multi" {
-		t.Errorf("expected group_by_multi, got %q", ops[0].Op)
+	// group_by
+	if ops[0].Op != "group_by" {
+		t.Errorf("expected group_by, got %q", ops[0].Op)
 	}
 	if len(ops[0].GroupFields) != 2 || ops[0].GroupFields[0] != "dept" || ops[0].GroupFields[1] != "region" {
 		t.Errorf("groupFields wrong: %v", ops[0].GroupFields)

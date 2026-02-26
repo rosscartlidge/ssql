@@ -249,8 +249,11 @@ wasm:
 	tinygo build -o cmd/ssql-wasm/ssql.wasm -target wasm -no-debug -panic=trap -opt=z ./cmd/ssql-wasm
 	rm -f cmd/ssql-wasm/js/wasm_exec.js
 	cp "$$(tinygo env TINYGOROOT)/targets/wasm_exec.js" cmd/ssql-wasm/js/
+	cp cmd/ssql-wasm/ssql.wasm cmd/ssql/wasm/ssql.wasm
+	cp cmd/ssql-wasm/js/wasm_exec.js cmd/ssql/wasm/wasm_exec.js
+	cp cmd/ssql-wasm/js/ssql-wasm.js cmd/ssql/wasm/ssql-wasm.js
 	@echo "✓ Built cmd/ssql-wasm/ssql.wasm ($$(du -h cmd/ssql-wasm/ssql.wasm | cut -f1) raw)"
-	@echo "✓ Copied TinyGo wasm_exec.js to cmd/ssql-wasm/js/"
+	@echo "✓ Embedded WASM files copied to cmd/ssql/wasm/"
 
 # Build WASM module with standard Go (larger binary, ~5MB)
 wasm-go:
@@ -258,5 +261,8 @@ wasm-go:
 	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o cmd/ssql-wasm/ssql.wasm ./cmd/ssql-wasm
 	rm -f cmd/ssql-wasm/js/wasm_exec.js
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/ssql-wasm/js/
+	cp cmd/ssql-wasm/ssql.wasm cmd/ssql/wasm/ssql.wasm
+	cp cmd/ssql-wasm/js/wasm_exec.js cmd/ssql/wasm/wasm_exec.js
+	cp cmd/ssql-wasm/js/ssql-wasm.js cmd/ssql/wasm/ssql-wasm.js
 	@echo "✓ Built cmd/ssql-wasm/ssql.wasm ($$(du -h cmd/ssql-wasm/ssql.wasm | cut -f1) raw)"
-	@echo "✓ Copied Go wasm_exec.js to cmd/ssql-wasm/js/"
+	@echo "✓ Embedded WASM files copied to cmd/ssql/wasm/"

@@ -1,15 +1,14 @@
 package commands
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/wasm"
 )
 
 // RegisterTo registers the to subcommand with nested format subcommands
@@ -1393,8 +1392,8 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			"Generate explorer from CSV data").
 		Example("ssql from logs.jsonl | ssql where -where level eq ERROR | ssql to explore errors.html",
 			"Explore filtered error logs").
-		Example("ssql from sales.csv | ssql to explore -wasm path/to/ssql.wasm -theme dark analysis.html",
-			"Explorer with WASM-powered transforms").
+		Example("ssql from sales.csv | ssql to explore -wasm -theme dark analysis.html",
+			"Explorer with WASM-powered client-side transforms").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -1432,10 +1431,9 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 		Help("Rows per page in table (default 50)").
 		Done().
 		Flag("-wasm").
-		String().
+		Bool().
 		Global().
-		Completer(&cf.FileCompleter{Pattern: "*.wasm"}).
-		Help("Path to ssql.wasm for client-side transforms (build with: make wasm)").
+		Help("Enable WASM-powered client-side transforms").
 		Done().
 		Flag("FILE").
 		String().
@@ -1445,9 +1443,9 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 		Help("Output HTML file (default: explore.html)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var title, theme, xField, yField, outputFile, wasmPath string
+			var title, theme, xField, yField, outputFile string
 			var pageSize int
-			var generate bool
+			var generate, useWasm bool
 
 			if titleVal, ok := ctx.GlobalFlags["-title"]; ok {
 				title = titleVal.(string)
@@ -1479,7 +1477,7 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 				generate = genVal.(bool)
 			}
 			if wasmVal, ok := ctx.GlobalFlags["-wasm"]; ok {
-				wasmPath = wasmVal.(string)
+				useWasm = wasmVal.(bool)
 			}
 
 			// Check if generation is enabled (flag or env var)
@@ -1499,22 +1497,12 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			config.InitialYField = yField
 			config.PageSize = pageSize
 
-			// Enable WASM if path provided
-			if wasmPath != "" {
-				jsContent, err := loadWasmJSFiles(wasmPath)
-				if err != nil {
-					return err
-				}
+			// Enable WASM with embedded binary
+			if useWasm {
 				config.WasmEnabled = true
-				config.WasmExecJS = jsContent.wasmExecJS
-				config.SsqlWasmJS = jsContent.ssqlWasmJS
-
-				// Read and base64-encode WASM binary for embedding
-				wasmBytes, err := os.ReadFile(wasmPath)
-				if err != nil {
-					return fmt.Errorf("reading WASM binary: %w", err)
-				}
-				config.WasmBinary = base64.StdEncoding.EncodeToString(wasmBytes)
+				config.WasmExecJS = wasm.WasmExecJS
+				config.SsqlWasmJS = wasm.SsqlWasmJS
+				config.WasmBinary = wasm.WasmBinaryBase64()
 			}
 
 			// Create explorer
@@ -1522,8 +1510,8 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 				return fmt.Errorf("creating explorer: %w", err)
 			}
 
-			if wasmPath != "" {
-				fmt.Printf("Explorer created: %s (with embedded WASM)\n", outputFile)
+			if useWasm {
+				fmt.Printf("Explorer created: %s (with WASM)\n", outputFile)
 			} else {
 				fmt.Printf("Explorer created: %s\n", outputFile)
 			}
@@ -1532,30 +1520,6 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 		Done()
 }
 
-type wasmJSContent struct {
-	wasmExecJS string
-	ssqlWasmJS string
-}
-
-// loadWasmJSFiles reads the JS support files from the same directory as the WASM file.
-func loadWasmJSFiles(wasmPath string) (*wasmJSContent, error) {
-	dir := filepath.Dir(wasmPath)
-
-	wasmExecJS, err := os.ReadFile(filepath.Join(dir, "js", "wasm_exec.js"))
-	if err != nil {
-		return nil, fmt.Errorf("reading wasm_exec.js (expected in %s/js/): %w", dir, err)
-	}
-
-	ssqlWasmJS, err := os.ReadFile(filepath.Join(dir, "js", "ssql-wasm.js"))
-	if err != nil {
-		return nil, fmt.Errorf("reading ssql-wasm.js (expected in %s/js/): %w", dir, err)
-	}
-
-	return &wasmJSContent{
-		wasmExecJS: string(wasmExecJS),
-		ssqlWasmJS: string(ssqlWasmJS),
-	}, nil
-}
 
 func generateToExploreCode(title, theme, xField, yField string, pageSize int, outputFile string) error {
 	fragments, err := lib.ReadAllCodeFragments()

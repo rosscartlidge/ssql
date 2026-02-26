@@ -16,7 +16,6 @@ import (
 func main() {
 	js.Global().Set("ssqlWhere", js.FuncOf(jsWhere))
 	js.Global().Set("ssqlSort", js.FuncOf(jsSort))
-	js.Global().Set("ssqlGroupBy", js.FuncOf(jsGroupBy))
 	js.Global().Set("ssqlDistinct", js.FuncOf(jsDistinct))
 	js.Global().Set("ssqlLimit", js.FuncOf(jsLimit))
 	js.Global().Set("ssqlPipeline", js.FuncOf(jsPipeline))
@@ -49,19 +48,6 @@ func jsSort(this js.Value, args []js.Value) any {
 		return errorJSON(fmt.Sprintf("parsing JSON: %v", err))
 	}
 	result := ds.sortBy(args[1].String(), args[2].Bool())
-	return result.toJSON()
-}
-
-// jsGroupBy: ssqlGroupBy(jsonData, groupField, aggField, aggFunc) → aggregated JSON string
-func jsGroupBy(this js.Value, args []js.Value) any {
-	if len(args) < 4 {
-		return errorJSON("ssqlGroupBy requires 4 arguments: jsonData, groupField, aggField, aggFunc")
-	}
-	ds, err := parseJSONArray(args[0].String())
-	if err != nil {
-		return errorJSON(fmt.Sprintf("parsing JSON: %v", err))
-	}
-	result := ds.groupBy(args[1].String(), args[2].String(), args[3].String())
 	return result.toJSON()
 }
 

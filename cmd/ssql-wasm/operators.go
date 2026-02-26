@@ -40,37 +40,52 @@ func (ds dataset) sortBy(field string, desc bool) dataset {
 	return dataset{s: ds.s, rows: rows}
 }
 
-// groupBy groups rows by a field and applies an aggregation function.
+// groupBy groups rows by multiple fields and applies multiple aggregations.
 // Preserves first-seen group order.
-func (ds dataset) groupBy(groupField, aggField, aggFunc string) dataset {
+func (ds dataset) groupBy(groupFields []string, aggs []aggSpec) dataset {
 	type group struct {
-		key  any
+		keys []any
 		rows []record
 	}
 
-	// Collect groups preserving insertion order
 	groupMap := make(map[string]*group)
 	var order []string
 	for _, r := range ds.rows {
-		key := r.mustGet(groupField)
-		keyStr := fmt.Sprintf("%v", key)
+		// Build composite key
+		var keyParts []string
+		var keys []any
+		for _, gf := range groupFields {
+			v := r.mustGet(gf)
+			keys = append(keys, v)
+			keyParts = append(keyParts, fmt.Sprintf("%v", v))
+		}
+		keyStr := strings.Join(keyParts, "\x00")
 		if g, ok := groupMap[keyStr]; ok {
 			g.rows = append(g.rows, r)
 		} else {
-			groupMap[keyStr] = &group{key: key, rows: []record{r}}
+			groupMap[keyStr] = &group{keys: keys, rows: []record{r}}
 			order = append(order, keyStr)
 		}
 	}
 
-	// Build result schema: groupField + aggFunc
-	resultFields := []string{groupField, aggFunc}
+	// Build result schema: groupFields... + agg aliases...
+	resultFields := make([]string, 0, len(groupFields)+len(aggs))
+	resultFields = append(resultFields, groupFields...)
+	for _, a := range aggs {
+		resultFields = append(resultFields, a.Alias)
+	}
 	resultSchema := newSchema(resultFields)
 
 	var resultRows []record
 	for _, keyStr := range order {
 		g := groupMap[keyStr]
-		aggVal := aggregate(g.rows, aggField, aggFunc)
-		values := []any{g.key, aggVal}
+		values := make([]any, len(resultFields))
+		// Copy group key values
+		copy(values, g.keys)
+		// Compute each aggregation
+		for i, a := range aggs {
+			values[len(groupFields)+i] = aggregate(g.rows, a.Field, a.Func)
+		}
 		resultRows = append(resultRows, record{s: resultSchema, values: values})
 	}
 
@@ -148,58 +163,6 @@ func maxField(rows []record, field string) any {
 		return int64(maxVal)
 	}
 	return maxVal
-}
-
-// groupByMulti groups rows by multiple fields and applies multiple aggregations.
-// Preserves first-seen group order.
-func (ds dataset) groupByMulti(groupFields []string, aggs []aggSpec) dataset {
-	type group struct {
-		keys []any
-		rows []record
-	}
-
-	groupMap := make(map[string]*group)
-	var order []string
-	for _, r := range ds.rows {
-		// Build composite key
-		var keyParts []string
-		var keys []any
-		for _, gf := range groupFields {
-			v := r.mustGet(gf)
-			keys = append(keys, v)
-			keyParts = append(keyParts, fmt.Sprintf("%v", v))
-		}
-		keyStr := strings.Join(keyParts, "\x00")
-		if g, ok := groupMap[keyStr]; ok {
-			g.rows = append(g.rows, r)
-		} else {
-			groupMap[keyStr] = &group{keys: keys, rows: []record{r}}
-			order = append(order, keyStr)
-		}
-	}
-
-	// Build result schema: groupFields... + agg aliases...
-	resultFields := make([]string, 0, len(groupFields)+len(aggs))
-	resultFields = append(resultFields, groupFields...)
-	for _, a := range aggs {
-		resultFields = append(resultFields, a.Alias)
-	}
-	resultSchema := newSchema(resultFields)
-
-	var resultRows []record
-	for _, keyStr := range order {
-		g := groupMap[keyStr]
-		values := make([]any, len(resultFields))
-		// Copy group key values
-		copy(values, g.keys)
-		// Compute each aggregation
-		for i, a := range aggs {
-			values[len(groupFields)+i] = aggregate(g.rows, a.Field, a.Func)
-		}
-		resultRows = append(resultRows, record{s: resultSchema, values: values})
-	}
-
-	return dataset{s: resultSchema, rows: resultRows}
 }
 
 // distinct deduplicates rows by a field value.
@@ -338,6 +301,327 @@ func (ds dataset) pivot(rowField, colField, valField, aggFunc string) dataset {
 	return dataset{s: resultSchema, rows: resultRows}
 }
 
+// ============================================================================
+// Window functions
+// ============================================================================
+
+// windowSpec describes a single window function computation.
+type windowSpec struct {
+	Type       string // "row_number","rank","dense_rank","ntile","percent_rank","lag","lead","first","last","sum","avg","count","min","max"
+	Field      string // source field for lag/lead/sum/avg/min/max/first/last
+	N          int    // offset for lag/lead, n for ntile
+	ResultName string
+}
+
+// windowOrderField specifies a field and sort direction for window ORDER BY.
+type windowOrderField struct {
+	Field string
+	Desc  bool
+}
+
+// windowFrame specifies frame boundaries.
+// Preceding/Following of -1 means UNBOUNDED.
+type windowFrame struct {
+	Preceding int
+	Following int
+}
+
+// windowConfig defines the partition, order, frame, and functions for one window clause.
+type windowConfig struct {
+	PartitionBy []string
+	OrderBy     []windowOrderField
+	Frame       windowFrame
+	Specs       []windowSpec
+}
+
+// window applies window functions without collapsing rows.
+func (ds dataset) window(configs []windowConfig) dataset {
+	if len(ds.rows) == 0 {
+		return ds
+	}
+
+	n := len(ds.rows)
+
+	// results[originalIndex][resultFieldName] = computed value
+	results := make([]map[string]any, n)
+	for i := range results {
+		results[i] = make(map[string]any)
+	}
+
+	// Track output order from first config that has OrderBy
+	var outputOrder []int
+	orderDecided := false
+
+	for _, cfg := range configs {
+		frame := cfg.Frame
+
+		// Partition records
+		partitions := make(map[string][]int)
+		var partOrder []string
+		for i, r := range ds.rows {
+			key := windowGroupKey(r, cfg.PartitionBy)
+			if _, exists := partitions[key]; !exists {
+				partOrder = append(partOrder, key)
+			}
+			partitions[key] = append(partitions[key], i)
+		}
+
+		// Process each partition
+		for _, pkey := range partOrder {
+			indices := partitions[pkey]
+
+			// Sort indices by OrderBy fields
+			if len(cfg.OrderBy) > 0 {
+				sort.SliceStable(indices, func(a, b int) bool {
+					return compareRecordByOrderFields(ds.rows[indices[a]], ds.rows[indices[b]], cfg.OrderBy) < 0
+				})
+			}
+
+			if !orderDecided {
+				outputOrder = append(outputOrder, indices...)
+			}
+
+			partLen := len(indices)
+
+			// Compute each spec for each row in the sorted partition
+			for pos, origIdx := range indices {
+				for _, spec := range cfg.Specs {
+					val := computeWindowValue(spec, ds.rows, indices, pos, partLen, frame, cfg.OrderBy)
+					results[origIdx][spec.ResultName] = val
+				}
+			}
+		}
+
+		if !orderDecided {
+			orderDecided = true
+		}
+	}
+
+	if outputOrder == nil {
+		outputOrder = make([]int, n)
+		for i := range outputOrder {
+			outputOrder[i] = i
+		}
+	}
+
+	// Collect all result field names in stable order
+	var resultFieldNames []string
+	resultFieldSet := make(map[string]bool)
+	for _, cfg := range configs {
+		for _, spec := range cfg.Specs {
+			if !resultFieldSet[spec.ResultName] {
+				resultFieldSet[spec.ResultName] = true
+				resultFieldNames = append(resultFieldNames, spec.ResultName)
+			}
+		}
+	}
+
+	// Build new schema: original fields + result fields
+	newFields := make([]string, len(ds.s.fields)+len(resultFieldNames))
+	copy(newFields, ds.s.fields)
+	for i, rf := range resultFieldNames {
+		newFields[len(ds.s.fields)+i] = rf
+	}
+	newSchema := newSchema(newFields)
+
+	rows := make([]record, len(outputOrder))
+	for i, origIdx := range outputOrder {
+		values := make([]any, len(newFields))
+		copy(values, ds.rows[origIdx].values)
+		for _, rf := range resultFieldNames {
+			if idx, ok := newSchema.index[rf]; ok {
+				values[idx] = results[origIdx][rf]
+			}
+		}
+		rows[i] = record{s: newSchema, values: values}
+	}
+
+	return dataset{s: newSchema, rows: rows}
+}
+
+// windowGroupKey builds a partition key from a record.
+func windowGroupKey(r record, partitionBy []string) string {
+	if len(partitionBy) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, f := range partitionBy {
+		parts = append(parts, fmt.Sprintf("%v", r.mustGet(f)))
+	}
+	return strings.Join(parts, "\x00")
+}
+
+// compareRecordByOrderFields compares two records by window order fields.
+func compareRecordByOrderFields(a, b record, orderBy []windowOrderField) int {
+	for _, of := range orderBy {
+		av := a.mustGet(of.Field)
+		bv := b.mustGet(of.Field)
+		cmp := compareValues(av, bv)
+		if of.Desc {
+			cmp = -cmp
+		}
+		if cmp != 0 {
+			return cmp
+		}
+	}
+	return 0
+}
+
+// computeWindowValue computes one window function for one row.
+func computeWindowValue(spec windowSpec, rows []record, indices []int, pos, partLen int, frame windowFrame, orderBy []windowOrderField) any {
+	switch spec.Type {
+	case "row_number":
+		return int64(pos + 1)
+
+	case "rank":
+		rank := pos + 1
+		if pos > 0 && compareRecordByOrderFields(rows[indices[pos-1]], rows[indices[pos]], orderBy) == 0 {
+			for i := pos - 1; i >= 0; i-- {
+				if i == 0 || compareRecordByOrderFields(rows[indices[i-1]], rows[indices[pos]], orderBy) != 0 {
+					rank = i + 1
+					break
+				}
+			}
+		}
+		return int64(rank)
+
+	case "dense_rank":
+		denseRank := 1
+		for i := 1; i <= pos; i++ {
+			if compareRecordByOrderFields(rows[indices[i-1]], rows[indices[i]], orderBy) != 0 {
+				denseRank++
+			}
+		}
+		return int64(denseRank)
+
+	case "ntile":
+		n := spec.N
+		if n <= 0 {
+			return int64(1)
+		}
+		return int64((pos*n)/partLen) + 1
+
+	case "percent_rank":
+		if partLen <= 1 {
+			return float64(0)
+		}
+		rank := pos + 1
+		if pos > 0 && compareRecordByOrderFields(rows[indices[pos-1]], rows[indices[pos]], orderBy) == 0 {
+			for i := pos - 1; i >= 0; i-- {
+				if i == 0 || compareRecordByOrderFields(rows[indices[i-1]], rows[indices[pos]], orderBy) != 0 {
+					rank = i + 1
+					break
+				}
+			}
+		}
+		return float64(rank-1) / float64(partLen-1)
+
+	case "lag":
+		srcPos := pos - spec.N
+		if srcPos < 0 || srcPos >= partLen {
+			return nil
+		}
+		return rows[indices[srcPos]].mustGet(spec.Field)
+
+	case "lead":
+		srcPos := pos + spec.N
+		if srcPos < 0 || srcPos >= partLen {
+			return nil
+		}
+		return rows[indices[srcPos]].mustGet(spec.Field)
+
+	case "first":
+		start := windowFrameStart(pos, partLen, frame)
+		return rows[indices[start]].mustGet(spec.Field)
+
+	case "last":
+		end := windowFrameEnd(pos, partLen, frame)
+		return rows[indices[end]].mustGet(spec.Field)
+
+	case "sum":
+		start := windowFrameStart(pos, partLen, frame)
+		end := windowFrameEnd(pos, partLen, frame)
+		var sum float64
+		for i := start; i <= end; i++ {
+			if f, ok := toFloat64(rows[indices[i]].mustGet(spec.Field)); ok {
+				sum += f
+			}
+		}
+		return sum
+
+	case "avg":
+		start := windowFrameStart(pos, partLen, frame)
+		end := windowFrameEnd(pos, partLen, frame)
+		var sum float64
+		var count int
+		for i := start; i <= end; i++ {
+			if f, ok := toFloat64(rows[indices[i]].mustGet(spec.Field)); ok {
+				sum += f
+				count++
+			}
+		}
+		if count == 0 {
+			return float64(0)
+		}
+		return sum / float64(count)
+
+	case "count":
+		start := windowFrameStart(pos, partLen, frame)
+		end := windowFrameEnd(pos, partLen, frame)
+		return int64(end - start + 1)
+
+	case "min":
+		start := windowFrameStart(pos, partLen, frame)
+		end := windowFrameEnd(pos, partLen, frame)
+		var minVal any
+		for i := start; i <= end; i++ {
+			v := rows[indices[i]].mustGet(spec.Field)
+			if minVal == nil || compareValues(v, minVal) < 0 {
+				minVal = v
+			}
+		}
+		return minVal
+
+	case "max":
+		start := windowFrameStart(pos, partLen, frame)
+		end := windowFrameEnd(pos, partLen, frame)
+		var maxVal any
+		for i := start; i <= end; i++ {
+			v := rows[indices[i]].mustGet(spec.Field)
+			if maxVal == nil || compareValues(v, maxVal) > 0 {
+				maxVal = v
+			}
+		}
+		return maxVal
+	}
+
+	return nil
+}
+
+// windowFrameStart returns the first index in the frame for position pos.
+func windowFrameStart(pos, partLen int, frame windowFrame) int {
+	if frame.Preceding < 0 {
+		return 0 // UNBOUNDED PRECEDING
+	}
+	start := pos - frame.Preceding
+	if start < 0 {
+		return 0
+	}
+	return start
+}
+
+// windowFrameEnd returns the last index (inclusive) in the frame for position pos.
+func windowFrameEnd(pos, partLen int, frame windowFrame) int {
+	if frame.Following < 0 {
+		return partLen - 1 // UNBOUNDED FOLLOWING
+	}
+	end := pos + frame.Following
+	if end >= partLen {
+		return partLen - 1
+	}
+	return end
+}
+
 // pipeline executes a sequence of operations.
 func (ds dataset) pipeline(ops []pipelineOp) (dataset, error) {
 	result := ds
@@ -348,9 +632,7 @@ func (ds dataset) pipeline(ops []pipelineOp) (dataset, error) {
 		case "sort":
 			result = result.sortBy(op.Field, op.Desc)
 		case "group_by":
-			result = result.groupBy(op.GroupField, op.AggField, op.AggFunc)
-		case "group_by_multi":
-			result = result.groupByMulti(op.GroupFields, op.Aggs)
+			result = result.groupBy(op.GroupFields, op.Aggs)
 		case "distinct":
 			result = result.distinct(op.Field)
 		case "limit":
@@ -363,6 +645,8 @@ func (ds dataset) pipeline(ops []pipelineOp) (dataset, error) {
 			}
 		case "pivot":
 			result = result.pivot(op.RowField, op.ColField, op.ValField, op.AggFunc)
+		case "window":
+			result = result.window(op.WindowConfigs)
 		default:
 			return dataset{}, fmt.Errorf("unknown operation: %s", op.Op)
 		}

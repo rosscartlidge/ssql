@@ -683,6 +683,33 @@ ssql is a modern Go library built on three core abstractions:
 - `ExecCommand(cmd, args...)` - Parse command output returning `iter.Seq[Record]`
 - `QuickChart(data, x, y, filename)` - Generate interactive charts
 
+## WASM Explore Module
+
+**⚠️ Always use TinyGo to build the WASM module — it produces ~278K vs ~2.7M with standard Go (10x smaller).**
+
+The WASM module (`cmd/ssql-wasm/`) powers client-side data transforms in the `to explore` interactive HTML pages. It is **embedded in the ssql binary** via `//go:embed` in `cmd/ssql/wasm/`, so users just need `-wasm` flag:
+
+```bash
+ssql from data.csv | ssql to explore -wasm output.html
+```
+
+**Build workflow:**
+```bash
+make wasm          # Build with TinyGo + copy to embed dir
+go install ./cmd/ssql  # Rebuild CLI with embedded WASM
+```
+
+**Key files:**
+- `cmd/ssql-wasm/` — WASM module source (standalone, no ssql/v4 dependency)
+- `cmd/ssql-wasm/js/` — `wasm_exec.js` (TinyGo runtime) + `ssql-wasm.js` (JS wrapper)
+- `cmd/ssql/wasm/` — Embedded copies for `//go:embed` (auto-copied by `make wasm`)
+
+**Rules:**
+- Always build with TinyGo: `make wasm` (NOT `make wasm-go`)
+- The `wasm_exec.js` MUST match the build tool — TinyGo's `wasm_exec.js` for TinyGo builds
+- After rebuilding WASM, run `go install ./cmd/ssql` to update the embedded binary
+- Test with: open the HTML, check for green **WASM** badge in header
+
 ## API Naming Conventions (SQL-Style)
 
 ssql uses SQL-like naming instead of functional programming conventions. **Always use these canonical names:**

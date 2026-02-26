@@ -495,7 +495,7 @@ func errorJSON(msg string) string {
 	return buf.String()
 }
 
-// aggSpec describes one aggregation in a group_by_multi operation.
+// aggSpec describes one aggregation in a group_by operation.
 type aggSpec struct {
 	Field string
 	Func  string
@@ -504,17 +504,14 @@ type aggSpec struct {
 
 // pipelineOp describes one operation in a pipeline.
 type pipelineOp struct {
-	Op         string
-	Field      string
-	Operator   string
-	Value      string
-	Desc       bool
-	GroupField string
-	AggField   string
-	AggFunc    string
-	N          int
-	Offset     int
-	// group_by_multi
+	Op       string
+	Field    string
+	Operator string
+	Value    string
+	Desc     bool
+	N        int
+	Offset   int
+	// group_by
 	GroupFields []string
 	Aggs        []aggSpec
 	// compute
@@ -524,6 +521,9 @@ type pipelineOp struct {
 	RowField string
 	ColField string
 	ValField string
+	AggFunc  string // used by pivot
+	// window
+	WindowConfigs []windowConfig
 }
 
 // parsePipelineOps parses a JSON array of pipeline operation objects.
@@ -572,12 +572,6 @@ func parsePipelineOps(jsonStr string) ([]pipelineOp, error) {
 				op.Value = formatValue(vals[i])
 			case "desc":
 				op.Desc, _ = vals[i].(bool)
-			case "groupField":
-				op.GroupField, _ = vals[i].(string)
-			case "aggField":
-				op.AggField, _ = vals[i].(string)
-			case "aggFunc":
-				op.AggFunc, _ = vals[i].(string)
 			case "n":
 				op.N = toInt(vals[i])
 			case "offset":
@@ -596,6 +590,10 @@ func parsePipelineOps(jsonStr string) ([]pipelineOp, error) {
 				op.ColField, _ = vals[i].(string)
 			case "valField":
 				op.ValField, _ = vals[i].(string)
+			case "aggFunc":
+				op.AggFunc, _ = vals[i].(string)
+			case "windowConfigs":
+				op.WindowConfigs = parseWindowConfigs(vals[i])
 			}
 		}
 		ops = append(ops, op)
@@ -696,6 +694,183 @@ func parseAggSpecs(v any) []aggSpec {
 		}
 		if spec.Alias == "" {
 			spec.Alias = spec.Func
+		}
+		result = append(result, spec)
+		pos = skipWS(b, pos, n)
+		if pos < n && b[pos] == ',' {
+			pos++
+		}
+	}
+}
+
+// parseWindowConfigs parses a JSON array of windowConfig objects from rawJSON.
+func parseWindowConfigs(v any) []windowConfig {
+	raw, ok := v.(rawJSON)
+	if !ok {
+		return nil
+	}
+	b := []byte(string(raw))
+	pos := 0
+	n := len(b)
+	pos = skipWS(b, pos, n)
+	if pos >= n || b[pos] != '[' {
+		return nil
+	}
+	pos++
+	var result []windowConfig
+	for {
+		pos = skipWS(b, pos, n)
+		if pos >= n || b[pos] == ']' {
+			return result
+		}
+		if b[pos] != '{' {
+			pos++
+			continue
+		}
+		fields, vals, newPos, err := parseObject(b, pos, n)
+		if err != nil {
+			return result
+		}
+		pos = newPos
+		cfg := windowConfig{
+			Frame: windowFrame{Preceding: -1, Following: 0}, // default: UNBOUNDED PRECEDING to CURRENT ROW
+		}
+		for i, f := range fields {
+			switch f {
+			case "partitionBy":
+				cfg.PartitionBy = parseStringArray(vals[i])
+			case "orderBy":
+				cfg.OrderBy = parseWindowOrderFields(vals[i])
+			case "frame":
+				cfg.Frame = parseWindowFrame(vals[i])
+			case "specs":
+				cfg.Specs = parseWindowSpecs(vals[i])
+			}
+		}
+		result = append(result, cfg)
+		pos = skipWS(b, pos, n)
+		if pos < n && b[pos] == ',' {
+			pos++
+		}
+	}
+}
+
+// parseWindowOrderFields parses a JSON array of {field, desc} objects.
+func parseWindowOrderFields(v any) []windowOrderField {
+	raw, ok := v.(rawJSON)
+	if !ok {
+		return nil
+	}
+	b := []byte(string(raw))
+	pos := 0
+	n := len(b)
+	pos = skipWS(b, pos, n)
+	if pos >= n || b[pos] != '[' {
+		return nil
+	}
+	pos++
+	var result []windowOrderField
+	for {
+		pos = skipWS(b, pos, n)
+		if pos >= n || b[pos] == ']' {
+			return result
+		}
+		if b[pos] != '{' {
+			pos++
+			continue
+		}
+		fields, vals, newPos, err := parseObject(b, pos, n)
+		if err != nil {
+			return result
+		}
+		pos = newPos
+		of := windowOrderField{}
+		for i, f := range fields {
+			switch f {
+			case "field":
+				of.Field, _ = vals[i].(string)
+			case "desc":
+				of.Desc, _ = vals[i].(bool)
+			}
+		}
+		result = append(result, of)
+		pos = skipWS(b, pos, n)
+		if pos < n && b[pos] == ',' {
+			pos++
+		}
+	}
+}
+
+// parseWindowFrame parses a {preceding, following} object.
+func parseWindowFrame(v any) windowFrame {
+	raw, ok := v.(rawJSON)
+	if !ok {
+		return windowFrame{Preceding: -1, Following: 0}
+	}
+	b := []byte(string(raw))
+	pos := 0
+	n := len(b)
+	pos = skipWS(b, pos, n)
+	if pos >= n || b[pos] != '{' {
+		return windowFrame{Preceding: -1, Following: 0}
+	}
+	fields, vals, _, err := parseObject(b, pos, n)
+	if err != nil {
+		return windowFrame{Preceding: -1, Following: 0}
+	}
+	frame := windowFrame{Preceding: -1, Following: 0}
+	for i, f := range fields {
+		switch f {
+		case "preceding":
+			frame.Preceding = toInt(vals[i])
+		case "following":
+			frame.Following = toInt(vals[i])
+		}
+	}
+	return frame
+}
+
+// parseWindowSpecs parses a JSON array of windowSpec objects.
+func parseWindowSpecs(v any) []windowSpec {
+	raw, ok := v.(rawJSON)
+	if !ok {
+		return nil
+	}
+	b := []byte(string(raw))
+	pos := 0
+	n := len(b)
+	pos = skipWS(b, pos, n)
+	if pos >= n || b[pos] != '[' {
+		return nil
+	}
+	pos++
+	var result []windowSpec
+	for {
+		pos = skipWS(b, pos, n)
+		if pos >= n || b[pos] == ']' {
+			return result
+		}
+		if b[pos] != '{' {
+			pos++
+			continue
+		}
+		fields, vals, newPos, err := parseObject(b, pos, n)
+		if err != nil {
+			return result
+		}
+		pos = newPos
+		spec := windowSpec{N: 1}
+		for i, f := range fields {
+			switch f {
+			case "type":
+				spec.Type, _ = vals[i].(string)
+			case "field":
+				spec.Field, _ = vals[i].(string)
+			case "n":
+				spec.N = toInt(vals[i])
+			case "result":
+				spec.ResultName, _ = vals[i].(string)
+			}
 		}
 		result = append(result, spec)
 		pos = skipWS(b, pos, n)

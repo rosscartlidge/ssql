@@ -234,7 +234,7 @@ func TestGroupByCount(t *testing.T) {
 		{"sales", int64(80)},
 	})
 
-	result := ds.groupBy("dept", "salary", "count")
+	result := ds.groupBy([]string{"dept"}, []aggSpec{{Field: "salary", Func: "count", Alias: "count"}})
 	if len(result.rows) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(result.rows))
 	}
@@ -257,7 +257,7 @@ func TestGroupBySum(t *testing.T) {
 		{"sales", int64(80)},
 	})
 
-	result := ds.groupBy("dept", "salary", "sum")
+	result := ds.groupBy([]string{"dept"}, []aggSpec{{Field: "salary", Func: "sum", Alias: "sum"}})
 	engSum := result.rows[0].mustGet("sum")
 	if f, ok := engSum.(float64); !ok || f != 220 {
 		t.Errorf("expected sum 220, got %v (%T)", engSum, engSum)
@@ -270,7 +270,7 @@ func TestGroupByAvg(t *testing.T) {
 		{"eng", int64(200)},
 	})
 
-	result := ds.groupBy("dept", "salary", "avg")
+	result := ds.groupBy([]string{"dept"}, []aggSpec{{Field: "salary", Func: "avg", Alias: "avg"}})
 	avg := result.rows[0].mustGet("avg")
 	if f, ok := avg.(float64); !ok || f != 150 {
 		t.Errorf("expected avg 150, got %v (%T)", avg, avg)
@@ -284,7 +284,7 @@ func TestGroupByMin(t *testing.T) {
 		{"a", int64(20)},
 	})
 
-	result := ds.groupBy("dept", "val", "min")
+	result := ds.groupBy([]string{"dept"}, []aggSpec{{Field: "val", Func: "min", Alias: "min"}})
 	minVal := result.rows[0].mustGet("min")
 	if minVal != int64(5) {
 		t.Errorf("expected min 5, got %v (%T)", minVal, minVal)
@@ -298,7 +298,7 @@ func TestGroupByMax(t *testing.T) {
 		{"a", int64(20)},
 	})
 
-	result := ds.groupBy("dept", "val", "max")
+	result := ds.groupBy([]string{"dept"}, []aggSpec{{Field: "val", Func: "max", Alias: "max"}})
 	maxVal := result.rows[0].mustGet("max")
 	if maxVal != int64(20) {
 		t.Errorf("expected max 20, got %v (%T)", maxVal, maxVal)
@@ -312,7 +312,7 @@ func TestGroupByOrderPreserved(t *testing.T) {
 		{"mango", int64(3)},
 	})
 
-	result := ds.groupBy("dept", "val", "count")
+	result := ds.groupBy([]string{"dept"}, []aggSpec{{Field: "val", Func: "count", Alias: "count"}})
 	if result.rows[0].mustGet("dept") != "zebra" {
 		t.Errorf("expected first-seen order (zebra), got %v", result.rows[0].mustGet("dept"))
 	}
@@ -444,10 +444,10 @@ func TestPipelineUnknownOp(t *testing.T) {
 }
 
 // ============================================================================
-// GroupByMulti
+// GroupBy Multi-field
 // ============================================================================
 
-func TestGroupByMultiTwoFields(t *testing.T) {
+func TestGroupByTwoFields(t *testing.T) {
 	ds := makeTestDataset([]string{"dept", "region", "salary"}, [][]any{
 		{"eng", "us", int64(100)},
 		{"eng", "us", int64(120)},
@@ -455,7 +455,7 @@ func TestGroupByMultiTwoFields(t *testing.T) {
 		{"sales", "us", int64(80)},
 	})
 
-	result := ds.groupByMulti(
+	result := ds.groupBy(
 		[]string{"dept", "region"},
 		[]aggSpec{
 			{Field: "salary", Func: "sum", Alias: "total_salary"},
@@ -482,14 +482,14 @@ func TestGroupByMultiTwoFields(t *testing.T) {
 	}
 }
 
-func TestGroupByMultiSingleField(t *testing.T) {
+func TestGroupByMultiAggs(t *testing.T) {
 	ds := makeTestDataset([]string{"dept", "salary"}, [][]any{
 		{"eng", int64(100)},
 		{"eng", int64(120)},
 		{"sales", int64(80)},
 	})
 
-	result := ds.groupByMulti(
+	result := ds.groupBy(
 		[]string{"dept"},
 		[]aggSpec{
 			{Field: "salary", Func: "avg", Alias: "avg_salary"},
@@ -505,14 +505,14 @@ func TestGroupByMultiSingleField(t *testing.T) {
 	}
 }
 
-func TestGroupByMultiPreservesOrder(t *testing.T) {
+func TestGroupByMultiFieldPreservesOrder(t *testing.T) {
 	ds := makeTestDataset([]string{"dept", "val"}, [][]any{
 		{"zebra", int64(1)},
 		{"apple", int64(2)},
 		{"mango", int64(3)},
 	})
 
-	result := ds.groupByMulti(
+	result := ds.groupBy(
 		[]string{"dept"},
 		[]aggSpec{{Field: "val", Func: "count", Alias: "n"}},
 	)
@@ -685,7 +685,7 @@ func TestPivotMissingCells(t *testing.T) {
 // Pipeline with new operations
 // ============================================================================
 
-func TestPipelineGroupByMulti(t *testing.T) {
+func TestPipelineGroupBy(t *testing.T) {
 	ds := makeTestDataset([]string{"dept", "salary"}, [][]any{
 		{"eng", int64(100)},
 		{"eng", int64(120)},
@@ -693,7 +693,7 @@ func TestPipelineGroupByMulti(t *testing.T) {
 	})
 
 	ops := []pipelineOp{{
-		Op:          "group_by_multi",
+		Op:          "group_by",
 		GroupFields: []string{"dept"},
 		Aggs: []aggSpec{
 			{Field: "salary", Func: "sum", Alias: "total"},
@@ -755,6 +755,232 @@ func TestPipelinePivot(t *testing.T) {
 	}
 	if len(result.s.fields) != 3 {
 		t.Fatalf("expected 3 fields, got %d: %v", len(result.s.fields), result.s.fields)
+	}
+}
+
+// ============================================================================
+// Window functions
+// ============================================================================
+
+func TestWindowRowNumber(t *testing.T) {
+	ds := makeTestDataset([]string{"name", "score"}, [][]any{
+		{"Alice", int64(90)},
+		{"Bob", int64(80)},
+		{"Charlie", int64(70)},
+	})
+
+	result := ds.window([]windowConfig{{
+		OrderBy: []windowOrderField{{Field: "score", Desc: true}},
+		Frame:   windowFrame{Preceding: -1, Following: 0},
+		Specs:   []windowSpec{{Type: "row_number", ResultName: "rn"}},
+	}})
+
+	if len(result.rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(result.rows))
+	}
+	// Sorted by score desc: Alice(90)=1, Bob(80)=2, Charlie(70)=3
+	if result.rows[0].mustGet("name") != "Alice" {
+		t.Errorf("expected Alice first, got %v", result.rows[0].mustGet("name"))
+	}
+	if result.rows[0].mustGet("rn") != int64(1) {
+		t.Errorf("expected rn=1, got %v", result.rows[0].mustGet("rn"))
+	}
+	if result.rows[2].mustGet("rn") != int64(3) {
+		t.Errorf("expected rn=3, got %v", result.rows[2].mustGet("rn"))
+	}
+}
+
+func TestWindowRowNumberPartitioned(t *testing.T) {
+	ds := makeTestDataset([]string{"dept", "name", "salary"}, [][]any{
+		{"eng", "Alice", int64(90)},
+		{"eng", "Bob", int64(80)},
+		{"sales", "Charlie", int64(70)},
+		{"sales", "David", int64(60)},
+	})
+
+	result := ds.window([]windowConfig{{
+		PartitionBy: []string{"dept"},
+		OrderBy:     []windowOrderField{{Field: "salary", Desc: true}},
+		Frame:       windowFrame{Preceding: -1, Following: 0},
+		Specs:       []windowSpec{{Type: "row_number", ResultName: "rn"}},
+	}})
+
+	if len(result.rows) != 4 {
+		t.Fatalf("expected 4 rows, got %d", len(result.rows))
+	}
+	// eng partition: Alice=1, Bob=2
+	// sales partition: Charlie=1, David=2
+	for _, r := range result.rows {
+		name := r.mustGet("name")
+		rn := r.mustGet("rn")
+		switch name {
+		case "Alice":
+			if rn != int64(1) {
+				t.Errorf("Alice should be rn=1, got %v", rn)
+			}
+		case "Bob":
+			if rn != int64(2) {
+				t.Errorf("Bob should be rn=2, got %v", rn)
+			}
+		case "Charlie":
+			if rn != int64(1) {
+				t.Errorf("Charlie should be rn=1, got %v", rn)
+			}
+		case "David":
+			if rn != int64(2) {
+				t.Errorf("David should be rn=2, got %v", rn)
+			}
+		}
+	}
+}
+
+func TestWindowRank(t *testing.T) {
+	ds := makeTestDataset([]string{"name", "score"}, [][]any{
+		{"Alice", int64(90)},
+		{"Bob", int64(80)},
+		{"Charlie", int64(80)},
+		{"David", int64(70)},
+	})
+
+	result := ds.window([]windowConfig{{
+		OrderBy: []windowOrderField{{Field: "score", Desc: true}},
+		Frame:   windowFrame{Preceding: -1, Following: 0},
+		Specs:   []windowSpec{{Type: "rank", ResultName: "r"}},
+	}})
+
+	// Expected ranks: Alice=1, Bob=2, Charlie=2, David=4
+	ranks := make(map[string]int64)
+	for _, r := range result.rows {
+		name := r.mustGet("name").(string)
+		ranks[name] = r.mustGet("r").(int64)
+	}
+	if ranks["Alice"] != 1 {
+		t.Errorf("Alice rank: expected 1, got %d", ranks["Alice"])
+	}
+	if ranks["Bob"] != 2 {
+		t.Errorf("Bob rank: expected 2, got %d", ranks["Bob"])
+	}
+	if ranks["Charlie"] != 2 {
+		t.Errorf("Charlie rank: expected 2, got %d", ranks["Charlie"])
+	}
+	if ranks["David"] != 4 {
+		t.Errorf("David rank: expected 4, got %d", ranks["David"])
+	}
+}
+
+func TestWindowLag(t *testing.T) {
+	ds := makeTestDataset([]string{"date", "revenue"}, [][]any{
+		{"2024-01", int64(100)},
+		{"2024-02", int64(150)},
+		{"2024-03", int64(120)},
+	})
+
+	result := ds.window([]windowConfig{{
+		OrderBy: []windowOrderField{{Field: "date"}},
+		Frame:   windowFrame{Preceding: -1, Following: 0},
+		Specs:   []windowSpec{{Type: "lag", Field: "revenue", N: 1, ResultName: "prev_rev"}},
+	}})
+
+	if len(result.rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(result.rows))
+	}
+	// First row: no previous → nil
+	if result.rows[0].mustGet("prev_rev") != nil {
+		t.Errorf("expected nil for first row lag, got %v", result.rows[0].mustGet("prev_rev"))
+	}
+	// Second row: previous is 100
+	if result.rows[1].mustGet("prev_rev") != int64(100) {
+		t.Errorf("expected 100, got %v", result.rows[1].mustGet("prev_rev"))
+	}
+	// Third row: previous is 150
+	if result.rows[2].mustGet("prev_rev") != int64(150) {
+		t.Errorf("expected 150, got %v", result.rows[2].mustGet("prev_rev"))
+	}
+}
+
+func TestWindowRunningSum(t *testing.T) {
+	ds := makeTestDataset([]string{"date", "revenue"}, [][]any{
+		{"2024-01", int64(100)},
+		{"2024-02", int64(150)},
+		{"2024-03", int64(120)},
+	})
+
+	result := ds.window([]windowConfig{{
+		OrderBy: []windowOrderField{{Field: "date"}},
+		Frame:   windowFrame{Preceding: -1, Following: 0}, // UNBOUNDED PRECEDING to CURRENT ROW
+		Specs:   []windowSpec{{Type: "sum", Field: "revenue", ResultName: "running_total"}},
+	}})
+
+	if len(result.rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(result.rows))
+	}
+	// Running sum: 100, 250, 370
+	expected := []float64{100, 250, 370}
+	for i, exp := range expected {
+		v, ok := toFloat64(result.rows[i].mustGet("running_total"))
+		if !ok || v != exp {
+			t.Errorf("row %d: expected running_total=%v, got %v", i, exp, result.rows[i].mustGet("running_total"))
+		}
+	}
+}
+
+func TestWindowMovingAvg(t *testing.T) {
+	ds := makeTestDataset([]string{"date", "price"}, [][]any{
+		{"d1", int64(10)},
+		{"d2", int64(20)},
+		{"d3", int64(30)},
+		{"d4", int64(40)},
+		{"d5", int64(50)},
+	})
+
+	result := ds.window([]windowConfig{{
+		OrderBy: []windowOrderField{{Field: "date"}},
+		Frame:   windowFrame{Preceding: 2, Following: 0}, // 3-row window (2 preceding + current)
+		Specs:   []windowSpec{{Type: "avg", Field: "price", ResultName: "ma3"}},
+	}})
+
+	if len(result.rows) != 5 {
+		t.Fatalf("expected 5 rows, got %d", len(result.rows))
+	}
+	// d1: avg(10) = 10
+	// d2: avg(10,20) = 15
+	// d3: avg(10,20,30) = 20
+	// d4: avg(20,30,40) = 30
+	// d5: avg(30,40,50) = 40
+	expected := []float64{10, 15, 20, 30, 40}
+	for i, exp := range expected {
+		v, ok := toFloat64(result.rows[i].mustGet("ma3"))
+		if !ok || v != exp {
+			t.Errorf("row %d: expected ma3=%v, got %v", i, exp, result.rows[i].mustGet("ma3"))
+		}
+	}
+}
+
+func TestPipelineWindow(t *testing.T) {
+	ds := makeTestDataset([]string{"name", "score"}, [][]any{
+		{"Alice", int64(90)},
+		{"Bob", int64(80)},
+		{"Charlie", int64(70)},
+	})
+
+	ops := []pipelineOp{{
+		Op: "window",
+		WindowConfigs: []windowConfig{{
+			OrderBy: []windowOrderField{{Field: "score", Desc: true}},
+			Frame:   windowFrame{Preceding: -1, Following: 0},
+			Specs:   []windowSpec{{Type: "row_number", ResultName: "rn"}},
+		}},
+	}}
+
+	result, err := ds.pipeline(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(result.rows))
+	}
+	if result.rows[0].mustGet("rn") != int64(1) {
+		t.Errorf("expected rn=1, got %v", result.rows[0].mustGet("rn"))
 	}
 }
 

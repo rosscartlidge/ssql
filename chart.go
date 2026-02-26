@@ -3211,9 +3211,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 
     <!-- AG-Grid -->
-    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-grid.css">
-    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-theme-alpine.css">
-    <script src="https://unpkg.com/ag-grid-community/dist/ag-grid-community.min.noStyle.js"></script>
+    <script src="https://unpkg.com/ag-grid-community@35.1.0/dist/ag-grid-community.min.js"></script>
 
     <!-- Plotly for charts -->
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -3538,7 +3536,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         }
 
         {{if eq .Theme "dark"}}
-        .ag-theme-alpine {
+        .ag-theme-quartz {
             --ag-background-color: #212529;
             --ag-header-background-color: #343a40;
             --ag-odd-row-background-color: #2b3035;
@@ -3568,8 +3566,12 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 const wasmBytes = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0));
                 await ssqlWasm.initFromBytes(wasmBytes.buffer);
                 console.log('ssql WASM module loaded (embedded)');
-                const badge = document.getElementById('wasm-badge');
-                if (badge) { badge.style.display = 'inline'; badge.textContent = 'WASM'; }
+                const showBadge = () => {
+                    const badge = document.getElementById('wasm-badge');
+                    if (badge) { badge.style.display = 'inline'; }
+                    else { setTimeout(showBadge, 100); }
+                };
+                showBadge();
             } catch(e) {
                 console.warn('ssql WASM failed to load, using JS fallback:', e);
                 ssqlWasm = null;
@@ -3588,12 +3590,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     case 'sort':
                         return 'ssql sort ' + step.field + (step.desc ? ' -desc' : '');
                     case 'group_by': {
-                        const alias = step.alias || step.aggFunc;
-                        if (step.aggFunc === 'count')
-                            return 'ssql group-by ' + step.groupField + ' -count ' + alias;
-                        return 'ssql group-by ' + step.groupField + ' -' + step.aggFunc + ' ' + step.aggField + ' ' + alias;
-                    }
-                    case 'group_by_multi': {
                         const fields = step.groupFields.filter(f => f).join(' ');
                         const aggs = step.aggs.map(a => {
                             if (a.func === 'count') return '-count ' + (a.alias || 'count');
@@ -3612,6 +3608,30 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     case 'pivot': {
                         let s = 'ssql pivot -row ' + step.rowField + ' -col ' + step.colField + ' -val ' + step.valField;
                         if (step.aggFunc && step.aggFunc !== 'sum') s += ' -func ' + step.aggFunc;
+                        return s;
+                    }
+                    case 'window': {
+                        let s = 'ssql window';
+                        const funcs = step.funcs || [];
+                        funcs.forEach(fn => {
+                            if (fn.type === 'row_number' || fn.type === 'rank' || fn.type === 'dense_rank' || fn.type === 'percent_rank' || fn.type === 'count') {
+                                s += ' -' + fn.type.replace(/_/g, '-') + ' ' + (fn.result || fn.type);
+                            } else if (fn.type === 'lag' || fn.type === 'lead') {
+                                s += ' -' + fn.type + ' ' + fn.field + ' ' + fn.n + ' ' + (fn.result || fn.type);
+                            } else if (fn.type === 'ntile') {
+                                s += ' -ntile ' + fn.n + ' ' + (fn.result || 'ntile');
+                            } else {
+                                s += ' -' + fn.type + ' ' + fn.field + ' ' + (fn.result || fn.type);
+                            }
+                        });
+                        const parts = (step.partitionBy || []).filter(f => f);
+                        if (parts.length > 0) s += ' -partition ' + parts.join(' ');
+                        const orders = (step.orderBy || []).filter(o => o.field);
+                        orders.forEach(o => {
+                            s += ' -order ' + o.field;
+                            if (o.desc) s += ' -desc';
+                        });
+                        if (step.rows && step.rows !== '*,0') s += ' -rows ' + step.rows;
                         return s;
                     }
                     default: return '';
@@ -3700,19 +3720,8 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                                 i++;
                             }
                         }
-                        // Single group field + single agg → group_by, otherwise group_by_multi
-                        if (groupFields.length <= 1 && aggs.length <= 1) {
-                            const agg = aggs[0] || { func: 'count', alias: 'count', field: '' };
-                            return {
-                                type: 'group_by',
-                                groupField: groupFields[0] || '',
-                                aggFunc: agg.func,
-                                aggField: agg.field,
-                                alias: agg.alias
-                            };
-                        }
                         return {
-                            type: 'group_by_multi',
+                            type: 'group_by',
                             groupFields: groupFields.length > 0 ? groupFields : [''],
                             aggs: aggs.length > 0 ? aggs : [{ field: '', func: 'count', alias: 'count' }]
                         };
@@ -3745,6 +3754,70 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         const fi = tokens.indexOf('-func');
                         if (fi !== -1 && fi + 1 < tokens.length) aggFunc = tokens[fi + 1];
                         return { type: 'pivot', rowField, colField, valField, aggFunc };
+                    }
+                    case 'window': {
+                        // window -row-number rn -partition dept -order salary -desc -rows 2,0
+                        const winFuncNames = ['row-number','rank','dense-rank','ntile','percent-rank','lag','lead','first','last','sum','avg','count','min','max'];
+                        const twoArgFuncs = ['lag','lead'];
+                        const oneNumArgFuncs = ['ntile'];
+                        const oneFieldFuncs = ['first','last','sum','avg','min','max'];
+                        const partitionBy = [];
+                        const orderBy = [];
+                        const funcs = [];
+                        let rows = '*,0';
+                        let i = 1;
+                        while (i < tokens.length) {
+                            const flag = tokens[i].replace(/^-/, '');
+                            if (flag === 'partition') {
+                                i++;
+                                while (i < tokens.length && !tokens[i].startsWith('-')) { partitionBy.push(tokens[i]); i++; }
+                            } else if (flag === 'order') {
+                                i++;
+                                if (i < tokens.length && !tokens[i].startsWith('-')) {
+                                    const desc = (i + 1 < tokens.length && tokens[i + 1] === '-desc');
+                                    orderBy.push({ field: tokens[i], desc });
+                                    i++;
+                                    if (desc) i++;
+                                }
+                            } else if (flag === 'desc') {
+                                i++;
+                            } else if (flag === 'rows') {
+                                i++;
+                                if (i < tokens.length) { rows = tokens[i]; i++; }
+                            } else if (winFuncNames.includes(flag)) {
+                                const fnType = flag.replace(/-/g, '_');
+                                if (twoArgFuncs.includes(flag)) {
+                                    const field = (i + 1 < tokens.length) ? tokens[i + 1] : '';
+                                    const n = (i + 2 < tokens.length) ? parseInt(tokens[i + 2]) || 1 : 1;
+                                    const result = (i + 3 < tokens.length && !tokens[i + 3].startsWith('-')) ? tokens[i + 3] : flag;
+                                    funcs.push({ type: fnType, field, n, result });
+                                    i += (i + 3 < tokens.length && !tokens[i + 3].startsWith('-')) ? 4 : 3;
+                                } else if (oneNumArgFuncs.includes(flag)) {
+                                    const n = (i + 1 < tokens.length) ? parseInt(tokens[i + 1]) || 1 : 1;
+                                    const result = (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? tokens[i + 2] : flag;
+                                    funcs.push({ type: fnType, field: '', n, result });
+                                    i += (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? 3 : 2;
+                                } else if (oneFieldFuncs.includes(flag)) {
+                                    const field = (i + 1 < tokens.length) ? tokens[i + 1] : '';
+                                    const result = (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? tokens[i + 2] : flag;
+                                    funcs.push({ type: fnType, field, n: 1, result });
+                                    i += (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? 3 : 2;
+                                } else {
+                                    const result = (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) ? tokens[i + 1] : flag;
+                                    funcs.push({ type: fnType, field: '', n: 1, result });
+                                    i += (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) ? 2 : 1;
+                                }
+                            } else {
+                                i++;
+                            }
+                        }
+                        return {
+                            type: 'window',
+                            partitionBy: partitionBy.length > 0 ? partitionBy : [''],
+                            orderBy: orderBy.length > 0 ? orderBy : [{ field: '', desc: false }],
+                            funcs: funcs.length > 0 ? funcs : [{ type: 'row_number', field: '', n: 1, result: '' }],
+                            rows
+                        };
                     }
                     default:
                         return null;
@@ -3826,12 +3899,12 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     switch (step.type) {
                         case 'where': return { op: 'where', field: step.field, operator: step.operator, value: step.value };
                         case 'sort': return { op: 'sort', field: step.field, desc: step.desc };
-                        case 'group_by': return { op: 'group_by', groupField: step.groupField, aggField: step.aggField, aggFunc: step.aggFunc, alias: step.alias };
-                        case 'group_by_multi': return { op: 'group_by_multi', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
+                        case 'group_by': return { op: 'group_by', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
                         case 'distinct': return { op: 'distinct', field: step.field };
                         case 'limit': return { op: 'limit', n: step.n, offset: step.offset };
                         case 'compute': return { op: 'compute', name: step.name, expr: step.expr };
                         case 'pivot': return { op: 'pivot', rowField: step.rowField, colField: step.colField, valField: step.valField, aggFunc: step.aggFunc };
+                        case 'window': return { op: 'window', windowConfigs: step.configs || [] };
                     }
                 })];
                 if (allOps.length === 0) return;
@@ -3856,11 +3929,10 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     resizable: true,
                     minWidth: 100
                 },
-                animateRows: true,
                 pagination: true,
                 paginationPageSize: CONFIG.pageSize || 50,
                 paginationPageSizeSelector: [20, 50, 100, 500],
-                rowSelection: 'multiple',
+                rowSelection: { mode: 'multiRow' },
                 onGridReady: (params) => {
                     gridApiRef.current = params.api;
                 },
@@ -4031,12 +4103,13 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 const defaults = {
                     where: { type: 'where', field: '', operator: 'eq', value: '' },
                     sort: { type: 'sort', field: '', desc: false },
-                    group_by: { type: 'group_by', groupField: '', aggField: '', aggFunc: 'count', alias: 'count' },
-                    group_by_multi: { type: 'group_by_multi', groupFields: [''], aggs: [{ field: '', func: 'count', alias: 'count' }] },
+                    group_by: { type: 'group_by', groupFields: [''], aggs: [{ field: '', func: 'count', alias: 'count' }] },
                     distinct: { type: 'distinct', field: '' },
                     limit: { type: 'limit', n: 100, offset: 0 },
                     compute: { type: 'compute', name: '', expr: '' },
-                    pivot: { type: 'pivot', rowField: '', colField: '', valField: '', aggFunc: 'sum' }
+                    pivot: { type: 'pivot', rowField: '', colField: '', valField: '', aggFunc: 'sum' },
+                    window: { type: 'window', partitionBy: [''], orderBy: [{ field: '', desc: false }],
+                              funcs: [{ type: 'row_number', field: '', n: 1, result: '' }], rows: '*,0' }
                 };
                 setPipelineSteps([...pipelineSteps, defaults[type]]);
             };
@@ -4068,19 +4141,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                             }
                             break;
                         case 'group_by': {
-                            const nf = [];
-                            const nn = [];
-                            if (step.groupField) nf.push(step.groupField);
-                            const aggName = step.alias || step.aggFunc;
-                            if (aggName) {
-                                nf.push(aggName);
-                                nn.push(aggName);
-                            }
-                            fields = nf;
-                            numericFields = nn;
-                            break;
-                        }
-                        case 'group_by_multi': {
                             const nf = [...step.groupFields.filter(f => f)];
                             const nn = [];
                             nf.forEach(f => { if (numericFields.includes(f)) nn.push(f); });
@@ -4089,6 +4149,19 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                             });
                             fields = nf;
                             numericFields = nn;
+                            break;
+                        }
+                        case 'window': {
+                            const wf = [...fields];
+                            const wn = [...numericFields];
+                            (step.funcs || []).forEach(fn => {
+                                if (fn.result && !wf.includes(fn.result)) {
+                                    wf.push(fn.result);
+                                    wn.push(fn.result);
+                                }
+                            });
+                            fields = wf;
+                            numericFields = wn;
                             break;
                         }
                         case 'pivot': {
@@ -4131,40 +4204,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                                 React.createElement('option', { value: 'desc' }, 'Descending')
                             )
                         ];
-                    case 'group_by':
-                        return [
-                            React.createElement('select', { key: 'gf', value: step.groupField, onChange: (e) => updateStep(idx, { groupField: e.target.value }) },
-                                React.createElement('option', { value: '' }, '-- Group Field --'),
-                                ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
-                            ),
-                            React.createElement('select', { key: 'af', value: step.aggFunc, onChange: (e) => {
-                                const updates = { aggFunc: e.target.value };
-                                if (!step.alias || step.alias === step.aggFunc) updates.alias = e.target.value;
-                                updateStep(idx, updates);
-                            } },
-                                ...['count','sum','avg','min','max'].map(fn =>
-                                    React.createElement('option', { key: fn, value: fn }, fn)
-                                )
-                            ),
-                            step.aggFunc !== 'count' && React.createElement('select', { key: 'vf', value: step.aggField, onChange: (e) => updateStep(idx, { aggField: e.target.value }) },
-                                React.createElement('option', { value: '' }, '-- Value Field --'),
-                                ...numFields.map(f => React.createElement('option', { key: f, value: f }, f))
-                            ),
-                            React.createElement('input', { key: 'alias', type: 'text', placeholder: 'Alias', value: step.alias || '', onChange: (e) => updateStep(idx, { alias: e.target.value }) })
-                        ].filter(Boolean);
-                    case 'distinct':
-                        return [
-                            React.createElement('select', { key: 'f', value: step.field, onChange: (e) => updateStep(idx, { field: e.target.value }) },
-                                React.createElement('option', { value: '' }, '-- Field --'),
-                                ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
-                            )
-                        ];
-                    case 'limit':
-                        return [
-                            React.createElement('input', { key: 'n', type: 'number', placeholder: 'Limit (n)', value: step.n, onChange: (e) => updateStep(idx, { n: parseInt(e.target.value) || 0 }) }),
-                            React.createElement('input', { key: 'o', type: 'number', placeholder: 'Offset', value: step.offset, onChange: (e) => updateStep(idx, { offset: parseInt(e.target.value) || 0 }) })
-                        ];
-                    case 'group_by_multi': {
+                    case 'group_by': {
                         const addGroupField = () => updateStep(idx, { groupFields: [...step.groupFields, ''] });
                         const removeGroupField = (gi) => updateStep(idx, { groupFields: step.groupFields.filter((_, i) => i !== gi) });
                         const updateGroupField = (gi, val) => {
@@ -4213,6 +4253,18 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                             React.createElement('button', { key: 'add-agg', onClick: addAgg, style: { fontSize: '0.75rem', padding: '2px 8px' } }, '+ Aggregation')
                         ].filter(Boolean);
                     }
+                    case 'distinct':
+                        return [
+                            React.createElement('select', { key: 'f', value: step.field, onChange: (e) => updateStep(idx, { field: e.target.value }) },
+                                React.createElement('option', { value: '' }, '-- Field --'),
+                                ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                            )
+                        ];
+                    case 'limit':
+                        return [
+                            React.createElement('input', { key: 'n', type: 'number', placeholder: 'Limit (n)', value: step.n, onChange: (e) => updateStep(idx, { n: parseInt(e.target.value) || 0 }) }),
+                            React.createElement('input', { key: 'o', type: 'number', placeholder: 'Offset', value: step.offset, onChange: (e) => updateStep(idx, { offset: parseInt(e.target.value) || 0 }) })
+                        ];
                     case 'compute':
                         return [
                             React.createElement('input', { key: 'name', type: 'text', placeholder: 'Field name', value: step.name, onChange: (e) => updateStep(idx, { name: e.target.value }) }),
@@ -4238,6 +4290,85 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                                 )
                             )
                         ];
+                    case 'window': {
+                        const winTypes = ['row_number','rank','dense_rank','ntile','percent_rank','lag','lead','first','last','sum','avg','count','min','max'];
+                        const needsField = ['lag','lead','first','last','sum','avg','min','max'];
+                        const needsN = ['lag','lead','ntile'];
+                        const addPartField = () => updateStep(idx, { partitionBy: [...step.partitionBy, ''] });
+                        const removePartField = (pi) => updateStep(idx, { partitionBy: step.partitionBy.filter((_, i) => i !== pi) });
+                        const updatePartField = (pi, val) => {
+                            const pf = [...step.partitionBy]; pf[pi] = val;
+                            updateStep(idx, { partitionBy: pf });
+                        };
+                        const addOrderField = () => updateStep(idx, { orderBy: [...step.orderBy, { field: '', desc: false }] });
+                        const removeOrderField = (oi) => updateStep(idx, { orderBy: step.orderBy.filter((_, i) => i !== oi) });
+                        const updateOrderField = (oi, updates) => {
+                            const ob = [...step.orderBy]; ob[oi] = { ...ob[oi], ...updates };
+                            updateStep(idx, { orderBy: ob });
+                        };
+                        const addFunc = () => updateStep(idx, { funcs: [...step.funcs, { type: 'row_number', field: '', n: 1, result: '' }] });
+                        const removeFunc = (fi) => updateStep(idx, { funcs: step.funcs.filter((_, i) => i !== fi) });
+                        const updateFunc = (fi, updates) => {
+                            const f = [...step.funcs]; f[fi] = { ...f[fi], ...updates };
+                            updateStep(idx, { funcs: f });
+                        };
+                        return [
+                            React.createElement('div', { key: 'p-label', style: { fontSize: '0.7rem', fontWeight: 600, color: '#6c757d', marginBottom: '2px' } }, 'PARTITION BY'),
+                            ...step.partitionBy.map((pf, pi) =>
+                                React.createElement('div', { key: 'p-' + pi, style: { display: 'flex', gap: '4px', marginBottom: '4px' } },
+                                    React.createElement('select', { style: { flex: 1 }, value: pf, onChange: (e) => updatePartField(pi, e.target.value) },
+                                        React.createElement('option', { value: '' }, '-- Field --'),
+                                        ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                                    ),
+                                    step.partitionBy.length > 1 && React.createElement('button', {
+                                        style: { background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', padding: '0 4px' },
+                                        onClick: () => removePartField(pi)
+                                    }, '\u00d7')
+                                )
+                            ),
+                            React.createElement('button', { key: 'add-p', onClick: addPartField, style: { fontSize: '0.75rem', padding: '2px 8px', marginBottom: '8px' } }, '+ Partition'),
+                            React.createElement('div', { key: 'o-label', style: { fontSize: '0.7rem', fontWeight: 600, color: '#6c757d', marginBottom: '2px' } }, 'ORDER BY'),
+                            ...step.orderBy.map((ob, oi) =>
+                                React.createElement('div', { key: 'o-' + oi, style: { display: 'flex', gap: '4px', marginBottom: '4px' } },
+                                    React.createElement('select', { style: { flex: 1 }, value: ob.field, onChange: (e) => updateOrderField(oi, { field: e.target.value }) },
+                                        React.createElement('option', { value: '' }, '-- Field --'),
+                                        ...fields.map(f => React.createElement('option', { key: f, value: f }, f))
+                                    ),
+                                    React.createElement('select', { style: { width: '70px' }, value: ob.desc ? 'desc' : 'asc', onChange: (e) => updateOrderField(oi, { desc: e.target.value === 'desc' }) },
+                                        React.createElement('option', { value: 'asc' }, 'Asc'),
+                                        React.createElement('option', { value: 'desc' }, 'Desc')
+                                    ),
+                                    step.orderBy.length > 1 && React.createElement('button', {
+                                        style: { background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', padding: '0 4px' },
+                                        onClick: () => removeOrderField(oi)
+                                    }, '\u00d7')
+                                )
+                            ),
+                            React.createElement('button', { key: 'add-o', onClick: addOrderField, style: { fontSize: '0.75rem', padding: '2px 8px', marginBottom: '8px' } }, '+ Order'),
+                            React.createElement('div', { key: 'f-label', style: { fontSize: '0.7rem', fontWeight: 600, color: '#6c757d', marginBottom: '2px' } }, 'FUNCTIONS'),
+                            ...step.funcs.map((fn, fi) =>
+                                React.createElement('div', { key: 'f-' + fi, style: { display: 'flex', gap: '4px', marginBottom: '4px', flexWrap: 'wrap' } },
+                                    React.createElement('select', { style: { flex: 1 }, value: fn.type, onChange: (e) => updateFunc(fi, { type: e.target.value }) },
+                                        ...winTypes.map(wt => React.createElement('option', { key: wt, value: wt }, wt))
+                                    ),
+                                    needsField.includes(fn.type) && React.createElement('select', { style: { flex: 1 }, value: fn.field, onChange: (e) => updateFunc(fi, { field: e.target.value }) },
+                                        React.createElement('option', { value: '' }, '-- Field --'),
+                                        ...numFields.map(f => React.createElement('option', { key: f, value: f }, f))
+                                    ),
+                                    needsN.includes(fn.type) && React.createElement('input', { style: { width: '50px' }, type: 'number', placeholder: 'N', value: fn.n, onChange: (e) => updateFunc(fi, { n: parseInt(e.target.value) || 1 }) }),
+                                    React.createElement('input', { style: { flex: 1 }, type: 'text', placeholder: 'Result name', value: fn.result, onChange: (e) => updateFunc(fi, { result: e.target.value }) }),
+                                    step.funcs.length > 1 && React.createElement('button', {
+                                        style: { background: 'none', border: 'none', color: '#dc3545', cursor: 'pointer', padding: '0 4px' },
+                                        onClick: () => removeFunc(fi)
+                                    }, '\u00d7')
+                                )
+                            ),
+                            React.createElement('button', { key: 'add-f', onClick: addFunc, style: { fontSize: '0.75rem', padding: '2px 8px', marginBottom: '8px' } }, '+ Function'),
+                            React.createElement('div', { key: 'fr-label', style: { fontSize: '0.7rem', fontWeight: 600, color: '#6c757d', marginBottom: '2px' } }, 'FRAME (rows)'),
+                            React.createElement('input', { key: 'rows', type: 'text', placeholder: '*,0 (preceding,following)', value: step.rows, onChange: (e) => updateStep(idx, { rows: e.target.value }),
+                                style: { width: '100%' }, title: '* = unbounded, number = fixed offset. Examples: *,0 (running), 2,0 (3-row window), *,* (full partition)' })
+                        ].filter(Boolean);
+                    }
                     default:
                         return [];
                 }
@@ -4255,12 +4386,15 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     switch (step.type) {
                         case 'where': return { op: 'where', field: step.field, operator: step.operator, value: step.value };
                         case 'sort': return { op: 'sort', field: step.field, desc: step.desc };
-                        case 'group_by': return { op: 'group_by', groupField: step.groupField, aggField: step.aggField, aggFunc: step.aggFunc, alias: step.alias };
-                        case 'group_by_multi': return { op: 'group_by_multi', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
+                        case 'group_by': return { op: 'group_by', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
                         case 'distinct': return { op: 'distinct', field: step.field };
                         case 'limit': return { op: 'limit', n: step.n, offset: step.offset };
                         case 'compute': return { op: 'compute', name: step.name, expr: step.expr };
                         case 'pivot': return { op: 'pivot', rowField: step.rowField, colField: step.colField, valField: step.valField, aggFunc: step.aggFunc };
+                        case 'window': {
+                            const parseRows = (r) => { const p = (r || '*,0').split(','); return { preceding: p[0] === '*' ? -1 : parseInt(p[0]) || 0, following: p.length > 1 ? (p[1] === '*' ? -1 : parseInt(p[1]) || 0) : 0 }; };
+                            return { op: 'window', windowConfigs: [{ partitionBy: step.partitionBy.filter(f => f), orderBy: step.orderBy.filter(o => o.field), frame: parseRows(step.rows), specs: step.funcs.map(fn => ({ type: fn.type, field: fn.field, n: fn.n, result: fn.result })) }] };
+                        }
                     }
                 });
 
@@ -4272,7 +4406,8 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         console.warn('WASM pipeline failed:', e);
                         if (pipelineSteps.length === 1 && pipelineSteps[0].type === 'group_by') {
                             const step = pipelineSteps[0];
-                            result = jsAggregation(DATA, step.groupField, step.aggFunc, step.aggField);
+                            const agg = step.aggs[0] || { func: 'count', field: '' };
+                            result = jsAggregation(DATA, step.groupFields[0] || '', agg.func, agg.field);
                         } else {
                             alert('Pipeline execution failed: ' + e.message);
                             return;
@@ -4281,7 +4416,8 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 } else {
                     if (pipelineSteps.length === 1 && pipelineSteps[0].type === 'group_by') {
                         const step = pipelineSteps[0];
-                        result = jsAggregation(DATA, step.groupField, step.aggFunc, step.aggField);
+                        const agg = step.aggs[0] || { func: 'count', field: '' };
+                        result = jsAggregation(DATA, step.groupFields[0] || '', agg.func, agg.field);
                     } else {
                         alert('Complex pipelines require WASM. Only single group-by is supported without WASM.');
                         return;
@@ -4461,11 +4597,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                                 React.createElement('option', { value: 'where' }, 'Where'),
                                 React.createElement('option', { value: 'sort' }, 'Sort'),
                                 React.createElement('option', { value: 'group_by' }, 'Group By'),
-                                React.createElement('option', { value: 'group_by_multi' }, 'Multi-Group'),
                                 React.createElement('option', { value: 'distinct' }, 'Distinct'),
                                 React.createElement('option', { value: 'limit' }, 'Limit'),
                                 React.createElement('option', { value: 'compute' }, 'Computed Column'),
-                                React.createElement('option', { value: 'pivot' }, 'Pivot')
+                                React.createElement('option', { value: 'pivot' }, 'Pivot'),
+                                React.createElement('option', { value: 'window' }, 'Window')
                             )
                         ),
                         pipelineSteps.length > 0 && React.createElement('div', { className: 'pipeline-actions' },
@@ -4559,7 +4695,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
 
                     // Table Area
                     React.createElement('div', {
-                        className: 'table-area ag-theme-alpine',
+                        className: 'table-area',
                         ref: gridRef,
                         style: { width: '100%', height: '100%' }
                     })
