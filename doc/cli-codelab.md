@@ -814,15 +814,12 @@ ssql from sales.csv | ssql to explore -x date -y revenue -theme dark analysis.ht
 
 ### Explorer with WASM Transforms
 
-Build the WASM module once, then use `-wasm` to enable client-side ssql operations
-(Where, Sort, GroupBy, Distinct, Limit) powered by the same Go code as the CLI:
+Use `-wasm` to enable client-side ssql operations (Where, Sort, Group By, Window,
+Distinct, Limit, Computed Column, Pivot) powered by the same Go code as the CLI.
+The WASM module is embedded in the ssql binary — no external files needed:
 
 ```bash
-# Build the WASM module (one-time)
-make wasm
-
-# Generate explorer with WASM-powered transforms
-ssql from sales.csv | ssql to explore -wasm cmd/ssql-wasm/ssql.wasm output.html
+ssql from sales.csv | ssql to explore -wasm output.html
 ```
 
 The explorer falls back to JavaScript if WASM fails to load. A green "WASM" badge
