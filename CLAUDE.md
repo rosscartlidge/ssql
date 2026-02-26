@@ -526,7 +526,7 @@ ssql version  # Should show: ssql vX.Y.Z
 - **No replace directive**: `go.mod` must NOT contain `replace` line (breaks `go install`)
 - **Annotated tags only**: Use `git tag -a vX.Y.Z -m "..."` not `git tag vX.Y.Z`
 - **Test install**: Always verify with `GOPROXY=direct go install` before announcing release
-- **Debian packages**: Always build and push updated `.deb` packages for minor/major releases
+- **Debian packages**: Always build and push updated `.deb` packages for minor/major releases. After pushing new `.deb` files, update the download URLs in `README.md` to reference the new version.
 - **Major version bumps**: Only bump major version (e.g., v4 → v5) when explicitly requested by the user. Major bumps require updating the module path (`/v4` → `/v5`) throughout the codebase. Use minor/patch versions for most releases.
 
 **How It Works:**
