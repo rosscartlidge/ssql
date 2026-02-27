@@ -1325,3 +1325,84 @@ func TestFunctionalPipelineComposition(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+// STREAMING TABLE TESTS
+// ============================================================================
+
+func TestDisplayTableStreamingTo_SmallInput(t *testing.T) {
+	// With input smaller than sample size, output should match DisplayTableWithFields
+	records := []Record{
+		NewRecord(map[string]any{"name": "Alice", "age": int64(30)}),
+		NewRecord(map[string]any{"name": "Bob", "age": int64(25)}),
+	}
+
+	// Capture streaming output
+	var streamBuf bytes.Buffer
+	DisplayTableStreamingTo(&streamBuf, slices.Values(records), 50, 100, nil, false)
+
+	// Capture non-streaming output
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	DisplayTableWithFields(slices.Values(records), 50, nil, false)
+	w.Close()
+	var normalBuf bytes.Buffer
+	normalBuf.ReadFrom(r)
+	os.Stdout = oldStdout
+
+	if streamBuf.String() != normalBuf.String() {
+		t.Errorf("Streaming output differs from normal:\nStreaming:\n%s\nNormal:\n%s", streamBuf.String(), normalBuf.String())
+	}
+}
+
+func TestDisplayTableStreamingTo_LargerThanSample(t *testing.T) {
+	// Create 10 records, sample 3
+	var records []Record
+	for i := range 10 {
+		records = append(records, NewRecord(map[string]any{
+			"id":   int64(i),
+			"name": "item",
+		}))
+	}
+
+	var buf bytes.Buffer
+	DisplayTableStreamingTo(&buf, slices.Values(records), 50, 3, nil, false)
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+
+	// header + separator + 10 data rows = 12 lines
+	if len(lines) != 12 {
+		t.Errorf("Expected 12 lines, got %d:\n%s", len(lines), output)
+	}
+}
+
+func TestDisplayTableStreamingTo_Truncation(t *testing.T) {
+	// Sample has short values, later record has longer value
+	sample := []Record{
+		NewRecord(map[string]any{"val": "short"}),
+	}
+	long := []Record{
+		NewRecord(map[string]any{"val": "this-is-a-very-long-value-that-exceeds-width"}),
+	}
+	all := append(sample, long...)
+
+	var buf bytes.Buffer
+	DisplayTableStreamingTo(&buf, slices.Values(all), 50, 1, nil, false)
+
+	output := buf.String()
+	// The long value should appear (possibly truncated by maxWidth=50, but column width was inferred from "short")
+	if !strings.Contains(output, "this-is-a-very-long") {
+		t.Errorf("Long value should appear in output:\n%s", output)
+	}
+}
+
+func TestDisplayTableStreamingTo_EmptyInput(t *testing.T) {
+	var buf bytes.Buffer
+	DisplayTableStreamingTo(&buf, slices.Values([]Record{}), 50, 100, nil, false)
+
+	if buf.String() != "" {
+		t.Errorf("Empty input should produce no output, got: %q", buf.String())
+	}
+}

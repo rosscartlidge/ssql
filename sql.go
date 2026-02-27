@@ -1050,6 +1050,79 @@ func recordsToSeq(records []Record) iter.Seq[Record] {
 	}
 }
 
+// StreamGroupByFields groups presorted records by specified field values in a streaming fashion.
+// Input MUST be sorted by the grouping fields. Buffers only one group at a time (O(group size) memory).
+// Output format is identical to GroupByFields — Records with grouping fields + sequence field.
+//
+// Example:
+//
+//	// Data already sorted by dept
+//	sorted := ssql.SortBy(func(r ssql.Record) string { return ssql.GetOr(r, "dept", "") })(records)
+//	grouped := ssql.StreamGroupByFields("members", "dept")(sorted)
+//	summary := ssql.Aggregate("members", map[string]ssql.AggregateFunc{
+//	    "count": ssql.Count(),
+//	})(grouped)
+func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, Record] {
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			var currentKey string
+			var currentKeyValues []any
+			var buffer []Record
+
+			for record := range input {
+				// Extract key values from this record
+				keyValues := make([]any, len(fields))
+				for i, field := range fields {
+					val, exists := Get[any](record, field)
+					if !exists {
+						val = nil
+					}
+					keyValues[i] = val
+				}
+				key := fmt.Sprintf("%v", keyValues)
+
+				if len(buffer) == 0 {
+					// First record
+					currentKey = key
+					currentKeyValues = keyValues
+					buffer = append(buffer, record)
+					continue
+				}
+
+				if key == currentKey {
+					// Same group — buffer
+					buffer = append(buffer, record)
+				} else {
+					// Group changed — emit buffered group
+					result := MakeMutableRecord()
+					for i, field := range fields {
+						result.fields[field] = currentKeyValues[i]
+					}
+					result.fields[sequenceField] = recordsToSeq(buffer)
+					if !yield(result.Freeze()) {
+						return
+					}
+
+					// Start new group
+					currentKey = key
+					currentKeyValues = keyValues
+					buffer = []Record{record}
+				}
+			}
+
+			// Emit final group
+			if len(buffer) > 0 {
+				result := MakeMutableRecord()
+				for i, field := range fields {
+					result.fields[field] = currentKeyValues[i]
+				}
+				result.fields[sequenceField] = recordsToSeq(buffer)
+				yield(result.Freeze())
+			}
+		}
+	}
+}
+
 // ============================================================================
 // AGGREGATION OPERATIONS
 // ============================================================================

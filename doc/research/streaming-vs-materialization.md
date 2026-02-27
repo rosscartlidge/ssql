@@ -43,18 +43,26 @@ These stream records but maintain a set that grows with the number of distinct k
 
 This is the standard hash join approach. User should put the smaller dataset on the right.
 
+### Streaming with Bounded Buffer (1 command)
+
+Uses O(K) memory where K is a user-specified constant.
+
+| Command | State | Notes |
+|---------|-------|-------|
+| `top N` | Min/max-heap of size N | Heap-based top-K. O(N·log(K)) time, O(K) memory. |
+
 ### Full Materialization (13 commands)
 
-Must collect all records before producing output. Cannot handle infinite streams.
+Must collect all records before producing output. Cannot handle infinite streams. Some have streaming alternatives.
 
 | Command | Materialization Point | Why |
 |---------|----------------------|-----|
 | `sort` | `slices.SortedFunc()` in `operations.go` | Must see all records to determine order. |
-| `group-by` | `map[string][]Record` in `sql.go` | Must see all records per group to compute aggregates. |
+| `group-by` | `map[string][]Record` in `sql.go` | Must see all records per group to compute aggregates. Use `-presorted` for streaming alternative. |
 | `group-by -rollup/-cube` | `Rollup()`/`Cube()` in `sql.go` | Collects all records for subtotal/grand total generation. |
 | `pivot` | `Pivot()` in `sql.go` + `slices.Collect` in `pivot.go` | Must see all records to discover pivot column values. |
 | `window` | `slices.Collect` in `sql.go` Window() | Ranking/lag/lead need full partition visibility. |
-| `to table` | `DisplayTableWithFields()` | Scans all records for column width alignment. |
+| `to table` | `DisplayTableWithFields()` | Scans all records for column width alignment. Use `-stream` for streaming alternative. |
 | `to json` (pretty) | `json.MarshalIndent(all)` | JSON array `[{...},{...}]` requires all records. |
 | `to arrow` | `WriteArrow()` | Columnar batch writing. |
 | `to wav` | `WriteWAV()` | WAV header requires total sample count. |
@@ -70,30 +78,32 @@ Must collect all records before producing output. Cannot handle infinite streams
 
 | Classification | Count | % of data commands |
 |---------------|-------|-------------------|
-| Pure streaming | 12 | 48% |
-| Streaming + growing state | 2 | 8% |
+| Pure streaming | 12 | 44% |
+| Streaming + growing state | 2 | 7% |
+| Streaming + bounded buffer | 1 | 4% |
 | Partial materialization | 1 | 4% |
-| Full materialization | 13 | 52% |
+| Full materialization | 13 | 48% |
+
+Note: `group-by -presorted` and `to table -stream` provide streaming alternatives for 2 of the 13 materializing commands.
 
 The core pipeline commands (where, update, include, exclude, rename, limit, offset) are all pure streaming, so the most common pipeline patterns already handle arbitrarily large data.
 
 ## Optimization Opportunities
 
-### 1. Streaming group-by with pre-sorted input (HIGH VALUE)
+### 1. Streaming group-by with pre-sorted input (HIGH VALUE) — DONE v4.23.0
 
-**Current:** `group-by` collects all records into `map[string][]Record`.
+**Implemented:** `StreamGroupByFields()` in `sql.go` + `-presorted` flag in CLI.
 
-**Opportunity:** If input is already sorted by group key, aggregation can be streaming — emit group result when key changes. This is a standard database optimization.
+Tracks current group key. When key changes, emits aggregate for previous group and starts new group. Memory = O(1 group) instead of O(all records). Output format identical to `GroupByFields` so `Aggregate()` works unchanged.
 
-**Approach:** Add a `-presorted` flag (or auto-detect sorted input by comparing consecutive keys):
 ```bash
-# Input sorted by dept — can stream
-ssql from data.csv | ssql sort -field dept | ssql group-by -presorted dept -count n -sum salary total
+# Input sorted by dept — streams with O(1 group) memory
+ssql from data.csv | ssql sort dept | ssql group-by dept -count n -sum salary total -presorted
 ```
 
-**Implementation:** Track current group key. When key changes, emit aggregate for previous group and start new group. Memory = O(1 group) instead of O(all records).
-
-**Complexity:** Medium. Requires a new code path in `GroupByFields()` or a new `StreamGroupBy()` function.
+- Library: `StreamGroupByFields(sequenceField, fields...)` — same signature as `GroupByFields`
+- CLI: `-presorted` flag (rejects `-rollup`/`-cube` combinations)
+- Code generation: emits `ssql.StreamGroupByFields` instead of `ssql.GroupByFields`
 
 ### 2. Streaming window with bounded frames (MEDIUM VALUE)
 
@@ -111,24 +121,23 @@ ssql from data.csv | ssql sort -field dept | ssql group-by -presorted dept -coun
 
 **Complexity:** High. Two separate code paths, careful edge case handling.
 
-### 3. Streaming to-table with fixed widths (LOW-MEDIUM VALUE)
+### 3. Streaming to-table with fixed widths (LOW-MEDIUM VALUE) — DONE v4.23.0
 
-**Current:** `to table` scans all records for column width calculation.
+**Implemented:** `DisplayTableStreaming()` / `DisplayTableStreamingTo()` in `io.go` + `-stream` flag in CLI.
 
-**Opportunity:** Offer a streaming mode with:
-- Fixed column widths (user-specified or inferred from first N records)
-- Truncation with `...` for overflow
+Uses `iter.Pull` for two-phase processing: samples first N records (default 100) to infer column widths, prints header, prints sampled records, then streams remaining records one at a time. Memory = O(sample size) instead of O(all records).
 
-**Approach:** Add a `-stream` or `-widths` flag:
 ```bash
 # Infer widths from first 100 records, stream the rest
 ssql from huge.csv | ssql to table -stream
 
-# Fixed widths
-ssql from huge.csv | ssql to table -widths 20,10,15
+# Custom sample size
+ssql from huge.csv | ssql to table -stream -sample 500
 ```
 
-**Complexity:** Low. Just skip the pre-scan and use default/specified widths.
+- Library: `DisplayTableStreaming(records, maxWidth, sampleSize, fieldOrder, onlySpecified)`
+- CLI: `-stream` flag + `-sample N` flag (default 100)
+- Extracted helpers: `buildColumnOrder`, `calculateColumnWidths`, `printTableHeader`, `printTableSeparator`, `printTableRow`
 
 ### 4. Chunked Arrow writing (LOW VALUE)
 
@@ -148,22 +157,26 @@ ssql from huge.csv | ssql to table -widths 20,10,15
 
 **Complexity:** Low.
 
-### 6. sort + limit fusion (MEDIUM VALUE)
+### 6. sort + limit fusion / `top` command (MEDIUM VALUE) — DONE v4.23.0
 
-**Current:** `sort | limit N` materializes ALL records for sort, then takes N.
+**Implemented:** `TopBy()` / `BottomBy()` in `operations.go` + `top` CLI command.
 
-**Opportunity:** A top-K algorithm uses a heap of size N, processing each record in O(log N) time with O(N) memory instead of O(all records).
+Heap-based top-K using `container/heap`. O(N·log(K)) time, O(K) memory. Results sorted descending (TopBy) or ascending (BottomBy).
 
-**Approach:** Detect `sort | limit` pattern in pipeline, or add a dedicated `top` command:
 ```bash
 # Instead of materializing millions of records:
-ssql from huge.csv | ssql sort -field salary -desc | ssql limit 10
+ssql from huge.csv | ssql sort salary -desc | ssql limit 10
 
-# Could use top-K with O(10) memory:
-ssql from huge.csv | ssql top 10 -field salary -desc
+# Uses top-K with O(10) memory:
+ssql from huge.csv | ssql top 10 -field salary
+
+# Bottom 5 (ascending):
+ssql from huge.csv | ssql top 5 -field age -asc
 ```
 
-**Complexity:** Medium. Heap-based top-K is straightforward; pipeline fusion is harder.
+- Library: `TopBy[T, K](n, keyFn)` and `BottomBy[T, K](n, keyFn)` — generic, work with any ordered key
+- CLI: `ssql top N -field FIELD [-asc] [-generate]`
+- Code generation: emits `ssql.TopBy` or `ssql.BottomBy`
 
 ## Workarounds for Users Today
 
@@ -178,11 +191,11 @@ For datasets too large to materialize:
 
 ## Recommended Priority
 
-| # | Optimization | Value | Complexity | Recommendation |
-|---|-------------|-------|------------|----------------|
-| 1 | Streaming group-by (`-presorted`) | High | Medium | Do first — most common analytical operation |
-| 2 | sort + limit fusion (`top` command) | Medium | Medium | Second — very common pattern |
-| 3 | Streaming to-table (`-stream`) | Low-Med | Low | Easy win, nice UX improvement |
+| # | Optimization | Value | Complexity | Status |
+|---|-------------|-------|------------|--------|
+| 1 | Streaming group-by (`-presorted`) | High | Medium | **DONE v4.23.0** |
+| 2 | sort + limit fusion (`top` command) | Medium | Medium | **DONE v4.23.0** |
+| 3 | Streaming to-table (`-stream`) | Low-Med | Low | **DONE v4.23.0** |
 | 4 | Streaming window (bounded frames) | Medium | High | Defer — complex, narrow use case |
 | 5 | Chunked Arrow writing | Low | Medium | Defer — niche format |
 | 6 | Seekable WAV writing | Low | Low | Defer — niche format |

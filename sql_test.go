@@ -425,6 +425,132 @@ func TestGroupByFieldsWithComplexValues(t *testing.T) {
 }
 
 // ============================================================================
+// STREAMING GROUP BY TESTS
+// ============================================================================
+
+func TestStreamGroupByFields_SingleField(t *testing.T) {
+	// Presorted by dept
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "Eng", "name": "Alice"}),
+		NewRecord(map[string]any{"dept": "Eng", "name": "Bob"}),
+		NewRecord(map[string]any{"dept": "Sales", "name": "Charlie"}),
+	})
+
+	result := slices.Collect(StreamGroupByFields("members", "dept")(input))
+
+	if len(result) != 2 {
+		t.Fatalf("StreamGroupByFields: expected 2 groups, got %d", len(result))
+	}
+
+	if GetOr(result[0], "dept", "") != "Eng" {
+		t.Error("First group should be Eng")
+	}
+	if GetOr(result[1], "dept", "") != "Sales" {
+		t.Error("Second group should be Sales")
+	}
+
+	// Verify group members
+	engMembers := slices.Collect(GetOr(result[0], "members", iter.Seq[Record](nil)))
+	if len(engMembers) != 2 {
+		t.Errorf("Eng should have 2 members, got %d", len(engMembers))
+	}
+	salesMembers := slices.Collect(GetOr(result[1], "members", iter.Seq[Record](nil)))
+	if len(salesMembers) != 1 {
+		t.Errorf("Sales should have 1 member, got %d", len(salesMembers))
+	}
+}
+
+func TestStreamGroupByFields_MultipleFields(t *testing.T) {
+	// Presorted by dept, then city
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "Eng", "city": "NYC", "name": "Alice"}),
+		NewRecord(map[string]any{"dept": "Eng", "city": "NYC", "name": "Bob"}),
+		NewRecord(map[string]any{"dept": "Eng", "city": "SF", "name": "Charlie"}),
+		NewRecord(map[string]any{"dept": "Sales", "city": "NYC", "name": "Dave"}),
+	})
+
+	result := slices.Collect(StreamGroupByFields("members", "dept", "city")(input))
+
+	if len(result) != 3 {
+		t.Fatalf("Expected 3 groups, got %d", len(result))
+	}
+
+	// Eng/NYC, Eng/SF, Sales/NYC
+	if GetOr(result[0], "dept", "") != "Eng" || GetOr(result[0], "city", "") != "NYC" {
+		t.Errorf("Group 0: expected Eng/NYC, got %s/%s", GetOr(result[0], "dept", ""), GetOr(result[0], "city", ""))
+	}
+	if GetOr(result[1], "dept", "") != "Eng" || GetOr(result[1], "city", "") != "SF" {
+		t.Errorf("Group 1: expected Eng/SF, got %s/%s", GetOr(result[1], "dept", ""), GetOr(result[1], "city", ""))
+	}
+}
+
+func TestStreamGroupByFields_EmptyInput(t *testing.T) {
+	input := slices.Values([]Record{})
+	result := slices.Collect(StreamGroupByFields("members", "dept")(input))
+	if len(result) != 0 {
+		t.Errorf("Expected 0 groups, got %d", len(result))
+	}
+}
+
+func TestStreamGroupByFields_SingleGroup(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "Eng", "name": "Alice"}),
+		NewRecord(map[string]any{"dept": "Eng", "name": "Bob"}),
+		NewRecord(map[string]any{"dept": "Eng", "name": "Charlie"}),
+	})
+
+	result := slices.Collect(StreamGroupByFields("members", "dept")(input))
+
+	if len(result) != 1 {
+		t.Fatalf("Expected 1 group, got %d", len(result))
+	}
+
+	members := slices.Collect(GetOr(result[0], "members", iter.Seq[Record](nil)))
+	if len(members) != 3 {
+		t.Errorf("Group should have 3 members, got %d", len(members))
+	}
+}
+
+func TestStreamGroupByFields_WithAggregate(t *testing.T) {
+	// Full pipeline: stream group-by + aggregate
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "Eng", "salary": int64(100000)}),
+		NewRecord(map[string]any{"dept": "Eng", "salary": int64(110000)}),
+		NewRecord(map[string]any{"dept": "Sales", "salary": int64(90000)}),
+		NewRecord(map[string]any{"dept": "Sales", "salary": int64(80000)}),
+	})
+
+	grouped := StreamGroupByFields("_group", "dept")(input)
+	aggregated := Aggregate("_group", map[string]AggregateFunc{
+		"count": Count(),
+		"total": Sum("salary"),
+		"avg":   Avg("salary"),
+	})(grouped)
+
+	result := slices.Collect(aggregated)
+
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 aggregated groups, got %d", len(result))
+	}
+
+	// Find Eng group
+	var eng Record
+	for _, r := range result {
+		if GetOr(r, "dept", "") == "Eng" {
+			eng = r
+			break
+		}
+	}
+
+	if GetOr(eng, "count", int64(0)) != int64(2) {
+		t.Errorf("Eng count: expected 2, got %v", GetOr[any](eng, "count", nil))
+	}
+	if GetOr(eng, "total", float64(0)) != float64(210000) {
+		t.Errorf("Eng total: expected 210000, got %v", GetOr[any](eng, "total", nil))
+	}
+}
+
+// ============================================================================
 // AGGREGATION OPERATIONS TESTS
 // ============================================================================
 

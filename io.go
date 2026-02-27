@@ -1733,6 +1733,162 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 	}
 }
 
+// DisplayTableStreaming prints records as a formatted table in streaming mode.
+// Samples the first sampleSize records to determine column widths, then streams
+// remaining records without buffering. This uses O(sampleSize) memory instead of
+// O(all records). Prints to stdout.
+func DisplayTableStreaming(records iter.Seq[Record], maxWidth int, sampleSize int, fieldOrder []string, onlySpecified bool) {
+	DisplayTableStreamingTo(os.Stdout, records, maxWidth, sampleSize, fieldOrder, onlySpecified)
+}
+
+// DisplayTableStreamingTo prints records as a formatted table in streaming mode,
+// writing to the specified writer. Samples the first sampleSize records to determine
+// column widths, then streams remaining records without buffering.
+func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int, sampleSize int, fieldOrder []string, onlySpecified bool) {
+	if sampleSize <= 0 {
+		sampleSize = 100
+	}
+
+	// Use iter.Pull for two-phase iteration
+	next, stop := iter.Pull(records)
+	defer stop()
+
+	// Phase 1: sample records to determine columns and widths
+	var sample []Record
+	columnSet := make(map[string]bool)
+	for range sampleSize {
+		record, ok := next()
+		if !ok {
+			break
+		}
+		sample = append(sample, record)
+		for field := range record.All() {
+			columnSet[field] = true
+		}
+	}
+
+	if len(sample) == 0 {
+		return
+	}
+
+	// Build column list
+	columns := buildColumnOrder(columnSet, fieldOrder, onlySpecified)
+
+	// Calculate column widths from sample
+	colWidths := calculateColumnWidths(columns, sample, maxWidth)
+
+	// Print header and separator
+	printTableHeader(w, columns, colWidths)
+	printTableSeparator(w, columns, colWidths)
+
+	// Print sampled records
+	for _, record := range sample {
+		printTableRow(w, columns, colWidths, record, maxWidth)
+	}
+
+	// Phase 2: stream remaining records
+	for {
+		record, ok := next()
+		if !ok {
+			break
+		}
+		printTableRow(w, columns, colWidths, record, maxWidth)
+	}
+}
+
+// buildColumnOrder builds an ordered column list from a set of discovered columns
+func buildColumnOrder(columnSet map[string]bool, fieldOrder []string, onlySpecified bool) []string {
+	var columns []string
+	if len(fieldOrder) > 0 {
+		specifiedSet := make(map[string]bool)
+		for _, field := range fieldOrder {
+			if columnSet[field] {
+				columns = append(columns, field)
+				specifiedSet[field] = true
+			}
+		}
+		if !onlySpecified {
+			var remaining []string
+			for col := range columnSet {
+				if !specifiedSet[col] {
+					remaining = append(remaining, col)
+				}
+			}
+			slices.Sort(remaining)
+			columns = append(columns, remaining...)
+		}
+	} else {
+		columns = make([]string, 0, len(columnSet))
+		for col := range columnSet {
+			columns = append(columns, col)
+		}
+		slices.Sort(columns)
+	}
+	return columns
+}
+
+// calculateColumnWidths calculates the maximum display width for each column
+func calculateColumnWidths(columns []string, records []Record, maxWidth int) map[string]int {
+	colWidths := make(map[string]int)
+	for _, col := range columns {
+		colWidths[col] = len(col) // Start with header width
+	}
+	for _, record := range records {
+		for field, value := range record.All() {
+			strValue := fmt.Sprintf("%v", value)
+			if len(strValue) > colWidths[field] {
+				if len(strValue) > maxWidth {
+					colWidths[field] = maxWidth
+				} else {
+					colWidths[field] = len(strValue)
+				}
+			}
+		}
+	}
+	return colWidths
+}
+
+// printTableHeader prints the column headers
+func printTableHeader(w io.Writer, columns []string, colWidths map[string]int) {
+	for i, col := range columns {
+		if i > 0 {
+			fmt.Fprint(w, "   ")
+		}
+		fmt.Fprintf(w, "%-*s", colWidths[col], col)
+	}
+	fmt.Fprintln(w)
+}
+
+// printTableSeparator prints the separator line below the header
+func printTableSeparator(w io.Writer, columns []string, colWidths map[string]int) {
+	totalWidth := 0
+	for i, col := range columns {
+		if i > 0 {
+			totalWidth += 3
+		}
+		totalWidth += colWidths[col]
+	}
+	fmt.Fprintln(w, strings.Repeat("-", totalWidth))
+}
+
+// printTableRow prints a single data row
+func printTableRow(w io.Writer, columns []string, colWidths map[string]int, record Record, maxWidth int) {
+	for i, col := range columns {
+		if i > 0 {
+			fmt.Fprint(w, "   ")
+		}
+		var strValue string
+		if value, exists := Get[any](record, col); exists {
+			strValue = fmt.Sprintf("%v", value)
+		}
+		if len(strValue) > maxWidth {
+			strValue = strValue[:maxWidth-3] + "..."
+		}
+		fmt.Fprintf(w, "%-*s", colWidths[col], strValue)
+	}
+	fmt.Fprintln(w)
+}
+
 // ============================================================================
 // COMMAND EXECUTION
 // ============================================================================

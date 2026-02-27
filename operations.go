@@ -2,6 +2,7 @@ package ssql
 
 import (
 	"cmp"
+	"container/heap"
 	"context"
 	"fmt"
 	"iter"
@@ -349,6 +350,114 @@ func SortDesc[T cmp.Ordered]() Filter[T, T] {
 			return cmp.Compare(b, a) // Reverse comparison
 		}))
 	}
+}
+
+// TopBy returns the top N elements by key value (highest first).
+// Uses a min-heap of size N for O(N*log(K)) time and O(K) memory.
+// Results are returned in descending order by key.
+func TopBy[T any, K cmp.Ordered](n int, keyFn func(T) K) Filter[T, T] {
+	return func(input iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			if n <= 0 {
+				return
+			}
+
+			h := &topMinHeap[T, K]{}
+			for item := range input {
+				key := keyFn(item)
+				if h.Len() < n {
+					heap.Push(h, topHeapEntry[T, K]{item: item, key: key})
+				} else if key > (*h)[0].key {
+					(*h)[0] = topHeapEntry[T, K]{item: item, key: key}
+					heap.Fix(h, 0)
+				}
+			}
+
+			// Extract sorted descending
+			result := make([]topHeapEntry[T, K], h.Len())
+			for i := len(result) - 1; i >= 0; i-- {
+				result[i] = heap.Pop(h).(topHeapEntry[T, K])
+			}
+
+			for _, entry := range result {
+				if !yield(entry.item) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// BottomBy returns the bottom N elements by key value (lowest first).
+// Uses a max-heap of size N for O(N*log(K)) time and O(K) memory.
+// Results are returned in ascending order by key.
+func BottomBy[T any, K cmp.Ordered](n int, keyFn func(T) K) Filter[T, T] {
+	return func(input iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			if n <= 0 {
+				return
+			}
+
+			h := &topMaxHeap[T, K]{}
+			for item := range input {
+				key := keyFn(item)
+				if h.Len() < n {
+					heap.Push(h, topHeapEntry[T, K]{item: item, key: key})
+				} else if key < (*h)[0].key {
+					(*h)[0] = topHeapEntry[T, K]{item: item, key: key}
+					heap.Fix(h, 0)
+				}
+			}
+
+			// Extract sorted ascending
+			result := make([]topHeapEntry[T, K], h.Len())
+			for i := len(result) - 1; i >= 0; i-- {
+				result[i] = heap.Pop(h).(topHeapEntry[T, K])
+			}
+
+			for _, entry := range result {
+				if !yield(entry.item) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// topHeapEntry holds an item and its pre-computed key for heap operations
+type topHeapEntry[T any, K cmp.Ordered] struct {
+	item T
+	key  K
+}
+
+// topMinHeap is a min-heap used by TopBy (keeps smallest at root to efficiently discard)
+type topMinHeap[T any, K cmp.Ordered] []topHeapEntry[T, K]
+
+func (h topMinHeap[T, K]) Len() int            { return len(h) }
+func (h topMinHeap[T, K]) Less(i, j int) bool   { return h[i].key < h[j].key }
+func (h topMinHeap[T, K]) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
+func (h *topMinHeap[T, K]) Push(x any)          { *h = append(*h, x.(topHeapEntry[T, K])) }
+func (h *topMinHeap[T, K]) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+// topMaxHeap is a max-heap used by BottomBy (keeps largest at root to efficiently discard)
+type topMaxHeap[T any, K cmp.Ordered] []topHeapEntry[T, K]
+
+func (h topMaxHeap[T, K]) Len() int            { return len(h) }
+func (h topMaxHeap[T, K]) Less(i, j int) bool   { return h[i].key > h[j].key }
+func (h topMaxHeap[T, K]) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
+func (h *topMaxHeap[T, K]) Push(x any)          { *h = append(*h, x.(topHeapEntry[T, K])) }
+func (h *topMaxHeap[T, K]) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
 }
 
 // ============================================================================

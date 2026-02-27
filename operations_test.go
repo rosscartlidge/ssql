@@ -425,6 +425,76 @@ func TestSortDesc(t *testing.T) {
 }
 
 // ============================================================================
+// TOP/BOTTOM OPERATIONS TESTS
+// ============================================================================
+
+func TestTopBy_Basic(t *testing.T) {
+	input := slices.Values([]int{3, 7, 1, 9, 4, 6, 2, 8, 5, 10})
+	result := slices.Collect(TopBy(3, func(x int) int { return x })(input))
+
+	expected := []int{10, 9, 8}
+	if !slices.Equal(result, expected) {
+		t.Errorf("TopBy(3) = %v, want %v", result, expected)
+	}
+}
+
+func TestTopBy_FewerThanN(t *testing.T) {
+	input := slices.Values([]int{5, 2})
+	result := slices.Collect(TopBy(5, func(x int) int { return x })(input))
+
+	expected := []int{5, 2}
+	if !slices.Equal(result, expected) {
+		t.Errorf("TopBy(5) with 2 items = %v, want %v", result, expected)
+	}
+}
+
+func TestTopBy_Zero(t *testing.T) {
+	input := slices.Values([]int{1, 2, 3})
+	result := slices.Collect(TopBy(0, func(x int) int { return x })(input))
+
+	if len(result) != 0 {
+		t.Errorf("TopBy(0) = %v, want empty", result)
+	}
+}
+
+func TestTopBy_ResultOrder(t *testing.T) {
+	type item struct {
+		name string
+		val  int
+	}
+	input := slices.Values([]item{
+		{"A", 10}, {"B", 50}, {"C", 30}, {"D", 20}, {"E", 40},
+	})
+
+	result := slices.Collect(TopBy(3, func(x item) int { return x.val })(input))
+
+	// Should be descending: B(50), E(40), C(30)
+	if result[0].name != "B" || result[1].name != "E" || result[2].name != "C" {
+		t.Errorf("TopBy order wrong: got %v", result)
+	}
+}
+
+func TestBottomBy_Basic(t *testing.T) {
+	input := slices.Values([]int{3, 7, 1, 9, 4, 6, 2, 8, 5, 10})
+	result := slices.Collect(BottomBy(3, func(x int) int { return x })(input))
+
+	expected := []int{1, 2, 3}
+	if !slices.Equal(result, expected) {
+		t.Errorf("BottomBy(3) = %v, want %v", result, expected)
+	}
+}
+
+func TestTopBy_Duplicates(t *testing.T) {
+	input := slices.Values([]int{5, 5, 5, 3, 3, 1})
+	result := slices.Collect(TopBy(4, func(x int) int { return x })(input))
+
+	expected := []int{5, 5, 5, 3}
+	if !slices.Equal(result, expected) {
+		t.Errorf("TopBy with duplicates = %v, want %v", result, expected)
+	}
+}
+
+// ============================================================================
 // UTILITY OPERATIONS TESTS
 // ============================================================================
 

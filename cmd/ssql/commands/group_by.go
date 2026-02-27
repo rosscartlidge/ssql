@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"iter"
 	"os"
 	"strings"
 
@@ -105,6 +106,11 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
 		Done().
+		Flag("-presorted").
+		Bool().
+		Global().
+		Help("Input is presorted by group fields (streaming, O(1) memory per group)").
+		Done().
 		Flag("-rollup").
 		Bool().
 		Global().
@@ -118,7 +124,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Handler(func(ctx *cf.Context) error {
 			var groupByFields []string
 			var generate bool
-			var rollup, cube bool
+			var rollup, cube, presorted bool
 
 			// Extract group-by fields from variadic positional
 			if fieldsVal, ok := ctx.GlobalFlags["FIELDS"]; ok {
@@ -145,6 +151,9 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if val, ok := ctx.GlobalFlags["-cube"]; ok {
 				cube = val.(bool)
 			}
+			if val, ok := ctx.GlobalFlags["-presorted"]; ok {
+				presorted = val.(bool)
+			}
 
 			if len(groupByFields) == 0 {
 				return fmt.Errorf("no group-by fields specified")
@@ -152,6 +161,10 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if rollup && cube {
 				return fmt.Errorf("cannot use both -rollup and -cube; choose one")
+			}
+
+			if presorted && (rollup || cube) {
+				return fmt.Errorf("-presorted cannot be combined with -rollup or -cube")
 			}
 
 			// Check if generation is enabled (flag or env var)
@@ -534,7 +547,12 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Standard path: use ssql.GroupByFields + ssql.Aggregate
 			// Supports both built-in aggregations (-count, -sum, etc.) and expressions (-expr)
-			grouped := ssql.GroupByFields("_group", groupByFields...)(records)
+			var grouped iter.Seq[ssql.Record]
+			if presorted {
+				grouped = ssql.StreamGroupByFields("_group", groupByFields...)(records)
+			} else {
+				grouped = ssql.GroupByFields("_group", groupByFields...)(records)
+			}
 
 			// Build aggregations map
 			aggregations := make(map[string]ssql.AggregateFunc)
@@ -750,17 +768,23 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		}
 	}
 
-	// Extract rollup/cube flags for code generation
-	var rollup, cube bool
+	// Extract rollup/cube/presorted flags for code generation
+	var rollup, cube, presorted bool
 	if val, ok := ctx.GlobalFlags["-rollup"]; ok {
 		rollup = val.(bool)
 	}
 	if val, ok := ctx.GlobalFlags["-cube"]; ok {
 		cube = val.(bool)
 	}
+	if val, ok := ctx.GlobalFlags["-presorted"]; ok {
+		presorted = val.(bool)
+	}
 
 	if rollup && cube {
 		return fmt.Errorf("cannot use both -rollup and -cube; choose one")
+	}
+	if presorted && (rollup || cube) {
+		return fmt.Errorf("-presorted cannot be combined with -rollup or -cube")
 	}
 
 	// Rollup/cube code generation path
@@ -846,8 +870,12 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	// Standard path: Generate TWO fragments for GroupByFields + Aggregate
 	// Both built-in aggregations (-count, -sum, etc.) and expressions (-expr) use this path
 
-	// Fragment 1: GroupByFields
-	groupCode := "grouped := ssql.GroupByFields(\"_group\""
+	// Fragment 1: GroupByFields (or StreamGroupByFields if presorted)
+	groupFunc := "ssql.GroupByFields"
+	if presorted {
+		groupFunc = "ssql.StreamGroupByFields"
+	}
+	groupCode := fmt.Sprintf("grouped := %s(\"_group\"", groupFunc)
 	for _, field := range groupByFields {
 		groupCode += fmt.Sprintf(", %q", field)
 	}

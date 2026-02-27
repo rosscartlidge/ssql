@@ -1303,3 +1303,71 @@ func TestUpdateSchemaNewField(t *testing.T) {
 		}
 	}
 }
+
+// TestTopGeneration tests code generation for the top command
+func TestTopGeneration(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	cmdLine := `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test top 5 -field salary`
+	cmd := exec.Command("bash", "-c", cmdLine)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Command output: %s", output)
+	}
+
+	outputStr := string(output)
+	for _, want := range []string{`"type":"stmt"`, `ssql.TopBy`, `salary`, `"var":"topRecords"`} {
+		if !strings.Contains(outputStr, want) {
+			t.Errorf("Expected output to contain %q, got: %s", want, outputStr)
+		}
+	}
+}
+
+// TestTopGenerationAsc tests code generation for top -asc
+func TestTopGenerationAsc(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	cmdLine := `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test top 3 -field age -asc`
+	cmd := exec.Command("bash", "-c", cmdLine)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Command output: %s", output)
+	}
+
+	outputStr := string(output)
+	if !strings.Contains(outputStr, `ssql.BottomBy`) {
+		t.Errorf("Expected output to contain ssql.BottomBy for -asc, got: %s", outputStr)
+	}
+}
+
+// TestPresortedGroupByGeneration tests code generation for group-by -presorted
+func TestPresortedGroupByGeneration(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	cmdLine := `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -count n -presorted`
+	cmd := exec.Command("bash", "-c", cmdLine)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Command output: %s", output)
+	}
+
+	outputStr := string(output)
+	if !strings.Contains(outputStr, `ssql.StreamGroupByFields`) {
+		t.Errorf("Expected output to contain ssql.StreamGroupByFields, got: %s", outputStr)
+	}
+	if !strings.Contains(outputStr, `ssql.Aggregate`) {
+		t.Errorf("Expected output to contain ssql.Aggregate, got: %s", outputStr)
+	}
+}

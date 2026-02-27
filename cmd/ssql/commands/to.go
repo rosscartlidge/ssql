@@ -40,6 +40,7 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.csv | ssql to table name age city", "Display with name, age, city first, then other fields").
 		Example("ssql from data.csv | ssql to table -only name age", "Display only name and age columns").
 		Example("ssql from data.csv | ssql to table -max-width 30", "Display with custom column width").
+		Example("ssql from huge.csv | ssql to table -stream", "Stream output, infer widths from first 100 records").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -50,6 +51,17 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 		Global().
 		Default(50).
 		Help("Maximum column width (truncate longer values)").
+		Done().
+		Flag("-stream").
+		Bool().
+		Global().
+		Help("Stream output, infer column widths from first records").
+		Done().
+		Flag("-sample").
+		Int().
+		Global().
+		Default(100).
+		Help("Records to sample for column widths (with -stream)").
 		Done().
 		Flag("-only").
 		Bool().
@@ -67,6 +79,8 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 			var generate bool
 			var maxWidth int
 			var onlySpecified bool
+			var stream bool
+			var sampleSize int
 			var fields []string
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
@@ -79,6 +93,14 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 
 			if onlyVal, ok := ctx.GlobalFlags["-only"]; ok {
 				onlySpecified = onlyVal.(bool)
+			}
+
+			if streamVal, ok := ctx.GlobalFlags["-stream"]; ok {
+				stream = streamVal.(bool)
+			}
+
+			if sampleVal, ok := ctx.GlobalFlags["-sample"]; ok {
+				sampleSize = sampleVal.(int)
 			}
 
 			if fieldsVal, ok := ctx.GlobalFlags["FIELDS"]; ok {
@@ -105,7 +127,11 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 				fields = schemaAndRecords.Schema.Fields
 			}
 
-			ssql.DisplayTableWithFields(records, maxWidth, fields, onlySpecified)
+			if stream {
+				ssql.DisplayTableStreaming(records, maxWidth, sampleSize, fields, onlySpecified)
+			} else {
+				ssql.DisplayTableWithFields(records, maxWidth, fields, onlySpecified)
+			}
 			return nil
 		}).
 		Done()
