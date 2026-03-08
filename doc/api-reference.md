@@ -585,6 +585,32 @@ func Reverse[T any]() Filter[T, T]
 ```
 Reverses the order of elements.
 
+### MergeSorted
+```go
+func MergeSorted(orderBy []OrderField, sources ...iter.Seq[Record]) iter.Seq[Record]
+```
+K-way merge of pre-sorted Record iterators using a min-heap. Each source must already be sorted by the given `orderBy` fields. Output is a single sorted stream with O(K) memory where K is the number of sources. When records compare equal, lower-indexed sources are emitted first (stable merge).
+
+**Example — Merge sorted shards:**
+```go
+shard1 := ssql.ReadCSV("shard1.csv")
+shard2 := ssql.ReadCSV("shard2.csv")
+shard3 := ssql.ReadCSV("shard3.csv")
+
+merged := ssql.MergeSorted(
+    []ssql.OrderField{{Field: "timestamp"}},
+    shard1, shard2, shard3,
+)
+
+// Output is sorted — use with StreamWindow for O(1) memory analytics
+filter, _ := ssql.StreamWindow([]ssql.WindowConfig{{
+    OrderBy: []ssql.OrderField{{Field: "timestamp"}},
+    Frame:   ssql.WindowFrame{Preceding: -1, Following: 0},
+    Specs:   []ssql.WindowSpec{{Function: ssql.WSum("revenue"), ResultName: "running_total"}},
+}})
+result := filter(merged)
+```
+
 ---
 
 ## Aggregation & Analysis

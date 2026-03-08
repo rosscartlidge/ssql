@@ -546,6 +546,32 @@ UNION
 SELECT * FROM suppliers
 ```
 
+### Merge Sorted Inputs
+
+When you have multiple pre-sorted files (e.g., time-series shards, partitioned exports), `merge` combines them in sorted order with O(K) memory — no re-sorting needed:
+
+```bash
+# Merge two sorted files by timestamp
+ssql from sorted1.csv | ssql merge sorted2.jsonl -by timestamp
+
+# Merge many shards by multiple fields
+ssql from chunk1.csv | \
+  ssql merge chunk2.jsonl chunk3.jsonl -by dept name
+
+# Merge descending
+ssql from data1.csv | ssql merge data2.jsonl -by amount -desc
+
+# Merge → streaming window (ideal for large time-series)
+ssql from shard1.csv | \
+  ssql merge <(ssql from shard2.csv) <(ssql from shard3.csv) -by date | \
+  ssql window -sum revenue running_total -order date -presorted
+```
+
+**Why merge instead of union + sort?**
+- `union | sort` materializes all records in memory — O(N)
+- `merge` streams with O(K) memory (K = number of sources)
+- Output is sorted by definition, enabling `-presorted` downstream
+
 ---
 
 ## Window Functions
@@ -1189,6 +1215,7 @@ go build -o monitor monitor.go
 ### Multi-Table Operations
 - `join` - Join two data sources (SQL JOIN - inner/left/right/full)
 - `union` - Combine multiple data sources (SQL UNION/UNION ALL)
+- `merge` - K-way merge of pre-sorted inputs (streaming, O(K) memory)
 
 ### Signal Processing
 - `fft` - Fast Fourier Transform for frequency analysis (`-field`, `-rate`, `-phase`)

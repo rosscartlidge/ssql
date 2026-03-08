@@ -526,6 +526,199 @@ func TestTopBy_Duplicates(t *testing.T) {
 }
 
 // ============================================================================
+// MERGE SORTED TESTS
+// ============================================================================
+
+func TestMergeSorted_TwoSources(t *testing.T) {
+	s1 := makeRecordSeq([]map[string]any{
+		{"name": "Alice", "age": int64(25)},
+		{"name": "Charlie", "age": int64(35)},
+	})
+	s2 := makeRecordSeq([]map[string]any{
+		{"name": "Bob", "age": int64(30)},
+		{"name": "Dave", "age": int64(40)},
+	})
+
+	orderBy := []OrderField{{Field: "age"}}
+	result := slices.Collect(MergeSorted(orderBy, s1, s2))
+
+	if len(result) != 4 {
+		t.Fatalf("expected 4 records, got %d", len(result))
+	}
+	ages := make([]int64, len(result))
+	for i, r := range result {
+		ages[i] = GetOr(r, "age", int64(0))
+	}
+	expected := []int64{25, 30, 35, 40}
+	if !slices.Equal(ages, expected) {
+		t.Errorf("expected ages %v, got %v", expected, ages)
+	}
+}
+
+func TestMergeSorted_ThreeSources(t *testing.T) {
+	s1 := makeRecordSeq([]map[string]any{{"v": int64(1)}, {"v": int64(4)}, {"v": int64(7)}})
+	s2 := makeRecordSeq([]map[string]any{{"v": int64(2)}, {"v": int64(5)}, {"v": int64(8)}})
+	s3 := makeRecordSeq([]map[string]any{{"v": int64(3)}, {"v": int64(6)}, {"v": int64(9)}})
+
+	orderBy := []OrderField{{Field: "v"}}
+	result := slices.Collect(MergeSorted(orderBy, s1, s2, s3))
+
+	vals := make([]int64, len(result))
+	for i, r := range result {
+		vals[i] = GetOr(r, "v", int64(0))
+	}
+	expected := []int64{1, 2, 3, 4, 5, 6, 7, 8, 9}
+	if !slices.Equal(vals, expected) {
+		t.Errorf("expected %v, got %v", expected, vals)
+	}
+}
+
+func TestMergeSorted_EmptySource(t *testing.T) {
+	s1 := makeRecordSeq([]map[string]any{{"v": int64(1)}, {"v": int64(3)}})
+	s2 := makeRecordSeq(nil) // empty
+	s3 := makeRecordSeq([]map[string]any{{"v": int64(2)}})
+
+	orderBy := []OrderField{{Field: "v"}}
+	result := slices.Collect(MergeSorted(orderBy, s1, s2, s3))
+
+	vals := make([]int64, len(result))
+	for i, r := range result {
+		vals[i] = GetOr(r, "v", int64(0))
+	}
+	expected := []int64{1, 2, 3}
+	if !slices.Equal(vals, expected) {
+		t.Errorf("expected %v, got %v", expected, vals)
+	}
+}
+
+func TestMergeSorted_SingleSource(t *testing.T) {
+	s1 := makeRecordSeq([]map[string]any{{"v": int64(3)}, {"v": int64(1)}, {"v": int64(2)}})
+
+	orderBy := []OrderField{{Field: "v"}}
+	result := slices.Collect(MergeSorted(orderBy, s1))
+
+	// Single source: records pass through in original order (assumed pre-sorted)
+	vals := make([]int64, len(result))
+	for i, r := range result {
+		vals[i] = GetOr(r, "v", int64(0))
+	}
+	expected := []int64{3, 1, 2} // passthrough, not re-sorted
+	if !slices.Equal(vals, expected) {
+		t.Errorf("expected %v, got %v", expected, vals)
+	}
+}
+
+func TestMergeSorted_NoSources(t *testing.T) {
+	orderBy := []OrderField{{Field: "v"}}
+	result := slices.Collect(MergeSorted(orderBy))
+	if len(result) != 0 {
+		t.Errorf("expected 0 records, got %d", len(result))
+	}
+}
+
+func TestMergeSorted_Descending(t *testing.T) {
+	s1 := makeRecordSeq([]map[string]any{{"v": int64(9)}, {"v": int64(5)}, {"v": int64(1)}})
+	s2 := makeRecordSeq([]map[string]any{{"v": int64(8)}, {"v": int64(4)}, {"v": int64(2)}})
+
+	orderBy := []OrderField{{Field: "v", Desc: true}}
+	result := slices.Collect(MergeSorted(orderBy, s1, s2))
+
+	vals := make([]int64, len(result))
+	for i, r := range result {
+		vals[i] = GetOr(r, "v", int64(0))
+	}
+	expected := []int64{9, 8, 5, 4, 2, 1}
+	if !slices.Equal(vals, expected) {
+		t.Errorf("expected %v, got %v", expected, vals)
+	}
+}
+
+func TestMergeSorted_MultiField(t *testing.T) {
+	s1 := makeRecordSeq([]map[string]any{
+		{"dept": "A", "salary": int64(50)},
+		{"dept": "B", "salary": int64(60)},
+	})
+	s2 := makeRecordSeq([]map[string]any{
+		{"dept": "A", "salary": int64(70)},
+		{"dept": "B", "salary": int64(40)},
+	})
+
+	orderBy := []OrderField{{Field: "dept"}, {Field: "salary"}}
+	result := slices.Collect(MergeSorted(orderBy, s1, s2))
+
+	// Expected: A/50, A/70, B/40, B/60
+	if len(result) != 4 {
+		t.Fatalf("expected 4 records, got %d", len(result))
+	}
+	type pair struct{ dept string; salary int64 }
+	got := make([]pair, len(result))
+	for i, r := range result {
+		got[i] = pair{GetOr(r, "dept", ""), GetOr(r, "salary", int64(0))}
+	}
+	exp := []pair{{"A", 50}, {"A", 70}, {"B", 40}, {"B", 60}}
+	for i := range got {
+		if got[i] != exp[i] {
+			t.Errorf("record %d: expected %v, got %v", i, exp[i], got[i])
+		}
+	}
+}
+
+func TestMergeSorted_Stable(t *testing.T) {
+	// Equal values: source with lower index should come first
+	s1 := makeRecordSeq([]map[string]any{{"v": int64(1), "src": "a"}})
+	s2 := makeRecordSeq([]map[string]any{{"v": int64(1), "src": "b"}})
+
+	orderBy := []OrderField{{Field: "v"}}
+	result := slices.Collect(MergeSorted(orderBy, s1, s2))
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(result))
+	}
+	if GetOr(result[0], "src", "") != "a" {
+		t.Errorf("expected source 'a' first (stable), got %q", GetOr(result[0], "src", ""))
+	}
+}
+
+func TestMergeSorted_EarlyTermination(t *testing.T) {
+	s1 := makeRecordSeq([]map[string]any{{"v": int64(1)}, {"v": int64(3)}, {"v": int64(5)}})
+	s2 := makeRecordSeq([]map[string]any{{"v": int64(2)}, {"v": int64(4)}, {"v": int64(6)}})
+
+	orderBy := []OrderField{{Field: "v"}}
+	merged := MergeSorted(orderBy, s1, s2)
+
+	// Take only first 3
+	limited := Limit[Record](3)(merged)
+	result := slices.Collect(limited)
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 records, got %d", len(result))
+	}
+	vals := make([]int64, len(result))
+	for i, r := range result {
+		vals[i] = GetOr(r, "v", int64(0))
+	}
+	expected := []int64{1, 2, 3}
+	if !slices.Equal(vals, expected) {
+		t.Errorf("expected %v, got %v", expected, vals)
+	}
+}
+
+// makeRecordSeq creates an iter.Seq[Record] from a slice of field maps
+func makeRecordSeq(records []map[string]any) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		for _, fields := range records {
+			r := MakeMutableRecord()
+			for k, v := range fields {
+				r.fields[k] = v
+			}
+			if !yield(r.Freeze()) {
+				return
+			}
+		}
+	}
+}
+
+// ============================================================================
 // UTILITY OPERATIONS TESTS
 // ============================================================================
 

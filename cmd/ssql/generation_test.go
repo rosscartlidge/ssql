@@ -371,6 +371,18 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			wantSubstring:  `ssql.MustStreamWindow`,
 		},
 		{
+			name:           "merge",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test merge sorted.jsonl -by timestamp`,
+			expectFragment: true,
+			wantSubstring:  `ssql.MergeSorted`,
+		},
+		{
+			name:           "merge-multi-field",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test merge file1.jsonl file2.jsonl -by dept name -desc`,
+			expectFragment: true,
+			wantSubstring:  `Desc: true`,
+		},
+		{
 			name:           "to csv",
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to csv /tmp/out.csv`,
 			expectFragment: true,

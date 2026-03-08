@@ -470,6 +470,76 @@ func (h *topMaxHeap[T, K]) Pop() any {
 	return item
 }
 
+// MergeSorted performs a k-way merge of pre-sorted Record iterators.
+// Each source must already be sorted by the given orderBy fields.
+// Output is a single sorted iterator with O(K) memory where K is the number of sources.
+// When records compare equal, sources with lower index are emitted first (stable).
+func MergeSorted(orderBy []OrderField, sources ...iter.Seq[Record]) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		if len(sources) == 0 {
+			return
+		}
+
+		// Convert push iterators to pull iterators
+		h := &mergeHeap{orderBy: orderBy}
+		stops := make([]func(), 0, len(sources))
+		defer func() {
+			for _, stop := range stops {
+				stop()
+			}
+		}()
+
+		for i, src := range sources {
+			next, stop := iter.Pull(src)
+			stops = append(stops, stop)
+			if rec, ok := next(); ok {
+				heap.Push(h, mergeHeapEntry{record: rec, next: next, index: i})
+			}
+		}
+
+		for h.Len() > 0 {
+			entry := heap.Pop(h).(mergeHeapEntry)
+			if !yield(entry.record) {
+				return
+			}
+			if rec, ok := entry.next(); ok {
+				heap.Push(h, mergeHeapEntry{record: rec, next: entry.next, index: entry.index})
+			}
+		}
+	}
+}
+
+// mergeHeapEntry holds the current record from a source and its pull function
+type mergeHeapEntry struct {
+	record Record
+	next   func() (Record, bool)
+	index  int // source index for stable ordering
+}
+
+// mergeHeap is a min-heap for k-way merge sort
+type mergeHeap struct {
+	entries []mergeHeapEntry
+	orderBy []OrderField
+}
+
+func (h mergeHeap) Len() int { return len(h.entries) }
+func (h mergeHeap) Less(i, j int) bool {
+	cmp := CompareRecordFields(h.entries[i].record, h.entries[j].record, h.orderBy)
+	if cmp == 0 {
+		return h.entries[i].index < h.entries[j].index // stable
+	}
+	return cmp < 0
+}
+func (h mergeHeap) Swap(i, j int) { h.entries[i], h.entries[j] = h.entries[j], h.entries[i] }
+func (h *mergeHeap) Push(x any)   { h.entries = append(h.entries, x.(mergeHeapEntry)) }
+func (h *mergeHeap) Pop() any {
+	old := h.entries
+	n := len(old)
+	entry := old[n-1]
+	h.entries = old[:n-1]
+	return entry
+}
+
 // ============================================================================
 // UTILITY OPERATIONS
 // ============================================================================
