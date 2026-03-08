@@ -442,6 +442,7 @@ The v4.6.0 fix came from profiling showing 28% CPU in `NewSchema` - not where we
 - `go fmt ./...` - Format all Go code
 - `go vet ./...` - Run Go vet for static analysis
 - `go mod tidy` - Clean up module dependencies
+- `go fix ./...` - Apply code modernizations (run after upgrading Go version in go.mod)
 
 **Testing:**
 - Tests are in `*_test.go` files using standard Go testing
