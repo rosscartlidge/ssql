@@ -718,6 +718,84 @@ smoothed := ssql.Window([]ssql.WindowConfig{{
 }})(prices)
 ```
 
+### StreamWindow
+
+```go
+func StreamWindow(configs []WindowConfig) (Filter[Record, Record], error)
+func MustStreamWindow(configs []WindowConfig) Filter[Record, Record]
+```
+
+Streaming variant of `Window()` that processes records incrementally without materializing the full partition. Input **MUST** be presorted by partition fields then order fields. Returns an error if unsupported functions or frames are requested.
+
+**When to use `StreamWindow` vs `Window`:**
+
+| | `Window()` | `StreamWindow()` |
+|---|---|---|
+| Input | Any order | Must be presorted |
+| Memory | O(partition size) | O(frame size) or O(1) |
+| Functions | All 15 | 13 (not NTILE, PERCENT\_RANK) |
+| Frames | All | Following ≤ 0 only |
+| Speed (running aggs) | O(N²) | O(N) |
+
+**Supported frames:**
+- Default frame (`Preceding: -1, Following: 0`) — UNBOUNDED PRECEDING TO CURRENT ROW
+- Bounded frame (`Preceding: N, Following: 0`) — ROWS N,0
+- **Not supported:** `Following > 0` or UNBOUNDED FOLLOWING
+
+**Streaming algorithms by function:**
+
+| Function | Default Frame | Bounded Frame |
+|----------|--------------|---------------|
+| SUM | Running accumulator O(1) | Sliding ring buffer |
+| AVG | Running sum + count | Sliding ring buffer + presence tracking |
+| COUNT | Counter | `min(pos+1, frameSize)` |
+| FIRST | Captured once | Sliding ring buffer |
+| LAST | Current row | Current row |
+| MIN | Running minimum | Monotonic deque O(1) amortized |
+| MAX | Running maximum | Monotonic deque O(1) amortized |
+| LAG(n) | Ring buffer of n+1 | Ring buffer of n+1 |
+| LEAD(n) | Delayed emission buffer | Delayed emission buffer |
+| ROW_NUMBER, RANK, DENSE_RANK | Counter | Counter |
+
+**Example — Streaming running total (O(1) memory):**
+```go
+filter, err := ssql.StreamWindow([]ssql.WindowConfig{{
+    PartitionBy: []string{"dept"},
+    OrderBy:     []ssql.OrderField{{Field: "date"}},
+    Frame:       ssql.WindowFrame{Preceding: -1, Following: 0},
+    Specs: []ssql.WindowSpec{
+        {Function: ssql.WSum("revenue"), ResultName: "running_total"},
+    },
+}})
+// 71x faster than Window() at 10K rows
+```
+
+**Example — 3-row moving average with LAG:**
+```go
+filter, err := ssql.StreamWindow([]ssql.WindowConfig{{
+    OrderBy: []ssql.OrderField{{Field: "date"}},
+    Frame:   ssql.WindowFrame{Preceding: 2, Following: 0},
+    Specs: []ssql.WindowSpec{
+        {Function: ssql.WAvg("price"), ResultName: "ma3"},
+        {Function: ssql.WLag("price", 1), ResultName: "prev_price"},
+    },
+}})
+```
+
+**Example — Sliding MIN/MAX with monotonic deque:**
+```go
+filter, err := ssql.StreamWindow([]ssql.WindowConfig{{
+    OrderBy: []ssql.OrderField{{Field: "date"}},
+    Frame:   ssql.WindowFrame{Preceding: 9, Following: 0}, // 10-row window
+    Specs: []ssql.WindowSpec{
+        {Function: ssql.WMin("price"), ResultName: "low10"},
+        {Function: ssql.WMax("price"), ResultName: "high10"},
+    },
+}})
+```
+
+`MustStreamWindow` is the panic-on-error variant, useful in generated code where configs are known-valid at generation time.
+
 ### CompareAny
 ```go
 func CompareAny(a, b any) int

@@ -641,6 +641,46 @@ SELECT *, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn
 FROM employees
 ```
 
+### Streaming Mode (`-presorted`)
+
+When input is already sorted by partition and order fields, add `-presorted` for streaming execution with O(1) memory per aggregate — no materialization needed:
+
+```bash
+# Running total on presorted time series (O(1) memory, 71x faster)
+ssql from sales.csv | \
+  ssql window -sum revenue running_total -order date -presorted
+
+# 3-row moving average (O(frame_size) memory)
+ssql from prices.csv | \
+  ssql window -avg price ma3 -order date -rows 2,0 -presorted
+
+# LAG for period-over-period comparison
+ssql from monthly.csv | \
+  ssql window -lag revenue 1 prev_revenue -order month -presorted | \
+  ssql update -set-expr change 'revenue - prev_revenue'
+
+# LEAD for lookahead
+ssql from daily.csv | \
+  ssql window -lead price 1 next_price -order date -presorted
+
+# Sliding MIN/MAX (monotonic deque, O(1) amortized)
+ssql from prices.csv | \
+  ssql window -min price low10 -max price high10 -order date -rows 9,0 -presorted
+
+# RANK on presorted data (134x faster than materialized)
+ssql from employees.csv | \
+  ssql sort -field dept -field salary -desc | \
+  ssql window -rank salary_rank -partition dept -order salary -desc -presorted
+```
+
+**When to use `-presorted`:**
+- Time series data (already ordered by timestamp)
+- After `ssql sort` in the pipeline
+- Data from presorted CSV/JSONL files
+- Large datasets where materialization is costly
+
+**Limitations of `-presorted`:** Cannot use NTILE or PERCENT_RANK (require partition size). Does not support `Following > 0` frames.
+
 ---
 
 ## Signal Processing

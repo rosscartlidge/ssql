@@ -61,7 +61,7 @@ Must collect all records before producing output. Cannot handle infinite streams
 | `group-by` | `map[string][]Record` in `sql.go` | Must see all records per group to compute aggregates. Use `-presorted` for streaming alternative. |
 | `group-by -rollup/-cube` | `Rollup()`/`Cube()` in `sql.go` | Collects all records for subtotal/grand total generation. |
 | `pivot` | `Pivot()` in `sql.go` + `slices.Collect` in `pivot.go` | Must see all records to discover pivot column values. |
-| `window` | `slices.Collect` in `sql.go` Window() | Ranking/lag/lead need full partition visibility. |
+| `window` | `slices.Collect` in `sql.go` Window() | Ranking/lag/lead need full partition visibility. Use `-presorted` for streaming alternative (13 of 15 functions). |
 | `to table` | `DisplayTableWithFields()` | Scans all records for column width alignment. Use `-stream` for streaming alternative. |
 | `to json` (pretty) | `json.MarshalIndent(all)` | JSON array `[{...},{...}]` requires all records. |
 | `to arrow` | `WriteArrow()` | Columnar batch writing. |
@@ -84,7 +84,7 @@ Must collect all records before producing output. Cannot handle infinite streams
 | Partial materialization | 1 | 4% |
 | Full materialization | 13 | 48% |
 
-Note: `group-by -presorted` and `to table -stream` provide streaming alternatives for 2 of the 13 materializing commands.
+Note: `group-by -presorted`, `window -presorted`, and `to table -stream` provide streaming alternatives for 3 of the 13 materializing commands.
 
 The core pipeline commands (where, update, include, exclude, rename, limit, offset) are all pure streaming, so the most common pipeline patterns already handle arbitrarily large data.
 
@@ -105,21 +105,22 @@ ssql from data.csv | ssql sort dept | ssql group-by dept -count n -sum salary to
 - CLI: `-presorted` flag (rejects `-rollup`/`-cube` combinations)
 - Code generation: emits `ssql.StreamGroupByFields` instead of `ssql.GroupByFields`
 
-### 2. Streaming window with bounded frames (MEDIUM VALUE)
+### 2. Streaming window functions — DONE v4.24.0
 
-**Current:** `Window()` materializes all records with `slices.Collect`.
+**Implemented:** `StreamWindow()` in `sql.go` + `-presorted` flag in CLI.
 
-**Opportunity:** Window functions with bounded ROWS frames (e.g., `-rows 3,0` for a 4-row window) could stream with a fixed-size ring buffer. Only needs to buffer `preceding + following + 1` records.
+Supports 13 of 15 window functions (not NTILE, PERCENT_RANK) with presorted input. Three algorithm categories:
+- **Running aggregates** (default frame): O(1) memory — SUM, AVG, COUNT, FIRST, LAST, ROW_NUMBER, RANK, DENSE_RANK
+- **Bounded frames** (ROWS N,0): Ring buffer / monotonic deque — sliding SUM, AVG, COUNT, FIRST, MIN, MAX
+- **Offset functions**: LAG via ring buffer (immediate), LEAD via delayed emission buffer
 
-**Limitations:** Does NOT work for:
-- Unbounded frames (running sum, cumulative count)
-- Ranking functions (row_number, rank, dense_rank) — need full partition
-- Lag with unbounded offset
-- Any function using PARTITION BY (need full partition)
+**Benchmark results (10K rows):** Running SUM 71x faster, RANK 134x faster, combined (7 funcs) 10.5x faster vs `Window()`.
 
-**Approach:** Add a streaming fast path when: no partitioning, bounded frame, and aggregate-only functions (sum/avg/min/max/count).
-
-**Complexity:** High. Two separate code paths, careful edge case handling.
+```bash
+ssql from data.csv | ssql window -sum revenue total -order date -presorted
+ssql from data.csv | ssql window -avg price ma3 -rows 2,0 -order date -presorted
+ssql from data.csv | ssql window -lag price 1 prev -lead price 1 next -order date -presorted
+```
 
 ### 3. Streaming to-table with fixed widths (LOW-MEDIUM VALUE) — DONE v4.23.0
 
@@ -196,6 +197,6 @@ For datasets too large to materialize:
 | 1 | Streaming group-by (`-presorted`) | High | Medium | **DONE v4.23.0** |
 | 2 | sort + limit fusion (`top` command) | Medium | Medium | **DONE v4.23.0** |
 | 3 | Streaming to-table (`-stream`) | Low-Med | Low | **DONE v4.23.0** |
-| 4 | Streaming window (bounded frames) | Medium | High | Defer — complex, narrow use case |
+| 4 | Streaming window (`-presorted`) | High | High | **DONE v4.24.0** — 71-134x speedup |
 | 5 | Chunked Arrow writing | Low | Medium | Defer — niche format |
 | 6 | Seekable WAV writing | Low | Low | Defer — niche format |

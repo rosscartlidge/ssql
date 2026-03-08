@@ -444,7 +444,7 @@ The current Window() implementation of RANK is O(N^2) per partition because it s
 
 ## Implementation Plan
 
-### Phase 1: Core StreamWindow (Running Aggregates Only)
+### Phase 1: Core StreamWindow (Running Aggregates Only) ✅ DONE
 
 Scope: `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` (the default frame) with no partition or presorted partition.
 
@@ -458,7 +458,7 @@ This covers the most common use case (running totals, row numbering) with O(1) m
 - `cmd/ssql/commands/window.go`: `-presorted` flag
 - `cmd/ssql/generation_test.go`: Generation test for presorted window
 
-### Phase 2: Bounded Frames
+### Phase 2: Bounded Frames + LAG/LEAD + MIN/MAX ✅ DONE
 
 Scope: `ROWS BETWEEN N PRECEDING AND M FOLLOWING` with fixed N, M.
 
@@ -468,9 +468,48 @@ Adds: Ring buffer, sliding SUM/AVG with Kahan compensation, monotonic deque for 
 - `sql.go`: `frameBuffer`, `slidingSum`, `slidingMin`, `slidingMax` types
 - `sql_test.go`: Additional differential tests with various frame sizes
 
-### Phase 3: Performance Validation
+### Phase 3: Performance Validation ✅ DONE
 
 Benchmark `StreamWindow` vs `Window` on realistic workloads to verify the memory and time improvements.
+
+**Benchmark file:** `window_benchmark_test.go`
+
+**Results (Intel Core Ultra 9 275HX, Go 1.24):**
+
+| Benchmark | Window() | StreamWindow() | Speedup |
+|-----------|----------|----------------|---------|
+| RunningSum 1K | 5.3ms | 0.71ms | **7.5x** |
+| RunningSum 10K | 465ms | 6.5ms | **71x** |
+| SlidingSum 1K (ROWS 2,0) | 0.84ms | 0.71ms | 1.2x |
+| SlidingSum 10K | 7.9ms | 6.5ms | 1.2x |
+| SlidingMin 1K (ROWS 9,0) | 0.92ms | 0.74ms | 1.2x |
+| SlidingMin 10K | 8.4ms | 6.7ms | 1.3x |
+| LAG 1K | 0.83ms | 0.74ms | 1.1x |
+| LAG 10K | 7.5ms | 6.4ms | 1.2x |
+| LEAD 1K | 0.81ms | 0.82ms | 1.0x |
+| LEAD 10K | 7.6ms | 7.2ms | 1.05x |
+| **Rank 1K** | **10.5ms** | **0.72ms** | **14.6x** |
+| **Rank 10K** | **858ms** | **6.4ms** | **134x** |
+| Partitioned 10K (100 parts) | 15.3ms | 8.4ms | 1.8x |
+| Partitioned 100K (1K parts) | 159ms | 82ms | 1.9x |
+| **Combined 1K (7 funcs)** | **4.5ms** | **2.2ms** | **2.1x** |
+| **Combined 10K (7 funcs)** | **208ms** | **20ms** | **10.5x** |
+
+**Key findings:**
+
+1. **RANK is the biggest win**: Window()'s O(N²) backward scan vs StreamWindow's O(N) counter. 134x at 10K rows, scaling quadratically — at 100K rows the ratio would be ~1000x+.
+
+2. **Running SUM shows O(N) vs O(N²)**: Window() materializes the full partition then scans `UNBOUNDED PRECEDING TO CURRENT ROW` for each row (O(N) per row × N rows = O(N²)). StreamWindow maintains a single accumulator: O(N) total. 71x speedup at 10K.
+
+3. **Bounded frame functions (sliding sum, min, lag) show modest gains**: ~1.2x at these sizes because Window() only scans the small frame (3-10 rows). The streaming advantage is avoiding materialization overhead and sorting.
+
+4. **LEAD is nearly break-even**: The delayed emission buffer adds overhead that offsets the streaming benefit. At 1K rows, StreamWindow is actually slightly slower due to the map allocations for pending records.
+
+5. **Combined workloads benefit significantly**: With 7 functions in one config, StreamWindow is 10.5x faster at 10K rows because running aggregates (SUM, AVG, COUNT, ROW_NUMBER) and RANK all benefit from O(N) streaming.
+
+6. **Memory**: Both approaches allocate similarly per-record (creating Records via ToMutable/Freeze dominates). The key memory advantage is that StreamWindow doesn't need to materialize the full partition before processing — not captured in `B/op` since Go's benchmark measures total allocations, not peak live memory.
+
+**Conclusion:** StreamWindow delivers massive speedups for running aggregates (7-71x) and RANK (14-134x), with the advantage growing with dataset size. Bounded frame operations show modest gains (~1.2x). The `-presorted` flag should be recommended whenever data is naturally ordered (time series, sorted files).
 
 ## Risk Assessment
 
@@ -495,7 +534,7 @@ Benchmark `StreamWindow` vs `Window` on realistic workloads to verify the memory
 | Incremental MIN/MAX | Monotonic deque, O(1) amortized |
 | CLI flag | `-presorted` on `window` command |
 | Testing | Differential: StreamWindow output == Window output |
-| Implementation | 2 phases: running aggregates first, bounded frames second |
+| Implementation | 3 phases: running aggregates (Phase 1 ✅), bounded frames + LAG/LEAD + MIN/MAX (Phase 2 ✅), benchmarks (Phase 3 ✅) |
 
 ## References
 
