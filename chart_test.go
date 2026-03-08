@@ -784,8 +784,8 @@ func TestEnhancedChartHeatmap(t *testing.T) {
 
 	// Create spectrogram-like data
 	var records []Record
-	for x := 0; x < 10; x++ {
-		for y := 0; y < 5; y++ {
+	for x := range 10 {
+		for y := range 5 {
 			r := MakeMutableRecord()
 			r.fields["time"] = float64(x) * 0.1
 			r.fields["frequency"] = float64(y) * 100

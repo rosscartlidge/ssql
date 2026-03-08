@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"iter"
+	"maps"
 	"math"
 	"os"
 	"sort"
@@ -736,8 +737,8 @@ func generateAnimateHeatmapHTML(writer *bufio.Writer, frames []animateFrameGroup
 
 	// Build per-frame grids, track global zMin/zMax
 	type heatmapFrame struct {
-		Label string      `json:"label"`
-		Grid  [][]any     `json:"grid"`
+		Label string  `json:"label"`
+		Grid  [][]any `json:"grid"`
 	}
 	globalZMin := math.Inf(1)
 	globalZMax := math.Inf(-1)
@@ -3143,10 +3144,7 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 	// Convert records to JSON-safe map format
 	var recordMaps []map[string]any
 	for _, record := range records {
-		m := make(map[string]any)
-		for k, v := range record.All() {
-			m[k] = v
-		}
+		m := maps.Collect(record.All())
 		recordMaps = append(recordMaps, m)
 	}
 
@@ -3196,7 +3194,6 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 
 	return writer.Flush()
 }
-
 
 // exploreHTMLTemplate is the HTML template for the interactive data explorer
 const exploreHTMLTemplate = `<!DOCTYPE html>

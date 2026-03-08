@@ -67,12 +67,12 @@ func OpenOutput(filename string) (io.WriteCloser, error) {
 
 // setValueFromJSON sets a field on a MutableRecord from a JSON value
 // Handles JSON-specific type conversions (nil, arrays, nested objects, numbers, bools, strings)
-func setValueFromJSON(record ssql.MutableRecord, key string, v interface{}) ssql.MutableRecord {
+func setValueFromJSON(record ssql.MutableRecord, key string, v any) ssql.MutableRecord {
 	switch val := v.(type) {
 	case nil:
 		// Skip nil values - don't set the field
 		return record
-	case []interface{}:
+	case []any:
 		// Convert array to []any for storage (preserves as proper slice, not JSONString)
 		// This allows the array to be serialized back as a JSON array
 		result := make([]any, len(val))
@@ -80,7 +80,7 @@ func setValueFromJSON(record ssql.MutableRecord, key string, v interface{}) ssql
 			result[i] = elem
 		}
 		return ssql.Set(record, key, result)
-	case map[string]interface{}:
+	case map[string]any:
 		// Nested object - convert to Record recursively
 		nested := ssql.MakeMutableRecord()
 		for k, subv := range val {
@@ -105,7 +105,7 @@ func setValueFromJSON(record ssql.MutableRecord, key string, v interface{}) ssql
 
 // inferJSONFieldType determines the FieldType from a JSON-parsed value
 // Handles both json.Unmarshal types (float64 for all numbers) and fast parser types (int64/float64)
-func inferJSONFieldType(value interface{}) ssql.FieldType {
+func inferJSONFieldType(value any) ssql.FieldType {
 	switch value.(type) {
 	case int64:
 		return ssql.FieldTypeInt // Fast parser returns integers as int64
@@ -115,7 +115,7 @@ func inferJSONFieldType(value interface{}) ssql.FieldType {
 		return ssql.FieldTypeBool
 	case string:
 		return ssql.FieldTypeString
-	case []interface{}, map[string]interface{}, ssql.Record, ssql.JSONString:
+	case []any, map[string]any, ssql.Record, ssql.JSONString:
 		return ssql.FieldTypeAuto // Preserve complex types as-is
 	default:
 		return ssql.FieldTypeAuto // Preserve unknown types as-is
@@ -124,7 +124,7 @@ func inferJSONFieldType(value interface{}) ssql.FieldType {
 
 // setValueWithType sets a field on a MutableRecord, coercing to the target type
 // Handles both json.Unmarshal types (float64 for all numbers) and fast parser types (int64/float64)
-func setValueWithType(record ssql.MutableRecord, key string, v interface{}, targetType ssql.FieldType) ssql.MutableRecord {
+func setValueWithType(record ssql.MutableRecord, key string, v any, targetType ssql.FieldType) ssql.MutableRecord {
 	switch targetType {
 	case ssql.FieldTypeFloat:
 		switch val := v.(type) {
@@ -201,11 +201,11 @@ func setValueWithType(record ssql.MutableRecord, key string, v interface{}, targ
 }
 
 // convertRecordValue converts ssql Record values to JSON-friendly types
-func convertRecordValue(v interface{}) interface{} {
+func convertRecordValue(v any) any {
 	switch val := v.(type) {
 	case ssql.Record:
 		// Convert nested Record to map
-		result := make(map[string]interface{})
+		result := make(map[string]any)
 		for k, subv := range val.All() {
 			result[k] = convertRecordValue(subv)
 		}
@@ -215,7 +215,7 @@ func convertRecordValue(v interface{}) interface{} {
 		return val
 	case []any:
 		// Convert slice elements recursively (for Collect aggregation results)
-		result := make([]interface{}, len(val))
+		result := make([]any, len(val))
 		for i, elem := range val {
 			result[i] = convertRecordValue(elem)
 		}

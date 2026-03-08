@@ -1950,6 +1950,52 @@ func TestWindowEmpty(t *testing.T) {
 	}
 }
 
+func TestSortRecords(t *testing.T) {
+	r1 := MakeMutableRecord().String("dept", "eng").Int("salary", int64(90000)).String("name", "Alice").Freeze()
+	r2 := MakeMutableRecord().String("dept", "sales").Int("salary", int64(80000)).String("name", "Bob").Freeze()
+	r3 := MakeMutableRecord().String("dept", "eng").Int("salary", int64(70000)).String("name", "Charlie").Freeze()
+	r4 := MakeMutableRecord().String("dept", "sales").Int("salary", int64(95000)).String("name", "Diana").Freeze()
+
+	input := slices.Values([]Record{r1, r2, r3, r4})
+
+	// Sort by dept ascending, then salary descending
+	result := slices.Collect(SortRecords([]OrderField{
+		{Field: "dept", Desc: false},
+		{Field: "salary", Desc: true},
+	})(input))
+
+	// eng should come first (alphabetically), then sales
+	// Within eng: 90000 (Alice) before 70000 (Charlie) (descending)
+	// Within sales: 95000 (Diana) before 80000 (Bob) (descending)
+	expected := []string{"Alice", "Charlie", "Diana", "Bob"}
+	for i, name := range expected {
+		got := GetOr(result[i], "name", "")
+		if got != name {
+			t.Errorf("SortRecords[%d]: expected %q, got %q", i, name, got)
+		}
+	}
+}
+
+func TestSortRecords_Strings(t *testing.T) {
+	r1 := MakeMutableRecord().String("name", "Charlie").Freeze()
+	r2 := MakeMutableRecord().String("name", "Alice").Freeze()
+	r3 := MakeMutableRecord().String("name", "Bob").Freeze()
+
+	input := slices.Values([]Record{r1, r2, r3})
+
+	result := slices.Collect(SortRecords([]OrderField{
+		{Field: "name", Desc: false},
+	})(input))
+
+	expected := []string{"Alice", "Bob", "Charlie"}
+	for i, name := range expected {
+		got := GetOr(result[i], "name", "")
+		if got != name {
+			t.Errorf("SortRecords_Strings[%d]: expected %q, got %q", i, name, got)
+		}
+	}
+}
+
 func TestCompareAny(t *testing.T) {
 	tests := []struct {
 		a, b any

@@ -139,10 +139,7 @@ func ConvolveSame(signal, kernel Signal) (Signal, error) {
 
 	// Extract central portion of same length as signal
 	start := (len(kernel) - 1) / 2
-	end := start + len(signal)
-	if end > len(full) {
-		end = len(full)
-	}
+	end := min(start+len(signal), len(full))
 
 	return full[start:end], nil
 }
@@ -194,10 +191,7 @@ func CorrelateSame(a, b Signal) (Signal, error) {
 
 	// Extract central portion of same length as a
 	start := (len(b) - 1) / 2
-	end := start + len(a)
-	if end > len(full) {
-		end = len(full)
-	}
+	end := min(start+len(a), len(full))
 
 	return full[start:end], nil
 }
@@ -316,7 +310,7 @@ func HannWindow(n int) Signal {
 		return Signal{1}
 	}
 	w := make(Signal, n)
-	for k := 0; k < n; k++ {
+	for k := range n {
 		w[k] = 0.5 - 0.5*math.Cos(2*math.Pi*float64(k)/float64(n-1))
 	}
 	return w
@@ -332,7 +326,7 @@ func HammingWindow(n int) Signal {
 		return Signal{1}
 	}
 	w := make(Signal, n)
-	for k := 0; k < n; k++ {
+	for k := range n {
 		w[k] = 0.54 - 0.46*math.Cos(2*math.Pi*float64(k)/float64(n-1))
 	}
 	return w
@@ -348,7 +342,7 @@ func BlackmanWindow(n int) Signal {
 		return Signal{1}
 	}
 	w := make(Signal, n)
-	for k := 0; k < n; k++ {
+	for k := range n {
 		w[k] = 0.42 - 0.5*math.Cos(2*math.Pi*float64(k)/float64(n-1)) + 0.08*math.Cos(4*math.Pi*float64(k)/float64(n-1))
 	}
 	return w
@@ -357,12 +351,9 @@ func BlackmanWindow(n int) Signal {
 // ApplyWindow multiplies a signal by a window function element-wise.
 // If the signal and window have different lengths, the shorter length is used.
 func ApplyWindow(signal, window Signal) Signal {
-	n := len(signal)
-	if len(window) < n {
-		n = len(window)
-	}
+	n := min(len(window), len(signal))
 	result := make(Signal, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		result[i] = signal[i] * window[i]
 	}
 	return result
@@ -482,10 +473,10 @@ func spectrogramGPU(signal Signal, opts SpectrogramOptions, window Signal, numFr
 	bins := make([]SpectrogramBin, numFrames*binsPerFrame)
 	binIdx := 0
 	start := 0
-	for ti := 0; ti < numFrames; ti++ {
+	for ti := range numFrames {
 		timeStart := float64(start) / opts.SampleRate
 		magOffset := ti * binsPerFrame
-		for fi := 0; fi < binsPerFrame; fi++ {
+		for fi := range binsPerFrame {
 			freq := float64(fi) * opts.SampleRate / float64(opts.WindowSize)
 			bins[binIdx] = SpectrogramBin{
 				TimeIndex: ti,
@@ -532,7 +523,7 @@ func spectrogramCPU(signal Signal, opts SpectrogramOptions, window Signal, numFr
 
 		timeStart := float64(start) / opts.SampleRate
 
-		for fi := 0; fi < len(mag); fi++ {
+		for fi := range mag {
 			freq := float64(fi) * opts.SampleRate / float64(opts.WindowSize)
 			bins = append(bins, SpectrogramBin{
 				TimeIndex: timeIdx,
@@ -1058,7 +1049,7 @@ func fftCooleyTukey(x []complex128) {
 		halfSize := size / 2
 		step := -2 * math.Pi / float64(size)
 		for i := 0; i < n; i += size {
-			for k := 0; k < halfSize; k++ {
+			for k := range halfSize {
 				w := cmplx.Exp(complex(0, step*float64(k)))
 				even := x[i+k]
 				odd := w * x[i+k+halfSize]
@@ -1088,7 +1079,7 @@ func fftMagnitudeCPU(signal Signal) []float64 {
 	// Pad to power of 2 for Cooley-Tukey
 	size := nextPowerOf2(n)
 	x := make([]complex128, size)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		x[i] = complex(signal[i], 0)
 	}
 
@@ -1097,7 +1088,7 @@ func fftMagnitudeCPU(signal Signal) []float64 {
 	// Extract magnitudes (positive frequencies only)
 	outN := n/2 + 1
 	magnitude := make([]float64, outN)
-	for i := 0; i < outN; i++ {
+	for i := range outN {
 		magnitude[i] = cmplx.Abs(x[i])
 	}
 
@@ -1114,7 +1105,7 @@ func fftMagnitudePhaseCPU(signal Signal) ([]float64, []float64) {
 	// Pad to power of 2 for Cooley-Tukey
 	size := nextPowerOf2(n)
 	x := make([]complex128, size)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		x[i] = complex(signal[i], 0)
 	}
 
@@ -1124,7 +1115,7 @@ func fftMagnitudePhaseCPU(signal Signal) ([]float64, []float64) {
 	outN := n/2 + 1
 	magnitude := make([]float64, outN)
 	phase := make([]float64, outN)
-	for i := 0; i < outN; i++ {
+	for i := range outN {
 		magnitude[i] = cmplx.Abs(x[i])
 		phase[i] = cmplx.Phase(x[i])
 	}
@@ -1141,8 +1132,8 @@ func convolveCPU(signal, kernel Signal) Signal {
 	outputLen := len(signal) + len(kernel) - 1
 	result := make(Signal, outputLen)
 
-	for i := 0; i < outputLen; i++ {
-		for k := 0; k < len(kernel); k++ {
+	for i := range outputLen {
+		for k := range kernel {
 			signalIdx := i - k
 			if signalIdx >= 0 && signalIdx < len(signal) {
 				result[i] += signal[signalIdx] * kernel[k]
@@ -1184,7 +1175,7 @@ func ifftCPU(magnitude, phase []float64) Signal {
 
 	// Reconstruct complex spectrum from magnitude and phase
 	// Positive frequencies: bins 0 to N/2
-	for i := 0; i < numBins; i++ {
+	for i := range numBins {
 		x[i] = cmplx.Rect(magnitude[i], phase[i])
 	}
 
@@ -1199,7 +1190,7 @@ func ifftCPU(magnitude, phase []float64) Signal {
 
 	// Extract real part and normalize
 	result := make(Signal, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		result[i] = real(x[i]) / float64(size)
 	}
 
@@ -1233,7 +1224,7 @@ func ifftCooleyTukey(x []complex128) {
 		halfSize := size / 2
 		step := 2 * math.Pi / float64(size) // Positive for IFFT (vs negative for FFT)
 		for i := 0; i < n; i += size {
-			for k := 0; k < halfSize; k++ {
+			for k := range halfSize {
 				w := cmplx.Exp(complex(0, step*float64(k)))
 				even := x[i+k]
 				odd := w * x[i+k+halfSize]

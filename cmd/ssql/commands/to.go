@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -40,7 +41,8 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.csv | ssql to table name age city", "Display with name, age, city first, then other fields").
 		Example("ssql from data.csv | ssql to table -only name age", "Display only name and age columns").
 		Example("ssql from data.csv | ssql to table -max-width 30", "Display with custom column width").
-		Example("ssql from huge.csv | ssql to table -stream", "Stream output, infer widths from first 100 records").
+		Example("ssql from huge.csv | ssql to table --sample 50", "Stream output, infer widths from first 50 records").
+		Example("ssql from data.csv | ssql to table --sample 0", "Materialize all records for perfect column widths").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -52,16 +54,11 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 		Default(50).
 		Help("Maximum column width (truncate longer values)").
 		Done().
-		Flag("-stream").
-		Bool().
-		Global().
-		Help("Stream output, infer column widths from first records").
-		Done().
-		Flag("-sample").
+		Flag("--sample").
 		Int().
 		Global().
 		Default(100).
-		Help("Records to sample for column widths (with -stream)").
+		Help("Records to sample for column widths (0 = materialize all)").
 		Done().
 		Flag("-only").
 		Bool().
@@ -79,7 +76,6 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 			var generate bool
 			var maxWidth int
 			var onlySpecified bool
-			var stream bool
 			var sampleSize int
 			var fields []string
 
@@ -95,11 +91,7 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 				onlySpecified = onlyVal.(bool)
 			}
 
-			if streamVal, ok := ctx.GlobalFlags["-stream"]; ok {
-				stream = streamVal.(bool)
-			}
-
-			if sampleVal, ok := ctx.GlobalFlags["-sample"]; ok {
+			if sampleVal, ok := ctx.GlobalFlags["--sample"]; ok {
 				sampleSize = sampleVal.(int)
 			}
 
@@ -127,7 +119,7 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 				fields = schemaAndRecords.Schema.Fields
 			}
 
-			if stream {
+			if sampleSize > 0 {
 				ssql.DisplayTableStreaming(records, maxWidth, sampleSize, fields, onlySpecified)
 			} else {
 				ssql.DisplayTableWithFields(records, maxWidth, fields, onlySpecified)
@@ -804,11 +796,12 @@ func joinStrings(strs []string, sep string) string {
 	if len(strs) == 0 {
 		return ""
 	}
-	result := strs[0]
+	var result strings.Builder
+	result.WriteString(strs[0])
 	for _, s := range strs[1:] {
-		result += sep + s
+		result.WriteString(sep + s)
 	}
-	return result
+	return result.String()
 }
 
 func generateToCSVCode(filename string) error {
@@ -1183,13 +1176,11 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 			"Animated histogram of distributions over years").
 		Example("ssql from data.csv | ssql to animate -frame epoch -x x -y y -z val -fps 10 -loop",
 			"Fast looping heatmap animation").
-
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
 		Done().
-
 		Flag("-frame").
 		String().
 		FieldsFromFlag("").
@@ -1197,7 +1188,6 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 		Required().
 		Help("Field that defines animation frames (ordered)").
 		Done().
-
 		Flag("-x").
 		String().
 		FieldsFromFlag("").
@@ -1205,7 +1195,6 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 		Required().
 		Help("X-axis field").
 		Done().
-
 		Flag("-y").
 		String().
 		FieldsFromFlag("").
@@ -1213,14 +1202,12 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 		Required().
 		Help("Y-axis field (value field for histogram)").
 		Done().
-
 		Flag("-z").
 		String().
 		FieldsFromFlag("").
 		Global().
 		Help("Z-axis field for heatmap cell values (required for heatmap)").
 		Done().
-
 		Flag("-type").
 		String().
 		Completer(&cf.StaticCompleter{Options: chartTypes}).
@@ -1228,14 +1215,12 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 		Default("heatmap").
 		Help("Chart type: heatmap or histogram").
 		Done().
-
 		Flag("-fps").
 		Int().
 		Global().
 		Default(5).
 		Help("Playback frames per second (default: 5)").
 		Done().
-
 		Flag("-colorscale").
 		String().
 		Completer(&cf.StaticCompleter{Options: colorScales}).
@@ -1243,13 +1228,11 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 		Default("viridis").
 		Help("Color scale for heatmap: viridis, plasma, inferno, magma, cividis, turbo").
 		Done().
-
 		Flag("-loop").
 		Bool().
 		Global().
 		Help("Loop playback").
 		Done().
-
 		Flag("-output", "-o").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.html"}).
@@ -1257,7 +1240,6 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 		Default("animate.html").
 		Help("Output HTML file (default: animate.html)").
 		Done().
-
 		Handler(func(ctx *cf.Context) error {
 			var frameField, xField, yField, zField, chartType, colorScale, outputFile string
 			var fps int
@@ -1545,7 +1527,6 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 		}).
 		Done()
 }
-
 
 func generateToExploreCode(title, theme, xField, yField string, pageSize int, outputFile string) error {
 	fragments, err := lib.ReadAllCodeFragments()

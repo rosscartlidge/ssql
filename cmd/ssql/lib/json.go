@@ -65,7 +65,7 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 
 	// Read array elements
 	for decoder.More() {
-		var rec map[string]interface{}
+		var rec map[string]any
 		if err := decoder.Decode(&rec); err != nil {
 			continue // Skip malformed elements
 		}
@@ -222,9 +222,9 @@ func WriteJSON(w io.Writer, records iter.Seq[ssql.Record], pretty bool) error {
 	}
 
 	// Collect all records into a slice
-	var recordMaps []map[string]interface{}
+	var recordMaps []map[string]any
 	for record := range records {
-		data := make(map[string]interface{})
+		data := make(map[string]any)
 		for k, v := range record.All() {
 			data[k] = convertRecordValue(v)
 		}
@@ -260,9 +260,9 @@ func WriteJSONWithFieldOrder(w io.Writer, records iter.Seq[ssql.Record], pretty 
 	}
 
 	// Collect all records into ordered format
-	var recordMaps []map[string]interface{}
+	var recordMaps []map[string]any
 	for record := range records {
-		data := make(map[string]interface{})
+		data := make(map[string]any)
 		for k, v := range record.All() {
 			data[k] = convertRecordValue(v)
 		}
@@ -329,7 +329,7 @@ func writeJSONLOrdered(w io.Writer, records iter.Seq[ssql.Record], fieldOrder []
 }
 
 // writePrettyJSONOrdered writes pretty JSON array with fields in specified order.
-func writePrettyJSONOrdered(w io.Writer, recordMaps []map[string]interface{}, fieldOrder []string) error {
+func writePrettyJSONOrdered(w io.Writer, recordMaps []map[string]any, fieldOrder []string) error {
 	writer := bufio.NewWriter(w)
 	defer writer.Flush()
 

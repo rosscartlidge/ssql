@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
@@ -263,12 +264,8 @@ func EvalStreamExpr(spec StreamExprSpec, records []ssql.Record) (any, error) {
 
 	// 2. Build a sample environment for compiling (state + first record's fields)
 	compileEnv := make(map[string]any)
-	for k, v := range stateMap {
-		compileEnv[k] = v
-	}
-	for k, v := range records[0].All() {
-		compileEnv[k] = v
-	}
+	maps.Copy(compileEnv, stateMap)
+	maps.Insert(compileEnv, records[0].All())
 
 	// Compile "every" expression with combined environment
 	everyProgram, err := expr.Compile(spec.EveryExpr, expr.Env(compileEnv))
@@ -280,12 +277,8 @@ func EvalStreamExpr(spec StreamExprSpec, records []ssql.Record) (any, error) {
 	for _, record := range records {
 		// Merge state with record fields
 		env := make(map[string]any)
-		for k, v := range stateMap {
-			env[k] = v
-		}
-		for k, v := range record.All() {
-			env[k] = v
-		}
+		maps.Copy(env, stateMap)
+		maps.Insert(env, record.All())
 
 		// Evaluate every expression
 		newState, err := expr.Run(everyProgram, env)

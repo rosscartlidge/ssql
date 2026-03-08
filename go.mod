@@ -1,6 +1,6 @@
 module github.com/rosscartlidge/ssql/v4
 
-go 1.24.8
+go 1.26
 
 require github.com/rosscartlidge/autocli/v4 v4.3.3
 

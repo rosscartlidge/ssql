@@ -3,6 +3,7 @@ package ssql
 import (
 	"fmt"
 	"iter"
+	"maps"
 	"math"
 	"sort"
 	"strings"
@@ -79,15 +80,10 @@ func innerJoinNested(
 // MutableRecord -> Freeze() copy overhead.
 func mergeRecords(left, right Record) Record {
 	// Pre-allocate with combined capacity
-	merged := make(map[string]any, left.Len()+right.Len())
 	// Copy left fields directly
-	for k, v := range left.All() {
-		merged[k] = v
-	}
+	merged := maps.Collect(left.All())
 	// Copy right fields (may override left on field name collision)
-	for k, v := range right.All() {
-		merged[k] = v
-	}
+	maps.Insert(merged, right.All())
 	return NewRecord(merged)
 }
 
@@ -762,16 +758,11 @@ func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record
 // If renames has entries, only those fields are copied with the specified new names.
 func mergeWithRenames(left, right Record, renames map[string]string) Record {
 	// Start with a copy of left
-	merged := make(map[string]any, left.Len()+len(renames))
-	for k, v := range left.All() {
-		merged[k] = v
-	}
+	merged := maps.Collect(left.All())
 
 	if len(renames) == 0 {
 		// No renames specified - copy all right fields (standard merge)
-		for k, v := range right.All() {
-			merged[k] = v
-		}
+		maps.Insert(merged, right.All())
 	} else {
 		// Only copy specified fields with new names
 		for rightField, newName := range renames {
@@ -1776,6 +1767,14 @@ type OrderField struct {
 	Desc  bool
 }
 
+// SortRecords sorts records by multiple fields with mixed ascending/descending.
+// Uses CompareRecordFields for proper cross-type comparison (strings, ints, floats).
+func SortRecords(orderBy []OrderField) Filter[Record, Record] {
+	return SortFunc(func(a, b Record) int {
+		return CompareRecordFields(a, b, orderBy)
+	})
+}
+
 // WindowFrame specifies the frame boundaries for aggregate window functions.
 // Preceding/Following of -1 means UNBOUNDED.
 type WindowFrame struct {
@@ -2070,7 +2069,7 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 	case wRank:
 		// Same as pos+1, but ties get the same rank
 		rank := 1
-		for i := 0; i < pos; i++ {
+		for i := range pos {
 			if CompareRecordFields(all[indices[i]], all[indices[pos]], orderBy) != 0 {
 				rank = i + 1
 			}
@@ -2209,7 +2208,7 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 }
 
 // frameStart returns the first index in the frame for position pos.
-func frameStart(pos, partLen int, frame WindowFrame) int {
+func frameStart(pos, _ int, frame WindowFrame) int {
 	if frame.Preceding < 0 {
 		return 0 // UNBOUNDED PRECEDING
 	}
@@ -2375,12 +2374,12 @@ func (s *swLast) reset() {}
 
 // swSlidingSum maintains a ring buffer for sliding SUM.
 type swSlidingSum struct {
-	field    string
-	ring     []float64
-	size     int // frame size = preceding + 1
-	idx      int // write position in ring
-	sum      float64
-	filled   int // how many slots filled so far
+	field  string
+	ring   []float64
+	size   int // frame size = preceding + 1
+	idx    int // write position in ring
+	sum    float64
+	filled int // how many slots filled so far
 }
 
 func (s *swSlidingSum) update(record Record, _ int, _ []OrderField, _ *Record) any {

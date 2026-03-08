@@ -9,7 +9,7 @@ import (
 // Creates duplicates by using modulo to ensure some join matches
 func generateRecords(n int, keyField string) []Record {
 	var records []Record
-	for i := 0; i < n; i++ {
+	for i := range n {
 		r := MakeMutableRecord()
 		r.fields[keyField] = int64(i % (n / 10)) // Create ~10% match rate
 		r.fields["value"] = int64(i)

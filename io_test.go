@@ -3,6 +3,7 @@ package ssql
 import (
 	"bytes"
 	"iter"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1163,9 +1164,7 @@ func TestJSONStreamProcessing(t *testing.T) {
 			// Add calculated field - copy to MutableRecord, add field, freeze
 			quantity, _ := Get[float64](record, "quantity")
 			mut := MakeMutableRecord()
-			for k, v := range record.All() {
-				mut.fields[k] = v
-			}
+			maps.Insert(mut.fields, record.All())
 			mut.fields["total_value"] = price * quantity
 			filteredRecords = append(filteredRecords, mut.Freeze())
 		}

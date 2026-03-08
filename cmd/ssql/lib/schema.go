@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -86,9 +87,7 @@ func (s *Schema) HasField(name string) bool {
 func (s *Schema) Clone() *Schema {
 	clone := NewSchema()
 	clone.Fields = slices.Clone(s.Fields)
-	for k, v := range s.Types {
-		clone.Types[k] = v
-	}
+	maps.Copy(clone.Types, s.Types)
 	return clone
 }
 

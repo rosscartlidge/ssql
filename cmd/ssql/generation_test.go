@@ -210,7 +210,7 @@ func TestLimitOffsetSortDistinct(t *testing.T) {
 		{
 			name:    "sort command",
 			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test sort age`,
-			want:    []string{`"type":"stmt"`, `"var":"sorted"`, `SortBy`, `age`},
+			want:    []string{`"type":"stmt"`, `"var":"sorted"`, `SortRecords`, `age`},
 		},
 		{
 			name:    "distinct command",
@@ -220,7 +220,7 @@ func TestLimitOffsetSortDistinct(t *testing.T) {
 		{
 			name:    "pipeline with all commands",
 			cmdLine: `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -where age gt 25 | /tmp/ssql_test limit 5 | /tmp/ssql_test offset 1 | /tmp/ssql_test sort age -desc | /tmp/ssql_test distinct | /tmp/ssql_test generate-go`,
-			want:    []string{"package main", "ssql.ReadCSV", "ssql.Where", "ssql.Limit", "ssql.Offset", "ssql.SortBy", "ssql.DistinctBy"},
+			want:    []string{"package main", "ssql.ReadCSV", "ssql.Where", "ssql.Limit", "ssql.Offset", "ssql.SortRecords", "ssql.DistinctBy"},
 		},
 	}
 
@@ -302,7 +302,7 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			name:           "sort",
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test sort age`,
 			expectFragment: true,
-			wantSubstring:  `ssql.SortBy`,
+			wantSubstring:  `ssql.SortRecords`,
 		},
 		{
 			name:           "distinct",

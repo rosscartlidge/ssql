@@ -1679,11 +1679,7 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 		for field, value := range record.All() {
 			strValue := fmt.Sprintf("%v", value)
 			if len(strValue) > colWidths[field] {
-				if len(strValue) > maxWidth {
-					colWidths[field] = maxWidth
-				} else {
-					colWidths[field] = len(strValue)
-				}
+				colWidths[field] = min(len(strValue), maxWidth)
 			}
 		}
 	}
@@ -1837,11 +1833,7 @@ func calculateColumnWidths(columns []string, records []Record, maxWidth int) map
 		for field, value := range record.All() {
 			strValue := fmt.Sprintf("%v", value)
 			if len(strValue) > colWidths[field] {
-				if len(strValue) > maxWidth {
-					colWidths[field] = maxWidth
-				} else {
-					colWidths[field] = len(strValue)
-				}
+				colWidths[field] = min(len(strValue), maxWidth)
 			}
 		}
 	}
@@ -2280,7 +2272,7 @@ func ReadJSONAuto(filename string) (iter.Seq[Record], error) {
 	// Check if it starts with '[' (JSON array)
 	if data[0] == '[' {
 		// Parse as JSON array
-		var records []map[string]interface{}
+		var records []map[string]any
 		if err := json.Unmarshal(data, &records); err != nil {
 			return nil, fmt.Errorf("failed to parse JSON array: %w", err)
 		}
@@ -2305,9 +2297,9 @@ func ReadJSONAuto(filename string) (iter.Seq[Record], error) {
 // WriteJSONPretty writes records as a pretty-printed JSON array
 func WriteJSONPretty(sb iter.Seq[Record], filename string) error {
 	// Collect all records
-	var recordMaps []map[string]interface{}
+	var recordMaps []map[string]any
 	for record := range sb {
-		data := make(map[string]interface{})
+		data := make(map[string]any)
 		for k, v := range record.All() {
 			data[k] = convertRecordValueForJSON(v)
 		}
@@ -2330,7 +2322,7 @@ func WriteJSONPretty(sb iter.Seq[Record], filename string) error {
 
 // addJSONField adds a JSON field to a MutableRecord using type-safe methods
 // Skips nil values. Converts arrays/objects to JSONString for type safety.
-func addJSONField(record MutableRecord, key string, value interface{}) MutableRecord {
+func addJSONField(record MutableRecord, key string, value any) MutableRecord {
 	switch val := value.(type) {
 	case float64:
 		// JSON numbers are always float64
@@ -2346,7 +2338,7 @@ func addJSONField(record MutableRecord, key string, value interface{}) MutableRe
 	case nil:
 		// Skip nil values - don't add field
 		return record
-	case []interface{}, map[string]interface{}:
+	case []any, map[string]any:
 		// Convert arrays/objects to JSONString for type safety
 		jsonBytes, err := json.Marshal(val)
 		if err != nil {
@@ -2361,11 +2353,11 @@ func addJSONField(record MutableRecord, key string, value interface{}) MutableRe
 }
 
 // convertRecordValueForJSON converts ssql Record values to JSON-friendly types
-func convertRecordValueForJSON(v interface{}) interface{} {
+func convertRecordValueForJSON(v any) any {
 	switch val := v.(type) {
 	case Record:
 		// Convert nested Record to map
-		result := make(map[string]interface{})
+		result := make(map[string]any)
 		for k, subv := range val.All() {
 			result[k] = convertRecordValueForJSON(subv)
 		}

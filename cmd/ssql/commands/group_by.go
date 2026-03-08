@@ -795,30 +795,30 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		}
 
 		// Build fields list
-		var fieldsList string
+		var fieldsList strings.Builder
 		for i, field := range groupByFields {
 			if i > 0 {
-				fieldsList += ", "
+				fieldsList.WriteString(", ")
 			}
-			fieldsList += fmt.Sprintf("%q", field)
+			fieldsList.WriteString(fmt.Sprintf("%q", field))
 		}
 
 		// Build aggregations map
-		var aggLines string
+		var aggLines strings.Builder
 		first := true
 		for _, spec := range aggSpecs {
 			if !first {
-				aggLines += ",\n"
+				aggLines.WriteString(",\n")
 			}
 			first = false
-			aggLines += fmt.Sprintf("\t\t\t%q: %s", spec.result, generateAggregatorCode(spec))
+			aggLines.WriteString(fmt.Sprintf("\t\t\t%q: %s", spec.result, generateAggregatorCode(spec)))
 		}
 		for _, spec := range exprSpecs {
 			if !first {
-				aggLines += ",\n"
+				aggLines.WriteString(",\n")
 			}
 			first = false
-			aggLines += fmt.Sprintf("\t\t\t%q: ssql.ExprAgg(%q)", spec.result, spec.expression)
+			aggLines.WriteString(fmt.Sprintf("\t\t\t%q: ssql.ExprAgg(%q)", spec.result, spec.expression))
 		}
 
 		code := fmt.Sprintf(`rollupResult := ssql.Rollup(ssql.RollupConfig{
@@ -827,7 +827,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 %s,
 		},
 		Mode: %s,
-	})(%s)`, fieldsList, aggLines, modeStr, inputVar)
+	})(%s)`, fieldsList.String(), aggLines.String(), modeStr, inputVar)
 
 		frag := lib.NewStmtFragment("rollupResult", inputVar, code, nil, getCommandString())
 		return lib.WriteCodeFragment(frag)
@@ -875,39 +875,41 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	if presorted {
 		groupFunc = "ssql.StreamGroupByFields"
 	}
-	groupCode := fmt.Sprintf("grouped := %s(\"_group\"", groupFunc)
+	var groupCode strings.Builder
+	groupCode.WriteString(fmt.Sprintf("grouped := %s(\"_group\"", groupFunc))
 	for _, field := range groupByFields {
-		groupCode += fmt.Sprintf(", %q", field)
+		groupCode.WriteString(fmt.Sprintf(", %q", field))
 	}
-	groupCode += fmt.Sprintf(")(%s)", inputVar)
+	groupCode.WriteString(fmt.Sprintf(")(%s)", inputVar))
 
-	frag1 := lib.NewStmtFragment("grouped", inputVar, groupCode, nil, getCommandString())
+	frag1 := lib.NewStmtFragment("grouped", inputVar, groupCode.String(), nil, getCommandString())
 	if err := lib.WriteCodeFragment(frag1); err != nil {
 		return fmt.Errorf("writing GroupByFields fragment: %w", err)
 	}
 
 	// Fragment 2: Aggregate
 	// Note: Empty command string since this is part of the same CLI command as Fragment 1
-	aggCode := "aggregated := ssql.Aggregate(\"_group\", map[string]ssql.AggregateFunc{\n"
+	var aggCode strings.Builder
+	aggCode.WriteString("aggregated := ssql.Aggregate(\"_group\", map[string]ssql.AggregateFunc{\n")
 	first := true
 	for _, spec := range aggSpecs {
 		if !first {
-			aggCode += ",\n"
+			aggCode.WriteString(",\n")
 		}
 		first = false
-		aggCode += fmt.Sprintf("\t\t%q: %s", spec.result, generateAggregatorCode(spec))
+		aggCode.WriteString(fmt.Sprintf("\t\t%q: %s", spec.result, generateAggregatorCode(spec)))
 	}
 	// Add expression aggregations using ssql.ExprAgg()
 	for _, spec := range exprSpecs {
 		if !first {
-			aggCode += ",\n"
+			aggCode.WriteString(",\n")
 		}
 		first = false
-		aggCode += fmt.Sprintf("\t\t%q: ssql.ExprAgg(%q)", spec.result, spec.expression)
+		aggCode.WriteString(fmt.Sprintf("\t\t%q: ssql.ExprAgg(%q)", spec.result, spec.expression))
 	}
-	aggCode += ",\n\t})(grouped)"
+	aggCode.WriteString(",\n\t})(grouped)")
 
-	frag2 := lib.NewStmtFragment("aggregated", "grouped", aggCode, nil, "")
+	frag2 := lib.NewStmtFragment("aggregated", "grouped", aggCode.String(), nil, "")
 	return lib.WriteCodeFragment(frag2)
 }
 

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"time"
@@ -225,10 +226,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 				// On first record, capture the schema
 				if isFirstRecord {
-					schemaFields = make(map[string]any)
-					for k, v := range frozen.All() {
-						schemaFields[k] = v
-					}
+					schemaFields = maps.Collect(frozen.All())
 					isFirstRecord = false
 				}
 

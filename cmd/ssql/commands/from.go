@@ -114,7 +114,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if typeSlice, ok := typeVal.([]any); ok {
 					for _, item := range typeSlice {
 						// autocli returns named args as map[string]interface{}
-						if argMap, ok := item.(map[string]interface{}); ok {
+						if argMap, ok := item.(map[string]any); ok {
 							field := fmt.Sprintf("%v", argMap["field"])
 							typ := fmt.Sprintf("%v", argMap["type"])
 							typeOverrides[field] = typ

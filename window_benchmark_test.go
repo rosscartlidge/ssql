@@ -12,7 +12,7 @@ import (
 // numPartitions controls how many distinct dept values exist.
 func generateWindowRecords(n, numPartitions int) []Record {
 	records := make([]Record, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		r := MakeMutableRecord()
 		r.fields["dept"] = fmt.Sprintf("dept_%04d", i%numPartitions)
 		r.fields["salary"] = float64(i) // monotonically increasing within each partition

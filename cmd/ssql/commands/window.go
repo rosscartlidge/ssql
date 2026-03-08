@@ -27,7 +27,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("Generate Go code instead of executing").
 		Done().
-
 		Flag("-presorted").
 		Bool().
 		Global().
@@ -42,7 +41,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Partition field (repeatable, like SQL PARTITION BY)").
 		Done().
-
 		Flag("-order").
 		String().
 		FieldsFromFlag("").
@@ -50,13 +48,11 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Order field (repeatable, like SQL ORDER BY)").
 		Done().
-
 		Flag("-desc").
 		Bool().
 		Local().
 		Help("Sort descending (applies to all -order fields in this clause)").
 		Done().
-
 		Flag("-rows").
 		String().
 		Local().
@@ -70,21 +66,18 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("ROW_NUMBER() → result field").
 		Done().
-
 		Flag("-rank").
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
 		Accumulate().
 		Local().
 		Help("RANK() → result field").
 		Done().
-
 		Flag("-dense-rank").
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
 		Accumulate().
 		Local().
 		Help("DENSE_RANK() → result field").
 		Done().
-
 		Flag("-ntile").
 		Arg("n").Completer(&cf.NoCompleter{Hint: "<n>"}).Done().
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
@@ -92,7 +85,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("NTILE(n) → result field").
 		Done().
-
 		Flag("-percent-rank").
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
 		Accumulate().
@@ -109,7 +101,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("LAG(field, n) → result field").
 		Done().
-
 		Flag("-lead").
 		Arg("field").FieldsFromFlag("").Done().
 		Arg("n").Completer(&cf.NoCompleter{Hint: "<offset>"}).Done().
@@ -118,7 +109,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("LEAD(field, n) → result field").
 		Done().
-
 		Flag("-first").
 		Arg("field").FieldsFromFlag("").Done().
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
@@ -126,7 +116,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("FIRST_VALUE(field) → result field").
 		Done().
-
 		Flag("-last").
 		Arg("field").FieldsFromFlag("").Done().
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
@@ -143,7 +132,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Windowed SUM(field) → result field").
 		Done().
-
 		Flag("-avg").
 		Arg("field").FieldsFromFlag("").Done().
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
@@ -151,14 +139,12 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Windowed AVG(field) → result field").
 		Done().
-
 		Flag("-count").
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
 		Accumulate().
 		Local().
 		Help("Windowed COUNT(*) → result field").
 		Done().
-
 		Flag("-min").
 		Arg("field").FieldsFromFlag("").Done().
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
@@ -166,7 +152,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Windowed MIN(field) → result field").
 		Done().
-
 		Flag("-max").
 		Arg("field").FieldsFromFlag("").Done().
 		Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done().
@@ -174,7 +159,6 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Windowed MAX(field) → result field").
 		Done().
-
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
@@ -571,43 +555,43 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 
 	// Helper: format configs as Go code
 	formatConfigs := func(indent string) string {
-		var s string
+		var s strings.Builder
 		for i, cfg := range configs {
 			if i > 0 {
-				s += ",\n"
+				s.WriteString(",\n")
 			}
-			s += indent + "{"
+			s.WriteString(indent + "{")
 			if len(cfg.PartitionBy) > 0 {
-				s += fmt.Sprintf("\n%s\tPartitionBy: []string{%s},", indent, formatStringSlice(cfg.PartitionBy))
+				s.WriteString(fmt.Sprintf("\n%s\tPartitionBy: []string{%s},", indent, formatStringSlice(cfg.PartitionBy)))
 			}
 			if len(cfg.OrderBy) > 0 {
-				s += "\n" + indent + "\tOrderBy: []ssql.OrderField{"
+				s.WriteString("\n" + indent + "\tOrderBy: []ssql.OrderField{")
 				for j, of := range cfg.OrderBy {
 					if j > 0 {
-						s += ", "
+						s.WriteString(", ")
 					}
 					if of.Desc {
-						s += fmt.Sprintf("{Field: %q, Desc: true}", of.Field)
+						s.WriteString(fmt.Sprintf("{Field: %q, Desc: true}", of.Field))
 					} else {
-						s += fmt.Sprintf("{Field: %q}", of.Field)
+						s.WriteString(fmt.Sprintf("{Field: %q}", of.Field))
 					}
 				}
-				s += "},"
+				s.WriteString("},")
 			}
-			s += fmt.Sprintf("\n%s\tFrame: ssql.WindowFrame{Preceding: %d, Following: %d},", indent, cfg.Frame.Preceding, cfg.Frame.Following)
+			s.WriteString(fmt.Sprintf("\n%s\tFrame: ssql.WindowFrame{Preceding: %d, Following: %d},", indent, cfg.Frame.Preceding, cfg.Frame.Following))
 			if len(cfg.Specs) > 0 {
-				s += "\n" + indent + "\tSpecs: []ssql.WindowSpec{"
+				s.WriteString("\n" + indent + "\tSpecs: []ssql.WindowSpec{")
 				for j, spec := range cfg.Specs {
 					if j > 0 {
-						s += ", "
+						s.WriteString(", ")
 					}
-					s += fmt.Sprintf("{Function: %s, ResultName: %q}", formatWindowFunc(spec.Function), spec.ResultName)
+					s.WriteString(fmt.Sprintf("{Function: %s, ResultName: %q}", formatWindowFunc(spec.Function), spec.ResultName))
 				}
-				s += "},"
+				s.WriteString("},")
 			}
-			s += "\n" + indent + "}"
+			s.WriteString("\n" + indent + "}")
 		}
-		return s
+		return s.String()
 	}
 
 	if presorted {

@@ -449,7 +449,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 	switch arr := col.(type) {
 	case *array.Float64:
 		// Direct access to float64 values - most efficient path
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -457,7 +457,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 			}
 		}
 	case *array.Float32:
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -465,7 +465,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 			}
 		}
 	case *array.Int64:
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -473,7 +473,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 			}
 		}
 	case *array.Int32:
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -481,7 +481,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 			}
 		}
 	case *array.Int16:
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -489,7 +489,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 			}
 		}
 	case *array.Int8:
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -497,7 +497,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 			}
 		}
 	case *array.Uint64:
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -505,7 +505,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 			}
 		}
 	case *array.Uint32:
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -513,7 +513,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 			}
 		}
 	case *array.Uint16:
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -521,7 +521,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 			}
 		}
 	case *array.Uint8:
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if arr.IsNull(i) {
 				signal = append(signal, 0)
 			} else {
@@ -530,7 +530,7 @@ func appendArrowColumnToSignal(signal Signal, col arrow.Array) Signal {
 		}
 	default:
 		// For unsupported types, append zeros
-		for i := 0; i < n; i++ {
+		for range n {
 			signal = append(signal, 0)
 		}
 	}

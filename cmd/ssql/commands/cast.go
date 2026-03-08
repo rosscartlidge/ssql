@@ -42,7 +42,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if typeVal, ok := ctx.GlobalFlags["-type"]; ok {
 				if typeSlice, ok := typeVal.([]any); ok {
 					for _, item := range typeSlice {
-						if argMap, ok := item.(map[string]interface{}); ok {
+						if argMap, ok := item.(map[string]any); ok {
 							field := fmt.Sprintf("%v", argMap["field"])
 							typeName := fmt.Sprintf("%v", argMap["type"])
 

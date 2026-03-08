@@ -39,11 +39,11 @@ func generateTestWAV(sampleRate, numSamples, bitsPerSample, numChannels int) []b
 
 	// Generate sine wave samples
 	freq := 440.0 // A4 note
-	for i := 0; i < numSamples; i++ {
+	for i := range numSamples {
 		t := float64(i) / float64(sampleRate)
 		amplitude := math.Sin(2 * math.Pi * freq * t)
 
-		for ch := 0; ch < numChannels; ch++ {
+		for range numChannels {
 			switch bitsPerSample {
 			case 8:
 				// 8-bit unsigned
@@ -183,7 +183,7 @@ func TestReadWAVChannel(t *testing.T) {
 	binary.Write(&buf, binary.LittleEndian, uint32(dataSize))
 
 	// Left channel = positive values, right channel = negative values
-	for i := 0; i < numSamples; i++ {
+	for i := range numSamples {
 		leftSample := int16(i * 100)   // Increasing positive values
 		rightSample := int16(-i * 100) // Increasing negative values
 		binary.Write(&buf, binary.LittleEndian, leftSample)
@@ -241,7 +241,7 @@ func TestWriteWAV(t *testing.T) {
 	freq := 440.0
 
 	records := func(yield func(Record) bool) {
-		for i := 0; i < numSamples; i++ {
+		for i := range numSamples {
 			t := float64(i) / float64(sampleRate)
 			amplitude := math.Sin(2 * math.Pi * freq * t)
 
@@ -514,7 +514,7 @@ func TestWriteWAVToWriter(t *testing.T) {
 	sampleRate := 22050
 
 	records := func(yield func(Record) bool) {
-		for i := 0; i < numSamples; i++ {
+		for i := range numSamples {
 			mut := MakeMutableRecord()
 			mut = mut.Int("sample", int64(i))
 			mut = mut.Float("amplitude", float64(i)/float64(numSamples)-0.5)

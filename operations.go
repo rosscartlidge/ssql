@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"time"
 )
@@ -343,6 +344,15 @@ func SortBy[T any, K cmp.Ordered](keyFn func(T) K) Filter[T, T] {
 	}
 }
 
+// SortFunc sorts elements using a comparator function.
+// The comparator should return a negative number when a < b, zero when a == b,
+// and a positive number when a > b.
+func SortFunc[T any](cmpFn func(T, T) int) Filter[T, T] {
+	return func(input iter.Seq[T]) iter.Seq[T] {
+		return slices.Values(slices.SortedFunc(input, cmpFn))
+	}
+}
+
 // SortDesc sorts elements in descending order
 func SortDesc[T cmp.Ordered]() Filter[T, T] {
 	return func(input iter.Seq[T]) iter.Seq[T] {
@@ -433,10 +443,10 @@ type topHeapEntry[T any, K cmp.Ordered] struct {
 // topMinHeap is a min-heap used by TopBy (keeps smallest at root to efficiently discard)
 type topMinHeap[T any, K cmp.Ordered] []topHeapEntry[T, K]
 
-func (h topMinHeap[T, K]) Len() int            { return len(h) }
-func (h topMinHeap[T, K]) Less(i, j int) bool   { return h[i].key < h[j].key }
-func (h topMinHeap[T, K]) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
-func (h *topMinHeap[T, K]) Push(x any)          { *h = append(*h, x.(topHeapEntry[T, K])) }
+func (h topMinHeap[T, K]) Len() int           { return len(h) }
+func (h topMinHeap[T, K]) Less(i, j int) bool { return h[i].key < h[j].key }
+func (h topMinHeap[T, K]) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *topMinHeap[T, K]) Push(x any)        { *h = append(*h, x.(topHeapEntry[T, K])) }
 func (h *topMinHeap[T, K]) Pop() any {
 	old := *h
 	n := len(old)
@@ -448,10 +458,10 @@ func (h *topMinHeap[T, K]) Pop() any {
 // topMaxHeap is a max-heap used by BottomBy (keeps largest at root to efficiently discard)
 type topMaxHeap[T any, K cmp.Ordered] []topHeapEntry[T, K]
 
-func (h topMaxHeap[T, K]) Len() int            { return len(h) }
-func (h topMaxHeap[T, K]) Less(i, j int) bool   { return h[i].key > h[j].key }
-func (h topMaxHeap[T, K]) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
-func (h *topMaxHeap[T, K]) Push(x any)          { *h = append(*h, x.(topHeapEntry[T, K])) }
+func (h topMaxHeap[T, K]) Len() int           { return len(h) }
+func (h topMaxHeap[T, K]) Less(i, j int) bool { return h[i].key > h[j].key }
+func (h topMaxHeap[T, K]) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *topMaxHeap[T, K]) Push(x any)        { *h = append(*h, x.(topHeapEntry[T, K])) }
 func (h *topMaxHeap[T, K]) Pop() any {
 	old := *h
 	n := len(old)
@@ -634,9 +644,7 @@ func RunningSum(fieldName string) Filter[Record, Record] {
 				// Create output record with running sum
 				outputRecord := MakeMutableRecord()
 				// Copy original record
-				for k, v := range record.All() {
-					outputRecord.fields[k] = v
-				}
+				maps.Insert(outputRecord.fields, record.All())
 				// Add running sum fields
 				outputRecord.fields["running_sum"] = runningTotal
 				outputRecord.fields["running_count"] = int64(count)
@@ -683,9 +691,7 @@ func RunningAverage(fieldName string, windowSize int) Filter[Record, Record] {
 
 				// Create output record
 				outputRecord := MakeMutableRecord()
-				for k, v := range record.All() {
-					outputRecord.fields[k] = v
-				}
+				maps.Insert(outputRecord.fields, record.All())
 				outputRecord.fields["moving_avg"] = avg
 				outputRecord.fields["window_size"] = int64(len(window))
 				outputRecord.fields["total_count"] = int64(count)
@@ -719,9 +725,7 @@ func ExponentialMovingAverage(fieldName string, alpha float64) Filter[Record, Re
 
 				// Create output record
 				outputRecord := MakeMutableRecord()
-				for k, v := range record.All() {
-					outputRecord.fields[k] = v
-				}
+				maps.Insert(outputRecord.fields, record.All())
 				outputRecord.fields["ema"] = ema
 				outputRecord.fields["alpha"] = alpha
 
@@ -758,9 +762,7 @@ func RunningMinMax(fieldName string) Filter[Record, Record] {
 
 				// Create output record
 				outputRecord := MakeMutableRecord()
-				for k, v := range record.All() {
-					outputRecord.fields[k] = v
-				}
+				maps.Insert(outputRecord.fields, record.All())
 				outputRecord.fields["running_min"] = min
 				outputRecord.fields["running_max"] = max
 				outputRecord.fields["running_range"] = max - min
@@ -790,9 +792,7 @@ func RunningCount(fieldName string) Filter[Record, Record] {
 
 				// Create output record
 				outputRecord := MakeMutableRecord()
-				for k, v := range record.All() {
-					outputRecord.fields[k] = v
-				}
+				maps.Insert(outputRecord.fields, record.All())
 				outputRecord.fields["distinct_counts"] = counts
 				outputRecord.fields["total_count"] = totalCount
 				outputRecord.fields["distinct_values"] = int64(len(counts))

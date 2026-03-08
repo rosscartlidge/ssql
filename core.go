@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"maps"
 	"reflect"
 	"sort"
 	"strconv"
@@ -2228,9 +2229,7 @@ func dotFlattenRecord(record Record, prefix, separator string, fields ...string)
 		if nestedRecord, ok := value.(Record); ok && shouldFlatten {
 			flattened := dotFlattenRecord(nestedRecord, newKey, separator)
 			// Copy all fields from flattened record to result
-			for k, v := range flattened.All() {
-				result.fields[k] = v
-			}
+			maps.Insert(result.fields, flattened.All())
 		} else {
 			// For non-record values (including sequences), or fields not to be flattened, keep as-is
 			result.fields[newKey] = value
@@ -2270,9 +2269,7 @@ func dotFlattenRecordWithSeqs(record Record, prefix, separator string, fields ..
 		if nestedRecord, ok := value.(Record); ok && shouldFlatten {
 			flattened := dotFlattenRecord(nestedRecord, newKey, separator)
 			// Copy all fields from flattened record
-			for k, v := range flattened.All() {
-				nonSeqRecord.fields[k] = v
-			}
+			maps.Insert(nonSeqRecord.fields, flattened.All())
 		} else if shouldFlatten && isIterSeq(value) {
 			// This is an iter.Seq field - collect its values for dot product expansion
 			values := materializeSequence(value)
@@ -2305,9 +2302,7 @@ func dotFlattenRecordWithSeqs(record Record, prefix, separator string, fields ..
 		result := MakeMutableRecord()
 
 		// Copy non-sequence fields from nonSeqRecord
-		for k, v := range nonSeqRecord.fields {
-			result.fields[k] = v
-		}
+		maps.Copy(result.fields, nonSeqRecord.fields)
 
 		// Add corresponding element from each sequence
 		for j, fieldName := range seqFields {
@@ -2395,12 +2390,8 @@ func cartesianProduct(columns [][]Record) []Record {
 		for _, rr := range columns[0] {
 			r := MakeMutableRecord()
 			// Copy fields from both records
-			for k, v := range rr.All() {
-				r.fields[k] = v
-			}
-			for k, v := range lr.All() {
-				r.fields[k] = v
-			}
+			maps.Insert(r.fields, rr.All())
+			maps.Insert(r.fields, lr.All())
 			rs = append(rs, r.Freeze())
 		}
 	}

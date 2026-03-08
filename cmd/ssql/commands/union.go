@@ -208,11 +208,12 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 	}
 
 	// Build Concat call
-	concatArgs := inputVar
+	var concatArgs strings.Builder
+	concatArgs.WriteString(inputVar)
 	for _, v := range readVars {
-		concatArgs += ", " + v
+		concatArgs.WriteString(", " + v)
 	}
-	codeLines = append(codeLines, fmt.Sprintf("combined := ssql.Concat(%s)", concatArgs))
+	codeLines = append(codeLines, fmt.Sprintf("combined := ssql.Concat(%s)", concatArgs.String()))
 
 	// Apply distinct if not UNION ALL
 	outputVar := "combined"

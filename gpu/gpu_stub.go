@@ -116,9 +116,9 @@ func FFTMagnitudeCPU(data []float64) []float64 {
 	outN := n/2 + 1
 	magnitude := make([]float64, outN)
 
-	for k := 0; k < outN; k++ {
+	for k := range outN {
 		var real, imag float64
-		for t := 0; t < n; t++ {
+		for t := range n {
 			angle := -2 * math.Pi * float64(k) * float64(t) / float64(n)
 			real += data[t] * math.Cos(angle)
 			imag += data[t] * math.Sin(angle)

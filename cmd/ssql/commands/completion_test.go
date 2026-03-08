@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -60,7 +61,7 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-as": {0}, // old-field is arg 0
 		},
 		"sort": {
-			"FIELD": {0}, // single field (not variadic)
+			"FIELDS": {0}, // sort fields (variadic)
 		},
 		"group-by": {
 			"FIELDS":   {0}, // group fields (variadic)
@@ -218,10 +219,8 @@ func findSubcommand(cmd *cf.Command, name string) *cf.Subcommand {
 // findFlag finds a flag by name in a subcommand
 func findFlag(subcmd *cf.Subcommand, name string) *cf.FlagSpec {
 	for _, flag := range subcmd.Flags {
-		for _, n := range flag.Names {
-			if n == name {
-				return flag
-			}
+		if slices.Contains(flag.Names, name) {
+			return flag
 		}
 	}
 	return nil

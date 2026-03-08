@@ -424,6 +424,37 @@ func TestSortDesc(t *testing.T) {
 	}
 }
 
+func TestSortFunc(t *testing.T) {
+	r1 := MakeMutableRecord().String("name", "Charlie").Int("age", int64(35)).Freeze()
+	r2 := MakeMutableRecord().String("name", "Alice").Int("age", int64(30)).Freeze()
+	r3 := MakeMutableRecord().String("name", "Bob").Int("age", int64(25)).Freeze()
+
+	input := slices.Values([]Record{r1, r2, r3})
+
+	// Sort by name ascending using comparator
+	filter := SortFunc(func(a, b Record) int {
+		aName := GetOr(a, "name", "")
+		bName := GetOr(b, "name", "")
+		if aName < bName {
+			return -1
+		}
+		if aName > bName {
+			return 1
+		}
+		return 0
+	})
+
+	result := slices.Collect(filter(input))
+	if GetOr(result[0], "name", "") != "Alice" ||
+		GetOr(result[1], "name", "") != "Bob" ||
+		GetOr(result[2], "name", "") != "Charlie" {
+		t.Errorf("SortFunc failed: got %v, %v, %v",
+			GetOr(result[0], "name", ""),
+			GetOr(result[1], "name", ""),
+			GetOr(result[2], "name", ""))
+	}
+}
+
 // ============================================================================
 // TOP/BOTTOM OPERATIONS TESTS
 // ============================================================================

@@ -1,5 +1,4 @@
 //go:build examples
-// +build examples
 
 package ssql_test
 
