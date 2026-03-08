@@ -1,7 +1,9 @@
 package ssql
 
 import (
+	"fmt"
 	"iter"
+	"math"
 	"slices"
 	"testing"
 )
@@ -2038,6 +2040,970 @@ func TestWindowPercentRank(t *testing.T) {
 			if pctRank != 1.0 {
 				t.Errorf("D pct_rank: want 1.0, got %v", pctRank)
 			}
+		}
+	}
+}
+
+// ============================================================================
+// STREAMING WINDOW FUNCTION TESTS
+// ============================================================================
+
+// TestStreamWindow_MatchesWindow runs both Window() and StreamWindow() on presorted input
+// and verifies the outputs match for all 8 supported streaming functions.
+func TestStreamWindow_MatchesWindow(t *testing.T) {
+	// Presorted by dept (partition) then salary (order) ascending
+	input := []Record{
+		NewRecord(map[string]any{"name": "Charlie", "dept": "eng", "salary": float64(70000)}),
+		NewRecord(map[string]any{"name": "Bob", "dept": "eng", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "Alice", "dept": "eng", "salary": float64(90000)}),
+		NewRecord(map[string]any{"name": "Eve", "dept": "sales", "salary": float64(60000)}),
+		NewRecord(map[string]any{"name": "Diana", "dept": "sales", "salary": float64(95000)}),
+	}
+
+	configs := []WindowConfig{{
+		PartitionBy: []string{"dept"},
+		OrderBy:     []OrderField{{Field: "salary"}},
+		Frame:       WindowFrame{Preceding: -1, Following: 0},
+		Specs: []WindowSpec{
+			{Function: WRowNumber(), ResultName: "rn"},
+			{Function: WRank(), ResultName: "rnk"},
+			{Function: WDenseRank(), ResultName: "drnk"},
+			{Function: WSum("salary"), ResultName: "running_sum"},
+			{Function: WAvg("salary"), ResultName: "running_avg"},
+			{Function: WCount(), ResultName: "cnt"},
+			{Function: WFirst("name"), ResultName: "first_name"},
+			{Function: WLast("name"), ResultName: "last_name"},
+		},
+	}}
+
+	// Window() — materializing
+	windowResult := slices.Collect(Window(configs)(slices.Values(input)))
+
+	// StreamWindow() — streaming
+	streamFilter, err := StreamWindow(configs)
+	if err != nil {
+		t.Fatalf("StreamWindow: %v", err)
+	}
+	streamResult := slices.Collect(streamFilter(slices.Values(input)))
+
+	if len(windowResult) != len(streamResult) {
+		t.Fatalf("length mismatch: Window=%d, StreamWindow=%d", len(windowResult), len(streamResult))
+	}
+
+	fields := []string{"rn", "rnk", "drnk", "running_sum", "cnt", "first_name", "last_name"}
+	for i := range windowResult {
+		wName := GetOr(windowResult[i], "name", "")
+		sName := GetOr(streamResult[i], "name", "")
+		if wName != sName {
+			t.Errorf("row %d: name mismatch: Window=%q, StreamWindow=%q", i, wName, sName)
+			continue
+		}
+		for _, f := range fields {
+			wv, _ := Get[any](windowResult[i], f)
+			sv, _ := Get[any](streamResult[i], f)
+			if fmt.Sprintf("%v", wv) != fmt.Sprintf("%v", sv) {
+				t.Errorf("row %d (%s) field %q: Window=%v, StreamWindow=%v", i, wName, f, wv, sv)
+			}
+		}
+		// Float comparison for running_avg
+		wAvg := GetOr(windowResult[i], "running_avg", float64(-1))
+		sAvg := GetOr(streamResult[i], "running_avg", float64(-1))
+		if math.Abs(wAvg-sAvg) > 1e-9 {
+			t.Errorf("row %d (%s) running_avg: Window=%v, StreamWindow=%v", i, wName, wAvg, sAvg)
+		}
+	}
+}
+
+func TestStreamWindowRowNumber(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "A", "val": float64(1)}),
+		NewRecord(map[string]any{"name": "B", "val": float64(2)}),
+		NewRecord(map[string]any{"name": "C", "val": float64(3)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WRowNumber(), ResultName: "rn"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	for i, r := range result {
+		rn := GetOr(r, "rn", int64(0))
+		if rn != int64(i+1) {
+			t.Errorf("row %d: want rn=%d, got %d", i, i+1, rn)
+		}
+	}
+}
+
+func TestStreamWindowRank(t *testing.T) {
+	// Ties: A=10, B=20, C=20, D=30
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "A", "val": float64(10)}),
+		NewRecord(map[string]any{"name": "B", "val": float64(20)}),
+		NewRecord(map[string]any{"name": "C", "val": float64(20)}),
+		NewRecord(map[string]any{"name": "D", "val": float64(30)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WRank(), ResultName: "rnk"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []int64{1, 2, 2, 4} // B and C tie at rank 2, D skips to 4
+	for i, r := range result {
+		rnk := GetOr(r, "rnk", int64(0))
+		if rnk != want[i] {
+			t.Errorf("row %d: want rank=%d, got %d", i, want[i], rnk)
+		}
+	}
+}
+
+func TestStreamWindowDenseRank(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "A", "val": float64(10)}),
+		NewRecord(map[string]any{"name": "B", "val": float64(20)}),
+		NewRecord(map[string]any{"name": "C", "val": float64(20)}),
+		NewRecord(map[string]any{"name": "D", "val": float64(30)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WDenseRank(), ResultName: "drnk"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []int64{1, 2, 2, 3} // B and C tie at 2, D is 3 (no gap)
+	for i, r := range result {
+		drnk := GetOr(r, "drnk", int64(0))
+		if drnk != want[i] {
+			t.Errorf("row %d: want dense_rank=%d, got %d", i, want[i], drnk)
+		}
+	}
+}
+
+func TestStreamWindowSum(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WSum("val"), ResultName: "running"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []float64{10, 30, 60}
+	for i, r := range result {
+		v := GetOr(r, "running", float64(0))
+		if v != want[i] {
+			t.Errorf("row %d: want sum=%v, got %v", i, want[i], v)
+		}
+	}
+}
+
+func TestStreamWindowAvg(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WAvg("val"), ResultName: "avg"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []float64{10, 15, 20} // 10/1, 30/2, 60/3
+	for i, r := range result {
+		v := GetOr(r, "avg", float64(0))
+		if math.Abs(v-want[i]) > 1e-9 {
+			t.Errorf("row %d: want avg=%v, got %v", i, want[i], v)
+		}
+	}
+}
+
+func TestStreamWindowCount(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WCount(), ResultName: "cnt"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	for i, r := range result {
+		cnt := GetOr(r, "cnt", int64(0))
+		if cnt != int64(i+1) {
+			t.Errorf("row %d: want count=%d, got %d", i, i+1, cnt)
+		}
+	}
+}
+
+func TestStreamWindowFirst(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "Alice", "val": float64(10)}),
+		NewRecord(map[string]any{"name": "Bob", "val": float64(20)}),
+		NewRecord(map[string]any{"name": "Charlie", "val": float64(30)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WFirst("name"), ResultName: "first"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	for i, r := range result {
+		first := GetOr(r, "first", "")
+		if first != "Alice" {
+			t.Errorf("row %d: want first=Alice, got %q", i, first)
+		}
+	}
+}
+
+func TestStreamWindowLast(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "Alice", "val": float64(10)}),
+		NewRecord(map[string]any{"name": "Bob", "val": float64(20)}),
+		NewRecord(map[string]any{"name": "Charlie", "val": float64(30)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WLast("name"), ResultName: "last"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []string{"Alice", "Bob", "Charlie"} // last = current row for this frame
+	for i, r := range result {
+		last := GetOr(r, "last", "")
+		if last != want[i] {
+			t.Errorf("row %d: want last=%q, got %q", i, want[i], last)
+		}
+	}
+}
+
+func TestStreamWindowEmpty(t *testing.T) {
+	input := slices.Values([]Record{})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		Frame: WindowFrame{Preceding: -1, Following: 0},
+		Specs: []WindowSpec{{Function: WRowNumber(), ResultName: "rn"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	if len(result) != 0 {
+		t.Errorf("expected 0 records, got %d", len(result))
+	}
+}
+
+func TestStreamWindowSingleRecord(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(42)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		Frame: WindowFrame{Preceding: -1, Following: 0},
+		Specs: []WindowSpec{
+			{Function: WRowNumber(), ResultName: "rn"},
+			{Function: WSum("val"), ResultName: "sum"},
+			{Function: WAvg("val"), ResultName: "avg"},
+			{Function: WCount(), ResultName: "cnt"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	if len(result) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(result))
+	}
+	r := result[0]
+	if rn := GetOr(r, "rn", int64(0)); rn != 1 {
+		t.Errorf("rn: want 1, got %d", rn)
+	}
+	if sum := GetOr(r, "sum", float64(0)); sum != 42 {
+		t.Errorf("sum: want 42, got %v", sum)
+	}
+	if avg := GetOr(r, "avg", float64(0)); avg != 42 {
+		t.Errorf("avg: want 42, got %v", avg)
+	}
+	if cnt := GetOr(r, "cnt", int64(0)); cnt != 1 {
+		t.Errorf("cnt: want 1, got %d", cnt)
+	}
+}
+
+func TestStreamWindowPartitionedRowNumber(t *testing.T) {
+	// Presorted by dept, then val
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "A", "val": float64(1)}),
+		NewRecord(map[string]any{"dept": "A", "val": float64(2)}),
+		NewRecord(map[string]any{"dept": "B", "val": float64(10)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		PartitionBy: []string{"dept"},
+		OrderBy:     []OrderField{{Field: "val"}},
+		Frame:       WindowFrame{Preceding: -1, Following: 0},
+		Specs:       []WindowSpec{{Function: WRowNumber(), ResultName: "rn"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []int64{1, 2, 1} // reset at partition boundary
+	for i, r := range result {
+		rn := GetOr(r, "rn", int64(0))
+		if rn != want[i] {
+			t.Errorf("row %d: want rn=%d, got %d", i, want[i], rn)
+		}
+	}
+}
+
+// Error tests
+
+func TestStreamWindowRejectsNtile(t *testing.T) {
+	_, err := StreamWindow([]WindowConfig{{
+		Frame: WindowFrame{Preceding: -1, Following: 0},
+		Specs: []WindowSpec{{Function: WNtile(4), ResultName: "q"}},
+	}})
+	if err == nil {
+		t.Fatal("expected error for NTILE")
+	}
+}
+
+func TestStreamWindowRejectsPercentRank(t *testing.T) {
+	_, err := StreamWindow([]WindowConfig{{
+		Frame: WindowFrame{Preceding: -1, Following: 0},
+		Specs: []WindowSpec{{Function: WPercentRank(), ResultName: "pct"}},
+	}})
+	if err == nil {
+		t.Fatal("expected error for PERCENT_RANK")
+	}
+}
+
+func TestStreamWindowRejectsFollowingPositive(t *testing.T) {
+	_, err := StreamWindow([]WindowConfig{{
+		Frame: WindowFrame{Preceding: 2, Following: 1},
+		Specs: []WindowSpec{{Function: WSum("val"), ResultName: "sum"}},
+	}})
+	if err == nil {
+		t.Fatal("expected error for Following > 0")
+	}
+}
+
+func TestStreamWindowRejectsUnboundedFollowing(t *testing.T) {
+	_, err := StreamWindow([]WindowConfig{{
+		Frame: WindowFrame{Preceding: -1, Following: -1},
+		Specs: []WindowSpec{{Function: WSum("val"), ResultName: "sum"}},
+	}})
+	if err == nil {
+		t.Fatal("expected error for UNBOUNDED FOLLOWING")
+	}
+}
+
+func TestStreamWindowRejectsMismatchedClauses(t *testing.T) {
+	_, err := StreamWindow([]WindowConfig{
+		{
+			PartitionBy: []string{"dept"},
+			OrderBy:     []OrderField{{Field: "val"}},
+			Frame:       WindowFrame{Preceding: -1, Following: 0},
+			Specs:       []WindowSpec{{Function: WRowNumber(), ResultName: "rn"}},
+		},
+		{
+			PartitionBy: []string{"region"}, // different partition
+			OrderBy:     []OrderField{{Field: "val"}},
+			Frame:       WindowFrame{Preceding: -1, Following: 0},
+			Specs:       []WindowSpec{{Function: WCount(), ResultName: "cnt"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for mismatched partition fields")
+	}
+}
+
+// ============================================================================
+// PHASE 2: Bounded frames, LAG/LEAD, MIN/MAX
+// ============================================================================
+
+func TestStreamWindow_MatchesWindow_BoundedFrame(t *testing.T) {
+	// Presorted by dept (partition) then salary (order) ascending
+	input := []Record{
+		NewRecord(map[string]any{"name": "Charlie", "dept": "eng", "salary": float64(70000)}),
+		NewRecord(map[string]any{"name": "Bob", "dept": "eng", "salary": float64(80000)}),
+		NewRecord(map[string]any{"name": "Alice", "dept": "eng", "salary": float64(90000)}),
+		NewRecord(map[string]any{"name": "Eve", "dept": "sales", "salary": float64(60000)}),
+		NewRecord(map[string]any{"name": "Diana", "dept": "sales", "salary": float64(95000)}),
+	}
+
+	configs := []WindowConfig{{
+		PartitionBy: []string{"dept"},
+		OrderBy:     []OrderField{{Field: "salary"}},
+		Frame:       WindowFrame{Preceding: 2, Following: 0},
+		Specs: []WindowSpec{
+			{Function: WSum("salary"), ResultName: "sliding_sum"},
+			{Function: WAvg("salary"), ResultName: "sliding_avg"},
+			{Function: WCount(), ResultName: "cnt"},
+			{Function: WFirst("name"), ResultName: "first_name"},
+			{Function: WMin("salary"), ResultName: "min_sal"},
+			{Function: WMax("salary"), ResultName: "max_sal"},
+		},
+	}}
+
+	// Window() — materializing
+	windowResult := slices.Collect(Window(configs)(slices.Values(input)))
+
+	// StreamWindow() — streaming
+	streamFilter, err := StreamWindow(configs)
+	if err != nil {
+		t.Fatalf("StreamWindow: %v", err)
+	}
+	streamResult := slices.Collect(streamFilter(slices.Values(input)))
+
+	if len(windowResult) != len(streamResult) {
+		t.Fatalf("length mismatch: Window=%d, StreamWindow=%d", len(windowResult), len(streamResult))
+	}
+
+	fields := []string{"sliding_sum", "cnt", "first_name", "min_sal", "max_sal"}
+	for i := range windowResult {
+		wName := GetOr(windowResult[i], "name", "")
+		sName := GetOr(streamResult[i], "name", "")
+		if wName != sName {
+			t.Errorf("row %d: name mismatch: Window=%q, StreamWindow=%q", i, wName, sName)
+			continue
+		}
+		for _, f := range fields {
+			wv, _ := Get[any](windowResult[i], f)
+			sv, _ := Get[any](streamResult[i], f)
+			if fmt.Sprintf("%v", wv) != fmt.Sprintf("%v", sv) {
+				t.Errorf("row %d (%s) field %q: Window=%v, StreamWindow=%v", i, wName, f, wv, sv)
+			}
+		}
+		// Float comparison for sliding_avg
+		wAvg := GetOr(windowResult[i], "sliding_avg", float64(-1))
+		sAvg := GetOr(streamResult[i], "sliding_avg", float64(-1))
+		if math.Abs(wAvg-sAvg) > 1e-9 {
+			t.Errorf("row %d (%s) sliding_avg: Window=%v, StreamWindow=%v", i, wName, wAvg, sAvg)
+		}
+	}
+}
+
+func TestStreamWindowSlidingSum(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(40)}),
+		NewRecord(map[string]any{"val": float64(50)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: 2, Following: 0}, // ROWS 2,0
+		Specs:   []WindowSpec{{Function: WSum("val"), ResultName: "sum"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []float64{10, 30, 60, 90, 120}
+	for i, r := range result {
+		v := GetOr(r, "sum", float64(0))
+		if v != want[i] {
+			t.Errorf("row %d: want sum=%v, got %v", i, want[i], v)
+		}
+	}
+}
+
+func TestStreamWindowSlidingAvg(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(40)}),
+		NewRecord(map[string]any{"val": float64(50)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: 2, Following: 0},
+		Specs:   []WindowSpec{{Function: WAvg("val"), ResultName: "avg"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// row0: 10/1=10, row1: 30/2=15, row2: 60/3=20, row3: 90/3=30, row4: 120/3=40
+	want := []float64{10, 15, 20, 30, 40}
+	for i, r := range result {
+		v := GetOr(r, "avg", float64(0))
+		if math.Abs(v-want[i]) > 1e-9 {
+			t.Errorf("row %d: want avg=%v, got %v", i, want[i], v)
+		}
+	}
+}
+
+func TestStreamWindowSlidingCount(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(40)}),
+		NewRecord(map[string]any{"val": float64(50)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: 2, Following: 0},
+		Specs:   []WindowSpec{{Function: WCount(), ResultName: "cnt"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []int64{1, 2, 3, 3, 3}
+	for i, r := range result {
+		cnt := GetOr(r, "cnt", int64(0))
+		if cnt != want[i] {
+			t.Errorf("row %d: want count=%d, got %d", i, want[i], cnt)
+		}
+	}
+}
+
+func TestStreamWindowSlidingFirst(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"name": "A", "val": float64(1)}),
+		NewRecord(map[string]any{"name": "B", "val": float64(2)}),
+		NewRecord(map[string]any{"name": "C", "val": float64(3)}),
+		NewRecord(map[string]any{"name": "D", "val": float64(4)}),
+		NewRecord(map[string]any{"name": "E", "val": float64(5)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: 2, Following: 0},
+		Specs:   []WindowSpec{{Function: WFirst("name"), ResultName: "first"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// Frame ROWS 2,0: row0=[A], row1=[A,B], row2=[A,B,C], row3=[B,C,D], row4=[C,D,E]
+	want := []string{"A", "A", "A", "B", "C"}
+	for i, r := range result {
+		first := GetOr(r, "first", "")
+		if first != want[i] {
+			t.Errorf("row %d: want first=%q, got %q", i, want[i], first)
+		}
+	}
+}
+
+func TestStreamWindowRunningMin(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(5)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0}, // default frame
+		Specs:   []WindowSpec{{Function: WMin("val"), ResultName: "rmin"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []float64{30, 10, 10, 5}
+	for i, r := range result {
+		v := GetOr(r, "rmin", float64(0))
+		if v != want[i] {
+			t.Errorf("row %d: want min=%v, got %v", i, want[i], v)
+		}
+	}
+}
+
+func TestStreamWindowRunningMax(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(5)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WMax("val"), ResultName: "rmax"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	want := []float64{10, 30, 30, 30}
+	for i, r := range result {
+		v := GetOr(r, "rmax", float64(0))
+		if v != want[i] {
+			t.Errorf("row %d: want max=%v, got %v", i, want[i], v)
+		}
+	}
+}
+
+func TestStreamWindowSlidingMin(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(50)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(40)}),
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: 2, Following: 0}, // ROWS 2,0 (window of 3)
+		Specs:   []WindowSpec{{Function: WMin("val"), ResultName: "smin"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// Frames: [50]=50, [50,30]=30, [50,30,40]=30, [30,40,10]=10, [40,10,20]=10
+	want := []float64{50, 30, 30, 10, 10}
+	for i, r := range result {
+		v := GetOr(r, "smin", float64(0))
+		if v != want[i] {
+			t.Errorf("row %d: want smin=%v, got %v", i, want[i], v)
+		}
+	}
+}
+
+func TestStreamWindowSlidingMax(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(50)}),
+		NewRecord(map[string]any{"val": float64(40)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: 2, Following: 0},
+		Specs:   []WindowSpec{{Function: WMax("val"), ResultName: "smax"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// Frames: [10]=10, [10,30]=30, [10,30,20]=30, [30,20,50]=50, [20,50,40]=50
+	want := []float64{10, 30, 30, 50, 50}
+	for i, r := range result {
+		v := GetOr(r, "smax", float64(0))
+		if v != want[i] {
+			t.Errorf("row %d: want smax=%v, got %v", i, want[i], v)
+		}
+	}
+}
+
+func TestStreamWindowLag(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(40)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WLag("val", 2), ResultName: "lag2"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// LAG(val, 2): nil, nil, 10, 20
+	for i, r := range result {
+		v, _ := Get[any](r, "lag2")
+		if i < 2 {
+			if v != nil {
+				t.Errorf("row %d: want nil, got %v", i, v)
+			}
+		} else {
+			expected := float64((i - 1) * 10)
+			if v != expected {
+				t.Errorf("row %d: want lag=%v, got %v", i, expected, v)
+			}
+		}
+	}
+}
+
+func TestStreamWindowLead(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(40)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs:   []WindowSpec{{Function: WLead("val", 1), ResultName: "lead1"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// LEAD(val, 1): 20, 30, 40, nil
+	for i, r := range result {
+		v, _ := Get[any](r, "lead1")
+		if i < 3 {
+			expected := float64((i + 2) * 10)
+			if v != expected {
+				t.Errorf("row %d: want lead=%v, got %v", i, expected, v)
+			}
+		} else {
+			if v != nil {
+				t.Errorf("row %d: want nil, got %v", i, v)
+			}
+		}
+	}
+}
+
+func TestStreamWindowLeadPartitioned(t *testing.T) {
+	// Presorted by dept, then val
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "A", "val": float64(1)}),
+		NewRecord(map[string]any{"dept": "A", "val": float64(2)}),
+		NewRecord(map[string]any{"dept": "A", "val": float64(3)}),
+		NewRecord(map[string]any{"dept": "B", "val": float64(10)}),
+		NewRecord(map[string]any{"dept": "B", "val": float64(20)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		PartitionBy: []string{"dept"},
+		OrderBy:     []OrderField{{Field: "val"}},
+		Frame:       WindowFrame{Preceding: -1, Following: 0},
+		Specs:       []WindowSpec{{Function: WLead("val", 1), ResultName: "next"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// Partition A: [1→2, 2→3, 3→nil], Partition B: [10→20, 20→nil]
+	wantVal := []any{float64(2), float64(3), nil, float64(20), nil}
+	for i, r := range result {
+		v, _ := Get[any](r, "next")
+		if fmt.Sprintf("%v", v) != fmt.Sprintf("%v", wantVal[i]) {
+			t.Errorf("row %d: want next=%v, got %v", i, wantVal[i], v)
+		}
+	}
+}
+
+func TestStreamWindowFrameLargerThanPartition(t *testing.T) {
+	// Frame ROWS 10,0 with only 3 records
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: 10, Following: 0},
+		Specs:   []WindowSpec{{Function: WSum("val"), ResultName: "sum"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// Frame never fills, so it's like UNBOUNDED PRECEDING
+	want := []float64{10, 30, 60}
+	for i, r := range result {
+		v := GetOr(r, "sum", float64(0))
+		if v != want[i] {
+			t.Errorf("row %d: want sum=%v, got %v", i, want[i], v)
+		}
+	}
+}
+
+func TestStreamWindowLagLargerThanPartition(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "A", "val": float64(1)}),
+		NewRecord(map[string]any{"dept": "A", "val": float64(2)}),
+		NewRecord(map[string]any{"dept": "B", "val": float64(10)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		PartitionBy: []string{"dept"},
+		OrderBy:     []OrderField{{Field: "val"}},
+		Frame:       WindowFrame{Preceding: -1, Following: 0},
+		Specs:       []WindowSpec{{Function: WLag("val", 5), ResultName: "lag5"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// All nil — lag offset > partition size
+	for i, r := range result {
+		v, _ := Get[any](r, "lag5")
+		if v != nil {
+			t.Errorf("row %d: want nil, got %v", i, v)
+		}
+	}
+}
+
+func TestStreamWindowLeadLargerThanPartition(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "A", "val": float64(1)}),
+		NewRecord(map[string]any{"dept": "A", "val": float64(2)}),
+		NewRecord(map[string]any{"dept": "B", "val": float64(10)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		PartitionBy: []string{"dept"},
+		OrderBy:     []OrderField{{Field: "val"}},
+		Frame:       WindowFrame{Preceding: -1, Following: 0},
+		Specs:       []WindowSpec{{Function: WLead("val", 5), ResultName: "lead5"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	// All nil — lead offset > partition size
+	for i, r := range result {
+		v, _ := Get[any](r, "lead5")
+		if v != nil {
+			t.Errorf("row %d: want nil, got %v", i, v)
+		}
+	}
+}
+
+func TestStreamWindowMixedLagAndSum(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: -1, Following: 0},
+		Specs: []WindowSpec{
+			{Function: WLag("val", 1), ResultName: "prev"},
+			{Function: WSum("val"), ResultName: "running"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	wantPrev := []any{nil, float64(10), float64(20)}
+	wantSum := []float64{10, 30, 60}
+	for i, r := range result {
+		prev, _ := Get[any](r, "prev")
+		if fmt.Sprintf("%v", prev) != fmt.Sprintf("%v", wantPrev[i]) {
+			t.Errorf("row %d: want prev=%v, got %v", i, wantPrev[i], prev)
+		}
+		sum := GetOr(r, "running", float64(0))
+		if sum != wantSum[i] {
+			t.Errorf("row %d: want sum=%v, got %v", i, wantSum[i], sum)
+		}
+	}
+}
+
+func TestStreamWindowMixedLeadAndSlidingSum(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"val": float64(10)}),
+		NewRecord(map[string]any{"val": float64(20)}),
+		NewRecord(map[string]any{"val": float64(30)}),
+		NewRecord(map[string]any{"val": float64(40)}),
+	})
+
+	filter, err := StreamWindow([]WindowConfig{{
+		OrderBy: []OrderField{{Field: "val"}},
+		Frame:   WindowFrame{Preceding: 1, Following: 0},
+		Specs: []WindowSpec{
+			{Function: WLead("val", 1), ResultName: "next"},
+			{Function: WSum("val"), ResultName: "sum2"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := slices.Collect(filter(input))
+	wantNext := []any{float64(20), float64(30), float64(40), nil}
+	wantSum := []float64{10, 30, 50, 70} // ROWS 1,0: [10], [10,20], [20,30], [30,40]
+	for i, r := range result {
+		next, _ := Get[any](r, "next")
+		if fmt.Sprintf("%v", next) != fmt.Sprintf("%v", wantNext[i]) {
+			t.Errorf("row %d: want next=%v, got %v", i, wantNext[i], next)
+		}
+		sum := GetOr(r, "sum2", float64(0))
+		if sum != wantSum[i] {
+			t.Errorf("row %d: want sum=%v, got %v", i, wantSum[i], sum)
 		}
 	}
 }

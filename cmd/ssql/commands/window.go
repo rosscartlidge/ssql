@@ -21,11 +21,17 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql window -lag price 1 prev_price -order date", "Previous row's value").
 		ClauseDescription("Each clause defines a separate window (partition/order/frame)").
 
-		// Global flag
+		// Global flags
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
+		Done().
+
+		Flag("-presorted").
+		Bool().
+		Global().
+		Help("Input is presorted by partition+order fields (streaming, O(1) memory)").
 		Done().
 
 		// Local flags (clause-scoped)
@@ -174,6 +180,10 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
+			var presorted bool
+			if psVal, ok := ctx.GlobalFlags["-presorted"]; ok {
+				presorted = psVal.(bool)
+			}
 
 			// Parse all clauses into WindowConfigs
 			configs, err := parseWindowClauses(ctx.Clauses)
@@ -191,7 +201,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			if shouldGenerate(generate) {
-				return generateWindowCode(configs)
+				return generateWindowCode(configs, presorted)
 			}
 
 			// Read JSONL from stdin
@@ -199,7 +209,35 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			records := schemaAndRecords.Records
 			inputSchema := schemaAndRecords.Schema
 
-			// Apply window function
+			if presorted {
+				// Streaming mode — O(1) memory per aggregate
+				streamFilter, err := ssql.StreamWindow(configs)
+				if err != nil {
+					return fmt.Errorf("streaming window: %w", err)
+				}
+
+				windowed := streamFilter(records)
+
+				// Build output schema from input schema + config specs
+				var outSchema *lib.Schema
+				if inputSchema != nil {
+					outSchema = inputSchema.Clone()
+					for _, cfg := range configs {
+						for _, spec := range cfg.Specs {
+							if !outSchema.HasField(spec.ResultName) {
+								outSchema.AddField(spec.ResultName, inferWindowResultType(spec.Function, inputSchema))
+							}
+						}
+					}
+				}
+
+				if err := lib.WriteJSONLWithSchema(os.Stdout, outSchema, windowed); err != nil {
+					return fmt.Errorf("writing output: %w", err)
+				}
+				return nil
+			}
+
+			// Non-presorted: materialize and use Window()
 			windowed := ssql.Window(configs)(records)
 
 			// Materialize to build output schema
@@ -511,7 +549,7 @@ func inferWindowResultType(fn ssql.WindowFunc, inputSchema *lib.Schema) string {
 }
 
 // generateWindowCode generates Go code for the window command.
-func generateWindowCode(configs []ssql.WindowConfig) error {
+func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -530,53 +568,59 @@ func generateWindowCode(configs []ssql.WindowConfig) error {
 	}
 
 	outputVar := "windowed"
-	code := fmt.Sprintf("%s := ssql.Window([]ssql.WindowConfig{\n", outputVar)
 
-	for i, cfg := range configs {
-		if i > 0 {
-			code += ",\n"
-		}
-		code += "\t{"
-
-		// PartitionBy
-		if len(cfg.PartitionBy) > 0 {
-			code += fmt.Sprintf("\n\t\tPartitionBy: []string{%s},", formatStringSlice(cfg.PartitionBy))
-		}
-
-		// OrderBy
-		if len(cfg.OrderBy) > 0 {
-			code += "\n\t\tOrderBy: []ssql.OrderField{"
-			for j, of := range cfg.OrderBy {
-				if j > 0 {
-					code += ", "
-				}
-				if of.Desc {
-					code += fmt.Sprintf("{Field: %q, Desc: true}", of.Field)
-				} else {
-					code += fmt.Sprintf("{Field: %q}", of.Field)
-				}
+	// Helper: format configs as Go code
+	formatConfigs := func(indent string) string {
+		var s string
+		for i, cfg := range configs {
+			if i > 0 {
+				s += ",\n"
 			}
-			code += "},"
-		}
-
-		// Frame
-		code += fmt.Sprintf("\n\t\tFrame: ssql.WindowFrame{Preceding: %d, Following: %d},", cfg.Frame.Preceding, cfg.Frame.Following)
-
-		// Specs
-		if len(cfg.Specs) > 0 {
-			code += "\n\t\tSpecs: []ssql.WindowSpec{"
-			for j, spec := range cfg.Specs {
-				if j > 0 {
-					code += ", "
-				}
-				code += fmt.Sprintf("{Function: %s, ResultName: %q}", formatWindowFunc(spec.Function), spec.ResultName)
+			s += indent + "{"
+			if len(cfg.PartitionBy) > 0 {
+				s += fmt.Sprintf("\n%s\tPartitionBy: []string{%s},", indent, formatStringSlice(cfg.PartitionBy))
 			}
-			code += "},"
+			if len(cfg.OrderBy) > 0 {
+				s += "\n" + indent + "\tOrderBy: []ssql.OrderField{"
+				for j, of := range cfg.OrderBy {
+					if j > 0 {
+						s += ", "
+					}
+					if of.Desc {
+						s += fmt.Sprintf("{Field: %q, Desc: true}", of.Field)
+					} else {
+						s += fmt.Sprintf("{Field: %q}", of.Field)
+					}
+				}
+				s += "},"
+			}
+			s += fmt.Sprintf("\n%s\tFrame: ssql.WindowFrame{Preceding: %d, Following: %d},", indent, cfg.Frame.Preceding, cfg.Frame.Following)
+			if len(cfg.Specs) > 0 {
+				s += "\n" + indent + "\tSpecs: []ssql.WindowSpec{"
+				for j, spec := range cfg.Specs {
+					if j > 0 {
+						s += ", "
+					}
+					s += fmt.Sprintf("{Function: %s, ResultName: %q}", formatWindowFunc(spec.Function), spec.ResultName)
+				}
+				s += "},"
+			}
+			s += "\n" + indent + "}"
 		}
-
-		code += "\n\t}"
+		return s
 	}
 
+	if presorted {
+		code := fmt.Sprintf("%s := ssql.MustStreamWindow([]ssql.WindowConfig{\n", outputVar)
+		code += formatConfigs("\t")
+		code += fmt.Sprintf(",\n})(%s)", inputVar)
+
+		frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
+		return lib.WriteCodeFragment(frag)
+	}
+
+	code := fmt.Sprintf("%s := ssql.Window([]ssql.WindowConfig{\n", outputVar)
+	code += formatConfigs("\t")
 	code += fmt.Sprintf(",\n})(%s)", inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())

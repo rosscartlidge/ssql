@@ -347,6 +347,30 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			wantSubstring:  `ssql.WSum`,
 		},
 		{
+			name:           "window-presorted-row-number",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test window -row-number rn -order salary -presorted`,
+			expectFragment: true,
+			wantSubstring:  `ssql.MustStreamWindow`,
+		},
+		{
+			name:           "window-presorted-sum",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test window -sum amount total -partition dept -order date -presorted`,
+			expectFragment: true,
+			wantSubstring:  `ssql.MustStreamWindow`,
+		},
+		{
+			name:           "window-presorted-sliding-avg",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test window -avg price ma3 -order date -rows 2,0 -presorted`,
+			expectFragment: true,
+			wantSubstring:  `ssql.MustStreamWindow`,
+		},
+		{
+			name:           "window-presorted-lag",
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test window -lag salary 1 prev_sal -order date -presorted`,
+			expectFragment: true,
+			wantSubstring:  `ssql.MustStreamWindow`,
+		},
+		{
 			name:           "to csv",
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to csv /tmp/out.csv`,
 			expectFragment: true,

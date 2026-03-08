@@ -2251,3 +2251,696 @@ func applyWindowValue(mut MutableRecord, field string, val any) MutableRecord {
 		return mut
 	}
 }
+
+// ============================================================================
+// STREAMING WINDOW FUNCTIONS
+// ============================================================================
+
+// streamWindowAgg is the interface for incremental window function state.
+type streamWindowAgg interface {
+	// update processes one record and returns the current window value.
+	// pos is 0-based position within the partition.
+	// orderBy fields and prevRecord are used for RANK/DENSE_RANK.
+	update(record Record, pos int, orderBy []OrderField, prevRecord *Record) any
+	// reset clears state for a new partition.
+	reset()
+}
+
+// streamWindowLeadSpec holds a LEAD spec that requires delayed emission.
+type streamWindowLeadSpec struct {
+	field      string
+	offset     int
+	resultName string
+}
+
+// --- Concrete streaming window aggregates ---
+
+type swRowNumber struct{ pos int64 }
+
+func (s *swRowNumber) update(_ Record, _ int, _ []OrderField, _ *Record) any {
+	s.pos++
+	return s.pos
+}
+func (s *swRowNumber) reset() { s.pos = 0 }
+
+type swRank struct {
+	pos  int64 // 1-based position
+	rank int64
+}
+
+func (s *swRank) update(record Record, _ int, orderBy []OrderField, prevRecord *Record) any {
+	s.pos++
+	if prevRecord == nil || CompareRecordFields(*prevRecord, record, orderBy) != 0 {
+		s.rank = s.pos
+	}
+	return s.rank
+}
+func (s *swRank) reset() { s.pos = 0; s.rank = 0 }
+
+type swDenseRank struct {
+	rank int64
+}
+
+func (s *swDenseRank) update(record Record, _ int, orderBy []OrderField, prevRecord *Record) any {
+	if prevRecord == nil || CompareRecordFields(*prevRecord, record, orderBy) != 0 {
+		s.rank++
+	}
+	return s.rank
+}
+func (s *swDenseRank) reset() { s.rank = 0 }
+
+type swSum struct {
+	field string
+	sum   float64
+}
+
+func (s *swSum) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	if v, ok := Get[float64](record, s.field); ok {
+		s.sum += v
+	}
+	return s.sum
+}
+func (s *swSum) reset() { s.sum = 0 }
+
+type swAvg struct {
+	field string
+	sum   float64
+	count int64
+}
+
+func (s *swAvg) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	if v, ok := Get[float64](record, s.field); ok {
+		s.sum += v
+		s.count++
+	}
+	if s.count == 0 {
+		return float64(0)
+	}
+	return s.sum / float64(s.count)
+}
+func (s *swAvg) reset() { s.sum = 0; s.count = 0 }
+
+type swCount struct{ count int64 }
+
+func (s *swCount) update(_ Record, _ int, _ []OrderField, _ *Record) any {
+	s.count++
+	return s.count
+}
+func (s *swCount) reset() { s.count = 0 }
+
+type swFirst struct {
+	field    string
+	value    any
+	captured bool
+}
+
+func (s *swFirst) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	if !s.captured {
+		s.value, _ = Get[any](record, s.field)
+		s.captured = true
+	}
+	return s.value
+}
+func (s *swFirst) reset() { s.value = nil; s.captured = false }
+
+type swLast struct{ field string }
+
+func (s *swLast) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	v, _ := Get[any](record, s.field)
+	return v
+}
+func (s *swLast) reset() {}
+
+// --- Sliding window aggregates (bounded frames, ROWS N,0) ---
+
+// swSlidingSum maintains a ring buffer for sliding SUM.
+type swSlidingSum struct {
+	field    string
+	ring     []float64
+	size     int // frame size = preceding + 1
+	idx      int // write position in ring
+	sum      float64
+	filled   int // how many slots filled so far
+}
+
+func (s *swSlidingSum) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	val := float64(0)
+	if v, ok := Get[float64](record, s.field); ok {
+		val = v
+	}
+	if s.filled >= s.size {
+		s.sum -= s.ring[s.idx]
+	}
+	s.ring[s.idx] = val
+	s.sum += val
+	s.idx = (s.idx + 1) % s.size
+	if s.filled < s.size {
+		s.filled++
+	}
+	return s.sum
+}
+
+func (s *swSlidingSum) reset() {
+	for i := range s.ring {
+		s.ring[i] = 0
+	}
+	s.idx = 0
+	s.sum = 0
+	s.filled = 0
+}
+
+// swSlidingAvg maintains a ring buffer for sliding AVG.
+type swSlidingAvg struct {
+	field  string
+	ring   []float64
+	has    []bool // tracks which slots have valid values
+	size   int
+	idx    int
+	sum    float64
+	count  int
+	filled int
+}
+
+func (s *swSlidingAvg) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	val, ok := Get[float64](record, s.field)
+	if s.filled >= s.size {
+		// Evict oldest
+		if s.has[s.idx] {
+			s.sum -= s.ring[s.idx]
+			s.count--
+		}
+	}
+	s.ring[s.idx] = val
+	s.has[s.idx] = ok
+	if ok {
+		s.sum += val
+		s.count++
+	}
+	s.idx = (s.idx + 1) % s.size
+	if s.filled < s.size {
+		s.filled++
+	}
+	if s.count == 0 {
+		return float64(0)
+	}
+	return s.sum / float64(s.count)
+}
+
+func (s *swSlidingAvg) reset() {
+	for i := range s.ring {
+		s.ring[i] = 0
+		s.has[i] = false
+	}
+	s.idx = 0
+	s.sum = 0
+	s.count = 0
+	s.filled = 0
+}
+
+// swSlidingCount returns min(pos+1, frameSize).
+type swSlidingCount struct {
+	frameSize int
+	count     int64
+}
+
+func (s *swSlidingCount) update(_ Record, _ int, _ []OrderField, _ *Record) any {
+	if s.count < int64(s.frameSize) {
+		s.count++
+	}
+	return s.count
+}
+
+func (s *swSlidingCount) reset() { s.count = 0 }
+
+// swSlidingFirst maintains a ring buffer for sliding FIRST.
+type swSlidingFirst struct {
+	field  string
+	ring   []any
+	size   int
+	idx    int
+	filled int
+}
+
+func (s *swSlidingFirst) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	val, _ := Get[any](record, s.field)
+	s.ring[s.idx] = val
+	s.idx = (s.idx + 1) % s.size
+	if s.filled < s.size {
+		s.filled++
+	}
+	// Oldest element is at idx when full, or at 0 when not yet full
+	if s.filled < s.size {
+		return s.ring[0]
+	}
+	return s.ring[s.idx] // idx just advanced past newest, so it points to oldest
+}
+
+func (s *swSlidingFirst) reset() {
+	for i := range s.ring {
+		s.ring[i] = nil
+	}
+	s.idx = 0
+	s.filled = 0
+}
+
+// swRunningMin tracks the running minimum (default frame, values never leave).
+type swRunningMin struct {
+	field  string
+	minVal any
+}
+
+func (s *swRunningMin) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	v, _ := Get[any](record, s.field)
+	if s.minVal == nil || CompareAny(v, s.minVal) < 0 {
+		s.minVal = v
+	}
+	return s.minVal
+}
+
+func (s *swRunningMin) reset() { s.minVal = nil }
+
+// swRunningMax tracks the running maximum (default frame, values never leave).
+type swRunningMax struct {
+	field  string
+	maxVal any
+}
+
+func (s *swRunningMax) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	v, _ := Get[any](record, s.field)
+	if s.maxVal == nil || CompareAny(v, s.maxVal) > 0 {
+		s.maxVal = v
+	}
+	return s.maxVal
+}
+
+func (s *swRunningMax) reset() { s.maxVal = nil }
+
+// dequeEntry stores a value and its position for monotonic deque operations.
+type dequeEntry struct {
+	pos int
+	val any
+}
+
+// swSlidingMin uses a monotonic deque (ascending) for O(1) amortized MIN.
+type swSlidingMin struct {
+	field string
+	size  int
+	deque []dequeEntry
+}
+
+func (s *swSlidingMin) update(record Record, pos int, _ []OrderField, _ *Record) any {
+	v, _ := Get[any](record, s.field)
+	// Pop back entries >= new value (maintain ascending order)
+	for len(s.deque) > 0 && CompareAny(s.deque[len(s.deque)-1].val, v) >= 0 {
+		s.deque = s.deque[:len(s.deque)-1]
+	}
+	s.deque = append(s.deque, dequeEntry{pos: pos, val: v})
+	// Pop front entries outside frame
+	for len(s.deque) > 0 && s.deque[0].pos <= pos-s.size {
+		s.deque = s.deque[1:]
+	}
+	return s.deque[0].val
+}
+
+func (s *swSlidingMin) reset() { s.deque = s.deque[:0] }
+
+// swSlidingMax uses a monotonic deque (descending) for O(1) amortized MAX.
+type swSlidingMax struct {
+	field string
+	size  int
+	deque []dequeEntry
+}
+
+func (s *swSlidingMax) update(record Record, pos int, _ []OrderField, _ *Record) any {
+	v, _ := Get[any](record, s.field)
+	// Pop back entries <= new value (maintain descending order)
+	for len(s.deque) > 0 && CompareAny(s.deque[len(s.deque)-1].val, v) <= 0 {
+		s.deque = s.deque[:len(s.deque)-1]
+	}
+	s.deque = append(s.deque, dequeEntry{pos: pos, val: v})
+	// Pop front entries outside frame
+	for len(s.deque) > 0 && s.deque[0].pos <= pos-s.size {
+		s.deque = s.deque[1:]
+	}
+	return s.deque[0].val
+}
+
+func (s *swSlidingMax) reset() { s.deque = s.deque[:0] }
+
+// swLag uses a ring buffer for LAG(field, offset).
+type swLag struct {
+	field  string
+	offset int
+	ring   []any
+	idx    int
+	filled int
+}
+
+func (s *swLag) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	val, _ := Get[any](record, s.field)
+	size := s.offset + 1
+	// Store current value
+	s.ring[s.idx] = val
+	s.idx = (s.idx + 1) % size
+	if s.filled < size {
+		s.filled++
+	}
+	// Return value from offset positions ago
+	if s.filled <= s.offset {
+		return nil // not enough history yet
+	}
+	// The value we want is at (idx) mod size — it's the oldest in the ring
+	return s.ring[s.idx%size]
+}
+
+func (s *swLag) reset() {
+	for i := range s.ring {
+		s.ring[i] = nil
+	}
+	s.idx = 0
+	s.filled = 0
+}
+
+// isBoundedFrame returns true if the frame has a fixed Preceding and Following=0.
+func isBoundedFrame(frame WindowFrame) bool {
+	return frame.Preceding >= 0 && frame.Following == 0
+}
+
+// newStreamWindowAgg creates a streaming aggregate for a supported window function.
+// The frame parameter determines whether to use running (default frame) or sliding (bounded) variants.
+// Returns (nil, nil) for LEAD specs — they are handled separately via delayed emission.
+func newStreamWindowAgg(fn WindowFunc, frame WindowFrame) (streamWindowAgg, error) {
+	bounded := isBoundedFrame(frame)
+	frameSize := frame.Preceding + 1 // only valid when bounded
+
+	switch f := fn.(type) {
+	case wRowNumber:
+		return &swRowNumber{}, nil
+	case wRank:
+		return &swRank{}, nil
+	case wDenseRank:
+		return &swDenseRank{}, nil
+	case wSum:
+		if bounded {
+			return &swSlidingSum{field: f.Field, ring: make([]float64, frameSize), size: frameSize}, nil
+		}
+		return &swSum{field: f.Field}, nil
+	case wAvg:
+		if bounded {
+			return &swSlidingAvg{field: f.Field, ring: make([]float64, frameSize), has: make([]bool, frameSize), size: frameSize}, nil
+		}
+		return &swAvg{field: f.Field}, nil
+	case wCount:
+		if bounded {
+			return &swSlidingCount{frameSize: frameSize}, nil
+		}
+		return &swCount{}, nil
+	case wFirst:
+		if bounded {
+			return &swSlidingFirst{field: f.Field, ring: make([]any, frameSize), size: frameSize}, nil
+		}
+		return &swFirst{field: f.Field}, nil
+	case wLast:
+		return &swLast{field: f.Field}, nil
+	case wMin:
+		if bounded {
+			return &swSlidingMin{field: f.Field, size: frameSize}, nil
+		}
+		return &swRunningMin{field: f.Field}, nil
+	case wMax:
+		if bounded {
+			return &swSlidingMax{field: f.Field, size: frameSize}, nil
+		}
+		return &swRunningMax{field: f.Field}, nil
+	case wLag:
+		ring := make([]any, f.Offset+1)
+		return &swLag{field: f.Field, offset: f.Offset, ring: ring}, nil
+	case wLead:
+		return nil, nil // handled separately via delayed emission
+	case wNtile:
+		return nil, fmt.Errorf("NTILE cannot be streamed (requires partition size)")
+	case wPercentRank:
+		return nil, fmt.Errorf("PERCENT_RANK cannot be streamed (requires partition size)")
+	default:
+		return nil, fmt.Errorf("unknown window function type: %T", fn)
+	}
+}
+
+// canStreamWindow checks if a single WindowConfig can be computed in streaming mode.
+func canStreamWindow(cfg WindowConfig) error {
+	if cfg.Frame.Following < 0 {
+		return fmt.Errorf("streaming window does not support UNBOUNDED FOLLOWING")
+	}
+	if cfg.Frame.Following > 0 {
+		return fmt.Errorf("streaming window does not yet support Following > 0; use Window() instead")
+	}
+	for _, spec := range cfg.Specs {
+		if _, err := newStreamWindowAgg(spec.Function, cfg.Frame); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// samePartitionOrder checks if two configs have the same partition and order fields.
+func samePartitionOrder(a, b WindowConfig) bool {
+	if len(a.PartitionBy) != len(b.PartitionBy) {
+		return false
+	}
+	for i := range a.PartitionBy {
+		if a.PartitionBy[i] != b.PartitionBy[i] {
+			return false
+		}
+	}
+	if len(a.OrderBy) != len(b.OrderBy) {
+		return false
+	}
+	for i := range a.OrderBy {
+		if a.OrderBy[i] != b.OrderBy[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// validateStreamWindowConfigs validates that all configs can stream and share the same partition/order.
+func validateStreamWindowConfigs(configs []WindowConfig) error {
+	for i, cfg := range configs {
+		if err := canStreamWindow(cfg); err != nil {
+			return fmt.Errorf("clause %d: %w", i+1, err)
+		}
+		if i > 0 && !samePartitionOrder(configs[0], cfg) {
+			return fmt.Errorf("streaming window requires all clauses to share the same partition and order fields")
+		}
+	}
+	return nil
+}
+
+// StreamWindow applies window functions in streaming mode with O(1) memory per aggregate.
+// Input MUST be presorted by partition fields then order fields.
+// Supports default frame (UNBOUNDED PRECEDING TO CURRENT ROW) and bounded frames (ROWS N,0).
+// LAG emits immediately via ring buffer. LEAD uses delayed emission with a lookahead buffer.
+// For Following > 0 or unsorted input, use Window() instead.
+func StreamWindow(configs []WindowConfig) (Filter[Record, Record], error) {
+	if err := validateStreamWindowConfigs(configs); err != nil {
+		return nil, err
+	}
+
+	// Pre-build all streaming aggregates, separating LEAD specs
+	var regularAggs []swSpecAgg
+	var leadSpecs []streamWindowLeadSpec
+	maxLeadOffset := 0
+
+	for _, cfg := range configs {
+		for _, spec := range cfg.Specs {
+			agg, _ := newStreamWindowAgg(spec.Function, cfg.Frame) // already validated
+			if agg == nil {
+				// LEAD — handled via delayed emission
+				lead := spec.Function.(wLead)
+				leadSpecs = append(leadSpecs, streamWindowLeadSpec{
+					field:      lead.Field,
+					offset:     lead.Offset,
+					resultName: spec.ResultName,
+				})
+				if lead.Offset > maxLeadOffset {
+					maxLeadOffset = lead.Offset
+				}
+			} else {
+				regularAggs = append(regularAggs, swSpecAgg{resultName: spec.ResultName, agg: agg})
+			}
+		}
+	}
+
+	// Use first config's partition/order (all are the same after validation)
+	partitionBy := configs[0].PartitionBy
+	orderBy := configs[0].OrderBy
+
+	if len(leadSpecs) == 0 {
+		// No LEAD — immediate emission path (same as Phase 1 but with new agg types)
+		return streamWindowImmediate(regularAggs, partitionBy, orderBy), nil
+	}
+
+	// LEAD present — delayed emission path
+	return streamWindowDelayed(regularAggs, leadSpecs, maxLeadOffset, partitionBy, orderBy), nil
+}
+
+// streamWindowImmediate emits records immediately (no LEAD specs).
+func streamWindowImmediate(allAggs []swSpecAgg, partitionBy []string, orderBy []OrderField) Filter[Record, Record] {
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			var prevKey string
+			var prevRecord *Record
+			firstRecord := true
+			pos := 0
+
+			for record := range input {
+				key := buildGroupKey(record, partitionBy)
+
+				if firstRecord {
+					firstRecord = false
+					prevKey = key
+				} else if key != prevKey {
+					for _, sa := range allAggs {
+						sa.agg.reset()
+					}
+					prevRecord = nil
+					prevKey = key
+					pos = 0
+				}
+
+				mut := record.ToMutable()
+				for _, sa := range allAggs {
+					val := sa.agg.update(record, pos, orderBy, prevRecord)
+					if val == nil {
+						mut.fields[sa.resultName] = nil
+					} else {
+						mut = applyWindowValue(mut, sa.resultName, val)
+					}
+				}
+
+				r := mut.Freeze()
+				prevRecord = &r
+				pos++
+
+				if !yield(r) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// swSpecAgg pairs a result name with its streaming aggregate.
+type swSpecAgg struct {
+	resultName string
+	agg        streamWindowAgg
+}
+
+// pendingRecord holds a record with its pre-computed regular agg values, awaiting LEAD values.
+type pendingRecord struct {
+	record    Record
+	aggValues map[string]any
+}
+
+// streamWindowDelayed handles LEAD specs by buffering records for lookahead.
+func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSpec, maxLeadOffset int, partitionBy []string, orderBy []OrderField) Filter[Record, Record] {
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			var prevKey string
+			var prevRecord *Record
+			firstRecord := true
+			pos := 0
+			var buf []pendingRecord
+
+			emitRecord := func(pr pendingRecord, bufIdx int, bufLen int) bool {
+				mut := pr.record.ToMutable()
+				// Apply regular agg values
+				for name, val := range pr.aggValues {
+					if val == nil {
+						mut.fields[name] = nil
+					} else {
+						mut = applyWindowValue(mut, name, val)
+					}
+				}
+				// Apply LEAD values
+				for _, ls := range leadSpecs {
+					lookIdx := bufIdx + ls.offset
+					if lookIdx < bufLen {
+						v, _ := Get[any](buf[lookIdx].record, ls.field)
+						if v == nil {
+							mut.fields[ls.resultName] = nil
+						} else {
+							mut = applyWindowValue(mut, ls.resultName, v)
+						}
+					} else {
+						mut.fields[ls.resultName] = nil
+					}
+				}
+				return yield(mut.Freeze())
+			}
+
+			flushBuf := func() bool {
+				for i := range buf {
+					if !emitRecord(buf[i], i, len(buf)) {
+						buf = buf[:0]
+						return false
+					}
+				}
+				buf = buf[:0]
+				return true
+			}
+
+			for record := range input {
+				key := buildGroupKey(record, partitionBy)
+
+				if firstRecord {
+					firstRecord = false
+					prevKey = key
+				} else if key != prevKey {
+					// Partition changed — flush buffer, reset
+					if !flushBuf() {
+						return
+					}
+					for _, sa := range regularAggs {
+						sa.agg.reset()
+					}
+					prevRecord = nil
+					prevKey = key
+					pos = 0
+				}
+
+				// Compute regular aggs for this record
+				vals := make(map[string]any, len(regularAggs))
+				for _, sa := range regularAggs {
+					vals[sa.resultName] = sa.agg.update(record, pos, orderBy, prevRecord)
+				}
+				buf = append(buf, pendingRecord{record: record, aggValues: vals})
+
+				// Emit oldest when buffer exceeds delay
+				if len(buf) > maxLeadOffset {
+					if !emitRecord(buf[0], 0, len(buf)) {
+						return
+					}
+					buf = buf[1:]
+				}
+
+				prevRecord2 := record
+				prevRecord = &prevRecord2
+				pos++
+			}
+
+			// Flush remaining records (LEAD values will be nil for tail)
+			flushBuf()
+		}
+	}
+}
+
+// MustStreamWindow is like StreamWindow but panics on error.
+// Useful in generated code where configs are known-valid at generation time.
+func MustStreamWindow(configs []WindowConfig) Filter[Record, Record] {
+	f, err := StreamWindow(configs)
+	if err != nil {
+		panic(fmt.Sprintf("MustStreamWindow: %v", err))
+	}
+	return f
+}
