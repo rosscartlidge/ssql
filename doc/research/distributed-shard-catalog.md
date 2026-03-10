@@ -138,7 +138,7 @@ Each machine publishes its own catalog describing its local shards. The query me
 # /data/events/2025-02.csv,csv,2025-02-01,2025-02-28
 
 # Query merges catalogs from all machines
-ssql from -catalog-hosts machine-1,machine-2,machine-3 \
+ssql from -catalog-hosts machine-1 machine-2 machine-3 \
   | ssql where -where date ge 2025-03-01 | ssql to table
 ```
 
@@ -181,7 +181,7 @@ No catalog file at all — discover shards by globbing on remote machines.
 
 ```bash
 # Discover shards matching a pattern on each machine
-ssql from -discover machine-1,machine-2,machine-3 \
+ssql from -discover machine-1 machine-2 machine-3 \
   -pattern '/data/events/*.csv' \
   | ssql to table
 ```
@@ -199,7 +199,7 @@ Pattern 4 (auto-discovery) is useful as a one-time tool to *generate* a catalog:
 
 ```bash
 # Generate a catalog by discovering files
-ssql catalog-discover machine-1,machine-2,machine-3 \
+ssql catalog-discover machine-1 machine-2 machine-3 \
   -pattern '/data/events/*.csv' \
   > shards.csv
 
