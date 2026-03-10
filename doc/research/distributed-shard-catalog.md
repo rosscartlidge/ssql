@@ -6,7 +6,7 @@
 
 ## Problem Statement
 
-When a dataset spans multiple files across multiple machines, you need a way to discover and locate shards before you can process them. Today, `from ssh://server/data/file.csv` addresses a single known file. But real distributed datasets look like:
+When a dataset spans multiple files across multiple machines, you need a way to discover and locate shards before you can process them. Today, `from ssh server /data/file.csv` addresses a single known file. But real distributed datasets look like:
 
 ```
 machine-1:/data/events/2025-01.csv    (January events)
@@ -41,15 +41,15 @@ Usage:
 
 ```bash
 # Read all shards
-ssql from -catalog shards.csv | ssql where -where status eq error | ssql to table
+ssql from catalog shards.csv | ssql where -where status eq error | ssql to table
 
 # Equivalent to (but automatic):
 ssql union \
-  <(ssql from ssh://machine-1/data/events/2025-01.csv) \
-  <(ssql from ssh://machine-1/data/events/2025-02.csv) \
-  <(ssql from ssh://machine-2/data/events/2025-03.csv) \
-  <(ssql from ssh://machine-2/data/events/2025-04.csv) \
-  <(ssql from ssh://machine-3/data/events/2025-05.csv) \
+  <(ssql from sshmachine-1/data/events/2025-01.csv) \
+  <(ssql from sshmachine-1/data/events/2025-02.csv) \
+  <(ssql from sshmachine-2/data/events/2025-03.csv) \
+  <(ssql from sshmachine-2/data/events/2025-04.csv) \
+  <(ssql from sshmachine-3/data/events/2025-05.csv) \
   | ssql where -where status eq error | ssql to table
 ```
 
@@ -72,11 +72,11 @@ Empty `date_to` means "ongoing" (current shard). Empty date fields mean "all dat
 
 ```bash
 # Only reads shards covering March 2025 — skips machine-1 and machine-3
-ssql from -catalog shards.csv -where date ge 2025-03-01 -where date le 2025-03-31 \
+ssql from catalog shards.csv -where date ge 2025-03-01 -where date le 2025-03-31 \
   | ssql group-by -field service -count | ssql to table
 
 # Only reads the europe shard
-ssql from -catalog shards.csv -where region eq europe \
+ssql from catalog shards.csv -where region eq europe \
   | ssql to json
 ```
 
@@ -114,11 +114,11 @@ One machine holds the catalog. Users copy it or access it via SSH.
 
 ```bash
 # Catalog lives on a known machine
-ssql from -catalog ssh://catalog-server/etc/ssql/shards.csv | ssql to table
+ssql from ssh catalog-server /etc/ssql/shards.csv | ssql to table
 
 # Or keep a local copy
 scp catalog-server:/etc/ssql/shards.csv ~/.ssql/catalogs/events.csv
-ssql from -catalog ~/.ssql/catalogs/events.csv | ssql to table
+ssql from catalog ~/.ssql/catalogs/events.csv | ssql to table
 ```
 
 **Pros:** Dead simple. One file to maintain.
@@ -138,7 +138,7 @@ Each machine publishes its own catalog describing its local shards. The query me
 # /data/events/2025-02.csv,csv,2025-02-01,2025-02-28
 
 # Query merges catalogs from all machines
-ssql from -catalog-hosts machine-1 machine-2 machine-3 \
+ssql from catalog-hosts machine-1 machine-2 machine-3 \
   | ssql where -where date ge 2025-03-01 | ssql to table
 ```
 
@@ -147,13 +147,13 @@ This desugars to:
 ```bash
 # 1. Fetch and merge catalogs
 ssql union \
-  <(ssql from ssh://machine-1/etc/ssql/catalog.csv | ssql update -set host machine-1) \
-  <(ssql from ssh://machine-2/etc/ssql/catalog.csv | ssql update -set host machine-2) \
-  <(ssql from ssh://machine-3/etc/ssql/catalog.csv | ssql update -set host machine-3) \
+  <(ssql from sshmachine-1/etc/ssql/catalog.csv | ssql update -set host machine-1) \
+  <(ssql from sshmachine-2/etc/ssql/catalog.csv | ssql update -set host machine-2) \
+  <(ssql from sshmachine-3/etc/ssql/catalog.csv | ssql update -set host machine-3) \
   > /tmp/merged-catalog.csv
 
 # 2. Use merged catalog
-ssql from -catalog /tmp/merged-catalog.csv -where date ge 2025-03-01 | ssql to table
+ssql from catalog /tmp/merged-catalog.csv -where date ge 2025-03-01 | ssql to table
 ```
 
 **Pros:** Each machine owns its own catalog. No central coordination.
@@ -166,10 +166,10 @@ Catalog stored in a shared filesystem, git repo, or object store.
 ```bash
 # Git-managed catalog (versioned, auditable)
 git clone git@github.com:team/data-catalog.git ~/.ssql/catalog
-ssql from -catalog ~/.ssql/catalog/events.csv | ssql to table
+ssql from catalog ~/.ssql/catalog/events.csv | ssql to table
 
 # NFS/shared filesystem
-ssql from -catalog /shared/ssql/catalogs/events.csv | ssql to table
+ssql from catalog /shared/ssql/catalogs/events.csv | ssql to table
 ```
 
 **Pros:** Versioned, shared, can be updated by CI/CD when data is ingested.
@@ -205,7 +205,7 @@ ssql catalog-discover machine-1 machine-2 machine-3 \
 
 # Edit to add range metadata, then use
 vi shards.csv
-ssql from -catalog shards.csv | ssql to table
+ssql from catalog shards.csv | ssql to table
 ```
 
 ## Catalog File Format Details
@@ -224,10 +224,10 @@ eu-west-1,/data/logs/2025-01-free.csv,csv,2025-01-01,2025-01-31,eu-west,free
 
 ```bash
 # Prunes to just the 2 premium shards
-ssql from -catalog shards.csv -where tier eq premium | ssql to table
+ssql from catalog shards.csv -where tier eq premium | ssql to table
 
 # Prunes to 1 shard: us-east premium January
-ssql from -catalog shards.csv \
+ssql from catalog shards.csv \
   -where tier eq premium \
   -where region eq us-east \
   -where date ge 2025-01-01 -where date le 2025-01-31 \
@@ -247,7 +247,7 @@ server-uk,/data/sales/uk.csv,csv,GB
 
 ```bash
 # Reads only the AU shard
-ssql from -catalog shards.csv -where country eq AU | ssql to table
+ssql from catalog shards.csv -where country eq AU | ssql to table
 ```
 
 ### Static metadata columns
@@ -283,10 +283,10 @@ Read shards in parallel, bounded by a concurrency limit:
 
 ```bash
 # Default: 4 concurrent SSH connections
-ssql from -catalog shards.csv | ssql to table
+ssql from catalog shards.csv | ssql to table
 
 # Higher parallelism
-ssql from -catalog shards.csv -parallel 8 | ssql to table
+ssql from catalog shards.csv -parallel 8 | ssql to table
 ```
 
 Shards on the same host can share an SSH connection (multiplexed via ControlMaster). Shards on different hosts run truly in parallel.
@@ -297,7 +297,7 @@ By default, records arrive in arbitrary order (whichever shard responds first). 
 
 ```bash
 # Merge by date across shards (requires shards to be pre-sorted by date)
-ssql from -catalog shards.csv -merge date | ssql to table
+ssql from catalog shards.csv -merge date | ssql to table
 ```
 
 Each shard must be sorted by the merge field, but the shards themselves can arrive in any order.
@@ -312,14 +312,14 @@ With multiple machines, SSH failures are inevitable — hosts go down, keys expi
 
 ```bash
 # Default: fail on first error
-ssql from -catalog shards.csv | ssql to table
+ssql from catalog shards.csv | ssql to table
 
 # Skip failed shards, log warnings to stderr
-ssql from -catalog shards.csv -on-error skip | ssql to table
+ssql from catalog shards.csv -on-error skip | ssql to table
 # stderr: WARN: shard machine-2:/data/events/2025-03.csv failed: ssh: connect to host machine-2: Connection refused
 
 # Retry once per shard, then skip
-ssql from -catalog shards.csv -on-error retry | ssql to table
+ssql from catalog shards.csv -on-error retry | ssql to table
 ```
 
 **Shard provenance with `-shard-field`:**
@@ -328,7 +328,7 @@ To make it visible which records came from which shard (and obvious when a shard
 
 ```bash
 # Each record gets a _shard field showing its origin
-ssql from -catalog shards.csv -shard-field _shard | ssql to table
+ssql from catalog shards.csv -shard-field _shard | ssql to table
 
 # Output includes:
 # _shard                              | name  | age
@@ -340,7 +340,7 @@ This composes well with `-on-error skip` — you can see which shards contribute
 
 ```bash
 # Check which shards actually responded
-ssql from -catalog shards.csv -on-error skip -shard-field _shard \
+ssql from catalog shards.csv -on-error skip -shard-field _shard \
   | ssql distinct -field _shard | ssql to table
 ```
 
@@ -363,7 +363,7 @@ When the pipeline contains filters or aggregations, push them to each shard:
 
 ```bash
 # This pushes the where + group-by to each shard
-ssql from -catalog shards.csv \
+ssql from catalog shards.csv \
   -remote 'where -where status eq error | group-by -field service -count' \
   | ssql group-by -field service -sum count \
   | ssql to table
@@ -374,7 +374,7 @@ Note the two-level aggregation: each shard groups locally, then results are re-a
 ## Code Generation
 
 ```bash
-SSQLGO=1 ssql from -catalog shards.csv | ssql generate-go
+SSQLGO=1 ssql from catalog shards.csv | ssql generate-go
 ```
 
 Generated code:
@@ -388,7 +388,7 @@ import (
 )
 
 func main() {
-    // ssql from -catalog shards.csv
+    // ssql from catalog shards.csv
     catalog, err := ssql.ReadCatalog("shards.csv")
     if err != nil {
         // error handling
@@ -442,12 +442,12 @@ The `merge` command (v4.26.0) already handles k-way merge of pre-sorted inputs. 
 ```bash
 # Today: explicit merge of known files
 ssql merge -field timestamp \
-  <(ssql from ssh://m1/data/jan.csv) \
-  <(ssql from ssh://m2/data/feb.csv) \
-  <(ssql from ssh://m3/data/mar.csv)
+  <(ssql from sshm1/data/jan.csv) \
+  <(ssql from sshm2/data/feb.csv) \
+  <(ssql from sshm3/data/mar.csv)
 
 # Future: catalog-driven merge
-ssql from -catalog shards.csv -merge timestamp
+ssql from catalog shards.csv -merge timestamp
 ```
 
 The `-merge-sort` flag on `from -catalog` is syntactic sugar that constructs the same k-way merge internally.

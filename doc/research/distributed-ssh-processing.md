@@ -14,7 +14,7 @@ scp server:/data/logs.csv .
 ssql from logs.csv | ssql where -where status eq error | ssql group-by -field service -count
 
 # Tomorrow: process where the data lives, stream 200 bytes of results
-ssql from ssh://server/data/logs.csv | ssql where -where status eq error | ssql group-by -field service -count
+ssql from ssh server /data/logs.csv | ssql where -where status eq error | ssql group-by -field service -count
 ```
 
 Moving data is slow, expensive, and often unnecessary. Most pipelines reduce — filtering, aggregating, grouping — so the result is orders of magnitude smaller than the input. The ideal architecture processes data where it lives and streams only the reduced result back to the local machine.
@@ -36,11 +36,11 @@ The alternative — a dedicated ssql daemon with gRPC or HTTP — adds operation
 
 ## What Already Works Today
 
-ssql's `from -- command` pattern already supports a degenerate form of distributed processing:
+ssql's `from command --` pattern already supports a degenerate form of distributed processing:
 
 ```bash
 # This works RIGHT NOW — runs ssql on the remote machine, streams JSONL back
-ssql from -- ssh server 'ssql from /data/logs.csv | ssql where -where status eq error' \
+ssql from command -- ssh server 'ssql from /data/logs.csv | ssql where -where status eq error' \
   | ssql group-by -field service -count \
   | ssql to table
 ```
@@ -63,51 +63,51 @@ The pieces exist. The design is about making them seamless.
 
 ### Remote file references
 
-The simplest extension: a `ssh://` prefix on file paths.
+The `from ssh` subcommand takes host and path as separate arguments (autocli style — no URL parsing needed):
 
 ```bash
 # Read a remote file — runs ssql on the remote machine
-ssql from ssh://server/data/logs.csv
+ssql from ssh server /data/logs.csv
 
 # With explicit user
-ssql from ssh://alice@analytics-box/data/sales.csv
+ssql from ssh alice@analytics-box /data/sales.csv
 
 # SSH config alias (most common in practice)
-ssql from ssh://prod-db/export/users.csv
+ssql from ssh prod-db /export/users.csv
 ```
 
 This desugars to:
 
 ```bash
-ssql from -- ssh server 'ssql from /data/logs.csv'
+ssql from command -- ssh server 'ssql from /data/logs.csv'
 ```
 
 ### Remote pipeline segments
 
-When `from` is followed by transform commands, the optimizer can push filters and aggregations to the remote side:
+When `from ssh` is followed by transform commands, the optimizer can push filters and aggregations to the remote side:
 
 ```bash
 # Naive: stream all records, filter locally
-ssql from ssh://server/data/logs.csv | ssql where -where status eq error
+ssql from ssh server /data/logs.csv | ssql where -where status eq error
 
 # Optimized: filter remotely, stream only matching records
 # Internally becomes:
 # ssh server 'ssql from /data/logs.csv | ssql where -where status eq error'
 ```
 
-The key insight: any chain of commands between a remote `from` and a local-only command (like `to chart`, `join` with a local file, or `to explore`) can be pushed to the remote side.
+The key insight: any chain of commands between a remote `from ssh` and a local-only command (like `to chart`, `join` with a local file, or `to explore`) can be pushed to the remote side.
 
 ### Explicit remote blocks
 
-For complex cases, an explicit `--remote` / `--local` boundary:
+For complex cases, an explicit `-remote` boundary:
 
 ```bash
-ssql from ssh://server/data/logs.csv \
-  --remote 'where -where status eq error | group-by -field service -count' \
+ssql from ssh server /data/logs.csv \
+  -remote 'where -where status eq error | group-by -field service -count' \
   | ssql to table
 ```
 
-This makes the split point unambiguous. Everything in `--remote` runs on the server; everything after the pipe runs locally.
+This makes the split point unambiguous. Everything in `-remote` runs on the server; everything after the pipe runs locally.
 
 ### Multi-source pipelines
 
@@ -116,13 +116,13 @@ Remote sources in joins and unions:
 ```bash
 # Join local data with remote lookup table
 ssql from local_orders.csv \
-  | ssql join ssh://warehouse/data/products.csv -on product_id -as name product_name
+  | ssql join <(ssql from ssh warehouse /data/products.csv) -on product_id -as name product_name
 
 # Union data from multiple servers
 ssql union \
-  <(ssql from ssh://server1/data/events.csv) \
-  <(ssql from ssh://server2/data/events.csv) \
-  <(ssql from ssh://server3/data/events.csv) \
+  <(ssql from ssh server1 /data/events.csv) \
+  <(ssql from ssh server2 /data/events.csv) \
+  <(ssql from ssh server3 /data/events.csv) \
   | ssql group-by -field event_type -count
 ```
 
@@ -132,16 +132,16 @@ When the remote machine has `ssql_gpu`:
 
 ```bash
 # Explicitly request GPU pipeline
-ssql from ssh://gpu-box/data/signal.csv --gpu \
+ssql from ssh gpu-box /data/signal.csv -gpu \
   | ssql fft -field amplitude \
   | ssql to chart -x frequency -y magnitude
 
 # Auto-detect: if remote has ssql_gpu, use it
-ssql from ssh://gpu-box/data/signal.csv \
+ssql from ssh gpu-box /data/signal.csv \
   | ssql convolve -field signal -kernel lowpass.csv
 ```
 
-The `--gpu` flag tells the remote side to use `ssql_gpu` instead of `ssql`. Auto-detection is a nice-to-have: `ssh server 'which ssql_gpu'` on first connection, cached in `~/.ssh/ssql-capabilities`.
+The `-gpu` flag tells the remote side to use `ssql_gpu` instead of `ssql`. Auto-detection is a nice-to-have: `ssh server 'which ssql_gpu'` on first connection, cached in `~/.ssh/ssql-capabilities`.
 
 ## Wire Format
 
@@ -190,30 +190,31 @@ For reduced results (post-aggregation), even WAN is fast enough — a `group-by`
 
 ## Implementation Phases
 
-### Phase 1: ssh:// URL support in `from` (minimal)
+### Phase 1: `from ssh` subcommand (minimal)
 
-Add `ssh://` URL parsing to the `from` command. No optimization — just syntactic sugar over `from -- ssh`.
+Add `from ssh` subcommand to the `from` command tree. No optimization — just syntactic sugar over `from command -- ssh`.
 
 **Changes:**
-- `cmd/ssql/commands/from.go` — detect `ssh://` prefix, parse host/path, construct SSH command
+- `cmd/ssql/commands/from.go` — add `registerFromSSH()` with HOST and PATH arguments
 - Code generation: emit `ssql.ExecCommand("ssh", []string{host, "ssql from " + path})`
 
 ```go
-// In from.go handler, before file format detection:
-if strings.HasPrefix(filename, "ssh://") {
-    host, remotePath := parseSSHURL(filename)
-    if shouldGenerate(generate) {
-        return generateFromSSHCode(host, remotePath)
-    }
-    // Execute: ssh host 'ssql from /remote/path'
-    records, err = ssql.ExecCommand("ssh", []string{host, fmt.Sprintf("ssql from %s", shellQuote(remotePath))})
-    return writeWithInferredSchema(records, ...)
+func registerFromSSH(cmd *cf.SubcommandBuilder) {
+    cmd.Subcommand("ssh").
+        Description("Read from a remote file via SSH").
+        Example("ssql from ssh server /data/logs.csv | ssql to table", "Read remote CSV").
+        Flag("HOST").String().Global().Help("SSH host (from ~/.ssh/config)").Done().
+        Flag("PATH").String().Global().Help("Remote file path").Done().
+        Flag("-remote").String().Global().Help("Pipeline to push down to remote").Done().
+        Flag("-generate", "-g").Bool().Global().Help("Generate Go code").Done().
+        Handler(fromSSHHandler).
+        Done()
 }
 ```
 
-**Effort:** Small. URL parsing + SSH command construction.
+**Effort:** Small. Subcommand registration + SSH command construction.
 
-**What it enables:** `ssql from ssh://server/data/file.csv | ssql where ...` works, with all processing happening locally after the remote `from`.
+**What it enables:** `ssql from ssh server /data/logs.csv | ssql where ...` works, with all processing happening locally after the remote `from`.
 
 ### Phase 2: Pipeline push-down
 
@@ -225,32 +226,30 @@ In practice, this requires a new mechanism: the `from` command doesn't know what
 
 **Approach A: Two-pass execution.** First pass with `SSQLPUSHDOWN=1` collects the pipeline description; second pass executes with the remote portion pushed down. This is complex.
 
-**Approach B: Explicit remote block.** The user specifies what runs remotely via `--remote`. Simple, predictable, no magic.
+**Approach B: Explicit remote block.** The user specifies what runs remotely via `-remote`. Simple, predictable, no magic.
 
 **Recommendation:** Start with Approach B. Users who understand their pipeline can make the split explicit. Approach A is a future optimization.
 
 ```bash
 # Explicit push-down
-ssql from ssh://server/data/logs.csv \
-  --remote 'where -where status eq error | group-by -field service -count' \
+ssql from ssh server /data/logs.csv \
+  -remote 'where -where status eq error | group-by -field service -count' \
   | ssql to table
 ```
 
 **Implementation:**
-- Parse `--remote` flag value as a pipeline string
+- Parse `-remote` flag value as a pipeline string
 - Construct: `ssh host 'ssql from /path | ssql <remote-pipeline>'`
 - Stream the result (post-aggregation JSONL) back to local stdin
 
 ### Phase 3: Remote source in join/union
 
-Enable `ssh://` URLs as the right-side file in `join` and as sources in `union`.
+Enable `from ssh` as a source in joins and unions via process substitution.
 
 **For join:**
-```go
-// In join.go, when rightFile starts with "ssh://":
-host, remotePath := parseSSHURL(rightFile)
-// Read right side via SSH
-rightRecords := ssql.ExecCommand("ssh", []string{host, fmt.Sprintf("ssql from %s", shellQuote(remotePath))})
+```bash
+ssql from local.csv \
+  | ssql join <(ssql from ssh warehouse /data/products.csv) -on product_id
 ```
 
 This is structurally identical to how join already handles process substitution — the right-side records come from a subprocess instead of a file.
@@ -259,12 +258,12 @@ This is structurally identical to how join already handles process substitution 
 ```bash
 # Each source can be local or remote
 ssql union \
-  <(ssql from ssh://server1/data/part1.csv) \
+  <(ssql from ssh server1 /data/part1.csv) \
   <(ssql from local_part2.csv) \
   | ssql to json
 ```
 
-This already works with the Phase 1 `from` changes, since `<(ssql from ssh://...)` is just process substitution.
+This already works with the `from ssh` subcommand, since `<(ssql from ssh ...)` is just process substitution.
 
 ### Phase 4: Code generation for remote pipelines
 
@@ -272,7 +271,7 @@ Extend `generate-go` to handle remote fragments.
 
 **For simple remote reads:**
 ```go
-// Generated code for: ssql from ssh://server/data/logs.csv
+// Generated code for: ssql from ssh server /data/logs.csv
 records, err := ssql.ExecCommand("ssh", []string{"server", "ssql from /data/logs.csv"})
 if err != nil {
     fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -282,7 +281,7 @@ if err != nil {
 
 **For push-down pipelines:**
 ```go
-// Generated code for: ssql from ssh://server/data/logs.csv --remote 'where -where status eq error'
+// Generated code for: ssql from ssh server /data/logs.csv -remote 'where -where status eq error'
 records, err := ssql.ExecCommand("ssh", []string{
     "server",
     "ssql from /data/logs.csv | ssql where -where status eq error",
@@ -317,8 +316,8 @@ Remote GPU processing extends naturally from the syntax:
 
 ```bash
 # Remote FFT on GPU server
-ssql from ssh://gpu-server/data/signal.wav \
-  --remote 'fft -field amplitude' \
+ssql from ssh gpu-server /data/signal.wav \
+  -remote 'fft -field amplitude' \
   | ssql to chart -x frequency -y magnitude
 ```
 
@@ -353,7 +352,7 @@ Cache results in `~/.cache/ssql/hosts.json`:
 ```
 
 **Auto-selection logic:**
-1. If `--gpu` flag: use `ssql_gpu`, fail if not available
+1. If `-gpu` flag: use `ssql_gpu`, fail if not available
 2. If command benefits from GPU (fft, convolve): use `ssql_gpu` if available
 3. Otherwise: use `ssql`
 
@@ -364,8 +363,8 @@ Cache results in `~/.cache/ssql/hosts.json`:
 The most common case. Filter/aggregate on the server, visualize locally.
 
 ```bash
-ssql from ssh://prod/data/access_log.csv \
-  --remote 'where -where response_code ge 500 | group-by -field endpoint -count' \
+ssql from ssh prod /data/access_log.csv \
+  -remote 'where -where response_code ge 500 | group-by -field endpoint -count' \
   | ssql sort -field count -desc \
   | ssql to chart -x endpoint -y count -type bar
 ```
@@ -387,9 +386,9 @@ Process the same dataset with different aggregations in parallel.
 ```bash
 # Three aggregations, one SSH connection (with ControlMaster)
 ssql union \
-  <(ssql from ssh://server/data/sales.csv --remote 'group-by -field region -sum revenue') \
-  <(ssql from ssh://server/data/sales.csv --remote 'group-by -field product -avg price') \
-  <(ssql from ssh://server/data/sales.csv --remote 'group-by -field month -count') \
+  <(ssql from ssh server /data/sales.csv -remote 'group-by -field region -sum revenue') \
+  <(ssql from ssh server /data/sales.csv -remote 'group-by -field product -avg price') \
+  <(ssql from ssh server /data/sales.csv -remote 'group-by -field month -count') \
   | ssql to explore output.html
 ```
 
@@ -401,7 +400,7 @@ Local stream enriched with remote lookup data.
 
 ```bash
 ssql from local_events.csv \
-  | ssql join ssh://warehouse/data/products.csv -on product_id -as name product_name \
+  | ssql join <(ssql from ssh warehouse /data/products.csv) -on product_id -as name product_name \
   | ssql to table
 ```
 
@@ -412,8 +411,8 @@ The join command fetches the remote lookup table once, builds an index, then mat
 Join data from two different servers.
 
 ```bash
-ssql from ssh://web-server/logs/access.csv \
-  --remote 'where -where status ge 500' \
+ssql from ssh web-server /logs/access.csv \
+  -remote 'where -where status ge 500' \
   | ssql join <(ssh db-server 'ssql from /logs/queries.csv | ssql where -where duration gt 1000') \
     -on request_id \
   | ssql to table
@@ -426,8 +425,8 @@ Both servers filter locally; only matching records travel to the local machine f
 Offload compute to GPU server, visualize locally.
 
 ```bash
-ssql from ssh://gpu-box/data/audio.wav \
-  --remote 'fft -field amplitude | to animate -frame segment -x freq -y time -z magnitude' \
+ssql from ssh gpu-box /data/audio.wav \
+  -remote 'fft -field amplitude | to animate -frame segment -x freq -y time -z magnitude' \
   | ssql to table
 ```
 
@@ -435,8 +434,8 @@ Wait — this doesn't quite work. The `to animate` generates HTML, not JSONL. Be
 
 ```bash
 # FFT on GPU, stream frequency data locally, visualize locally
-ssql from ssh://gpu-box/data/audio.wav \
-  --remote 'fft -field amplitude' \
+ssql from ssh gpu-box /data/audio.wav \
+  -remote 'fft -field amplitude' \
   | ssql to animate -frame segment -x freq -y time -z magnitude
 ```
 
@@ -449,7 +448,7 @@ Code generation (`SSQLGO=1 ... | ssql generate-go`) handles remote pipelines by 
 ### Simple remote read
 
 ```bash
-SSQLGO=1 ssql from ssh://server/data/logs.csv | ssql where -where status eq error | ssql generate-go
+SSQLGO=1 ssql from ssh server /data/logs.csv | ssql where -where status eq error | ssql generate-go
 ```
 
 Generated:
@@ -465,7 +464,7 @@ import (
 )
 
 func main() {
-    // ssql from ssh://server/data/logs.csv
+    // ssql from ssh server /data/logs.csv
     records, err := ssql.ExecCommand("ssh", []string{"server", "ssql from /data/logs.csv"})
     if err != nil {
         fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -484,8 +483,8 @@ func main() {
 ### With push-down
 
 ```bash
-SSQLGO=1 ssql from ssh://server/data/logs.csv \
-  --remote 'where -where status eq error' \
+SSQLGO=1 ssql from ssh server /data/logs.csv \
+  -remote 'where -where status eq error' \
   | ssql group-by -field service -count \
   | ssql generate-go
 ```
@@ -503,7 +502,7 @@ import (
 )
 
 func main() {
-    // ssql from ssh://server/data/logs.csv --remote 'where -where status eq error'
+    // ssql from ssh server /data/logs.csv -remote 'where -where status eq error'
     records, err := ssql.ExecCommand("ssh", []string{
         "server",
         "ssql from /data/logs.csv | ssql where -where status eq error",
@@ -584,7 +583,7 @@ SSH wins for ssql's use case: ad-hoc exploration of data on remote machines by i
 
 1. **No new infrastructure.** SSH is already there. Don't make users install daemons.
 2. **Explicit is better than magic.** Users declare what runs remotely. No invisible optimization that changes semantics.
-3. **Degrade gracefully.** If SSH is slow, the pipeline still works — just slower. If the remote lacks ssql, `from --` with explicit commands still works.
+3. **Degrade gracefully.** If SSH is slow, the pipeline still works — just slower. If the remote lacks ssql, `from command --` with explicit commands still works.
 4. **Compose with Unix.** `ssh`, process substitution, pipes — these are the building blocks. ssql adds convenience syntax, not a new paradigm.
 5. **Generate honest code.** Code generation produces `ExecCommand("ssh", ...)` — the same thing the CLI does. No hidden complexity.
 
@@ -649,7 +648,7 @@ The `to explore` HTML app gains an optional remote data panel:
 
 ```bash
 # Generate explorer with relay support
-ssql from ssh://server/data/sample.csv \
+ssql from ssh server /data/sample.csv \
   | ssql to explore -relay localhost:9090 output.html
 ```
 
@@ -693,8 +692,8 @@ A simpler approach that avoids the relay entirely:
 
 ```bash
 # Generate explorer with a refresh script
-ssql from ssh://server/data/logs.csv \
-  --remote 'where -where status eq error' \
+ssql from ssh server /data/logs.csv \
+  -remote 'where -where status eq error' \
   | ssql to explore -refresh-script refresh.sh output.html
 ```
 
@@ -706,7 +705,7 @@ This is adequate for dashboards that refresh periodically but not for interactiv
 
 Implement in two stages:
 
-1. **Pre-fetch (Phase 1):** `ssql from ssh://... | ssql to explore` fetches remote data at generation time. The explorer is fully self-contained. Simple, works today with Phase 1 SSH support.
+1. **Pre-fetch (Phase 1):** `ssql from ssh server /data/... | ssql to explore` fetches remote data at generation time. The explorer is fully self-contained. Simple, works today with Phase 1 SSH support.
 
 2. **Live relay (Phase 6):** `ssql serve` + `-relay` flag for interactive remote querying. Only needed when datasets are too large to pre-fetch or when the user needs real-time data.
 
@@ -714,7 +713,7 @@ Most users will be well-served by pre-fetch. The relay is for power users who ne
 
 ## Open Questions
 
-1. **Arrow over SSH?** Binary Arrow format is 10-20x faster than JSONL. Worth adding `--format arrow` for the SSH transport? Requires Arrow support on both ends.
+1. **Arrow over SSH?** Binary Arrow format is 10-20x faster than JSONL. Worth adding `-format arrow` for the SSH transport? Requires Arrow support on both ends.
 2. **Parallel SSH?** For fan-out patterns, should ssql manage parallel SSH sessions, or leave that to shell parallelism (`&`, `xargs -P`)?
 3. **Progress reporting?** Long-running remote pipelines are silent. Should the remote side emit progress on stderr?
 4. **Version mismatch?** What happens when local ssql is v4.15 but remote is v4.10? Schema headers should be compatible, but new commands won't exist.
@@ -724,14 +723,14 @@ Most users will be well-served by pre-fetch. The relay is for power users who ne
 
 Distributed processing in ssql is not a new architecture — it's a thin layer over patterns that already work:
 
-- `from -- ssh server 'ssql ...'` already executes remote pipelines
+- `from command -- ssh server 'ssql ...'` already executes remote pipelines
 - JSONL schema headers already carry type information between processes
 - Process substitution already treats subprocesses as data sources
 - Code generation already wraps subprocesses into standalone functions
 
 The proposal adds:
-1. **Syntactic sugar** (`ssh://` URLs) to make remote sources first-class
-2. **Pipeline push-down** (`--remote`) to reduce data transfer
+1. **`from ssh` subcommand** to make remote sources first-class (host and path as separate args, autocli style)
+2. **Pipeline push-down** (`-remote`) to reduce data transfer
 3. **GPU awareness** (auto-detect `ssql_gpu` on remote hosts)
 4. **Connection optimization** (documentation + optional tooling for SSH ControlMaster)
 

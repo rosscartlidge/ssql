@@ -1,6 +1,6 @@
 # `from` Subcommands: Mirroring `to`
 
-**Status:** Research / Design Proposal
+**Status:** Implemented (v4.27.0)
 **Date:** March 2026
 
 ## Problem Statement
