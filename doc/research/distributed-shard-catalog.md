@@ -293,14 +293,14 @@ Shards on the same host can share an SSH connection (multiplexed via ControlMast
 
 ### Merge ordering
 
-By default, records arrive in arbitrary order (whichever shard responds first). For ordered output:
+By default, records arrive in arbitrary order (whichever shard responds first). For ordered output, use `--merge` to k-way merge the shard streams — the same operation as the `merge` command:
 
 ```bash
-# Merge-sort by date across shards (requires shards to be pre-sorted)
-ssql from --catalog shards.csv --merge-sort date | ssql to table
+# Merge by date across shards (requires shards to be pre-sorted by date)
+ssql from --catalog shards.csv --merge date | ssql to table
 ```
 
-This uses ssql's existing `merge` command logic — a k-way merge of pre-sorted streams. Each shard must be sorted by the merge key, but the shards themselves can arrive in any order.
+Each shard must be sorted by the merge field, but the shards themselves can arrive in any order.
 
 ### Error handling
 
@@ -447,7 +447,7 @@ ssql merge -field timestamp \
   <(ssql from ssh://m3/data/mar.csv)
 
 # Future: catalog-driven merge
-ssql from --catalog shards.csv --merge-sort timestamp
+ssql from --catalog shards.csv --merge timestamp
 ```
 
 The `--merge-sort` flag on `from --catalog` is syntactic sugar that constructs the same k-way merge internally.
