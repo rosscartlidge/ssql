@@ -302,6 +302,61 @@ ssql from --catalog shards.csv --merge-sort date | ssql to table
 
 This uses ssql's existing `merge` command logic — a k-way merge of pre-sorted streams. Each shard must be sorted by the merge key, but the shards themselves can arrive in any order.
 
+### Error handling
+
+With multiple machines, SSH failures are inevitable — hosts go down, keys expire, files move, networks timeout. The question is whether to abort the whole pipeline or continue with partial results.
+
+**Default: fail-fast.** The first SSH error stops the pipeline with a clear error message. This is correct for scripts and production — silent partial results are dangerous.
+
+**Opt-in resilience with `--on-error`:**
+
+```bash
+# Default: fail on first error
+ssql from --catalog shards.csv | ssql to table
+
+# Skip failed shards, log warnings to stderr
+ssql from --catalog shards.csv --on-error skip | ssql to table
+# stderr: WARN: shard machine-2:/data/events/2025-03.csv failed: ssh: connect to host machine-2: Connection refused
+
+# Retry once per shard, then skip
+ssql from --catalog shards.csv --on-error retry | ssql to table
+```
+
+**Shard provenance with `--shard-field`:**
+
+To make it visible which records came from which shard (and obvious when a shard is missing), add a provenance field:
+
+```bash
+# Each record gets a _shard field showing its origin
+ssql from --catalog shards.csv --shard-field _shard | ssql to table
+
+# Output includes:
+# _shard                              | name  | age
+# machine-1:/data/events/2025-01.csv  | Alice | 30
+# machine-2:/data/events/2025-03.csv  | Bob   | 25
+```
+
+This composes well with `--on-error skip` — you can see which shards contributed and which are absent:
+
+```bash
+# Check which shards actually responded
+ssql from --catalog shards.csv --on-error skip --shard-field _shard \
+  | ssql distinct -field _shard | ssql to table
+```
+
+**Summary of failed shards:**
+
+When `--on-error skip` is used, emit a summary to stderr after the pipeline completes:
+
+```
+WARN: 2 of 5 shards failed:
+  machine-2:/data/events/2025-03.csv — ssh: connect to host machine-2: Connection refused
+  machine-3:/data/events/2025-05.csv — remote: No such file or directory
+Processed 3 of 5 shards (60%)
+```
+
+This gives users confidence in what they got and what they missed, without polluting stdout.
+
 ### Push-down to shards
 
 When the pipeline contains filters or aggregations, push them to each shard:
