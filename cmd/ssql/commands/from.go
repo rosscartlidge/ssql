@@ -22,8 +22,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	fromCmd := cmd.Subcommand("from").
 		Description("Read data from files or command output").
 		Example("ssql from data.csv | ssql where -where age gt 18", "Read CSV (infers format from extension)").
-		Example("ssql from csv data.csv -type zipcode string", "Read CSV with explicit format and type overrides").
-		Example("ssql from command -- ps aux | ssql where -where USER eq root", "Read command output")
+		Example("ssql from csv data.csv -type zipcode string", "Read CSV with explicit format and type overrides")
 
 	// Format subcommands
 	registerFromCSV(fromCmd)
@@ -60,20 +59,6 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
-			}
-
-			// Handle -- separator (command execution mode)
-			if len(ctx.RemainingArgs) > 0 {
-				command := ctx.RemainingArgs[0]
-				args := ctx.RemainingArgs[1:]
-				if shouldGenerate(generate) {
-					return generateFromExecCode(command, args)
-				}
-				records, err := ssql.ExecCommand(command, args)
-				if err != nil {
-					return fmt.Errorf("executing command: %w", err)
-				}
-				return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
 			}
 
 			if inputFile == "" {
