@@ -54,7 +54,7 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 		Default(50).
 		Help("Maximum column width (truncate longer values)").
 		Done().
-		Flag("--sample").
+		Flag("-sample").
 		Int().
 		Global().
 		Default(100).
@@ -91,7 +91,7 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 				onlySpecified = onlyVal.(bool)
 			}
 
-			if sampleVal, ok := ctx.GlobalFlags["--sample"]; ok {
+			if sampleVal, ok := ctx.GlobalFlags["-sample"]; ok {
 				sampleSize = sampleVal.(int)
 			}
 
@@ -134,7 +134,7 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("csv").
 		Description("Write as CSV file").
 		Example("ssql from data.json | ssql to csv output.csv", "Convert JSON to CSV").
-		Example("ssql from data.csv | ssql where -where status eq active | ssql to csv active.csv", "Filter and save to CSV").
+		Example("ssql from data.csv | ssql where -if status eq active | ssql to csv active.csv", "Filter and save to CSV").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -1398,7 +1398,7 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 		Description("Create interactive data exploration app with table, charts, and aggregation").
 		Example("ssql from data.csv | ssql to explore output.html",
 			"Generate explorer from CSV data").
-		Example("ssql from logs.jsonl | ssql where -where level eq ERROR | ssql to explore errors.html",
+		Example("ssql from logs.jsonl | ssql where -if level eq ERROR | ssql to explore errors.html",
 			"Explore filtered error logs").
 		Example("ssql from sales.csv | ssql to explore -wasm -theme dark analysis.html",
 			"Explorer with WASM-powered client-side transforms").

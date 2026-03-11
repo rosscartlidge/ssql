@@ -184,8 +184,8 @@ We added comprehensive tests that verify feature presence:
 // completion is accidentally removed.
 func TestFieldCompletionConfiguration(t *testing.T) {
     expectedFieldCompletion := map[string]map[string][]int{
-        "where": {"-where": {0}},      // field is arg 0
-        "update": {"-where": {0}, "-set": {0}, "-set-expr": {0}},
+        "where": {"-if": {0}},      // field is arg 0
+        "update": {"-if": {0}, "-set": {0}, "-set-expr": {0}},
         "cast": {"-type": {0}},
         "join": {"-using": {0}, "-on": {0}},
         // ... all commands with field completion
@@ -216,11 +216,11 @@ ssql CLI supports "self-generating pipelines" where commands emit Go code fragme
 
 ```bash
 # CLI execution (interpreted)
-ssql from data.csv | ssql where -where age gt 25 | ssql to csv out.csv
+ssql from data.csv | ssql where -if age gt 25 | ssql to csv out.csv
 
 # Code generation mode
 export SSQLGO=1
-ssql from data.csv | ssql where -where age gt 25 | ssql generate-go > program.go
+ssql from data.csv | ssql where -if age gt 25 | ssql generate-go > program.go
 go build -o program program.go
 ./program  # 2.6x faster than CLI
 ```
@@ -274,7 +274,7 @@ The generated Go code eliminates all of this—direct function calls, in-memory 
 ```go
 cmd := cf.NewCommand("ssql").
     Subcommand("where").
-        Flag("-where").
+        Flag("-if").
             Arg("field").FieldsFromFlag("FILE").Done().
             Arg("operator").Completer(&StaticCompleter{...}).Done().
             Arg("value").FieldValuesFrom("FILE", "field").Done().
@@ -286,15 +286,15 @@ cmd := cf.NewCommand("ssql").
 **Clause-based Parsing:**
 ```bash
 # Multiple conditions with OR logic using + separator
-ssql where -where age gt 18 + -where status eq active
+ssql where -if age gt 18 + -if status eq active
 ```
 
 **Intelligent Completion:**
 ```bash
-ssql where FILE users.csv -where <TAB>
+ssql where FILE users.csv -if <TAB>
 # Shows: name, age, email, status (field names from file)
 
-ssql where FILE users.csv -where status eq <TAB>
+ssql where FILE users.csv -if status eq <TAB>
 # Shows: active, pending, archived (actual data values!)
 ```
 

@@ -124,11 +124,11 @@ result := ssql.LookupJoin(data, []ssql.LookupClause{
 
 ```bash
 # Prototype with CLI
-ssql from data.csv | ssql where -where age gt 25
+ssql from data.csv | ssql where -if age gt 25
 
 # Generate production code
 export SSQLGO=1
-ssql from data.csv | ssql where -where age gt 25 | \
+ssql from data.csv | ssql where -if age gt 25 | \
   ssql generate-go > program.go
 
 go build -o program program.go

@@ -224,7 +224,7 @@ func printMathFunctions() error {
 	fmt.Println("Common Usage:")
 	fmt.Println("  ssql update -set-expr final_price 'round(price * 0.85)'")
 	fmt.Println("  ssql update -set-expr balance 'max(0, amount - fees)'")
-	fmt.Println("  ssql where -where-expr 'abs(actual - expected) < 0.01'")
+	fmt.Println("  ssql where -if-expr 'abs(actual - expected) < 0.01'")
 	return nil
 }
 
@@ -275,7 +275,7 @@ func printArrayFunctions() error {
 	fmt.Println("  Note: In predicates, # = current element, #acc = accumulator")
 	fmt.Println()
 	fmt.Println("Common Usage:")
-	fmt.Println("  ssql where -where-expr 'all(scores, {# >= 60})'")
+	fmt.Println("  ssql where -if-expr 'all(scores, {# >= 60})'")
 	fmt.Println("  ssql update -set-expr avg_score 'mean(scores)'")
 	fmt.Println("  ssql update -set-expr top3 'take(sort(scores), 3)'")
 	return nil
@@ -299,7 +299,7 @@ func printDateFunctions() error {
 	fmt.Println()
 	fmt.Println("Common Usage:")
 	fmt.Println("  ssql update -set-expr timestamp 'string(now())'")
-	fmt.Println("  ssql where -where-expr 'date(created) > date(\"2026-01-01\")'")
+	fmt.Println("  ssql where -if-expr 'date(created) > date(\"2026-01-01\")'")
 	return nil
 }
 
@@ -393,7 +393,7 @@ func printBitwiseFunctions() error {
 	fmt.Println()
 	fmt.Println("Common Usage:")
 	fmt.Println("  ssql update -set-expr masked 'bitand(flags, 0x0F)'")
-	fmt.Println("  ssql where -where-expr 'bitand(permissions, 4) != 0'")
+	fmt.Println("  ssql where -if-expr 'bitand(permissions, 4) != 0'")
 	return nil
 }
 
@@ -461,7 +461,7 @@ func printHelpers() error {
 	fmt.Println()
 	fmt.Println("  has(field)              Check if field exists")
 	fmt.Println("    Example: has(\"email\") → true/false")
-	fmt.Println("    Usage:   ssql where -where-expr 'has(\"email\") and contains(email, \"@\")'")
+	fmt.Println("    Usage:   ssql where -if-expr 'has(\"email\") and contains(email, \"@\")'")
 	fmt.Println()
 	fmt.Println("  getOr(field, default)   Get field value or default")
 	fmt.Println("    Example: getOr(\"age\", 0) → field value or 0")
@@ -478,8 +478,8 @@ func printExamples() error {
 	fmt.Println("COMMON EXPRESSION PATTERNS:")
 	fmt.Println()
 	fmt.Println("Data Validation:")
-	fmt.Println("  ssql where -where-expr 'has(\"email\") and contains(email, \"@\")'")
-	fmt.Println("  ssql where -where-expr 'age >= 0 and age <= 120'")
+	fmt.Println("  ssql where -if-expr 'has(\"email\") and contains(email, \"@\")'")
+	fmt.Println("  ssql where -if-expr 'age >= 0 and age <= 120'")
 	fmt.Println()
 	fmt.Println("Data Cleaning:")
 	fmt.Println("  ssql update -set-expr email 'lower(trim(email))'")
@@ -495,11 +495,11 @@ func printExamples() error {
 	fmt.Println("Array Operations:")
 	fmt.Println("  ssql update -set-expr avg_score 'mean(scores)'")
 	fmt.Println("  ssql update -set-expr top3 'take(sort(scores), 3)'")
-	fmt.Println("  ssql where -where-expr 'none(scores, {# < 60})'")
+	fmt.Println("  ssql where -if-expr 'none(scores, {# < 60})'")
 	fmt.Println()
 	fmt.Println("Complex Filters:")
-	fmt.Println("  ssql where -where-expr 'age >= 18 and age <= 65 and status == \"active\"'")
-	fmt.Println("  ssql where -where-expr '(age >= 18 and verified) or role == \"admin\"'")
+	fmt.Println("  ssql where -if-expr 'age >= 18 and age <= 65 and status == \"active\"'")
+	fmt.Println("  ssql where -if-expr '(age >= 18 and verified) or role == \"admin\"'")
 	fmt.Println()
 	fmt.Println("String Manipulation:")
 	fmt.Println("  ssql update -set-expr full_name 'first + \" \" + last'")

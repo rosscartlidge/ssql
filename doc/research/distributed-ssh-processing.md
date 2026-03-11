@@ -11,10 +11,10 @@ Data processing pipelines break down when data is remote:
 ```bash
 # Today: download 50GB, then process locally
 scp server:/data/logs.csv .
-ssql from logs.csv | ssql where -where status eq error | ssql group-by -field service -count
+ssql from logs.csv | ssql where -if status eq error | ssql group-by -field service -count
 
 # Tomorrow: process where the data lives, stream 200 bytes of results
-ssql from ssh server /data/logs.csv | ssql where -where status eq error | ssql group-by -field service -count
+ssql from ssh server /data/logs.csv | ssql where -if status eq error | ssql group-by -field service -count
 ```
 
 Moving data is slow, expensive, and often unnecessary. Most pipelines reduce — filtering, aggregating, grouping — so the result is orders of magnitude smaller than the input. The ideal architecture processes data where it lives and streams only the reduced result back to the local machine.
@@ -40,7 +40,7 @@ ssql's `from command --` pattern already supports a degenerate form of distribut
 
 ```bash
 # This works RIGHT NOW — runs ssql on the remote machine, streams JSONL back
-ssql from command -- ssh server 'ssql from /data/logs.csv | ssql where -where status eq error' \
+ssql from command -- ssh server 'ssql from /data/logs.csv | ssql where -if status eq error' \
   | ssql group-by -field service -count \
   | ssql to table
 ```
@@ -88,11 +88,11 @@ When `from ssh` is followed by transform commands, the optimizer can push filter
 
 ```bash
 # Naive: stream all records, filter locally
-ssql from ssh server /data/logs.csv | ssql where -where status eq error
+ssql from ssh server /data/logs.csv | ssql where -if status eq error
 
 # Optimized: filter remotely, stream only matching records
 # Internally becomes:
-# ssh server 'ssql from /data/logs.csv | ssql where -where status eq error'
+# ssh server 'ssql from /data/logs.csv | ssql where -if status eq error'
 ```
 
 The key insight: any chain of commands between a remote `from ssh` and a local-only command (like `to chart`, `join` with a local file, or `to explore`) can be pushed to the remote side.
@@ -103,7 +103,7 @@ For complex cases, an explicit `-remote` boundary:
 
 ```bash
 ssql from ssh server /data/logs.csv \
-  -remote 'where -where status eq error | group-by -field service -count' \
+  -remote 'where -if status eq error | group-by -field service -count' \
   | ssql to table
 ```
 
@@ -233,7 +233,7 @@ In practice, this requires a new mechanism: the `from` command doesn't know what
 ```bash
 # Explicit push-down
 ssql from ssh server /data/logs.csv \
-  -remote 'where -where status eq error | group-by -field service -count' \
+  -remote 'where -if status eq error | group-by -field service -count' \
   | ssql to table
 ```
 
@@ -281,10 +281,10 @@ if err != nil {
 
 **For push-down pipelines:**
 ```go
-// Generated code for: ssql from ssh server /data/logs.csv -remote 'where -where status eq error'
+// Generated code for: ssql from ssh server /data/logs.csv -remote 'where -if status eq error'
 records, err := ssql.ExecCommand("ssh", []string{
     "server",
-    "ssql from /data/logs.csv | ssql where -where status eq error",
+    "ssql from /data/logs.csv | ssql where -if status eq error",
 })
 ```
 
@@ -364,7 +364,7 @@ The most common case. Filter/aggregate on the server, visualize locally.
 
 ```bash
 ssql from ssh prod /data/access_log.csv \
-  -remote 'where -where response_code ge 500 | group-by -field endpoint -count' \
+  -remote 'where -if response_code ge 500 | group-by -field endpoint -count' \
   | ssql sort -field count -desc \
   | ssql to chart -x endpoint -y count -type bar
 ```
@@ -412,8 +412,8 @@ Join data from two different servers.
 
 ```bash
 ssql from ssh web-server /logs/access.csv \
-  -remote 'where -where status ge 500' \
-  | ssql join <(ssh db-server 'ssql from /logs/queries.csv | ssql where -where duration gt 1000') \
+  -remote 'where -if status ge 500' \
+  | ssql join <(ssh db-server 'ssql from /logs/queries.csv | ssql where -if duration gt 1000') \
     -on request_id \
   | ssql to table
 ```
@@ -448,7 +448,7 @@ Code generation (`SSQLGO=1 ... | ssql generate-go`) handles remote pipelines by 
 ### Simple remote read
 
 ```bash
-SSQLGO=1 ssql from ssh server /data/logs.csv | ssql where -where status eq error | ssql generate-go
+SSQLGO=1 ssql from ssh server /data/logs.csv | ssql where -if status eq error | ssql generate-go
 ```
 
 Generated:
@@ -471,7 +471,7 @@ func main() {
         os.Exit(1)
     }
 
-    // ssql where -where status eq error
+    // ssql where -if status eq error
     filtered := ssql.Where(func(r ssql.Record) bool {
         return ssql.GetOr(r, "status", "") == "error"
     })(records)
@@ -484,7 +484,7 @@ func main() {
 
 ```bash
 SSQLGO=1 ssql from ssh server /data/logs.csv \
-  -remote 'where -where status eq error' \
+  -remote 'where -if status eq error' \
   | ssql group-by -field service -count \
   | ssql generate-go
 ```
@@ -502,10 +502,10 @@ import (
 )
 
 func main() {
-    // ssql from ssh server /data/logs.csv -remote 'where -where status eq error'
+    // ssql from ssh server /data/logs.csv -remote 'where -if status eq error'
     records, err := ssql.ExecCommand("ssh", []string{
         "server",
-        "ssql from /data/logs.csv | ssql where -where status eq error",
+        "ssql from /data/logs.csv | ssql where -if status eq error",
     })
     if err != nil {
         fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -627,7 +627,7 @@ The relay accepts WebSocket connections and exposes a simple JSON protocol:
 
 ```json
 // Browser → relay: execute remote pipeline
-{"action": "query", "id": "q1", "host": "prod-server", "pipeline": "from /data/logs.csv | where -where status eq error | group-by -field service -count"}
+{"action": "query", "id": "q1", "host": "prod-server", "pipeline": "from /data/logs.csv | where -if status eq error | group-by -field service -count"}
 
 // Relay → browser: schema header
 {"id": "q1", "type": "schema", "data": {"fields": ["service", "count"], "types": {"service": "string", "count": "int"}}}
@@ -640,7 +640,7 @@ The relay accepts WebSocket connections and exposes a simple JSON protocol:
 {"id": "q1", "type": "done", "records": 2}
 ```
 
-Internally, the relay runs: `ssh prod-server 'ssql from /data/logs.csv | ssql where -where status eq error | ssql group-by -field service -count'` and streams the JSONL output back over the WebSocket.
+Internally, the relay runs: `ssh prod-server 'ssql from /data/logs.csv | ssql where -if status eq error | ssql group-by -field service -count'` and streams the JSONL output back over the WebSocket.
 
 ### Explorer integration
 
@@ -693,7 +693,7 @@ A simpler approach that avoids the relay entirely:
 ```bash
 # Generate explorer with a refresh script
 ssql from ssh server /data/logs.csv \
-  -remote 'where -where status eq error' \
+  -remote 'where -if status eq error' \
   | ssql to explore -refresh-script refresh.sh output.html
 ```
 

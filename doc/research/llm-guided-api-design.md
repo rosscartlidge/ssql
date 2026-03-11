@@ -30,13 +30,13 @@ result := ssql.Aggregate("_g", aggregations)(grouped)
 **CLI Tool:** A Unix pipeline interface where each command reads from stdin and writes to stdout:
 
 ```bash
-ssql from data.csv | ssql where -where age gt 30 | ssql group-by dept -count count | ssql to json
+ssql from data.csv | ssql where -if age gt 30 | ssql group-by dept -count count | ssql to json
 ```
 
 The CLI is built on autocli, which provides:
 - **Auto-generated help:** Every command has comprehensive `-help` output with usage, flags, and examples—no manual required
-- **Data-aware tab completion:** Field names are extracted from data files and offered as completions (e.g., `ssql where -where <TAB>` shows actual column names)
-- **Field value completion:** When filtering, actual data values are sampled and offered (e.g., `-where status eq <TAB>` shows "active", "pending", etc.)
+- **Data-aware tab completion:** Field names are extracted from data files and offered as completions (e.g., `ssql where -if <TAB>` shows actual column names)
+- **Field value completion:** When filtering, actual data values are sampled and offered (e.g., `-if status eq <TAB>` shows "active", "pending", etc.)
 - **Subcommand discovery:** `ssql <TAB>` shows all available commands with descriptions
 
 **Design Philosophy:**
@@ -336,13 +336,13 @@ Our test suite contains 30 test cases (15 Go, 15 CLI) covering the full API surf
 
 | ID | Description | Key Patterns |
 |----|-------------|--------------|
-| CLI-01 | Basic filter | `from`, `where -where`, `to` |
+| CLI-01 | Basic filter | `from`, `where -if`, `to` |
 | CLI-02 | Group aggregation | `group-by`, `-count` or `-sum` |
-| CLI-03 | Update with conditions | `update`, `-where`, `-set` |
+| CLI-03 | Update with conditions | `update`, `-if`, `-set` |
 | CLI-04 | Signal processing | `fft`, `-field`, `-rate` |
 | CLI-05 | Spectrogram | `spectrogram`, `-window-size` |
 | CLI-06 | Join with rename | `join`, `-on`, `-as` |
-| CLI-07 | Expression filter | `-where-expr`, `-set-expr` |
+| CLI-07 | Expression filter | `-if-expr`, `-set-expr` |
 | CLI-08 | Sort + pagination | `sort`, `limit`, `offset` |
 | CLI-09 | Code generation | `SSQLGO=1`, `generate-go` |
 | CLI-10 | Format conversion | `from`, `to arrow` or `to json` |
@@ -363,7 +363,7 @@ Negative patterns catch common LLM mistakes:
 | `r["field"].(string)` | Unsafe direct map access |
 | `FlatMap` | Wrong naming (should be SelectMany) |
 | `ssql.FromSlice` | Non-existent function |
-| `-match` | Old CLI flag (now `-where`) |
+| `-match` | Old CLI flag (now `-if`) |
 | `-expr` (standalone) | Old flag form |
 
 ## 4. API Design for LLM Compatibility
@@ -859,7 +859,7 @@ ssql from users.csv | ssql group-by dept -count count | ssql to table
 
 **Generated CLI Pipeline:**
 ```bash
-export SSQLGO=1 && ssql from users.csv | ssql where -where status eq active | ssql group-by dept -count count | ssql generate-go
+export SSQLGO=1 && ssql from users.csv | ssql where -if status eq active | ssql group-by dept -count count | ssql generate-go
 ```
 
 Note how the generated code correctly uses:

@@ -378,7 +378,7 @@ ssql read-csv orders.csv | ssql update -set status active
 
 # Conditional update
 ssql read-csv orders.csv | \
-  ssql update -set status processed -where status eq pending
+  ssql update -set status processed -if status eq pending
 
 # Multiple updates
 ssql read-csv orders.csv | \
@@ -440,7 +440,7 @@ updated := ssql.SetField("status", "active")(records)
 ### CLI Tests (cmd/ssql/*_test.go)
 
 - Test basic `-set` flag
-- Test conditional updates with `-where`
+- Test conditional updates with `-if`
 - Test multiple field updates
 - Test code generation with `-generate` flag
 

@@ -340,7 +340,7 @@ A CLI framework designed for data-processing pipelines with unique features arou
 
 1. **FieldsFromFlag()** - Completers can read a data file and suggest field names:
    ```go
-   Flag("-where").
+   Flag("-if").
        Arg("field").FieldsFromFlag("FILE").Done().  // Completes: name, age, status
        Arg("operator").Options("eq", "gt", "lt").Done().
        Arg("value").FieldValuesFrom("FILE", "field").Done().  // Completes: actual values!
@@ -348,8 +348,8 @@ A CLI framework designed for data-processing pipelines with unique features arou
 
 2. **FieldValuesFrom()** - Completes with actual data values from columns:
    ```bash
-   ssql where -where status <TAB>     # Shows: eq, gt, lt, ne...
-   ssql where -where status eq <TAB>  # Shows: active, pending, archived (from data!)
+   ssql where -if status <TAB>     # Shows: eq, gt, lt, ne...
+   ssql where -if status eq <TAB>  # Shows: active, pending, archived (from data!)
    ```
 
 3. **Clause-based parsing** - Native Boolean logic in command-line:
@@ -361,7 +361,7 @@ A CLI framework designed for data-processing pipelines with unique features arou
 4. **CacheFieldsFrom()** - Pipeline field propagation:
    ```bash
    # First command caches field names for downstream completion
-   ssql from users.csv | ssql where -where <TAB>  # Completes from upstream file!
+   ssql from users.csv | ssql where -if <TAB>  # Completes from upstream file!
    ```
 
 **Strengths:**

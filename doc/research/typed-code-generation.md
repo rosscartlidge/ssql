@@ -66,7 +66,7 @@ For the 14.6M record, 3-join workload:
 ### Current Code Generation
 
 ```bash
-SSQLGO=1 ssql from data.csv | ssql where -where age gt 18 | ssql join lookup.csv -on dept_id | ssql to csv output.csv | ssql generate-go
+SSQLGO=1 ssql from data.csv | ssql where -if age gt 18 | ssql join lookup.csv -on dept_id | ssql to csv output.csv | ssql generate-go
 ```
 
 Produces:
@@ -87,7 +87,7 @@ func main() {
 Same CLI command with `--typed` flag or `SSQLGO=typed`:
 
 ```bash
-SSQLGO=typed ssql from data.csv | ssql where -where age gt 18 | ssql join lookup.csv -on dept_id | ssql to csv output.csv | ssql generate-go
+SSQLGO=typed ssql from data.csv | ssql where -if age gt 18 | ssql join lookup.csv -on dept_id | ssql to csv output.csv | ssql generate-go
 ```
 
 Produces:

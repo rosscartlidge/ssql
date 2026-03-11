@@ -131,11 +131,11 @@ Test cases are defined in `doc/ai-test-cases.md` with 20 structured tests:
 |----|-------------|-------------|
 | CLI-01 | Basic filter pipeline | from, where, include, to table |
 | CLI-02 | Group-by with aggregation | group-by, -count, -sum, -avg |
-| CLI-03 | Update if-else clauses | update, -where, -set, + separator |
+| CLI-03 | Update if-else clauses | update, -if, -set, + separator |
 | CLI-04 | Signal processing FFT | fft, -field, -rate |
 | CLI-05 | Spectrogram | spectrogram, -window-size, -rate |
 | CLI-06 | Join with rename | join, -on, -as |
-| CLI-07 | Expression filter | -where-expr, -set-expr |
+| CLI-07 | Expression filter | -if-expr, -set-expr |
 | CLI-08 | Sort + limit + offset | sort, limit, offset |
 | CLI-09 | Code generation | SSQLGO=1, generate-go |
 | CLI-10 | Multi-format pipeline | from CSV, to json |

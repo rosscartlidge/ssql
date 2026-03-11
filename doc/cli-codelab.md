@@ -55,7 +55,7 @@ EOF
 
 # Process it with a pipeline
 ssql from employees.csv | \
-  ssql where -where department eq Engineering | \
+  ssql where -if department eq Engineering | \
   ssql include name salary
 ```
 
@@ -147,7 +147,7 @@ Output (JSONL with schema header):
 ```bash
 # Input CSV has columns: name, age, department, salary
 ssql from employees.csv | \
-  ssql where -where age gt 25 | \
+  ssql where -if age gt 25 | \
   ssql to csv output.csv
 
 # Output CSV has same column order: name, age, department, salary
@@ -165,15 +165,15 @@ Filter records based on conditions:
 ```bash
 # Single condition
 ssql from employees.csv | \
-  ssql where -where salary gt 70000
+  ssql where -if salary gt 70000
 
 # Multiple conditions (AND)
 ssql from employees.csv | \
-  ssql where -where age gt 25 -where department eq Engineering
+  ssql where -if age gt 25 -if department eq Engineering
 
 # Multiple conditions (OR) - use + separator
 ssql from employees.csv | \
-  ssql where -where department eq Engineering + -where department eq Sales
+  ssql where -if department eq Engineering + -if department eq Sales
 ```
 
 **Available Operators:**
@@ -213,26 +213,26 @@ ssql from employees.csv | \
 
 # Conditional update - only matching records
 ssql from employees.csv | \
-  ssql update -where salary gt 100000 -set bracket "high"
+  ssql update -if salary gt 100000 -set bracket "high"
 
 # Multiple conditions (AND logic)
 ssql from employees.csv | \
-  ssql update -where status eq pending -where priority eq urgent -set assignee "alice"
+  ssql update -if status eq pending -if priority eq urgent -set assignee "alice"
 
 # If-elseif-else with + separator (first match wins)
 ssql from customers.csv | \
   ssql update \
-    -where purchases gt 5000 -set tier "Gold" -set discount 0.2 + \
-    -where purchases gt 1000 -set tier "Silver" -set discount 0.1 + \
+    -if purchases gt 5000 -set tier "Gold" -set discount 0.2 + \
+    -if purchases gt 1000 -set tier "Silver" -set discount 0.1 + \
     -set tier "Bronze" -set discount 0.0
 ```
 
 **How It Works:**
-- **Without `-where`**: Updates all records
-- **With `-where`**: Only updates records matching conditions, others pass through unchanged
-- **Multiple `-where` flags**: AND logic (all must match)
+- **Without `-if`**: Updates all records
+- **With `-if`**: Only updates records matching conditions, others pass through unchanged
+- **Multiple `-if` flags**: AND logic (all must match)
 - **`+` separator**: Creates clauses for if-elseif-else logic (first matching clause wins)
-- **Default clause**: Clause with no `-where` acts as else (catches all remaining records)
+- **Default clause**: Clause with no `-if` acts as else (catches all remaining records)
 
 **Type Inference:**
 The `update` command automatically infers types from string values:
@@ -247,9 +247,9 @@ The `update` command automatically infers types from string values:
 # Set priority based on multiple conditions
 ssql from orders.csv | \
   ssql update \
-    -where status eq pending -where amount gt 10000 -set priority "critical" -set sla 24 + \
-    -where status eq pending -where amount gt 1000 -set priority "high" -set sla 48 + \
-    -where status eq pending -set priority "normal" -set sla 72 + \
+    -if status eq pending -if amount gt 10000 -set priority "critical" -set sla 24 + \
+    -if status eq pending -if amount gt 1000 -set priority "high" -set sla 48 + \
+    -if status eq pending -set priority "normal" -set sla 72 + \
     -set priority "low" -set sla 168
 ```
 
@@ -261,7 +261,7 @@ Write results to CSV:
 
 ```bash
 ssql from employees.csv | \
-  ssql where -where department eq Engineering | \
+  ssql where -if department eq Engineering | \
   ssql to csv engineers.csv
 ```
 
@@ -278,7 +278,7 @@ ssql from xlsx sales.xlsx -sheet "Q4 Results" | ssql to table
 
 # Filter Excel data and write to a new spreadsheet
 ssql from sales.xlsx | \
-  ssql where -where revenue gt 50000 | \
+  ssql where -if revenue gt 50000 | \
   ssql to xlsx top_performers.xlsx
 
 # Convert CSV to Excel
@@ -298,7 +298,7 @@ ssql from employees.csv | ssql to table
 
 # With filtering
 ssql from employees.csv | \
-  ssql where -where department eq Engineering | \
+  ssql where -if department eq Engineering | \
   ssql to table
 
 # Limit column width to prevent wrapping
@@ -308,10 +308,10 @@ ssql from employees.csv | \
 # Complex pipeline with updates and filtering
 ssql from customers.csv | \
   ssql update \
-    -where purchases gt 5000 -set tier "Gold" + \
-    -where purchases gt 1000 -set tier "Silver" + \
+    -if purchases gt 5000 -set tier "Gold" + \
+    -if purchases gt 1000 -set tier "Silver" + \
     -set tier "Bronze" | \
-  ssql where -where tier eq Gold | \
+  ssql where -if tier eq Gold | \
   ssql table
 ```
 
@@ -342,7 +342,7 @@ Execute shell commands and parse their output:
 ```bash
 # Analyze process information
 ssql from command -- ps -efl | \
-  ssql where -where CMD contains chrome | \
+  ssql where -if CMD contains chrome | \
   ssql include PID USER CMD
 ```
 
@@ -355,7 +355,7 @@ Find memory-intensive processes:
 ```bash
 # Get top memory users
 ssql from command -- ps aux | \
-  ssql where -where USER eq root | \
+  ssql where -if USER eq root | \
   ssql include PID MEM CMD | \
   ssql to csv system_processes.csv
 ```
@@ -597,7 +597,7 @@ Combine `window` with `where` to get top records per group:
 # Top 3 highest-paid per department
 ssql from employees.csv | \
   ssql window -row-number rn -partition dept -order salary -desc | \
-  ssql where -where rn le 3 | \
+  ssql where -if rn le 3 | \
   ssql exclude rn | \
   ssql to table
 ```
@@ -613,10 +613,10 @@ ssql from sales.csv | \
 
 # 7-day moving average
 ssql from prices.csv | \
-  ssql window -avg price ma7 -order date -rows 6,0
+  ssql window -avg price ma7 -order date -preceding 6 -following 0
 ```
 
-The `-rows P,F` flag controls the frame: `P` rows preceding and `F` rows following. Use `*` for unbounded. The default is `*,0` (unbounded preceding to current row).
+The `-preceding` and `-following` flags control the window frame. `-preceding N` means N rows before the current row, `-following N` means N rows after. Use `-1` for unbounded. The default is `-preceding -1 -following 0` (unbounded preceding to current row).
 
 ### Lag and Lead
 
@@ -678,7 +678,7 @@ ssql from sales.csv | \
 
 # 3-row moving average (O(frame_size) memory)
 ssql from prices.csv | \
-  ssql window -avg price ma3 -order date -rows 2,0 -presorted
+  ssql window -avg price ma3 -order date -preceding 2 -following 0 -presorted
 
 # LAG for period-over-period comparison
 ssql from monthly.csv | \
@@ -691,7 +691,7 @@ ssql from daily.csv | \
 
 # Sliding MIN/MAX (monotonic deque, O(1) amortized)
 ssql from prices.csv | \
-  ssql window -min price low10 -max price high10 -order date -rows 9,0 -presorted
+  ssql window -min price low10 -max price high10 -order date -preceding 9 -following 0 -presorted
 
 # RANK on presorted data (134x faster than materialized)
 ssql from employees.csv | \
@@ -939,7 +939,7 @@ Every command supports the `-generate` flag to output Go code instead of executi
 
 ```bash
 ssql from -generate employees.csv | \
-  ssql where -generate -where department eq Engineering | \
+  ssql where -generate -if department eq Engineering | \
   ssql include name salary | \
   ssql to csv -generate output.csv | \
   ssql generate-go
@@ -998,7 +998,7 @@ When you use multiple transformation commands, the generated code automatically 
 ```bash
 # Complex pipeline: filter, select, sort, limit
 ssql from -generate sales.csv | \
-  ssql where -where revenue gt 1000 -generate | \
+  ssql where -if revenue gt 1000 -generate | \
   ssql include salesperson revenue | \
   ssql sort revenue -desc -generate | \
   ssql limit 10 -generate | \
@@ -1199,7 +1199,7 @@ go build -o monitor monitor.go
 - `from command -- [command] [args...]` - Execute command and parse output
 
 ### Transformations
-- `where` - Filter records by conditions (`-where field op value`)
+- `where` - Filter records by conditions (`-if field op value`)
 - `include` - Select specific fields
 - `exclude` - Remove specific fields
 - `rename` - Rename fields (`-as old new`)
@@ -1277,7 +1277,7 @@ source ~/.bashrc
 Now you can tab-complete:
 ```bash
 ssql <TAB>          # Shows all commands
-ssql where <TAB>    # Shows flags like -where, -help
+ssql where <TAB>    # Shows flags like -if, -help
 ssql from <TAB>     # Completes .csv, .json, .jsonl files
 ```
 
@@ -1290,7 +1290,7 @@ Commands that support multiple items use `+` as a separator to create "clauses".
 
 ```bash
 # Multiple WHERE conditions (OR logic) - each clause after + is independent
-ssql where -where age gt 30 + -where salary gt 100000
+ssql where -if age gt 30 + -if salary gt 100000
 
 # Multiple aggregations - specify multiple flags
 ssql group-by department \

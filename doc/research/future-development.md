@@ -47,7 +47,7 @@ DuckDB is the closest comparable tool — a single-binary analytical engine that
 | Capability | ssql (v4.19) | DuckDB | Notes |
 |-----------|-------------|--------|-------|
 | **Read CSV/JSON/Parquet/Arrow** | CSV, JSON, JSONL, Arrow | CSV, JSON, Parquet, Arrow, SQLite, PostgreSQL, S3, HTTP | DuckDB has broader format and remote source support |
-| **Filter rows** | `where -where field op value` | `WHERE field op value` | Equivalent |
+| **Filter rows** | `where -if field op value` | `WHERE field op value` | Equivalent |
 | **Computed columns** | `update -set-expr field 'expr'` | `SELECT *, expr AS field` | Equivalent |
 | **Group-by aggregation** | `group-by fields -count/-sum/-avg` | `GROUP BY ... COUNT/SUM/AVG` | Equivalent |
 | **Rollup/cube** | `group-by -rollup/-cube` (enriched rows) | `GROUP BY ROLLUP/CUBE` (extra NULL-sentinel rows) | Different output model; ssql's is more pipeline-friendly |
@@ -125,14 +125,14 @@ ssql from sales.csv | ssql window -sum revenue running_total -partition dept -or
 
 # Top 3 per department
 ssql from employees.csv | ssql window -row-number rn -partition dept -order salary -desc \
-  | ssql where -where rn le 3
+  | ssql where -if rn le 3
 
 # Month-over-month change
 ssql from monthly.csv | ssql window -lag revenue 1 prev_revenue -order month \
   | ssql update -set-expr change 'revenue - prev_revenue'
 
 # 7-day moving average
-ssql from prices.csv | ssql window -avg price ma7 -order date -rows 6,0
+ssql from prices.csv | ssql window -avg price ma7 -order date -preceding 6 -following 0
 ```
 
 **Implementation scope:** ~830 lines (library function + tests + CLI command + code generation)
@@ -164,7 +164,7 @@ ssql from data.csv | ssql window -row-number rn -partition dept -order hire_date
 
 ### Priority 3: Expression Ergonomics
 
-The expression language (`expr-lang`) is powerful but only accessible via specific flags (`-where-expr`, `-set-expr`). Extending expression support to more commands eliminates intermediate pipeline steps.
+The expression language (`expr-lang`) is powerful but only accessible via specific flags (`-if-expr`, `-set-expr`). Extending expression support to more commands eliminates intermediate pipeline steps.
 
 **Today (requires temporary fields):**
 ```bash

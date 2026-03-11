@@ -106,7 +106,7 @@ Add Arrow as a file format for `from` and `to` commands.
 **CLI Usage:**
 ```bash
 # Read Arrow file
-ssql from data.arrow | ssql where -where age gt 30 | ssql to json
+ssql from data.arrow | ssql where -if age gt 30 | ssql to json
 
 # Write Arrow file
 ssql from data.csv | ssql to arrow output.arrow
@@ -297,7 +297,7 @@ ssql from data.bin --format arrow  # Force Arrow parsing
 ssql from huge.csv | ssql to arrow huge.arrow
 
 # Subsequent queries are 10-20x faster to start
-ssql from huge.arrow | ssql where -where status eq active | ssql to json
+ssql from huge.arrow | ssql where -if status eq active | ssql to json
 ```
 
 ### Workflow 2: Python/Pandas Interop
@@ -314,7 +314,7 @@ pa.ipc.write_file(table, 'data.arrow')
 
 ```bash
 # ssql side
-ssql from data.arrow | ssql where -where age gt 25 | ssql to arrow result.arrow
+ssql from data.arrow | ssql where -if age gt 25 | ssql to arrow result.arrow
 ```
 
 ```python
@@ -326,7 +326,7 @@ result = pa.ipc.open_file('result.arrow').read_all().to_pandas()
 
 ```bash
 # Generate columnar code (future)
-SSQLGO=columnar ssql from data.csv | ssql where -where age gt 30 | ssql generate-go
+SSQLGO=columnar ssql from data.csv | ssql where -if age gt 30 | ssql generate-go
 ```
 
 ```go

@@ -436,7 +436,7 @@ program, err := expr.Compile(code, expr.Timezone(time.UTC))
 
 ssql uses expr-lang in two contexts:
 
-1. **`-where-expr`** - Boolean expressions for filtering records
+1. **`-if-expr`** - Boolean expressions for filtering records
 2. **`-set-expr`** - Value expressions for updating fields
 
 ### How Records Are Accessed
@@ -445,10 +445,10 @@ In ssql expressions, the entire record is the environment:
 
 ```bash
 # Direct field access
-ssql where -where-expr 'age > 18 and status == "active"'
+ssql where -if-expr 'age > 18 and status == "active"'
 
 # Field names with spaces or special chars
-ssql where -where-expr '$env["field name"] > 0'
+ssql where -if-expr '$env["field name"] > 0'
 ```
 
 ### Current Implementation
@@ -460,7 +460,7 @@ for k, v := range record.All() {
     env[k] = v
 }
 
-// For -where-expr (boolean required)
+// For -if-expr (boolean required)
 program, err := expr.Compile(exprStr, expr.Env(env), expr.AsBool())
 
 // For -set-expr (any type)
@@ -471,22 +471,22 @@ program, err := expr.Compile(exprStr, expr.Env(env))
 
 ```bash
 # Filter with expression
-ssql from data.csv | ssql where -where-expr 'age > 18 and verified == true'
+ssql from data.csv | ssql where -if-expr 'age > 18 and verified == true'
 
 # Complex conditions
-ssql from data.csv | ssql where -where-expr 'status in ["active", "pending"]'
+ssql from data.csv | ssql where -if-expr 'status in ["active", "pending"]'
 
 # Update with expression
 ssql from data.csv | ssql update -set-expr discount 'price * 0.1'
 
 # Conditional update
-ssql from data.csv | ssql update -where status eq vip -set-expr discount 'price * 0.2'
+ssql from data.csv | ssql update -if status eq vip -set-expr discount 'price * 0.2'
 
 # String manipulation
 ssql from data.csv | ssql update -set-expr email 'lower(email)'
 
 # Date calculations
-ssql from data.csv | ssql where -where-expr 'date(created_at) > now() - duration("24h")'
+ssql from data.csv | ssql where -if-expr 'date(created_at) > now() - duration("24h")'
 ```
 
 ---
@@ -655,7 +655,7 @@ Would fail if expression returns `any` instead of typed value.
 Add a command to validate expressions without running:
 
 ```bash
-ssql expr-check -where-expr 'age > 18 and status == "active"' -sample data.csv
+ssql expr-check -if-expr 'age > 18 and status == "active"' -sample data.csv
 # Output: Valid boolean expression
 # Fields used: age (int64), status (string)
 ```

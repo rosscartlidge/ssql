@@ -197,7 +197,7 @@ ssql from ssh ssql-node1 /data/events/2025-01.csv | ssql to table
 
 # With pipeline
 ssql from ssh ssql-node1 /data/events/2025-01.csv \
-  | ssql where -where status eq 500 | ssql to table
+  | ssql where -if status eq 500 | ssql to table
 ```
 
 ### Catalog read (all shards)
@@ -216,7 +216,7 @@ ssql from catalog /tmp/test-catalog.csv \
 ```bash
 # Should only read ssql-node2 (February)
 ssql from catalog /tmp/test-catalog.csv \
-  -where date ge 2025-02-01 -where date le 2025-02-28 \
+  -if date ge 2025-02-01 -if date le 2025-02-28 \
   | ssql to table
 ```
 
@@ -225,7 +225,7 @@ ssql from catalog /tmp/test-catalog.csv \
 ```bash
 # Filter remotely, aggregate locally
 ssql from catalog /tmp/test-catalog.csv \
-  -remote 'where -where status ge 500' \
+  -remote 'where -if status ge 500' \
   | ssql group-by -field service -count | ssql to table
 ```
 
@@ -260,7 +260,7 @@ ssql from ssh ssql-node1 /data/events/2025-01.csv \
 ```bash
 # Verify generated code compiles and runs
 SSQLGO=1 ssql from ssh ssql-node1 /data/events/2025-01.csv \
-  | ssql where -where status ge 500 \
+  | ssql where -if status ge 500 \
   | ssql generate-go > /tmp/remote_test.go
 
 go run /tmp/remote_test.go

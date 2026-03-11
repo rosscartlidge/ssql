@@ -171,7 +171,7 @@ index   frequency   magnitude
 # Create a frequency spectrum chart
 ssql from /tmp/multi_freq.csv | \
   ssql fft -field amplitude -rate 1000 | \
-  ssql where -where frequency le 200 | \
+  ssql where -if frequency le 200 | \
   ssql to chart -x frequency -y magnitude -output /tmp/spectrum.html
 
 echo "Open /tmp/spectrum.html to see the frequency spectrum"
@@ -185,7 +185,7 @@ The chart will show clear peaks at 10 Hz, 50 Hz, and 120 Hz - exactly the freque
 # Find the top 5 frequency peaks
 ssql from /tmp/multi_freq.csv | \
   ssql fft -field amplitude -rate 1000 | \
-  ssql where -where frequency gt 1 | \
+  ssql where -if frequency gt 1 | \
   ssql sort -desc magnitude | \
   ssql limit 5 | \
   ssql to table
@@ -199,7 +199,7 @@ Phase tells you the offset of each frequency component:
 # FFT with phase (needed for reconstruction via IFFT)
 ssql from /tmp/multi_freq.csv | \
   ssql fft -field amplitude -rate 1000 -phase | \
-  ssql where -where frequency le 150 | \
+  ssql where -if frequency le 150 | \
   ssql to table | head -20
 ```
 
@@ -235,7 +235,7 @@ ssql from /tmp/noisy_signal.csv | \
 # Apply low-pass filter: FFT -> remove high frequencies -> IFFT
 ssql from /tmp/noisy_signal.csv | \
   ssql fft -field amplitude -rate 1000 -phase | \
-  ssql where -where frequency le 100 | \
+  ssql where -if frequency le 100 | \
   ssql ifft -magnitude magnitude -phase phase | \
   ssql to chart -x index -y signal -output /tmp/filtered.html
 
@@ -248,8 +248,8 @@ echo "Compare /tmp/noisy.html and /tmp/filtered.html"
 # Keep only frequencies between 40-60 Hz (isolate the 50 Hz component)
 ssql from /tmp/multi_freq.csv | \
   ssql fft -field amplitude -rate 1000 -phase | \
-  ssql where -where frequency ge 40 | \
-  ssql where -where frequency le 60 | \
+  ssql where -if frequency ge 40 | \
+  ssql where -if frequency le 60 | \
   ssql ifft -magnitude magnitude -phase phase | \
   ssql to chart -x index -y signal -output /tmp/bandpass.html
 ```
@@ -260,7 +260,7 @@ ssql from /tmp/multi_freq.csv | \
 # Remove 50 Hz (e.g., power line interference)
 ssql from /tmp/multi_freq.csv | \
   ssql fft -field amplitude -rate 1000 -phase | \
-  ssql where -where-expr 'frequency < 48 || frequency > 52' | \
+  ssql where -if-expr 'frequency < 48 || frequency > 52' | \
   ssql ifft -magnitude magnitude -phase phase | \
   ssql to chart -x index -y signal -output /tmp/notch.html
 ```
@@ -473,7 +473,7 @@ time        frequency   magnitude
 # Create spectrogram visualization
 ssql from /tmp/chirp.csv | \
   ssql spectrogram -field amplitude -window-size 256 -hop 64 -rate 1000 | \
-  ssql where -where frequency le 150 | \
+  ssql where -if frequency le 150 | \
   ssql to chart -x time -y frequency -output /tmp/spectrogram.html
 
 echo "Open /tmp/spectrogram.html - shows frequency rising from 10 to 100 Hz"
@@ -488,7 +488,7 @@ Different window functions trade off frequency resolution vs. spectral leakage:
 for window in hann hamming blackman none; do
   ssql from /tmp/chirp.csv | \
     ssql spectrogram -field amplitude -window-size 512 -window-type $window -rate 1000 | \
-    ssql where -where time eq 1.0 | \
+    ssql where -if time eq 1.0 | \
     ssql sort -desc magnitude | \
     ssql limit 3 | \
     ssql update -set window $window
@@ -508,13 +508,13 @@ done | ssql to table
 # High time resolution (small window, small hop)
 ssql from /tmp/chirp.csv | \
   ssql spectrogram -field amplitude -window-size 128 -hop 32 -rate 1000 | \
-  ssql where -where frequency le 150 | \
+  ssql where -if frequency le 150 | \
   ssql to chart -x time -y frequency -output /tmp/spec_time_res.html
 
 # High frequency resolution (large window)
 ssql from /tmp/chirp.csv | \
   ssql spectrogram -field amplitude -window-size 1024 -hop 256 -rate 1000 | \
-  ssql where -where frequency le 150 | \
+  ssql where -if frequency le 150 | \
   ssql to chart -x time -y frequency -output /tmp/spec_freq_res.html
 
 echo "Compare the two - tradeoff between time and frequency resolution"
@@ -534,7 +534,7 @@ ssql from /tmp/chirp.csv | \
 # Decibels - logarithmic scale (best for visualization)
 ssql from /tmp/chirp.csv | \
   ssql spectrogram -field amplitude -output db -rate 1000 | \
-  ssql where -where frequency le 150 | \
+  ssql where -if frequency le 150 | \
   ssql to chart -x time -y frequency -output /tmp/spec_db.html
 ```
 
@@ -544,15 +544,15 @@ ssql from /tmp/chirp.csv | \
 # Analyze a WAV file
 ssql from song.wav | \
   ssql spectrogram -field amplitude -window-size 2048 -hop 512 -rate 44100 -output db | \
-  ssql where -where frequency le 4000 | \
-  ssql where -where magnitude gt -60 | \
+  ssql where -if frequency le 4000 | \
+  ssql where -if magnitude gt -60 | \
   ssql to chart -x time -y frequency -output /tmp/song_spectrogram.html
 
 # Find when specific frequencies appear
 ssql from song.wav | \
   ssql spectrogram -field amplitude -window-size 2048 -rate 44100 | \
-  ssql where -where frequency ge 430 | \
-  ssql where -where frequency le 450 | \
+  ssql where -if frequency ge 430 | \
+  ssql where -if frequency le 450 | \
   ssql sort -desc magnitude | \
   ssql limit 10 | \
   ssql to table
@@ -581,15 +581,15 @@ python3 /tmp/freq_switch.py > /tmp/freq_switch.csv
 # Spectrogram clearly shows the transition
 ssql from /tmp/freq_switch.csv | \
   ssql spectrogram -field amplitude -window-size 256 -rate 1000 | \
-  ssql where -where frequency le 200 | \
+  ssql where -if frequency le 200 | \
   ssql to chart -x time -y frequency -output /tmp/freq_transition.html
 
 # Find the transition time programmatically
 ssql from /tmp/freq_switch.csv | \
   ssql spectrogram -field amplitude -window-size 256 -rate 1000 | \
-  ssql where -where frequency ge 100 | \
-  ssql where -where frequency le 140 | \
-  ssql where -where magnitude gt 50 | \
+  ssql where -if frequency ge 100 | \
+  ssql where -if frequency le 140 | \
+  ssql where -if magnitude gt 50 | \
   ssql sort time | \
   ssql limit 1 | \
   ssql to table
@@ -624,8 +624,8 @@ python3 /tmp/audio_sim.py > /tmp/audio.csv
 # Compute and visualize spectrum
 ssql from /tmp/audio.csv | \
   ssql fft -field amplitude -rate 44100 | \
-  ssql where -where frequency le 2000 | \
-  ssql where -where frequency ge 100 | \
+  ssql where -if frequency le 2000 | \
+  ssql where -if frequency ge 100 | \
   ssql to chart -x frequency -y magnitude -output /tmp/audio_spectrum.html
 
 echo "Open /tmp/audio_spectrum.html - peaks at 440, 659, 880 Hz"
@@ -657,7 +657,7 @@ python3 /tmp/vibration.py > /tmp/vibration.csv
 # Analyze vibration spectrum
 ssql from /tmp/vibration.csv | \
   ssql fft -field acceleration -rate 10000 | \
-  ssql where -where frequency le 500 | \
+  ssql where -if frequency le 500 | \
   ssql to chart -x frequency -y magnitude -output /tmp/vibration_spectrum.html
 
 echo "Open /tmp/vibration_spectrum.html - fault peak at 156 Hz"
@@ -704,16 +704,16 @@ python3 /tmp/ecg_sim.py > /tmp/ecg.csv
 
 # View raw ECG
 ssql from /tmp/ecg.csv | \
-  ssql where -where time le 3 | \
+  ssql where -if time le 3 | \
   ssql to chart -x time -y voltage -output /tmp/ecg_raw.html
 
 # Remove baseline wander with high-pass filter (FFT method)
 ssql from /tmp/ecg.csv | \
   ssql fft -field voltage -rate 500 -phase | \
-  ssql where -where frequency ge 0.5 | \
+  ssql where -if frequency ge 0.5 | \
   ssql ifft -magnitude magnitude -phase phase | \
   ssql update -set-expr time 'index / 500.0' | \
-  ssql where -where time le 3 | \
+  ssql where -if time le 3 | \
   ssql to chart -x time -y signal -output /tmp/ecg_filtered.html
 
 # Find heart rate using autocorrelation
@@ -734,7 +734,7 @@ ssql natively reads WAV files. For MP3 and other formats, use `ffmpeg` to conver
 # Read WAV and analyze frequency content
 ssql from song.wav | \
   ssql fft -field amplitude | \
-  ssql where -where frequency le 5000 | \
+  ssql where -if frequency le 5000 | \
   ssql to chart -x frequency -y magnitude -output /tmp/song_spectrum.html
 
 # The schema header includes sample_rate automatically
@@ -750,8 +750,8 @@ ffmpeg -i song.mp3 -ac 1 -ar 44100 song.wav
 # Now process with ssql
 ssql from song.wav | \
   ssql fft -field amplitude | \
-  ssql where -where frequency ge 20 | \
-  ssql where -where frequency le 4000 | \
+  ssql where -if frequency ge 20 | \
+  ssql where -if frequency le 4000 | \
   ssql to chart -x frequency -y magnitude -output /tmp/mp3_spectrum.html
 ```
 
@@ -760,7 +760,7 @@ ssql from song.wav | \
 # Stream MP3 through ffmpeg directly to ssql
 ssql from <(ffmpeg -i song.mp3 -ac 1 -ar 44100 -f wav - 2>/dev/null) | \
   ssql fft -field amplitude | \
-  ssql where -where frequency le 2000 | \
+  ssql where -if frequency le 2000 | \
   ssql to table | head -20
 ```
 
@@ -772,7 +772,7 @@ ffmpeg -i song.mp3 -ac 1 -ar 44100 /tmp/song.wav 2>/dev/null
 # Find top 10 frequency peaks (skip DC component)
 ssql from /tmp/song.wav | \
   ssql fft -field amplitude | \
-  ssql where -where frequency gt 20 | \
+  ssql where -if frequency gt 20 | \
   ssql sort -desc magnitude | \
   ssql limit 10 | \
   ssql to table
@@ -785,7 +785,7 @@ ffmpeg -i song.mp3 -ss 30 -t 5 -ac 1 -ar 44100 /tmp/segment.wav 2>/dev/null
 
 ssql from /tmp/segment.wav | \
   ssql fft -field amplitude | \
-  ssql where -where frequency le 1000 | \
+  ssql where -if frequency le 1000 | \
   ssql to chart -x frequency -y magnitude -output /tmp/segment_spectrum.html
 ```
 
@@ -837,7 +837,7 @@ ssql_gpu from large_signal.csv | ssql_gpu fft -field value
 # Good: Single pipeline
 ssql from data.csv | \
   ssql fft -field value -rate 1000 -phase | \
-  ssql where -where frequency le 100 | \
+  ssql where -if frequency le 100 | \
   ssql ifft -magnitude magnitude -phase phase
 
 # Avoid: Multiple separate invocations with intermediate files

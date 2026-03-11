@@ -118,7 +118,7 @@ Supports 13 of 15 window functions (not NTILE, PERCENT_RANK) with presorted inpu
 
 ```bash
 ssql from data.csv | ssql window -sum revenue total -order date -presorted
-ssql from data.csv | ssql window -avg price ma3 -rows 2,0 -order date -presorted
+ssql from data.csv | ssql window -avg price ma3 -preceding 2 -following 0 -order date -presorted
 ssql from data.csv | ssql window -lag price 1 prev -lead price 1 next -order date -presorted
 ```
 

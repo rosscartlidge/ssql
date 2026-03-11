@@ -612,10 +612,10 @@ ssql from prices.csv | ssql convolve -field close -kernel gaussian:21:3 -as smoo
 ```bash
 # Filter, smooth, then analyze
 ssql from data.csv \
-  | ssql where -where quality eq good \
+  | ssql where -if quality eq good \
   | ssql convolve -field signal -kernel avg:5 -as smoothed \
   | ssql fft -field smoothed \
-  | ssql where -where magnitude gt 0.1 \
+  | ssql where -if magnitude gt 0.1 \
   | ssql to json
 ```
 

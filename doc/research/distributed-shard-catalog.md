@@ -41,7 +41,7 @@ Usage:
 
 ```bash
 # Read all shards
-ssql from catalog shards.csv | ssql where -where status eq error | ssql to table
+ssql from catalog shards.csv | ssql where -if status eq error | ssql to table
 
 # Equivalent to (but automatic):
 ssql union \
@@ -50,7 +50,7 @@ ssql union \
   <(ssql from sshmachine-2/data/events/2025-03.csv) \
   <(ssql from sshmachine-2/data/events/2025-04.csv) \
   <(ssql from sshmachine-3/data/events/2025-05.csv) \
-  | ssql where -where status eq error | ssql to table
+  | ssql where -if status eq error | ssql to table
 ```
 
 ### Catalog with range metadata (partition pruning)
@@ -72,11 +72,11 @@ Empty `date_to` means "ongoing" (current shard). Empty date fields mean "all dat
 
 ```bash
 # Only reads shards covering March 2025 — skips machine-1 and machine-3
-ssql from catalog shards.csv -where date ge 2025-03-01 -where date le 2025-03-31 \
+ssql from catalog shards.csv -if date ge 2025-03-01 -if date le 2025-03-31 \
   | ssql group-by -field service -count | ssql to table
 
 # Only reads the europe shard
-ssql from catalog shards.csv -where region eq europe \
+ssql from catalog shards.csv -if region eq europe \
   | ssql to json
 ```
 
@@ -139,7 +139,7 @@ Each machine publishes its own catalog describing its local shards. The query me
 
 # Query merges catalogs from all machines
 ssql from catalog-hosts machine-1 machine-2 machine-3 \
-  | ssql where -where date ge 2025-03-01 | ssql to table
+  | ssql where -if date ge 2025-03-01 | ssql to table
 ```
 
 This desugars to:
@@ -153,7 +153,7 @@ ssql union \
   > /tmp/merged-catalog.csv
 
 # 2. Use merged catalog
-ssql from catalog /tmp/merged-catalog.csv -where date ge 2025-03-01 | ssql to table
+ssql from catalog /tmp/merged-catalog.csv -if date ge 2025-03-01 | ssql to table
 ```
 
 **Pros:** Each machine owns its own catalog. No central coordination.
@@ -224,13 +224,13 @@ eu-west-1,/data/logs/2025-01-free.csv,csv,2025-01-01,2025-01-31,eu-west,free
 
 ```bash
 # Prunes to just the 2 premium shards
-ssql from catalog shards.csv -where tier eq premium | ssql to table
+ssql from catalog shards.csv -if tier eq premium | ssql to table
 
 # Prunes to 1 shard: us-east premium January
 ssql from catalog shards.csv \
-  -where tier eq premium \
-  -where region eq us-east \
-  -where date ge 2025-01-01 -where date le 2025-01-31 \
+  -if tier eq premium \
+  -if region eq us-east \
+  -if date ge 2025-01-01 -if date le 2025-01-31 \
   | ssql to table
 ```
 
@@ -247,7 +247,7 @@ server-uk,/data/sales/uk.csv,csv,GB
 
 ```bash
 # Reads only the AU shard
-ssql from catalog shards.csv -where country eq AU | ssql to table
+ssql from catalog shards.csv -if country eq AU | ssql to table
 ```
 
 ### Static metadata columns
@@ -268,7 +268,7 @@ Every record from `contacts.csv` gets `source_system=salesforce` and `data_owner
 
 ```
 1. Read catalog CSV
-2. Apply partition pruning (skip shards that don't match -where filters)
+2. Apply partition pruning (skip shards that don't match -if filters)
 3. For remaining shards:
    a. Group by host (to batch SSH connections)
    b. For each host, open SSH connection (with ControlMaster)
@@ -364,7 +364,7 @@ When the pipeline contains filters or aggregations, push them to each shard:
 ```bash
 # This pushes the where + group-by to each shard
 ssql from catalog shards.csv \
-  -remote 'where -where status eq error | group-by -field service -count' \
+  -remote 'where -if status eq error | group-by -field service -count' \
   | ssql group-by -field service -sum count \
   | ssql to table
 ```

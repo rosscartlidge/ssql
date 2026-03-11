@@ -209,7 +209,7 @@ ssql from data.csv | ssql rollup dept region \
 
 # Filter to specific level
 ssql from data.csv | ssql rollup a_kind z_kind -count count \
-    | ssql where -where _level eq 1
+    | ssql where -if _level eq 1
 ```
 
 **Flags** (mirrors `group-by` aggregation flags):
@@ -286,11 +286,11 @@ This requires a way to reference the grand total. One approach: a `rollup-pct` c
 ```bash
 # Get grand total
 TOTAL=$(ssql from data.csv | ssql rollup dept -sum salary total \
-    | ssql where -where _level eq 0 | ssql include total | ssql to json)
+    | ssql where -if _level eq 0 | ssql include total | ssql to json)
 
 # Join or compute inline
 ssql from data.csv | ssql rollup dept -sum salary total \
-    | ssql where -where _level eq 1 \
+    | ssql where -if _level eq 1 \
     | ssql update -set-expr pct "total / $TOTAL * 100"
 ```
 

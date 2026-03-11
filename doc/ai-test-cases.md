@@ -295,7 +295,7 @@ Each test case specifies:
 **Expected patterns**:
 - `ssql from users.csv`
 - `ssql where`
-- `-where age`
+- `-if age`
 - `gt 30`
 - `ssql include`
 - `name`
@@ -306,7 +306,7 @@ Each test case specifies:
 **Negative patterns**:
 - `read-csv` (old command name)
 - `write-csv` (old command name)
-- `-match` (old flag name, use -where)
+- `-match` (old flag name, use -if)
 - `ssql where users.csv` (transform commands don't take FILE)
 
 **Validation**: parse
@@ -358,7 +358,7 @@ Each test case specifies:
 **Expected patterns**:
 - `ssql from users.csv`
 - `ssql update`
-- `-where`
+- `-if`
 - `-set tier`
 - `senior`
 - `mid` or `junior`
@@ -464,12 +464,12 @@ Each test case specifies:
 
 **Expected patterns**:
 - `ssql from orders.csv`
-- `-where-expr` or `-set-expr`
+- `-if-expr` or `-set-expr`
 - `quantity`
 - `|`
 
 **Negative patterns**:
-- `where -expr` (old flag: use -where-expr instead)
+- `where -expr` (old flag: use -if-expr instead)
 - `update -expr` (old flag: use -set-expr instead)
 - `-match` (old flag name)
 
@@ -520,7 +520,7 @@ Each test case specifies:
 - `export SSQLGO=1`
 - `ssql from users.csv`
 - `ssql where`
-- `-where status eq active`
+- `-if status eq active`
 - `ssql group-by`
 - `dept`
 - `-count`

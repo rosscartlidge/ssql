@@ -1346,7 +1346,7 @@ The schema header contains:
 **CLI Usage:**
 ```bash
 # Schema header is emitted automatically to preserve field order
-ssql from data.csv | ssql where -where age gt 25 | ssql to csv output.csv
+ssql from data.csv | ssql where -if age gt 25 | ssql to csv output.csv
 ```
 
 **How Schema Flows Through Pipelines:**

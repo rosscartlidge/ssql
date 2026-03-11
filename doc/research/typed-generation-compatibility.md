@@ -23,7 +23,7 @@ These commands use static field names known at CLI parse time:
 | Command | Pattern | Why It Works |
 |---------|---------|--------------|
 | `from` | `ssql from data.csv` | Schema derived from header row |
-| `where -where` | `-where age gt 18` | Field name is literal |
+| `where -if` | `-if age gt 18` | Field name is literal |
 | `update -set` | `-set status done` | Field name and value are literals |
 | `include` | `ssql include name age` | Field names are literals |
 | `exclude` | `ssql exclude id` | Field names are literals |
@@ -40,7 +40,7 @@ These commands use static field names known at CLI parse time:
 
 **Example Typed Generation:**
 ```go
-// CLI: ssql from users.csv | ssql where -where age gt 18 | ssql include name age
+// CLI: ssql from users.csv | ssql where -if age gt 18 | ssql include name age
 
 type InputRow struct {
     Name string
@@ -66,11 +66,11 @@ func main() {
 
 These commands have features that need changes for typed generation:
 
-#### 1. `where -where-expr` (Expression evaluation)
+#### 1. `where -if-expr` (Expression evaluation)
 
 **Current:** Runtime expression evaluation using expr-lang
 ```bash
-ssql where -where-expr 'age > 18 && verified == true'
+ssql where -if-expr 'age > 18 && verified == true'
 ```
 
 **Problem:** Expressions are evaluated at runtime against `map[string]any`. Cannot generate typed predicates without parsing the expression.
@@ -78,7 +78,7 @@ ssql where -where-expr 'age > 18 && verified == true'
 **Solution Options:**
 1. **Parse expressions to typed predicates** - Generate Go code from expr syntax
 2. **Restrict to simple expressions** - Only support comparisons translatable to typed code
-3. **Remove feature** - Force use of `-where field op value` syntax
+3. **Remove feature** - Force use of `-if field op value` syntax
 
 **Recommendation:** Parse expressions at generation time to produce typed predicates. Most expressions (`age > 18`) can translate directly to struct field access.
 
@@ -89,7 +89,7 @@ ssql where -where-expr 'age > 18 && verified == true'
 ssql update -set-expr discount 'total * 0.1'
 ```
 
-**Problem:** Same as `-where-expr` - runtime expression evaluation.
+**Problem:** Same as `-if-expr` - runtime expression evaluation.
 
 **Solution:** Parse expressions to generate typed update functions:
 ```go
@@ -270,7 +270,7 @@ All core operations (`Select`, `Where`, `Limit`, `Offset`, `Sort`, `Distinct`, `
 
 ### 2. Modify: Expression Flags
 
-The `-where-expr` and `-set-expr` flags need expression parsing at generation time. Two options:
+The `-if-expr` and `-set-expr` flags need expression parsing at generation time. Two options:
 
 **Option A: Parse to typed code (Recommended)**
 - Parse expr-lang syntax to generate Go predicates
@@ -343,7 +343,7 @@ Consider a two-tier approach:
 
 **Overall Assessment:** The vast majority of ssql functionality (>90%) translates directly to typed code generation. The main work is:
 
-1. Expression parsing for `-where-expr` and `-set-expr`
+1. Expression parsing for `-if-expr` and `-set-expr`
 2. Generating struct types per pipeline stage
 3. Typed join result struct generation
 

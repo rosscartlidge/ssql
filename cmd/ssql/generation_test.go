@@ -28,7 +28,7 @@ func TestGenerationWithEnvVar(t *testing.T) {
 		},
 		{
 			name:    "where generation",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test where -where age gt 18`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test where -if age gt 18`,
 			want:    `"type":"stmt"`,
 		},
 		{
@@ -100,7 +100,7 @@ func TestFullPipeline(t *testing.T) {
 	defer os.Remove("/tmp/ssql_test")
 
 	// Run pipeline: from | where | generate-go
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -where age gt 25 | /tmp/ssql_test generate-go`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test generate-go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -143,7 +143,7 @@ func TestGeneratedCodeCompiles(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// Generate code
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -where age gt 25 | /tmp/ssql_test generate-go`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test generate-go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -219,7 +219,7 @@ func TestLimitOffsetSortDistinct(t *testing.T) {
 		},
 		{
 			name:    "pipeline with all commands",
-			cmdLine: `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -where age gt 25 | /tmp/ssql_test limit 5 | /tmp/ssql_test offset 1 | /tmp/ssql_test sort age -desc | /tmp/ssql_test distinct | /tmp/ssql_test generate-go`,
+			cmdLine: `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test limit 5 | /tmp/ssql_test offset 1 | /tmp/ssql_test sort age -desc | /tmp/ssql_test distinct | /tmp/ssql_test generate-go`,
 			want:    []string{"package main", "ssql.ReadCSV", "ssql.Where", "ssql.Limit", "ssql.Offset", "ssql.SortRecords", "ssql.DistinctBy"},
 		},
 	}
@@ -282,7 +282,7 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 		},
 		{
 			name:           "where",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test where -where age gt 25`,
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test where -if age gt 25`,
 			expectFragment: true,
 			wantSubstring:  `ssql.Where`,
 		},
@@ -360,7 +360,7 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 		},
 		{
 			name:           "window-presorted-sliding-avg",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test window -avg price ma3 -order date -rows 2,0 -presorted`,
+			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test window -avg price ma3 -order date -preceding 2 -following 0 -presorted`,
 			expectFragment: true,
 			wantSubstring:  `ssql.MustStreamWindow`,
 		},
@@ -574,7 +574,7 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 	}{
 		{
 			name:    "simple conditional - single clause",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -where age gt 30 -set priority high`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -if age gt 30 -set priority high`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.Update`,
@@ -585,7 +585,7 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 		},
 		{
 			name:    "multiple clauses - first match wins",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -where purchases gt 5000 -set tier Gold + -where purchases gt 1000 -set tier Silver + -set tier Bronze`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -if purchases gt 5000 -set tier Gold + -if purchases gt 1000 -set tier Silver + -set tier Bronze`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.Update`,
@@ -598,7 +598,7 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 		},
 		{
 			name:    "AND logic within clause",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -where status eq active -where age gt 30 -set priority high`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -if status eq active -if age gt 30 -set priority high`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.Update`,
@@ -610,7 +610,7 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 		},
 		{
 			name:    "multiple updates per clause",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -where tier eq Gold -set discount 0.2 -set priority high`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test update -if tier eq Gold -set discount 0.2 -set priority high`,
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`ssql.Update`,
@@ -1189,7 +1189,7 @@ func TestErrorFragmentPropagation(t *testing.T) {
 	// Test that an error in middle of pipeline prevents generate-go from producing code
 	// The where command would succeed, but if an error fragment was introduced,
 	// generate-go should fail
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total | /tmp/ssql_test where -where age gt 25 | /tmp/ssql_test generate-go 2>&1`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test generate-go 2>&1`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)

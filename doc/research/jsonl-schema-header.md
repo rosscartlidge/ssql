@@ -256,8 +256,8 @@ This gives us:
 
 Currently, field completion only works for the first command in a pipeline:
 ```bash
-ssql from users.csv | ssql where -where <TAB>  # Works - reads users.csv
-ssql from users.csv | ssql include name age | ssql where -where <TAB>  # Doesn't know fields changed!
+ssql from users.csv | ssql where -if <TAB>  # Works - reads users.csv
+ssql from users.csv | ssql include name age | ssql where -if <TAB>  # Doesn't know fields changed!
 ```
 
 The `include` command reduced the available fields, but completion doesn't know that.
@@ -328,15 +328,15 @@ export SSQL_PIPELINE_TYPES="username:string,age:int"
 ### Example: Full Pipeline Completion
 
 ```bash
-ssql from users.csv | ssql include name age status | ssql where -where status eq active | ssql rename -as name full_name | ssql where -where <TAB>
+ssql from users.csv | ssql include name age status | ssql where -if status eq active | ssql rename -as name full_name | ssql where -if <TAB>
 ```
 
 Schema flows through:
 1. `from users.csv` → `{fields: [name, age, status, email, ...], types: {...}}`
 2. `include name age status` → `{fields: [name, age, status], types: {...}}`
-3. `where -where status eq active` → `{fields: [name, age, status], types: {...}}` (unchanged)
+3. `where -if status eq active` → `{fields: [name, age, status], types: {...}}` (unchanged)
 4. `rename -as name full_name` → `{fields: [full_name, age, status], types: {...}}`
-5. `where -where <TAB>` → offers: `full_name`, `age`, `status`
+5. `where -if <TAB>` → offers: `full_name`, `age`, `status`
 
 The completion correctly shows `full_name` (not `name`) because it knows the rename happened!
 

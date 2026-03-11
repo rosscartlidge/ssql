@@ -106,17 +106,17 @@ ssql from command -- ps -efl | \
 ssql from employees.csv | ssql window -row-number rn -partition dept -order salary -desc
 
 # Schema headers are automatic - preserves field order through pipelines
-ssql from data.csv | ssql where -where age gt 30 | ssql to csv output.csv
+ssql from data.csv | ssql where -if age gt 30 | ssql to csv output.csv
 
 # High-performance Arrow format (10-20x faster I/O)
-ssql from data.arrow | ssql where -where age gt 30 | ssql to arrow output.arrow
+ssql from data.arrow | ssql where -if age gt 30 | ssql to arrow output.arrow
 
 # Excel files — read and write .xlsx directly
-ssql from xlsx sales.xlsx -sheet "Q4 Results" | ssql where -where revenue gt 50000 | ssql to xlsx top.xlsx
+ssql from xlsx sales.xlsx -sheet "Q4 Results" | ssql where -if revenue gt 50000 | ssql to xlsx top.xlsx
 
 # Debug pipelines with jq (JSONL streaming format)
 ssql from data.csv | jq '.' | head -5  # Inspect data
-ssql from data.csv | ssql where -where age gt 30 | jq -s 'length'  # Count results
+ssql from data.csv | ssql where -if age gt 30 | jq -s 'length'  # Count results
 ```
 
 [**Try the CLI →**](doc/cli-codelab.md) | [**Debug with jq →**](doc/cli-debugging.md)
@@ -163,7 +163,7 @@ ssql version
 # Try it out
 echo "name,age,salary
 Alice,30,95000
-Bob,25,65000" | ssql from | ssql where -where age gt 28
+Bob,25,65000" | ssql from | ssql where -if age gt 28
 ```
 
 [**See CLI Tutorial →**](doc/cli-codelab.md)

@@ -37,10 +37,10 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	// Format: command -> flag -> arg index that should have field completion
 	expectedFieldCompletion := map[string]map[string][]int{
 		"where": {
-			"-where": {0}, // field is arg 0
+			"-if": {0}, // field is arg 0
 		},
 		"update": {
-			"-where":    {0}, // field is arg 0
+			"-if":    {0}, // field is arg 0
 			"-set":      {0}, // field is arg 0
 			"-set-expr": {0}, // field is arg 0
 		},
@@ -99,10 +99,10 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	// Define expected value completion (FieldValuesFrom)
 	expectedValueCompletion := map[string]map[string][]int{
 		"where": {
-			"-where": {2}, // value is arg 2 (field, operator, value)
+			"-if": {2}, // value is arg 2 (field, operator, value)
 		},
 		"update": {
-			"-where": {2}, // value is arg 2
+			"-if": {2}, // value is arg 2
 			"-set":   {1}, // value is arg 1 (field, value)
 		},
 	}

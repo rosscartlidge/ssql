@@ -25,7 +25,7 @@ ssql from data.csv | head -5
 ssql from data.csv | jq '.' | head -5
 
 # Check what's passing through a filter
-ssql from data.csv | ssql where -where age gt 30 | jq '.'
+ssql from data.csv | ssql where -if age gt 30 | jq '.'
 ```
 
 ### 2. Count Records at Each Stage
@@ -35,7 +35,7 @@ ssql from data.csv | ssql where -where age gt 30 | jq '.'
 ssql from data.csv | wc -l
 
 # Count after filtering
-ssql from data.csv | ssql where -where status eq active | wc -l
+ssql from data.csv | ssql where -if status eq active | wc -l
 
 # Use jq for exact count (handles empty lines)
 ssql from data.csv | jq -s 'length'
@@ -46,7 +46,7 @@ ssql from data.csv | jq -s 'length'
 ```bash
 # Work with small dataset while developing
 ssql from large_file.csv | ssql limit 100 | \
-  ssql where -where ... | \
+  ssql where -if ... | \
   jq '.'
 
 # Test with just first 10 records
@@ -107,7 +107,7 @@ ssql from data.csv | jq 'select(.age > 30)'
 
 # Combine with ssql filters
 ssql from data.csv | \
-  ssql where -where department eq Engineering | \
+  ssql where -if department eq Engineering | \
   jq 'select(.salary > 80000)'
 ```
 
@@ -168,7 +168,7 @@ ssql from data.csv | jq -r '.department' | sort -u
 echo "Before: $(ssql from data.csv | wc -l)"
 
 # Count after filter
-echo "After: $(ssql from data.csv | ssql where -where age gt 30 | wc -l)"
+echo "After: $(ssql from data.csv | ssql where -if age gt 30 | wc -l)"
 
 # See what was filtered out
 ssql from data.csv | jq 'select(.age <= 30)'
@@ -214,7 +214,7 @@ ssql from data.csv | jq '.age | type' | head -5
 ssql from data.csv | jq 'select(.age > 30)' | head -5
 
 # Step 5: Compare with ssql filter
-ssql from data.csv | ssql where -where age gt 30 | jq '.' | head -5
+ssql from data.csv | ssql where -if age gt 30 | jq '.' | head -5
 ```
 
 ### Pattern 2: "My GROUP BY results look wrong"
@@ -248,7 +248,7 @@ ssql from data.csv | head -1 | jq '.'
 
 # Fix in jq if needed:
 ssql from data.csv | jq '.age = (.age | tonumber)' | \
-  ssql where -where age gt 30
+  ssql where -if age gt 30
 ```
 
 ### Pattern 4: "Pipeline is too slow"
@@ -259,7 +259,7 @@ time (ssql from large.csv | head -1000 | ssql where ...)
 
 # Profile each stage
 time ssql from large.csv > /dev/null
-time (ssql from large.csv | ssql where -where age gt 30 > /dev/null)
+time (ssql from large.csv | ssql where -if age gt 30 > /dev/null)
 time (ssql from large.csv | ssql where ... | ssql group ... > /dev/null)
 
 # Use limit to stop early
@@ -275,13 +275,13 @@ ssql from large.csv | ssql where ... | ssql limit 100
 ```bash
 # Time entire pipeline
 time (ssql from data.csv | \
-  ssql where -where age gt 30 | \
+  ssql where -if age gt 30 | \
   ssql group-by department -count total | \
   ssql to csv output.csv)
 
 # Time individual commands
 time ssql from data.csv > /tmp/stage1.jsonl
-time (cat /tmp/stage1.jsonl | ssql where -where age gt 30 > /tmp/stage2.jsonl)
+time (cat /tmp/stage1.jsonl | ssql where -if age gt 30 > /tmp/stage2.jsonl)
 time (cat /tmp/stage2.jsonl | ssql group ... > /tmp/stage3.jsonl)
 ```
 
@@ -290,8 +290,8 @@ time (cat /tmp/stage2.jsonl | ssql group ... > /tmp/stage3.jsonl)
 ```bash
 # Ensure no data loss between stages
 echo "Input: $(ssql from data.csv | wc -l)"
-echo "After filter: $(ssql from data.csv | ssql where -where age gt 30 | wc -l)"
-echo "After group: $(ssql from data.csv | ssql where -where age gt 30 | ssql group-by dept -count n | wc -l)"
+echo "After filter: $(ssql from data.csv | ssql where -if age gt 30 | wc -l)"
+echo "After group: $(ssql from data.csv | ssql where -if age gt 30 | ssql group-by dept -count n | wc -l)"
 ```
 
 ### Sample Large Datasets
@@ -323,7 +323,7 @@ ssql from data.csv | head -1
 
 # Check each stage
 ssql from data.csv | tee /tmp/stage1.jsonl | \
-  ssql where -where age gt 30 | tee /tmp/stage2.jsonl | \
+  ssql where -if age gt 30 | tee /tmp/stage2.jsonl | \
   ssql to csv output.csv
 ```
 
@@ -339,12 +339,12 @@ ssql from data.csv | tee /tmp/stage1.jsonl | \
 ```bash
 # Count at each stage
 ssql from data.csv | tee >(wc -l >&2) | \
-  ssql where -where age gt 30 | tee >(wc -l >&2) | \
+  ssql where -if age gt 30 | tee >(wc -l >&2) | \
   ssql to csv output.csv
 
 # Or step by step
 echo "Input: $(ssql from data.csv | wc -l)"
-echo "Filtered: $(ssql from data.csv | ssql where -where age gt 30 | wc -l)"
+echo "Filtered: $(ssql from data.csv | ssql where -if age gt 30 | wc -l)"
 ```
 
 ### Issue: "Field not found errors"
@@ -380,7 +380,7 @@ ssql from data.csv | jq 'select(.age | type != "number")'
 **Solution:**
 ```bash
 # CSV auto-parsing should handle this, but if you have manual JSONL:
-ssql from data.jsonl | jq '.age |= tonumber' | ssql where -where age gt 30
+ssql from data.jsonl | jq '.age |= tonumber' | ssql where -if age gt 30
 ```
 
 ### Issue: "GROUP BY produces unexpected results"
@@ -407,7 +407,7 @@ echo "GROUP BY count: $(ssql from data.csv | ssql group-by department -count n |
 
 ```bash
 # Save intermediate results
-ssql from data.csv | ssql where -where age gt 30 > /tmp/filtered.jsonl
+ssql from data.csv | ssql where -if age gt 30 > /tmp/filtered.jsonl
 
 # Explore interactively with jq
 jq '.' /tmp/filtered.jsonl | less
@@ -424,18 +424,18 @@ jq 'group_by(.department) | map({dept: .[0].department, count: length})' /tmp/fi
 ssql from data.csv | jq '.'
 
 # Add one filter
-ssql from data.csv | ssql where -where age gt 30 | jq '.'
+ssql from data.csv | ssql where -if age gt 30 | jq '.'
 
 # Add another filter
 ssql from data.csv | \
-  ssql where -where age gt 30 | \
-  ssql where -where department eq Engineering | \
+  ssql where -if age gt 30 | \
+  ssql where -if department eq Engineering | \
   jq '.'
 
 # Add aggregation
 ssql from data.csv | \
-  ssql where -where age gt 30 | \
-  ssql where -where department eq Engineering | \
+  ssql where -if age gt 30 | \
+  ssql where -if department eq Engineering | \
   ssql group-by department -avg salary avg_salary | \
   jq '.'
 ```
@@ -456,8 +456,8 @@ ssql from data.csv | jq '.' | head -3
 ```bash
 # Add filters one at a time, checking counts
 ssql from data.csv | wc -l
-ssql from data.csv | ssql where -where age gt 30 | wc -l
-ssql from data.csv | ssql where -where age gt 30 | ssql where -where status eq active | wc -l
+ssql from data.csv | ssql where -if age gt 30 | wc -l
+ssql from data.csv | ssql where -if age gt 30 | ssql where -if status eq active | wc -l
 ```
 
 ### 3. Use Limit During Development
@@ -475,7 +475,7 @@ ssql from huge.csv | ssql limit 100 | \
 ```bash
 # Save stages for debugging
 ssql from data.csv > /tmp/1-input.jsonl
-cat /tmp/1-input.jsonl | ssql where -where age gt 30 > /tmp/2-filtered.jsonl
+cat /tmp/1-input.jsonl | ssql where -if age gt 30 > /tmp/2-filtered.jsonl
 cat /tmp/2-filtered.jsonl | ssql group-by dept -count n > /tmp/3-grouped.jsonl
 
 # Inspect any stage
@@ -487,7 +487,7 @@ jq '.' /tmp/2-filtered.jsonl | less
 ```bash
 # Count records at each stage
 ssql from data.csv | tee >(wc -l >&2) | \
-  ssql where -where age gt 30 | tee >(wc -l >&2) | \
+  ssql where -if age gt 30 | tee >(wc -l >&2) | \
   ssql group-by dept -count n | tee >(wc -l >&2) | \
   ssql to csv output.csv
 ```

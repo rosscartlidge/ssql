@@ -78,7 +78,7 @@ cd /path/to/data && ssql from data.csv
 
 **Symptoms:**
 ```bash
-$ ssql from data.csv | ssql where -where age gt 30 | wc -l
+$ ssql from data.csv | ssql where -if age gt 30 | wc -l
 0
 ```
 
@@ -112,7 +112,7 @@ ssql from data.csv | head -1 | jq 'keys | map(select(contains("age")))'
 ssql from data.csv | jq 'select(.age > 30)' | head -5
 
 # If numbers are strings (shouldn't happen with CSV), convert in jq
-ssql from data.csv | jq '.age |= tonumber' | ssql where -where age gt 30
+ssql from data.csv | jq '.age |= tonumber' | ssql where -if age gt 30
 ```
 
 ---
@@ -122,7 +122,7 @@ ssql from data.csv | jq '.age |= tonumber' | ssql where -where age gt 30
 **Symptoms:**
 ```bash
 # Filter silently excludes all records
-ssql from data.csv | ssql where -where nonexistent_field eq value | wc -l
+ssql from data.csv | ssql where -if nonexistent_field eq value | wc -l
 0
 ```
 
@@ -160,7 +160,7 @@ head -1 data.csv
 **Symptoms:**
 ```bash
 # Expected 100 records, got 95
-$ ssql from data.csv | ssql where -where status eq active | wc -l
+$ ssql from data.csv | ssql where -if status eq active | wc -l
 95
 ```
 
@@ -168,7 +168,7 @@ $ ssql from data.csv | ssql where -where status eq active | wc -l
 ```bash
 # Count at each stage
 echo "Input: $(ssql from data.csv | wc -l)"
-echo "After filter: $(ssql from data.csv | ssql where -where status eq active | wc -l)"
+echo "After filter: $(ssql from data.csv | ssql where -if status eq active | wc -l)"
 
 # Find what's being filtered out
 ssql from data.csv | jq 'select(.status != "active")' | jq -r '.status' | sort | uniq -c
@@ -189,7 +189,7 @@ ssql from data.csv | jq -r '.status' | sort | uniq
 **Solutions:**
 ```bash
 # Case-insensitive match (convert to lowercase in jq first)
-ssql from data.csv | jq '.status |= ascii_downcase' | ssql where -where status eq active
+ssql from data.csv | jq '.status |= ascii_downcase' | ssql where -if status eq active
 
 # Check actual values
 ssql from data.csv | jq -r '.status' | sort | uniq -c
@@ -245,7 +245,7 @@ ssql from data.csv | jq -r '.department' | sort | uniq -c
 **Symptoms:**
 ```bash
 # Numeric filter doesn't work
-ssql from data.csv | ssql where -where age gt 30 | wc -l
+ssql from data.csv | ssql where -if age gt 30 | wc -l
 0  # But you know there are records with age > 30
 ```
 
@@ -272,10 +272,10 @@ ssql from data.csv | jq '.age' | head -10
 ssql from data.csv | jq '.age | type' | sort | uniq -c
 
 # For manual JSONL, convert types
-ssql from data.jsonl | jq '.age |= tonumber' | ssql where -where age gt 30
+ssql from data.jsonl | jq '.age |= tonumber' | ssql where -if age gt 30
 
 # Filter out non-numeric values first
-ssql from data.csv | jq 'select(.age | type == "number")' | ssql where -where age gt 30
+ssql from data.csv | jq 'select(.age | type == "number")' | ssql where -if age gt 30
 ```
 
 ---

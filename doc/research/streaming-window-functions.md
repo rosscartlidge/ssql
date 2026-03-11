@@ -342,7 +342,7 @@ ssql from data.csv | ssql window -ntile 4 rank -order salary -presorted
 # Error: NTILE cannot be computed in streaming mode (needs partition size)
 
 # Error: unbounded following cannot stream
-ssql from data.csv | ssql window -sum revenue total -order date -rows '*,*' -presorted
+ssql from data.csv | ssql window -sum revenue total -order date -preceding -1 -following -1 -presorted
 # Error: UNBOUNDED FOLLOWING is not supported in streaming mode
 ```
 

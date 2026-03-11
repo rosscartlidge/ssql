@@ -19,7 +19,7 @@ ssql pipelines follow the Unix philosophy: small commands connected by pipes.
 ```
 SOURCE -> TRANSFORM(s) -> SINK
 
-ssql from data.csv | ssql where -where age gt 25 | ssql to table
+ssql from data.csv | ssql where -if age gt 25 | ssql to table
  ^^ source            ^^ transform                 ^^ sink
 ```
 
@@ -50,8 +50,8 @@ ssql from data.csv | ssql where -where age gt 25 | ssql to table
 
 | Command | Description | Key Flags |
 |---------|-------------|-----------|
-| `where` | Filter records | `-where FIELD OP VALUE`, `-where-expr EXPR` |
-| `update` | Modify fields | `-where ... -set FIELD VALUE`, `-set-expr FIELD EXPR`, `+` clause separator |
+| `where` | Filter records | `-if FIELD OP VALUE`, `-if-expr EXPR` |
+| `update` | Modify fields | `-if ... -set FIELD VALUE`, `-set-expr FIELD EXPR`, `+` clause separator |
 | `group-by` | Group and aggregate | `FIELDS...` (positional), `-count NAME`, `-sum F NAME`, `-avg F NAME`, `-min F NAME`, `-max F NAME` |
 | `sort` | Sort records | `FIELD` (positional), `-desc` |
 | `limit N` | Take first N records | (positional argument) |
@@ -92,7 +92,7 @@ ssql from data.csv | ssql to csv output.csv
 ssql from data.jsonl | ssql to json output.jsonl
 
 # Command output as source
-ssql from command -- ps aux | ssql where -where USER eq root
+ssql from command -- ps aux | ssql where -if USER eq root
 
 # Stdin
 cat data.csv | ssql from | ssql to table
@@ -107,22 +107,22 @@ ssql from data.csv | ssql to table      # Formatted table to stdout
 
 ```bash
 # Comparison operators
-ssql where -where age gt 25           # greater than
-ssql where -where age ge 25           # greater than or equal
-ssql where -where age lt 25           # less than
-ssql where -where age le 25           # less than or equal
-ssql where -where status eq active    # equal
-ssql where -where status ne pending   # not equal
+ssql where -if age gt 25           # greater than
+ssql where -if age ge 25           # greater than or equal
+ssql where -if age lt 25           # less than
+ssql where -if age le 25           # less than or equal
+ssql where -if status eq active    # equal
+ssql where -if status ne pending   # not equal
 
 # String operators
-ssql where -where name contains Alice
-ssql where -where email startswith admin
-ssql where -where domain endswith .com
-ssql where -where code regex "^[A-Z]{3}"
+ssql where -if name contains Alice
+ssql where -if email startswith admin
+ssql where -if domain endswith .com
+ssql where -if code regex "^[A-Z]{3}"
 
 # Expression-based filter (expr-lang syntax)
-ssql where -where-expr 'age > 25 && status == "active"'
-ssql where -where-expr 'amount * quantity > 500'
+ssql where -if-expr 'age > 25 && status == "active"'
+ssql where -if-expr 'amount * quantity > 500'
 ```
 
 ### 3. Update Command (If-ElseIf-Else)
@@ -135,9 +135,9 @@ ssql from data.csv | ssql update -set status done
 
 # Conditional update (if-elseif-else)
 ssql from data.csv | ssql update \
-  -where revenue gt 10000 -set tier premium \
+  -if revenue gt 10000 -set tier premium \
   + \
-  -where revenue gt 1000 -set tier standard \
+  -if revenue gt 1000 -set tier standard \
   + \
   -set tier basic
 
@@ -146,16 +146,16 @@ ssql from data.csv | ssql update -set-expr total 'price * quantity'
 
 # Combined: conditional with expressions
 ssql from data.csv | ssql update \
-  -where-expr 'amount > 1000' -set-expr discount 'amount * 0.1' \
+  -if-expr 'amount > 1000' -set-expr discount 'amount * 0.1' \
   + \
   -set-expr discount 'amount * 0.05'
 ```
 
 **Clause rules:**
 - Each clause separated by `+`
-- Each clause can have its own `-where` / `-where-expr` condition
+- Each clause can have its own `-if` / `-if-expr` condition
 - Each clause can have one or more `-set` / `-set-expr` assignments
-- Last clause without `-where` acts as the "else" branch
+- Last clause without `-if` acts as the "else" branch
 - First matching clause wins (order matters)
 
 ### 4. Join Command (Multi-Clause)
@@ -250,16 +250,16 @@ ssql from audio.csv | ssql spectrogram \
 
 ```bash
 # Generate Go code from entire pipeline - MUST export for all pipeline stages
-export SSQLGO=1 && ssql from data.csv | ssql where -where age gt 25 | ssql group-by dept -count count | ssql generate-go > program.go
+export SSQLGO=1 && ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -count count | ssql generate-go > program.go
 
 # Alternative: subshell with export
-(export SSQLGO=1; ssql from data.csv | ssql where -where age gt 25 | ssql generate-go) > program.go
+(export SSQLGO=1; ssql from data.csv | ssql where -if age gt 25 | ssql generate-go) > program.go
 
 # The generated program writes to stdout by default
 go run program.go
 
 # WRONG - SSQLGO=1 without export only affects first command!
-SSQLGO=1 ssql from data.csv | ssql where -where age gt 25 | ssql generate-go   # NO - where doesn't see SSQLGO!
+SSQLGO=1 ssql from data.csv | ssql where -if age gt 25 | ssql generate-go   # NO - where doesn't see SSQLGO!
 
 # WRONG - don't put output commands before generate-go
 export SSQLGO=1 && ssql from data.csv | ssql to table | ssql generate-go   # NO!
@@ -281,8 +281,8 @@ export SSQLGO=1 && ssql from data.csv | ssql to table | ssql generate-go   # NO!
 
 | Wrong | Correct |
 |-------|---------|
-| `-match field op value` | `-where field op value` |
-| `-expr 'expression'` | `-where-expr 'expression'` |
+| `-match field op value` | `-if field op value` |
+| `-expr 'expression'` | `-if-expr 'expression'` |
 | `-input FILE` on union | (stdin only) |
 
 ### Old Join Syntax (Pre-v4)
@@ -297,12 +297,12 @@ export SSQLGO=1 && ssql from data.csv | ssql to table | ssql generate-go   # NO!
 
 ```bash
 # WRONG - transform commands don't accept file arguments
-ssql where data.csv -where age gt 25       # NO!
+ssql where data.csv -if age gt 25       # NO!
 ssql update data.csv -set status done      # NO!
 ssql group-by sales.csv region             # NO!
 
 # CORRECT - pipe from source command
-ssql from data.csv | ssql where -where age gt 25
+ssql from data.csv | ssql where -if age gt 25
 ssql from data.csv | ssql update -set status done
 ssql from sales.csv | ssql group-by region -count count
 ```
@@ -311,16 +311,16 @@ ssql from sales.csv | ssql group-by region -count count
 
 ```bash
 # WRONG - using shell redirect instead of ssql to
-ssql from data.csv | ssql where -where age gt 25 > output.json    # NO!
+ssql from data.csv | ssql where -if age gt 25 > output.json    # NO!
 
 # CORRECT - use ssql to for output format
-ssql from data.csv | ssql where -where age gt 25 | ssql to json output.json
+ssql from data.csv | ssql where -if age gt 25 | ssql to json output.json
 
 # WRONG - missing pipe between commands
-ssql from data.csv ssql where -where age gt 25    # NO!
+ssql from data.csv ssql where -if age gt 25    # NO!
 
 # CORRECT - pipe between commands
-ssql from data.csv | ssql where -where age gt 25
+ssql from data.csv | ssql where -if age gt 25
 
 # WRONG - using -field flag with group-by (doesn't exist!)
 ssql from data.csv | ssql group-by -field dept -count    # NO!
@@ -351,9 +351,9 @@ ssql from a.csv | ssql union -file <(ssql from b.csv)
 
 ```bash
 ssql from employees.csv \
-  | ssql where -where salary gt 80000 \
+  | ssql where -if salary gt 80000 \
   | ssql group-by department -count count \
-  | ssql where -where count gt 10 \
+  | ssql where -if count gt 10 \
   | ssql sort count -desc \
   | ssql to table
 ```
@@ -365,9 +365,9 @@ ssql from employees.csv \
 ```bash
 ssql from orders.csv \
   | ssql update \
-    -where amount gt 1000 -set size large \
+    -if amount gt 1000 -set size large \
     + \
-    -where amount gt 100 -set size medium \
+    -if amount gt 100 -set size medium \
     + \
     -set size small \
   | ssql group-by size -count count -sum amount total -avg amount avg \
@@ -414,7 +414,7 @@ ssql from audio.csv \
 
 ```bash
 ssql from report.csv \
-  | ssql where -where-expr 'revenue > 0 && status == "active"' \
+  | ssql where -if-expr 'revenue > 0 && status == "active"' \
   | ssql include name revenue status \
   | ssql sort revenue -desc \
   | ssql limit 100 \
@@ -442,7 +442,7 @@ ssql from data.csv \
 # Must export SSQLGO so all pipeline stages see it
 export SSQLGO=1 && \
   ssql from sales.csv \
-  | ssql where -where region eq "North" \
+  | ssql where -if region eq "North" \
   | ssql group-by product -sum revenue total -count count \
   | ssql sort revenue_sum -desc \
   | ssql limit 10 \
@@ -461,11 +461,11 @@ Map natural language intent to ssql commands:
 | Intent | ssql Commands |
 |--------|--------------|
 | "read / load / open" | `ssql from FILE` |
-| "filter / only / where" | `ssql where -where FIELD OP VALUE` |
-| "filter with expression" | `ssql where -where-expr 'EXPR'` |
+| "filter / only / where" | `ssql where -if FIELD OP VALUE` |
+| "filter with expression" | `ssql where -if-expr 'EXPR'` |
 | "update / set / change" | `ssql update -set FIELD VALUE` |
 | "compute / calculate field" | `ssql update -set-expr FIELD 'EXPR'` |
-| "if X then Y else Z" | `ssql update -where ... -set ... + -set ...` |
+| "if X then Y else Z" | `ssql update -if ... -set ... + -set ...` |
 | "group by / per / by" | `ssql group-by FIELD` (positional) |
 | "count / total / average" | `-count`, `-sum F`, `-avg F` (on group-by) |
 | "sort / order by" | `ssql sort FIELD [-desc]` (positional) |
@@ -494,7 +494,7 @@ Generated CLI pipelines should have:
 - Pipes (`|`) between every pair of commands
 - `ssql from` as the source (or stdin from another pipeline)
 - Transform commands reading from stdin only (no file arguments)
-- Current flag names (`-where`, `-where-expr`, not `-match`, `-expr`)
+- Current flag names (`-if`, `-if-expr`, not `-match`, `-expr`)
 - Current command names (`from`, `to csv`, not `read-csv`, `write-csv`)
 - Current join syntax (`-using`, `-on L R`, not old `-on FIELD`)
 - `+` separator for update clauses (not `;` or `&&`)

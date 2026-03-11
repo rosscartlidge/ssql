@@ -492,7 +492,7 @@ ssql from sales.csv | ssql to explore output.html
 ssql from sales.csv | ssql to explore -x date -y revenue output.html
 
 # From any pipeline
-ssql from logs.jsonl | ssql where -where level eq ERROR | ssql to explore errors.html
+ssql from logs.jsonl | ssql where -if level eq ERROR | ssql to explore errors.html
 ```
 
 **What the generated HTML provides:**
@@ -582,7 +582,7 @@ ssql serve data.csv
 ssql serve -port 8080 data.csv
 
 # Serve from pipeline (buffers data)
-ssql from logs.jsonl | ssql where -where level eq ERROR | ssql serve -port 3000
+ssql from logs.jsonl | ssql where -if level eq ERROR | ssql serve -port 3000
 
 # Stream live data (WebSocket)
 tail -f /var/log/app.log | ssql from jsonl | ssql serve -stream

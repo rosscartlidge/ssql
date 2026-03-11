@@ -21,7 +21,7 @@ import (
 func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	fromCmd := cmd.Subcommand("from").
 		Description("Read data from files or command output").
-		Example("ssql from data.csv | ssql where -where age gt 18", "Read CSV (infers format from extension)").
+		Example("ssql from data.csv | ssql where -if age gt 18", "Read CSV (infers format from extension)").
 		Example("ssql from csv data.csv -type zipcode string", "Read CSV with explicit format and type overrides")
 
 	// Format subcommands
@@ -375,7 +375,7 @@ func registerFromXLSX(cmd *cf.SubcommandBuilder) {
 func registerFromCommand(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("command").
 		Description("Execute a command and read its output").
-		Example("ssql from command -- ps aux | ssql where -where USER eq root", "Parse ps output").
+		Example("ssql from command -- ps aux | ssql where -if USER eq root", "Parse ps output").
 		Example("ssql from command -- docker ps | ssql to table", "Parse docker output").
 		Flag("-generate", "-g").
 		Bool().

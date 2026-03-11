@@ -3583,7 +3583,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             return steps.map(step => {
                 switch (step.type) {
                     case 'where':
-                        return 'ssql where -where ' + step.field + ' ' + step.operator + ' ' + step.value;
+                        return 'ssql where -if ' + step.field + ' ' + step.operator + ' ' + step.value;
                     case 'sort':
                         return 'ssql sort ' + step.field + (step.desc ? ' -desc' : '');
                     case 'group_by': {
@@ -3671,9 +3671,9 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
 
                 switch (cmd) {
                     case 'where': {
-                        // where -where field op value
+                        // where -if field op value
                         let field = '', operator = 'eq', value = '';
-                        const wi = tokens.indexOf('-where');
+                        const wi = tokens.indexOf('-if');
                         if (wi !== -1 && wi + 3 < tokens.length) {
                             field = tokens[wi + 1];
                             operator = tokens[wi + 2];
@@ -4571,7 +4571,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         type: 'text',
                         className: 'pipeline-string-input',
                         value: pipelineString,
-                        placeholder: 'ssql where -where age gt 25 | ssql sort salary -desc',
+                        placeholder: 'ssql where -if age gt 25 | ssql sort salary -desc',
                         onChange: (e) => onPipelineStringChange(e.target.value),
                         style: pipelineParseError ? { borderColor: '#dc3545' } : {}
                     }),

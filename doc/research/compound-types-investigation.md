@@ -155,7 +155,7 @@ ssql update -set-expr first 'tags[0]'                  # indexing
 ssql update -set-expr city 'addr.city'                 # nested object access
 ssql update -set-expr has_admin 'any(roles, {# == "admin"})'  # array predicates
 ssql update -set-expr total 'reduce(scores, {# + #acc}, 0)'   # reduce
-ssql where -where-expr 'len(tags) > 2'                # filter by array length
+ssql where -if-expr 'len(tags) > 2'                # filter by array length
 ssql update -set-expr sorted 'sort(tags)'              # sort array
 ssql update -set-expr uniq_tags 'uniq(tags)'           # deduplicate
 ```

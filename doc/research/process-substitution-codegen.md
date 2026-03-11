@@ -28,7 +28,7 @@ This paper describes our solution: a fragment-based architecture with automatic 
 ssql commands communicate via JSONL (JSON Lines) format on stdin/stdout. Each command reads records, transforms them, and writes results. This enables arbitrary composition:
 
 ```bash
-ssql from data.csv | ssql where -where age gt 18 | ssql sort -by name
+ssql from data.csv | ssql where -if age gt 18 | ssql sort -by name
 ```
 
 ### 2.2 Code Generation Mode
@@ -53,7 +53,7 @@ Bash process substitution `<(command)` executes `command` and provides its outpu
 Consider a join operation with a filtered secondary source:
 
 ```bash
-ssql from users.csv | ssql join <(ssql from orders.csv | ssql where -where status eq active) -on id
+ssql from users.csv | ssql join <(ssql from orders.csv | ssql where -if status eq active) -on id
 ```
 
 In code generation mode, we face several challenges:
@@ -166,10 +166,10 @@ We want to find Engineering employees with their active orders over $400:
 
 ```bash
 ssql from users.csv \
-  | ssql where -where department eq Engineering \
+  | ssql where -if department eq Engineering \
   | ssql join <(ssql from orders.csv \
-      | ssql where -where status eq active \
-      | ssql where -where amount gt 400) \
+      | ssql where -if status eq active \
+      | ssql where -if amount gt 400) \
     -left-field id -right-field user_id \
   | ssql include name amount
 ```
@@ -186,10 +186,10 @@ ssql from users.csv \
 ```bash
 export SSQLGO=1
 ssql from users.csv \
-  | ssql where -where department eq Engineering \
+  | ssql where -if department eq Engineering \
   | ssql join <(ssql from orders.csv \
-      | ssql where -where status eq active \
-      | ssql where -where amount gt 400) \
+      | ssql where -if status eq active \
+      | ssql where -if amount gt 400) \
     -left-field id -right-field user_id \
   | ssql include name amount \
   | ssql generate-go

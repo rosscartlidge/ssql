@@ -53,10 +53,17 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Sort descending (applies to all -order fields in this clause)").
 		Done().
-		Flag("-rows").
-		String().
+		Flag("-preceding").
+		Int().
 		Local().
-		Help("Frame spec: P,F where * means unbounded (default: *,0)").
+		Default(-1).
+		Help("Rows before current row (-1 = unbounded, default: -1)").
+		Done().
+		Flag("-following").
+		Int().
+		Local().
+		Default(0).
+		Help("Rows after current row (-1 = unbounded, default: 0)").
 		Done().
 
 		// Ranking functions
@@ -295,14 +302,15 @@ func parseWindowClauses(clauses []cf.Clause) ([]ssql.WindowConfig, error) {
 			}
 		}
 
-		// Parse -rows frame
-		if raw, ok := clause.Flags["-rows"]; ok {
-			if s, ok := raw.(string); ok && s != "" {
-				frame, err := parseRowsFrame(s)
-				if err != nil {
-					return nil, fmt.Errorf("invalid -rows %q: %w", s, err)
-				}
-				cfg.Frame = frame
+		// Parse -preceding/-following frame
+		if raw, ok := clause.Flags["-preceding"]; ok {
+			if v, ok := raw.(int); ok {
+				cfg.Frame.Preceding = v
+			}
+		}
+		if raw, ok := clause.Flags["-following"]; ok {
+			if v, ok := raw.(int); ok {
+				cfg.Frame.Following = v
 			}
 		}
 
@@ -467,38 +475,6 @@ func parseLagLeadSpecs(flags map[string]any, flagName string, isLag bool) []ssql
 	return specs
 }
 
-// parseRowsFrame parses a frame spec like "2,0" or "*,0" or "*,*".
-func parseRowsFrame(spec string) (ssql.WindowFrame, error) {
-	parts := strings.SplitN(spec, ",", 2)
-	if len(parts) != 2 {
-		return ssql.WindowFrame{}, fmt.Errorf("expected format P,F (e.g., 2,0 or *,0)")
-	}
-
-	preceding, err := parseFrameValue(strings.TrimSpace(parts[0]))
-	if err != nil {
-		return ssql.WindowFrame{}, fmt.Errorf("preceding: %w", err)
-	}
-	following, err := parseFrameValue(strings.TrimSpace(parts[1]))
-	if err != nil {
-		return ssql.WindowFrame{}, fmt.Errorf("following: %w", err)
-	}
-
-	return ssql.WindowFrame{Preceding: preceding, Following: following}, nil
-}
-
-func parseFrameValue(s string) (int, error) {
-	if s == "*" {
-		return -1, nil // UNBOUNDED
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0, fmt.Errorf("expected integer or * for unbounded, got %q", s)
-	}
-	if n < 0 {
-		return 0, fmt.Errorf("frame value must be non-negative, got %d", n)
-	}
-	return n, nil
-}
 
 // inferWindowResultType returns the schema type string for a window function result.
 func inferWindowResultType(fn ssql.WindowFunc, inputSchema *lib.Schema) string {

@@ -229,7 +229,7 @@ func shouldGenerate(flagValue bool) bool {
 
 // getCommandString returns the command line that invoked this command
 // Filters out the -generate flag since it's implied by the code generation context
-// Returns something like "ssql from data.csv" or "ssql where -where age gt 18"
+// Returns something like "ssql from data.csv" or "ssql where -if age gt 18"
 // Properly quotes arguments that contain shell special characters
 func getCommandString() string {
 	// Filter out -generate and -g flags

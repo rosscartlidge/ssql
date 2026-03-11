@@ -104,7 +104,7 @@ ssql from data.csv | ssql window -lag price 1 prev_price -order date
 ssql from data.csv | ssql window -sum amount running_total -order date
 
 # Moving average (3-row window)
-ssql from data.csv | ssql window -avg price ma3 -order date -rows 2,0
+ssql from data.csv | ssql window -avg price ma3 -order date -preceding 2 -following 0
 
 # Multiple window functions in one pass
 ssql from data.csv | ssql window \
@@ -157,9 +157,9 @@ ssql from data.csv | ssql window \
 **Frame specification:**
 
 ```
--rows P,F                      ROWS BETWEEN P PRECEDING AND F FOLLOWING
-                               Use * for UNBOUNDED: -rows *,0 means from start to current
-                               Default: *,0 (UNBOUNDED PRECEDING to CURRENT ROW)
+-preceding N                   N rows before current row (-1 = unbounded)
+-following N                   N rows after current row (-1 = unbounded)
+                               Default: -preceding -1 -following 0 (UNBOUNDED PRECEDING to CURRENT ROW)
 ```
 
 ### Examples
@@ -200,14 +200,14 @@ ssql from monthly.csv | ssql window -lag revenue 1 prev_revenue -order month \
 
 ```bash
 ssql from employees.csv | ssql window -row-number rn -partition dept -order salary -desc \
-  | ssql where -where rn le 3 \
+  | ssql where -if rn le 3 \
   | ssql exclude rn
 ```
 
 **4. 7-day moving average:**
 
 ```bash
-ssql from prices.csv | ssql window -avg price ma7 -order date -rows 6,0
+ssql from prices.csv | ssql window -avg price ma7 -order date -preceding 6 -following 0
 ```
 
 **5. Rank with comparison to group average:**
@@ -318,7 +318,7 @@ But most require materialization:
 | Existing | Window equivalent | Migration |
 |----------|------------------|-----------|
 | `RunningSum(field)` | `window -sum field running_sum -order <something>` | Keep library function for streaming; CLI uses Window |
-| `RunningAverage(field, n)` | `window -avg field ma -order <something> -rows n-1,0` | Same |
+| `RunningAverage(field, n)` | `window -avg field ma -order <something> -preceding n-1 -following 0` | Same |
 | `RunningMinMax(field)` | `window -min field rmin -max field rmax -order <something>` | Same |
 
 The library's streaming functions serve a different purpose (infinite streams). The `window` command targets batch analytics where you need SQL-style window semantics with PARTITION BY, ORDER BY, and frame specs.

@@ -12,7 +12,7 @@ import (
 func RegisterGenerateGo(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("generate-go").
 		Description("Generate Go code from ssql CLI pipeline").
-		Example("ssql from -g data.csv | ssql where -g -where age gt 18 | ssql generate-go", "Generate Go code from pipeline").
+		Example("ssql from -g data.csv | ssql where -g -if age gt 18 | ssql generate-go", "Generate Go code from pipeline").
 		Example("(export SSQLGO=1 && ssql from data.csv | ssql limit 10 | ssql generate-go) > prog.go", "Generate using environment variable").
 		Flag("OUTPUT").
 		String().

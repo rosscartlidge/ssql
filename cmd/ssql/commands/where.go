@@ -15,30 +15,30 @@ import (
 func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("where").
 		Description("Filter records based on field conditions").
-		Example("ssql from data.csv | ssql where -where age gt 18", "Filter records where age > 18").
-		Example("ssql from sales.csv | ssql where -where-expr 'price * qty > 1000'", "Filter using expression (price * qty > 1000)").
-		Example("ssql from users.csv | ssql where -where dept eq Sales + -where dept eq Marketing", "Sales OR Marketing departments").
-		Example("ssql from users.csv | ssql where -where-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
-		Example("ssql from data.csv | ssql where -where-expr 'has(\"email\") and contains(email, \"@\")'", "Validate email field exists and format").
-		Example("ssql from sales.csv | ssql where -where-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
+		Example("ssql from data.csv | ssql where -if age gt 18", "Filter records where age > 18").
+		Example("ssql from sales.csv | ssql where -if-expr 'price * qty > 1000'", "Filter using expression (price * qty > 1000)").
+		Example("ssql from users.csv | ssql where -if dept eq Sales + -if dept eq Marketing", "Sales OR Marketing departments").
+		Example("ssql from users.csv | ssql where -if-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
+		Example("ssql from data.csv | ssql where -if-expr 'has(\"email\") and contains(email, \"@\")'", "Validate email field exists and format").
+		Example("ssql from sales.csv | ssql where -if-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
 		Done().
-		Flag("-where", "-w").
+		Flag("-if", "-i").
 		Arg("field").FieldsFromFlag("").Done().
 		Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
 		Arg("value").FieldValuesFrom("", "field").Done().
 		Accumulate().
 		Local().
-		Help("Filter condition: -where <field> <operator> <value>").
+		Help("Filter condition: -if <field> <operator> <value>").
 		Done().
-		Flag("-where-expr", "-x").
+		Flag("-if-expr", "-x").
 		Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
 		Accumulate().
 		Local().
-		Help("Filter using boolean expression: -where-expr <expression>").
+		Help("Filter using boolean expression: -if-expr <expression>").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -66,16 +66,16 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			for _, clause := range ctx.Clauses {
 				// Skip empty clauses
-				hasWhere := clause.Flags["-where"] != nil
-				hasWhereExpr := clause.Flags["-where-expr"] != nil
+				hasWhere := clause.Flags["-if"] != nil
+				hasWhereExpr := clause.Flags["-if-expr"] != nil
 				if !hasWhere && !hasWhereExpr {
 					continue
 				}
 
 				cd := clauseData{}
 
-				// Parse -where conditions
-				if matchesRaw, ok := clause.Flags["-where"]; ok && matchesRaw != nil {
+				// Parse -if conditions
+				if matchesRaw, ok := clause.Flags["-if"]; ok && matchesRaw != nil {
 					matches, ok := matchesRaw.([]any)
 					if ok {
 						for _, matchRaw := range matches {
@@ -97,8 +97,8 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				}
 
-				// Parse and compile -where-expr conditions ONCE
-				if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
+				// Parse and compile -if-expr conditions ONCE
+				if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
 					exprs, ok := exprsRaw.([]any)
 					if ok {
 						for _, exprRaw := range exprs {
@@ -130,7 +130,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				for _, clause := range clauses {
 					clauseMatches := true
 
-					// Check -where conditions
+					// Check -if conditions
 					for _, match := range clause.matches {
 						fieldValue, exists := ssql.Get[any](r, match.field)
 						if !exists || !applyOperator(fieldValue, match.op, match.value) {
@@ -139,7 +139,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						}
 					}
 
-					// Check -where-expr conditions (using pre-compiled expressions)
+					// Check -if-expr conditions (using pre-compiled expressions)
 					if clauseMatches {
 						for _, eval := range clause.exprEvals {
 							result, err := eval(r)
@@ -243,8 +243,8 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 	for _, clause := range clauses {
 		var andConditions []string
 
-		// Process -where conditions
-		if matchesRaw, ok := clause.Flags["-where"]; ok && matchesRaw != nil {
+		// Process -if conditions
+		if matchesRaw, ok := clause.Flags["-if"]; ok && matchesRaw != nil {
 			matches, ok := matchesRaw.([]any)
 			if ok && len(matches) > 0 {
 				for _, matchRaw := range matches {
@@ -269,8 +269,8 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 			}
 		}
 
-		// Process -where-expr conditions
-		if exprsRaw, ok := clause.Flags["-where-expr"]; ok && exprsRaw != nil {
+		// Process -if-expr conditions
+		if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
 			exprs, ok := exprsRaw.([]any)
 			if ok && len(exprs) > 0 {
 				for _, exprRaw := range exprs {

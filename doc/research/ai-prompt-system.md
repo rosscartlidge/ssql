@@ -39,10 +39,10 @@ This prompt teaches an LLM to compose ssql CLI commands via Unix pipes. It cover
 - Critical patterns that are hard to get right:
   - Update if-elseif-else with `+` clause separators
   - Join multi-clause with `-` separators and `-as` renames
-  - Expression language (`-where-expr`, `-set-expr`)
+  - Expression language (`-if-expr`, `-set-expr`)
   - Signal processing commands (fft, spectrogram, convolve)
   - Code generation with `SSQLGO=1`
-- Anti-patterns: old command names (read-csv → from), old flags (-match → -where), file arguments on transform commands
+- Anti-patterns: old command names (read-csv → from), old flags (-match → -if), file arguments on transform commands
 - 8 complete pipeline examples
 - A pattern recognition table mapping natural language intent to ssql commands
 

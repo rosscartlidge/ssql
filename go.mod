@@ -33,3 +33,5 @@ require (
 	golang.org/x/tools v0.37.0 // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
 )
+
+replace github.com/rosscartlidge/autocli/v4 => /home/rossc/src/autocli
