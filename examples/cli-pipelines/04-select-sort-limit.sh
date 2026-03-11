@@ -30,7 +30,7 @@ echo
 # Run the pipeline
 echo "Pipeline: Select name & salary, sort by salary descending, take top 3"
 echo "Command:"
-echo "  ssql read-csv /tmp/employees.csv | \\"
+echo "  ssql from /tmp/employees.csv | \\"
 echo "    ssql select -field name + -field salary | \\"
 echo "    ssql sort -field salary -desc | \\"
 echo "    ssql limit -n 3 | \\"
@@ -38,7 +38,7 @@ echo "    ssql to csv"
 echo
 echo "Results:"
 
-ssql read-csv /tmp/employees.csv | \
+ssql from /tmp/employees.csv | \
   ssql select -field name + -field salary | \
   ssql sort -field salary -desc | \
   ssql limit -n 3 | \

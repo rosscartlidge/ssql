@@ -98,7 +98,7 @@ West,Gadget,3100`
 **Or use the CLI:**
 ```bash
 # Prototype with Unix-style pipelines, then generate production Go code
-ssql from -- ps -efl | \
+ssql from command -- ps -efl | \
   ssql group-by UID -count process_count | \
   ssql to chart -x UID -y process_count -output chart.html
 
@@ -112,7 +112,7 @@ ssql from data.csv | ssql where -where age gt 30 | ssql to csv output.csv
 ssql from data.arrow | ssql where -where age gt 30 | ssql to arrow output.arrow
 
 # Excel files — read and write .xlsx directly
-ssql from sales.xlsx -sheet "Q4 Results" | ssql where -where revenue gt 50000 | ssql to xlsx top.xlsx
+ssql from xlsx sales.xlsx -sheet "Q4 Results" | ssql where -where revenue gt 50000 | ssql to xlsx top.xlsx
 
 # Debug pipelines with jq (JSONL streaming format)
 ssql from data.csv | jq '.' | head -5  # Inspect data

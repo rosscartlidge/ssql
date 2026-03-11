@@ -274,7 +274,7 @@ Read and write Excel (.xlsx) files:
 ssql from sales.xlsx | ssql to table
 
 # Read a specific sheet
-ssql from sales.xlsx -sheet "Q4 Results" | ssql to table
+ssql from xlsx sales.xlsx -sheet "Q4 Results" | ssql to table
 
 # Filter Excel data and write to a new spreadsheet
 ssql from sales.xlsx | \
@@ -341,12 +341,12 @@ Execute shell commands and parse their output:
 
 ```bash
 # Analyze process information
-ssql from -- ps -efl | \
+ssql from command -- ps -efl | \
   ssql where -where CMD contains chrome | \
   ssql include PID USER CMD
 ```
 
-**Note:** The `--` separator is required to prevent ssql from interpreting command flags like `-efl` as its own flags.
+**Note:** The `--` separator is required to prevent ssql from interpreting command flags like `-efl` as its own flags. Use `from command --` to execute shell commands.
 
 ### Example: System Monitoring
 
@@ -354,7 +354,7 @@ Find memory-intensive processes:
 
 ```bash
 # Get top memory users
-ssql from -- ps aux | \
+ssql from command -- ps aux | \
   ssql where -where USER eq root | \
   ssql include PID MEM CMD | \
   ssql to csv system_processes.csv
@@ -1124,7 +1124,7 @@ Let's build a comprehensive data analysis pipeline:
 
 ```bash
 # Execute the pipeline
-ssql from -- ps -efl | \
+ssql from command -- ps -efl | \
   ssql group-by UID -count process_count | \
   ssql chart -x UID -y process_count -output /tmp/processes_by_user.html
 ```
@@ -1142,7 +1142,7 @@ Output: `Chart created: /tmp/processes_by_user.html`
 Now convert the same pipeline to Go code:
 
 ```bash
-ssql exec -generate -- ps -efl | \
+ssql from command -generate -- ps -efl | \
   ssql group-by -generate UID -count process_count | \
   ssql chart -generate -x UID -y process_count -output processes.html | \
   ssql generate-go > monitor.go
@@ -1189,11 +1189,14 @@ go build -o monitor monitor.go
 
 ### Data Sources
 - `from [file]` - Read data from CSV, TSV, JSON, JSONL, Arrow, WAV, or XLSX file (auto-detects format, always emits schema header)
-  - `-type field type` - Override type for a field: `-type zipcode string -type age int`
-  - `-default-type type` - Default type for all fields: `auto` (default), `string`, `int`, `float`, `bool`
-  - `-format fmt` - Input format for stdin: `csv` (default), `tsv`, `json`, `jsonl`, `arrow`, `wav`
-  - `-sheet name` - For XLSX files: sheet name to read (default: first sheet)
-- `from -- [command] [args...]` - Execute command and parse output
+- `from csv [file]` - Read CSV (or stdin). Flags: `-type field type`, `-default-type type`
+- `from tsv [file]` - Read TSV (or stdin). Flags: `-type field type`, `-default-type type`
+- `from json [file]` - Read JSON
+- `from jsonl [file]` - Read JSONL (or stdin)
+- `from arrow [file]` - Read Arrow
+- `from wav file` - Read WAV audio. Flags: `-channel N`
+- `from xlsx file` - Read Excel. Flags: `-sheet name`
+- `from command -- [command] [args...]` - Execute command and parse output
 
 ### Transformations
 - `where` - Filter records by conditions (`-where field op value`)

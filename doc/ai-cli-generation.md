@@ -44,7 +44,7 @@ ssql from data.csv | ssql where -where age gt 25 | ssql to table
 |---------|-------------|-----------|
 | `from FILE` | Read CSV, JSON, JSONL, TSV | (auto-detects format from extension) |
 | `from` | Read from stdin | (pipe data in) |
-| `from -- CMD ARGS` | Read from command output | `--` separates ssql flags from command |
+| `from command -- CMD ARGS` | Read from command output | `--` separates ssql flags from command |
 
 ### Transform Commands
 
@@ -92,7 +92,7 @@ ssql from data.csv | ssql to csv output.csv
 ssql from data.jsonl | ssql to json output.jsonl
 
 # Command output as source
-ssql from -- ps aux | ssql where -where USER eq root
+ssql from command -- ps aux | ssql where -where USER eq root
 
 # Stdin
 cat data.csv | ssql from | ssql to table

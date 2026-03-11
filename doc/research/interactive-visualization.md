@@ -585,7 +585,7 @@ ssql serve -port 8080 data.csv
 ssql from logs.jsonl | ssql where -where level eq ERROR | ssql serve -port 3000
 
 # Stream live data (WebSocket)
-tail -f /var/log/app.log | ssql from -format jsonl | ssql serve -stream
+tail -f /var/log/app.log | ssql from jsonl | ssql serve -stream
 
 # Multiple data sources
 ssql serve -port 8080 \

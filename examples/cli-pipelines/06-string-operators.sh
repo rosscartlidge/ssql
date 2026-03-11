@@ -28,13 +28,13 @@ echo
 # Example 1: contains operator
 echo "Example 6a: Find emails containing 'engineering'"
 echo "Command:"
-echo "  ssql read-csv /tmp/users.csv | \\"
+echo "  ssql from /tmp/users.csv | \\"
 echo "    ssql where -match email contains engineering | \\"
 echo "    ssql to csv"
 echo
 echo "Results:"
 
-ssql read-csv /tmp/users.csv | \
+ssql from /tmp/users.csv | \
   ssql where -match email contains engineering | \
   ssql to csv
 
@@ -45,13 +45,13 @@ echo
 # Example 2: endswith operator
 echo "Example 6b: Find emails ending with '.org'"
 echo "Command:"
-echo "  ssql read-csv /tmp/users.csv | \\"
+echo "  ssql from /tmp/users.csv | \\"
 echo "    ssql where -match email endswith .org | \\"
 echo "    ssql to csv"
 echo
 echo "Results:"
 
-ssql read-csv /tmp/users.csv | \
+ssql from /tmp/users.csv | \
   ssql where -match email endswith .org | \
   ssql to csv
 
@@ -62,13 +62,13 @@ echo
 # Example 3: startswith operator
 echo "Example 6c: Find names starting with 'C'"
 echo "Command:"
-echo "  ssql read-csv /tmp/users.csv | \\"
+echo "  ssql from /tmp/users.csv | \\"
 echo "    ssql where -match name startswith C | \\"
 echo "    ssql to csv"
 echo
 echo "Results:"
 
-ssql read-csv /tmp/users.csv | \
+ssql from /tmp/users.csv | \
   ssql where -match name startswith C | \
   ssql to csv
 

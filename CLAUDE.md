@@ -1324,7 +1324,7 @@ Subcommand("command-name").
    - Enables dynamic flag handling and accumulation
 
 5. **-- separator support** - Requires autocli v3.0+
-   - Use for commands that pass args to other programs (like `from -- command args`)
+   - Use for commands that pass args to other programs (like `from command -- cmd args`)
    - Access via `ctx.RemainingArgs` slice
 
 ### autocli Migration History

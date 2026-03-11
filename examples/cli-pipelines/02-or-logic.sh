@@ -30,13 +30,13 @@ echo
 # Run the pipeline
 echo "Pipeline: Find employees where age < 26 OR salary > 100000"
 echo "Command:"
-echo "  ssql read-csv /tmp/employees.csv | \\"
+echo "  ssql from /tmp/employees.csv | \\"
 echo "    ssql where -match age lt 26 + -match salary gt 100000 | \\"
 echo "    ssql to csv"
 echo
 echo "Results:"
 
-ssql read-csv /tmp/employees.csv | \
+ssql from /tmp/employees.csv | \
   ssql where -match age lt 26 + -match salary gt 100000 | \
   ssql to csv
 

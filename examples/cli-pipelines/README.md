@@ -83,7 +83,7 @@ ssql include name salary | \
 **Demonstrates**: Complete end-to-end data processing pipeline
 ```bash
 # Full pipeline: filter, include, sort, limit, export
-ssql read-csv employees.csv | \
+ssql from employees.csv | \
   ssql where -match department eq Engineering | \
   ssql include name age salary | \
   ssql sort salary -desc | \
@@ -170,7 +170,7 @@ ssql where -match a eq 1 -match b eq 2 + -match c eq 3 -match d eq 4
 
 1. **Use tab completion**: Press TAB after `-match` to see available fields
 2. **Pipe to `head`**: Test pipelines quickly with `| head -n 5`
-3. **Check data structure**: Use `ssql read-csv file.csv | head -n 1` to see JSONL format
+3. **Check data structure**: Use `ssql from file.csv | head -n 1` to see JSONL format
 4. **Save pipelines**: Store working pipelines in shell scripts for reuse
 5. **Generate Go code**: Convert CLI pipeline to production code with `ssql generate-go`
 

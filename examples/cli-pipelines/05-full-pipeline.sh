@@ -39,7 +39,7 @@ echo "  5. Limit: top 3"
 echo "  6. Write: to output CSV"
 echo
 echo "Command:"
-echo "  ssql read-csv /tmp/employees.csv | \\"
+echo "  ssql from /tmp/employees.csv | \\"
 echo "    ssql where -match department eq Engineering | \\"
 echo "    ssql select -field name + -field age + -field salary | \\"
 echo "    ssql sort -field salary -desc | \\"
@@ -47,7 +47,7 @@ echo "    ssql limit -n 3 | \\"
 echo "    ssql to csv > /tmp/top_engineers.csv"
 echo
 
-ssql read-csv /tmp/employees.csv | \
+ssql from /tmp/employees.csv | \
   ssql where -match department eq Engineering | \
   ssql select -field name + -field age + -field salary | \
   ssql sort -field salary -desc | \
