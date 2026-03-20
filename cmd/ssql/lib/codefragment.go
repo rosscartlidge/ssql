@@ -20,6 +20,17 @@ func NextFuncName() string {
 	return fmt.Sprintf("rightSource%d", n)
 }
 
+// CodeParam declares a parameterizable value in generated code.
+// Each param becomes a flag.String/flag.Int declaration in the assembled program,
+// with the original pipeline value as the default.
+type CodeParam struct {
+	Name    string `json:"name"`           // Flag name (e.g., "input", "catalog", "date-ge")
+	Default string `json:"default"`        // Default value from original pipeline
+	Help    string `json:"help"`           // Flag help text
+	VarName string `json:"var"`            // Go variable name used in code (e.g., "flagInput")
+	Type    string `json:"type,omitempty"` // "string" (default), "int"
+}
+
 // CodeFragment represents a piece of generated Go code in a pipeline
 type CodeFragment struct {
 	Type    string   `json:"type"`            // "stmt" (statement), "final" (no output var), "init" (first in chain), "func" (subprocess function), "error" (generation failed)
@@ -29,6 +40,7 @@ type CodeFragment struct {
 	Imports []string `json:"imports"`         // Required imports (e.g., ["strings", "log"])
 	Command string   `json:"command"`         // The ssql command that generated this fragment (e.g., "ssql from")
 	Error   string   `json:"error,omitempty"` // Error message for "error" type fragments
+	Params  []CodeParam `json:"params,omitempty"` // Parameterizable values for flag generation
 
 	// For "func" type fragments (subprocess functions from process substitution)
 	FuncName string          `json:"func_name,omitempty"` // Function name (e.g., "rightSource1")
@@ -243,9 +255,16 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		}
 	}
 
+	// Collect all params from all fragments and deduplicate flag names
+	allParams := collectParams(fragments)
+
 	// Collect all imports and deduplicate
 	importSet := make(map[string]bool)
 	importSet["github.com/rosscartlidge/ssql/v4"] = true // Always needed
+
+	if len(allParams) > 0 {
+		importSet["flag"] = true
+	}
 
 	// iter import only needed for subprocess functions (process substitution)
 	if len(funcFragments) > 0 {
@@ -297,10 +316,15 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		}
 		if frag.Command != "" {
 			cmd := frag.Command
-			// If this is a join command with /dev/fd, replace with process substitution
-			if findString(cmd, "ssql join /dev/fd/") != -1 && funcIndex < len(funcFragments) {
-				// Get the subprocess command from the func fragment
-				subCmd := funcFragments[funcIndex].Command
+			// If this command has /dev/fd (process substitution), replace with readable <(...) syntax
+			if findString(cmd, "/dev/fd/") != -1 && funcIndex < len(funcFragments) {
+				// Get the subprocess command from the func fragment's body
+				subCmd := ""
+				for _, bodyFrag := range funcFragments[funcIndex].FuncBody {
+					if bodyFrag.Command != "" {
+						subCmd = bodyFrag.Command
+					}
+				}
 				if subCmd != "" {
 					// Replace /dev/fd/NN with <(subprocess)
 					// Find the /dev/fd part and replace it
@@ -351,14 +375,60 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		code.WriteString("\n")
 	}
 
+	// Emit flag declarations for parameterized values
+	if len(allParams) > 0 {
+		code.WriteString("var (\n")
+		for _, p := range allParams {
+			if p.Type == "int" {
+				code.WriteString(fmt.Sprintf("\t%s = flag.Int(%q, %s, %q)\n", p.VarName, p.Name, p.Default, p.Help))
+			} else {
+				code.WriteString(fmt.Sprintf("\t%s = flag.String(%q, %q, %q)\n", p.VarName, p.Name, p.Default, p.Help))
+			}
+		}
+		code.WriteString(")\n\n")
+	}
+
 	// Generate subprocess functions (from process substitution)
+	// Deduplicate function names: if two func fragments have the same name,
+	// rename the second one and update its corresponding stmt fragment reference.
+	// Track which stmt fragments have been "claimed" by a func with the same name.
+	funcNameCount := make(map[string]int)
+	stmtClaimed := make(map[int]bool) // indices of stmt fragments already matched to a func
 	for _, funcFrag := range funcFragments {
+		count := funcNameCount[funcFrag.FuncName]
+		funcNameCount[funcFrag.FuncName] = count + 1
+		if count > 0 {
+			oldName := funcFrag.FuncName
+			newName := fmt.Sprintf("%s_%d", oldName, count+1)
+			// Find the next UNCLAIMED stmt fragment that references the old name
+			for si, sf := range stmtFragments {
+				if !stmtClaimed[si] && strings.Contains(sf.Code, oldName+"()") {
+					sf.Code = strings.Replace(sf.Code, oldName+"()", newName+"()", 1)
+					stmtClaimed[si] = true
+					break
+				}
+			}
+			funcFrag.FuncName = newName
+			funcFrag.Var = newName
+		} else {
+			// First occurrence — claim its matching stmt fragment
+			for si, sf := range stmtFragments {
+				if !stmtClaimed[si] && strings.Contains(sf.Code, funcFrag.FuncName+"()") {
+					stmtClaimed[si] = true
+					break
+				}
+			}
+		}
 		code.WriteString(generateSubprocessFunction(funcFrag))
 		code.WriteString("\n")
 	}
 
 	// Add main function
 	code.WriteString("func main() {\n")
+
+	if len(allParams) > 0 {
+		code.WriteString("\tflag.Parse()\n\n")
+	}
 
 	// Add init fragments (the main data source)
 	for _, frag := range initFragments {
@@ -549,6 +619,43 @@ func extractPreCompileVars(fragments []*CodeFragment) []string {
 	return vars
 }
 
+// collectParams gathers all CodeParams from fragments, deduplicating flag names.
+// First occurrence of a name gets the bare name; subsequent get numbered suffixes.
+// When a param is renamed, the corresponding fragment's code is updated to use the new variable name.
+func collectParams(fragments []*CodeFragment) []CodeParam {
+	var result []CodeParam
+	seen := make(map[string]int) // name -> count of occurrences
+
+	renameParam := func(p CodeParam, frag *CodeFragment) CodeParam {
+		count := seen[p.Name]
+		seen[p.Name] = count + 1
+
+		param := p
+		if count > 0 {
+			newVarName := fmt.Sprintf("%s%d", p.VarName, count+1)
+			// Update the fragment's code to reference the new variable name
+			frag.Code = strings.ReplaceAll(frag.Code, "*"+p.VarName, "*"+newVarName)
+			param.Name = fmt.Sprintf("%s%d", p.Name, count+1)
+			param.VarName = newVarName
+		}
+		return param
+	}
+
+	for _, frag := range fragments {
+		for _, p := range frag.Params {
+			result = append(result, renameParam(p, frag))
+		}
+		// Also collect from func body fragments
+		for _, bodyFrag := range frag.FuncBody {
+			for _, p := range bodyFrag.Params {
+				result = append(result, renameParam(p, bodyFrag))
+			}
+		}
+	}
+
+	return result
+}
+
 // extractFilter extracts the filter function from a statement like "var := filter(input)"
 // Returns just "filter" for use in Chain()
 // Skips pre-compile var declarations (moved to package level)
@@ -594,9 +701,11 @@ func extractFilter(code string) string {
 // findLastApplyParen finds the last "(" that applies the filter to input
 // Looks for ")(" pattern and returns the index of the second "("
 func findLastApplyParen(code string) int {
-	// Search backwards for ")(" pattern
+	// Search backwards for ")(" or "}(" pattern
+	// ")(" handles standard filter application: ssql.Where(func...)(records)
+	// "}(" handles inline closure application: func(...) { ... }(records)
 	for i := len(code) - 1; i > 0; i-- {
-		if code[i] == '(' && i > 0 && code[i-1] == ')' {
+		if code[i] == '(' && i > 0 && (code[i-1] == ')' || code[i-1] == '}') {
 			return i
 		}
 	}

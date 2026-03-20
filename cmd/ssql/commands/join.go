@@ -330,19 +330,23 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 
 	// For regular files, create a simple func fragment that reads the file
 	// Build init fragment for the file read - detect file type by extension
+	joinParams := []lib.CodeParam{
+		{Name: "join", Default: rightFile, Help: "join file", VarName: "flagJoin"},
+	}
 	var initCode string
 	if strings.HasSuffix(strings.ToLower(rightFile), ".jsonl") || strings.HasSuffix(strings.ToLower(rightFile), ".json") {
-		initCode = fmt.Sprintf(`records, err := ssql.ReadJSON(%q)
+		initCode = `records, err := ssql.ReadJSON(*flagJoin)
 	if err != nil {
 		return nil
-	}`, rightFile)
+	}`
 	} else {
-		initCode = fmt.Sprintf(`records, err := ssql.ReadCSV(%q)
+		initCode = `records, err := ssql.ReadCSV(*flagJoin)
 	if err != nil {
 		return nil
-	}`, rightFile)
+	}`
 	}
 	initFrag := lib.NewInitFragment("records", initCode, nil, fmt.Sprintf("ssql from %s", rightFile))
+	initFrag.Params = joinParams
 
 	// Create func fragment with just the init
 	funcFrag := lib.NewFuncFragment(funcName, []*lib.CodeFragment{initFrag}, fmt.Sprintf("ssql from %s", rightFile))

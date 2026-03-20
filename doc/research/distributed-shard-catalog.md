@@ -1,6 +1,6 @@
 # Distributed Shard Catalog
 
-**Status:** Research / Design Proposal
+**Status:** Implemented (v4.27.0)
 **Date:** March 2026
 **Depends on:** [distributed-ssh-processing.md](distributed-ssh-processing.md)
 
@@ -359,17 +359,17 @@ This gives users confidence in what they got and what they missed, without pollu
 
 ### Push-down to shards
 
-When the pipeline contains filters or aggregations, push them to each shard:
+When the pipeline contains filters or aggregations, push them to each shard using `--` and `+` separators (consistent with `from ssh HOST PATH -- pipeline`):
 
 ```bash
 # This pushes the where + group-by to each shard
-ssql from catalog shards.csv \
-  -remote 'where -if status eq error | group-by -field service -count' \
+ssql from catalog shards.csv -- \
+  where -if status eq error + group-by -field service -count \
   | ssql group-by -field service -sum count \
   | ssql to table
 ```
 
-Note the two-level aggregation: each shard groups locally, then results are re-aggregated locally. This is the standard map-reduce pattern. The user specifies the remote portion explicitly (consistent with the `-remote` design in distributed-ssh-processing.md).
+Note the two-level aggregation: each shard groups locally, then results are re-aggregated locally. This is the standard map-reduce pattern. The user specifies the remote portion explicitly — each argument is plain, no structured strings.
 
 ## Code Generation
 

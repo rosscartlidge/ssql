@@ -122,10 +122,14 @@ func generateTopCode(n int, field string, asc bool) error {
 		funcName = "ssql.BottomBy"
 	}
 
-	code := fmt.Sprintf(`%s := %s(%d, func(r ssql.Record) float64 {
+	params := []lib.CodeParam{
+		{Name: "top", Default: fmt.Sprintf("%d", n), Help: "number of top records", VarName: "flagTop", Type: "int"},
+	}
+	code := fmt.Sprintf(`%s := %s(*flagTop, func(r ssql.Record) float64 {
 		return ssql.GetOr(r, %q, 0.0)
-	})(%s)`, outputVar, funcName, n, field, inputVar)
+	})(%s)`, outputVar, funcName, field, inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

@@ -86,7 +86,11 @@ func generateLimitCode(n int) error {
 		inputVar = "records"
 	}
 	outputVar := "limited"
-	code := fmt.Sprintf("%s := ssql.Limit[ssql.Record](%d)(%s)", outputVar, n, inputVar)
+	params := []lib.CodeParam{
+		{Name: "limit", Default: fmt.Sprintf("%d", n), Help: "maximum number of records", VarName: "flagLimit", Type: "int"},
+	}
+	code := fmt.Sprintf("%s := ssql.Limit[ssql.Record](*flagLimit)(%s)", outputVar, inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

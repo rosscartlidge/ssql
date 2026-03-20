@@ -3,10 +3,12 @@ package commands
 import (
 	"bufio"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"iter"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -20,7 +22,7 @@ import (
 // and extension inference: "ssql from data.csv" (bare form).
 func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	fromCmd := cmd.Subcommand("from").
-		Description("Read data from files or command output").
+		Description("Read data from files or command output. Tab-complete the filename to enable field completion in downstream commands (where, group-by, etc).").
 		Example("ssql from data.csv | ssql where -if age gt 18", "Read CSV (infers format from extension)").
 		Example("ssql from csv data.csv -type zipcode string", "Read CSV with explicit format and type overrides")
 
@@ -30,11 +32,14 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	registerFromJSON(fromCmd)
 	registerFromJSONL(fromCmd)
 	registerFromArrow(fromCmd)
+	registerFromParquet(fromCmd)
 	registerFromWAV(fromCmd)
 	registerFromXLSX(fromCmd)
 
 	// Operational subcommands
 	registerFromCommand(fromCmd)
+	registerFromSSH(fromCmd)
+	registerFromCatalog(fromCmd)
 
 	// Bare "from FILE" handler — infers format from extension
 	fromCmd.
@@ -45,7 +50,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("FILE").
 		String().
-		Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,wav,xlsx}"}).
+		Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,parquet,wav,xlsx}"}).
 		Global().
 		Default("").
 		Help("Input file (format inferred from extension). Reads JSONL from stdin if not specified.").
@@ -77,6 +82,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return executeFromJSON(inputFile, generate)
 			case strings.HasSuffix(lower, ".arrow"):
 				return executeFromArrow(inputFile, generate)
+			case strings.HasSuffix(lower, ".parquet"):
+				return executeFromParquet(inputFile, nil, generate)
 			case strings.HasSuffix(lower, ".wav"):
 				return executeFromWAV(inputFile, -1, generate)
 			case strings.HasSuffix(lower, ".xlsx"):
@@ -281,6 +288,58 @@ func registerFromArrow(cmd *cf.SubcommandBuilder) {
 		Done()
 }
 
+func registerFromParquet(cmd *cf.SubcommandBuilder) {
+	cmd.Subcommand("parquet").
+		Description("Read Parquet file (columnar format, DuckDB compatible)").
+		Example("ssql from parquet data.parquet | ssql to table", "Read Parquet file").
+		Example("ssql from parquet data.parquet -columns name -columns age -columns dept | ssql to table", "Read only selected columns (faster for wide files)").
+		Example("ssql from parquet data.parquet | ssql to csv output.csv", "Convert Parquet to CSV").
+		Flag("-generate", "-g").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
+		Flag("FILE").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
+		Global().
+		Required().
+		Help("Input Parquet file (random access required, no stdin)").
+		Done().
+		Flag("-columns", "-c").
+		Arg("column").FieldsFromFlag("FILE").Done().
+		Accumulate().
+		Global().
+		Help("Column to read (repeat for multiple). Omit for all columns. Reduces I/O for wide files.").
+		Done().
+		Handler(func(ctx *cf.Context) error {
+			var inputFile string
+			var generate bool
+
+			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
+				inputFile = fileVal.(string)
+			}
+			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
+				generate = genVal.(bool)
+			}
+
+			// Extract accumulated column names
+			var columns []string
+			if colVal, ok := ctx.GlobalFlags["-columns"]; ok && colVal != nil {
+				if colSlice, ok := colVal.([]any); ok {
+					for _, v := range colSlice {
+						if s, ok := v.(string); ok && s != "" {
+							columns = append(columns, s)
+						}
+					}
+				}
+			}
+
+			return executeFromParquet(inputFile, columns, generate)
+		}).
+		Done()
+}
+
 func registerFromWAV(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("wav").
 		Description("Read WAV audio file").
@@ -409,6 +468,625 @@ func registerFromCommand(cmd *cf.SubcommandBuilder) {
 		Done()
 }
 
+func registerFromSSH(cmd *cf.SubcommandBuilder) {
+	cmd.Subcommand("ssh").
+		Description("Read from a remote file via SSH. Tab-complete the path to enable field completion in downstream commands.").
+		Example("ssql from ssh server /data/logs.csv | ssql to table", "Read remote CSV").
+		Example("ssql from ssh server /data/logs.csv -- where -if status eq error", "Push filter to remote").
+		Example("ssql from ssh server /data/logs.csv -- where -if age gt 25 + group-by -field dept -count", "Push multi-step pipeline to remote").
+		Flag("HOST").
+		String().
+		CompleterFunc(completeSSHHost).
+		Global().
+		Help("SSH host (from ~/.ssh/config or user@host)").
+		Done().
+		Flag("PATH").
+		String().
+		CompleterFunc(completeSSHPath).
+		Global().
+		Help("Remote file path").
+		Done().
+		Flag("-gpu").
+		Bool().
+		Global().
+		Default(false).
+		Help("Use ssql_gpu on the remote machine").
+		Done().
+		Flag("-generate", "-g").
+		Bool().
+		Global().
+		Default(false).
+		Help("Generate Go code instead of executing").
+		Done().
+		Handler(func(ctx *cf.Context) error {
+			host, _ := ctx.GlobalFlags["HOST"].(string)
+			path, _ := ctx.GlobalFlags["PATH"].(string)
+			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
+			generate, _ := ctx.GlobalFlags["-generate"].(bool)
+
+			if host == "" || path == "" {
+				return fmt.Errorf("usage: ssql from ssh HOST PATH [-- <remote-pipeline>]")
+			}
+
+			// If RemainingArgs present (after --), it's a push-down pipeline
+			if len(ctx.RemainingArgs) > 0 {
+				if shouldGenerate(generate) {
+					return generateFromSSHRemoteCode(host, path, gpu, ctx.RemainingArgs)
+				}
+				return executeFromSSHRemote(host, path, gpu, ctx.RemainingArgs)
+			}
+
+			// Simple remote read
+			if shouldGenerate(generate) {
+				return generateFromSSHCode(host, path, gpu)
+			}
+			return executeFromSSH(host, path, gpu)
+		}).
+		Done()
+}
+
+func registerFromCatalog(cmd *cf.SubcommandBuilder) {
+	cmd.Subcommand("catalog").
+		Description("Read from a shard catalog (CSV mapping host+path to data files)").
+		Example("ssql from catalog shards.csv | ssql to table", "Read all shards in catalog").
+		Example("ssql from catalog shards.csv -if date ge 2025-03-01 | ssql to table", "Partition pruning").
+		Example("ssql from catalog shards.csv -- where -if status eq error", "Push filter to each shard").
+		Flag("FILE").
+		String().
+		CompleterFunc(completeCatalogFile).
+		Global().
+		Help("Catalog CSV file (must have host and path columns)").
+		Done().
+		Flag("-if", "-i").
+		Arg("field").FieldsFromFlag("FILE").Done().
+		Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le"}}).Done().
+		Arg("value").Completer(cf.CompletionFunc(completeCatalogFilterValue)).Done().
+		Accumulate().
+		Global().
+		Help("Partition pruning: skip shards that don't match (uses catalog columns)").
+		Done().
+		Flag("-gpu").
+		Bool().
+		Global().
+		Default(false).
+		Help("Use ssql_gpu on remote machines").
+		Done().
+		Flag("-shard-field").
+		String().
+		Global().
+		Default("").
+		Help("Add a field to each record showing its shard origin (host:path)").
+		Done().
+		Flag("-generate", "-g").
+		Bool().
+		Global().
+		Default(false).
+		Help("Generate Go code instead of executing").
+		Done().
+		Handler(func(ctx *cf.Context) error {
+			catalogFile, _ := ctx.GlobalFlags["FILE"].(string)
+			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
+			shardField, _ := ctx.GlobalFlags["-shard-field"].(string)
+			generate, _ := ctx.GlobalFlags["-generate"].(bool)
+
+			if catalogFile == "" {
+				return fmt.Errorf("usage: ssql from catalog FILE [-if field op value]...")
+			}
+
+			// Parse pruning filters
+			var filters []ssql.CatalogFilter
+			if ifVal, ok := ctx.GlobalFlags["-if"]; ok {
+				filters = parseCatalogFilters(ifVal)
+			}
+
+			if shouldGenerate(generate) {
+				return generateFromCatalogCode(catalogFile, gpu, filters, shardField, ctx.RemainingArgs)
+			}
+
+			return executeFromCatalog(catalogFile, gpu, filters, shardField, ctx.RemainingArgs)
+		}).
+		Done()
+}
+
+// completeSSHHost completes SSH host names from ~/.ssh/config and warms
+// the connection when a single host is matched.
+func completeSSHHost(ctx cf.CompletionContext) ([]string, error) {
+	hosts := parseSSHConfigHosts()
+	if len(hosts) == 0 {
+		return []string{"<host>"}, nil
+	}
+
+	var matches []string
+	partial := strings.ToLower(ctx.Partial)
+	for _, h := range hosts {
+		if strings.HasPrefix(strings.ToLower(h), partial) {
+			matches = append(matches, h)
+		}
+	}
+
+	// Single match — warm the SSH connection in the background
+	if len(matches) == 1 {
+		exec.Command("ssh", "-o", "ConnectTimeout=3", "-N", "-f", matches[0]).Start()
+	}
+
+	if len(matches) == 0 {
+		return []string{"<host>"}, nil
+	}
+	return matches, nil
+}
+
+// parseSSHConfigHosts reads Host entries from ~/.ssh/config.
+func parseSSHConfigHosts() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	f, err := os.Open(home + "/.ssh/config")
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var hosts []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(strings.ToLower(line), "host ") {
+			for _, h := range strings.Fields(line)[1:] {
+				// Skip wildcards and patterns
+				if strings.ContainsAny(h, "*?") {
+					continue
+				}
+				hosts = append(hosts, h)
+			}
+		}
+	}
+	return hosts
+}
+
+// completeSSHPath completes the PATH arg for `from ssh` and emits a field_cache
+// directive by SSH-fetching the first line of the remote file.
+func completeSSHPath(ctx cf.CompletionContext) ([]string, error) {
+	host, _ := ctx.GlobalFlags["HOST"].(string)
+	if host == "" || ctx.Partial == "" {
+		return []string{"<remote-path>"}, nil
+	}
+
+	// Try to fetch the CSV header from the remote file
+	cmd := exec.Command("ssh", "-o", "ConnectTimeout=2", "-o", "BatchMode=yes", host,
+		"/usr/bin/head -1 "+ssql.ShellQuote(ctx.Partial))
+	out, err := cmd.Output()
+	if err != nil {
+		// SSH failed (host down, file not found, etc.) — just return the partial
+		return []string{ctx.Partial}, nil
+	}
+
+	header := strings.TrimSpace(string(out))
+	if header == "" {
+		return []string{ctx.Partial}, nil
+	}
+
+	// Parse as CSV header
+	reader := csv.NewReader(strings.NewReader(header))
+	fields, err := reader.Read()
+	if err != nil || len(fields) == 0 {
+		return []string{ctx.Partial}, nil
+	}
+	for i := range fields {
+		fields[i] = strings.TrimSpace(fields[i])
+	}
+
+	// Emit field_cache directive for downstream commands
+	directive := cf.CompletionDirective{
+		Type:   "field_cache",
+		Fields: fields,
+	}
+	directiveJSON, err := json.Marshal(directive)
+	if err != nil {
+		return []string{ctx.Partial}, nil
+	}
+	return []string{string(directiveJSON), ctx.Partial}, nil
+}
+
+// completeCatalogFile completes catalog CSV files and emits a field_cache directive
+// with the catalog's metadata columns (for -if pruning completion).
+// The FileCompleter would cache ALL headers (including host, path, format, fields),
+// but -if only needs the metadata columns used for pruning.
+func completeCatalogFile(ctx cf.CompletionContext) ([]string, error) {
+	// Delegate to FileCompleter for the actual file completion
+	fc := &cf.FileCompleter{Pattern: "*.csv"}
+	results, err := fc.Complete(ctx)
+	if err != nil || len(results) == 0 {
+		return results, err
+	}
+
+	// If we got a single file match (not a directory), read catalog columns for -if completion
+	matches := results
+	// Skip any JSON directives from FileCompleter
+	for len(matches) > 0 && strings.HasPrefix(matches[0], "{") {
+		matches = matches[1:]
+	}
+	if len(matches) != 1 || strings.HasSuffix(matches[0], "/") {
+		return results, nil
+	}
+
+	// Read catalog headers, filtering out structural columns
+	catalogFields := readCatalogColumns(matches[0])
+	if len(catalogFields) == 0 {
+		return results, nil
+	}
+
+	// Replace FileCompleter's field_cache with catalog metadata columns
+	directive := cf.CompletionDirective{
+		Type:   "field_cache",
+		Fields: catalogFields,
+	}
+	directiveJSON, err := json.Marshal(directive)
+	if err != nil {
+		return results, nil
+	}
+
+	// Strip any existing JSON directives from FileCompleter, prepend ours
+	var clean []string
+	for _, r := range results {
+		if !strings.HasPrefix(r, "{") {
+			clean = append(clean, r)
+		}
+	}
+	return append([]string{string(directiveJSON)}, clean...), nil
+}
+
+// completeCatalogFilterValue completes -if value args from catalog CSV data.
+// For range fields (where X_from/X_to exist), samples from X_from so users
+// can see the value format.
+func completeCatalogFilterValue(ctx cf.CompletionContext) ([]string, error) {
+	catalogFile, _ := ctx.GlobalFlags["FILE"].(string)
+	// Fallback: scan args for the catalog file (positional flags may not be in GlobalFlags during completion)
+	if catalogFile == "" {
+		for _, arg := range ctx.Args {
+			if strings.HasSuffix(arg, ".csv") {
+				catalogFile = arg
+				break
+			}
+		}
+	}
+	if catalogFile == "" {
+		return []string{"<value>"}, nil
+	}
+
+	// Field name is the first arg of the -if flag.
+	// PreviousArgs may not be populated during completion; fall back to
+	// scanning ctx.Args for the token after -if/-i.
+	field := ""
+	if len(ctx.PreviousArgs) >= 1 {
+		field = ctx.PreviousArgs[0]
+	}
+	if field == "" {
+		for i, arg := range ctx.Args {
+			if (arg == "-if" || arg == "-i") && i+1 < len(ctx.Args) {
+				field = ctx.Args[i+1]
+				break
+			}
+		}
+	}
+	if field == "" {
+		return []string{"<value>"}, nil
+	}
+
+	f, err := os.Open(catalogFile)
+	if err != nil {
+		return []string{"<value>"}, nil
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	headers, err := reader.Read()
+	if err != nil {
+		return []string{"<value>"}, nil
+	}
+
+	// Find the column: try exact match, then field_from for range fields
+	colIdx := -1
+	for i, h := range headers {
+		if strings.TrimSpace(strings.ToLower(h)) == field {
+			colIdx = i
+			break
+		}
+	}
+	if colIdx < 0 {
+		for i, h := range headers {
+			if strings.TrimSpace(strings.ToLower(h)) == field+"_from" {
+				colIdx = i
+				break
+			}
+		}
+	}
+	if colIdx < 0 {
+		return []string{"<value>"}, nil
+	}
+
+	// Collect unique values
+	seen := map[string]bool{}
+	var values []string
+	for {
+		row, err := reader.Read()
+		if err != nil {
+			break
+		}
+		if colIdx < len(row) {
+			v := strings.TrimSpace(row[colIdx])
+			if v != "" && !seen[v] {
+				seen[v] = true
+				if strings.HasPrefix(strings.ToLower(v), strings.ToLower(ctx.Partial)) {
+					values = append(values, v)
+				}
+			}
+		}
+	}
+	sort.Strings(values)
+
+	if len(values) == 0 {
+		return []string{"<value>"}, nil
+	}
+	return values, nil
+}
+
+// readCatalogColumns reads a catalog CSV header and returns the prunable field names.
+// Range columns (X_from/X_to) are collapsed to their logical field name (X).
+// The "fields" column is excluded (it's a schema hint, not a pruning target).
+func readCatalogColumns(catalogFile string) []string {
+	f, err := os.Open(catalogFile)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	headers, err := csv.NewReader(f).Read()
+	if err != nil {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	var cols []string
+	for _, h := range headers {
+		h = strings.TrimSpace(strings.ToLower(h))
+		if h == "fields" {
+			continue
+		}
+		// Collapse range columns: date_from/date_to → date
+		if strings.HasSuffix(h, "_from") {
+			h = strings.TrimSuffix(h, "_from")
+		} else if strings.HasSuffix(h, "_to") {
+			h = strings.TrimSuffix(h, "_to")
+		}
+		if !seen[h] {
+			seen[h] = true
+			cols = append(cols, h)
+		}
+	}
+	return cols
+}
+
+
+// parseCatalogFilters extracts catalog filters from autocli accumulated flag value.
+func parseCatalogFilters(ifVal any) []ssql.CatalogFilter {
+	var filters []ssql.CatalogFilter
+	if ifSlice, ok := ifVal.([]any); ok {
+		for _, item := range ifSlice {
+			if argMap, ok := item.(map[string]any); ok {
+				filters = append(filters, ssql.CatalogFilter{
+					Field:    fmt.Sprintf("%v", argMap["field"]),
+					Operator: fmt.Sprintf("%v", argMap["operator"]),
+					Value:    fmt.Sprintf("%v", argMap["value"]),
+				})
+			}
+		}
+	}
+	return filters
+}
+
+// executeFromCatalog reads all shards in a catalog, applying pruning and optional push-down.
+func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, pipelineArgs []string) error {
+	entries, err := ssql.ReadCatalog(catalogFile)
+	if err != nil {
+		return err
+	}
+
+	entries = ssql.PruneCatalog(entries, filters)
+	if len(entries) == 0 {
+		return nil
+	}
+
+	remoteBin := sshRemoteBin(gpu)
+	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
+
+	records := ssql.ProcessCatalogShards(entries, remoteBin, shardField, pipelineGroups)
+	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+}
+
+// --- Code generation for catalog ---
+
+func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, pipelineArgs []string) error {
+	remoteBin := sshRemoteBin(gpu)
+
+	var params []lib.CodeParam
+	params = append(params, lib.CodeParam{Name: "catalog", Default: catalogFile, Help: "catalog CSV file", VarName: "flagCatalog"})
+
+	// Build filter code with parameterized values
+	var filterCode string
+	if len(filters) > 0 {
+		var parts []string
+		for _, f := range filters {
+			// Create a flag for each filter value
+			flagName := f.Field + "-" + f.Operator
+			varName := "flag" + flagVarName(f.Field) + flagVarName(f.Operator)
+			params = append(params, lib.CodeParam{Name: flagName, Default: f.Value, Help: f.Field + " " + f.Operator + " filter", VarName: varName})
+			parts = append(parts, fmt.Sprintf(`{Field: %q, Operator: %q, Value: *%s}`, f.Field, f.Operator, varName))
+		}
+		filterCode = fmt.Sprintf("[]ssql.CatalogFilter{%s}", strings.Join(parts, ", "))
+	} else {
+		filterCode = "nil"
+	}
+
+	// Build pipeline groups code
+	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
+	var pipelineCode string
+	if len(pipelineGroups) > 0 {
+		var groupStrs []string
+		for _, group := range pipelineGroups {
+			var quotedArgs []string
+			for _, arg := range group {
+				quotedArgs = append(quotedArgs, fmt.Sprintf("%q", arg))
+			}
+			groupStrs = append(groupStrs, fmt.Sprintf("{%s}", strings.Join(quotedArgs, ", ")))
+		}
+		pipelineCode = fmt.Sprintf("[][]string{%s}", strings.Join(groupStrs, ", "))
+	} else {
+		pipelineCode = "nil"
+	}
+
+	code := fmt.Sprintf(`entries, err := ssql.ReadCatalog(*flagCatalog)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
+		os.Exit(1)
+	}
+	entries = ssql.PruneCatalog(entries, %s)
+	records := ssql.ProcessCatalogShards(entries, %q, %q, %s)`,
+		filterCode, remoteBin, shardField, pipelineCode)
+
+	imports := []string{"fmt", "os"}
+	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
+	return lib.WriteCodeFragment(frag)
+}
+
+// executeFromSSH runs a simple remote read via SSH.
+func executeFromSSH(host, path string, gpu bool) error {
+	remoteBin := sshRemoteBin(gpu)
+	remoteCmd := ssql.BuildRemoteCommand(remoteBin, path, "", nil)
+	return runSSHAndStreamJSONL(host, remoteCmd)
+}
+
+// executeFromSSHRemote runs a remote pipeline via SSH with push-down.
+func executeFromSSHRemote(host, path string, gpu bool, pipelineArgs []string) error {
+	remoteBin := sshRemoteBin(gpu)
+	remoteCmd := ssql.BuildRemoteCommand(remoteBin, path, "", ssql.SplitOnPlus(pipelineArgs))
+	return runSSHAndStreamJSONL(host, remoteCmd)
+}
+
+// runSSHAndStreamJSONL executes an SSH command and streams JSONL output.
+func runSSHAndStreamJSONL(host, remoteCmd string) error {
+	cmd := exec.Command("ssh", host, remoteCmd)
+	cmd.Stderr = os.Stderr
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("ssh pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ssh start: %w", err)
+	}
+
+	records := readJSONSchemaAware(stdout)
+	writeErr := writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+
+	waitErr := cmd.Wait()
+	if writeErr != nil {
+		return writeErr
+	}
+	if waitErr != nil {
+		return fmt.Errorf("ssh: %w", waitErr)
+	}
+	return nil
+}
+
+// sshRemoteBin returns the absolute path to the remote binary.
+// Uses full path to prevent PATH manipulation attacks on remote machines.
+func sshRemoteBin(gpu bool) string {
+	if gpu {
+		return "/usr/bin/ssql_gpu"
+	}
+	return "/usr/bin/ssql"
+}
+
+// --- Code generation for SSH ---
+
+func generateFromSSHCode(host, path string, gpu bool) error {
+	remoteBin := sshRemoteBin(gpu)
+
+	params := []lib.CodeParam{
+		{Name: "host", Default: host, Help: "SSH host", VarName: "flagHost"},
+		{Name: "path", Default: path, Help: "remote file path", VarName: "flagPath"},
+	}
+
+	code := fmt.Sprintf(`remoteCmd := ssql.BuildRemoteCommand(%q, *flagPath, "", nil)
+	sshCmd := exec.Command("ssh", *flagHost, remoteCmd)
+	sshCmd.Stderr = os.Stderr
+	sshStdout, err := sshCmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
+		os.Exit(1)
+	}
+	if err := sshCmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
+		os.Exit(1)
+	}
+	defer sshCmd.Wait()
+	records := ssql.ReadJSONFromReader(sshStdout)`, remoteBin)
+
+	imports := []string{"fmt", "os", "os/exec"}
+	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
+	return lib.WriteCodeFragment(frag)
+}
+
+func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []string) error {
+	remoteBin := sshRemoteBin(gpu)
+	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
+
+	params := []lib.CodeParam{
+		{Name: "host", Default: host, Help: "SSH host", VarName: "flagHost"},
+		{Name: "path", Default: path, Help: "remote file path", VarName: "flagPath"},
+	}
+
+	// Build pipeline groups code
+	var pipelineCode string
+	if len(pipelineGroups) > 0 {
+		var groupStrs []string
+		for _, group := range pipelineGroups {
+			var quotedArgs []string
+			for _, arg := range group {
+				quotedArgs = append(quotedArgs, fmt.Sprintf("%q", arg))
+			}
+			groupStrs = append(groupStrs, fmt.Sprintf("{%s}", strings.Join(quotedArgs, ", ")))
+		}
+		pipelineCode = fmt.Sprintf("[][]string{%s}", strings.Join(groupStrs, ", "))
+	} else {
+		pipelineCode = "nil"
+	}
+
+	code := fmt.Sprintf(`remoteCmd := ssql.BuildRemoteCommand(%q, *flagPath, "", %s)
+	sshCmd := exec.Command("ssh", *flagHost, remoteCmd)
+	sshCmd.Stderr = os.Stderr
+	sshStdout, err := sshCmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
+		os.Exit(1)
+	}
+	if err := sshCmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
+		os.Exit(1)
+	}
+	defer sshCmd.Wait()
+	records := ssql.ReadJSONFromReader(sshStdout)`, remoteBin, pipelineCode)
+
+	imports := []string{"fmt", "os", "os/exec"}
+	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
+	return lib.WriteCodeFragment(frag)
+}
+
 // --- Shared execution functions ---
 
 // executeFromCSV handles CSV reading for both the subcommand and bare form.
@@ -503,6 +1181,25 @@ func executeFromArrow(inputFile string, generate bool) error {
 		if err != nil {
 			return fmt.Errorf("reading Arrow file: %w", err)
 		}
+	}
+
+	records = wrapWithFieldCaching(records, inputFile)
+	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+}
+
+// executeFromParquet handles Parquet reading.
+func executeFromParquet(inputFile string, columns []string, generate bool) error {
+	if shouldGenerate(generate) {
+		return generateFromParquetCode(inputFile, columns)
+	}
+
+	if inputFile == "" {
+		return fmt.Errorf("Parquet requires a file (random access format, no stdin support)")
+	}
+
+	records, err := ssql.ReadParquetColumns(inputFile, columns)
+	if err != nil {
+		return fmt.Errorf("reading Parquet file: %w", err)
 	}
 
 	records = wrapWithFieldCaching(records, inputFile)
@@ -749,6 +1446,8 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 	configCode := generateCSVConfigCode(typeOverrides, defaultType)
 	hasConfig := configCode != ""
 
+	var params []lib.CodeParam
+
 	if filename == "" {
 		if hasConfig {
 			code = configCode + "\n\trecords := ssql.ReadCSVFromReader(os.Stdin, csvConfig)"
@@ -757,24 +1456,26 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 		}
 		imports = []string{"os"}
 	} else {
+		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input CSV file", VarName: "flagInput"})
 		if hasConfig {
-			code = fmt.Sprintf(`%s
-	records, err := ssql.ReadCSV(%q, csvConfig)
+			code = configCode + `
+	records, err := ssql.ReadCSV(*flagInput, csvConfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading CSV: %%w", err))
+		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading CSV: %w", err))
 		os.Exit(1)
-	}`, configCode, filename)
+	}`
 		} else {
-			code = fmt.Sprintf(`records, err := ssql.ReadCSV(%q)
+			code = `records, err := ssql.ReadCSV(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading CSV: %%w", err))
+		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading CSV: %w", err))
 		os.Exit(1)
-	}`, filename)
+	}`
 		}
 		imports = []string{"fmt", "os"}
 	}
 
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -782,20 +1483,23 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 func generateFromTSVCode(filename string) error {
 	var code string
 	var imports []string
+	var params []lib.CodeParam
 
 	if filename == "" {
 		code = `records := ssql.ReadTSVFromReader(os.Stdin)`
 		imports = []string{"os"}
 	} else {
-		code = fmt.Sprintf(`records, err := ssql.ReadTSV(%q)
+		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input TSV file", VarName: "flagInput"})
+		code = `records, err := ssql.ReadTSV(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading TSV: %%w", err))
+		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading TSV: %w", err))
 		os.Exit(1)
-	}`, filename)
+	}`
 		imports = []string{"fmt", "os"}
 	}
 
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -803,20 +1507,23 @@ func generateFromTSVCode(filename string) error {
 func generateFromJSONCode(filename string) error {
 	var code string
 	var imports []string
+	var params []lib.CodeParam
 
 	if filename == "" {
 		code = `records := ssql.ReadJSONFromReader(os.Stdin)`
 		imports = []string{"os"}
 	} else {
-		code = fmt.Sprintf(`records, err := ssql.ReadJSONAuto(%q)
+		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input JSON file", VarName: "flagInput"})
+		code = `records, err := ssql.ReadJSONAuto(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading JSON: %%w", err))
+		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading JSON: %w", err))
 		os.Exit(1)
-	}`, filename)
+	}`
 		imports = []string{"fmt", "os"}
 	}
 
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -824,20 +1531,59 @@ func generateFromJSONCode(filename string) error {
 func generateFromArrowCode(filename string) error {
 	var code string
 	var imports []string
+	var params []lib.CodeParam
 
 	if filename == "" {
 		code = `records := ssql.ReadArrowFromReader(os.Stdin)`
 		imports = []string{"os"}
 	} else {
-		code = fmt.Sprintf(`records, err := ssql.ReadArrow(%q)
+		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input Arrow file", VarName: "flagInput"})
+		code = `records, err := ssql.ReadArrow(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading Arrow: %%w", err))
+		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading Arrow: %w", err))
 		os.Exit(1)
-	}`, filename)
+	}`
 		imports = []string{"fmt", "os"}
 	}
 
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
+	return lib.WriteCodeFragment(frag)
+}
+
+// generateFromParquetCode generates Go code for reading Parquet.
+func generateFromParquetCode(filename string, columns []string) error {
+	if filename == "" {
+		return fmt.Errorf("Parquet code generation requires a file (no stdin support)")
+	}
+
+	params := []lib.CodeParam{
+		{Name: "input", Default: filename, Help: "input Parquet file", VarName: "flagInput"},
+	}
+
+	var code string
+	if len(columns) > 0 {
+		// Build Go string slice literal for the columns
+		quoted := make([]string, len(columns))
+		for i, c := range columns {
+			quoted[i] = fmt.Sprintf("%q", c)
+		}
+		colLiteral := "[]string{" + strings.Join(quoted, ", ") + "}"
+		code = fmt.Sprintf(`records, err := ssql.ReadParquetColumns(*flagInput, %s)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading Parquet: %%w", err))
+		os.Exit(1)
+	}`, colLiteral)
+	} else {
+		code = `records, err := ssql.ReadParquetColumns(*flagInput, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading Parquet: %w", err))
+		os.Exit(1)
+	}`
+	}
+
+	frag := lib.NewInitFragment("records", code, []string{"fmt", "os"}, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -845,6 +1591,7 @@ func generateFromArrowCode(filename string) error {
 func generateFromWAVCode(filename string, channel int) error {
 	var code string
 	var imports []string
+	var params []lib.CodeParam
 
 	if filename == "" {
 		code = `records, _, err := ssql.ReadWAVFromReader(os.Stdin)
@@ -853,46 +1600,52 @@ func generateFromWAVCode(filename string, channel int) error {
 		os.Exit(1)
 	}`
 		imports = []string{"fmt", "os"}
-	} else if channel >= 0 {
-		code = fmt.Sprintf(`records, _, err := ssql.ReadWAVChannel(%q, %d)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading WAV: %%w", err))
-		os.Exit(1)
-	}`, filename, channel)
-		imports = []string{"fmt", "os"}
 	} else {
-		code = fmt.Sprintf(`records, _, err := ssql.ReadWAV(%q)
+		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input WAV file", VarName: "flagInput"})
+		if channel >= 0 {
+			code = fmt.Sprintf(`records, _, err := ssql.ReadWAVChannel(*flagInput, %d)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading WAV: %%w", err))
 		os.Exit(1)
-	}`, filename)
+	}`, channel)
+		} else {
+			code = `records, _, err := ssql.ReadWAV(*flagInput)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading WAV: %w", err))
+		os.Exit(1)
+	}`
+		}
 		imports = []string{"fmt", "os"}
 	}
 
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
 // generateFromXLSXCode generates Go code for reading XLSX.
 func generateFromXLSXCode(filename string, sheet string) error {
 	var code string
+	var params []lib.CodeParam
 
+	params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input XLSX file", VarName: "flagInput"})
 	if sheet != "" {
-		code = fmt.Sprintf(`records, err := ssql.ReadXLSX(%q, ssql.XLSXConfig{SheetName: %q})
+		code = fmt.Sprintf(`records, err := ssql.ReadXLSX(*flagInput, ssql.XLSXConfig{SheetName: %q})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading XLSX: %%w", err))
 		os.Exit(1)
-	}`, filename, sheet)
+	}`, sheet)
 	} else {
-		code = fmt.Sprintf(`records, err := ssql.ReadXLSX(%q)
+		code = `records, err := ssql.ReadXLSX(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", fmt.Errorf("reading XLSX: %%w", err))
+		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading XLSX: %w", err))
 		os.Exit(1)
-	}`, filename)
+	}`
 	}
 
 	imports := []string{"fmt", "os"}
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"iter"
 	"os"
-	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -125,107 +124,72 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 		inputVar = "records"
 	}
 
-	// Build code to read additional files and combine with Concat
-	var codeLines []string
-	var readVars []string
-	needsLibImport := false // Only true if we generate lib.ReadJSONL code
+	// Build code to read additional files and combine with Concat.
+	// Process substitution sources become func fragments (self-contained functions)
+	// to avoid variable name collisions.
+	var sourceCalls []string // Function calls or variable names for Concat
+	needsLibImport := false
 
-	for i, file := range additionalFiles {
-		varName := fmt.Sprintf("records%d", i+1)
-
+	for _, file := range additionalFiles {
 		// Check if this is a non-regular file (e.g., /dev/fd/N, named pipe)
 		// In generation mode, these contain code fragments from the inner command
 		fileInfo, statErr := os.Stat(file)
 		if statErr == nil && !fileInfo.Mode().IsRegular() {
 			fileFragments, err := lib.ReadCodeFragmentsFromFile(file)
 			if err == nil && len(fileFragments) > 0 {
-				// Rename all variables in secondary fragments to avoid collision
-				// We assign new names per fragment index, then track what each original var maps to
-				prefix := fmt.Sprintf("union%d_", i+1)
-				newVarNames := make([]string, len(fileFragments))
-				varRename := make(map[string]string) // maps old var name to new (updated per fragment)
-
-				for j, frag := range fileFragments {
-					if frag.Var != "" {
-						var newName string
-						if j == len(fileFragments)-1 {
-							// Last fragment's output becomes recordsN
-							newName = varName
-						} else {
-							// Intermediate variables get unique prefixed names
-							newName = fmt.Sprintf("%s%s_%d", prefix, frag.Var, j)
-						}
-						newVarNames[j] = newName
-						varRename[frag.Var] = newName
-					}
+				// Wrap subprocess fragments in a func fragment.
+				// Each becomes its own function, encapsulating all internal variables.
+				// Use index-based name since NextFuncName() resets per process.
+				funcName := fmt.Sprintf("unionSource%d", len(sourceCalls)+1)
+				funcFrag := lib.NewFuncFragment(funcName, fileFragments, getCommandString())
+				if err := lib.WriteCodeFragment(funcFrag); err != nil {
+					return fmt.Errorf("writing func fragment from %s: %w", file, err)
 				}
-
-				// Apply renames to all fragments
-				for j, frag := range fileFragments {
-					// First, rename input variable reference using the mapping built so far
-					// (must happen before we update the map with this fragment's output)
-					if frag.Input != "" {
-						if newInput, ok := varRename[frag.Input]; ok {
-							oldInput := frag.Input
-							frag.Input = newInput
-							// Update code to reference renamed input
-							frag.Code = strings.Replace(frag.Code, ")("+oldInput+")", ")("+newInput+")", 1)
-						}
-					}
-
-					// Then, rename output variable
-					if newVarNames[j] != "" {
-						oldVar := frag.Var
-						newVar := newVarNames[j]
-						frag.Var = newVar
-						// Update code to use new variable name
-						frag.Code = strings.Replace(frag.Code, oldVar+", err :=", newVar+", err :=", 1)
-						frag.Code = strings.Replace(frag.Code, oldVar+" :=", newVar+" :=", 1)
-						// Update varRename for subsequent fragments that reference this output
-						varRename[oldVar] = newVar
-					}
-
-					if err := lib.WriteCodeFragment(frag); err != nil {
-						return fmt.Errorf("writing fragment from %s: %w", file, err)
-					}
-				}
-				readVars = append(readVars, varName)
-				continue // Skip to next file
+				sourceCalls = append(sourceCalls, funcName+"()")
+				continue
 			}
-			// If reading fragments failed, fall through to normal file handling
 		}
 
-		// Generate JSONL reading code
+		// Generate JSONL reading code for regular files
 		needsLibImport = true
-		readVars = append(readVars, varName)
-		codeLines = append(codeLines, fmt.Sprintf(`%sFile, err := os.Open(%q)
+		varName := fmt.Sprintf("unionFile%d", len(sourceCalls)+1)
+		// Write an init fragment for the file read
+		code := fmt.Sprintf(`%sHandle, err := os.Open(%q)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
 		os.Exit(1)
 	}
-	defer %sFile.Close()
-	%s := lib.ReadJSONL(%sFile)`, varName, file, file, varName, varName, varName))
+	defer %sHandle.Close()
+	%s := lib.ReadJSONL(%sHandle)`, varName, file, file, varName, varName, varName)
+		fileFrag := lib.NewInitFragment(varName, code,
+			[]string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}, "")
+		if err := lib.WriteCodeFragment(fileFrag); err != nil {
+			return fmt.Errorf("writing file read fragment: %w", err)
+		}
+		sourceCalls = append(sourceCalls, varName)
 	}
 
-	// Build Concat call
-	var concatArgs strings.Builder
-	concatArgs.WriteString(inputVar)
-	for _, v := range readVars {
-		concatArgs.WriteString(", " + v)
-	}
-	codeLines = append(codeLines, fmt.Sprintf("combined := ssql.Concat(%s)", concatArgs.String()))
-
-	// Apply distinct if not UNION ALL
-	outputVar := "combined"
-	if !unionAll {
-		codeLines = append(codeLines, "result := ssql.DistinctBy(ssql.RecordKey)(combined)")
-		outputVar = "result"
+	// Build a filter-compatible closure so it works with Chain().
+	// Pattern: func(input iter.Seq[ssql.Record]) iter.Seq[ssql.Record] { ... }
+	var concatArgs string
+	for _, src := range sourceCalls {
+		concatArgs += ", " + src
 	}
 
-	code := strings.Join(codeLines, "\n\t")
-	var imports []string
+	var filterBody string
+	if unionAll {
+		filterBody = fmt.Sprintf("return ssql.Concat(input%s)", concatArgs)
+	} else {
+		filterBody = fmt.Sprintf("return ssql.DistinctBy(ssql.RecordKey)(ssql.Concat(input%s))", concatArgs)
+	}
+
+	outputVar := "unioned"
+	code := fmt.Sprintf("%s := func(input iter.Seq[ssql.Record]) iter.Seq[ssql.Record] {\n\t\t%s\n\t}(%s)",
+		outputVar, filterBody, inputVar)
+
+	imports := []string{"iter"}
 	if needsLibImport {
-		imports = []string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}
+		imports = append(imports, "fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib")
 	}
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())

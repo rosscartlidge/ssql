@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"slices"
 	"strings"
@@ -113,10 +112,11 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			opts := ssql.SpectrogramOptions{
-				WindowSize: windowSize,
-				HopSize:    hopSize,
-				Window:     windowType,
-				SampleRate: sampleRate,
+				WindowSize:   windowSize,
+				HopSize:      hopSize,
+				Window:       windowType,
+				SampleRate:   sampleRate,
+				OutputFormat: outputFormat,
 			}
 
 			// Extract signal based on input source
@@ -172,9 +172,6 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("computing spectrogram: %w", err)
 			}
 
-			// Apply output format transformation
-			bins = applyOutputFormat(bins, outputFormat)
-
 			// Convert to records and write as JSONL
 			spectrogramRecords := ssql.SpectrogramToRecords(bins)
 			if err := lib.WriteJSONL(os.Stdout, spectrogramRecords); err != nil {
@@ -187,33 +184,8 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	return cmd
 }
 
-// applyOutputFormat transforms magnitude values based on the output format.
-func applyOutputFormat(bins []ssql.SpectrogramBin, format string) []ssql.SpectrogramBin {
-	switch format {
-	case "power":
-		for i := range bins {
-			bins[i].Magnitude = bins[i].Magnitude * bins[i].Magnitude
-		}
-	case "db":
-		for i := range bins {
-			mag := bins[i].Magnitude
-			if mag > 0 {
-				bins[i].Magnitude = 20 * math.Log10(mag)
-			} else {
-				bins[i].Magnitude = -200 // floor for zero magnitude
-			}
-		}
-	}
-	return bins
-}
-
 // generateSpectrogramCode generates Go code for the spectrogram command
 func generateSpectrogramCode(inputFile, field string, windowSize, hopSize int, windowType string, sampleRate float64, outputFormat string) error {
-	if outputFormat != "" && outputFormat != "magnitude" {
-		return lib.WriteErrorAndExit(getCommandString(),
-			fmt.Errorf("-output %s is not yet supported with -generate (only magnitude is supported)", outputFormat))
-	}
-
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -226,11 +198,12 @@ func generateSpectrogramCode(inputFile, field string, windowSize, hopSize int, w
 
 	// Build options code
 	optsCode := fmt.Sprintf(`ssql.SpectrogramOptions{
-		WindowSize: %d,
-		HopSize:    %d,
-		Window:     %q,
-		SampleRate: %v,
-	}`, windowSize, hopSize, windowType, sampleRate)
+		WindowSize:   %d,
+		HopSize:      %d,
+		Window:       %q,
+		SampleRate:   %v,
+		OutputFormat: %q,
+	}`, windowSize, hopSize, windowType, sampleRate, outputFormat)
 
 	// If reading directly from Arrow file, generate optimized code
 	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {

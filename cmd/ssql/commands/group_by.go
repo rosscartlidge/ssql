@@ -444,109 +444,9 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return nil
 			}
 
-			// Streaming expressions require manual grouping (per-record processing)
-			// Batch expressions (-expr) now use ssql.ExprAgg() through the standard path
-			if len(streamExprSpecs) > 0 {
-				// Manual grouping: collect records per group
-				groups := make(map[string][]ssql.Record)
-				groupKeys := make(map[string]ssql.Record) // Keep first record for key values
-
-				for record := range records {
-					// Build group key
-					var parts []string
-					for _, field := range groupByFields {
-						parts = append(parts, fmt.Sprintf("%v", ssql.GetOr(record, field, "")))
-					}
-					key := strings.Join(parts, "\x00")
-
-					if _, exists := groups[key]; !exists {
-						groupKeys[key] = record
-					}
-					groups[key] = append(groups[key], record)
-				}
-
-				// Build output schema: group-by fields + aggregation result fields
-				var outputSchema *lib.Schema
-				if inputSchema != nil {
-					outputSchema = lib.NewSchema()
-					// Add group-by fields with their input types
-					for _, field := range groupByFields {
-						if inputSchema.HasField(field) {
-							outputSchema.AddField(field, inputSchema.TypeOf(field))
-						}
-					}
-					// Add aggregation result fields
-					for _, spec := range aggSpecs {
-						outputSchema.AddField(spec.result, aggResultType(spec.function))
-					}
-					for _, spec := range exprSpecs {
-						outputSchema.AddField(spec.result, "float") // expr results are typically numeric
-					}
-					for _, spec := range streamExprSpecs {
-						outputSchema.AddField(spec.result, "float") // stream-expr results are typically numeric
-					}
-				}
-
-				// Write schema header if present
-				if outputSchema != nil {
-					if err := outputSchema.WriteHeader(os.Stdout); err != nil {
-						return fmt.Errorf("writing schema header: %w", err)
-					}
-				}
-
-				// Process each group
-				for key, groupRecords := range groups {
-					// Start with group key fields
-					mut := ssql.MakeMutableRecord()
-					keyRecord := groupKeys[key]
-					for _, field := range groupByFields {
-						val := ssql.GetOr[any](keyRecord, field, nil)
-						mut = applyValueToRecord(mut, field, val)
-					}
-
-					// Apply built-in aggregations
-					for _, spec := range aggSpecs {
-						agg, err := buildAggregator(spec.function, spec.field)
-						if err != nil {
-							return err
-						}
-						result := agg(groupRecords)
-						mut = applyValueToRecord(mut, spec.result, result.GetValue())
-					}
-
-					// Apply batch expressions
-					for _, spec := range exprSpecs {
-						result, err := EvalBatchExpr(spec.expression, groupRecords)
-						if err != nil {
-							return fmt.Errorf("evaluating -expr %q: %w", spec.expression, err)
-						}
-						mut = applyValueToRecord(mut, spec.result, result)
-					}
-
-					// Apply streaming expressions
-					for _, spec := range streamExprSpecs {
-						result, err := EvalStreamExpr(StreamExprSpec{
-							InitExpr:  spec.initExpr,
-							EveryExpr: spec.everyExpr,
-							FinalExpr: spec.finalExpr,
-							Result:    spec.result,
-						}, groupRecords)
-						if err != nil {
-							return fmt.Errorf("evaluating -stream-expr: %w", err)
-						}
-						mut = applyValueToRecord(mut, spec.result, result)
-					}
-
-					// Write result
-					if err := lib.WriteJSONLRecord(os.Stdout, mut.Freeze()); err != nil {
-						return fmt.Errorf("writing output: %w", err)
-					}
-				}
-				return nil
-			}
-
 			// Standard path: use ssql.GroupByFields + ssql.Aggregate
-			// Supports both built-in aggregations (-count, -sum, etc.) and expressions (-expr)
+			// Supports built-in aggregations (-count, -sum, etc.), expressions (-expr),
+			// and streaming expressions (-stream-expr) via ssql.StreamExprAgg()
 			var grouped iter.Seq[ssql.Record]
 			if presorted {
 				grouped = ssql.StreamGroupByFields("_group", groupByFields...)(records)
@@ -566,6 +466,10 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Add expression aggregations using ssql.ExprAgg()
 			for _, spec := range exprSpecs {
 				aggregations[spec.result] = ssql.ExprAgg(spec.expression)
+			}
+			// Add streaming expression aggregations using ssql.StreamExprAgg()
+			for _, spec := range streamExprSpecs {
+				aggregations[spec.result] = ssql.StreamExprAgg(spec.initExpr, spec.everyExpr, spec.finalExpr)
 			}
 
 			// Apply Aggregate
@@ -588,6 +492,10 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				// Add expression result fields
 				for _, spec := range exprSpecs {
 					outputSchema.AddField(spec.result, "float") // ExprAgg always returns float64
+				}
+				// Add streaming expression result fields
+				for _, spec := range streamExprSpecs {
+					outputSchema.AddField(spec.result, "float") // StreamExprAgg always returns float64
 				}
 			}
 
@@ -760,11 +668,31 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		}
 	}
 
-	// Check for -stream-expr flags (not supported in code generation yet)
+	// Parse -stream-expr flags (init, every, final, result name)
+	type streamExprGenSpec struct {
+		initExpr  string
+		everyExpr string
+		finalExpr string
+		result    string
+	}
+	var streamExprSpecs []streamExprGenSpec
 	if streamVals, ok := ctx.GlobalFlags["-stream-expr"]; ok {
-		if streams, ok := streamVals.([]any); ok && len(streams) > 0 {
-			err := fmt.Errorf("-stream-expr flag is not yet supported with -generate; use built-in aggregations or run without -generate")
-			return lib.WriteErrorAndExit("ssql group-by", err)
+		streams, _ := streamVals.([]any)
+		for _, streamVal := range streams {
+			if argsMap, ok := streamVal.(map[string]any); ok {
+				initExpr, _ := argsMap["init"].(string)
+				everyExpr, _ := argsMap["every"].(string)
+				finalExpr, _ := argsMap["final"].(string)
+				result, _ := argsMap["result-name"].(string)
+				if initExpr != "" && everyExpr != "" && finalExpr != "" && result != "" {
+					streamExprSpecs = append(streamExprSpecs, streamExprGenSpec{
+						initExpr:  initExpr,
+						everyExpr: everyExpr,
+						finalExpr: finalExpr,
+						result:    result,
+					})
+				}
+			}
 		}
 	}
 
@@ -788,7 +716,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	}
 
 	// Rollup/cube code generation path
-	if (rollup || cube) && (len(aggSpecs) > 0 || len(exprSpecs) > 0) {
+	if (rollup || cube) && (len(aggSpecs) > 0 || len(exprSpecs) > 0 || len(streamExprSpecs) > 0) {
 		modeStr := "ssql.RollupHierarchical"
 		if cube {
 			modeStr = "ssql.RollupCube"
@@ -820,6 +748,13 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			first = false
 			aggLines.WriteString(fmt.Sprintf("\t\t\t%q: ssql.ExprAgg(%q)", spec.result, spec.expression))
 		}
+		for _, spec := range streamExprSpecs {
+			if !first {
+				aggLines.WriteString(",\n")
+			}
+			first = false
+			aggLines.WriteString(fmt.Sprintf("\t\t\t%q: ssql.StreamExprAgg(%q, %q, %q)", spec.result, spec.initExpr, spec.everyExpr, spec.finalExpr))
+		}
 
 		code := fmt.Sprintf(`rollupResult := ssql.Rollup(ssql.RollupConfig{
 		Fields: []string{%s},
@@ -834,7 +769,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	}
 
 	// If no aggregations at all, generate code for DISTINCT on grouped fields
-	if len(aggSpecs) == 0 && len(exprSpecs) == 0 {
+	if len(aggSpecs) == 0 && len(exprSpecs) == 0 && len(streamExprSpecs) == 0 {
 		// Build field list for key function
 		var fieldList strings.Builder
 		for i, field := range groupByFields {
@@ -906,6 +841,14 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		}
 		first = false
 		aggCode.WriteString(fmt.Sprintf("\t\t%q: ssql.ExprAgg(%q)", spec.result, spec.expression))
+	}
+	// Add streaming expression aggregations using ssql.StreamExprAgg()
+	for _, spec := range streamExprSpecs {
+		if !first {
+			aggCode.WriteString(",\n")
+		}
+		first = false
+		aggCode.WriteString(fmt.Sprintf("\t\t%q: ssql.StreamExprAgg(%q, %q, %q)", spec.result, spec.initExpr, spec.everyExpr, spec.finalExpr))
 	}
 	aggCode.WriteString(",\n\t})(grouped)")
 

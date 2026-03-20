@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
@@ -203,7 +204,7 @@ func chainRecords(firstRecords iter.Seq[ssql.Record], additionalFiles []string) 
 				continue
 			}
 
-			records := lib.ReadJSONL(f)
+			records := lib.ReadJSONLWithSchema(f).Records
 			for record := range records {
 				if !yield(record) {
 					f.Close()
@@ -248,48 +249,30 @@ func getCommandString() string {
 			args = append(args, "ssql")
 		} else {
 			// Quote the argument if it needs quoting for shell safety
-			args = append(args, shellQuote(arg))
+			args = append(args, ssql.ShellQuote(arg))
 		}
 	}
 	return strings.Join(args, " ")
 }
 
-// shellQuote quotes a string for safe use in shell commands
-// Returns the string with appropriate quoting if needed
-func shellQuote(s string) string {
-	// If the string is simple (alphanumeric, dash, underscore, dot, slash, colon), no quoting needed
-	needsQuoting := false
+// flagVarName converts a flag name segment to a Go-safe identifier part.
+// "timestamp" -> "Timestamp", "ge" -> "Ge", "date-start" -> "DateStart"
+func flagVarName(s string) string {
+	var result strings.Builder
+	upper := true
 	for _, c := range s {
-		if !isSimpleShellChar(c) {
-			needsQuoting = true
-			break
+		if c == '-' || c == '_' {
+			upper = true
+			continue
+		}
+		if upper {
+			result.WriteRune(unicode.ToUpper(c))
+			upper = false
+		} else {
+			result.WriteRune(c)
 		}
 	}
-
-	if !needsQuoting {
-		return s
-	}
-
-	// If string contains single quotes, use double quotes and escape special chars
-	if strings.Contains(s, "'") {
-		// Use double quotes, escape $, `, \, ", and !
-		escaped := strings.ReplaceAll(s, `\`, `\\`)
-		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-		escaped = strings.ReplaceAll(escaped, `$`, `\$`)
-		escaped = strings.ReplaceAll(escaped, "`", "\\`")
-		return `"` + escaped + `"`
-	}
-
-	// Otherwise use single quotes (most literal, safest)
-	return "'" + s + "'"
-}
-
-// isSimpleShellChar returns true if the character is safe in shell without quoting
-func isSimpleShellChar(c rune) bool {
-	return (c >= 'a' && c <= 'z') ||
-		(c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') ||
-		c == '-' || c == '_' || c == '.' || c == '/' || c == ':'
+	return result.String()
 }
 
 func parseValue(s string) any {

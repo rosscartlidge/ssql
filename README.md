@@ -114,6 +114,22 @@ ssql from data.arrow | ssql where -if age gt 30 | ssql to arrow output.arrow
 # Excel files — read and write .xlsx directly
 ssql from xlsx sales.xlsx -sheet "Q4 Results" | ssql where -if revenue gt 50000 | ssql to xlsx top.xlsx
 
+# Distributed processing: read remote files via SSH
+ssql from ssh myserver /data/events.csv -- where -if status eq error | ssql to table
+
+# Read multiple shards from a catalog, with partition pruning
+ssql from catalog shards.csv -if date ge 2025-03-01 | ssql group-by service -count n
+
+# Optimize a pipeline — push filters into SSH, collapse sort+limit to top
+(export SSQLGO=1; ssql from ssh node1 /data/events.csv \
+  | ssql where -if status ge 500 \
+  | ssql sort -desc cnt | ssql limit 10 \
+  | ssql to table) | ssql generate-ssql
+# → ssql from ssh node1 /data/events.csv -- where -if status ge 500 | ssql top 10 -field cnt | ssql to table
+
+# Chain: optimize → then compile to Go
+(export SSQLGO=1; ...) | ssql generate-ssql | ssql generate-go
+
 # Debug pipelines with jq (JSONL streaming format)
 ssql from data.csv | jq '.' | head -5  # Inspect data
 ssql from data.csv | ssql where -if age gt 30 | jq -s 'length'  # Count results
@@ -665,6 +681,50 @@ func main() {
     }
 }
 ```
+
+</details>
+
+### **Distributed Processing**
+
+**Quick view:**
+```bash
+# Read a remote file via SSH with push-down filtering
+ssql from ssh myserver /data/events.csv -- where -if status eq error | ssql to table
+
+# Read multiple shards from a catalog CSV with partition pruning
+ssql from catalog shards.csv -if date ge 2025-03-01 | ssql group-by service -count n
+```
+
+<details>
+<summary>Click for more examples</summary>
+
+```bash
+# Multi-step push-down: filter and aggregate on each remote shard
+ssql from ssh myserver /data/events.csv \
+  -- where -if status ge 400 + group-by service -count cnt | \
+  ssql to table
+
+# Catalog with range pruning and two-level aggregation
+ssql from catalog shards.csv -if date ge 2025-02-01 \
+  -- where -if status ge 400 + group-by service -count cnt | \
+  ssql group-by service -sum cnt total_errors | \
+  ssql to table
+
+# Add provenance to track which shard each record came from
+ssql from catalog shards.csv -shard-field _shard | ssql to table
+
+# Use ssql_gpu on remote hosts
+ssql from ssh myserver /data/events.csv -gpu | ssql to table
+```
+
+**Features:**
+- **`from ssh`** - Read remote files via SSH, push-down filters to reduce transfer
+- **`from catalog`** - Read multiple shards from a catalog CSV mapping hosts to file paths
+- **Partition pruning** - Skip irrelevant shards using range (`X_from`/`X_to`) or exact-value metadata
+- **Push-down** - Send filter and aggregation stages to remote hosts with `--` separator
+- **Local shards** - Catalog entries with `host=local` or `host=localhost` are read directly
+- **Code generation** - `from ssh` supports `-generate` / `SSQLGO=1`
+- **Pipeline optimizer** - `generate-ssql` automatically pushes filters into SSH/catalog, collapses sort+limit to top, prunes Parquet columns, and more (12 optimization rules)
 
 </details>
 

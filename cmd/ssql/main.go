@@ -50,6 +50,8 @@ func buildRootCommand() *cf.Command {
 	cmd = commands.RegisterSpectrogram(cmd)
 	cmd = commands.RegisterTo(cmd)
 	cmd = commands.RegisterGenerateGo(cmd)
+	cmd = commands.RegisterGenerateSQL(cmd)
+	cmd = commands.RegisterGenerateSSQL(cmd)
 
 	// Root handler (when no subcommand specified)
 	return cmd.Handler(func(ctx *cf.Context) error {

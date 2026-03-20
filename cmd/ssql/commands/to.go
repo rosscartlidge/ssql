@@ -23,6 +23,7 @@ func RegisterTo(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	registerToTSV(toCmd)
 	registerToJSON(toCmd)
 	registerToArrow(toCmd)
+	registerToParquet(toCmd)
 	registerToWAV(toCmd)
 	registerToXLSX(toCmd)
 	registerToChart(toCmd)
@@ -366,6 +367,56 @@ func registerToArrow(cmd *cf.SubcommandBuilder) {
 			// Write as Arrow
 			if err := ssql.WriteArrow(records, outputFile); err != nil {
 				return fmt.Errorf("writing Arrow file: %w", err)
+			}
+
+			return nil
+		}).
+		Done()
+}
+
+// registerToParquet registers the "to parquet" subcommand
+func registerToParquet(cmd *cf.SubcommandBuilder) {
+	cmd.Subcommand("parquet").
+		Description("Write as Parquet file (Snappy compression, DuckDB compatible)").
+		Example("ssql from data.csv | ssql to parquet output.parquet", "Convert CSV to Parquet").
+		Example("ssql from large.json | ssql to parquet data.parquet", "Convert JSON to Parquet").
+		Flag("-generate", "-g").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
+		Flag("FILE").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
+		Global().
+		Required().
+		Help("Output Parquet file (required)").
+		Done().
+		Handler(func(ctx *cf.Context) error {
+			var outputFile string
+			var generate bool
+
+			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
+				outputFile = fileVal.(string)
+			}
+			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
+				generate = genVal.(bool)
+			}
+
+			if outputFile == "" {
+				return fmt.Errorf("output file required")
+			}
+
+			if shouldGenerate(generate) {
+				return generateToParquetCode(outputFile)
+			}
+
+			// Read JSONL from stdin (with schema if present)
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
+
+			if err := ssql.WriteParquet(records, outputFile); err != nil {
+				return fmt.Errorf("writing Parquet file: %w", err)
 			}
 
 			return nil
@@ -825,14 +876,17 @@ func generateToCSVCode(filename string) error {
 
 	var code string
 	var imports []string
+	var params []lib.CodeParam
 	if filename == "" {
 		code = fmt.Sprintf(`ssql.WriteCSVToWriter(%s, os.Stdout)`, inputVar)
 		imports = append(imports, "os")
 	} else {
-		code = fmt.Sprintf(`ssql.WriteCSV(%s, %q)`, inputVar, filename)
+		params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output CSV file", VarName: "flagOutput"})
+		code = fmt.Sprintf(`ssql.WriteCSV(%s, *flagOutput)`, inputVar)
 	}
 
 	frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -887,16 +941,21 @@ func generateToJSONCode(filename string, pretty bool) error {
 	} else {
 		// Write to file
 		if pretty {
-			code = fmt.Sprintf(`	if err := ssql.WriteJSONPretty(%s, %q); err != nil {
+			code = fmt.Sprintf(`	if err := ssql.WriteJSONPretty(%s, *flagOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing JSON: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar, filename)
+	}`, inputVar)
 		} else {
-			code = fmt.Sprintf(`	if err := ssql.WriteJSON(%s, %q); err != nil {
+			code = fmt.Sprintf(`	if err := ssql.WriteJSON(%s, *flagOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing JSON: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar, filename)
+	}`, inputVar)
 		}
+	}
+
+	var params []lib.CodeParam
+	if filename != "" {
+		params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output JSON file", VarName: "flagOutput"})
 	}
 
 	imports := []string{"fmt", "os"}
@@ -904,6 +963,7 @@ func generateToJSONCode(filename string, pretty bool) error {
 		imports = append(imports, "encoding/json")
 	}
 	frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -926,12 +986,48 @@ func generateToArrowCode(filename string) error {
 		inputVar = "records"
 	}
 
-	code := fmt.Sprintf(`if err := ssql.WriteArrow(%s, %q); err != nil {
+	params := []lib.CodeParam{
+		{Name: "output", Default: filename, Help: "output Arrow file", VarName: "flagOutput"},
+	}
+	code := fmt.Sprintf(`if err := ssql.WriteArrow(%s, *flagOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing Arrow: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar, filename)
+	}`, inputVar)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	frag.Params = params
+	return lib.WriteCodeFragment(frag)
+}
+
+func generateToParquetCode(filename string) error {
+	fragments, err := lib.ReadAllCodeFragments()
+	if err != nil {
+		return fmt.Errorf("reading code fragments: %w", err)
+	}
+
+	for _, frag := range fragments {
+		if err := lib.WriteCodeFragment(frag); err != nil {
+			return fmt.Errorf("writing previous fragment: %w", err)
+		}
+	}
+
+	var inputVar string
+	if len(fragments) > 0 {
+		inputVar = fragments[len(fragments)-1].Var
+	} else {
+		inputVar = "records"
+	}
+
+	params := []lib.CodeParam{
+		{Name: "output", Default: filename, Help: "output Parquet file", VarName: "flagOutput"},
+	}
+	code := fmt.Sprintf(`if err := ssql.WriteParquet(%s, *flagOutput); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar)
+
+	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -959,12 +1055,16 @@ func generateToWAVCode(filename string, sampleRate int) error {
 		sampleRate = 44100
 	}
 
-	code := fmt.Sprintf(`if err := ssql.WriteWAV(%s, %q, %d); err != nil {
+	params := []lib.CodeParam{
+		{Name: "output", Default: filename, Help: "output WAV file", VarName: "flagOutput"},
+	}
+	code := fmt.Sprintf(`if err := ssql.WriteWAV(%s, *flagOutput, %d); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing WAV: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar, filename, sampleRate)
+	}`, inputVar, sampleRate)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -987,20 +1087,24 @@ func generateToXLSXCode(filename string, sheet string) error {
 		inputVar = "records"
 	}
 
+	params := []lib.CodeParam{
+		{Name: "output", Default: filename, Help: "output XLSX file", VarName: "flagOutput"},
+	}
 	var code string
 	if sheet != "" {
-		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, %q, ssql.XLSXConfig{SheetName: %q}); err != nil {
+		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, *flagOutput, ssql.XLSXConfig{SheetName: %q}); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing XLSX: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar, filename, sheet)
+	}`, inputVar, sheet)
 	} else {
-		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, %q); err != nil {
+		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, *flagOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing XLSX: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar, filename)
+	}`, inputVar)
 	}
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -1025,14 +1129,17 @@ func generateToTSVCode(filename string, sep rune) error {
 
 	var code string
 	var imports []string
+	var params []lib.CodeParam
 	if filename == "" {
 		code = fmt.Sprintf(`ssql.WriteTSVToWriterWithSeparator(%s, os.Stdout, %q)`, inputVar, sep)
 		imports = append(imports, "os")
 	} else {
-		code = fmt.Sprintf(`ssql.WriteTSVWithSeparator(%s, %q, %q)`, inputVar, filename, sep)
+		params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output TSV file", VarName: "flagOutput"})
+		code = fmt.Sprintf(`ssql.WriteTSVWithSeparator(%s, *flagOutput, %q)`, inputVar, sep)
 	}
 
 	frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -1108,13 +1215,17 @@ func generateToChartCode(xField string, yFields []string, zField, chartType stri
 			configLines = append(configLines, "\tconfig.LogFreq = true")
 		}
 
+		params := []lib.CodeParam{
+			{Name: "output", Default: outputFile, Help: "output HTML file", VarName: "flagOutput"},
+		}
 		code := fmt.Sprintf(`%s
-	if err := ssql.HeatmapChart(%s, config, %q); err != nil {
+	if err := ssql.HeatmapChart(%s, config, *flagOutput); err != nil {
 		return fmt.Errorf("creating heatmap: %%w", err)
 	}
-	fmt.Printf("Heatmap created: %%s\n", %q)`, joinStrings(configLines, "\n"), inputVar, outputFile, outputFile)
+	fmt.Printf("Heatmap created: %%s\n", *flagOutput)`, joinStrings(configLines, "\n"), inputVar)
 
 		frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
+		frag.Params = params
 		return lib.WriteCodeFragment(frag)
 	}
 
@@ -1148,13 +1259,17 @@ func generateToChartCode(xField string, yFields []string, zField, chartType stri
 		configLines = append(configLines, "\tconfig.YAxisType = \"logarithmic\"")
 	}
 
+	params := []lib.CodeParam{
+		{Name: "output", Default: outputFile, Help: "output HTML file", VarName: "flagOutput"},
+	}
 	code := fmt.Sprintf(`%s
-	if err := ssql.EnhancedChart(%s, config, %q); err != nil {
+	if err := ssql.EnhancedChart(%s, config, *flagOutput); err != nil {
 		return fmt.Errorf("creating chart: %%w", err)
 	}
-	fmt.Printf("Chart created: %%s\n", %q)`, joinStrings(configLines, "\n"), inputVar, outputFile, outputFile)
+	fmt.Printf("Chart created: %%s\n", *flagOutput)`, joinStrings(configLines, "\n"), inputVar)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
 

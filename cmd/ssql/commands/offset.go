@@ -85,7 +85,11 @@ func generateOffsetCode(n int) error {
 		inputVar = "records"
 	}
 	outputVar := "skipped"
-	code := fmt.Sprintf("%s := ssql.Offset[ssql.Record](%d)(%s)", outputVar, n, inputVar)
+	params := []lib.CodeParam{
+		{Name: "offset", Default: fmt.Sprintf("%d", n), Help: "number of records to skip", VarName: "flagOffset", Type: "int"},
+	}
+	code := fmt.Sprintf("%s := ssql.Offset[ssql.Record](*flagOffset)(%s)", outputVar, inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
+	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

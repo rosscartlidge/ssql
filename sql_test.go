@@ -895,6 +895,52 @@ func TestExprAggMean(t *testing.T) {
 	}
 }
 
+func TestStreamExprAggSum(t *testing.T) {
+	records := []Record{
+		NewRecord(map[string]any{"salary": int64(100)}),
+		NewRecord(map[string]any{"salary": int64(200)}),
+		NewRecord(map[string]any{"salary": int64(300)}),
+	}
+
+	agg := StreamExprAgg("{s: 0}", "{s: s + salary}", "s")
+	result := agg(records)
+	val := result.GetValue().(float64)
+	if val != 600 {
+		t.Errorf("expected 600, got %v", val)
+	}
+}
+
+func TestStreamExprAggWithAggregate(t *testing.T) {
+	input := slices.Values([]Record{
+		NewRecord(map[string]any{"dept": "eng", "salary": int64(100)}),
+		NewRecord(map[string]any{"dept": "eng", "salary": int64(200)}),
+		NewRecord(map[string]any{"dept": "sales", "salary": int64(50)}),
+	})
+
+	grouped := GroupByFields("_group", "dept")(input)
+	aggregated := Aggregate("_group", map[string]AggregateFunc{
+		"total": StreamExprAgg("{s: 0}", "{s: s + salary}", "s"),
+	})(grouped)
+
+	results := slices.Collect(aggregated)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(results))
+	}
+
+	totals := make(map[string]float64)
+	for _, r := range results {
+		dept := GetOr(r, "dept", "")
+		total := GetOr(r, "total", float64(0))
+		totals[dept] = total
+	}
+	if totals["eng"] != 300 {
+		t.Errorf("eng total: expected 300, got %v", totals["eng"])
+	}
+	if totals["sales"] != 50 {
+		t.Errorf("sales total: expected 50, got %v", totals["sales"])
+	}
+}
+
 // ============================================================================
 // COMPLEX SQL-STYLE PIPELINE TESTS
 // ============================================================================

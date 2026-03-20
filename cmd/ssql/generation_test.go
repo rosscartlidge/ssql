@@ -200,12 +200,12 @@ func TestLimitOffsetSortDistinct(t *testing.T) {
 		{
 			name:    "limit command",
 			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test limit 5`,
-			want:    []string{`"type":"stmt"`, `"var":"limited"`, `Limit[ssql.Record](5)`},
+			want:    []string{`"type":"stmt"`, `"var":"limited"`, `Limit[ssql.Record](*flagLimit)`, `"name":"limit"`, `"default":"5"`},
 		},
 		{
 			name:    "offset command",
 			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test offset 10`,
-			want:    []string{`"type":"stmt"`, `"var":"skipped"`, `Offset[ssql.Record](10)`},
+			want:    []string{`"type":"stmt"`, `"var":"skipped"`, `Offset[ssql.Record](*flagOffset)`, `"name":"offset"`, `"default":"10"`},
 		},
 		{
 			name:    "sort command",
@@ -423,6 +423,36 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to xlsx /tmp/out.xlsx`,
 			expectFragment: true,
 			wantSubstring:  `ssql.WriteXLSX`,
+		},
+		{
+			name:           "from ssh",
+			cmdLine:        `SSQLGO=1 /tmp/ssql_test from ssh myhost /data/test.csv`,
+			expectFragment: true,
+			wantSubstring:  `sshCmd := exec.Command`,
+		},
+		{
+			name:           "from ssh remote",
+			cmdLine:        `SSQLGO=1 /tmp/ssql_test from ssh myhost /data/test.csv -- where -if age gt 25`,
+			expectFragment: true,
+			wantSubstring:  `BuildRemoteCommand`,
+		},
+		{
+			name:           "from ssh remote multi",
+			cmdLine:        `SSQLGO=1 /tmp/ssql_test from ssh myhost /data/test.csv -- where -if age gt 25 + group-by dept -count cnt`,
+			expectFragment: true,
+			wantSubstring:  `BuildRemoteCommand`,
+		},
+		{
+			name:           "from ssh gpu",
+			cmdLine:        `SSQLGO=1 /tmp/ssql_test from ssh myhost /data/test.csv -gpu`,
+			expectFragment: true,
+			wantSubstring:  `ssql_gpu`,
+		},
+		{
+			name:           "from catalog",
+			cmdLine:        `SSQLGO=1 /tmp/ssql_test from catalog test-data/test-catalog.csv`,
+			expectFragment: true,
+			wantSubstring:  `ssql.ReadCatalog`,
 		},
 	}
 
@@ -1118,8 +1148,8 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 	}
 }
 
-// TestGenerationErrorHandling tests that code generation errors prevent partial code output
-func TestGenerationErrorHandling(t *testing.T) {
+// TestStreamExprGeneration tests that -stream-expr generates correct code
+func TestStreamExprGeneration(t *testing.T) {
 	// Build the binary first
 	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
 	if err := buildCmd.Run(); err != nil {
@@ -1127,50 +1157,31 @@ func TestGenerationErrorHandling(t *testing.T) {
 	}
 	defer os.Remove("/tmp/ssql_test")
 
-	tests := []struct {
-		name           string
-		cmdLine        string
-		expectError    bool
-		errorSubstring string // Expected substring in error message
-		notInOutput    string // Should NOT appear in output (no partial code)
-	}{
-		{
-			name:           "stream-expr not supported in generation",
-			cmdLine:        `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total | /tmp/ssql_test generate-go`,
-			expectError:    true,
-			errorSubstring: "not yet supported",
-			notInOutput:    "package main", // No partial Go code should be output
-		},
+	cmdLine := `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total`
+	cmd := exec.Command("bash", "-c", cmdLine)
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	if err != nil {
+		t.Fatalf("Expected success, got error: %v\nOutput: %s", err, outputStr)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmd := exec.Command("bash", "-c", tt.cmdLine)
-			output, err := cmd.CombinedOutput()
-			outputStr := string(output)
-
-			if tt.expectError {
-				// Should have an error
-				if err == nil {
-					t.Errorf("Expected error but got none. Output: %s", outputStr)
-				}
-
-				// Error message should contain expected substring
-				if !strings.Contains(outputStr, tt.errorSubstring) {
-					t.Errorf("Expected error message to contain %q, got: %s", tt.errorSubstring, outputStr)
-				}
-
-				// Should NOT contain partial code
-				if strings.Contains(outputStr, tt.notInOutput) {
-					t.Errorf("Output should NOT contain %q when there's an error (no partial code), got: %s", tt.notInOutput, outputStr)
-				}
-			}
-		})
+	// Should contain StreamExprAgg call
+	expected := []string{
+		`"type":"stmt"`,
+		`ssql.StreamExprAgg`,
+		`{s:0}`,
+		`{s:s+salary}`,
+	}
+	for _, want := range expected {
+		if !strings.Contains(outputStr, want) {
+			t.Errorf("Expected output to contain %q, got: %s", want, outputStr)
+		}
 	}
 }
 
-// TestErrorFragmentPropagation tests that error fragments propagate through pipeline
-func TestErrorFragmentPropagation(t *testing.T) {
+// TestStreamExprFullPipeline tests stream-expr code generation in a full pipeline
+func TestStreamExprFullPipeline(t *testing.T) {
 	// Build the binary first
 	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
 	if err := buildCmd.Run(); err != nil {
@@ -1179,39 +1190,38 @@ func TestErrorFragmentPropagation(t *testing.T) {
 	defer os.Remove("/tmp/ssql_test")
 
 	// Create a test CSV
-	csvContent := "name,age,dept\nAlice,30,Engineering\nBob,25,Sales\n"
-	tmpFile := "/tmp/test_error_prop.csv"
+	csvContent := "name,salary,dept\nAlice,90000,Engineering\nBob,75000,Sales\n"
+	tmpFile := "/tmp/test_stream_expr_pipe.csv"
 	if err := os.WriteFile(tmpFile, []byte(csvContent), 0644); err != nil {
 		t.Fatalf("Failed to create test CSV: %v", err)
 	}
 	defer os.Remove(tmpFile)
 
-	// Test that an error in middle of pipeline prevents generate-go from producing code
-	// The where command would succeed, but if an error fragment was introduced,
-	// generate-go should fail
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test generate-go 2>&1`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total | /tmp/ssql_test generate-go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 
-	// Should fail due to unsupported -stream-expr
-	if err == nil {
-		t.Errorf("Expected error from unsupported feature, got none. Output: %s", outputStr)
+	if err != nil {
+		t.Fatalf("Expected success, got error: %v\nOutput: %s", err, outputStr)
 	}
 
-	// Should NOT produce partial code
-	if strings.Contains(outputStr, "package main") {
-		t.Errorf("Should not produce partial Go code when there's an error. Output: %s", outputStr)
+	// Should produce valid Go code with StreamExprAgg
+	expected := []string{
+		"package main",
+		"ssql.StreamExprAgg",
+		"ssql.GroupByFields",
+		"ssql.Aggregate",
 	}
-
-	// Should contain error message
-	if !strings.Contains(outputStr, "not yet supported") {
-		t.Errorf("Expected 'not yet supported' error message, got: %s", outputStr)
+	for _, want := range expected {
+		if !strings.Contains(outputStr, want) {
+			t.Errorf("Expected output to contain %q, got: %s", want, outputStr)
+		}
 	}
 }
 
-// TestErrorFragmentFormat tests that error fragments have correct JSON format
-func TestErrorFragmentFormat(t *testing.T) {
+// TestStreamExprWithBuiltinAgg tests stream-expr combined with built-in aggregations
+func TestStreamExprWithBuiltinAgg(t *testing.T) {
 	// Build the binary first
 	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
 	if err := buildCmd.Run(); err != nil {
@@ -1219,19 +1229,24 @@ func TestErrorFragmentFormat(t *testing.T) {
 	}
 	defer os.Remove("/tmp/ssql_test")
 
-	// Test that error fragments are valid JSON with expected fields
-	cmdLine := `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+1}' 's' total 2>&1`
+	cmdLine := `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test group-by dept -count num -stream-expr '{s:0}' '{s:s+salary}' 's' total`
 	cmd := exec.Command("bash", "-c", cmdLine)
-	output, _ := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 
-	// Should contain error fragment markers
-	if !strings.Contains(outputStr, `"type":"error"`) {
-		t.Errorf("Expected error fragment with type 'error', got: %s", outputStr)
+	if err != nil {
+		t.Fatalf("Expected success, got error: %v\nOutput: %s", err, outputStr)
 	}
 
-	if !strings.Contains(outputStr, `"error":`) {
-		t.Errorf("Expected error fragment with 'error' field, got: %s", outputStr)
+	// Should contain both Count and StreamExprAgg
+	expected := []string{
+		`ssql.Count()`,
+		`ssql.StreamExprAgg`,
+	}
+	for _, want := range expected {
+		if !strings.Contains(outputStr, want) {
+			t.Errorf("Expected output to contain %q, got: %s", want, outputStr)
+		}
 	}
 }
 
@@ -1405,5 +1420,99 @@ func TestPresortedGroupByGeneration(t *testing.T) {
 	}
 	if !strings.Contains(outputStr, `ssql.Aggregate`) {
 		t.Errorf("Expected output to contain ssql.Aggregate, got: %s", outputStr)
+	}
+}
+
+// TestParameterizedCodeGeneration verifies that generated code uses flag variables
+// instead of hardcoded literals, enabling reuse with different inputs.
+func TestParameterizedCodeGeneration(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	// Create test input
+	tmpFile := "/tmp/test_param_gen.csv"
+	if err := os.WriteFile(tmpFile, []byte("name,age\nAlice,30\n"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(tmpFile)
+
+	tests := []struct {
+		name string
+		cmd  string
+		want []string
+	}{
+		{
+			name: "input file parameterized",
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test generate-go`,
+			want: []string{`flag.String("input"`, `"input CSV file"`, `*flagInput`, `flag.Parse()`},
+		},
+		{
+			name: "output file parameterized",
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test to csv /tmp/out.csv | /tmp/ssql_test generate-go`,
+			want: []string{`flag.String("output"`, `*flagOutput`, `flag.Parse()`},
+		},
+		{
+			name: "limit parameterized as int",
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test limit 42 | /tmp/ssql_test generate-go`,
+			want: []string{`flag.Int("limit"`, `42`, `*flagLimit`},
+		},
+		{
+			name: "offset parameterized as int",
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test offset 5 | /tmp/ssql_test generate-go`,
+			want: []string{`flag.Int("offset"`, `5`, `*flagOffset`},
+		},
+		{
+			name: "stdin input has no flag",
+			cmd:  `echo '{"name":"Alice"}' | SSQLGO=1 /tmp/ssql_test from json | /tmp/ssql_test generate-go`,
+			want: []string{`ReadJSONFromReader(os.Stdin)`},
+		},
+		{
+			name: "flag name deduplication",
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test join ` + tmpFile + ` -using name | /tmp/ssql_test generate-go`,
+			want: []string{`flag.String("input"`, `flag.String("join"`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", tt.cmd)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Logf("Command error: %v\nOutput: %s", err, output)
+			}
+			outputStr := string(output)
+			for _, w := range tt.want {
+				if !strings.Contains(outputStr, w) {
+					t.Errorf("Expected %q in output, got:\n%s", w, outputStr)
+				}
+			}
+		})
+	}
+}
+
+// TestParameterizedStdinNoFlags verifies that stdin-only pipelines don't emit flag declarations
+func TestParameterizedStdinNoFlags(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	cmd := exec.Command("bash", "-c", `echo '{"name":"Alice"}' | SSQLGO=1 /tmp/ssql_test from json | /tmp/ssql_test to table | /tmp/ssql_test generate-go`)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Command error: %v\nOutput: %s", err, output)
+	}
+	outputStr := string(output)
+
+	// Should NOT contain flag infrastructure when everything is stdin/stdout
+	if strings.Contains(outputStr, `flag.Parse()`) {
+		t.Errorf("Stdin-only pipeline should not have flag.Parse(), got:\n%s", outputStr)
+	}
+	if strings.Contains(outputStr, `"flag"`) {
+		t.Errorf("Stdin-only pipeline should not import flag, got:\n%s", outputStr)
 	}
 }

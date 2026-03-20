@@ -5,6 +5,26 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.27.0] - 2026-03-13
+
+### New Features
+- **`from ssh` command**: Read remote files via SSH
+  - `ssql from ssh HOST PATH` reads a remote file and streams records locally
+  - `-gpu` flag uses `ssql_gpu` on the remote host for GPU-accelerated reading
+  - Push-down filtering with `--` separator: `ssql from ssh HOST PATH -- where -if age gt 25`
+  - Multi-step push-down with `+` separator: `-- where -if age gt 25 + group-by service -count cnt`
+  - Supports code generation via `-generate` / `SSQLGO=1`
+
+- **`from catalog` command**: Read all shards from a catalog CSV for distributed processing
+  - `ssql from catalog shards.csv` reads shards listed in a catalog CSV (`host` and `path` columns required)
+  - `-if field op value` for partition pruning (skips irrelevant shards before connecting)
+  - Range pruning: catalog columns named `X_from`/`X_to` enable interval overlap pruning with `-if X ge val`
+  - Exact-value pruning for non-range catalog columns
+  - `-shard-field _shard` adds provenance field (`host:path`) to each record
+  - Push-down to each shard with `--` separator: `-- where -if status eq error`
+  - Multi-step push-down: `-- where -if status ge 400 + group-by service -count cnt`
+  - Supports local shards (`host=local` or `host=localhost`)
+
 ## [Unreleased]
 
 ### Breaking Changes
@@ -199,7 +219,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MutableRecord builder for efficient record construction
 - Comprehensive test suite
 
-[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.6.2...HEAD
+[v4.27.0]: https://github.com/rosscartlidge/ssql/compare/v4.6.2...v4.27.0
+[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.27.0...HEAD
 [v4.6.2]: https://github.com/rosscartlidge/ssql/compare/v4.6.1...v4.6.2
 [v4.6.1]: https://github.com/rosscartlidge/ssql/compare/v4.6.0...v4.6.1
 [v4.6.0]: https://github.com/rosscartlidge/ssql/compare/v4.5.1...v4.6.0

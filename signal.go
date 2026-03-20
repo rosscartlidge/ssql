@@ -365,10 +365,11 @@ func ApplyWindow(signal, window Signal) Signal {
 
 // SpectrogramOptions configures the STFT computation.
 type SpectrogramOptions struct {
-	WindowSize int     // FFT window size (default: 1024)
-	HopSize    int     // Samples between windows (default: WindowSize/4)
-	Window     string  // "hann", "hamming", "blackman", "none" (default: "hann")
-	SampleRate float64 // For frequency axis (default: 1.0)
+	WindowSize   int     // FFT window size (default: 1024)
+	HopSize      int     // Samples between windows (default: WindowSize/4)
+	Window       string  // "hann", "hamming", "blackman", "none" (default: "hann")
+	SampleRate   float64 // For frequency axis (default: 1.0)
+	OutputFormat string  // "magnitude" (default), "power" (magnitude^2), "db" (20*log10)
 }
 
 // SpectrogramBin represents a single time-frequency magnitude value.
@@ -437,12 +438,36 @@ func Spectrogram(signal Signal, opts SpectrogramOptions) ([]SpectrogramBin, erro
 	if gpuAvailableForSignal() && totalFrameSamples >= 32768 {
 		bins, err := spectrogramGPU(signal, opts, window, numFrames)
 		if err == nil {
+			applySpectrogramOutputFormat(bins, opts.OutputFormat)
 			return bins, nil
 		}
 		// GPU failed, fall through to CPU path
 	}
 
-	return spectrogramCPU(signal, opts, window, numFrames)
+	bins, err := spectrogramCPU(signal, opts, window, numFrames)
+	if err != nil {
+		return nil, err
+	}
+	applySpectrogramOutputFormat(bins, opts.OutputFormat)
+	return bins, nil
+}
+
+// applySpectrogramOutputFormat transforms magnitude values in-place.
+func applySpectrogramOutputFormat(bins []SpectrogramBin, format string) {
+	switch format {
+	case "power":
+		for i := range bins {
+			bins[i].Magnitude = bins[i].Magnitude * bins[i].Magnitude
+		}
+	case "db":
+		for i := range bins {
+			if bins[i].Magnitude > 0 {
+				bins[i].Magnitude = 20 * math.Log10(bins[i].Magnitude)
+			} else {
+				bins[i].Magnitude = -200
+			}
+		}
+	}
 }
 
 // spectrogramGPU computes spectrogram using batched GPU FFT.

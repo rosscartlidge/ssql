@@ -213,7 +213,7 @@ func generateWhereCode(ctx *cf.Context) error {
 	}
 
 	// Generate filter code from clauses
-	filterCode, imports, preCompileVars := generateWhereCodeFromClauses(ctx.Clauses)
+	filterCode, imports, preCompileVars, params := generateWhereCodeFromClauses(ctx.Clauses)
 
 	// Build complete statement with pre-compiled expressions
 	var codeLines []string
@@ -227,16 +227,18 @@ func generateWhereCode(ctx *cf.Context) error {
 
 	// Create code fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
+	frag.Params = params
 
 	// Write to stdout
 	return lib.WriteCodeFragment(frag)
 }
 
 // generateWhereCodeFromClauses generates the filter function code
-func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []string) {
+func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []string, []lib.CodeParam) {
 	var imports []string
 	var clauseConditions []string
 	var preCompileVars []string
+	var params []lib.CodeParam
 	exprCounter := 0
 
 	// Build conditions for each clause (OR logic between clauses)
@@ -261,10 +263,13 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 						continue
 					}
 
-					// Generate condition code
-					cond, imp := generateCondition(field, op, value)
+					// Generate condition code with parameterized value
+					cond, imp, param := generateCondition(field, op, value)
 					andConditions = append(andConditions, cond)
 					imports = append(imports, imp...)
+					if param != nil {
+						params = append(params, *param)
+					}
 				}
 			}
 		}
@@ -319,12 +324,24 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 	// Build function
 	code := fmt.Sprintf("func(r ssql.Record) bool {\n\t\t%s\n\t}", finalCondition)
 
-	return code, dedupeImports(imports), preCompileVars
+	return code, dedupeImports(imports), preCompileVars, params
 }
 
-// generateCondition generates code for a single where condition
-func generateCondition(field, op, value string) (string, []string) {
+// generateCondition generates code for a single where condition.
+// Returns the condition code, any extra imports, and an optional CodeParam for the value.
+func generateCondition(field, op, value string) (string, []string, *lib.CodeParam) {
 	var imports []string
+
+	// Build flag name and var name: e.g., "age-gt" → flagAgeGt
+	flagName := field + "-" + op
+	varName := "flag" + flagVarName(field) + flagVarName(op)
+
+	param := &lib.CodeParam{
+		Name:    flagName,
+		Default: value,
+		Help:    fmt.Sprintf("filter: %s %s value", field, op),
+		VarName: varName,
+	}
 
 	// Detect if value is numeric
 	_, err := strconv.ParseFloat(value, 64)
@@ -333,46 +350,46 @@ func generateCondition(field, op, value string) (string, []string) {
 	switch op {
 	case "eq":
 		if isNum {
-			return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) == %s", field, value), nil
+			return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) == ssql.ParseFloat64(*%s)", field, varName), nil, param
 		}
-		return fmt.Sprintf("ssql.GetOr(r, %q, \"\") == %q", field, value), nil
+		return fmt.Sprintf("ssql.GetOr(r, %q, \"\") == *%s", field, varName), nil, param
 
 	case "ne":
 		if isNum {
-			return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) != %s", field, value), nil
+			return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) != ssql.ParseFloat64(*%s)", field, varName), nil, param
 		}
-		return fmt.Sprintf("ssql.GetOr(r, %q, \"\") != %q", field, value), nil
+		return fmt.Sprintf("ssql.GetOr(r, %q, \"\") != *%s", field, varName), nil, param
 
 	case "gt":
-		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) > %s", field, value), nil
+		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) > ssql.ParseFloat64(*%s)", field, varName), nil, param
 
 	case "ge":
-		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) >= %s", field, value), nil
+		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) >= ssql.ParseFloat64(*%s)", field, varName), nil, param
 
 	case "lt":
-		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) < %s", field, value), nil
+		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) < ssql.ParseFloat64(*%s)", field, varName), nil, param
 
 	case "le":
-		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) <= %s", field, value), nil
+		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) <= ssql.ParseFloat64(*%s)", field, varName), nil, param
 
 	case "contains":
 		imports = append(imports, "strings")
-		return fmt.Sprintf("strings.Contains(ssql.GetOr(r, %q, \"\"), %q)", field, value), imports
+		return fmt.Sprintf("strings.Contains(ssql.GetOr(r, %q, \"\"), *%s)", field, varName), imports, param
 
 	case "startswith":
 		imports = append(imports, "strings")
-		return fmt.Sprintf("strings.HasPrefix(ssql.GetOr(r, %q, \"\"), %q)", field, value), imports
+		return fmt.Sprintf("strings.HasPrefix(ssql.GetOr(r, %q, \"\"), *%s)", field, varName), imports, param
 
 	case "endswith":
 		imports = append(imports, "strings")
-		return fmt.Sprintf("strings.HasSuffix(ssql.GetOr(r, %q, \"\"), %q)", field, value), imports
+		return fmt.Sprintf("strings.HasSuffix(ssql.GetOr(r, %q, \"\"), *%s)", field, varName), imports, param
 
 	case "regex":
 		imports = append(imports, "regexp")
-		return fmt.Sprintf("regexp.MustCompile(%q).MatchString(ssql.GetOr(r, %q, \"\"))", value, field), imports
+		return fmt.Sprintf("regexp.MustCompile(*%s).MatchString(ssql.GetOr(r, %q, \"\"))", varName, field), imports, param
 
 	default:
-		return "false", nil
+		return "false", nil, nil
 	}
 }
 

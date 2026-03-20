@@ -2,6 +2,7 @@ package ssql
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
@@ -28,6 +29,92 @@ func ExprAgg(expression string) AggregateFunc {
 		}
 		return AggResult[float64]{val: toFloat64(result)}
 	}
+}
+
+// StreamExprAgg creates an AggregateFunc using streaming (init/every/final) expressions.
+// This processes records one at a time with mutable state, useful for memory-efficient
+// aggregations or custom accumulation logic.
+//
+// The three expressions are:
+//   - initExpr: initializes state as an object, e.g. "{s: 0}"
+//   - everyExpr: updates state for each record, e.g. "{s: s + salary}"
+//   - finalExpr: extracts the final result from state, e.g. "s"
+//
+// Panics if any expression is invalid or evaluation fails.
+//
+// Example:
+//
+//	aggregations := map[string]ssql.AggregateFunc{
+//	    "total": ssql.StreamExprAgg("{s: 0}", "{s: s + salary}", "s"),
+//	}
+func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc {
+	return func(records []Record) AggregateResult {
+		result, err := evalStreamAggExpr(initExpr, everyExpr, finalExpr, records)
+		if err != nil {
+			panic(fmt.Sprintf("StreamExprAgg: %v", err))
+		}
+		return AggResult[float64]{val: toFloat64(result)}
+	}
+}
+
+// evalStreamAggExpr evaluates a streaming aggregation on a group of records.
+func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) (any, error) {
+	if len(records) == 0 {
+		return nil, fmt.Errorf("no records to process")
+	}
+
+	// 1. Initialize state
+	initProgram, err := expr.Compile(initExpr)
+	if err != nil {
+		return nil, fmt.Errorf("compiling init expression: %w", err)
+	}
+	state, err := expr.Run(initProgram, nil)
+	if err != nil {
+		return nil, fmt.Errorf("evaluating init expression: %w", err)
+	}
+	stateMap, ok := state.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("init expression must return object, got %T", state)
+	}
+
+	// 2. Build a sample environment for compiling (state + first record's fields)
+	compileEnv := make(map[string]any)
+	maps.Copy(compileEnv, stateMap)
+	maps.Insert(compileEnv, records[0].All())
+
+	// Compile "every" expression with combined environment
+	everyProgram, err := expr.Compile(everyExpr, expr.Env(compileEnv))
+	if err != nil {
+		return nil, fmt.Errorf("compiling every expression: %w", err)
+	}
+
+	// 3. Process each record
+	for _, record := range records {
+		env := make(map[string]any)
+		maps.Copy(env, stateMap)
+		maps.Insert(env, record.All())
+
+		newState, err := expr.Run(everyProgram, env)
+		if err != nil {
+			return nil, fmt.Errorf("evaluating every expression: %w", err)
+		}
+		stateMap, ok = newState.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("every expression must return object, got %T", newState)
+		}
+	}
+
+	// 4. Compute final result
+	finalProgram, err := expr.Compile(finalExpr, expr.Env(stateMap))
+	if err != nil {
+		return nil, fmt.Errorf("compiling final expression: %w", err)
+	}
+	result, err := expr.Run(finalProgram, stateMap)
+	if err != nil {
+		return nil, fmt.Errorf("evaluating final expression: %w", err)
+	}
+
+	return result, nil
 }
 
 // toFloat64 converts various numeric types to float64

@@ -694,6 +694,12 @@ func ReadJSONFromReader(reader io.Reader) iter.Seq[Record] {
 				continue
 			}
 
+			// Skip schema header lines
+			if len(line) > 10 && strings.Contains(line[:min(20, len(line))], `"_schema"`) {
+				lineNumber++
+				continue
+			}
+
 			var rawRecord Record
 			if err := json.Unmarshal([]byte(line), &rawRecord); err != nil {
 				// For simple API, skip invalid JSON lines

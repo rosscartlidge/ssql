@@ -8,6 +8,7 @@ import (
 	"iter"
 	"maps"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -1244,4 +1245,11 @@ func SkipUntil[T any](predicate func(T) bool) Filter[T, T] {
 			}
 		}
 	}
+}
+
+// ParseFloat64 parses a string as float64, returning 0 on failure.
+// Used by generated code to convert parameterized flag values for numeric comparisons.
+func ParseFloat64(s string) float64 {
+	f, _ := strconv.ParseFloat(s, 64)
+	return f
 }

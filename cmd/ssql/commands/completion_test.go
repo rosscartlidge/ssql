@@ -80,6 +80,9 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-x": {0}, // x-axis field
 			"-y": {0}, // y-axis field
 		},
+		"from/catalog": {
+			"-if": {0}, // catalog field is arg 0
+		},
 		"convolve": {
 			"-field": {0}, // signal field
 		},

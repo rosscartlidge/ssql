@@ -19,6 +19,7 @@
 - [Grouping and Aggregations](#grouping-and-aggregations)
 - [SQL-Like Operations](#sql-like-operations)
 - [Signal Processing](#signal-processing)
+- [Distributed Processing](#distributed-processing)
 - [Creating Visualizations](#creating-visualizations)
 - [Code Generation](#code-generation)
 - [Complete Example](#complete-example)
@@ -841,6 +842,91 @@ Smaller signals use CPU (faster due to GPU transfer overhead).
 
 ---
 
+## Distributed Processing
+
+ssql can read data from remote machines via SSH and coordinate reads across multiple shards using a catalog file.
+
+### Reading Remote Files with `from ssh`
+
+Read a file from a remote host over SSH:
+
+```bash
+# Read a remote CSV file
+ssql from ssh myserver /data/events.csv | ssql to table
+
+# Use ssql_gpu on the remote host
+ssql from ssh myserver /data/events.csv -gpu | ssql to table
+```
+
+**Push-down filtering** sends filter and aggregation operations to the remote host, reducing the amount of data transferred:
+
+```bash
+# Filter on the remote side before streaming results back
+ssql from ssh myserver /data/events.csv -- where -if status eq error | ssql to table
+
+# Multi-step push-down: filter then aggregate remotely
+ssql from ssh myserver /data/events.csv \
+  -- where -if status ge 400 + group-by service -count cnt | \
+  ssql to table
+```
+
+The `--` separator marks the start of remote pipeline stages. Use `+` to separate multiple stages within the remote pipeline.
+
+### Reading Multiple Shards with `from catalog`
+
+A catalog CSV file maps shards to their locations. It must have `host` and `path` columns, and can include optional metadata columns for partition pruning:
+
+```csv
+host,path,date_from,date_to,region
+ssql-node1,/data/events/2025-01.csv,2025-01-01,2025-01-31,us
+ssql-node2,/data/events/2025-02.csv,2025-02-01,2025-02-28,us
+ssql-node3,/data/events/2025-03.csv,2025-03-01,2025-03-31,eu
+```
+
+Read all shards:
+
+```bash
+# Read every shard listed in the catalog
+ssql from catalog shards.csv | ssql to table
+```
+
+**Partition pruning** skips shards that can't match your filter, avoiding unnecessary SSH connections:
+
+```bash
+# Range pruning: only read shards whose date range overlaps March
+ssql from catalog shards.csv -if date ge 2025-03-01 | ssql to table
+
+# Exact-value pruning: only read shards in the "us" region
+ssql from catalog shards.csv -if region eq us | ssql to table
+
+# Multiple pruning conditions
+ssql from catalog shards.csv -if date ge 2025-02-01 -if region eq us | ssql to table
+```
+
+**Push-down filtering** sends operations to each shard:
+
+```bash
+# Filter on each remote shard before streaming results
+ssql from catalog shards.csv -- where -if status eq error | ssql to table
+
+# Two-level aggregation: aggregate per shard, then merge locally
+ssql from catalog shards.csv \
+  -- where -if status ge 400 + group-by service -count cnt | \
+  ssql group-by service -sum cnt total_errors | \
+  ssql to table
+```
+
+**Add provenance** to track which shard each record came from:
+
+```bash
+ssql from catalog shards.csv -shard-field _shard | ssql to table
+# Each record gets a _shard field like "ssql-node1:/data/events/2025-01.csv"
+```
+
+Local shards (where `host` is `local` or `localhost`) are read directly without SSH.
+
+---
+
 ## Creating Visualizations
 
 Generate interactive HTML charts with Chart.js:
@@ -1183,6 +1269,77 @@ go build -o monitor monitor.go
 ./monitor
 ```
 
+### Pipeline Optimizer (`generate-ssql`)
+
+`generate-ssql` reads the same code fragments as `generate-go` and rewrites the pipeline to run faster. It applies 12 optimization rules automatically:
+
+```bash
+# Optimize a naive pipeline
+(export SSQLGO=1; ssql from ssh node1 /data/events.csv \
+  | ssql where -if status ge 500 \
+  | ssql group-by service -count cnt \
+  | ssql sort -desc cnt | ssql limit 10 \
+  | ssql to table) | ssql generate-ssql
+
+# Output: filters and aggregation pushed to remote, sort+limit collapsed
+# ssql from ssh node1 /data/events.csv -- where -if status ge 500 + group-by service -count cnt | ssql top 10 -field cnt | ssql to table
+```
+
+Use `-explain` to see which rules fired:
+```bash
+... | ssql generate-ssql -explain
+# [ssh-predicate-pushdown] ssql from ssh node1 ... | ssql where ... → ssql from ssh node1 ... -- where ...
+# [ssh-aggregation-pushdown] ... | ssql group-by ... → ... + group-by ...
+# [sort-limit-to-top] ssql sort -desc cnt | ssql limit 10 → ssql top 10 -field cnt
+```
+
+Use `-run` to execute the optimized pipeline directly:
+```bash
+... | ssql generate-ssql -run
+```
+
+Chain with `generate-go` to optimize *then* compile:
+```bash
+(export SSQLGO=1; ssql from catalog shards.csv \
+  | ssql where -if date ge 2025-02-01 -if status ge 500 \
+  | ssql group-by service -count cnt \
+  | ssql to table) | ssql generate-ssql | ssql generate-go
+```
+
+**Optimization rules:**
+- **SSH/Catalog pushdown** — move `where` and `group-by` into remote `--` push-down args
+- **Catalog predicate extraction** — move predicates matching catalog metadata columns into `-if` for shard pruning
+- **Sort + limit → top** — replace `sort -desc FIELD | limit N` with `top N -field FIELD`
+- **Sort elimination** — remove `sort` before `group-by` (group-by doesn't preserve order)
+- **Where merge** — combine consecutive `where` commands into one
+- **Predicate reorder** — cheap operators (eq) before expensive ones (regex)
+- **Predicate simplification** — tighten redundant ranges, detect contradictions
+- **Empty result detection** — contradictory predicates skip the entire pipeline
+- **Parquet column pruning** — add `-columns` to `from parquet` based on downstream field usage
+- **Join predicate pushdown** — move filters to the appropriate side of a join
+
+### SQL Generation (`generate-sql`)
+
+`generate-sql` converts an ssql pipeline into DuckDB-compatible SQL:
+
+```bash
+(export SSQLGO=1; ssql from data.csv \
+  | ssql where -if age gt 25 \
+  | ssql group-by dept -sum salary total \
+  | ssql to table) | ssql generate-sql
+
+# Output:
+# SELECT dept, SUM(salary) AS total
+# FROM 'data.csv'
+# WHERE age > '25'
+# GROUP BY dept;
+```
+
+Use `-run` to execute directly with DuckDB:
+```bash
+... | ssql generate-sql -run
+```
+
 ---
 
 ## Available Commands
@@ -1197,6 +1354,8 @@ go build -o monitor monitor.go
 - `from wav file` - Read WAV audio. Flags: `-channel N`
 - `from xlsx file` - Read Excel. Flags: `-sheet name`
 - `from command -- [command] [args...]` - Execute command and parse output
+- `from ssh HOST PATH` - Read remote file via SSH. Flags: `-gpu`, `-- [push-down stages]`
+- `from catalog [file]` - Read shards from catalog CSV. Flags: `-if field op value`, `-shard-field name`, `-- [push-down stages]`
 
 ### Transformations
 - `where` - Filter records by conditions (`-if field op value`)
@@ -1240,6 +1399,8 @@ go build -o monitor monitor.go
 
 ### Code Generation
 - `generate-go` - Assemble code fragments into Go program
+- `generate-sql` - Generate DuckDB SQL from pipeline. Flags: `-run`, `OUTPUT`
+- `generate-ssql` - Optimize pipeline (SSH/catalog pushdown, sort→top, Parquet pruning, join pushdown, predicate reorder/simplify). Flags: `-run`, `-explain`
 
 ### Utilities
 - `functions` - Show available expression functions and operators
