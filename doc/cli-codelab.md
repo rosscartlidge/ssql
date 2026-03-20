@@ -87,7 +87,7 @@ ssql from data.csv | ssql where ... | ssql group ... | ssql to chart ...
 **Self-Generating Commands**
 Every command supports `-generate` flag to emit Go code instead of executing:
 ```bash
-ssql from -generate data.csv | ssql generate-go
+ssql from -generate data.csv | ssql generate go
 ```
 
 **Universal Data Format**
@@ -1028,7 +1028,7 @@ ssql from -generate employees.csv | \
   ssql where -generate -if department eq Engineering | \
   ssql include name salary | \
   ssql to csv -generate output.csv | \
-  ssql generate-go
+  ssql generate go
 ```
 
 Output:
@@ -1063,7 +1063,7 @@ func main() {
 # Generate code to file
 ssql from -generate data.csv | \
   ssql group-by -generate region -sum sales total | \
-  ssql generate-go > analysis.go
+  ssql generate go > analysis.go
 
 # Add package initialization
 cat > go.mod << 'EOF'
@@ -1089,7 +1089,7 @@ ssql from -generate sales.csv | \
   ssql sort revenue -desc -generate | \
   ssql limit 10 -generate | \
   ssql to csv -generate top_performers.csv | \
-  ssql generate-go > report.go
+  ssql generate go > report.go
 ```
 
 Generated code (`report.go`):
@@ -1161,7 +1161,7 @@ ssql from -generate sales.csv | \
     -avg revenue avg_revenue | \
   ssql sort -generate total_revenue -desc | \
   ssql to csv -generate region_report.csv | \
-  ssql generate-go > region_analysis.go
+  ssql generate go > region_analysis.go
 ```
 
 Generated code:
@@ -1231,7 +1231,7 @@ Now convert the same pipeline to Go code:
 ssql from command -generate -- ps -efl | \
   ssql group-by -generate UID -count process_count | \
   ssql chart -generate -x UID -y process_count -output processes.html | \
-  ssql generate-go > monitor.go
+  ssql generate go > monitor.go
 ```
 
 Generated code in `monitor.go`:
@@ -1269,9 +1269,9 @@ go build -o monitor monitor.go
 ./monitor
 ```
 
-### Pipeline Optimizer (`generate-ssql`)
+### Pipeline Optimizer (`generate ssql`)
 
-`generate-ssql` reads the same code fragments as `generate-go` and rewrites the pipeline to run faster. It applies 12 optimization rules automatically:
+`generate ssql` reads the same code fragments as `generate go` and rewrites the pipeline to run faster. It applies 12 optimization rules automatically:
 
 ```bash
 # Optimize a naive pipeline
@@ -1279,7 +1279,7 @@ go build -o monitor monitor.go
   | ssql where -if status ge 500 \
   | ssql group-by service -count cnt \
   | ssql sort -desc cnt | ssql limit 10 \
-  | ssql to table) | ssql generate-ssql
+  | ssql to table) | ssql generate ssql
 
 # Output: filters and aggregation pushed to remote, sort+limit collapsed
 # ssql from ssh node1 /data/events.csv -- where -if status ge 500 + group-by service -count cnt | ssql top 10 -field cnt | ssql to table
@@ -1287,7 +1287,7 @@ go build -o monitor monitor.go
 
 Use `-explain` to see which rules fired:
 ```bash
-... | ssql generate-ssql -explain
+... | ssql generate ssql -explain
 # [ssh-predicate-pushdown] ssql from ssh node1 ... | ssql where ... → ssql from ssh node1 ... -- where ...
 # [ssh-aggregation-pushdown] ... | ssql group-by ... → ... + group-by ...
 # [sort-limit-to-top] ssql sort -desc cnt | ssql limit 10 → ssql top 10 -field cnt
@@ -1295,15 +1295,15 @@ Use `-explain` to see which rules fired:
 
 Use `-run` to execute the optimized pipeline directly:
 ```bash
-... | ssql generate-ssql -run
+... | ssql generate ssql -run
 ```
 
-Chain with `generate-go` to optimize *then* compile:
+Chain with `generate go` to optimize *then* compile:
 ```bash
 (export SSQLGO=1; ssql from catalog shards.csv \
   | ssql where -if date ge 2025-02-01 -if status ge 500 \
   | ssql group-by service -count cnt \
-  | ssql to table) | ssql generate-ssql | ssql generate-go
+  | ssql to table) | ssql generate ssql | ssql generate go
 ```
 
 **Optimization rules:**
@@ -1318,15 +1318,15 @@ Chain with `generate-go` to optimize *then* compile:
 - **Parquet column pruning** — add `-columns` to `from parquet` based on downstream field usage
 - **Join predicate pushdown** — move filters to the appropriate side of a join
 
-### SQL Generation (`generate-sql`)
+### SQL Generation (`generate sql`)
 
-`generate-sql` converts an ssql pipeline into DuckDB-compatible SQL:
+`generate sql` converts an ssql pipeline into DuckDB-compatible SQL:
 
 ```bash
 (export SSQLGO=1; ssql from data.csv \
   | ssql where -if age gt 25 \
   | ssql group-by dept -sum salary total \
-  | ssql to table) | ssql generate-sql
+  | ssql to table) | ssql generate sql
 
 # Output:
 # SELECT dept, SUM(salary) AS total
@@ -1337,7 +1337,7 @@ Chain with `generate-go` to optimize *then* compile:
 
 Use `-run` to execute directly with DuckDB:
 ```bash
-... | ssql generate-sql -run
+... | ssql generate sql -run
 ```
 
 ---
@@ -1398,9 +1398,9 @@ Use `-run` to execute directly with DuckDB:
 - `to wav [file]` - Write WAV audio file
 
 ### Code Generation
-- `generate-go` - Assemble code fragments into Go program
-- `generate-sql` - Generate DuckDB SQL from pipeline. Flags: `-run`, `OUTPUT`
-- `generate-ssql` - Optimize pipeline (SSH/catalog pushdown, sort→top, Parquet pruning, join pushdown, predicate reorder/simplify). Flags: `-run`, `-explain`
+- `generate go` - Assemble code fragments into Go program
+- `generate sql` - Generate DuckDB SQL from pipeline. Flags: `-run`, `OUTPUT`
+- `generate ssql` - Optimize pipeline (SSH/catalog pushdown, sort→top, Parquet pruning, join pushdown, predicate reorder/simplify). Flags: `-run`, `-explain`
 
 ### Utilities
 - `functions` - Show available expression functions and operators
@@ -1501,7 +1501,7 @@ This pattern makes complex aggregations readable while maintaining type safety a
 
 2. **Generate Code** - Convert to Go when satisfied
    ```bash
-   ssql from -generate data.csv | ... | ssql generate-go > app.go
+   ssql from -generate data.csv | ... | ssql generate go > app.go
    ```
 
 3. **Refine and Deploy** - Edit generated code, add error handling, deploy

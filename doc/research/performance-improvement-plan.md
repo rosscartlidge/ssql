@@ -205,9 +205,9 @@ Phases 1-3 alone (about a week of work) get ssql within 5-10x of DuckDB for Parq
 - Pipelines that stay within ssql (no DuckDB handoff)
 - Streaming + batch hybrid workflows
 
-**When to use `generate-sql` instead:**
+**When to use `generate sql` instead:**
 - Pure analytical queries on static files
 - Queries that DuckDB's optimizer handles better (complex joins, subqueries)
 - Maximum performance is the only goal
 
-The two approaches complement each other. Phases 1-3 make ssql fast enough for interactive use. `generate-sql` bridges to DuckDB when absolute performance matters.
+The two approaches complement each other. Phases 1-3 make ssql fast enough for interactive use. `generate sql` bridges to DuckDB when absolute performance matters.

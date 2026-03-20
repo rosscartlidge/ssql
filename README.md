@@ -124,11 +124,11 @@ ssql from catalog shards.csv -if date ge 2025-03-01 | ssql group-by service -cou
 (export SSQLGO=1; ssql from ssh node1 /data/events.csv \
   | ssql where -if status ge 500 \
   | ssql sort -desc cnt | ssql limit 10 \
-  | ssql to table) | ssql generate-ssql
+  | ssql to table) | ssql generate ssql
 # → ssql from ssh node1 /data/events.csv -- where -if status ge 500 | ssql top 10 -field cnt | ssql to table
 
 # Chain: optimize → then compile to Go
-(export SSQLGO=1; ...) | ssql generate-ssql | ssql generate-go
+(export SSQLGO=1; ...) | ssql generate ssql | ssql generate go
 
 # Debug pipelines with jq (JSONL streaming format)
 ssql from data.csv | jq '.' | head -5  # Inspect data
@@ -724,7 +724,7 @@ ssql from ssh myserver /data/events.csv -gpu | ssql to table
 - **Push-down** - Send filter and aggregation stages to remote hosts with `--` separator
 - **Local shards** - Catalog entries with `host=local` or `host=localhost` are read directly
 - **Code generation** - `from ssh` supports `-generate` / `SSQLGO=1`
-- **Pipeline optimizer** - `generate-ssql` automatically pushes filters into SSH/catalog, collapses sort+limit to top, prunes Parquet columns, and more (12 optimization rules)
+- **Pipeline optimizer** - `generate ssql` automatically pushes filters into SSH/catalog, collapses sort+limit to top, prunes Parquet columns, and more (12 optimization rules)
 
 </details>
 
@@ -833,7 +833,7 @@ export SSQLGO=1
 ssql from huge.csv | \
   ssql where -expr 'price * qty > 1000' | \
   ssql update -set-expr total 'price * qty' | \
-  ssql generate-go > optimized.go
+  ssql generate go > optimized.go
 go run optimized.go
 ```
 

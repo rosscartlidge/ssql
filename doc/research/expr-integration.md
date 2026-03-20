@@ -311,7 +311,7 @@ expr compiles expressions once at startup:
 time ssql read-csv large.csv | ssql where -expr 'price > 100' | ssql limit 10
 
 # Generated code: Zero overhead (compiled at package init)
-ssql read-csv large.csv | ssql where -expr 'price > 100' | ssql generate-go > program.go
+ssql read-csv large.csv | ssql where -expr 'price > 100' | ssql generate go > program.go
 go run program.go  # No runtime compilation!
 ```
 
@@ -329,7 +329,7 @@ go run program.go  # No runtime compilation!
 
 ## Code Generation
 
-expr expressions translate to Go code via `generate-go`:
+expr expressions translate to Go code via `generate go`:
 
 ### CLI Expression
 
@@ -338,7 +338,7 @@ export SSQLGO=1
 ssql read-csv data.csv | \
   ssql where -expr 'price > 15' | \
   ssql update -set-expr total 'price * qty' | \
-  ssql generate-go
+  ssql generate go
 ```
 
 ### Generated Code
@@ -596,7 +596,7 @@ ssql read-csv data.csv | ssql where -expr 'price > 100 and status == "active"'
 
 # Test code generation
 export SSQLGO=1
-ssql read-csv data.csv | ssql where -expr 'price > 100' | ssql generate-go > test.go
+ssql read-csv data.csv | ssql where -expr 'price > 100' | ssql generate go > test.go
 go run test.go
 ```
 

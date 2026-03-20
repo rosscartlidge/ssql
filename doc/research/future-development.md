@@ -254,7 +254,7 @@ The documentation is thorough but fragmented across 10+ files. A user discoverin
 5. Join with lookup data (`join`)
 6. Window functions (when available)
 7. Visualize (`to chart`, `to explore`)
-8. Generate production Go code (`SSQLGO=1` → `generate-go`)
+8. Generate production Go code (`SSQLGO=1` → `generate go`)
 
 This tells the ssql story: explore → analyze → visualize → ship.
 

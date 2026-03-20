@@ -434,6 +434,6 @@ These are the highest-ROI changes. They parallelize I/O without touching the pip
 
 Parallel Parquet row groups + parallel catalog sources would get ssql within 5-10x of DuckDB for the common case (read large file → filter → aggregate → output). That's Phase 1, achievable in a few days, with no architectural changes.
 
-The remaining gap is DuckDB's vectorized columnar engine — closing that fully would require rearchitecting ssql's core data model. The question is whether that's worth it given that `generate-sql` could just hand off to DuckDB for performance-critical queries.
+The remaining gap is DuckDB's vectorized columnar engine — closing that fully would require rearchitecting ssql's core data model. The question is whether that's worth it given that `generate sql` could just hand off to DuckDB for performance-critical queries.
 
-The pragmatic answer: **ssql for streaming, exploration, and code generation. DuckDB (via `generate-sql`) for maximum performance on large static datasets.** Parallel I/O in ssql closes the gap enough for most interactive use cases.
+The pragmatic answer: **ssql for streaming, exploration, and code generation. DuckDB (via `generate sql`) for maximum performance on large static datasets.** Parallel I/O in ssql closes the gap enough for most interactive use cases.

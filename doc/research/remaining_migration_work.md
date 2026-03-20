@@ -53,7 +53,7 @@ Successfully migrated ALL commands to native subcommand support:
    - -output flag for HTML file (default: chart.html)
    - Uses QuickChart() from ssql library
 
-✅ **generate-go** - Generate Go code from ssql CLI pipeline
+✅ **generate go** - Generate Go code from ssql CLI pipeline
    - Assembles code fragments from stdin
    - OUTPUT argument for file (or stdout)
    - Enables self-generating pipelines
@@ -126,7 +126,7 @@ For each migrated command:
 - ✅ All core data processing commands migrated
 - ✅ All SQL-style operations (WHERE, SELECT, JOIN, GROUP BY, UNION)
 - ✅ All I/O commands (CSV, JSONL)
-- ✅ Visualization (chart) and code generation (generate-go)
+- ✅ Visualization (chart) and code generation (generate go)
 - ✅ Command execution (exec) with -- separator support
 
 **Impact:**

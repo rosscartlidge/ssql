@@ -42,7 +42,7 @@ When the environment variable `SSQLGO=1` is set, commands emit *code fragments* 
 - `imports`: Required import paths
 - `command`: Original CLI command (for documentation)
 
-The `generate-go` command assembles fragments into a complete Go program.
+The `generate go` command assembles fragments into a complete Go program.
 
 ### 2.3 Process Substitution
 
@@ -192,7 +192,7 @@ ssql from users.csv \
       | ssql where -if amount gt 400) \
     -left-field id -right-field user_id \
   | ssql include name amount \
-  | ssql generate-go
+  | ssql generate go
 ```
 
 Produces:

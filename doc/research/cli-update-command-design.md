@@ -195,7 +195,7 @@ cat data.jsonl | ssql where -match amount gt 100 | ssql update -set priority "hi
 
 # With code generation
 export SSQLGO=1
-ssql read-csv data.csv | ssql update -set status "done" | ssql generate-go > program.go
+ssql read-csv data.csv | ssql update -set status "done" | ssql generate go > program.go
 ```
 
 **Type Handling:**

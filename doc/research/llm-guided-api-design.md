@@ -344,7 +344,7 @@ Our test suite contains 30 test cases (15 Go, 15 CLI) covering the full API surf
 | CLI-06 | Join with rename | `join`, `-on`, `-as` |
 | CLI-07 | Expression filter | `-if-expr`, `-set-expr` |
 | CLI-08 | Sort + pagination | `sort`, `limit`, `offset` |
-| CLI-09 | Code generation | `SSQLGO=1`, `generate-go` |
+| CLI-09 | Code generation | `SSQLGO=1`, `generate go` |
 | CLI-10 | Format conversion | `from`, `to arrow` or `to json` |
 | CLI-11 | Complex multi-stage | Multiple piped commands |
 | CLI-12 | Chart visualization | `to chart`, `-x`, `-y` |
@@ -859,7 +859,7 @@ ssql from users.csv | ssql group-by dept -count count | ssql to table
 
 **Generated CLI Pipeline:**
 ```bash
-export SSQLGO=1 && ssql from users.csv | ssql where -if status eq active | ssql group-by dept -count count | ssql generate-go
+export SSQLGO=1 && ssql from users.csv | ssql where -if status eq active | ssql group-by dept -count count | ssql generate go
 ```
 
 Note how the generated code correctly uses:

@@ -395,7 +395,7 @@ The `update` command should support the `-generate` flag:
 export SSQLGO=1
 ssql read-csv data.csv | \
   ssql update -set status active | \
-  ssql generate-go > program.go
+  ssql generate go > program.go
 ```
 
 This generates:

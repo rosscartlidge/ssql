@@ -491,7 +491,7 @@ ssql from data.csv | \
   ssql where -if-expr 'price * qty > 1000' | \
   ssql update -set-expr total 'price * qty' | \
   ssql update -set-expr tier 'total > 5000 ? "premium" : "standard"' | \
-  ssql generate-go > program.go
+  ssql generate go > program.go
 
 # Compile and run (10-100x faster than CLI)
 go run program.go

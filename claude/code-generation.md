@@ -33,10 +33,10 @@ Two ways to enable generation mode:
 ```bash
 # Method 1: Environment variable (affects entire pipeline)
 export SSQLGO=1
-ssql from data.csv | ssql where -if age gt 25 | ssql generate-go
+ssql from data.csv | ssql where -if age gt 25 | ssql generate go
 
 # Method 2: -generate flag per command
-ssql from -generate data.csv | ssql where -generate -if age gt 25 | ssql generate-go
+ssql from -generate data.csv | ssql where -generate -if age gt 25 | ssql generate go
 ```
 
 The environment variable approach is preferred for full pipelines.
@@ -46,7 +46,7 @@ The environment variable approach is preferred for full pipelines.
 **Architecture (`cmd/ssql/lib/codefragment.go`):**
 - Commands communicate via JSONL code fragments on stdin/stdout
 - Each fragment has: Type, Var (variable name), Input (input var), Code, Imports, Command
-- The `generate-go` command assembles all fragments into a complete Go program
+- The `generate go` command assembles all fragments into a complete Go program
 - Fragments are passed through the pipeline, with each command adding its own
 
 **Fragment Types:**
@@ -77,7 +77,7 @@ The environment variable approach is preferred for full pipelines.
 13. `join` - Generates stmt fragment with `ssql.Join()`
 
 **Commands that don't need -generate:**
-- `generate-go` - it's the assembler that produces the final Go code
+- `generate go` - it's the assembler that produces the final Go code
 - `functions` - displays help information only
 - `version` - displays version only
 
@@ -229,7 +229,7 @@ export SSQLGO=1
 ./ssql from data.csv | \
   ./ssql where -if age gt 25 | \
   ./ssql my-command -arg1 test | \
-  ./ssql generate-go > program.go
+  ./ssql generate go > program.go
 
 # Compile and run generated code
 go run program.go
@@ -270,10 +270,10 @@ Every data-processing command MUST support code generation (`-generate` flag / `
 **Before releasing any new command:**
 1. Implement `-generate` flag support
 2. Add generation tests to `cmd/ssql/generation_test.go`
-3. Test full pipeline: `SSQLGO=1 ssql from ... | ssql new-command ... | ssql generate-go`
+3. Test full pipeline: `SSQLGO=1 ssql from ... | ssql new-command ... | ssql generate go`
 4. Verify generated code compiles and runs correctly
 
-**Exception:** Commands that don't process data (like `version`, `functions`, `generate-go` itself) don't need generation support.
+**Exception:** Commands that don't process data (like `version`, `functions`, `generate go` itself) don't need generation support.
 
 ## Error Handling Requirements (CRITICAL)
 
@@ -288,7 +288,7 @@ This applies to BOTH execution mode AND code generation mode:
 
 **Code Generation Mode:**
 - Unsupported features must emit error fragments (`"type":"error"`)
-- `generate-go` must detect error fragments and fail (no partial code output)
+- `generate go` must detect error fragments and fail (no partial code output)
 - Error messages must explain what's unsupported and suggest alternatives
 
 **Example - Proper error fragment emission:**

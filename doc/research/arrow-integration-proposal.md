@@ -326,7 +326,7 @@ result = pa.ipc.open_file('result.arrow').read_all().to_pandas()
 
 ```bash
 # Generate columnar code (future)
-SSQLGO=columnar ssql from data.csv | ssql where -if age gt 30 | ssql generate-go
+SSQLGO=columnar ssql from data.csv | ssql where -if age gt 30 | ssql generate go
 ```
 
 ```go

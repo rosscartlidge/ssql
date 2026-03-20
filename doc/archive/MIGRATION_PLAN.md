@@ -69,7 +69,7 @@ All commands follow the same pattern:
 2. ✅ **write-csv** - Single optional FILE positional
 3. ✅ **limit** - Just -n flag (no positionals)
 4. ✅ **select** - Local -field/-as flags (no positionals)
-5. ✅ **generate-go** - Single optional FILE positional
+5. ✅ **generate go** - Single optional FILE positional
 6. ✅ **sort** - Optional FILE positional, -field and -desc flags
 7. ✅ **exec** - Special `--` handling, no FILE positional
 8. ✅ **chart** - Optional FILE positional, -x, -y, -output flags
@@ -178,7 +178,7 @@ echo "name,age\nAlice,30" | ./ssql read-csv
 ./ssql read-csv test.csv | ./ssql where -match age gt 25 | ./ssql select -field name
 
 # Code generation
-./ssql read-csv -generate test.csv | ./ssql generate-go
+./ssql read-csv -generate test.csv | ./ssql generate go
 
 # Complex pipeline
 ./ssql read-csv data.csv | \

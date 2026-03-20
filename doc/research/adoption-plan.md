@@ -10,7 +10,7 @@ ssql is the only tool that lets you prototype with Unix pipes, optimize automati
 
 ```
 prototype → optimize → compile
-  (CLI)    (generate-ssql)  (generate-go)
+  (CLI)    (generate ssql)  (generate go)
 ```
 
 Lead with this workflow in every piece of content. Features are secondary to the story.
@@ -23,7 +23,7 @@ Lead with this workflow in every piece of content. Features are secondary to the
 - [ ] GitHub topics added: `golang`, `cli`, `data-processing`, `csv`, `pipeline`, `sql`, `unix`, `stream-processing`
 - [ ] Terminal recordings added to README (2-3 short demos with `asciinema` or `vhs`)
   - Demo 1: Basic pipeline (from csv → where → group-by → to table) — 15 seconds
-  - Demo 2: Optimize + compile (generate-ssql → generate-go) — 20 seconds
+  - Demo 2: Optimize + compile (generate ssql → generate go) — 20 seconds
   - Demo 3: SSH pushdown (from ssh → where → to table, showing the rewrite) — 15 seconds
 - [ ] Pin repo on GitHub profile
 - [ ] Verify examples in README actually run (copy-paste test)
@@ -38,7 +38,7 @@ Lead with this workflow in every piece of content. Features are secondary to the
 
 **Post body** — keep it short, show don't tell:
 - One paragraph: what it is (CLI + Go library for data processing)
-- The killer demo: naive pipeline → generate-ssql optimizes it → generate-go compiles it
+- The killer demo: naive pipeline → generate ssql optimizes it → generate go compiles it
 - Link to GitHub
 - "I built this because..." one sentence motivation
 
@@ -90,7 +90,7 @@ Add `doc/comparison.md` to the repo. Honest comparison with:
 - **miller (mlr)** — similar Unix philosophy, mlr has its own DSL, ssql generates Go code
 - **xsv** — xsv is faster for pure CSV ops, ssql handles JSON/Parquet/Arrow/XLSX and has aggregations
 - **jq** — jq is better for JSON transformation, ssql is better for tabular data and aggregations
-- **DuckDB CLI** — DuckDB is faster for SQL queries, ssql is better for streaming pipelines and SSH pushdown; ssql can generate DuckDB SQL via `generate-sql`
+- **DuckDB CLI** — DuckDB is faster for SQL queries, ssql is better for streaming pipelines and SSH pushdown; ssql can generate DuckDB SQL via `generate sql`
 - **awk** — awk is universal, ssql is higher-level with named fields and type safety
 
 Don't trash the alternatives. Show where each tool is the better choice.
@@ -146,7 +146,7 @@ You already have a WASM build (`make wasm`). Create a simple static site where p
 
 ### DuckDB community
 
-- Post in DuckDB Discord showing the `generate-sql` bridge
+- Post in DuckDB Discord showing the `generate sql` bridge
 - Write a DuckDB community blog post: "Using ssql as a pipeline front-end for DuckDB"
 - The DuckDB community is active and welcoming of integrations
 

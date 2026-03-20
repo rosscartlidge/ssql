@@ -58,7 +58,7 @@ func NewErrorFragment(command string, err error) *CodeFragment {
 
 // WriteErrorAndExit writes an error fragment and returns the error
 // This should be used when code generation fails - it ensures the error
-// propagates through the pipeline so generate-go can detect it
+// propagates through the pipeline so generate go can detect it
 func WriteErrorAndExit(command string, err error) error {
 	frag := NewErrorFragment(command, err)
 	WriteCodeFragment(frag)
@@ -350,7 +350,7 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		for _, cmd := range commands {
 			code.WriteString(cmd + " |\n")
 		}
-		code.WriteString("ssql generate-go)\n")
+		code.WriteString("ssql generate go)\n")
 		code.WriteString("*/\n\n")
 	}
 

@@ -245,24 +245,24 @@ ssql from audio.csv | ssql spectrogram \
 ### 7. Code Generation
 
 **IMPORTANT:**
-1. Code generation pipelines end with `ssql generate-go`, NOT with output commands (`to table`, `to json`, etc.)
+1. Code generation pipelines end with `ssql generate go`, NOT with output commands (`to table`, `to json`, etc.)
 2. Use `export SSQLGO=1` (not just `SSQLGO=1`) so ALL commands in the pipeline see it
 
 ```bash
 # Generate Go code from entire pipeline - MUST export for all pipeline stages
-export SSQLGO=1 && ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -count count | ssql generate-go > program.go
+export SSQLGO=1 && ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -count count | ssql generate go > program.go
 
 # Alternative: subshell with export
-(export SSQLGO=1; ssql from data.csv | ssql where -if age gt 25 | ssql generate-go) > program.go
+(export SSQLGO=1; ssql from data.csv | ssql where -if age gt 25 | ssql generate go) > program.go
 
 # The generated program writes to stdout by default
 go run program.go
 
 # WRONG - SSQLGO=1 without export only affects first command!
-SSQLGO=1 ssql from data.csv | ssql where -if age gt 25 | ssql generate-go   # NO - where doesn't see SSQLGO!
+SSQLGO=1 ssql from data.csv | ssql where -if age gt 25 | ssql generate go   # NO - where doesn't see SSQLGO!
 
-# WRONG - don't put output commands before generate-go
-export SSQLGO=1 && ssql from data.csv | ssql to table | ssql generate-go   # NO!
+# WRONG - don't put output commands before generate go
+export SSQLGO=1 && ssql from data.csv | ssql to table | ssql generate go   # NO!
 ```
 
 ---
@@ -446,7 +446,7 @@ export SSQLGO=1 && \
   | ssql group-by product -sum revenue total -count count \
   | ssql sort revenue_sum -desc \
   | ssql limit 10 \
-  | ssql generate-go > top_products.go
+  | ssql generate go > top_products.go
 
 # Run the generated program
 go run top_products.go
@@ -484,7 +484,7 @@ Map natural language intent to ssql commands:
 | "FFT / frequency" | `ssql fft -field F -rate N` |
 | "spectrogram / STFT" | `ssql spectrogram -field F -window-size N -rate N` |
 | "smooth / convolve" | `ssql convolve -field F -kernel gaussian -size N` |
-| "generate Go code" | `export SSQLGO=1 && ... \| ssql generate-go` |
+| "generate Go code" | `export SSQLGO=1 && ... \| ssql generate go` |
 
 ---
 

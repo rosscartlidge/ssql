@@ -392,7 +392,7 @@ ssql spectrogram -file signal.arrow -field value -window 1024
 ssql from signal.csv | ssql spectrogram -field value -window 1024
 
 # Code generation
-SSQLGO=1 ssql from signal.arrow | ssql spectrogram -field value | ssql generate-go
+SSQLGO=1 ssql from signal.arrow | ssql spectrogram -field value | ssql generate go
 ```
 
 **Automatic GPU selection:** Like FFT/convolution, use thresholds:

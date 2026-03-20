@@ -524,7 +524,7 @@ Each test case specifies:
 - `ssql group-by`
 - `dept`
 - `-count`
-- `ssql generate-go`
+- `ssql generate go`
 - `|`
 
 **Negative patterns**:

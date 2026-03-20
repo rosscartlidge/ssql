@@ -147,7 +147,7 @@ func TestJoinWithNamedPipe(t *testing.T) {
 # Test 1: Named pipe with process substitution equivalent
 mkfifo /tmp/test_pipe
 (export SSQLGO=1 && ssql from orders.csv > /tmp/test_pipe) &
-export SSQLGO=1 && ssql from users.csv | ssql join /tmp/test_pipe -on id | ssql generate-go
+export SSQLGO=1 && ssql from users.csv | ssql join /tmp/test_pipe -on id | ssql generate go
 
 # Test 2: Named pipe in execution mode (should work as JSONL)
 mkfifo /tmp/data_pipe

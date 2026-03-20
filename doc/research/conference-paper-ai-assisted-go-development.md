@@ -220,7 +220,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to csv out.csv
 
 # Code generation mode
 export SSQLGO=1
-ssql from data.csv | ssql where -if age gt 25 | ssql generate-go > program.go
+ssql from data.csv | ssql where -if age gt 25 | ssql generate go > program.go
 go build -o program program.go
 ./program  # 2.6x faster than CLI
 ```

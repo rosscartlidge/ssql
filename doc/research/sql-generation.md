@@ -5,7 +5,7 @@
 
 ## The Idea
 
-ssql already generates Go code from CLI pipelines (`SSQLGO=1 ... | ssql generate-go`). The same fragment-based architecture could generate SQL instead: `ssql generate-sql`.
+ssql already generates Go code from CLI pipelines (`SSQLGO=1 ... | ssql generate go`). The same fragment-based architecture could generate SQL instead: `ssql generate sql`.
 
 ```bash
 ssql from sales.csv \
@@ -119,14 +119,14 @@ FROM ...
 
 ### Option A: SQL Fragment System (Parallel to Go Fragments)
 
-Add a `generate-sql` command that works like `generate-go`:
+Add a `generate sql` command that works like `generate go`:
 
 ```bash
 export SSQLSQL=1  # or SSQL_TARGET=sql
-ssql from data.csv | ssql where -if age gt 25 | ssql generate-sql
+ssql from data.csv | ssql where -if age gt 25 | ssql generate sql
 ```
 
-Each command emits SQL fragments instead of Go code fragments. The `generate-sql` assembler combines them into a complete query.
+Each command emits SQL fragments instead of Go code fragments. The `generate sql` assembler combines them into a complete query.
 
 **Fragment types:**
 ```json
@@ -163,14 +163,14 @@ type SQLQuery struct {
 }
 ```
 
-Each command adds to the AST. The `generate-sql` command renders the AST as SQL text, handling dialect differences.
+Each command adds to the AST. The `generate sql` command renders the AST as SQL text, handling dialect differences.
 
 **Pros:** Clean separation of structure and rendering. Easy to add dialect support. Can optimize (e.g., push WHERE conditions before GROUP BY).
 **Cons:** More code. AST needs to handle CTEs for multi-step pipelines.
 
 ### Option C: Direct Translation (Simplest)
 
-Don't use the fragment system at all. Instead, `generate-sql` reads the original pipeline commands (from the comment block or from a saved pipeline spec) and translates them directly.
+Don't use the fragment system at all. Instead, `generate sql` reads the original pipeline commands (from the comment block or from a saved pipeline spec) and translates them directly.
 
 ```bash
 ssql translate-sql "from data.csv | where -if age gt 25 | group-by dept -count cnt | limit 10"
@@ -232,7 +232,7 @@ type SQLFragment struct {
 }
 ```
 
-The `generate-sql` assembler collects fragments and builds the query.
+The `generate sql` assembler collects fragments and builds the query.
 
 ### Phase 2: JOINs and UNIONs
 
@@ -252,9 +252,9 @@ Abstract the SQL renderer to support multiple dialects. Start with DuckDB, add P
 
 ## Open Questions
 
-1. **Should it be `generate-sql` or `to sql`?** The `to` prefix implies output format, but this isn't data output — it's query generation. `generate-sql` parallels `generate-go`.
+1. **Should it be `generate sql` or `to sql`?** The `to` prefix implies output format, but this isn't data output — it's query generation. `generate sql` parallels `generate go`.
 
-2. **Should we embed DuckDB?** If ssql could run DuckDB queries directly, the `generate-sql` output becomes immediately executable. DuckDB has a Go driver. But this adds a large dependency.
+2. **Should we embed DuckDB?** If ssql could run DuckDB queries directly, the `generate sql` output becomes immediately executable. DuckDB has a Go driver. But this adds a large dependency.
 
 3. **Parameterization?** The Go codegen parameterizes values as flags. SQL could use `$1`, `$2` parameters (prepared statement style) or just emit literal values.
 

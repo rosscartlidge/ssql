@@ -99,8 +99,8 @@ func TestFullPipeline(t *testing.T) {
 	}
 	defer os.Remove("/tmp/ssql_test")
 
-	// Run pipeline: from | where | generate-go
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test generate-go`
+	// Run pipeline: from | where | generate go
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test generate go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -143,7 +143,7 @@ func TestGeneratedCodeCompiles(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// Generate code
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test generate-go`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test generate go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -219,7 +219,7 @@ func TestLimitOffsetSortDistinct(t *testing.T) {
 		},
 		{
 			name:    "pipeline with all commands",
-			cmdLine: `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test limit 5 | /tmp/ssql_test offset 1 | /tmp/ssql_test sort age -desc | /tmp/ssql_test distinct | /tmp/ssql_test generate-go`,
+			cmdLine: `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 25 | /tmp/ssql_test limit 5 | /tmp/ssql_test offset 1 | /tmp/ssql_test sort age -desc | /tmp/ssql_test distinct | /tmp/ssql_test generate go`,
 			want:    []string{"package main", "ssql.ReadCSV", "ssql.Where", "ssql.Limit", "ssql.Offset", "ssql.SortRecords", "ssql.DistinctBy"},
 		},
 	}
@@ -271,7 +271,7 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 	tests := []struct {
 		name           string
 		cmdLine        string
-		expectFragment bool   // false for commands that shouldn't generate (like generate-go)
+		expectFragment bool   // false for commands that shouldn't generate (like generate go)
 		wantSubstring  string // substring to verify in generated code
 	}{
 		{
@@ -1121,7 +1121,7 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 
 	// Test full pipeline with join (using JSONL for right side)
 	// Note: v4 uses -using for same field name, -on for different field names
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join /tmp/test_orders.jsonl -on id user_id | /tmp/ssql_test generate-go`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join /tmp/test_orders.jsonl -on id user_id | /tmp/ssql_test generate go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1197,7 +1197,7 @@ func TestStreamExprFullPipeline(t *testing.T) {
 	}
 	defer os.Remove(tmpFile)
 
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total | /tmp/ssql_test generate-go`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total | /tmp/ssql_test generate go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
@@ -1276,7 +1276,7 @@ func TestJoinWithProcessSubstitutionGeneration(t *testing.T) {
 	// Test full pipeline with join using process substitution for right side
 	// This tests the nested fragment merging feature
 	// Note: v4 uses -on LEFT RIGHT for different field names
-	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join <(/tmp/ssql_test from csv /tmp/test_orders.csv) -on id user_id | /tmp/ssql_test generate-go`
+	pipeline := `export SSQLGO=1 && /tmp/ssql_test from /tmp/test_users.csv | /tmp/ssql_test join <(/tmp/ssql_test from csv /tmp/test_orders.csv) -on id user_id | /tmp/ssql_test generate go`
 	cmd := exec.Command("bash", "-c", pipeline)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1446,32 +1446,32 @@ func TestParameterizedCodeGeneration(t *testing.T) {
 	}{
 		{
 			name: "input file parameterized",
-			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test generate-go`,
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test generate go`,
 			want: []string{`flag.String("input"`, `"input CSV file"`, `*flagInput`, `flag.Parse()`},
 		},
 		{
 			name: "output file parameterized",
-			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test to csv /tmp/out.csv | /tmp/ssql_test generate-go`,
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test to csv /tmp/out.csv | /tmp/ssql_test generate go`,
 			want: []string{`flag.String("output"`, `*flagOutput`, `flag.Parse()`},
 		},
 		{
 			name: "limit parameterized as int",
-			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test limit 42 | /tmp/ssql_test generate-go`,
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test limit 42 | /tmp/ssql_test generate go`,
 			want: []string{`flag.Int("limit"`, `42`, `*flagLimit`},
 		},
 		{
 			name: "offset parameterized as int",
-			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test offset 5 | /tmp/ssql_test generate-go`,
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test offset 5 | /tmp/ssql_test generate go`,
 			want: []string{`flag.Int("offset"`, `5`, `*flagOffset`},
 		},
 		{
 			name: "stdin input has no flag",
-			cmd:  `echo '{"name":"Alice"}' | SSQLGO=1 /tmp/ssql_test from json | /tmp/ssql_test generate-go`,
+			cmd:  `echo '{"name":"Alice"}' | SSQLGO=1 /tmp/ssql_test from json | /tmp/ssql_test generate go`,
 			want: []string{`ReadJSONFromReader(os.Stdin)`},
 		},
 		{
 			name: "flag name deduplication",
-			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test join ` + tmpFile + ` -using name | /tmp/ssql_test generate-go`,
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test join ` + tmpFile + ` -using name | /tmp/ssql_test generate go`,
 			want: []string{`flag.String("input"`, `flag.String("join"`},
 		},
 	}
@@ -1501,7 +1501,7 @@ func TestParameterizedStdinNoFlags(t *testing.T) {
 	}
 	defer os.Remove("/tmp/ssql_test")
 
-	cmd := exec.Command("bash", "-c", `echo '{"name":"Alice"}' | SSQLGO=1 /tmp/ssql_test from json | /tmp/ssql_test to table | /tmp/ssql_test generate-go`)
+	cmd := exec.Command("bash", "-c", `echo '{"name":"Alice"}' | SSQLGO=1 /tmp/ssql_test from json | /tmp/ssql_test to table | /tmp/ssql_test generate go`)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("Command error: %v\nOutput: %s", err, output)

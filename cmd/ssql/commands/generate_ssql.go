@@ -15,13 +15,13 @@ import (
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
-// RegisterGenerateSSQL registers the generate-ssql subcommand
-func RegisterGenerateSSQL(cmd *cf.CommandBuilder) *cf.CommandBuilder {
-	cmd.Subcommand("generate-ssql").
+// registerGenerateSSQL registers the "generate ssql" subcommand
+func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
+	cmd.Subcommand("ssql").
 		Description("Optimize an ssql pipeline by rewriting it with fewer commands").
-		Example("(export SSQLGO=1; ssql from ssh host /data.csv | ssql where -if status ge 500 | ssql to table) | ssql generate-ssql", "Push filter into SSH").
-		Example("(export SSQLGO=1; ssql from csv data.csv | ssql sort -desc revenue | ssql limit 10 | ssql to table) | ssql generate-ssql", "Rewrite sort+limit as top").
-		Example("(export SSQLGO=1; ssql from csv data.csv | ssql where -if age gt 25 | ssql where -if dept eq sales | ssql to table) | ssql generate-ssql", "Merge adjacent where commands").
+		Example("(export SSQLGO=1; ssql from ssh host /data.csv | ssql where -if status ge 500 | ssql to table) | ssql generate ssql", "Push filter into SSH").
+		Example("(export SSQLGO=1; ssql from csv data.csv | ssql sort -desc revenue | ssql limit 10 | ssql to table) | ssql generate ssql", "Rewrite sort+limit as top").
+		Example("(export SSQLGO=1; ssql from csv data.csv | ssql where -if age gt 25 | ssql where -if dept eq sales | ssql to table) | ssql generate ssql", "Merge adjacent where commands").
 		Flag("-run", "-r").
 		Bool().
 		Global().
@@ -75,7 +75,6 @@ func RegisterGenerateSSQL(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			return nil
 		}).
 		Done()
-	return cmd
 }
 
 // errEmptyResult is returned when contradictory predicates are detected.

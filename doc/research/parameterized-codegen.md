@@ -148,7 +148,7 @@ params := []lib.CodeParam{
 code := fmt.Sprintf("%s := ssql.Limit[ssql.Record](*flagLimit)(%s)", outputVar, inputVar)
 ```
 
-### How `generate-go` Assembles Parameters
+### How `generate go` Assembles Parameters
 
 The `AssembleCodeFragments` function:
 

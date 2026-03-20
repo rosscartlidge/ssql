@@ -261,7 +261,7 @@ ssql from ssh ssql-node1 /data/events/2025-01.csv \
 # Verify generated code compiles and runs
 SSQLGO=1 ssql from ssh ssql-node1 /data/events/2025-01.csv \
   | ssql where -if status ge 500 \
-  | ssql generate-go > /tmp/remote_test.go
+  | ssql generate go > /tmp/remote_test.go
 
 go run /tmp/remote_test.go
 ```

@@ -374,7 +374,7 @@ Note the two-level aggregation: each shard groups locally, then results are re-a
 ## Code Generation
 
 ```bash
-SSQLGO=1 ssql from catalog shards.csv | ssql generate-go
+SSQLGO=1 ssql from catalog shards.csv | ssql generate go
 ```
 
 Generated code:

@@ -1,4 +1,4 @@
-# Design: `generate-ssql` Pipeline Optimizer
+# Design: `generate ssql` Pipeline Optimizer
 
 **Status:** Phase 1+2+3+4 implemented
 **Date:** 2026-03-17
@@ -7,7 +7,7 @@
 
 SQL databases don't execute queries as written — they rewrite them. A query planner analyzes the full query, applies transformation rules, and produces an optimized execution plan. The user writes what they want; the optimizer figures out how to get it fast.
 
-ssql pipelines could work the same way. `generate-ssql` reads the pipeline structure (via the existing fragment system), applies optimization rules, and outputs a rewritten ssql pipeline that produces identical results but runs faster.
+ssql pipelines could work the same way. `generate ssql` reads the pipeline structure (via the existing fragment system), applies optimization rules, and outputs a rewritten ssql pipeline that produces identical results but runs faster.
 
 ```bash
 # User writes naive pipeline:
@@ -16,7 +16,7 @@ ssql pipelines could work the same way. `generate-ssql` reads the pipeline struc
   | ssql group-by service -count cnt \
   | ssql sort -desc cnt \
   | ssql limit 5 \
-  | ssql to table) | ssql generate-ssql
+  | ssql to table) | ssql generate ssql
 
 # Optimizer outputs:
 ssql from ssh node1 /data/events.csv -- where -if status ge 500 + group-by service -count cnt \
@@ -376,12 +376,12 @@ Optimizations applied:
 
 ### How It Works
 
-`generate-ssql` uses the same fragment pipeline as `generate-go` and `generate-sql`:
+`generate ssql` uses the same fragment pipeline as `generate go` and `generate sql`:
 
 ```bash
 (export SSQLGO=1; ssql from ssh node1 /data/events.csv \
   | ssql where -if status ge 500 \
-  | ssql to table) | ssql generate-ssql
+  | ssql to table) | ssql generate ssql
 ```
 
 Each command emits its fragment with the `Command` field. The optimizer:
@@ -407,16 +407,16 @@ Rules are applied in dependency order — some rules create opportunities for ot
 
 ```bash
 # Default: print optimized pipeline
-... | ssql generate-ssql
+... | ssql generate ssql
 
 # With explanation of what changed
-... | ssql generate-ssql -explain
+... | ssql generate ssql -explain
 
 # Execute the optimized pipeline directly
-... | ssql generate-ssql -run
+... | ssql generate ssql -run
 
 # Show both original and optimized for comparison
-... | ssql generate-ssql -diff
+... | ssql generate ssql -diff
 ```
 
 The `-explain` mode would annotate each optimization:
@@ -534,7 +534,7 @@ Implemented in `cmd/ssql/commands/generate_ssql.go`. Registered via `RegisterGen
 **Flags:** `-run` (execute optimized pipeline via bash), `-explain` (print applied rules to stderr).
 
 **Implementation details:**
-- Reads JSONL code fragments from stdin (same as `generate-go`/`generate-sql`)
+- Reads JSONL code fragments from stdin (same as `generate go`/`generate sql`)
 - Parses each fragment's `Command` string into `pipelineCmd` structs
 - Rules applied in dependency order (where-merge first to simplify subsequent analysis)
 - Group-by's second fragment (empty Command) is automatically skipped (marked Removed)
@@ -610,7 +610,7 @@ Added to `cmd/ssql/commands/generate_ssql.go`.
 
 **Rejected after benchmarking:**
 - **Mid-pipeline column dropping** (Rule 14) — inserts `include` after `from csv` to drop unneeded columns. Benchmarked at **1.4x–1.5x SLOWER** because the extra pipeline process (JSONL encode/decode + process spawn) costs more than the serialization savings from fewer columns. Even with 20→2 columns and 5+ downstream stages, the overhead dominates. Code retained but disabled.
-- **Limit pushdown** (Rule 13) — moves `limit` before row-preserving commands. Benchmarked at **no measurable difference** because Unix pipe backpressure already provides early termination via SIGPIPE — downstream `limit` causes upstream to stop writing after ~N rows regardless of position. Only relevant for in-process composition (`generate-go`), not CLI pipelines. Code retained but disabled.
+- **Limit pushdown** (Rule 13) — moves `limit` before row-preserving commands. Benchmarked at **no measurable difference** because Unix pipe backpressure already provides early termination via SIGPIPE — downstream `limit` causes upstream to stop writing after ~N rows regardless of position. Only relevant for in-process composition (`generate go`), not CLI pipelines. Code retained but disabled.
 
 **New infrastructure (retained — useful for Parquet pruning and future rules):**
 - `collectDownstreamFields(cmds, startIdx)` — walks all non-removed commands after a given index, returns `(map[string]bool, allFieldsNeeded bool)`

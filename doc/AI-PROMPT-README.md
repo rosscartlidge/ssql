@@ -137,7 +137,7 @@ Test cases are defined in `doc/ai-test-cases.md` with 20 structured tests:
 | CLI-06 | Join with rename | join, -on, -as |
 | CLI-07 | Expression filter | -if-expr, -set-expr |
 | CLI-08 | Sort + limit + offset | sort, limit, offset |
-| CLI-09 | Code generation | SSQLGO=1, generate-go |
+| CLI-09 | Code generation | SSQLGO=1, generate go |
 | CLI-10 | Multi-format pipeline | from CSV, to json |
 
 ---

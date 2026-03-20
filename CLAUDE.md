@@ -164,7 +164,7 @@ See `claude/code-generation.md` for fragment system, testing patterns, and full 
 - **All errors must cause pipeline failure** with clear messages (use error fragments in generation mode)
 - **When adding new CLI features**: (1) add function to ssql package, (2) use it in CLI, (3) generate code that calls it
 - **Test generation**: add tests to `cmd/ssql/generation_test.go`, test full pipeline round-trip
-- **`generate-sql` reuses the same fragments** — no separate SQL generation path needed per command. The SQL assembler parses the `Command` string from each fragment.
+- **`generate sql` reuses the same fragments** — no separate SQL generation path needed per command. The SQL assembler parses the `Command` string from each fragment.
 
 ## GPU Acceleration Rules
 See `claude/gpu-acceleration.md` for benchmarks, build instructions, and detailed analysis.
@@ -201,8 +201,8 @@ ssql from data.parquet | ssql where -if age gt 25 | ssql to parquet output.parqu
 
 ## SQL Generation
 
-`generate-sql` produces DuckDB-compatible SQL from the same pipeline fragments as `generate-go`:
+`generate sql` produces DuckDB-compatible SQL from the same pipeline fragments as `generate go`:
 ```bash
-(export SSQLGO=1; ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -sum salary total | ssql to table) | ssql generate-sql | duckdb
+(export SSQLGO=1; ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -sum salary total | ssql to table) | ssql generate sql | duckdb
 ```
 DuckDB is installed at `~/.local/bin/duckdb` for testing generated SQL.

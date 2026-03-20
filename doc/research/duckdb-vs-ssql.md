@@ -4,7 +4,7 @@
 
 ## Overview
 
-DuckDB and ssql solve overlapping problems from different directions. DuckDB is an embedded analytical database that happens to read files. ssql is a stream processor that happens to use SQL-style naming. Understanding where they overlap and diverge helps position ssql and informs the `generate-sql` design.
+DuckDB and ssql solve overlapping problems from different directions. DuckDB is an embedded analytical database that happens to read files. ssql is a stream processor that happens to use SQL-style naming. Understanding where they overlap and diverge helps position ssql and informs the `generate sql` design.
 
 ## Philosophy
 
@@ -114,7 +114,7 @@ ssql pipelines generate standalone, parameterized Go programs:
 
 ```bash
 SSQLGO=1 ssql from data.csv | ssql where -if age gt 25 | ssql to json out.json \
-  | ssql generate-go > pipeline.go
+  | ssql generate go > pipeline.go
 
 go run pipeline.go                    # defaults
 go run pipeline.go -age-gt 30         # different threshold
@@ -246,7 +246,7 @@ tail -f /var/log/nginx/access.log \
 ```bash
 # ssql: generates a compiled Go program
 SSQLGO=1 ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -count cnt \
-  | ssql generate-go > report.go
+  | ssql generate go > report.go
 go build -o report report.go
 ./report -input latest.csv -age-gt 30    # parameterized
 
@@ -438,4 +438,4 @@ The two tools serve different niches:
 | Distributed SSH processing | ssql |
 | Quick shell one-liners | Both (ssql with completion, DuckDB with SQL) |
 
-The `generate-sql` feature would bridge them: prototype in ssql with tab completion and streaming, then generate the DuckDB query for production-scale execution.
+The `generate sql` feature would bridge them: prototype in ssql with tab completion and streaming, then generate the DuckDB query for production-scale execution.

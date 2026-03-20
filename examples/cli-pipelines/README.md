@@ -172,7 +172,7 @@ ssql where -match a eq 1 -match b eq 2 + -match c eq 3 -match d eq 4
 2. **Pipe to `head`**: Test pipelines quickly with `| head -n 5`
 3. **Check data structure**: Use `ssql from file.csv | head -n 1` to see JSONL format
 4. **Save pipelines**: Store working pipelines in shell scripts for reuse
-5. **Generate Go code**: Convert CLI pipeline to production code with `ssql generate-go`
+5. **Generate Go code**: Convert CLI pipeline to production code with `ssql generate go`
 
 ## Getting Help
 
@@ -187,7 +187,7 @@ ssql include -help        # Show include command help
 
 After mastering CLI pipelines:
 1. Save your pipeline to a shell script
-2. Generate production Go code: `ssql generate-go < pipeline.sh > main.go`
+2. Generate production Go code: `ssql generate go < pipeline.sh > main.go`
 3. Compile for 10-100x performance: `go build main.go`
 
 See the [CLI Tools Design Document](../../doc/research/cli-tools-design.md) for more details.

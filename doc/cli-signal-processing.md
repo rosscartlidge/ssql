@@ -925,7 +925,7 @@ sudo make install-gpu  # Copies libssqlgpu.so to /usr/local/lib
 ```bash
 SSQLGO=1 ssql from signal.csv | \
   ssql fft -field value -rate 1000 | \
-  ssql generate-go > fft_program.go
+  ssql generate go > fft_program.go
 ```
 
 **Step 3: Build and run with GPU support**

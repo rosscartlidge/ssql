@@ -577,7 +577,7 @@ The ssql CLI uses a revolutionary **self-generating command architecture** where
 **Data Flow:**
 ```
 ┌─────────────┐  fragment  ┌─────────────┐  fragment  ┌─────────────┐  fragments  ┌──────────────┐
-│  read-csv   │────JSON───>│    where    │────JSON───>│  write-csv  │─────JSON───>│ generate-go  │
+│  read-csv   │────JSON───>│    where    │────JSON───>│  write-csv  │─────JSON───>│ generate go  │
 │  -generate  │   Line     │  -generate  │   Line     │  -generate  │    Lines    │              │
 └─────────────┘            └─────────────┘            └─────────────┘             └──────────────┘
      init                       stmt                       final                    assembles to
@@ -624,7 +624,7 @@ type CodeFragment struct {
 {"type":"final","var":"","input":"filtered","code":"ssql.WriteCSV(\"\", filtered)","imports":null}
 ```
 
-4. **generate-go** assembles all fragments:
+4. **generate go** assembles all fragments:
 ```go
 package main
 
@@ -689,7 +689,7 @@ func (c *WhereConfig) generateCode(clauses []gs.ClauseSet) error {
 
 **Import Tracking:**
 - Each fragment specifies required imports
-- `generate-go` deduplicates and sorts imports
+- `generate go` deduplicates and sorts imports
 - Example: `where -match name contains Alice` adds `"strings"` import
 
 #### Implementation Example: where Command
@@ -806,7 +806,7 @@ func (c *MyCommandConfig) generateCode(clauses []gs.ClauseSet) error {
 ssql read-csv -generate data.csv | \
   ssql where -generate -match age gt 18 | \
   ssql write-csv -generate output.csv | \
-  ssql generate-go > main.go
+  ssql generate go > main.go
 ```
 
 **Complex Filtering:**
@@ -817,7 +817,7 @@ ssql read-csv -generate employees.csv | \
     -match age gt 30 -match status eq active + \
     -match department eq Engineering | \
   ssql write-csv -generate filtered.csv | \
-  ssql generate-go > main.go
+  ssql generate go > main.go
 ```
 
 **Build and Run:**
@@ -863,7 +863,7 @@ ssql where -generate -match age gt 30 < input_fragment.json | jq .
 # Generate code
 ssql read-csv -generate data.csv | \
   ssql where -generate -match age gt 30 | \
-  ssql generate-go > test.go
+  ssql generate go > test.go
 
 # Verify it compiles
 go build test.go
@@ -1055,16 +1055,16 @@ There are three approaches to implementing code generation:
 
 #### Approach 1: Simple Code Generator (Recommended for MVP)
 
-**Command:** `ssql generate-go`
+**Command:** `ssql generate go`
 
 **Usage:**
 ```bash
 # Generate from shell history
-ssql generate-go < pipeline.sh > main.go
+ssql generate go < pipeline.sh > main.go
 
 # Or inline
 echo 'ssql read-csv data.csv | ssql where -field age -op gt -value 18' | \
-  ssql generate-go > main.go
+  ssql generate go > main.go
 
 # Then compile and run
 go mod init myproject
@@ -1126,7 +1126,7 @@ ssql record-pipeline generate my-pipeline.go
 **Usage:**
 ```bash
 # Run pipeline normally, but also generate code
-ssql --generate-go=output.go \
+ssql --generate go=output.go \
   read-csv data.csv | \
   ssql where -field age -op gt -value 18 | \
   ssql write-csv result.csv
@@ -1435,7 +1435,7 @@ chmod +x pipeline.sh
 **Step 3: Generate Go Code**
 ```bash
 # Generate production code
-ssql generate-go < pipeline.sh > main.go
+ssql generate go < pipeline.sh > main.go
 
 # Review generated code
 cat main.go

@@ -72,7 +72,7 @@ Must collect all records before producing output. Cannot handle infinite streams
 
 ### Non-Data Commands (3)
 
-`version`, `functions`, `generate-go` — not applicable.
+`version`, `functions`, `generate go` — not applicable.
 
 ## Summary
 

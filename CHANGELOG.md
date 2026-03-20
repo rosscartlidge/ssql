@@ -83,7 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Code Generation Error Handling**: Errors now prevent partial code output
   - Added error fragment type to code generation pipeline
-  - `generate-go` detects errors and fails cleanly instead of outputting broken code
+  - `generate go` detects errors and fails cleanly instead of outputting broken code
   - Unsupported features now fail fast with clear error messages
 
 ### Added

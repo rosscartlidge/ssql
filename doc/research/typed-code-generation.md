@@ -66,7 +66,7 @@ For the 14.6M record, 3-join workload:
 ### Current Code Generation
 
 ```bash
-SSQLGO=1 ssql from data.csv | ssql where -if age gt 18 | ssql join lookup.csv -on dept_id | ssql to csv output.csv | ssql generate-go
+SSQLGO=1 ssql from data.csv | ssql where -if age gt 18 | ssql join lookup.csv -on dept_id | ssql to csv output.csv | ssql generate go
 ```
 
 Produces:
@@ -87,7 +87,7 @@ func main() {
 Same CLI command with `--typed` flag or `SSQLGO=typed`:
 
 ```bash
-SSQLGO=typed ssql from data.csv | ssql where -if age gt 18 | ssql join lookup.csv -on dept_id | ssql to csv output.csv | ssql generate-go
+SSQLGO=typed ssql from data.csv | ssql where -if age gt 18 | ssql join lookup.csv -on dept_id | ssql to csv output.csv | ssql generate go
 ```
 
 Produces:
@@ -241,10 +241,10 @@ func WriteCSV[T any](seq iter.Seq[T], filename string) error
 
 ### Code Generation Changes
 
-#### generate-go command
+#### generate go command
 
 ```go
-// In generate-go handler
+// In generate go handler
 if typedMode {
     // Collect all struct definitions from fragments
     structDefs := collectStructDefs(fragments)
@@ -619,7 +619,7 @@ func HashJoin[L, R, O any, K comparable](
 
 ### Phase 2: CLI Typed Generation
 
-Add `--typed` mode to `generate-go`:
+Add `--typed` mode to `generate go`:
 
 1. Schema inference from CSV files
 2. Struct type generation

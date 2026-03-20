@@ -12,7 +12,7 @@
 - `write-csv` - Data sink (INTO OUTFILE)
 - `chart` - Visualization
 - `exec` - Execute commands as data source
-- `generate-go` - Code generation
+- `generate go` - Code generation
 
 **Existing Library Functions (Not Yet in CLI):**
 - `InnerJoin`, `LeftJoin`, `RightJoin`, `FullJoin` - All JOIN types

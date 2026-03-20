@@ -259,7 +259,7 @@ This already works with the `from ssh` subcommand, since `<(ssql from ssh ...)` 
 
 ### Phase 3: Code generation for remote pipelines
 
-Extend `generate-go` to handle remote fragments.
+Extend `generate go` to handle remote fragments.
 
 **For simple remote reads:**
 ```go
@@ -424,12 +424,12 @@ The FFT runs on the GPU. The frequency-domain data (much smaller than raw audio)
 
 ## Code Generation for Remote Pipelines
 
-Code generation (`SSQLGO=1 ... | ssql generate-go`) handles remote pipelines by generating `ExecCommand("ssh", ...)` calls.
+Code generation (`SSQLGO=1 ... | ssql generate go`) handles remote pipelines by generating `ExecCommand("ssh", ...)` calls.
 
 ### Simple remote read
 
 ```bash
-SSQLGO=1 ssql from ssh server /data/logs.csv | ssql where -if status eq error | ssql generate-go
+SSQLGO=1 ssql from ssh server /data/logs.csv | ssql where -if status eq error | ssql generate go
 ```
 
 Generated:
@@ -466,7 +466,7 @@ func main() {
 ```bash
 SSQLGO=1 ssql from ssh server /data/logs.csv -- where -if status eq error \
   | ssql group-by -field service -count \
-  | ssql generate-go
+  | ssql generate go
 ```
 
 Generated:
