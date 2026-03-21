@@ -105,11 +105,33 @@ func assembleSQL(input io.Reader) (string, error) {
 
 	q := &sqlQuery{}
 
+	// Collect func fragments (subprocess sources for joins) and build subqueries
+	var funcFrags []*lib.CodeFragment
 	for _, frag := range fragments {
-		if frag.Command != "" {
-			q.comments = append(q.comments, frag.Command)
+		if frag.Type == "func" {
+			funcFrags = append(funcFrags, frag)
+			continue // don't add to comments — shown as part of the join comment
 		}
-		if err := translateFragment(q, frag); err != nil {
+		if frag.Command != "" {
+			cmd := frag.Command
+			// For join commands referencing /dev/fd/, reconstruct with <(func command)
+			if strings.Contains(cmd, "/dev/fd/") && len(funcFrags) > 0 {
+				lastFunc := funcFrags[len(funcFrags)-1]
+				if lastFunc.Command != "" {
+					for i := strings.Index(cmd, "/dev/fd/"); i >= 0; {
+						// Find end of /dev/fd/NNN
+						end := i + 8
+						for end < len(cmd) && cmd[end] >= '0' && cmd[end] <= '9' {
+							end++
+						}
+						cmd = cmd[:i] + "<(" + lastFunc.Command + ")" + cmd[end:]
+						break
+					}
+				}
+			}
+			q.comments = append(q.comments, cmd)
+		}
+		if err := translateFragment(q, frag, funcFrags); err != nil {
 			return "", err
 		}
 	}
@@ -117,7 +139,7 @@ func assembleSQL(input io.Reader) (string, error) {
 	return renderSQL(q), nil
 }
 
-func translateFragment(q *sqlQuery, frag *lib.CodeFragment) error {
+func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.CodeFragment) error {
 	cmd := frag.Command
 	if cmd == "" {
 		return nil // skip empty commands (e.g., Aggregate fragment from group-by)
@@ -148,7 +170,7 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment) error {
 		q.selectExprs = append([]string{"DISTINCT"}, q.selectExprs...)
 		return nil
 	case "join":
-		return translateJoin(q, args[2:])
+		return translateJoin(q, args[2:], funcFrags)
 	case "include":
 		return translateInclude(q, args[2:])
 	case "exclude":
@@ -367,12 +389,12 @@ func translateTop(q *sqlQuery, args []string) error {
 	return nil
 }
 
-func translateJoin(q *sqlQuery, args []string) error {
+func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) error {
 	if len(args) == 0 {
 		return fmt.Errorf("join requires a file argument")
 	}
 
-	file := quoteFile(args[0])
+	filePath := args[0]
 	var joinCond string
 
 	for i := 1; i < len(args); i++ {
@@ -391,11 +413,65 @@ func translateJoin(q *sqlQuery, args []string) error {
 	}
 
 	if joinCond == "" {
-		joinCond = "ON TRUE" // shouldn't happen but safe fallback
+		joinCond = "ON TRUE"
 	}
 
-	q.joins = append(q.joins, fmt.Sprintf("JOIN %s %s", file, joinCond))
+	// Check if the join file is a process substitution — build a SQL subquery
+	// from the func fragment's body commands
+	if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
+		subquery := buildJoinSubquery(funcFrags[len(funcFrags)-1])
+		if subquery != "" {
+			q.joins = append(q.joins, fmt.Sprintf("JOIN (%s) %s", subquery, joinCond))
+			return nil
+		}
+	}
+
+	q.joins = append(q.joins, fmt.Sprintf("JOIN %s %s", quoteFile(filePath), joinCond))
 	return nil
+}
+
+// buildJoinSubquery builds a SQL subquery from a func fragment's body.
+func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
+	if funcFrag == nil {
+		return ""
+	}
+
+	// Build a mini SQL query from the func body's commands
+	sub := &sqlQuery{}
+	for _, bodyFrag := range funcFrag.FuncBody {
+		if bodyFrag.Command == "" {
+			continue
+		}
+		args := parseCommandArgs(bodyFrag.Command)
+		if len(args) < 2 {
+			continue
+		}
+		switch args[1] {
+		case "from":
+			translateFrom(sub, args[2:])
+		case "where":
+			translateWhere(sub, args[2:])
+		}
+	}
+
+	// If we didn't get a FROM, try the func fragment's own Command
+	if sub.fromClause == "" && funcFrag.Command != "" {
+		args := parseCommandArgs(funcFrag.Command)
+		if len(args) >= 2 && args[1] == "from" {
+			translateFrom(sub, args[2:])
+		}
+	}
+
+	if sub.fromClause == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("SELECT * FROM " + sub.fromClause)
+	if len(sub.whereClauses) > 0 {
+		sb.WriteString(" WHERE " + strings.Join(sub.whereClauses, " AND "))
+	}
+	return sb.String()
 }
 
 func translateInclude(q *sqlQuery, args []string) error {

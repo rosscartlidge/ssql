@@ -137,6 +137,33 @@ ssql from data.csv | ssql where -if age gt 30 | jq -s 'length'  # Count results
 
 [**Try the CLI →**](doc/cli-codelab.md) | [**Debug with jq →**](doc/cli-debugging.md)
 
+### 🌐 **Browser Playground** *(in testing)*
+
+Try ssql without installing anything — the full CLI runs in your browser via WebAssembly:
+
+```bash
+# Clone and serve locally (requires Go 1.23+)
+cd cmd/ssql-playground
+# Build the WASM module (~68MB, one-time)
+GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o ssql-playground.wasm ../../cmd/ssql-playground/
+# Copy Go's WASM support
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" .
+# Serve
+python3 -m http.server 8080
+# Open http://localhost:8080/playground.html
+```
+
+Features:
+- Type real ssql pipelines and see results instantly
+- **Optimize** — see the pipeline optimizer rewrite your commands with `-explain`
+- **Generate Go** — compile pipelines to standalone Go code
+- **Generate SQL** — convert to DuckDB-compatible SQL
+- **Process substitution** — `<(ssql from ... | ssql where ...)` works in joins
+- Sample datasets included (employees, orders, customers)
+- Upload your own CSV files
+
+> **Note:** SSH and catalog commands require network access and are not available in the browser. Use Optimize or Generate Go to see how those pipelines would be rewritten.
+
 ### 🤖 **AI-Powered Code Generation**
 Describe what you want in plain English, get working ssql code:
 

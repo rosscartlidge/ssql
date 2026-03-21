@@ -27,6 +27,7 @@ help:
 	@echo "WASM Build:"
 	@echo "  make wasm         - Build ssql.wasm with TinyGo (~300-500KB)"
 	@echo "  make wasm-go      - Build ssql.wasm with standard Go (~5MB)"
+	@echo "  make playground   - Build WASM playground (full CLI in browser)"
 	@echo ""
 	@echo "Documentation Validation (3 levels):"
 	@echo "  make doc-check    - Level 1: Fast checks (syntax, links, patterns)"
@@ -254,6 +255,14 @@ wasm:
 	cp cmd/ssql-wasm/js/ssql-wasm.js cmd/ssql/wasm/ssql-wasm.js
 	@echo "✓ Built cmd/ssql-wasm/ssql.wasm ($$(du -h cmd/ssql-wasm/ssql.wasm | cut -f1) raw)"
 	@echo "✓ Embedded WASM files copied to cmd/ssql/wasm/"
+
+# Build WASM playground (full CLI in browser)
+playground:
+	@echo "Building playground WASM (full ssql CLI)..."
+	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o cmd/ssql-playground/ssql-playground.wasm ./cmd/ssql-playground
+	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/ssql-playground/
+	@echo "✓ Built cmd/ssql-playground/ssql-playground.wasm ($$(du -h cmd/ssql-playground/ssql-playground.wasm | cut -f1) raw)"
+	@echo "Serve with: cd cmd/ssql-playground && python3 -m http.server 8080"
 
 # Build WASM module with standard Go (larger binary, ~5MB)
 wasm-go:

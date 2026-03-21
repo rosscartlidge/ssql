@@ -1,45 +1,39 @@
+
+*~
 # Binaries for programs and plugins
+# Build artifacts
+cmd/ssql-playground/ssql-playground.wasm
+cmd/ssql-playground/wasm_exec.js
+/cmd/ssql/ssql
+/cmd/ssql-wasm/js/wasm_exec.js
+/cmd/ssql-wasm/ssql.wasm
+# Compiled examples (built from examples/)
+/*_demo
+*.dll
+.DS_Store
+*.dylib
+/*_example
 *.exe
 *.exe~
-*.dll
-*.so
-*.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# Go workspace file
 go.work
-
-# Build artifacts
-/ssql
-/cmd/ssql/ssql
-/ssql_poc
-
-# Compiled examples (built from examples/)
-/*_example
-/*_demo
-/test_*
-/seq_*
-/messagepack_demo
-
-# HTML test outputs
+# Go workspace file
 /*.html
-
-# WASM build artifacts
-/cmd/ssql-wasm/ssql.wasm
-/cmd/ssql-wasm/js/wasm_exec.js
-
-# IDE and editor files
-.vscode/
+# HTML test outputs
 .idea/
-*.swp
-*.swo
-*~
-
+# IDE and editor files
+/messagepack_demo
 # OS files
-.DS_Store
+*.out
+# Output of the go coverage tool, specifically when used with LiteIDE
+/seq_*
+*.so
+/ssql
+/ssql_poc
+*.swo
+*.swp
+*.test
+/test_*
+# Test binary, built with `go test -c`
 Thumbs.db
+.vscode/
+# WASM build artifacts

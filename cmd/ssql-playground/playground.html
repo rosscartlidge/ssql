@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ssql playground</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1b26; color: #c0caf5; padding: 20px; }
+h1 { color: #7aa2f7; margin-bottom: 4px; font-size: 1.4em; }
+.subtitle { color: #565f89; margin-bottom: 20px; font-size: 0.85em; }
+.input-area { background: #24283b; border: 1px solid #3b4261; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+.input-area label { color: #7aa2f7; font-size: 0.8em; display: block; margin-bottom: 8px; }
+textarea { width: 100%; background: #1a1b26; color: #c0caf5; border: 1px solid #3b4261; border-radius: 4px; padding: 12px; font-family: inherit; font-size: 14px; resize: vertical; min-height: 60px; }
+textarea:focus { outline: none; border-color: #7aa2f7; }
+.buttons { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+button { background: #3b4261; color: #c0caf5; border: 1px solid #565f89; border-radius: 6px; padding: 8px 16px; font-family: inherit; font-size: 13px; cursor: pointer; }
+button:hover { background: #414868; border-color: #7aa2f7; }
+button.primary { background: #7aa2f7; color: #1a1b26; border-color: #7aa2f7; }
+button.primary:hover { background: #89b4fa; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+.output-area { background: #24283b; border: 1px solid #3b4261; border-radius: 8px; padding: 16px; margin-bottom: 16px; min-height: 100px; }
+.output-area label { color: #7aa2f7; font-size: 0.8em; display: block; margin-bottom: 8px; }
+.output-content { white-space: pre-wrap; font-size: 13px; line-height: 1.5; max-height: 500px; overflow-y: auto; }
+.stderr { color: #f7768e; }
+.info { color: #9ece6a; }
+.examples { margin-top: 16px; }
+.examples h3 { color: #7aa2f7; font-size: 0.9em; margin-bottom: 8px; }
+.example-btn { display: block; background: none; border: none; color: #73daca; text-align: left; padding: 4px 0; font-family: inherit; font-size: 12px; cursor: pointer; width: 100%; }
+.example-btn:hover { color: #89ddff; text-decoration: underline; }
+.datasets { margin-top: 16px; color: #565f89; font-size: 0.8em; }
+.datasets span { color: #9ece6a; }
+.loading { text-align: center; padding: 40px; color: #565f89; }
+#status { font-size: 0.8em; color: #565f89; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<h1>ssql playground</h1>
+<div class="subtitle">SQL-style stream processing — runs entirely in your browser via WebAssembly</div>
+<div id="status">Loading WASM module...</div>
+
+<div class="input-area">
+    <label>Pipeline</label>
+    <textarea id="pipeline" rows="3" placeholder="ssql from employees.csv | ssql where -if age gt 30 | ssql to table" spellcheck="false"></textarea>
+</div>
+
+<div class="buttons">
+    <button class="primary" id="btnRun" onclick="runPipeline()" disabled>Run ▶</button>
+    <button id="btnOptimize" onclick="optimizePipeline()" disabled>Optimize</button>
+    <button id="btnGenerateGo" onclick="generateGo()" disabled>Generate Go</button>
+    <button id="btnGenerateSQL" onclick="generateSQL()" disabled>Generate SQL</button>
+    <input type="file" id="fileUpload" accept=".csv,.tsv,.json,.jsonl" style="display:none" onchange="uploadFile(event)">
+    <button onclick="document.getElementById('fileUpload').click()">Upload CSV</button>
+</div>
+
+<div class="output-area">
+    <label id="outputLabel">Output</label>
+    <div class="output-content" id="output"><span class="info">Click "Run" to execute a pipeline, or try an example below.</span></div>
+    <button id="btnUseOptimized" onclick="applyOptimized()" style="display:none; margin-top: 10px;">Use this pipeline</button>
+</div>
+
+<div class="examples">
+    <h3>Examples</h3>
+    <button class="example-btn" onclick="loadExample(0)">Filter and aggregate employees by department</button>
+    <button class="example-btn" onclick="loadExample(1)">Join orders with customers, top products by revenue</button>
+    <button class="example-btn" onclick="loadExample(2)">Window functions — rank employees by salary within dept</button>
+    <button class="example-btn" onclick="loadExample(3)">Optimize: merge where + sort→top</button>
+    <button class="example-btn" onclick="loadExample(4)">Optimize: SSH pushdown (shows rewrite)</button>
+    <button class="example-btn" onclick="loadExample(5)">Process substitution join with filter</button>
+    <button class="example-btn" onclick="loadExample(6)">Full workflow: optimize then generate Go</button>
+</div>
+
+<div class="datasets">
+    Available datasets: <span>employees.csv</span> (1000 rows) · <span>orders.csv</span> (5000 rows) · <span>customers.csv</span> (500 rows) · or upload your own
+</div>
+
+<script src="fs-polyfill.js"></script>
+<script src="wasm_exec.js"></script>
+<script>
+// --- Sample datasets ---
+const SAMPLE_DATASETS = {};
+
+function generateEmployees() {
+    const depts = ['Engineering', 'Sales', 'Marketing', 'Finance', 'HR', 'Legal', 'Support', 'Operations'];
+    const cities = ['SF', 'NYC', 'Chicago', 'Austin', 'Seattle', 'Boston', 'Denver', 'Portland'];
+    const statuses = ['active', 'active', 'active', 'active', 'active', 'active', 'active', 'active', 'active', 'inactive'];
+    let csv = 'name,age,dept,salary,city,level,hire_date,status\n';
+    for (let i = 1; i <= 1000; i++) {
+        const name = 'user_' + i;
+        const age = 22 + Math.floor(Math.random() * 43);
+        const dept = depts[Math.floor(Math.random() * depts.length)];
+        const salary = 50000 + Math.floor(Math.random() * 150000);
+        const city = cities[Math.floor(Math.random() * cities.length)];
+        const level = 1 + Math.floor(Math.random() * 10);
+        const year = 2015 + Math.floor(Math.random() * 11);
+        const month = String(1 + Math.floor(Math.random() * 12)).padStart(2, '0');
+        const day = String(1 + Math.floor(Math.random() * 28)).padStart(2, '0');
+        const status = statuses[Math.floor(Math.random() * statuses.length)];
+        csv += `${name},${age},${dept},${salary},${city},${level},${year}-${month}-${day},${status}\n`;
+    }
+    return csv;
+}
+
+function generateOrders() {
+    const products = ['Widget', 'Gadget', 'Doohickey', 'Thingamajig', 'Whatsit'];
+    let csv = 'order_id,customer_id,product,amount,order_date\n';
+    for (let i = 1; i <= 5000; i++) {
+        const custId = 1 + Math.floor(Math.random() * 500);
+        const product = products[Math.floor(Math.random() * products.length)];
+        const amount = (10 + Math.random() * 990).toFixed(2);
+        const year = 2024 + Math.floor(Math.random() * 2);
+        const month = String(1 + Math.floor(Math.random() * 12)).padStart(2, '0');
+        const day = String(1 + Math.floor(Math.random() * 28)).padStart(2, '0');
+        csv += `${i},${custId},${product},${amount},${year}-${month}-${day}\n`;
+    }
+    return csv;
+}
+
+function generateCustomers() {
+    const countries = ['US', 'UK', 'DE', 'FR', 'JP', 'AU', 'CA', 'BR', 'IN', 'MX'];
+    const tiers = ['bronze', 'bronze', 'bronze', 'bronze', 'bronze', 'silver', 'silver', 'silver', 'gold', 'platinum'];
+    let csv = 'customer_id,name,country,tier\n';
+    for (let i = 1; i <= 500; i++) {
+        const country = countries[Math.floor(Math.random() * countries.length)];
+        const tier = tiers[Math.floor(Math.random() * tiers.length)];
+        csv += `${i},customer_${i},${country},${tier}\n`;
+    }
+    return csv;
+}
+
+// --- Examples ---
+const EXAMPLES = [
+    `ssql from employees.csv | ssql where -if age gt 30 | ssql group-by dept -count cnt -avg salary avg_sal | ssql sort -desc cnt | ssql to table`,
+    `ssql from orders.csv | ssql join <(ssql from customers.csv | ssql where -if country eq US) -using customer_id | ssql group-by product -sum amount total | ssql sort -desc total | ssql to table`,
+    `ssql from employees.csv | ssql window -row-number rank -partition dept -order salary -desc | ssql where -if rank le 3 | ssql include dept name salary rank | ssql to table`,
+    `ssql from employees.csv | ssql where -if age gt 25 | ssql where -if dept eq Engineering | ssql sort -desc salary | ssql limit 10 | ssql to table`,
+    `ssql from ssh node1 /data/events.csv | ssql where -if status_code ge 500 | ssql group-by service -count cnt | ssql sort -desc cnt | ssql limit 10 | ssql to table`,
+    `ssql from orders.csv | ssql join <(ssql from customers.csv | ssql where -if tier eq gold) -using customer_id | ssql where -if amount gt 500 | ssql sort -desc amount | ssql limit 20 | ssql to table`,
+    `ssql from employees.csv | ssql where -if age gt 25 | ssql where -if dept eq Engineering | ssql sort -desc salary | ssql limit 10 | ssql to table`,
+];
+
+function loadExample(n) {
+    document.getElementById('pipeline').value = EXAMPLES[n];
+    // SSH/catalog examples can't run in WASM — show optimization instead
+    if (EXAMPLES[n].includes('from ssh') || EXAMPLES[n].includes('from catalog')) {
+        optimizePipeline();
+    } else {
+        runPipeline();
+    }
+}
+
+// --- WASM setup ---
+let wasmReady = false;
+
+async function initWasm() {
+    const go = new Go();
+    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm'), go.importObject);
+    go.run(result.instance);
+
+    // Wait for ssqlReady
+    await new Promise(resolve => {
+        const check = () => {
+            if (typeof ssqlReady !== 'undefined' && ssqlReady) {
+                resolve();
+            } else {
+                setTimeout(check, 50);
+            }
+        };
+        check();
+    });
+
+    // Generate and write sample datasets to virtual FS (via JS polyfill, not Go)
+    document.getElementById('status').textContent = 'Generating sample data...';
+    SAMPLE_DATASETS['employees.csv'] = generateEmployees();
+    SAMPLE_DATASETS['orders.csv'] = generateOrders();
+    SAMPLE_DATASETS['customers.csv'] = generateCustomers();
+
+    for (const [name, content] of Object.entries(SAMPLE_DATASETS)) {
+        _fsWriteFile(name, content);
+    }
+
+    wasmReady = true;
+    document.getElementById('status').textContent = 'Ready — ssql in your browser';
+    document.getElementById('btnRun').disabled = false;
+    document.getElementById('btnOptimize').disabled = false;
+    document.getElementById('btnGenerateGo').disabled = false;
+    document.getElementById('btnGenerateSQL').disabled = false;
+    document.getElementById('pipeline').value = EXAMPLES[0];
+}
+
+// --- Pipeline parser ---
+
+// Parse a pipeline string into an array of {args: string[], stdin: string|null} stages.
+// Handles <(...) process substitution by executing inner pipelines first.
+function parsePipeline(pipelineStr, isTopLevel, ssqlgoMode) {
+    // First, find and resolve <(...) blocks
+    let resolved = resolveProcessSubstitutions(pipelineStr, isTopLevel, ssqlgoMode);
+
+    // Split on " | ssql " (but not inside quotes)
+    // Simple approach: split on /\s*\|\s*ssql\s+/
+    let parts = resolved.split(/\s*\|\s*ssql\s+/);
+
+    // First part starts with "ssql " — strip it
+    if (parts[0].trim().startsWith('ssql ')) {
+        parts[0] = parts[0].trim().substring(5);
+    }
+
+    return parts.map(p => p.trim().split(/\s+/));
+}
+
+// Map of temp file paths to original <(...) expressions, for restoring in output.
+let procSubMap = {};
+
+// Resolve <(...) by executing the inner pipeline and writing result to a temp file.
+// Returns the pipeline string with <(...) replaced by temp file paths.
+function resolveProcessSubstitutions(str, isTopLevel, ssqlgoMode) {
+    let result = str;
+    let procSubId = 0;
+    if (isTopLevel !== false) procSubMap = {};
+
+    // Find <(...) blocks — handle nesting by finding matching parens
+    while (true) {
+        let start = result.indexOf('<(');
+        if (start === -1) break;
+
+        // Find matching closing paren
+        let depth = 0;
+        let end = start + 1;
+        for (; end < result.length; end++) {
+            if (result[end] === '(') depth++;
+            if (result[end] === ')') {
+                depth--;
+                if (depth === 0) break;
+            }
+        }
+
+        let innerPipeline = result.substring(start + 2, end);
+        let originalExpr = result.substring(start, end + 1); // "<(...)"
+        // Use /dev/fd/ path so Go's os.Stat sees it as non-regular (like real process substitution)
+        let tempFile = `/dev/fd/${100 + procSubId++}`;
+        procSubMap[tempFile] = originalExpr;
+
+        // Execute inner pipeline (not top-level — don't reset procSubMap)
+        let stages = parsePipeline(innerPipeline, false, ssqlgoMode);
+        let data = '';
+        for (const args of stages) {
+            let execArgs = args;
+            // In SSQLGO mode, add -generate to inner pipeline commands
+            // so they produce fragments (not data) for the join's func fragment
+            if (ssqlgoMode && !execArgs.includes('-generate') && !execArgs.includes('-g')) {
+                execArgs = [...execArgs, '-generate'];
+            }
+            let res = ssqlExec(execArgs, data);
+            if (res.exitCode !== 0) {
+                throw new Error(`Process substitution failed: ${res.stderr}`);
+            }
+            data = res.stdout;
+        }
+
+        // Write result to virtual file
+        _fsWriteFile(tempFile, data);
+
+        // Replace <(...) with temp file path
+        result = result.substring(0, start) + tempFile + result.substring(end + 1);
+    }
+
+    return result;
+}
+
+// --- Execution ---
+
+function executePipeline(pipelineStr, ssqlgoMode) {
+    if (!wasmReady) return { stdout: '', stderr: 'WASM not ready', exitCode: 1 };
+
+    // Set SSQLGO env if needed
+    if (ssqlgoMode) {
+        // Go WASM reads env via go.env — but we can't set it after init.
+        // Instead, add -generate flag to each command except the last.
+        // Actually, for the fragment pipeline, we need SSQLGO=1 behavior.
+        // The ssql CLI checks os.Getenv("SSQLGO") in the shouldGenerate() helper.
+        // For WASM, we'll set it via the Go process env.
+        // go.env is set before go.run() — too late to change.
+        // Alternative: use -generate flag explicitly.
+    }
+
+    try {
+        let stages = parsePipeline(pipelineStr, true, ssqlgoMode);
+        let data = '';
+
+        for (let i = 0; i < stages.length; i++) {
+            let args = stages[i];
+
+            // In SSQLGO mode, add -generate to data commands (not to generate subcommand)
+            if (ssqlgoMode && i < stages.length - 1) {
+                // Don't add -generate if args already has it, or if this is a "generate" command
+                if (args[0] !== 'generate' && !args.includes('-generate') && !args.includes('-g')) {
+                    args = [...args, '-generate'];
+                }
+            }
+
+            let res = ssqlExec(args, data);
+            if (res.exitCode !== 0) {
+                return res;
+            }
+            data = res.stdout;
+        }
+
+        return { stdout: data, stderr: '', exitCode: 0 };
+    } catch (e) {
+        return { stdout: '', stderr: e.message, exitCode: 1 };
+    }
+}
+
+function showOutput(result, label, restoreProcsub) {
+    const el = document.getElementById('output');
+    const labelEl = document.getElementById('outputLabel');
+    labelEl.textContent = label || 'Output';
+
+    let stdout = result.stdout;
+    let stderr = result.stderr || '';
+    if (restoreProcsub) {
+        stdout = restoreProcessSubstitutions(stdout);
+        stderr = restoreProcessSubstitutions(stderr);
+    }
+
+    if (result.exitCode !== 0) {
+        el.innerHTML = `<span class="stderr">${escapeHtml(stderr || 'Unknown error')}</span>`;
+    } else {
+        el.textContent = stdout;
+        if (stderr) {
+            el.innerHTML = `<span class="info">${escapeHtml(stderr)}</span>\n` + escapeHtml(stdout);
+        }
+    }
+}
+
+function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Replace temp file paths with original <(...) expressions in output text.
+function restoreProcessSubstitutions(s) {
+    for (const [tempFile, originalExpr] of Object.entries(procSubMap)) {
+        while (s.includes(tempFile)) {
+            s = s.replace(tempFile, originalExpr);
+        }
+    }
+    return s;
+}
+
+// --- Button handlers ---
+
+function runPipeline() {
+    hideUseButton();
+    const pipeline = document.getElementById('pipeline').value.trim();
+    if (!pipeline) return;
+    if (pipeline.includes('from ssh') || pipeline.includes('from catalog')) {
+        showOutput({ stdout: '', stderr: 'SSH and catalog commands require network access — use Optimize or Generate Go to see the pipeline rewrite.', exitCode: 1 }, 'Output');
+        return;
+    }
+    const result = executePipeline(pipeline, false);
+    showOutput(result, 'Output');
+}
+
+let lastOptimized = '';
+
+function optimizePipeline() {
+    const pipeline = document.getElementById('pipeline').value.trim();
+    if (!pipeline) return;
+
+    // Run with -generate flags, pipe to generate ssql -explain
+    const fullPipeline = pipeline + ' | ssql generate ssql -explain';
+    const result = executePipeline(fullPipeline, true);
+    showOutput(result, 'Optimized Pipeline', true);
+
+    // Store the optimized pipeline (stdout without explain lines) for Apply
+    if (result.exitCode === 0 && result.stdout.trim()) {
+        lastOptimized = restoreProcessSubstitutions(result.stdout.trim());
+        document.getElementById('btnUseOptimized').style.display = '';
+    } else {
+        lastOptimized = '';
+        document.getElementById('btnUseOptimized').style.display = 'none';
+    }
+}
+
+function applyOptimized() {
+    if (lastOptimized) {
+        document.getElementById('pipeline').value = lastOptimized;
+        document.getElementById('btnUseOptimized').style.display = 'none';
+        lastOptimized = '';
+    }
+}
+
+function hideUseButton() {
+    document.getElementById('btnUseOptimized').style.display = 'none';
+    lastOptimized = '';
+}
+
+function generateGo() {
+    hideUseButton();
+    const pipeline = document.getElementById('pipeline').value.trim();
+    if (!pipeline) return;
+
+    // First optimize, then generate Go
+    const optimizePipe = pipeline + ' | ssql generate ssql';
+    const optResult = executePipeline(optimizePipe, true);
+    if (optResult.exitCode !== 0) {
+        showOutput(optResult, 'Error');
+        return;
+    }
+
+    // The optimized pipeline is a shell command — but for generate go,
+    // we run the original pipeline through generate go directly
+    const goPipe = pipeline + ' | ssql generate go';
+    const result = executePipeline(goPipe, true);
+    showOutput(result, 'Generated Go Code');
+}
+
+function generateSQL() {
+    hideUseButton();
+    const pipeline = document.getElementById('pipeline').value.trim();
+    if (!pipeline) return;
+    if (pipeline.includes('from ssh') || pipeline.includes('from catalog')) {
+        showOutput({ stdout: '', stderr: 'SQL generation does not support SSH or catalog sources — these are ssql-specific distributed features.', exitCode: 1 }, 'Generated SQL (DuckDB)');
+        return;
+    }
+
+    const sqlPipe = pipeline + ' | ssql generate sql';
+    const result = executePipeline(sqlPipe, true);
+    showOutput(result, 'Generated SQL (DuckDB)');
+}
+
+function uploadFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+        _fsWriteFile(file.name, reader.result);
+        SAMPLE_DATASETS[file.name] = reader.result;
+        document.getElementById('status').textContent = `Uploaded ${file.name} (${(file.size/1024).toFixed(0)} KB)`;
+    };
+    reader.readAsText(file);
+}
+
+// --- Init ---
+initWasm().catch(err => {
+    document.getElementById('status').textContent = 'Failed to load WASM: ' + err.message;
+    document.getElementById('output').innerHTML = `<span class="stderr">${escapeHtml(err.toString())}</span>`;
+});
+</script>
+</body>
+</html>

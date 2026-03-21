@@ -23,6 +23,10 @@ import "github.com/rosscartlidge/ssql/v4"
 - **NEVER** create documentation files in the root directory — use `doc/research/` or `doc/archive/`
 - **What Belongs in Root:** Core library source (`*.go`), tests (`*_test.go`), `README.md`, `CHANGELOG.md`, `go.mod`, `go.sum`, `Makefile`, `.gitignore`
 
+## TODO Tracking (CRITICAL)
+
+When you discover a missing feature, unsupported command, or limitation during development or testing, **add it to `doc/research/TODO.md`**. This includes: commands that `generate sql` doesn't support, build system improvements, playground gaps, optimizer bail-outs, etc.
+
 ## Development Journal (CRITICAL)
 
 Maintain weekly journal entries in `journal/YYYY-WNN.md`. Update at end of sessions, when completing tasks, when making commits. Read latest on startup for context.
