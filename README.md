@@ -141,9 +141,11 @@ ssql from data.csv | ssql where -if age gt 30 | jq -s 'length'  # Count results
 
 Try ssql without installing anything — the full CLI runs in your browser via WebAssembly:
 
-**[Launch Playground →](https://rosscartlidge.github.io/ssql/playground.html)** *(~12MB download on first load)*
+**[Launch Playground →](https://rosscartlidge.github.io/ssql/playground.html)** *(instant — optimized WASM, ~12MB)*
 
-Or build and serve locally:
+**[Launch Full Terminal →](https://rosscartlidge.github.io/ssql-terminal/)** *(real Linux with bash, tab completion, pipes — boots in ~20s)*
+
+Or build the playground locally:
 ```bash
 make playground
 cd cmd/ssql-playground && python3 -m http.server 8080
