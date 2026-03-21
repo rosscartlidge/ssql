@@ -18,7 +18,8 @@ Tracked issues and feature gaps discovered during development.
 ## WASM Playground
 
 - [ ] **Binary size** — 68MB raw / 12MB gzipped. Blocked on from.go/to.go split (see Build System above). Target: ~15MB raw / ~3MB gzipped with slim build.
-- [ ] **GitHub Pages deployment** — static site hosting, gzip compression, cache headers.
+- [x] **GitHub Pages deployment** — live at `https://rosscartlidge.github.io/ssql/playground.html`. Currently manual (push to `gh-pages` branch).
+- [ ] **GitHub Actions automation** — build WASM and deploy to `gh-pages` automatically on push to `main`. Removes the 68MB binary from git history and keeps playground always up-to-date.
 - [ ] **Share links** — encode pipeline in URL fragment for sharing.
 - [ ] **Syntax highlighting** — generated Go/SQL code should be highlighted (highlight.js or Prism).
 - [ ] **Chart rendering** — `to chart` generates a full HTML file; playground should render inline with Chart.js.

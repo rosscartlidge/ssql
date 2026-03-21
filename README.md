@@ -141,15 +141,12 @@ ssql from data.csv | ssql where -if age gt 30 | jq -s 'length'  # Count results
 
 Try ssql without installing anything — the full CLI runs in your browser via WebAssembly:
 
+**[Launch Playground →](https://rosscartlidge.github.io/ssql/playground.html)** *(~12MB download on first load)*
+
+Or build and serve locally:
 ```bash
-# Clone and serve locally (requires Go 1.23+)
-cd cmd/ssql-playground
-# Build the WASM module (~68MB, one-time)
-GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o ssql-playground.wasm ../../cmd/ssql-playground/
-# Copy Go's WASM support
-cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" .
-# Serve
-python3 -m http.server 8080
+make playground
+cd cmd/ssql-playground && python3 -m http.server 8080
 # Open http://localhost:8080/playground.html
 ```
 
