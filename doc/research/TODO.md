@@ -22,9 +22,13 @@ Tracked issues and feature gaps discovered during development.
 - [ ] **GitHub Actions automation** — build WASM and deploy to `gh-pages` automatically on push to `main`. Removes the 68MB binary from git history and keeps playground always up-to-date.
 - [ ] **Share links** — encode pipeline in URL fragment for sharing.
 - [ ] **Syntax highlighting** — generated Go/SQL code should be highlighted (highlight.js or Prism).
-- [ ] **Chart rendering** — `to chart` generates a full HTML file; playground should render inline with Chart.js.
+- [x] **Chart rendering** — `to chart` output rendered inline via iframe.
 - [ ] **Loading indicator** — show progress while 12MB WASM loads.
 - [ ] **Mobile layout** — currently untested on mobile.
+
+## Tab Completion
+
+- [ ] **`ssql from <tab>` should also complete filenames** — currently only shows subcommands (csv, ssh, parquet, etc.). Most users type `ssql from data.csv` directly without the subcommand, so file completion at this position would be more useful.
 
 ## Pipeline Optimizer (`generate ssql`)
 
