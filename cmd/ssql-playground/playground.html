@@ -41,8 +41,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <div id="status">Loading WASM module...</div>
 
 <div class="input-area">
-    <label>Pipeline</label>
-    <textarea id="pipeline" rows="3" placeholder="ssql from employees.csv | ssql where -if age gt 30 | ssql to table" spellcheck="false"></textarea>
+    <label>Pipeline <span style="color:#565f89; font-weight:normal;">— comment out commands with #</span></label>
+    <textarea id="pipeline" rows="8" placeholder="ssql from employees.csv | ssql where -if age gt 30 | ssql to table" spellcheck="false"></textarea>
 </div>
 
 <div class="buttons">
@@ -54,26 +54,43 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <button onclick="document.getElementById('fileUpload').click()">Upload CSV</button>
 </div>
 
+<div id="dataViewer" class="output-area" style="display:none;">
+    <label id="dataViewerLabel">Data <button onclick="hideDataViewer()" style="float:right; background:none; border:none; color:#565f89; cursor:pointer; font-size:13px; padding:0;">✕</button></label>
+    <div class="output-content" id="dataViewerContent"></div>
+</div>
+
 <div class="output-area">
     <label id="outputLabel">Output</label>
     <div class="output-content" id="output"><span class="info">Click "Run" to execute a pipeline, or try an example below.</span></div>
+    <iframe id="chartFrame" style="display:none; width:100%; height:500px; border:1px solid #3b4261; border-radius:4px; background:#fff; margin-top:8px;"></iframe>
     <button id="btnUseOptimized" onclick="applyOptimized()" style="display:none; margin-top: 10px;">Use this pipeline</button>
 </div>
 
 <div class="examples">
     <h3>Examples</h3>
-    <button class="example-btn" onclick="loadExample(0)">Filter and aggregate employees by department</button>
-    <button class="example-btn" onclick="loadExample(1)">Join orders with customers, top products by revenue</button>
-    <button class="example-btn" onclick="loadExample(2)">Window functions — rank employees by salary within dept</button>
-    <button class="example-btn" onclick="loadExample(3)">Optimize: merge where + sort→top</button>
-    <button class="example-btn" onclick="loadExample(4)">Optimize: SSH pushdown (shows rewrite)</button>
-    <button class="example-btn" onclick="loadExample(5)">Process substitution join with filter</button>
-    <button class="example-btn" onclick="loadExample(6)">Full workflow: optimize then generate Go</button>
+    <button class="example-btn" onclick="loadExample(0)">View data — see what's in the table</button>
+    <button class="example-btn" onclick="loadExample(1)">Filter — engineers only</button>
+    <button class="example-btn" onclick="loadExample(2)">Sort + limit — top 10 salaries</button>
+    <button class="example-btn" onclick="loadExample(3)">Update — add a new field</button>
+    <button class="example-btn" onclick="loadExample(4)">Update — computed field with an expression</button>
+    <button class="example-btn" onclick="loadExample(5)">Group by — count and average by department</button>
+    <button class="example-btn" onclick="loadExample(6)">Chart — bar chart of department sizes</button>
+    <button class="example-btn" onclick="loadExample(7)">Join — orders with customers</button>
+    <button class="example-btn" onclick="loadExample(8)">Join + filter — US revenue by product (try Optimize — pushes filter into join)</button>
+    <button class="example-btn" onclick="loadExample(9)">Optimize — merges filters, sort+limit→top (click Optimize to see rewrite)</button>
+    <button class="example-btn" onclick="loadExample(10)">Window — top 3 earners per department</button>
+    <button class="example-btn" onclick="loadExample(11)">Optimize: SSH pushdown (shows rewritten pipeline — can't run, no SSH in browser)</button>
 </div>
 
 <div class="datasets">
-    Available datasets: <span>employees.csv</span> (1000 rows) · <span>orders.csv</span> (5000 rows) · <span>customers.csv</span> (500 rows) · or upload your own
-    <br>Install ssql for tab completion of field names, operators, values, and remote SSH paths: <code>eval "$(ssql -completion-script)"</code>
+    Available datasets:
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('employees.csv')">employees.csv</button> (50 rows) ·
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('orders.csv')">orders.csv</button> (40 rows) ·
+    <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('customers.csv')">customers.csv</button> (20 rows) · or upload your own
+    <br><br>This playground runs a real ssql binary compiled to WebAssembly — but the shell piping is simulated in JavaScript.
+    The real CLI experience is far richer: tab completion for field names, operators, and values; Unix pipes;
+    process substitution; SSH to remote hosts; and catalog queries across fleets.
+    <br>Install: <code>go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest</code>
 </div>
 
 <script src="fs-polyfill.js"></script>
@@ -81,70 +98,77 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
+const DATA_FILES = ['employees.csv', 'orders.csv', 'customers.csv'];
 
-function generateEmployees() {
-    const depts = ['Engineering', 'Sales', 'Marketing', 'Finance', 'HR', 'Legal', 'Support', 'Operations'];
-    const cities = ['SF', 'NYC', 'Chicago', 'Austin', 'Seattle', 'Boston', 'Denver', 'Portland'];
-    const statuses = ['active', 'active', 'active', 'active', 'active', 'active', 'active', 'active', 'active', 'inactive'];
-    let csv = 'name,age,dept,salary,city,level,hire_date,status\n';
-    for (let i = 1; i <= 1000; i++) {
-        const name = 'user_' + i;
-        const age = 22 + Math.floor(Math.random() * 43);
-        const dept = depts[Math.floor(Math.random() * depts.length)];
-        const salary = 50000 + Math.floor(Math.random() * 150000);
-        const city = cities[Math.floor(Math.random() * cities.length)];
-        const level = 1 + Math.floor(Math.random() * 10);
-        const year = 2015 + Math.floor(Math.random() * 11);
-        const month = String(1 + Math.floor(Math.random() * 12)).padStart(2, '0');
-        const day = String(1 + Math.floor(Math.random() * 28)).padStart(2, '0');
-        const status = statuses[Math.floor(Math.random() * statuses.length)];
-        csv += `${name},${age},${dept},${salary},${city},${level},${year}-${month}-${day},${status}\n`;
+async function loadDatasets() {
+    for (const name of DATA_FILES) {
+        const resp = await fetch('data/' + name);
+        if (!resp.ok) throw new Error(`Failed to load ${name}: ${resp.status}`);
+        SAMPLE_DATASETS[name] = await resp.text();
     }
-    return csv;
-}
-
-function generateOrders() {
-    const products = ['Widget', 'Gadget', 'Doohickey', 'Thingamajig', 'Whatsit'];
-    let csv = 'order_id,customer_id,product,amount,order_date\n';
-    for (let i = 1; i <= 5000; i++) {
-        const custId = 1 + Math.floor(Math.random() * 500);
-        const product = products[Math.floor(Math.random() * products.length)];
-        const amount = (10 + Math.random() * 990).toFixed(2);
-        const year = 2024 + Math.floor(Math.random() * 2);
-        const month = String(1 + Math.floor(Math.random() * 12)).padStart(2, '0');
-        const day = String(1 + Math.floor(Math.random() * 28)).padStart(2, '0');
-        csv += `${i},${custId},${product},${amount},${year}-${month}-${day}\n`;
-    }
-    return csv;
-}
-
-function generateCustomers() {
-    const countries = ['US', 'UK', 'DE', 'FR', 'JP', 'AU', 'CA', 'BR', 'IN', 'MX'];
-    const tiers = ['bronze', 'bronze', 'bronze', 'bronze', 'bronze', 'silver', 'silver', 'silver', 'gold', 'platinum'];
-    let csv = 'customer_id,name,country,tier\n';
-    for (let i = 1; i <= 500; i++) {
-        const country = countries[Math.floor(Math.random() * countries.length)];
-        const tier = tiers[Math.floor(Math.random() * tiers.length)];
-        csv += `${i},customer_${i},${country},${tier}\n`;
-    }
-    return csv;
 }
 
 // --- Examples ---
 const EXAMPLES = [
-    `ssql from employees.csv | ssql where -if age gt 30 | ssql group-by dept -count cnt -avg salary avg_sal | ssql sort -desc cnt | ssql to table`,
-    `ssql from orders.csv | ssql join <(ssql from customers.csv | ssql where -if country eq US) -using customer_id | ssql group-by product -sum amount total | ssql sort -desc total | ssql to table`,
-    `ssql from employees.csv | ssql window -row-number rank -partition dept -order salary -desc | ssql where -if rank le 3 | ssql include dept name salary rank | ssql to table`,
-    `ssql from employees.csv | ssql where -if age gt 25 | ssql where -if dept eq Engineering | ssql sort -desc salary | ssql limit 10 | ssql to table`,
-    `ssql from ssh node1 /data/events.csv | ssql where -if status_code ge 500 | ssql group-by service -count cnt | ssql sort -desc cnt | ssql limit 10 | ssql to table`,
-    `ssql from orders.csv | ssql join <(ssql from customers.csv | ssql where -if tier eq gold) -using customer_id | ssql where -if amount gt 500 | ssql sort -desc amount | ssql limit 20 | ssql to table`,
-    `ssql from employees.csv | ssql where -if age gt 25 | ssql where -if dept eq Engineering | ssql sort -desc salary | ssql limit 10 | ssql to table`,
+    `ssql from employees.csv
+| ssql to table`,
+    `ssql from employees.csv
+| ssql where -if dept eq Engineering
+| ssql to table`,
+    `ssql from employees.csv
+| ssql sort -desc salary
+| ssql limit 10
+| ssql to table`,
+    `ssql from employees.csv
+| ssql update -set magic 42
+| ssql limit 5
+| ssql to table`,
+    `ssql from employees.csv
+| ssql update -set-expr bonus 'salary / 10'
+| ssql limit 5
+| ssql to table`,
+    `ssql from employees.csv
+| ssql group-by dept -count cnt -avg salary avg_sal
+| ssql sort -desc cnt
+| ssql to table`,
+    `ssql from employees.csv
+| ssql group-by dept -count cnt
+| ssql to chart -x dept -y cnt -type bar`,
+    `ssql from orders.csv
+| ssql join <(ssql from customers.csv) -using customer_id
+| ssql limit 10
+| ssql to table`,
+    `ssql from orders.csv
+| ssql join <(ssql from customers.csv) -using customer_id
+| ssql where -if country eq US
+| ssql group-by product -sum amount total
+| ssql sort -desc total
+| ssql to table`,
+    `ssql from employees.csv
+| ssql where -if age gt 25
+| ssql where -if dept eq Engineering
+| ssql sort -desc salary
+| ssql limit 10
+| ssql to table`,
+    `ssql from employees.csv
+| ssql window -row-number rank -partition dept -order salary -desc
+| ssql where -if rank le 3
+| ssql include dept name salary rank
+| ssql to table`,
+    `ssql from ssh node1 /data/events.csv
+| ssql where -if status_code ge 500
+| ssql group-by service -count cnt
+| ssql sort -desc cnt
+| ssql limit 10
+| ssql to table`,
 ];
+
+// Examples that should auto-optimize instead of run (by index)
+const OPTIMIZE_EXAMPLES = new Set([9, 11]);
 
 function loadExample(n) {
     document.getElementById('pipeline').value = EXAMPLES[n];
-    // SSH/catalog examples can't run in WASM — show optimization instead
-    if (EXAMPLES[n].includes('from ssh') || EXAMPLES[n].includes('from catalog')) {
+    if (OPTIMIZE_EXAMPLES.has(n) || EXAMPLES[n].includes('from ssh') || EXAMPLES[n].includes('from catalog')) {
         optimizePipeline();
     } else {
         runPipeline();
@@ -171,11 +195,9 @@ async function initWasm() {
         check();
     });
 
-    // Generate and write sample datasets to virtual FS (via JS polyfill, not Go)
-    document.getElementById('status').textContent = 'Generating sample data...';
-    SAMPLE_DATASETS['employees.csv'] = generateEmployees();
-    SAMPLE_DATASETS['orders.csv'] = generateOrders();
-    SAMPLE_DATASETS['customers.csv'] = generateCustomers();
+    // Load static datasets from server and write to virtual FS
+    document.getElementById('status').textContent = 'Loading sample data...';
+    await loadDatasets();
 
     for (const [name, content] of Object.entries(SAMPLE_DATASETS)) {
         _fsWriteFile(name, content);
@@ -195,6 +217,9 @@ async function initWasm() {
 // Parse a pipeline string into an array of {args: string[], stdin: string|null} stages.
 // Handles <(...) process substitution by executing inner pipelines first.
 function parsePipeline(pipelineStr, isTopLevel, ssqlgoMode) {
+    // Strip bash-style comments: # to end of line (but not inside quotes)
+    pipelineStr = stripComments(pipelineStr);
+
     // First, find and resolve <(...) blocks
     let resolved = resolveProcessSubstitutions(pipelineStr, isTopLevel, ssqlgoMode);
 
@@ -207,7 +232,55 @@ function parsePipeline(pipelineStr, isTopLevel, ssqlgoMode) {
         parts[0] = parts[0].trim().substring(5);
     }
 
-    return parts.map(p => p.trim().split(/\s+/));
+    return parts.map(p => shellSplit(p.trim()));
+}
+
+// Split a string into tokens respecting single and double quotes (shell-style).
+// Strip # comments (to end of line), respecting quotes.
+function stripComments(s) {
+    let result = '';
+    let quote = null;
+    for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (quote) {
+            result += c;
+            if (c === quote) quote = null;
+        } else if (c === '"' || c === "'") {
+            result += c;
+            quote = c;
+        } else if (c === '#') {
+            // Skip to end of line
+            while (i < s.length && s[i] !== '\n') i++;
+            result += '\n';
+        } else {
+            result += c;
+        }
+    }
+    return result;
+}
+
+function shellSplit(s) {
+    const tokens = [];
+    let current = '';
+    let quote = null;
+    for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (quote) {
+            if (c === quote) {
+                quote = null;
+            } else {
+                current += c;
+            }
+        } else if (c === '"' || c === "'") {
+            quote = c;
+        } else if (/\s/.test(c)) {
+            if (current) { tokens.push(current); current = ''; }
+        } else {
+            current += c;
+        }
+    }
+    if (current) tokens.push(current);
+    return tokens;
 }
 
 // Map of temp file paths to original <(...) expressions, for restoring in output.
@@ -353,19 +426,51 @@ function restoreProcessSubstitutions(s) {
 
 function runPipeline() {
     hideUseButton();
+    hideChart();
     const pipeline = document.getElementById('pipeline').value.trim();
     if (!pipeline) return;
     if (pipeline.includes('from ssh') || pipeline.includes('from catalog')) {
-        showOutput({ stdout: '', stderr: 'SSH and catalog commands require network access — use Optimize or Generate Go to see the pipeline rewrite.', exitCode: 1 }, 'Output');
+        showOutput({ stdout: '', stderr: 'SSH and catalog commands require network access and can\'t run in the browser.\nClick Optimize to see how ssql rewrites this pipeline (e.g. pushing predicates to the remote host).', exitCode: 1 }, 'Output');
         return;
     }
     const result = executePipeline(pipeline, false);
+
+    // Check if pipeline produced a chart HTML file
+    if (result.exitCode === 0 && pipeline.includes('to chart')) {
+        const chartFile = extractChartFilename(pipeline);
+        const chartHtml = _fsReadFile(chartFile);
+        if (chartHtml) {
+            showOutput({ stdout: 'Chart rendered below.', stderr: result.stderr, exitCode: 0 }, 'Output');
+            showChart(chartHtml);
+            return;
+        }
+    }
+
     showOutput(result, 'Output');
+}
+
+function extractChartFilename(pipeline) {
+    // Look for -o or -output flag after "to chart", default to chart.html
+    const match = pipeline.match(/to\s+chart\b.*?(?:-o|-output)\s+(\S+)/);
+    return match ? match[1] : 'chart.html';
+}
+
+function showChart(html) {
+    const frame = document.getElementById('chartFrame');
+    frame.style.display = '';
+    frame.srcdoc = html;
+}
+
+function hideChart() {
+    const frame = document.getElementById('chartFrame');
+    frame.style.display = 'none';
+    frame.srcdoc = '';
 }
 
 let lastOptimized = '';
 
 function optimizePipeline() {
+    hideChart();
     const pipeline = document.getElementById('pipeline').value.trim();
     if (!pipeline) return;
 
@@ -386,7 +491,7 @@ function optimizePipeline() {
 
 function applyOptimized() {
     if (lastOptimized) {
-        document.getElementById('pipeline').value = lastOptimized;
+        document.getElementById('pipeline').value = lastOptimized.replace(/\s*\|\s*ssql\s+/g, '\n| ssql ');
         document.getElementById('btnUseOptimized').style.display = 'none';
         lastOptimized = '';
     }
@@ -399,6 +504,7 @@ function hideUseButton() {
 
 function generateGo() {
     hideUseButton();
+    hideChart();
     const pipeline = document.getElementById('pipeline').value.trim();
     if (!pipeline) return;
 
@@ -419,6 +525,7 @@ function generateGo() {
 
 function generateSQL() {
     hideUseButton();
+    hideChart();
     const pipeline = document.getElementById('pipeline').value.trim();
     if (!pipeline) return;
     if (pipeline.includes('from ssh') || pipeline.includes('from catalog')) {
@@ -429,6 +536,18 @@ function generateSQL() {
     const sqlPipe = pipeline + ' | ssql generate sql';
     const result = executePipeline(sqlPipe, true);
     showOutput(result, 'Generated SQL (DuckDB)');
+}
+
+function viewDataset(name) {
+    const content = SAMPLE_DATASETS[name];
+    if (!content) return;
+    document.getElementById('dataViewerLabel').firstChild.textContent = name + ' ';
+    document.getElementById('dataViewerContent').textContent = content;
+    document.getElementById('dataViewer').style.display = '';
+}
+
+function hideDataViewer() {
+    document.getElementById('dataViewer').style.display = 'none';
 }
 
 function uploadFile(event) {

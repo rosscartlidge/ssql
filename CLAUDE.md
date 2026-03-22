@@ -170,6 +170,13 @@ See `claude/code-generation.md` for fragment system, testing patterns, and full 
 - **Test generation**: add tests to `cmd/ssql/generation_test.go`, test full pipeline round-trip
 - **`generate sql` reuses the same fragments** — no separate SQL generation path needed per command. The SQL assembler parses the `Command` string from each fragment.
 
+## WASM Playground Rules
+See `claude/playground.md` for data files, testing workflow, and chart support.
+
+- **Always test playground examples against `cmd/ssql-playground/data/` with real ssql before adding to `playground.html`**
+- Static CSV data lives in `cmd/ssql-playground/data/` — same files used by playground and local testing
+- No WASM rebuild needed for HTML/JS/data changes — just refresh browser
+
 ## GPU Acceleration Rules
 See `claude/gpu-acceleration.md` for benchmarks, build instructions, and detailed analysis.
 
@@ -193,6 +200,7 @@ For detailed examples, rationale, and history, read the relevant `claude/` file:
 | GPU acceleration | `claude/gpu-acceleration.md` |
 | autocli migration | `claude/autocli-migration.md` |
 | Version history | `claude/project-history.md` |
+| WASM playground | `claude/playground.md` |
 
 ## Arrow & Parquet Format Support
 

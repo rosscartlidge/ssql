@@ -221,7 +221,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Build update filter with first-match-wins clause evaluation (using pre-compiled expressions)
+			var evalErr error
 			updateFilter := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
+				if evalErr != nil {
+					return mut
+				}
 				frozen := mut.Freeze()
 
 				// On first record, capture the schema
@@ -281,12 +285,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 								// Evaluate using pre-compiled expression
 								result, err := upd.exprEval(frozen)
 								if err != nil {
-									// Log error and set field to empty string
-									fmt.Fprintf(os.Stderr, "Error evaluating expression: %v\n", err)
-									parsedValue = ""
-								} else {
-									parsedValue = result
+									evalErr = fmt.Errorf("evaluating expression for field %q: %w", upd.field, err)
+									return mut
 								}
+								parsedValue = result
 							} else {
 								// Parse as literal
 								parsedValue = parseValue(upd.literal)
@@ -377,6 +379,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Write output as JSONL (preserving schema if present)
 			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, updated); err != nil {
 				return fmt.Errorf("writing output: %w", err)
+			}
+
+			if evalErr != nil {
+				return evalErr
 			}
 
 			return nil

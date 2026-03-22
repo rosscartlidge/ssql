@@ -107,6 +107,7 @@ type pipelineCmd struct {
 	JoinArgs         []string // args after FILE (-using, -on, -type, etc.)
 	JoinRightWhere   []string // where args pushed into right side (rendered as process substitution)
 	JoinIsProcessSub bool     // true if right side is already a process substitution (/dev/fd/N)
+	JoinProcSubCmds  []*pipelineCmd // parsed inner pipeline commands (for process substitution optimization)
 
 	// Sort fields
 	SortDesc  bool
@@ -161,11 +162,23 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 
 	// Parse each fragment into a pipelineCmd
 	var cmds []*pipelineCmd
+	var pendingFuncCmds []*pipelineCmd // inner pipeline cmds from func fragments awaiting their join
 	for _, frag := range fragments {
 		cmd := parsePipelineCmd(frag.Command)
 		// func fragments are right-side sources for joins, not pipeline stages
 		if frag.Type == "func" {
 			cmd.Removed = true
+			// Parse inner pipeline from FuncBody
+			var innerCmds []*pipelineCmd
+			for _, bodyFrag := range frag.FuncBody {
+				innerCmds = append(innerCmds, parsePipelineCmd(bodyFrag.Command))
+			}
+			pendingFuncCmds = innerCmds
+		}
+		// Attach pending func body to its join
+		if cmd.IsJoin && cmd.JoinIsProcessSub && len(pendingFuncCmds) > 0 {
+			cmd.JoinProcSubCmds = pendingFuncCmds
+			pendingFuncCmds = nil
 		}
 		cmds = append(cmds, cmd)
 	}
@@ -961,10 +974,6 @@ func ruleJoinPredicatePushdown(cmds []*pipelineCmd) ([]*pipelineCmd, []ruleAppli
 		if cmds[i].Removed || !cmds[i].IsJoin {
 			continue
 		}
-		// Skip if right side is already a process substitution
-		if cmds[i].JoinIsProcessSub {
-			continue
-		}
 
 		j := nextNonRemoved(cmds, i)
 		if j == -1 || cmds[j].Kind != "where" {
@@ -998,7 +1007,18 @@ func ruleJoinPredicatePushdown(cmds []*pipelineCmd) ([]*pipelineCmd, []ruleAppli
 		if err != nil {
 			continue
 		}
-		rightFields, err := readFieldNames(cmds[i].JoinFile, "")
+
+		// Read right-side fields — either from plain file or process substitution's from command
+		var rightFields []string
+		if cmds[i].JoinIsProcessSub {
+			rightFile, rightFormat := findProcSubSource(cmds[i].JoinProcSubCmds)
+			if rightFile == "" {
+				continue
+			}
+			rightFields, err = readFieldNames(rightFile, rightFormat)
+		} else {
+			rightFields, err = readFieldNames(cmds[i].JoinFile, "")
+		}
 		if err != nil {
 			continue
 		}
@@ -1035,7 +1055,16 @@ func ruleJoinPredicatePushdown(cmds []*pipelineCmd) ([]*pipelineCmd, []ruleAppli
 
 		// Push right-only predicates into join's right side
 		if len(rightOnly) > 0 {
-			cmds[i].JoinRightWhere = buildWhereArgs([]whereClause{{Conditions: rightOnly}})
+			whereArgs := buildWhereArgs([]whereClause{{Conditions: rightOnly}})
+			if cmds[i].JoinIsProcessSub {
+				// Append where to the existing inner pipeline
+				cmds[i].JoinProcSubCmds = append(cmds[i].JoinProcSubCmds, &pipelineCmd{
+					Kind:    "where",
+					RawArgs: whereArgs,
+				})
+			} else {
+				cmds[i].JoinRightWhere = whereArgs
+			}
 		}
 
 		// Left-only predicates: insert a where command before the join
@@ -1079,6 +1108,29 @@ func ruleJoinPredicatePushdown(cmds []*pipelineCmd) ([]*pipelineCmd, []ruleAppli
 	}
 
 	return cmds, rules
+}
+
+// findProcSubSource finds the source file and format from a process substitution's inner pipeline.
+// Returns ("", "") if the inner pipeline doesn't start with a simple "from" command.
+func findProcSubSource(innerCmds []*pipelineCmd) (string, string) {
+	for _, cmd := range innerCmds {
+		if cmd.Kind == "from" && !cmd.IsSSH && !cmd.IsCatalog {
+			return getFromFileAndFormat(cmd)
+		}
+	}
+	return "", ""
+}
+
+// renderProcSubPipeline renders an inner pipeline as "ssql cmd1 | ssql cmd2 | ...".
+func renderProcSubPipeline(innerCmds []*pipelineCmd) string {
+	var parts []string
+	for _, cmd := range innerCmds {
+		if cmd.Removed {
+			continue
+		}
+		parts = append(parts, renderCmd(cmd))
+	}
+	return strings.Join(parts, " | ")
 }
 
 // findLeftSource finds the from command that feeds into a join at position joinIdx.
@@ -1662,9 +1714,16 @@ func renderCmd(cmd *pipelineCmd) string {
 
 	if cmd.IsJoin {
 		if len(cmd.JoinRightWhere) > 0 {
-			// Render with process substitution for right-side filtering.
+			// Render with process substitution for right-side filtering (plain file join).
 			// The <(...) must NOT be quoted — it's bash syntax, not an argument.
 			rightPipeline := "ssql from " + shellJoin([]string{cmd.JoinFile}) + " | ssql where " + shellJoin(cmd.JoinRightWhere)
+			prefix := shellJoin(parts)
+			suffix := shellJoin(cmd.JoinArgs)
+			return prefix + " <(" + rightPipeline + ") " + suffix
+		}
+		if cmd.JoinIsProcessSub && len(cmd.JoinProcSubCmds) > 0 {
+			// Render modified process substitution with inner pipeline
+			rightPipeline := renderProcSubPipeline(cmd.JoinProcSubCmds)
 			prefix := shellJoin(parts)
 			suffix := shellJoin(cmd.JoinArgs)
 			return prefix + " <(" + rightPipeline + ") " + suffix

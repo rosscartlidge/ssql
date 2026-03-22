@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/ast"
 	"github.com/rosscartlidge/ssql/v4"
 )
 
@@ -87,7 +89,18 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 		return nil, fmt.Errorf("compile expression: %w", err)
 	}
 
+	// Extract identifiers from the AST so we can validate fields on first record.
+	// Skip validation if the expression handles missing fields explicitly via ??, has(), or getOr().
+	handlesMissing := strings.Contains(expression, "??") ||
+		strings.Contains(expression, "has(") ||
+		strings.Contains(expression, "getOr(")
+	var identifiers []string
+	if !handlesMissing {
+		identifiers = extractIdentifiers(program.Node())
+	}
+
 	// Return a closure that evaluates the compiled program on a record
+	validated := false
 	return func(record ssql.Record) (any, error) {
 		// Build environment with all record fields
 		env := make(map[string]interface{})
@@ -114,6 +127,20 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 		env["md5"] = hashMD5
 		env["replaceRegex"] = replaceRegex
 
+		// On first record, check that expression identifiers exist as fields or known functions
+		if !validated {
+			validated = true
+			var missing []string
+			for _, id := range identifiers {
+				if _, ok := env[id]; !ok {
+					missing = append(missing, id)
+				}
+			}
+			if len(missing) > 0 {
+				return nil, fmt.Errorf("expression references unknown field(s): %s", strings.Join(missing, ", "))
+			}
+		}
+
 		// Execute the pre-compiled program with this record's environment
 		result, err := expr.Run(program, env)
 		if err != nil {
@@ -122,6 +149,28 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 
 		return result, nil
 	}, nil
+}
+
+// extractIdentifiers walks the AST and returns all identifier names.
+func extractIdentifiers(node ast.Node) []string {
+	var ids []string
+	seen := make(map[string]bool)
+	ast.Walk(&node, &identifierVisitor{ids: &ids, seen: seen})
+	return ids
+}
+
+type identifierVisitor struct {
+	ids  *[]string
+	seen map[string]bool
+}
+
+func (v *identifierVisitor) Visit(node *ast.Node) {
+	if n, ok := (*node).(*ast.IdentifierNode); ok {
+		if !v.seen[n.Value] {
+			v.seen[n.Value] = true
+			*v.ids = append(*v.ids, n.Value)
+		}
+	}
 }
 
 // CompileExprWithFields compiles an expression with known field names.
@@ -152,6 +201,18 @@ func CompileExprWithFields(expression string, fields []string) (func(ssql.Record
 	)
 	if err != nil {
 		return nil, fmt.Errorf("compile expression: %w", err)
+	}
+
+	// Validate identifiers against known fields at compile time
+	identifiers := extractIdentifiers(program.Node())
+	var missing []string
+	for _, id := range identifiers {
+		if _, ok := sampleEnv[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("expression references unknown field(s): %s", strings.Join(missing, ", "))
 	}
 
 	// Return a closure that evaluates the compiled program on a record
