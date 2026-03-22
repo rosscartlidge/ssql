@@ -29,6 +29,7 @@ Tracked issues and feature gaps discovered during development.
 ## Tab Completion
 
 - [ ] **`ssql from <tab>` should also complete filenames** — currently only shows subcommands (csv, ssh, parquet, etc.). Most users type `ssql from data.csv` directly without the subcommand, so file completion at this position would be more useful.
+- [ ] **WebVM: AUTOCLI field cache not set** — tab completion works for filenames but `AUTOCLI_CACHE_FILE`/`AUTOCLI_FIELDS` env vars don't propagate back to the parent shell in CheerpX's bash. This means field name completion after `-if` doesn't work in the WebVM terminal. Likely a CheerpX limitation with how bash completion functions export env vars. Works fine on real bash.
 
 ## Pipeline Optimizer (`generate ssql`)
 
