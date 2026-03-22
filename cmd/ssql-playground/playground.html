@@ -80,6 +80,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <button class="example-btn" onclick="loadExample(9)">Optimize — merges filters, sort+limit→top (click Optimize to see rewrite)</button>
     <button class="example-btn" onclick="loadExample(10)">Window — top 3 earners per department</button>
     <button class="example-btn" onclick="loadExample(11)">Optimize: SSH pushdown (shows rewritten pipeline — can't run, no SSH in browser)</button>
+    <button class="example-btn" onclick="loadExample(12)">Help — list all commands</button>
+    <button class="example-btn" onclick="loadExample(13)">Help — update command details</button>
 </div>
 
 <div class="datasets">
@@ -161,6 +163,8 @@ const EXAMPLES = [
 | ssql sort -desc cnt
 | ssql limit 10
 | ssql to table`,
+    `ssql -help`,
+    `ssql update -help`,
 ];
 
 // Examples that should auto-optimize instead of run (by index)
