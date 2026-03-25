@@ -5,6 +5,10 @@
 .PHONY: ai-test ai-test-go ai-test-cli
 .PHONY: wasm wasm-go
 
+VERSION := $(shell cat cmd/ssql/version/version.txt | tr -d '[:space:]')
+COMMIT := $(shell git rev-parse --short=8 HEAD)
+LDFLAGS := -X github.com/rosscartlidge/ssql/v4/cmd/ssql/version.Commit=$(COMMIT)
+
 # Default target
 help:
 	@echo "ssql Makefile Targets:"
@@ -61,7 +65,7 @@ build:
 	@echo "Building ssql..."
 	go build ./...
 	@echo "Building CLI tool..."
-	cd cmd/ssql && go build
+	cd cmd/ssql && go build -ldflags "$(LDFLAGS)"
 
 # Format code
 fmt:
@@ -135,7 +139,7 @@ deb: build-gpu
 	@# Standard package
 	rm -rf /tmp/ssql-deb
 	mkdir -p /tmp/ssql-deb/DEBIAN /tmp/ssql-deb/usr/bin
-	go build -o /tmp/ssql-deb/usr/bin/ssql ./cmd/ssql
+	go build -ldflags "$(LDFLAGS)" -o /tmp/ssql-deb/usr/bin/ssql ./cmd/ssql
 	printf 'Package: ssql\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: amd64\nDepends: libc6\nMaintainer: Ross Cartlidge <ross@cartlidge.com>\nDescription: Unix-style data processing tools\nHomepage: https://github.com/rosscartlidge/ssql\n' > /tmp/ssql-deb/DEBIAN/control
 	dpkg-deb --build /tmp/ssql-deb ssql_$(VERSION)_amd64.deb
 	@# GPU package
@@ -198,7 +202,7 @@ build-gpu: gpu
 	CGO_ENABLED=1 \
 	CGO_LDFLAGS="-L$(PWD)/gpu -L/usr/local/cuda/lib64" \
 	LD_LIBRARY_PATH="$(PWD)/gpu:/usr/local/cuda/lib64" \
-	go build -tags gpu -o ssql_gpu ./cmd/ssql
+	go build -tags gpu -ldflags "$(LDFLAGS)" -o ssql_gpu ./cmd/ssql
 	@echo "✓ Built ssql_gpu"
 	@echo ""
 	@echo "To run: LD_LIBRARY_PATH=$(PWD)/gpu ./ssql_gpu version"
@@ -259,7 +263,7 @@ wasm:
 # Build WASM playground (full CLI in browser)
 playground:
 	@echo "Building playground WASM (full ssql CLI)..."
-	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o cmd/ssql-playground/ssql-playground.wasm ./cmd/ssql-playground
+	GOOS=js GOARCH=wasm go build -ldflags="-s -w $(LDFLAGS)" -o cmd/ssql-playground/ssql-playground.wasm ./cmd/ssql-playground
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/ssql-playground/
 	@echo "✓ Built cmd/ssql-playground/ssql-playground.wasm ($$(du -h cmd/ssql-playground/ssql-playground.wasm | cut -f1) raw)"
 	@echo "Serve with: cd cmd/ssql-playground && python3 -m http.server 8080"
