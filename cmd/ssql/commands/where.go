@@ -54,12 +54,8 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Pre-compile all expressions ONCE before processing records
 			type clauseData struct {
-				matches []struct {
-					field string
-					op    string
-					value string
-				}
-				exprEvals []func(ssql.Record) (any, error)
+				conditions []Condition
+				exprEvals  []func(ssql.Record) (any, error)
 			}
 
 			var clauses []clauseData
@@ -74,28 +70,12 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 				cd := clauseData{}
 
-				// Parse -if conditions
-				if matchesRaw, ok := clause.Flags["-if"]; ok && matchesRaw != nil {
-					matches, ok := matchesRaw.([]any)
-					if ok {
-						for _, matchRaw := range matches {
-							matchMap, ok := matchRaw.(map[string]any)
-							if !ok {
-								continue
-							}
-							field, _ := matchMap["field"].(string)
-							op, _ := matchMap["operator"].(string)
-							value, _ := matchMap["value"].(string)
-							if field != "" && op != "" {
-								cd.matches = append(cd.matches, struct {
-									field string
-									op    string
-									value string
-								}{field, op, value})
-							}
-						}
-					}
+				// Parse -if conditions (validates operators)
+				conditions, err := parseConditions(clause.Flags["-if"])
+				if err != nil {
+					return err
 				}
+				cd.conditions = conditions
 
 				// Parse and compile -if-expr conditions ONCE
 				if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
@@ -120,10 +100,30 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				clauses = append(clauses, cd)
 			}
 
+			// Collect all field names from -if conditions for first-record validation
+			var allFilterFields []string
+			for _, cd := range clauses {
+				allFilterFields = append(allFilterFields, conditionFields(cd.conditions)...)
+			}
+
 			// Build filter that uses pre-compiled expressions
+			var filterErr error
+			validated := false
 			filter := func(r ssql.Record) bool {
+				if filterErr != nil {
+					return false
+				}
 				if len(clauses) == 0 {
 					return true
+				}
+
+				// On first record, validate that all -if field names exist
+				if !validated {
+					validated = true
+					if err := validateFields(r, allFilterFields, "where"); err != nil {
+						filterErr = err
+						return false
+					}
 				}
 
 				// OR logic between clauses
@@ -131,9 +131,9 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					clauseMatches := true
 
 					// Check -if conditions
-					for _, match := range clause.matches {
-						fieldValue, exists := ssql.Get[any](r, match.field)
-						if !exists || !applyOperator(fieldValue, match.op, match.value) {
+					for _, cond := range clause.conditions {
+						fieldValue, exists := ssql.Get[any](r, cond.Field)
+						if !exists || !applyOperator(fieldValue, cond.Operator, cond.Value) {
 							clauseMatches = false
 							break
 						}
@@ -181,6 +181,10 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Write output as JSONL (preserving schema if present)
 			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, filtered); err != nil {
 				return fmt.Errorf("writing output: %w", err)
+			}
+
+			if filterErr != nil {
+				return filterErr
 			}
 
 			return nil

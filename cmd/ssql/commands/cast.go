@@ -73,13 +73,31 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			records := lib.ReadJSONL(os.Stdin)
 
 			// Build cast filter that converts field types for ALL records
+			var castErr error
+			castValidated := false
 			castFilter := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
+				if castErr != nil {
+					return mut
+				}
 				frozen := mut.Freeze()
+
+				// Validate field names on first record
+				if !castValidated {
+					castValidated = true
+					var castFields []string
+					for f := range typeConversions {
+						castFields = append(castFields, f)
+					}
+					if err := validateFields(frozen, castFields, "cast"); err != nil {
+						castErr = err
+						return mut
+					}
+				}
 
 				for field, targetType := range typeConversions {
 					value, exists := ssql.Get[any](frozen, field)
 					if !exists {
-						continue // Skip fields that don't exist
+						continue
 					}
 
 					// Convert to target type
@@ -96,6 +114,10 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Write output as JSONL
 			if err := lib.WriteJSONL(os.Stdout, casted); err != nil {
 				return fmt.Errorf("writing output: %w", err)
+			}
+
+			if castErr != nil {
+				return castErr
 			}
 
 			return nil

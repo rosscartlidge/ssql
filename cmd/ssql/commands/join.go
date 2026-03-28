@@ -110,6 +110,18 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			rightSeq := rightSchemaAndRecords.Records
 			rightSchema := rightSchemaAndRecords.Schema
 
+			// Validate join field names against schemas
+			for _, clause := range clauses {
+				if leftSchema != nil && !leftSchema.HasField(clause.LeftField) {
+					return fmt.Errorf("join left field %q not found (available: %s)",
+						clause.LeftField, strings.Join(leftSchema.Fields, ", "))
+				}
+				if rightSchema != nil && !rightSchema.HasField(clause.RightField) {
+					return fmt.Errorf("join right field %q not found (available: %s)",
+						clause.RightField, strings.Join(rightSchema.Fields, ", "))
+				}
+			}
+
 			// For single clause without -as, use traditional join for full merge
 			// For multiple clauses or clauses with -as, use LookupJoin
 			if len(clauses) == 1 && len(clauses[0].FieldRenames) == 0 {

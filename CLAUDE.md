@@ -148,6 +148,7 @@ make wasm && go install ./cmd/ssql
 See `claude/cli-architecture.md` for full autocli patterns, subcommand registration, and examples.
 
 **Rules (never violate):**
+- **Fail loudly on invalid input** — unknown field names, unknown operators, and invalid flag values MUST terminate the command with a clear error message. NEVER silently produce empty or wrong results. Validate field names against the first record (list available fields in the error). Validate operators and constrained values at parse time. This applies in both normal execution and `-generate` code generation mode.
 - **`FieldsFromFlag("FILE")` for field name completion** — NEVER use `NoCompleter` when field names can be derived from a data file. This applies to `-if`, `-sum`, `-avg`, `-min`, `-max`, `-field`, `-group`, etc.
 - **`FieldValuesFrom("FILE", "field")` for field value completion** — complete with actual data values, not hints
 - **Every command MUST have 2-3 `.Example()` calls**

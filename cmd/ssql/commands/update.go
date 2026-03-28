@@ -70,11 +70,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Parse clauses - each clause has optional -if/-if-expr conditions and required -set/-set-expr operations
 			type updateClause struct {
-				conditions []struct {
-					field string
-					op    string
-					value string
-				}
+				conditions     []Condition
 				whereExprEvals []func(ssql.Record) (any, error) // For -if-expr (pre-compiled)
 				updates        []struct {
 					field    string
@@ -89,30 +85,12 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			for _, clause := range ctx.Clauses {
 				uc := updateClause{}
 
-				// Parse -match conditions (optional)
-				if matchesRaw, ok := clause.Flags["-if"]; ok && matchesRaw != nil {
-					matches, ok := matchesRaw.([]any)
-					if ok {
-						for _, matchRaw := range matches {
-							matchMap, ok := matchRaw.(map[string]any)
-							if !ok {
-								continue
-							}
-
-							field, _ := matchMap["field"].(string)
-							op, _ := matchMap["operator"].(string)
-							value, _ := matchMap["value"].(string)
-
-							if field != "" && op != "" {
-								uc.conditions = append(uc.conditions, struct {
-									field string
-									op    string
-									value string
-								}{field, op, value})
-							}
-						}
-					}
+				// Parse -if conditions (validates operators)
+				conditions, err := parseConditions(clause.Flags["-if"])
+				if err != nil {
+					return err
 				}
+				uc.conditions = conditions
 
 				// Parse -if-expr conditions and compile expressions ONCE
 				if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
@@ -243,8 +221,8 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					// Check all conditions in this clause (AND logic)
 					allMatch := true
 					for _, cond := range clause.conditions {
-						fieldValue, exists := ssql.Get[any](frozen, cond.field)
-						if !exists || !applyOperator(fieldValue, cond.op, cond.value) {
+						fieldValue, exists := ssql.Get[any](frozen, cond.Field)
+						if !exists || !applyOperator(fieldValue, cond.Operator, cond.Value) {
 							allMatch = false
 							break
 						}
@@ -416,11 +394,7 @@ func generateUpdateCode(ctx *cf.Context) error {
 
 	// Parse clauses - each clause has optional -match conditions and required -set/-set-expr operations
 	type updateClause struct {
-		conditions []struct {
-			field string
-			op    string
-			value string
-		}
+		conditions []Condition
 		whereExprs []string // For -if-expr expressions
 		updates    []struct {
 			field  string
@@ -434,30 +408,14 @@ func generateUpdateCode(ctx *cf.Context) error {
 	for _, clause := range ctx.Clauses {
 		uc := updateClause{}
 
-		// Parse -match conditions (optional)
-		if matchesRaw, ok := clause.Flags["-if"]; ok && matchesRaw != nil {
-			matches, ok := matchesRaw.([]any)
-			if ok {
-				for _, matchRaw := range matches {
-					matchMap, ok := matchRaw.(map[string]any)
-					if !ok {
-						continue
-					}
+		// Parse -if conditions (validates operators)
+		conditions, err := parseConditions(clause.Flags["-if"])
+		if err != nil {
+			return err
+		}
+		uc.conditions = conditions
 
-					field, _ := matchMap["field"].(string)
-					op, _ := matchMap["operator"].(string)
-					value, _ := matchMap["value"].(string)
-
-					if field != "" && op != "" {
-						uc.conditions = append(uc.conditions, struct {
-							field string
-							op    string
-							value string
-						}{field, op, value})
-					}
-				}
-			}
-
+		if clause.Flags["-if"] != nil {
 			// Parse -if-expr conditions (boolean expressions)
 			if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
 				exprs, ok := exprsRaw.([]any)
@@ -580,11 +538,11 @@ func generateUpdateCode(ctx *cf.Context) error {
 				if condCount > 0 {
 					codeBody.WriteString(" && ")
 				}
-				codeBody.WriteString(generateConditionCode(cond.field, cond.op, cond.value))
+				codeBody.WriteString(generateConditionCode(cond.Field, cond.Operator, cond.Value))
 				condCount++
 
 				// Track which imports are needed
-				switch cond.op {
+				switch cond.Operator {
 				case "contains", "startswith", "endswith":
 					needsStrings = true
 				case "regex":

@@ -109,6 +109,11 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
 			stdinRecords := schemaAndRecords.Records
 
+			// Validate merge fields against schema
+			if err := validateFieldsSchema(schemaAndRecords.Schema, byFields, "merge"); err != nil {
+				return err
+			}
+
 			// Open additional files as iterators
 			sources := make([]iter.Seq[ssql.Record], 0, len(files)+1)
 			sources = append(sources, stdinRecords)

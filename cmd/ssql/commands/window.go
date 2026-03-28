@@ -200,6 +200,18 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			records := schemaAndRecords.Records
 			inputSchema := schemaAndRecords.Schema
 
+			// Validate partition and order field names against schema
+			var windowFields []string
+			for _, cfg := range configs {
+				windowFields = append(windowFields, cfg.PartitionBy...)
+				for _, o := range cfg.OrderBy {
+					windowFields = append(windowFields, o.Field)
+				}
+			}
+			if err := validateFieldsSchema(inputSchema, windowFields, "window"); err != nil {
+				return err
+			}
+
 			if presorted {
 				// Streaming mode — O(1) memory per aggregate
 				streamFilter, err := ssql.StreamWindow(configs)

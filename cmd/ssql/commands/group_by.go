@@ -335,6 +335,18 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			records := schemaAndRecords.Records
 			inputSchema := schemaAndRecords.Schema
 
+			// Validate field names against schema
+			var fieldsToValidate []string
+			fieldsToValidate = append(fieldsToValidate, groupByFields...)
+			for _, spec := range aggSpecs {
+				if spec.field != "" { // count has no field
+					fieldsToValidate = append(fieldsToValidate, spec.field)
+				}
+			}
+			if err := validateFieldsSchema(inputSchema, fieldsToValidate, "group-by"); err != nil {
+				return err
+			}
+
 			// Check if we have any aggregations
 			hasAnyAgg := len(aggSpecs) > 0 || len(exprSpecs) > 0 || len(streamExprSpecs) > 0
 

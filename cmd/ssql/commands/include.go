@@ -64,6 +64,11 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
 			records := schemaAndRecords.Records
 
+			// Validate field names against schema
+			if err := validateFieldsSchema(schemaAndRecords.Schema, fields, "include"); err != nil {
+				return err
+			}
+
 			// Build included fields map
 			includedMap := make(map[string]bool)
 			for _, field := range fields {

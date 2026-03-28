@@ -82,6 +82,11 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
 			records := schemaAndRecords.Records
 
+			// Validate sort fields against schema
+			if err := validateFieldsSchema(schemaAndRecords.Schema, fields, "sort"); err != nil {
+				return err
+			}
+
 			// Sort using SortRecords (proper cross-type comparison)
 			result := ssql.SortRecords(orderBy)(records)
 

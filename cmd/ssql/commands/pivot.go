@@ -78,6 +78,12 @@ func RegisterPivot(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("pivot requires -row, -col, and -val flags")
 			}
 
+			// Validate aggregation function
+			validPivotFuncs := map[string]bool{"count": true, "sum": true, "avg": true, "min": true, "max": true}
+			if !validPivotFuncs[aggFunc] {
+				return fmt.Errorf("unknown pivot function %q (valid: count, sum, avg, min, max)", aggFunc)
+			}
+
 			if shouldGenerate(generate) {
 				return generatePivotCode(rowField, colField, valField, aggFunc)
 			}
@@ -85,6 +91,11 @@ func RegisterPivot(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Read JSONL from stdin (with schema if present)
 			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
 			records := schemaAndRecords.Records
+
+			// Validate field names against schema
+			if err := validateFieldsSchema(schemaAndRecords.Schema, []string{rowField, colField, valField}, "pivot"); err != nil {
+				return err
+			}
 
 			// Apply pivot
 			pivoted := ssql.Pivot(rowField, colField, valField, aggFunc)(records)

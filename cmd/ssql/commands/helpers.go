@@ -5,6 +5,7 @@ import (
 	"iter"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,113 @@ func extractNumeric(val any) float64 {
 	}
 }
 
-// applyOperator applies a comparison operator for where command
+// fieldNames returns the sorted field names from a record (for error messages).
+func fieldNames(r ssql.Record) []string {
+	var names []string
+	for k := range r.All() {
+		if k != "_row_number" {
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// validateFields checks that all given field names exist in the record.
+// Returns an error listing missing fields and available fields, or nil if all exist.
+func validateFields(r ssql.Record, fields []string, command string) error {
+	var missing []string
+	for _, f := range fields {
+		if _, exists := ssql.Get[any](r, f); !exists {
+			missing = append(missing, f)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%s references unknown field(s): %s (available: %s)",
+			command, strings.Join(missing, ", "), strings.Join(fieldNames(r), ", "))
+	}
+	return nil
+}
+
+// validateFieldsSchema checks that all given field names exist in the schema.
+// Returns an error listing missing fields and available fields, or nil if all exist.
+func validateFieldsSchema(schema *lib.Schema, fields []string, command string) error {
+	if schema == nil {
+		return nil // no schema to validate against
+	}
+	var missing []string
+	for _, f := range fields {
+		if !schema.HasField(f) {
+			missing = append(missing, f)
+		}
+	}
+	if len(missing) > 0 {
+		available := make([]string, len(schema.Fields))
+		copy(available, schema.Fields)
+		sort.Strings(available)
+		return fmt.Errorf("%s references unknown field(s): %s (available: %s)",
+			command, strings.Join(missing, ", "), strings.Join(available, ", "))
+	}
+	return nil
+}
+
+// Condition represents a parsed -if field operator value condition.
+type Condition struct {
+	Field    string
+	Operator string
+	Value    string
+}
+
+// parseConditions parses -if flag values from autocli into Conditions.
+// Validates that all operators are recognized. Returns an error for unknown operators.
+func parseConditions(flagValue any) ([]Condition, error) {
+	if flagValue == nil {
+		return nil, nil
+	}
+	matches, ok := flagValue.([]any)
+	if !ok {
+		return nil, nil
+	}
+	var conditions []Condition
+	for _, matchRaw := range matches {
+		matchMap, ok := matchRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		field, _ := matchMap["field"].(string)
+		op, _ := matchMap["operator"].(string)
+		value, _ := matchMap["value"].(string)
+		if field == "" || op == "" {
+			continue
+		}
+		if !validOperators[op] {
+			return nil, fmt.Errorf("unknown operator %q (valid: eq, ne, gt, ge, lt, le, contains, startswith, endswith, regex)", op)
+		}
+		conditions = append(conditions, Condition{field, op, value})
+	}
+	return conditions, nil
+}
+
+// conditionFields returns the unique field names from a slice of conditions.
+func conditionFields(conditions []Condition) []string {
+	seen := make(map[string]bool)
+	var fields []string
+	for _, c := range conditions {
+		if !seen[c.Field] {
+			seen[c.Field] = true
+			fields = append(fields, c.Field)
+		}
+	}
+	return fields
+}
+
+// applyOperator applies a comparison operator.
+// validOperators is the set of recognized comparison operators.
+var validOperators = map[string]bool{
+	"eq": true, "ne": true, "gt": true, "ge": true, "lt": true, "le": true,
+	"contains": true, "startswith": true, "endswith": true, "regex": true,
+}
+
 func applyOperator(fieldValue any, op string, compareValue string) bool {
 	switch op {
 	case "eq":
