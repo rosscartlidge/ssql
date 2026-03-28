@@ -70,12 +70,6 @@ Multi-step pushdown via `+` separator: `-- where -if x eq 1 + group-by dept`.
 - Optional `-parallel` flag for interleaved output (faster, non-deterministic)
 - Uses `errgroup` for error propagation
 
-## Phase 4: Glob support
-
-### 9. Explicit glob expansion
-
-For quoted globs (`ssql from csv '*.csv'`), detect `*`, `?` in filenames and expand via `filepath.Glob`. Shell-expanded globs already work once FILE is variadic.
-
 ## Key Decisions
 
 | Decision | Choice | Rationale |
@@ -86,6 +80,7 @@ For quoted globs (`ssql from csv '*.csv'`), detect `*`, `?` in filenames and exp
 | Missing fields | Absent in JSON output | Natural JSONL behavior |
 | Pushdown | `--` separator | Follows `from ssh`/`from catalog` patterns |
 | Bare form | First-file format inference | Simple, prevents mixed-format confusion |
+| Glob support | Not needed — shell does it | `ssql from csv *.csv` works once FILE is variadic |
 
 ## Critical Files
 
