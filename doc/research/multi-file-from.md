@@ -40,11 +40,7 @@ Open files lazily (next file when previous exhausted) to avoid fd limits. Pre-sc
 
 Optional flag adds a string field with the source filename to each record. Like catalog's `-shard-field`. Useful for provenance tracking.
 
-### 5. Bare `from` form
-
-`ssql from 1.csv 2.csv` — variadic, infer format from first file's extension, error if subsequent files have different extensions.
-
-### 6. Code generation
+### 5. Code generation
 
 - `generate go` emits `ssql.ReadMultiCSV(files)`
 - `generate sql` emits `read_csv_auto(['f1', 'f2', ...])`
@@ -79,7 +75,7 @@ Multi-step pushdown via `+` separator: `-- where -if x eq 1 + group-by dept`.
 | Ordering | Sequential by default | Deterministic, simpler |
 | Missing fields | Absent in JSON output | Natural JSONL behavior |
 | Pushdown | `--` separator | Follows `from ssh`/`from catalog` patterns |
-| Bare form | First-file format inference | Simple, prevents mixed-format confusion |
+| Bare form | Single file only | Multi-file is explicit format subcommands only |
 | Glob support | Not needed — shell does it | `ssql from csv *.csv` works once FILE is variadic |
 
 ## Critical Files
