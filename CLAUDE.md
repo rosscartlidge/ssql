@@ -41,6 +41,9 @@ Keep documentation in sync with API and CLI changes. Key files:
 
 ## Development Principles (CRITICAL)
 
+### Refactor While You Work
+Whenever fixing bugs or adding features, always look for opportunities to refactor and simplify the surrounding code. Extract shared helpers, remove duplication, simplify control flow. Leave the code better than you found it.
+
 ### If It's Not Tested, It Will Break
 Features without tests will eventually be removed during refactoring (learned when field/value completion was lost in v3.2.0).
 

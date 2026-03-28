@@ -1516,3 +1516,118 @@ func TestParameterizedStdinNoFlags(t *testing.T) {
 		t.Errorf("Stdin-only pipeline should not import flag, got:\n%s", outputStr)
 	}
 }
+
+// TestJoinFieldCollision tests join behavior with overlapping field names.
+func TestJoinFieldCollision(t *testing.T) {
+	// Build binary
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_join_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_join_test")
+
+	// Create test data
+	leftCSV := "id,name,score\n1,Alice,90\n2,Bob,80\n"
+	rightCSV := "id,name,grade\n1,Alice_R,A\n2,Bobby,B\n"
+	rightNoCollision := "id,grade\n1,A\n2,B\n"
+
+	os.WriteFile("/tmp/join_left.csv", []byte(leftCSV), 0644)
+	os.WriteFile("/tmp/join_right.csv", []byte(rightCSV), 0644)
+	os.WriteFile("/tmp/join_right_nocol.csv", []byte(rightNoCollision), 0644)
+	defer os.Remove("/tmp/join_left.csv")
+	defer os.Remove("/tmp/join_right.csv")
+	defer os.Remove("/tmp/join_right_nocol.csv")
+
+	ssql := "/tmp/ssql_join_test"
+
+	tests := []struct {
+		name      string
+		cmd       string
+		wantErr   string   // substring in stderr if error expected
+		wantCols  []string // field names expected in output
+		dontWant  []string // field names that should NOT appear
+		wantValue string   // substring that should appear in output
+	}{
+		{
+			name:    "collision errors by default",
+			cmd:     ssql + " from csv /tmp/join_left.csv | " + ssql + " join <(" + ssql + " from csv /tmp/join_right.csv) -using id",
+			wantErr: "join field collision: name",
+		},
+		{
+			name:      "suffix renames all right fields",
+			cmd:       ssql + " from csv /tmp/join_left.csv | " + ssql + " join <(" + ssql + " from csv /tmp/join_right.csv) -using id -suffix _right | " + ssql + " to table",
+			wantCols:  []string{"name", "name_right", "grade_right"},
+			wantValue: "Alice",
+		},
+		{
+			name:      "suffix preserves left values",
+			cmd:       ssql + " from csv /tmp/join_left.csv | " + ssql + " join <(" + ssql + " from csv /tmp/join_right.csv) -using id -suffix _right | " + ssql + " to table",
+			wantValue: "Alice_R", // should appear as name_right, not as name
+		},
+		{
+			name:     "exclude-right keeps only left fields",
+			cmd:      ssql + " from csv /tmp/join_left.csv | " + ssql + " join <(" + ssql + " from csv /tmp/join_right.csv) -using id -exclude-right | " + ssql + " to table",
+			wantCols: []string{"name", "score"},
+			dontWant: []string{"grade"},
+		},
+		{
+			name:      "exclude-right preserves left values",
+			cmd:       ssql + " from csv /tmp/join_left.csv | " + ssql + " join <(" + ssql + " from csv /tmp/join_right.csv) -using id -exclude-right | " + ssql + " to table",
+			wantValue: "Alice",
+			dontWant:  []string{"Alice_R"},
+		},
+		{
+			name:     "exclude-left keeps only right fields",
+			cmd:      ssql + " from csv /tmp/join_left.csv | " + ssql + " join <(" + ssql + " from csv /tmp/join_right.csv) -using id -exclude-left | " + ssql + " to table",
+			wantCols: []string{"grade"},
+			dontWant: []string{"score"},
+		},
+		{
+			name:      "as rename resolves collision",
+			cmd:       ssql + " from csv /tmp/join_left.csv | " + ssql + " join <(" + ssql + " from csv /tmp/join_right.csv) -using id -as name right_name | " + ssql + " to table",
+			wantCols:  []string{"name", "right_name"},
+			wantValue: "Alice",
+		},
+		{
+			name:      "no collision works without flags",
+			cmd:       ssql + " from csv /tmp/join_left.csv | " + ssql + " join <(" + ssql + " from csv /tmp/join_right_nocol.csv) -using id | " + ssql + " to table",
+			wantCols:  []string{"name", "score", "grade"},
+			wantValue: "Alice",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", tt.cmd)
+			output, err := cmd.CombinedOutput()
+			outputStr := string(output)
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Errorf("expected error containing %q, but command succeeded with: %s", tt.wantErr, outputStr)
+				} else if !strings.Contains(outputStr, tt.wantErr) {
+					t.Errorf("expected error containing %q, got: %s", tt.wantErr, outputStr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v\noutput: %s", err, outputStr)
+			}
+
+			for _, col := range tt.wantCols {
+				if !strings.Contains(outputStr, col) {
+					t.Errorf("expected output to contain column %q, got:\n%s", col, outputStr)
+				}
+			}
+			for _, col := range tt.dontWant {
+				if strings.Contains(outputStr, col) {
+					t.Errorf("expected output NOT to contain %q, got:\n%s", col, outputStr)
+				}
+			}
+			if tt.wantValue != "" && !strings.Contains(outputStr, tt.wantValue) {
+				t.Errorf("expected output to contain %q, got:\n%s", tt.wantValue, outputStr)
+			}
+		})
+	}
+}

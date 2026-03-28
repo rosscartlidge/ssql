@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"iter"
 	"os"
 	"strings"
 
@@ -51,6 +52,22 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Rename field from right side: -as <old> <new>").
 		Done().
+		Flag("-suffix").
+		String().
+		Global().
+		Default("").
+		Help("Add suffix to all right-side non-key fields: -suffix _right → name_right").
+		Done().
+		Flag("-exclude-left").
+		Bool().
+		Global().
+		Help("Exclude non-key fields from left side").
+		Done().
+		Flag("-exclude-right").
+		Bool().
+		Global().
+		Help("Exclude non-key fields from right side (only bring key + -as fields)").
+		Done().
 		Flag("FILE").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
@@ -59,8 +76,8 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Help("Right-side file (JSONL/JSON). For CSV: ssql join <(ssql from FILE) ...").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var rightFile, joinType string
-			var generate bool
+			var rightFile, joinType, suffix string
+			var generate, excludeLeft, excludeRight bool
 
 			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
 				rightFile = fileVal.(string)
@@ -72,6 +89,15 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
+			}
+			if sfxVal, ok := ctx.GlobalFlags["-suffix"]; ok {
+				suffix = sfxVal.(string)
+			}
+			if elVal, ok := ctx.GlobalFlags["-exclude-left"]; ok {
+				excludeLeft = elVal.(bool)
+			}
+			if erVal, ok := ctx.GlobalFlags["-exclude-right"]; ok {
+				excludeRight = erVal.(bool)
 			}
 
 			// Validate required file
@@ -122,9 +148,89 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
-			// For single clause without -as, use traditional join for full merge
-			// For multiple clauses or clauses with -as, use LookupJoin
-			if len(clauses) == 1 && len(clauses[0].FieldRenames) == 0 {
+			// Handle field collision, suffix, and exclude flags
+			if leftSchema != nil && rightSchema != nil {
+				// Collect join key fields
+				joinKeys := make(map[string]bool)
+				for _, c := range clauses {
+					joinKeys[c.LeftField] = true
+					if c.LeftField != c.RightField {
+						joinKeys[c.RightField] = true
+					}
+				}
+
+				leftFields := make(map[string]bool)
+				for _, f := range leftSchema.Fields {
+					leftFields[f] = true
+				}
+
+				// Apply -suffix to ALL non-key right fields (not just collisions)
+				if suffix != "" {
+					if len(clauses) > 0 && clauses[0].FieldRenames == nil {
+						clauses[0].FieldRenames = make(map[string]string)
+					}
+					for _, rf := range rightSchema.Fields {
+						if joinKeys[rf] || rf == "_row_number" {
+							continue
+						}
+						suffixed := rf + suffix
+						// Check suffixed name doesn't collide with left
+						if leftFields[suffixed] {
+							return fmt.Errorf("join: suffixed field %q collides with left-side field", suffixed)
+						}
+						clauses[0].FieldRenames[rf] = suffixed
+					}
+				}
+
+				// Check for remaining collisions (when no suffix and no exclude)
+				if suffix == "" && !excludeLeft && !excludeRight {
+					var collisions []string
+					for _, rf := range rightSchema.Fields {
+						if joinKeys[rf] || rf == "_row_number" {
+							continue
+						}
+						// Check if -as renames handle this field
+						renamed := false
+						for _, c := range clauses {
+							if _, ok := c.FieldRenames[rf]; ok {
+								renamed = true
+								break
+							}
+						}
+						if !renamed && leftFields[rf] {
+							collisions = append(collisions, rf)
+						}
+					}
+					if len(collisions) > 0 {
+						return fmt.Errorf("join field collision: %s exist in both sides — use -as to rename, -suffix to auto-rename, or -exclude-left/-exclude-right",
+							strings.Join(collisions, ", "))
+					}
+				}
+			}
+
+			// Collect join key fields for exclude logic
+			joinKeys := make(map[string]bool)
+			for _, c := range clauses {
+				joinKeys[c.LeftField] = true
+				if c.LeftField != c.RightField {
+					joinKeys[c.RightField] = true
+				}
+			}
+
+			// -exclude-right: set empty FieldRenames so LookupJoin copies nothing from right
+			if excludeRight {
+				for i := range clauses {
+					if clauses[i].FieldRenames == nil {
+						clauses[i].FieldRenames = make(map[string]string)
+					}
+				}
+			}
+
+			// Execute join
+			var joined iter.Seq[ssql.Record]
+			var outputSchema *lib.Schema
+
+			if len(clauses) == 1 && clauses[0].FieldRenames == nil && !excludeRight {
 				// Traditional join - merge all fields from right
 				clause := clauses[0]
 				var predicate ssql.JoinPredicate
@@ -148,19 +254,16 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					return fmt.Errorf("unsupported join type: %s", joinType)
 				}
 
-				joined := joinFilter(leftRecords)
+				joined = joinFilter(leftRecords)
 
 				// Build output schema by merging left and right schemas
-				var outputSchema *lib.Schema
 				if leftSchema != nil || rightSchema != nil {
 					outputSchema = lib.NewSchema()
-					// Add all fields from left schema
 					if leftSchema != nil {
 						for _, field := range leftSchema.Fields {
 							outputSchema.AddField(field, leftSchema.TypeOf(field))
 						}
 					}
-					// Add fields from right schema (if not already present)
 					if rightSchema != nil {
 						for _, field := range rightSchema.Fields {
 							if !outputSchema.HasField(field) {
@@ -169,38 +272,55 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						}
 					}
 				}
+			} else {
+				// Multi-clause, selective field lookup, or -exclude-right
+				joined = ssql.LookupJoin(rightSeq, clauses)(leftRecords)
 
-				if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, joined); err != nil {
-					return fmt.Errorf("writing output: %w", err)
+				// Build output schema: left schema + renamed fields
+				if leftSchema != nil || rightSchema != nil {
+					outputSchema = lib.NewSchema()
+					if leftSchema != nil {
+						for _, field := range leftSchema.Fields {
+							outputSchema.AddField(field, leftSchema.TypeOf(field))
+						}
+					}
+					for _, clause := range clauses {
+						for rightField, newName := range clause.FieldRenames {
+							typ := lib.TypeString
+							if rightSchema != nil && rightSchema.HasField(rightField) {
+								typ = rightSchema.TypeOf(rightField)
+							}
+							if !outputSchema.HasField(newName) {
+								outputSchema.AddField(newName, typ)
+							}
+						}
+					}
 				}
-				return nil
 			}
 
-			// Multi-clause or selective field lookup
-			joined := ssql.LookupJoin(rightSeq, clauses)(leftRecords)
-
-			// Build output schema: left schema + fields from -as renames
-			var outputSchema *lib.Schema
-			if leftSchema != nil || rightSchema != nil {
-				outputSchema = lib.NewSchema()
-				// Add all fields from left schema
-				if leftSchema != nil {
-					for _, field := range leftSchema.Fields {
-						outputSchema.AddField(field, leftSchema.TypeOf(field))
+			// Apply -exclude-left: remove non-key left fields from output
+			if excludeLeft && leftSchema != nil {
+				excludeFields := make(map[string]bool)
+				for _, f := range leftSchema.Fields {
+					if !joinKeys[f] {
+						excludeFields[f] = true
 					}
 				}
-				// Add renamed fields from clauses
-				for _, clause := range clauses {
-					for rightField, newName := range clause.FieldRenames {
-						// Get type from right schema if available
-						typ := "string" // default
-						if rightSchema != nil && rightSchema.HasField(rightField) {
-							typ = rightSchema.TypeOf(rightField)
-						}
-						if !outputSchema.HasField(newName) {
-							outputSchema.AddField(newName, typ)
+				joined = ssql.Select(func(r ssql.Record) ssql.Record {
+					mut := r.ToMutable()
+					for f := range excludeFields {
+						mut = mut.Delete(f)
+					}
+					return mut.Freeze()
+				})(joined)
+				if outputSchema != nil {
+					filtered := lib.NewSchema()
+					for _, f := range outputSchema.Fields {
+						if !excludeFields[f] {
+							filtered.AddField(f, outputSchema.TypeOf(f))
 						}
 					}
+					outputSchema = filtered
 				}
 			}
 
@@ -218,9 +338,7 @@ func parseJoinClauses(clauses []cf.Clause) []ssql.LookupClause {
 	var result []ssql.LookupClause
 
 	for _, clause := range clauses {
-		lc := ssql.LookupClause{
-			FieldRenames: make(map[string]string),
-		}
+		lc := ssql.LookupClause{}
 
 		// Parse -using flags (same field name both sides)
 		if usingRaw, ok := clause.Flags["-using"]; ok {
@@ -261,6 +379,9 @@ func parseJoinClauses(clauses []cf.Clause) []ssql.LookupClause {
 						oldName, _ := asMap["right-field"].(string)
 						newName, _ := asMap["new-name"].(string)
 						if oldName != "" && newName != "" {
+							if lc.FieldRenames == nil {
+								lc.FieldRenames = make(map[string]string)
+							}
 							lc.FieldRenames[oldName] = newName
 						}
 					}

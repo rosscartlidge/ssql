@@ -760,7 +760,7 @@ func mergeWithRenames(left, right Record, renames map[string]string) Record {
 	// Start with a copy of left
 	merged := maps.Collect(left.All())
 
-	if len(renames) == 0 {
+	if renames == nil {
 		// No renames specified - copy all right fields (standard merge)
 		maps.Insert(merged, right.All())
 	} else {
