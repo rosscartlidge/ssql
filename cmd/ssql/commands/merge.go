@@ -124,8 +124,11 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					return fmt.Errorf("opening %s: %w", file, err)
 				}
 				defer f.Close()
-				fileRecords := lib.ReadJSONL(f)
-				sources = append(sources, fileRecords)
+				fileSchemaAndRecords := lib.ReadJSONLWithSchema(f)
+				if fileSchemaAndRecords.Schema == nil {
+					return fmt.Errorf("file %s has no schema header — pipe through ssql first: <(ssql from jsonl %s)", file, file)
+				}
+				sources = append(sources, fileSchemaAndRecords.Records)
 			}
 
 			// Merge

@@ -136,6 +136,11 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			rightSeq := rightSchemaAndRecords.Records
 			rightSchema := rightSchemaAndRecords.Schema
 
+			// Require schema header on right side
+			if rightSchema == nil {
+				return fmt.Errorf("right-side file %s has no schema header — pipe through ssql first: ssql join <(ssql from jsonl %s) ...", rightFile, rightFile)
+			}
+
 			// Validate join field names against schemas
 			for _, clause := range clauses {
 				if leftSchema != nil && !leftSchema.HasField(clause.LeftField) {

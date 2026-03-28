@@ -963,7 +963,7 @@ func TestWriteJSONGeneration(t *testing.T) {
 		},
 		{
 			name:    "to json pretty mode",
-			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to json -pretty /tmp/output.json`,
+			cmdLine: `echo '{"type":"init","var":"records"}' | SSQLGO=1 /tmp/ssql_test to json /tmp/output.json`,
 			wantStrs: []string{
 				`"type":"final"`,
 				`ssql.WriteJSONPretty`,

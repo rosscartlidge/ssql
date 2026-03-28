@@ -158,6 +158,7 @@ See `claude/cli-architecture.md` for full autocli patterns, subcommand registrat
 - **Use `.Accumulate()` for repeated flags** (e.g., `-if` appearing multiple times)
 - **NEVER use in-argument delimiters or comma-separated values in a single flag** — use `.Accumulate()` for multiple values instead. BAD: `-columns "a,b,c"` or `-rename "old:new"`. GOOD: `-columns a -columns b -columns c` or `-as old new`. This applies to ALL flags that accept multiple values.
 - **All data commands MUST support stdin/stdout** for Unix pipelines
+- **Commands that accept file inputs (join, merge, union) MUST require schema-header JSONL** — plain JSONL without a `_schema` header will silently lose field information. Error with a message suggesting `<(ssql from jsonl FILE)` to add the schema. Only `ssql from jsonl` accepts plain JSONL.
 - **Add new commands to `TestFieldCompletionConfiguration`** in `completion_test.go`
 - **Debug completion with `-complete N`** — e.g., `./ssql -complete 5 from catalog file.csv -if ""`
 - See `claude/completion-system.md` for field cache mechanism, SSH warmup, catalog completion, and debugging guide

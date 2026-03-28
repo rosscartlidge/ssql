@@ -15,13 +15,14 @@ import (
 // RegisterTo registers the to subcommand with nested format subcommands
 func RegisterTo(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	toCmd := cmd.Subcommand("to").
-		Description("Write output in various formats (table, csv, tsv, json, xlsx, chart, animate, explore, wav)")
+		Description("Write output in various formats (table, csv, tsv, json, jsonl, xlsx, chart, animate, explore, wav)")
 
 	// Register nested subcommands
 	registerToTable(toCmd)
 	registerToCSV(toCmd)
 	registerToTSV(toCmd)
 	registerToJSON(toCmd)
+	registerToJSONL(toCmd)
 	registerToArrow(toCmd)
 	registerToParquet(toCmd)
 	registerToWAV(toCmd)
@@ -251,72 +252,110 @@ func registerToTSV(cmd *cf.SubcommandBuilder) {
 		Done()
 }
 
-// registerToJSON registers the "to json" subcommand
+// registerToJSON registers the "to json" subcommand (pretty-printed JSON array)
 func registerToJSON(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("json").
-		Description("Write as JSONL (default) or pretty JSON array (-pretty)").
-		Example("ssql from data.csv | ssql to json", "Convert CSV to JSONL").
-		Example("ssql from data.csv | ssql to json -pretty > output.json", "Convert CSV to pretty JSON array").
+		Description("Write as pretty-printed JSON array").
+		Example("ssql from data.csv | ssql to json", "Convert CSV to pretty JSON").
+		Example("ssql from data.csv | ssql to json output.json", "Write pretty JSON to file").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
 		Done().
-		Flag("-pretty", "-p").
-		Bool().
-		Global().
-		Help("Pretty-print as JSON array (default: JSONL)").
-		Done().
 		Flag("FILE").
 		String().
-		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
+		Completer(&cf.FileCompleter{Pattern: "*.json"}).
 		Global().
 		Default("").
-		Help("Output JSON/JSONL file (or stdout if not specified)").
+		Help("Output JSON file (or stdout if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
-			var pretty bool
 			var generate bool
 
 			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
 				outputFile = fileVal.(string)
 			}
-
-			if prettyVal, ok := ctx.GlobalFlags["-pretty"]; ok {
-				pretty = prettyVal.(bool)
-			}
-
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
 
-			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateToJSONCode(outputFile, pretty)
+				return generateToJSONCode(outputFile, true)
 			}
 
-			// Read JSONL from stdin (with schema if present)
 			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
 			records := schemaAndRecords.Records
 
-			// Get field order from schema if present
 			var fieldOrder []string
 			if schemaAndRecords.Schema != nil {
 				fieldOrder = schemaAndRecords.Schema.Fields
 			}
 
-			// Write to stdout or file
 			if outputFile == "" {
-				return lib.WriteJSONWithFieldOrder(os.Stdout, records, pretty, fieldOrder)
-			} else {
-				output, err := lib.OpenOutput(outputFile)
-				if err != nil {
-					return err
-				}
-				defer output.Close()
-				return lib.WriteJSONWithFieldOrder(output, records, pretty, fieldOrder)
+				return lib.WriteJSONWithFieldOrder(os.Stdout, records, true, fieldOrder)
 			}
+			output, err := lib.OpenOutput(outputFile)
+			if err != nil {
+				return err
+			}
+			defer output.Close()
+			return lib.WriteJSONWithFieldOrder(output, records, true, fieldOrder)
+		}).
+		Done()
+}
+
+// registerToJSONL registers the "to jsonl" subcommand (one JSON object per line)
+func registerToJSONL(cmd *cf.SubcommandBuilder) {
+	cmd.Subcommand("jsonl").
+		Description("Write as JSONL (one JSON object per line)").
+		Example("ssql from data.csv | ssql to jsonl", "Convert CSV to JSONL").
+		Example("ssql from data.csv | ssql to jsonl output.jsonl", "Write JSONL to file").
+		Flag("-generate", "-g").
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
+		Flag("FILE").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
+		Global().
+		Default("").
+		Help("Output JSONL file (or stdout if not specified)").
+		Done().
+		Handler(func(ctx *cf.Context) error {
+			var outputFile string
+			var generate bool
+
+			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
+				outputFile = fileVal.(string)
+			}
+			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
+				generate = genVal.(bool)
+			}
+
+			if shouldGenerate(generate) {
+				return generateToJSONCode(outputFile, false)
+			}
+
+			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			records := schemaAndRecords.Records
+
+			var fieldOrder []string
+			if schemaAndRecords.Schema != nil {
+				fieldOrder = schemaAndRecords.Schema.Fields
+			}
+
+			if outputFile == "" {
+				return lib.WriteJSONWithFieldOrder(os.Stdout, records, false, fieldOrder)
+			}
+			output, err := lib.OpenOutput(outputFile)
+			if err != nil {
+				return err
+			}
+			defer output.Close()
+			return lib.WriteJSONWithFieldOrder(output, records, false, fieldOrder)
 		}).
 		Done()
 }
