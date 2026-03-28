@@ -102,15 +102,26 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 func registerFromCSV(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("csv").
-		Description("Read CSV file or stdin").
+		Description("Read CSV file(s) or stdin").
 		Example("ssql from csv data.csv | ssql to table", "Read CSV file").
-		Example("cat data.csv | ssql from csv | ssql to json", "Read CSV from stdin").
+		Example("ssql from csv *.csv | ssql to table", "Read multiple CSV files").
+		Example("ssql from csv *.csv -merge-schemas | ssql to table", "Merge files with different headers").
 		Example("ssql from csv data.csv -type zipcode string -type phone string", "Force fields to string").
-		Example("ssql from csv data.csv -default-type string", "Treat all fields as strings").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
+		Done().
+		Flag("-merge-schemas").
+		Bool().
+		Global().
+		Help("Allow files with different headers (merge schemas)").
+		Done().
+		Flag("-source").
+		String().
+		Global().
+		Default("").
+		Help("Add field with source filename: -source file").
 		Done().
 		Flag("-type", "-t").
 		Arg("field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
@@ -128,22 +139,42 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Done().
 		Flag("FILE").
 		String().
+		Variadic().
 		Completer(&cf.FileCompleter{Pattern: "*.csv"}).
 		Global().
 		Default("").
-		Help("Input CSV file (or stdin if not specified)").
+		Help("Input CSV file(s) (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var inputFile string
-			var generate bool
-			var defaultType string
+			var files []string
+			var generate, mergeSchemas bool
+			var defaultType, sourceField string
 			typeOverrides := make(map[string]string)
 
-			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
+			if filesVal, ok := ctx.GlobalFlags["FILE"]; ok {
+				switch v := filesVal.(type) {
+				case []string:
+					files = v
+				case []any:
+					for _, item := range v {
+						if s, ok := item.(string); ok {
+							files = append(files, s)
+						}
+					}
+				case string:
+					if v != "" {
+						files = []string{v}
+					}
+				}
 			}
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
+			}
+			if msVal, ok := ctx.GlobalFlags["-merge-schemas"]; ok {
+				mergeSchemas = msVal.(bool)
+			}
+			if srcVal, ok := ctx.GlobalFlags["-source"]; ok {
+				sourceField = srcVal.(string)
 			}
 			if dtVal, ok := ctx.GlobalFlags["-default-type"]; ok {
 				defaultType = dtVal.(string)
@@ -152,106 +183,167 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 				typeOverrides = parseTypeOverrides(typeVal)
 			}
 
-			return executeFromCSV(inputFile, typeOverrides, defaultType, generate)
+			if len(files) <= 1 {
+				inputFile := ""
+				if len(files) == 1 {
+					inputFile = files[0]
+				}
+				return executeFromCSV(inputFile, typeOverrides, defaultType, generate)
+			}
+
+			return executeFromMultiCSV(files, typeOverrides, defaultType, mergeSchemas, sourceField, generate)
 		}).
 		Done()
 }
 
 func registerFromTSV(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("tsv").
-		Description("Read TSV file or stdin").
+		Description("Read TSV file(s) or stdin").
 		Example("ssql from tsv data.tsv | ssql to table", "Read TSV file").
-		Example("cat data.tsv | ssql from tsv | ssql to json", "Read TSV from stdin").
+		Example("ssql from tsv *.tsv | ssql to table", "Read multiple TSV files").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
 		Done().
+		Flag("-merge-schemas").
+		Bool().
+		Global().
+		Help("Allow files with different headers (merge schemas)").
+		Done().
+		Flag("-source").
+		String().
+		Global().
+		Default("").
+		Help("Add field with source filename: -source file").
+		Done().
 		Flag("FILE").
 		String().
+		Variadic().
 		Completer(&cf.FileCompleter{Pattern: "*.tsv"}).
 		Global().
 		Default("").
-		Help("Input TSV file (or stdin if not specified)").
+		Help("Input TSV file(s) (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var inputFile string
-			var generate bool
+			cfg := extractMultiFileConfig(ctx)
 
-			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
-			}
-			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
-				generate = genVal.(bool)
+			if len(cfg.files) <= 1 {
+				inputFile := ""
+				if len(cfg.files) == 1 {
+					inputFile = cfg.files[0]
+				}
+				return executeFromTSV(inputFile, cfg.generate)
 			}
 
-			return executeFromTSV(inputFile, generate)
+			readFile := func(file *os.File) iter.Seq[ssql.Record] {
+				return ssql.ReadTSVFromReader(file)
+			}
+			readHeaders := func(filename string) ([]string, error) {
+				file, err := os.Open(filename)
+				if err != nil {
+					return nil, err
+				}
+				defer file.Close()
+				return readTSVHeaders(file)
+			}
+			return executeFromMultiFile(cfg, "TSV", readFile, readHeaders)
 		}).
 		Done()
 }
 
 func registerFromJSON(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("json").
-		Description("Read JSON file or stdin").
+		Description("Read JSON file(s) or stdin").
 		Example("ssql from json data.json | ssql to table", "Read JSON file").
-		Example("curl -s api/data | ssql from json | ssql to table", "Read JSON from stdin").
+		Example("ssql from json *.json | ssql to table", "Read multiple JSON files").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
 		Done().
+		Flag("-merge-schemas").
+		Bool().
+		Global().
+		Help("Allow files with different fields (merge schemas)").
+		Done().
+		Flag("-source").
+		String().
+		Global().
+		Default("").
+		Help("Add field with source filename: -source file").
+		Done().
 		Flag("FILE").
 		String().
+		Variadic().
 		Completer(&cf.FileCompleter{Pattern: "*.json"}).
 		Global().
 		Default("").
-		Help("Input JSON file (or stdin if not specified)").
+		Help("Input JSON file(s) (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var inputFile string
-			var generate bool
+			cfg := extractMultiFileConfig(ctx)
 
-			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
-			}
-			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
-				generate = genVal.(bool)
+			if len(cfg.files) <= 1 {
+				inputFile := ""
+				if len(cfg.files) == 1 {
+					inputFile = cfg.files[0]
+				}
+				return executeFromJSON(inputFile, cfg.generate)
 			}
 
-			return executeFromJSON(inputFile, generate)
+			readFile := func(file *os.File) iter.Seq[ssql.Record] {
+				return readJSONSchemaAware(file)
+			}
+			return executeFromMultiFile(cfg, "JSON", readFile, nil)
 		}).
 		Done()
 }
 
 func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("jsonl").
-		Description("Read JSONL file or stdin").
+		Description("Read JSONL file(s) or stdin").
 		Example("ssql from jsonl data.jsonl | ssql to table", "Read JSONL file").
-		Example("cat data.jsonl | ssql from jsonl | ssql to table", "Read JSONL from stdin").
+		Example("ssql from jsonl *.jsonl | ssql to table", "Read multiple JSONL files").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
 		Done().
+		Flag("-merge-schemas").
+		Bool().
+		Global().
+		Help("Allow files with different fields (merge schemas)").
+		Done().
+		Flag("-source").
+		String().
+		Global().
+		Default("").
+		Help("Add field with source filename: -source file").
+		Done().
 		Flag("FILE").
 		String().
+		Variadic().
 		Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
 		Global().
 		Default("").
-		Help("Input JSONL file (or stdin if not specified)").
+		Help("Input JSONL file(s) (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var inputFile string
-			var generate bool
+			cfg := extractMultiFileConfig(ctx)
 
-			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
-			}
-			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
-				generate = genVal.(bool)
+			if len(cfg.files) <= 1 {
+				inputFile := ""
+				if len(cfg.files) == 1 {
+					inputFile = cfg.files[0]
+				}
+				return executeFromJSON(inputFile, cfg.generate)
 			}
 
-			return executeFromJSON(inputFile, generate)
+			readFile := func(file *os.File) iter.Seq[ssql.Record] {
+				return readJSONSchemaAware(file)
+			}
+			return executeFromMultiFile(cfg, "JSONL", readFile, nil)
 		}).
 		Done()
 }
@@ -1122,6 +1214,244 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: csvHeaders})
 }
 
+// executeFromMultiCSV reads multiple CSV files and outputs merged JSONL.
+func executeFromMultiCSV(files []string, typeOverrides map[string]string, defaultType string, mergeSchemas bool, sourceField string, generate bool) error {
+	csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
+	if err != nil {
+		return err
+	}
+
+	cfg := multiFileConfig{
+		files:        files,
+		mergeSchemas: mergeSchemas,
+		sourceField:  sourceField,
+		generate:     generate,
+	}
+
+	readFile := func(file *os.File) iter.Seq[ssql.Record] {
+		return ssql.ReadCSVFromReader(file, csvConfig)
+	}
+
+	readHeaders := func(filename string) ([]string, error) {
+		file, err := os.Open(filename)
+		if err != nil {
+			return nil, fmt.Errorf("opening %s: %w", filename, err)
+		}
+		defer file.Close()
+		return readCSVHeadersFromReader(file)
+	}
+
+	return executeFromMultiFile(cfg, "CSV", readFile, readHeaders)
+}
+
+// mergeCSVHeaders checks or merges headers from multiple files.
+func mergeCSVHeaders(allHeaders [][]string, files []string, merge bool) ([]string, error) {
+	if len(allHeaders) == 0 {
+		return nil, fmt.Errorf("no files specified")
+	}
+
+	first := allHeaders[0]
+
+	if !merge {
+		// Require identical headers
+		firstSet := make(map[string]bool, len(first))
+		for _, h := range first {
+			firstSet[h] = true
+		}
+		for i := 1; i < len(allHeaders); i++ {
+			if len(allHeaders[i]) != len(first) {
+				return nil, fmt.Errorf("schema mismatch: %s has %d fields, %s has %d — use -merge-schemas to combine",
+					files[0], len(first), files[i], len(allHeaders[i]))
+			}
+			for j, h := range allHeaders[i] {
+				if h != first[j] {
+					return nil, fmt.Errorf("schema mismatch: field %d is %q in %s but %q in %s — use -merge-schemas to combine",
+						j+1, first[j], files[0], h, files[i])
+				}
+			}
+		}
+		return first, nil
+	}
+
+	// Merge: union of all fields, preserving order from first file
+	seen := make(map[string]bool)
+	var merged []string
+	for _, headers := range allHeaders {
+		for _, h := range headers {
+			if !seen[h] {
+				seen[h] = true
+				merged = append(merged, h)
+			}
+		}
+	}
+	return merged, nil
+}
+
+// generateFromMultiCSVCode generates Go code for multi-file CSV reading.
+func generateFromMultiCSVCode(files []string, typeOverrides map[string]string, defaultType string, sourceField string) error {
+	// For now, generate code that reads files sequentially
+	// TODO: implement proper multi-file code generation
+	return fmt.Errorf("code generation for multi-file CSV not yet implemented — use single file with -generate")
+}
+
+// multiFileConfig holds common options for multi-file reading.
+type multiFileConfig struct {
+	files        []string
+	mergeSchemas bool
+	sourceField  string
+	generate     bool
+}
+
+// extractMultiFileConfig extracts multi-file flags from autocli context.
+func extractMultiFileConfig(ctx *cf.Context) multiFileConfig {
+	var cfg multiFileConfig
+
+	if filesVal, ok := ctx.GlobalFlags["FILE"]; ok {
+		switch v := filesVal.(type) {
+		case []string:
+			cfg.files = v
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					cfg.files = append(cfg.files, s)
+				}
+			}
+		case string:
+			if v != "" {
+				cfg.files = []string{v}
+			}
+		}
+	}
+	if msVal, ok := ctx.GlobalFlags["-merge-schemas"]; ok {
+		cfg.mergeSchemas = msVal.(bool)
+	}
+	if srcVal, ok := ctx.GlobalFlags["-source"]; ok {
+		cfg.sourceField = srcVal.(string)
+	}
+	if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
+		cfg.generate = genVal.(bool)
+	}
+	return cfg
+}
+
+// fileReaderFunc opens a file and returns a record iterator.
+type fileReaderFunc func(file *os.File) iter.Seq[ssql.Record]
+
+// headerReaderFunc reads headers from a file (for CSV/TSV). Returns nil for formats without headers.
+type headerReaderFunc func(filename string) ([]string, error)
+
+// executeFromMultiFile reads multiple files of any format and outputs merged JSONL.
+func executeFromMultiFile(cfg multiFileConfig, format string, readFile fileReaderFunc, readHeaders headerReaderFunc) error {
+	if cfg.generate {
+		return fmt.Errorf("code generation for multi-file %s not yet implemented — use single file with -generate", format)
+	}
+
+	var mergedHeaders []string
+
+	// For formats with headers (CSV, TSV), pre-scan and validate
+	if readHeaders != nil {
+		allHeaders := make([][]string, len(cfg.files))
+		for i, f := range cfg.files {
+			headers, err := readHeaders(f)
+			if err != nil {
+				return fmt.Errorf("reading headers from %s: %w", f, err)
+			}
+			allHeaders[i] = headers
+		}
+		var err error
+		mergedHeaders, err = mergeCSVHeaders(allHeaders, cfg.files, cfg.mergeSchemas)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Build schema from first file's first record
+	firstFile, err := os.Open(cfg.files[0])
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", cfg.files[0], err)
+	}
+	firstRecords := readFile(firstFile)
+	next, stop := iter.Pull(firstRecords)
+	firstRecord, hasFirst := next()
+	stop()
+	firstFile.Close()
+
+	// For headerless formats (JSON/JSONL), derive headers from first record
+	if readHeaders == nil && hasFirst {
+		var firstFields []string
+		for k := range firstRecord.All() {
+			firstFields = append(firstFields, k)
+		}
+		sort.Strings(firstFields)
+		mergedHeaders = firstFields
+
+		// Scan remaining files' first records for schema validation/merge
+		if len(cfg.files) > 1 {
+			allHeaders := [][]string{firstFields}
+			for _, f := range cfg.files[1:] {
+				file, err := os.Open(f)
+				if err != nil {
+					return fmt.Errorf("opening %s: %w", f, err)
+				}
+				recs := readFile(file)
+				nextR, stopR := iter.Pull(recs)
+				rec, ok := nextR()
+				stopR()
+				file.Close()
+				if ok {
+					var fields []string
+					for k := range rec.All() {
+						fields = append(fields, k)
+					}
+					sort.Strings(fields)
+					allHeaders = append(allHeaders, fields)
+				}
+			}
+			mergedHeaders, err = mergeCSVHeaders(allHeaders, cfg.files, cfg.mergeSchemas)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	schema := lib.NewSchema()
+	if hasFirst {
+		for _, h := range mergedHeaders {
+			if v, exists := ssql.Get[any](firstRecord, h); exists {
+				schema.AddField(h, lib.InferTypeString(v))
+			} else {
+				schema.AddField(h, lib.TypeString)
+			}
+		}
+	}
+	if cfg.sourceField != "" {
+		schema.AddField(cfg.sourceField, lib.TypeString)
+	}
+
+	// Concatenate records from all files, lazily
+	records := func(yield func(ssql.Record) bool) {
+		for i, f := range cfg.files {
+			file, err := os.Open(f)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error opening %s: %v\n", f, err)
+				return
+			}
+			for r := range readFile(file) {
+				if cfg.sourceField != "" {
+					r = r.ToMutable().String(cfg.sourceField, cfg.files[i]).Freeze()
+				}
+				if !yield(r) {
+					file.Close()
+					return
+				}
+			}
+			file.Close()
+		}
+	}
+
+	return lib.WriteJSONLWithSchema(os.Stdout, schema, records)
+}
+
 // executeFromTSV handles TSV reading for both the subcommand and bare form.
 func executeFromTSV(inputFile string, generate bool) error {
 	if shouldGenerate(generate) {
@@ -1367,6 +1697,16 @@ func readCSVHeadersFromReader(r io.Reader) ([]string, error) {
 		return nil, err
 	}
 	return headers, nil
+}
+
+func readTSVHeaders(r io.Reader) ([]string, error) {
+	scanner := bufio.NewScanner(r)
+	if !scanner.Scan() {
+		return nil, fmt.Errorf("empty file")
+	}
+	header := scanner.Text()
+	sep := ssql.DetectTSVSeparator(header)
+	return strings.Split(header, string(sep)), nil
 }
 
 // writeWithInferredSchemaOptions configures writeWithInferredSchema behavior
