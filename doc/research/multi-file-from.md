@@ -16,9 +16,11 @@ Change `String()` to `StringSlice().Variadic()` on `from csv`, `from tsv`, `from
 
 Follows the `merge` command pattern for variadic file args.
 
-### 2. Schema merging
+### 2. Schema handling
 
-Add `MergeSchemas()` to `lib/schema.go`:
+**Default: require identical schemas.** All files must have the same fields and types. Error on mismatch: `"schemas differ — use -merge-schemas to combine"`.
+
+**`-merge-schemas` flag:** opt-in to merge different schemas. Add `MergeSchemas()` to `lib/schema.go`:
 - Union of all field sets
 - Type widening on conflicts: `int64 + float64 → float64`, `int + string → string`
 - Field order: first file's order, then appended new fields from subsequent files
@@ -71,7 +73,7 @@ Multi-step pushdown via `+` separator: `-- where -if x eq 1 + group-by dept`.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Variadic mechanism | `StringSlice().Variadic()` | Follows `merge` command pattern |
-| Schema merge | Union with type widening | Matches SQL UNION semantics |
+| Schema merge | Identical required by default, `-merge-schemas` to combine | Safe default, opt-in flexibility |
 | Ordering | Sequential by default | Deterministic, simpler |
 | Missing fields | Absent in JSON output | Natural JSONL behavior |
 | Pushdown | `--` separator | Follows `from ssh`/`from catalog` patterns |
