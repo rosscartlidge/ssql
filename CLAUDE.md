@@ -172,6 +172,7 @@ See `claude/code-generation.md` for fragment system, testing patterns, and full 
 - **All errors must cause pipeline failure** with clear messages (use error fragments in generation mode)
 - **When adding new CLI features**: (1) add function to ssql package, (2) use it in CLI, (3) generate code that calls it
 - **Test generation**: add tests to `cmd/ssql/generation_test.go`, test full pipeline round-trip
+- **When changing a command, test ALL generate formats** — `generate go`, `generate sql`, and `generate ssql` may each have their own translation logic (e.g. SQL assembler parses the Command string). A feature that works in execution mode can silently break in generation.
 - **`generate sql` reuses the same fragments** — no separate SQL generation path needed per command. The SQL assembler parses the `Command` string from each fragment.
 
 ## WASM Playground Rules

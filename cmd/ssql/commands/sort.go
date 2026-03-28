@@ -15,14 +15,15 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("sort").
 		Description("Sort records by one or more fields").
 		Example("ssql from data.csv | ssql sort name", "Sort by name ascending").
-		Example("ssql from data.csv | ssql sort dept age", "Sort by dept then age").
-		Example("ssql from sales.csv | ssql sort amount -desc", "Sort by amount descending").
+		Example("ssql from data.csv | ssql sort dept -desc salary", "Sort by dept descending, then salary ascending").
+		Example("ssql from data.csv | ssql sort dept - salary -desc", "Sort by dept ascending, salary descending").
+		ClauseDescription("Each clause specifies fields with a sort direction").
 		Flag("FIELDS").
 		String().
 		Variadic().
 		Required().
 		FieldsFromFlag("").
-		Global().
+		Local().
 		Help("Fields to sort by").
 		Done().
 		Flag("-generate", "-g").
@@ -32,45 +33,60 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-desc", "-d").
 		Bool().
-		Global().
-		Help("Sort descending").
+		Local().
+		Help("Sort descending (applies to fields in this clause)").
+		Done().
+		Flag("-asc", "-a").
+		Bool().
+		Local().
+		Help("Sort ascending (default, applies to fields in this clause)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var fields []string
-			var desc bool
 			var generate bool
-
-			if fieldsVal, ok := ctx.GlobalFlags["FIELDS"]; ok {
-				switch v := fieldsVal.(type) {
-				case []string:
-					fields = v
-				case []any:
-					for _, item := range v {
-						if s, ok := item.(string); ok {
-							fields = append(fields, s)
-						}
-					}
-				case string:
-					fields = []string{v}
-				}
-			}
-
-			if descVal, ok := ctx.GlobalFlags["-desc"]; ok {
-				desc = descVal.(bool)
-			}
-
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
 
-			if len(fields) == 0 {
-				return fmt.Errorf("no sort fields specified")
+			// Parse clauses into OrderField slice
+			var orderBy []ssql.OrderField
+			seen := make(map[string]bool)
+
+			for _, clause := range ctx.Clauses {
+				var fields []string
+				var desc bool
+
+				if fieldsVal, ok := clause.Flags["FIELDS"]; ok {
+					switch v := fieldsVal.(type) {
+					case []string:
+						fields = v
+					case []any:
+						for _, item := range v {
+							if s, ok := item.(string); ok {
+								fields = append(fields, s)
+							}
+						}
+					case string:
+						if v != "" {
+							fields = []string{v}
+						}
+					}
+				}
+
+				if descVal, ok := clause.Flags["-desc"]; ok {
+					desc = descVal.(bool)
+				}
+
+				for _, f := range fields {
+					if seen[f] {
+						return fmt.Errorf("sort: field %q specified more than once", f)
+					}
+					seen[f] = true
+					orderBy = append(orderBy, ssql.OrderField{Field: f, Desc: desc})
+				}
 			}
 
-			// Build OrderField slice
-			orderBy := make([]ssql.OrderField, len(fields))
-			for i, f := range fields {
-				orderBy[i] = ssql.OrderField{Field: f, Desc: desc}
+			if len(orderBy) == 0 {
+				return fmt.Errorf("no sort fields specified")
 			}
 
 			// Check if generation is enabled (flag or env var)
@@ -83,7 +99,11 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			records := schemaAndRecords.Records
 
 			// Validate sort fields against schema
-			if err := validateFieldsSchema(schemaAndRecords.Schema, fields, "sort"); err != nil {
+			var fieldNames []string
+			for _, of := range orderBy {
+				fieldNames = append(fieldNames, of.Field)
+			}
+			if err := validateFieldsSchema(schemaAndRecords.Schema, fieldNames, "sort"); err != nil {
 				return err
 			}
 

@@ -339,19 +339,42 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 }
 
 func translateSort(q *sqlQuery, args []string) error {
-	desc := false
+	// Parse fields with per-clause direction: "dept - salary -desc"
+	// The "-" is a clause separator; -desc/-asc apply to all fields in their clause.
+	// We collect fields per clause, then apply the clause's direction.
+	type sortClause struct {
+		fields []string
+		desc   bool
+	}
+	var clauses []sortClause
+	current := sortClause{}
+
 	for _, arg := range args {
 		switch arg {
 		case "-desc", "-d":
-			desc = true
+			current.desc = true
 		case "-asc", "-a":
-			desc = false
+			current.desc = false
+		case "-":
+			if len(current.fields) > 0 {
+				clauses = append(clauses, current)
+			}
+			current = sortClause{}
 		default:
 			if strings.HasPrefix(arg, "-") {
 				continue
 			}
-			entry := quoteIdent(arg)
-			if desc {
+			current.fields = append(current.fields, arg)
+		}
+	}
+	if len(current.fields) > 0 {
+		clauses = append(clauses, current)
+	}
+
+	for _, c := range clauses {
+		for _, f := range c.fields {
+			entry := quoteIdent(f)
+			if c.desc {
 				entry += " DESC"
 			}
 			q.orderBy = append(q.orderBy, entry)
