@@ -34,12 +34,12 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-desc", "-d").
 		Bool().
 		Local().
-		Help("Sort descending (applies to fields in this clause)").
+		Help("Sort descending (use +desc for ascending)").
 		Done().
 		Flag("-asc", "-a").
 		Bool().
 		Local().
-		Help("Sort ascending (default, applies to fields in this clause)").
+		Help("Sort ascending (default, use +asc for descending)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool

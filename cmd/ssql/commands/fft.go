@@ -41,7 +41,7 @@ func RegisterFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-phase", "-p").
 		Bool().
 		Global().
-		Help("Include phase information in output").
+		Help("Include phase information (use +phase to exclude)").
 		Done().
 		Flag("-generate", "-g").
 		Bool().

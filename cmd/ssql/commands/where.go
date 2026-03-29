@@ -15,6 +15,7 @@ import (
 func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("where").
 		Description("Filter records based on field conditions").
+		ClauseDescription("Conditions within a clause use AND logic. Separate clauses with + for OR logic.").
 		Example("ssql from data.csv | ssql where -if age gt 18", "Filter records where age > 18").
 		Example("ssql from sales.csv | ssql where -if-expr 'price * qty > 1000'", "Filter using expression (price * qty > 1000)").
 		Example("ssql from users.csv | ssql where -if dept eq Sales + -if dept eq Marketing", "Sales OR Marketing departments").
@@ -32,13 +33,13 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Arg("value").FieldValuesFrom("", "field").Done().
 		Accumulate().
 		Local().
-		Help("Filter condition: -if <field> <operator> <value>").
+		Help("Filter condition: -if <field> <op> <value> (use +if to negate)").
 		Done().
 		Flag("-if-expr", "-x").
 		Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
 		Accumulate().
 		Local().
-		Help("Filter using boolean expression: -if-expr <expression>").
+		Help("Filter using boolean expression: -if-expr <expr> (use +if-expr to negate)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -53,9 +54,13 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Pre-compile all expressions ONCE before processing records
+			type exprEval struct {
+				eval    func(ssql.Record) (any, error)
+				negated bool
+			}
 			type clauseData struct {
 				conditions []Condition
-				exprEvals  []func(ssql.Record) (any, error)
+				exprEvals  []exprEval
 			}
 
 			var clauses []clauseData
@@ -77,22 +82,29 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 				cd.conditions = conditions
 
-				// Parse and compile -if-expr conditions ONCE
+				// Parse and compile -if-expr / +if-expr conditions ONCE
 				if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
 					exprs, ok := exprsRaw.([]any)
 					if ok {
 						for _, exprRaw := range exprs {
-							expression, ok := exprRaw.(string)
-							if !ok || expression == "" {
+							var expression string
+							var negated bool
+							switch v := exprRaw.(type) {
+							case string:
+								expression = v
+							case map[string]any:
+								expression, _ = v["expression"].(string)
+								negated, _ = v["_negated"].(bool)
+							}
+							if expression == "" {
 								continue
 							}
 
-							// Compile the expression ONCE
-							eval, err := compileExpression(expression)
+							compiled, err := compileExpression(expression)
 							if err != nil {
 								return fmt.Errorf("compiling expression %q: %w", expression, err)
 							}
-							cd.exprEvals = append(cd.exprEvals, eval)
+							cd.exprEvals = append(cd.exprEvals, exprEval{eval: compiled, negated: negated})
 						}
 					}
 				}
@@ -130,19 +142,23 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				for _, clause := range clauses {
 					clauseMatches := true
 
-					// Check -if conditions
+					// Check -if / +if conditions
 					for _, cond := range clause.conditions {
 						fieldValue, exists := ssql.Get[any](r, cond.Field)
-						if !exists || !applyOperator(fieldValue, cond.Operator, cond.Value) {
+						match := exists && applyOperator(fieldValue, cond.Operator, cond.Value)
+						if cond.Negated {
+							match = !match
+						}
+						if !match {
 							clauseMatches = false
 							break
 						}
 					}
 
-					// Check -if-expr conditions (using pre-compiled expressions)
+					// Check -if-expr / +if-expr conditions (using pre-compiled expressions)
 					if clauseMatches {
-						for _, eval := range clause.exprEvals {
-							result, err := eval(r)
+						for _, ee := range clause.exprEvals {
+							result, err := ee.eval(r)
 							if err != nil {
 								fmt.Fprintf(os.Stderr, "Error evaluating expression: %v\n", err)
 								clauseMatches = false
@@ -154,6 +170,10 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 								fmt.Fprintf(os.Stderr, "Expression must return boolean, got %T\n", result)
 								clauseMatches = false
 								break
+							}
+
+							if ee.negated {
+								boolResult = !boolResult
 							}
 
 							if !boolResult {

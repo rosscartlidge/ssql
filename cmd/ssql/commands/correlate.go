@@ -41,7 +41,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-auto", "-a").
 		Bool().
 		Global().
-		Help("Compute autocorrelation (correlate field with itself)").
+		Help("Compute autocorrelation (use +auto for cross-correlation)").
 		Done().
 		Flag("-max-lag", "-m").
 		Int().
@@ -57,7 +57,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-same").
 		Bool().
 		Global().
-		Help("Output same length as input (truncate edges)").
+		Help("Output same length as input (use +same for full length)").
 		Done().
 		Flag("-generate", "-g").
 		Bool().

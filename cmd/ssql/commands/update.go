@@ -34,13 +34,13 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Arg("value").FieldValuesFrom("", "field").Done().
 		Accumulate().
 		Local().
-		Help("Condition to check: -if <field> <operator> <value>").
+		Help("Condition to check: -if <field> <op> <value> (use +if to negate)").
 		Done().
 		Flag("-if-expr", "-x").
 		Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
 		Accumulate().
 		Local().
-		Help("Condition using boolean expression: -if-expr <expression>").
+		Help("Condition using boolean expression: -if-expr <expr> (use +if-expr to negate)").
 		Done().
 		Flag("-set", "-s").
 		Arg("field").FieldsFromFlag("").Done().
@@ -222,7 +222,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					allMatch := true
 					for _, cond := range clause.conditions {
 						fieldValue, exists := ssql.Get[any](frozen, cond.Field)
-						if !exists || !applyOperator(fieldValue, cond.Operator, cond.Value) {
+						match := exists && applyOperator(fieldValue, cond.Operator, cond.Value)
+						if cond.Negated {
+							match = !match
+						}
+						if !match {
 							allMatch = false
 							break
 						}

@@ -82,11 +82,12 @@ func validateFieldsSchema(schema *lib.Schema, fields []string, command string) e
 	return nil
 }
 
-// Condition represents a parsed -if field operator value condition.
+// Condition represents a parsed -if / +if field operator value condition.
 type Condition struct {
 	Field    string
 	Operator string
 	Value    string
+	Negated  bool // true when specified as +if (negate the match)
 }
 
 // parseConditions parses -if flag values from autocli into Conditions.
@@ -108,13 +109,14 @@ func parseConditions(flagValue any) ([]Condition, error) {
 		field, _ := matchMap["field"].(string)
 		op, _ := matchMap["operator"].(string)
 		value, _ := matchMap["value"].(string)
+		negated, _ := matchMap["_negated"].(bool)
 		if field == "" || op == "" {
 			continue
 		}
 		if !validOperators[op] {
 			return nil, fmt.Errorf("unknown operator %q (valid: eq, ne, gt, ge, lt, le, contains, startswith, endswith, regex)", op)
 		}
-		conditions = append(conditions, Condition{field, op, value})
+		conditions = append(conditions, Condition{field, op, value, negated})
 	}
 	return conditions, nil
 }

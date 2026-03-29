@@ -14,6 +14,7 @@ import (
 func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("union").
 		Description("Combine records from multiple sources (SQL UNION). Additional files must be JSONL.").
+		ClauseDescription("Each clause specifies additional files to combine.").
 		Example("ssql from 2023.jsonl | ssql union -file 2024.jsonl", "Combine two JSONL files (removes duplicates)").
 		Example("ssql from 2023.csv | ssql union -file <(ssql from csv 2024.csv)", "Combine CSV files via process substitution").
 		Example("ssql from east.csv | ssql union -all -file <(ssql from csv west.csv) -file <(ssql from csv south.csv)", "Combine multiple CSV files (UNION ALL)").
@@ -32,7 +33,7 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-all", "-a").
 		Bool().
 		Global().
-		Help("Keep duplicates (UNION ALL instead of UNION)").
+		Help("Keep duplicates (UNION ALL, use +all for UNION)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var unionAll bool

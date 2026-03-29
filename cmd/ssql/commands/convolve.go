@@ -65,12 +65,12 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-auto", "-a").
 		Bool().
 		Global().
-		Help("Compute auto-convolution (convolve signal with itself)").
+		Help("Compute auto-convolution (use +auto for cross-convolution)").
 		Done().
 		Flag("-same").
 		Bool().
 		Global().
-		Help("Output same length as input (truncate edges)").
+		Help("Output same length as input (use +same for full length)").
 		Done().
 		Flag("-generate", "-g").
 		Bool().

@@ -10,10 +10,42 @@ import (
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"
 )
 
+// Flags that support +flag negation with arguments.
+// Boolean flags all support + negation automatically.
+var negatableArgFlags = map[string]bool{
+	"-if":      true,
+	"-if-expr": true,
+}
+
+// ssqlPrefixHandler interprets +flag as negation of -flag.
+// Boolean flags: +desc → false (instead of true).
+// Arg flags -if, -if-expr: +if → adds _negated: true to the arg map.
+// Other arg flags with +: error (unsupported negation).
+func ssqlPrefixHandler(flagName string, hasPlus bool, value interface{}) interface{} {
+	if !hasPlus {
+		return value
+	}
+	// Boolean flags: negate
+	if b, ok := value.(bool); ok {
+		return !b
+	}
+	// Multi-arg flags: only -if and -if-expr support negation
+	if m, ok := value.(map[string]any); ok {
+		if !negatableArgFlags[flagName] {
+			fmt.Fprintf(os.Stderr, "Error: +%s is not supported — only +if and +if-expr support negation\n", flagName[1:])
+			os.Exit(1)
+		}
+		m["_negated"] = true
+		return m
+	}
+	return value
+}
+
 func buildRootCommand() *cf.Command {
 	cmd := cf.NewCommand("ssql").
 		Version(version.Version).
 		Description("Unix-style data processing tools").
+		PrefixHandler(ssqlPrefixHandler).
 
 		// Root global flags
 		Flag("-verbose", "-v").

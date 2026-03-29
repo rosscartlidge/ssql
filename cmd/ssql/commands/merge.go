@@ -37,7 +37,7 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-desc", "-d").
 		Bool().
 		Global().
-		Help("Merge descending").
+		Help("Merge descending (use +desc for ascending)").
 		Done().
 		Flag("-generate", "-g").
 		Bool().

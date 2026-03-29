@@ -33,7 +33,7 @@ func RegisterTop(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-asc").
 		Bool().
 		Global().
-		Help("Return bottom N instead (ascending order)").
+		Help("Return bottom N instead (ascending, use +asc for top N)").
 		Done().
 		Flag("-generate", "-g").
 		Bool().

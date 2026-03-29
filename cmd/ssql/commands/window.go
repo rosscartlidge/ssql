@@ -51,7 +51,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-desc").
 		Bool().
 		Local().
-		Help("Sort descending (applies to all -order fields in this clause)").
+		Help("Sort descending (use +desc for ascending)").
 		Done().
 		Flag("-preceding").
 		Int().
