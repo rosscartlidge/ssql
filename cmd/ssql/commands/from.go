@@ -50,20 +50,45 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("FILE").
 		String().
+		Variadic().
 		Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,parquet,wav,xlsx}"}).
 		Global().
 		Default("").
 		Help("Input file (format inferred from extension). Reads JSONL from stdin if not specified.").
 		Done().
 		Handler(func(ctx *cf.Context) error {
-			var inputFile string
+			var files []string
 			var generate bool
 
-			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
+			if filesVal, ok := ctx.GlobalFlags["FILE"]; ok {
+				switch v := filesVal.(type) {
+				case []string:
+					files = v
+				case []any:
+					for _, item := range v {
+						if s, ok := item.(string); ok {
+							files = append(files, s)
+						}
+					}
+				case string:
+					if v != "" {
+						files = []string{v}
+					}
+				}
 			}
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
+			}
+
+			// Bare form only supports single file
+			if len(files) > 1 {
+				return fmt.Errorf("bare 'from' only supports a single file — for multiple files use: ssql from csv %s %s ...",
+					files[0], files[1])
+			}
+
+			inputFile := ""
+			if len(files) == 1 {
+				inputFile = files[0]
 			}
 
 			if inputFile == "" {
