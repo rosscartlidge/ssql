@@ -10,8 +10,11 @@ Tracked issues and feature gaps discovered during development.
 
 ## Build System
 
-- [ ] **Split from.go into per-format files** — `from_csv.go`, `from_arrow.go`, `from_parquet.go`, `from_xlsx.go`, `from_wav.go` etc. with build tags. Enables slim builds that exclude heavy dependencies (Apache Arrow, excelize). Same for `to.go`. Current WASM playground binary is 68MB (12MB gzipped) because it pulls in everything.
-- [ ] **Split to.go similarly** — `to_arrow.go`, `to_parquet.go`, `to_xlsx.go`, `to_wav.go` with matching build tags.
+- [ ] **Split from.go into per-format files** — `from_csv.go`, `from_arrow.go`, `from_parquet.go`, `from_xlsx.go`, `from_wav.go` etc. Two phases:
+  1. **Readability split** — one file per format, no build tags. `from.go` and `to.go` are now very large after adding multi-file support, `-merge-schemas`, etc. The hierarchical indentation reformatting helped but file size is still the main readability problem.
+  2. **Build tags** — add `//go:build !slim` to heavy-dependency files (arrow, parquet, xlsx, wav). Enables slim builds.
+- [ ] **Split to.go similarly** — `to_table.go`, `to_csv.go`, `to_chart.go`, `to_arrow.go`, etc.
+- [ ] **Slim build tag** — `go build -tags slim` excludes arrow, parquet, xlsx, wav. Useful for WASM playground, embedded systems, or users who only need CSV/JSON. Current WASM binary is 68MB (12MB gzipped).
 - [ ] **Slim build tag** — `go build -tags slim` excludes arrow, parquet, xlsx, wav. Useful for WASM playground, embedded systems, or users who only need CSV/JSON.
 
 ## SQL Generation (`generate sql`)
