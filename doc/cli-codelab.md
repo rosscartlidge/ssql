@@ -722,7 +722,7 @@ ssql from prices.csv | \
 
 # RANK on presorted data (134x faster than materialized)
 ssql from employees.csv | \
-  ssql sort -field dept -field salary -desc | \
+  ssql sort dept - salary -desc | \
   ssql window -rank salary_rank -partition dept -order salary -desc -presorted
 ```
 
