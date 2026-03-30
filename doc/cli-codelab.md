@@ -123,6 +123,25 @@ Output (JSONL):
 ...
 ```
 
+### Reading Multiple Files
+
+Read multiple files of the same format with explicit subcommands:
+
+```bash
+# Read all CSV files (shell expands *.csv)
+ssql from csv *.csv | ssql to table
+
+# Different schemas — merge field sets
+ssql from csv east.csv west.csv -merge-schemas | ssql to table
+
+# Track which file each record came from
+ssql from csv *.csv -source file | ssql group-by file -count n | ssql to table
+```
+
+By default, all files must have identical schemas. Use `-merge-schemas` to combine files with different headers (union of all fields).
+
+Supported formats: `csv`, `tsv`, `json`, `jsonl`. The bare `ssql from file.csv` form is single-file only.
+
 ### Schema Headers (Automatic)
 
 The `from` command automatically emits a schema header that preserves field order and types through pipelines:
@@ -156,7 +175,7 @@ ssql from employees.csv | \
 
 **Schema flows through all commands:**
 - Transform commands (`where`, `update`, `sort`, etc.) pass schema through unchanged
-- Output commands (`to csv`, `to json`, `to table`) use schema for field ordering
+- Output commands (`to csv`, `to json`, `to jsonl`, `to table`) use schema for field ordering
 - The schema header is automatically consumed and not included in final output
 
 ### Filtering Data
@@ -512,6 +531,13 @@ ssql from data.csv | ssql join <(ssql from kind.csv) \
 - `-on LEFT RIGHT` - Join on different field names
 - `-as OLD NEW` - Rename field from right side when bringing it in
 - `-type TYPE` - Join type: inner (default), left, right, full
+- `-suffix SUFFIX` - Add suffix to all right-side non-key fields (e.g. `-suffix _right`)
+- `-exclude-left` - Exclude non-key fields from left side
+- `-exclude-right` - Exclude non-key fields from right side
+
+**Field collision handling:** If non-key fields exist in both sides, join errors with suggestions. Use `-as`, `-suffix`, or `-exclude-left`/`-exclude-right` to resolve.
+
+**Right-side files must have schema headers.** Use process substitution for CSV: `<(ssql from csv file.csv)`.
 - `-` - Clause separator for multiple lookups from same file
 
 **Join Types:**
@@ -1346,10 +1372,10 @@ Use `-run` to execute directly with DuckDB:
 
 ### Data Sources
 - `from [file]` - Read data from CSV, TSV, JSON, JSONL, Arrow, WAV, or XLSX file (auto-detects format, always emits schema header)
-- `from csv [file]` - Read CSV (or stdin). Flags: `-type field type`, `-default-type type`
-- `from tsv [file]` - Read TSV (or stdin). Flags: `-type field type`, `-default-type type`
-- `from json [file]` - Read JSON
-- `from jsonl [file]` - Read JSONL (or stdin)
+- `from csv [file...]` - Read CSV (or stdin). Multi-file: `-merge-schemas`, `-source`. Flags: `-type field type`, `-default-type type`
+- `from tsv [file...]` - Read TSV (or stdin). Multi-file: `-merge-schemas`, `-source`
+- `from json [file...]` - Read JSON. Multi-file: `-merge-schemas`, `-source`
+- `from jsonl [file...]` - Read JSONL (or stdin). Multi-file: `-merge-schemas`, `-source`
 - `from arrow [file]` - Read Arrow
 - `from wav file` - Read WAV audio. Flags: `-channel N`
 - `from xlsx file` - Read Excel. Flags: `-sheet name`
@@ -1365,7 +1391,7 @@ Use `-run` to execute directly with DuckDB:
 - `cast` - Convert field types (`-type field type`)
 - `update` - Conditionally update field values (if-elseif-else logic)
 - `group-by` - Group and aggregate data
-- `sort` - Sort records by field
+- `sort` - Sort records by field (per-field direction: `sort dept - salary -desc`)
 - `limit` - Take first N records
 - `offset` - Skip first N records (SQL OFFSET)
 - `distinct` - Remove duplicate records (SQL DISTINCT)
@@ -1375,7 +1401,7 @@ Use `-run` to execute directly with DuckDB:
 - `pivot` - Cross-tabulation (pivot table)
 
 ### Multi-Table Operations
-- `join` - Join two data sources (SQL JOIN - inner/left/right/full)
+- `join` - Join two data sources (SQL JOIN - inner/left/right/full). Flags: `-suffix`, `-exclude-left`, `-exclude-right`
 - `union` - Combine multiple data sources (SQL UNION/UNION ALL)
 - `merge` - K-way merge of pre-sorted inputs (streaming, O(K) memory)
 
@@ -1388,7 +1414,8 @@ Use `-run` to execute directly with DuckDB:
 ### Outputs (using `to` subcommands)
 - `to table` - Display records as formatted table
 - `to csv [file]` - Write CSV file (or stdout)
-- `to json [file]` - Write JSON/JSONL file (or stdout)
+- `to json [file]` - Write pretty-printed JSON array (or stdout)
+- `to jsonl [file]` - Write JSONL, one JSON object per line (or stdout)
 - `to arrow [file]` - Write Apache Arrow IPC file (10-20x faster I/O)
 - `to xlsx [file]` - Write Excel XLSX file
 - `to chart` - Create interactive HTML chart (including heatmaps via `-type heatmap`)

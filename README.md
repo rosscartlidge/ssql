@@ -105,6 +105,9 @@ ssql from command -- ps -efl | \
 # Window functions — rankings, running totals, lag/lead without collapsing rows
 ssql from employees.csv | ssql window -row-number rn -partition dept -order salary -desc
 
+# Read multiple files at once (shell expands *.csv)
+ssql from csv *.csv -source file | ssql group-by file -count n | ssql to table
+
 # Schema headers are automatic - preserves field order through pipelines
 ssql from data.csv | ssql where -if age gt 30 | ssql to csv output.csv
 
@@ -268,15 +271,15 @@ Pre-built `.deb` packages are available for amd64 Linux systems:
 
 **Standard version (no GPU dependencies):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.25.0_amd64.deb
-sudo dpkg -i ssql_4.25.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.32.0_amd64.deb
+sudo dpkg -i ssql_4.32.0_amd64.deb
 ssql version
 ```
 
 **GPU-accelerated version (requires NVIDIA CUDA runtime):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.25.0_amd64.deb
-sudo dpkg -i ssql-gpu_4.25.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.32.0_amd64.deb
+sudo dpkg -i ssql-gpu_4.32.0_amd64.deb
 ssql version
 ```
 
