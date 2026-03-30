@@ -15,11 +15,13 @@ func RegisterDistinct(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("Remove duplicate records").
 		Example("ssql from data.csv | ssql distinct", "Remove duplicate records").
 		Example("ssql from users.csv | ssql include email | ssql distinct", "Get unique email addresses").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 

@@ -19,62 +19,80 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from users.csv | ssql join orders.jsonl -on user_id order_user_id", "Join on different field names").
 		Example("ssql from data.csv | ssql join <(ssql from kind.csv) -on a_kind kind -as kind_name a_kind_name - -on z_kind kind -as kind_name z_kind_name", "Multiple lookups from same file").
 		ClauseDescription("Each clause performs a separate lookup from the right-side file").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-type", "-t").
-		String().
-		Completer(&cf.StaticCompleter{Options: []string{"inner", "left", "right", "full"}}).
-		Global().
-		Default("inner").
-		Help("Join type: inner, left, right, full (default: inner)").
-		Done().
+			String().
+			Completer(&cf.StaticCompleter{Options: []string{"inner", "left", "right", "full"}}).
+			Global().
+			Default("inner").
+			Help("Join type: inner, left, right, full (default: inner)").
+			Done().
+
 		Flag("-using").
-		String().
-		FieldsFromFlag("").
-		Accumulate().
-		Local().
-		Help("Field name for equality join (same name in both sides)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Accumulate().
+			Local().
+			Help("Field name for equality join (same name in both sides)").
+			Done().
+
 		Flag("-on").
-		Arg("left-field").FieldsFromFlag("").Done().
-		Arg("right-field").Completer(&cf.NoCompleter{Hint: "<right-field>"}).Done().
-		Accumulate().
-		Local().
-		Help("Join on different field names: -on <left> <right>").
-		Done().
+			Arg("left-field").
+				FieldsFromFlag("").
+				Done().
+			Arg("right-field").
+				Completer(&cf.NoCompleter{Hint: "<right-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Join on different field names: -on <left> <right>").
+			Done().
+
 		Flag("-as").
-		Arg("right-field").Completer(&cf.NoCompleter{Hint: "<right-field>"}).Done().
-		Arg("new-name").Completer(&cf.NoCompleter{Hint: "<new-name>"}).Done().
-		Accumulate().
-		Local().
-		Help("Rename field from right side: -as <old> <new>").
-		Done().
+			Arg("right-field").
+				Completer(&cf.NoCompleter{Hint: "<right-field>"}).
+				Done().
+			Arg("new-name").
+				Completer(&cf.NoCompleter{Hint: "<new-name>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Rename field from right side: -as <old> <new>").
+			Done().
+
 		Flag("-suffix").
-		String().
-		Global().
-		Default("").
-		Help("Add suffix to all right-side non-key fields: -suffix _right → name_right").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Add suffix to all right-side non-key fields: -suffix _right → name_right").
+			Done().
+
 		Flag("-exclude-left").
-		Bool().
-		Global().
-		Help("Exclude non-key fields from left side").
-		Done().
+			Bool().
+			Global().
+			Help("Exclude non-key fields from left side").
+			Done().
+
 		Flag("-exclude-right").
-		Bool().
-		Global().
-		Help("Exclude non-key fields from right side (only bring key + -as fields)").
-		Done().
+			Bool().
+			Global().
+			Help("Exclude non-key fields from right side (only bring key + -as fields)").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
-		Global().
-		Required().
-		Help("Right-side file (JSONL/JSON). For CSV: ssql join <(ssql from FILE) ...").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
+			Global().
+			Required().
+			Help("Right-side file (JSONL/JSON). For CSV: ssql join <(ssql from FILE) ...").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var rightFile, joinType, suffix string
 			var generate, excludeLeft, excludeRight bool

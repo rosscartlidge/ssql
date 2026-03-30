@@ -18,32 +18,37 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from sorted1.csv | ssql merge sorted2.jsonl -by timestamp", "Merge two sorted files by timestamp").
 		Example("ssql from chunk1.csv | ssql merge chunk2.jsonl chunk3.jsonl -by dept name", "Merge 3 sorted files by multiple fields").
 		Example("ssql from data1.csv | ssql merge data2.jsonl -by amount -desc", "Merge sorted descending").
+
 		Flag("FILE").
-		String().
-		Variadic().
-		Required().
-		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
-		Global().
-		Help("Additional pre-sorted JSONL files to merge. For CSV: <(ssql from csv FILE)").
-		Done().
+			String().
+			Variadic().
+			Required().
+			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
+			Global().
+			Help("Additional pre-sorted JSONL files to merge. For CSV: <(ssql from csv FILE)").
+			Done().
+
 		Flag("-by", "-b").
-		String().
-		Variadic().
-		Required().
-		FieldsFromFlag("").
-		Global().
-		Help("Fields to merge by (must match sort order of inputs)").
-		Done().
+			String().
+			Variadic().
+			Required().
+			FieldsFromFlag("").
+			Global().
+			Help("Fields to merge by (must match sort order of inputs)").
+			Done().
+
 		Flag("-desc", "-d").
-		Bool().
-		Global().
-		Help("Merge descending (use +desc for ascending)").
-		Done().
+			Bool().
+			Global().
+			Help("Merge descending (use +desc for ascending)").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var files []string
 			var byFields []string

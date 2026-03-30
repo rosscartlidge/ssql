@@ -16,18 +16,25 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("Rename fields").
 		Example("ssql from data.csv | ssql rename -as oldname newname", "Rename a single field").
 		Example("ssql from users.csv | ssql rename -as first_name firstName -as last_name lastName", "Rename multiple fields to camelCase").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-as").
-		Arg("old-field").FieldsFromFlag("").Done().
-		Arg("new-field").Completer(cf.NoCompleter{Hint: "<new-name>"}).Done().
-		Accumulate().
-		Global().
-		Help("Rename old-field to new-field").
-		Done().
+			Arg("old-field").
+				FieldsFromFlag("").
+				Done().
+			Arg("new-field").
+				Completer(cf.NoCompleter{Hint: "<new-name>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Rename old-field to new-field").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 

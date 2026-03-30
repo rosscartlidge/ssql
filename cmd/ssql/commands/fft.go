@@ -19,35 +19,41 @@ func RegisterFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql fft -file signal.arrow -field amplitude", "Direct Arrow read (fastest, bypasses Record conversion)").
 		Example("ssql from audio.csv | ssql fft -field sample -rate 44100", "Compute FFT with sample rate for frequency calculation").
 		Example("ssql from data.csv | ssql fft -field value -phase", "Include phase information in output").
+
 		Flag("-file").
-		String().
-		Global().
-		Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
-		Help("Input file (Arrow files use optimized direct signal extraction)").
-		Done().
+			String().
+			Global().
+			Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
+			Help("Input file (Arrow files use optimized direct signal extraction)").
+			Done().
+
 		Flag("-field", "-f").
-		String().
-		Global().
-		Required().
-		FieldsFromFlag("-file").
-		Help("Field containing numeric signal values").
-		Done().
+			String().
+			Global().
+			Required().
+			FieldsFromFlag("-file").
+			Help("Field containing numeric signal values").
+			Done().
+
 		Flag("-rate", "-r").
-		Float().
-		Default(1.0).
-		Global().
-		Help("Sample rate in Hz (for frequency calculation)").
-		Done().
+			Float().
+			Default(1.0).
+			Global().
+			Help("Sample rate in Hz (for frequency calculation)").
+			Done().
+
 		Flag("-phase", "-p").
-		Bool().
-		Global().
-		Help("Include phase information (use +phase to exclude)").
-		Done().
+			Bool().
+			Global().
+			Help("Include phase information (use +phase to exclude)").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var field string

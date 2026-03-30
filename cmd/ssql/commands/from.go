@@ -26,6 +26,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql where -if age gt 18", "Read CSV (infers format from extension)").
 		Example("ssql from csv data.csv -type zipcode string", "Read CSV with explicit format and type overrides")
 
+
 	// Format subcommands
 	registerFromCSV(fromCmd)
 	registerFromTSV(fromCmd)
@@ -43,19 +44,22 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 	// Bare "from FILE" handler — infers format from extension
 	fromCmd.
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Variadic().
-		Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,parquet,wav,xlsx}"}).
-		Global().
-		Default("").
-		Help("Input file (format inferred from extension). Reads JSONL from stdin if not specified.").
-		Done().
+			String().
+			Variadic().
+			Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,parquet,wav,xlsx}"}).
+			Global().
+			Default("").
+			Help("Input file (format inferred from extension). Reads JSONL from stdin if not specified.").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var files []string
 			var generate bool
@@ -132,44 +136,55 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Example("ssql from csv *.csv | ssql to table", "Read multiple CSV files").
 		Example("ssql from csv *.csv -merge-schemas | ssql to table", "Merge files with different headers").
 		Example("ssql from csv data.csv -type zipcode string -type phone string", "Force fields to string").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-merge-schemas").
-		Bool().
-		Global().
-		Help("Allow files with different headers (merge schemas)").
-		Done().
+			Bool().
+			Global().
+			Help("Allow files with different headers (merge schemas)").
+			Done().
+
 		Flag("-source").
-		String().
-		Global().
-		Default("").
-		Help("Add field with source filename: -source file").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Add field with source filename: -source file").
+			Done().
+
 		Flag("-type", "-t").
-		Arg("field").Completer(cf.NoCompleter{Hint: "<field-name>"}).Done().
-		Arg("type").Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "auto"}}).Done().
-		Accumulate().
-		Global().
-		Help("Override type for field: -type zipcode string -type age int").
-		Done().
+			Arg("field").
+				Completer(cf.NoCompleter{Hint: "<field-name>"}).
+				Done().
+			Arg("type").
+				Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "auto"}}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Override type for field: -type zipcode string -type age int").
+			Done().
+
 		Flag("-default-type", "-dt").
-		String().
-		Global().
-		Default("auto").
-		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
-		Help("Default type for all fields: auto (default), string, int, float, bool").
-		Done().
+			String().
+			Global().
+			Default("auto").
+			Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
+			Help("Default type for all fields: auto (default), string, int, float, bool").
+			Done().
+
 		Flag("FILE").
-		String().
-		Variadic().
-		Completer(&cf.FileCompleter{Pattern: "*.csv"}).
-		Global().
-		Default("").
-		Help("Input CSV file(s) (or stdin if not specified)").
-		Done().
+			String().
+			Variadic().
+			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+			Global().
+			Default("").
+			Help("Input CSV file(s) (or stdin if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var files []string
 			var generate, mergeSchemas bool
@@ -226,30 +241,35 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Description("Read TSV file(s) or stdin").
 		Example("ssql from tsv data.tsv | ssql to table", "Read TSV file").
 		Example("ssql from tsv *.tsv | ssql to table", "Read multiple TSV files").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-merge-schemas").
-		Bool().
-		Global().
-		Help("Allow files with different headers (merge schemas)").
-		Done().
+			Bool().
+			Global().
+			Help("Allow files with different headers (merge schemas)").
+			Done().
+
 		Flag("-source").
-		String().
-		Global().
-		Default("").
-		Help("Add field with source filename: -source file").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Add field with source filename: -source file").
+			Done().
+
 		Flag("FILE").
-		String().
-		Variadic().
-		Completer(&cf.FileCompleter{Pattern: "*.tsv"}).
-		Global().
-		Default("").
-		Help("Input TSV file(s) (or stdin if not specified)").
-		Done().
+			String().
+			Variadic().
+			Completer(&cf.FileCompleter{Pattern: "*.tsv"}).
+			Global().
+			Default("").
+			Help("Input TSV file(s) (or stdin if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
 
@@ -282,30 +302,35 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 		Description("Read JSON file(s) or stdin").
 		Example("ssql from json data.json | ssql to table", "Read JSON file").
 		Example("ssql from json *.json | ssql to table", "Read multiple JSON files").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-merge-schemas").
-		Bool().
-		Global().
-		Help("Allow files with different fields (merge schemas)").
-		Done().
+			Bool().
+			Global().
+			Help("Allow files with different fields (merge schemas)").
+			Done().
+
 		Flag("-source").
-		String().
-		Global().
-		Default("").
-		Help("Add field with source filename: -source file").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Add field with source filename: -source file").
+			Done().
+
 		Flag("FILE").
-		String().
-		Variadic().
-		Completer(&cf.FileCompleter{Pattern: "*.json"}).
-		Global().
-		Default("").
-		Help("Input JSON file(s) (or stdin if not specified)").
-		Done().
+			String().
+			Variadic().
+			Completer(&cf.FileCompleter{Pattern: "*.json"}).
+			Global().
+			Default("").
+			Help("Input JSON file(s) (or stdin if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
 
@@ -330,30 +355,35 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 		Description("Read JSONL file(s) or stdin").
 		Example("ssql from jsonl data.jsonl | ssql to table", "Read JSONL file").
 		Example("ssql from jsonl *.jsonl | ssql to table", "Read multiple JSONL files").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-merge-schemas").
-		Bool().
-		Global().
-		Help("Allow files with different fields (merge schemas)").
-		Done().
+			Bool().
+			Global().
+			Help("Allow files with different fields (merge schemas)").
+			Done().
+
 		Flag("-source").
-		String().
-		Global().
-		Default("").
-		Help("Add field with source filename: -source file").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Add field with source filename: -source file").
+			Done().
+
 		Flag("FILE").
-		String().
-		Variadic().
-		Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-		Global().
-		Default("").
-		Help("Input JSONL file(s) (or stdin if not specified)").
-		Done().
+			String().
+			Variadic().
+			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
+			Global().
+			Default("").
+			Help("Input JSONL file(s) (or stdin if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
 
@@ -377,18 +407,21 @@ func registerFromArrow(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("arrow").
 		Description("Read Arrow file or stdin").
 		Example("ssql from arrow data.arrow | ssql to table", "Read Arrow file (10-20x faster than CSV)").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.arrow"}).
-		Global().
-		Default("").
-		Help("Input Arrow file (or stdin if not specified)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.arrow"}).
+			Global().
+			Default("").
+			Help("Input Arrow file (or stdin if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var generate bool
@@ -411,24 +444,30 @@ func registerFromParquet(cmd *cf.SubcommandBuilder) {
 		Example("ssql from parquet data.parquet | ssql to table", "Read Parquet file").
 		Example("ssql from parquet data.parquet -columns name -columns age -columns dept | ssql to table", "Read only selected columns (faster for wide files)").
 		Example("ssql from parquet data.parquet | ssql to csv output.csv", "Convert Parquet to CSV").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
-		Global().
-		Required().
-		Help("Input Parquet file (random access required, no stdin)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
+			Global().
+			Required().
+			Help("Input Parquet file (random access required, no stdin)").
+			Done().
+
 		Flag("-columns", "-c").
-		Arg("column").FieldsFromFlag("FILE").Done().
-		Accumulate().
-		Global().
-		Help("Column to read (repeat for multiple). Omit for all columns. Reduces I/O for wide files.").
-		Done().
+			Arg("column").
+				FieldsFromFlag("FILE").
+				Done().
+			Accumulate().
+			Global().
+			Help("Column to read (repeat for multiple). Omit for all columns. Reduces I/O for wide files.").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var generate bool
@@ -462,24 +501,28 @@ func registerFromWAV(cmd *cf.SubcommandBuilder) {
 		Description("Read WAV audio file").
 		Example("ssql from wav audio.wav | ssql fft -field amplitude", "Read WAV for FFT analysis").
 		Example("ssql from wav stereo.wav -channel 0 | ssql to table", "Read left channel only").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-channel", "-ch").
-		Int().
-		Global().
-		Default(-1).
-		Help("Extract specific channel (0=left, 1=right). Default: mix to mono.").
-		Done().
+			Int().
+			Global().
+			Default(-1).
+			Help("Extract specific channel (0=left, 1=right). Default: mix to mono.").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.wav"}).
-		Global().
-		Default("").
-		Help("Input WAV file").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.wav"}).
+			Global().
+			Default("").
+			Help("Input WAV file").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var generate bool
@@ -505,23 +548,27 @@ func registerFromXLSX(cmd *cf.SubcommandBuilder) {
 		Description("Read Excel spreadsheet").
 		Example("ssql from xlsx data.xlsx | ssql to table", "Read Excel spreadsheet").
 		Example("ssql from xlsx workbook.xlsx -sheet Sales | ssql to csv", "Read specific sheet").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-sheet").
-		String().
-		Global().
-		Default("").
-		Help("Sheet name to read (default: first sheet)").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Sheet name to read (default: first sheet)").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.xlsx"}).
-		Global().
-		Help("Input XLSX file (required — XLSX cannot be read from stdin)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.xlsx"}).
+			Global().
+			Help("Input XLSX file (required — XLSX cannot be read from stdin)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var generate bool
@@ -553,11 +600,13 @@ func registerFromCommand(cmd *cf.SubcommandBuilder) {
 		Description("Execute a command and read its output").
 		Example("ssql from command -- ps aux | ssql where -if USER eq root", "Parse ps output").
 		Example("ssql from command -- docker ps | ssql to table", "Parse docker output").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
@@ -591,30 +640,35 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 		Example("ssql from ssh server /data/logs.csv | ssql to table", "Read remote CSV").
 		Example("ssql from ssh server /data/logs.csv -- where -if status eq error", "Push filter to remote").
 		Example("ssql from ssh server /data/logs.csv -- where -if age gt 25 + group-by -field dept -count", "Push multi-step pipeline to remote").
+
 		Flag("HOST").
-		String().
-		CompleterFunc(completeSSHHost).
-		Global().
-		Help("SSH host (from ~/.ssh/config or user@host)").
-		Done().
+			String().
+			CompleterFunc(completeSSHHost).
+			Global().
+			Help("SSH host (from ~/.ssh/config or user@host)").
+			Done().
+
 		Flag("PATH").
-		String().
-		CompleterFunc(completeSSHPath).
-		Global().
-		Help("Remote file path").
-		Done().
+			String().
+			CompleterFunc(completeSSHPath).
+			Global().
+			Help("Remote file path").
+			Done().
+
 		Flag("-gpu").
-		Bool().
-		Global().
-		Default(false).
-		Help("Use ssql_gpu on the remote machine").
-		Done().
+			Bool().
+			Global().
+			Default(false).
+			Help("Use ssql_gpu on the remote machine").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Default(false).
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Default(false).
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			host, _ := ctx.GlobalFlags["HOST"].(string)
 			path, _ := ctx.GlobalFlags["PATH"].(string)
@@ -648,38 +702,50 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 		Example("ssql from catalog shards.csv | ssql to table", "Read all shards in catalog").
 		Example("ssql from catalog shards.csv -if date ge 2025-03-01 | ssql to table", "Partition pruning").
 		Example("ssql from catalog shards.csv -- where -if status eq error", "Push filter to each shard").
+
 		Flag("FILE").
-		String().
-		CompleterFunc(completeCatalogFile).
-		Global().
-		Help("Catalog CSV file (must have host and path columns)").
-		Done().
+			String().
+			CompleterFunc(completeCatalogFile).
+			Global().
+			Help("Catalog CSV file (must have host and path columns)").
+			Done().
+
 		Flag("-if", "-i").
-		Arg("field").FieldsFromFlag("FILE").Done().
-		Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le"}}).Done().
-		Arg("value").Completer(cf.CompletionFunc(completeCatalogFilterValue)).Done().
-		Accumulate().
-		Global().
-		Help("Partition pruning: skip shards that don't match (uses catalog columns)").
-		Done().
+			Arg("field").
+				FieldsFromFlag("FILE").
+				Done().
+			Arg("operator").
+				Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le"}}).
+				Done().
+			Arg("value").
+				Completer(cf.CompletionFunc(completeCatalogFilterValue)).
+				Done().
+			Accumulate().
+			Global().
+			Help("Partition pruning: skip shards that don't match (uses catalog columns)").
+			Done().
+
 		Flag("-gpu").
-		Bool().
-		Global().
-		Default(false).
-		Help("Use ssql_gpu on remote machines").
-		Done().
+			Bool().
+			Global().
+			Default(false).
+			Help("Use ssql_gpu on remote machines").
+			Done().
+
 		Flag("-shard-field").
-		String().
-		Global().
-		Default("").
-		Help("Add a field to each record showing its shard origin (host:path)").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Add a field to each record showing its shard origin (host:path)").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Default(false).
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Default(false).
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			catalogFile, _ := ctx.GlobalFlags["FILE"].(string)
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)

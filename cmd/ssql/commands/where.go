@@ -22,25 +22,37 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from users.csv | ssql where -if-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
 		Example("ssql from data.csv | ssql where -if-expr 'has(\"email\") and contains(email, \"@\")'", "Validate email field exists and format").
 		Example("ssql from sales.csv | ssql where -if-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-if", "-i").
-		Arg("field").FieldsFromFlag("").Done().
-		Arg("operator").Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).Done().
-		Arg("value").FieldValuesFrom("", "field").Done().
-		Accumulate().
-		Local().
-		Help("Filter condition: -if <field> <op> <value> (use +if to negate)").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("operator").
+				Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).
+				Done().
+			Arg("value").
+				FieldValuesFrom("", "field").
+				Done().
+			Accumulate().
+			Local().
+			Help("Filter condition: -if <field> <op> <value> (use +if to negate)").
+			Done().
+
 		Flag("-if-expr", "-x").
-		Arg("expression").Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).Done().
-		Accumulate().
-		Local().
-		Help("Filter using boolean expression: -if-expr <expr> (use +if-expr to negate)").
-		Done().
+			Arg("expression").
+				Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Filter using boolean expression: -if-expr <expr> (use +if-expr to negate)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 

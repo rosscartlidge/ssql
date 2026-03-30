@@ -174,6 +174,25 @@ make wasm && go install ./cmd/ssql
 See `claude/cli-architecture.md` for full autocli patterns, subcommand registration, and examples.
 
 **Rules (never violate):**
+- **Hierarchical indentation for command builders** — indent to show the structure: command → flag → flag details → done. Blank lines between flag blocks. Example:
+  ```go
+  cmd.Subcommand("sort").
+      Description("Sort records by one or more fields").
+      ClauseDescription("Each clause specifies fields with a sort direction").
+
+      Flag("FIELDS").
+          String().
+          Variadic().
+          Required().
+          Help("Fields to sort by").
+          Done().
+
+      Flag("-desc", "-d").
+          Bool().
+          Local().
+          Help("Sort descending").
+          Done().
+  ```
 - **Fail loudly on invalid input** — unknown field names, unknown operators, and invalid flag values MUST terminate the command with a clear error message. NEVER silently produce empty or wrong results. Validate field names against the first record (list available fields in the error). Validate operators and constrained values at parse time. This applies in both normal execution and `-generate` code generation mode.
 - **`FieldsFromFlag("FILE")` for field name completion** — NEVER use `NoCompleter` when field names can be derived from a data file. This applies to `-if`, `-sum`, `-avg`, `-min`, `-max`, `-field`, `-group`, etc.
 - **`FieldValuesFrom("FILE", "field")` for field value completion** — complete with actual data values, not hints

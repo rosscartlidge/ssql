@@ -19,51 +19,60 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql correlate -file signal.arrow -field value -auto -max-lag 1000", "Direct Arrow read (fastest)").
 		Example("ssql from data.csv | ssql correlate -field signal -with template", "Find where template pattern occurs in signal").
 		Example("ssql from sensors.csv | ssql correlate -field sensor1 -with sensor2 -same", "Cross-correlate two sensor readings").
+
 		Flag("-file").
-		String().
-		Global().
-		Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
-		Help("Input file (Arrow files use optimized direct signal extraction)").
-		Done().
+			String().
+			Global().
+			Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
+			Help("Input file (Arrow files use optimized direct signal extraction)").
+			Done().
+
 		Flag("-field", "-f").
-		String().
-		Global().
-		Required().
-		FieldsFromFlag("-file").
-		Help("Primary field containing numeric signal").
-		Done().
+			String().
+			Global().
+			Required().
+			FieldsFromFlag("-file").
+			Help("Primary field containing numeric signal").
+			Done().
+
 		Flag("-with", "-w").
-		String().
-		Global().
-		FieldsFromFlag("-file").
-		Help("Second field to correlate with (for cross-correlation)").
-		Done().
+			String().
+			Global().
+			FieldsFromFlag("-file").
+			Help("Second field to correlate with (for cross-correlation)").
+			Done().
+
 		Flag("-auto", "-a").
-		Bool().
-		Global().
-		Help("Compute autocorrelation (use +auto for cross-correlation)").
-		Done().
+			Bool().
+			Global().
+			Help("Compute autocorrelation (use +auto for cross-correlation)").
+			Done().
+
 		Flag("-max-lag", "-m").
-		Int().
-		Default(0).
-		Global().
-		Help("Maximum lag for autocorrelation (0 = full, requires -auto)").
-		Done().
+			Int().
+			Default(0).
+			Global().
+			Help("Maximum lag for autocorrelation (0 = full, requires -auto)").
+			Done().
+
 		Flag("-output", "-o").
-		String().
-		Global().
-		Help("Output field name (default: correlation)").
-		Done().
+			String().
+			Global().
+			Help("Output field name (default: correlation)").
+			Done().
+
 		Flag("-same").
-		Bool().
-		Global().
-		Help("Output same length as input (use +same for full length)").
-		Done().
+			Bool().
+			Global().
+			Help("Output same length as input (use +same for full length)").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var inputFile, field, withField, outputField string
 			var auto, same, generate bool

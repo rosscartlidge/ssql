@@ -20,39 +20,39 @@ func RegisterPivot(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql pivot -row region -col product -val units -func count", "Count units by region and product").
 
 		Flag("-row").
-		String().
-		Global().
-		Help("Row field (groups become rows)").
-		FieldsFromFlag("").
-		Done().
+			String().
+			Global().
+			Help("Row field (groups become rows)").
+			FieldsFromFlag("").
+			Done().
 
 		Flag("-col").
-		String().
-		Global().
-		Help("Column field (unique values become columns)").
-		FieldsFromFlag("").
-		Done().
+			String().
+			Global().
+			Help("Column field (unique values become columns)").
+			FieldsFromFlag("").
+			Done().
 
 		Flag("-val").
-		String().
-		Global().
-		Help("Value field to aggregate").
-		FieldsFromFlag("").
-		Done().
+			String().
+			Global().
+			Help("Value field to aggregate").
+			FieldsFromFlag("").
+			Done().
 
 		Flag("-func").
-		String().
-		Global().
-		Help("Aggregation function: count, sum, avg, min, max (default: sum)").
-		Completer(&cf.StaticCompleter{Options: aggFuncs}).
-		Default("sum").
-		Done().
+			String().
+			Global().
+			Help("Aggregation function: count, sum, avg, min, max (default: sum)").
+			Completer(&cf.StaticCompleter{Options: aggFuncs}).
+			Default("sum").
+			Done().
 
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
 
 		Handler(func(ctx *cf.Context) error {
 			var rowField, colField, valField, aggFunc string

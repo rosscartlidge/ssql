@@ -37,90 +37,138 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from huge.csv | ssql group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total", "Memory-efficient streaming aggregation").
 		Example("ssql from data.csv | ssql group-by a_kind z_kind -count count -rollup", "Hierarchical rollup with parent-level counts").
 		Example("ssql from data.csv | ssql group-by a_kind z_kind -count count -cube", "Full cube with all combination counts").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FIELDS").
-		String().
-		Variadic().
-		FieldsFromFlag("").
-		Global().
-		Help("Fields to group by").
-		Done().
+			String().
+			Variadic().
+			FieldsFromFlag("").
+			Global().
+			Help("Fields to group by").
+			Done().
+
 		Flag("-count").
-		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-		Accumulate().
-		Global().
-		Help("Count records (result field name)").
-		Done().
+			Arg("result-name").
+				Completer(cf.NoCompleter{Hint: "<name>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Count records (result field name)").
+			Done().
+
 		Flag("-sum").
-		Arg("field").FieldsFromFlag("").Done().
-		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-		Accumulate().
-		Global().
-		Help("Sum field values (field name, result name)").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result-name").
+				Completer(cf.NoCompleter{Hint: "<name>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Sum field values (field name, result name)").
+			Done().
+
 		Flag("-avg").
-		Arg("field").FieldsFromFlag("").Done().
-		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-		Accumulate().
-		Global().
-		Help("Average field values (field name, result name)").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result-name").
+				Completer(cf.NoCompleter{Hint: "<name>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Average field values (field name, result name)").
+			Done().
+
 		Flag("-min").
-		Arg("field").FieldsFromFlag("").Done().
-		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-		Accumulate().
-		Global().
-		Help("Minimum field value (field name, result name)").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result-name").
+				Completer(cf.NoCompleter{Hint: "<name>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Minimum field value (field name, result name)").
+			Done().
+
 		Flag("-max").
-		Arg("field").FieldsFromFlag("").Done().
-		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-		Accumulate().
-		Global().
-		Help("Maximum field value (field name, result name)").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result-name").
+				Completer(cf.NoCompleter{Hint: "<name>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Maximum field value (field name, result name)").
+			Done().
+
 		Flag("-collect").
-		Arg("field").FieldsFromFlag("").Done().
-		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-		Accumulate().
-		Global().
-		Help("Collect all field values into array (field name, result name)").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result-name").
+				Completer(cf.NoCompleter{Hint: "<name>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Collect all field values into array (field name, result name)").
+			Done().
+
 		Flag("-expr", "-e").
-		Arg("expression").Completer(cf.NoCompleter{Hint: "<expression>"}).Done().
-		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-		Accumulate().
-		Global().
-		Help("Custom aggregation expression: -expr 'sum(salary * bonus)' total").
-		Done().
+			Arg("expression").
+				Completer(cf.NoCompleter{Hint: "<expression>"}).
+				Done().
+			Arg("result-name").
+				Completer(cf.NoCompleter{Hint: "<name>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Custom aggregation expression: -expr 'sum(salary * bonus)' total").
+			Done().
+
 		Flag("-stream-expr").
-		Arg("init").Completer(cf.NoCompleter{Hint: "<init-expr>"}).Done().
-		Arg("every").Completer(cf.NoCompleter{Hint: "<every-expr>"}).Done().
-		Arg("final").Completer(cf.NoCompleter{Hint: "<final-expr>"}).Done().
-		Arg("result-name").Completer(cf.NoCompleter{Hint: "<name>"}).Done().
-		Accumulate().
-		Global().
-		Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
-		Done().
+			Arg("init").
+				Completer(cf.NoCompleter{Hint: "<init-expr>"}).
+				Done().
+			Arg("every").
+				Completer(cf.NoCompleter{Hint: "<every-expr>"}).
+				Done().
+			Arg("final").
+				Completer(cf.NoCompleter{Hint: "<final-expr>"}).
+				Done().
+			Arg("result-name").
+				Completer(cf.NoCompleter{Hint: "<name>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
+			Done().
+
 		Flag("-presorted").
-		Bool().
-		Global().
-		Help("Input is presorted by group fields (streaming, O(1) memory per group)").
-		Done().
+			Bool().
+			Global().
+			Help("Input is presorted by group fields (streaming, O(1) memory per group)").
+			Done().
+
 		Flag("-rollup").
-		Bool().
-		Global().
-		Help("Hierarchical rollup: enrich rows with parent-level aggregations").
-		Done().
+			Bool().
+			Global().
+			Help("Hierarchical rollup: enrich rows with parent-level aggregations").
+			Done().
+
 		Flag("-cube").
-		Bool().
-		Global().
-		Help("Full cube: enrich rows with all combination aggregations").
-		Done().
+			Bool().
+			Global().
+			Help("Full cube: enrich rows with all combination aggregations").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var groupByFields []string
 			var generate bool

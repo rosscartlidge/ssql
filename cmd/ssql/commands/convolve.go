@@ -21,62 +21,73 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from sensor.csv | ssql convolve -field reading -kernel diff", "Compute first derivative").
 		Example("ssql from signal.csv | ssql convolve -field value -custom 0.25,0.5,0.25", "Apply custom kernel").
 		Example("ssql from signal.csv | ssql convolve -field value -auto", "Compute auto-convolution (signal with itself)").
+
 		Flag("-file").
-		String().
-		Global().
-		Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
-		Help("Input file (Arrow files use optimized direct signal extraction)").
-		Done().
+			String().
+			Global().
+			Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
+			Help("Input file (Arrow files use optimized direct signal extraction)").
+			Done().
+
 		Flag("-field", "-f").
-		String().
-		Global().
-		Required().
-		FieldsFromFlag("-file").
-		Help("Field containing numeric signal values").
-		Done().
+			String().
+			Global().
+			Required().
+			FieldsFromFlag("-file").
+			Help("Field containing numeric signal values").
+			Done().
+
 		Flag("-output", "-o").
-		String().
-		Global().
-		Help("Output field name (default: field_convolved)").
-		Done().
+			String().
+			Global().
+			Help("Output field name (default: field_convolved)").
+			Done().
+
 		Flag("-kernel", "-k").
-		String().
-		Global().
-		Help("Built-in kernel: avg, gaussian, diff, laplacian, sobel").
-		Completer(&cf.StaticCompleter{Options: []string{"avg", "gaussian", "diff", "laplacian", "sobel"}}).
-		Done().
+			String().
+			Global().
+			Help("Built-in kernel: avg, gaussian, diff, laplacian, sobel").
+			Completer(&cf.StaticCompleter{Options: []string{"avg", "gaussian", "diff", "laplacian", "sobel"}}).
+			Done().
+
 		Flag("-size", "-s").
-		Int().
-		Default(5).
-		Global().
-		Help("Kernel size (for avg, gaussian)").
-		Done().
+			Int().
+			Default(5).
+			Global().
+			Help("Kernel size (for avg, gaussian)").
+			Done().
+
 		Flag("-sigma").
-		Float().
-		Default(1.0).
-		Global().
-		Help("Sigma value for Gaussian kernel").
-		Done().
+			Float().
+			Default(1.0).
+			Global().
+			Help("Sigma value for Gaussian kernel").
+			Done().
+
 		Flag("-custom", "-c").
-		String().
-		Global().
-		Help("Custom kernel as comma-separated values (e.g., '0.25,0.5,0.25')").
-		Done().
+			String().
+			Global().
+			Help("Custom kernel as comma-separated values (e.g., '0.25,0.5,0.25')").
+			Done().
+
 		Flag("-auto", "-a").
-		Bool().
-		Global().
-		Help("Compute auto-convolution (use +auto for cross-convolution)").
-		Done().
+			Bool().
+			Global().
+			Help("Compute auto-convolution (use +auto for cross-convolution)").
+			Done().
+
 		Flag("-same").
-		Bool().
-		Global().
-		Help("Output same length as input (use +same for full length)").
-		Done().
+			Bool().
+			Global().
+			Help("Output same length as input (use +same for full length)").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var inputFile, field, outputField, kernelName, customKernel string
 			var size int = 5

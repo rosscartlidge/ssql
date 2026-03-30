@@ -18,23 +18,27 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from 2023.jsonl | ssql union -file 2024.jsonl", "Combine two JSONL files (removes duplicates)").
 		Example("ssql from 2023.csv | ssql union -file <(ssql from csv 2024.csv)", "Combine CSV files via process substitution").
 		Example("ssql from east.csv | ssql union -all -file <(ssql from csv west.csv) -file <(ssql from csv south.csv)", "Combine multiple CSV files (UNION ALL)").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-file", "-f").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-		Accumulate().
-		Local().
-		Help("Additional JSONL file. For CSV: -file <(ssql from csv FILE)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
+			Accumulate().
+			Local().
+			Help("Additional JSONL file. For CSV: -file <(ssql from csv FILE)").
+			Done().
+
 		Flag("-all", "-a").
-		Bool().
-		Global().
-		Help("Keep duplicates (UNION ALL, use +all for UNION)").
-		Done().
+			Bool().
+			Global().
+			Help("Keep duplicates (UNION ALL, use +all for UNION)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var unionAll bool
 			var generate bool

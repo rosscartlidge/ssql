@@ -15,17 +15,20 @@ func RegisterOffset(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("Skip first N records (SQL OFFSET)").
 		Example("ssql from data.csv | ssql offset 10", "Skip first 10 records").
 		Example("ssql from data.csv | ssql offset 100 | ssql limit 10", "Get records 101-110 (pagination)").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("N").
-		Int().
-		Required().
-		Global().
-		Help("Number of records to skip").
-		Done().
+			Int().
+			Required().
+			Global().
+			Help("Number of records to skip").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var n int
 			var generate bool

@@ -18,18 +18,25 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql cast -type age int", "Convert age to integer").
 		Example("ssql from data.csv | ssql cast -type price float -type active bool", "Convert multiple fields").
 		Example("ssql from data.csv | ssql cast -type zipcode string -type phone string", "Preserve leading zeros as strings").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-type", "-t").
-		Arg("field").FieldsFromFlag("").Done().
-		Arg("type").Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool"}}).Done().
-		Accumulate().
-		Global().
-		Help("Convert field to type: -type <field> <type>").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("type").
+				Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool"}}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Convert field to type: -type <field> <type>").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 			typeConversions := make(map[string]ssql.FieldType)

@@ -45,35 +45,41 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.csv | ssql to table -max-width 30", "Display with custom column width").
 		Example("ssql from huge.csv | ssql to table --sample 50", "Stream output, infer widths from first 50 records").
 		Example("ssql from data.csv | ssql to table --sample 0", "Materialize all records for perfect column widths").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-max-width").
-		Int().
-		Global().
-		Default(50).
-		Help("Maximum column width (truncate longer values)").
-		Done().
+			Int().
+			Global().
+			Default(50).
+			Help("Maximum column width (truncate longer values)").
+			Done().
+
 		Flag("-sample").
-		Int().
-		Global().
-		Default(100).
-		Help("Records to sample for column widths (0 = materialize all)").
-		Done().
+			Int().
+			Global().
+			Default(100).
+			Help("Records to sample for column widths (0 = materialize all)").
+			Done().
+
 		Flag("-only").
-		Bool().
-		Global().
-		Help("Only show specified fields (hide others)").
-		Done().
+			Bool().
+			Global().
+			Help("Only show specified fields (hide others)").
+			Done().
+
 		Flag("FIELDS").
-		String().
-		Variadic().
-		FieldsFromFlag("").
-		Global().
-		Help("Field names to display first (in order)").
-		Done().
+			String().
+			Variadic().
+			FieldsFromFlag("").
+			Global().
+			Help("Field names to display first (in order)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 			var maxWidth int
@@ -137,18 +143,21 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 		Description("Write as CSV file").
 		Example("ssql from data.json | ssql to csv output.csv", "Convert JSON to CSV").
 		Example("ssql from data.csv | ssql where -if status eq active | ssql to csv active.csv", "Filter and save to CSV").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.csv"}).
-		Global().
-		Default("").
-		Help("Output CSV file (or stdout if not specified)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+			Global().
+			Default("").
+			Help("Output CSV file (or stdout if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool
@@ -193,25 +202,29 @@ func registerToTSV(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.json | ssql to tsv output.tsv", "Convert JSON to TSV").
 		Example("ssql from data.csv | ssql to tsv -separator '|' output.psv", "Use pipe separator").
 		Example("ssql from data.csv | ssql to tsv", "Write TSV to stdout").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-separator", "-s").
-		String().
-		Global().
-		Default("\t").
-		Completer(&cf.StaticCompleter{Options: []string{"\\t", "|", ";", ","}}). // Common separators
-		Help("Field separator character (default: tab)").
-		Done().
+			String().
+			Global().
+			Default("\t").
+			Completer(&cf.StaticCompleter{Options: []string{"\\t", "|", ";", ","}}). // Common separators
+			Help("Field separator character (default: tab)").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.tsv"}).
-		Global().
-		Default("").
-		Help("Output TSV file (or stdout if not specified)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.tsv"}).
+			Global().
+			Default("").
+			Help("Output TSV file (or stdout if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var separator string
@@ -258,18 +271,21 @@ func registerToJSON(cmd *cf.SubcommandBuilder) {
 		Description("Write as pretty-printed JSON array").
 		Example("ssql from data.csv | ssql to json", "Convert CSV to pretty JSON").
 		Example("ssql from data.csv | ssql to json output.json", "Write pretty JSON to file").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.json"}).
-		Global().
-		Default("").
-		Help("Output JSON file (or stdout if not specified)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.json"}).
+			Global().
+			Default("").
+			Help("Output JSON file (or stdout if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool
@@ -312,18 +328,21 @@ func registerToJSONL(cmd *cf.SubcommandBuilder) {
 		Description("Write as JSONL (one JSON object per line)").
 		Example("ssql from data.csv | ssql to jsonl", "Convert CSV to JSONL").
 		Example("ssql from data.csv | ssql to jsonl output.jsonl", "Write JSONL to file").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-		Global().
-		Default("").
-		Help("Output JSONL file (or stdout if not specified)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
+			Global().
+			Default("").
+			Help("Output JSONL file (or stdout if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool
@@ -366,18 +385,21 @@ func registerToArrow(cmd *cf.SubcommandBuilder) {
 		Description("Write as Apache Arrow IPC file (10-20x faster I/O)").
 		Example("ssql from data.csv | ssql to arrow output.arrow", "Convert CSV to Arrow for faster subsequent reads").
 		Example("ssql from large.json | ssql to arrow data.arrow", "Convert JSON to Arrow format").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.arrow"}).
-		Global().
-		Required().
-		Help("Output Arrow file (required)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.arrow"}).
+			Global().
+			Required().
+			Help("Output Arrow file (required)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool
@@ -419,18 +441,21 @@ func registerToParquet(cmd *cf.SubcommandBuilder) {
 		Description("Write as Parquet file (Snappy compression, DuckDB compatible)").
 		Example("ssql from data.csv | ssql to parquet output.parquet", "Convert CSV to Parquet").
 		Example("ssql from large.json | ssql to parquet data.parquet", "Convert JSON to Parquet").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
-		Global().
-		Required().
-		Help("Output Parquet file (required)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
+			Global().
+			Required().
+			Help("Output Parquet file (required)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool
@@ -470,24 +495,28 @@ func registerToWAV(cmd *cf.SubcommandBuilder) {
 		Example("ssql from audio.wav | ssql to wav output.wav", "Copy WAV file (round-trip)").
 		Example("ssql from audio.wav | ssql to wav -rate 22050 output.wav", "Resample to 22050 Hz").
 		Example("ssql from signal.jsonl | ssql to wav -rate 44100 audio.wav", "Convert signal data to audio").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-rate", "-r").
-		Int().
-		Global().
-		Default(0).
-		Help("Sample rate in Hz (default: from schema header, or 44100 if not specified)").
-		Done().
+			Int().
+			Global().
+			Default(0).
+			Help("Sample rate in Hz (default: from schema header, or 44100 if not specified)").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.wav"}).
-		Global().
-		Required().
-		Help("Output WAV file (required)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.wav"}).
+			Global().
+			Required().
+			Help("Output WAV file (required)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var sampleRate int
@@ -542,24 +571,28 @@ func registerToXLSX(cmd *cf.SubcommandBuilder) {
 		Description("Write as Excel XLSX file").
 		Example("ssql from data.csv | ssql to xlsx output.xlsx", "Convert CSV to Excel").
 		Example("ssql from data.json | ssql to xlsx -sheet Sales output.xlsx", "Convert JSON to Excel with custom sheet name").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-sheet").
-		String().
-		Global().
-		Default("").
-		Help("Sheet name (default: Sheet1)").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Sheet name (default: Sheet1)").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.xlsx"}).
-		Global().
-		Required().
-		Help("Output XLSX file (required)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.xlsx"}).
+			Global().
+			Required().
+			Help("Output XLSX file (required)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var sheet string
@@ -618,84 +651,98 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 		Example("ssql from spectro.jsonl | ssql to chart -x time -y frequency -z magnitude -type heatmap", "Create heatmap from spectrogram data").
 		Example("ssql from data.csv | ssql to chart -x frequency -y magnitude -log-x", "Create chart with logarithmic X-axis").
 		Example("ssql from customers.csv | ssql to chart -x age -y spend -color region -type scatter", "Scatter plot with points colored by region").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-x").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("X-axis field").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("X-axis field").
+			Done().
+
 		Flag("-y").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Accumulate().
-		Help("Y-axis field (can specify multiple times for multi-series)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Accumulate().
+			Help("Y-axis field (can specify multiple times for multi-series)").
+			Done().
+
 		Flag("-z").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Z-axis field (for heatmap color values)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Z-axis field (for heatmap color values)").
+			Done().
+
 		Flag("-type", "-t").
-		String().
-		Completer(&cf.StaticCompleter{Options: chartTypes}).
-		Global().
-		Default("line").
-		Help("Chart type: line, bar, scatter, pie, doughnut, radar, heatmap").
-		Done().
+			String().
+			Completer(&cf.StaticCompleter{Options: chartTypes}).
+			Global().
+			Default("line").
+			Help("Chart type: line, bar, scatter, pie, doughnut, radar, heatmap").
+			Done().
+
 		Flag("-log-x").
-		Bool().
-		Global().
-		Help("Use logarithmic scale for X-axis").
-		Done().
+			Bool().
+			Global().
+			Help("Use logarithmic scale for X-axis").
+			Done().
+
 		Flag("-log-y").
-		Bool().
-		Global().
-		Help("Use logarithmic scale for Y-axis").
-		Done().
+			Bool().
+			Global().
+			Help("Use logarithmic scale for Y-axis").
+			Done().
+
 		Flag("-color").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Color-by field for scatter plots (categorical coloring)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Color-by field for scatter plots (categorical coloring)").
+			Done().
+
 		Flag("-colorscale").
-		String().
-		Completer(&cf.StaticCompleter{Options: colorScales}).
-		Global().
-		Default("viridis").
-		Help("Color scale for heatmaps: viridis, plasma, inferno, magma, cividis, turbo").
-		Done().
+			String().
+			Completer(&cf.StaticCompleter{Options: colorScales}).
+			Global().
+			Default("viridis").
+			Help("Color scale for heatmaps: viridis, plasma, inferno, magma, cividis, turbo").
+			Done().
+
 		Flag("-zmin").
-		String().
-		Global().
-		Default("").
-		Help("Minimum value for color scale (heatmap only, empty = auto)").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Minimum value for color scale (heatmap only, empty = auto)").
+			Done().
+
 		Flag("-zmax").
-		String().
-		Global().
-		Default("").
-		Help("Maximum value for color scale (heatmap only, empty = auto)").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Maximum value for color scale (heatmap only, empty = auto)").
+			Done().
+
 		Flag("-log-freq").
-		Bool().
-		Global().
-		Help("Use logarithmic Y-axis for spectrograms (heatmap only)").
-		Done().
+			Bool().
+			Global().
+			Help("Use logarithmic Y-axis for spectrograms (heatmap only)").
+			Done().
+
 		Flag("-output", "-o").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.html"}).
-		Global().
-		Default("chart.html").
-		Help("Output HTML file (default: chart.html)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.html"}).
+			Global().
+			Default("chart.html").
+			Help("Output HTML file (default: chart.html)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var xField, zField, colorField, colorScale, chartType, outputFile string
 			var zMinStr, zMaxStr string
@@ -1330,70 +1377,81 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 			"Animated histogram of distributions over years").
 		Example("ssql from data.csv | ssql to animate -frame epoch -x x -y y -z val -fps 10 -loop",
 			"Fast looping heatmap animation").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-frame").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Required().
-		Help("Field that defines animation frames (ordered)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Required().
+			Help("Field that defines animation frames (ordered)").
+			Done().
+
 		Flag("-x").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Required().
-		Help("X-axis field").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Required().
+			Help("X-axis field").
+			Done().
+
 		Flag("-y").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Required().
-		Help("Y-axis field (value field for histogram)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Required().
+			Help("Y-axis field (value field for histogram)").
+			Done().
+
 		Flag("-z").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Z-axis field for heatmap cell values (required for heatmap)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Z-axis field for heatmap cell values (required for heatmap)").
+			Done().
+
 		Flag("-type").
-		String().
-		Completer(&cf.StaticCompleter{Options: chartTypes}).
-		Global().
-		Default("heatmap").
-		Help("Chart type: heatmap or histogram").
-		Done().
+			String().
+			Completer(&cf.StaticCompleter{Options: chartTypes}).
+			Global().
+			Default("heatmap").
+			Help("Chart type: heatmap or histogram").
+			Done().
+
 		Flag("-fps").
-		Int().
-		Global().
-		Default(5).
-		Help("Playback frames per second (default: 5)").
-		Done().
+			Int().
+			Global().
+			Default(5).
+			Help("Playback frames per second (default: 5)").
+			Done().
+
 		Flag("-colorscale").
-		String().
-		Completer(&cf.StaticCompleter{Options: colorScales}).
-		Global().
-		Default("viridis").
-		Help("Color scale for heatmap: viridis, plasma, inferno, magma, cividis, turbo").
-		Done().
+			String().
+			Completer(&cf.StaticCompleter{Options: colorScales}).
+			Global().
+			Default("viridis").
+			Help("Color scale for heatmap: viridis, plasma, inferno, magma, cividis, turbo").
+			Done().
+
 		Flag("-loop").
-		Bool().
-		Global().
-		Help("Loop playback").
-		Done().
+			Bool().
+			Global().
+			Help("Loop playback").
+			Done().
+
 		Flag("-output", "-o").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.html"}).
-		Global().
-		Default("animate.html").
-		Help("Output HTML file (default: animate.html)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.html"}).
+			Global().
+			Default("animate.html").
+			Help("Output HTML file (default: animate.html)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var frameField, xField, yField, zField, chartType, colorScale, outputFile string
 			var fps int
@@ -1556,54 +1614,63 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			"Explore filtered error logs").
 		Example("ssql from sales.csv | ssql to explore -wasm -theme dark analysis.html",
 			"Explorer with WASM-powered client-side transforms").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-title").
-		String().
-		Global().
-		Default("Data Explorer").
-		Help("Page title").
-		Done().
+			String().
+			Global().
+			Default("Data Explorer").
+			Help("Page title").
+			Done().
+
 		Flag("-theme").
-		String().
-		Global().
-		Default("light").
-		Completer(&cf.StaticCompleter{Options: []string{"light", "dark"}}).
-		Help("Theme: light or dark").
-		Done().
+			String().
+			Global().
+			Default("light").
+			Completer(&cf.StaticCompleter{Options: []string{"light", "dark"}}).
+			Help("Theme: light or dark").
+			Done().
+
 		Flag("-x").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Initial X-axis field").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Initial X-axis field").
+			Done().
+
 		Flag("-y").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Initial Y-axis field").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Initial Y-axis field").
+			Done().
+
 		Flag("-pagesize").
-		Int().
-		Global().
-		Default(50).
-		Help("Rows per page in table (default 50)").
-		Done().
+			Int().
+			Global().
+			Default(50).
+			Help("Rows per page in table (default 50)").
+			Done().
+
 		Flag("-wasm").
-		Bool().
-		Global().
-		Help("Enable WASM-powered client-side transforms").
-		Done().
+			Bool().
+			Global().
+			Help("Enable WASM-powered client-side transforms").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.html"}).
-		Global().
-		Default("explore.html").
-		Help("Output HTML file (default: explore.html)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.html"}).
+			Global().
+			Default("explore.html").
+			Help("Output HTML file (default: explore.html)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var title, theme, xField, yField, outputFile string
 			var pageSize int

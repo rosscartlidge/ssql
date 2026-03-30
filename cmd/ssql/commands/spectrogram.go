@@ -18,56 +18,65 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from signal.csv | ssql spectrogram -field amplitude", "Compute spectrogram with default settings (window=1024, hop=256, hann)").
 		Example("ssql spectrogram -file signal.arrow -field value -window-size 2048 -rate 44100", "Direct Arrow read with custom window size and sample rate").
 		Example("ssql from audio.csv | ssql spectrogram -field sample -window-size 512 -hop 128 -window-type hamming", "Custom hop size and Hamming window").
+
 		Flag("-file").
-		String().
-		Global().
-		Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
-		Help("Input file (Arrow files use optimized direct signal extraction)").
-		Done().
+			String().
+			Global().
+			Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
+			Help("Input file (Arrow files use optimized direct signal extraction)").
+			Done().
+
 		Flag("-field", "-f").
-		String().
-		Global().
-		Required().
-		FieldsFromFlag("-file").
-		Help("Field containing numeric signal values").
-		Done().
+			String().
+			Global().
+			Required().
+			FieldsFromFlag("-file").
+			Help("Field containing numeric signal values").
+			Done().
+
 		Flag("-window-size", "-w").
-		Int().
-		Default(1024).
-		Global().
-		Help("FFT window size in samples (default: 1024)").
-		Done().
+			Int().
+			Default(1024).
+			Global().
+			Help("FFT window size in samples (default: 1024)").
+			Done().
+
 		Flag("-hop", "-h").
-		Int().
-		Default(0).
-		Global().
-		Help("Hop size in samples between windows (default: window-size/4)").
-		Done().
+			Int().
+			Default(0).
+			Global().
+			Help("Hop size in samples between windows (default: window-size/4)").
+			Done().
+
 		Flag("-window-type", "-t").
-		String().
-		Default("hann").
-		Global().
-		Completer(&cf.StaticCompleter{Options: []string{"hann", "hamming", "blackman", "none"}}).
-		Help("Window function: hann, hamming, blackman, none (default: hann)").
-		Done().
+			String().
+			Default("hann").
+			Global().
+			Completer(&cf.StaticCompleter{Options: []string{"hann", "hamming", "blackman", "none"}}).
+			Help("Window function: hann, hamming, blackman, none (default: hann)").
+			Done().
+
 		Flag("-rate", "-r").
-		Float().
-		Default(1.0).
-		Global().
-		Help("Sample rate in Hz (for frequency/time calculation)").
-		Done().
+			Float().
+			Default(1.0).
+			Global().
+			Help("Sample rate in Hz (for frequency/time calculation)").
+			Done().
+
 		Flag("-output", "-o").
-		String().
-		Default("magnitude").
-		Global().
-		Completer(&cf.StaticCompleter{Options: []string{"magnitude", "power", "db"}}).
-		Help("Output format: magnitude (default), power (magnitude^2), db (20*log10)").
-		Done().
+			String().
+			Default("magnitude").
+			Global().
+			Completer(&cf.StaticCompleter{Options: []string{"magnitude", "power", "db"}}).
+			Help("Output format: magnitude (default), power (magnitude^2), db (20*log10)").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var field string
