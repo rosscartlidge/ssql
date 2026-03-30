@@ -87,11 +87,34 @@ When constructing shell commands for remote execution (SSH, bash -c):
 
 Version is stored in `cmd/ssql/version/version.txt` (WITHOUT "v" prefix). Key rules:
 - version.txt: `X.Y.Z` (no "v"), git tag: `vX.Y.Z` (with "v")
+- Update `cmd/ssql/version/commit.txt` with `git rev-parse --short=8 HEAD` before tagging
 - Use annotated tags: `git tag -a vX.Y.Z -m "..."`
 - go.mod must NOT contain `replace` directive for releases
-- Always build debian packages for minor/major releases
+- **Never re-tag a Go module version** — the checksum database is immutable
 - Always verify with `GOPROXY=direct go install` before announcing
 - Major version bumps only when explicitly requested
+
+## Post-Release Checklist (CRITICAL)
+
+After a minor/major release, always do ALL of these:
+
+**Builds:**
+- [ ] `make deb` — build `ssql_X.Y.Z_amd64.deb` and `ssql-gpu_X.Y.Z_amd64.deb`, commit to repo
+- [ ] `make build-gpu` — build and test `ssql_gpu` binary
+- [ ] `make playground` — rebuild WASM playground
+
+**Deployments:**
+- [ ] Update `gh-pages` branch with new playground (see `claude/playground.md` for steps)
+- [ ] Cross-compile for WebVM: `CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -ldflags "..." -o ~/src/ssql-terminal/dockerfiles/ssql ./cmd/ssql`
+- [ ] Push WebVM binary and trigger deploy: `gh workflow run Deploy --ref main -f DOCKERFILE_PATH=dockerfiles/ssql_mini -f IMAGE_SIZE=750M -f DEPLOY_TO_GITHUB_PAGES=true -f GITHUB_RELEASE=false`
+
+**Documentation audit:**
+- [ ] Run `make doc-check` (L1 validation)
+- [ ] Check README.md — version numbers, examples reflect new features
+- [ ] Check doc/cli-codelab.md — command syntax, flags, examples up to date
+- [ ] Check doc/api-reference.md — new/changed functions documented
+- [ ] Check doc/ai-code-generation.md — new features have examples
+- [ ] Update doc/research/TODO.md to reflect current state
 
 ## Project History
 See `claude/project-history.md` for version history and migration details.
