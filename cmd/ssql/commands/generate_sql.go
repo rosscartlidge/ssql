@@ -171,6 +171,12 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		return nil
 	case "join":
 		return translateJoin(q, args[2:], funcFrags)
+	case "rename":
+		return translateRename(q, args[2:])
+	case "cast":
+		return translateCast(q, args[2:])
+	case "update":
+		return translateUpdate(q, args[2:])
 	case "include":
 		return translateInclude(q, args[2:])
 	case "exclude":
@@ -495,6 +501,144 @@ func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
 		sb.WriteString(" WHERE " + strings.Join(sub.whereClauses, " AND "))
 	}
 	return sb.String()
+}
+
+func translateRename(q *sqlQuery, args []string) error {
+	// DuckDB: SELECT * RENAME ("old" AS "new", ...)
+	var renames []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-as" && i+2 < len(args) {
+			renames = append(renames, fmt.Sprintf("%s AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
+			i += 2
+		}
+	}
+	if len(renames) > 0 {
+		q.selectExprs = append(q.selectExprs, "* RENAME ("+strings.Join(renames, ", ")+")")
+	}
+	return nil
+}
+
+func translateCast(q *sqlQuery, args []string) error {
+	// DuckDB: SELECT * REPLACE (CAST("field" AS TYPE) AS "field", ...)
+	var replacements []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-type" && i+2 < len(args) {
+			field, typeName := args[i+1], args[i+2]
+			sqlType := mapTypeToSQL(typeName)
+			replacements = append(replacements, fmt.Sprintf("CAST(%s AS %s) AS %s", quoteIdent(field), sqlType, quoteIdent(field)))
+			i += 2
+		}
+	}
+	if len(replacements) > 0 {
+		q.selectExprs = append(q.selectExprs, "* REPLACE ("+strings.Join(replacements, ", ")+")")
+	}
+	return nil
+}
+
+func translateUpdate(q *sqlQuery, args []string) error {
+	// DuckDB: SELECT * REPLACE (CASE WHEN cond THEN val ELSE "field" END AS "field")
+	// Parse: -if field op val -set field val [-set field val ...]
+	// Multiple -if groups create chained CASE WHEN ... WHEN ... ELSE ... END
+
+	// First pass: collect all target fields and their condition/value pairs
+	type assignment struct {
+		conds []string // AND conditions for this clause
+		field string
+		value string
+	}
+	var assignments []assignment
+	var currentConds []string
+
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "-if", "-i":
+			if i+3 >= len(args) {
+				return fmt.Errorf("incomplete -if condition in update")
+			}
+			cond := translateCondition(args[i+1], args[i+2], args[i+3])
+			currentConds = append(currentConds, cond)
+			i += 4
+		case "-set", "-s":
+			if i+2 >= len(args) {
+				return fmt.Errorf("incomplete -set in update")
+			}
+			assignments = append(assignments, assignment{
+				conds: append([]string{}, currentConds...),
+				field: args[i+1],
+				value: args[i+2],
+			})
+			i += 3
+		case "-":
+			// Clause separator — reset conditions
+			currentConds = nil
+			i++
+		default:
+			i++
+		}
+	}
+
+	// Group assignments by target field to build a single CASE expression per field
+	fieldCases := make(map[string][]assignment)
+	var fieldOrder []string
+	for _, a := range assignments {
+		if _, seen := fieldCases[a.field]; !seen {
+			fieldOrder = append(fieldOrder, a.field)
+		}
+		fieldCases[a.field] = append(fieldCases[a.field], a)
+	}
+
+	var replacements []string
+	for _, field := range fieldOrder {
+		cases := fieldCases[field]
+		var sb strings.Builder
+		sb.WriteString("CASE")
+		for _, c := range cases {
+			if len(c.conds) > 0 {
+				sb.WriteString(" WHEN " + strings.Join(c.conds, " AND ") + " THEN '" + escapeSQL(c.value) + "'")
+			} else {
+				// Unconditional set
+				sb.WriteString(" ELSE '" + escapeSQL(c.value) + "'")
+			}
+		}
+		// If all cases are conditional, preserve original value as ELSE
+		hasUnconditional := false
+		for _, c := range cases {
+			if len(c.conds) == 0 {
+				hasUnconditional = true
+				break
+			}
+		}
+		if !hasUnconditional {
+			sb.WriteString(" ELSE " + quoteIdent(field))
+		}
+		sb.WriteString(" END")
+		replacements = append(replacements, fmt.Sprintf("%s AS %s", sb.String(), quoteIdent(field)))
+	}
+
+	if len(replacements) > 0 {
+		q.selectExprs = append(q.selectExprs, "* REPLACE ("+strings.Join(replacements, ", ")+")")
+	}
+	return nil
+}
+
+func mapTypeToSQL(typeName string) string {
+	switch strings.ToLower(typeName) {
+	case "int", "integer", "int64":
+		return "BIGINT"
+	case "float", "float64", "double", "number":
+		return "DOUBLE"
+	case "string", "str", "text":
+		return "VARCHAR"
+	case "bool", "boolean":
+		return "BOOLEAN"
+	case "date":
+		return "DATE"
+	case "timestamp", "datetime":
+		return "TIMESTAMP"
+	default:
+		return strings.ToUpper(typeName)
+	}
 }
 
 func translateInclude(q *sqlQuery, args []string) error {

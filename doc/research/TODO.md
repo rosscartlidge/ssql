@@ -17,7 +17,7 @@ Tracked issues and feature gaps discovered during development.
 ## SQL Generation (`generate sql`)
 
 - [ ] **Window functions** — `generate sql` returns "unsupported command" for `window`. DuckDB supports full window function syntax (`ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)`), so translation is feasible.
-- [ ] **rename / cast / update** — not yet translated to SQL equivalents (`AS`, `CAST()`, `CASE WHEN`).
+- [x] **rename / cast / update** — translated using DuckDB's `* RENAME`, `* REPLACE (CAST(...))`, and `* REPLACE (CASE WHEN ... END)`.
 - [ ] **include / exclude** — translate to explicit column list or `SELECT * EXCLUDE(...)`.
 - [ ] **from ssh / from catalog** — currently treats "ssh" as a filename. Should either error clearly or skip (these are ssql-specific distributed features with no SQL equivalent).
 
