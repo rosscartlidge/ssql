@@ -46,10 +46,16 @@ just like a real shell.
 `to chart` in the pipeline, reads the generated file via `_fsReadFile()`, and
 displays it in an iframe below the output area.
 
+## Adding Examples That Auto-Optimize
+
+Some examples (SSH pushdown, optimizer demos) should run the optimizer instead of
+executing. Add their index to the `OPTIMIZE_EXAMPLES` Set in `playground.html`.
+Examples containing `from ssh` or `from catalog` auto-optimize regardless.
+
 ## Building and Serving
 
 ```bash
-make playground                    # builds WASM (~68MB)
+make playground                    # builds WASM (~68MB, ~13MB slim)
 cd cmd/ssql-playground && python3 -m http.server 8080
 ```
 
@@ -60,16 +66,30 @@ WASM rebuild only needed when Go code changes.
 
 ### WASM Playground (rosscartlidge.github.io/ssql/playground.html)
 
-Served from the `gh-pages` branch. Update manually:
+Served from the `gh-pages` branch. The WASM binary is NOT tracked in main (gitignored),
+so you must build it on main, save to /tmp, then switch branches to deploy.
 
+**HTML-only changes** (no WASM rebuild needed):
 ```bash
 git checkout gh-pages
 git show main:cmd/ssql-playground/playground.html > playground.html
-git show main:cmd/ssql-playground/fs-polyfill.js > fs-polyfill.js
-mkdir -p data && git show main:cmd/ssql-playground/data/employees.csv > data/employees.csv
-# repeat for other data files
-# copy freshly-built ssql-playground.wasm and wasm_exec.js
-git add -A && git commit -m "deploy: update playground" && git push
+git add playground.html && git commit -m "deploy: update playground" && git push
+git checkout main
+```
+
+**Go code changes** (WASM rebuild required):
+```bash
+# 1. Build on main
+make playground
+cp cmd/ssql-playground/ssql-playground.wasm /tmp/
+cp cmd/ssql-playground/wasm_exec.js /tmp/
+
+# 2. Deploy from gh-pages
+git checkout gh-pages
+cp /tmp/ssql-playground.wasm .
+cp /tmp/wasm_exec.js .
+git show main:cmd/ssql-playground/playground.html > playground.html
+git add -A && git commit -m "deploy: rebuild WASM" && git push
 git checkout main
 ```
 
@@ -77,8 +97,18 @@ git checkout main
 
 Separate repo: `rosscartlidge/ssql-terminal`. Deploy is **manual trigger only** (workflow_dispatch).
 
-After pushing changes to the terminal repo:
+**Updating the ssql binary:**
+```bash
+# Cross-compile slim build for linux/386
+CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -tags slim \
+  -ldflags "-s -w -X github.com/rosscartlidge/ssql/v4/cmd/ssql/version.Commit=$(git rev-parse --short=8 HEAD)" \
+  -o ~/src/ssql-terminal/dockerfiles/ssql ./cmd/ssql
 
+cd ~/src/ssql-terminal
+git add dockerfiles/ssql && git commit -m "update ssql binary" && git push
+```
+
+**Triggering deploy:**
 ```bash
 cd ~/src/ssql-terminal
 gh workflow run Deploy --ref main \
@@ -90,10 +120,30 @@ gh workflow run Deploy --ref main \
 
 This builds Docker → ext2 image → deploys to Pages. Takes ~2 minutes.
 
+### WebVM filesystem and `docker cp -a` uid/gid bug
+
+CheerpX uses an ext2 overlay filesystem — reads from HTTP, writes to IndexedDB.
+Runtime writes **do work**, but the deploy workflow uses `docker cp -a` to extract
+the container filesystem, which has a known bug (moby/moby#41727): it does NOT
+preserve uid/gid ownership. All files end up owned by root in the ext2 image.
+
+The deploy workflow includes a workaround:
+```yaml
+sudo docker cp -a ${CONTAINER_ID}:/ /mnt/
+sudo chown -R 1000:1000 /mnt/home/user/   # fix ownership
+```
+
+Without this fix, directories like `.ssh/` (mode 700) are inaccessible at runtime
+because CheerpX runs as uid 1000 but the directory is owned by root.
+
+**Key implication:** File permissions (mode bits) ARE preserved by `docker cp -a`,
+but ownership is not. World-readable dirs like `data/` work fine; restricted dirs
+like `.ssh/` fail without the chown fix.
+
 ### Keeping WebVM in sync
 
 When updating the playground data or examples:
 1. Copy CSV files: `cp cmd/ssql-playground/data/*.csv ~/src/ssql-terminal/dockerfiles/data/`
 2. Update `~/src/ssql-terminal/dockerfiles/data/examples.sh` with new examples
-3. Rebuild ssql for linux/386: `CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -o ~/src/ssql-terminal/dockerfiles/ssql ./cmd/ssql`
+3. Rebuild ssql for linux/386 (see above)
 4. Commit, push, and trigger the Deploy workflow
