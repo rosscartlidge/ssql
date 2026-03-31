@@ -262,8 +262,8 @@ wasm:
 
 # Build WASM playground (full CLI in browser)
 playground:
-	@echo "Building playground WASM (full ssql CLI)..."
-	GOOS=js GOARCH=wasm go build -ldflags="-s -w $(LDFLAGS)" -o cmd/ssql-playground/ssql-playground.wasm ./cmd/ssql-playground
+	@echo "Building playground WASM (slim build — no arrow/parquet/xlsx)..."
+	GOOS=js GOARCH=wasm go build -tags slim -ldflags="-s -w $(LDFLAGS)" -o cmd/ssql-playground/ssql-playground.wasm ./cmd/ssql-playground
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/ssql-playground/
 	@echo "✓ Built cmd/ssql-playground/ssql-playground.wasm ($$(du -h cmd/ssql-playground/ssql-playground.wasm | cut -f1) raw)"
 	@echo "Serve with: cd cmd/ssql-playground && python3 -m http.server 8080"

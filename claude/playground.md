@@ -55,7 +55,7 @@ Examples containing `from ssh` or `from catalog` auto-optimize regardless.
 ## Building and Serving
 
 ```bash
-make playground                    # builds WASM (~68MB, ~13MB slim)
+make playground                    # builds slim WASM (~13MB, excludes arrow/parquet/xlsx)
 cd cmd/ssql-playground && python3 -m http.server 8080
 ```
 
