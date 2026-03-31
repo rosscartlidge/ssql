@@ -18,15 +18,15 @@ Tracked issues and feature gaps discovered during development.
 
 - [x] **Window functions** — all 15 window functions translated: ranking (ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK), offset (LAG, LEAD, FIRST_VALUE, LAST_VALUE), aggregate (SUM, AVG, COUNT, MIN, MAX), and NTILE. Multi-clause windows, custom frames, PARTITION BY, ORDER BY all supported.
 - [x] **rename / cast / update** — translated using DuckDB's `* RENAME`, `* REPLACE (CAST(...))`, and `* REPLACE (CASE WHEN ... END)`.
-- [ ] **include / exclude** — translate to explicit column list or `SELECT * EXCLUDE(...)`.
+- [x] **include / exclude** — `include` translates to explicit column list, `exclude` uses DuckDB's `SELECT * EXCLUDE (...)`.
 - [ ] **from ssh / from catalog** — currently treats "ssh" as a filename. Should either error clearly or skip (these are ssql-specific distributed features with no SQL equivalent).
 
 ## WASM Playground
 
-- [ ] **Binary size** — 68MB raw / 12MB gzipped. Blocked on from.go/to.go split (see Build System above). Target: ~15MB raw / ~3MB gzipped with slim build.
+- [x] **Binary size** — slim build tag reduces WASM from 68MB to 13MB raw. Both playgrounds deployed with slim builds.
 - [x] **GitHub Pages deployment** — live at `https://rosscartlidge.github.io/ssql/playground.html`. Manual push to `gh-pages` branch.
 - [x] **Chart rendering** — `to chart` output rendered inline via iframe.
-- [x] **Progressive examples** — 12 examples from simple to complex, with static data files.
+- [x] **Progressive examples** — 15 examples from simple to complex, with static data files.
 - [x] **Data viewer** — click dataset names to view raw CSV.
 - [x] **# comments** — comment out pipeline stages to build up incrementally.
 - [ ] **GitHub Actions automation** — build WASM and deploy to `gh-pages` automatically on push to `main`.
@@ -43,7 +43,7 @@ Tracked issues and feature gaps discovered during development.
 
 ## Tab Completion
 
-- [ ] **`ssql from <tab>` should also complete filenames** — currently only shows subcommands (csv, ssh, parquet, etc.). Most users type `ssql from data.csv` directly without the subcommand, so file completion at this position would be more useful.
+- [x] **`ssql from <tab>` should also complete filenames** — autocli v4.3.7 returns both subcommand names and file completions when a command has both.
 
 ## Pipeline Optimizer (`generate ssql`)
 
