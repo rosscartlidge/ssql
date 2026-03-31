@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -171,6 +172,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		return nil
 	case "join":
 		return translateJoin(q, args[2:], funcFrags)
+	case "window":
+		return translateWindow(q, args[2:])
 	case "rename":
 		return translateRename(q, args[2:])
 	case "cast":
@@ -501,6 +504,228 @@ func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
 		sb.WriteString(" WHERE " + strings.Join(sub.whereClauses, " AND "))
 	}
 	return sb.String()
+}
+
+func translateWindow(q *sqlQuery, args []string) error {
+	// Parse window clauses separated by "-"
+	// Each clause has: partition, order, desc, preceding, following, and function flags
+	type windowClause struct {
+		partitionBy []string
+		orderBy     []string
+		desc        bool
+		preceding   int
+		following   int
+		funcs       []string // pre-built SQL function expressions like "ROW_NUMBER() AS rn"
+	}
+
+	clauses := []windowClause{{preceding: -1, following: 0}}
+	cur := &clauses[0]
+
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "-":
+			// Clause separator
+			clauses = append(clauses, windowClause{preceding: -1, following: 0})
+			cur = &clauses[len(clauses)-1]
+			i++
+		case "-partition":
+			if i+1 < len(args) {
+				cur.partitionBy = append(cur.partitionBy, args[i+1])
+				i += 2
+			} else {
+				i++
+			}
+		case "-order":
+			if i+1 < len(args) {
+				cur.orderBy = append(cur.orderBy, args[i+1])
+				i += 2
+			} else {
+				i++
+			}
+		case "-desc", "-d":
+			cur.desc = true
+			i++
+		case "-preceding":
+			if i+1 < len(args) {
+				cur.preceding, _ = strconv.Atoi(args[i+1])
+				i += 2
+			} else {
+				i++
+			}
+		case "-following":
+			if i+1 < len(args) {
+				cur.following, _ = strconv.Atoi(args[i+1])
+				i += 2
+			} else {
+				i++
+			}
+		case "-presorted":
+			i++ // ignore for SQL
+		// Ranking: 1-arg → result
+		case "-row-number":
+			if i+1 < len(args) {
+				cur.funcs = append(cur.funcs, fmt.Sprintf("ROW_NUMBER() AS %s", quoteIdent(args[i+1])))
+				i += 2
+			} else {
+				i++
+			}
+		case "-rank":
+			if i+1 < len(args) {
+				cur.funcs = append(cur.funcs, fmt.Sprintf("RANK() AS %s", quoteIdent(args[i+1])))
+				i += 2
+			} else {
+				i++
+			}
+		case "-dense-rank":
+			if i+1 < len(args) {
+				cur.funcs = append(cur.funcs, fmt.Sprintf("DENSE_RANK() AS %s", quoteIdent(args[i+1])))
+				i += 2
+			} else {
+				i++
+			}
+		case "-percent-rank":
+			if i+1 < len(args) {
+				cur.funcs = append(cur.funcs, fmt.Sprintf("PERCENT_RANK() AS %s", quoteIdent(args[i+1])))
+				i += 2
+			} else {
+				i++
+			}
+		// 1-arg result: -count result
+		case "-count":
+			if i+1 < len(args) {
+				cur.funcs = append(cur.funcs, fmt.Sprintf("COUNT(*) AS %s", quoteIdent(args[i+1])))
+				i += 2
+			} else {
+				i++
+			}
+		// 2-arg: -ntile n result
+		case "-ntile":
+			if i+2 < len(args) {
+				cur.funcs = append(cur.funcs, fmt.Sprintf("NTILE(%s) AS %s", args[i+1], quoteIdent(args[i+2])))
+				i += 3
+			} else {
+				i++
+			}
+		// 2-arg: -func field result
+		case "-sum", "-avg", "-min", "-max", "-first", "-last":
+			if i+2 < len(args) {
+				sqlFunc := windowSQLFunc(args[i])
+				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s) AS %s", sqlFunc, quoteIdent(args[i+1]), quoteIdent(args[i+2])))
+				i += 3
+			} else {
+				i++
+			}
+		// 3-arg: -lag/-lead field n result
+		case "-lag", "-lead":
+			if i+3 < len(args) {
+				sqlFunc := strings.ToUpper(args[i][1:])
+				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s, %s) AS %s", sqlFunc, quoteIdent(args[i+1]), args[i+2], quoteIdent(args[i+3])))
+				i += 4
+			} else {
+				i++
+			}
+		default:
+			i++
+		}
+	}
+
+	// Window adds new columns — ensure existing columns are preserved
+	if len(q.selectExprs) == 0 {
+		q.selectExprs = append(q.selectExprs, "*")
+	}
+
+	// Build SQL OVER clauses
+	for _, c := range clauses {
+		overParts := []string{}
+
+		if len(c.partitionBy) > 0 {
+			quoted := make([]string, len(c.partitionBy))
+			for j, f := range c.partitionBy {
+				quoted[j] = quoteIdent(f)
+			}
+			overParts = append(overParts, "PARTITION BY "+strings.Join(quoted, ", "))
+		}
+
+		if len(c.orderBy) > 0 {
+			quoted := make([]string, len(c.orderBy))
+			for j, f := range c.orderBy {
+				quoted[j] = quoteIdent(f)
+				if c.desc {
+					quoted[j] += " DESC"
+				}
+			}
+			overParts = append(overParts, "ORDER BY "+strings.Join(quoted, ", "))
+		}
+
+		// Frame clause — only emit if non-default or if aggregate functions present
+		frameSQL := buildFrameSQL(c.preceding, c.following)
+		if frameSQL != "" {
+			overParts = append(overParts, frameSQL)
+		}
+
+		over := strings.Join(overParts, " ")
+
+		for _, f := range c.funcs {
+			// f is like "ROW_NUMBER() AS rn" — insert OVER before AS
+			asIdx := strings.LastIndex(f, " AS ")
+			if asIdx < 0 {
+				continue
+			}
+			funcExpr := f[:asIdx]
+			alias := f[asIdx:]
+			q.selectExprs = append(q.selectExprs, funcExpr+" OVER ("+over+")"+alias)
+		}
+	}
+
+	return nil
+}
+
+func windowSQLFunc(flag string) string {
+	switch flag {
+	case "-sum":
+		return "SUM"
+	case "-avg":
+		return "AVG"
+	case "-min":
+		return "MIN"
+	case "-max":
+		return "MAX"
+	case "-first":
+		return "FIRST_VALUE"
+	case "-last":
+		return "LAST_VALUE"
+	default:
+		return strings.ToUpper(flag[1:])
+	}
+}
+
+func buildFrameSQL(preceding, following int) string {
+	// Default frame (unbounded preceding to current row) matches SQL default
+	// for aggregate window functions when ORDER BY is present, so we can often omit it.
+	// But be explicit when the user specified non-default values.
+	if preceding == -1 && following == 0 {
+		return "" // default — let DuckDB use its own default
+	}
+
+	var start, end string
+	if preceding < 0 {
+		start = "UNBOUNDED PRECEDING"
+	} else if preceding == 0 {
+		start = "CURRENT ROW"
+	} else {
+		start = fmt.Sprintf("%d PRECEDING", preceding)
+	}
+
+	if following < 0 {
+		end = "UNBOUNDED FOLLOWING"
+	} else if following == 0 {
+		end = "CURRENT ROW"
+	} else {
+		end = fmt.Sprintf("%d FOLLOWING", following)
+	}
+
+	return fmt.Sprintf("ROWS BETWEEN %s AND %s", start, end)
 }
 
 func translateRename(q *sqlQuery, args []string) error {

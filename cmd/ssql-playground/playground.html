@@ -79,9 +79,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <button class="example-btn" onclick="loadExample(8)">Join + filter — US revenue by product (try Optimize — pushes filter into join)</button>
     <button class="example-btn" onclick="loadExample(9)">Optimize — merges filters, sort+limit→top (click Optimize to see rewrite)</button>
     <button class="example-btn" onclick="loadExample(10)">Window — top 3 earners per department</button>
-    <button class="example-btn" onclick="loadExample(11)">Optimize: SSH pushdown (shows rewritten pipeline — can't run, no SSH in browser)</button>
-    <button class="example-btn" onclick="loadExample(12)">Help — list all commands</button>
-    <button class="example-btn" onclick="loadExample(13)">Help — update command details</button>
+    <button class="example-btn" onclick="loadExample(11)">Window — running total per product</button>
+    <button class="example-btn" onclick="loadExample(12)">Optimize: SSH pushdown (shows rewritten pipeline — can't run, no SSH in browser)</button>
+    <button class="example-btn" onclick="loadExample(13)">Help — list all commands</button>
+    <button class="example-btn" onclick="loadExample(14)">Help — update command details</button>
 </div>
 
 <div class="datasets">
@@ -157,6 +158,10 @@ const EXAMPLES = [
 | ssql where -if rank le 3
 | ssql include dept name salary rank
 | ssql to table`,
+    `ssql from orders.csv
+| ssql window -sum amount running_total -partition product -order order_date
+| ssql include product order_date amount running_total
+| ssql to table`,
     `ssql from ssh node1 /data/events.csv
 | ssql where -if status_code ge 500
 | ssql group-by service -count cnt
@@ -168,7 +173,7 @@ const EXAMPLES = [
 ];
 
 // Examples that should auto-optimize instead of run (by index)
-const OPTIMIZE_EXAMPLES = new Set([9, 11]);
+const OPTIMIZE_EXAMPLES = new Set([9, 12]);
 
 function loadExample(n) {
     document.getElementById('pipeline').value = EXAMPLES[n];
