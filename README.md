@@ -108,6 +108,9 @@ ssql from employees.csv | ssql window -row-number rn -partition dept -order sala
 # Read multiple files at once (shell expands *.csv)
 ssql from csv *.csv -source file | ssql group-by file -count n | ssql to table
 
+# Multi-file pushdown — filter per file in parallel, then merge (4x faster)
+ssql from csv *.csv -- where -if age gt 25 | ssql to table
+
 # Schema headers are automatic - preserves field order through pipelines
 ssql from data.csv | ssql where -if age gt 30 | ssql to csv output.csv
 
@@ -144,7 +147,7 @@ ssql from data.csv | ssql where -if age gt 30 | jq -s 'length'  # Count results
 
 Try ssql without installing anything — the full CLI runs in your browser via WebAssembly:
 
-**[Launch Playground →](https://rosscartlidge.github.io/ssql/playground.html)** *(instant — optimized WASM, ~12MB)*
+**[Launch Playground →](https://rosscartlidge.github.io/ssql/playground.html)** *(instant — optimized WASM, ~13MB)*
 
 **[Launch Full Terminal →](https://rosscartlidge.github.io/ssql-terminal/)** *(real Linux with bash, tab completion, pipes — boots in ~20s)*
 
@@ -196,10 +199,17 @@ ssql.QuickChart(data, "month", "revenue", "chart.html")  // One line = full dash
 
 ### Installation
 
-#### Option 1: CLI Tool (for rapid prototyping)
+#### Option 1: Homebrew (macOS & Linux)
 
 ```bash
-# Install the command-line tool
+brew tap rosscartlidge/ssql
+brew install ssql
+ssql version
+```
+
+#### Option 2: Go Install
+
+```bash
 go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 
 # Verify installation
@@ -213,7 +223,11 @@ Bob,25,65000" | ssql from | ssql where -if age gt 28
 
 [**See CLI Tutorial →**](doc/cli-codelab.md)
 
-#### Option 1b: CLI Tool with GPU Acceleration (optional)
+#### Option 3: Download Binary
+
+Pre-built binaries for all platforms are available on [GitHub Releases](https://github.com/rosscartlidge/ssql/releases). Download the archive for your OS/architecture, extract, and add to your PATH.
+
+#### Option 4: GPU Acceleration (optional)
 
 For 10-50x faster FFT, convolution, and correlation on large signals:
 
@@ -265,27 +279,27 @@ ssql_gpu version
 
 **Note:** The GPU version falls back to CPU automatically when GPU is unavailable or for small datasets where CPU is faster.
 
-#### Option 1c: Pre-built Debian Packages (easiest install)
+#### Option 5: Debian Packages
 
 Pre-built `.deb` packages are available for amd64 Linux systems:
 
 **Standard version (no GPU dependencies):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.32.0_amd64.deb
-sudo dpkg -i ssql_4.32.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.34.0_amd64.deb
+sudo dpkg -i ssql_4.34.0_amd64.deb
 ssql version
 ```
 
 **GPU-accelerated version (requires NVIDIA CUDA runtime):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.32.0_amd64.deb
-sudo dpkg -i ssql-gpu_4.32.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.34.0_amd64.deb
+sudo dpkg -i ssql-gpu_4.34.0_amd64.deb
 ssql version
 ```
 
 The GPU package requires `libcudart` (CUDA runtime) which is typically installed with NVIDIA drivers.
 
-#### Option 2: Go Library (for application development)
+#### Option 6: Go Library (for application development)
 
 **Step 1: Create a new project**
 ```bash

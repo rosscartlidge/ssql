@@ -142,6 +142,24 @@ By default, all files must have identical schemas. Use `-merge-schemas` to combi
 
 Supported formats: `csv`, `tsv`, `json`, `jsonl`. The bare `ssql from file.csv` form is single-file only.
 
+### Multi-File Pushdown
+
+Use `--` to push a sub-pipeline into each file before merging. This runs in parallel (one subprocess per file, capped at NumCPU) and is much faster than reading all files then filtering:
+
+```bash
+# Filter per file, then merge (4x faster than sequential on 10 files)
+ssql from csv *.csv -- where -if age gt 25 | ssql to table
+
+# Multi-stage pushdown with + separator
+ssql from csv *.csv -- where -if status eq active + group-by dept -count cnt | ssql to table
+
+# Track source file
+ssql from csv *.csv -source file -- where -if value gt 100 | ssql to table
+
+# Skip file-order preservation for max throughput
+ssql from csv *.csv -unordered -- where -if age gt 25 | ssql to table
+```
+
 ### Schema Headers (Automatic)
 
 The `from` command automatically emits a schema header that preserves field order and types through pipelines:
@@ -1361,6 +1379,25 @@ Chain with `generate go` to optimize *then* compile:
 # GROUP BY dept;
 ```
 
+Supported commands: `from`, `where`, `group-by`, `sort`, `limit`, `offset`, `top`, `distinct`, `join`, `window`, `rename`, `cast`, `update`, `include`, `exclude`.
+
+More examples:
+```bash
+# Window functions → SQL OVER clauses
+(export SSQLGO=1; ssql from data.csv \
+  | ssql window -row-number rn -partition dept -order salary -desc \
+  | ssql to table) | ssql generate sql
+# → SELECT *, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn
+
+# Rename → DuckDB RENAME
+... | ssql rename -as name full_name | ... | ssql generate sql
+# → SELECT * RENAME (name AS full_name)
+
+# Cast → DuckDB REPLACE + CAST
+... | ssql cast -type age string | ... | ssql generate sql
+# → SELECT * REPLACE (CAST(age AS VARCHAR) AS age)
+```
+
 Use `-run` to execute directly with DuckDB:
 ```bash
 ... | ssql generate sql -run
@@ -1372,10 +1409,10 @@ Use `-run` to execute directly with DuckDB:
 
 ### Data Sources
 - `from [file]` - Read data from CSV, TSV, JSON, JSONL, Arrow, WAV, or XLSX file (auto-detects format, always emits schema header)
-- `from csv [file...]` - Read CSV (or stdin). Multi-file: `-merge-schemas`, `-source`. Flags: `-type field type`, `-default-type type`
-- `from tsv [file...]` - Read TSV (or stdin). Multi-file: `-merge-schemas`, `-source`
-- `from json [file...]` - Read JSON. Multi-file: `-merge-schemas`, `-source`
-- `from jsonl [file...]` - Read JSONL (or stdin). Multi-file: `-merge-schemas`, `-source`
+- `from csv [file...]` - Read CSV (or stdin). Multi-file: `-merge-schemas`, `-source`, `-unordered`, `-- [pushdown]`
+- `from tsv [file...]` - Read TSV (or stdin). Multi-file: `-merge-schemas`, `-source`, `-unordered`, `-- [pushdown]`
+- `from json [file...]` - Read JSON. Multi-file: `-merge-schemas`, `-source`, `-unordered`, `-- [pushdown]`
+- `from jsonl [file...]` - Read JSONL (or stdin). Multi-file: `-merge-schemas`, `-source`, `-unordered`, `-- [pushdown]`
 - `from arrow [file]` - Read Arrow
 - `from wav file` - Read WAV audio. Flags: `-channel N`
 - `from xlsx file` - Read Excel. Flags: `-sheet name`
@@ -1466,7 +1503,7 @@ Now you can tab-complete:
 ```bash
 ssql <TAB>          # Shows all commands
 ssql where <TAB>    # Shows flags like -if, -help
-ssql from <TAB>     # Completes .csv, .json, .jsonl files
+ssql from <TAB>     # Shows format subcommands (csv, json, ...) AND matching files
 ```
 
 ### Understanding Command Structure (Advanced)
