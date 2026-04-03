@@ -68,5 +68,6 @@ homebrew_casks:
     repository:
       owner: rosscartlidge
       name: homebrew-ssql
+      token: "{{ .Env.GH_PAT }}"
     homepage: "https://github.com/rosscartlidge/ssql"
     description: "SQL-style stream processing for CSV, JSON, and more"
