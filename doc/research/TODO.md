@@ -61,5 +61,5 @@ Tracked issues and feature gaps discovered during development.
 
 - [x] LICENSE file — MIT License
 - [ ] Terminal recordings for README (asciinema/vhs)
-- [ ] Homebrew formula
-- [ ] goreleaser for GitHub Releases binaries
+- [x] goreleaser for GitHub Releases binaries — full + slim builds for linux/darwin/windows × amd64/arm64
+- [ ] Homebrew — tap repo created (`rosscartlidge/homebrew-ssql`), goreleaser configured. Needs GH_PAT secret and first tagged release to populate.

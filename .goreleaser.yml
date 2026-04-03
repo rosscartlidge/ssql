@@ -1,0 +1,72 @@
+version: 2
+
+builds:
+  - id: ssql
+    main: ./cmd/ssql
+    binary: ssql
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: ssql-slim
+    main: ./cmd/ssql
+    binary: ssql
+    tags:
+      - slim
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: full
+    ids:
+      - ssql
+    name_template: "ssql_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+  - id: slim
+    ids:
+      - ssql-slim
+    name_template: "ssql-slim_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^journal:"
+      - "^docs:"
+      - "^style:"
+
+homebrew_casks:
+  - name: ssql
+    ids:
+      - full
+    binaries:
+      - ssql
+    repository:
+      owner: rosscartlidge
+      name: homebrew-ssql
+    homepage: "https://github.com/rosscartlidge/ssql"
+    description: "SQL-style stream processing for CSV, JSON, and more"
