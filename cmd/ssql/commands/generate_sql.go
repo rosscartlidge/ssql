@@ -204,6 +204,12 @@ func translateFrom(q *sqlQuery, args []string) error {
 			return fmt.Errorf("from %s requires a file argument", args[0])
 		}
 		q.fromClause = quoteFile(args[1])
+	case "ssh":
+		return fmt.Errorf("from ssh has no SQL equivalent — it is an ssql-specific distributed feature")
+	case "catalog":
+		return fmt.Errorf("from catalog has no SQL equivalent — it is an ssql-specific distributed feature")
+	case "command":
+		return fmt.Errorf("from command has no SQL equivalent — use DuckDB's read_csv_auto() with a subquery instead")
 	default:
 		// Bare: from FILE
 		q.fromClause = quoteFile(args[0])
