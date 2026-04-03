@@ -32,7 +32,21 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .datasets span { color: #9ece6a; }
 .loading { text-align: center; padding: 40px; color: #565f89; }
 #status { font-size: 0.8em; color: #565f89; margin-bottom: 12px; }
+/* Prism syntax highlighting — Tokyo Night theme overrides */
+code[class*="language-"], pre[class*="language-"] { background: none; font-family: inherit; font-size: 13px; line-height: 1.5; }
+.token.comment, .token.block-comment, .token.prolog { color: #565f89; }
+.token.keyword { color: #bb9af7; }
+.token.function { color: #7aa2f7; }
+.token.string, .token.char { color: #9ece6a; }
+.token.number { color: #ff9e64; }
+.token.operator { color: #89ddff; }
+.token.punctuation { color: #c0caf5; }
+.token.builtin, .token.class-name, .token.type-name { color: #2ac3de; }
+.token.boolean { color: #ff9e64; }
+.token.constant { color: #ff9e64; }
+.token.property { color: #73daca; }
 </style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1/themes/prism-tomorrow.min.css">
 </head>
 <body>
 
@@ -395,7 +409,7 @@ function executePipeline(pipelineStr, ssqlgoMode) {
     }
 }
 
-function showOutput(result, label, restoreProcsub) {
+function showOutput(result, label, restoreProcsub, language) {
     const el = document.getElementById('output');
     const labelEl = document.getElementById('outputLabel');
     labelEl.textContent = label || 'Output';
@@ -409,6 +423,9 @@ function showOutput(result, label, restoreProcsub) {
 
     if (result.exitCode !== 0) {
         el.innerHTML = `<span class="stderr">${escapeHtml(stderr || 'Unknown error')}</span>`;
+    } else if (language && typeof Prism !== 'undefined' && Prism.languages[language]) {
+        const highlighted = Prism.highlight(stdout, Prism.languages[language], language);
+        el.innerHTML = (stderr ? `<span class="info">${escapeHtml(stderr)}</span>\n` : '') + highlighted;
     } else {
         el.textContent = stdout;
         if (stderr) {
@@ -529,7 +546,7 @@ function generateGo() {
     // we run the original pipeline through generate go directly
     const goPipe = pipeline + ' | ssql generate go';
     const result = executePipeline(goPipe, true);
-    showOutput(result, 'Generated Go Code');
+    showOutput(result, 'Generated Go Code', false, 'go');
 }
 
 function generateSQL() {
@@ -544,7 +561,7 @@ function generateSQL() {
 
     const sqlPipe = pipeline + ' | ssql generate sql';
     const result = executePipeline(sqlPipe, true);
-    showOutput(result, 'Generated SQL (DuckDB)');
+    showOutput(result, 'Generated SQL (DuckDB)', false, 'sql');
 }
 
 function viewDataset(name) {
@@ -578,5 +595,8 @@ initWasm().catch(err => {
     document.getElementById('output').innerHTML = `<span class="stderr">${escapeHtml(err.toString())}</span>`;
 });
 </script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1/prism.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-go.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-sql.min.js"></script>
 </body>
 </html>
