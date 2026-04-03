@@ -59,7 +59,7 @@ Tracked issues and feature gaps discovered during development.
 
 ## Adoption (see adoption-plan.md)
 
-- [ ] LICENSE file (confirm with employer: MIT or Apache 2.0)
+- [x] LICENSE file — MIT License
 - [ ] Terminal recordings for README (asciinema/vhs)
 - [ ] Homebrew formula
 - [ ] goreleaser for GitHub Releases binaries
