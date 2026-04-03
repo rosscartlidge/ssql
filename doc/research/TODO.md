@@ -31,7 +31,7 @@ Tracked issues and feature gaps discovered during development.
 - [x] **# comments** — comment out pipeline stages to build up incrementally.
 - [ ] **GitHub Actions automation** — build WASM and deploy to `gh-pages` automatically on push to `main`.
 - [ ] **Share links** — encode pipeline in URL fragment for sharing.
-- [ ] **Syntax highlighting** — generated Go/SQL code should be highlighted (highlight.js or Prism).
+- [x] **Syntax highlighting** — Prism.js (CDN) highlights generated Go and SQL with Tokyo Night theme colors.
 - [x] **Loading indicator** — not needed after slim build (13MB loads fast on phone and desktop).
 
 ## WebVM Terminal
