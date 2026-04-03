@@ -32,7 +32,7 @@ Tracked issues and feature gaps discovered during development.
 - [ ] **GitHub Actions automation** — build WASM and deploy to `gh-pages` automatically on push to `main`.
 - [ ] **Share links** — encode pipeline in URL fragment for sharing.
 - [ ] **Syntax highlighting** — generated Go/SQL code should be highlighted (highlight.js or Prism).
-- [ ] **Loading indicator** — show progress while 12MB WASM loads.
+- [x] **Loading indicator** — not needed after slim build (13MB loads fast on phone and desktop).
 
 ## WebVM Terminal
 
