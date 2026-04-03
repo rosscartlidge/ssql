@@ -45,6 +45,12 @@ Tracked issues and feature gaps discovered during development.
 
 - [x] **`ssql from <tab>` should also complete filenames** — autocli v4.3.7 returns both subcommand names and file completions when a command has both.
 
+## Merge with Catalog (see merge-catalog.md)
+
+- [ ] **Phase 1: Core `-catalog` flag** — `ssql merge -catalog shards.csv -by timestamp`. Opens SSH to each catalog entry, streams JSONL into K-way merge heap. Supports pushdown via `--` and partition pruning via `-if`. Streaming, O(K) memory.
+- [ ] **Phase 2: Shard metadata enrichment** — `-shard source` adds host:path to each record.
+- [ ] **Phase 3: GPU support** — `-gpu` flag to use `ssql_gpu` on remote nodes.
+
 ## Pipeline Optimizer (`generate ssql`)
 
 - [x] **Join predicate pushdown for process substitutions** — `<(ssql from file.csv)` joins now support predicate pushdown.
