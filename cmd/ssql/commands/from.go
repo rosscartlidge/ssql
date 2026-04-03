@@ -6,8 +6,10 @@ import (
 	"iter"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -284,9 +286,10 @@ func executeFromMultiFile(cfg multiFileConfig, format string, readFile fileReade
 	return lib.WriteJSONLWithSchema(os.Stdout, schema, records)
 }
 
-// executeFromMultiFilePushdown runs a sub-pipeline per file and merges results.
+// executeFromMultiFilePushdown runs a sub-pipeline per file in parallel and merges results.
 // format is "csv", "tsv", etc. pipelineArgs are the args after "--".
 // Uses SplitOnPlus to support multi-stage pushdown: -- where -if x eq 1 + group-by dept
+// Files are processed concurrently (capped at NumCPU) but output preserves file order.
 func executeFromMultiFilePushdown(files []string, format string, sourceField string, pipelineArgs []string) error {
 	selfBin, err := os.Executable()
 	if err != nil {
@@ -294,59 +297,103 @@ func executeFromMultiFilePushdown(files []string, format string, sourceField str
 	}
 
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
+	maxWorkers := runtime.NumCPU()
+	if maxWorkers > len(files) {
+		maxWorkers = len(files)
+	}
 
+	// Each file gets a channel; workers fill them concurrently, consumer reads in order.
+	type fileResult struct {
+		records []ssql.Record
+		err     error
+	}
+	results := make([]chan fileResult, len(files))
+	for i := range results {
+		results[i] = make(chan fileResult, 1)
+	}
+
+	// Semaphore to cap concurrency
+	sem := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
+
+	for i, file := range files {
+		wg.Add(1)
+		go func(idx int, f string) {
+			defer wg.Done()
+			sem <- struct{}{}        // acquire
+			defer func() { <-sem }() // release
+
+			recs, err := runFilePushdown(selfBin, f, format, sourceField, pipelineGroups)
+			results[idx] <- fileResult{records: recs, err: err}
+		}(i, file)
+	}
+
+	// Read results in file order
 	records := func(yield func(ssql.Record) bool) {
-		for _, file := range files {
-			cmd := ssql.BuildRemoteCommand(selfBin, file, format, pipelineGroups)
-			proc := exec.Command("bash", "-c", cmd)
-			proc.Stderr = os.Stderr
-
-			stdout, err := proc.StdoutPipe()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "file %s pipe: %v\n", file, err)
+		for i := range files {
+			res := <-results[i]
+			if res.err != nil {
+				fmt.Fprintf(os.Stderr, "file %s: %v\n", files[i], res.err)
 				continue
 			}
-			if err := proc.Start(); err != nil {
-				fmt.Fprintf(os.Stderr, "file %s start: %v\n", file, err)
-				continue
-			}
-
-			scanner := bufio.NewScanner(stdout)
-			scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-			stopped := false
-
-			for scanner.Scan() {
-				line := scanner.Bytes()
-				if len(line) == 0 {
-					continue
-				}
-				// Skip _schema header lines
-				if len(line) > 10 && strings.Contains(string(line[:20]), `"_schema"`) {
-					continue
-				}
-
-				rec, err := ssql.ParseJSONLine(line)
-				if err != nil {
-					continue
-				}
-				r := rec.Freeze()
-				if sourceField != "" {
-					r = r.ToMutable().String(sourceField, file).Freeze()
-				}
+			for _, r := range res.records {
 				if !yield(r) {
-					stopped = true
-					break
+					return
 				}
-			}
-
-			proc.Wait()
-			if stopped {
-				return
 			}
 		}
 	}
 
-	return writeWithInferredSchema(records)
+	err = writeWithInferredSchema(records)
+
+	// Ensure all goroutines finish
+	wg.Wait()
+	return err
+}
+
+// runFilePushdown executes a pushdown pipeline on a single file and returns all records.
+func runFilePushdown(selfBin, file, format, sourceField string, pipelineGroups [][]string) ([]ssql.Record, error) {
+	cmd := ssql.BuildRemoteCommand(selfBin, file, format, pipelineGroups)
+	proc := exec.Command("bash", "-c", cmd)
+	proc.Stderr = os.Stderr
+
+	stdout, err := proc.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("pipe: %w", err)
+	}
+	if err := proc.Start(); err != nil {
+		return nil, fmt.Errorf("start: %w", err)
+	}
+
+	var records []ssql.Record
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		// Skip _schema header lines
+		if len(line) > 10 && strings.Contains(string(line[:20]), `"_schema"`) {
+			continue
+		}
+
+		rec, err := ssql.ParseJSONLine(line)
+		if err != nil {
+			continue
+		}
+		r := rec.Freeze()
+		if sourceField != "" {
+			r = r.ToMutable().String(sourceField, file).Freeze()
+		}
+		records = append(records, r)
+	}
+
+	if err := proc.Wait(); err != nil {
+		return records, fmt.Errorf("exit: %w", err)
+	}
+	return records, nil
 }
 
 // wrapWithFieldCaching wraps a record iterator with field name caching for

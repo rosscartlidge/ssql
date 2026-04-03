@@ -6,7 +6,7 @@ Tracked issues and feature gaps discovered during development.
 
 - [x] **Phase 1: Core multi-file support** — `ssql from csv *.csv` with `-merge-schemas` and `-source`. Supports csv, tsv, json, jsonl.
 - [x] **Phase 2: Pushdown** — `ssql from csv *.csv -- where -if age gt 25`. Spawns sub-pipeline per file, merges JSONL output. Supports multi-stage via `+` separator. Works for csv, tsv, json, jsonl.
-- [ ] **Phase 3: Parallel reading** — goroutine-per-file reader, capped at NumCPU. Preserves file order by default.
+- [x] **Phase 3: Parallel reading** — pushdown subprocesses run concurrently (capped at NumCPU), output preserves file order. 4x faster on 10×100k row files.
 
 ## Build System
 
