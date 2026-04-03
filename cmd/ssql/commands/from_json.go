@@ -37,6 +37,12 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 			Help("Add field with source filename: -source file").
 			Done().
 
+		Flag("-unordered").
+			Bool().
+			Global().
+			Help("Don't preserve file order in pushdown (faster, lower memory)").
+			Done().
+
 		Flag("FILE").
 			String().
 			Variadic().
@@ -53,7 +59,7 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 				if len(cfg.files) == 0 {
 					return fmt.Errorf("pushdown (--) requires at least one file")
 				}
-				return executeFromMultiFilePushdown(cfg.files, "json", cfg.sourceField, ctx.RemainingArgs)
+				return executeFromMultiFilePushdown(cfg.files, "json", cfg.sourceField, cfg.unordered, ctx.RemainingArgs)
 			}
 
 			if len(cfg.files) <= 1 {
@@ -97,6 +103,12 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 			Help("Add field with source filename: -source file").
 			Done().
 
+		Flag("-unordered").
+			Bool().
+			Global().
+			Help("Don't preserve file order in pushdown (faster, lower memory)").
+			Done().
+
 		Flag("FILE").
 			String().
 			Variadic().
@@ -113,7 +125,7 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 				if len(cfg.files) == 0 {
 					return fmt.Errorf("pushdown (--) requires at least one file")
 				}
-				return executeFromMultiFilePushdown(cfg.files, "jsonl", cfg.sourceField, ctx.RemainingArgs)
+				return executeFromMultiFilePushdown(cfg.files, "jsonl", cfg.sourceField, cfg.unordered, ctx.RemainingArgs)
 			}
 
 			if len(cfg.files) <= 1 {

@@ -40,6 +40,12 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 			Help("Add field with source filename: -source file").
 			Done().
 
+		Flag("-unordered").
+			Bool().
+			Global().
+			Help("Don't preserve file order in pushdown (faster, lower memory)").
+			Done().
+
 		Flag("-type", "-t").
 			Arg("field").
 				Completer(cf.NoCompleter{Hint: "<field-name>"}).
@@ -107,13 +113,19 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 				typeOverrides = parseTypeOverrides(typeVal)
 			}
 
+			var unordered bool
+			if uVal, ok := ctx.GlobalFlags["-unordered"]; ok {
+				unordered = uVal.(bool)
+			}
+
 			// Pushdown: ssql from csv *.csv -- where -if age gt 25
 			if len(ctx.RemainingArgs) > 0 {
 				if len(files) == 0 {
 					return fmt.Errorf("pushdown (--) requires at least one file")
 				}
-				return executeFromMultiFilePushdown(files, "csv", sourceField, ctx.RemainingArgs)
+				return executeFromMultiFilePushdown(files, "csv", sourceField, unordered, ctx.RemainingArgs)
 			}
+			_ = unordered // only used with pushdown
 
 			if len(files) <= 1 {
 				inputFile := ""

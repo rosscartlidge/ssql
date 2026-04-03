@@ -134,6 +134,7 @@ type multiFileConfig struct {
 	mergeSchemas bool
 	sourceField  string
 	generate     bool
+	unordered    bool
 }
 
 // extractMultiFileConfig extracts multi-file flags from autocli context.
@@ -164,6 +165,9 @@ func extractMultiFileConfig(ctx *cf.Context) multiFileConfig {
 	}
 	if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 		cfg.generate = genVal.(bool)
+	}
+	if uVal, ok := ctx.GlobalFlags["-unordered"]; ok {
+		cfg.unordered = uVal.(bool)
 	}
 	return cfg
 }
@@ -290,7 +294,7 @@ func executeFromMultiFile(cfg multiFileConfig, format string, readFile fileReade
 // format is "csv", "tsv", etc. pipelineArgs are the args after "--".
 // Uses SplitOnPlus to support multi-stage pushdown: -- where -if x eq 1 + group-by dept
 // Files are processed concurrently (capped at NumCPU) but output preserves file order.
-func executeFromMultiFilePushdown(files []string, format string, sourceField string, pipelineArgs []string) error {
+func executeFromMultiFilePushdown(files []string, format string, sourceField string, unordered bool, pipelineArgs []string) error {
 	selfBin, err := os.Executable()
 	if err != nil {
 		selfBin = "ssql"
@@ -302,6 +306,13 @@ func executeFromMultiFilePushdown(files []string, format string, sourceField str
 		maxWorkers = len(files)
 	}
 
+	if unordered {
+		return executeMultiFilePushdownUnordered(selfBin, files, format, sourceField, pipelineGroups, maxWorkers)
+	}
+	return executeMultiFilePushdownOrdered(selfBin, files, format, sourceField, pipelineGroups, maxWorkers)
+}
+
+func executeMultiFilePushdownOrdered(selfBin string, files []string, format, sourceField string, pipelineGroups [][]string, maxWorkers int) error {
 	// Each file gets a channel; workers fill them concurrently, consumer reads in order.
 	type fileResult struct {
 		records []ssql.Record
@@ -312,7 +323,6 @@ func executeFromMultiFilePushdown(files []string, format string, sourceField str
 		results[i] = make(chan fileResult, 1)
 	}
 
-	// Semaphore to cap concurrency
 	sem := make(chan struct{}, maxWorkers)
 	var wg sync.WaitGroup
 
@@ -320,15 +330,14 @@ func executeFromMultiFilePushdown(files []string, format string, sourceField str
 		wg.Add(1)
 		go func(idx int, f string) {
 			defer wg.Done()
-			sem <- struct{}{}        // acquire
-			defer func() { <-sem }() // release
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
 			recs, err := runFilePushdown(selfBin, f, format, sourceField, pipelineGroups)
 			results[idx] <- fileResult{records: recs, err: err}
 		}(i, file)
 	}
 
-	// Read results in file order
 	records := func(yield func(ssql.Record) bool) {
 		for i := range files {
 			res := <-results[i]
@@ -344,11 +353,52 @@ func executeFromMultiFilePushdown(files []string, format string, sourceField str
 		}
 	}
 
-	err = writeWithInferredSchema(records)
-
-	// Ensure all goroutines finish
+	err := writeWithInferredSchema(records)
 	wg.Wait()
 	return err
+}
+
+func executeMultiFilePushdownUnordered(selfBin string, files []string, format, sourceField string, pipelineGroups [][]string, maxWorkers int) error {
+	// Shared channel — records stream as they arrive from any file.
+	// No per-file buffering, lower memory, lower latency.
+	ch := make(chan ssql.Record, 1024)
+
+	sem := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
+
+	for _, file := range files {
+		wg.Add(1)
+		go func(f string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			recs, err := runFilePushdown(selfBin, f, format, sourceField, pipelineGroups)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "file %s: %v\n", f, err)
+				return
+			}
+			for _, r := range recs {
+				ch <- r
+			}
+		}(file)
+	}
+
+	// Close channel when all workers finish
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	records := func(yield func(ssql.Record) bool) {
+		for r := range ch {
+			if !yield(r) {
+				return
+			}
+		}
+	}
+
+	return writeWithInferredSchema(records)
 }
 
 // runFilePushdown executes a pushdown pipeline on a single file and returns all records.
