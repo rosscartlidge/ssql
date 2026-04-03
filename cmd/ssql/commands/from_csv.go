@@ -107,6 +107,14 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 				typeOverrides = parseTypeOverrides(typeVal)
 			}
 
+			// Pushdown: ssql from csv *.csv -- where -if age gt 25
+			if len(ctx.RemainingArgs) > 0 {
+				if len(files) == 0 {
+					return fmt.Errorf("pushdown (--) requires at least one file")
+				}
+				return executeFromMultiFilePushdown(files, "csv", sourceField, ctx.RemainingArgs)
+			}
+
 			if len(files) <= 1 {
 				inputFile := ""
 				if len(files) == 1 {

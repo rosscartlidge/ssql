@@ -5,7 +5,7 @@ Tracked issues and feature gaps discovered during development.
 ## Multi-file `from` (see multi-file-from.md)
 
 - [x] **Phase 1: Core multi-file support** — `ssql from csv *.csv` with `-merge-schemas` and `-source`. Supports csv, tsv, json, jsonl.
-- [ ] **Phase 2: Pushdown** — `ssql from csv *.csv -- where -if age gt 25`. Spawn sub-pipeline per file, merge JSONL output. Pattern proven in `from ssh`/`from catalog`.
+- [x] **Phase 2: Pushdown** — `ssql from csv *.csv -- where -if age gt 25`. Spawns sub-pipeline per file, merges JSONL output. Supports multi-stage via `+` separator. Works for csv, tsv, json, jsonl.
 - [ ] **Phase 3: Parallel reading** — goroutine-per-file reader, capped at NumCPU. Preserves file order by default.
 
 ## Build System

@@ -1,9 +1,11 @@
 package commands
 
 import (
+	"bufio"
 	"fmt"
 	"iter"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -280,6 +282,71 @@ func executeFromMultiFile(cfg multiFileConfig, format string, readFile fileReade
 	}
 
 	return lib.WriteJSONLWithSchema(os.Stdout, schema, records)
+}
+
+// executeFromMultiFilePushdown runs a sub-pipeline per file and merges results.
+// format is "csv", "tsv", etc. pipelineArgs are the args after "--".
+// Uses SplitOnPlus to support multi-stage pushdown: -- where -if x eq 1 + group-by dept
+func executeFromMultiFilePushdown(files []string, format string, sourceField string, pipelineArgs []string) error {
+	selfBin, err := os.Executable()
+	if err != nil {
+		selfBin = "ssql"
+	}
+
+	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
+
+	records := func(yield func(ssql.Record) bool) {
+		for _, file := range files {
+			cmd := ssql.BuildRemoteCommand(selfBin, file, format, pipelineGroups)
+			proc := exec.Command("bash", "-c", cmd)
+			proc.Stderr = os.Stderr
+
+			stdout, err := proc.StdoutPipe()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "file %s pipe: %v\n", file, err)
+				continue
+			}
+			if err := proc.Start(); err != nil {
+				fmt.Fprintf(os.Stderr, "file %s start: %v\n", file, err)
+				continue
+			}
+
+			scanner := bufio.NewScanner(stdout)
+			scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+			stopped := false
+
+			for scanner.Scan() {
+				line := scanner.Bytes()
+				if len(line) == 0 {
+					continue
+				}
+				// Skip _schema header lines
+				if len(line) > 10 && strings.Contains(string(line[:20]), `"_schema"`) {
+					continue
+				}
+
+				rec, err := ssql.ParseJSONLine(line)
+				if err != nil {
+					continue
+				}
+				r := rec.Freeze()
+				if sourceField != "" {
+					r = r.ToMutable().String(sourceField, file).Freeze()
+				}
+				if !yield(r) {
+					stopped = true
+					break
+				}
+			}
+
+			proc.Wait()
+			if stopped {
+				return
+			}
+		}
+	}
+
+	return writeWithInferredSchema(records)
 }
 
 // wrapWithFieldCaching wraps a record iterator with field name caching for

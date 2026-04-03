@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"iter"
 	"os"
@@ -47,6 +48,13 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
+
+			if len(ctx.RemainingArgs) > 0 {
+				if len(cfg.files) == 0 {
+					return fmt.Errorf("pushdown (--) requires at least one file")
+				}
+				return executeFromMultiFilePushdown(cfg.files, "json", cfg.sourceField, ctx.RemainingArgs)
+			}
 
 			if len(cfg.files) <= 1 {
 				inputFile := ""
@@ -100,6 +108,13 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
+
+			if len(ctx.RemainingArgs) > 0 {
+				if len(cfg.files) == 0 {
+					return fmt.Errorf("pushdown (--) requires at least one file")
+				}
+				return executeFromMultiFilePushdown(cfg.files, "jsonl", cfg.sourceField, ctx.RemainingArgs)
+			}
 
 			if len(cfg.files) <= 1 {
 				inputFile := ""
