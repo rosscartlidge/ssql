@@ -60,6 +60,6 @@ Tracked issues and feature gaps discovered during development.
 ## Adoption (see adoption-plan.md)
 
 - [x] LICENSE file — MIT License
-- [ ] Terminal recordings for README (asciinema/vhs)
+- [x] Terminal recordings for README — VHS demo GIF showing filter, group-by, and generate sql
 - [x] goreleaser for GitHub Releases binaries — full + slim builds for linux/darwin/windows × amd64/arm64
 - [ ] Homebrew — tap repo created (`rosscartlidge/homebrew-ssql`), goreleaser configured. Needs GH_PAT secret and first tagged release to populate.

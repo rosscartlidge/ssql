@@ -96,6 +96,8 @@ West,Gadget,3100`
 </details>
 
 **Or use the CLI:**
+
+![ssql demo](doc/demo.gif)
 ```bash
 # Prototype with Unix-style pipelines, then generate production Go code
 ssql from command -- ps -efl | \
