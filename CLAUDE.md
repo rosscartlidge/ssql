@@ -79,6 +79,12 @@ When constructing shell commands for remote execution (SSH, bash -c):
 
 ## Development Commands
 
+**Before testing any CLI behavior**, always rebuild and install the latest binary:
+```bash
+go build -ldflags "-s -w" -o ~/go/bin/ssql ./cmd/ssql && ssql version
+```
+Stale binaries in PATH are a common source of false failures.
+
 - `go build` / `go test` / `go test -v` / `go test -run TestName`
 - `go fmt ./...` / `go vet ./...` / `go mod tidy`
 - `go build ./cmd/ssql/...` (not `go build ./...` which fails on examples dir)
