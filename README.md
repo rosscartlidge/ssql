@@ -143,6 +143,10 @@ ssql from data.csv | jq '.' | head -5  # Inspect data
 ssql from data.csv | ssql where -if age gt 30 | jq -s 'length'  # Count results
 ```
 
+**Optimize and compile to Go:**
+
+![ssql optimize demo](doc/demo-optimize.gif)
+
 [**Try the CLI →**](doc/cli-codelab.md) | [**Debug with jq →**](doc/cli-debugging.md)
 
 ### 🌐 **Browser Playground** *(in testing)*
@@ -183,11 +187,15 @@ Describe what you want in plain English, get working ssql code:
 ### 📊 **Interactive Visualizations**
 Create modern, responsive charts with zoom, pan, and filtering capabilities:
 
-```go
-ssql.QuickChart(data, "month", "revenue", "chart.html")  // One line = full dashboard
+```bash
+ssql from data.csv | ssql group-by dept -avg salary avg_sal | ssql to chart -x dept -y avg_sal -type bar
 ```
 
-[**See Chart Demo →**](examples/chart_demo.go)
+![ssql chart](doc/chart-screenshot.png)
+
+Charts are self-contained HTML files with Chart.js — interactive controls, trend lines, export to PNG. Also supports animated visualizations (`to animate`) for time-series and frequency spectra.
+
+[**Try charts in the playground →**](https://rosscartlidge.github.io/ssql/playground.html)
 
 ## 🚀 Quick Start
 
