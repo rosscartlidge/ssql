@@ -228,7 +228,7 @@ ssql version
 # Try it out
 echo "name,age,salary
 Alice,30,95000
-Bob,25,65000" | ssql from | ssql where -if age gt 28
+Bob,25,65000" | ssql from csv | ssql where -if age gt 28
 ```
 
 [**See CLI Tutorial →**](doc/cli-codelab.md)
