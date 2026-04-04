@@ -27,11 +27,11 @@ Sleep 3s
 
 Type ""
 Enter
-Type "# Compile to standalone Go code"
+Type "# Compile the optimized pipeline to standalone Go code"
 Enter
 Sleep 500ms
 
-Type "(export SSQLGO=1; ssql from test-data/users.csv | ssql where -if age gt 25 -if dept eq Engineering | ssql top 3 -by salary | ssql to table) | ssql generate go | head -25"
+Type "(export SSQLGO=1; ssql from test-data/users.csv | ssql where -if dept eq Engineering -if age gt 25 | ssql top 3 -field salary | ssql to table) | ssql generate go | head -30"
 Enter
 Sleep 3s
 
