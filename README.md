@@ -149,7 +149,7 @@ ssql from data.csv | ssql where -if age gt 30 | jq -s 'length'  # Count results
 
 [**Try the CLI →**](doc/cli-codelab.md) | [**Debug with jq →**](doc/cli-debugging.md)
 
-### 🌐 **Browser Playground** *(in testing)*
+### 🌐 **Browser Playground**
 
 Try ssql without installing anything — the full CLI runs in your browser via WebAssembly:
 
@@ -378,7 +378,7 @@ func main() {
 
 **New to ssql?** We've got you covered with step-by-step guides:
 
-### 1. ⚡ **[CLI Tutorial](doc/cli-codelab.md)** *(In Development)*
+### 1. ⚡ **[CLI Tutorial](doc/cli-codelab.md)**
 *Prototype fast with Unix-style pipelines, generate production code*
 - Quick data exploration with command-line tools
 - Process system commands (ps, df, etc.)
