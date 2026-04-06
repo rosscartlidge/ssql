@@ -617,6 +617,32 @@ ssql from shard1.csv | \
 - `merge` streams with O(K) memory (K = number of sources)
 - Output is sorted by definition, enabling `-presorted` downstream
 
+### Merge with Catalog
+
+Merge data from distributed shards listed in a catalog CSV. Each shard gets its own SSH connection; the merge heap interleaves records in sort order:
+
+```bash
+# Merge all shards sorted by timestamp
+ssql merge -catalog shards.csv -by timestamp | ssql to table
+
+# With pushdown — filter on each shard before merging
+ssql merge -catalog shards.csv -by timestamp -- where -if level eq ERROR | ssql to table
+
+# Partition pruning — only connect to relevant shards
+ssql merge -catalog shards.csv -by timestamp -if date_from le 2024-03-01 | ssql to table
+
+# Track which shard each record came from
+ssql merge -catalog shards.csv -by timestamp -shard-field source | ssql to table
+```
+
+The optimizer automatically pushes downstream filters into the pushdown:
+```bash
+# Before optimization:
+ssql merge -catalog shards.csv -by ts | ssql where -if value gt 200 | ssql to table
+# After optimization:
+ssql merge -catalog shards.csv -by ts -- where -if value gt 200 | ssql to table
+```
+
 ---
 
 ## Window Functions
@@ -1440,7 +1466,7 @@ Use `-run` to execute directly with DuckDB:
 ### Multi-Table Operations
 - `join` - Join two data sources (SQL JOIN - inner/left/right/full). Flags: `-suffix`, `-exclude-left`, `-exclude-right`
 - `union` - Combine multiple data sources (SQL UNION/UNION ALL)
-- `merge` - K-way merge of pre-sorted inputs (streaming, O(K) memory)
+- `merge` - K-way merge of pre-sorted inputs (streaming, O(K) memory). Flags: `-catalog`, `-if`, `-shard-field`, `-gpu`, `-- [pushdown]`
 
 ### Signal Processing
 - `fft` - Fast Fourier Transform for frequency analysis (`-field`, `-rate`, `-phase`)
