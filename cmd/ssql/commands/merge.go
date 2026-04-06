@@ -1,9 +1,11 @@
 package commands
 
 import (
+	"bufio"
 	"fmt"
 	"iter"
 	"os"
+	"os/exec"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -17,12 +19,11 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("K-way merge of pre-sorted inputs (streaming, O(K) memory)").
 		Example("ssql from sorted1.csv | ssql merge sorted2.jsonl -by timestamp", "Merge two sorted files by timestamp").
 		Example("ssql from chunk1.csv | ssql merge chunk2.jsonl chunk3.jsonl -by dept name", "Merge 3 sorted files by multiple fields").
-		Example("ssql from data1.csv | ssql merge data2.jsonl -by amount -desc", "Merge sorted descending").
+		Example("ssql merge -catalog shards.csv -by timestamp -- where -if level eq ERROR", "Merge catalog shards with pushdown").
 
 		Flag("FILE").
 			String().
 			Variadic().
-			Required().
 			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
 			Global().
 			Help("Additional pre-sorted JSONL files to merge. For CSV: <(ssql from csv FILE)").
@@ -43,6 +44,42 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Merge descending (use +desc for ascending)").
 			Done().
 
+		Flag("-catalog", "-c").
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+			Global().
+			Default("").
+			Help("Catalog CSV file listing shards (host,path columns)").
+			Done().
+
+		Flag("-if").
+			Arg("field").
+				Completer(&cf.NoCompleter{Hint: "<field>"}).
+				Done().
+			Arg("op").
+				Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains"}}).
+				Done().
+			Arg("value").
+				Completer(&cf.NoCompleter{Hint: "<value>"}).
+				Done().
+			Accumulate().
+			Global().
+			Help("Partition pruning filter on catalog metadata: -if date_from le 2024-03-01").
+			Done().
+
+		Flag("-gpu").
+			Bool().
+			Global().
+			Help("Use GPU-enabled ssql binary on remote hosts").
+			Done().
+
+		Flag("-shard-field").
+			String().
+			Global().
+			Default("").
+			Help("Add field with host:path to each record").
+			Done().
+
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -54,6 +91,9 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			var byFields []string
 			var desc bool
 			var generate bool
+			var catalogFile string
+			var gpu bool
+			var shardField string
 
 			if filesVal, ok := ctx.GlobalFlags["FILE"]; ok {
 				switch v := filesVal.(type) {
@@ -66,7 +106,9 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						}
 					}
 				case string:
-					files = []string{v}
+					if v != "" {
+						files = []string{v}
+					}
 				}
 			}
 
@@ -88,14 +130,19 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if descVal, ok := ctx.GlobalFlags["-desc"]; ok {
 				desc = descVal.(bool)
 			}
-
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
-
-			if len(files) == 0 {
-				return fmt.Errorf("at least one FILE required for merge")
+			if catVal, ok := ctx.GlobalFlags["-catalog"]; ok {
+				catalogFile = catVal.(string)
 			}
+			if gpuVal, ok := ctx.GlobalFlags["-gpu"]; ok {
+				gpu = gpuVal.(bool)
+			}
+			if sfVal, ok := ctx.GlobalFlags["-shard-field"]; ok {
+				shardField = sfVal.(string)
+			}
+
 			if len(byFields) == 0 {
 				return fmt.Errorf("-by fields required for merge")
 			}
@@ -104,6 +151,24 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			orderBy := make([]ssql.OrderField, len(byFields))
 			for i, f := range byFields {
 				orderBy[i] = ssql.OrderField{Field: f, Desc: desc}
+			}
+
+			// Catalog mode
+			if catalogFile != "" {
+				var filters []ssql.CatalogFilter
+				if ifVal, ok := ctx.GlobalFlags["-if"]; ok {
+					filters = parseCatalogFilters(ifVal)
+				}
+				if shouldGenerate(generate) {
+					frag := lib.NewInitFragment("merged", "", nil, getCommandString())
+					return lib.WriteCodeFragment(frag)
+				}
+				return executeMergeCatalog(catalogFile, filters, orderBy, gpu, shardField, ctx.RemainingArgs)
+			}
+
+			// File mode
+			if len(files) == 0 {
+				return fmt.Errorf("at least one FILE or -catalog required for merge")
 			}
 
 			if shouldGenerate(generate) {
@@ -148,6 +213,96 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		}).
 		Done()
 	return cmd
+}
+
+// executeMergeCatalog runs a K-way sorted merge across catalog shards.
+// Each shard becomes an iter.Seq[Record] source via SSH (or local bash).
+// All connections start simultaneously; the merge heap pulls in sort order.
+func executeMergeCatalog(catalogFile string, filters []ssql.CatalogFilter, orderBy []ssql.OrderField, gpu bool, shardField string, pipelineArgs []string) error {
+	entries, err := ssql.ReadCatalog(catalogFile)
+	if err != nil {
+		return fmt.Errorf("reading catalog: %w", err)
+	}
+	entries = ssql.PruneCatalog(entries, filters)
+
+	if len(entries) == 0 {
+		return fmt.Errorf("no catalog entries match the filter criteria")
+	}
+
+	remoteBin := sshRemoteBin(gpu)
+	localBin, _ := os.Executable()
+	if localBin == "" {
+		localBin = "ssql"
+	}
+	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
+
+	// Create one iterator per shard — each runs an SSH/local subprocess
+	sources := make([]iter.Seq[ssql.Record], len(entries))
+	var procs []*exec.Cmd
+
+	for i, entry := range entries {
+		var proc *exec.Cmd
+		if entry.Host == "local" || entry.Host == "localhost" {
+			remoteCmd := ssql.BuildRemoteCommand(localBin, entry.Path, entry.Format, pipelineGroups)
+			proc = exec.Command("bash", "-c", remoteCmd)
+		} else {
+			remoteCmd := ssql.BuildRemoteCommand(remoteBin, entry.Path, entry.Format, pipelineGroups)
+			proc = exec.Command("ssh", entry.Host, remoteCmd)
+		}
+		proc.Stderr = os.Stderr
+
+		stdout, err := proc.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("shard %s:%s pipe: %w", entry.Host, entry.Path, err)
+		}
+		if err := proc.Start(); err != nil {
+			return fmt.Errorf("shard %s:%s start: %w", entry.Host, entry.Path, err)
+		}
+		procs = append(procs, proc)
+
+		// Create streaming iterator from subprocess stdout
+		entryCapture := entry
+		sources[i] = func(yield func(ssql.Record) bool) {
+			scanner := bufio.NewScanner(stdout)
+			scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+			for scanner.Scan() {
+				line := scanner.Bytes()
+				if len(line) == 0 {
+					continue
+				}
+				// Skip _schema header lines
+				if len(line) > 10 && strings.Contains(string(line[:20]), `"_schema"`) {
+					continue
+				}
+
+				rec, err := ssql.ParseJSONLine(line)
+				if err != nil {
+					continue
+				}
+				r := rec.Freeze()
+				if shardField != "" {
+					r = r.ToMutable().String(shardField, entryCapture.Host+":"+entryCapture.Path).Freeze()
+				}
+				if !yield(r) {
+					return
+				}
+			}
+		}
+	}
+
+	// K-way merge across all shard iterators
+	merged := ssql.MergeSorted(orderBy, sources...)
+	writeErr := writeWithInferredSchema(merged)
+
+	// Wait for all subprocesses
+	for i, proc := range procs {
+		if err := proc.Wait(); err != nil {
+			fmt.Fprintf(os.Stderr, "shard %s:%s: %v\n", entries[i].Host, entries[i].Path, err)
+		}
+	}
+
+	return writeErr
 }
 
 // generateMergeCode generates Go code for the merge command

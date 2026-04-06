@@ -116,6 +116,17 @@ type pipelineCmd struct {
 	JoinIsProcessSub bool     // true if right side is already a process substitution (/dev/fd/N)
 	JoinProcSubCmds  []*pipelineCmd // parsed inner pipeline commands (for process substitution optimization)
 
+	// Parsed fields for "merge -catalog"
+	IsMergeCatalog         bool
+	MergeCatalogFile       string
+	MergeCatalogFilters    []whereCondition
+	MergeCatalogGPU        bool
+	MergeCatalogShardField string
+	MergeCatalogByFields   []string
+	MergeCatalogDesc       bool
+	MergeCatalogPushDown   []string
+	MergeCatalogFlags      []string // other flags
+
 	// Sort fields
 	SortDesc  bool
 	SortField string
@@ -199,6 +210,8 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 	rules = append(rules, ruleSSHAggregationPushdown(cmds)...)
 	rules = append(rules, ruleMultiFilePredicatePushdown(cmds)...)
 	rules = append(rules, ruleMultiFileAggregationPushdown(cmds)...)
+	rules = append(rules, ruleMergeCatalogPredicatePushdown(cmds)...)
+	rules = append(rules, ruleMergeCatalogAggregationPushdown(cmds)...)
 
 	// Phase 2 rules (before sort rules, since they may modify where commands)
 	rules = append(rules, ruleCatalogPredicateExtraction(cmds)...)
@@ -257,6 +270,8 @@ func parsePipelineCmd(command string) *pipelineCmd {
 	switch kind {
 	case "from":
 		parseFromCmd(cmd)
+	case "merge":
+		parseMergeCmd(cmd)
 	case "join":
 		parseJoinCmd(cmd)
 	case "sort":
@@ -310,6 +325,61 @@ func parseFromMultiFileCmd(cmd *pipelineCmd) {
 	}
 	if len(cmd.MultiFileFiles) > 1 {
 		cmd.IsMultiFile = true
+	}
+}
+
+func parseMergeCmd(cmd *pipelineCmd) {
+	i := 0
+	for i < len(cmd.RawArgs) {
+		arg := cmd.RawArgs[i]
+		if arg == "--" {
+			if i+1 < len(cmd.RawArgs) {
+				cmd.MergeCatalogPushDown = cmd.RawArgs[i+1:]
+			}
+			break
+		}
+		switch arg {
+		case "-catalog", "-c":
+			if i+1 < len(cmd.RawArgs) {
+				cmd.IsMergeCatalog = true
+				cmd.MergeCatalogFile = cmd.RawArgs[i+1]
+				i += 2
+			} else {
+				i++
+			}
+		case "-by", "-b":
+			i++
+			for i < len(cmd.RawArgs) && !strings.HasPrefix(cmd.RawArgs[i], "-") && cmd.RawArgs[i] != "--" {
+				cmd.MergeCatalogByFields = append(cmd.MergeCatalogByFields, cmd.RawArgs[i])
+				i++
+			}
+		case "-desc", "-d":
+			cmd.MergeCatalogDesc = true
+			i++
+		case "-gpu":
+			cmd.MergeCatalogGPU = true
+			i++
+		case "-shard-field":
+			if i+1 < len(cmd.RawArgs) {
+				cmd.MergeCatalogShardField = cmd.RawArgs[i+1]
+				i += 2
+			} else {
+				i++
+			}
+		case "-if":
+			if i+3 < len(cmd.RawArgs) {
+				cmd.MergeCatalogFilters = append(cmd.MergeCatalogFilters, whereCondition{
+					Field:    cmd.RawArgs[i+1],
+					Operator: cmd.RawArgs[i+2],
+					Value:    cmd.RawArgs[i+3],
+				})
+				i += 4
+			} else {
+				i++
+			}
+		default:
+			i++
+		}
 	}
 }
 
@@ -610,6 +680,65 @@ func ruleMultiFileAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
 		after := renderCmd(cmds[i])
 		rules = append(rules, ruleApplication{
 			Rule:   "multifile-aggregation-pushdown",
+			Before: before,
+			After:  after,
+		})
+	}
+	return rules
+}
+
+// ruleMergeCatalogPredicatePushdown moves a where command after "merge -catalog" into pushdown.
+func ruleMergeCatalogPredicatePushdown(cmds []*pipelineCmd) []ruleApplication {
+	var rules []ruleApplication
+	for i := 0; i < len(cmds); i++ {
+		if cmds[i].Removed || cmds[i].Kind != "merge" || !cmds[i].IsMergeCatalog {
+			continue
+		}
+		j := nextNonRemoved(cmds, i)
+		if j == -1 || cmds[j].Kind != "where" {
+			continue
+		}
+		before := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
+		pushArgs := append([]string{"where"}, cmds[j].RawArgs...)
+		if len(cmds[i].MergeCatalogPushDown) > 0 {
+			cmds[i].MergeCatalogPushDown = append(cmds[i].MergeCatalogPushDown, "+")
+			cmds[i].MergeCatalogPushDown = append(cmds[i].MergeCatalogPushDown, pushArgs...)
+		} else {
+			cmds[i].MergeCatalogPushDown = pushArgs
+		}
+		cmds[j].Removed = true
+		after := renderCmd(cmds[i])
+		rules = append(rules, ruleApplication{
+			Rule:   "merge-catalog-predicate-pushdown",
+			Before: before,
+			After:  after,
+		})
+	}
+	return rules
+}
+
+// ruleMergeCatalogAggregationPushdown moves a group-by after "merge -catalog" (with pushdown) into pushdown.
+func ruleMergeCatalogAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
+	var rules []ruleApplication
+	for i := 0; i < len(cmds); i++ {
+		if cmds[i].Removed || cmds[i].Kind != "merge" || !cmds[i].IsMergeCatalog {
+			continue
+		}
+		if len(cmds[i].MergeCatalogPushDown) == 0 {
+			continue
+		}
+		j := nextNonRemoved(cmds, i)
+		if j == -1 || cmds[j].Kind != "group-by" {
+			continue
+		}
+		before := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
+		pushArgs := append([]string{"group-by"}, cmds[j].RawArgs...)
+		cmds[i].MergeCatalogPushDown = append(cmds[i].MergeCatalogPushDown, "+")
+		cmds[i].MergeCatalogPushDown = append(cmds[i].MergeCatalogPushDown, pushArgs...)
+		cmds[j].Removed = true
+		after := renderCmd(cmds[i])
+		rules = append(rules, ruleApplication{
+			Rule:   "merge-catalog-aggregation-pushdown",
 			Before: before,
 			After:  after,
 		})
@@ -1831,6 +1960,31 @@ func renderCmd(cmd *pipelineCmd) string {
 		}
 		parts = append(parts, cmd.JoinFile)
 		parts = append(parts, cmd.JoinArgs...)
+		return shellJoin(parts)
+	}
+
+	if cmd.IsMergeCatalog {
+		parts = append(parts, "-catalog", cmd.MergeCatalogFile)
+		for _, f := range cmd.MergeCatalogFilters {
+			parts = append(parts, "-if", f.Field, f.Operator, f.Value)
+		}
+		if len(cmd.MergeCatalogByFields) > 0 {
+			parts = append(parts, "-by")
+			parts = append(parts, cmd.MergeCatalogByFields...)
+		}
+		if cmd.MergeCatalogDesc {
+			parts = append(parts, "-desc")
+		}
+		if cmd.MergeCatalogGPU {
+			parts = append(parts, "-gpu")
+		}
+		if cmd.MergeCatalogShardField != "" {
+			parts = append(parts, "-shard-field", cmd.MergeCatalogShardField)
+		}
+		if len(cmd.MergeCatalogPushDown) > 0 {
+			parts = append(parts, "--")
+			parts = append(parts, cmd.MergeCatalogPushDown...)
+		}
 		return shellJoin(parts)
 	}
 
