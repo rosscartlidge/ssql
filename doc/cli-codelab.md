@@ -635,6 +635,18 @@ ssql merge -catalog shards.csv -by timestamp -if date_from le 2024-03-01 | ssql 
 ssql merge -catalog shards.csv -by timestamp -shard-field source | ssql to table
 ```
 
+Catalog paths support glob patterns — each matched file becomes a separate merge source:
+```bash
+# Catalog with globs — new files are picked up automatically
+# shards.csv:  host,path
+#              node1,/data/logs-*.csv
+#              node2,/data/logs-*.csv
+ssql merge -catalog shards.csv -by timestamp | ssql to table
+
+# See which files were actually matched
+ssql merge -catalog shards.csv -by timestamp -catalog-used expanded.csv | ssql to table
+```
+
 The optimizer automatically pushes downstream filters into the pushdown:
 ```bash
 # Before optimization:
@@ -994,6 +1006,21 @@ ssql from catalog shards.csv -shard-field _shard | ssql to table
 ```
 
 Local shards (where `host` is `local` or `localhost`) are read directly without SSH.
+
+**Glob patterns** in the `path` column are expanded on each host before processing. New files matching the glob are picked up automatically without editing the catalog:
+
+```csv
+host,path
+node1,/data/logs-2024-*.csv
+node2,/data/events/*.csv
+```
+
+Use `-catalog-used` to see which files were actually matched:
+
+```bash
+ssql from catalog shards.csv -catalog-used expanded.csv | ssql to table
+cat expanded.csv  # shows one row per matched file
+```
 
 ---
 
