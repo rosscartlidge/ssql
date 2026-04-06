@@ -101,6 +101,13 @@ type pipelineCmd struct {
 	CatalogShardField string
 	CatalogPushDown   []string
 
+	// Parsed fields for multi-file "from csv/tsv/json/jsonl"
+	IsMultiFile       bool
+	MultiFileFormat   string   // "csv", "tsv", "json", "jsonl"
+	MultiFileFiles    []string // file paths
+	MultiFileFlags    []string // other flags (-merge-schemas, -source, -unordered, -type, etc.)
+	MultiFilePushDown []string // args after --
+
 	// Parsed fields for "join"
 	IsJoin           bool
 	JoinFile         string   // right-side file path
@@ -190,6 +197,8 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 	rules = append(rules, ruleWhereMerge(cmds)...)
 	rules = append(rules, ruleSSHPredicatePushdown(cmds)...)
 	rules = append(rules, ruleSSHAggregationPushdown(cmds)...)
+	rules = append(rules, ruleMultiFilePredicatePushdown(cmds)...)
+	rules = append(rules, ruleMultiFileAggregationPushdown(cmds)...)
 
 	// Phase 2 rules (before sort rules, since they may modify where commands)
 	rules = append(rules, ruleCatalogPredicateExtraction(cmds)...)
@@ -268,6 +277,39 @@ func parseFromCmd(cmd *pipelineCmd) {
 		parseFromSSHCmd(cmd)
 	case "catalog":
 		parseFromCatalogCmd(cmd)
+	case "csv", "tsv", "json", "jsonl":
+		parseFromMultiFileCmd(cmd)
+	}
+}
+
+func parseFromMultiFileCmd(cmd *pipelineCmd) {
+	cmd.MultiFileFormat = cmd.RawArgs[0]
+	i := 1
+	for i < len(cmd.RawArgs) {
+		arg := cmd.RawArgs[i]
+		if arg == "--" {
+			if i+1 < len(cmd.RawArgs) {
+				cmd.MultiFilePushDown = cmd.RawArgs[i+1:]
+			}
+			break
+		}
+		if strings.HasPrefix(arg, "-") {
+			// Flag — collect flag and its value(s)
+			cmd.MultiFileFlags = append(cmd.MultiFileFlags, arg)
+			i++
+			// Consume flag values (non-flag args until next flag or --)
+			for i < len(cmd.RawArgs) && !strings.HasPrefix(cmd.RawArgs[i], "-") && cmd.RawArgs[i] != "--" {
+				cmd.MultiFileFlags = append(cmd.MultiFileFlags, cmd.RawArgs[i])
+				i++
+			}
+			continue
+		}
+		// Positional — file path
+		cmd.MultiFileFiles = append(cmd.MultiFileFiles, arg)
+		i++
+	}
+	if len(cmd.MultiFileFiles) > 1 {
+		cmd.IsMultiFile = true
 	}
 }
 
@@ -509,6 +551,65 @@ func ruleSSHAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
 		after := renderCmd(cmds[i])
 		rules = append(rules, ruleApplication{
 			Rule:   "ssh-aggregation-pushdown",
+			Before: before,
+			After:  after,
+		})
+	}
+	return rules
+}
+
+// ruleMultiFilePredicatePushdown moves a where command after multi-file "from csv/tsv/json/jsonl" into pushdown.
+func ruleMultiFilePredicatePushdown(cmds []*pipelineCmd) []ruleApplication {
+	var rules []ruleApplication
+	for i := 0; i < len(cmds); i++ {
+		if cmds[i].Removed || cmds[i].Kind != "from" || !cmds[i].IsMultiFile {
+			continue
+		}
+		j := nextNonRemoved(cmds, i)
+		if j == -1 || cmds[j].Kind != "where" {
+			continue
+		}
+		before := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
+		pushArgs := append([]string{"where"}, cmds[j].RawArgs...)
+		if len(cmds[i].MultiFilePushDown) > 0 {
+			cmds[i].MultiFilePushDown = append(cmds[i].MultiFilePushDown, "+")
+			cmds[i].MultiFilePushDown = append(cmds[i].MultiFilePushDown, pushArgs...)
+		} else {
+			cmds[i].MultiFilePushDown = pushArgs
+		}
+		cmds[j].Removed = true
+		after := renderCmd(cmds[i])
+		rules = append(rules, ruleApplication{
+			Rule:   "multifile-predicate-pushdown",
+			Before: before,
+			After:  after,
+		})
+	}
+	return rules
+}
+
+// ruleMultiFileAggregationPushdown moves a group-by after multi-file "from" (with pushdown) into pushdown.
+func ruleMultiFileAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
+	var rules []ruleApplication
+	for i := 0; i < len(cmds); i++ {
+		if cmds[i].Removed || cmds[i].Kind != "from" || !cmds[i].IsMultiFile {
+			continue
+		}
+		if len(cmds[i].MultiFilePushDown) == 0 {
+			continue
+		}
+		j := nextNonRemoved(cmds, i)
+		if j == -1 || cmds[j].Kind != "group-by" {
+			continue
+		}
+		before := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
+		pushArgs := append([]string{"group-by"}, cmds[j].RawArgs...)
+		cmds[i].MultiFilePushDown = append(cmds[i].MultiFilePushDown, "+")
+		cmds[i].MultiFilePushDown = append(cmds[i].MultiFilePushDown, pushArgs...)
+		cmds[j].Removed = true
+		after := renderCmd(cmds[i])
+		rules = append(rules, ruleApplication{
+			Rule:   "multifile-aggregation-pushdown",
 			Before: before,
 			After:  after,
 		})
@@ -1730,6 +1831,17 @@ func renderCmd(cmd *pipelineCmd) string {
 		}
 		parts = append(parts, cmd.JoinFile)
 		parts = append(parts, cmd.JoinArgs...)
+		return shellJoin(parts)
+	}
+
+	if cmd.IsMultiFile {
+		parts = append(parts, cmd.MultiFileFormat)
+		parts = append(parts, cmd.MultiFileFiles...)
+		parts = append(parts, cmd.MultiFileFlags...)
+		if len(cmd.MultiFilePushDown) > 0 {
+			parts = append(parts, "--")
+			parts = append(parts, cmd.MultiFilePushDown...)
+		}
 		return shellJoin(parts)
 	}
 

@@ -180,8 +180,11 @@ type headerReaderFunc func(filename string) ([]string, error)
 
 // executeFromMultiFile reads multiple files of any format and outputs merged JSONL.
 func executeFromMultiFile(cfg multiFileConfig, format string, readFile fileReaderFunc, readHeaders headerReaderFunc) error {
-	if cfg.generate {
-		return fmt.Errorf("code generation for multi-file %s not yet implemented — use single file with -generate", format)
+	if shouldGenerate(cfg.generate) {
+		// Emit a command-only fragment for the optimizer (generate ssql).
+		// Full Go code generation for multi-file is not yet supported.
+		frag := lib.NewInitFragment("records", "", nil, getCommandString())
+		return lib.WriteCodeFragment(frag)
 	}
 
 	var mergedHeaders []string
