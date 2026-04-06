@@ -1,6 +1,6 @@
 # ssql Performance Improvement Plan
 
-**Date:** 2026-03-16
+**Date:** 2026-03-16 (updated 2026-04-07)
 **Related:** [DuckDB Comparison](duckdb-vs-ssql.md), [Parallel Processing](parallel-processing.md)
 
 ## Current State
@@ -9,194 +9,147 @@ ssql processes records sequentially, one at a time, on a single core. For a 16-c
 
 DuckDB handles the same query in seconds using columnar batches, SIMD, and all cores. This plan identifies how to close that gap incrementally, ordered by effort vs impact.
 
-## The Plan
+## Status
 
-### Phase 1: Parquet Column Pruning (Days)
+| Phase | Feature | Status | Notes |
+|-------|---------|--------|-------|
+| 1 | Parquet column pruning | **DONE** | `-columns` flag, `ReadParquetColumns()` |
+| 2a | Parallel multi-file | **DONE** | 4.4x speedup, ordered + unordered modes |
+| 2b | Parallel Parquet row groups | Not done | |
+| 3 | Parquet row group pruning | Not done | |
+| 4 | Parallel CSV/JSON parsing | Not done | |
+| 5 | Automatic column inference | **Partial** | `ruleParquetColumnPruning` in optimizer; CSV column drop benchmarked as counterproductive |
+| 6 | Parallel compute | Not done | |
+| 7 | Pipeline parallelism | Not done | |
+| 8 | Columnar fast path | Not done | |
+| NEW | PGO (profile-guided optimization) | Not done | |
+| NEW | sync.Pool for records/buffers | Not done | |
+| NEW | Parquet bloom filter pushdown | Not done | |
+| NEW | SIMD filtering (Go 1.26 archsimd) | Not done | |
 
-**Impact:** 10-50x less I/O on wide files
-**Effort:** 1-2 days
-**Risk:** None — additive feature
+## Recommended Implementation Order
 
-Read only the columns the pipeline needs instead of the entire file.
+Based on effort/impact analysis, here's what to do next:
 
-**Implementation:**
+### Tier 1: Free Wins (hours, no code risk)
 
-Add `-columns` flag to `from parquet`:
+#### PGO — Profile-Guided Optimization
+**Effort:** 1 hour | **Impact:** 5-14% across all operations | **Risk:** None
 
-```bash
-# Read only dept and salary from a 50-column file
-ssql from parquet employees.parquet -columns dept,salary \
-  | ssql group-by dept -sum salary total \
-  | ssql to table
-```
-
-Under the hood, use `pqarrow.FileReader.ReadRowGroups` with a column index list instead of `ReadTable` which reads everything.
-
-```go
-reader, _ := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{}, mem)
-colIndices := []int{schema.FieldIndex("dept"), schema.FieldIndex("salary")}
-tbl, _ := reader.ReadRowGroups(ctx, colIndices, nil)
-```
-
-**Future:** Auto-infer needed columns from the pipeline structure (Phase 5).
-
-### Phase 2: Parallel Source Reading (Days)
-
-**Impact:** Nx speedup (N = number of sources/row groups)
-**Effort:** 2-3 days
-**Risk:** Low — sources are independent
-
-Two sub-tasks:
-
-**2a. Parallel Parquet row groups:**
-
-Each row group is an independent chunk. Read and decode them on separate goroutines, merge with ordered fan-in.
+Run ssql under a representative workload, save the CPU profile, build with PGO. Go 1.19+ picks up `default.pgo` automatically. Uber reports up to 14% CPU savings fleet-wide.
 
 ```bash
-# Automatic — large Parquet files read row groups in parallel
-ssql from parquet large.parquet | ssql where -if age gt 25 | ssql to table
-
-# Explicit control
-ssql from parquet large.parquet -parallel 8 | ssql to table
+# Generate profile from representative workload
+ssql from large.csv | ssql where -if age gt 25 | ssql group-by dept -count n | ssql to csv > /dev/null
+# Save as default.pgo in cmd/ssql/
+go build -pgo=auto ./cmd/ssql
 ```
 
-Expected speedup: 4-8x for files with multiple row groups (most Parquet files).
+No code changes. Worth doing for every release.
 
-**2b. Parallel catalog/SSH shards:**
+### Tier 2: High Impact, Low Effort (days)
 
-`ProcessCatalogShards` currently reads shards sequentially. Launch all SSH connections concurrently:
+#### Parquet Row Group Pruning (Phase 3)
+**Effort:** 2-3 days | **Impact:** 10-100x less data read | **Risk:** Low
+
+Reuse `-if` syntax from catalog pruning. Check min/max statistics per column per row group, skip groups that can't match.
 
 ```bash
-# All 10 shards read simultaneously
-ssql from catalog shards.csv -parallel \
-  -- where -if status ge 500 + group-by service -count cnt \
-  | ssql to table
+ssql from parquet events.parquet -if timestamp ge 2025-02-01 -if timestamp le 2025-02-28 | ssql to table
 ```
-
-Expected speedup: Nx where N is shard count. SSH multiplexing already handles connection overhead.
-
-### Phase 3: Parquet Row Group Pruning (Days)
-
-**Impact:** 10-100x less data read for filtered queries
-**Effort:** 2-3 days
-**Risk:** Low — reuses catalog pruning pattern
-
-Parquet stores min/max statistics per column per row group. Use them to skip row groups that can't match a filter — identical to catalog partition pruning.
-
-```bash
-# Reads only row groups where timestamp might be in February
-ssql from parquet events.parquet -if timestamp ge 2025-02-01 -if timestamp le 2025-02-28 \
-  | ssql to table
-```
-
-The `-if` syntax mirrors `from catalog -if` exactly. Implementation reads row group metadata before opening the row group.
 
 Combined with column pruning (Phase 1): read 2 of 50 columns from 1 of 10 row groups = 0.4% of the file.
 
-### Phase 4: Parallel CSV/JSON Parsing (Week)
+#### Parquet Bloom Filter Pushdown
+**Effort:** 2-3 days | **Impact:** 10-30x for selective queries | **Risk:** Low
 
-**Impact:** 2-4x for large text files
-**Effort:** 3-5 days
-**Risk:** Medium — quoted fields with newlines complicate chunk splitting
-
-Split the file into N chunks at line boundaries, parse each chunk on a separate goroutine, merge in order.
+Parquet spec supports Split Block Bloom Filters. An 8KB bloom filter per row group prunes 90%+ of row groups for equality predicates. The parquet-go library has bloom filter support.
 
 ```bash
-# Transparent parallel reading for large CSV files
-ssql from csv large.csv | ssql where -if status eq error | ssql to json
+# Equality filter on indexed column — bloom filter skips most row groups
+ssql from parquet events.parquet | ssql where -if user_id eq U12345 | ssql to table
 ```
 
-Auto-enable when file size > 100MB. Tricky parts: CSV header only in first chunk, and split points must respect quoted fields.
+Can be combined with row group pruning for compound predicates.
 
-### Phase 5: Automatic Column Inference (Week)
+#### sync.Pool for Records and Buffers
+**Effort:** 2-3 days | **Impact:** 2-4x less GC pressure | **Risk:** Low
 
-**Impact:** Makes Phase 1 automatic — no `-columns` flag needed
-**Effort:** 1 week
-**Risk:** Medium — needs pipeline analysis before execution
+Pool `Record` objects, `[]byte` buffers, and CSV field slices. Reset and return after each record. Directly reduces GC pause frequency on high-throughput pipelines.
 
-Analyze the pipeline to determine which columns are needed:
+Key locations:
+- `ParseJSONLine` — pool the intermediate `map[string]any`
+- CSV reader — pool field slices (`ReuseRecord` is already set)
+- JSONL writer — pool `json.Encoder` buffers
+
+### Tier 3: Medium Effort, High Impact (1-2 weeks)
+
+#### Parallel Parquet Row Groups (Phase 2b)
+**Effort:** 2-3 days | **Impact:** 4-8x | **Risk:** Low
+
+Each row group is independent. Read and decode on separate goroutines, ordered fan-in. Most Parquet files have multiple row groups.
 
 ```bash
-# ssql infers only dept and salary are needed
-ssql from parquet employees.parquet \
-  | ssql where -if dept eq Engineering \
-  | ssql group-by dept -sum salary total \
-  | ssql to table
+ssql from parquet large.parquet | ssql where -if age gt 25 | ssql to table
+# Automatically reads row groups in parallel
 ```
 
-Two approaches:
-- **Environment variable protocol:** Each command exports its needed fields; `from parquet` reads them before starting
-- **`plan-columns` helper:** Separate utility parses the pipeline and outputs the column list for shell substitution
+#### Parallel CSV Chunk Parsing (Phase 4)
+**Effort:** 3-5 days | **Impact:** 3-8x for large files | **Risk:** Medium
 
-### Phase 6: Parallel Compute (1-2 Weeks)
+mmap the file, find safe split points (newlines outside quotes), parse chunks on separate goroutines. Auto-enable for files > 100MB.
 
-**Impact:** 2-8x for CPU-bound operations
-**Effort:** 1-2 weeks
-**Risk:** Medium — goroutine overhead can exceed benefit for simple operations
+The new `go-simdcsv` library (SIMD delimiter detection via Go 1.26 archsimd) is worth evaluating as a drop-in for `encoding/csv`.
 
-**6a. Parallel where (for expensive predicates):**
+#### SIMD Filtering (Go 1.26 archsimd)
+**Effort:** 1 week | **Impact:** 10-25x for numeric predicates | **Risk:** Medium (experimental API)
 
-Batch records, evaluate predicate on multiple goroutines, yield matches in order. Only beneficial when predicate cost > goroutine overhead (~1μs per record).
+Go 1.26 ships `simd/archsimd` with 128/256/512-bit vector types. Compare 8 float64s simultaneously, batch-filter numeric columns.
 
-```bash
-# Regex predicate benefits from parallelism
-ssql from parquet data.parquet \
-  | ssql where -if-expr 'regex(email, "^[a-z]+@company\\.com$")' \
-  | ssql to json
+```go
+// Filter: where salary > 100000
+// Process 8 records at a time with Float64x8
+vec := archsimd.LoadFloat64x8(salaries[i:])
+mask := archsimd.GreaterThanFloat64x8(vec, threshold)
 ```
 
-**6b. Parallel group-by (hash partition):**
+Currently AMD64 only, behind `GOEXPERIMENT=simd`. The API may change.
 
-Partition records by group key hash, aggregate each partition on a separate goroutine, merge results. Classic MapReduce pattern — no key conflicts between partitions.
+### Tier 4: High Effort (weeks)
 
-**6c. Parallel join probe:**
+#### Parallel Compute (Phase 6)
+**Effort:** 1-2 weeks | **Impact:** 2-8x CPU-bound | **Risk:** Medium
 
-Build hash table single-threaded, probe from multiple goroutines (read-only access is thread-safe).
+- **Parallel where:** Batch records, evaluate predicates on multiple goroutines
+- **Parallel group-by:** Hash-partition by key, aggregate each partition independently
+- **Parallel join probe:** Build hash table single-threaded, probe from multiple goroutines
 
-### Phase 7: Pipeline Parallelism (Weeks)
+Only beneficial when operation cost > goroutine overhead (~1μs per record).
 
-**Impact:** Variable — depends on stage cost balance
-**Effort:** 1-2 weeks
-**Risk:** High — architectural change to iterator model
+#### Columnar Fast Path (Phase 8)
+**Effort:** 2-4 weeks | **Impact:** 5-20x for Parquet/Arrow | **Risk:** High
 
-Run each pipeline stage on its own goroutine connected by buffered channels. Overlaps I/O-bound and CPU-bound stages.
+Keep data columnar through filter and aggregate for Parquet→Parquet pipelines. Only convert to Records at boundaries. This is the only way to reach DuckDB-level performance.
 
-```
-from (I/O) → [chan] → where (CPU) → [chan] → group-by (CPU) → [chan] → to (I/O)
-    G1                    G2                      G3                     G4
-```
+## Implementation Plan (Next Steps)
 
-**Challenge:** `iter.Seq` is push-based. Converting to/from channels adds overhead and complicates backpressure. May not be worth it unless stages have very different costs.
+**Week 1:**
+1. Set up PGO for release builds (1 hour)
+2. Parquet row group pruning with `-if` (2-3 days)
+3. Benchmark and document results
 
-### Phase 8: Columnar Fast Path (Months)
+**Week 2:**
+4. sync.Pool for records/buffers (2-3 days)
+5. Parquet bloom filter pushdown (2-3 days)
 
-**Impact:** 5-20x for Parquet/Arrow pipelines
-**Effort:** 2-4 weeks
-**Risk:** High — parallel data model alongside row-based
+**Week 3-4:**
+6. Parallel Parquet row groups (2-3 days)
+7. Evaluate go-simdcsv for CSV parsing (1-2 days)
 
-For pipelines where input and output are both columnar (Parquet/Arrow), keep data columnar through filter and aggregate operations. Only convert to Records at boundaries (expressions, output formats).
-
-```
-Parquet → [columnar filter] → [columnar aggregate] → Parquet
-          no Record conversion, typed arrays, auto-vectorizable
-```
-
-This is the only way to approach DuckDB-level performance without becoming DuckDB. But it requires maintaining two parallel execution paths (row-based and columnar).
-
-## Summary
-
-| Phase | Change | Effort | Speedup | Cumulative |
-|---|---|---|---|---|
-| 1 | Parquet column pruning | 1-2 days | 10-50x I/O | 10-50x |
-| 2 | Parallel sources (row groups + SSH) | 2-3 days | 4-8x | 40-400x |
-| 3 | Parquet row group pruning | 2-3 days | 2-10x | 80-4000x |
-| 4 | Parallel CSV/JSON parsing | 3-5 days | 2-4x | — |
-| 5 | Automatic column inference | 1 week | UX (no -columns flag) | — |
-| 6 | Parallel compute (where/group-by/join) | 1-2 weeks | 2-8x | 160-32000x |
-| 7 | Pipeline parallelism | 1-2 weeks | Variable | — |
-| 8 | Columnar fast path | 2-4 weeks | 5-20x | DuckDB-level |
-
-Phases 1-3 alone (about a week of work) get ssql within 5-10x of DuckDB for Parquet-based analytical queries. The remaining gap is CPU-bound vectorized execution — Phases 6-8 close it progressively, with Phase 8 reaching DuckDB-level for columnar pipelines.
+**After GopherCon (optional):**
+8. SIMD filtering with archsimd
+9. Parallel compute (where/group-by)
+10. Columnar fast path
 
 ## Decision Framework
 
@@ -211,3 +164,11 @@ Phases 1-3 alone (about a week of work) get ssql within 5-10x of DuckDB for Parq
 - Maximum performance is the only goal
 
 The two approaches complement each other. Phases 1-3 make ssql fast enough for interactive use. `generate sql` bridges to DuckDB when absolute performance matters.
+
+## New Techniques to Watch
+
+- **Go 1.26 archsimd** — SIMD vectors in Go, still experimental but promising for numeric filtering
+- **go-simdcsv** — SIMD-accelerated CSV parsing using archsimd
+- **Parquet bloom filters** — already in parquet-go, just needs wiring
+- **PGO** — proven 5-14% improvement, zero code changes
+- **GOMEMLIMIT** — cap heap to reduce GC frequency for known-budget batch work
