@@ -8,6 +8,7 @@ import (
 	"iter"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -173,6 +174,93 @@ func catalogStringOp(colVal, operator, filterVal string) bool {
 		return colVal <= filterVal
 	}
 	return true
+}
+
+// ExpandCatalogGlobs expands entries whose paths contain glob characters into
+// one entry per matching file. Local entries use filepath.Glob; remote entries
+// use `ssh host echo <glob>` to expand on the remote host. Non-glob entries
+// are passed through unchanged. Metadata is inherited by expanded entries.
+func ExpandCatalogGlobs(entries []CatalogEntry) []CatalogEntry {
+	var result []CatalogEntry
+	for _, entry := range entries {
+		if !isGlob(entry.Path) {
+			result = append(result, entry)
+			continue
+		}
+
+		var paths []string
+		if entry.Host == "local" || entry.Host == "localhost" || entry.Host == "" {
+			matches, err := filepath.Glob(entry.Path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "glob %s: %v\n", entry.Path, err)
+				continue
+			}
+			paths = matches
+		} else {
+			// Remote: ssh host echo <glob> — shell expands the glob
+			out, err := exec.Command("ssh", entry.Host, "echo", entry.Path).Output()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "glob %s:%s: %v\n", entry.Host, entry.Path, err)
+				continue
+			}
+			for _, p := range strings.Fields(strings.TrimSpace(string(out))) {
+				if p != "" {
+					paths = append(paths, p)
+				}
+			}
+		}
+
+		for _, p := range paths {
+			expanded := CatalogEntry{
+				Host:     entry.Host,
+				Path:     p,
+				Format:   entry.Format,
+				Metadata: entry.Metadata, // shared — metadata applies to all expanded files
+			}
+			result = append(result, expanded)
+		}
+	}
+	return result
+}
+
+// WriteCatalog writes catalog entries as CSV.
+func WriteCatalog(w io.Writer, entries []CatalogEntry) error {
+	writer := csv.NewWriter(w)
+
+	// Collect all metadata keys
+	metaKeys := make(map[string]bool)
+	for _, e := range entries {
+		for k := range e.Metadata {
+			metaKeys[k] = true
+		}
+	}
+	var sortedKeys []string
+	for k := range metaKeys {
+		sortedKeys = append(sortedKeys, k)
+	}
+
+	// Headers
+	headers := []string{"host", "path"}
+	if len(sortedKeys) > 0 {
+		headers = append(headers, sortedKeys...)
+	}
+	if err := writer.Write(headers); err != nil {
+		return err
+	}
+
+	// Rows
+	for _, e := range entries {
+		row := []string{e.Host, e.Path}
+		for _, k := range sortedKeys {
+			row = append(row, e.Metadata[k])
+		}
+		if err := writer.Write(row); err != nil {
+			return err
+		}
+	}
+
+	writer.Flush()
+	return writer.Error()
 }
 
 // ProcessCatalogShards connects to each shard via SSH (or locally for

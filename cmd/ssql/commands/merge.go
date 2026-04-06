@@ -80,6 +80,14 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Add field with host:path to each record").
 			Done().
 
+		Flag("-catalog-used").
+			String().
+			Global().
+			Default("").
+			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+			Help("Write expanded catalog (after glob expansion + pruning) to CSV file").
+			Done().
+
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -94,6 +102,7 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			var catalogFile string
 			var gpu bool
 			var shardField string
+			var catalogUsed string
 
 			if filesVal, ok := ctx.GlobalFlags["FILE"]; ok {
 				switch v := filesVal.(type) {
@@ -142,6 +151,9 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if sfVal, ok := ctx.GlobalFlags["-shard-field"]; ok {
 				shardField = sfVal.(string)
 			}
+			if cuVal, ok := ctx.GlobalFlags["-catalog-used"]; ok {
+				catalogUsed = cuVal.(string)
+			}
 
 			if len(byFields) == 0 {
 				return fmt.Errorf("-by fields required for merge")
@@ -163,7 +175,7 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					frag := lib.NewInitFragment("merged", "", nil, getCommandString())
 					return lib.WriteCodeFragment(frag)
 				}
-				return executeMergeCatalog(catalogFile, filters, orderBy, gpu, shardField, ctx.RemainingArgs)
+				return executeMergeCatalog(catalogFile, filters, orderBy, gpu, shardField, catalogUsed, ctx.RemainingArgs)
 			}
 
 			// File mode
@@ -218,15 +230,30 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 // executeMergeCatalog runs a K-way sorted merge across catalog shards.
 // Each shard becomes an iter.Seq[Record] source via SSH (or local bash).
 // All connections start simultaneously; the merge heap pulls in sort order.
-func executeMergeCatalog(catalogFile string, filters []ssql.CatalogFilter, orderBy []ssql.OrderField, gpu bool, shardField string, pipelineArgs []string) error {
+func executeMergeCatalog(catalogFile string, filters []ssql.CatalogFilter, orderBy []ssql.OrderField, gpu bool, shardField string, catalogUsedFile string, pipelineArgs []string) error {
 	entries, err := ssql.ReadCatalog(catalogFile)
 	if err != nil {
 		return fmt.Errorf("reading catalog: %w", err)
 	}
 	entries = ssql.PruneCatalog(entries, filters)
+	entries = ssql.ExpandCatalogGlobs(entries)
 
 	if len(entries) == 0 {
 		return fmt.Errorf("no catalog entries match the filter criteria")
+	}
+
+	// Write expanded catalog if requested
+	if catalogUsedFile != "" {
+		f, err := os.Create(catalogUsedFile)
+		if err != nil {
+			return fmt.Errorf("creating catalog-used file: %w", err)
+		}
+		if err := ssql.WriteCatalog(f, entries); err != nil {
+			f.Close()
+			return fmt.Errorf("writing catalog-used: %w", err)
+		}
+		f.Close()
+		fmt.Fprintf(os.Stderr, "Expanded catalog written to %s (%d entries)\n", catalogUsedFile, len(entries))
 	}
 
 	remoteBin := sshRemoteBin(gpu)

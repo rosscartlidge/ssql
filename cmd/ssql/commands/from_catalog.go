@@ -56,6 +56,14 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 			Help("Add a field to each record showing its shard origin (host:path)").
 			Done().
 
+		Flag("-catalog-used").
+			String().
+			Global().
+			Default("").
+			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+			Help("Write expanded catalog (after glob expansion + pruning) to CSV file").
+			Done().
+
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -68,6 +76,7 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
 			shardField, _ := ctx.GlobalFlags["-shard-field"].(string)
 			generate, _ := ctx.GlobalFlags["-generate"].(bool)
+			catalogUsed, _ := ctx.GlobalFlags["-catalog-used"].(string)
 
 			if catalogFile == "" {
 				return fmt.Errorf("usage: ssql from catalog FILE [-if field op value]...")
@@ -83,7 +92,7 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 				return generateFromCatalogCode(catalogFile, gpu, filters, shardField, ctx.RemainingArgs)
 			}
 
-			return executeFromCatalog(catalogFile, gpu, filters, shardField, ctx.RemainingArgs)
+			return executeFromCatalog(catalogFile, gpu, filters, shardField, catalogUsed, ctx.RemainingArgs)
 		}).
 		Done()
 }
@@ -285,15 +294,30 @@ func parseCatalogFilters(ifVal any) []ssql.CatalogFilter {
 }
 
 // executeFromCatalog reads all shards in a catalog, applying pruning and optional push-down.
-func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, pipelineArgs []string) error {
+func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, catalogUsedFile string, pipelineArgs []string) error {
 	entries, err := ssql.ReadCatalog(catalogFile)
 	if err != nil {
 		return err
 	}
 
 	entries = ssql.PruneCatalog(entries, filters)
+	entries = ssql.ExpandCatalogGlobs(entries)
 	if len(entries) == 0 {
 		return nil
+	}
+
+	// Write expanded catalog if requested
+	if catalogUsedFile != "" {
+		f, err := os.Create(catalogUsedFile)
+		if err != nil {
+			return fmt.Errorf("creating catalog-used file: %w", err)
+		}
+		if err := ssql.WriteCatalog(f, entries); err != nil {
+			f.Close()
+			return fmt.Errorf("writing catalog-used: %w", err)
+		}
+		f.Close()
+		fmt.Fprintf(os.Stderr, "Expanded catalog written to %s (%d entries)\n", catalogUsedFile, len(entries))
 	}
 
 	remoteBin := sshRemoteBin(gpu)
