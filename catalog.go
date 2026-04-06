@@ -285,9 +285,34 @@ var validFormats = map[string]bool{
 	"arrow": true, "wav": true, "xlsx": true,
 }
 
+// isGlob returns true if the path contains shell glob characters.
+func isGlob(path string) bool {
+	return strings.ContainsAny(path, "*?[")
+}
+
+// inferFormat returns the format from a file extension (e.g., ".csv" → "csv").
+func inferFormat(path string) string {
+	// Strip glob characters to find the extension
+	clean := strings.TrimRight(path, "*?[]")
+	if i := strings.LastIndex(clean, "."); i >= 0 {
+		ext := strings.ToLower(clean[i+1:])
+		if validFormats[ext] {
+			return ext
+		}
+	}
+	return "csv" // default
+}
+
 func BuildRemoteCommand(remoteBin, path, format string, pipelineGroups [][]string) string {
 	var remoteCmd string
-	if format != "" && format != "csv" && validFormats[format] {
+
+	if isGlob(path) {
+		// Glob path: don't quote (let bash expand), use explicit format for multi-file
+		if format == "" {
+			format = inferFormat(path)
+		}
+		remoteCmd = remoteBin + " from " + format + " " + path
+	} else if format != "" && format != "csv" && validFormats[format] {
 		remoteCmd = remoteBin + " from " + format + " " + ShellQuote(path)
 	} else {
 		// Unknown formats are ignored — use bare "from path" which infers from extension
