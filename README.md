@@ -937,14 +937,13 @@ go run examples/early_termination_example.go
 
 ## 📚 Documentation
 
+**[All documentation →](doc/README.md)** | **[Research & design docs →](doc/research/README.md)**
+
+- **[CLI Tutorial](doc/cli-codelab.md)** - Complete command-line guide
+- **[API Reference](doc/api-reference.md)** - Go library documentation
 - **[Debugging Pipelines](doc/cli-debugging.md)** - Debug with jq, inspect data, profile performance
 - **[Troubleshooting Guide](doc/cli-troubleshooting.md)** - Common issues and quick solutions
-- **[API Reference](doc/api-reference.md)** - Complete function documentation
-- **[CLI Tutorial](doc/cli-codelab.md)** - Command-line tool guide
 - **[AI Code Generation](doc/ai-human-guide.md)** - Natural language to code
-  - **[For LLMs](doc/ai-code-generation.md)** - Copy this prompt into your LLM
-  - **[For Maintainers](doc/AI-PROMPT-README.md)** - Maintaining the AI prompt
-  - **[Testing AI Generation](doc/archive/TESTING.md)** - Validate generated code with automated test suite
 
 ## 🤝 Community
 

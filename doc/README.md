@@ -1,5 +1,7 @@
 # Documentation
 
+See also: **[Research & design docs →](research/README.md)**
+
 ## Getting Started
 
 - [CLI Tutorial](cli-codelab.md) — step-by-step guide to all CLI commands
