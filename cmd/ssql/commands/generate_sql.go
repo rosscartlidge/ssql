@@ -203,7 +203,26 @@ func translateFrom(q *sqlQuery, args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("from %s requires a file argument", args[0])
 		}
-		q.fromClause = quoteFile(args[1])
+		// Collect file paths (skip flags starting with -)
+		var files []string
+		for _, a := range args[1:] {
+			if a == "--" {
+				break
+			}
+			if !strings.HasPrefix(a, "-") {
+				files = append(files, a)
+			}
+		}
+		if len(files) == 1 {
+			q.fromClause = quoteFile(files[0])
+		} else {
+			// DuckDB: read_csv_auto(['file1.csv', 'file2.csv'])
+			quoted := make([]string, len(files))
+			for i, f := range files {
+				quoted[i] = quoteFile(f)
+			}
+			q.fromClause = fmt.Sprintf("read_csv_auto([%s])", strings.Join(quoted, ", "))
+		}
 	case "ssh":
 		return fmt.Errorf("from ssh has no SQL equivalent — it is an ssql-specific distributed feature")
 	case "catalog":
