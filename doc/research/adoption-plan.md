@@ -1,7 +1,7 @@
 # ssql Adoption Plan
 
-**Date:** 2026-03-19 (updated 2026-04-04)
-**Status:** Pre-launch checklist complete. Ready to launch.
+**Date:** 2026-03-19 (updated 2026-04-08)
+**Status:** Launched. HN posted, Reddit and newsletters next.
 **Goal:** Get ssql in front of developers who work with data at the command line
 
 ## Core pitch
@@ -154,12 +154,18 @@ Still useful:
 - Don't lead with feature lists — lead with problems solved and the workflow demo
 - Don't neglect the first issue/PR from a stranger — that's your first potential contributor
 
-## Immediate next steps
+## Progress
 
-1. Add GitHub topics to the repo
-2. Pin repo on GitHub profile
-3. Copy-paste test all README examples
-4. Create two more demo GIFs (optimize+compile, SSH pushdown)
-5. Write Show HN post
-6. Submit to Golang Weekly
-7. PR to Awesome Go
+- [x] Add GitHub topics to the repo
+- [x] Pin repo on GitHub profile
+- [x] Copy-paste test all README examples
+- [x] Demo GIFs (basic + optimize+compile) + chart screenshot
+- [x] Show HN post — posted 2026-04-08
+- [ ] Reddit posts — r/golang, r/commandline, r/dataengineering (drafts ready)
+- [ ] Submit to Golang Weekly (draft ready)
+- [ ] PR to Awesome Go (draft ready)
+- [ ] Blog post 1: "From CSV to optimized Go binary in 30 seconds"
+- [ ] Blog post 2: "Analyzing logs across 3 servers in one command"
+- [ ] Blog post 3: "I built a query optimizer for shell pipelines"
+- [ ] Comparison page (`doc/comparison.md`)
+- [ ] DuckDB community post
