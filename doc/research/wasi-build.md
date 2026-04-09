@@ -122,15 +122,18 @@ wasmtime compile ssql.wasm -o ssql.cwasm  # run once after download
 
 | Mode | Time | vs Native CLI |
 |------|------|--------------|
-| Generated Go (native) | 1.06s | 1.3x faster |
-| CLI pipeline (native) | 1.40s | 1x baseline |
-| CLI pipeline (WASI) | 5.39s | 3.9x slower |
-| Generated Go (WASI) | 9.19s | 6.6x slower |
+| Generated Go (native) | 0.98s | 1.4x faster |
+| CLI pipeline (native) | 1.36s | 1x baseline |
+| **Generated Go (WASI AOT)** | **3.82s** | **2.8x** |
+| Generated Go (WASI JIT) | 4.23s | 3.1x |
+| CLI pipeline (WASI JIT) | 5.39s | 4.0x |
+| CLI pipeline (WASI AOT) | 5.56s | 4.1x |
 
 **Insights:**
-- **Generated Go native is fastest** — single process, no pipe overhead, no subprocess startup. The `generate go` → `go build` workflow produces the best performance.
-- **CLI WASI beats generated Go WASI** — counterintuitively, the multi-process CLI pipeline (5 × 14MB slim modules) is faster than a single 54MB generated Go WASM module. Wasmtime's JIT compilation of the larger module dominates.
-- **The sweet spot for WASI is the CLI pipeline** — the slim build keeps each module small and fast to JIT.
+- **Generated Go native is fastest** — single process, no pipe overhead. The `generate go` → `go build` workflow produces the best performance.
+- **Generated Go AOT is the fastest WASI option** (3.82s) — single process with no JIT or pipe overhead. AOT eliminates the 54MB module JIT cost that made it slowest in JIT mode.
+- **CLI WASI JIT and AOT are similar** for large data (~5.4s) — startup is a small fraction of total time. AOT helps more for small data where startup dominates.
+- **For WASI batch processing:** use `generate go` → WASI AOT (2.8x native). For interactive use: CLI with AOT precompiled modules (near-native startup).
 
 ### When to use native vs WASI
 
