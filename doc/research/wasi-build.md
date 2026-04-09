@@ -72,23 +72,31 @@ $W from data.csv | $W where -if dept eq Engineering | $W group-by dept -count n 
 
 ## Performance
 
-WASI startup overhead dominates for small data. For larger datasets the gap narrows as processing dominates.
+WASI startup overhead dominates for small data. For larger datasets the ratio improves significantly as processing dominates startup cost.
+
+### Benchmarks (1M rows, 33MB CSV, 5 columns)
 
 | Scenario | Native | WASI (wasmtime) | Ratio |
 |----------|--------|-----------------|-------|
-| 8 rows, 3 pipeline stages | 0.015s | 0.195s | 13x |
+| 8 rows, 3 stages | 0.015s | 0.20s | 13x |
+| 1M rows, passthrough (read + write) | 1.60s | 5.53s | 3.5x |
+| 1M rows, filter (`where -if value gt 9900`) | 1.28s | 7.69s | 6x |
+| 1M rows, filter + group-by + sort (5 stages) | 1.56s | 5.38s | 3.4x |
 
-**Key insight:** Each pipe stage spawns a new WASI instance (~50ms startup each). A 3-stage pipeline pays ~150ms in startup alone. For interactive exploration of small files this is noticeable; for batch processing of large files it's negligible.
+**Key insight:** For small data, startup overhead per WASI instance (~50ms each) dominates. For 1M+ rows, the ratio drops to **3-6x** — practical for batch workloads. The aggregation pipeline (3.4x) is faster than the filter pipeline (6x) because aggregation reduces output size, so downstream stages process less data.
 
-**Benchmarking tips:**
-- Startup overhead is per-command, not per-record. Longer pipelines pay more.
+### Benchmarking tips
+
+- Startup overhead is per-command, not per-record. Longer pipelines pay more startup.
 - Use `time` to compare: `time wasmtime --dir=. ssql.wasm from big.csv | wasmtime ssql.wasm to csv > /dev/null`
 - For best WASI performance, use wasmtime (JIT compiled) over wazero (interpreted).
 - The slim build (14MB) loads faster than a full build would (~37MB).
 
-**When native is better:** Interactive exploration, SSH pushdown, multi-file pushdown (subprocess spawning), anything requiring sub-50ms latency.
+### When to use native vs WASI
 
-**When WASI is fine:** Batch processing, CI pipelines, sandboxed environments, anywhere you can't install native binaries, Docker+WASM deployments.
+**Native is better for:** Interactive exploration, SSH pushdown, multi-file pushdown (subprocess spawning), anything requiring sub-50ms latency, large-scale batch processing where 3x matters.
+
+**WASI is fine for:** CI pipelines, sandboxed environments, anywhere you can't install native binaries, Docker+WASM deployments, cross-platform distribution, moderate batch sizes where 3-6x overhead is acceptable.
 
 ## Distribution
 
