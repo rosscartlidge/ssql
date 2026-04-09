@@ -69,6 +69,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Interactive Visualization](interactive-visualization.md) — Chart.js integration
 - [WASM Playground](wasm-playground.md) — browser playground design
 - [WASM TinyGo Redesign](wasm-tinygo-redesign.md) — TinyGo build approach
+- [WASI Build](wasi-build.md) — portable .wasm binary for wasmtime/wasmer/Docker
 - [Browser Linux Options](wasm-linux-options.md) — WebVM/CheerpX research
 
 ## AI & LLM Development
