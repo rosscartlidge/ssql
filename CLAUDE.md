@@ -38,7 +38,7 @@ Keep documentation in sync with API and CLI changes. Key files:
 - `doc/cli-troubleshooting.md`, `doc/EXPRESSIONS.md`, `doc/ai-code-generation.md`
 - Validate: `make doc-check` (L1), `make doc-test` (L2), `make doc-verify` (L3)
 - Common mistakes: changing API/CLI without updating docs, using old import paths/command names/flag names
-- **When creating new docs**, add them to the appropriate index: `doc/README.md` or `doc/research/README.md`
+- **When creating new docs**, ALWAYS add them to the appropriate index: `doc/README.md` or `doc/research/README.md`. This is easy to forget — check BEFORE committing.
 
 ## Development Principles (CRITICAL)
 

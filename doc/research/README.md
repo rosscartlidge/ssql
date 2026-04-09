@@ -8,6 +8,9 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [TODO — autocli](TODO-cli.md) — autocli framework issues
 - [Adoption Plan](adoption-plan.md) — launch strategy and content plan
 - [Show HN Draft](show-hn-draft.md) — Hacker News post draft
+- [Reddit Post Drafts](reddit-drafts.md) — r/golang, r/commandline, r/dataengineering
+- [Golang Weekly Submission](golang-weekly-submission.md) — newsletter submission text
+- [Awesome Go PR](awesome-go-pr.md) — PR description and checklist
 - [Merge with Catalog](merge-catalog.md) — K-way merge across distributed shards
 
 ## Architecture & Design
