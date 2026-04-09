@@ -225,11 +225,16 @@ See `claude/code-generation.md` for fragment system, testing patterns, and full 
 - **When changing a command, test ALL generate formats** — `generate go`, `generate sql`, and `generate ssql` may each have their own translation logic (e.g. SQL assembler parses the Command string). A feature that works in execution mode can silently break in generation.
 - **`generate sql` reuses the same fragments** — no separate SQL generation path needed per command. The SQL assembler parses the `Command` string from each fragment.
 
-## WASM Playground Rules
-See `claude/playground.md` for data files, testing workflow, and chart support.
+## WASM and WASI Rules
+See `claude/wasm.md` for all WASM/WASI knowledge: three build targets (browser, WebVM, WASI), performance characteristics, AOT compilation, deployment workflows, and the docker cp uid/gid bug.
 
+See `claude/playground.md` for playground-specific data files, testing workflow, and chart support.
+
+- **Three WASM targets:** browser (`js/wasm`), WebVM (`linux/386`), WASI (`wasip1/wasm`) — all use slim build
+- **WASI AOT is near-native** for interactive use (1.2x native). Use `wasmtime compile` to precompile.
 - **Always test playground examples against `cmd/ssql-playground/data/` with real ssql before adding to `playground.html`**
-- Static CSV data lives in `cmd/ssql-playground/data/` — same files used by playground and local testing
+- **WASM deploy needs /tmp dance** — build on main, copy to /tmp, switch to gh-pages, copy from /tmp (WASM is gitignored on main)
+- **WebVM docker cp -a loses uid/gid** — deploy workflow has chown fix, don't remove it
 - No WASM rebuild needed for HTML/JS/data changes — just refresh browser
 
 ## GPU Acceleration Rules
@@ -256,6 +261,7 @@ For detailed examples, rationale, and history, read the relevant `claude/` file:
 | autocli migration | `claude/autocli-migration.md` |
 | Version history | `claude/project-history.md` |
 | WASM playground | `claude/playground.md` |
+| WASM/WASI builds, AOT, WebVM | `claude/wasm.md` |
 
 ## Arrow & Parquet Format Support
 
