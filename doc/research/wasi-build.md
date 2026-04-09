@@ -92,6 +92,20 @@ WASI startup overhead dominates for small data. For larger datasets the ratio im
 - For best WASI performance, use wasmtime (JIT compiled) over wazero (interpreted).
 - The slim build (14MB) loads faster than a full build would (~37MB).
 
+### Full comparison: CLI vs generated Go vs WASI (1M rows, filter + group-by + sort)
+
+| Mode | Time | vs Native CLI |
+|------|------|--------------|
+| Generated Go (native) | 1.06s | 1.3x faster |
+| CLI pipeline (native) | 1.40s | 1x baseline |
+| CLI pipeline (WASI) | 5.39s | 3.9x slower |
+| Generated Go (WASI) | 9.19s | 6.6x slower |
+
+**Insights:**
+- **Generated Go native is fastest** — single process, no pipe overhead, no subprocess startup. The `generate go` → `go build` workflow produces the best performance.
+- **CLI WASI beats generated Go WASI** — counterintuitively, the multi-process CLI pipeline (5 × 14MB slim modules) is faster than a single 54MB generated Go WASM module. Wasmtime's JIT compilation of the larger module dominates.
+- **The sweet spot for WASI is the CLI pipeline** — the slim build keeps each module small and fast to JIT.
+
 ### When to use native vs WASI
 
 **Native is better for:** Interactive exploration, SSH pushdown, multi-file pushdown (subprocess spawning), anything requiring sub-50ms latency, large-scale batch processing where 3x matters.
