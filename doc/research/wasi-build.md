@@ -85,6 +85,32 @@ WASI startup overhead dominates for small data. For larger datasets the ratio im
 
 **Key insight:** For small data, startup overhead per WASI instance (~50ms each) dominates. For 1M+ rows, the ratio drops to **3-6x** — practical for batch workloads. The aggregation pipeline (3.4x) is faster than the filter pipeline (6x) because aggregation reduces output size, so downstream stages process less data.
 
+### AOT compilation (precompiled WASM)
+
+Wasmtime supports ahead-of-time compilation, which eliminates JIT startup overhead:
+
+```bash
+wasmtime compile ssql.wasm -o ssql.cwasm
+wasmtime --allow-precompiled --dir=. ssql.cwasm from data.csv | wasmtime --allow-precompiled ssql.cwasm to table
+```
+
+AOT dramatically improves small-data latency:
+
+| Mode | Small (8 rows, 3 stages) | 1M rows (5 stages) |
+|------|--------------------------|---------------------|
+| Native | 0.015s | 1.36s |
+| WASI JIT | 0.195s (13x) | 5.51s (4.1x) |
+| **WASI AOT** | **0.018s (1.2x native)** | 6.95s (5.1x) |
+
+**Key insight:** AOT reduces small-data startup from 195ms to 18ms — nearly native speed. This makes AOT-compiled WASI viable for interactive exploration. The 1M row case is slightly slower than JIT because wasmtime's JIT can optimize hot loops at runtime.
+
+**Recommendation:** Use AOT for interactive use (many small commands). Use JIT for batch processing of large files.
+
+The `.cwasm` file is platform-specific (unlike `.wasm` which is portable). Generate it once per machine:
+```bash
+wasmtime compile ssql.wasm -o ssql.cwasm  # run once after download
+```
+
 ### Benchmarking tips
 
 - Startup overhead is per-command, not per-record. Longer pipelines pay more startup.
