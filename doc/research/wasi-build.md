@@ -72,11 +72,23 @@ $W from data.csv | $W where -if dept eq Engineering | $W group-by dept -count n 
 
 ## Performance
 
-~13x slower than native for small data (startup overhead dominates). For larger datasets the gap narrows as actual processing dominates startup cost.
+WASI startup overhead dominates for small data. For larger datasets the gap narrows as processing dominates.
 
-| Dataset | Native | WASI (wasmtime) | Ratio |
-|---------|--------|-----------------|-------|
-| 8 rows, 3 stages | 0.015s | 0.195s | 13x |
+| Scenario | Native | WASI (wasmtime) | Ratio |
+|----------|--------|-----------------|-------|
+| 8 rows, 3 pipeline stages | 0.015s | 0.195s | 13x |
+
+**Key insight:** Each pipe stage spawns a new WASI instance (~50ms startup each). A 3-stage pipeline pays ~150ms in startup alone. For interactive exploration of small files this is noticeable; for batch processing of large files it's negligible.
+
+**Benchmarking tips:**
+- Startup overhead is per-command, not per-record. Longer pipelines pay more.
+- Use `time` to compare: `time wasmtime --dir=. ssql.wasm from big.csv | wasmtime ssql.wasm to csv > /dev/null`
+- For best WASI performance, use wasmtime (JIT compiled) over wazero (interpreted).
+- The slim build (14MB) loads faster than a full build would (~37MB).
+
+**When native is better:** Interactive exploration, SSH pushdown, multi-file pushdown (subprocess spawning), anything requiring sub-50ms latency.
+
+**When WASI is fine:** Batch processing, CI pipelines, sandboxed environments, anywhere you can't install native binaries, Docker+WASM deployments.
 
 ## Distribution
 
