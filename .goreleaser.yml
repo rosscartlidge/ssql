@@ -31,6 +31,19 @@ builds:
       - arm64
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+  - id: ssql-wasi
+    main: ./cmd/ssql
+    binary: ssql
+    tags:
+      - slim
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - wasip1
+    goarch:
+      - wasm
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
 archives:
   - id: full
     ids:
@@ -47,6 +60,11 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+
+  - id: wasi
+    ids:
+      - ssql-wasi
+    name_template: "ssql_{{ .Version }}_wasi"
 
 checksum:
   name_template: "checksums.txt"

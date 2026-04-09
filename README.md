@@ -237,7 +237,23 @@ Bob,25,65000" | ssql from csv | ssql where -if age gt 28
 
 Pre-built binaries for all platforms are available on [GitHub Releases](https://github.com/rosscartlidge/ssql/releases). Download the archive for your OS/architecture, extract, and add to your PATH.
 
-#### Option 4: GPU Acceleration (optional)
+#### Option 4: WASI (run anywhere)
+
+A single `.wasm` binary that runs on any platform with a WASI runtime ([wasmtime](https://wasmtime.dev/), wasmer, Docker+WASM):
+
+```bash
+# Download from GitHub Releases
+curl -LO https://github.com/rosscartlidge/ssql/releases/latest/download/ssql_wasi.tar.gz
+tar xzf ssql_wasi.tar.gz
+
+# Run with wasmtime
+wasmtime ssql.wasm version
+wasmtime --dir=. ssql.wasm from data.csv | wasmtime ssql.wasm where -if age gt 25 | wasmtime ssql.wasm to table
+```
+
+No Go, no cross-compilation — one binary for every platform. 14MB slim build.
+
+#### Option 5: GPU Acceleration (optional)
 
 For 10-50x faster FFT, convolution, and correlation on large signals:
 
@@ -289,7 +305,7 @@ ssql_gpu version
 
 **Note:** The GPU version falls back to CPU automatically when GPU is unavailable or for small datasets where CPU is faster.
 
-#### Option 5: Debian Packages
+#### Option 6: Debian Packages
 
 Pre-built `.deb` packages are available for amd64 Linux systems:
 
@@ -309,7 +325,7 @@ ssql version
 
 The GPU package requires `libcudart` (CUDA runtime) which is typically installed with NVIDIA drivers.
 
-#### Option 6: Go Library (for application development)
+#### Option 7: Go Library (for application development)
 
 **Step 1: Create a new project**
 ```bash

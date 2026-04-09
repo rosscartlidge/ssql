@@ -261,6 +261,13 @@ wasm:
 	@echo "✓ Embedded WASM files copied to cmd/ssql/wasm/"
 
 # Build WASM playground (full CLI in browser)
+wasi:
+	@echo "Building WASI binary (slim build)..."
+	GOOS=wasip1 GOARCH=wasm go build -tags slim -ldflags="-s -w $(LDFLAGS)" -o ssql.wasm ./cmd/ssql
+	@echo "✓ Built ssql.wasm ($$(du -h ssql.wasm | cut -f1))"
+	@echo "Run with: wasmtime ssql.wasm version"
+	@echo "Pipeline: wasmtime --dir=. ssql.wasm from data.csv | wasmtime ssql.wasm where -if age gt 25 | wasmtime ssql.wasm to table"
+
 playground:
 	@echo "Building playground WASM (slim build — no arrow/parquet/xlsx)..."
 	GOOS=js GOARCH=wasm go build -tags slim -ldflags="-s -w $(LDFLAGS)" -o cmd/ssql-playground/ssql-playground.wasm ./cmd/ssql-playground
