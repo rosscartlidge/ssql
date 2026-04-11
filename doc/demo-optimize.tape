@@ -33,7 +33,4 @@ Sleep 500ms
 
 Type "(export SSQLGO=1; ssql from test-data/users.csv | ssql where -if dept eq Engineering -if age gt 25 | ssql top 3 -field salary | ssql to table) | ssql generate go"
 Enter
-Sleep 4s
-
-Type ""
-Enter
+Sleep 8s

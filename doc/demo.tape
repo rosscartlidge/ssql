@@ -33,7 +33,4 @@ Sleep 500ms
 
 Type "(export SSQLGO=1; ssql from test-data/users.csv | ssql where -if age gt 30 | ssql group-by dept -count cnt | ssql to table) | ssql generate sql"
 Enter
-Sleep 3s
-
-Type ""
-Enter
+Sleep 8s
