@@ -59,7 +59,6 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Multi-file predicate/aggregation pushdown** — `from csv *.csv | where ...` → `from csv *.csv -- where ...`
 - [x] **Merge catalog predicate/aggregation pushdown** — same pattern for `merge -catalog`
 - [x] **SSH pushdown with expressions** — already works. The pushdown rule copies all `where` args (including `-if-expr`) wholesale.
-- [ ] **Catalog column analysis** — currently reads catalog CSV at optimization time; fails silently if file not accessible. Could cache column info in fragments.
 
 ## Adoption (see adoption-plan.md)
 
