@@ -373,29 +373,39 @@ _row_number   age   city      name      salary
 
 ## Working with Real Data
 
-### Processing Command Output
+### Unix Tools Integration
 
-Execute shell commands and parse their output:
+Many modern Linux tools support JSON output, which ssql reads directly:
 
 ```bash
-# Analyze process information
-ssql from command -- ps -efl | \
-  ssql where -if CMD contains chrome | \
-  ssql include PID USER CMD
+# Network interfaces (ip -j outputs JSON)
+ip -j addr | ssql from json | ssql to table
+
+# Block devices
+lsblk -J | ssql from json | ssql to table
+
+# Mount points
+findmnt -J | ssql from json | ssql to table
+
+# Journal logs
+journalctl -o json --since today | ssql from jsonl | ssql where -if PRIORITY le 3 | ssql to table
 ```
 
-**Note:** The `--` separator is required to prevent ssql from interpreting command flags like `-efl` as its own flags. Use `from command --` to execute shell commands.
-
-### Example: System Monitoring
-
-Find memory-intensive processes:
+For tools with fixed-width columnar output, convert to CSV with `tr` or `awk`:
 
 ```bash
-# Get top memory users
-ssql from command -- ps aux | \
-  ssql where -if USER eq root | \
-  ssql include PID MEM CMD | \
-  ssql to csv system_processes.csv
+# ps: simple fields (no spaces in values)
+(echo "pid,uid,comm"; ps -eo pid,uid,comm --no-headers | tr -s ' ' ',' | sed 's/^,//') | ssql from csv | ssql to table
+
+# df: POSIX mode gives consistent columns
+df -P | tr -s ' ' ',' | ssql from csv | ssql where -if Use% gt 80% | ssql to table
+```
+
+For more complex parsing, [miller](https://miller.readthedocs.io/) (`mlr`) handles fixed-width to CSV conversion:
+
+```bash
+# General approach for any columnar command output
+ps aux | mlr --ipprint --ifs ' ' --ocsv cat | ssql from csv | ssql to table
 ```
 
 ---
@@ -1301,69 +1311,23 @@ This workflow enables **rapid prototyping** with the CLI, then **instant product
 
 ## Complete Example
 
-Let's build a comprehensive data analysis pipeline:
-
-### Scenario: Analyze Process Counts by User
+### Scenario: Salary Analysis by Department
 
 ```bash
-# Execute the pipeline
-ssql from command -- ps -efl | \
-  ssql group-by UID -count process_count | \
-  ssql chart -x UID -y process_count -output /tmp/processes_by_user.html
-```
+# Explore the data
+ssql from employees.csv | ssql to table
 
-This will:
-1. Execute `ps -efl` and parse the output
-2. Group processes by UID (user)
-3. Count processes per user
-4. Create an interactive chart
+# Filter and aggregate
+ssql from employees.csv | \
+  ssql where -if status eq active | \
+  ssql group-by dept -count n -avg salary avg_sal | \
+  ssql sort -desc avg_sal | \
+  ssql to table
 
-Output: `Chart created: /tmp/processes_by_user.html`
-
-### Generate Production Code
-
-Now convert the same pipeline to Go code:
-
-```bash
-ssql from command -generate -- ps -efl | \
-  ssql group-by -generate UID -count process_count | \
-  ssql chart -generate -x UID -y process_count -output processes.html | \
-  ssql generate go > monitor.go
-```
-
-Generated code in `monitor.go`:
-```go
-package main
-
-import (
-	"fmt"
-	"os"
-	"github.com/rosscartlidge/ssql/v4"
-)
-
-func main() {
-	records, err := ssql.ExecCommand("ps", []string{"-efl"})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	grouped := ssql.GroupByFields("_group", "UID")(records)
-	aggregated := ssql.Aggregate("_group", map[string]ssql.AggregateFunc{
-		"process_count": ssql.Count(),
-	})(grouped)
-	ssql.QuickChart(aggregated, "UID", "process_count", "processes.html")
-}
-```
-
-Compile and run:
-```bash
-# Setup module
-go mod init monitor
-go get github.com/rosscartlidge/ssql/v4
-
-# Build and run
-go build -o monitor monitor.go
-./monitor
+# Create a chart
+ssql from employees.csv | \
+  ssql group-by dept -count n -avg salary avg_sal | \
+  ssql to chart -x dept -y avg_sal -type bar
 ```
 
 ### Pipeline Optimizer (`generate ssql`)
@@ -1469,7 +1433,6 @@ Use `-run` to execute directly with DuckDB:
 - `from arrow [file]` - Read Arrow
 - `from wav file` - Read WAV audio. Flags: `-channel N`
 - `from xlsx file` - Read Excel. Flags: `-sheet name`
-- `from command -- [command] [args...]` - Execute command and parse output
 - `from ssh HOST PATH` - Read remote file via SSH. Flags: `-gpu`, `-- [push-down stages]`
 - `from catalog [file]` - Read shards from catalog CSV. Flags: `-if field op value`, `-shard-field name`, `-- [push-down stages]`
 

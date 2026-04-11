@@ -37,7 +37,6 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	registerFromXLSX(fromCmd)
 
 	// Operational subcommands
-	registerFromCommand(fromCmd)
 	registerFromSSH(fromCmd)
 	registerFromCatalog(fromCmd)
 

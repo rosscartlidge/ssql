@@ -100,9 +100,9 @@ West,Gadget,3100`
 ![ssql demo](doc/demo.gif)
 ```bash
 # Prototype with Unix-style pipelines, then generate production Go code
-ssql from command -- ps -efl | \
-  ssql group-by UID -count process_count | \
-  ssql to chart -x UID -y process_count -output chart.html
+ssql from employees.csv | \
+  ssql group-by dept -count n -avg salary avg_sal | \
+  ssql to chart -x dept -y avg_sal -output chart.html
 
 # Window functions — rankings, running totals, lag/lead without collapsing rows
 ssql from employees.csv | ssql window -row-number rn -partition dept -order salary -desc

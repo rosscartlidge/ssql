@@ -67,7 +67,6 @@ $W from data.csv | $W where -if dept eq Engineering | $W group-by dept -count n 
 
 - **SSH** — no network access in WASI
 - **GPU** — no CUDA in WASI
-- **from command** — no subprocess spawning
 - **Multi-file pushdown** — spawns subprocesses internally
 
 ## Performance

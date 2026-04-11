@@ -39,3 +39,4 @@ Thumbs.db
 .vscode/
 # WASM build artifacts
 /ssql.wasm
+/dist/

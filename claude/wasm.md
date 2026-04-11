@@ -46,7 +46,6 @@ AOT eliminates JIT startup: 0.018s vs 0.195s for small data (1.2x native vs 13x)
 ### What doesn't work in WASI
 - SSH (no network)
 - GPU (no CUDA)
-- `from command` (no subprocess spawning)
 - Multi-file pushdown (spawns subprocesses internally)
 
 ### goreleaser
