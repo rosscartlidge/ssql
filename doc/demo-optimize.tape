@@ -1,9 +1,9 @@
 Output doc/demo-optimize.gif
 
 Set Shell "bash"
-Set FontSize 14
-Set Width 900
-Set Height 550
+Set FontSize 13
+Set Width 950
+Set Height 650
 Set Padding 10
 Set Theme "TokyoNight"
 
@@ -31,9 +31,9 @@ Type "# Compile the optimized pipeline to standalone Go code"
 Enter
 Sleep 500ms
 
-Type "(export SSQLGO=1; ssql from test-data/users.csv | ssql where -if dept eq Engineering -if age gt 25 | ssql top 3 -field salary | ssql to table) | ssql generate go | head -30"
+Type "(export SSQLGO=1; ssql from test-data/users.csv | ssql where -if dept eq Engineering -if age gt 25 | ssql top 3 -field salary | ssql to table) | ssql generate go"
 Enter
-Sleep 3s
+Sleep 4s
 
 Type ""
 Enter
