@@ -51,10 +51,13 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Phase 2: Shard metadata enrichment** — `-shard-field source` adds host:path to each record.
 - [x] **Phase 3: GPU support** — `-gpu` flag to use `ssql_gpu` on remote nodes.
 - [x] **Optimizer rules** — `merge-catalog-predicate-pushdown` and `merge-catalog-aggregation-pushdown` push where/group-by into `--` pushdown.
+- [x] **Catalog glob expansion** — paths with `*`, `?`, `[` expanded before processing. `-catalog-used FILE` for auditing.
 
 ## Pipeline Optimizer (`generate ssql`)
 
 - [x] **Join predicate pushdown for process substitutions** — `<(ssql from file.csv)` joins now support predicate pushdown.
+- [x] **Multi-file predicate/aggregation pushdown** — `from csv *.csv | where ...` → `from csv *.csv -- where ...`
+- [x] **Merge catalog predicate/aggregation pushdown** — same pattern for `merge -catalog`
 - [ ] **SSH pushdown with expressions** — currently bails out on `-if-expr` for SSH pushdown. Could push simple expressions that don't reference functions unavailable on remote.
 - [ ] **Catalog column analysis** — currently reads catalog CSV at optimization time; fails silently if file not accessible. Could cache column info in fragments.
 
@@ -63,4 +66,9 @@ Tracked issues and feature gaps discovered during development.
 - [x] LICENSE file — MIT License
 - [x] Terminal recordings for README — VHS demo GIF showing filter, group-by, and generate sql
 - [x] goreleaser for GitHub Releases binaries — full + slim builds for linux/darwin/windows × amd64/arm64
-- [ ] Homebrew — tap repo created (`rosscartlidge/homebrew-ssql`), goreleaser configured. Needs GH_PAT secret and first tagged release to populate.
+- [x] Homebrew — `brew tap rosscartlidge/ssql && brew install ssql`. goreleaser auto-updates on each release.
+- [x] WASI build — `ssql.wasm` ships with every release. AOT compilation gives near-native startup.
+- [x] Show HN posted, Reddit drafts posted (r/golang)
+- [ ] Reddit: r/commandline, r/dataengineering
+- [ ] Golang Weekly submission
+- [ ] Awesome Go PR
