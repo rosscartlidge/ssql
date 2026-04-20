@@ -159,29 +159,42 @@ ssql from data.csv | ssql update \
 
 ### 4. Join Command (Multi-Clause)
 
+**CRITICAL:** `join`, `merge`, and `union -file` require the right-side file to carry a schema header (JSONL emitted by ssql). Plain CSV/JSONL files WILL fail with `"right-side file X has no schema header"`. Always wrap the file with `<(ssql from FILE)` (bash process substitution) so ssql adds the schema header.
+
 ```bash
-# Join on same field name
-ssql from users.csv | ssql join departments.csv -using dept_id
+# Join on same field name — wrap the right-side file with <(ssql from ...)
+ssql from users.csv | ssql join <(ssql from departments.csv) -using dept_id
 
 # Join on different field names
-ssql from users.csv | ssql join orders.csv -on user_id customer_id
+ssql from users.csv | ssql join <(ssql from orders.csv) -on user_id customer_id
 
 # Join with field rename (avoid collisions)
-ssql from users.csv | ssql join departments.csv -on dept_id id -as name dept_name
+ssql from users.csv | ssql join <(ssql from departments.csv) -on dept_id id -as name dept_name
 
 # Multi-clause join (multiple lookups from same file, separated by -)
-ssql from data.csv | ssql join kinds.csv \
+ssql from data.csv | ssql join <(ssql from kinds.csv) \
   -on a_kind kind -as kind_name a_kind_name \
   - \
   -on z_kind kind -as kind_name z_kind_name
 ```
 
 **Join rules:**
+- Wrap the right-side file with `<(ssql from FILE)` — raw CSV/JSONL has no schema header and will be rejected
 - `-using FIELD`: Join on same field name in both sides
 - `-on LEFT RIGHT`: Join on different field names
 - `-as OLD NEW`: Rename a field from the right side
 - `-` (dash): Clause separator for multi-clause joins
 - The FILE argument is the right-side lookup table
+
+**WRONG — raw file on right side:**
+```bash
+ssql from orders.csv | ssql join customers.csv -using customer_id    # FAILS at runtime
+```
+
+**CORRECT — wrap with process substitution:**
+```bash
+ssql from orders.csv | ssql join <(ssql from customers.csv) -using customer_id
+```
 - Left side always comes from stdin (pipeline)
 
 ### 5. Group-By with Aggregation
@@ -470,15 +483,17 @@ Map natural language intent to ssql commands:
 | "sort / order by" | `ssql sort FIELD [-desc]` (positional) |
 | "top N / first N" | `ssql sort ... \| ssql limit N` |
 | "skip / offset" | `ssql offset N` |
-| "join / combine / lookup" | `ssql join FILE -using F` or `-on L R` |
+| "join / combine / lookup" | `ssql join <(ssql from FILE) -using F` or `-on L R` |
 | "merge / union" | `ssql union` (with data piped in) |
 | "keep fields / select columns" | `ssql include F1 F2 ...` |
 | "remove fields / drop columns" | `ssql exclude F1 F2 ...` |
 | "rename field" | `ssql rename -as OLD NEW` |
 | "unique / deduplicate" | `ssql distinct [-field F]` |
 | "output as table" | `ssql to table` |
-| "output as CSV" | `ssql to csv [FILE]` |
-| "output as JSON" | `ssql to json [FILE]` |
+| "output as CSV" (no destination named) | `ssql to csv` (stdout, NO filename) |
+| "output as JSON" (no destination named) | `ssql to json` (stdout, NO filename) |
+| "write to FILE.csv" | `ssql to csv FILE.csv` |
+| "write to FILE.json / .jsonl" | `ssql to json FILE.json` |
 | "create chart" | `ssql to chart -x F -y F FILE` |
 | "FFT / frequency" | `ssql fft -field F -rate N` |
 | "spectrogram / STFT" | `ssql spectrogram -field F -window-size N -rate N` |

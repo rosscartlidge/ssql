@@ -1,6 +1,6 @@
 # AI Prompt Fix Request
 
-**Generated**: 2026-02-01 15:28
+**Generated**: 2026-04-21 09:26
 **Mode**: cli
 **Prompt file**: /home/rossc/src/ssql/doc/ai-cli-generation.md
 
@@ -22,28 +22,12 @@ The following test cases failed. Please update the prompt file to fix these issu
 
 **Issues found**:
 ```
-CLI-03
+CLI-09
 ```
 
 **Generated output** (`/tmp/ssql-ai-test-results/.sh`):
 ```bash
-||Read users.csv and set tier to "senior" where age >= 40, set tier to "mid" where age >= 30, otherwise set tier to "junior".|||output missing: tier
-```
-
----
-
-## Failure 2: 
-
-**Prompt**: 
-
-**Issues found**:
-```
-CLI-10
-```
-
-**Generated output** (`/tmp/ssql-ai-test-results/.sh`):
-```bash
-||Read data from users.csv, filter for active users, then write the output as JSON.|||output missing: "status":"active"
+||Generate a standalone Go program from this pipeline: read users.csv, filter where status equals active, group by dept (as positional arg), count per dept, output to stdout. Remember to export SSQLGO=1 so all pipeline commands see it.|||output missing: package main
 ```
 
 ---

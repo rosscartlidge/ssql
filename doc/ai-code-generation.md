@@ -48,7 +48,9 @@ import (
 // "os"         - ONLY if using os.WriteFile, os.ReadFile
 ```
 
-**DO NOT import packages that aren't referenced in the code.**
+**DO NOT import packages that aren't referenced in the code.** Go will refuse to compile with `imported and not used: "os"`. In particular:
+- If you use `fmt.Printf` / `fmt.Println` for stdout output, you do NOT need to import `"os"`.
+- Only import `"os"` when you actually reference `os.Stdout`, `os.Args`, `os.ReadFile`, etc.
 
 **⚠️ Common Import Mistakes:**
 - ❌ `github.com/rocketlaunchr/ssql` - Wrong! Different project
@@ -251,6 +253,22 @@ withSmoothed := ssql.WithSignal(records, "smoothed", smoothedSignal)
 // Output a signal slice directly as JSON (without records)
 import "encoding/json"
 json.NewEncoder(os.Stdout).Encode(smoothedSignal) // Signal is []float64, JSON-encodable
+```
+
+**CRITICAL — `ssql.Signal` is `[]float64`, NOT `iter.Seq[Record]`:**
+Functions like `ConvolveSame`, `GaussianKernel`, `Convolve`, `FFTMagnitude`, `IFFT`, `HannWindow`, `ApplyWindow` return a `Signal` (i.e. `[]float64`). You CANNOT pass a Signal to `ssql.WriteJSONToWriter` — that function takes records. To emit a Signal as JSON, use `encoding/json` directly:
+
+```go
+// WRONG — Signal is not iter.Seq[Record], will not compile
+err := ssql.WriteJSONToWriter(smoothed, os.Stdout)  // ❌
+
+// CORRECT — Signal is []float64, use encoding/json
+import "encoding/json"
+err := json.NewEncoder(os.Stdout).Encode(smoothed)  // ✓
+
+// ALSO CORRECT — attach Signal back to records, then WriteJSONToWriter
+withSmoothed := ssql.WithSignal(records, "smoothed", smoothed)
+err := ssql.WriteJSONToWriter(withSmoothed, os.Stdout)  // ✓
 ```
 
 **NOTE:** There is NO `ssql.Range()` function. To iterate with index, use standard Go:

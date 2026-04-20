@@ -437,8 +437,8 @@ Each test case specifies:
 **Prompt**: Join orders.csv with customers.csv matching customer_id field on both sides, and rename the customer name field to customer_name.
 
 **Expected patterns**:
-- `ssql from orders.csv`
-- `ssql join customers.csv`
+- `ssql from orders.csv` or `ssql from test-data/orders.csv`
+- `ssql join customers.csv` or `ssql join test-data/customers.csv` or `ssql join <(ssql from customers.csv)` or `ssql join <(ssql from test-data/customers.csv)`
 - `-using customer_id` or `-on customer_id`
 - `-as name customer_name` or `-as`
 - `|`
@@ -562,7 +562,7 @@ Each test case specifies:
 **Test Data**: `test-data/users.csv`
 
 **Expected Output**:
-- `"status":"active"`
+- `"status":"active"` or `"status": "active"`
 - `"name"`
 
 ---
