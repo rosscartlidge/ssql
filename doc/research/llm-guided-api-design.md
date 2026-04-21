@@ -1008,4 +1008,4 @@ After these changes, CLI rose from 13/15 → 15/15 and Go held at 12/15. The rem
 
 ### E.5 Implications
 
-Locally-hosted mid-size models (tens of GB) can reach ~83% on a domain-specific API on the first attempt, without any prompt work targeted at the specific model. Combined with no per-token cost and no data egress, this makes them increasingly attractive for the inner loop of LLM-aware library development — reserving frontier-model budget for final validation runs. Library designers who want broad LLM reach should consider locally-runnable models as a third target class alongside frontier commercial models.
+Locally-hosted mid-size models (tens of GB) can reach ~83% on a domain-specific API on the first attempt, without any prompt work targeted at the specific model. Combined with no per-token cost and no data egress, this makes them increasingly attractive for the inner loop of LLM-aware library development — reserving frontier-model budget for final validation runs. Library designers who want broad LLM reach should consider locally-runnable models as a second target class alongside frontier commercial APIs.
