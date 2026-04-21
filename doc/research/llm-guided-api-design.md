@@ -893,29 +893,40 @@ End-to-end wall time for 30 tests was ~4 minutes.
 
 ### E.2 Results
 
-**Seven-way comparison after prompt/test-case fixes (2026-04-21):**
+**Seven-way comparison with before/after prompt-tuning scores (2026-04-21/22):**
 
-| LLM | Size | Go | CLI | Total | Rate |
-|---|---|---|---|---|---|
-| Claude (Opus 4.5) | frontier | 15/15 | 14/15 | 29/30 | 97% |
-| Gemini | frontier | 15/15 | 14/15 | 29/30 | 97% |
-| Gemma 4 31B | 19 GB | 13/15 | 15/15 | 28/30 | 93% |
-| Gemma 4 26B | 17 GB | 12/15 | 15/15 | 27/30 | 90% |
-| Gemma 4 e4b | 9.6 GB | 7/15 | 14/15 | 21/30 | 70% |
-| Gemma 4 e2b | 7.2 GB | 0/15 | 9/15 | 9/30 | 30% |
-| Llama 4 Scout (q4) | 65 GB | 0/15 | 5/15 | 5/30 | 17% |
+| LLM | Size | Baseline (untuned) | After tuning | Δ |
+|---|---|---|---|---|
+| Claude (Opus 4.5) | frontier | 26/30 (87%) | 29/30 (97%) | +3 |
+| Gemini | frontier | 23/30 (77%) | 29/30 (97%) | +6 |
+| Gemma 4 31B | 19 GB | 26/30 (87%) | 28/30 (93%) | +2 |
+| Gemma 4 26B | 17 GB | 25/30 (83%) | 27/30 (90%) | +2 |
+| Gemma 4 e4b | 9.6 GB | 20/30 (67%) | 21/30 (70%) | +1 |
+| Gemma 4 e2b | 7.2 GB | 7/30 (23%) | 9/30 (30%) | +2 |
+| Llama 4 Scout (q4) | 65 GB | 6/30 (20%) | 5/30 (17%) | −1 (noise) |
+
+**Go / CLI split at each score (after tuning):**
+
+| LLM | Go | CLI | Total |
+|---|---|---|---|
+| Claude (Opus 4.5) | 15/15 | 14/15 | 29/30 |
+| Gemini | 15/15 | 14/15 | 29/30 |
+| Gemma 4 31B | 13/15 | 15/15 | 28/30 |
+| Gemma 4 26B | 12/15 | 15/15 | 27/30 |
+| Gemma 4 e4b | 7/15 | 14/15 | 21/30 |
+| Gemma 4 e2b | 0/15 | 9/15 | 9/30 |
+| Llama 4 Scout (q4) | 0/15 | 5/15 | 5/30 |
+
+**Observations on tuning deltas:**
+
+- Tuning most helps the models that can understand it. Gemini (+6) and Claude (+3) gain the most; Gemma family gains +1 to +2 each.
+- **Gemma 31B's Go score actually *dropped* from 14/15 baseline to 13/15 after tuning** — the new "Signal is []float64, use encoding/json" anti-pattern appears to have caused a speculative import that the baseline prompt didn't. Its CLI gained +3 (12→15) from the join/output clarifications. Net +2 but nonzero cost on the Go side.
+- **Llama 4 Scout is unmoved by tuning** (−1 is within seed noise). Scout's failures are context-ignorance, not understanding gaps; changing the text Scout ignores doesn't help.
+- The tuning was authored after seeing Gemma 26B's iter-1 failures. It was *not* specifically targeted at the other five models, yet every Gemma variant still gained at least +1. This suggests the fixes were about underlying API-documentation gaps (schema-header join, Signal-vs-Record type confusion, implicit output destinations) rather than Gemma-26B-specific quirks.
 
 The local-model column exposes a sharp scaling curve within the Gemma family. On Go — which demands strict typing and no unused imports — the e2b produces 0/15 compilable programs, e4b reaches 7/15, and the curve plateaus around the 26-31B scale at 12-13/15. On CLI, which is forgiving pipe syntax, even e4b lands at 14/15 (tied with Gemini); the 26B and 31B both hit 15/15. **The split reveals that the API's CLI surface is easier for small models than the Go library surface — a finding with practical implications for API design choices.**
 
 **Llama 4 Scout (109B q4) is the striking outlier.** At 65 GB it is the second-largest local model we tested, yet it scored 5/30 — worse than the 7.2 GB Gemma 4 e2b. It did not fail from lack of capability; it failed by ignoring the prompt. Scout consistently used the old `github.com/rosscartlidge/ssql` import path (no `/v4`), invoked `ssql.Filter(records, func)` instead of the actual `ssql.Where(func)(records)`, and for CLI fabricated a plausible-but-wrong grammar (`-rename` instead of `-as`, chained `ssql count -as` and `ssql avg -as` as standalone commands, `ssql sort -desc F` instead of `ssql sort F -desc`). Every error is what a model might produce from pretraining priors about Unix tools and functional-programming APIs — Scout appears to weight that knowledge above the documentation we supplied. Raw capacity is not sufficient for domain-specific API compliance; context-following is a distinct axis and can work against larger models that have stronger priors.
-
-**Historical baseline (from the main body of the paper, before Gemma testing):**
-
-| LLM | Go | CLI | Total | Rate | Iterations |
-|---|---|---|---|---|---|
-| Claude (Opus 4.5, initial) | 15/15 | 11/15 | 26/30 | 87% | 2 → 100% |
-| Gemini (initial) | 10/15 | 13/15 | 23/30 | 77% | 5 → 100% |
-| Gemma 4 26B (first pass, untuned) | 12/15 | 13/15 | 25/30 | 83% | baseline |
 
 **Observations:**
 
