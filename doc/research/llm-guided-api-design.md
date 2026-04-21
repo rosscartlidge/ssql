@@ -875,10 +875,11 @@ To probe whether the API-design findings extend to smaller, locally-hosted model
 
 | Property | Value |
 |---|---|
-| Model | `gemma4:26b` (17 GB quantized) |
+| Models | `gemma4:26b` (17 GB) and `gemma4:31b` (≈22 GB), both quantized |
 | Runtime | Ollama 0.x, local host (`http://localhost:11434`) |
 | Hardware | Intel Core Ultra 9 275HX, Ubuntu Linux |
 | Context window | `num_ctx=32768` |
+| Sampling | `temperature=0.0`, `top_p=1.0`, `seed=42` |
 | Thinking | Disabled (`"think": false`) |
 | Testing date | 2026-04-21 |
 
@@ -892,12 +893,13 @@ End-to-end wall time for 30 tests was ~4 minutes.
 
 ### E.2 Results
 
-**Three-way comparison after prompt/test-case fixes (2026-04-21):**
+**Four-way comparison after prompt/test-case fixes (2026-04-21):**
 
 | LLM | Go | CLI | Total | Rate | Remaining failures |
 |---|---|---|---|---|---|
 | Claude (Opus 4.5) | 15/15 | 14/15 | 29/30 | 97% | CLI-09 (prompt ambiguity — see E.2a) |
 | Gemini | 15/15 | 14/15 | 29/30 | 97% | CLI-06 (test pattern too narrow for path prefix — fixed post-run) |
+| Gemma 4 31B | 13/15 | 15/15 | 28/30 | 93% | GO-04, GO-15 (unused-import compile errors; pipelines semantically correct) |
 | Gemma 4 26B | 12/15 | 15/15 | 27/30 | 90% | GO-03, GO-07, GO-09 (all token-corruption artifacts — see E.4) |
 
 **Historical baseline (from the main body of the paper, before Gemma testing):**
@@ -910,9 +912,10 @@ End-to-end wall time for 30 tests was ~4 minutes.
 
 **Observations:**
 
-- The Gemma baseline (83% untuned) sat between the initial rates of Claude (87%) and Gemini (77%) — a notable result for a ~17 GB model running locally on consumer hardware.
+- The Gemma 4 26B baseline (83% untuned) sat between the initial rates of Claude (87%) and Gemini (77%) — a notable result for a ~17 GB model running locally on consumer hardware.
+- Scaling from 26B to 31B improved the total from 27/30 to 28/30. The 31B run had CLI 15/15 (same as 26B) and gained one Go test (13/15 vs 12/15). Notably, the 31B failures are a different class — speculative unused imports rather than token-level corruption — suggesting the token-glitch class is more pronounced at smaller scale.
 - The frontier-model "regressions" vs the paper's earlier 30/30 results are test-harness artifacts, not real capability regressions. Both Claude's CLI-09 and Gemini's CLI-06 produced functionally-correct pipelines; the test pattern or prompt failed to discriminate.
-- Gemma's three failures are genuinely the model's ceiling at this scale (see E.4).
+- Gemma's remaining failures are genuinely the models' ceiling at this scale (see E.4).
 
 #### E.2a The Claude CLI-09 ambiguity
 
