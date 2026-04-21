@@ -1,6 +1,6 @@
 # AI Prompt Fix Request
 
-**Generated**: 2026-04-21 21:00
+**Generated**: 2026-04-22 07:30
 **Mode**: cli
 **Prompt file**: /home/rossc/src/ssql/doc/ai-cli-generation.md
 
@@ -59,7 +59,7 @@ CLI-06
 
 **Generated output** (`/tmp/ssql-ai-test-results/.sh`):
 ```bash
-||Join orders.csv with customers.csv matching customer_id field on both sides, and rename the customer name field to customer_name.|||missing: -as name customer_name` or `-as
+||Join orders.csv with customers.csv matching customer_id field on both sides, and rename the customer name field to customer_name.|||output missing: customer_id
 ```
 
 ---
@@ -86,22 +86,6 @@ CLI-07
 
 **Issues found**:
 ```
-CLI-08
-```
-
-**Generated output** (`/tmp/ssql-ai-test-results/.sh`):
-```bash
-||Read users.csv, sort by salary descending, skip the first 2, and show the next 3 users.|||missing: ssql offset
-```
-
----
-
-## Failure 6: 
-
-**Prompt**: 
-
-**Issues found**:
-```
 CLI-09
 ```
 
@@ -112,7 +96,7 @@ CLI-09
 
 ---
 
-## Failure 7: 
+## Failure 6: 
 
 **Prompt**: 
 
@@ -123,12 +107,12 @@ CLI-10
 
 **Generated output** (`/tmp/ssql-ai-test-results/.sh`):
 ```bash
-||Read data from users.csv, filter for active users, then write the output as JSON.|||output missing: "status":"active"` or `"status": "active"
+||Read data from users.csv, filter for active users, then write the output as JSON.|||output missing: "status":"active"
 ```
 
 ---
 
-## Failure 8: 
+## Failure 7: 
 
 **Prompt**: 
 
@@ -144,7 +128,7 @@ CLI-11
 
 ---
 
-## Failure 9: 
+## Failure 8: 
 
 **Prompt**: 
 
@@ -160,7 +144,7 @@ CLI-13
 
 ---
 
-## Failure 10: 
+## Failure 9: 
 
 **Prompt**: 
 
