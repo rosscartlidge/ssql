@@ -893,7 +893,7 @@ End-to-end wall time for 30 tests was ~4 minutes.
 
 ### E.2 Results
 
-**Six-way comparison after prompt/test-case fixes (2026-04-21):**
+**Seven-way comparison after prompt/test-case fixes (2026-04-21):**
 
 | LLM | Size | Go | CLI | Total | Rate |
 |---|---|---|---|---|---|
@@ -903,8 +903,11 @@ End-to-end wall time for 30 tests was ~4 minutes.
 | Gemma 4 26B | 17 GB | 12/15 | 15/15 | 27/30 | 90% |
 | Gemma 4 e4b | 9.6 GB | 7/15 | 14/15 | 21/30 | 70% |
 | Gemma 4 e2b | 7.2 GB | 0/15 | 9/15 | 9/30 | 30% |
+| Llama 4 Scout (q4) | 65 GB | 0/15 | 5/15 | 5/30 | 17% |
 
-The local-model column exposes a sharp scaling curve. On Go — which demands strict typing and no unused imports — the e2b produces 0/15 compilable programs, e4b reaches 7/15, and the curve plateaus around the 26-31B scale at 12-13/15. On CLI, which is forgiving pipe syntax, even e4b lands at 14/15 (tied with Gemini); the 26B and 31B both hit 15/15. **The split reveals that the API's CLI surface is easier for small models than the Go library surface — a finding with practical implications for API design choices.**
+The local-model column exposes a sharp scaling curve within the Gemma family. On Go — which demands strict typing and no unused imports — the e2b produces 0/15 compilable programs, e4b reaches 7/15, and the curve plateaus around the 26-31B scale at 12-13/15. On CLI, which is forgiving pipe syntax, even e4b lands at 14/15 (tied with Gemini); the 26B and 31B both hit 15/15. **The split reveals that the API's CLI surface is easier for small models than the Go library surface — a finding with practical implications for API design choices.**
+
+**Llama 4 Scout (109B q4) is the striking outlier.** At 65 GB it is the second-largest local model we tested, yet it scored 5/30 — worse than the 7.2 GB Gemma 4 e2b. It did not fail from lack of capability; it failed by ignoring the prompt. Scout consistently used the old `github.com/rosscartlidge/ssql` import path (no `/v4`), invoked `ssql.Filter(records, func)` instead of the actual `ssql.Where(func)(records)`, and for CLI fabricated a plausible-but-wrong grammar (`-rename` instead of `-as`, chained `ssql count -as` and `ssql avg -as` as standalone commands, `ssql sort -desc F` instead of `ssql sort F -desc`). Every error is what a model might produce from pretraining priors about Unix tools and functional-programming APIs — Scout appears to weight that knowledge above the documentation we supplied. Raw capacity is not sufficient for domain-specific API compliance; context-following is a distinct axis and can work against larger models that have stronger priors.
 
 **Historical baseline (from the main body of the paper, before Gemma testing):**
 
