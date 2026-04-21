@@ -875,7 +875,7 @@ To probe whether the API-design findings extend to smaller, locally-hosted model
 
 | Property | Value |
 |---|---|
-| Models | `gemma4:26b` (17 GB) and `gemma4:31b` (≈22 GB), both quantized |
+| Models | `gemma4:e2b` (7.2 GB), `gemma4:e4b` (9.6 GB), `gemma4:26b` (17 GB), `gemma4:31b` (19 GB), all quantized |
 | Runtime | Ollama 0.x, local host (`http://localhost:11434`) |
 | Hardware | Intel Core Ultra 9 275HX, Ubuntu Linux |
 | Context window | `num_ctx=32768` |
@@ -893,14 +893,18 @@ End-to-end wall time for 30 tests was ~4 minutes.
 
 ### E.2 Results
 
-**Four-way comparison after prompt/test-case fixes (2026-04-21):**
+**Six-way comparison after prompt/test-case fixes (2026-04-21):**
 
-| LLM | Go | CLI | Total | Rate | Remaining failures |
+| LLM | Size | Go | CLI | Total | Rate |
 |---|---|---|---|---|---|
-| Claude (Opus 4.5) | 15/15 | 14/15 | 29/30 | 97% | CLI-09 (prompt ambiguity — see E.2a) |
-| Gemini | 15/15 | 14/15 | 29/30 | 97% | CLI-06 (test pattern too narrow for path prefix — fixed post-run) |
-| Gemma 4 31B | 13/15 | 15/15 | 28/30 | 93% | GO-04, GO-15 (unused-import compile errors; pipelines semantically correct) |
-| Gemma 4 26B | 12/15 | 15/15 | 27/30 | 90% | GO-03, GO-07, GO-09 (all token-corruption artifacts — see E.4) |
+| Claude (Opus 4.5) | frontier | 15/15 | 14/15 | 29/30 | 97% |
+| Gemini | frontier | 15/15 | 14/15 | 29/30 | 97% |
+| Gemma 4 31B | 19 GB | 13/15 | 15/15 | 28/30 | 93% |
+| Gemma 4 26B | 17 GB | 12/15 | 15/15 | 27/30 | 90% |
+| Gemma 4 e4b | 9.6 GB | 7/15 | 14/15 | 21/30 | 70% |
+| Gemma 4 e2b | 7.2 GB | 0/15 | 9/15 | 9/30 | 30% |
+
+The local-model column exposes a sharp scaling curve. On Go — which demands strict typing and no unused imports — the e2b produces 0/15 compilable programs, e4b reaches 7/15, and the curve plateaus around the 26-31B scale at 12-13/15. On CLI, which is forgiving pipe syntax, even e4b lands at 14/15 (tied with Gemini); the 26B and 31B both hit 15/15. **The split reveals that the API's CLI surface is easier for small models than the Go library surface — a finding with practical implications for API design choices.**
 
 **Historical baseline (from the main body of the paper, before Gemma testing):**
 
@@ -912,10 +916,10 @@ End-to-end wall time for 30 tests was ~4 minutes.
 
 **Observations:**
 
-- The Gemma 4 26B baseline (83% untuned) sat between the initial rates of Claude (87%) and Gemini (77%) — a notable result for a ~17 GB model running locally on consumer hardware.
-- Scaling from 26B to 31B improved the total from 27/30 to 28/30. The 31B run had CLI 15/15 (same as 26B) and gained one Go test (13/15 vs 12/15). Notably, the 31B failures are a different class — speculative unused imports rather than token-level corruption — suggesting the token-glitch class is more pronounced at smaller scale.
+- The Gemma 4 26B baseline (83% untuned, before iteration) sat between the initial rates of Claude (87%) and Gemini (77%) — a notable result for a ~17 GB model running locally on consumer hardware.
+- **Go vs CLI scales very differently with model size.** On CLI, the 7.2 GB e2b still scores 9/15 (60%); the 9.6 GB e4b jumps to 14/15 (93%); 26B and 31B reach 15/15 (100%). On Go, the 7.2 GB e2b scores 0/15 (0%); the 9.6 GB e4b jumps to 7/15 (47%); 26B reaches 12/15 (80%); 31B 13/15 (87%). The Go surface demands more capability — compile-time strictness, explicit typing, no unused imports — and only models past ~17 GB produce usable code consistently.
+- **Failure class shifts with scale.** e2b's Go failures were pervasive (unused imports everywhere, wrong numeric type defaults, occasional prompt-misread). 26B's failures were token-corruption artifacts (`sql.GetOr`, `!=ly`, dropped `}`). 31B's failures were speculative unused imports only. The really-bad glitches fade with scale even within the same model family.
 - The frontier-model "regressions" vs the paper's earlier 30/30 results are test-harness artifacts, not real capability regressions. Both Claude's CLI-09 and Gemini's CLI-06 produced functionally-correct pipelines; the test pattern or prompt failed to discriminate.
-- Gemma's remaining failures are genuinely the models' ceiling at this scale (see E.4).
 
 #### E.2a The Claude CLI-09 ambiguity
 
