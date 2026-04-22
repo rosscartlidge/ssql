@@ -1,6 +1,6 @@
 # AI Prompt Fix Request
 
-**Generated**: 2026-04-22 10:47
+**Generated**: 2026-04-22 13:02
 **Mode**: cli
 **Prompt file**: /home/rossc/src/ssql/doc/ai-cli-generation.md
 
@@ -22,12 +22,12 @@ The following test cases failed. Please update the prompt file to fix these issu
 
 **Issues found**:
 ```
-CLI-09
+CLI-05
 ```
 
 **Generated output** (`/tmp/ssql-ai-test-results/.sh`):
 ```bash
-||Generate a standalone Go program from this pipeline: read users.csv, filter where status equals active, group by dept (as positional arg), count per dept, output to stdout. Remember to export SSQLGO=1 so all pipeline commands see it.|||output missing: package main
+||Compute a spectrogram of the value field from measurements.csv with a window size of 4, sample rate 10.|||output missing: time_index
 ```
 
 ---

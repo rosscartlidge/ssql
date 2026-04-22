@@ -899,6 +899,7 @@ End-to-end wall time for 30 tests was ~4 minutes.
 |---|---|---|---|---|
 | Claude (Opus 4.5) | frontier | 26/30 (87%) | 29/30 (97%) | +3 |
 | Gemini | frontier | 23/30 (77%) | 29/30 (97%) | +6 |
+| gpt-oss 120B | 65 GB | — | 28/30 (93%) | — |
 | Gemma 4 31B | 19 GB | 26/30 (87%) | 28/30 (93%) | +2 |
 | Gemma 4 26B | 17 GB | 25/30 (83%) | 27/30 (90%) | +2 |
 | gpt-oss 20B | 13 GB | — | 26/30 (87%) | — |
@@ -912,6 +913,7 @@ End-to-end wall time for 30 tests was ~4 minutes.
 |---|---|---|---|
 | Claude (Opus 4.5) | 15/15 | 14/15 | 29/30 |
 | Gemini | 15/15 | 14/15 | 29/30 |
+| gpt-oss 120B | 14/15 | 14/15 | 28/30 |
 | Gemma 4 31B | 13/15 | 15/15 | 28/30 |
 | Gemma 4 26B | 12/15 | 15/15 | 27/30 |
 | gpt-oss 20B | 12/15 | 14/15 | 26/30 |
@@ -925,6 +927,7 @@ End-to-end wall time for 30 tests was ~4 minutes.
 - **Gemma 31B's Go score actually *dropped* from 14/15 baseline to 13/15 after tuning** — the new "Signal is []float64, use encoding/json" anti-pattern appears to have caused a speculative import that the baseline prompt didn't. Its CLI gained +3 (12→15) from the join/output clarifications. Net +2 but nonzero cost on the Go side.
 - **Llama 4 Scout is unmoved by tuning** (−1 is within seed noise). Scout's failures are context-ignorance, not understanding gaps; changing the text Scout ignores doesn't help.
 - **OpenAI's `gpt-oss:20b` lands at 26/30 (87%) with the tuned prompts** — close to Gemma 4 26B (27/30) at roughly the same size class, but slightly below. Its failures are a mix: two are test-harness narrowness (`ReadJSONFast` counted as missing `ReadJSON(`; CLI-09's prompt-ambiguity issue), two are genuine (one reading-comprehension slip — filtered field `active` vs `status` — and one empty output). Encouragingly for library designers, gpt-oss also followed the documented API without falling back on OpenAI-training-data priors — unlike Llama 4 Scout.
+- **`gpt-oss:120b` ties Gemma 4 31B at 28/30 (93%) and is the strongest local model we tested.** Both failures are minor: GO-06 wrapped an existing iterator in `slices.Values()` (which takes a slice, not an iterator) — a Go type-system slip, not an API misunderstanding; and CLI-05 wrote the spectrogram to a file (`spectrogram.csv`) instead of stdout — the same implicit-destination ambiguity that caused Claude's CLI-09 failure. End-to-end wall time for the 120B run was ~55 minutes on a single consumer GPU (vs ~4 min for Gemma 26B), illustrating the cost side of the curve.
 - The tuning was authored after seeing Gemma 26B's iter-1 failures. It was *not* specifically targeted at the other five models, yet every Gemma variant still gained at least +1. This suggests the fixes were about underlying API-documentation gaps (schema-header join, Signal-vs-Record type confusion, implicit output destinations) rather than Gemma-26B-specific quirks.
 
 The local-model column exposes a sharp scaling curve within the Gemma family. On Go — which demands strict typing and no unused imports — the e2b produces 0/15 compilable programs, e4b reaches 7/15, and the curve plateaus around the 26-31B scale at 12-13/15. On CLI, which is forgiving pipe syntax, even e4b lands at 14/15 (tied with Gemini); the 26B and 31B both hit 15/15. **The split reveals that the API's CLI surface is easier for small models than the Go library surface — a finding with practical implications for API design choices.**
