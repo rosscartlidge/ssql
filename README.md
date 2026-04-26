@@ -957,6 +957,7 @@ go run examples/early_termination_example.go
 
 - **[CLI Tutorial](doc/cli-codelab.md)** - Complete command-line guide
 - **[API Reference](doc/api-reference.md)** - Go library documentation
+- **[Typed Reference](doc/typed-reference.md)** - `ssql/typed` high-performance struct API (5–14× faster)
 - **[Debugging Pipelines](doc/cli-debugging.md)** - Debug with jq, inspect data, profile performance
 - **[Troubleshooting Guide](doc/cli-troubleshooting.md)** - Common issues and quick solutions
 - **[AI Code Generation](doc/ai-human-guide.md)** - Natural language to code

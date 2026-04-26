@@ -3,6 +3,8 @@
 *Complete reference for all ssql types, functions, and methods*
 
 > 📖 **Documentation Note**: This is a learning-focused API reference with examples and best practices. For raw API documentation directly from source code, use `go doc github.com/rosscartlidge/ssql/v4` or browse specific functions with `go doc github.com/rosscartlidge/ssql/v4.FunctionName`
+>
+> ⚡ **Looking for the high-performance struct-based API?** See the [`ssql/typed` reference](typed-reference.md) — 5–14× faster and 9–2,000× less memory for known-schema pipelines.
 
 ## Table of Contents
 
