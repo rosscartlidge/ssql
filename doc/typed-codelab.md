@@ -565,5 +565,5 @@ fallback for ecosystem compatibility.
 - **[Typed Reference](typed-reference.md)** — concise function-by-function reference
 - **[Performance Notes](research/typed-performance-notes.md)** — known optimization opportunities (and a writeup of one that didn't pay off)
 - **[Concurrency Proposal](research/typed-concurrency-proposal.md)** — design sketch for closing the remaining gap to DuckDB via opt-in `Stream[T]`
-- **[Phase 2 vision](research/typed-package-proposal.md#5b-what-phase-2-delivers--and-why-its-different)** — `ssql generate go -typed`: shell-pipeline → typed Go program in one flag
+- **[Codegen design (Phase 2)](research/typed-codegen-proposal.md)** — `SSQLGO=typed ssql … | ssql generate go` shipped (Tier 1 + Tier 2: from, where, join, group-by, include/exclude/rename, limit/offset, to csv, to table). Same shell pipeline you'd run interactively becomes a self-contained typed Go program.
 - **[Side-by-side example](../examples/typed_pipeline)** — runnable Record vs typed comparison that prints the speedup live
