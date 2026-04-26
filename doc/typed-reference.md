@@ -24,8 +24,18 @@ exploratory work and dynamic-schema cases; `ssql/typed` for the inner loop.
 
 ## Performance
 
-Same workload (1M rows joined against a 1k-row lookup, filter, count),
-measured in `typed/bench_test.go`:
+### Headline: 10M rows × 3 chained joins (end-to-end with CSV I/O)
+
+| Implementation | Time | Memory allocated | Allocations |
+|---|---:|---:|---:|
+| `ssql.Record` | 74.8 s | 37.7 GB | 544 M |
+| **`ssql/typed`** | **4.94 s** | **1.10 GB** | **20.0 M** |
+| **Speedup** | **15.1×** | **34.2× less** | **27.2× fewer** |
+
+Both pipelines produce 7.25 M output rows (correctness validated).
+A 75-second batch job becomes 5 seconds; 38 GB of allocations becomes 1 GB.
+
+### Smaller workload: 1M rows × 1 join
 
 | Implementation | Time | Memory | Allocs |
 |---|---:|---:|---:|
@@ -42,7 +52,17 @@ number includes CSV reading on both sides; ssql/typed's reflection-built
 decoder costs ~20% over a hand-rolled positional reader, which is the price
 of keeping the API generic.
 
-To reproduce: `go test -bench=. -benchtime=3x -run=^$ ./typed/...`
+### Reproducing
+
+```bash
+# Quick benches (~1 minute, 1M-row workload)
+go test -bench=. -benchtime=3x -run=^$ ./typed/...
+
+# Headline benches (~2 minutes, 10M × 3-join workload — generates 600 MB CSV)
+go test -bench=Scale -benchtime=1x -run=^$ -timeout=30m ./typed/...
+```
+
+Hardware: Intel Core Ultra 9 275HX, single-threaded.
 
 ## Field tags
 
