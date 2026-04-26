@@ -194,7 +194,30 @@ joined := typed.HashJoin(seniors, depts,
 Use `ssql.Record` for prototyping and dynamic schemas; switch to
 `ssql/typed` when you know your schema and the pipeline is hot.
 
-[**Codelab →**](doc/typed-codelab.md) | [**Reference →**](doc/typed-reference.md)
+**Or skip the rewrite entirely** — `ssql generate go -typed` translates a
+shell pipeline directly into a typed Go program with auto-derived struct
+types. The same prototype pipeline you'd run interactively becomes a
+self-contained, compiled, schema-safe binary:
+
+```bash
+SSQLGO=typed ssql from employees.csv \
+    | ssql where -if years ge 5 \
+    | ssql join departments.csv -using dept_id \
+    | ssql to csv seniors.csv \
+    | ssql generate go > pipeline.go
+go run pipeline.go
+```
+
+Measured against the same pipeline generated in Record mode (1M rows ×
+1 join, see `cmd/ssql/codegen_bench_test.go`):
+
+| Mode | Wall time | Peak RSS |
+|---|---:|---:|
+| `SSQLGO=1` (Record) | 2.62 s | 921 MB |
+| **`SSQLGO=typed`** | **0.76 s** | **8.5 MB** |
+| Ratio | **3.47× faster** | **108× less memory** |
+
+[**Codelab →**](doc/typed-codelab.md) | [**Reference →**](doc/typed-reference.md) | [**Codegen design →**](doc/research/typed-codegen-proposal.md)
 
 ### 🌐 **Browser Playground**
 

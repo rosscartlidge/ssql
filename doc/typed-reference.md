@@ -380,6 +380,18 @@ go run pipeline.go              # uses defaults
 go run pipeline.go -input emp_q4.csv
 ```
 
+**Measured impact of the one-line `SSQLGO=1 → SSQLGO=typed` change**, on
+1M employees × 1k departments, identical pipeline expression
+(see `cmd/ssql/codegen_bench_test.go`):
+
+| Mode   | Wall time | Peak RSS |
+|---|---:|---:|
+| Record (`SSQLGO=1`) | 2.62 s | 921 MB |
+| Typed (`SSQLGO=typed`) | **0.76 s** | **8.5 MB** |
+| Ratio | **3.47× faster** | **108× less memory** |
+
+Reproduce: `go test ./cmd/ssql/ -run TestCodegenBench -timeout 10m -v`.
+
 Phase 2 — Tier 2 (planned):
 - [ ] `group-by FIELDS … -count -sum -avg` (typed `GroupBy` with multi-aggregator)
 - [ ] `include` / `exclude` / `rename` (typed `Select` with derived struct)

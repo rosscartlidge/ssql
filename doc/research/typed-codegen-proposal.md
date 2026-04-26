@@ -363,6 +363,53 @@ For the MVP, we accept the sampling decision and document the behaviour. Users h
 
 **Total budget**: ~1 week of focused work for Tier 1 ship.
 
+## 11a. Measured Results (Tier 1, 2026-04-26)
+
+The codegen-comparison benchmark in `cmd/ssql/codegen_bench_test.go`
+generates the **same pipeline** two ways and reports wall time and
+peak RSS for each:
+
+```bash
+# Pipeline used in the bench:
+SSQLGO={1|typed} ssql from employees.csv \
+    | ssql where -if years ge 5 \
+    | ssql join departments.csv -using dept_id \
+    | ssql to csv \
+    | ssql generate go
+```
+
+Workload: 1,000,000-row `employees.csv` joined against a 1,000-row
+`departments.csv` on `dept_id`, filtered on `years >= 5`. Both
+generated programs are compiled with `go build -ldflags "-s -w"` and
+run via `/usr/bin/time -v` to capture peak resident set size.
+
+| Mode   | Wall time | Peak RSS | Source size |
+|--------|----------:|---------:|------------:|
+| Record | 2.62 s    | 921 MB   | 1.2 KB      |
+| Typed  | 0.76 s    | 8.5 MB   | 2.0 KB      |
+| Ratio  | **3.47× faster** | **108× less memory** | 1.7× more source (auto-derived structs) |
+
+The wall-time speedup (3.5×) is below the 5-15× the typed runtime
+delivers in pure micro-bench mode because the codegen comparison
+includes process startup, CSV read latency, and disk-write costs that
+wash out some of the in-process advantage. The memory ratio (108×) is
+the real story: Record's per-row `map[string]any` blows past 900 MB
+on the same workload while typed's stack-allocated structs stay
+under 10 MB.
+
+The 800-byte source-size delta is the auto-derived struct types
+(`EmployeesRow`, `DepartmentsRow`, `EmployeesRow_DepartmentsRow`).
+That's the *only* code the user didn't write.
+
+Reproduce on your own hardware:
+
+```bash
+go test ./cmd/ssql/ -run TestCodegenBench -timeout 10m -v
+```
+
+The test materializes its dataset once under
+`$TMPDIR/ssql-codegen-bench`, so re-runs are cheap.
+
 ## 12. What This Proposal Doesn't Try to Do
 
 - It doesn't change `ssql.Record` codegen. `SSQLGO=1` keeps working exactly as today.
