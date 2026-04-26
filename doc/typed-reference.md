@@ -358,10 +358,35 @@ Phase 1.6 (planned):
 - [ ] `HashJoinSized` with capacity hint for known right-side size
 - [ ] Strict-mode CSV reader (errors on unknown / missing columns)
 
-Phase 2 (the moonshot):
-- [ ] `ssql generate go -typed` — schema-aware code generation that emits
-  calls into this package directly. The library is being designed to be
-  the runtime that hand-written and generator-emitted typed Go both target.
+Phase 2 — Tier 1 shipped (2026-04-26):
+- [x] `SSQLGO=typed ssql generate go` — schema-aware code generation that
+  emits calls into this package directly. Tier 1 covers
+  `from FILE.csv` (header sampled at generation time, struct types
+  auto-derived), `where -if FIELD OP VALUE` (literal operators only),
+  `join FILE.csv -using FIELD` (single-key + process-substitution),
+  `to csv`, and `to table`. Other commands abort with a clear error.
+  See [`research/typed-codegen-proposal.md`](research/typed-codegen-proposal.md).
+
+```bash
+# Same prototype pipeline you'd run interactively...
+SSQLGO=typed ssql from employees.csv \
+    | ssql where -if years ge 5 \
+    | ssql join departments.csv -using dept_id \
+    | ssql to csv seniors.csv \
+    | ssql generate go > pipeline.go
+
+# ...is now a self-contained, type-safe Go program.
+go run pipeline.go              # uses defaults
+go run pipeline.go -input emp_q4.csv
+```
+
+Phase 2 — Tier 2 (planned):
+- [ ] `group-by FIELDS … -count -sum -avg` (typed `GroupBy` with multi-aggregator)
+- [ ] `include` / `exclude` / `rename` (typed `Select` with derived struct)
+- [ ] `update -set FIELD VALUE` (literal-value sets only)
+- [ ] Multi-clause joins, `-as` field renames
+- [ ] `sort` / `limit` / `skip` / `distinct`
+- [ ] `union`
 
 See [`doc/research/typed-package-proposal.md`](research/typed-package-proposal.md)
 for the full design and Phase 2 vision.

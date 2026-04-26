@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -124,10 +125,28 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 	}
 
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
+	}
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'to table' has no typed input; %s does not yet support typed mode (Tier 2 or Tier 3) — drop -typed or refactor the pipeline", lastNamedCommand(fragments)))
+		}
+		// Tier 1: emit a tab-separated print loop. We don't try to
+		// match ssql.DisplayTable's column-width alignment in v1 — too
+		// much code for a feature most pipelines route through 'to
+		// csv' anyway. Users who care about pretty alignment can pipe
+		// the generated program's output through the `column` utility.
+		code := generateTypedToTableCode(prevSchema, fields, onlySpecified, inputVar)
+		frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
+		frag.InputTypedSchema = prevSchema
+		return lib.WriteCodeFragment(frag)
 	}
 
 	var code string
@@ -145,4 +164,59 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 	}
 	frag := lib.NewFinalFragment(inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)
+}
+
+// generateTypedToTableCode emits a tab-separated print loop over the
+// schema's struct fields. fields/onlySpecified select which columns
+// are printed; if fields is empty, all schema fields are used.
+func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpecified bool, inputVar string) string {
+	// Resolve which fields to print, in order.
+	var selected []lib.TypedSchemaField
+	if len(fields) == 0 {
+		selected = schema.Fields
+	} else {
+		byName := make(map[string]lib.TypedSchemaField, len(schema.Fields))
+		for _, f := range schema.Fields {
+			byName[strings.ToLower(f.Name)] = f
+		}
+		seen := make(map[string]bool, len(fields))
+		for _, name := range fields {
+			if f, ok := byName[strings.ToLower(name)]; ok {
+				selected = append(selected, f)
+				seen[strings.ToLower(name)] = true
+			}
+		}
+		if !onlySpecified {
+			for _, f := range schema.Fields {
+				if !seen[strings.ToLower(f.Name)] {
+					selected = append(selected, f)
+				}
+			}
+		}
+	}
+
+	var b strings.Builder
+	// Header
+	headers := make([]string, len(selected))
+	for i, f := range selected {
+		headers[i] = fmt.Sprintf("%q", f.Name)
+	}
+	b.WriteString(fmt.Sprintf("fmt.Println(%s)\n", strings.Join(headers, ` + "\t" + `)))
+	b.WriteString(fmt.Sprintf("\tfor row := range %s {\n", inputVar))
+	args := make([]string, len(selected))
+	for i, f := range selected {
+		args[i] = "row." + f.GoName
+	}
+	// Use %v for each — works for all of int64/float64/string/bool/time.Time.
+	b.WriteString("\t\tfmt.Printf(\"")
+	for i := range selected {
+		if i > 0 {
+			b.WriteString("\\t")
+		}
+		b.WriteString("%v")
+	}
+	b.WriteString("\\n\", ")
+	b.WriteString(strings.Join(args, ", "))
+	b.WriteString(")\n\t}")
+	return b.String()
 }

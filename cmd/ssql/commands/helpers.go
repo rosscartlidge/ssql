@@ -328,13 +328,34 @@ func chainRecords(firstRecords iter.Seq[ssql.Record], additionalFiles []string) 
 // shouldGenerate checks if code generation is enabled via flag or environment variable
 // Returns true if:
 //   - The generate flag is explicitly set to true, OR
-//   - The SSQLGO environment variable is set to "1" or "true"
+//   - The SSQLGO environment variable is set to "1", "true", or "typed"
 func shouldGenerate(flagValue bool) bool {
 	if flagValue {
 		return true
 	}
 	envValue := os.Getenv("SSQLGO")
-	return envValue == "1" || envValue == "true"
+	return envValue == "1" || envValue == "true" || envValue == "typed"
+}
+
+// typedMode returns true when the pipeline is running under
+// SSQLGO=typed (Phase 2 typed-codegen mode). Commands that support
+// typed-mode emission should branch on this; commands that don't
+// should emit a clear error fragment via writeUnsupportedTypedFragment.
+func typedMode() bool {
+	return os.Getenv("SSQLGO") == "typed"
+}
+
+// lastNamedCommand returns a human-readable description of the most
+// recent fragment with a non-empty Command field, used in typed-mode
+// error messages to point at the offending stage. Returns
+// "(unknown command)" if every fragment is anonymous.
+func lastNamedCommand(fragments []*lib.CodeFragment) string {
+	for i := len(fragments) - 1; i >= 0; i-- {
+		if fragments[i].Command != "" {
+			return fmt.Sprintf("the upstream command %q", fragments[i].Command)
+		}
+	}
+	return "an upstream command"
 }
 
 // getCommandString returns the command line that invoked this command

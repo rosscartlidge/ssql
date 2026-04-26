@@ -1,6 +1,10 @@
 # `ssql generate go -typed` — Phase 2 Proposal
 
-**Status:** Proposal. No code written yet.
+**Status:** Tier 1 SHIPPED (2026-04-26). Activate with `SSQLGO=typed` instead of `SSQLGO=1`.
+
+Tier 1 covers: `from FILE.csv` (with schema sampling), `where -if FIELD OP VALUE` (literal operators), `join FILE.csv -using FIELD` / `-on LEFT RIGHT` (single-key, single-clause + process-substitution), `to csv [FILE]`, `to table`. Pipelines that include a Tier-2/Tier-3 command (e.g. `group-by`, `update`, `-if-expr`) abort with a clear error naming the offender.
+
+The original proposal text below is preserved as the design record.
 
 **Predecessors:**
 - [`typed-package-proposal.md`](typed-package-proposal.md) — Phase 1 + 1.5 + 1.6 typed library, shipped

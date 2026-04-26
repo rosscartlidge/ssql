@@ -45,6 +45,32 @@ type CodeFragment struct {
 	// For "func" type fragments (subprocess functions from process substitution)
 	FuncName string          `json:"func_name,omitempty"` // Function name (e.g., "rightSource1")
 	FuncBody []*CodeFragment `json:"func_body,omitempty"` // Fragments that make up the function body
+
+	// Phase 2 typed-mode (SSQLGO=typed): schema-flow info populated by
+	// commands that support typed-mode emission. Empty/nil for the
+	// existing Record-based generator. The TypedSchema is distinct from
+	// the existing lib.Schema (which describes runtime JSONL field
+	// types) — it carries the Go-source-level type names that the
+	// generated code needs.
+	InputTypedSchema  *TypedSchema `json:"input_typed_schema,omitempty"`
+	OutputTypedSchema *TypedSchema `json:"output_typed_schema,omitempty"`
+	StructDefs        []string     `json:"struct_defs,omitempty"`
+}
+
+// TypedSchema describes the row type flowing between two pipeline
+// stages in typed-mode codegen (SSQLGO=typed). The TypeName is the Go
+// identifier the StructDefs declares; Fields is the ordered list of
+// columns with their CSV names, Go field names, and Go types.
+type TypedSchema struct {
+	TypeName string             `json:"type_name"`
+	Fields   []TypedSchemaField `json:"fields"`
+}
+
+// TypedSchemaField is one column in a typed schema.
+type TypedSchemaField struct {
+	Name   string `json:"name"`    // CSV column name (e.g., "dept_id")
+	GoName string `json:"go_name"` // Go field name (e.g., "DeptID")
+	GoType string `json:"go_type"` // "string", "int64", "float64", "time.Time", "*int64", etc.
 }
 
 // NewErrorFragment creates an error fragment that signals code generation failure
@@ -234,6 +260,13 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 
 	if len(fragments) == 0 {
 		return "", fmt.Errorf("no code fragments received")
+	}
+
+	// Phase 2: if any fragment carries a typed schema, route through the
+	// typed assembler. We require all-typed-or-none: a mixed pipeline is
+	// rejected because the runtime types don't compose.
+	if isTypedPipeline(fragments) {
+		return assembleTypedFragments(fragments)
 	}
 
 	// Separate fragments by type

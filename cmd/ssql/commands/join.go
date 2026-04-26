@@ -441,8 +441,10 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 
 	// Get input variable from last fragment
 	var inputVar string
+	var leftSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		leftSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
 	}
@@ -472,6 +474,20 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 			}
 			subCommandStr := strings.Join(subCommands, " | ")
 
+			// Typed mode: subprocess fragments must carry a schema.
+			if typedMode() {
+				rightSchema := findOutputSchema(rightFragments)
+				if rightSchema == nil {
+					return lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("ssql generate go -typed: right side of join did not produce a typed schema (inner pipeline must use typed-mode commands)"))
+				}
+				if leftSchema == nil {
+					return lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("ssql generate go -typed: 'join' must follow a typed-mode source"))
+				}
+				return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses)
+			}
+
 			// Create a func fragment that wraps the subprocess pipeline
 			funcFrag := lib.NewFuncFragment(funcName, rightFragments, subCommandStr)
 			if err := lib.WriteCodeFragment(funcFrag); err != nil {
@@ -482,6 +498,38 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 			return generateJoinStmtWithFunc(inputVar, funcName, joinType, clauses)
 		}
 		// If reading fragments failed, fall through to normal file handling
+	}
+
+	// Typed-mode regular-file path: sample the right-side file ourselves.
+	if typedMode() {
+		if leftSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'join' must follow a typed-mode source"))
+		}
+		if !strings.HasSuffix(strings.ToLower(rightFile), ".csv") {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'join' on non-CSV files not yet supported in typed mode (Tier 2)"))
+		}
+		rightSchema, rightStructDef, err := lib.SampleCSVSchema(rightFile, "", 0)
+		if err != nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: %w", err))
+		}
+		// Build a synthesized init fragment for the right side and an
+		// inline func fragment that wraps it.
+		rightInit := lib.NewInitFragment(
+			fmt.Sprintf("right%s", rightSchema.TypeName),
+			fmt.Sprintf("right%s := typed.ReadCSV[%s](%q)", rightSchema.TypeName, rightSchema.TypeName, rightFile),
+			[]string{"github.com/rosscartlidge/ssql/v4/typed"},
+			fmt.Sprintf("ssql from %s", rightFile),
+		)
+		rightInit.OutputTypedSchema = rightSchema
+		rightInit.StructDefs = []string{rightStructDef}
+		return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema,
+			[]*lib.CodeFragment{rightInit},
+			fmt.Sprintf("ssql from %s", rightFile),
+			clauses,
+		)
 	}
 
 	// For regular files, create a simple func fragment that reads the file
@@ -511,6 +559,154 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 	}
 
 	return generateJoinStmtWithFunc(inputVar, funcName, joinType, clauses)
+}
+
+// findOutputSchema returns the OutputTypedSchema of the last fragment
+// in the slice that has one set, or nil.
+func findOutputSchema(fragments []*lib.CodeFragment) *lib.TypedSchema {
+	for i := len(fragments) - 1; i >= 0; i-- {
+		if fragments[i].OutputTypedSchema != nil {
+			return fragments[i].OutputTypedSchema
+		}
+	}
+	return nil
+}
+
+// emitTypedJoin writes the func+stmt fragments for a typed-mode join.
+// rightFragments become the body of a `func rightSourceN() iter.Seq[RightT]`,
+// and the stmt fragment emits the typed.HashJoin call with merge function.
+func emitTypedJoin(
+	inputVar, funcName string,
+	leftSchema, rightSchema *lib.TypedSchema,
+	rightFragments []*lib.CodeFragment,
+	subCommandStr string,
+	clauses []ssql.LookupClause,
+) error {
+	if joinTypeIsUnsupported(clauses) {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: only single-clause joins without -as renames are supported in v1; got %d clause(s) with renames", len(clauses)))
+	}
+	clause := clauses[0]
+
+	// Build merged struct.
+	mergedSchema, mergedDef := mergeJoinSchemas(leftSchema, rightSchema)
+
+	// Func fragment carrying the right side.
+	funcFrag := lib.NewFuncFragment(funcName, rightFragments, subCommandStr)
+	if err := lib.WriteCodeFragment(funcFrag); err != nil {
+		return fmt.Errorf("writing func fragment: %w", err)
+	}
+
+	// Find the right-side Go field name for the join key.
+	leftKeyField, ok := lookupSchemaField(leftSchema, clause.LeftField)
+	if !ok {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: 'join -on/-using' references unknown left field %q", clause.LeftField))
+	}
+	rightKeyField, ok := lookupSchemaField(rightSchema, clause.RightField)
+	if !ok {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: 'join -on/-using' references unknown right field %q", clause.RightField))
+	}
+	if leftKeyField.GoType != rightKeyField.GoType {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: join key types differ (left %s: %s, right %s: %s)", leftKeyField.Name, leftKeyField.GoType, rightKeyField.Name, rightKeyField.GoType))
+	}
+	keyType := leftKeyField.GoType
+
+	// Build merge function body.
+	var mergeAssignments []string
+	for _, f := range mergedSchema.Fields {
+		// Look up where this field came from. Prefer left side.
+		if _, isLeft := lookupSchemaField(leftSchema, f.Name); isLeft {
+			lf, _ := lookupSchemaField(leftSchema, f.Name)
+			mergeAssignments = append(mergeAssignments, fmt.Sprintf("%s: l.%s", f.GoName, lf.GoName))
+		} else {
+			rf, _ := lookupSchemaField(rightSchema, f.Name)
+			mergeAssignments = append(mergeAssignments, fmt.Sprintf("%s: r.%s", f.GoName, rf.GoName))
+		}
+	}
+
+	stmtCode := fmt.Sprintf(`joined := typed.HashJoin(%s, %s(),
+		func(l %s) %s { return l.%s },
+		func(r %s) %s { return r.%s },
+		func(l %s, r %s) %s {
+			return %s{
+				%s,
+			}
+		})`,
+		inputVar, funcName,
+		leftSchema.TypeName, keyType, leftKeyField.GoName,
+		rightSchema.TypeName, keyType, rightKeyField.GoName,
+		leftSchema.TypeName, rightSchema.TypeName, mergedSchema.TypeName,
+		mergedSchema.TypeName,
+		strings.Join(mergeAssignments, ",\n\t\t\t\t"),
+	)
+
+	stmtFrag := lib.NewStmtFragment("joined", inputVar, stmtCode, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+	stmtFrag.InputTypedSchema = leftSchema
+	stmtFrag.OutputTypedSchema = mergedSchema
+	stmtFrag.StructDefs = []string{mergedDef}
+	return lib.WriteCodeFragment(stmtFrag)
+}
+
+func joinTypeIsUnsupported(clauses []ssql.LookupClause) bool {
+	if len(clauses) != 1 {
+		return true
+	}
+	if len(clauses[0].FieldRenames) > 0 {
+		return true
+	}
+	return false
+}
+
+func lookupSchemaField(s *lib.TypedSchema, name string) (lib.TypedSchemaField, bool) {
+	for _, f := range s.Fields {
+		if strings.EqualFold(f.Name, name) {
+			return f, true
+		}
+	}
+	return lib.TypedSchemaField{}, false
+}
+
+// mergeJoinSchemas returns the union of left + right fields. Right-side
+// fields whose CSV name collides with a left-side name are dropped (the
+// left value wins). The Go type name is "<Left>_<Right>".
+func mergeJoinSchemas(left, right *lib.TypedSchema) (*lib.TypedSchema, string) {
+	merged := &lib.TypedSchema{
+		TypeName: fmt.Sprintf("%s_%s", left.TypeName, right.TypeName),
+	}
+	seen := make(map[string]bool, len(left.Fields))
+	for _, f := range left.Fields {
+		merged.Fields = append(merged.Fields, f)
+		seen[strings.ToLower(f.Name)] = true
+	}
+	for _, f := range right.Fields {
+		if seen[strings.ToLower(f.Name)] {
+			continue
+		}
+		merged.Fields = append(merged.Fields, f)
+	}
+	// Render struct with no tags — this is a synthetic merge type, not
+	// meant to round-trip through CSV reading.
+	var b strings.Builder
+	fmt.Fprintf(&b, "// %s is the merged row type produced by the join.\n", merged.TypeName)
+	fmt.Fprintf(&b, "type %s struct {\n", merged.TypeName)
+	maxName := 0
+	maxType := 0
+	for _, f := range merged.Fields {
+		if len(f.GoName) > maxName {
+			maxName = len(f.GoName)
+		}
+		if len(f.GoType) > maxType {
+			maxType = len(f.GoType)
+		}
+	}
+	for _, f := range merged.Fields {
+		fmt.Fprintf(&b, "\t%-*s %s\n", maxName, f.GoName, f.GoType)
+	}
+	b.WriteString("}\n")
+	return merged, b.String()
 }
 
 // generateJoinStmtWithFunc generates a join statement that calls a function for the right source

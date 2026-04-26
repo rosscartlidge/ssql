@@ -248,6 +248,10 @@ func mergeCSVHeaders(allHeaders [][]string, files []string, merge bool) ([]strin
 
 // generateFromCSVCode generates Go code for reading CSV.
 func generateFromCSVCode(filename string, typeOverrides map[string]string, defaultType string) error {
+	if typedMode() {
+		return generateFromCSVCodeTyped(filename, typeOverrides, defaultType)
+	}
+
 	var code string
 	var imports []string
 
@@ -285,6 +289,60 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
+}
+
+// generateFromCSVCodeTyped emits a Phase-2 typed-mode init fragment.
+// Samples the CSV header + 1000 rows to infer per-column Go types,
+// emits the corresponding struct definition, and produces a
+// typed.ReadCSV[GeneratedType] call.
+func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, defaultType string) error {
+	if filename == "" {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: 'from' from stdin not supported in typed mode (need a file to sample for schema inference)"))
+	}
+	// User-supplied type overrides aren't honored in typed mode for v1
+	// — the inferred types from sampling are authoritative. "auto" is
+	// the flag's default value (no user override).
+	if len(typeOverrides) > 0 || (defaultType != "" && defaultType != "auto") {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: -as / -default-type column overrides not supported in typed mode (schema is inferred from CSV samples)"))
+	}
+
+	schema, structDef, err := lib.SampleCSVSchema(filename, "", 0)
+	if err != nil {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: %w", err))
+	}
+
+	code := fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput)`, schema.TypeName)
+	params := []lib.CodeParam{{
+		Name:    "input",
+		Default: filename,
+		Help:    "input CSV file",
+		VarName: "flagInput",
+	}}
+	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	if needsTimeImport(schema) {
+		imports = append(imports, "time")
+	}
+
+	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
+	frag.OutputTypedSchema = schema
+	frag.StructDefs = []string{structDef}
+	return lib.WriteCodeFragment(frag)
+}
+
+// needsTimeImport reports whether any field in the schema uses the
+// time.Time type (or pointer to it). Used to decide whether to include
+// "time" in the fragment's import list.
+func needsTimeImport(s *lib.TypedSchema) bool {
+	for _, f := range s.Fields {
+		if f.GoType == "time.Time" || f.GoType == "*time.Time" {
+			return true
+		}
+	}
+	return false
 }
 
 // generateFromMultiCSVCode generates Go code for multi-file CSV reading.

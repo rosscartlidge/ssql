@@ -242,10 +242,17 @@ func generateWhereCode(ctx *cf.Context) error {
 
 	// Get input variable name from last fragment
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
+	}
+
+	// Typed-mode branch — emits typed.Where with direct field access.
+	if typedMode() {
+		return generateWhereCodeTyped(ctx.Clauses, inputVar, prevSchema)
 	}
 
 	// Generate filter code from clauses
@@ -267,6 +274,174 @@ func generateWhereCode(ctx *cf.Context) error {
 
 	// Write to stdout
 	return lib.WriteCodeFragment(frag)
+}
+
+// generateWhereCodeTyped emits a typed.Where call against the input
+// schema. Tier-1 supports -if FIELD OP VALUE only. -if-expr is Tier 3
+// (would require expr-lang -> Go translation) and produces an error
+// fragment.
+func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.TypedSchema) error {
+	if schema == nil {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: 'where' must follow a typed-mode source (e.g. 'from FILE.csv') so the input schema is known"))
+	}
+
+	// Index fields by lowercased CSV name for case-insensitive lookup.
+	byName := make(map[string]lib.TypedSchemaField, len(schema.Fields))
+	for _, f := range schema.Fields {
+		byName[strings.ToLower(f.Name)] = f
+	}
+
+	var clauseConds []string
+	for _, clause := range clauses {
+		// -if-expr is not supported in typed mode (Tier 3).
+		if exprs, ok := clause.Flags["-if-expr"]; ok && exprs != nil {
+			if list, ok := exprs.([]any); ok && len(list) > 0 {
+				return lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: 'where -if-expr' not supported in typed mode (Tier 3); use 'where -if FIELD OP VALUE' or drop -typed"))
+			}
+		}
+
+		matchesRaw, ok := clause.Flags["-if"]
+		if !ok || matchesRaw == nil {
+			continue
+		}
+		matches, _ := matchesRaw.([]any)
+		var ands []string
+		for _, mr := range matches {
+			m, _ := mr.(map[string]any)
+			field, _ := m["field"].(string)
+			op, _ := m["operator"].(string)
+			value, _ := m["value"].(string)
+			if field == "" || op == "" {
+				continue
+			}
+			f, ok := byName[strings.ToLower(field)]
+			if !ok {
+				return lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: 'where' references unknown field %q (schema has %s)", field, fieldNamesList(schema)))
+			}
+			cond, err := typedWhereCondition(f, op, value)
+			if err != nil {
+				return lib.WriteErrorAndExit(getCommandString(), err)
+			}
+			ands = append(ands, cond)
+		}
+		if len(ands) > 0 {
+			if len(ands) == 1 {
+				clauseConds = append(clauseConds, ands[0])
+			} else {
+				clauseConds = append(clauseConds, "("+strings.Join(ands, " && ")+")")
+			}
+		}
+	}
+
+	var body string
+	switch len(clauseConds) {
+	case 0:
+		body = "return true"
+	case 1:
+		body = "return " + clauseConds[0]
+	default:
+		body = "return " + strings.Join(clauseConds, " || ")
+	}
+
+	outputVar := "filtered"
+	code := fmt.Sprintf("%s := typed.Where(func(r %s) bool {\n\t\t%s\n\t})(%s)",
+		outputVar, schema.TypeName, body, inputVar)
+
+	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	if schemaUsesTime(schema) {
+		imports = append(imports, "time")
+	}
+
+	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
+	// Where doesn't change the row type — pass the schema through.
+	frag.InputTypedSchema = schema
+	frag.OutputTypedSchema = schema
+	return lib.WriteCodeFragment(frag)
+}
+
+// typedWhereCondition emits a single typed condition like `r.Age > 30`
+// or `r.Status == "active"`, choosing literal formatting based on the
+// field's Go type. Returns an error if op is unknown.
+func typedWhereCondition(f lib.TypedSchemaField, op, value string) (string, error) {
+	field := "r." + f.GoName
+	switch op {
+	case "eq", "ne", "lt", "le", "gt", "ge":
+		opSym := map[string]string{"eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}[op]
+		lit, err := typedLiteral(f.GoType, value)
+		if err != nil {
+			return "", fmt.Errorf("ssql generate go -typed: where %s %s %q: %w", f.Name, op, value, err)
+		}
+		return fmt.Sprintf("%s %s %s", field, opSym, lit), nil
+	case "contains":
+		if f.GoType != "string" {
+			return "", fmt.Errorf("ssql generate go -typed: 'contains' requires a string field, got %s for %s", f.GoType, f.Name)
+		}
+		return fmt.Sprintf("strings.Contains(%s, %q)", field, value), nil
+	case "startswith":
+		if f.GoType != "string" {
+			return "", fmt.Errorf("ssql generate go -typed: 'startswith' requires a string field, got %s for %s", f.GoType, f.Name)
+		}
+		return fmt.Sprintf("strings.HasPrefix(%s, %q)", field, value), nil
+	case "endswith":
+		if f.GoType != "string" {
+			return "", fmt.Errorf("ssql generate go -typed: 'endswith' requires a string field, got %s for %s", f.GoType, f.Name)
+		}
+		return fmt.Sprintf("strings.HasSuffix(%s, %q)", field, value), nil
+	default:
+		return "", fmt.Errorf("ssql generate go -typed: where operator %q not supported in typed mode (Tier 3); use eq/ne/lt/le/gt/ge/contains/startswith/endswith", op)
+	}
+}
+
+// typedLiteral formats value as a Go literal of the given type.
+func typedLiteral(goType, value string) (string, error) {
+	switch goType {
+	case "string":
+		return fmt.Sprintf("%q", value), nil
+	case "bool":
+		if _, err := strconv.ParseBool(value); err != nil {
+			return "", fmt.Errorf("invalid bool literal %q", value)
+		}
+		return value, nil
+	case "int", "int32", "int64", "uint64":
+		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+			return "", fmt.Errorf("invalid int literal %q", value)
+		}
+		return value, nil
+	case "float32", "float64":
+		if _, err := strconv.ParseFloat(value, 64); err != nil {
+			return "", fmt.Errorf("invalid float literal %q", value)
+		}
+		return value, nil
+	case "time.Time":
+		// Compare against a parsed RFC3339 literal.
+		if _, err := strconv.Unquote(`"` + value + `"`); err != nil {
+			// strconv.Unquote validation; just pass value through if it round-trips
+			_ = err
+		}
+		return fmt.Sprintf("func() time.Time { t, _ := time.Parse(time.RFC3339, %q); return t }()", value), nil
+	default:
+		return "", fmt.Errorf("typed where: unsupported field type %s", goType)
+	}
+}
+
+func fieldNamesList(s *lib.TypedSchema) string {
+	names := make([]string, len(s.Fields))
+	for i, f := range s.Fields {
+		names[i] = f.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+func schemaUsesTime(s *lib.TypedSchema) bool {
+	for _, f := range s.Fields {
+		if f.GoType == "time.Time" || f.GoType == "*time.Time" {
+			return true
+		}
+	}
+	return false
 }
 
 // generateWhereCodeFromClauses generates the filter function code

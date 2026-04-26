@@ -80,8 +80,10 @@ func generateToCSVCode(filename string) error {
 	}
 
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
 	}
@@ -89,6 +91,32 @@ func generateToCSVCode(filename string) error {
 	var code string
 	var imports []string
 	var params []lib.CodeParam
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'to csv' has no typed input; %s does not yet support typed mode (Tier 2 or Tier 3) — drop -typed or refactor the pipeline", lastNamedCommand(fragments)))
+		}
+		if filename == "" {
+			code = fmt.Sprintf(`if err := typed.WriteCSVToWriter(%s, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar)
+			imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
+		} else {
+			params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output CSV file", VarName: "flagOutput"})
+			code = fmt.Sprintf(`if err := typed.WriteCSV(%s, *flagOutput); err != nil {
+		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar)
+			imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
+		}
+		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+		frag.Params = params
+		frag.InputTypedSchema = prevSchema
+		return lib.WriteCodeFragment(frag)
+	}
+
 	if filename == "" {
 		code = fmt.Sprintf(`ssql.WriteCSVToWriter(%s, os.Stdout)`, inputVar)
 		imports = append(imports, "os")
