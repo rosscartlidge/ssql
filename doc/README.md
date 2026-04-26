@@ -11,7 +11,8 @@ See also: **[Research & design docs →](research/README.md)**
 ## Reference
 
 - [API Reference](api-reference.md) — complete Go library documentation
-- [Typed Reference](typed-reference.md) — `ssql/typed` high-performance struct-based API (5–14× faster than Record)
+- [Typed Codelab](typed-codelab.md) — hands-on tutorial for the `ssql/typed` package
+- [Typed Reference](typed-reference.md) — `ssql/typed` high-performance struct-based API (15× faster, 34× less memory than Record)
 - [Expression Language](EXPRESSIONS.md) — expression syntax for `-if-expr` and `-set-expr`
 - [Debugging Pipelines](cli-debugging.md) — debug with jq, inspect data, profile performance
 - [Troubleshooting](cli-troubleshooting.md) — common issues and quick solutions
