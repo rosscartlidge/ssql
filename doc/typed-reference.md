@@ -34,10 +34,42 @@ exploratory work and dynamic-schema cases; `ssql/typed` for the inner loop.
 |---|---:|---:|---:|
 | `ssql.Record` | 74.8 s | 37.7 GB | 544 M |
 | **`ssql/typed`** | **4.94 s** | **1.10 GB** | **20.0 M** |
-| **Speedup** | **15.1×** | **34.2× less** | **27.2× fewer** |
+| **vs Record** | **15.1×** | **34.2× less** | **27.2× fewer** |
 
-Both pipelines produce 7.25 M output rows (correctness validated).
+All three pipelines produce 7.25 M output rows (correctness validated).
 A 75-second batch job becomes 5 seconds; 38 GB of allocations becomes 1 GB.
+
+### How does this compare to DuckDB?
+
+For context, the same workload run via the DuckDB CLI on the same files:
+
+| Implementation | Time | Notes |
+|---|---:|---|
+| `ssql.Record` | 74.8 s | row-based, `map[string]any` |
+| **`ssql/typed`** | **4.94 s** | row-based, struct fields, pure Go |
+| DuckDB CLI v1.5.0 | 0.42 s | columnar + SIMD, native C++, ~50 MB binary |
+
+DuckDB is ~12× faster than `ssql/typed`. Most of that gap comes from
+**columnar storage with vectorized SIMD execution** — fundamental
+architectural advantages that no row-based runtime can match without
+rewriting around Apache Arrow or similar.
+
+Where `ssql/typed` competes:
+
+- **Zero native dependency** — pure Go, no CGO, no shared library, no
+  `~/.local/bin/duckdb` install step. Drops into any Go program with
+  `go get`.
+- **~5 KB of source on the data path** — `typed/io.go` + `typed/ops.go`
+  + `typed/agg.go` total 600 LOC. Trivially auditable.
+- **Streaming, not materializing** — pipelines are `iter.Seq[T]` all the
+  way down. DuckDB materializes intermediate join results.
+- **Composes with the rest of Go** — joining streamed data against a
+  `chan T` or a custom reader is one line. DuckDB requires bridging
+  through SQL or a connection.
+
+For pure throughput on static datasets, DuckDB wins. For embedded
+Go pipelines that need a typed, streaming, dependency-free fast path,
+`ssql/typed` is the right tool.
 
 ### Smaller workload: 1M rows × 1 join
 
@@ -64,6 +96,9 @@ go test -bench=. -benchtime=3x -run=^$ ./typed/...
 
 # Headline benches (~2 minutes, 10M × 3-join workload — generates 600 MB CSV)
 go test -bench=Scale -benchtime=1x -run=^$ -timeout=30m ./typed/...
+
+# DuckDB baseline (requires duckdb on PATH, reuses the dataset)
+go test -bench=DuckDB -benchtime=1x -run=^$ -timeout=10m ./typed/...
 ```
 
 Hardware: Intel Core Ultra 9 275HX, single-threaded.
