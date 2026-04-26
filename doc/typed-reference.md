@@ -392,13 +392,19 @@ go run pipeline.go -input emp_q4.csv
 
 Reproduce: `go test ./cmd/ssql/ -run TestCodegenBench -timeout 10m -v`.
 
-Phase 2 — Tier 2 (planned):
-- [ ] `group-by FIELDS … -count -sum -avg` (typed `GroupBy` with multi-aggregator)
-- [ ] `include` / `exclude` / `rename` (typed `Select` with derived struct)
-- [ ] `update -set FIELD VALUE` (literal-value sets only)
+Phase 2 — Tier 2 shipped (2026-04-26):
+- [x] `limit N` (typed.Limit), `offset N` (typed.Skip)
+- [x] `include` / `exclude` / `rename` (typed.Select with derived struct)
+- [x] `group-by FIELDS… -count -sum -avg -min -max` (typed.GroupBy with
+      synthesized aggregator + result struct, single- or multi-field keys)
+
+Phase 2 — Tier 3 (deferred):
+- [ ] `update -set FIELD VALUE` (literal-only could be Tier 2 stretch)
 - [ ] Multi-clause joins, `-as` field renames
-- [ ] `sort` / `limit` / `skip` / `distinct`
-- [ ] `union`
+- [ ] `sort` / `distinct` / `union` (need typed-library additions)
+- [ ] `-if-expr` / `-set-expr` / `-expr` aggregations (expression-lang → Go)
+- [ ] `-rollup` / `-cube` / `-collect`
+- [ ] Signal processing (FFT, convolve, etc.)
 
 See [`doc/research/typed-package-proposal.md`](research/typed-package-proposal.md)
 for the full design and Phase 2 vision.

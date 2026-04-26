@@ -83,8 +83,10 @@ func generateLimitCode(n int) error {
 		}
 	}
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
 	}
@@ -92,6 +94,20 @@ func generateLimitCode(n int) error {
 	params := []lib.CodeParam{
 		{Name: "limit", Default: fmt.Sprintf("%d", n), Help: "maximum number of records", VarName: "flagLimit", Type: "int"},
 	}
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'limit' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
+		}
+		code := fmt.Sprintf("%s := typed.Limit[%s](*flagLimit)(%s)", outputVar, prevSchema.TypeName, inputVar)
+		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+		frag.Params = params
+		frag.InputTypedSchema = prevSchema
+		frag.OutputTypedSchema = prevSchema
+		return lib.WriteCodeFragment(frag)
+	}
+
 	code := fmt.Sprintf("%s := ssql.Limit[ssql.Record](*flagLimit)(%s)", outputVar, inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	frag.Params = params

@@ -82,8 +82,10 @@ func generateOffsetCode(n int) error {
 		}
 	}
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
 	}
@@ -91,6 +93,20 @@ func generateOffsetCode(n int) error {
 	params := []lib.CodeParam{
 		{Name: "offset", Default: fmt.Sprintf("%d", n), Help: "number of records to skip", VarName: "flagOffset", Type: "int"},
 	}
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'offset' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
+		}
+		code := fmt.Sprintf("%s := typed.Skip[%s](*flagOffset)(%s)", outputVar, prevSchema.TypeName, inputVar)
+		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+		frag.Params = params
+		frag.InputTypedSchema = prevSchema
+		frag.OutputTypedSchema = prevSchema
+		return lib.WriteCodeFragment(frag)
+	}
+
 	code := fmt.Sprintf("%s := ssql.Offset[ssql.Record](*flagOffset)(%s)", outputVar, inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	frag.Params = params

@@ -152,8 +152,15 @@ func TypeNameFromFilename(filename string) string {
 	return name
 }
 
-// goNameFromColumn turns a CSV column name into an exported Go field
+// GoNameFromColumn turns a CSV column name into an exported Go field
 // name: "dept_id" → "DeptID", "first name" → "FirstName".
+//
+// Exported for use by command-side code generators that need to derive
+// a Go field name from a CSV-style identifier (e.g. when emitting a
+// rename projection's new field name).
+func GoNameFromColumn(col string) string { return goNameFromColumn(col) }
+
+// goNameFromColumn is the implementation; see GoNameFromColumn.
 func goNameFromColumn(col string) string {
 	if col == "" {
 		return "Col"

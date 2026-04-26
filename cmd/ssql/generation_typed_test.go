@@ -178,8 +178,10 @@ func TestTypedUnsupportedCommandErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := buildSSQLForTypedTest(t)
+	// 'update' is still Tier 2 / Tier 3 in typed-mode, so this
+	// pipeline should error out.
 	cmd := exec.Command("bash", "-c",
-		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" group-by name -count n | "+bin+" to csv | "+bin+" generate go")
+		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" update -set tier gold | "+bin+" to csv | "+bin+" generate go")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected typed pipeline to fail, got output:\n%s", out)
@@ -187,8 +189,162 @@ func TestTypedUnsupportedCommandErrors(t *testing.T) {
 	if !strings.Contains(string(out), "does not yet support typed mode") {
 		t.Errorf("error message should mention typed-mode unsupported, got:\n%s", out)
 	}
-	if !strings.Contains(string(out), "group-by") {
+	if !strings.Contains(string(out), "update") {
 		t.Errorf("error should name the offending command, got:\n%s", out)
+	}
+}
+
+func TestTypedLimitSkip(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name,age\n1,Alice,30\n2,Bob,25\n3,Carol,42\n4,Dave,28\n5,Eve,35\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" offset 1 | "+bin+" limit 2 | "+bin+" to csv")
+
+	for _, want := range []string{
+		"typed.Skip[PeopleRow](*flagOffset)",
+		"typed.Limit[PeopleRow](*flagLimit)",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("missing %q\nsource:\n%s", want, src)
+		}
+	}
+
+	out := goRunGenerated(t, src)
+	// Bob and Carol (offset 1, limit 2) should appear.
+	for _, want := range []string{"Bob", "Carol"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output, got:\n%s", want, out)
+		}
+	}
+	for _, dontWant := range []string{"Alice", "Dave", "Eve"} {
+		if strings.Contains(out, dontWant) {
+			t.Errorf("did not expect %q in output, got:\n%s", dontWant, out)
+		}
+	}
+}
+
+func TestTypedIncludeProjection(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name,dept_id,age\n1,Alice,D01,30\n2,Bob,D02,25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" include name age | "+bin+" to csv")
+
+	if !strings.Contains(src, "PeopleRowSubset") {
+		t.Errorf("expected projected struct PeopleRowSubset in source\n%s", src)
+	}
+	if !strings.Contains(src, "typed.Select(") {
+		t.Errorf("expected typed.Select call\n%s", src)
+	}
+
+	out := goRunGenerated(t, src)
+	// First line is the header; ssql tags use the original CSV column
+	// names (lowercase), so we expect "name,age".
+	firstLine := strings.SplitN(out, "\n", 2)[0]
+	if firstLine != "name,age" {
+		t.Errorf("expected header 'name,age', got %q", firstLine)
+	}
+	// Body should not mention dept_id values.
+	if strings.Contains(out, "D01") || strings.Contains(out, "D02") {
+		t.Errorf("excluded fields leaked into output:\n%s", out)
+	}
+}
+
+func TestTypedExcludeProjection(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name,dept_id,age\n1,Alice,D01,30\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" exclude id dept_id | "+bin+" to csv")
+	out := goRunGenerated(t, src)
+	if !strings.Contains(out, "name,age") {
+		t.Errorf("expected header 'name,age' after exclude, got:\n%s", out)
+	}
+	if strings.Contains(out, "D01") {
+		t.Errorf("excluded dept_id leaked:\n%s", out)
+	}
+}
+
+func TestTypedRenameProjection(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name,age\n1,Alice,30\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" rename -as name full_name -as age years | "+bin+" to csv")
+	out := goRunGenerated(t, src)
+	if !strings.Contains(out, "id,full_name,years") {
+		t.Errorf("expected renamed header 'id,full_name,years', got:\n%s", out)
+	}
+	if !strings.Contains(out, "Alice") {
+		t.Errorf("data should still flow through rename, got:\n%s", out)
+	}
+}
+
+func TestTypedGroupByCountAvg(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "employees.csv")
+	if err := os.WriteFile(emp, []byte("id,name,dept_id,salary\n1,Alice,D01,100000\n2,Bob,D02,80000\n3,Carol,D01,120000\n4,Dave,D02,60000\n5,Eve,D01,80000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" group-by dept_id -count headcount -avg salary avg_salary | "+bin+" to csv")
+
+	for _, want := range []string{
+		"typed.GroupBy(",
+		"EmployeesRowAggregator",
+		"EmployeesRowAggregatorResult",
+		"EmployeesRowGroup",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("missing %q\n%s", want, src)
+		}
+	}
+
+	out := goRunGenerated(t, src)
+	// D01: 3 employees at 100/120/80 = avg 100000
+	// D02: 2 employees at 80/60 = avg 70000
+	// Output is unordered (map iteration), so check substrings.
+	if !strings.Contains(out, "D01,3,100000") {
+		t.Errorf("expected D01,3,100000 row\n%s", out)
+	}
+	if !strings.Contains(out, "D02,2,70000") {
+		t.Errorf("expected D02,2,70000 row\n%s", out)
+	}
+}
+
+func TestTypedGroupByMultipleKeys(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "sales.csv")
+	if err := os.WriteFile(emp, []byte("region,product,amount\nN,A,100\nN,B,200\nN,A,150\nS,A,300\nS,B,400\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" group-by region product -sum amount total | "+bin+" to csv")
+
+	if !strings.Contains(src, "SalesRowGroupKey") {
+		t.Errorf("expected composite key struct SalesRowGroupKey\n%s", src)
+	}
+
+	out := goRunGenerated(t, src)
+	for _, want := range []string{"N,A,250", "N,B,200", "S,A,300", "S,B,400"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output, got:\n%s", want, out)
+		}
 	}
 }
 

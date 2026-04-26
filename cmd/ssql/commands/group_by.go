@@ -587,8 +587,10 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 
 	// Get input variable from last fragment
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
 	}
@@ -773,6 +775,35 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	}
 	if presorted && (rollup || cube) {
 		return fmt.Errorf("-presorted cannot be combined with -rollup or -cube")
+	}
+
+	// Typed-mode branch — emits typed.GroupBy with a synthesized
+	// aggregator and a derived result struct. Tier 2 limits: no -expr /
+	// -stream-expr (Tier 3), no -rollup / -cube, no -collect (deferred).
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'group-by' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
+		}
+		if len(exprSpecs) > 0 || len(streamExprSpecs) > 0 {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: -expr / -stream-expr aggregations are Tier 3 (need expression-language → Go translation); drop -typed"))
+		}
+		if rollup || cube {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: -rollup / -cube not yet supported in typed mode; drop -typed"))
+		}
+		if len(aggSpecs) == 0 {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'group-by' without aggregations is Tier 3 (would need typed.Distinct); add -count NAME or similar"))
+		}
+		for _, s := range aggSpecs {
+			if s.function == "collect" {
+				return lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: -collect not yet supported (would need slice-typed result fields); drop -typed for now"))
+			}
+		}
+		return emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, presorted)
 	}
 
 	// Rollup/cube code generation path

@@ -125,10 +125,25 @@ func generateRenameCode(renames []struct{ oldField, newField string }) error {
 
 	// Get input variable from last fragment
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
+	}
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'rename' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
+		}
+		// Convert to map old -> new for emitTypedProjection.
+		renameMap := make(map[string]string, len(renames))
+		for _, r := range renames {
+			renameMap[r.oldField] = r.newField
+		}
+		return emitTypedProjection("rename", "Renamed", inputVar, prevSchema, nil, false, renameMap)
 	}
 
 	// Generate rename statements
