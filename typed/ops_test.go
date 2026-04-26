@@ -147,6 +147,111 @@ func TestHashJoinEmptyRight(t *testing.T) {
 	}
 }
 
+func TestHashJoinMulti(t *testing.T) {
+	type T struct{ K, V string }
+	left := []T{{K: "a", V: "L"}, {K: "b", V: "M"}}
+	right := []T{{K: "a", V: "R1"}, {K: "a", V: "R2"}, {K: "b", V: "R3"}}
+	got := slices.Collect(HashJoinMulti(slices.Values(left), slices.Values(right),
+		func(l T) string { return l.K },
+		func(r T) string { return r.K },
+		func(l, r T) string { return l.V + "+" + r.V },
+	))
+	slices.Sort(got)
+	want := []string{"L+R1", "L+R2", "M+R3"}
+	if !slices.Equal(got, want) {
+		t.Errorf("multi join: got %v, want %v", got, want)
+	}
+}
+
+func TestLeftJoin(t *testing.T) {
+	type L struct{ K, V string }
+	type R struct{ K, Extra string }
+	type O struct {
+		V     string
+		Extra string
+		Found bool
+	}
+	left := []L{{K: "a", V: "1"}, {K: "z", V: "9"}}
+	right := []R{{K: "a", Extra: "Apple"}}
+	got := slices.Collect(LeftJoin(slices.Values(left), slices.Values(right),
+		func(l L) string { return l.K },
+		func(r R) string { return r.K },
+		func(l L, r R, found bool) O { return O{V: l.V, Extra: r.Extra, Found: found} },
+	))
+	want := []O{
+		{V: "1", Extra: "Apple", Found: true},
+		{V: "9", Extra: "", Found: false},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("left join: got %#v, want %#v", got, want)
+	}
+}
+
+func TestRightJoin(t *testing.T) {
+	type T struct{ K, V string }
+	left := []T{{K: "a", V: "L"}}
+	right := []T{{K: "a", V: "R"}, {K: "z", V: "Zonly"}}
+	type O struct {
+		L, R  string
+		Found bool
+	}
+	got := slices.Collect(RightJoin(slices.Values(left), slices.Values(right),
+		func(l T) string { return l.K },
+		func(r T) string { return r.K },
+		func(l, r T, found bool) O { return O{L: l.V, R: r.V, Found: found} },
+	))
+	want := []O{
+		{L: "L", R: "R", Found: true},
+		{L: "", R: "Zonly", Found: false},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("right join: got %#v, want %#v", got, want)
+	}
+}
+
+func TestFullJoin(t *testing.T) {
+	type T struct{ K, V string }
+	left := []T{{K: "a", V: "L1"}, {K: "b", V: "L2"}}
+	right := []T{{K: "a", V: "R1"}, {K: "c", V: "R3"}}
+	type O struct {
+		L, R       string
+		LFound     bool
+		RFound     bool
+	}
+	got := slices.Collect(FullJoin(slices.Values(left), slices.Values(right),
+		func(l T) string { return l.K },
+		func(r T) string { return r.K },
+		func(l, r T, lf, rf bool) O { return O{L: l.V, R: r.V, LFound: lf, RFound: rf} },
+	))
+	// Ordering: matched + left-only in left order, then right-only in
+	// (non-deterministic) map order. Sort for stable comparison.
+	cmpO := func(a, b O) int {
+		if a.L != b.L {
+			if a.L < b.L {
+				return -1
+			}
+			return 1
+		}
+		if a.R < b.R {
+			return -1
+		}
+		if a.R > b.R {
+			return 1
+		}
+		return 0
+	}
+	slices.SortFunc(got, cmpO)
+	want := []O{
+		{L: "", R: "R3", LFound: false, RFound: true},
+		{L: "L1", R: "R1", LFound: true, RFound: true},
+		{L: "L2", R: "", LFound: true, RFound: false},
+	}
+	slices.SortFunc(want, cmpO)
+	if !slices.Equal(got, want) {
+		t.Errorf("full join: got %#v, want %#v", got, want)
+	}
+}
+
 func TestComposition(t *testing.T) {
 	// Where -> Limit -> Skip composition.
 	in := slices.Values([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})

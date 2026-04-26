@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 type person struct {
@@ -190,6 +191,138 @@ func TestWriteThenReadRoundTrip(t *testing.T) {
 	out := slices.Collect(ReadCSV[person](path))
 	if !slices.Equal(in, out) {
 		t.Errorf("write/read round-trip mismatch:\n  in:  %#v\n  out: %#v", in, out)
+	}
+}
+
+type wideTypes struct {
+	I32  int32
+	U64  uint64
+	F32  float32
+	When time.Time `ssql:"when"`
+}
+
+func TestReadCSVWideTypes(t *testing.T) {
+	src := "I32,U64,F32,when\n42,18000000000000000000,3.14,2026-04-26T10:00:00Z\n"
+	got := slices.Collect(ReadCSVFromReader[wideTypes](strings.NewReader(src)))
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(got))
+	}
+	if got[0].I32 != 42 {
+		t.Errorf("int32: got %d, want 42", got[0].I32)
+	}
+	if got[0].U64 != 18000000000000000000 {
+		t.Errorf("uint64: got %d", got[0].U64)
+	}
+	if got[0].F32 < 3.13 || got[0].F32 > 3.15 {
+		t.Errorf("float32: got %v, want ~3.14", got[0].F32)
+	}
+	want := time.Date(2026, 4, 26, 10, 0, 0, 0, time.UTC)
+	if !got[0].When.Equal(want) {
+		t.Errorf("time: got %v, want %v", got[0].When, want)
+	}
+}
+
+func TestWriteCSVWideTypes(t *testing.T) {
+	row := wideTypes{
+		I32:  42,
+		U64:  18000000000000000000,
+		F32:  3.14,
+		When: time.Date(2026, 4, 26, 10, 0, 0, 0, time.UTC),
+	}
+	var buf bytes.Buffer
+	if err := WriteCSVToWriter(slices.Values([]wideTypes{row}), &buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "42") || !strings.Contains(out, "18000000000000000000") {
+		t.Errorf("missing wide-int values: %q", out)
+	}
+	if !strings.Contains(out, "2026-04-26T10:00:00Z") {
+		t.Errorf("missing time: %q", out)
+	}
+}
+
+func TestWriteCSVZeroTimeRendersEmpty(t *testing.T) {
+	row := wideTypes{I32: 1}
+	var buf bytes.Buffer
+	if err := WriteCSVToWriter(slices.Values([]wideTypes{row}), &buf); err != nil {
+		t.Fatal(err)
+	}
+	// Header line + one data line; the time column should be empty (",,")
+	// rather than rendered as "0001-01-01T00:00:00Z".
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d", len(lines))
+	}
+	cols := strings.Split(lines[1], ",")
+	if cols[3] != "" {
+		t.Errorf("zero time should render as empty string, got %q", cols[3])
+	}
+}
+
+type nullable struct {
+	Name *string
+	Age  *int64
+}
+
+func TestReadCSVNullable(t *testing.T) {
+	src := "Name,Age\nAlice,30\n,\nBob,\n"
+	got := slices.Collect(ReadCSVFromReader[nullable](strings.NewReader(src)))
+	if len(got) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(got))
+	}
+	if got[0].Name == nil || *got[0].Name != "Alice" {
+		t.Errorf("row 0 name: %v", got[0].Name)
+	}
+	if got[0].Age == nil || *got[0].Age != 30 {
+		t.Errorf("row 0 age: %v", got[0].Age)
+	}
+	if got[1].Name != nil || got[1].Age != nil {
+		t.Errorf("row 1 should be all-null, got %#v", got[1])
+	}
+	if got[2].Name == nil || *got[2].Name != "Bob" || got[2].Age != nil {
+		t.Errorf("row 2: name=%v age=%v", got[2].Name, got[2].Age)
+	}
+}
+
+func TestWriteCSVNullable(t *testing.T) {
+	name := "Alice"
+	age := int64(30)
+	rows := []nullable{
+		{Name: &name, Age: &age},
+		{Name: nil, Age: nil},
+		{Name: &name, Age: nil},
+	}
+	var buf bytes.Buffer
+	if err := WriteCSVToWriter(slices.Values(rows), &buf); err != nil {
+		t.Fatal(err)
+	}
+	want := "Name,Age\nAlice,30\n,\nAlice,\n"
+	if buf.String() != want {
+		t.Errorf("nullable write:\n  got:  %q\n  want: %q", buf.String(), want)
+	}
+}
+
+func TestNullableRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "n.csv")
+	name := "Alice"
+	in := []nullable{
+		{Name: &name, Age: nil},
+		{Name: nil, Age: nil},
+	}
+	if err := WriteCSV(slices.Values(in), path); err != nil {
+		t.Fatal(err)
+	}
+	out := slices.Collect(ReadCSV[nullable](path))
+	if len(out) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(out))
+	}
+	if out[0].Name == nil || *out[0].Name != "Alice" || out[0].Age != nil {
+		t.Errorf("row 0: %#v", out[0])
+	}
+	if out[1].Name != nil || out[1].Age != nil {
+		t.Errorf("row 1: %#v", out[1])
 	}
 }
 

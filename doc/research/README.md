@@ -28,6 +28,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Process Substitution Codegen](process-substitution-codegen.md) — fragment merging for nested pipelines
 - [Typed Code Generation](typed-code-generation.md) — 35x performance via type specialization
 - [Typed Package Proposal](typed-package-proposal.md) — Phase 1 `ssql/typed` package, validated by PoC (5–23× faster, 9–4000× less memory)
+- [Typed Performance Notes](typed-performance-notes.md) — improvement opportunities observed during Phase 1/1.5 implementation
 
 ## Distributed Processing
 

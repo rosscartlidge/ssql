@@ -4,11 +4,15 @@ The `ssql/typed` package provides a high-performance, struct-based data path
 alongside the main `ssql.Record` API. Use it when your schema is known at
 compile time and the pipeline is hot.
 
-> **Status:** Phase 1 — CSV I/O and core operations (Where, Limit, Skip, Select, HashJoin).
-> JSON/JSONL/Arrow readers, outer joins, aggregation, and `time.Time` /
-> nullable field types are planned for Phase 1.5.
+> **Status:** Phase 1.5 — CSV + JSONL I/O, core operations
+> (Where, Limit, Skip, Select), full join family (Hash, HashMulti,
+> Left, Right, Full), streaming aggregation (GroupBy, GroupByOrdered,
+> standalone Sum/Count/Min/Max/Avg), field types
+> string/bool/int/int32/int64/uint64/float32/float64/time.Time + pointers.
+> Arrow I/O is the next major addition.
 > See [`doc/research/typed-package-proposal.md`](research/typed-package-proposal.md)
-> for the full design.
+> for the design and [`doc/research/typed-performance-notes.md`](research/typed-performance-notes.md)
+> for known optimization opportunities.
 
 ## When to use it
 
@@ -81,15 +85,18 @@ type Employee struct {
 for ecosystem compatibility (e.g. structs already tagged for `encoding/csv`).
 A tag value of `"-"` excludes the field entirely.
 
-## Supported field types (Phase 1)
+## Supported field types
 
-`string`, `bool`, `int`, `int64`, `float64`.
+`string`, `bool`, `int`, `int32`, `int64`, `uint64`, `float32`, `float64`,
+`time.Time` (RFC3339 in CSV), and **pointer-to-T** for nullable columns.
+Empty CSV values become the zero value (or `nil` for pointer types).
 
-Empty CSV values become the type's zero value. Other parse errors silently
-zero the field in `ReadCSV`; use `ReadCSVSafe` to surface them.
+Other parse errors silently zero the field in `ReadCSV`; use `ReadCSVSafe`
+to surface them.
 
-`int32`, `uint64`, `time.Time` (RFC3339), and pointer-to-T (nullable columns)
-are planned for Phase 1.5.
+> **Note on nullables**: pointer-to-T columns allocate one heap value per
+> non-empty cell. For hot paths with many nullables, consider an explicit
+> `Valid bool` field (sql.NullInt64-style) instead.
 
 ## API
 
@@ -152,7 +159,63 @@ Materializes `right` in a `map[K]R` (build phase), then streams `left`
 is dropped. For multi-column joins, pass a tuple type as `K`.
 
 If the right side has duplicate keys, only the last value per key is kept.
-Outer joins (`LeftJoin`, `RightJoin`, `FullJoin`) are planned for Phase 1.5.
+Use `HashJoinMulti` for many-to-many joins, or `LeftJoin` / `RightJoin` /
+`FullJoin` for outer-join semantics with an explicit `found bool` flag.
+
+```go
+func HashJoinMulti[L, R, O any, K comparable](...) iter.Seq[O]
+func LeftJoin[L, R, O any, K comparable](
+    left, right ..., merge func(L, R, found bool) O,
+) iter.Seq[O]
+func RightJoin[L, R, O any, K comparable](...) iter.Seq[O]
+func FullJoin[L, R, O any, K comparable](
+    left, right ..., merge func(L, R, leftFound, rightFound bool) O,
+) iter.Seq[O]
+```
+
+## JSONL I/O
+
+For newline-delimited JSON (`one object per line`), use the JSONL pair:
+
+```go
+func ReadJSONL[T any](filename string) iter.Seq[T]
+func ReadJSONLSafe[T any](filename string) iter.Seq2[T, error]
+func WriteJSONL[T any](seq iter.Seq[T], filename string) error
+```
+
+Field mapping follows standard `json:"name"` struct tags. Implementation
+uses `encoding/json` (reflection per row); for high-throughput JSONL
+pipelines see [`doc/research/typed-performance-notes.md`](research/typed-performance-notes.md).
+
+## Aggregation
+
+```go
+func Count[T any](seq iter.Seq[T]) int64
+func Sum[T any, N Number](seq iter.Seq[T], fn func(T) N) N
+func Min[T any, N Ordered](seq iter.Seq[T], fn func(T) N) (N, bool)
+func Max[T any, N Ordered](seq iter.Seq[T], fn func(T) N) (N, bool)
+func Avg[T any, N Number](seq iter.Seq[T], fn func(T) N) (float64, int64)
+```
+
+Standalone aggregates over an entire stream. For per-group results:
+
+```go
+func GroupBy[T, S, O any, K comparable](
+    seq iter.Seq[T],
+    keyFn func(T) K,
+    newAgg AggFunc[T, S],   // fresh accumulator per group
+    build func(K, S) O,     // build output row from key + final state
+) iter.Seq[O]
+
+func GroupByOrdered[T, S, O any, K comparable](...)  // O(1) memory; pre-sorted input
+```
+
+Prebuilt aggregators: `Counter[T]`, `NewSummer(fn)`, `NewAverager(fn)`.
+Custom accumulators implement the `Aggregator[T, R]` interface.
+
+Use `GroupBy` for unordered input (buffers all groups in a map). Use
+`GroupByOrdered` when the input is pre-sorted by key — it streams in
+constant memory.
 
 ## Worked example
 
@@ -241,18 +304,24 @@ reflection at all.
 
 ## Roadmap
 
-Phase 1 (this release):
+Phase 1 (shipped):
 - [x] CSV I/O with header inference
 - [x] `Where`, `Limit`, `Skip`, `Select`
 - [x] `HashJoin` (inner)
 - [x] Benchmarks demonstrating the gap
 
-Phase 1.5 (planned):
-- [ ] `time.Time` (RFC3339), `int32`, `uint64`
-- [ ] Pointer-to-T for nullable columns
-- [ ] Outer joins (`LeftJoin`, `RightJoin`, `FullJoin`)
-- [ ] JSONL reader/writer
-- [ ] Streaming aggregation primitives (`Sum`, `Count`, `GroupBy`)
+Phase 1.5 (shipped):
+- [x] `time.Time` (RFC3339), `int32`, `uint64`, `float32`
+- [x] Pointer-to-T for nullable columns
+- [x] Full join family: `HashJoinMulti`, `LeftJoin`, `RightJoin`, `FullJoin`
+- [x] JSONL reader/writer (`ReadJSONL`, `ReadJSONLSafe`, `WriteJSONL`)
+- [x] Streaming aggregation: `Count`, `Sum`, `Min`, `Max`, `Avg`,
+      `GroupBy`, `GroupByOrdered`, `Counter`, `Summer`, `Averager`
+
+Phase 1.6 (planned):
+- [ ] Arrow reader/writer (`ReadArrow[T]`, `WriteArrow[T]`)
+- [ ] `HashJoinSized` with capacity hint for known right-side size
+- [ ] Strict-mode CSV reader (errors on unknown / missing columns)
 
 Phase 2 (the moonshot):
 - [ ] `ssql generate go -typed` — schema-aware code generation that emits

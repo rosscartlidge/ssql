@@ -76,6 +76,10 @@ func Select[T, U any](fn func(T) U) func(iter.Seq[T]) iter.Seq[U] {
 // matching left. Right is materialized in memory (build phase); left
 // streams (probe phase). Same shape as ssql.InnerJoin but type-safe.
 //
+// Inner-join semantics: a left row with no matching right row is dropped.
+// If multiple right rows share a key, only the last is kept — use
+// [HashJoinMulti] when you need many-to-many.
+//
 // For multi-column joins, use a tuple type (e.g. struct or array) as K
 // and have the key functions return the composite key.
 func HashJoin[L, R, O any, K comparable](
@@ -95,6 +99,142 @@ func HashJoin[L, R, O any, K comparable](
 				if !yield(merge(l, r)) {
 					return
 				}
+			}
+		}
+	}
+}
+
+// HashJoinMulti is the many-to-many variant of [HashJoin]: every left
+// row with N matches in the right side produces N output rows. Right
+// values are stored in a map[K][]R, so memory cost scales with the
+// total right-side size rather than the number of unique keys.
+func HashJoinMulti[L, R, O any, K comparable](
+	left iter.Seq[L],
+	right iter.Seq[R],
+	leftKey func(L) K,
+	rightKey func(R) K,
+	merge func(L, R) O,
+) iter.Seq[O] {
+	idx := make(map[K][]R)
+	for r := range right {
+		k := rightKey(r)
+		idx[k] = append(idx[k], r)
+	}
+	return func(yield func(O) bool) {
+		for l := range left {
+			for _, r := range idx[leftKey(l)] {
+				if !yield(merge(l, r)) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// LeftJoin keeps every left row. Left rows with no matching right row
+// are emitted with the right side absent — the caller's merge function
+// receives a zero R and a found=false flag so it can populate the
+// output with nulls / defaults / pointer fields as needed.
+//
+// Example:
+//
+//	merge := func(l Order, r Customer, found bool) Joined {
+//	    var name string
+//	    if found {
+//	        name = r.Name
+//	    }
+//	    return Joined{OrderID: l.ID, CustomerName: name}
+//	}
+func LeftJoin[L, R, O any, K comparable](
+	left iter.Seq[L],
+	right iter.Seq[R],
+	leftKey func(L) K,
+	rightKey func(R) K,
+	merge func(l L, r R, found bool) O,
+) iter.Seq[O] {
+	idx := make(map[K]R)
+	for r := range right {
+		idx[rightKey(r)] = r
+	}
+	return func(yield func(O) bool) {
+		for l := range left {
+			r, ok := idx[leftKey(l)]
+			if !yield(merge(l, r, ok)) {
+				return
+			}
+		}
+	}
+}
+
+// RightJoin is the symmetric mirror of [LeftJoin]: every right row is
+// emitted, with left rows attached when their keys match.
+//
+// Implementation note: the left side is fully materialized into a map
+// keyed by leftKey, then the right side streams. If you actually want
+// one row per left input, with right when matched, use [LeftJoin] —
+// it's cheaper because the typically-larger left side stays streaming.
+func RightJoin[L, R, O any, K comparable](
+	left iter.Seq[L],
+	right iter.Seq[R],
+	leftKey func(L) K,
+	rightKey func(R) K,
+	merge func(l L, r R, found bool) O,
+) iter.Seq[O] {
+	idx := make(map[K]L)
+	for l := range left {
+		idx[leftKey(l)] = l
+	}
+	return func(yield func(O) bool) {
+		for r := range right {
+			l, ok := idx[rightKey(r)]
+			if !yield(merge(l, r, ok)) {
+				return
+			}
+		}
+	}
+}
+
+// FullJoin emits every left row (matched or not) followed by every
+// unmatched right row. Both sides are materialized.
+//
+// merge receives (l, r, leftFound, rightFound). For left-only rows:
+// leftFound=true, rightFound=false (r is zero). For right-only rows:
+// leftFound=false, rightFound=true (l is zero). For matched rows: both
+// true. (false/false never occurs.)
+func FullJoin[L, R, O any, K comparable](
+	left iter.Seq[L],
+	right iter.Seq[R],
+	leftKey func(L) K,
+	rightKey func(R) K,
+	merge func(l L, r R, leftFound, rightFound bool) O,
+) iter.Seq[O] {
+	rightIdx := make(map[K]R)
+	for r := range right {
+		rightIdx[rightKey(r)] = r
+	}
+	return func(yield func(O) bool) {
+		seen := make(map[K]struct{}, len(rightIdx))
+		var zeroL L
+		var zeroR R
+		for l := range left {
+			k := leftKey(l)
+			if r, ok := rightIdx[k]; ok {
+				seen[k] = struct{}{}
+				if !yield(merge(l, r, true, true)) {
+					return
+				}
+			} else {
+				if !yield(merge(l, zeroR, true, false)) {
+					return
+				}
+			}
+		}
+		for k, r := range rightIdx {
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			if !yield(merge(zeroL, r, false, true)) {
+				return
 			}
 		}
 	}

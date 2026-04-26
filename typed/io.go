@@ -10,8 +10,12 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 )
+
+// timeType is cached so decoderFor doesn't allocate a reflect.Type per call.
+var timeType = reflect.TypeOf(time.Time{})
 
 // fieldDecoder writes one CSV column into a struct field at a known offset.
 // The closure has zero reflection at call time.
@@ -128,6 +132,12 @@ func buildWriteSchema[T any]() (*rowSchema, error) {
 func noopDecoder(unsafe.Pointer, string) error { return nil }
 
 func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
+	if t == timeType {
+		return decodeTime(off), nil
+	}
+	if t.Kind() == reflect.Pointer {
+		return decoderForPointer(t, off)
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return func(p unsafe.Pointer, s string) error {
@@ -147,6 +157,19 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 			*(*int64)(unsafe.Add(p, off)) = v
 			return nil
 		}, nil
+	case reflect.Int32:
+		return func(p unsafe.Pointer, s string) error {
+			if s == "" {
+				*(*int32)(unsafe.Add(p, off)) = 0
+				return nil
+			}
+			v, err := strconv.ParseInt(s, 10, 32)
+			if err != nil {
+				return err
+			}
+			*(*int32)(unsafe.Add(p, off)) = int32(v)
+			return nil
+		}, nil
 	case reflect.Int:
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
@@ -160,6 +183,19 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 			*(*int)(unsafe.Add(p, off)) = int(v)
 			return nil
 		}, nil
+	case reflect.Uint64:
+		return func(p unsafe.Pointer, s string) error {
+			if s == "" {
+				*(*uint64)(unsafe.Add(p, off)) = 0
+				return nil
+			}
+			v, err := strconv.ParseUint(s, 10, 64)
+			if err != nil {
+				return err
+			}
+			*(*uint64)(unsafe.Add(p, off)) = v
+			return nil
+		}, nil
 	case reflect.Float64:
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
@@ -171,6 +207,19 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 				return err
 			}
 			*(*float64)(unsafe.Add(p, off)) = v
+			return nil
+		}, nil
+	case reflect.Float32:
+		return func(p unsafe.Pointer, s string) error {
+			if s == "" {
+				*(*float32)(unsafe.Add(p, off)) = 0
+				return nil
+			}
+			v, err := strconv.ParseFloat(s, 32)
+			if err != nil {
+				return err
+			}
+			*(*float32)(unsafe.Add(p, off)) = float32(v)
 			return nil
 		}, nil
 	case reflect.Bool:
@@ -191,7 +240,74 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	}
 }
 
+// decodeTime parses RFC3339 timestamps. Empty value → zero time.
+//
+// Note: time.Parse with a fixed layout is not the absolute fastest path
+// — a hand-rolled RFC3339 parser is ~3x faster — but it handles all
+// edge cases (timezones, fractional seconds) correctly and is the
+// natural choice for a generic library. See PERFORMANCE-NOTES.md for
+// the optimization opportunity.
+func decodeTime(off uintptr) fieldDecoder {
+	return func(p unsafe.Pointer, s string) error {
+		if s == "" {
+			*(*time.Time)(unsafe.Add(p, off)) = time.Time{}
+			return nil
+		}
+		v, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return err
+		}
+		*(*time.Time)(unsafe.Add(p, off)) = v
+		return nil
+	}
+}
+
+// decoderForPointer builds a decoder for *T fields. Empty CSV value
+// becomes a nil pointer; non-empty allocates a fresh T, parses, and
+// points at it.
+//
+// Allocation cost: one heap allocation per non-empty value. Users with
+// hot paths and many nullable fields should prefer separate "Valid bool"
+// fields (sql.NullInt64-style) instead of pointer types.
+func decoderForPointer(t reflect.Type, off uintptr) (fieldDecoder, error) {
+	elem := t.Elem()
+	// Build an inner decoder that writes at offset 0 (relative to the
+	// freshly-allocated element).
+	inner, err := decoderFor(elem, 0)
+	if err != nil {
+		return nil, fmt.Errorf("pointer to %v: %w", elem, err)
+	}
+	// reflect.New produces a *T as reflect.Value. We need its address
+	// stored at the field's offset. Use reflect for the allocation
+	// (control-path), then copy the pointer bits.
+	return func(p unsafe.Pointer, s string) error {
+		if s == "" {
+			// Zero out the pointer field (set to nil).
+			*(*unsafe.Pointer)(unsafe.Add(p, off)) = nil
+			return nil
+		}
+		v := reflect.New(elem)
+		if err := inner(v.UnsafePointer(), s); err != nil {
+			return err
+		}
+		*(*unsafe.Pointer)(unsafe.Add(p, off)) = v.UnsafePointer()
+		return nil
+	}, nil
+}
+
 func encoderFor(t reflect.Type, off uintptr) (fieldEncoder, error) {
+	if t == timeType {
+		return func(p unsafe.Pointer) string {
+			t := *(*time.Time)(unsafe.Add(p, off))
+			if t.IsZero() {
+				return ""
+			}
+			return t.Format(time.RFC3339)
+		}, nil
+	}
+	if t.Kind() == reflect.Pointer {
+		return encoderForPointer(t, off)
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return func(p unsafe.Pointer) string {
@@ -201,13 +317,25 @@ func encoderFor(t reflect.Type, off uintptr) (fieldEncoder, error) {
 		return func(p unsafe.Pointer) string {
 			return strconv.FormatInt(*(*int64)(unsafe.Add(p, off)), 10)
 		}, nil
+	case reflect.Int32:
+		return func(p unsafe.Pointer) string {
+			return strconv.FormatInt(int64(*(*int32)(unsafe.Add(p, off))), 10)
+		}, nil
 	case reflect.Int:
 		return func(p unsafe.Pointer) string {
 			return strconv.Itoa(*(*int)(unsafe.Add(p, off)))
 		}, nil
+	case reflect.Uint64:
+		return func(p unsafe.Pointer) string {
+			return strconv.FormatUint(*(*uint64)(unsafe.Add(p, off)), 10)
+		}, nil
 	case reflect.Float64:
 		return func(p unsafe.Pointer) string {
 			return strconv.FormatFloat(*(*float64)(unsafe.Add(p, off)), 'f', -1, 64)
+		}, nil
+	case reflect.Float32:
+		return func(p unsafe.Pointer) string {
+			return strconv.FormatFloat(float64(*(*float32)(unsafe.Add(p, off))), 'f', -1, 32)
 		}, nil
 	case reflect.Bool:
 		return func(p unsafe.Pointer) string {
@@ -216,6 +344,22 @@ func encoderFor(t reflect.Type, off uintptr) (fieldEncoder, error) {
 	default:
 		return nil, fmt.Errorf("unsupported field kind: %v", t.Kind())
 	}
+}
+
+// encoderForPointer builds an encoder for *T fields. nil pointer → empty string.
+func encoderForPointer(t reflect.Type, off uintptr) (fieldEncoder, error) {
+	elem := t.Elem()
+	inner, err := encoderFor(elem, 0)
+	if err != nil {
+		return nil, fmt.Errorf("pointer to %v: %w", elem, err)
+	}
+	return func(p unsafe.Pointer) string {
+		ptr := *(*unsafe.Pointer)(unsafe.Add(p, off))
+		if ptr == nil {
+			return ""
+		}
+		return inner(ptr)
+	}, nil
 }
 
 // ReadCSV streams rows of T from a CSV file. Parse errors on individual
