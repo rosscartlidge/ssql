@@ -30,6 +30,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Typed Package Proposal](typed-package-proposal.md) — Phase 1 `ssql/typed` package, validated by PoC (5–23× faster, 9–4000× less memory)
 - [Typed Performance Notes](typed-performance-notes.md) — improvement opportunities observed during Phase 1/1.5 implementation
 - [Typed Concurrency Proposal](typed-concurrency-proposal.md) — proposed `Stream[T]` parallel pipeline alongside `iter.Seq[T]` (DuckDB morsel-driven inspiration)
+- [Typed Codegen Proposal (Phase 2)](typed-codegen-proposal.md) — `ssql generate go -typed` MVP scope, schema discovery, type flow, fallback strategy
 
 ## Distributed Processing
 
