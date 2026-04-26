@@ -147,6 +147,34 @@ func TestHashJoinEmptyRight(t *testing.T) {
 	}
 }
 
+func TestHashJoinSized(t *testing.T) {
+	type T struct{ K, V string }
+	left := []T{{K: "a", V: "1"}, {K: "z", V: "9"}}
+	right := []T{{K: "a", V: "Apple"}}
+	got := slices.Collect(HashJoinSized(slices.Values(left), slices.Values(right), len(right),
+		func(l T) string { return l.K },
+		func(r T) string { return r.K },
+		func(l, r T) string { return l.V + ":" + r.V },
+	))
+	want := []string{"1:Apple"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestHashJoinSizedZeroHint(t *testing.T) {
+	// Hint of 0 should still work — falls back to default growth.
+	type T struct{ K, V string }
+	got := slices.Collect(HashJoinSized(slices.Values([]T{{K: "a"}}), slices.Values([]T{{K: "a", V: "X"}}), 0,
+		func(l T) string { return l.K },
+		func(r T) string { return r.K },
+		func(l, r T) string { return r.V },
+	))
+	if !slices.Equal(got, []string{"X"}) {
+		t.Errorf("got %v", got)
+	}
+}
+
 func TestHashJoinMulti(t *testing.T) {
 	type T struct{ K, V string }
 	left := []T{{K: "a", V: "L"}, {K: "b", V: "M"}}

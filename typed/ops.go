@@ -104,6 +104,36 @@ func HashJoin[L, R, O any, K comparable](
 	}
 }
 
+// HashJoinSized is [HashJoin] with a size hint for the build-side map.
+// When the right side's row count is known (or even roughly known) at
+// call time, passing it here avoids the rehash allocations that happen
+// as the map grows. Pass 0 to fall back to default growth.
+//
+// Useful when joining a streaming left side against a slice on the
+// right: pass len(rightSlice) and the map is sized exactly once.
+func HashJoinSized[L, R, O any, K comparable](
+	left iter.Seq[L],
+	right iter.Seq[R],
+	rightSizeHint int,
+	leftKey func(L) K,
+	rightKey func(R) K,
+	merge func(L, R) O,
+) iter.Seq[O] {
+	idx := make(map[K]R, rightSizeHint)
+	for r := range right {
+		idx[rightKey(r)] = r
+	}
+	return func(yield func(O) bool) {
+		for l := range left {
+			if r, ok := idx[leftKey(l)]; ok {
+				if !yield(merge(l, r)) {
+					return
+				}
+			}
+		}
+	}
+}
+
 // HashJoinMulti is the many-to-many variant of [HashJoin]: every left
 // row with N matches in the right side produces N output rows. Right
 // values are stored in a map[K][]R, so memory cost scales with the

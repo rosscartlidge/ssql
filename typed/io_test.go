@@ -326,6 +326,64 @@ func TestNullableRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStrictRejectsUnknownColumn(t *testing.T) {
+	src := "Name,Age,Salary,Active,Extra\nAlice,30,95000.5,true,unknown\n"
+	got := slices.Collect(ReadCSVFromReader[person](strings.NewReader(src), Strict()))
+	if len(got) != 0 {
+		t.Errorf("Strict should produce no rows on extra column, got %#v", got)
+	}
+	// Verify Safe variant surfaces the error explicitly.
+	var sawErr error
+	for _, err := range ReadCSVSafeFromReader[person](strings.NewReader(src), Strict()) {
+		if err != nil && sawErr == nil {
+			sawErr = err
+		}
+	}
+	if sawErr == nil || !strings.Contains(sawErr.Error(), "Extra") {
+		t.Errorf("Strict Safe should surface unknown column error, got %v", sawErr)
+	}
+}
+
+func TestStrictRejectsMissingField(t *testing.T) {
+	src := "Name,Age\nAlice,30\n"
+	var sawErr error
+	for _, err := range ReadCSVSafeFromReader[person](strings.NewReader(src), Strict()) {
+		if err != nil && sawErr == nil {
+			sawErr = err
+		}
+	}
+	if sawErr == nil || !strings.Contains(sawErr.Error(), "missing") {
+		t.Errorf("Strict should reject missing required column, got %v", sawErr)
+	}
+}
+
+func TestStrictAllowsMissingPointerField(t *testing.T) {
+	// Pointer fields are optional; missing them is fine in strict mode.
+	src := "Name\nAlice\n"
+	var sawErr error
+	for _, err := range ReadCSVSafeFromReader[nullable](strings.NewReader(src), Strict()) {
+		if err != nil && sawErr == nil {
+			sawErr = err
+		}
+	}
+	if sawErr != nil {
+		t.Errorf("Strict should accept missing pointer field, got: %v", sawErr)
+	}
+}
+
+func TestStrictAllowsExactMatch(t *testing.T) {
+	src := "Name,Age,Salary,Active\nAlice,30,95000.5,true\n"
+	var sawErr error
+	for _, err := range ReadCSVSafeFromReader[person](strings.NewReader(src), Strict()) {
+		if err != nil && sawErr == nil {
+			sawErr = err
+		}
+	}
+	if sawErr != nil {
+		t.Errorf("Strict should accept exact match, got: %v", sawErr)
+	}
+}
+
 func TestReadCSVMalformedHeader(t *testing.T) {
 	// Empty input — csv.Reader returns EOF on header read.
 	var sawErr error

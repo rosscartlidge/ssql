@@ -12,29 +12,50 @@ specific code paths.
 
 ## High-impact, medium-effort
 
-### 1. Custom byte-level CSV reader
+### 1. Custom byte-level CSV reader (TRIED — DID NOT PAY OFF)
 
-**Where the cost is now.** `encoding/csv.Reader.Read()` allocates a
-fresh string for every cell on every row. Even with `ReuseRecord = true`
-(which we use), only the `[]string` slice is reused — the strings
-themselves are freshly allocated from the underlying bytes.
+**Hypothesis.** `encoding/csv.Reader.Read()` looked like it should
+allocate a fresh string for every cell on every row, even with
+`ReuseRecord=true`. A custom scanner producing `[]byte` slices into a
+reused buffer should let non-string field decoders parse via
+`unsafe.String` without allocation, leaving only string fields to copy.
 
-In the 10M × 3-join end-to-end benchmark, `ssql/typed` allocates 20M
-times for 7.25M output rows — that's about 2.7 allocs/row. The vast
-majority are CSV cell strings.
+**What happened.** Implemented a full RFC 4180 byte-level scanner
+(`csvscan.go`, ~140 LOC) plus a parallel `byteFieldDecoder` for every
+type. Threaded through `ReadCSVFromReader` and `ReadCSVSafeFromReader`.
+All 67 unit tests still passed.
 
-**Improvement.** Write a custom CSV scanner that operates on `[]byte`
-ranges and feeds field decoders directly with `unsafe.String(&buf[lo], hi-lo)`
-or by passing `(buf, lo, hi)` triples. Field decoders that need a string
-copy (the `string` field type) do `string(buf[lo:hi])` — one alloc per
-string field, instead of one alloc per *every* field.
+Measured against the 10M × 3-join scale bench:
 
-**Estimated impact.** End-to-end time drops 10-20%, allocations drop
-~3-5×. Combined with the existing wins, end-to-end speedup vs
-`ssql.Record` would jump from 5× to roughly 7-10×.
+|                | Time   | Memory  | Allocs  |
+|----------------|-------:|--------:|--------:|
+| `csv.Reader`   | 4.94 s | 1.10 GB | 20.0 M  |
+| Byte scanner   | 5.76 s | 0.85 GB | 30.0 M  |
 
-**Effort.** 1-2 days. RFC 4180-correct CSV parsing has corner cases
-(quoted fields, escaped quotes, embedded newlines) that need care.
+The byte reader was **17% slower** and produced **50% more allocations**.
+Memory allocated dropped 23%, but that's a small consolation when both
+time and alloc-count regressed.
+
+**Why the hypothesis was wrong.** `encoding/csv` with `ReuseRecord=true`
+is smarter than I assumed: it reads each row into a single allocated
+buffer and slices the field strings out of it, so cell allocation is
+already block-allocated rather than per-cell. The "alloc savings" my
+byte reader was supposedly capturing didn't exist.
+
+The byte reader's overhead came from elsewhere: per-byte
+`bufio.Reader.ReadByte()` calls are slower than `csv.Reader`'s scanned
+chunked parsing, and tracking field offsets in parallel `[]int` slices
+costs allocation of its own.
+
+**Conclusion.** The byte-level reader was deleted. The lesson: profile
+before assuming a stdlib package is wasteful. `csv.Reader` was already
+near-optimal for our access pattern.
+
+**Where genuine CSV wins might still come from.** A SIMD-accelerated
+delimiter scan (intrinsics or assembly) — but Go's stdlib doesn't
+expose these, and pulling in a third-party library would conflict with
+the "zero native dependency" pitch. We will likely have to live with
+the current ~280 ms / 1M-row CSV overhead.
 
 ### 2. Time parsing without `time.Parse`
 

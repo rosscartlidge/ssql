@@ -65,7 +65,11 @@ func columnName(f reflect.StructField) (name string, skip bool) {
 // buildReadSchema analyzes T against the CSV header and returns one
 // decoder per column. Columns whose name has no matching struct field
 // get a no-op decoder. Reflection happens here, once.
-func buildReadSchema[T any](header []string) (*rowSchema, error) {
+//
+// When strict is true, the function fails if any header column has
+// no matching struct field, OR if any required (non-pointer) struct
+// field has no matching column.
+func buildReadSchema[T any](header []string, strict bool) (*rowSchema, error) {
 	var zero T
 	rt := reflect.TypeOf(zero)
 	if rt == nil || rt.Kind() != reflect.Struct {
@@ -73,6 +77,7 @@ func buildReadSchema[T any](header []string) (*rowSchema, error) {
 	}
 
 	byName := make(map[string]reflect.StructField, rt.NumField())
+	wantedFields := make([]reflect.StructField, 0, rt.NumField())
 	for i := 0; i < rt.NumField(); i++ {
 		f := rt.Field(i)
 		if !f.IsExported() {
@@ -83,12 +88,17 @@ func buildReadSchema[T any](header []string) (*rowSchema, error) {
 			continue
 		}
 		byName[strings.ToLower(name)] = f
+		wantedFields = append(wantedFields, f)
 	}
 
+	matched := make(map[string]struct{}, len(byName))
 	decoders := make([]fieldDecoder, len(header))
 	for col, h := range header {
 		f, ok := byName[strings.ToLower(h)]
 		if !ok {
+			if strict {
+				return nil, fmt.Errorf("typed: strict: header column %q has no matching field in %v", h, rt)
+			}
 			decoders[col] = noopDecoder
 			continue
 		}
@@ -97,8 +107,31 @@ func buildReadSchema[T any](header []string) (*rowSchema, error) {
 			return nil, fmt.Errorf("field %s: %w", f.Name, err)
 		}
 		decoders[col] = dec
+		matched[strings.ToLower(h)] = struct{}{}
 	}
-	return &rowSchema{decoders: decoders, header: append([]string(nil), header...)}, nil
+
+	if strict {
+		var missing []string
+		for _, f := range wantedFields {
+			name, _ := columnName(f)
+			if _, ok := matched[strings.ToLower(name)]; ok {
+				continue
+			}
+			// Pointer fields are nullable by definition — absent is OK.
+			if f.Type.Kind() == reflect.Pointer {
+				continue
+			}
+			missing = append(missing, name)
+		}
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("typed: strict: missing required CSV columns: %v", missing)
+		}
+	}
+
+	return &rowSchema{
+		decoders: decoders,
+		header:   append([]string(nil), header...),
+	}, nil
 }
 
 // buildWriteSchema produces the header and per-field encoders for type T.
@@ -362,6 +395,30 @@ func encoderForPointer(t reflect.Type, off uintptr) (fieldEncoder, error) {
 	}, nil
 }
 
+// CSVOption configures a CSV reader. Pass to ReadCSV / ReadCSVSafe and
+// their *FromReader variants.
+type CSVOption func(*csvOpts)
+
+type csvOpts struct {
+	strict bool
+}
+
+// Strict makes ReadCSV* fail on schema mismatch: any CSV column without
+// a matching struct field, OR any required (non-pointer) struct field
+// without a matching column. Pointer fields are always optional.
+//
+// Without Strict (the default), unknown columns are silently dropped
+// and missing fields stay at their zero value.
+func Strict() CSVOption { return func(o *csvOpts) { o.strict = true } }
+
+func resolveOpts(opts []CSVOption) csvOpts {
+	var o csvOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
 // ReadCSV streams rows of T from a CSV file. Parse errors on individual
 // columns silently zero the field and continue — use [ReadCSVSafe] when
 // you need to surface those errors.
@@ -369,19 +426,22 @@ func encoderForPointer(t reflect.Type, off uintptr) (fieldEncoder, error) {
 // Reflection happens once at file-open time (to build the read schema
 // from the header). The per-row path uses precomputed offset writers
 // only — no reflection per row.
-func ReadCSV[T any](filename string) iter.Seq[T] {
+//
+// Pass [Strict] to reject CSVs whose header doesn't exactly match T.
+func ReadCSV[T any](filename string, opts ...CSVOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		f, err := os.Open(filename)
 		if err != nil {
 			return
 		}
 		defer f.Close()
-		ReadCSVFromReader[T](f)(yield)
+		ReadCSVFromReader[T](f, opts...)(yield)
 	}
 }
 
 // ReadCSVFromReader is the [io.Reader] variant of [ReadCSV].
-func ReadCSVFromReader[T any](r io.Reader) iter.Seq[T] {
+func ReadCSVFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq[T] {
+	o := resolveOpts(opts)
 	return func(yield func(T) bool) {
 		cr := csv.NewReader(r)
 		cr.ReuseRecord = true
@@ -389,7 +449,7 @@ func ReadCSVFromReader[T any](r io.Reader) iter.Seq[T] {
 		if err != nil {
 			return
 		}
-		schema, err := buildReadSchema[T](header)
+		schema, err := buildReadSchema[T](header, o.strict)
 		if err != nil {
 			return
 		}
@@ -410,7 +470,7 @@ func ReadCSVFromReader[T any](r io.Reader) iter.Seq[T] {
 // ReadCSVSafe is the error-reporting variant of [ReadCSV]. The returned
 // sequence yields a fresh error for any row that fails to parse — file
 // open failures, header decode failures, and per-row parse failures.
-func ReadCSVSafe[T any](filename string) iter.Seq2[T, error] {
+func ReadCSVSafe[T any](filename string, opts ...CSVOption) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		f, err := os.Open(filename)
 		if err != nil {
@@ -419,12 +479,13 @@ func ReadCSVSafe[T any](filename string) iter.Seq2[T, error] {
 			return
 		}
 		defer f.Close()
-		ReadCSVSafeFromReader[T](f)(yield)
+		ReadCSVSafeFromReader[T](f, opts...)(yield)
 	}
 }
 
 // ReadCSVSafeFromReader is the [io.Reader] variant of [ReadCSVSafe].
-func ReadCSVSafeFromReader[T any](r io.Reader) iter.Seq2[T, error] {
+func ReadCSVSafeFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq2[T, error] {
+	o := resolveOpts(opts)
 	return func(yield func(T, error) bool) {
 		cr := csv.NewReader(r)
 		cr.ReuseRecord = true
@@ -434,7 +495,7 @@ func ReadCSVSafeFromReader[T any](r io.Reader) iter.Seq2[T, error] {
 			yield(zero, fmt.Errorf("typed.ReadCSV: read header: %w", err))
 			return
 		}
-		schema, err := buildReadSchema[T](header)
+		schema, err := buildReadSchema[T](header, o.strict)
 		if err != nil {
 			var zero T
 			yield(zero, err)
