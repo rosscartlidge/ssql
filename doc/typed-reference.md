@@ -150,7 +150,7 @@ rows. `ReadCSVSafe` returns an `iter.Seq2[T, error]` so the consumer can choose
 to halt, log, or skip on each error. Mirrors the `ssql.ReadCSV` /
 `ssql.ReadCSVSafe` split.
 
-### Writing
+### Writing CSV
 
 ```go
 func WriteCSV[T any](seq iter.Seq[T], filename string) error
@@ -174,6 +174,72 @@ its slice before dump). For outputs that don't fit in RAM, fall back to the
 serial form: `Stream.Serial()` then `WriteCSV` — slower but streaming. Order
 within each shard is preserved; across shards it is shard-concatenation order
 (rows from shard 0 before shard 1, etc.) — same as `Stream.Serial()`.
+
+### TSV / Delimited (no quoting)
+
+```go
+func ReadDelim[T any](filename string, opts ...DelimOption) iter.Seq[T]
+func ReadDelimFromReader[T any](r io.Reader, opts ...DelimOption) iter.Seq[T]
+func ReadDelimSafe[T any](filename string, opts ...DelimOption) iter.Seq2[T, error]
+func ReadDelimParallel[T any](filename string, n int, opts ...DelimOption) Stream[T]
+
+func WriteDelim[T any](seq iter.Seq[T], filename string, opts ...DelimOption) error
+func WriteDelimToWriter[T any](seq iter.Seq[T], w io.Writer, opts ...DelimOption) error
+func (s Stream[T]) WriteDelim(filename string, opts ...DelimOption) error
+func (s Stream[T]) WriteDelimToWriter(w io.Writer, opts ...DelimOption) error
+
+// Default delimiter is '\t'. Pass typed.WithDelim(',') for fast clean
+// CSV reading WITHOUT quote handling, '|' / ':' for pipe / colon
+// formats.
+typed.WithDelim(byte) DelimOption
+typed.DelimStrict() DelimOption  // mirrors typed.Strict for CSV
+```
+
+Same struct-tag mapping as `ReadCSV`; same `Stream[T]` per-shard buffer
+sink. **Differs from `ReadCSV` only in that fields are split on a
+single byte with no quote/escape handling — embedded delimiters or
+newlines produce wrong rows.** Use this when your data is clean
+delimited text; use `ReadCSV` for RFC-4180-correct parsing.
+
+The parallel reader (`ReadDelimParallel`) does zero-copy field
+strings (each row's strings alias into the file's mmap'd bytes via
+`unsafe.String`) and uses `bytes.IndexByte` for SIMD-accelerated
+field splitting. This makes the parser cost competitive with the
+memory-bandwidth ceiling.
+
+### Parquet
+
+```go
+func ReadParquet[T any](filename string, opts ...ParquetOption) iter.Seq[T]
+func ReadParquetSafe[T any](filename string, opts ...ParquetOption) iter.Seq2[T, error]
+func ReadParquetFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...ParquetOption) iter.Seq[T]
+func ReadParquetSafeFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...ParquetOption) iter.Seq2[T, error]
+func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) Stream[T]
+
+func WriteParquet[T any](seq iter.Seq[T], filename string) error
+func WriteParquetToWriter[T any](seq iter.Seq[T], w io.Writer) error
+func (s Stream[T]) WriteParquet(filename string) error
+func (s Stream[T]) WriteParquetToWriter(w io.Writer) error
+
+typed.ParquetStrict() ParquetOption       // reject schema mismatches
+typed.ParquetColumns(names...) ParquetOption  // read only listed columns
+```
+
+Snappy compression by default. Reads use the existing
+`github.com/apache/arrow/go/v18/parquet` dependency that ssql
+already imports for Record-mode Parquet.
+
+**`ParquetColumns` is the primary lever.** A 14.6M-row corpus
+group-by-with-count benchmark went from **1.51 s** (read all 7
+columns) to **0.15 s** (read only the column needed for the
+group key) — a 10× speedup. For wide tables it's the difference
+between Parquet feeling fast and feeling like CSV-with-extra-steps.
+
+The parallel reader assigns Parquet row groups to shards
+round-robin; each shard owns its own `pqarrow.FileReader`. Peak
+memory is roughly `nShards × max-row-group-size`. If the file has
+fewer row groups than `n`, `n` is reduced to match — Parquet
+doesn't allow splitting within a row group without re-decoding it.
 
 ### Operations
 
@@ -458,6 +524,10 @@ Phase 2 — `SSQLGO=parallel` codegen shipped (2026-04-27):
 - [x] **Per-shard buffer dump CSV sink (2026-04-27)** — `to csv` in parallel mode now emits `Stream.WriteCSVToWriter` (no `Serial()` fan-in). Each shard formats into its own buffer in parallel, dumped in shard order. Wide-output workload (7.25M-row CSV write) went from 0.73× typed-serial to **4.4× faster** with this fix. Trade-off: peak memory ~2× output size.
 - [x] **`GroupByParallel` with Sink/Combine/Finalize (2026-04-27)** — `group-by` in parallel mode emits `typed.GroupByParallel`. Each shard accumulates its own partial `map[K]Aggregator`; Combine merges per shard sequentially; Finalize yields rows lazily. Synthesized `<Input>Aggregator` gets a `Merge` method generated from the aggregation specs. **4.0× faster than typed-serial** on the 10M-row × 1 000-group workload (count+sum+avg+min+max).
 - **When to use it:** filter-heavy / aggregating / transform-and-write / group-by pipelines. **4.4× faster** on the CSV write workload (1.3 s vs typed-serial 5.7 s; DuckDB 0.7 s — 1.86× ahead). **4.0× faster** on the group-by workload (0.95 s vs 3.80 s; DuckDB 0.39 s — 2.4× ahead). **6.4× faster** for count-only sinks. Use `SSQLGO=typed` when the output is too large to buffer in RAM, when you need strict input-order output, or when group-by needs `-presorted`. See [`research/typed-codegen-proposal.md` §5d](research/typed-codegen-proposal.md#5d-parallel-mode-codegen-ssqlgoparallel) and [`research/typed-groupby-parallel-proposal.md`](research/typed-groupby-parallel-proposal.md).
+
+Phase 1.8 — TSV / Parquet readers (2026-04-28):
+- [x] **`typed.ReadDelim` / `ReadDelimParallel` / `WriteDelim`** — fast delimited-text reader with no quoting (default '\t'). Zero-copy field strings via `unsafe.String` (parallel only); SIMD-accelerated split via `bytes.IndexByte`. 18% faster than `ReadCSV` on a 14.6 M-row corpus; memory-bandwidth-bound at ~600 MB/s. Use when data is clean (no embedded quotes / delimiters / newlines).
+- [x] **`typed.ReadParquet` / `ReadParquetParallel` / `WriteParquet`** — Parquet input/output via existing Apache Arrow Go dependency. Snappy compression by default. Row groups partition naturally to shards. **`ParquetColumns(...)` is the primary speed lever**: on the 14.6 M-row corpus group-by-with-count benchmark, restricting the read to the single grouped column dropped wall time from 1.51 s to **0.15 s** — a 10× win, within 5× of DuckDB's 0.03 s on the same query. Without column projection Parquet performs about the same as TSV (decompression at ~1–2 GB/s ≈ TSV memory bandwidth ceiling).
 
 Phase 2 — Tier 3a shipped (2026-04-27, on top of Phase 1.7):
 - [x] `sort FIELD` and `sort FIELD -desc` (single-field)

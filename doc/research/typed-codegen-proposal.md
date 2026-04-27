@@ -215,11 +215,12 @@ After the fix, the same workload now runs **4.4× faster than typed-serial** and
 **Future work (in priority order):**
 1. ~~**Per-shard CSV output buffers, no fan-in channel.**~~ ✅ Shipped 2026-04-27. `Stream.WriteCSV` / `Stream.WriteCSVToWriter` formats per-shard in parallel and dumps in shard order. The codegen for `to csv` in parallel mode now emits the Stream method directly — no `Serial()` call.
 2. ~~**`GroupByParallel`** with the Sink/Combine/Finalize three-phase contract.~~ ✅ Shipped 2026-04-27. Per-shard partial map, sequential Combine, lazy Finalize. Synthesized aggregator gets a `Merge` method when in parallel mode. 4.0× faster than typed-serial on the 10 M-row × 1 000-group benchmark; closes most of the gap to DuckDB. See [`typed-groupby-parallel-proposal.md`](typed-groupby-parallel-proposal.md) for the design.
-3. **Stream-aware `Limit`, `Offset`, `Distinct`** so common pipelines aren't blocked by parallel-mode rejection.
-4. **Hash-partitioned Stream source** for the `#groups ≈ #rows` case (route each row to the shard owning `hash(key) mod nShards`, eliminate the Merge phase, at the cost of a fan-out channel).
-5. **`SerialOrdered()` fan-in** for users who need input-order = output-order without leaving parallel mode.
-6. **Faster delimited reader for clean TSV** (split-on-delim, no quoting/escaping). Should be ~2× faster than `encoding/csv` on data without embedded quotes.
-7. **Parquet input.** Columnar + compressed + typed; row groups map naturally to shards. Likely the biggest single I/O win on read-bound workloads.
+3. ~~**Faster delimited reader for clean TSV.**~~ ✅ Shipped 2026-04-28 as `typed.ReadDelim` / `ReadDelimParallel`. Zero-copy field strings + SIMD split. 18% faster than `ReadCSV` on the user-corpus benchmark (1.85 s → 1.51 s); now memory-bandwidth-bound at ~600 MB/s. The originally projected "2× faster" didn't materialise because the bottleneck wasn't the quote-handling state machine — it was per-field string allocation.
+4. ~~**Parquet input.**~~ ✅ Shipped 2026-04-28 as `typed.ReadParquet` / `ReadParquetParallel`. Headline result on the same 14.6 M-row corpus: 1.51 s with all columns read; **0.15 s with `ParquetColumns(...)` restricted to the single column needed for the group key** — a 10× speedup, within 5× of DuckDB. Parquet's value is in *what you don't read*: column projection is the primary lever, not the columnar layout itself. See [`typed-parquet-proposal.md`](typed-parquet-proposal.md).
+5. **CLI codegen for typed-mode `from parquet` / `to parquet`.** The Go API is shipped; the CLI codegen path still needs wiring. Should also emit `ParquetColumns(...)` automatically based on which struct fields are used downstream — without that the read is the same speed as TSV.
+6. **Stream-aware `Limit`, `Offset`, `Distinct`** so common pipelines aren't blocked by parallel-mode rejection.
+7. **Hash-partitioned Stream source** for the `#groups ≈ #rows` case (route each row to the shard owning `hash(key) mod nShards`, eliminate the Merge phase, at the cost of a fan-out channel).
+8. **`SerialOrdered()` fan-in** for users who need input-order = output-order without leaving parallel mode.
 
 ## 6. Tier 3 (Deferred Indefinitely)
 
