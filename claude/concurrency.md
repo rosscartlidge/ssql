@@ -291,6 +291,71 @@ Then `go build` and `go test` automatically pick up `default.pgo` from the packa
 
 For this codebase the **3% gain doesn't currently justify the maintenance cost** of keeping a fresh profile. If profitability changes (e.g. a hot pipeline becomes the bottleneck for a real user), revisit and pin a workload-representative profile then.
 
+## 12. Per-Shard Buffer Dump Sinks (avoid Serial fan-in for write-everything)
+
+**Rule: when a parallel pipeline ends in a write-everything sink (CSV, JSON, etc), don't fan in through `Serial()` — give each shard its own buffer, write in parallel, then dump in shard order. Pays ~2× peak output memory; saves ~100 ns/row of channel coordination.**
+
+Measured on the 10M-row → filter `age > 30` → write 7.25 M-row CSV workload (32-core machine, 2026-04-27):
+
+| Sink design | Wall time | vs typed-serial |
+|---|---:|---:|
+| Channel-based: `Stream.Serial()` then `typed.WriteCSV` | 9.07 s | 0.73× (slower) |
+| **Per-shard buffer dump:** `Stream.WriteCSVToWriter` | **1.30 s** | **4.4× faster** |
+| typed-serial baseline (single-threaded `iter.Seq[T]`) | 5.70 s | 1.0× |
+| DuckDB equivalent | 0.70 s | 8.1× faster |
+
+**The pattern.**
+
+```go
+func (s Stream[T]) WriteCSVToWriter(w io.Writer) error {
+    // 1. Write header sequentially.
+    cw := csv.NewWriter(w)
+    cw.Write(headerRow); cw.Flush()
+
+    // 2. Each shard formats into its own bytes.Buffer in parallel.
+    buffers := make([]*bytes.Buffer, len(s.shards))
+    var wg sync.WaitGroup
+    for i, shard := range s.shards {
+        i, shard := i, shard
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            buf := &bytes.Buffer{}
+            buffers[i] = buf
+            scw := csv.NewWriter(buf)
+            for v := range shard {
+                scw.Write(formatRow(v))
+            }
+            scw.Flush()
+        }()
+    }
+    wg.Wait()
+
+    // 3. Sequential dump in shard order — IO-bound, no per-row coordination.
+    for _, buf := range buffers {
+        w.Write(buf.Bytes())
+    }
+    return nil
+}
+```
+
+**Why it works.** `Serial()` reunifies shards through a channel that costs ~100 ns/row in scheduling and synchronisation. On a 7.25 M-row write that's ~700 ms of pure overhead — comparable to the *entire* 1.3 s parallel runtime, and more than enough to flip the result negative. Per-shard buffers move all the row-level work into the shard goroutines (where it parallelises) and reduce the serial finalize phase to a few `Buffer.Bytes()` writes (a handful of large memcpy / write-syscall pairs, IO-bound).
+
+**Trade-offs and constraints.**
+- **Peak memory ~2× output size.** Each shard's buffer holds its slice of the output until the final dump; for an output that doesn't fit in RAM (~free RAM / 2), fall back to typed-serial (still streaming).
+- **Order is shard-concatenation, not input.** Within a shard, input order is preserved. Across shards, rows from shard 0 come before shard 1, etc. This matches what `Serial()` (the unordered fan-in) already gives, so no regression.
+- **Won't help streaming sinks** that need per-row backpressure (network sockets, gRPC streaming). The pattern is fundamentally "buffer then dump."
+- **Use-case fit.** Write-everything pipelines (CSV/JSON/Arrow file output) where the output fits in RAM. Don't apply to aggregating sinks (count/sum/first) — `SerialCount` already handles those.
+
+**When NOT to use this pattern.**
+- Output is genuinely too large for RAM ⇒ typed-serial.
+- Input order must be preserved ⇒ wait for `SerialOrdered()` (future).
+- Sink is naturally aggregating (count, sum, max) ⇒ use `Stream.Serial()` + reducer; the fan-in cost is amortised across the aggregation, not paid per output row.
+
+**General principle.** *The cheapest fan-in is no fan-in.* If a parallel pipeline ends in something that can be expressed as "do the work in parallel, then concatenate results," prefer per-shard buffers over a `Serial()` channel. This is the same morsel-driven idea DuckDB uses for its parallel sinks — give each operator a Sink/Combine/Finalize three-phase contract instead of forcing every row through a coordinated boundary.
+
+This is the pattern to extend next for `GroupByParallel` (each shard accumulates a partial map, finalize merges) and any future Stream sinks (`WriteJSONL`, `WriteArrow`, etc.).
+
 ## See Also
 
 - [`doc/research/typed-concurrency-proposal.md`](../doc/research/typed-concurrency-proposal.md) — design proposal + measured PoC results in §9a

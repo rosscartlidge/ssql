@@ -155,11 +155,25 @@ to halt, log, or skip on each error. Mirrors the `ssql.ReadCSV` /
 ```go
 func WriteCSV[T any](seq iter.Seq[T], filename string) error
 func WriteCSVToWriter[T any](seq iter.Seq[T], w io.Writer) error
+
+// Parallel-aware sinks on Stream[T] — each shard formats its rows
+// into its own bytes.Buffer concurrently, then buffers are dumped in
+// shard order. Avoids the per-row Serial() fan-in channel cost on
+// transform-and-write workloads (~4.4× faster than typed-serial on a
+// 7M-row CSV write benchmark).
+func (s Stream[T]) WriteCSV(filename string) error
+func (s Stream[T]) WriteCSVToWriter(w io.Writer) error
 ```
 
 The header row is taken from struct field names (or tags). All exported fields
 are written in declaration order. Unexported fields and `ssql:"-"`-tagged
 fields are skipped.
+
+The `Stream[T]` variants peak at ~2× output size in memory (each shard buffers
+its slice before dump). For outputs that don't fit in RAM, fall back to the
+serial form: `Stream.Serial()` then `WriteCSV` — slower but streaming. Order
+within each shard is preserved; across shards it is shard-concatenation order
+(rows from shard 0 before shard 1, etc.) — same as `Stream.Serial()`.
 
 ### Operations
 
@@ -418,9 +432,10 @@ Phase 2 — Tier 2 shipped (2026-04-26):
       synthesized aggregator + result struct, single- or multi-field keys)
 
 Phase 2 — `SSQLGO=parallel` codegen shipped (2026-04-27):
-- [x] Same pipeline shape as `SSQLGO=typed`, with `from`/`where`/`join`/`to csv`/`to table` emitting Stream-based parallel code (typed.ReadCSVParallel + Stream.Where + typed.HashJoinParallel + Serial() sink).
+- [x] Same pipeline shape as `SSQLGO=typed`, with `from`/`where`/`join`/`to csv`/`to table` emitting Stream-based parallel code (typed.ReadCSVParallel + Stream.Where + typed.HashJoinParallel).
 - [x] Other typed-aware commands (limit, group-by, sort, distinct, etc.) emit a clear error suggesting `SSQLGO=typed` instead.
-- **When to use it:** filter-heavy / aggregating pipelines. **2× faster** when output rows ≪ input rows; **6.4× faster** for count-only sinks. **slower** for transform-and-write-everything pipelines (Serial() fan-in cost > parallel-filter savings). See [`research/typed-codegen-proposal.md` §5d](research/typed-codegen-proposal.md#5d-parallel-mode-codegen-ssqlgoparallel) for the workload-vs-mode table.
+- [x] **Per-shard buffer dump CSV sink (2026-04-27)** — `to csv` in parallel mode now emits `Stream.WriteCSVToWriter` (no `Serial()` fan-in). Each shard formats into its own buffer in parallel, dumped in shard order. Wide-output workload (7.25M-row CSV write) went from 0.73× typed-serial to **4.4× faster** with this fix. Trade-off: peak memory ~2× output size.
+- **When to use it:** filter-heavy / aggregating *and* transform-and-write pipelines. **4.4× faster** on the 7.25 M-row CSV write workload (1.3 s vs typed-serial 5.7 s; DuckDB 0.7 s on the same machine — within 1.86×). **6.4× faster** for count-only sinks. Use `SSQLGO=typed` when the output is too large to buffer in RAM or when you need strict input-order output. See [`research/typed-codegen-proposal.md` §5d](research/typed-codegen-proposal.md#5d-parallel-mode-codegen-ssqlgoparallel) for the workload-vs-mode table.
 
 Phase 2 — Tier 3a shipped (2026-04-27, on top of Phase 1.7):
 - [x] `sort FIELD` and `sort FIELD -desc` (single-field)

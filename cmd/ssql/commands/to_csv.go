@@ -97,26 +97,42 @@ func generateToCSVCode(filename string) error {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'to csv' has no typed input; %s does not yet support typed mode (Tier 2 or Tier 3) — drop -typed or refactor the pipeline", lastNamedCommand(fragments)))
 		}
-		// In parallel mode, the input is a typed.Stream[T] — call
-		// Serial() to flatten back to iter.Seq[T] for WriteCSV.
-		// This is the natural sink boundary; the parallel work
-		// (read+filter+joins) has already happened upstream.
-		readVar := inputVar
-		if parallelMode() {
-			readVar = inputVar + ".Serial()"
-		}
+		// In parallel mode, the input is a typed.Stream[T]. Call the
+		// Stream's per-shard CSV methods directly so each shard
+		// formats into its own buffer in parallel — avoids the
+		// Serial() fan-in channel cost (~100ns/row, ~700ms on a
+		// 7M-row write) that otherwise erases the parallel-filter
+		// savings on transform-and-write-everything pipelines. The
+		// trade-off is peak memory ~2× output size and that rows are
+		// emitted in shard-concatenation order (within-shard order
+		// preserved). For serial-mode typed (iter.Seq[T]) we still
+		// use the package-level typed.WriteCSV helpers.
 		if filename == "" {
-			code = fmt.Sprintf(`if err := typed.WriteCSVToWriter(%s, os.Stdout); err != nil {
+			if parallelMode() {
+				code = fmt.Sprintf(`if err := %s.WriteCSVToWriter(os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
-	}`, readVar)
+	}`, inputVar)
+			} else {
+				code = fmt.Sprintf(`if err := typed.WriteCSVToWriter(%s, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar)
+			}
 			imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
 		} else {
 			params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output CSV file", VarName: "flagOutput"})
-			code = fmt.Sprintf(`if err := typed.WriteCSV(%s, *flagOutput); err != nil {
+			if parallelMode() {
+				code = fmt.Sprintf(`if err := %s.WriteCSV(*flagOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
-	}`, readVar)
+	}`, inputVar)
+			} else {
+				code = fmt.Sprintf(`if err := typed.WriteCSV(%s, *flagOutput); err != nil {
+		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar)
+			}
 			imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
 		}
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())

@@ -197,24 +197,25 @@ Activate with `SSQLGO=parallel` (everything else identical to `SSQLGO=typed`). T
 
 | Workload | typed-serial | parallel | Outcome |
 |---|---:|---:|---|
-| Filter `age > 30` (7.25 M output rows) | 6.59 s | 9.07 s | **parallel slower (0.73×)** |
-| Filter `age > 55` (1 M output rows) | 3.86 s | 1.88 s | **parallel 2.05× faster** |
-| Aggregating sink (count, via `SerialCount`) | 5.00 s | 0.77 s | **parallel 6.4× faster** |
+| Filter `age > 30` (7.25 M output rows, *initial channel-based sink*) | 6.59 s | 9.07 s | parallel slower (0.73×) — *historical* |
+| Filter `age > 30` (7.25 M output rows, **per-shard buffer sink, 2026-04-27**) | **5.7 s** | **1.3 s** | **parallel 4.4× faster** |
+| Filter `age > 55` (1 M output rows) | 3.86 s | 1.88 s | parallel 2.05× faster |
+| Aggregating sink (count, via `SerialCount`) | 5.00 s | 0.77 s | parallel 6.4× faster |
 
-**The pattern.** Parallel-mode wins when the *output* is much smaller than the input. The `Serial()` fan-in needed before `WriteCSV` adds per-row channel overhead that exceeds the parallel-filter savings when output ≈ input. For high-cardinality output writes (filter+join+write-everything), `SSQLGO=typed` is the right choice.
+**The original problem (resolved 2026-04-27).** The first parallel-mode CSV sink called `Stream.Serial()` to fan all shards back into a single `iter.Seq[T]` and then ran `typed.WriteCSV` on it. The fan-in channel cost ~100 ns/row, which on a 7.25 M-row output erased the parallel-filter savings. The fix is the **per-shard buffer dump sink** (§5d.1): each shard formats its rows into its own `*bytes.Buffer` concurrently, then a sequential final stage writes the buffers to the output in shard order. No `Serial()` channel; no per-row coordination cost on the hot path.
 
-**Honest user guidance:**
+After the fix, the same workload now runs **4.4× faster than typed-serial** and closes most of the gap to DuckDB (1.3 s vs DuckDB's 0.7 s on the same machine). The trade-off is peak memory ~2× output size; for huge outputs that don't fit in RAM, fall back to `SSQLGO=typed` (still streaming, slower).
 
-- **Use `SSQLGO=parallel` for** filter-heavy / aggregate-style pipelines: `from | where (selective) | ...`, `from | where | join | to count`, future `from | ... | group-by`.
-- **Use `SSQLGO=typed` for** pipelines that transform-and-write large outputs: `from | where (loose) | to csv`, anything with `output_rows ≈ input_rows`.
+**Honest user guidance (updated):**
 
-**Why we ship a known-loss case at all:** documenting the loss + giving users a per-pipeline choice is more useful than refusing to emit parallel code for "to csv" pipelines. The future `to count` / `to sum` / `to first` sinks would close the gap when paired with parallel mode.
+- **Use `SSQLGO=parallel` for** filter, join, aggregate, *and* write-everything pipelines on machines with enough RAM to hold ~2× the output size. The per-shard buffer sink means transform-and-write workloads now scale with cores.
+- **Use `SSQLGO=typed` for** outputs too large to buffer (RAM-bound) or when you need strict input-order = output-order in the CSV. Typed-serial preserves input order; parallel emits shard-concatenation order (within-shard order preserved, across-shard order is partition order).
 
 **Future work (in priority order):**
-1. **Per-shard CSV output buffers, no fan-in channel.** Each shard writes to its own `bytes.Buffer`; final stage dumps buffers sequentially. Loses streaming, peak memory ~2× output size, but eliminates the channel cost. ~2 hours of work.
-2. **Stream-aware `Limit`, `Offset`, `Distinct`** so common pipelines aren't blocked by parallel-mode rejection.
-3. **`GroupByParallel`** with the Sink/Combine/Finalize three-phase contract from the original concurrency proposal.
-4. **`SerialOrdered()` fan-in** for users who need input-order = output-order.
+1. ~~**Per-shard CSV output buffers, no fan-in channel.**~~ ✅ Shipped 2026-04-27. `Stream.WriteCSV` / `Stream.WriteCSVToWriter` formats per-shard in parallel and dumps in shard order. The codegen for `to csv` in parallel mode now emits the Stream method directly — no `Serial()` call.
+2. **`GroupByParallel`** with the Sink/Combine/Finalize three-phase contract from the original concurrency proposal. Each shard accumulates a partial map; finalize merges. Group-by is a hot path and the projected speedup is large because the merge is small relative to the scan.
+3. **Stream-aware `Limit`, `Offset`, `Distinct`** so common pipelines aren't blocked by parallel-mode rejection.
+4. **`SerialOrdered()` fan-in** for users who need input-order = output-order without leaving parallel mode.
 
 ## 6. Tier 3 (Deferred Indefinitely)
 
