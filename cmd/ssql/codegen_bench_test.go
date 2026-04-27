@@ -65,40 +65,89 @@ func TestCodegenBench(t *testing.T) {
 		)
 	}
 
-	// Generate, build, and time each variant.
+	// Generate, build, and time each codegen variant.
 	results := make(map[string]variant)
 	for _, mode := range []string{"1", "typed"} {
 		v := buildAndRun(t, mode, pipelineFor(mode))
 		results[mode] = v
-		t.Logf("%-7s  wall=%-10s  rss=%-12s  src=%d bytes", v.label, v.wall, v.rss, v.srcBytes)
+		t.Logf("%-13s  wall=%-10s  rss=%-12s  src=%d bytes", v.label, v.wall, v.rss, v.srcBytes)
 	}
+
+	// Also time the same pipeline as a CLI bash chain — what users
+	// actually run interactively before they discover code generation.
+	// Each command spawns its own process and uses ssql.Record over
+	// JSONL pipes between stages. The right-side join file is wrapped
+	// with <(ssql from ...) — required by ssql join to ensure the
+	// schema-header is present.
+	cliPipeline := fmt.Sprintf(
+		"%s from %s | %s where -if years ge 5 | %s join <(%s from %s) -using dept_id | %s to csv > /dev/null",
+		bin, empCSV, bin, bin, bin, deptCSV, bin,
+	)
+	results["cli"] = runCLIPipeline(t, cliPipeline)
+	t.Logf("%-13s  wall=%-10s  rss=%-12s",
+		results["cli"].label, results["cli"].wall, results["cli"].rss)
 
 	// Print a small comparison table that the reader of the test log
 	// can scan. Keep it under a reasonable width.
+	cli := results["cli"]
 	rec := results["1"]
 	typ := results["typed"]
-	speedup := float64(rec.wall) / float64(typ.wall)
-	rssRatio := float64(rec.rssKB) / float64(typ.rssKB)
+	cliVsTypedTime := float64(cli.wall) / float64(typ.wall)
+	recVsTypedTime := float64(rec.wall) / float64(typ.wall)
 
 	fmt.Println()
-	fmt.Println("┌──────────────────────────────────────────────────────────────┐")
-	fmt.Println("│  Codegen benchmark: Record vs typed (same pipeline)          │")
-	fmt.Println("├───────────────┬──────────────┬──────────────┬────────────────┤")
-	fmt.Println("│  Mode         │  Wall time   │  Peak RSS    │  Source size   │")
-	fmt.Println("├───────────────┼──────────────┼──────────────┼────────────────┤")
-	fmt.Printf("│  %-13s│  %-12s│  %-12s│  %-14s│\n", rec.label, rec.wall.Round(time.Millisecond), formatKB(rec.rssKB), formatBytes(rec.srcBytes))
-	fmt.Printf("│  %-13s│  %-12s│  %-12s│  %-14s│\n", typ.label, typ.wall.Round(time.Millisecond), formatKB(typ.rssKB), formatBytes(typ.srcBytes))
-	fmt.Println("├───────────────┼──────────────┼──────────────┼────────────────┤")
-	fmt.Printf("│  Ratio        │  %-12s│  %-12s│                │\n",
-		fmt.Sprintf("%.2fx faster", speedup),
-		fmt.Sprintf("%.2fx less", rssRatio))
-	fmt.Println("└───────────────┴──────────────┴──────────────┴────────────────┘")
+	fmt.Println("┌──────────────────────────────────────────────────────────────────────┐")
+	fmt.Println("│  Codegen benchmark: same pipeline, three execution models           │")
+	fmt.Println("├──────────────────┬──────────────┬──────────────┬────────────────────┤")
+	fmt.Println("│  Mode            │  Wall time   │  Peak RSS    │  Source size       │")
+	fmt.Println("├──────────────────┼──────────────┼──────────────┼────────────────────┤")
+	fmt.Printf("│  %-16s│  %-12s│  %-12s│  %-18s│\n", cli.label,
+		cli.wall.Round(time.Millisecond), formatKB(cli.rssKB), "(no source)")
+	fmt.Printf("│  %-16s│  %-12s│  %-12s│  %-18s│\n", rec.label,
+		rec.wall.Round(time.Millisecond), formatKB(rec.rssKB), formatBytes(rec.srcBytes))
+	fmt.Printf("│  %-16s│  %-12s│  %-12s│  %-18s│\n", typ.label,
+		typ.wall.Round(time.Millisecond), formatKB(typ.rssKB), formatBytes(typ.srcBytes))
+	fmt.Println("├──────────────────┴──────────────┴──────────────┴────────────────────┤")
+	fmt.Printf("│  typed vs CLI pipeline:    %.2fx faster                                │\n", cliVsTypedTime)
+	fmt.Printf("│  typed vs Record codegen:  %.2fx faster                                │\n", recVsTypedTime)
+	fmt.Println("└──────────────────────────────────────────────────────────────────────┘")
 	fmt.Println()
 
-	// Sanity assertion: the typed program shouldn't be slower. If it
-	// is, something regressed badly and we want a loud failure.
-	if speedup < 1.0 {
+	// Sanity assertion: the typed program shouldn't be slower than
+	// either the CLI pipeline or the Record codegen.
+	if recVsTypedTime < 1.0 {
 		t.Errorf("typed program is slower than Record (%v vs %v) — regression?", typ.wall, rec.wall)
+	}
+	if cliVsTypedTime < 1.0 {
+		t.Errorf("typed program is slower than CLI pipeline (%v vs %v) — regression?", typ.wall, cli.wall)
+	}
+}
+
+// runCLIPipeline times the multi-process bash chain and captures the
+// peak RSS reported by /usr/bin/time -v for the bash wrapper. Note
+// that GNU time on Linux reports max RSS of the immediate child only
+// (the bash process), not the aggregate over its forked subprocesses
+// — so the RSS number understates per-stage peak. Wall time is exact.
+func runCLIPipeline(t *testing.T, pipeline string) variant {
+	t.Helper()
+	timed := exec.Command("/usr/bin/time", "-v", "bash", "-c", pipeline)
+
+	var stderr bytes.Buffer
+	timed.Stderr = &stderr
+	timed.Stdout = nil
+
+	start := time.Now()
+	if err := timed.Run(); err != nil {
+		t.Fatalf("CLI pipeline run: %v\n%s", err, stderr.String())
+	}
+	wall := time.Since(start)
+
+	rssKB := parseTimeRSS(stderr.String())
+	return variant{
+		label: "CLI pipeline",
+		wall:  wall,
+		rssKB: rssKB,
+		rss:   formatKB(rssKB),
 	}
 }
 

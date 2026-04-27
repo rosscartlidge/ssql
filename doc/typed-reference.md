@@ -394,17 +394,22 @@ go run pipeline.go              # uses defaults
 go run pipeline.go -input emp_q4.csv
 ```
 
-**Measured impact of the one-line `SSQLGO=1 → SSQLGO=typed` change**, on
-1M employees × 1k departments, identical pipeline expression
+**Measured impact of typed codegen vs the alternatives**, on 1M
+employees × 1k departments, identical pipeline expression
 (see `cmd/ssql/codegen_bench_test.go`):
 
-| Mode   | Wall time | Peak RSS |
+| Mode | Wall time | Peak RSS |
 |---|---:|---:|
-| Record (`SSQLGO=1`) | 2.62 s | 921 MB |
-| Typed (`SSQLGO=typed`) | **0.76 s** | **8.5 MB** |
-| Ratio | **3.47× faster** | **108× less memory** |
+| CLI pipeline (interactive) | 3.08 s | 33 MB |
+| Record codegen (`SSQLGO=1`) | 2.69 s | 910 MB |
+| **Typed codegen (`SSQLGO=typed`)** | **0.77 s** | **8.7 MB** |
+| Speedup vs CLI | **4.0× faster** | — |
+| Speedup vs Record codegen | **3.5× faster** | **104× less memory** |
 
-Reproduce: `go test ./cmd/ssql/ -run TestCodegenBench -timeout 10m -v`.
+Typed codegen wins on every dimension simultaneously: single-process
+execution beats the CLI pipeline's per-stage process+pipe overhead,
+and stack-allocated structs beat Record codegen's `map[string]any`
+peak RSS. Reproduce: `go test ./cmd/ssql/ -run TestCodegenBench -timeout 10m -v`.
 
 Phase 2 — Tier 2 shipped (2026-04-26):
 - [x] `limit N` (typed.Limit), `offset N` (typed.Skip)

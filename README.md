@@ -208,14 +208,16 @@ SSQLGO=typed ssql from employees.csv \
 go run pipeline.go
 ```
 
-Measured against the same pipeline generated in Record mode (1M rows ×
+Measured against the same shell pipeline run three ways (1M rows ×
 1 join, see `cmd/ssql/codegen_bench_test.go`):
 
 | Mode | Wall time | Peak RSS |
 |---|---:|---:|
-| `SSQLGO=1` (Record) | 2.62 s | 921 MB |
-| **`SSQLGO=typed`** | **0.76 s** | **8.5 MB** |
-| Ratio | **3.47× faster** | **108× less memory** |
+| CLI pipeline (interactive) | 3.08 s | 33 MB |
+| `SSQLGO=1` codegen (Record) | 2.69 s | 910 MB |
+| **`SSQLGO=typed` codegen** | **0.77 s** | **8.7 MB** |
+| Typed vs CLI | **4.0× faster** | — |
+| Typed vs Record codegen | **3.5× faster** | **104× less memory** |
 
 [**Codelab →**](doc/typed-codelab.md) | [**Reference →**](doc/typed-reference.md) | [**Codegen design →**](doc/research/typed-codegen-proposal.md)
 

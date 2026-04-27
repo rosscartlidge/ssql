@@ -389,19 +389,37 @@ Workload: 1,000,000-row `employees.csv` joined against a 1,000-row
 generated programs are compiled with `go build -ldflags "-s -w"` and
 run via `/usr/bin/time -v` to capture peak resident set size.
 
-| Mode   | Wall time | Peak RSS | Source size |
-|--------|----------:|---------:|------------:|
-| Record | 2.62 s    | 921 MB   | 1.2 KB      |
-| Typed  | 0.76 s    | 8.5 MB   | 2.0 KB      |
-| Ratio  | **3.47× faster** | **108× less memory** | 1.7× more source (auto-derived structs) |
+| Mode             | Wall time | Peak RSS | Source size |
+|------------------|----------:|---------:|------------:|
+| CLI pipeline     | 3.08 s    | 33 MB    | (no source) |
+| Record codegen   | 2.69 s    | 910 MB   | 1.2 KB      |
+| **Typed codegen**| **0.77 s**| **8.7 MB**| 2.0 KB     |
+| Speedup vs CLI   | **4.0× faster** | — |  |
+| Speedup vs Record| **3.5× faster** | **104× less memory** | |
 
-The wall-time speedup (3.5×) is below the 5-15× the typed runtime
-delivers in pure micro-bench mode because the codegen comparison
-includes process startup, CSV read latency, and disk-write costs that
-wash out some of the in-process advantage. The memory ratio (108×) is
-the real story: Record's per-row `map[string]any` blows past 900 MB
-on the same workload while typed's stack-allocated structs stay
-under 10 MB.
+Three execution models, same shell pipeline:
+
+- **CLI pipeline** is what users run interactively: each command in
+  its own process, JSONL on the pipes between stages. Per-process
+  memory is small (33 MB) because streaming through pipes never
+  materializes everything in one address space, but the wall-time
+  cost of process startup + per-row JSONL serialize/deserialize is
+  substantial.
+- **Record codegen** (`SSQLGO=1 … | ssql generate go`) collapses to a
+  single Go process with native iterators and no inter-process
+  serialization — wall time drops 13%, but in-process Record
+  (`map[string]any`) state explodes peak RSS to 900+ MB.
+- **Typed codegen** (`SSQLGO=typed … | ssql generate go`) eliminates
+  both costs: single process *and* stack-allocated struct
+  representation. **Best on every dimension simultaneously.**
+
+The wall-time speedup (3.5–4× over the alternatives) is below the
+15× the typed runtime delivers in pure micro-bench mode because the
+codegen comparison includes process startup, CSV read latency, and
+disk I/O that wash out some of the in-process advantage. The memory
+ratio (104×) vs Record codegen is the real story: typed's
+stack-allocated structs stay under 10 MB while Record's per-row
+`map[string]any` blows past 900 MB on the same workload.
 
 The 800-byte source-size delta is the auto-derived struct types
 (`EmployeesRow`, `DepartmentsRow`, `EmployeesRow_DepartmentsRow`).
