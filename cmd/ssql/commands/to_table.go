@@ -143,8 +143,14 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 		// much code for a feature most pipelines route through 'to
 		// csv' anyway. Users who care about pretty alignment can pipe
 		// the generated program's output through the `column` utility.
-		code := generateTypedToTableCode(prevSchema, fields, onlySpecified, inputVar)
-		frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
+		readVar := inputVar
+		imports := []string{"fmt"}
+		if parallelMode() {
+			readVar = inputVar + ".Serial()"
+			imports = append(imports, "github.com/rosscartlidge/ssql/v4/typed")
+		}
+		code := generateTypedToTableCode(prevSchema, fields, onlySpecified, readVar)
+		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
 		frag.InputTypedSchema = prevSchema
 		return lib.WriteCodeFragment(frag)
 	}

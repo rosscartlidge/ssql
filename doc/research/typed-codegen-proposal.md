@@ -1,6 +1,6 @@
 # `ssql generate go -typed` — Phase 2 Proposal
 
-**Status:** Tier 1 + Tier 2 + Tier 3a + Tier 3b SHIPPED (2026-04-26 / 2026-04-27). Activate with `SSQLGO=typed` instead of `SSQLGO=1`.
+**Status:** Tier 1 + Tier 2 + Tier 3a + Tier 3b + parallel-mode SHIPPED (2026-04-26 / 2026-04-27). Activate with `SSQLGO=typed` for serial typed Go, or `SSQLGO=parallel` for parallel typed Go (Stream[T] + HashJoinParallel + ReadCSVParallel). See [§5d](#5d-parallel-mode-codegen-ssqlgoparallel) for the parallel-mode constraints and measured numbers.
 
 **Tier 1 (initial ship):** `from FILE.csv` (with schema sampling), `where -if FIELD OP VALUE` (literal operators), `join FILE.csv -using FIELD` / `-on LEFT RIGHT` (single-key, single-clause + process-substitution), `to csv [FILE]`, `to table`.
 
@@ -186,6 +186,35 @@ Add when the MVP ships and we have user feedback:
 - **Multi-clause joins** — same shape, just multiple `HashJoin` calls chained.
 - **`distinct` / `sort` / `limit` / `skip` / `offset`** — `typed.Limit`/`typed.Skip`; `sort` likely needs a `typed.SortBy` runtime addition.
 - **`union`** — concatenation of streams of the same type.
+
+## 5d. Parallel-Mode Codegen (`SSQLGO=parallel`)
+
+Activate with `SSQLGO=parallel` (everything else identical to `SSQLGO=typed`). The generator emits Go code that uses the parallel runtime: `typed.ReadCSVParallel[T]`, `typed.Stream[T]`, `Stream.Where`, `typed.HashJoinParallel`, `Stream.Serial()` at the sink.
+
+**Supported in v1:** `from FILE.csv`, `where -if F OP V`, `join FILE -using F`, `to csv`, `to table`. Other typed-aware commands (limit, offset, include, exclude, rename, group-by, sort, distinct, union, top, cast, update) currently emit a clear "not yet supported in parallel mode" error suggesting a fallback to `SSQLGO=typed`. Each maps to a tractable expansion later — `limit/offset` need a Stream variant, `group-by` needs `GroupByParallel` (Sink/Combine/Finalize), `sort/distinct` need parallel-merge variants.
+
+**When parallel-mode wins (and when it doesn't):**
+
+| Workload | typed-serial | parallel | Outcome |
+|---|---:|---:|---|
+| Filter `age > 30` (7.25 M output rows) | 6.59 s | 9.07 s | **parallel slower (0.73×)** |
+| Filter `age > 55` (1 M output rows) | 3.86 s | 1.88 s | **parallel 2.05× faster** |
+| Aggregating sink (count, via `SerialCount`) | 5.00 s | 0.77 s | **parallel 6.4× faster** |
+
+**The pattern.** Parallel-mode wins when the *output* is much smaller than the input. The `Serial()` fan-in needed before `WriteCSV` adds per-row channel overhead that exceeds the parallel-filter savings when output ≈ input. For high-cardinality output writes (filter+join+write-everything), `SSQLGO=typed` is the right choice.
+
+**Honest user guidance:**
+
+- **Use `SSQLGO=parallel` for** filter-heavy / aggregate-style pipelines: `from | where (selective) | ...`, `from | where | join | to count`, future `from | ... | group-by`.
+- **Use `SSQLGO=typed` for** pipelines that transform-and-write large outputs: `from | where (loose) | to csv`, anything with `output_rows ≈ input_rows`.
+
+**Why we ship a known-loss case at all:** documenting the loss + giving users a per-pipeline choice is more useful than refusing to emit parallel code for "to csv" pipelines. The future `to count` / `to sum` / `to first` sinks would close the gap when paired with parallel mode.
+
+**Future work (in priority order):**
+1. **Per-shard CSV output buffers, no fan-in channel.** Each shard writes to its own `bytes.Buffer`; final stage dumps buffers sequentially. Loses streaming, peak memory ~2× output size, but eliminates the channel cost. ~2 hours of work.
+2. **Stream-aware `Limit`, `Offset`, `Distinct`** so common pipelines aren't blocked by parallel-mode rejection.
+3. **`GroupByParallel`** with the Sink/Combine/Finalize three-phase contract from the original concurrency proposal.
+4. **`SerialOrdered()` fan-in** for users who need input-order = output-order.
 
 ## 6. Tier 3 (Deferred Indefinitely)
 

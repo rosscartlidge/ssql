@@ -97,18 +97,26 @@ func generateToCSVCode(filename string) error {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'to csv' has no typed input; %s does not yet support typed mode (Tier 2 or Tier 3) — drop -typed or refactor the pipeline", lastNamedCommand(fragments)))
 		}
+		// In parallel mode, the input is a typed.Stream[T] — call
+		// Serial() to flatten back to iter.Seq[T] for WriteCSV.
+		// This is the natural sink boundary; the parallel work
+		// (read+filter+joins) has already happened upstream.
+		readVar := inputVar
+		if parallelMode() {
+			readVar = inputVar + ".Serial()"
+		}
 		if filename == "" {
 			code = fmt.Sprintf(`if err := typed.WriteCSVToWriter(%s, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar)
+	}`, readVar)
 			imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
 		} else {
 			params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output CSV file", VarName: "flagOutput"})
 			code = fmt.Sprintf(`if err := typed.WriteCSV(%s, *flagOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar)
+	}`, readVar)
 			imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
 		}
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())

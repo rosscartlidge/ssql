@@ -134,6 +134,9 @@ func generateRenameCode(renames []struct{ oldField, newField string }) error {
 	}
 
 	if typedMode() {
+		if err := rejectParallelMode("rename"); err != nil {
+			return err
+		}
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'rename' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))

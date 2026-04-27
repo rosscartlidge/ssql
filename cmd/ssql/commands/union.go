@@ -132,6 +132,9 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 	}
 
 	if typedMode() {
+		if err := rejectParallelMode("union"); err != nil {
+			return err
+		}
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'union' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))

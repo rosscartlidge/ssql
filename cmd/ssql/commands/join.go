@@ -627,7 +627,14 @@ func emitTypedJoin(
 		}
 	}
 
-	stmtCode := fmt.Sprintf(`joined := typed.HashJoin(%s, %s(),
+	joinFn := "typed.HashJoin"
+	if parallelMode() {
+		// HashJoinParallel — left is a Stream[L]; right side is read
+		// serially via the funcName() call (process-sub or file).
+		joinFn = "typed.HashJoinParallel"
+	}
+
+	stmtCode := fmt.Sprintf(`joined := %s(%s, %s(),
 		func(l %s) %s { return l.%s },
 		func(r %s) %s { return r.%s },
 		func(l %s, r %s) %s {
@@ -635,7 +642,7 @@ func emitTypedJoin(
 				%s,
 			}
 		})`,
-		inputVar, funcName,
+		joinFn, inputVar, funcName,
 		leftSchema.TypeName, keyType, leftKeyField.GoName,
 		rightSchema.TypeName, keyType, rightKeyField.GoName,
 		leftSchema.TypeName, rightSchema.TypeName, mergedSchema.TypeName,
@@ -647,6 +654,7 @@ func emitTypedJoin(
 	stmtFrag.InputTypedSchema = leftSchema
 	stmtFrag.OutputTypedSchema = mergedSchema
 	stmtFrag.StructDefs = []string{mergedDef}
+	stmtFrag.IsStream = parallelMode()
 	return lib.WriteCodeFragment(stmtFrag)
 }
 

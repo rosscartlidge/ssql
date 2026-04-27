@@ -79,6 +79,9 @@ func generateDistinctCode() error {
 	outputVar := "distinct"
 
 	if typedMode() {
+		if err := rejectParallelMode("distinct"); err != nil {
+			return err
+		}
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'distinct' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))

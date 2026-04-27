@@ -328,21 +328,32 @@ func chainRecords(firstRecords iter.Seq[ssql.Record], additionalFiles []string) 
 // shouldGenerate checks if code generation is enabled via flag or environment variable
 // Returns true if:
 //   - The generate flag is explicitly set to true, OR
-//   - The SSQLGO environment variable is set to "1", "true", or "typed"
+//   - The SSQLGO environment variable is set to "1", "true", "typed", or "parallel"
 func shouldGenerate(flagValue bool) bool {
 	if flagValue {
 		return true
 	}
 	envValue := os.Getenv("SSQLGO")
-	return envValue == "1" || envValue == "true" || envValue == "typed"
+	return envValue == "1" || envValue == "true" || envValue == "typed" || envValue == "parallel"
 }
 
 // typedMode returns true when the pipeline is running under
-// SSQLGO=typed (Phase 2 typed-codegen mode). Commands that support
-// typed-mode emission should branch on this; commands that don't
-// should emit a clear error fragment via writeUnsupportedTypedFragment.
+// SSQLGO=typed OR SSQLGO=parallel — both produce typed-Go output;
+// parallel mode adds Stream[T] / HashJoinParallel / etc. on top.
+//
+// Commands that support typed-mode emission should branch on
+// typedMode(); commands that additionally support parallel emission
+// further branch on parallelMode() inside the typed branch.
 func typedMode() bool {
-	return os.Getenv("SSQLGO") == "typed"
+	v := os.Getenv("SSQLGO")
+	return v == "typed" || v == "parallel"
+}
+
+// parallelMode returns true only when SSQLGO=parallel — strictly
+// stronger than typedMode (every parallel-mode pipeline is also a
+// typed-mode pipeline).
+func parallelMode() bool {
+	return os.Getenv("SSQLGO") == "parallel"
 }
 
 // lastNamedCommand returns a human-readable description of the most
@@ -356,6 +367,18 @@ func lastNamedCommand(fragments []*lib.CodeFragment) string {
 		}
 	}
 	return "an upstream command"
+}
+
+// rejectParallelMode emits an error fragment if the pipeline is
+// running under SSQLGO=parallel and the calling command doesn't yet
+// support Stream-based emission. Returns nil if parallel mode is
+// off (caller continues as normal).
+func rejectParallelMode(cmdName string) error {
+	if !parallelMode() {
+		return nil
+	}
+	return lib.WriteErrorAndExit(getCommandString(),
+		fmt.Errorf("ssql generate go -parallel: %q not yet supported in parallel mode (only from/where/join/to csv/to table are streamable in v1); drop -parallel and use SSQLGO=typed", cmdName))
 }
 
 // getCommandString returns the command line that invoked this command

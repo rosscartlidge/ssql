@@ -417,6 +417,11 @@ Phase 2 — Tier 2 shipped (2026-04-26):
 - [x] `group-by FIELDS… -count -sum -avg -min -max` (typed.GroupBy with
       synthesized aggregator + result struct, single- or multi-field keys)
 
+Phase 2 — `SSQLGO=parallel` codegen shipped (2026-04-27):
+- [x] Same pipeline shape as `SSQLGO=typed`, with `from`/`where`/`join`/`to csv`/`to table` emitting Stream-based parallel code (typed.ReadCSVParallel + Stream.Where + typed.HashJoinParallel + Serial() sink).
+- [x] Other typed-aware commands (limit, group-by, sort, distinct, etc.) emit a clear error suggesting `SSQLGO=typed` instead.
+- **When to use it:** filter-heavy / aggregating pipelines. **2× faster** when output rows ≪ input rows; **6.4× faster** for count-only sinks. **slower** for transform-and-write-everything pipelines (Serial() fan-in cost > parallel-filter savings). See [`research/typed-codegen-proposal.md` §5d](research/typed-codegen-proposal.md#5d-parallel-mode-codegen-ssqlgoparallel) for the workload-vs-mode table.
+
 Phase 2 — Tier 3a shipped (2026-04-27, on top of Phase 1.7):
 - [x] `sort FIELD` and `sort FIELD -desc` (single-field)
 - [x] `distinct` (full-row dedup; pointer fields compare by identity)

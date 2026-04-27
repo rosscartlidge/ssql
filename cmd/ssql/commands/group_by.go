@@ -781,6 +781,9 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	// aggregator and a derived result struct. Tier 2 limits: no -expr /
 	// -stream-expr (Tier 3), no -rollup / -cube, no -collect (deferred).
 	if typedMode() {
+		if err := rejectParallelMode("group-by"); err != nil {
+			return err
+		}
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'group-by' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))

@@ -125,6 +125,9 @@ func generateExcludeCode(fields []string) error {
 	}
 
 	if typedMode() {
+		if err := rejectParallelMode("exclude"); err != nil {
+			return err
+		}
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'exclude' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))

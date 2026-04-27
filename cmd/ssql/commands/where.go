@@ -347,18 +347,28 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 	}
 
 	outputVar := "filtered"
-	code := fmt.Sprintf("%s := typed.Where(func(r %s) bool {\n\t\t%s\n\t})(%s)",
-		outputVar, schema.TypeName, body, inputVar)
-
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	if schemaUsesTime(schema) {
 		imports = append(imports, "time")
+	}
+
+	var code string
+	isStream := false
+	if parallelMode() {
+		// Stream.Where — embarrassingly parallel, T -> T.
+		code = fmt.Sprintf("%s := %s.Where(func(r %s) bool {\n\t\t%s\n\t})",
+			outputVar, inputVar, schema.TypeName, body)
+		isStream = true
+	} else {
+		code = fmt.Sprintf("%s := typed.Where(func(r %s) bool {\n\t\t%s\n\t})(%s)",
+			outputVar, schema.TypeName, body, inputVar)
 	}
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
 	// Where doesn't change the row type — pass the schema through.
 	frag.InputTypedSchema = schema
 	frag.OutputTypedSchema = schema
+	frag.IsStream = isStream
 	return lib.WriteCodeFragment(frag)
 }
 

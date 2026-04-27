@@ -55,6 +55,13 @@ type CodeFragment struct {
 	InputTypedSchema  *TypedSchema `json:"input_typed_schema,omitempty"`
 	OutputTypedSchema *TypedSchema `json:"output_typed_schema,omitempty"`
 	StructDefs        []string     `json:"struct_defs,omitempty"`
+
+	// Phase 2 parallel-mode (SSQLGO=parallel): when true, the
+	// fragment's output Var is a typed.Stream[T] rather than an
+	// iter.Seq[T]. The typed-mode assembler uses this to decide
+	// whether to import "runtime", whether to emit Serial/SerialCount
+	// boundaries at sinks, etc.
+	IsStream bool `json:"is_stream,omitempty"`
 }
 
 // TypedSchema describes the row type flowing between two pipeline

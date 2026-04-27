@@ -314,7 +314,6 @@ func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, 
 			fmt.Errorf("ssql generate go -typed: %w", err))
 	}
 
-	code := fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput)`, schema.TypeName)
 	params := []lib.CodeParam{{
 		Name:    "input",
 		Default: filename,
@@ -326,10 +325,22 @@ func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, 
 		imports = append(imports, "time")
 	}
 
+	var code string
+	isStream := false
+	if parallelMode() {
+		// Parallel mode: read the file in parallel, return a Stream[T].
+		code = fmt.Sprintf(`records := typed.ReadCSVParallel[%s](*flagInput, runtime.GOMAXPROCS(0))`, schema.TypeName)
+		imports = append(imports, "runtime")
+		isStream = true
+	} else {
+		code = fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput)`, schema.TypeName)
+	}
+
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}
+	frag.IsStream = isStream
 	return lib.WriteCodeFragment(frag)
 }
 

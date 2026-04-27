@@ -95,6 +95,9 @@ func generateOffsetCode(n int) error {
 	}
 
 	if typedMode() {
+		if err := rejectParallelMode("offset"); err != nil {
+			return err
+		}
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'offset' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))

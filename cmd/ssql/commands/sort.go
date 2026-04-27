@@ -148,6 +148,9 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 	outputVar := "sorted"
 
 	if typedMode() {
+		if err := rejectParallelMode("sort"); err != nil {
+			return err
+		}
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'sort' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
