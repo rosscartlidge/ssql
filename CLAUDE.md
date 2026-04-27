@@ -62,6 +62,15 @@ See `claude/performance-patterns.md` for full details and examples.
 - **Pre-allocate buffers outside loops**, reset with `buf = buf[:0]` (keep capacity).
 - **Profile before optimizing**: `go test -cpuprofile cpu.prof -bench BenchmarkName`
 
+### Concurrency Patterns (CRITICAL)
+See `claude/concurrency.md` for full details, measurements, and negative results.
+
+**Rules (never violate):**
+- **Never put a channel between every row and its next consumer.** Per-row channel transit is ~100 ns; on a 4-stage pipeline over 7M rows that's 2.8 s of pure overhead. The first PoC tried this and was 3x SLOWER than single-threaded. Use `ParallelFromSlice` (slice partitioning, no channel) instead of channel-based `Parallel` whenever the source is in memory.
+- **Always shadow the loop variable** (`shard := shard`) inside `for _, shard := range shards { go func() { ... } }`. Go 1.22+ scoping helps but doesn't cover every case.
+- **`go test -race ./typed/...` is a hard CI gate** for any commit that touches `typed/stream.go`.
+- **Keep failed concurrency experiments as reference negative results** rather than deleting them. `BenchmarkScaleTypedParallel3Join` is the canonical example — channel-based Parallel measured 11.65s vs 5.30s single-threaded.
+
 ### Refactor CLI When Exporting New Package Functions (CRITICAL)
 EVERY time a new public function is added to the ssql package, check whether existing CLI commands can be simplified. The CLI should be a thin layer over ssql package primitives.
 
@@ -256,6 +265,7 @@ For detailed examples, rationale, and history, read the relevant `claude/` file:
 | Completion system, field cache, SSH warmup, debugging | `claude/completion-system.md` |
 | Code generation system | `claude/code-generation.md` |
 | Performance patterns | `claude/performance-patterns.md` |
+| Concurrency patterns and lessons | `claude/concurrency.md` |
 | Record API | `claude/record-api.md` |
 | GPU acceleration | `claude/gpu-acceleration.md` |
 | autocli migration | `claude/autocli-migration.md` |
