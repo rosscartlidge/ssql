@@ -777,13 +777,11 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		return fmt.Errorf("-presorted cannot be combined with -rollup or -cube")
 	}
 
-	// Typed-mode branch — emits typed.GroupBy with a synthesized
-	// aggregator and a derived result struct. Tier 2 limits: no -expr /
-	// -stream-expr (Tier 3), no -rollup / -cube, no -collect (deferred).
+	// Typed-mode branch — emits typed.GroupBy (or typed.GroupByParallel
+	// in parallel mode) with a synthesized aggregator and a derived
+	// result struct. Tier 2 limits: no -expr / -stream-expr (Tier 3),
+	// no -rollup / -cube, no -collect (deferred).
 	if typedMode() {
-		if err := rejectParallelMode("group-by"); err != nil {
-			return err
-		}
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'group-by' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
@@ -806,7 +804,11 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 					fmt.Errorf("ssql generate go -typed: -collect not yet supported (would need slice-typed result fields); drop -typed for now"))
 			}
 		}
-		return emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, presorted)
+		if parallelMode() && presorted {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed (parallel): -presorted is incompatible with parallel mode (shards split contiguous runs); drop SSQLGO=parallel and use SSQLGO=typed for this pipeline"))
+		}
+		return emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, presorted, parallelMode())
 	}
 
 	// Rollup/cube code generation path

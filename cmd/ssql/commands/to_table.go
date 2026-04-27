@@ -126,9 +126,11 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 
 	var inputVar string
 	var prevSchema *lib.TypedSchema
+	var prevIsStream bool
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
 		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
+		prevIsStream = fragments[len(fragments)-1].IsStream
 	} else {
 		inputVar = "records"
 	}
@@ -145,7 +147,7 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 		// the generated program's output through the `column` utility.
 		readVar := inputVar
 		imports := []string{"fmt"}
-		if parallelMode() {
+		if prevIsStream {
 			readVar = inputVar + ".Serial()"
 			imports = append(imports, "github.com/rosscartlidge/ssql/v4/typed")
 		}

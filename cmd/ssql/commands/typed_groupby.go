@@ -25,7 +25,13 @@ import (
 // Aggregation set is restricted to count/sum/avg/min/max in v1 (no
 // collect, no expr, no stream-expr). The caller has validated this
 // before invoking us.
-func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string, specs []aggSpec, presorted bool) error {
+//
+// parallel selects between typed.GroupBy (false) and
+// typed.GroupByParallel (true). The synthesized aggregator gets a
+// Merge method when parallel; the call site uses
+// typed.ParallelAggregator and typed.GroupByParallel; the upstream
+// fragment is expected to carry a Stream[T].
+func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string, specs []aggSpec, presorted, parallel bool) error {
 	// Validate group fields exist in the input schema.
 	groupSchemaFields := make([]lib.TypedSchemaField, 0, len(groupFields))
 	for _, name := range groupFields {
@@ -77,7 +83,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	// ---- aggregator type ----
 	aggTypeName := in.TypeName + "Aggregator"
 	aggResultName := aggTypeName + "Result"
-	aggDef, _, _ := buildTypedAggregator(aggTypeName, in, specs, groupSchemaFields, resultName)
+	aggDef, _, _ := buildTypedAggregator(aggTypeName, in, specs, groupSchemaFields, resultName, parallel)
 
 	// Assemble all three struct/type definitions.
 	defs := []string{aggDef}
@@ -86,19 +92,24 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	}
 	defs = append(defs, resultDef)
 
-	// ---- the typed.GroupBy call itself ----
+	// ---- the typed.GroupBy / typed.GroupByParallel call itself ----
 	groupFn := "typed.GroupBy"
+	aggIface := "typed.Aggregator"
 	if presorted {
 		groupFn = "typed.GroupByOrdered"
 	}
+	if parallel {
+		groupFn = "typed.GroupByParallel"
+		aggIface = "typed.ParallelAggregator"
+	}
 
-	// The aggregator's Result() returns aggResultName; typed.GroupBy
+	// The aggregator's Result() returns aggResultName; typed.GroupBy(Parallel)
 	// passes that to our build function. The build function then
 	// constructs the final group-output struct (resultName) from the
 	// key plus the aggregator result.
 	code := fmt.Sprintf(`grouped := %s(%s,
 		func(r %s) %s { return %s },
-		func() typed.Aggregator[%s, %s] { return &%s{} },
+		func() %s[%s, %s] { return &%s{} },
 		func(k %s, agg %s) %s {
 			return %s{
 				%s,
@@ -106,7 +117,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 		})`,
 		groupFn, inputVar,
 		in.TypeName, keyType, keyExpr,
-		in.TypeName, aggResultName, aggTypeName,
+		aggIface, in.TypeName, aggResultName, aggTypeName,
 		keyType, aggResultName, resultName,
 		resultName,
 		buildResultCtor(groupSchemaFields, specs, aggResultName),
@@ -191,7 +202,14 @@ func renderResultStructDef(s *lib.TypedSchema) string {
 // for the given aggregation specs. Returns the struct definition,
 // plus separate Add and Result body strings (the Add body is already
 // embedded into the returned definition).
-func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSpec, groupFields []lib.TypedSchemaField, resultName string) (def, addBody, resultBody string) {
+//
+// When parallel is true, also emits a Merge method so the struct
+// satisfies typed.ParallelAggregator and can be used with
+// typed.GroupByParallel. Merge rules per aggregation function are
+// the trivially associative ones (count: N1+N2; sum: s1+s2; avg:
+// sum1+sum2 + n1+n2; min/max: pick the better while honouring the
+// "have value" flag).
+func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSpec, groupFields []lib.TypedSchemaField, resultName string, parallel bool) (def, addBody, resultBody string) {
 	// Decide what state to hold per spec.
 	type aggState struct {
 		spec      aggSpec
@@ -293,6 +311,36 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		}
 	}
 	d.WriteString("\t}\n}\n\n")
+
+	// Merge() — only emitted in parallel mode. Each shard's partial
+	// aggregator gets folded into the surviving one. The peer is
+	// recovered via type assertion; mismatched concrete types are a
+	// programmer error and we no-op rather than panic.
+	if parallel {
+		fmt.Fprintf(&d, "func (a *%s) Merge(other typed.Aggregator[%s, %sResult]) {\n", aggTypeName, in.TypeName, aggTypeName)
+		fmt.Fprintf(&d, "\to, ok := other.(*%s)\n", aggTypeName)
+		d.WriteString("\tif !ok {\n\t\treturn\n\t}\n")
+		for _, s := range states {
+			switch s.spec.function {
+			case "count", "sum":
+				fmt.Fprintf(&d, "\ta.%s += o.%s\n", s.stateName, s.stateName)
+			case "avg":
+				fmt.Fprintf(&d, "\ta.%s += o.%s\n", s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\ta.%s_n += o.%s_n\n", s.stateName, s.stateName)
+			case "min":
+				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || o.%s < a.%s) {\n", s.stateName, s.stateName, s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\t\ta.%s = o.%s\n", s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
+				d.WriteString("\t}\n")
+			case "max":
+				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || o.%s > a.%s) {\n", s.stateName, s.stateName, s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\t\ta.%s = o.%s\n", s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
+				d.WriteString("\t}\n")
+			}
+		}
+		d.WriteString("}\n\n")
+	}
 
 	// The Result struct itself.
 	fmt.Fprintf(&d, "// %sResult is the per-group result of the synthesized aggregator.\n", aggTypeName)
