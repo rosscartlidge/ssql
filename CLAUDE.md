@@ -67,6 +67,7 @@ See `claude/concurrency.md` for full details, measurements, and negative results
 
 **Rules (never violate):**
 - **Never put a channel between every row and its next consumer.** Per-row channel transit is ~100 ns; on a 4-stage pipeline over 7M rows that's 2.8 s of pure overhead. The first PoC tried this and was 3x SLOWER than single-threaded. Use `ParallelFromSlice` (slice partitioning, no channel) instead of channel-based `Parallel` whenever the source is in memory.
+- **Use `bytes.IndexByte` for byte-search in hot paths**, not `for i, b := range data { if b == '\n' { ... } }`. The first form is SIMD-accelerated on amd64 (~5-10× faster than byte-by-byte). Switching the parallel-CSV newline scan saved 210 ms on a 600 MB file.
 - **Always shadow the loop variable** (`shard := shard`) inside `for _, shard := range shards { go func() { ... } }`. Go 1.22+ scoping helps but doesn't cover every case.
 - **`go test -race ./typed/...` is a hard CI gate** for any commit that touches `typed/stream.go`.
 - **Keep failed concurrency experiments as reference negative results** rather than deleting them. `BenchmarkScaleTypedParallel3Join` is the canonical example — channel-based Parallel measured 11.65s vs 5.30s single-threaded.

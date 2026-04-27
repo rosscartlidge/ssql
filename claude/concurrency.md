@@ -164,22 +164,52 @@ Measured on Intel Core Ultra 9 275HX (24 logical cores), 10M × 3 chained inner 
 
 For pure-compute kernels (FFT, hash computation) we'd expect closer to 70-80% efficiency. For I/O-bound work, much worse — see §7.
 
-## 7. CSV I/O Is the Next Bottleneck (Not Yet Tackled)
+## 7. CSV I/O Parallelism: ReadCSVParallel
 
-**Rule: when end-to-end speedups stall, look at where the un-parallelized work lives.**
+**Rule: for end-to-end speedups, the CSV reader has to parallelize too.**
 
-The end-to-end pipeline (CSV read → filter → 3 joins → output) measures:
+The end-to-end pipeline (CSV read → filter → 3 joins → output)
+measures (10M × 3 joins, 7.25M output rows):
 
 | Mode | End-to-end | Compute-only |
 |---|---:|---:|
-| typed serial | 5,300 ms | 1,259 ms |
-| typed parallel (24 shards) | ≈ 5,200 ms (estimate) | 124 ms |
+| typed serial | 5,000 ms | 1,259 ms |
+| typed parallel (compute only) | (n/a, preloaded) | 124 ms |
+| typed parallel + ReadCSVParallel | **774 ms** | (subset of above) |
 
-Parallelizing compute didn't help the end-to-end number much because **CSV reading dominates**. The single-threaded CSV reader is now the Amdahl-serial portion limiting end-to-end gains.
+`ReadCSVParallel[T]` shipped 2026-04-27 and took the end-to-end gap
+to DuckDB from 14× behind to 2.2× behind.
 
-Next investment per the proposal §9a: `ReadCSVParallel[T]` — partition the CSV file by byte range, each shard scans forward to its first newline boundary and reads its slice. DuckDB does this; it's why their CSV path is fast.
+**How it works.** Read the whole file into memory once, scan
+newlines using `bytes.IndexByte` (SIMD on amd64), partition data
+lines across n shards, each shard wraps its byte range in
+`csv.NewReader(bytes.NewReader(chunk))` and parses rows
+independently. The header is parsed once and the resulting
+`*rowSchema` is shared read-only across shards.
 
-Until that ships, **don't claim end-to-end speedups from concurrency**. The honest claim is "10× at compute".
+**Limitation, documented in the function:** assumes no quoted
+fields with embedded newlines. Files produced by `typed.WriteCSV`
+satisfy this. RFC-4180-correct quoted-multiline parsing requires
+streaming-stateful parsing across the byte boundary, which would
+serialize the partitioning step.
+
+**Why we read the whole file into memory.** Scanning newlines on a
+streaming reader can't be parallelized — you have to know all the
+boundaries before partitioning. Reading 600 MB into memory takes
+~200 ms; the alternative is a complex byte-range pre-scan that
+delivers similar performance at much higher complexity.
+
+**`bytes.IndexByte` is SIMD on amd64.** Switching from
+`for i, b := range data { if b == '\n' { ... } }` to a
+`bytes.IndexByte`-driven loop saved ~210 ms on the 600 MB scan.
+**Always use `bytes.IndexByte` for byte search in hot paths**
+unless you specifically need the byte-by-byte form.
+
+**What's left for closing the DuckDB gap.** 2.2× behind DuckDB
+end-to-end. The remaining gap requires SIMD-vectorized parsing,
+columnar layout, or Apache Arrow as the runtime. Each trades away
+the "pure Go, no native deps, ~600 LOC data path" pitch. **Defer
+unless a real workload demands it.**
 
 ## 8. Negative Results Worth Preserving
 

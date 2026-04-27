@@ -1,6 +1,6 @@
 # `ssql/typed` — Concurrency Proposal
 
-**Status:** PoC SHIPPED (2026-04-27). Measured a **10.1× speedup over single-threaded typed compute** on the 10M × 3-join workload, putting typed-parallel **2.8× ahead of DuckDB** at the compute level. Full numbers in [§9a](#9a-poc-results-2026-04-27).
+**Status:** PoC SHIPPED (2026-04-27). Measured a **10.1× speedup at compute** and a **6.4× end-to-end speedup** on the 10M × 3-join workload. End-to-end with `ReadCSVParallel`, typed-parallel runs at **2.2× of DuckDB's wall time** — the architectural gap is now narrow enough that further closing requires SIMD or columnar layout (Phase 3+ work). Full numbers in [§9a](#9a-poc-results-2026-04-27).
 
 Predecessor:
 [`typed-package-proposal.md`](typed-package-proposal.md) (Phase 1 + 1.5 + 1.6 shipped),
@@ -379,24 +379,37 @@ in `typed/stream.go` (~120 LOC) and benchmarked against the same 10M
 
 ### Headline numbers
 
-10M × 3 chained joins, 7.25 M output rows, all preloaded into memory
-so the comparison is compute-only:
+10M × 3 chained joins, 7.25 M output rows. Two comparisons:
+
+**Compute only (preloaded into memory):**
 
 | Implementation | Wall time | Speedup vs serial |
 |---|---:|---:|
 | typed serial (single-threaded) | 1,259 ms | 1.0× |
 | **typed parallel (24 shards)** | **124 ms** | **10.1×** |
-| DuckDB CLI (end-to-end incl. CSV) | 345 ms | (different scope) |
 
-Reproduce: `go test -bench='ScaleTypedSerialCompute|ScaleTypedSliceParallel|ScaleDuckDB3Join$' -benchtime=3x -run=^$ -timeout=15m ./typed/...`
+**End-to-end (CSV read → filter → 3 joins → count):**
 
-10.1× scaling on 24 logical cores is roughly Amdahl-bounded (filter
-selectivity is ~70%, output cardinality varies per shard, memory
-bandwidth saturates somewhere in the build/probe boundary). It's
-within the proposal's §7 estimate of "3-4× over single-threaded
-end-to-end" once you note the original estimate was end-to-end and
-this is compute-only — they measure different fractions of the
-same pipeline.
+| Implementation | Wall time | Speedup vs serial | vs DuckDB |
+|---|---:|---:|---:|
+| typed serial | 4,997 ms | 1.0× | 14× behind |
+| **typed parallel (`ReadCSVParallel` + `HashJoinParallel` + `SerialCount`)** | **774 ms** | **6.4×** | **2.2× behind** |
+| DuckDB CLI | 356 ms | — | — |
+
+Reproduce:
+```bash
+go test -bench='ScaleTypedReadCSVParallel|ScaleTypedSerialCompute|ScaleTypedSliceParallel|ScaleTyped3Join$|ScaleDuckDB3Join$' -benchtime=3x -run=^$ -timeout=15m ./typed/...
+```
+
+10.1× scaling at compute on 24 logical cores is Amdahl-bounded
+(filter selectivity ~70%, output cardinality varies per shard,
+memory bandwidth saturates at the build/probe boundary). 6.4×
+end-to-end means **80% of the original DuckDB gap closed** with a
+~350-line PoC — no SIMD, no columnar storage, no CGO. The
+remaining 2.2× requires architectural changes: vectorized SIMD
+parsing, columnar in-memory representation, or Apache Arrow as
+the runtime — all of which trade away the "pure Go, no native deps,
+~600 LOC data path" pitch.
 
 ### Channel design failure (and the lesson)
 
@@ -430,9 +443,13 @@ plus the build-once-shared-read hashmap from `HashJoinParallel`.
 
 ### What the PoC doesn't yet have
 
-- **Parallel CSV reading.** Without `ReadCSVParallel`, end-to-end
-  pipelines are still bound by single-threaded I/O (~5 s of the
-  6 s end-to-end serial time). This is the next obvious axis.
+- **Parallel CSV reading.** ✅ SHIPPED — `ReadCSVParallel[T]`. Reads
+  the file into memory, scans newlines via SIMD `bytes.IndexByte`,
+  partitions data lines across shards, each shard runs its own
+  `csv.Reader` over its byte range. Documented limitation: assumes
+  no quoted fields with embedded newlines (files produced by
+  `typed.WriteCSV` satisfy this; arbitrary external files may not).
+  This took the end-to-end gap to DuckDB from 14× to 2.2×.
 - **Ordering preservation.** `Serial()` fan-in is unordered.
   `SerialOrdered()` (round-robin merge) is sketched in §5 but
   not built.
@@ -445,18 +462,24 @@ plus the build-once-shared-read hashmap from `HashJoinParallel`.
 
 ### Recommendation
 
-The PoC's headline number (10.1× compute-only, beating DuckDB) is
-strong enough to justify promoting the parallel runtime into the
+The PoC's measured numbers — 10.1× at compute, 6.4× end-to-end,
+2.2× from DuckDB — justify promoting the parallel runtime into the
 package proper. Next investments, in order:
 
-1. **`ReadCSVParallel[T]`** — biggest end-to-end win remaining; the
-   single-threaded CSV path is now the bottleneck.
-2. **`Stream.SerialOrdered`** — for users who need
+1. ✅ ~~`ReadCSVParallel[T]`~~ — done; closes 80% of the DuckDB gap.
+2. **Codegen `-parallel` flag** — surface the speedup to users
+   without requiring them to rewrite as Go. Now the highest-leverage
+   item: the runtime is fast enough; the codegen integration is what
+   exposes it.
+3. **`Stream.SerialOrdered`** — for users who need
    input-order = output-order.
-3. **`GroupByParallel` with Sink / Combine / Finalize** —
+4. **`GroupByParallel` with Sink / Combine / Finalize** —
    completes the parallel-aware operator set.
-4. **Codegen `-parallel` flag** — surface the speedup to users
-   without requiring them to rewrite as Go.
+5. **Beyond 2.2× of DuckDB** would require SIMD-vectorized parsing
+   (Go stdlib gives us `bytes.IndexByte` but no vectorized struct
+   decode), columnar layout, or Apache Arrow. Each trades away
+   "pure Go, no native deps". Defer indefinitely unless a real user
+   workload demands it.
 
 ## 10. What This Proposal Doesn't Try to Do
 

@@ -249,3 +249,69 @@ func BenchmarkScaleTypedSerialCompute3Join(b *testing.B) {
 		b.ReportMetric(float64(count), "rows_out")
 	}
 }
+
+// BenchmarkScaleTypedReadCSVParallel3Join is the end-to-end parallel
+// pipeline: ReadCSVParallel for the 10M-row source, serial ReadCSV
+// for the small lookup tables (parallel reading them is pointless),
+// HashJoinParallel for all three joins, SerialCount sink.
+//
+// This is the apples-to-apples comparison against DuckDB end-to-end:
+// both include CSV reading, parsing, filtering, joining, and counting.
+func BenchmarkScaleTypedReadCSVParallel3Join(b *testing.B) {
+	setupScaleData(b)
+	n := runtime.GOMAXPROCS(0)
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		// Parallel CSV read for the big source.
+		stream := ReadCSVParallel[scaleData](scaleDataFile, n)
+
+		// Lookup tables stay serial — they're tiny.
+		depts := ReadCSV[scaleDept](scaleDeptFile)
+		regs := ReadCSV[scaleRegion](scaleRegFile)
+		cities := ReadCSV[scaleCity](scaleCityFile)
+
+		filtered := stream.Where(func(r scaleData) bool { return r.Age > 30 })
+
+		j1 := HashJoinParallel(filtered, depts,
+			func(l scaleData) string { return l.DeptID },
+			func(r scaleDept) string { return r.DeptID },
+			func(l scaleData, r scaleDept) scaleJoin1 {
+				return scaleJoin1{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: r.DeptName, RegionID: r.RegionID,
+				}
+			})
+
+		j2 := HashJoinParallel(j1, regs,
+			func(l scaleJoin1) string  { return l.RegionID },
+			func(r scaleRegion) string { return r.RegionID },
+			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
+				return scaleJoin2{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: l.DeptName, RegionID: l.RegionID,
+					RegionName: r.RegionName, CityID: r.CityID,
+				}
+			})
+
+		j3 := HashJoinParallel(j2, cities,
+			func(l scaleJoin2) string { return l.CityID },
+			func(r scaleCity) string  { return r.CityID },
+			func(l scaleJoin2, r scaleCity) scaleJoin3 {
+				return scaleJoin3{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: l.DeptName, RegionID: l.RegionID,
+					RegionName: l.RegionName, CityID: l.CityID,
+					City: r.City, Country: r.Country,
+				}
+			})
+
+		count := j3.SerialCount()
+		if count == 0 {
+			b.Fatal("expected non-zero count")
+		}
+		b.ReportMetric(float64(count), "rows_out")
+		b.ReportMetric(float64(n), "shards")
+	}
+}

@@ -1,10 +1,14 @@
 package typed
 
 import (
+	"bytes"
+	"encoding/csv"
 	"iter"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 // Stream is the PoC type for the typed concurrency proposal — a
@@ -235,4 +239,123 @@ func HashJoinParallel[L, R, O any, K comparable](
 		}
 	}
 	return Stream[O]{shards: out, n: left.n}
+}
+
+// ReadCSVParallel reads a CSV file using n worker goroutines. The
+// file is partitioned by line count: each shard parses a contiguous
+// range of data lines independently. Header is parsed once before
+// shards start; the resulting schema is shared read-only.
+//
+// Implementation: reads the entire file into memory, scans for
+// newline byte offsets (~200ms for a 600 MB file), partitions lines
+// across n shards. Each shard wraps its byte range in its own
+// bytes.NewReader / csv.NewReader and parses rows in parallel.
+//
+// LIMITATION: this PoC assumes no quoted fields with embedded
+// newlines. Files produced by typed.WriteCSV satisfy this. Files
+// from other producers may not — fall back to serial ReadCSV if
+// you need RFC-4180-correct parsing of quoted multi-line fields.
+//
+// Memory cost: ~filesize bytes (the whole file is held in memory)
+// plus ~8 bytes per line for the newline-offset index. For our
+// 600 MB / 10M-row workload that's ~680 MB. Negligible compared to
+// the saved CSV-read time.
+func ReadCSVParallel[T any](filename string, n int) Stream[T] {
+	if n <= 0 {
+		n = runtime.GOMAXPROCS(0)
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil || len(data) == 0 {
+		return Stream[T]{shards: nil, n: 0}
+	}
+
+	// Find every newline byte offset using bytes.IndexByte (SIMD on
+	// amd64). The first newline ends the header; subsequent newlines
+	// end data rows.
+	newlines := make([]int, 0, len(data)/64) // rough size hint
+	for off := 0; off < len(data); {
+		idx := bytes.IndexByte(data[off:], '\n')
+		if idx < 0 {
+			break
+		}
+		newlines = append(newlines, off+idx)
+		off += idx + 1
+	}
+	if len(newlines) == 0 {
+		return Stream[T]{shards: nil, n: 0}
+	}
+
+	// Parse the header once and build the shared decode schema.
+	headerEnd := newlines[0]
+	hr := csv.NewReader(bytes.NewReader(data[:headerEnd]))
+	header, err := hr.Read()
+	if err != nil {
+		return Stream[T]{shards: nil, n: 0}
+	}
+	schema, err := buildReadSchema[T](header, false)
+	if err != nil {
+		return Stream[T]{shards: nil, n: 0}
+	}
+
+	// Determine number of data lines. Lines are bounded by newlines;
+	// an unterminated last line counts as a data line too.
+	numDataLines := len(newlines) - 1 // each non-last newline ends a data line
+	if data[len(data)-1] != '\n' {
+		numDataLines++ // unterminated last line is also data
+	}
+	if numDataLines == 0 {
+		return Stream[T]{shards: nil, n: 0}
+	}
+	if n > numDataLines {
+		n = numDataLines
+	}
+
+	// Partition data lines across n shards. Each shard owns a
+	// contiguous byte range starting just after one newline and
+	// ending just after another (or at EOF).
+	linesPerShard := (numDataLines + n - 1) / n // round up
+
+	shards := make([]iter.Seq[T], n)
+	for i := 0; i < n; i++ {
+		// Lines [startLine, endLine) belong to this shard.
+		// Line indices are 0-based against data lines (0 = first
+		// row after header); newlines[0] ends the header, so line k
+		// starts at newlines[k]+1 and ends at newlines[k+1] (inclusive
+		// of the trailing \n) or at len(data) for an unterminated last.
+		startLine := i * linesPerShard
+		endLine := startLine + linesPerShard
+		if endLine > numDataLines {
+			endLine = numDataLines
+		}
+		if startLine >= endLine {
+			shards[i] = func(yield func(T) bool) {}
+			continue
+		}
+
+		startByte := newlines[startLine] + 1
+		var endByte int
+		if endLine <= len(newlines)-1 {
+			endByte = newlines[endLine] + 1
+		} else {
+			endByte = len(data)
+		}
+		chunk := data[startByte:endByte]
+
+		shards[i] = func(yield func(T) bool) {
+			cr := csv.NewReader(bytes.NewReader(chunk))
+			cr.ReuseRecord = true
+			for {
+				rec, err := cr.Read()
+				if err != nil {
+					return
+				}
+				var row T
+				_ = schema.decode(unsafe.Pointer(&row), rec)
+				if !yield(row) {
+					return
+				}
+			}
+		}
+	}
+	return Stream[T]{shards: shards, n: n}
 }
