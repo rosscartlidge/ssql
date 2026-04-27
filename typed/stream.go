@@ -292,6 +292,93 @@ func (s Stream[T]) WriteCSVToWriter(w io.Writer) error {
 	return nil
 }
 
+// GroupByParallel implements the Sink/Combine/Finalize three-phase
+// contract for parallel group-by-with-aggregation.
+//
+//  1. **Sink (per-shard, parallel):** each shard maintains its own
+//     map[K]ParallelAggregator[T, S]; rows are folded in via Add()
+//     with no cross-shard coordination.
+//  2. **Combine (sequential):** the orchestrator walks the partial
+//     maps in shard order, transferring new keys as-is and calling
+//     Merge for keys already present. Cost is O(#shards × #groups),
+//     not O(#rows) — negligible when #groups ≪ #rows.
+//  3. **Finalize (lazy):** returns an iter.Seq[O] that yields one row
+//     per distinct key in **shard-then-insertion** order, calling
+//     build(k, agg.Result()) for each.
+//
+// Ordering: within a shard, first-seen-key order is preserved.
+// Across shards, shard-0's first-seen keys come before shard-1's new
+// first-seen keys, etc. Deterministic for a deterministic input.
+// Not the same as serial typed.GroupBy (which sees keys in true
+// input order); fall back to typed.GroupBy if you need that.
+//
+// **When this wins.** Workloads where #rows ≫ #groups
+// (e.g. 10M rows × 1k dept_ids). The Add() phase dominates and
+// parallelises cleanly; the Merge phase is small. When #groups is
+// close to #rows, the Combine phase grows and the speedup shrinks
+// — consider hash-partitioning the input first (future variant).
+//
+// See doc/research/typed-groupby-parallel-proposal.md for the full
+// design rationale.
+func GroupByParallel[T, S, O any, K comparable](
+	in Stream[T],
+	keyFn func(T) K,
+	newAgg ParallelAggFunc[T, S],
+	build func(K, S) O,
+) iter.Seq[O] {
+	nShards := len(in.shards)
+	if nShards == 0 {
+		return func(yield func(O) bool) {}
+	}
+
+	partials := make([]map[K]ParallelAggregator[T, S], nShards)
+	keysPerShard := make([][]K, nShards)
+	var wg sync.WaitGroup
+	wg.Add(nShards)
+	for i, shard := range in.shards {
+		i, shard := i, shard
+		go func() {
+			defer wg.Done()
+			m := make(map[K]ParallelAggregator[T, S])
+			var keys []K
+			for v := range shard {
+				k := keyFn(v)
+				agg, ok := m[k]
+				if !ok {
+					agg = newAgg()
+					m[k] = agg
+					keys = append(keys, k)
+				}
+				agg.Add(v)
+			}
+			partials[i] = m
+			keysPerShard[i] = keys
+		}()
+	}
+	wg.Wait()
+
+	final := make(map[K]ParallelAggregator[T, S])
+	var orderedKeys []K
+	for i := 0; i < nShards; i++ {
+		for _, k := range keysPerShard[i] {
+			if existing, ok := final[k]; ok {
+				existing.Merge(partials[i][k])
+			} else {
+				final[k] = partials[i][k]
+				orderedKeys = append(orderedKeys, k)
+			}
+		}
+	}
+
+	return func(yield func(O) bool) {
+		for _, k := range orderedKeys {
+			if !yield(build(k, final[k].Result())) {
+				return
+			}
+		}
+	}
+}
+
 // HashJoinParallel is the morsel-driven hash join.
 //
 // Build phase: the right side is fully consumed by a single goroutine

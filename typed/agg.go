@@ -18,6 +18,24 @@ type Aggregator[T, R any] interface {
 // distinct key to build that group's accumulator.
 type AggFunc[T, R any] func() Aggregator[T, R]
 
+// ParallelAggregator extends Aggregator with a Merge method that folds
+// another (same-typed) aggregator's partial state into this one. Used
+// by [GroupByParallel] for the Combine phase: each shard accumulates
+// its own per-key partial map, then the Combine phase merges shards'
+// partials into a single global result.
+//
+// Implementations should accept a peer of their own concrete type via
+// type assertion. If the peer is a different type (which never happens
+// when paired with [ParallelAggFunc]), Merge is allowed to no-op.
+type ParallelAggregator[T, R any] interface {
+	Aggregator[T, R]
+	Merge(other Aggregator[T, R])
+}
+
+// ParallelAggFunc constructs a fresh ParallelAggregator. Used by
+// [GroupByParallel] in place of [AggFunc].
+type ParallelAggFunc[T, R any] func() ParallelAggregator[T, R]
+
 // ---- standalone aggregations ----
 
 // Count returns the number of items in seq.
@@ -187,8 +205,18 @@ func GroupByOrdered[T, S, O any, K comparable](
 // Counter counts inputs.
 type Counter[T any] struct{ N int64 }
 
-func (c *Counter[T]) Add(T)          { c.N++ }
-func (c *Counter[T]) Result() int64  { return c.N }
+func (c *Counter[T]) Add(T)         { c.N++ }
+func (c *Counter[T]) Result() int64 { return c.N }
+func (c *Counter[T]) Merge(other Aggregator[T, int64]) {
+	if o, ok := other.(*Counter[T]); ok {
+		c.N += o.N
+	}
+}
+
+// NewCounter is the [ParallelAggFunc] constructor for [Counter].
+func NewCounter[T any]() ParallelAggFunc[T, int64] {
+	return func() ParallelAggregator[T, int64] { return &Counter[T]{} }
+}
 
 // Summer accumulates fn(x) over inputs.
 type Summer[T any, N Number] struct {
@@ -200,8 +228,18 @@ func NewSummer[T any, N Number](fn func(T) N) AggFunc[T, N] {
 	return func() Aggregator[T, N] { return &Summer[T, N]{fn: fn} }
 }
 
-func (s *Summer[T, N]) Add(v T)  { s.sum += s.fn(v) }
+// NewParallelSummer is the [ParallelAggFunc] constructor for [Summer].
+func NewParallelSummer[T any, N Number](fn func(T) N) ParallelAggFunc[T, N] {
+	return func() ParallelAggregator[T, N] { return &Summer[T, N]{fn: fn} }
+}
+
+func (s *Summer[T, N]) Add(v T)   { s.sum += s.fn(v) }
 func (s *Summer[T, N]) Result() N { return s.sum }
+func (s *Summer[T, N]) Merge(other Aggregator[T, N]) {
+	if o, ok := other.(*Summer[T, N]); ok {
+		s.sum += o.sum
+	}
+}
 
 // Averager accumulates a running mean.
 type Averager[T any, N Number] struct {
@@ -214,6 +252,11 @@ func NewAverager[T any, N Number](fn func(T) N) AggFunc[T, float64] {
 	return func() Aggregator[T, float64] { return &Averager[T, N]{fn: fn} }
 }
 
+// NewParallelAverager is the [ParallelAggFunc] constructor for [Averager].
+func NewParallelAverager[T any, N Number](fn func(T) N) ParallelAggFunc[T, float64] {
+	return func() ParallelAggregator[T, float64] { return &Averager[T, N]{fn: fn} }
+}
+
 func (a *Averager[T, N]) Add(v T) {
 	a.sum += a.fn(v)
 	a.n++
@@ -224,4 +267,11 @@ func (a *Averager[T, N]) Result() float64 {
 		return 0
 	}
 	return float64(a.sum) / float64(a.n)
+}
+
+func (a *Averager[T, N]) Merge(other Aggregator[T, float64]) {
+	if o, ok := other.(*Averager[T, N]); ok {
+		a.sum += o.sum
+		a.n += o.n
+	}
 }

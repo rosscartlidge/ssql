@@ -189,3 +189,178 @@ func TestGroupBySingleGroup(t *testing.T) {
 		t.Errorf("GroupBy single group: got %#v, want %#v", got, want)
 	}
 }
+
+// ---- GroupByParallel tests ----
+
+type RegionCount struct {
+	Region string
+	N      int64
+}
+
+type RegionTotal struct {
+	Region string
+	Total  float64
+}
+
+// sortBy lets us compare unordered group-by output between serial and
+// parallel without depending on shard order.
+func sortRegionCount(xs []RegionCount) {
+	slices.SortFunc(xs, func(a, b RegionCount) int {
+		if a.Region < b.Region {
+			return -1
+		}
+		if a.Region > b.Region {
+			return 1
+		}
+		return 0
+	})
+}
+
+func sortRegionTotal(xs []RegionTotal) {
+	slices.SortFunc(xs, func(a, b RegionTotal) int {
+		if a.Region < b.Region {
+			return -1
+		}
+		if a.Region > b.Region {
+			return 1
+		}
+		return 0
+	})
+}
+
+func TestGroupByParallelCount(t *testing.T) {
+	in := []sale{
+		{Region: "N", Amount: 10},
+		{Region: "S", Amount: 20},
+		{Region: "N", Amount: 5},
+		{Region: "E", Amount: 15},
+		{Region: "N", Amount: 1},
+		{Region: "S", Amount: 7},
+	}
+	stream := ParallelFromSlice(in, 3)
+	got := slices.Collect(GroupByParallel(stream,
+		func(s sale) string { return s.Region },
+		NewCounter[sale](),
+		func(k string, n int64) RegionCount { return RegionCount{Region: k, N: n} },
+	))
+	sortRegionCount(got)
+	want := []RegionCount{
+		{Region: "E", N: 1},
+		{Region: "N", N: 3},
+		{Region: "S", N: 2},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("GroupByParallel count: got %#v, want %#v", got, want)
+	}
+}
+
+func TestGroupByParallelSum(t *testing.T) {
+	in := []sale{
+		{Region: "N", Amount: 10},
+		{Region: "S", Amount: 20},
+		{Region: "N", Amount: 5},
+		{Region: "E", Amount: 15},
+		{Region: "N", Amount: 1},
+		{Region: "S", Amount: 7},
+	}
+	stream := ParallelFromSlice(in, 4)
+	got := slices.Collect(GroupByParallel(stream,
+		func(s sale) string { return s.Region },
+		NewParallelSummer(func(s sale) float64 { return s.Amount }),
+		func(k string, total float64) RegionTotal { return RegionTotal{Region: k, Total: total} },
+	))
+	sortRegionTotal(got)
+	want := []RegionTotal{
+		{Region: "E", Total: 15},
+		{Region: "N", Total: 16},
+		{Region: "S", Total: 27},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("GroupByParallel sum: got %#v, want %#v", got, want)
+	}
+}
+
+func TestGroupByParallelAvg(t *testing.T) {
+	in := []sale{
+		{Region: "N", Amount: 10},
+		{Region: "N", Amount: 20},
+		{Region: "S", Amount: 30},
+	}
+	stream := ParallelFromSlice(in, 2)
+	got := slices.Collect(GroupByParallel(stream,
+		func(s sale) string { return s.Region },
+		NewParallelAverager(func(s sale) float64 { return s.Amount }),
+		func(k string, avg float64) RegionTotal { return RegionTotal{Region: k, Total: avg} },
+	))
+	sortRegionTotal(got)
+	want := []RegionTotal{
+		{Region: "N", Total: 15},
+		{Region: "S", Total: 30},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("GroupByParallel avg: got %#v, want %#v", got, want)
+	}
+}
+
+func TestGroupByParallelEmptyStream(t *testing.T) {
+	stream := ParallelFromSlice[sale](nil, 4)
+	got := slices.Collect(GroupByParallel(stream,
+		func(s sale) string { return s.Region },
+		NewCounter[sale](),
+		func(k string, n int64) RegionCount { return RegionCount{Region: k, N: n} },
+	))
+	if len(got) != 0 {
+		t.Errorf("GroupByParallel empty: got %#v, want []", got)
+	}
+}
+
+func TestGroupByParallelMatchesSerial(t *testing.T) {
+	// Build a deterministic 1000-row input with 7 distinct regions.
+	regions := []string{"N", "S", "E", "W", "NE", "NW", "SE"}
+	in := make([]sale, 1000)
+	for i := 0; i < 1000; i++ {
+		in[i] = sale{Region: regions[i%len(regions)], Amount: float64(i)}
+	}
+
+	// Serial: count + sum.
+	type Result struct {
+		Region string
+		N      int64
+	}
+	serial := slices.Collect(GroupBy(slices.Values(in),
+		func(s sale) string { return s.Region },
+		func() Aggregator[sale, int64] { return &Counter[sale]{} },
+		func(k string, n int64) Result { return Result{Region: k, N: n} },
+	))
+	slices.SortFunc(serial, func(a, b Result) int {
+		if a.Region < b.Region {
+			return -1
+		}
+		if a.Region > b.Region {
+			return 1
+		}
+		return 0
+	})
+
+	// Parallel: same workload, several shard counts.
+	for _, n := range []int{1, 2, 4, 7, 16} {
+		stream := ParallelFromSlice(in, n)
+		par := slices.Collect(GroupByParallel(stream,
+			func(s sale) string { return s.Region },
+			NewCounter[sale](),
+			func(k string, n int64) Result { return Result{Region: k, N: n} },
+		))
+		slices.SortFunc(par, func(a, b Result) int {
+			if a.Region < b.Region {
+				return -1
+			}
+			if a.Region > b.Region {
+				return 1
+			}
+			return 0
+		})
+		if !slices.Equal(par, serial) {
+			t.Errorf("GroupByParallel n=%d: parity broken vs serial.\n  serial=%#v\n  parallel=%#v", n, serial, par)
+		}
+	}
+}
