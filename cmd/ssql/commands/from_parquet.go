@@ -88,6 +88,9 @@ func executeFromParquet(inputFile string, columns []string, generate bool) error
 
 // generateFromParquetCode generates Go code for reading Parquet.
 func generateFromParquetCode(filename string, columns []string) error {
+	if typedMode() {
+		return generateFromParquetCodeTyped(filename, columns)
+	}
 	if filename == "" {
 		return fmt.Errorf("Parquet code generation requires a file (no stdin support)")
 	}

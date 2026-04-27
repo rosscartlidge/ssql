@@ -32,6 +32,61 @@ import (
 // runtime maps CSV columns case-insensitively even when the CSV header
 // uses snake_case.
 func SampleCSVSchema(filename, typeName string, maxRows int) (*TypedSchema, string, error) {
+	return sampleDelimitedSchema(filename, typeName, maxRows, ',')
+}
+
+// SampleTSVSchema is the [SampleCSVSchema] variant for TSV files. It
+// auto-detects the delimiter from the header (first non-identifier
+// rune; defaults to '\t'), then samples the file with that
+// delimiter. Returns the inferred schema, the rendered struct
+// definition, and the detected delimiter byte (so the caller can
+// emit `typed.WithDelim(...)` if it's non-tab).
+func SampleTSVSchema(filename, typeName string, maxRows int) (*TypedSchema, string, byte, error) {
+	delim, err := detectTSVDelim(filename)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	schema, def, err := sampleDelimitedSchema(filename, typeName, maxRows, rune(delim))
+	return schema, def, delim, err
+}
+
+// detectTSVDelim peeks the first line of a file and returns the first
+// non-identifier byte, defaulting to '\t' when the entire header
+// consists of identifier characters.
+func detectTSVDelim(filename string) (byte, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return 0, fmt.Errorf("typed schema sample: %w", err)
+	}
+	defer f.Close()
+	buf := make([]byte, 64*1024)
+	n, _ := f.Read(buf)
+	for i := 0; i < n; i++ {
+		c := buf[i]
+		if c == '\n' || c == '\r' {
+			break
+		}
+		if !isIdentByte(c, i == 0) {
+			return c, nil
+		}
+	}
+	return '\t', nil
+}
+
+func isIdentByte(c byte, first bool) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '_':
+		return true
+	case !first && c >= '0' && c <= '9':
+		return true
+	}
+	return false
+}
+
+// sampleDelimitedSchema is the shared body of [SampleCSVSchema] and
+// [SampleTSVSchema]. delim is passed through to encoding/csv's
+// Comma field (which natively supports any single-rune delimiter).
+func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune) (*TypedSchema, string, error) {
 	if maxRows <= 0 {
 		maxRows = 1000
 	}
@@ -46,13 +101,14 @@ func SampleCSVSchema(filename, typeName string, maxRows int) (*TypedSchema, stri
 	defer f.Close()
 
 	r := csv.NewReader(f)
-	r.ReuseRecord = false // we hold rec slices across iterations
+	r.Comma = delim
+	r.ReuseRecord = false
+	r.FieldsPerRecord = -1 // tolerate ragged rows during sampling
 	header, err := r.Read()
 	if err != nil {
 		return nil, "", fmt.Errorf("typed schema sample: read header: %w", err)
 	}
 
-	// Per-column running state for type inference.
 	cols := make([]colInfer, len(header))
 	for i := range cols {
 		cols[i] = newColInfer()
@@ -64,7 +120,6 @@ func SampleCSVSchema(filename, typeName string, maxRows int) (*TypedSchema, stri
 			break
 		}
 		if err != nil {
-			// Tolerate a malformed row mid-sample — keep what we have.
 			break
 		}
 		for i, v := range rec {
@@ -79,7 +134,6 @@ func SampleCSVSchema(filename, typeName string, maxRows int) (*TypedSchema, stri
 	usedNames := make(map[string]int, len(header))
 	for i, name := range header {
 		gn := goNameFromColumn(name)
-		// Disambiguate Go-name collisions (e.g. "User Name" + "user_name").
 		if usedNames[gn] > 0 {
 			usedNames[gn]++
 			gn = fmt.Sprintf("%s%d", gn, usedNames[gn])

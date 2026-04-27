@@ -111,6 +111,10 @@ func executeFromTSV(inputFile string, generate bool) error {
 
 // generateFromTSVCode generates Go code for reading TSV.
 func generateFromTSVCode(filename string) error {
+	if typedMode() {
+		return generateFromTSVCodeTyped(filename)
+	}
+
 	var code string
 	var imports []string
 	var params []lib.CodeParam
@@ -130,6 +134,74 @@ func generateFromTSVCode(filename string) error {
 
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
 	frag.Params = params
+	return lib.WriteCodeFragment(frag)
+}
+
+// generateFromTSVCodeTyped emits a Phase-1.8 typed-mode init fragment
+// for `ssql from tsv FILE`. Auto-detects the delimiter (first
+// non-identifier byte in the header; defaults to '\t'), samples the
+// file to infer per-column Go types, emits the corresponding struct
+// definition, and produces a typed.ReadDelim[T] /
+// typed.ReadDelimParallel[T] call. When the detected delimiter is
+// not '\t', emits a typed.WithDelim(...) option.
+func generateFromTSVCodeTyped(filename string) error {
+	if filename == "" {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: 'from tsv' from stdin not supported in typed mode (need a file to sample for schema inference)"))
+	}
+
+	schema, structDef, delim, err := lib.SampleTSVSchema(filename, "", 0)
+	if err != nil {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: %w", err))
+	}
+
+	// Build the optional WithDelim trailing arg. Only emit when the
+	// delimiter isn't the default tab — keeps the generated code
+	// minimal in the common case.
+	var delimArg string
+	if delim != '\t' {
+		// Use Go rune literal syntax — handles printable ASCII
+		// without needing escape rules for common separators.
+		switch delim {
+		case '|':
+			delimArg = ", typed.WithDelim('|')"
+		case ':':
+			delimArg = ", typed.WithDelim(':')"
+		case ',':
+			delimArg = ", typed.WithDelim(',')"
+		case ';':
+			delimArg = ", typed.WithDelim(';')"
+		case ' ':
+			delimArg = ", typed.WithDelim(' ')"
+		default:
+			delimArg = fmt.Sprintf(", typed.WithDelim(0x%02x)", delim)
+		}
+	}
+
+	params := []lib.CodeParam{{
+		Name: "input", Default: filename, Help: "input TSV file", VarName: "flagInput",
+	}}
+	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	if needsTimeImport(schema) {
+		imports = append(imports, "time")
+	}
+
+	var code string
+	isStream := false
+	if parallelMode() {
+		code = fmt.Sprintf(`records := typed.ReadDelimParallel[%s](*flagInput, runtime.GOMAXPROCS(0)%s)`, schema.TypeName, delimArg)
+		imports = append(imports, "runtime")
+		isStream = true
+	} else {
+		code = fmt.Sprintf(`records := typed.ReadDelim[%s](*flagInput%s)`, schema.TypeName, delimArg)
+	}
+
+	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
+	frag.OutputTypedSchema = schema
+	frag.StructDefs = []string{structDef}
+	frag.IsStream = isStream
 	return lib.WriteCodeFragment(frag)
 }
 
