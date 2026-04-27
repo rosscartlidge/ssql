@@ -156,27 +156,56 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'sort' requires at least one field"))
 		}
-		if len(orderBy) > 1 {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: multi-field sort not yet supported in typed mode (would need composite sort key); single-field sort works"))
+		// Resolve every field, validating existence and type sortability.
+		type sortField struct {
+			f    lib.TypedSchemaField
+			desc bool
 		}
-		of := orderBy[0]
-		f, ok := lookupSchemaField(prevSchema, of.Field)
-		if !ok {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'sort' references unknown field %q", of.Field))
+		fields := make([]sortField, 0, len(orderBy))
+		for _, of := range orderBy {
+			f, ok := lookupSchemaField(prevSchema, of.Field)
+			if !ok {
+				return lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: 'sort' references unknown field %q", of.Field))
+			}
+			if !isSortableGoType(f.GoType) {
+				return lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: 'sort' on field %q (type %s) not supported (need int/float/string)", of.Field, f.GoType))
+			}
+			fields = append(fields, sortField{f: f, desc: of.Desc})
 		}
-		// Restrict to types our typed.SortBy can handle (Ordered constraint).
-		if !isSortableGoType(f.GoType) {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'sort' on field %q (type %s) not supported (need int/float/string/time)", of.Field, f.GoType))
+
+		// Single-field path: prefer the simpler typed.SortBy /
+		// typed.SortByDesc. Multi-field path: build a comparator
+		// closure and use typed.SortByFunc.
+		var code string
+		if len(fields) == 1 {
+			fn := "typed.SortBy"
+			if fields[0].desc {
+				fn = "typed.SortByDesc"
+			}
+			code = fmt.Sprintf("%s := %s(func(r %s) %s { return r.%s })(%s)",
+				outputVar, fn, prevSchema.TypeName, fields[0].f.GoType, fields[0].f.GoName, inputVar)
+		} else {
+			// Build the comparator: each field contributes a < / > /
+			// 0 chain. Descending fields swap a/b.
+			var cmpBody strings.Builder
+			for i, sf := range fields {
+				lhs, rhs := "a."+sf.f.GoName, "b."+sf.f.GoName
+				if sf.desc {
+					lhs, rhs = rhs, lhs
+				}
+				if i > 0 {
+					cmpBody.WriteString("\n\t\t")
+				}
+				cmpBody.WriteString(fmt.Sprintf(`if %s < %s { return -1 }; if %s > %s { return 1 }`, lhs, rhs, lhs, rhs))
+			}
+			cmpBody.WriteString("\n\t\treturn 0")
+			code = fmt.Sprintf(`%s := typed.SortByFunc(func(a, b %s) int {
+		%s
+	})(%s)`, outputVar, prevSchema.TypeName, cmpBody.String(), inputVar)
 		}
-		fn := "typed.SortBy"
-		if of.Desc {
-			fn = "typed.SortByDesc"
-		}
-		code := fmt.Sprintf("%s := %s(func(r %s) %s { return r.%s })(%s)",
-			outputVar, fn, prevSchema.TypeName, f.GoType, f.GoName, inputVar)
+
 		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema

@@ -115,20 +115,52 @@ func generateTopCode(n int, field string, asc bool) error {
 	}
 
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
 	}
 
 	outputVar := "topRecords"
+	params := []lib.CodeParam{
+		{Name: "top", Default: fmt.Sprintf("%d", n), Help: "number of top records", VarName: "flagTop", Type: "int"},
+	}
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'top' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
+		}
+		f, ok := lookupSchemaField(prevSchema, field)
+		if !ok {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'top' references unknown field %q", field))
+		}
+		if !isSortableGoType(f.GoType) {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'top' on field %q (type %s) not supported (need int/float/string)", field, f.GoType))
+		}
+		// `top` is desugared as sort + limit. Default order is descending
+		// (largest first); -asc reverses to smallest first.
+		sortFn := "typed.SortByDesc"
+		if asc {
+			sortFn = "typed.SortBy"
+		}
+		code := fmt.Sprintf(`%s := typed.Limit[%s](*flagTop)(
+		%s(func(r %s) %s { return r.%s })(%s),
+	)`, outputVar, prevSchema.TypeName, sortFn, prevSchema.TypeName, f.GoType, f.GoName, inputVar)
+		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+		frag.Params = params
+		frag.InputTypedSchema = prevSchema
+		frag.OutputTypedSchema = prevSchema
+		return lib.WriteCodeFragment(frag)
+	}
+
 	funcName := "ssql.TopBy"
 	if asc {
 		funcName = "ssql.BottomBy"
-	}
-
-	params := []lib.CodeParam{
-		{Name: "top", Default: fmt.Sprintf("%d", n), Help: "number of top records", VarName: "flagTop", Type: "int"},
 	}
 	code := fmt.Sprintf(`%s := %s(*flagTop, func(r ssql.Record) float64 {
 		return ssql.GetOr(r, %q, 0.0)

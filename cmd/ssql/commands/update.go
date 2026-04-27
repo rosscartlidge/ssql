@@ -412,10 +412,20 @@ func generateUpdateCode(ctx *cf.Context) error {
 
 	// Get input variable from last fragment (or default to "records")
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
+	}
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'update' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
+		}
+		return emitTypedUpdate(ctx, inputVar, prevSchema)
 	}
 
 	// Parse clauses - each clause has optional -match conditions and required -set/-set-expr operations

@@ -174,14 +174,14 @@ func TestTypedFromWhereJoinToCSV(t *testing.T) {
 func TestTypedUnsupportedCommandErrors(t *testing.T) {
 	dir := t.TempDir()
 	emp := filepath.Join(dir, "people.csv")
-	if err := os.WriteFile(emp, []byte("id,name,age\n1,Alice,30\n"), 0o644); err != nil {
+	if err := os.WriteFile(emp, []byte("id,name,age\n1,Alice,30\n2,Bob,25\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	bin := buildSSQLForTypedTest(t)
-	// 'update' is still Tier 2 / Tier 3 in typed-mode, so this
-	// pipeline should error out.
+	// 'pivot' is still Tier 3 (deferred indefinitely per the
+	// roadmap), so a typed pipeline that includes it should error.
 	cmd := exec.Command("bash", "-c",
-		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" update -set tier gold | "+bin+" to csv | "+bin+" generate go")
+		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" pivot name age | "+bin+" to csv | "+bin+" generate go")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected typed pipeline to fail, got output:\n%s", out)
@@ -189,7 +189,7 @@ func TestTypedUnsupportedCommandErrors(t *testing.T) {
 	if !strings.Contains(string(out), "does not yet support typed mode") {
 		t.Errorf("error message should mention typed-mode unsupported, got:\n%s", out)
 	}
-	if !strings.Contains(string(out), "update") {
+	if !strings.Contains(string(out), "pivot") {
 		t.Errorf("error should name the offending command, got:\n%s", out)
 	}
 }
@@ -496,6 +496,132 @@ func TestTypedUnionSchemaMismatch(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "union") || !strings.Contains(string(out), "schema") && !strings.Contains(string(out), "field") {
 		t.Errorf("error should explain the schema mismatch, got:\n%s", out)
+	}
+}
+
+func TestTypedTopBy(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name,salary\n1,Alice,95000\n2,Bob,65000\n3,Carol,120000\n4,Dave,55000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" top 2 -field salary | "+bin+" to csv")
+	if !strings.Contains(src, "typed.SortByDesc") || !strings.Contains(src, "typed.Limit") {
+		t.Errorf("expected SortByDesc + Limit composition\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	if !strings.Contains(out, "Carol") || !strings.Contains(out, "Alice") {
+		t.Errorf("expected top-2 by salary (Carol, Alice), got:\n%s", out)
+	}
+	if strings.Contains(out, "Bob") || strings.Contains(out, "Dave") {
+		t.Errorf("Bob and Dave should be excluded, got:\n%s", out)
+	}
+}
+
+func TestTypedSortMultiField(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "sales.csv")
+	if err := os.WriteFile(emp, []byte("region,product,amount\nN,A,100\nN,B,200\nS,A,300\nN,C,150\nS,B,250\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" sort region product | "+bin+" to csv")
+	if !strings.Contains(src, "typed.SortByFunc") {
+		t.Errorf("expected typed.SortByFunc for multi-field sort\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	// Lex-asc by region, then product: N/A, N/B, N/C, S/A, S/B
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 6 {
+		t.Fatalf("expected 6 lines, got:\n%s", out)
+	}
+	want := []string{"N,A,100", "N,B,200", "N,C,150", "S,A,300", "S,B,250"}
+	for i, w := range want {
+		if !strings.Contains(lines[i+1], w) {
+			t.Errorf("line %d: expected %q, got %q", i+1, w, lines[i+1])
+		}
+	}
+}
+
+func TestTypedCastFloat(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("name,years\nAlice,8\nBob,3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" cast -type years float | "+bin+" to csv")
+	if !strings.Contains(src, "Years  float64") && !strings.Contains(src, "Years float64") {
+		t.Errorf("expected Years to become float64 in cast struct\n%s", src)
+	}
+	if !strings.Contains(src, "float64(r.Years)") {
+		t.Errorf("expected float64(r.Years) conversion\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	for _, want := range []string{"Alice", "Bob"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in cast output\n%s", want, out)
+		}
+	}
+}
+
+func TestTypedUpdateSetLiteral(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name\n1,Alice\n2,Bob\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" update -set tier gold | "+bin+" to csv")
+	if !strings.Contains(src, "PeopleRowUpdated") {
+		t.Errorf("expected derived PeopleRowUpdated struct\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	for _, want := range []string{"id,name,tier", "1,Alice,gold", "2,Bob,gold"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output\n%s", want, out)
+		}
+	}
+}
+
+func TestTypedUpdateConditional(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name,salary\n1,Alice,95000\n2,Bob,65000\n3,Carol,120000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" update -if salary gt 100000 -set tier premium + -if salary gt 70000 -set tier standard + -set tier basic | "+bin+" to csv")
+	out := goRunGenerated(t, src)
+	// Alice 95k -> standard, Bob 65k -> basic, Carol 120k -> premium
+	for _, want := range []string{"Alice,95000,standard", "Bob,65000,basic", "Carol,120000,premium"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output\n%s", want, out)
+		}
+	}
+}
+
+func TestTypedUpdateSetExprErrors(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name,salary\n1,Alice,95000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	cmd := exec.Command("bash", "-c",
+		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" update -set-expr bonus 'salary * 0.1' | "+bin+" to csv | "+bin+" generate go")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected -set-expr to fail in typed mode, got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "set-expr") || !strings.Contains(string(out), "Tier 3") {
+		t.Errorf("error should name -set-expr and Tier 3, got:\n%s", out)
 	}
 }
 

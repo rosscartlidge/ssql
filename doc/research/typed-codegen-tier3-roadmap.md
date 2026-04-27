@@ -13,13 +13,16 @@ Items are ordered roughly by `(demand) × (1 / effort)`.
 
 ## Quick summary
 
-| # | Command(s) | Effort | Demand | New runtime needed? | Recommendation |
+Items #1-5 shipped as **Tier 3b** on 2026-04-27 (commit forthcoming).
+Surface and recommendations preserved below as a record.
+
+| # | Command(s) | Effort | Demand | New runtime needed? | Status |
 |---|---|---|---|---|---|
-| 1 | `update -set FIELD LITERAL` (unconditional) | **low** (~half day) | **high** | No (uses `typed.Select`) | **Do next** |
-| 2 | Multi-field `sort` | low (~2 h) | medium-high | No (composite-key `SortBy`) | Do soon |
-| 3 | `cast -field F -type TYPE` | low (~2 h) | medium | No (uses `typed.Select` + conversion) | Do soon |
-| 4 | `top N -field F` | low (~1 h, syntactic sugar) | medium | No (it's `sort -desc | limit`) | Do soon |
-| 5 | `update` with conditional clauses (`-if`/`-if-expr`/multiple clauses) | medium (~1-2 days) | high | No, but needs expr-lang for `-if-expr` | Do after #1 |
+| 1 | `update -set FIELD LITERAL` (unconditional) | **low** (~half day) | **high** | No (uses `typed.Select`) | **shipped** |
+| 2 | Multi-field `sort` | low (~2 h) | medium-high | No (composite-key `SortBy`) | **shipped** (with new `typed.SortByFunc`) |
+| 3 | `cast -field F -type TYPE` | low (~2 h) | medium | No (uses `typed.Select` + conversion) | **shipped** |
+| 4 | `top N -field F` | low (~1 h, syntactic sugar) | medium | No (it's `sort -desc | limit`) | **shipped** |
+| 5 | `update` with conditional clauses (`-if`/`-if-expr`/multiple clauses) | medium (~1-2 days) | high | No, but needs expr-lang for `-if-expr` | **shipped** (literal `-if` only; `-if-expr` rejected as Tier 3) |
 | 6 | `group-by … -collect F NAME` | medium (~half day) | medium | No (slice-typed result field) | Do alongside aggregation work |
 | 7 | Multi-clause joins, `-as OLD NEW` field renames | medium (~1 day) | low-medium | No | Do when a real pipeline needs it |
 | 8 | `-if-expr` / `-set-expr` / `-expr` aggregations | **very high** (~weeks) | **high** | expr-lang AST → Go AST | Decide before #5 |

@@ -423,13 +423,24 @@ Phase 2 — Tier 3a shipped (2026-04-27, on top of Phase 1.7):
 - [x] `union -file FILE` and `union -file FILE -all` (cross-source
       schema validation — mismatched fields error with a clear message)
 
-Phase 2 — Tier 3 still deferred:
-- [ ] `update -set FIELD VALUE` (literal-only would be straightforward next)
-- [ ] Multi-field sort (would need composite sort key)
-- [ ] Multi-clause joins, `-as` field renames
+Phase 2 — Tier 3b shipped (2026-04-27, Sprint 1+2 of the Tier 3 roadmap):
+- [x] `top N -field F` (sort + limit composition)
+- [x] Multi-field `sort` via composite comparator (`typed.SortByFunc`)
+- [x] `cast -type FIELD TYPE` — string/int/float/bool conversions; emits a
+      derived struct with the field's Go type changed
+- [x] `update -set FIELD LITERAL` (unconditional, literal values only;
+      adds a derived "Updated" struct when new fields are introduced)
+- [x] `update` with conditional clauses (`-if F OP V -set ...
+      + ...`); first-match-wins as an if/else-if chain
+
+Phase 2 — still deferred:
 - [ ] `-if-expr` / `-set-expr` / `-expr` aggregations (expression-lang → Go)
+- [ ] Multi-clause joins, `-as` field renames
 - [ ] `-rollup` / `-cube` / `-collect`
+- [ ] JSONL/Arrow/Parquet typed I/O
+- [ ] Window analytic functions
 - [ ] Signal processing (FFT, convolve, etc.)
+- [ ] `pivot`, `merge`, distributed sources
 
 See [`doc/research/typed-package-proposal.md`](research/typed-package-proposal.md)
 for the full design and Phase 2 vision.

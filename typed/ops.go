@@ -329,6 +329,24 @@ func SortByDesc[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T] {
 	}
 }
 
+// SortByFunc collects the input into a slice and sorts it using the
+// caller-supplied comparator. Use this for multi-key sorts where the
+// comparator combines multiple fields (e.g. "by region asc, then
+// revenue desc"). Materializes the full input — O(N) memory.
+func SortByFunc[T any](cmp func(a, b T) int) func(iter.Seq[T]) iter.Seq[T] {
+	return func(in iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			buf := slices.Collect(in)
+			slices.SortFunc(buf, cmp)
+			for _, v := range buf {
+				if !yield(v) {
+					return
+				}
+			}
+		}
+	}
+}
+
 // SortByStable is the stable variant of [SortBy] — preserves original
 // order for elements with equal keys. Slightly slower; use only when
 // stability matters.
