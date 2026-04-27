@@ -1675,10 +1675,14 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 		slices.Sort(columns)
 	}
 
-	// Calculate max width for each column
+	// Calculate max width for each column, and decide alignment:
+	// columns whose values are all numeric/bool are right-justified;
+	// any non-numeric value forces the column to left-justified.
 	colWidths := make(map[string]int)
+	colRightAlign := make(map[string]bool, len(columns))
 	for _, col := range columns {
 		colWidths[col] = len(col) // Start with header width
+		colRightAlign[col] = true // assume right-align until proven otherwise
 	}
 
 	for _, record := range allRecords {
@@ -1686,6 +1690,9 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 			strValue := fmt.Sprintf("%v", value)
 			if len(strValue) > colWidths[field] {
 				colWidths[field] = min(len(strValue), maxWidth)
+			}
+			if !isNumericOrBoolValue(value) {
+				colRightAlign[field] = false
 			}
 		}
 	}
@@ -1729,10 +1736,27 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 				strValue = strValue[:maxWidth-3] + "..."
 			}
 
-			fmt.Printf("%-*s", colWidths[col], strValue)
+			if colRightAlign[col] {
+				fmt.Printf("%*s", colWidths[col], strValue)
+			} else {
+				fmt.Printf("%-*s", colWidths[col], strValue)
+			}
 		}
 		fmt.Println()
 	}
+}
+
+// isNumericOrBoolValue reports whether v is a numeric or boolean
+// type — anything that should be right-justified in a table.
+func isNumericOrBoolValue(v any) bool {
+	switch v.(type) {
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64,
+		bool:
+		return true
+	}
+	return false
 }
 
 // DisplayTableStreaming prints records as a formatted table in streaming mode.
@@ -1776,8 +1800,11 @@ func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int
 	// Build column list
 	columns := buildColumnOrder(columnSet, fieldOrder, onlySpecified)
 
-	// Calculate column widths from sample
-	colWidths := calculateColumnWidths(columns, sample, maxWidth)
+	// Calculate column widths AND alignment from the sample. Note:
+	// streaming mode commits to alignment after the sample — if a
+	// later non-numeric value lands in a "right" column we just
+	// keep right-aligning it (truncating widths is the same trade).
+	colWidths, colRightAlign := calculateColumnWidthsAndAlignment(columns, sample, maxWidth)
 
 	// Print header and separator
 	printTableHeader(w, columns, colWidths)
@@ -1785,7 +1812,7 @@ func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int
 
 	// Print sampled records
 	for _, record := range sample {
-		printTableRow(w, columns, colWidths, record, maxWidth)
+		printTableRow(w, columns, colWidths, colRightAlign, record, maxWidth)
 	}
 
 	// Phase 2: stream remaining records
@@ -1794,7 +1821,7 @@ func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int
 		if !ok {
 			break
 		}
-		printTableRow(w, columns, colWidths, record, maxWidth)
+		printTableRow(w, columns, colWidths, colRightAlign, record, maxWidth)
 	}
 }
 
@@ -1846,6 +1873,31 @@ func calculateColumnWidths(columns []string, records []Record, maxWidth int) map
 	return colWidths
 }
 
+// calculateColumnWidthsAndAlignment is like calculateColumnWidths but
+// also decides per-column alignment. A column is right-aligned when
+// every sampled value is numeric/bool; any non-numeric value in the
+// sample forces it to left-aligned.
+func calculateColumnWidthsAndAlignment(columns []string, records []Record, maxWidth int) (map[string]int, map[string]bool) {
+	colWidths := make(map[string]int)
+	colRight := make(map[string]bool, len(columns))
+	for _, col := range columns {
+		colWidths[col] = len(col)
+		colRight[col] = true
+	}
+	for _, record := range records {
+		for field, value := range record.All() {
+			strValue := fmt.Sprintf("%v", value)
+			if len(strValue) > colWidths[field] {
+				colWidths[field] = min(len(strValue), maxWidth)
+			}
+			if !isNumericOrBoolValue(value) {
+				colRight[field] = false
+			}
+		}
+	}
+	return colWidths, colRight
+}
+
 // printTableHeader prints the column headers
 func printTableHeader(w io.Writer, columns []string, colWidths map[string]int) {
 	for i, col := range columns {
@@ -1869,8 +1921,10 @@ func printTableSeparator(w io.Writer, columns []string, colWidths map[string]int
 	fmt.Fprintln(w, strings.Repeat("-", totalWidth))
 }
 
-// printTableRow prints a single data row
-func printTableRow(w io.Writer, columns []string, colWidths map[string]int, record Record, maxWidth int) {
+// printTableRow prints a single data row. colRight selects per-column
+// alignment: right-justified when true (numeric/bool), left-justified
+// when false.
+func printTableRow(w io.Writer, columns []string, colWidths map[string]int, colRight map[string]bool, record Record, maxWidth int) {
 	for i, col := range columns {
 		if i > 0 {
 			fmt.Fprint(w, "   ")
@@ -1882,7 +1936,11 @@ func printTableRow(w io.Writer, columns []string, colWidths map[string]int, reco
 		if len(strValue) > maxWidth {
 			strValue = strValue[:maxWidth-3] + "..."
 		}
-		fmt.Fprintf(w, "%-*s", colWidths[col], strValue)
+		if colRight[col] {
+			fmt.Fprintf(w, "%*s", colWidths[col], strValue)
+		} else {
+			fmt.Fprintf(w, "%-*s", colWidths[col], strValue)
+		}
 	}
 	fmt.Fprintln(w)
 }
