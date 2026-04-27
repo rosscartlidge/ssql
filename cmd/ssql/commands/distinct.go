@@ -69,12 +69,33 @@ func generateDistinctCode() error {
 		}
 	}
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
 	}
 	outputVar := "distinct"
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'distinct' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
+		}
+		// All Tier-1/1.5 supported field types are Go-comparable
+		// (string/numeric/bool/time.Time/pointer), so we can dedup by
+		// the row value itself. Pointer fields compare by identity,
+		// not by pointed-to value — note in the doc, but uncommon
+		// for typical CSV data.
+		code := fmt.Sprintf("%s := typed.Distinct(func(r %s) %s { return r })(%s)",
+			outputVar, prevSchema.TypeName, prevSchema.TypeName, inputVar)
+		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+		frag.InputTypedSchema = prevSchema
+		frag.OutputTypedSchema = prevSchema
+		return lib.WriteCodeFragment(frag)
+	}
+
 	code := fmt.Sprintf(`%s := ssql.DistinctBy(func(r ssql.Record) string {
 		return fmt.Sprintf("%%v", r)
 	})(%s)`, outputVar, inputVar)

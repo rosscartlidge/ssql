@@ -138,12 +138,50 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 		}
 	}
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
 	}
 	outputVar := "sorted"
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'sort' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
+		}
+		if len(orderBy) == 0 {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'sort' requires at least one field"))
+		}
+		if len(orderBy) > 1 {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: multi-field sort not yet supported in typed mode (would need composite sort key); single-field sort works"))
+		}
+		of := orderBy[0]
+		f, ok := lookupSchemaField(prevSchema, of.Field)
+		if !ok {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'sort' references unknown field %q", of.Field))
+		}
+		// Restrict to types our typed.SortBy can handle (Ordered constraint).
+		if !isSortableGoType(f.GoType) {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'sort' on field %q (type %s) not supported (need int/float/string/time)", of.Field, f.GoType))
+		}
+		fn := "typed.SortBy"
+		if of.Desc {
+			fn = "typed.SortByDesc"
+		}
+		code := fmt.Sprintf("%s := %s(func(r %s) %s { return r.%s })(%s)",
+			outputVar, fn, prevSchema.TypeName, f.GoType, f.GoName, inputVar)
+		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+		frag.InputTypedSchema = prevSchema
+		frag.OutputTypedSchema = prevSchema
+		return lib.WriteCodeFragment(frag)
+	}
 
 	// Build OrderField slice literal
 	var fields []string
@@ -155,4 +193,16 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)
+}
+
+// isSortableGoType reports whether a field's Go type satisfies our
+// typed.SortBy[T,K Ordered] constraint. Pointer types and time.Time
+// don't satisfy cmp.Ordered directly; defer them to a future
+// SortByFunc that takes a cmp closure.
+func isSortableGoType(t string) bool {
+	switch t {
+	case "string", "int", "int32", "int64", "uint64", "float32", "float64":
+		return true
+	}
+	return false
 }

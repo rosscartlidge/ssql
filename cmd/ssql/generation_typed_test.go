@@ -348,6 +348,157 @@ func TestTypedGroupByMultipleKeys(t *testing.T) {
 	}
 }
 
+func TestTypedSortDesc(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name,salary\n1,Alice,95000\n2,Bob,65000\n3,Carol,120000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" sort salary -desc | "+bin+" limit 2 | "+bin+" to csv")
+
+	if !strings.Contains(src, "typed.SortByDesc(") {
+		t.Errorf("expected typed.SortByDesc call\n%s", src)
+	}
+
+	out := goRunGenerated(t, src)
+	// Highest salaries: Carol (120k), Alice (95k). Bob (65k) is excluded by limit.
+	if !strings.Contains(out, "Carol") || !strings.Contains(out, "Alice") {
+		t.Errorf("expected Carol and Alice in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "Bob") {
+		t.Errorf("Bob should be excluded by limit 2 after sort, got:\n%s", out)
+	}
+	// First data line should be Carol (highest salary).
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 2 || !strings.HasPrefix(lines[1], "3,Carol") {
+		t.Errorf("expected first row to be Carol (sorted desc), got:\n%s", out)
+	}
+}
+
+func TestTypedSortAsc(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("name,age\nCarol,42\nAlice,30\nBob,25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" sort age | "+bin+" to csv")
+	if !strings.Contains(src, "typed.SortBy(") || strings.Contains(src, "typed.SortByDesc") {
+		t.Errorf("expected typed.SortBy ascending\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected 4 lines (header + 3), got:\n%s", out)
+	}
+	if !strings.HasPrefix(lines[1], "Bob") || !strings.HasPrefix(lines[3], "Carol") {
+		t.Errorf("expected Bob first, Carol last by age asc; got:\n%s", out)
+	}
+}
+
+func TestTypedDistinct(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "dups.csv")
+	if err := os.WriteFile(emp, []byte("name,age\nAlice,30\nBob,25\nAlice,30\nCarol,42\nBob,25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" distinct | "+bin+" to csv")
+	if !strings.Contains(src, "typed.Distinct(") {
+		t.Errorf("expected typed.Distinct call\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	// Should be 3 unique rows + header.
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 4 {
+		t.Errorf("expected 4 lines (header + 3 unique), got %d:\n%s", len(lines), out)
+	}
+	for _, want := range []string{"Alice", "Bob", "Carol"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in distinct output, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestTypedUnionDedup(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.csv")
+	b := filepath.Join(dir, "b.csv")
+	if err := os.WriteFile(a, []byte("name,age\nAlice,30\nBob,25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("name,age\nBob,25\nCarol,42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+a+" | "+bin+" union -file "+b+" | "+bin+" to csv")
+	if !strings.Contains(src, "typed.Union(") {
+		t.Errorf("expected typed.Union call (dedup)\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	// 3 unique rows: Alice, Bob, Carol.
+	bobCount := strings.Count(out, "Bob,25")
+	if bobCount != 1 {
+		t.Errorf("expected exactly one Bob row after union dedup, got %d:\n%s", bobCount, out)
+	}
+	for _, want := range []string{"Alice", "Bob", "Carol"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in union output:\n%s", want, out)
+		}
+	}
+}
+
+func TestTypedUnionAll(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.csv")
+	b := filepath.Join(dir, "b.csv")
+	if err := os.WriteFile(a, []byte("name,age\nAlice,30\nBob,25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("name,age\nBob,25\nCarol,42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+a+" | "+bin+" union -file "+b+" -all | "+bin+" to csv")
+	if !strings.Contains(src, "typed.Concat(") {
+		t.Errorf("expected typed.Concat call (union -all)\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	// 4 rows total: Alice, Bob, Bob, Carol.
+	bobCount := strings.Count(out, "Bob,25")
+	if bobCount != 2 {
+		t.Errorf("expected two Bob rows after union -all, got %d:\n%s", bobCount, out)
+	}
+}
+
+func TestTypedUnionSchemaMismatch(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.csv")
+	b := filepath.Join(dir, "b.csv")
+	if err := os.WriteFile(a, []byte("name,age\nAlice,30\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("name,score\nBob,99\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	cmd := exec.Command("bash", "-c",
+		"export SSQLGO=typed && "+bin+" from "+a+" | "+bin+" union -file "+b+" | "+bin+" to csv | "+bin+" generate go")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected union with mismatched schemas to fail, got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "union") || !strings.Contains(string(out), "schema") && !strings.Contains(string(out), "field") {
+		t.Errorf("error should explain the schema mismatch, got:\n%s", out)
+	}
+}
+
 func TestTypedRecordModeUnaffected(t *testing.T) {
 	// Regression: SSQLGO=1 (Record mode) must still produce the same
 	// shape of output it did before Phase 2.

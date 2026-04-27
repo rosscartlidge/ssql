@@ -1,12 +1,14 @@
 # `ssql generate go -typed` — Phase 2 Proposal
 
-**Status:** Tier 1 + Tier 2 SHIPPED (2026-04-26). Activate with `SSQLGO=typed` instead of `SSQLGO=1`.
+**Status:** Tier 1 + Tier 2 + Tier 3a SHIPPED (2026-04-26 / 2026-04-27). Activate with `SSQLGO=typed` instead of `SSQLGO=1`.
 
 **Tier 1 (initial ship):** `from FILE.csv` (with schema sampling), `where -if FIELD OP VALUE` (literal operators), `join FILE.csv -using FIELD` / `-on LEFT RIGHT` (single-key, single-clause + process-substitution), `to csv [FILE]`, `to table`.
 
-**Tier 2 (this update):** `limit N`, `offset N`, `include FIELDS…`, `exclude FIELDS…`, `rename -as OLD NEW`, `group-by FIELDS… -count NAME -sum F NAME -avg F NAME -min F NAME -max F NAME` (single- and multi-field group keys, synthesized aggregator + result struct).
+**Tier 2:** `limit N`, `offset N`, `include FIELDS…`, `exclude FIELDS…`, `rename -as OLD NEW`, `group-by FIELDS… -count NAME -sum F NAME -avg F NAME -min F NAME -max F NAME` (single- and multi-field group keys, synthesized aggregator + result struct).
 
-**Tier 3 (deferred):** `-if-expr` / `-set-expr` (expression-language → Go), `update -set` (literal-only is Tier 2 stretch — not yet), `sort` / `distinct` / `union` (need typed-library additions), `-rollup` / `-cube`, `-collect`, signal processing.
+**Tier 3a (this update — wired on top of typed Phase 1.7):** `sort FIELD [-desc]` (single-field), `distinct` (full-row dedup), `union -file FILE` and `union -file FILE -all` (with cross-source schema validation).
+
+**Still deferred:** `-if-expr` / `-set-expr` (expression-language → Go), `update -set` (literal-only would be straightforward next), multi-field `sort`, `-rollup` / `-cube`, `-collect`, signal processing.
 
 Pipelines containing a Tier-3 command abort with a clear error naming the offender and suggesting `drop -typed`.
 

@@ -123,10 +123,20 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 
 	// Get input variable from last fragment
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
+	}
+
+	if typedMode() {
+		if prevSchema == nil {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: 'union' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
+		}
+		return emitTypedUnion(inputVar, prevSchema, additionalFiles, unionAll)
 	}
 
 	// Build code to read additional files and combine with Concat.

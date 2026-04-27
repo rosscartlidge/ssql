@@ -417,10 +417,16 @@ Phase 2 — Tier 2 shipped (2026-04-26):
 - [x] `group-by FIELDS… -count -sum -avg -min -max` (typed.GroupBy with
       synthesized aggregator + result struct, single- or multi-field keys)
 
-Phase 2 — Tier 3 (deferred):
-- [ ] `update -set FIELD VALUE` (literal-only could be Tier 2 stretch)
+Phase 2 — Tier 3a shipped (2026-04-27, on top of Phase 1.7):
+- [x] `sort FIELD` and `sort FIELD -desc` (single-field)
+- [x] `distinct` (full-row dedup; pointer fields compare by identity)
+- [x] `union -file FILE` and `union -file FILE -all` (cross-source
+      schema validation — mismatched fields error with a clear message)
+
+Phase 2 — Tier 3 still deferred:
+- [ ] `update -set FIELD VALUE` (literal-only would be straightforward next)
+- [ ] Multi-field sort (would need composite sort key)
 - [ ] Multi-clause joins, `-as` field renames
-- [ ] `sort` / `distinct` / `union` (need typed-library additions)
 - [ ] `-if-expr` / `-set-expr` / `-expr` aggregations (expression-lang → Go)
 - [ ] `-rollup` / `-cube` / `-collect`
 - [ ] Signal processing (FFT, convolve, etc.)
