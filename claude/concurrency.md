@@ -356,6 +356,62 @@ func (s Stream[T]) WriteCSVToWriter(w io.Writer) error {
 
 This is the pattern to extend next for `GroupByParallel` (each shard accumulates a partial map, finalize merges) and any future Stream sinks (`WriteJSONL`, `WriteArrow`, etc.).
 
+## 13. GroupByParallel — Sink/Combine/Finalize for parallel aggregation
+
+**Rule: parallel group-by uses per-shard partial maps + sequential merge, never a shared map. Combine cost scales with `#shards × #groups`, not `#rows`. Wins when `#rows ≫ #groups`.**
+
+Measured on the 10M-row workload, group-by `dept_id` with 5 aggregations (count, sum, avg, min, max), 1 000 groups, 32-core machine:
+
+| Config | Wall time | vs typed-serial |
+|---|---:|---:|
+| typed-serial (single-threaded `typed.GroupBy`) | 3.80 s | 1.0× |
+| **typed-parallel (`typed.GroupByParallel`, this doc)** | **0.95 s** | **4.0× faster** |
+| DuckDB equivalent | 0.39 s | 9.7× faster |
+
+**The three phases.**
+
+1. **Sink (per-shard, fully parallel):** each shard owns a `map[K]ParallelAggregator[T, S]` and a key-insertion-order `[]K`. Rows are folded in via `agg.Add(v)`; the constructor `newAgg()` runs once per first-seen key per shard.
+2. **Combine (sequential, small):** the orchestrator walks shards in index order. For each `(shard, k)` pair: if `k` is new in the global map, transfer the partial aggregator as-is; otherwise call `final[k].Merge(partial[k])` to fold the partial into the survivor. Cost: `O(#shards × #keys_per_shard)`.
+3. **Finalize (lazy):** returns an `iter.Seq[O]` that yields one row per distinct key in **shard-0-first, then-each-shard's-new-keys** order, calling `build(k, agg.Result())`.
+
+**Why per-shard maps, not a shared map.** A `sync.Map` or mutex-protected `map[K]Aggregator` would force every row through a contended write, recreating the channel-fan-in cost we eliminated in `Stream.Where`. Per-shard maps mean zero coordination during Sink — the entire row scan parallelises cleanly.
+
+**Why sequential Combine.** For the typical workload (`#groups ≪ #rows`) the merge is a few thousand map operations vs millions of row Adds. Parallelising Combine would add coordination cost that exceeds the savings. If `#groups ≈ #rows` (everything is unique), the workload is closer to a write-everything sink and Combine becomes the bottleneck — apply per-shard buffer dump (§12) or hash-partition the input upstream so each shard owns disjoint keys (future variant).
+
+**Aggregator interface.** Serial `typed.GroupBy` uses `Aggregator[T, R]` (Add, Result). The parallel variant adds a third method:
+
+```go
+type ParallelAggregator[T, R any] interface {
+    Aggregator[T, R]
+    Merge(other Aggregator[T, R])
+}
+```
+
+Type assertion inside `Merge` (`other.(*Counter[T])`) recovers the concrete peer type — safe because `GroupByParallel` always pairs a single constructor with itself, so all partials in the run share the same concrete type.
+
+**Codegen pattern.** When the CLI emits a parallel-mode group-by, the synthesized `<Input>Aggregator` struct gets a `Merge` method generated from the aggregation specs:
+
+| Function | Merge of (a, b) |
+|---|---|
+| `count` | `a.N += b.N` |
+| `sum` | `a.sum += b.sum` |
+| `avg` | `a.sum += b.sum; a.n += b.n` (compute `sum/n` only at `Result`) |
+| `min` | `if b.have && (!a.have || b.v < a.v) { a.v = b.v; a.have = true }` |
+| `max` | `if b.have && (!a.have || b.v > a.v) { a.v = b.v; a.have = true }` |
+
+These are all trivially associative and commutative — exactly the property we need for shard-order-independent results.
+
+**Ordering note.** Cross-shard order is **shard-concatenation, not input order**. Serial `GroupBy` emits keys in true input order; `GroupByParallel` emits them in shard-then-insertion order. Deterministic for deterministic input + partition, but not interchangeable. Tests assert this contract explicitly.
+
+**Floating-point note.** Parallel sums diverge from serial in the last few ULPs because shard-then-merge changes the addition order, and `+` is not associative on `float64`. Equal at the level that matters for analytics; not equal byte-for-byte.
+
+**When NOT to use this pattern.**
+- `#groups ≈ #rows` ⇒ Combine becomes the bottleneck. Use `SSQLGO=typed`, or wait for hash-partitioned `Stream` (future).
+- `-presorted` group-by ⇒ rejected at codegen because shards split contiguous runs. Use `SSQLGO=typed`.
+- Custom aggregator that doesn't have an associative merge (e.g. order-sensitive concatenation) ⇒ stick with serial `GroupBy`.
+
+See [`doc/research/typed-groupby-parallel-proposal.md`](../doc/research/typed-groupby-parallel-proposal.md) for the full design rationale, future-work list, and benchmark methodology.
+
 ## See Also
 
 - [`doc/research/typed-concurrency-proposal.md`](../doc/research/typed-concurrency-proposal.md) — design proposal + measured PoC results in §9a

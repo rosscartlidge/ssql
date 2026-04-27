@@ -191,7 +191,7 @@ Add when the MVP ships and we have user feedback:
 
 Activate with `SSQLGO=parallel` (everything else identical to `SSQLGO=typed`). The generator emits Go code that uses the parallel runtime: `typed.ReadCSVParallel[T]`, `typed.Stream[T]`, `Stream.Where`, `typed.HashJoinParallel`, `Stream.Serial()` at the sink.
 
-**Supported in v1:** `from FILE.csv`, `where -if F OP V`, `join FILE -using F`, `to csv`, `to table`. Other typed-aware commands (limit, offset, include, exclude, rename, group-by, sort, distinct, union, top, cast, update) currently emit a clear "not yet supported in parallel mode" error suggesting a fallback to `SSQLGO=typed`. Each maps to a tractable expansion later — `limit/offset` need a Stream variant, `group-by` needs `GroupByParallel` (Sink/Combine/Finalize), `sort/distinct` need parallel-merge variants.
+**Supported in v1:** `from FILE.csv`, `where -if F OP V`, `join FILE -using F`, `group-by … -count/-sum/-avg/-min/-max …`, `to csv`, `to table`. Other typed-aware commands (limit, offset, include, exclude, rename, sort, distinct, union, top, cast, update) currently emit a clear "not yet supported in parallel mode" error suggesting a fallback to `SSQLGO=typed`. Each maps to a tractable expansion later — `limit/offset` need a Stream variant, `sort/distinct` need parallel-merge variants. `group-by -presorted` is rejected in parallel mode (shards split contiguous runs).
 
 **When parallel-mode wins (and when it doesn't):**
 
@@ -201,6 +201,7 @@ Activate with `SSQLGO=parallel` (everything else identical to `SSQLGO=typed`). T
 | Filter `age > 30` (7.25 M output rows, **per-shard buffer sink, 2026-04-27**) | **5.7 s** | **1.3 s** | **parallel 4.4× faster** |
 | Filter `age > 55` (1 M output rows) | 3.86 s | 1.88 s | parallel 2.05× faster |
 | Aggregating sink (count, via `SerialCount`) | 5.00 s | 0.77 s | parallel 6.4× faster |
+| **`group-by` (10 M rows, 1 000 groups, count+sum+avg+min+max, 2026-04-27)** | **3.80 s** | **0.95 s** | **parallel 4.0× faster (DuckDB 0.39 s — 2.4× ahead)** |
 
 **The original problem (resolved 2026-04-27).** The first parallel-mode CSV sink called `Stream.Serial()` to fan all shards back into a single `iter.Seq[T]` and then ran `typed.WriteCSV` on it. The fan-in channel cost ~100 ns/row, which on a 7.25 M-row output erased the parallel-filter savings. The fix is the **per-shard buffer dump sink** (§5d.1): each shard formats its rows into its own `*bytes.Buffer` concurrently, then a sequential final stage writes the buffers to the output in shard order. No `Serial()` channel; no per-row coordination cost on the hot path.
 
@@ -213,9 +214,12 @@ After the fix, the same workload now runs **4.4× faster than typed-serial** and
 
 **Future work (in priority order):**
 1. ~~**Per-shard CSV output buffers, no fan-in channel.**~~ ✅ Shipped 2026-04-27. `Stream.WriteCSV` / `Stream.WriteCSVToWriter` formats per-shard in parallel and dumps in shard order. The codegen for `to csv` in parallel mode now emits the Stream method directly — no `Serial()` call.
-2. **`GroupByParallel`** with the Sink/Combine/Finalize three-phase contract from the original concurrency proposal. Each shard accumulates a partial map; finalize merges. Group-by is a hot path and the projected speedup is large because the merge is small relative to the scan.
+2. ~~**`GroupByParallel`** with the Sink/Combine/Finalize three-phase contract.~~ ✅ Shipped 2026-04-27. Per-shard partial map, sequential Combine, lazy Finalize. Synthesized aggregator gets a `Merge` method when in parallel mode. 4.0× faster than typed-serial on the 10 M-row × 1 000-group benchmark; closes most of the gap to DuckDB. See [`typed-groupby-parallel-proposal.md`](typed-groupby-parallel-proposal.md) for the design.
 3. **Stream-aware `Limit`, `Offset`, `Distinct`** so common pipelines aren't blocked by parallel-mode rejection.
-4. **`SerialOrdered()` fan-in** for users who need input-order = output-order without leaving parallel mode.
+4. **Hash-partitioned Stream source** for the `#groups ≈ #rows` case (route each row to the shard owning `hash(key) mod nShards`, eliminate the Merge phase, at the cost of a fan-out channel).
+5. **`SerialOrdered()` fan-in** for users who need input-order = output-order without leaving parallel mode.
+6. **Faster delimited reader for clean TSV** (split-on-delim, no quoting/escaping). Should be ~2× faster than `encoding/csv` on data without embedded quotes.
+7. **Parquet input.** Columnar + compressed + typed; row groups map naturally to shards. Likely the biggest single I/O win on read-bound workloads.
 
 ## 6. Tier 3 (Deferred Indefinitely)
 

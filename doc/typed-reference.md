@@ -257,14 +257,35 @@ func GroupBy[T, S, O any, K comparable](
 ) iter.Seq[O]
 
 func GroupByOrdered[T, S, O any, K comparable](...)  // O(1) memory; pre-sorted input
+
+// Parallel variant — Sink/Combine/Finalize three-phase contract.
+// Each shard builds its own partial map; the orchestrator merges
+// shards sequentially after Wait; the result iterator yields lazily.
+// 4.0× faster than serial GroupBy on the 10M-row × 1 000-group
+// benchmark (close to DuckDB).
+func GroupByParallel[T, S, O any, K comparable](
+    in     Stream[T],
+    keyFn  func(T) K,
+    newAgg ParallelAggFunc[T, S],   // newAgg() returns ParallelAggregator
+    build  func(K, S) O,
+) iter.Seq[O]
 ```
 
-Prebuilt aggregators: `Counter[T]`, `NewSummer(fn)`, `NewAverager(fn)`.
-Custom accumulators implement the `Aggregator[T, R]` interface.
+Prebuilt aggregators: `Counter[T]`, `NewSummer(fn)`, `NewAverager(fn)` —
+all three implement `Merge` so they double as `ParallelAggregator`.
+The parallel constructors are `NewCounter[T]()`, `NewParallelSummer(fn)`,
+`NewParallelAverager(fn)`. Custom accumulators implement the
+`Aggregator[T, R]` interface (serial); add a `Merge(other Aggregator[T, R])`
+method to satisfy `ParallelAggregator[T, R]`.
 
-Use `GroupBy` for unordered input (buffers all groups in a map). Use
-`GroupByOrdered` when the input is pre-sorted by key — it streams in
-constant memory.
+Use `GroupBy` for unordered serial input (buffers all groups in a map).
+Use `GroupByOrdered` when the input is pre-sorted by key (O(1) memory).
+Use `GroupByParallel` when the input is a `Stream[T]` and `#rows ≫
+#groups` — the Combine cost is `O(#shards × #groups)`, negligible
+compared to the row scan. **Ordering:** within a shard, first-seen-key
+order is preserved; across shards, shard-0's first-seen keys come
+before shard-1's, etc. Deterministic but not the same as serial
+GroupBy (which sees keys in true input order).
 
 ## Worked example
 
@@ -432,10 +453,11 @@ Phase 2 — Tier 2 shipped (2026-04-26):
       synthesized aggregator + result struct, single- or multi-field keys)
 
 Phase 2 — `SSQLGO=parallel` codegen shipped (2026-04-27):
-- [x] Same pipeline shape as `SSQLGO=typed`, with `from`/`where`/`join`/`to csv`/`to table` emitting Stream-based parallel code (typed.ReadCSVParallel + Stream.Where + typed.HashJoinParallel).
-- [x] Other typed-aware commands (limit, group-by, sort, distinct, etc.) emit a clear error suggesting `SSQLGO=typed` instead.
+- [x] Same pipeline shape as `SSQLGO=typed`, with `from`/`where`/`join`/`group-by`/`to csv`/`to table` emitting Stream-based parallel code (typed.ReadCSVParallel + Stream.Where + typed.HashJoinParallel + typed.GroupByParallel).
+- [x] Other typed-aware commands (limit, sort, distinct, union, top, cast, update, include/exclude/rename) emit a clear error suggesting `SSQLGO=typed` instead.
 - [x] **Per-shard buffer dump CSV sink (2026-04-27)** — `to csv` in parallel mode now emits `Stream.WriteCSVToWriter` (no `Serial()` fan-in). Each shard formats into its own buffer in parallel, dumped in shard order. Wide-output workload (7.25M-row CSV write) went from 0.73× typed-serial to **4.4× faster** with this fix. Trade-off: peak memory ~2× output size.
-- **When to use it:** filter-heavy / aggregating *and* transform-and-write pipelines. **4.4× faster** on the 7.25 M-row CSV write workload (1.3 s vs typed-serial 5.7 s; DuckDB 0.7 s on the same machine — within 1.86×). **6.4× faster** for count-only sinks. Use `SSQLGO=typed` when the output is too large to buffer in RAM or when you need strict input-order output. See [`research/typed-codegen-proposal.md` §5d](research/typed-codegen-proposal.md#5d-parallel-mode-codegen-ssqlgoparallel) for the workload-vs-mode table.
+- [x] **`GroupByParallel` with Sink/Combine/Finalize (2026-04-27)** — `group-by` in parallel mode emits `typed.GroupByParallel`. Each shard accumulates its own partial `map[K]Aggregator`; Combine merges per shard sequentially; Finalize yields rows lazily. Synthesized `<Input>Aggregator` gets a `Merge` method generated from the aggregation specs. **4.0× faster than typed-serial** on the 10M-row × 1 000-group workload (count+sum+avg+min+max).
+- **When to use it:** filter-heavy / aggregating / transform-and-write / group-by pipelines. **4.4× faster** on the CSV write workload (1.3 s vs typed-serial 5.7 s; DuckDB 0.7 s — 1.86× ahead). **4.0× faster** on the group-by workload (0.95 s vs 3.80 s; DuckDB 0.39 s — 2.4× ahead). **6.4× faster** for count-only sinks. Use `SSQLGO=typed` when the output is too large to buffer in RAM, when you need strict input-order output, or when group-by needs `-presorted`. See [`research/typed-codegen-proposal.md` §5d](research/typed-codegen-proposal.md#5d-parallel-mode-codegen-ssqlgoparallel) and [`research/typed-groupby-parallel-proposal.md`](research/typed-groupby-parallel-proposal.md).
 
 Phase 2 — Tier 3a shipped (2026-04-27, on top of Phase 1.7):
 - [x] `sort FIELD` and `sort FIELD -desc` (single-field)

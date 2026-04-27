@@ -32,6 +32,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Typed Concurrency Proposal](typed-concurrency-proposal.md) — proposed `Stream[T]` parallel pipeline alongside `iter.Seq[T]` (DuckDB morsel-driven inspiration)
 - [Typed Codegen Proposal (Phase 2)](typed-codegen-proposal.md) — `ssql generate go -typed` MVP scope, schema discovery, type flow, fallback strategy
 - [Typed Codegen Tier 3 Roadmap](typed-codegen-tier3-roadmap.md) — what's left after Tier 1+2+3a, ranked by demand × ease, with explicit recommendations
+- [Typed GroupByParallel Proposal](typed-groupby-parallel-proposal.md) — Sink/Combine/Finalize parallel group-by, `ParallelAggregator` interface, codegen plan
 
 ## Distributed Processing
 
