@@ -568,10 +568,55 @@ type Row struct {
 `ssql:"name"` is preferred. `csv:"name"` is also accepted as a
 fallback for ecosystem compatibility.
 
+## Need more speed? `SSQLGO=parallel`
+
+Once you've got a working `SSQLGO=typed` pipeline, you can run the
+same one across all cores by switching the env var:
+
+```bash
+SSQLGO=parallel ssql from data.csv \
+    | ssql where -if age gt 30 \
+    | ssql group-by dept_id -count n -sum salary total -avg salary mean \
+    | ssql to csv | ssql generate go > pipeline.go
+go run pipeline.go
+```
+
+What changes under the hood: the generated Go now uses
+`typed.ReadCSVParallel`, the `Stream[T]` runtime
+(`Stream.Where`, `typed.HashJoinParallel`, `typed.GroupByParallel`),
+and a per-shard CSV output buffer. Same struct types, same struct
+tags, same pipeline shape — the parallel infrastructure is
+invisible at the source level.
+
+Measured on a 32-core machine against `cmd/ssql-typed-scale/data.csv`
+(10 M rows, 1 000 dept_ids):
+
+| Workload | typed-serial | **typed-parallel** | DuckDB |
+|---|---:|---:|---:|
+| Filter + write 7.25 M-row CSV | 5.7 s | **1.3 s** (4.4× faster) | 0.7 s |
+| Group-by, count + sum + avg + min + max | 3.80 s | **0.95 s** (4.0× faster) | 0.39 s |
+
+**When parallel mode wins:** `from + where + join + group-by + to csv/table`
+pipelines on a host with spare cores. Other typed-aware commands
+(limit, sort, distinct, union, top, cast, update, include/exclude/
+rename) still emit a clear error in parallel mode pointing back at
+`SSQLGO=typed`. Group-by `-presorted` is also rejected in parallel
+mode (shards split contiguous runs).
+
+**When to stay on `SSQLGO=typed`:** outputs too large to buffer
+(parallel CSV sink peaks at ~2× output size in memory), pipelines
+needing strict input-order output, or pipelines that depend on a
+Tier 3 command not yet supported in parallel mode.
+
+For the full design rationale see
+[`typed-codegen-proposal.md`](research/typed-codegen-proposal.md) §5d
+and [`typed-groupby-parallel-proposal.md`](research/typed-groupby-parallel-proposal.md).
+
 ## Where to next
 
-- **[Typed Reference](typed-reference.md)** — concise function-by-function reference
+- **[Typed Reference](typed-reference.md)** — concise function-by-function reference (covers `Stream[T]`, `GroupByParallel`, parallel sinks)
 - **[Performance Notes](research/typed-performance-notes.md)** — known optimization opportunities (and a writeup of one that didn't pay off)
-- **[Concurrency Proposal](research/typed-concurrency-proposal.md)** — design sketch for closing the remaining gap to DuckDB via opt-in `Stream[T]`
-- **[Codegen design (Phase 2)](research/typed-codegen-proposal.md)** — `SSQLGO=typed ssql … | ssql generate go` shipped (Tier 1 + Tier 2: from, where, join, group-by, include/exclude/rename, limit/offset, to csv, to table). Same shell pipeline you'd run interactively becomes a self-contained typed Go program.
+- **[Concurrency Proposal](research/typed-concurrency-proposal.md)** — original PoC results that motivated `Stream[T]` (now shipped — see codegen proposal §5d for status)
+- **[GroupByParallel Proposal](research/typed-groupby-parallel-proposal.md)** — Sink/Combine/Finalize design for parallel group-by
+- **[Codegen design (Phase 2)](research/typed-codegen-proposal.md)** — `SSQLGO=typed` and `SSQLGO=parallel` shipped (Tier 1 + Tier 2 + Tier 3a/3b: from, where, join, group-by, sort, distinct, union, top, cast, update, include/exclude/rename, limit/offset, to csv, to table). Parallel mode covers the read/filter/join/group-by/sink subset.
 - **[Side-by-side example](../examples/typed_pipeline)** — runnable Record vs typed comparison that prints the speedup live

@@ -219,7 +219,32 @@ Measured against the same shell pipeline run three ways (1M rows ×
 | Typed vs CLI | **4.0× faster** | — |
 | Typed vs Record codegen | **3.5× faster** | **104× less memory** |
 
-[**Codelab →**](doc/typed-codelab.md) | [**Reference →**](doc/typed-reference.md) | [**Codegen design →**](doc/research/typed-codegen-proposal.md)
+**Need more speed? `SSQLGO=parallel` runs the same pipeline across
+all cores.** Drop-in replacement for `SSQLGO=typed`; emits Go code
+that uses a shard-partitioned `Stream[T]` runtime with parallel
+CSV read, parallel `Where`, parallel hash-join, parallel group-by
+(Sink/Combine/Finalize), and per-shard CSV output buffers. Measured
+on a 32-core machine, 10 M-row corpus:
+
+| Workload | typed-serial | **typed-parallel** | DuckDB |
+|---|---:|---:|---:|
+| Filter + write 7.25 M-row CSV | 5.7 s | **1.3 s (4.4× faster)** | 0.7 s |
+| Group-by 1 000 dept_ids, count + sum + avg + min + max | 3.80 s | **0.95 s (4.0× faster)** | 0.39 s |
+
+```bash
+SSQLGO=parallel ssql from data.csv \
+    | ssql group-by dept_id -count n -sum salary total -avg salary mean \
+    | ssql to csv | ssql generate go > pipeline.go
+go run pipeline.go
+```
+
+Use `SSQLGO=parallel` when the host has spare cores and the
+pipeline fits the supported subset (`from`, `where`, `join`,
+`group-by`, `to csv`, `to table`); fall back to `SSQLGO=typed` for
+output-too-large-for-RAM cases or when you need strict input-order
+output.
+
+[**Codelab →**](doc/typed-codelab.md) | [**Reference →**](doc/typed-reference.md) | [**Codegen design →**](doc/research/typed-codegen-proposal.md) | [**GroupByParallel design →**](doc/research/typed-groupby-parallel-proposal.md)
 
 ### 🌐 **Browser Playground**
 
