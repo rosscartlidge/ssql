@@ -359,13 +359,13 @@ Phase 1.6 (shipped 2026-04-26):
 - (Tried and rejected: custom byte-level CSV reader — see
   [`research/typed-performance-notes.md`](research/typed-performance-notes.md))
 
-Phase 1.7 (proposed — unblocks Tier 3 codegen):
-- [ ] `SortBy[T,K]`, `SortByDesc[T,K]` — half-day, unblocks `sort` codegen
-- [ ] `Distinct[T,K]` — half-day, unblocks `distinct` codegen
-- [ ] `Concat[T]`, `Union[T,K]` — couple of hours, unblocks `union` codegen
-- See
-  [`research/typed-package-proposal.md` §6a](research/typed-package-proposal.md#6a-library-phases-after-phase-1)
-  for design and motivation.
+Phase 1.7 (shipped 2026-04-27 — unblocks Tier 3 codegen):
+- [x] `SortBy[T,K]`, `SortByDesc[T,K]`, `SortByStable[T,K]`
+- [x] `Distinct[T,K]` (streaming, hash-set state)
+- [x] `Concat[T]`, `Union[T,K]`
+- Tier 3 codegen for `sort` / `distinct` / `union` can now wire into
+  these directly. See
+  [`research/typed-package-proposal.md` §6a](research/typed-package-proposal.md#6a-library-phases-after-phase-1).
 
 Phase 1.8+ (open):
 - [ ] Arrow reader/writer (`ReadArrow[T]`, `WriteArrow[T]`)

@@ -290,3 +290,171 @@ func TestComposition(t *testing.T) {
 		t.Errorf("composed pipeline: got %v, want %v", got, want)
 	}
 }
+
+func TestSortByAsc(t *testing.T) {
+	in := []int{3, 1, 4, 1, 5, 9, 2, 6}
+	got := slices.Collect(SortBy(func(v int) int { return v })(slices.Values(in)))
+	want := []int{1, 1, 2, 3, 4, 5, 6, 9}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestSortByDesc(t *testing.T) {
+	in := []int{3, 1, 4, 1, 5, 9, 2, 6}
+	got := slices.Collect(SortByDesc(func(v int) int { return v })(slices.Values(in)))
+	want := []int{9, 6, 5, 4, 3, 2, 1, 1}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestSortByOnStruct(t *testing.T) {
+	type row struct {
+		Name string
+		Age  int64
+	}
+	in := []row{{"Carol", 42}, {"Alice", 30}, {"Bob", 25}}
+	got := slices.Collect(SortBy(func(r row) int64 { return r.Age })(slices.Values(in)))
+	want := []row{{"Bob", 25}, {"Alice", 30}, {"Carol", 42}}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestSortByEmpty(t *testing.T) {
+	got := slices.Collect(SortBy(func(v int) int { return v })(slices.Values([]int{})))
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %v", got)
+	}
+}
+
+func TestSortByEarlyTermination(t *testing.T) {
+	in := []int{3, 1, 4, 1, 5, 9, 2, 6}
+	seen := 0
+	for v := range SortBy(func(x int) int { return x })(slices.Values(in)) {
+		seen++
+		if v == 2 {
+			break
+		}
+	}
+	// Sorted: 1,1,2,... — break after seeing 2 means seen==3.
+	if seen != 3 {
+		t.Errorf("expected 3 iterations before break, got %d", seen)
+	}
+}
+
+func TestSortByStable(t *testing.T) {
+	type row struct {
+		Key  int
+		Tag  string
+	}
+	in := []row{{1, "a"}, {2, "b"}, {1, "c"}, {2, "d"}}
+	got := slices.Collect(SortByStable(func(r row) int { return r.Key })(slices.Values(in)))
+	// Equal-key entries should preserve original order: a before c, b before d.
+	want := []row{{1, "a"}, {1, "c"}, {2, "b"}, {2, "d"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestDistinctByKey(t *testing.T) {
+	type row struct {
+		ID   int
+		Name string
+	}
+	in := []row{{1, "Alice"}, {2, "Bob"}, {1, "Alice2"}, {3, "Carol"}, {2, "Bob2"}}
+	got := slices.Collect(Distinct(func(r row) int { return r.ID })(slices.Values(in)))
+	want := []row{{1, "Alice"}, {2, "Bob"}, {3, "Carol"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}
+
+func TestDistinctEmpty(t *testing.T) {
+	got := slices.Collect(Distinct(func(v int) int { return v })(slices.Values([]int{})))
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %v", got)
+	}
+}
+
+func TestDistinctNoDups(t *testing.T) {
+	in := []int{1, 2, 3, 4}
+	got := slices.Collect(Distinct(func(v int) int { return v })(slices.Values(in)))
+	if !slices.Equal(got, in) {
+		t.Errorf("got %v, want %v (no-op when no dups)", got, in)
+	}
+}
+
+func TestDistinctEarlyTermination(t *testing.T) {
+	in := []int{1, 2, 1, 3, 4}
+	seen := 0
+	for v := range Distinct(func(x int) int { return x })(slices.Values(in)) {
+		seen++
+		if v == 2 {
+			break
+		}
+	}
+	if seen != 2 {
+		t.Errorf("expected 2 iterations, got %d", seen)
+	}
+}
+
+func TestConcat(t *testing.T) {
+	a := slices.Values([]int{1, 2})
+	b := slices.Values([]int{3, 4})
+	c := slices.Values([]int{5})
+	got := slices.Collect(Concat(a, b, c))
+	want := []int{1, 2, 3, 4, 5}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestConcatEmpty(t *testing.T) {
+	got := slices.Collect(Concat[int]())
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %v", got)
+	}
+}
+
+func TestConcatPreservesDuplicates(t *testing.T) {
+	a := slices.Values([]int{1, 2, 3})
+	b := slices.Values([]int{2, 3, 4})
+	got := slices.Collect(Concat(a, b))
+	want := []int{1, 2, 3, 2, 3, 4}
+	if !slices.Equal(got, want) {
+		t.Errorf("Concat must preserve dups; got %v, want %v", got, want)
+	}
+}
+
+func TestUnion(t *testing.T) {
+	a := slices.Values([]int{1, 2, 3})
+	b := slices.Values([]int{2, 3, 4})
+	got := slices.Collect(Union(func(v int) int { return v }, a, b))
+	want := []int{1, 2, 3, 4}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestUnionEmpty(t *testing.T) {
+	got := slices.Collect(Union(func(v int) int { return v }))
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %v", got)
+	}
+}
+
+func TestUnionByCompositeKey(t *testing.T) {
+	type row struct {
+		Region  string
+		Product string
+	}
+	a := slices.Values([]row{{"N", "A"}, {"S", "B"}})
+	b := slices.Values([]row{{"N", "A"}, {"E", "C"}}) // duplicate (N,A)
+	got := slices.Collect(Union(func(r row) row { return r }, a, b))
+	want := []row{{"N", "A"}, {"S", "B"}, {"E", "C"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %#v, want %#v", got, want)
+	}
+}

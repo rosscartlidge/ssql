@@ -1,6 +1,9 @@
 package typed
 
-import "iter"
+import (
+	"iter"
+	"slices"
+)
 
 // Where filters in place. T -> T.
 //
@@ -265,6 +268,154 @@ func FullJoin[L, R, O any, K comparable](
 			}
 			if !yield(merge(zeroL, r, false, true)) {
 				return
+			}
+		}
+	}
+}
+
+// SortBy collects the input into a slice, sorts it ascending by the
+// extracted key using slices.SortFunc, then yields. Materializes the
+// full input — O(N) memory.
+//
+// For descending order use [SortByDesc]. Stable sort isn't guaranteed
+// (slices.SortFunc is not stable); use SortByStable when you need
+// determinism for ties.
+func SortBy[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T] {
+	return func(in iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			buf := slices.Collect(in)
+			slices.SortFunc(buf, func(a, b T) int {
+				ka, kb := key(a), key(b)
+				switch {
+				case ka < kb:
+					return -1
+				case ka > kb:
+					return 1
+				default:
+					return 0
+				}
+			})
+			for _, v := range buf {
+				if !yield(v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// SortByDesc is [SortBy] in descending order.
+func SortByDesc[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T] {
+	return func(in iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			buf := slices.Collect(in)
+			slices.SortFunc(buf, func(a, b T) int {
+				ka, kb := key(a), key(b)
+				switch {
+				case ka > kb:
+					return -1
+				case ka < kb:
+					return 1
+				default:
+					return 0
+				}
+			})
+			for _, v := range buf {
+				if !yield(v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// SortByStable is the stable variant of [SortBy] — preserves original
+// order for elements with equal keys. Slightly slower; use only when
+// stability matters.
+func SortByStable[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T] {
+	return func(in iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			buf := slices.Collect(in)
+			slices.SortStableFunc(buf, func(a, b T) int {
+				ka, kb := key(a), key(b)
+				switch {
+				case ka < kb:
+					return -1
+				case ka > kb:
+					return 1
+				default:
+					return 0
+				}
+			})
+			for _, v := range buf {
+				if !yield(v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// Distinct yields only the first occurrence of each unique key. Streams
+// in O(distinct-keys) memory — does not materialize the whole input.
+//
+// For "distinct entire row" use Distinct with key = the value itself
+// (only valid when T is comparable):
+//
+//	distinct := typed.Distinct(func(r Row) Row { return r })(rows)
+//
+// For multi-key uniqueness, return a tuple struct from key.
+func Distinct[T any, K comparable](key func(T) K) func(iter.Seq[T]) iter.Seq[T] {
+	return func(in iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			seen := make(map[K]struct{})
+			for v := range in {
+				k := key(v)
+				if _, ok := seen[k]; ok {
+					continue
+				}
+				seen[k] = struct{}{}
+				if !yield(v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// Concat yields every element from each input sequence in turn. No
+// materialization — pure streaming. Inputs are consumed in order.
+//
+// Useful for unioning streams of the same type without deduplication.
+// For dedup-on-concat use [Union].
+func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for _, s := range seqs {
+			for v := range s {
+				if !yield(v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// Union concatenates the input sequences and yields only the first
+// occurrence of each key — equivalent to Concat followed by Distinct,
+// but in a single pass.
+func Union[T any, K comparable](key func(T) K, seqs ...iter.Seq[T]) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		seen := make(map[K]struct{})
+		for _, s := range seqs {
+			for v := range s {
+				k := key(v)
+				if _, ok := seen[k]; ok {
+					continue
+				}
+				seen[k] = struct{}{}
+				if !yield(v) {
+					return
+				}
 			}
 		}
 	}

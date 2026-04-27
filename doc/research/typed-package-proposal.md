@@ -472,35 +472,32 @@ Two small additions plus one negative finding worth recording:
   [`typed-performance-notes.md`](typed-performance-notes.md) §1
   for the writeup so we don't repeat it.
 
-### Phase 1.7 — proposed (unblocks Tier 3 codegen)
+### Phase 1.7 — shipped (2026-04-27, unblocks Tier 3 codegen)
 
-Phase 2 codegen Tier 3 lists `sort`, `distinct`, and `union` as
+Phase 2 codegen Tier 3 listed `sort`, `distinct`, and `union` as
 deferred. The codegen work for those commands is small — emit a call
-to a typed runtime function — but the runtime functions don't exist
-yet. Phase 1.7 closes that gap.
+to a typed runtime function — but the runtime functions didn't exist.
+Phase 1.7 closed that gap; the Tier 3 codegen wiring can now follow
+in a separate cycle.
 
-| Function | Signature sketch | Why needed | Effort |
-|---|---|---|---|
-| `SortBy[T any, K cmp.Ordered]` | `func SortBy[T,K](key func(T) K) Filter[T,T]` (materialize, `slices.SortFunc`, yield) | unblocks `sort FIELD` codegen | 2-3 h |
-| `SortByDesc[T,K]` | symmetric, descending | unblocks `sort -desc FIELD` | 1 h |
-| `Distinct[T any, K comparable]` | `func Distinct[T,K](key func(T) K) Filter[T,T]` (hash-set, yield first occurrence) | unblocks `distinct` codegen | 1-2 h |
-| `Concat[T any]` | `func Concat[T](seqs ...iter.Seq[T]) iter.Seq[T]` | unblocks `union` codegen (concatenation) | 30 min |
-| `Union[T any, K comparable]` | `func Union[T,K](key func(T) K, seqs ...iter.Seq[T]) iter.Seq[T]` | unblocks `union -distinct` codegen (concatenation + dedup) | 1 h |
+| Function | Signature | Notes |
+|---|---|---|
+| `SortBy[T,K Ordered](key func(T) K)` | `func(iter.Seq[T]) iter.Seq[T]` | Materializes, `slices.SortFunc`, yields. O(N) memory. |
+| `SortByDesc[T,K Ordered](key func(T) K)` | as above, descending | |
+| `SortByStable[T,K Ordered](key func(T) K)` | as above, stable | Slightly slower; preserves order for equal keys. |
+| `Distinct[T,K comparable](key func(T) K)` | `func(iter.Seq[T]) iter.Seq[T]` | Streams; tracks seen keys in a hash set. O(unique-keys) memory. |
+| `Concat[T any](seqs ...iter.Seq[T])` | `iter.Seq[T]` | Pure streaming. Preserves duplicates. |
+| `Union[T,K comparable](key func(T) K, seqs ...)` | `iter.Seq[T]` | `Concat` + dedup in one pass. |
 
-Plus tests, plus a perf-bench against `slices.SortFunc` directly to
-confirm the wrapper overhead is negligible (it should be — it's just
-`slices.Collect` then `slices.SortFunc`).
+14 unit tests covering each primitive — empty input, no duplicates,
+early termination, composite key types, multi-sequence Concat. All
+pass; total typed-package test count went from 63 to 79.
 
-**Total budget:** half a day. Low-risk; pure additive, no API changes
-to existing primitives.
-
-**Why parked rather than shipped:** Tier 3 codegen demand isn't yet
-clear. The four commands together cover maybe 20% of pipelines, and
-two of them (`sort`, `distinct`) have ergonomic-only motivations —
-users can already write `slices.SortFunc(slices.Collect(seq), ...)` in
-hand-written typed code today. We'll prioritise this when (a) there's
-demand from real users hitting the Tier 3 wall, or (b) the Tier 3
-codegen story becomes the limiting factor in adoption.
+**Why ship now rather than wait:** the proposal originally parked
+this on "Tier 3 codegen demand isn't yet clear", but the additions
+were genuinely small (~140 LOC of runtime, no API changes elsewhere)
+and shipping them keeps the typed runtime ergonomically complete for
+hand-written code even before the codegen wiring lands.
 
 ### Phase 1.8+ (open)
 

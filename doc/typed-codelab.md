@@ -521,6 +521,14 @@ typed.Where(pred)(seq)
 typed.Limit[T](n)(seq)
 typed.Skip[T](n)(seq)
 typed.Select(fn)(seq)
+typed.SortBy(key)(seq)            // ascending
+typed.SortByDesc(key)(seq)        // descending
+typed.SortByStable(key)(seq)      // stable for equal keys
+typed.Distinct(key)(seq)          // first occurrence per unique key
+
+// Set ops (multi-input)
+typed.Concat(seq1, seq2, ...)            // preserves duplicates
+typed.Union(key, seq1, seq2, ...)        // concat + dedup
 
 // Joins
 typed.HashJoin(left, right, leftKey, rightKey, merge)
