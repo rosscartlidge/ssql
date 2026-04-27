@@ -353,10 +353,24 @@ Phase 1.5 (shipped):
 - [x] Streaming aggregation: `Count`, `Sum`, `Min`, `Max`, `Avg`,
       `GroupBy`, `GroupByOrdered`, `Counter`, `Summer`, `Averager`
 
-Phase 1.6 (planned):
+Phase 1.6 (shipped 2026-04-26):
+- [x] `HashJoinSized` with capacity hint for known right-side size
+- [x] Strict-mode CSV reader via `Strict()` option
+- (Tried and rejected: custom byte-level CSV reader — see
+  [`research/typed-performance-notes.md`](research/typed-performance-notes.md))
+
+Phase 1.7 (proposed — unblocks Tier 3 codegen):
+- [ ] `SortBy[T,K]`, `SortByDesc[T,K]` — half-day, unblocks `sort` codegen
+- [ ] `Distinct[T,K]` — half-day, unblocks `distinct` codegen
+- [ ] `Concat[T]`, `Union[T,K]` — couple of hours, unblocks `union` codegen
+- See
+  [`research/typed-package-proposal.md` §6a](research/typed-package-proposal.md#6a-library-phases-after-phase-1)
+  for design and motivation.
+
+Phase 1.8+ (open):
 - [ ] Arrow reader/writer (`ReadArrow[T]`, `WriteArrow[T]`)
-- [ ] `HashJoinSized` with capacity hint for known right-side size
-- [ ] Strict-mode CSV reader (errors on unknown / missing columns)
+- [ ] Faster JSONL via `goccy/go-json` or per-type generated unmarshallers
+- [ ] Hand-rolled RFC3339 time parser (~3× over `time.Parse`)
 
 Phase 2 — Tier 1 shipped (2026-04-26):
 - [x] `SSQLGO=typed ssql generate go` — schema-aware code generation that

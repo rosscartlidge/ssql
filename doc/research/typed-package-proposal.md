@@ -440,6 +440,83 @@ The Phase-1 library design makes Phase 2 mechanically straightforward: every pip
 
 Total: ~1.5 days of focused work. Low-risk because (a) the PoC has already validated the design, and (b) the package is purely additive — it does not touch existing `ssql.Record` code.
 
+## 6a. Library Phases After Phase 1
+
+Phase 1 was deliberately scoped to the smallest credible runtime that
+validated the moonshot's headline numbers. The follow-on phases below
+fill out the surface so more pipelines become typed-codegen-eligible
+(Phase 2 Tier 3) without users having to fall back to `SSQLGO=1`.
+
+### Phase 1.5 — shipped (2026-04-26)
+
+Wider type coverage and the operations needed to express most real
+analytics workloads:
+
+- `time.Time` (RFC3339), `int32`, `uint64`, `float32`, pointer-to-T
+- `HashJoinMulti` (many-to-many), `LeftJoin`, `RightJoin`, `FullJoin`
+- JSONL I/O (`ReadJSONL`, `ReadJSONLSafe`, `WriteJSONL`)
+- Streaming aggregation: `Count`, `Sum`, `Min`, `Max`, `Avg`,
+  `GroupBy`, `GroupByOrdered`, `Counter`, `NewSummer`, `NewAverager`,
+  `Aggregator[T,R]` interface for custom accumulators
+
+### Phase 1.6 — shipped (2026-04-26)
+
+Two small additions plus one negative finding worth recording:
+
+- `HashJoinSized` — pre-sized build map for known right-side cardinality
+- `Strict()` CSV option — fail-fast on schema mismatch
+- *Tried and rejected*: a custom byte-level CSV reader. Hypothesis
+  (csv.Reader allocates per cell) was wrong; csv.Reader with
+  `ReuseRecord=true` already block-allocates per row. The custom
+  reader was 17% slower with 50% more allocations. Deleted; see
+  [`typed-performance-notes.md`](typed-performance-notes.md) §1
+  for the writeup so we don't repeat it.
+
+### Phase 1.7 — proposed (unblocks Tier 3 codegen)
+
+Phase 2 codegen Tier 3 lists `sort`, `distinct`, and `union` as
+deferred. The codegen work for those commands is small — emit a call
+to a typed runtime function — but the runtime functions don't exist
+yet. Phase 1.7 closes that gap.
+
+| Function | Signature sketch | Why needed | Effort |
+|---|---|---|---|
+| `SortBy[T any, K cmp.Ordered]` | `func SortBy[T,K](key func(T) K) Filter[T,T]` (materialize, `slices.SortFunc`, yield) | unblocks `sort FIELD` codegen | 2-3 h |
+| `SortByDesc[T,K]` | symmetric, descending | unblocks `sort -desc FIELD` | 1 h |
+| `Distinct[T any, K comparable]` | `func Distinct[T,K](key func(T) K) Filter[T,T]` (hash-set, yield first occurrence) | unblocks `distinct` codegen | 1-2 h |
+| `Concat[T any]` | `func Concat[T](seqs ...iter.Seq[T]) iter.Seq[T]` | unblocks `union` codegen (concatenation) | 30 min |
+| `Union[T any, K comparable]` | `func Union[T,K](key func(T) K, seqs ...iter.Seq[T]) iter.Seq[T]` | unblocks `union -distinct` codegen (concatenation + dedup) | 1 h |
+
+Plus tests, plus a perf-bench against `slices.SortFunc` directly to
+confirm the wrapper overhead is negligible (it should be — it's just
+`slices.Collect` then `slices.SortFunc`).
+
+**Total budget:** half a day. Low-risk; pure additive, no API changes
+to existing primitives.
+
+**Why parked rather than shipped:** Tier 3 codegen demand isn't yet
+clear. The four commands together cover maybe 20% of pipelines, and
+two of them (`sort`, `distinct`) have ergonomic-only motivations —
+users can already write `slices.SortFunc(slices.Collect(seq), ...)` in
+hand-written typed code today. We'll prioritise this when (a) there's
+demand from real users hitting the Tier 3 wall, or (b) the Tier 3
+codegen story becomes the limiting factor in adoption.
+
+### Phase 1.8+ (open)
+
+No specific scope yet. Things that have been mentioned in passing but
+not designed:
+
+- Faster JSONL via `goccy/go-json` or per-type generated unmarshallers
+- Hand-rolled RFC3339 time parser (~3× over `time.Parse`)
+- A `Schema[T]` cache exposed as a public type so users can pre-build
+  decoders for hot paths
+- Concurrency, the `Stream[T]` proposal (separate doc:
+  [`typed-concurrency-proposal.md`](typed-concurrency-proposal.md))
+
+These are deliberately not committed to a phase — they'll be picked
+up if and when measurement says they matter.
+
 ## 7. Open Questions
 
 1. **Tag conventions.** PoC uses `csv:"colname"`. Should we also support `ssql:"colname"` so the same tag works for any future format? Suggestion: yes, with `csv` accepted as fallback for ecosystem compatibility.
