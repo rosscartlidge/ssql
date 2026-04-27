@@ -31,6 +31,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Typed Performance Notes](typed-performance-notes.md) — improvement opportunities observed during Phase 1/1.5 implementation
 - [Typed Concurrency Proposal](typed-concurrency-proposal.md) — proposed `Stream[T]` parallel pipeline alongside `iter.Seq[T]` (DuckDB morsel-driven inspiration)
 - [Typed Codegen Proposal (Phase 2)](typed-codegen-proposal.md) — `ssql generate go -typed` MVP scope, schema discovery, type flow, fallback strategy
+- [Typed Codegen Tier 3 Roadmap](typed-codegen-tier3-roadmap.md) — what's left after Tier 1+2+3a, ranked by demand × ease, with explicit recommendations
 
 ## Distributed Processing
 
