@@ -40,3 +40,9 @@ Thumbs.db
 # WASM build artifacts
 /ssql.wasm
 /dist/
+
+
+# PGO profiles — captured locally, regenerate via:
+#   go test -bench=BenchmarkScaleTypedReadCSVParallel3Join -benchtime=5x -cpuprofile=typed/default.pgo -run=^$ ./typed/...
+# See claude/concurrency.md §11 for why we don't ship a profile by default.
+default.pgo

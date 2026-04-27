@@ -255,6 +255,42 @@ result := slices.Collect(joined.Serial())    // unordered fan-in, channel
 - Match shard granularity to L2 cache size when possible — for our struct sizes that's ~10K-100K rows per shard
 - Prefer `SerialCount` / `SerialSum` style sinks over `Serial()` when the consumer is an aggregation
 
+## 11. Profile-Guided Optimization (PGO) — Modest Win
+
+**Rule: PGO (`go build -pgo=auto`) is worth ~3% on data pipelines, not the 5-15% headline number you read about. Profile representative workloads only; don't bother with PGO for code that's already heavily inlined.**
+
+Measured on a generated typed Go binary (10M rows × filter × 1 join × write CSV, single-threaded), 3 runs each:
+
+| Build | Mean wall time |
+|---|---:|
+| `-pgo=off` | 6.637 s |
+| `-pgo=auto` (using `typed/default.pgo` from `BenchmarkScaleTypedReadCSVParallel3Join`) | 6.431 s |
+| **PGO speedup** | **3.1%** |
+
+Binary is 1.27% larger (1953 KB vs 1929 KB) — negligible.
+
+**Why we don't get the 5-15% headline number:**
+- The dominant CPU time is in `encoding/csv` and other stdlib parsers. PGO drives inlining decisions for our package and its dependencies — *but not stdlib*, which is compiled with its own profile-independent decisions.
+- The typed runtime (`Where`, `HashJoin`, `SortBy`, the byte/string field decoders) is already small enough that the static inliner makes the right calls without help.
+- PGO mainly helps mid-size functions where call frequency is high but body cost is high enough that the static heuristic balks. Most ssql hot paths are either tiny (already inlined) or dominated by stdlib.
+
+**When PGO might pay off more:**
+- Binaries with large user-defined predicates / merge functions (e.g. complex `Where` clauses, multi-aggregator group-bys).
+- Long-running services where 3% compounds over weeks of CPU time.
+- Hot paths that involve user code with many branches.
+
+**Profile capture:**
+```bash
+go test -bench=BenchmarkScaleTypedReadCSVParallel3Join -benchtime=5x \
+    -cpuprofile=typed/default.pgo -run=^$ ./typed/...
+```
+
+Then `go build` and `go test` automatically pick up `default.pgo` from the package directory (Go 1.21+ default behaviour). Disable with `-pgo=off`.
+
+**Maintenance gotcha:** profiles go stale. A profile captured against today's workload won't reflect tomorrow's hot paths if the codebase or pipeline shape shifts. If we ship `default.pgo`, we need a CI job that regenerates it periodically (or at release time) — otherwise the file is just dead weight that drifts further from reality.
+
+For this codebase the **3% gain doesn't currently justify the maintenance cost** of keeping a fresh profile. If profitability changes (e.g. a hot pipeline becomes the bottleneck for a real user), revisit and pin a workload-representative profile then.
+
 ## See Also
 
 - [`doc/research/typed-concurrency-proposal.md`](../doc/research/typed-concurrency-proposal.md) — design proposal + measured PoC results in §9a
