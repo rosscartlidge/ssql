@@ -35,6 +35,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Typed GroupByParallel Proposal](typed-groupby-parallel-proposal.md) — Sink/Combine/Finalize parallel group-by, `ParallelAggregator` interface, codegen plan
 - [Typed Parquet Proposal](typed-parquet-proposal.md) — Parquet input for the `typed` package; row-group-as-shard parallelism; expected I/O ceiling at or under DuckDB
 - [`generate go -optimise / -run` Proposal](generate-go-flags-proposal.md) — chain `generate ssql` rewrites into `generate go`, plus a one-shot compile-and-run flag mirroring `generate sql -run`
+- [Mixed-Mode Pipelines Proposal](mixed-mode-pipelines-proposal.md) — design space for pipelines where some stages run typed and others run Record, with adapter fragments at the boundaries
 
 ## Distributed Processing
 
