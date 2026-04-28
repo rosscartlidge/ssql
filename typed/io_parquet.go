@@ -672,6 +672,61 @@ func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) S
 
 // ---- Write path ----
 
+// ParquetWriteOption configures a Parquet writer. Pass to
+// [WriteParquet], [WriteParquetToWriter], [Stream.WriteParquet]
+// and [Stream.WriteParquetToWriter].
+type ParquetWriteOption func(*parquetWriteOpts)
+
+type parquetWriteOpts struct {
+	rowGroupSize int64
+	compression  string
+}
+
+// WithRowGroupSize sets the maximum number of rows per Parquet row
+// group. Default is 1_000_000. Smaller values increase parallelism
+// (each row group becomes one shard for [ReadParquetParallel]) at
+// the cost of more metadata overhead; larger values do the
+// opposite. Pass 0 to put all rows in a single group (use only for
+// small files; caps reader parallelism at 1).
+func WithRowGroupSize(n int) ParquetWriteOption {
+	return func(o *parquetWriteOpts) { o.rowGroupSize = int64(n) }
+}
+
+// WithCompression sets the Parquet column compression. Accepted
+// values: "snappy" (default), "gzip", "zstd", "none"/"uncompressed".
+// Unknown values fall back to Snappy with a warning emitted to
+// stderr at write time.
+func WithCompression(name string) ParquetWriteOption {
+	return func(o *parquetWriteOpts) { o.compression = name }
+}
+
+func resolveParquetWriteOpts(opts []ParquetWriteOption) parquetWriteOpts {
+	o := parquetWriteOpts{
+		rowGroupSize: 1_000_000,
+		compression:  "snappy",
+	}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
+func compressionCodec(name string) compress.Compression {
+	switch strings.ToLower(name) {
+	case "", "snappy":
+		return compress.Codecs.Snappy
+	case "gzip":
+		return compress.Codecs.Gzip
+	case "zstd":
+		return compress.Codecs.Zstd
+	case "none", "uncompressed":
+		return compress.Codecs.Uncompressed
+	default:
+		fmt.Fprintf(os.Stderr, "typed.WriteParquet: unknown compression %q, falling back to snappy\n", name)
+		return compress.Codecs.Snappy
+	}
+}
+
 // parquetWriteEncoder pushes one struct field's value into an Arrow
 // array builder. The closure is bound to a specific (struct offset,
 // builder type) pair at schema-build time.
@@ -791,36 +846,42 @@ func parquetEncoderFor(t reflect.Type) (arrow.DataType, func(unsafe.Pointer, arr
 	return nil, nil, fmt.Errorf("unsupported field type %v", t)
 }
 
-// WriteParquet writes a sequence of T to a Parquet file with Snappy
-// compression. The Arrow schema is derived from T's struct fields
-// (same `ssql:"name"` / `csv:"name"` tag rules as the CSV writers).
+// WriteParquet writes a sequence of T to a Parquet file. By default
+// uses Snappy compression and a 1_000_000-row row-group size — the
+// row-group size matters because [ReadParquetParallel] uses one
+// shard per row group, so a single-row-group file can only be read
+// with parallelism 1. Adjust via [WithRowGroupSize] / [WithCompression].
+//
+// The Arrow schema is derived from T's struct fields (same
+// `ssql:"name"` / `csv:"name"` tag rules as the CSV writers).
 //
 // All rows are buffered in memory before flushing; Parquet's
 // footer-last format requires this. For very large outputs that
 // don't fit in RAM, write to multiple files and concatenate.
-func WriteParquet[T any](seq iter.Seq[T], filename string) error {
+func WriteParquet[T any](seq iter.Seq[T], filename string, opts ...ParquetWriteOption) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return WriteParquetToWriter(seq, f)
+	return WriteParquetToWriter(seq, f, opts...)
 }
 
 // WriteParquetToWriter is the [io.Writer] variant of [WriteParquet].
-func WriteParquetToWriter[T any](seq iter.Seq[T], w io.Writer) error {
+func WriteParquetToWriter[T any](seq iter.Seq[T], w io.Writer, opts ...ParquetWriteOption) error {
 	mem := memory.DefaultAllocator
 	plan, err := buildParquetWriteSchema[T]()
 	if err != nil {
 		return err
 	}
-	return writeParquetSeq[T](seq, w, plan, mem)
+	o := resolveParquetWriteOpts(opts)
+	return writeParquetSeq[T](seq, w, plan, mem, o)
 }
 
 // writeParquetSeq materializes the sequence into Arrow column
 // builders, finalises a single arrow.Record + Table, and writes it
-// out as Parquet with Snappy compression.
-func writeParquetSeq[T any](seq iter.Seq[T], w io.Writer, plan *parquetWritePlan, mem memory.Allocator) error {
+// out as Parquet with the configured compression and row-group size.
+func writeParquetSeq[T any](seq iter.Seq[T], w io.Writer, plan *parquetWritePlan, mem memory.Allocator, opts parquetWriteOpts) error {
 	builders := make([]array.Builder, len(plan.encoders))
 	for i, f := range plan.schema.Fields() {
 		builders[i] = array.NewBuilder(mem, f.Type)
@@ -862,16 +923,24 @@ func writeParquetSeq[T any](seq iter.Seq[T], w io.Writer, plan *parquetWritePlan
 	defer tbl.Release()
 
 	props := parquet.NewWriterProperties(
-		parquet.WithCompression(compress.Codecs.Snappy),
+		parquet.WithCompression(compressionCodec(opts.compression)),
 	)
 	arrProps := pqarrow.NewArrowWriterProperties()
-	return pqarrow.WriteTable(tbl, w, nRows, props, arrProps)
+	chunk := opts.rowGroupSize
+	if chunk <= 0 || chunk > nRows {
+		chunk = nRows
+	}
+	return pqarrow.WriteTable(tbl, w, chunk, props, arrProps)
 }
 
-// WriteParquet writes a Stream[T] to a Parquet file with Snappy
-// compression. Each shard concurrently writes its rows into its own
-// in-memory Parquet payload; the per-shard payloads are concatenated
-// into a single output file by writing one row group per shard.
+// WriteParquet writes a Stream[T] to a Parquet file. Each shard
+// concurrently writes its rows into its own in-memory Parquet
+// payload; the per-shard payloads are concatenated into a single
+// output file as one row group per shard (so the natural
+// parallelism of the writer maps directly to the natural
+// parallelism of [ReadParquetParallel]). Pass [WithRowGroupSize] to
+// further sub-divide each shard's output, or [WithCompression] to
+// pick a different codec.
 //
 // Trade-off: peak memory ~2× output size (each shard buffers its
 // payload). For huge outputs that don't fit in RAM, fall back to
@@ -879,13 +948,13 @@ func writeParquetSeq[T any](seq iter.Seq[T], w io.Writer, plan *parquetWritePlan
 //
 // Order: rows from shard 0 come before shard 1 etc. Within a shard,
 // input order is preserved. Same as [Stream.WriteCSV].
-func (s Stream[T]) WriteParquet(filename string) error {
+func (s Stream[T]) WriteParquet(filename string, opts ...ParquetWriteOption) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return s.WriteParquetToWriter(f)
+	return s.WriteParquetToWriter(f, opts...)
 }
 
 // WriteParquetToWriter is the [io.Writer] variant of [Stream.WriteParquet].
@@ -896,7 +965,7 @@ func (s Stream[T]) WriteParquet(filename string) error {
 // table — Parquet doesn't support concatenating independent files
 // at the byte level, so we buffer the per-shard arrow.Records and
 // pass them all to a single pqarrow.WriteTable call.
-func (s Stream[T]) WriteParquetToWriter(w io.Writer) error {
+func (s Stream[T]) WriteParquetToWriter(w io.Writer, opts ...ParquetWriteOption) error {
 	mem := memory.DefaultAllocator
 	plan, err := buildParquetWriteSchema[T]()
 	if err != nil {
@@ -975,12 +1044,13 @@ func (s Stream[T]) WriteParquetToWriter(w io.Writer) error {
 		nonEmpty = append(nonEmpty, r)
 		totalRows += r.NumRows()
 	}
+	o := resolveParquetWriteOpts(opts)
 	if totalRows == 0 {
 		// Write empty file with schema only.
 		buf := &bytes.Buffer{}
 		tbl := array.NewTableFromRecords(plan.schema, nil)
 		defer tbl.Release()
-		props := parquet.NewWriterProperties(parquet.WithCompression(compress.Codecs.Snappy))
+		props := parquet.NewWriterProperties(parquet.WithCompression(compressionCodec(o.compression)))
 		arrProps := pqarrow.NewArrowWriterProperties()
 		if err := pqarrow.WriteTable(tbl, buf, 0, props, arrProps); err != nil {
 			return err
@@ -991,7 +1061,11 @@ func (s Stream[T]) WriteParquetToWriter(w io.Writer) error {
 
 	tbl := array.NewTableFromRecords(plan.schema, nonEmpty)
 	defer tbl.Release()
-	props := parquet.NewWriterProperties(parquet.WithCompression(compress.Codecs.Snappy))
+	props := parquet.NewWriterProperties(parquet.WithCompression(compressionCodec(o.compression)))
 	arrProps := pqarrow.NewArrowWriterProperties()
-	return pqarrow.WriteTable(tbl, w, totalRows, props, arrProps)
+	chunk := o.rowGroupSize
+	if chunk <= 0 || chunk > totalRows {
+		chunk = totalRows
+	}
+	return pqarrow.WriteTable(tbl, w, chunk, props, arrProps)
 }

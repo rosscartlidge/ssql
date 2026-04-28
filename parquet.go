@@ -131,21 +131,75 @@ func readParquetFromReaderWithColumns(r parquet.ReaderAtSeeker, columns []string
 	}, nil
 }
 
-// WriteParquet writes Records to a Parquet file with Snappy compression.
-func WriteParquet(records iter.Seq[Record], filename string) error {
+// ParquetWriteOption configures a Parquet writer. Pass to
+// [WriteParquet] / [WriteParquetToWriter].
+type ParquetWriteOption func(*parquetWriteOpts)
+
+type parquetWriteOpts struct {
+	rowGroupSize int64
+	compression  string
+}
+
+// WithRowGroupSize sets the maximum number of rows per Parquet row
+// group. Default is 1_000_000. Smaller values increase reader-side
+// parallelism (one row group → one shard in
+// [github.com/rosscartlidge/ssql/v4/typed.ReadParquetParallel]) at
+// the cost of more metadata overhead. Pass 0 to put all rows in a
+// single group (caps reader parallelism at 1).
+func WithRowGroupSize(n int) ParquetWriteOption {
+	return func(o *parquetWriteOpts) { o.rowGroupSize = int64(n) }
+}
+
+// WithCompression sets the Parquet column compression. Accepted
+// values: "snappy" (default), "gzip", "zstd", "none"/"uncompressed".
+// Unknown values fall back to Snappy with a warning to stderr.
+func WithCompression(name string) ParquetWriteOption {
+	return func(o *parquetWriteOpts) { o.compression = name }
+}
+
+func resolveParquetWriteOpts(opts []ParquetWriteOption) parquetWriteOpts {
+	o := parquetWriteOpts{rowGroupSize: 1_000_000, compression: "snappy"}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
+func parquetCompressionCodec(name string) compress.Compression {
+	switch strings.ToLower(name) {
+	case "", "snappy":
+		return compress.Codecs.Snappy
+	case "gzip":
+		return compress.Codecs.Gzip
+	case "zstd":
+		return compress.Codecs.Zstd
+	case "none", "uncompressed":
+		return compress.Codecs.Uncompressed
+	default:
+		fmt.Fprintf(os.Stderr, "ssql.WriteParquet: unknown compression %q, falling back to snappy\n", name)
+		return compress.Codecs.Snappy
+	}
+}
+
+// WriteParquet writes Records to a Parquet file. Defaults: Snappy
+// compression, 1_000_000-row row-groups (so the file can be read
+// in parallel by `typed.ReadParquetParallel` or DuckDB). Adjust
+// via [WithRowGroupSize] / [WithCompression].
+func WriteParquet(records iter.Seq[Record], filename string, opts ...ParquetWriteOption) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("creating Parquet file: %w", err)
 	}
 	defer f.Close()
 
-	return WriteParquetToWriter(records, f)
+	return WriteParquetToWriter(records, f, opts...)
 }
 
 // WriteParquetToWriter writes Records to a Parquet format writer.
-// Uses Snappy compression (the Parquet default).
-func WriteParquetToWriter(records iter.Seq[Record], w io.Writer) error {
+// Same defaults as [WriteParquet].
+func WriteParquetToWriter(records iter.Seq[Record], w io.Writer, opts ...ParquetWriteOption) error {
 	mem := memory.DefaultAllocator
+	o := resolveParquetWriteOpts(opts)
 
 	// Collect records to build Arrow table
 	var allRecords []Record
@@ -173,11 +227,15 @@ func WriteParquetToWriter(records iter.Seq[Record], w io.Writer) error {
 	tbl := array.NewTableFromRecords(arrowSchema, []arrow.Record{batch})
 	defer tbl.Release()
 
-	// Write as Parquet with Snappy compression
 	props := parquet.NewWriterProperties(
-		parquet.WithCompression(compress.Codecs.Snappy),
+		parquet.WithCompression(parquetCompressionCodec(o.compression)),
 	)
 	arrProps := pqarrow.NewArrowWriterProperties()
 
-	return pqarrow.WriteTable(tbl, w, int64(len(allRecords)), props, arrProps)
+	chunk := o.rowGroupSize
+	nRows := int64(len(allRecords))
+	if chunk <= 0 || chunk > nRows {
+		chunk = nRows
+	}
+	return pqarrow.WriteTable(tbl, w, chunk, props, arrProps)
 }
