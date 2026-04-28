@@ -1,6 +1,6 @@
 # `generate go -optimise` and `generate go -run` Proposal
 
-**Status:** `-run` shipped 2026-04-28. `-optimise` design-only.
+**Status:** `-run` and `-build` shipped 2026-04-28. `-optimise` design-only.
 
 `-run` was implemented as designed but with one refinement: the
 implementation does **build + exec** (two steps) rather than `go run`
@@ -444,10 +444,14 @@ Tests reuse the build-binary-and-pipe pattern in
 
 ## 9. Future follow-ups
 
-- **Persistent binary mode.** `-build OUT` flag that compiles
+- ~~**Persistent binary mode.** `-build OUT` flag that compiles
   to a binary file, with the schema baked in (so the binary
   doesn't re-sample a CSV at startup). Could be a separate
-  proposal.
+  proposal.~~ ✅ Shipped 2026-04-28. `compileGoSource(code, outPath)`
+  is the shared helper between `-run` (outPath="" → binary
+  inside temp dir, exec then nuke) and `-build` (outPath set →
+  binary kept, temp source nuked). Mutual exclusion enforced
+  on `{-run, -build, OUTPUT}` — pick one of three output forms.
 - **Auto-`ParquetColumns` without `generate ssql`.** Have the
   typed-mode codegen perform downstream-field analysis directly
   during fragment processing. More work, but the user wouldn't
