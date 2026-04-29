@@ -62,6 +62,16 @@ type CodeFragment struct {
 	// whether to import "runtime", whether to emit Serial/SerialCount
 	// boundaries at sinks, etc.
 	IsStream bool `json:"is_stream,omitempty"`
+
+	// OutputRecordFields is the ordered list of field names this
+	// fragment produces in Record mode (SSQLGO=1). When non-empty,
+	// downstream sinks (e.g. `to table`) can use it to display
+	// columns in the same natural order the JSONL CLI pipeline
+	// would, rather than the alphabetical order ssql.GroupByFields /
+	// MutableRecord.Freeze() default to. Commands that don't change
+	// the schema can leave this nil; the assembler treats nil as
+	// "schema unknown, fall back to alphabetical."
+	OutputRecordFields []string `json:"output_record_fields,omitempty"`
 }
 
 // TypedSchema describes the row type flowing between two pipeline

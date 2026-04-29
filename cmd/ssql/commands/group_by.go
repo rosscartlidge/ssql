@@ -952,6 +952,25 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	aggCode.WriteString(",\n\t})(grouped)")
 
 	frag2 := lib.NewStmtFragment("aggregated", "grouped", aggCode.String(), nil, "")
+	// Populate OutputRecordFields so downstream `to table` codegen
+	// can match the column order the CLI pipeline produces (group-by
+	// fields first, then aggregations in the order they were
+	// declared on the command line). Without this, the generated
+	// program goes through ssql.GroupByFields → MutableRecord →
+	// alphabetical-sorted schema, and the table renders columns in
+	// alphabetical order — different from the CLI pipeline's
+	// JSONL-schema-driven order.
+	outputFields := append([]string{}, groupByFields...)
+	for _, spec := range aggSpecs {
+		outputFields = append(outputFields, spec.result)
+	}
+	for _, spec := range exprSpecs {
+		outputFields = append(outputFields, spec.result)
+	}
+	for _, spec := range streamExprSpecs {
+		outputFields = append(outputFields, spec.result)
+	}
+	frag2.OutputRecordFields = outputFields
 	return lib.WriteCodeFragment(frag2)
 }
 

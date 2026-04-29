@@ -127,10 +127,12 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 	var inputVar string
 	var prevSchema *lib.TypedSchema
 	var prevIsStream bool
+	var prevRecordFields []string
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
 		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 		prevIsStream = fragments[len(fragments)-1].IsStream
+		prevRecordFields = fragments[len(fragments)-1].OutputRecordFields
 	} else {
 		inputVar = "records"
 	}
@@ -158,16 +160,29 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 	}
 
 	var code string
-	if len(fields) > 0 {
-		// Generate code with field ordering
+	switch {
+	case len(fields) > 0:
+		// User explicitly specified column order
 		quotedFields := make([]string, len(fields))
 		for i, f := range fields {
 			quotedFields[i] = fmt.Sprintf("%q", f)
 		}
 		fieldsStr := "[]string{" + joinStrings(quotedFields, ", ") + "}"
 		code = fmt.Sprintf("ssql.DisplayTableWithFields(%s, %d, %s, %t)", inputVar, maxWidth, fieldsStr, onlySpecified)
-	} else {
-		// No fields specified - use simple DisplayTable
+	case len(prevRecordFields) > 0:
+		// Upstream command (e.g. group-by) populated the natural
+		// field order. Without this, the generated program would
+		// render columns alphabetically — mismatching the CLI
+		// pipeline's JSONL-schema-preserved order.
+		quotedFields := make([]string, len(prevRecordFields))
+		for i, f := range prevRecordFields {
+			quotedFields[i] = fmt.Sprintf("%q", f)
+		}
+		fieldsStr := "[]string{" + joinStrings(quotedFields, ", ") + "}"
+		code = fmt.Sprintf("ssql.DisplayTableWithFields(%s, %d, %s, false)", inputVar, maxWidth, fieldsStr)
+	default:
+		// No upstream order info; fall back to alphabetical (current
+		// behaviour, matches DisplayTable's historical default).
 		code = fmt.Sprintf("ssql.DisplayTable(%s, %d)", inputVar, maxWidth)
 	}
 	frag := lib.NewFinalFragment(inputVar, code, nil, getCommandString())

@@ -1667,12 +1667,12 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 			columns = append(columns, remaining...)
 		}
 	} else {
-		// No field order specified - sort alphabetically (original behavior)
-		columns = make([]string, 0, len(columnSet))
-		for col := range columnSet {
-			columns = append(columns, col)
-		}
-		slices.Sort(columns)
+		// No field order specified — prefer the first record's
+		// schema-declared field order (so the output matches what
+		// the JSONL stream / upstream commands would produce).
+		// Records without a schema fall back to alphabetical, as
+		// before.
+		columns = naturalColumnOrder(columnSet, allRecords)
 	}
 
 	// Calculate max width for each column, and decide alignment:
@@ -1798,7 +1798,7 @@ func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int
 	}
 
 	// Build column list
-	columns := buildColumnOrder(columnSet, fieldOrder, onlySpecified)
+	columns := buildColumnOrderWithSample(columnSet, fieldOrder, onlySpecified, sample)
 
 	// Calculate column widths AND alignment from the sample. Note:
 	// streaming mode commits to alignment after the sample — if a
@@ -1827,6 +1827,15 @@ func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int
 
 // buildColumnOrder builds an ordered column list from a set of discovered columns
 func buildColumnOrder(columnSet map[string]bool, fieldOrder []string, onlySpecified bool) []string {
+	return buildColumnOrderWithSample(columnSet, fieldOrder, onlySpecified, nil)
+}
+
+// buildColumnOrderWithSample is like [buildColumnOrder] but uses
+// `sample` records' schema as the natural-order hint when no
+// explicit field order is given. Each record's schema field list
+// (the order in which the JSONL/CSV producer declared columns) is
+// preferred over alphabetical sort.
+func buildColumnOrderWithSample(columnSet map[string]bool, fieldOrder []string, onlySpecified bool, sample []Record) []string {
 	var columns []string
 	if len(fieldOrder) > 0 {
 		specifiedSet := make(map[string]bool)
@@ -1847,12 +1856,47 @@ func buildColumnOrder(columnSet map[string]bool, fieldOrder []string, onlySpecif
 			columns = append(columns, remaining...)
 		}
 	} else {
-		columns = make([]string, 0, len(columnSet))
-		for col := range columnSet {
-			columns = append(columns, col)
-		}
-		slices.Sort(columns)
+		columns = naturalColumnOrder(columnSet, sample)
 	}
+	return columns
+}
+
+// naturalColumnOrder returns the columns in `columnSet` ordered by:
+// (1) the first record's schema field order (if any), then
+// (2) any remaining columns alphabetically.
+//
+// Records without a schema fall back to fully alphabetical, matching
+// the historical behaviour of `DisplayTable`. Used by `to table`
+// codegen so that Record-mode generated programs produce the same
+// column order as the interactive CLI pipeline.
+func naturalColumnOrder(columnSet map[string]bool, records []Record) []string {
+	var columns []string
+	seen := make(map[string]bool, len(columnSet))
+
+	// Phase 1: schema-driven order from the first record that has one.
+	for _, r := range records {
+		sch := r.Schema()
+		if sch == nil {
+			continue
+		}
+		for _, f := range sch.Fields() {
+			if columnSet[f] && !seen[f] {
+				columns = append(columns, f)
+				seen[f] = true
+			}
+		}
+		break // first record's schema is enough; downstream commands share it
+	}
+
+	// Phase 2: any unseen columns alphabetically (typically empty).
+	var extras []string
+	for c := range columnSet {
+		if !seen[c] {
+			extras = append(extras, c)
+		}
+	}
+	slices.Sort(extras)
+	columns = append(columns, extras...)
 	return columns
 }
 
