@@ -1,10 +1,14 @@
 package commands
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
@@ -19,6 +23,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Example("(export SSQLGO=1 && ssql from data.csv | ssql limit 10 | ssql generate go) > prog.go", "Generate using environment variable").
 		Example("(export SSQLGO=parallel; ssql from data.csv | ssql to table) | ssql generate go -run", "Generate, compile, and execute in one shot").
 		Example("(export SSQLGO=parallel; ssql from data.csv | ssql to table) | ssql generate go -build query", "Compile to a binary named 'query' and exit").
+		Example("(export SSQLGO=parallel; ssql from parquet x.parquet | ssql group-by k -count n | ssql to table) | ssql generate go -optimise -run", "Apply pipeline optimiser (column projection etc.), then compile and execute").
 		Flag("-run", "-r").
 		Bool().
 		Global().
@@ -32,6 +37,18 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Default("").
 		Help("Compile to the named binary and exit (mutually exclusive with OUTPUT and -run)").
 		Done().
+		Flag("-optimise", "-O").
+		Bool().
+		Global().
+		Default(false).
+		Help("Apply the pipeline optimiser (same rewrites as 'generate ssql') before generating code — auto-injects column projection, predicate pushdown, etc.").
+		Done().
+		Flag("-explain", "-e").
+		Bool().
+		Global().
+		Default(false).
+		Help("With -optimise: print applied optimisation rules to stderr").
+		Done().
 		Flag("OUTPUT").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.go"}).
@@ -43,6 +60,8 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			var outputFile string
 			var run bool
 			var buildOut string
+			var optimise bool
+			var explain bool
 
 			if outVal, ok := ctx.GlobalFlags["OUTPUT"]; ok {
 				outputFile = outVal.(string)
@@ -52,6 +71,12 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			}
 			if buildVal, ok := ctx.GlobalFlags["-build"]; ok {
 				buildOut = buildVal.(string)
+			}
+			if v, ok := ctx.GlobalFlags["-optimise"]; ok {
+				optimise = v.(bool)
+			}
+			if v, ok := ctx.GlobalFlags["-explain"]; ok {
+				explain = v.(bool)
 			}
 
 			// At most one of {-run, -build, OUTPUT} may be set — they
@@ -68,6 +93,13 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			}
 			if modes > 1 {
 				return fmt.Errorf("ssql generate go: -run, -build, and OUTPUT are mutually exclusive (pick one: -run to compile+execute, -build PATH to compile to a binary, OUTPUT to write Go source)")
+			}
+
+			if optimise {
+				return runOptimiseThenGo(os.Stdin, run, buildOut, outputFile, explain)
+			}
+			if explain {
+				return fmt.Errorf("ssql generate go: -explain only meaningful with -optimise")
 			}
 
 			// Assemble code fragments from stdin
@@ -96,6 +128,131 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			return nil
 		}).
 		Done()
+}
+
+// runOptimiseThenGo implements `generate go -optimise`. The fragment
+// stream from stdin is fed to optimizePipeline (the same rewriter
+// `generate ssql` uses), which returns a rewritten pipeline string.
+// We re-execute that string under bash with SSQLGO inferred from the
+// incoming fragment metadata (parallel/typed/Record), then pipe the
+// new fragments through `ssql generate go` (without -optimise to
+// avoid recursion). Output mode flags (-run, -build, OUTPUT) are
+// forwarded to the inner generate-go.
+//
+// Inferring SSQLGO from incoming fragment metadata (rather than the
+// parent's environment) handles the user's own subshell-export
+// patterns naturally — see doc/research/generate-go-flags-proposal.md
+// §2b for the discussion.
+func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, explain bool) error {
+	// Buffer stdin once — we feed it to optimizePipeline AND parse it
+	// again to detect the target SSQLGO mode for re-execution.
+	buf, err := io.ReadAll(in)
+	if err != nil {
+		return fmt.Errorf("reading fragments: %w", err)
+	}
+
+	pipeline, rules, err := optimizePipeline(bytes.NewReader(buf))
+	if err == errEmptyResult {
+		if explain {
+			for _, r := range rules {
+				fmt.Fprintf(os.Stderr, "[%s] %s → %s\n", r.Rule, r.Before, r.After)
+			}
+		}
+		fmt.Fprintln(os.Stderr, "pipeline produces no results (contradictory predicates)")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("optimising pipeline: %w", err)
+	}
+
+	if explain {
+		if len(rules) == 0 {
+			fmt.Fprintln(os.Stderr, "(no optimisation rules applied)")
+		}
+		for _, r := range rules {
+			fmt.Fprintf(os.Stderr, "[%s] %s → %s\n", r.Rule, r.Before, r.After)
+		}
+	}
+
+	targetMode := detectFragmentMode(buf)
+
+	// Build the inner command. The inner generate-go inherits whichever
+	// output flag was passed to the outer one.
+	inner := pipeline + " | ssql generate go"
+	switch {
+	case run:
+		inner += " -run"
+	case buildOut != "":
+		inner += " -build " + shellQuote(buildOut)
+	case outputFile != "":
+		inner += " " + shellQuote(outputFile)
+	}
+
+	cmd := exec.Command("bash", "-c", inner)
+	cmd.Env = setEnvVar(os.Environ(), "SSQLGO", targetMode)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// detectFragmentMode peeks the buffered fragment stream to figure
+// out which SSQLGO scope to set when re-executing the optimised
+// pipeline:
+//
+//   - any fragment with IsStream=true   → parallel-mode (the
+//     pipeline contains a Stream[T] producer like
+//     ReadCSVParallel / ReadParquetParallel)
+//   - else any fragment with OutputTypedSchema set → typed-mode
+//     (the pipeline emitted struct-typed fragments)
+//   - otherwise → "1" (Record-mode)
+//
+// Errors during decoding fall through to the most permissive mode
+// ("1") — the inner generate-go will surface a clearer error.
+func detectFragmentMode(buf []byte) string {
+	hasTyped := false
+	dec := json.NewDecoder(bytes.NewReader(buf))
+	for {
+		var frag lib.CodeFragment
+		if err := dec.Decode(&frag); err != nil {
+			break
+		}
+		if frag.IsStream {
+			return "parallel"
+		}
+		if frag.OutputTypedSchema != nil {
+			hasTyped = true
+		}
+	}
+	if hasTyped {
+		return "typed"
+	}
+	return "1"
+}
+
+// setEnvVar returns env with KEY=value, replacing an existing entry
+// if present.
+func setEnvVar(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+// shellQuote wraps s in single quotes if it contains characters bash
+// would otherwise interpret. Used for output paths passed to the
+// inner `ssql generate go` invocation.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(s, " \t\n'\"\\$`") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // runGoSource compiles the generated Go code, then executes the

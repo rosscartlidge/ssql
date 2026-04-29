@@ -1,6 +1,6 @@
 # `generate go -optimise` and `generate go -run` Proposal
 
-**Status:** `-run` and `-build` shipped 2026-04-28. `-optimise` design-only.
+**Status:** `-run` shipped 2026-04-28. `-build` shipped 2026-04-28. `-optimise` shipped 2026-04-29.
 
 `-run` was implemented as designed but with one refinement: the
 implementation does **build + exec** (two steps) rather than `go run`
