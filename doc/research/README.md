@@ -36,6 +36,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Typed Parquet Proposal](typed-parquet-proposal.md) — Parquet input for the `typed` package; row-group-as-shard parallelism; expected I/O ceiling at or under DuckDB
 - [`generate go -optimise / -run` Proposal](generate-go-flags-proposal.md) — chain `generate ssql` rewrites into `generate go`, plus a one-shot compile-and-run flag mirroring `generate sql -run`
 - [Mixed-Mode Pipelines Proposal](mixed-mode-pipelines-proposal.md) — design space for pipelines where some stages run typed and others run Record, with adapter fragments at the boundaries
+- [mmap Readers Proposal](mmap-readers-proposal.md) — replace `os.ReadFile` slurp with `mmap` in parallel CSV/TSV readers (~1.7-1.9× faster slurp on 1.23 GB); modest 7-8% win on Arrow IPC reader. With benchmark numbers.
 
 ## Distributed Processing
 
