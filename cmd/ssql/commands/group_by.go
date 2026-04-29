@@ -203,8 +203,12 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				presorted = val.(bool)
 			}
 
-			if len(groupByFields) == 0 {
-				return fmt.Errorf("no group-by fields specified")
+			// Empty group-by fields means "single group spanning all rows"
+			// (SQL `GROUP BY ()`) — useful for `group-by -count n` to get
+			// a single total. Rollup/cube need at least one field
+			// because the grouping-set logic depends on it.
+			if (rollup || cube) && len(groupByFields) == 0 {
+				return fmt.Errorf("-rollup/-cube requires at least one group-by field")
 			}
 
 			if rollup && cube {
@@ -595,10 +599,9 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		inputVar = "records"
 	}
 
-	// Validate group-by fields
-	if len(groupByFields) == 0 {
-		return fmt.Errorf("no group-by field specified (use -by)")
-	}
+	// Empty group-by fields means "single group spanning all rows"
+	// (SQL `GROUP BY ()`) — generates code that emits one summary row
+	// with just the aggregation result fields.
 
 	// Parse aggregation specifications from new flag format
 	// Type aggSpec is defined at package level

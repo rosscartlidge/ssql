@@ -136,12 +136,18 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 }
 
 // buildGroupKeyType decides on the key type for the group-by.
-// For a single field, the key is the field's Go type directly.
-// For multiple fields, an anonymous struct type is emitted.
+// Empty fields → key is `struct{}{}` (single group, all rows
+// collapse to one). Single field → the field's Go type directly.
+// Multiple fields → an emitted anonymous struct.
 //
 // Returns: (Go type expression, key extraction expression from "r",
 // optional struct definition string).
 func buildGroupKeyType(in *lib.TypedSchema, fields []lib.TypedSchemaField) (string, string, string) {
+	if len(fields) == 0 {
+		// SQL `GROUP BY ()` semantics: one group, no key fields.
+		// struct{} is comparable, can be used as map key.
+		return "struct{}", "struct{}{}", ""
+	}
 	if len(fields) == 1 {
 		return fields[0].GoType, "r." + fields[0].GoName, ""
 	}
