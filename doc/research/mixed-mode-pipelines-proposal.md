@@ -12,9 +12,10 @@ The original `typed-codegen-proposal.md` deferred this in §6 as
 "adds significant assembler complexity, defer indefinitely." This
 doc revisits that decision in light of:
 
-- **Real-world numbers** showing typed-parallel codegen at 90× the
+- **Real-world numbers** showing typed-parallel codegen at 215× the
   CLI baseline on a user corpus (`journal/2026-W18.md`,
-  2026-04-28). The performance gap between typed-parallel and
+  2026-04-29 entry, after the v4.37.3 multi-row-group Parquet
+  default landed). The performance gap between typed-parallel and
   Record is now too large to leave unbridged.
 - **A long tail of useful but non-typed commands** —
   `-if-expr`/`-set-expr` (expression language), `signal`
@@ -287,8 +288,9 @@ rows that's ~700 ms wall on a single core (or ~50 ms on a
 shard-parallel converter, but we don't have one yet).
 
 **Typed-mode savings vs Record:** highly workload-dependent. On
-the user-corpus group-by benchmark, typed-parallel was 12.6 s
-faster than Record (90× speedup vs CLI baseline). For a
+the user-corpus group-by benchmark, typed-parallel-Parquet was
+~15 s faster than Record (215× speedup vs CLI baseline once the
+multi-row-group Parquet default unlocked the parallelism). For a
 filter-heavy pipeline with selective predicates, the savings
 are smaller because the data shrinks early.
 
@@ -389,11 +391,13 @@ specific need surfaces.
 
 The original "deferred indefinitely" call was made before:
 
-- **Typed-parallel codegen shipped** (v4.36.0) — turning the
-  performance gap between typed and Record from "interesting"
-  into "dramatic" (90×). Mixed mode previously meant trading
-  off "fast typed" against "convenient Record"; today the
-  trade-off is "fast typed" against "*very slow* Record."
+- **Typed-parallel codegen shipped** (v4.36.0, with v4.37.3
+  multi-row-group Parquet defaults) — turning the performance
+  gap between typed and Record from "interesting" into
+  "dramatic" (215× CLI → typed-parallel on a real user corpus).
+  Mixed mode previously meant trading off "fast typed" against
+  "convenient Record"; today the trade-off is "fast typed"
+  against "*very slow* Record."
 - **Real-corpus measurements landed** — we now know what
   typical user pipelines look like and where they spend time.
   The adapter-cost analysis in §4 is grounded in numbers, not
@@ -424,6 +428,7 @@ keeps improving.
   (the optimiser could re-segment a pipeline after applying
   rewrites).
 - [`../../journal/2026-W18.md`](../../journal/2026-W18.md)
-  2026-04-28 entry — five-mode comparison on a 72-thread
-  Xeon, showing the 90× CLI→typed-parallel speedup that
+  2026-04-28 / 2026-04-29 entries — six-mode comparison on a
+  72-thread Xeon, showing the 215× CLI→typed-parallel-Parquet
+  speedup (once multi-row-group Parquet was the default) that
   motivates wanting mixed mode in the first place.
