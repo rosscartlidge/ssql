@@ -154,6 +154,53 @@ Cost: one extra fork+exec per `-optimise` call. Negligible
 compared to the actual `go build` and runtime work that
 follows.
 
+#### Shell equivalent (interim workaround until shipped)
+
+A user independently discovered the exact same data flow as a
+pure-shell pipeline, which validates the design and serves as a
+stop-gap for anyone who needs the behaviour today:
+
+```bash
+(export SSQLGO=parallel;
+  eval $(
+    (export SSQLGO=1
+     ssql from parquet shuffle.parquet \
+       | ssql group-by relationship -count number \
+       | ssql to table) | ssql generate ssql
+  )
+) | ssql generate go > parallel-par.go
+```
+
+The two SSQLGO scopes are the key trick:
+
+- **Inner subshell `SSQLGO=1`** — runs the original pipeline in
+  Record mode so `generate ssql` has Record-mode fragments to
+  read and rewrite (column-pruning, predicate pushdown, etc.).
+  The output is the rewritten pipeline as a bash string.
+- **Outer subshell `SSQLGO=parallel`** — `eval`s the rewritten
+  string. Each command in the optimised pipeline now emits
+  parallel-typed fragments because of the outer env. The final
+  `| ssql generate go` collects them and assembles the program.
+
+This is exactly what the proposed `-optimise` implementation
+above does, just hidden behind a flag: `optimizePipeline()`
+returns the rewritten string, then `exec.Command("bash", "-c",
+string + " | ssql generate go")` with the right `SSQLGO`
+inherited on the env.
+
+The shell version exposes one thing the implementation will
+need to handle gracefully: **the user has to know which
+SSQLGO each scope wants**. Inner is always `=1` (Record mode is
+what `generate ssql` rewrites against); outer is whichever
+mode the user wants the optimised pipeline to compile *to*.
+The Go implementation can either pick the outer mode from
+`os.Getenv("SSQLGO")` (matching whatever's set when
+`generate go -optimise` runs) or infer it from incoming
+fragment metadata (`OutputTypedSchema` set ⇒ typed/parallel,
+unset ⇒ Record). Inferring from fragments is more robust
+because it handles the user's own subshell-export pattern
+without surprises.
+
 ### 2c. `-optimise -run` (combined)
 
 The two flags compose naturally — the rewritten pipeline is fed
