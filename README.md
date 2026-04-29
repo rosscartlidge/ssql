@@ -247,7 +247,7 @@ output.
 #### Real-world: 14.6 M-row group-by on a 72-thread Xeon
 
 Same pipeline (`from … | group-by relationship -count number | to table`)
-run five different ways against a user-supplied 1.23 GB / 14.6 M-row
+run six different ways against a user-supplied 1.23 GB / 14.6 M-row
 CSV on a dual-socket Xeon Gold 6154 workstation:
 
 | Mode | Wall | vs CLI baseline |
@@ -256,16 +256,20 @@ CSV on a dual-socket Xeon Gold 6154 workstation:
 | `SSQLGO=1` codegen (Record, 1 process) | 15.5 s | 4.4× faster |
 | `SSQLGO=typed` codegen (1 thread, struct types) | 22.0 s | 3.1× faster |
 | `SSQLGO=parallel` codegen (CSV, multi-shard) | 1.23 s | **56× faster** |
-| `SSQLGO=parallel` codegen (Parquet, column projection) | 0.76 s | **90× faster** |
+| `SSQLGO=parallel` codegen (Parquet, single row group) | 0.76 s | **90× faster** |
+| **`SSQLGO=parallel` codegen (Parquet, 15 row groups, column projection)** | **0.32 s** | **215× faster** |
 
-The 90× from interactive CLI to typed-parallel-Parquet decomposes
-into three roughly independent wins: ~4× from collapsing 3 processes
-to 1 (no JSONL transit), ~13× from struct types over `map[string]any`
-(no allocation per row, no GC), and ~1.6× from data parallelism
-(capped at 1 row group on this Parquet file; multi-row-group inputs
-go further). For column-projected Parquet on a wide table, `ssql generate ssql`
-infers which columns are actually used downstream and rewrites the
-pipeline with `-columns …` automatically.
+The 215× from interactive CLI to typed-parallel-Parquet decomposes
+into independent wins multiplied together: ~4× from collapsing 3
+processes to 1 (no JSONL transit), ~13× from struct types over
+`map[string]any` (no allocation per row, no GC), ~1.6× from
+parallelism on the CSV path, ~1.6× from column projection on Parquet,
+and ~2.4× from multi-row-group parallelism. For column-projected
+Parquet on a wide table, `ssql generate ssql` infers which columns
+are actually used downstream and rewrites the pipeline with
+`-columns …` automatically; `ssql to parquet -row-group-size 1000000`
+(default since v4.37.3) writes parquet with row-group boundaries
+the parallel reader can shard across.
 
 [**Codelab →**](doc/typed-codelab.md) | [**Reference →**](doc/typed-reference.md) | [**Codegen design →**](doc/research/typed-codegen-proposal.md) | [**GroupByParallel design →**](doc/research/typed-groupby-parallel-proposal.md)
 
