@@ -132,6 +132,24 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = resultSchema
 	frag.StructDefs = defs
+	// Capabilities for the planner. Three sub-cases:
+	//   - parallel (typed.GroupByParallel): accepts Stream[T],
+	//     produces iter.Seq[O] (the parallel runtime fans-in
+	//     after Combine).
+	//   - serial unordered (typed.GroupBy): accepts iter.Seq[T],
+	//     produces iter.Seq[O].
+	//   - serial presorted (typed.GroupByOrdered): SerialOnly,
+	//     accepts iter.Seq[T], produces iter.Seq[O].
+	caps := &lib.Capabilities{Produces: lib.ShapeSeqTyped}
+	if parallel {
+		caps.Accepts = lib.ShapeStream
+	} else {
+		caps.Accepts = lib.ShapeSeqTyped
+		if presorted {
+			caps.SerialOnly = true
+		}
+	}
+	frag.Capabilities = caps
 	return lib.WriteCodeFragment(frag)
 }
 

@@ -2,6 +2,7 @@ package lib
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"
@@ -353,15 +354,12 @@ func applyPlannerBoundaries(fragments []*CodeFragment) []*CodeFragment {
 			out = append(out, boundary)
 			// Rewrite the SerialOnly fragment's code/input to consume
 			// the serialised var instead of the original Stream var.
-			//
-			// NOTE: this is a string rewrite, brittle if the input
-			// var name appears in the code body as a substring of
-			// another identifier. In practice typed-mode codegen
-			// always uses the Input var as a standalone identifier
-			// at known positions, so this is safe. Worth replacing
-			// with structured emission later.
+			// Word-boundary regex so we don't mangle identifiers
+			// that contain the input name as a substring (e.g. if
+			// the input is "records" we mustn't replace inside
+			// "recordsSerial" itself).
 			rewritten := *f
-			rewritten.Code = strings.ReplaceAll(f.Code, "("+f.Input+")", "("+serialVar+")")
+			rewritten.Code = replaceIdentifier(f.Code, f.Input, serialVar)
 			rewritten.Input = serialVar
 			out = append(out, &rewritten)
 			continue
@@ -369,4 +367,29 @@ func applyPlannerBoundaries(fragments []*CodeFragment) []*CodeFragment {
 		out = append(out, f)
 	}
 	return out
+}
+
+// replaceIdentifier replaces all word-boundary occurrences of `old` in
+// `s` with `new`. Used by applyPlannerBoundaries to rewrite
+// references to the upstream variable when inserting a Serial()
+// boundary, without mangling identifiers that contain `old` as a
+// substring (e.g. when old="records" we mustn't touch
+// "recordsSerial" — both halves of the boundary share the prefix).
+func replaceIdentifier(s, old, new string) string {
+	if !strings.Contains(s, old) {
+		return s
+	}
+	re := identRegexpFor(old)
+	return re.ReplaceAllString(s, new)
+}
+
+var identRegexpCache = map[string]*regexp.Regexp{}
+
+func identRegexpFor(name string) *regexp.Regexp {
+	if re, ok := identRegexpCache[name]; ok {
+		return re
+	}
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
+	identRegexpCache[name] = re
+	return re
 }

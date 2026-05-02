@@ -210,6 +210,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema) erro
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = derived
 	frag.StructDefs = defs
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
 	return lib.WriteCodeFragment(frag)
 }
 

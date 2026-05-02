@@ -96,9 +96,8 @@ func generateLimitCode(n int) error {
 	}
 
 	if typedMode() {
-		if err := rejectParallelMode("limit"); err != nil {
-			return err
-		}
+		// limit is SerialOnly — planner inserts Stream.Serial()
+		// upstream automatically when input is a Stream.
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'limit' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
@@ -108,6 +107,7 @@ func generateLimitCode(n int) error {
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

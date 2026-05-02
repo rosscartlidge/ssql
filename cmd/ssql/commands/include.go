@@ -140,9 +140,9 @@ func generateIncludeCode(fields []string) error {
 	}
 
 	if typedMode() {
-		if err := rejectParallelMode("include"); err != nil {
-			return err
-		}
+		// include is SerialOnly — planner inserts Stream.Serial()
+		// upstream automatically when input is a Stream.
+		// emitTypedProjection sets Capabilities.
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'include' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))

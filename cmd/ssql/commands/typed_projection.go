@@ -94,6 +94,7 @@ func emitTypedProjection(cmdName, typeSuffix, inputVar string, in *lib.TypedSche
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = derivedSchema
 	frag.StructDefs = []string{structDef}
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
 	return lib.WriteCodeFragment(frag)
 }
 

@@ -129,9 +129,9 @@ func generateTopCode(n int, field string, asc bool) error {
 	}
 
 	if typedMode() {
-		if err := rejectParallelMode("top"); err != nil {
-			return err
-		}
+		// top is SerialOnly (sort + limit composition) — planner
+		// inserts Stream.Serial() upstream automatically when input
+		// is a Stream.
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'top' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
@@ -158,6 +158,7 @@ func generateTopCode(n int, field string, asc bool) error {
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

@@ -103,6 +103,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = derived
 	frag.StructDefs = []string{structDef}
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
 	return lib.WriteCodeFragment(frag)
 }
 

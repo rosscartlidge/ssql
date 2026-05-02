@@ -807,11 +807,14 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 					fmt.Errorf("ssql generate go -typed: -collect not yet supported (would need slice-typed result fields); drop -typed for now"))
 			}
 		}
-		if parallelMode() && presorted {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed (parallel): -presorted is incompatible with parallel mode (shards split contiguous runs); drop SSQLGO=parallel and use SSQLGO=typed for this pipeline"))
-		}
-		return emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, presorted, parallelMode())
+		// -presorted forces SerialOnly behaviour (the GroupByOrdered
+		// runtime needs contiguous keys; shard partitioning would
+		// split runs). The planner detects the SerialOnly capability
+		// on the emitted fragment and inserts Stream.Serial()
+		// upstream when needed. Non-presorted parallel mode works
+		// directly via typed.GroupByParallel (emits iter.Seq[O]).
+		useParallel := parallelMode() && !presorted
+		return emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, presorted, useParallel)
 	}
 
 	// Rollup/cube code generation path

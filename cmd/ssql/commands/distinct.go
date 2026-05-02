@@ -79,9 +79,8 @@ func generateDistinctCode() error {
 	outputVar := "distinct"
 
 	if typedMode() {
-		if err := rejectParallelMode("distinct"); err != nil {
-			return err
-		}
+		// distinct is SerialOnly — planner inserts Stream.Serial()
+		// upstream automatically when input is a Stream.
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'distinct' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
@@ -96,6 +95,7 @@ func generateDistinctCode() error {
 		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

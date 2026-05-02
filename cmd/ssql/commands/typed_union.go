@@ -95,6 +95,7 @@ func emitTypedUnion(inputVar string, leftSchema *lib.TypedSchema, additionalFile
 		[]string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
 	frag.InputTypedSchema = leftSchema
 	frag.OutputTypedSchema = leftSchema
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
 	return lib.WriteCodeFragment(frag)
 }
 

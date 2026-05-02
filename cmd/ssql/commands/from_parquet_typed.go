@@ -77,6 +77,11 @@ func generateFromParquetCodeTyped(filename string, columns []string) error {
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}
 	frag.IsStream = isStream
+	produces := lib.ShapeSeqTyped
+	if isStream {
+		produces = lib.ShapeStream
+	}
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: produces}
 	return lib.WriteCodeFragment(frag)
 }
 
