@@ -50,6 +50,33 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	// need to know.
 	fragments = applyPlannerBoundaries(fragments)
 
+	// Subprocess function bodies (process substitution sources) are
+	// independent fragment chains. Plan each one too, so import
+	// collection below sees the post-downgrade state. Without this,
+	// a parallel-mode pipeline whose subprocess goes serial after
+	// downgrade still pulls in `runtime` for the (no-longer-present)
+	// ReadCSVParallel call and fails to compile.
+	//
+	// NewFuncFragment aggregates body imports onto the parent's
+	// Imports field at construction time — that snapshot is now
+	// stale, so re-aggregate after planning.
+	for _, frag := range fragments {
+		if frag.Type == "func" && len(frag.FuncBody) > 0 {
+			frag.FuncBody = applyPlannerBoundaries(frag.FuncBody)
+			seen := make(map[string]bool)
+			frag.Imports = frag.Imports[:0]
+			for _, body := range frag.FuncBody {
+				for _, imp := range body.Imports {
+					if imp == "" || seen[imp] {
+						continue
+					}
+					seen[imp] = true
+					frag.Imports = append(frag.Imports, imp)
+				}
+			}
+		}
+	}
+
 	var initFragments []*CodeFragment
 	var stmtFragments []*CodeFragment
 	var finalFragments []*CodeFragment
@@ -286,6 +313,9 @@ func generateTypedSubprocessFunction(funcFrag *CodeFragment) string {
 
 	fmt.Fprintf(&b, "func %s() iter.Seq[%s] {\n", funcFrag.FuncName, typeName)
 
+	// FuncBody has already been run through applyPlannerBoundaries
+	// by assembleTypedFragments (so its Imports / Capabilities
+	// reflect any source downgrade). Just iterate.
 	var initFrags, stmtFrags []*CodeFragment
 	for _, f := range funcFrag.FuncBody {
 		switch f.Type {

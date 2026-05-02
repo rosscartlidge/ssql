@@ -148,14 +148,18 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 		// can size columns exactly. Field selection / reordering
 		// uses typed.WriteTableSelectedToWriter with one
 		// TableColumn{Header, Format, RightAlign} per column.
-		readVar := inputVar
-		if prevIsStream {
-			readVar = inputVar + ".Serial()"
-		}
+		//
+		// to_table only consumes iter.Seq[T] (the helper buffers all
+		// rows for column sizing — there's no parallel-write
+		// equivalent). Declare Accepts=ShapeSeqTyped + SerialOnly so
+		// the planner inserts a Stream.Serial() boundary upstream
+		// when the previous fragment produces a Stream.
+		_ = prevIsStream
 		imports := []string{"fmt", "github.com/rosscartlidge/ssql/v4/typed", "os"}
-		code := generateTypedToTableCode(prevSchema, fields, onlySpecified, readVar)
+		code := generateTypedToTableCode(prevSchema, fields, onlySpecified, inputVar)
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
 		frag.InputTypedSchema = prevSchema
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone, SerialOnly: true}
 		return lib.WriteCodeFragment(frag)
 	}
 

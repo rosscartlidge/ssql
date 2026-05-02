@@ -347,12 +347,24 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 	}
 
 	outputVar := "casted"
+	body := codeBody.String()
 	castCode := fmt.Sprintf(`%s := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 %s		return mut
-	})(%s)`, outputVar, codeBody.String(), inputVar)
+	})(%s)`, outputVar, body, inputVar)
 
-	// Determine imports needed
-	imports := []string{"strconv", "strings", "fmt"}
+	// Only include imports for packages actually used in the body.
+	// Otherwise the generated code fails to compile with
+	// "imported and not used".
+	var imports []string
+	if strings.Contains(body, "strconv.") {
+		imports = append(imports, "strconv")
+	}
+	if strings.Contains(body, "strings.") {
+		imports = append(imports, "strings")
+	}
+	if strings.Contains(body, "fmt.") {
+		imports = append(imports, "fmt")
+	}
 
 	// Create and write fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, castCode, imports, getCommandString())
