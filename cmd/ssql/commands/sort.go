@@ -148,9 +148,9 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 	outputVar := "sorted"
 
 	if typedMode() {
-		if err := rejectParallelMode("sort"); err != nil {
-			return err
-		}
+		// Sort is SerialOnly — the planner inserts Stream.Serial()
+		// upstream automatically when input is a Stream. The serial
+		// codegen below always runs.
 		if prevSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'sort' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
@@ -212,6 +212,11 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
+		frag.Capabilities = &lib.Capabilities{
+			Accepts:    lib.ShapeSeqTyped,
+			Produces:   lib.ShapeSeqTyped,
+			SerialOnly: true,
+		}
 		return lib.WriteCodeFragment(frag)
 	}
 

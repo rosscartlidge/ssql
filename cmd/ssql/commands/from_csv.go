@@ -341,6 +341,14 @@ func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, 
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}
 	frag.IsStream = isStream
+	produces := lib.ShapeSeqTyped
+	if isStream {
+		produces = lib.ShapeStream
+	}
+	frag.Capabilities = &lib.Capabilities{
+		Accepts:  lib.ShapeNone, // source — no input
+		Produces: produces,
+	}
 	return lib.WriteCodeFragment(frag)
 }
 

@@ -1,6 +1,6 @@
-// Package planner is the typed-mode pipeline planner.
+// Typed-mode pipeline planner.
 //
-// It walks the fragment list before code emission and decides:
+// MakePlan walks the fragment list before code emission and decides:
 //
 //  1. Whether the source should emit a parallel primitive
 //     (typed.ReadCSVParallel, ReadParquetParallel, etc.) or the
@@ -17,11 +17,7 @@
 // Phase B (mixed mode) extends this with the
 // iter.Seq[T] ↔ iter.Seq[Record] adapter — same algorithm,
 // additional shape.
-package planner
-
-import (
-	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
-)
+package lib
 
 // Plan is the planner's per-fragment decision matrix. It maps
 // fragment indices in the input list to plan annotations.
@@ -47,7 +43,7 @@ type Plan struct {
 // MakePlan builds a Plan from the fragment list. Fragments without
 // Capabilities are treated as "no opinion" — they pass through and
 // don't contribute to source-parallelism reach analysis.
-func MakePlan(fragments []*lib.CodeFragment) Plan {
+func MakePlan(fragments []*CodeFragment) Plan {
 	plan := Plan{
 		SerialBoundaryBefore: map[int]bool{},
 	}
@@ -64,8 +60,7 @@ func MakePlan(fragments []*lib.CodeFragment) Plan {
 			continue
 		}
 		c := f.Capabilities
-		if c.Accepts == lib.ShapeStream ||
-			c.Produces == lib.ShapeStream {
+		if c.Accepts == ShapeStream || c.Produces == ShapeStream {
 			plan.SourceParallel = true
 			break
 		}
@@ -77,7 +72,7 @@ func MakePlan(fragments []*lib.CodeFragment) Plan {
 	// When a SerialOnly fragment receives ShapeStream input, mark
 	// it as needing a Serial() boundary upstream (the renderer
 	// emits the boundary fragment immediately before this one).
-	currShape := lib.ShapeNone
+	currShape := ShapeNone
 	for i, f := range fragments {
 		if f == nil {
 			continue
@@ -90,15 +85,15 @@ func MakePlan(fragments []*lib.CodeFragment) Plan {
 			continue
 		}
 
-		if c.SerialOnly && currShape == lib.ShapeStream {
+		if c.SerialOnly && currShape == ShapeStream {
 			plan.SerialBoundaryBefore[i] = true
-			currShape = lib.ShapeSeqTyped
+			currShape = ShapeSeqTyped
 		}
 
 		// Update running shape from the fragment's declared output.
 		// SerialOnly fragments produce ShapeSeqTyped (Phase A
 		// invariant — no SerialOnly op produces a Stream).
-		if c.Produces != lib.ShapeNone {
+		if c.Produces != ShapeNone {
 			currShape = c.Produces
 		}
 	}

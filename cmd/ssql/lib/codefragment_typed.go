@@ -35,6 +35,19 @@ func isTypedPipeline(fragments []*CodeFragment) bool {
 //   - Errors out if fragments are missing typed schema info partway
 //     through (mixed-mode is unsupported)
 func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
+	// Run the typed-mode planner first. It walks the fragment list and
+	// returns:
+	//   - which fragments need a Stream.Serial() boundary inserted
+	//     before them (SerialOnly fragments downstream of a Stream
+	//     producer)
+	//   - whether the source should emit a parallel primitive (not
+	//     yet wired — Phase A.2 deferred)
+	//
+	// Boundary fragments are spliced into the fragment list before the
+	// renderer walks them, so the rest of the assembler logic doesn't
+	// need to know.
+	fragments = applyPlannerBoundaries(fragments)
+
 	var initFragments []*CodeFragment
 	var stmtFragments []*CodeFragment
 	var finalFragments []*CodeFragment
@@ -299,4 +312,61 @@ func generateTypedSubprocessFunction(funcFrag *CodeFragment) string {
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// applyPlannerBoundaries runs the typed-mode planner over the
+// fragment list and splices Stream.Serial() boundary fragments in
+// where needed. The returned slice is the fragment list as it
+// should be rendered.
+//
+// Boundary fragments are minimal stmt fragments that emit
+// `<inputVar>Serial := <inputVar>.Serial()` and update the
+// downstream fragment's Input to point at the new var. Capabilities
+// are set so subsequent planner runs (idempotent) wouldn't
+// re-insert.
+func applyPlannerBoundaries(fragments []*CodeFragment) []*CodeFragment {
+	plan := MakePlan(fragments)
+	if len(plan.SerialBoundaryBefore) == 0 {
+		return fragments
+	}
+	out := make([]*CodeFragment, 0, len(fragments)+len(plan.SerialBoundaryBefore))
+	for i, f := range fragments {
+		if plan.SerialBoundaryBefore[i] {
+			// The fragment at index i is SerialOnly and its upstream
+			// produces ShapeStream. Insert a Serial() boundary that
+			// reads from f.Input and produces a new var.
+			serialVar := f.Input + "Serial"
+			boundary := &CodeFragment{
+				Type:    "stmt",
+				Var:     serialVar,
+				Input:   f.Input,
+				Code:    serialVar + " := " + f.Input + ".Serial()",
+				Imports: []string{"github.com/rosscartlidge/ssql/v4/typed"},
+				// Carry the upstream's typed schema through.
+				InputTypedSchema:  f.InputTypedSchema,
+				OutputTypedSchema: f.InputTypedSchema,
+				Capabilities: &Capabilities{
+					Accepts:  ShapeStream,
+					Produces: ShapeSeqTyped,
+				},
+			}
+			out = append(out, boundary)
+			// Rewrite the SerialOnly fragment's code/input to consume
+			// the serialised var instead of the original Stream var.
+			//
+			// NOTE: this is a string rewrite, brittle if the input
+			// var name appears in the code body as a substring of
+			// another identifier. In practice typed-mode codegen
+			// always uses the Input var as a standalone identifier
+			// at known positions, so this is safe. Worth replacing
+			// with structured emission later.
+			rewritten := *f
+			rewritten.Code = strings.ReplaceAll(f.Code, "("+f.Input+")", "("+serialVar+")")
+			rewritten.Input = serialVar
+			out = append(out, &rewritten)
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
