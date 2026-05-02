@@ -110,37 +110,55 @@ func generateToCSVCode(filename string) error {
 		// iter.Seq[T] (serial typed, or a parallel-mode op like
 		// GroupByParallel that fans in to iter.Seq before emitting),
 		// we still use the package-level typed.WriteCSV helpers.
+		// Emit BOTH templates so the planner can pick. The Stream
+		// (per-shard buffer-dump) form is preferred when the
+		// upstream produces ShapeStream; the iter.Seq form is the
+		// alternative for serial pipelines (or after a planner-
+		// inserted Serial() / source downgrade).
+		var streamCode, serialCode string
 		if filename == "" {
-			if prevIsStream {
-				code = fmt.Sprintf(`if err := %s.WriteCSVToWriter(os.Stdout); err != nil {
+			streamCode = fmt.Sprintf(`if err := %s.WriteCSVToWriter(os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
-			} else {
-				code = fmt.Sprintf(`if err := typed.WriteCSVToWriter(%s, os.Stdout); err != nil {
+			serialCode = fmt.Sprintf(`if err := typed.WriteCSVToWriter(%s, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
-			}
-			imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
 		} else {
 			params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output CSV file", VarName: "flagOutput"})
-			if prevIsStream {
-				code = fmt.Sprintf(`if err := %s.WriteCSV(*flagOutput); err != nil {
+			streamCode = fmt.Sprintf(`if err := %s.WriteCSV(*flagOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
-			} else {
-				code = fmt.Sprintf(`if err := typed.WriteCSV(%s, *flagOutput); err != nil {
+			serialCode = fmt.Sprintf(`if err := typed.WriteCSV(%s, *flagOutput); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
-			}
-			imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
+		}
+		imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
+		// Default code: pick based on the upstream IsStream flag at
+		// emission time. The planner will swap to AltCodeIfSeq if it
+		// later determines the upstream is iter.Seq.
+		if prevIsStream {
+			code = streamCode
+		} else {
+			code = serialCode
 		}
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
+		// Capabilities: this sink accepts whichever the upstream is.
+		// Setting Accepts=ShapeStream when emitting the Stream form
+		// keeps the planner's reach analysis correct.
+		if prevIsStream {
+			frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeNone}
+			frag.AltCodeIfSeq = serialCode
+			frag.AltImportsIfSeq = imports
+			frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone}
+		} else {
+			frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone}
+		}
 		return lib.WriteCodeFragment(frag)
 	}
 

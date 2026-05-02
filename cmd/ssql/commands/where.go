@@ -352,23 +352,37 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 		imports = append(imports, "time")
 	}
 
-	var code string
-	isStream := false
+	// In parallel mode, where is a pass-through that prefers Stream
+	// input (Stream.Where is embarrassingly parallel). Emit BOTH
+	// templates so the planner can swap to the iter.Seq form if
+	// the upstream's running shape ends up being iter.Seq (e.g.
+	// after a source downgrade by parallelism-reach analysis).
+	// In serial typed mode, just emit typed.Where.
 	if parallelMode() {
-		// Stream.Where — embarrassingly parallel, T -> T.
-		code = fmt.Sprintf("%s := %s.Where(func(r %s) bool {\n\t\t%s\n\t})",
+		parallelCode := fmt.Sprintf("%s := %s.Where(func(r %s) bool {\n\t\t%s\n\t})",
 			outputVar, inputVar, schema.TypeName, body)
-		isStream = true
-	} else {
-		code = fmt.Sprintf("%s := typed.Where(func(r %s) bool {\n\t\t%s\n\t})(%s)",
+		serialCode := fmt.Sprintf("%s := typed.Where(func(r %s) bool {\n\t\t%s\n\t})(%s)",
 			outputVar, schema.TypeName, body, inputVar)
+
+		frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
+		frag.InputTypedSchema = schema
+		frag.OutputTypedSchema = schema
+		frag.IsStream = true
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
+		frag.AltCodeIfSeq = serialCode
+		frag.AltImportsIfSeq = imports
+		frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
+		return lib.WriteCodeFragment(frag)
 	}
 
+	// SSQLGO=typed (serial)
+	code := fmt.Sprintf("%s := typed.Where(func(r %s) bool {\n\t\t%s\n\t})(%s)",
+		outputVar, schema.TypeName, body, inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
-	// Where doesn't change the row type — pass the schema through.
 	frag.InputTypedSchema = schema
 	frag.OutputTypedSchema = schema
-	frag.IsStream = isStream
+	frag.IsStream = false
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 	return lib.WriteCodeFragment(frag)
 }
 

@@ -50,17 +50,22 @@ func MakePlan(fragments []*CodeFragment) Plan {
 
 	// Pass 1 — parallelism reach.
 	//
-	// The source goes parallel iff at least one downstream
-	// fragment with Capabilities accepts ShapeStream OR produces
-	// ShapeStream. Fragments without Capabilities don't count for
-	// or against (they're shape-agnostic — Record-mode emitters,
-	// init fragments, error fragments).
+	// The source goes parallel iff at least one *downstream*
+	// fragment can consume Stream input (i.e. some
+	// Capabilities.Accepts == ShapeStream). Fragments without
+	// Capabilities don't count (Record-mode emitters, init
+	// fragments, error fragments).
+	//
+	// Source fragments themselves don't count — they have
+	// Accepts == ShapeNone, and their Produces is what we're
+	// trying to decide. The parallelism question is "does anyone
+	// need Stream input?", not "did some fragment claim to
+	// produce Stream?".
 	for _, f := range fragments {
 		if f == nil || f.Capabilities == nil {
 			continue
 		}
-		c := f.Capabilities
-		if c.Accepts == ShapeStream || c.Produces == ShapeStream {
+		if f.Capabilities.Accepts == ShapeStream {
 			plan.SourceParallel = true
 			break
 		}

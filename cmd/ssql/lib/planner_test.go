@@ -89,16 +89,44 @@ func TestPlanConsecutiveSerialOnly(t *testing.T) {
 }
 
 func TestPlanFragmentsWithoutCapabilities(t *testing.T) {
+	// Source produces Stream, then a pass-through fragment with no
+	// capabilities (e.g. a Record-mode helper or init fragment), then
+	// SerialOnly sort. Reach analysis sees no downstream `Accepts==
+	// ShapeStream`, so SourceParallel=false (downgrade is needed).
+	//
+	// The boundary detection in MakePlan still sees the source's
+	// declared Produces=ShapeStream and the SerialOnly sort, so it
+	// returns a boundary. In the higher-level assembler flow the
+	// source gets swapped first and MakePlan is re-run — at which
+	// point the boundary disappears. This test only checks the
+	// raw output of MakePlan, so we just verify SourceParallel
+	// here. Boundary inversion is exercised by the assembler-level
+	// integration tests.
 	frags := []*CodeFragment{
 		fragT("records", capsT(ShapeNone, ShapeStream, false)),
 		{Var: "helper"}, // no capabilities — pass-through
 		fragT("sorted", capsT(ShapeSeqTyped, ShapeSeqTyped, true)),
 	}
 	p := MakePlan(frags)
+	if p.SourceParallel {
+		t.Error("no downstream wants Stream → SourceParallel should be false (parallelism-reach=0)")
+	}
+}
+
+func TestPlanReachWithStreamConsumer(t *testing.T) {
+	// Source produces Stream, then a fragment that explicitly
+	// Accepts ShapeStream (e.g. parallel-friendly where), then
+	// SerialOnly sort.
+	frags := []*CodeFragment{
+		fragT("records", capsT(ShapeNone, ShapeStream, false)),
+		fragT("filtered", capsT(ShapeStream, ShapeStream, false)),
+		fragT("sorted", capsT(ShapeSeqTyped, ShapeSeqTyped, true)),
+	}
+	p := MakePlan(frags)
 	if !p.SourceParallel {
-		t.Error("Stream source still implies parallel source choice")
+		t.Error("a downstream Accepts=ShapeStream → SourceParallel should be true")
 	}
 	if !p.SerialBoundaryBefore[2] {
-		t.Errorf("expected boundary before sort even when intermediate fragment had no capabilities; got %v", p.SerialBoundaryBefore)
+		t.Errorf("expected boundary before sort (idx 2); got %v", p.SerialBoundaryBefore)
 	}
 }

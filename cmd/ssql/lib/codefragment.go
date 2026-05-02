@@ -87,6 +87,25 @@ type CodeFragment struct {
 	// fragments, error fragments, init fragments etc.). The planner
 	// treats nil as "no opinion; pass through unchanged."
 	Capabilities *Capabilities `json:"capabilities,omitempty"`
+
+	// AltCodeIfSeq, AltImportsIfSeq, AltCapabilitiesIfSeq are an
+	// alternative template the planner can swap into Code/Imports/
+	// Capabilities if it decides this fragment should produce
+	// ShapeSeqTyped rather than ShapeStream. Used by source
+	// fragments (typed.ReadCSVParallel ↔ typed.ReadCSV etc.) so
+	// the planner's parallelism-reach analysis can downgrade the
+	// source primitive when no downstream fragment can consume
+	// Stream input.
+	//
+	// When set, the source emits the parallel form by default
+	// (Code = ReadXParallel, Capabilities.Produces = ShapeStream).
+	// The planner activates the serial alternative when
+	// Plan.SourceParallel = false. Empty alternatives mean "no
+	// downgrade possible" — the planner leaves the fragment
+	// untouched.
+	AltCodeIfSeq         string        `json:"alt_code_if_seq,omitempty"`
+	AltImportsIfSeq      []string      `json:"alt_imports_if_seq,omitempty"`
+	AltCapabilitiesIfSeq *Capabilities `json:"alt_capabilities_if_seq,omitempty"`
 }
 
 // Shape tags the row-type a fragment expects (Accepts) or produces

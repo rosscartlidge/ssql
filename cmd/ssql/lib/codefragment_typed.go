@@ -316,17 +316,40 @@ func generateTypedSubprocessFunction(funcFrag *CodeFragment) string {
 }
 
 // applyPlannerBoundaries runs the typed-mode planner over the
-// fragment list and splices Stream.Serial() boundary fragments in
-// where needed. The returned slice is the fragment list as it
-// should be rendered.
+// fragment list and:
 //
-// Boundary fragments are minimal stmt fragments that emit
-// `<inputVar>Serial := <inputVar>.Serial()` and update the
-// downstream fragment's Input to point at the new var. Capabilities
-// are set so subsequent planner runs (idempotent) wouldn't
-// re-insert.
+//  1. Downgrades source fragments to their serial alternative
+//     (typed.ReadCSV instead of typed.ReadCSVParallel etc.) when
+//     no downstream fragment needs Stream input. Avoids the
+//     Serial()-channel-cost trap from the prototype's negative
+//     result (parallel source + Serial() boundary is *slower*
+//     than serial source on pipelines where parallelism reaches
+//     no work).
+//
+//  2. Splices Stream.Serial() boundary fragments before each
+//     SerialOnly fragment whose upstream produces ShapeStream.
+//
+// The returned slice is the fragment list as it should be
+// rendered.
 func applyPlannerBoundaries(fragments []*CodeFragment) []*CodeFragment {
 	plan := MakePlan(fragments)
+
+	// Phase 1 — source primitive selection.
+	// If no downstream fragment needs Stream, swap each source's
+	// parallel template for its serial alternative. Then walk all
+	// pass-through fragments (where, group-by, sinks…) that have
+	// alternatives and swap them too — their Stream-form code
+	// won't compile against an iter.Seq upstream. Re-plan after
+	// the swap so boundary detection sees the updated shapes.
+	if !plan.SourceParallel {
+		for _, f := range fragments {
+			if f != nil && f.AltCodeIfSeq != "" {
+				applySerialSourceAlternative(f)
+			}
+		}
+		plan = MakePlan(fragments)
+	}
+
 	if len(plan.SerialBoundaryBefore) == 0 {
 		return fragments
 	}
@@ -392,4 +415,26 @@ func identRegexpFor(name string) *regexp.Regexp {
 	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
 	identRegexpCache[name] = re
 	return re
+}
+
+// applySerialSourceAlternative mutates a source fragment in place
+// to use its serial alternative (typed.ReadCSV instead of
+// typed.ReadCSVParallel etc.). Called by applyPlannerBoundaries
+// when the parallelism-reach analysis determines no downstream
+// fragment can consume Stream input.
+//
+// After the swap the fragment's IsStream flag is cleared (so any
+// downstream code keying off that signal sees iter.Seq), and the
+// alternative fields are nil'd so a subsequent planner pass
+// (idempotency) doesn't re-apply the swap.
+func applySerialSourceAlternative(f *CodeFragment) {
+	f.Code = f.AltCodeIfSeq
+	f.Imports = f.AltImportsIfSeq
+	if f.AltCapabilitiesIfSeq != nil {
+		f.Capabilities = f.AltCapabilitiesIfSeq
+	}
+	f.IsStream = false
+	f.AltCodeIfSeq = ""
+	f.AltImportsIfSeq = nil
+	f.AltCapabilitiesIfSeq = nil
 }
