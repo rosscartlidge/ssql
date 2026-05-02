@@ -1,6 +1,35 @@
 # Mixed-Mode Pipelines Proposal
 
-**Status:** Design exploration only (2026-04-28). Not committed work.
+**Status:** Design (2026-04-28, refined 2026-05-02). Now reframed as
+**Phase B of the unified-typed-mode plan**: builds on the planner
+abstraction introduced in [`typed-auto-parallel-proposal.md`](typed-auto-parallel-proposal.md)
+(Phase A) by adding a second boundary kind to the same planner.
+
+**The unified vision:** any pipeline that ssql can compile in
+Record mode should also compile in typed mode, with the codegen
+automatically picking — *per pipeline stage* — between
+`Stream[T]` (parallel typed), `iter.Seq[T]` (serial typed), and
+`iter.Seq[Record]` (Record fallback). Users type `SSQLGO=typed`
+and the planner produces "the fastest possible code for this
+specific pipeline." As we add typed/parallel implementations of
+currently-Record-only commands over time, every user's
+pipelines get faster without them touching anything — same shape
+as a query optimiser.
+
+This proposal is the second of two phases (the other being
+`typed-auto-parallel-proposal.md`). They share the same planner
+abstraction; only the *boundary kind* differs:
+
+| Boundary kind | Source shape | Sink shape | Inserted adapter | Phase |
+|---|---|---|---|---|
+| Parallelism boundary | `Stream[T]` | `iter.Seq[T]` (serial-only typed op) | `Stream.Serial()` | **A** (auto-parallel) |
+| Mode boundary | `iter.Seq[T]` | `iter.Seq[Record]` (Record-only op) | reflection-based struct→Record | **B** (this doc) |
+| Mode boundary (reverse) | `iter.Seq[Record]` | `iter.Seq[T]` (typed-only op) | `--into` hint or sample-infer | C (deferred) |
+
+The Phase B work mostly reuses Phase A's planner + assembler;
+the additions are the new boundary kind, the reflection-based
+adapter, and updating the per-command capability declarations to
+include "Record-only".
 
 This doc lays out the design space for **mixed-mode pipelines** —
 ssql pipelines where some stages run in the typed runtime
@@ -205,20 +234,49 @@ it would need to materialise the Record stream into a slice,
 then partition into shards. Probably defer to v3 unless a
 specific use case forces it.
 
-## 3. Implementation sketch
+## 3. Implementation sketch (Phase B = adapter + capability extension)
 
-Three pieces of new code:
+The Phase A planner already walks fragments, reads per-command
+capability declarations, and inserts boundary fragments where
+shapes don't match. Phase B adds:
 
-### 3a. Adapter fragments
+### 3a. Capability declarations get a third shape
 
-Two new fragment kinds in `lib.CodeFragment`:
+The Phase A planner declares per-fragment input/output shapes:
 
 ```go
-const FragmentTypeTypedToRecord = "typed_to_record"
-const FragmentTypeRecordToTyped = "record_to_typed"  // v2
+// From phase A (auto-parallel proposal):
+type Shape int
+const (
+    ShapeStream    Shape = iota // typed.Stream[T]
+    ShapeSeqTyped               // iter.Seq[T]
+    ShapeSeqRecord              // iter.Seq[Record]   ← new in Phase B
+)
+
+type Capabilities struct {
+    AcceptsInput Shape
+    Produces     Shape
+}
 ```
 
-These fragments emit a small adapter function:
+Most commands already have a typed-mode codegen path emitting
+either `Stream[T]` or `iter.Seq[T]`. **In Phase B we add a
+`ShapeSeqRecord` declaration for commands that ONLY have a
+Record-mode codegen** — the Tier 3 list: `signal *`,
+`pivot`, `merge -catalog`, `from ssh`, `from catalog`, plus
+the `-if-expr`/`-set-expr` flag forms of `where` / `group-by` /
+`update`.
+
+These commands' typed-mode codegen path doesn't need a real
+implementation — they just emit a fragment with
+`Capabilities.Produces = ShapeSeqRecord` (or `AcceptsInput`).
+The planner takes care of the rest.
+
+### 3b. New boundary type: `iter.Seq[T]` → `iter.Seq[Record]`
+
+The planner already inserts `Stream.Serial()` adapters at the
+parallel→serial-typed boundary (Phase A). Phase B registers a
+second adapter:
 
 ```go
 // emitted by the typed→Record boundary fragment
@@ -237,47 +295,38 @@ func toRecord(seq iter.Seq[ShuffledRow]) iter.Seq[ssql.Record] {
 }
 ```
 
-Schema-sharing rule applies: build the `*Schema` once outside
-the loop; reuse across rows. No per-row allocation beyond the
-Record itself.
+Generated once per typed→Record boundary, parameterised by the
+upstream struct's `OutputTypedSchema`. Schema-sharing rule
+applies (build the `*Schema` once outside the loop). No per-row
+allocation beyond the `Record` itself — about 50 ns/row.
 
-### 3b. Mode tagging
+The planner inserts this exactly the same way Phase A inserts
+`Stream.Serial()`: when the next fragment's `AcceptsInput` is
+`ShapeSeqRecord` but the previous fragment produces
+`ShapeSeqTyped` (or `ShapeStream`, in which case BOTH a
+`Stream.Serial()` and a `toRecord()` get inserted in sequence).
 
-Each command's codegen function needs to declare what mode(s)
-it supports:
+### 3c. Stream→Record (combined boundary)
+
+A `Stream[T]` followed by a Record-only op needs both adapters:
 
 ```go
-// In each command's typed-mode codegen path:
-type CommandModeSupport struct {
-    Typed    bool  // serial typed (iter.Seq[T])
-    Parallel bool  // parallel typed (Stream[T])
-    Record   bool  // record runtime (iter.Seq[Record])
-}
+recordsSerial := records.Serial()           // Stream→iter.Seq[T]
+recordsAsRecords := toRecord(recordsSerial) // iter.Seq[T]→iter.Seq[Record]
 ```
 
-Today this is implicit (each command's `generateXxxCode` checks
-`typedMode()` / `parallelMode()` and dispatches). Refactor to
-expose this as a structured value so the assembler can decide
-where to insert boundaries.
+The planner emits both fragments. Same mechanism as Phase A
+(boundary insertion); just two adapters chained. No new
+machinery beyond the per-shape adapter registry.
 
-### 3c. Pipeline segmentation pass
+### 3d. Reverse direction (Record → typed) — deferred to Phase C
 
-A new step in `lib.AssembleCodeFragments`:
-
-1. Walk fragments in order.
-2. For each fragment, determine its declared mode (typed /
-   parallel / record).
-3. Find runs of contiguous same-mode fragments.
-4. At each mode-change boundary, insert an adapter fragment.
-5. Validate that the adapter direction is supported (v1: only
-   typed→Record).
-6. Emit the assembled program.
-
-Most of the existing assembler logic doesn't change. The
-segmentation pass is ~200 lines of new code. The big risk is
-edge cases (e.g. a func fragment for a join right-side
-contains its own mini-pipeline that might need its own
-segmentation pass).
+Going the other way (a Record-only source like
+`from ssh` followed by a typed `where`) needs a struct hint
+because Records don't carry a static type. Three sub-options
+discussed in §2b of the original draft. Defer to Phase C — the
+forward direction (typed→Record) handles all four motivating
+use cases below.
 
 ## 4. Cost analysis
 
@@ -345,25 +394,45 @@ Not insurmountable but adds test surface.
 
 ## 6. Phased rollout
 
-**Phase A (v1):** typed → Record adapter only. Implicit
-auto-segmentation. Stream→Record requires implicit `Serial()`
-(documented). Add `--explain` to surface inserted boundaries.
-Estimate: 1 week of work + tests + benchmark.
+The phasing has been revised since the original draft. With the
+unified-planner framing, the work now lays out as:
 
-**Phase B (v2):** Record → typed adapter via "explicit struct
-hint" (option C from §2b). User passes `--into MyStruct`
-where needed. Allows pipelines like SSH → typed-aggregate.
-Estimate: ~2 weeks.
+**Phase A (auto-parallel):** see
+[`typed-auto-parallel-proposal.md`](typed-auto-parallel-proposal.md).
+Build the planner abstraction; add the `Stream[T]` ↔
+`iter.Seq[T]` boundary; collapse `SSQLGO=parallel` into
+`SSQLGO=typed`. Foundation for everything that follows.
+Estimate: ~2-3 days. Ships as v4.39.0.
 
-**Phase C (v3):** Record → typed via inference (option B from
-§2b). Sample first N rows. More magic but lets users skip
-the `--into` flag. Optional.
+**Phase B (this doc — typed → Record adapter):** add the
+`iter.Seq[T]` → `iter.Seq[Record]` boundary kind. Each
+Record-only command (the Tier 3 list — `signal`, `pivot`,
+`merge -catalog`, `from ssh`, `from catalog`, plus
+`-if-expr`/`-set-expr` flag forms) declares
+`Capabilities.AcceptsInput = ShapeSeqRecord`. The planner
+inserts the `toRecord` adapter automatically. Stream→Record
+boundaries chain `Stream.Serial()` + `toRecord()` (no new
+machinery). Estimate: ~2-3 days. Ships as v4.40.0.
 
-**Phase D (deferred):** Record → Stream[T] (i.e. converting a
-sequential Record stream into a parallel typed stream). Useful
-for pipelines that produce few rows but want parallel
-post-processing. Probably never worth the complexity unless a
-specific need surfaces.
+**Phase C (deferred — Record → typed via explicit hint):**
+adds the reverse direction with `--into MyStruct` syntax.
+Allows pipelines like `from ssh ... | ssql where -if x gt 5
+--into MyRow | typed group-by ...`. Estimate: ~1 week.
+
+**Phase D (deferred indefinitely):** Record → Stream[T]
+(parallel typed source from a Record stream) and Record →
+typed via first-N-row inference. Both useful but neither is on
+a critical path — they unblock fewer real workloads than
+Phase B, and the explicit-hint version of Phase C handles the
+common case.
+
+After Phases A + B land, **the user's vision is realised**:
+any pipeline that compiles in Record mode also compiles in
+typed mode, with the planner picking the fastest viable
+strategy per stage. Subsequent typed-runtime additions
+(parallel sort via k-way merge, parallel distinct via
+hash-shuffle, expr-lang → Go translation) are silent
+speed-ups for users — no flag changes, no rewrites.
 
 ## 7. Open questions
 
