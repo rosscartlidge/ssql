@@ -66,8 +66,13 @@ func TestCodegenBench(t *testing.T) {
 	}
 
 	// Generate, build, and time each codegen variant.
+	// "parallel" is the planner-driven mode that picks Stream[T] vs
+	// iter.Seq[T] per stage based on capability reach analysis — for
+	// this pipeline (where + join + write CSV) the planner should
+	// keep the source parallel and use the per-shard buffer-dump CSV
+	// sink, beating serial typed.
 	results := make(map[string]variant)
-	for _, mode := range []string{"1", "typed"} {
+	for _, mode := range []string{"1", "typed", "parallel"} {
 		v := buildAndRun(t, mode, pipelineFor(mode))
 		results[mode] = v
 		t.Logf("%-13s  wall=%-10s  rss=%-12s  src=%d bytes", v.label, v.wall, v.rss, v.srcBytes)
@@ -92,12 +97,14 @@ func TestCodegenBench(t *testing.T) {
 	cli := results["cli"]
 	rec := results["1"]
 	typ := results["typed"]
+	par := results["parallel"]
 	cliVsTypedTime := float64(cli.wall) / float64(typ.wall)
 	recVsTypedTime := float64(rec.wall) / float64(typ.wall)
+	parVsTypedTime := float64(typ.wall) / float64(par.wall)
 
 	fmt.Println()
 	fmt.Println("┌──────────────────────────────────────────────────────────────────────┐")
-	fmt.Println("│  Codegen benchmark: same pipeline, three execution models           │")
+	fmt.Println("│  Codegen benchmark: same pipeline, four execution models             │")
 	fmt.Println("├──────────────────┬──────────────┬──────────────┬────────────────────┤")
 	fmt.Println("│  Mode            │  Wall time   │  Peak RSS    │  Source size       │")
 	fmt.Println("├──────────────────┼──────────────┼──────────────┼────────────────────┤")
@@ -107,9 +114,12 @@ func TestCodegenBench(t *testing.T) {
 		rec.wall.Round(time.Millisecond), formatKB(rec.rssKB), formatBytes(rec.srcBytes))
 	fmt.Printf("│  %-16s│  %-12s│  %-12s│  %-18s│\n", typ.label,
 		typ.wall.Round(time.Millisecond), formatKB(typ.rssKB), formatBytes(typ.srcBytes))
+	fmt.Printf("│  %-16s│  %-12s│  %-12s│  %-18s│\n", par.label,
+		par.wall.Round(time.Millisecond), formatKB(par.rssKB), formatBytes(par.srcBytes))
 	fmt.Println("├──────────────────┴──────────────┴──────────────┴────────────────────┤")
-	fmt.Printf("│  typed vs CLI pipeline:    %.2fx faster                                │\n", cliVsTypedTime)
-	fmt.Printf("│  typed vs Record codegen:  %.2fx faster                                │\n", recVsTypedTime)
+	fmt.Printf("│  typed vs CLI pipeline:        %.2fx faster                            │\n", cliVsTypedTime)
+	fmt.Printf("│  typed vs Record codegen:      %.2fx faster                            │\n", recVsTypedTime)
+	fmt.Printf("│  parallel vs typed (serial):   %.2fx faster                            │\n", parVsTypedTime)
 	fmt.Println("└──────────────────────────────────────────────────────────────────────┘")
 	fmt.Println()
 
@@ -120,6 +130,12 @@ func TestCodegenBench(t *testing.T) {
 	}
 	if cliVsTypedTime < 1.0 {
 		t.Errorf("typed program is slower than CLI pipeline (%v vs %v) — regression?", typ.wall, cli.wall)
+	}
+	// Parallel should be at least as fast as serial typed for this
+	// pipeline shape (filter + join + write benefits from per-shard
+	// parallelism). We allow a small wobble to absorb scheduling jitter.
+	if parVsTypedTime < 0.9 {
+		t.Errorf("parallel program is slower than serial typed (%v vs %v) — planner regression?", par.wall, typ.wall)
 	}
 }
 
@@ -163,8 +179,11 @@ func buildAndRun(t *testing.T, mode, pipeline string) variant {
 	t.Helper()
 
 	label := "Record"
-	if mode == "typed" {
-		label = "typed"
+	switch mode {
+	case "typed":
+		label = "typed (serial)"
+	case "parallel":
+		label = "typed (parallel)"
 	}
 
 	// Generate the Go source.
