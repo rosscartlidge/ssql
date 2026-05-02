@@ -228,6 +228,7 @@ See `claude/code-generation.md` for fragment system, testing patterns, and full 
 
 **Rules (never violate):**
 - **Every data-processing command MUST support `-generate` / `SSQLGO=1`** — a single missing command breaks entire pipelines
+- **Every pipeline MUST generate working code in all three modes** — `record` (`SSQLGO=1`), `typed` (`SSQLGO=typed`), and `parallel`/mixed (`SSQLGO=parallel`). The pipeline regression corpus in `cmd/ssql/corpus_test.go` is the safety net — every pipeline added to a tutorial example or feature should be added there. As we extend typed/parallel coverage, this corpus is what prevents silent regressions across modes.
 - **CLI commands must use ssql package primitives**, not raw Go code
 - **Generated code must be readable** — move complexity to helper functions in ssql package
 - **All errors must cause pipeline failure** with clear messages (use error fragments in generation mode)
@@ -235,6 +236,7 @@ See `claude/code-generation.md` for fragment system, testing patterns, and full 
 - **Test generation**: add tests to `cmd/ssql/generation_test.go`, test full pipeline round-trip
 - **When changing a command, test ALL generate formats** — `generate go`, `generate sql`, and `generate ssql` may each have their own translation logic (e.g. SQL assembler parses the Command string). A feature that works in execution mode can silently break in generation.
 - **`generate sql` reuses the same fragments** — no separate SQL generation path needed per command. The SQL assembler parses the `Command` string from each fragment.
+- **Run the planner-driven corpus on every change touching codegen** — `go test ./cmd/ssql -run TestPipelineCorpus -timeout=10m`. It compiles + runs each pipeline through all three modes, catching things `go vet` and unit tests miss (unused imports after planner downgrade, type mismatches between Stream and iter.Seq, etc.).
 
 ## WASM and WASI Rules
 See `claude/wasm.md` for all WASM/WASI knowledge: three build targets (browser, WebVM, WASI), performance characteristics, AOT compilation, deployment workflows, and the docker cp uid/gid bug.
