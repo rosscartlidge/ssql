@@ -2,6 +2,7 @@ package lib
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
@@ -332,7 +333,12 @@ func generateTypedSubprocessFunction(funcFrag *CodeFragment) string {
 // The returned slice is the fragment list as it should be
 // rendered.
 func applyPlannerBoundaries(fragments []*CodeFragment) []*CodeFragment {
+	explain := os.Getenv("SSQL_EXPLAIN_PLAN") != ""
 	plan := MakePlan(fragments)
+
+	if explain {
+		explainPlanInitial(fragments, plan)
+	}
 
 	// Phase 1 — source primitive selection.
 	// If no downstream fragment needs Stream, swap each source's
@@ -345,9 +351,20 @@ func applyPlannerBoundaries(fragments []*CodeFragment) []*CodeFragment {
 		for _, f := range fragments {
 			if f != nil && f.AltCodeIfSeq != "" {
 				applySerialSourceAlternative(f)
+				if explain {
+					describe := f.Var
+					if f.Command != "" {
+						describe = f.Command
+					}
+					fmt.Fprintf(os.Stderr, "[plan] downgraded %s to serial alternative\n", describe)
+				}
 			}
 		}
 		plan = MakePlan(fragments)
+	}
+
+	if explain {
+		explainBoundaries(fragments, plan)
 	}
 
 	if len(plan.SerialBoundaryBefore) == 0 {
@@ -437,4 +454,52 @@ func applySerialSourceAlternative(f *CodeFragment) {
 	f.AltCodeIfSeq = ""
 	f.AltImportsIfSeq = nil
 	f.AltCapabilitiesIfSeq = nil
+}
+
+// explainPlanInitial prints the planner's initial decisions to
+// stderr — what reach analysis returned, and what each source's
+// chosen mode was. Called when SSQL_EXPLAIN_PLAN is set.
+func explainPlanInitial(fragments []*CodeFragment, plan Plan) {
+	fmt.Fprintln(os.Stderr, "[plan] typed-mode planner — initial decisions")
+	if plan.SourceParallel {
+		fmt.Fprintln(os.Stderr, "[plan]   source: parallel (Stream[T]) — at least one downstream accepts ShapeStream")
+	} else {
+		fmt.Fprintln(os.Stderr, "[plan]   source: serial (iter.Seq[T]) — parallelism reach = 0; downgrade source primitive")
+	}
+	for _, f := range fragments {
+		if f == nil || f.Capabilities == nil {
+			continue
+		}
+		describe := f.Var
+		if f.Command != "" {
+			describe = f.Command
+		}
+		fmt.Fprintf(os.Stderr, "[plan]   %s: accepts=%s, produces=%s%s\n",
+			describe, f.Capabilities.Accepts, f.Capabilities.Produces, serialOnlyTag(f.Capabilities.SerialOnly))
+	}
+}
+
+// explainBoundaries prints which fragments got a Stream.Serial()
+// boundary inserted upstream. Called after the boundary detection
+// pass, so the output reflects the post-downgrade plan.
+func explainBoundaries(fragments []*CodeFragment, plan Plan) {
+	if len(plan.SerialBoundaryBefore) == 0 {
+		fmt.Fprintln(os.Stderr, "[plan]   (no Stream.Serial() boundaries needed)")
+		return
+	}
+	for i := range plan.SerialBoundaryBefore {
+		f := fragments[i]
+		describe := f.Var
+		if f.Command != "" {
+			describe = f.Command
+		}
+		fmt.Fprintf(os.Stderr, "[plan]   inserted Stream.Serial() before %s (SerialOnly fragment with Stream upstream)\n", describe)
+	}
+}
+
+func serialOnlyTag(serialOnly bool) string {
+	if serialOnly {
+		return ", SerialOnly=true"
+	}
+	return ""
 }

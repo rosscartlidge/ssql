@@ -95,11 +95,16 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 				return fmt.Errorf("ssql generate go: -run, -build, and OUTPUT are mutually exclusive (pick one: -run to compile+execute, -build PATH to compile to a binary, OUTPUT to write Go source)")
 			}
 
+			if explain {
+				// The typed-mode planner reads this and emits its
+				// per-stage decisions (source parallel/serial,
+				// inserted Serial() boundaries) to stderr. The
+				// optimiser's own -explain output is handled below
+				// when -optimise is set.
+				os.Setenv("SSQL_EXPLAIN_PLAN", "1")
+			}
 			if optimise {
 				return runOptimiseThenGo(os.Stdin, run, buildOut, outputFile, explain)
-			}
-			if explain {
-				return fmt.Errorf("ssql generate go: -explain only meaningful with -optimise")
 			}
 
 			// Assemble code fragments from stdin
