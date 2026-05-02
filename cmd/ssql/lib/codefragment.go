@@ -72,6 +72,74 @@ type CodeFragment struct {
 	// the schema can leave this nil; the assembler treats nil as
 	// "schema unknown, fall back to alphabetical."
 	OutputRecordFields []string `json:"output_record_fields,omitempty"`
+
+	// Capabilities describes what this fragment expects from its
+	// upstream and what it produces. Used by the typed-mode planner
+	// (cmd/ssql/lib/planner) to decide where to insert Stream.Serial()
+	// boundaries and whether the source should emit a parallel
+	// (Stream[T]) or serial (iter.Seq[T]) primitive.
+	//
+	// Phase A only uses ShapeStream / ShapeSeqTyped. Phase B (mixed
+	// mode) extends this with ShapeSeqRecord for Tier 3 / Record-only
+	// commands.
+	//
+	// Nil for fragments that pre-date the planner (Record-mode
+	// fragments, error fragments, init fragments etc.). The planner
+	// treats nil as "no opinion; pass through unchanged."
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
+}
+
+// Shape tags the row-type a fragment expects (Accepts) or produces
+// (Produces). Used by the typed-mode planner.
+type Shape int
+
+const (
+	// ShapeNone is the placeholder for sources/sinks that have no
+	// upstream input (or have no relevant output type).
+	ShapeNone Shape = iota
+	// ShapeStream means typed.Stream[T] — the parallel runtime's
+	// shard-partitioned stream.
+	ShapeStream
+	// ShapeSeqTyped means iter.Seq[T] — serial typed Go.
+	ShapeSeqTyped
+	// ShapeSeqRecord means iter.Seq[ssql.Record] — Record-mode
+	// runtime. Only set in Phase B (mixed mode).
+	ShapeSeqRecord
+)
+
+// String returns the shape's human-readable name (used by the
+// planner's --explain output).
+func (s Shape) String() string {
+	switch s {
+	case ShapeNone:
+		return "none"
+	case ShapeStream:
+		return "Stream[T]"
+	case ShapeSeqTyped:
+		return "iter.Seq[T]"
+	case ShapeSeqRecord:
+		return "iter.Seq[Record]"
+	default:
+		return "?"
+	}
+}
+
+// Capabilities describes a fragment's input/output shapes for the
+// typed-mode planner. See [CodeFragment.Capabilities] for usage.
+type Capabilities struct {
+	// Accepts is the row-type this fragment requires as input.
+	// Sources use ShapeNone (no input).
+	Accepts Shape `json:"accepts"`
+	// Produces is the row-type this fragment outputs. Sinks use
+	// ShapeNone (no row output; the sink writes externally).
+	Produces Shape `json:"produces"`
+	// SerialOnly means the fragment cannot accept ShapeStream input
+	// even though it works in typed mode. The planner inserts a
+	// Stream.Serial() boundary upstream when SerialOnly is true and
+	// the upstream produces ShapeStream. Examples: sort, distinct,
+	// limit, offset, top, union, cast, update, include, exclude,
+	// rename, and group-by -presorted.
+	SerialOnly bool `json:"serial_only,omitempty"`
 }
 
 // TypedSchema describes the row type flowing between two pipeline
