@@ -126,9 +126,14 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 		importSet["iter"] = true
 	}
 	if len(finalFragments) == 0 {
-		// Fall back to JSONL output via typed.WriteJSONLToWriter.
+		// JSONL fallback. Always needs fmt + os. Additionally needs
+		// `iter` and the public ssql package because the typed-shape
+		// branch emits an inline `func() iter.Seq[ssql.Record] {...}`
+		// converter and calls ssql.WriteJSONLWithInferredSchemaToWriter.
 		importSet["fmt"] = true
 		importSet["os"] = true
+		importSet["iter"] = true
+		importSet["github.com/rosscartlidge/ssql/v4"] = true
 	}
 	for _, frag := range fragments {
 		for _, imp := range frag.Imports {
@@ -246,10 +251,29 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 			code.WriteString("\t" + frag.Code + "\n")
 		}
 	} else {
-		// No sink — emit JSONL fallback to stdout. If the
-		// last-stage shape is Record (mixed-mode pipeline ended on
-		// a Tier 3 command like pivot), use ssql.WriteJSONLToWriter;
-		// otherwise typed.WriteJSONLToWriter.
+		// No sink — emit JSONL fallback to stdout with a
+		// `{"_schema":...}` header (matches the wire format the
+		// rest of the ssql CLI produces).
+		//
+		// Two cases:
+		//
+		//   - Record-shape last fragment (mixed-mode pipeline ended
+		//     on a Tier 3 command like pivot): use
+		//     ssql.WriteJSONLWithInferredSchemaToWriter directly.
+		//
+		//   - Typed-shape last fragment: emit an inline
+		//     typed→Record converter (same shape as the planner's
+		//     toRecord boundary), then call the same helper. This
+		//     gives us lowercase CSV-style field names (from the
+		//     typed schema's Name field, not the Go struct's
+		//     CamelCase) AND a schema header — matches the format
+		//     baseline `ssql ... | ssql to jsonl` produces.
+		//
+		// Wire format is critical for `from ssh -remote`: without
+		// a schema header on the remote's output, the local
+		// readJSONSchemaAware reader inserts `_line_number` into
+		// every record (a real bug fixed by v4.41.2 for users who
+		// chain pipelines).
 		var outVar string
 		var lastFrag *CodeFragment
 		if len(stmtFragments) > 0 {
@@ -259,10 +283,20 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 		}
 		outVar = lastFrag.Var
 		isRecord := lastFrag.Capabilities != nil && lastFrag.Capabilities.Produces == ShapeSeqRecord
-		code.WriteString("\t// No sink in pipeline — emit JSONL to stdout\n")
+		code.WriteString("\t// No sink in pipeline — emit JSONL to stdout (with schema header)\n")
 		if isRecord {
-			fmt.Fprintf(&code, "\tif err := ssql.WriteJSONFastToWriter(%s, os.Stdout); err != nil {\n", outVar)
+			fmt.Fprintf(&code, "\tif err := ssql.WriteJSONLWithInferredSchemaToWriter(%s, os.Stdout); err != nil {\n", outVar)
+		} else if lastFrag.OutputTypedSchema != nil {
+			// Inline typed→Record converter, then schema-aware writer.
+			// We don't go through the planner's toRecord boundary
+			// because that would alter the fragment list — we just
+			// emit equivalent code at the assembly layer.
+			converter := buildInlineToRecordExpr(outVar, lastFrag.OutputTypedSchema)
+			fmt.Fprintf(&code, "\tif err := ssql.WriteJSONLWithInferredSchemaToWriter(%s, os.Stdout); err != nil {\n", converter)
 		} else {
+			// No typed schema (shouldn't happen for typed
+			// pipelines after Phase A) — fall back to plain
+			// JSONL without schema. Better than crashing.
 			fmt.Fprintf(&code, "\tif err := typed.WriteJSONLToWriter(%s, os.Stdout); err != nil {\n", outVar)
 		}
 		code.WriteString("\t\tfmt.Fprintf(os.Stderr, \"write: %v\\n\", err)\n")
@@ -601,6 +635,43 @@ func tagRecordModeFragments(fragments []*CodeFragment) {
 			lastTypedSchema = f.OutputTypedSchema
 		}
 	}
+}
+
+// buildInlineToRecordExpr returns a Go expression (a self-contained
+// IIFE) that converts an iter.Seq[T] of typed structs into an
+// iter.Seq[ssql.Record]. Used by the assembler's JSONL fallback to
+// route typed-shape output through ssql.WriteJSONLWithInferredSchemaToWriter
+// without going through the planner's full boundary insertion.
+//
+// The expression evaluates to an iter.Seq[ssql.Record] inline —
+// callers can drop it into a function call argument:
+//
+//	ssql.WriteJSONLWithInferredSchemaToWriter( <expr>, os.Stdout )
+//
+// Schema is built once outside the per-row loop (schema-sharing
+// rule), then NewRecordFromSchema fills in values per row.
+func buildInlineToRecordExpr(inputVar string, schema *TypedSchema) string {
+	fieldNames := make([]string, len(schema.Fields))
+	valueExtractors := make([]string, len(schema.Fields))
+	for i, f := range schema.Fields {
+		fieldNames[i] = fmt.Sprintf("%q", f.Name)
+		valueExtractors[i] = "v." + f.GoName
+	}
+	return fmt.Sprintf(`func() iter.Seq[ssql.Record] {
+		schema := ssql.NewSchema([]string{%s})
+		return func(yield func(ssql.Record) bool) {
+			for v := range %s {
+				r := ssql.NewRecordFromSchema(schema, []any{%s})
+				if !yield(r) {
+					return
+				}
+			}
+		}
+	}()`,
+		strings.Join(fieldNames, ", "),
+		inputVar,
+		strings.Join(valueExtractors, ", "),
+	)
 }
 
 // buildToRecordBoundary emits the typed→Record adapter fragment.

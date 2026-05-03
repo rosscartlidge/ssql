@@ -261,22 +261,17 @@ func executeFromSSHRemoteGo(host, path string, pipelineArgs []string) error {
 //	| ssql STAGE1
 //	| ssql STAGE2
 //	...
-//	| ssql to jsonl   (auto-appended unless STAGE_N is already a sink)
 //
 // Path and per-stage args are quoted with ssql.ShellQuote — the
 // script is exec'd by bash on the remote, so the same quoting rules
 // the existing BuildRemoteCommand uses apply.
 //
-// `to jsonl` is auto-appended so the remote output matches the wire
-// format the rest of the local `from ssh` pipeline expects: a
-// `{"_schema":...}` header line followed by one JSON object per
-// record with original CSV-style field names. Without an explicit
-// sink, the typed assembler falls back to typed.WriteJSONLToWriter
-// which uses CamelCase struct names and omits the schema — fine
-// for terminals but breaks downstream local `ssql` stages.
-//
-// Auto-append is suppressed when the user's last stage is itself
-// a `to <format>` sink (they've explicitly chosen the wire format).
+// As of v4.41.2 the JSONL fallback in the typed assembler emits a
+// {"_schema":...} header inferred from the typed output type and
+// uses lowercase CSV-style field names — same wire format the
+// baseline `--` pushdown produces — so we no longer need to
+// auto-append `| ssql to jsonl`. The script ends naturally at the
+// user's last stage.
 func buildRemoteSSQLScript(path string, pipelineGroups [][]string) string {
 	var sb strings.Builder
 	sb.WriteString("ssql from ")
@@ -292,21 +287,7 @@ func buildRemoteSSQLScript(path string, pipelineGroups [][]string) string {
 		}
 		sb.WriteString("\n")
 	}
-	if !lastGroupIsSink(pipelineGroups) {
-		sb.WriteString("| ssql to jsonl\n")
-	}
 	return sb.String()
-}
-
-// lastGroupIsSink reports whether the last pushdown stage is a
-// `to ...` sink command. Used by buildRemoteSSQLScript to decide
-// whether to auto-append `to jsonl`.
-func lastGroupIsSink(groups [][]string) bool {
-	if len(groups) == 0 {
-		return false
-	}
-	last := groups[len(groups)-1]
-	return len(last) > 0 && last[0] == "to"
 }
 
 // runSSHAndStreamJSONL executes an SSH command and streams JSONL output.

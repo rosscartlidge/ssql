@@ -17,9 +17,10 @@ import (
 )
 
 func TestBuildRemoteSSQLScript_NoSink(t *testing.T) {
-	// Pipeline without an explicit sink — script should auto-append
-	// `to jsonl` so the wire format matches the baseline pushdown
-	// (schema header + lowercase JSONL).
+	// As of v4.41.2 the script no longer auto-appends `to jsonl` —
+	// the typed assembler's JSONL fallback emits a schema header
+	// itself (and routes through ssql.WriteJSONLWithInferredSchemaToWriter
+	// for typed-shape outputs via an inline toRecord converter).
 	got := callBuildRemoteSSQLScript("/data/logs.csv", [][]string{
 		{"where", "-if", "status", "ge", "500"},
 		{"group-by", "service", "-count", "n"},
@@ -28,7 +29,6 @@ func TestBuildRemoteSSQLScript_NoSink(t *testing.T) {
 		"ssql from /data/logs.csv",
 		"| ssql where -if status ge 500",
 		"| ssql group-by service -count n",
-		"| ssql to jsonl",
 		"",
 	}, "\n")
 	if got != want {
@@ -37,17 +37,17 @@ func TestBuildRemoteSSQLScript_NoSink(t *testing.T) {
 }
 
 func TestBuildRemoteSSQLScript_ExplicitSink(t *testing.T) {
-	// User specified `to csv` as the last stage — script should NOT
-	// auto-append `to jsonl`.
+	// User specified `to csv` as the last stage — appears verbatim.
 	got := callBuildRemoteSSQLScript("/data/logs.csv", [][]string{
 		{"where", "-if", "status", "ge", "500"},
 		{"to", "csv"},
 	})
-	if strings.Contains(got, "to jsonl") {
-		t.Errorf("explicit `to csv` sink should suppress auto-append; got:\n%s", got)
-	}
 	if !strings.Contains(got, "| ssql to csv") {
 		t.Errorf("user's `to csv` should appear in script; got:\n%s", got)
+	}
+	// Sanity: no synthetic stages appended.
+	if strings.Contains(got, "to jsonl") {
+		t.Errorf("script should not contain auto-appended `to jsonl`; got:\n%s", got)
 	}
 }
 
@@ -146,9 +146,6 @@ func callBuildRemoteSSQLScript(path string, groups [][]string) string {
 			sb.WriteString(shQuote(arg))
 		}
 		sb.WriteString("\n")
-	}
-	if !(len(groups) > 0 && len(groups[len(groups)-1]) > 0 && groups[len(groups)-1][0] == "to") {
-		sb.WriteString("| ssql to jsonl\n")
 	}
 	return sb.String()
 }

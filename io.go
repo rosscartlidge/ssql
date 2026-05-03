@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1029,6 +1030,112 @@ func WriteJSON(sb iter.Seq[Record], filename string) error {
 // ============================================================================
 // FAST JSON ENCODING (AVOIDS REFLECTION)
 // ============================================================================
+
+// WriteJSONLWithInferredSchemaToWriter writes records as JSONL prefixed
+// with a `{"_schema":{"fields":[...],"types":{...}}}` header inferred
+// from the first record. Field order is alphabetical (deterministic).
+//
+// Wire format matches the standard ssql CLI output (the same header
+// the multi-process pipeline produces between stages), so consumers
+// reading the result can use the schema to preserve types.
+//
+// Used by `ssql generate go` as the JSONL fallback sink when a typed-
+// mode pipeline has no explicit `to ...` stage. Particularly important
+// for `ssql from ssh -remote`, where the local side reads the remote
+// program's stdout and benefits from the schema header arriving from
+// the remote rather than being inferred locally (which adds a spurious
+// `_line_number` column).
+//
+// Empty input → no header is written (consistent with the rest of the
+// JSONL writers). Errors mid-stream are returned immediately.
+func WriteJSONLWithInferredSchemaToWriter(sb iter.Seq[Record], writer io.Writer) error {
+	next, stop := iter.Pull(sb)
+	defer stop()
+
+	first, ok := next()
+	if !ok {
+		return nil
+	}
+
+	// Build alphabetical field list + types map from the first record.
+	fields := make([]string, 0, 16)
+	for k := range first.All() {
+		fields = append(fields, k)
+	}
+	sort.Strings(fields)
+	types := make(map[string]string, len(fields))
+	for _, f := range fields {
+		v, _ := Get[any](first, f)
+		types[f] = inferJSONType(v)
+	}
+
+	// Emit the schema header. Using encoding/json directly keeps the
+	// ssql package free of cross-package dependencies on cmd/ssql/lib.
+	header := struct {
+		Schema struct {
+			Fields []string          `json:"fields"`
+			Types  map[string]string `json:"types"`
+		} `json:"_schema"`
+	}{}
+	header.Schema.Fields = fields
+	header.Schema.Types = types
+	hdr, err := json.Marshal(&header)
+	if err != nil {
+		return fmt.Errorf("marshaling _schema header: %w", err)
+	}
+	hdr = append(hdr, '\n')
+	if _, err := writer.Write(hdr); err != nil {
+		return err
+	}
+
+	// Write the first record, then the rest, using the same fast
+	// encoding path WriteJSONFastToWriter uses.
+	bufPtr := jsonBufferPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer func() {
+		*bufPtr = buf[:0]
+		jsonBufferPool.Put(bufPtr)
+	}()
+	writeOne := func(r Record) error {
+		buf = buf[:0]
+		buf = r.AppendJSON(buf)
+		buf = append(buf, '\n')
+		_, err := writer.Write(buf)
+		return err
+	}
+	if err := writeOne(first); err != nil {
+		return err
+	}
+	for {
+		r, ok := next()
+		if !ok {
+			return nil
+		}
+		if err := writeOne(r); err != nil {
+			return err
+		}
+	}
+}
+
+// inferJSONType returns the schema type string for an interface value.
+// Types match the existing CLI _schema header format ("string", "int",
+// "float", "bool", "json"). Unknown types fall back to "string".
+func inferJSONType(v any) string {
+	switch v.(type) {
+	case int64, int, int32:
+		return "int"
+	case float64, float32:
+		return "float"
+	case bool:
+		return "bool"
+	case string:
+		return "string"
+	case []any, Record, map[string]any:
+		return "json"
+	default:
+		return "string"
+	}
+}
 
 // WriteJSONFastToWriter writes records as JSONL using fast encoding (no reflection).
 // This is 2-5x faster than WriteJSONToWriter for typical workloads.
