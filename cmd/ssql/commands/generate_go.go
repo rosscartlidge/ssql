@@ -49,6 +49,19 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Default(false).
 		Help("With -optimise: print applied optimisation rules to stderr").
 		Done().
+		Flag("-script", "-s").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.ssql"}).
+		Global().
+		Default("").
+		Help("Read pipeline from a script file (or <(heredoc)) instead of stdin. Strips # comments, joins leading-| continuation lines.").
+		Done().
+		Flag("-mode").
+		String().
+		Global().
+		Default("").
+		Help("With -script: SSQLGO value for the script (record/typed/parallel). Default: typed.").
+		Done().
 		Flag("OUTPUT").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.go"}).
@@ -62,6 +75,8 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			var buildOut string
 			var optimise bool
 			var explain bool
+			var scriptPath string
+			var scriptMode string
 
 			if outVal, ok := ctx.GlobalFlags["OUTPUT"]; ok {
 				outputFile = outVal.(string)
@@ -77,6 +92,12 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			}
 			if v, ok := ctx.GlobalFlags["-explain"]; ok {
 				explain = v.(bool)
+			}
+			if v, ok := ctx.GlobalFlags["-script"]; ok {
+				scriptPath = v.(string)
+			}
+			if v, ok := ctx.GlobalFlags["-mode"]; ok {
+				scriptMode = v.(string)
 			}
 
 			// At most one of {-run, -build, OUTPUT} may be set — they
@@ -103,12 +124,28 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 				// when -optimise is set.
 				os.Setenv("SSQL_EXPLAIN_PLAN", "1")
 			}
-			if optimise {
-				return runOptimiseThenGo(os.Stdin, run, buildOut, outputFile, explain)
+
+			// Source of code fragments: stdin by default, or the
+			// output of running the .ssql script under bash with
+			// SSQLGO set. Both produce the same JSONL fragment
+			// stream for the assembler.
+			var fragmentSrc io.Reader = os.Stdin
+			if scriptPath != "" {
+				if scriptMode == "" {
+					scriptMode = "typed"
+				}
+				fragments, err := runScriptForFragments(scriptPath, scriptMode)
+				if err != nil {
+					return err
+				}
+				fragmentSrc = bytes.NewReader(fragments)
 			}
 
-			// Assemble code fragments from stdin
-			code, err := lib.AssembleCodeFragments(os.Stdin)
+			if optimise {
+				return runOptimiseThenGo(fragmentSrc, run, buildOut, outputFile, explain)
+			}
+
+			code, err := lib.AssembleCodeFragments(fragmentSrc)
 			if err != nil {
 				return fmt.Errorf("assembling code fragments: %w", err)
 			}
@@ -370,4 +407,100 @@ require github.com/rosscartlidge/ssql/v4 v%s
 	}
 
 	return dir, outPath, nil
+}
+
+// runScriptForFragments reads a .ssql pipeline script, preprocesses
+// it (strip comments, trim whitespace, join leading-| continuation
+// lines), and execs it under bash with SSQLGO set to mode. Returns
+// the JSONL fragment stream the script's commands emit — same format
+// the assembler expects from stdin.
+//
+// Bash is required (uses pipes and process substitution) — if we
+// ever need to run on a host without bash this will need a fallback.
+func runScriptForFragments(scriptPath, mode string) ([]byte, error) {
+	src, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return nil, fmt.Errorf("ssql generate go -script: %w", err)
+	}
+	pipeline := preprocessScript(string(src))
+	if pipeline == "" {
+		return nil, fmt.Errorf("ssql generate go -script: %s contains no pipeline", scriptPath)
+	}
+
+	cmd := exec.Command("bash", "-c", pipeline)
+	cmd.Env = append(os.Environ(), "SSQLGO="+mode)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("ssql generate go -script: pipeline failed (mode=%s): %w", mode, err)
+	}
+	return out, nil
+}
+
+// preprocessScript turns a .ssql script (multi-line, comment-allowed,
+// either trailing-| or leading-| continuation) into a single bash
+// pipeline command line. Steps:
+//  1. Strip "# comment" — to-end-of-line, only outside quoted strings
+//     so tokens like `where -if-expr 'tag == "#urgent"'` survive.
+//  2. Trim per-line whitespace and drop empty lines.
+//  3. Join leading-| continuation lines onto the previous line so
+//     bash sees a single pipeline (bash natively allows trailing-|
+//     continuation but not leading-|).
+func preprocessScript(src string) string {
+	var lines []string
+	for _, raw := range strings.Split(src, "\n") {
+		line := stripCommentRespectingQuotes(raw)
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	// Join leading-| continuation onto the previous line.
+	var joined []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "|") && len(joined) > 0 {
+			joined[len(joined)-1] = joined[len(joined)-1] + " " + line
+		} else {
+			joined = append(joined, line)
+		}
+	}
+	return strings.Join(joined, " ")
+}
+
+// stripCommentRespectingQuotes returns the prefix of line up to the
+// first '#' that's not inside a single- or double-quoted string.
+// Backslash-escapes inside double quotes consume the next character
+// (so `"\""` doesn't terminate). Single quotes are literal — no
+// escapes (matches bash semantics).
+func stripCommentRespectingQuotes(line string) string {
+	var sb strings.Builder
+	var quote rune // 0, '\'', or '"'
+	runes := []rune(line)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if quote == '"' && r == '\\' && i+1 < len(runes) {
+			sb.WriteRune(r)
+			sb.WriteRune(runes[i+1])
+			i++
+			continue
+		}
+		if quote != 0 {
+			sb.WriteRune(r)
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		if r == '"' || r == '\'' {
+			quote = r
+			sb.WriteRune(r)
+			continue
+		}
+		if r == '#' {
+			break
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
 }

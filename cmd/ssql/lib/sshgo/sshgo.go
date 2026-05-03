@@ -1,0 +1,197 @@
+// Package sshgo runs ssql pipelines on remote hosts via SSH.
+//
+// The execution model: ship a .ssql script (a few hundred bytes)
+// to /tmp on the remote, exec `ssql generate go -script PATH -run`
+// over SSH, stream stdout back. The remote's existing ssql binary
+// does the typed-parallel codegen + go-run; the local pipeline
+// receives the (typically much smaller) result.
+//
+// Prerequisites: ssql is installed on the remote (same requirement
+// as `--` pushdown). When the remote doesn't have ssql, callers
+// fall back to the existing SSH-streams-bytes path.
+//
+// See doc/research/remote-go-execution-proposal.md.
+package sshgo
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// HostCaps records what we know about a remote host's ssql install.
+type HostCaps struct {
+	// HasSSQL is true when the probe found an `ssql` binary on the
+	// remote that responded to `ssql version`.
+	HasSSQL bool
+
+	// SSQLVer is the version string the remote ssql reported,
+	// e.g. "v4.40.0". Empty when HasSSQL is false.
+	SSQLVer string
+
+	// ProbedAt is the timestamp of the most recent probe.
+	ProbedAt time.Time
+}
+
+// String returns a human-readable summary, used in stderr notes.
+func (c HostCaps) String() string {
+	if c.HasSSQL {
+		return fmt.Sprintf("ssql %s installed", c.SSQLVer)
+	}
+	return "no ssql installed"
+}
+
+// Probe runs `ssql version` on the remote and returns what it
+// found. Network failure (ssh times out, host unreachable) is
+// returned as an error; "ssh succeeded but ssql isn't there" is
+// returned as HostCaps{HasSSQL: false} with no error.
+//
+// No caching at this layer — the higher-level CLI plumbing decides
+// when to refresh. Probe is fast (~50 ms over a warm SSH connection).
+func Probe(host string) (HostCaps, error) {
+	if host == "" {
+		return HostCaps{}, errors.New("sshgo.Probe: empty host")
+	}
+	// 2>/dev/null swallows "command not found" so we can detect "no
+	// ssql" by an empty stdout rather than parsing stderr.
+	cmd := exec.Command("ssh",
+		"-o", "ConnectTimeout=5",
+		"-o", "BatchMode=yes",
+		host,
+		"ssql version 2>/dev/null || true")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return HostCaps{}, fmt.Errorf("sshgo.Probe %s: ssh failed: %w (%s)",
+			host, err, strings.TrimSpace(stderr.String()))
+	}
+	out := strings.TrimSpace(stdout.String())
+	if out == "" {
+		// ssh succeeded but `ssql version` produced no output —
+		// remote either has no ssql, or has one but doesn't accept
+		// `version`. Treat as "no ssql" — the caller falls back to
+		// the existing SSH-streams-bytes path.
+		return HostCaps{HasSSQL: false, ProbedAt: time.Now()}, nil
+	}
+	// `ssql version` prints something like:
+	//   ssql v4.40.0 (build: 17eb3325, gpu: no)
+	// We pull out the "vX.Y.Z" token. If the format is unrecognised
+	// we still report HasSSQL=true with whatever the remote said —
+	// callers can compare against required versions.
+	ver := parseVersion(out)
+	return HostCaps{
+		HasSSQL:  true,
+		SSQLVer:  ver,
+		ProbedAt: time.Now(),
+	}, nil
+}
+
+// parseVersion extracts a "vX.Y.Z" token from `ssql version` output.
+// Returns the raw input string if no token matches — better to
+// surface something than to drop the data on the floor.
+func parseVersion(s string) string {
+	for tok := range strings.FieldsSeq(s) {
+		if len(tok) > 1 && tok[0] == 'v' && (tok[1] >= '0' && tok[1] <= '9') {
+			// strip trailing punctuation in case the version is
+			// followed by a comma or paren in a future format.
+			return strings.TrimRight(tok, ",;)(")
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
+// RunRemote ships the .ssql script content to a temp file on host,
+// runs `ssql generate go -script PATH -run`, streams stdout to w.
+// stderr from the remote is forwarded to os.Stderr (prefixed with
+// "host: " so multi-host catalog runs are legible).
+//
+// The script content is sent via stdin to a remote `cat > /tmp/...`
+// rather than scp — saves a separate connection setup and works
+// the same way over the existing batch-mode SSH connection.
+func RunRemote(host string, scriptBytes []byte, w io.Writer) error {
+	if host == "" {
+		return errors.New("sshgo.RunRemote: empty host")
+	}
+	if len(scriptBytes) == 0 {
+		return errors.New("sshgo.RunRemote: empty script")
+	}
+
+	// Generate a unique remote path. PID + nanos is good enough —
+	// the script is ephemeral and self-cleaning via `; rm -f`.
+	remotePath := fmt.Sprintf("/tmp/ssql-remote-%d-%d.ssql",
+		os.Getpid(), time.Now().UnixNano())
+
+	// Single SSH session, two phases via shell &&:
+	//   1. cat > $remotePath           (we feed the script via stdin)
+	//   2. ssql generate go -script $remotePath -run
+	//   3. rm -f $remotePath           (always; via trap-on-EXIT)
+	//
+	// Quoting: remotePath is generated locally and contains no
+	// shell metacharacters — safe to interpolate. The script
+	// bytes go via stdin so they're never quoted.
+	remoteCmd := fmt.Sprintf(
+		`trap 'rm -f %[1]s' EXIT; cat > %[1]s && ssql generate go -script %[1]s -run`,
+		remotePath)
+
+	cmd := exec.Command("ssh",
+		"-o", "BatchMode=yes",
+		host,
+		remoteCmd)
+	cmd.Stdin = bytes.NewReader(scriptBytes)
+	cmd.Stdout = w
+	// Prefix the remote's stderr with "host: " so multi-host
+	// catalog output is legible.
+	cmd.Stderr = &prefixWriter{prefix: host + ": ", w: os.Stderr}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("sshgo.RunRemote %s: %w", host, err)
+	}
+	return nil
+}
+
+// prefixWriter wraps an io.Writer and inserts a fixed prefix at
+// the start of each line (and at the very beginning). Used to
+// disambiguate stderr from multiple remote hosts in catalog runs.
+//
+// State machine: `started` is false until the first byte is
+// written; `bol` is true at the start of every new line (after
+// '\n'). Both states require a prefix on the next non-empty write.
+type prefixWriter struct {
+	prefix  string
+	w       io.Writer
+	started bool // true once we've written anything
+	bol     bool // true after a '\n' has just been emitted
+}
+
+func (p *prefixWriter) Write(b []byte) (int, error) {
+	written := 0
+	for len(b) > 0 {
+		if !p.started || p.bol {
+			if _, err := io.WriteString(p.w, p.prefix); err != nil {
+				return written, err
+			}
+			p.started = true
+			p.bol = false
+		}
+		nl := bytes.IndexByte(b, '\n')
+		if nl < 0 {
+			n, err := p.w.Write(b)
+			written += n
+			return written, err
+		}
+		n, err := p.w.Write(b[:nl+1])
+		written += n
+		if err != nil {
+			return written, err
+		}
+		b = b[nl+1:]
+		p.bol = true
+	}
+	return written, nil
+}

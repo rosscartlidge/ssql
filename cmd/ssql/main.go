@@ -98,6 +98,16 @@ func buildRootCommand() *cf.Command {
 }
 
 func main() {
+	// Intercept -shell-helpers before autocli sees it. Same pattern
+	// as -completion-script (handled by autocli internally), but the
+	// helper-functions output isn't autocli's concern. Users source
+	// it with `eval "$(ssql -shell-helpers)"` in ~/.bashrc.
+	for _, a := range os.Args[1:] {
+		if a == "-shell-helpers" || a == "--shell-helpers" {
+			fmt.Print(commands.ShellHelpersScript)
+			return
+		}
+	}
 	cmd := buildRootCommand()
 	if err := cmd.Execute(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
