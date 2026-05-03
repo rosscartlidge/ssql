@@ -139,3 +139,54 @@ func TestScriptFlag_HeredocViaStdin(t *testing.T) {
 	// case above, just via a real file.
 	t.Skip("process substitution covered indirectly by TestScriptFlag_LeadingPipe")
 }
+
+func TestScriptFlag_FailsLoudlyOnTypo(t *testing.T) {
+	// User wrote `sql from ...` (typo) instead of `ssql from ...`.
+	// Without `set -o pipefail`, bash returns the last stage's exit
+	// code (success), the empty stdin flowed through downstream
+	// stages, and the assembler produced uncompilable code with an
+	// undeclared `records` variable. With pipefail, any stage's
+	// non-zero exit fails the whole pipeline and we error out
+	// loudly. This test guards that.
+	dir := t.TempDir()
+	csv := filepath.Join(dir, "p.csv")
+	if err := os.WriteFile(csv, []byte("name,age\nAlice,30\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "p.ssql")
+	if err := os.WriteFile(script, []byte(
+		"sql from "+csv+" | ssql group-by name -count n | ssql to table\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	cmd := exec.Command(bin, "generate", "go", "-script", script, "-mode", "typed")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected non-zero exit when first stage was typo'd; got success:\n%s", out)
+	}
+	// Error should mention the pipeline failure (not silently emit
+	// uncompilable Go).
+	if !strings.Contains(string(out), "pipeline failed") {
+		t.Errorf("expected 'pipeline failed' in error message; got:\n%s", out)
+	}
+}
+
+func TestAssembler_NoInitFragment(t *testing.T) {
+	// Defence-in-depth: if somehow stmt/final fragments arrive on
+	// stdin without an init fragment (e.g. a different shell caused
+	// a silent upstream failure that pipefail wouldn't have caught),
+	// the record-mode assembler should refuse rather than producing
+	// code that references an undeclared `records` variable.
+	bin := buildSSQLForTypedTest(t)
+	// One synthetic stmt fragment with no init upstream.
+	cmd := exec.Command(bin, "generate", "go")
+	cmd.Stdin = strings.NewReader(
+		`{"type":"stmt","var":"x","input":"records","code":"x := ssql.Limit[ssql.Record](5)(records)"}` + "\n")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected non-zero exit with no-init-fragment input; got success:\n%s", out)
+	}
+	if !strings.Contains(string(out), "no source (init) fragment") {
+		t.Errorf("expected 'no source (init) fragment' in error; got:\n%s", out)
+	}
+}

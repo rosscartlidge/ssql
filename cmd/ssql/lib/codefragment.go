@@ -392,6 +392,20 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		}
 	}
 
+	// Defence in depth: a pipeline with no init fragment but with
+	// stmt/final fragments produces broken Go (references an
+	// undeclared `records` variable). Common cause: the user's
+	// pipeline failed silently — e.g. `sql from x.csv | ssql ...`
+	// (typo'd `sql` instead of `ssql`) where the upstream stage
+	// didn't emit anything, but downstream stages happily emitted
+	// fragments. With `set -o pipefail` in the script-exec path
+	// this is caught at the bash layer; this check covers the
+	// pipe-from-stdin case too.
+	if len(initFragments) == 0 && (len(stmtFragments) > 0 || len(finalFragments) > 0) {
+		return "", fmt.Errorf("assembler: pipeline has no source (init) fragment but produced %d stmt + %d final fragments — typically means an upstream `ssql from ...` stage failed silently. Check the pipeline for typos and shell errors.",
+			len(stmtFragments), len(finalFragments))
+	}
+
 	// Collect all params from all fragments and deduplicate flag names
 	allParams := collectParams(fragments)
 

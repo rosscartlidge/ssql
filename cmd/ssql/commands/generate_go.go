@@ -427,7 +427,14 @@ func runScriptForFragments(scriptPath, mode string) ([]byte, error) {
 		return nil, fmt.Errorf("ssql generate go -script: %s contains no pipeline", scriptPath)
 	}
 
-	cmd := exec.Command("bash", "-c", pipeline)
+	// `set -o pipefail` is essential: without it, a typo earlier in
+	// the pipeline (e.g. `sql from x.csv | ssql group-by ...`) goes
+	// silently and the failed stage's empty output flows downstream,
+	// producing fragment streams without an init fragment. The
+	// assembler then generates code referencing an undeclared
+	// `records` variable. With pipefail, any stage's non-zero exit
+	// fails the whole pipeline.
+	cmd := exec.Command("bash", "-c", "set -o pipefail; "+pipeline)
 	cmd.Env = append(os.Environ(), "SSQLGO="+mode)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
