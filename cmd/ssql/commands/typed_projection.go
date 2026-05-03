@@ -73,7 +73,21 @@ func emitTypedProjection(cmdName, typeSuffix, inputVar string, in *lib.TypedSche
 		outputVar = "excluded"
 	}
 
-	code := fmt.Sprintf(`%s := typed.Select(func(r %s) %s {
+	// Emit BOTH templates. typed.StreamSelect is the parallel form
+	// (Stream[T] → Stream[U] — embarrassingly parallel projection,
+	// per-shard); typed.Select is the iter.Seq alternative. The
+	// planner picks per pipeline via reach analysis.
+	parallelCode := fmt.Sprintf(`%s := typed.StreamSelect(%s, func(r %s) %s {
+		return %s{
+			%s,
+		}
+	})`,
+		outputVar, inputVar,
+		in.TypeName, derivedSchema.TypeName,
+		derivedSchema.TypeName,
+		strings.Join(assigns, ",\n\t\t\t"),
+	)
+	serialCode := fmt.Sprintf(`%s := typed.Select(func(r %s) %s {
 		return %s{
 			%s,
 		}
@@ -90,11 +104,15 @@ func emitTypedProjection(cmdName, typeSuffix, inputVar string, in *lib.TypedSche
 		imports = append(imports, "time")
 	}
 
-	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
+	frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = derivedSchema
 	frag.StructDefs = []string{structDef}
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
+	frag.IsStream = true
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
+	frag.AltCodeIfSeq = serialCode
+	frag.AltImportsIfSeq = imports
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 	return lib.WriteCodeFragment(frag)
 }
 

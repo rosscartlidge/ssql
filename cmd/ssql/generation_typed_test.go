@@ -251,8 +251,10 @@ func TestTypedIncludeProjection(t *testing.T) {
 	if !strings.Contains(src, "PeopleRowSubset") {
 		t.Errorf("expected projected struct PeopleRowSubset in source\n%s", src)
 	}
-	if !strings.Contains(src, "typed.Select(") {
-		t.Errorf("expected typed.Select call\n%s", src)
+	// Either typed.Select (serial) or typed.StreamSelect (parallel)
+	// — the planner picks per pipeline as of v4.40.
+	if !strings.Contains(src, "typed.Select(") && !strings.Contains(src, "typed.StreamSelect(") {
+		t.Errorf("expected typed.Select or typed.StreamSelect call\n%s", src)
 	}
 
 	out := goRunGenerated(t, src)

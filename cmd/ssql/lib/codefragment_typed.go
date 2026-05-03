@@ -332,15 +332,26 @@ func generateTypedSubprocessFunction(funcFrag *CodeFragment) string {
 		b.WriteString("\t" + f.Code + "\n")
 	}
 
-	// Return the last variable.
+	// Return the last variable. If the last fragment produces a
+	// Stream (e.g. a parallel-form include or where in the
+	// subprocess body), call .Serial() to fan in — the function
+	// signature is iter.Seq[T].
 	var lastVar string
+	var lastFrag *CodeFragment
 	if len(stmtFrags) > 0 {
-		lastVar = stmtFrags[len(stmtFrags)-1].Var
+		lastFrag = stmtFrags[len(stmtFrags)-1]
+		lastVar = lastFrag.Var
 	} else if len(initFrags) > 0 {
-		lastVar = initFrags[0].Var
+		lastFrag = initFrags[0]
+		lastVar = lastFrag.Var
 	}
 	if lastVar != "" {
-		fmt.Fprintf(&b, "\treturn %s\n", lastVar)
+		needsSerial := lastFrag != nil && lastFrag.Capabilities != nil && lastFrag.Capabilities.Produces == ShapeStream
+		if needsSerial {
+			fmt.Fprintf(&b, "\treturn %s.Serial()\n", lastVar)
+		} else {
+			fmt.Fprintf(&b, "\treturn %s\n", lastVar)
+		}
 	}
 	b.WriteString("}\n")
 	return b.String()

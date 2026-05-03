@@ -818,8 +818,13 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			}
 			distinctCode := fmt.Sprintf("grouped := typed.Distinct(func(r %s) %s { return r })(included)",
 				derived.TypeName, derived.TypeName)
+			// Empty Command on the second fragment: both fragments
+			// belong to the same source command (`ssql group-by FIELD`),
+			// and the assembler builds the pipeline-comment list from
+			// each fragment's Command — recording the same command
+			// twice would duplicate it in the output header.
 			distinctFrag := lib.NewStmtFragment("grouped", "included", distinctCode,
-				[]string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+				[]string{"github.com/rosscartlidge/ssql/v4/typed"}, "")
 			distinctFrag.InputTypedSchema = derived
 			distinctFrag.OutputTypedSchema = derived
 			distinctFrag.Capabilities = &lib.Capabilities{
