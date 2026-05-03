@@ -48,6 +48,13 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	// Boundary fragments are spliced into the fragment list before the
 	// renderer walks them, so the rest of the assembler logic doesn't
 	// need to know.
+	//
+	// Phase B pre-pass: Record-mode fragments (pivot, signal, etc.
+	// — anything emitted from a non-typed codegen path) have no
+	// OutputTypedSchema and no Capabilities. Tag them now so the
+	// planner sees the typed→Record transition and inserts a
+	// toRecord adapter upstream.
+	tagRecordModeFragments(fragments)
 	fragments = applyPlannerBoundaries(fragments)
 
 	// Subprocess function bodies (process substitution sources) are
@@ -99,23 +106,12 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 		return "", fmt.Errorf("typed assembler: no source fragment (need 'from FILE.csv' as the first stage)")
 	}
 
-	// Strict-mode check: every init/stmt fragment must carry typed
-	// schema info. If a fragment slipped through without it, that
-	// command does not yet support typed-mode emission. Surface a
-	// clear error rather than producing broken Go.
+	// Init sources must be typed (Phase B doesn't yet support
+	// Record-mode sources flowing into typed downstream — that's
+	// Phase C, the harder direction with explicit struct hints).
 	for _, f := range initFragments {
 		if f.OutputTypedSchema == nil {
-			return "", fmt.Errorf("ssql generate go -typed: init fragment from %q has no typed schema (command does not yet support typed mode)", f.Command)
-		}
-	}
-	for _, f := range stmtFragments {
-		if f.OutputTypedSchema == nil {
-			return "", fmt.Errorf("ssql generate go -typed: command %q does not yet support typed mode (Tier 2 or Tier 3); drop -typed or refactor the pipeline", f.Command)
-		}
-	}
-	for _, f := range finalFragments {
-		if f.InputTypedSchema == nil {
-			return "", fmt.Errorf("ssql generate go -typed: sink %q does not yet support typed mode", f.Command)
+			return "", fmt.Errorf("ssql generate go -typed: init fragment from %q has no typed schema (Record-mode sources are Phase C)", f.Command)
 		}
 	}
 
@@ -146,6 +142,16 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 					importSet[imp] = true
 				}
 			}
+		}
+		// Phase B: Record-mode fragments (pivot, signal, etc.)
+		// reference the ssql package but historically passed nil
+		// imports because the record-mode assembler hardcoded the
+		// import. The typed assembler doesn't, so add it whenever
+		// any fragment touches Record shape.
+		if frag.Capabilities != nil &&
+			(frag.Capabilities.Produces == ShapeSeqRecord ||
+				frag.Capabilities.Accepts == ShapeSeqRecord) {
+			importSet["github.com/rosscartlidge/ssql/v4"] = true
 		}
 	}
 	imports := make([]string, 0, len(importSet))
@@ -240,15 +246,25 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 			code.WriteString("\t" + frag.Code + "\n")
 		}
 	} else {
-		// No sink — emit JSONL fallback to stdout.
+		// No sink — emit JSONL fallback to stdout. If the
+		// last-stage shape is Record (mixed-mode pipeline ended on
+		// a Tier 3 command like pivot), use ssql.WriteJSONLToWriter;
+		// otherwise typed.WriteJSONLToWriter.
 		var outVar string
+		var lastFrag *CodeFragment
 		if len(stmtFragments) > 0 {
-			outVar = stmtFragments[len(stmtFragments)-1].Var
+			lastFrag = stmtFragments[len(stmtFragments)-1]
 		} else {
-			outVar = initFragments[0].Var
+			lastFrag = initFragments[0]
 		}
+		outVar = lastFrag.Var
+		isRecord := lastFrag.Capabilities != nil && lastFrag.Capabilities.Produces == ShapeSeqRecord
 		code.WriteString("\t// No sink in pipeline — emit JSONL to stdout\n")
-		fmt.Fprintf(&code, "\tif err := typed.WriteJSONLToWriter(%s, os.Stdout); err != nil {\n", outVar)
+		if isRecord {
+			fmt.Fprintf(&code, "\tif err := ssql.WriteJSONFastToWriter(%s, os.Stdout); err != nil {\n", outVar)
+		} else {
+			fmt.Fprintf(&code, "\tif err := typed.WriteJSONLToWriter(%s, os.Stdout); err != nil {\n", outVar)
+		}
 		code.WriteString("\t\tfmt.Fprintf(os.Stderr, \"write: %v\\n\", err)\n")
 		code.WriteString("\t\tos.Exit(1)\n")
 		code.WriteString("\t}\n")
@@ -472,46 +488,165 @@ func applyPlannerBoundaries(fragments []*CodeFragment) []*CodeFragment {
 		explainBoundaries(fragments, plan)
 	}
 
-	if len(plan.SerialBoundaryBefore) == 0 {
+	if len(plan.SerialBoundaryBefore) == 0 && len(plan.RecordBoundaryBefore) == 0 {
 		return fragments
 	}
-	out := make([]*CodeFragment, 0, len(fragments)+len(plan.SerialBoundaryBefore))
+	out := make([]*CodeFragment, 0, len(fragments)+len(plan.SerialBoundaryBefore)+len(plan.RecordBoundaryBefore))
 	for i, f := range fragments {
-		if plan.SerialBoundaryBefore[i] {
-			// The fragment at index i is SerialOnly and its upstream
-			// produces ShapeStream. Insert a Serial() boundary that
-			// reads from f.Input and produces a new var.
-			serialVar := f.Input + "Serial"
+		needsSerial := plan.SerialBoundaryBefore[i]
+		needsRecord := plan.RecordBoundaryBefore[i]
+		if !needsSerial && !needsRecord {
+			out = append(out, f)
+			continue
+		}
+
+		// Inputs to f get rewritten as we splice in adapters.
+		// upstreamVar tracks what the next adapter (or f itself)
+		// reads from; upstreamSchema follows it for the toRecord
+		// adapter's schema source.
+		upstreamVar := f.Input
+		upstreamSchema := f.InputTypedSchema
+
+		if needsSerial {
+			serialVar := upstreamVar + "Serial"
 			boundary := &CodeFragment{
 				Type:    "stmt",
 				Var:     serialVar,
-				Input:   f.Input,
-				Code:    serialVar + " := " + f.Input + ".Serial()",
+				Input:   upstreamVar,
+				Code:    serialVar + " := " + upstreamVar + ".Serial()",
 				Imports: []string{"github.com/rosscartlidge/ssql/v4/typed"},
 				// Carry the upstream's typed schema through.
-				InputTypedSchema:  f.InputTypedSchema,
-				OutputTypedSchema: f.InputTypedSchema,
+				InputTypedSchema:  upstreamSchema,
+				OutputTypedSchema: upstreamSchema,
 				Capabilities: &Capabilities{
 					Accepts:  ShapeStream,
 					Produces: ShapeSeqTyped,
 				},
 			}
 			out = append(out, boundary)
-			// Rewrite the SerialOnly fragment's code/input to consume
-			// the serialised var instead of the original Stream var.
-			// Word-boundary regex so we don't mangle identifiers
-			// that contain the input name as a substring (e.g. if
-			// the input is "records" we mustn't replace inside
-			// "recordsSerial" itself).
-			rewritten := *f
-			rewritten.Code = replaceIdentifier(f.Code, f.Input, serialVar)
-			rewritten.Input = serialVar
-			out = append(out, &rewritten)
-			continue
+			upstreamVar = serialVar
 		}
-		out = append(out, f)
+
+		if needsRecord {
+			// Phase B: typed→Record adapter. Build a stmt that
+			// converts the typed iter.Seq[T] into iter.Seq[ssql.Record]
+			// using ssql.NewRecordFromSchema with a once-built schema.
+			if upstreamSchema == nil {
+				// Should never happen — planner only inserts a Record
+				// boundary when upstream is typed. Defensive: skip.
+				out = append(out, f)
+				continue
+			}
+			recordVar := upstreamVar + "AsRecord"
+			boundary := buildToRecordBoundary(recordVar, upstreamVar, upstreamSchema)
+			out = append(out, boundary)
+			upstreamVar = recordVar
+		}
+
+		// Rewrite f's Code/Input to consume the new upstream variable.
+		// Word-boundary regex so we don't mangle identifiers that
+		// contain the input name as a substring.
+		rewritten := *f
+		if f.Input != "" {
+			rewritten.Code = replaceIdentifier(f.Code, f.Input, upstreamVar)
+		}
+		rewritten.Input = upstreamVar
+		out = append(out, &rewritten)
 	}
 	return out
+}
+
+// tagRecordModeFragments walks the fragment list before planning
+// and gives each Record-mode fragment (no typed schema, no
+// Capabilities) the {Accepts: SeqRecord, Produces: SeqRecord}
+// declaration so the planner sees the typed→Record transition
+// and can insert the toRecord adapter upstream. Sinks get
+// Produces: ShapeNone instead. Init fragments are NOT tagged —
+// Record-mode sources flowing into typed are Phase C.
+//
+// Also propagates the upstream's OutputTypedSchema onto each
+// Record fragment's InputTypedSchema field — buildToRecordBoundary
+// needs it to know which struct fields to convert.
+func tagRecordModeFragments(fragments []*CodeFragment) {
+	var lastTypedSchema *TypedSchema
+	for _, f := range fragments {
+		if f == nil {
+			continue
+		}
+		if f.Capabilities == nil {
+			switch f.Type {
+			case "stmt":
+				if f.OutputTypedSchema == nil {
+					f.Capabilities = &Capabilities{
+						Accepts:  ShapeSeqRecord,
+						Produces: ShapeSeqRecord,
+					}
+					if f.InputTypedSchema == nil {
+						f.InputTypedSchema = lastTypedSchema
+					}
+				}
+			case "final":
+				if f.InputTypedSchema == nil {
+					f.Capabilities = &Capabilities{
+						Accepts:  ShapeSeqRecord,
+						Produces: ShapeNone,
+					}
+					f.InputTypedSchema = lastTypedSchema
+				}
+			}
+		}
+		// Track the most recent typed-schema-producing fragment
+		// for the next Record-mode fragment to inherit.
+		if f.OutputTypedSchema != nil {
+			lastTypedSchema = f.OutputTypedSchema
+		}
+	}
+}
+
+// buildToRecordBoundary emits the typed→Record adapter fragment.
+// Produces an inline closure that builds an ssql.Schema once
+// (outside the per-row loop, per the schema-sharing rule) and
+// converts each typed struct value to an ssql.Record via
+// NewRecordFromSchema.
+func buildToRecordBoundary(outputVar, inputVar string, schema *TypedSchema) *CodeFragment {
+	// Build the schema's field-name list (input CSV names) and the
+	// matching value-extractor list (`v.GoName`), in declaration order.
+	fieldNames := make([]string, len(schema.Fields))
+	valueExtractors := make([]string, len(schema.Fields))
+	for i, f := range schema.Fields {
+		fieldNames[i] = fmt.Sprintf("%q", f.Name)
+		valueExtractors[i] = "v." + f.GoName
+	}
+	code := fmt.Sprintf(`%s := func() iter.Seq[ssql.Record] {
+		schema := ssql.NewSchema([]string{%s})
+		return func(yield func(ssql.Record) bool) {
+			for v := range %s {
+				r := ssql.NewRecordFromSchema(schema, []any{%s})
+				if !yield(r) {
+					return
+				}
+			}
+		}
+	}()`,
+		outputVar,
+		strings.Join(fieldNames, ", "),
+		inputVar,
+		strings.Join(valueExtractors, ", "),
+	)
+	return &CodeFragment{
+		Type:    "stmt",
+		Var:     outputVar,
+		Input:   inputVar,
+		Code:    code,
+		Imports: []string{"iter", "github.com/rosscartlidge/ssql/v4"},
+		// No upstream typed schema beyond this point — fragment
+		// produces Record-shaped data.
+		InputTypedSchema: schema,
+		Capabilities: &Capabilities{
+			Accepts:  ShapeSeqTyped,
+			Produces: ShapeSeqRecord,
+		},
+	}
 }
 
 // replaceIdentifier replaces all word-boundary occurrences of `old` in
@@ -584,12 +719,13 @@ func explainPlanInitial(fragments []*CodeFragment, plan Plan) {
 	}
 }
 
-// explainBoundaries prints which fragments got a Stream.Serial()
-// boundary inserted upstream. Called after the boundary detection
-// pass, so the output reflects the post-downgrade plan.
+// explainBoundaries prints which fragments got Stream.Serial() or
+// typed→Record boundaries inserted upstream. Called after the
+// boundary detection pass, so the output reflects the post-
+// downgrade plan.
 func explainBoundaries(fragments []*CodeFragment, plan Plan) {
-	if len(plan.SerialBoundaryBefore) == 0 {
-		fmt.Fprintln(os.Stderr, "[plan]   (no Stream.Serial() boundaries needed)")
+	if len(plan.SerialBoundaryBefore) == 0 && len(plan.RecordBoundaryBefore) == 0 {
+		fmt.Fprintln(os.Stderr, "[plan]   (no boundaries needed)")
 		return
 	}
 	for i := range plan.SerialBoundaryBefore {
@@ -598,7 +734,15 @@ func explainBoundaries(fragments []*CodeFragment, plan Plan) {
 		if f.Command != "" {
 			describe = f.Command
 		}
-		fmt.Fprintf(os.Stderr, "[plan]   inserted Stream.Serial() before %s (SerialOnly fragment with Stream upstream)\n", describe)
+		fmt.Fprintf(os.Stderr, "[plan]   inserted Stream.Serial() before %s (SerialOnly or Record fragment with Stream upstream)\n", describe)
+	}
+	for i := range plan.RecordBoundaryBefore {
+		f := fragments[i]
+		describe := f.Var
+		if f.Command != "" {
+			describe = f.Command
+		}
+		fmt.Fprintf(os.Stderr, "[plan]   inserted typed→Record adapter before %s (Record fragment with typed upstream)\n", describe)
 	}
 }
 

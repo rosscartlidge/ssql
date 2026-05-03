@@ -139,14 +139,11 @@ func generateIncludeCode(fields []string) error {
 		inputVar = "records"
 	}
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// include is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
 		// emitTypedProjection sets Capabilities.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'include' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		return emitTypedProjection("include", "Subset", inputVar, prevSchema, fields, false, nil)
 	}
 

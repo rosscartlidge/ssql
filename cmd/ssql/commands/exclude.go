@@ -124,14 +124,11 @@ func generateExcludeCode(fields []string) error {
 		inputVar = "records"
 	}
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// exclude is SerialOnly (typed.Select with derived struct) —
 		// planner inserts Stream.Serial() upstream automatically when
 		// input is a Stream. emitTypedProjection sets Capabilities.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'exclude' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		return emitTypedProjection("exclude", "Subset", inputVar, prevSchema, fields, true, nil)
 	}
 

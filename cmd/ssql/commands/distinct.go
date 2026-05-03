@@ -78,13 +78,10 @@ func generateDistinctCode() error {
 	}
 	outputVar := "distinct"
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// distinct is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'distinct' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		// All Tier-1/1.5 supported field types are Go-comparable
 		// (string/numeric/bool/time.Time/pointer), so we can dedup by
 		// the row value itself. Pointer fields compare by identity,

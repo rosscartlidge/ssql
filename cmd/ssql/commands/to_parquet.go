@@ -133,11 +133,9 @@ func generateToParquetCode(filename string, rowGroupSize int, compression string
 		{Name: "output", Default: filename, Help: "output Parquet file", VarName: "flagOutput"},
 	}
 	optsArg := fmt.Sprintf(", typed.WithRowGroupSize(%d), typed.WithCompression(%q)", rowGroupSize, compression)
-	if typedMode() {
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'to parquet' has no typed input; %s does not yet support typed mode (drop -typed for the upstream command, or pipe through it in record mode first)", lastNamedCommand(fragments)))
-		}
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	// to_parquet's record-mode path uses ssql.WriteParquet below.
+	if typedMode() && prevSchema != nil {
 		// Stream → call Stream.WriteParquet (per-shard one row group);
 		// iter.Seq[T] → call typed.WriteParquet (single row group of
 		// configured size).

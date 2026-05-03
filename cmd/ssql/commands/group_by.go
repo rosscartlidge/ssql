@@ -784,11 +784,9 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	// in parallel mode) with a synthesized aggregator and a derived
 	// result struct. Tier 2 limits: no -expr / -stream-expr (Tier 3),
 	// no -rollup / -cube, no -collect (deferred).
-	if typedMode() {
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'group-by' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream
+	// (ssql.GroupByFields / ssql.Aggregate path below handles it).
+	if typedMode() && prevSchema != nil {
 		if len(exprSpecs) > 0 || len(streamExprSpecs) > 0 {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: -expr / -stream-expr aggregations are Tier 3 (need expression-language → Go translation); drop -typed"))

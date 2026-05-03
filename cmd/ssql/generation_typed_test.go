@@ -189,19 +189,22 @@ func TestTypedUnsupportedCommandErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := buildSSQLForTypedTest(t)
-	// 'pivot' is still Tier 3 (deferred indefinitely per the
-	// roadmap), so a typed pipeline that includes it should error.
+	// 'pivot' under typed mode used to error; as of v4.40 (Phase B
+	// mixed mode) the planner inserts a typed→Record adapter
+	// upstream, so the pipeline now compiles and runs. Verify that.
 	cmd := exec.Command("bash", "-c",
-		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" pivot name age | "+bin+" to csv | "+bin+" generate go")
+		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" pivot -row name -col id -val age | "+bin+" to csv | "+bin+" generate go")
 	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected typed pipeline to fail, got output:\n%s", out)
+	if err != nil {
+		t.Fatalf("Phase B should let pivot work under typed mode, got error:\n%s\n--- output:\n%s", err, out)
 	}
-	if !strings.Contains(string(out), "does not yet support typed mode") {
-		t.Errorf("error message should mention typed-mode unsupported, got:\n%s", out)
+	src := string(out)
+	// The toRecord boundary should be present.
+	if !strings.Contains(src, "ssql.NewRecordFromSchema") {
+		t.Errorf("expected typed→Record adapter (ssql.NewRecordFromSchema) in source\n%s", src)
 	}
-	if !strings.Contains(string(out), "pivot") {
-		t.Errorf("error should name the offending command, got:\n%s", out)
+	if !strings.Contains(src, "ssql.Pivot") {
+		t.Errorf("expected ssql.Pivot call in source\n%s", src)
 	}
 }
 

@@ -94,11 +94,11 @@ func generateToCSVCode(filename string) error {
 	var imports []string
 	var params []lib.CodeParam
 
-	if typedMode() {
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'to csv' has no typed input; %s does not yet support typed mode (Tier 2 or Tier 3) — drop -typed or refactor the pipeline", lastNamedCommand(fragments)))
-		}
+	// Phase B mixed-mode: prevSchema==nil means the upstream is
+	// Record-shaped (a typed→Record boundary inserted by the
+	// planner, or a Tier 3 source). Fall through to the record-
+	// mode code below, which uses ssql.WriteCSV{,ToWriter}.
+	if typedMode() && prevSchema != nil {
 		// When the upstream fragment carries a Stream[T] (parallel
 		// mode + a Stream-producing op), emit the per-shard buffer
 		// sink directly — each shard formats into its own bytes.Buffer

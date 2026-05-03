@@ -131,15 +131,12 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 		inputVar = "records"
 	}
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// union is SerialOnly (Concat / Union of multiple sources;
 		// no parallel-merge variant yet) — planner inserts
 		// Stream.Serial() upstream automatically when input is a
 		// Stream. emitTypedUnion sets Capabilities.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'union' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		return emitTypedUnion(inputVar, prevSchema, additionalFiles, unionAll)
 	}
 

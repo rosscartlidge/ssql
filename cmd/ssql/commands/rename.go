@@ -133,14 +133,11 @@ func generateRenameCode(renames []struct{ oldField, newField string }) error {
 		inputVar = "records"
 	}
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// rename is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
 		// emitTypedProjection sets Capabilities.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'rename' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		// Convert to map old -> new for emitTypedProjection.
 		renameMap := make(map[string]string, len(renames))
 		for _, r := range renames {

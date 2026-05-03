@@ -73,11 +73,8 @@ func generateCountCode() error {
 		inputVar = "records"
 	}
 
-	if typedMode() {
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'count' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// Emit BOTH templates. The Stream form (records.SerialCount())
 		// drains shards concurrently with no fan-in channel; the serial
 		// form (typed.Count(records)) is a one-loop count over iter.Seq[T].

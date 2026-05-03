@@ -420,14 +420,11 @@ func generateUpdateCode(ctx *cf.Context) error {
 		inputVar = "records"
 	}
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// update is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
 		// emitTypedUpdate sets Capabilities.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'update' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		return emitTypedUpdate(ctx, inputVar, prevSchema)
 	}
 

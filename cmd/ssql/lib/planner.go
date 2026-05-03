@@ -38,6 +38,21 @@ type Plan struct {
 	//   - the upstream produces ShapeStream, and
 	//   - this fragment is SerialOnly (can't accept ShapeStream)
 	SerialBoundaryBefore map[int]bool
+
+	// RecordBoundaryBefore is the set of fragment indices that need
+	// a typed→Record adapter inserted immediately before them.
+	// These are fragments where:
+	//   - the upstream produces ShapeSeqTyped (or ShapeStream — in
+	//     which case both a Stream.Serial() AND a toRecord() get
+	//     inserted), and
+	//   - this fragment Accepts ShapeSeqRecord (it's a Record-mode
+	//     command that follows a typed segment)
+	//
+	// Phase B: lets typed→Record mixed pipelines work without the
+	// user having to drop the SSQLGO=typed env var — the parallel-
+	// CSV-parse and any typed-supported transforms still happen,
+	// then we fan in to Record at the boundary.
+	RecordBoundaryBefore map[int]bool
 }
 
 // MakePlan builds a Plan from the fragment list. Fragments without
@@ -46,6 +61,7 @@ type Plan struct {
 func MakePlan(fragments []*CodeFragment) Plan {
 	plan := Plan{
 		SerialBoundaryBefore: map[int]bool{},
+		RecordBoundaryBefore: map[int]bool{},
 	}
 
 	// Pass 1 — parallelism reach.
@@ -90,7 +106,19 @@ func MakePlan(fragments []*CodeFragment) Plan {
 			continue
 		}
 
-		if c.SerialOnly && currShape == ShapeStream {
+		// Phase B: typed→Record boundary. When this fragment
+		// requires Record input but the running shape isn't Record
+		// yet, mark it for a toRecord adapter upstream. If the
+		// upstream is Stream, it'll get a Serial() boundary first
+		// (next clause), then the Record boundary chains after —
+		// the renderer emits both adapters in sequence.
+		if c.Accepts == ShapeSeqRecord && currShape != ShapeSeqRecord && currShape != ShapeNone {
+			plan.RecordBoundaryBefore[i] = true
+			if currShape == ShapeStream {
+				plan.SerialBoundaryBefore[i] = true
+			}
+			currShape = ShapeSeqRecord
+		} else if c.SerialOnly && currShape == ShapeStream {
 			plan.SerialBoundaryBefore[i] = true
 			currShape = ShapeSeqTyped
 		}

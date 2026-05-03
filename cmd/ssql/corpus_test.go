@@ -96,6 +96,7 @@ func corpusData(t *testing.T) string {
 			"employees.csv": corpusEmployeesCSV,
 			"customers.csv": corpusCustomersCSV,
 			"orders.csv":    corpusOrdersCSV,
+			"sales.csv":     corpusSalesCSV,
 			"employees.tsv": strings.ReplaceAll(corpusEmployeesCSV, ",", "\t"),
 		}
 		for name, content := range files {
@@ -357,6 +358,17 @@ func TestPipelineCorpus(t *testing.T) {
 			Contains: []string{"7"},
 		},
 
+		// --- Phase B mixed-mode (typed → Record adapter) ------
+		{
+			// Pivot is Tier 3 (Record-only). Under typed mode the
+			// planner inserts a typed→Record boundary upstream and
+			// the rest of the pipeline runs on Records.
+			Name:     "mixed_pivot",
+			Pipeline: `{{.bin}} from {{.data}}/sales.csv | {{.bin}} pivot -row product -col region -val amount | {{.bin}} to csv`,
+			Contains: []string{"product", "Widget", "Gadget"},
+			SkipRecord: "pivot is record-mode by default; this case targets typed→Record boundary",
+		},
+
 		// --- Compound pipelines (the realistic shape) ---------
 		{
 			Name: "where_groupby_sort_limit",
@@ -412,4 +424,12 @@ const corpusOrdersCSV = `order_id,customer_id,product,amount,order_date
 2,1,Gadget,89.99,2024-01-18
 3,5,Doohickey,512.00,2024-02-01
 4,2,Widget,178.25,2024-02-10
+`
+
+const corpusSalesCSV = `product,region,amount
+Widget,US,100
+Widget,EU,150
+Gadget,US,200
+Gadget,EU,80
+Widget,US,50
 `

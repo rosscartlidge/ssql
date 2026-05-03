@@ -94,13 +94,10 @@ func generateOffsetCode(n int) error {
 		{Name: "offset", Default: fmt.Sprintf("%d", n), Help: "number of records to skip", VarName: "flagOffset", Type: "int"},
 	}
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// offset is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'offset' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		code := fmt.Sprintf("%s := typed.Skip[%s](*flagOffset)(%s)", outputVar, prevSchema.TypeName, inputVar)
 		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
 		frag.Params = params

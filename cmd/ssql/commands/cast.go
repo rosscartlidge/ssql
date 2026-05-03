@@ -244,13 +244,10 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 		inputVar = "records"
 	}
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// cast is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'cast' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		return emitTypedCast(inputVar, prevSchema, typeConversions)
 	}
 

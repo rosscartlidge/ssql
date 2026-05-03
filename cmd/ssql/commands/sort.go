@@ -147,14 +147,11 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 	}
 	outputVar := "sorted"
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// Sort is SerialOnly — the planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream. The serial
 		// codegen below always runs.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'sort' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		if len(orderBy) == 0 {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'sort' requires at least one field"))

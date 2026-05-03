@@ -251,7 +251,12 @@ func generateWhereCode(ctx *cf.Context) error {
 	}
 
 	// Typed-mode branch — emits typed.Where with direct field access.
-	if typedMode() {
+	// Two Phase B fall-throughs to record code below:
+	//   - prevSchema==nil (upstream is Record after a typed→Record
+	//     boundary)
+	//   - any clause uses -if-expr (expr-lang predicates remain
+	//     Record-only; the planner inserts the boundary upstream)
+	if typedMode() && prevSchema != nil && !whereHasExpr(ctx.Clauses) {
 		return generateWhereCodeTyped(ctx.Clauses, inputVar, prevSchema)
 	}
 
@@ -274,6 +279,21 @@ func generateWhereCode(ctx *cf.Context) error {
 
 	// Write to stdout
 	return lib.WriteCodeFragment(frag)
+}
+
+// whereHasExpr reports whether any -if-expr clause is present.
+// Used by Phase B to fall through to record-mode codegen when
+// expression-language predicates appear (typed mode doesn't yet
+// translate the expr language to Go).
+func whereHasExpr(clauses []cf.Clause) bool {
+	for _, clause := range clauses {
+		if exprs, ok := clause.Flags["-if-expr"]; ok && exprs != nil {
+			if list, ok := exprs.([]any); ok && len(list) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // generateWhereCodeTyped emits a typed.Where call against the input

@@ -128,14 +128,11 @@ func generateTopCode(n int, field string, asc bool) error {
 		{Name: "top", Default: fmt.Sprintf("%d", n), Help: "number of top records", VarName: "flagTop", Type: "int"},
 	}
 
-	if typedMode() {
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	if typedMode() && prevSchema != nil {
 		// top is SerialOnly (sort + limit composition) — planner
 		// inserts Stream.Serial() upstream automatically when input
 		// is a Stream.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'top' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		f, ok := lookupSchemaField(prevSchema, field)
 		if !ok {
 			return lib.WriteErrorAndExit(getCommandString(),

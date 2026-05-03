@@ -95,13 +95,12 @@ func generateLimitCode(n int) error {
 		{Name: "limit", Default: fmt.Sprintf("%d", n), Help: "maximum number of records", VarName: "flagLimit", Type: "int"},
 	}
 
-	if typedMode() {
+	// Phase B: when prevSchema==nil, the upstream is Record-mode
+	// (a typed→Record boundary inserted by the planner). Fall
+	// through to the ssql.Limit[ssql.Record] form below.
+	if typedMode() && prevSchema != nil {
 		// limit is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'limit' has no typed input; %s does not yet support typed mode", lastNamedCommand(fragments)))
-		}
 		code := fmt.Sprintf("%s := typed.Limit[%s](*flagLimit)(%s)", outputVar, prevSchema.TypeName, inputVar)
 		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
 		frag.Params = params

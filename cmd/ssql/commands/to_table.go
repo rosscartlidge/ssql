@@ -137,11 +137,9 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 		inputVar = "records"
 	}
 
-	if typedMode() {
-		if prevSchema == nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'to table' has no typed input; %s does not yet support typed mode (Tier 2 or Tier 3) — drop -typed or refactor the pipeline", lastNamedCommand(fragments)))
-		}
+	// Phase B fall-through: prevSchema==nil → Record-mode upstream
+	// (e.g. pivot/signal). Falls through to ssql.DisplayTable below.
+	if typedMode() && prevSchema != nil {
 		// Width-aligned table output. typed.WriteTableToWriter
 		// uses struct-tag info to right-align numeric/bool columns
 		// and left-align strings; the helper buffers all rows so it
