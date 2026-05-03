@@ -47,6 +47,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Parallel Processing](parallel-processing.md) — parallelism opportunities
 - [SSH Test Environment](ssh-test-environment.md) — test setup for SSH features
 - [Remote Go Execution](remote-go-execution-proposal.md) — ship generated Go to remote SSH hosts that have Go installed; unlocks the v4.40 typed-parallel speedups for distributed pipelines without copying source data
+- [Codegen Wrapper Proposal](codegen-wrapper-proposal.md) — `ssql -shell-helpers` + `ssql generate go -script PATH` to lower the bar from `(export SSQLGO=...; ...) | ssql generate go` to `ssqlgen 'pipeline'` or `-script <(heredoc)`
 
 ## CLI & Framework
 
