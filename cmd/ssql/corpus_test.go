@@ -329,6 +329,26 @@ func TestPipelineCorpus(t *testing.T) {
 			Contains: []string{"Engineering", "Sales", "Marketing"},
 		},
 
+		// --- Count sink --------------------------------------
+		{
+			Name:     "count_simple",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} count`,
+			// 7 rows in corpusEmployeesCSV
+			Contains: []string{"7"},
+		},
+		{
+			Name:     "count_after_where",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} where -if age gt 30 | {{.bin}} count`,
+			// Alice(35), Carol(42), David(31), Frank(45), Grace(33) → 5
+			Contains: []string{"5"},
+		},
+		{
+			Name:     "count_after_sort",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} sort name | {{.bin}} count`,
+			// All 7 rows after sort
+			Contains: []string{"7"},
+		},
+
 		// --- Compound pipelines (the realistic shape) ---------
 		{
 			Name: "where_groupby_sort_limit",

@@ -393,6 +393,70 @@ func applyPlannerBoundaries(fragments []*CodeFragment) []*CodeFragment {
 		plan = MakePlan(fragments)
 	}
 
+	// Phase 1b — per-fragment shape coercion. Walk fragments
+	// tracking the running output shape. When a fragment with an
+	// AltCodeIfSeq alternative receives input of a different shape
+	// than its declared Accepts (e.g. parallel-form `count` after
+	// a SerialOnly `sort` whose boundary turns the running shape
+	// into iter.Seq[T]), swap that fragment to its serial form.
+	// This complements the source-level downgrade in the previous
+	// step — that only fires when reach=0 across the whole pipeline,
+	// missing the case where some downstream fragment needs Stream
+	// but a SerialOnly op upstream forces iter.Seq locally.
+	anySwapped := false
+	currShape := ShapeNone
+	for _, f := range fragments {
+		if f == nil {
+			continue
+		}
+		c := f.Capabilities
+		if c == nil {
+			continue
+		}
+		if f.AltCodeIfSeq != "" && c.Accepts == ShapeStream && currShape == ShapeSeqTyped {
+			applySerialSourceAlternative(f)
+			anySwapped = true
+			if explain {
+				describe := f.Var
+				if f.Command != "" {
+					describe = f.Command
+				}
+				fmt.Fprintf(os.Stderr, "[plan] downgraded %s to serial alternative (upstream is iter.Seq[T])\n", describe)
+			}
+			c = f.Capabilities
+		}
+		// SerialOnly fragments will get an upstream Serial() boundary
+		// (handled in the next phase). The boundary's Produces is
+		// ShapeSeqTyped, so reflect that here.
+		if c.SerialOnly && currShape == ShapeStream {
+			currShape = ShapeSeqTyped
+		}
+		if c.Produces != ShapeNone {
+			currShape = c.Produces
+		}
+	}
+	plan = MakePlan(fragments)
+	// Phase 1b may have removed the last Stream consumer (e.g.
+	// `from | sort | count` — count's parallel form was the only
+	// Accepts=ShapeStream, swap removed it). Re-run the
+	// source-downgrade pass so reach=0 actually downgrades the
+	// source instead of leaving a gratuitous ReadCSVParallel.
+	if anySwapped && !plan.SourceParallel {
+		for _, f := range fragments {
+			if f != nil && f.AltCodeIfSeq != "" {
+				applySerialSourceAlternative(f)
+				if explain {
+					describe := f.Var
+					if f.Command != "" {
+						describe = f.Command
+					}
+					fmt.Fprintf(os.Stderr, "[plan] downgraded %s to serial alternative\n", describe)
+				}
+			}
+		}
+		plan = MakePlan(fragments)
+	}
+
 	if explain {
 		explainBoundaries(fragments, plan)
 	}

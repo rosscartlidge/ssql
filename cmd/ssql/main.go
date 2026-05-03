@@ -63,6 +63,7 @@ func buildRootCommand() *cf.Command {
 	cmd = commands.RegisterSort(cmd)
 	cmd = commands.RegisterTop(cmd)
 	cmd = commands.RegisterDistinct(cmd)
+	cmd = commands.RegisterCount(cmd)
 	cmd = commands.RegisterWhere(cmd)
 	cmd = commands.RegisterUpdate(cmd)
 	cmd = commands.RegisterCast(cmd)
