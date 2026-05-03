@@ -1355,7 +1355,7 @@ ssql from employees.csv | \
 
 ```bash
 # Optimize a naive pipeline
-(export SSQLGO=1; ssql from ssh node1 /data/events.csv \
+(export SSQLGO=record; ssql from ssh node1 /data/events.csv \
   | ssql where -if status ge 500 \
   | ssql group-by service -count cnt \
   | ssql sort -desc cnt | ssql limit 10 \
@@ -1380,7 +1380,7 @@ Use `-run` to execute the optimized pipeline directly:
 
 Chain with `generate go` to optimize *then* compile:
 ```bash
-(export SSQLGO=1; ssql from catalog shards.csv \
+(export SSQLGO=record; ssql from catalog shards.csv \
   | ssql where -if date ge 2025-02-01 -if status ge 500 \
   | ssql group-by service -count cnt \
   | ssql to table) | ssql generate ssql | ssql generate go
@@ -1403,7 +1403,7 @@ Chain with `generate go` to optimize *then* compile:
 `generate sql` converts an ssql pipeline into DuckDB-compatible SQL:
 
 ```bash
-(export SSQLGO=1; ssql from data.csv \
+(export SSQLGO=record; ssql from data.csv \
   | ssql where -if age gt 25 \
   | ssql group-by dept -sum salary total \
   | ssql to table) | ssql generate sql
@@ -1420,7 +1420,7 @@ Supported commands: `from`, `where`, `group-by`, `sort`, `limit`, `offset`, `top
 More examples:
 ```bash
 # Window functions → SQL OVER clauses
-(export SSQLGO=1; ssql from data.csv \
+(export SSQLGO=record; ssql from data.csv \
   | ssql window -row-number rn -partition dept -order salary -desc \
   | ssql to table) | ssql generate sql
 # → SELECT *, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn

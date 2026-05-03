@@ -923,7 +923,7 @@ sudo make install-gpu  # Copies libssqlgpu.so to /usr/local/lib
 
 **Step 2: Generate the code**
 ```bash
-SSQLGO=1 ssql from signal.csv | \
+SSQLGO=record ssql from signal.csv | \
   ssql fft -field value -rate 1000 | \
   ssql generate go > fft_program.go
 ```

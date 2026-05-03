@@ -328,13 +328,24 @@ func chainRecords(firstRecords iter.Seq[ssql.Record], additionalFiles []string) 
 // shouldGenerate checks if code generation is enabled via flag or environment variable
 // Returns true if:
 //   - The generate flag is explicitly set to true, OR
-//   - The SSQLGO environment variable is set to "1", "true", "typed", or "parallel"
+//   - The SSQLGO environment variable is set to a recognised value
+//
+// Recognised SSQLGO values:
+//   - "record" / "1" / "true" — Record-mode codegen (map[string]any rows).
+//     "record" is the modern name; "1"/"true" are backwards-compat aliases
+//     retained for older scripts.
+//   - "typed" — Typed/planner-driven codegen. Picks Stream[T] vs
+//     iter.Seq[T] per stage; falls back to Record at typed→Record
+//     boundaries (Phase B mixed mode).
+//   - "parallel" — silent alias of "typed", retained for backwards compat
+//     (collapsed into "typed" in v4.40 — see the planner).
 func shouldGenerate(flagValue bool) bool {
 	if flagValue {
 		return true
 	}
 	envValue := os.Getenv("SSQLGO")
-	return envValue == "1" || envValue == "true" || envValue == "typed" || envValue == "parallel"
+	return envValue == "record" || envValue == "1" || envValue == "true" ||
+		envValue == "typed" || envValue == "parallel"
 }
 
 // typedMode returns true when the pipeline is running under

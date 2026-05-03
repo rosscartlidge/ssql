@@ -484,7 +484,7 @@ ssql from sales.csv | \
 **Generate optimized Go code from expressions:**
 ```bash
 # Set environment variable for code generation
-export SSQLGO=1
+export SSQLGO=record
 
 # Build pipeline with expressions
 ssql from data.csv | \
@@ -524,7 +524,7 @@ go run program.go
 1. ✅ Use expressions for complex logic (vs. multiple commands)
 2. ✅ Pre-filter with simple `-if` before expensive expressions
 3. ✅ Use code generation for production workloads
-4. ✅ Profile with `SSQLGO=1` to generate optimized programs
+4. ✅ Profile with `SSQLGO=record` to generate optimized programs
 
 ## Examples by Use Case
 

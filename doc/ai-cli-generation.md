@@ -258,23 +258,23 @@ ssql from audio.csv | ssql spectrogram \
 
 **IMPORTANT:**
 1. Code generation pipelines end with `ssql generate go`, NOT with output commands (`to table`, `to json`, etc.)
-2. Use `export SSQLGO=1` (not just `SSQLGO=1`) so ALL commands in the pipeline see it
+2. Use `export SSQLGO=record` (not just `SSQLGO=record`) so ALL commands in the pipeline see it
 
 ```bash
 # Generate Go code from entire pipeline - MUST export for all pipeline stages
-export SSQLGO=1 && ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -count count | ssql generate go > program.go
+export SSQLGO=record && ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -count count | ssql generate go > program.go
 
 # Alternative: subshell with export
-(export SSQLGO=1; ssql from data.csv | ssql where -if age gt 25 | ssql generate go) > program.go
+(export SSQLGO=record; ssql from data.csv | ssql where -if age gt 25 | ssql generate go) > program.go
 
 # The generated program writes to stdout by default
 go run program.go
 
-# WRONG - SSQLGO=1 without export only affects first command!
-SSQLGO=1 ssql from data.csv | ssql where -if age gt 25 | ssql generate go   # NO - where doesn't see SSQLGO!
+# WRONG - SSQLGO=record without export only affects first command!
+SSQLGO=record ssql from data.csv | ssql where -if age gt 25 | ssql generate go   # NO - where doesn't see SSQLGO!
 
 # WRONG - don't put output commands before generate go
-export SSQLGO=1 && ssql from data.csv | ssql to table | ssql generate go   # NO!
+export SSQLGO=record && ssql from data.csv | ssql to table | ssql generate go   # NO!
 ```
 
 ---
@@ -452,7 +452,7 @@ ssql from data.csv \
 
 ```bash
 # Must export SSQLGO so all pipeline stages see it
-export SSQLGO=1 && \
+export SSQLGO=record && \
   ssql from sales.csv \
   | ssql where -if region eq "North" \
   | ssql group-by product -sum revenue total -count count \
@@ -498,7 +498,7 @@ Map natural language intent to ssql commands:
 | "FFT / frequency" | `ssql fft -field F -rate N` |
 | "spectrogram / STFT" | `ssql spectrogram -field F -window-size N -rate N` |
 | "smooth / convolve" | `ssql convolve -field F -kernel gaussian -size N` |
-| "generate Go code" | `export SSQLGO=1 && ... \| ssql generate go` |
+| "generate Go code" | `export SSQLGO=record && ... \| ssql generate go` |
 
 ---
 
@@ -513,7 +513,7 @@ Generated CLI pipelines should have:
 - Current join syntax (`-using`, `-on L R`, not old `-on FIELD`)
 - `+` separator for update clauses (not `;` or `&&`)
 - `-` separator for join clauses
-- `SSQLGO=1` for code generation pipelines
+- `SSQLGO=record` for code generation pipelines
 
 ---
 
