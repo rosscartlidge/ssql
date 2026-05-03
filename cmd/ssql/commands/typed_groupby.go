@@ -83,7 +83,13 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	// ---- aggregator type ----
 	aggTypeName := in.TypeName + "Aggregator"
 	aggResultName := aggTypeName + "Result"
-	aggDef, _, _ := buildTypedAggregator(aggTypeName, in, specs, groupSchemaFields, resultName, parallel)
+	// Always emit the parallel-flavoured aggregator (Add + Result +
+	// Merge). ParallelAggregator extends Aggregator, so the same
+	// struct satisfies both interfaces — that lets us emit ONE
+	// struct definition usable by both the parallel call site
+	// (typed.GroupByParallel + ParallelAggregator interface) and
+	// the serial alternative (typed.GroupBy + Aggregator interface).
+	aggDef, _, _ := buildTypedAggregator(aggTypeName, in, specs, groupSchemaFields, resultName, true)
 
 	// Assemble all three struct/type definitions.
 	defs := []string{aggDef}
@@ -93,21 +99,10 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	defs = append(defs, resultDef)
 
 	// ---- the typed.GroupBy / typed.GroupByParallel call itself ----
-	groupFn := "typed.GroupBy"
-	aggIface := "typed.Aggregator"
-	if presorted {
-		groupFn = "typed.GroupByOrdered"
-	}
-	if parallel {
-		groupFn = "typed.GroupByParallel"
-		aggIface = "typed.ParallelAggregator"
-	}
-
-	// The aggregator's Result() returns aggResultName; typed.GroupBy(Parallel)
-	// passes that to our build function. The build function then
-	// constructs the final group-output struct (resultName) from the
-	// key plus the aggregator result.
-	code := fmt.Sprintf(`grouped := %s(%s,
+	// Build both forms so the planner can swap to the serial
+	// alternative if no downstream consumes Stream input.
+	makeGroupByCode := func(groupFn, aggIface string) string {
+		return fmt.Sprintf(`grouped := %s(%s,
 		func(r %s) %s { return %s },
 		func() %s[%s, %s] { return &%s{} },
 		func(k %s, agg %s) %s {
@@ -115,41 +110,52 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 				%s,
 			}
 		})`,
-		groupFn, inputVar,
-		in.TypeName, keyType, keyExpr,
-		aggIface, in.TypeName, aggResultName, aggTypeName,
-		keyType, aggResultName, resultName,
-		resultName,
-		buildResultCtor(groupSchemaFields, specs, aggResultName),
-	)
+			groupFn, inputVar,
+			in.TypeName, keyType, keyExpr,
+			aggIface, in.TypeName, aggResultName, aggTypeName,
+			keyType, aggResultName, resultName,
+			resultName,
+			buildResultCtor(groupSchemaFields, specs, aggResultName),
+		)
+	}
 
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	if schemaUsesTime(resultSchema) || schemaUsesTime(in) {
 		imports = append(imports, "time")
 	}
 
-	frag := lib.NewStmtFragment("grouped", inputVar, code, imports, getCommandString())
+	// -presorted: GroupByOrdered requires contiguous keys → SerialOnly,
+	// no parallel form. Single-template emission.
+	if presorted {
+		code := makeGroupByCode("typed.GroupByOrdered", "typed.Aggregator")
+		frag := lib.NewStmtFragment("grouped", inputVar, code, imports, getCommandString())
+		frag.InputTypedSchema = in
+		frag.OutputTypedSchema = resultSchema
+		frag.StructDefs = defs
+		frag.Capabilities = &lib.Capabilities{
+			Accepts:    lib.ShapeSeqTyped,
+			Produces:   lib.ShapeSeqTyped,
+			SerialOnly: true,
+		}
+		return lib.WriteCodeFragment(frag)
+	}
+
+	// Non-presorted: emit both templates. Default is
+	// typed.GroupByParallel (Stream[T] → iter.Seq[O], fans in after
+	// Combine); planner swaps to typed.GroupBy when source is
+	// downgraded.
+	parallelCode := makeGroupByCode("typed.GroupByParallel", "typed.ParallelAggregator")
+	serialCode := makeGroupByCode("typed.GroupBy", "typed.Aggregator")
+
+	frag := lib.NewStmtFragment("grouped", inputVar, parallelCode, imports, getCommandString())
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = resultSchema
 	frag.StructDefs = defs
-	// Capabilities for the planner. Three sub-cases:
-	//   - parallel (typed.GroupByParallel): accepts Stream[T],
-	//     produces iter.Seq[O] (the parallel runtime fans-in
-	//     after Combine).
-	//   - serial unordered (typed.GroupBy): accepts iter.Seq[T],
-	//     produces iter.Seq[O].
-	//   - serial presorted (typed.GroupByOrdered): SerialOnly,
-	//     accepts iter.Seq[T], produces iter.Seq[O].
-	caps := &lib.Capabilities{Produces: lib.ShapeSeqTyped}
-	if parallel {
-		caps.Accepts = lib.ShapeStream
-	} else {
-		caps.Accepts = lib.ShapeSeqTyped
-		if presorted {
-			caps.SerialOnly = true
-		}
-	}
-	frag.Capabilities = caps
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped}
+	frag.AltCodeIfSeq = serialCode
+	frag.AltImportsIfSeq = imports
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
+	_ = parallel // intentionally unused — the planner picks now
 	return lib.WriteCodeFragment(frag)
 }
 

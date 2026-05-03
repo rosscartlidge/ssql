@@ -187,34 +187,21 @@ func generateFromTSVCodeTyped(filename string) error {
 		imports = append(imports, "time")
 	}
 
-	if parallelMode() {
-		// Parallel default; planner can downgrade to serial when
-		// no downstream needs Stream input.
-		parallelCode := fmt.Sprintf(`records := typed.ReadDelimParallel[%s](*flagInput, runtime.GOMAXPROCS(0)%s)`, schema.TypeName, delimArg)
-		parallelImports := append(append([]string{}, imports...), "runtime")
-		serialCode := fmt.Sprintf(`records := typed.ReadDelim[%s](*flagInput%s)`, schema.TypeName, delimArg)
-		serialImports := append([]string{}, imports...)
+	// Always emit BOTH templates; planner picks per pipeline.
+	parallelCode := fmt.Sprintf(`records := typed.ReadDelimParallel[%s](*flagInput, runtime.GOMAXPROCS(0)%s)`, schema.TypeName, delimArg)
+	parallelImports := append(append([]string{}, imports...), "runtime")
+	serialCode := fmt.Sprintf(`records := typed.ReadDelim[%s](*flagInput%s)`, schema.TypeName, delimArg)
+	serialImports := append([]string{}, imports...)
 
-		frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
-		frag.Params = params
-		frag.OutputTypedSchema = schema
-		frag.StructDefs = []string{structDef}
-		frag.IsStream = true
-		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeStream}
-		frag.AltCodeIfSeq = serialCode
-		frag.AltImportsIfSeq = serialImports
-		frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeSeqTyped}
-		return lib.WriteCodeFragment(frag)
-	}
-
-	// SSQLGO=typed (serial)
-	code := fmt.Sprintf(`records := typed.ReadDelim[%s](*flagInput%s)`, schema.TypeName, delimArg)
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}
-	frag.IsStream = false
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeSeqTyped}
+	frag.IsStream = true
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeStream}
+	frag.AltCodeIfSeq = serialCode
+	frag.AltImportsIfSeq = serialImports
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeSeqTyped}
 	return lib.WriteCodeFragment(frag)
 }
 

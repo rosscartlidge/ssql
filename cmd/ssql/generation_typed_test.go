@@ -82,12 +82,16 @@ func TestTypedFromToCSV(t *testing.T) {
 	src := runTypedPipeline(t, bin, bin+" from "+emp+" | "+bin+" to csv")
 
 	// Generated source must reference the typed package and an inferred type.
+	// As of v4.40 SSQLGO=typed defaults to dual templates, so the source
+	// can be either typed.ReadCSV (serial) or typed.ReadCSVParallel — and
+	// the writer can be either typed.WriteCSVToWriter (serial) or the
+	// per-shard buffer-dump form `records.WriteCSVToWriter`. Accept either.
 	for _, want := range []string{
 		"github.com/rosscartlidge/ssql/v4/typed",
 		"PeopleRow struct",
 		`Name`, `string`, `Age`, `int64`,
-		"typed.ReadCSV[PeopleRow]",
-		"typed.WriteCSVToWriter",
+		"typed.ReadCSV", // matches both ReadCSV and ReadCSVParallel
+		"WriteCSVToWriter",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("generated source missing %q\nsource:\n%s", want, src)
@@ -113,13 +117,15 @@ func TestTypedFromWhereToCSV(t *testing.T) {
 	src := runTypedPipeline(t, bin,
 		bin+" from "+emp+" | "+bin+" where -if age ge 30 | "+bin+" to csv")
 
-	for _, want := range []string{
-		"typed.Where(func(r PeopleRow) bool",
-		"r.Age >= 30",
-	} {
-		if !strings.Contains(src, want) {
-			t.Errorf("generated source missing %q\nsource:\n%s", want, src)
-		}
+	// SSQLGO=typed now defaults to dual templates — the planner
+	// picks Stream.Where (parallel form) or typed.Where (serial)
+	// per pipeline. Accept either form; the predicate body is
+	// identical across modes.
+	if !strings.Contains(src, ".Where(func(r PeopleRow) bool") {
+		t.Errorf("generated source missing `.Where(func(r PeopleRow) bool`\nsource:\n%s", src)
+	}
+	if !strings.Contains(src, "r.Age >= 30") {
+		t.Errorf("generated source missing %q\nsource:\n%s", "r.Age >= 30", src)
 	}
 
 	out := goRunGenerated(t, src)
@@ -145,11 +151,16 @@ func TestTypedFromWhereJoinToCSV(t *testing.T) {
 	src := runTypedPipeline(t, bin,
 		bin+" from "+emp+" | "+bin+" where -if years ge 5 | "+bin+" join "+dept+" -using dept_id | "+bin+" to csv")
 
+	// As of v4.40 SSQLGO=typed picks HashJoinParallel by default
+	// when a Stream consumer is reachable; HashJoin (serial) is the
+	// alternative the planner picks otherwise. Accept either; the
+	// joined-fragment shape is the same.
 	for _, want := range []string{
 		"EmployeesRow",
 		"DeptsRow",
 		"EmployeesRow_DeptsRow",
-		"typed.HashJoin(filtered, rightSource1()",
+		"typed.HashJoin", // matches both HashJoin and HashJoinParallel
+		"rightSource1()",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("generated source missing %q\nsource:\n%s", want, src)
@@ -303,8 +314,11 @@ func TestTypedGroupByCountAvg(t *testing.T) {
 	src := runTypedPipeline(t, bin,
 		bin+" from "+emp+" | "+bin+" group-by dept_id -count headcount -avg salary avg_salary | "+bin+" to csv")
 
+	// As of v4.40 SSQLGO=typed picks GroupByParallel by default
+	// when the upstream is a Stream; the planner picks GroupBy
+	// (serial) otherwise. Accept either.
 	for _, want := range []string{
-		"typed.GroupBy(",
+		"typed.GroupBy", // matches both GroupBy and GroupByParallel
 		"EmployeesRowAggregator",
 		"EmployeesRowAggregatorResult",
 		"EmployeesRowGroup",

@@ -325,43 +325,30 @@ func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, 
 		imports = append(imports, "time")
 	}
 
-	// Default form follows the user's SSQLGO mode (parallel vs
-	// typed). When parallel, also offer a serial alternative that
-	// the planner can swap in if no downstream consumes Stream
-	// (parallelism-reach analysis). SSQLGO=typed stays single-track
-	// serial — no auto-upgrade in Phase A.
-	if parallelMode() {
-		parallelCode := fmt.Sprintf(`records := typed.ReadCSVParallel[%s](*flagInput, runtime.GOMAXPROCS(0))`, schema.TypeName)
-		parallelImports := append(append([]string{}, imports...), "runtime")
-		serialCode := fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput)`, schema.TypeName)
-		serialImports := append([]string{}, imports...)
+	// Always emit BOTH templates. The planner inspects downstream
+	// fragments and either keeps the parallel form (typed.ReadCSVParallel
+	// → Stream[T]) or downgrades to the serial alternative
+	// (typed.ReadCSV → iter.Seq[T]) when no downstream needs Stream.
+	parallelCode := fmt.Sprintf(`records := typed.ReadCSVParallel[%s](*flagInput, runtime.GOMAXPROCS(0))`, schema.TypeName)
+	parallelImports := append(append([]string{}, imports...), "runtime")
+	serialCode := fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput)`, schema.TypeName)
+	serialImports := append([]string{}, imports...)
 
-		frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
-		frag.Params = params
-		frag.OutputTypedSchema = schema
-		frag.StructDefs = []string{structDef}
-		frag.IsStream = true
-		frag.Capabilities = &lib.Capabilities{
-			Accepts:  lib.ShapeNone,
-			Produces: lib.ShapeStream,
-		}
-		frag.AltCodeIfSeq = serialCode
-		frag.AltImportsIfSeq = serialImports
-		frag.AltCapabilitiesIfSeq = &lib.Capabilities{
-			Accepts:  lib.ShapeNone,
-			Produces: lib.ShapeSeqTyped,
-		}
-		return lib.WriteCodeFragment(frag)
-	}
-
-	// SSQLGO=typed (serial)
-	code := fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput)`, schema.TypeName)
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}
-	frag.IsStream = false
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeSeqTyped}
+	frag.IsStream = true
+	frag.Capabilities = &lib.Capabilities{
+		Accepts:  lib.ShapeNone,
+		Produces: lib.ShapeStream,
+	}
+	frag.AltCodeIfSeq = serialCode
+	frag.AltImportsIfSeq = serialImports
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{
+		Accepts:  lib.ShapeNone,
+		Produces: lib.ShapeSeqTyped,
+	}
 	return lib.WriteCodeFragment(frag)
 }
 

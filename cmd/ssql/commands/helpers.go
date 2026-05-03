@@ -338,22 +338,18 @@ func shouldGenerate(flagValue bool) bool {
 }
 
 // typedMode returns true when the pipeline is running under
-// SSQLGO=typed OR SSQLGO=parallel — both produce typed-Go output;
-// parallel mode adds Stream[T] / HashJoinParallel / etc. on top.
+// SSQLGO=typed (the modern unified mode) or SSQLGO=parallel
+// (deprecated alias retained for backwards compatibility).
 //
-// Commands that support typed-mode emission should branch on
-// typedMode(); commands that additionally support parallel emission
-// further branch on parallelMode() inside the typed branch.
+// Both produce typed-Go output. As of v4.40.0, the planner inspects
+// each pipeline's downstream Capabilities and either keeps the
+// parallel form (Stream[T] + ReadCSVParallel + HashJoinParallel +
+// GroupByParallel) or downgrades to the serial alternative
+// (iter.Seq[T] + ReadCSV + HashJoin + GroupBy) — there's no longer
+// a per-command "is the user in parallel mode?" branch.
 func typedMode() bool {
 	v := os.Getenv("SSQLGO")
 	return v == "typed" || v == "parallel"
-}
-
-// parallelMode returns true only when SSQLGO=parallel — strictly
-// stronger than typedMode (every parallel-mode pipeline is also a
-// typed-mode pipeline).
-func parallelMode() bool {
-	return os.Getenv("SSQLGO") == "parallel"
 }
 
 // lastNamedCommand returns a human-readable description of the most
@@ -367,18 +363,6 @@ func lastNamedCommand(fragments []*lib.CodeFragment) string {
 		}
 	}
 	return "an upstream command"
-}
-
-// rejectParallelMode emits an error fragment if the pipeline is
-// running under SSQLGO=parallel and the calling command doesn't yet
-// support Stream-based emission. Returns nil if parallel mode is
-// off (caller continues as normal).
-func rejectParallelMode(cmdName string) error {
-	if !parallelMode() {
-		return nil
-	}
-	return lib.WriteErrorAndExit(getCommandString(),
-		fmt.Errorf("ssql generate go -parallel: %q not yet supported in parallel mode (only from/where/join/to csv/to table are streamable in v1); drop -parallel and use SSQLGO=typed", cmdName))
 }
 
 // getCommandString returns the command line that invoked this command

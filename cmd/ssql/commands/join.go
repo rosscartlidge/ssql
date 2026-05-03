@@ -627,14 +627,14 @@ func emitTypedJoin(
 		}
 	}
 
-	joinFn := "typed.HashJoin"
-	if parallelMode() {
-		// HashJoinParallel — left is a Stream[L]; right side is read
-		// serially via the funcName() call (process-sub or file).
-		joinFn = "typed.HashJoinParallel"
-	}
-
-	stmtCode := fmt.Sprintf(`joined := %s(%s, %s(),
+	// Emit BOTH templates so the planner can pick. The HashJoinParallel
+	// form (left=Stream[L]) is preferred when the upstream produces
+	// ShapeStream; the HashJoin form (left=iter.Seq[L]) is the
+	// alternative for serial pipelines (or after a planner-driven
+	// source downgrade). The right side is always read serially via
+	// funcName() — process substitution / file source.
+	makeJoinCode := func(joinFn string) string {
+		return fmt.Sprintf(`joined := %s(%s, %s(),
 		func(l %s) %s { return l.%s },
 		func(r %s) %s { return r.%s },
 		func(l %s, r %s) %s {
@@ -642,19 +642,27 @@ func emitTypedJoin(
 				%s,
 			}
 		})`,
-		joinFn, inputVar, funcName,
-		leftSchema.TypeName, keyType, leftKeyField.GoName,
-		rightSchema.TypeName, keyType, rightKeyField.GoName,
-		leftSchema.TypeName, rightSchema.TypeName, mergedSchema.TypeName,
-		mergedSchema.TypeName,
-		strings.Join(mergeAssignments, ",\n\t\t\t\t"),
-	)
+			joinFn, inputVar, funcName,
+			leftSchema.TypeName, keyType, leftKeyField.GoName,
+			rightSchema.TypeName, keyType, rightKeyField.GoName,
+			leftSchema.TypeName, rightSchema.TypeName, mergedSchema.TypeName,
+			mergedSchema.TypeName,
+			strings.Join(mergeAssignments, ",\n\t\t\t\t"),
+		)
+	}
+	parallelCode := makeJoinCode("typed.HashJoinParallel")
+	serialCode := makeJoinCode("typed.HashJoin")
+	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 
-	stmtFrag := lib.NewStmtFragment("joined", inputVar, stmtCode, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+	stmtFrag := lib.NewStmtFragment("joined", inputVar, parallelCode, imports, getCommandString())
 	stmtFrag.InputTypedSchema = leftSchema
 	stmtFrag.OutputTypedSchema = mergedSchema
 	stmtFrag.StructDefs = []string{mergedDef}
-	stmtFrag.IsStream = parallelMode()
+	stmtFrag.IsStream = true
+	stmtFrag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
+	stmtFrag.AltCodeIfSeq = serialCode
+	stmtFrag.AltImportsIfSeq = imports
+	stmtFrag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 	return lib.WriteCodeFragment(stmtFrag)
 }
 
