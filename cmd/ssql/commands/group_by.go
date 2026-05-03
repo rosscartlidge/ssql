@@ -798,8 +798,34 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 				fmt.Errorf("ssql generate go -typed: -rollup / -cube not yet supported in typed mode; drop -typed"))
 		}
 		if len(aggSpecs) == 0 {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'group-by' without aggregations is Tier 3 (would need typed.Distinct); add -count NAME or similar"))
+			// 'group-by FIELDS' with no aggregations is semantically
+			// equivalent to `include FIELDS | distinct` — project to
+			// the kept fields and dedupe. Emit two fragments rather
+			// than a third dedicated codepath: the projection
+			// (Subset struct + typed.Select) and a typed.Distinct on
+			// the projected stream. typed.Distinct is iter.Seq-only,
+			// so the planner inserts a Stream.Serial() boundary
+			// upstream when needed.
+			if err := emitTypedProjection("include", "Subset", inputVar, prevSchema, groupByFields, false, nil); err != nil {
+				return err
+			}
+			// emitTypedProjection wrote a fragment with Var "included"
+			// and OutputTypedSchema = the subset schema. Append the
+			// distinct stage referencing it.
+			derived, _, derr := buildDerivedSchema(prevSchema, "Subset", groupByFields, false, nil)
+			if derr != nil {
+				return lib.WriteErrorAndExit(getCommandString(), derr)
+			}
+			distinctCode := fmt.Sprintf("grouped := typed.Distinct(func(r %s) %s { return r })(included)",
+				derived.TypeName, derived.TypeName)
+			distinctFrag := lib.NewStmtFragment("grouped", "included", distinctCode,
+				[]string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+			distinctFrag.InputTypedSchema = derived
+			distinctFrag.OutputTypedSchema = derived
+			distinctFrag.Capabilities = &lib.Capabilities{
+				Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true,
+			}
+			return lib.WriteCodeFragment(distinctFrag)
 		}
 		for _, s := range aggSpecs {
 			if s.function == "collect" {
@@ -869,37 +895,53 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		return lib.WriteCodeFragment(frag)
 	}
 
-	// If no aggregations at all, generate code for DISTINCT on grouped fields
+	// If no aggregations at all, generate code for DISTINCT on grouped
+	// fields. Must emit a SINGLE Filter expression (the record-mode
+	// assembler runs extractFilter() over each stmt's Code, which only
+	// understands `var := filter(input)`); ssql.Chain glues the
+	// DistinctBy + Select projection into one filter.
 	if len(aggSpecs) == 0 && len(exprSpecs) == 0 && len(streamExprSpecs) == 0 {
-		// Build field list for key function
-		var fieldList strings.Builder
-		for i, field := range groupByFields {
+		// Inline the distinct-key extraction. Each field becomes one
+		// %v slot in a fmt.Sprintf — short, no closure-captured slice.
+		var keyParts []string
+		for _, field := range groupByFields {
+			keyParts = append(keyParts, fmt.Sprintf("ssql.GetOr(r, %q, \"\")", field))
+		}
+		var keyFmt strings.Builder
+		for i := range groupByFields {
 			if i > 0 {
-				fieldList.WriteString(", ")
+				keyFmt.WriteString("\\x00")
 			}
-			fieldList.WriteString(fmt.Sprintf("%q", field))
+			keyFmt.WriteString("%v")
+		}
+		// Field-keep check: a small switch instead of a per-record map
+		// allocation. Cheap and inline.
+		var keepCases strings.Builder
+		for _, field := range groupByFields {
+			keepCases.WriteString(fmt.Sprintf("\n\t\t\tcase %q:\n\t\t\t\tcontinue", field))
 		}
 
-		code := fmt.Sprintf(`keepFields := map[string]bool{%s}
-	distinctKey := func(r ssql.Record) string {
-		var parts []string
-		for field := range keepFields {
-			parts = append(parts, fmt.Sprintf("%%v", ssql.GetOr(r, field, "")))
-		}
-		return strings.Join(parts, "\x00")
-	}
-	distinct := ssql.DistinctBy(distinctKey)(%s)
-	grouped := ssql.Select(func(r ssql.Record) ssql.Record {
-		mut := r.ToMutable()
-		for k := range r.All() {
-			if !keepFields[k] {
+		code := fmt.Sprintf(`grouped := ssql.Chain(
+		ssql.DistinctBy(func(r ssql.Record) string {
+			return fmt.Sprintf("%s", %s)
+		}),
+		ssql.Select(func(r ssql.Record) ssql.Record {
+			mut := r.ToMutable()
+			for k := range r.All() {
+				switch k {%s
+				}
 				mut = mut.Delete(k)
 			}
-		}
-		return mut.Freeze()
-	})(distinct)`, buildMapLiteral(groupByFields), inputVar)
+			return mut.Freeze()
+		}),
+	)(%s)`,
+			keyFmt.String(),
+			strings.Join(keyParts, ", "),
+			keepCases.String(),
+			inputVar,
+		)
 
-		frag := lib.NewStmtFragment("grouped", inputVar, code, []string{"fmt", "strings"}, getCommandString())
+		frag := lib.NewStmtFragment("grouped", inputVar, code, []string{"fmt"}, getCommandString())
 		return lib.WriteCodeFragment(frag)
 	}
 

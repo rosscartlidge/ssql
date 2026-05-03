@@ -292,6 +292,14 @@ func TestPipelineCorpus(t *testing.T) {
 			Contains: []string{"Engineering", "Sales", "Marketing"},
 		},
 		{
+			// No aggregations — DISTINCT on the grouped field.
+			// Three rows expected: Engineering, Sales, Marketing.
+			Name:     "group_by_no_aggs",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} group-by dept | {{.bin}} to csv`,
+			Contains: []string{"Engineering", "Sales", "Marketing"},
+			Excludes: []string{"Alice", "salary"}, // projected away
+		},
+		{
 			Name:     "group_by_sum_avg",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} group-by dept -sum salary total -avg salary avg_pay | {{.bin}} to csv`,
 			Contains: []string{"Engineering", "total", "avg_pay"},
