@@ -46,7 +46,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Catalog Codegen](catalog-codegen.md) — code generation for catalog operations
 - [Parallel Processing](parallel-processing.md) — parallelism opportunities
 - [SSH Test Environment](ssh-test-environment.md) — test setup for SSH features
-- [Remote Go Execution](remote-go-execution-proposal.md) — ship generated Go to remote SSH hosts that have Go installed; unlocks the v4.40 typed-parallel speedups for distributed pipelines without copying source data
+- [Remote Go Execution](remote-go-execution-proposal.md) — ship a small `.ssql` script (~500 B) to remote SSH hosts that already have ssql installed; remote runs `ssql generate go -script -run` and streams just the result back. Unlocks v4.40 typed-parallel speedups for `from ssh`/`from catalog` pipelines without copying source data. Builds on the codegen-wrapper proposal's `-script PATH` flag.
 - [Codegen Wrapper Proposal](codegen-wrapper-proposal.md) — `ssql -shell-helpers` + `ssql generate go -script PATH` to lower the bar from `(export SSQLGO=...; ...) | ssql generate go` to `ssqlgen 'pipeline'` or `-script <(heredoc)`
 
 ## CLI & Framework
