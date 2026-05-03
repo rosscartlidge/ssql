@@ -514,6 +514,25 @@ Equivalent SQL:
 SELECT * FROM data LIMIT 10 OFFSET 20
 ```
 
+### Count Rows with COUNT
+
+Drain a pipeline and print the row count to stdout (like `wc -l`).
+Discoverable shorthand for "how many rows match this filter?":
+
+```bash
+# Total rows in the file
+ssql from data.csv | ssql count
+
+# After filtering
+ssql from employees.csv | ssql where -if status eq active | ssql count
+
+# In code-generation mode the planner picks the right runtime per
+# pipeline: a parallel `Stream.SerialCount()` (drains shards
+# concurrently with no fan-in cost) when the source can stay
+# parallel, falling back to `typed.Count` or a serial loop otherwise.
+SSQLGO=typed ssql from huge.csv | ssql count | ssql generate go -run
+```
+
 ### Remove Duplicates with DISTINCT
 
 Remove duplicate records:
@@ -1448,6 +1467,7 @@ Use `-run` to execute directly with DuckDB:
 - `limit` - Take first N records
 - `offset` - Skip first N records (SQL OFFSET)
 - `distinct` - Remove duplicate records (SQL DISTINCT)
+- `count` - Drain the pipeline and print the row count to stdout (sink, like `wc -l`)
 
 ### Analytics
 - `window` - SQL-style window functions (ranking, lag/lead, running aggregates)

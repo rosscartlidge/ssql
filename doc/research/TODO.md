@@ -60,6 +60,17 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Merge catalog predicate/aggregation pushdown** — same pattern for `merge -catalog`
 - [x] **SSH pushdown with expressions** — already works. The pushdown rule copies all `where` args (including `-if-expr`) wholesale.
 
+## Unified Typed Mode (see typed-auto-parallel-proposal.md, mixed-mode-pipelines-proposal.md)
+
+- [x] **Phase A — typed-mode planner + auto-parallel selection** (v4.39.0). Per-fragment Capabilities + Shape; planner picks Stream[T] vs iter.Seq[T] per pipeline stage; `generate go -explain` shows decisions; 24-pipeline regression corpus across record/typed/parallel modes.
+- [x] **SSQLGO=typed becomes auto-parallel default** (v4.40.0). Drops the per-command `parallelMode()` gate; SSQLGO=parallel now a silent alias. Dual-template emission extended to join (HashJoinParallel/HashJoin) and group-by (GroupByParallel/GroupBy).
+- [x] **`ssql count` sink** (v4.40.0). Discoverable wc -l for pipelines with planner-picked runtime (record loop / typed.Count / Stream.SerialCount). Surfaced and fixed planner Phase 1b (per-fragment shape coercion).
+- [x] **Phase B — mixed-mode pipelines (typed→Record adapter)** (v4.40.0). Tier 3 commands (pivot, signal/fft/ifft/convolve/correlate/spectrogram, merge -catalog, from ssh, from catalog, -if-expr, -set-expr) no longer error under SSQLGO=typed; planner inserts toRecord adapter automatically. Stream→Record chains Serial() + toRecord(). 15 typed-aware commands fall through to record-mode codegen when prevSchema is nil.
+- [x] **Parallel projection (StreamSelect)** (v4.40.0). emitTypedProjection emits typed.StreamSelect (Stream[T]→Stream[U]) as default; planner picks vs typed.Select.
+- [ ] **Phase C — Record→typed reverse adapter via `--into MyStruct` hint**. Lets pipelines like `from ssh ... | ssql where -if x gt 5 --into MyRow | typed group-by ...` work. Estimate: ~1 week.
+- [ ] **Phase D (deferred indefinitely)** — Record→Stream[T] (parallel typed source from a Record stream). Useful but no critical path.
+- [ ] **mmap CSV reader** — see `mmap-readers-proposal.md`. Replacing `os.ReadFile` with `mmap` in `typed.ReadCSVParallel` / `ReadDelimParallel` measured 1.7-1.9× faster slurp on a 1.23 GB CSV (~0.79s → ~0.56s wall on the headline parallel-CSV path). Helper: linux/darwin amd64/arm64 use real mmap; Windows/386/wasi fall back to os.ReadFile. Add MADV_DONTDUMP. Document SIGBUS risk for files modified during use. Estimate: ~half-day.
+
 ## Adoption (see adoption-plan.md)
 
 - [x] LICENSE file — MIT License
