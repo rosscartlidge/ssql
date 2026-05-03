@@ -1,7 +1,7 @@
 # Remote Go Execution Proposal
 
-**Status:** Proposal (rev 2, 2026-05-04)
-**Date:** 2026-05-03 (orig); 2026-05-04 (rev: .ssql-script-as-unit)
+**Status:** Proposal (rev 3, 2026-05-04)
+**Date:** 2026-05-03 (orig); 2026-05-04 (rev 2: .ssql-as-unit; rev 3: drop fallback modes — ssql-on-remote required)
 **ssql version target:** v4.41+
 **Prerequisites:** Phase A planner (v4.39), Phase B mixed mode (v4.40), `-script PATH` flag (codegen-wrapper-proposal.md)
 **Related:** `distributed-ssh-processing.md`, `distributed-shard-catalog.md`, `codegen-wrapper-proposal.md`
@@ -9,24 +9,26 @@
 ## TL;DR
 
 `ssql from ssh HOST FILE | <pipeline>` currently streams the entire
-remote file over SSH then processes locally. If `ssql` is installed
-on the remote (we already require this for `--` pushdown), we can
-ship a tiny `.ssql` *script file* (a few hundred bytes) describing
-the pipeline, run `ssql generate go -script /tmp/X.ssql -run` on
-the remote, and stream just the (typically much smaller) result
-back. This unlocks the typed-parallel runtime — including the
-workstation 215× speedup — for remote data without copying the
-source file.
+remote file over SSH then processes locally. **If ssql is installed
+on the remote** (already a requirement for `--` pushdown), we can
+ship a tiny `.ssql` script (a few hundred bytes) describing the
+pipeline, run `ssql generate go -script /tmp/X.ssql -run` on the
+remote, and stream just the (typically much smaller) result back.
+This unlocks the typed-parallel runtime — including the workstation
+215× speedup — for remote data without copying the source file.
 
 The .ssql script (from the codegen-wrapper proposal) is the natural
 unit of remote work: human-readable, KB-sized, no `go.mod`
 plumbing, no `go get` over the internet, the remote's deployed
 ssql version controls behavior.
 
-Estimated effort: **~1 day** for v1 (Mode A — ssql-on-remote, the
-ssh-already-works path). Heavier modes (Go-only remotes,
-binary-only remotes) layer on top as fallbacks for less common
-deployment shapes.
+**Single mode, single requirement: ssql installed on the remote.**
+We considered fallback modes for hosts that have only Go or
+neither, and rejected them — see "Considered and rejected" below.
+
+Estimated effort: **~1 day for Phase A** (single host), **+1 day
+for Phase B** (catalog extension). Total ~2 days for the whole
+feature.
 
 ## Motivation
 
@@ -61,7 +63,7 @@ ssql from ssh node1 /data/logs.csv \
 # Local:  build a .ssql script for the whole pipeline (~500 B)
 # SSH:    scp script to /tmp/ssql-X.ssql on node1
 # Remote: ssql generate go -script /tmp/ssql-X.ssql -run
-#         (local-typed-parallel: parses CSV in parallel, aggregates,
+#         (typed-parallel: parses CSV in parallel, aggregates,
 #          prints just the result rows)
 # Stream: aggregated rows return over SSH
 ```
@@ -103,17 +105,16 @@ side replaces the remote source path (`logs.csv` becomes whatever
 the remote sees) and ships the file. Remote side runs `ssql
 generate go -script -run`. Done.
 
-This sidesteps every complication the original proposal worried
-about:
+Sidesteps every complication that arises from shipping Go:
 
 - No `go.mod` to manage
 - No `go get` over the internet
 - No first-time module-download lag
 - No version pinning across local and remote
-- Payload is ~500 B (script) instead of ~6 KB (Go) plus
-  ~50 MB of module cache fetched on first run
+- Payload is ~500 B (script) instead of MB-scale (Go + module cache)
 - The script is human-readable — `ssh node1 cat /tmp/ssql-X.ssql`
   shows exactly what's running
+- Remote's deployed ssql version controls behavior
 
 ## Why generate on the remote (not on the local)
 
@@ -144,20 +145,12 @@ accepts a flag the remote's older ssql doesn't, the script fails
 on the remote with a confusing error. Mitigations:
 - Capability probe caches the remote's `ssql version` and warns
   at the time of the call (not at exec time)
-- Optional `-require-version vX.Y.Z` directive in the .ssql header
-  for scripts that need a specific feature
+- Optional `# require: vX.Y.Z` directive in the .ssql script for
+  scripts that need a specific feature
 
 Both fixes are cheap; the upside in simplicity is large.
 
-## Three execution modes (reframed)
-
-The .ssql-as-payload framing makes Mode A genuinely simple. Modes
-B and C remain as fallbacks for less common deployment shapes.
-
-### Mode A — ssql-on-remote (default; ~1 day to ship)
-
-Requires: ssql installed on the remote (already required for `--`
-pushdown).
+## Mechanism
 
 ```
 local:  scp pipeline.ssql node1:/tmp/ssql-X.ssql
@@ -165,71 +158,71 @@ remote: ssql generate go -script /tmp/ssql-X.ssql -run
 local:  ssh streams stdout back into the local pipeline
 ```
 
-That's it. No go.mod, no module download, no cross-compile, no
-Go-on-remote requirement. The remote's existing ssql binary
-already knows how to do typed-parallel codegen + go-run; we just
-hand it a script.
+That's the entire mechanism. No go.mod, no module download, no
+cross-compile, no Go-on-remote requirement. The remote's existing
+ssql binary already knows how to do typed-parallel codegen +
+go-run; we hand it a script.
 
-### Mode B — Go-on-remote (fallback; +1 day)
+## Considered and rejected: fallback modes
 
-For hosts that have Go but not ssql. Local generates the .go file
-and ships it along with a `go.mod`. Remote runs `go run`.
+The earlier draft included two fallback modes for hosts that
+*don't* have ssql installed:
 
-```
-local:  ssql generate go -script pipeline.ssql > /tmp/main.go
-        echo 'module ssqlgen\ngo 1.23\nrequire github.com/rosscartlidge/ssql/v4 vX.Y.Z' > /tmp/go.mod
-        scp /tmp/main.go /tmp/go.mod node1:/tmp/ssql-X/
-remote: cd /tmp/ssql-X && go mod tidy && go run .
-```
+- **Mode B** — local generates `.go`, ships source + `go.mod`,
+  remote runs `go run`. For hosts that have Go but not ssql.
+- **Mode C** — local cross-compiles a binary, ships, executes.
+  For hosts with neither.
 
-Pays the ~10 s first-run cost for `go get`. Subsequent runs hit
-the remote's Go module cache.
+Dropped from v1 (and arguably from v2+). Reasons:
 
-### Mode C — cross-compile binary (fallback-fallback; +1-2 days)
+1. **`--` pushdown already requires ssql on the remote.** Anyone
+   using `from ssh` for non-trivial work has already deployed
+   ssql to the targets. Mode A inherits that requirement
+   transparently. B/C add modes for personas that don't really
+   exist in the user base.
 
-For hosts with neither ssql nor Go. Local cross-compiles the
-generated program, scps the binary, executes.
+2. **Trust surface.** Mode A ships a declarative pipeline DSL.
+   B/C ship arbitrary Go or executable binaries. Users running
+   ssql in production environments may have a different posture
+   toward "run this Go I generated for you" vs. "run this
+   declarative script with your already-trusted ssql binary."
 
-```
-local:  GOOS=$REMOTE_OS GOARCH=$REMOTE_ARCH go build -tags slim \
-          -o /tmp/ssql-X-bin
-        scp /tmp/ssql-X-bin node1:/tmp/ssql-X-bin
-remote: chmod +x && /tmp/ssql-X-bin
-```
+3. **Version coherence.** Only Mode A respects the remote's
+   deployed ssql version. B/C bypass it — laptop's local version
+   silently overrides whatever was deliberately deployed. This
+   makes B/C a deployment surprise.
 
-Useful for embedded / locked-down fleets. ARM target needs local
-cross-compile toolchain (Go has it built in for pure-Go builds).
+4. **Implementation surface.** B/C adds cross-compile toolchain
+   concerns, go.mod plumbing, module-cache management, Go
+   version probes, MB-scale payloads. Cutting them roughly halves
+   total effort and removes whole categories of failure mode.
 
-### Auto-selection
+5. **Architectural value of "prepared hosts".** Every clustered
+   system worth using assumes nodes have been deliberately
+   prepared (Kubernetes joins, database replicas, etc.). Modes
+   B/C invite the opposite — accidental compute on random hosts
+   — which is rarely what the user actually wants.
 
-Capability probe (see below) decides per host:
-- Has `ssql` (compatible version)? → Mode A
-- Else has `go` (1.23+)? → Mode B
-- Else cross-compile fallback → Mode C
-- Else fall back to current SSH-streams-bytes path
+If a future user really has the "Go but not ssql" use case, they
+can install ssql (it's a single static binary, one `go install`
+away). The cost is small and the coordination value is large.
 
 ## Capability discovery
 
-Probe each remote host once per session, cache locally.
+The probe shrinks to a single question: **does the remote have
+ssql, and what version?**
 
-The probe runs over SSH:
 ```
-ssql version 2>/dev/null; \
-go version 2>/dev/null; \
-uname -s; uname -m
+ssh node1 'ssql version 2>/dev/null || echo no-ssql'
 ```
 
 Parses the output into:
 
 ```go
 type HostCaps struct {
-    HasSSQL    bool
-    SSQLVer    string  // e.g. "v4.40.0"
-    HasGo      bool
-    GoVer      string  // e.g. "go1.23.4"
-    GOOS       string  // "linux", "darwin", …
-    GOARCH     string  // "amd64", "arm64", "386"
-    ProbedAt   time.Time
+    HasSSQL  bool
+    SSQLVer  string  // e.g. "v4.40.0"
+    ProbedAt time.Time
 }
 ```
 
@@ -238,9 +231,14 @@ Cache: `~/.ssql/host-caps.json` keyed by SSH host. Default TTL:
 mismatch (e.g., remote ssql errors with "unknown flag" → cached
 version is stale, rerun the probe).
 
-For the simple case (all hosts have ssql installed), the probe is
-~50 ms over SSH and the cache hit makes subsequent invocations
+Probe is ~50 ms over SSH. Cache hit makes subsequent invocations
 free.
+
+If the remote doesn't have ssql, we **fall back to the existing
+SSH-streams-bytes path** (the v4.27 behavior). No remote-Go
+acceleration, but the pipeline still works. Surface a one-line
+note: "node1 has no ssql installed; falling back to standard SSH
+streaming (install ssql on node1 to enable remote-Go acceleration)."
 
 ## Pipeline boundary — what gets sent remote?
 
@@ -257,27 +255,30 @@ Three natural cuts; the choice is per-pipeline:
   needs explicit control.
 
 Default to "all of it" with the chart/explore exception. The sink
-fragment is easy to detect at codegen time (`final` fragment
-Type, plus a small allowlist).
+fragment is easy to detect at codegen time (`final` fragment Type,
+plus a small allowlist).
 
-## Catalog extension — heterogeneous fleets
+## Catalog extension — homogeneous fleets, parallel per-shard
 
 `from catalog shards.csv` opens N parallel SSH connections, one
 per shard. Each shard host gets its own capability probe (in
-parallel during the dispatch phase). Per-host execution mode
-selection naturally falls out:
+parallel during the dispatch phase).
 
-- node1 (amd64, ssql v4.40 installed) → Mode A
-- node2 (ARM64, Go installed but no ssql) → Mode B
-- node3 (no Go, no ssql) → Mode C with ARM cross-compile
+Since we now require ssql on every shard target, the catalog case
+is straightforwardly per-shard execution of the same Mode A flow:
 
-For homogeneous fleets the binary (Mode C) or .go shipping (Mode
-B) caches once and reuses across shards.
+- For each shard host: probe (cached); ship the per-shard .ssql
+  script (path-rewritten for that shard's data); exec `ssql
+  generate go -script -run`; stream stdout.
+- Local side does the K-way merge of result streams (already
+  does in the existing catalog code).
 
-The N-way K-merge of result streams happens locally (already does
-in the existing catalog code). Each shard returns aggregated rows
-of size O(num_groups) instead of O(num_input_rows) — the win
-compounds with shard count.
+Each shard returns aggregated rows of size O(num_groups) instead
+of O(num_input_rows) — the win compounds with shard count.
+
+If any shard host doesn't have ssql, that shard falls back to the
+SSH-streams-bytes path; other shards still get acceleration. Mixed
+mode within a single catalog query.
 
 ## Error surfacing
 
@@ -286,115 +287,97 @@ Three error categories, with different surface treatments:
 1. **Script syntax errors** caught locally before shipping:
    "pipeline.ssql:3 — unknown command `wherq`; did you mean
    `where`?". The .ssql preprocessor (codegen-wrapper) emits these.
-2. **Remote codegen errors** (Mode A — remote ssql says no): the
-   remote ssql's existing error messages flow back via SSH stderr.
-   Wrap with "on node1: ".
-3. **Remote runtime errors** (Mode B/C — generated program
-   failed): exit code + stderr captured. For OOM (exit 137):
-   "node1 ran out of memory; the pipeline's working set
-   exceeded available RAM."
-
-For Mode B, compile errors are reverse-mapped to pipeline stages
-via the `Generated by` comment that codegen already emits — so
-the user sees "stage 3: ssql group-by relationship -X foo" rather
-than "main.go:42:18 — undefined: typed.WhateverOp".
+2. **Remote codegen errors** (remote ssql says no): the remote
+   ssql's existing error messages flow back via SSH stderr. Wrap
+   with "on node1: ".
+3. **Remote runtime errors** (the generated program failed):
+   exit code + stderr captured. For OOM (exit 137):
+   "node1 ran out of memory; the pipeline's working set exceeded
+   available RAM."
 
 ## Trust model
 
 `--` pushdown today executes the user's locally-installed `ssql`
-binary remotely (well-defined surface). Remote-Go execution
-extends this in a controlled way:
+binary remotely with arguments derived from the user's CLI input.
+Remote-Go execution extends this in a controlled way: same `ssql`
+binary on the remote, executing a `.ssql` script (declarative
+pipeline DSL).
 
-- **Mode A** ships a .ssql script, executed by the remote's
-  `ssql` (same binary the user already invokes for `--` pushdown).
-  No new trust surface beyond what already exists.
-- **Mode B/C** ships generated Go, executed by `go run` or
-  directly. Same trust boundary as SSH itself: if the user can
-  SSH to the host they can already run arbitrary code there.
-
-A `-show-remote-source` (or `-dry-run`) flag prints what would be
-sent without sending it — useful for review and for
-copy-paste-into-CI workflows.
+**No new trust surface beyond what already exists for `--`
+pushdown.** A `-show-remote-source` (or `-dry-run`) flag prints
+what would be sent without sending it — useful for review and
+for copy-paste-into-CI workflows.
 
 ## Implementation sketch
 
-### Phase A — Mode A only, single host (~1 day)
+### Phase A — single host (~1 day)
 
 1. Add `lib/sshgo/`:
-   - `Probe(host) (HostCaps, error)` — runs the version-and-uname
-     probe over SSH.
-   - `RunRemote(host, scriptBytes []byte, mode string) (stdout, error)`
-     — scps the .ssql, runs `ssql generate go -script -run`,
-     streams stdout.
+   - `Probe(host) (HostCaps, error)` — `ssh HOST 'ssql version'`,
+     parses output. Cache in `~/.ssql/host-caps.json`.
+   - `RunRemote(host, scriptBytes []byte) (stdout, error)` —
+     scps the .ssql, runs `ssql generate go -script -run`, streams
+     stdout.
 2. Add `-remote` flag to `ssql from ssh` (or auto-detect when
    the source is a remote file and the rest of the pipeline can
    ship there):
    - Build a .ssql script for the rest-of-pipeline.
-   - Path-rewrite: the `from ssh HOST PATH` becomes `from PATH`
-     in the script (the file is local on the remote).
-   - Call `sshgo.RunRemote(host, script, mode)`.
+   - Path-rewrite: `from ssh HOST PATH` becomes `from PATH` in
+     the script (the file is local on the remote).
+   - Call `sshgo.RunRemote(host, script)`.
    - Pipe result into the local pipeline.
 3. Tests using LXD containers (per `ssh-test-environment.md`):
-   one container with ssql v4.40 installed; verify the same
-   pipeline produces the same output via Mode A vs. the existing
-   non-remote path.
+   one container with ssql v4.40 installed, one without ssql.
+   Verify identical output between Mode A and the standard SSH
+   path; verify graceful fallback when ssql isn't installed.
 
-### Phase B — capability cache + Go-on-remote (+1 day)
+### Phase B — catalog extension (+1 day)
 
-4. `~/.ssql/host-caps.json` cache; `-rediscover` flag.
-5. Auto-detect: probe; if ssql installed → Mode A; if only Go →
-   Mode B (generate .go locally, scp, `go mod tidy && go run`).
-6. `-no-remote` opt-out for users who want the old behaviour.
+4. `from catalog` — per-shard probe in parallel during dispatch.
+5. Each shard runs Mode A independently; results stream into
+   the existing K-way merge.
+6. Heterogeneous-fleet test: 3 LXD containers, mix of ssql-yes
+   and ssql-no, verify partial acceleration works.
 
-### Phase C — catalog + cross-compile fallback (+1-2 days)
+### Out of scope
 
-7. `from catalog` extension — per-shard capability probe in
-   parallel, per-shard execution mode selection.
-8. Mode C (cross-compile) for hosts with neither ssql nor Go.
-9. Heterogeneous-fleet test: 3 LXD containers (one ARM via qemu,
-   one without Go, one fully equipped).
-
-### Out of scope for v1
-
-- **Module proxy mirror for airgapped fleets** — defer until
-  someone has the use case. Mode A doesn't need it; Mode B does
-  but the current target environments all have internet.
-- **Persistent remote daemon** — overkill; per-invocation `go
-  run` is fast enough after the first warm-up, and Mode A skips
-  go-run entirely.
+- **Go-on-remote (old Mode B)** and **cross-compile binary (old
+  Mode C)** — see "Considered and rejected" above. Not blocked;
+  not planned.
+- **Persistent remote daemon** — overkill; `ssql generate go
+  -script -run` is fast enough per-invocation.
 - **GPU on remote** — `from ssh -gpu` already handles this for
-  the current Record-mode path; folding into typed-Go remote is a
-  v2 question (need typed.Stream + GPU helpers first).
-- **Distributed join** — a `from ssh A | join from ssh B` needs
-  cross-node coordination. Phase A executes A remote, ships its
+  the current Record-mode path; folding into typed-Go remote is
+  a v2 question (need typed.Stream + GPU helpers first).
+- **Distributed join** — `from ssh A | join from ssh B` needs
+  cross-node coordination. Phase A executes A remote, ships
   result back, joins locally. v2 can explore.
 
 ## Failure modes
 
-### Version skew (Mode A)
+### Version skew
 
 Remote ssql is older than local; doesn't recognise a flag or
 command in the script. Detection: the probe captures the remote
-version; we compare against the script's required version (either
-inferred or declared in a `# require: vX.Y.Z` header). Surface:
-"node1 has ssql v4.39; this script uses `count` (v4.40+)."
+version; we compare against the script's required version
+(inferred from feature usage, or declared in a `# require: vX.Y.Z`
+header). Surface: "node1 has ssql v4.39; this script uses
+`count` (v4.40+) — upgrade ssql on node1 or drop -remote."
 
-### Go version too old on remote (Mode B)
+### Remote ssql not installed
 
-Probe catches it. Emit clear error: `node1 has Go 1.21; ssql
-remote-Go execution needs 1.23+`. Skip Mode B; try Mode C.
-
-### Remote `/tmp` is noexec / mounted with restrictive options
-
-Mode A doesn't care (script is data, not executable). Mode B/C
-need exec on the workdir. Expose `-remote-workdir DIR` for hosts
-where `/tmp` doesn't allow exec.
+Probe catches it. Fall back to existing SSH-streams-bytes path
+with a clear note: "node1 has no ssql installed; falling back to
+standard SSH streaming (install ssql on node1 to enable remote-Go
+acceleration)."
 
 ### Disk pressure on remote /tmp
 
 A pathological pipeline could fill `/tmp` during go-run with
-module cache + binary + intermediate output. Surface clearly when
-it happens; document `-remote-workdir`.
+intermediate output + module cache (the remote ssql's `go run`
+uses *its* module cache, but generated programs may produce
+output to /tmp). Surface clearly when it happens; document
+`-remote-workdir` for hosts where /tmp is constrained.
 
 ### Quota / OOM on remote
 
@@ -417,15 +400,11 @@ Remote ssql errors at script-execution time:
    E.g. `from ssh A | join from-ssh-B | to chart`. Phase A runs
    A remotely, ships result back, joins locally. v2 can explore
    distributed join.
-3. **Caching the cross-compiled binary (Mode C)?**
-   `~/.ssql/bin-cache/$ssql_version-$goos-$goarch` — rebuild only
-   when ssql version or target changes. Yes for catalog
-   scenarios.
-4. **Trust prompt?** First-time use against a host shows: "ssql
+3. **Trust prompt?** First-time use against a host shows: "ssql
    will run a script on node1 — show source? [y/N]". Not a
    security boundary (SSH already lets you run anything), but a
    transparency aid. Probably skip for v1.
-5. **`-require-version` in the .ssql header?** Useful for
+4. **`# require: vX.Y.Z` in the .ssql header?** Useful for
    scripts shared between teams with different deployed
    versions. Cheap to add (preprocessor reads the directive,
    compares against probed version, errors early). Could be in
@@ -439,10 +418,11 @@ Remote ssql errors at script-execution time:
 - The `-script` flag from the codegen-wrapper proposal is
   exactly the unit of remote work we need. Doing both proposals
   together is cheaper than either alone.
-- The plumbing is genuinely small for Mode A — ~1 day for v1.
-  The existing ssh + pushdown + capability layers handle 90% of
-  it; remote-Go just hands `ssql generate go -script -run` over
-  SSH instead of running ssql commands directly.
+- The plumbing is genuinely small for v1 — ~1 day for single
+  host, +1 day for catalog. The existing ssh + pushdown +
+  capability layers handle 90% of it; remote-Go just hands `ssql
+  generate go -script -run` over SSH instead of running ssql
+  commands directly.
 - The user value is large and easy to demo: same pipeline, same
   syntax, ~100× faster aggregations against a remote big-CSV /
   big-Parquet / big-Arrow file.
