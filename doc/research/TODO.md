@@ -70,6 +70,7 @@ Tracked issues and feature gaps discovered during development.
 - [ ] **Phase C — Record→typed reverse adapter via `--into MyStruct` hint**. Lets pipelines like `from ssh ... | ssql where -if x gt 5 --into MyRow | typed group-by ...` work. Estimate: ~1 week.
 - [ ] **Phase D (deferred indefinitely)** — Record→Stream[T] (parallel typed source from a Record stream). Useful but no critical path.
 - [ ] **mmap CSV reader** — see `mmap-readers-proposal.md`. Replacing `os.ReadFile` with `mmap` in `typed.ReadCSVParallel` / `ReadDelimParallel` measured 1.7-1.9× faster slurp on a 1.23 GB CSV (~0.79s → ~0.56s wall on the headline parallel-CSV path). Helper: linux/darwin amd64/arm64 use real mmap; Windows/386/wasi fall back to os.ReadFile. Add MADV_DONTDUMP. Document SIGBUS risk for files modified during use. Estimate: ~half-day.
+- [ ] **Remote Go execution** — see `remote-go-execution-proposal.md`. When the SSH target has Go installed, ship a generated Go program (~6 KB) instead of streaming the source file. The remote does the typed-parallel CSV/Parquet parse + transform + aggregate; only the (small) result rows return over SSH. Unlocks the v4.40 typed-parallel speedups for `from ssh` / `from catalog` workflows. Phase A (single host, source-shipping mode): ~2 days. Phase B (capability cache + auto-detect): ~1 day. Phase C (catalog + cross-compile fallback for Go-less hosts): ~3 days.
 
 ## Adoption (see adoption-plan.md)
 
