@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/sshgo"
 )
 
 func registerFromSSH(cmd *cf.SubcommandBuilder) {
@@ -42,6 +44,13 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			Help("Use ssql_gpu on the remote machine").
 			Done().
 
+		Flag("-remote").
+			Bool().
+			Global().
+			Default(false).
+			Help("Run the pipeline as typed-Go on the remote (Mode A: requires ssql installed). Falls back to standard SSH streaming if the remote has no ssql.").
+			Done().
+
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -53,6 +62,7 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			host, _ := ctx.GlobalFlags["HOST"].(string)
 			path, _ := ctx.GlobalFlags["PATH"].(string)
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
+			remote, _ := ctx.GlobalFlags["-remote"].(bool)
 			generate, _ := ctx.GlobalFlags["-generate"].(bool)
 
 			if host == "" || path == "" {
@@ -63,6 +73,9 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			if len(ctx.RemainingArgs) > 0 {
 				if shouldGenerate(generate) {
 					return generateFromSSHRemoteCode(host, path, gpu, ctx.RemainingArgs)
+				}
+				if remote {
+					return executeFromSSHRemoteGo(host, path, ctx.RemainingArgs)
 				}
 				return executeFromSSHRemote(host, path, gpu, ctx.RemainingArgs)
 			}
@@ -188,6 +201,112 @@ func executeFromSSHRemote(host, path string, gpu bool, pipelineArgs []string) er
 	remoteBin := sshRemoteBin(gpu)
 	remoteCmd := ssql.BuildRemoteCommand(remoteBin, path, "", ssql.SplitOnPlus(pipelineArgs))
 	return runSSHAndStreamJSONL(host, remoteCmd)
+}
+
+// executeFromSSHRemoteGo runs the push-down pipeline on the remote
+// host as typed-Go (Mode A from remote-go-execution-proposal.md):
+// builds a .ssql script, ships it via stdin, runs `ssql generate go
+// -script -run`. The remote does typed-parallel codegen + go-run;
+// stdout (JSONL with schema-inferred header) streams back through
+// the same readJSONSchemaAware + writeWithInferredSchema layer the
+// non-remote path uses, so downstream local stages see the same
+// wire format either way.
+//
+// If the remote doesn't have ssql installed (probe says no), falls
+// back to the standard executeFromSSHRemote path with a stderr note
+// — pipeline still works, just without acceleration.
+func executeFromSSHRemoteGo(host, path string, pipelineArgs []string) error {
+	caps, err := sshgo.Probe(host)
+	if err != nil {
+		return fmt.Errorf("ssql from ssh -remote: probe %s: %w", host, err)
+	}
+	if !caps.HasSSQL {
+		fmt.Fprintf(os.Stderr,
+			"%s has no ssql installed; falling back to standard SSH streaming "+
+				"(install ssql on %s to enable -remote acceleration)\n",
+			host, host)
+		return executeFromSSHRemote(host, path, false, pipelineArgs)
+	}
+	script := buildRemoteSSQLScript(path, ssql.SplitOnPlus(pipelineArgs))
+
+	// Pipe the remote's stdout through the same schema-aware
+	// reader/writer the non-remote path uses. This:
+	//   - prepends a `{"_schema":...}` header to the output (so
+	//     downstream local stages can preserve column types)
+	//   - normalises field names if the remote emitted CamelCase
+	//     (typed-mode JSONL fallback) — readJSONSchemaAware uses
+	//     the first row's keys as schema fields verbatim, then
+	//     writeWithInferredSchema emits a consistent header
+	//   - matches the wire format the standard from-ssh path uses
+	pr, pw := io.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- sshgo.RunRemote(host, []byte(script), pw)
+		pw.Close()
+	}()
+
+	records := readJSONSchemaAware(pr)
+	writeErr := writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+	runErr := <-errCh
+	if writeErr != nil {
+		return writeErr
+	}
+	return runErr
+}
+
+// buildRemoteSSQLScript turns a from-ssh-pushdown invocation into a
+// multi-line .ssql script:
+//
+//	ssql from PATH
+//	| ssql STAGE1
+//	| ssql STAGE2
+//	...
+//	| ssql to jsonl   (auto-appended unless STAGE_N is already a sink)
+//
+// Path and per-stage args are quoted with ssql.ShellQuote — the
+// script is exec'd by bash on the remote, so the same quoting rules
+// the existing BuildRemoteCommand uses apply.
+//
+// `to jsonl` is auto-appended so the remote output matches the wire
+// format the rest of the local `from ssh` pipeline expects: a
+// `{"_schema":...}` header line followed by one JSON object per
+// record with original CSV-style field names. Without an explicit
+// sink, the typed assembler falls back to typed.WriteJSONLToWriter
+// which uses CamelCase struct names and omits the schema — fine
+// for terminals but breaks downstream local `ssql` stages.
+//
+// Auto-append is suppressed when the user's last stage is itself
+// a `to <format>` sink (they've explicitly chosen the wire format).
+func buildRemoteSSQLScript(path string, pipelineGroups [][]string) string {
+	var sb strings.Builder
+	sb.WriteString("ssql from ")
+	sb.WriteString(ssql.ShellQuote(path))
+	sb.WriteString("\n")
+	for _, group := range pipelineGroups {
+		sb.WriteString("| ssql ")
+		for i, arg := range group {
+			if i > 0 {
+				sb.WriteString(" ")
+			}
+			sb.WriteString(ssql.ShellQuote(arg))
+		}
+		sb.WriteString("\n")
+	}
+	if !lastGroupIsSink(pipelineGroups) {
+		sb.WriteString("| ssql to jsonl\n")
+	}
+	return sb.String()
+}
+
+// lastGroupIsSink reports whether the last pushdown stage is a
+// `to ...` sink command. Used by buildRemoteSSQLScript to decide
+// whether to auto-append `to jsonl`.
+func lastGroupIsSink(groups [][]string) bool {
+	if len(groups) == 0 {
+		return false
+	}
+	last := groups[len(groups)-1]
+	return len(last) > 0 && last[0] == "to"
 }
 
 // runSSHAndStreamJSONL executes an SSH command and streams JSONL output.
