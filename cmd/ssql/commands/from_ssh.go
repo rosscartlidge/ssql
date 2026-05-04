@@ -51,6 +51,13 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			Help("Run the pipeline as typed-Go on the remote (Mode A: requires ssql installed). Falls back to standard SSH streaming if the remote has no ssql.").
 			Done().
 
+		Flag("-show-remote-source").
+			Bool().
+			Global().
+			Default(false).
+			Help("Print the .ssql script and SSH command that -remote would send, without executing. Dry-run for review / audit.").
+			Done().
+
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -63,6 +70,7 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			path, _ := ctx.GlobalFlags["PATH"].(string)
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
 			remote, _ := ctx.GlobalFlags["-remote"].(bool)
+			showRemoteSource, _ := ctx.GlobalFlags["-show-remote-source"].(bool)
 			generate, _ := ctx.GlobalFlags["-generate"].(bool)
 
 			if host == "" || path == "" {
@@ -71,6 +79,9 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 
 			// If RemainingArgs present (after --), it's a push-down pipeline
 			if len(ctx.RemainingArgs) > 0 {
+				if showRemoteSource {
+					return showFromSSHRemoteSource(host, path, ctx.RemainingArgs)
+				}
 				if shouldGenerate(generate) {
 					return generateFromSSHRemoteCode(host, path, gpu, ctx.RemainingArgs)
 				}
@@ -252,6 +263,38 @@ func executeFromSSHRemoteGo(host, path string, pipelineArgs []string) error {
 		return writeErr
 	}
 	return runErr
+}
+
+// showFromSSHRemoteSource prints the .ssql script and the SSH
+// command that `-remote` would send, without executing. Used as a
+// transparency aid / dry-run for review and audit. Output goes to
+// stdout in a "report" form — the .ssql script (so users can see
+// the pipeline as the remote will see it) and the equivalent
+// `ssh HOST 'COMMAND'` invocation that ships it.
+//
+// No probe is performed — this is purely cosmetic. Use without
+// `-remote` to see what *would* be sent if you used `-remote`.
+func showFromSSHRemoteSource(host, path string, pipelineArgs []string) error {
+	script := buildRemoteSSQLScript(path, ssql.SplitOnPlus(pipelineArgs))
+	remotePath := sshgo.MakeRemoteScriptPath()
+	remoteCmd := sshgo.BuildRemoteCmd(remotePath)
+
+	fmt.Printf("# Remote: %s\n", host)
+	fmt.Printf("# Remote script path: %s (auto-cleaned via trap-on-EXIT)\n", remotePath)
+	fmt.Println("#")
+	fmt.Println("# .ssql script that would be piped in via stdin:")
+	fmt.Println("# ----------------------------------------------")
+	for _, line := range strings.Split(strings.TrimRight(script, "\n"), "\n") {
+		fmt.Printf("#   %s\n", line)
+	}
+	fmt.Println("# ----------------------------------------------")
+	fmt.Println("#")
+	fmt.Println("# Equivalent shell command:")
+	fmt.Printf("ssh -o BatchMode=yes %s %s <<'__SSQL_SCRIPT__'\n",
+		ssql.ShellQuote(host), ssql.ShellQuote(remoteCmd))
+	fmt.Print(script)
+	fmt.Println("__SSQL_SCRIPT__")
+	return nil
 }
 
 // buildRemoteSSQLScript turns a from-ssh-pushdown invocation into a
