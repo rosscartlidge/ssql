@@ -52,6 +52,19 @@ func buildRootCommand() *cf.Command {
 		Bool().
 		Global().
 		Help("Enable verbose output").
+		Done().
+
+		// Registering -shell-helpers as a global Bool flag makes it
+		// show up in `ssql -help` and (more importantly) gets picked
+		// up by the bash-completion script — `ssql -she<TAB>` then
+		// expands to `-shell-helpers`. The actual handler is in
+		// main(), intercepting before autocli dispatches: we print
+		// the helper script and exit, same as autocli does for
+		// -completion-script.
+		Flag("-shell-helpers").
+		Bool().
+		Global().
+		Help("Print bash helper functions (eval \"$(ssql -shell-helpers)\" in ~/.bashrc to install)").
 		Done()
 
 	// Register all subcommands
