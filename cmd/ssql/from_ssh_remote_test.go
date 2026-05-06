@@ -61,10 +61,17 @@ func TestBuildRemoteSSQLScript_PathQuoting(t *testing.T) {
 	}
 }
 
-// TestRemoteGoIntegration runs an end-to-end remote-Go pipeline
-// against a test host. Requires SSQL_TEST_SSH_HOST to point at a
-// reachable SSH host that has ssql v4.41+ AND Go 1.26+ installed.
-// Skipped without the env var.
+// TestRemoteGoIntegration runs end-to-end codegen-symmetric remote
+// execution against a test host. Requires SSQL_TEST_SSH_HOST to
+// point at a reachable SSH host with ssql v4.42+ AND Go 1.26+
+// installed. Skipped without the env var.
+//
+// Each codegen mode (record, typed) is tested:
+//   1. Local generates Go via `(SSQLGO=$mode; ssql from ssh H P -- …) | ssql generate go`
+//   2. Generated Go is run; it ships the .ssql script to H and execs
+//      `ssql generate go -script -mode $mode -run` on H
+//   3. Output is compared to the v4.27 baseline (no codegen) for
+//      wire-format compatibility
 //
 // Setup hint: see doc/research/ssh-test-environment.md (LXD
 // container with ssql + Go installed).
@@ -85,41 +92,36 @@ func TestRemoteGoIntegration(t *testing.T) {
 	}
 	defer exec.Command("ssh", host, "rm -f "+stagePath).Run()
 
-	// Run a pushdown pipeline both ways. The baseline path expects
-	// the remote pipeline's final stage to emit JSONL (which the
-	// local from_ssh code reads via runSSHAndStreamJSONL); explicit
-	// `to csv` would break baseline. With -remote, our script auto-
-	// appends `to jsonl` if no sink is given — so the wire format
-	// matches the baseline. Both invocations therefore use the
-	// no-explicit-sink form.
-	args := func(useRemote bool) []string {
-		a := []string{"from", "ssh", host, stagePath}
-		if useRemote {
-			a = append(a, "-remote")
-		}
-		a = append(a, "--", "where", "-if", "age", "gt", "25", "+", "group-by", "dept", "-count", "n")
-		return a
+	pipelineArgs := []string{"--", "where", "-if", "age", "gt", "25", "+", "group-by", "dept", "-count", "n"}
+
+	// Baseline: v4.27 plain CLI pushdown (no codegen, no -remote).
+	args := append([]string{"from", "ssh", host, stagePath}, pipelineArgs...)
+	baseline, err := exec.Command(bin, args...).Output()
+	if err != nil {
+		t.Fatalf("baseline (CLI pushdown): %v", err)
 	}
 
-	baseline, err := exec.Command(bin, args(false)...).Output()
-	if err != nil {
-		t.Fatalf("baseline (no -remote): %v", err)
-	}
-	remote, err := exec.Command(bin, args(true)...).Output()
-	if err != nil {
-		t.Fatalf("with -remote: %v", err)
-	}
-	// Both should emit a JSONL stream with a _schema header followed
-	// by aggregated rows. We don't compare byte-for-byte — the
-	// _schema field-order may differ — but both should contain the
-	// expected aggregate.
-	for _, want := range []string{`"_schema"`, `"dept":"Eng"`, `"n":2`} {
-		if !strings.Contains(string(baseline), want) {
-			t.Errorf("baseline missing %q\nfull baseline:\n%s", want, baseline)
-		}
-		if !strings.Contains(string(remote), want) {
-			t.Errorf("-remote missing %q\nfull -remote:\n%s", want, remote)
-		}
+	// Codegen-symmetric: SSQLGO=record and SSQLGO=typed should each
+	// generate Go that ships the .ssql to the remote and runs `ssql
+	// generate go -script -mode $mode -run` there. Output should
+	// match the baseline wire format.
+	for _, mode := range []string{"record", "typed"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			pipelineCmd := strings.Join(append([]string{bin, "from", "ssh", host, stagePath}, pipelineArgs...), " ")
+			fullCmd := "export SSQLGO=" + mode + " && " + pipelineCmd + " | " + bin + " generate go -run"
+			out, err := exec.Command("bash", "-c", fullCmd).Output()
+			if err != nil {
+				t.Fatalf("codegen-%s end-to-end: %v\n%s", mode, err, out)
+			}
+			for _, want := range []string{`"dept":"Eng"`, `"n":2`} {
+				if !strings.Contains(string(out), want) {
+					t.Errorf("mode=%s output missing %q\nfull:\n%s", mode, want, out)
+				}
+				if !strings.Contains(string(baseline), want) {
+					t.Errorf("baseline missing %q (test setup error)\n%s", want, baseline)
+				}
+			}
+		})
 	}
 }
 

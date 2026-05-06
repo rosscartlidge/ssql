@@ -5,7 +5,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
-	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/sshgo"
 )
 
 func registerFromSSH(cmd *cf.SubcommandBuilder) {
@@ -44,20 +42,6 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			Help("Use ssql_gpu on the remote machine").
 			Done().
 
-		Flag("-remote").
-			Bool().
-			Global().
-			Default(false).
-			Help("Run the pipeline as typed-Go on the remote (Mode A: requires ssql installed). Falls back to standard SSH streaming if the remote has no ssql.").
-			Done().
-
-		Flag("-show-remote-source").
-			Bool().
-			Global().
-			Default(false).
-			Help("Print the .ssql script and SSH command that -remote would send, without executing. Dry-run for review / audit.").
-			Done().
-
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -69,24 +53,21 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			host, _ := ctx.GlobalFlags["HOST"].(string)
 			path, _ := ctx.GlobalFlags["PATH"].(string)
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
-			remote, _ := ctx.GlobalFlags["-remote"].(bool)
-			showRemoteSource, _ := ctx.GlobalFlags["-show-remote-source"].(bool)
 			generate, _ := ctx.GlobalFlags["-generate"].(bool)
 
 			if host == "" || path == "" {
 				return fmt.Errorf("usage: ssql from ssh HOST PATH [-- <remote-pipeline>]")
 			}
 
-			// If RemainingArgs present (after --), it's a push-down pipeline
+			// If RemainingArgs present (after --), it's a push-down pipeline.
+			// In codegen mode (SSQLGO set), the generated Go ships the
+			// .ssql script to the remote and runs ssql generate go -script
+			// -run there — so local and remote run the same mode. In CLI
+			// mode, it's the v4.27 baseline: ssql … | ssql … chain on the
+			// remote.
 			if len(ctx.RemainingArgs) > 0 {
-				if showRemoteSource {
-					return showFromSSHRemoteSource(host, path, ctx.RemainingArgs)
-				}
 				if shouldGenerate(generate) {
 					return generateFromSSHRemoteCode(host, path, gpu, ctx.RemainingArgs)
-				}
-				if remote {
-					return executeFromSSHRemoteGo(host, path, ctx.RemainingArgs)
 				}
 				return executeFromSSHRemote(host, path, gpu, ctx.RemainingArgs)
 			}
@@ -214,89 +195,6 @@ func executeFromSSHRemote(host, path string, gpu bool, pipelineArgs []string) er
 	return runSSHAndStreamJSONL(host, remoteCmd)
 }
 
-// executeFromSSHRemoteGo runs the push-down pipeline on the remote
-// host as typed-Go (Mode A from remote-go-execution-proposal.md):
-// builds a .ssql script, ships it via stdin, runs `ssql generate go
-// -script -run`. The remote does typed-parallel codegen + go-run;
-// stdout (JSONL with schema-inferred header) streams back through
-// the same readJSONSchemaAware + writeWithInferredSchema layer the
-// non-remote path uses, so downstream local stages see the same
-// wire format either way.
-//
-// If the remote doesn't have ssql installed (probe says no), falls
-// back to the standard executeFromSSHRemote path with a stderr note
-// — pipeline still works, just without acceleration.
-func executeFromSSHRemoteGo(host, path string, pipelineArgs []string) error {
-	caps, err := sshgo.Probe(host)
-	if err != nil {
-		return fmt.Errorf("ssql from ssh -remote: probe %s: %w", host, err)
-	}
-	if !caps.HasSSQL {
-		fmt.Fprintf(os.Stderr,
-			"%s has no ssql installed; falling back to standard SSH streaming "+
-				"(install ssql on %s to enable -remote acceleration)\n",
-			host, host)
-		return executeFromSSHRemote(host, path, false, pipelineArgs)
-	}
-	script := buildRemoteSSQLScript(path, ssql.SplitOnPlus(pipelineArgs))
-
-	// Pipe the remote's stdout through the same schema-aware
-	// reader/writer the non-remote path uses. This:
-	//   - prepends a `{"_schema":...}` header to the output (so
-	//     downstream local stages can preserve column types)
-	//   - normalises field names if the remote emitted CamelCase
-	//     (typed-mode JSONL fallback) — readJSONSchemaAware uses
-	//     the first row's keys as schema fields verbatim, then
-	//     writeWithInferredSchema emits a consistent header
-	//   - matches the wire format the standard from-ssh path uses
-	pr, pw := io.Pipe()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- sshgo.RunRemote(host, []byte(script), pw)
-		pw.Close()
-	}()
-
-	records := readJSONSchemaAware(pr)
-	writeErr := writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
-	runErr := <-errCh
-	if writeErr != nil {
-		return writeErr
-	}
-	return runErr
-}
-
-// showFromSSHRemoteSource prints the .ssql script and the SSH
-// command that `-remote` would send, without executing. Used as a
-// transparency aid / dry-run for review and audit. Output goes to
-// stdout in a "report" form — the .ssql script (so users can see
-// the pipeline as the remote will see it) and the equivalent
-// `ssh HOST 'COMMAND'` invocation that ships it.
-//
-// No probe is performed — this is purely cosmetic. Use without
-// `-remote` to see what *would* be sent if you used `-remote`.
-func showFromSSHRemoteSource(host, path string, pipelineArgs []string) error {
-	script := buildRemoteSSQLScript(path, ssql.SplitOnPlus(pipelineArgs))
-	remotePath := sshgo.MakeRemoteScriptPath()
-	remoteCmd := sshgo.BuildRemoteCmd(remotePath)
-
-	fmt.Printf("# Remote: %s\n", host)
-	fmt.Printf("# Remote script path: %s (auto-cleaned via trap-on-EXIT)\n", remotePath)
-	fmt.Println("#")
-	fmt.Println("# .ssql script that would be piped in via stdin:")
-	fmt.Println("# ----------------------------------------------")
-	for _, line := range strings.Split(strings.TrimRight(script, "\n"), "\n") {
-		fmt.Printf("#   %s\n", line)
-	}
-	fmt.Println("# ----------------------------------------------")
-	fmt.Println("#")
-	fmt.Println("# Equivalent shell command:")
-	fmt.Printf("ssh -o BatchMode=yes %s %s <<'__SSQL_SCRIPT__'\n",
-		ssql.ShellQuote(host), ssql.ShellQuote(remoteCmd))
-	fmt.Print(script)
-	fmt.Println("__SSQL_SCRIPT__")
-	return nil
-}
-
 // buildRemoteSSQLScript turns a from-ssh-pushdown invocation into a
 // multi-line .ssql script:
 //
@@ -399,33 +297,58 @@ func generateFromSSHCode(host, path string, gpu bool) error {
 	return lib.WriteCodeFragment(frag)
 }
 
+// generateFromSSHRemoteCode emits an init fragment that runs the
+// pushdown pipeline on the remote host. v4.42 codegen-symmetric
+// design (see remote-go-execution-proposal.md rev 4):
+//
+// The generated Go embeds the .ssql script as a `const` string and
+// inlines a small ssh-and-cat-and-run helper. Whatever mode SSQLGO
+// is at codegen time (record/typed/parallel) is propagated to the
+// remote via `ssql generate go -script -mode $mode -run`. So:
+//
+//   (SSQLGO=record …) | ssql generate go -run   →  remote runs record-mode Go
+//   (SSQLGO=typed  …) | ssql generate go -run   →  remote runs typed-parallel Go
+//
+// Local-side, the fragment produces an `iter.Seq[ssql.Record]` from
+// the remote's JSONL output (parsed via ssql.ReadJSONFromReader,
+// which strips the `{"_schema":…}` header the remote emits via the
+// v4.41.2 schema-aware JSONL fallback). Downstream local stages
+// see the same wire shape they would in the v4.27 baseline path.
+//
+// Self-contained: the .ssql script is baked into the generated
+// source as a const, so the resulting binary is a single artifact
+// — no sibling files to ship.
 func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []string) error {
-	remoteBin := sshRemoteBin(gpu)
+	_ = gpu // -gpu is unused in the codegen path — the remote runs
+	// `ssql generate go` regardless. ssql_gpu vs ssql is a runtime
+	// choice on the remote, not something the generator picks.
+
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
+	script := buildRemoteSSQLScript(path, pipelineGroups)
+	remoteMode := ssqlgoModeFromEnv()
 
 	params := []lib.CodeParam{
 		{Name: "host", Default: host, Help: "SSH host", VarName: "flagHost"},
-		{Name: "path", Default: path, Help: "remote file path", VarName: "flagPath"},
+		// path stays embedded in the script (which is a const), but
+		// we still expose -input so users can override at runtime
+		// (e.g. when the binary is pointed at a different remote
+		// file with the same schema).
 	}
 
-	// Build pipeline groups code
-	var pipelineCode string
-	if len(pipelineGroups) > 0 {
-		var groupStrs []string
-		for _, group := range pipelineGroups {
-			var quotedArgs []string
-			for _, arg := range group {
-				quotedArgs = append(quotedArgs, fmt.Sprintf("%q", arg))
-			}
-			groupStrs = append(groupStrs, fmt.Sprintf("{%s}", strings.Join(quotedArgs, ", ")))
-		}
-		pipelineCode = fmt.Sprintf("[][]string{%s}", strings.Join(groupStrs, ", "))
-	} else {
-		pipelineCode = "nil"
-	}
+	// Indent each line of the .ssql script for the Go raw-string
+	// literal. We use a backtick-delimited string for clarity.
+	scriptLiteral := "`" + strings.TrimRight(script, "\n") + "`"
 
-	code := fmt.Sprintf(`remoteCmd := ssql.BuildRemoteCommand(%q, *flagPath, "", %s)
-	sshCmd := exec.Command("ssh", *flagHost, remoteCmd)
+	// The remote command: `trap 'rm -f X' EXIT; cat > X && ssql
+	// generate go -script X -mode $mode -run`. Built at runtime so
+	// the temp path is unique per invocation.
+	code := fmt.Sprintf(`const remoteSSQLScript = %s
+	const remoteSSQLMode = %q
+	remoteSSQLPath := fmt.Sprintf("/tmp/ssql-remote-%%d-%%d.ssql", os.Getpid(), time.Now().UnixNano())
+	remoteSSQLCmd := fmt.Sprintf("trap 'rm -f %%s' EXIT; cat > %%s && ssql generate go -script %%s -mode %%s -run",
+		remoteSSQLPath, remoteSSQLPath, remoteSSQLPath, remoteSSQLMode)
+	sshCmd := exec.Command("ssh", "-o", "BatchMode=yes", *flagHost, remoteSSQLCmd)
+	sshCmd.Stdin = strings.NewReader(remoteSSQLScript)
 	sshCmd.Stderr = os.Stderr
 	sshStdout, err := sshCmd.StdoutPipe()
 	if err != nil {
@@ -437,10 +360,23 @@ func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []strin
 		os.Exit(1)
 	}
 	defer sshCmd.Wait()
-	records := ssql.ReadJSONFromReader(sshStdout)`, remoteBin, pipelineCode)
+	records := ssql.ReadJSONLFromReader(sshStdout)`, scriptLiteral, remoteMode)
 
-	imports := []string{"fmt", "os", "os/exec"}
+	imports := []string{"fmt", "os", "os/exec", "strings", "time"}
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
+}
+
+// ssqlgoModeFromEnv returns the canonical mode name to pass to the
+// remote `ssql generate go -mode …` based on the local SSQLGO env.
+// SSQLGO=1/true/record → "record"; SSQLGO=typed/parallel → "typed".
+// We're called only from the codegen path so SSQLGO is non-empty.
+func ssqlgoModeFromEnv() string {
+	switch os.Getenv("SSQLGO") {
+	case "typed", "parallel":
+		return "typed"
+	default:
+		return "record"
+	}
 }

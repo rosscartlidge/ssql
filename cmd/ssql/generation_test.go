@@ -431,16 +431,20 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			wantSubstring:  `sshCmd := exec.Command`,
 		},
 		{
+			// v4.42: from-ssh-pushdown codegen embeds the .ssql script
+			// as a const and inlines a small ship-and-cat-and-run helper.
+			// Generated Go ssh's the script to the remote and runs `ssql
+			// generate go -script -mode $mode -run` there.
 			name:           "from ssh remote",
 			cmdLine:        `SSQLGO=1 /tmp/ssql_test from ssh myhost /data/test.csv -- where -if age gt 25`,
 			expectFragment: true,
-			wantSubstring:  `BuildRemoteCommand`,
+			wantSubstring:  `remoteSSQLScript`,
 		},
 		{
 			name:           "from ssh remote multi",
 			cmdLine:        `SSQLGO=1 /tmp/ssql_test from ssh myhost /data/test.csv -- where -if age gt 25 + group-by dept -count cnt`,
 			expectFragment: true,
-			wantSubstring:  `BuildRemoteCommand`,
+			wantSubstring:  `ssql generate go -script`,
 		},
 		{
 			name:           "from ssh gpu",

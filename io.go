@@ -1031,6 +1031,89 @@ func WriteJSON(sb iter.Seq[Record], filename string) error {
 // FAST JSON ENCODING (AVOIDS REFLECTION)
 // ============================================================================
 
+// ReadJSONLFromReader reads JSONL records from r. Counterpart to
+// WriteJSONLWithInferredSchemaToWriter — reads the standard ssql
+// wire format. If the first line is a `{"_schema":…}` header, it's
+// parsed and used for per-field type coercion; otherwise records
+// are read with per-record type inference.
+//
+// Unlike ReadJSONFromReader, this helper does NOT inject a synthetic
+// `_line_number` field. Use it when consuming streams that have
+// already been processed (SSH push-down output, generated-Go remote
+// pipelines, JSONL written by `ssql ... | ssql to jsonl`).
+func ReadJSONLFromReader(r io.Reader) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		br := bufio.NewReader(r)
+
+		// Read first line; might be a {"_schema":…} header.
+		firstLine, _ := br.ReadBytes('\n')
+		var schema *Schema
+		var firstIsHeader bool
+		if len(bytes.TrimSpace(firstLine)) > 0 {
+			schema, firstIsHeader = parseSchemaHeaderLine(firstLine)
+		}
+
+		// Build the iterator source: if first line was the schema
+		// header, read the rest. Otherwise treat the first line as
+		// a data record (re-prepend).
+		var src io.Reader = br
+		if !firstIsHeader && len(firstLine) > 0 {
+			src = io.MultiReader(bytes.NewReader(firstLine), br)
+		}
+
+		scanner := bufio.NewScanner(src)
+		// Records can be large (group-by results with -collect, etc.) —
+		// match the bufio buffer the schema-aware lib reader uses.
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+		for scanner.Scan() {
+			line := bytes.TrimSpace(scanner.Bytes())
+			if len(line) == 0 {
+				continue
+			}
+			var record Record
+			var err error
+			if schema != nil {
+				record, err = ParseJSONLineWithSchema(line, schema)
+			} else {
+				var mut MutableRecord
+				mut, err = ParseJSONLine(line)
+				if err == nil {
+					record = mut.Freeze()
+				}
+			}
+			if err != nil {
+				continue
+			}
+			if !yield(record) {
+				return
+			}
+		}
+	}
+}
+
+// parseSchemaHeaderLine returns (schema, true) if line is a
+// `{"_schema":…}` header, or (nil, false) otherwise. The schema's
+// fields/types are inferred from the header's `fields` and `types`
+// maps. Errors return (nil, false) — callers treat the line as a
+// data record in that case.
+func parseSchemaHeaderLine(line []byte) (*Schema, bool) {
+	var hdr struct {
+		Schema struct {
+			Fields []string          `json:"fields"`
+			Types  map[string]string `json:"types"`
+		} `json:"_schema"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(line), &hdr); err != nil {
+		return nil, false
+	}
+	if len(hdr.Schema.Fields) == 0 {
+		// Not a schema header (or an empty one — treat as data).
+		return nil, false
+	}
+	return NewSchema(hdr.Schema.Fields), true
+}
+
 // WriteJSONLWithInferredSchemaToWriter writes records as JSONL prefixed
 // with a `{"_schema":{"fields":[...],"types":{...}}}` header inferred
 // from the first record. Field order is alphabetical (deterministic).
