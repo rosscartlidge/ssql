@@ -1,7 +1,7 @@
 # Catalog Remote-Go Proposal
 
-**Status:** Proposal
-**Date:** 2026-05-06
+**Status:** Proposal (rev 2, 2026-05-06)
+**Date:** 2026-05-06 (orig); 2026-05-06 (rev 2: drop concurrency cap, completion-order default, fail-fast default, auto-emit require header)
 **ssql version target:** v4.43
 **Prerequisites:** Phase A planner (v4.39), Phase B mixed mode (v4.40), `-script PATH` flag (v4.41), codegen-symmetric ssh pushdown (v4.42)
 **Related:** `distributed-shard-catalog.md` (shipped v4.27.0), `remote-go-execution-proposal.md` (shipped v4.42)
@@ -76,12 +76,18 @@ The local generator emits Go that:
    (already happens today — v4.27 mechanism unchanged)
 3. For each remaining entry, builds a per-shard `.ssql` script
    from the embedded template (substituting `entry.Path`)
-4. Ships+runs each script on its respective host, in parallel
-   (bounded by `-shard-concurrency N`, default GOMAXPROCS or
-   8 — whichever is smaller, since these are network-bound)
+4. Ships+runs each script on its respective host, **all in
+   parallel by default** (no concurrency cap — each shard runs
+   on a different host, and the local orchestrator just spawns
+   `ssh` subprocesses with negligible CPU cost). Opt-in
+   `-shard-concurrency N` for pathological catalogs (hundreds
+   of shards) or fleets where many shards colocate on one host
+   and `MaxSessions` matters.
 5. Reads each shard's JSONL output, optionally enriches with
-   `shardField`, merges (today: sequential concat; later:
-   K-way merge for `-by` ordered streams)
+   `shardField`, merges to local stdout in **completion order**
+   by default (whichever shard finishes first writes first).
+   Opt-in `-shard-order catalog` for deterministic output with
+   per-shard buffering (peak memory ~total output).
 
 ### Per-shard .ssql template
 
@@ -104,35 +110,53 @@ runRemote(entry.Host, script, remoteSSQLMode, w)
 The template captures the local-side intent (the user's `--`
 pushdown stages). The path is the only per-shard variable.
 
-### Parallel orchestrator
+### Parallel orchestrator (completion-order default)
 
 ```go
 func runCatalogShards(entries []ssql.CatalogEntry, mode string, concurrency int, w io.Writer) error {
-    sem := make(chan struct{}, concurrency)
+    var sem chan struct{}
+    if concurrency > 0 {
+        sem = make(chan struct{}, concurrency)
+    }
     var wg sync.WaitGroup
-    var mu sync.Mutex // serialises writes to w to avoid interleaving
+    var mu sync.Mutex // serialises writes to w (and the schema-header-once latch)
+    var schemaWritten bool
     var firstErr error
+    var firstErrOnce sync.Once
 
     for _, entry := range entries {
         wg.Add(1)
-        sem <- struct{}{}
+        if sem != nil { sem <- struct{}{} }
         go func(e ssql.CatalogEntry) {
             defer wg.Done()
-            defer func() { <-sem }()
+            if sem != nil { defer func() { <-sem }() }
 
             script := fmt.Sprintf(remoteSSQLTemplate, ssql.ShellQuote(e.Path))
-            var buf bytes.Buffer
-            if err := runRemote(e.Host, script, mode, &buf); err != nil {
+            stdout, errCh := runRemoteStreaming(e.Host, script, mode)
+
+            // Stream this shard's output line-by-line under the
+            // mutex so multiple shards' lines don't interleave.
+            scanner := bufio.NewScanner(stdout)
+            for scanner.Scan() {
+                line := scanner.Bytes()
+                if isSchemaHeader(line) {
+                    // Emit the schema header exactly once (from
+                    // whichever shard arrives first); other
+                    // shards' headers are dropped.
+                    mu.Lock()
+                    if !schemaWritten { w.Write(line); w.Write([]byte{'\n'}); schemaWritten = true }
+                    mu.Unlock()
+                    continue
+                }
                 mu.Lock()
-                if firstErr == nil { firstErr = fmt.Errorf("shard %s:%s: %w", e.Host, e.Path, err) }
+                w.Write(enrichWithShardField(line, e, shardField))
+                w.Write([]byte{'\n'})
                 mu.Unlock()
-                return
             }
-            // Optionally enrich each record with shard provenance,
-            // then write to w under mu.
-            mu.Lock()
-            defer mu.Unlock()
-            // ... process buf into w ...
+            if err := <-errCh; err != nil {
+                firstErrOnce.Do(func() { firstErr = fmt.Errorf("shard %s:%s: %w", e.Host, e.Path, err) })
+                if failFast { /* signal cancellation to other shards */ }
+            }
         }(entry)
     }
     wg.Wait()
@@ -140,10 +164,71 @@ func runCatalogShards(entries []ssql.CatalogEntry, mode string, concurrency int,
 }
 ```
 
-Shard outputs are concatenated in completion order (whichever
-shard finishes first writes first). The existing K-way merge in
-`ssql merge -catalog` handles the case where ordered output is
-required.
+Default behaviour:
+
+- **No concurrency cap** (`concurrency == 0` → `sem == nil`,
+  uncapped fanout). Each shard runs on its own host; the local
+  orchestrator is essentially I/O multiplexing.
+- **Completion order** — shards write under the mutex as data
+  arrives. First shard to produce data emits the schema header;
+  subsequent shards' schema headers are dropped (they should
+  match anyway).
+- **Fail-fast on first error** — `firstErrOnce.Do` captures the
+  earliest shard failure; remaining shards are signalled to
+  cancel via the `failFast` path. `-keep-going` opt-out skips
+  the cancellation, lets remaining shards finish, returns the
+  collected errors.
+
+Opt-in `-shard-order catalog` switches to per-shard buffering:
+each shard accumulates into its own buffer, the orchestrator
+flushes them in catalog order once all shards complete. Trade:
+peak memory ~total output, deterministic output for callers
+that need it.
+
+### Auto-emitted `# require: vX.Y.Z` header
+
+Catalog has the highest version-skew risk: multiple hosts, often
+heterogeneous deployment. A v4.40 shard processing a v4.42-feature
+script produces hard-to-diagnose cascade errors:
+
+```
+shard node3: bash: line 3: count: command not found
+shard node3: pipeline failed: exit status 127
+Error: shard node3: exit status 1
+```
+
+The `require:` directive at the top of the .ssql script gives the
+remote ssql a chance to pre-flight check before running anything.
+Mismatch → single clear error:
+
+```
+shard node3: ssql v4.40.0 cannot run this script (requires v4.42.1+) — upgrade ssql on node3
+```
+
+**Two ways the directive arrives:**
+
+1. **Auto-emitted by the local generator** at codegen time.
+   Every `.ssql` script shipped via `ssql generate go` gets a
+   `# require: $localVersion` header automatically. Zero user
+   effort; biggest mismatch class caught (the catalog case
+   where the user can't easily know each shard's version).
+2. **User-authored** in hand-written `.ssql` files. Pin a
+   specific minimum for scripts that genuinely need a
+   particular feature.
+
+**Implementation:**
+
+- `ssql generate go -script` preprocessor parses leading
+  `# require: vX.Y.Z` lines (multiple allowed; takes the
+  highest minimum). Compares against the running binary's
+  `version.Version`. Mismatch → error before the pipeline runs.
+- Local-side codegen path emits `# require: $localVersion` as
+  the first line of any .ssql script written into the
+  generated Go const.
+
+Format chosen to match the `require` keyword from `go.mod` and
+`Cargo.toml` — recognisable pattern, one-word directive, the
+version is the *minimum*.
 
 ### Result format compatibility
 
@@ -299,25 +384,33 @@ Total scope for v4.43: **~2-3 days**. Phase C is a quality-of-
 life upgrade for users who don't use codegen — could ship
 together or later.
 
-## Open questions
+## Decisions (rev 2)
 
-1. **Default concurrency.** GOMAXPROCS is the obvious choice
-   but for SSH-bound work it's wasteful. Lean: **min(GOMAXPROCS, 8)**.
-   8 is a reasonable saturation point for typical SSH bandwidth
-   and avoids fork-bombing 72-thread workstations into the
-   ground.
-2. **Shard ordering in output.** Today's serial implementation
-   produces shards in catalog order (deterministic). Parallel
-   produces them in completion order (non-deterministic).
-   Should we maintain catalog order via per-shard buffering?
-   Lean: **yes, for backwards compatibility**. The cost is
-   peak memory ~total_output (each shard buffers until prior
-   shards finish writing).
-3. **Per-shard error handling.** Today: log + continue. v4.43
-   default: log + fail-fast. Opt-out: `-keep-going`.
-4. **`# require: vX.Y.Z` in the .ssql template?** Worth
-   landing here — catalog has the highest version-skew risk
-   (multiple hosts, often heterogeneous deployment).
+The four open questions from rev 1 have been resolved:
+
+1. **Concurrency: uncapped by default.** Each shard runs on a
+   different host; the local orchestrator just spawns ssh
+   subprocesses with negligible CPU cost. Fork-bombing concerns
+   start at hundreds of shards, not eight. Opt-in
+   `-shard-concurrency N` exists for users with pathological
+   catalogs (1000+ shards) or fleets where many shards
+   colocate on one host.
+2. **Output ordering: completion order by default.** Cheaper
+   (no per-shard buffering, peak memory ~one record). Opt-in
+   `-shard-order catalog` for users who need deterministic
+   output — buffers each shard, flushes in catalog order at
+   the end. Trade: peak memory ~total output.
+3. **Failure: fail-fast by default.** First shard error
+   cancels remaining shards and returns the error. Opt-out
+   `-keep-going` collects errors, lets remaining shards
+   finish, returns the aggregate. Matches what users expect
+   from a coherent distributed query.
+4. **`# require: vX.Y.Z` directive: auto-emitted on every
+   generated .ssql script** with the local ssql version.
+   Pre-flight check on the remote catches version-skew before
+   the pipeline runs, giving a single clear error instead of
+   a cascade of symptoms. Also accepted in user-authored
+   scripts. Cost: ~30 minutes of preprocessor work.
 
 ## Why this is the right scope for v4.43
 
