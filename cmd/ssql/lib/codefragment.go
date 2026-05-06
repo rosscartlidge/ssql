@@ -628,8 +628,15 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 			outputVar = "records"
 		}
 
-		code.WriteString("\t// Output records as JSONL\n")
-		code.WriteString(fmt.Sprintf("\tif err := ssql.WriteJSONFastToWriter(%s, os.Stdout); err != nil {\n", outputVar))
+		// Emit a `{"_schema":…}` header inferred from the first
+		// record, then JSONL — matches the wire format the v4.27
+		// CLI multi-process pipeline produces. The typed assembler
+		// already uses this helper (since v4.41.2); aligning the
+		// record-mode fallback closes the last wire-format gap so
+		// downstream consumers see the same shape regardless of
+		// codegen mode.
+		code.WriteString("\t// Output records as JSONL with inferred schema header\n")
+		code.WriteString(fmt.Sprintf("\tif err := ssql.WriteJSONLWithInferredSchemaToWriter(%s, os.Stdout); err != nil {\n", outputVar))
 		code.WriteString("\t\tfmt.Fprintf(os.Stderr, \"Error writing output: %%v\\n\", err)\n")
 		code.WriteString("\t\tos.Exit(1)\n")
 		code.WriteString("\t}\n")
