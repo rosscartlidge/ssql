@@ -46,7 +46,8 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Catalog Codegen](catalog-codegen.md) — code generation for catalog operations
 - [Parallel Processing](parallel-processing.md) — parallelism opportunities
 - [SSH Test Environment](ssh-test-environment.md) — test setup for SSH features
-- [Remote Go Execution](remote-go-execution-proposal.md) — codegen-symmetric ssh pushdown. Whatever mode the local pipeline runs in (CLI baseline / SSQLGO=record / SSQLGO=typed), the remote runs in too. Generated Go embeds the .ssql script as a const string and inlines a small ssh-and-cat-and-run helper — single self-contained binary, no extra deployment artefacts. Drops the v4.41 transitional `-remote` flag. ~1 day for v4.42.
+- [Remote Go Execution](remote-go-execution-proposal.md) — codegen-symmetric ssh pushdown. Whatever mode the local pipeline runs in (CLI baseline / SSQLGO=record / SSQLGO=typed), the remote runs in too. Generated Go embeds the .ssql script as a const string and inlines a small ssh-and-cat-and-run helper — single self-contained binary, no extra deployment artefacts. Drops the v4.41 transitional `-remote` flag. Shipped v4.42.0.
+- [Catalog Remote-Go](catalog-remote-go-proposal.md) — extend the codegen-symmetric ssh pushdown to `from catalog`. Per-shard ship-and-run, parallel orchestration, embedded .ssql template. One self-contained Go binary that orchestrates distributed typed-parallel execution across N shard hosts with stock ssh and a deployed ssql. ~2 days for v4.43.
 - [Codegen Wrapper Proposal](codegen-wrapper-proposal.md) — `ssql -shell-helpers` + `ssql generate go -script PATH` to lower the bar from `(export SSQLGO=...; ...) | ssql generate go` to `ssqlgen 'pipeline'` or `-script <(heredoc)`
 
 ## CLI & Framework
