@@ -5,6 +5,18 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.43.1] - 2026-05-08
+
+### New Features
+- **Catalog hostname-aware local routing**: `from catalog` now treats a
+  `host` column matching the local machine's `os.Hostname()` (in addition
+  to the literal `local`/`localhost` sentinels) as local. Catalog CSVs are
+  portable across hosts — a row with `host=derra` runs locally on `derra`
+  and via ssh from anywhere else, no rewriting per machine. Public helper
+  `ssql.IsLocalHost(host)` exposes the predicate; applies symmetrically to
+  the v4.27 CLI baseline (`ProcessCatalogShards`) and the v4.43
+  codegen-symmetric path (`ProcessCatalogShardsRemoteGo`).
+
 ## [v4.43.0] - 2026-05-07
 
 ### New Features

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // CatalogEntry represents one shard in a catalog.
@@ -263,18 +264,46 @@ func WriteCatalog(w io.Writer, entries []CatalogEntry) error {
 	return writer.Error()
 }
 
+// IsLocalHost returns true when host refers to the machine running this
+// process: the literal "local"/"localhost" sentinels, or a value
+// matching os.Hostname() (so a catalog with host=derra is portable —
+// the row runs locally on derra and via ssh from anywhere else).
+//
+// The hostname lookup is cached on first call.
+func IsLocalHost(host string) bool {
+	if host == "local" || host == "localhost" {
+		return true
+	}
+	return host == cachedHostname()
+}
+
+var (
+	cachedHostnameOnce sync.Once
+	cachedHostnameVal  string
+)
+
+func cachedHostname() string {
+	cachedHostnameOnce.Do(func() {
+		if h, err := os.Hostname(); err == nil {
+			cachedHostnameVal = h
+		}
+	})
+	return cachedHostnameVal
+}
+
 // ProcessCatalogShards connects to each shard via SSH (or locally for
-// host "local"/"localhost") and returns a concatenated record stream.
-// remoteBin is "ssql" or "ssql_gpu". pipelineArgs are push-down commands
-// split on "+". shardField, if non-empty, adds a provenance field to
-// each record with the value "host:path".
+// hosts that resolve to this machine — see IsLocalHost) and returns a
+// concatenated record stream. remoteBin is "ssql" or "ssql_gpu".
+// pipelineArgs are push-down commands split on "+". shardField, if
+// non-empty, adds a provenance field to each record with the value
+// "host:path".
 func ProcessCatalogShards(entries []CatalogEntry, remoteBin string, shardField string, pipelineArgs [][]string) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
 		for _, entry := range entries {
 			remoteCmd := BuildRemoteCommand(remoteBin, entry.Path, entry.Format, pipelineArgs)
 
 			var cmd *exec.Cmd
-			if entry.Host == "local" || entry.Host == "localhost" {
+			if IsLocalHost(entry.Host) {
 				cmd = exec.Command("bash", "-c", remoteCmd)
 			} else {
 				cmd = exec.Command("ssh", entry.Host, remoteCmd)

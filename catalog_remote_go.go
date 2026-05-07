@@ -251,7 +251,7 @@ func startShardSSH(
 		remotePath, remotePath, remotePath, mode,
 	)
 	var cmd *exec.Cmd
-	if entry.Host == "local" || entry.Host == "localhost" {
+	if IsLocalHost(entry.Host) {
 		cmd = exec.CommandContext(ctx, "bash", "-c", remoteCmd)
 	} else {
 		cmd = exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", entry.Host, remoteCmd)
