@@ -21,7 +21,7 @@ func ReadParquetColumns(filename string, columns []string) (iter.Seq[Record], er
 // functions returns the standard "not available in slim build" error.
 type ParquetWriteOption func(*struct{})
 
-func WithRowGroupSize(n int) ParquetWriteOption     { return func(*struct{}) {} }
+func WithRowGroupSize(n int) ParquetWriteOption      { return func(*struct{}) {} }
 func WithCompression(name string) ParquetWriteOption { return func(*struct{}) {} }
 
 func WriteParquet(records iter.Seq[Record], filename string, opts ...ParquetWriteOption) error {

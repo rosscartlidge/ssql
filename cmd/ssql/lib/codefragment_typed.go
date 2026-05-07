@@ -291,7 +291,17 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 			// We don't go through the planner's toRecord boundary
 			// because that would alter the fragment list — we just
 			// emit equivalent code at the assembly layer.
-			converter := buildInlineToRecordExpr(outVar, lastFrag.OutputTypedSchema)
+			//
+			// If the last fragment produces a Stream[T] (parallel
+			// runtime), call Serial() to drain it into iter.Seq[T] —
+			// `for v := range stream` is illegal because Stream is a
+			// struct, not a range func. ShapeSeqTyped is already an
+			// iter.Seq and ranges directly.
+			rangeOver := outVar
+			if lastFrag.Capabilities != nil && lastFrag.Capabilities.Produces == ShapeStream {
+				rangeOver = outVar + ".Serial()"
+			}
+			converter := buildInlineToRecordExpr(rangeOver, lastFrag.OutputTypedSchema)
 			fmt.Fprintf(&code, "\tif err := ssql.WriteJSONLWithInferredSchemaToWriter(%s, os.Stdout); err != nil {\n", converter)
 		} else {
 			// No typed schema (shouldn't happen for typed

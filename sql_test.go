@@ -2054,8 +2054,8 @@ func TestCompareAny(t *testing.T) {
 		{int64(2), int64(1), 1},
 		{int64(1), int64(1), 0},
 		{float64(1.5), float64(2.5), -1},
-		{int64(1), float64(1.5), -1},  // cross-type numeric
-		{float64(2), int64(1), 1},     // cross-type numeric
+		{int64(1), float64(1.5), -1}, // cross-type numeric
+		{float64(2), int64(1), 1},    // cross-type numeric
 		{"abc", "def", -1},
 		{"def", "abc", 1},
 		{"abc", "abc", 0},

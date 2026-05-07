@@ -40,7 +40,7 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-if": {0}, // field is arg 0
 		},
 		"update": {
-			"-if":    {0}, // field is arg 0
+			"-if":       {0}, // field is arg 0
 			"-set":      {0}, // field is arg 0
 			"-set-expr": {0}, // field is arg 0
 		},
@@ -105,8 +105,8 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-if": {2}, // value is arg 2 (field, operator, value)
 		},
 		"update": {
-			"-if": {2}, // value is arg 2
-			"-set":   {1}, // value is arg 1 (field, value)
+			"-if":  {2}, // value is arg 2
+			"-set": {1}, // value is arg 1 (field, value)
 		},
 	}
 

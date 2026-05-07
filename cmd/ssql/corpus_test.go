@@ -52,9 +52,9 @@ type PipelineCase struct {
 // Shared corpus binary — built once across all corpus subtests to
 // keep the test suite fast.
 var (
-	corpusBinOnce sync.Once
-	corpusBinPath string
-	corpusBinErr  error
+	corpusBinOnce  sync.Once
+	corpusBinPath  string
+	corpusBinErr   error
 	corpusDataOnce sync.Once
 	corpusDataDir  string
 	corpusDataErr  error
@@ -363,9 +363,9 @@ func TestPipelineCorpus(t *testing.T) {
 			// Pivot is Tier 3 (Record-only). Under typed mode the
 			// planner inserts a typed→Record boundary upstream and
 			// the rest of the pipeline runs on Records.
-			Name:     "mixed_pivot",
-			Pipeline: `{{.bin}} from {{.data}}/sales.csv | {{.bin}} pivot -row product -col region -val amount | {{.bin}} to csv`,
-			Contains: []string{"product", "Widget", "Gadget"},
+			Name:       "mixed_pivot",
+			Pipeline:   `{{.bin}} from {{.data}}/sales.csv | {{.bin}} pivot -row product -col region -val amount | {{.bin}} to csv`,
+			Contains:   []string{"product", "Widget", "Gadget"},
 			SkipRecord: "pivot is record-mode by default; this case targets typed→Record boundary",
 		},
 

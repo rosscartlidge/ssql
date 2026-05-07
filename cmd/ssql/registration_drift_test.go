@@ -86,4 +86,3 @@ func setDiff(a, b map[string]struct{}) []string {
 	sort.Strings(out)
 	return out
 }
-

@@ -12,6 +12,7 @@ import (
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"
 )
 
 func registerFromSSH(cmd *cf.SubcommandBuilder) {
@@ -215,6 +216,15 @@ func executeFromSSHRemote(host, path string, gpu bool, pipelineArgs []string) er
 // user's last stage.
 func buildRemoteSSQLScript(path string, pipelineGroups [][]string) string {
 	var sb strings.Builder
+	// `# require: vX.Y.Z` lets the remote `ssql generate go -script`
+	// pre-flight check refuse the script if the remote ssql is older
+	// than the local one that produced it. Without this, version skew
+	// surfaces as a confusing mid-pipeline failure (a stage uses a
+	// flag the remote doesn't know). With it the remote errors at
+	// load time with a clear "this ssql (vA) needs vB or newer".
+	sb.WriteString("# require: v")
+	sb.WriteString(version.Version)
+	sb.WriteString("\n")
 	sb.WriteString("ssql from ")
 	sb.WriteString(ssql.ShellQuote(path))
 	sb.WriteString("\n")
@@ -345,7 +355,7 @@ func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []strin
 	code := fmt.Sprintf(`const remoteSSQLScript = %s
 	const remoteSSQLMode = %q
 	remoteSSQLPath := fmt.Sprintf("/tmp/ssql-remote-%%d-%%d.ssql", os.Getpid(), time.Now().UnixNano())
-	remoteSSQLCmd := fmt.Sprintf("trap 'rm -f %%s' EXIT; cat > %%s && ssql generate go -script %%s -mode %%s -run",
+	remoteSSQLCmd := fmt.Sprintf("trap 'rm -f %%s' EXIT; cat > %%s && /usr/bin/ssql generate go -script %%s -mode %%s -run",
 		remoteSSQLPath, remoteSSQLPath, remoteSSQLPath, remoteSSQLMode)
 	sshCmd := exec.Command("ssh", "-o", "BatchMode=yes", *flagHost, remoteSSQLCmd)
 	sshCmd.Stdin = strings.NewReader(remoteSSQLScript)

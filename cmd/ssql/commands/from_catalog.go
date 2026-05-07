@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"
 )
 
 func registerFromCatalog(cmd *cf.SubcommandBuilder) {
@@ -64,6 +66,28 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 			Help("Write expanded catalog (after glob expansion + pruning) to CSV file").
 			Done().
 
+		Flag("-shard-order").
+			String().
+			Global().
+			Default("completion").
+			Completer(&cf.StaticCompleter{Options: []string{"completion", "catalog"}}).
+			Help("Output ordering: 'completion' (default, low memory) or 'catalog' (deterministic, buffers per shard)").
+			Done().
+
+		Flag("-shard-concurrency").
+			Int().
+			Global().
+			Default(int64(0)).
+			Help("Cap concurrent ssh-pushdown shards (default 0 = uncapped)").
+			Done().
+
+		Flag("-keep-going").
+			Bool().
+			Global().
+			Default(false).
+			Help("Run all shards to completion on error (default: fail-fast)").
+			Done().
+
 		Flag("-generate", "-g").
 			Bool().
 			Global().
@@ -77,6 +101,9 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 			shardField, _ := ctx.GlobalFlags["-shard-field"].(string)
 			generate, _ := ctx.GlobalFlags["-generate"].(bool)
 			catalogUsed, _ := ctx.GlobalFlags["-catalog-used"].(string)
+			shardOrder, _ := ctx.GlobalFlags["-shard-order"].(string)
+			shardConcurrency64, _ := ctx.GlobalFlags["-shard-concurrency"].(int64)
+			keepGoing, _ := ctx.GlobalFlags["-keep-going"].(bool)
 
 			if catalogFile == "" {
 				return fmt.Errorf("usage: ssql from catalog FILE [-if field op value]...")
@@ -88,11 +115,17 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 				filters = parseCatalogFilters(ifVal)
 			}
 
-			if shouldGenerate(generate) {
-				return generateFromCatalogCode(catalogFile, gpu, filters, shardField, ctx.RemainingArgs)
+			opts := ssql.CatalogShardOpts{
+				Concurrency: int(shardConcurrency64),
+				Order:       shardOrder,
+				KeepGoing:   keepGoing,
 			}
 
-			return executeFromCatalog(catalogFile, gpu, filters, shardField, catalogUsed, ctx.RemainingArgs)
+			if shouldGenerate(generate) {
+				return generateFromCatalogCode(catalogFile, gpu, filters, shardField, opts, ctx.RemainingArgs)
+			}
+
+			return executeFromCatalog(catalogFile, gpu, filters, shardField, catalogUsed, opts, ctx.RemainingArgs)
 		}).
 		Done()
 }
@@ -294,7 +327,13 @@ func parseCatalogFilters(ifVal any) []ssql.CatalogFilter {
 }
 
 // executeFromCatalog reads all shards in a catalog, applying pruning and optional push-down.
-func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, catalogUsedFile string, pipelineArgs []string) error {
+//
+// opts only affects the v4.43 codegen-symmetric remote-Go path; the
+// CLI baseline (this function) still uses the v4.27 sequential
+// ProcessCatalogShards. Phase C of the catalog-remote-Go proposal
+// extends per-shard parallelism to this path too.
+func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, catalogUsedFile string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
+	_ = opts // unused in CLI baseline — Phase C
 	entries, err := ssql.ReadCatalog(catalogFile)
 	if err != nil {
 		return err
@@ -327,19 +366,35 @@ func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilt
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
 }
 
-// generateFromCatalogCode generates Go code for catalog reading.
-func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, pipelineArgs []string) error {
-	remoteBin := sshRemoteBin(gpu)
+// generateFromCatalogCode emits an init fragment that orchestrates
+// ship-and-run across catalog shards. v4.43 codegen-symmetric design
+// (see catalog-remote-go-proposal.md):
+//
+// Each shard runs the same mode the local pipeline runs in. The local
+// generated Go embeds the per-shard pushdown stages as a const slice,
+// reads the catalog at runtime, prunes, and calls
+// ssql.ProcessCatalogShardsRemoteGo. The function builds the per-
+// shard .ssql script, ships+runs it on each host (concurrently by
+// default), and returns iter.Seq[Record] of the merged output.
+//
+// The `# require: vX.Y.Z` directive baked into each shipped script
+// catches version-skew on stale shards before any records flow.
+//
+// gpu is currently unused in the codegen path — ssql vs ssql_gpu is
+// a runtime choice on the remote (the shipped script always invokes
+// `ssql generate go -script ... -run`).
+func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
+	_ = gpu
 
 	var params []lib.CodeParam
 	params = append(params, lib.CodeParam{Name: "catalog", Default: catalogFile, Help: "catalog CSV file", VarName: "flagCatalog"})
 
-	// Build filter code with parameterized values
+	// Filter values become per-flag CodeParams so the compiled
+	// binary can override them at runtime.
 	var filterCode string
 	if len(filters) > 0 {
 		var parts []string
 		for _, f := range filters {
-			// Create a flag for each filter value
 			flagName := f.Field + "-" + f.Operator
 			varName := "flag" + flagVarName(f.Field) + flagVarName(f.Operator)
 			params = append(params, lib.CodeParam{Name: flagName, Default: f.Value, Help: f.Field + " " + f.Operator + " filter", VarName: varName})
@@ -350,7 +405,6 @@ func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.Catalo
 		filterCode = "nil"
 	}
 
-	// Build pipeline groups code
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
 	var pipelineCode string
 	if len(pipelineGroups) > 0 {
@@ -367,16 +421,48 @@ func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.Catalo
 		pipelineCode = "nil"
 	}
 
+	mode := ssqlgoModeFromEnv()
+	requireVersion := version.Version
+
+	// Add runtime-overridable params for shard-level controls so the
+	// compiled binary exposes the same UX as the source CLI.
+	concurrencyDefault := strconv.Itoa(opts.Concurrency)
+	orderDefault := opts.Order
+	if orderDefault == "" {
+		orderDefault = "completion"
+	}
+	keepGoingDefault := strconv.FormatBool(opts.KeepGoing)
+	params = append(params,
+		lib.CodeParam{Name: "shard-concurrency", Default: concurrencyDefault, Help: "max concurrent shards (0 = uncapped)", VarName: "flagShardConcurrency"},
+		lib.CodeParam{Name: "shard-order", Default: orderDefault, Help: "shard output ordering: completion or catalog", VarName: "flagShardOrder"},
+		lib.CodeParam{Name: "keep-going", Default: keepGoingDefault, Help: "keep running on shard error", VarName: "flagKeepGoing"},
+	)
+
 	code := fmt.Sprintf(`entries, err := ssql.ReadCatalog(*flagCatalog)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
 		os.Exit(1)
 	}
 	entries = ssql.PruneCatalog(entries, %s)
-	records := ssql.ProcessCatalogShards(entries, %q, %q, %s)`,
-		filterCode, remoteBin, shardField, pipelineCode)
+	entries = ssql.ExpandCatalogGlobs(entries)
+	shardConcurrency, _ := strconv.Atoi(*flagShardConcurrency)
+	keepGoing, _ := strconv.ParseBool(*flagKeepGoing)
+	records := ssql.ProcessCatalogShardsRemoteGo(
+		entries,
+		%q,
+		%s,
+		%q,
+		%q,
+		ssql.CatalogShardOpts{
+			Concurrency: shardConcurrency,
+			Order:       *flagShardOrder,
+			KeepGoing:   keepGoing,
+		},
+	)`,
+		filterCode, requireVersion, pipelineCode, mode, shardField,
+	)
 
-	imports := []string{"fmt", "os"}
+	imports := []string{"fmt", "os", "strconv"}
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)

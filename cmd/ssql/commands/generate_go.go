@@ -422,6 +422,18 @@ func runScriptForFragments(scriptPath, mode string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ssql generate go -script: %w", err)
 	}
+	// Pre-flight check: enforce any `# require: vX.Y.Z` header
+	// directives in the script. If a directive specifies a minimum
+	// version higher than the running ssql, error early with a
+	// clear message. Especially valuable in distributed (catalog)
+	// usage, where heterogeneous fleets can produce hard-to-
+	// diagnose cascade errors when a stale shard tries to run a
+	// script that uses newer features.
+	if missing := checkRequireDirectives(string(src), version.Version); missing != "" {
+		return nil, fmt.Errorf(
+			"ssql generate go -script %s: this ssql (v%s) cannot run the script — it requires v%s or newer",
+			scriptPath, version.Version, missing)
+	}
 	pipeline := preprocessScript(string(src))
 	if pipeline == "" {
 		return nil, fmt.Errorf("ssql generate go -script: %s contains no pipeline", scriptPath)
@@ -442,6 +454,109 @@ func runScriptForFragments(scriptPath, mode string) ([]byte, error) {
 		return nil, fmt.Errorf("ssql generate go -script: pipeline failed (mode=%s): %w", mode, err)
 	}
 	return out, nil
+}
+
+// checkRequireDirectives scans a .ssql script source for header
+// directives of the form `# require: vX.Y.Z` (or `X.Y.Z` without
+// the `v`) and verifies the running ssql satisfies each one. It
+// returns the highest required version that the local version does
+// not satisfy, or "" if all directives are satisfied (or absent).
+//
+// Why: catalog ssh-pushdown ships a generated .ssql script to remote
+// hosts that may run a different ssql version. Without a pre-flight
+// check, version skew surfaces as a confusing pipeline failure mid-
+// stream. The local codegen path auto-emits `# require: $localVersion`
+// on every shipped script so the remote catches the skew before any
+// records flow.
+//
+// Comparison is lexicographic-by-numeric-component on MAJOR.MINOR.PATCH
+// (anything beyond PATCH is ignored). Non-numeric components or
+// malformed directives are treated as "satisfied" — we only block
+// when we can confidently tell the local version is too old.
+func checkRequireDirectives(src, localVersion string) string {
+	local := parseVersion(localVersion)
+	var highestUnsatisfied string
+	for _, raw := range strings.Split(src, "\n") {
+		line := strings.TrimSpace(raw)
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		body := strings.TrimSpace(strings.TrimPrefix(line, "#"))
+		const prefix = "require:"
+		if !strings.HasPrefix(body, prefix) {
+			continue
+		}
+		want := strings.TrimSpace(strings.TrimPrefix(body, prefix))
+		want = strings.TrimPrefix(want, "v")
+		if want == "" {
+			continue
+		}
+		req := parseVersion(want)
+		if req == nil {
+			continue // unparseable — skip rather than block
+		}
+		if compareVersions(local, req) >= 0 {
+			continue
+		}
+		if highestUnsatisfied == "" || compareVersions(parseVersion(highestUnsatisfied), req) < 0 {
+			highestUnsatisfied = want
+		}
+	}
+	return highestUnsatisfied
+}
+
+// parseVersion parses a "MAJOR.MINOR.PATCH" string into a 3-element
+// int slice. Missing components default to 0. Returns nil if the
+// first component is non-numeric (i.e. clearly not a version).
+func parseVersion(s string) []int {
+	s = strings.TrimPrefix(s, "v")
+	if s == "" {
+		return nil
+	}
+	parts := strings.SplitN(s, ".", 4)
+	out := make([]int, 3)
+	for i := 0; i < 3 && i < len(parts); i++ {
+		// Stop at the first non-digit so "1.2.3-rc4" parses as [1 2 3].
+		end := 0
+		for end < len(parts[i]) && parts[i][end] >= '0' && parts[i][end] <= '9' {
+			end++
+		}
+		if end == 0 {
+			if i == 0 {
+				return nil
+			}
+			break
+		}
+		n := 0
+		for j := 0; j < end; j++ {
+			n = n*10 + int(parts[i][j]-'0')
+		}
+		out[i] = n
+	}
+	return out
+}
+
+// compareVersions returns -1, 0, or 1 if a is less than, equal to, or
+// greater than b. nil sorts equal to nil; nil sorts less than non-nil.
+func compareVersions(a, b []int) int {
+	if a == nil && b == nil {
+		return 0
+	}
+	if a == nil {
+		return -1
+	}
+	if b == nil {
+		return 1
+	}
+	for i := 0; i < 3; i++ {
+		if a[i] < b[i] {
+			return -1
+		}
+		if a[i] > b[i] {
+			return 1
+		}
+	}
+	return 0
 }
 
 // preprocessScript turns a .ssql script (multi-line, comment-allowed,

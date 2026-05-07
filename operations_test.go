@@ -650,7 +650,10 @@ func TestMergeSorted_MultiField(t *testing.T) {
 	if len(result) != 4 {
 		t.Fatalf("expected 4 records, got %d", len(result))
 	}
-	type pair struct{ dept string; salary int64 }
+	type pair struct {
+		dept   string
+		salary int64
+	}
 	got := make([]pair, len(result))
 	for i, r := range result {
 		got[i] = pair{GetOr(r, "dept", ""), GetOr(r, "salary", int64(0))}

@@ -67,11 +67,11 @@ func TestBuildRemoteSSQLScript_PathQuoting(t *testing.T) {
 // installed. Skipped without the env var.
 //
 // Each codegen mode (record, typed) is tested:
-//   1. Local generates Go via `(SSQLGO=$mode; ssql from ssh H P -- …) | ssql generate go`
-//   2. Generated Go is run; it ships the .ssql script to H and execs
-//      `ssql generate go -script -mode $mode -run` on H
-//   3. Output is compared to the v4.27 baseline (no codegen) for
-//      wire-format compatibility
+//  1. Local generates Go via `(SSQLGO=$mode; ssql from ssh H P -- …) | ssql generate go`
+//  2. Generated Go is run; it ships the .ssql script to H and execs
+//     `ssql generate go -script -mode $mode -run` on H
+//  3. Output is compared to the v4.27 baseline (no codegen) for
+//     wire-format compatibility
 //
 // Setup hint: see doc/research/ssh-test-environment.md (LXD
 // container with ssql + Go installed).

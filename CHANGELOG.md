@@ -5,6 +5,37 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.43.0] - 2026-05-07
+
+### New Features
+- **Catalog remote-Go execution**: extends the v4.42 codegen-symmetric ssh
+  pushdown to `from catalog`. Each shard host runs the same mode the local
+  pipeline runs in (record / typed-parallel). Per-shard `.ssql` script is
+  built at runtime from the embedded template, shipped via ssh stdin, and
+  run with stock `ssql generate go -script -mode $mode -run`. Shards run
+  concurrently by default; results merge to local stdout.
+  - `ssql.ProcessCatalogShardsRemoteGo(entries, requireVersion, pushdownGroups, mode, shardField, opts)` — public orchestrator (returns `iter.Seq[Record]`).
+  - `-shard-order completion` (default, low memory) or `catalog` (deterministic, buffers per shard).
+  - `-shard-concurrency N` opt-in cap (default 0 = uncapped).
+  - `-keep-going` opt-out of fail-fast (default: first shard error cancels remaining).
+  - End-to-end byte-identical results across CLI baseline, SSQLGO=record, SSQLGO=typed.
+
+- **Auto-emitted `# require: vX.Y.Z` directive**: every generated `.ssql`
+  script gets a `# require: v$localVersion` header so remote `ssql generate
+  go -script` can pre-flight check version skew before any records flow.
+  Single clear error on stale shards instead of a cascade of symptoms.
+
+### Fixes
+- **Typed JSONL fallback Stream→Serial**: `(SSQLGO=typed; ...) | ssql
+  generate go -run` against pipelines without an explicit sink now emits
+  `for v := range stream.Serial()` when the last fragment produces
+  `Stream[T]`. Previously emitted `for v := range stream` which fails to
+  compile (Stream is a struct, not a range func). Affects every typed
+  pipeline shipping JSONL — including the new catalog remote-Go path.
+- **Absolute remote paths**: `from ssh -- ...` and `from catalog --` now
+  invoke `/usr/bin/ssql` on the remote rather than bare `ssql`. Avoids
+  PATH manipulation and ensures the deployed binary is the one used.
+
 ## [v4.27.0] - 2026-03-13
 
 ### New Features
