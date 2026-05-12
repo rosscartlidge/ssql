@@ -184,6 +184,7 @@ func buildCommand() *cf.Command {
 	cmd = commands.RegisterSpectrogram(cmd)
 	cmd = commands.RegisterTo(cmd)
 	cmd = commands.RegisterGenerate(cmd)
+	cmd = commands.RegisterServe(cmd)
 
 	return cmd.Handler(func(ctx *cf.Context) error {
 		return fmt.Errorf("no command specified")

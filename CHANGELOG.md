@@ -5,6 +5,51 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.44.0] - 2026-05-13
+
+### New Features
+- **`ssql serve` subcommand**: SSH-accessible operator console for an
+  in-memory dataset. Load a CSV/TSV/JSON/JSONL once at startup, then
+  accept SSH connections that run commands against the loaded data
+  with zero per-query startup cost.
+
+  ```bash
+  ssql serve data.csv -listen :2222 \
+      -host-key ./host_key \
+      -authorized-keys ./authorized_keys
+  ```
+
+  Operator workflow:
+  ```
+  $ ssh -p 2222 alice@host
+  > sta<TAB>tus
+  > status
+  uptime:  3h17m
+  path:    data.csv
+  rows:    87123421
+  > schema
+    name    string
+    age     int
+    ...
+  > head -t -n 5
+  ... table ...
+  > :exit
+  ```
+
+  Built on the Phase A-C autocli-shell stack:
+  - `github.com/rosscartlidge/autocli/v4` v4.5.0 (engine split)
+  - `github.com/rosscartlidge/autocli/shell` v0.1.1 (readline driver)
+  - `github.com/rosscartlidge/autocli/ssh` v0.1.0 (SSH server)
+
+  Commands in v0: `status`, `schema`, `count`, `head [-n N] [-t]`.
+  Future versions add pipelines (`from-loaded | where … | to table`),
+  `let $name = pipeline` for named intermediates, `reload`, GPU-aware
+  per-shard dispatch.
+
+  Behind the `!slim` build tag because it pulls in `crypto/ssh` and
+  `chzyer/readline`. Slim builds (WASM, WebVM playground) error
+  clearly if `serve` is invoked.
+
 ## [v4.43.1] - 2026-05-08
 
 ### New Features
