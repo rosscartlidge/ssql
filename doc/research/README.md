@@ -59,6 +59,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Go CLI Frameworks](go-cli-frameworks-comparison.md) — framework comparison (Dec 2025)
 - [Autocli Improvements](autocli-improvements.md) — multi-arg flag handling
 - [Autocli Helper Methods](autocli-helper-methods-proposal.md) — accumulated flag helpers
+- [autocli-shell + autocli-ssh Proposal](autocli-shell-proposal.md) — embed autocli's completion engine in a readline REPL or SSH-accessible service CLI (router-style operator console). Three layers: completion-engine split in autocli, readline driver, SSH server. First consumer: `ssql serve`. ~4 days.
 - [Subcommand Migration](completionflags_subcommand_migration.md) — migration to autocli subcommands
 
 ## Performance
