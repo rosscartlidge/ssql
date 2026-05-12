@@ -262,7 +262,7 @@ authenticate them, and hand each one a shell session.
 package autoclissh
 
 type Options struct {
-    Addr          string                 // ":2222"
+    Addr          string                 // ":2222" or "127.0.0.1:2222"; see Port configuration below
     HostKeyPath   string                 // server's host key (auto-generated on first run if missing)
     AuthorizedKeys string                // path to ssh-style authorized_keys file
     AuthCallback  func(meta ConnMeta, key ssh.PublicKey) (allowed bool, user string, err error)
@@ -285,6 +285,60 @@ type ConnMeta struct {
 // a goroutine with session-scoped IO.
 func Serve(ctx context.Context, cli *autocli.Command, opts Options) error
 ```
+
+#### Port configuration
+
+Multiple service instances on one host is a normal deployment, so
+the port story has to be unambiguous and easy.
+
+`Options.Addr` is a standard Go listen address — `":2222"` (all
+interfaces, port 2222), `"127.0.0.1:2222"` (loopback only),
+`":0"` (kernel-assigned ephemeral). The default if empty is
+`":2222"`, chosen because:
+
+- ≥ 1024 (no root needed)
+- not a well-known service port
+- matches the convention used by ad-hoc sshd-in-container deployments
+
+**Recommended pattern for service binaries:**
+
+```go
+var flagAddr = flag.String("listen", ":2222", "SSH listen address")
+// later:
+addr := *flagAddr
+if env := os.Getenv("MYSERVICE_LISTEN"); env != "" {
+    addr = env // env overrides flag default but not explicit flag
+}
+autoclissh.Serve(ctx, cli, autoclissh.Options{Addr: addr, ...})
+```
+
+Three layers of override, in priority order: explicit flag > env
+var > built-in default. Standard 12-factor shape; operators can
+launch `MYSERVICE_LISTEN=:2223 myservice` for a second instance
+without rebuilding.
+
+**Auto-discovery (optional pattern):** services that want to be
+findable by tooling can write `pid + addr` to a state file on
+startup (e.g. `/var/run/myservice.info`) and remove it on shutdown.
+The standard Go `net.Listener.Addr()` returns the resolved address
+even for `":0"`, so this works for ephemeral ports too:
+
+```go
+ln, _ := net.Listen("tcp", *flagAddr)
+os.WriteFile("/var/run/myservice.info",
+    []byte(fmt.Sprintf("pid=%d addr=%s\n", os.Getpid(), ln.Addr())),
+    0644)
+autoclissh.ServeListener(ctx, cli, ln, opts) // alternate entrypoint
+```
+
+`ServeListener` is the variant that takes an already-bound
+listener (so the caller controls the binding). `Serve` wraps it
+with a `net.Listen` call for the simple case.
+
+**Bind-to-loopback by default for the local-only case:** services
+that should NEVER be reachable off-box can default to
+`"127.0.0.1:2222"`. Same UX, no firewall surprise. Document this
+clearly in each service's man page.
 
 #### Authentication
 
@@ -372,6 +426,143 @@ Handler(func(ctx *autocli.Context) error {
 
 Ctrl-C in the SSH session cancels `ctx.Ctx`; the handler exits
 gracefully and the shell re-prompts.
+
+## Pipes and composition
+
+A naïve embedded shell that runs one subcommand per line is fine
+for operator consoles (`status`, `reload`, `config`) but useless
+for ssql serve, where every interesting query is a pipeline.
+`from` → `where` → `group-by` → `to table` has to compose somehow.
+
+Three positions, layered from simplest to most powerful:
+
+### Position 1 — no pipes (default)
+
+Each input line is exactly one subcommand. `|` is a syntax error.
+Sufficient for service-operator consoles (configure / inspect /
+reload). This is the default for `autocli/shell` because it adds
+zero surface area to autocli itself and keeps the simplest case
+genuinely simple.
+
+### Position 2 — process pipes via `io.Pipe()` (opt-in)
+
+Set `Options.EnablePipes = true`. The shell tokeniser splits the
+line on top-level `|` (respecting quotes), creates an `io.Pipe()`
+between each adjacent pair of stages, spawns each stage in its
+own goroutine with its `Context.Stdin`/`Context.Stdout` wired to
+the pipe ends, and waits for all stages to finish.
+
+```
+user types:  from a.csv | where -if x gt 5 | to table
+                  │             │              │
+                  ▼             ▼              ▼
+              goroutine     goroutine     goroutine
+              ctx.Stdout─►io.Pipe()─►ctx.Stdin─►io.Pipe()─►ctx.Stdin
+                                                           ctx.Stdout = session
+```
+
+Works for any subcommand that already reads JSONL on stdin and
+writes JSONL on stdout — i.e. essentially all of ssql today.
+Cost: each pipeline still serialises through JSONL between
+stages, paying the marshalling cost in-process for no real
+reason. ~100 LOC in `autocli/shell` to implement.
+
+### Position 3 — in-process composition (recommended for ssql serve)
+
+Subcommands return composable Go values instead of writing to
+stdout:
+
+- A **source** subcommand returns `iter.Seq[Record]`.
+- A **transform** subcommand returns a `Filter[Record, Record]`
+  (i.e. `func(iter.Seq[Record]) iter.Seq[Record]`).
+- A **sink** subcommand consumes an `iter.Seq[Record]` and returns
+  nothing.
+
+The shell parser walks the stages, type-checks that sources only
+appear first and sinks only appear last, composes the chain, and
+drains it. No JSONL serialisation; the entire pipeline runs in one
+goroutine with values flowing through `iter.Seq` channels.
+
+This is essentially what the generated-Go path produces today —
+we'd be exposing the same composition mechanism interactively.
+The handler signature changes:
+
+```go
+// Today (print to stdout):
+Handler(func(ctx *autocli.Context) error {
+    rows := loadDataset(...)
+    for r := range rows { fmt.Fprintln(ctx.Stdout, r) }
+    return nil
+})
+
+// Position-3 composable handler:
+Source(func(ctx *autocli.Context) (iter.Seq[ssql.Record], error) {
+    return loadDataset(...), nil
+})
+```
+
+`autocli.Source` / `autocli.Transform` / `autocli.Sink` are new
+handler-registration verbs alongside `Handler`. A subcommand with a
+plain `Handler` is non-composable and emits a "cannot pipe into/out
+of X" error if used in a pipeline.
+
+Bigger lift in autocli (~half day for the type-aware composer) but
+the perf delta is the whole point of `ssql serve` — querying a
+loaded dataset at full Go speed instead of marshalling through
+JSONL on every stage.
+
+### Choosing per consumer
+
+- `autocli/shell` ships Positions 1 and 2 (default 1, flag-flip 2).
+  Process-pipe support is generic and useful for any shell.
+- `ssql serve` builds Position 3 on top of autocli's composable-
+  handler primitives. Other services adopt it if they want full-
+  speed in-process pipelines.
+
+## Process substitution: `let` variables
+
+Bash `<(cmd)` forks a process and gives the parent a path to that
+subprocess's output. In-shell, there's no fork — and even if there
+were, the consuming command would have to accept either a real
+path or an `io.Reader` (a meaningful API change for every command
+that takes a FILE arg).
+
+Better fit for a REPL: **named intermediate results.**
+
+```
+> let recent = from events.csv | where -if date ge 2026-05-01
+> let high = from prices.csv | where -if value gt 1000
+> join -left $recent -right $high -on symbol | to table
+```
+
+`let NAME = pipeline` runs the pipeline lazily, stores the result
+as a named handle in the session, and lets subsequent commands
+reference it via `$NAME`. The handle is whatever the pipeline
+yields: under Position 2 it's a buffered bytes.Reader, under
+Position 3 it's a re-runnable `iter.Seq[Record]`.
+
+Why this is better than `<(...)`:
+
+- **Reusable.** `$recent` can appear in multiple later commands
+  without re-running the source.
+- **Inspectable.** `:vars` lists current handles, their schemas,
+  their row counts. Operator can see what they've materialised.
+- **Disposable.** `:unset recent` frees it.
+- **Lazy if Position 3.** A handle is an `iter.Seq`; nothing runs
+  until something drains it. Combine handles freely.
+- **REPL-natural.** Variables are how every interactive shell
+  composes intermediate results (psql `\gset`, Python REPL,
+  Jupyter cells). Process substitution is a bash-shell quirk.
+
+`let` ships in `autocli/shell` as a built-in `:`-prefix command,
+same family as `:exit / :history / :vars / :unset`. Position-3
+composable services get full lazy reuse; Position-2 services get
+buffered reuse. Position-1 shells don't expose `let` at all (no
+pipelines = no intermediates).
+
+Deferred to v2 of `autocli/shell` to keep the first ship small.
+The grammar reserves `$name` and `let` from day one so we don't
+break compatibility later.
 
 ## End-to-end example: `ssql serve`
 
