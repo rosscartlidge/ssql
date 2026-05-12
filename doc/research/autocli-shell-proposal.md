@@ -210,7 +210,9 @@ package autoclishell
 
 type Options struct {
     Prompt       string             // default: "> "
-    HistoryFile  string             // empty = no history
+    HistoryFile  string             // empty = no history (see "Editor mode and persistence")
+    EditingMode  EditingMode        // EditingEmacs (default) or EditingVi
+    SessionDir   string             // for per-user history + prefs; required for SSH multi-user
     State        any                // passed through to Context
     Welcome      string             // banner printed on session start
     Goodbye      string             // banner printed on Ctrl-D
@@ -218,6 +220,13 @@ type Options struct {
     Stdin        io.Reader          // default os.Stdin
     Stdout       io.Writer          // default os.Stdout
 }
+
+type EditingMode int
+
+const (
+    EditingEmacs EditingMode = iota
+    EditingVi
+)
 
 // Serve runs an interactive shell loop until Ctrl-D or :exit.
 func Serve(cli *autocli.Command, opts Options) error
@@ -249,9 +258,51 @@ Built-in shell-level commands (not autocli subcommands):
 - `:exit` / `:quit` — close session
 - `:history` — list session history
 - `:!cmd` — re-run a previous command by index
+- `:set vi` / `:set emacs` — switch editing mode for the rest of
+  the session (persists to per-user prefs file)
+- `:set` — show current settings (mode, history file, etc.)
 
 These start with `:` so they can't collide with user-defined
 subcommands.
+
+#### Editor mode and persistence
+
+`chzyer/readline` supports both emacs (default) and vi modes
+natively (`Config.VimMode: true` selects vi at startup; runtime
+`rl.SetVimMode(bool)` flips on the fly). Bindings in each mode
+match GNU readline: emacs gets Ctrl-A/E/K/W/R/etc.; vi gets
+normal/insert modes with hjkl/w/b/dd motions and `:` for ex
+commands.
+
+In an SSH session the operator's local `~/.inputrc` isn't reachable
+(readline runs on the server, not the client), so the server has
+to expose the choice. `autocli/shell` does this via:
+
+1. **Initial mode** from `Options.EditingMode`. Service authors
+   pick the default for their consumer base. Vi-leaning teams set
+   `EditingVi`; broader services keep the `EditingEmacs` default.
+
+2. **Per-user override at runtime** via `:set vi` / `:set emacs`.
+   Takes effect immediately.
+
+3. **Persistence per user**, alongside command history. When
+   `Options.SessionDir` is set (typically `/var/lib/myservice/sessions`
+   under SSH, `~/.config/myservice` for local shell), the shell
+   reads `$SessionDir/$user/prefs.json` on connect and writes back
+   on mode change. Schema:
+
+   ```json
+   {"editing_mode": "vi", "history_file": "history"}
+   ```
+
+   The history file lives in the same per-user directory, so each
+   operator gets their own scrollback without leaking commands
+   between users on a shared service.
+
+Recommended default for `ssql serve`: **vi mode** (project author
+preference; data folks tend to vi-lean and the muscle memory pairs
+well with `ssql` being a CLI tool). Other autocli/shell consumers
+keep emacs.
 
 ### Layer 3: autocli/ssh
 
