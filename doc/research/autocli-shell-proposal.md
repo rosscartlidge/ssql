@@ -1,10 +1,39 @@
 # autocli-shell + autocli-ssh Proposal
 
-**Status:** Proposal
-**Date:** 2026-05-12
-**Target:** autocli vX, ssql v4.44 (first consumer)
+**Status:** Phases A–D shipped (2026-05-12 / 2026-05-13). See *Status at end of week 20* below for the snapshot.
+**Date:** 2026-05-12 (orig); 2026-05-13 (status update)
+**Target:** autocli vX, ssql v4.44 (first consumer) — both shipped
 **Prerequisites:** stable autocli completion engine (already present)
 **Related:** `ssql-serve-proposal.md`, `cli-tools-design.md`, `distributed-ssh-processing.md`
+
+## Status at end of week 20 (2026-05-13)
+
+| Phase | Module | Version | Notes |
+| --- | --- | --- | --- |
+| A — engine split | `github.com/rosscartlidge/autocli/v4` | v4.5.0 | `Complete`, `ExecuteWith`, `Context` IO+State |
+| B — shell driver | `github.com/rosscartlidge/autocli/shell` | v0.1.1 | readline loop, `:` builtins, tokeniser |
+| C — SSH server | `github.com/rosscartlidge/autocli/ssh` | v0.1.0 | host key, authorized_keys, pubkey auth |
+| D — first consumer | `github.com/rosscartlidge/ssql/v4` | v4.44.0 | `ssql serve` subcommand |
+
+End-to-end smoke-tested against loopback with a small CSV — `status` / `schema` / `count` / `head [-n N] [-t]` all return expected output through `ssh` and across multi-command sessions. Race-detector clean except for one known third-party race (see "Open follow-ups" below).
+
+**Total effort:** ~3 working days across A–D, under the ~4-day proposal estimate. Test-as-you-go discipline kept regressions zero between iterations.
+
+### Deviations from the original proposal
+
+- **Module path** for the shell sub-module is `github.com/rosscartlidge/autocli/shell` (not `.../v4/shell`). Go's tooling expects the filesystem layout to mirror the module path; since the sub-module lives at `shell/` (not `v4/shell/`), we dropped the `/v4` suffix. Parent stays `github.com/rosscartlidge/autocli/v4`.
+- **Runtime `:set vi`/`:set emacs`** defers the actual readline switch until next session because `chzyer/readline.SetVimMode` races with its own input goroutine (library bug, not ours). Bookkeeping updates immediately so per-user prefs persistence works.
+- **`ssql serve` v0.1** ships with `status` / `schema` / `count` / `head` only — no pipelines, no `let` variables. These are tracked under "Open follow-ups" rather than blocking the first release. The autocli-shell stack is the heavy lift; layering ssql-specific features on top is incremental.
+
+### Open follow-ups (tracked, not blocking)
+
+1. **`chzyer/readline.SetVimMode` race** — send upstream PR (~1–2 hrs investigation + patch + test). If accepted, drop the deferred-switch workaround. Library is mostly maintenance-mode; if the PR languishes, consider forking or switching to `reeflective/readline`. The user's question prompted this — the answer was "yes, worth a shot."
+2. **SSH window-size propagation** — `autocli/ssh` accepts `window-change` requests but doesn't surface them to readline's `SetSize`. Lines wrap at readline's auto-detected width (typically 80). Modest plumbing change.
+3. **Pipes in `autocli/shell`** — Position 2 (`io.Pipe` between stages, opt-in via `Options.EnablePipes`) is documented in the "Pipes and composition" section below. Not yet implemented; ~100 LOC plus tests. Required for `ssql serve` to support `from-loaded | where … | to table`.
+4. **`let $name = pipeline`** — REPL-friendly replacement for bash process substitution. Documented in this proposal as v2-of-shell scope. Reserved grammar already.
+5. **Schema-aware completion in `ssql serve`** — TAB on `head -if <TAB>` should complete loaded field names. Same `FieldCompleter` ssql commands use today, pointed at the in-memory dataset instead of a file. Small registration change.
+6. **Position 3 (in-process composition)** — composable handlers returning `iter.Seq[Record]` / `Filter[Record,Record]`, the big one. Bigger lift in autocli; the right model for `ssql serve` querying when we want full Go speed rather than JSONL serialisation between stages. Defer until we have a concrete perf-motivated need.
+7. **Per-user history dir on `ssql serve`** — `autocli/ssh.Options.HistoryDir` plumbing exists, `ssql serve` just needs to expose a CLI flag (`-history-dir`).
 
 ## TL;DR
 
@@ -774,7 +803,7 @@ guide. Auto-generated keys are 0600 in a dedicated directory.
 
 ## Phased implementation
 
-### Phase A — autocli engine split (~1 day)
+### Phase A — autocli engine split (~1 day) — ✅ SHIPPED v4.5.0
 
 1. Introduce `autocli.Context` struct with `Stdin/Stdout/Stderr/Ctx/State`.
 2. Refactor existing handlers to receive `*Context` instead of
@@ -790,7 +819,7 @@ guide. Auto-generated keys are 0600 in a dedicated directory.
 Tests: every existing autocli test keeps passing. New table tests
 for `Complete()` against known partial lines.
 
-### Phase B — autocli/shell (~half day)
+### Phase B — autocli/shell (~half day) — ✅ SHIPPED shell/v0.1.1
 
 1. New module `autocli/shell` (sub-package of autocli or a
    separate go module — separate keeps the readline dep
@@ -803,7 +832,7 @@ for `Complete()` against known partial lines.
 Tests: spin up a shell with a stdin reader, feed commands, assert
 on stdout. Standard readline-loop testing pattern.
 
-### Phase C — autocli/ssh (~1 day)
+### Phase C — autocli/ssh (~1 day) — ✅ SHIPPED ssh/v0.1.0
 
 1. New module `autocli/ssh`.
 2. SSH server setup: host-key load-or-generate, authorized_keys
@@ -818,7 +847,7 @@ localhost, connect with `golang.org/x/crypto/ssh` client,
 exchange commands, assert on output. ~150 LOC of test, covers
 auth + happy-path + shutdown.
 
-### Phase D — ssql serve integration (~1 day)
+### Phase D — ssql serve integration (~1 day) — ✅ SHIPPED ssql v4.44.0 (v0.1 scope: status / schema / count / head)
 
 1. New `cmd/ssql-serve/` (or add a `serve` subcommand to `ssql`).
 2. Implement Server struct + handlers: status, schema, query,
@@ -828,7 +857,7 @@ auth + happy-path + shutdown.
    the live dataset, observe sub-millisecond query latency
    (no startup cost).
 
-### Phase E — docs/examples (~half day)
+### Phase E — docs/examples (~half day) — ✅ Partial: shell/README.md, shell/_example, ssh/README.md, ssh/_example shipped; CHANGELOG + journal-W20 updated
 
 1. README for autocli/shell and autocli/ssh.
 2. Example service in `examples/`.
