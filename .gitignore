@@ -29,6 +29,7 @@ go.work
 *.so
 /ssql
 /ssql_gpu
+/ssql-wasm
 /ssql_poc
 *.swo
 *.swp
