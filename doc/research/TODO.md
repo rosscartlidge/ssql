@@ -52,6 +52,7 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Phase 3: GPU support** — `-gpu` flag to use `ssql_gpu` on remote nodes.
 - [x] **Optimizer rules** — `merge-catalog-predicate-pushdown` and `merge-catalog-aggregation-pushdown` push where/group-by into `--` pushdown.
 - [x] **Catalog glob expansion** — paths with `*`, `?`, `[` expanded before processing. `-catalog-used FILE` for auditing.
+- [x] **Hostname-aware local routing** (v4.43.1). Catalog rows with `host=$HOSTNAME` (matching `os.Hostname()`) run locally instead of via ssh. Catalog CSVs are now portable across hosts. Public helper `ssql.IsLocalHost(host)` applies symmetrically to `ProcessCatalogShards` and `ProcessCatalogShardsRemoteGo`.
 
 ## Pipeline Optimizer (`generate ssql`)
 
@@ -73,7 +74,28 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Remote Go execution Phase A — interactive `-remote` flag** (v4.41.0). Shipped with the .ssql-script-as-unit framing; replaced by codegen-symmetric path in v4.42 (see below).
 - [x] **Remote Go execution Phase B — codegen-symmetric pushdown** (v4.42.0). Codegen-symmetric ssh pushdown for `from ssh`. Whatever mode the local pipeline runs in, the remote runs in too. Generated Go embeds the `.ssql` script as a const, ships+runs via ssh.
 - [x] **Remote Go execution Phase C — catalog extension** (v4.43.0). Per-shard ship-and-run via the codegen-symmetric path; embedded .ssql template substituted with each shard's path at runtime; parallel orchestration with `-shard-concurrency`/`-shard-order`/`-keep-going` flags; auto-emitted `# require: vX.Y.Z` header for version-skew detection. End-to-end verified: CLI baseline, SSQLGO=record, SSQLGO=typed all produce byte-identical cross-shard aggregation. Optional Phase C-bis (CLI-baseline parallelism for the v4.27 path) deferred.
-- [ ] **Codegen wrapper** — see `codegen-wrapper-proposal.md`. Lower the bar from `(export SSQLGO=record; ...) | ssql generate go` to friendlier shapes: `ssqlgen 'pipeline'` (a bash function shipped via `ssql -shell-helpers`, same install pattern as completion script) plus `ssql generate go -script PATH` (reads the pipeline from a file or `<(heredoc)`). Both build on the existing SSQLGO + fragment-pipe machinery; power-user form keeps working. Estimate: ~half a day total.
+- [x] **Codegen wrapper** (v4.41.0 / v4.42.0). `ssql generate go -script PATH` reads the pipeline from a file or `<(heredoc)`. Used internally by the v4.42+ codegen-symmetric ssh path; available to users for hand-authored pipelines too. The `ssqlgen` shell-helper part of the original proposal hasn't shipped — power-user form (`(export SSQLGO=...; ...) | ssql generate go`) keeps working.
+
+## autocli-shell stack (see autocli-shell-proposal.md)
+
+The same autocli `Command` tree powers the bash CLI today AND drives long-running services with a router-style operator console over SSH. Foundation for `ssql serve` (Phase 1, below).
+
+- [x] **Phase A — autocli engine split** (autocli v4.5.0, 2026-05-12). `Command.Complete(args, pos) ([]string, error)` and `Command.ExecuteWith(args, base *Context) error` exposed as pure functions. `Context.Stdin/Stdout/Stderr/Ctx/State` accessors; bash CLI path unchanged.
+- [x] **Phase B — autocli/shell readline driver** (autocli/shell v0.1.1, 2026-05-12). `chzyer/readline` loop wired to `cli.Complete`/`cli.ExecuteWith`. Built-in `:exit`/`:quit`/`:help`/`:history`/`:set vi`/`:set emacs`. Sub-module so core stays stdlib-only.
+- [x] **Phase C — autocli/ssh server** (autocli/ssh v0.1.0, 2026-05-12). Wraps `crypto/ssh` around `autocli/shell`. ed25519 host-key load-or-generate, OpenSSH `authorized_keys` parsing, `AuthCallback` override, refuse-to-start safety, `ConnMeta` audit hooks, graceful shutdown.
+- [x] **Phase D — ssql serve subcommand** (ssql v4.44.0, 2026-05-13). First consumer; behind `!slim` build tag.
+- [ ] **Upstream `chzyer/readline.SetVimMode` race fix** — runtime mode switch races with the library's own input goroutine. v0.1 workaround defers the switch until next session. Send upstream PR (~1-2 hrs); fork if rejected. Drop the workaround once landed.
+- [ ] **Pipes in autocli/shell (Position 2)** — opt-in `io.Pipe()`-based pipe support so `from-loaded | where ... | to table` works in shell sessions. ~100 LOC. Required for `ssql serve` to expose pipelines.
+- [ ] **`let $name = pipeline` variables** — REPL-friendly replacement for bash process substitution. Documented as v2-of-shell scope; grammar already reserved.
+- [ ] **SSH window-size propagation** — `autocli/ssh` accepts `window-change` requests but doesn't surface them to readline's `SetSize`. Lines wrap at 80. Modest plumbing change.
+- [ ] **Schema-aware completion in `ssql serve`** — TAB on `head -if <TAB>` should complete loaded field names. `FieldCompleter` pointed at the in-memory dataset.
+- [ ] **Position 3 (in-process composition)** — composable handlers returning `iter.Seq[Record]` / `Filter[Record,Record]`. Big lift, perf-motivated; defer until needed.
+- [ ] **Per-user history dir on `ssql serve`** — `autocli/ssh.Options.HistoryDir` plumbing exists; `ssql serve` needs a `-history-dir` flag.
+
+## ssql serve (see ssql-serve-proposal.md rev 2)
+
+- [x] **Phase 1 — SSH-CLI operator console** (v4.44.0). `status` / `schema` / `count` / `head [-n N] [-t]` against in-memory dataset. Pubkey auth, multi-user sessions, no per-query startup cost.
+- [ ] **Phase 2 — HTTP+WebSocket+browser UI** (the original rev-1 design). `-listen-http :8080` alongside `-listen-ssh :2222`; shared `serveState`; embedded UI with charts, file browser, pipeline editor; REST endpoints per rev-1. ~1 week for core server, ~1 week for UI polish — shorter than rev-1 thought because the dataset-cache and `cli.Complete`/`cli.ExecuteWith` plumbing is already done.
 
 ## Adoption (see adoption-plan.md)
 
