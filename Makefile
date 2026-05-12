@@ -1,7 +1,7 @@
 # ssql Makefile
 
 .PHONY: help test build clean doc-check doc-test doc-verify doc-update fmt vet all ci install-hooks
-.PHONY: gpu build-gpu install-gpu docker-gpu docker-gpu-image docker-gpu-extract deb
+.PHONY: gpu build-gpu install-gpu install-local docker-gpu docker-gpu-image docker-gpu-extract deb
 .PHONY: ai-test ai-test-go ai-test-cli
 .PHONY: wasm wasm-go
 
@@ -207,6 +207,20 @@ build-gpu: gpu
 	@echo ""
 	@echo "To run: LD_LIBRARY_PATH=$(PWD)/gpu ./ssql_gpu version"
 	@echo "Or install the library: sudo make install-gpu"
+
+# Build BOTH ssql + ssql_gpu and copy into the developer's $GOPATH/bin
+# (or $HOME/go/bin if GOPATH is unset). This is what the human's shell
+# resolves when they type `ssql` or `ssql_gpu` after a release, so it
+# needs to be kept in sync — running it as part of every release cycle
+# prevents the drift the user spotted between ssql v4.44.0 and an
+# ssql_gpu that was still at v4.32.0 in $GOPATH/bin.
+install-local: build-gpu
+	@echo "Installing local binaries into $${GOPATH:-$$HOME/go}/bin..."
+	go install -ldflags "-s -w $(LDFLAGS)" ./cmd/ssql
+	cp ssql_gpu $${GOPATH:-$$HOME/go}/bin/ssql_gpu
+	@echo "✓ Installed ssql + ssql_gpu"
+	@$${GOPATH:-$$HOME/go}/bin/ssql version
+	@$${GOPATH:-$$HOME/go}/bin/ssql_gpu version
 
 # Install CUDA library system-wide (one-time setup)
 install-gpu: gpu

@@ -118,7 +118,7 @@ After a minor/major release, always do ALL of these:
 
 **Builds:**
 - [ ] `make deb` — build `ssql_X.Y.Z_amd64.deb` and `ssql-gpu_X.Y.Z_amd64.deb`, commit to repo
-- [ ] `make build-gpu` — build and test `ssql_gpu` binary
+- [ ] `make install-local` — refresh BOTH `$GOPATH/bin/ssql` and `$GOPATH/bin/ssql_gpu` so the developer's shell resolves the latest version on the next `ssql` / `ssql_gpu` invocation. Verify final lines print `ssql vX.Y.Z` for both (no `gpu: no` + `gpu: yes` version mismatch). Replaces the older "`make build-gpu` and test" step which left the gpu binary out of `$GOPATH/bin` — gpu drifted from v4.32.0 to v4.44.0 unnoticed before being caught at v4.44.0 release.
 - [ ] `make playground` — rebuild WASM playground
 
 **Deployments:**
