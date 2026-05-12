@@ -1,5 +1,116 @@
 # ssql serve — Browser UI with Native Backend
 
+**Status (rev 2, 2026-05-13):** The original rev-1 design (this whole doc below)
+sketched an HTTP + WebSocket + browser-UI daemon. v4.44.0 shipped a **different
+shape under the same name**: an SSH-accessible CLI operator console
+(autocli-shell stack — see `autocli-shell-proposal.md`). The two are
+complementary, not competing — rev 2 reframes them as **two protocols sharing
+one daemon**.
+
+## Status at end of week 20 (2026-05-13)
+
+| Variant | Shipped | Module | Audience | Notes |
+| --- | --- | --- | --- | --- |
+| **SSH-CLI** | ✅ v4.44.0 | `cmd/ssql/commands/serve.go` | power users at a terminal | `status` / `schema` / `count` / `head` against in-memory data; pubkey auth; multi-user sessions |
+| **HTTP+WebSocket+UI** | ⏳ proposed (rev-1 design below) | future | browser users wanting charts + visual exploration | the entire rev-1 design from "Tier 2" onward, now layered on the Phase-1 shared infrastructure |
+
+### Dual-protocol design (rev 2)
+
+One process loads the dataset once and exposes it via *two* listeners:
+
+```
+                  ssql serve data.csv
+                  -listen-ssh :2222
+                  -listen-http :8080
+                          │
+                ┌─────────┴─────────┐
+                │   serveState      │   ← single in-memory dataset
+                │   (loaded once)   │     shared across all sessions
+                │                   │
+                │  records []Record │
+                │  schema  []string │
+                │  …                │
+                └─────────┬─────────┘
+                          │
+              ┌───────────┴───────────┐
+              ▼                       ▼
+     ┌──────────────┐         ┌──────────────────┐
+     │ autocli/ssh  │         │ net/http + WS    │  ← Phase 2
+     │ (Phase 1 ✅) │         │ + embedded UI    │
+     └──────┬───────┘         └────────┬─────────┘
+            │                          │
+   ssh -p 2222 user@host       http://host:8080
+   `status`, `schema`, …        pipeline editor + charts
+```
+
+Both drivers run the same autocli `Command` tree under the hood — the SSH side
+runs it via `autocli/shell` reading from the SSH channel, the HTTP+WS side
+parses incoming pipeline strings, dispatches via `cli.ExecuteWith` with a
+buffered `Stdout`, and streams the resulting JSONL down the WebSocket. Tab
+completion in the browser editor goes through the same `cli.Complete` API
+already exercised by the SSH path.
+
+### What Phase 1 (shipped) provides as foundation for Phase 2
+
+- `serveState` loaded once at startup, shared across sessions
+- `ssql.Record` materialised in memory — no per-query startup cost
+- Per-session `Context.State` plumbing → handlers reach the dataset cleanly
+- `cli.Complete(line, pos)` → ready-to-use completion engine for the browser
+  editor
+- `cli.ExecuteWith(args, ctx)` → ready-to-use dispatch with arbitrary
+  `io.Writer` sinks (a `bytes.Buffer` per WebSocket message instead of
+  `os.Stdout`)
+- Subcommand tree (`status` / `schema` / `count` / `head`) → already exists,
+  works against the cache, just needs to be exposed through the second
+  protocol
+
+### What Phase 2 adds (the original rev-1 design, scoped fresh)
+
+- `-listen-http :8080` flag alongside `-listen :2222`
+- `net/http` server with embedded static UI (`//go:embed`)
+- WebSocket `/ws` endpoint multiplexing `execute` / `complete` / `cancel`
+  messages per the rev-1 wire format
+- REST endpoints (`/api/execute`, `/api/complete`, `/api/files`, `/api/schema/:file`,
+  `/api/health`) per rev-1
+- Browser UI based on existing `cmd/ssql-playground/playground.html` —
+  swap the WASM execution path for WebSocket dispatch
+- `to chart` and `to explore` HTML output captured and rendered in the UI
+- localhost-bind default, optional `-token` auth for remote mode
+- `-readonly` flag for write-protected deployments
+
+### Implementation note for Phase 2
+
+The handlers are the easy part — `cli.ExecuteWith` already does the right thing.
+The work is HTTP routing, WebSocket framing, browser-UI plumbing, and
+streaming-JSONL-to-records bridge for the editor's results pane. Estimated
+effort matches the rev-1 plan (~1 week for core server, ~1 week for UI
+polish), but shorter than rev-1 thought because the dataset-cache layer is
+already done in Phase 1.
+
+### Open question for Phase 2
+
+The rev-1 design talks about pipelines being submitted as **single strings**
+(`"ssql from data.csv | ssql where -if age gt 25 | ssql to table"`). The
+SSH-CLI today exposes **discrete subcommands** (`status`, `head`, …) instead.
+For Phase 2 to give browser users a real pipeline editor we need one of:
+
+1. **Pipe support in autocli/shell** (Position 2 of the autocli-shell
+   proposal). Implement once, both protocols benefit.
+2. **Strip the `ssql ` prefix and split on `|`** server-side, dispatching each
+   stage separately and threading `io.Pipe` between them. Works without
+   touching autocli/shell.
+3. **In-process composition (Position 3)** — bigger lift, eventual end state,
+   defer until perf is a concrete pain.
+
+Option 1 is the cleanest and aligns with the SSH-CLI getting pipes too. The
+autocli-shell proposal already reserves the grammar and design.
+
+---
+
+(The rev-1 design below is preserved verbatim. Treat it as the Phase-2
+design document; the dataset-cache and authentication concerns it raised are
+already solved by Phase 1.)
+
 ## Problem
 
 The WASM playground is useful for demos but fundamentally limited: no real filesystem, no SSH, no GPU, simulated pipes. The WebVM terminal has real Linux but boots slowly and can't access local files.
