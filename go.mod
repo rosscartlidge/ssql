@@ -7,7 +7,7 @@ require github.com/rosscartlidge/autocli/v4 v4.5.0
 require (
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142
 	github.com/expr-lang/expr v1.17.6
-	github.com/rosscartlidge/autocli/ssh v0.1.0
+	github.com/rosscartlidge/autocli/ssh v0.1.2
 	github.com/xuri/excelize/v2 v2.10.0
 )
 
