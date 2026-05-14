@@ -54,6 +54,22 @@ func buildServeCLI() *cf.Command {
 		Handler(serveHeadHandler).
 		Done().
 
+		// Sink-style counterpart to `head`: render the (optionally limited)
+		// dataset as a fixed-width text table, the same shape ssql's
+		// `to table` produces. Default prints ALL rows; -n caps.
+		Subcommand("to").
+		Subcommand("table").
+		Description("render the dataset as a fixed-width text table").
+		Flag("-n").
+			Int().
+			Global().
+			Default(int64(0)).
+			Help("limit to first N rows (default 0 = all)").
+			Done().
+		Handler(serveToTableHandler).
+		Done().
+		Done().
+
 		Build()
 }
 
@@ -87,6 +103,26 @@ func serveCountHandler(ctx *cf.Context) error {
 	srv := ctx.State.(*serveState)
 	fmt.Fprintln(ctx.Stdout(), len(srv.records))
 	return nil
+}
+
+// serveToTableHandler renders the dataset as a fixed-width table —
+// symmetric to ssql's `to table` sink in normal pipelines. Default is
+// to print everything (the dataset is already in memory); -n caps.
+func serveToTableHandler(ctx *cf.Context) error {
+	srv := ctx.State.(*serveState)
+
+	n := 0
+	switch v := ctx.GlobalFlags["-n"].(type) {
+	case int:
+		n = v
+	case int64:
+		n = int(v)
+	}
+	if n <= 0 || n > len(srv.records) {
+		n = len(srv.records)
+	}
+
+	return renderTableTo(ctx.Stdout(), srv.records[:n], srv.schema)
 }
 
 func serveHeadHandler(ctx *cf.Context) error {

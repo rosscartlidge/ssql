@@ -5,6 +5,33 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.44.1] - 2026-05-14
+
+### New Features
+- **`ssql serve`: `to table` subcommand** — sink-style command symmetric
+  to the regular ssql CLI's `to table`. Renders the loaded dataset as a
+  fixed-width text table. Default prints all rows; `-n N` caps. Sits
+  alongside `head -t` which previews the first N as a table.
+
+### Fixes
+- **Ctrl-C now exits `ssql serve` immediately when sessions are open**
+  (autocli/ssh v0.1.4). Previously a connected SSH session sitting in
+  `readline.Readline()` held the server in its 5-second grace-timeout
+  window after Ctrl-C. The server's force-close path now closes
+  active SSH connections when its context cancels — sessions disconnect
+  immediately, the operator sees their `ssh` exit, and the server
+  returns. Behaviour change for callers, but matches what users expect
+  from Ctrl-C on a server console.
+
+### Stack upgrades
+- `github.com/rosscartlidge/autocli/v4` → v4.6.0
+  (`ErrUnknownCommand` + `GenerateHelpEmbedded`)
+- `github.com/rosscartlidge/autocli/shell` → v0.1.2
+  (intercept `-help`, friendly unknown-command message, scoped `:help`)
+- `github.com/rosscartlidge/autocli/ssh` → v0.1.4
+  (CRLF translation for SSH-PTY sessions; force-close active sessions
+  on ctx-cancel)
+
 ## [v4.44.0] - 2026-05-13
 
 ### New Features
