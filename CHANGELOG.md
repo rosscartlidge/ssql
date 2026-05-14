@@ -5,6 +5,43 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.44.2] - 2026-05-14
+
+### New Features
+- **`-session-dir` flag on `ssql serve`** — persist per-user shell
+  state across reconnects. Wires into autocli/ssh's `HistoryDir`,
+  which now also stores per-user editor preferences alongside command
+  history. Empty (default) = no persistence.
+
+### Fixes
+- **`:set vi` / `:set emacs` actually persists** (autocli/shell v0.1.4).
+  Previously bookkeeping flipped but readline stayed in the original
+  mode and the next session re-read the autocli/ssh-level default —
+  `:set` was a functional no-op. Now `:set` writes
+  `$session-dir/$user/prefs.json` and the next session reads it back.
+  Operator workflow:
+  ```
+  $ ssh -p 2222 alice@host
+  > :set vi
+  editing-mode: vi
+  (saved — takes effect on next session)
+  > :exit
+  $ ssh -p 2222 alice@host
+  > # vi keybindings active — <Esc>h moves cursor left, etc.
+  ```
+  Runtime in-session switch still blocked on the upstream
+  `chzyer/readline.SetVimMode` race; reconnect is required.
+
+- **Completion fixes** (autocli v4.6.1 + shell v0.1.3):
+  `-h<TAB>` at the prompt now completes to `-help` (was missing the
+  built-in flags at the root level). `to <TAB>` correctly suggests
+  child subcommand `table` instead of re-echoing the parent `to`.
+
+### Stack upgrades
+- `github.com/rosscartlidge/autocli/v4` → v4.6.1
+- `github.com/rosscartlidge/autocli/shell` → v0.1.4
+- `github.com/rosscartlidge/autocli/ssh` → v0.1.6
+
 ## [v4.44.1] - 2026-05-14
 
 ### New Features

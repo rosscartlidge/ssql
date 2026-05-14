@@ -83,12 +83,21 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Welcome banner shown on session connect").
 			Done().
 
+		Flag("-session-dir").
+			String().
+			Global().
+			Default("").
+			Completer(&cf.FileCompleter{Pattern: "*"}).
+			Help("Parent directory for per-user shell state (history + :set vi/emacs prefs). Empty = no persistence.").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			path, _ := ctx.GlobalFlags["PATH"].(string)
 			listen, _ := ctx.GlobalFlags["-listen"].(string)
 			hostKey, _ := ctx.GlobalFlags["-host-key"].(string)
 			authKeys, _ := ctx.GlobalFlags["-authorized-keys"].(string)
 			welcome, _ := ctx.GlobalFlags["-welcome"].(string)
+			sessionDir, _ := ctx.GlobalFlags["-session-dir"].(string)
 
 			if path == "" {
 				return fmt.Errorf("ssql serve: PATH required")
@@ -126,6 +135,7 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				AuthorizedKeys: authKeys,
 				State:          srv,
 				Welcome:        welcome,
+				HistoryDir:     sessionDir,
 			})
 		}).
 		Done()
