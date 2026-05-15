@@ -5,6 +5,32 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.44.4] - 2026-05-15
+
+### Stack upgrades
+- **autocli/shell migrated from `chzyer/readline` to `golang.org/x/term`**
+  (shell v0.2.0). Three bugs in two weeks all of the same shape —
+  `chzyer/readline` assumes `os.Stdin` even when given a different
+  `Config.Stdin` — drove the rewrite. `x/term` is designed for the
+  embedded-driver case (it's what `crypto/ssh`'s own shell example
+  uses), takes an explicit `io.ReadWriter`, and never touches
+  `os.Stdin` behind your back.
+
+### Behaviour changes inherited from shell v0.2.0
+- **No vi mode.** `golang.org/x/term` is emacs-only. `:set vi` at the
+  serve prompt is now accepted-but-inactive (deprecation notice on
+  invocation). Operators who really need vi can run their editor of
+  choice; the shell prompt itself is emacs-keybindings.
+- **No Ctrl-R reverse-incremental-search.** Up/Down arrows browse
+  history, but no incremental search.
+- **`prefs.json` is no longer written.** The only thing it persisted
+  was the vi/emacs choice; that's gone. `-session-dir` still
+  controls per-user history file.
+
+### Stack
+- `github.com/rosscartlidge/autocli/shell` → v0.2.0
+- `github.com/rosscartlidge/autocli/ssh` → v0.1.8
+
 ## [v4.44.3] - 2026-05-15
 
 ### Fixes
