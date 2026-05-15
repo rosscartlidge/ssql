@@ -5,6 +5,31 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.44.3] - 2026-05-15
+
+### Fixes
+- **Ctrl-C now actually kills `ssql serve` when SSH sessions are open**
+  (autocli/shell v0.1.5). Same shape of root cause as the earlier
+  `SetVimMode` race: `chzyer/readline.MakeRaw` is hardcoded to call
+  on `syscall.Stdin` (FD 0) regardless of what `Config.Stdin` was
+  passed. When an SSH session connected, readline put the *server
+  process's controlling terminal* into raw mode, which disables
+  ISIG, which made Ctrl-C in that terminal stop generating SIGINT
+  (it just became a literal byte). `kill -INT` worked because it
+  bypasses the tty driver entirely.
+
+  Fix: when `shell.Options.Stdin` is not `os.Stdin` (i.e. we're
+  driving readline from an SSH channel or any other non-tty
+  source), `shell.Serve` now installs no-op `FuncMakeRaw` /
+  `FuncExitRaw` on the readline config. SSH client manages its
+  own terminal; the server has no business touching termios on
+  the host. Local autocli/shell usage (real `os.Stdin`) is
+  unchanged.
+
+### Stack upgrades
+- `github.com/rosscartlidge/autocli/shell` → v0.1.5
+- `github.com/rosscartlidge/autocli/ssh` → v0.1.7
+
 ## [v4.44.2] - 2026-05-14
 
 ### New Features
