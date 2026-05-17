@@ -8,11 +8,14 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	cf "github.com/rosscartlidge/autocli/v4"
+	"github.com/rosscartlidge/autocli/shell"
 	autossh "github.com/rosscartlidge/autocli/ssh"
 	"github.com/rosscartlidge/ssql/v4"
 )
@@ -136,6 +139,7 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				State:          srv,
 				Welcome:        welcome,
 				HistoryDir:     sessionDir,
+				Settings:       buildServeSettings(srv),
 			})
 		}).
 		Done()
@@ -152,6 +156,13 @@ type serveState struct {
 	path     string
 	started  time.Time
 	loadTime time.Duration
+
+	// headDefault is the default row count for `head` when the
+	// operator hasn't passed -n explicitly. Tunable at runtime via
+	// `:set head-default-rows N` — the Setting's Get/Set close over
+	// this field via atomic load/store, so concurrent sessions
+	// stay consistent.
+	headDefault atomic.Int64
 }
 
 // loadServerDataset reads the entire dataset into memory.  Supports
@@ -194,11 +205,40 @@ func loadServerDataset(path string) (*serveState, error) {
 		}
 	}
 
-	return &serveState{
+	s := &serveState{
 		records:  records,
 		schema:   schema,
 		path:     path,
 		started:  time.Now(),
 		loadTime: time.Since(t0),
-	}, nil
+	}
+	s.headDefault.Store(10)
+	return s, nil
+}
+
+// buildServeSettings constructs the runtime-tunable settings exposed
+// at the SSH prompt via `:set`. Each Setting closes over srv so all
+// sessions on the same server see the same underlying values; the
+// atomics make concurrent reads/writes safe.
+func buildServeSettings(srv *serveState) []shell.Setting {
+	return []shell.Setting{
+		{
+			Name:        "head-default-rows",
+			Description: "default row count for `head` when -n isn't passed",
+			Get: func() string {
+				return strconv.FormatInt(srv.headDefault.Load(), 10)
+			},
+			Set: func(v string) error {
+				n, err := strconv.ParseInt(v, 10, 64)
+				if err != nil {
+					return fmt.Errorf("must be an integer, got %q", v)
+				}
+				if n <= 0 {
+					return fmt.Errorf("must be > 0, got %d", n)
+				}
+				srv.headDefault.Store(n)
+				return nil
+			},
+		},
+	}
 }

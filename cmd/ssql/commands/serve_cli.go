@@ -38,12 +38,12 @@ func buildServeCLI() *cf.Command {
 		Done().
 
 		Subcommand("head").
-		Description("show the first N rows (default 10)").
+		Description("show the first N rows (default tunable via `:set head-default-rows`)").
 		Flag("-n").
 			Int().
 			Global().
-			Default(int64(10)).
-			Help("rows to print").
+			Default(int64(-1)).
+			Help("rows to print (default: see `:set head-default-rows`)").
 			Done().
 		Flag("-t").
 			Bool().
@@ -130,13 +130,17 @@ func serveHeadHandler(ctx *cf.Context) error {
 	w := ctx.Stdout()
 
 	// autocli Int() flags arrive as `int`; the Default we set is int64
-	// to satisfy the builder signature. Handle both.
-	n := 10
+	// to satisfy the builder signature. Handle both. -1 is the
+	// sentinel meaning "use the head-default-rows Setting".
+	n := -1
 	switch v := ctx.GlobalFlags["-n"].(type) {
 	case int:
 		n = v
 	case int64:
 		n = int(v)
+	}
+	if n < 0 {
+		n = int(srv.headDefault.Load())
 	}
 	if n <= 0 || n > len(srv.records) {
 		n = len(srv.records)

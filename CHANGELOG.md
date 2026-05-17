@@ -5,6 +5,33 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.44.5] - 2026-05-18
+
+### New Features
+- **`:set` at the `ssql serve` prompt is now a generic settings
+  interface.** First setting wired: `head-default-rows`. Operators
+  tune the default row count for `head` at runtime without
+  reconnecting:
+
+  ```
+  > :set
+    head-default-rows = 10
+                        (default row count for `head` when -n isn't passed)
+  > :set head-default-rows 3
+  head-default-rows = 3
+  > head        # now returns 3 rows by default
+  > head -n 5   # explicit -n still overrides
+  ```
+
+  Underlying mechanism is `autocli/shell` v0.2.1's Settings
+  registry — services supply `[]shell.Setting{Name, Description,
+  Get, Set}` and the shell handles the UX (listing, read, write,
+  invalid-value feedback).
+
+### Stack upgrades
+- `github.com/rosscartlidge/autocli/shell` → v0.2.1
+- `github.com/rosscartlidge/autocli/ssh` → v0.1.10
+
 ## [v4.44.4] - 2026-05-15
 
 ### Stack upgrades

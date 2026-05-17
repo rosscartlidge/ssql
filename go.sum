@@ -39,10 +39,10 @@ github.com/richardlehane/mscfb v1.0.4/go.mod h1:YzVpcZg9czvAuhk9T+a3avCpcFPMUWm7
 github.com/richardlehane/msoleps v1.0.1/go.mod h1:BWev5JBpU9Ko2WAgmZEuiz4/u3ZYTKbjLycmwiWUfWg=
 github.com/richardlehane/msoleps v1.0.4 h1:WuESlvhX3gH2IHcd8UqyCuFY5yiq/GR/yqaSM/9/g00=
 github.com/richardlehane/msoleps v1.0.4/go.mod h1:BWev5JBpU9Ko2WAgmZEuiz4/u3ZYTKbjLycmwiWUfWg=
-github.com/rosscartlidge/autocli/shell v0.2.0 h1:r80jvjs604QmM5CBRkbabbdQlUMyNtggi9Cft+P9GJo=
-github.com/rosscartlidge/autocli/shell v0.2.0/go.mod h1:RdTfxGSVaYi18zvO3IZ/TI7119rxWgAi+X2RbA1x/6s=
-github.com/rosscartlidge/autocli/ssh v0.1.8 h1:vhcCJcWP33G4tI9JVWN5kB1g0qpt9jPb7WvDUGcXUCU=
-github.com/rosscartlidge/autocli/ssh v0.1.8/go.mod h1:Ifsrv55PIs6bDP1tdimtd3RwF8aDXos62I+2J9FdqEY=
+github.com/rosscartlidge/autocli/shell v0.2.1 h1:CWzO6cAsj7F1GjMmjOf7jyTXOQA/O+HWXBR25s8V6H8=
+github.com/rosscartlidge/autocli/shell v0.2.1/go.mod h1:RdTfxGSVaYi18zvO3IZ/TI7119rxWgAi+X2RbA1x/6s=
+github.com/rosscartlidge/autocli/ssh v0.1.10 h1:gMw/kI4oAdJZfpthIJE8+4ZX1SKamm+bGZRd11XfaXk=
+github.com/rosscartlidge/autocli/ssh v0.1.10/go.mod h1:urAPJkTKPNxdNY4AgSps3+n4AWSnYcazHvXmFSYvP84=
 github.com/rosscartlidge/autocli/v4 v4.6.1 h1:INOzQFB5V+rsNOZxp5huv7deeDzQC85pTemXlMEm8ZQ=
 github.com/rosscartlidge/autocli/v4 v4.6.1/go.mod h1:HxyY8xr+3Pv7GHcxo7nWeqptLZvF2/8Vd7oPh1QJZuY=
 github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=
