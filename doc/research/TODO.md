@@ -84,13 +84,14 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 - [x] **Phase B — autocli/shell readline driver** (autocli/shell v0.1.1, 2026-05-12). `chzyer/readline` loop wired to `cli.Complete`/`cli.ExecuteWith`. Built-in `:exit`/`:quit`/`:help`/`:history`/`:set vi`/`:set emacs`. Sub-module so core stays stdlib-only.
 - [x] **Phase C — autocli/ssh server** (autocli/ssh v0.1.0, 2026-05-12). Wraps `crypto/ssh` around `autocli/shell`. ed25519 host-key load-or-generate, OpenSSH `authorized_keys` parsing, `AuthCallback` override, refuse-to-start safety, `ConnMeta` audit hooks, graceful shutdown.
 - [x] **Phase D — ssql serve subcommand** (ssql v4.44.0, 2026-05-13). First consumer; behind `!slim` build tag.
-- [ ] **Upstream `chzyer/readline.SetVimMode` race fix** — runtime mode switch races with the library's own input goroutine. v0.1 workaround defers the switch until next session. Send upstream PR (~1-2 hrs); fork if rejected. Drop the workaround once landed.
+- [x] **Migrated off `chzyer/readline`** (ssql v4.44.4, autocli/shell v0.2.0, 2026-05-15). Three bugs all of the same shape — library hardcoded `os.Stdin` — drove the rewrite onto `golang.org/x/term`. Retires the proposed upstream PR (we don't depend on the library any more). Trade-off: lost vi mode and Ctrl-R reverse-search, both deemed acceptable.
+- [x] **Generic `:set` Settings registry** (shell v0.2.1, ssh v0.1.10, ssql v4.44.5, 2026-05-18). Replaces the dead vi/emacs toggle with a service-supplied `[]Setting{Name, Description, Get, Set}` registry. First setting wired: `head-default-rows` on `ssql serve`.
+- [x] **Per-user history dir on `ssql serve`** (v4.44.2). `-session-dir DIR` flag exposes `autocli/ssh.Options.HistoryDir`. Per-user history + (formerly) prefs files under `$DIR/$user/`.
 - [ ] **Pipes in autocli/shell (Position 2)** — opt-in `io.Pipe()`-based pipe support so `from-loaded | where ... | to table` works in shell sessions. ~100 LOC. Required for `ssql serve` to expose pipelines.
 - [ ] **`let $name = pipeline` variables** — REPL-friendly replacement for bash process substitution. Documented as v2-of-shell scope; grammar already reserved.
-- [ ] **SSH window-size propagation** — `autocli/ssh` accepts `window-change` requests but doesn't surface them to readline's `SetSize`. Lines wrap at 80. Modest plumbing change.
-- [ ] **Schema-aware completion in `ssql serve`** — TAB on `head -if <TAB>` should complete loaded field names. `FieldCompleter` pointed at the in-memory dataset.
+- [ ] **SSH window-size propagation** — `autocli/ssh` accepts `window-change` requests but doesn't surface them to x/term's `SetSize`. Lines wrap at 80. Modest plumbing change.
+- [ ] **Schema-aware completion in `ssql serve`** — once pipes ship and commands like `where -if FIELD` exist at the prompt, TAB should complete loaded field names. `FieldCompleter` pointed at the in-memory dataset.
 - [ ] **Position 3 (in-process composition)** — composable handlers returning `iter.Seq[Record]` / `Filter[Record,Record]`. Big lift, perf-motivated; defer until needed.
-- [ ] **Per-user history dir on `ssql serve`** — `autocli/ssh.Options.HistoryDir` plumbing exists; `ssql serve` needs a `-history-dir` flag.
 
 ## ssql serve (see ssql-serve-proposal.md rev 2)
 
