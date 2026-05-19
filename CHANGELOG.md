@@ -5,6 +5,23 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.44.6] - 2026-05-19
+
+### Fixes
+- **SSH window size now propagates to the terminal.** `ssql serve`
+  sessions used to wrap lines at a hardcoded 80 cols regardless of
+  the operator's actual terminal width. Now `autocli/ssh` parses
+  `pty-req` (initial size) and `window-change` (live updates) SSH
+  payloads, pushes `(cols, rows)` through `shell.Options.ResizeChan`,
+  and `shell.Serve` calls `Terminal.SetSize` for each update. Wide
+  rows in `head -t` and `to table` render correctly on wide
+  terminals; resizing the terminal mid-session takes effect on the
+  next prompt redraw.
+
+### Stack upgrades
+- `github.com/rosscartlidge/autocli/shell` → v0.2.2
+- `github.com/rosscartlidge/autocli/ssh` → v0.1.11
+
 ## [v4.44.5] - 2026-05-18
 
 ### New Features
