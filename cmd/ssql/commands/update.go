@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"maps"
-	"os"
 	"strings"
 	"time"
 
@@ -199,7 +198,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Track schema from first record
@@ -259,14 +258,14 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						for _, eval := range clause.whereExprEvals {
 							result, err := eval(frozen)
 							if err != nil {
-								fmt.Fprintf(os.Stderr, "Error evaluating where-expr: %v\n", err)
+								fmt.Fprintf(ctx.Stderr(), "Error evaluating where-expr: %v\n", err)
 								allMatch = false
 								break
 							}
 
 							boolResult, ok := result.(bool)
 							if !ok {
-								fmt.Fprintf(os.Stderr, "Where-expr must return boolean, got %T\n", result)
+								fmt.Fprintf(ctx.Stderr(), "Where-expr must return boolean, got %T\n", result)
 								allMatch = false
 								break
 							}
@@ -314,7 +313,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 								var coerced bool
 								mut, coerced = applyValueToRecordWithTypeCheck(mut, upd.field, parsedValue, existingValue, existsInRecord)
 								if coerced && !warnedFields[upd.field] {
-									fmt.Fprintf(os.Stderr, "Warning: field %q value coerced to match existing type (use 'ssql cast' for explicit type conversion)\n", upd.field)
+									fmt.Fprintf(ctx.Stderr(), "Warning: field %q value coerced to match existing type (use 'ssql cast' for explicit type conversion)\n", upd.field)
 									warnedFields[upd.field] = true
 								}
 							}
@@ -381,7 +380,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, updated); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, updated); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

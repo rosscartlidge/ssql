@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -172,14 +171,14 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						for _, ee := range clause.exprEvals {
 							result, err := ee.eval(r)
 							if err != nil {
-								fmt.Fprintf(os.Stderr, "Error evaluating expression: %v\n", err)
+								fmt.Fprintf(ctx.Stderr(), "Error evaluating expression: %v\n", err)
 								clauseMatches = false
 								break
 							}
 
 							boolResult, ok := result.(bool)
 							if !ok {
-								fmt.Fprintf(os.Stderr, "Expression must return boolean, got %T\n", result)
+								fmt.Fprintf(ctx.Stderr(), "Expression must return boolean, got %T\n", result)
 								clauseMatches = false
 								break
 							}
@@ -204,14 +203,14 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Apply filter
 			filtered := ssql.Where(filter)(records)
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, filtered); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, filtered); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

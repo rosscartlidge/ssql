@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -83,7 +82,7 @@ func registerToParquet(cmd *cf.SubcommandBuilder) {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			if err := ssql.WriteParquet(records, outputFile,
@@ -142,12 +141,12 @@ func generateToParquetCode(filename string, rowGroupSize int, compression string
 		var code string
 		if prevIsStream {
 			code = fmt.Sprintf(`if err := %s.WriteParquet(*flagOutput%s); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error writing Parquet: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, optsArg)
 		} else {
 			code = fmt.Sprintf(`if err := typed.WriteParquet(%s, *flagOutput%s); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error writing Parquet: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, optsArg)
 		}
@@ -159,7 +158,7 @@ func generateToParquetCode(filename string, rowGroupSize int, compression string
 	}
 
 	code := fmt.Sprintf(`if err := ssql.WriteParquet(%s, *flagOutput, ssql.WithRowGroupSize(%d), ssql.WithCompression(%q)); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error writing Parquet: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, rowGroupSize, compression)
 

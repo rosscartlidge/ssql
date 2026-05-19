@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
@@ -32,12 +31,12 @@ func RegisterCount(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if shouldGenerate(generate) {
 				return generateCountCode()
 			}
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			var n int64
 			for range schemaAndRecords.Records {
 				n++
 			}
-			fmt.Println(n)
+			fmt.Fprintln(ctx.Stdout(), n)
 			return nil
 		}).
 		Done()
@@ -81,9 +80,9 @@ func generateCountCode() error {
 		// The planner picks based on whether any downstream needs
 		// Stream — for `count` itself, declaring Accepts=ShapeStream
 		// keeps the source parallel.
-		streamCode := fmt.Sprintf(`fmt.Println(%s.SerialCount())`, inputVar)
-		serialCode := fmt.Sprintf(`fmt.Println(typed.Count(%s))`, inputVar)
-		imports := []string{"fmt", "github.com/rosscartlidge/ssql/v4/typed"}
+		streamCode := fmt.Sprintf(`fmt.Fprintln(os.Stdout, %s.SerialCount())`, inputVar)
+		serialCode := fmt.Sprintf(`fmt.Fprintln(os.Stdout, typed.Count(%s))`, inputVar)
+		imports := []string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/typed"}
 
 		frag := lib.NewFinalFragment(inputVar, streamCode, imports, getCommandString())
 		frag.InputTypedSchema = prevSchema
@@ -99,7 +98,7 @@ func generateCountCode() error {
 	for range %s {
 		n++
 	}
-	fmt.Println(n)`, inputVar)
-	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
+	fmt.Fprintln(os.Stdout, n)`, inputVar)
+	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
 	return lib.WriteCodeFragment(frag)
 }

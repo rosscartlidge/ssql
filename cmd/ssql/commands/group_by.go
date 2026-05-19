@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"iter"
-	"os"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -383,7 +382,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 			inputSchema := schemaAndRecords.Schema
 
@@ -456,7 +455,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				}
 
-				if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, result); err != nil {
+				if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, result); err != nil {
 					return fmt.Errorf("writing output: %w", err)
 				}
 				return nil
@@ -502,7 +501,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				}
 
-				if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, projected); err != nil {
+				if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, projected); err != nil {
 					return fmt.Errorf("writing output: %w", err)
 				}
 				return nil
@@ -564,7 +563,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, aggregated); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, aggregated); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

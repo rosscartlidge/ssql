@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -100,7 +99,7 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Validate sort fields against schema
@@ -116,7 +115,7 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			result := ssql.SortRecords(orderBy)(records)
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, result); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, result); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

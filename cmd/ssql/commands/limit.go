@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -54,14 +53,14 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Apply limit
 			limited := ssql.Limit[ssql.Record](n)(records)
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, limited); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, limited); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

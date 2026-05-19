@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -94,7 +93,7 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 			}
 
 			// Read all records from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// If no fields specified but schema is present, use schema field order
@@ -229,14 +228,14 @@ func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpec
 	// Emit a TableColumn[<RowType>]-typed slice literal then call
 	// typed.WriteTableSelectedToWriter.
 	var b strings.Builder
-	fmt.Fprintf(&b, "if err := typed.WriteTableSelectedToWriter(%s, os.Stdout, []typed.TableColumn[%s]{\n", inputVar, schema.TypeName)
+	fmt.Fprintf(&b, "if err := typed.WriteTableSelectedToWriter(%s, ctx.Stdout(), []typed.TableColumn[%s]{\n", inputVar, schema.TypeName)
 	for _, f := range selected {
 		right := isNumericOrBoolGoType(f.GoType)
 		fmt.Fprintf(&b, "\t\t{Header: %q, Format: func(r *%s) string { return fmt.Sprintf(\"%%v\", r.%s) }, RightAlign: %t},\n",
 			f.Name, schema.TypeName, f.GoName, right)
 	}
 	b.WriteString("\t}); err != nil {\n")
-	b.WriteString("\t\tfmt.Fprintf(os.Stderr, \"to table: %v\\n\", err)\n")
+	b.WriteString("\t\tfmt.Fprintf(ctx.Stderr(), \"to table: %v\\n\", err)\n")
 	b.WriteString("\t\tos.Exit(1)\n")
 	b.WriteString("\t}")
 	return b.String()

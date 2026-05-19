@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -73,7 +72,7 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Build renamer function using Rename()
@@ -98,7 +97,7 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, renamed); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, renamed); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

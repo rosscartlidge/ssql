@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -74,7 +73,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin
-			records := lib.ReadJSONL(os.Stdin)
+			records := lib.ReadJSONL(ctx.Stdin())
 
 			// Build cast filter that converts field types for ALL records
 			var castErr error
@@ -116,7 +115,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			casted := castFilter(records)
 
 			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, casted); err != nil {
+			if err := lib.WriteJSONL(ctx.Stdout(), casted); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -52,7 +51,7 @@ func registerToArrow(cmd *cf.SubcommandBuilder) {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Write as Arrow
@@ -88,7 +87,7 @@ func generateToArrowCode(filename string) error {
 		{Name: "output", Default: filename, Help: "output Arrow file", VarName: "flagOutput"},
 	}
 	code := fmt.Sprintf(`if err := ssql.WriteArrow(%s, *flagOutput); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing Arrow: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error writing Arrow: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
 

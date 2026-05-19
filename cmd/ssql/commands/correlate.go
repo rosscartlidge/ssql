@@ -186,7 +186,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			} else {
 				// Read from stdin (pipeline mode)
-				schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+				schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 				records = slices.Collect(schemaAndRecords.Records)
 				signalA = ssql.ExtractSignalFromSlice(records, field)
 				if !auto || maxLag == 0 {
@@ -250,7 +250,7 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, slices.Values(output)); err != nil {
+			if err := lib.WriteJSONL(ctx.Stdout(), slices.Values(output)); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -295,7 +295,7 @@ func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, 
 		if !auto {
 			signalBExtract = fmt.Sprintf(`signalB, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error extracting second signal: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error extracting second signal: %%v\n", err)
 		os.Exit(1)
 	}
 
@@ -304,13 +304,13 @@ func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, 
 
 		code := fmt.Sprintf(`signalA, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error extracting signal: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error extracting signal: %%v\n", err)
 		os.Exit(1)
 	}
 
 	%sresult, err := %s
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error computing correlation: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error computing correlation: %%v\n", err)
 		os.Exit(1)
 	}
 

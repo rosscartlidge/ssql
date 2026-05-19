@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -65,7 +64,7 @@ func registerToWAV(cmd *cf.SubcommandBuilder) {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Determine sample rate: flag > schema > default
@@ -114,7 +113,7 @@ func generateToWAVCode(filename string, sampleRate int) error {
 		{Name: "output", Default: filename, Help: "output WAV file", VarName: "flagOutput"},
 	}
 	code := fmt.Sprintf(`if err := ssql.WriteWAV(%s, *flagOutput, %d); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing WAV: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error writing WAV: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, sampleRate)
 

@@ -178,7 +178,7 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			} else {
 				// Read from stdin (pipeline mode)
-				schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+				schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 				records = slices.Collect(schemaAndRecords.Records)
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			}
@@ -245,7 +245,7 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, slices.Values(output)); err != nil {
+			if err := lib.WriteJSONL(ctx.Stdout(), slices.Values(output)); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -337,13 +337,13 @@ func generateConvolveCode(inputFile, field, outputField, kernelName string, size
 
 		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error extracting signal: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error extracting signal: %%v\n", err)
 		os.Exit(1)
 	}
 
 	result, err := %s
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error computing convolution: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error computing convolution: %%v\n", err)
 		os.Exit(1)
 	}
 

@@ -43,15 +43,15 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 				run = runVal.(bool)
 			}
 
-			sql, err := assembleSQL(os.Stdin)
+			sql, err := assembleSQL(ctx.Stdin())
 			if err != nil {
 				return fmt.Errorf("assembling SQL: %w", err)
 			}
 
 			if run {
 				cmd := exec.Command("duckdb", "-c", sql)
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
+				cmd.Stdout = ctx.Stdout()
+				cmd.Stderr = ctx.Stderr()
 				return cmd.Run()
 			}
 
@@ -59,7 +59,7 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 				if err := os.WriteFile(outputFile, []byte(sql), 0644); err != nil {
 					return fmt.Errorf("writing output file: %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "Generated SQL written to %s\n", outputFile)
+				fmt.Fprintf(ctx.Stderr(), "Generated SQL written to %s\n", outputFile)
 			} else {
 				fmt.Print(sql)
 			}

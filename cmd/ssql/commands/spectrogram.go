@@ -166,7 +166,7 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			} else {
 				// Read from stdin (pipeline mode)
-				schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+				schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 				records := slices.Collect(schemaAndRecords.Records)
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			}
@@ -183,7 +183,7 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Convert to records and write as JSONL
 			spectrogramRecords := ssql.SpectrogramToRecords(bins)
-			if err := lib.WriteJSONL(os.Stdout, spectrogramRecords); err != nil {
+			if err := lib.WriteJSONL(ctx.Stdout(), spectrogramRecords); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -218,13 +218,13 @@ func generateSpectrogramCode(inputFile, field string, windowSize, hopSize int, w
 	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
 		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error extracting signal: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error extracting signal: %%v\n", err)
 		os.Exit(1)
 	}
 
 	spectrogramBins, err := ssql.Spectrogram(signal, %s)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error computing spectrogram: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error computing spectrogram: %%v\n", err)
 		os.Exit(1)
 	}
 

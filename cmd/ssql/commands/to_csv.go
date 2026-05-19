@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -48,7 +47,7 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Build CSV config with field order from schema if present
@@ -59,7 +58,7 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 
 			// Write as CSV with field order
 			if outputFile == "" {
-				return ssql.WriteCSVToWriter(records, os.Stdout, config)
+				return ssql.WriteCSVToWriter(records, ctx.Stdout(), config)
 			} else {
 				return ssql.WriteCSV(records, outputFile, config)
 			}

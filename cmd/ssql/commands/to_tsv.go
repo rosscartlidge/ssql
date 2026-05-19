@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -66,12 +65,12 @@ func registerToTSV(cmd *cf.SubcommandBuilder) {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Write as TSV
 			if outputFile == "" {
-				return ssql.WriteTSVToWriterWithSeparator(records, os.Stdout, sep)
+				return ssql.WriteTSVToWriterWithSeparator(records, ctx.Stdout(), sep)
 			} else {
 				return ssql.WriteTSVWithSeparator(records, outputFile, sep)
 			}

@@ -186,7 +186,7 @@ func inferTypeForServe(v any) string {
 
 // renderTableTo writes rows + schema as a fixed-width text table to
 // the writer. Goes through an io.Writer (the SSH channel) rather than
-// os.Stdout — ssql.DisplayTable writes to stdout directly which would
+// ctx.Stdout() — ssql.DisplayTable writes to stdout directly which would
 // not reach the operator's session. Refactoring DisplayTable to
 // accept an io.Writer is on the list; for now keep it inline.
 //

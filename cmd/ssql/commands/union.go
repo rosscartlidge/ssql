@@ -76,7 +76,7 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read first input from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			firstRecords := schemaAndRecords.Records
 
 			// Chain all iterators together
@@ -93,7 +93,7 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Write output as JSONL (preserving schema from first input)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, result); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, result); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -172,7 +172,7 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 		// Write an init fragment for the file read
 		code := fmt.Sprintf(`%sHandle, err := os.Open(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error opening %s: %%v\n", err)
 		os.Exit(1)
 	}
 	defer %sHandle.Close()

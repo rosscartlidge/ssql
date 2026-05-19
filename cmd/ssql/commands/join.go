@@ -137,7 +137,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read left-side input from stdin (with schema if present)
-			leftSchemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			leftSchemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			leftRecords := leftSchemaAndRecords.Records
 			leftSchema := leftSchemaAndRecords.Schema
 
@@ -347,7 +347,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
-			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, joined); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, joined); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 			return nil

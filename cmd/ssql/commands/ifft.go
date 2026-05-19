@@ -139,7 +139,7 @@ func RegisterIFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			} else {
 				// Read from stdin (pipeline mode)
-				schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+				schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 				records := slices.Collect(schemaAndRecords.Records)
 				magnitude = make([]float64, len(records))
 				phase = make([]float64, len(records))
@@ -163,7 +163,7 @@ func RegisterIFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			signalRecords := signalToRecords(signal, outputField)
 
 			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, signalRecords); err != nil {
+			if err := lib.WriteJSONL(ctx.Stdout(), signalRecords); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -203,18 +203,18 @@ func generateIFFTCode(inputFile, magnitudeField, phaseField, outputField string)
 	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
 		code := fmt.Sprintf(`magnitude, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error extracting magnitude: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error extracting magnitude: %%v\n", err)
 		os.Exit(1)
 	}
 	phase, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error extracting phase: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error extracting phase: %%v\n", err)
 		os.Exit(1)
 	}
 
 	signal, err := ssql.IFFT(magnitude, phase)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error computing IFFT: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error computing IFFT: %%v\n", err)
 		os.Exit(1)
 	}
 

@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -77,7 +76,7 @@ func RegisterTop(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			keyFn := func(r ssql.Record) float64 {
@@ -92,7 +91,7 @@ func RegisterTop(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				result = ssql.TopBy(n, keyFn)(records)
 			}
 
-			if err := lib.WriteJSONLWithSchema(os.Stdout, schemaAndRecords.Schema, result); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, result); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

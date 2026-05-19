@@ -111,7 +111,7 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("ssql serve: load %s: %w", path, err)
 			}
 
-			fmt.Fprintf(os.Stderr, "ssql serve: loaded %d rows from %s in %v\n",
+			fmt.Fprintf(ctx.Stderr(), "ssql serve: loaded %d rows from %s in %v\n",
 				len(srv.records), srv.path, srv.loadTime)
 			if welcome == "" {
 				welcome = fmt.Sprintf("ssql serve — %d rows from %s — :help for built-ins, :exit to quit",
@@ -128,7 +128,7 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 			go func() {
 				<-sigs
-				fmt.Fprintln(os.Stderr, "ssql serve: shutting down…")
+				fmt.Fprintln(ctx.Stderr(), "ssql serve: shutting down…")
 				cancel()
 			}()
 

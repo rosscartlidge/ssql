@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -64,7 +63,7 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Validate field names against schema
@@ -104,7 +103,7 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, outputSchema, included); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, included); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

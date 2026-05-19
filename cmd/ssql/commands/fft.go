@@ -125,7 +125,7 @@ func RegisterFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			} else {
 				// Read from stdin (pipeline mode)
-				schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+				schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 				records := slices.Collect(schemaAndRecords.Records)
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			}
@@ -149,7 +149,7 @@ func RegisterFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			spectrumRecords := ssql.SpectrumToRecords(spectrum, sampleRate)
 
 			// Write output as JSONL
-			if err := lib.WriteJSONL(os.Stdout, spectrumRecords); err != nil {
+			if err := lib.WriteJSONL(ctx.Stdout(), spectrumRecords); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -176,13 +176,13 @@ func generateFFTCode(inputFile, field string, sampleRate float64, includePhase b
 		// Direct Arrow extraction - bypasses Record conversion
 		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error extracting signal: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error extracting signal: %%v\n", err)
 		os.Exit(1)
 	}
 
 	spectrum, err := ssql.FFT%s(signal)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error computing FFT: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error computing FFT: %%v\n", err)
 		os.Exit(1)
 	}
 

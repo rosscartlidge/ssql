@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -64,7 +63,7 @@ func registerToXLSX(cmd *cf.SubcommandBuilder) {
 			}
 
 			// Read JSONL from stdin (with schema if present)
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			// Build XLSX config
@@ -108,12 +107,12 @@ func generateToXLSXCode(filename string, sheet string) error {
 	var code string
 	if sheet != "" {
 		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, *flagOutput, ssql.XLSXConfig{SheetName: %q}); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing XLSX: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error writing XLSX: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, sheet)
 	} else {
 		code = fmt.Sprintf(`if err := ssql.WriteXLSX(%s, *flagOutput); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing XLSX: %%v\n", err)
+		fmt.Fprintf(ctx.Stderr(), "Error writing XLSX: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
 	}

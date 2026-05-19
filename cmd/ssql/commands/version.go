@@ -19,7 +19,7 @@ func RegisterVersion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if ssql.GPUAvailable() {
 				gpuStatus = "yes"
 			}
-			fmt.Printf("ssql v%s (build: %s, gpu: %s)\n", version.Version, version.Commit, gpuStatus)
+			fmt.Fprintf(ctx.Stdout(), "ssql v%s (build: %s, gpu: %s)\n", version.Version, version.Commit, gpuStatus)
 			return nil
 		}).
 		Done()

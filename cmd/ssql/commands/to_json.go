@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
@@ -44,7 +43,7 @@ func registerToJSON(cmd *cf.SubcommandBuilder) {
 				return generateToJSONCode(outputFile, true)
 			}
 
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			var fieldOrder []string
@@ -53,7 +52,7 @@ func registerToJSON(cmd *cf.SubcommandBuilder) {
 			}
 
 			if outputFile == "" {
-				return lib.WriteJSONWithFieldOrder(os.Stdout, records, true, fieldOrder)
+				return lib.WriteJSONWithFieldOrder(ctx.Stdout(), records, true, fieldOrder)
 			}
 			output, err := lib.OpenOutput(outputFile)
 			if err != nil {
@@ -101,7 +100,7 @@ func registerToJSONL(cmd *cf.SubcommandBuilder) {
 				return generateToJSONCode(outputFile, false)
 			}
 
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
 			var fieldOrder []string
@@ -110,7 +109,7 @@ func registerToJSONL(cmd *cf.SubcommandBuilder) {
 			}
 
 			if outputFile == "" {
-				return lib.WriteJSONWithFieldOrder(os.Stdout, records, false, fieldOrder)
+				return lib.WriteJSONWithFieldOrder(ctx.Stdout(), records, false, fieldOrder)
 			}
 			output, err := lib.OpenOutput(outputFile)
 			if err != nil {

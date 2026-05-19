@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -263,7 +262,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Read JSONL from stdin
-			schemaAndRecords := lib.ReadJSONLWithSchema(os.Stdin)
+			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 			inputSchema := schemaAndRecords.Schema
 
@@ -301,7 +300,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				}
 
-				if err := lib.WriteJSONLWithSchema(os.Stdout, outSchema, windowed); err != nil {
+				if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outSchema, windowed); err != nil {
 					return fmt.Errorf("writing output: %w", err)
 				}
 				return nil
@@ -334,7 +333,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Write output
 			resultIter := slices.Values(results)
-			if err := lib.WriteJSONLWithSchema(os.Stdout, outSchema, resultIter); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outSchema, resultIter); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
