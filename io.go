@@ -1801,7 +1801,12 @@ func ReadCommandOutputSafe(filename string, config ...CommandConfig) iter.Seq2[R
 //	records := ssql.ReadCSV("data.csv")
 //	ssql.DisplayTable(records, 50)
 func DisplayTable(records iter.Seq[Record], maxWidth int) {
-	DisplayTableWithFields(records, maxWidth, nil, false)
+	DisplayTableWithFieldsTo(os.Stdout, records, maxWidth, nil, false)
+}
+
+// DisplayTableTo is like [DisplayTable] but writes to the given writer.
+func DisplayTableTo(w io.Writer, records iter.Seq[Record], maxWidth int) {
+	DisplayTableWithFieldsTo(w, records, maxWidth, nil, false)
 }
 
 // DisplayTableWithFields formats and prints records as a table with field ordering control.
@@ -1818,6 +1823,11 @@ func DisplayTable(records iter.Seq[Record], maxWidth int) {
 //	// Show only name and age
 //	ssql.DisplayTableWithFields(records, 50, []string{"name", "age"}, true)
 func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder []string, onlySpecified bool) {
+	DisplayTableWithFieldsTo(os.Stdout, records, maxWidth, fieldOrder, onlySpecified)
+}
+
+// DisplayTableWithFieldsTo is like [DisplayTableWithFields] but writes to the given writer.
+func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth int, fieldOrder []string, onlySpecified bool) {
 	// Collect records and determine columns
 	var allRecords []Record
 	columnSet := make(map[string]bool)
@@ -1890,11 +1900,11 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 	// Print header
 	for i, col := range columns {
 		if i > 0 {
-			fmt.Print("   ")
+			fmt.Fprint(w, "   ")
 		}
-		fmt.Printf("%-*s", colWidths[col], col)
+		fmt.Fprintf(w, "%-*s", colWidths[col], col)
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 
 	// Print separator line
 	totalWidth := 0
@@ -1904,13 +1914,13 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 		}
 		totalWidth += colWidths[col]
 	}
-	fmt.Println(strings.Repeat("-", totalWidth))
+	fmt.Fprintln(w, strings.Repeat("-", totalWidth))
 
 	// Print data rows
 	for _, record := range allRecords {
 		for i, col := range columns {
 			if i > 0 {
-				fmt.Print("   ")
+				fmt.Fprint(w, "   ")
 			}
 
 			// Get value as any type
@@ -1927,12 +1937,12 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 			}
 
 			if colRightAlign[col] {
-				fmt.Printf("%*s", colWidths[col], strValue)
+				fmt.Fprintf(w, "%*s", colWidths[col], strValue)
 			} else {
-				fmt.Printf("%-*s", colWidths[col], strValue)
+				fmt.Fprintf(w, "%-*s", colWidths[col], strValue)
 			}
 		}
-		fmt.Println()
+		fmt.Fprintln(w)
 	}
 }
 

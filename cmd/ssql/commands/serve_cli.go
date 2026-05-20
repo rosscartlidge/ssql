@@ -3,14 +3,13 @@
 package commands
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"strings"
+	"iter"
 	"time"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
 // buildServeCLI assembles the small autocli Command tree shown at the
@@ -21,56 +20,57 @@ import (
 // Future additions: query (run a pipeline against the loaded data),
 // reload (re-read the file), :var (named intermediates), etc.
 func buildServeCLI() *cf.Command {
-	return cf.NewCommand("serve").
-		Subcommand("status").
+	b := cf.NewCommand("serve")
+
+	// Serve-specific commands: state shortcuts + pipeline source.
+	b.Subcommand("from-loaded").
+		Description("emit the in-memory dataset as JSONL — pipeline source").
+		Handler(serveFromLoadedHandler).
+		Done()
+
+	b.Subcommand("status").
 		Description("show uptime, dataset path, row count").
 		Handler(serveStatusHandler).
-		Done().
+		Done()
 
-		Subcommand("schema").
+	b.Subcommand("schema").
 		Description("show the dataset schema (field names + inferred types)").
 		Handler(serveSchemaHandler).
-		Done().
+		Done()
 
-		Subcommand("count").
-		Description("print total row count").
-		Handler(serveCountHandler).
-		Done().
+	// Bash transforms — reused unchanged. Each reads JSONL from
+	// ctx.Stdin() and writes JSONL to ctx.Stdout(), so they compose
+	// downstream of `from-loaded` in a Position 2 pipe.
+	b = RegisterWhere(b)
+	b = RegisterCount(b)
+	b = RegisterLimit(b)
+	b = RegisterOffset(b)
+	b = RegisterTop(b)
+	b = RegisterSort(b)
+	b = RegisterDistinct(b)
+	b = RegisterInclude(b)
+	b = RegisterExclude(b)
+	b = RegisterRename(b)
+	b = RegisterCast(b)
+	b = RegisterUpdate(b)
+	b = RegisterGroupBy(b)
+	b = RegisterPivot(b)
+	b = RegisterWindow(b)
 
-		Subcommand("head").
-		Description("show the first N rows (default tunable via `:set head-default-rows`)").
-		Flag("-n").
-			Int().
-			Global().
-			Default(int64(-1)).
-			Help("rows to print (default: see `:set head-default-rows`)").
-			Done().
-		Flag("-t").
-			Bool().
-			Global().
-			Default(false).
-			Help("render as a table (default: JSONL)").
-			Done().
-		Handler(serveHeadHandler).
-		Done().
+	// Stream-output sinks under `to`. File-writing variants
+	// (parquet/arrow/xlsx/wav/chart/explore/animate) are deliberately
+	// not registered — they'd write to server-side paths, which is
+	// surprising for SSH operators. Future v2 can sandbox / forbid.
+	toCmd := b.Subcommand("to").
+		Description("Write output in various formats (table, csv, tsv, json, jsonl)")
+	registerToTable(toCmd)
+	registerToCSV(toCmd)
+	registerToTSV(toCmd)
+	registerToJSON(toCmd)
+	registerToJSONL(toCmd)
+	toCmd.Done()
 
-		// Sink-style counterpart to `head`: render the (optionally limited)
-		// dataset as a fixed-width text table, the same shape ssql's
-		// `to table` produces. Default prints ALL rows; -n caps.
-		Subcommand("to").
-		Subcommand("table").
-		Description("render the dataset as a fixed-width text table").
-		Flag("-n").
-			Int().
-			Global().
-			Default(int64(0)).
-			Help("limit to first N rows (default 0 = all)").
-			Done().
-		Handler(serveToTableHandler).
-		Done().
-		Done().
-
-		Build()
+	return b.Build()
 }
 
 func serveStatusHandler(ctx *cf.Context) error {
@@ -99,74 +99,42 @@ func serveSchemaHandler(ctx *cf.Context) error {
 	return nil
 }
 
-func serveCountHandler(ctx *cf.Context) error {
+// serveFromLoadedHandler emits the in-memory dataset as schema-headed
+// JSONL on ctx.Stdout(). Pipeline source — sits at the start of a
+// `from-loaded | where … | to table` chain. The wire format matches
+// what bash `ssql from FOO.csv` produces, so downstream transforms
+// (which read JSONL from ctx.Stdin()) work unchanged.
+//
+// Schema is inferred once from the first record's field types; types
+// are NOT re-inferred per row (the dataset is uniformly-typed by
+// virtue of having come through ssql.ReadCSV / ReadJSONL at startup).
+func serveFromLoadedHandler(ctx *cf.Context) error {
 	srv := ctx.State.(*serveState)
-	fmt.Fprintln(ctx.Stdout(), len(srv.records))
-	return nil
-}
-
-// serveToTableHandler renders the dataset as a fixed-width table —
-// symmetric to ssql's `to table` sink in normal pipelines. Default is
-// to print everything (the dataset is already in memory); -n caps.
-func serveToTableHandler(ctx *cf.Context) error {
-	srv := ctx.State.(*serveState)
-
-	n := 0
-	switch v := ctx.GlobalFlags["-n"].(type) {
-	case int:
-		n = v
-	case int64:
-		n = int(v)
-	}
-	if n <= 0 || n > len(srv.records) {
-		n = len(srv.records)
+	if len(srv.records) == 0 {
+		// Empty dataset — emit nothing. Downstream sees EOF immediately.
+		return nil
 	}
 
-	return renderTableTo(ctx.Stdout(), srv.records[:n], srv.schema)
-}
-
-func serveHeadHandler(ctx *cf.Context) error {
-	srv := ctx.State.(*serveState)
-	w := ctx.Stdout()
-
-	// autocli Int() flags arrive as `int`; the Default we set is int64
-	// to satisfy the builder signature. Handle both. -1 is the
-	// sentinel meaning "use the head-default-rows Setting".
-	n := -1
-	switch v := ctx.GlobalFlags["-n"].(type) {
-	case int:
-		n = v
-	case int64:
-		n = int(v)
-	}
-	if n < 0 {
-		n = int(srv.headDefault.Load())
-	}
-	if n <= 0 || n > len(srv.records) {
-		n = len(srv.records)
+	schema := lib.NewSchema()
+	first := srv.records[0]
+	for _, name := range srv.schema {
+		v := ssql.GetOr[any](first, name, nil)
+		schema.AddField(name, lib.InferTypeString(v))
 	}
 
-	asTable, _ := ctx.GlobalFlags["-t"].(bool)
-	if asTable {
-		return renderTableTo(w, srv.records[:n], srv.schema)
-	}
-
-	// JSONL default — terse, easy to pipe / parse on the operator's end.
-	enc := json.NewEncoder(w)
-	for i := 0; i < n; i++ {
-		obj := make(map[string]any, len(srv.schema))
-		for _, k := range srv.schema {
-			obj[k] = ssql.GetOr[any](srv.records[i], k, nil)
-		}
-		if err := enc.Encode(obj); err != nil {
-			return err
+	// Wrap []Record as iter.Seq[Record] for the writer.
+	records := func(yield func(ssql.Record) bool) {
+		for _, r := range srv.records {
+			if !yield(r) {
+				return
+			}
 		}
 	}
-	return nil
+	return lib.WriteJSONLWithSchema(ctx.Stdout(), schema, iter.Seq[ssql.Record](records))
 }
 
 // inferTypeForServe returns a short, readable type tag for a value.
-// Aligned with how ssql infers types in CSV (int64/float64/string).
+// Used by serveSchemaHandler to summarise field types.
 func inferTypeForServe(v any) string {
 	switch v.(type) {
 	case int, int32, int64:
@@ -182,65 +150,4 @@ func inferTypeForServe(v any) string {
 	default:
 		return "string"
 	}
-}
-
-// renderTableTo writes rows + schema as a fixed-width text table to
-// the writer. Goes through an io.Writer (the SSH channel) rather than
-// ctx.Stdout() — ssql.DisplayTable writes to stdout directly which would
-// not reach the operator's session. Refactoring DisplayTable to
-// accept an io.Writer is on the list; for now keep it inline.
-//
-// Column widths are computed from the data with a 50-rune cap.
-func renderTableTo(w io.Writer, rows []ssql.Record, schema []string) error {
-	if len(rows) == 0 {
-		_, err := fmt.Fprintln(w, "(no rows)")
-		return err
-	}
-	widths := make(map[string]int, len(schema))
-	for _, col := range schema {
-		widths[col] = len(col)
-	}
-	cellAt := func(r ssql.Record, col string) string {
-		v := ssql.GetOr[any](r, col, nil)
-		s := fmt.Sprintf("%v", v)
-		if len(s) > 50 {
-			s = s[:47] + "..."
-		}
-		return s
-	}
-	for _, r := range rows {
-		for _, col := range schema {
-			if n := len(cellAt(r, col)); n > widths[col] {
-				widths[col] = n
-			}
-		}
-	}
-	var sb strings.Builder
-	for i, col := range schema {
-		if i > 0 {
-			sb.WriteString("  ")
-		}
-		sb.WriteString(padRight(col, widths[col]))
-	}
-	sb.WriteByte('\n')
-	sb.WriteString(strings.Repeat("-", sb.Len()-1))
-	sb.WriteByte('\n')
-	for _, r := range rows {
-		for i, col := range schema {
-			if i > 0 {
-				sb.WriteString("  ")
-			}
-			sb.WriteString(padRight(cellAt(r, col), widths[col]))
-		}
-		sb.WriteByte('\n')
-	}
-	_, err := w.Write([]byte(sb.String()))
-	return err
-}
-
-func padRight(s string, w int) string {
-	if len(s) >= w {
-		return s
-	}
-	return s + strings.Repeat(" ", w-len(s))
 }

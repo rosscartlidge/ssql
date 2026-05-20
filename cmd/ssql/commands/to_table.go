@@ -102,9 +102,9 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 			}
 
 			if sampleSize > 0 {
-				ssql.DisplayTableStreaming(records, maxWidth, sampleSize, fields, onlySpecified)
+				ssql.DisplayTableStreamingTo(ctx.Stdout(), records, maxWidth, sampleSize, fields, onlySpecified)
 			} else {
-				ssql.DisplayTableWithFields(records, maxWidth, fields, onlySpecified)
+				ssql.DisplayTableWithFieldsTo(ctx.Stdout(), records, maxWidth, fields, onlySpecified)
 			}
 			return nil
 		}).
