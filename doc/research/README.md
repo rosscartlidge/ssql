@@ -38,6 +38,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 - [Mixed-Mode Pipelines Proposal](mixed-mode-pipelines-proposal.md) — design space for pipelines where some stages run typed and others run Record, with adapter fragments at the boundaries
 - [mmap Readers Proposal](mmap-readers-proposal.md) — replace `os.ReadFile` slurp with `mmap` in parallel CSV/TSV readers (~1.7-1.9× faster slurp on 1.23 GB); modest 7-8% win on Arrow IPC reader. With benchmark numbers.
 - [Typed Auto-Parallel Proposal](typed-auto-parallel-proposal.md) — merge `SSQLGO=typed` and `SSQLGO=parallel` into a single mode that auto-picks per-pipeline. Prototype validated; benchmark exposed a Serial()-channel-cost gotcha that shapes the design (parallelism reach analysis).
+- [Schema-Aware Completion (`SSQLGO=schema`)](schema-aware-completion.md) — pipeline-aware tab completion via a fourth fragment-generation mode. Each command declares a `SchemaOp` rule; bash runs it as a subprocess (`SSQLGO=schema <upstream> | ssql generate schema`), autocli-shell runs it in-process. Same per-command rules in both worlds. Designed 2026-05-20 after shipping Position 2 pipes (v4.45.0).
 
 ## Distributed Processing
 
