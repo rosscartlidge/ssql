@@ -89,7 +89,9 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 - [x] **Per-user history dir on `ssql serve`** (v4.44.2). `-session-dir DIR` flag exposes `autocli/ssh.Options.HistoryDir`. Per-user history + (formerly) prefs files under `$DIR/$user/`.
 - [ ] **Pipes in autocli/shell (Position 2)** — opt-in `io.Pipe()`-based pipe support so `from-loaded | where ... | to table` works in shell sessions. ~100 LOC. Required for `ssql serve` to expose pipelines.
 - [ ] **`let $name = pipeline` variables** — REPL-friendly replacement for bash process substitution. Documented as v2-of-shell scope; grammar already reserved.
-- [ ] **SSH window-size propagation** — `autocli/ssh` accepts `window-change` requests but doesn't surface them to x/term's `SetSize`. Lines wrap at 80. Modest plumbing change.
+- [x] **SSH window-size propagation** (ssql v4.44.6, shell/v0.2.2, ssh/v0.1.11, 2026-05-19). `autocli/ssh` parses pty-req + window-change SSH payloads and pushes (cols, rows) through `shell.Options.ResizeChan`; `shell.Serve` calls `Terminal.SetSize`. Wide rows render at full terminal width; resize mid-session works.
+- [x] **Handler IO migration** (ssql commit 340e025, 2026-05-19). Ssql's command handlers now use `ctx.Stdin/Stdout/Stderr` accessors instead of `os.Stdin/Stdout/Stderr` directly. Zero behaviour change for bash users; unblocks Position 2 pipes for `ssql serve`. From-sources, codegen, file-only sinks intentionally left on `os.*`.
+- [x] **`os.Exit` audit** (2026-05-20). All 49 occurrences inspected; all are inside code-emission templates that emit `os.Exit(1)` into the generated standalone Go programs (correct). No handler-direct `os.Exit` exists, so Position 2 pipes are safe from stages terminating mid-flight.
 - [ ] **Schema-aware completion in `ssql serve`** — once pipes ship and commands like `where -if FIELD` exist at the prompt, TAB should complete loaded field names. `FieldCompleter` pointed at the in-memory dataset.
 - [ ] **Position 3 (in-process composition)** — composable handlers returning `iter.Seq[Record]` / `Filter[Record,Record]`. Big lift, perf-motivated; defer until needed.
 
