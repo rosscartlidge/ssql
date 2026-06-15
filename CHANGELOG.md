@@ -5,6 +5,47 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.45.0] - 2026-05-20
+
+### New Features
+- **Position 2 pipes in `ssql serve`.** Operators can now compose
+  pipelines at the prompt just like at a bash shell:
+
+  ```
+  > from-loaded | where -if dept eq Engineering | to table
+  > from-loaded | group-by dept -avg salary mean | sort -desc mean | limit 5
+  ```
+
+  All standard transforms (`count`, `limit`, `sort`, `group-by`,
+  `pivot`, `window`, …) compose over the in-memory dataset. Stages
+  are connected with `io.Pipe` and run one goroutine each, mirroring
+  the bash pipeline model. Tab completion after `|` now offers the
+  next stage's subcommands rather than the upstream command's flags.
+
+### Fixes
+- **`to table` now honours the command's stdout in serve pipes.**
+  `DisplayTable` / `DisplayTableWithFields` hardcoded `os.Stdout`, so
+  table output vanished inside a serve pipeline. Added writer-accepting
+  `DisplayTableTo` / `DisplayTableWithFieldsTo` variants in `io.go`;
+  `to table` passes `ctx.Stdout()`.
+- **Early-exit pipelines no longer error.** `… | limit 3 | to table`
+  finishes once `limit` stops reading; the upstream stages hit closed
+  pipe write-ends. `io.ErrClosedPipe` is now suppressed in the shell
+  pipeline runner, matching the Unix SIGPIPE convention.
+- **Ctrl-C cancels the line instead of killing the SSH session.**
+  `x/term` returns `io.EOF` on Ctrl-C without consuming the `0x03`,
+  so the next `ReadLine` saw the stuck byte and exited. The reader now
+  translates `0x03` → `0x0d` in-stream; the shell discards the partial
+  line with a `^C` banner and continues.
+- **Bare transforms no longer hang.** Typing a transform (e.g.
+  `where -if …`) without a `from-loaded |` upstream used to wire the
+  keyboard into the command's stdin and block. Single commands and
+  pipeline stage 0 now read from an empty reader, degrading gracefully
+  to zero-record processing — same as `where < /dev/null`.
+
+### Stack upgrades
+- `github.com/rosscartlidge/autocli/shell` → v0.3.1
+
 ## [v4.44.6] - 2026-05-19
 
 ### Fixes
