@@ -22,7 +22,7 @@ Corrections to §4.3 (the table there is wrong in three rows — fix before impl
 
 Estimate reality: "5–15 lines each" holds for `rename`/`include`/`exclude`/`update`/`cast`, but **`group-by` (~25–40 lines: distinct/standard/rollup/cube sub-shapes) and `join` (~20–40 lines) are the risk commands**. `join` is **not** a pure `(inputFields, args)` function — it must do I/O on the right file's `_schema` header and return `ok=false` on a `/dev/fd/N` process-substitution right side. Budget group-by and join at ~½ day each.
 
-Pre-req refactor: group-by parses its agg flags ~140 lines, **twice** (handler exec + `generate*Code`). Extract a shared `parseAggSpecs(ctx)` helper **first**, or the SchemaOp becomes a third divergent copy that the shadow-test must police (aligns with the repo's "Refactor While You Work" rule).
+Pre-req refactor: group-by parses its agg flags ~140 lines, **twice** (handler exec + `generate*Code`). Extract a shared `parseAggSpecs(ctx)` helper **first**, or the SchemaOp becomes a third divergent copy that the shadow-test must police (aligns with the repo's "Refactor While You Work" rule). **✅ Done (slice 2):** `cmd/ssql/commands/group_by_specs.go` now holds `parseGroupBySpecs(ctx)` (+ `parseAggSpecs`, the package-level `streamExprSpec`, and a `groupBySpecs` struct); both call sites decode once. The group-by SchemaOp (slice 5) is now a third *caller*, not a third copy.
 
 ### Part B — autocli completion surface: sound strategy, every API name in §7 is fictional
 

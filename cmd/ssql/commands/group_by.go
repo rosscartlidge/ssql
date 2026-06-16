@@ -171,7 +171,6 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Handler(func(ctx *cf.Context) error {
 			var groupByFields []string
 			var generate bool
-			var rollup, cube, presorted bool
 
 			// Extract group-by fields from variadic positional
 			if fieldsVal, ok := ctx.GlobalFlags["FIELDS"]; ok {
@@ -192,15 +191,12 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
-			if val, ok := ctx.GlobalFlags["-rollup"]; ok {
-				rollup = val.(bool)
-			}
-			if val, ok := ctx.GlobalFlags["-cube"]; ok {
-				cube = val.(bool)
-			}
-			if val, ok := ctx.GlobalFlags["-presorted"]; ok {
-				presorted = val.(bool)
-			}
+
+			// Decode all aggregation + modifier flags once. The same
+			// helper feeds the codegen path (and, later, the schema
+			// rule), so the flag-shape decoding lives in one place.
+			specs := parseGroupBySpecs(ctx)
+			rollup, cube, presorted := specs.rollup, specs.cube, specs.presorted
 
 			// Empty group-by fields means "single group spanning all rows"
 			// (SQL `GROUP BY ()`) — useful for `group-by -count n` to get
@@ -223,163 +219,8 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateGroupByCode(ctx, groupByFields)
 			}
 
-			// Parse aggregation specifications from new flag format
-			// Types aggSpec and exprSpec are defined at package level
-
-			type streamExprSpec struct {
-				initExpr  string
-				everyExpr string
-				finalExpr string
-				result    string
-			}
-
-			var aggSpecs []aggSpec
-			var exprSpecs []exprSpec
-			var streamExprSpecs []streamExprSpec
-
-			// Parse -count flags (only result name)
-			if countVals, ok := ctx.GlobalFlags["-count"]; ok {
-				counts, _ := countVals.([]any)
-				for _, countVal := range counts {
-					// When there's only 1 Arg(), autocli doesn't wrap in a slice
-					if resultName, ok := countVal.(string); ok {
-						aggSpecs = append(aggSpecs, aggSpec{
-							function: "count",
-							field:    "",
-							result:   resultName,
-						})
-					}
-				}
-			}
-
-			// Parse -sum flags (field and result name)
-			if sumVals, ok := ctx.GlobalFlags["-sum"]; ok {
-				sums, _ := sumVals.([]any)
-				for _, sumVal := range sums {
-					// When there are 2+ Args(), autocli returns a map with arg names as keys
-					if argsMap, ok := sumVal.(map[string]any); ok {
-						field, _ := argsMap["field"].(string)
-						result, _ := argsMap["result-name"].(string)
-						if field != "" && result != "" {
-							aggSpecs = append(aggSpecs, aggSpec{
-								function: "sum",
-								field:    field,
-								result:   result,
-							})
-						}
-					}
-				}
-			}
-
-			// Parse -avg flags (field and result name)
-			if avgVals, ok := ctx.GlobalFlags["-avg"]; ok {
-				avgs, _ := avgVals.([]any)
-				for _, avgVal := range avgs {
-					if argsMap, ok := avgVal.(map[string]any); ok {
-						field, _ := argsMap["field"].(string)
-						result, _ := argsMap["result-name"].(string)
-						if field != "" && result != "" {
-							aggSpecs = append(aggSpecs, aggSpec{
-								function: "avg",
-								field:    field,
-								result:   result,
-							})
-						}
-					}
-				}
-			}
-
-			// Parse -min flags (field and result name)
-			if minVals, ok := ctx.GlobalFlags["-min"]; ok {
-				mins, _ := minVals.([]any)
-				for _, minVal := range mins {
-					if argsMap, ok := minVal.(map[string]any); ok {
-						field, _ := argsMap["field"].(string)
-						result, _ := argsMap["result-name"].(string)
-						if field != "" && result != "" {
-							aggSpecs = append(aggSpecs, aggSpec{
-								function: "min",
-								field:    field,
-								result:   result,
-							})
-						}
-					}
-				}
-			}
-
-			// Parse -max flags (field and result name)
-			if maxVals, ok := ctx.GlobalFlags["-max"]; ok {
-				maxs, _ := maxVals.([]any)
-				for _, maxVal := range maxs {
-					if argsMap, ok := maxVal.(map[string]any); ok {
-						field, _ := argsMap["field"].(string)
-						result, _ := argsMap["result-name"].(string)
-						if field != "" && result != "" {
-							aggSpecs = append(aggSpecs, aggSpec{
-								function: "max",
-								field:    field,
-								result:   result,
-							})
-						}
-					}
-				}
-			}
-
-			// Parse -collect flags (field and result name)
-			if collectVals, ok := ctx.GlobalFlags["-collect"]; ok {
-				collects, _ := collectVals.([]any)
-				for _, collectVal := range collects {
-					if argsMap, ok := collectVal.(map[string]any); ok {
-						field, _ := argsMap["field"].(string)
-						result, _ := argsMap["result-name"].(string)
-						if field != "" && result != "" {
-							aggSpecs = append(aggSpecs, aggSpec{
-								function: "collect",
-								field:    field,
-								result:   result,
-							})
-						}
-					}
-				}
-			}
-
-			// Parse -expr flags (expression and result name)
-			if exprVals, ok := ctx.GlobalFlags["-expr"]; ok {
-				exprs, _ := exprVals.([]any)
-				for _, exprVal := range exprs {
-					if argsMap, ok := exprVal.(map[string]any); ok {
-						expression, _ := argsMap["expression"].(string)
-						result, _ := argsMap["result-name"].(string)
-						if expression != "" && result != "" {
-							exprSpecs = append(exprSpecs, exprSpec{
-								expression: expression,
-								result:     result,
-							})
-						}
-					}
-				}
-			}
-
-			// Parse -stream-expr flags (init, every, final, result name)
-			if streamVals, ok := ctx.GlobalFlags["-stream-expr"]; ok {
-				streams, _ := streamVals.([]any)
-				for _, streamVal := range streams {
-					if argsMap, ok := streamVal.(map[string]any); ok {
-						initExpr, _ := argsMap["init"].(string)
-						everyExpr, _ := argsMap["every"].(string)
-						finalExpr, _ := argsMap["final"].(string)
-						result, _ := argsMap["result-name"].(string)
-						if initExpr != "" && everyExpr != "" && finalExpr != "" && result != "" {
-							streamExprSpecs = append(streamExprSpecs, streamExprSpec{
-								initExpr:  initExpr,
-								everyExpr: everyExpr,
-								finalExpr: finalExpr,
-								result:    result,
-							})
-						}
-					}
-				}
-			}
+			// Aggregation specs were decoded above by parseGroupBySpecs.
+			aggSpecs, exprSpecs, streamExprSpecs := specs.aggs, specs.exprs, specs.streamExprs
 
 			// Read JSONL from stdin (with schema if present)
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
@@ -602,175 +443,11 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	// (SQL `GROUP BY ()`) — generates code that emits one summary row
 	// with just the aggregation result fields.
 
-	// Parse aggregation specifications from new flag format
-	// Type aggSpec is defined at package level
-
-	var aggSpecs []aggSpec
-
-	// Parse -count flags (only result name)
-	if countVals, ok := ctx.GlobalFlags["-count"]; ok {
-		counts, _ := countVals.([]any)
-		for _, countVal := range counts {
-			// When there's only 1 Arg(), autocli doesn't wrap in a slice
-			if resultName, ok := countVal.(string); ok {
-				aggSpecs = append(aggSpecs, aggSpec{
-					function: "count",
-					field:    "",
-					result:   resultName,
-				})
-			}
-		}
-	}
-
-	// Parse -sum flags (field and result name)
-	if sumVals, ok := ctx.GlobalFlags["-sum"]; ok {
-		sums, _ := sumVals.([]any)
-		for _, sumVal := range sums {
-			if argsMap, ok := sumVal.(map[string]any); ok {
-				field, _ := argsMap["field"].(string)
-				result, _ := argsMap["result-name"].(string)
-				if field != "" && result != "" {
-					aggSpecs = append(aggSpecs, aggSpec{
-						function: "sum",
-						field:    field,
-						result:   result,
-					})
-				}
-			}
-		}
-	}
-
-	// Parse -avg flags (field and result name)
-	if avgVals, ok := ctx.GlobalFlags["-avg"]; ok {
-		avgs, _ := avgVals.([]any)
-		for _, avgVal := range avgs {
-			if argsMap, ok := avgVal.(map[string]any); ok {
-				field, _ := argsMap["field"].(string)
-				result, _ := argsMap["result-name"].(string)
-				if field != "" && result != "" {
-					aggSpecs = append(aggSpecs, aggSpec{
-						function: "avg",
-						field:    field,
-						result:   result,
-					})
-				}
-			}
-		}
-	}
-
-	// Parse -min flags (field and result name)
-	if minVals, ok := ctx.GlobalFlags["-min"]; ok {
-		mins, _ := minVals.([]any)
-		for _, minVal := range mins {
-			if argsMap, ok := minVal.(map[string]any); ok {
-				field, _ := argsMap["field"].(string)
-				result, _ := argsMap["result-name"].(string)
-				if field != "" && result != "" {
-					aggSpecs = append(aggSpecs, aggSpec{
-						function: "min",
-						field:    field,
-						result:   result,
-					})
-				}
-			}
-		}
-	}
-
-	// Parse -max flags (field and result name)
-	if maxVals, ok := ctx.GlobalFlags["-max"]; ok {
-		maxs, _ := maxVals.([]any)
-		for _, maxVal := range maxs {
-			if argsMap, ok := maxVal.(map[string]any); ok {
-				field, _ := argsMap["field"].(string)
-				result, _ := argsMap["result-name"].(string)
-				if field != "" && result != "" {
-					aggSpecs = append(aggSpecs, aggSpec{
-						function: "max",
-						field:    field,
-						result:   result,
-					})
-				}
-			}
-		}
-	}
-
-	// Parse -collect flags (field and result name)
-	if collectVals, ok := ctx.GlobalFlags["-collect"]; ok {
-		collects, _ := collectVals.([]any)
-		for _, collectVal := range collects {
-			if argsMap, ok := collectVal.(map[string]any); ok {
-				field, _ := argsMap["field"].(string)
-				result, _ := argsMap["result-name"].(string)
-				if field != "" && result != "" {
-					aggSpecs = append(aggSpecs, aggSpec{
-						function: "collect",
-						field:    field,
-						result:   result,
-					})
-				}
-			}
-		}
-	}
-
-	// Expression aggregation specs (type defined at package level)
-	var exprSpecs []exprSpec
-
-	// Parse -expr flags (expression and result name)
-	if exprVals, ok := ctx.GlobalFlags["-expr"]; ok {
-		exprs, _ := exprVals.([]any)
-		for _, exprVal := range exprs {
-			if argsMap, ok := exprVal.(map[string]any); ok {
-				expression, _ := argsMap["expression"].(string)
-				result, _ := argsMap["result-name"].(string)
-				if expression != "" && result != "" {
-					exprSpecs = append(exprSpecs, exprSpec{
-						expression: expression,
-						result:     result,
-					})
-				}
-			}
-		}
-	}
-
-	// Parse -stream-expr flags (init, every, final, result name)
-	type streamExprGenSpec struct {
-		initExpr  string
-		everyExpr string
-		finalExpr string
-		result    string
-	}
-	var streamExprSpecs []streamExprGenSpec
-	if streamVals, ok := ctx.GlobalFlags["-stream-expr"]; ok {
-		streams, _ := streamVals.([]any)
-		for _, streamVal := range streams {
-			if argsMap, ok := streamVal.(map[string]any); ok {
-				initExpr, _ := argsMap["init"].(string)
-				everyExpr, _ := argsMap["every"].(string)
-				finalExpr, _ := argsMap["final"].(string)
-				result, _ := argsMap["result-name"].(string)
-				if initExpr != "" && everyExpr != "" && finalExpr != "" && result != "" {
-					streamExprSpecs = append(streamExprSpecs, streamExprGenSpec{
-						initExpr:  initExpr,
-						everyExpr: everyExpr,
-						finalExpr: finalExpr,
-						result:    result,
-					})
-				}
-			}
-		}
-	}
-
-	// Extract rollup/cube/presorted flags for code generation
-	var rollup, cube, presorted bool
-	if val, ok := ctx.GlobalFlags["-rollup"]; ok {
-		rollup = val.(bool)
-	}
-	if val, ok := ctx.GlobalFlags["-cube"]; ok {
-		cube = val.(bool)
-	}
-	if val, ok := ctx.GlobalFlags["-presorted"]; ok {
-		presorted = val.(bool)
-	}
+	// Decode all aggregation + modifier flags (shared with the exec
+	// handler via parseGroupBySpecs — single decode point).
+	specs := parseGroupBySpecs(ctx)
+	aggSpecs, exprSpecs, streamExprSpecs := specs.aggs, specs.exprs, specs.streamExprs
+	rollup, cube, presorted := specs.rollup, specs.cube, specs.presorted
 
 	if rollup && cube {
 		return fmt.Errorf("cannot use both -rollup and -cube; choose one")
