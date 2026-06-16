@@ -69,6 +69,16 @@ WASM rebuild only needed when Go code changes.
 Served from the `gh-pages` branch. The WASM binary is NOT tracked in main (gitignored),
 so you must build it on main, save to /tmp, then switch branches to deploy.
 
+> **Shared-working-tree gotcha.** `gh-pages` shares one working directory with `main`.
+> `git checkout gh-pages` removes main's *tracked* files but leaves main's *ignored*
+> build artifacts (`typed.test`, `dist/`, generated `*.html`, …) sitting in the tree as
+> untracked. Before the gh-pages `.gitignore` existed (added 2026-06-16), a `git add -A`
+> deploy would sweep ~90MB of that junk into the branch. The branch now carries its own
+> `.gitignore` mirroring main's, so `git add -A` is safe again — tracked deploy assets
+> still stage (ignore rules never apply to tracked files). If you ever see stray
+> artifacts in `git status` on gh-pages, add the pattern to that `.gitignore` rather than
+> deleting files by hand.
+
 **HTML-only changes** (no WASM rebuild needed):
 ```bash
 git checkout gh-pages
