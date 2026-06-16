@@ -1,0 +1,44 @@
+# .gitignore for the gh-pages branch.
+#
+# gh-pages shares one working directory with main (the deploy recipe
+# does `git checkout gh-pages` in the same tree). Switching branches
+# removes main's *tracked* files but leaves main's *ignored* build
+# artifacts (test binaries, dist/, generated HTML) sitting in the tree.
+# Without this file those leak in as untracked on gh-pages and a
+# `git add -A` deploy would sweep them into the branch.
+#
+# Mirror of main's .gitignore so exactly what main ignores, gh-pages
+# ignores too. Already-tracked deploy assets (playground.html, the
+# *.wasm, ssql_gpu, …) are unaffected — git ignore rules never apply
+# to tracked files, so `git add -A` still stages real deploy changes.
+
+*~
+*.dll
+*.dylib
+*.exe
+*.exe~
+*.out
+*.so
+*.swo
+*.swp
+*.test
+*_demo
+*_example
+
+/dist/
+/seq_*
+/test_*
+/*.html
+/*_demo
+/*_example
+
+.DS_Store
+.idea/
+.vscode/
+.claude/
+Thumbs.db
+go.work
+default.pgo
+
+# Stray Go test binaries that leak from the shared tree (e.g. typed.test).
+typed/
