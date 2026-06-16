@@ -325,12 +325,28 @@ func chainRecords(firstRecords iter.Seq[ssql.Record], additionalFiles []string) 
 	}
 }
 
+// modeEnv returns the pipeline code-generation mode selected by the
+// environment. SSQL_MODE is the canonical variable (since v4.46.0);
+// SSQLGO is honoured as a deprecated alias for older scripts. When
+// both are set, SSQL_MODE wins.
+//
+// This is the single read point for the mode env var — every other
+// site (shouldGenerate, typedMode, pipelineModeFromEnv) goes through
+// it so the alias precedence is defined in exactly one place.
+func modeEnv() string {
+	if v := os.Getenv("SSQL_MODE"); v != "" {
+		return v
+	}
+	return os.Getenv("SSQLGO")
+}
+
 // shouldGenerate checks if code generation is enabled via flag or environment variable
 // Returns true if:
 //   - The generate flag is explicitly set to true, OR
-//   - The SSQLGO environment variable is set to a recognised value
+//   - The mode environment variable (SSQL_MODE, or its deprecated
+//     SSQLGO alias) is set to a recognised value
 //
-// Recognised SSQLGO values:
+// Recognised values:
 //   - "record" / "1" / "true" — Record-mode codegen (map[string]any rows).
 //     "record" is the modern name; "1"/"true" are backwards-compat aliases
 //     retained for older scripts.
@@ -343,14 +359,15 @@ func shouldGenerate(flagValue bool) bool {
 	if flagValue {
 		return true
 	}
-	envValue := os.Getenv("SSQLGO")
+	envValue := modeEnv()
 	return envValue == "record" || envValue == "1" || envValue == "true" ||
 		envValue == "typed" || envValue == "parallel"
 }
 
 // typedMode returns true when the pipeline is running under
-// SSQLGO=typed (the modern unified mode) or SSQLGO=parallel
-// (deprecated alias retained for backwards compatibility).
+// SSQL_MODE=typed (the modern unified mode) or SSQL_MODE=parallel
+// (deprecated alias retained for backwards compatibility). The
+// deprecated SSQLGO env var is honoured too — see modeEnv.
 //
 // Both produce typed-Go output. As of v4.40.0, the planner inspects
 // each pipeline's downstream Capabilities and either keeps the
@@ -359,7 +376,7 @@ func shouldGenerate(flagValue bool) bool {
 // (iter.Seq[T] + ReadCSV + HashJoin + GroupBy) — there's no longer
 // a per-command "is the user in parallel mode?" branch.
 func typedMode() bool {
-	v := os.Getenv("SSQLGO")
+	v := modeEnv()
 	return v == "typed" || v == "parallel"
 }
 

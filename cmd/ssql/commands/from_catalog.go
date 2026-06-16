@@ -421,7 +421,7 @@ func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.Catalo
 		pipelineCode = "nil"
 	}
 
-	mode := ssqlgoModeFromEnv()
+	mode := pipelineModeFromEnv()
 	requireVersion := version.Version
 
 	// Add runtime-overridable params for shard-level controls so the

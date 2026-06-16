@@ -19,9 +19,9 @@ import (
 func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("ssql").
 		Description("Optimize an ssql pipeline by rewriting it with fewer commands").
-		Example("(export SSQLGO=1; ssql from ssh host /data.csv | ssql where -if status ge 500 | ssql to table) | ssql generate ssql", "Push filter into SSH").
-		Example("(export SSQLGO=1; ssql from csv data.csv | ssql sort -desc revenue | ssql limit 10 | ssql to table) | ssql generate ssql", "Rewrite sort+limit as top").
-		Example("(export SSQLGO=1; ssql from csv data.csv | ssql where -if age gt 25 | ssql where -if dept eq sales | ssql to table) | ssql generate ssql", "Merge adjacent where commands").
+		Example("(export SSQL_MODE=record; ssql from ssh host /data.csv | ssql where -if status ge 500 | ssql to table) | ssql generate ssql", "Push filter into SSH").
+		Example("(export SSQL_MODE=record; ssql from csv data.csv | ssql sort -desc revenue | ssql limit 10 | ssql to table) | ssql generate ssql", "Rewrite sort+limit as top").
+		Example("(export SSQL_MODE=record; ssql from csv data.csv | ssql where -if age gt 25 | ssql where -if dept eq sales | ssql to table) | ssql generate ssql", "Merge adjacent where commands").
 		Flag("-run", "-r").
 		Bool().
 		Global().

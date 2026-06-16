@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"os"
 	"testing"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -367,6 +368,74 @@ func TestEvaluateExpression_Strings(t *testing.T) {
 			}
 			if !tt.wantErr && got != tt.want {
 				t.Errorf("evaluateExpression() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestModeEnv covers the SSQLGO -> SSQL_MODE migration: SSQL_MODE is
+// canonical, SSQLGO is honoured as a deprecated alias, and SSQL_MODE
+// wins when both are set.
+func TestModeEnv(t *testing.T) {
+	tests := []struct {
+		name     string
+		ssqlMode string // "" means unset
+		ssqlgo   string // "" means unset
+		want     string
+	}{
+		{name: "neither set", ssqlMode: "", ssqlgo: "", want: ""},
+		{name: "canonical only", ssqlMode: "typed", ssqlgo: "", want: "typed"},
+		{name: "alias only", ssqlMode: "", ssqlgo: "record", want: "record"},
+		{name: "alias 1", ssqlMode: "", ssqlgo: "1", want: "1"},
+		{name: "both set — canonical wins", ssqlMode: "record", ssqlgo: "typed", want: "record"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Unsetenv("SSQL_MODE")
+			os.Unsetenv("SSQLGO")
+			if tt.ssqlMode != "" {
+				t.Setenv("SSQL_MODE", tt.ssqlMode)
+			}
+			if tt.ssqlgo != "" {
+				t.Setenv("SSQLGO", tt.ssqlgo)
+			}
+			if got := modeEnv(); got != tt.want {
+				t.Errorf("modeEnv() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestShouldGenerateAndTypedMode confirms both env vars drive the
+// codegen predicates identically (alias parity).
+func TestShouldGenerateAndTypedMode(t *testing.T) {
+	cases := []struct {
+		envVar        string
+		value         string
+		wantGenerate  bool
+		wantTypedMode bool
+	}{
+		{"SSQL_MODE", "record", true, false},
+		{"SSQL_MODE", "typed", true, true},
+		{"SSQL_MODE", "parallel", true, true},
+		{"SSQL_MODE", "schema", false, false}, // not a codegen mode
+		{"SSQL_MODE", "bogus", false, false},
+		{"SSQLGO", "record", true, false}, // deprecated alias parity
+		{"SSQLGO", "1", true, false},
+		{"SSQLGO", "true", true, false},
+		{"SSQLGO", "typed", true, true},
+		{"SSQLGO", "parallel", true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.envVar+"="+c.value, func(t *testing.T) {
+			os.Unsetenv("SSQL_MODE")
+			os.Unsetenv("SSQLGO")
+			t.Setenv(c.envVar, c.value)
+			if got := shouldGenerate(false); got != c.wantGenerate {
+				t.Errorf("shouldGenerate(false) = %v, want %v", got, c.wantGenerate)
+			}
+			if got := typedMode(); got != c.wantTypedMode {
+				t.Errorf("typedMode() = %v, want %v", got, c.wantTypedMode)
 			}
 		})
 	}

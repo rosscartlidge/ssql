@@ -129,19 +129,22 @@ ssql from ssh myserver /data/events.csv -- where -if status eq error | ssql to t
 ssql from catalog shards.csv -if date ge 2025-03-01 | ssql group-by service -count n
 
 # Optimize a pipeline — push filters into SSH, collapse sort+limit to top
-(export SSQLGO=record; ssql from ssh node1 /data/events.csv \
+(export SSQL_MODE=record; ssql from ssh node1 /data/events.csv \
   | ssql where -if status ge 500 \
   | ssql sort -desc cnt | ssql limit 10 \
   | ssql to table) | ssql generate ssql
 # → ssql from ssh node1 /data/events.csv -- where -if status ge 500 | ssql top 10 -field cnt | ssql to table
 
 # Chain: optimize → then compile to Go
-(export SSQLGO=record; ...) | ssql generate ssql | ssql generate go
+(export SSQL_MODE=record; ...) | ssql generate ssql | ssql generate go
 
 # Debug pipelines with jq (JSONL streaming format)
 ssql from data.csv | jq '.' | head -5  # Inspect data
 ssql from data.csv | ssql where -if age gt 30 | jq -s 'length'  # Count results
 ```
+
+> The code-generation mode is selected by `SSQL_MODE` (`record` / `typed` /
+> `parallel`). The older `SSQLGO` variable still works as a deprecated alias.
 
 **Optimize and compile to Go:**
 
@@ -200,7 +203,7 @@ types. The same prototype pipeline you'd run interactively becomes a
 self-contained, compiled, schema-safe binary:
 
 ```bash
-SSQLGO=typed ssql from employees.csv \
+SSQL_MODE=typed ssql from employees.csv \
     | ssql where -if years ge 5 \
     | ssql join departments.csv -using dept_id \
     | ssql to csv seniors.csv \
@@ -214,12 +217,12 @@ Measured against the same shell pipeline run three ways (1M rows ×
 | Mode | Wall time | Peak RSS |
 |---|---:|---:|
 | CLI pipeline (interactive) | 3.08 s | 33 MB |
-| `SSQLGO=1` codegen (Record) | 2.69 s | 910 MB |
-| **`SSQLGO=typed` codegen** | **0.77 s** | **8.7 MB** |
+| `SSQL_MODE=record` codegen (Record) | 2.69 s | 910 MB |
+| **`SSQL_MODE=typed` codegen** | **0.77 s** | **8.7 MB** |
 | Typed vs CLI | **4.0× faster** | — |
 | Typed vs Record codegen | **3.5× faster** | **104× less memory** |
 
-**As of v4.40, `SSQLGO=typed` automatically runs the same pipeline
+**As of v4.40, `SSQL_MODE=typed` automatically runs the same pipeline
 across all cores when there's parallelism to exploit.** A planner
 inspects every stage and picks per-pipeline: parallel CSV read +
 parallel `Where`/`HashJoin`/`GroupBy` + per-shard CSV output
@@ -233,13 +236,13 @@ var flip needed. Measured on a 32-core machine, 10 M-row corpus:
 | Group-by 1 000 dept_ids, count + sum + avg + min + max | 3.80 s | **0.95 s (4.0× faster)** | 0.39 s |
 
 ```bash
-SSQLGO=typed ssql from data.csv \
+SSQL_MODE=typed ssql from data.csv \
     | ssql group-by dept_id -count n -sum salary total -avg salary mean \
     | ssql to csv | ssql generate go > pipeline.go
 go run pipeline.go
 ```
 
-`SSQLGO=parallel` is kept as a silent alias for backwards
+`SSQL_MODE=parallel` is kept as a silent alias for backwards
 compatibility. The planner backs off to serial when needed —
 e.g., `from | sort | to csv` correctly downgrades to
 `typed.ReadCSV` to avoid Stream→Serial fan-in cost. Tier 3
@@ -258,11 +261,11 @@ CSV on a dual-socket Xeon Gold 6154 workstation:
 | Mode | Wall | vs CLI baseline |
 |---|---:|---:|
 | Interactive CLI pipeline (3 processes via JSONL pipes) | 68.7 s | 1.0× |
-| `SSQLGO=1` codegen (Record, 1 process) | 15.5 s | 4.4× faster |
-| `SSQLGO=typed` codegen (1 thread, struct types) | 22.0 s | 3.1× faster |
-| `SSQLGO=parallel` codegen (CSV, multi-shard) | 1.23 s | **56× faster** |
-| `SSQLGO=parallel` codegen (Parquet, single row group) | 0.76 s | **90× faster** |
-| **`SSQLGO=parallel` codegen (Parquet, 15 row groups, column projection)** | **0.32 s** | **215× faster** |
+| `SSQL_MODE=record` codegen (Record, 1 process) | 15.5 s | 4.4× faster |
+| `SSQL_MODE=typed` codegen (1 thread, struct types) | 22.0 s | 3.1× faster |
+| `SSQL_MODE=parallel` codegen (CSV, multi-shard) | 1.23 s | **56× faster** |
+| `SSQL_MODE=parallel` codegen (Parquet, single row group) | 0.76 s | **90× faster** |
+| **`SSQL_MODE=parallel` codegen (Parquet, 15 row groups, column projection)** | **0.32 s** | **215× faster** |
 
 The 215× from interactive CLI to typed-parallel-Parquet decomposes
 into independent wins multiplied together: ~4× from collapsing 3
@@ -921,7 +924,7 @@ ssql from ssh myserver /data/events.csv -gpu | ssql to table
 - **Partition pruning** - Skip irrelevant shards using range (`X_from`/`X_to`) or exact-value metadata
 - **Push-down** - Send filter and aggregation stages to remote hosts with `--` separator
 - **Local shards** - Catalog entries with `host=local` or `host=localhost` are read directly
-- **Code generation** - `from ssh` supports `-generate` / `SSQLGO=record`
+- **Code generation** - `from ssh` supports `-generate` / `SSQL_MODE=record`
 - **Pipeline optimizer** - `generate ssql` automatically pushes filters into SSH/catalog, collapses sort+limit to top, prunes Parquet columns, and more (12 optimization rules)
 
 </details>
@@ -1027,7 +1030,7 @@ func main() {
 ssql from huge.csv | ssql where -expr 'price * qty > 1000'
 
 # Code generation (10-100x faster, zero compilation overhead)
-export SSQLGO=record
+export SSQL_MODE=record
 ssql from huge.csv | \
   ssql where -expr 'price * qty > 1000' | \
   ssql update -set-expr total 'price * qty' | \

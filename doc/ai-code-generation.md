@@ -1007,6 +1007,10 @@ func main() {
 
 ## Code Generation Rules
 
+> When generating code from a shell pipeline (`ssql ... | ssql generate go`), the
+> mode is selected by `SSQL_MODE` (`record` / `typed` / `parallel`). The older
+> `SSQLGO` variable still works as a deprecated alias.
+
 ### Core Principles
 
 1. **Use Chain() for pipelines**: Prefer `Chain()` for 2+ operations on same type

@@ -20,10 +20,10 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("go").
 		Description("Generate Go code from ssql CLI pipeline").
 		Example("ssql from -g data.csv | ssql where -g -if age gt 18 | ssql generate go", "Generate Go code from pipeline").
-		Example("(export SSQLGO=1 && ssql from data.csv | ssql limit 10 | ssql generate go) > prog.go", "Generate using environment variable").
-		Example("(export SSQLGO=parallel; ssql from data.csv | ssql to table) | ssql generate go -run", "Generate, compile, and execute in one shot").
-		Example("(export SSQLGO=parallel; ssql from data.csv | ssql to table) | ssql generate go -build query", "Compile to a binary named 'query' and exit").
-		Example("(export SSQLGO=parallel; ssql from parquet x.parquet | ssql group-by k -count n | ssql to table) | ssql generate go -optimise -run", "Apply pipeline optimiser (column projection etc.), then compile and execute").
+		Example("(export SSQL_MODE=record && ssql from data.csv | ssql limit 10 | ssql generate go) > prog.go", "Generate using environment variable").
+		Example("(export SSQL_MODE=parallel; ssql from data.csv | ssql to table) | ssql generate go -run", "Generate, compile, and execute in one shot").
+		Example("(export SSQL_MODE=parallel; ssql from data.csv | ssql to table) | ssql generate go -build query", "Compile to a binary named 'query' and exit").
+		Example("(export SSQL_MODE=parallel; ssql from parquet x.parquet | ssql group-by k -count n | ssql to table) | ssql generate go -optimise -run", "Apply pipeline optimiser (column projection etc.), then compile and execute").
 		Flag("-run", "-r").
 		Bool().
 		Global().
@@ -60,7 +60,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		String().
 		Global().
 		Default("").
-		Help("With -script: SSQLGO value for the script (record/typed/parallel). Default: typed.").
+		Help("With -script: SSQL_MODE value for the script (record/typed/parallel). Default: typed.").
 		Done().
 		Flag("OUTPUT").
 		String().
@@ -231,7 +231,7 @@ func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, expl
 	}
 
 	cmd := exec.Command("bash", "-c", inner)
-	cmd.Env = setEnvVar(os.Environ(), "SSQLGO", targetMode)
+	cmd.Env = setEnvVar(os.Environ(), "SSQL_MODE", targetMode)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -447,7 +447,7 @@ func runScriptForFragments(scriptPath, mode string) ([]byte, error) {
 	// `records` variable. With pipefail, any stage's non-zero exit
 	// fails the whole pipeline.
 	cmd := exec.Command("bash", "-c", "set -o pipefail; "+pipeline)
-	cmd.Env = append(os.Environ(), "SSQLGO="+mode)
+	cmd.Env = setEnvVar(os.Environ(), "SSQL_MODE", mode)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

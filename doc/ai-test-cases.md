@@ -514,10 +514,10 @@ Each test case specifies:
 
 ### CLI-09: Code Generation Pipeline
 
-**Prompt**: Generate a standalone Go program from this pipeline: read users.csv, filter where status equals active, group by dept (as positional arg), count per dept, output to stdout. Remember to export SSQLGO=1 so all pipeline commands see it.
+**Prompt**: Generate a standalone Go program from this pipeline: read users.csv, filter where status equals active, group by dept (as positional arg), count per dept, output to stdout. Remember to export SSQL_MODE=record so all pipeline commands see it.
 
 **Expected patterns**:
-- `export SSQLGO=1`
+- `export SSQL_MODE=record`
 - `ssql from users.csv`
 - `ssql where`
 - `-if status eq active`
@@ -528,7 +528,7 @@ Each test case specifies:
 - `|`
 
 **Negative patterns**:
-- `-generate` (prefer SSQLGO=1 for full pipelines)
+- `-generate` (prefer SSQL_MODE=record for full pipelines)
 - `read-csv` (old command)
 - `-field` (wrong - use positional args for group-by)
 

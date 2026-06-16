@@ -5,6 +5,19 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Code-generation mode is now selected by `SSQL_MODE`** (`record` /
+  `typed` / `parallel`), replacing `SSQLGO` as the canonical variable.
+  `SSQLGO` continues to work as a **deprecated alias** — existing
+  scripts and `(export SSQLGO=…; …) | ssql generate go` pipelines are
+  unaffected. When both are set, `SSQL_MODE` wins. `SSQLGO=1` /
+  `SSQLGO=true` remain record-mode aliases. All examples, generated-code
+  provenance comments, and the `ssqlgen` shell helper now emit
+  `SSQL_MODE`. First slice of the `SSQL_MODE=schema` pipeline-aware
+  completion work (see doc/research/schema-aware-completion.md §0).
+
 ## [v4.45.0] - 2026-05-20
 
 ### New Features

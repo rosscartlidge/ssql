@@ -17,9 +17,9 @@ import (
 func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("sql").
 		Description("Generate DuckDB SQL from ssql CLI pipeline").
-		Example("(export SSQLGO=1; ssql from data.csv | ssql where -if age gt 25 | ssql to table) | ssql generate sql", "Generate SQL from pipeline").
-		Example("(export SSQLGO=1; ssql from data.parquet | ssql group-by dept -sum salary total | ssql to table) | ssql generate sql", "Parquet aggregation query").
-		Example("(export SSQLGO=1; ssql from data.csv | ssql where -if age gt 25 | ssql to table) | ssql generate sql -run", "Generate and execute with DuckDB").
+		Example("(export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql to table) | ssql generate sql", "Generate SQL from pipeline").
+		Example("(export SSQL_MODE=record; ssql from data.parquet | ssql group-by dept -sum salary total | ssql to table) | ssql generate sql", "Parquet aggregation query").
+		Example("(export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql to table) | ssql generate sql -run", "Generate and execute with DuckDB").
 		Flag("-run", "-r").
 		Bool().
 		Global().

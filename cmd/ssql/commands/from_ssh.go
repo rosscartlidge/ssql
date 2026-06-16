@@ -335,7 +335,7 @@ func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []strin
 
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
 	script := buildRemoteSSQLScript(path, pipelineGroups)
-	remoteMode := ssqlgoModeFromEnv()
+	remoteMode := pipelineModeFromEnv()
 
 	params := []lib.CodeParam{
 		{Name: "host", Default: host, Help: "SSH host", VarName: "flagHost"},
@@ -378,12 +378,13 @@ func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []strin
 	return lib.WriteCodeFragment(frag)
 }
 
-// ssqlgoModeFromEnv returns the canonical mode name to pass to the
-// remote `ssql generate go -mode …` based on the local SSQLGO env.
-// SSQLGO=1/true/record → "record"; SSQLGO=typed/parallel → "typed".
-// We're called only from the codegen path so SSQLGO is non-empty.
-func ssqlgoModeFromEnv() string {
-	switch os.Getenv("SSQLGO") {
+// pipelineModeFromEnv returns the canonical mode name to pass to the
+// remote `ssql generate go -mode …` based on the local mode env var
+// (SSQL_MODE, or its deprecated SSQLGO alias — see modeEnv).
+// 1/true/record → "record"; typed/parallel → "typed".
+// We're called only from the codegen path so the mode is non-empty.
+func pipelineModeFromEnv() string {
+	switch modeEnv() {
 	case "typed", "parallel":
 		return "typed"
 	default:

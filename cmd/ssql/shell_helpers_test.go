@@ -2,7 +2,7 @@ package main
 
 // Tests for `ssql -shell-helpers` and the `ssqlgen` bash function it
 // emits. The function is the friendly-syntax wrapper around the
-// `(export SSQLGO=...; <pipeline>) | ssql generate go` pattern.
+// `(export SSQL_MODE=...; <pipeline>) | ssql generate go` pattern.
 
 import (
 	"os"
@@ -18,7 +18,7 @@ func TestShellHelpers_OutputContainsSsqlgen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ssql -shell-helpers: %v", err)
 	}
-	for _, want := range []string{"ssqlgen()", "SSQLGO=", "command ssql generate go"} {
+	for _, want := range []string{"ssqlgen()", "SSQL_MODE=", "command ssql generate go"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("missing %q in -shell-helpers output\n%s", want, out)
 		}

@@ -474,7 +474,7 @@ Phase 1.8+ (open):
 - [ ] Hand-rolled RFC3339 time parser (~3× over `time.Parse`)
 
 Phase 2 — Tier 1 shipped (2026-04-26):
-- [x] `SSQLGO=typed ssql generate go` — schema-aware code generation that
+- [x] `SSQL_MODE=typed ssql generate go` — schema-aware code generation that
   emits calls into this package directly. Tier 1 covers
   `from FILE.csv` (header sampled at generation time, struct types
   auto-derived), `where -if FIELD OP VALUE` (literal operators only),
@@ -484,7 +484,7 @@ Phase 2 — Tier 1 shipped (2026-04-26):
 
 ```bash
 # Same prototype pipeline you'd run interactively...
-SSQLGO=typed ssql from employees.csv \
+SSQL_MODE=typed ssql from employees.csv \
     | ssql where -if years ge 5 \
     | ssql join departments.csv -using dept_id \
     | ssql to csv seniors.csv \
@@ -502,8 +502,8 @@ employees × 1k departments, identical pipeline expression
 | Mode | Wall time | Peak RSS |
 |---|---:|---:|
 | CLI pipeline (interactive) | 3.08 s | 33 MB |
-| Record codegen (`SSQLGO=1`) | 2.69 s | 910 MB |
-| **Typed codegen (`SSQLGO=typed`)** | **0.77 s** | **8.7 MB** |
+| Record codegen (`SSQL_MODE=record`) | 2.69 s | 910 MB |
+| **Typed codegen (`SSQL_MODE=typed`)** | **0.77 s** | **8.7 MB** |
 | Speedup vs CLI | **4.0× faster** | — |
 | Speedup vs Record codegen | **3.5× faster** | **104× less memory** |
 
@@ -518,12 +518,12 @@ Phase 2 — Tier 2 shipped (2026-04-26):
 - [x] `group-by FIELDS… -count -sum -avg -min -max` (typed.GroupBy with
       synthesized aggregator + result struct, single- or multi-field keys)
 
-Phase 2 — `SSQLGO=parallel` codegen shipped (2026-04-27):
-- [x] Same pipeline shape as `SSQLGO=typed`, with `from`/`where`/`join`/`group-by`/`to csv`/`to table` emitting Stream-based parallel code (typed.ReadCSVParallel + Stream.Where + typed.HashJoinParallel + typed.GroupByParallel).
-- [x] Other typed-aware commands (limit, sort, distinct, union, top, cast, update, include/exclude/rename) emit a clear error suggesting `SSQLGO=typed` instead.
+Phase 2 — `SSQL_MODE=parallel` codegen shipped (2026-04-27):
+- [x] Same pipeline shape as `SSQL_MODE=typed`, with `from`/`where`/`join`/`group-by`/`to csv`/`to table` emitting Stream-based parallel code (typed.ReadCSVParallel + Stream.Where + typed.HashJoinParallel + typed.GroupByParallel).
+- [x] Other typed-aware commands (limit, sort, distinct, union, top, cast, update, include/exclude/rename) emit a clear error suggesting `SSQL_MODE=typed` instead.
 - [x] **Per-shard buffer dump CSV sink (2026-04-27)** — `to csv` in parallel mode now emits `Stream.WriteCSVToWriter` (no `Serial()` fan-in). Each shard formats into its own buffer in parallel, dumped in shard order. Wide-output workload (7.25M-row CSV write) went from 0.73× typed-serial to **4.4× faster** with this fix. Trade-off: peak memory ~2× output size.
 - [x] **`GroupByParallel` with Sink/Combine/Finalize (2026-04-27)** — `group-by` in parallel mode emits `typed.GroupByParallel`. Each shard accumulates its own partial `map[K]Aggregator`; Combine merges per shard sequentially; Finalize yields rows lazily. Synthesized `<Input>Aggregator` gets a `Merge` method generated from the aggregation specs. **4.0× faster than typed-serial** on the 10M-row × 1 000-group workload (count+sum+avg+min+max).
-- **When to use it:** filter-heavy / aggregating / transform-and-write / group-by pipelines. **4.4× faster** on the CSV write workload (1.3 s vs typed-serial 5.7 s; DuckDB 0.7 s — 1.86× ahead). **4.0× faster** on the group-by workload (0.95 s vs 3.80 s; DuckDB 0.39 s — 2.4× ahead). **6.4× faster** for count-only sinks. Use `SSQLGO=typed` when the output is too large to buffer in RAM, when you need strict input-order output, or when group-by needs `-presorted`. See [`research/typed-codegen-proposal.md` §5d](research/typed-codegen-proposal.md#5d-parallel-mode-codegen-ssqlgoparallel) and [`research/typed-groupby-parallel-proposal.md`](research/typed-groupby-parallel-proposal.md).
+- **When to use it:** filter-heavy / aggregating / transform-and-write / group-by pipelines. **4.4× faster** on the CSV write workload (1.3 s vs typed-serial 5.7 s; DuckDB 0.7 s — 1.86× ahead). **4.0× faster** on the group-by workload (0.95 s vs 3.80 s; DuckDB 0.39 s — 2.4× ahead). **6.4× faster** for count-only sinks. Use `SSQL_MODE=typed` when the output is too large to buffer in RAM, when you need strict input-order output, or when group-by needs `-presorted`. See [`research/typed-codegen-proposal.md` §5d](research/typed-codegen-proposal.md#5d-parallel-mode-codegen-ssqlgoparallel) and [`research/typed-groupby-parallel-proposal.md`](research/typed-groupby-parallel-proposal.md).
 
 Phase 1.8 — TSV / Parquet readers (2026-04-28):
 - [x] **`typed.ReadDelim` / `ReadDelimParallel` / `WriteDelim`** — fast delimited-text reader with no quoting (default '\t'). Zero-copy field strings via `unsafe.String` (parallel only); SIMD-accelerated split via `bytes.IndexByte`. 18% faster than `ReadCSV` on a 14.6 M-row corpus; memory-bandwidth-bound at ~600 MB/s. Use when data is clean (no embedded quotes / delimiters / newlines).

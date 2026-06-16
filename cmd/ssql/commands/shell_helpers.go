@@ -6,7 +6,7 @@ package commands
 //	eval "$(ssql -shell-helpers)"
 //
 // The script defines `ssqlgen` — a thin wrapper around the
-// `(export SSQLGO=...; <pipeline>) | ssql generate go` pattern,
+// `(export SSQL_MODE=...; <pipeline>) | ssql generate go` pattern,
 // taking the pipeline as a single quoted string. All `generate go`
 // flags (-run, -build, -optimise, -explain, OUTPUT) pass through
 // after the pipeline argument.
@@ -47,6 +47,6 @@ ssqlgen() {
         return 2
     fi
     local script="$1"; shift
-    (export SSQLGO="$mode"; eval "$script") | command ssql generate go "$@"
+    (export SSQL_MODE="$mode"; eval "$script") | command ssql generate go "$@"
 }
 `

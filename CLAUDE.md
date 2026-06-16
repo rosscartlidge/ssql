@@ -228,8 +228,9 @@ See `claude/cli-architecture.md` for full autocli patterns, subcommand registrat
 See `claude/code-generation.md` for fragment system, testing patterns, and full examples.
 
 **Rules (never violate):**
-- **Every data-processing command MUST support `-generate` / `SSQLGO=record`** — a single missing command breaks entire pipelines. (`SSQLGO=1` and `SSQLGO=true` are accepted as backwards-compat aliases of `record`.)
-- **Every pipeline MUST generate working code in all modes** — `record` (`SSQLGO=record`) and `typed` (`SSQLGO=typed`). As of v4.40.0 `SSQLGO=typed` and `SSQLGO=parallel` are equivalent — both go through the planner, which picks the parallel form (Stream[T] + ReadCSVParallel + HashJoinParallel + GroupByParallel + per-shard sinks) when reachable and the serial form otherwise. The pipeline regression corpus in `cmd/ssql/corpus_test.go` runs three modes (record + typed + parallel) end-to-end as the regression gate; new pipelines and tutorial examples should be added there.
+- **Mode env var is `SSQL_MODE`** (canonical since v4.46.0). The legacy `SSQLGO` is honoured as a **deprecated alias** (read via the single `modeEnv()` helper in `cmd/ssql/commands/helpers.go`; `SSQL_MODE` wins when both are set). `SSQLGO=1`/`SSQLGO=true` remain record-mode aliases. Emit `SSQL_MODE` in all new code/docs/examples; never reintroduce `SSQLGO` as the canonical name.
+- **Every data-processing command MUST support `-generate` / `SSQL_MODE=record`** — a single missing command breaks entire pipelines.
+- **Every pipeline MUST generate working code in all modes** — `record` (`SSQL_MODE=record`) and `typed` (`SSQL_MODE=typed`). As of v4.40.0 `SSQL_MODE=typed` and `SSQL_MODE=parallel` are equivalent — both go through the planner, which picks the parallel form (Stream[T] + ReadCSVParallel + HashJoinParallel + GroupByParallel + per-shard sinks) when reachable and the serial form otherwise. The pipeline regression corpus in `cmd/ssql/corpus_test.go` runs three modes (record + typed + parallel) end-to-end as the regression gate (it drives the deprecated `SSQLGO=` alias, keeping back-compat covered); new pipelines and tutorial examples should be added there.
 - **Typed-mode commands that have a parallel form MUST emit dual templates** — set `Code` to the parallel template (`Stream.Where`, `typed.HashJoinParallel`, `typed.GroupByParallel`, `typed.ReadCSVParallel`, …), `Capabilities = {Accepts: ShapeStream, Produces: ShapeStream}` (or the appropriate output shape), `AltCodeIfSeq` to the serial alternative, and `AltCapabilitiesIfSeq` to the iter.Seq[T] capabilities. The planner inspects downstream Capabilities and either keeps the parallel form or atomically swaps Code+Imports+Capabilities to the serial alternative. Single-template emission is correct only for commands that have no parallel runtime (e.g. `to table` — declares SerialOnly so the planner inserts a Stream.Serial() boundary upstream).
 - **CLI commands must use ssql package primitives**, not raw Go code
 - **Generated code must be readable** — move complexity to helper functions in ssql package
@@ -292,6 +293,6 @@ ssql from data.parquet | ssql where -if age gt 25 | ssql to parquet output.parqu
 
 `generate sql` produces DuckDB-compatible SQL from the same pipeline fragments as `generate go`:
 ```bash
-(export SSQLGO=record; ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -sum salary total | ssql to table) | ssql generate sql | duckdb
+(export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -sum salary total | ssql to table) | ssql generate sql | duckdb
 ```
 DuckDB is installed at `~/.local/bin/duckdb` for testing generated SQL.

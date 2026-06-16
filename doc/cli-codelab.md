@@ -530,7 +530,7 @@ ssql from employees.csv | ssql where -if status eq active | ssql count
 # pipeline: a parallel `Stream.SerialCount()` (drains shards
 # concurrently with no fan-in cost) when the source can stay
 # parallel, falling back to `typed.Count` or a serial loop otherwise.
-SSQLGO=typed ssql from huge.csv | ssql count | ssql generate go -run
+SSQL_MODE=typed ssql from huge.csv | ssql count | ssql generate go -run
 ```
 
 ### Remove Duplicates with DISTINCT
@@ -1355,7 +1355,7 @@ ssql from employees.csv | \
 
 ```bash
 # Optimize a naive pipeline
-(export SSQLGO=record; ssql from ssh node1 /data/events.csv \
+(export SSQL_MODE=record; ssql from ssh node1 /data/events.csv \
   | ssql where -if status ge 500 \
   | ssql group-by service -count cnt \
   | ssql sort -desc cnt | ssql limit 10 \
@@ -1380,7 +1380,7 @@ Use `-run` to execute the optimized pipeline directly:
 
 Chain with `generate go` to optimize *then* compile:
 ```bash
-(export SSQLGO=record; ssql from catalog shards.csv \
+(export SSQL_MODE=record; ssql from catalog shards.csv \
   | ssql where -if date ge 2025-02-01 -if status ge 500 \
   | ssql group-by service -count cnt \
   | ssql to table) | ssql generate ssql | ssql generate go
@@ -1403,7 +1403,7 @@ Chain with `generate go` to optimize *then* compile:
 `generate sql` converts an ssql pipeline into DuckDB-compatible SQL:
 
 ```bash
-(export SSQLGO=record; ssql from data.csv \
+(export SSQL_MODE=record; ssql from data.csv \
   | ssql where -if age gt 25 \
   | ssql group-by dept -sum salary total \
   | ssql to table) | ssql generate sql
@@ -1420,7 +1420,7 @@ Supported commands: `from`, `where`, `group-by`, `sort`, `limit`, `offset`, `top
 More examples:
 ```bash
 # Window functions → SQL OVER clauses
-(export SSQLGO=record; ssql from data.csv \
+(export SSQL_MODE=record; ssql from data.csv \
   | ssql window -row-number rn -partition dept -order salary -desc \
   | ssql to table) | ssql generate sql
 # → SELECT *, ROW_NUMBER() OVER (PARTITION BY dept ORDER BY salary DESC) AS rn
