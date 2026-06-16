@@ -1,6 +1,42 @@
 # Pipeline-Aware Completion via `SSQLGO=schema`
 
-**Status:** Design — not yet implemented. Discussion captured 2026-05-20 (W21 Wed), immediately after shipping Position 2 pipes (v4.45.0 / shell v0.3.1).
+**Status:** Design — not yet implemented. Discussion captured 2026-05-20 (W21 Wed), immediately after shipping Position 2 pipes (v4.45.0 / shell v0.3.1). **De-risk spike run 2026-06-16 (W25 Tue)** — see §0 for verified reality, corrections to this doc, and decisions taken. Read §0 before implementing; several inline sketches below (the §4.3 table, the §7 API names) were written from memory and are corrected there.
+
+## 0. Spike findings & decisions (2026-06-16)
+
+Two parallel investigations verified the load-bearing assumptions against the real code (ssql commands + autocli). Verdict: **proceed — architecture is sound, but the doc is wrong in specific, implementation-breaking ways, and Phase 1 is bigger than originally framed.**
+
+### Decisions taken
+
+- **Env var: `SSQL_MODE=schema`** (not `SSQLGO=schema`). Chosen as an umbrella var. Implication: `SSQL_MODE` becomes the canonical mode selector for *all* modes; the existing `SSQLGO=record/typed/parallel` migrate to `SSQL_MODE=record/typed/parallel`, with **`SSQLGO` kept as a deprecated alias** for back-compat (mirrors how `SSQLGO=1/true` already alias `record`). This migration is its own slice of work — it touches the corpus tests, CLAUDE.md, and every doc that names `SSQLGO`. Supersedes §5.1, §6, §12.5.
+- **Scope: bundle Phase 1 + Phase 2** (serve + bash) in one release arc. The per-command `SchemaOp`s are shared between both runtimes, so the marginal cost over serve-only is the bash plumbing (`SSQL_MODE=schema` wrapper, `generate schema`, the bash shim). Revised estimate **≈5–6 days**.
+
+### Part A — SchemaOp separability: HOLDS, with caveats
+
+Confirmed sound: every schema-mutating command builds an explicit `*lib.Schema` *before* and *independent of* record iteration. `pivot` is the only genuinely data-dependent case (correctly `ok=false`). **Key de-risk:** `(*cf.Command).Parse(args)` is reusable and runs `matchPositionals`+`applyDefaults` without invoking the handler — so a SchemaOp does **not** hand-parse argv; it calls `Parse` and reads the same `ctx.GlobalFlags`/`ctx.Clauses` the handler does.
+
+Corrections to §4.3 (the table there is wrong in three rows — fix before implementing):
+- **`rename`** uses `-as old new` (accumulated), **not** positional `old new` pairs.
+- **`window`** has **no `-into` flag**. It has ~17 result-name-bearing flags (`-row-number`, `-sum field result`, `-lag field n result`, …) and infers real result types via `inferWindowResultType` (window.go:558). Not "identity-ish."
+- **`cast`** emits **no runtime schema at all** (uses `ReadJSONL`/`WriteJSONL`, no `_schema`). A SchemaOp must *synthesize* the type-replace, and the §9 corpus shadow-test has **no runtime `_schema` to compare against** — cast needs `SkipSchema` or a different assertion.
+
+Estimate reality: "5–15 lines each" holds for `rename`/`include`/`exclude`/`update`/`cast`, but **`group-by` (~25–40 lines: distinct/standard/rollup/cube sub-shapes) and `join` (~20–40 lines) are the risk commands**. `join` is **not** a pure `(inputFields, args)` function — it must do I/O on the right file's `_schema` header and return `ok=false` on a `/dev/fd/N` process-substitution right side. Budget group-by and join at ~½ day each.
+
+Pre-req refactor: group-by parses its agg flags ~140 lines, **twice** (handler exec + `generate*Code`). Extract a shared `parseAggSpecs(ctx)` helper **first**, or the SchemaOp becomes a third divergent copy that the shadow-test must police (aligns with the repo's "Refactor While You Work" rule).
+
+### Part B — autocli completion surface: sound strategy, every API name in §7 is fictional
+
+The *approach* works: `Completer` is a clean one-method interface (`Complete(ctx CompletionContext) ([]string, error)`), a new `UpstreamFieldsCompleter` is a drop-in, and the existing `ChainCompleter` gives "try upstream fields, fall back to file" for free. But the §7 code block must be rewritten — corrections:
+- **`cli.CompleteWithContext(...)` does not exist.** Real entry point: `(*cf.Command).Complete(args []string, pos int) ([]string, error)` (completion_script.go:282) — **no injectable context**; it builds `CompletionContext` internally via `analyzeCompletionContext`.
+- **`ctx.UpstreamFields` and `ctx.State` do not exist** on `CompletionContext` (completion.go:16). Both are net-new fields.
+- **The completion path has no `State` analog.** Runtime `cf.Context.State` (flag.go:114) never reaches completion. Adding it is genuinely new.
+- **`tabComplete` throws away everything before the last `|`** today (shell.go:405-410) — the per-stage schema walk is entirely unwritten. `splitOnPipe` already exists in shell/pipeline.go to build on.
+
+Two things the doc missed:
+- **Layering**: `shell` is ssql-agnostic and **cannot** resolve ssql's `SchemaOp`s directly (§7's `lookupSchemaOp(cli, stage[0])` is wrong). Shell needs a **generic callback hook** (e.g. an `Options.SchemaWalk func(stages [][]string) []Field`); ssql supplies the walker. This is the single biggest implementation risk.
+- **Release order**: this is **not** "shell-only." It requires **autocli core (≈v4.7.0)** — new `CompleteWithContext(args, pos, seed)` + `CompletionContext.{UpstreamFields,State}` — then **shell (≈v0.4.0)** (the `tabComplete` rewrite + `SchemaWalk` hook + `opts.State` plumbed into `tabComplete`), then **ssql**. Core must tag first; shell can't reference an untagged API. Supersedes the §11 "shell v0.4.0 + ssql" framing.
+
+`Field{Name,Type}` is an ssql concept — keep it out of autocli core (core carries field *names* or an `any`/neutral shape; ssql owns the typed `Field` and the `UpstreamFieldsCompleter`).
 
 ## 1. The problem
 
@@ -73,6 +109,8 @@ Sources receive no `inputFields`. They peek at external state. For `from FILE` w
 `where`, `sort`, `limit`, `offset`, `top`, `distinct`, `head`. Default rule: `return inputFields, true`.
 
 ### 4.3 Schema-mutating transforms
+
+> ⚠ **Corrected in §0.** The `rename`, `window`, and `cast` rows below are inaccurate (verified 2026-06-16): `rename` uses `-as old new`, `window` has no `-into`, `cast` emits no runtime schema. `group-by`/`join` are larger than the "5–15 line" framing. Use §0 as the spec.
 
 | Command | Rule |
 |---|---|
@@ -169,6 +207,8 @@ Latency: with no I/O, every stage's `SSQLGO=schema` returns in <1 ms once warm. 
 In every case, the completion script falls back to the existing per-flag completer — never worse than today, often better.
 
 ## 7. autocli-shell integration
+
+> ⚠ **API names below are fictional — corrected in §0.** `CompleteWithContext`, `ctx.UpstreamFields`, `ctx.State`, and `lookupSchemaOp(cli, …)` do not exist as written. Real entry point is `Command.Complete(args, pos)`; shell cannot resolve ssql `SchemaOp`s directly (needs a generic `SchemaWalk` callback); and autocli **core** must release before shell. Treat the block below as intent, not API.
 
 The shell is the cleaner case. `tabComplete` already has the whole line. It does:
 
@@ -302,6 +342,8 @@ Pipelines with `pivot` or other undeterminable transforms set `SkipSchema=true`.
 
 ## 11. Implementation phases
 
+> ⚠ **Revised in §0.** Phases 1+2 are now **bundled** (one release arc, ≈5–6 days). Phase 1 is **not** "shell-only": it needs an autocli **core** release (≈v4.7.0) before shell (≈v0.4.0), plus the `SchemaWalk` layering hook. The per-ten-commands estimate holds except **group-by and join (~½ day each)**. Sequence below stands as a logical decomposition; the release/effort framing is superseded by §0.
+
 ### Phase 1: shell-side only (no env var, no bash, no fragments)
 
 Smallest useful step. Adds `SchemaOp` per command, in-process schema walk in `tabComplete`, `UpstreamFieldsCompleter` reading from `CompletionContext.UpstreamFields`. Shipped as autocli/shell v0.4.0 + ssql vX.Y.0.
@@ -340,7 +382,7 @@ Effort: ~half a day.
 
 4. **What about `:var NAME` (saved intermediates) once we add them?** Each saved intermediate would have its own schema; `from-var NAME` would need to consult that. Defer until intermediates exist.
 
-5. **Conflict with `SSQLGO=record` / `SSQLGO=typed` / `SSQLGO=parallel`.** These all generate code. `SSQLGO=schema` does not — it's a runtime mode that emits a schema. Should the env var be different to avoid the conflation? Options:
+5. **[DECIDED — see §0] Env var.** Chosen: `SSQL_MODE=schema` (umbrella var), with `SSQLGO` retained as a deprecated alias and the existing modes migrating to `SSQL_MODE=record/typed/parallel`. The original options were:
    - `SSQLGO=schema` (consistent with siblings)
    - `SSQLSCHEMA=1` (orthogonal)
    - `SSQL_MODE=schema` (new umbrella var)
