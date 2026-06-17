@@ -19,18 +19,17 @@ const SchemaCompletionScript = `# ssql pipeline-aware tab completion (SSQL_MODE=
 _ssql_schema_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
 
-    # Start of the ssql command under the cursor: the word after the last
-    # top-level pipe before COMP_CWORD.
-    local i cur_cmd_start=0
-    for ((i=0; i<COMP_CWORD; i++)); do
-        [[ "${COMP_WORDS[i]}" == "|" ]] && cur_cmd_start=$((i+1))
-    done
-
-    # Augment only when there IS an upstream stage and we're completing a
-    # value (not a flag — flags stay with autocli).
-    if [[ $cur_cmd_start -gt 0 && "$cur" != -* && "$cur" != +* ]]; then
-        # Upstream = the words before the last pipe.
-        local upstream="${COMP_WORDS[*]:0:$((cur_cmd_start-1))}"
+    # bash scopes COMP_WORDS to the simple command under the cursor (the
+    # stage after the last pipe), so the upstream pipeline lives only in
+    # COMP_LINE. Take everything up to the cursor, then everything before
+    # the last top-level '|' — that's the upstream to run under
+    # SSQL_MODE=schema. Augment only when there IS an upstream pipe and
+    # we're completing a value (flags stay with autocli).
+    local line="${COMP_LINE:0:$COMP_POINT}"
+    if [[ "$line" == *"|"* && "$cur" != -* && "$cur" != +* ]]; then
+        local upstream="${line%|*}"
+        # Strip trailing whitespace left by the split.
+        upstream="${upstream%"${upstream##*[![:space:]]}"}"
         local fields
         fields=$( (export SSQL_MODE=schema; eval "$upstream") 2>/dev/null \
                   | command ssql generate schema 2>/dev/null )
