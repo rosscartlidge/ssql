@@ -110,6 +110,15 @@ bind -x '"\C-x\C-f": _ssql_field_key'
   (the lesson from the Tab attempt: never validate completion with a hand-built
   `COMP_*` — drive a real pty).
 - **Risk:** low. Worst case the chord prints nothing and the line is untouched.
+- **Feasibility: PTY-VERIFIED (2026-06-18).** A `bind -x '"\C-t": _fn'` PoC,
+  driven through a real pty, confirmed every step: inside the keybinding
+  `READLINE_LINE` held the **full line including the upstream**
+  (`ssql from csv … | ssql group-by `, `READLINE_POINT=45`), the function sliced
+  the upstream, ran it under `SSQL_MODE=schema | ssql generate schema` →
+  `name dept salary`, and edited the line in place (inserted `name`). So the
+  mechanism is sound; only the multi-candidate UX (common-prefix / list) is left
+  to design. Harness: `/tmp/bindx_setup.bash` + a pty driver (same shape as the
+  appendix harness, but sending Ctrl-T after typing the line).
 
 ### Option B — rebind `Tab` itself via `bind -x` — **not recommended**
 
