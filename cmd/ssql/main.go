@@ -121,6 +121,14 @@ func main() {
 			fmt.Print(commands.ShellHelpersScript)
 			return
 		}
+		// Field-completion keybinding (bind -x). Sourced like
+		// -shell-helpers: eval "$(ssql -field-keybinding)". WriteString
+		// (not fmt.Print) because the bash body contains literal %s that
+		// vet would otherwise flag as a stray Printf directive.
+		if a == "-field-keybinding" || a == "--field-keybinding" {
+			os.Stdout.WriteString(commands.FieldKeybindingScript)
+			return
+		}
 	}
 	cmd := buildRootCommand()
 	if err := cmd.Execute(os.Args[1:]); err != nil {

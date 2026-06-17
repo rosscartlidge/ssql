@@ -110,7 +110,11 @@ bind -x '"\C-x\C-f": _ssql_field_key'
   (the lesson from the Tab attempt: never validate completion with a hand-built
   `COMP_*` — drive a real pty).
 - **Risk:** low. Worst case the chord prints nothing and the line is untouched.
-- **Feasibility: PTY-VERIFIED (2026-06-18).** A `bind -x '"\C-t": _fn'` PoC,
+- **SHIPPED — v4.47.0 (2026-06-18).** `ssql -field-keybinding` emits the
+  `bind -x '"\C-x\C-f"'` binding (`cmd/ssql/commands/field_keybinding.go`):
+  unique prefix completes in place + space, ambiguous extends to the common
+  prefix and lists, Tab untouched. pty-verified + `TestFieldKeybinding`.
+- **Feasibility (the PoC that preceded the ship): PTY-VERIFIED (2026-06-18).** A `bind -x '"\C-t": _fn'` PoC,
   driven through a real pty, confirmed every step: inside the keybinding
   `READLINE_LINE` held the **full line including the upstream**
   (`ssql from csv … | ssql group-by `, `READLINE_POINT=45`), the function sliced

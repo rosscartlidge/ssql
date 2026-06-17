@@ -5,6 +5,32 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.47.0] - 2026-06-18
+
+### New Features
+- **Pipeline-aware field completion in bash, via a key binding.** v4.46.2
+  established that bash *Tab* completion can't see the upstream pipeline
+  (bash scopes a completion function to the current command). A `bind -x`
+  key binding *can* — it reads `READLINE_LINE`, which holds the whole
+  line. Install it:
+
+  ```bash
+  eval "$(ssql -field-keybinding)"      # add to ~/.bashrc
+  ```
+
+  Then inside a pipeline, at a field position, press **Ctrl-X Ctrl-F**:
+
+  ```bash
+  ssql from data.csv | ssql rename -as name person | ssql group-by <C-x C-f>
+  #   → completes from  person dept …   (the upstream schema, renames and all)
+  ```
+
+  It runs the upstream under `SSQL_MODE=schema` (sources read only the
+  header — near-instant, even on huge files) and completes the field:
+  unique prefixes complete in place with a trailing space, ambiguous ones
+  extend to the common prefix and list the candidates. Tab is untouched;
+  rebind the chord by editing the emitted `bind` line. pty-verified.
+
 ## [v4.46.2] - 2026-06-18
 
 ### Changed

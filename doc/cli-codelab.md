@@ -1550,16 +1550,32 @@ stages, including ones that earlier commands renamed or added:
     person  dept  …        (the renamed field, not the stale "name")
 ```
 
-This is **serve-only**. At a plain *bash* prompt it can't work across a
-pipe: bash scopes a completion function's view to the current command, so
-the function literally cannot see the upstream stages (see
+Bash **Tab** can't do this across a pipe — bash scopes a completion
+function's view to the current command, so it can't see the upstream
+stages (see
 [doc/research/bash-pipeline-completion-options.md](research/bash-pipeline-completion-options.md)).
-Bash completion still does single-command field completion (the
-`ssql from data.csv -if <TAB>` line above).
+A **key binding** can, though, because it sees the whole line:
 
-You can compute a pipeline's output schema directly with `SSQL_MODE=schema`
-— a two-pass mode where each command transforms a *schema header* instead
-of data (sources read only the header, so it's near-instant):
+```bash
+# Install (add to ~/.bashrc):
+eval "$(ssql -field-keybinding)"
+```
+
+Then inside a pipeline, at a field position, press **Ctrl-X Ctrl-F**:
+
+```bash
+ssql from data.csv | ssql rename -as name person | ssql group-by <Ctrl-X Ctrl-F>
+#   → completes from  person dept …   (the upstream schema, renames and all)
+```
+
+It runs the upstream under `SSQL_MODE=schema` (below) and completes the
+field from the result — unique prefixes complete in place, ambiguous ones
+list. Rebind the chord by editing the `bind` line the command emits.
+
+Under the hood, `SSQL_MODE=schema` is a two-pass mode where each command
+transforms a *schema header* instead of data (sources read only the
+header, so it's near-instant). You can use it directly to see a pipeline's
+output schema without running it:
 
 ```bash
 (export SSQL_MODE=schema; ssql from data.csv | ssql group-by dept -count n) | ssql generate schema
