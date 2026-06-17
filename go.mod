@@ -2,13 +2,13 @@ module github.com/rosscartlidge/ssql/v4
 
 go 1.26
 
-require github.com/rosscartlidge/autocli/v4 v4.6.1
+require github.com/rosscartlidge/autocli/v4 v4.8.0
 
 require (
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142
 	github.com/expr-lang/expr v1.17.6
-	github.com/rosscartlidge/autocli/shell v0.3.1
-	github.com/rosscartlidge/autocli/ssh v0.1.12
+	github.com/rosscartlidge/autocli/shell v0.4.0
+	github.com/rosscartlidge/autocli/ssh v0.1.13
 	github.com/xuri/excelize/v2 v2.10.0
 )
 

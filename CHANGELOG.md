@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### New Features
+- **Pipeline-aware tab completion in `ssql serve`.** At the prompt,
+  completing a field position now offers the schema flowing in from the
+  upstream pipeline, not stale columns:
+
+  ```
+  > from-loaded | group-by <TAB>                       name  dept  salary
+  > from-loaded | rename name person | group-by <TAB>  person  dept  salary
+  > from-loaded | exclude salary | group-by <TAB>      name  dept
+  ```
+
+  Each serve command declares a schema rule (`from-loaded` reads the
+  loaded schema; `rename`/`include`/`exclude`/`update`/`group-by`/
+  `window` transform field names; `pivot` is undeterminable; the rest
+  are identity). The session walks the upstream stages through these
+  rules and seeds the result into completion. Built on autocli v4.8.0
+  (`FieldsFromFlag` chains an upstream-fields completer), shell v0.4.0
+  (`SchemaWalk` hook), and ssh v0.1.13 (`SchemaWalk` passthrough). bash
+  completion is unaffected. See doc/research/schema-aware-completion.md.
+
 ### Changed
 - **Code-generation mode is now selected by `SSQL_MODE`** (`record` /
   `typed` / `parallel`), replacing `SSQLGO` as the canonical variable.

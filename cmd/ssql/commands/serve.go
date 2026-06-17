@@ -140,6 +140,7 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				Welcome:        welcome,
 				HistoryDir:     sessionDir,
 				Settings:       buildServeSettings(srv),
+				SchemaWalk:     serveSchemaWalk,
 			})
 		}).
 		Done()
