@@ -1525,13 +1525,10 @@ The CLI supports intelligent tab completion for commands, flags, and even field 
 
 ```bash
 # Install bash completion (for current session)
-eval "$(ssql -bash-completion)"
-
-# Install permanently
-ssql -bash-completion > ~/.local/share/bash-completion/completions/ssql
+eval "$(ssql -completion-script)"
 
 # Or add to ~/.bashrc
-echo 'eval "$(ssql -bash-completion)"' >> ~/.bashrc
+echo 'eval "$(ssql -completion-script)"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -1540,7 +1537,22 @@ Now you can tab-complete:
 ssql <TAB>          # Shows all commands
 ssql where <TAB>    # Shows flags like -if, -help
 ssql from <TAB>     # Shows format subcommands (csv, json, ...) AND matching files
+ssql from data.csv -if <TAB>   # Shows field names read from data.csv
 ```
+
+**Pipeline-aware completion (v4.46.0+).** Completion also follows the
+schema *through* a pipeline — when you complete a field position, it
+offers the fields flowing in from the upstream stages, including ones
+that earlier commands renamed or added:
+
+```bash
+ssql from data.csv | ssql rename -as name person | ssql group-by <TAB>
+#   → person  dept  …        (the renamed field, not the stale "name")
+```
+
+This works by running the upstream under `SSQL_MODE=schema` — a two-pass
+mode where each command transforms a *schema header* instead of data, so
+it's near-instant. The same completion is available inside `ssql serve`.
 
 ### Understanding Command Structure (Advanced)
 
