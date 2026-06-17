@@ -142,6 +142,23 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 
 // executeFromCSV handles CSV reading for both the subcommand and bare form.
 func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultType string, generate bool) error {
+	// SSQL_MODE=schema: emit just the header as a schema, no data. Covers
+	// both `from csv FILE` and the bare `from FILE` form (both route
+	// here), so neither runs the full read.
+	if schemaMode() {
+		var r io.Reader = os.Stdin
+		if inputFile != "" {
+			f, err := os.Open(inputFile)
+			if err != nil {
+				return fmt.Errorf("reading file: %w", err)
+			}
+			defer f.Close()
+			r = f
+		}
+		headers, _ := readCSVHeadersFromReader(r)
+		return writeSchemaModeOutput(os.Stdout, headers)
+	}
+
 	if shouldGenerate(generate) {
 		return generateFromCSVCode(inputFile, typeOverrides, defaultType)
 	}

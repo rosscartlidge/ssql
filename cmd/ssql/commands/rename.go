@@ -35,6 +35,10 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "rename")
+			}
+
 			var generate bool
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {

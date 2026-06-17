@@ -1,22 +1,27 @@
-//go:build !slim
-
 package commands
 
 import "slices"
 
-// Schema-aware completion (SSQL_MODE=schema, slice 5).
+// Schema-aware completion (SSQL_MODE=schema, slices 5 + Phase 2).
 //
-// Each serve command can declare a schemaOp: given the session state,
-// the field names flowing IN, and the command's own args, it returns
-// the field names flowing OUT. serveSchemaWalk threads an upstream
-// pipeline through these ops to compute the schema entering the stage
-// under the cursor; autocli/shell seeds that into completion so e.g.
-// `from-loaded | group-by <TAB>` offers the loaded columns.
+// Each data command can declare a schemaOp: given the session state
+// (serve only), the field names flowing IN, and the command's own args,
+// it returns the field names flowing OUT. The same per-command rules
+// drive two runtimes:
+//
+//   - serve: serveSchemaWalk (serve_schema.go) threads an upstream
+//     pipeline through the ops in-process for `<cmd> <TAB>` completion.
+//   - bash: SSQL_MODE=schema runs each command as a subprocess that
+//     transforms a schema header (schema_mode.go).
 //
 // Commands without a registered op are treated as identity (they don't
 // change the set of field names) — correct for where/sort/limit/etc.
-// Sources (from-loaded) MUST register an explicit op since they ignore
-// their input and produce a schema from state.
+// Sources MUST register an explicit op since they produce a schema from
+// state (from-loaded) or a file (from csv …) rather than their input.
+//
+// This file (untagged, so it compiles into slim builds too) holds the
+// registry + the runtime-agnostic transform ops. The serve-only,
+// serveState-dependent pieces live in serve_schema.go (!slim).
 //
 // See doc/research/schema-aware-completion.md §0.
 
@@ -47,24 +52,6 @@ func lookupSchemaOp(name string) schemaOp {
 // identitySchemaOp passes the input field names through unchanged.
 func identitySchemaOp(_ any, in []string, _ []string) ([]string, bool) {
 	return in, true
-}
-
-// serveSchemaWalk is the shell.SchemaWalkFunc the serve session installs.
-// It walks the upstream stages left-to-right through their schemaOps,
-// returning the field names entering the stage under the cursor. A
-// single ok=false anywhere poisons the result (no fields seeded).
-func serveSchemaWalk(state any, upstream [][]string) (fields []string, ok bool) {
-	for _, stage := range upstream {
-		if len(stage) == 0 {
-			continue
-		}
-		out, ok := lookupSchemaOp(stage[0])(state, fields, stage[1:])
-		if !ok {
-			return nil, false
-		}
-		fields = out
-	}
-	return fields, true
 }
 
 // --- argv decoding -------------------------------------------------------
@@ -137,16 +124,6 @@ func keepPresent(in, names []string) []string {
 }
 
 func init() {
-	// from-loaded is a source: it ignores its input and emits the
-	// in-memory dataset's schema, read from the session serveState.
-	registerSchemaOp("from-loaded", func(state any, _ []string, _ []string) ([]string, bool) {
-		srv, ok := state.(*serveState)
-		if !ok || srv == nil {
-			return nil, false
-		}
-		return srv.schema, true
-	})
-
 	// rename: `-as old new` (accumulated) → replace old with new in place.
 	registerSchemaOp("rename", func(_ any, in []string, args []string) ([]string, bool) {
 		out := slices.Clone(in)

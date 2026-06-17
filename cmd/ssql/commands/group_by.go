@@ -169,6 +169,10 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "group-by")
+			}
+
 			var groupByFields []string
 			var generate bool
 

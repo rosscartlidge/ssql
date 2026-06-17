@@ -89,6 +89,21 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 
 // executeFromTSV handles TSV reading for both the subcommand and bare form.
 func executeFromTSV(inputFile string, generate bool) error {
+	if schemaMode() {
+		var r io.Reader = os.Stdin
+		if inputFile != "" {
+			f, err := os.Open(inputFile)
+			if err != nil {
+				return fmt.Errorf("reading TSV file: %w", err)
+			}
+			defer f.Close()
+			r = f
+		}
+		line, _ := bufio.NewReader(r).ReadString('\n')
+		headers := strings.Split(strings.TrimRight(line, "\r\n"), "\t")
+		return writeSchemaModeOutput(os.Stdout, headers)
+	}
+
 	if shouldGenerate(generate) {
 		return generateFromTSVCode(inputFile)
 	}

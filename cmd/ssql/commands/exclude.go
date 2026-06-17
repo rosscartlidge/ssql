@@ -31,6 +31,10 @@ func RegisterExclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "exclude")
+			}
+
 			var generate bool
 			var fields []string
 

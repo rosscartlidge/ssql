@@ -24,8 +24,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are identity). The session walks the upstream stages through these
   rules and seeds the result into completion. Built on autocli v4.8.0
   (`FieldsFromFlag` chains an upstream-fields completer), shell v0.4.0
-  (`SchemaWalk` hook), and ssh v0.1.13 (`SchemaWalk` passthrough). bash
-  completion is unaffected. See doc/research/schema-aware-completion.md.
+  (`SchemaWalk` hook), and ssh v0.1.13 (`SchemaWalk` passthrough).
+  See doc/research/schema-aware-completion.md.
+
+- **Pipeline-aware tab completion in bash, too.** The same field
+  completion now works at the bash prompt via a two-pass `SSQL_MODE=schema`
+  mode: each command, run under `SSQL_MODE=schema`, transforms a schema
+  header instead of data (near-zero cost — sources read only the
+  header), and a terminal `ssql generate schema` prints the field list.
+  `ssql -completion-script` now also installs a wrapper that, on TAB at a
+  value position inside a pipeline, runs the upstream under
+  `SSQL_MODE=schema` and offers the resulting fields:
+
+  ```
+  ssql from data.csv | ssql rename -as name person | ssql group-by <TAB>
+    → person  dept  …
+  ```
+
+  Sources `from csv/tsv/json[l]` and transforms reuse the same
+  per-command rules as serve. Flag completion and the single-command
+  case fall through to autocli's file-based completer.
 
 ### Changed
 - **Code-generation mode is now selected by `SSQL_MODE`** (`record` /

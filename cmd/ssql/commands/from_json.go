@@ -146,6 +146,19 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 
 // executeFromJSON handles JSON/JSONL reading for both the subcommand and bare form.
 func executeFromJSON(inputFile string, generate bool) error {
+	if schemaMode() {
+		var r io.Reader = os.Stdin
+		if inputFile != "" {
+			f, err := lib.OpenInputFile(inputFile)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			r = f
+		}
+		return writeSchemaModeOutput(os.Stdout, schemaModeJSONNames(r))
+	}
+
 	if shouldGenerate(generate) {
 		return generateFromJSONCode(inputFile)
 	}

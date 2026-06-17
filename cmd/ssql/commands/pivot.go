@@ -54,6 +54,10 @@ func RegisterPivot(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "pivot")
+			}
+
 			var rowField, colField, valField, aggFunc string
 			var generate bool
 

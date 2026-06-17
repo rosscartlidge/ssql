@@ -121,6 +121,14 @@ func main() {
 			fmt.Print(commands.ShellHelpersScript)
 			return
 		}
+		// Intercept -completion-script (normally handled by autocli) so
+		// we can append ssql's pipeline-aware schema-completion wrapper
+		// after autocli's _autocli_complete.
+		if a == "-completion-script" || a == "--completion-script" {
+			fmt.Print(buildRootCommand().GenerateCompletionScript())
+			fmt.Print("\n", commands.SchemaCompletionScript)
+			return
+		}
 	}
 	cmd := buildRootCommand()
 	if err := cmd.Execute(os.Args[1:]); err != nil {
