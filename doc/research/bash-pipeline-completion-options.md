@@ -25,18 +25,33 @@ The `-completion-script` wrapper reconstructs the upstream from `COMP_LINE` /
 there.** It scopes `COMP_LINE`/`COMP_WORDS`/`COMP_POINT`/`COMP_CWORD` to the
 *current simple command* — everything after the last `|`.
 
-Proven with a real pty (bash 5.2.21), completing `echo hi | xtest <TAB>` where
-`xtest`'s completion just dumps its variables:
+Proven with a real pty (bash 5.2.21), with a control case to validate the
+harness. The completion for `xtest` just dumps its `COMP_*` variables:
 
-```
-NATIVE bash (no bash-completion):  LINE=[xtest ] POINT=[6] WORDS=[xtest ]
-WITH bash-completion:              LINE=[xtest ] POINT=[6] WORDS=[xtest ]
-```
+| Case | `COMP_LINE` | `COMP_POINT` |
+|---|---|---|
+| control — `xtest alpha <TAB>` (no pipe) | `xtest alpha ` | 12 |
+| `echo beta \| xtest alpha <TAB>` — native bash | `xtest alpha ` | 12 |
+| `echo beta \| xtest alpha <TAB>` — with bash-completion | `xtest alpha ` | 12 |
+
+The control proves the harness is sound: for a single command, `COMP_LINE` *is*
+the full command. Prepend `echo beta |` and `COMP_LINE` is **still** just
+`xtest alpha ` — the upstream is gone. `COMP_POINT=12` is the clincher: 12 is the
+length of `"xtest alpha "`, not of `"echo beta | xtest alpha "` (24), so
+`COMP_LINE` really *is* the scoped 12-char string, not the full line truncated in
+display.
 
 So it is **not** a bug, **not** bash-completion's doing, and **not**
 version-specific — it is how bash programmable completion is designed (completion
 is per-command). A `complete -F` function fundamentally cannot see the pipeline
 to its left. (Reproduction harness in the appendix.)
+
+> **Common misconception.** Bash's manual calls `COMP_LINE` "the current command
+> line," and most tutorials (and LLMs) read that as "the whole line you typed,
+> pipes and all." It is not — it's the current *simple* command. Snippets that
+> `[[ "$COMP_LINE" =~ upstream.*\|.*mytool ]]` to branch on the upstream look
+> correct but never match on a real bash after a pipe. The only reliable check is
+> to `printf '%s' "$COMP_LINE"` from inside a piped completion, as above.
 
 The **only** place the full command line is available to shell code is
 `READLINE_LINE` (+ `READLINE_POINT`), and bash only populates those for **`bind -x`
@@ -160,29 +175,40 @@ B.
 ## Appendix — reproduction harness
 
 Drives a real pty (no `expect` needed), registers a completion that dumps its
-variables, and completes a piped command. Run with `python3`.
+variables, and completes both a bare command (control) and a piped command. Run
+with `python3`. `--norc --noprofile` ensures no bash-completion in the native
+runs.
 
 ```python
 import os, pty, time, select
-def run(setup, type_line):
+def run(setup, type_line, dump="/tmp/comp_dump.txt"):
+    try: os.remove(dump)
+    except: pass
     pid, fd = pty.fork()
     if pid == 0:
-        os.execvp("bash", ["bash", "--norc", "-i"])
-    def send(s): os.write(fd, s.encode()); time.sleep(0.4)
+        os.execvp("bash", ["bash", "--norc", "--noprofile", "-i"])
+    def send(s): os.write(fd, s.encode()); time.sleep(0.5)
     def drain():
         while select.select([fd],[],[],0.3)[0]:
             try: os.read(fd, 4096)
             except OSError: break
-    time.sleep(0.5); drain()
+    time.sleep(0.6); drain()
     for c in setup: send(c+"\n"); drain()
-    send(r'''_dbg() { printf 'LINE=[%s] POINT=[%s] WORDS=[%s]\n' "$COMP_LINE" "$COMP_POINT" "${COMP_WORDS[*]}" > /tmp/comp_dump.txt; COMPREPLY=(); }'''+"\n"); drain()
+    send(r'''_dbg() { printf 'LINE=[%s] POINT=[%s] WORDS=[%s]\n' "$COMP_LINE" "$COMP_POINT" "${COMP_WORDS[*]}" > ''' + dump + r'''; COMPREPLY=(); }'''+"\n"); drain()
     send("complete -F _dbg xtest\n"); drain()
-    send(type_line + "\t"); time.sleep(0.6); drain()
+    send(type_line + "\t"); time.sleep(0.8); drain()
     send("\x03\n"); time.sleep(0.2); os.close(fd)
-    return open("/tmp/comp_dump.txt").read().strip()
+    return open(dump).read().strip()
 
-print("NATIVE :", run([], "echo hi | xtest "))
-print("BASHCMP:", run(["source /usr/share/bash-completion/bash_completion"], "echo hi | xtest "))
+print("CONTROL (no pipe):", run([], "xtest alpha "))
+print("PIPE native       :", run([], "echo beta | xtest alpha "))
+print("PIPE bash-comp    :", run(["source /usr/share/bash-completion/bash_completion"], "echo beta | xtest alpha "))
 ```
 
-Result on bash 5.2.21 (both lines): `LINE=[xtest ] POINT=[6] WORDS=[xtest ]`.
+Result on bash 5.2.21:
+- control: `LINE=[xtest alpha ] POINT=[12] WORDS=[xtest alpha ]`
+- pipe (native): `LINE=[xtest alpha ] POINT=[12] WORDS=[xtest alpha ]`  ← upstream dropped
+- pipe (bash-completion): same as native.
+
+The control's full `COMP_LINE` validates the harness; the pipe runs' identical
+`POINT=12` proves the upstream is genuinely absent (not display truncation).
