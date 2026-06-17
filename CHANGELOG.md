@@ -5,6 +5,25 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.46.2] - 2026-06-18
+
+### Changed
+- **Corrected the v4.46.0/.1 claim that pipeline-aware tab completion
+  works in bash.** It does not, and cannot via a completion function:
+  bash scopes `COMP_LINE`/`COMP_WORDS` to the command under the cursor —
+  the stage *after* the last pipe — so the upstream pipeline is invisible
+  to a `complete -F` function (verified with a pty; see
+  doc/research/bash-pipeline-completion-options.md). The `ssql
+  -completion-script` schema wrapper has been **removed** (it was a no-op
+  for pipes); `-completion-script` is again autocli's, which still gives
+  command, flag, and single-command field completion (`ssql from data.csv
+  -if <TAB>`). **Pipeline-aware completion remains fully working in `ssql
+  serve`**, and `SSQL_MODE=schema` + `ssql generate schema` remain as a
+  scriptable way to get a pipeline's output schema. A `bind -x` approach
+  that *can* do bash pipeline completion (it reads `READLINE_LINE`, which
+  has the full line) is pty-validated and documented for a future release.
+- Docs updated accordingly (CHANGELOG v4.46.0 entry, cli-codelab).
+
 ## [v4.46.1] - 2026-06-17
 
 ### Fixes
@@ -39,23 +58,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`SchemaWalk` hook), and ssh v0.1.13 (`SchemaWalk` passthrough).
   See doc/research/schema-aware-completion.md.
 
-- **Pipeline-aware tab completion in bash, too.** The same field
-  completion now works at the bash prompt via a two-pass `SSQL_MODE=schema`
-  mode: each command, run under `SSQL_MODE=schema`, transforms a schema
-  header instead of data (near-zero cost — sources read only the
-  header), and a terminal `ssql generate schema` prints the field list.
-  `ssql -completion-script` now also installs a wrapper that, on TAB at a
-  value position inside a pipeline, runs the upstream under
-  `SSQL_MODE=schema` and offers the resulting fields:
+- **`SSQL_MODE=schema` — compute a pipeline's output schema without
+  reading data.** Each command, run under `SSQL_MODE=schema`, transforms a
+  schema header instead of data (near-zero cost — sources read only the
+  header), and a terminal `ssql generate schema` prints the resulting
+  field list:
 
   ```
-  ssql from data.csv | ssql rename -as name person | ssql group-by <TAB>
-    → person  dept  …
+  (export SSQL_MODE=schema; ssql from data.csv | ssql group-by dept -count n) | ssql generate schema
+    → dept
+      n
   ```
 
-  Sources `from csv/tsv/json[l]` and transforms reuse the same
-  per-command rules as serve. Flag completion and the single-command
-  case fall through to autocli's file-based completer.
+  Sources `from csv/tsv/json[l]` and transforms reuse the same per-command
+  rules as serve's in-process completion. (**Correction, see v4.46.2:**
+  v4.46.0 also shipped a `ssql -completion-script` wrapper claiming this
+  drove *bash tab completion* across pipes. It does not — bash scopes a
+  completion function to the current command, so the upstream is invisible.
+  Pipeline-aware completion is serve-only; the wrapper was removed in
+  v4.46.2.)
 
 ### Changed
 - **Code-generation mode is now selected by `SSQL_MODE`** (`record` /

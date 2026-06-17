@@ -1540,19 +1540,32 @@ ssql from <TAB>     # Shows format subcommands (csv, json, ...) AND matching fil
 ssql from data.csv -if <TAB>   # Shows field names read from data.csv
 ```
 
-**Pipeline-aware completion (v4.46.0+).** Completion also follows the
-schema *through* a pipeline — when you complete a field position, it
-offers the fields flowing in from the upstream stages, including ones
-that earlier commands renamed or added:
+**Pipeline-aware completion (in `ssql serve`).** Inside the interactive
+`ssql serve` console, completion follows the schema *through* a pipeline —
+completing a field position offers the fields flowing in from the upstream
+stages, including ones that earlier commands renamed or added:
 
-```bash
-ssql from data.csv | ssql rename -as name person | ssql group-by <TAB>
-#   → person  dept  …        (the renamed field, not the stale "name")
+```
+> from-loaded | rename -as name person | group-by <TAB>
+    person  dept  …        (the renamed field, not the stale "name")
 ```
 
-This works by running the upstream under `SSQL_MODE=schema` — a two-pass
-mode where each command transforms a *schema header* instead of data, so
-it's near-instant. The same completion is available inside `ssql serve`.
+This is **serve-only**. At a plain *bash* prompt it can't work across a
+pipe: bash scopes a completion function's view to the current command, so
+the function literally cannot see the upstream stages (see
+[doc/research/bash-pipeline-completion-options.md](research/bash-pipeline-completion-options.md)).
+Bash completion still does single-command field completion (the
+`ssql from data.csv -if <TAB>` line above).
+
+You can compute a pipeline's output schema directly with `SSQL_MODE=schema`
+— a two-pass mode where each command transforms a *schema header* instead
+of data (sources read only the header, so it's near-instant):
+
+```bash
+(export SSQL_MODE=schema; ssql from data.csv | ssql group-by dept -count n) | ssql generate schema
+#   → dept
+#     n
+```
 
 ### Understanding Command Structure (Advanced)
 
