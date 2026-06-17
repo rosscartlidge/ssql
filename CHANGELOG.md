@@ -5,6 +5,18 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.46.1] - 2026-06-17
+
+### Fixes
+- **bash pipeline-aware completion now actually fires.** The
+  `_ssql_schema_complete` wrapper (from `ssql -completion-script`) read
+  the upstream pipeline from `COMP_WORDS`, but bash scopes `COMP_WORDS`
+  to the command under the cursor — the stage after the last pipe — so
+  the upstream was invisible and completion silently fell back to
+  autocli's (stale) field cache. It now parses `COMP_LINE`/`COMP_POINT`.
+  Also fixes `doc/cli-codelab.md`, which referenced a non-existent
+  `-bash-completion` flag (the real one is `-completion-script`).
+
 ## [v4.46.0] - 2026-06-17
 
 ### New Features
