@@ -77,5 +77,9 @@ _ssql_complete_field() {
     fi
 }
 
-bind -x '"\C-x\C-f": _ssql_complete_field'
+# Bind in every keymap so it works whether you are in emacs or vi mode
+# (a bare bind installs only into the keymap active when sourced).
+bind -m emacs -x '"\C-x\C-f": _ssql_complete_field'
+bind -m vi-insert -x '"\C-x\C-f": _ssql_complete_field'
+bind -m vi-command -x '"\C-x\C-f": _ssql_complete_field'
 `

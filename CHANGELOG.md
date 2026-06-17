@@ -5,6 +5,15 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.47.1] - 2026-06-18
+
+### Fixes
+- **`-field-keybinding` now works in vi editing mode too.** A bare
+  `bind -x` installs only into the keymap active when sourced, so the
+  Ctrl-X Ctrl-F binding was invisible to `set -o vi` users (the keys
+  self-inserted as `^X^F`). The emitted script now binds into the emacs,
+  vi-insert, and vi-command keymaps. pty-verified in both modes.
+
 ## [v4.47.0] - 2026-06-18
 
 ### New Features
