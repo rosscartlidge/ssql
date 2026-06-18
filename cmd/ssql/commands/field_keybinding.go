@@ -5,10 +5,15 @@ package commands
 //
 //	eval "$(ssql -field-keybinding)"      # add to ~/.bashrc
 //
-// and then, at a field position inside a pipeline, press Ctrl-X Ctrl-F:
+// and then, at a field position inside a pipeline, press Ctrl-O:
 //
-//	ssql from data.csv | ssql rename -as name person | ssql group-by <C-x C-f>
+//	ssql from data.csv | ssql rename -as name person | ssql group-by <C-o>
 //	  → completes from  person dept …  (the schema flowing in from the upstream)
+//
+// A single key (not a chord) on purpose: a two-key chord depends on
+// readline's keyseq-timeout, which vi users routinely lower for snappy
+// Esc — so the chord intermittently self-inserts. Ctrl-O has no timeout
+// dependency. (fzf uses single keys for the same reason.)
 //
 // Why a keybinding and not Tab completion: bash scopes a completion
 // function's COMP_LINE/COMP_WORDS to the command under the cursor, so a
@@ -20,8 +25,8 @@ package commands
 // doc/research/bash-pipeline-completion-options.md.
 const FieldKeybindingScript = `# ssql field-completion keybinding — install with:
 #   eval "$(ssql -field-keybinding)"
-# Then inside a pipeline, at a field position, press Ctrl-X Ctrl-F.
-# Rebind elsewhere by changing the bind line at the bottom.
+# Then inside a pipeline, at a field position, press Ctrl-O.
+# Rebind elsewhere by changing the bind lines at the bottom.
 
 # Longest common prefix of the arguments.
 _ssql_lcp() {
@@ -79,7 +84,7 @@ _ssql_complete_field() {
 
 # Bind in every keymap so it works whether you are in emacs or vi mode
 # (a bare bind installs only into the keymap active when sourced).
-bind -m emacs -x '"\C-x\C-f": _ssql_complete_field'
-bind -m vi-insert -x '"\C-x\C-f": _ssql_complete_field'
-bind -m vi-command -x '"\C-x\C-f": _ssql_complete_field'
+bind -m emacs -x '"\C-o": _ssql_complete_field'
+bind -m vi-insert -x '"\C-o": _ssql_complete_field'
+bind -m vi-command -x '"\C-o": _ssql_complete_field'
 `

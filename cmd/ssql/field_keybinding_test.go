@@ -75,8 +75,8 @@ func TestFieldKeybindingEmitted(t *testing.T) {
 		t.Fatalf("-field-keybinding: %v", err)
 	}
 	for _, want := range []string{"_ssql_complete_field", "READLINE_LINE", "SSQL_MODE=schema", "generate schema",
-		`bind -m emacs -x '"\C-x\C-f": _ssql_complete_field'`,
-		`bind -m vi-insert -x '"\C-x\C-f": _ssql_complete_field'`} {
+		`bind -m emacs -x '"\C-o": _ssql_complete_field'`,
+		`bind -m vi-insert -x '"\C-o": _ssql_complete_field'`} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("keybinding script missing %q", want)
 		}

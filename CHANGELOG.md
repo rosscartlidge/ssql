@@ -5,6 +5,18 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.47.2] - 2026-06-18
+
+### Changed
+- **`-field-keybinding` now binds a single key, `Ctrl-O`, instead of the
+  `Ctrl-X Ctrl-F` chord.** A two-key chord depends on readline's
+  `keyseq-timeout`, which vi users routinely lower for a snappy `Esc` —
+  so the chord intermittently self-inserted as `^X^F` unless typed very
+  fast. A single key has no timeout dependency and behaves identically in
+  emacs and vi. (fzf uses single keys for the same reason.) Rebind by
+  editing the `bind` lines the command emits. pty-verified in emacs and vi
+  with a low `keyseq-timeout`.
+
 ## [v4.47.1] - 2026-06-18
 
 ### Fixes

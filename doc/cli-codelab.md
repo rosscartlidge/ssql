@@ -1561,10 +1561,10 @@ A **key binding** can, though, because it sees the whole line:
 eval "$(ssql -field-keybinding)"
 ```
 
-Then inside a pipeline, at a field position, press **Ctrl-X Ctrl-F**:
+Then inside a pipeline, at a field position, press **Ctrl-O**:
 
 ```bash
-ssql from data.csv | ssql rename -as name person | ssql group-by <Ctrl-X Ctrl-F>
+ssql from data.csv | ssql rename -as name person | ssql group-by <Ctrl-O>
 #   → completes from  person dept …   (the upstream schema, renames and all)
 ```
 
