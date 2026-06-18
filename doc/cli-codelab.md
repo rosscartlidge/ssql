@@ -1183,6 +1183,30 @@ func main() {
 }
 ```
 
+### Shortcut: `ssqlgen`
+
+Typing `-generate` on every stage (or `(export SSQL_MODE=record; …) | ssql
+generate go`) gets tedious. Install the shell helper once:
+
+```bash
+eval "$(ssql -shell-helpers)"      # add to ~/.bashrc
+```
+
+Then `ssqlgen` wraps the whole thing — pass the pipeline as one quoted string:
+
+```bash
+ssqlgen 'ssql from data.csv | ssql where -if age gt 25 | ssql to csv'
+#   → prints the generated Go
+
+ssqlgen -record 'ssql from x.csv | ssql to csv' -run    # record mode, compile + run
+ssqlgen 'ssql from x.csv | ssql to table' -optimise -build /tmp/prog
+```
+
+It accepts `-record`/`-typed`/`-parallel` (default `typed`) and forwards any
+`generate go` flags (`-run`, `-build`, `-optimise`, `OUTPUT`) after the
+pipeline. Under the hood it's `(export SSQL_MODE=MODE; PIPELINE) | ssql
+generate go FLAGS`.
+
 ### Compile and Run Generated Code
 
 ```bash

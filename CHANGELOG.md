@@ -5,6 +5,15 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.47.4] - 2026-06-18
+
+### Changed
+- The bare `ssql` (no subcommand) hint now lists all three shell
+  integrations together — `-completion-script`, `-field-keybinding`, and
+  `-shell-helpers` (the `ssqlgen` codegen wrapper, which was previously
+  undocumented for users). Also documented `ssqlgen` in the CLI codelab's
+  Code Generation section.
+
 ## [v4.47.3] - 2026-06-18
 
 ### Changed

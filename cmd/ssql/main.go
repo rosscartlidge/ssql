@@ -105,12 +105,10 @@ func buildRootCommand() *cf.Command {
 		fmt.Println("Use -help to see available subcommands")
 		fmt.Println()
 		binaryName := filepath.Base(os.Args[0])
-		fmt.Println("To enable tab completion, add to your ~/.bashrc:")
-		fmt.Printf("  eval \"$(%s -completion-script)\"\n", binaryName)
-		fmt.Println()
-		fmt.Println("For pipeline-aware field completion (press Ctrl-O at a field")
-		fmt.Println("position inside a pipeline), also add:")
-		fmt.Printf("  eval \"$(%s -field-keybinding)\"\n", binaryName)
+		fmt.Println("Shell integration — add any of these to your ~/.bashrc:")
+		fmt.Printf("  eval \"$(%s -completion-script)\"   # tab completion: commands, flags, fields\n", binaryName)
+		fmt.Printf("  eval \"$(%s -field-keybinding)\"    # Ctrl-O: pipeline-aware field completion\n", binaryName)
+		fmt.Printf("  eval \"$(%s -shell-helpers)\"       # ssqlgen: turn a pipeline into Go/SQL\n", binaryName)
 		return nil
 	}).Build()
 }
