@@ -107,6 +107,10 @@ func buildRootCommand() *cf.Command {
 		binaryName := filepath.Base(os.Args[0])
 		fmt.Println("To enable tab completion, add to your ~/.bashrc:")
 		fmt.Printf("  eval \"$(%s -completion-script)\"\n", binaryName)
+		fmt.Println()
+		fmt.Println("For pipeline-aware field completion (press Ctrl-O at a field")
+		fmt.Println("position inside a pipeline), also add:")
+		fmt.Printf("  eval \"$(%s -field-keybinding)\"\n", binaryName)
 		return nil
 	}).Build()
 }
