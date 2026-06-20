@@ -106,9 +106,10 @@ func buildRootCommand() *cf.Command {
 		fmt.Println()
 		binaryName := filepath.Base(os.Args[0])
 		fmt.Println("Shell integration — add any of these to your ~/.bashrc:")
-		fmt.Printf("  eval \"$(%s -completion-script)\"   # tab completion: commands, flags, fields\n", binaryName)
-		fmt.Printf("  eval \"$(%s -field-keybinding)\"    # Ctrl-O: pipeline-aware field completion\n", binaryName)
-		fmt.Printf("  eval \"$(%s -shell-helpers)\"       # ssqlgen: turn a pipeline into Go/SQL\n", binaryName)
+		fmt.Printf("  eval \"$(%s -completion-script)\"    # tab completion: commands, flags, fields\n", binaryName)
+		fmt.Printf("  eval \"$(%s -field-keybinding)\"     # Ctrl-O: pipeline-aware field completion\n", binaryName)
+		fmt.Printf("  eval \"$(%s -optimise-keybinding)\"  # Ctrl-T: optimise the pipeline in place\n", binaryName)
+		fmt.Printf("  eval \"$(%s -shell-helpers)\"        # ssqlgen: turn a pipeline into Go/SQL\n", binaryName)
 		return nil
 	}).Build()
 }
@@ -129,6 +130,11 @@ func main() {
 		// vet would otherwise flag as a stray Printf directive.
 		if a == "-field-keybinding" || a == "--field-keybinding" {
 			os.Stdout.WriteString(commands.FieldKeybindingScript)
+			return
+		}
+		// In-situ pipeline-optimise keybinding (bind -x).
+		if a == "-optimise-keybinding" || a == "--optimise-keybinding" {
+			os.Stdout.WriteString(commands.OptimiseKeybindingScript)
 			return
 		}
 	}

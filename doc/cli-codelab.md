@@ -1594,7 +1594,7 @@ ssql from data.csv | ssql rename -as name person | ssql group-by <Ctrl-O>
 
 It runs the upstream under `SSQL_MODE=schema` (below) and completes the
 field from the result — unique prefixes complete in place, ambiguous ones
-list. Rebind the chord by editing the `bind` line the command emits.
+list. Rebind the key by editing the `bind` lines the command emits.
 
 Under the hood, `SSQL_MODE=schema` is a two-pass mode where each command
 transforms a *schema header* instead of data (sources read only the
@@ -1606,6 +1606,28 @@ output schema without running it:
 #   → dept
 #     n
 ```
+
+### Optimise a Pipeline in Place (`Ctrl-O`'s cousin)
+
+A second key binding rewrites the **whole** pipeline on the line to its
+optimised form (the same rewrites as `generate ssql` — merge adjacent
+`where`s, `sort … | limit` → `top`, push filters into `from ssh`, …):
+
+```bash
+eval "$(ssql -optimise-keybinding)"      # add to ~/.bashrc
+```
+
+Type a pipeline and press **Ctrl-T**:
+
+```bash
+ssql from x.csv | ssql where -if a gt 1 | ssql where -if b eq y | ssql sort -desc s | ssql limit 5  <Ctrl-T>
+#   → ssql from x.csv | ssql where -if b eq y -if a gt 1 | ssql top 5 -field s
+```
+
+It runs the line through `ssql generate ssql` under `SSQL_MODE=record`, so
+it reads no data — instant even on huge files — and replaces the line in
+place. Undo with `Ctrl-_` (emacs) or `u` (vi) if you want the original
+back. Single key, robust in both editing modes.
 
 ### Understanding Command Structure (Advanced)
 

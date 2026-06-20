@@ -5,6 +5,28 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.48.0] - 2026-06-20
+
+### New Features
+- **In-situ pipeline optimisation key binding.** `ssql -optimise-keybinding`
+  emits a `bind -x` binding (default **Ctrl-T**) that rewrites the ssql
+  pipeline on the readline line to its optimised form — the same rewrites
+  as `generate ssql` (merge adjacent `where`s, `sort … | limit` → `top`,
+  push filters into `from ssh`, column projection, …):
+
+  ```bash
+  eval "$(ssql -optimise-keybinding)"     # add to ~/.bashrc
+  # type a pipeline, press Ctrl-T:
+  ssql from x.csv | ssql where -if a gt 1 | ssql where -if b eq y | ssql sort -desc s | ssql limit 5
+  #   → ssql from x.csv | ssql where -if b eq y -if a gt 1 | ssql top 5 -field s
+  ```
+
+  Runs the line through `generate ssql` under `SSQL_MODE=record`, so it
+  reads no data (operates on the codegen fragment stream) — instant even
+  on huge files. Replaces the line in place; undo with Ctrl-_ (emacs) or
+  `u` (vi). Single key bound in emacs/vi-insert/vi-command, real-pty
+  tested. The bare `ssql` hint lists it alongside the other integrations.
+
 ## [v4.47.4] - 2026-06-18
 
 ### Changed

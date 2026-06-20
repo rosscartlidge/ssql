@@ -46,8 +46,10 @@ def run(vi):
     time.sleep(0.9)
     after = drain().decode(errors="replace")
     os.write(fd, b"\x03\n"); time.sleep(0.2); os.close(fd)
-    txt = re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[A-Za-z]', '', after.replace("\r", ""))
-    cand = [l for l in txt.split("\n") if "group-by na" in l]
+    # readline redraws via CR; take the FINAL CR-delimited line, not the
+    # joined echo (which would also contain the pre-completion text).
+    segs = [re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[A-Za-z]', '', s) for s in after.split("\r")]
+    cand = [s for s in segs if "group-by na" in s]
     line = cand[-1] if cand else ""
     # PASS = the partial 'na' completed to 'name' and no literal ^O leaked in.
     return ("name " in line) and ("^O" not in line) and ("\x0f" not in line)
