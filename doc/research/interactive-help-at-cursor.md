@@ -1,6 +1,11 @@
 # Interactive Help at the Cursor — Design Exploration
 
-**Status:** Exploration / proposal. Written 2026-06-20. Idea: show help for
+**Status:** v1 implemented (2026-06-22) — autocli `Command.HelpAt(args, pos)`
++ `-help-at` protocol flag, and ssql's **Alt-h** `-help-keybinding` (bash;
+`tmux display-popup` when in tmux, inline otherwise). Deferred: the
+autocli-shell `AutoCompleteCallback` help key (§4b), the live `tmux
+split-window` pane (§5c), and a structured `HelpResult` for the REPL.
+Originally written 2026-06-20 as exploration / proposal. Idea: show help for
 the **command / flag / argument under the cursor** while you're editing the
 line — not just completion candidates. "What does `-sum` take here?" answered
 in place, optionally in a **tmux popup**. Proposed to live in **autocli** (general),

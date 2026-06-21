@@ -109,6 +109,7 @@ func buildRootCommand() *cf.Command {
 		fmt.Printf("  eval \"$(%s -completion-script)\"    # tab completion: commands, flags, fields\n", binaryName)
 		fmt.Printf("  eval \"$(%s -field-keybinding)\"     # Ctrl-O: pipeline-aware field completion\n", binaryName)
 		fmt.Printf("  eval \"$(%s -optimise-keybinding)\"  # Ctrl-T: optimise the pipeline in place\n", binaryName)
+		fmt.Printf("  eval \"$(%s -help-keybinding)\"      # Alt-h: help for the flag/command under the cursor\n", binaryName)
 		fmt.Printf("  eval \"$(%s -shell-helpers)\"        # ssqlgen: turn a pipeline into Go/SQL\n", binaryName)
 		return nil
 	}).Build()
@@ -135,6 +136,13 @@ func main() {
 		// In-situ pipeline-optimise keybinding (bind -x).
 		if a == "-optimise-keybinding" || a == "--optimise-keybinding" {
 			os.Stdout.WriteString(commands.OptimiseKeybindingScript)
+			return
+		}
+		// Help-at-cursor keybinding (bind -x). Note: -help-at (the autocli
+		// protocol flag this binding calls) is NOT intercepted here — it
+		// flows through to autocli's ExecuteWith.
+		if a == "-help-keybinding" || a == "--help-keybinding" {
+			os.Stdout.WriteString(commands.HelpKeybindingScript)
 			return
 		}
 	}

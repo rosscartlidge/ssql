@@ -1629,6 +1629,35 @@ it reads no data — instant even on huge files — and replaces the line in
 place. Undo with `Ctrl-_` (emacs) or `u` (vi) if you want the original
 back. Single key, robust in both editing modes.
 
+### Help at the Cursor (`Alt-h`)
+
+The third key binding shows **contextual help for the flag or command under
+the cursor** — what it does and what arguments it expects — without leaving
+the line you're editing:
+
+```bash
+eval "$(ssql -help-keybinding)"          # add to ~/.bashrc
+```
+
+Put the cursor on (or inside the arguments of) any ssql command and press
+**Alt-h**:
+
+```bash
+ssql from data.csv | ssql group-by dept -sum salary<Alt-h>
+#   → -sum, -s  field result-name
+#         Sum field values (field name, result name)
+#         → result-name (string)        ← the argument under the cursor
+```
+
+Where Tab/`Ctrl-O` complete *candidates*, Alt-h *explains* what's there.
+The help comes from `ssql -help-at`, the autocli help-at-cursor protocol —
+it reads no data, just the command tree, so it's instant. Inside **tmux** it
+pops a transient `display-popup` overlay (your command line is untouched);
+otherwise it prints inline below the prompt. Single key, works in emacs and
+vi. (Implemented as the autocli `Command.HelpAt(args, pos)` primitive, so any
+autocli-based CLI can offer the same binding — see
+`doc/research/interactive-help-at-cursor.md`.)
+
 ### Understanding Command Structure (Advanced)
 
 ssql CLI uses the **autocli** framework for declarative command definitions. This enables powerful features:

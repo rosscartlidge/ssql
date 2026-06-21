@@ -5,6 +5,35 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.49.0] - 2026-06-22
+
+### New Features
+- **Help-at-cursor key binding.** `ssql -help-keybinding` emits a `bind -x`
+  binding (default **Alt-h**) that shows contextual help for the flag or
+  command under the cursor — what it does and what arguments it expects —
+  without disturbing the line:
+
+  ```bash
+  eval "$(ssql -help-keybinding)"         # add to ~/.bashrc
+  # cursor on a flag, press Alt-h:
+  ssql from data.csv | ssql group-by dept -sum salary
+  #   → -sum, -s  field result-name
+  #         Sum field values (field name, result name)
+  ```
+
+  The third member of the READLINE_LINE action family (Ctrl-O field
+  completion, Ctrl-T optimise, Alt-h help). Help text comes from the new
+  autocli `Command.HelpAt(args, pos)` primitive via the `-help-at` protocol
+  flag (parallel to `-complete`); it reads only the command tree, so it's
+  instant. Inside tmux it renders in a `display-popup` overlay, otherwise
+  inline. Generalised into autocli so any autocli CLI can offer it. See
+  `doc/research/interactive-help-at-cursor.md`.
+
+### Dependencies
+- Bumped `github.com/rosscartlidge/autocli/v4` to **v4.9.0**, which adds the
+  `Command.HelpAt(args, pos)` primitive and the `-help-at` protocol flag that
+  the help-at-cursor binding is built on.
+
 ## [v4.48.0] - 2026-06-20
 
 ### New Features
