@@ -110,10 +110,10 @@ type pipelineCmd struct {
 
 	// Parsed fields for "join"
 	IsJoin           bool
-	JoinFile         string   // right-side file path
-	JoinArgs         []string // args after FILE (-using, -on, -type, etc.)
-	JoinRightWhere   []string // where args pushed into right side (rendered as process substitution)
-	JoinIsProcessSub bool     // true if right side is already a process substitution (/dev/fd/N)
+	JoinFile         string         // right-side file path
+	JoinArgs         []string       // args after FILE (-using, -on, -type, etc.)
+	JoinRightWhere   []string       // where args pushed into right side (rendered as process substitution)
+	JoinIsProcessSub bool           // true if right side is already a process substitution (/dev/fd/N)
 	JoinProcSubCmds  []*pipelineCmd // parsed inner pipeline commands (for process substitution optimization)
 
 	// Parsed fields for "merge -catalog"
@@ -1642,8 +1642,28 @@ func collectDownstreamFields(cmds []*pipelineCmd, startIdx int) (map[string]bool
 		for _, f := range fields {
 			needed[f] = true
 		}
+		// A schema-redefining command (group-by) replaces the stream
+		// schema with its own output — the group keys plus the aggregation
+		// output names. Fields referenced further downstream are satisfied
+		// by that output, NOT by the source, so the source only needs the
+		// fields up to and including this command's own input references
+		// (already added above). Without this stop, downstream references
+		// to aggregation outputs (e.g. a -count result named "count") leak
+		// back as phantom source columns the file does not contain.
+		if redefinesSourceSchema(cmds[j]) {
+			break
+		}
 	}
 	return needed, false
+}
+
+// redefinesSourceSchema reports whether a command fully replaces the stream
+// schema with one of its own making, so that downstream field references no
+// longer map back to source columns. group-by is the canonical case (output
+// = group keys + aggregation outputs). distinct/exclude already short-circuit
+// collectDownstreamFields via extractReferencedFields returning allNeeded.
+func redefinesSourceSchema(cmd *pipelineCmd) bool {
+	return cmd.Kind == "group-by"
 }
 
 // extractReferencedFields returns field names explicitly referenced by a command.
