@@ -74,6 +74,11 @@ func TestHelpKeybindingEmitted(t *testing.T) {
 		`bind -m emacs -x '"\eh": _ssql_help_at'`,
 		`bind -m vi-insert -x '"\eh": _ssql_help_at'`,
 		`bind -m vi-command -x '"\eh": _ssql_help_at'`,
+		// Alt-H cheat-sheet of the whole key-binding family.
+		"_ssql_help_keys", "ssql key bindings",
+		`bind -m emacs -x '"\eH": _ssql_help_keys'`,
+		`bind -m vi-insert -x '"\eH": _ssql_help_keys'`,
+		`bind -m vi-command -x '"\eH": _ssql_help_keys'`,
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("help keybinding script missing %q", want)

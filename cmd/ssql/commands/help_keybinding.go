@@ -19,6 +19,10 @@ package commands
 // rationale). The help text comes from `ssql -help-at`, the autocli
 // help-at-cursor protocol flag — it reads no data, just the command tree.
 //
+// This emitter also binds Alt-H (Alt-Shift-h) to a cheat-sheet of the whole
+// ssql key-binding family, so users can rediscover the keys at the prompt.
+// (Alt-? would collide with readline's default possible-completions.)
+//
 // Display: inside tmux it pops a transient `display-popup` overlay (the
 // command line is untouched); otherwise it prints inline below the prompt
 // and readline redraws the line underneath.
@@ -33,7 +37,17 @@ _ssql_show_help() {
         local tmpf
         tmpf=$(mktemp) || { printf '\n%s\n' "$1"; return; }
         printf '%s\n' "$1" > "$tmpf"
-        tmux display-popup -w 84 -h 24 -E "\${PAGER:-less -R} '$tmpf'; rm -f '$tmpf'"
+        # Clamp the popup to the client size — tmux errors "width/height too
+        # large" if the popup is bigger than the terminal (small windows).
+        local w=84 h=24 cw ch
+        cw=$(tmux display-message -p '#{client_width}' 2>/dev/null)
+        ch=$(tmux display-message -p '#{client_height}' 2>/dev/null)
+        [[ "$cw" =~ ^[0-9]+$ ]] && (( w > cw )) && w=$cw
+        [[ "$ch" =~ ^[0-9]+$ ]] && (( h > ch )) && h=$ch
+        # Redirect the temp file into the pager's stdin (rather than passing it
+        # as an argument) so less shows its bare ":" prompt — as it does for
+        # piped input — instead of the ugly /tmp/tmp.XXXX path.
+        tmux display-popup -w "$w" -h "$h" -E "\${PAGER:-less -R} < '$tmpf'; rm -f '$tmpf'"
     else
         printf '\n%s\n' "$1"
     fi
@@ -69,8 +83,24 @@ _ssql_help_at() {
     _ssql_show_help "$help"
 }
 
-# Bind in every keymap — a single key, no keyseq-timeout dependency.
+# Alt-H: cheat-sheet of the whole ssql key-binding family, for rediscovery.
+_ssql_help_keys() {
+    _ssql_show_help "ssql key bindings
+
+  Ctrl-O   complete a field name from the upstream pipeline schema
+  Ctrl-T   optimise the ssql pipeline on the line, in place
+  Alt-r    compile the pipeline as typed Go and run it
+  Alt-h    help for the flag / command under the cursor
+  Alt-H    show this list
+
+Run 'ssql' with no arguments to see how to enable each binding."
+}
+
+# Bind in every keymap — single keys, no keyseq-timeout dependency.
 bind -m emacs -x '"\eh": _ssql_help_at'
 bind -m vi-insert -x '"\eh": _ssql_help_at'
 bind -m vi-command -x '"\eh": _ssql_help_at'
+bind -m emacs -x '"\eH": _ssql_help_keys'
+bind -m vi-insert -x '"\eH": _ssql_help_keys'
+bind -m vi-command -x '"\eH": _ssql_help_keys'
 `

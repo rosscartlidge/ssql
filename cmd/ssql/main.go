@@ -109,7 +109,8 @@ func buildRootCommand() *cf.Command {
 		fmt.Printf("  eval \"$(%s -completion-script)\"    # tab completion: commands, flags, fields\n", binaryName)
 		fmt.Printf("  eval \"$(%s -field-keybinding)\"     # Ctrl-O: pipeline-aware field completion\n", binaryName)
 		fmt.Printf("  eval \"$(%s -optimise-keybinding)\"  # Ctrl-T: optimise the pipeline in place\n", binaryName)
-		fmt.Printf("  eval \"$(%s -help-keybinding)\"      # Alt-h: help for the flag/command under the cursor\n", binaryName)
+		fmt.Printf("  eval \"$(%s -help-keybinding)\"      # Alt-h: help under cursor · Alt-H: list key bindings\n", binaryName)
+		fmt.Printf("  eval \"$(%s -run-keybinding)\"       # Alt-r: compile the pipeline as typed Go and run it\n", binaryName)
 		fmt.Printf("  eval \"$(%s -shell-helpers)\"        # ssqlgen: turn a pipeline into Go/SQL\n", binaryName)
 		return nil
 	}).Build()
@@ -143,6 +144,11 @@ func main() {
 		// flows through to autocli's ExecuteWith.
 		if a == "-help-keybinding" || a == "--help-keybinding" {
 			os.Stdout.WriteString(commands.HelpKeybindingScript)
+			return
+		}
+		// Convert-to-typed-and-run keybinding (bind -x).
+		if a == "-run-keybinding" || a == "--run-keybinding" {
+			os.Stdout.WriteString(commands.RunKeybindingScript)
 			return
 		}
 	}

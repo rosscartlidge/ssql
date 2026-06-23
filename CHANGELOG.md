@@ -5,6 +5,31 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.49.1] - 2026-06-23
+
+### New Features
+- **Convert-to-typed-and-run key binding (Alt-r).** `ssql -run-keybinding`
+  emits a `bind -x` binding that compiles the ssql pipeline on the line as
+  typed Go and runs it (via `generate go -run`) — the compiled-native result
+  without losing the line you're editing. Output streams inline. The win is
+  speed on large inputs. Needs a Go toolchain on PATH; fails loudly otherwise.
+- **Key-binding cheat-sheet (Alt-H).** `ssql -help-keybinding` now also binds
+  Alt-H (Alt-Shift-h) to a popup/inline list of the whole ssql key-binding
+  family (Ctrl-O, Ctrl-T, Alt-r, Alt-h, Alt-H), for rediscovery at the prompt.
+
+### Improvements
+- Help popup (`-help-keybinding`): the pager now shows a bare `:` prompt
+  instead of the temp-file path, and the popup is clamped to the client size
+  so it no longer errors "width/height too large" in small terminals.
+
+### Bug Fixes
+- **`generate ssql` parquet column pruning** no longer emits phantom source
+  columns for fields *produced* by `group-by` (e.g. a `-count` result named
+  `count`). The downstream-field scan now stops at the group-by schema barrier
+  — the source only needs the fields read up to and including the group-by.
+  Previously this produced a misleading `-columns count` and, in the `generate
+  go` path, an invalid projection of a column the file does not contain.
+
 ## [v4.49.0] - 2026-06-22
 
 ### New Features
