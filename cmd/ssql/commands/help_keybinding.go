@@ -32,11 +32,12 @@ var HelpKeybindingScript = `# ssql help-at-cursor keybinding — install with:
 
 ` + ssqlPopupFunc + `
 _ssql_help_at() {
-    # Text up to the cursor; the current pipeline stage is after the last pipe.
+    # The current pipeline stage at the cursor, paren-aware (a pipe inside a
+    # <(…) process substitution is not a stage boundary, and inside a procsub
+    # the stage is within it). See cursor_context.go.
     local before="${READLINE_LINE:0:$READLINE_POINT}"
-    local stage="${before##*|}"
-    # Trim leading whitespace.
-    stage="${stage#"${stage%%[![:space:]]*}"}"
+    local stage
+    stage=$(command ssql -cursor-stage "$before" 2>/dev/null)
     # Only act on ssql stages.
     [[ "$stage" == ssql* || "$stage" == ssql ]] || return
 

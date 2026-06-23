@@ -5,6 +5,27 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.51.0] - 2026-06-24
+
+### New Features / Fixes (interactive completion)
+- **Process-substitution-aware Ctrl-O field completion + Alt-h help.** The
+  keybindings used to split the line on the last `|` (`${line%|*}` /
+  `${line##*|}`), which isn't paren-aware — a `|` *inside* a `<(ssql … | ssql …)`
+  process substitution was mistaken for a top-level pipe and produced a
+  malformed upstream (silent no-op). The split now happens in Go
+  (`cursor_context.go`, paren-aware, unit-tested) behind two protocol flags:
+  - `ssql -complete-source "<line>"` — which command's `SSQL_MODE=schema` output
+    drives field completion at the cursor; and
+  - `ssql -cursor-stage "<line>"` — the current stage, for `-help-at`.
+- **Join right-side field completion (new).** Ctrl-O on a join's right-side
+  field — the 2nd arg of `-on` (`-on <left> <RIGHT>`) or the 1st arg of `-as`
+  (`-as <RIGHT> <new>`) — now completes from the join's `<(ssql from …)>` source
+  rather than the upstream pipeline. Clause separators (`+`/`-`) reset the slot
+  tracking, so multi-lookup joins complete every field. Cursor *inside* a
+  `<(…)>` completes from that procsub's own internal upstream.
+  - Real-pty coverage `TestFieldProcsubPTY` (emacs + vi); parsing exhaustively
+    unit-tested in `cursor_context_test.go`.
+
 ## [v4.50.1] - 2026-06-23
 
 ### Bug Fixes

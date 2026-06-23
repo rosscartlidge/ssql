@@ -103,11 +103,43 @@ AUTOCLI_FIELDS="host,path,format,date" ./ssql -complete 7 from catalog test-data
 **Tips:**
 - Position counting: `ssql`=0, `from`=1, `catalog`=2, `file.csv`=3, `-if`=4, `host`=5, `eq`=6, `<value>`=7
 - Add an empty string `""` as the final arg to simulate pressing TAB with no partial input
-- Set `AUTOCLI_FIELDS` manually when testing downstream completion (normally set by bash completion script)
+- Set `AUTOCLI_CACHE_FILE` manually when testing downstream VALUE completion (normally set by the bash completion script from the `field_cache` directive's `filepath`)
 - JSON `field_cache` directives appear as the first line of output — the bash script strips these before showing to the user
+
+## Ctrl-O field completion & process substitution
+
+Field *names* across a pipe come from **Ctrl-O** (`ssql -field-keybinding`), not
+Tab (see the cache-removal note up top). The Ctrl-O `bind -x` function reads the
+whole line via `READLINE_LINE` and asks the binary which command's schema feeds
+the cursor — it does **not** split the line itself. Two protocol flags do the
+paren-aware parsing in Go (`cmd/ssql/cursor_context.go`, unit-tested in
+`cursor_context_test.go`):
+
+- `ssql -complete-source "<line-up-to-cursor>"` → the shell command whose
+  `SSQL_MODE=schema` output should drive completion at the cursor.
+- `ssql -cursor-stage "<line-up-to-cursor>"` → the current pipeline stage,
+  paren-aware (used by the Alt-h help binding).
+
+Why a Go helper and not bash: the old bindings split on the last `|` with
+`${line%|*}` / `${line##*|}`, which is **not** paren-aware — a `|` *inside* a
+process substitution `<(ssql … | ssql …)` was mistaken for a top-level pipe and
+produced a malformed upstream. `-complete-source` handles, in order:
+
+1. **Cursor inside a `<(…)`** → that procsub's own internal upstream
+   (`<(ssql from k.csv | ssql group-by ▮)` completes from `ssql from k.csv`).
+2. **A join's right-side field** — the 2nd arg of `-on` (`-on <left> <RIGHT>`)
+   or the 1st arg of `-as` (`-as <RIGHT> <new>`) — completes from the join's
+   `<(…)>` source, not the upstream pipeline (`join <(ssql from k.csv) -on
+   a_kind ▮` completes `kind`/`kind_name` from `k.csv`). Clause separators
+   (`+`/`-`) reset the per-clause slot tracking.
+3. **Otherwise** → the upstream pipeline feeding the current stage.
+
+Real-pty coverage: `TestFieldProcsubPTY` (Ctrl-O right-field from a procsub,
+emacs + vi). Parsing is exhaustively unit-tested in `cursor_context_test.go`.
 
 ## Known Limitations
 
-- **Positional flags not in GlobalFlags during completion:** The autocli completion parser doesn't always populate positional flag values into `ctx.GlobalFlags`. Workaround: scan `ctx.Args` directly.
-- **SSH field discovery requires tab on PATH:** The field_cache is only emitted when the PATH completer fires. If the user types the full path without tabbing, downstream commands won't have field names.
+- **Positional flags not in GlobalFlags during completion:** The autocli completion parser doesn't always populate positional flag values into `ctx.GlobalFlags`. Workaround: scan `ctx.Args` directly (e.g. `completeCatalogFilterValue`).
+- **Remote (`from ssh`) field names need Ctrl-O:** there is no remote field-name cache (removed in v4.50.0). Field names downstream of an SSH source come from Ctrl-O, which runs the pipeline under `SSQL_MODE=schema` — including the remote read — to get the live schema.
 - **Connection warmup requires tab on HOST:** The background SSH connection starts when HOST is tab-completed. If typed manually, no warmup occurs (PATH completion still works, just slower on first use).
+- **Right-field completion is join-specific:** `-complete-source` recognizes the right-side slots of `join`'s `-on`/`-as`. Other commands that take a `<(…)>` source would need the same slot rule added.

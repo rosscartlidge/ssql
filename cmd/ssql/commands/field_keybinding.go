@@ -79,15 +79,16 @@ _ssql_complete_field() {
         line="${READLINE_LINE:0:$READLINE_POINT}"
         partial=""
     fi
-    # Need an upstream pipe to derive a schema from.
-    [[ "$line" == *"|"* ]] || return
-    # Upstream = everything before the last pipe, right-trimmed.
-    local upstream="${line%|*}"
-    upstream="${upstream%"${upstream##*[![:space:]]}"}"
-    [[ -n "$upstream" ]] || return
+    # Ask ssql which command's schema feeds this cursor position. This is
+    # paren-aware: it handles a pipe INSIDE a process substitution, the cursor
+    # being inside a <(…), and a join's right-side field (which comes from the
+    # join's <(…) source, not the upstream pipeline). See cursor_context.go.
+    local src
+    src=$(command ssql -complete-source "$line" 2>/dev/null)
+    [[ -n "$src" ]] || return
 
     local fields
-    fields=$( (export SSQL_MODE=schema; eval "$upstream") 2>/dev/null \
+    fields=$( (export SSQL_MODE=schema; eval "$src") 2>/dev/null \
               | command ssql generate schema 2>/dev/null )
     [[ -n "$fields" ]] || return
 

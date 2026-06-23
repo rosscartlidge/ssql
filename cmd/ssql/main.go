@@ -118,6 +118,19 @@ func buildRootCommand() *cf.Command {
 }
 
 func main() {
+	// Paren-aware cursor-context helpers for the Ctrl-O / Alt-h keybindings.
+	// They take the line up to the cursor as the next arg and print a single
+	// value; WriteString (not fmt.Print) because the text may contain %.
+	// See cursor_context.go for why the bash split couldn't do this itself.
+	if len(os.Args) >= 3 && os.Args[1] == "-complete-source" {
+		os.Stdout.WriteString(completeSource(os.Args[2]))
+		return
+	}
+	if len(os.Args) >= 3 && os.Args[1] == "-cursor-stage" {
+		os.Stdout.WriteString(cursorTopLevelStage(os.Args[2]))
+		return
+	}
+
 	// Intercept -shell-helpers before autocli sees it. Same pattern
 	// as -completion-script (handled by autocli internally), but the
 	// helper-functions output isn't autocli's concern. Users source
