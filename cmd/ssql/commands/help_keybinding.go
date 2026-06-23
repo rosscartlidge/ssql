@@ -26,33 +26,11 @@ package commands
 // Display: inside tmux it pops a transient `display-popup` overlay (the
 // command line is untouched); otherwise it prints inline below the prompt
 // and readline redraws the line underneath.
-const HelpKeybindingScript = `# ssql help-at-cursor keybinding — install with:
+var HelpKeybindingScript = `# ssql help-at-cursor keybinding — install with:
 #   eval "$(ssql -help-keybinding)"
 # Then, with the cursor on an ssql command/flag, press Alt-h. Rebind below.
 
-# Show help text: a tmux popup when inside tmux, inline otherwise.
-_ssql_show_help() {
-    [[ -n "$1" ]] || return
-    if [[ -n "$TMUX" ]]; then
-        local tmpf
-        tmpf=$(mktemp) || { printf '\n%s\n' "$1"; return; }
-        printf '%s\n' "$1" > "$tmpf"
-        # Clamp the popup to the client size — tmux errors "width/height too
-        # large" if the popup is bigger than the terminal (small windows).
-        local w=84 h=24 cw ch
-        cw=$(tmux display-message -p '#{client_width}' 2>/dev/null)
-        ch=$(tmux display-message -p '#{client_height}' 2>/dev/null)
-        [[ "$cw" =~ ^[0-9]+$ ]] && (( w > cw )) && w=$cw
-        [[ "$ch" =~ ^[0-9]+$ ]] && (( h > ch )) && h=$ch
-        # Redirect the temp file into the pager's stdin (rather than passing it
-        # as an argument) so less shows its bare ":" prompt — as it does for
-        # piped input — instead of the ugly /tmp/tmp.XXXX path.
-        tmux display-popup -w "$w" -h "$h" -E "\${PAGER:-less -R} < '$tmpf'; rm -f '$tmpf'"
-    else
-        printf '\n%s\n' "$1"
-    fi
-}
-
+` + ssqlPopupFunc + `
 _ssql_help_at() {
     # Text up to the cursor; the current pipeline stage is after the last pipe.
     local before="${READLINE_LINE:0:$READLINE_POINT}"
@@ -84,16 +62,10 @@ _ssql_help_at() {
 }
 
 # Alt-H: cheat-sheet of the whole ssql key-binding family, for rediscovery.
+# The list below is generated from the KeyBindings table (commands/
+# keybindings.go) — keep it the source of truth, do not hand-edit here.
 _ssql_help_keys() {
-    _ssql_show_help "ssql key bindings
-
-  Ctrl-O   complete a field name from the upstream pipeline schema
-  Ctrl-T   optimise the ssql pipeline on the line, in place
-  Alt-r    compile the pipeline as typed Go and run it
-  Alt-h    help for the flag / command under the cursor
-  Alt-H    show this list
-
-Run 'ssql' with no arguments to see how to enable each binding."
+    _ssql_show_help "` + KeyBindingsHelp() + `"
 }
 
 # Bind in every keymap — single keys, no keyseq-timeout dependency.
@@ -103,4 +75,35 @@ bind -m vi-command -x '"\eh": _ssql_help_at'
 bind -m emacs -x '"\eH": _ssql_help_keys'
 bind -m vi-insert -x '"\eH": _ssql_help_keys'
 bind -m vi-command -x '"\eH": _ssql_help_keys'
+`
+
+// ssqlPopupFunc is the shared bash `_ssql_show_help` function embedded by the
+// help (-help-keybinding) and code-view (-code-keybinding) bindings. It shows
+// text in a tmux `display-popup` (clamped to the client size so it never
+// errors "width/height too large"; less reads via stdin redirect so the prompt
+// is a bare ":") when inside tmux, and inline below the prompt otherwise. Both
+// emitters embed it so each `eval` is self-contained; sourcing both just
+// redefines it identically.
+const ssqlPopupFunc = `# Show text in a tmux popup when inside tmux, inline otherwise.
+_ssql_show_help() {
+    [[ -n "$1" ]] || return
+    if [[ -n "$TMUX" ]]; then
+        local tmpf
+        tmpf=$(mktemp) || { printf '\n%s\n' "$1"; return; }
+        printf '%s\n' "$1" > "$tmpf"
+        # Clamp the popup to the client size — tmux errors "width/height too
+        # large" if the popup is bigger than the terminal (small windows).
+        local w=84 h=24 cw ch
+        cw=$(tmux display-message -p '#{client_width}' 2>/dev/null)
+        ch=$(tmux display-message -p '#{client_height}' 2>/dev/null)
+        [[ "$cw" =~ ^[0-9]+$ ]] && (( w > cw )) && w=$cw
+        [[ "$ch" =~ ^[0-9]+$ ]] && (( h > ch )) && h=$ch
+        # Redirect the temp file into the pager's stdin (rather than passing it
+        # as an argument) so less shows its bare ":" prompt — as it does for
+        # piped input — instead of the ugly /tmp/tmp.XXXX path.
+        tmux display-popup -w "$w" -h "$h" -E "\${PAGER:-less -R} < '$tmpf'; rm -f '$tmpf'"
+    else
+        printf '\n%s\n' "$1"
+    fi
+}
 `

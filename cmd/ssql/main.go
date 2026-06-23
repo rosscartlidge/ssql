@@ -110,6 +110,7 @@ func buildRootCommand() *cf.Command {
 		fmt.Printf("  eval \"$(%s -field-keybinding)\"     # Ctrl-O: pipeline-aware field completion\n", binaryName)
 		fmt.Printf("  eval \"$(%s -optimise-keybinding)\"  # Ctrl-T: optimise the pipeline in place\n", binaryName)
 		fmt.Printf("  eval \"$(%s -help-keybinding)\"      # Alt-h: help under cursor · Alt-H: list key bindings\n", binaryName)
+		fmt.Printf("  eval \"$(%s -code-keybinding)\"      # Alt-g: show the typed Go the pipeline generates\n", binaryName)
 		fmt.Printf("  eval \"$(%s -run-keybinding)\"       # Alt-r: compile the pipeline as typed Go and run it\n", binaryName)
 		fmt.Printf("  eval \"$(%s -shell-helpers)\"        # ssqlgen: turn a pipeline into Go/SQL\n", binaryName)
 		return nil
@@ -149,6 +150,11 @@ func main() {
 		// Convert-to-typed-and-run keybinding (bind -x).
 		if a == "-run-keybinding" || a == "--run-keybinding" {
 			os.Stdout.WriteString(commands.RunKeybindingScript)
+			return
+		}
+		// Show-generated-code keybinding (bind -x).
+		if a == "-code-keybinding" || a == "--code-keybinding" {
+			os.Stdout.WriteString(commands.CodeKeybindingScript)
 			return
 		}
 	}
