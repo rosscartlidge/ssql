@@ -213,7 +213,8 @@ See `claude/cli-architecture.md` for full autocli patterns, subcommand registrat
   ```
 - **Fail loudly on invalid input** — unknown field names, unknown operators, and invalid flag values MUST terminate the command with a clear error message. NEVER silently produce empty or wrong results. Validate field names against the first record (list available fields in the error). Validate operators and constrained values at parse time. This applies in both normal execution and `-generate` code generation mode.
 - **`FieldsFromFlag("FILE")` for field name completion** — NEVER use `NoCompleter` when field names can be derived from a data file. This applies to `-if`, `-sum`, `-avg`, `-min`, `-max`, `-field`, `-group`, etc.
-- **`FieldValuesFrom("FILE", "field")` for field value completion** — complete with actual data values, not hints
+- **Field NAMES are NOT cached across pipe boundaries** (the `AUTOCLI_FIELDS` env cache was removed in autocli ≥ v4.10.0 — it went stale on rename/group-by/join and completed the wrong names). Cross-pipe field-name Tab now returns an honest `<FIELD>` hint; live pipeline-aware names come from **Ctrl-O** (`ssql -field-keybinding`, which runs `SSQL_MODE=schema | generate schema`). Only the source file PATH is still cached (`AUTOCLI_CACHE_FILE`) — for VALUE completion. See `claude/completion-system.md`.
+- **`FieldValuesFrom("FILE", "field")` for field value completion** — complete with actual data values, not hints (still works cross-pipe via `AUTOCLI_CACHE_FILE`)
 - **Every command MUST have 2-3 `.Example()` calls**
 - **Use `.Accumulate()` for repeated flags** (e.g., `-if` appearing multiple times)
 - **NEVER use in-argument delimiters or comma-separated values in a single flag** — use `.Accumulate()` for multiple values instead. BAD: `-columns "a,b,c"` or `-rename "old:new"`. GOOD: `-columns a -columns b -columns c` or `-as old new`. This applies to ALL flags that accept multiple values.

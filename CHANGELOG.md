@@ -5,6 +5,35 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.50.0] - 2026-06-23
+
+### Changed (completion behavior)
+- **Honest field-name Tab completion.** The cross-pipe field-NAME cache (the
+  `AUTOCLI_FIELDS` env mechanism) is removed — it snapshotted a source header
+  and went stale on `rename`/`group-by`/`join`, confidently completing the
+  WRONG names. Field names across a pipe now come from the **live** schema via
+  **Ctrl-O** (`ssql -field-keybinding`, which runs `SSQL_MODE=schema | generate
+  schema`). At a field position Tab can't resolve it inserts a self-documenting
+  **`Use-Ctrl-O`** placeholder; pressing **Ctrl-O** deletes it and completes
+  for real. Requires autocli ≥ v4.10.0.
+  - **Field VALUE completion is unchanged** — `-if dept eq <TAB>` still samples
+    real values from the source file (via `AUTOCLI_CACHE_FILE`, a separate
+    cache that was never stale).
+  - Removed the now-pointless SSH header round-trip and catalog metadata-column
+    directive (both only fed the deleted name cache).
+
+### New Features
+- **`Alt-g` (`ssql -code-keybinding`)** — show the typed Go the pipeline on the
+  line generates, in a popup/inline, without running it. The inspection
+  sibling of Alt-r; reads no data, no compile. Listed in the Alt-H cheat-sheet
+  and bare-`ssql`.
+
+### Internal
+- Single-source-of-truth `KeyBindings` table (`commands/keybindings.go`) now
+  generates the Alt-H cheat-sheet; `TestKeyBindingsInSync` scans every emitter
+  script and fails if a bound key drifts from the table. Shared popup-display
+  fragment between the help and code bindings.
+
 ## [v4.49.1] - 2026-06-23
 
 ### New Features

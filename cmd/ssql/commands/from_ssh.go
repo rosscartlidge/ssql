@@ -2,8 +2,6 @@ package commands
 
 import (
 	"bufio"
-	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,39 +15,34 @@ import (
 
 func registerFromSSH(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("ssh").
-		Description("Read from a remote file via SSH. Tab-complete the path to enable field completion in downstream commands.").
+		Description("Read from a remote file via SSH.").
 		Example("ssql from ssh server /data/logs.csv | ssql to table", "Read remote CSV").
 		Example("ssql from ssh server /data/logs.csv -- where -if status eq error", "Push filter to remote").
 		Example("ssql from ssh server /data/logs.csv -- where -if age gt 25 + group-by -field dept -count", "Push multi-step pipeline to remote").
-
 		Flag("HOST").
-			String().
-			CompleterFunc(completeSSHHost).
-			Global().
-			Help("SSH host (from ~/.ssh/config or user@host)").
-			Done().
-
+		String().
+		CompleterFunc(completeSSHHost).
+		Global().
+		Help("SSH host (from ~/.ssh/config or user@host)").
+		Done().
 		Flag("PATH").
-			String().
-			CompleterFunc(completeSSHPath).
-			Global().
-			Help("Remote file path").
-			Done().
-
+		String().
+		CompleterFunc(completeSSHPath).
+		Global().
+		Help("Remote file path").
+		Done().
 		Flag("-gpu").
-			Bool().
-			Global().
-			Default(false).
-			Help("Use ssql_gpu on the remote machine").
-			Done().
-
+		Bool().
+		Global().
+		Default(false).
+		Help("Use ssql_gpu on the remote machine").
+		Done().
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Default(false).
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Default(false).
+		Help("Generate Go code instead of executing").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			host, _ := ctx.GlobalFlags["HOST"].(string)
 			path, _ := ctx.GlobalFlags["PATH"].(string)
@@ -138,48 +131,19 @@ func parseSSHConfigHosts() []string {
 	return hosts
 }
 
-// completeSSHPath completes the PATH arg for `from ssh` and emits a field_cache
-// directive by SSH-fetching the first line of the remote file.
+// completeSSHPath completes the PATH arg for `from ssh`. We can't cheaply
+// enumerate remote files, so this just echoes the partial.
+//
+// It used to SSH-fetch the remote header (`head -1`) to seed a downstream
+// field-NAME cache. That cross-pipe name cache was removed (it went stale the
+// moment the pipeline renamed/aggregated/joined and then completed the wrong
+// names) — so the remote round-trip is gone too. Field names downstream now
+// come from the pipeline-aware path, e.g. ssql's Ctrl-O binding.
 func completeSSHPath(ctx cf.CompletionContext) ([]string, error) {
-	host, _ := ctx.GlobalFlags["HOST"].(string)
-	if host == "" || ctx.Partial == "" {
+	if ctx.Partial == "" {
 		return []string{"<remote-path>"}, nil
 	}
-
-	// Try to fetch the CSV header from the remote file
-	cmd := exec.Command("ssh", "-o", "ConnectTimeout=2", "-o", "BatchMode=yes", host,
-		"/usr/bin/head -1 "+ssql.ShellQuote(ctx.Partial))
-	out, err := cmd.Output()
-	if err != nil {
-		// SSH failed (host down, file not found, etc.) — just return the partial
-		return []string{ctx.Partial}, nil
-	}
-
-	header := strings.TrimSpace(string(out))
-	if header == "" {
-		return []string{ctx.Partial}, nil
-	}
-
-	// Parse as CSV header
-	reader := csv.NewReader(strings.NewReader(header))
-	fields, err := reader.Read()
-	if err != nil || len(fields) == 0 {
-		return []string{ctx.Partial}, nil
-	}
-	for i := range fields {
-		fields[i] = strings.TrimSpace(fields[i])
-	}
-
-	// Emit field_cache directive for downstream commands
-	directive := cf.CompletionDirective{
-		Type:   "field_cache",
-		Fields: fields,
-	}
-	directiveJSON, err := json.Marshal(directive)
-	if err != nil {
-		return []string{ctx.Partial}, nil
-	}
-	return []string{string(directiveJSON), ctx.Partial}, nil
+	return []string{ctx.Partial}, nil
 }
 
 // executeFromSSH runs a simple remote read via SSH.
@@ -316,8 +280,8 @@ func generateFromSSHCode(host, path string, gpu bool) error {
 // is at codegen time (record/typed/parallel) is propagated to the
 // remote via `ssql generate go -script -mode $mode -run`. So:
 //
-//   (SSQLGO=record …) | ssql generate go -run   →  remote runs record-mode Go
-//   (SSQLGO=typed  …) | ssql generate go -run   →  remote runs typed-parallel Go
+//	(SSQLGO=record …) | ssql generate go -run   →  remote runs record-mode Go
+//	(SSQLGO=typed  …) | ssql generate go -run   →  remote runs typed-parallel Go
 //
 // Local-side, the fragment produces an `iter.Seq[ssql.Record]` from
 // the remote's JSONL output (parsed via ssql.ReadJSONFromReader,

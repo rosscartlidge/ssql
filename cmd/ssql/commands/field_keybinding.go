@@ -1,5 +1,22 @@
 package commands
 
+import cf "github.com/rosscartlidge/autocli/v4"
+
+// FieldHintToken is what Tab inserts at a field position it can't resolve
+// itself (the cross-pipe case): a self-documenting, shell-metacharacter-free
+// placeholder telling the user to press Ctrl-O. The Ctrl-O binding
+// (_ssql_complete_field) recognises this exact token, deletes it, and
+// completes from the live upstream schema. Single source of truth — wired into
+// autocli's FieldCompleter via init() and matched literally in
+// FieldKeybindingScript (TestFieldHintTokenConsistent enforces the match).
+const FieldHintToken = "Use-Ctrl-O"
+
+func init() {
+	// Make autocli's field-name hint the actionable Ctrl-O placeholder rather
+	// than the bare "<FIELD>". Runs before any completion executes.
+	cf.FieldNameHint = FieldHintToken
+}
+
 // FieldKeybindingScript is the bash `bind -x` keybinding emitted by
 // `ssql -field-keybinding`. Users install it once:
 //
@@ -44,10 +61,26 @@ _ssql_lcp() {
 _ssql_complete_field() {
     # READLINE_LINE is the whole line; take everything up to the cursor.
     local line="${READLINE_LINE:0:$READLINE_POINT}"
-    # Need an upstream pipe to derive a schema from.
-    [[ "$line" == *"|"* ]] || return
     # The partial word under the cursor (after the last space or pipe).
     local partial="${line##*[ |]}"
+    # When Tab can't resolve field names itself (the cross-pipe case) it
+    # inserts the "Use-Ctrl-O" placeholder; bash appends a space after that
+    # unique completion. Detect the placeholder right before the cursor in
+    # either form, delete it, and complete for real from the upstream schema.
+    local _ph="Use-Ctrl-O" _cut=0
+    if [[ "$partial" == "$_ph" ]]; then
+        _cut=${#_ph}                       # cursor sits right after it
+    elif [[ -z "$partial" && "$line" == *"$_ph " ]]; then
+        _cut=$(( ${#_ph} + 1 ))            # …followed by bash's trailing space
+    fi
+    if (( _cut > 0 )); then
+        READLINE_LINE="${READLINE_LINE:0:$((READLINE_POINT-_cut))}${READLINE_LINE:$READLINE_POINT}"
+        READLINE_POINT=$(( READLINE_POINT - _cut ))
+        line="${READLINE_LINE:0:$READLINE_POINT}"
+        partial=""
+    fi
+    # Need an upstream pipe to derive a schema from.
+    [[ "$line" == *"|"* ]] || return
     # Upstream = everything before the last pipe, right-trimmed.
     local upstream="${line%|*}"
     upstream="${upstream%"${upstream##*[![:space:]]}"}"

@@ -2,7 +2,6 @@ package commands
 
 import (
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -21,80 +20,70 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 		Example("ssql from catalog shards.csv | ssql to table", "Read all shards in catalog").
 		Example("ssql from catalog shards.csv -if date ge 2025-03-01 | ssql to table", "Partition pruning").
 		Example("ssql from catalog shards.csv -- where -if status eq error", "Push filter to each shard").
-
 		Flag("FILE").
-			String().
-			CompleterFunc(completeCatalogFile).
-			Global().
-			Help("Catalog CSV file (must have host and path columns)").
-			Done().
-
+		String().
+		CompleterFunc(completeCatalogFile).
+		Global().
+		Help("Catalog CSV file (must have host and path columns)").
+		Done().
 		Flag("-if", "-i").
-			Arg("field").
-				FieldsFromFlag("FILE").
-				Done().
-			Arg("operator").
-				Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le"}}).
-				Done().
-			Arg("value").
-				Completer(cf.CompletionFunc(completeCatalogFilterValue)).
-				Done().
-			Accumulate().
-			Global().
-			Help("Partition pruning: skip shards that don't match (uses catalog columns)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("FILE").
+		Done().
+		Arg("operator").
+		Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le"}}).
+		Done().
+		Arg("value").
+		Completer(cf.CompletionFunc(completeCatalogFilterValue)).
+		Done().
+		Accumulate().
+		Global().
+		Help("Partition pruning: skip shards that don't match (uses catalog columns)").
+		Done().
 		Flag("-gpu").
-			Bool().
-			Global().
-			Default(false).
-			Help("Use ssql_gpu on remote machines").
-			Done().
-
+		Bool().
+		Global().
+		Default(false).
+		Help("Use ssql_gpu on remote machines").
+		Done().
 		Flag("-shard-field").
-			String().
-			Global().
-			Default("").
-			Help("Add a field to each record showing its shard origin (host:path)").
-			Done().
-
+		String().
+		Global().
+		Default("").
+		Help("Add a field to each record showing its shard origin (host:path)").
+		Done().
 		Flag("-catalog-used").
-			String().
-			Global().
-			Default("").
-			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
-			Help("Write expanded catalog (after glob expansion + pruning) to CSV file").
-			Done().
-
+		String().
+		Global().
+		Default("").
+		Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+		Help("Write expanded catalog (after glob expansion + pruning) to CSV file").
+		Done().
 		Flag("-shard-order").
-			String().
-			Global().
-			Default("completion").
-			Completer(&cf.StaticCompleter{Options: []string{"completion", "catalog"}}).
-			Help("Output ordering: 'completion' (default, low memory) or 'catalog' (deterministic, buffers per shard)").
-			Done().
-
+		String().
+		Global().
+		Default("completion").
+		Completer(&cf.StaticCompleter{Options: []string{"completion", "catalog"}}).
+		Help("Output ordering: 'completion' (default, low memory) or 'catalog' (deterministic, buffers per shard)").
+		Done().
 		Flag("-shard-concurrency").
-			Int().
-			Global().
-			Default(int64(0)).
-			Help("Cap concurrent ssh-pushdown shards (default 0 = uncapped)").
-			Done().
-
+		Int().
+		Global().
+		Default(int64(0)).
+		Help("Cap concurrent ssh-pushdown shards (default 0 = uncapped)").
+		Done().
 		Flag("-keep-going").
-			Bool().
-			Global().
-			Default(false).
-			Help("Run all shards to completion on error (default: fail-fast)").
-			Done().
-
+		Bool().
+		Global().
+		Default(false).
+		Help("Run all shards to completion on error (default: fail-fast)").
+		Done().
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Default(false).
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Default(false).
+		Help("Generate Go code instead of executing").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			catalogFile, _ := ctx.GlobalFlags["FILE"].(string)
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
@@ -130,52 +119,16 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 		Done()
 }
 
-// completeCatalogFile completes catalog CSV files and emits a field_cache directive
-// with the catalog's metadata columns (for -if pruning completion).
-// The FileCompleter would cache ALL headers (including host, path, format, fields),
-// but -if only needs the metadata columns used for pruning.
+// completeCatalogFile completes catalog CSV files. FileCompleter caches the
+// source file PATH (for downstream value sampling); we no longer emit a
+// field-NAME cache. Same-command `-if <field>` still completes from the
+// catalog file directly via FieldsFromFlag("FILE"); downstream field names
+// come from the pipeline-aware path (ssql's Ctrl-O). Previously this replaced
+// FileCompleter's directive with the catalog's metadata-column names — a
+// cross-pipe name cache that went stale on transforms, now removed.
 func completeCatalogFile(ctx cf.CompletionContext) ([]string, error) {
-	// Delegate to FileCompleter for the actual file completion
 	fc := &cf.FileCompleter{Pattern: "*.csv"}
-	results, err := fc.Complete(ctx)
-	if err != nil || len(results) == 0 {
-		return results, err
-	}
-
-	// If we got a single file match (not a directory), read catalog columns for -if completion
-	matches := results
-	// Skip any JSON directives from FileCompleter
-	for len(matches) > 0 && strings.HasPrefix(matches[0], "{") {
-		matches = matches[1:]
-	}
-	if len(matches) != 1 || strings.HasSuffix(matches[0], "/") {
-		return results, nil
-	}
-
-	// Read catalog headers, filtering out structural columns
-	catalogFields := readCatalogColumns(matches[0])
-	if len(catalogFields) == 0 {
-		return results, nil
-	}
-
-	// Replace FileCompleter's field_cache with catalog metadata columns
-	directive := cf.CompletionDirective{
-		Type:   "field_cache",
-		Fields: catalogFields,
-	}
-	directiveJSON, err := json.Marshal(directive)
-	if err != nil {
-		return results, nil
-	}
-
-	// Strip any existing JSON directives from FileCompleter, prepend ours
-	var clean []string
-	for _, r := range results {
-		if !strings.HasPrefix(r, "{") {
-			clean = append(clean, r)
-		}
-	}
-	return append([]string{string(directiveJSON)}, clean...), nil
+	return fc.Complete(ctx)
 }
 
 // completeCatalogFilterValue completes -if value args from catalog CSV data.
@@ -271,42 +224,6 @@ func completeCatalogFilterValue(ctx cf.CompletionContext) ([]string, error) {
 		return []string{"<value>"}, nil
 	}
 	return values, nil
-}
-
-// readCatalogColumns reads a catalog CSV header and returns the prunable field names.
-// Range columns (X_from/X_to) are collapsed to their logical field name (X).
-// The "fields" column is excluded (it's a schema hint, not a pruning target).
-func readCatalogColumns(catalogFile string) []string {
-	f, err := os.Open(catalogFile)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
-	headers, err := csv.NewReader(f).Read()
-	if err != nil {
-		return nil
-	}
-
-	seen := map[string]bool{}
-	var cols []string
-	for _, h := range headers {
-		h = strings.TrimSpace(strings.ToLower(h))
-		if h == "fields" {
-			continue
-		}
-		// Collapse range columns: date_from/date_to → date
-		if strings.HasSuffix(h, "_from") {
-			h = strings.TrimSuffix(h, "_from")
-		} else if strings.HasSuffix(h, "_to") {
-			h = strings.TrimSuffix(h, "_to")
-		}
-		if !seen[h] {
-			seen[h] = true
-			cols = append(cols, h)
-		}
-	}
-	return cols
 }
 
 // parseCatalogFilters extracts catalog filters from autocli accumulated flag value.

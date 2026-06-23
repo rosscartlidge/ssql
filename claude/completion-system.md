@@ -2,21 +2,37 @@
 
 ssql uses autocli's completion system to provide context-aware tab completion across pipelines, including remote data sources.
 
-## Core Mechanism: Field Cache
+## Core Mechanism: source-file cache (NOT field names)
 
-The field cache bridges completion across pipe boundaries. When a `from` command completes a filename, it extracts field names and passes them to downstream commands via environment variable.
+> **History (changed 2026-06-23, autocli ≥ v4.10.0):** Tab completion used to
+> cache field **names** across pipe boundaries via `AUTOCLI_FIELDS` and emit
+> them as the wrong-looking completions described below. That cache was a
+> snapshot of a source header and went **stale** the moment the pipeline
+> renamed fields, aggregated (`group-by`), or joined — so it confidently
+> completed the *wrong* names. It was removed. Field **names** across a pipe
+> now come from the live schema (`ssql -field-keybinding`, **Ctrl-O**, which
+> runs `SSQL_MODE=schema | generate schema`); Tab returns an honest `<FIELD>`
+> hint when it can't read the names from a file in the *same* command.
 
-**Flow:**
-1. `from data.csv<TAB>` → `FileCompleter` reads CSV header, emits `field_cache` JSON directive
-2. Bash completion script parses directive, sets `AUTOCLI_FIELDS=name,age,salary`
-3. `| ssql where -if <TAB>` → `FieldCompleter` reads `AUTOCLI_FIELDS`, shows field names
+What survives is a **source-file path** cache, used only for **value**
+completion (it never went stale the same way — it samples real values from the
+source, and degrades to a `<VALUE>` hint when the field isn't in the source):
+
+**Flow (value completion):**
+1. `from data.csv<TAB>` → `FileCompleter` emits a `field_cache` directive
+   carrying only the source file's absolute **path** (no field names).
+2. Bash completion script parses it, sets `AUTOCLI_CACHE_FILE=/abs/data.csv`.
+3. `| ssql where -if dept eq <TAB>` → `FieldValueCompleter` samples real `dept`
+   values from `AUTOCLI_CACHE_FILE`.
 
 **The directive format:**
 ```json
-{"type":"field_cache","fields":["name","age","salary"]}
+{"type":"field_cache","filepath":"/abs/data.csv"}
 ```
 
-Emitted as the first completion result. The bash completion script (autocli) strips it from visible completions and exports the env var.
+Emitted as the first completion result. The bash completion script (autocli)
+strips it from visible completions and exports `AUTOCLI_CACHE_FILE`. (Field
+names are deliberately NOT cached — see `FieldCompleter.Complete` in autocli.)
 
 ## Completer Types
 
