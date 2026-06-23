@@ -155,6 +155,48 @@ add the two pieces of structure the system has been faking (variable binding
 via `uniqueVarName`, operator structure via `Command` re-parsing), and stop
 short of an AST that the distributed, multi-backend shape doesn't want.
 
+## 7. The bigger payoff: other target languages
+
+A language-neutral `Op` (§4a) is what makes "one IR, N backends" real — and
+this is **not hypothetical**: ssql already lowers the same fragment stream to
+**Go**, **DuckDB SQL**, and **ssql** (the optimiser). SQL is a *more* alien
+target than Rust would be (declarative vs. imperative — a bigger leap than
+Go→Rust, both imperative), so the architecture has already crossed the harder
+divide. A new target is a new *lowering pass*, not a re-architecture.
+
+The honest caveat: **the IR makes the translation tractable; it does not give
+you the runtime.** ssql's generated Go isn't standalone — it calls into the
+`typed`/`ssql` Go library (`typed.ReadCSVParallel`, `typed.HashJoinParallel`,
+`typed.GroupBy`, …); the Go backend lowers `Op{Kind:"group"}` to a *call into
+that library*. So a new language target needs a lowering **plus** a runtime to
+call into. SQL is the instructive exception: it needs no ssql runtime because
+**DuckDB *is* the runtime** — lower the IR to SQL and ride someone else's
+engine.
+
+So for an imperative target like **Rust**, the smart move is to lower to an
+existing engine rather than hand-port the streaming primitives:
+
+- **DataFusion** (Apache Arrow's Rust query engine) is the elegant fit — it has
+  its *own* relational logical-plan IR, so ssql's `Op` lowers to a DataFusion
+  `LogicalPlan` and inherits its optimizer + parallel execution. Your IR →
+  their IR → their runtime.
+- **Polars** (lower to its lazy/expression API) — schema-dynamic, so it maps
+  onto ssql's *record* model rather than typed structs.
+
+Which exposes a real portability gradient: **record-mode generation ports more
+easily than typed-mode.** Typed mode emits a Go struct per schema
+(`ShuffledRowSubset`, …); a 1:1 Rust port hits ownership/traits and is fiddly.
+Record mode (`map[string]any` over `iter.Seq`) maps cleanly onto
+Polars/DataFusion's dynamic schema. A first Rust/Polars backend would most
+naturally consume the **record** IR.
+
+The framing this points at: **ssql as a friendly frontend over a relational
+IR**, with the target a choice — write the pipeline once, emit it as Go, as
+DuckDB SQL, as a Rust DataFusion plan, as Polars. The gating question for any
+new target is never the IR; it's "what runtime do I lower to" — and for Rust
+the good answer is *DataFusion*, not a from-scratch port. None of this is on
+the roadmap; it's the design headroom §4a buys.
+
 ## Prior art / related
 - `doc/research/typed-auto-parallel-proposal.md` — the planner/Capabilities
   design this builds on.
