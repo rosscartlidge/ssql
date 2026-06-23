@@ -147,7 +147,8 @@ func generateIncludeCode(fields []string) error {
 		// include is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
 		// emitTypedProjection sets Capabilities.
-		return emitTypedProjection("include", "Subset", inputVar, prevSchema, fields, false, nil)
+		_, err := emitTypedProjection("include", "Subset", inputVar, prevSchema, fields, false, nil, fragments)
+		return err
 	}
 
 	// Generate field list

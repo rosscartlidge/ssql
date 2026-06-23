@@ -146,7 +146,8 @@ func generateRenameCode(renames []struct{ oldField, newField string }) error {
 		for _, r := range renames {
 			renameMap[r.oldField] = r.newField
 		}
-		return emitTypedProjection("rename", "Renamed", inputVar, prevSchema, nil, false, renameMap)
+		_, err := emitTypedProjection("rename", "Renamed", inputVar, prevSchema, nil, false, renameMap, fragments)
+		return err
 	}
 
 	// Generate rename statements

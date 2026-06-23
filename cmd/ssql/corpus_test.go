@@ -248,6 +248,17 @@ func TestPipelineCorpus(t *testing.T) {
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} rename -as name full_name -as salary pay | {{.bin}} to csv`,
 			Contains: []string{"full_name", "pay", "Alice"},
 		},
+		{
+			// Regression: include then no-agg group-by both project to a
+			// derived struct. In typed mode the two projections used to be
+			// named "included" → "no new variables on left side of :=" /
+			// type mismatch (uniqueVarName now disambiguates). group-by with
+			// no aggregations == project-to-keys + distinct.
+			Name:     "include_then_groupby",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} include name dept | {{.bin}} group-by dept | {{.bin}} to csv`,
+			Contains: []string{"Engineering", "Sales", "Marketing"},
+			Excludes: []string{"name", "Alice"}, // group-by dept drops name
+		},
 
 		// --- Ordering / dedup ---------------------------------
 		{

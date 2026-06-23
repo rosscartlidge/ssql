@@ -5,6 +5,20 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.50.1] - 2026-06-23
+
+### Bug Fixes
+- **Typed codegen: projection variable-name collision.** A pipeline where two
+  stages project to a derived struct — e.g. `include … | group-by FIELD` (a
+  no-aggregation group-by projects to its keys, like an include), or two
+  `include`s — generated two `included :=` statements, so `go build` failed
+  with "no new variables on left side of :=" and a type mismatch. This broke
+  the **Alt-r** run-typed binding and `generate go`/`-run` in typed mode for
+  such pipelines (record mode and interpreted execution were unaffected).
+  Projection output names are now made unique against the upstream fragment
+  stream (`uniqueVarName`), and group-by threads the chosen name into its
+  `Distinct`. Regression: corpus case `include_then_groupby` (all three modes).
+
 ## [v4.50.0] - 2026-06-23
 
 ### Changed (completion behavior)

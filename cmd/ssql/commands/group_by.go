@@ -484,8 +484,9 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			// the projected stream. typed.Distinct is iter.Seq-only,
 			// so the planner inserts a Stream.Serial() boundary
 			// upstream when needed.
-			if err := emitTypedProjection("include", "Subset", inputVar, prevSchema, groupByFields, false, nil); err != nil {
-				return err
+			projVar, perr := emitTypedProjection("include", "Subset", inputVar, prevSchema, groupByFields, false, nil, fragments)
+			if perr != nil {
+				return perr
 			}
 			// emitTypedProjection wrote a fragment with Var "included"
 			// and OutputTypedSchema = the subset schema. Append the
@@ -494,14 +495,15 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			if derr != nil {
 				return lib.WriteErrorAndExit(getCommandString(), derr)
 			}
-			distinctCode := fmt.Sprintf("grouped := typed.Distinct(func(r %s) %s { return r })(included)",
-				derived.TypeName, derived.TypeName)
+			groupedVar := uniqueVarName("grouped", fragments)
+			distinctCode := fmt.Sprintf("%s := typed.Distinct(func(r %s) %s { return r })(%s)",
+				groupedVar, derived.TypeName, derived.TypeName, projVar)
 			// Empty Command on the second fragment: both fragments
 			// belong to the same source command (`ssql group-by FIELD`),
 			// and the assembler builds the pipeline-comment list from
 			// each fragment's Command — recording the same command
 			// twice would duplicate it in the output header.
-			distinctFrag := lib.NewStmtFragment("grouped", "included", distinctCode,
+			distinctFrag := lib.NewStmtFragment(groupedVar, projVar, distinctCode,
 				[]string{"github.com/rosscartlidge/ssql/v4/typed"}, "")
 			distinctFrag.InputTypedSchema = derived
 			distinctFrag.OutputTypedSchema = derived

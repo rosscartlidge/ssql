@@ -132,7 +132,8 @@ func generateExcludeCode(fields []string) error {
 		// exclude is SerialOnly (typed.Select with derived struct) —
 		// planner inserts Stream.Serial() upstream automatically when
 		// input is a Stream. emitTypedProjection sets Capabilities.
-		return emitTypedProjection("exclude", "Subset", inputVar, prevSchema, fields, true, nil)
+		_, err := emitTypedProjection("exclude", "Subset", inputVar, prevSchema, fields, true, nil, fragments)
+		return err
 	}
 
 	// Generate delete statements
