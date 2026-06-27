@@ -5,6 +5,23 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.51.1] - 2026-06-27
+
+### New Features / Improvements (shell integration)
+- **`ssql -shell-init`** — one line enables everything (completion + all
+  keybindings + `ssqlgen`): `eval "$(ssql -shell-init)"` in `~/.bashrc`. Driven
+  by a single `ShellIntegrations` source-of-truth table, so future integrations
+  are picked up automatically; a drift test fails if a new emitter isn't added.
+  The bare-`ssql` hint now recommends `-shell-init` first, then lists the
+  individual flags.
+- **Keybindings surface errors in a subwindow.** When **Alt-g** (show generated
+  Go) or **Alt-r** (compile-and-run) can't generate, compile, or run, the error
+  now shows in the popup (or inline outside tmux) instead of doing nothing /
+  scrolling past. Alt-r still streams successful output inline; only failures
+  pop up. A shared `_ssql_clean_err` strips the redundant per-stage re-reports
+  so a pipeline with two real errors shows both — not a wall of duplicates.
+  **Alt-h** likewise no longer flashes empty on failure.
+
 ## [v4.51.0] - 2026-06-24
 
 ### New Features / Fixes (interactive completion)

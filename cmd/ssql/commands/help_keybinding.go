@@ -57,8 +57,17 @@ _ssql_help_at() {
 
     # args = the stage words minus the program name.
     local -a args=("${words[@]:1}")
-    local help
-    help=$(command ssql -help-at "$pos" "${args[@]}" 2>/dev/null)
+    # Capture stderr+exit so a failure (e.g. an unrecognized command at the
+    # cursor) surfaces in the popup rather than flashing nothing.
+    local help rc
+    help=$(command ssql -help-at "$pos" "${args[@]}" 2>&1)
+    rc=$?
+    if (( rc != 0 )) || [[ -z "$help" ]]; then
+        _ssql_show_help "ssql: no help available here
+
+${help:-<no output>}"
+        return
+    fi
     _ssql_show_help "$help"
 }
 
@@ -105,6 +114,21 @@ _ssql_show_help() {
         tmux display-popup -w "$w" -h "$h" -E "\${PAGER:-less -R} < '$tmpf'; rm -f '$tmpf'"
     else
         printf '\n%s\n' "$1"
+    fi
+}
+
+# Strip the redundant per-stage re-reports a codegen error accumulates — each
+# downstream stage echoes the upstream failure — leaving the distinct real
+# messages (so a pipeline with two real errors shows both, not a wall of
+# duplicates). Falls back to the first line if everything was filtered.
+_ssql_clean_err() {
+    local cleaned
+    cleaned=$(grep -v -e 'reading code fragments: code generation failed' \
+                      -e 'assembling code fragments: no code fragments' <<< "$1")
+    if [[ -n "$cleaned" ]]; then
+        printf '%s' "$cleaned"
+    else
+        local first; IFS= read -r first <<< "$1"; printf '%s' "$first"
     fi
 }
 `

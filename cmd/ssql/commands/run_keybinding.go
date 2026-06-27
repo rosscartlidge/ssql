@@ -25,14 +25,26 @@ const RunKeybindingScript = `# ssql convert-to-typed-and-run keybinding — inst
 #   eval "$(ssql -run-keybinding)"
 # Then, with an ssql pipeline on the line, press Alt-r. Rebind below.
 
+` + ssqlPopupFunc + `
 _ssql_typed_run() {
     # Only act on lines that look like an ssql pipeline.
     [[ "$READLINE_LINE" == *ssql* ]] || return
     # Compiling takes a moment and reads data — say so before the pause.
     printf '\n[ssql: compiling typed pipeline and running…]\n'
-    # Generate typed Go from the line and run it (go build + exec). Output
-    # streams to the terminal; readline redraws the prompt+line afterwards.
-    (export SSQL_MODE=typed; eval "$READLINE_LINE") | command ssql generate go -run
+    # Generate typed Go from the line and run it (go build + exec). The
+    # program's stdout (the result) STREAMS to the terminal; its stderr (generate
+    # /compile/runtime errors) goes to a temp file. On failure, show the error in
+    # a popup instead of an inline error wall. readline redraws the line after.
+    local errf; errf=$(mktemp) || { (export SSQL_MODE=typed; eval "$READLINE_LINE") | command ssql generate go -run; return; }
+    (export SSQL_MODE=typed; eval "$READLINE_LINE") 2>"$errf" \
+        | command ssql generate go -run 2>>"$errf"
+    local rc=${PIPESTATUS[1]}
+    if (( rc != 0 )); then
+        _ssql_show_help "ssql: pipeline failed (could not generate, compile, or run)
+
+$(_ssql_clean_err "$(<"$errf")")"
+    fi
+    rm -f "$errf"
 }
 
 # Bind in every keymap — a single key, no keyseq-timeout dependency.

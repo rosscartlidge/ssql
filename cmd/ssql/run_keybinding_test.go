@@ -23,9 +23,15 @@ func TestRunKeybinding(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	csv := filepath.Join(dir, "r.csv")
+	if err := os.WriteFile(csv, []byte("a,b\n1,2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	run := func(line string) string {
 		script := fmt.Sprintf(`
 export PATH=%q:$PATH
+unset TMUX
 eval "$(ssql -run-keybinding)" 2>/dev/null
 READLINE_LINE=%q
 READLINE_POINT=${#READLINE_LINE}
@@ -42,6 +48,17 @@ true
 	// A non-ssql line is left alone — no compile notice.
 	if got := run("echo hello world"); strings.TrimSpace(got) != "" {
 		t.Errorf("non-ssql line produced output: %q", got)
+	}
+
+	// A pipeline that can't generate (a typed-mode-only limitation) fails fast
+	// at codegen — the error must surface (in the popup; inline here), not just
+	// scroll past. -set-expr is a Tier 3 generation error.
+	got := run("ssql from csv " + csv + " | ssql update -set-expr x '3*4' | ssql to table")
+	if !strings.Contains(got, "pipeline failed") {
+		t.Errorf("expected the failure header, got:\n%s", got)
+	}
+	if !strings.Contains(got, "set-expr") {
+		t.Errorf("expected the real generation error, got:\n%s", got)
 	}
 }
 

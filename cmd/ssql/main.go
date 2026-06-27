@@ -105,14 +105,23 @@ func buildRootCommand() *cf.Command {
 		fmt.Println("Use -help to see available subcommands")
 		fmt.Println()
 		binaryName := filepath.Base(os.Args[0])
-		fmt.Println("Shell integration — add any of these to your ~/.bashrc:")
-		fmt.Printf("  eval \"$(%s -completion-script)\"    # tab completion: commands, flags, fields\n", binaryName)
-		fmt.Printf("  eval \"$(%s -field-keybinding)\"     # Ctrl-O: pipeline-aware field completion\n", binaryName)
-		fmt.Printf("  eval \"$(%s -optimise-keybinding)\"  # Ctrl-T: optimise the pipeline in place\n", binaryName)
-		fmt.Printf("  eval \"$(%s -help-keybinding)\"      # Alt-h: help under cursor · Alt-H: list key bindings\n", binaryName)
-		fmt.Printf("  eval \"$(%s -code-keybinding)\"      # Alt-g: show the typed Go the pipeline generates\n", binaryName)
-		fmt.Printf("  eval \"$(%s -run-keybinding)\"       # Alt-r: compile the pipeline as typed Go and run it\n", binaryName)
-		fmt.Printf("  eval \"$(%s -shell-helpers)\"        # ssqlgen: turn a pipeline into Go/SQL\n", binaryName)
+		fmt.Println("Shell integration — add this one line to your ~/.bashrc:")
+		fmt.Printf("  eval \"$(%s -shell-init)\"     # enables everything below in one eval\n", binaryName)
+		fmt.Println()
+		fmt.Println("…or enable pieces individually:")
+		// Align the trailing comments. Driven by commands.ShellIntegrations so
+		// new integrations appear here automatically.
+		maxFlag := 0
+		for _, si := range commands.ShellIntegrations {
+			if len(si.Flag) > maxFlag {
+				maxFlag = len(si.Flag)
+			}
+		}
+		for _, si := range commands.ShellIntegrations {
+			line := fmt.Sprintf("  eval \"$(%s %s)\"", binaryName, si.Flag)
+			pad := maxFlag - len(si.Flag) + 2
+			fmt.Printf("%s%*s# %s\n", line, pad, "", si.Desc)
+		}
 		return nil
 	}).Build()
 }
@@ -131,44 +140,28 @@ func main() {
 		return
 	}
 
-	// Intercept -shell-helpers before autocli sees it. Same pattern
-	// as -completion-script (handled by autocli internally), but the
-	// helper-functions output isn't autocli's concern. Users source
-	// it with `eval "$(ssql -shell-helpers)"` in ~/.bashrc.
+	// Shell-integration scripts (eval'd in ~/.bashrc). All driven by the
+	// commands.ShellIntegrations table — the single source of truth — so a new
+	// integration is wired everywhere at once. -completion-script is handled by
+	// autocli, not here; the const-script ones (keybindings, -shell-helpers)
+	// are intercepted before autocli. WriteString (not fmt.Print) because the
+	// bash bodies contain literal %s that vet would flag as Printf directives.
 	for _, a := range os.Args[1:] {
-		if a == "-shell-helpers" || a == "--shell-helpers" {
-			fmt.Print(commands.ShellHelpersScript)
+		// -shell-init: emit EVERYTHING in one eval (completion + every script).
+		if a == "-shell-init" || a == "--shell-init" {
+			os.Stdout.WriteString(buildRootCommand().GenerateCompletionScript())
+			for _, si := range commands.ShellIntegrations {
+				if si.Script != "" {
+					os.Stdout.WriteString(si.Script)
+				}
+			}
 			return
 		}
-		// Field-completion keybinding (bind -x). Sourced like
-		// -shell-helpers: eval "$(ssql -field-keybinding)". WriteString
-		// (not fmt.Print) because the bash body contains literal %s that
-		// vet would otherwise flag as a stray Printf directive.
-		if a == "-field-keybinding" || a == "--field-keybinding" {
-			os.Stdout.WriteString(commands.FieldKeybindingScript)
-			return
-		}
-		// In-situ pipeline-optimise keybinding (bind -x).
-		if a == "-optimise-keybinding" || a == "--optimise-keybinding" {
-			os.Stdout.WriteString(commands.OptimiseKeybindingScript)
-			return
-		}
-		// Help-at-cursor keybinding (bind -x). Note: -help-at (the autocli
-		// protocol flag this binding calls) is NOT intercepted here — it
-		// flows through to autocli's ExecuteWith.
-		if a == "-help-keybinding" || a == "--help-keybinding" {
-			os.Stdout.WriteString(commands.HelpKeybindingScript)
-			return
-		}
-		// Convert-to-typed-and-run keybinding (bind -x).
-		if a == "-run-keybinding" || a == "--run-keybinding" {
-			os.Stdout.WriteString(commands.RunKeybindingScript)
-			return
-		}
-		// Show-generated-code keybinding (bind -x).
-		if a == "-code-keybinding" || a == "--code-keybinding" {
-			os.Stdout.WriteString(commands.CodeKeybindingScript)
-			return
+		for _, si := range commands.ShellIntegrations {
+			if si.Script != "" && (a == si.Flag || a == "-"+si.Flag) {
+				os.Stdout.WriteString(si.Script)
+				return
+			}
 		}
 	}
 	cmd := buildRootCommand()

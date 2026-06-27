@@ -58,6 +58,20 @@ true
 	if got := run("echo hello world"); strings.TrimSpace(got) != "" {
 		t.Errorf("non-ssql line produced output: %q", got)
 	}
+
+	// A pipeline that can't generate shows the error (not silence). A bad
+	// operator in typed mode fails generation; the real message must surface.
+	bad := "ssql from csv " + csv + " | ssql where -if age badop 5 | ssql to table"
+	got = run(bad)
+	if !strings.Contains(got, "cannot generate Go") {
+		t.Errorf("expected the generation-failure header, got:\n%s", got)
+	}
+	if !strings.Contains(got, "badop") {
+		t.Errorf("expected the real error (mentioning the bad operator), got:\n%s", got)
+	}
+	if strings.Contains(got, "package main") {
+		t.Errorf("failure case should not show generated code, got:\n%s", got)
+	}
 }
 
 // TestCodeKeybindingEmitted confirms `-code-keybinding` emits the function,
