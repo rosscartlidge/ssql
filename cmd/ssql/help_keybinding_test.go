@@ -55,6 +55,22 @@ true   # swallow the guard-path return status so Output() doesn't error
 		t.Errorf("help in a pipeline stage missing description:\n%s", got)
 	}
 
+	// On an EXPRESSION argument, the help appends the function reference —
+	// writing an expression is hard without knowing the functions.
+	exprLine := "ssql from csv x.csv | ssql update -set-expr total "
+	got = run(exprLine, len(exprLine))
+	if !strings.Contains(got, "EXPRESSION FUNCTIONS") {
+		t.Errorf("help on an expression arg should append the function reference:\n%s", got)
+	}
+	if !strings.Contains(got, "round(num)") {
+		t.Errorf("help on an expression arg missing the function list:\n%s", got)
+	}
+	// On a non-expression arg (the field name of -set-expr), it must NOT append.
+	fieldLine := "ssql from csv x.csv | ssql update -set-expr "
+	if got := run(fieldLine, len(fieldLine)); strings.Contains(got, "EXPRESSION FUNCTIONS") {
+		t.Errorf("help on the field arg should NOT append functions:\n%s", got)
+	}
+
 	// A non-ssql stage must produce nothing (guard against running junk).
 	if got := run("echo hello world", len("echo hello world")); strings.TrimSpace(got) != "" {
 		t.Errorf("non-ssql line produced help: %q", got)

@@ -83,6 +83,40 @@ func TestCompleteSource(t *testing.T) {
 	}
 }
 
+func TestExprArgAtCursor(t *testing.T) {
+	// args is COMP_WORDS minus the program name (args[0] = command); pos is the
+	// COMP_WORDS index of the cursor (program at 0).
+	cases := []struct {
+		name string
+		args []string
+		pos  int
+		want bool
+	}{
+		{"where -if-expr expr", []string{"where", "-if-expr", ""}, 3, true},
+		{"where -if-expr short -x expr", []string{"where", "-x", ""}, 3, true},
+		{"where -if FIELD (not expr)", []string{"where", "-if", ""}, 3, false},
+		{"update -set-expr field (not expr)", []string{"update", "-set-expr", ""}, 3, false},
+		{"update -set-expr field EXPR", []string{"update", "-set-expr", "total", ""}, 4, true},
+		{"update -set-expr short -e EXPR", []string{"update", "-e", "total", ""}, 4, true},
+		{"update -if-expr EXPR", []string{"update", "-if-expr", ""}, 3, true},
+		{"group-by -expr EXPR", []string{"group-by", "-expr", ""}, 3, true},
+		{"group-by -expr EXPR name (not expr)", []string{"group-by", "-expr", "sum(x)", ""}, 4, false},
+		{"group-by -sum FIELD (not expr)", []string{"group-by", "dept", "-sum", ""}, 4, false},
+		{"group-by -stream-expr init", []string{"group-by", "-stream-expr", ""}, 3, true},
+		{"group-by -stream-expr final", []string{"group-by", "-stream-expr", "{s:0}", "{s:s+x}", ""}, 5, true},
+		{"group-by -stream-expr name (not expr)", []string{"group-by", "-stream-expr", "{s:0}", "{s:s+x}", "s", ""}, 6, false},
+		{"cursor on the flag itself (not an arg)", []string{"update", "-set-expr"}, 2, false},
+		{"after a clause separator resets", []string{"where", "-if", "a", "eq", "1", "+", "-if-expr", ""}, 8, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := exprArgAtCursor(tc.args, tc.pos); got != tc.want {
+				t.Errorf("exprArgAtCursor(%q, %d) = %v, want %v", tc.args, tc.pos, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCursorTopLevelStage(t *testing.T) {
 	cases := []struct {
 		before, want string

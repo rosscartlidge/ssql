@@ -5,6 +5,19 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.51.2] - 2026-06-27
+
+### New Features (interactive help)
+- **Alt-h shows the expression-function reference on an expression argument.**
+  When the cursor is on an `-if-expr` / `-set-expr` / `-expr` / `-stream-expr`
+  expression (not the field name, result-name, or flag itself), Alt-h appends
+  the full function listing (the same content as `ssql functions`) below the
+  flag help — so you can see every available function without leaving the line.
+  Detection is precise per command (`exprArgAtCursor`, unit-tested); the
+  listing is a single source of truth (`FunctionsReference`) shared with the
+  `ssql functions` command. Also fixes the Alt-h argument marker (`→`) to point
+  at the expression on a trailing space, instead of mis-marking the field.
+
 ## [v4.51.1] - 2026-06-27
 
 ### New Features / Improvements (shell integration)

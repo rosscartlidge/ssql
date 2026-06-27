@@ -1658,6 +1658,23 @@ vi. (Implemented as the autocli `Command.HelpAt(args, pos)` primitive, so any
 autocli-based CLI can offer the same binding — see
 `doc/research/interactive-help-at-cursor.md`.)
 
+**On an expression argument**, Alt-h also appends the expression-function
+reference (the same listing as `ssql functions`) — so when you're writing an
+`-if-expr` / `-set-expr` / `-expr` / `-stream-expr` you can see every available
+function without leaving the line:
+
+```bash
+ssql from data.csv | ssql update -set-expr label <Alt-h>
+#   → -set-expr, -e  field expression
+#         Set field to expression result …
+#         → expression (string)
+#
+#     EXPRESSION FUNCTIONS AVAILABLE:
+#       String Functions (16): upper(str), lower(str), trim(str), …
+#       Math Functions (6): round(num), floor(num), abs(num), min(a, b), …
+#       …  (scroll for Array / Date / Type / Map / Bitwise / Hash / Operators)
+```
+
 ### Understanding Command Structure (Advanced)
 
 ssql CLI uses the **autocli** framework for declarative command definitions. This enables powerful features:

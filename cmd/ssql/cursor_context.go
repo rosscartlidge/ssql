@@ -175,6 +175,61 @@ func cursorTopLevelStage(before string) string {
 	return strings.TrimLeft(segs[len(segs)-1], " \t")
 }
 
+// exprArgAtCursor reports whether the cursor sits on an expression argument of
+// an expression-bearing flag — so the Alt-h help can append the function
+// reference (writing an expression is hard without knowing the functions).
+// args is the COMP_WORDS-style slice MINUS the program name (args[0] is the
+// command), and pos is the COMP_WORDS index of the cursor (program at 0), the
+// same shape autocli's -help-at / Complete use. Expression slots:
+//
+//	where    -if-expr|-x  <EXPR>
+//	update   -if-expr|-x  <EXPR>            -set-expr|-e <field> <EXPR>
+//	group-by -expr|-e     <EXPR> <name>     -stream-expr <init> <every> <final> <name>
+func exprArgAtCursor(args []string, pos int) bool {
+	if len(args) == 0 {
+		return false
+	}
+	cmd := args[0]
+	isExprSlot := func(flag string, argIdx int) bool {
+		switch cmd {
+		case "where":
+			return (flag == "-if-expr" || flag == "-x") && argIdx == 0
+		case "update":
+			if (flag == "-if-expr" || flag == "-x") && argIdx == 0 {
+				return true
+			}
+			return (flag == "-set-expr" || flag == "-e") && argIdx == 1
+		case "group-by":
+			if (flag == "-expr" || flag == "-e") && argIdx == 0 {
+				return true
+			}
+			return flag == "-stream-expr" && argIdx >= 0 && argIdx <= 2
+		}
+		return false
+	}
+	// Walk the completed args before the cursor word (at index pos-1), tracking
+	// the current flag and how many positionals it has consumed.
+	end := pos - 1
+	if end > len(args) {
+		end = len(args)
+	}
+	flag := ""
+	argIdx := -1
+	for i := 1; i < end; i++ {
+		t := args[i]
+		switch {
+		case t == "+" || t == "-": // clause separators reset the flag
+			flag, argIdx = "", -1
+		case len(t) > 1 && t[0] == '-':
+			flag, argIdx = t, -1
+		default:
+			argIdx++
+		}
+	}
+	// The cursor word occupies the next positional slot of the current flag.
+	return flag != "" && isExprSlot(flag, argIdx+1)
+}
+
 // completeSource returns the shell command whose `SSQL_MODE=schema` output
 // should drive field-NAME completion at the cursor, or "" if none applies:
 //   - cursor inside a process substitution → that procsub's internal upstream;

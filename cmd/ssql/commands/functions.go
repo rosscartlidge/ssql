@@ -55,56 +55,64 @@ func RegisterFunctions(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	return cmd
 }
 
+// FunctionsReference is the concise expression-function reference printed by
+// `ssql functions` (no args) and appended to the Alt-h help popup when the
+// cursor is on an expression argument (see the -help-at intercept in main.go),
+// so the function list is at hand exactly when you're authoring an expression.
+// Single source of truth — keep in sync with doc/EXPRESSIONS.md.
+const FunctionsReference = `EXPRESSION FUNCTIONS AVAILABLE:
+
+String Functions (16):
+  upper(str), lower(str), trim(str), trimPrefix(str, prefix),
+  trimSuffix(str, suffix), split(str, sep), splitAfter(str, sep),
+  join(arr, sep), replace(str, old, new), replaceRegex(str, pat, repl),
+  repeat(str, n), indexOf(str, sub), lastIndexOf(str, sub),
+  hasPrefix(str, prefix), hasSuffix(str, suffix), contains(str, sub)
+
+Math Functions (6):
+  round(num), floor(num), ceil(num), abs(num), min(a, b), max(a, b)
+
+Array Functions (26):
+  len(arr), first(arr), last(arr), take(arr, n), reverse(arr),
+  sort(arr), sortBy(arr, pred), uniq(arr), flatten(arr), concat(a, b),
+  filter(arr, pred), map(arr, fn), reduce(arr, pred, init),
+  find(arr, pred), findIndex(arr, pred), findLast(arr, pred),
+  findLastIndex(arr, pred), groupBy(arr, pred),
+  all(arr, pred), any(arr, pred), one(arr, pred), none(arr, pred),
+  count(arr), sum(arr), mean(arr), median(arr)
+
+Date Functions (4):
+  now(), date(str), duration(str), timezone(str)
+
+Type & Encoding (10):
+  int(v), float(v), string(v), type(v),
+  toJSON(v), fromJSON(str), toBase64(str), fromBase64(str),
+  toPairs(map), fromPairs(arr)
+
+Map Functions (3):
+  keys(map), values(map), get(v, key)
+
+Bitwise Functions (8):
+  bitand(a, b), bitor(a, b), bitxor(a, b), bitnand(a, b),
+  bitnot(a), bitshl(a, n), bitshr(a, n), bitushr(a, n)
+
+Hash Functions (3):
+  sha256(str), sha1(str), md5(str)
+
+Helpers (2):
+  has(field), getOr(field, default)
+
+Operators:
+  +  -  *  /  %  **  ==  !=  <  >  <=  >=  and  or  not  ?:  ??  in  |
+
+Use: ssql functions -category <name>   # Show detailed help for category
+     ssql functions -examples          # Show common expression patterns
+
+Full reference: doc/EXPRESSIONS.md
+`
+
 func printAllCategories(ctx *cf.Context) error {
-	fmt.Fprintln(ctx.Stdout(), "EXPRESSION FUNCTIONS AVAILABLE:")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "String Functions (16):")
-	fmt.Fprintln(ctx.Stdout(), "  upper(str), lower(str), trim(str), trimPrefix(str, prefix),")
-	fmt.Fprintln(ctx.Stdout(), "  trimSuffix(str, suffix), split(str, sep), splitAfter(str, sep),")
-	fmt.Fprintln(ctx.Stdout(), "  join(arr, sep), replace(str, old, new), replaceRegex(str, pat, repl),")
-	fmt.Fprintln(ctx.Stdout(), "  repeat(str, n), indexOf(str, sub), lastIndexOf(str, sub),")
-	fmt.Fprintln(ctx.Stdout(), "  hasPrefix(str, prefix), hasSuffix(str, suffix), contains(str, sub)")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Math Functions (6):")
-	fmt.Fprintln(ctx.Stdout(), "  round(num), floor(num), ceil(num), abs(num), min(a, b), max(a, b)")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Array Functions (26):")
-	fmt.Fprintln(ctx.Stdout(), "  len(arr), first(arr), last(arr), take(arr, n), reverse(arr),")
-	fmt.Fprintln(ctx.Stdout(), "  sort(arr), sortBy(arr, pred), uniq(arr), flatten(arr), concat(a, b),")
-	fmt.Fprintln(ctx.Stdout(), "  filter(arr, pred), map(arr, fn), reduce(arr, pred, init),")
-	fmt.Fprintln(ctx.Stdout(), "  find(arr, pred), findIndex(arr, pred), findLast(arr, pred),")
-	fmt.Fprintln(ctx.Stdout(), "  findLastIndex(arr, pred), groupBy(arr, pred),")
-	fmt.Fprintln(ctx.Stdout(), "  all(arr, pred), any(arr, pred), one(arr, pred), none(arr, pred),")
-	fmt.Fprintln(ctx.Stdout(), "  count(arr), sum(arr), mean(arr), median(arr)")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Date Functions (4):")
-	fmt.Fprintln(ctx.Stdout(), "  now(), date(str), duration(str), timezone(str)")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Type & Encoding (10):")
-	fmt.Fprintln(ctx.Stdout(), "  int(v), float(v), string(v), type(v),")
-	fmt.Fprintln(ctx.Stdout(), "  toJSON(v), fromJSON(str), toBase64(str), fromBase64(str),")
-	fmt.Fprintln(ctx.Stdout(), "  toPairs(map), fromPairs(arr)")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Map Functions (3):")
-	fmt.Fprintln(ctx.Stdout(), "  keys(map), values(map), get(v, key)")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Bitwise Functions (8):")
-	fmt.Fprintln(ctx.Stdout(), "  bitand(a, b), bitor(a, b), bitxor(a, b), bitnand(a, b),")
-	fmt.Fprintln(ctx.Stdout(), "  bitnot(a), bitshl(a, n), bitshr(a, n), bitushr(a, n)")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Hash Functions (3):")
-	fmt.Fprintln(ctx.Stdout(), "  sha256(str), sha1(str), md5(str)")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Helpers (2):")
-	fmt.Fprintln(ctx.Stdout(), "  has(field), getOr(field, default)")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Operators:")
-	fmt.Fprintln(ctx.Stdout(), "  +  -  *  /  %  **  ==  !=  <  >  <=  >=  and  or  not  ?:  ??  in  |")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Use: ssql functions -category <name>   # Show detailed help for category")
-	fmt.Fprintln(ctx.Stdout(), "     ssql functions -examples          # Show common expression patterns")
-	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "Full reference: doc/EXPRESSIONS.md")
+	fmt.Fprint(ctx.Stdout(), FunctionsReference)
 	return nil
 }
 

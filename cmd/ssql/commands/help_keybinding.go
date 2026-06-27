@@ -49,14 +49,14 @@ _ssql_help_at() {
     # COMP_WORDS-style position: index of the word under the cursor, counting
     # "ssql" as 0. A trailing space means the cursor is on a new empty word.
     local pos
+    local -a args=("${words[@]:1}")
     if [[ "$stage" =~ [[:space:]]$ ]]; then
         pos=${#words[@]}
+        args+=("")            # the empty word the cursor sits on (read drops it)
     else
         pos=$(( ${#words[@]} - 1 ))
     fi
 
-    # args = the stage words minus the program name.
-    local -a args=("${words[@]:1}")
     # Capture stderr+exit so a failure (e.g. an unrecognized command at the
     # cursor) surfaces in the popup rather than flashing nothing.
     local help rc
