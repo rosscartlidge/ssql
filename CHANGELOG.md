@@ -5,6 +5,24 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.52.0] - 2026-06-29
+
+### New Features
+- **`ssql conventions`** — an in-binary reference for cross-cutting system
+  semantics that span commands and tend to surprise (and that no single
+  command's `-help` covers). Categories + `-category <evaluation|data|pipeline|
+  codegen>` for detail; sibling of `ssql functions`. Entry #1 documents the
+  `update` assignment semantics: every `-set`/`-set-expr`/`-if` in one `update`
+  sees the **original** row (SQL `SET` semantics) — pipe to sequence.
+
+### Improvements
+- **Dispatcher commands now list their subcommands in `-help` and `-man`.**
+  `ssql to -help` (and `from`, `generate`, …) previously showed no hint that
+  `to table`, `to csv`, … exist — now a `COMMANDS:` section lists them, USAGE
+  shows `<COMMAND>`, and the misleading "does not support clauses" is gone.
+  `ssql to table -help` also renders the full path ("ssql to table", not
+  "ssql table"). Requires autocli ≥ v4.11.0.
+
 ## [v4.51.2] - 2026-06-27
 
 ### New Features (interactive help)
