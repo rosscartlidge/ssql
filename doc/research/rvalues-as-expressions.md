@@ -100,6 +100,89 @@ Don't collapse to pure-expr. Chase the unification without the regressions:
    (no `…-expr` proliferation, expressions wherever they add power) without
    forcing quotes-and-lost-completion on the common case.
 
+## Closing the structured-form gaps without going pure-expr
+
+Two specific gaps in the structured form keep forcing people into `…-expr`.
+Each has a targeted fix that preserves the bash-friendly, completable, native
+properties — and weighing them sharpens *why* the structured form pays off in
+some places but not others.
+
+### Gap 1: `field OP field` — the `@field` value sigil ✅ recommended
+
+`-if FIELD OP VALUE` can't compare two fields, because an unquoted token in
+value position is a **string literal** (`-if dept eq sales` means the string
+`"sales"`). Field-vs-field forces `-if-expr "a > b"` (with quoting).
+
+Fix: a leading **`@`** in any value position means "this value is a field
+reference":
+
+```bash
+ssql where -if salary gt @budget      # field > field
+ssql where -if dept eq sales          # field == literal "sales"  (unchanged)
+ssql update -set mirror @source       # copy a field's value (bonus: -set too)
+```
+
+It adopts *one atom* of expression syntax (the field reference — ssql's
+`$1`/`.col`) into the structured grammar:
+
+- **bash-friendly** (`@` needs no quoting);
+- **completable** — `-if salary gt @<TAB>` completes *field names* from the
+  upstream schema (reuse the existing field completion), bare `<TAB>` still
+  samples *values*;
+- **native codegen** — `r.Field1 OP r.Field2`, no transpiler needed;
+- **`generate sql`** — drop the `@`, emit `field1 OP field2`;
+- **predictable** — `@budget` validates `budget` is a real field (fail loudly).
+
+The one wrinkle: `@` collides with leading-`@` string *literals*
+(`-if user eq @bob`). Rare in comparison values; escape with `@@bob` or quote
+`'@bob'`. (`@` beats the alternatives: `#`/`$` are shell-special, `.`/`/` are
+common in path-like values.)
+
+Rejected alternatives: **auto-detect** ("treat the value as a field if it
+matches a known field name") is silently wrong the day someone has a `sales`
+field — violates fail-loudly; **type-based** ("numeric field + non-numeric
+token ⇒ field ref") is subtle and string-ambiguous; a **`-if-fields` flag** is
+flag proliferation.
+
+### Gap 2: computed `set` (`field OP value`) — lean *no* on a structured flag
+
+`-set FIELD VALUE` sets a literal; computing `price = price * 1.1` forces
+`-set-expr`. Tempting to add a symmetric `-set-op RESULT FIELD OP VALUE`
+(arith op ∈ `mul/div/add/sub/mod/pow`). But there's a **filter↔set
+asymmetry**:
+
+- For **filters**, a single binary `FIELD OP VALUE` covers most of the real
+  need (AND/OR come from clause separators), so `-if`'s structured form earns
+  its keep.
+- For **computed sets**, binary covers a *much smaller* fraction — real
+  arithmetic wants more than two operands and precedence: `price * qty *
+  (1 - discount)`, `(gross - tax) / months`, `round(price * 1.1)`. A binary-only
+  `-set-op` hits that wall immediately and drops back to `-set-expr` anyway.
+
+So `-set-op` buys `price * 1.1` quote-free at the cost of a **third** set-flag
+(`-set` / `-set-op` / `-set-expr`) that overlaps `-set-expr` and covers a narrow
+slice. Coverage-to-cost is poor — arithmetic outgrows binary far faster than
+filters do.
+
+Better: make `-set-expr` the *one good path* for computed values by removing its
+two pains — (1) the **transpiler** makes it native (handles binary, N-ary,
+precedence, functions — no wall), and (2) the **Alt-h function reference**
+(shipped v4.51.2) makes it discoverable while typing. Plus **`@field`** covers
+the trivial field-ref case. The residual cost is the quoting on
+`-set-expr "..."` — more tolerable for sets (often scripted) than for the
+rapid-interactive `-if`.
+
+If interactive quoting on the simple binary case really bites, do it as a
+**fixed-arity** `-set-op RESULT FIELD OP VALUE` (clean per-arg completion,
+`@field`-aware value), *not* a variadic richer `-set` (the alternating
+operand/op variadic is fiddly to complete) — eyes open that it's binary-only and
+overlaps `-set-expr`.
+
+**Takeaway:** structured-binary is a great fit for `-if` (filters are usually
+one comparison) and a weak fit for computed `-set` (arithmetic usually isn't
+one operation). That asymmetry is the rule for deciding when a structured form
+is worth it versus when to lean on a (fast, discoverable) expression.
+
 ## Bottom line
 
 The unification instinct is correct and worth pursuing — but the structured
