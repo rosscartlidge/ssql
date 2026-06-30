@@ -257,6 +257,29 @@ shape as the main `ssql` package, so a typed pipeline reads identically:
 result := typed.Where(pred1)(typed.Skip[T](10)(typed.Limit[T](100)(input)))
 ```
 
+### Top-k selection
+
+```go
+func TopBy[T any, K Ordered](n int, keyFn func(T) K)    func(iter.Seq[T]) iter.Seq[T]
+func BottomBy[T any, K Ordered](n int, keyFn func(T) K) func(iter.Seq[T]) iter.Seq[T]
+
+// Parallel forms — consume a Stream[T], return the ≤ n winners as iter.Seq[T].
+func TopByParallel[T any, K Ordered](in Stream[T], n int, keyFn func(T) K)    iter.Seq[T]
+func BottomByParallel[T any, K Ordered](in Stream[T], n int, keyFn func(T) K) iter.Seq[T]
+```
+
+`TopBy` / `BottomBy` keep a bounded heap of size `n`: **O(N·log n)** time and
+**O(n)** memory, versus the O(N·log N) time + O(N) memory of a full
+`SortByDesc` + `Limit`. Results are yielded best-first (descending key for
+`TopBy`, ascending for `BottomBy`). These are the typed analogues of
+`ssql.TopBy` / `ssql.BottomBy`.
+
+Top-k is an associative reduction, so it parallelises: `TopByParallel` keeps a
+per-shard heap over each `Stream[T]` shard concurrently, then merges the
+survivors (≤ shards·n entries) through one final size-n selection. The `top`
+CLI command emits the parallel form when the upstream is a `Stream` and the
+serial form otherwise (the planner picks per pipeline).
+
 ### Hash join
 
 ```go

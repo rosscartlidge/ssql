@@ -5,6 +5,41 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.53.0] - 2026-06-30
+
+### New Features
+- **Heap-based top-k in typed mode.** `typed.TopBy` / `typed.BottomBy` (bounded
+  heap of size n: **O(N·log n)** time, **O(n)** memory) are the typed analogues
+  of `ssql.TopBy` / `ssql.BottomBy`, plus parallel forms `typed.TopByParallel` /
+  `typed.BottomByParallel` that keep a per-shard heap over a `Stream[T]` and
+  merge the survivors. The `top` CLI command's typed/parallel codegen now emits
+  these instead of desugaring to a full `SortByDesc` + `Limit` (O(N·log N),
+  O(N) memory). The fragment is no longer `SerialOnly` — `from | top` stays
+  fully parallel via the per-shard-heap reduction instead of collapsing to
+  serial.
+
+### Improvements
+- **`generate go -mode` now Tab-completes** to `record` / `typed` (it had no
+  completer at all, so Tab offered nothing). `parallel` is omitted as a
+  deprecated alias for `typed`.
+
+## [v4.52.2] - 2026-06-30
+
+### Documentation
+- **Docs: `typed` and `parallel` are the same mode.** The typed tutorial framed
+  `SSQL_MODE=parallel` as a separate "switch the env var for more speed" mode;
+  since v4.40 the `typed` planner auto-emits the parallel form when reachable
+  and `parallel` is a deprecated alias. Updated the typed tutorial, the typed
+  reference, and the README benchmark labels.
+
+## [v4.52.1] - 2026-06-30
+
+### Documentation
+- **README + codelab now showcase the interactive shell experience** — the
+  `Ctrl-O` / `Alt-h` / `Alt-g` / `Alt-r` / `Ctrl-T` / `Alt-H` key bindings,
+  `eval "$(ssql -shell-init)"`, and the `ssql functions` / `ssql conventions`
+  reference commands (previously undocumented in the README).
+
 ## [v4.52.0] - 2026-06-29
 
 ### New Features

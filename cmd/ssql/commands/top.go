@@ -129,9 +129,6 @@ func generateTopCode(n int, field string, asc bool) error {
 
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {
-		// top is SerialOnly (sort + limit composition) — planner
-		// inserts Stream.Serial() upstream automatically when input
-		// is a Stream.
 		f, ok := lookupSchemaField(prevSchema, field)
 		if !ok {
 			return lib.WriteErrorAndExit(getCommandString(),
@@ -141,20 +138,31 @@ func generateTopCode(n int, field string, asc bool) error {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'top' on field %q (type %s) not supported (need int/float/string)", field, f.GoType))
 		}
-		// `top` is desugared as sort + limit. Default order is descending
-		// (largest first); -asc reverses to smallest first.
-		sortFn := "typed.SortByDesc"
+		// `top` is a bounded heap select (O(N·log K), O(K) memory), NOT a
+		// full sort + limit. It is an associative reduction, so it has a
+		// parallel form: typed.TopByParallel keeps a per-shard heap over a
+		// Stream[T] and merges the survivors. Emit BOTH templates — the
+		// planner keeps the parallel form when the upstream is a Stream and
+		// swaps to the serial iter.Seq form (typed.TopBy) otherwise. Either
+		// way the output is an iter.Seq[T] of the ≤ K winners. Default order
+		// is descending (largest first); -asc selects the smallest instead.
+		serialFn, parallelFn := "typed.TopBy", "typed.TopByParallel"
 		if asc {
-			sortFn = "typed.SortBy"
+			serialFn, parallelFn = "typed.BottomBy", "typed.BottomByParallel"
 		}
-		code := fmt.Sprintf(`%s := typed.Limit[%s](*flagTop)(
-		%s(func(r %s) %s { return r.%s })(%s),
-	)`, outputVar, prevSchema.TypeName, sortFn, prevSchema.TypeName, f.GoType, f.GoName, inputVar)
-		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+		keyFn := fmt.Sprintf("func(r %s) %s { return r.%s }", prevSchema.TypeName, f.GoType, f.GoName)
+		parallelCode := fmt.Sprintf("%s := %s(%s, *flagTop, %s)", outputVar, parallelFn, inputVar, keyFn)
+		serialCode := fmt.Sprintf("%s := %s(*flagTop, %s)(%s)", outputVar, serialFn, keyFn, inputVar)
+		imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+
+		frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
-		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped}
+		frag.AltCodeIfSeq = serialCode
+		frag.AltImportsIfSeq = imports
+		frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 		return lib.WriteCodeFragment(frag)
 	}
 

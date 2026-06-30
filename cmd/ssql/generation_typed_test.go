@@ -527,8 +527,40 @@ func TestTypedTopBy(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)
 	src := runTypedPipeline(t, bin,
 		bin+" from "+emp+" | "+bin+" top 2 -field salary | "+bin+" to csv")
-	if !strings.Contains(src, "typed.SortByDesc") || !strings.Contains(src, "typed.Limit") {
-		t.Errorf("expected SortByDesc + Limit composition\n%s", src)
+	// `from | top` is parallel-reachable, so the planner keeps the
+	// heap-based parallel form — NOT a full SortByDesc + Limit.
+	if !strings.Contains(src, "typed.TopByParallel") {
+		t.Errorf("expected typed.TopByParallel (bounded-heap top-k)\n%s", src)
+	}
+	if strings.Contains(src, "typed.SortByDesc") || strings.Contains(src, "typed.Limit") {
+		t.Errorf("top must not desugar to SortByDesc + Limit anymore\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	if !strings.Contains(out, "Carol") || !strings.Contains(out, "Alice") {
+		t.Errorf("expected top-2 by salary (Carol, Alice), got:\n%s", out)
+	}
+	if strings.Contains(out, "Bob") || strings.Contains(out, "Dave") {
+		t.Errorf("Bob and Dave should be excluded, got:\n%s", out)
+	}
+}
+
+// TestTypedTopBySerialForm forces the serial iter.Seq form (a sort
+// upstream downgrades the running shape) and checks the planner swaps to
+// typed.TopBy rather than the parallel TopByParallel.
+func TestTypedTopBySerialForm(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("id,name,salary\n1,Alice,95000\n2,Bob,65000\n3,Carol,120000\n4,Dave,55000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" sort name | "+bin+" top 2 -field salary | "+bin+" to csv")
+	if !strings.Contains(src, "typed.TopBy(") {
+		t.Errorf("expected serial typed.TopBy after a sort downgrade\n%s", src)
+	}
+	if strings.Contains(src, "typed.TopByParallel") {
+		t.Errorf("serial-shape input must not use TopByParallel\n%s", src)
 	}
 	out := goRunGenerated(t, src)
 	if !strings.Contains(out, "Carol") || !strings.Contains(out, "Alice") {

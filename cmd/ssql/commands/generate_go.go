@@ -58,9 +58,10 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Done().
 		Flag("-mode").
 		String().
+		Completer(&cf.StaticCompleter{Options: []string{"record", "typed"}}).
 		Global().
 		Default("").
-		Help("With -script: SSQL_MODE value for the script (record/typed/parallel). Default: typed.").
+		Help("With -script: SSQL_MODE value for the script (record or typed; parallel is a deprecated alias for typed). Default: typed.").
 		Done().
 		Flag("OUTPUT").
 		String().

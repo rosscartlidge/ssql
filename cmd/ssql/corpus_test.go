@@ -293,8 +293,17 @@ func TestPipelineCorpus(t *testing.T) {
 			Name:     "top",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} top 2 -field salary | {{.bin}} to csv`,
 			// Top 2 by salary (default desc): Carol (105000), Alice (95000).
+			// Heap-based: typed/parallel emit typed.TopBy / typed.TopByParallel.
 			Contains: []string{"Carol", "Alice", "105000", "95000"},
 			Excludes: []string{"Bob"},
+		},
+		{
+			Name:     "top_asc",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} top 2 -field salary -asc | {{.bin}} to csv`,
+			// Bottom 2 by salary (-asc): Bob (65000), David (72000).
+			// Exercises ssql.BottomBy / typed.BottomBy / typed.BottomByParallel.
+			Contains: []string{"Bob", "David", "65000", "72000"},
+			Excludes: []string{"Carol"},
 		},
 
 		// --- Aggregation --------------------------------------
