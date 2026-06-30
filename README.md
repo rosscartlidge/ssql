@@ -300,14 +300,19 @@ Same pipeline (`from … | group-by relationship -count number | to table`)
 run six different ways against a user-supplied 1.23 GB / 14.6 M-row
 CSV on a dual-socket Xeon Gold 6154 workstation:
 
-| Mode | Wall | vs CLI baseline |
+| Form | Wall | vs CLI baseline |
 |---|---:|---:|
 | Interactive CLI pipeline (3 processes via JSONL pipes) | 68.7 s | 1.0× |
 | `SSQL_MODE=record` codegen (Record, 1 process) | 15.5 s | 4.4× faster |
-| `SSQL_MODE=typed` codegen (1 thread, struct types) | 22.0 s | 3.1× faster |
-| `SSQL_MODE=parallel` codegen (CSV, multi-shard) | 1.23 s | **56× faster** |
-| `SSQL_MODE=parallel` codegen (Parquet, single row group) | 0.76 s | **90× faster** |
-| **`SSQL_MODE=parallel` codegen (Parquet, 15 row groups, column projection)** | **0.32 s** | **215× faster** |
+| `SSQL_MODE=typed`, serial form (1 thread, struct types) | 22.0 s | 3.1× faster |
+| `SSQL_MODE=typed`, planner-parallel (CSV, multi-shard) | 1.23 s | **56× faster** |
+| `SSQL_MODE=typed`, planner-parallel (Parquet, single row group) | 0.76 s | **90× faster** |
+| **`SSQL_MODE=typed`, planner-parallel (Parquet, 15 row groups, column projection)** | **0.32 s** | **215× faster** |
+
+All four typed rows come from the *same* `SSQL_MODE=typed` — the planner
+auto-selects the parallel form when reachable (the serial row is what it emits
+when forced serial, shown here to isolate where the speed comes from).
+`SSQL_MODE=parallel` is a deprecated alias for the same path.
 
 The 215× from interactive CLI to typed-parallel-Parquet decomposes
 into independent wins multiplied together: ~4× from collapsing 3

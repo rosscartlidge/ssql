@@ -568,45 +568,49 @@ type Row struct {
 `ssql:"name"` is preferred. `csv:"name"` is also accepted as a
 fallback for ecosystem compatibility.
 
-## Need more speed? `SSQL_MODE=parallel`
+## `SSQL_MODE=typed` already uses all your cores
 
-Once you've got a working `SSQL_MODE=typed` pipeline, you can run the
-same one across all cores by switching the env var:
+There is no separate "parallel mode" to switch into. As of **v4.40**,
+`SSQL_MODE=typed` doesn't just mean serial struct code — a planner
+inspects every stage of your pipeline and automatically emits the
+**parallel** form whenever the pipeline can exploit it:
+`typed.ReadCSVParallel`, the `Stream[T]` runtime (`Stream.Where`,
+`typed.HashJoinParallel`, `typed.GroupByParallel`), and per-shard
+output buffers. Same struct types, same struct tags, same pipeline
+shape — the parallel infrastructure is invisible at the source level.
 
 ```bash
-SSQL_MODE=parallel ssql from data.csv \
+SSQL_MODE=typed ssql from data.csv \
     | ssql where -if age gt 30 \
     | ssql group-by dept_id -count n -sum salary total -avg salary mean \
     | ssql to csv | ssql generate go > pipeline.go
 go run pipeline.go
 ```
 
-What changes under the hood: the generated Go now uses
-`typed.ReadCSVParallel`, the `Stream[T]` runtime
-(`Stream.Where`, `typed.HashJoinParallel`, `typed.GroupByParallel`),
-and a per-shard CSV output buffer. Same struct types, same struct
-tags, same pipeline shape — the parallel infrastructure is
-invisible at the source level.
+Nothing to flip — the same `SSQL_MODE=typed` you've used all tutorial
+is what produces the parallel code below. Measured on a 32-core machine
+against `cmd/ssql-typed-scale/data.csv` (10 M rows, 1 000 dept_ids):
 
-Measured on a 32-core machine against `cmd/ssql-typed-scale/data.csv`
-(10 M rows, 1 000 dept_ids):
-
-| Workload | typed-serial | **typed-parallel** | DuckDB |
+| Workload | typed (serial form) | **typed (planner-parallel)** | DuckDB |
 |---|---:|---:|---:|
 | Filter + write 7.25 M-row CSV | 5.7 s | **1.3 s** (4.4× faster) | 0.7 s |
 | Group-by, count + sum + avg + min + max | 3.80 s | **0.95 s** (4.0× faster) | 0.39 s |
 
-**When parallel mode wins:** `from + where + join + group-by + to csv/table`
-pipelines on a host with spare cores. Other typed-aware commands
-(limit, sort, distinct, union, top, cast, update, include/exclude/
-rename) still emit a clear error in parallel mode pointing back at
-`SSQL_MODE=typed`. Group-by `-presorted` is also rejected in parallel
-mode (shards split contiguous runs).
+**What the planner parallelizes:** `from + where + join + group-by + to
+csv/table`. When a stage can't run in the `Stream[T]` runtime — `sort`,
+`distinct`, or a Tier 3 command (`pivot`, `from ssh`, `-if-expr`, …) —
+the planner does **not** error; it inserts the right boundary
+automatically: a serial `iter.Seq[T]` downgrade (to avoid a
+Stream→Serial fan-in that would cost more than it saves), or a
+typed→Record adapter so the parallel-parse stages still happen and the
+Tier 3 stage runs on Records. `group-by -presorted` forces the serial
+form (shards split contiguous runs). Use `generate go -explain` to see
+which form the planner chose and why.
 
-**When to stay on `SSQL_MODE=typed`:** outputs too large to buffer
-(parallel CSV sink peaks at ~2× output size in memory), pipelines
-needing strict input-order output, or pipelines that depend on a
-Tier 3 command not yet supported in parallel mode.
+> **`SSQL_MODE=parallel` is a deprecated alias for `SSQL_MODE=typed`.**
+> The two are identical now — both go through the same planner. Old
+> scripts using `parallel` keep working; new code should just use
+> `typed`.
 
 For the full design rationale see
 [`typed-codegen-proposal.md`](research/typed-codegen-proposal.md) §5d
@@ -618,5 +622,5 @@ and [`typed-groupby-parallel-proposal.md`](research/typed-groupby-parallel-propo
 - **[Performance Notes](research/typed-performance-notes.md)** — known optimization opportunities (and a writeup of one that didn't pay off)
 - **[Concurrency Proposal](research/typed-concurrency-proposal.md)** — original PoC results that motivated `Stream[T]` (now shipped — see codegen proposal §5d for status)
 - **[GroupByParallel Proposal](research/typed-groupby-parallel-proposal.md)** — Sink/Combine/Finalize design for parallel group-by
-- **[Codegen design (Phase 2)](research/typed-codegen-proposal.md)** — `SSQL_MODE=typed` and `SSQL_MODE=parallel` shipped (Tier 1 + Tier 2 + Tier 3a/3b: from, where, join, group-by, sort, distinct, union, top, cast, update, include/exclude/rename, limit/offset, to csv, to table). Parallel mode covers the read/filter/join/group-by/sink subset.
+- **[Codegen design (Phase 2)](research/typed-codegen-proposal.md)** — the planner-driven `SSQL_MODE=typed` (auto-parallel; `parallel` is a deprecated alias). Covers Tier 1 + Tier 2 + Tier 3a/3b: from, where, join, group-by, sort, distinct, union, top, cast, update, include/exclude/rename, limit/offset, to csv, to table — emitting the parallel Stream form for the read/filter/join/group-by/sink subset and the serial form elsewhere.
 - **[Side-by-side example](../examples/typed_pipeline)** — runnable Record vs typed comparison that prints the speedup live
