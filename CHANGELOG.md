@@ -5,6 +5,17 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.54.1] - 2026-06-30
+
+### Bug Fixes
+- **Typed `to table` now honours `-max-width`.** The typed/parallel `generate go`
+  path emitted `typed.WriteTableToWriter` with no width cap, so it ignored
+  `-max-width` and never truncated — diverging from record mode (default 50).
+  Long cells now truncate identically (`value…`) in both modes.
+  `typed.WriteTableToWriter` / `WriteTableSelectedToWriter` gained an optional
+  variadic `maxWidth ...int` (back-compatible: no argument means no truncation,
+  so previously-generated code is unaffected).
+
 ## [v4.54.0] - 2026-06-30
 
 ### Bug Fixes

@@ -28,12 +28,27 @@ import (
 //	----------------------
 //	           1   4849187
 //	          17    392383
-func WriteTableToWriter[T any](seq iter.Seq[T], w io.Writer) error {
+//
+// The optional maxWidth truncates any cell longer than maxWidth to
+// maxWidth runes with a trailing "..." (maxWidth<=0 means no limit),
+// matching ssql.DisplayTable's `-max-width` so the typed `to table`
+// codegen renders identically to the record-mode pipeline. It is
+// variadic so existing callers (and previously-generated code) that
+// pass no width keep compiling and keep the un-truncated behaviour.
+func WriteTableToWriter[T any](seq iter.Seq[T], w io.Writer, maxWidth ...int) error {
 	schema, err := buildWriteSchema[T]()
 	if err != nil {
 		return err
 	}
-	return writeTableWithSchema(seq, w, schema, structFieldAlignments[T]())
+	return writeTableWithSchema(seq, w, schema, structFieldAlignments[T](), optInt(maxWidth))
+}
+
+// optInt resolves a variadic "optional int" to its first value or 0.
+func optInt(v []int) int {
+	if len(v) > 0 {
+		return v[0]
+	}
+	return 0
 }
 
 // alignmentRight is true when the field should be right-justified
@@ -87,7 +102,8 @@ type TableColumn[T any] struct {
 }
 
 // WriteTableSelectedToWriter formats columns in the order given.
-func WriteTableSelectedToWriter[T any](seq iter.Seq[T], w io.Writer, cols []TableColumn[T]) error {
+// maxWidth is the optional column-width cap (see [WriteTableToWriter]).
+func WriteTableSelectedToWriter[T any](seq iter.Seq[T], w io.Writer, cols []TableColumn[T], maxWidth ...int) error {
 	rows := make([][]string, 0, 64)
 	for v := range seq {
 		row := make([]string, len(cols))
@@ -102,10 +118,10 @@ func WriteTableSelectedToWriter[T any](seq iter.Seq[T], w io.Writer, cols []Tabl
 		headers[i] = c.Header
 		rightAlign[i] = c.RightAlign
 	}
-	return writeTableLines(w, headers, rows, rightAlign)
+	return writeTableLines(w, headers, rows, rightAlign, optInt(maxWidth))
 }
 
-func writeTableWithSchema[T any](seq iter.Seq[T], w io.Writer, schema *rowSchema, rightAlign []bool) error {
+func writeTableWithSchema[T any](seq iter.Seq[T], w io.Writer, schema *rowSchema, rightAlign []bool, maxWidth int) error {
 	rows := make([][]string, 0, 64)
 	for v := range seq {
 		row := make([]string, len(schema.encoders))
@@ -115,7 +131,7 @@ func writeTableWithSchema[T any](seq iter.Seq[T], w io.Writer, schema *rowSchema
 		}
 		rows = append(rows, row)
 	}
-	return writeTableLines(w, schema.header, rows, rightAlign)
+	return writeTableLines(w, schema.header, rows, rightAlign, maxWidth)
 }
 
 // writeTableLines is the shared formatter used by both
@@ -126,7 +142,25 @@ func writeTableWithSchema[T any](seq iter.Seq[T], w io.Writer, schema *rowSchema
 // is 3 spaces; underline is one dash per column-plus-separator
 // character. Header is always left-justified; data alignment per
 // column controlled by rightAlign.
-func writeTableLines(w io.Writer, headers []string, rows [][]string, rightAlign []bool) error {
+func writeTableLines(w io.Writer, headers []string, rows [][]string, rightAlign []bool, maxWidth int) error {
+	// Truncate over-long cells to maxWidth (with a trailing "...") before
+	// sizing columns — same rule as ssql.DisplayTable. maxWidth<=0 disables
+	// it. Guard maxWidth>3 so the "..." slice never goes negative; for a
+	// tiny positive cap, hard-truncate without the ellipsis.
+	if maxWidth > 0 {
+		for _, r := range rows {
+			for i, v := range r {
+				if len(v) > maxWidth {
+					if maxWidth > 3 {
+						r[i] = v[:maxWidth-3] + "..."
+					} else {
+						r[i] = v[:maxWidth]
+					}
+				}
+			}
+		}
+	}
+
 	widths := make([]int, len(headers))
 	for i, h := range headers {
 		widths[i] = len(h)

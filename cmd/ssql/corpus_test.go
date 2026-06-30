@@ -193,6 +193,15 @@ func TestPipelineCorpus(t *testing.T) {
 			Contains: []string{"Alice", "Bob", "Engineering"},
 		},
 		{
+			Name:     "to_table_maxwidth",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} to table -max-width 6`,
+			// -max-width must truncate identically in record and typed
+			// modes: "Engineering" (11) → "Eng..." (6). Before, typed
+			// codegen ignored -max-width and showed the full value.
+			Contains: []string{"Eng..."},
+			Excludes: []string{"Engineering"},
+		},
+		{
 			Name:     "from_csv_to_csv",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} to csv`,
 			// Record mode reorders columns alphabetically (no schema

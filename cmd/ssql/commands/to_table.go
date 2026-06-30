@@ -153,7 +153,7 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 		// when the previous fragment produces a Stream.
 		_ = prevIsStream
 		imports := []string{"fmt", "github.com/rosscartlidge/ssql/v4/typed", "os"}
-		code := generateTypedToTableCode(prevSchema, fields, onlySpecified, inputVar)
+		code := generateTypedToTableCode(prevSchema, fields, onlySpecified, inputVar, maxWidth)
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
 		frag.InputTypedSchema = prevSchema
 		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone, SerialOnly: true}
@@ -195,13 +195,13 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 // (the common case — print everything in struct order); calls
 // typed.WriteTableSelectedToWriter with a one-TableColumn-per-field
 // list when fields/onlySpecified are set.
-func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpecified bool, inputVar string) string {
+func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpecified bool, inputVar string, maxWidth int) string {
 	// No field selection — let the helper read the struct schema.
 	if len(fields) == 0 && !onlySpecified {
-		return fmt.Sprintf(`if err := typed.WriteTableToWriter(%s, os.Stdout); err != nil {
+		return fmt.Sprintf(`if err := typed.WriteTableToWriter(%s, os.Stdout, %d); err != nil {
 		fmt.Fprintf(os.Stderr, "to table: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar)
+	}`, inputVar, maxWidth)
 	}
 
 	// Resolve fields in display order.
@@ -234,7 +234,7 @@ func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpec
 		fmt.Fprintf(&b, "\t\t{Header: %q, Format: func(r *%s) string { return fmt.Sprintf(\"%%v\", r.%s) }, RightAlign: %t},\n",
 			f.Name, schema.TypeName, f.GoName, right)
 	}
-	b.WriteString("\t}); err != nil {\n")
+	fmt.Fprintf(&b, "\t}, %d); err != nil {\n", maxWidth)
 	b.WriteString("\t\tfmt.Fprintf(ctx.Stderr(), \"to table: %v\\n\", err)\n")
 	b.WriteString("\t\tos.Exit(1)\n")
 	b.WriteString("\t}")
