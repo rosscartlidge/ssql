@@ -305,6 +305,16 @@ func TestPipelineCorpus(t *testing.T) {
 			Contains: []string{"Bob", "David", "65000", "72000"},
 			Excludes: []string{"Carol"},
 		},
+		{
+			Name:     "top_string_asc",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} top 2 -field name -asc | {{.bin}} to csv`,
+			// Bottom 2 by NAME (-asc), lexicographic: Alice, Bob. Guards that
+			// record-mode `top` orders strings the same as the typed codegen
+			// (the old numeric-only key collapsed all strings to 0 and
+			// returned arbitrary rows).
+			Contains: []string{"Alice", "Bob"},
+			Excludes: []string{"Grace", "Frank"},
+		},
 
 		// --- Aggregation --------------------------------------
 		{

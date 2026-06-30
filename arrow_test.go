@@ -255,7 +255,7 @@ func TestArrowInternalFieldsSkipped(t *testing.T) {
 	records := []Record{
 		MakeMutableRecord().
 			String("name", "Alice").
-			Int("_row_number", int64(1)). // Internal field
+			Int("_internal", int64(1)). // Internal field (underscore prefix)
 			Freeze(),
 	}
 
@@ -281,15 +281,15 @@ func TestArrowInternalFieldsSkipped(t *testing.T) {
 		t.Fatalf("Expected 1 record, got %d", len(results))
 	}
 
-	// Should have name but not _row_number
+	// Should have name but not the internal field
 	name := GetOr(results[0], "name", "")
 	if name != "Alice" {
 		t.Errorf("Expected name 'Alice', got %q", name)
 	}
 
 	// Internal field should not be present
-	if _, exists := Get[int64](results[0], "_row_number"); exists {
-		t.Error("Internal field _row_number should not be written to Arrow")
+	if _, exists := Get[int64](results[0], "_internal"); exists {
+		t.Error("Internal field _internal should not be written to Arrow")
 	}
 }
 

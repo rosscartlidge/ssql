@@ -471,6 +471,83 @@ func (h *topMaxHeap[T, K]) Pop() any {
 	return item
 }
 
+// TopByFunc returns the top N elements ranked by a comparator: cmp(a, b) > 0
+// means a ranks higher than b (and so sorts earlier in the result). Like
+// [TopBy] it uses a bounded heap of size N — O(N*log(K)) time, O(K) memory —
+// but ranks by an arbitrary comparator instead of a single Ordered key. Use
+// this when the ordering is type-aware (e.g. [CompareAny], which orders
+// numbers numerically and everything else lexicographically) so a single field
+// can hold mixed or non-numeric values. Results are highest-first.
+func TopByFunc[T any](n int, cmp func(a, b T) int) Filter[T, T] {
+	return topByComparator(n, cmp, false)
+}
+
+// BottomByFunc returns the bottom N elements ranked by a comparator (the N for
+// which cmp ranks them lowest), lowest-first. The comparator counterpart of
+// [BottomBy]; see [TopByFunc].
+func BottomByFunc[T any](n int, cmp func(a, b T) int) Filter[T, T] {
+	return topByComparator(n, cmp, true)
+}
+
+// topByComparator backs TopByFunc/BottomByFunc. asc=false keeps the N highest
+// (heap root = current lowest survivor, replaced when a higher item arrives);
+// asc=true keeps the N lowest (root = current highest survivor). Either way the
+// result is emitted best-first.
+func topByComparator[T any](n int, cmp func(a, b T) int, asc bool) Filter[T, T] {
+	return func(input iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			if n <= 0 {
+				return
+			}
+			// The heap's worst survivor sits at the root so it can be
+			// discarded in O(log K). For top-N that's the smallest; for
+			// bottom-N the largest — invert the comparator for the latter.
+			less := func(a, b T) bool { return cmp(a, b) < 0 }
+			worse := func(item, root T) bool { return cmp(item, root) > 0 }
+			if asc {
+				less = func(a, b T) bool { return cmp(a, b) > 0 }
+				worse = func(item, root T) bool { return cmp(item, root) < 0 }
+			}
+			h := &cmpHeap[T]{less: less}
+			for item := range input {
+				if len(h.items) < n {
+					heap.Push(h, item)
+				} else if worse(item, h.items[0]) {
+					h.items[0] = item
+					heap.Fix(h, 0)
+				}
+			}
+			result := make([]T, len(h.items))
+			for i := len(result) - 1; i >= 0; i-- {
+				result[i] = heap.Pop(h).(T)
+			}
+			for _, item := range result {
+				if !yield(item) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// cmpHeap is a comparator-driven heap used by TopByFunc/BottomByFunc.
+type cmpHeap[T any] struct {
+	items []T
+	less  func(a, b T) bool
+}
+
+func (h *cmpHeap[T]) Len() int           { return len(h.items) }
+func (h *cmpHeap[T]) Less(i, j int) bool { return h.less(h.items[i], h.items[j]) }
+func (h *cmpHeap[T]) Swap(i, j int)      { h.items[i], h.items[j] = h.items[j], h.items[i] }
+func (h *cmpHeap[T]) Push(x any)         { h.items = append(h.items, x.(T)) }
+func (h *cmpHeap[T]) Pop() any {
+	old := h.items
+	n := len(old)
+	item := old[n-1]
+	h.items = old[:n-1]
+	return item
+}
+
 // MergeSorted performs a k-way merge of pre-sorted Record iterators.
 // Each source must already be sorted by the given orderBy fields.
 // Output is a single sorted iterator with O(K) memory where K is the number of sources.

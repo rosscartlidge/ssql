@@ -118,8 +118,8 @@ ssql from employees.csv
 
 Output (JSONL):
 ```json
-{"_row_number":0,"age":30,"department":"Engineering","name":"Alice","salary":95000}
-{"_row_number":1,"age":25,"department":"Marketing","name":"Bob","salary":65000}
+{"age":30,"department":"Engineering","name":"Alice","salary":95000}
+{"age":25,"department":"Marketing","name":"Bob","salary":65000}
 ...
 ```
 
@@ -171,8 +171,8 @@ ssql from employees.csv
 Output (JSONL with schema header):
 ```json
 {"_schema":{"fields":["name","age","department","salary"],"types":{"name":"string","age":"int","department":"string","salary":"int"}}}
-{"_row_number":0,"name":"Alice","age":30,"department":"Engineering","salary":95000}
-{"_row_number":1,"name":"Bob","age":25,"department":"Marketing","salary":65000}
+{"name":"Alice","age":30,"department":"Engineering","salary":95000}
+{"name":"Bob","age":25,"department":"Marketing","salary":65000}
 ...
 ```
 
@@ -362,11 +362,11 @@ ssql from customers.csv | \
 
 **Example output:**
 ```
-_row_number   age   city      name      salary
-----------------------------------------------
-0             30    NYC       Alice     95000
-1             25    LA        Bob       75000
-2             35    Chicago   Charlie   120000
+age   city      name      salary
+--------------------------------
+30    NYC       Alice     95000
+25    LA        Bob       75000
+35    Chicago   Charlie   120000
 ```
 
 ---
@@ -1714,15 +1714,27 @@ eval "$(ssql -run-keybinding)"       # Alt-r
 - **Alt-g** shows the **typed Go** the pipeline generates, in a `tmux` popup,
   without running it — a fast way to see what the fast path looks like.
 - **Alt-r** **compiles and runs** the pipeline as typed Go and streams the
-  output. If generation or compilation fails, the error appears in a popup
-  subwindow rather than silently doing nothing.
+  output, then prints a `[ssql: compiled in …, ran in …]` line so you can see
+  how fast the compiled pipeline ran (compile time is reported separately, so
+  the run figure is the pipeline's real speed on your data). If generation or
+  compilation fails, the error appears in a popup subwindow rather than
+  silently doing nothing.
 
 ```bash
 ssql from data.csv | ssql where -if age gt 30 | ssql to table  <Alt-g>
 #   → popup shows the generated typed Go program
 
 ssql from data.csv | ssql where -if age gt 30 | ssql to table  <Alt-r>
-#   → compiles the typed Go and prints its output inline
+#   → compiles the typed Go, prints its output inline, then:
+#     [ssql: compiled in 1.43s, ran in 7.5ms]
+```
+
+The same timing is available non-interactively with `generate go -run -time`
+(the time line goes to stderr, so it never mixes into the data on stdout):
+
+```bash
+(export SSQL_MODE=typed; ssql from data.csv | ssql top 10 -field salary | ssql to table) \
+    | ssql generate go -run -time
 ```
 
 Both read the pipeline structure, not the data, to generate — so producing the

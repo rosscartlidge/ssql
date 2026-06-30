@@ -79,16 +79,24 @@ func RegisterTop(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
-			keyFn := func(r ssql.Record) float64 {
-				val, _ := ssql.Get[any](r, field)
-				return extractNumeric(val)
+			// Rank by the field's natural type — numeric when both values
+			// are numbers, lexicographic otherwise — via the same
+			// type-aware comparator `sort` uses (ssql.CompareAny). This
+			// matches the typed codegen (which keys by the field's Go type)
+			// and fixes string fields: the previous numeric-only key coerced
+			// every string to 0, so `top -field <string>` silently returned
+			// arbitrary rows instead of the lexicographic top-N.
+			cmp := func(a, b ssql.Record) int {
+				av, _ := ssql.Get[any](a, field)
+				bv, _ := ssql.Get[any](b, field)
+				return ssql.CompareAny(av, bv)
 			}
 
 			var result = records
 			if asc {
-				result = ssql.BottomBy(n, keyFn)(records)
+				result = ssql.BottomByFunc(n, cmp)(records)
 			} else {
-				result = ssql.TopBy(n, keyFn)(records)
+				result = ssql.TopByFunc(n, cmp)(records)
 			}
 
 			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, result); err != nil {

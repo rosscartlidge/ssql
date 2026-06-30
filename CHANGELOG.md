@@ -5,6 +5,33 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.54.0] - 2026-06-30
+
+### Bug Fixes
+- **`top` now ranks by the field's natural type.** Previously `top` keyed every
+  value through a numeric coercion that returned 0 for any non-number, so
+  `top -field <string>` silently returned arbitrary rows instead of the
+  lexicographic top-N. It now ranks with `ssql.CompareAny` (numeric when both
+  values are numbers, lexicographic otherwise) — the same comparator `sort`
+  uses — so execution matches the typed `generate go` output. New comparator-
+  based `ssql.TopByFunc` / `ssql.BottomByFunc` (bounded heap, O(N·log K)) back
+  this.
+
+### Changed
+- **The internal `_row_number` field is gone.** `from csv` / `from xlsx` no
+  longer attach a hidden `_row_number` column (added at read time since the
+  first commit). It leaked into `to table` / `to csv` / `to json` output and
+  diverged from typed mode (which never had it); record and typed output now
+  match. If you relied on it to recover input order, use `window -row-number`
+  instead.
+
+### New Features
+- **`generate go -time`** (and **Alt-r**) report compile and run wall-clock
+  times. `… | ssql generate go -run -time` prints `[ssql: compiled in …, ran in
+  …]` to stderr (never mixing into stdout data); the Alt-r key binding shows it
+  inline on success. Compile and run are timed separately so the run figure is
+  the compiled pipeline's real speed.
+
 ## [v4.53.0] - 2026-06-30
 
 ### New Features

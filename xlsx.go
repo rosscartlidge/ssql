@@ -83,10 +83,9 @@ func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error) {
 		return func(yield func(Record) bool) {}, nil
 	}
 
-	// Build schema from headers + _row_number
-	fieldNames := make([]string, len(headers)+1)
+	// Build schema from headers
+	fieldNames := make([]string, len(headers))
 	copy(fieldNames, headers)
-	fieldNames[len(headers)] = "_row_number"
 	slices.Sort(fieldNames)
 	schema := NewSchema(fieldNames)
 
@@ -95,7 +94,6 @@ func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error) {
 	for i, h := range headers {
 		fieldIndices[i] = schema.Index(h)
 	}
-	rowNumIdx := schema.Index("_row_number")
 
 	// Infer types from second row (first data row) if available
 	var fieldParsers []func(string) any
@@ -117,7 +115,7 @@ func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error) {
 		defer f.Close()
 
 		numFields := schema.Width()
-		for rowIdx, row := range dataRows {
+		for _, row := range dataRows {
 			values := make([]any, numFields)
 
 			for i, cell := range row {
@@ -129,7 +127,6 @@ func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error) {
 					}
 				}
 			}
-			values[rowNumIdx] = int64(rowIdx)
 
 			if !yield(NewRecordFromSchema(schema, values)) {
 				return

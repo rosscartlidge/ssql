@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
@@ -22,6 +23,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Example("ssql from -g data.csv | ssql where -g -if age gt 18 | ssql generate go", "Generate Go code from pipeline").
 		Example("(export SSQL_MODE=record && ssql from data.csv | ssql limit 10 | ssql generate go) > prog.go", "Generate using environment variable").
 		Example("(export SSQL_MODE=parallel; ssql from data.csv | ssql to table) | ssql generate go -run", "Generate, compile, and execute in one shot").
+		Example("(export SSQL_MODE=typed; ssql from data.csv | ssql to table) | ssql generate go -run -time", "Compile and run, reporting compile and run times on stderr").
 		Example("(export SSQL_MODE=parallel; ssql from data.csv | ssql to table) | ssql generate go -build query", "Compile to a binary named 'query' and exit").
 		Example("(export SSQL_MODE=parallel; ssql from parquet x.parquet | ssql group-by k -count n | ssql to table) | ssql generate go -optimise -run", "Apply pipeline optimiser (column projection etc.), then compile and execute").
 		Flag("-run", "-r").
@@ -36,6 +38,12 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Global().
 		Default("").
 		Help("Compile to the named binary and exit (mutually exclusive with OUTPUT and -run)").
+		Done().
+		Flag("-time").
+		Bool().
+		Global().
+		Default(false).
+		Help("With -run: print the compile and run wall-clock times to stderr").
 		Done().
 		Flag("-optimise", "-O").
 		Bool().
@@ -94,6 +102,10 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			if v, ok := ctx.GlobalFlags["-explain"]; ok {
 				explain = v.(bool)
 			}
+			var timeRun bool
+			if v, ok := ctx.GlobalFlags["-time"]; ok {
+				timeRun = v.(bool)
+			}
 			if v, ok := ctx.GlobalFlags["-script"]; ok {
 				scriptPath = v.(string)
 			}
@@ -143,7 +155,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			}
 
 			if optimise {
-				return runOptimiseThenGo(fragmentSrc, run, buildOut, outputFile, explain)
+				return runOptimiseThenGo(fragmentSrc, run, buildOut, outputFile, explain, timeRun)
 			}
 
 			code, err := lib.AssembleCodeFragments(fragmentSrc)
@@ -152,7 +164,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			}
 
 			if run {
-				return runGoSource(code)
+				return runGoSource(code, timeRun)
 			}
 			if buildOut != "" {
 				return buildGoSource(code, buildOut)
@@ -186,7 +198,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 // parent's environment) handles the user's own subshell-export
 // patterns naturally — see doc/research/generate-go-flags-proposal.md
 // §2b for the discussion.
-func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, explain bool) error {
+func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, explain, timeRun bool) error {
 	// Buffer stdin once — we feed it to optimizePipeline AND parse it
 	// again to detect the target SSQLGO mode for re-execution.
 	buf, err := io.ReadAll(in)
@@ -225,6 +237,9 @@ func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, expl
 	switch {
 	case run:
 		inner += " -run"
+		if timeRun {
+			inner += " -time"
+		}
 	case buildOut != "":
 		inner += " -build " + shellQuote(buildOut)
 	case outputFile != "":
@@ -309,19 +324,42 @@ func shellQuote(s string) string {
 // from the user's cwd, keeps relative paths working AND lets Go
 // resolve the temp module without conflict with whatever go.mod is
 // (or isn't) in the user's cwd.
-func runGoSource(code string) error {
+func runGoSource(code string, timeRun bool) error {
+	compileStart := time.Now()
 	dir, binPath, err := compileGoSource(code, "")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
+	compileDur := time.Since(compileStart)
 
 	// Run step: do NOT set cmd.Dir — the binary inherits the user's
 	// cwd, so relative file paths in the pipeline resolve as expected.
 	run := exec.Command(binPath)
 	run.Stdout = os.Stdout
 	run.Stderr = os.Stderr
-	return run.Run()
+	runStart := time.Now()
+	runErr := run.Run()
+	runDur := time.Since(runStart)
+
+	// Timing goes to stderr so it never pollutes the data on stdout. The
+	// compile cost is reported separately from the run so you can see how
+	// fast the compiled pipeline actually processes the data — the whole
+	// point of -run over the interpreted pipeline.
+	if timeRun {
+		fmt.Fprintf(os.Stderr, "[ssql: compiled in %s, ran in %s]\n",
+			roundDur(compileDur), roundDur(runDur))
+	}
+	return runErr
+}
+
+// roundDur trims a duration to a human-friendly precision: whole
+// milliseconds once past a second, otherwise microseconds.
+func roundDur(d time.Duration) time.Duration {
+	if d >= time.Second {
+		return d.Round(time.Millisecond)
+	}
+	return d.Round(time.Microsecond)
 }
 
 // buildGoSource compiles the generated Go code and writes the

@@ -138,15 +138,13 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 		// Determine field names
 		var fieldNames []string
 		if cfg.HasHeaders && len(headers) > 0 {
-			fieldNames = make([]string, len(headers)+1)
+			fieldNames = make([]string, len(headers))
 			copy(fieldNames, headers)
-			fieldNames[len(headers)] = "_row_number"
 		} else {
-			fieldNames = make([]string, len(firstRow)+1)
+			fieldNames = make([]string, len(firstRow))
 			for i := range firstRow {
 				fieldNames[i] = fmt.Sprintf("col_%d", i)
 			}
-			fieldNames[len(firstRow)] = "_row_number"
 		}
 
 		// Sort field names and create shared schema ONCE
@@ -166,7 +164,6 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 				fieldIndices[i] = schema.Index(fmt.Sprintf("col_%d", i))
 			}
 		}
-		rowNumIdx := schema.Index("_row_number")
 
 		// Determine parsers: either from config or inferred from first row
 		var fieldParsers []func(string) any
@@ -211,13 +208,11 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 				values[fieldIndices[i]] = fieldParsers[i](value)
 			}
 		}
-		values[rowNumIdx] = int64(0)
 		if !yield(NewRecordFromSchema(schema, values)) {
 			return
 		}
 
 		// Process remaining rows with shared schema
-		rowIndex := int64(1)
 		numFields := schema.Width()
 		for {
 			row, err := csvReader.Read()
@@ -234,8 +229,6 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 					values[fieldIndices[i]] = fieldParsers[i](value)
 				}
 			}
-			values[rowNumIdx] = rowIndex
-			rowIndex++
 
 			// Create record with shared schema (no allocation for schema)
 			if !yield(NewRecordFromSchema(schema, values)) {
@@ -363,15 +356,13 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 		// Determine field names
 		var fieldNames []string
 		if cfg.HasHeaders && len(headers) > 0 {
-			fieldNames = make([]string, len(headers)+1)
+			fieldNames = make([]string, len(headers))
 			copy(fieldNames, headers)
-			fieldNames[len(headers)] = "_row_number"
 		} else {
-			fieldNames = make([]string, len(firstRow)+1)
+			fieldNames = make([]string, len(firstRow))
 			for i := range firstRow {
 				fieldNames[i] = fmt.Sprintf("col_%d", i)
 			}
-			fieldNames[len(firstRow)] = "_row_number"
 		}
 
 		// Sort field names and create shared schema ONCE
@@ -391,7 +382,6 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 				fieldIndices[i] = schema.Index(fmt.Sprintf("col_%d", i))
 			}
 		}
-		rowNumIdx := schema.Index("_row_number")
 
 		// Determine parsers: either from config or inferred from first row
 		var fieldParsers []func(string) any
@@ -436,12 +426,12 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 				values[fieldIndices[i]] = fieldParsers[i](value)
 			}
 		}
-		values[rowNumIdx] = int64(0)
 		if !yield(NewRecordFromSchema(schema, values), nil) {
 			return
 		}
 
-		// Process remaining rows with shared schema
+		// Process remaining rows with shared schema. rowIndex is the
+		// 1-based data-row counter used only for error messages.
 		rowIndex := int64(1)
 		numFields := schema.Width()
 		for {
@@ -465,7 +455,6 @@ func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Reco
 					values[fieldIndices[i]] = fieldParsers[i](value)
 				}
 			}
-			values[rowNumIdx] = rowIndex
 			rowIndex++
 
 			// Create record with shared schema

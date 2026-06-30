@@ -193,7 +193,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						clauses[0].FieldRenames = make(map[string]string)
 					}
 					for _, rf := range rightSchema.Fields {
-						if joinKeys[rf] || rf == "_row_number" {
+						if joinKeys[rf] {
 							continue
 						}
 						suffixed := rf + suffix
@@ -209,7 +209,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if suffix == "" && !excludeLeft && !excludeRight {
 					var collisions []string
 					for _, rf := range rightSchema.Fields {
-						if joinKeys[rf] || rf == "_row_number" {
+						if joinKeys[rf] {
 							continue
 						}
 						// Check if -as renames handle this field

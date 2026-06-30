@@ -60,6 +60,12 @@ true
 	if !strings.Contains(got, "set-expr") {
 		t.Errorf("expected the real generation error, got:\n%s", got)
 	}
+
+	// A working pipeline compiles, runs, and reports timing inline on success.
+	ok := run("ssql from csv " + csv + " | ssql to table")
+	if !strings.Contains(ok, "compiled in") || !strings.Contains(ok, "ran in") {
+		t.Errorf("expected inline [ssql: compiled in …, ran in …] timing on success, got:\n%s", ok)
+	}
 }
 
 // TestRunKeybindingEmitted confirms `-run-keybinding` emits the function,
@@ -71,7 +77,7 @@ func TestRunKeybindingEmitted(t *testing.T) {
 		t.Fatalf("-run-keybinding: %v", err)
 	}
 	for _, want := range []string{
-		"_ssql_typed_run", "READLINE_LINE", "SSQL_MODE=typed", "generate go -run",
+		"_ssql_typed_run", "READLINE_LINE", "SSQL_MODE=typed", "generate go -run -time",
 		`bind -m emacs -x '"\er": _ssql_typed_run'`,
 		`bind -m vi-insert -x '"\er": _ssql_typed_run'`,
 		`bind -m vi-command -x '"\er": _ssql_typed_run'`,

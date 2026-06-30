@@ -525,6 +525,40 @@ func TestTopBy_Duplicates(t *testing.T) {
 	}
 }
 
+func TestTopByFunc_StringOrder(t *testing.T) {
+	// CompareAny orders strings lexicographically — the case that the old
+	// numeric-only `top` key got wrong (every string collapsed to 0).
+	input := slices.Values([]string{"delta", "alpha", "charlie", "echo", "bravo"})
+	cmp := func(a, b string) int { return CompareAny(a, b) }
+
+	top := slices.Collect(TopByFunc(2, cmp)(input))
+	if want := []string{"echo", "delta"}; !slices.Equal(top, want) {
+		t.Errorf("TopByFunc(2) = %v, want %v", top, want)
+	}
+	bottom := slices.Collect(BottomByFunc(3, cmp)(input))
+	if want := []string{"alpha", "bravo", "charlie"}; !slices.Equal(bottom, want) {
+		t.Errorf("BottomByFunc(3) = %v, want %v", bottom, want)
+	}
+}
+
+func TestTopByFunc_NumericMatchesKey(t *testing.T) {
+	// With a numeric comparator TopByFunc must agree with key-based TopBy.
+	nums := []int{3, 7, 1, 9, 4, 6, 2, 8, 5, 10}
+	cmp := func(a, b int) int { return CompareAny(a, b) }
+	got := slices.Collect(TopByFunc(3, cmp)(slices.Values(nums)))
+	want := slices.Collect(TopBy(3, func(x int) int { return x })(slices.Values(nums)))
+	if !slices.Equal(got, want) {
+		t.Errorf("TopByFunc %v != TopBy %v", got, want)
+	}
+}
+
+func TestTopByFunc_Zero(t *testing.T) {
+	in := slices.Values([]int{1, 2, 3})
+	if r := slices.Collect(TopByFunc(0, func(a, b int) int { return CompareAny(a, b) })(in)); len(r) != 0 {
+		t.Errorf("TopByFunc(0) = %v, want empty", r)
+	}
+}
+
 // ============================================================================
 // MERGE SORTED TESTS
 // ============================================================================

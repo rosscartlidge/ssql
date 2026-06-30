@@ -10,7 +10,8 @@ package commands
 // you're editing:
 //
 //	ssql from big.csv | ssql where -if age gt 25 | ssql to table<Alt-r>
-//	  → (compiles the typed pipeline, runs it, output streams below the prompt)
+//	  → (compiles the typed pipeline, runs it, output streams below the prompt,
+//	     then a "[ssql: compiled in …, ran in …]" line reports how fast it ran)
 //
 // Unlike the other action keys (Ctrl-O field completion, Ctrl-T optimise,
 // Alt-h/Alt-H help), this one is NOT instant and DOES read data: it runs a
@@ -35,14 +36,19 @@ _ssql_typed_run() {
     # program's stdout (the result) STREAMS to the terminal; its stderr (generate
     # /compile/runtime errors) goes to a temp file. On failure, show the error in
     # a popup instead of an inline error wall. readline redraws the line after.
-    local errf; errf=$(mktemp) || { (export SSQL_MODE=typed; eval "$READLINE_LINE") | command ssql generate go -run; return; }
+    local errf; errf=$(mktemp) || { (export SSQL_MODE=typed; eval "$READLINE_LINE") | command ssql generate go -run -time; return; }
+    # -time makes generate-go print "[ssql: compiled in …, ran in …]" to its
+    # stderr (which we capture). On success we echo that timing line inline;
+    # on failure the whole captured stderr goes to the error popup.
     (export SSQL_MODE=typed; eval "$READLINE_LINE") 2>"$errf" \
-        | command ssql generate go -run 2>>"$errf"
+        | command ssql generate go -run -time 2>>"$errf"
     local rc=${PIPESTATUS[1]}
     if (( rc != 0 )); then
         _ssql_show_help "ssql: pipeline failed (could not generate, compile, or run)
 
 $(_ssql_clean_err "$(<"$errf")")"
+    elif [[ -s "$errf" ]]; then
+        printf '%s\n' "$(<"$errf")"
     fi
     rm -f "$errf"
 }
