@@ -1543,6 +1543,31 @@ ssql group-by -help
 ssql to chart -help
 ```
 
+### Interactive Shell
+
+ssql is designed to be typed *live* at the bash prompt. One line in your
+`~/.bashrc` enables everything in this section at once — completion plus the
+whole family of single-key actions:
+
+```bash
+eval "$(ssql -shell-init)"     # completion + every key binding, in one eval
+```
+
+| Key | Action |
+|---|---|
+| **Ctrl-O** | Complete a field name from the upstream pipeline schema (across `\|`, process substitution, and a `join`'s right side) |
+| **Alt-h** | Help for the flag/command under the cursor — plus the function reference on an expression argument |
+| **Alt-g** | Show the typed Go this pipeline generates (popup) |
+| **Alt-r** | Compile the pipeline as typed Go and run it |
+| **Ctrl-T** | Optimise the pipeline on the line, in place |
+| **Alt-H** | List these key bindings |
+
+Each binding is also available on its own flag (`-field-keybinding`,
+`-help-keybinding`, `-code-keybinding`, `-run-keybinding`,
+`-optimise-keybinding`) if you'd rather enable pieces individually — run `ssql`
+with no arguments to see the full list. The rest of this section walks through
+each one.
+
 ### Bash Completion
 
 The CLI supports intelligent tab completion for commands, flags, and even field names:
@@ -1674,6 +1699,71 @@ ssql from data.csv | ssql update -set-expr label <Alt-h>
 #       Math Functions (6): round(num), floor(num), abs(num), min(a, b), …
 #       …  (scroll for Array / Date / Type / Map / Bitwise / Hash / Operators)
 ```
+
+### Show and Run the Typed Go (`Alt-g`, `Alt-r`)
+
+The same prototype pipeline you're editing can compile to a standalone typed Go
+program (see [Code Generation](#code-generation) above). Two key bindings put
+that one keystroke away — no need to retype the line into `ssql generate go`:
+
+```bash
+eval "$(ssql -code-keybinding)"      # Alt-g — add to ~/.bashrc
+eval "$(ssql -run-keybinding)"       # Alt-r
+```
+
+- **Alt-g** shows the **typed Go** the pipeline generates, in a `tmux` popup,
+  without running it — a fast way to see what the fast path looks like.
+- **Alt-r** **compiles and runs** the pipeline as typed Go and streams the
+  output. If generation or compilation fails, the error appears in a popup
+  subwindow rather than silently doing nothing.
+
+```bash
+ssql from data.csv | ssql where -if age gt 30 | ssql to table  <Alt-g>
+#   → popup shows the generated typed Go program
+
+ssql from data.csv | ssql where -if age gt 30 | ssql to table  <Alt-r>
+#   → compiles the typed Go and prints its output inline
+```
+
+Both read the pipeline structure, not the data, to generate — so producing the
+code is instant even on huge files (only Alt-r then actually runs it).
+
+### List the Key Bindings (`Alt-H`)
+
+Forgotten which key does what? **Alt-H** (capital) pops a cheat-sheet of the
+whole family — it's generated from the same table that defines the bindings, so
+it can never drift from what's actually bound:
+
+```bash
+ssql from data.csv | ssql to table  <Alt-H>
+#   → ssql key bindings
+#       Ctrl-O   complete a field name from the upstream pipeline schema
+#       Ctrl-T   optimise the ssql pipeline on the line, in place
+#       Alt-g    show the typed Go this pipeline generates (without running)
+#       Alt-r    compile the pipeline as typed Go and run it
+#       Alt-h    help for the flag / command under the cursor
+#       Alt-H    list these key bindings
+```
+
+### Reference at the Prompt: `ssql functions` and `ssql conventions`
+
+Two in-binary reference commands round out the interactive experience — no need
+to leave the terminal for the docs:
+
+```bash
+ssql functions                 # ~80 expression functions, by category
+ssql functions -category math  # just one category
+
+ssql conventions                       # cross-cutting system semantics
+ssql conventions -category evaluation  # e.g. update's SET-snapshot rule
+```
+
+`ssql functions` is the same listing Alt-h appends on an expression argument.
+`ssql conventions` documents the behaviours that span commands and tend to
+surprise people — how `update` evaluates all assignments against the original
+row (like SQL `UPDATE … SET`), the JSONL `_schema` header, the `SSQL_MODE`
+codegen paths, and process-substitution sourcing — the things that aren't any
+single command's `-help`.
 
 ### Understanding Command Structure (Advanced)
 
