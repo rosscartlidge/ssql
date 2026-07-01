@@ -14,6 +14,13 @@ package main
 // our safety net. Adding a new pipeline here is cheap; the cost of
 // silently breaking a tutorial example is high.
 //
+// This is a SMOKE test (Contains/Excludes substrings). For the stronger
+// N-way DIFFERENTIAL gate — every result-producing lane (exec, go-record,
+// go-typed, go-parallel, generate-ssql) must produce byte-identical
+// normalised output, with golden oracles on shuffled data — see
+// equivalence_test.go (TestPipelineEquivalence). That harness catches the
+// "works in mode X, silently wrong in mode Y" bugs this one can miss.
+//
 // To run only the corpus tests:
 //   go test ./cmd/ssql -run TestPipelineCorpus -v
 //
@@ -98,6 +105,7 @@ func corpusData(t *testing.T) string {
 			"orders.csv":    corpusOrdersCSV,
 			"sales.csv":     corpusSalesCSV,
 			"employees.tsv": strings.ReplaceAll(corpusEmployeesCSV, ",", "\t"),
+			"shuffled.csv":  corpusShuffledCSV,
 		}
 		for name, content := range files {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -323,6 +331,17 @@ func TestPipelineCorpus(t *testing.T) {
 			// returned arbitrary rows).
 			Contains: []string{"Alice", "Bob"},
 			Excludes: []string{"Grace", "Frank"},
+		},
+		{
+			Name:     "top_string_desc",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} top 2 -field name | {{.bin}} to csv`,
+			// Top 2 by NAME (desc), lexicographic: Grace, Frank. This case is
+			// DISCRIMINATING — employees are in alphabetical input order, so a
+			// buggy "return the first 2 rows" (the old float64-key-coerces-to-0
+			// behaviour) would yield Alice/Bob, which this catches. Covers the
+			// record-mode codegen path the earlier -asc case couldn't.
+			Contains: []string{"Grace", "Frank"},
+			Excludes: []string{"Alice", "Bob"},
 		},
 
 		// --- Aggregation --------------------------------------

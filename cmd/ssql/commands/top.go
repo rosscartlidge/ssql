@@ -174,13 +174,20 @@ func generateTopCode(n int, field string, asc bool) error {
 		return lib.WriteCodeFragment(frag)
 	}
 
-	funcName := "ssql.TopBy"
+	// Rank by the field's natural type via ssql.CompareAny (numeric when
+	// both values are numbers, lexicographic otherwise) — the same
+	// comparator the CLI execution path and the typed codegen use. The old
+	// float64 key coerced every string to 0.0, so `top -field <string>`
+	// generated code returned arbitrary rows.
+	funcName := "ssql.TopByFunc"
 	if asc {
-		funcName = "ssql.BottomBy"
+		funcName = "ssql.BottomByFunc"
 	}
-	code := fmt.Sprintf(`%s := %s(*flagTop, func(r ssql.Record) float64 {
-		return ssql.GetOr(r, %q, 0.0)
-	})(%s)`, outputVar, funcName, field, inputVar)
+	code := fmt.Sprintf(`%s := %s(*flagTop, func(a, b ssql.Record) int {
+		av, _ := ssql.Get[any](a, %q)
+		bv, _ := ssql.Get[any](b, %q)
+		return ssql.CompareAny(av, bv)
+	})(%s)`, outputVar, funcName, field, field, inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	frag.Params = params

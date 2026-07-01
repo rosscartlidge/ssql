@@ -1375,10 +1375,15 @@ func TestTopGeneration(t *testing.T) {
 	}
 
 	outputStr := string(output)
-	for _, want := range []string{`"type":"stmt"`, `ssql.TopBy`, `salary`, `"var":"topRecords"`} {
+	// Record codegen must rank by natural type (CompareAny), NOT the old
+	// float64 key that coerced strings to 0.0 — matches CLI execution + typed.
+	for _, want := range []string{`"type":"stmt"`, `ssql.TopByFunc`, `ssql.CompareAny`, `salary`, `"var":"topRecords"`} {
 		if !strings.Contains(outputStr, want) {
 			t.Errorf("Expected output to contain %q, got: %s", want, outputStr)
 		}
+	}
+	if strings.Contains(outputStr, `float64 {`) {
+		t.Errorf("top must not emit the numeric-only float64 key anymore, got: %s", outputStr)
 	}
 }
 
@@ -1398,8 +1403,8 @@ func TestTopGenerationAsc(t *testing.T) {
 	}
 
 	outputStr := string(output)
-	if !strings.Contains(outputStr, `ssql.BottomBy`) {
-		t.Errorf("Expected output to contain ssql.BottomBy for -asc, got: %s", outputStr)
+	if !strings.Contains(outputStr, `ssql.BottomByFunc`) || !strings.Contains(outputStr, `ssql.CompareAny`) {
+		t.Errorf("Expected ssql.BottomByFunc + CompareAny for -asc, got: %s", outputStr)
 	}
 }
 

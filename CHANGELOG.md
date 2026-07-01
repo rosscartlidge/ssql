@@ -5,6 +5,38 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.55.0] - 2026-07-01
+
+### New Features
+- **Decluttered flag completion** (autocli v4.12.0). A broad `ssql <cmd> -<TAB>`
+  now foregrounds that command's own options instead of a wall of aliases,
+  inherited root globals, and the full `-help`/`-man`/`-completion-script` set.
+  Only a flag's primary name shows on a broad prefix; aliases (`-dt`), inherited
+  globals (`-verbose`), and meta built-ins appear only when the typed prefix
+  matches them, and help collapses to a single `--help`. Nothing that completed
+  before stops completing. Example: `from csv -<TAB>` → `-default-type -generate
+  -merge-schemas -source -type -unordered --help`.
+
+### Bug Fixes
+- **`top` on a string field now ranks correctly in ALL paths.** v4.54.0 fixed
+  CLI execution and typed codegen; this fixes the two that were missed:
+  - **record-mode `generate go`** emitted a numeric-only key
+    (`ssql.BottomBy(…, float64 GetOr(f, 0.0))`) that coerced every string to 0,
+    so it returned arbitrary rows — now `ssql.BottomByFunc` + `ssql.CompareAny`,
+    matching execution and typed.
+  - **`generate sql`** `translateTop` looked for the long-removed `-by` flag (so
+    it never emitted `ORDER BY`) and treated the first arg as `N` (so `-asc`
+    became `LIMIT -asc`). Now emits `ORDER BY FIELD DESC|ASC LIMIT N`.
+
+### Testing
+- **N-way differential equivalence harness** (`TestPipelineEquivalence`). Runs
+  each pipeline through every result-producing lane — exec, `generate go`
+  record/typed/parallel, and `generate ssql` — and asserts byte-identical
+  normalised output (canonical JSONL; column-order and int/float normalised;
+  ordered-list when the pipeline defines order, else multiset), with golden
+  oracles on shuffled fixtures. Catches "correct in mode X, silently wrong in
+  mode Y" bugs the substring corpus can miss.
+
 ## [v4.54.1] - 2026-06-30
 
 ### Bug Fixes

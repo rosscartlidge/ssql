@@ -430,16 +430,36 @@ func translateOffset(q *sqlQuery, args []string) error {
 }
 
 func translateTop(q *sqlQuery, args []string) error {
-	// top N -by field → ORDER BY field DESC LIMIT N
-	if len(args) == 0 {
-		return nil
-	}
-	q.limit = args[0]
-	for i := 1; i < len(args); i++ {
-		if (args[i] == "-by" || args[i] == "-b") && i+1 < len(args) {
-			q.orderBy = append(q.orderBy, quoteIdent(args[i+1])+" DESC")
-			i++
+	// top [-asc] N -field FIELD → ORDER BY FIELD DESC|ASC LIMIT N.
+	// Default is descending (largest first); -asc selects the smallest.
+	// N is the first bare positional; the field comes from -field/-f (NOT
+	// the long-removed -by). Order-independent so `-asc` before N parses.
+	var field, limit string
+	asc := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-asc":
+			asc = true
+		case "-field", "-f":
+			if i+1 < len(args) {
+				field = args[i+1]
+				i++
+			}
+		default:
+			if limit == "" && !strings.HasPrefix(args[i], "-") && !strings.HasPrefix(args[i], "+") {
+				limit = args[i]
+			}
 		}
+	}
+	if limit != "" {
+		q.limit = limit
+	}
+	if field != "" {
+		dir := "DESC"
+		if asc {
+			dir = "ASC"
+		}
+		q.orderBy = append(q.orderBy, quoteIdent(field)+" "+dir)
 	}
 	return nil
 }
