@@ -48,6 +48,17 @@ Whenever fixing bugs or adding features, always look for opportunities to refact
 ### If It's Not Tested, It Will Break
 Features without tests will eventually be removed during refactoring (learned when field/value completion was lost in v3.2.0).
 
+### One Semantics, Many Backends → Test Them Differentially (CRITICAL)
+The same pipeline runs **five ways**: interpreted exec, `generate go` in record/typed/parallel, and `generate sql` (DuckDB). Each is a separate implementation of the same semantics, so **a bug fixed in one path is almost always still live in the others.** Hard-won lesson (the `top`-by-string saga, v4.54–v4.55): the numeric-coercion bug was fixed in exec and typed but left wrong in record codegen AND `generate sql` for two more releases, found only when a user compared two outputs by hand.
+
+**Rules:**
+- **When you change a command's *results* (ranking/filter/aggregate/selection), assume the bug is in ALL backends until a test proves otherwise.** Fix exec, record codegen, typed codegen, and the `generate sql` translator together; don't fix only where you see it.
+- **Add/adjust a case in `TestPipelineEquivalence` (`cmd/ssql/equivalence_test.go`)** — the N-way differential gate that runs every lane and asserts **byte-identical normalised output**. This is the gate that catches "correct in mode X, silently wrong in mode Y"; the `TestPipelineCorpus` substring smoke test does NOT (it stayed green through the whole `top` bug).
+- **A test's power = oracle strength × input discrimination — weakness in EITHER blinds it.** The `top` bug survived because the oracle was weak (`Contains` substrings, not equality) AND the fixture was non-discriminating (alphabetical data, so "first N" == "sorted N"). Assert normalised equality, and use **shuffled fixtures with distinct values** so a wrong answer actually diverges.
+- **Guard the "all lanes agree" metamorphic oracle with an independent one** — hand-written `Golden` outputs and/or the DuckDB (SQL) lane — so unanimous-but-wrong can't pass.
+- **A gate you haven't watched fail isn't a gate** — reintroduce the bug once and confirm the harness catches it.
+- Full rationale + generalizable lessons: `doc/research/multimode-equivalence-testing.md`.
+
 ### Compile-Time Type Safety Over Runtime
 - Use generics and type constraints to enforce correctness at compile time
 - Use sealed interfaces to prevent invalid type construction
