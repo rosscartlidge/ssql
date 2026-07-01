@@ -20,6 +20,13 @@ Tracked issues and feature gaps discovered during development.
 - [x] **rename / cast / update** — translated using DuckDB's `* RENAME`, `* REPLACE (CAST(...))`, and `* REPLACE (CASE WHEN ... END)`.
 - [x] **include / exclude** — `include` translates to explicit column list, `exclude` uses DuckDB's `SELECT * EXCLUDE (...)`.
 - [x] **from ssh / from catalog** — errors clearly: "has no SQL equivalent — it is an ssql-specific distributed feature".
+- [x] **`top` translation** (v4.55.0) — `translateTop` had gone stale: it looked for the long-removed `-by` flag (so it emitted **no `ORDER BY`**) and treated `args[0]` as N (so `-asc` became `LIMIT -asc`). Now emits `ORDER BY FIELD DESC|ASC LIMIT N` (N = first bare positional; field from `-field`/`-f`; `-asc` → ASC). Covered by `TestTranslateTopSQL`.
+
+### Remaining quirks (found during the v4.55.0 `top` differential work)
+
+- [ ] **All WHERE values are quoted as string literals** — `translateCondition` emits `field OP 'value'` unconditionally (`generate_sql.go`), so `where -if n gt 15` becomes `n > '15'` and `-if active eq true` becomes `active = 'true'`. DuckDB coerces by column type so it *usually* runs, but it's semantically fragile (string vs numeric ordering: `'9' > '15'` is TRUE as strings, FALSE as numbers), non-portable to stricter engines, and wrong if the column isn't the thing forcing coercion. Fix: emit a **bare literal** when the value is numeric/boolean (infer from the value token, or better from the pipeline schema); keep quoting for strings. Add a differential case that runs the SQL through DuckDB and compares to the exec lane (the harness already has a DuckDB path in mind — see `multimode-equivalence-testing.md`).
+- [ ] **`-if-expr` is passed through verbatim** as SQL (`translateWhere`: "most expr-lang syntax is valid SQL"). True for simple arithmetic/comparison, but expr-lang functions (`upper()`, `contains()`, `??`, date helpers, …) do not all map to DuckDB and will produce invalid SQL silently. Options: translate the common expr functions to SQL equivalents, or **fail loudly** on an expr that references an unsupported function rather than emitting broken SQL. Relates to the expr→native transpiler work (`expr-codegen-transpilation.md`).
+- [ ] **No general differential coverage for the SQL lane.** `TestPipelineEquivalence` runs exec + the three Go backends + generate-ssql, but **not** `generate sql`→DuckDB. Adding a DuckDB lane (gated on the binary being present, with type-coercion normalisation) would make DuckDB an independent second-engine oracle and catch translation bugs like the two above automatically. See `doc/research/multimode-equivalence-testing.md` §(c).
 
 ## WASM Playground
 
