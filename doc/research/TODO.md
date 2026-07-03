@@ -133,3 +133,7 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 - [ ] Reddit: r/commandline, r/dataengineering
 - [ ] Golang Weekly submission
 - [ ] Awesome Go PR
+
+## Release Infrastructure
+
+- [ ] **Regenerate the `GH_PAT` secret** (found 2026-07-03, v4.56.0 release): the goreleaser workflow's Homebrew-tap push failed with `401 Bad credentials` against `rosscartlidge/homebrew-ssql` — the PAT worked for v4.55.0 on 2026-07-01, so it expired/was revoked in between. The GitHub Release itself succeeded (14 assets); only the tap push uses `GH_PAT` (`.goreleaser.yml` line ~89). v4.56.0's cask was updated manually (homebrew-ssql commit 228e46a). **Action (user-only): create a new PAT with repo scope on homebrew-ssql and update the `GH_PAT` actions secret in rosscartlidge/ssql** — otherwise every future release needs the manual cask update.
