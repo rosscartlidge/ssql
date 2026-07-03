@@ -332,7 +332,7 @@ func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, 
 		inputVar = "records"
 	}
 
-	outputVar := "correlatedRecords"
+	outputVar := uniqueVarName("correlatedRecords", fragments)
 
 	var code string
 	if auto && maxLag > 0 {

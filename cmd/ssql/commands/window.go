@@ -609,7 +609,7 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 		inputVar = "records"
 	}
 
-	outputVar := "windowed"
+	outputVar := uniqueVarName("windowed", fragments)
 
 	// Helper: format configs as Go code
 	formatConfigs := func(indent string) string {

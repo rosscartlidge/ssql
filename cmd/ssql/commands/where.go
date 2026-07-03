@@ -256,7 +256,7 @@ func generateWhereCode(ctx *cf.Context) error {
 	//   - any clause uses -if-expr (expr-lang predicates remain
 	//     Record-only; the planner inserts the boundary upstream)
 	if typedMode() && prevSchema != nil && !whereHasExpr(ctx.Clauses) {
-		return generateWhereCodeTyped(ctx.Clauses, inputVar, prevSchema)
+		return generateWhereCodeTyped(ctx.Clauses, inputVar, prevSchema, fragments)
 	}
 
 	// Generate filter code from clauses
@@ -268,7 +268,7 @@ func generateWhereCode(ctx *cf.Context) error {
 		codeLines = append(codeLines, preVar)
 	}
 
-	outputVar := "filtered"
+	outputVar := uniqueVarName("filtered", fragments)
 	codeLines = append(codeLines, fmt.Sprintf("%s := ssql.Where(%s)(%s)", outputVar, filterCode, inputVar))
 	code := strings.Join(codeLines, "\n")
 
@@ -299,7 +299,7 @@ func whereHasExpr(clauses []cf.Clause) bool {
 // schema. Tier-1 supports -if FIELD OP VALUE only. -if-expr is Tier 3
 // (would require expr-lang -> Go translation) and produces an error
 // fragment.
-func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.TypedSchema) error {
+func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.TypedSchema, fragments []*lib.CodeFragment) error {
 	if schema == nil {
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'where' must follow a typed-mode source (e.g. 'from FILE.csv') so the input schema is known"))
@@ -365,7 +365,7 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 		body = "return " + strings.Join(clauseConds, " || ")
 	}
 
-	outputVar := "filtered"
+	outputVar := uniqueVarName("filtered", fragments)
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	if schemaUsesTime(schema) {
 		imports = append(imports, "time")

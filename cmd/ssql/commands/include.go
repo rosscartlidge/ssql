@@ -164,7 +164,7 @@ func generateIncludeCode(fields []string) error {
 	includedMap.WriteString("}")
 
 	// Generate code
-	outputVar := "included"
+	outputVar := uniqueVarName("included", fragments)
 	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
 		includedMap := %s
 		mut := r.ToMutable()

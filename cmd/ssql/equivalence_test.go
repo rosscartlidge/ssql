@@ -251,45 +251,100 @@ func TestPipelineEquivalence(t *testing.T) {
 		c := c
 		t.Run(c.Name, func(t *testing.T) {
 			t.Parallel()
-			pipeline := repl.Replace(c.Pipeline)
-			lanes := equivLanes()
-
-			results := make(map[string][]map[string]any)
-			for _, ln := range lanes {
-				if reason := c.Skip[ln.name]; reason != "" {
-					continue
-				}
-				results[ln.name] = equivParse(t, ln.name, ln.run(t, bin, pipeline))
-			}
-
-			ref, ok := results["exec"]
-			if !ok {
-				t.Fatal("exec lane is the reference oracle and must not be skipped")
-			}
-
-			// Ground truth: exec must match the implementation-independent
-			// golden when supplied (catches "all lanes agree but all wrong").
-			if c.Golden != nil {
-				if wantC, gotC := equivCanon(c.Golden, c.Ordered), equivCanon(ref, c.Ordered); !slices.Equal(gotC, wantC) {
-					t.Errorf("exec lane disagrees with golden:\n  golden: %s\n  exec:   %s",
-						strings.Join(wantC, " "), strings.Join(gotC, " "))
-				}
-			}
-
-			// Every lane must match the reference.
-			refC := equivCanon(ref, c.Ordered)
-			for _, ln := range lanes {
-				got, ok := results[ln.name]
-				if !ok || ln.name == "exec" {
-					continue
-				}
-				if gotC := equivCanon(got, c.Ordered); !slices.Equal(gotC, refC) {
-					t.Errorf("lane %q disagrees with exec (%s):\n  exec: %s\n  %s: %s",
-						ln.name, orderedLabel(c.Ordered),
-						strings.Join(refC, " "), ln.name, strings.Join(gotC, " "))
-				}
-			}
+			runEquivCase(t, bin, repl.Replace(c.Pipeline), c)
 		})
+	}
+}
+
+// runEquivCase runs one pipeline through every lane and asserts agreement
+// (and the golden, when supplied). Shared by the hand-written case list and
+// the permutation generator.
+func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
+	t.Helper()
+	lanes := equivLanes()
+
+	results := make(map[string][]map[string]any)
+	for _, ln := range lanes {
+		if reason := c.Skip[ln.name]; reason != "" {
+			continue
+		}
+		results[ln.name] = equivParse(t, ln.name, ln.run(t, bin, pipeline))
+	}
+
+	ref, ok := results["exec"]
+	if !ok {
+		t.Fatal("exec lane is the reference oracle and must not be skipped")
+	}
+
+	// Ground truth: exec must match the implementation-independent
+	// golden when supplied (catches "all lanes agree but all wrong").
+	if c.Golden != nil {
+		if wantC, gotC := equivCanon(c.Golden, c.Ordered), equivCanon(ref, c.Ordered); !slices.Equal(gotC, wantC) {
+			t.Errorf("exec lane disagrees with golden:\n  golden: %s\n  exec:   %s",
+				strings.Join(wantC, " "), strings.Join(gotC, " "))
+		}
+	}
+
+	// Every lane must match the reference.
+	refC := equivCanon(ref, c.Ordered)
+	for _, ln := range lanes {
+		got, ok := results[ln.name]
+		if !ok || ln.name == "exec" {
+			continue
+		}
+		if gotC := equivCanon(got, c.Ordered); !slices.Equal(gotC, refC) {
+			t.Errorf("lane %q disagrees with exec (%s):\n  exec: %s\n  %s: %s",
+				ln.name, orderedLabel(c.Ordered),
+				strings.Join(refC, " "), ln.name, strings.Join(gotC, " "))
+		}
+	}
+}
+
+// TestPipelinePermutations enumerates every ordered PAIR of a small stage set
+// and runs each 2-stage pipeline through all lanes. Rationale: each v4.56
+// stage-order bug (limit|group-by flattened wrong, update|group-by invalid,
+// projection pairs colliding) was a two-stage ORDERING that no hand-written
+// case exercised — orderings are cheap to enumerate mechanically, so
+// enumerate them all instead of waiting for a user to hit each shape.
+//
+// Every pipeline is prefixed with `sort id` so "first N" semantics are
+// deterministic in every lane (including the DuckDB one).
+func TestPipelinePermutations(t *testing.T) {
+	if testing.Short() {
+		t.Skip("permutation equivalence tests are slow (each lane compiles + runs)")
+	}
+	bin := corpusBin(t)
+	data := corpusData(t)
+	repl := strings.NewReplacer("{{.bin}}", bin, "{{.data}}", data)
+
+	stages := []struct{ key, cmd string }{
+		{"where", `{{.bin}} where -if pop gt 5`},
+		{"sort", `{{.bin}} sort pop -desc`},
+		{"limit", `{{.bin}} limit 5`},
+		{"group", `{{.bin}} group-by pop -count cnt`},
+		{"distinct", `{{.bin}} distinct`},
+	}
+	// group|limit is skipped because the PIPELINE itself is nondeterministic:
+	// group-by emission order is unspecified, so "first 5 groups" legitimately
+	// differs between lanes. Not a translation bug — there is nothing to agree on.
+	nondeterministic := map[string]bool{"group|limit": true}
+
+	for i, a := range stages {
+		for j, b := range stages {
+			if i == j || nondeterministic[a.key+"|"+b.key] {
+				continue
+			}
+			c := EquivCase{
+				Name: "perm_" + a.key + "_then_" + b.key,
+				Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} sort id | ` +
+					a.cmd + ` | ` + b.cmd,
+				Ordered: false,
+			}
+			t.Run(c.Name, func(t *testing.T) {
+				t.Parallel()
+				runEquivCase(t, bin, repl.Replace(c.Pipeline), c)
+			})
+		}
 	}
 }
 
@@ -378,5 +433,66 @@ var equivCases = []EquivCase{
 		Name:     "group_by",
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -count cnt -sum salary total`,
 		Ordered:  false, // group emission order differs across modes
+	},
+	{
+		// A stage arriving "out of SQL clause order": limit BEFORE group-by.
+		// The pre-v4.56 assembler flattened everything into one SELECT, so
+		// the SQL grouped ALL rows and limited the GROUPS — a silently
+		// different pipeline. The sort makes "first 5" deterministic in
+		// every lane.
+		Name:     "limit_then_group",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} sort city | {{.bin}} limit 5 | {{.bin}} group-by city -count cnt`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"city": "Bogota", "cnt": 1},
+			{"city": "Cairo", "cnt": 1},
+			{"city": "Delhi", "cnt": 1},
+			{"city": "Hanoi", "cnt": 1},
+			{"city": "Lagos", "cnt": 1},
+		},
+	},
+	{
+		// Unconditional -set emitted `CASE ELSE 3 END` (no WHEN — a SQL
+		// syntax error), and update-then-group needs a subquery wrap.
+		Name:     "update_unconditional_then_group",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update -set pop 3 | {{.bin}} group-by pop -count cnt`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"pop": 3, "cnt": 12},
+		},
+	},
+	{
+		// Self-union without -all must dedup back to the original rows.
+		// Broken before v4.56: the exec dedup key was fmt.Sprintf("%v", r),
+		// which embeds the schema POINTER — records from different sources
+		// never matched, so `union` returned everything (24 rows, not 12).
+		Name:     "union_dedup",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} union -file <({{.bin}} from csv {{.data}}/shuffled.csv)`,
+		Ordered:  false,
+	},
+	{
+		// update -set on a NEW column: exec creates the field; SQL needs
+		// `SELECT *, 3 AS x` (REPLACE would be a binder error). Decided via
+		// header-seeded column tracking in the assembler.
+		Name:     "update_new_column",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update -set x 3 | {{.bin}} where -if pop gt 25`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 5, "city": "Tokyo", "pop": 37, "x": 3},
+			{"id": 1, "city": "Oslo", "pop": 31, "x": 3},
+			{"id": 2, "city": "Delhi", "pop": 29, "x": 3},
+		},
+	},
+	{
+		// distinct rendered as a fake select column (`SELECT DISTINCT, col`
+		// / bare `SELECT DISTINCT`) before v4.56.
+		Name:     "include_distinct",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} include dept | {{.bin}} distinct`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering"},
+			{"dept": "Marketing"},
+			{"dept": "Sales"},
+		},
 	},
 }

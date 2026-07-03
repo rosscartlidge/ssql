@@ -143,7 +143,7 @@ func generatePivotCode(rowField, colField, valField, aggFunc string) error {
 		inputVar = "records"
 	}
 
-	outputVar := "pivoted"
+	outputVar := uniqueVarName("pivoted", fragments)
 	code := fmt.Sprintf(`%s := ssql.Pivot(%q, %q, %q, %q)(%s)`,
 		outputVar, rowField, colField, valField, aggFunc, inputVar)
 

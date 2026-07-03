@@ -143,7 +143,7 @@ func generateExcludeCode(fields []string) error {
 	}
 
 	// Generate code
-	outputVar := "excluded"
+	outputVar := uniqueVarName("excluded", fragments)
 	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
 		mut := r.ToMutable()%s
 		return mut.Freeze()

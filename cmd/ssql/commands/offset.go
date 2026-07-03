@@ -88,7 +88,7 @@ func generateOffsetCode(n int) error {
 	} else {
 		inputVar = "records"
 	}
-	outputVar := "skipped"
+	outputVar := uniqueVarName("skipped", fragments)
 	params := []lib.CodeParam{
 		{Name: "offset", Default: fmt.Sprintf("%d", n), Help: "number of records to skip", VarName: "flagOffset", Type: "int"},
 	}

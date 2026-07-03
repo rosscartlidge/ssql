@@ -144,7 +144,7 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 	} else {
 		inputVar = "records"
 	}
-	outputVar := "sorted"
+	outputVar := uniqueVarName("sorted", fragments)
 
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {

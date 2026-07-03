@@ -688,7 +688,7 @@ func generateUpdateCode(ctx *cf.Context) error {
 		codeLines = append(codeLines, preVar)
 	}
 
-	outputVar := "updated"
+	outputVar := uniqueVarName("updated", fragments)
 	updateCode := fmt.Sprintf(`%s := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 %s
 		return mut

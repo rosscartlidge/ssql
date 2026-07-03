@@ -235,7 +235,7 @@ func generateIFFTCode(inputFile, magnitudeField, phaseField, outputField string)
 		inputVar = "records"
 	}
 
-	outputVar := "ifftRecords"
+	outputVar := uniqueVarName("ifftRecords", fragments)
 
 	// Use the IFFTFilter function that works with the code generation system
 	code := fmt.Sprintf(`%s := ssql.IFFTFilter(%q, %q, %q)(%s)`,

@@ -37,13 +37,12 @@ func RegisterDistinct(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
-			// Apply distinct using DistinctBy with JSON serialization for comparison
-			distinct := ssql.DistinctBy(func(r ssql.Record) string {
-				// Use JSON representation as unique key
-				// This is simpler than making Record comparable
-				json := fmt.Sprintf("%v", r)
-				return json
-			})(records)
+			// Dedup by ssql.RecordKey — a value-based canonical key. NOT
+			// fmt.Sprintf("%v", r): that prints the internal schema POINTER,
+			// so equal-valued records from different schema instances never
+			// match (which is exactly what projections and multi-source
+			// inputs produce).
+			distinct := ssql.DistinctBy(ssql.RecordKey)(records)
 
 			// Write output as JSONL (preserving schema if present)
 			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, distinct); err != nil {
@@ -75,7 +74,7 @@ func generateDistinctCode() error {
 	} else {
 		inputVar = "records"
 	}
-	outputVar := "distinct"
+	outputVar := uniqueVarName("distinct", fragments)
 
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {
@@ -95,9 +94,7 @@ func generateDistinctCode() error {
 		return lib.WriteCodeFragment(frag)
 	}
 
-	code := fmt.Sprintf(`%s := ssql.DistinctBy(func(r ssql.Record) string {
-		return fmt.Sprintf("%%v", r)
-	})(%s)`, outputVar, inputVar)
-	frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"fmt"}, getCommandString())
+	code := fmt.Sprintf("%s := ssql.DistinctBy(ssql.RecordKey)(%s)", outputVar, inputVar)
+	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)
 }

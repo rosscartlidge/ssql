@@ -87,8 +87,10 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if unionAll {
 				result = combined
 			} else {
-				// Apply distinct using DistinctBy with full record key
-				distinct := ssql.DistinctBy(unionRecordToKey)
+				// Dedup by ssql.RecordKey — value-based, matching the generated
+				// code path. NOT %v, which embeds the schema pointer and never
+				// matches records from different sources.
+				distinct := ssql.DistinctBy(ssql.RecordKey)
 				result = distinct(combined)
 			}
 
@@ -199,7 +201,7 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 		filterBody = fmt.Sprintf("return ssql.DistinctBy(ssql.RecordKey)(ssql.Concat(input%s))", concatArgs)
 	}
 
-	outputVar := "unioned"
+	outputVar := uniqueVarName("unioned", fragments)
 	code := fmt.Sprintf("%s := func(input iter.Seq[ssql.Record]) iter.Seq[ssql.Record] {\n\t\t%s\n\t}(%s)",
 		outputVar, filterBody, inputVar)
 

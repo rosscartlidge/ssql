@@ -130,7 +130,7 @@ func generateTopCode(n int, field string, asc bool) error {
 		inputVar = "records"
 	}
 
-	outputVar := "topRecords"
+	outputVar := uniqueVarName("topRecords", fragments)
 	params := []lib.CodeParam{
 		{Name: "top", Default: fmt.Sprintf("%d", n), Help: "number of top records", VarName: "flagTop", Type: "int"},
 	}

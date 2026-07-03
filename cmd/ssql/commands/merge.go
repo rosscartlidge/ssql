@@ -427,7 +427,7 @@ func generateMergeCode(orderBy []ssql.OrderField, files []string) error {
 	codeLines = append(codeLines, fmt.Sprintf("merged := ssql.MergeSorted([]ssql.OrderField{%s}, %s)",
 		strings.Join(fields, ", "), strings.Join(sourceVars, ", ")))
 
-	outputVar := "merged"
+	outputVar := uniqueVarName("merged", fragments)
 	code := strings.Join(codeLines, "\n\t")
 	var imports []string
 	if needsLibImport {

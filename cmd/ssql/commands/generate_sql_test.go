@@ -1,10 +1,265 @@
 package commands
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
+
+// assembleFromCommands runs a synthetic fragment stream (one Command per
+// pipeline stage) through assembleSQL, mirroring what `generate sql` receives.
+func assembleFromCommands(t *testing.T, cmds ...string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	for _, c := range cmds {
+		if err := enc.Encode(lib.CodeFragment{Type: "stmt", Command: c}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sql, err := assembleSQL(&buf)
+	if err != nil {
+		t.Fatalf("assembleSQL(%v): %v", cmds, err)
+	}
+	return sql
+}
+
+// TestSubqueryWrapping guards pipeline-order correctness. A single SELECT
+// evaluates clauses in a FIXED order (WHERE→GROUP BY→ORDER BY→LIMIT), so
+// stages arriving "out of order" must wrap the accumulated query as a
+// subquery. The original flattening silently computed a different pipeline —
+// `update -set x 3 | limit 10 | group-by r | join …` became one SELECT that
+// grouped everything, limited the GROUPS, and had an invalid CASE to boot.
+func TestSubqueryWrapping(t *testing.T) {
+	mustBefore := func(t *testing.T, sql, first, second string) {
+		t.Helper()
+		i, j := strings.Index(sql, first), strings.Index(sql, second)
+		if i < 0 || j < 0 {
+			t.Fatalf("missing %q or %q in:\n%s", first, second, sql)
+		}
+		if i > j {
+			t.Errorf("%q must appear before %q (inner subquery first):\n%s", first, second, sql)
+		}
+	}
+
+	t.Run("limit_before_group", func(t *testing.T) {
+		sql := assembleFromCommands(t,
+			"ssql from csv data.csv",
+			"ssql limit 10",
+			"ssql group-by dept -count cnt",
+		)
+		mustBefore(t, sql, "LIMIT 10", "GROUP BY")
+		if !strings.Contains(sql, "FROM (") {
+			t.Errorf("expected a subquery wrap:\n%s", sql)
+		}
+	})
+
+	t.Run("projection_before_group", func(t *testing.T) {
+		sql := assembleFromCommands(t,
+			"ssql from csv data.csv",
+			"ssql update -set x 3",
+			"ssql group-by dept -count cnt",
+		)
+		mustBefore(t, sql, "* REPLACE", "GROUP BY")
+	})
+
+	t.Run("join_after_group", func(t *testing.T) {
+		sql := assembleFromCommands(t,
+			"ssql from csv data.csv",
+			"ssql group-by dept -count cnt",
+			"ssql join lookup.csv -using dept",
+		)
+		mustBefore(t, sql, "GROUP BY", "JOIN")
+	})
+
+	t.Run("sort_after_limit", func(t *testing.T) {
+		sql := assembleFromCommands(t,
+			"ssql from csv data.csv",
+			"ssql limit 5",
+			"ssql sort name",
+		)
+		mustBefore(t, sql, "LIMIT 5", "ORDER BY")
+	})
+
+	t.Run("two_projections", func(t *testing.T) {
+		sql := assembleFromCommands(t,
+			"ssql from csv data.csv",
+			"ssql update -set x 3",
+			"ssql rename -as old new",
+		)
+		// The LATER projection is the outer SELECT (textually first); the
+		// earlier one nests inside FROM (...).
+		mustBefore(t, sql, "* RENAME", "* REPLACE")
+		mustBefore(t, sql, "FROM (", "* REPLACE")
+	})
+
+	t.Run("where_after_group", func(t *testing.T) {
+		sql := assembleFromCommands(t,
+			"ssql from csv data.csv",
+			"ssql group-by dept -count cnt",
+			"ssql where -if cnt gt 2",
+		)
+		mustBefore(t, sql, "GROUP BY", "WHERE")
+	})
+
+	// In-order pipelines must stay a single flat SELECT — wrapping
+	// everything would be correct but unreadable.
+	t.Run("in_order_stays_flat", func(t *testing.T) {
+		sql := assembleFromCommands(t,
+			"ssql from csv data.csv",
+			"ssql where -if age gt 25",
+			"ssql group-by dept -count cnt",
+			"ssql sort dept",
+			"ssql limit 5",
+		)
+		if strings.Contains(sql, "FROM (") {
+			t.Errorf("in-order pipeline should not wrap:\n%s", sql)
+		}
+	})
+}
+
+// TestTranslateUnionSQL: union becomes a SQL set operation over the
+// accumulated query and each <(…)> source (previously "unsupported").
+func TestTranslateUnionSQL(t *testing.T) {
+	assemble := func(t *testing.T, unionCmd string) string {
+		t.Helper()
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		for _, frag := range []lib.CodeFragment{
+			{Type: "stmt", Command: "ssql from csv base.csv"},
+			{Type: "func", FuncName: "unionSource1", Command: "ssql from csv extra.csv",
+				FuncBody: []*lib.CodeFragment{{Type: "stmt", Command: "ssql from csv extra.csv"}}},
+			{Type: "stmt", Command: unionCmd},
+		} {
+			if err := enc.Encode(frag); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sql, err := assembleSQL(&buf)
+		if err != nil {
+			t.Fatalf("assembleSQL: %v", err)
+		}
+		return sql
+	}
+
+	sql := assemble(t, "ssql union -file /dev/fd/63")
+	for _, want := range []string{"'base.csv'", "UNION", "'extra.csv'"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %q in:\n%s", want, sql)
+		}
+	}
+	if strings.Contains(sql, "UNION ALL") {
+		t.Errorf("bare union must dedup (UNION, not UNION ALL):\n%s", sql)
+	}
+
+	if sql := assemble(t, "ssql union -all -file /dev/fd/63"); !strings.Contains(sql, "UNION ALL") {
+		t.Errorf("-all must emit UNION ALL:\n%s", sql)
+	}
+}
+
+// TestUpdateNewColumnSQL: with header-seeded column tracking, `update -set`
+// on a field NOT in the source becomes an added select expression
+// (`SELECT *, 3 AS x`) — `* REPLACE` on a missing column is a binder error.
+func TestUpdateNewColumnSQL(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := dir + "/data.csv"
+	if err := os.WriteFile(csvPath, []byte("id,city,pop\n1,Oslo,31\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sql := assembleFromCommands(t, "ssql from csv "+csvPath, "ssql update -set x 3")
+	if !strings.Contains(sql, "SELECT *, 3 AS x") {
+		t.Errorf("new column: want `SELECT *, 3 AS x`, got:\n%s", sql)
+	}
+	if strings.Contains(sql, "REPLACE") {
+		t.Errorf("new column must not use REPLACE:\n%s", sql)
+	}
+
+	// Existing column keeps the REPLACE form.
+	sql = assembleFromCommands(t, "ssql from csv "+csvPath, "ssql update -set pop 3")
+	if !strings.Contains(sql, "* REPLACE (3 AS pop)") {
+		t.Errorf("existing column: want REPLACE, got:\n%s", sql)
+	}
+
+	// Conditional set on a NEW column has no faithful translation (exec
+	// leaves the field absent on unmatched rows) — must fail loudly.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	for _, c := range []string{"ssql from csv " + csvPath, "ssql update -if pop gt 5 -set x 3"} {
+		if err := enc.Encode(lib.CodeFragment{Type: "stmt", Command: c}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := assembleSQL(&buf); err == nil {
+		t.Error("conditional -set on new column: expected error, got none")
+	}
+
+	// Unknown schema (unreadable source) assumes columns exist — REPLACE.
+	sql = assembleFromCommands(t, "ssql from csv missing-file.csv", "ssql update -set x 3")
+	if !strings.Contains(sql, "* REPLACE (3 AS x)") {
+		t.Errorf("unknown schema: want REPLACE fallback, got:\n%s", sql)
+	}
+}
+
+// TestUpdateUnconditionalSet: `update -set x 3` with no -if must emit the
+// plain value — `CASE ELSE 3 END` (no WHEN arm) is a SQL syntax error.
+func TestUpdateUnconditionalSet(t *testing.T) {
+	q := &sqlQuery{}
+	if err := translateUpdate(q, []string{"-set", "x", "3"}); err != nil {
+		t.Fatalf("translateUpdate: %v", err)
+	}
+	want := "* REPLACE (3 AS x)"
+	if len(q.selectExprs) != 1 || q.selectExprs[0] != want {
+		t.Errorf("selectExprs = %v, want [%s]", q.selectExprs, want)
+	}
+
+	// Mixed: conditional arms become WHEN, the unconditional becomes ELSE.
+	q = &sqlQuery{}
+	err := translateUpdate(q, []string{"-if", "a", "gt", "1", "-set", "x", "2", "-", "-set", "x", "9"})
+	if err != nil {
+		t.Fatalf("translateUpdate mixed: %v", err)
+	}
+	want = "* REPLACE (CASE WHEN a > 1 THEN 2 ELSE 9 END AS x)"
+	if len(q.selectExprs) != 1 || q.selectExprs[0] != want {
+		t.Errorf("selectExprs = %v, want [%s]", q.selectExprs, want)
+	}
+}
+
+// TestDistinctSQL: distinct must render as SELECT DISTINCT (the old
+// implementation prepended "DISTINCT" as a fake select column, producing
+// `SELECT DISTINCT` with no columns, or `SELECT DISTINCT, col`).
+func TestDistinctSQL(t *testing.T) {
+	sql := assembleFromCommands(t, "ssql from csv data.csv", "ssql distinct")
+	if !strings.Contains(sql, "SELECT DISTINCT *") {
+		t.Errorf("bare distinct: want SELECT DISTINCT *, got:\n%s", sql)
+	}
+
+	sql = assembleFromCommands(t, "ssql from csv data.csv", "ssql include city", "ssql distinct")
+	if !strings.Contains(sql, "SELECT DISTINCT city") {
+		t.Errorf("include+distinct: want SELECT DISTINCT city, got:\n%s", sql)
+	}
+}
+
+// TestResortPrepends: a second `sort` re-sorts stably — its keys are primary,
+// the earlier order is the tie-break, so new entries must be PREPENDED.
+func TestResortPrepends(t *testing.T) {
+	q := &sqlQuery{}
+	if err := translateSort(q, []string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := translateSort(q, []string{"y", "-desc"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"y DESC", "x"}
+	if !slices.Equal(q.orderBy, want) {
+		t.Errorf("orderBy = %v, want %v", q.orderBy, want)
+	}
+}
 
 // TestSQLLiteral guards value-token rendering: numerics and booleans must be
 // bare, not string-quoted. `n > '15'` happens to work in DuckDB (it coerces by
@@ -150,7 +405,7 @@ func TestTranslateUpdateExpr(t *testing.T) {
 	if err := translateUpdate(q, []string{"-set", "pop", "99"}); err != nil {
 		t.Fatalf("translateUpdate -set: %v", err)
 	}
-	want = "* REPLACE (CASE ELSE 99 END AS pop)"
+	want = "* REPLACE (99 AS pop)"
 	if len(q.selectExprs) != 1 || q.selectExprs[0] != want {
 		t.Errorf("selectExprs = %v, want [%s]", q.selectExprs, want)
 	}

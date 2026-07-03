@@ -495,7 +495,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 			}
 
 			// Generate join statement using the function call
-			return generateJoinStmtWithFunc(inputVar, funcName, joinType, clauses)
+			return generateJoinStmtWithFunc(inputVar, funcName, joinType, clauses, fragments)
 		}
 		// If reading fragments failed, fall through to normal file handling
 	}
@@ -558,7 +558,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 		return fmt.Errorf("writing func fragment: %w", err)
 	}
 
-	return generateJoinStmtWithFunc(inputVar, funcName, joinType, clauses)
+	return generateJoinStmtWithFunc(inputVar, funcName, joinType, clauses, fragments)
 }
 
 // findOutputSchema returns the OutputTypedSchema of the last fragment
@@ -726,8 +726,8 @@ func mergeJoinSchemas(left, right *lib.TypedSchema) (*lib.TypedSchema, string) {
 }
 
 // generateJoinStmtWithFunc generates a join statement that calls a function for the right source
-func generateJoinStmtWithFunc(inputVar, funcName, joinType string, clauses []ssql.LookupClause) error {
-	outputVar := "joined"
+func generateJoinStmtWithFunc(inputVar, funcName, joinType string, clauses []ssql.LookupClause, fragments []*lib.CodeFragment) error {
+	outputVar := uniqueVarName("joined", fragments)
 	var stmtCode string
 	var stmtImports []string
 

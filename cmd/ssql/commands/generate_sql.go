@@ -1,12 +1,14 @@
 package commands
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -76,11 +78,81 @@ type sqlQuery struct {
 	joins        []string
 	whereClauses []string // AND groups; multiple groups joined with OR
 	selectExprs  []string
+	distinct     bool
 	groupBy      []string
 	orderBy      []string
 	limit        string
 	offset       string
 	comments     []string // original ssql commands
+
+	// columns tracks the current output field names, seeded from the source
+	// CSV/TSV header and advanced by each stage's schemaOp (the same rules
+	// pipeline-aware completion uses). nil = unknown; translation then falls
+	// back to assuming referenced columns exist.
+	columns []string
+}
+
+// needsWrap reports whether translating cmd into q would violate the
+// pipeline's stage order. A single SELECT evaluates its clauses in a FIXED
+// order (FROM→JOIN→WHERE→GROUP BY→SELECT→ORDER BY→LIMIT/OFFSET) regardless of
+// the order clauses were added — so a stage arriving after a clause that SQL
+// would run LATER (e.g. group-by after limit, a second projection, join after
+// group-by) must instead apply to the RESULT of everything so far. Flattening
+// anyway silently computes a different pipeline (e.g. `limit 10 | group-by`
+// became "group everything, then keep 10 groups").
+func needsWrap(q *sqlQuery, cmd string) bool {
+	projected := len(q.selectExprs) > 0
+	limited := q.limit != "" || q.offset != ""
+	switch cmd {
+	case "where":
+		// WHERE runs before GROUP BY and before the SELECT list.
+		return projected || len(q.groupBy) > 0 || limited
+	case "group-by":
+		// group-by owns the SELECT list and grouping; anything already
+		// projected/grouped/ordered/limited must be materialised first.
+		return projected || len(q.groupBy) > 0 || len(q.orderBy) > 0 || limited || q.distinct
+	case "update", "rename", "cast", "include", "exclude":
+		// One SELECT holds one projection spec.
+		return projected || limited
+	case "window":
+		return projected || len(q.groupBy) > 0 || limited
+	case "sort":
+		return limited // ORDER BY runs before LIMIT; `limit | sort` is not `sort | limit`
+	case "top":
+		return len(q.orderBy) > 0 || limited // top imposes its own order + limit
+	case "limit":
+		return q.limit != ""
+	case "offset":
+		return limited // `limit 10 | offset 5` ≠ LIMIT 10 OFFSET 5 (which skips first)
+	case "join":
+		// JOIN runs first; joining the grouped/projected/limited result
+		// needs that result as a subquery.
+		return projected || len(q.groupBy) > 0 || len(q.orderBy) > 0 || limited
+	case "distinct":
+		return limited
+	}
+	return false
+}
+
+// wrapAsSubquery folds everything accumulated so far into a FROM (subquery),
+// so subsequent stages apply to its result — preserving pipeline order.
+func wrapAsSubquery(q *sqlQuery) {
+	sub := renderSelect(q)
+	*q = sqlQuery{
+		fromClause: "(\n" + indentLines(sub, "  ") + "\n)",
+		comments:   q.comments,
+		columns:    q.columns, // wrapping doesn't change the output schema
+	}
+}
+
+func indentLines(s, prefix string) string {
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		if ln != "" {
+			lines[i] = prefix + ln
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func assembleSQL(input io.Reader) (string, error) {
@@ -153,43 +225,76 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 	}
 
 	// args[0] is "ssql", args[1] is the command
-	switch args[1] {
+	name := args[1]
+	if needsWrap(q, name) {
+		wrapAsSubquery(q)
+	}
+	var err error
+	switch name {
 	case "from":
-		return translateFrom(q, args[2:])
+		err = translateFrom(q, args[2:])
 	case "where":
-		return translateWhere(q, args[2:])
+		err = translateWhere(q, args[2:])
 	case "group-by":
-		return translateGroupBy(q, args[2:])
+		err = translateGroupBy(q, args[2:])
 	case "sort":
-		return translateSort(q, args[2:])
+		err = translateSort(q, args[2:])
 	case "limit":
-		return translateLimit(q, args[2:])
+		err = translateLimit(q, args[2:])
 	case "offset":
-		return translateOffset(q, args[2:])
+		err = translateOffset(q, args[2:])
 	case "top":
-		return translateTop(q, args[2:])
+		err = translateTop(q, args[2:])
 	case "distinct":
-		q.selectExprs = append([]string{"DISTINCT"}, q.selectExprs...)
-		return nil
+		q.distinct = true
 	case "join":
-		return translateJoin(q, args[2:], funcFrags)
+		err = translateJoin(q, args[2:], funcFrags)
+	case "union":
+		err = translateUnion(q, args[2:], funcFrags)
 	case "window":
-		return translateWindow(q, args[2:])
+		err = translateWindow(q, args[2:])
 	case "rename":
-		return translateRename(q, args[2:])
+		err = translateRename(q, args[2:])
 	case "cast":
-		return translateCast(q, args[2:])
+		err = translateCast(q, args[2:])
 	case "update":
-		return translateUpdate(q, args[2:])
+		err = translateUpdate(q, args[2:])
 	case "include":
-		return translateInclude(q, args[2:])
+		err = translateInclude(q, args[2:])
 	case "exclude":
-		return translateExclude(q, args[2:])
+		err = translateExclude(q, args[2:])
 	case "to":
 		// Output commands don't affect SQL
 		return nil
 	default:
-		return fmt.Errorf("unsupported command for SQL generation: %s", args[1])
+		return fmt.Errorf("unsupported command for SQL generation: %s", name)
+	}
+	if err != nil {
+		return err
+	}
+	advanceColumns(q, name, args[2:])
+	return nil
+}
+
+// advanceColumns tracks the pipeline's output columns through this stage via
+// its schemaOp (the same rules pipeline-aware completion uses), so later
+// stages can distinguish existing columns from new ones. Unknown → nil.
+func advanceColumns(q *sqlQuery, name string, args []string) {
+	switch name {
+	case "from":
+		// translateFrom seeds columns from the source header itself.
+	case "join", "union":
+		// Adds/merges columns from another source the ops can't see.
+		q.columns = nil
+	default:
+		if q.columns == nil {
+			return
+		}
+		if out, ok := lookupSchemaOp(name)(nil, q.columns, args); ok {
+			q.columns = out
+		} else {
+			q.columns = nil
+		}
 	}
 }
 
@@ -216,6 +321,14 @@ func translateFrom(q *sqlQuery, args []string) error {
 		}
 		if len(files) == 1 {
 			q.fromClause = quoteFile(files[0])
+			// Seed column tracking from the header (generation runs where
+			// the file lives). Non-delimited formats stay unknown.
+			switch args[0] {
+			case "csv":
+				q.columns = delimHeader(files[0], ',')
+			case "tsv":
+				q.columns = delimHeader(files[0], '\t')
+			}
 		} else {
 			// DuckDB: read_csv_auto(['file1.csv', 'file2.csv'])
 			quoted := make([]string, len(files))
@@ -444,15 +557,20 @@ func translateSort(q *sqlQuery, args []string) error {
 		clauses = append(clauses, current)
 	}
 
+	var entries []string
 	for _, c := range clauses {
 		for _, f := range c.fields {
 			entry := quoteIdent(f)
 			if c.desc {
 				entry += " DESC"
 			}
-			q.orderBy = append(q.orderBy, entry)
+			entries = append(entries, entry)
 		}
 	}
+	// A later `sort` re-sorts stably: its keys take precedence and any
+	// existing order becomes the tie-break — so PREPEND (appending would
+	// leave the earlier sort as the primary key).
+	q.orderBy = append(entries, q.orderBy...)
 	return nil
 }
 
@@ -544,6 +662,86 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 
 	q.joins = append(q.joins, fmt.Sprintf("JOIN %s %s", quoteFile(filePath), joinCond))
 	return nil
+}
+
+// translateUnion translates `union [-all] -file <(…)…` to a SQL set
+// operation: the accumulated query UNION [ALL] each source subquery, wrapped
+// as the new FROM. Bare UNION deduplicates — exactly `union` without -all.
+// Before v4.56 union was "unsupported"; silently dropping it would return a
+// fraction of the rows.
+func translateUnion(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) error {
+	if q.fromClause == "" {
+		return fmt.Errorf("union requires an upstream source")
+	}
+	unionAll := false
+	var files []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-all", "-a":
+			unionAll = true
+		case "-file", "-f":
+			if i+1 < len(args) {
+				files = append(files, args[i+1])
+				i++
+			}
+		}
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("union requires at least one -file source")
+	}
+
+	// Process-substitution sources arrive as unionSourceN func fragments, in
+	// -file order, emitted just before this fragment.
+	var procs []*lib.CodeFragment
+	for _, f := range funcFrags {
+		if strings.HasPrefix(f.FuncName, "unionSource") {
+			procs = append(procs, f)
+		}
+	}
+
+	op := "UNION"
+	if unionAll {
+		op = "UNION ALL"
+	}
+	parts := []string{renderSelect(q)}
+	pi := 0
+	for _, f := range files {
+		if !strings.HasPrefix(f, "/dev/fd/") {
+			return fmt.Errorf("union -file %s: schema-headed JSONL files have no SQL translation — use <(ssql from csv FILE)", f)
+		}
+		if pi >= len(procs) {
+			return fmt.Errorf("union: missing source fragment for %s", f)
+		}
+		sub := buildJoinSubquery(procs[pi])
+		pi++
+		if sub == "" {
+			return fmt.Errorf("union: source pipeline is too complex to translate (only from/where are supported inside <(…)>)")
+		}
+		parts = append(parts, sub)
+	}
+
+	*q = sqlQuery{
+		fromClause: "(\n" + indentLines(strings.Join(parts, "\n"+op+"\n"), "  ") + "\n)",
+		comments:   q.comments,
+	}
+	return nil
+}
+
+// delimHeader reads the header row of a delimited file; nil when unreadable
+// (column tracking then degrades to unknown rather than failing generation).
+func delimHeader(path string, comma rune) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	r := csv.NewReader(f)
+	r.Comma = comma
+	header, err := r.Read()
+	if err != nil || len(header) == 0 {
+		return nil
+	}
+	return header
 }
 
 // buildJoinSubquery builds a SQL subquery from a func fragment's body.
@@ -929,37 +1127,58 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		fieldCases[a.field] = append(fieldCases[a.field], a)
 	}
 
-	var replacements []string
+	var replacements, additions []string
 	for _, field := range fieldOrder {
 		cases := fieldCases[field]
-		var sb strings.Builder
-		sb.WriteString("CASE")
+		// `* REPLACE` requires the column to exist; a NEW field (exec creates
+		// it) must be an added select expression instead. Only decidable when
+		// column tracking is live — unknown schema assumes the column exists.
+		isNew := q.columns != nil && !slices.Contains(q.columns, field)
+
+		// Conditional sets become WHEN arms; an unconditional set becomes the
+		// ELSE (last one wins). No conditionals at all → plain value, since
+		// `CASE ELSE x END` (no WHEN) is a SQL syntax error.
+		var whens []assignment
+		elseSQL := quoteIdent(field) // default: preserve original value
 		for _, c := range cases {
 			if len(c.conds) > 0 {
-				sb.WriteString(" WHEN " + strings.Join(c.conds, " AND ") + " THEN " + c.valueSQL)
+				whens = append(whens, c)
 			} else {
-				// Unconditional set
-				sb.WriteString(" ELSE " + c.valueSQL)
+				elseSQL = c.valueSQL
 			}
 		}
-		// If all cases are conditional, preserve original value as ELSE
-		hasUnconditional := false
-		for _, c := range cases {
-			if len(c.conds) == 0 {
-				hasUnconditional = true
-				break
+		if isNew && len(whens) > 0 {
+			// exec leaves the field ABSENT on non-matching rows; SQL columns
+			// are rectangular, so there is no faithful translation.
+			return fmt.Errorf("update: conditional -set on new field %q has no SQL translation (unmatched rows would need a value)", field)
+		}
+		if isNew && elseSQL == quoteIdent(field) {
+			return fmt.Errorf("update: -set on new field %q needs an unconditional value for SQL translation", field)
+		}
+		exprSQL := elseSQL
+		if len(whens) > 0 {
+			var sb strings.Builder
+			sb.WriteString("CASE")
+			for _, c := range whens {
+				sb.WriteString(" WHEN " + strings.Join(c.conds, " AND ") + " THEN " + c.valueSQL)
 			}
+			sb.WriteString(" ELSE " + elseSQL + " END")
+			exprSQL = sb.String()
 		}
-		if !hasUnconditional {
-			sb.WriteString(" ELSE " + quoteIdent(field))
+		if isNew {
+			additions = append(additions, fmt.Sprintf("%s AS %s", exprSQL, quoteIdent(field)))
+		} else {
+			replacements = append(replacements, fmt.Sprintf("%s AS %s", exprSQL, quoteIdent(field)))
 		}
-		sb.WriteString(" END")
-		replacements = append(replacements, fmt.Sprintf("%s AS %s", sb.String(), quoteIdent(field)))
 	}
 
-	if len(replacements) > 0 {
+	switch {
+	case len(replacements) > 0:
 		q.selectExprs = append(q.selectExprs, "* REPLACE ("+strings.Join(replacements, ", ")+")")
+	case len(additions) > 0:
+		q.selectExprs = append(q.selectExprs, "*")
 	}
+	q.selectExprs = append(q.selectExprs, additions...)
 	return nil
 }
 
@@ -1018,12 +1237,26 @@ func renderSQL(q *sqlQuery) string {
 		sb.WriteString("\n")
 	}
 
+	sb.WriteString(renderSelect(q))
+	sb.WriteString("\n;\n")
+	return sb.String()
+}
+
+// renderSelect renders the accumulated query as a SELECT statement (no
+// pipeline comments, no trailing semicolon) so it can also serve as a
+// subquery body for wrapAsSubquery.
+func renderSelect(q *sqlQuery) string {
+	var sb strings.Builder
+
 	// SELECT
+	sel := "*"
 	if len(q.selectExprs) > 0 {
-		sb.WriteString("SELECT " + strings.Join(q.selectExprs, ", ") + "\n")
-	} else {
-		sb.WriteString("SELECT *\n")
+		sel = strings.Join(q.selectExprs, ", ")
 	}
+	if q.distinct {
+		sel = "DISTINCT " + sel
+	}
+	sb.WriteString("SELECT " + sel + "\n")
 
 	// FROM
 	if q.fromClause != "" {
@@ -1060,8 +1293,7 @@ func renderSQL(q *sqlQuery) string {
 		sb.WriteString("OFFSET " + q.offset + "\n")
 	}
 
-	sb.WriteString(";\n")
-	return sb.String()
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // --- SQL helpers ---

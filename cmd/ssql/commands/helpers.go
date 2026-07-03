@@ -265,12 +265,6 @@ func buildAggregator(function, field string) (ssql.AggregateFunc, error) {
 	}
 }
 
-// unionRecordToKey converts a record to a string key for deduplication (for union command)
-func unionRecordToKey(r ssql.Record) string {
-	// Use JSON representation as unique key
-	return fmt.Sprintf("%v", r)
-}
-
 // chainRecords chains multiple JSONL data sources into a single stream (for union command)
 // Secondary sources must be JSONL format. For CSV files, use process substitution:
 //

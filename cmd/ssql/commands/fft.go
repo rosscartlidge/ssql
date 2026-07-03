@@ -203,7 +203,7 @@ func generateFFTCode(inputFile, field string, sampleRate float64, includePhase b
 		inputVar = "records"
 	}
 
-	outputVar := "fftRecords"
+	outputVar := uniqueVarName("fftRecords", fragments)
 
 	// Use the FFTFilter function that works with the code generation system
 	code := fmt.Sprintf(`%s := ssql.FFTFilter(%q, %v, %v)(%s)`,

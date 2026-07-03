@@ -89,7 +89,7 @@ func generateLimitCode(n int) error {
 	} else {
 		inputVar = "records"
 	}
-	outputVar := "limited"
+	outputVar := uniqueVarName("limited", fragments)
 	params := []lib.CodeParam{
 		{Name: "limit", Default: fmt.Sprintf("%d", n), Help: "maximum number of records", VarName: "flagLimit", Type: "int"},
 	}

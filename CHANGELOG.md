@@ -21,7 +21,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `getOr(f, d)`→`COALESCE(f, d)`). Anything without a faithful SQL equivalent
   **fails loudly**, naming the construct, instead of emitting broken SQL.
 
+### New Features (continued)
+- **`union` translates to SQL.** `generate sql` now renders `union` as a set
+  operation — the accumulated query `UNION [ALL]` each `<(…)>` source — where
+  it previously errored as unsupported. Bare `UNION` deduplicates, exactly
+  matching `union` without `-all`.
+- **`generate sql` is schema-aware.** The assembler tracks the pipeline's
+  columns (seeded from the source CSV/TSV header, advanced per stage by the
+  same schema rules pipeline-aware completion uses). First use: `update -set`
+  on a NEW field now emits `SELECT *, 3 AS x` (exec creates the field;
+  `* REPLACE` on a missing column is a binder error), while conditional
+  `-set` on a new field fails loudly (unmatched rows would need a value SQL
+  can't give them).
+
 ### Bug Fixes
+- **Repeated commands no longer break `generate go` (permutation-gate
+  catch).** Any pipeline using the same command twice — two `sort`s, two
+  `where`s, `limit` twice — could fail typed codegen with "no new variables
+  on left side of :=": 22 codegen sites drew output variable names from a
+  fixed set (`sorted`, `filtered`, `limited`, `joined`, …). This is the same
+  collision class as v4.50.1, which spot-fixed only four commands; all sites
+  now go through `uniqueVarName`.
+- **`generate sql` respects pipeline stage order (user-reported).** The
+  assembler folded every stage into ONE `SELECT`, whose fixed clause order
+  (WHERE→GROUP BY→ORDER BY→LIMIT) silently computed a different pipeline —
+  `update -set x 3 | limit 10 | group-by r | join …` became "group ALL rows,
+  then keep 10 groups", with an invalid `CASE ELSE '3' END` on top. Stages
+  arriving out of SQL clause order (limit-before-group-by, a second
+  projection, join/where after group-by, sort-after-limit, …) now wrap the
+  accumulated query as a `FROM (subquery)`; in-order pipelines still render
+  flat. Unconditional `update -set` emits the plain value (a `CASE` with no
+  `WHEN` is a SQL syntax error), `distinct` renders `SELECT DISTINCT` (was an
+  invalid fake select column), and a later `sort` re-sorts stably (its keys
+  become primary, the earlier order the tie-break).
+- **`distinct` and `union` dedup was broken by pointer-based keys.** Both
+  keyed records by `fmt.Sprintf("%v", r)`, which embeds the internal schema
+  *pointer* — so equal-valued records from different schema instances never
+  matched. `union` (SQL UNION semantics) returned everything un-deduped;
+  `distinct` failed in record-mode generated code after projections. Both now
+  use the existing value-based `ssql.RecordKey` (which union's *generated*
+  code already used — the CLI paths had just never adopted it).
 - **`generate sql` no longer silently drops filters and assignments.**
   `update -set-expr`/`-if-expr` were ignored entirely (the SQL returned
   unmodified rows), negated `+if`/`+if-expr` conditions were ignored (the SQL
@@ -39,6 +78,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   equivalents.
 
 ### Testing
+- **Permutation gate: `TestPipelinePermutations`.** Enumerates every ordered
+  pair of {where, sort, limit, group-by, distinct} (19 two-stage pipelines)
+  and runs each through all equivalence lanes — orderings are cheap to
+  enumerate mechanically, so the stage-order bug class is now tested
+  exhaustively at pair level instead of case-by-case. It caught the
+  repeated-command variable collision on its first run.
 - **DuckDB is now the sixth equivalence lane.** `TestPipelineEquivalence` runs
   `generate sql` output through `duckdb -json` and asserts it matches every
   other lane — an independent second-engine oracle that shares no code with

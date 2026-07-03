@@ -157,7 +157,7 @@ func generateRenameCode(renames []struct{ oldField, newField string }) error {
 	}
 
 	// Generate code
-	outputVar := "renamed"
+	outputVar := uniqueVarName("renamed", fragments)
 	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
 		mut := r.ToMutable()%s
 		return mut.Freeze()
