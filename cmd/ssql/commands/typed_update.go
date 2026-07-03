@@ -20,7 +20,7 @@ import (
 // The output type is the input type when every -set targets an
 // existing field; otherwise a derived struct with the new fields
 // appended is emitted.
-func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema) error {
+func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, fragments []*lib.CodeFragment) error {
 	type setOp struct {
 		field string
 		value string
@@ -199,18 +199,28 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema) erro
 		imports = append(imports, "time")
 	}
 
-	code := fmt.Sprintf(`updated := typed.Select(func(r %s) %s {
-%s	})(%s)`,
-		in.TypeName, derived.TypeName,
-		body.String(),
-		inputVar,
-	)
+	// Emit BOTH templates. update is a pure per-row map, so the parallel
+	// form is typed.StreamSelect (per-shard projection) exactly like
+	// include/rename/exclude; typed.Select is the iter.Seq alternative.
+	// A single SerialOnly template here used to serialise the WHOLE
+	// pipeline — the planner downgraded the source read and every
+	// parallel-capable stage downstream because update only spoke Seq.
+	closure := fmt.Sprintf(`func(r %s) %s {
+%s	}`, in.TypeName, derived.TypeName, body.String())
 
-	frag := lib.NewStmtFragment("updated", inputVar, code, imports, getCommandString())
+	outputVar := uniqueVarName("updated", fragments)
+	parallelCode := fmt.Sprintf("%s := typed.StreamSelect(%s, %s)", outputVar, inputVar, closure)
+	serialCode := fmt.Sprintf("%s := typed.Select(%s)(%s)", outputVar, closure, inputVar)
+
+	frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = derived
 	frag.StructDefs = defs
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
+	frag.IsStream = true
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
+	frag.AltCodeIfSeq = serialCode
+	frag.AltImportsIfSeq = imports
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 	return lib.WriteCodeFragment(frag)
 }
 

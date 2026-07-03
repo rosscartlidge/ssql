@@ -428,7 +428,7 @@ func generateUpdateCode(ctx *cf.Context) error {
 		// update is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
 		// emitTypedUpdate sets Capabilities.
-		return emitTypedUpdate(ctx, inputVar, prevSchema)
+		return emitTypedUpdate(ctx, inputVar, prevSchema, fragments)
 	}
 
 	// Parse clauses - each clause has optional -match conditions and required -set/-set-expr operations

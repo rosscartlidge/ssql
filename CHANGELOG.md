@@ -5,7 +5,7 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v4.56.0] - 2026-07-03
 
 ### New Features
 - **Real expression translation in `generate sql`.** `-if-expr` / `-set-expr`
@@ -21,7 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `getOr(f, d)`→`COALESCE(f, d)`). Anything without a faithful SQL equivalent
   **fails loudly**, naming the construct, instead of emitting broken SQL.
 
-### New Features (continued)
 - **`union` translates to SQL.** `generate sql` now renders `union` as a set
   operation — the accumulated query `UNION [ALL]` each `<(…)>` source — where
   it previously errored as unsupported. Bare `UNION` deduplicates, exactly
@@ -35,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can't give them).
 
 ### Bug Fixes
+- **Typed `update` no longer serialises the whole pipeline (user-reported).**
+  `update`'s typed codegen emitted a single SerialOnly `typed.Select`
+  template, so the planner downgraded the source read AND every
+  parallel-capable stage downstream — `from csv | update | group-by | join`
+  ran fully serial. update is a pure per-row map, so it now emits dual
+  templates like the other projections: `typed.StreamSelect` (parallel,
+  per-shard) with `typed.Select` as the Seq alternative. The same pipeline
+  now plans `ReadCSVParallel → StreamSelect → GroupByParallel`.
 - **Repeated commands no longer break `generate go` (permutation-gate
   catch).** Any pipeline using the same command twice — two `sort`s, two
   `where`s, `limit` twice — could fail typed codegen with "no new variables
