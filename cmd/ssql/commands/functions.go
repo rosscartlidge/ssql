@@ -62,12 +62,12 @@ func RegisterFunctions(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 // Single source of truth — keep in sync with doc/EXPRESSIONS.md.
 const FunctionsReference = `EXPRESSION FUNCTIONS AVAILABLE:
 
-String Functions (16):
+String Functions (15):
   upper(str), lower(str), trim(str), trimPrefix(str, prefix),
   trimSuffix(str, suffix), split(str, sep), splitAfter(str, sep),
   join(arr, sep), replace(str, old, new), replaceRegex(str, pat, repl),
   repeat(str, n), indexOf(str, sub), lastIndexOf(str, sub),
-  hasPrefix(str, prefix), hasSuffix(str, suffix), contains(str, sub)
+  hasPrefix(str, prefix), hasSuffix(str, suffix)
 
 Math Functions (6):
   round(num), floor(num), ceil(num), abs(num), min(a, b), max(a, b)
@@ -197,11 +197,12 @@ func printStringFunctions(ctx *cf.Context) error {
 	fmt.Fprintln(ctx.Stdout(), "  hasSuffix(str, suffix)  Check if ends with suffix")
 	fmt.Fprintln(ctx.Stdout(), "    Example: hasSuffix(\"world\", \"ld\") → true")
 	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "  contains(str, substr)   Check if contains substring")
-	fmt.Fprintln(ctx.Stdout(), "    Example: contains(\"hello\", \"ll\") → true")
+	fmt.Fprintln(ctx.Stdout(), "  str contains substr     Check if contains substring (OPERATOR only)")
+	fmt.Fprintln(ctx.Stdout(), "    Example: \"hello\" contains \"ll\" → true")
 	fmt.Fprintln(ctx.Stdout())
-	fmt.Fprintln(ctx.Stdout(), "  Note: contains, startsWith, endsWith also work as operators:")
+	fmt.Fprintln(ctx.Stdout(), "  Note: contains, startsWith, endsWith are operators, not functions:")
 	fmt.Fprintln(ctx.Stdout(), "    name startsWith \"A\"    email contains \"@\"    file endsWith \".csv\"")
+	fmt.Fprintln(ctx.Stdout(), "    (contains(email, \"@\") is a parse error — use `email contains \"@\"`)")
 	fmt.Fprintln(ctx.Stdout())
 	fmt.Fprintln(ctx.Stdout(), "Common Usage:")
 	fmt.Fprintln(ctx.Stdout(), "  ssql update -set-expr email 'lower(trim(email))'")
@@ -451,7 +452,7 @@ func printOperators(ctx *cf.Context) error {
 	fmt.Fprintln(ctx.Stdout(), "Logical:")
 	fmt.Fprintln(ctx.Stdout(), "  and  Logical AND:      age >= 18 and status == \"active\"")
 	fmt.Fprintln(ctx.Stdout(), "  or   Logical OR:       dept == \"Sales\" or dept == \"Marketing\"")
-	fmt.Fprintln(ctx.Stdout(), "  not  Logical NOT:      not contains(email, \"@test.com\")")
+	fmt.Fprintln(ctx.Stdout(), "  not  Logical NOT:      not (email contains \"@test.com\")")
 	fmt.Fprintln(ctx.Stdout())
 	fmt.Fprintln(ctx.Stdout(), "String/Array:")
 	fmt.Fprintln(ctx.Stdout(), "  contains     Contains:      email contains \"@\"")
@@ -472,7 +473,7 @@ func printHelpers(ctx *cf.Context) error {
 	fmt.Fprintln(ctx.Stdout())
 	fmt.Fprintln(ctx.Stdout(), "  has(field)              Check if field exists")
 	fmt.Fprintln(ctx.Stdout(), "    Example: has(\"email\") → true/false")
-	fmt.Fprintln(ctx.Stdout(), "    Usage:   ssql where -if-expr 'has(\"email\") and contains(email, \"@\")'")
+	fmt.Fprintln(ctx.Stdout(), "    Usage:   ssql where -if-expr 'has(\"email\") and email contains \"@\"'")
 	fmt.Fprintln(ctx.Stdout())
 	fmt.Fprintln(ctx.Stdout(), "  getOr(field, default)   Get field value or default")
 	fmt.Fprintln(ctx.Stdout(), "    Example: getOr(\"age\", 0) → field value or 0")
@@ -489,7 +490,7 @@ func printExamples(ctx *cf.Context) error {
 	fmt.Fprintln(ctx.Stdout(), "COMMON EXPRESSION PATTERNS:")
 	fmt.Fprintln(ctx.Stdout())
 	fmt.Fprintln(ctx.Stdout(), "Data Validation:")
-	fmt.Fprintln(ctx.Stdout(), "  ssql where -if-expr 'has(\"email\") and contains(email, \"@\")'")
+	fmt.Fprintln(ctx.Stdout(), "  ssql where -if-expr 'has(\"email\") and email contains \"@\"'")
 	fmt.Fprintln(ctx.Stdout(), "  ssql where -if-expr 'age >= 0 and age <= 120'")
 	fmt.Fprintln(ctx.Stdout())
 	fmt.Fprintln(ctx.Stdout(), "Data Cleaning:")

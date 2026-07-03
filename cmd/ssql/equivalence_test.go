@@ -32,9 +32,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -89,7 +93,7 @@ func equivLanes() []equivLane {
 			return goRunGenerated(t, src)
 		}}
 	}
-	return []equivLane{
+	lanes := []equivLane{
 		{"exec", func(t *testing.T, bin, pipeline string) string {
 			return equivShell(t, "exec", pipeline+" | "+bin+" to jsonl")
 		}},
@@ -113,6 +117,70 @@ func equivLanes() []equivLane {
 			return equivShell(t, "ssql-opt", opt)
 		}},
 	}
+	// The DuckDB lane is the independent second-engine oracle: the pipeline is
+	// translated by `generate sql` and executed by DuckDB, whose implementation
+	// shares nothing with ssql — a unanimous-but-wrong answer across the Go
+	// lanes can't fool it. Only present when a duckdb binary is available.
+	if duckdb := duckdbBinary(); duckdb != "" {
+		lanes = append(lanes, equivLane{"duckdb", func(t *testing.T, bin, pipeline string) string {
+			sql := equivShell(t, "duckdb-gen", "export SSQL_MODE=record && "+
+				pipeline+" | "+bin+" to jsonl | "+bin+" generate sql")
+			cmd := exec.Command(duckdb, "-json", "-c", sql)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("lane %q: duckdb failed: %v\n  sql:\n%s\n  stderr:\n%s",
+					"duckdb", err, sql, stderr.String())
+			}
+			// duckdb -json prints one JSON array; re-emit as JSONL for equivParse.
+			raw := strings.TrimSpace(stdout.String())
+			if raw == "" {
+				return ""
+			}
+			var rows []map[string]any
+			if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+				t.Fatalf("lane %q: bad duckdb -json output: %v\n%s", "duckdb", err, raw)
+			}
+			// duckdb -json renders HUGEINT (e.g. SUM over BIGINT) as a JSON
+			// string. ssql's CSV reader parses canonical integer strings as
+			// numbers anyway, so converting them back is normalising a
+			// representation difference, not masking a value difference.
+			for _, r := range rows {
+				for k, v := range r {
+					if s, ok := v.(string); ok && canonicalIntRe.MatchString(s) {
+						if f, err := strconv.ParseFloat(s, 64); err == nil {
+							r[k] = f
+						}
+					}
+				}
+			}
+			var sb strings.Builder
+			for _, r := range rows {
+				b, _ := json.Marshal(r)
+				sb.Write(b)
+				sb.WriteByte('\n')
+			}
+			return sb.String()
+		}})
+	}
+	return lanes
+}
+
+var canonicalIntRe = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
+
+// duckdbBinary locates duckdb (PATH, then ~/.local/bin); empty when absent so
+// the DuckDB lane degrades to skipped rather than failing the suite.
+func duckdbBinary() string {
+	if p, err := exec.LookPath("duckdb"); err == nil {
+		return p
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		p := filepath.Join(home, ".local", "bin", "duckdb")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 // equivShell runs a bash pipeline and returns stdout, failing with stderr on
@@ -175,6 +243,9 @@ func TestPipelineEquivalence(t *testing.T) {
 	bin := corpusBin(t)
 	data := corpusData(t)
 	repl := strings.NewReplacer("{{.bin}}", bin, "{{.data}}", data)
+	if duckdbBinary() == "" {
+		t.Log("duckdb not found (PATH or ~/.local/bin) — the second-engine SQL lane is skipped")
+	}
 
 	for _, c := range equivCases {
 		c := c
@@ -239,6 +310,31 @@ var equivCases = []EquivCase{
 		Name:     "where",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 15`,
 		Ordered:  false,
+	},
+	{
+		// -if-expr exercises the expr→SQL translation: `&&` and "double
+		// quotes" mean something different in SQL, so verbatim passthrough
+		// (the pre-v4.56 behaviour) is a DuckDB parse/binder error.
+		Name:     "where_expr",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if-expr 'pop > 15 && city != "Oslo"'`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 7, "city": "Mumbai", "pop": 20},
+			{"id": 5, "city": "Tokyo", "pop": 37},
+			{"id": 2, "city": "Delhi", "pop": 29},
+			{"id": 11, "city": "Bogota", "pop": 25},
+		},
+	},
+	{
+		// -set-expr was silently DROPPED by the SQL translator before v4.56
+		// (the update emitted no REPLACE), so DuckDB returned unmodified rows.
+		Name:     "update_set_expr",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update -if pop gt 25 -set-expr city 'upper(city)'`,
+		Ordered:  false,
+		Skip: map[string]string{
+			"go-typed":    "typed codegen rejects update -set-expr (loud Tier-3 error)",
+			"go-parallel": "typed codegen rejects update -set-expr (loud Tier-3 error)",
+		},
 	},
 	{
 		// The discriminating case: top by a STRING field on shuffled data,

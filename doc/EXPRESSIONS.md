@@ -53,7 +53,7 @@ ssql from data.csv | ssql update -set-expr email 'lower(trim(email))'
 |----------|-------------|---------|
 | `and` | Logical AND | `age >= 18 and status == "active"` |
 | `or` | Logical OR | `dept == "Sales" or dept == "Marketing"` |
-| `not` | Logical NOT | `not contains(email, "@test.com")` |
+| `not` | Logical NOT | `not (email contains "@test.com")` |
 
 ### Special Operators
 
@@ -86,9 +86,9 @@ ssql from data.csv | ssql update -set-expr email 'lower(trim(email))'
 | `lastIndexOf(str, sub)` | Last index of substring (-1 if missing) | `lastIndexOf("hello", "l")` → `3` |
 | `hasPrefix(str, prefix)` | Check if starts with prefix | `hasPrefix("hello", "he")` → `true` |
 | `hasSuffix(str, suffix)` | Check if ends with suffix | `hasSuffix("world", "ld")` → `true` |
-| `contains(str, substr)` | Check if contains substring | `contains("hello", "ll")` → `true` |
+| `str contains substr` | Check if contains substring (operator only) | `"hello" contains "ll"` → `true` |
 
-**Note:** `contains`, `startsWith`, `endsWith` also work as infix operators: `name startsWith "A"`.
+**Note:** `contains`, `startsWith`, `endsWith` are infix **operators**, not functions — `contains(email, "@")` is a parse error; write `email contains "@"`.
 
 **Examples:**
 ```bash
@@ -316,7 +316,7 @@ ssql provides additional helper functions for safe field access:
 **Examples:**
 ```bash
 # Only process records with email
-ssql where -if-expr 'has("email") and contains(email, "@")'
+ssql where -if-expr 'has("email") and email contains "@"'
 
 # Use default values for missing fields
 ssql update -set-expr total 'getOr("price", 0) * getOr("qty", 1)'
@@ -331,7 +331,7 @@ ssql update -set-expr status 'has("verified") ? "active" : "pending"'
 
 **Check email format:**
 ```bash
-ssql where -if-expr 'has("email") and contains(email, "@") and contains(email, ".")'
+ssql where -if-expr 'has("email") and email contains "@" and email contains "."'
 ```
 
 **Validate required fields:**
@@ -559,7 +559,7 @@ ssql where -if-expr 'days_since_purchase > 90 and lifetime_value > 1000'
 
 ```bash
 # Valid email addresses
-ssql where -if-expr 'has("email") and contains(email, "@") and len(email) > 5'
+ssql where -if-expr 'has("email") and email contains "@" and len(email) > 5'
 
 # Complete profiles
 ssql where -if-expr 'has("name") and has("email") and has("phone") and has("address")'

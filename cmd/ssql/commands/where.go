@@ -19,7 +19,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from sales.csv | ssql where -if-expr 'price * qty > 1000'", "Filter using expression (price * qty > 1000)").
 		Example("ssql from users.csv | ssql where -if dept eq Sales + -if dept eq Marketing", "Sales OR Marketing departments").
 		Example("ssql from users.csv | ssql where -if-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
-		Example("ssql from data.csv | ssql where -if-expr 'has(\"email\") and contains(email, \"@\")'", "Validate email field exists and format").
+		Example("ssql from data.csv | ssql where -if-expr 'has(\"email\") and email contains \"@\"'", "Validate email field exists and format").
 		Example("ssql from sales.csv | ssql where -if-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
 
 		Flag("-generate", "-g").

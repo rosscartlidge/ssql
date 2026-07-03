@@ -181,6 +181,15 @@ independent checks:
 Metamorphic for breadth (every command, cheaply); golden + DuckDB for ground
 truth on the cases that matter.
 
+*(Status: when this doc was written the DuckDB check was manual. Since v4.56.0
+it is a real harness lane — `TestPipelineEquivalence` runs `generate sql`
+through `duckdb -json` alongside the Go lanes, gated on a `duckdb` binary being
+present. Its first catch was immediate: `-if-expr` passthrough emitted SQL that
+DuckDB rejected (`&&`) or mis-parsed (`"double quotes"` are identifiers in
+SQL), and `update -set-expr` was silently dropped by the translator — the lane
+flagged both, and both were fixed by a real expr→SQL translation that fails
+loudly on untranslatable constructs.)*
+
 ### (d) Fixtures that can actually fail
 
 The alphabetical fixture is the whole reason the bug hid. So the differential

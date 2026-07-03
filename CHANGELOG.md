@@ -5,6 +5,49 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### New Features
+- **Real expression translation in `generate sql`.** `-if-expr` / `-set-expr`
+  are no longer passed through verbatim (expr-lang and SQL disagree on more
+  than function names: `&&` is a SQL parse error, `||` means string *concat*,
+  and `"double quotes"` quote identifiers, not strings). A new expr-lang→SQL
+  translator (`exprToSQL`) parses the expression and renders the SQL-safe
+  subset — `and`/`&&`→`AND`, `or`/`||`→`OR`, `==`→`=`, string literals
+  re-quoted, `??`→`COALESCE`, `?:`→`CASE WHEN`, `in [...]`→`IN`,
+  `contains`/`startsWith`/`endsWith`/`matches` operators, and the
+  upper/lower/trim/abs/round/floor/ceil/len/hasPrefix/hasSuffix/min/max/
+  int/float/string functions (`has(f)`→`f IS NOT NULL`,
+  `getOr(f, d)`→`COALESCE(f, d)`). Anything without a faithful SQL equivalent
+  **fails loudly**, naming the construct, instead of emitting broken SQL.
+
+### Bug Fixes
+- **`generate sql` no longer silently drops filters and assignments.**
+  `update -set-expr`/`-if-expr` were ignored entirely (the SQL returned
+  unmodified rows), negated `+if`/`+if-expr` conditions were ignored (the SQL
+  returned extra rows), and `group-by -expr`/`-stream-expr`/`-rollup`/`-cube`
+  aggregations were dropped. Expressions and negation are now translated;
+  the group-by forms without a SQL translation error loudly.
+- **`generate sql` types its literals.** WHERE/SET values were always quoted
+  as strings (`n > '15'`, fragile: true for `'9' > '15'` as strings, false as
+  numbers — DuckDB's column-type coercion usually hid it). Numeric and boolean
+  tokens are now bare (`n > 15`, `active = TRUE`); strings keep quotes.
+- **`contains` documented correctly as an operator.** `ssql functions`, a
+  `where` example, and `doc/EXPRESSIONS.md` all showed `contains(email, "@")`,
+  which is an expr-lang **parse error** (it's an infix operator: `email
+  contains "@"`). All fixed; `hasPrefix`/`hasSuffix` remain the call-form
+  equivalents.
+
+### Testing
+- **DuckDB is now the sixth equivalence lane.** `TestPipelineEquivalence` runs
+  `generate sql` output through `duckdb -json` and asserts it matches every
+  other lane — an independent second-engine oracle that shares no code with
+  ssql, so unanimous-but-wrong Go lanes can't fool it. Gated on a `duckdb`
+  binary (PATH or `~/.local/bin`); normalises DuckDB's HUGEINT-as-JSON-string
+  rendering. New discriminating cases `where_expr` and `update_set_expr` —
+  both watched failing against the pre-fix translator (parse error and silent
+  multiset diff respectively).
+
 ## [v4.55.0] - 2026-07-01
 
 ### New Features

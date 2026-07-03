@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -243,20 +244,29 @@ func translateWhere(q *sqlQuery, args []string) error {
 	i := 0
 	for i < len(args) {
 		switch args[i] {
-		case "-if", "-i":
+		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
 				return fmt.Errorf("incomplete -if condition")
 			}
 			field, op, value := args[i+1], args[i+2], args[i+3]
 			cond := translateCondition(field, op, value)
+			if args[i][0] == '+' {
+				cond = "NOT (" + cond + ")"
+			}
 			currentAnd = append(currentAnd, cond)
 			i += 4
-		case "-if-expr", "-x":
+		case "-if-expr", "-x", "+if-expr", "+x":
 			if i+1 >= len(args) {
 				return fmt.Errorf("incomplete -if-expr")
 			}
-			// Pass expression through as-is — most expr-lang syntax is valid SQL
-			currentAnd = append(currentAnd, args[i+1])
+			cond, err := exprToSQL(args[i+1])
+			if err != nil {
+				return fmt.Errorf("where -if-expr: %w", err)
+			}
+			if args[i][0] == '+' {
+				cond = "NOT (" + cond + ")"
+			}
+			currentAnd = append(currentAnd, cond)
 			i += 2
 		case "+":
 			// OR separator between clauses
@@ -303,7 +313,28 @@ func translateCondition(field, op, value string) string {
 	if op == "regex" {
 		return fmt.Sprintf("regexp_matches(%s, '%s')", quoteIdent(field), escapeSQL(value))
 	}
-	return fmt.Sprintf("%s %s '%s'", quoteIdent(field), sqlOp, escapeSQL(value))
+	return fmt.Sprintf("%s %s %s", quoteIdent(field), sqlOp, sqlLiteral(value))
+}
+
+// sqlLiteral renders a CLI value token as a SQL literal. Numeric and boolean
+// tokens stay bare — quoting them as strings is semantically fragile ('9' >
+// '15' is true as strings, false as numbers; DuckDB happens to coerce by
+// column type but stricter engines don't) — everything else is a
+// single-quoted string.
+func sqlLiteral(value string) string {
+	if _, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return value
+	}
+	if f, err := strconv.ParseFloat(value, 64); err == nil && !math.IsInf(f, 0) && !math.IsNaN(f) {
+		return value
+	}
+	switch strings.ToLower(value) {
+	case "true":
+		return "TRUE"
+	case "false":
+		return "FALSE"
+	}
+	return "'" + escapeSQL(value) + "'"
 }
 
 func translateGroupBy(q *sqlQuery, args []string) error {
@@ -362,6 +393,16 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 			} else {
 				i++
 			}
+		// Silently dropping an aggregation would produce wrong results —
+		// fail loudly on the forms with no SQL translation (yet).
+		case "-expr", "-e":
+			return fmt.Errorf("group-by -expr has no SQL translation (expression aggregations are ssql-specific)")
+		case "-stream-expr":
+			return fmt.Errorf("group-by -stream-expr has no SQL translation (expression aggregations are ssql-specific)")
+		case "-rollup":
+			return fmt.Errorf("group-by -rollup is not yet translated to SQL (GROUP BY ROLLUP)")
+		case "-cube":
+			return fmt.Errorf("group-by -cube is not yet translated to SQL (GROUP BY CUBE)")
 		default:
 			i++
 		}
@@ -805,14 +846,16 @@ func translateCast(q *sqlQuery, args []string) error {
 
 func translateUpdate(q *sqlQuery, args []string) error {
 	// DuckDB: SELECT * REPLACE (CASE WHEN cond THEN val ELSE "field" END AS "field")
-	// Parse: -if field op val -set field val [-set field val ...]
+	// Parse: -if field op val -set field val [-set-expr field expr ...]
 	// Multiple -if groups create chained CASE WHEN ... WHEN ... ELSE ... END
 
-	// First pass: collect all target fields and their condition/value pairs
+	// First pass: collect all target fields and their condition/value pairs.
+	// valueSQL is an already-rendered SQL expression (literal or translated
+	// -set-expr), inserted verbatim into THEN/ELSE.
 	type assignment struct {
-		conds []string // AND conditions for this clause
-		field string
-		value string
+		conds    []string // AND conditions for this clause
+		field    string
+		valueSQL string
 	}
 	var assignments []assignment
 	var currentConds []string
@@ -820,21 +863,51 @@ func translateUpdate(q *sqlQuery, args []string) error {
 	i := 0
 	for i < len(args) {
 		switch args[i] {
-		case "-if", "-i":
+		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
 				return fmt.Errorf("incomplete -if condition in update")
 			}
 			cond := translateCondition(args[i+1], args[i+2], args[i+3])
+			if args[i][0] == '+' {
+				cond = "NOT (" + cond + ")"
+			}
 			currentConds = append(currentConds, cond)
 			i += 4
+		case "-if-expr", "-x", "+if-expr", "+x":
+			if i+1 >= len(args) {
+				return fmt.Errorf("incomplete -if-expr in update")
+			}
+			cond, err := exprToSQL(args[i+1])
+			if err != nil {
+				return fmt.Errorf("update -if-expr: %w", err)
+			}
+			if args[i][0] == '+' {
+				cond = "NOT (" + cond + ")"
+			}
+			currentConds = append(currentConds, cond)
+			i += 2
 		case "-set", "-s":
 			if i+2 >= len(args) {
 				return fmt.Errorf("incomplete -set in update")
 			}
 			assignments = append(assignments, assignment{
-				conds: append([]string{}, currentConds...),
-				field: args[i+1],
-				value: args[i+2],
+				conds:    append([]string{}, currentConds...),
+				field:    args[i+1],
+				valueSQL: sqlLiteral(args[i+2]),
+			})
+			i += 3
+		case "-set-expr", "-e":
+			if i+2 >= len(args) {
+				return fmt.Errorf("incomplete -set-expr in update")
+			}
+			valueSQL, err := exprToSQL(args[i+2])
+			if err != nil {
+				return fmt.Errorf("update -set-expr: %w", err)
+			}
+			assignments = append(assignments, assignment{
+				conds:    append([]string{}, currentConds...),
+				field:    args[i+1],
+				valueSQL: valueSQL,
 			})
 			i += 3
 		case "-":
@@ -863,10 +936,10 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		sb.WriteString("CASE")
 		for _, c := range cases {
 			if len(c.conds) > 0 {
-				sb.WriteString(" WHEN " + strings.Join(c.conds, " AND ") + " THEN '" + escapeSQL(c.value) + "'")
+				sb.WriteString(" WHEN " + strings.Join(c.conds, " AND ") + " THEN " + c.valueSQL)
 			} else {
 				// Unconditional set
-				sb.WriteString(" ELSE '" + escapeSQL(c.value) + "'")
+				sb.WriteString(" ELSE " + c.valueSQL)
 			}
 		}
 		// If all cases are conditional, preserve original value as ELSE
