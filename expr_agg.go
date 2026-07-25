@@ -27,7 +27,7 @@ func ExprAgg(expression string) AggregateFunc {
 		if err != nil {
 			panic(fmt.Sprintf("ExprAgg(%q): %v", expression, err))
 		}
-		return AggResult[float64]{val: toFloat64(result)}
+		return AggResult[float64]{val: mustAggFloat64(fmt.Sprintf("ExprAgg(%q)", expression), result)}
 	}
 }
 
@@ -53,7 +53,7 @@ func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc {
 		if err != nil {
 			panic(fmt.Sprintf("StreamExprAgg: %v", err))
 		}
-		return AggResult[float64]{val: toFloat64(result)}
+		return AggResult[float64]{val: mustAggFloat64("StreamExprAgg", result)}
 	}
 }
 
@@ -115,6 +115,20 @@ func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) 
 	}
 
 	return result, nil
+}
+
+// mustAggFloat64 coerces an aggregation expression's result to float64,
+// panicking with a clear message for non-numeric results. The old behaviour
+// (silently returning 0 via toFloat64's default case) turned a wrong
+// expression into corrupted-looking data; panicking matches how
+// ExprAgg/StreamExprAgg already report compile and eval errors.
+func mustAggFloat64(context string, v any) float64 {
+	switch v.(type) {
+	case float64, float32, int, int64, int32, int16, int8,
+		uint, uint64, uint32, uint16, uint8:
+		return toFloat64(v)
+	}
+	panic(fmt.Sprintf("%s: expression returned %T (%v), need a numeric result", context, v, v))
 }
 
 // toFloat64 converts various numeric types to float64

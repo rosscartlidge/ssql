@@ -105,6 +105,41 @@ func parseConditions(flagValue any) ([]Condition, error) {
 	return conditions, nil
 }
 
+// ExprCond is one parsed -if-expr / +if-expr entry.
+type ExprCond struct {
+	Expression string
+	Negated    bool // true when specified as +if-expr
+}
+
+// parseExprConds parses -if-expr flag values from autocli. A plain -if-expr
+// arrives as a bare string; a negated +if-expr arrives as a map
+// {"expression": …, "_negated": true}. Readers that type-assert only the
+// string form silently DROP every negated condition — that bug shipped in
+// both where and update codegen (and update's exec path), so all -if-expr
+// consumers must go through this helper.
+func parseExprConds(flagValue any) []ExprCond {
+	list, ok := flagValue.([]any)
+	if !ok {
+		return nil
+	}
+	var out []ExprCond
+	for _, raw := range list {
+		switch v := raw.(type) {
+		case string:
+			if v != "" {
+				out = append(out, ExprCond{Expression: v})
+			}
+		case map[string]any:
+			expression, _ := v["expression"].(string)
+			negated, _ := v["_negated"].(bool)
+			if expression != "" {
+				out = append(out, ExprCond{Expression: expression, Negated: negated})
+			}
+		}
+	}
+	return out
+}
+
 // conditionFields returns the unique field names from a slice of conditions.
 func conditionFields(conditions []Condition) []string {
 	seen := make(map[string]bool)

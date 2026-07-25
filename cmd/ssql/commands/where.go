@@ -94,30 +94,12 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				cd.conditions = conditions
 
 				// Parse and compile -if-expr / +if-expr conditions ONCE
-				if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
-					exprs, ok := exprsRaw.([]any)
-					if ok {
-						for _, exprRaw := range exprs {
-							var expression string
-							var negated bool
-							switch v := exprRaw.(type) {
-							case string:
-								expression = v
-							case map[string]any:
-								expression, _ = v["expression"].(string)
-								negated, _ = v["_negated"].(bool)
-							}
-							if expression == "" {
-								continue
-							}
-
-							compiled, err := compileExpression(expression)
-							if err != nil {
-								return fmt.Errorf("compiling expression %q: %w", expression, err)
-							}
-							cd.exprEvals = append(cd.exprEvals, exprEval{eval: compiled, negated: negated})
-						}
+				for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+					compiled, err := compileExpression(ec.Expression)
+					if err != nil {
+						return fmt.Errorf("compiling expression %q: %w", ec.Expression, err)
 					}
+					cd.exprEvals = append(cd.exprEvals, exprEval{eval: compiled, negated: ec.Negated})
 				}
 
 				clauses = append(clauses, cd)
@@ -332,6 +314,7 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 			field, _ := m["field"].(string)
 			op, _ := m["operator"].(string)
 			value, _ := m["value"].(string)
+			negated, _ := m["_negated"].(bool)
 			if field == "" || op == "" {
 				continue
 			}
@@ -343,6 +326,9 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 			cond, err := typedWhereCondition(f, op, value)
 			if err != nil {
 				return lib.WriteErrorAndExit(getCommandString(), err)
+			}
+			if negated {
+				cond = "!(" + cond + ")"
 			}
 			ands = append(ands, cond)
 		}
@@ -486,7 +472,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 	for _, clause := range clauses {
 		var andConditions []string
 
-		// Process -if conditions
+		// Process -if / +if conditions
 		if matchesRaw, ok := clause.Flags["-if"]; ok && matchesRaw != nil {
 			matches, ok := matchesRaw.([]any)
 			if ok && len(matches) > 0 {
@@ -499,6 +485,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 					field, _ := matchMap["field"].(string)
 					op, _ := matchMap["operator"].(string)
 					value, _ := matchMap["value"].(string)
+					negated, _ := matchMap["_negated"].(bool)
 
 					if field == "" || op == "" {
 						continue
@@ -506,6 +493,9 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 
 					// Generate condition code with parameterized value
 					cond, imp, param := generateCondition(field, op, value)
+					if negated {
+						cond = "!(" + cond + ")"
+					}
 					andConditions = append(andConditions, cond)
 					imports = append(imports, imp...)
 					if param != nil {
@@ -515,27 +505,19 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 			}
 		}
 
-		// Process -if-expr conditions
-		if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
-			exprs, ok := exprsRaw.([]any)
-			if ok && len(exprs) > 0 {
-				for _, exprRaw := range exprs {
-					// Expression is stored as a string (single arg flag)
-					expression, ok := exprRaw.(string)
-					if !ok || expression == "" {
-						continue
-					}
-
-					// Generate pre-compiled expression variable
-					exprCounter++
-					varName := fmt.Sprintf("exprFilter%d", exprCounter)
-					preCompileVars = append(preCompileVars,
-						fmt.Sprintf("var %s = runtime.MustCompileExprFilter(%q)", varName, expression))
-
-					// Use the pre-compiled filter
-					andConditions = append(andConditions, fmt.Sprintf("%s(r)", varName))
-				}
+		// Process -if-expr / +if-expr conditions. parseExprConds handles the
+		// map form negated entries arrive in — a plain string type-assert
+		// silently dropped every +if-expr condition.
+		for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+			exprCounter++
+			varName := fmt.Sprintf("exprFilter%d", exprCounter)
+			preCompileVars = append(preCompileVars,
+				fmt.Sprintf("var %s = runtime.MustCompileExprFilter(%q)", varName, ec.Expression))
+			call := fmt.Sprintf("%s(r)", varName)
+			if ec.Negated {
+				call = "!" + call
 			}
+			andConditions = append(andConditions, call)
 		}
 
 		// Combine AND conditions for this clause

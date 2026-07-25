@@ -367,6 +367,49 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// +if negation was silently DROPPED by record and typed codegen
+		// (the condition was applied UN-negated), while exec and the SQL
+		// translator honoured it.
+		Name:     "where_negated_if",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where +if city eq Oslo`,
+		Ordered:  false,
+	},
+	{
+		// +if-expr entries arrive as {"expression":…, "_negated":true} maps;
+		// record codegen read them as plain strings and dropped the whole
+		// condition (returning every row).
+		Name:     "where_negated_expr",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where +if-expr 'pop > 15'`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 3, "city": "Cairo", "pop": 10},
+			{"id": 9, "city": "Lima", "pop": 7},
+			{"id": 8, "city": "Lagos", "pop": 14},
+			{"id": 4, "city": "Paris", "pop": 11},
+			{"id": 6, "city": "Nairobi", "pop": 4},
+			{"id": 10, "city": "Quito", "pop": 2},
+			{"id": 12, "city": "Hanoi", "pop": 9},
+		},
+	},
+	{
+		// update codegen dropped +if negation the same way.
+		Name:     "update_negated_if",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update +if pop gt 15 -set city Low`,
+		Ordered:  false,
+	},
+	{
+		// update record codegen only parsed -if-expr when a -if flag was ALSO
+		// present — `update -if-expr … -set …` (the shipped help example
+		// shape) generated an UNCONDITIONAL update.
+		Name:     "update_if_expr_only",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update -if-expr 'pop > 25' -set city Big`,
+		Ordered:  false,
+		Skip: map[string]string{
+			"go-typed":    "typed codegen rejects update -if-expr (loud Tier-3 error)",
+			"go-parallel": "typed codegen rejects update -if-expr (loud Tier-3 error)",
+		},
+	},
+	{
 		// -if-expr exercises the expr→SQL translation: `&&` and "double
 		// quotes" mean something different in SQL, so verbatim passthrough
 		// (the pre-v4.56 behaviour) is a DuckDB parse/binder error.

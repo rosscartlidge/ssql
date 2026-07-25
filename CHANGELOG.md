@@ -5,6 +5,34 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Bug Fixes
+- **`+if` / `+if-expr` negation now works in ALL generated code** (found
+  during the expr-transpiler investigation). Negation was honoured only by
+  `where`'s interpreted execution and by `generate sql`; everywhere else it
+  silently produced wrong results: record and typed codegen for both `where`
+  and `update` applied `+if` conditions UN-negated, and `+if-expr` conditions
+  (which arrive as `{"expression":…, "_negated":true}` maps) were dropped
+  entirely by record codegen — and by `update`'s interpreted execution too.
+  All consumers now parse via a shared `parseExprConds` helper and emit
+  `!(…)`. Locked by four new equivalence cases (`where_negated_if`,
+  `where_negated_expr`, `update_negated_if`, `update_if_expr_only`), all
+  watched failing first.
+- **`update -if-expr … -set …` without a `-if` flag no longer generates an
+  UNCONDITIONAL update.** Record codegen only parsed `-if-expr` when a `-if`
+  flag was also present — the shipped help-example shape applied its `-set`
+  to every row. (Fixing it also exposed a never-closed `if` block in the
+  emitted code for expr-only clauses; both fixed.)
+- **`update -set-expr` eval errors now fail the generated pipeline loudly.**
+  Interpreted execution fails the pipeline on an expression eval error; the
+  generated record code silently set the field to `""`. Generated code now
+  reports the error and exits non-zero, matching exec.
+- **Non-numeric `group-by -expr`/`-stream-expr` results now panic with a
+  clear message** instead of silently aggregating as `0` (`toFloat64`'s
+  default case). A string-valued aggregation is a bug in the expression;
+  silent zeros looked like corrupted data.
+
 ## [v4.56.0] - 2026-07-03
 
 ### New Features

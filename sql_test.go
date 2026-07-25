@@ -5,6 +5,7 @@ import (
 	"iter"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -795,6 +796,27 @@ func TestExprAggSum(t *testing.T) {
 	if result != float64(60) {
 		t.Errorf("ExprAgg sum should return 60, got %v", result)
 	}
+}
+
+// TestExprAggNonNumericPanics: a non-numeric aggregation result must panic
+// with a clear message, not silently coerce to 0 (the old toFloat64 default
+// turned a wrong expression into corrupted-looking data).
+func TestExprAggNonNumericPanics(t *testing.T) {
+	records := []Record{
+		NewRecord(map[string]any{"name": "Alice"}),
+	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for non-numeric aggregation result, got none")
+		}
+		if msg := fmt.Sprint(r); !strings.Contains(msg, "need a numeric result") {
+			t.Errorf("panic message %q should mention 'need a numeric result'", msg)
+		}
+	}()
+	// first(names)-style string results have no numeric meaning; use a
+	// stream aggregation whose final expression is a string.
+	StreamExprAgg(`{s: ""}`, `{s: name}`, `s`)(records)
 }
 
 func TestExprAggCount(t *testing.T) {

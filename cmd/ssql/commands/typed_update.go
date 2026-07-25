@@ -26,9 +26,10 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		value string
 	}
 	type cond struct {
-		field string
-		op    string
-		value string
+		field   string
+		op      string
+		value   string
+		negated bool // +if
 	}
 	type updateClause struct {
 		conds []cond
@@ -54,7 +55,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 			}
 		}
 
-		// Parse -if conditions.
+		// Parse -if / +if conditions.
 		if matchesRaw, ok := clause.Flags["-if"]; ok && matchesRaw != nil {
 			matches, _ := matchesRaw.([]any)
 			for _, mr := range matches {
@@ -62,10 +63,11 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				field, _ := m["field"].(string)
 				op, _ := m["operator"].(string)
 				value, _ := m["value"].(string)
+				negated, _ := m["_negated"].(bool)
 				if field == "" || op == "" {
 					continue
 				}
-				uc.conds = append(uc.conds, cond{field: field, op: op, value: value})
+				uc.conds = append(uc.conds, cond{field: field, op: op, value: value, negated: negated})
 			}
 		}
 
@@ -155,6 +157,9 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				expr, err := typedWhereCondition(f, cd.op, cd.value)
 				if err != nil {
 					return lib.WriteErrorAndExit(getCommandString(), err)
+				}
+				if cd.negated {
+					expr = "!(" + expr + ")"
 				}
 				conds = append(conds, expr)
 			}

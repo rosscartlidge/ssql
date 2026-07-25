@@ -423,22 +423,31 @@ soaked because record-mode inference is heuristic.
 
 ---
 
-## 9. Bugs found during this investigation (fix with, or before, Phase 1)
+## 9. Bugs found during this investigation — ALL FIXED 2026-07-04 (pre-Phase-1)
 
-1. **`+if-expr` negation is silently DROPPED in record-mode codegen** —
-   `generateWhereCodeFromClauses` (where.go:518) reads `-if-expr` values as
-   plain strings and never checks `_negated`; only the exec interpreter
-   honours it (where.go:186). Generated record code returns MORE rows than
-   exec for any `+if-expr` pipeline. This is a live multi-backend divergence
-   of exactly the v4.55 class — **add the equivalence case first, watch it
-   fail, then fix** (fix is independent of the transpiler; don't wait for
-   Phase 4).
-2. **`update -set-expr` eval-error → field silently set to `""`**
-   (update.go:622-624). With codegen-time type checking most error paths
-   disappear; for Tier V document the behaviour or make it loud.
-3. **`toFloat64` default → 0** (expr_agg.go:149): a `-expr` aggregation
-   returning a string silently contributes 0. Transpiled path errors at
-   codegen (§6); consider making the VM path loud too.
+The fix sweep found the class was wider than the dig's headline. What
+shipped (see the four `*negated*`/`update_if_expr_only` equivalence cases,
+all watched failing first — notably the duckdb lane passed every one, since
+the v4.56 SQL translator already handled negation):
+
+1. **`+if`/`+if-expr` negation** was honoured only by where's exec path and
+   generate sql. Fixed in: where record codegen (`+if` applied UN-negated,
+   `+if-expr` dropped entirely), where typed codegen (`+if` un-negated),
+   update exec (`+if-expr` dropped), update record codegen (both), update
+   typed codegen (`+if` un-negated). Root cause was one shape repeated five
+   times: negated single-arg flags arrive as `{"expression":…, "_negated":true}`
+   maps and readers type-asserted only the string form → shared
+   `parseExprConds` helper now used everywhere.
+2. **`update -if-expr … -set …` with no `-if`** generated an UNCONDITIONAL
+   update (the `-if-expr` parse was gated on `-if` being present) — and
+   fixing it exposed a never-closed `if` block for expr-only clauses in the
+   emitted code. Both fixed.
+3. **`update -set-expr` eval-error → `""`**: generated code now fails the
+   pipeline loudly (stderr + exit 1), matching exec.
+4. **`toFloat64` default → 0**: `ExprAgg`/`StreamExprAgg` now panic with a
+   clear message on non-numeric results (`mustAggFloat64`), consistent with
+   their existing compile/eval-error panics. The transpiled path will error
+   at codegen instead (§6).
 
 ---
 

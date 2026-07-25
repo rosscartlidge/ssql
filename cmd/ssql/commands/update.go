@@ -94,9 +94,13 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Parse clauses - each clause has optional -if/-if-expr conditions and required -set/-set-expr operations
+			type whereExprEval struct {
+				eval    func(ssql.Record) (any, error)
+				negated bool
+			}
 			type updateClause struct {
 				conditions     []Condition
-				whereExprEvals []func(ssql.Record) (any, error) // For -if-expr (pre-compiled)
+				whereExprEvals []whereExprEval // For -if-expr / +if-expr (pre-compiled)
 				updates        []struct {
 					field    string
 					literal  string                         // For -set
@@ -117,24 +121,15 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 				uc.conditions = conditions
 
-				// Parse -if-expr conditions and compile expressions ONCE
-				if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
-					exprs, ok := exprsRaw.([]any)
-					if ok {
-						for _, exprRaw := range exprs {
-							expression, ok := exprRaw.(string)
-							if !ok || expression == "" {
-								continue
-							}
-
-							// Compile the expression ONCE
-							eval, err := compileExpression(expression)
-							if err != nil {
-								return fmt.Errorf("compiling where-expr %q: %w", expression, err)
-							}
-							uc.whereExprEvals = append(uc.whereExprEvals, eval)
-						}
+				// Parse and compile -if-expr / +if-expr conditions ONCE
+				// (parseExprConds handles the negated map form — a plain
+				// string type-assert silently dropped +if-expr entries)
+				for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+					eval, err := compileExpression(ec.Expression)
+					if err != nil {
+						return fmt.Errorf("compiling where-expr %q: %w", ec.Expression, err)
 					}
+					uc.whereExprEvals = append(uc.whereExprEvals, whereExprEval{eval: eval, negated: ec.Negated})
 				}
 
 				// Parse -set operations (literal values)
@@ -259,8 +254,8 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 					// Check where-expr conditions
 					if allMatch {
-						for _, eval := range clause.whereExprEvals {
-							result, err := eval(frozen)
+						for _, we := range clause.whereExprEvals {
+							result, err := we.eval(frozen)
 							if err != nil {
 								fmt.Fprintf(ctx.Stderr(), "Error evaluating where-expr: %v\n", err)
 								allMatch = false
@@ -272,6 +267,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 								fmt.Fprintf(ctx.Stderr(), "Where-expr must return boolean, got %T\n", result)
 								allMatch = false
 								break
+							}
+
+							if we.negated {
+								boolResult = !boolResult
 							}
 
 							if !boolResult {
@@ -434,7 +433,7 @@ func generateUpdateCode(ctx *cf.Context) error {
 	// Parse clauses - each clause has optional -match conditions and required -set/-set-expr operations
 	type updateClause struct {
 		conditions []Condition
-		whereExprs []string // For -if-expr expressions
+		whereExprs []ExprCond // For -if-expr / +if-expr expressions
 		updates    []struct {
 			field  string
 			value  string
@@ -454,20 +453,11 @@ func generateUpdateCode(ctx *cf.Context) error {
 		}
 		uc.conditions = conditions
 
-		if clause.Flags["-if"] != nil {
-			// Parse -if-expr conditions (boolean expressions)
-			if exprsRaw, ok := clause.Flags["-if-expr"]; ok && exprsRaw != nil {
-				exprs, ok := exprsRaw.([]any)
-				if ok {
-					for _, exprRaw := range exprs {
-						expression, ok := exprRaw.(string)
-						if ok && expression != "" {
-							uc.whereExprs = append(uc.whereExprs, expression)
-						}
-					}
-				}
-			}
-		}
+		// Parse -if-expr / +if-expr conditions. NB: this must NOT be gated on
+		// -if also being present — `update -if-expr … -set …` with no -if
+		// used to generate an UNCONDITIONAL update. parseExprConds also
+		// handles the negated map form (previously dropped).
+		uc.whereExprs = parseExprConds(clause.Flags["-if-expr"])
 
 		// Parse -set operations (literal values)
 		if setOpsRaw, ok := clause.Flags["-set"]; ok && setOpsRaw != nil {
@@ -577,7 +567,11 @@ func generateUpdateCode(ctx *cf.Context) error {
 				if condCount > 0 {
 					codeBody.WriteString(" && ")
 				}
-				codeBody.WriteString(generateConditionCode(cond.Field, cond.Operator, cond.Value))
+				condCode := generateConditionCode(cond.Field, cond.Operator, cond.Value)
+				if cond.Negated {
+					condCode = "!(" + condCode + ")"
+				}
+				codeBody.WriteString(condCode)
 				condCount++
 
 				// Track which imports are needed
@@ -590,7 +584,7 @@ func generateUpdateCode(ctx *cf.Context) error {
 			}
 
 			// Generate where-expr conditions
-			for _, whereExpr := range clause.whereExprs {
+			for _, we := range clause.whereExprs {
 				if condCount > 0 {
 					codeBody.WriteString(" && ")
 				}
@@ -598,8 +592,12 @@ func generateUpdateCode(ctx *cf.Context) error {
 				exprCounter++
 				varName := fmt.Sprintf("exprFilter%d", exprCounter)
 				preCompileVars = append(preCompileVars,
-					fmt.Sprintf("var %s = runtime.MustCompileExprFilter(%q)", varName, whereExpr))
-				codeBody.WriteString(varName + "(frozen)")
+					fmt.Sprintf("var %s = runtime.MustCompileExprFilter(%q)", varName, we.Expression))
+				call := varName + "(frozen)"
+				if we.Negated {
+					call = "!" + call
+				}
+				codeBody.WriteString(call)
 				condCount++
 			}
 
@@ -629,7 +627,10 @@ func generateUpdateCode(ctx *cf.Context) error {
 				stmtBuilder.WriteString(indent + "{\n")
 				stmtBuilder.WriteString(indent + "\tresult, err := " + varName + "(frozen)\n")
 				stmtBuilder.WriteString(indent + "\tif err != nil {\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\tmut = mut.String(%q, \"\")\n", indent, upd.field))
+				// Match exec: an eval error fails the pipeline loudly.
+				// (Previously the generated code silently set the field to "".)
+				stmtBuilder.WriteString(fmt.Sprintf("%s\t\tfmt.Fprintf(os.Stderr, \"Error: update -set-expr %s: %%v\\n\", err)\n", indent, upd.field))
+				stmtBuilder.WriteString(indent + "\t\tos.Exit(1)\n")
 				stmtBuilder.WriteString(indent + "\t} else {\n")
 				stmtBuilder.WriteString(indent + "\t\tswitch v := result.(type) {\n")
 				stmtBuilder.WriteString(indent + "\t\tcase int64:\n")
@@ -678,7 +679,7 @@ func generateUpdateCode(ctx *cf.Context) error {
 	}
 
 	// Close the if-else chain if we had conditions
-	if len(clauses) > 0 && (len(clauses[0].conditions) > 0 || len(clauses) > 1) {
+	if len(clauses) > 0 && (len(clauses[0].conditions) > 0 || len(clauses[0].whereExprs) > 0 || len(clauses) > 1) {
 		codeBody.WriteString("\t\t}")
 	}
 
@@ -708,7 +709,7 @@ func generateUpdateCode(ctx *cf.Context) error {
 		imports = append(imports, "regexp")
 	}
 	if needsRuntime {
-		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime")
+		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime", "fmt", "os")
 	}
 
 	// Create and write fragment
