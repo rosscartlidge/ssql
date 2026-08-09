@@ -68,6 +68,31 @@ func exprToGo(expression string, schema *lib.TypedSchema, recv string) (exprGo, 
 	return res, nil
 }
 
+// exprToGoWith is exprToGo with extra variable bindings (e.g. -stream-expr
+// state fields), resolved after schema fields — record shadows state. A nil
+// schema means identifiers resolve against vars only.
+func exprToGoWith(expression string, schema *lib.TypedSchema, recv string, vars map[string]exprGo) (exprGo, error) {
+	tree, err := parser.Parse(expression)
+	if err != nil {
+		return exprGo{}, fmt.Errorf("expression %q: %w", expression, err)
+	}
+	env := newExprGoEnv(schema, recv)
+	env.vars = vars
+	res, err := env.node(tree.Node)
+	if err != nil {
+		return exprGo{}, fmt.Errorf("expression %q: %w", expression, err)
+	}
+	return res, nil
+}
+
+// exprNodeToGoWith runs the walker directly on an already-parsed AST node
+// (used by the -stream-expr lowering, which dissects map literals).
+func exprNodeToGoWith(n ast.Node, schema *lib.TypedSchema, recv string, vars map[string]exprGo) (exprGo, error) {
+	env := newExprGoEnv(schema, recv)
+	env.vars = vars
+	return env.node(n)
+}
+
 // exprToGoBool is exprToGo + "result must be bool" (for -if-expr / +if-expr).
 func exprToGoBool(expression string, schema *lib.TypedSchema, recv string) (exprGo, error) {
 	res, err := exprToGo(expression, schema, recv)
@@ -81,11 +106,15 @@ func exprToGoBool(expression string, schema *lib.TypedSchema, recv string) (expr
 }
 
 // exprGoEnv resolves identifiers against the schema, case-insensitively
-// (matching lookupSchemaField's convention).
+// (matching lookupSchemaField's convention). vars holds extra bindings
+// (group-by -stream-expr state fields) consulted AFTER schema fields —
+// record shadows state, matching evalStreamAggExpr's env build order
+// (maps.Copy(state) then maps.Insert(record): record wins).
 type exprGoEnv struct {
 	fields map[string]lib.TypedSchemaField
 	names  []string // schema order, for deterministic error messages
 	recv   string
+	vars   map[string]exprGo // extra bindings, e.g. "s" → {Src: "a.se0_s", Type: float64}
 }
 
 func newExprGoEnv(schema *lib.TypedSchema, recv string) *exprGoEnv {
@@ -111,11 +140,24 @@ type exprUnknownFieldError struct{ msg string }
 
 func (e *exprUnknownFieldError) Error() string { return e.msg }
 
-// field resolves a schema field to its Go reference, admitting only the MVP
-// scalar types.
+// known reports whether name resolves to a schema field or an extra binding
+// (used by has/getOr/?? which fold existence at codegen time).
+func (e *exprGoEnv) known(name string) bool {
+	if _, ok := e.fields[strings.ToLower(name)]; ok {
+		return true
+	}
+	_, ok := e.vars[name]
+	return ok
+}
+
+// field resolves an identifier: schema field first (record shadows state),
+// then extra bindings. Schema fields admit only the MVP scalar types.
 func (e *exprGoEnv) field(name string) (exprGo, error) {
 	f, ok := e.fields[strings.ToLower(name)]
 	if !ok {
+		if v, ok := e.vars[name]; ok {
+			return v, nil
+		}
 		return exprGo{}, &exprUnknownFieldError{
 			msg: fmt.Sprintf("unknown field %q (schema has %s)", name, e.fieldNames())}
 	}
@@ -225,7 +267,7 @@ func (e *exprGoEnv) binary(n *ast.BinaryNode) (exprGo, error) {
 	// nil-ness the type system can't see: refuse.
 	if n.Operator == "??" {
 		if ident, ok := n.Left.(*ast.IdentifierNode); ok {
-			if _, known := e.fields[strings.ToLower(ident.Value)]; !known {
+			if !e.known(ident.Value) {
 				return e.node(n.Right)
 			}
 			return e.field(ident.Value)
@@ -431,8 +473,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
-		_, known := e.fields[strings.ToLower(fieldName)]
-		return exprGo{Src: strconv.FormatBool(known), Type: exprGoBool}, nil
+		return exprGo{Src: strconv.FormatBool(e.known(fieldName)), Type: exprGoBool}, nil
 	case "getOr":
 		if len(args) != 2 {
 			return exprGo{}, fmt.Errorf("getOr() takes a field name and a default")
@@ -445,7 +486,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
-		if _, known := e.fields[strings.ToLower(fieldName)]; !known {
+		if !e.known(fieldName) {
 			return def, nil
 		}
 		field, err := e.field(fieldName)

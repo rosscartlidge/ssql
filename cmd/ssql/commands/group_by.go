@@ -36,138 +36,124 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from huge.csv | ssql group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total", "Memory-efficient streaming aggregation").
 		Example("ssql from data.csv | ssql group-by a_kind z_kind -count count -rollup", "Hierarchical rollup with parent-level counts").
 		Example("ssql from data.csv | ssql group-by a_kind z_kind -count count -cube", "Full cube with all combination counts").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("FIELDS").
-			String().
-			Variadic().
-			FieldsFromFlag("").
-			Global().
-			Help("Fields to group by").
-			Done().
-
+		String().
+		Variadic().
+		FieldsFromFlag("").
+		Global().
+		Help("Fields to group by").
+		Done().
 		Flag("-count").
-			Arg("result-name").
-				Completer(cf.NoCompleter{Hint: "<name>"}).
-				Done().
-			Accumulate().
-			Global().
-			Help("Count records (result field name)").
-			Done().
-
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Count records (result field name)").
+		Done().
 		Flag("-sum").
-			Arg("field").
-				FieldsFromFlag("").
-				Done().
-			Arg("result-name").
-				Completer(cf.NoCompleter{Hint: "<name>"}).
-				Done().
-			Accumulate().
-			Global().
-			Help("Sum field values (field name, result name)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Sum field values (field name, result name)").
+		Done().
 		Flag("-avg").
-			Arg("field").
-				FieldsFromFlag("").
-				Done().
-			Arg("result-name").
-				Completer(cf.NoCompleter{Hint: "<name>"}).
-				Done().
-			Accumulate().
-			Global().
-			Help("Average field values (field name, result name)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Average field values (field name, result name)").
+		Done().
 		Flag("-min").
-			Arg("field").
-				FieldsFromFlag("").
-				Done().
-			Arg("result-name").
-				Completer(cf.NoCompleter{Hint: "<name>"}).
-				Done().
-			Accumulate().
-			Global().
-			Help("Minimum field value (field name, result name)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Minimum field value (field name, result name)").
+		Done().
 		Flag("-max").
-			Arg("field").
-				FieldsFromFlag("").
-				Done().
-			Arg("result-name").
-				Completer(cf.NoCompleter{Hint: "<name>"}).
-				Done().
-			Accumulate().
-			Global().
-			Help("Maximum field value (field name, result name)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Maximum field value (field name, result name)").
+		Done().
 		Flag("-collect").
-			Arg("field").
-				FieldsFromFlag("").
-				Done().
-			Arg("result-name").
-				Completer(cf.NoCompleter{Hint: "<name>"}).
-				Done().
-			Accumulate().
-			Global().
-			Help("Collect all field values into array (field name, result name)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Collect all field values into array (field name, result name)").
+		Done().
 		Flag("-expr", "-e").
-			Arg("expression").
-				Completer(cf.NoCompleter{Hint: "<expression>"}).
-				Done().
-			Arg("result-name").
-				Completer(cf.NoCompleter{Hint: "<name>"}).
-				Done().
-			Accumulate().
-			Global().
-			Help("Custom aggregation expression: -expr 'sum(salary * bonus)' total").
-			Done().
-
+		Arg("expression").
+		Completer(cf.NoCompleter{Hint: "<expression>"}).
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Custom aggregation expression: -expr 'sum(salary * bonus)' total").
+		Done().
 		Flag("-stream-expr").
-			Arg("init").
-				Completer(cf.NoCompleter{Hint: "<init-expr>"}).
-				Done().
-			Arg("every").
-				Completer(cf.NoCompleter{Hint: "<every-expr>"}).
-				Done().
-			Arg("final").
-				Completer(cf.NoCompleter{Hint: "<final-expr>"}).
-				Done().
-			Arg("result-name").
-				Completer(cf.NoCompleter{Hint: "<name>"}).
-				Done().
-			Accumulate().
-			Global().
-			Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
-			Done().
-
+		Arg("init").
+		Completer(cf.NoCompleter{Hint: "<init-expr>"}).
+		Done().
+		Arg("every").
+		Completer(cf.NoCompleter{Hint: "<every-expr>"}).
+		Done().
+		Arg("final").
+		Completer(cf.NoCompleter{Hint: "<final-expr>"}).
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Streaming aggregation: -stream-expr '{s:0}' '{s:s+salary}' 's' total").
+		Done().
 		Flag("-presorted").
-			Bool().
-			Global().
-			Help("Input is presorted by group fields (streaming, O(1) memory per group)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Input is presorted by group fields (streaming, O(1) memory per group)").
+		Done().
 		Flag("-rollup").
-			Bool().
-			Global().
-			Help("Hierarchical rollup: enrich rows with parent-level aggregations").
-			Done().
-
+		Bool().
+		Global().
+		Help("Hierarchical rollup: enrich rows with parent-level aggregations").
+		Done().
 		Flag("-cube").
-			Bool().
-			Global().
-			Help("Full cube: enrich rows with all combination aggregations").
-			Done().
-
+		Bool().
+		Global().
+		Help("Full cube: enrich rows with all combination aggregations").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "group-by")
@@ -462,20 +448,24 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 
 	// Typed-mode branch — emits typed.GroupBy (or typed.GroupByParallel
 	// in parallel mode) with a synthesized aggregator and a derived
-	// result struct. Tier 2 limits: no -expr / -stream-expr (Tier 3),
-	// no -rollup / -cube, no -collect (deferred).
-	// Phase B fall-through: prevSchema==nil → Record-mode upstream
-	// (ssql.GroupByFields / ssql.Aggregate path below handles it).
+	// result struct. -stream-expr folds lower to accumulator fields
+	// (expr-transpiler Phase 2; forces the serial form — fold state is
+	// not mergeable); -expr remains Tier 3 until Phase 3. No -rollup /
+	// -cube, no -collect (deferred).
+	// Phase B fall-throughs: prevSchema==nil → Record-mode upstream;
+	// a -stream-expr shape a typed struct can't hold → record path
+	// below, with the reason surfaced under -explain.
+	var typedFallbackNotes []string
 	if typedMode() && prevSchema != nil {
-		if len(exprSpecs) > 0 || len(streamExprSpecs) > 0 {
+		if len(exprSpecs) > 0 {
 			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: -expr / -stream-expr aggregations are Tier 3 (need expression-language → Go translation); drop -typed"))
+				fmt.Errorf("ssql generate go -typed: -expr aggregations are Tier 3 (need expression-language → Go translation); drop -typed"))
 		}
 		if rollup || cube {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: -rollup / -cube not yet supported in typed mode; drop -typed"))
 		}
-		if len(aggSpecs) == 0 {
+		if len(aggSpecs) == 0 && len(streamExprSpecs) == 0 {
 			// 'group-by FIELDS' with no aggregations is semantically
 			// equivalent to `include FIELDS | distinct` — project to
 			// the kept fields and dedupe. Emit two fragments rather
@@ -520,11 +510,15 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		}
 		// emitTypedGroupBy now always emits dual templates (parallel
 		// + serial) for non-presorted, and the planner picks per
-		// pipeline. -presorted forces SerialOnly (GroupByOrdered
-		// requires contiguous keys; shard partitioning would split
-		// runs), single-template emission. The `useParallel` arg is
-		// vestigial now — kept for API stability but ignored.
-		return emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, presorted, true)
+		// pipeline. -presorted and -stream-expr force SerialOnly
+		// (GroupByOrdered needs contiguous keys; fold state is not
+		// mergeable), single-template emission. The `useParallel` arg
+		// is vestigial now — kept for API stability but ignored.
+		handled, reason, err := emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, streamExprSpecs, presorted, true)
+		if handled || err != nil {
+			return err
+		}
+		typedFallbackNotes = append(typedFallbackNotes, fmt.Sprintf("record fallback (%s)", reason))
 	}
 
 	// Rollup/cube code generation path
@@ -646,6 +640,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	groupCode.WriteString(fmt.Sprintf(")(%s)", inputVar))
 
 	frag1 := lib.NewStmtFragment("grouped", inputVar, groupCode.String(), nil, getCommandString())
+	frag1.PlanNotes = typedFallbackNotes
 	if err := lib.WriteCodeFragment(frag1); err != nil {
 		return fmt.Errorf("writing GroupByFields fragment: %w", err)
 	}

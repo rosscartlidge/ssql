@@ -854,6 +854,72 @@ func TestTierVKeepsTypedPipeline(t *testing.T) {
 	})
 }
 
+// TestStreamExprTypedGeneration locks the -stream-expr typed accumulator
+// lowering (expr-transpiler Phase 2): state fields on the aggregator struct,
+// ONE simultaneous multi-assignment in Add() (sequential assignment breaks
+// {a: b, b: a} — gated by the groupby_stream_swap equivalence golden), the
+// serial GroupBy form (fold state is not mergeable), and record fallback for
+// shapes a typed struct can't hold.
+func TestStreamExprTypedGeneration(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	tmpFile := "/tmp/streamexpr_gen_test.csv"
+	if err := os.WriteFile(tmpFile, []byte("dept,salary\na,100\nb,200\n"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(tmpFile)
+
+	t.Run("typed accumulator emission", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=typed && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test group-by dept -stream-expr '{s:0, n:0}' '{s:s+salary, n:n+1}' 's/n' avg_sal`+
+				` | /tmp/ssql_test generate go`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate failed: %v\n%s", err, out)
+		}
+		src := string(out)
+		for _, want := range []string{
+			"se0_s int64",
+			"se0_n int64",
+			"a.se0_s, a.se0_n = (a.se0_s + r.Salary), (a.se0_n + 1)", // ONE multi-assign
+			"AvgSal: (float64(a.se0_s) / float64(a.se0_n))",
+			"typed.GroupBy(", // serial form — fold state is not mergeable
+		} {
+			if !strings.Contains(src, want) {
+				t.Errorf("generated source missing %q:\n%s", want, src)
+			}
+		}
+		if strings.Contains(src, "GroupByParallel") {
+			t.Errorf("stream-expr must not use the parallel group-by:\n%s", src)
+		}
+	})
+
+	t.Run("untypeable shape falls back with explain note", func(t *testing.T) {
+		// every drops a state key — the VM legitimately shrinks the state
+		// object; a struct can't. Record fallback, reason under -explain.
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=typed && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test group-by dept -stream-expr '{s:0, n:0}' '{s:s+salary}' 's' total`+
+				` | /tmp/ssql_test generate go -explain`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate -explain failed: %v\n%s", err, out)
+		}
+		src := string(out)
+		if !strings.Contains(src, "ssql.StreamExprAgg") {
+			t.Errorf("fallback must emit the record StreamExprAgg path:\n%s", src)
+		}
+		if !strings.Contains(src, "record fallback") {
+			t.Errorf("-explain output missing the record-fallback note:\n%s", src)
+		}
+	})
+}
+
 // TestTableGeneration tests that the table command generates correct Go code
 func TestTableGeneration(t *testing.T) {
 	// Build the binary first

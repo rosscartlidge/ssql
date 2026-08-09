@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Expr transpiler Phase 2: `group-by -stream-expr` folds run as native
+  typed accumulators.** The init/every/final map-state fold lowers onto the
+  same synthesized aggregator struct the built-in aggregations use: init
+  keys become typed state fields (int64 widening to float64 when the every
+  expression demands it), the every object becomes ONE simultaneous
+  multi-assignment in Add() — the VM computes the whole new state from the
+  OLD state, so `{a: b, b: a}` must swap; sequential assignment is caught by
+  the `groupby_stream_swap` equivalence golden — and final becomes the
+  Result() expression, coerced to float64 (`mustAggFloat64` parity).
+  Identifier resolution matches exec exactly: record fields SHADOW state
+  fields in every (verified against `evalStreamAggExpr`'s env build; the
+  plan's assumption was backwards), and final sees state only. Stream folds
+  are not generally mergeable, so any `-stream-expr` forces the serial
+  group-by form (SerialOnly fragment; the planner serialises upstream).
+  Shapes a typed struct can't hold — non-literal init, every keys ≠ init
+  keys (the VM legitimately reshapes the state object), non-numeric
+  state/final — fall back to record codegen with the reason under
+  `-explain`. Gated by `TestLowerStreamAgg`, `TestStreamExprTypedGeneration`,
+  and four equivalence cases with goldens (avg fold, widening + division,
+  the swap simultaneity gate — watched failing against sequential
+  assignment — and mixed builtin+fold grouping).
 - **Expr transpiler Phase 1.5: Tier V keeps exotic expressions typed, and
   `generate go -explain` reports the tier per expression.** An expression
   outside the native subset (e.g. `sha256(city)`) no longer ejects the stage

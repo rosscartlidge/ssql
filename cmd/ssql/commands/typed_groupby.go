@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,22 +23,29 @@ import (
 // directly. Multi-field: a tuple struct named <Input>GroupKey is
 // emitted alongside.
 //
-// Aggregation set is restricted to count/sum/avg/min/max in v1 (no
-// collect, no expr, no stream-expr). The caller has validated this
-// before invoking us.
+// Aggregations: count/sum/avg/min/max, plus -stream-expr folds lowered
+// to accumulator fields by lowerStreamAgg (expr-transpiler Phase 2). No
+// collect, no -expr (Phase 3). The caller has validated this before
+// invoking us.
 //
-// parallel selects between typed.GroupBy (false) and
-// typed.GroupByParallel (true). The synthesized aggregator gets a
-// Merge method when parallel; the call site uses
-// typed.ParallelAggregator and typed.GroupByParallel; the upstream
-// fragment is expected to carry a Stream[T].
-func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string, specs []aggSpec, presorted, parallel bool) error {
+// Returns handled=false with a reason — WITHOUT writing a fragment — when a
+// -stream-expr spec can't be held in a typed struct (non-literal init,
+// every keys ≠ init keys, non-numeric state/final, untranspilable
+// sub-expression); the caller falls back to record codegen. Unknown fields
+// stay loud.
+//
+// Stream-expr state is NOT generally mergeable (the fold isn't
+// necessarily associative), so any -stream-expr forces the serial
+// single-template emission (SerialOnly — the planner inserts the
+// Stream.Serial() boundary upstream); otherwise dual templates are
+// emitted and the planner picks.
+func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string, specs []aggSpec, streamSpecs []streamExprSpec, presorted, parallel bool) (bool, string, error) {
 	// Validate group fields exist in the input schema.
 	groupSchemaFields := make([]lib.TypedSchemaField, 0, len(groupFields))
 	for _, name := range groupFields {
 		f, ok := lookupSchemaField(in, name)
 		if !ok {
-			return lib.WriteErrorAndExit(getCommandString(),
+			return true, "", lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'group-by': unknown field %q", name))
 		}
 		groupSchemaFields = append(groupSchemaFields, f)
@@ -51,13 +59,31 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 		}
 		f, ok := lookupSchemaField(in, s.field)
 		if !ok {
-			return lib.WriteErrorAndExit(getCommandString(),
+			return true, "", lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: aggregation %q references unknown field %q", s.function, s.field))
 		}
 		if needsNumeric(s.function) && !isNumericGoType(f.GoType) {
-			return lib.WriteErrorAndExit(getCommandString(),
+			return true, "", lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires a numeric type, got %s", s.function, s.field, f.GoType))
 		}
+	}
+
+	// Lower each -stream-expr fold. Unknown record fields inside are loud;
+	// any other refusal falls back to record codegen with the reason.
+	var streamPlans []streamAggPlan
+	var planNotes []string
+	for i, ss := range streamSpecs {
+		plan, err := lowerStreamAgg(ss, in, i)
+		if err != nil {
+			var unknownField *exprUnknownFieldError
+			if errors.As(err, &unknownField) {
+				return true, "", lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: 'group-by -stream-expr': %w", err))
+			}
+			return false, fmt.Sprintf("-stream-expr %s: %v", ss.result, err), nil
+		}
+		streamPlans = append(streamPlans, plan)
+		planNotes = append(planNotes, fmt.Sprintf("stream-expr %q: native accumulator (serial group-by — fold state is not mergeable)", ss.result))
 	}
 
 	// ---- key type ----
@@ -77,19 +103,36 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 			GoType: aggResultGoType(s, in),
 		})
 	}
+	for _, p := range streamPlans {
+		// Stream-expr results are always float64 (mustAggFloat64 parity).
+		resultFields = append(resultFields, lib.TypedSchemaField{
+			Name:   p.Spec.result,
+			GoName: lib.GoNameFromColumn(p.Spec.result),
+			GoType: "float64",
+		})
+	}
 	resultSchema := &lib.TypedSchema{TypeName: resultName, Fields: resultFields}
 	resultDef := renderResultStructDef(resultSchema)
 
 	// ---- aggregator type ----
 	aggTypeName := in.TypeName + "Aggregator"
 	aggResultName := aggTypeName + "Result"
-	// Always emit the parallel-flavoured aggregator (Add + Result +
-	// Merge). ParallelAggregator extends Aggregator, so the same
-	// struct satisfies both interfaces — that lets us emit ONE
-	// struct definition usable by both the parallel call site
-	// (typed.GroupByParallel + ParallelAggregator interface) and
-	// the serial alternative (typed.GroupBy + Aggregator interface).
-	aggDef, _, _ := buildTypedAggregator(aggTypeName, in, specs, groupSchemaFields, resultName, true)
+	// Without stream folds: emit the parallel-flavoured aggregator (Add +
+	// Result + Merge). ParallelAggregator extends Aggregator, so the same
+	// struct satisfies both interfaces — ONE definition serves both the
+	// parallel call site and the serial alternative. With stream folds:
+	// no Merge (not mergeable) — the emission below is SerialOnly anyway.
+	aggDef, _, _ := buildTypedAggregator(aggTypeName, in, specs, streamPlans, groupSchemaFields, resultName, len(streamPlans) == 0)
+
+	// The aggregator constructor: stream-expr states carry their INIT
+	// values (the plain &T{} zero value is wrong for `{s: 1}`).
+	var ctorInits []string
+	for _, p := range streamPlans {
+		for _, st := range p.States {
+			ctorInits = append(ctorInits, fmt.Sprintf("%s: %s", st.GoName, st.Init))
+		}
+	}
+	aggCtor := fmt.Sprintf("&%s{%s}", aggTypeName, strings.Join(ctorInits, ", "))
 
 	// Assemble all three struct/type definitions.
 	defs := []string{aggDef}
@@ -104,7 +147,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	makeGroupByCode := func(groupFn, aggIface string) string {
 		return fmt.Sprintf(`grouped := %s(%s,
 		func(r %s) %s { return %s },
-		func() %s[%s, %s] { return &%s{} },
+		func() %s[%s, %s] { return %s },
 		func(k %s, agg %s) %s {
 			return %s{
 				%s,
@@ -112,32 +155,47 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 		})`,
 			groupFn, inputVar,
 			in.TypeName, keyType, keyExpr,
-			aggIface, in.TypeName, aggResultName, aggTypeName,
+			aggIface, in.TypeName, aggResultName, aggCtor,
 			keyType, aggResultName, resultName,
 			resultName,
-			buildResultCtor(groupSchemaFields, specs, aggResultName),
+			buildResultCtor(groupSchemaFields, specs, streamPlans, aggResultName),
 		)
 	}
 
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	for _, p := range streamPlans {
+		imports = append(imports, p.Imports...)
+	}
 	if schemaUsesTime(resultSchema) || schemaUsesTime(in) {
 		imports = append(imports, "time")
 	}
+	imports = dedupeImports(imports)
+	var hoisted []string
+	for _, p := range streamPlans {
+		hoisted = append(hoisted, p.Hoisted...)
+	}
 
-	// -presorted: GroupByOrdered requires contiguous keys → SerialOnly,
-	// no parallel form. Single-template emission.
-	if presorted {
-		code := makeGroupByCode("typed.GroupByOrdered", "typed.Aggregator")
+	// -presorted: GroupByOrdered requires contiguous keys → SerialOnly.
+	// Any -stream-expr also forces SerialOnly: the fold state is not
+	// mergeable across shards. Single-template emission; the planner
+	// inserts the Stream.Serial() boundary upstream when needed.
+	if presorted || len(streamPlans) > 0 {
+		groupFn := "typed.GroupBy"
+		if presorted {
+			groupFn = "typed.GroupByOrdered"
+		}
+		code := makeGroupByCode(groupFn, "typed.Aggregator")
 		frag := lib.NewStmtFragment("grouped", inputVar, code, imports, getCommandString())
 		frag.InputTypedSchema = in
 		frag.OutputTypedSchema = resultSchema
-		frag.StructDefs = defs
+		frag.StructDefs = append(defs, hoisted...)
+		frag.PlanNotes = planNotes
 		frag.Capabilities = &lib.Capabilities{
 			Accepts:    lib.ShapeSeqTyped,
 			Produces:   lib.ShapeSeqTyped,
 			SerialOnly: true,
 		}
-		return lib.WriteCodeFragment(frag)
+		return true, "", lib.WriteCodeFragment(frag)
 	}
 
 	// Non-presorted: emit both templates. Default is
@@ -156,7 +214,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	frag.AltImportsIfSeq = imports
 	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 	_ = parallel // intentionally unused — the planner picks now
-	return lib.WriteCodeFragment(frag)
+	return true, "", lib.WriteCodeFragment(frag)
 }
 
 // buildGroupKeyType decides on the key type for the group-by.
@@ -239,7 +297,7 @@ func renderResultStructDef(s *lib.TypedSchema) string {
 // the trivially associative ones (count: N1+N2; sum: s1+s2; avg:
 // sum1+sum2 + n1+n2; min/max: pick the better while honouring the
 // "have value" flag).
-func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSpec, groupFields []lib.TypedSchemaField, resultName string, parallel bool) (def, addBody, resultBody string) {
+func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSpec, streamPlans []streamAggPlan, groupFields []lib.TypedSchemaField, resultName string, parallel bool) (def, addBody, resultBody string) {
 	// Decide what state to hold per spec.
 	type aggState struct {
 		spec      aggSpec
@@ -296,6 +354,11 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\t%s_have bool\n", s.stateName)
 		}
 	}
+	for _, p := range streamPlans {
+		for _, st := range p.States {
+			fmt.Fprintf(&d, "\t%s %s // -stream-expr %q state %q\n", st.GoName, st.Type, p.Spec.result, st.Key)
+		}
+	}
 	d.WriteString("}\n\n")
 
 	// Add() method.
@@ -321,6 +384,17 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			d.WriteString("\t}\n")
 		}
 	}
+	for _, p := range streamPlans {
+		// One SIMULTANEOUS multi-assignment per fold: the VM computes the
+		// whole new state object from the OLD state, then replaces it —
+		// {s: n, n: s} must swap, so every RHS reads pre-assignment values.
+		var lhs, rhs []string
+		for i, st := range p.States {
+			lhs = append(lhs, "a."+st.GoName)
+			rhs = append(rhs, p.Every[i])
+		}
+		fmt.Fprintf(&d, "\t%s = %s\n", strings.Join(lhs, ", "), strings.Join(rhs, ", "))
+	}
 	d.WriteString("}\n\n")
 
 	// Result() method — returns a struct with a field per aggregation
@@ -339,6 +413,9 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\t\t%s: func() float64 { if a.%s_n == 0 { return 0 }; return float64(a.%s) / float64(a.%s_n) }(),\n",
 				lib.GoNameFromColumn(s.spec.result), s.stateName, s.stateName, s.stateName)
 		}
+	}
+	for _, p := range streamPlans {
+		fmt.Fprintf(&d, "\t\t%s: %s,\n", lib.GoNameFromColumn(p.Spec.result), p.Final)
 	}
 	d.WriteString("\t}\n}\n\n")
 
@@ -382,9 +459,17 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			maxName = len(gn)
 		}
 	}
+	for _, p := range streamPlans {
+		if gn := lib.GoNameFromColumn(p.Spec.result); len(gn) > maxName {
+			maxName = len(gn)
+		}
+	}
 	for _, s := range states {
 		gn := lib.GoNameFromColumn(s.spec.result)
 		fmt.Fprintf(&d, "\t%-*s %s\n", maxName, gn, aggResultGoTypeForState(s.spec.function, s.fieldGoT))
+	}
+	for _, p := range streamPlans {
+		fmt.Fprintf(&d, "\t%-*s float64\n", maxName, lib.GoNameFromColumn(p.Spec.result))
 	}
 	d.WriteString("}\n")
 
@@ -397,7 +482,7 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 //   - k: the group key (single value or composite-key struct)
 //   - agg: the aggregator's Result() value (the synthesized inner
 //     result struct of typed Aggregator[T, S], where S = aggResultName)
-func buildResultCtor(groupFields []lib.TypedSchemaField, specs []aggSpec, aggResultName string) string {
+func buildResultCtor(groupFields []lib.TypedSchemaField, specs []aggSpec, streamPlans []streamAggPlan, aggResultName string) string {
 	var b strings.Builder
 	// Group-key fields come from k.
 	if len(groupFields) == 1 {
@@ -412,6 +497,10 @@ func buildResultCtor(groupFields []lib.TypedSchemaField, specs []aggSpec, aggRes
 	// value, not the aggregator itself).
 	for _, s := range specs {
 		gn := lib.GoNameFromColumn(s.result)
+		fmt.Fprintf(&b, "\t\t\t\t%s: agg.%s,\n", gn, gn)
+	}
+	for _, p := range streamPlans {
+		gn := lib.GoNameFromColumn(p.Spec.result)
 		fmt.Fprintf(&b, "\t\t\t\t%s: agg.%s,\n", gn, gn)
 	}
 	return strings.TrimRight(b.String(), ",\n")

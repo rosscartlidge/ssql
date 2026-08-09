@@ -491,6 +491,61 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// -stream-expr as a typed accumulator (expr-transpiler Phase 2):
+		// single group over all rows, classic avg fold. Golden =
+		// sum(pop)/12 = 199/12. duckdb skipped: generate sql rejects
+		// -stream-expr loudly (v4.56.0 behaviour, by design).
+		Name:     "groupby_stream_avg",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} group-by -stream-expr '{s:0, n:0}' '{s:s+pop, n:n+1}' 's/n' avg_pop`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"avg_pop": 16.583333333333332},
+		},
+		Skip: map[string]string{
+			"duckdb": "-stream-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// Widening fixpoint: init declares s as int, every adds pop/2
+		// (float division!) — the state must widen to float64 and the
+		// division must NOT become Go integer division. Golden = 199/2.
+		Name:     "groupby_stream_widening",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} group-by -stream-expr '{s:0}' '{s: s + pop/2}' 's' half_sum`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"half_sum": 99.5},
+		},
+		Skip: map[string]string{
+			"duckdb": "-stream-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// SIMULTANEITY gate: every's object is computed from the OLD state
+		// then replaces it — {a: b, b: a} must SWAP each row. Sequential
+		// assignment (a=b then b=a-already-overwritten) converges to (1,1)
+		// and returns 1; the correct fold alternates and returns 0 after 12
+		// rows. The golden catches unanimous-but-wrong.
+		Name:     "groupby_stream_swap",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} group-by -stream-expr '{a:0, b:1}' '{a: b, b: a}' 'a' flip`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"flip": 0},
+		},
+		Skip: map[string]string{
+			"duckdb": "-stream-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// Per-group state reset + mixing a built-in aggregation with a
+		// stream fold in one aggregator struct.
+		Name:     "groupby_stream_grouped",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} group-by city -count c -stream-expr '{s:0, n:0}' '{s:s+pop, n:n+1}' 's/n' v`,
+		Ordered:  false,
+		Skip: map[string]string{
+			"duckdb": "-stream-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
 		// Tier V (expr-transpiler Phase 1.5): sha256 is outside exprToGo's
 		// native subset, so typed lanes evaluate it with the VM against a
 		// generated static env — WITHOUT ejecting the stage to record mode.

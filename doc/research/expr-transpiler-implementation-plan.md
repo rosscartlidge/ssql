@@ -411,7 +411,7 @@ value-equality only for expressions that are valid under BOTH paths.
 |---|---|---|---|
 | **1** ✅ 2026-08-09 | `exprToGo` core + typed `where -if-expr` + typed `update -set/-if-expr` (Tier N + Tier R; Tier V machinery deferred if tight) | equivalence cases unskip typed lanes; differential harness green; benches show 0 allocs | 2-3 days |
 | **1.5** ✅ 2026-08-10 | Tier V (`runtime.CompileExprEnv` + generated static env) + `-explain` tier reporting | exotic expr in typed pipeline no longer downgrades downstream stages; -explain names tiers | 1 day |
-| **2** | `group-by -stream-expr` → typed accumulator (serial GroupBy) | new equivalence case green across lanes | 1-2 days |
+| **2** ✅ 2026-08-10 | `group-by -stream-expr` → typed accumulator (serial GroupBy) | new equivalence case green across lanes | 1-2 days |
 | **3** | `group-by -expr` via patcher normal form → mergeable accumulators (keeps GroupByParallel) | equivalence + a parallel-vs-serial multiset test | 1-2 days |
 | **4** | record-mode native (where/update) + fix the `+if-expr` negation bug + retire the per-row type-switch | record lanes byte-identical; negation regression test | 1-2 days |
 | **5** | breadth: time.Time lowering, string→int casts, `in` on fields, split/join/replace/replaceRegex/sha256 via exprfn; grow from `-explain` fallback telemetry | incremental | ongoing |
@@ -474,6 +474,34 @@ soaked because record-mode inference is heuristic.
   note asserted), equivalence where_expr_tier_v (sha256 golden, 5/12 cities,
   duckdb lane skipped by design) + update_set_expr_tier_v, runtime env unit
   tests.
+
+**Phase 2 shipped (2026-08-10).** What landed vs §5c:
+- `lowerStreamAgg` (`expr_stream.go`): init MapNode → typed state fields
+  (`se<i>_<key>` on the shared aggregator struct, INIT values in the
+  aggregator constructor — `&T{}` zero value is wrong for `{s:1}`); every →
+  ONE simultaneous multi-assignment in Add() (the VM computes the whole new
+  state from the OLD state; `{a: b, b: a}` must swap — the
+  `groupby_stream_swap` equivalence golden was watched failing against
+  sequential assignment, both typed lanes); final → Result() expression,
+  float64-coerced (mustAggFloat64 parity, non-numeric → refusal).
+- **§5c's shadowing note corrected**: the env build is maps.Copy(state) THEN
+  maps.Insert(record) — RECORD shadows state, not the reverse. The walker's
+  new `vars` bindings resolve after schema fields accordingly (and has/getOr/
+  ?? see them via a unified known()).
+- Type inference runs to a widening fixpoint over init ∪ every (only
+  int64→float64 exists, terminates in ≤ len(states) rounds).
+- Every's key set must EQUAL init's — the VM legitimately reshapes the state
+  object (dropped/added keys); a struct can't → record fallback with the
+  reason under -explain. Same for non-literal init and non-numeric
+  state/final. Unknown record fields stay loud.
+- As planned, -stream-expr forces the serial single-template emission
+  (SerialOnly; -presorted still selects GroupByOrdered) — fold state is not
+  mergeable. Mixing with built-in aggregations in one aggregator works.
+- Gates: TestLowerStreamAgg (lowering table + refusals + shadowing),
+  TestStreamExprTypedGeneration (emission pinned incl. the multi-assign and
+  serial form; fallback note), equivalence groupby_stream_{avg,widening,
+  swap,grouped} with goldens (duckdb lane skipped: generate sql rejects
+  -stream-expr loudly, v4.56.0 behaviour).
 
 ---
 
