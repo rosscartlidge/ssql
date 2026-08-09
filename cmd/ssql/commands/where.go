@@ -21,37 +21,33 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from users.csv | ssql where -if-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
 		Example("ssql from data.csv | ssql where -if-expr 'has(\"email\") and email contains \"@\"'", "Validate email field exists and format").
 		Example("ssql from sales.csv | ssql where -if-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-if", "-i").
-			Arg("field").
-				FieldsFromFlag("").
-				Done().
-			Arg("operator").
-				Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).
-				Done().
-			Arg("value").
-				FieldValuesFrom("", "field").
-				Done().
-			Accumulate().
-			Local().
-			Help("Filter condition: -if <field> <op> <value> (use +if to negate)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("operator").
+		Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).
+		Done().
+		Arg("value").
+		FieldValuesFrom("", "field").
+		Done().
+		Accumulate().
+		Local().
+		Help("Filter condition: -if <field> <op> <value> (use +if to negate)").
+		Done().
 		Flag("-if-expr", "-x").
-			Arg("expression").
-				Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).
-				Done().
-			Accumulate().
-			Local().
-			Help("Filter using boolean expression: -if-expr <expr> (use +if-expr to negate)").
-			Done().
-
+		Arg("expression").
+		Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).
+		Done().
+		Accumulate().
+		Local().
+		Help("Filter using boolean expression: -if-expr <expr> (use +if-expr to negate)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 
@@ -467,6 +463,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 	var preCompileVars []string
 	var params []lib.CodeParam
 	exprCounter := 0
+	flagSeen := make(map[string]int) // field+op occurrences within this fragment
 
 	// Build conditions for each clause (OR logic between clauses)
 	for _, clause := range clauses {
@@ -492,7 +489,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 					}
 
 					// Generate condition code with parameterized value
-					cond, imp, param := generateCondition(field, op, value)
+					cond, imp, param := generateCondition(field, op, value, flagSeen)
 					if negated {
 						cond = "!(" + cond + ")"
 					}
@@ -552,12 +549,23 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 
 // generateCondition generates code for a single where condition.
 // Returns the condition code, any extra imports, and an optional CodeParam for the value.
-func generateCondition(field, op, value string) (string, []string, *lib.CodeParam) {
+// seen counts field+op occurrences within the fragment: duplicate conditions on
+// the same field+op get numbered flag/var names at EMISSION time. They must —
+// collectParams' cross-fragment rename rewrites references textually, and two
+// identical `*flagPopGt` references in one fragment are indistinguishable there
+// (both got the last name, silently replacing the first value; three didn't
+// compile).
+func generateCondition(field, op, value string, seen map[string]int) (string, []string, *lib.CodeParam) {
 	var imports []string
 
 	// Build flag name and var name: e.g., "age-gt" → flagAgeGt
 	flagName := field + "-" + op
 	varName := "flag" + flagVarName(field) + flagVarName(op)
+	seen[flagName]++
+	if n := seen[flagName]; n > 1 {
+		flagName = fmt.Sprintf("%s%d", flagName, n)
+		varName = fmt.Sprintf("%s%d", varName, n)
+	}
 
 	param := &lib.CodeParam{
 		Name:    flagName,

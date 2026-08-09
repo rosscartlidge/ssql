@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Bug Fixes
+- **Record codegen no longer mis-references flags for duplicate field+op
+  conditions.** `where -if pop gt 5 -if pop gt 8` declared
+  `flagPopGt`/`flagPopGt2` but emitted BOTH references as `flagPopGt2` — the
+  first value was silently replaced by the second. Invisible for ANDed
+  same-direction bounds, wrong for `+if` mixes (`pop>8 && !(pop>8)` = empty
+  result); with THREE duplicates the generated code referenced an undeclared
+  `flagPopGt32` and didn't compile. Fixed in two layers: duplicate field+op
+  conditions now get numbered flag names at emission time (`where.go`), and
+  `collectParams`' cross-fragment rename claims all kept names before
+  renaming collisions and rewrites references with a word-boundary match
+  (`lib/codefragment.go`). Typed codegen inlines values and was immune;
+  exec, `generate sql`, and `generate ssql` were unaffected. Locked by
+  equivalence cases `where_dup_fieldop_negated` / `where_dup_fieldop_three` /
+  `where_dup_fieldop_two_stages` (all watched failing against the exact
+  defect each guards) and `TestCollectParamsRename`.
 - **`generate ssql`'s optimiser no longer drops `+if` / `+if-expr`.** The
   v4.56.1 negation sweep fixed exec and `generate go`, but the optimiser's
   where round-trip (`parseWhereArgs`/`buildWhereArgs`) still didn't recognise

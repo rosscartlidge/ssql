@@ -444,6 +444,51 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// Duplicate field+op conditions: record codegen derived flag var
+		// names from field+op only, and collectParams' rename rewrote BOTH
+		// identical references to the last name — `pop gt 5` silently became
+		// `pop gt 8`. Invisible for ANDed same-direction bounds; the +if mix
+		// makes it wrong (pop>8 && !(pop>8) = empty). Golden = 5 < pop <= 8.
+		Name:     "where_dup_fieldop_negated",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 5 +if pop gt 8`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 9, "city": "Lima", "pop": 7},
+		},
+	},
+	{
+		// THREE duplicates of the same field+op: the sequential ReplaceAll
+		// rename corrupted by prefix (*flagPopGt inside *flagPopGt2 →
+		// *flagPopGt32, undeclared) — the generated record code didn't even
+		// compile. Golden = 5 < pop <= 10.
+		Name:     "where_dup_fieldop_three",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 2 -if pop gt 5 +if pop gt 10`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 3, "city": "Cairo", "pop": 10},
+			{"id": 9, "city": "Lima", "pop": 7},
+			{"id": 12, "city": "Hanoi", "pop": 9},
+		},
+	},
+	{
+		// Cross-fragment rename guard: the first where now emits pop-gt AND
+		// pop-gt2 itself, so the second where's pop-gt must rename PAST the
+		// taken suffix (pop-gt3) — a naive count-based rename would register
+		// the same flag name twice and panic at flag.Parse. Golden = pop > 10.
+		Name:     "where_dup_fieldop_two_stages",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 2 -if pop gt 5 | {{.bin}} where -if pop gt 10`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 7, "city": "Mumbai", "pop": 20},
+			{"id": 1, "city": "Oslo", "pop": 31},
+			{"id": 5, "city": "Tokyo", "pop": 37},
+			{"id": 2, "city": "Delhi", "pop": 29},
+			{"id": 8, "city": "Lagos", "pop": 14},
+			{"id": 4, "city": "Paris", "pop": 11},
+			{"id": 11, "city": "Bogota", "pop": 25},
+		},
+	},
+	{
 		// -if-expr exercises the expr→SQL translation: `&&` and "double
 		// quotes" mean something different in SQL, so verbatim passthrough
 		// (the pre-v4.56 behaviour) is a DuckDB parse/binder error.

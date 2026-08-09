@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 
@@ -33,13 +34,13 @@ type CodeParam struct {
 
 // CodeFragment represents a piece of generated Go code in a pipeline
 type CodeFragment struct {
-	Type    string   `json:"type"`            // "stmt" (statement), "final" (no output var), "init" (first in chain), "func" (subprocess function), "error" (generation failed)
-	Var     string   `json:"var"`             // Output variable name (e.g., "filtered0")
-	Input   string   `json:"input"`           // Input variable name from previous command
-	Code    string   `json:"code"`            // Go code for this operation
-	Imports []string `json:"imports"`         // Required imports (e.g., ["strings", "log"])
-	Command string   `json:"command"`         // The ssql command that generated this fragment (e.g., "ssql from")
-	Error   string   `json:"error,omitempty"` // Error message for "error" type fragments
+	Type    string      `json:"type"`             // "stmt" (statement), "final" (no output var), "init" (first in chain), "func" (subprocess function), "error" (generation failed)
+	Var     string      `json:"var"`              // Output variable name (e.g., "filtered0")
+	Input   string      `json:"input"`            // Input variable name from previous command
+	Code    string      `json:"code"`             // Go code for this operation
+	Imports []string    `json:"imports"`          // Required imports (e.g., ["strings", "log"])
+	Command string      `json:"command"`          // The ssql command that generated this fragment (e.g., "ssql from")
+	Error   string      `json:"error,omitempty"`  // Error message for "error" type fragments
 	Params  []CodeParam `json:"params,omitempty"` // Parameterizable values for flag generation
 
 	// For "func" type fragments (subprocess functions from process substitution)
@@ -778,39 +779,68 @@ func extractPreCompileVars(fragments []*CodeFragment) []string {
 }
 
 // collectParams gathers all CodeParams from fragments, deduplicating flag names.
-// First occurrence of a name gets the bare name; subsequent get numbered suffixes.
-// When a param is renamed, the corresponding fragment's code is updated to use the new variable name.
+// First occurrence of a name gets the bare name; subsequent get the first FREE
+// numbered suffix — renamed names count as taken, so a fragment that already
+// declares pop-gt2 itself (duplicate field+op conditions get numbered names at
+// emission) can't collide with a rename. When a param is renamed, the
+// fragment's code is rewritten to the new variable name with a word-boundary
+// match: a bare ReplaceAll of *flagPopGt also corrupted *flagPopGt2 (→
+// *flagPopGt32, undeclared — the generated code didn't compile).
 func collectParams(fragments []*CodeFragment) []CodeParam {
-	var result []CodeParam
-	seen := make(map[string]int) // name -> count of occurrences
-
-	renameParam := func(p CodeParam, frag *CodeFragment) CodeParam {
-		count := seen[p.Name]
-		seen[p.Name] = count + 1
-
-		param := p
-		if count > 0 {
-			newVarName := fmt.Sprintf("%s%d", p.VarName, count+1)
-			// Update the fragment's code to reference the new variable name
-			frag.Code = strings.ReplaceAll(frag.Code, "*"+p.VarName, "*"+newVarName)
-			param.Name = fmt.Sprintf("%s%d", p.Name, count+1)
-			param.VarName = newVarName
-		}
-		return param
+	type entry struct {
+		param CodeParam
+		frag  *CodeFragment
 	}
-
+	var entries []*entry
 	for _, frag := range fragments {
 		for _, p := range frag.Params {
-			result = append(result, renameParam(p, frag))
+			entries = append(entries, &entry{p, frag})
 		}
 		// Also collect from func body fragments
 		for _, bodyFrag := range frag.FuncBody {
 			for _, p := range bodyFrag.Params {
-				result = append(result, renameParam(p, bodyFrag))
+				entries = append(entries, &entry{p, bodyFrag})
 			}
 		}
 	}
 
+	// Pass 1: first occurrence of each name keeps it. Claiming ALL keepers
+	// before renaming anything matters: a rename must not land on a name a
+	// LATER param still holds (pop-gt → pop-gt2 while this fragment's own
+	// pop-gt2 is unprocessed would recreate the double reference).
+	used := make(map[string]bool)
+	var renames []*entry
+	for _, e := range entries {
+		if used[e.param.Name] {
+			renames = append(renames, e)
+		} else {
+			used[e.param.Name] = true
+		}
+	}
+
+	// Pass 2: move each collision to the first genuinely free suffix and
+	// rewrite its fragment's references. The word boundary keeps the rewrite
+	// exact — *flagPopGt must not touch *flagPopGt2. (Names are unique WITHIN
+	// a fragment — the emitters number duplicate field+op conditions — so the
+	// pattern matches exactly this param's references.)
+	for _, e := range renames {
+		n := 2
+		for used[fmt.Sprintf("%s%d", e.param.Name, n)] {
+			n++
+		}
+		newName := fmt.Sprintf("%s%d", e.param.Name, n)
+		newVarName := fmt.Sprintf("%s%d", e.param.VarName, n)
+		re := regexp.MustCompile(`\*` + regexp.QuoteMeta(e.param.VarName) + `\b`)
+		e.frag.Code = re.ReplaceAllString(e.frag.Code, "*"+newVarName)
+		e.param.Name = newName
+		e.param.VarName = newVarName
+		used[newName] = true
+	}
+
+	result := make([]CodeParam, len(entries))
+	for i, e := range entries {
+		result[i] = e.param
+	}
 	return result
 }
 
