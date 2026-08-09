@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -228,13 +229,17 @@ func generateWhereCode(ctx *cf.Context) error {
 	}
 
 	// Typed-mode branch — emits typed.Where with direct field access.
-	// Two Phase B fall-throughs to record code below:
+	// -if-expr predicates transpile to native Go (exprToGo); the two
+	// fall-throughs to record code below are:
 	//   - prevSchema==nil (upstream is Record after a typed→Record
 	//     boundary)
-	//   - any clause uses -if-expr (expr-lang predicates remain
-	//     Record-only; the planner inserts the boundary upstream)
-	if typedMode() && prevSchema != nil && !whereHasExpr(ctx.Clauses) {
-		return generateWhereCodeTyped(ctx.Clauses, inputVar, prevSchema, fragments)
+	//   - an expression outside the transpilable subset (Tier R: the
+	//     planner inserts the Serial()+toRecord boundary upstream)
+	if typedMode() && prevSchema != nil {
+		handled, err := generateWhereCodeTyped(ctx.Clauses, inputVar, prevSchema, fragments)
+		if handled || err != nil {
+			return err
+		}
 	}
 
 	// Generate filter code from clauses
@@ -258,28 +263,16 @@ func generateWhereCode(ctx *cf.Context) error {
 	return lib.WriteCodeFragment(frag)
 }
 
-// whereHasExpr reports whether any -if-expr clause is present.
-// Used by Phase B to fall through to record-mode codegen when
-// expression-language predicates appear (typed mode doesn't yet
-// translate the expr language to Go).
-func whereHasExpr(clauses []cf.Clause) bool {
-	for _, clause := range clauses {
-		if exprs, ok := clause.Flags["-if-expr"]; ok && exprs != nil {
-			if list, ok := exprs.([]any); ok && len(list) > 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// generateWhereCodeTyped emits a typed.Where call against the input
-// schema. Tier-1 supports -if FIELD OP VALUE only. -if-expr is Tier 3
-// (would require expr-lang -> Go translation) and produces an error
-// fragment.
-func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.TypedSchema, fragments []*lib.CodeFragment) error {
+// generateWhereCodeTyped emits a typed.Where call against the input schema.
+// -if conditions render via typedWhereCondition; -if-expr predicates
+// transpile to native Go via exprToGoBool. Returns handled=false — WITHOUT
+// writing a fragment — when an expression falls outside the transpilable
+// subset, so the caller can fall back to record-mode codegen (Tier R).
+// Unknown fields and invalid operators stay loud errors: they'd fail in
+// every mode, just later and worse.
+func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.TypedSchema, fragments []*lib.CodeFragment) (bool, error) {
 	if schema == nil {
-		return lib.WriteErrorAndExit(getCommandString(),
+		return true, lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'where' must follow a typed-mode source (e.g. 'from FILE.csv') so the input schema is known"))
 	}
 
@@ -289,45 +282,60 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 		byName[strings.ToLower(f.Name)] = f
 	}
 
+	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	var hoisted []string
 	var clauseConds []string
 	for _, clause := range clauses {
-		// -if-expr is not supported in typed mode (Tier 3).
-		if exprs, ok := clause.Flags["-if-expr"]; ok && exprs != nil {
-			if list, ok := exprs.([]any); ok && len(list) > 0 {
-				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: 'where -if-expr' not supported in typed mode (Tier 3); use 'where -if FIELD OP VALUE' or drop -typed"))
+		var ands []string
+
+		matchesRaw, ok := clause.Flags["-if"]
+		if ok && matchesRaw != nil {
+			matches, _ := matchesRaw.([]any)
+			for _, mr := range matches {
+				m, _ := mr.(map[string]any)
+				field, _ := m["field"].(string)
+				op, _ := m["operator"].(string)
+				value, _ := m["value"].(string)
+				negated, _ := m["_negated"].(bool)
+				if field == "" || op == "" {
+					continue
+				}
+				f, ok := byName[strings.ToLower(field)]
+				if !ok {
+					return true, lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("ssql generate go -typed: 'where' references unknown field %q (schema has %s)", field, fieldNamesList(schema)))
+				}
+				cond, err := typedWhereCondition(f, op, value)
+				if err != nil {
+					return true, lib.WriteErrorAndExit(getCommandString(), err)
+				}
+				if negated {
+					cond = "!(" + cond + ")"
+				}
+				ands = append(ands, cond)
 			}
 		}
 
-		matchesRaw, ok := clause.Flags["-if"]
-		if !ok || matchesRaw == nil {
-			continue
-		}
-		matches, _ := matchesRaw.([]any)
-		var ands []string
-		for _, mr := range matches {
-			m, _ := mr.(map[string]any)
-			field, _ := m["field"].(string)
-			op, _ := m["operator"].(string)
-			value, _ := m["value"].(string)
-			negated, _ := m["_negated"].(bool)
-			if field == "" || op == "" {
-				continue
-			}
-			f, ok := byName[strings.ToLower(field)]
-			if !ok {
-				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: 'where' references unknown field %q (schema has %s)", field, fieldNamesList(schema)))
-			}
-			cond, err := typedWhereCondition(f, op, value)
+		// -if-expr / +if-expr: transpile to native Go.
+		for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+			res, err := exprToGoBool(ec.Expression, schema, "r")
 			if err != nil {
-				return lib.WriteErrorAndExit(getCommandString(), err)
+				var unknownField *exprUnknownFieldError
+				if errors.As(err, &unknownField) {
+					return true, lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("ssql generate go -typed: 'where -if-expr': %w", err))
+				}
+				return false, nil // outside the subset → record fallback
 			}
-			if negated {
+			cond := res.Src
+			if ec.Negated {
 				cond = "!(" + cond + ")"
 			}
 			ands = append(ands, cond)
+			imports = append(imports, res.Imports...)
+			hoisted = append(hoisted, res.Hoisted...)
 		}
+
 		if len(ands) > 0 {
 			if len(ands) == 1 {
 				clauseConds = append(clauseConds, ands[0])
@@ -348,10 +356,10 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 	}
 
 	outputVar := uniqueVarName("filtered", fragments)
-	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	if schemaUsesTime(schema) {
 		imports = append(imports, "time")
 	}
+	imports = dedupeImports(imports)
 
 	// `where` is a pass-through. Stream.Where is embarrassingly
 	// parallel; typed.Where is the serial form. Emit BOTH templates
@@ -366,12 +374,13 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 	frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
 	frag.InputTypedSchema = schema
 	frag.OutputTypedSchema = schema
+	frag.StructDefs = hoisted // package-level decls (hoisted regexp vars), deduped by the assembler
 	frag.IsStream = true
 	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
 	frag.AltCodeIfSeq = serialCode
 	frag.AltImportsIfSeq = imports
 	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
-	return lib.WriteCodeFragment(frag)
+	return true, lib.WriteCodeFragment(frag)
 }
 
 // typedWhereCondition emits a single typed condition like `r.Age > 30`

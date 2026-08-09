@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### New Features
+- **Expr→Go transpiler (Phase 1): `-if-expr` and `-set-expr` now run NATIVE
+  in typed/parallel generated code.** Previously any `-if-expr` silently
+  downgraded the whole downstream pipeline to record mode, and typed
+  `update -set-expr`/`-if-expr` hard-errored ("Tier 3"). `exprToGo`
+  (`cmd/ssql/commands/expr_go.go`, the Go sibling of the v4.56.0 SQL
+  expression translator) transpiles the curated expr-lang subset to plain Go
+  with expr-lang semantics reproduced exactly — int/int division is float64
+  (`pop/2` of 7 is 3.5), `len()` counts runes, `**` is `math.Pow`, `round()`
+  is half-away-from-zero, `matches` patterns hoist to compiled package vars.
+  Expressions outside the subset fall back to record-mode codegen exactly as
+  before (per-expression, decided at codegen). New `exprfn` runtime package
+  provides the two helpers inlining would uglify (`Abs`, `RuneLen`).
+  Measured on 1M rows: predicate 4ns/op native vs 1.5µs VM (~375x),
+  assignment 3ns vs 1.3µs, both 0 allocs/op. Gated by: emitted-source unit
+  tests, a transpiled-vs-VM differential harness (which caught a mixed-type
+  `min()` semantics assumption on its first run — the VM returns the winning
+  operand with its own type, so mixed min/max deliberately falls back),
+  previously-skipped typed equivalence lanes now unskipped, new
+  `update_set_expr_division`/`update_set_expr_ternary` equivalence cases,
+  and a `where -if-expr` stage in the permutation gate.
+
 ### Bug Fixes
 - **Record codegen no longer mis-references flags for duplicate field+op
   conditions.** `where -if pop gt 5 -if pop gt 8` declared

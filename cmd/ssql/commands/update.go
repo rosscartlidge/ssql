@@ -22,61 +22,55 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from users.csv | ssql update -set-expr email 'lower(trim(email))'", "Normalize email addresses").
 		Example("ssql from data.csv | ssql update -set-expr tier 'revenue > 10000 ? \"gold\" : (revenue > 5000 ? \"silver\" : \"bronze\")'", "Multi-tier categorization").
 		ClauseDescription("Clauses are evaluated in order using if-then-else logic.\nSeparators: +, -\nThe FIRST matching clause applies its updates, then processing stops (first-match-wins).\nThis is different from 'where' which uses OR logic - all clauses are evaluated.").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-if", "-i").
-			Arg("field").
-				FieldsFromFlag("").
-				Done().
-			Arg("operator").
-				Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).
-				Done().
-			Arg("value").
-				FieldValuesFrom("", "field").
-				Done().
-			Accumulate().
-			Local().
-			Help("Condition to check: -if <field> <op> <value> (use +if to negate)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("operator").
+		Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains", "startswith", "endswith", "regex"}}).
+		Done().
+		Arg("value").
+		FieldValuesFrom("", "field").
+		Done().
+		Accumulate().
+		Local().
+		Help("Condition to check: -if <field> <op> <value> (use +if to negate)").
+		Done().
 		Flag("-if-expr", "-x").
-			Arg("expression").
-				Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).
-				Done().
-			Accumulate().
-			Local().
-			Help("Condition using boolean expression: -if-expr <expr> (use +if-expr to negate)").
-			Done().
-
+		Arg("expression").
+		Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).
+		Done().
+		Accumulate().
+		Local().
+		Help("Condition using boolean expression: -if-expr <expr> (use +if-expr to negate)").
+		Done().
 		Flag("-set", "-s").
-			Arg("field").
-				FieldsFromFlag("").
-				Done().
-			Arg("value").
-				FieldValuesFrom("", "field").
-				Done().
-			Accumulate().
-			Local().
-			Help("Set field to literal value: -set <field> <value>").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("value").
+		FieldValuesFrom("", "field").
+		Done().
+		Accumulate().
+		Local().
+		Help("Set field to literal value: -set <field> <value>").
+		Done().
 		Flag("-set-expr", "-e").
-			Arg("field").
-				FieldsFromFlag("").
-				Done().
-			Arg("expression").
-				Completer(cf.NoCompleter{Hint: "<expression>"}).
-				Done().
-			Accumulate().
-			Local().
-			Help("Set field to expression result: -set-expr <field> <expression>").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("expression").
+		Completer(cf.NoCompleter{Hint: "<expression>"}).
+		Done().
+		Accumulate().
+		Local().
+		Help("Set field to expression result: -set-expr <field> <expression>").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "update")
@@ -422,12 +416,14 @@ func generateUpdateCode(ctx *cf.Context) error {
 		inputVar = "records"
 	}
 
-	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
+	// Phase B fall-throughs: prevSchema==nil → Record-mode upstream;
+	// handled==false → an expression outside the transpilable subset
+	// (Tier R: the planner inserts the Serial()+toRecord boundary).
 	if typedMode() && prevSchema != nil {
-		// update is SerialOnly — planner inserts Stream.Serial()
-		// upstream automatically when input is a Stream.
-		// emitTypedUpdate sets Capabilities.
-		return emitTypedUpdate(ctx, inputVar, prevSchema, fragments)
+		handled, err := emitTypedUpdate(ctx, inputVar, prevSchema, fragments)
+		if handled || err != nil {
+			return err
+		}
 	}
 
 	// Parse clauses - each clause has optional -match conditions and required -set/-set-expr operations

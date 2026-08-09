@@ -319,6 +319,10 @@ func TestPipelinePermutations(t *testing.T) {
 
 	stages := []struct{ key, cmd string }{
 		{"where", `{{.bin}} where -if pop gt 5`},
+		// Typed lanes run this NATIVE as of expr-transpiler Phase 1. Only pop
+		// is referenced — the one field every other stage's output retains
+		// (group-by pop -count drops city).
+		{"whereexpr", `{{.bin}} where -if-expr 'pop > 5 && pop != 9'`},
 		{"sort", `{{.bin}} sort pop -desc`},
 		{"limit", `{{.bin}} limit 5`},
 		{"group", `{{.bin}} group-by pop -count cnt`},
@@ -404,10 +408,8 @@ var equivCases = []EquivCase{
 		Name:     "update_if_expr_only",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update -if-expr 'pop > 25' -set city Big`,
 		Ordered:  false,
-		Skip: map[string]string{
-			"go-typed":    "typed codegen rejects update -if-expr (loud Tier-3 error)",
-			"go-parallel": "typed codegen rejects update -if-expr (loud Tier-3 error)",
-		},
+		// go-typed/go-parallel unskipped in Phase 1 of the expr transpiler:
+		// the predicate now transpiles to native Go in typed mode.
 	},
 	{
 		// generate ssql's optimiser: parseWhereArgs didn't recognise +if, so
@@ -508,10 +510,38 @@ var equivCases = []EquivCase{
 		Name:     "update_set_expr",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update -if pop gt 25 -set-expr city 'upper(city)'`,
 		Ordered:  false,
-		Skip: map[string]string{
-			"go-typed":    "typed codegen rejects update -set-expr (loud Tier-3 error)",
-			"go-parallel": "typed codegen rejects update -set-expr (loud Tier-3 error)",
+		// go-typed/go-parallel unskipped in Phase 1 of the expr transpiler:
+		// -set-expr now transpiles to a native typed assignment.
+	},
+	{
+		// The transpiler's headline semantic in a full pipeline: expr-lang
+		// division is ALWAYS float64 (pop/2 of 31 is 15.5, not 15), and the
+		// NEW field's type comes from the expression's inferred type. Runs
+		// native in typed/parallel lanes as of Phase 1.
+		Name:     "update_set_expr_division",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update -set-expr half 'pop / 2'`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 7, "city": "Mumbai", "pop": 20, "half": 10},
+			{"id": 3, "city": "Cairo", "pop": 10, "half": 5},
+			{"id": 9, "city": "Lima", "pop": 7, "half": 3.5},
+			{"id": 1, "city": "Oslo", "pop": 31, "half": 15.5},
+			{"id": 5, "city": "Tokyo", "pop": 37, "half": 18.5},
+			{"id": 2, "city": "Delhi", "pop": 29, "half": 14.5},
+			{"id": 8, "city": "Lagos", "pop": 14, "half": 7},
+			{"id": 4, "city": "Paris", "pop": 11, "half": 5.5},
+			{"id": 6, "city": "Nairobi", "pop": 4, "half": 2},
+			{"id": 10, "city": "Quito", "pop": 2, "half": 1},
+			{"id": 12, "city": "Hanoi", "pop": 9, "half": 4.5},
+			{"id": 11, "city": "Bogota", "pop": 25, "half": 12.5},
 		},
+	},
+	{
+		// Ternary with same-type branches transpiles natively; exercises the
+		// generated func(){}() closure through every lane.
+		Name:     "update_set_expr_ternary",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update -set-expr size 'pop > 15 ? "big" : "small"'`,
+		Ordered:  false,
 	},
 	{
 		// The discriminating case: top by a STRING field on shuffled data,

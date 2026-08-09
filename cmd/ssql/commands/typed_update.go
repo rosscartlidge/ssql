@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,20 +11,28 @@ import (
 )
 
 // emitTypedUpdate handles `update` in typed-codegen mode.
-// Supports `-if FIELD OP VALUE` clauses (literal operators only) and
-// `-set FIELD VALUE` (literal values only). Rejects `-if-expr` and
-// `-set-expr` as Tier 3 (would need expression-language → Go).
+// Supports `-if FIELD OP VALUE` / `+if` clauses, `-set FIELD VALUE`
+// (literal values), and — via the expr→Go transpiler — `-if-expr` /
+// `+if-expr` predicates and `-set-expr FIELD EXPR` assignments.
+//
+// Returns handled=false — WITHOUT writing a fragment — when an expression
+// falls outside the transpilable subset (or a -set-expr result type can't
+// be assigned to an existing field), so the caller falls back to
+// record-mode codegen (Tier R). Unknown fields and invalid operators stay
+// loud errors: they'd fail in every mode, just later and worse.
 //
 // Multiple clauses use first-match-wins semantics — emitted as an
-// if/else if chain. A clause with no `-if` is the "else" arm.
+// if/else if chain. A clause with no condition is the "else" arm.
 //
-// The output type is the input type when every -set targets an
-// existing field; otherwise a derived struct with the new fields
-// appended is emitted.
-func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, fragments []*lib.CodeFragment) error {
+// The output type is the input type when every set targets an existing
+// field; otherwise a derived struct with the new fields appended is
+// emitted. A new field's type comes from its literal (-set) or its
+// expression's inferred type (-set-expr).
+func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, fragments []*lib.CodeFragment) (bool, error) {
 	type setOp struct {
 		field string
-		value string
+		value string  // literal (-set)
+		expr  *exprGo // transpiled expression (-set-expr); nil for literals
 	}
 	type cond struct {
 		field   string
@@ -32,28 +41,17 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		negated bool // +if
 	}
 	type updateClause struct {
-		conds []cond
-		sets  []setOp
+		conds     []cond
+		exprConds []string // transpiled -if-expr / +if-expr predicates (already negated)
+		sets      []setOp
 	}
 
 	var clauses []updateClause
+	var exprImports []string
+	var hoisted []string
 
 	for _, clause := range ctx.Clauses {
 		var uc updateClause
-
-		// Reject expr-lang.
-		if exprs, ok := clause.Flags["-if-expr"]; ok && exprs != nil {
-			if list, ok := exprs.([]any); ok && len(list) > 0 {
-				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: 'update -if-expr' not supported in typed mode (Tier 3); use 'update -if FIELD OP VALUE' or drop -typed"))
-			}
-		}
-		if exprs, ok := clause.Flags["-set-expr"]; ok && exprs != nil {
-			if list, ok := exprs.([]any); ok && len(list) > 0 {
-				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: 'update -set-expr' not supported in typed mode (Tier 3); use 'update -set FIELD LITERAL' or drop -typed"))
-			}
-		}
 
 		// Parse -if / +if conditions.
 		if matchesRaw, ok := clause.Flags["-if"]; ok && matchesRaw != nil {
@@ -71,7 +69,27 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 			}
 		}
 
-		// Parse -set assignments (literal values only).
+		// Transpile -if-expr / +if-expr predicates.
+		for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+			res, err := exprToGoBool(ec.Expression, in, "r")
+			if err != nil {
+				var unknownField *exprUnknownFieldError
+				if errors.As(err, &unknownField) {
+					return true, lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("ssql generate go -typed: 'update -if-expr': %w", err))
+				}
+				return false, nil // outside the subset → record fallback
+			}
+			src := res.Src
+			if ec.Negated {
+				src = "!(" + src + ")"
+			}
+			uc.exprConds = append(uc.exprConds, src)
+			exprImports = append(exprImports, res.Imports...)
+			hoisted = append(hoisted, res.Hoisted...)
+		}
+
+		// Parse -set assignments (literal values).
 		if setOpsRaw, ok := clause.Flags["-set"]; ok && setOpsRaw != nil {
 			setList, _ := setOpsRaw.([]any)
 			for _, setRaw := range setList {
@@ -85,19 +103,45 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 			}
 		}
 
+		// Transpile -set-expr assignments.
+		if setExprRaw, ok := clause.Flags["-set-expr"]; ok && setExprRaw != nil {
+			setList, _ := setExprRaw.([]any)
+			for _, setRaw := range setList {
+				setMap, _ := setRaw.(map[string]any)
+				field, _ := setMap["field"].(string)
+				expression, _ := setMap["expression"].(string)
+				if field == "" || expression == "" {
+					continue
+				}
+				res, err := exprToGo(expression, in, "r")
+				if err != nil {
+					var unknownField *exprUnknownFieldError
+					if errors.As(err, &unknownField) {
+						return true, lib.WriteErrorAndExit(getCommandString(),
+							fmt.Errorf("ssql generate go -typed: 'update -set-expr': %w", err))
+					}
+					return false, nil // outside the subset → record fallback
+				}
+				uc.sets = append(uc.sets, setOp{field: field, expr: &res})
+				exprImports = append(exprImports, res.Imports...)
+				hoisted = append(hoisted, res.Hoisted...)
+			}
+		}
+
 		if len(uc.sets) > 0 {
 			clauses = append(clauses, uc)
 		}
 	}
 
 	if len(clauses) == 0 {
-		return lib.WriteErrorAndExit(getCommandString(),
+		return true, lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'update' has no -set assignments"))
 	}
 
-	// Build derived schema: input fields + any new fields introduced
-	// by -set. Type of a new field is inferred from the literal value.
-	// Existing fields keep their type (the literal must be assignable).
+	// Build derived schema: input fields + any new fields introduced by a
+	// set. A new field's type is inferred from the literal value (-set) or
+	// the expression's result type (-set-expr). Existing fields keep their
+	// type (the value must be assignable).
 	derived := &lib.TypedSchema{TypeName: in.TypeName + "Updated"}
 	derived.Fields = append(derived.Fields, in.Fields...)
 	existing := make(map[string]int, len(in.Fields))
@@ -106,24 +150,33 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 	}
 
 	// Track new fields added during this update so we don't double-add.
-	newFieldGoNames := make(map[string]string) // CSV name → Go name
+	newFieldTypes := make(map[string]string) // lowercase CSV name → GoType
 	for _, c := range clauses {
 		for _, s := range c.sets {
 			lower := strings.ToLower(s.field)
+			goType := ""
+			if s.expr != nil {
+				goType = string(s.expr.Type)
+			} else {
+				goType = inferLiteralGoType(s.value)
+			}
 			if _, ok := existing[lower]; ok {
 				continue
 			}
-			if _, dup := newFieldGoNames[lower]; dup {
+			if prev, dup := newFieldTypes[lower]; dup {
+				if prev != goType {
+					// Two clauses give the same new field different types —
+					// a typed struct can't hold both. Record mode can.
+					return false, nil
+				}
 				continue
 			}
-			goName := lib.GoNameFromColumn(s.field)
-			goType := inferLiteralGoType(s.value)
 			derived.Fields = append(derived.Fields, lib.TypedSchemaField{
 				Name:   s.field,
-				GoName: goName,
+				GoName: lib.GoNameFromColumn(s.field),
 				GoType: goType,
 			})
-			newFieldGoNames[lower] = goName
+			newFieldTypes[lower] = goType
 		}
 	}
 
@@ -145,24 +198,25 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 	body.WriteString("\n")
 
 	for i, c := range clauses {
-		hasCond := len(c.conds) > 0
-		if hasCond {
-			conds := make([]string, 0, len(c.conds))
-			for _, cd := range c.conds {
-				f, ok := lookupSchemaField(in, cd.field)
-				if !ok {
-					return lib.WriteErrorAndExit(getCommandString(),
-						fmt.Errorf("ssql generate go -typed: 'update -if': unknown field %q", cd.field))
-				}
-				expr, err := typedWhereCondition(f, cd.op, cd.value)
-				if err != nil {
-					return lib.WriteErrorAndExit(getCommandString(), err)
-				}
-				if cd.negated {
-					expr = "!(" + expr + ")"
-				}
-				conds = append(conds, expr)
+		conds := make([]string, 0, len(c.conds)+len(c.exprConds))
+		for _, cd := range c.conds {
+			f, ok := lookupSchemaField(in, cd.field)
+			if !ok {
+				return true, lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: 'update -if': unknown field %q", cd.field))
 			}
+			expr, err := typedWhereCondition(f, cd.op, cd.value)
+			if err != nil {
+				return true, lib.WriteErrorAndExit(getCommandString(), err)
+			}
+			if cd.negated {
+				expr = "!(" + expr + ")"
+			}
+			conds = append(conds, expr)
+		}
+		conds = append(conds, c.exprConds...)
+
+		if len(conds) > 0 {
 			combined := strings.Join(conds, " && ")
 			if i == 0 {
 				fmt.Fprintf(&body, "\t\tif %s {\n", combined)
@@ -180,14 +234,27 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		for _, s := range c.sets {
 			f, exists := lookupDerivedField(derived, s.field)
 			if !exists {
-				return fmt.Errorf("internal error: derived schema missing field %q", s.field)
+				return true, fmt.Errorf("internal error: derived schema missing field %q", s.field)
 			}
-			lit, err := typedLiteral(f.GoType, s.value)
-			if err != nil {
-				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: update -set %s = %q: %w", s.field, s.value, err))
+			var rhs string
+			if s.expr != nil {
+				var ok bool
+				rhs, ok = assignExprTo(f.GoType, *s.expr)
+				if !ok {
+					// e.g. a string expression into a float64 column, or a
+					// -set-expr retyping an existing column — record mode's
+					// runtime type-switch handles those; fall back.
+					return false, nil
+				}
+			} else {
+				lit, err := typedLiteral(f.GoType, s.value)
+				if err != nil {
+					return true, lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("ssql generate go -typed: update -set %s = %q: %w", s.field, s.value, err))
+				}
+				rhs = lit
 			}
-			fmt.Fprintf(&body, "\t\t\tout.%s = %s\n", f.GoName, lit)
+			fmt.Fprintf(&body, "\t\t\tout.%s = %s\n", f.GoName, rhs)
 		}
 	}
 	body.WriteString("\t\t}\n")
@@ -199,10 +266,11 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		defs = append(defs, renderUpdateStructDef(derived))
 	}
 
-	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	imports := append([]string{"github.com/rosscartlidge/ssql/v4/typed"}, exprImports...)
 	if schemaUsesTime(derived) {
 		imports = append(imports, "time")
 	}
+	imports = dedupeImports(imports)
 
 	// Emit BOTH templates. update is a pure per-row map, so the parallel
 	// form is typed.StreamSelect (per-shard projection) exactly like
@@ -220,13 +288,28 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 	frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = derived
-	frag.StructDefs = defs
+	frag.StructDefs = append(defs, hoisted...) // + hoisted regexp vars, deduped by the assembler
 	frag.IsStream = true
 	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
 	frag.AltCodeIfSeq = serialCode
 	frag.AltImportsIfSeq = imports
 	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
-	return lib.WriteCodeFragment(frag)
+	return true, lib.WriteCodeFragment(frag)
+}
+
+// assignExprTo renders a transpiled expression for assignment to a field of
+// goType. The only inserted coercion is the value-preserving int64→float64
+// widening; a float result into an int64 column is NOT a coercion — exec
+// RETYPES the field per row (pop/2 makes pop 3.5), and int64(…) truncation
+// would silently diverge — so it returns ok=false and record mode handles it.
+func assignExprTo(goType string, e exprGo) (string, bool) {
+	if string(e.Type) == goType {
+		return e.Src, true
+	}
+	if goType == "float64" && e.Type == exprGoInt {
+		return asFloat(e), true
+	}
+	return "", false
 }
 
 // initialRowConstructor returns Go source for the "starting point"

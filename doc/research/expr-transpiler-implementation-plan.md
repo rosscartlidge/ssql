@@ -88,7 +88,7 @@ territory anyway.
 | `abs(int)` / `abs(float)` | **type-preserving** (int→int, float→float) | generic helper `exprfn.Abs[T]` |
 | `round(f)` | float64, **half away from zero** (`round(2.5)=3`, `round(-2.5)=-3`) | `math.Round` (identical semantics — verified) |
 | `floor`, `ceil` | float64 | `math.Floor` / `math.Ceil` |
-| `min(a,b)` / `max(a,b)` | type-preserving; mixed int/float → float64 | generic `exprfn.Min/Max`; mixed → coerce to float64 |
+| `min(a,b)` / `max(a,b)` | type-preserving; **mixed int/float returns the WINNER with its own type** (`min(-3, -2.5)` is int64 `-3` — NOT promoted; corrected 2026-08-09, caught by the differential harness on its first run) | Go built-in `min`/`max` for same-type args; mixed int/float → **refuses** (no static Go type expresses "winner's type") |
 | `int(f)` | truncates toward zero; `int("12")` parses; `int("12.7")` **runtime error** | `int64(f)` for numeric; string→int → helper or fallback (MVP: fallback) |
 | `float(i)`, `string(i)` | float64 / decimal string | `float64(i)` / `strconv.FormatInt` |
 | `len(s)` | **rune count**, not bytes (`len("héllo") = 5`) | `int64(utf8.RuneCountInString(s))` |
@@ -409,7 +409,7 @@ value-equality only for expressions that are valid under BOTH paths.
 
 | phase | scope | acceptance | est. |
 |---|---|---|---|
-| **1** | `exprToGo` core + typed `where -if-expr` + typed `update -set/-if-expr` (Tier N + Tier R; Tier V machinery deferred if tight) | equivalence cases unskip typed lanes; differential harness green; benches show 0 allocs | 2-3 days |
+| **1** ✅ 2026-08-09 | `exprToGo` core + typed `where -if-expr` + typed `update -set/-if-expr` (Tier N + Tier R; Tier V machinery deferred if tight) | equivalence cases unskip typed lanes; differential harness green; benches show 0 allocs | 2-3 days |
 | **1.5** | Tier V (`runtime.CompileExprEnv` + generated static env) + `-explain` tier reporting | exotic expr in typed pipeline no longer downgrades downstream stages; -explain names tiers | 1 day |
 | **2** | `group-by -stream-expr` → typed accumulator (serial GroupBy) | new equivalence case green across lanes | 1-2 days |
 | **3** | `group-by -expr` via patcher normal form → mergeable accumulators (keeps GroupByParallel) | equivalence + a parallel-vs-serial multiset test | 1-2 days |
@@ -420,6 +420,29 @@ Sequencing rationale: Phase 1 unlocks the parallel path (the performance
 story); 2 before 3 because -stream-expr is structurally simpler (explicit
 state) despite looking scarier; 4 is deliberately after the typed path has
 soaked because record-mode inference is heuristic.
+
+**Phase 1 shipped (2026-08-09).** What landed vs the plan:
+- `expr_go.go` (`exprToGo`/`exprToGoBool`) + `exprfn` (Abs, RuneLen only —
+  Go's built-in `min`/`max` cover the same-type cases; mixed-type min/max
+  refuses, see the corrected §2d row). Unknown fields are a typed error
+  (`exprUnknownFieldError`, loud); everything else refuses → Tier R.
+- Chained comparisons need NO lowering — the parser desugars `1 < x < 3` to
+  `&&` of two BinaryNodes (settled §10 question). Pipe syntax desugars too.
+- Hoisted `matches` regexps ride the fragment's StructDefs (content-addressed
+  names, deduped by the assembler).
+- `-set-expr` into an existing column: only the value-preserving int64→float64
+  coercion is inserted. A float result into an int64 column is a RETYPE in
+  exec (pop/2 makes pop 3.5) — int64() truncation would silently diverge, so
+  it falls back to record mode. Same for retypes and cross-clause new-field
+  type conflicts.
+- Measured (TestExprGoNativeZeroAllocs, 1M rows): predicate 4ns native vs
+  1.50µs VM (~375x), assignment 3ns vs 1.31µs (~435x), both 0 allocs/op.
+- Gates: TestExprToGo/TestExprToGoErrors (§7.1), TestExprGoDifferential
+  (§7.2 — caught the min/max mixed-type promotion assumption on its FIRST
+  run, and the §7.6 integer-division sabotage was watched failing),
+  equivalence cases update_set_expr / update_if_expr_only unskipped +
+  update_set_expr_division / update_set_expr_ternary added (§7.3), whereexpr
+  permutation stage (§7.4), zero-alloc bench (§7.5).
 
 ---
 
