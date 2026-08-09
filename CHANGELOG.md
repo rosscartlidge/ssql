@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Expr transpiler Phase 3: `group-by -expr` aggregations run as native
+  MERGEABLE accumulators — and keep the parallel group-by.** The expression
+  is compiled through exec's own patcher (`ssql.CompileAggExprPatched`, the
+  same env dummies and AST rewrite the VM uses — bare `count()` only parses
+  because a dummy env function shadows the arity-checked builtin), and the
+  patched normal form (`sum(_records, #.e)`, `len(_records)`, avg → sum/len)
+  lowers to accumulator fields: each distinct sum element gets a `+=` term
+  keeping the element's OWN type (an int sum stays int64 — `sum(pop) % 5`
+  must be integer modulo), `count()` a shared counter, the outer arithmetic
+  the Result() expression, float64-coerced. Sums and counts add across
+  shards, so a Merge is emitted and `typed.GroupByParallel` is KEPT (unlike
+  Phase 2's stream folds). Fallback to record codegen for shapes with no
+  typed lowering — notably a field referenced OUTSIDE an aggregation, which
+  the VM binds to the group's value ARRAY (`sum(salary)/len(salary)` is
+  legal exec and stays record-mode). VM-compile failures are loud at
+  codegen. Gated by `TestLowerExprAgg`, `TestExprAggTypedGeneration`, and
+  four equivalence goldens (avg desugar, outer division, int-modulo
+  fidelity, grouped+mixed) — with the Merge watched failing under a
+  sabotaged merge in the go-parallel lane.
 - **Expr transpiler Phase 2: `group-by -stream-expr` folds run as native
   typed accumulators.** The init/every/final map-state fold lowers onto the
   same synthesized aggregator struct the built-in aggregations use: init

@@ -920,6 +920,70 @@ func TestStreamExprTypedGeneration(t *testing.T) {
 	})
 }
 
+// TestExprAggTypedGeneration locks the -expr aggregation lowering
+// (expr-transpiler Phase 3): accumulator terms with the element's own type,
+// a Merge that adds terms and counts (mergeable — so GroupByParallel is
+// KEPT, unlike -stream-expr), and record fallback for shapes with no typed
+// lowering (a field bound to the VM's per-group value array).
+func TestExprAggTypedGeneration(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	tmpFile := "/tmp/expragg_gen_test.csv"
+	if err := os.WriteFile(tmpFile, []byte("dept,salary\na,100\nb,200\n"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(tmpFile)
+
+	t.Run("mergeable accumulator keeps parallel group-by", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=parallel && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test group-by dept -expr 'sum(salary * 2) / count()' v`+
+				` | /tmp/ssql_test generate go`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate failed: %v\n%s", err, out)
+		}
+		src := string(out)
+		for _, want := range []string{
+			"ea0_t0 int64", // element's own type, not blanket float64
+			"ea0_cnt int64",
+			"a.ea0_t0 += (r.Salary * 2)",
+			"a.ea0_t0 += o.ea0_t0", // the Merge — sums add across shards
+			"a.ea0_cnt += o.ea0_cnt",
+			"V: (float64(a.ea0_t0) / float64(a.ea0_cnt))",
+			"typed.GroupByParallel", // mergeable → parallel form KEPT
+		} {
+			if !strings.Contains(src, want) {
+				t.Errorf("generated source missing %q:\n%s", want, src)
+			}
+		}
+	})
+
+	t.Run("outer value-array shape falls back with explain note", func(t *testing.T) {
+		// len(salary) outside an aggregation is the VM's value array —
+		// no typed lowering; record fallback preserves the behaviour.
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=typed && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test group-by dept -expr 'sum(salary) / len(salary)' v`+
+				` | /tmp/ssql_test generate go -explain`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate -explain failed: %v\n%s", err, out)
+		}
+		src := string(out)
+		if !strings.Contains(src, "ssql.ExprAgg") {
+			t.Errorf("fallback must emit the record ExprAgg path:\n%s", src)
+		}
+		if !strings.Contains(src, "record fallback") {
+			t.Errorf("-explain output missing the record-fallback note:\n%s", src)
+		}
+	})
+}
+
 // TestTableGeneration tests that the table command generates correct Go code
 func TestTableGeneration(t *testing.T) {
 	// Build the binary first

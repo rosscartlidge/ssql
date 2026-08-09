@@ -364,6 +364,33 @@ func (p *aggPatcher) transformIdentifiers(node *ast.Node) {
 	ast.Walk(node, &identifierTransformer{Fields: p.Fields})
 }
 
+// CompileAggExprPatched compiles an aggregation expression EXACTLY as the
+// exec path does — same env dummies (bare `count()` only parses because a
+// dummy env function shadows the arity-checked builtin), same AST patcher —
+// against a synthetic empty-record env built from the field names, and
+// returns the PATCHED tree: sum(salary*bonus) → sum(_records,
+// #.salary*#.bonus), count() → len(_records), avg(e) → sum/len. The typed
+// code generator lowers this SAME normal form to mergeable accumulators
+// instead of re-deriving aggregation recognition (one semantics, two
+// consumers).
+func CompileAggExprPatched(expression string, fieldNames []string) (ast.Node, error) {
+	env := make(map[string]any)
+	fields := make(map[string]bool)
+	for _, f := range fieldNames {
+		env[f] = []any{}
+		fields[f] = true
+	}
+	env["_records"] = []map[string]any{}
+	env["_count"] = 0
+	env["count"] = func() int { return 0 }
+	env["avg"] = func(arr []float64) float64 { return 0 }
+	program, err := compileAggExpr(expression, fields, env)
+	if err != nil {
+		return nil, err
+	}
+	return program.Node(), nil
+}
+
 type identifierTransformer struct {
 	Fields map[string]bool
 }

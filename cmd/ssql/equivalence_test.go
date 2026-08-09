@@ -491,6 +491,60 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// -expr aggregation as a native MERGEABLE accumulator
+		// (expr-transpiler Phase 3): avg desugars via the patcher normal
+		// form to sum/len. Golden = 199/12. duckdb skipped: generate sql
+		// rejects -expr loudly (v4.56.0 behaviour, by design).
+		Name:     "groupby_expr_avg",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} group-by -expr 'avg(pop)' ap`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"ap": 16.583333333333332},
+		},
+		Skip: map[string]string{
+			"duckdb": "-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// Arithmetic over aggregation terms: sum(pop*2)/count() — the
+		// int/int division must be float64 in the OUTER expression too.
+		// Golden = 398/12.
+		Name:     "groupby_expr_arith",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} group-by -expr 'sum(pop * 2) / count()' v`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"v": 33.166666666666664},
+		},
+		Skip: map[string]string{
+			"duckdb": "-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// Int-accumulator fidelity: sum of ints is an INT in the VM, so
+		// `% 5` is integer modulo (199 % 5 = 4). A blanket float64
+		// accumulator would refuse % and silently fall back — this case
+		// keeps the native path honest about integer semantics.
+		Name:     "groupby_expr_int_mod",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} group-by -expr 'sum(pop) % 5' m`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"m": 4},
+		},
+		Skip: map[string]string{
+			"duckdb": "-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// Grouped + mixed with a built-in aggregation in one aggregator;
+		// exercises the Merge path in the go-parallel lane.
+		Name:     "groupby_expr_grouped",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} group-by city -count c -expr 'sum(pop * pop)' sq`,
+		Ordered:  false,
+		Skip: map[string]string{
+			"duckdb": "-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
 		// -stream-expr as a typed accumulator (expr-transpiler Phase 2):
 		// single group over all rows, classic avg fold. Golden =
 		// sum(pop)/12 = 199/12. duckdb skipped: generate sql rejects

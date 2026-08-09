@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"strconv"
@@ -140,6 +141,21 @@ type exprUnknownFieldError struct{ msg string }
 
 func (e *exprUnknownFieldError) Error() string { return e.msg }
 
+// exprLoudError marks a codegen-time failure that is a user error in EVERY
+// mode (e.g. an aggregation expression the VM's own compiler rejects) —
+// callers error out instead of falling back.
+type exprLoudError struct{ err error }
+
+func (e *exprLoudError) Error() string { return e.err.Error() }
+
+// exprIsLoud reports whether err demands a loud codegen error rather than a
+// record fallback.
+func exprIsLoud(err error) bool {
+	var unknownField *exprUnknownFieldError
+	var loud *exprLoudError
+	return errors.As(err, &unknownField) || errors.As(err, &loud)
+}
+
 // known reports whether name resolves to a schema field or an extra binding
 // (used by has/getOr/?? which fold existence at codegen time).
 func (e *exprGoEnv) known(name string) bool {
@@ -223,6 +239,16 @@ func (e *exprGoEnv) node(n ast.Node) (exprGo, error) {
 			return exprGo{}, fmt.Errorf("%s has no native Go emission", exprNodeDesc(n.Callee))
 		}
 		return e.call(ident.Value, n.Arguments)
+	case *ast.MemberNode:
+		// #.field — the aggregation patcher's element reference (PatchAggExpr
+		// rewrites `salary` to `#.salary` inside sum() predicates). Resolves
+		// exactly like the bare identifier.
+		if _, ok := n.Node.(*ast.PointerNode); ok {
+			if prop, ok := n.Property.(*ast.StringNode); ok {
+				return e.field(prop.Value)
+			}
+		}
+		return exprGo{}, fmt.Errorf("%s has no native Go emission", exprNodeDesc(n))
 	case *ast.NilNode:
 		return exprGo{}, fmt.Errorf("nil has no native Go emission in typed mode")
 	}

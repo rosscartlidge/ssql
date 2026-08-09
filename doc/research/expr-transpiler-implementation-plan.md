@@ -412,7 +412,7 @@ value-equality only for expressions that are valid under BOTH paths.
 | **1** ✅ 2026-08-09 | `exprToGo` core + typed `where -if-expr` + typed `update -set/-if-expr` (Tier N + Tier R; Tier V machinery deferred if tight) | equivalence cases unskip typed lanes; differential harness green; benches show 0 allocs | 2-3 days |
 | **1.5** ✅ 2026-08-10 | Tier V (`runtime.CompileExprEnv` + generated static env) + `-explain` tier reporting | exotic expr in typed pipeline no longer downgrades downstream stages; -explain names tiers | 1 day |
 | **2** ✅ 2026-08-10 | `group-by -stream-expr` → typed accumulator (serial GroupBy) | new equivalence case green across lanes | 1-2 days |
-| **3** | `group-by -expr` via patcher normal form → mergeable accumulators (keeps GroupByParallel) | equivalence + a parallel-vs-serial multiset test | 1-2 days |
+| **3** ✅ 2026-08-10 | `group-by -expr` via patcher normal form → mergeable accumulators (keeps GroupByParallel) | equivalence + a parallel-vs-serial multiset test | 1-2 days |
 | **4** | record-mode native (where/update) + fix the `+if-expr` negation bug + retire the per-row type-switch | record lanes byte-identical; negation regression test | 1-2 days |
 | **5** | breadth: time.Time lowering, string→int casts, `in` on fields, split/join/replace/replaceRegex/sha256 via exprfn; grow from `-explain` fallback telemetry | incremental | ongoing |
 
@@ -502,6 +502,35 @@ soaked because record-mode inference is heuristic.
   serial form; fallback note), equivalence groupby_stream_{avg,widening,
   swap,grouped} with goldens (duckdb lane skipped: generate sql rejects
   -stream-expr loudly, v4.56.0 behaviour).
+
+**Phase 3 shipped (2026-08-10).** What landed vs §5d:
+- The lowering does NOT re-parse: `ssql.CompileAggExprPatched` runs exec's
+  own compile (same env dummies, same patcher) and hands back the patched
+  tree from `program.Node()`. This matters: bare `count()` is a PARSE error
+  under `parser.Parse` — the arity-checked builtin — and only parses in exec
+  because a dummy env function shadows it. First attempt re-parsed and every
+  `count()` silently fell back; exec's own compile is the only faithful
+  entry point.
+- `lowerExprAgg` (`expr_agg_lower.go`): each distinct sum(_records, elem)
+  becomes a `+=` accumulator (deduped by transpiled element source, KEEPING
+  the element's own type — sum of ints is int in the VM, and `sum(pop) % 5`
+  must stay integer modulo; §5d's blanket `accN float64` was wrong),
+  len(_records) a shared counter, the outer expression Result() over
+  placeholder identifiers substituted into the tree (walked with the vars
+  bindings), float64-coerced. `#.field` MemberNodes resolve like bare
+  identifiers in the walker.
+- Merge adds terms and counts → dual templates KEPT (GroupByParallel), the
+  whole point of 3-after-2. Watched failing: sabotaged the Merge and the
+  go-parallel lane diverged on the avg golden.
+- Fallback subtlety found: a field OUTSIDE an aggregation is legal in exec —
+  the batch env binds it to the group's value ARRAY (`sum(salary)/
+  len(salary)`: len of array = group size). No typed lowering → REFUSAL
+  (record fallback preserves it), deliberately not the loud unknown-field
+  path. VM-compile failures (typos inside sums) ARE loud (exprLoudError).
+- Gates: TestLowerExprAgg (terms/dedup/int-fidelity/refusal-vs-loud),
+  TestExprAggTypedGeneration (emission + parallel-kept + fallback note),
+  equivalence groupby_expr_{avg,arith,int_mod,grouped} goldens (duckdb
+  skipped: generate sql rejects -expr loudly).
 
 ---
 

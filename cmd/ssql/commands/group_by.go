@@ -448,24 +448,21 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 
 	// Typed-mode branch — emits typed.GroupBy (or typed.GroupByParallel
 	// in parallel mode) with a synthesized aggregator and a derived
-	// result struct. -stream-expr folds lower to accumulator fields
-	// (expr-transpiler Phase 2; forces the serial form — fold state is
-	// not mergeable); -expr remains Tier 3 until Phase 3. No -rollup /
-	// -cube, no -collect (deferred).
+	// result struct. -expr aggregations lower via the patcher normal
+	// form to MERGEABLE accumulator fields (expr-transpiler Phase 3;
+	// keeps the parallel form); -stream-expr folds lower to accumulator
+	// fields too but force the serial form (Phase 2; fold state is not
+	// mergeable). No -rollup / -cube, no -collect (deferred).
 	// Phase B fall-throughs: prevSchema==nil → Record-mode upstream;
-	// a -stream-expr shape a typed struct can't hold → record path
+	// an expression shape a typed struct can't hold → record path
 	// below, with the reason surfaced under -explain.
 	var typedFallbackNotes []string
 	if typedMode() && prevSchema != nil {
-		if len(exprSpecs) > 0 {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: -expr aggregations are Tier 3 (need expression-language → Go translation); drop -typed"))
-		}
 		if rollup || cube {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: -rollup / -cube not yet supported in typed mode; drop -typed"))
 		}
-		if len(aggSpecs) == 0 && len(streamExprSpecs) == 0 {
+		if len(aggSpecs) == 0 && len(exprSpecs) == 0 && len(streamExprSpecs) == 0 {
 			// 'group-by FIELDS' with no aggregations is semantically
 			// equivalent to `include FIELDS | distinct` — project to
 			// the kept fields and dedupe. Emit two fragments rather
@@ -514,7 +511,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 		// (GroupByOrdered needs contiguous keys; fold state is not
 		// mergeable), single-template emission. The `useParallel` arg
 		// is vestigial now — kept for API stability but ignored.
-		handled, reason, err := emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, streamExprSpecs, presorted, true)
+		handled, reason, err := emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, exprSpecs, streamExprSpecs, presorted, true)
 		if handled || err != nil {
 			return err
 		}
