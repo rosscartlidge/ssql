@@ -410,7 +410,7 @@ value-equality only for expressions that are valid under BOTH paths.
 | phase | scope | acceptance | est. |
 |---|---|---|---|
 | **1** ✅ 2026-08-09 | `exprToGo` core + typed `where -if-expr` + typed `update -set/-if-expr` (Tier N + Tier R; Tier V machinery deferred if tight) | equivalence cases unskip typed lanes; differential harness green; benches show 0 allocs | 2-3 days |
-| **1.5** | Tier V (`runtime.CompileExprEnv` + generated static env) + `-explain` tier reporting | exotic expr in typed pipeline no longer downgrades downstream stages; -explain names tiers | 1 day |
+| **1.5** ✅ 2026-08-10 | Tier V (`runtime.CompileExprEnv` + generated static env) + `-explain` tier reporting | exotic expr in typed pipeline no longer downgrades downstream stages; -explain names tiers | 1 day |
 | **2** | `group-by -stream-expr` → typed accumulator (serial GroupBy) | new equivalence case green across lanes | 1-2 days |
 | **3** | `group-by -expr` via patcher normal form → mergeable accumulators (keeps GroupByParallel) | equivalence + a parallel-vs-serial multiset test | 1-2 days |
 | **4** | record-mode native (where/update) + fix the `+if-expr` negation bug + retire the per-row type-switch | record lanes byte-identical; negation regression test | 1-2 days |
@@ -443,6 +443,37 @@ soaked because record-mode inference is heuristic.
   equivalence cases update_set_expr / update_if_expr_only unskipped +
   update_set_expr_division / update_set_expr_ternary added (§7.3), whereexpr
   permutation stage (§7.4), zero-alloc bench (§7.5).
+
+**Phase 1.5 shipped (2026-08-10).** What landed vs the plan:
+- `runtime/env.go`: `CompileExprEnv`/`CompileExprFilterEnv` (+ Must forms) —
+  CompileExpr minus the Record→env copy; has/getOr close over the FIELD map
+  (so `has("sha256")` is false, helper names aren't fields); no identifier
+  validation (the schema was validated statically at codegen).
+- Emission (`expr_go.go` Tier-V helpers): a per-schema env constructor
+  (`exprEnv<TypeName>`, content-addressed → assembler-deduped) + hoisted
+  compiled-VM vars (`exprFilterEnv<hash>`/`exprEvalEnv<hash>`). where and
+  update -if-expr go native-else-TierV; -set-expr goes Tier V only for
+  EXISTING columns with a `MustCoerce*` typing (loud exit on would-be
+  retype — record mode retypes, typed columns can't; §10's open question
+  resolved as predicted: new-field-from-untranspilable forces Tier R).
+- Codegen validates the expression compiles in the VM before emitting Tier V
+  (`exprTierVValidate`) — an expression invalid in EVERY mode errors at
+  codegen, not at generated-program startup.
+- `-explain` per-expression tier lines ride a new `CodeFragment.PlanNotes`
+  field, printed by AssembleCodeFragments under SSQL_EXPLAIN_PLAN — works
+  for the record assembler too (record-fallback reasons).
+- Gotcha found: parallel programs import Go's stdlib `runtime`
+  (GOMAXPROCS), colliding with `…/cmd/ssql/lib/runtime` — both assemblers'
+  import renderers now accept "alias path" entries; Tier V imports as
+  `exprvm`.
+- Pre-existing limitation surfaced: `generate go -run` pins the PUBLISHED
+  module version, so new runtime APIs (exprfn, env.go) only work with -run
+  after the next release. Test harnesses use replace directives; unaffected.
+- Gates: TestTierVKeepsTypedPipeline (parallel group-by SURVIVES a Tier-V
+  where; record markers asserted absent; -explain names tiers; fallback
+  note asserted), equivalence where_expr_tier_v (sha256 golden, 5/12 cities,
+  duckdb lane skipped by design) + update_set_expr_tier_v, runtime env unit
+  tests.
 
 ---
 

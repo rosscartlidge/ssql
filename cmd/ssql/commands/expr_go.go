@@ -10,6 +10,7 @@ import (
 	"github.com/expr-lang/expr/parser"
 
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
 )
 
 // exprToGo transpiles an ssql expression (expr-lang, as used by -if-expr and
@@ -604,4 +605,104 @@ func exprGoFieldArg(node ast.Node) (string, error) {
 		return n.Value, nil
 	}
 	return "", fmt.Errorf("field argument must be a literal field name")
+}
+
+// ---- Tier V: VM with a generated static env (expr-transpiler Phase 1.5) ----
+//
+// When exprToGo refuses an expression, typed emission doesn't have to eject
+// the whole stage to Record mode: the generated code evaluates the expression
+// with the expr-lang VM against an env map built from the struct. The stage
+// stays Stream[T]/Seq[T] — one exotic expression no longer downgrades every
+// downstream stage. Costs the map alloc + VM dispatch that Tier N avoids.
+
+// Aliased because parallel-mode programs also import Go's stdlib "runtime"
+// (GOMAXPROCS). The "alias path" form (no quotes) is rendered by the
+// assemblers' renderImport as `alias "path"`.
+const exprRuntimeImport = "exprvm github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
+
+// exprGoHash is the content-addressing suffix for hoisted expression vars —
+// identical expressions dedupe to one package-level decl.
+func exprGoHash(s string) string {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return fmt.Sprintf("%08x", h.Sum32())
+}
+
+// exprEnvConstructor renders the per-schema env-builder function the Tier-V
+// call sites feed: one map literal with every schema field. Content-addressed
+// by type name; the assembler dedupes the identical decls.
+func exprEnvConstructor(schema *lib.TypedSchema) (name string, decl string) {
+	name = "exprEnv" + schema.TypeName
+	var b strings.Builder
+	fmt.Fprintf(&b, "// %s builds the expr-lang env for Tier-V (VM) expressions over %s.\n", name, schema.TypeName)
+	fmt.Fprintf(&b, "func %s(r %s) map[string]any {\n\treturn map[string]any{\n", name, schema.TypeName)
+	for _, f := range schema.Fields {
+		fmt.Fprintf(&b, "\t\t%q: r.%s,\n", f.Name, f.GoName)
+	}
+	b.WriteString("\t}\n}")
+	return name, b.String()
+}
+
+// exprTierVValidate confirms the expression at least compiles in the VM.
+// When it doesn't, the expression is invalid in EVERY mode — the caller
+// should error loudly at codegen instead of emitting a program that panics
+// at startup.
+func exprTierVValidate(expression string) error {
+	_, err := runtime.CompileExprEnv(expression)
+	return err
+}
+
+// exprTierVFilter builds the Tier-V predicate call for -if-expr: a hoisted
+// MustCompileExprFilterEnv var (false on eval error / non-bool, matching the
+// record path) applied to the schema's env constructor.
+func exprTierVFilter(expression string, schema *lib.TypedSchema) (call string, imports, hoisted []string, err error) {
+	if err := exprTierVValidate(expression); err != nil {
+		return "", nil, nil, err
+	}
+	envFn, envDecl := exprEnvConstructor(schema)
+	filterVar := "exprFilterEnv" + exprGoHash(expression)
+	decl := fmt.Sprintf("var %s = exprvm.MustCompileExprFilterEnv(%q)", filterVar, expression)
+	return filterVar + "(" + envFn + "(r))",
+		[]string{exprRuntimeImport},
+		[]string{envDecl, decl},
+		nil
+}
+
+// exprTierVEval builds the Tier-V evaluation pieces for -set-expr: a hoisted
+// MustCompileExprEnv var and the call source producing (any, error).
+func exprTierVEval(expression string, schema *lib.TypedSchema) (call string, imports, hoisted []string, err error) {
+	if err := exprTierVValidate(expression); err != nil {
+		return "", nil, nil, err
+	}
+	envFn, envDecl := exprEnvConstructor(schema)
+	evalVar := "exprEvalEnv" + exprGoHash(expression)
+	decl := fmt.Sprintf("var %s = exprvm.MustCompileExprEnv(%q)", evalVar, expression)
+	return evalVar + "(" + envFn + "(r))",
+		[]string{exprRuntimeImport},
+		[]string{envDecl, decl},
+		nil
+}
+
+// exprTierReason renders an exprToGo refusal for a -explain plan note,
+// trimming the redundant "expression …:" prefix.
+func exprTierReason(expression string, err error) string {
+	return strings.TrimPrefix(err.Error(), fmt.Sprintf("expression %q: ", expression))
+}
+
+// exprCoerceFunc maps a typed column's Go type to the runtime coercion
+// helper that types a Tier-V result for assignment (loud exit on mismatch —
+// a typed column cannot retype). ok=false for column types with no coercion
+// (time.Time etc.), which forces record fallback.
+func exprCoerceFunc(goType string) (string, bool) {
+	switch goType {
+	case "int64":
+		return "exprvm.MustCoerceInt64", true
+	case "float64":
+		return "exprvm.MustCoerceFloat64", true
+	case "string":
+		return "exprvm.MustCoerceString", true
+	case "bool":
+		return "exprvm.MustCoerceBool", true
+	}
+	return "", false
 }

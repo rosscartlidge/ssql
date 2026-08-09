@@ -491,6 +491,36 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// Tier V (expr-transpiler Phase 1.5): sha256 is outside exprToGo's
+		// native subset, so typed lanes evaluate it with the VM against a
+		// generated static env — WITHOUT ejecting the stage to record mode.
+		// Golden = cities whose sha256 hex digest sorts above "8"
+		// (precomputed; sha256 is deterministic).
+		Name:     "where_expr_tier_v",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if-expr 'sha256(city) > "8"'`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 7, "city": "Mumbai", "pop": 20},
+			{"id": 9, "city": "Lima", "pop": 7},
+			{"id": 5, "city": "Tokyo", "pop": 37},
+			{"id": 8, "city": "Lagos", "pop": 14},
+			{"id": 10, "city": "Quito", "pop": 2},
+		},
+		Skip: map[string]string{
+			"duckdb": "sha256 has no exprToSQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// Tier V -set-expr on an EXISTING string column: VM eval + runtime
+		// MustCoerceString typing, still inside the typed StreamSelect.
+		Name:     "update_set_expr_tier_v",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} update -if pop gt 25 -set-expr city 'upper(sha256(city))'`,
+		Ordered:  false,
+		Skip: map[string]string{
+			"duckdb": "sha256 has no exprToSQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
 		// -if-expr exercises the expr→SQL translation: `&&` and "double
 		// quotes" mean something different in SQL, so verbatim passthrough
 		// (the pre-v4.56 behaviour) is a DuckDB parse/binder error.

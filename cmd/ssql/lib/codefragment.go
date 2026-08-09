@@ -64,6 +64,13 @@ type CodeFragment struct {
 	// boundaries at sinks, etc.
 	IsStream bool `json:"is_stream,omitempty"`
 
+	// PlanNotes are per-fragment planning decisions surfaced by `generate
+	// go -explain` (e.g. the expr transpiler's tier per expression:
+	// native / VM with static env / record fallback). Emitting commands
+	// append them; AssembleCodeFragments prints them to stderr when
+	// SSQL_EXPLAIN_PLAN is set. Never part of the generated program.
+	PlanNotes []string `json:"plan_notes,omitempty"`
+
 	// OutputRecordFields is the ordered list of field names this
 	// fragment produces in Record mode (SSQLGO=1). When non-empty,
 	// downstream sinks (e.g. `to table`) can use it to display
@@ -367,6 +374,16 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		return "", fmt.Errorf("no code fragments received")
 	}
 
+	// Surface per-fragment planning notes (expr tier decisions) under
+	// -explain, for both the record and typed assemblers.
+	if os.Getenv("SSQL_EXPLAIN_PLAN") != "" {
+		for _, frag := range fragments {
+			for _, note := range frag.PlanNotes {
+				fmt.Fprintf(os.Stderr, "[plan] %s: %s\n", frag.Command, note)
+			}
+		}
+	}
+
 	// Phase 2: if any fragment carries a typed schema, route through the
 	// typed assembler. We require all-typed-or-none: a mixed pipeline is
 	// rejected because the runtime types don't compose.
@@ -510,7 +527,7 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 	if len(imports) > 0 {
 		code.WriteString("import (\n")
 		for _, imp := range imports {
-			code.WriteString(fmt.Sprintf("\t%q\n", imp))
+			code.WriteString("\t" + renderImport(imp) + "\n")
 		}
 		code.WriteString(")\n\n")
 	}
@@ -958,6 +975,17 @@ func replaceReturnError(code string) string {
 	replacement := fmt.Sprintf("fmt.Fprintf(os.Stderr, \"Error: %%v\\n\", fmt.Errorf(%s))\n\t\tos.Exit(1)", errorMsg)
 
 	return code[:returnIdx] + replacement + code[msgEnd+1:]
+}
+
+// renderImport renders one import line. An entry of the form "alias path"
+// (single space) becomes an aliased import — used when a package's base name
+// would collide with another import (e.g. the expr Tier-V runtime package
+// `.../lib/runtime` vs Go's stdlib "runtime" in parallel-mode programs).
+func renderImport(imp string) string {
+	if idx := strings.IndexByte(imp, ' '); idx > 0 {
+		return imp[:idx] + " " + fmt.Sprintf("%q", imp[idx+1:])
+	}
+	return fmt.Sprintf("%q", imp)
 }
 
 // sortImports sorts imports with standard library first, then third-party

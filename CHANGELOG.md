@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Expr transpiler Phase 1.5: Tier V keeps exotic expressions typed, and
+  `generate go -explain` reports the tier per expression.** An expression
+  outside the native subset (e.g. `sha256(city)`) no longer ejects the stage
+  — and everything downstream — to record mode: the generated typed code
+  evaluates it with the expr-lang VM against a static env built from the
+  struct (`runtime.CompileExprEnv` + a generated per-schema env constructor),
+  so downstream stages keep their parallel forms. `-set-expr` under Tier V
+  types its result with loud runtime coercers (`runtime.MustCoerce*`) — a
+  result that would RETYPE the column fails the pipeline with a clear message
+  (record mode retypes; typed columns can't). Record fallback remains only
+  for shapes typed structs can't hold: a NEW field from an untranspilable
+  expression, retyping `-set-expr` results, cross-clause new-field type
+  conflicts. `generate go -explain` now prints per-expression tier lines
+  (`native` / `VM with static env (reason)` / `record fallback (reason)`)
+  carried on fragments via `PlanNotes`. Import rendering learned aliased
+  entries (`exprvm "…/lib/runtime"`) since parallel programs also import Go's
+  stdlib `runtime`. Gated by `TestTierVKeepsTypedPipeline` (asserts the
+  parallel group-by SURVIVES a Tier-V where, and the record markers are
+  gone), Tier-V equivalence cases with sha256 goldens (duckdb lane skipped —
+  no SQL translation, by design), and runtime env/coercion unit tests.
 - **Expr→Go transpiler (Phase 1): `-if-expr` and `-set-expr` now run NATIVE
   in typed/parallel generated code.** Previously any `-if-expr` silently
   downgraded the whole downstream pipeline to record mode, and typed

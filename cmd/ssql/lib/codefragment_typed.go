@@ -196,7 +196,7 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	if len(imports) > 0 {
 		code.WriteString("import (\n")
 		for _, imp := range imports {
-			fmt.Fprintf(&code, "\t%q\n", imp)
+			fmt.Fprintf(&code, "\t%s\n", renderImport(imp))
 		}
 		code.WriteString(")\n\n")
 	}

@@ -772,6 +772,88 @@ func TestNegatedConditionGeneration(t *testing.T) {
 	}
 }
 
+// TestTierVKeepsTypedPipeline locks expr-transpiler Phase 1.5: an expression
+// OUTSIDE the native subset (sha256) evaluates via the VM against a generated
+// static env — and the stage STAYS typed, so downstream stages keep their
+// parallel forms. Before 1.5, one such expression ejected the whole stage to
+// record mode and the planner downgraded everything downstream.
+func TestTierVKeepsTypedPipeline(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	tmpFile := "/tmp/tierv_gen_test.csv"
+	if err := os.WriteFile(tmpFile, []byte("city,pop\nOslo,31\nCairo,10\nAo,7\n"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(tmpFile)
+
+	t.Run("where tier V stays parallel through group-by", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=parallel && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test where -if-expr 'sha256(city) > "8"'`+
+				` | /tmp/ssql_test group-by pop -count c | /tmp/ssql_test generate go`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate failed: %v\n%s", err, out)
+		}
+		src := string(out)
+		for _, want := range []string{
+			"exprvm.MustCompileExprFilterEnv", // the Tier V predicate var
+			"exprEnv",                         // the generated static-env constructor
+			"GroupByParallel",                 // downstream KEPT its parallel form
+		} {
+			if !strings.Contains(src, want) {
+				t.Errorf("generated source missing %q:\n%s", want, src)
+			}
+		}
+		// The pre-1.5 record ejection must be gone: no record-mode VM filter,
+		// no ssql.Where over Records.
+		for _, reject := range []string{"MustCompileExprFilter(", "ssql.Where("} {
+			if strings.Contains(src, reject) {
+				t.Errorf("generated source still contains record-mode marker %q:\n%s", reject, src)
+			}
+		}
+	})
+
+	t.Run("explain names the tiers", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=typed && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test where -if-expr 'pop > 8'`+
+				` | /tmp/ssql_test update -set-expr city 'sha256(city)'`+
+				` | /tmp/ssql_test generate go -explain > /dev/null`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate -explain failed: %v\n%s", err, out)
+		}
+		stderr := string(out)
+		for _, want := range []string{
+			`expr "pop > 8": native`,
+			`expr "sha256(city)": VM with static env`,
+		} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("-explain output missing %q:\n%s", want, stderr)
+			}
+		}
+	})
+
+	t.Run("untypeable new field falls back with explain note", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=typed && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test update -set-expr h 'sha256(city)'`+
+				` | /tmp/ssql_test generate go -explain > /dev/null`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate -explain failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "record fallback") {
+			t.Errorf("-explain output missing the record-fallback note:\n%s", out)
+		}
+	})
+}
+
 // TestTableGeneration tests that the table command generates correct Go code
 func TestTableGeneration(t *testing.T) {
 	// Build the binary first

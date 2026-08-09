@@ -392,7 +392,9 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // generateUpdateCode generates Go code for the update command with conditional clauses
-func generateUpdateCode(ctx *cf.Context) error {
+// planNotes surfaces planning decisions (e.g. why typed mode fell back to
+// this record path) under `generate go -explain`.
+func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	// Read all previous code fragments from stdin
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
@@ -417,13 +419,16 @@ func generateUpdateCode(ctx *cf.Context) error {
 	}
 
 	// Phase B fall-throughs: prevSchema==nil → Record-mode upstream;
-	// handled==false → an expression outside the transpilable subset
-	// (Tier R: the planner inserts the Serial()+toRecord boundary).
+	// handled==false → a shape even Tier V can't hold typed (new field
+	// from an untranspilable expression, a -set-expr retyping a column)
+	// — Tier R: execution continues into the record path below and the
+	// planner inserts the Serial()+toRecord boundary.
 	if typedMode() && prevSchema != nil {
-		handled, err := emitTypedUpdate(ctx, inputVar, prevSchema, fragments)
+		handled, reason, err := emitTypedUpdate(ctx, inputVar, prevSchema, fragments)
 		if handled || err != nil {
 			return err
 		}
+		planNotes = append(planNotes, fmt.Sprintf("record fallback (%s)", reason))
 	}
 
 	// Parse clauses - each clause has optional -match conditions and required -set/-set-expr operations
@@ -710,6 +715,7 @@ func generateUpdateCode(ctx *cf.Context) error {
 
 	// Create and write fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
+	frag.PlanNotes = planNotes
 	return lib.WriteCodeFragment(frag)
 }
 

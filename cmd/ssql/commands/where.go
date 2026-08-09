@@ -284,6 +284,7 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	var hoisted []string
+	var planNotes []string
 	var clauseConds []string
 	for _, clause := range clauses {
 		var ands []string
@@ -316,24 +317,40 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 			}
 		}
 
-		// -if-expr / +if-expr: transpile to native Go.
+		// -if-expr / +if-expr: transpile to native Go (Tier N); outside the
+		// subset, evaluate with the VM against a static env (Tier V) — the
+		// stage stays typed either way, so downstream stages keep their
+		// parallel forms.
 		for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+			var cond string
 			res, err := exprToGoBool(ec.Expression, schema, "r")
-			if err != nil {
+			switch {
+			case err == nil:
+				cond = res.Src
+				imports = append(imports, res.Imports...)
+				hoisted = append(hoisted, res.Hoisted...)
+				planNotes = append(planNotes, fmt.Sprintf("expr %q: native", ec.Expression))
+			default:
 				var unknownField *exprUnknownFieldError
 				if errors.As(err, &unknownField) {
 					return true, lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'where -if-expr': %w", err))
 				}
-				return false, nil // outside the subset → record fallback
+				call, tvImports, tvHoisted, verr := exprTierVFilter(ec.Expression, schema)
+				if verr != nil {
+					// Doesn't even compile in the VM — invalid in every mode.
+					return true, lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("ssql generate go -typed: 'where -if-expr' %q: %w", ec.Expression, verr))
+				}
+				cond = call
+				imports = append(imports, tvImports...)
+				hoisted = append(hoisted, tvHoisted...)
+				planNotes = append(planNotes, fmt.Sprintf("expr %q: VM with static env (%s)", ec.Expression, exprTierReason(ec.Expression, err)))
 			}
-			cond := res.Src
 			if ec.Negated {
 				cond = "!(" + cond + ")"
 			}
 			ands = append(ands, cond)
-			imports = append(imports, res.Imports...)
-			hoisted = append(hoisted, res.Hoisted...)
 		}
 
 		if len(ands) > 0 {
@@ -374,7 +391,8 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 	frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
 	frag.InputTypedSchema = schema
 	frag.OutputTypedSchema = schema
-	frag.StructDefs = hoisted // package-level decls (hoisted regexp vars), deduped by the assembler
+	frag.StructDefs = hoisted // package-level decls (hoisted regexp/VM vars), deduped by the assembler
+	frag.PlanNotes = planNotes
 	frag.IsStream = true
 	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
 	frag.AltCodeIfSeq = serialCode
