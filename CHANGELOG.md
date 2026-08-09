@@ -5,6 +5,25 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Bug Fixes
+- **`generate ssql`'s optimiser no longer drops `+if` / `+if-expr`.** The
+  v4.56.1 negation sweep fixed exec and `generate go`, but the optimiser's
+  where round-trip (`parseWhereArgs`/`buildWhereArgs`) still didn't recognise
+  the `+` forms: any rewrite rule that rebuilt a where clause (predicate
+  simplification, predicate reorder, catalog predicate extraction, join
+  predicate pushdown) silently dropped the negated conditions from the
+  optimised pipeline — returning extra rows. Negated conditions now
+  round-trip through the rewrite rules, stay opaque to eq/range
+  simplification (their bounds are inverted), and are never lifted into
+  catalog pruning filters (which have no negated form). Ported from the
+  parallel web-session fix of the same negation class. Locked by equivalence
+  cases `where_negated_survives_simplify` and
+  `where_negated_expr_survives_reorder` (both watched failing in the
+  ssql-opt lane first) plus `generate ssql` round-trip subtests in
+  `TestNegatedConditionGeneration`.
+
 ## [v4.56.1] - 2026-07-25
 
 ### Bug Fixes

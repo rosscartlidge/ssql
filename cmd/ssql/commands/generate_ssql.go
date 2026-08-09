@@ -135,18 +135,25 @@ type pipelineCmd struct {
 	LimitN string
 }
 
-// whereCondition represents a single -if field op value condition.
+// whereCondition represents a single -if / +if field op value condition.
 type whereCondition struct {
 	Field    string
 	Operator string
 	Value    string
+	Negated  bool // +if form (negate the match)
+}
+
+// whereExpr is one -if-expr / +if-expr expression in a where clause.
+type whereExpr struct {
+	Expr    string
+	Negated bool // +if-expr form (negate the result)
 }
 
 // whereClause represents one OR-group in a where command.
 // Multiple conditions within a clause are ANDed.
 type whereClause struct {
 	Conditions []whereCondition
-	Exprs      []string // -if-expr expressions
+	Exprs      []whereExpr
 }
 
 // ruleApplication tracks an optimization rule that was applied.
@@ -487,17 +494,20 @@ func parseWhereArgs(args []string) []whereClause {
 	i := 0
 	for i < len(args) {
 		switch args[i] {
-		case "-if", "-i":
+		case "-if", "-i", "+if", "+i":
 			if i+3 < len(args) {
 				current.Conditions = append(current.Conditions, whereCondition{
 					Field: args[i+1], Operator: args[i+2], Value: args[i+3],
+					Negated: args[i][0] == '+',
 				})
 				i += 4
 				continue
 			}
-		case "-if-expr", "-x":
+		case "-if-expr", "-x", "+if-expr", "+x":
 			if i+1 < len(args) {
-				current.Exprs = append(current.Exprs, args[i+1])
+				current.Exprs = append(current.Exprs, whereExpr{
+					Expr: args[i+1], Negated: args[i][0] == '+',
+				})
 				i += 2
 				continue
 			}
@@ -523,10 +533,18 @@ func buildWhereArgs(clauses []whereClause) []string {
 			args = append(args, "+")
 		}
 		for _, cond := range clause.Conditions {
-			args = append(args, "-if", cond.Field, cond.Operator, cond.Value)
+			flag := "-if"
+			if cond.Negated {
+				flag = "+if"
+			}
+			args = append(args, flag, cond.Field, cond.Operator, cond.Value)
 		}
 		for _, expr := range clause.Exprs {
-			args = append(args, "-if-expr", expr)
+			flag := "-if-expr"
+			if expr.Negated {
+				flag = "+if-expr"
+			}
+			args = append(args, flag, expr.Expr)
 		}
 	}
 	return args
@@ -826,10 +844,12 @@ func ruleCatalogPredicateExtraction(cmds []*pipelineCmd) []ruleApplication {
 		}
 		clause := clauses[0]
 
-		// Split conditions into catalog-matchable and data-only
+		// Split conditions into catalog-matchable and data-only. Negated
+		// (+if) conditions stay data-side: the catalog -if pruning filters
+		// have no negated form, so extracting one would drop the negation.
 		var catalogConds, dataConds []whereCondition
 		for _, cond := range clause.Conditions {
-			if catalogCols[cond.Field] {
+			if catalogCols[cond.Field] && !cond.Negated {
 				catalogConds = append(catalogConds, cond)
 			} else {
 				dataConds = append(dataConds, cond)
@@ -999,10 +1019,12 @@ func simplifyClause(clause whereClause) (whereClause, bool) {
 		return clause, false
 	}
 
-	// Check for eq/eq contradictions and eq/ne contradictions
+	// Check for eq/eq contradictions and eq/ne contradictions.
+	// Negated (+if) conditions are opaque to this reasoning — they are
+	// never removed and never contribute to contradiction detection.
 	eqValues := make(map[string]string) // field → value for eq conditions
 	for _, c := range conds {
-		if c.Operator == "eq" {
+		if c.Operator == "eq" && !c.Negated {
 			if prev, exists := eqValues[c.Field]; exists {
 				if prev != c.Value {
 					return whereClause{}, true // eq X AND eq Y where X != Y
@@ -1012,7 +1034,7 @@ func simplifyClause(clause whereClause) (whereClause, bool) {
 		}
 	}
 	for _, c := range conds {
-		if c.Operator == "ne" {
+		if c.Operator == "ne" && !c.Negated {
 			if eqVal, exists := eqValues[c.Field]; exists && eqVal == c.Value {
 				return whereClause{}, true // eq X AND ne X
 			}
@@ -1033,6 +1055,9 @@ func simplifyClause(clause whereClause) (whereClause, bool) {
 	remove := make(map[int]bool)
 
 	for idx, c := range conds {
+		if c.Negated {
+			continue // +if bounds are inverted — exclude from range tightening
+		}
 		val, err := strconv.ParseFloat(c.Value, 64)
 		isNum := err == nil
 

@@ -438,6 +438,18 @@ the v4.56 SQL translator already handled negation):
    times: negated single-arg flags arrive as `{"expression":…, "_negated":true}`
    maps and readers type-asserted only the string form → shared
    `parseExprConds` helper now used everywhere.
+
+   **Addendum (2026-08-09):** the sweep had a SIXTH site — `generate ssql`'s
+   optimiser round-trip (`parseWhereArgs`/`buildWhereArgs`) didn't recognise
+   the `+` forms, so every rewrite rule that rebuilt a where (simplification,
+   reorder, catalog extraction, join pushdown) silently dropped
+   `+if`/`+if-expr` from the optimised pipeline. Fixed by porting the
+   parallel web-session implementation of this sweep (which had caught it):
+   negation round-trips, stays opaque to eq/range simplification, and is
+   never lifted into catalog pruning filters. Gates: equivalence cases
+   `where_negated_survives_simplify` / `where_negated_expr_survives_reorder`
+   (watched failing in the ssql-opt lane) + `generate ssql` subtests in
+   `TestNegatedConditionGeneration`.
 2. **`update -if-expr … -set …` with no `-if`** generated an UNCONDITIONAL
    update (the `-if-expr` parse was gated on `-if` being present) — and
    fixing it exposed a never-closed `if` block for expr-only clauses in the

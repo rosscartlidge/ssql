@@ -675,6 +675,103 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 	}
 }
 
+// TestNegatedConditionGeneration locks the +if / +if-expr negation emissions.
+// Before v4.56.1, record codegen emitted +if UN-negated (the complement rows),
+// silently DROPPED +if-expr (the negated form arrives as a map, not a string),
+// dropped an -if-expr that had no accompanying -if entirely, and typed codegen
+// ignored negation too — while exec was correct. The optimiser round-trip
+// (parseWhereArgs/buildWhereArgs in generate ssql) dropped +if/+if-expr tokens
+// whenever a rewrite rule rebuilt a where. The equivalence cases
+// (where_negated_if, where_negated_expr, update_negated_if,
+// where_negated_survives_simplify, where_negated_expr_survives_reorder) are
+// the end-to-end gate; this pins the exact emitted source.
+func TestNegatedConditionGeneration(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	tmpFile := "/tmp/negation_gen_test.csv"
+	if err := os.WriteFile(tmpFile, []byte("name,age\nAlice,30\nBob,20\n"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(tmpFile)
+
+	tests := []struct {
+		name     string
+		cmdLine  string
+		wantStrs []string
+	}{
+		{
+			name:     "record where +if negates",
+			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where +if age gt 25 | /tmp/ssql_test generate go`,
+			wantStrs: []string{`return !(ssql.GetOr(r, "age"`},
+		},
+		{
+			name:     "record where +if-expr negates (not dropped)",
+			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where +if-expr 'age > 25' | /tmp/ssql_test generate go`,
+			wantStrs: []string{`MustCompileExprFilter("age > 25")`, `return !exprFilter1(r)`},
+		},
+		{
+			name:     "record update +if negates",
+			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update +if age gt 25 -set tag young | /tmp/ssql_test generate go`,
+			wantStrs: []string{`if !(ssql.GetOr(frozen, "age"`},
+		},
+		{
+			name:     "record update +if-expr negates (not dropped)",
+			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update +if-expr 'age > 25' -set tag young | /tmp/ssql_test generate go`,
+			wantStrs: []string{`if !exprFilter1(frozen) {`},
+		},
+		{
+			name:     "record update -if-expr without -if keeps the condition",
+			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update -if-expr 'age > 25' -set tag old | /tmp/ssql_test generate go`,
+			wantStrs: []string{`if exprFilter1(frozen) {`},
+		},
+		{
+			name:     "typed where +if negates",
+			cmdLine:  `export SSQL_MODE=typed && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where +if age gt 25 | /tmp/ssql_test generate go`,
+			wantStrs: []string{`return !(r.Age > 25)`},
+		},
+		{
+			name:     "typed update +if negates",
+			cmdLine:  `export SSQL_MODE=typed && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update +if age gt 25 -set tag young | /tmp/ssql_test generate go`,
+			wantStrs: []string{`if !(r.Age > 25) {`},
+		},
+		{
+			// Optimiser round-trip: range tightening (gt 5 + ge 8) rebuilds
+			// the where args; the +if must survive the rebuild.
+			name:     "generate ssql keeps +if through simplification",
+			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 5 -if age ge 8 +if age lt 12 | /tmp/ssql_test generate ssql`,
+			wantStrs: []string{`+if age lt 12`},
+		},
+		{
+			// Predicate reorder (ne before gt) rebuilds too; +if-expr must
+			// survive.
+			name:     "generate ssql keeps +if-expr through reorder",
+			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 8 -if name ne Bob +if-expr 'age > 12' | /tmp/ssql_test generate ssql`,
+			wantStrs: []string{`+if-expr`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c", tt.cmdLine)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Logf("Command output: %s", output)
+			}
+
+			outputStr := string(output)
+			for _, want := range tt.wantStrs {
+				if !strings.Contains(outputStr, want) {
+					t.Errorf("Expected output to contain %q, got: %s", want, outputStr)
+				}
+			}
+		})
+	}
+}
+
 // TestTableGeneration tests that the table command generates correct Go code
 func TestTableGeneration(t *testing.T) {
 	// Build the binary first

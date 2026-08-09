@@ -410,6 +410,40 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// generate ssql's optimiser: parseWhereArgs didn't recognise +if, so
+		// any rule that REBUILT the where args dropped it. Here range
+		// tightening (gt 5 + ge 8 → ge 8) triggers the rebuild and the
+		// ssql-opt lane silently lost the +if — returning pop >= 8 instead of
+		// pop >= 8 AND NOT(pop < 12). The +if must also stay OPAQUE to the
+		// tightening itself (its bounds are inverted). Golden = pop >= 12.
+		// (Distinct operators on purpose: duplicate field+op conditions hit a
+		// separate record-codegen flag-naming bug, tracked in TODO.md.)
+		Name:     "where_negated_survives_simplify",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 5 -if pop ge 8 +if pop lt 12`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 7, "city": "Mumbai", "pop": 20},
+			{"id": 1, "city": "Oslo", "pop": 31},
+			{"id": 5, "city": "Tokyo", "pop": 37},
+			{"id": 2, "city": "Delhi", "pop": 29},
+			{"id": 8, "city": "Lagos", "pop": 14},
+			{"id": 11, "city": "Bogota", "pop": 25},
+		},
+	},
+	{
+		// Same optimiser class for +if-expr: predicate reorder (ne is cheaper
+		// than gt, so the conditions swap) rebuilds the where args and the
+		// unrecognised +if-expr token vanished from the optimised pipeline.
+		Name:     "where_negated_expr_survives_reorder",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 8 -if city ne Oslo +if-expr 'pop > 12'`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 3, "city": "Cairo", "pop": 10},
+			{"id": 4, "city": "Paris", "pop": 11},
+			{"id": 12, "city": "Hanoi", "pop": 9},
+		},
+	},
+	{
 		// -if-expr exercises the expr→SQL translation: `&&` and "double
 		// quotes" mean something different in SQL, so verbatim passthrough
 		// (the pre-v4.56 behaviour) is a DuckDB parse/binder error.
