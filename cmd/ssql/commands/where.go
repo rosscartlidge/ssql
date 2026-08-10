@@ -242,8 +242,15 @@ func generateWhereCode(ctx *cf.Context) error {
 		}
 	}
 
+	// Record mode: advisory column types from the upstream fragment let
+	// -if-expr predicates transpile to native GetOr code (Phase 4).
+	var advisory map[string]string
+	if len(fragments) > 0 {
+		advisory = fragments[len(fragments)-1].AdvisoryTypes
+	}
+
 	// Generate filter code from clauses
-	filterCode, imports, preCompileVars, params := generateWhereCodeFromClauses(ctx.Clauses)
+	filterCode, imports, preCompileVars, params, planNotes := generateWhereCodeFromClauses(ctx.Clauses, advisory)
 
 	// Build complete statement with pre-compiled expressions
 	var codeLines []string
@@ -258,6 +265,8 @@ func generateWhereCode(ctx *cf.Context) error {
 	// Create code fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
 	frag.Params = params
+	frag.PlanNotes = planNotes
+	frag.AdvisoryTypes = advisory // where preserves the schema
 
 	// Write to stdout
 	return lib.WriteCodeFragment(frag)
@@ -483,12 +492,17 @@ func schemaUsesTime(s *lib.TypedSchema) bool {
 	return false
 }
 
-// generateWhereCodeFromClauses generates the filter function code
-func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []string, []lib.CodeParam) {
+// generateWhereCodeFromClauses generates the filter function code. When
+// advisory column types are available (record pipelines fed by a sampling
+// source), -if-expr predicates transpile to native GetOr code; otherwise —
+// and for expressions outside the subset — the compiled-VM filter var is
+// emitted as before.
+func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]string) (string, []string, []string, []lib.CodeParam, []string) {
 	var imports []string
 	var clauseConditions []string
 	var preCompileVars []string
 	var params []lib.CodeParam
+	var planNotes []string
 	exprCounter := 0
 	flagSeen := make(map[string]int) // field+op occurrences within this fragment
 
@@ -533,6 +547,34 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 		// map form negated entries arrive in — a plain string type-assert
 		// silently dropped every +if-expr condition.
 		for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+			// Native first (Phase 4): needs advisory types, a boolean
+			// result, and no hoisted decls (the record assembler has no
+			// package-level slot for regexp vars — those stay on the VM).
+			// Unknown fields are a refusal here, not a loud error: the VM
+			// validates against the real first record, and mid-pipeline
+			// commands may legitimately have reshaped the rows.
+			if advisory != nil {
+				res, err := exprToGoRecord(ec.Expression, advisory, "r")
+				if err == nil && res.Type == exprGoBool && len(res.Hoisted) == 0 {
+					cond := res.Src
+					if ec.Negated {
+						cond = "!(" + cond + ")"
+					}
+					andConditions = append(andConditions, cond)
+					imports = append(imports, res.Imports...)
+					planNotes = append(planNotes, fmt.Sprintf("expr %q: native (record, advisory types)", ec.Expression))
+					continue
+				}
+				reason := "hoisted declarations need the VM path in record mode"
+				if err != nil {
+					reason = exprTierReason(ec.Expression, err)
+				} else if res.Type != exprGoBool {
+					reason = fmt.Sprintf("result is %s, not a boolean predicate", res.Type)
+				}
+				planNotes = append(planNotes, fmt.Sprintf("expr %q: VM (%s)", ec.Expression, reason))
+			} else {
+				planNotes = append(planNotes, fmt.Sprintf("expr %q: VM (no advisory column types from upstream)", ec.Expression))
+			}
 			exprCounter++
 			varName := fmt.Sprintf("exprFilter%d", exprCounter)
 			preCompileVars = append(preCompileVars,
@@ -571,7 +613,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause) (string, []string, []stri
 	// Build function
 	code := fmt.Sprintf("func(r ssql.Record) bool {\n\t\t%s\n\t}", finalCondition)
 
-	return code, dedupeImports(imports), preCompileVars, params
+	return code, dedupeImports(imports), preCompileVars, params, planNotes
 }
 
 // generateCondition generates code for a single where condition.

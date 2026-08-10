@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -94,6 +95,28 @@ func exprNodeToGoWith(n ast.Node, schema *lib.TypedSchema, recv string, vars map
 	return env.node(n)
 }
 
+// exprToGoRecord transpiles an expression for RECORD mode: identifiers emit
+// typed ssql.GetOr calls against recv (a Record), with types from the
+// advisory map (CSV name → Go type, sampled by the source). Same walker,
+// same semantics tables — only the field emission differs.
+func exprToGoRecord(expression string, advisory map[string]string, recv string) (exprGo, error) {
+	tree, err := parser.Parse(expression)
+	if err != nil {
+		return exprGo{}, fmt.Errorf("expression %q: %w", expression, err)
+	}
+	env := &exprGoEnv{recv: recv, advisory: make(map[string]lib.TypedSchemaField, len(advisory))}
+	for name, goType := range advisory {
+		env.advisory[strings.ToLower(name)] = lib.TypedSchemaField{Name: name, GoType: goType}
+		env.names = append(env.names, name)
+	}
+	sort.Strings(env.names) // map order — sorted for deterministic errors
+	res, err := env.node(tree.Node)
+	if err != nil {
+		return exprGo{}, fmt.Errorf("expression %q: %w", expression, err)
+	}
+	return res, nil
+}
+
 // exprToGoBool is exprToGo + "result must be bool" (for -if-expr / +if-expr).
 func exprToGoBool(expression string, schema *lib.TypedSchema, recv string) (exprGo, error) {
 	res, err := exprToGo(expression, schema, recv)
@@ -111,11 +134,17 @@ func exprToGoBool(expression string, schema *lib.TypedSchema, recv string) (expr
 // (group-by -stream-expr state fields) consulted AFTER schema fields —
 // record shadows state, matching evalStreamAggExpr's env build order
 // (maps.Copy(state) then maps.Insert(record): record wins).
+//
+// In RECORD mode (expr-transpiler Phase 4) there is no struct: advisory
+// holds sampled column types and identifiers emit typed ssql.GetOr calls
+// instead of struct field access.
 type exprGoEnv struct {
 	fields map[string]lib.TypedSchemaField
 	names  []string // schema order, for deterministic error messages
 	recv   string
 	vars   map[string]exprGo // extra bindings, e.g. "s" → {Src: "a.se0_s", Type: float64}
+
+	advisory map[string]lib.TypedSchemaField // record mode: lowercase name → {Name, GoType}
 }
 
 func newExprGoEnv(schema *lib.TypedSchema, recv string) *exprGoEnv {
@@ -162,13 +191,39 @@ func (e *exprGoEnv) known(name string) bool {
 	if _, ok := e.fields[strings.ToLower(name)]; ok {
 		return true
 	}
+	if _, ok := e.advisory[strings.ToLower(name)]; ok {
+		return true
+	}
 	_, ok := e.vars[name]
 	return ok
 }
 
 // field resolves an identifier: schema field first (record shadows state),
-// then extra bindings. Schema fields admit only the MVP scalar types.
+// then extra bindings. Schema fields admit only the MVP scalar types. In
+// record mode (advisory set), fields emit typed ssql.GetOr calls.
 func (e *exprGoEnv) field(name string) (exprGo, error) {
+	if e.advisory != nil {
+		f, ok := e.advisory[strings.ToLower(name)]
+		if !ok {
+			if v, ok := e.vars[name]; ok {
+				return v, nil
+			}
+			return exprGo{}, &exprUnknownFieldError{
+				msg: fmt.Sprintf("unknown field %q (schema has %s)", name, e.fieldNames())}
+		}
+		switch f.GoType {
+		case "int64":
+			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, int64(0))", e.recv, f.Name), Type: exprGoInt}, nil
+		case "float64":
+			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, float64(0))", e.recv, f.Name), Type: exprGoFloat}, nil
+		case "string":
+			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, \"\")", e.recv, f.Name), Type: exprGoString}, nil
+		case "bool":
+			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, false)", e.recv, f.Name), Type: exprGoBool}, nil
+		}
+		return exprGo{}, fmt.Errorf("field %q has advisory type %s, which has no native Go emission", name, f.GoType)
+	}
+
 	f, ok := e.fields[strings.ToLower(name)]
 	if !ok {
 		if v, ok := e.vars[name]; ok {

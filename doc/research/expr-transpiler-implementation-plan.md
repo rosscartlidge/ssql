@@ -413,7 +413,7 @@ value-equality only for expressions that are valid under BOTH paths.
 | **1.5** ✅ 2026-08-10 | Tier V (`runtime.CompileExprEnv` + generated static env) + `-explain` tier reporting | exotic expr in typed pipeline no longer downgrades downstream stages; -explain names tiers | 1 day |
 | **2** ✅ 2026-08-10 | `group-by -stream-expr` → typed accumulator (serial GroupBy) | new equivalence case green across lanes | 1-2 days |
 | **3** ✅ 2026-08-10 | `group-by -expr` via patcher normal form → mergeable accumulators (keeps GroupByParallel) | equivalence + a parallel-vs-serial multiset test | 1-2 days |
-| **4** | record-mode native (where/update) + fix the `+if-expr` negation bug + retire the per-row type-switch | record lanes byte-identical; negation regression test | 1-2 days |
+| **4** ✅ 2026-08-10 | record-mode native (where/update) + fix the `+if-expr` negation bug + retire the per-row type-switch | record lanes byte-identical; negation regression test | 1-2 days |
 | **5** | breadth: time.Time lowering, string→int casts, `in` on fields, split/join/replace/replaceRegex/sha256 via exprfn; grow from `-explain` fallback telemetry | incremental | ongoing |
 
 Sequencing rationale: Phase 1 unlocks the parallel path (the performance
@@ -531,6 +531,42 @@ soaked because record-mode inference is heuristic.
   TestExprAggTypedGeneration (emission + parallel-kept + fallback note),
   equivalence groupby_expr_{avg,arith,int_mod,grouped} goldens (duckdb
   skipped: generate sql rejects -expr loudly).
+
+**Phase 4 shipped (2026-08-10).** What landed vs §5e:
+- Not "whole-expression inference" — REAL types: `from csv` samples column
+  types in record mode too (the same lib.SampleCSVSchema typed mode trusts)
+  and carries them on the fragment as `AdvisoryTypes` (deliberately NOT
+  OutputTypedSchema, which would flip the pipeline into the typed
+  assembler). The walker's record resolver emits typed GetOr calls
+  (`ssql.GetOr(r, "pop", int64(0))`) — exact per-type emission means int
+  arithmetic/% keep VM parity, no float64 blanket.
+- Propagation is conservative: `where` passes advisory through unchanged;
+  `update` tracks assignments — a field whose assigned type matches keeps
+  its advisory entry, a retype (`-set-expr salary 'salary/2'` makes an int
+  column float) DROPS it so no downstream expression uses a stale type
+  (gated by the retype-safety generation case); new fields are not added
+  (a conditional clause may leave them absent). Other commands don't
+  propagate yet → downstream expressions use the VM (zero regression;
+  extending propagation is incremental — see -explain telemetry).
+- `update -set-expr` native collapses eval + the per-row runtime
+  type-switch into ONE typed setter (mut.Int/Float/String/Bool) — native
+  subset expressions are total (no runtime eval errors; int/0 is +Inf).
+- Record-native REFUSES hoisted decls (`matches`) — the record assembler
+  has no package-level slot; VM keeps them. Unknown fields in record mode
+  are a refusal, not loud — mid-pipeline rows may be reshaped and the VM
+  validates against the real first record.
+- The well-typed-column contract matches typed mode's (and the existing
+  -if GetOr emission's): a value of another type in a column is out of
+  contract in native mode; messy data keeps the VM by having no advisory.
+- Measured: record-native predicate 47ns/op 0 allocs vs 1.52µs VM (~32x);
+  typed native remains 4ns (GetOr pays schema lookups).
+- The §9 negation bug named in this phase's scope was already fixed in
+  v4.56.1; TestNegatedConditionGeneration's record pins now assert the
+  NATIVE negated emission (`return !((ssql.GetOr(…) > 25))`).
+- Gates: TestExprToGoRecord (emission pins incl. division/promotion),
+  TestRecordNativeExprGeneration (native where/update, VM-without-advisory
+  + -explain note, propagation through where, retype safety), record-lane
+  equivalence corpus green end-to-end on native paths, zero-alloc bench.
 
 ---
 

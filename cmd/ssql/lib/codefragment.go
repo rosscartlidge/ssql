@@ -71,6 +71,19 @@ type CodeFragment struct {
 	// SSQL_EXPLAIN_PLAN is set. Never part of the generated program.
 	PlanNotes []string `json:"plan_notes,omitempty"`
 
+	// AdvisoryTypes carries RECORD-mode type knowledge (CSV column name →
+	// Go type, e.g. "pop" → "int64") inferred by the source (CSV sampling,
+	// JSONL schema headers). Deliberately distinct from OutputTypedSchema:
+	// setting THAT routes the pipeline through the typed assembler, while
+	// this is advisory — the expr transpiler uses it to emit native
+	// ssql.GetOr predicates in record mode (expr-transpiler Phase 4) and
+	// falls back to the VM when it's absent. Commands that preserve the
+	// schema propagate it; commands that change it drop or extend it.
+	// The contract matches typed mode's: columns are well-typed (a value
+	// of a different type in a column is out of contract, exactly as it
+	// is for typed.ReadCSV and for the existing -if GetOr emission).
+	AdvisoryTypes map[string]string `json:"advisory_types,omitempty"`
+
 	// OutputRecordFields is the ordered list of field names this
 	// fragment produces in Record mode (SSQLGO=1). When non-empty,
 	// downstream sinks (e.g. `to table`) can use it to display

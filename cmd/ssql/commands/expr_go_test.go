@@ -126,6 +126,56 @@ func TestExprToGo(t *testing.T) {
 	}
 }
 
+// TestExprToGoRecord pins the record-mode emission (expr-transpiler Phase
+// 4): identifiers become typed ssql.GetOr calls with the type from the
+// advisory map; all §2 semantics (division!, promotion) carry over.
+func TestExprToGoRecord(t *testing.T) {
+	advisory := map[string]string{
+		"pop": "int64", "price": "float64", "city": "string", "active": "bool", "when": "time.Time",
+	}
+
+	tests := []struct {
+		name     string
+		expr     string
+		wantSrc  string
+		wantType exprGoType
+	}{
+		{"int field compare", "pop > 15", `(ssql.GetOr(r, "pop", int64(0)) > 15)`, exprGoBool},
+		{"string field", `city == "Oslo"`, `(ssql.GetOr(r, "city", "") == "Oslo")`, exprGoBool},
+		{"division is float", "pop / 2", `(float64(ssql.GetOr(r, "pop", int64(0))) / 2)`, exprGoFloat},
+		{"int arithmetic stays int", "pop + 1", `(ssql.GetOr(r, "pop", int64(0)) + 1)`, exprGoInt},
+		{"mixed promotes", "pop + price", `(float64(ssql.GetOr(r, "pop", int64(0))) + ssql.GetOr(r, "price", float64(0)))`, exprGoFloat},
+		{"bool field", "active", `ssql.GetOr(r, "active", false)`, exprGoBool},
+		{"has folds against advisory", `has("pop") && has("nope")`, "(true && false)", exprGoBool},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := exprToGoRecord(tt.expr, advisory, "r")
+			if err != nil {
+				t.Fatalf("exprToGoRecord(%q) error: %v", tt.expr, err)
+			}
+			if got.Src != tt.wantSrc {
+				t.Errorf("exprToGoRecord(%q)\n  got  %s\n  want %s", tt.expr, got.Src, tt.wantSrc)
+			}
+			if got.Type != tt.wantType {
+				t.Errorf("type = %s, want %s", got.Type, tt.wantType)
+			}
+		})
+	}
+
+	t.Run("advisory-untypeable field refuses", func(t *testing.T) {
+		if _, err := exprToGoRecord("when > when", advisory, "r"); err == nil {
+			t.Errorf("time.Time advisory field must refuse")
+		}
+	})
+	t.Run("unknown field errors", func(t *testing.T) {
+		_, err := exprToGoRecord("missing > 5", advisory, "r")
+		if err == nil {
+			t.Fatalf("unknown field accepted")
+		}
+	})
+}
+
 // TestExprToGoMatches pins the hoisted-regex emission for `matches`.
 func TestExprToGoMatches(t *testing.T) {
 	got, err := exprToGo(`city matches "^A"`, exprGoTestSchema(), "r")

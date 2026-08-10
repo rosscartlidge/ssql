@@ -517,9 +517,30 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 		return fmt.Errorf("no -set or -set-expr operations specified")
 	}
 
+	// Record mode: advisory column types from the upstream fragment let
+	// expressions transpile to native GetOr/typed-setter code (Phase 4).
+	var advisory map[string]string
+	if len(fragments) > 0 {
+		advisory = fragments[len(fragments)-1].AdvisoryTypes
+	}
+	// The output advisory: fields this update assigns either keep their
+	// type (assignment type matches) or become uncertain (dropped). New
+	// fields are conservatively NOT added — a conditional clause may leave
+	// them absent on some rows.
+	newAdvisory := make(map[string]string, len(advisory))
+	for k, v := range advisory {
+		newAdvisory[k] = v
+	}
+	noteAssign := func(field, goType string) {
+		if old, ok := newAdvisory[field]; ok && old != goType {
+			delete(newAdvisory, field)
+		}
+	}
+
 	// Generate Update code with conditional clauses
 	var codeBody strings.Builder
 	var preCompileVars []string
+	var extraImports []string // from native record expressions (math, strconv, exprfn, …)
 	exprCounter := 0
 	needsTime := false
 	needsStrings := false
@@ -584,19 +605,31 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				}
 			}
 
-			// Generate where-expr conditions
+			// Generate where-expr conditions: native GetOr predicate when
+			// advisory types cover it (Phase 4), else the compiled-VM var.
 			for _, we := range clause.whereExprs {
 				if condCount > 0 {
 					codeBody.WriteString(" && ")
 				}
-				needsRuntime = true
-				exprCounter++
-				varName := fmt.Sprintf("exprFilter%d", exprCounter)
-				preCompileVars = append(preCompileVars,
-					fmt.Sprintf("var %s = runtime.MustCompileExprFilter(%q)", varName, we.Expression))
-				call := varName + "(frozen)"
+				var call string
+				if advisory != nil {
+					if res, err := exprToGoRecord(we.Expression, advisory, "frozen"); err == nil && res.Type == exprGoBool && len(res.Hoisted) == 0 {
+						call = res.Src
+						extraImports = append(extraImports, res.Imports...)
+						planNotes = append(planNotes, fmt.Sprintf("expr %q: native (record, advisory types)", we.Expression))
+					}
+				}
+				if call == "" {
+					planNotes = append(planNotes, fmt.Sprintf("expr %q: VM", we.Expression))
+					needsRuntime = true
+					exprCounter++
+					varName := fmt.Sprintf("exprFilter%d", exprCounter)
+					preCompileVars = append(preCompileVars,
+						fmt.Sprintf("var %s = runtime.MustCompileExprFilter(%q)", varName, we.Expression))
+					call = varName + "(frozen)"
+				}
 				if we.Negated {
-					call = "!" + call
+					call = "!(" + call + ")"
 				}
 				codeBody.WriteString(call)
 				condCount++
@@ -616,6 +649,26 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 
 			// Check if this is an expression
 			if upd.isExpr {
+				// Native record emission (Phase 4): the expression's result
+				// type is known at codegen, so the whole eval + runtime
+				// type-switch collapses to one typed setter. Native
+				// expressions cannot eval-error at runtime (the walker's
+				// subset is total — division by zero is +Inf).
+				if advisory != nil {
+					if res, err := exprToGoRecord(upd.value, advisory, "frozen"); err == nil && len(res.Hoisted) == 0 {
+						setter := map[exprGoType]string{
+							exprGoInt: "Int", exprGoFloat: "Float", exprGoString: "String", exprGoBool: "Bool",
+						}[res.Type]
+						stmt = fmt.Sprintf("%smut = mut.%s(%q, %s)", indent, setter, upd.field, res.Src)
+						extraImports = append(extraImports, res.Imports...)
+						planNotes = append(planNotes, fmt.Sprintf("expr %q: native (record, advisory types)", upd.value))
+						noteAssign(upd.field, string(res.Type))
+						codeBody.WriteString(stmt + "\n")
+						continue
+					}
+				}
+				planNotes = append(planNotes, fmt.Sprintf("expr %q: VM", upd.value))
+				noteAssign(upd.field, "") // result type unknown → drop from advisory
 				// Pre-compile expression and use runtime function
 				needsRuntime = true
 				exprCounter++
@@ -659,19 +712,25 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				switch v := parsedValue.(type) {
 				case int64:
 					stmt = fmt.Sprintf("%smut = mut.Int(%q, int64(%d))", indent, upd.field, v)
+					noteAssign(upd.field, "int64")
 				case float64:
 					stmt = fmt.Sprintf("%smut = mut.Float(%q, %f)", indent, upd.field, v)
+					noteAssign(upd.field, "float64")
 				case bool:
 					stmt = fmt.Sprintf("%smut = mut.Bool(%q, %t)", indent, upd.field, v)
+					noteAssign(upd.field, "bool")
 				case time.Time:
 					timeExpr := fmt.Sprintf("time.Date(%d, %d, %d, %d, %d, %d, %d, time.UTC)",
 						v.Year(), v.Month(), v.Day(), v.Hour(), v.Minute(), v.Second(), v.Nanosecond())
 					stmt = fmt.Sprintf("%smut = ssql.Set(mut, %q, %s)", indent, upd.field, timeExpr)
 					needsTime = true
+					noteAssign(upd.field, "time.Time")
 				case string:
 					stmt = fmt.Sprintf("%smut = mut.String(%q, %q)", indent, upd.field, v)
+					noteAssign(upd.field, "string")
 				default:
 					stmt = fmt.Sprintf("%smut = mut.String(%q, %q)", indent, upd.field, upd.value)
+					noteAssign(upd.field, "string")
 				}
 			}
 
@@ -712,10 +771,12 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	if needsRuntime {
 		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime", "fmt", "os")
 	}
+	imports = dedupeImports(append(imports, extraImports...))
 
 	// Create and write fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
 	frag.PlanNotes = planNotes
+	frag.AdvisoryTypes = newAdvisory
 	return lib.WriteCodeFragment(frag)
 }
 

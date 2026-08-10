@@ -20,61 +20,53 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Example("ssql from csv *.csv | ssql to table", "Read multiple CSV files").
 		Example("ssql from csv *.csv -merge-schemas | ssql to table", "Merge files with different headers").
 		Example("ssql from csv data.csv -type zipcode string -type phone string", "Force fields to string").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-merge-schemas").
-			Bool().
-			Global().
-			Help("Allow files with different headers (merge schemas)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Allow files with different headers (merge schemas)").
+		Done().
 		Flag("-source").
-			String().
-			Global().
-			Default("").
-			Help("Add field with source filename: -source file").
-			Done().
-
+		String().
+		Global().
+		Default("").
+		Help("Add field with source filename: -source file").
+		Done().
 		Flag("-unordered").
-			Bool().
-			Global().
-			Help("Don't preserve file order in pushdown (faster, lower memory)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Don't preserve file order in pushdown (faster, lower memory)").
+		Done().
 		Flag("-type", "-t").
-			Arg("field").
-				Completer(cf.NoCompleter{Hint: "<field-name>"}).
-				Done().
-			Arg("type").
-				Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "auto"}}).
-				Done().
-			Accumulate().
-			Global().
-			Help("Override type for field: -type zipcode string -type age int").
-			Done().
-
+		Arg("field").
+		Completer(cf.NoCompleter{Hint: "<field-name>"}).
+		Done().
+		Arg("type").
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "auto"}}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Override type for field: -type zipcode string -type age int").
+		Done().
 		Flag("-default-type", "-dt").
-			String().
-			Global().
-			Default("auto").
-			Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
-			Help("Default type for all fields: auto (default), string, int, float, bool").
-			Done().
-
+		String().
+		Global().
+		Default("auto").
+		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
+		Help("Default type for all fields: auto (default), string, int, float, bool").
+		Done().
 		Flag("FILE").
-			String().
-			Variadic().
-			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
-			Global().
-			Default("").
-			Help("Input CSV file(s) (or stdin if not specified)").
-			Done().
-
+		String().
+		Variadic().
+		Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+		Global().
+		Default("").
+		Help("Input CSV file(s) (or stdin if not specified)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var files []string
 			var generate, mergeSchemas bool
@@ -305,7 +297,26 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
 	frag.Params = params
+	// Advisory column types for the record-mode expr transpiler (Phase 4):
+	// the same sampling typed mode trusts. Only without user type
+	// overrides (overrides change runtime types) and only for file input.
+	// Failure to sample is not an error — downstream just uses the VM.
+	if filename != "" && len(typeOverrides) == 0 && (defaultType == "" || defaultType == "auto") {
+		if schema, _, err := lib.SampleCSVSchema(filename, "", 0); err == nil {
+			frag.AdvisoryTypes = advisoryFromSchema(schema)
+		}
+	}
 	return lib.WriteCodeFragment(frag)
+}
+
+// advisoryFromSchema flattens a sampled TypedSchema into the record-mode
+// advisory type map (CSV name → Go type).
+func advisoryFromSchema(schema *lib.TypedSchema) map[string]string {
+	m := make(map[string]string, len(schema.Fields))
+	for _, f := range schema.Fields {
+		m[f.Name] = f.GoType
+	}
+	return m
 }
 
 // generateFromCSVCodeTyped emits a Phase-2 typed-mode init fragment.

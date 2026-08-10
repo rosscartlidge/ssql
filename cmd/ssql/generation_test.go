@@ -711,7 +711,7 @@ func TestNegatedConditionGeneration(t *testing.T) {
 		{
 			name:     "record where +if-expr negates (not dropped)",
 			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where +if-expr 'age > 25' | /tmp/ssql_test generate go`,
-			wantStrs: []string{`MustCompileExprFilter("age > 25")`, `return !exprFilter1(r)`},
+			wantStrs: []string{`return !((ssql.GetOr(r, "age", int64(0)) > 25))`},
 		},
 		{
 			name:     "record update +if negates",
@@ -721,12 +721,12 @@ func TestNegatedConditionGeneration(t *testing.T) {
 		{
 			name:     "record update +if-expr negates (not dropped)",
 			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update +if-expr 'age > 25' -set tag young | /tmp/ssql_test generate go`,
-			wantStrs: []string{`if !exprFilter1(frozen) {`},
+			wantStrs: []string{`if !((ssql.GetOr(frozen, "age", int64(0)) > 25)) {`},
 		},
 		{
 			name:     "record update -if-expr without -if keeps the condition",
 			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update -if-expr 'age > 25' -set tag old | /tmp/ssql_test generate go`,
-			wantStrs: []string{`if exprFilter1(frozen) {`},
+			wantStrs: []string{`if (ssql.GetOr(frozen, "age", int64(0)) > 25) {`},
 		},
 		{
 			name:     "typed where +if negates",
@@ -980,6 +980,116 @@ func TestExprAggTypedGeneration(t *testing.T) {
 		}
 		if !strings.Contains(src, "record fallback") {
 			t.Errorf("-explain output missing the record-fallback note:\n%s", src)
+		}
+	})
+}
+
+// TestRecordNativeExprGeneration locks the record-mode native expression
+// emission (expr-transpiler Phase 4): with advisory column types from the
+// CSV source, -if-expr predicates and -set-expr assignments emit typed
+// GetOr code (no VM var, no runtime type-switch); without advisory types
+// (an intervening stage that doesn't propagate them) the VM path is kept —
+// zero regression.
+func TestRecordNativeExprGeneration(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	tmpFile := "/tmp/recnative_gen_test.csv"
+	if err := os.WriteFile(tmpFile, []byte("dept,salary\na,100\nb,200\n"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(tmpFile)
+
+	t.Run("where predicate goes native", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=record && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test where -if-expr 'salary > 150 && dept != "x"' | /tmp/ssql_test generate go`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate failed: %v\n%s", err, out)
+		}
+		src := string(out)
+		if !strings.Contains(src, `(ssql.GetOr(r, "salary", int64(0)) > 150)`) {
+			t.Errorf("missing native GetOr predicate:\n%s", src)
+		}
+		if strings.Contains(src, "MustCompileExprFilter") {
+			t.Errorf("VM filter var still emitted for a native predicate:\n%s", src)
+		}
+	})
+
+	t.Run("update set-expr goes native typed setter", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=record && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test update -if-expr 'salary > 150' -set-expr salary 'salary * 2' | /tmp/ssql_test generate go`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate failed: %v\n%s", err, out)
+		}
+		src := string(out)
+		if !strings.Contains(src, `mut = mut.Int("salary", (ssql.GetOr(frozen, "salary", int64(0)) * 2))`) {
+			t.Errorf("missing native typed setter:\n%s", src)
+		}
+		if strings.Contains(src, "MustCompileExpr") {
+			t.Errorf("VM eval var still emitted for a native set-expr:\n%s", src)
+		}
+		if strings.Contains(src, "switch v := result.(type)") {
+			t.Errorf("runtime type-switch still emitted for a native set-expr:\n%s", src)
+		}
+	})
+
+	t.Run("no advisory types keeps the VM path", func(t *testing.T) {
+		// sort's fragment doesn't propagate AdvisoryTypes → downstream
+		// where uses the VM exactly as before Phase 4.
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=record && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test sort salary | /tmp/ssql_test where -if-expr 'salary > 150'`+
+				` | /tmp/ssql_test generate go -explain`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate failed: %v\n%s", err, out)
+		}
+		src := string(out)
+		if !strings.Contains(src, "MustCompileExprFilter") {
+			t.Errorf("VM filter var missing without advisory types:\n%s", src)
+		}
+		if !strings.Contains(src, "no advisory column types") {
+			t.Errorf("-explain output missing the no-advisory note:\n%s", src)
+		}
+	})
+
+	t.Run("where propagates advisory types", func(t *testing.T) {
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=record && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test where -if dept eq a | /tmp/ssql_test where -if-expr 'salary > 150'`+
+				` | /tmp/ssql_test generate go`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), `(ssql.GetOr(r, "salary", int64(0)) > 150)`) {
+			t.Errorf("advisory types not propagated through where:\n%s", out)
+		}
+	})
+
+	t.Run("update retype drops the field from advisory", func(t *testing.T) {
+		// salary becomes float64 (division) — a following -if-expr on
+		// salary must NOT use the stale int64 advisory type. The update
+		// propagates salary: float64 (unconditional retype tracked), so
+		// the where should be native with a float64 GetOr — or, if
+		// dropped, VM. Either is sound; stale int64 is the bug.
+		cmd := exec.Command("bash", "-c",
+			`export SSQL_MODE=record && /tmp/ssql_test from `+tmpFile+
+				` | /tmp/ssql_test update -set-expr salary 'salary / 2' | /tmp/ssql_test where -if-expr 'salary > 60'`+
+				` | /tmp/ssql_test generate go`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate failed: %v\n%s", err, out)
+		}
+		if strings.Contains(string(out), `ssql.GetOr(r, "salary", int64(0)) > 60`) {
+			t.Errorf("stale int64 advisory used after a retyping update:\n%s", out)
 		}
 	})
 }

@@ -28,6 +28,15 @@ func TestExprGoNativeZeroAllocs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Record-mode native (Phase 4): same predicate over ssql.GetOr access.
+	recPred, err := exprToGoRecord(`price * float(qty) > 1000 && city != "x"`,
+		map[string]string{"price": "float64", "qty": "int64", "city": "string"}, "rec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recPred.Type != exprGoBool {
+		t.Fatalf("record predicate type: %s", recPred.Type)
+	}
 
 	src := fmt.Sprintf(`package main
 
@@ -79,27 +88,30 @@ func main() {
 	vmPred := runtime.MustCompileExprFilter(%q)
 	nativeSet := func(r Row) float64 { return %s }
 	vmSet := runtime.MustCompileExpr(%q)
+	recPred := func(rec ssql.Record) bool { return %s }
 
 	predAllocs := testing.AllocsPerRun(10000, func() { boolSink = nativePred(rows[0]) })
 	setAllocs := testing.AllocsPerRun(10000, func() { floatSink = nativeSet(rows[0]) })
+	recAllocs := testing.AllocsPerRun(10000, func() { boolSink = recPred(records[0]) })
 
 	const N = 1_000_000
 	nPred := timePerOp(N, func(i int) { boolSink = nativePred(rows[i%%4]) })
 	vPred := timePerOp(N, func(i int) { boolSink = vmPred(records[i%%4]) })
+	rPred := timePerOp(N, func(i int) { boolSink = recPred(records[i%%4]) })
 	nSet := timePerOp(N, func(i int) { floatSink = nativeSet(rows[i%%4]) })
 	vSet := timePerOp(N, func(i int) {
 		v, _ := vmSet(records[i%%4])
 		floatSink, _ = v.(float64)
 	})
 
-	fmt.Printf("pred-native-allocs=%%g set-native-allocs=%%g\n", predAllocs, setAllocs)
-	fmt.Printf("pred-native=%%v pred-vm=%%v set-native=%%v set-vm=%%v\n", nPred, vPred, nSet, vSet)
-	if predAllocs != 0 || setAllocs != 0 {
+	fmt.Printf("pred-native-allocs=%%g set-native-allocs=%%g rec-native-allocs=%%g\n", predAllocs, setAllocs, recAllocs)
+	fmt.Printf("pred-native=%%v pred-vm=%%v pred-record-native=%%v set-native=%%v set-vm=%%v\n", nPred, vPred, rPred, nSet, vSet)
+	if predAllocs != 0 || setAllocs != 0 || recAllocs != 0 {
 		os.Exit(1)
 	}
 	fmt.Println("OK")
 }
-`, pred.Src, `price * float(qty) > 1000 && city != "x"`, set.Src, `price * 1.1`)
+`, pred.Src, `price * float(qty) > 1000 && city != "x"`, set.Src, `price * 1.1`, recPred.Src)
 
 	out := buildAndRunExprProgram(t, src)
 	t.Logf("expr benchmark:\n%s", out)

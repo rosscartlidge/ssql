@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Expr transpiler Phase 4: record-mode `-if-expr`/`-set-expr` go native
+  too.** `from csv FILE` now samples column types in record mode (the same
+  inference typed mode trusts) and carries them as ADVISORY types on its
+  fragment; `where` propagates them and `update` propagates them with
+  retype tracking (an assignment that changes a column's type drops it
+  from the advisory — a following expression will not use a stale type).
+  With advisory types, `where -if-expr` emits a native GetOr predicate
+  (`ssql.GetOr(r, "salary", int64(0)) > 150`) instead of the compiled-VM
+  filter var, and `update -set-expr` collapses the eval + runtime
+  type-switch into ONE typed setter (`mut = mut.Int("salary", …)`) — the
+  result type is known at codegen and native expressions cannot eval-error.
+  Without advisory types (stdin sources, type overrides, an intervening
+  stage that doesn't propagate) the VM path is emitted exactly as before —
+  zero regression, reason under `-explain`. Well-typed-column contract
+  matches typed mode's and the existing `-if` GetOr emission. Measured:
+  record-native predicate 47ns/op, 0 allocs vs 1.5µs VM (~32x). Gated by
+  `TestExprToGoRecord`, `TestRecordNativeExprGeneration` (native emission,
+  VM-without-advisory, propagation, retype safety), the existing
+  record-lane equivalence corpus (now exercising native paths end to end),
+  and the zero-alloc bench.
 - **Expr transpiler Phase 3: `group-by -expr` aggregations run as native
   MERGEABLE accumulators — and keep the parallel group-by.** The expression
   is compiled through exec's own patcher (`ssql.CompileAggExprPatched`, the
