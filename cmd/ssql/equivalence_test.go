@@ -405,33 +405,10 @@ func TestPipelinePermutations(t *testing.T) {
 	data := corpusData(t)
 	repl := strings.NewReplacer("{{.bin}}", bin, "{{.data}}", data)
 
-	stages := []struct{ key, cmd string }{
-		{"where", `{{.bin}} where -if pop gt 5`},
-		// Typed lanes run this NATIVE as of expr-transpiler Phase 1. Only pop
-		// is referenced — the one field every other stage's output retains
-		// (group-by pop -count drops city).
-		{"whereexpr", `{{.bin}} where -if-expr 'pop > 5 && pop != 9'`},
-		{"sort", `{{.bin}} sort pop -desc`},
-		{"limit", `{{.bin}} limit 5`},
-		{"group", `{{.bin}} group-by pop -count cnt`},
-		{"distinct", `{{.bin}} distinct`},
-		// top SORTS its output, so it stays deterministic in every pairing
-		// (even downstream of group-by's unspecified emission order).
-		{"top", `{{.bin}} top 3 -field pop`},
-		// update with a -set-expr derived UNIQUELY from pop: no ties for a
-		// downstream sort/limit/top, references only the field every stage
-		// retains, and puts the expr transpiler's assignment path (native in
-		// typed lanes, advisory-native or VM in record) into every pairing.
-		{"update", `{{.bin}} update -set-expr popx 'pop * 2 + 1'`},
-	}
-	// group|limit is skipped because the PIPELINE itself is nondeterministic:
-	// group-by emission order is unspecified, so "first 5 groups" legitimately
-	// differs between lanes. Not a translation bug — there is nothing to agree on.
-	nondeterministic := map[string]bool{"group|limit": true}
-
+	stages := permStages()
 	for i, a := range stages {
 		for j, b := range stages {
-			if i == j || nondeterministic[a.key+"|"+b.key] {
+			if i == j || permOrderHazard([]string{a.key, b.key}) {
 				continue
 			}
 			c := EquivCase{
@@ -444,6 +421,120 @@ func TestPipelinePermutations(t *testing.T) {
 				t.Parallel()
 				runEquivCase(t, bin, repl.Replace(c.Pipeline), c)
 			})
+		}
+	}
+}
+
+// permStages is the stage set shared by the pair and triple permutation
+// gates. Every stage references only `pop` — the one field every other
+// stage's output retains (group-by pop -count drops city).
+func permStages() []struct{ key, cmd string } {
+	return []struct{ key, cmd string }{
+		{"where", `{{.bin}} where -if pop gt 5`},
+		// Typed lanes run this NATIVE as of expr-transpiler Phase 1.
+		{"whereexpr", `{{.bin}} where -if-expr 'pop > 5 && pop != 9'`},
+		{"sort", `{{.bin}} sort pop -desc`},
+		{"limit", `{{.bin}} limit 5`},
+		{"group", `{{.bin}} group-by pop -count cnt`},
+		{"distinct", `{{.bin}} distinct`},
+		// top SORTS its output, so it stays deterministic even downstream
+		// of group-by's unspecified emission order.
+		{"top", `{{.bin}} top 3 -field pop`},
+		// update with a -set-expr derived UNIQUELY from pop: no ties for a
+		// downstream sort/limit/top, and it puts the expr transpiler's
+		// assignment path (native in typed lanes, advisory-native or VM in
+		// record) into every combination.
+		{"update", `{{.bin}} update -set-expr popx 'pop * 2 + 1'`},
+	}
+}
+
+// permOrderHazard reports whether a stage sequence is INHERENTLY
+// nondeterministic — not a translation bug, so the lanes have nothing to
+// agree on. The one hazard: group-by's emission order is unspecified, so a
+// positional `limit` downstream of `group` is "first N of an unspecified
+// order" — unless an order-restoring stage (sort, or top, which sorts by
+// value) intervenes. Every other stage is either order-insensitive under
+// the multiset comparison or selects by VALUE rather than position.
+func permOrderHazard(keys []string) bool {
+	unordered := false
+	for _, k := range keys {
+		switch k {
+		case "group":
+			unordered = true
+		case "sort", "top":
+			unordered = false
+		case "limit":
+			if unordered {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestPermOrderHazard pins the exclusion rule — excluding too much would
+// silently shrink coverage; too little makes the gate flaky.
+func TestPermOrderHazard(t *testing.T) {
+	cases := []struct {
+		seq  []string
+		want bool
+	}{
+		{[]string{"group", "limit"}, true},
+		{[]string{"limit", "group"}, false},
+		{[]string{"group", "where", "limit"}, true},   // where preserves the unspecified order
+		{[]string{"group", "sort", "limit"}, false},   // sort restores order
+		{[]string{"group", "top", "limit"}, false},    // top sorts by value
+		{[]string{"group", "update", "limit"}, true},  // update preserves order
+		{[]string{"where", "group", "distinct"}, false},
+		{[]string{"sort", "group", "limit"}, true}, // sort BEFORE group doesn't help
+	}
+	for _, c := range cases {
+		if got := permOrderHazard(c.seq); got != c.want {
+			t.Errorf("permOrderHazard(%v) = %v, want %v", c.seq, got, c.want)
+		}
+	}
+}
+
+// TestPipelinePermutationTriples is the opt-in SLOW gate: every ordered
+// TRIPLE of the permutation stage set (8·7·6 = 336 pipelines minus order
+// hazards), each through every lane. Wall-clock is several minutes even
+// parallelized, so it runs only with SSQL_PERM_TRIPLES=1 — intended for
+// pre-release checklists and after codegen-touching changes, not every
+// test invocation. Rationale: each historical stage-ordering bug was found
+// exactly when this family was widened; triples cover wrap-of-wrap
+// interactions pairs cannot.
+func TestPipelinePermutationTriples(t *testing.T) {
+	if testing.Short() {
+		t.Skip("permutation triples are slow")
+	}
+	if os.Getenv("SSQL_PERM_TRIPLES") == "" {
+		t.Skip("set SSQL_PERM_TRIPLES=1 to run the 3-stage permutation gate (several minutes)")
+	}
+	bin := corpusBin(t)
+	data := corpusData(t)
+	repl := strings.NewReplacer("{{.bin}}", bin, "{{.data}}", data)
+
+	stages := permStages()
+	for i, a := range stages {
+		for j, b := range stages {
+			for k, c := range stages {
+				if i == j || j == k || i == k {
+					continue
+				}
+				if permOrderHazard([]string{a.key, b.key, c.key}) {
+					continue
+				}
+				ec := EquivCase{
+					Name: "perm3_" + a.key + "_" + b.key + "_" + c.key,
+					Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} sort id | ` +
+						a.cmd + ` | ` + b.cmd + ` | ` + c.cmd,
+					Ordered: false,
+				}
+				t.Run(ec.Name, func(t *testing.T) {
+					t.Parallel()
+					runEquivCase(t, bin, repl.Replace(ec.Pipeline), ec)
+				})
+			}
 		}
 	}
 }
