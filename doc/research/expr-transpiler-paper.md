@@ -188,10 +188,73 @@ Three findings generalize beyond this codebase:
    An unknown field in a typed pipeline is a typo: fail at codegen,
    listing the schema. An unknown field in record mode may be a
    legitimately reshaped row: fall back to the VM, which validates
-   against the real first record. `sum(salary)/len(salary)` looks like a
-   typo but is *working* interpreter code (the array binding) — making
-   it loud would have broken running pipelines. Getting this wrong in
+   against the real first record. Worked through in §3.1: the same
+   mechanical signal — an unresolved identifier — demands *opposite*
+   responses depending on where it occurs, and getting it wrong in
    either direction is a user-visible regression.
+
+### 3.1 Worked example: `sum(salary) / len(salary)`
+
+This aggregation expression is the sharpest instance of lesson 3, and it
+turns on a quirk of the interpreter's evaluation environment. When exec
+evaluates `group-by region -expr '…'`, it materializes each group and
+builds the env (`buildAggBatchEnv`) for a group of, say, three rows with
+salaries 100, 200, 300 as:
+
+```
+_records = [{salary:100,…}, {salary:200,…}, {salary:300,…}]
+salary   = [100, 200, 300]     ← every field is ALSO bound to the
+region   = ["east","east","east"]  array of its values across the group
+```
+
+A bare field name used *outside* an aggregation function therefore
+evaluates to the group's **value array**. Tracing the expression:
+
+- `sum(salary)`: `sum` is a recognized aggregation, so the AST patcher
+  rewrites it to `sum(_records, #.salary)` — iterate the rows, take each
+  row's salary → 600.
+- `len(salary)`: `len` is *not* an aggregation function, so the patcher
+  leaves it alone; `salary` stays a bare identifier and resolves to the
+  array `[100, 200, 300]`; `len` of it is 3 — the group size.
+- `600 / 3 = 200`: average salary. Accidental idiom or not, this is
+  *legal, working interpreter behaviour* that a user's pipeline may rely
+  on.
+
+The typed lowering cannot express it. Accumulators exist precisely so
+the per-group value arrays are *never materialized* (that is where E2's
+2.45 GB → 328 MB comes from); the outer expression runs once per group
+over accumulated scalars, with no row and no array in scope. Supporting
+the array binding natively would require building the very structure the
+lowering exists to eliminate.
+
+So when the outer walk hits the bare `salary`, it sees an unresolved
+identifier — mechanically indistinguishable from a typo. The reflexive
+response under the project's fail-loudly rule would be a codegen error.
+That would have **broken a working pipeline**. Instead the lowering
+treats an unresolved identifier in the *outer* position as a quiet
+refusal: the stage falls back to record codegen, which reproduces the
+array semantics exactly, and `-explain` states the reason:
+
+```
+[plan] … : record fallback (-expr v: aggregation expression references a
+       field outside sum()/avg() — the VM binds it to the group's value
+       ARRAY, which has no typed lowering: unknown field "salary" …)
+```
+
+Contrast `sum(nope * 2)`: an unknown name *inside* the aggregation,
+where scope is per-row and the interpreter's own compiler rejects it
+too. Invalid in every mode → loud codegen error. Same signal, opposite
+correct responses, distinguished only by evaluation context — which is
+why this classification cannot be a blanket policy and had to be decided
+construct by construct against the interpreter's actual behaviour.
+
+The practical guidance that falls out: write `sum(salary) / count()` (or
+`avg(salary)`) — `count()` lowers to the shared counter and the whole
+expression stays on the native, parallel path; `len(field)` as a
+group-size idiom keeps working, on the VM fallback. A future
+canonicalization could rewrite `len(field)` → `count()` automatically
+(safe, since every row contributes a value to the field array), at which
+point the idiom would regain the native path without user action.
 
 ## 4. Correctness methodology
 
