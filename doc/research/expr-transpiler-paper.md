@@ -207,8 +207,35 @@ salary   = [100, 200, 300]     ← every field is ALSO bound to the
 region   = ["east","east","east"]  array of its values across the group
 ```
 
-A bare field name used *outside* an aggregation function therefore
-evaluates to the group's **value array**. Tracing the expression:
+The array binding is deliberate, and it is ssql's own code, not
+expr-lang's: `buildAggBatchEnv` (expr_agg.go), called per group from
+`ssql.ExprAgg`'s aggregation function, makes one pass over the group's
+rows building *both* representations at once —
+
+```go
+for _, r := range records {
+    recMap := make(map[string]any)
+    for k, v := range r.All() {
+        fieldValues[k] = append(fieldValues[k], v) // the column array
+        recMap[k] = v
+    }
+    recordMaps = append(recordMaps, recMap)
+}
+// "Add field arrays to env"
+for field, values := range fieldValues { env[field] = values }
+env["_records"] = recordMaps
+```
+
+— so a bare field name used *outside* an aggregation function evaluates
+to the group's **value array**, enabling column-as-array idioms
+(`len(salary)`, `salary[0]`). Note the memory shape this implies: per
+group, per expression evaluation, the data exists three times over — the
+materialized `[]Record`, the `recordMaps` the patched `sum(_records, …)`
+iterates, and a boxed `[]any` copy of every column. This
+triple-representation is a substantial part of E2's 2.4 GB exec/record
+peak RSS (§5.3); the transpiled accumulators build none of it.
+
+Tracing the expression:
 
 - `sum(salary)`: `sum` is a recognized aggregation, so the AST patcher
   rewrites it to `sum(_records, #.salary)` — iterate the rows, take each
