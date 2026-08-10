@@ -992,7 +992,7 @@ ssql update -set-expr total 'price * qty'
 ssql update -set-expr tier 'revenue > 10000 ? "gold" : "silver"'
 
 # Complex filtering with boolean expressions
-ssql where -expr 'age >= 18 and status == "active"'
+ssql where -if-expr 'age >= 18 and status == "active"'
 ```
 
 <details>
@@ -1014,7 +1014,7 @@ echo 'name,age,email,status
 Alice,30,alice@example.com,active
 Bob,17,bob@example.com,pending
 Carol,25,carol@example.com,active' | ssql from | \
-  ssql where -expr 'age >= 18 and status == "active" and has("email")'
+  ssql where -if-expr 'age >= 18 and status == "active" and has("email")'
 
 # String manipulation
 echo 'email
@@ -1072,7 +1072,7 @@ func main() {
 - **Code generation** - Expressions pre-compiled in generated Go programs
 
 **Use Cases:**
-- **Data validation** - `where -expr 'age >= 0 and age <= 120 and has("email")'`
+- **Data validation** - `where -if-expr 'age >= 0 and age <= 120 and has("email")'`
 - **Data cleaning** - `update -set-expr email 'lower(trim(email))'`
 - **Calculations** - `update -set-expr total 'round(price * qty * (1 - discount / 100))'`
 - **Categorization** - `update -set-expr tier 'revenue > 10000 ? "gold" : "silver"'`
@@ -1081,12 +1081,15 @@ func main() {
 **Performance:**
 ```bash
 # CLI execution (~1ms overhead for 1M records)
-ssql from huge.csv | ssql where -expr 'price * qty > 1000'
+ssql from huge.csv | ssql where -if-expr 'price * qty > 1000'
 
-# Code generation (10-100x faster, zero compilation overhead)
-export SSQL_MODE=record
+# Code generation: expressions transpile to native Go (v4.57.0+) —
+# ~3ns/row with zero allocations instead of ~1.3µs of interpreted VM,
+# and a measured 19x end-to-end on a 5M-row filter+aggregate pipeline
+# (use -explain to see the chosen tier per expression)
+export SSQL_MODE=parallel
 ssql from huge.csv | \
-  ssql where -expr 'price * qty > 1000' | \
+  ssql where -if-expr 'price * qty > 1000' | \
   ssql update -set-expr total 'price * qty' | \
   ssql generate go > optimized.go
 go run optimized.go

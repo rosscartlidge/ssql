@@ -497,34 +497,45 @@ ssql from data.csv | \
 go run program.go
 ```
 
-**Generated code features:**
-- Expressions pre-compiled at package init (~100µs one-time cost)
-- Zero compilation overhead at runtime
-- Clean, readable Go code
-- Full type safety
+**Generated code features (v4.57.0+):**
+- Expressions **transpile to native Go** in generated programs — a
+  predicate like `price * qty > 1000` becomes plain Go comparisons, not
+  an interpreted evaluation (typed, parallel, AND record modes)
+- Zero allocations per row on the native path (~3ns/row typed,
+  ~28ns/row record — vs ~1.3µs + 1KB of garbage per row for the
+  interpreted VM it replaced)
+- Expressions outside the native subset automatically fall back to the
+  embedded VM **per expression** — the rest of the pipeline keeps its
+  typed/parallel form. Run `generate go -explain` to see the chosen
+  tier and reason for every expression
+- Clean, readable Go code; full type safety
 
 ## Performance
 
-**Expression Compilation:**
-- **Compile-time:** ~100 microseconds per expression (one-time cost)
-- **Runtime:** ~1-2 microseconds per evaluation
-- **Total overhead:** <1 millisecond for typical pipelines (1M records)
+**Interpreted execution (the `ssql` CLI itself):**
+- Expressions compile once at startup (~100 microseconds), then
+  evaluate at ~1-2 microseconds per record via the expr-lang VM
 
-**Optimization Strategy:**
-- Expressions are compiled **once** at startup
-- Reusable evaluation function called for each record
-- Minimal memory allocation per evaluation
-
-**Code Generation Performance:**
-- Expressions pre-compiled at package init time
-- Zero compilation overhead during execution
-- Typically **10-100x faster** than CLI for large datasets
+**Generated code (`generate go`, v4.57.0+):**
+- Native-subset expressions cost single-digit nanoseconds per row with
+  zero allocations; measured end-to-end on 5M rows, an expression
+  filter + group-by pipeline runs ~19x faster (and in 3.6x less
+  memory) than the pre-4.57 generated code, and `-stream-expr` folds
+  drop from gigabytes to megabytes of peak memory (see
+  `doc/research/expr-transpiler-paper.md` for the full measurements)
+- `group-by -expr` aggregations generate mergeable accumulators and
+  keep the parallel group-by; `-stream-expr` folds generate typed
+  accumulators (serial — folds don't merge)
 
 **Best Practices:**
 1. ✅ Use expressions for complex logic (vs. multiple commands)
-2. ✅ Pre-filter with simple `-if` before expensive expressions
-3. ✅ Use code generation for production workloads
-4. ✅ Profile with `SSQL_MODE=record` to generate optimized programs
+2. ✅ Use code generation for production workloads
+3. ✅ Check `generate go -explain` — it names the tier per expression;
+   an unexpected "VM" or "record fallback" note tells you exactly which
+   construct to rewrite for the native path
+4. ✅ In `group-by -expr`, prefer `count()` (native, parallel) over the
+   `len(field)` group-size idiom — the latter relies on the VM's
+   per-group value-array binding and forces a record fallback
 
 ## Examples by Use Case
 
