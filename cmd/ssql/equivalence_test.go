@@ -300,6 +300,95 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 	}
 }
 
+// TestFlagExprMetamorphic is convergence Phase A
+// (doc/research/flag-expr-convergence.md): for every flag operator, the flag
+// form and its expression equivalent must produce IDENTICAL output — in every
+// lane. `FIELD OP VALUE` is lowered independently in five places (exec
+// applyOperator, record generateCondition, update's generateConditionCode,
+// typed typedWhereCondition, SQL translateWhere) while the expression form
+// goes through the transpiler; this gate pins the two surfaces to one
+// semantics before any lowering is converged.
+//
+// Mechanics: each pipeline must be internally lane-consistent
+// (runEquivCase), and the two exec outputs must agree (the metamorphic
+// assertion) — together that pins all lanes of both pipelines to each other.
+func TestFlagExprMetamorphic(t *testing.T) {
+	if testing.Short() {
+		t.Skip("equivalence tests are slow (each lane compiles + runs)")
+	}
+	bin := corpusBin(t)
+	data := corpusData(t)
+
+	pairs := []struct {
+		name     string
+		flag     string            // stage in flag syntax
+		expr     string            // the same stage in expression syntax
+		skipFlag map[string]string // lanes the FLAG form cannot run (known capability gaps)
+	}{
+		{name: "eq_int", flag: `where -if pop eq 20`, expr: `where -if-expr 'pop == 20'`},
+		{name: "eq_string", flag: `where -if city eq Oslo`, expr: `where -if-expr 'city == "Oslo"'`},
+		{name: "ne_string", flag: `where -if city ne Oslo`, expr: `where -if-expr 'city != "Oslo"'`},
+		{name: "gt_int", flag: `where -if pop gt 15`, expr: `where -if-expr 'pop > 15'`},
+		{name: "ge_int", flag: `where -if pop ge 14`, expr: `where -if-expr 'pop >= 14'`},
+		{name: "lt_int", flag: `where -if pop lt 10`, expr: `where -if-expr 'pop < 10'`},
+		{name: "le_int", flag: `where -if pop le 10`, expr: `where -if-expr 'pop <= 10'`},
+		{
+			// Lexicographic string ordering — exec's compareGreater does it;
+			// every codegen backend must agree.
+			name: "gt_string", flag: `where -if city gt Lima`, expr: `where -if-expr 'city > "Lima"'`,
+		},
+		{name: "contains", flag: `where -if city contains an`, expr: `where -if-expr 'city contains "an"'`},
+		{name: "startswith", flag: `where -if city startswith L`, expr: `where -if-expr 'city startsWith "L"'`},
+		{name: "endswith", flag: `where -if city endswith o`, expr: `where -if-expr 'city endsWith "o"'`},
+		{
+			name: "regex", flag: `where -if city regex ^[A-M]`, expr: `where -if-expr 'city matches "^[A-M]"'`,
+			skipFlag: map[string]string{
+				"go-typed":    "-if regex is a Tier-3 error in typed codegen (the expr form is native — a convergence unlock)",
+				"go-parallel": "-if regex is a Tier-3 error in typed codegen",
+			},
+		},
+		{name: "negated_if", flag: `where +if pop gt 15`, expr: `where +if-expr 'pop > 15'`},
+		{name: "negated_string_op", flag: `where +if city contains an`, expr: `where +if-expr 'city contains "an"'`},
+		{name: "and_conditions", flag: `where -if pop gt 5 -if city ne Oslo`, expr: `where -if-expr 'pop > 5 && city != "Oslo"'`},
+		{name: "or_clauses", flag: `where -if pop gt 25 + -if city eq Lima`, expr: `where -if-expr 'pop > 25 || city == "Lima"'`},
+		// Update pairs -set an EXISTING field: a conditional -set on a NEW
+		// field has no SQL translation (loud by design), which would knock
+		// out the duckdb lane for both forms.
+		{name: "update_if", flag: `update -if pop gt 15 -set city big`, expr: `update -if-expr 'pop > 15' -set city big`},
+		{name: "update_negated", flag: `update +if pop gt 15 -set city small`, expr: `update +if-expr 'pop > 15' -set city small`},
+		{
+			// String ordering through update's OWN condition emission
+			// (generateConditionCode had the same unconditional-numeric bug
+			// as where's — worse: float64(0) > "Lima" didn't compile).
+			name: "update_string_gt", flag: `update -if city gt Lima -set pop 0`, expr: `update -if-expr 'city > "Lima"' -set pop 0`,
+		},
+	}
+
+	for _, p := range pairs {
+		p := p
+		t.Run(p.name, func(t *testing.T) {
+			t.Parallel()
+			pipeFlag := bin + " from csv " + data + "/shuffled.csv | " + bin + " " + p.flag
+			pipeExpr := bin + " from csv " + data + "/shuffled.csv | " + bin + " " + p.expr
+
+			// Each pipeline internally lane-consistent.
+			runEquivCase(t, bin, pipeFlag, EquivCase{Name: p.name + "_flag", Skip: p.skipFlag})
+			runEquivCase(t, bin, pipeExpr, EquivCase{Name: p.name + "_expr"})
+
+			// The metamorphic assertion: exec(flag) == exec(expr).
+			flagOut := equivCanon(equivParse(t, "exec-flag",
+				equivShell(t, "exec-flag", pipeFlag+" | "+bin+" to jsonl")), false)
+			exprOut := equivCanon(equivParse(t, "exec-expr",
+				equivShell(t, "exec-expr", pipeExpr+" | "+bin+" to jsonl")), false)
+			if !slices.Equal(flagOut, exprOut) {
+				t.Errorf("flag form and expression form disagree in exec:\n  %s → %s\n  %s → %s",
+					p.flag, strings.Join(flagOut, " "),
+					p.expr, strings.Join(exprOut, " "))
+			}
+		})
+	}
+}
+
 // TestPipelinePermutations enumerates every ordered PAIR of a small stage set
 // and runs each 2-stage pipeline through all lanes. Rationale: each v4.56
 // stage-order bug (limit|group-by flattened wrong, update|group-by invalid,

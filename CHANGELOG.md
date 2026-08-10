@@ -5,6 +5,25 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Bug Fixes
+- **Flag-vs-expression metamorphic gate + three bugs it caught on its
+  first run.** New `TestFlagExprMetamorphic` (convergence Phase A,
+  `doc/research/flag-expr-convergence.md`) asserts that `-if FIELD OP
+  VALUE` and its `-if-expr` equivalent produce identical output in every
+  lane, for all 10 operators plus negation, AND/OR composition, and
+  update conditions. Found and fixed: (1) record `where` codegen emitted
+  gt/ge/lt/le numerically UNCONDITIONALLY — `-if city gt Lima` silently
+  returned ZERO rows (exec compares strings lexicographically); it now
+  branches on the advisory field type like exec branches on the runtime
+  type. (2) record `update` codegen had the same bug worse —
+  `float64(0) > "Lima"` didn't compile. (3) typed codegen emitted
+  `strings.Contains/HasPrefix/HasSuffix` for contains/startswith/endswith
+  conditions without importing `strings` — generated programs failed to
+  compile in both typed lanes. The sabotage check (ge→gt) was watched
+  failing before the gate was trusted.
+
 ## [v4.57.0] - 2026-08-10
 
 ### New Features

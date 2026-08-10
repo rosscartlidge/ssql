@@ -253,6 +253,9 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 			if err != nil {
 				return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 			}
+			if opNeedsStrings(cd.op) {
+				exprImports = append(exprImports, "strings")
+			}
 			if cd.negated {
 				expr = "!(" + expr + ")"
 			}

@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -589,7 +590,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				if condCount > 0 {
 					codeBody.WriteString(" && ")
 				}
-				condCode := generateConditionCode(cond.Field, cond.Operator, cond.Value)
+				condCode := generateConditionCode(cond.Field, cond.Operator, cond.Value, advisoryTypeOf(advisory, cond.Field))
 				if cond.Negated {
 					condCode = "!(" + condCode + ")"
 				}
@@ -781,7 +782,12 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 }
 
 // generateConditionCode generates the Go code for a single condition check
-func generateConditionCode(field, op, value string) string {
+// goType is the advisory field type ("" = unknown): exec's applyOperator
+// branches comparisons on the FIELD's runtime type, so codegen must too —
+// the old unconditional numeric emission for gt/ge/lt/le made
+// `-if city gt Lima` emit `float64(0) > "Lima"` (a compile error, caught
+// by TestFlagExprMetamorphic).
+func generateConditionCode(field, op, value, goType string) string {
 	switch op {
 	case "eq":
 		return fmt.Sprintf("ssql.GetOr(frozen, %q, %s) == %s",
@@ -790,9 +796,22 @@ func generateConditionCode(field, op, value string) string {
 		return fmt.Sprintf("ssql.GetOr(frozen, %q, %s) != %s",
 			field, getDefaultValueForComparison(value), getComparisonValue(value))
 	case "gt", "ge", "lt", "le":
-		// Numeric comparisons
-		return fmt.Sprintf("ssql.GetOr(frozen, %q, float64(0)) %s %s",
-			field, getOperatorCode(op), getComparisonValue(value))
+		numeric := false
+		switch goType {
+		case "int64", "float64":
+			numeric = true
+		case "string":
+			numeric = false
+		default:
+			_, err := strconv.ParseFloat(value, 64)
+			numeric = err == nil
+		}
+		if numeric {
+			return fmt.Sprintf("ssql.GetOr(frozen, %q, float64(0)) %s %s",
+				field, getOperatorCode(op), getComparisonValue(value))
+		}
+		return fmt.Sprintf("ssql.GetOr(frozen, %q, \"\") %s %q",
+			field, getOperatorCode(op), value)
 	case "contains":
 		return fmt.Sprintf("strings.Contains(ssql.GetOr(frozen, %q, \"\"), %s)",
 			field, getComparisonValue(value))

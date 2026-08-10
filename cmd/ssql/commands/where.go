@@ -319,6 +319,9 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 				if err != nil {
 					return true, lib.WriteErrorAndExit(getCommandString(), err)
 				}
+				if opNeedsStrings(op) {
+					imports = append(imports, "strings")
+				}
 				if negated {
 					cond = "!(" + cond + ")"
 				}
@@ -475,6 +478,32 @@ func typedLiteral(goType, value string) (string, error) {
 	}
 }
 
+// opNeedsStrings reports whether a flag operator's typed emission calls
+// into the strings package (typedWhereCondition emits strings.Contains/
+// HasPrefix/HasSuffix — the import must ride the fragment, which was
+// missed until TestFlagExprMetamorphic caught the compile failure).
+func opNeedsStrings(op string) bool {
+	switch op {
+	case "contains", "startswith", "endswith":
+		return true
+	}
+	return false
+}
+
+// advisoryTypeOf looks up a field's advisory Go type case-insensitively;
+// "" when unknown (no advisory, or field not in it).
+func advisoryTypeOf(advisory map[string]string, field string) string {
+	if t, ok := advisory[field]; ok {
+		return t
+	}
+	for name, t := range advisory {
+		if strings.EqualFold(name, field) {
+			return t
+		}
+	}
+	return ""
+}
+
 func fieldNamesList(s *lib.TypedSchema) string {
 	names := make([]string, len(s.Fields))
 	for i, f := range s.Fields {
@@ -529,8 +558,10 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]strin
 						continue
 					}
 
-					// Generate condition code with parameterized value
-					cond, imp, param := generateCondition(field, op, value, flagSeen)
+					// Generate condition code with parameterized value.
+					// The advisory field type (when known) picks numeric vs
+					// string comparison, matching exec's field-type branch.
+					cond, imp, param := generateCondition(field, op, value, advisoryTypeOf(advisory, field), flagSeen)
 					if negated {
 						cond = "!(" + cond + ")"
 					}
@@ -624,7 +655,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]strin
 // identical `*flagPopGt` references in one fragment are indistinguishable there
 // (both got the last name, silently replacing the first value; three didn't
 // compile).
-func generateCondition(field, op, value string, seen map[string]int) (string, []string, *lib.CodeParam) {
+func generateCondition(field, op, value, goType string, seen map[string]int) (string, []string, *lib.CodeParam) {
 	var imports []string
 
 	// Build flag name and var name: e.g., "age-gt" → flagAgeGt
@@ -643,34 +674,29 @@ func generateCondition(field, op, value string, seen map[string]int) (string, []
 		VarName: varName,
 	}
 
-	// Detect if value is numeric
+	// Comparison typing: exec's applyOperator branches on the FIELD's
+	// runtime type — string fields compare lexicographically, numeric
+	// fields numerically. With an advisory field type (goType, from the
+	// sampling source) we branch the same way; without one, fall back to
+	// the value-form heuristic. Before this branch existed, gt/ge/lt/le
+	// were emitted numerically UNCONDITIONALLY — `-if city gt Lima`
+	// silently returned zero rows (caught by TestFlagExprMetamorphic).
 	_, err := strconv.ParseFloat(value, 64)
-	isNum := err == nil
+	numeric := err == nil
+	switch goType {
+	case "string":
+		numeric = false
+	case "int64", "float64":
+		numeric = true
+	}
 
 	switch op {
-	case "eq":
-		if isNum {
-			return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) == ssql.ParseFloat64(*%s)", field, varName), nil, param
+	case "eq", "ne", "gt", "ge", "lt", "le":
+		sym := map[string]string{"eq": "==", "ne": "!=", "gt": ">", "ge": ">=", "lt": "<", "le": "<="}[op]
+		if numeric {
+			return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) %s ssql.ParseFloat64(*%s)", field, sym, varName), nil, param
 		}
-		return fmt.Sprintf("ssql.GetOr(r, %q, \"\") == *%s", field, varName), nil, param
-
-	case "ne":
-		if isNum {
-			return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) != ssql.ParseFloat64(*%s)", field, varName), nil, param
-		}
-		return fmt.Sprintf("ssql.GetOr(r, %q, \"\") != *%s", field, varName), nil, param
-
-	case "gt":
-		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) > ssql.ParseFloat64(*%s)", field, varName), nil, param
-
-	case "ge":
-		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) >= ssql.ParseFloat64(*%s)", field, varName), nil, param
-
-	case "lt":
-		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) < ssql.ParseFloat64(*%s)", field, varName), nil, param
-
-	case "le":
-		return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) <= ssql.ParseFloat64(*%s)", field, varName), nil, param
+		return fmt.Sprintf("ssql.GetOr(r, %q, \"\") %s *%s", field, sym, varName), nil, param
 
 	case "contains":
 		imports = append(imports, "strings")

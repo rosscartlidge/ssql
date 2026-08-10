@@ -104,6 +104,38 @@ untouched). Only the *final emission step* changes.
 
 ### Phase A — pin current behaviour before touching anything
 
+> **✅ SHIPPED 2026-08-10 — and it found three real bugs on its first
+> run**, vindicating the gates-first sequencing. `TestFlagExprMetamorphic`
+> (equivalence_test.go): 19 pairs covering all 10 operators, negation,
+> AND/OR clause composition, and update conditions; each pair asserts
+> internal lane-consistency of BOTH pipelines plus exec(flag)==exec(expr).
+> Found and fixed:
+> 1. **Record `where` string ordering silently returned zero rows** —
+>    `generateCondition` emitted gt/ge/lt/le numerically UNCONDITIONALLY,
+>    so `-if city gt Lima` compared `float64(0) > 0` on every row (exec
+>    compares lexicographically). Now branches on the advisory field type
+>    when known (exactly exec's field-type branch), value-form heuristic
+>    otherwise.
+> 2. **Record `update` string ordering didn't even compile** — the same
+>    unconditional-numeric emission in `generateConditionCode` produced
+>    `float64(0) > "Lima"`. Same fix.
+> 3. **Typed contains/startswith/endswith emitted `strings.*` without
+>    importing `strings`** — generated programs failed to compile in both
+>    typed lanes (where AND typed-update paths). Import now rides the
+>    fragment.
+> Watched failing: a sabotaged `ge`→`gt` emission was caught by the
+> `ge_int` pair's go-record lane. Known capability gap encoded in the
+> gate: `-if … regex` is a Tier-3 error in typed codegen (skip'd lanes) —
+> the expression form is native, which is convergence unlock C.7.
+>
+> Residual divergences documented, deliberately NOT changed in Phase A:
+> a string-typed field compared against a numeric-looking value takes the
+> numeric branch in codegen without advisory types (exec branches on the
+> runtime field type); an int64 field compared via `-if f gt 15.5` is
+> silently false-for-every-row in exec (`ParseInt` fails) while
+> `-if-expr 'f > 15.5'` compares numerically — these are audit-table
+> items for Phase B's shared lowering to resolve, not quiet fixes.
+
 1. **Semantic audit table.** For each operator × field type × backend,
    document today's behaviour: numeric coercion in `applyOperator` vs
    `GetOr(float64)` in record codegen vs `typedLiteral` in typed codegen
