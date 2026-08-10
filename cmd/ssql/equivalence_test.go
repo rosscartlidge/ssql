@@ -341,11 +341,10 @@ func TestFlagExprMetamorphic(t *testing.T) {
 		{name: "startswith", flag: `where -if city startswith L`, expr: `where -if-expr 'city startsWith "L"'`},
 		{name: "endswith", flag: `where -if city endswith o`, expr: `where -if-expr 'city endsWith "o"'`},
 		{
+			// Phase B unlock (C.7): `-if … regex` was a Tier-3 error in typed
+			// codegen; the shared lowering gives it the hoisted-pattern
+			// emission the expression form always had — all lanes run.
 			name: "regex", flag: `where -if city regex ^[A-M]`, expr: `where -if-expr 'city matches "^[A-M]"'`,
-			skipFlag: map[string]string{
-				"go-typed":    "-if regex is a Tier-3 error in typed codegen (the expr form is native — a convergence unlock)",
-				"go-parallel": "-if regex is a Tier-3 error in typed codegen",
-			},
 		},
 		{name: "negated_if", flag: `where +if pop gt 15`, expr: `where +if-expr 'pop > 15'`},
 		{name: "negated_string_op", flag: `where +if city contains an`, expr: `where +if-expr 'city contains "an"'`},
@@ -716,6 +715,28 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 		Skip: map[string]string{
 			"duckdb": "sha256 has no exprToSQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// Expression canonicalization (convergence Phase C): the ssql-opt
+		// lane rewrites this -if-expr into structured -if conditions and
+		// then range-tightens them (`pop > 9 && pop > 5` → `-if pop gt 9`)
+		// — the optimized pipeline must still agree with every other lane.
+		// The binding term sits ON a fixture boundary (Hanoi pop=9) so a
+		// wrong operator mapping (gt↔ge) actually diverges; the negated
+		// single-term (+if-expr → +if) canonicalizes too. Golden = pop > 9
+		// AND NOT city == "Oslo".
+		Name:     "where_expr_canonicalized",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if-expr 'pop > 9 && pop > 5' +if-expr 'city == "Oslo"'`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 7, "city": "Mumbai", "pop": 20},
+			{"id": 3, "city": "Cairo", "pop": 10},
+			{"id": 5, "city": "Tokyo", "pop": 37},
+			{"id": 2, "city": "Delhi", "pop": 29},
+			{"id": 8, "city": "Lagos", "pop": 14},
+			{"id": 4, "city": "Paris", "pop": 11},
+			{"id": 11, "city": "Bogota", "pop": 25},
 		},
 	},
 	{

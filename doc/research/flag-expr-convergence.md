@@ -155,6 +155,38 @@ untouched). Only the *final emission step* changes.
 
 ### Phase B — the shared lowering
 
+> **✅ SHIPPED 2026-08-10.** `condOpToExprGo` (`expr_cond.go`) is the one
+> operator lowering; `typedWhereCondition`, `generateCondition` and
+> `generateConditionCode` are now thin wrappers that resolve the FIELD for
+> their backend (struct access / advisory-typed GetOr / heuristic GetOr —
+> the part that legitimately differs) and delegate the OPERATOR. The
+> comparison emission itself is `exprCompare`, extracted from the
+> expression walker — so `-if pop gt X` and `pop > X` share one
+> implementation by construction. What changed beyond the deletion:
+> - **`regex` works in typed mode** (unlock C.7 landed early): literal
+>   patterns hoist a content-addressed compiled var, exactly like the
+>   expression form's `matches`; the metamorphic regex pair now runs ALL
+>   lanes. Patterns are also validated at codegen (invalid regex used to
+>   panic at generated-program startup — or, in record where, PER ROW).
+> - **Record update's literal regexes are hoisted** instead of recompiled
+>   per row; record where's parameterized patterns still compile at the
+>   call site (a flag value doesn't exist until flag.Parse).
+> - **Unknown operators are loud codegen errors** — record where's old
+>   `default:` silently emitted `false` (every row dropped, no message).
+> - **Bool-field conditions** (eq/ne, incl. parameterized) gained a typed
+>   emission; ordering operators on bool are loud errors.
+> - Cosmetic: shared emissions parenthesize conditions (`(r.Age > 25)`),
+>   and numeric literals ride as untyped constants — generation-test pins
+>   updated, semantics gated unchanged by the metamorphic suite.
+> - The parameter-reference RHS (4.) landed as planned: record where keeps
+>   its runtime `-pop-gt`-style flags through the shared lowering.
+> - Gates: TestCondOpToExprGo (per-op pins across typed/record/param lhs
+>   shapes + loud-error cases), the full metamorphic suite green with the
+>   regex skip REMOVED, and one sabotage (ge→gt in the shared map) caught
+>   by ge_int — one gate now guards every surface at once.
+> - NOT converged, as designed: exec's applyOperator (the oracle) and the
+>   SQL translator (structured translation, already total).
+
 3. **`condToExprGo(cond, resolver)`** in the transpiler: map each
    operator onto the walker's existing emissions (`gt` → the `>`
    comparison with §2 coercion rules; `contains`/`startswith`/`endswith`
@@ -178,6 +210,28 @@ untouched). Only the *final emission step* changes.
    keeps a bespoke emission or compiles per-call.
 
 ### Phase C — capability and cleanup wins the convergence unlocks
+
+> **✅ SHIPPED 2026-08-10** (7. landed with Phase B). Canonicalization
+> (8.): `exprToFlagConds` recognizes conjunctions of `field OP literal`
+> (int/string literals; bool for eq/ne; flipped operands normalized;
+> contains/startsWith/endsWith mapped) and `ruleExprCanonicalize` runs
+> FIRST in the `generate ssql` rewrite pipeline, so canonicalized
+> expressions inherit merge, tightening, contradiction detection,
+> reorder, catalog extraction and join pushdown —
+> `-if-expr 'pop > 9 && pop > 5'` optimizes clean through to
+> `-if pop gt 9`. Guard rails, each deliberate: FLOAT literals refuse
+> (the int-column trap from Phase A's audit — `-if f gt 15.5` is
+> silently false-for-every-row in exec); OR refuses (needs clause
+> splitting, future); `matches` refuses (regex-in-shell round-trips
+> deserve their own soak); a negated expression canonicalizes only as a
+> single term (¬(a∧b) does not distribute). Docs (9.): EXPRESSIONS.md
+> gained the flags-vs-expressions division-of-labour section.
+> Gates: TestExprToFlagConds (accept/refuse table), the
+> where_expr_canonicalized equivalence golden with the binding term ON a
+> fixture boundary (Hanoi pop=9) — a first sabotage at a non-boundary
+> value was NOT caught, the case was sharpened until gt↔ge sabotage
+> visibly fails — and the reorder-survival generation pin split into
+> canonicalized and non-canonicalizable variants.
 
 7. **`regex` in typed mode** stops being a Tier-3 error — it inherits
    the `matches` hoisted emission for free.

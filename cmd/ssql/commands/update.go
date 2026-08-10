@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"maps"
-	"strconv"
 	"strings"
 	"time"
 
@@ -544,8 +543,6 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	var extraImports []string // from native record expressions (math, strconv, exprfn, …)
 	exprCounter := 0
 	needsTime := false
-	needsStrings := false
-	needsRegexp := false
 	needsRuntime := false
 
 	// Check if we need frozen (for reading in conditions or evaluating expressions)
@@ -590,20 +587,18 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				if condCount > 0 {
 					codeBody.WriteString(" && ")
 				}
-				condCode := generateConditionCode(cond.Field, cond.Operator, cond.Value, advisoryTypeOf(advisory, cond.Field))
+				condCode, condImports, condHoisted, cerr := generateConditionCode(cond.Field, cond.Operator, cond.Value, advisoryTypeOf(advisory, cond.Field))
+				if cerr != nil {
+					return lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("update -if %s %s %s: %w", cond.Field, cond.Operator, cond.Value, cerr))
+				}
+				extraImports = append(extraImports, condImports...)
+				preCompileVars = append(preCompileVars, condHoisted...)
 				if cond.Negated {
 					condCode = "!(" + condCode + ")"
 				}
 				codeBody.WriteString(condCode)
 				condCount++
-
-				// Track which imports are needed
-				switch cond.Operator {
-				case "contains", "startswith", "endswith":
-					needsStrings = true
-				case "regex":
-					needsRegexp = true
-				}
 			}
 
 			// Generate where-expr conditions: native GetOr predicate when
@@ -763,12 +758,6 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	if needsTime {
 		imports = append(imports, "time")
 	}
-	if needsStrings {
-		imports = append(imports, "strings")
-	}
-	if needsRegexp {
-		imports = append(imports, "regexp")
-	}
 	if needsRuntime {
 		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime", "fmt", "os")
 	}
@@ -782,54 +771,20 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 }
 
 // generateConditionCode generates the Go code for a single condition check
-// goType is the advisory field type ("" = unknown): exec's applyOperator
-// branches comparisons on the FIELD's runtime type, so codegen must too —
-// the old unconditional numeric emission for gt/ge/lt/le made
-// `-if city gt Lima` emit `float64(0) > "Lima"` (a compile error, caught
-// by TestFlagExprMetamorphic).
-func generateConditionCode(field, op, value, goType string) string {
-	switch op {
-	case "eq":
-		return fmt.Sprintf("ssql.GetOr(frozen, %q, %s) == %s",
-			field, getDefaultValueForComparison(value), getComparisonValue(value))
-	case "ne":
-		return fmt.Sprintf("ssql.GetOr(frozen, %q, %s) != %s",
-			field, getDefaultValueForComparison(value), getComparisonValue(value))
-	case "gt", "ge", "lt", "le":
-		numeric := false
-		switch goType {
-		case "int64", "float64":
-			numeric = true
-		case "string":
-			numeric = false
-		default:
-			_, err := strconv.ParseFloat(value, 64)
-			numeric = err == nil
-		}
-		if numeric {
-			return fmt.Sprintf("ssql.GetOr(frozen, %q, float64(0)) %s %s",
-				field, getOperatorCode(op), getComparisonValue(value))
-		}
-		return fmt.Sprintf("ssql.GetOr(frozen, %q, \"\") %s %q",
-			field, getOperatorCode(op), value)
-	case "contains":
-		return fmt.Sprintf("strings.Contains(ssql.GetOr(frozen, %q, \"\"), %s)",
-			field, getComparisonValue(value))
-	case "startswith":
-		return fmt.Sprintf("strings.HasPrefix(ssql.GetOr(frozen, %q, \"\"), %s)",
-			field, getComparisonValue(value))
-	case "endswith":
-		return fmt.Sprintf("strings.HasSuffix(ssql.GetOr(frozen, %q, \"\"), %s)",
-			field, getComparisonValue(value))
-	case "regex":
-		// For regexp, we need to compile the pattern
-		return fmt.Sprintf("regexp.MustCompile(%s).MatchString(ssql.GetOr(frozen, %q, \"\"))",
-			getComparisonValue(value), field)
-	default:
-		// Fallback to equality
-		return fmt.Sprintf("ssql.GetOr(frozen, %q, %s) == %s",
-			field, getDefaultValueForComparison(value), getComparisonValue(value))
+// generateConditionCode emits an update -if condition against `frozen`.
+// Since convergence Phase B it delegates the OPERATOR to the shared
+// condOpToExprGo lowering (values inline — update conditions are not
+// parameterized); the LHS is typed by the advisory field type (goType, ""
+// = unknown), matching exec's runtime field-type branch. Returned hoisted
+// decls (literal-regex compiled vars) go to the caller's preCompileVars —
+// previously the pattern was recompiled PER ROW.
+func generateConditionCode(field, op, value, goType string) (string, []string, []string, error) {
+	lhs := recordCondLHS("frozen", field, op, value, goType)
+	res, err := condOpToExprGo(lhs, op, value, "")
+	if err != nil {
+		return "", nil, nil, err
 	}
+	return res.Src, res.Imports, res.Hoisted, nil
 }
 
 // getDefaultValueForComparison returns the default value for GetOr based on the comparison value's type

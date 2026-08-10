@@ -452,6 +452,13 @@ func (e *exprGoEnv) arith(op string, left, right exprGo) (exprGo, error) {
 // number vs bool) are codegen errors: the VM either errors per row or — for
 // `==` — silently returns false, and both are bugs worth catching early (§6).
 func (e *exprGoEnv) compare(op string, left, right exprGo, equality bool) (exprGo, error) {
+	return exprCompare(op, left, right, equality)
+}
+
+// exprCompare is the one comparison emission — shared by the expression
+// walker and the flag-condition lowering (condOpToExprGo), so `-if pop gt X`
+// and `pop > X` cannot drift.
+func exprCompare(op string, left, right exprGo, equality bool) (exprGo, error) {
 	switch {
 	case left.Type.numeric() && right.Type.numeric():
 		if left.Type != right.Type {

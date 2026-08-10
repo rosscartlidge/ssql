@@ -211,6 +211,12 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 	// Apply optimization rules in order
 	var rules []ruleApplication
 
+	// Canonicalize trivial -if-expr predicates into structured -if
+	// conditions FIRST, so every later rule (merge, tightening,
+	// contradiction, reorder, catalog extraction, join pushdown) can
+	// reason about them — opaque expressions defeat all of those.
+	rules = append(rules, ruleExprCanonicalize(cmds)...)
+
 	// Phase 1 rules
 	rules = append(rules, ruleWhereMerge(cmds)...)
 	rules = append(rules, ruleSSHPredicatePushdown(cmds)...)
@@ -940,6 +946,51 @@ func ruleCatalogAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
 			Rule:   "catalog-aggregation-pushdown",
 			Before: before,
 			After:  after,
+		})
+	}
+	return rules
+}
+
+// ruleExprCanonicalize rewrites trivial -if-expr predicates (conjunctions
+// of `field OP literal` — see exprToFlagConds for the conservative
+// recognition rules) into structured -if conditions, in place. Negation is
+// preserved: a canonicalized +if-expr becomes +if conditions... with one
+// caveat: negating a CONJUNCTION distributes only when it has a single
+// term (¬(a ∧ b) ≠ ¬a ∧ ¬b), so negated expressions canonicalize only
+// when they reduce to exactly one condition.
+func ruleExprCanonicalize(cmds []*pipelineCmd) []ruleApplication {
+	var rules []ruleApplication
+	for i := 0; i < len(cmds); i++ {
+		if cmds[i].Removed || cmds[i].Kind != "where" {
+			continue
+		}
+		clauses := parseWhereArgs(cmds[i].RawArgs)
+		changed := false
+		for ci, clause := range clauses {
+			var kept []whereExpr
+			for _, ex := range clause.Exprs {
+				conds, ok := exprToFlagConds(ex.Expr)
+				if !ok || (ex.Negated && len(conds) != 1) {
+					kept = append(kept, ex)
+					continue
+				}
+				for _, c := range conds {
+					c.Negated = ex.Negated
+					clauses[ci].Conditions = append(clauses[ci].Conditions, c)
+				}
+				changed = true
+			}
+			clauses[ci].Exprs = kept
+		}
+		if !changed {
+			continue
+		}
+		before := renderCmd(cmds[i])
+		cmds[i].RawArgs = buildWhereArgs(clauses)
+		rules = append(rules, ruleApplication{
+			Rule:   "expr-canonicalization",
+			Before: before,
+			After:  renderCmd(cmds[i]),
 		})
 	}
 	return rules

@@ -249,13 +249,13 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				return true, "", lib.WriteErrorAndExit(getCommandString(),
 					fmt.Errorf("ssql generate go -typed: 'update -if': unknown field %q", cd.field))
 			}
-			expr, err := typedWhereCondition(f, cd.op, cd.value)
+			res, err := typedWhereCondition(f, cd.op, cd.value)
 			if err != nil {
 				return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 			}
-			if opNeedsStrings(cd.op) {
-				exprImports = append(exprImports, "strings")
-			}
+			exprImports = append(exprImports, res.Imports...)
+			hoisted = append(hoisted, res.Hoisted...)
+			expr := res.Src
 			if cd.negated {
 				expr = "!(" + expr + ")"
 			}

@@ -250,7 +250,10 @@ func generateWhereCode(ctx *cf.Context) error {
 	}
 
 	// Generate filter code from clauses
-	filterCode, imports, preCompileVars, params, planNotes := generateWhereCodeFromClauses(ctx.Clauses, advisory)
+	filterCode, imports, preCompileVars, params, planNotes, gerr := generateWhereCodeFromClauses(ctx.Clauses, advisory)
+	if gerr != nil {
+		return lib.WriteErrorAndExit(getCommandString(), gerr)
+	}
 
 	// Build complete statement with pre-compiled expressions
 	var codeLines []string
@@ -315,13 +318,13 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 					return true, lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'where' references unknown field %q (schema has %s)", field, fieldNamesList(schema)))
 				}
-				cond, err := typedWhereCondition(f, op, value)
+				res, err := typedWhereCondition(f, op, value)
 				if err != nil {
 					return true, lib.WriteErrorAndExit(getCommandString(), err)
 				}
-				if opNeedsStrings(op) {
-					imports = append(imports, "strings")
-				}
+				imports = append(imports, res.Imports...)
+				hoisted = append(hoisted, res.Hoisted...)
+				cond := res.Src
 				if negated {
 					cond = "!(" + cond + ")"
 				}
@@ -413,37 +416,45 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 	return true, lib.WriteCodeFragment(frag)
 }
 
-// typedWhereCondition emits a single typed condition like `r.Age > 30`
-// or `r.Status == "active"`, choosing literal formatting based on the
-// field's Go type. Returns an error if op is unknown.
-func typedWhereCondition(f lib.TypedSchemaField, op, value string) (string, error) {
+// typedWhereCondition emits a single typed condition like `(r.Age > 30)`
+// or `(r.Status == "active")`. Since convergence Phase B it is a thin
+// wrapper: it resolves the struct field and delegates the OPERATOR to the
+// shared condOpToExprGo lowering (the same emissions the expression form
+// uses) — which also makes `regex` work in typed mode (hoisted compiled
+// pattern), previously a Tier-3 error. The returned exprGo carries any
+// imports ("strings"/"regexp") and hoisted decls the emission needs.
+func typedWhereCondition(f lib.TypedSchemaField, op, value string) (exprGo, error) {
 	field := "r." + f.GoName
-	switch op {
-	case "eq", "ne", "lt", "le", "gt", "ge":
-		opSym := map[string]string{"eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}[op]
-		lit, err := typedLiteral(f.GoType, value)
-		if err != nil {
-			return "", fmt.Errorf("ssql generate go -typed: where %s %s %q: %w", f.Name, op, value, err)
+	var lhs exprGo
+	switch f.GoType {
+	case "int64", "int", "int32", "uint64":
+		lhs = exprGo{Src: field, Type: exprGoInt}
+	case "float64", "float32":
+		lhs = exprGo{Src: field, Type: exprGoFloat}
+	case "string":
+		lhs = exprGo{Src: field, Type: exprGoString}
+	case "bool":
+		lhs = exprGo{Src: field, Type: exprGoBool}
+	case "time.Time":
+		// Narrow legacy support: equality against a parsed literal. Ordering
+		// operators never compiled for time.Time and remain unsupported.
+		if op == "eq" || op == "ne" {
+			lit, err := typedLiteral(f.GoType, value)
+			if err != nil {
+				return exprGo{}, fmt.Errorf("ssql generate go -typed: where %s %s %q: %w", f.Name, op, value, err)
+			}
+			sym := map[string]string{"eq": "==", "ne": "!="}[op]
+			return exprGo{Src: fmt.Sprintf("(%s %s %s)", field, sym, lit), Type: exprGoBool}, nil
 		}
-		return fmt.Sprintf("%s %s %s", field, opSym, lit), nil
-	case "contains":
-		if f.GoType != "string" {
-			return "", fmt.Errorf("ssql generate go -typed: 'contains' requires a string field, got %s for %s", f.GoType, f.Name)
-		}
-		return fmt.Sprintf("strings.Contains(%s, %q)", field, value), nil
-	case "startswith":
-		if f.GoType != "string" {
-			return "", fmt.Errorf("ssql generate go -typed: 'startswith' requires a string field, got %s for %s", f.GoType, f.Name)
-		}
-		return fmt.Sprintf("strings.HasPrefix(%s, %q)", field, value), nil
-	case "endswith":
-		if f.GoType != "string" {
-			return "", fmt.Errorf("ssql generate go -typed: 'endswith' requires a string field, got %s for %s", f.GoType, f.Name)
-		}
-		return fmt.Sprintf("strings.HasSuffix(%s, %q)", field, value), nil
+		return exprGo{}, fmt.Errorf("ssql generate go -typed: operator %q not supported for time.Time field %s", op, f.Name)
 	default:
-		return "", fmt.Errorf("ssql generate go -typed: where operator %q not supported in typed mode (Tier 3); use eq/ne/lt/le/gt/ge/contains/startswith/endswith", op)
+		return exprGo{}, fmt.Errorf("ssql generate go -typed: where on %s field %s not supported", f.GoType, f.Name)
 	}
+	res, err := condOpToExprGo(lhs, op, value, "")
+	if err != nil {
+		return exprGo{}, fmt.Errorf("ssql generate go -typed: where %s %s %q: %w", f.Name, op, value, err)
+	}
+	return res, nil
 }
 
 // typedLiteral formats value as a Go literal of the given type.
@@ -476,18 +487,6 @@ func typedLiteral(goType, value string) (string, error) {
 	default:
 		return "", fmt.Errorf("typed where: unsupported field type %s", goType)
 	}
-}
-
-// opNeedsStrings reports whether a flag operator's typed emission calls
-// into the strings package (typedWhereCondition emits strings.Contains/
-// HasPrefix/HasSuffix — the import must ride the fragment, which was
-// missed until TestFlagExprMetamorphic caught the compile failure).
-func opNeedsStrings(op string) bool {
-	switch op {
-	case "contains", "startswith", "endswith":
-		return true
-	}
-	return false
 }
 
 // advisoryTypeOf looks up a field's advisory Go type case-insensitively;
@@ -526,7 +525,7 @@ func schemaUsesTime(s *lib.TypedSchema) bool {
 // source), -if-expr predicates transpile to native GetOr code; otherwise —
 // and for expressions outside the subset — the compiled-VM filter var is
 // emitted as before.
-func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]string) (string, []string, []string, []lib.CodeParam, []string) {
+func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]string) (string, []string, []string, []lib.CodeParam, []string, error) {
 	var imports []string
 	var clauseConditions []string
 	var preCompileVars []string
@@ -561,7 +560,10 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]strin
 					// Generate condition code with parameterized value.
 					// The advisory field type (when known) picks numeric vs
 					// string comparison, matching exec's field-type branch.
-					cond, imp, param := generateCondition(field, op, value, advisoryTypeOf(advisory, field), flagSeen)
+					cond, imp, param, cerr := generateCondition(field, op, value, advisoryTypeOf(advisory, field), flagSeen)
+					if cerr != nil {
+						return "", nil, nil, nil, nil, fmt.Errorf("where -if %s %s %s: %w", field, op, value, cerr)
+					}
 					if negated {
 						cond = "!(" + cond + ")"
 					}
@@ -644,7 +646,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]strin
 	// Build function
 	code := fmt.Sprintf("func(r ssql.Record) bool {\n\t\t%s\n\t}", finalCondition)
 
-	return code, dedupeImports(imports), preCompileVars, params, planNotes
+	return code, dedupeImports(imports), preCompileVars, params, planNotes, nil
 }
 
 // generateCondition generates code for a single where condition.
@@ -655,9 +657,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]strin
 // identical `*flagPopGt` references in one fragment are indistinguishable there
 // (both got the last name, silently replacing the first value; three didn't
 // compile).
-func generateCondition(field, op, value, goType string, seen map[string]int) (string, []string, *lib.CodeParam) {
-	var imports []string
-
+func generateCondition(field, op, value, goType string, seen map[string]int) (string, []string, *lib.CodeParam, error) {
 	// Build flag name and var name: e.g., "age-gt" → flagAgeGt
 	flagName := field + "-" + op
 	varName := "flag" + flagVarName(field) + flagVarName(op)
@@ -674,49 +674,44 @@ func generateCondition(field, op, value, goType string, seen map[string]int) (st
 		VarName: varName,
 	}
 
-	// Comparison typing: exec's applyOperator branches on the FIELD's
-	// runtime type — string fields compare lexicographically, numeric
-	// fields numerically. With an advisory field type (goType, from the
-	// sampling source) we branch the same way; without one, fall back to
-	// the value-form heuristic. Before this branch existed, gt/ge/lt/le
-	// were emitted numerically UNCONDITIONALLY — `-if city gt Lima`
-	// silently returned zero rows (caught by TestFlagExprMetamorphic).
-	_, err := strconv.ParseFloat(value, 64)
-	numeric := err == nil
+	// Since convergence Phase B the OPERATOR is lowered by the shared
+	// condOpToExprGo — one emission for flag and expression forms alike.
+	// Only the LHS resolution stays here: record mode types the GetOr by
+	// the advisory field type (exec branches on the runtime field type),
+	// falling back to the value-form heuristic without one.
+	lhs := recordCondLHS("r", field, op, value, goType)
+	res, err := condOpToExprGo(lhs, op, value, varName)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return res.Src, res.Imports, param, nil
+}
+
+// recordCondLHS resolves a record-mode condition field to a typed GetOr
+// expression. String operators always read the field as a string (the
+// pre-existing record behaviour); comparisons branch on the advisory type
+// when known, else on the value's form.
+func recordCondLHS(recv, field, op, value, goType string) exprGo {
+	switch op {
+	case "contains", "startswith", "endswith", "regex":
+		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, \"\")", recv, field), Type: exprGoString}
+	}
+	numeric := false
 	switch goType {
-	case "string":
-		numeric = false
 	case "int64", "float64":
 		numeric = true
-	}
-
-	switch op {
-	case "eq", "ne", "gt", "ge", "lt", "le":
-		sym := map[string]string{"eq": "==", "ne": "!=", "gt": ">", "ge": ">=", "lt": "<", "le": "<="}[op]
-		if numeric {
-			return fmt.Sprintf("ssql.GetOr(r, %q, float64(0)) %s ssql.ParseFloat64(*%s)", field, sym, varName), nil, param
-		}
-		return fmt.Sprintf("ssql.GetOr(r, %q, \"\") %s *%s", field, sym, varName), nil, param
-
-	case "contains":
-		imports = append(imports, "strings")
-		return fmt.Sprintf("strings.Contains(ssql.GetOr(r, %q, \"\"), *%s)", field, varName), imports, param
-
-	case "startswith":
-		imports = append(imports, "strings")
-		return fmt.Sprintf("strings.HasPrefix(ssql.GetOr(r, %q, \"\"), *%s)", field, varName), imports, param
-
-	case "endswith":
-		imports = append(imports, "strings")
-		return fmt.Sprintf("strings.HasSuffix(ssql.GetOr(r, %q, \"\"), *%s)", field, varName), imports, param
-
-	case "regex":
-		imports = append(imports, "regexp")
-		return fmt.Sprintf("regexp.MustCompile(*%s).MatchString(ssql.GetOr(r, %q, \"\"))", varName, field), imports, param
-
+	case "string":
+		numeric = false
+	case "bool":
+		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, false)", recv, field), Type: exprGoBool}
 	default:
-		return "false", nil, nil
+		_, err := strconv.ParseFloat(value, 64)
+		numeric = err == nil
 	}
+	if numeric {
+		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, float64(0))", recv, field), Type: exprGoFloat}
+	}
+	return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, \"\")", recv, field), Type: exprGoString}
 }
 
 // dedupeImports removes duplicate imports

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### New Features
+- **One lowering for flag conditions (convergence Phase B) — and `-if …
+  regex` now works in typed mode.** `FIELD OP VALUE` conditions from
+  `where`/`update` are lowered by a single shared emission
+  (`condOpToExprGo`), reusing the expression transpiler's own comparison
+  and string-op machinery; the three per-backend implementations became
+  thin field-resolution wrappers. User-visible wins: `-if f regex P` is no
+  longer a Tier-3 error in typed codegen (literal patterns hoist a
+  compiled var, like the expression form's `matches`); invalid regex
+  patterns fail at codegen instead of panicking at program startup;
+  record update's literal patterns are compiled once instead of PER ROW;
+  unknown operators are loud codegen errors instead of silently dropping
+  every row; bool-field eq/ne conditions gained typed emissions. Record
+  where keeps its runtime-adjustable filter flags (`-pop-gt`-style)
+  through the shared lowering. Gated by TestCondOpToExprGo, the full
+  flag≡expr metamorphic suite (regex pair now running ALL lanes), and a
+  sabotage watched failing — one gate now guards every backend at once.
+
+- **The optimizer canonicalizes trivial expressions (convergence Phase
+  C).** `generate ssql` now rewrites `-if-expr` predicates that are
+  conjunctions of `field OP literal` into structured `-if` conditions
+  (first rule in the pipeline, reported as `expr-canonicalization` under
+  `-explain`), so simple expressions inherit every structural rewrite:
+  `where -if-expr 'pop > 9 && pop > 5'` optimizes through to
+  `-if pop gt 9`. Conservative by design: float literals refuse (an int
+  column compared against `15.5` behaves differently under exec's flag
+  semantics — the residual divergence documented in Phase A), OR and
+  `matches` refuse, and negated expressions canonicalize only as single
+  terms. EXPRESSIONS.md gained a flags-vs-expressions
+  division-of-labour section.
+
 ### Bug Fixes
 - **Flag-vs-expression metamorphic gate + three bugs it caught on its
   first run.** New `TestFlagExprMetamorphic` (convergence Phase A,

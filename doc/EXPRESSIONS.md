@@ -641,6 +641,38 @@ Expressions do **not** support comments. Keep expressions concise and use comman
 
 ## Integration with ssql Commands
 
+### Flags vs expressions — which to use?
+
+`-if FIELD OP VALUE` and `-if-expr 'FIELD OP VALUE'` produce **identical
+results** — this equivalence is enforced by a dedicated differential test
+suite, and both forms compile to the same native code in generated
+programs (they share one lowering internally). The difference is
+ergonomics and analyzability:
+
+**Prefer the flag form when it can express the condition:**
+- **Tab completion** works on every part: field names from the live
+  pipeline, operators, and *actual data values*. An expression is an
+  opaque string to the completion system.
+- **No shell quoting** — `-if region ne south` vs
+  `-if-expr 'region != "south"'` — which compounds over SSH and in
+  remote/pushdown pipelines.
+- **The optimizer can reason about it**: `generate ssql`'s rewrites
+  (range tightening, contradiction detection, catalog partition pruning,
+  join pushdown) operate on flag conditions. So do the catalog `-if`
+  pruning flags and multi-file `--` pushdown.
+
+**Use the expression form for everything else**: arithmetic
+(`price * qty > 1000`), functions (`len(name) > 3`), cross-field
+comparisons (`price > cost`), OR within one condition, `has()`/`??`
+missing-field handling.
+
+**Best of both:** the optimizer *canonicalizes* trivial expressions —
+`-if-expr 'pop > 9 && pop > 5'` is rewritten to `-if pop gt 9` (shown
+under `generate ssql -explain` as `expr-canonicalization`), so simple
+expressions inherit the flag form's optimizations automatically.
+Float-literal comparisons and OR-expressions are deliberately left
+alone.
+
 ### update command
 
 **Syntax:** `ssql update -set-expr <field> '<expression>'`

@@ -613,8 +613,11 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 				`"type":"stmt"`,
 				`ssql.Update`,
 				`frozen`,
-				`ssql.GetOr`,
-				`float64(30)`,
+				// The shared condition lowering emits the literal as an
+				// untyped constant in a float64 comparison (Phase B). NB the
+				// fragment is raw JSON, where > is encoded as >.
+				`ssql.GetOr(frozen, \"age\", float64(0))`,
+				`\u003e 30) {`,
 			},
 		},
 		{
@@ -706,7 +709,7 @@ func TestNegatedConditionGeneration(t *testing.T) {
 		{
 			name:     "record where +if negates",
 			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where +if age gt 25 | /tmp/ssql_test generate go`,
-			wantStrs: []string{`return !(ssql.GetOr(r, "age"`},
+			wantStrs: []string{`return !((ssql.GetOr(r, "age"`},
 		},
 		{
 			name:     "record where +if-expr negates (not dropped)",
@@ -716,7 +719,7 @@ func TestNegatedConditionGeneration(t *testing.T) {
 		{
 			name:     "record update +if negates",
 			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update +if age gt 25 -set tag young | /tmp/ssql_test generate go`,
-			wantStrs: []string{`if !(ssql.GetOr(frozen, "age"`},
+			wantStrs: []string{`if !((ssql.GetOr(frozen, "age"`},
 		},
 		{
 			name:     "record update +if-expr negates (not dropped)",
@@ -731,12 +734,12 @@ func TestNegatedConditionGeneration(t *testing.T) {
 		{
 			name:     "typed where +if negates",
 			cmdLine:  `export SSQL_MODE=typed && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where +if age gt 25 | /tmp/ssql_test generate go`,
-			wantStrs: []string{`return !(r.Age > 25)`},
+			wantStrs: []string{`return !((r.Age > 25))`},
 		},
 		{
 			name:     "typed update +if negates",
 			cmdLine:  `export SSQL_MODE=typed && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update +if age gt 25 -set tag young | /tmp/ssql_test generate go`,
-			wantStrs: []string{`if !(r.Age > 25) {`},
+			wantStrs: []string{`if !((r.Age > 25)) {`},
 		},
 		{
 			// Optimiser round-trip: range tightening (gt 5 + ge 8) rebuilds
@@ -748,8 +751,19 @@ func TestNegatedConditionGeneration(t *testing.T) {
 		{
 			// Predicate reorder (ne before gt) rebuilds too; +if-expr must
 			// survive.
-			name:     "generate ssql keeps +if-expr through reorder",
+			// Since convergence Phase C the trivial negated expression
+			// CANONICALIZES to a structured +if — negation still survives
+			// the reorder rebuild, now in flag form.
+			name:     "generate ssql canonicalizes +if-expr and keeps negation through reorder",
 			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 8 -if name ne Bob +if-expr 'age > 12' | /tmp/ssql_test generate ssql`,
+			wantStrs: []string{`+if age gt 12`},
+		},
+		{
+			// A float-literal expression refuses canonicalization (the
+			// int-column trap), so THIS one must still survive the reorder
+			// rebuild as +if-expr — the original Phase-4-era guard.
+			name:     "generate ssql keeps non-canonicalizable +if-expr through reorder",
+			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where -if age gt 8 -if name ne Bob +if-expr 'age > 12.5' | /tmp/ssql_test generate ssql`,
 			wantStrs: []string{`+if-expr`},
 		},
 	}
