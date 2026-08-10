@@ -5,6 +5,35 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Bug Fixes
+- **Catalog range-column extraction no longer LEAKS rows.** The
+  `generate ssql` optimizer's catalog-predicate-extraction rule deleted
+  the row-level `where` when lifting a condition on a RANGE metadata
+  column (`date_from`/`date_to`) into pruning flags — but range pruning is
+  only conservative, so shards straddling the boundary silently returned
+  non-matching rows (reproduced end-to-end on the LXD SSH rig). Extraction
+  now distinguishes column kinds: EXACT metadata columns (the value holds
+  for every row in the shard) still extract fully; RANGE columns prune AND
+  keep the row filter — which the pushdown rule then ships shard-side
+  (`-if date ge X -- where -if date ge X`), the ideal form.
+
+### New Features
+- **Catalog pruning flags gained the `+if` negated form.**
+  `from catalog` / `merge -catalog` `+if FIELD OP VALUE` keeps shards that
+  may contain rows NOT matching: exact metadata columns invert exactly;
+  range columns prune only when the ENTIRE range satisfies the positive
+  condition (no row could survive the negation) — conservative, like all
+  pruning. Round-trips through the optimizer and generated code; the
+  extraction rule now lifts negated where-conditions too (previously
+  refused). Gated by a negated `PruneCatalog` unit table,
+  `TestCatalogPredicateExtraction` optimizer pins, and the rig-gated
+  `TestCatalogSSHPruning` integration test (`SSQL_TEST_SSH_HOST=<node>`,
+  skips without it).
+- **Permutation gate widened**: `top` and a tie-free `update -set-expr`
+  stage joined the 2-stage permutation suite (56 pipelines, all lanes).
+
 ## [v4.58.0] - 2026-08-10
 
 ### New Features

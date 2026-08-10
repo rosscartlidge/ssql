@@ -415,6 +415,14 @@ func TestPipelinePermutations(t *testing.T) {
 		{"limit", `{{.bin}} limit 5`},
 		{"group", `{{.bin}} group-by pop -count cnt`},
 		{"distinct", `{{.bin}} distinct`},
+		// top SORTS its output, so it stays deterministic in every pairing
+		// (even downstream of group-by's unspecified emission order).
+		{"top", `{{.bin}} top 3 -field pop`},
+		// update with a -set-expr derived UNIQUELY from pop: no ties for a
+		// downstream sort/limit/top, references only the field every stage
+		// retains, and puts the expr transpiler's assignment path (native in
+		// typed lanes, advisory-native or VM in record) into every pairing.
+		{"update", `{{.bin}} update -set-expr popx 'pop * 2 + 1'`},
 	}
 	// group|limit is skipped because the PIPELINE itself is nondeterministic:
 	// group-by emission order is unspecified, so "first 5 groups" legitimately

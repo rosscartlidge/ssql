@@ -26,6 +26,12 @@ type CatalogFilter struct {
 	Field    string
 	Operator string
 	Value    string
+	// Negated is the +if form: keep shards that may contain rows NOT
+	// matching the condition. For exact metadata columns that is the
+	// complement; for range (_from/_to) columns a shard is skipped only
+	// when its ENTIRE range satisfies the positive condition (no row
+	// could survive the negation) — pruning stays conservative.
+	Negated bool
 }
 
 // ReadCatalog parses a catalog CSV file. The CSV must have "host" and "path"
@@ -120,6 +126,14 @@ func catalogEntryMatches(entry CatalogEntry, filters []CatalogFilter) bool {
 		toVal, hasTo := entry.Metadata[toKey]
 
 		if hasFrom || hasTo {
+			if f.Negated {
+				// +if: skip only when the WHOLE range satisfies the
+				// positive condition — then no row survives the negation.
+				if catalogRangeEntirely(fromVal, toVal, f.Operator, f.Value) {
+					return false
+				}
+				continue
+			}
 			if !catalogRangeMatches(fromVal, toVal, f.Operator, f.Value) {
 				return false
 			}
@@ -127,13 +141,42 @@ func catalogEntryMatches(entry CatalogEntry, filters []CatalogFilter) bool {
 		}
 
 		if colVal, ok := entry.Metadata[f.Field]; ok {
-			if !catalogStringOp(colVal, f.Operator, f.Value) {
+			match := catalogStringOp(colVal, f.Operator, f.Value)
+			if f.Negated {
+				// Exact metadata: the column value holds for every row in
+				// the shard, so negation is the exact complement.
+				match = !match
+			}
+			if !match {
 				return false
 			}
 			continue
 		}
 	}
 	return true
+}
+
+// catalogRangeEntirely reports whether EVERY value in [from, to] satisfies
+// the operator against value — the condition under which a negated (+if)
+// filter can prune the shard. Missing bounds answer false (conservative:
+// keep the shard).
+func catalogRangeEntirely(from, to, operator, value string) bool {
+	switch operator {
+	case "ge":
+		return from != "" && from >= value
+	case "gt":
+		return from != "" && from > value
+	case "le":
+		return to != "" && to <= value
+	case "lt":
+		return to != "" && to < value
+	case "eq":
+		return from != "" && to != "" && from == value && to == value
+	case "ne":
+		// Entire range ≠ value ⇔ value lies outside [from, to].
+		return (from != "" && value < from) || (to != "" && value > to)
+	}
+	return false
 }
 
 func catalogRangeMatches(from, to, operator, value string) bool {

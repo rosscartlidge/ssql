@@ -232,10 +232,12 @@ func parseCatalogFilters(ifVal any) []ssql.CatalogFilter {
 	if ifSlice, ok := ifVal.([]any); ok {
 		for _, item := range ifSlice {
 			if argMap, ok := item.(map[string]any); ok {
+				negated, _ := argMap["_negated"].(bool)
 				filters = append(filters, ssql.CatalogFilter{
 					Field:    fmt.Sprintf("%v", argMap["field"]),
 					Operator: fmt.Sprintf("%v", argMap["operator"]),
 					Value:    fmt.Sprintf("%v", argMap["value"]),
+					Negated:  negated,
 				})
 			}
 		}
@@ -314,8 +316,18 @@ func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.Catalo
 		for _, f := range filters {
 			flagName := f.Field + "-" + f.Operator
 			varName := "flag" + flagVarName(f.Field) + flagVarName(f.Operator)
+			if f.Negated {
+				// Distinct flag identity for the +if form — a -if and +if on
+				// the same field+op must not collide.
+				flagName = "not-" + flagName
+				varName = "flagNot" + flagVarName(f.Field) + flagVarName(f.Operator)
+			}
 			params = append(params, lib.CodeParam{Name: flagName, Default: f.Value, Help: f.Field + " " + f.Operator + " filter", VarName: varName})
-			parts = append(parts, fmt.Sprintf(`{Field: %q, Operator: %q, Value: *%s}`, f.Field, f.Operator, varName))
+			if f.Negated {
+				parts = append(parts, fmt.Sprintf(`{Field: %q, Operator: %q, Value: *%s, Negated: true}`, f.Field, f.Operator, varName))
+			} else {
+				parts = append(parts, fmt.Sprintf(`{Field: %q, Operator: %q, Value: *%s}`, f.Field, f.Operator, varName))
+			}
 		}
 		filterCode = fmt.Sprintf("[]ssql.CatalogFilter{%s}", strings.Join(parts, ", "))
 	} else {

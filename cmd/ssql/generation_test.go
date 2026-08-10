@@ -1108,6 +1108,86 @@ func TestRecordNativeExprGeneration(t *testing.T) {
 	})
 }
 
+// TestCatalogPredicateExtraction pins the optimizer's catalog rewrite
+// semantics after the range-leak fix (2026-08-11): EXACT metadata columns
+// hold for every row in a shard, so extraction REPLACES the row filter;
+// RANGE (_from/_to) columns prune only conservatively — a straddling shard
+// still contains non-matching rows — so the row filter is KEPT (and the
+// pushdown rule then ships it shard-side). Before the fix, range
+// extraction deleted the row filter and straddling shards leaked rows
+// (reproduced on the LXD rig). Negated (+if) conditions now extract too.
+func TestCatalogPredicateExtraction(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	catFile := "/tmp/catalog_extract_test.csv"
+	if err := os.WriteFile(catFile, []byte(
+		"host,path,region,date_from,date_to\n"+
+			"n1,/data/s1.csv,east,2026-01-01,2026-02-01\n"+
+			"n2,/data/s2.csv,west,2026-02-15,2026-03-15\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(catFile)
+
+	tests := []struct {
+		name     string
+		where    string
+		wantStrs []string
+		rejects  []string
+	}{
+		{
+			// Range column: prune AND keep the row filter (which pushdown
+			// then ships into the shard-side `--` pipeline).
+			name:     "range condition keeps row filter",
+			where:    `where -if date ge 2026-03-01`,
+			wantStrs: []string{`-if date ge 2026-03-01 -- where -if date ge 2026-03-01`},
+		},
+		{
+			// Exact column: the metadata value holds for every row —
+			// extraction fully replaces the row filter.
+			name:     "exact condition fully extracted",
+			where:    `where -if region eq east`,
+			wantStrs: []string{`-if region eq east`},
+			rejects:  []string{`-- where`},
+		},
+		{
+			name:     "negated exact condition fully extracted",
+			where:    `where +if region eq east`,
+			wantStrs: []string{`+if region eq east`},
+			rejects:  []string{`-- where`},
+		},
+		{
+			name:     "negated range condition prunes AND keeps row filter",
+			where:    `where +if date ge 2026-03-01`,
+			wantStrs: []string{`+if date ge 2026-03-01 -- where +if date ge 2026-03-01`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c",
+				`(export SSQL_MODE=record; /tmp/ssql_test from catalog `+catFile+
+					` | /tmp/ssql_test `+tt.where+` | /tmp/ssql_test to jsonl) | /tmp/ssql_test generate ssql`)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("generate ssql failed: %v\n%s", err, out)
+			}
+			for _, want := range tt.wantStrs {
+				if !strings.Contains(string(out), want) {
+					t.Errorf("optimized pipeline missing %q:\n%s", want, out)
+				}
+			}
+			for _, reject := range tt.rejects {
+				if strings.Contains(string(out), reject) {
+					t.Errorf("optimized pipeline should not contain %q:\n%s", reject, out)
+				}
+			}
+		})
+	}
+}
+
 // TestTableGeneration tests that the table command generates correct Go code
 func TestTableGeneration(t *testing.T) {
 	// Build the binary first

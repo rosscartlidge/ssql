@@ -71,6 +71,27 @@ func TestPruneCatalog(t *testing.T) {
 			{Field: "region", Operator: "eq", Value: "us"},
 		}, 1},
 		{"unknown field", []CatalogFilter{{Field: "status", Operator: "eq", Value: "active"}}, 3},
+
+		// Negated (+if) filters: exact columns invert exactly; range
+		// columns prune only when the ENTIRE range satisfies the positive
+		// condition (no row could survive the negation).
+		{"negated exact eq", []CatalogFilter{{Field: "region", Operator: "eq", Value: "us", Negated: true}}, 1},
+		{"negated exact ne", []CatalogFilter{{Field: "region", Operator: "ne", Value: "us", Negated: true}}, 2},
+		// +if date ge 2025-02-01: rows with date < feb — jan kept, feb and
+		// mar entirely >= → skipped.
+		{"negated range ge", []CatalogFilter{{Field: "date", Operator: "ge", Value: "2025-02-01", Negated: true}}, 1},
+		// +if date ge 2025-02-15: feb STRADDLES (2025-02-01..28) → kept
+		// conservatively; mar entirely >= → skipped; jan kept.
+		{"negated range ge straddling kept", []CatalogFilter{{Field: "date", Operator: "ge", Value: "2025-02-15", Negated: true}}, 2},
+		{"negated range le", []CatalogFilter{{Field: "date", Operator: "le", Value: "2025-02-28", Negated: true}}, 1},
+		{"negated range lt straddling kept", []CatalogFilter{{Field: "date", Operator: "lt", Value: "2025-02-15", Negated: true}}, 2},
+		// +if date eq V prunes only a shard whose whole range IS V — none here.
+		{"negated range eq keeps all", []CatalogFilter{{Field: "date", Operator: "eq", Value: "2025-02-15", Negated: true}}, 3},
+		// +if date ne V ≡ rows with date == V: skip shards whose range
+		// excludes V entirely — only feb can contain 2025-02-15.
+		{"negated range ne", []CatalogFilter{{Field: "date", Operator: "ne", Value: "2025-02-15", Negated: true}}, 1},
+		// Unknown fields stay conservative under negation too.
+		{"negated unknown field", []CatalogFilter{{Field: "status", Operator: "eq", Value: "x", Negated: true}}, 3},
 	}
 
 	for _, tt := range tests {

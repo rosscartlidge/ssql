@@ -379,12 +379,13 @@ func parseMergeCmd(cmd *pipelineCmd) {
 			} else {
 				i++
 			}
-		case "-if":
+		case "-if", "+if":
 			if i+3 < len(cmd.RawArgs) {
 				cmd.MergeCatalogFilters = append(cmd.MergeCatalogFilters, whereCondition{
 					Field:    cmd.RawArgs[i+1],
 					Operator: cmd.RawArgs[i+2],
 					Value:    cmd.RawArgs[i+3],
+					Negated:  arg[0] == '+',
 				})
 				i += 4
 			} else {
@@ -433,10 +434,11 @@ func parseFromCatalogCmd(cmd *pipelineCmd) {
 			break
 		}
 		switch arg {
-		case "-if", "-i":
+		case "-if", "-i", "+if", "+i":
 			if i+3 < len(cmd.RawArgs) {
 				cmd.CatalogFilters = append(cmd.CatalogFilters, whereCondition{
 					Field: cmd.RawArgs[i+1], Operator: cmd.RawArgs[i+2], Value: cmd.RawArgs[i+3],
+					Negated: arg[0] == '+',
 				})
 				i += 4
 				continue
@@ -837,8 +839,15 @@ func ruleCatalogPredicateExtraction(cmds []*pipelineCmd) []ruleApplication {
 			continue
 		}
 
-		// Read catalog CSV header to determine metadata columns
-		catalogCols, err := readCatalogMetadataColumns(cmds[i].CatalogFile)
+		// Read catalog CSV header to determine metadata columns —
+		// distinguishing EXACT columns (the value holds for every row in
+		// the shard, so extraction can REPLACE the row filter) from RANGE
+		// columns (_from/_to: pruning is only conservative — a shard
+		// straddling the boundary still contains non-matching rows, so
+		// the row filter must be KEPT). Before this distinction, range
+		// extraction deleted the row filter and straddling shards LEAKED
+		// non-matching rows (caught on the LXD rig, 2026-08-11).
+		catalogCols, rangeCols, err := readCatalogMetadataColumns(cmds[i].CatalogFile)
 		if err != nil {
 			continue // can't read catalog, skip
 		}
@@ -850,13 +859,18 @@ func ruleCatalogPredicateExtraction(cmds []*pipelineCmd) []ruleApplication {
 		}
 		clause := clauses[0]
 
-		// Split conditions into catalog-matchable and data-only. Negated
-		// (+if) conditions stay data-side: the catalog -if pruning filters
-		// have no negated form, so extracting one would drop the negation.
+		// Split conditions: catalogConds become pruning filters (negated
+		// conditions included — the exec matcher handles the +if form
+		// exactly for exact columns and conservatively for ranges);
+		// dataConds stay in the where. Range-backed conditions appear in
+		// BOTH (prune shards AND filter rows).
 		var catalogConds, dataConds []whereCondition
 		for _, cond := range clause.Conditions {
-			if catalogCols[cond.Field] && !cond.Negated {
+			if catalogCols[cond.Field] {
 				catalogConds = append(catalogConds, cond)
+				if rangeCols[cond.Field] {
+					dataConds = append(dataConds, cond)
+				}
 			} else {
 				dataConds = append(dataConds, cond)
 			}
@@ -1239,20 +1253,21 @@ func conditionCost(op string) int {
 
 // readCatalogMetadataColumns reads the catalog CSV header and returns the set of
 // metadata column names (collapsing field_from/field_to to field).
-func readCatalogMetadataColumns(filename string) (map[string]bool, error) {
+func readCatalogMetadataColumns(filename string) (cols, rangeCols map[string]bool, err error) {
 	f, err := os.Open(filename)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 
 	reader := csv.NewReader(f)
 	headers, err := reader.Read()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	cols := make(map[string]bool)
+	cols = make(map[string]bool)
+	rangeCols = make(map[string]bool)
 	for _, h := range headers {
 		h = strings.TrimSpace(strings.ToLower(h))
 		if h == "host" || h == "path" || h == "format" || h == "fields" {
@@ -1261,12 +1276,14 @@ func readCatalogMetadataColumns(filename string) (map[string]bool, error) {
 		base := h
 		if strings.HasSuffix(h, "_from") {
 			base = strings.TrimSuffix(h, "_from")
+			rangeCols[base] = true
 		} else if strings.HasSuffix(h, "_to") {
 			base = strings.TrimSuffix(h, "_to")
+			rangeCols[base] = true
 		}
 		cols[base] = true
 	}
-	return cols, nil
+	return cols, rangeCols, nil
 }
 
 // --- Phase 4 optimization rules ---
@@ -2062,7 +2079,11 @@ func renderCmd(cmd *pipelineCmd) string {
 	if cmd.IsMergeCatalog {
 		parts = append(parts, "-catalog", cmd.MergeCatalogFile)
 		for _, f := range cmd.MergeCatalogFilters {
-			parts = append(parts, "-if", f.Field, f.Operator, f.Value)
+			ifFlag := "-if"
+			if f.Negated {
+				ifFlag = "+if"
+			}
+			parts = append(parts, ifFlag, f.Field, f.Operator, f.Value)
 		}
 		if len(cmd.MergeCatalogByFields) > 0 {
 			parts = append(parts, "-by")
@@ -2101,7 +2122,11 @@ func renderCmd(cmd *pipelineCmd) string {
 			parts = append(parts, cmd.CatalogFile)
 		}
 		for _, f := range cmd.CatalogFilters {
-			parts = append(parts, "-if", f.Field, f.Operator, f.Value)
+			ifFlag := "-if"
+			if f.Negated {
+				ifFlag = "+if"
+			}
+			parts = append(parts, ifFlag, f.Field, f.Operator, f.Value)
 		}
 		if cmd.CatalogGPU {
 			parts = append(parts, "-gpu")
