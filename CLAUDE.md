@@ -280,6 +280,8 @@ See `claude/gpu-acceleration.md` for benchmarks, build instructions, and detaile
 
 **WARNING: `claude/` files are NOT automatically loaded into context.** If a rule only exists in a `claude/` file and not in this file, it will be ignored. Every critical rule must have at least a one-liner in CLAUDE.md — the `claude/` files provide detailed examples and rationale, not the rules themselves. When adding new conventions to `claude/` files, always add the corresponding rule here too.
 
+**Searching the docs and journals:** `scripts/docsearch.sh 'your query'` — hybrid BM25 + embedding (local ollama nomic-embed-text) search over `doc/`, `claude/`, `journal/` and root docs, returning ranked `file:line` chunks. Use it BEFORE designing anything that smells like it may have been tried, decided, or measured before — concept queries work ("avoid copying file into memory" finds the mmap work without the word mmap). `-lexical` skips embeddings (works without ollama); first run after doc changes re-embeds only changed chunks. Cache is `.docsearch-cache.jsonl` (gitignored).
+
 **The journal is equally important.** It contains recent decisions, what was tried, what worked, what didn't, and what's in progress. Without reading it, you risk re-solving solved problems, contradicting recent decisions, or duplicating work. Always read the latest entry on startup (see "On Startup" above).
 
 For detailed examples, rationale, and history, read the relevant `claude/` file:

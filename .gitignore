@@ -48,3 +48,4 @@ Thumbs.db
 # See claude/concurrency.md §11 for why we don't ship a profile by default.
 default.pgo
 .claude/
+.docsearch-cache.jsonl
