@@ -47,7 +47,7 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Data viewer** — click dataset names to view raw CSV.
 - [x] **# comments** — comment out pipeline stages to build up incrementally.
 - [x] **GitHub Actions automation** — `.github/workflows/playground.yml` (2026-08-11) builds WASM and deploys the three playground artifacts to `gh-pages` on push to `main` (path-filtered) + `workflow_dispatch`. Data/gpu files on gh-pages remain manually deployed.
-- [ ] **Share links** — encode pipeline in URL fragment for sharing.
+- [x] **Share links** — SHIPPED 2026-08-12: Share button encodes the pipeline as `#p=<base64url(utf8)>` in the URL fragment (fragment, not query — never hits server logs) and copies the link; on load a `#p=` hash preloads the pipeline and auto-runs it (auto-optimizes for ssh/catalog pipelines). Malformed hashes are ignored gracefully. Verified headless (Chrome `--dump-dom`): shared link runs, no-hash default preserved, garbage hash ignored.
 - [x] **Syntax highlighting** — Prism.js (CDN) highlights generated Go and SQL with Tokyo Night theme colors.
 - [x] **Loading indicator** — not needed after slim build (13MB loads fast on phone and desktop).
 

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Playground share links** — the browser playground gained a Share
+  button that encodes the current pipeline into the URL fragment
+  (`#p=<base64url>`) and copies the link; opening a shared link
+  preloads the pipeline and runs it automatically. Unicode-safe,
+  malformed links ignored gracefully.
 - **`group-by -rollup` / `-cube` now work in typed and parallel mode**
   (previously a hard error: "not yet supported in typed mode; drop
   -typed"). The stage ejects to the record `ssql.Rollup` path through

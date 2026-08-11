@@ -66,6 +66,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button id="btnGenerateSQL" onclick="generateSQL()" disabled>Generate SQL</button>
     <input type="file" id="fileUpload" accept=".csv,.tsv,.json,.jsonl" style="display:none" onchange="uploadFile(event)">
     <button onclick="document.getElementById('fileUpload').click()">Upload CSV</button>
+    <button id="btnShare" onclick="sharePipeline()">Share 🔗</button>
 </div>
 
 <div id="dataViewer" class="output-area" style="display:none;">
@@ -198,6 +199,55 @@ function loadExample(n) {
     }
 }
 
+// --- Share links ---
+// The pipeline is carried in the URL fragment as #p=<base64url(utf8)>.
+// Fragment (not query) so shared links never hit the server logs and
+// GitHub Pages caching is unaffected.
+
+function encodePipeline(s) {
+    const bytes = new TextEncoder().encode(s);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function decodePipeline(b64url) {
+    const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64);
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+}
+
+function sharePipeline() {
+    const pipeline = document.getElementById('pipeline').value.trim();
+    const status = document.getElementById('status');
+    if (!pipeline) {
+        status.textContent = 'Nothing to share — the pipeline is empty';
+        return;
+    }
+    const url = location.origin + location.pathname + '#p=' + encodePipeline(pipeline);
+    history.replaceState(null, '', url);
+    const done = () => { status.textContent = 'Link copied to clipboard — paste it anywhere'; };
+    const fail = () => { status.textContent = 'Link is in the address bar — copy it from there'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done, fail);
+    } else {
+        fail();
+    }
+}
+
+// Returns the shared pipeline from the URL fragment, or null.
+function pipelineFromHash() {
+    const m = location.hash.match(/^#p=([A-Za-z0-9_-]+)$/);
+    if (!m) return null;
+    try {
+        return decodePipeline(m[1]);
+    } catch (e) {
+        console.warn('ignoring malformed share link:', e);
+        return null;
+    }
+}
+
 // --- WASM setup ---
 let wasmReady = false;
 
@@ -232,7 +282,20 @@ async function initWasm() {
     document.getElementById('btnOptimize').disabled = false;
     document.getElementById('btnGenerateGo').disabled = false;
     document.getElementById('btnGenerateSQL').disabled = false;
-    document.getElementById('pipeline').value = EXAMPLES[0];
+
+    // A shared link (#p=...) preloads its pipeline and runs it;
+    // otherwise show the first example.
+    const shared = pipelineFromHash();
+    if (shared !== null) {
+        document.getElementById('pipeline').value = shared;
+        if (shared.includes('from ssh') || shared.includes('from catalog')) {
+            optimizePipeline();
+        } else {
+            runPipeline();
+        }
+    } else {
+        document.getElementById('pipeline').value = EXAMPLES[0];
+    }
 }
 
 // --- Pipeline parser ---
