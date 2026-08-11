@@ -558,6 +558,21 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// `limit 0` / `offset 0` are pass-throughs (a limit stage you can
+		// dial to 0 for full runs) and MUST vanish from generated
+		// go/sql/ssql — every lane must return exactly the where result.
+		Name:     "limit_zero_passthrough",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 15 | {{.bin}} offset 0 | {{.bin}} limit 0`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 7, "city": "Mumbai", "pop": 20},
+			{"id": 1, "city": "Oslo", "pop": 31},
+			{"id": 5, "city": "Tokyo", "pop": 37},
+			{"id": 2, "city": "Delhi", "pop": 29},
+			{"id": 11, "city": "Bogota", "pop": 25},
+		},
+	},
+	{
 		// +if negation was silently DROPPED by record and typed codegen
 		// (the condition was applied UN-negated), while exec and the SQL
 		// translator honoured it.

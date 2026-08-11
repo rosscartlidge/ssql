@@ -11,9 +11,10 @@ import (
 // RegisterLimit registers the limit subcommand
 func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("limit").
-		Description("Take first N records (SQL LIMIT)").
+		Description("Take first N records (SQL LIMIT); 0 = no limit (pass-through)").
 		Example("ssql from data.csv | ssql limit 10", "Show first 10 records").
 		Example("ssql from large.csv | ssql limit 100 | ssql to table", "Preview first 100 records").
+		Example("ssql from large.csv | ssql limit 0 | ssql to table", "Limit dialled to 0: all records pass through (and code generation skips the stage)").
 
 		Flag("-generate", "-g").
 			Bool().
@@ -43,8 +44,8 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				generate = genVal.(bool)
 			}
 
-			if n <= 0 {
-				return fmt.Errorf("limit must be positive, got %d", n)
+			if n < 0 {
+				return fmt.Errorf("limit must be non-negative, got %d (use 0 for no limit)", n)
 			}
 
 			// Check if generation is enabled (flag or env var)
@@ -56,11 +57,15 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
-			// Apply limit
-			limited := ssql.Limit[ssql.Record](n)(records)
+			// Apply limit — 0 means no limit, pass everything through
+			// (lets pipelines keep a `limit N` stage and dial it to 0
+			// for full runs).
+			if n > 0 {
+				records = ssql.Limit[ssql.Record](n)(records)
+			}
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, limited); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, records); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -80,6 +85,11 @@ func generateLimitCode(n int) error {
 		if err := lib.WriteCodeFragment(frag); err != nil {
 			return fmt.Errorf("writing previous fragment: %w", err)
 		}
+	}
+	// limit 0 = no limit: emit no fragment at all, so the stage vanishes
+	// from generated go/sql/ssql alike.
+	if n == 0 {
+		return nil
 	}
 	var inputVar string
 	var prevSchema *lib.TypedSchema

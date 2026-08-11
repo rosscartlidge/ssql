@@ -55,11 +55,14 @@ func RegisterOffset(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
-			// Apply offset
-			offsetted := ssql.Offset[ssql.Record](n)(records)
+			// offset 0 is a pass-through — skip the filter entirely
+			// (mirrors `limit 0` = no limit).
+			if n > 0 {
+				records = ssql.Offset[ssql.Record](n)(records)
+			}
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, offsetted); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, records); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -79,6 +82,10 @@ func generateOffsetCode(n int) error {
 		if err := lib.WriteCodeFragment(frag); err != nil {
 			return fmt.Errorf("writing previous fragment: %w", err)
 		}
+	}
+	// offset 0 skips nothing: emit no fragment (mirrors `limit 0`).
+	if n == 0 {
+		return nil
 	}
 	var inputVar string
 	var prevSchema *lib.TypedSchema

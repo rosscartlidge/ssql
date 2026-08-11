@@ -5,6 +5,18 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### New Features
+- **`limit 0` means no limit** (previously an error): all records pass
+  through, so a pipeline can keep a `limit N` sampling stage and dial it
+  to `0` for full runs instead of deleting it. `offset 0` gets the same
+  treatment. In code generation (`generate go` / `sql` / `ssql`) a
+  zero-valued `limit`/`offset` stage emits no fragment at all — it
+  vanishes from the generated program. Gated by the
+  `limit_zero_passthrough` equivalence case (all lanes incl. DuckDB, with
+  golden) and `TestLimitZeroSkipsGeneration`.
+
 ## [v4.59.0] - 2026-08-11
 
 ### New Features

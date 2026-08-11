@@ -514,6 +514,19 @@ Equivalent SQL:
 SELECT * FROM data LIMIT 10 OFFSET 20
 ```
 
+**`limit 0` means no limit** — every record passes through. This makes
+the limit a dial you can leave in the pipeline: sample with
+`ssql limit 1000` while developing, then set it to `0` for the full run
+instead of deleting the stage. `offset 0` is the same kind of no-op. In
+code generation (`generate go` / `sql` / `ssql`) a zero-valued stage is
+skipped entirely — it leaves no trace in the generated program:
+
+```bash
+# Same pipeline, dialled between sampling and full runs
+ssql from big.csv | ssql limit 1000 | ssql group-by dept -sum salary total   # sample
+ssql from big.csv | ssql limit 0    | ssql group-by dept -sum salary total   # full run
+```
+
 ### Count Rows with COUNT
 
 Drain a pipeline and print the row count to stdout (like `wc -l`).

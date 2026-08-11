@@ -2153,3 +2153,49 @@ func TestJoinFieldCollision(t *testing.T) {
 		})
 	}
 }
+
+// TestLimitZeroSkipsGeneration pins that `limit 0` / `offset 0` (the
+// pass-through dial: keep a limit stage in the pipeline, set it to 0 for
+// full runs) emit NO fragment — the stage must vanish from generated go,
+// sql, and ssql alike. The result-equivalence side is covered by the
+// limit_zero_passthrough case in TestPipelineEquivalence.
+func TestLimitZeroSkipsGeneration(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	tmpFile := "/tmp/lz_gen_test.csv"
+	if err := os.WriteFile(tmpFile, []byte("city,pop\nOslo,31\nCairo,10\n"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove(tmpFile)
+
+	pipeline := `/tmp/ssql_test from ` + tmpFile +
+		` | /tmp/ssql_test offset 0 | /tmp/ssql_test limit 0 | /tmp/ssql_test to jsonl`
+
+	for _, mode := range []string{"record", "typed"} {
+		for _, gen := range []struct{ format, reject string }{
+			{"go", "Limit"},   // no ssql.Limit / typed.Limit / flagLimit
+			{"go", "Offset"},  // no ssql.Offset / typed.Skip flagOffset
+			{"sql", "LIMIT"},  // no LIMIT clause
+			{"sql", "OFFSET"}, // no OFFSET clause
+			{"ssql", "ssql limit"}, // stage gone from regenerated pipeline
+			{"ssql", "ssql offset"},
+		} {
+			t.Run(mode+"_"+gen.format+"_no_"+gen.reject, func(t *testing.T) {
+				cmd := exec.Command("bash", "-c",
+					`export SSQL_MODE=`+mode+` && `+pipeline+` | /tmp/ssql_test generate `+gen.format)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("generate %s failed: %v\n%s", gen.format, err, out)
+				}
+				if strings.Contains(string(out), gen.reject) {
+					t.Errorf("generate %s (mode %s): zero-valued stage leaked %q into output:\n%s",
+						gen.format, mode, gen.reject, out)
+				}
+			})
+		}
+	}
+}
