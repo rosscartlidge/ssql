@@ -1,4 +1,4 @@
-package main
+package commands
 
 import "strings"
 
@@ -162,11 +162,11 @@ func upstreamOf(s string) string {
 	return strings.TrimSpace(strings.Join(segs[:len(segs)-1], "|"))
 }
 
-// cursorTopLevelStage returns the current pipeline stage at the cursor —
+// CursorTopLevelStage returns the current pipeline stage at the cursor —
 // paren-aware. If the cursor is inside a process substitution, the stage is the
 // current stage WITHIN that procsub. Leading whitespace is trimmed; a trailing
 // space is preserved (the bindings use it to tell "on a new empty word").
-func cursorTopLevelStage(before string) string {
+func CursorTopLevelStage(before string) string {
 	scope := before
 	if p, ok := enclosingProcsub(before); ok {
 		scope = p
@@ -175,7 +175,7 @@ func cursorTopLevelStage(before string) string {
 	return strings.TrimLeft(segs[len(segs)-1], " \t")
 }
 
-// exprArgAtCursor reports whether the cursor sits on an expression argument of
+// ExprArgAtCursor reports whether the cursor sits on an expression argument of
 // an expression-bearing flag — so the Alt-h help can append the function
 // reference (writing an expression is hard without knowing the functions).
 // args is the COMP_WORDS-style slice MINUS the program name (args[0] is the
@@ -185,7 +185,7 @@ func cursorTopLevelStage(before string) string {
 //	where    -if-expr|-x  <EXPR>
 //	update   -if-expr|-x  <EXPR>            -set-expr|-e <field> <EXPR>
 //	group-by -expr|-e     <EXPR> <name>     -stream-expr <init> <every> <final> <name>
-func exprArgAtCursor(args []string, pos int) bool {
+func ExprArgAtCursor(args []string, pos int) bool {
 	if len(args) == 0 {
 		return false
 	}
@@ -230,12 +230,12 @@ func exprArgAtCursor(args []string, pos int) bool {
 	return flag != "" && isExprSlot(flag, argIdx+1)
 }
 
-// completeSource returns the shell command whose `SSQL_MODE=schema` output
+// CompleteSource returns the shell command whose `SSQL_MODE=schema` output
 // should drive field-NAME completion at the cursor, or "" if none applies:
 //   - cursor inside a process substitution → that procsub's internal upstream;
 //   - cursor at a join right-side field slot → the join's procsub (right source);
 //   - otherwise → the upstream pipeline feeding the current stage.
-func completeSource(before string) string {
+func CompleteSource(before string) string {
 	if p, ok := enclosingProcsub(before); ok {
 		return upstreamOf(p)
 	}

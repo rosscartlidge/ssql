@@ -658,7 +658,13 @@ func TestTypedUpdateConditional(t *testing.T) {
 	}
 }
 
-func TestTypedUpdateSetExprErrors(t *testing.T) {
+// TestTypedUpdateSetExprUnknownFieldLoud: transpilable -set-expr is native
+// in typed mode since the expr transpiler (v4.57.0; success path covered by
+// "update set-expr goes native typed setter" in generation_test.go), but an
+// unknown field must remain a LOUD generation error naming the field and
+// the schema — never silently empty output. (This test previously asserted
+// -set-expr always failed in typed mode — a pre-transpiler expectation.)
+func TestTypedUpdateSetExprUnknownFieldLoud(t *testing.T) {
 	dir := t.TempDir()
 	emp := filepath.Join(dir, "people.csv")
 	if err := os.WriteFile(emp, []byte("id,name,salary\n1,Alice,95000\n"), 0o644); err != nil {
@@ -666,13 +672,15 @@ func TestTypedUpdateSetExprErrors(t *testing.T) {
 	}
 	bin := buildSSQLForTypedTest(t)
 	cmd := exec.Command("bash", "-c",
-		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" update -set-expr bonus 'salary * 0.1' | "+bin+" to csv | "+bin+" generate go")
+		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" update -set-expr bonus 'nosuchfield * 0.1' | "+bin+" to csv | "+bin+" generate go")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("expected -set-expr to fail in typed mode, got:\n%s", out)
+		t.Fatalf("expected unknown-field -set-expr to fail generation, got:\n%s", out)
 	}
-	if !strings.Contains(string(out), "set-expr") || !strings.Contains(string(out), "Tier 3") {
-		t.Errorf("error should name -set-expr and Tier 3, got:\n%s", out)
+	for _, want := range []string{"set-expr", `unknown field "nosuchfield"`, "schema has"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("error should contain %q, got:\n%s", want, out)
+		}
 	}
 }
 

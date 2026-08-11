@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<!--
+  Headless end-to-end test of the WASM playground. Run via
+  scripts/playground-test.sh (serves this dir, drives headless Chrome,
+  greps the results). Exercises the REAL page in iframes: the
+  help-at-cursor button (caret math + -cursor-stage/-help-at protocol
+  through the WASM), the Alt-h keydown path, and share-link loading.
+
+  Headless gotcha this harness works around: Chrome's
+  - -virtual-time-budget fast-forwards timers, so a plain setTimeout poll
+  expires before the real WASM fetch completes. Each poll iteration is
+  anchored to a REAL network round-trip (virtual time pauses while a
+  fetch is in flight). Readiness is probed via btnHelpAt.disabled — the
+  page's `let wasmReady` is not a window property, so the parent frame
+  can't see it.
+-->
+<html><body>
+<iframe id="pg" src="playground.html" style="width:1200px;height:800px"></iframe>
+<iframe id="pgshare" src="playground.html#p=c3NxbCBmcm9tIGVtcGxveWVlcy5jc3YKfCBzc3FsIGdyb3VwLWJ5IGRlcHQgLWNvdW50IGNudAp8IHNzcWwgdG8gdGFibGU" style="width:1200px;height:800px"></iframe>
+<pre id="results">RUNNING</pre>
+<script>
+const out = [];
+function record(name, ok, detail) {
+    out.push((ok ? "PASS " : "FAIL ") + name + (ok ? "" : " :: " + detail));
+}
+async function waitReady(w) {
+    for (let i = 0; i < 400; i++) {
+        const btn = w.document.getElementById('btnHelpAt');
+        if (btn && !btn.disabled) return true;
+        try { await fetch('test-harness.html?ping=' + i, { cache: 'no-store' }); } catch (e) {}
+        await new Promise(r => setTimeout(r, 50));
+    }
+    return false;
+}
+async function run() {
+    const frame = document.getElementById('pg');
+    if (frame.contentDocument === null || frame.contentDocument.readyState !== 'complete') {
+        await new Promise(r => frame.addEventListener('load', r, { once: true }));
+    }
+    const w = frame.contentWindow;
+    if (!(await waitReady(w))) {
+        let st = "(no status)";
+        try { st = w.document.getElementById('status').textContent; } catch (e) { st = "err: " + e; }
+        record("wasm-init", false, "never ready; iframe status: " + st);
+        finish(); return;
+    }
+    record("wasm-init", true);
+
+    const doc = w.document;
+    const ta = doc.getElementById('pipeline');
+    const output = () => doc.getElementById('output').textContent;
+    const label = () => doc.getElementById('outputLabel').textContent;
+
+    // 1. Caret at end of "-sum salary" in a mid-pipeline group-by stage.
+    const p1 = "ssql from employees.csv\n| ssql group-by dept -sum salary";
+    ta.value = p1; ta.selectionStart = ta.selectionEnd = p1.length;
+    w.helpAtCursor();
+    record("flag-arg-help", output().includes("Sum field values"), output().slice(0, 200));
+
+    // 2. Caret on an -if-expr expression argument -> functions reference appended.
+    const p2 = "ssql from employees.csv | ssql where -if-expr 'salary > 5'";
+    ta.value = p2; ta.selectionStart = ta.selectionEnd = p2.length;
+    w.helpAtCursor();
+    record("expr-arg-functions", output().includes("EXPRESSION FUNCTIONS AVAILABLE"), output().slice(0, 200));
+
+    // 3. Caret mid-pipeline: end of FIRST stage while a second exists —
+    //    must get help for `from`, not for the last stage.
+    const p3 = "ssql from employees.csv | ssql to table";
+    ta.value = p3; ta.selectionStart = ta.selectionEnd = "ssql from employees.csv".length;
+    w.helpAtCursor();
+    record("first-stage-help", /from|input|file/i.test(output()) && !/to table/.test(label()), label() + " :: " + output().slice(0, 200));
+
+    // 4. Empty textarea -> friendly message, no crash.
+    ta.value = ""; ta.selectionStart = ta.selectionEnd = 0;
+    w.helpAtCursor();
+    record("empty-message", output().includes("Put the cursor"), output().slice(0, 120));
+
+    // 5. Alt-h keydown path reaches the same handler.
+    const p5 = "ssql from employees.csv | ssql sort -desc salary";
+    ta.value = p5; ta.selectionStart = ta.selectionEnd = p5.length;
+    ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'h', altKey: true, bubbles: true }));
+    record("alt-h-keydown", /descending|Sort/i.test(output()), output().slice(0, 200));
+
+    // 6. Share link (#p=... on the second iframe): pipeline preloaded and
+    //    auto-run — output is the group-by result table.
+    const w2 = document.getElementById('pgshare').contentWindow;
+    if (await waitReady(w2)) {
+        const o2 = w2.document.getElementById('output').textContent;
+        const ta2 = w2.document.getElementById('pipeline').value;
+        record("share-link-autorun",
+            ta2.includes("group-by dept -count cnt") && /Engineering/.test(o2) && /cnt/.test(o2),
+            "textarea: " + ta2.slice(0, 60) + " :: output: " + o2.slice(0, 120));
+    } else {
+        record("share-link-autorun", false, "share iframe never ready");
+    }
+
+    finish();
+}
+function finish() {
+    document.getElementById('results').textContent = "DONE\n" + out.join("\n");
+}
+run();
+</script>
+</body></html>

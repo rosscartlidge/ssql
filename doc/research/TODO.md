@@ -47,6 +47,9 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Data viewer** — click dataset names to view raw CSV.
 - [x] **# comments** — comment out pipeline stages to build up incrementally.
 - [x] **GitHub Actions automation** — `.github/workflows/playground.yml` (2026-08-11) builds WASM and deploys the three playground artifacts to `gh-pages` on push to `main` (path-filtered) + `workflow_dispatch`. Data/gpu files on gh-pages remain manually deployed.
+- [x] **Playground help-at-cursor** — SHIPPED 2026-08-12: "? Help" button + Alt-h in the textarea, driven by the CLI's own `-cursor-stage`/`-help-at` protocol through the WASM bridge (`commands.HandleCursorProtocol`, shared with cmd/ssql/main.go). E2E gate: `scripts/playground-test.sh` (headless Chrome harness `cmd/ssql-playground/test-harness.html`).
+- [ ] **Playground Tab completion** — route `-complete N` through the same protocol path; popup UI at the caret (mirror-div caret positioning), insert on click/Enter. Field/value completion works via the virtual FS. Estimate 1-2 days.
+- [ ] **Playground Ctrl-O pipeline-aware field completion** — run the upstream (from `-complete-source`) in `SSQL_MODE=schema | generate schema` through the JS pipeline simulator; feed names into the Tab-completion popup. After Tab completion. Estimate ~1 day.
 - [x] **Share links** — SHIPPED 2026-08-12: Share button encodes the pipeline as `#p=<base64url(utf8)>` in the URL fragment (fragment, not query — never hits server logs) and copies the link; on load a `#p=` hash preloads the pipeline and auto-runs it (auto-optimizes for ssh/catalog pipelines). Malformed hashes are ignored gracefully. Verified headless (Chrome `--dump-dom`): shared link runs, no-hash default preserved, garbage hash ignored.
 - [x] **Syntax highlighting** — Prism.js (CDN) highlights generated Go and SQL with Tokyo Night theme colors.
 - [x] **Loading indicator** — not needed after slim build (13MB loads fast on phone and desktop).

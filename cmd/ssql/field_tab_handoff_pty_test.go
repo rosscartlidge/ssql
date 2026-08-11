@@ -27,6 +27,7 @@ def seg(after, needle):
 def run(vi):
     pid, fd = pty.fork()
     if pid == 0:
+        os.environ.pop("TMUX", None)
         os.execvp("bash", ["bash", "--norc", "--noprofile", "-i"])
     def send(s): os.write(fd, s.encode()); time.sleep(0.4)
     def drain():
@@ -37,6 +38,7 @@ def run(vi):
         return o
     time.sleep(0.6); drain()
     send("export PATH=%s:$PATH\n" % binDir); drain()
+    send("unset TMUX\n"); drain()
     send("bind 'set keyseq-timeout 1'\n"); drain()
     send('eval "$(ssql -completion-script)"\n'); drain()
     send('eval "$(ssql -field-keybinding)"\n'); drain()

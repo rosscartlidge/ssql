@@ -1,4 +1,4 @@
-package main
+package commands
 
 import "testing"
 
@@ -76,8 +76,8 @@ func TestCompleteSource(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := completeSource(tc.before); got != tc.want {
-				t.Errorf("completeSource(%q)\n  got  %q\n  want %q", tc.before, got, tc.want)
+			if got := CompleteSource(tc.before); got != tc.want {
+				t.Errorf("CompleteSource(%q)\n  got  %q\n  want %q", tc.before, got, tc.want)
 			}
 		})
 	}
@@ -110,8 +110,8 @@ func TestExprArgAtCursor(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := exprArgAtCursor(tc.args, tc.pos); got != tc.want {
-				t.Errorf("exprArgAtCursor(%q, %d) = %v, want %v", tc.args, tc.pos, got, tc.want)
+			if got := ExprArgAtCursor(tc.args, tc.pos); got != tc.want {
+				t.Errorf("ExprArgAtCursor(%q, %d) = %v, want %v", tc.args, tc.pos, got, tc.want)
 			}
 		})
 	}
@@ -135,8 +135,8 @@ func TestCursorTopLevelStage(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		if got := cursorTopLevelStage(tc.before); got != tc.want {
-			t.Errorf("cursorTopLevelStage(%q)\n  got  %q\n  want %q", tc.before, got, tc.want)
+		if got := CursorTopLevelStage(tc.before); got != tc.want {
+			t.Errorf("CursorTopLevelStage(%q)\n  got  %q\n  want %q", tc.before, got, tc.want)
 		}
 	}
 }

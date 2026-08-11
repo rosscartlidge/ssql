@@ -50,14 +50,16 @@ true
 		t.Errorf("non-ssql line produced output: %q", got)
 	}
 
-	// A pipeline that can't generate (a typed-mode-only limitation) fails fast
-	// at codegen — the error must surface (in the popup; inline here), not just
-	// scroll past. -set-expr is a Tier 3 generation error.
-	got := run("ssql from csv " + csv + " | ssql update -set-expr x '3*4' | ssql to table")
+	// A pipeline that can't generate fails fast at codegen — the error must
+	// surface (in the popup; inline here), not just scroll past. An unknown
+	// field in -set-expr is a PERMANENT loud generation error; the previous
+	// fixture ('3*4') was a pre-transpiler limitation that v4.57.0 learned
+	// to compile, silently inverting this test.
+	got := run("ssql from csv " + csv + " | ssql update -set-expr x 'nosuchfield * 2' | ssql to table")
 	if !strings.Contains(got, "pipeline failed") {
 		t.Errorf("expected the failure header, got:\n%s", got)
 	}
-	if !strings.Contains(got, "set-expr") {
+	if !strings.Contains(got, "unknown field") {
 		t.Errorf("expected the real generation error, got:\n%s", got)
 	}
 

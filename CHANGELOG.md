@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Playground help-at-cursor** — a "? Help" button (and Alt-h inside the
+  pipeline textarea) shows contextual help for the command or flag at the
+  caret, exactly like the CLI's Alt-h keybinding: paren-aware stage
+  extraction, autocli help-at, and the expression-function reference on
+  expression arguments. The cursor-context protocol
+  (`-cursor-stage`/`-help-at`/`-complete-source`) moved to
+  `commands.HandleCursorProtocol`, shared by the CLI and the playground
+  WASM — one implementation, no drift. New headless end-to-end gate:
+  `scripts/playground-test.sh` (drives the real page in headless Chrome;
+  also covers share links).
 - **Playground share links** — the browser playground gained a Share
   button that encodes the current pipeline into the URL fragment
   (`#p=<base64url>`) and copies the link; opening a shared link

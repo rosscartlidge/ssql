@@ -62,6 +62,40 @@ cd cmd/ssql-playground && python3 -m http.server 8080
 No rebuild needed for HTML/CSS/JS/data changes — just refresh the browser.
 WASM rebuild only needed when Go code changes.
 
+## Help at Cursor (and the cursor-context protocol)
+
+The "? Help" button (and Alt-h inside the textarea) is the CLI's Alt-h
+keybinding in the browser: JS takes the textarea up to the caret, calls the
+WASM binary with `-cursor-stage` (paren-aware stage extraction), does the
+COMP_WORDS-style index math (ported from `help_keybinding.go`'s bash), and
+calls `-help-at`. The protocol lives in
+`commands.HandleCursorProtocol` (`cmd/ssql/commands/cursor_protocol.go`) —
+ONE implementation shared by `cmd/ssql/main.go` and the playground's
+`execCommand`, so CLI and playground can't drift. The same protocol is the
+route for future Tab completion (`-complete`) and Ctrl-O (`-complete-source`).
+
+## End-to-End Testing (headless Chrome)
+
+```bash
+make playground && scripts/playground-test.sh
+```
+
+`cmd/ssql-playground/test-harness.html` iframes the REAL playground page and
+drives it: sets textarea value + caret, calls `helpAtCursor()`, dispatches an
+Alt-h KeyboardEvent, and loads a `#p=` share link — asserting on the output
+div. Run it before pushing playground/WASM changes; the deploy workflow does
+NOT run it.
+
+Headless gotchas (hard-won, keep in mind when extending the harness):
+- `--virtual-time-budget` fast-forwards timers, so a plain setTimeout poll
+  expires before the real 15 MB WASM fetch finishes. Anchor each poll
+  iteration to a REAL network round-trip (`await fetch(...)`) — virtual time
+  pauses while a fetch is in flight.
+- The page's `let wasmReady` is NOT a window property (let/const don't attach
+  to window), so probe readiness via `btnHelpAt.disabled` instead.
+- `--dump-dom` dumps only the main frame — put assertions in the harness
+  page's own DOM, not the iframe's.
+
 ## Deploying to GitHub Pages
 
 ### WASM Playground (rosscartlidge.github.io/ssql/playground.html)

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/commands"
@@ -130,38 +128,17 @@ func buildRootCommand() *cf.Command {
 }
 
 func main() {
-	// Paren-aware cursor-context helpers for the Ctrl-O / Alt-h keybindings.
-	// They take the line up to the cursor as the next arg and print a single
-	// value; WriteString (not fmt.Print) because the text may contain %.
-	// See cursor_context.go for why the bash split couldn't do this itself.
-	if len(os.Args) >= 3 && os.Args[1] == "-complete-source" {
-		os.Stdout.WriteString(completeSource(os.Args[2]))
-		return
-	}
-	if len(os.Args) >= 3 && os.Args[1] == "-cursor-stage" {
-		os.Stdout.WriteString(cursorTopLevelStage(os.Args[2]))
-		return
-	}
-	// -help-at: autocli renders help for the flag/command under the cursor. We
-	// intercept (rather than let it flow to autocli) only to ALSO append the
-	// expression-function reference when the cursor is on an expression
-	// argument — writing an expression is hard without knowing the functions.
-	if len(os.Args) >= 3 && os.Args[1] == "-help-at" {
-		pos, perr := strconv.Atoi(os.Args[2])
-		args := os.Args[3:]
-		if perr != nil {
-			fmt.Fprintf(os.Stderr, "invalid position: %s\n", os.Args[2])
-			os.Exit(1)
+	// Paren-aware cursor-context protocol (-complete-source, -cursor-stage,
+	// -help-at) for the Ctrl-O / Alt-h keybindings — shared with the browser
+	// playground via commands.HandleCursorProtocol. WriteString (not
+	// fmt.Print) because the text may contain %. See commands/cursor_context.go
+	// for why the bash split couldn't do this itself.
+	if out, errOut, code, ok := commands.HandleCursorProtocol(os.Args[1:], buildRootCommand); ok {
+		os.Stdout.WriteString(out)
+		os.Stderr.WriteString(errOut)
+		if code != 0 {
+			os.Exit(code)
 		}
-		help, herr := buildRootCommand().HelpAt(args, pos)
-		if herr != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", herr)
-			os.Exit(1)
-		}
-		if exprArgAtCursor(args, pos) {
-			help = strings.TrimRight(help, "\n") + "\n\n" + commands.FunctionsReference
-		}
-		os.Stdout.WriteString(help)
 		return
 	}
 

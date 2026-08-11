@@ -71,6 +71,12 @@ var execCounter int
 // execCommand runs an ssql command with captured I/O using temp files
 // (os.Pipe is not implemented in Go WASM).
 func execCommand(args []string, stdinData string) (string, string, int) {
+	// Cursor-context protocol (-cursor-stage / -help-at / -complete-source):
+	// pure argv→string, no I/O redirection needed. Drives the playground's
+	// help-at-cursor button with the same code as the CLI's Alt-h binding.
+	if out, errOut, code, ok := commands.HandleCursorProtocol(args, buildCommand); ok {
+		return out, errOut, code
+	}
 	execCounter++
 	prefix := fmt.Sprintf("/tmp/_exec_%d", execCounter)
 	stdinFile := prefix + "_in"
