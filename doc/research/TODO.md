@@ -46,7 +46,7 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Progressive examples** — 15 examples from simple to complex, with static data files.
 - [x] **Data viewer** — click dataset names to view raw CSV.
 - [x] **# comments** — comment out pipeline stages to build up incrementally.
-- [ ] **GitHub Actions automation** — build WASM and deploy to `gh-pages` automatically on push to `main`.
+- [x] **GitHub Actions automation** — `.github/workflows/playground.yml` (2026-08-11) builds WASM and deploys the three playground artifacts to `gh-pages` on push to `main` (path-filtered) + `workflow_dispatch`. Data/gpu files on gh-pages remain manually deployed.
 - [ ] **Share links** — encode pipeline in URL fragment for sharing.
 - [x] **Syntax highlighting** — Prism.js (CDN) highlights generated Go and SQL with Tokyo Night theme colors.
 - [x] **Loading indicator** — not needed after slim build (13MB loads fast on phone and desktop).

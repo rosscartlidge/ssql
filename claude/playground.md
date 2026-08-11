@@ -66,8 +66,19 @@ WASM rebuild only needed when Go code changes.
 
 ### WASM Playground (rosscartlidge.github.io/ssql/playground.html)
 
-Served from the `gh-pages` branch. The WASM binary is NOT tracked in main (gitignored),
-so you must build it on main, save to /tmp, then switch branches to deploy.
+Served from the `gh-pages` branch.
+
+**Deployment is automated** (since 2026-08-11): `.github/workflows/playground.yml`
+builds `make playground` and pushes `ssql-playground.wasm`, `wasm_exec.js`, and
+`playground.html` to `gh-pages` on every push to `main` that touches Go source or
+`cmd/ssql-playground/` (plus `workflow_dispatch` for manual runs:
+`gh workflow run "Deploy Playground"`). It updates ONLY those three files — data
+files, `fs-polyfill.js`, and the gpu demo on gh-pages are untouched and still
+deployed by hand. Verify with `gh run list --workflow=playground.yml`.
+
+The manual process below is the **fallback** (e.g. Actions outage, or deploying
+uncommitted work). The WASM binary is NOT tracked in main (gitignored), so you
+must build it on main, save to /tmp, then switch branches to deploy.
 
 > **Shared-working-tree gotcha.** `gh-pages` shares one working directory with `main`.
 > `git checkout gh-pages` removes main's *tracked* files but leaves main's *ignored*

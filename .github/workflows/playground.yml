@@ -1,0 +1,63 @@
+# Builds the WASM playground and deploys it to gh-pages on every push to
+# main that could change it — replacing the manual build-on-main /
+# copy-to-/tmp / switch-branch dance from the release checklist
+# (claude/playground.md keeps the manual steps as the fallback).
+#
+# Only the three build artifacts are updated; everything else on gh-pages
+# (data/, fs-polyfill.js, the gpu demo, …) is preserved untouched.
+name: Deploy Playground
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "cmd/ssql-playground/**"
+      - ".github/workflows/playground.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-playground
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Build playground WASM
+        run: make playground
+
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: ghp
+
+      - name: Deploy artifacts
+        run: |
+          cp cmd/ssql-playground/ssql-playground.wasm ghp/
+          cp cmd/ssql-playground/wasm_exec.js ghp/
+          cp cmd/ssql-playground/playground.html ghp/
+          cd ghp
+          git add ssql-playground.wasm wasm_exec.js playground.html
+          if git diff --cached --quiet; then
+            echo "playground unchanged — nothing to deploy"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "deploy: playground from ${GITHUB_SHA::8}"
+          git push origin gh-pages

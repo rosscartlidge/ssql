@@ -133,10 +133,10 @@ After a minor/major release, always do ALL of these:
 **Builds:**
 - [ ] `make deb` — build `ssql_X.Y.Z_amd64.deb` and `ssql-gpu_X.Y.Z_amd64.deb`, commit to repo
 - [ ] `make install-local` — refresh BOTH `$GOPATH/bin/ssql` and `$GOPATH/bin/ssql_gpu` so the developer's shell resolves the latest version on the next `ssql` / `ssql_gpu` invocation. Verify final lines print `ssql vX.Y.Z` for both (no `gpu: no` + `gpu: yes` version mismatch). Replaces the older "`make build-gpu` and test" step which left the gpu binary out of `$GOPATH/bin` — gpu drifted from v4.32.0 to v4.44.0 unnoticed before being caught at v4.44.0 release.
-- [ ] `make playground` — rebuild WASM playground
+- [ ] `make playground` — rebuild WASM playground locally if you want to test it before the release push (CI rebuilds and deploys it anyway)
 
 **Deployments:**
-- [ ] Update `gh-pages` branch with new playground (see `claude/playground.md` for steps)
+- [ ] Playground deploys automatically — `.github/workflows/playground.yml` pushes WASM + playground.html to `gh-pages` on push to main. Verify with `gh run list --workflow=playground.yml -L 1` (manual fallback steps in `claude/playground.md`)
 - [ ] Cross-compile for WebVM: `CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -ldflags "..." -o ~/src/ssql-terminal/dockerfiles/ssql ./cmd/ssql`
 - [ ] Push WebVM binary and trigger deploy: `gh workflow run Deploy --ref main -f DOCKERFILE_PATH=dockerfiles/ssql_mini -f IMAGE_SIZE=750M -f DEPLOY_TO_GITHUB_PAGES=true -f GITHUB_RELEASE=false`
 
