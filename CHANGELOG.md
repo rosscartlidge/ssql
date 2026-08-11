@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **`group-by -rollup` / `-cube` now work in typed and parallel mode**
+  (previously a hard error: "not yet supported in typed mode; drop
+  -typed"). The stage ejects to the record `ssql.Rollup` path through
+  the Phase B typed→Record boundary — the typed (parallel) CSV parse
+  upstream is kept, and the fallback is surfaced under `-explain`
+  ("record fallback (-rollup / -cube have no typed form)"). Gated by
+  the `groupby_cube_typed_eject` equivalence case with a hand-checked
+  golden. (`generate sql` still refuses rollup/cube loudly —
+  translation tracked in TODO.)
 - **`limit 0` means no limit** (previously an error): all records pass
   through, so a pipeline can keep a `limit N` sampling stage and dial it
   to `0` for full runs instead of deleting it. `offset 0` gets the same

@@ -459,10 +459,13 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	var typedFallbackNotes []string
 	if typedMode() && prevSchema != nil {
 		if rollup || cube {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: -rollup / -cube not yet supported in typed mode; drop -typed"))
-		}
-		if len(aggSpecs) == 0 && len(exprSpecs) == 0 && len(streamExprSpecs) == 0 {
+			// No typed runtime for rollup/cube (the enriched output
+			// carries per-grouping-set prefixed fields). Eject to the
+			// record path below — the planner inserts the typed→Record
+			// boundary, so the typed (parallel) upstream is kept.
+			typedFallbackNotes = append(typedFallbackNotes,
+				"record fallback (-rollup / -cube have no typed form)")
+		} else if len(aggSpecs) == 0 && len(exprSpecs) == 0 && len(streamExprSpecs) == 0 {
 			// 'group-by FIELDS' with no aggregations is semantically
 			// equivalent to `include FIELDS | distinct` — project to
 			// the kept fields and dedupe. Emit two fragments rather
@@ -498,24 +501,25 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 				Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true,
 			}
 			return lib.WriteCodeFragment(distinctFrag)
-		}
-		for _, s := range aggSpecs {
-			if s.function == "collect" {
-				return lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: -collect not yet supported (would need slice-typed result fields); drop -typed for now"))
+		} else {
+			for _, s := range aggSpecs {
+				if s.function == "collect" {
+					return lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("ssql generate go -typed: -collect not yet supported (would need slice-typed result fields); drop -typed for now"))
+				}
 			}
+			// emitTypedGroupBy now always emits dual templates (parallel
+			// + serial) for non-presorted, and the planner picks per
+			// pipeline. -presorted and -stream-expr force SerialOnly
+			// (GroupByOrdered needs contiguous keys; fold state is not
+			// mergeable), single-template emission. The `useParallel` arg
+			// is vestigial now — kept for API stability but ignored.
+			handled, reason, err := emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, exprSpecs, streamExprSpecs, presorted, true)
+			if handled || err != nil {
+				return err
+			}
+			typedFallbackNotes = append(typedFallbackNotes, fmt.Sprintf("record fallback (%s)", reason))
 		}
-		// emitTypedGroupBy now always emits dual templates (parallel
-		// + serial) for non-presorted, and the planner picks per
-		// pipeline. -presorted and -stream-expr force SerialOnly
-		// (GroupByOrdered needs contiguous keys; fold state is not
-		// mergeable), single-template emission. The `useParallel` arg
-		// is vestigial now — kept for API stability but ignored.
-		handled, reason, err := emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, exprSpecs, streamExprSpecs, presorted, true)
-		if handled || err != nil {
-			return err
-		}
-		typedFallbackNotes = append(typedFallbackNotes, fmt.Sprintf("record fallback (%s)", reason))
 	}
 
 	// Rollup/cube code generation path
@@ -568,6 +572,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	})(%s)`, fieldsList.String(), aggLines.String(), modeStr, inputVar)
 
 		frag := lib.NewStmtFragment("rollupResult", inputVar, code, nil, getCommandString())
+		frag.PlanNotes = typedFallbackNotes
 		return lib.WriteCodeFragment(frag)
 	}
 

@@ -558,6 +558,26 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// -cube (and -rollup) were REJECTED outright by typed-mode codegen.
+		// They now eject to the record ssql.Rollup path via the Phase B
+		// typed→Record boundary — typed/parallel lanes must produce the
+		// exact enrichment exec does. Golden hand-checked: Widget/US
+		// appears twice (100+50), so a wrong grouping diverges.
+		Name: "groupby_cube_typed_eject",
+		Pipeline: `{{.bin}} from csv {{.data}}/sales.csv | ` +
+			`{{.bin}} group-by product region -count c -sum amount total -cube`,
+		Ordered: false,
+		Golden: []map[string]any{
+			{"product": "Widget", "region": "US", "c": 5, "total": 580, "product_c": 3, "product_total": 300, "region_c": 3, "region_total": 350, "product_region_c": 2, "product_region_total": 150},
+			{"product": "Widget", "region": "EU", "c": 5, "total": 580, "product_c": 3, "product_total": 300, "region_c": 2, "region_total": 230, "product_region_c": 1, "product_region_total": 150},
+			{"product": "Gadget", "region": "US", "c": 5, "total": 580, "product_c": 2, "product_total": 280, "region_c": 3, "region_total": 350, "product_region_c": 1, "product_region_total": 200},
+			{"product": "Gadget", "region": "EU", "c": 5, "total": 580, "product_c": 2, "product_total": 280, "region_c": 2, "region_total": 230, "product_region_c": 1, "product_region_total": 80},
+		},
+		Skip: map[string]string{
+			"duckdb": "generate sql refuses -cube (GROUP BY CUBE translation not implemented; loud error)",
+		},
+	},
+	{
 		// `limit 0` / `offset 0` are pass-throughs (a limit stage you can
 		// dial to 0 for full runs) and MUST vanish from generated
 		// go/sql/ssql — every lane must return exactly the where result.
