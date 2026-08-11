@@ -7,6 +7,8 @@ import (
 	"iter"
 	"os"
 	"runtime"
+
+	"github.com/rosscartlidge/ssql/v4/internal/mmap"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -440,8 +442,20 @@ func ReadCSVParallel[T any](filename string, n int) Stream[T] {
 	if n <= 0 {
 		n = runtime.GOMAXPROCS(0)
 	}
-	data, err := os.ReadFile(filename)
-	if err != nil || len(data) == 0 {
+	// mmap the file instead of os.ReadFile: no kernel→user copy, no
+	// file-sized heap allocation (1.7–1.9× faster slurp on a 1.23 GB CSV
+	// — doc/research/mmap-readers-proposal.md). SAFE here because
+	// encoding/csv COPIES field strings (ReuseRecord reuses only the
+	// record slice), so yielded structs never alias the mapping; each
+	// shard closure holds the *Mapped reachable while it reads. NB
+	// ReadDelimParallel must NOT do this — its splitLineAlias strings
+	// alias the buffer, which the GC cannot see into a mapping.
+	m, err := mmap.Map(filename)
+	if err != nil {
+		return Stream[T]{shards: nil, n: 0}
+	}
+	data := m.Data
+	if len(data) == 0 {
 		return Stream[T]{shards: nil, n: 0}
 	}
 
@@ -518,6 +532,9 @@ func ReadCSVParallel[T any](filename string, n int) Stream[T] {
 		chunk := data[startByte:endByte]
 
 		shards[i] = func(yield func(T) bool) {
+			// chunk points into mmap'd memory the GC cannot trace — the
+			// KeepAlive pins the mapping until this shard finishes.
+			defer runtime.KeepAlive(m)
 			cr := csv.NewReader(bytes.NewReader(chunk))
 			cr.ReuseRecord = true
 			for {
@@ -533,5 +550,6 @@ func ReadCSVParallel[T any](filename string, n int) Stream[T] {
 			}
 		}
 	}
+	runtime.KeepAlive(m) // the setup above also read the mapping
 	return Stream[T]{shards: shards, n: n}
 }

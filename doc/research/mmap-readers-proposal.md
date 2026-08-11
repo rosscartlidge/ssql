@@ -286,3 +286,48 @@ addition to the cleanup helper.
   reads (Phase D, deferred).
 - Bench code: `/tmp/mmap-bench/main.go` and `/tmp/mmap-slurp/main.go`
   (kept for reproducibility while iterating; not committed).
+
+---
+
+## Implementation results (2026-08-11 — SHIPPED, Phase A / CSV only)
+
+Landed as `internal/mmap` (linux/darwin real mmap + MADV_DONTDUMP on
+linux; os.ReadFile fallback elsewhere) wired into
+`typed.ReadCSVParallel`. Lifetime is GC-driven (`runtime.AddCleanup` on
+the *Mapped; shard closures `runtime.KeepAlive` it) — deferred unmap
+costs address space only, since clean file-backed pages are
+kernel-reclaimable regardless.
+
+**Scope correction vs the plan: `ReadDelimParallel` deliberately NOT
+converted.** Its `splitLineAlias` zero-copy strings alias the slurped
+buffer; under os.ReadFile the string pointers keep the heap buffer
+GC-alive for as long as any row survives (sort/group materialization
+included). Under mmap the GC traces NOTHING into the mapping, so any
+retained row after unmap would be a dangling string → SIGSEGV. The
+proposal's "safe because the chunk lives for the duration of the
+iter.Seq" claim was wrong for materializing pipelines. CSV is safe
+because encoding/csv COPIES field strings (ReuseRecord reuses only the
+record slice).
+
+**Measured on the Ultra 9 275HX (24T), 1.15 GB / 50M-row CSV, warm
+cache, medians of 3:**
+
+| layer | os.ReadFile | mmap | delta |
+|---|---:|---:|---|
+| raw slurp + newline scan (1 thread) | 1.44 s | 1.22 s | **1.16–1.25× faster** |
+| ReadCSVParallel + count (24T) | 3.44 s / **3.01 GB** RSS | 3.47 s / **2.07 GB** RSS | wall neutral, **−0.94 GB** |
+| full pipeline (where-expr + group-by) | 3.73 s / 3.01 GB | 3.69 s / 2.21 GB | wall neutral, **−0.80 GB** |
+
+**Honest revision of the headline claim:** the original 1.7–1.9× slurp
+numbers were measured on a different (slower-memory) workstation; on
+the Ultra 9 the raw-layer win is 1.16–1.25×, and in the full parallel
+pipeline it vanishes into the 24-thread parse (page-fault first-touch
+distributes across parsers roughly cancelling the saved copy). The
+robust, machine-independent win is MEMORY: the file-sized heap
+allocation (and its GC pressure) is gone — peak RSS drops by
+approximately the input size. For a 1.15 GB input that is the
+difference between ~3 GB and ~2 GB resident; proportionally more
+important as inputs grow.
+
+Phase B (Arrow IPC, ~7–8% cold-cache) and Phase C (fadvise hygiene)
+remain unimplemented — revisit if profiles ever show them.

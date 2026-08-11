@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### New Features
+- **`typed.ReadCSVParallel` memory-maps its input** (`internal/mmap`:
+  real mmap on linux/darwin with MADV_DONTDUMP, `os.ReadFile` fallback
+  elsewhere; GC-managed unmap). The file-sized heap allocation — and its
+  GC pressure — is gone: peak RSS drops by roughly the input size
+  (measured: 3.0 GB → 2.07 GB on a 1.15 GB / 50M-row CSV). Wall clock is
+  neutral on a modern-memory machine (the raw slurp is 1.16–1.25×
+  faster, but the 24-thread parse dominates); the honest measured
+  numbers, including the revision of the proposal's older-workstation
+  1.7–1.9× claim, are appended to
+  `doc/research/mmap-readers-proposal.md`. `ReadDelimParallel` is
+  deliberately NOT converted: its zero-copy field strings alias the
+  buffer, and the GC cannot trace references into a mapping — retained
+  rows after unmap would dangle. Race-gated (`go test -race ./typed/...`)
+  with byte-identical pipeline output verified pre/post.
+
 ### Bug Fixes
 - **Catalog range-column extraction no longer LEAKS rows.** The
   `generate ssql` optimizer's catalog-predicate-extraction rule deleted
