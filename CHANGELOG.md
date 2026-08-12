@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Bug Fixes
+- **Schema mode now honours `from tsv`'s delimiter auto-detection** — the
+  schema-mode branch hard-split headers on tab, so Ctrl-O / playground
+  field completion on a pipe- (or colon-, semicolon-, …) delimited file
+  offered one bogus concatenated field. Detection is now a single shared
+  rule (`lib.DetectDelimInHeader`) used by typed sampling and schema
+  mode alike, and the header is parsed with proper quote handling.
+
 ### New Features
 - **Playground "Generate Typed Go" button** — generates the typed-mode
   program (derived row structs, `typed.*` runtime, planner-selected

@@ -61,16 +61,24 @@ func detectTSVDelim(filename string) (byte, error) {
 	defer f.Close()
 	buf := make([]byte, 64*1024)
 	n, _ := f.Read(buf)
-	for i := 0; i < n; i++ {
-		c := buf[i]
+	return DetectDelimInHeader(string(buf[:n])), nil
+}
+
+// DetectDelimInHeader returns the delimiter implied by a header line:
+// the first non-identifier byte, defaulting to '\t'. The single
+// detection rule shared by typed schema sampling and schema-mode
+// header parsing — every backend must agree on how a "TSV" splits.
+func DetectDelimInHeader(line string) byte {
+	for i := 0; i < len(line); i++ {
+		c := line[i]
 		if c == '\n' || c == '\r' {
 			break
 		}
 		if !isIdentByte(c, i == 0) {
-			return c, nil
+			return c
 		}
 	}
-	return '\t', nil
+	return '\t'
 }
 
 func isIdentByte(c byte, first bool) bool {

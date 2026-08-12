@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bufio"
+	"encoding/csv"
 	"fmt"
 	"io"
 	"iter"
@@ -99,8 +100,18 @@ func executeFromTSV(inputFile string, generate bool) error {
 			defer f.Close()
 			r = f
 		}
+		// Same delimiter auto-detection as the readers and typed
+		// sampling (first non-identifier byte; default tab) — a raw
+		// tab split here made Ctrl-O field completion on a
+		// pipe-delimited file offer one bogus "name|age|dept" field.
 		line, _ := bufio.NewReader(r).ReadString('\n')
-		headers := strings.Split(strings.TrimRight(line, "\r\n"), "\t")
+		line = strings.TrimRight(line, "\r\n")
+		cr := csv.NewReader(strings.NewReader(line))
+		cr.Comma = rune(lib.DetectDelimInHeader(line))
+		headers, err := cr.Read()
+		if err != nil {
+			headers = strings.Split(line, string(lib.DetectDelimInHeader(line)))
+		}
 		return writeSchemaModeOutput(os.Stdout, headers)
 	}
 
