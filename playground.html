@@ -56,10 +56,11 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 
 <h1>ssql playground</h1>
 <div class="subtitle">SQL-style stream processing — runs entirely in your browser via WebAssembly</div>
+<div class="subtitle"><b style="color:#9ece6a;">Tab</b> completes commands, flags, files, and pipeline-aware field names · <b style="color:#9ece6a;">? Help</b> (Alt-h) explains the command or flag at your cursor</div>
 <div id="status">Loading WASM module...</div>
 
 <div class="input-area">
-    <label>Pipeline <span style="color:#565f89; font-weight:normal;">— comment out commands with #</span></label>
+    <label>Pipeline <span style="color:#565f89; font-weight:normal;">— Tab to complete · "? Help" for the flag under the cursor · # comments out a command</span></label>
     <textarea id="pipeline" rows="8" placeholder="ssql from employees.csv | ssql where -if age gt 30 | ssql to table" spellcheck="false"></textarea>
     <div id="completions"></div>
 </div>
@@ -68,6 +69,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="primary" id="btnRun" onclick="runPipeline()" disabled>Run ▶</button>
     <button id="btnOptimize" onclick="optimizePipeline()" disabled>Optimize</button>
     <button id="btnGenerateGo" onclick="generateGo()" disabled>Generate Go</button>
+    <button id="btnGenerateTypedGo" onclick="generateGo('typed')" disabled title="Typed/parallel code generation: derived row structs, planner-selected Stream/parallel forms">Generate Typed Go</button>
     <button id="btnGenerateSQL" onclick="generateSQL()" disabled>Generate SQL</button>
     <input type="file" id="fileUpload" accept=".csv,.tsv,.json,.jsonl" style="display:none" onchange="uploadFile(event)">
     <button onclick="document.getElementById('fileUpload').click()">Upload CSV</button>
@@ -560,6 +562,7 @@ async function initWasm() {
     document.getElementById('btnRun').disabled = false;
     document.getElementById('btnOptimize').disabled = false;
     document.getElementById('btnGenerateGo').disabled = false;
+    document.getElementById('btnGenerateTypedGo').disabled = false;
     document.getElementById('btnGenerateSQL').disabled = false;
     document.getElementById('btnHelpAt').disabled = false;
 
@@ -710,7 +713,7 @@ function resolveProcessSubstitutions(str, isTopLevel, ssqlgoMode, env) {
 
 // --- Execution ---
 
-function executePipeline(pipelineStr, ssqlgoMode) {
+function executePipeline(pipelineStr, ssqlgoMode, env) {
     if (!wasmReady) return { stdout: '', stderr: 'WASM not ready', exitCode: 1 };
 
     // Set SSQLGO env if needed
@@ -725,7 +728,7 @@ function executePipeline(pipelineStr, ssqlgoMode) {
     }
 
     try {
-        let stages = parsePipeline(pipelineStr, true, ssqlgoMode);
+        let stages = parsePipeline(pipelineStr, true, ssqlgoMode, env);
         let data = '';
 
         for (let i = 0; i < stages.length; i++) {
@@ -739,7 +742,7 @@ function executePipeline(pipelineStr, ssqlgoMode) {
                 }
             }
 
-            let res = ssqlExec(args, data);
+            let res = ssqlExec(args, data, env);
             if (res.exitCode !== 0) {
                 return res;
             }
@@ -871,15 +874,20 @@ function hideUseButton() {
     lastOptimized = '';
 }
 
-function generateGo() {
+// generateGo(mode): mode 'typed' runs the pipeline under SSQL_MODE=typed —
+// derived row structs and planner-selected Stream/parallel forms; default
+// (record mode) generates the ssql.Record form.
+function generateGo(mode) {
     hideUseButton();
     hideChart();
     const pipeline = document.getElementById('pipeline').value.trim();
     if (!pipeline) return;
+    const env = mode === 'typed' ? { SSQL_MODE: 'typed' } : null;
+    const label = mode === 'typed' ? 'Generated Go Code (typed/parallel)' : 'Generated Go Code (record)';
 
     // First optimize, then generate Go
     const optimizePipe = pipeline + ' | ssql generate ssql';
-    const optResult = executePipeline(optimizePipe, true);
+    const optResult = executePipeline(optimizePipe, true, env);
     if (optResult.exitCode !== 0) {
         showOutput(optResult, 'Error');
         return;
@@ -888,8 +896,8 @@ function generateGo() {
     // The optimized pipeline is a shell command — but for generate go,
     // we run the original pipeline through generate go directly
     const goPipe = pipeline + ' | ssql generate go';
-    const result = executePipeline(goPipe, true);
-    showOutput(result, 'Generated Go Code', false, 'go');
+    const result = executePipeline(goPipe, true, env);
+    showOutput(result, label, false, 'go');
 }
 
 function generateSQL() {
