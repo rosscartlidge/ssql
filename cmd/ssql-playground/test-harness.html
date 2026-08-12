@@ -176,6 +176,23 @@ async function run() {
         popupOpen() ? items().join(",") : JSON.stringify(ta.value));
     if (popupOpen()) key('Escape');
 
+    // 10g. Ross's friends.tsv repro: comma-delimited .tsv, pipeline TYPED
+    //      (file path never tab-completed, so no field_cache) — value
+    //      completion must derive the source from the pipeline itself.
+    //      Values contain spaces -> accepted candidate must be quoted.
+    w._fsWriteFile('friends.tsv', 'name,age,school\nPeter Allworth,46,Knox\nJames Dunn,46,Knox\nRoss Cartlidge,45,SSBHS\n');
+    setLine("ssql from tsv friends.tsv | ssql where -if name eq ");
+    tab();
+    const friendsOK = popupOpen() && items().includes("Peter Allworth") && items().includes("Ross Cartlidge");
+    let quotedOK = false;
+    if (popupOpen()) {
+        key('Enter'); // accept first candidate
+        quotedOK = ta.value.includes("eq 'Peter Allworth' ") || ta.value.includes("eq 'James Dunn' ") || ta.value.includes("eq 'Ross Cartlidge' ");
+    }
+    record("tab-value-derived-source", friendsOK,
+        popupOpen() ? items().join(",") : "no popup; status: " + doc.getElementById('status').textContent + " value=" + JSON.stringify(ta.value));
+    record("tab-value-quoted-insert", quotedOK, JSON.stringify(ta.value));
+
     // 11. Generate Typed Go: derived row struct + typed runtime calls;
     //     record-mode Generate Go must NOT have them (discriminates the
     //     SSQL_MODE=typed env plumbing).

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Bug Fixes
+- **Playground value completion no longer requires tab-completing the
+  file path first** — the value source is now derived from the pipeline
+  itself (via `-complete-source` + the virtual FS), so typed, pasted, or
+  shared pipelines complete values too; a stale cache from an earlier
+  pipeline can't win over the file the current one reads. Values
+  containing spaces ("Peter Allworth") are quoted on insertion.
 - **Field AND value completion work for non-tab "TSV" files** — pipe-,
   semicolon-, colon-delimited files (which `from tsv` reads fine via
   delimiter auto-detection) silently broke completion: schema mode

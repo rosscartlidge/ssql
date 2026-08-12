@@ -269,8 +269,27 @@ let compState = null; // { cands, sel } while the popup is open
 // VALUE completion (`where -if country eq <Tab>` → real values).
 let completionEnv = {};
 
+// valueSourceFile: the data file feeding the cursor position, derived
+// from the PIPELINE (via the paren-aware -complete-source) rather than
+// the tab-completion cache. Bash needs the cache because its completion
+// can't see across pipes; the playground can, so a typed or pasted
+// pipeline gets value completion too — and a stale cache from an
+// earlier pipeline can't win over what the current one actually reads.
+function valueSourceFile(before) {
+    const src = ssqlExec(['-complete-source', before], '').stdout.trim();
+    if (!src) return null;
+    const toks = shellSplit(src);
+    for (let i = toks.length - 1; i >= 0; i--) {
+        if (_fsReadFile(toks[i]) !== null) return toks[i];
+    }
+    return null;
+}
+
 function completionCandidates(ctx) {
-    const out = ssqlExec(['-complete', String(ctx.pos), ...ctx.args], '', completionEnv).stdout;
+    const env = Object.assign({}, completionEnv);
+    const derived = valueSourceFile(ctx.before);
+    if (derived) env.AUTOCLI_CACHE_FILE = derived;
+    const out = ssqlExec(['-complete', String(ctx.pos), ...ctx.args], '', env).stdout;
     const cands = [], hints = [];
     for (const l of out.split('\n').map(s => s.trim()).filter(Boolean)) {
         // {"type":...} lines are protocol directives, not candidates —
@@ -290,6 +309,12 @@ function completionCandidates(ctx) {
         else cands.push(l);
     }
     return { cands, hints };
+}
+
+// Values can contain spaces ("Peter Allworth") — quote on insert so the
+// pipeline still parses as one argument.
+function maybeQuote(cand) {
+    return /\s/.test(cand) ? "'" + cand.replace(/'/g, "'\\''") + "'" : cand;
 }
 
 // The raw partial word being completed: the non-whitespace run ending at
@@ -383,7 +408,7 @@ function acceptCompletion(idx) {
     const ta = document.getElementById('pipeline');
     const cand = compState.cands[idx ?? compState.sel];
     const isDir = cand.endsWith('/');
-    insertCompletion(ta, currentRawWord(ta).length, cand, !isDir);
+    insertCompletion(ta, currentRawWord(ta).length, maybeQuote(cand), !isDir);
     hideCompletions();
     ta.focus();
 }
@@ -434,7 +459,7 @@ function fieldCompleteAtCursor() {
         return;
     }
     if (matches.length === 1) {
-        insertCompletion(ta, cur.length, matches[0], true);
+        insertCompletion(ta, cur.length, maybeQuote(matches[0]), true);
         return;
     }
     const lcp = longestCommonPrefix(matches);
@@ -460,7 +485,7 @@ function completeAtCursor() {
         return;
     }
     if (cands.length === 1) {
-        insertCompletion(ta, currentRawWord(ta).length, cands[0], !cands[0].endsWith('/'));
+        insertCompletion(ta, currentRawWord(ta).length, maybeQuote(cands[0]), !cands[0].endsWith('/'));
         return;
     }
     // Bash-style: extend to the longest common prefix, then show the list.
