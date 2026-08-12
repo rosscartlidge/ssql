@@ -112,9 +112,10 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('orders.csv')">orders.csv</button> (40 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('customers.csv')">customers.csv</button> (20 rows) · or upload your own
     <br><br>This playground runs a real ssql binary compiled to WebAssembly — <b>Tab</b> completes commands,
-    flags, operators, and files; <b>Alt-h</b> (or "? Help") explains whatever the cursor is on. The shell piping
-    is simulated in JavaScript. The real CLI adds more: pipeline-aware field-name and value completion, Unix pipes,
-    process substitution, SSH to remote hosts, and catalog queries across fleets.
+    flags, operators, files, and <i>pipeline-aware field names</i> (it runs your upstream stages in schema mode,
+    so after a group-by it offers the grouped and aggregate fields); <b>Alt-h</b> (or "? Help") explains whatever
+    the cursor is on. The shell piping is simulated in JavaScript. The real CLI adds more: field-value completion,
+    Unix pipes, process substitution, SSH to remote hosts, and catalog queries across fleets.
     <br>Install: <code>go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest</code>
 </div>
 
@@ -364,15 +365,74 @@ function acceptCompletion(idx) {
     ta.focus();
 }
 
+// --- Pipeline-aware field-name completion (the CLI's Ctrl-O) ---
+// -complete-source picks the command whose schema feeds the cursor
+// (paren-aware: procsub interiors, join right-side fields). That upstream
+// runs through the pipeline simulator under SSQL_MODE=schema — commands
+// transform a schema header instead of data, so only file headers are
+// read — and `generate schema` prints the resulting field names.
+// Unlike the terminal (where bash scopes Tab to one command), the
+// playground sees the whole pipeline, so Tab triggers this automatically
+// whenever the engine answers a field slot with the Use-Ctrl-O hint.
+
+function schemaFieldsAtCursor(before) {
+    const src = ssqlExec(['-complete-source', before], '').stdout.trim();
+    if (!src) return null;
+    try {
+        const env = { SSQL_MODE: 'schema' };
+        const stages = parsePipeline(src, true, false, env);
+        let data = '';
+        for (const args of stages) {
+            const res = ssqlExec(args, data, env);
+            if (res.exitCode !== 0) return null;
+            data = res.stdout;
+        }
+        const g = ssqlExec(['generate', 'schema'], data, null);
+        if (g.exitCode !== 0) return null;
+        return g.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+    } catch (e) {
+        return null;
+    }
+}
+
+function fieldCompleteAtCursor() {
+    const ta = document.getElementById('pipeline');
+    const before = ta.value.slice(0, ta.selectionStart);
+    if (!before.trim()) return;
+    const fields = schemaFieldsAtCursor(before);
+    if (!fields || !fields.length) {
+        document.getElementById('status').textContent = 'No upstream schema found for field completion';
+        return;
+    }
+    const cur = currentRawWord(ta);
+    const matches = fields.filter(f => f.startsWith(cur));
+    if (!matches.length) {
+        document.getElementById('status').textContent = 'No field matches ' + JSON.stringify(cur) + ' (fields: ' + fields.join(', ') + ')';
+        return;
+    }
+    if (matches.length === 1) {
+        insertCompletion(ta, cur.length, matches[0], true);
+        return;
+    }
+    const lcp = longestCommonPrefix(matches);
+    if (lcp.length > cur.length) insertCompletion(ta, cur.length, lcp, false);
+    showCompletions(ta, matches);
+}
+
 function completeAtCursor() {
     const ta = document.getElementById('pipeline');
     const ctx = cursorContext();
     if (!ctx) return;
     const { cands, hints } = completionCandidates(ctx);
     if (cands.length === 0) {
+        // A field slot: the engine can't see across pipes, but we can —
+        // complete from the live upstream schema.
+        if (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>')) {
+            fieldCompleteAtCursor();
+            return;
+        }
         if (hints.length) {
-            const h = hints.map(x => x === 'Use-Ctrl-O' ? 'field names (pipeline-aware completion coming soon)' : x).join(' ');
-            document.getElementById('status').textContent = 'Expected here: ' + h;
+            document.getElementById('status').textContent = 'Expected here: ' + hints.join(' ');
         }
         return;
     }
@@ -407,6 +467,13 @@ document.getElementById('pipeline').addEventListener('keydown', e => {
     if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         completeAtCursor();
+        return;
+    }
+    // Ctrl-O: explicit field-name completion, CLI parity. preventDefault is
+    // load-bearing — the browser default is "open file".
+    if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'o' || e.key === 'O')) {
+        e.preventDefault();
+        fieldCompleteAtCursor();
     }
 });
 document.getElementById('pipeline').addEventListener('blur', () => setTimeout(hideCompletions, 150));
@@ -515,12 +582,12 @@ async function initWasm() {
 
 // Parse a pipeline string into an array of {args: string[], stdin: string|null} stages.
 // Handles <(...) process substitution by executing inner pipelines first.
-function parsePipeline(pipelineStr, isTopLevel, ssqlgoMode) {
+function parsePipeline(pipelineStr, isTopLevel, ssqlgoMode, env) {
     // Strip bash-style comments: # to end of line (but not inside quotes)
     pipelineStr = stripComments(pipelineStr);
 
     // First, find and resolve <(...) blocks
-    let resolved = resolveProcessSubstitutions(pipelineStr, isTopLevel, ssqlgoMode);
+    let resolved = resolveProcessSubstitutions(pipelineStr, isTopLevel, ssqlgoMode, env);
 
     // Split on " | ssql " (but not inside quotes)
     // Simple approach: split on /\s*\|\s*ssql\s+/
@@ -587,7 +654,7 @@ let procSubMap = {};
 
 // Resolve <(...) by executing the inner pipeline and writing result to a temp file.
 // Returns the pipeline string with <(...) replaced by temp file paths.
-function resolveProcessSubstitutions(str, isTopLevel, ssqlgoMode) {
+function resolveProcessSubstitutions(str, isTopLevel, ssqlgoMode, env) {
     let result = str;
     let procSubId = 0;
     if (isTopLevel !== false) procSubMap = {};
@@ -615,7 +682,7 @@ function resolveProcessSubstitutions(str, isTopLevel, ssqlgoMode) {
         procSubMap[tempFile] = originalExpr;
 
         // Execute inner pipeline (not top-level — don't reset procSubMap)
-        let stages = parsePipeline(innerPipeline, false, ssqlgoMode);
+        let stages = parsePipeline(innerPipeline, false, ssqlgoMode, env);
         let data = '';
         for (const args of stages) {
             let execArgs = args;
@@ -624,7 +691,7 @@ function resolveProcessSubstitutions(str, isTopLevel, ssqlgoMode) {
             if (ssqlgoMode && !execArgs.includes('-generate') && !execArgs.includes('-g')) {
                 execArgs = [...execArgs, '-generate'];
             }
-            let res = ssqlExec(execArgs, data);
+            let res = ssqlExec(execArgs, data, env);
             if (res.exitCode !== 0) {
                 throw new Error(`Process substitution failed: ${res.stderr}`);
             }

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Playground pipeline-aware field completion** — Tab at a field
+  position now completes real field names from the live upstream
+  pipeline (the stages before the cursor run in schema mode, so after a
+  `group-by dept -count cnt` it offers `dept` and `cnt`, not the raw CSV
+  columns). This is the CLI's Ctrl-O — but better placed: the browser
+  sees the whole pipeline, so plain Tab triggers it automatically
+  (Ctrl-O is also bound for CLI parity). Under the hood: `ssqlExec`
+  gained a per-invocation env argument (the WASM process env is frozen
+  at startup, so `SSQL_MODE=schema` is set/restored around each call).
 - **Playground Tab completion** — Tab in the pipeline textarea completes
   subcommands, flags, operators, formats, and files (the virtual FS's
   sample datasets and uploads), driven by the CLI's own completion

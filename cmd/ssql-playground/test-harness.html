@@ -116,13 +116,29 @@ async function run() {
     if (popupOpen()) key('Escape');
     record("tab-escape-closes", !popupOpen(), "popup still open");
 
-    // 10. Field-name slot: engine returns the Use-Ctrl-O hint -> status
-    //     message, no popup, nothing inserted.
+    // 10. Field-name slot: the engine answers Use-Ctrl-O, and Tab
+    //     transparently completes from the LIVE upstream schema instead —
+    //     popup lists the employees.csv fields.
     setLine("ssql from employees.csv | ssql where -if ");
-    const beforeVal = ta.value;
     tab();
-    record("tab-field-hint", !popupOpen() && ta.value === beforeVal && /field names/.test(doc.getElementById('status').textContent),
-        "status: " + doc.getElementById('status').textContent + " value: " + JSON.stringify(ta.value));
+    record("tab-field-auto", popupOpen() && items().includes("salary") && items().includes("dept"),
+        popupOpen() ? items().join(",") : "no popup; status: " + doc.getElementById('status').textContent);
+    if (popupOpen()) key('Escape');
+
+    // 10b. Unique partial via explicit Ctrl-O: "sa" -> "salary ".
+    setLine("ssql from employees.csv | ssql where -if sa");
+    ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'o', ctrlKey: true, bubbles: true, cancelable: true }));
+    record("ctrl-o-unique-insert", ta.value === "ssql from employees.csv | ssql where -if salary ", JSON.stringify(ta.value));
+
+    // 10c. PIPELINE-AWARE: after a group-by, the schema is the grouped
+    //      fields + aggregates — salary must be gone, cnt present.
+    setLine("ssql from employees.csv | ssql group-by dept -count cnt | ssql sort ");
+    tab();
+    const pipeFields = popupOpen() ? items() : [];
+    record("tab-field-pipeline-aware",
+        popupOpen() && pipeFields.includes("cnt") && pipeFields.includes("dept") && !pipeFields.includes("salary"),
+        pipeFields.join(","));
+    if (popupOpen()) key('Escape');
 
     // 11. Full pipeline run with process substitution — guards the
     //     polyfill's /dev/fd FIFO detection (join's procsub handling)

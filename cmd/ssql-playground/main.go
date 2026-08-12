@@ -33,7 +33,13 @@ func jsWriteFile(this js.Value, args []js.Value) any {
 	return js.ValueOf(map[string]any{"ok": true})
 }
 
-// jsExec: ssqlExec(argsArray, stdinString) → {stdout, stderr, exitCode}
+// jsExec: ssqlExec(argsArray, stdinString, envObject?) → {stdout, stderr, exitCode}
+//
+// envObject (optional) sets environment variables for THIS invocation only
+// (restored afterwards). Needed because the wasm process env is frozen at
+// go.run(); mode env vars like SSQL_MODE=schema (Ctrl-O field completion)
+// must be settable per call. Safe: execCommand is synchronous and the
+// playground is single-threaded.
 func jsExec(this js.Value, jsArgs []js.Value) any {
 	if len(jsArgs) < 1 {
 		return js.ValueOf(map[string]any{
@@ -54,6 +60,32 @@ func jsExec(this js.Value, jsArgs []js.Value) any {
 	stdinData := ""
 	if len(jsArgs) > 1 && !jsArgs[1].IsUndefined() && !jsArgs[1].IsNull() {
 		stdinData = jsArgs[1].String()
+	}
+
+	// Apply per-invocation env, restoring the previous state after.
+	if len(jsArgs) > 2 && !jsArgs[2].IsUndefined() && !jsArgs[2].IsNull() {
+		obj := jsArgs[2]
+		keys := js.Global().Get("Object").Call("keys", obj)
+		type saved struct {
+			key, val string
+			had      bool
+		}
+		var restore []saved
+		for i := 0; i < keys.Length(); i++ {
+			k := keys.Index(i).String()
+			old, had := os.LookupEnv(k)
+			restore = append(restore, saved{k, old, had})
+			os.Setenv(k, obj.Get(k).String())
+		}
+		defer func() {
+			for _, s := range restore {
+				if s.had {
+					os.Setenv(s.key, s.val)
+				} else {
+					os.Unsetenv(s.key)
+				}
+			}
+		}()
 	}
 
 	stdout, stderr, exitCode := execCommand(args, stdinData)
