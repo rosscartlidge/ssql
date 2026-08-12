@@ -11,10 +11,21 @@ import cf "github.com/rosscartlidge/autocli/v4"
 // FieldKeybindingScript (TestFieldHintTokenConsistent enforces the match).
 const FieldHintToken = "Use-Ctrl-O"
 
+// ValueHintToken is the same idea for field-VALUE positions (cross-pipe,
+// where Tab has no source file to sample now that the persistent
+// AUTOCLI_CACHE_FILE export is gone): Tab inserts it, Ctrl-O recognises
+// it, deletes it, and completes values from the pipeline's own source.
+// Deliberately NOT a suffix-collision with FieldHintToken handling: the
+// binding's placeholder cleanup must test this LONGER token first, since
+// it ends with the field token.
+const ValueHintToken = "Values-Use-Ctrl-O"
+
 func init() {
-	// Make autocli's field-name hint the actionable Ctrl-O placeholder rather
-	// than the bare "<FIELD>". Runs before any completion executes.
+	// Make autocli's field-name and value hints the actionable Ctrl-O
+	// placeholders rather than the bare "<FIELD>"/"<VALUE>". Runs before
+	// any completion executes.
 	cf.FieldNameHint = FieldHintToken
+	cf.FieldValueHint = ValueHintToken
 }
 
 // FieldKeybindingScript is the bash `bind -x` keybinding emitted by
@@ -63,16 +74,22 @@ _ssql_complete_field() {
     local line="${READLINE_LINE:0:$READLINE_POINT}"
     # The partial word under the cursor (after the last space or pipe).
     local partial="${line##*[ |]}"
-    # When Tab can't resolve field names itself (the cross-pipe case) it
-    # inserts the "Use-Ctrl-O" placeholder; bash appends a space after that
-    # unique completion. Detect the placeholder right before the cursor in
-    # either form, delete it, and complete for real from the upstream schema.
-    local _ph="Use-Ctrl-O" _cut=0
-    if [[ "$partial" == "$_ph" ]]; then
-        _cut=${#_ph}                       # cursor sits right after it
-    elif [[ -z "$partial" && "$line" == *"$_ph " ]]; then
-        _cut=$(( ${#_ph} + 1 ))            # …followed by bash's trailing space
-    fi
+    # When Tab can't resolve field names or values itself (the cross-pipe
+    # case) it inserts the "Use-Ctrl-O" / "Values-Use-Ctrl-O" placeholder;
+    # bash appends a space after that unique completion. Detect either
+    # placeholder right before the cursor, delete it, and complete for
+    # real. The VALUE token is tested FIRST — it ends with the field token,
+    # so the shorter match would leave "Values-" behind.
+    local _ph _cut=0
+    for _ph in "Values-Use-Ctrl-O" "Use-Ctrl-O"; do
+        if [[ "$partial" == "$_ph" ]]; then
+            _cut=${#_ph}                   # cursor sits right after it
+            break
+        elif [[ -z "$partial" && "$line" == *"$_ph " ]]; then
+            _cut=$(( ${#_ph} + 1 ))        # …followed by bash's trailing space
+            break
+        fi
+    done
     if (( _cut > 0 )); then
         READLINE_LINE="${READLINE_LINE:0:$((READLINE_POINT-_cut))}${READLINE_LINE:$READLINE_POINT}"
         READLINE_POINT=$(( READLINE_POINT - _cut ))
@@ -80,11 +97,10 @@ _ssql_complete_field() {
         partial=""
     fi
     # VALUE phase: when the cursor sits on a field-VALUE slot (the Tab
-    # engine answers "<VALUE>" there when nothing is cached), complete
-    # actual values from the file feeding this pipeline — no
-    # AUTOCLI_CACHE_FILE tab-dance needed, because unlike Tab this binding
-    # sees the whole line. Field slots answer Use-Ctrl-O instead and fall
-    # through to schema-mode field completion below.
+    # engine answers "Values-Use-Ctrl-O" there when no source is at hand),
+    # complete actual values from the file feeding this pipeline — unlike
+    # Tab, this binding sees the whole line. Field slots answer Use-Ctrl-O
+    # instead and fall through to schema-mode field completion below.
     local vstage
     vstage=$(command ssql -cursor-stage "$line" 2>/dev/null)
     if [[ "$vstage" == ssql* ]]; then
@@ -98,13 +114,13 @@ _ssql_complete_field() {
         else
             vpos=$(( ${#vwords[@]} - 1 ))
         fi
-        # Probe with the cache CLEARED: the "<VALUE>" marker only appears
-        # when no cache is set, and tab-completing a filename exports
-        # AUTOCLI_CACHE_FILE into this shell — which made the probe return
-        # values instead of the marker and the detector miss the slot.
+        # Probe with the cache CLEARED: the marker only appears when no
+        # sampling source is set (a stale AUTOCLI_CACHE_FILE exported by an
+        # old shell would make the probe return values instead of the
+        # marker and blind the detector).
         local vplain
         vplain=$(AUTOCLI_CACHE_FILE= command ssql -complete "$vpos" "${vargs[@]}" 2>/dev/null)
-        if [[ $'\n'"$vplain"$'\n' == *$'\n<VALUE>\n'* ]]; then
+        if [[ $'\n'"$vplain"$'\n' == *$'\nValues-Use-Ctrl-O\n'* ]]; then
             local vsrc
             vsrc=$(command ssql -value-source "$line" 2>/dev/null)
             if [[ -n "$vsrc" ]]; then
@@ -114,6 +130,7 @@ _ssql_complete_field() {
                 local vl
                 while IFS= read -r vl; do
                     [[ -z "$vl" || "$vl" == \{* || "$vl" == \<*\> ]] && continue
+                    [[ "$vl" == "Use-Ctrl-O" || "$vl" == "Values-Use-Ctrl-O" ]] && continue
                     [[ "$vl" == "$vpartial"* ]] && vals+=("$vl")
                 done < <(AUTOCLI_CACHE_FILE="$vsrc" command ssql -complete "$vpos" "${vargs[@]}" 2>/dev/null)
                 local vn=${#vals[@]}

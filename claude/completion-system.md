@@ -15,24 +15,28 @@ ssql uses autocli's completion system to provide context-aware tab completion ac
 > hint when it can't read the names from a file in the *same* command.
 
 What survives is a **source-file path** cache, used only for **value**
-completion (it never went stale the same way — it samples real values from the
-source, and degrades to a `<VALUE>` hint when the field isn't in the source):
+completion. **The persistent cache was removed in autocli v4.13.0** — it kept
+the stale-across-pipelines failure mode (tab-complete fileA, write a pipeline
+reading fileB, Tab offers fileA's values), the same class that killed the
+field-name cache.
 
-**Flow (value completion):**
-1. `from data.csv<TAB>` → `FileCompleter` emits a `field_cache` directive
-   carrying only the source file's absolute **path** (no field names).
-2. Bash completion script parses it, sets `AUTOCLI_CACHE_FILE=/abs/data.csv`.
-3. `| ssql where -if dept eq <TAB>` → `FieldValueCompleter` samples real `dept`
-   values from `AUTOCLI_CACHE_FILE`.
+**Flow (value completion), current:**
+1. Cross-pipe value slot + `<TAB>` → `FieldValueCompleter` has no source →
+   returns the actionable `Values-Use-Ctrl-O` token (bash inserts it as the
+   unique completion, exactly like the field-name `Use-Ctrl-O`).
+2. `<Ctrl-O>` → the binding deletes the placeholder, resolves the pipeline's
+   own source file via `ssql -value-source` (paren-aware; join right-sides
+   resolve to the join's `<(…)` file), and completes real values —
+   `AUTOCLI_CACHE_FILE` survives only as the **per-invocation sampling
+   parameter** the binding passes to `ssql -complete` (never exported).
+3. Spaced values are single-quoted on insertion (`'Peter Allworth'`).
 
-**The directive format:**
-```json
-{"type":"field_cache","filepath":"/abs/data.csv"}
-```
-
-Emitted as the first completion result. The bash completion script (autocli)
-strips it from visible completions and exports `AUTOCLI_CACHE_FILE`. (Field
-names are deliberately NOT cached — see `FieldCompleter.Complete` in autocli.)
+The token pair is mirrored in autocli via `cf.FieldNameHint` /
+`cf.FieldValueHint`, wired in `commands/field_keybinding.go`'s `init()` and
+locked by `TestFieldHintTokenConsistent` (including the suffix-ordering
+hazard: the value token ends with the field token, so placeholder cleanup
+tests the longer token first). In-stage value completion (`FieldValuesFrom`
+with the file in the same command) is unaffected — it never needed the env.
 
 ## Completer Types
 

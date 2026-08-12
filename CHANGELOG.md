@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features (unreleased batch 2)
+- **The persistent value-completion cache is gone** (autocli v4.13.0,
+  now required) — tab-completing a filename no longer exports
+  `AUTOCLI_CACHE_FILE` into the shell, closing the stale-cache hole
+  (values offered from a previously-completed file). Cross-pipe value
+  slots hint the actionable `Values-Use-Ctrl-O` token, mirroring the
+  field-name `Use-Ctrl-O`; Ctrl-O deletes either placeholder and
+  completes from the pipeline's own source. In-stage value completion
+  is unaffected. The completion script also sheds its jq-based JSON
+  directive machinery.
 - **Ctrl-O now completes field VALUES too** — the CLI keybinding is
   position-aware: at a value slot (`where -if dept eq <C-o>`) it
   completes actual data values from the file feeding the pipeline (the

@@ -2,7 +2,7 @@ module github.com/rosscartlidge/ssql/v4
 
 go 1.26
 
-require github.com/rosscartlidge/autocli/v4 v4.12.1
+require github.com/rosscartlidge/autocli/v4 v4.13.0
 
 require (
 	github.com/apache/arrow/go/v18 v18.0.0-20241007013041-ab95a4d25142

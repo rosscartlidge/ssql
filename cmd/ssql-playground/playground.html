@@ -298,7 +298,7 @@ function completionCandidates(ctx) {
             } catch (e) { /* not a directive — ignore the line */ }
             continue;
         }
-        if (/^<.*>$/.test(l) || l === 'Use-Ctrl-O') hints.push(l);
+        if (/^<.*>$/.test(l) || l === 'Use-Ctrl-O' || l === 'Values-Use-Ctrl-O') hints.push(l);
         else cands.push(l);
     }
     return { cands, hints };
@@ -472,7 +472,9 @@ function completeAtCursor() {
             fieldCompleteAtCursor();
             return;
         }
-        if (hints.length) {
+        if (hints.includes('Values-Use-Ctrl-O')) {
+            document.getElementById('status').textContent = 'A field value goes here, but no source file was found to sample values from';
+        } else if (hints.length) {
             document.getElementById('status').textContent = 'Expected here: ' + hints.join(' ');
         }
         return;

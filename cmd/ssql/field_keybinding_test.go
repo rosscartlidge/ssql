@@ -78,6 +78,11 @@ printf '%%s' "$READLINE_LINE"
 		struct{ in, want string }{fbase + " | ssql where -if name eq ", fbase + " | ssql where -if name eq "},
 		// field slot still does FIELD completion, not values
 		struct{ in, want string }{fbase + " | ssql where -if sc", fbase + " | ssql where -if school "},
+		// Tab-inserted placeholders are deleted and completed for real —
+		// the VALUE token must be cleaned whole (it ends with the field
+		// token; wrong ordering would leave "Values-" behind).
+		struct{ in, want string }{base + " | ssql where -if dept eq Values-Use-Ctrl-O ", base + " | ssql where -if dept eq x "},
+		struct{ in, want string }{base + " | ssql group-by Use-Ctrl-O ", base + " | ssql group-by "},
 	)
 	for _, c := range cases {
 		if got := run(c.in); got != c.want {
