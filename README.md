@@ -166,7 +166,7 @@ Then, while editing any `ssql … | ssql …` line:
 
 | Key | What it does |
 |---|---|
-| **Ctrl-O** | Complete a **field name** from the upstream pipeline's schema — even across process substitution and a `join`'s right-hand side |
+| **Ctrl-O** | Complete a **field name or value** from the upstream pipeline — position-aware: names come from the live schema, values are sampled from the pipeline's own source file (spaced values arrive quoted). Works across process substitution and a `join`'s right-hand side |
 | **Alt-h** | **Help for the flag/command under the cursor** — and on an expression argument, the full function reference so you're not writing expressions blind |
 | **Alt-g** | Show the **typed Go** this pipeline compiles to (in a `tmux` popup) — without running it |
 | **Alt-r** | **Compile the pipeline as typed Go and run it** — the fast path, one keystroke away |

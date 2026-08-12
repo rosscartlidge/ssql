@@ -1568,7 +1568,7 @@ eval "$(ssql -shell-init)"     # completion + every key binding, in one eval
 
 | Key | Action |
 |---|---|
-| **Ctrl-O** | Complete a field name from the upstream pipeline schema (across `\|`, process substitution, and a `join`'s right side) |
+| **Ctrl-O** | Complete a field name **or value** from the upstream pipeline — names from the live schema, values sampled from the pipeline's source file (across `\|`, process substitution, and a `join`'s right side) |
 | **Alt-h** | Help for the flag/command under the cursor — plus the function reference on an expression argument |
 | **Alt-g** | Show the typed Go this pipeline generates (popup) |
 | **Alt-r** | Compile the pipeline as typed Go and run it |

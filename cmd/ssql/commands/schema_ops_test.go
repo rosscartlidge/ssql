@@ -54,7 +54,11 @@ func TestMutatingSchemaOps(t *testing.T) {
 		{"update", []string{"-set", "salary", "0"}, []string{"name", "dept", "salary"}, true}, // existing not duplicated
 		{"group-by", []string{"dept"}, []string{"dept"}, true},
 		{"group-by", []string{"dept", "-count", "n", "-sum", "salary", "total"}, []string{"dept", "n", "total"}, true},
-		{"group-by", []string{"dept", "-rollup", "-count", "n"}, nil, false}, // undeterminable
+		// rollup/cube ARE determinable from argv: group keys + one
+		// prefixed result per grouping set (grand total unprefixed).
+		{"group-by", []string{"dept", "-rollup", "-count", "n"}, []string{"dept", "n", "dept_n"}, true},
+		{"group-by", []string{"name", "dept", "-cube", "-count", "n"},
+			[]string{"name", "dept", "n", "name_n", "dept_n", "name_dept_n"}, true},
 		{"window", []string{"-partition", "dept", "-order", "salary", "-row-number", "rn"}, []string{"name", "dept", "salary", "rn"}, true},
 		{"window", []string{"-lag", "salary", "1", "prev"}, []string{"name", "dept", "salary", "prev"}, true},
 		{"pivot", []string{"dept", "salary"}, nil, false},

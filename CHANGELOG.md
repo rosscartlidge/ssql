@@ -5,9 +5,9 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [v4.60.0] - 2026-08-12
 
-### New Features (unreleased batch 2)
+### New Features
 - **The persistent value-completion cache is gone** (autocli v4.13.0,
   now required) — tab-completing a filename no longer exports
   `AUTOCLI_CACHE_FILE` into the shell, closing the stale-cache hole
@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes actual data values from the file feeding the pipeline (the
   new `-value-source` protocol flag — no AUTOCLI_CACHE_FILE tab-dance),
   quoting spaced values (`'Peter Allworth'`); at field slots it behaves
-  exactly as before. Bash Tab remains cache-based (its completion can't
-  see across pipes — the whole reason Ctrl-O exists). The playground's
+  exactly as before. (Bash Tab can't see across pipes — the whole reason
+  Ctrl-O exists.) The playground's
   value-source derivation now shares this Go implementation. Real-pty
   tested in emacs + vi for both phases.
 
@@ -49,9 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Playground Tab completion no longer shows protocol directives as
   candidates** — completing a data-file path surfaced the engine's
   `{"type":"field_cache",...}` line in the popup. The playground now
-  consumes directives the way the bash completion script does — and
-  keeps them: the cached file path enables **field-value completion**
-  (`where -if country eq <Tab>` → real values), previously CLI-only.
+  consumes protocol lines instead of displaying them — and gained
+  **field-value completion** (`where -if country eq <Tab>` → real
+  values) on the way, previously CLI-only.
 - **Schema mode now honours `from tsv`'s delimiter auto-detection** — the
   schema-mode branch hard-split headers on tab, so Ctrl-O / playground
   field completion on a pipe- (or colon-, semicolon-, …) delimited file
@@ -59,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule (`lib.DetectDelimInHeader`) used by typed sampling and schema
   mode alike, and the header is parsed with proper quote handling.
 
-### New Features
+### New Features (playground & pipeline)
 - **Playground "Generate Typed Go" button** — generates the typed-mode
   program (derived row structs, `typed.*` runtime, planner-selected
   parallel forms) alongside the existing record-mode Generate Go. The
