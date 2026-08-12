@@ -9,7 +9,7 @@
 body { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; background: #1a1b26; color: #c0caf5; padding: 20px; }
 h1 { color: #7aa2f7; margin-bottom: 4px; font-size: 1.4em; }
 .subtitle { color: #565f89; margin-bottom: 20px; font-size: 0.85em; }
-.input-area { background: #24283b; border: 1px solid #3b4261; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+.input-area { background: #24283b; border: 1px solid #3b4261; border-radius: 8px; padding: 16px; margin-bottom: 12px; position: relative; }
 .input-area label { color: #7aa2f7; font-size: 0.8em; display: block; margin-bottom: 8px; }
 textarea { width: 100%; background: #1a1b26; color: #c0caf5; border: 1px solid #3b4261; border-radius: 4px; padding: 12px; font-family: inherit; font-size: 14px; resize: vertical; min-height: 60px; }
 textarea:focus { outline: none; border-color: #7aa2f7; }
@@ -32,6 +32,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .datasets span { color: #9ece6a; }
 .loading { text-align: center; padding: 40px; color: #565f89; }
 #status { font-size: 0.8em; color: #565f89; margin-bottom: 12px; }
+#completions { position: absolute; display: none; background: #24283b; border: 1px solid #7aa2f7; border-radius: 6px; max-height: 220px; overflow-y: auto; z-index: 10; font-size: 13px; min-width: 160px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+#completions div { padding: 3px 12px; cursor: pointer; white-space: pre; }
+#completions div.sel { background: #3b4261; color: #7aa2f7; }
+#completions div:hover { background: #414868; }
 /* Prism syntax highlighting — Tokyo Night theme overrides */
 code[class*="language-"], pre[class*="language-"] { background: none; font-family: inherit; font-size: 13px; line-height: 1.5; }
 .token.comment, .token.block-comment, .token.prolog { color: #565f89; }
@@ -57,6 +61,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 <div class="input-area">
     <label>Pipeline <span style="color:#565f89; font-weight:normal;">— comment out commands with #</span></label>
     <textarea id="pipeline" rows="8" placeholder="ssql from employees.csv | ssql where -if age gt 30 | ssql to table" spellcheck="false"></textarea>
+    <div id="completions"></div>
 </div>
 
 <div class="buttons">
@@ -106,9 +111,10 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('employees.csv')">employees.csv</button> (50 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('orders.csv')">orders.csv</button> (40 rows) ·
     <button class="example-btn" style="display:inline; width:auto;" onclick="viewDataset('customers.csv')">customers.csv</button> (20 rows) · or upload your own
-    <br><br>This playground runs a real ssql binary compiled to WebAssembly — but the shell piping is simulated in JavaScript.
-    The real CLI experience is far richer: tab completion for field names, operators, and values; Unix pipes;
-    process substitution; SSH to remote hosts; and catalog queries across fleets.
+    <br><br>This playground runs a real ssql binary compiled to WebAssembly — <b>Tab</b> completes commands,
+    flags, operators, and files; <b>Alt-h</b> (or "? Help") explains whatever the cursor is on. The shell piping
+    is simulated in JavaScript. The real CLI adds more: pipeline-aware field-name and value completion, Unix pipes,
+    process substitution, SSH to remote hosts, and catalog queries across fleets.
     <br>Install: <code>go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest</code>
 </div>
 
@@ -206,19 +212,18 @@ function loadExample(n) {
 // for the word the caret sits on (plus the expression-function reference
 // on expression args). Same Go code as the terminal keybinding.
 
-function helpAtCursor() {
-    if (!wasmReady) return;
+// cursorContext: the shared caret math for help + Tab completion. Extracts
+// the paren-aware stage at the caret via -cursor-stage, splits it, and
+// computes the COMP_WORDS-style word index (program name at 0; trailing
+// whitespace = caret on a new empty word) — ported from the bash bindings.
+// Returns null when the caret isn't on an ssql stage.
+function cursorContext() {
+    if (!wasmReady) return null;
     const ta = document.getElementById('pipeline');
     const before = ta.value.slice(0, ta.selectionStart);
-    if (!before.trim()) {
-        showOutput({ stdout: '', stderr: 'Put the cursor on a command or flag, then ask for help (Alt-h).', exitCode: 1 }, 'Help');
-        return;
-    }
+    if (!before.trim()) return null;
     const stage = ssqlExec(['-cursor-stage', before], '').stdout;
-    if (!/^ssql(\s|$)/.test(stage)) {
-        showOutput({ stdout: '', stderr: "The cursor isn't on an ssql command.", exitCode: 1 }, 'Help');
-        return;
-    }
+    if (!/^ssql(\s|$)/.test(stage)) return null;
     const words = shellSplit(stage); // words[0] === 'ssql'
     const args = words.slice(1);
     let pos;
@@ -228,20 +233,183 @@ function helpAtCursor() {
     } else {
         pos = words.length - 1;
     }
-    const res = ssqlExec(['-help-at', String(pos), ...args], '');
+    return { ta, before, words, args, pos };
+}
+
+function helpAtCursor() {
+    if (!wasmReady) return;
+    const ctx = cursorContext();
+    if (!ctx) {
+        showOutput({ stdout: '', stderr: 'Put the cursor on an ssql command or flag, then ask for help (Alt-h).', exitCode: 1 }, 'Help');
+        return;
+    }
+    const res = ssqlExec(['-help-at', String(ctx.pos), ...ctx.args], '');
     if (res.exitCode !== 0 || !res.stdout.trim()) {
         showOutput({ stdout: '', stderr: res.stderr || 'No help available here.', exitCode: 1 }, 'Help');
         return;
     }
-    showOutput(res, 'Help — ' + (words[pos] || words[words.length - 1] || 'ssql'));
+    showOutput(res, 'Help — ' + (ctx.words[ctx.pos] || ctx.words[ctx.words.length - 1] || 'ssql'));
+}
+
+// --- Tab completion ---
+// Tab calls the CLI's own completion engine (`-complete N words...`, the
+// same protocol bash completion uses) through the WASM bridge. File
+// completion lists the virtual FS, so the sample datasets complete too.
+// Angle-bracket entries (<VALUE>, <FIELD>) and Use-Ctrl-O are display
+// hints from the engine, not insertable candidates.
+
+let compState = null; // { cands, sel } while the popup is open
+
+function completionCandidates(ctx) {
+    const out = ssqlExec(['-complete', String(ctx.pos), ...ctx.args], '').stdout;
+    const lines = out.split('\n').map(s => s.trim()).filter(Boolean);
+    const hints = lines.filter(c => /^<.*>$/.test(c) || c === 'Use-Ctrl-O');
+    const cands = lines.filter(c => !hints.includes(c));
+    return { cands, hints };
+}
+
+// The raw partial word being completed: the non-whitespace run ending at
+// the caret (raw text, unlike the shell-split word — fine for the
+// flag/subcommand/file candidates the engine returns).
+function currentRawWord(ta) {
+    const before = ta.value.slice(0, ta.selectionStart);
+    return before.match(/(\S*)$/)[1];
+}
+
+function insertCompletion(ta, replaceLen, text, addSpace) {
+    const start = ta.selectionStart - replaceLen;
+    ta.value = ta.value.slice(0, start) + text + (addSpace ? ' ' : '') + ta.value.slice(ta.selectionEnd);
+    ta.selectionStart = ta.selectionEnd = start + text.length + (addSpace ? 1 : 0);
+}
+
+function longestCommonPrefix(list) {
+    let p = list[0];
+    for (const s of list) {
+        while (!s.startsWith(p)) p = p.slice(0, -1);
+    }
+    return p;
+}
+
+// Caret pixel position via the mirror-div trick: clone the textarea's text
+// metrics, render the text up to the caret plus a marker span, and read
+// the marker's position.
+function caretPixelPos(ta) {
+    const div = document.createElement('div');
+    const cs = getComputedStyle(ta);
+    for (const p of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
+        'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'boxSizing']) {
+        div.style[p] = cs[p];
+    }
+    div.style.position = 'absolute';
+    div.style.visibility = 'hidden';
+    div.style.whiteSpace = 'pre-wrap';
+    div.style.wordWrap = 'break-word';
+    div.style.width = ta.clientWidth + 'px';
+    div.style.left = ta.offsetLeft + 'px'; // overlay the textarea exactly
+    div.style.top = ta.offsetTop + 'px';
+    div.textContent = ta.value.slice(0, ta.selectionStart);
+    const marker = document.createElement('span');
+    marker.textContent = '​';
+    div.appendChild(marker);
+    ta.parentElement.appendChild(div);
+    const pos = {
+        left: div.offsetLeft + marker.offsetLeft,
+        top: div.offsetTop + marker.offsetTop + marker.offsetHeight - ta.scrollTop,
+    };
+    div.remove();
+    return pos;
+}
+
+function showCompletions(ta, cands) {
+    compState = { cands, sel: 0 };
+    const el = document.getElementById('completions');
+    el.innerHTML = '';
+    cands.forEach((c, i) => {
+        const d = document.createElement('div');
+        d.textContent = c;
+        if (i === 0) d.className = 'sel';
+        // mousedown, not click: click fires after the textarea blurs and
+        // the caret context is gone.
+        d.addEventListener('mousedown', e => { e.preventDefault(); acceptCompletion(i); });
+        el.appendChild(d);
+    });
+    const pos = caretPixelPos(ta);
+    el.style.left = Math.max(0, Math.min(pos.left, ta.offsetLeft + ta.clientWidth - 180)) + 'px';
+    el.style.top = (pos.top + 2) + 'px';
+    el.style.display = 'block';
+}
+
+function hideCompletions() {
+    compState = null;
+    document.getElementById('completions').style.display = 'none';
+}
+
+function moveCompletionSel(delta) {
+    if (!compState) return;
+    const n = compState.cands.length;
+    compState.sel = (compState.sel + delta + n) % n;
+    const el = document.getElementById('completions');
+    [...el.children].forEach((d, i) => d.className = i === compState.sel ? 'sel' : '');
+    el.children[compState.sel].scrollIntoView({ block: 'nearest' });
+}
+
+function acceptCompletion(idx) {
+    if (!compState) return;
+    const ta = document.getElementById('pipeline');
+    const cand = compState.cands[idx ?? compState.sel];
+    const isDir = cand.endsWith('/');
+    insertCompletion(ta, currentRawWord(ta).length, cand, !isDir);
+    hideCompletions();
+    ta.focus();
+}
+
+function completeAtCursor() {
+    const ta = document.getElementById('pipeline');
+    const ctx = cursorContext();
+    if (!ctx) return;
+    const { cands, hints } = completionCandidates(ctx);
+    if (cands.length === 0) {
+        if (hints.length) {
+            const h = hints.map(x => x === 'Use-Ctrl-O' ? 'field names (pipeline-aware completion coming soon)' : x).join(' ');
+            document.getElementById('status').textContent = 'Expected here: ' + h;
+        }
+        return;
+    }
+    if (cands.length === 1) {
+        insertCompletion(ta, currentRawWord(ta).length, cands[0], !cands[0].endsWith('/'));
+        return;
+    }
+    // Bash-style: extend to the longest common prefix, then show the list.
+    const cur = currentRawWord(ta);
+    const lcp = longestCommonPrefix(cands);
+    if (lcp.length > cur.length) insertCompletion(ta, cur.length, lcp, false);
+    showCompletions(ta, cands);
 }
 
 document.getElementById('pipeline').addEventListener('keydown', e => {
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H')) {
         e.preventDefault();
         helpAtCursor();
+        return;
+    }
+    if (compState) {
+        switch (e.key) {
+            case 'ArrowDown': e.preventDefault(); moveCompletionSel(1); return;
+            case 'ArrowUp': e.preventDefault(); moveCompletionSel(-1); return;
+            case 'Tab': e.preventDefault(); moveCompletionSel(e.shiftKey ? -1 : 1); return;
+            case 'Enter': e.preventDefault(); acceptCompletion(); return;
+            case 'Escape': e.preventDefault(); hideCompletions(); return;
+            default: hideCompletions(); // fall through: let the key type
+        }
+        return;
+    }
+    if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        completeAtCursor();
     }
 });
+document.getElementById('pipeline').addEventListener('blur', () => setTimeout(hideCompletions, 150));
 
 // --- Share links ---
 // The pipeline is carried in the URL fragment as #p=<base64url(utf8)>.
