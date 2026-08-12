@@ -84,6 +84,37 @@ printf '%%s' "$READLINE_LINE"
 			t.Errorf("in=%q\n got=%q\nwant=%q", c.in, got, c.want)
 		}
 	}
+
+	// Regression (user-found): tab-completing a filename exports
+	// AUTOCLI_CACHE_FILE into the shell, which blinded the value-slot
+	// detector (the plain -complete probe returned values instead of the
+	// <VALUE> marker). The probe now clears the cache. Exporting a cache
+	// for the WRONG file also pins that the pipeline-derived source wins
+	// over a stale cache.
+	runWithCache := func(line, cacheFile string) string {
+		script := fmt.Sprintf(`
+export PATH=%q:$PATH
+export AUTOCLI_CACHE_FILE=%q
+eval "$(ssql -field-keybinding)" 2>/dev/null
+READLINE_LINE=%q
+READLINE_POINT=${#READLINE_LINE}
+_ssql_complete_field >/dev/null 2>&1
+printf '%%s' "$READLINE_LINE"
+`, binDir, cacheFile, line)
+		out, err := exec.Command("bash", "-c", script).Output()
+		if err != nil {
+			t.Fatalf("runWithCache %q: %v", line, err)
+		}
+		return string(out)
+	}
+	in := base + " | ssql where -if dept eq "
+	want := base + " | ssql where -if dept eq x "
+	if got := runWithCache(in, csv); got != want { // matching cache
+		t.Errorf("cache=own file:\n got=%q\nwant=%q", got, want)
+	}
+	if got := runWithCache(in, friends); got != want { // STALE cache
+		t.Errorf("cache=stale (friends.csv):\n got=%q\nwant=%q", got, want)
+	}
 }
 
 // TestFieldKeybindingEmitted confirms `-field-keybinding` emits the

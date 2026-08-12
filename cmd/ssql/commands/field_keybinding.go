@@ -98,8 +98,12 @@ _ssql_complete_field() {
         else
             vpos=$(( ${#vwords[@]} - 1 ))
         fi
+        # Probe with the cache CLEARED: the "<VALUE>" marker only appears
+        # when no cache is set, and tab-completing a filename exports
+        # AUTOCLI_CACHE_FILE into this shell — which made the probe return
+        # values instead of the marker and the detector miss the slot.
         local vplain
-        vplain=$(command ssql -complete "$vpos" "${vargs[@]}" 2>/dev/null)
+        vplain=$(AUTOCLI_CACHE_FILE= command ssql -complete "$vpos" "${vargs[@]}" 2>/dev/null)
         if [[ $'\n'"$vplain"$'\n' == *$'\n<VALUE>\n'* ]]; then
             local vsrc
             vsrc=$(command ssql -value-source "$line" 2>/dev/null)
