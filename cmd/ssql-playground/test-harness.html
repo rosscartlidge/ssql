@@ -140,7 +140,22 @@ async function run() {
         pipeFields.join(","));
     if (popupOpen()) key('Escape');
 
-    // 11. Full pipeline run with process substitution — guards the
+    // 11. Generate Typed Go: derived row struct + typed runtime calls;
+    //     record-mode Generate Go must NOT have them (discriminates the
+    //     SSQL_MODE=typed env plumbing).
+    setLine("ssql from employees.csv | ssql where -if age gt 30 | ssql to table");
+    w.generateGo('typed');
+    const typedSrc = doc.getElementById('output').textContent;
+    record("generate-typed-go",
+        /EmployeesRow/.test(typedSrc) && /typed\./.test(typedSrc) && /typed mode/.test(typedSrc),
+        typedSrc.slice(0, 250));
+    w.generateGo();
+    const recSrc = doc.getElementById('output').textContent;
+    record("generate-record-go-unchanged",
+        /ssql\.GetOr|ssql\.Where/.test(recSrc) && !/typed\./.test(recSrc),
+        recSrc.slice(0, 250));
+
+    // 12. Full pipeline run with process substitution — guards the
     //     polyfill's /dev/fd FIFO detection (join's procsub handling)
     //     after the path-normalization change.
     setLine("ssql from orders.csv | ssql join <(ssql from customers.csv) -using customer_id | ssql limit 3 | ssql to table");

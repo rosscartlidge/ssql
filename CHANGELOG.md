@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Playground "Generate Typed Go" button** — generates the typed-mode
+  program (derived row structs, `typed.*` runtime, planner-selected
+  parallel forms) alongside the existing record-mode Generate Go. The
+  header now also announces Tab completion and the "? Help" button so
+  the interactive features are discoverable without scrolling.
 - **Playground pipeline-aware field completion** — Tab at a field
   position now completes real field names from the live upstream
   pipeline (the stages before the cursor run in schema mode, so after a
