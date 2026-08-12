@@ -113,6 +113,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC103 | 2026-07-04 | 2026-08-10 | [Expr→Go transpiler: implementation plan](./expr-transpiler-implementation-plan.md) |
 | DFC104 | 2026-08-10 | 2026-08-10 | [Compiling an Embedded Expression Language into a Query Pipeline Code Generator: An Experience Report](./expr-transpiler-paper.md) |
 | DFC105 | 2026-08-10 | 2026-08-10 | [Converging the Flag-Condition and Expression Lowerings](./flag-expr-convergence.md) |
+| DFC106 | 2026-08-12 | 2026-08-12 | [DFC Conventions for Research Documents](./dfc106_dfc_conventions.md) |
 
 <!-- DFC-INDEX-END -->
 
