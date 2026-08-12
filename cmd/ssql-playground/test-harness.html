@@ -159,6 +159,23 @@ async function run() {
         popupOpen() ? items().join(",") : JSON.stringify(ta.value));
     if (popupOpen()) key('Escape');
 
+    // 10f. Non-tab "TSV" (pipe-delimited, as found in the wild): field
+    //      AND value completion must work — needs the schema-mode
+    //      delimiter fix (ssql) and sampler detection (autocli 4.12.1).
+    w._fsWriteFile('piped.tsv', 'name|age|dept\nAlice|30|Eng\nBob|25|Sales\n');
+    setLine("ssql from tsv piped.tsv | ssql where -if ");
+    tab();
+    record("tab-pipe-tsv-fields", popupOpen() && items().includes("dept") && items().includes("age"),
+        popupOpen() ? items().join(",") : "no popup; status: " + doc.getElementById('status').textContent);
+    if (popupOpen()) key('Escape');
+    setLine("ssql from tsv piped.t");
+    tab(); // completes the path -> caches the file for value sampling
+    setLine("ssql from tsv piped.tsv | ssql where -if dept eq ");
+    tab();
+    record("tab-pipe-tsv-values", popupOpen() && items().includes("Eng") && items().includes("Sales"),
+        popupOpen() ? items().join(",") : JSON.stringify(ta.value));
+    if (popupOpen()) key('Escape');
+
     // 11. Generate Typed Go: derived row struct + typed runtime calls;
     //     record-mode Generate Go must NOT have them (discriminates the
     //     SSQL_MODE=typed env plumbing).

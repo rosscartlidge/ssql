@@ -1,6 +1,10 @@
 package commands
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/rosscartlidge/ssql/v4"
+)
 
 // Schema-aware completion (SSQL_MODE=schema, slices 5 + Phase 2).
 //
@@ -180,8 +184,10 @@ func init() {
 	})
 
 	// group-by: output = group keys (positionals) + aggregation result
-	// names (the last arg of each agg flag). -rollup/-cube add
-	// data-shape-dependent prefixed columns → undeterminable.
+	// names (the last arg of each agg flag). -rollup/-cube enrich with
+	// per-grouping-set prefixed result columns — fully determinable
+	// from argv (unlike pivot, whose columns are data values): the same
+	// computeGroupingSetsForSchema the exec path uses.
 	registerSchemaOp("group-by", func(_ any, in []string, args []string) ([]string, bool) {
 		pos, flags := walkStage(args, map[string]int{
 			"-count": 1, "-sum": 2, "-avg": 2, "-min": 2, "-max": 2,
@@ -189,14 +195,30 @@ func init() {
 			"-rollup": 0, "-cube": 0, "-presorted": 0, "-generate": 0, "-g": 0,
 		})
 		out := keepPresent(in, pos)
+		var results []string
+		rollupMode := ssql.RollupMode(-1)
 		for _, f := range flags {
 			switch f.name {
-			case "-rollup", "-cube":
-				return nil, false
+			case "-rollup":
+				rollupMode = ssql.RollupHierarchical
+			case "-cube":
+				rollupMode = ssql.RollupCube
 			case "-count", "-sum", "-avg", "-min", "-max", "-collect", "-expr", "-stream-expr":
 				if len(f.args) > 0 {
-					out = append(out, f.args[len(f.args)-1])
+					results = append(results, f.args[len(f.args)-1])
 				}
+			}
+		}
+		if rollupMode == ssql.RollupMode(-1) {
+			return append(out, results...), true
+		}
+		// Rollup/cube: one prefixed copy of each result per grouping
+		// set; the grand-total set has an empty prefix (plain names).
+		// Mirrors the output-schema construction in the exec handler.
+		for _, set := range computeGroupingSetsForSchema(pos, rollupMode) {
+			prefix := groupingSetPrefixForSchema(set)
+			for _, r := range results {
+				out = append(out, prefix+r)
 			}
 		}
 		return out, true

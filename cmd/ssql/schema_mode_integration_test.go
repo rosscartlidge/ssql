@@ -42,6 +42,10 @@ func TestSchemaModePipeline(t *testing.T) {
 		{"exclude", "from csv " + csv + " | " + bin + " exclude salary", []string{"name", "dept"}},
 		{"group-by", "from csv " + csv + " | " + bin + " group-by dept -count n", []string{"dept", "n"}},
 		{"pivot undeterminable", "from csv " + csv + " | " + bin + " pivot dept salary", nil},
+		{"group-by rollup", "from csv " + csv + " | " + bin + " group-by name dept -count n -rollup",
+			[]string{"name", "dept", "n", "name_n", "name_dept_n"}},
+		{"group-by cube", "from csv " + csv + " | " + bin + " group-by name dept -count n -cube",
+			[]string{"name", "dept", "n", "name_n", "dept_n", "name_dept_n"}},
 		{"tsv tab", "from tsv " + tabTSV, []string{"name", "age", "dept"}},
 		{"tsv pipe-delimited", "from tsv " + pipeTSV, []string{"name", "age", "dept"}},
 	}

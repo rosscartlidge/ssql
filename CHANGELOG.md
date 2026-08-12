@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Bug Fixes
+- **Field AND value completion work for non-tab "TSV" files** — pipe-,
+  semicolon-, colon-delimited files (which `from tsv` reads fine via
+  delimiter auto-detection) silently broke completion: schema mode
+  hard-split headers on tab (fixed in ssql), and autocli's value sampler
+  hard-coded '\t' (fixed in autocli v4.12.1, now required). Field names,
+  values, playground and CLI all agree with the readers now.
+- **Field completion works after `group-by -rollup`/`-cube`** — the
+  schema op treated rollup output as undeterminable and returned an
+  empty schema, killing Ctrl-O / playground field completion downstream.
+  The enriched schema is fully determinable from argv (group keys + one
+  prefixed copy of each result per grouping set — the exec handler's own
+  `computeGroupingSetsForSchema`); only pivot is truly data-dependent.
 - **Playground Tab completion no longer shows protocol directives as
   candidates** — completing a data-file path surfaced the engine's
   `{"type":"field_cache",...}` line in the popup. The playground now
