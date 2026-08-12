@@ -22,7 +22,7 @@ type ShellIntegration struct {
 // name); main.go fills it in for -shell-init.
 var ShellIntegrations = []ShellIntegration{
 	{"-completion-script", "tab completion: commands, flags, fields", ""},
-	{"-field-keybinding", "Ctrl-O: pipeline-aware field completion", FieldKeybindingScript},
+	{"-field-keybinding", "Ctrl-O: pipeline-aware field and value completion", FieldKeybindingScript},
 	{"-optimise-keybinding", "Ctrl-T: optimise the pipeline in place", OptimiseKeybindingScript},
 	{"-help-keybinding", "Alt-h: help under cursor · Alt-H: list key bindings", HelpKeybindingScript},
 	{"-code-keybinding", "Alt-g: show the typed Go the pipeline generates", CodeKeybindingScript},

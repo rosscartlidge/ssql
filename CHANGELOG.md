@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### New Features (unreleased batch 2)
+- **Ctrl-O now completes field VALUES too** — the CLI keybinding is
+  position-aware: at a value slot (`where -if dept eq <C-o>`) it
+  completes actual data values from the file feeding the pipeline (the
+  new `-value-source` protocol flag — no AUTOCLI_CACHE_FILE tab-dance),
+  quoting spaced values (`'Peter Allworth'`); at field slots it behaves
+  exactly as before. Bash Tab remains cache-based (its completion can't
+  see across pipes — the whole reason Ctrl-O exists). The playground's
+  value-source derivation now shares this Go implementation. Real-pty
+  tested in emacs + vi for both phases.
+
 ### Bug Fixes
 - **Playground value completion no longer requires tab-completing the
   file path first** — the value source is now derived from the pipeline

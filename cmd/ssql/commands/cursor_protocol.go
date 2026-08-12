@@ -28,6 +28,8 @@ func HandleCursorProtocol(args []string, root func() *cf.Command) (stdout, stder
 		return CompleteSource(args[1]), "", 0, true
 	case "-cursor-stage":
 		return CursorTopLevelStage(args[1]), "", 0, true
+	case "-value-source":
+		return ValueSourceFile(args[1]), "", 0, true
 	case "-help-at":
 		pos, err := strconv.Atoi(args[1])
 		if err != nil {

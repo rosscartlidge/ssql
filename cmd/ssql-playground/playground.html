@@ -270,19 +270,12 @@ let compState = null; // { cands, sel } while the popup is open
 let completionEnv = {};
 
 // valueSourceFile: the data file feeding the cursor position, derived
-// from the PIPELINE (via the paren-aware -complete-source) rather than
-// the tab-completion cache. Bash needs the cache because its completion
-// can't see across pipes; the playground can, so a typed or pasted
-// pipeline gets value completion too — and a stale cache from an
-// earlier pipeline can't win over what the current one actually reads.
+// from the PIPELINE rather than the tab-completion cache. Bash needs the
+// cache because its completion can't see across pipes; this (and the
+// CLI's Ctrl-O value phase) can. One Go implementation —
+// commands.ValueSourceFile via the -value-source protocol flag.
 function valueSourceFile(before) {
-    const src = ssqlExec(['-complete-source', before], '').stdout.trim();
-    if (!src) return null;
-    const toks = shellSplit(src);
-    for (let i = toks.length - 1; i >= 0; i--) {
-        if (_fsReadFile(toks[i]) !== null) return toks[i];
-    }
-    return null;
+    return ssqlExec(['-value-source', before], '').stdout.trim() || null;
 }
 
 function completionCandidates(ctx) {

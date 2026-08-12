@@ -56,14 +56,50 @@ def run(vi):
     # PASS = the partial 'na' completed to 'name' and no literal ^O leaked in.
     return ("name " in line) and ("^O" not in line) and ("\x0f" not in line)
 
+def run_value(vi):
+    # VALUE slot: Ctrl-O completes the actual data value ("x") from the
+    # pipeline's source file — the value phase of the same binding.
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ.pop("TMUX", None)
+        os.execvp("bash", ["bash", "--norc", "--noprofile", "-i"])
+    def send(s): os.write(fd, s.encode()); time.sleep(0.4)
+    def drain():
+        o = b""
+        while select.select([fd], [], [], 0.3)[0]:
+            try: o += os.read(fd, 4096)
+            except OSError: break
+        return o
+    time.sleep(0.6); drain()
+    send("export PATH=%s:$PATH\n" % binDir); drain()
+    send("unset TMUX\n"); drain()
+    send("bind 'set keyseq-timeout 1'\n"); drain()
+    send('eval "$(ssql -field-keybinding)"\n'); drain()
+    if vi:
+        send("set -o vi\n"); drain()
+    send("ssql from csv %s | ssql where -if dept eq " % csv)
+    time.sleep(0.5)
+    os.write(fd, b"\x0f")                                 # Ctrl-O
+    time.sleep(0.9)
+    after = drain().decode(errors="replace")
+    os.write(fd, b"\x03\n"); time.sleep(0.2); os.close(fd)
+    segs = [re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[A-Za-z]', '', s) for s in after.split("\r")]
+    cand = [s for s in segs if "-if dept eq" in s]
+    line = cand[-1] if cand else ""
+    return ("eq x " in line) and ("^O" not in line) and ("\x0f" not in line)
+
 try:
     ok_e = run(False)
     ok_v = run(True)
+    ok_ev = run_value(False)
+    ok_vv = run_value(True)
 except Exception as e:
     print("SKIP:", e); sys.exit(0)
 print("emacs:", "PASS" if ok_e else "FAIL")
 print("vi:", "PASS" if ok_v else "FAIL")
-sys.exit(0 if (ok_e and ok_v) else 1)
+print("emacs-value:", "PASS" if ok_ev else "FAIL")
+print("vi-value:", "PASS" if ok_vv else "FAIL")
+sys.exit(0 if (ok_e and ok_v and ok_ev and ok_vv) else 1)
 `
 
 // TestFieldKeybindingPTY exercises the field-completion keybinding through

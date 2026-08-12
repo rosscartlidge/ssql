@@ -79,6 +79,70 @@ _ssql_complete_field() {
         line="${READLINE_LINE:0:$READLINE_POINT}"
         partial=""
     fi
+    # VALUE phase: when the cursor sits on a field-VALUE slot (the Tab
+    # engine answers "<VALUE>" there when nothing is cached), complete
+    # actual values from the file feeding this pipeline — no
+    # AUTOCLI_CACHE_FILE tab-dance needed, because unlike Tab this binding
+    # sees the whole line. Field slots answer Use-Ctrl-O instead and fall
+    # through to schema-mode field completion below.
+    local vstage
+    vstage=$(command ssql -cursor-stage "$line" 2>/dev/null)
+    if [[ "$vstage" == ssql* ]]; then
+        local -a vwords
+        read -ra vwords <<< "$vstage"
+        local vpos
+        local -a vargs=("${vwords[@]:1}")
+        if [[ "$vstage" =~ [[:space:]]$ ]]; then
+            vpos=${#vwords[@]}
+            vargs+=("")
+        else
+            vpos=$(( ${#vwords[@]} - 1 ))
+        fi
+        local vplain
+        vplain=$(command ssql -complete "$vpos" "${vargs[@]}" 2>/dev/null)
+        if [[ $'\n'"$vplain"$'\n' == *$'\n<VALUE>\n'* ]]; then
+            local vsrc
+            vsrc=$(command ssql -value-source "$line" 2>/dev/null)
+            if [[ -n "$vsrc" ]]; then
+                # Match against the partial, tolerating an opening quote.
+                local vpartial="${partial#\'}"
+                local -a vals=()
+                local vl
+                while IFS= read -r vl; do
+                    [[ -z "$vl" || "$vl" == \{* || "$vl" == \<*\> ]] && continue
+                    [[ "$vl" == "$vpartial"* ]] && vals+=("$vl")
+                done < <(AUTOCLI_CACHE_FILE="$vsrc" command ssql -complete "$vpos" "${vargs[@]}" 2>/dev/null)
+                local vn=${#vals[@]}
+                if (( vn == 1 )); then
+                    local vv="${vals[0]}" vinsert
+                    if [[ "$vv" == *[[:space:]]* ]]; then
+                        # Spaced value: replace the typed partial with the
+                        # fully single-quoted value so it parses as one arg.
+                        READLINE_LINE="${READLINE_LINE:0:$((READLINE_POINT-${#partial}))}'$vv' ${READLINE_LINE:$READLINE_POINT}"
+                        READLINE_POINT=$(( READLINE_POINT - ${#partial} + ${#vv} + 3 ))
+                    else
+                        vinsert="${vv:${#vpartial}} "
+                        READLINE_LINE="${READLINE_LINE:0:$READLINE_POINT}${vinsert}${READLINE_LINE:$READLINE_POINT}"
+                        READLINE_POINT=$(( READLINE_POINT + ${#vinsert} ))
+                    fi
+                    return
+                elif (( vn > 1 )); then
+                    local vlcp vinsert
+                    vlcp="$(_ssql_lcp "${vals[@]}")"
+                    vinsert="${vlcp:${#vpartial}}"
+                    # Never insert an unquoted spaced prefix — just list.
+                    [[ "$vinsert" == *[[:space:]]* ]] && vinsert=""
+                    printf '\n%s\n' "${vals[*]}"
+                    if [[ -n "$vinsert" ]]; then
+                        READLINE_LINE="${READLINE_LINE:0:$READLINE_POINT}${vinsert}${READLINE_LINE:$READLINE_POINT}"
+                        READLINE_POINT=$(( READLINE_POINT + ${#vinsert} ))
+                    fi
+                    return
+                fi
+            fi
+        fi
+    fi
+
     # Ask ssql which command's schema feeds this cursor position. This is
     # paren-aware: it handles a pipe INSIDE a process substitution, the cursor
     # being inside a <(…), and a join's right-side field (which comes from the

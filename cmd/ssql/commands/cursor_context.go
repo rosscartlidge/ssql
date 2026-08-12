@@ -1,6 +1,9 @@
 package commands
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 // Cursor-context analysis for the interactive keybindings (Ctrl-O field
 // completion, Alt-h help-at-cursor). The bash bindings used to split the line
@@ -228,6 +231,26 @@ func ExprArgAtCursor(args []string, pos int) bool {
 	}
 	// The cursor word occupies the next positional slot of the current flag.
 	return flag != "" && isExprSlot(flag, argIdx+1)
+}
+
+// ValueSourceFile returns the data file feeding the cursor position, for
+// field-VALUE sampling: the last token of the CompleteSource upstream
+// that exists as a regular file, or "". This replaces the
+// AUTOCLI_CACHE_FILE tab-completion dance for consumers that can see the
+// whole pipeline (the Ctrl-O binding, the browser playground) — bash Tab
+// can't, which is why the cache exists at all.
+func ValueSourceFile(before string) string {
+	src := CompleteSource(before)
+	if src == "" {
+		return ""
+	}
+	toks := tokenizeStage(src)
+	for i := len(toks) - 1; i >= 0; i-- {
+		if st, err := os.Stat(toks[i]); err == nil && st.Mode().IsRegular() {
+			return toks[i]
+		}
+	}
+	return ""
 }
 
 // CompleteSource returns the shell command whose `SSQL_MODE=schema` output
