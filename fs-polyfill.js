@@ -8,6 +8,14 @@
     // File data store: path → Uint8Array
     const files = new Map();
 
+    // Write log: store keys written since the last _fsResetWriteLog().
+    // Wrapping files.set catches every write path (open/trunc, close
+    // flush, write, rename, truncate, _fsWriteFile) in one place —
+    // drives the playground's "download created files" bar.
+    const writeLog = new Set();
+    const _origSet = files.set.bind(files);
+    files.set = (k, v) => { writeLog.add(k); return _origSet(k, v); };
+
     // File descriptor table: fd → {path, data, pos, flags}
     const fds = new Map();
     let nextFd = 10; // 0=stdin, 1=stdout, 2=stderr reserved
@@ -117,6 +125,7 @@
             }
             entry.data.set(data, entry.pos);
             entry.pos += data.length;
+            entry.wrote = true;
             files.set(entry.path, entry.data.slice(0, Math.max(entry.data.length, needed)));
             return data.length;
         },
@@ -143,6 +152,7 @@
             }
             entry.data.set(data, entry.pos);
             entry.pos += data.length;
+            entry.wrote = true;
             // Update stored file
             files.set(entry.path, entry.data.slice(0, Math.max(files.get(entry.path)?.length || 0, needed)));
             callback(null, data.length);
@@ -211,8 +221,12 @@
                 return;
             }
             if (entry) {
-                // Flush written data back to file store
-                files.set(entry.path, entry.data.slice(0, entry.pos > (files.get(entry.path)?.length || 0) ? entry.pos : (files.get(entry.path)?.length || entry.data.length)));
+                // Flush back to the store ONLY if this fd was written —
+                // a read-only close used to rewrite the file, which
+                // (besides being sloppy) logged every READ as a write.
+                if (entry.wrote) {
+                    files.set(entry.path, entry.data.slice(0, entry.pos > (files.get(entry.path)?.length || 0) ? entry.pos : (files.get(entry.path)?.length || entry.data.length)));
+                }
                 fds.delete(fd);
             }
             callback(null);
@@ -338,4 +352,12 @@
 
     // Expose helper to list files
     globalThis._fsListFiles = () => Array.from(files.keys());
+
+    // Write-log + binary-safe read for the download-created-files UI.
+    globalThis._fsResetWriteLog = () => writeLog.clear();
+    globalThis._fsWriteLog = () => Array.from(writeLog);
+    globalThis._fsReadFileBytes = (path) => {
+        const data = files.get(norm(path));
+        return data ? new Uint8Array(data) : null;
+    };
 })();

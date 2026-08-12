@@ -32,6 +32,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .datasets span { color: #9ece6a; }
 .loading { text-align: center; padding: 40px; color: #565f89; }
 #status { font-size: 0.8em; color: #565f89; margin-bottom: 12px; }
+#filesBar { display: none; background: #24283b; border: 1px solid #3b4261; border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; font-size: 13px; }
+#filesBar .fname { color: #73daca; }
+#filesBar button { margin-left: 8px; padding: 2px 10px; font-size: 12px; }
 #completions { position: absolute; display: none; background: #24283b; border: 1px solid #7aa2f7; border-radius: 6px; max-height: 220px; overflow-y: auto; z-index: 10; font-size: 13px; min-width: 160px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
 #completions div { padding: 3px 12px; cursor: pointer; white-space: pre; }
 #completions div.sel { background: #3b4261; color: #7aa2f7; }
@@ -89,6 +92,8 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button id="btnUseOptimized" onclick="applyOptimized()" style="display:none; margin-top: 10px;">Use this pipeline</button>
 </div>
 
+<div id="filesBar"></div>
+
 <div class="examples">
     <h3>Examples</h3>
     <button class="example-btn" onclick="loadExample(0)">View data — see what's in the table</button>
@@ -106,6 +111,9 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" onclick="loadExample(12)">Optimize: SSH pushdown (shows rewritten pipeline — can't run, no SSH in browser)</button>
     <button class="example-btn" onclick="loadExample(13)">Help — list all commands</button>
     <button class="example-btn" onclick="loadExample(14)">Help — update command details</button>
+    <button class="example-btn" onclick="loadExample(15)">Markdown — paste-ready table for READMEs and PRs</button>
+    <button class="example-btn" onclick="loadExample(16)">Create a file — CSV summary, download it from the Files bar</button>
+    <button class="example-btn" onclick="loadExample(17)">Create a file — Markdown report (engineers.md)</button>
 </div>
 
 <div class="datasets">
@@ -195,6 +203,15 @@ const EXAMPLES = [
 | ssql to table`,
     `ssql -help`,
     `ssql update -help`,
+    `ssql from employees.csv
+| ssql group-by dept -count cnt -avg salary avg_sal
+| ssql to markdown`,
+    `ssql from employees.csv
+| ssql group-by dept -count cnt -avg salary avg_sal
+| ssql to csv dept_summary.csv`,
+    `ssql from employees.csv
+| ssql where -if dept eq Engineering
+| ssql to markdown -o engineers.md`,
 ];
 
 // Examples that should auto-optimize instead of run (by index)
@@ -837,16 +854,56 @@ function restoreProcessSubstitutions(s) {
 
 // --- Button handlers ---
 
+// --- Download files a run created in the virtual FS ---
+// The polyfill logs every written path; after a run, list the
+// user-visible ones with download buttons (Blob-based, binary-safe).
+
+function hideFilesBar() {
+    document.getElementById('filesBar').style.display = 'none';
+}
+
+function downloadVFSFile(name) {
+    const bytes = _fsReadFileBytes(name);
+    if (!bytes) return;
+    const url = URL.createObjectURL(new Blob([bytes]));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name.split('/').pop();
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function showCreatedFiles() {
+    const names = _fsWriteLog().filter(p =>
+        !p.startsWith('tmp/') && !p.startsWith('/tmp/') &&
+        !p.startsWith('dev/fd/') && !p.startsWith('/dev/fd/'));
+    const bar = document.getElementById('filesBar');
+    if (!names.length) { bar.style.display = 'none'; return; }
+    bar.innerHTML = 'Files created — click to download: ';
+    for (const n of names) {
+        const btn = document.createElement('button');
+        const bytes = _fsReadFileBytes(n);
+        btn.innerHTML = '<span class="fname">' + escapeHtml(n) + '</span> ⬇ ' +
+            (bytes ? (bytes.length >= 1024 ? (bytes.length / 1024).toFixed(1) + ' KB' : bytes.length + ' B') : '');
+        btn.addEventListener('click', () => downloadVFSFile(n));
+        bar.appendChild(btn);
+    }
+    bar.style.display = '';
+}
+
 function runPipeline() {
     hideUseButton();
     hideChart();
+    hideFilesBar();
     const pipeline = document.getElementById('pipeline').value.trim();
     if (!pipeline) return;
     if (pipeline.includes('from ssh') || pipeline.includes('from catalog')) {
         showOutput({ stdout: '', stderr: 'SSH and catalog commands require network access and can\'t run in the browser.\nClick Optimize to see how ssql rewrites this pipeline (e.g. pushing predicates to the remote host).', exitCode: 1 }, 'Output');
         return;
     }
+    _fsResetWriteLog();
     const result = executePipeline(pipeline, false);
+    if (result.exitCode === 0) showCreatedFiles();
 
     // Check if pipeline produced a chart HTML file
     if (result.exitCode === 0 && pipeline.includes('to chart')) {
