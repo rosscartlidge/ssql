@@ -1523,6 +1523,7 @@ Use `-run` to execute directly with DuckDB:
 
 ### Outputs (using `to` subcommands)
 - `to table` - Display records as formatted table
+- `to markdown [-o file]` - GitHub-flavored Markdown table (numeric columns right-aligned, pipes escaped) — paste results straight into READMEs, issues, and PRs, or write a .md file
 - `to csv [file]` - Write CSV file (or stdout)
 - `to json [file]` - Write pretty-printed JSON array (or stdout)
 - `to jsonl [file]` - Write JSONL, one JSON object per line (or stdout)

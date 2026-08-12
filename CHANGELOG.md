@@ -5,6 +5,26 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### New Features
+- **`ssql to markdown`** — a GitHub-flavored Markdown table sink for
+  paste-ready results in READMEs, issues, and PRs: header + alignment
+  row (numeric/bool columns right-aligned), pipes escaped, newlines →
+  `<br>`; `FIELDS`/`-only` column control like `to table`. Backed by
+  the new `ssql.WriteMarkdownTo`; works in exec, record, typed, and
+  parallel modes (typed lanes reach the Record sink via the Phase B
+  boundary) and in the playground. `-o report.md` writes a file instead
+  of stdout — in the playground it lands in the download bar. New
+  example buttons cover the stdout table and creating CSV/Markdown
+  files.
+- **Playground: download created files** — a run that writes files into
+  the virtual FS (`to csv out.csv`, `to chart`, …) now shows a
+  "Files created" bar with per-file download buttons (binary-safe via
+  the polyfill's new byte reader; the executor's tmp/procsub plumbing is
+  excluded). Fixed on the way: closing a read-only fd rewrote the file
+  in the polyfill's store.
+
 ## [v4.60.0] - 2026-08-12
 
 ### New Features

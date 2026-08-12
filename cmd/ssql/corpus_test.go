@@ -201,6 +201,20 @@ func TestPipelineCorpus(t *testing.T) {
 			Contains: []string{"Alice", "Bob", "Engineering"},
 		},
 		{
+			Name:     "to_markdown",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} group-by dept -count n | {{.bin}} to markdown`,
+			// GFM table: header row + right-aligned count column; the
+			// typed lanes reach this Record-only sink via the Phase B
+			// toRecord boundary.
+			Contains: []string{"| dept | n |", "|---|---:|", "| Engineering | 3 |"},
+		},
+		{
+			// -o FILE variant: no stdout to assert — the value is that
+			// the file-writing code path compiles and runs in all modes.
+			Name:     "to_markdown_file",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} to markdown -o {{.data}}/md_out.md`,
+		},
+		{
 			Name:     "to_table_maxwidth",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} to table -max-width 6`,
 			// -max-width must truncate identically in record and typed

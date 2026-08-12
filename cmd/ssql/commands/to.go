@@ -14,6 +14,7 @@ func RegisterTo(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 	// Register nested subcommands
 	registerToTable(toCmd)
+	registerToMarkdown(toCmd)
 	registerToCSV(toCmd)
 	registerToTSV(toCmd)
 	registerToJSON(toCmd)

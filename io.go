@@ -1815,6 +1815,107 @@ func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder [
 	DisplayTableWithFieldsTo(os.Stdout, records, maxWidth, fieldOrder, onlySpecified)
 }
 
+// resolveDisplayColumns builds the column list shared by the table and
+// markdown writers: explicit fieldOrder first (existing fields only),
+// then — unless onlySpecified — the remaining fields alphabetically;
+// with no fieldOrder, the schema-declared natural order (alphabetical
+// fallback).
+func resolveDisplayColumns(columnSet map[string]bool, allRecords []Record, fieldOrder []string, onlySpecified bool) []string {
+	var columns []string
+	if len(fieldOrder) > 0 {
+		specifiedSet := make(map[string]bool)
+		for _, field := range fieldOrder {
+			if columnSet[field] {
+				columns = append(columns, field)
+				specifiedSet[field] = true
+			}
+		}
+		if !onlySpecified {
+			var remaining []string
+			for col := range columnSet {
+				if !specifiedSet[col] {
+					remaining = append(remaining, col)
+				}
+			}
+			slices.Sort(remaining)
+			columns = append(columns, remaining...)
+		}
+		return columns
+	}
+	return naturalColumnOrder(columnSet, allRecords)
+}
+
+// WriteMarkdownTo writes records as a GitHub-flavored Markdown table:
+// a header row, an alignment row (numeric/bool columns right-aligned via
+// `---:`), and one row per record. Pipes are escaped and newlines become
+// <br> so cells can't break the table. Column selection/ordering follows
+// the same rules as [DisplayTableWithFields].
+func WriteMarkdownTo(w io.Writer, records iter.Seq[Record], fieldOrder []string, onlySpecified bool) error {
+	var allRecords []Record
+	columnSet := make(map[string]bool)
+	for record := range records {
+		allRecords = append(allRecords, record)
+		for field := range record.All() {
+			columnSet[field] = true
+		}
+	}
+	if len(allRecords) == 0 {
+		return nil
+	}
+	columns := resolveDisplayColumns(columnSet, allRecords, fieldOrder, onlySpecified)
+
+	rightAlign := make(map[string]bool, len(columns))
+	for _, col := range columns {
+		rightAlign[col] = true
+	}
+	for _, record := range allRecords {
+		for field, value := range record.All() {
+			if !isNumericOrBoolValue(value) {
+				rightAlign[field] = false
+			}
+		}
+	}
+
+	esc := func(s string) string {
+		s = strings.ReplaceAll(s, "|", `\|`)
+		s = strings.ReplaceAll(s, "\r\n", "<br>")
+		s = strings.ReplaceAll(s, "\n", "<br>")
+		return s
+	}
+
+	var b strings.Builder
+	b.WriteString("|")
+	for _, col := range columns {
+		b.WriteString(" " + esc(col) + " |")
+	}
+	b.WriteString("\n|")
+	for _, col := range columns {
+		if rightAlign[col] {
+			b.WriteString("---:|")
+		} else {
+			b.WriteString("---|")
+		}
+	}
+	b.WriteString("\n")
+	for _, record := range allRecords {
+		values := make(map[string]any, len(columns))
+		for field, value := range record.All() {
+			values[field] = value
+		}
+		b.WriteString("|")
+		for _, col := range columns {
+			cell := ""
+			if v, ok := values[col]; ok {
+				cell = esc(fmt.Sprintf("%v", v))
+			}
+			b.WriteString(" " + cell + " |")
+		}
+		b.WriteString("\n")
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
 // DisplayTableWithFieldsTo is like [DisplayTableWithFields] but writes to the given writer.
 func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth int, fieldOrder []string, onlySpecified bool) {
 	// Collect records and determine columns
@@ -1832,37 +1933,7 @@ func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth in
 		return // No records to display
 	}
 
-	// Build column list based on field ordering options
-	var columns []string
-	if len(fieldOrder) > 0 {
-		// Add specified fields first (in order), only if they exist in data
-		specifiedSet := make(map[string]bool)
-		for _, field := range fieldOrder {
-			if columnSet[field] {
-				columns = append(columns, field)
-				specifiedSet[field] = true
-			}
-		}
-
-		// Add remaining fields alphabetically (unless onlySpecified)
-		if !onlySpecified {
-			var remaining []string
-			for col := range columnSet {
-				if !specifiedSet[col] {
-					remaining = append(remaining, col)
-				}
-			}
-			slices.Sort(remaining)
-			columns = append(columns, remaining...)
-		}
-	} else {
-		// No field order specified — prefer the first record's
-		// schema-declared field order (so the output matches what
-		// the JSONL stream / upstream commands would produce).
-		// Records without a schema fall back to alphabetical, as
-		// before.
-		columns = naturalColumnOrder(columnSet, allRecords)
-	}
+	columns := resolveDisplayColumns(columnSet, allRecords, fieldOrder, onlySpecified)
 
 	// Calculate max width for each column, and decide alignment:
 	// columns whose values are all numeric/bool are right-justified;

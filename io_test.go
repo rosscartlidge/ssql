@@ -1405,3 +1405,36 @@ func TestDisplayTableStreamingTo_EmptyInput(t *testing.T) {
 		t.Errorf("Empty input should produce no output, got: %q", buf.String())
 	}
 }
+
+func TestWriteMarkdownTo(t *testing.T) {
+	records := []Record{
+		NewRecord(map[string]any{"name": "Ann|e", "note": "line1\nline2", "n": int64(3)}),
+		NewRecord(map[string]any{"name": "Bob", "note": "plain", "n": int64(12)}),
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdownTo(&buf, slices.Values(records), []string{"name", "n", "note"}, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "| name | n | note |\n" +
+		"|---|---:|---|\n" +
+		"| Ann\\|e | 3 | line1<br>line2 |\n" +
+		"| Bob | 12 | plain |\n"
+	if buf.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", buf.String(), want)
+	}
+
+	// -only hides unspecified columns.
+	buf.Reset()
+	if err := WriteMarkdownTo(&buf, slices.Values(records), []string{"name"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); got != "| name |\n|---|\n| Ann\\|e |\n| Bob |\n" {
+		t.Errorf("-only output wrong:\n%s", got)
+	}
+
+	// Empty input: no output, no error.
+	buf.Reset()
+	if err := WriteMarkdownTo(&buf, slices.Values([]Record{}), nil, false); err != nil || buf.Len() != 0 {
+		t.Errorf("empty input: err=%v out=%q", err, buf.String())
+	}
+}

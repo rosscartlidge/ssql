@@ -1477,6 +1477,21 @@ if err != nil {
 csvString := buf.String()
 ```
 
+#### WriteMarkdownTo
+```go
+func WriteMarkdownTo(w io.Writer, records iter.Seq[Record], fieldOrder []string, onlySpecified bool) error
+```
+Writes records as a GitHub-flavored Markdown table: header row, alignment row (numeric/bool columns right-aligned via `---:`), one row per record. Pipes are escaped and newlines become `<br>`. Column selection follows the same rules as DisplayTableWithFields. Backs `ssql to markdown`.
+
+**Example:**
+```go
+var buf bytes.Buffer
+if err := ssql.WriteMarkdownTo(&buf, records, []string{"name", "count"}, false); err != nil {
+    log.Fatal(err)
+}
+fmt.Print(buf.String()) // paste-ready | name | count | table
+```
+
 #### DefaultCSVConfig
 ```go
 func DefaultCSVConfig() CSVConfig
