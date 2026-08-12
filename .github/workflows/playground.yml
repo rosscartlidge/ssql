@@ -15,6 +15,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "cmd/ssql-playground/**"
+      - "cmd/ssql/version/**"
       - ".github/workflows/playground.yml"
   workflow_dispatch:
 
