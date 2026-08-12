@@ -1,5 +1,11 @@
 # Reddit Post Drafts
 
+Reference: DFC078
+Created: 2026-04-08
+Last modified: 2026-04-08
+
+[Back to Index](./README.md)
+
 Post 1-2 days after HN. Each community gets a different angle. Don't cross-post identical content.
 
 ---

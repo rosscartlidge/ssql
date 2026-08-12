@@ -1,5 +1,11 @@
 # GPU Feature Opportunities
 
+Reference: DFC041
+Created: 2026-01-25
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 This document explores potential GPU-accelerated features for ssql, based on lessons learned from FFT/convolution implementation.
 
 ## GPU Performance Characteristics

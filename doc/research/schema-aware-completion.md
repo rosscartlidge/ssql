@@ -1,5 +1,11 @@
 # Pipeline-Aware Completion via `SSQLGO=schema`
 
+Reference: DFC096
+Created: 2026-05-20
+Last modified: 2026-06-16
+
+[Back to Index](./README.md)
+
 **Status:** Design — not yet implemented. Discussion captured 2026-05-20 (W21 Wed), immediately after shipping Position 2 pipes (v4.45.0 / shell v0.3.1). **De-risk spike run 2026-06-16 (W25 Tue)** — see §0 for verified reality, corrections to this doc, and decisions taken. Read §0 before implementing; several inline sketches below (the §4.3 table, the §7 API names) were written from memory and are corrected there.
 
 ## 0. Spike findings & decisions (2026-06-16)

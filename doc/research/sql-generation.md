@@ -1,5 +1,11 @@
 # Research: SQL Generation from ssql Pipelines
 
+Reference: DFC067
+Created: 2026-03-20
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Status:** Exploratory
 **Date:** 2026-03-16
 

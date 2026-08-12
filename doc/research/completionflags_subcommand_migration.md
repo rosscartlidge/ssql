@@ -1,5 +1,11 @@
 # CompletionFlags Subcommand Migration Plan
 
+Reference: DFC007
+Created: 2025-11-02
+Last modified: 2025-12-09
+
+[Back to Index](./README.md)
+
 ## Current Architecture
 
 ssql currently uses a **custom subcommand dispatcher**:

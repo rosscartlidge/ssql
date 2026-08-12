@@ -1,5 +1,11 @@
 # Interactive Help at the Cursor — Design Exploration
 
+Reference: DFC098
+Created: 2026-06-21
+Last modified: 2026-06-22
+
+[Back to Index](./README.md)
+
 **Status:** v1 implemented (2026-06-22) — autocli `Command.HelpAt(args, pos)`
 + `-help-at` protocol flag, and ssql's **Alt-h** `-help-keybinding` (bash;
 `tmux display-popup` when in tmux, inline otherwise). Deferred: the

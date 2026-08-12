@@ -1,5 +1,11 @@
 # Browser-Based Linux for ssql Playground
 
+Reference: DFC069
+Created: 2026-03-21
+Last modified: 2026-03-21
+
+[Back to Index](./README.md)
+
 **Date:** 2026-03-21
 **Status:** Research
 **Goal:** Evaluate options for running real bash (with pipes, process substitution, tab completion) in the browser

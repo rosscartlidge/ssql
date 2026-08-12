@@ -1,5 +1,11 @@
 # Compiling an Embedded Expression Language into a Query Pipeline Code Generator: An Experience Report
 
+Reference: DFC104
+Created: 2026-08-10
+Last modified: 2026-08-10
+
+[Back to Index](./README.md)
+
 **Status:** Research paper / experience report, 2026-08-10. Covers the
 expr→Go transpiler work (v4.56.1 → post-Phase-4 main, commits
 `6531859..df354e2`). All measurements in §5 are real runs, reproducible

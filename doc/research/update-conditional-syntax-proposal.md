@@ -1,5 +1,11 @@
 # Conditional Update Syntax Proposal
 
+Reference: DFC016
+Created: 2025-11-04
+Last modified: 2025-11-08
+
+[Back to Index](./README.md)
+
 ## Problem
 
 Currently, combining `where` with `update` filters out non-matching records:

@@ -1,5 +1,11 @@
 # Expression Evaluation Implementation Plan
 
+Reference: DFC019
+Created: 2025-11-12
+Last modified: 2025-11-12
+
+[Back to Index](./README.md)
+
 **Decision:** Use **expr-lang/expr** for computed expressions in `ssql update`
 
 **Date:** 2025-11-12

@@ -1,5 +1,11 @@
 # Plan: Non-Regular File Fragment Detection
 
+Reference: DFC025
+Created: 2025-12-09
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Status**: Implemented (v3.5.2)
 **Author**: Ross Cartlidge
 **Date**: December 2025

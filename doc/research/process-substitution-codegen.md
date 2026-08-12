@@ -1,5 +1,11 @@
 # Fragment Merging for Nested Pipeline Code Generation in ssql
 
+Reference: DFC026
+Created: 2025-12-09
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Ross Cartlidge**
 December 2025
 

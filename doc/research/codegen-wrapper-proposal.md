@@ -1,5 +1,11 @@
 # Codegen Wrapper Proposal
 
+Reference: DFC092
+Created: 2026-05-03
+Last modified: 2026-05-03
+
+[Back to Index](./README.md)
+
 **Status:** Proposal
 **Date:** 2026-05-03
 **ssql version target:** v4.41+

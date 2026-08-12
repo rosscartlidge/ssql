@@ -1,5 +1,11 @@
 # +flag Negation Survey
 
+Reference: DFC073
+Created: 2026-03-30
+Last modified: 2026-03-30
+
+[Back to Index](./README.md)
+
 All flags across all commands, assessed for whether `+flag` (reverse/negation) has a natural meaning.
 
 ## Already Implemented

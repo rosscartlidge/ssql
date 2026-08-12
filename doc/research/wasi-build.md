@@ -1,5 +1,11 @@
 # WASI Build — Portable WebAssembly Binary
 
+Reference: DFC080
+Created: 2026-04-09
+Last modified: 2026-04-11
+
+[Back to Index](./README.md)
+
 ## Overview
 
 ssql can be compiled to WASI (WebAssembly System Interface), producing a single `.wasm` binary that runs on any platform with a WASI runtime — no Go installation or cross-compilation needed.

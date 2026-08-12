@@ -1,5 +1,11 @@
 # Bash Pipeline-Aware Completion — Constraints & Options
 
+Reference: DFC097
+Created: 2026-06-17
+Last modified: 2026-06-18
+
+[Back to Index](./README.md)
+
 **Status:** Decision doc. Written 2026-06-17 after `SSQL_MODE=schema` shipped
 (v4.46.0/.1) and bash *pipeline* completion was found not to work. The schema
 engine and `ssql serve` completion are fine; this doc is only about wiring

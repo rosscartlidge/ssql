@@ -1,5 +1,11 @@
 # JSONL Schema Header Design
 
+Reference: DFC024
+Created: 2025-12-09
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 ## Overview
 
 Add an optional schema header record to JSONL pipeline output, similar to CSV headers but with type information.

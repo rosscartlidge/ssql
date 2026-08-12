@@ -1,5 +1,11 @@
 # Hash Join Implementation Plan
 
+Reference: DFC008
+Created: 2025-11-02
+Last modified: 2025-11-08
+
+[Back to Index](./README.md)
+
 ## Overview
 
 Implement hash join optimization for ssql JOIN operations to improve performance from O(n×m) to O(n+m) for equality-based joins.

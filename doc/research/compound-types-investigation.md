@@ -1,5 +1,11 @@
 # Compound Types in ssql: Investigation and Opportunities
 
+Reference: DFC052
+Created: 2026-02-27
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 ## Current State
 
 ssql is fundamentally scalar-focused. Records store fields as `int64`, `float64`, `string`, `bool`, or `time.Time`. When JSON input contains arrays or nested objects, they are stored as `JSONString` — an opaque raw JSON string, not a parsed Go data structure.

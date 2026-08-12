@@ -1,5 +1,11 @@
 # Post-Italy: v4.17 → v4.28
 
+Reference: DFC066
+Created: 2026-03-20
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Period:** February 16 – March 15, 2026 (4 weeks)
 **Previous:** [Italy Sprint v4.11–v4.16](italy-sprint-v4.11-v4.16.md)
 **Versions:** v4.17.0 → v4.28.0 (12 releases)

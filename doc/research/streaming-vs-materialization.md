@@ -1,5 +1,11 @@
 # Streaming vs Materialization: Command Survey
 
+Reference: DFC051
+Created: 2026-02-26
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 ## Problem Statement
 
 ssql commands process data through Unix-style pipelines. Some commands stream records one-by-one (O(1) memory, infinite stream compatible), while others materialize all records into memory before producing output. This document surveys every command's behavior and identifies opportunities to improve streaming support.

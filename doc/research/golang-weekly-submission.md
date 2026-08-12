@@ -1,5 +1,11 @@
 # Golang Weekly Submission
 
+Reference: DFC077
+Created: 2026-04-08
+Last modified: 2026-04-08
+
+[Back to Index](./README.md)
+
 Submit at: https://golangweekly.com/submit
 
 ---

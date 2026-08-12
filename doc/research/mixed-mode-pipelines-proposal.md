@@ -1,5 +1,11 @@
 # Mixed-Mode Pipelines Proposal
 
+Reference: DFC088
+Created: 2026-04-28
+Last modified: 2026-05-02
+
+[Back to Index](./README.md)
+
 **Status:** Design (2026-04-28, refined 2026-05-02). Now reframed as
 **Phase B of the unified-typed-mode plan**: builds on the planner
 abstraction introduced in [`typed-auto-parallel-proposal.md`](typed-auto-parallel-proposal.md)

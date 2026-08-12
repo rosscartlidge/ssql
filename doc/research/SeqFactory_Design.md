@@ -1,5 +1,11 @@
 # SeqFactory Design Document
 
+Reference: DFC001
+Created: 2025-09-29
+Last modified: 2025-11-08
+
+[Back to Index](./README.md)
+
 ## Problem Statement
 
 Current `iter.Seq[T]` types in the `Value` constraint have a fundamental issue: **they are not copyable or reusable**.

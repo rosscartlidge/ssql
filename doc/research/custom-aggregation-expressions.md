@@ -1,5 +1,11 @@
 # Custom Aggregation Expressions for group-by
 
+Reference: DFC034
+Created: 2025-12-31
+Last modified: 2026-01-01
+
+[Back to Index](./README.md)
+
 ## Overview
 
 This document describes the design for adding custom aggregation expressions to the `group-by` command, leveraging ssql's existing expr-lang integration.

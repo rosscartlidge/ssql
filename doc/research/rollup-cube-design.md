@@ -1,5 +1,11 @@
 # ROLLUP and CUBE Aggregation Design
 
+Reference: DFC048
+Created: 2026-02-22
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 **Status: Implemented** — Option B chosen (`-rollup`/`-cube` flags on `group-by` with enriched field naming).
 
 ## Problem

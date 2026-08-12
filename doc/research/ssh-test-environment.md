@@ -1,5 +1,11 @@
 # SSH Test Environment Setup
 
+Reference: DFC056
+Created: 2026-03-10
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Status:** Planning
 **Date:** March 2026
 **Purpose:** Local VM environment for testing `from ssh` and `from catalog` before implementation

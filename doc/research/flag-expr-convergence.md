@@ -1,5 +1,11 @@
 # Converging the Flag-Condition and Expression Lowerings
 
+Reference: DFC105
+Created: 2026-08-10
+Last modified: 2026-08-10
+
+[Back to Index](./README.md)
+
 **Status:** Design proposal, 2026-08-10. Follow-up to the expr transpiler
 (phases 1–4, see [expr-transpiler-paper.md](expr-transpiler-paper.md)) and
 sibling to [rvalues-as-expressions.md](rvalues-as-expressions.md), which

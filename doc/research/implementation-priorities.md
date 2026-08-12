@@ -1,5 +1,11 @@
 # ssql Feature Implementation Priorities
 
+Reference: DFC035
+Created: 2025-12-31
+Last modified: 2026-01-17
+
+[Back to Index](./README.md)
+
 ## Overview
 
 This document summarizes unimplemented features from the research documents, ranked by value/effort ratio and readiness for implementation.

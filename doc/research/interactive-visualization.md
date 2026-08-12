@@ -1,5 +1,11 @@
 # Interactive Visualization Research
 
+Reference: DFC044
+Created: 2026-02-09
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 ## Current State
 
 ssql currently generates static HTML charts using Chart.js:

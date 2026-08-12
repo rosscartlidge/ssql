@@ -1,5 +1,11 @@
 # Typed Auto-Parallel Proposal
 
+Reference: DFC091
+Created: 2026-05-02
+Last modified: 2026-05-02
+
+[Back to Index](./README.md)
+
 **Status:** Prototype + benchmarks, 2026-05-02. Not yet implemented.
 
 This proposal merges `SSQLGO=typed` (serial) and `SSQLGO=parallel`

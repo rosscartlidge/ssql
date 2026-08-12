@@ -1,5 +1,11 @@
 # `ssql/typed` — Concurrency Proposal
 
+Reference: DFC082
+Created: 2026-04-26
+Last modified: 2026-04-27
+
+[Back to Index](./README.md)
+
 **Status:** PoC SHIPPED (2026-04-27). Measured a **10.1× speedup at compute** and a **6.4× end-to-end speedup** on the 10M × 3-join workload. End-to-end with `ReadCSVParallel`, typed-parallel runs at **2.2× of DuckDB's wall time** — the architectural gap is now narrow enough that further closing requires SIMD or columnar layout (Phase 3+ work). Full numbers in [§9a](#9a-poc-results-2026-04-27).
 
 Predecessor:

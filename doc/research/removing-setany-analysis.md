@@ -1,5 +1,11 @@
 # Removing SetAny: Impact Analysis
 
+Reference: DFC017
+Created: 2025-11-05
+Last modified: 2025-11-08
+
+[Back to Index](./README.md)
+
 ## Executive Summary
 
 `SetAny` is a method on `MutableRecord` that bypasses the `Value` type constraint, allowing any type to be stored in a record. It's currently used in 4 places in the codebase, all outside the core package.

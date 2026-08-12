@@ -1,5 +1,11 @@
 # `ssql/typed` — Phase 1 Package Proposal
 
+Reference: DFC083
+Created: 2026-04-26
+Last modified: 2026-04-27
+
+[Back to Index](./README.md)
+
 **Status:** Proposal, validated by PoC measurements (2026-04-26)
 **Predecessor:** [`typed-code-generation.md`](typed-code-generation.md) — the moonshot vision
 **Predecessor claim:** 35× speedup, 82,000× less allocation

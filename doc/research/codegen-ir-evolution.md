@@ -1,5 +1,11 @@
 # Codegen: evolving the fragment system (and why *not* go/ast)
 
+Reference: DFC099
+Created: 2026-06-24
+Last modified: 2026-06-24
+
+[Back to Index](./README.md)
+
 **Status:** Design exploration, 2026-06-23. Prompted by the recurring question
 "should the code generator assemble an AST instead of strings?" — sharpened by
 the v4.50.1 bug (two projection stages both named `included`, a string-codegen

@@ -7,6 +7,12 @@ date: "Go Programming Conference 2026"
 
 # The Challenge
 
+Reference: DFC032
+Created: 2025-12-18
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 ## AI Coding Assistants: Promise vs Reality
 
 **The Promise:**

@@ -1,5 +1,11 @@
 # ssql Adoption Plan
 
+Reference: DFC058
+Created: 2026-03-20
+Last modified: 2026-04-08
+
+[Back to Index](./README.md)
+
 **Date:** 2026-03-19 (updated 2026-04-08)
 **Status:** Launched. HN posted, Reddit and newsletters next.
 **Goal:** Get ssql in front of developers who work with data at the command line

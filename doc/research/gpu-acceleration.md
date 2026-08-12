@@ -1,5 +1,11 @@
 # GPU Acceleration for ssql: Research and Implementation Plan
 
+Reference: DFC027
+Created: 2025-12-13
+Last modified: 2026-01-22
+
+[Back to Index](./README.md)
+
 ## Experimental Findings (January 2025)
 
 **We implemented GPU acceleration and tested it. Here's what we learned:**

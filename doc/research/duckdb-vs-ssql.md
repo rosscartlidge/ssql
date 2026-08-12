@@ -1,5 +1,11 @@
 # DuckDB vs ssql: A Comparison
 
+Reference: DFC060
+Created: 2026-03-20
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Date:** 2026-03-16
 
 ## Overview

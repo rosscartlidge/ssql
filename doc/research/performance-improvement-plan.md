@@ -1,5 +1,11 @@
 # ssql Performance Improvement Plan
 
+Reference: DFC064
+Created: 2026-03-20
+Last modified: 2026-04-07
+
+[Back to Index](./README.md)
+
 **Date:** 2026-03-16 (updated 2026-04-07)
 **Related:** [DuckDB Comparison](duckdb-vs-ssql.md), [Parallel Processing](parallel-processing.md)
 

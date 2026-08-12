@@ -1,5 +1,11 @@
 # Expr-lang Reference for ssql
 
+Reference: DFC023
+Created: 2025-12-09
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 This document is a comprehensive reference for the expr-lang expression language (v1.17) as used in ssql. It covers all language features, built-in functions, and ssql-specific usage patterns.
 
 **Source**: https://expr-lang.org/

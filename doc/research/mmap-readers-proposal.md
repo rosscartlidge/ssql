@@ -1,5 +1,11 @@
 # mmap + MADV Readers Proposal
 
+Reference: DFC090
+Created: 2026-04-30
+Last modified: 2026-08-11
+
+[Back to Index](./README.md)
+
 **Status:** Prototype + benchmarks, 2026-04-30. Not yet implemented in main.
 
 This proposal evaluates replacing the file-I/O layer in ssql's

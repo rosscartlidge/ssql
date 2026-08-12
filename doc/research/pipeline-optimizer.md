@@ -1,5 +1,11 @@
 # Design: `generate ssql` Pipeline Optimizer
 
+Reference: DFC065
+Created: 2026-03-20
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Status:** Phase 1+2+3+4 implemented
 **Date:** 2026-03-17
 

@@ -1,5 +1,11 @@
 # expr-lang Integration in ssql
 
+Reference: DFC021
+Created: 2025-11-16
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Version**: v2.1.0+
 **Date**: November 2025
 **expr-lang docs**: https://expr-lang.org/

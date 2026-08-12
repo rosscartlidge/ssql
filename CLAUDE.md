@@ -40,6 +40,24 @@ Keep documentation in sync with API and CLI changes. Key files:
 - Common mistakes: changing API/CLI without updating docs, using old import paths/command names/flag names
 - **When creating new docs**, ALWAYS add them to the appropriate index: `doc/README.md` or `doc/research/README.md`. This is easy to forget — check BEFORE committing.
 
+### DFC Convention for Research Docs (CRITICAL)
+
+Every `doc/research/*.md` carries a DFC (Doc For Comment) reference — a stable, chronological handle (like an RFC number) for journals, commit messages, and cross-doc references. `scripts/dfc.py` is the tool; `make doc-check` gates it (Check 9).
+
+- **New research doc**: get the number with `scripts/dfc.py --new`; name the file `dfcNNN_short_description.md` (lowercase); put the metadata block right below the `# Title`:
+  ```
+  Reference: DFCnnn
+  Created: YYYY-MM-DD
+  Last modified: YYYY-MM-DD
+
+  [Back to Index](./README.md)
+  ```
+  (Pre-DFC files keep their original names — renaming breaks inbound links; only the metadata identifies them.)
+- **After creating or editing research docs**: run `scripts/dfc.py --stamp && scripts/dfc.py --index` before committing — stamps dates from git/working-tree state and regenerates the chronological table in `doc/research/README.md`. Numbers are NEVER reassigned.
+- **Superseding a doc**: add `Deprecates: [DFCnnn](./old_file.md)` to the new doc's metadata and `Deprecated-by: [DFCnnn](./new_file.md)` to the old one — future sessions must not implement from a superseded plan.
+- **Refer to docs by DFC number** in journals and commit messages (`Ref: DFC085`) — short, stable, greppable in both directions.
+- **Context discipline**: locate docs via `scripts/docsearch.sh` or the README index, then read only the 1–2 DFCs the task needs — never bulk-load the research dir.
+
 ## Development Principles (CRITICAL)
 
 ### Refactor While You Work

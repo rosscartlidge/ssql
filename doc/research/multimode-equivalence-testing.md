@@ -1,5 +1,11 @@
 # When one pipeline has five implementations: a divergence bug and the differential harness that kills it
 
+Reference: DFC102
+Created: 2026-07-02
+Last modified: 2026-07-03
+
+[Back to Index](./README.md)
+
 **Status:** Retrospective + design note, 2026-07-01. A correctness bug that hid
 in plain sight across our multiple execution/codegen backends, why our existing
 tests missed it, and the N-way differential equivalence harness we built so this

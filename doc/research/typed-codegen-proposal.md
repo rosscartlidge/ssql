@@ -1,5 +1,11 @@
 # `ssql generate go -typed` — Phase 2 Proposal
 
+Reference: DFC081
+Created: 2026-04-26
+Last modified: 2026-04-28
+
+[Back to Index](./README.md)
+
 **Status:** Tier 1 + Tier 2 + Tier 3a + Tier 3b + parallel-mode SHIPPED (2026-04-26 / 2026-04-27). Activate with `SSQLGO=typed` for serial typed Go, or `SSQLGO=parallel` for parallel typed Go (Stream[T] + HashJoinParallel + ReadCSVParallel). See [§5d](#5d-parallel-mode-codegen-ssqlgoparallel) for the parallel-mode constraints and measured numbers.
 
 **Tier 1 (initial ship):** `from FILE.csv` (with schema sampling), `where -if FIELD OP VALUE` (literal operators), `join FILE.csv -using FIELD` / `-on LEFT RIGHT` (single-key, single-clause + process-substitution), `to csv [FILE]`, `to table`.

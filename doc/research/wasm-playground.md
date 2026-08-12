@@ -1,5 +1,11 @@
 # Design: ssql WASM Playground
 
+Reference: DFC070
+Created: 2026-03-21
+Last modified: 2026-03-21
+
+[Back to Index](./README.md)
+
 **Status:** Design
 **Date:** 2026-03-21
 **Goal:** Browser-based interactive playground where users can type ssql pipelines and see results — zero install

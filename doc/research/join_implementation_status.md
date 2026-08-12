@@ -1,5 +1,11 @@
 # Hash Join Implementation Status
 
+Reference: DFC009
+Created: 2025-11-02
+Last modified: 2025-12-09
+
+[Back to Index](./README.md)
+
 ## Completed ✅
 
 ### 1. Interface Conversion

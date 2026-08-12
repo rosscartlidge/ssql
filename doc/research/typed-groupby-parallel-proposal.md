@@ -1,5 +1,11 @@
 # Typed GroupByParallel — Sink/Combine/Finalize Proposal
 
+Reference: DFC086
+Created: 2026-04-27
+Last modified: 2026-04-27
+
+[Back to Index](./README.md)
+
 **Status:** Design + early implementation in flight (2026-04-27).
 
 This proposal extends the typed parallel runtime

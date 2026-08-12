@@ -1,5 +1,11 @@
 # Tier 3 Codegen — What's Left, and How to Prioritize
 
+Reference: DFC085
+Created: 2026-04-27
+Last modified: 2026-04-27
+
+[Back to Index](./README.md)
+
 Forward-looking companion to
 [`typed-codegen-proposal.md`](typed-codegen-proposal.md). The proposal
 documents what shipped (Tier 1 + Tier 2 + Tier 3a). This doc enumerates

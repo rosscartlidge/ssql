@@ -1,5 +1,11 @@
 # JOIN Interface Approach - Breaking Change Analysis
 
+Reference: DFC010
+Created: 2025-11-02
+Last modified: 2025-11-08
+
+[Back to Index](./README.md)
+
 ## Overview
 
 Convert `JoinPredicate` from a function type to an interface to enable clean hash join optimization.

@@ -1,5 +1,11 @@
 # ssql CLI Tools Design Document
 
+Reference: DFC004
+Created: 2025-10-12
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 ## Executive Summary
 
 This document outlines the design and implementation of command-line tools for ssql, enabling Unix-style pipelines for data processing. The CLI will leverage the existing gs (gogstools) framework for declarative command definition, intelligent tab completion, and clause-based filtering.

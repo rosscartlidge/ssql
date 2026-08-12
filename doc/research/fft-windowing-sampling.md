@@ -1,5 +1,11 @@
 # FFT Windowing and Sampling Considerations
 
+Reference: DFC039
+Created: 2026-01-19
+Last modified: 2026-01-19
+
+[Back to Index](./README.md)
+
 **Status:** Draft for expert review
 **Date:** January 2026
 **Purpose:** Document FFT best practices and propose API design for ssql

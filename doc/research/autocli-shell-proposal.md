@@ -1,5 +1,11 @@
 # autocli-shell + autocli-ssh Proposal
 
+Reference: DFC095
+Created: 2026-05-12
+Last modified: 2026-05-13
+
+[Back to Index](./README.md)
+
 **Status:** Phases A–D shipped (2026-05-12 / 2026-05-13). See *Status at end of week 20* below for the snapshot.
 **Date:** 2026-05-12 (orig); 2026-05-13 (status update)
 **Target:** autocli vX, ssql v4.44 (first consumer) — both shipped

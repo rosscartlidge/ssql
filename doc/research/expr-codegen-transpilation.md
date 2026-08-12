@@ -1,5 +1,11 @@
 # Expression support in `generate go`: transpile to native Go (performance-first)
 
+Reference: DFC100
+Created: 2026-06-25
+Last modified: 2026-06-25
+
+[Back to Index](./README.md)
+
 **Status:** Research / design exploration, 2026-06-25. Prompted by: expressions
 (`-if-expr`, `-set-expr`, `-expr`, `-stream-expr`) are a weak spot in code
 generation — when a pipeline uses one you lose native-Go performance, and that

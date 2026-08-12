@@ -1,5 +1,11 @@
 # Show HN Draft
 
+Reference: DFC075
+Created: 2026-04-04
+Last modified: 2026-04-04
+
+[Back to Index](./README.md)
+
 **Title:** `Show HN: ssql – Unix-style data processing that optimizes and compiles to Go`
 
 **Body:**

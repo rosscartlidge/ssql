@@ -1,5 +1,11 @@
 # JOIN Performance Analysis and Optimization
 
+Reference: DFC006
+Created: 2025-10-30
+Last modified: 2025-11-08
+
+[Back to Index](./README.md)
+
 ## Current Implementation Analysis
 
 ### Algorithm Complexity

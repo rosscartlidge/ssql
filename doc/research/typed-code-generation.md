@@ -1,5 +1,11 @@
 # Typed Code Generation: 35x Performance Through Type Specialization
 
+Reference: DFC029
+Created: 2025-12-13
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 ## Executive Summary
 
 This document explores generating **typed struct-based code** instead of `map[string]any` Record-based code. Benchmarks show **35x speedup** and **82,000x less memory allocation** for large datasets.

@@ -1,5 +1,11 @@
 # ssql serve — Browser UI with Native Backend
 
+Reference: DFC079
+Created: 2026-04-09
+Last modified: 2026-05-13
+
+[Back to Index](./README.md)
+
 **Status (rev 2, 2026-05-13):** The original rev-1 design (this whole doc below)
 sketched an HTTP + WebSocket + browser-UI daemon. v4.44.0 shipped a **different
 shape under the same name**: an SSH-accessible CLI operator console

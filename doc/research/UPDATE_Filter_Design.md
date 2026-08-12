@@ -1,5 +1,11 @@
 # UPDATE Filter Design
 
+Reference: DFC013
+Created: 2025-11-04
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 ## Overview
 
 This document describes the design for adding SQL-style UPDATE operations to ssql. The UPDATE filter will allow modifying record fields within pipelines while maintaining type safety through the `Value` constraint.

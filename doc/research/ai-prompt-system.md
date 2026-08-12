@@ -1,5 +1,11 @@
 # AI Prompt Engineering System for ssql
 
+Reference: DFC042
+Created: 2026-01-28
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 ## What We Built
 
 ssql now has a structured system for getting LLMs to generate correct ssql code — both Go library code and CLI pipelines. The system has three parts:

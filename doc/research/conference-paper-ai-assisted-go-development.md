@@ -1,5 +1,11 @@
 # Building Production Go Tools with AI-Assisted Development: A Case Study in ssql and autocli
 
+Reference: DFC031
+Created: 2025-12-17
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Conference Paper Draft - Go Programming Conference**
 
 *Ross Cartlidge, December 2025*

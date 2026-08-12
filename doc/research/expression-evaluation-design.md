@@ -1,5 +1,11 @@
 # Expression Evaluation Design for ssql Update Command
 
+Reference: DFC020
+Created: 2025-11-12
+Last modified: 2025-11-12
+
+[Back to Index](./README.md)
+
 **Status:** Design Proposal
 **Date:** 2025-11-12
 **Author:** Design discussion with Claude Code

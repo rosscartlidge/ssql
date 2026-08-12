@@ -1,5 +1,11 @@
 # Expr→Go transpiler: implementation plan
 
+Reference: DFC103
+Created: 2026-07-04
+Last modified: 2026-08-10
+
+[Back to Index](./README.md)
+
 **Status:** Detailed implementation plan, 2026-07-03. No code written yet.
 This is the concrete follow-up to
 [expr-codegen-transpilation.md](expr-codegen-transpilation.md) (the design

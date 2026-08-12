@@ -1,5 +1,11 @@
 # Distributed Processing via SSH
 
+Reference: DFC045
+Created: 2026-02-13
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Status:** Implemented (v4.27.0)
 **Date:** February 2026
 **ssql version:** v4.15.0+

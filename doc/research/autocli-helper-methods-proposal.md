@@ -1,5 +1,11 @@
 # Proposal: Add Helper Methods for Accumulated Flags
 
+Reference: DFC022
+Created: 2025-11-25
+Last modified: 2025-11-25
+
+[Back to Index](./README.md)
+
 ## Summary
 
 Add type-safe helper methods to `Context` for accessing accumulated multi-argument flags, eliminating the current type assertion complexity and inconsistent return types.

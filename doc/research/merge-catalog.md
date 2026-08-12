@@ -1,5 +1,11 @@
 # Merge with Catalog Support
 
+Reference: DFC074
+Created: 2026-04-03
+Last modified: 2026-04-03
+
+[Back to Index](./README.md)
+
 ## Problem
 
 `ssql merge` does K-way sorted merge of pre-sorted inputs, streaming with O(K) memory. Currently it only accepts local JSONL files (or process substitutions). For distributed time-series or log data where each node holds a pre-sorted shard, you'd need to manually construct process substitutions:

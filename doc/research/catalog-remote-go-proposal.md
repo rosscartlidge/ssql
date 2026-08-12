@@ -1,5 +1,11 @@
 # Catalog Remote-Go Proposal
 
+Reference: DFC094
+Created: 2026-05-06
+Last modified: 2026-05-06
+
+[Back to Index](./README.md)
+
 **Status:** Proposal (rev 2, 2026-05-06)
 **Date:** 2026-05-06 (orig); 2026-05-06 (rev 2: drop concurrency cap, completion-order default, fail-fast default, auto-emit require header)
 **ssql version target:** v4.43

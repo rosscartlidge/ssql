@@ -1,5 +1,11 @@
 # Window / Analytic Functions Design
 
+Reference: DFC049
+Created: 2026-02-24
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 ## Problem
 
 ssql's `group-by` collapses rows — you get one output row per group. SQL window functions let you compute aggregates, rankings, and offsets **without losing rows**. Every input row comes out enriched with computed values.

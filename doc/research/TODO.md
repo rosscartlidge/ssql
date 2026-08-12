@@ -1,5 +1,11 @@
 # TODO
 
+Reference: DFC068
+Created: 2026-03-21
+Last modified: 2026-08-12
+
+[Back to Index](./README.md)
+
 Tracked issues and feature gaps discovered during development.
 
 ## Multi-file `from` (see multi-file-from.md)

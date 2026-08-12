@@ -1,5 +1,11 @@
 # Schema-Aware Records: Performance Optimization Research
 
+Reference: DFC028
+Created: 2025-12-13
+Last modified: 2025-12-13
+
+[Back to Index](./README.md)
+
 ## Executive Summary
 
 This document explores replacing `map[string]any` with a schema-aware `[]any` slice design to improve performance for large datasets. Benchmarks show **2-10x speedup** for record merging operations (joins), with **1.3-4x memory reduction**.

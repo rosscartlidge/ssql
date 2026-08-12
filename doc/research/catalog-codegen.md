@@ -1,5 +1,11 @@
 # Catalog Code Generation
 
+Reference: DFC059
+Created: 2026-03-20
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Status:** Implemented (Option B)
 **Date:** March 2026
 **Depends on:** `from catalog` (implemented), code generation system

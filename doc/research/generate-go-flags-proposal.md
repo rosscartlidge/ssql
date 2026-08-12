@@ -1,5 +1,11 @@
 # `generate go -optimise` and `generate go -run` Proposal
 
+Reference: DFC087
+Created: 2026-04-28
+Last modified: 2026-04-29
+
+[Back to Index](./README.md)
+
 **Status:** `-run` shipped 2026-04-28. `-build` shipped 2026-04-28. `-optimise` shipped 2026-04-29.
 
 `-run` was implemented as designed but with one refinement: the

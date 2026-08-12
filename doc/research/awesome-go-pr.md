@@ -1,5 +1,11 @@
 # Awesome Go PR
 
+Reference: DFC076
+Created: 2026-04-08
+Last modified: 2026-04-08
+
+[Back to Index](./README.md)
+
 Submit PR to: https://github.com/avelino/awesome-go
 
 **Section:** Stream Processing

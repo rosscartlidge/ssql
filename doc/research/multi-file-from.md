@@ -1,5 +1,11 @@
 # Multi-file `ssql from` — Design Doc
 
+Reference: DFC071
+Created: 2026-03-28
+Last modified: 2026-03-28
+
+[Back to Index](./README.md)
+
 ## Problem
 
 Currently `ssql from csv file.csv` reads one file. Real-world usage often requires reading many CSVs (and other formats) at once. Users need:

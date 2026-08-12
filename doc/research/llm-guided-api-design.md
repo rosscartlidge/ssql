@@ -1,5 +1,11 @@
 # LLM-Guided API Design: A Case Study in Iterative Prompt Engineering for Code Generation
 
+Reference: DFC043
+Created: 2026-01-29
+Last modified: 2026-04-22
+
+[Back to Index](./README.md)
+
 **Authors:** Ross Cartlidge, with Claude (Anthropic)
 
 **Abstract:** We present a methodology for designing APIs that are naturally expressible through large language models (LLMs). Using ssql, a Go stream processing library, as a case study, we demonstrate how iterative prompt testing with objective validation criteria can improve code generation accuracy. Our approach—which we call the "Ralph Wiggum Loop"—achieves 100% test pass rates across 30 structured test cases on both Claude and Gemini, verified through integration testing that executes generated code against real data. We find that SQL-style naming conventions, encapsulated types, and functional composition patterns significantly improve LLM code generation quality. Notably, integration testing revealed a 13% gap between syntactically correct and behaviorally correct code. Our comparative analysis shows that different LLMs require different teaching strategies: Claude reached 100% in 2 iterations through positive examples, while Gemini required 5 iterations and explicit anti-patterns to address function hallucination and type confusion. We argue this multi-LLM testing approach should become standard practice for library designers who want their APIs to be broadly LLM-accessible.

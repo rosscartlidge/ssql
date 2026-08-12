@@ -1,5 +1,11 @@
 # Streaming Window Functions: Design Report
 
+Reference: DFC053
+Created: 2026-02-27
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 ## Problem Statement
 
 The current `Window()` implementation materializes all input records before computing any window function. For a 10M-row dataset, this means 10M records buffered in memory before the first output row appears. This is the correct approach for the general case (arbitrary partitioning, unbounded frames, ranking functions), but many real-world window patterns could stream with bounded memory.

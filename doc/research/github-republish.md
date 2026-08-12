@@ -1,5 +1,11 @@
 # GitHub Republish Plan
 
+Reference: DFC061
+Created: 2026-03-20
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Date:** 2026-03-19
 **Purpose:** Push ssql and autocli back to GitHub after receiving employer open-source approval
 

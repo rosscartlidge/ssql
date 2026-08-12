@@ -1,5 +1,11 @@
 # ssql Subcommand Migration - Production Checklist
 
+Reference: DFC012
+Created: 2025-11-02
+Last modified: 2025-12-09
+
+[Back to Index](./README.md)
+
 ## Overview
 
 Migrate ssql from custom subcommand routing to native completionflags subcommand support.

@@ -1,5 +1,11 @@
 # AST Patching for Natural Aggregation Syntax
 
+Reference: DFC036
+Created: 2026-01-01
+Last modified: 2026-01-01
+
+[Back to Index](./README.md)
+
 ## Overview
 
 Use expr-lang's AST visitor and patch API to transform natural SQL-like aggregation expressions into the predicate form that expr-lang requires.

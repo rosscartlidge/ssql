@@ -1,5 +1,11 @@
 # Arrow Integration Proposal for ssql
 
+Reference: DFC038
+Created: 2026-01-17
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 ## Executive Summary
 
 This proposal outlines how Apache Arrow can be integrated into ssql to provide:

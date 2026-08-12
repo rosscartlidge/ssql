@@ -1,5 +1,11 @@
 # `ssql/typed` — Performance Improvement Opportunities
 
+Reference: DFC084
+Created: 2026-04-26
+Last modified: 2026-04-26
+
+[Back to Index](./README.md)
+
 Notes captured while implementing Phase 1 and Phase 1.5, organized by how
 much they could move the headline numbers and how much work they require.
 

@@ -1,5 +1,11 @@
 # Record Performance Optimization Plan
 
+Reference: DFC037
+Created: 2026-01-14
+Last modified: 2026-01-15
+
+[Back to Index](./README.md)
+
 ## Problem Statement
 
 The current ssql pipeline has significant performance overhead compared to raw Go CSV operations:

@@ -1,5 +1,11 @@
 # Autocli Improvements for Multi-Argument Flags
 
+Reference: DFC018
+Created: 2025-11-09
+Last modified: 2025-11-09
+
+[Back to Index](./README.md)
+
 ## Background
 
 While implementing ssql's new `group-by` syntax, we discovered some inconsistencies in how autocli handles multi-argument flags. This document proposes improvements to make the API more consistent and easier to use.

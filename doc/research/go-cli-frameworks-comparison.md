@@ -1,5 +1,11 @@
 # Go CLI Frameworks Comparison - December 2025
 
+Reference: DFC033
+Created: 2025-12-21
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 This document provides a comprehensive, factual comparison of the most popular Go CLI frameworks based on research conducted in December 2025.
 
 ## Summary Table

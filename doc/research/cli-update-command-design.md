@@ -1,5 +1,11 @@
 # CLI Update Command Design
 
+Reference: DFC014
+Created: 2025-11-04
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 ## Overview
 
 Add an `update` subcommand to the ssql CLI that allows users to modify field values in records. This complements the existing `select` (field projection) and `where` (filtering) commands.

@@ -1,5 +1,11 @@
 # Parameterized Code Generation
 
+Reference: DFC063
+Created: 2026-03-20
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Status:** Implemented (v4.28.0, March 2026)
 **Date:** March 2026
 **Decision:** Option A — always parameterize (zero-cost defaults)

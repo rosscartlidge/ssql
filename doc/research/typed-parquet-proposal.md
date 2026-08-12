@@ -1,5 +1,11 @@
 # Typed Parquet Reader Proposal
 
+Reference: DFC089
+Created: 2026-04-28
+Last modified: 2026-04-28
+
+[Back to Index](./README.md)
+
 **Status:** Design + implementation in flight (2026-04-27).
 
 This proposal adds Parquet input to the `typed` package, mirroring

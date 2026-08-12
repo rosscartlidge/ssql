@@ -1,5 +1,11 @@
 # ssql Future Development
 
+Reference: DFC050
+Created: 2026-02-25
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 ## What ssql Is
 
 ssql is a Unix-pipeline data processing toolkit: a Go library, a CLI, a code generator, and a visualization engine. Its identity is composable pipeline steps — not SQL, not a database, not a notebook. Everything flows left to right through pipes.

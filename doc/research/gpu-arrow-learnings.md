@@ -1,5 +1,11 @@
 # What We Learned: GPU Acceleration and Arrow Integration
 
+Reference: DFC040
+Created: 2026-01-19
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 | | |
 |---|---|
 | **Date** | January 2025 |

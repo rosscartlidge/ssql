@@ -1,5 +1,11 @@
 # ssql Serialization Format Analysis
 
+Reference: DFC002
+Created: 2025-10-06
+Last modified: 2025-12-09
+
+[Back to Index](./README.md)
+
 ## Executive Summary
 
 This document analyzes different serialization formats for inter-process communication in ssql pipelines. Based on comprehensive benchmarking and compatibility analysis, **JSON remains the optimal default format** while specific binary alternatives offer significant performance benefits for targeted use cases.

@@ -1,5 +1,11 @@
 # Remote Go Execution Proposal
 
+Reference: DFC093
+Created: 2026-05-03
+Last modified: 2026-05-06
+
+[Back to Index](./README.md)
+
 **Status:** Proposal (rev 4, 2026-05-06)
 **Date:** 2026-05-03 (orig); 2026-05-04 (rev 2: .ssql-as-unit; rev 3: drop fallback modes; rev 4: codegen-symmetric, drop -remote interactive flag)
 **ssql version target:** v4.42

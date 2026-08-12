@@ -1,5 +1,11 @@
 # Research: Gob vs JSONL for Inter-Process Streaming in ssql
 
+Reference: DFC005
+Created: 2025-10-15
+Last modified: 2025-12-09
+
+[Back to Index](./README.md)
+
 **Date:** 2025-10-15
 **Author:** Claude Code
 **Status:** Complete

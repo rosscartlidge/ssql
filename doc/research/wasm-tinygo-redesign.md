@@ -1,5 +1,11 @@
 # WASM Module Redesign: TinyGo + Decoupled Architecture
 
+Reference: DFC047
+Created: 2026-02-17
+Last modified: 2026-02-17
+
+[Back to Index](./README.md)
+
 ## Problem
 
 The current `ssql.wasm` is **19MB raw (~4MB gzipped)**. This makes the `to explore -wasm` feature impractical for most deployments — users wait several seconds to download and instantiate the module before they can interact with data.

@@ -1,5 +1,11 @@
 # `from` Subcommands: Mirroring `to`
 
+Reference: DFC055
+Created: 2026-03-10
+Last modified: 2026-03-10
+
+[Back to Index](./README.md)
+
 **Status:** Implemented (v4.27.0)
 **Date:** March 2026
 

@@ -1,5 +1,11 @@
 # Typed Code Generation: Compatibility Audit
 
+Reference: DFC030
+Created: 2025-12-13
+Last modified: 2026-03-12
+
+[Back to Index](./README.md)
+
 ## Overview
 
 This document audits ssql's CLI commands and library API for compatibility with typed code generation. The goal is to identify constructs that:

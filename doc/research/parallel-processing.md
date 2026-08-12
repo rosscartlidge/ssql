@@ -1,5 +1,11 @@
 # Research: Parallel Processing Opportunities in ssql
 
+Reference: DFC062
+Created: 2026-03-20
+Last modified: 2026-03-20
+
+[Back to Index](./README.md)
+
 **Status:** Exploratory
 **Date:** 2026-03-16
 

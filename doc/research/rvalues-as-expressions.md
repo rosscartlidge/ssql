@@ -1,5 +1,11 @@
 # Should all rvalues be expressions? (and why the structured flags stay)
 
+Reference: DFC101
+Created: 2026-06-28
+Last modified: 2026-06-29
+
+[Back to Index](./README.md)
+
 **Status:** Design rationale / decision record, 2026-06-28. Captures a design
 review of a radical idea — *remove the `…-expr` flags and make every rvalue in
 the system a potential expression* — and why ssql keeps the structured

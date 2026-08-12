@@ -376,6 +376,16 @@ for doc_file in "${files_with_code[@]}"; do
     fi
 done
 
+# Check 9: DFC metadata on research docs (Reference/Created/Last modified,
+# unique numbers, index currency). scripts/dfc.py prints the specifics.
+section "9. Checking DFC Metadata (doc/research)"
+
+if python3 scripts/dfc.py --check; then
+    pass "DFC metadata and index current"
+else
+    fail "DFC metadata problems — run scripts/dfc.py --stamp && scripts/dfc.py --index"
+fi
+
 # Summary
 section "Summary"
 
