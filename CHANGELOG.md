@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Bug Fixes
+- **Playground Tab completion no longer shows protocol directives as
+  candidates** — completing a data-file path surfaced the engine's
+  `{"type":"field_cache",...}` line in the popup. The playground now
+  consumes directives the way the bash completion script does — and
+  keeps them: the cached file path enables **field-value completion**
+  (`where -if country eq <Tab>` → real values), previously CLI-only.
 - **Schema mode now honours `from tsv`'s delimiter auto-detection** — the
   schema-mode branch hard-split headers on tab, so Ctrl-O / playground
   field completion on a pipe- (or colon-, semicolon-, …) delimited file

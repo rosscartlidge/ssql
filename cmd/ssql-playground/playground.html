@@ -116,7 +116,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <br><br>This playground runs a real ssql binary compiled to WebAssembly — <b>Tab</b> completes commands,
     flags, operators, files, and <i>pipeline-aware field names</i> (it runs your upstream stages in schema mode,
     so after a group-by it offers the grouped and aggregate fields); <b>Alt-h</b> (or "? Help") explains whatever
-    the cursor is on. The shell piping is simulated in JavaScript. The real CLI adds more: field-value completion,
+    the cursor is on. The shell piping is simulated in JavaScript. The real CLI adds more:
     Unix pipes, process substitution, SSH to remote hosts, and catalog queries across fleets.
     <br>Install: <code>go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest</code>
 </div>
@@ -263,11 +263,32 @@ function helpAtCursor() {
 
 let compState = null; // { cands, sel } while the popup is open
 
+// Env accumulated from completion directives — the playground's
+// equivalent of the bash script's `export AUTOCLI_CACHE_FILE=…`.
+// Completing a data-file path caches it here, which enables downstream
+// VALUE completion (`where -if country eq <Tab>` → real values).
+let completionEnv = {};
+
 function completionCandidates(ctx) {
-    const out = ssqlExec(['-complete', String(ctx.pos), ...ctx.args], '').stdout;
-    const lines = out.split('\n').map(s => s.trim()).filter(Boolean);
-    const hints = lines.filter(c => /^<.*>$/.test(c) || c === 'Use-Ctrl-O');
-    const cands = lines.filter(c => !hints.includes(c));
+    const out = ssqlExec(['-complete', String(ctx.pos), ...ctx.args], '', completionEnv).stdout;
+    const cands = [], hints = [];
+    for (const l of out.split('\n').map(s => s.trim()).filter(Boolean)) {
+        // {"type":...} lines are protocol directives, not candidates —
+        // the bash completion script consumes them the same way.
+        if (/^\{.*\}$/.test(l)) {
+            try {
+                const d = JSON.parse(l);
+                if (d.type === 'field_cache' && d.filepath) {
+                    completionEnv.AUTOCLI_CACHE_FILE = d.filepath;
+                } else if (d.type === 'env' && d.key) {
+                    completionEnv[d.key] = d.value || '';
+                }
+            } catch (e) { /* not a directive — ignore the line */ }
+            continue;
+        }
+        if (/^<.*>$/.test(l) || l === 'Use-Ctrl-O') hints.push(l);
+        else cands.push(l);
+    }
     return { cands, hints };
 }
 

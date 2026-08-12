@@ -140,6 +140,25 @@ async function run() {
         pipeFields.join(","));
     if (popupOpen()) key('Escape');
 
+    // 10d. Completing a data-file path must NOT surface the field_cache
+    //      protocol directive as a candidate (it used to appear as
+    //      {"type":"field_cache",...} in the popup) — single candidate
+    //      inserts cleanly.
+    setLine("ssql from csv cu");
+    tab();
+    record("tab-file-no-directive-junk",
+        ta.value === "ssql from csv customers.csv " && !popupOpen(),
+        JSON.stringify(ta.value) + (popupOpen() ? " popup: " + items().join(",") : ""));
+
+    // 10e. ...and the directive it carries enables downstream VALUE
+    //      completion: values of `country` from the cached file.
+    setLine("ssql from csv customers.csv | ssql where -if country eq ");
+    tab();
+    const valueOK = (popupOpen() && items().includes("US")) || / US $/.test(ta.value) || ta.value.endsWith("US ");
+    record("tab-value-completion", valueOK,
+        popupOpen() ? items().join(",") : JSON.stringify(ta.value));
+    if (popupOpen()) key('Escape');
+
     // 11. Generate Typed Go: derived row struct + typed runtime calls;
     //     record-mode Generate Go must NOT have them (discriminates the
     //     SSQL_MODE=typed env plumbing).
