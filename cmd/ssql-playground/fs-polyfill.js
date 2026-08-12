@@ -59,12 +59,25 @@
         };
     }
 
-    // Directories implied by file paths
-    function dirExists(path) {
-        if (path === "/" || path === "." || path === "") return true;
-        const prefix = path.endsWith("/") ? path : path + "/";
+    // Canonicalize an incoming path to the store's key form: "./x", "/x"
+    // and "x" all address the same entry (Go's os layer freely mixes them —
+    // os.ReadDir lstats entries as "./name", which used to ENOENT here and
+    // made Go silently drop every listing as "file disappeared").
+    // "" (after normalization of ".", "/", "") means the root directory.
+    function norm(path) {
+        let p = path;
+        while (p.startsWith("./")) p = p.slice(2);
+        if (p.startsWith("/")) p = p.slice(1);
+        if (p === ".") p = "";
+        return p;
+    }
+
+    // Directories implied by file paths. Takes a NORMALIZED path.
+    function dirExists(p) {
+        if (p === "") return true;
+        const prefix = p.endsWith("/") ? p : p + "/";
         for (const key of files.keys()) {
-            if (key.startsWith(prefix)) return true;
+            if (norm(key).startsWith(prefix)) return true;
         }
         return false;
     }
@@ -136,11 +149,23 @@
         },
 
         open(path, flags, mode, callback) {
+            path = norm(path);
             const creating = (flags & O_CREAT) !== 0;
             const truncating = (flags & O_TRUNC) !== 0;
 
             let data = files.get(path);
             if (!data && !creating) {
+                // Directories are implicit (no stored entry). os.ReadDir
+                // opens the directory before listing — give it a dir fd;
+                // the listing itself goes through fs.readdir(path).
+                // Without this, open(".") ENOENTed and Tab file-completion
+                // saw an empty directory.
+                if (dirExists(path)) {
+                    const fd = nextFd++;
+                    fds.set(fd, { path: path, data: new Uint8Array(0), pos: 0, flags: flags, isDir: true });
+                    callback(null, fd);
+                    return;
+                }
                 callback(enoent(path));
                 return;
             }
@@ -178,6 +203,13 @@
 
         close(fd, callback) {
             const entry = fds.get(fd);
+            if (entry && entry.isDir) {
+                // Never flush a directory fd — it would materialize the
+                // dir path (".") as an empty FILE in the store.
+                fds.delete(fd);
+                callback(null);
+                return;
+            }
             if (entry) {
                 // Flush written data back to file store
                 files.set(entry.path, entry.data.slice(0, entry.pos > (files.get(entry.path)?.length || 0) ? entry.pos : (files.get(entry.path)?.length || entry.data.length)));
@@ -187,11 +219,12 @@
         },
 
         stat(path, callback) {
+            path = norm(path);
             const data = files.get(path);
             if (data) {
-                // /dev/fd/ paths report as non-regular (FIFO/pipe) so Go's
+                // dev/fd/ paths report as non-regular (FIFO/pipe) so Go's
                 // join code generation detects them as process substitutions
-                const isFifo = path.startsWith("/dev/fd/");
+                const isFifo = path.startsWith("dev/fd/");
                 callback(null, makeStat(data.length, false, isFifo));
                 return;
             }
@@ -214,7 +247,7 @@
             }
             const entry = fds.get(fd);
             if (!entry) { callback(enoent("<fd:" + fd + ">")); return; }
-            callback(null, makeStat(entry.data.length, false));
+            callback(null, makeStat(entry.data.length, !!entry.isDir));
         },
 
         mkdir(path, perm, callback) {
@@ -223,7 +256,7 @@
         },
 
         unlink(path, callback) {
-            files.delete(path);
+            files.delete(norm(path));
             callback(null);
         },
 
@@ -232,6 +265,7 @@
         },
 
         rename(from, to, callback) {
+            from = norm(from); to = norm(to);
             const data = files.get(from);
             if (!data) { callback(enoent(from)); return; }
             files.set(to, data);
@@ -240,6 +274,7 @@
         },
 
         truncate(path, length, callback) {
+            path = norm(path);
             let data = files.get(path);
             if (!data) { callback(enoent(path)); return; }
             if (length < data.length) {
@@ -258,12 +293,13 @@
         },
 
         readdir(path, callback) {
-            const prefix = path.endsWith("/") ? path : path + "/";
+            const dir = norm(path);
+            const prefix = dir === "" ? "" : (dir.endsWith("/") ? dir : dir + "/");
             const entries = new Set();
             for (const key of files.keys()) {
-                if (key.startsWith(prefix)) {
-                    const rest = key.substring(prefix.length);
-                    const name = rest.split("/")[0];
+                const k = norm(key);
+                if (k.startsWith(prefix)) {
+                    const name = k.substring(prefix.length).split("/")[0];
                     if (name) entries.add(name);
                 }
             }
@@ -290,12 +326,12 @@
     // Expose helper for JS to write files into the virtual FS
     globalThis._fsWriteFile = (path, contents) => {
         const data = typeof contents === "string" ? encoder.encode(contents) : contents;
-        files.set(path, new Uint8Array(data));
+        files.set(norm(path), new Uint8Array(data));
     };
 
     // Expose helper to read files from the virtual FS
     globalThis._fsReadFile = (path) => {
-        const data = files.get(path);
+        const data = files.get(norm(path));
         if (!data) return null;
         return decoder.decode(data);
     };

@@ -81,7 +81,58 @@ async function run() {
     ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'h', altKey: true, bubbles: true }));
     record("alt-h-keydown", /descending|Sort/i.test(output()), output().slice(0, 200));
 
-    // 6. Share link (#p=... on the second iframe): pipeline preloaded and
+    // --- Tab completion ---
+    const tab = (shift) => ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Tab', shiftKey: !!shift, bubbles: true, cancelable: true }));
+    const key = (k) => ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+    const popup = () => doc.getElementById('completions');
+    const popupOpen = () => popup().style.display === 'block';
+    const setLine = (s) => { ta.value = s; ta.selectionStart = ta.selectionEnd = s.length; };
+
+    // 6. Single candidate: "ssql gr" + Tab -> "ssql group-by " inserted, no popup.
+    setLine("ssql gr");
+    tab();
+    record("tab-single-insert", ta.value === "ssql group-by " && !popupOpen(), JSON.stringify(ta.value));
+
+    // 7. Multi candidate: "ssql where -i" + Tab -> popup listing -if and -if-expr.
+    setLine("ssql from employees.csv | ssql where -i");
+    tab();
+    const items = () => [...popup().children].map(d => d.textContent);
+    record("tab-popup-multi", popupOpen() && items().includes("-if") && items().includes("-if-expr"), items().join(","));
+
+    // 8. Navigate + Enter accepts the selected candidate.
+    if (popupOpen()) {
+        const want = items()[1];
+        key('ArrowDown'); key('Enter');
+        record("tab-accept-nav", !popupOpen() && ta.value.endsWith(want + " "), JSON.stringify(ta.value) + " want " + want);
+    } else {
+        record("tab-accept-nav", false, "popup was not open");
+    }
+
+    // 9. File completion lists the virtual FS: "ssql from csv " + Tab.
+    setLine("ssql from csv ");
+    tab();
+    const fileOK = (popupOpen() && items().some(x => x.includes("employees.csv"))) || ta.value.includes("employees.csv");
+    record("tab-file-vfs", fileOK, popupOpen() ? items().join(",") : JSON.stringify(ta.value));
+    if (popupOpen()) key('Escape');
+    record("tab-escape-closes", !popupOpen(), "popup still open");
+
+    // 10. Field-name slot: engine returns the Use-Ctrl-O hint -> status
+    //     message, no popup, nothing inserted.
+    setLine("ssql from employees.csv | ssql where -if ");
+    const beforeVal = ta.value;
+    tab();
+    record("tab-field-hint", !popupOpen() && ta.value === beforeVal && /field names/.test(doc.getElementById('status').textContent),
+        "status: " + doc.getElementById('status').textContent + " value: " + JSON.stringify(ta.value));
+
+    // 11. Full pipeline run with process substitution — guards the
+    //     polyfill's /dev/fd FIFO detection (join's procsub handling)
+    //     after the path-normalization change.
+    setLine("ssql from orders.csv | ssql join <(ssql from customers.csv) -using customer_id | ssql limit 3 | ssql to table");
+    w.runPipeline();
+    record("procsub-join-run", /customer_id|country|amount/.test(doc.getElementById('output').textContent) && !/Error|failed/i.test(doc.getElementById('output').textContent),
+        doc.getElementById('output').textContent.slice(0, 200));
+
+    // 12. Share link (#p=... on the second iframe): pipeline preloaded and
     //    auto-run — output is the group-by result table.
     const w2 = document.getElementById('pgshare').contentWindow;
     if (await waitReady(w2)) {

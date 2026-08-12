@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Playground Tab completion** — Tab in the pipeline textarea completes
+  subcommands, flags, operators, formats, and files (the virtual FS's
+  sample datasets and uploads), driven by the CLI's own completion
+  engine (`-complete`) through the WASM bridge. Bash-style behaviour:
+  single candidates insert directly, multiple extend to the longest
+  common prefix and open a popup at the caret (arrows/Tab cycle,
+  Enter/click accept, Esc dismisses). Field-name slots show the honest
+  hint (pipeline-aware names are the next step). Fixed on the way:
+  the WASM fs polyfill treated `./x`, `/x`, and `x` as different files,
+  which made Go's `os.ReadDir` silently return empty listings.
 - **Playground help-at-cursor** — a "? Help" button (and Alt-h inside the
   pipeline textarea) shows contextual help for the command or flag at the
   caret, exactly like the CLI's Alt-h keybinding: paren-aware stage

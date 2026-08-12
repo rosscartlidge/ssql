@@ -51,8 +51,9 @@ jobs:
           cp cmd/ssql-playground/ssql-playground.wasm ghp/
           cp cmd/ssql-playground/wasm_exec.js ghp/
           cp cmd/ssql-playground/playground.html ghp/
+          cp cmd/ssql-playground/fs-polyfill.js ghp/
           cd ghp
-          git add ssql-playground.wasm wasm_exec.js playground.html
+          git add ssql-playground.wasm wasm_exec.js playground.html fs-polyfill.js
           if git diff --cached --quiet; then
             echo "playground unchanged — nothing to deploy"
             exit 0
