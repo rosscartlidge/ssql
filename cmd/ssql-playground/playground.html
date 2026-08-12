@@ -129,8 +129,10 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <br>Install: <code>go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest</code>
 </div>
 
-<script src="fs-polyfill.js"></script>
-<script src="wasm_exec.js"></script>
+<!-- ?v= busts the browser cache per deploy: a stale fs-polyfill.js with a
+     fresh playground.html made runs die silently (missing new helpers). -->
+<script src="fs-polyfill.js?v=__DEPLOY_SHA__"></script>
+<script src="wasm_exec.js?v=__DEPLOY_SHA__"></script>
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
@@ -592,7 +594,7 @@ let wasmReady = false;
 
 async function initWasm() {
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm'), go.importObject);
+    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=__DEPLOY_SHA__'), go.importObject);
     go.run(result.instance);
 
     // Wait for ssqlReady
@@ -888,7 +890,10 @@ function showCreatedFiles() {
         btn.addEventListener('click', () => downloadVFSFile(n));
         bar.appendChild(btn);
     }
-    bar.style.display = '';
+    // 'block', not '': the element is hidden by a STYLESHEET rule, so
+    // clearing the inline style falls back to display:none and the bar
+    // never appears (shipped bug — the harness checked the inline style).
+    bar.style.display = 'block';
 }
 
 function runPipeline() {

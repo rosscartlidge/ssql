@@ -214,14 +214,15 @@ async function run() {
     setLine("ssql from employees.csv | ssql where -if dept eq Engineering | ssql to csv eng.csv");
     w.runPipeline();
     const fbar = doc.getElementById('filesBar');
+    const fbarVisible = () => w.getComputedStyle(fbar).display !== 'none';
     const fbytes = w._fsReadFileBytes('eng.csv');
     record("files-bar-created",
-        fbar.style.display !== 'none' && fbar.textContent.includes('eng.csv') &&
+        fbarVisible() && fbar.textContent.includes('eng.csv') &&
         !fbar.textContent.includes('_exec_') && fbytes && fbytes.length > 0,
         "bar: " + fbar.textContent.slice(0, 120) + " bytes=" + (fbytes ? fbytes.length : 'null'));
     setLine("ssql from employees.csv | ssql limit 2 | ssql to table");
     w.runPipeline();
-    record("files-bar-hidden-when-none", fbar.style.display === 'none', "display=" + fbar.style.display);
+    record("files-bar-hidden-when-none", !fbarVisible(), "computed=" + w.getComputedStyle(fbar).display);
 
     // 11c. to markdown renders a paste-ready GFM table in the browser.
     setLine("ssql from employees.csv | ssql group-by dept -count n | ssql to markdown");
@@ -235,6 +236,7 @@ async function run() {
     w.runPipeline();
     const mdFileBytes = w._fsReadFileBytes('engineers.md');
     record("to-markdown-file-bar",
+        w.getComputedStyle(doc.getElementById('filesBar')).display !== 'none' &&
         doc.getElementById('filesBar').textContent.includes('engineers.md') &&
         mdFileBytes && new TextDecoder().decode(mdFileBytes).includes('|---'),
         doc.getElementById('filesBar').textContent.slice(0, 120));
