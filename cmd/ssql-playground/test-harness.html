@@ -365,14 +365,17 @@ async function run() {
     record("auto-bare-pipe-preserved", nOK && ta.value.startsWith("ssql from employees.csv | ssql "),
         JSON.stringify(ta.value));
 
-    // O. Clear button empties the box, closes the popup, and keeps
-    //    focus so Tab immediately offers subcommands.
-    setLine("ssql from employees.csv | ssql to table");
-    doc.getElementById('btnClear').click();
-    const oCleared = ta.value === '' && !popupOpen() && doc.activeElement === ta;
+    // O. Corner ✕: visible only with content (computed style!), clears
+    //    the box, hides itself, keeps focus so Tab offers subcommands.
+    await typeInto("ssql from employees.csv | ssql to table");
+    const clearBtn = doc.getElementById('btnClear');
+    const clearVisible = () => w.getComputedStyle(clearBtn).display !== 'none';
+    const oShown = clearVisible();
+    clearBtn.click();
+    const oCleared = ta.value === '' && !clearVisible() && !popupOpen() && doc.activeElement === ta;
     tab();
-    record("clear-button", oCleared && popupOpen() && items().includes("from"),
-        "value=" + JSON.stringify(ta.value) + " focus=" + (doc.activeElement === ta) + " popup=" + popupOpen());
+    record("clear-button", oShown && oCleared && popupOpen() && items().includes("from"),
+        "shown=" + oShown + " value=" + JSON.stringify(ta.value) + " visAfter=" + clearVisible() + " popup=" + popupOpen());
     if (popupOpen()) key('Escape');
 
     // G. Latency probe: one flag-completion round-trip (informational,
