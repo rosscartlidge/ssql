@@ -131,8 +131,8 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 
 <!-- ?v= busts the browser cache per deploy: a stale fs-polyfill.js with a
      fresh playground.html made runs die silently (missing new helpers). -->
-<script src="fs-polyfill.js?v=62b5c88f"></script>
-<script src="wasm_exec.js?v=62b5c88f"></script>
+<script src="fs-polyfill.js?v=402fd794"></script>
+<script src="wasm_exec.js?v=402fd794"></script>
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
@@ -243,7 +243,11 @@ function cursorContext() {
     if (!wasmReady) return null;
     const ta = document.getElementById('pipeline');
     const before = ta.value.slice(0, ta.selectionStart);
-    if (!before.trim()) return null;
+    // An empty (or all-whitespace) line IS a stage start: offer the
+    // subcommand list with the "ssql " prefix pending.
+    if (!before.trim()) {
+        return { ta, before, words: ['ssql', ''], args: [''], pos: 1, prefixNeeded: true };
+    }
     const stage = ssqlExec(['-cursor-stage', before], '').stdout;
     if (/^ssql(\s|$)/.test(stage)) {
         const words = shellSplit(stage); // words[0] === 'ssql'
@@ -350,7 +354,10 @@ function maybeQuote(cand) {
 // flag/subcommand/file candidates the engine returns).
 function currentRawWord(ta) {
     const before = ta.value.slice(0, ta.selectionStart);
-    return before.match(/(\S*)$/)[1];
+    // Stop at whitespace OR a pipe — mirrors the bash binding's
+    // ${line##*[ |]}. Without the pipe, the "word" after a bare "|" was
+    // the pipe itself, and acceptance ate it.
+    return before.match(/([^\s|]*)$/)[1];
 }
 
 function insertCompletion(ta, replaceLen, text, addSpace) {
@@ -524,7 +531,7 @@ function completeAtCursor() {
         }
         return;
     }
-    const stagePrefix = ctx.prefixNeeded ? 'ssql ' : '';
+    const stagePrefix = pendingPrefix(ta, ctx.prefixNeeded);
     if (cands.length === 1) {
         insertCompletion(ta, currentRawWord(ta).length, stagePrefix + maybeQuote(cands[0]), !cands[0].endsWith('/'));
         return;
@@ -552,6 +559,14 @@ let suppressWordStart = -1; // Escape'd word start; cleared on word change
 
 function currentWordStart(ta) {
     return ta.selectionStart - currentRawWord(ta).length;
+}
+
+// pendingPrefix: the boilerplate to insert at a prefixless stage start —
+// with a leading space when the caret sits directly after "|".
+function pendingPrefix(ta, needed) {
+    if (!needed) return '';
+    const i = currentWordStart(ta);
+    return (i > 0 && ta.value[i - 1] === '|') ? ' ssql ' : 'ssql ';
 }
 
 function autoSuggest() {
@@ -582,7 +597,7 @@ function autoSuggest() {
         if (fields) cands = fields.filter(f => f.startsWith(cur));
     }
     if (!cands.length) { if (compState && compState.passive) hideCompletions(); return; }
-    showCompletions(ta, cands, ctx.prefixNeeded ? 'ssql ' : '');
+    showCompletions(ta, cands, pendingPrefix(ta, ctx.prefixNeeded));
 }
 
 document.getElementById('pipeline').addEventListener('input', () => {
@@ -688,7 +703,7 @@ let wasmReady = false;
 
 async function initWasm() {
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=62b5c88f'), go.importObject);
+    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=402fd794'), go.importObject);
     go.run(result.instance);
 
     // Wait for ssqlReady
