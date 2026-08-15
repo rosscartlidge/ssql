@@ -78,6 +78,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button onclick="document.getElementById('fileUpload').click()">Upload CSV</button>
     <button id="btnShare" onclick="sharePipeline()">Share 🔗</button>
     <button id="btnHelpAt" onmousedown="event.preventDefault()" onclick="helpAtCursor()" disabled title="Help for the command or flag at the cursor (Alt-h)">? Help</button>
+    <button id="btnClear" onclick="clearPipeline()" title="Clear the pipeline box">Clear ✕</button>
 </div>
 
 <div id="dataViewer" class="output-area" style="display:none;">
@@ -131,8 +132,8 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 
 <!-- ?v= busts the browser cache per deploy: a stale fs-polyfill.js with a
      fresh playground.html made runs die silently (missing new helpers). -->
-<script src="fs-polyfill.js?v=402fd794"></script>
-<script src="wasm_exec.js?v=402fd794"></script>
+<script src="fs-polyfill.js?v=2cde0109"></script>
+<script src="wasm_exec.js?v=2cde0109"></script>
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
@@ -493,13 +494,13 @@ function fieldCompleteAtCursor() {
     if (!before.trim()) return;
     const fields = schemaFieldsAtCursor(before);
     if (!fields || !fields.length) {
-        document.getElementById('status').textContent = 'No upstream schema found for field completion';
+        setTransientStatus('No upstream schema found for field completion');
         return;
     }
     const cur = currentRawWord(ta);
     const matches = fields.filter(f => f.startsWith(cur));
     if (!matches.length) {
-        document.getElementById('status').textContent = 'No field matches ' + JSON.stringify(cur) + ' (fields: ' + fields.join(', ') + ')';
+        setTransientStatus('No field matches ' + JSON.stringify(cur) + ' (fields: ' + fields.join(', ') + ')');
         return;
     }
     if (matches.length === 1) {
@@ -525,9 +526,19 @@ function completeAtCursor() {
             return;
         }
         if (hints.includes('Values-Use-Ctrl-O')) {
-            document.getElementById('status').textContent = 'A field value goes here, but no source file was found to sample values from';
+            setTransientStatus('A field value goes here, but no source file was found to sample values from');
         } else if (hints.length) {
-            document.getElementById('status').textContent = 'Expected here: ' + hints.join(' ');
+            // Engine hints are honest but terse — translate the common
+            // ones ("this is a slot you fill in, nothing to complete").
+            const friendly = {
+                '<name>': 'a new field name goes here — your choice, just type it',
+                '<expression>': 'an expression goes here — press "? Help" (Alt-h) for the function reference',
+                '<init-expr>': 'an init expression, e.g. {s:0} — see "? Help" (Alt-h)',
+                '<every-expr>': 'a per-record expression, e.g. {s:s+salary} — see "? Help" (Alt-h)',
+                '<final-expr>': 'a final expression over the state, e.g. s — see "? Help" (Alt-h)',
+                '<FILE>': 'a file path goes here',
+            };
+            setTransientStatus(hints.map(h => friendly[h] || ('expected here: ' + h)).join(' · '));
         }
         return;
     }
@@ -545,6 +556,35 @@ function completeAtCursor() {
         if (lcp.length > cur.length) insertCompletion(ta, cur.length, lcp, false);
     }
     showCompletions(ta, cands, stagePrefix);
+}
+
+// Completion hints in the status line are TRANSIENT: they fade back to
+// "Ready" after a few seconds and clear as soon as you keep typing —
+// a hint set once used to sit there forever.
+let statusRestoreTimer = null;
+function setTransientStatus(msg) {
+    const st = document.getElementById('status');
+    st.textContent = msg;
+    st.dataset.transient = '1';
+    if (statusRestoreTimer) clearTimeout(statusRestoreTimer);
+    statusRestoreTimer = setTimeout(clearTransientStatus, 4000);
+}
+function clearTransientStatus() {
+    const st = document.getElementById('status');
+    if (st.dataset.transient) {
+        st.textContent = 'Ready — ssql in your browser';
+        delete st.dataset.transient;
+    }
+}
+
+function clearPipeline() {
+    const ta = document.getElementById('pipeline');
+    ta.value = '';
+    hideCompletions();
+    hideFilesBar();
+    hideChart();
+    hideUseButton();
+    ta.focus(); // Tab (or typing) now offers the subcommand list
 }
 
 // --- As-you-type completion ---
@@ -601,6 +641,7 @@ function autoSuggest() {
 }
 
 document.getElementById('pipeline').addEventListener('input', () => {
+    clearTransientStatus();
     if (autoSuggestTimer) clearTimeout(autoSuggestTimer);
     autoSuggestTimer = setTimeout(autoSuggest, 150);
 });
@@ -703,7 +744,7 @@ let wasmReady = false;
 
 async function initWasm() {
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=402fd794'), go.importObject);
+    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=2cde0109'), go.importObject);
     go.run(result.instance);
 
     // Wait for ssqlReady
