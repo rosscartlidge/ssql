@@ -317,6 +317,31 @@ async function run() {
     record("auto-subcommands-after-space", subsOK, subsOK ? "" : (popupOpen() ? items().join(",") : "no popup"));
     record("auto-subcommand-insert-clean", insertOK, JSON.stringify(ta.value));
 
+    // J. Prefixless stage start: "| fr" completes as a SUBCOMMAND and
+    //    acceptance inserts the "ssql " boilerplate.
+    await typeInto("ssql from employees.csv | fr");
+    const jOK = popupOpen() && items().includes("from");
+    if (popupOpen()) tab();
+    record("auto-prefixless-partial", jOK && ta.value === "ssql from employees.csv | ssql from ", JSON.stringify(ta.value));
+
+    // K. Bare "| " is a discovery slot too: subcommands pop, acceptance
+    //    inserts "ssql <cmd> ".
+    await typeInto("ssql from employees.csv | ");
+    const kOK = popupOpen() && items().includes("where");
+    let kInsert = false;
+    if (popupOpen()) {
+        const first = items()[0];
+        tab();
+        kInsert = ta.value === "ssql from employees.csv | ssql " + first + " ";
+    }
+    record("auto-pipe-discovery", kOK && kInsert, JSON.stringify(ta.value));
+
+    // L. First word of a fresh pipeline, no prefix typed at all.
+    await typeInto("wh");
+    const lOK = popupOpen() && items().includes("where");
+    if (popupOpen()) tab();
+    record("auto-first-word-prefixless", lOK && ta.value === "ssql where ", JSON.stringify(ta.value));
+
     // G. Latency probe: one flag-completion round-trip (informational,
     //    generous ceiling — catches pathological regressions only).
     {

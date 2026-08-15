@@ -245,17 +245,27 @@ function cursorContext() {
     const before = ta.value.slice(0, ta.selectionStart);
     if (!before.trim()) return null;
     const stage = ssqlExec(['-cursor-stage', before], '').stdout;
-    if (!/^ssql(\s|$)/.test(stage)) return null;
-    const words = shellSplit(stage); // words[0] === 'ssql'
-    const args = words.slice(1);
-    let pos;
-    if (/\s$/.test(stage)) { // caret sits on a new empty word
-        pos = words.length;
-        args.push('');
-    } else {
-        pos = words.length - 1;
+    if (/^ssql(\s|$)/.test(stage)) {
+        const words = shellSplit(stage); // words[0] === 'ssql'
+        const args = words.slice(1);
+        let pos;
+        if (/\s$/.test(stage)) { // caret sits on a new empty word
+            pos = words.length;
+            args.push('');
+        } else {
+            pos = words.length - 1;
+        }
+        return { ta, before, words, args, pos };
     }
-    return { ta, before, words, args, pos };
+    // Stage-start boilerplate: every stage begins "ssql ", so a bare
+    // stage ("| ") or a single partial word ("| fr") is treated as if
+    // "ssql " were already typed — completion offers subcommands and
+    // ACCEPTANCE inserts the prefix (ctx.prefixNeeded → compState.prefix).
+    const t = stage.trim();
+    if ((t === '' || /^[a-z][a-z-]*$/.test(t)) && !/\s\S/.test(stage)) {
+        return { ta, before, words: ['ssql', t], args: [t], pos: 1, prefixNeeded: true };
+    }
+    return null;
 }
 
 function helpAtCursor() {
@@ -388,10 +398,10 @@ function caretPixelPos(ta) {
     return pos;
 }
 
-function showCompletions(ta, cands) {
+function showCompletions(ta, cands, prefix) {
     // passive until the user arrows into the list: Enter stays a newline,
     // typing keeps filtering; Tab or click accepts.
-    compState = { cands, sel: 0, passive: true };
+    compState = { cands, sel: 0, passive: true, prefix: prefix || '' };
     const el = document.getElementById('completions');
     el.innerHTML = '';
     cands.forEach((c, i) => {
@@ -429,7 +439,7 @@ function acceptCompletion(idx) {
     const ta = document.getElementById('pipeline');
     const cand = compState.cands[idx ?? compState.sel];
     const isDir = cand.endsWith('/');
-    insertCompletion(ta, currentRawWord(ta).length, maybeQuote(cand), !isDir);
+    insertCompletion(ta, currentRawWord(ta).length, compState.prefix + maybeQuote(cand), !isDir);
     hideCompletions();
     ta.focus();
 }
@@ -514,15 +524,20 @@ function completeAtCursor() {
         }
         return;
     }
+    const stagePrefix = ctx.prefixNeeded ? 'ssql ' : '';
     if (cands.length === 1) {
-        insertCompletion(ta, currentRawWord(ta).length, maybeQuote(cands[0]), !cands[0].endsWith('/'));
+        insertCompletion(ta, currentRawWord(ta).length, stagePrefix + maybeQuote(cands[0]), !cands[0].endsWith('/'));
         return;
     }
-    // Bash-style: extend to the longest common prefix, then show the list.
+    // Bash-style: extend to the longest common prefix, then show the list
+    // (skipped when the "ssql " prefix is pending — extending an
+    // unprefixed partial would leave invalid text).
     const cur = currentRawWord(ta);
-    const lcp = longestCommonPrefix(cands);
-    if (lcp.length > cur.length) insertCompletion(ta, cur.length, lcp, false);
-    showCompletions(ta, cands);
+    if (!stagePrefix) {
+        const lcp = longestCommonPrefix(cands);
+        if (lcp.length > cur.length) insertCompletion(ta, cur.length, lcp, false);
+    }
+    showCompletions(ta, cands, stagePrefix);
 }
 
 // --- As-you-type completion ---
@@ -557,6 +572,9 @@ function autoSuggest() {
         if (passiveOpen) hideCompletions();
         return;
     }
+    // Guard: at a synthesized stage start, the "word" before the caret
+    // may be the pipe itself when cur is empty — that is exactly the
+    // discovery slot, so proceed.
 
     let { cands, hints } = completionCandidates(ctx, true);
     if (!cands.length && (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>'))) {
@@ -564,7 +582,7 @@ function autoSuggest() {
         if (fields) cands = fields.filter(f => f.startsWith(cur));
     }
     if (!cands.length) { if (compState && compState.passive) hideCompletions(); return; }
-    showCompletions(ta, cands);
+    showCompletions(ta, cands, ctx.prefixNeeded ? 'ssql ' : '');
 }
 
 document.getElementById('pipeline').addEventListener('input', () => {
