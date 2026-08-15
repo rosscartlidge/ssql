@@ -19,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   word itself never completes (accepting used to replace "ssql" with a
   subcommand); the subcommand list pops right after "ssql " — and the
   prefix is boilerplate the UI supplies: at a stage start ("| fr", a bare
-  "| ", or the first word of the pipeline) completion offers subcommands
-  directly and acceptance inserts "ssql " for you.
+  "| ", a bare "|", an empty box, or the first word of the pipeline)
+  completion offers subcommands directly and acceptance inserts "ssql "
+  for you — preserving the pipe and spacing.
 - **`ssql to markdown`** — a GitHub-flavored Markdown table sink for
   paste-ready results in READMEs, issues, and PRs: header + alignment
   row (numeric/bool columns right-aligned), pipes escaped, newlines →

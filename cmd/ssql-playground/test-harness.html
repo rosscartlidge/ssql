@@ -70,10 +70,12 @@ async function run() {
     w.helpAtCursor();
     record("first-stage-help", /from|input|file/i.test(output()) && !/to table/.test(label()), label() + " :: " + output().slice(0, 200));
 
-    // 4. Empty textarea -> friendly message, no crash.
+    // 4. Empty textarea -> the ROOT overview (the empty line is a stage
+    //    start now, so help describes ssql itself — better than the old
+    //    "put the cursor somewhere" scolding).
     ta.value = ""; ta.selectionStart = ta.selectionEnd = 0;
     w.helpAtCursor();
-    record("empty-message", output().includes("Put the cursor"), output().slice(0, 120));
+    record("empty-help-overview", /Unix-style data processing|COMMANDS|subcommand/i.test(output()), output().slice(0, 120));
 
     // 5. Alt-h keydown path reaches the same handler.
     const p5 = "ssql from employees.csv | ssql sort -desc salary";
@@ -341,6 +343,27 @@ async function run() {
     const lOK = popupOpen() && items().includes("where");
     if (popupOpen()) tab();
     record("auto-first-word-prefixless", lOK && ta.value === "ssql where ", JSON.stringify(ta.value));
+
+    // M. Tab in an EMPTY textarea lists all subcommands; acceptance
+    //    starts the pipeline with "ssql <cmd> ".
+    setLine("");
+    tab();
+    const mOK = popupOpen() && items().includes("from") && items().includes("where") && items().includes("group-by");
+    let mInsert = false;
+    if (popupOpen()) {
+        const first = items()[0];
+        tab();
+        mInsert = ta.value === "ssql " + first + " ";
+    }
+    record("tab-empty-textarea-subcommands", mOK && mInsert, JSON.stringify(ta.value));
+
+    // N. Bare "|" (no space): popup appears, and acceptance PRESERVES
+    //    the pipe, gluing " ssql <cmd> " after it.
+    await typeInto("ssql from employees.csv |");
+    const nOK = popupOpen() && items().includes("where");
+    if (popupOpen()) tab();
+    record("auto-bare-pipe-preserved", nOK && ta.value.startsWith("ssql from employees.csv | ssql "),
+        JSON.stringify(ta.value));
 
     // G. Latency probe: one flag-completion round-trip (informational,
     //    generous ceiling — catches pathological regressions only).
