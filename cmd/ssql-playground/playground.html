@@ -498,6 +498,7 @@ function completeAtCursor() {
     const ta = document.getElementById('pipeline');
     const ctx = cursorContext();
     if (!ctx) return;
+    if (ctx.pos === 0) return; // caret on the program word itself
     const { cands, hints } = completionCandidates(ctx);
     if (cands.length === 0) {
         // A field slot: the engine can't see across pipes, but we can —
@@ -543,10 +544,19 @@ function autoSuggest() {
     if (!wasmReady || document.activeElement !== ta) return;
     const cur = currentRawWord(ta);
     const passiveOpen = compState && compState.passive;
-    if (!cur) { if (passiveOpen) hideCompletions(); return; }
     if (currentWordStart(ta) === suppressWordStart) return;
     const ctx = cursorContext();
     if (!ctx) { if (passiveOpen) hideCompletions(); return; }
+    // The caret on the program word itself ("ssql|") is position 0 —
+    // bash never completes it, and accepting would REPLACE "ssql" with a
+    // subcommand. Stay quiet until after the space.
+    if (ctx.pos === 0) { if (passiveOpen) hideCompletions(); return; }
+    // Empty current word: auto-pop only at the subcommand slot ("ssql |")
+    // — the discovery moment — not at every word boundary.
+    if (!cur && !(ctx.pos === 1 && ctx.args.length === 1 && ctx.args[0] === '')) {
+        if (passiveOpen) hideCompletions();
+        return;
+    }
 
     let { cands, hints } = completionCandidates(ctx, true);
     if (!cands.length && (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>'))) {

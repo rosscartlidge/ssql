@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same engine as Tab: commands, flags, operators, files, and
   pipeline-aware field names (cached schema runs); large-file value
   sampling stays Tab-only so typing never stutters. This also makes
-  completion usable on mobile, where there is no Tab key.
+  completion usable on mobile, where there is no Tab key. The program
+  word itself never completes (accepting used to replace "ssql" with a
+  subcommand); the subcommand list pops right after "ssql ".
 - **`ssql to markdown`** — a GitHub-flavored Markdown table sink for
   paste-ready results in READMEs, issues, and PRs: header + alignment
   row (numeric/bool columns right-aligned), pipes escaped, newlines →

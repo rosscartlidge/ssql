@@ -296,6 +296,27 @@ async function run() {
         popupOpen() ? items().join(",") : "no popup");
     if (popupOpen()) key('Escape');
 
+    // H. The program word itself never completes: typing "ssql" shows
+    //    nothing, and Tab on it changes nothing (accepting used to
+    //    REPLACE "ssql" with a subcommand).
+    await typeInto("ssql from employees.csv | ssql");
+    record("auto-no-popup-on-ssql-word", !popupOpen(), popupOpen() ? items().join(",") : "");
+    tab();
+    record("tab-noop-on-ssql-word", ta.value === "ssql from employees.csv | ssql" && !popupOpen(), JSON.stringify(ta.value));
+
+    // I. …but right after "ssql " the subcommand list auto-pops (the
+    //    discovery moment), and accepting INSERTS without eating "ssql".
+    await typeInto("ssql from employees.csv | ssql ");
+    const subsOK = popupOpen() && items().includes("where") && items().includes("group-by");
+    let insertOK = false;
+    if (popupOpen()) {
+        const first = items()[0];
+        tab(); // passive popup: Tab accepts
+        insertOK = ta.value === "ssql from employees.csv | ssql " + first + " ";
+    }
+    record("auto-subcommands-after-space", subsOK, subsOK ? "" : (popupOpen() ? items().join(",") : "no popup"));
+    record("auto-subcommand-insert-clean", insertOK, JSON.stringify(ta.value));
+
     // G. Latency probe: one flag-completion round-trip (informational,
     //    generous ceiling — catches pathological regressions only).
     {
