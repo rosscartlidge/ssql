@@ -186,7 +186,7 @@ async function run() {
     const friendsOK = popupOpen() && items().includes("Peter Allworth") && items().includes("Ross Cartlidge");
     let quotedOK = false;
     if (popupOpen()) {
-        key('Enter'); // accept first candidate
+        key('ArrowDown'); key('Enter'); // arrows activate, Enter accepts
         quotedOK = ta.value.includes("eq 'Peter Allworth' ") || ta.value.includes("eq 'James Dunn' ") || ta.value.includes("eq 'Ross Cartlidge' ");
     }
     record("tab-value-derived-source", friendsOK,
@@ -240,6 +240,70 @@ async function run() {
         doc.getElementById('filesBar').textContent.includes('engineers.md') &&
         mdFileBytes && new TextDecoder().decode(mdFileBytes).includes('|---'),
         doc.getElementById('filesBar').textContent.slice(0, 120));
+
+    // --- As-you-type completion ---
+    const typeInto = async (line) => {
+        setLine(line);
+        ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+        // debounce is 150ms; anchored sleep past it
+        for (let i = 0; i < 8; i++) {
+            try { await fetch('test-harness.html?tick=' + Math.abs(line.length * 31 + i), { cache: 'no-store' }); } catch (e) {}
+            await new Promise(r => setTimeout(r, 50));
+        }
+    };
+    ta.focus();
+
+    // A. Typing pops suggestions without any Tab press.
+    await typeInto("ssql from employees.csv | ssql gr");
+    record("auto-popup-appears", popupOpen() && items().includes("group-by"),
+        popupOpen() ? items().join(",") : "no popup");
+
+    // B. Enter on a PASSIVE popup must NOT be stolen (returns true =
+    //    not preventDefault'ed → the newline still happens) and closes it.
+    const enterEv = new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    const enterFree = ta.dispatchEvent(enterEv);
+    record("auto-enter-not-stolen", enterFree && !popupOpen(), "dispatch=" + enterFree + " open=" + popupOpen());
+
+    // C. Tab accepts the passive suggestion.
+    await typeInto("ssql from employees.csv | ssql gro");
+    tab();
+    record("auto-tab-accepts", ta.value === "ssql from employees.csv | ssql group-by " && !popupOpen(), JSON.stringify(ta.value));
+
+    // D. After arrow-activation, Enter DOES accept.
+    await typeInto("ssql from employees.csv | ssql where -i");
+    if (popupOpen()) {
+        key('ArrowDown');
+        const active = items()[1];
+        key('Enter');
+        record("auto-arrow-enter-accepts", ta.value.endsWith(active + " "), JSON.stringify(ta.value) + " want " + active);
+    } else {
+        record("auto-arrow-enter-accepts", false, "popup did not open");
+    }
+
+    // E. Escape suppresses re-popup for the same word.
+    await typeInto("ssql from employees.csv | ssql so");
+    if (!popupOpen()) { record("auto-escape-suppresses", false, "precondition: no popup"); }
+    else {
+        key('Escape');
+        ta.dispatchEvent(new w.Event('input', { bubbles: true }));
+        for (let i = 0; i < 6; i++) { try { await fetch('test-harness.html?sup=' + i, { cache: 'no-store' }); } catch (e) {} await new Promise(r => setTimeout(r, 50)); }
+        record("auto-escape-suppresses", !popupOpen(), "popup reopened");
+    }
+
+    // F. Field names auto-suggest mid-pipeline (schema path, cached).
+    await typeInto("ssql from employees.csv | ssql group-by de");
+    record("auto-field-suggest", popupOpen() && items().includes("dept"),
+        popupOpen() ? items().join(",") : "no popup");
+    if (popupOpen()) key('Escape');
+
+    // G. Latency probe: one flag-completion round-trip (informational,
+    //    generous ceiling — catches pathological regressions only).
+    {
+        const t0 = w.performance.now();
+        w.ssqlExec(['-complete', '2', 'where', '-i'], '');
+        const ms = w.performance.now() - t0;
+        record("auto-latency-budget", ms < 500, ms.toFixed(1) + "ms");
+    }
 
     // 12. Full pipeline run with process substitution — guards the
     //     polyfill's /dev/fd FIFO detection (join's procsub handling)

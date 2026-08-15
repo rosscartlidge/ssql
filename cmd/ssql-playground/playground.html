@@ -59,11 +59,11 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 
 <h1>ssql playground</h1>
 <div class="subtitle">SQL-style stream processing — runs entirely in your browser via WebAssembly</div>
-<div class="subtitle"><b style="color:#9ece6a;">Tab</b> completes commands, flags, files, and pipeline-aware field names · <b style="color:#9ece6a;">? Help</b> (Alt-h) explains the command or flag at your cursor</div>
+<div class="subtitle">Suggestions appear <b style="color:#9ece6a;">as you type</b> — commands, flags, files, pipeline-aware field names and values (<b style="color:#9ece6a;">Tab</b> or click accepts, Esc dismisses) · <b style="color:#9ece6a;">? Help</b> (Alt-h) explains the command or flag at your cursor</div>
 <div id="status">Loading WASM module...</div>
 
 <div class="input-area">
-    <label>Pipeline <span style="color:#565f89; font-weight:normal;">— Tab to complete · "? Help" for the flag under the cursor · # comments out a command</span></label>
+    <label>Pipeline <span style="color:#565f89; font-weight:normal;">— type for suggestions, Tab accepts · "? Help" for the flag under the cursor · # comments out a command</span></label>
     <textarea id="pipeline" rows="8" placeholder="ssql from employees.csv | ssql where -if age gt 30 | ssql to table" spellcheck="false"></textarea>
     <div id="completions"></div>
 </div>
@@ -297,10 +297,16 @@ function valueSourceFile(before) {
     return ssqlExec(['-value-source', before], '').stdout.trim() || null;
 }
 
-function completionCandidates(ctx) {
+function completionCandidates(ctx, cheapOnly) {
     const env = Object.assign({}, completionEnv);
     const derived = valueSourceFile(ctx.before);
-    if (derived) env.AUTOCLI_CACHE_FILE = derived;
+    // cheapOnly (the as-you-type path): skip value sampling for large
+    // sources — the engine reads up to 10k records per query, which
+    // would stutter typing. Tab still samples unconditionally.
+    if (derived) {
+        const big = cheapOnly && (_fsReadFileBytes(derived) || []).length > (1 << 20);
+        if (!big) env.AUTOCLI_CACHE_FILE = derived;
+    }
     const out = ssqlExec(['-complete', String(ctx.pos), ...ctx.args], '', env).stdout;
     const cands = [], hints = [];
     for (const l of out.split('\n').map(s => s.trim()).filter(Boolean)) {
@@ -383,7 +389,9 @@ function caretPixelPos(ta) {
 }
 
 function showCompletions(ta, cands) {
-    compState = { cands, sel: 0 };
+    // passive until the user arrows into the list: Enter stays a newline,
+    // typing keeps filtering; Tab or click accepts.
+    compState = { cands, sel: 0, passive: true };
     const el = document.getElementById('completions');
     el.innerHTML = '';
     cands.forEach((c, i) => {
@@ -408,6 +416,7 @@ function hideCompletions() {
 
 function moveCompletionSel(delta) {
     if (!compState) return;
+    compState.passive = false;
     const n = compState.cands.length;
     compState.sel = (compState.sel + delta + n) % n;
     const el = document.getElementById('completions');
@@ -435,9 +444,12 @@ function acceptCompletion(idx) {
 // playground sees the whole pipeline, so Tab triggers this automatically
 // whenever the engine answers a field slot with the Use-Ctrl-O hint.
 
+const schemaFieldsCache = new Map(); // upstream text -> field names
+
 function schemaFieldsAtCursor(before) {
     const src = ssqlExec(['-complete-source', before], '').stdout.trim();
     if (!src) return null;
+    if (schemaFieldsCache.has(src)) return schemaFieldsCache.get(src);
     try {
         const env = { SSQL_MODE: 'schema' };
         const stages = parsePipeline(src, true, false, env);
@@ -449,7 +461,10 @@ function schemaFieldsAtCursor(before) {
         }
         const g = ssqlExec(['generate', 'schema'], data, null);
         if (g.exitCode !== 0) return null;
-        return g.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+        const fields = g.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+        if (schemaFieldsCache.size > 30) schemaFieldsCache.clear();
+        schemaFieldsCache.set(src, fields);
+        return fields;
     } catch (e) {
         return null;
     }
@@ -509,6 +524,44 @@ function completeAtCursor() {
     showCompletions(ta, cands);
 }
 
+// --- As-you-type completion ---
+// A debounced input listener pops the same completion popup PASSIVELY
+// while typing (>=1 char of the current word): typing keeps filtering,
+// Tab or click accepts, Enter stays a newline until the user arrows into
+// the list, Escape suppresses suggestions for the current word. Value
+// sampling auto-triggers only for small sources (Tab always may).
+
+let autoSuggestTimer = null;
+let suppressWordStart = -1; // Escape'd word start; cleared on word change
+
+function currentWordStart(ta) {
+    return ta.selectionStart - currentRawWord(ta).length;
+}
+
+function autoSuggest() {
+    const ta = document.getElementById('pipeline');
+    if (!wasmReady || document.activeElement !== ta) return;
+    const cur = currentRawWord(ta);
+    const passiveOpen = compState && compState.passive;
+    if (!cur) { if (passiveOpen) hideCompletions(); return; }
+    if (currentWordStart(ta) === suppressWordStart) return;
+    const ctx = cursorContext();
+    if (!ctx) { if (passiveOpen) hideCompletions(); return; }
+
+    let { cands, hints } = completionCandidates(ctx, true);
+    if (!cands.length && (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>'))) {
+        const fields = schemaFieldsAtCursor(ctx.before);
+        if (fields) cands = fields.filter(f => f.startsWith(cur));
+    }
+    if (!cands.length) { if (compState && compState.passive) hideCompletions(); return; }
+    showCompletions(ta, cands);
+}
+
+document.getElementById('pipeline').addEventListener('input', () => {
+    if (autoSuggestTimer) clearTimeout(autoSuggestTimer);
+    autoSuggestTimer = setTimeout(autoSuggest, 150);
+});
+
 document.getElementById('pipeline').addEventListener('keydown', e => {
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H')) {
         e.preventDefault();
@@ -519,9 +572,22 @@ document.getElementById('pipeline').addEventListener('keydown', e => {
         switch (e.key) {
             case 'ArrowDown': e.preventDefault(); moveCompletionSel(1); return;
             case 'ArrowUp': e.preventDefault(); moveCompletionSel(-1); return;
-            case 'Tab': e.preventDefault(); moveCompletionSel(e.shiftKey ? -1 : 1); return;
-            case 'Enter': e.preventDefault(); acceptCompletion(); return;
-            case 'Escape': e.preventDefault(); hideCompletions(); return;
+            case 'Tab':
+                e.preventDefault();
+                // Passive popup: Tab accepts the highlighted candidate
+                // (bash-like). After arrow-activation, Tab cycles.
+                if (compState.passive) { acceptCompletion(); } else { moveCompletionSel(e.shiftKey ? -1 : 1); }
+                return;
+            case 'Enter':
+                // Passive popup must never steal Enter — close it and let
+                // the newline happen. Accept only after arrow-activation.
+                if (compState.passive) { hideCompletions(); return; }
+                e.preventDefault(); acceptCompletion(); return;
+            case 'Escape':
+                e.preventDefault();
+                suppressWordStart = currentWordStart(document.getElementById('pipeline'));
+                hideCompletions();
+                return;
             default: hideCompletions(); // fall through: let the key type
         }
         return;
@@ -907,6 +973,7 @@ function runPipeline() {
         return;
     }
     _fsResetWriteLog();
+    schemaFieldsCache.clear(); // a run can rewrite files upstream reads
     const result = executePipeline(pipeline, false);
     if (result.exitCode === 0) showCreatedFiles();
 
@@ -1036,6 +1103,7 @@ function uploadFile(event) {
 
     const reader = new FileReader();
     reader.onload = () => {
+        schemaFieldsCache.clear();
         _fsWriteFile(file.name, reader.result);
         SAMPLE_DATASETS[file.name] = reader.result;
         document.getElementById('status').textContent = `Uploaded ${file.name} (${(file.size/1024).toFixed(0)} KB)`;

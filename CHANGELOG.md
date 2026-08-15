@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Playground: completion as you type** — suggestions appear
+  automatically while typing (debounced), IDE-style: typing filters the
+  popup, Tab or click accepts, Escape dismisses it for the current word,
+  and Enter keeps meaning newline until you arrow into the list. Covers
+  the same engine as Tab: commands, flags, operators, files, and
+  pipeline-aware field names (cached schema runs); large-file value
+  sampling stays Tab-only so typing never stutters. This also makes
+  completion usable on mobile, where there is no Tab key.
 - **`ssql to markdown`** — a GitHub-flavored Markdown table sink for
   paste-ready results in READMEs, issues, and PRs: header + alignment
   row (numeric/bool columns right-aligned), pipes escaped, newlines →
