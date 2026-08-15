@@ -1492,6 +1492,18 @@ if err := ssql.WriteMarkdownTo(&buf, records, []string{"name", "count"}, false);
 fmt.Print(buf.String()) // paste-ready | name | count | table
 ```
 
+#### TeeFile
+```go
+func TeeFile(filename string, fieldOrder ...string) Filter[Record, Record]
+```
+Unix tee for record streams: writes every record to filename as schema-headed JSONL (the pipeline wire format) while passing it through unchanged — snapshot intermediate results mid-pipeline. fieldOrder sets the header's field order (alphabetical from the first record otherwise). Distinct from `Tee`/`LazyTee`, which split a stream into copies. Backs `ssql tee FILE`.
+
+**Example:**
+```go
+teed := ssql.TeeFile("checkpoint.jsonl")(records)
+for r := range teed { /* pipeline continues */ }
+```
+
 #### DefaultCSVConfig
 ```go
 func DefaultCSVConfig() CSVConfig

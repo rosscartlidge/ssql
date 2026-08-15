@@ -215,6 +215,13 @@ func TestPipelineCorpus(t *testing.T) {
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} to markdown -o {{.data}}/md_out.md`,
 		},
 		{
+			// tee passes through unchanged while snapshotting; the
+			// downstream result proves the pass-through in all modes.
+			Name:     "tee_passthrough",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} tee {{.data}}/tee_snap.jsonl | {{.bin}} group-by dept -count n | {{.bin}} to table`,
+			Contains: []string{"Engineering", "3"},
+		},
+		{
 			Name:     "to_table_maxwidth",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} to table -max-width 6`,
 			// -max-width must truncate identically in record and typed

@@ -1521,6 +1521,8 @@ Use `-run` to execute directly with DuckDB:
 - `convolve` - Apply convolution filters (`-field`, `-kernel`, `-custom`, `-same`)
 - `correlate` - Cross-correlation or autocorrelation (`-field`, `-with`)
 
+- `tee FILE` - Write the stream to FILE (schema-headed JSONL) and pass it through — save intermediate results mid-pipeline; replay with `ssql from FILE`
+
 ### Outputs (using `to` subcommands)
 - `to table` - Display records as formatted table
 - `to markdown [-o file]` - GitHub-flavored Markdown table (numeric columns right-aligned, pipes escaped) — paste results straight into READMEs, issues, and PRs, or write a .md file

@@ -2736,3 +2736,83 @@ func convertRecordValueForJSON(v any) any {
 		return fmt.Sprintf("%v", v)
 	}
 }
+
+// TeeFile writes every record to filename as schema-headed JSONL (the
+// pipeline wire format) while passing it through unchanged — Unix tee
+// for record streams: snapshot an intermediate result mid-pipeline.
+// (Distinct from [Tee]/[LazyTee], which split a stream into copies.)
+//
+//	teed := ssql.TeeFile("checkpoint.jsonl")(records)
+//
+// fieldOrder, if given, sets the header's field order (otherwise
+// alphabetical from the first record); value types are inferred from
+// the first record. The file is created when iteration starts (empty
+// input yields an empty file) and closed when the stream ends. Backs
+// `ssql tee FILE`. Write errors terminate the process — silently losing
+// a requested snapshot would be worse.
+func TeeFile(filename string, fieldOrder ...string) Filter[Record, Record] {
+	return func(records iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			die := func(err error) {
+				fmt.Fprintf(os.Stderr, "ssql tee: %v\n", err)
+				os.Exit(1)
+			}
+			f, err := os.Create(filename)
+			if err != nil {
+				die(err)
+			}
+			defer f.Close()
+			w := bufio.NewWriter(f)
+			defer func() {
+				if err := w.Flush(); err != nil {
+					die(err)
+				}
+			}()
+
+			wroteHeader := false
+			var buf []byte
+			for r := range records {
+				if !wroteHeader {
+					wroteHeader = true
+					fields := fieldOrder
+					if len(fields) == 0 {
+						for k := range r.All() {
+							fields = append(fields, k)
+						}
+						sort.Strings(fields)
+					}
+					types := make(map[string]string, len(fields))
+					for _, fld := range fields {
+						v, _ := Get[any](r, fld)
+						types[fld] = inferJSONType(v)
+					}
+					header := struct {
+						Schema struct {
+							Fields []string          `json:"fields"`
+							Types  map[string]string `json:"types"`
+						} `json:"_schema"`
+					}{}
+					header.Schema.Fields = fields
+					header.Schema.Types = types
+					hdr, err := json.Marshal(&header)
+					if err != nil {
+						die(err)
+					}
+					hdr = append(hdr, '\n')
+					if _, err := w.Write(hdr); err != nil {
+						die(err)
+					}
+				}
+				buf = buf[:0]
+				buf = r.AppendJSON(buf)
+				buf = append(buf, '\n')
+				if _, err := w.Write(buf); err != nil {
+					die(err)
+				}
+				if !yield(r) {
+					return
+				}
+			}
+		}
+	}
+}

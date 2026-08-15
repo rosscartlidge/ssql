@@ -1438,3 +1438,41 @@ func TestWriteMarkdownTo(t *testing.T) {
 		t.Errorf("empty input: err=%v out=%q", err, buf.String())
 	}
 }
+
+func TestTeeFile(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/snap.jsonl"
+	records := []Record{
+		NewRecord(map[string]any{"name": "Alice", "age": int64(30)}),
+		NewRecord(map[string]any{"name": "Bob", "age": int64(25)}),
+	}
+	var passed []string
+	for r := range TeeFile(path, "name", "age")(slices.Values(records)) {
+		passed = append(passed, GetOr(r, "name", ""))
+	}
+	if len(passed) != 2 || passed[0] != "Alice" {
+		t.Errorf("pass-through wrong: %v", passed)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want header+2 records, got %d lines:\n%s", len(lines), data)
+	}
+	if !strings.Contains(lines[0], `"fields":["name","age"]`) {
+		t.Errorf("header should honour fieldOrder: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], "Alice") || !strings.Contains(lines[2], "Bob") {
+		t.Errorf("records missing: %v", lines[1:])
+	}
+
+	// Empty input: file exists, empty (no header).
+	empty := dir + "/empty.jsonl"
+	for range TeeFile(empty)(slices.Values([]Record{})) {
+	}
+	if b, err := os.ReadFile(empty); err != nil || len(b) != 0 {
+		t.Errorf("empty tee: err=%v len=%d", err, len(b))
+	}
+}

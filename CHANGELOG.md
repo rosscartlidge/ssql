@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **`ssql tee FILE`** — Unix tee for pipelines: writes the stream to
+  FILE as schema-headed JSONL (replayable with `ssql from FILE`, and
+  directly usable by join/merge/union) while passing every record
+  through unchanged. Backed by the new `ssql.TeeFile` package filter
+  (distinct from the stream-splitting `Tee`/`LazyTee`); works in all
+  codegen modes (typed lanes via the Phase B boundary; a native
+  `typed.TeeFile` is tracked in TODO). In the playground the snapshot
+  lands in the Files bar for download.
 - **Playground: completion as you type** — suggestions appear
   automatically while typing (debounced), IDE-style: typing filters the
   popup, Tab or click accepts, Escape dismisses it for the current word,

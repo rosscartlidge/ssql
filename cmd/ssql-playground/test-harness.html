@@ -387,6 +387,18 @@ async function run() {
         record("auto-latency-budget", ms < 500, ms.toFixed(1) + "ms");
     }
 
+    // 11e. tee mid-pipeline: downstream continues AND the snapshot
+    //      lands in the Files bar for download.
+    setLine("ssql from employees.csv | ssql where -if dept eq Engineering | ssql tee eng_snap.jsonl | ssql group-by city -count n | ssql to table");
+    w.runPipeline();
+    const teeOut = doc.getElementById('output').textContent;
+    const teeBytes = w._fsReadFileBytes('eng_snap.jsonl');
+    record("tee-passthrough-and-filesbar",
+        /city/.test(teeOut) && w.getComputedStyle(doc.getElementById('filesBar')).display !== 'none' &&
+        doc.getElementById('filesBar').textContent.includes('eng_snap.jsonl') &&
+        teeBytes && new TextDecoder().decode(teeBytes).includes('_schema'),
+        "out: " + teeOut.slice(0, 80) + " bar: " + doc.getElementById('filesBar').textContent.slice(0, 100));
+
     // 12. Full pipeline run with process substitution — guards the
     //     polyfill's /dev/fd FIFO detection (join's procsub handling)
     //     after the path-normalization change.
