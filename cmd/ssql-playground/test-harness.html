@@ -365,6 +365,16 @@ async function run() {
     record("auto-bare-pipe-preserved", nOK && ta.value.startsWith("ssql from employees.csv | ssql "),
         JSON.stringify(ta.value));
 
+    // O. Clear button empties the box, closes the popup, and keeps
+    //    focus so Tab immediately offers subcommands.
+    setLine("ssql from employees.csv | ssql to table");
+    doc.getElementById('btnClear').click();
+    const oCleared = ta.value === '' && !popupOpen() && doc.activeElement === ta;
+    tab();
+    record("clear-button", oCleared && popupOpen() && items().includes("from"),
+        "value=" + JSON.stringify(ta.value) + " focus=" + (doc.activeElement === ta) + " popup=" + popupOpen());
+    if (popupOpen()) key('Escape');
+
     // G. Latency probe: one flag-completion round-trip (informational,
     //    generous ceiling — catches pathological regressions only).
     {
