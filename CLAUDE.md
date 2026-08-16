@@ -152,6 +152,7 @@ After a minor/major release, always do ALL of these:
 - [ ] `make deb` — build `ssql_X.Y.Z_amd64.deb` and `ssql-gpu_X.Y.Z_amd64.deb`, commit to repo
 - [ ] `make install-local` — refresh BOTH `$GOPATH/bin/ssql` and `$GOPATH/bin/ssql_gpu` so the developer's shell resolves the latest version on the next `ssql` / `ssql_gpu` invocation. Verify final lines print `ssql vX.Y.Z` for both (no `gpu: no` + `gpu: yes` version mismatch). Replaces the older "`make build-gpu` and test" step which left the gpu binary out of `$GOPATH/bin` — gpu drifted from v4.32.0 to v4.44.0 unnoticed before being caught at v4.44.0 release.
 - [ ] `make playground` — rebuild WASM playground locally if you want to test it before the release push (CI rebuilds and deploys it anyway)
+- [ ] `make explore-wasm` — refresh the embedded explore engine (`cmd/ssql/wasm/ssql-playground.wasm.gz`) and commit it, so `to explore -wasm` ships the released engine
 
 **Deployments:**
 - [ ] Playground deploys automatically — `.github/workflows/playground.yml` pushes WASM + playground.html to `gh-pages` on push to main. Verify with `gh run list --workflow=playground.yml -L 1` (manual fallback steps in `claude/playground.md`)
@@ -196,12 +197,12 @@ See `claude/record-api.md` for full API and migration guides.
 - **Iterate with `.All()`** (maps.All pattern), `.KeysIter()`, or `.Values()`
 - **In generated code**: always `ssql.GetOr(r, field, default)` — never `r[field].(type)`
 
-## WASM Explore Module
+## WASM Explore Engine (DFC107)
 
-Always use TinyGo to build (`make wasm`). Embedded in ssql binary via `//go:embed`.
+`to explore -wasm` embeds the SAME slim playground wasm (gzipped ~3.4MB, `cmd/ssql/wasm/ssql-playground.wasm.gz`, `//go:embed` behind `!slim`) — the TinyGo mini-engine (a third, untested semantics implementation) was REMOVED; explore ops run through the real engine via an `ssqlExec` shim. Refresh the artifact with `make explore-wasm` (part of the release checklist); e2e gate: `scripts/explore-test.sh`. Slim builds error loudly on `-wasm` (a wasm can't embed itself).
 ```bash
 ssql from data.csv | ssql to explore -wasm output.html
-make wasm && go install ./cmd/ssql
+make explore-wasm && go install ./cmd/ssql
 ```
 
 ## API Naming Conventions (SQL-Style)

@@ -53,12 +53,13 @@ jobs:
           cp cmd/ssql-playground/wasm_exec.js ghp/
           cp cmd/ssql-playground/playground.html ghp/
           cp cmd/ssql-playground/fs-polyfill.js ghp/
+          cp cmd/ssql-playground/ssql-ui.js ghp/
           # Cache-bust subresources per deploy: without this, a browser can
           # pair a fresh playground.html with a stale fs-polyfill.js/wasm
           # and runs die silently on missing helpers.
           sed -i "s/__DEPLOY_SHA__/${GITHUB_SHA::8}/g" ghp/playground.html
           cd ghp
-          git add ssql-playground.wasm wasm_exec.js playground.html fs-polyfill.js
+          git add ssql-playground.wasm wasm_exec.js playground.html fs-polyfill.js ssql-ui.js
           if git diff --cached --quiet; then
             echo "playground unchanged — nothing to deploy"
             exit 0

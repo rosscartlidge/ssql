@@ -5,8 +5,6 @@
 cmd/ssql-playground/ssql-playground.wasm
 cmd/ssql-playground/wasm_exec.js
 /cmd/ssql/ssql
-/cmd/ssql-wasm/js/wasm_exec.js
-/cmd/ssql-wasm/ssql.wasm
 # Compiled examples (built from examples/)
 /*_demo
 *.dll

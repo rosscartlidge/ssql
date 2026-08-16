@@ -131,12 +131,17 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			config.InitialYField = yField
 			config.PageSize = pageSize
 
-			// Enable WASM with embedded binary
+			// Enable client-side transforms via the embedded engine —
+			// the SAME slim playground wasm, gzipped (DFC107).
 			if useWasm {
+				if !wasm.Available() {
+					return fmt.Errorf("to explore -wasm requires the full build (the slim build carries no embedded engine)")
+				}
 				config.WasmEnabled = true
 				config.WasmExecJS = wasm.WasmExecJS
-				config.SsqlWasmJS = wasm.SsqlWasmJS
-				config.WasmBinary = wasm.WasmBinaryBase64()
+				config.FsPolyfillJS = wasm.FsPolyfillJS
+				config.SsqlUIJS = wasm.SsqlUIJS
+				config.WasmBinary = wasm.WasmGzBase64()
 			}
 
 			// Create explorer

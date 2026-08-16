@@ -3067,8 +3067,9 @@ type ExploreConfig struct {
 	Height        int    `json:"height"`
 	WasmEnabled   bool   `json:"wasmEnabled"` // Load ssql.wasm for client-side transforms
 	WasmExecJS    string `json:"-"`           // Content of wasm_exec.js (inlined in HTML)
-	SsqlWasmJS    string `json:"-"`           // Content of ssql-wasm.js (inlined in HTML)
-	WasmBinary    string `json:"-"`           // Base64-encoded ssql.wasm (embedded in HTML)
+	FsPolyfillJS  string `json:"-"`           // Content of fs-polyfill.js (inlined in HTML)
+	SsqlUIJS      string `json:"-"`           // Content of ssql-ui.js (shared completion/help/pipeline layer)
+	WasmBinary    string `json:"-"`           // Base64 of the GZIPPED slim engine wasm (embedded in HTML)
 }
 
 // DefaultExploreConfig provides sensible defaults for interactive data exploration.
@@ -3173,9 +3174,10 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 		ConfigJSON  template.JS
 		Theme       string
 		WasmEnabled bool
-		WasmExecJS  template.JS
-		SsqlWasmJS  template.JS
-		WasmBinary  template.JS
+		WasmExecJS   template.JS
+		FsPolyfillJS template.JS
+		SsqlUIJS     template.JS
+		WasmBinary   template.JS
 	}{
 		Title:       config.Title,
 		DataJSON:    template.JS(dataJSON),
@@ -3183,9 +3185,10 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 		ConfigJSON:  template.JS(configJSON),
 		Theme:       config.Theme,
 		WasmEnabled: config.WasmEnabled,
-		WasmExecJS:  template.JS(config.WasmExecJS),
-		SsqlWasmJS:  template.JS(config.SsqlWasmJS),
-		WasmBinary:  template.JS(config.WasmBinary),
+		WasmExecJS:   template.JS(config.WasmExecJS),
+		FsPolyfillJS: template.JS(config.FsPolyfillJS),
+		SsqlUIJS:     template.JS(config.SsqlUIJS),
+		WasmBinary:   template.JS(config.WasmBinary),
 	}
 
 	if err := tmpl.Execute(writer, templateData); err != nil {
@@ -3218,8 +3221,8 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
 
     {{if .WasmEnabled}}
+    <script>{{.FsPolyfillJS}}</script>
     <script>{{.WasmExecJS}}</script>
-    <script>{{.SsqlWasmJS}}</script>
     {{end}}
 
     <style>
@@ -3545,8 +3548,27 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
     </style>
 </head>
 <body>
+    {{if .WasmEnabled}}
+    <div id="pipelineBar" style="position:relative; padding:10px 16px; border-bottom:1px solid var(--border-color); background:var(--panel-bg); font-family:monospace;">
+        <div id="status" style="font-size:12px; color:#6c757d; margin-bottom:6px;">Loading engine…</div>
+        <textarea id="pipeline" rows="2" spellcheck="false" placeholder="ssql from data.jsonl | …  (suggestions appear as you type; Tab accepts; Alt-h = help)" style="width:100%; font-family:inherit; font-size:13px; padding:8px; box-sizing:border-box; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px;"></textarea>
+        <div id="completions" style="position:absolute; display:none; background:var(--panel-bg); border:1px solid #6c9bd1; border-radius:6px; max-height:200px; overflow-y:auto; z-index:1000; font-size:13px; min-width:160px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
+        <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button id="barRun" style="padding:4px 14px;">Run → grid</button>
+            <button id="barHelp" onmousedown="event.preventDefault()" style="padding:4px 14px;">? Help</button>
+            <button id="barReset" style="padding:4px 14px;">Reset data</button>
+            <input type="file" id="barUpload" accept=".csv,.tsv,.json,.jsonl" style="display:none">
+            <button onclick="document.getElementById('barUpload').click()" style="padding:4px 14px;">Upload file</button>
+            <span id="fileList" style="font-size:12px; color:#6c757d;"></span>
+        </div>
+        <div id="filesBar" style="display:none; font-size:12px; margin-top:6px;"></div>
+        <pre id="output" style="display:none; max-height:200px; overflow:auto; font-size:12px; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:8px; margin-top:6px;"></pre>
+    </div>
+    <style>#completions div { padding: 3px 12px; cursor: pointer; white-space: pre; } #completions div.sel { background: #6c9bd1; color: #fff; } #completions div:hover { background: var(--hover-bg); }</style>
+    {{end}}
     <div id="root"></div>
 
+    {{if .WasmEnabled}}<script>{{.SsqlUIJS}}</script>{{end}}
     <script>
         // Data from the pipeline
         const DATA = {{.DataJSON}};
@@ -3558,11 +3580,137 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         {{if .WasmEnabled}}
         (async function() {
             try {
-                ssqlWasm = new SsqlWasm();
-                const wasmBase64 = '{{.WasmBinary}}';
-                const wasmBytes = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0));
-                await ssqlWasm.initFromBytes(wasmBytes.buffer);
-                console.log('ssql WASM module loaded (embedded)');
+                // The embedded engine is the SAME slim playground wasm,
+                // gzipped; decompress and boot it, then expose the old
+                // mini-engine surface (pipeline(data, ops)) as a shim
+                // that translates ops to REAL CLI stages via ssqlExec —
+                // one semantics, no third engine (DFC107).
+                const gz = Uint8Array.from(atob('{{.WasmBinary}}'), c => c.charCodeAt(0));
+                const wasmBuf = await new Response(
+                    new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))
+                ).arrayBuffer();
+                const go = new Go();
+                const inst = await WebAssembly.instantiate(wasmBuf, go.importObject);
+                go.run(inst.instance);
+                for (let i = 0; i < 200 && !(typeof ssqlReady !== 'undefined' && ssqlReady); i++) {
+                    await new Promise(r => setTimeout(r, 50));
+                }
+                if (typeof ssqlReady === 'undefined' || !ssqlReady) throw new Error('engine did not become ready');
+
+                const opsToStages = (ops) => {
+                    const stages = [];
+                    let i = 0;
+                    while (i < ops.length) {
+                        const o = ops[i];
+                        switch (o.op) {
+                            case 'where': {
+                                const a = ['where'];
+                                while (i < ops.length && ops[i].op === 'where') {
+                                    a.push('-if', ops[i].field, ops[i].operator, String(ops[i].value));
+                                    i++;
+                                }
+                                stages.push(a);
+                                continue;
+                            }
+                            case 'sort': {
+                                const a = ['sort'];
+                                let first = true;
+                                while (i < ops.length && ops[i].op === 'sort') {
+                                    if (!first) a.push('+');
+                                    a.push(ops[i].field);
+                                    if (ops[i].desc) a.push('-desc');
+                                    first = false;
+                                    i++;
+                                }
+                                stages.push(a);
+                                continue;
+                            }
+                            case 'group_by': {
+                                const a = ['group-by', ...(o.groupFields || [])];
+                                for (const g of (o.aggs || [])) {
+                                    const alias = g.alias || g.func; // mini-engine naming contract
+                                    if (g.func === 'count') a.push('-count', alias);
+                                    else a.push('-' + g.func, g.field, alias);
+                                }
+                                stages.push(a); i++; continue;
+                            }
+                            case 'distinct':
+                                stages.push(o.field ? ['group-by', o.field] : ['distinct']);
+                                i++; continue;
+                            case 'limit':
+                                if (o.offset) stages.push(['offset', String(o.offset)]);
+                                stages.push(['limit', String(o.n)]);
+                                i++; continue;
+                            case 'compute':
+                                stages.push(['update', '-set-expr', o.name, o.expr]);
+                                i++; continue;
+                            case 'pivot':
+                                stages.push(['pivot', '-row', o.rowField, '-col', o.colField, '-val', o.valField, '-func', o.aggFunc || 'sum']);
+                                i++; continue;
+                            case 'window': {
+                                for (const wc of (o.windowConfigs || [])) {
+                                    const a = ['window'];
+                                    for (const pf of (wc.partitionBy || [])) a.push('-partition', pf);
+                                    for (const ob of (wc.orderBy || [])) { a.push('-order', ob.field); if (ob.desc) a.push('-desc'); }
+                                    if (wc.frame) {
+                                        if (wc.frame.preceding >= 0) a.push('-preceding', String(wc.frame.preceding));
+                                        if (wc.frame.following >= 0) a.push('-following', String(wc.frame.following));
+                                    }
+                                    for (const sp of (wc.specs || [])) {
+                                        switch (sp.type) {
+                                            case 'row_number': a.push('-row-number', sp.result); break;
+                                            case 'rank': a.push('-rank', sp.result); break;
+                                            case 'dense_rank': a.push('-dense-rank', sp.result); break;
+                                            case 'percent_rank': a.push('-percent-rank', sp.result); break;
+                                            case 'count': a.push('-count', sp.result); break;
+                                            case 'ntile': a.push('-ntile', String(sp.n), sp.result); break;
+                                            case 'lag': a.push('-lag', sp.field, String(sp.n || 1), sp.result); break;
+                                            case 'lead': a.push('-lead', sp.field, String(sp.n || 1), sp.result); break;
+                                            default: a.push('-' + sp.type, sp.field, sp.result); // sum/avg/min/max/first/last
+                                        }
+                                    }
+                                    stages.push(a);
+                                }
+                                i++; continue;
+                            }
+                            default:
+                                throw new Error('unsupported op: ' + o.op);
+                        }
+                    }
+                    return stages;
+                };
+
+                ssqlWasm = {
+                    pipeline(data, ops) {
+                        const stages = opsToStages(ops);
+                        if (!stages.length) return data;
+                        let payload = data.map(r => JSON.stringify(r)).join('\n') + '\n';
+                        for (const args of stages) {
+                            const res = ssqlExec(args, payload);
+                            if (res.exitCode !== 0) throw new Error(res.stderr || ('stage failed: ' + args.join(' ')));
+                            payload = res.stdout;
+                        }
+                        const out = [];
+                        for (const line of payload.split('\n')) {
+                            const t = line.trim();
+                            if (t.startsWith('{') && !t.startsWith('{"_schema"')) out.push(JSON.parse(t));
+                        }
+                        return out;
+                    }
+                };
+                window.ssqlEngine = ssqlWasm; // exposed for e2e harnesses
+                // Boot the shared interactive layer: the data lives in the
+                // virtual FS so completion (fields, VALUES) and the
+                // pipeline bar run against it like any file.
+                _fsWriteFile('data.jsonl', DATA.map(r => JSON.stringify(r)).join('\n') + '\n');
+                window.ssqlUIReady = true;
+                window.SSQL_UI_READY_TEXT = 'Engine ready — pipeline runs against data.jsonl';
+                const bar = document.getElementById('pipeline');
+                if (bar && !bar.value) bar.value = 'ssql from data.jsonl | ';
+                const st = document.getElementById('status');
+                if (st) st.textContent = window.SSQL_UI_READY_TEXT;
+                refreshFileList();
+                console.log('ssql engine loaded (embedded slim wasm)');
                 const showBadge = () => {
                     const badge = document.getElementById('wasm-badge');
                     if (badge) { badge.style.display = 'inline'; }
@@ -3571,9 +3719,57 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 showBadge();
             } catch(e) {
                 console.warn('ssql WASM failed to load, using JS fallback:', e);
+                window.ssqlEngineError = String(e); // surfaced for e2e harnesses
                 ssqlWasm = null;
             }
         })();
+
+        // Pipeline-bar wiring (elements are static, functions come from
+        // the shared ssql-ui layer). Results replace the grid rows.
+        function showOutput(result, label) {
+            const el = document.getElementById('output');
+            if (!el) return;
+            el.style.display = 'block';
+            el.textContent = (label ? label + '\n\n' : '') +
+                (result.exitCode !== 0 ? (result.stderr || 'error') : result.stdout);
+        }
+        function refreshFileList() {
+            const names = _fsListFiles().filter(p =>
+                !p.startsWith('tmp/') && !p.startsWith('/tmp/') &&
+                !p.startsWith('dev/fd/') && !p.startsWith('/dev/fd/'));
+            document.getElementById('fileList').textContent = 'files: ' + names.join(', ');
+        }
+        window.ssqlUIOnUpload = refreshFileList;
+        document.getElementById('barUpload').addEventListener('change', (ev) => {
+            const file = ev.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => ssqlUIWriteUpload(file.name, reader.result);
+            reader.readAsText(file);
+        });
+        window.exploreRunBar = function() {
+            let text = document.getElementById('pipeline').value.trim().replace(/[|\s]+$/, '');
+            if (!text) return;
+            _fsResetWriteLog();
+            const res = executePipeline(text + ' | ssql to jsonl', false);
+            if (res.exitCode !== 0) { showOutput(res, 'Pipeline failed'); return; }
+            document.getElementById('output').style.display = 'none';
+            const rows = [];
+            for (const line of res.stdout.split('\n')) {
+                const t = line.trim();
+                if (t.startsWith('{') && !t.startsWith('{"_schema"')) rows.push(JSON.parse(t));
+            }
+            if (window.exploreSetRows) window.exploreSetRows(rows);
+            showCreatedFiles();
+            refreshFileList();
+        };
+        document.getElementById('barRun').addEventListener('click', window.exploreRunBar);
+        document.getElementById('barHelp').addEventListener('click', () => helpAtCursor());
+        document.getElementById('barReset').addEventListener('click', () => {
+            if (window.exploreSetRows) window.exploreSetRows(DATA);
+            document.getElementById('pipeline').value = 'ssql from data.jsonl | ';
+            document.getElementById('output').style.display = 'none';
+        });
         {{end}}
 
         const { useState, useEffect, useRef, useMemo } = React;
@@ -3932,6 +4128,14 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 rowSelection: { mode: 'multiRow' },
                 onGridReady: (params) => {
                     gridApiRef.current = params.api;
+                    // Pipeline-bar integration: run results replace grid rows.
+                    window.exploreSetRows = (rows) => {
+                        window.exploreLastRowCount = rows.length;
+                        suppressGridEvents.current = true;
+                        params.api.setGridOption('rowData', rows);
+                        setPipelineResult({ inputCount: DATA.length, outputCount: rows.length });
+                        setTimeout(() => { suppressGridEvents.current = false; }, 0);
+                    };
                 },
                 onFilterChanged: (params) => {
                     if (!ssqlWasm || suppressGridEvents.current) return;

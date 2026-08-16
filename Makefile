@@ -29,7 +29,7 @@ help:
 	@echo "  make docker-gpu-extract - Build and extract ssql_gpu binary to current dir"
 	@echo ""
 	@echo "WASM Build:"
-	@echo "  make wasm         - Build ssql.wasm with TinyGo (~300-500KB)"
+	@echo "  make explore-wasm - Refresh the embedded explore engine (slim wasm, gzipped)"
 	@echo "  make wasm-go      - Build ssql.wasm with standard Go (~5MB)"
 	@echo "  make playground   - Build WASM playground (full CLI in browser)"
 	@echo ""
@@ -108,7 +108,6 @@ clean:
 	go clean ./...
 	rm -f cmd/ssql/ssql
 	rm -f ssql_gpu libssqlgpu.so
-	rm -f cmd/ssql-wasm/ssql.wasm
 	cd gpu && $(MAKE) clean 2>/dev/null || true
 
 # Run all quality checks (pre-push)
@@ -262,17 +261,16 @@ docker-gpu: docker-gpu-extract
 # WASM Build Targets
 # =============================================================================
 
-# Build WASM module with TinyGo (small binary, ~300-500KB)
-wasm:
-	@echo "Building ssql.wasm with TinyGo..."
-	tinygo build -o cmd/ssql-wasm/ssql.wasm -target wasm -no-debug -panic=trap -opt=z ./cmd/ssql-wasm
-	rm -f cmd/ssql-wasm/js/wasm_exec.js
-	cp "$$(tinygo env TINYGOROOT)/targets/wasm_exec.js" cmd/ssql-wasm/js/
-	cp cmd/ssql-wasm/ssql.wasm cmd/ssql/wasm/ssql.wasm
-	cp cmd/ssql-wasm/js/wasm_exec.js cmd/ssql/wasm/wasm_exec.js
-	cp cmd/ssql-wasm/js/ssql-wasm.js cmd/ssql/wasm/ssql-wasm.js
-	@echo "✓ Built cmd/ssql-wasm/ssql.wasm ($$(du -h cmd/ssql-wasm/ssql.wasm | cut -f1) raw)"
-	@echo "✓ Embedded WASM files copied to cmd/ssql/wasm/"
+# Refresh the embedded explore engine: the SAME slim playground wasm,
+# gzipped for embedding (DFC107 — the TinyGo mini-engine is gone).
+explore-wasm:
+	@echo "Building slim wasm for explore embedding..."
+	GOOS=js GOARCH=wasm go build -tags slim -ldflags="-s -w $(LDFLAGS)" -o /tmp/ssql-explore.wasm ./cmd/ssql-playground
+	gzip -9 -c /tmp/ssql-explore.wasm > cmd/ssql/wasm/ssql-playground.wasm.gz
+	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/ssql/wasm/wasm_exec.js
+	cp cmd/ssql-playground/fs-polyfill.js cmd/ssql/wasm/fs-polyfill.js
+	cp cmd/ssql-playground/ssql-ui.js cmd/ssql/wasm/ssql-ui.js
+	@echo "✓ cmd/ssql/wasm/ssql-playground.wasm.gz ($$(du -h cmd/ssql/wasm/ssql-playground.wasm.gz | cut -f1))"
 
 # Build WASM playground (full CLI in browser)
 wasi:
@@ -289,14 +287,3 @@ playground:
 	@echo "✓ Built cmd/ssql-playground/ssql-playground.wasm ($$(du -h cmd/ssql-playground/ssql-playground.wasm | cut -f1) raw)"
 	@echo "Serve with: cd cmd/ssql-playground && python3 -m http.server 8080"
 
-# Build WASM module with standard Go (larger binary, ~5MB)
-wasm-go:
-	@echo "Building ssql.wasm with standard Go..."
-	GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o cmd/ssql-wasm/ssql.wasm ./cmd/ssql-wasm
-	rm -f cmd/ssql-wasm/js/wasm_exec.js
-	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/ssql-wasm/js/
-	cp cmd/ssql-wasm/ssql.wasm cmd/ssql/wasm/ssql.wasm
-	cp cmd/ssql-wasm/js/wasm_exec.js cmd/ssql/wasm/wasm_exec.js
-	cp cmd/ssql-wasm/js/ssql-wasm.js cmd/ssql/wasm/ssql-wasm.js
-	@echo "✓ Built cmd/ssql-wasm/ssql.wasm ($$(du -h cmd/ssql-wasm/ssql.wasm | cut -f1) raw)"
-	@echo "✓ Embedded WASM files copied to cmd/ssql/wasm/"

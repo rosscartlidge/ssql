@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html><body>
+<iframe id="ex" src="exp_explore.html" style="width:1200px;height:800px"></iframe>
+<pre id="results">RUNNING</pre>
+<script>
+const out = [];
+function rec(name, ok, detail) { out.push((ok ? "PASS " : "FAIL ") + name + (ok ? "" : " :: " + detail)); }
+async function run() {
+    const frame = document.getElementById('ex');
+    if (frame.contentDocument === null || frame.contentDocument.readyState !== 'complete') {
+        await new Promise(r => frame.addEventListener('load', r, { once: true }));
+    }
+    const w = frame.contentWindow;
+    for (let i = 0; i < 400; i++) {
+        if (w.ssqlEngine || w.ssqlEngineError) break;
+        try { await fetch('check.html?p=' + i, { cache: 'no-store' }); } catch (e) {}
+        await new Promise(r => setTimeout(r, 50));
+    }
+    if (!w.ssqlEngine) { rec("engine-loads", false, w.ssqlEngineError || "never ready"); fin(); return; }
+    rec("engine-loads", true);
+    const DATA = [{name:'Alice',dept:'Eng',salary:95000},{name:'Bob',dept:'Sales',salary:65000},{name:'Carol',dept:'Eng',salary:105000},{name:'Dave',dept:'Sales',salary:70000}];
+    const P = (ops) => w.ssqlEngine.pipeline(DATA, ops);
+    try {
+        const r1 = P([{op:'where', field:'dept', operator:'eq', value:'Eng'}]);
+        rec("op-where", r1.length === 2 && r1.every(r => r.dept === 'Eng'), JSON.stringify(r1));
+        const r2 = P([{op:'sort', field:'salary', desc:true}, {op:'limit', n:1}]);
+        rec("op-sort-limit", r2.length === 1 && r2[0].name === 'Carol', JSON.stringify(r2));
+        const r3 = P([{op:'group_by', groupFields:['dept'], aggs:[{func:'count'},{func:'sum', field:'salary', alias:'total'}]}]);
+        const eng = r3.find(r => r.dept === 'Eng');
+        rec("op-group-by", r3.length === 2 && eng && eng.count === 2 && eng.total === 200000, JSON.stringify(r3));
+        const r4 = P([{op:'compute', name:'bonus', expr:'salary / 10'}]);
+        rec("op-compute", r4.length === 4 && r4[0].bonus === r4[0].salary / 10, JSON.stringify(r4[0]));
+        const r5 = P([{op:'window', windowConfigs:[{partitionBy:['dept'], orderBy:[{field:'salary', desc:true}], specs:[{type:'row_number', result:'rn'}]}]}]);
+        rec("op-window", r5.length === 4 && r5.filter(r => r.rn === 1).length === 2, JSON.stringify(r5.map(r=>[r.name,r.rn])));
+        const r6 = P([{op:'distinct', field:'dept'}]);
+        rec("op-distinct", r6.length === 2, JSON.stringify(r6));
+    } catch (e) { rec("ops", false, String(e)); }
+
+    // --- Pipeline bar (shared ssql-ui layer) ---
+    try {
+        const doc = w.document;
+        const ta = doc.getElementById('pipeline');
+        const popup = () => doc.getElementById('completions');
+        const popupOpen = () => popup().style.display === 'block';
+        const items = () => [...popup().children].map(d => d.textContent);
+        rec("bar-present", !!ta && ta.value.startsWith('ssql from data.jsonl'), ta ? ta.value : 'no textarea');
+
+        // Field completion against the page's own data (schema path).
+        ta.focus();
+        ta.value = "ssql from data.jsonl | ssql where -if ";
+        ta.selectionStart = ta.selectionEnd = ta.value.length;
+        ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        rec("bar-field-completion", popupOpen() && items().includes("salary") && items().includes("dept"),
+            popupOpen() ? items().join(",") : "no popup; status: " + doc.getElementById('status').textContent);
+        if (popupOpen()) ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+        // Help at the cursor renders into the output panel.
+        ta.value = "ssql from data.jsonl | ssql group-by dept -count";
+        ta.selectionStart = ta.selectionEnd = ta.value.length;
+        doc.getElementById('barHelp').click();
+        const helpText = doc.getElementById('output').textContent;
+        rec("bar-help", /Count records|result/i.test(helpText), helpText.slice(0, 120));
+
+        // Run feeds the grid (exploreSetRows records the row count).
+        ta.value = "ssql from data.jsonl | ssql where -if dept eq Eng";
+        for (let i = 0; i < 100 && !w.exploreSetRows; i++) { await new Promise(r => setTimeout(r, 50)); }
+        w.exploreRunBar();
+        rec("bar-run-grid", w.exploreLastRowCount === 2, "rows=" + w.exploreLastRowCount);
+
+        // Upload a lookup file and JOIN it directly by name.
+        w.ssqlUIWriteUpload('lookup.csv', 'dept,label\nEng,Engineering\nSales,GoToMarket\n');
+        rec("bar-upload-listed", doc.getElementById('fileList').textContent.includes('lookup.csv'),
+            doc.getElementById('fileList').textContent);
+        ta.value = "ssql from data.jsonl | ssql join lookup.csv -using dept";
+        w.exploreRunBar();
+        rec("bar-upload-join", w.exploreLastRowCount === 4, "rows=" + w.exploreLastRowCount);
+
+        // A run that writes a file surfaces the download bar (tee keeps
+        // rows flowing AND snapshots).
+        ta.value = "ssql from data.jsonl | ssql tee snap.jsonl";
+        w.exploreRunBar();
+        rec("bar-files-download",
+            w.getComputedStyle(doc.getElementById('filesBar')).display !== 'none' &&
+            doc.getElementById('filesBar').textContent.includes('snap.jsonl'),
+            doc.getElementById('filesBar').textContent.slice(0, 100));
+    } catch (e) { rec("bar", false, String(e)); }
+    fin();
+}
+function fin() { document.getElementById('results').textContent = "DONE\n" + out.join("\n"); }
+run();
+</script>
+</body></html>

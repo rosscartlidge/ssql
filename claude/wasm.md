@@ -1,5 +1,7 @@
 # WASM and WASI Reference
 
+> **DFC107 (2026-08-16):** the TinyGo explore mini-engine (`cmd/ssql-wasm`) was REMOVED. `to explore -wasm` now embeds the gzipped slim playground wasm (`make explore-wasm`); TinyGo is no longer part of the build. References to `make wasm`/TinyGo below are historical.
+
 ## Three WASM Targets
 
 ssql has three distinct WASM builds:

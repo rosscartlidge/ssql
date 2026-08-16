@@ -74,6 +74,17 @@ ONE implementation shared by `cmd/ssql/main.go` and the playground's
 `execCommand`, so CLI and playground can't drift. The same protocol is the
 route for future Tab completion (`-complete`) and Ctrl-O (`-complete-source`).
 
+## Shared UI Layer: ssql-ui.js
+
+The completion/help/pipeline machinery lives in
+`cmd/ssql-playground/ssql-ui.js` — ONE file shared by playground.html
+(script src, deploy workflow copies + cache-busts it) and the `to
+explore -wasm` template (embedded via `cmd/ssql/wasm/`, refreshed by
+`make explore-wasm`). Page contract is documented at the top of the
+file (#pipeline/#completions/#status elements, global ssqlExec +
+showOutput, window.ssqlUIReady). Edit it once; run BOTH harnesses
+(`scripts/playground-test.sh`, `scripts/explore-test.sh`).
+
 ## End-to-End Testing (headless Chrome)
 
 ```bash

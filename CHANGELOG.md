@@ -5,6 +5,31 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`to explore -wasm` runs the real engine** (DFC107) — the TinyGo
+  mini-engine (a third, hand-written implementation of ssql semantics,
+  never differentially tested) is gone. Explore embeds the same slim
+  playground WASM, gzipped (~3.4MB inlined, decompressed in-browser),
+  and every UI op — filters, sorts, group-by, distinct, limit, compute
+  expressions (now full expr-lang), pivot, window — translates to real
+  CLI stages through `ssqlExec`. TinyGo leaves the toolchain entirely.
+  Slim builds error loudly on `-wasm` (a wasm can't embed itself).
+  New e2e gate: `scripts/explore-test.sh` drives the generated page
+  headless through every op type.
+- **Explore gains the playground's pipeline bar** — a textarea above the
+  grid with the full interactive stack: as-you-type completion (including
+  your own data's field names and values), Alt-h / "? Help", and
+  "Run → grid" (any pipeline's result replaces the grid rows;
+  "Reset data" restores). The whole layer is one shared file now —
+  `ssql-ui.js`, extracted from the playground and embedded into explore
+  pages — so browser completion/help can never fork. Explore pages are
+  full workspaces: **Upload file** adds more datasets to the in-page
+  filesystem (join them directly by name), the file list shows what's
+  available, and files a run creates (`tee`, `to csv`, `to markdown -o`)
+  appear in a download bar.
+
 ## [v4.62.0] - 2026-08-16
 
 ### New Features
