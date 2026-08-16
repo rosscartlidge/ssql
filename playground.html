@@ -134,8 +134,8 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 
 <!-- ?v= busts the browser cache per deploy: a stale fs-polyfill.js with a
      fresh playground.html made runs die silently (missing new helpers). -->
-<script src="fs-polyfill.js?v=a49e9ad9"></script>
-<script src="wasm_exec.js?v=a49e9ad9"></script>
+<script src="fs-polyfill.js?v=ca4666b4"></script>
+<script src="wasm_exec.js?v=ca4666b4"></script>
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
@@ -630,15 +630,11 @@ function autoSuggest() {
     // bash never completes it, and accepting would REPLACE "ssql" with a
     // subcommand. Stay quiet until after the space.
     if (ctx.pos === 0) { if (passiveOpen) hideCompletions(); return; }
-    // Empty current word: auto-pop only at the subcommand slot ("ssql |")
-    // — the discovery moment — not at every word boundary.
-    if (!cur && !(ctx.pos === 1 && ctx.args.length === 1 && ctx.args[0] === '')) {
-        if (passiveOpen) hideCompletions();
-        return;
-    }
-    // Guard: at a synthesized stage start, the "word" before the caret
-    // may be the pipe itself when cur is empty — that is exactly the
-    // discovery slot, so proceed.
+    // Empty current word: suggestions pop here too — the popup is
+    // PASSIVE (never steals Enter or typing), so showing what fits at
+    // every position is pure discovery. This is also the only way to
+    // summon a list on mobile, where there is no Tab key: after
+    // "from csv " the file list just appears; tap to accept.
 
     let { cands, hints } = completionCandidates(ctx, true);
     if (!cands.length && (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>'))) {
@@ -754,7 +750,7 @@ let wasmReady = false;
 
 async function initWasm() {
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=a49e9ad9'), go.importObject);
+    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=ca4666b4'), go.importObject);
     go.run(result.instance);
 
     // Wait for ssqlReady
