@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### New Features
+- **Playground suggestions at every position (mobile-complete)** — the
+  passive popup now appears at empty words too: after `from csv ` the
+  file list shows unprompted, after a field the operators, after `eq `
+  the sampled values. Tap (or Tab) to accept — which makes the full
+  completion system usable on phones, where there is no Tab key.
 - **`ssql tee FILE`** — Unix tee for pipelines: writes the stream to
   FILE as schema-headed JSONL (replayable with `ssql from FILE`, and
   directly usable by join/merge/union) while passing every record

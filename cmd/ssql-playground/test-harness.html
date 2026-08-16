@@ -378,6 +378,19 @@ async function run() {
         "shown=" + oShown + " value=" + JSON.stringify(ta.value) + " visAfter=" + clearVisible() + " popup=" + popupOpen());
     if (popupOpen()) key('Escape');
 
+    // P. Empty word after "from csv " auto-pops the FILE list — the
+    //    mobile path (no Tab key; tap to accept).
+    await typeInto("ssql from csv ");
+    record("auto-empty-word-files", popupOpen() && items().some(x => x.includes("employees.csv")),
+        popupOpen() ? items().join(",") : "no popup");
+    if (popupOpen()) key('Escape');
+
+    // P2. …and after a field+operator, values pop unprompted too.
+    await typeInto("ssql from csv customers.csv | ssql where -if country eq ");
+    record("auto-empty-word-values", popupOpen() && items().includes("US"),
+        popupOpen() ? items().join(",") : "no popup; status: " + doc.getElementById('status').textContent);
+    if (popupOpen()) key('Escape');
+
     // G. Latency probe: one flag-completion round-trip (informational,
     //    generous ceiling — catches pathological regressions only).
     {
