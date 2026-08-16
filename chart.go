@@ -3383,27 +3383,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             font-weight: 500;
         }
 
-        .pipeline-string-input {
-            width: 100%;
-            padding: 6px 8px;
-            margin-top: 8px;
-            margin-bottom: 4px;
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            background: var(--panel-bg);
-            color: var(--text-color);
-            font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
-            font-size: 0.75rem;
-            box-sizing: border-box;
-            transition: border-color 0.15s;
-        }
-
-        .pipeline-string-input:focus {
-            outline: none;
-            border-color: #0d6efd;
-        }
-
-        .pipeline-panel {
+.pipeline-panel {
             margin-top: 8px;
         }
 
@@ -3578,6 +3558,121 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         // WASM module (initialized asynchronously if enabled)
         let ssqlWasm = null;
         {{if .WasmEnabled}}
+        // stepsToOps: the step builder's state → mini-engine-style ops.
+        // ONE mapping, used by the builder's run path and the bar sync.
+        function stepsToOps(pipelineSteps) {
+            return pipelineSteps.map(step => {
+                switch (step.type) {
+                    case 'where': return { op: 'where', field: step.field, operator: step.operator, value: step.value };
+                    case 'sort': return { op: 'sort', field: step.field, desc: step.desc };
+                    case 'group_by': return { op: 'group_by', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
+                    case 'distinct': return { op: 'distinct', field: step.field };
+                    case 'limit': return { op: 'limit', n: step.n, offset: step.offset };
+                    case 'compute': return { op: 'compute', name: step.name, expr: step.expr };
+                    case 'pivot': return { op: 'pivot', rowField: step.rowField, colField: step.colField, valField: step.valField, aggFunc: step.aggFunc };
+                    case 'window': {
+                        const parseRows = (r) => { const p = (r || '*,0').split(','); return { preceding: p[0] === '*' ? -1 : parseInt(p[0]) || 0, following: p.length > 1 ? (p[1] === '*' ? -1 : parseInt(p[1]) || 0) : 0 }; };
+                        return { op: 'window', windowConfigs: [{ partitionBy: step.partitionBy.filter(f => f), orderBy: step.orderBy.filter(o => o.field), frame: parseRows(step.rows), specs: step.funcs.map(fn => ({ type: fn.type, field: fn.field, n: fn.n, result: fn.result })) }] };
+                    }
+                }
+            });
+        }
+
+        function opsToStages(ops) {
+            const stages = [];
+            let i = 0;
+            while (i < ops.length) {
+                const o = ops[i];
+                switch (o.op) {
+                    case 'where': {
+                        const a = ['where'];
+                        while (i < ops.length && ops[i].op === 'where') {
+                            a.push('-if', ops[i].field, ops[i].operator, String(ops[i].value));
+                            i++;
+                        }
+                        stages.push(a);
+                        continue;
+                    }
+                    case 'sort': {
+                        const a = ['sort'];
+                        let first = true;
+                        while (i < ops.length && ops[i].op === 'sort') {
+                            if (!first) a.push('+');
+                            a.push(ops[i].field);
+                            if (ops[i].desc) a.push('-desc');
+                            first = false;
+                            i++;
+                        }
+                        stages.push(a);
+                        continue;
+                    }
+                    case 'group_by': {
+                        const a = ['group-by', ...(o.groupFields || [])];
+                        for (const g of (o.aggs || [])) {
+                            const alias = g.alias || g.func; // mini-engine naming contract
+                            if (g.func === 'count') a.push('-count', alias);
+                            else a.push('-' + g.func, g.field, alias);
+                        }
+                        stages.push(a); i++; continue;
+                    }
+                    case 'distinct':
+                        stages.push(o.field ? ['group-by', o.field] : ['distinct']);
+                        i++; continue;
+                    case 'limit':
+                        if (o.offset) stages.push(['offset', String(o.offset)]);
+                        stages.push(['limit', String(o.n)]);
+                        i++; continue;
+                    case 'compute':
+                        stages.push(['update', '-set-expr', o.name, o.expr]);
+                        i++; continue;
+                    case 'pivot':
+                        stages.push(['pivot', '-row', o.rowField, '-col', o.colField, '-val', o.valField, '-func', o.aggFunc || 'sum']);
+                        i++; continue;
+                    case 'window': {
+                        for (const wc of (o.windowConfigs || [])) {
+                            const a = ['window'];
+                            for (const pf of (wc.partitionBy || [])) a.push('-partition', pf);
+                            for (const ob of (wc.orderBy || [])) { a.push('-order', ob.field); if (ob.desc) a.push('-desc'); }
+                            if (wc.frame) {
+                                if (wc.frame.preceding >= 0) a.push('-preceding', String(wc.frame.preceding));
+                                if (wc.frame.following >= 0) a.push('-following', String(wc.frame.following));
+                            }
+                            for (const sp of (wc.specs || [])) {
+                                switch (sp.type) {
+                                    case 'row_number': a.push('-row-number', sp.result); break;
+                                    case 'rank': a.push('-rank', sp.result); break;
+                                    case 'dense_rank': a.push('-dense-rank', sp.result); break;
+                                    case 'percent_rank': a.push('-percent-rank', sp.result); break;
+                                    case 'count': a.push('-count', sp.result); break;
+                                    case 'ntile': a.push('-ntile', String(sp.n), sp.result); break;
+                                    case 'lag': a.push('-lag', sp.field, String(sp.n || 1), sp.result); break;
+                                    case 'lead': a.push('-lead', sp.field, String(sp.n || 1), sp.result); break;
+                                    default: a.push('-' + sp.type, sp.field, sp.result); // sum/avg/min/max/first/last
+                                }
+                            }
+                            stages.push(a);
+                        }
+                        i++; continue;
+                    }
+                    default:
+                        throw new Error('unsupported op: ' + o.op);
+                }
+            }
+            return stages;
+        };
+
+        function shellQuoteArg(a) {
+            a = String(a);
+            return /[\s'"|<>()]/.test(a) || a === '' ? "'" + a.replace(/'/g, "'\\''") + "'" : a;
+        }
+
+        // opsToText: render ops as the equivalent ssql pipeline over the
+        // explored data — the builder and the bar are two views of this.
+        function opsToText(ops) {
+            const stages = opsToStages(ops);
+            return 'ssql from data.jsonl' + stages.map(a => ' | ssql ' + a.map(shellQuoteArg).join(' ')).join('');
+        }
+
         (async function() {
             try {
                 // The embedded engine is the SAME slim playground wasm,
@@ -3597,88 +3692,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 }
                 if (typeof ssqlReady === 'undefined' || !ssqlReady) throw new Error('engine did not become ready');
 
-                const opsToStages = (ops) => {
-                    const stages = [];
-                    let i = 0;
-                    while (i < ops.length) {
-                        const o = ops[i];
-                        switch (o.op) {
-                            case 'where': {
-                                const a = ['where'];
-                                while (i < ops.length && ops[i].op === 'where') {
-                                    a.push('-if', ops[i].field, ops[i].operator, String(ops[i].value));
-                                    i++;
-                                }
-                                stages.push(a);
-                                continue;
-                            }
-                            case 'sort': {
-                                const a = ['sort'];
-                                let first = true;
-                                while (i < ops.length && ops[i].op === 'sort') {
-                                    if (!first) a.push('+');
-                                    a.push(ops[i].field);
-                                    if (ops[i].desc) a.push('-desc');
-                                    first = false;
-                                    i++;
-                                }
-                                stages.push(a);
-                                continue;
-                            }
-                            case 'group_by': {
-                                const a = ['group-by', ...(o.groupFields || [])];
-                                for (const g of (o.aggs || [])) {
-                                    const alias = g.alias || g.func; // mini-engine naming contract
-                                    if (g.func === 'count') a.push('-count', alias);
-                                    else a.push('-' + g.func, g.field, alias);
-                                }
-                                stages.push(a); i++; continue;
-                            }
-                            case 'distinct':
-                                stages.push(o.field ? ['group-by', o.field] : ['distinct']);
-                                i++; continue;
-                            case 'limit':
-                                if (o.offset) stages.push(['offset', String(o.offset)]);
-                                stages.push(['limit', String(o.n)]);
-                                i++; continue;
-                            case 'compute':
-                                stages.push(['update', '-set-expr', o.name, o.expr]);
-                                i++; continue;
-                            case 'pivot':
-                                stages.push(['pivot', '-row', o.rowField, '-col', o.colField, '-val', o.valField, '-func', o.aggFunc || 'sum']);
-                                i++; continue;
-                            case 'window': {
-                                for (const wc of (o.windowConfigs || [])) {
-                                    const a = ['window'];
-                                    for (const pf of (wc.partitionBy || [])) a.push('-partition', pf);
-                                    for (const ob of (wc.orderBy || [])) { a.push('-order', ob.field); if (ob.desc) a.push('-desc'); }
-                                    if (wc.frame) {
-                                        if (wc.frame.preceding >= 0) a.push('-preceding', String(wc.frame.preceding));
-                                        if (wc.frame.following >= 0) a.push('-following', String(wc.frame.following));
-                                    }
-                                    for (const sp of (wc.specs || [])) {
-                                        switch (sp.type) {
-                                            case 'row_number': a.push('-row-number', sp.result); break;
-                                            case 'rank': a.push('-rank', sp.result); break;
-                                            case 'dense_rank': a.push('-dense-rank', sp.result); break;
-                                            case 'percent_rank': a.push('-percent-rank', sp.result); break;
-                                            case 'count': a.push('-count', sp.result); break;
-                                            case 'ntile': a.push('-ntile', String(sp.n), sp.result); break;
-                                            case 'lag': a.push('-lag', sp.field, String(sp.n || 1), sp.result); break;
-                                            case 'lead': a.push('-lead', sp.field, String(sp.n || 1), sp.result); break;
-                                            default: a.push('-' + sp.type, sp.field, sp.result); // sum/avg/min/max/first/last
-                                        }
-                                    }
-                                    stages.push(a);
-                                }
-                                i++; continue;
-                            }
-                            default:
-                                throw new Error('unsupported op: ' + o.op);
-                        }
-                    }
-                    return stages;
-                };
 
                 ssqlWasm = {
                     pipeline(data, ops) {
@@ -3774,265 +3787,31 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
 
         const { useState, useEffect, useRef, useMemo } = React;
 
-        // Serialize pipeline steps to CLI-style string
-        const stepsToString = (steps) => {
-            return steps.map(step => {
-                switch (step.type) {
-                    case 'where':
-                        return 'ssql where -if ' + step.field + ' ' + step.operator + ' ' + step.value;
-                    case 'sort':
-                        return 'ssql sort ' + step.field + (step.desc ? ' -desc' : '');
-                    case 'group_by': {
-                        const fields = step.groupFields.filter(f => f).join(' ');
-                        const aggs = step.aggs.map(a => {
-                            if (a.func === 'count') return '-count ' + (a.alias || 'count');
-                            return '-' + a.func + ' ' + a.field + ' ' + (a.alias || a.func);
-                        }).join(' ');
-                        return 'ssql group-by ' + fields + ' ' + aggs;
-                    }
-                    case 'distinct':
-                        return 'ssql distinct';
-                    case 'limit':
-                        return 'ssql limit ' + step.n;
-                    case 'compute': {
-                        const expr = step.expr.includes(' ') ? "'" + step.expr + "'" : step.expr;
-                        return 'ssql update -set-expr ' + step.name + ' ' + expr;
-                    }
-                    case 'pivot': {
-                        let s = 'ssql pivot -row ' + step.rowField + ' -col ' + step.colField + ' -val ' + step.valField;
-                        if (step.aggFunc && step.aggFunc !== 'sum') s += ' -func ' + step.aggFunc;
-                        return s;
-                    }
-                    case 'window': {
-                        let s = 'ssql window';
-                        const funcs = step.funcs || [];
-                        funcs.forEach(fn => {
-                            if (fn.type === 'row_number' || fn.type === 'rank' || fn.type === 'dense_rank' || fn.type === 'percent_rank' || fn.type === 'count') {
-                                s += ' -' + fn.type.replace(/_/g, '-') + ' ' + (fn.result || fn.type);
-                            } else if (fn.type === 'lag' || fn.type === 'lead') {
-                                s += ' -' + fn.type + ' ' + fn.field + ' ' + fn.n + ' ' + (fn.result || fn.type);
-                            } else if (fn.type === 'ntile') {
-                                s += ' -ntile ' + fn.n + ' ' + (fn.result || 'ntile');
-                            } else {
-                                s += ' -' + fn.type + ' ' + fn.field + ' ' + (fn.result || fn.type);
-                            }
-                        });
-                        const parts = (step.partitionBy || []).filter(f => f);
-                        if (parts.length > 0) s += ' -partition ' + parts.join(' ');
-                        const orders = (step.orderBy || []).filter(o => o.field);
-                        orders.forEach(o => {
-                            s += ' -order ' + o.field;
-                            if (o.desc) s += ' -desc';
-                        });
-                        if (step.rows && step.rows !== '*,0') s += ' -rows ' + step.rows;
-                        return s;
-                    }
-                    default: return '';
-                }
-            }).filter(Boolean).join(' | ');
-        };
-
-        // Tokenize a command string, respecting single-quoted strings
-        const tokenize = (str) => {
-            const tokens = [];
-            let i = 0;
-            while (i < str.length) {
-                while (i < str.length && str[i] === ' ') i++;
-                if (i >= str.length) break;
-                if (str[i] === "'") {
-                    i++;
-                    let tok = '';
-                    while (i < str.length && str[i] !== "'") { tok += str[i]; i++; }
-                    if (i < str.length) i++; // skip closing quote
-                    tokens.push(tok);
-                } else {
-                    let tok = '';
-                    while (i < str.length && str[i] !== ' ') { tok += str[i]; i++; }
-                    tokens.push(tok);
-                }
-            }
-            return tokens;
-        };
-
-        // Parse CLI-style pipeline string back into step objects
-        const parseString = (str) => {
-            if (!str.trim()) return [];
-            const commands = str.split(' | ');
-            return commands.map(cmdStr => {
-                let tokens = tokenize(cmdStr.trim());
-                if (tokens.length === 0) return null;
-                if (tokens[0] === 'ssql') tokens = tokens.slice(1);
-                if (tokens.length === 0) return null;
-                const cmd = tokens[0];
-
-                switch (cmd) {
-                    case 'where': {
-                        // where -if field op value
-                        let field = '', operator = 'eq', value = '';
-                        const wi = tokens.indexOf('-if');
-                        if (wi !== -1 && wi + 3 < tokens.length) {
-                            field = tokens[wi + 1];
-                            operator = tokens[wi + 2];
-                            value = tokens[wi + 3];
-                        }
-                        return { type: 'where', field, operator, value };
-                    }
-                    case 'sort': {
-                        // sort field [-desc]
-                        const field = tokens.length > 1 ? tokens[1] : '';
-                        const desc = tokens.includes('-desc');
-                        return { type: 'sort', field, desc };
-                    }
-                    case 'group-by': {
-                        // Collect group fields (non-flag tokens after command name)
-                        // and aggregations (-count alias, -sum field alias, etc.)
-                        const groupFields = [];
-                        const aggs = [];
-                        const aggFuncs = ['count', 'sum', 'avg', 'min', 'max'];
-                        let i = 1;
-                        // Collect group fields until we hit a flag
-                        while (i < tokens.length && !tokens[i].startsWith('-')) {
-                            groupFields.push(tokens[i]);
-                            i++;
-                        }
-                        // Collect aggregations
-                        while (i < tokens.length) {
-                            const flag = tokens[i].replace(/^-/, '');
-                            if (aggFuncs.includes(flag)) {
-                                if (flag === 'count') {
-                                    const alias = (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) ? tokens[i + 1] : 'count';
-                                    aggs.push({ field: '', func: 'count', alias });
-                                    i += (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) ? 2 : 1;
-                                } else {
-                                    const field = (i + 1 < tokens.length) ? tokens[i + 1] : '';
-                                    const alias = (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? tokens[i + 2] : flag;
-                                    aggs.push({ field, func: flag, alias });
-                                    i += (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? 3 : 2;
-                                }
-                            } else {
-                                i++;
-                            }
-                        }
-                        return {
-                            type: 'group_by',
-                            groupFields: groupFields.length > 0 ? groupFields : [''],
-                            aggs: aggs.length > 0 ? aggs : [{ field: '', func: 'count', alias: 'count' }]
-                        };
-                    }
-                    case 'distinct':
-                        return { type: 'distinct', field: '' };
-                    case 'limit': {
-                        const n = tokens.length > 1 ? (parseInt(tokens[1]) || 0) : 100;
-                        return { type: 'limit', n, offset: 0 };
-                    }
-                    case 'update': {
-                        // update -set-expr name expr
-                        let name = '', expr = '';
-                        const si = tokens.indexOf('-set-expr');
-                        if (si !== -1 && si + 2 < tokens.length) {
-                            name = tokens[si + 1];
-                            expr = tokens[si + 2];
-                        }
-                        return { type: 'compute', name, expr };
-                    }
-                    case 'pivot': {
-                        // pivot -row R -col C -val V [-func F]
-                        let rowField = '', colField = '', valField = '', aggFunc = 'sum';
-                        const ri = tokens.indexOf('-row');
-                        if (ri !== -1 && ri + 1 < tokens.length) rowField = tokens[ri + 1];
-                        const ci = tokens.indexOf('-col');
-                        if (ci !== -1 && ci + 1 < tokens.length) colField = tokens[ci + 1];
-                        const vi = tokens.indexOf('-val');
-                        if (vi !== -1 && vi + 1 < tokens.length) valField = tokens[vi + 1];
-                        const fi = tokens.indexOf('-func');
-                        if (fi !== -1 && fi + 1 < tokens.length) aggFunc = tokens[fi + 1];
-                        return { type: 'pivot', rowField, colField, valField, aggFunc };
-                    }
-                    case 'window': {
-                        // window -row-number rn -partition dept -order salary -desc -rows 2,0
-                        const winFuncNames = ['row-number','rank','dense-rank','ntile','percent-rank','lag','lead','first','last','sum','avg','count','min','max'];
-                        const twoArgFuncs = ['lag','lead'];
-                        const oneNumArgFuncs = ['ntile'];
-                        const oneFieldFuncs = ['first','last','sum','avg','min','max'];
-                        const partitionBy = [];
-                        const orderBy = [];
-                        const funcs = [];
-                        let rows = '*,0';
-                        let i = 1;
-                        while (i < tokens.length) {
-                            const flag = tokens[i].replace(/^-/, '');
-                            if (flag === 'partition') {
-                                i++;
-                                while (i < tokens.length && !tokens[i].startsWith('-')) { partitionBy.push(tokens[i]); i++; }
-                            } else if (flag === 'order') {
-                                i++;
-                                if (i < tokens.length && !tokens[i].startsWith('-')) {
-                                    const desc = (i + 1 < tokens.length && tokens[i + 1] === '-desc');
-                                    orderBy.push({ field: tokens[i], desc });
-                                    i++;
-                                    if (desc) i++;
-                                }
-                            } else if (flag === 'desc') {
-                                i++;
-                            } else if (flag === 'rows') {
-                                i++;
-                                if (i < tokens.length) { rows = tokens[i]; i++; }
-                            } else if (winFuncNames.includes(flag)) {
-                                const fnType = flag.replace(/-/g, '_');
-                                if (twoArgFuncs.includes(flag)) {
-                                    const field = (i + 1 < tokens.length) ? tokens[i + 1] : '';
-                                    const n = (i + 2 < tokens.length) ? parseInt(tokens[i + 2]) || 1 : 1;
-                                    const result = (i + 3 < tokens.length && !tokens[i + 3].startsWith('-')) ? tokens[i + 3] : flag;
-                                    funcs.push({ type: fnType, field, n, result });
-                                    i += (i + 3 < tokens.length && !tokens[i + 3].startsWith('-')) ? 4 : 3;
-                                } else if (oneNumArgFuncs.includes(flag)) {
-                                    const n = (i + 1 < tokens.length) ? parseInt(tokens[i + 1]) || 1 : 1;
-                                    const result = (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? tokens[i + 2] : flag;
-                                    funcs.push({ type: fnType, field: '', n, result });
-                                    i += (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? 3 : 2;
-                                } else if (oneFieldFuncs.includes(flag)) {
-                                    const field = (i + 1 < tokens.length) ? tokens[i + 1] : '';
-                                    const result = (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? tokens[i + 2] : flag;
-                                    funcs.push({ type: fnType, field, n: 1, result });
-                                    i += (i + 2 < tokens.length && !tokens[i + 2].startsWith('-')) ? 3 : 2;
-                                } else {
-                                    const result = (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) ? tokens[i + 1] : flag;
-                                    funcs.push({ type: fnType, field: '', n: 1, result });
-                                    i += (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) ? 2 : 1;
-                                }
-                            } else {
-                                i++;
-                            }
-                        }
-                        return {
-                            type: 'window',
-                            partitionBy: partitionBy.length > 0 ? partitionBy : [''],
-                            orderBy: orderBy.length > 0 ? orderBy : [{ field: '', desc: false }],
-                            funcs: funcs.length > 0 ? funcs : [{ type: 'row_number', field: '', n: 1, result: '' }],
-                            rows
-                        };
-                    }
-                    default:
-                        return null;
-                }
-            }).filter(Boolean);
-        };
-
         function App() {
             const [chartType, setChartType] = useState('line');
             const [xField, setXField] = useState(CONFIG.initialXField || (SCHEMA.fields && SCHEMA.fields[0]) || '');
             const [yField, setYField] = useState(CONFIG.initialYField || (SCHEMA.numericFields && SCHEMA.numericFields[0]) || '');
             const [displayData, setDisplayData] = useState(DATA);
             const [pipelineSteps, setPipelineSteps] = useState([]);
+
+            // The builder and the bar are two views of ONE pipeline: every
+            // builder change regenerates the bar text (source is always the
+            // explored data). Editing the bar directly just isn't reverse-
+            // parsed — last writer wins.
+            useEffect(() => {
+                if (typeof stepsToOps !== 'function') return;
+                const ta = document.getElementById('pipeline');
+                if (!ta) return;
+                ta.value = pipelineSteps.length
+                    ? opsToText(stepsToOps(pipelineSteps))
+                    : 'ssql from data.jsonl | ';
+            }, [pipelineSteps]);
             const [pipelineResult, setPipelineResult] = useState(null);
-            const [pipelineString, setPipelineString] = useState('');
-            const [pipelineParseError, setPipelineParseError] = useState(false);
             const chartRef = useRef(null);
             const gridRef = useRef(null);
             const gridApiRef = useRef(null);
             const gridOpsRef = useRef([]);  // Current grid filter/sort ops
             const suppressGridEvents = useRef(false);  // Prevent re-entrant updates
-            const syncSource = useRef(null);  // 'steps' or 'string' to prevent circular updates
 
             // Column definitions for AG-Grid
             const columnDefs = useMemo(() => {
@@ -4134,6 +3913,16 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         suppressGridEvents.current = true;
                         params.api.setGridOption('rowData', rows);
                         setPipelineResult({ inputCount: DATA.length, outputCount: rows.length });
+                        setDisplayData(rows);
+                        if (rows.length > 0) {
+                            const rf = Object.keys(rows[0]);
+                            const numR = rf.filter(f => typeof rows[0][f] === 'number');
+                            if (!rf.includes(xField)) {
+                                const nonNum = rf.filter(f => typeof rows[0][f] !== 'number');
+                                setXField(nonNum[0] || rf[0] || '');
+                            }
+                            if (!rf.includes(yField)) setYField(numR[0] || rf[1] || '');
+                        }
                         setTimeout(() => { suppressGridEvents.current = false; }, 0);
                     };
                 },
@@ -4232,72 +4021,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
 
                 Plotly.react(chartRef.current, [trace], layout, config);
             }, [chartType, xField, yField, displayData]);
-
-            // Sync pipeline steps → string (when steps change from UI)
-            useEffect(() => {
-                if (syncSource.current === 'string') {
-                    syncSource.current = null;
-                    return;
-                }
-                const str = stepsToString(pipelineSteps);
-                setPipelineString(str);
-                setPipelineParseError(false);
-                // Update URL hash
-                if (str) {
-                    window.location.hash = encodeURIComponent(str);
-                } else {
-                    if (window.location.hash) history.replaceState(null, '', window.location.pathname + window.location.search);
-                }
-            }, [pipelineSteps]);
-
-            // Load pipeline from URL hash on mount
-            useEffect(() => {
-                const loadFromHash = () => {
-                    const hash = window.location.hash.slice(1);
-                    if (hash) {
-                        try {
-                            const str = decodeURIComponent(hash);
-                            const steps = parseString(str);
-                            if (steps.length > 0) {
-                                syncSource.current = 'string';
-                                setPipelineString(str);
-                                setPipelineSteps(steps);
-                                setPipelineParseError(false);
-                            }
-                        } catch(e) {
-                            console.warn('Failed to parse pipeline from URL hash:', e);
-                        }
-                    }
-                };
-                loadFromHash();
-                window.addEventListener('hashchange', loadFromHash);
-                return () => window.removeEventListener('hashchange', loadFromHash);
-            }, []);
-
-            // Handle pipeline string input change
-            const onPipelineStringChange = (newStr) => {
-                setPipelineString(newStr);
-                if (!newStr.trim()) {
-                    syncSource.current = 'string';
-                    setPipelineSteps([]);
-                    setPipelineParseError(false);
-                    if (window.location.hash) history.replaceState(null, '', window.location.pathname + window.location.search);
-                    return;
-                }
-                try {
-                    const steps = parseString(newStr);
-                    if (steps.length > 0) {
-                        syncSource.current = 'string';
-                        setPipelineSteps(steps);
-                        setPipelineParseError(false);
-                        window.location.hash = encodeURIComponent(newStr);
-                    } else {
-                        setPipelineParseError(true);
-                    }
-                } catch(e) {
-                    setPipelineParseError(true);
-                }
-            };
 
             // Pipeline step management
             const addStep = (type) => {
@@ -4583,38 +4306,18 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     return;
                 }
 
-                const ops = pipelineSteps.map(step => {
-                    switch (step.type) {
-                        case 'where': return { op: 'where', field: step.field, operator: step.operator, value: step.value };
-                        case 'sort': return { op: 'sort', field: step.field, desc: step.desc };
-                        case 'group_by': return { op: 'group_by', groupFields: step.groupFields.filter(f => f), aggs: step.aggs };
-                        case 'distinct': return { op: 'distinct', field: step.field };
-                        case 'limit': return { op: 'limit', n: step.n, offset: step.offset };
-                        case 'compute': return { op: 'compute', name: step.name, expr: step.expr };
-                        case 'pivot': return { op: 'pivot', rowField: step.rowField, colField: step.colField, valField: step.valField, aggFunc: step.aggFunc };
-                        case 'window': {
-                            const parseRows = (r) => { const p = (r || '*,0').split(','); return { preceding: p[0] === '*' ? -1 : parseInt(p[0]) || 0, following: p.length > 1 ? (p[1] === '*' ? -1 : parseInt(p[1]) || 0) : 0 }; };
-                            return { op: 'window', windowConfigs: [{ partitionBy: step.partitionBy.filter(f => f), orderBy: step.orderBy.filter(o => o.field), frame: parseRows(step.rows), specs: step.funcs.map(fn => ({ type: fn.type, field: fn.field, n: fn.n, result: fn.result })) }] };
-                        }
-                    }
-                });
+                // WASM path: the bar text (already synced from the steps)
+                // IS the pipeline — one run path for builder and bar.
+                if (ssqlWasm && window.exploreRunBar) {
+                    const ta = document.getElementById('pipeline');
+                    if (ta) ta.value = opsToText(stepsToOps(pipelineSteps));
+                    window.exploreRunBar();
+                    return;
+                }
 
+                // Non-wasm fallback (light pages): single group-by only.
                 let result;
-                if (ssqlWasm) {
-                    try {
-                        result = ssqlWasm.pipeline(DATA, ops);
-                    } catch(e) {
-                        console.warn('WASM pipeline failed:', e);
-                        if (pipelineSteps.length === 1 && pipelineSteps[0].type === 'group_by') {
-                            const step = pipelineSteps[0];
-                            const agg = step.aggs[0] || { func: 'count', field: '' };
-                            result = jsAggregation(DATA, step.groupFields[0] || '', agg.func, agg.field);
-                        } else {
-                            alert('Pipeline execution failed: ' + e.message);
-                            return;
-                        }
-                    }
-                } else {
+                {
                     if (pipelineSteps.length === 1 && pipelineSteps[0].type === 'group_by') {
                         const step = pipelineSteps[0];
                         const agg = step.aggs[0] || { func: 'count', field: '' };
@@ -4771,14 +4474,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     ),
 
                     React.createElement('div', { className: 'section-title', style: { marginTop: '24px' } }, 'Pipeline'),
-                    React.createElement('input', {
-                        type: 'text',
-                        className: 'pipeline-string-input',
-                        value: pipelineString,
-                        placeholder: 'ssql where -if age gt 25 | ssql sort salary -desc',
-                        onChange: (e) => onPipelineStringChange(e.target.value),
-                        style: pipelineParseError ? { borderColor: '#dc3545' } : {}
-                    }),
                     React.createElement('div', { className: 'pipeline-panel' },
                         ...pipelineSteps.map((step, idx) =>
                             React.createElement('div', { key: idx, className: 'pipeline-step' },

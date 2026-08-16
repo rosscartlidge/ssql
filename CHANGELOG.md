@@ -5,6 +5,28 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Explore builder field clicks registered only every second time** — the
+  old sidebar string input kept a two-way steps↔string↔URL-hash sync whose
+  lossy round-trip (a `where` step with an empty value drops its field)
+  clobbered alternating clicks via the `hashchange` listener. The string
+  input and the entire sync loop are removed; the pipeline bar is the one
+  text view.
+
+### Changed
+- **Explore's step builder and pipeline bar are one pipeline** — every
+  builder change regenerates the bar text (`ssql from data.jsonl | …`),
+  so the clicks and the CLI syntax are always in sync (and the builder
+  doubles as a syntax teacher); both run through one path. Editing the
+  bar directly isn't reverse-parsed — last writer wins. Spaced values
+  are quoted in the generated text.
+- **`to explore` embeds the engine by default** — the full workspace
+  (~5MB page) is now what you get; `-light` produces the old ~1MB
+  grid-only viewer. Slim builds downgrade to light gracefully with a
+  note instead of erroring.
+
 ## [v4.63.0] - 2026-08-16
 
 ### Changed

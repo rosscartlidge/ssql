@@ -5,6 +5,11 @@
 <script>
 const out = [];
 function rec(name, ok, detail) { out.push((ok ? "PASS " : "FAIL ") + name + (ok ? "" : " :: " + detail)); }
+async function pause(ms) {
+    // Anchor to a real fetch so --virtual-time-budget doesn't skip the wait.
+    try { await fetch('check.html?w=' + Math.random(), { cache: 'no-store' }); } catch (e) {}
+    await new Promise(r => setTimeout(r, ms));
+}
 async function run() {
     const frame = document.getElementById('ex');
     if (frame.contentDocument === null || frame.contentDocument.readyState !== 'complete') {
@@ -83,6 +88,39 @@ async function run() {
             w.getComputedStyle(doc.getElementById('filesBar')).display !== 'none' &&
             doc.getElementById('filesBar').textContent.includes('snap.jsonl'),
             doc.getElementById('filesBar').textContent.slice(0, 100));
+        // Builder↔bar unification: the steps→text translator renders the
+        // exact pipeline the bar would show (source always data.jsonl),
+        // quoting spaced values; and running that text is the ONE run path.
+        const txt = w.opsToText(w.stepsToOps([
+            { type: 'where', field: 'dept', operator: 'eq', value: 'Eng' },
+            { type: 'sort', field: 'salary', desc: true },
+        ]));
+        rec("builder-to-text", txt === "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary -desc", txt);
+        const q = w.opsToText(w.stepsToOps([{ type: 'where', field: 'name', operator: 'eq', value: 'Ann E' }]));
+        rec("builder-text-quoting", q.includes("eq 'Ann E'"), q);
+        ta.value = txt;
+        w.exploreRunBar();
+        rec("builder-text-runs", w.exploreLastRowCount === 2, "rows=" + w.exploreLastRowCount);
+        // Regression: clicking builder selects must register EVERY time.
+        // The old string-input/URL-hash two-way sync re-parsed the (lossy)
+        // step string on hashchange and clobbered alternate clicks — a
+        // where step with an empty value lost its field on round-trip.
+        const setSelect = (sel, val) => {
+            Object.getOwnPropertyDescriptor(w.HTMLSelectElement.prototype, 'value').set.call(sel, val);
+            sel.dispatchEvent(new w.Event('change', { bubbles: true }));
+        };
+        setSelect([...doc.querySelectorAll('.pipeline-actions select')][0], 'where');
+        await pause(200);
+        const fieldSel = () => doc.querySelector('.pipeline-step').querySelectorAll('select')[0];
+        setSelect(fieldSel(), 'dept');
+        await pause(250);
+        const click1 = ta.value;
+        setSelect(fieldSel(), 'name');
+        await pause(250);
+        const click2 = ta.value;
+        rec("builder-click-1", click1.includes('-if dept'), click1);
+        rec("builder-click-2", click2.includes('-if name'), click2);
+        rec("old-string-input-gone", !doc.querySelector('.pipeline-string-input'), "still present");
     } catch (e) { rec("bar", false, String(e)); }
     fin();
 }

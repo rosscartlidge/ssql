@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -17,8 +18,10 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			"Generate explorer from CSV data").
 		Example("ssql from logs.jsonl | ssql where -if level eq ERROR | ssql to explore errors.html",
 			"Explore filtered error logs").
-		Example("ssql from sales.csv | ssql to explore -wasm -theme dark analysis.html",
-			"Explorer with WASM-powered client-side transforms").
+		Example("ssql from sales.csv | ssql to explore -theme dark analysis.html",
+			"Full workspace by default: pipeline bar, completion, uploads, downloads").
+		Example("ssql from big.csv | ssql to explore -light small.html",
+			"Light viewer (~1MB): grid browsing only, no embedded engine").
 
 		Flag("-generate", "-g").
 			Bool().
@@ -65,7 +68,14 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 		Flag("-wasm").
 			Bool().
 			Global().
-			Help("Enable WASM-powered client-side transforms").
+			Default(true).
+			Help("Embed the ssql engine for client-side pipelines (DEFAULT; use -light to disable)").
+			Done().
+
+		Flag("-light").
+			Bool().
+			Global().
+			Help("Light viewer: no embedded engine (~1MB page, grid browsing only)").
 			Done().
 
 		Flag("FILE").
@@ -113,6 +123,9 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			if wasmVal, ok := ctx.GlobalFlags["-wasm"]; ok {
 				useWasm = wasmVal.(bool)
 			}
+			if lightVal, ok := ctx.GlobalFlags["-light"]; ok && lightVal.(bool) {
+				useWasm = false
+			}
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
@@ -134,9 +147,15 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			// Enable client-side transforms via the embedded engine —
 			// the SAME slim playground wasm, gzipped (DFC107).
 			if useWasm {
+				// Slim builds (playground, WebVM) carry no engine — since
+				// -wasm is the DEFAULT, downgrade gracefully to light
+				// rather than failing every `to explore`.
 				if !wasm.Available() {
-					return fmt.Errorf("to explore -wasm requires the full build (the slim build carries no embedded engine)")
+					fmt.Fprintln(os.Stderr, "note: this build carries no embedded engine — generating the light explorer")
+					useWasm = false
 				}
+			}
+			if useWasm {
 				config.WasmEnabled = true
 				config.WasmExecJS = wasm.WasmExecJS
 				config.FsPolyfillJS = wasm.FsPolyfillJS

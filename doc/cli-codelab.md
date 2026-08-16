@@ -1540,7 +1540,7 @@ Use `-run` to execute directly with DuckDB:
 - `to chart` - Create interactive HTML chart (including heatmaps via `-type heatmap`)
 - `to animate` - Create animated heatmap or histogram with video-player controls
 - `to explore [file]` - Create interactive data explorer (table + charts + aggregation)
-  - `-wasm` - Embed the real ssql engine (slim wasm) for client-side transforms — filters, sorts, group-by, expressions all run with full ssql semantics in the browser
+  - Embeds the real ssql engine BY DEFAULT (pipeline bar with completion/help, uploads, downloads — a full offline workspace, ~5MB). `-light` for a ~1MB grid-only viewer.
 - `to wav [file]` - Write WAV audio file
 
 ### Code Generation
