@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"path/filepath"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -16,29 +18,25 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("Combine records from multiple sources (SQL UNION). Additional files must be JSONL.").
 		ClauseDescription("Each clause specifies additional files to combine.").
 		Example("ssql from 2023.jsonl | ssql union -file 2024.jsonl", "Combine two JSONL files (removes duplicates)").
-		Example("ssql from 2023.csv | ssql union -file <(ssql from csv 2024.csv)", "Combine CSV files via process substitution").
+		Example("ssql from 2023.csv | ssql union -file 2024.csv", "Combine CSV files directly (format inferred from extension)").
 		Example("ssql from east.csv | ssql union -all -file <(ssql from csv west.csv) -file <(ssql from csv south.csv)", "Combine multiple CSV files (UNION ALL)").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-file", "-f").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-			Accumulate().
-			Local().
-			Help("Additional JSONL file. For CSV: -file <(ssql from csv FILE)").
-			Done().
-
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.{jsonl,csv,tsv,json}"}).
+		Accumulate().
+		Local().
+		Help("Additional file (csv/tsv/json/schema-headed jsonl — format inferred from extension)").
+		Done().
 		Flag("-all", "-a").
-			Bool().
-			Global().
-			Help("Keep duplicates (UNION ALL, use +all for UNION)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Keep duplicates (UNION ALL, use +all for UNION)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var unionAll bool
 			var generate bool
@@ -79,8 +77,35 @@ func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			firstRecords := schemaAndRecords.Records
 
-			// Chain all iterators together
-			combined := chainRecords(firstRecords, additionalFiles)
+			// Open every additional file up front (extension-inferred,
+			// like `from FILE`) so a bad file fails loudly before any
+			// output — and a headerless .jsonl is rejected per the
+			// schema rule (it used to slip through silently).
+			extraSources := make([]iter.Seq[ssql.Record], 0, len(additionalFiles))
+			for _, file := range additionalFiles {
+				recs, schema, err := readAuxInput(file)
+				if err != nil {
+					return err
+				}
+				if schema == nil {
+					return fmt.Errorf("file %s has no schema header — pipe through ssql first: <(ssql from jsonl %s)", file, file)
+				}
+				extraSources = append(extraSources, recs)
+			}
+			combined := func(yield func(ssql.Record) bool) {
+				for record := range firstRecords {
+					if !yield(record) {
+						return
+					}
+				}
+				for _, src := range extraSources {
+					for record := range src {
+						if !yield(record) {
+							return
+						}
+					}
+				}
+			}
 
 			// Apply distinct if not UNION ALL
 			var result iter.Seq[ssql.Record]
@@ -168,19 +193,37 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 			}
 		}
 
-		// Generate JSONL reading code for regular files
-		needsLibImport = true
+		// Regular files: extension-inferred read, matching exec.
 		varName := fmt.Sprintf("unionFile%d", len(sourceCalls)+1)
-		// Write an init fragment for the file read
-		code := fmt.Sprintf(`%sHandle, err := os.Open(%q)
+		var code string
+		var imports []string
+		switch strings.ToLower(filepath.Ext(file)) {
+		case ".csv":
+			code = fmt.Sprintf(`%s, err := ssql.ReadCSV(%q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
+		os.Exit(1)
+	}`, varName, file, file)
+			imports = []string{"fmt", "os"}
+		case ".tsv":
+			code = fmt.Sprintf(`%s, err := ssql.ReadTSV(%q)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
+		os.Exit(1)
+	}`, varName, file, file)
+			imports = []string{"fmt", "os"}
+		default:
+			needsLibImport = true
+			code = fmt.Sprintf(`%sHandle, err := os.Open(%q)
 	if err != nil {
 		fmt.Fprintf(ctx.Stderr(), "Error opening %s: %%v\n", err)
 		os.Exit(1)
 	}
 	defer %sHandle.Close()
 	%s := lib.ReadJSONL(%sHandle)`, varName, file, file, varName, varName, varName)
-		fileFrag := lib.NewInitFragment(varName, code,
-			[]string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}, "")
+			imports = []string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}
+		}
+		fileFrag := lib.NewInitFragment(varName, code, imports, "")
 		if err := lib.WriteCodeFragment(fileFrag); err != nil {
 			return fmt.Errorf("writing file read fragment: %w", err)
 		}

@@ -570,7 +570,13 @@ SELECT DISTINCT department, location FROM employees
 Join two data sources on common fields:
 
 ```bash
-# Inner join on same field name (use -using)
+# Inner join on same field name (use -using). Files join directly —
+# csv/tsv/json inferred from the extension, exactly like `from FILE`:
+ssql from employees.csv | \
+  ssql join departments.csv -using dept_id
+
+# Process substitution still works, and is how you pre-transform the
+# right side (filter, rename, …) before joining:
 ssql from employees.csv | \
   ssql join <(ssql from departments.csv) -using dept_id
 

@@ -578,6 +578,35 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// Direct-file join (`join FILE.csv`, extension-inferred like
+		// `from FILE`) must agree with the procsub form in every lane —
+		// the shared Golden on BOTH cases pins direct ≡ procsub.
+		Name: "join_direct_csv",
+		Pipeline: `{{.bin}} from csv {{.data}}/orders.csv | ` +
+			`{{.bin}} join {{.data}}/customers.csv -using customer_id | ` +
+			`{{.bin}} include order_id product country tier`,
+		Ordered: false,
+		Golden: []map[string]any{
+			{"order_id": 1, "product": "Widget", "country": "US", "tier": "gold"},
+			{"order_id": 2, "product": "Gadget", "country": "US", "tier": "bronze"},
+			{"order_id": 3, "product": "Doohickey", "country": "FR", "tier": "silver"},
+			{"order_id": 4, "product": "Widget", "country": "UK", "tier": "silver"},
+		},
+	},
+	{
+		Name: "join_procsub_csv",
+		Pipeline: `{{.bin}} from csv {{.data}}/orders.csv | ` +
+			`{{.bin}} join <({{.bin}} from csv {{.data}}/customers.csv) -using customer_id | ` +
+			`{{.bin}} include order_id product country tier`,
+		Ordered: false,
+		Golden: []map[string]any{
+			{"order_id": 1, "product": "Widget", "country": "US", "tier": "gold"},
+			{"order_id": 2, "product": "Gadget", "country": "US", "tier": "bronze"},
+			{"order_id": 3, "product": "Doohickey", "country": "FR", "tier": "silver"},
+			{"order_id": 4, "product": "Widget", "country": "UK", "tier": "silver"},
+		},
+	},
+	{
 		// `limit 0` / `offset 0` are pass-throughs (a limit stage you can
 		// dial to 0 for full runs) and MUST vanish from generated
 		// go/sql/ssql — every lane must return exactly the where result.

@@ -5,6 +5,27 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### New Features
+- **`join`/`merge`/`union` read files directly** — `ssql join
+  customers.csv -using id` now works without process substitution:
+  `.csv`/`.tsv`/`.json` are extension-inferred through the same readers
+  `from FILE` uses (shared `readAuxInput`), in exec and every codegen
+  mode (typed join gained `.tsv` right sides via the shared delimiter
+  detection). Bare `.jsonl` still requires a `_schema` header — the
+  headerless case silently loses field information (and union used to
+  let it slip through; it now errors loudly like merge always did).
+  Pinned by a direct≡procsub equivalence pair with shared goldens.
+
+### Bug Fixes
+- **`generate ssql` of a union with process substitution replayed a
+  dead file descriptor** — the rendered pipeline contained the literal
+  `/dev/fd/N` from generation time, so re-running it silently produced
+  left-side-only rows (masked by union's old warn-and-continue). The
+  renderer now reconstructs `-file <(inner pipeline)` from the func
+  fragments, as join always did.
+
 ## [v4.61.0] - 2026-08-16
 
 ### New Features

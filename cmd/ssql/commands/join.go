@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"path/filepath"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -15,84 +16,74 @@ import (
 func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("join").
 		Description("Join records from two data sources. Supports multiple lookups with clauses.").
-		Example("ssql from users.csv | ssql join orders.jsonl -using user_id", "Join on same field name").
+		Example("ssql from users.csv | ssql join orders.csv -using user_id", "Join a file directly — csv/tsv/json inferred from the extension").
 		Example("ssql from users.csv | ssql join orders.jsonl -on user_id order_user_id", "Join on different field names").
 		Example("ssql from data.csv | ssql join <(ssql from kind.csv) -on a_kind kind -as kind_name a_kind_name - -on z_kind kind -as kind_name z_kind_name", "Multiple lookups from same file").
 		ClauseDescription("Each clause performs a separate lookup from the right-side file").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-type", "-t").
-			String().
-			Completer(&cf.StaticCompleter{Options: []string{"inner", "left", "right", "full"}}).
-			Global().
-			Default("inner").
-			Help("Join type: inner, left, right, full (default: inner)").
-			Done().
-
+		String().
+		Completer(&cf.StaticCompleter{Options: []string{"inner", "left", "right", "full"}}).
+		Global().
+		Default("inner").
+		Help("Join type: inner, left, right, full (default: inner)").
+		Done().
 		Flag("-using").
-			String().
-			FieldsFromFlag("").
-			Accumulate().
-			Local().
-			Help("Field name for equality join (same name in both sides)").
-			Done().
-
+		String().
+		FieldsFromFlag("").
+		Accumulate().
+		Local().
+		Help("Field name for equality join (same name in both sides)").
+		Done().
 		Flag("-on").
-			Arg("left-field").
-				FieldsFromFlag("").
-				Done().
-			Arg("right-field").
-				Completer(&cf.NoCompleter{Hint: "<right-field>"}).
-				Done().
-			Accumulate().
-			Local().
-			Help("Join on different field names: -on <left> <right>").
-			Done().
-
+		Arg("left-field").
+		FieldsFromFlag("").
+		Done().
+		Arg("right-field").
+		Completer(&cf.NoCompleter{Hint: "<right-field>"}).
+		Done().
+		Accumulate().
+		Local().
+		Help("Join on different field names: -on <left> <right>").
+		Done().
 		Flag("-as").
-			Arg("right-field").
-				Completer(&cf.NoCompleter{Hint: "<right-field>"}).
-				Done().
-			Arg("new-name").
-				Completer(&cf.NoCompleter{Hint: "<new-name>"}).
-				Done().
-			Accumulate().
-			Local().
-			Help("Rename field from right side: -as <old> <new>").
-			Done().
-
+		Arg("right-field").
+		Completer(&cf.NoCompleter{Hint: "<right-field>"}).
+		Done().
+		Arg("new-name").
+		Completer(&cf.NoCompleter{Hint: "<new-name>"}).
+		Done().
+		Accumulate().
+		Local().
+		Help("Rename field from right side: -as <old> <new>").
+		Done().
 		Flag("-suffix").
-			String().
-			Global().
-			Default("").
-			Help("Add suffix to all right-side non-key fields: -suffix _right → name_right").
-			Done().
-
+		String().
+		Global().
+		Default("").
+		Help("Add suffix to all right-side non-key fields: -suffix _right → name_right").
+		Done().
 		Flag("-exclude-left").
-			Bool().
-			Global().
-			Help("Exclude non-key fields from left side").
-			Done().
-
+		Bool().
+		Global().
+		Help("Exclude non-key fields from left side").
+		Done().
 		Flag("-exclude-right").
-			Bool().
-			Global().
-			Help("Exclude non-key fields from right side (only bring key + -as fields)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Exclude non-key fields from right side (only bring key + -as fields)").
+		Done().
 		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
-			Global().
-			Required().
-			Help("Right-side file (JSONL/JSON). For CSV: ssql join <(ssql from FILE) ...").
-			Done().
-
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl,csv,tsv}"}).
+		Global().
+		Required().
+		Help("Right-side file (JSONL/JSON). For CSV: ssql join <(ssql from FILE) ...").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var rightFile, joinType, suffix string
 			var generate, excludeLeft, excludeRight bool
@@ -141,20 +132,15 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			leftRecords := leftSchemaAndRecords.Records
 			leftSchema := leftSchemaAndRecords.Schema
 
-			// Read right-side file (JSONL only - use process substitution for CSV)
-			rightInput, err := os.Open(rightFile)
+			// Read the right-side file with extension-inferred format —
+			// the same convenience `from FILE` provides. CSV/TSV/JSON
+			// read directly; .jsonl / procsubs carry the wire format.
+			rightSeq, rightSchema, err := readAuxInput(rightFile)
 			if err != nil {
-				if !strings.HasPrefix(rightFile, "/dev/fd/") && !strings.HasSuffix(strings.ToLower(rightFile), ".jsonl") {
-					return fmt.Errorf("opening %s: %w\nFor CSV files use: ssql join <(ssql from %s) ...", rightFile, err, rightFile)
-				}
-				return fmt.Errorf("opening right file: %w", err)
+				return err
 			}
-			defer rightInput.Close()
-			rightSchemaAndRecords := lib.ReadJSONLWithSchema(rightInput)
-			rightSeq := rightSchemaAndRecords.Records
-			rightSchema := rightSchemaAndRecords.Schema
-
-			// Require schema header on right side
+			// Bare .jsonl without a schema header must fail LOUDLY —
+			// a headerless file silently loses field information.
 			if rightSchema == nil {
 				return fmt.Errorf("right-side file %s has no schema header — pipe through ssql first: ssql join <(ssql from jsonl %s) ...", rightFile, rightFile)
 			}
@@ -506,20 +492,36 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'join' must follow a typed-mode source"))
 		}
-		if !strings.HasSuffix(strings.ToLower(rightFile), ".csv") {
+		lower := strings.ToLower(rightFile)
+		var rightSchema *lib.TypedSchema
+		var rightStructDef, readCode string
+		switch {
+		case strings.HasSuffix(lower, ".csv"):
+			var err error
+			rightSchema, rightStructDef, err = lib.SampleCSVSchema(rightFile, "", 0)
+			if err != nil {
+				return lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: %w", err))
+			}
+			readCode = fmt.Sprintf("right%s := typed.ReadCSV[%s](%q)", rightSchema.TypeName, rightSchema.TypeName, rightFile)
+		case strings.HasSuffix(lower, ".tsv"):
+			var delim byte
+			var err error
+			rightSchema, rightStructDef, delim, err = lib.SampleTSVSchema(rightFile, "", 0)
+			if err != nil {
+				return lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: %w", err))
+			}
+			readCode = fmt.Sprintf("right%s := typed.ReadDelim[%s](%q%s)", rightSchema.TypeName, rightSchema.TypeName, rightFile, typedDelimArg(delim))
+		default:
 			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: 'join' on non-CSV files not yet supported in typed mode (Tier 2)"))
-		}
-		rightSchema, rightStructDef, err := lib.SampleCSVSchema(rightFile, "", 0)
-		if err != nil {
-			return lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: %w", err))
+				fmt.Errorf("ssql generate go -typed: 'join' on %s files not yet supported in typed mode — use <(ssql from %s)", filepath.Ext(rightFile), rightFile))
 		}
 		// Build a synthesized init fragment for the right side and an
 		// inline func fragment that wraps it.
 		rightInit := lib.NewInitFragment(
 			fmt.Sprintf("right%s", rightSchema.TypeName),
-			fmt.Sprintf("right%s := typed.ReadCSV[%s](%q)", rightSchema.TypeName, rightSchema.TypeName, rightFile),
+			readCode,
 			[]string{"github.com/rosscartlidge/ssql/v4/typed"},
 			fmt.Sprintf("ssql from %s", rightFile),
 		)
@@ -540,6 +542,11 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 	var initCode string
 	if strings.HasSuffix(strings.ToLower(rightFile), ".jsonl") || strings.HasSuffix(strings.ToLower(rightFile), ".json") {
 		initCode = `records, err := ssql.ReadJSON(*flagJoin)
+	if err != nil {
+		return nil
+	}`
+	} else if strings.HasSuffix(strings.ToLower(rightFile), ".tsv") {
+		initCode = `records, err := ssql.ReadTSV(*flagJoin)
 	if err != nil {
 		return nil
 	}`

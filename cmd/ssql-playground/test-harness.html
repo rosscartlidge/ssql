@@ -412,6 +412,12 @@ async function run() {
         teeBytes && new TextDecoder().decode(teeBytes).includes('_schema'),
         "out: " + teeOut.slice(0, 80) + " bar: " + doc.getElementById('filesBar').textContent.slice(0, 100));
 
+    // 11f. Direct-file join (no procsub) — the newcomer path.
+    setLine("ssql from orders.csv | ssql join customers.csv -using customer_id | ssql limit 3 | ssql to table");
+    w.runPipeline();
+    const djOut = doc.getElementById('output').textContent;
+    record("join-direct-file", /country|tier/.test(djOut) && !/Error|failed/i.test(djOut), djOut.slice(0, 150));
+
     // 12. Full pipeline run with process substitution — guards the
     //     polyfill's /dev/fd FIFO detection (join's procsub handling)
     //     after the path-normalization change.

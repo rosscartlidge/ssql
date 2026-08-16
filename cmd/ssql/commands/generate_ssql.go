@@ -110,11 +110,12 @@ type pipelineCmd struct {
 
 	// Parsed fields for "join"
 	IsJoin           bool
-	JoinFile         string         // right-side file path
-	JoinArgs         []string       // args after FILE (-using, -on, -type, etc.)
-	JoinRightWhere   []string       // where args pushed into right side (rendered as process substitution)
-	JoinIsProcessSub bool           // true if right side is already a process substitution (/dev/fd/N)
-	JoinProcSubCmds  []*pipelineCmd // parsed inner pipeline commands (for process substitution optimization)
+	JoinFile         string           // right-side file path
+	JoinArgs         []string         // args after FILE (-using, -on, -type, etc.)
+	JoinRightWhere   []string         // where args pushed into right side (rendered as process substitution)
+	JoinIsProcessSub bool             // true if right side is already a process substitution (/dev/fd/N)
+	JoinProcSubCmds  []*pipelineCmd   // parsed inner pipeline commands (for process substitution optimization)
+	UnionProcSubs    [][]*pipelineCmd // union: inner pipelines for each -file /dev/fd/N, in order
 
 	// Parsed fields for "merge -catalog"
 	IsMergeCatalog         bool
@@ -187,23 +188,37 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 
 	// Parse each fragment into a pipelineCmd
 	var cmds []*pipelineCmd
-	var pendingFuncCmds []*pipelineCmd // inner pipeline cmds from func fragments awaiting their join
+	// Inner pipelines from func fragments, queued in emission order —
+	// a join consumes one; a union consumes one per -file /dev/fd/N.
+	var pendingFuncBodies [][]*pipelineCmd
 	for _, frag := range fragments {
 		cmd := parsePipelineCmd(frag.Command)
-		// func fragments are right-side sources for joins, not pipeline stages
+		// func fragments are side-input sources (join/union), not pipeline
+		// stages — and never CONSUMERS (a union func fragment's Command is
+		// the outer union string, which would otherwise eat its own body).
 		if frag.Type == "func" {
 			cmd.Removed = true
-			// Parse inner pipeline from FuncBody
 			var innerCmds []*pipelineCmd
 			for _, bodyFrag := range frag.FuncBody {
 				innerCmds = append(innerCmds, parsePipelineCmd(bodyFrag.Command))
 			}
-			pendingFuncCmds = innerCmds
+			pendingFuncBodies = append(pendingFuncBodies, innerCmds)
+			cmds = append(cmds, cmd)
+			continue
 		}
-		// Attach pending func body to its join
-		if cmd.IsJoin && cmd.JoinIsProcessSub && len(pendingFuncCmds) > 0 {
-			cmd.JoinProcSubCmds = pendingFuncCmds
-			pendingFuncCmds = nil
+		// Attach pending func bodies to their consumer.
+		if cmd.IsJoin && cmd.JoinIsProcessSub && len(pendingFuncBodies) > 0 {
+			cmd.JoinProcSubCmds = pendingFuncBodies[0]
+			pendingFuncBodies = pendingFuncBodies[1:]
+		}
+		if cmd.Kind == "union" {
+			for i := 0; i+1 < len(cmd.RawArgs); i++ {
+				if (cmd.RawArgs[i] == "-file" || cmd.RawArgs[i] == "-f") &&
+					strings.HasPrefix(cmd.RawArgs[i+1], "/dev/fd/") && len(pendingFuncBodies) > 0 {
+					cmd.UnionProcSubs = append(cmd.UnionProcSubs, pendingFuncBodies[0])
+					pendingFuncBodies = pendingFuncBodies[1:]
+				}
+			}
 		}
 		cmds = append(cmds, cmd)
 	}
@@ -2074,6 +2089,29 @@ func renderCmd(cmd *pipelineCmd) string {
 		parts = append(parts, cmd.JoinFile)
 		parts = append(parts, cmd.JoinArgs...)
 		return shellJoin(parts)
+	}
+
+	if cmd.Kind == "union" && len(cmd.UnionProcSubs) > 0 {
+		// Reconstruct -file <(inner pipeline) — the fragment's command
+		// string holds the DEAD /dev/fd/N the generation run happened
+		// to get; rendering it verbatim made replays read a stale fd.
+		var sb strings.Builder
+		sb.WriteString("ssql union")
+		idx := 0
+		i := 0
+		for i < len(cmd.RawArgs) {
+			a := cmd.RawArgs[i]
+			if (a == "-file" || a == "-f") && i+1 < len(cmd.RawArgs) &&
+				strings.HasPrefix(cmd.RawArgs[i+1], "/dev/fd/") && idx < len(cmd.UnionProcSubs) {
+				sb.WriteString(" -file <(" + renderProcSubPipeline(cmd.UnionProcSubs[idx]) + ")")
+				idx++
+				i += 2
+				continue
+			}
+			sb.WriteString(" " + shellJoin([]string{a}))
+			i++
+		}
+		return sb.String()
 	}
 
 	if cmd.IsMergeCatalog {

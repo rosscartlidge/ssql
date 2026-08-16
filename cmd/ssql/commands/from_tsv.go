@@ -19,41 +19,35 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Description("Read TSV file(s) or stdin").
 		Example("ssql from tsv data.tsv | ssql to table", "Read TSV file").
 		Example("ssql from tsv *.tsv | ssql to table", "Read multiple TSV files").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-merge-schemas").
-			Bool().
-			Global().
-			Help("Allow files with different headers (merge schemas)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Allow files with different headers (merge schemas)").
+		Done().
 		Flag("-source").
-			String().
-			Global().
-			Default("").
-			Help("Add field with source filename: -source file").
-			Done().
-
+		String().
+		Global().
+		Default("").
+		Help("Add field with source filename: -source file").
+		Done().
 		Flag("-unordered").
-			Bool().
-			Global().
-			Help("Don't preserve file order in pushdown (faster, lower memory)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Don't preserve file order in pushdown (faster, lower memory)").
+		Done().
 		Flag("FILE").
-			String().
-			Variadic().
-			Completer(&cf.FileCompleter{Pattern: "*.tsv"}).
-			Global().
-			Default("").
-			Help("Input TSV file(s) (or stdin if not specified)").
-			Done().
-
+		String().
+		Variadic().
+		Completer(&cf.FileCompleter{Pattern: "*.tsv"}).
+		Global().
+		Default("").
+		Help("Input TSV file(s) (or stdin if not specified)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
 
@@ -163,6 +157,29 @@ func generateFromTSVCode(filename string) error {
 	return lib.WriteCodeFragment(frag)
 }
 
+// typedDelimArg renders the optional typed.WithDelim(...) trailing arg
+// for a detected delimiter — empty for the default tab. Shared by the
+// from-tsv typed init and the typed join right-side reader.
+func typedDelimArg(delim byte) string {
+	if delim == '\t' {
+		return ""
+	}
+	switch delim {
+	case '|':
+		return ", typed.WithDelim('|')"
+	case ':':
+		return ", typed.WithDelim(':')"
+	case ',':
+		return ", typed.WithDelim(',')"
+	case ';':
+		return ", typed.WithDelim(';')"
+	case ' ':
+		return ", typed.WithDelim(' ')"
+	default:
+		return fmt.Sprintf(", typed.WithDelim(0x%02x)", delim)
+	}
+}
+
 // generateFromTSVCodeTyped emits a Phase-1.8 typed-mode init fragment
 // for `ssql from tsv FILE`. Auto-detects the delimiter (first
 // non-identifier byte in the header; defaults to '\t'), samples the
@@ -182,28 +199,7 @@ func generateFromTSVCodeTyped(filename string) error {
 			fmt.Errorf("ssql generate go -typed: %w", err))
 	}
 
-	// Build the optional WithDelim trailing arg. Only emit when the
-	// delimiter isn't the default tab — keeps the generated code
-	// minimal in the common case.
-	var delimArg string
-	if delim != '\t' {
-		// Use Go rune literal syntax — handles printable ASCII
-		// without needing escape rules for common separators.
-		switch delim {
-		case '|':
-			delimArg = ", typed.WithDelim('|')"
-		case ':':
-			delimArg = ", typed.WithDelim(':')"
-		case ',':
-			delimArg = ", typed.WithDelim(',')"
-		case ';':
-			delimArg = ", typed.WithDelim(';')"
-		case ' ':
-			delimArg = ", typed.WithDelim(' ')"
-		default:
-			delimArg = fmt.Sprintf(", typed.WithDelim(0x%02x)", delim)
-		}
-	}
+	delimArg := typedDelimArg(delim)
 
 	params := []lib.CodeParam{{
 		Name: "input", Default: filename, Help: "input TSV file", VarName: "flagInput",

@@ -24,7 +24,7 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("FILE").
 			String().
 			Variadic().
-			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl}"}).
+			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl,csv,tsv}"}).
 			Global().
 			Help("Additional pre-sorted JSONL files to merge. For CSV: <(ssql from csv FILE)").
 			Done().
@@ -201,16 +201,14 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			sources = append(sources, stdinRecords)
 
 			for _, file := range files {
-				f, err := os.Open(file)
+				recs, schema, err := readAuxInput(file)
 				if err != nil {
-					return fmt.Errorf("opening %s: %w", file, err)
+					return err
 				}
-				defer f.Close()
-				fileSchemaAndRecords := lib.ReadJSONLWithSchema(f)
-				if fileSchemaAndRecords.Schema == nil {
+				if schema == nil {
 					return fmt.Errorf("file %s has no schema header — pipe through ssql first: <(ssql from jsonl %s)", file, file)
 				}
-				sources = append(sources, fileSchemaAndRecords.Records)
+				sources = append(sources, recs)
 			}
 
 			// Merge

@@ -105,6 +105,7 @@ func corpusData(t *testing.T) string {
 			"orders.csv":    corpusOrdersCSV,
 			"sales.csv":     corpusSalesCSV,
 			"employees.tsv": strings.ReplaceAll(corpusEmployeesCSV, ",", "\t"),
+			"customers.tsv": strings.ReplaceAll(corpusCustomersCSV, ",", "\t"),
 			"shuffled.csv":  corpusShuffledCSV,
 		}
 		for name, content := range files {
@@ -220,6 +221,26 @@ func TestPipelineCorpus(t *testing.T) {
 			Name:     "tee_passthrough",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} tee {{.data}}/tee_snap.jsonl | {{.bin}} group-by dept -count n | {{.bin}} to table`,
 			Contains: []string{"Engineering", "3"},
+		},
+		{
+			// Direct-file join right sides (no procsub): csv and tsv.
+			Name:     "join_direct_file_csv",
+			Pipeline: `{{.bin}} from {{.data}}/orders.csv | {{.bin}} join {{.data}}/customers.csv -using customer_id | {{.bin}} to table`,
+			Contains: []string{"Widget", "customer_3", "US"},
+		},
+		{
+			Name:     "join_direct_file_tsv",
+			Pipeline: `{{.bin}} from {{.data}}/orders.csv | {{.bin}} join {{.data}}/customers.tsv -using customer_id | {{.bin}} to table`,
+			Contains: []string{"Widget", "customer_3", "US"},
+		},
+		{
+			Name:     "union_direct_file_csv",
+			Pipeline: `{{.bin}} from {{.data}}/orders.csv | {{.bin}} union -all -file {{.data}}/customers.csv | {{.bin}} to table`,
+			Contains: []string{"Widget", "customer_4"},
+			// typed union reads csv via the LEFT schema struct — mixed
+			// schemas here; typed lane errors by design.
+			SkipTyped:    "union file schema differs from left (typed reads via left struct)",
+			SkipParallel: "same as typed",
 		},
 		{
 			Name:     "to_table_maxwidth",
