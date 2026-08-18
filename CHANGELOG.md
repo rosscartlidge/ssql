@@ -1334,7 +1334,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multi-step push-down: `-- where -if status ge 400 + group-by service -count cnt`
   - Supports local shards (`host=local` or `host=localhost`)
 
-## [Unreleased]
+## [4.64.0] - 2026-08-18
 
 ### Breaking Changes
 - **Mandatory Schema Headers**: `ssql from` now ALWAYS emits schema headers
