@@ -1360,7 +1360,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multi-step push-down: `-- where -if status ge 400 + group-by service -count cnt`
   - Supports local shards (`host=local` or `host=localhost`)
 
-## [Unreleased]
+## v1.1.0-era changes (historical; header was never version-stamped)
+
+These notes sat under an "Unreleased" heading since the v1 days even
+though everything in them shipped long ago (the JoinPredicate
+interface change, hash-join optimization, mandatory schema headers).
+Retitled 2026-08-18 so release tooling matching "Unreleased" can't
+land new entries here by mistake.
 
 ### Breaking Changes
 - **Mandatory Schema Headers**: `ssql from` now ALWAYS emits schema headers
