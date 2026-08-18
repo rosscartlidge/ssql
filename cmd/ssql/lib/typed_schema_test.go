@@ -93,3 +93,40 @@ func TestSampleCSVSchemaMissingFile(t *testing.T) {
 		t.Errorf("expected error for missing file")
 	}
 }
+
+func TestTypedSchemaFromHeader(t *testing.T) {
+	s := &Schema{
+		Fields: []string{"dept", "n", "avg_pay", "active", "dept_id", "dept-id"},
+		Types: map[string]string{
+			"dept": "string", "n": "int", "avg_pay": "float",
+			"active": "bool", "dept_id": "string", "dept-id": "string",
+		},
+	}
+	ts, def, err := TypedSchemaFromHeader(s, "EventRow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTypes := []string{"string", "int64", "float64", "bool", "string", "string"}
+	for i, f := range ts.Fields {
+		if f.GoType != wantTypes[i] {
+			t.Errorf("field %s: GoType = %s, want %s", f.Name, f.GoType, wantTypes[i])
+		}
+	}
+	// dept_id and dept-id both mangle to DeptID — dedupe must keep them distinct.
+	if ts.Fields[4].GoName == ts.Fields[5].GoName {
+		t.Errorf("colliding Go names not deduped: %s", ts.Fields[4].GoName)
+	}
+	if !strings.Contains(def, "type EventRow struct") {
+		t.Errorf("struct def missing type decl:\n%s", def)
+	}
+
+	// Untypeable wire types must be a loud error, not a guess.
+	bad := &Schema{Fields: []string{"x"}, Types: map[string]string{"x": "any"}}
+	if _, _, err := TypedSchemaFromHeader(bad, "T"); err == nil ||
+		!strings.Contains(err.Error(), "SSQL_MODE=record") {
+		t.Errorf("wire type any: want loud error naming the fallback, got %v", err)
+	}
+	if _, _, err := TypedSchemaFromHeader(&Schema{}, "T"); err == nil {
+		t.Error("empty schema: want error")
+	}
+}

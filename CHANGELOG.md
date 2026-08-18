@@ -1336,6 +1336,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Typed pipelines over SSH sources (DFC109)** — `SSQL_MODE=typed`
+  now works with `from ssh` (plain and pushdown forms). The struct is
+  synthesized at generate time by sampling the remote's `_schema`
+  header (exec run over a 200-row source prefix — exact wire types,
+  no value inference); the Record landing enters the typed runtime
+  via new `typed.FromRecords` (lazy, serial) or
+  `typed.FromRecordsParallel` (materialize + shard) with a readable
+  per-field converter closure. The planner's parallelism-reach logic
+  picks the form. Sampling failure is a loud generate-time error —
+  never a silent Record-mode downgrade.
+
+### Fixed
+- **`from ssh` generated code parsed JSONL 4× slower than the CLI** — the
+  plain form's landing used the legacy per-line `json.Unmarshal` reader
+  (schema built per record); now uses the schema-cached
+  `ReadJSONLFromReader` like the pushdown form. 3M-row benchmark:
+  record-mode 22.7s→5.7s, typed 20.7s→4.9s (remote side alone is 3.9s,
+  so typed downstream now rides within ~1s of the wire floor).
+- **`typed.ParallelFromSlice` out-of-bounds panic** when round-up
+  chunking pushed a shard's start past the slice end (e.g. 50 rows
+  across 24 shards). Latent since the primitive landed; exposed by
+  small SSH results entering the parallel runtime.
+
 ### Breaking Changes
 - **Mandatory Schema Headers**: `ssql from` now ALWAYS emits schema headers
   - Removed `-schema` flag - schema is now automatic

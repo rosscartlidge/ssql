@@ -106,12 +106,13 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 		return "", fmt.Errorf("typed assembler: no source fragment (need 'from FILE.csv' as the first stage)")
 	}
 
-	// Init sources must be typed (Phase B doesn't yet support
-	// Record-mode sources flowing into typed downstream — that's
-	// Phase C, the harder direction with explicit struct hints).
+	// Init sources must carry a typed schema. Sources that can enter
+	// typed mode do so via generate-time schema sampling (DFC109 —
+	// `from ssh` synthesizes its struct from the remote's `_schema`
+	// header); sources that can't yet (e.g. `from catalog`) land here.
 	for _, f := range initFragments {
 		if f.OutputTypedSchema == nil {
-			return "", fmt.Errorf("ssql generate go -typed: init fragment from %q has no typed schema (Record-mode sources are Phase C)", f.Command)
+			return "", fmt.Errorf("ssql generate go -typed: source %q cannot enter typed mode (no sampled schema); run with SSQL_MODE=record", f.Command)
 		}
 	}
 

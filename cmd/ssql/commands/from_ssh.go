@@ -61,6 +61,9 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			// remote.
 			if len(ctx.RemainingArgs) > 0 {
 				if shouldGenerate(generate) {
+					if typedMode() {
+						return generateFromSSHTypedCode(host, path, gpu, ctx.RemainingArgs)
+					}
 					return generateFromSSHRemoteCode(host, path, gpu, ctx.RemainingArgs)
 				}
 				return executeFromSSHRemote(host, path, gpu, ctx.RemainingArgs)
@@ -68,6 +71,9 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 
 			// Simple remote read
 			if shouldGenerate(generate) {
+				if typedMode() {
+					return generateFromSSHTypedCode(host, path, gpu, nil)
+				}
 				return generateFromSSHCode(host, path, gpu)
 			}
 			return executeFromSSH(host, path, gpu)
@@ -241,10 +247,12 @@ func sshRemoteBin(gpu bool) string {
 	return "/usr/bin/ssql"
 }
 
-// generateFromSSHCode generates Go code for SSH remote read.
-func generateFromSSHCode(host, path string, gpu bool) error {
-	remoteBin := sshRemoteBin(gpu)
-
+// sshPlainLandingCode renders the Record-mode landing for a simple
+// SSH remote read: exec ssh, stream the remote JSONL into outVar as
+// iter.Seq[ssql.Record]. Shared by the record generator (outVar
+// "records") and the typed generator (outVar "recordsRaw", converted
+// downstream).
+func sshPlainLandingCode(host, path, remoteBin, outVar string) (string, []string, []lib.CodeParam) {
 	params := []lib.CodeParam{
 		{Name: "host", Default: host, Help: "SSH host", VarName: "flagHost"},
 		{Name: "path", Default: path, Help: "remote file path", VarName: "flagPath"},
@@ -263,9 +271,15 @@ func generateFromSSHCode(host, path string, gpu bool) error {
 		os.Exit(1)
 	}
 	defer sshCmd.Wait()
-	records := ssql.ReadJSONFromReader(sshStdout)`, remoteBin)
+	%s := ssql.ReadJSONLFromReader(sshStdout)`, remoteBin, outVar)
 
 	imports := []string{"fmt", "os", "os/exec"}
+	return code, imports, params
+}
+
+// generateFromSSHCode generates Go code for SSH remote read.
+func generateFromSSHCode(host, path string, gpu bool) error {
+	code, imports, params := sshPlainLandingCode(host, path, sshRemoteBin(gpu), "records")
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
@@ -284,7 +298,7 @@ func generateFromSSHCode(host, path string, gpu bool) error {
 //	(SSQLGO=typed  …) | ssql generate go -run   →  remote runs typed-parallel Go
 //
 // Local-side, the fragment produces an `iter.Seq[ssql.Record]` from
-// the remote's JSONL output (parsed via ssql.ReadJSONFromReader,
+// the remote's JSONL output (parsed via ssql.ReadJSONLFromReader,
 // which strips the `{"_schema":…}` header the remote emits via the
 // v4.41.2 schema-aware JSONL fallback). Downstream local stages
 // see the same wire shape they would in the v4.27 baseline path.
@@ -297,6 +311,19 @@ func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []strin
 	// `ssql generate go` regardless. ssql_gpu vs ssql is a runtime
 	// choice on the remote, not something the generator picks.
 
+	code, imports, params := sshScriptLandingCode(host, path, pipelineArgs, "records")
+	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag.Params = params
+	return lib.WriteCodeFragment(frag)
+}
+
+// sshScriptLandingCode renders the Record-mode landing for a
+// pushed-down SSH pipeline: ship the embedded .ssql script to the
+// remote, run it there via `ssql generate go -script -mode … -run`,
+// and stream the remote JSONL into outVar as iter.Seq[ssql.Record].
+// Shared by the record generator (outVar "records") and the typed
+// generator (outVar "recordsRaw", converted downstream).
+func sshScriptLandingCode(host, path string, pipelineArgs []string, outVar string) (string, []string, []lib.CodeParam) {
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
 	script := buildRemoteSSQLScript(path, pipelineGroups)
 	remoteMode := pipelineModeFromEnv()
@@ -334,12 +361,10 @@ func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []strin
 		os.Exit(1)
 	}
 	defer sshCmd.Wait()
-	records := ssql.ReadJSONLFromReader(sshStdout)`, scriptLiteral, remoteMode)
+	%s := ssql.ReadJSONLFromReader(sshStdout)`, scriptLiteral, remoteMode, outVar)
 
 	imports := []string{"fmt", "os", "os/exec", "strings", "time"}
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
-	frag.Params = params
-	return lib.WriteCodeFragment(frag)
+	return code, imports, params
 }
 
 // pipelineModeFromEnv returns the canonical mode name to pass to the

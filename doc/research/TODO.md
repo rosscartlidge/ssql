@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-08-15
+Last modified: 2026-08-18
 
 [Back to Index](./README.md)
 
@@ -87,6 +87,10 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Merge catalog predicate/aggregation pushdown** — same pattern for `merge -catalog`
 - [x] **SSH pushdown with expressions** — already works. The pushdown rule copies all `where` args (including `-if-expr`) wholesale.
 
+## Performance
+
+- [ ] **Switch remaining `ReadJSONFromReader` call sites to the schema-cached `ReadJSONLFromReader`** — the old reader does `json.Unmarshal` per line with per-record schema construction (the #1 perf rule violation); switching the `from ssh` codegen landing was a 4× end-to-end win on a 3M-row pipeline (22.7s→5.7s record, 20.7s→4.9s typed; DFC109 benchmark). Remaining sites: `from_json.go` stdin codegen and `aux_input.go` `.json` side-inputs — both need a decision on JSON-array vs JSONL semantics first (the old reader silently skips non-JSONL lines).
+
 ## Unified Typed Mode (see typed-auto-parallel-proposal.md, mixed-mode-pipelines-proposal.md)
 
 - [x] **Phase A — typed-mode planner + auto-parallel selection** (v4.39.0). Per-fragment Capabilities + Shape; planner picks Stream[T] vs iter.Seq[T] per pipeline stage; `generate go -explain` shows decisions; 24-pipeline regression corpus across record/typed/parallel modes.
@@ -97,8 +101,8 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Heap top-k in typed mode** (v4.53.0). `typed.TopBy`/`BottomBy` (bounded heap, O(N·log K)/O(K)) + parallel `typed.TopByParallel`/`BottomByParallel` (per-shard heap, merge survivors). `top` codegen now emits these via dual templates instead of desugaring to `SortByDesc`+`Limit` (was `SerialOnly` and O(N·log N)/O(N)); `from | top` stays parallel. Found because `generate go -mode typed` on `top` emitted a full sort. Also: `generate go -mode` gained a value completer (record/typed).
 - [x] **`group-by -rollup`/`-cube` under SSQL_MODE=typed** — SHIPPED 2026-08-11: ejects to the record `ssql.Rollup` path via the Phase B typed→Record boundary (typed/parallel upstream kept; reason under `-explain`). Was a hard error. Native typed rollup (derived struct with per-grouping-set prefixed fields + multi-pass GroupBy) remains possible if profiling ever shows the record stage hot — estimate 1-2 days; not worth it speculatively since rollup input is usually post-reduction.
 - [ ] **typed.TeeFile** — `ssql tee` currently ejects typed pipelines to Record at the tee (Phase B boundary), losing downstream parallelism. A `typed.TeeFile[T]` (dual-template, per-shard buffers like the CSV sink) would keep the stream typed. Small; do when a real pipeline hits the eject cost.
-- [ ] **Phase C — Record→typed reverse adapter via `--into MyStruct` hint**. Lets pipelines like `from ssh ... | ssql where -if x gt 5 --into MyRow | typed group-by ...` work. Estimate: ~1 week.
-- [ ] **Phase D (deferred indefinitely)** — Record→Stream[T] (parallel typed source from a Record stream). Useful but no critical path.
+- [x] **Phase C — Record→typed reverse adapter** — shipped for `from ssh` (both forms) via generate-time schema sampling, NOT the `--into MyStruct` hint (superseded by DFC109: sample the remote `_schema` header, synthesize the struct, convert via `typed.FromRecords`/`FromRecordsParallel`). Remaining Record-only sources (`from catalog`) still eject; mid-pipeline re-entry (after `pivot` etc.) waits on schema-shadow types.
+- [x] **Phase D (Record→Stream[T])** — collapsed into Phase C for ssh sources: `typed.FromRecordsParallel` materializes + `ParallelFromSlice` (DFC109). A streaming (non-materializing) Record→Stream[T] remains unbuilt and unneeded.
 - [x] **mmap CSV reader** — SHIPPED 2026-08-11 (`internal/mmap` → `typed.ReadCSVParallel`; GC-cleanup lifetime). Measured on the Ultra 9: raw slurp 1.16–1.25× faster, full-pipeline wall NEUTRAL (parse-dominated at 24T — the proposal's 1.7–1.9× was the old workstation), but peak RSS drops by ~the input size (3.0→2.07 GB on 1.15 GB input) — the robust win. `ReadDelimParallel` deliberately NOT converted: its splitLineAlias strings alias the buffer and the GC can't trace into a mapping (dangling strings after unmap for materializing pipelines). Results appended to the proposal doc. (original: Replacing `os.ReadFile` with `mmap` in `typed.ReadCSVParallel` / `ReadDelimParallel` measured 1.7-1.9× faster slurp on a 1.23 GB CSV (~0.79s → ~0.56s wall on the headline parallel-CSV path). Helper: linux/darwin amd64/arm64 use real mmap; Windows/386/wasi fall back to os.ReadFile. Add MADV_DONTDUMP. Document SIGBUS risk for files modified during use. Estimate: ~half-day.)
 - [x] **Remote Go execution Phase A — interactive `-remote` flag** (v4.41.0). Shipped with the .ssql-script-as-unit framing; replaced by codegen-symmetric path in v4.42 (see below).
 - [x] **Remote Go execution Phase B — codegen-symmetric pushdown** (v4.42.0). Codegen-symmetric ssh pushdown for `from ssh`. Whatever mode the local pipeline runs in, the remote runs in too. Generated Go embeds the `.ssql` script as a const, ships+runs via ssh.

@@ -314,3 +314,49 @@ func (c *colInfer) resolve() string {
 		return "string"
 	}
 }
+
+// TypedSchemaFromHeader builds a TypedSchema from a JSONL `_schema`
+// header (field order + wire types), for Record-mode sources entering
+// typed codegen (DFC109 — e.g. `from ssh` under SSQL_MODE=typed). The
+// header comes from sampling the source at generate time, so unlike
+// [SampleCSVSchema] there is no value inference: the wire types are
+// authoritative.
+//
+// Wire→Go mapping: int→int64, float→float64, bool→bool,
+// string→string. Any other wire type (notably "any") is an error —
+// the caller must fail loudly rather than guess (a wrong struct field
+// silently drops every value via GetOr's default).
+func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, error) {
+	if s == nil || len(s.Fields) == 0 {
+		return nil, "", fmt.Errorf("typed schema from header: empty schema")
+	}
+	fields := make([]TypedSchemaField, len(s.Fields))
+	usedNames := make(map[string]int, len(s.Fields))
+	for i, name := range s.Fields {
+		var goType string
+		switch s.Types[name] {
+		case "int":
+			goType = "int64"
+		case "float":
+			goType = "float64"
+		case "bool":
+			goType = "bool"
+		case "string":
+			goType = "string"
+		default:
+			return nil, "", fmt.Errorf(
+				"typed schema from header: field %q has wire type %q — cannot map to a Go type (run with SSQL_MODE=record)",
+				name, s.Types[name])
+		}
+		gn := goNameFromColumn(name)
+		if usedNames[gn] > 0 {
+			usedNames[gn]++
+			gn = fmt.Sprintf("%s%d", gn, usedNames[gn])
+		} else {
+			usedNames[gn] = 1
+		}
+		fields[i] = TypedSchemaField{Name: name, GoName: gn, GoType: goType}
+	}
+	schema := &TypedSchema{TypeName: typeName, Fields: fields}
+	return schema, RenderStructDef(schema), nil
+}

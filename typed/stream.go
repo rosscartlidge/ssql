@@ -166,6 +166,12 @@ func ParallelFromSlice[T any](data []T, n int) Stream[T] {
 	chunkSize := (len(data) + n - 1) / n // round up
 	for i := 0; i < n; i++ {
 		lo := i * chunkSize
+		if lo > len(data) {
+			// Round-up chunking can push later shards past the end
+			// entirely (e.g. 50 rows / 24 shards → chunkSize 3 →
+			// shard 17 starts at 51). Those shards are empty.
+			lo = len(data)
+		}
 		hi := lo + chunkSize
 		if hi > len(data) {
 			hi = len(data)
