@@ -115,6 +115,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC105 | 2026-08-10 | 2026-08-10 | [Converging the Flag-Condition and Expression Lowerings](./flag-expr-convergence.md) |
 | DFC106 | 2026-08-12 | 2026-08-12 | [DFC Conventions for Research Documents](./dfc106_dfc_conventions.md) |
 | DFC107 | 2026-08-16 | 2026-08-16 | [Explore on the Playground Engine (retire the TinyGo mini-engine)](./dfc107_explore_on_playground_engine.md) |
+| DFC108 | 2026-08-18 | 2026-08-18 | [Split Pipelines: Server Head, Browser Tail](./dfc108_split_pipelines_server_browser.md) |
 
 <!-- DFC-INDEX-END -->
 
