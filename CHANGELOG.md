@@ -1334,7 +1334,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multi-step push-down: `-- where -if status ge 400 + group-by service -count cnt`
   - Supports local shards (`host=local` or `host=localhost`)
 
-## [Unreleased]
+## [4.65.0] - 2026-08-18
 
 ### Added
 - **Typed pipelines over SSH sources (DFC109)** — `SSQL_MODE=typed`
