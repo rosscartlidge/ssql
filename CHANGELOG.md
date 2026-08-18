@@ -5,7 +5,7 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.64.0] - 2026-08-18
 
 ### Fixed
 - **Explore builder field clicks registered only every second time** — the
@@ -1334,7 +1334,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Multi-step push-down: `-- where -if status ge 400 + group-by service -count cnt`
   - Supports local shards (`host=local` or `host=localhost`)
 
-## [4.64.0] - 2026-08-18
+## [Unreleased]
 
 ### Breaking Changes
 - **Mandatory Schema Headers**: `ssql from` now ALWAYS emits schema headers
