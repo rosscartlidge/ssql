@@ -19,7 +19,9 @@ Usage:
     scripts/dfc.py --stamp   # insert missing blocks, sync dates from git
     scripts/dfc.py --index   # regenerate the DFC table in README.md
     scripts/dfc.py --check   # validate (used by make doc-check); exit 1 on problems
-    scripts/dfc.py --new     # print the next free DFC number
+    scripts/dfc.py --new [TOPIC WORDS...]
+                             # print the next free DFC number; with topic
+                             # words, first docsearch for prior art
 """
 
 import argparse
@@ -210,7 +212,26 @@ def check():
     print(f"DFC: {len(seen)} docs OK")
 
 
-def new():
+def new(topic_words=None):
+    # Prior-art check first: a new DFC for something already tried (or a
+    # doc it should supersede) is exactly what docsearch exists to catch.
+    if topic_words:
+        query = " ".join(topic_words)
+        hits = None
+        for args in (["-k", "5", query], ["-lexical", "-k", "5", query]):
+            try:
+                r = subprocess.run(
+                    [str(ROOT / "scripts" / "docsearch.sh")] + args,
+                    capture_output=True, text=True, timeout=90)
+                if r.returncode == 0 and r.stdout.strip():
+                    hits = r.stdout.strip()
+                    break
+            except (subprocess.TimeoutExpired, OSError):
+                continue
+        if hits:
+            print(f"Related existing docs for '{query}' — check for prior art or a doc to supersede:")
+            print(hits)
+            print()
     used = [parse_meta(p.read_text())[0] for p in docs()]
     n = max((u for u in used if u), default=0) + 1
     print(f"DFC{n:03d}  (filename: dfc{n:03d}_short_description.md)")
@@ -221,7 +242,8 @@ def main():
     ap.add_argument("--stamp", action="store_true")
     ap.add_argument("--index", action="store_true")
     ap.add_argument("--check", action="store_true")
-    ap.add_argument("--new", action="store_true")
+    ap.add_argument("--new", nargs="*", default=None, metavar="TOPIC_WORD",
+                    help="print next free DFC number; with topic words, first docsearch for prior art")
     a = ap.parse_args()
     if a.stamp:
         stamp()
@@ -229,9 +251,9 @@ def main():
         index()
     if a.check:
         check()
-    if a.new:
-        new()
-    if not (a.stamp or a.index or a.check or a.new):
+    if a.new is not None:
+        new(a.new)
+    if not (a.stamp or a.index or a.check or a.new is not None):
         ap.print_help()
 
 

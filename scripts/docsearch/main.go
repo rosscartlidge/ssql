@@ -310,9 +310,18 @@ func semantic(root string, chunks []chunk, query string) ([]scored, error) {
 				text = text[:6000]
 			}
 			vec, err := embed("search_document: " + text)
+			if err != nil && len(text) > 2000 {
+				// Dense chunks (markdown tables, flag lists) can blow the
+				// model's token window at a byte length prose survives —
+				// retry on a shorter prefix before giving up.
+				vec, err = embed("search_document: " + text[:2000])
+			}
 			if err != nil {
 				// A bad chunk shouldn't kill the semantic layer — skip it
-				// (it simply won't rank semantically this run).
+				// (it simply won't rank semantically this run). Name it so
+				// a persistent failure is diagnosable, not a bare count.
+				fmt.Fprintf(os.Stderr, "note: embed failed for %s:%d (%s): %v\n",
+					chunks[i].File, chunks[i].Line, chunks[i].Heading, err)
 				skipped++
 				continue
 			}

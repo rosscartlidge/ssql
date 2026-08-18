@@ -44,7 +44,7 @@ Keep documentation in sync with API and CLI changes. Key files:
 
 Every `doc/research/*.md` carries a DFC (Doc For Comment) reference — a stable, chronological handle (like an RFC number) for journals, commit messages, and cross-doc references. `scripts/dfc.py` is the tool; `make doc-check` gates it (Check 9).
 
-- **New research doc**: get the number with `scripts/dfc.py --new`; name the file `dfcNNN_short_description.md` (lowercase); put the metadata block right below the `# Title`:
+- **New research doc**: get the number with `scripts/dfc.py --new TOPIC WORDS` (topic words trigger a prior-art docsearch first — read what it surfaces); name the file `dfcNNN_short_description.md` (lowercase); put the metadata block right below the `# Title`:
   ```
   Reference: DFCnnn
   Created: YYYY-MM-DD
@@ -299,7 +299,7 @@ See `claude/gpu-acceleration.md` for benchmarks, build instructions, and detaile
 
 **WARNING: `claude/` files are NOT automatically loaded into context.** If a rule only exists in a `claude/` file and not in this file, it will be ignored. Every critical rule must have at least a one-liner in CLAUDE.md — the `claude/` files provide detailed examples and rationale, not the rules themselves. When adding new conventions to `claude/` files, always add the corresponding rule here too.
 
-**Searching the docs and journals:** `scripts/docsearch.sh 'your query'` — hybrid BM25 + embedding (local ollama nomic-embed-text) search over `doc/`, `claude/`, `journal/` and root docs, returning ranked `file:line` chunks. Use it BEFORE designing anything that smells like it may have been tried, decided, or measured before — concept queries work ("avoid copying file into memory" finds the mmap work without the word mmap). `-lexical` skips embeddings (works without ollama); first run after doc changes re-embeds only changed chunks. Cache is `.docsearch-cache.jsonl` (gitignored).
+**Searching the docs and journals:** `scripts/docsearch.sh 'your query'` — hybrid BM25 + embedding (local ollama nomic-embed-text) search over `doc/`, `claude/`, `journal/` and root docs, returning ranked `file:line` chunks. Concept queries work ("avoid copying file into memory" finds the mmap work without the word mmap); grep only wins when you already know the identifier. Use it at these moments, not just when something "smells" prior-art: (1) on startup, after the journal, for the session's task topic; (2) before writing any DFC — `scripts/dfc.py --new TOPIC WORDS` does this automatically and prints related docs with the number; (3) before answering any "why did we / have we ever" question; (4) before designing anything that may have been tried, decided, or measured before. A `UserPromptSubmit` hook (`scripts/docsearch-hook.sh`, registered in `.claude/settings.local.json`) also injects top hits for substantive prompts automatically — treat them as hints. `-lexical` skips embeddings (works without ollama); first run after doc changes re-embeds only changed chunks. Cache is `.docsearch-cache.jsonl` (gitignored).
 
 **The journal is equally important.** It contains recent decisions, what was tried, what worked, what didn't, and what's in progress. Without reading it, you risk re-solving solved problems, contradicting recent decisions, or duplicating work. Always read the latest entry on startup (see "On Startup" above).
 
