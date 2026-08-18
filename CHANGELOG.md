@@ -1561,7 +1561,6 @@ land new entries here by mistake.
 - Comprehensive test suite
 
 [v4.27.0]: https://github.com/rosscartlidge/ssql/compare/v4.6.2...v4.27.0
-[Unreleased]: https://github.com/rosscartlidge/ssql/compare/v4.27.0...HEAD
 [v4.6.2]: https://github.com/rosscartlidge/ssql/compare/v4.6.1...v4.6.2
 [v4.6.1]: https://github.com/rosscartlidge/ssql/compare/v4.6.0...v4.6.1
 [v4.6.0]: https://github.com/rosscartlidge/ssql/compare/v4.5.1...v4.6.0
