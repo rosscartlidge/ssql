@@ -28,12 +28,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -83,6 +86,12 @@ func startServeHTTP(ctx context.Context, o serveHTTPOptions) (string, <-chan err
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		serveIndex(w, r, o)
+	})
+	mux.HandleFunc("GET /explore", func(w http.ResponseWriter, r *http.Request) {
+		serveExplorePage(w, r, o)
+	})
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status": "ok", "version": version.Version, "dir": o.Dir,
@@ -272,43 +281,10 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 		defer cancel()
 	}
 
-	// Per-stage stderr buffers: a shared bytes.Buffer would be a data
-	// race with stages writing concurrently.
-	stderrs := make([]bytes.Buffer, len(stages))
-	collectStderr := func() string {
-		var parts []string
-		for i := range stderrs {
-			if t := strings.TrimSpace(stderrs[i].String()); t != "" {
-				parts = append(parts, t)
-			}
-		}
-		return strings.Join(parts, "\n")
-	}
-	cmds := make([]*exec.Cmd, len(stages))
-	for i, args := range stages {
-		cmds[i] = exec.CommandContext(ctx, self, args...)
-		cmds[i].Dir = o.Dir
-		cmds[i].Stderr = &stderrs[i]
-		if i > 0 {
-			pipe, err := cmds[i-1].StdoutPipe()
-			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-				return
-			}
-			cmds[i].Stdin = pipe
-		}
-	}
-	last := cmds[len(cmds)-1]
-	out, err := last.StdoutPipe()
+	ch, err := startStageChain(ctx, self, o.Dir, stages)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
-	}
-	for _, c := range cmds {
-		if err := c.Start(); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
 	}
 
 	w.Header().Set("Trailer", "X-Ssql-Exit-Code, X-Ssql-Error")
@@ -322,28 +298,17 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	var n int
 	var readErr error
 	for {
-		n, readErr = out.Read(buf)
+		n, readErr = ch.out.Read(buf)
 		if n > 0 || readErr != nil {
 			break
 		}
 	}
 	firstChunk := buf[:n]
 
-	waitAll := func() error {
-		var firstErr error
-		for _, c := range cmds {
-			if err := c.Wait(); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		}
-		return firstErr
-	}
-
 	if n == 0 {
-		runErr := waitAll()
-		if runErr != nil {
+		if runErr := ch.wait(); runErr != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-				"error": "pipeline failed", "detail": collectStderr(),
+				"error": "pipeline failed", "detail": ch.stderr(),
 			})
 			return
 		}
@@ -358,15 +323,74 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 		f.Flush()
 	}
 	if readErr == nil { // more output than one buffer
-		io.Copy(&flushingWriter{w: w}, out)
+		io.Copy(&flushingWriter{w: w}, ch.out)
 	}
-	runErr := waitAll()
-	if runErr != nil {
+	if runErr := ch.wait(); runErr != nil {
 		w.Header().Set("X-Ssql-Exit-Code", "1")
-		w.Header().Set("X-Ssql-Error", firstLine(collectStderr()))
+		w.Header().Set("X-Ssql-Error", firstLine(ch.stderr()))
 	} else {
 		w.Header().Set("X-Ssql-Exit-Code", "0")
 	}
+}
+
+// stageChain is a started pipeline of self-exec stages with per-stage
+// stderr capture (a shared buffer would be a data race).
+type stageChain struct {
+	cmds    []*exec.Cmd
+	stderrs []bytes.Buffer
+	out     io.ReadCloser // last stage's stdout
+}
+
+// startStageChain wires and starts `self stage[0] | self stage[1] | …`
+// in dir under ctx.
+func startStageChain(ctx context.Context, self, dir string, stages [][]string) (*stageChain, error) {
+	ch := &stageChain{stderrs: make([]bytes.Buffer, len(stages))}
+	ch.cmds = make([]*exec.Cmd, len(stages))
+	for i, args := range stages {
+		ch.cmds[i] = exec.CommandContext(ctx, self, args...)
+		ch.cmds[i].Dir = dir
+		ch.cmds[i].Stderr = &ch.stderrs[i]
+		if i > 0 {
+			pipe, err := ch.cmds[i-1].StdoutPipe()
+			if err != nil {
+				return nil, err
+			}
+			ch.cmds[i].Stdin = pipe
+		}
+	}
+	out, err := ch.cmds[len(ch.cmds)-1].StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	ch.out = out
+	for _, c := range ch.cmds {
+		if err := c.Start(); err != nil {
+			return nil, err
+		}
+	}
+	return ch, nil
+}
+
+// wait waits for every stage; the first stage error (if any) wins.
+func (ch *stageChain) wait() error {
+	var firstErr error
+	for _, c := range ch.cmds {
+		if err := c.Wait(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// stderr joins the non-empty per-stage stderr captures.
+func (ch *stageChain) stderr() string {
+	var parts []string
+	for i := range ch.stderrs {
+		if t := strings.TrimSpace(ch.stderrs[i].String()); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 type flushingWriter struct{ w http.ResponseWriter }
@@ -431,4 +455,125 @@ func serveCursor(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stdout": stdout.String(), "stderr": stderr.String(), "code": code,
 	})
+}
+
+// listDataFiles returns the data files (by extension) in dir, sorted.
+func listDataFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && serveDataExtensions[strings.ToLower(filepath.Ext(e.Name()))] {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// serveIndex renders a minimal landing page: the served directory's
+// data files, each linking to its explore workspace. Any configured
+// token is threaded through the links (the Jupyter ?token= pattern).
+func serveIndex(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
+	names, err := listDataFiles(o.Dir)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	tokenQ := ""
+	if o.Token != "" {
+		tokenQ = "&token=" + url.QueryEscape(o.Token)
+	}
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>ssql serve</title>
+<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:3rem auto;padding:0 1rem}
+li{margin:.4rem 0}code{background:#eee;padding:1px 5px;border-radius:3px}</style></head><body>
+<h1>ssql serve</h1><p>Data files in <code>` + html.EscapeString(o.Dir) + `</code> — click one to open its explore workspace:</p><ul>`)
+	for _, n := range names {
+		esc := html.EscapeString(n)
+		b.WriteString(`<li><a href="/explore?file=` + url.QueryEscape(n) + tokenQ + `">` + esc + `</a></li>`)
+	}
+	b.WriteString(`</ul><p>Or run a head pipeline server-side and explore its result:<br>
+<code>/explore?pipeline=` + html.EscapeString(url.QueryEscape("ssql from FILE.csv | ssql where -if …")) + `</code></p>
+<p>API: <code>POST /api/execute</code> · <code>POST /api/cursor</code> · <code>GET /api/files</code> · <code>GET /api/health</code></p>
+</body></html>`)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(b.String()))
+}
+
+// serveExplorePage runs `<head pipeline> | ssql to explore TMP` through
+// the stage chain and serves the generated workspace — byte-identical
+// to a locally generated `to explore` artifact (wasm engine included on
+// full builds; slim serve builds degrade to the light viewer). ?file=X
+// is shorthand for the head `ssql from X` and is allow-listed against
+// the directory listing; ?pipeline=… goes through the same strict
+// tokenizer as /api/execute.
+func serveExplorePage(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
+	var stages [][]string
+	var title string
+	switch {
+	case r.URL.Query().Get("file") != "":
+		file := r.URL.Query().Get("file")
+		names, err := listDataFiles(o.Dir)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !slices.Contains(names, file) {
+			writeJSON(w, http.StatusNotFound, map[string]any{
+				"error": fmt.Sprintf("%q is not a data file in the served directory", file)})
+			return
+		}
+		stages = [][]string{{"from", file}}
+		title = file
+	case r.URL.Query().Get("pipeline") != "":
+		var err error
+		stages, err = splitServePipeline(r.URL.Query().Get("pipeline"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		title = "pipeline result"
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "need ?file=NAME or ?pipeline=ssql …"})
+		return
+	}
+
+	tmp, err := os.CreateTemp("", "ssql-serve-explore-*.html")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	tmpPath := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpPath)
+	stages = append(stages, []string{"to", "explore", "-title", title, tmpPath})
+
+	self, err := os.Executable()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	ctx := r.Context()
+	if o.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, o.Timeout)
+		defer cancel()
+	}
+	ch, err := startStageChain(ctx, self, o.Dir, stages)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	io.Copy(io.Discard, ch.out) // "Explorer created" notice
+	if runErr := ch.wait(); runErr != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error": "pipeline failed", "detail": ch.stderr(),
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	http.ServeFile(w, r, tmpPath)
 }

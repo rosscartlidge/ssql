@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-08-18
+Last modified: 2026-08-19
 
 [Back to Index](./README.md)
 
@@ -139,7 +139,7 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 
 - [x] **Phase 1 — SSH-CLI operator console** (v4.44.0). `status` / `schema` / `count` / `head [-n N] [-t]` against in-memory dataset. Pubkey auth, multi-user sessions, no per-query startup cost.
 - [x] **Phase 2a — HTTP transport** (2026-08-19, DFC108 stage 2a): `serve -listen-http ADDR -dir DIR` with REST endpoints — `/api/execute` (strict-tokenized pipeline → self-exec stage chain, streamed output, mid-stream failures in X-Ssql-Exit-Code/X-Ssql-Error trailers), `/api/cursor` (cursor-protocol passthrough: completion/help/value-sampling), `/api/files`, `/api/health`. Stateless per-request over -dir (decided over shared serveState); loopback default, non-loopback REFUSES to start without -token; Jupyter-style trust model (-dir is cwd, not a sandbox). Departure from rev-1: self-exec per stage instead of in-process `cli.ExecuteWith` — exec-lane semantics by construction, `execute-matches-direct` is the differential gate.
-- [ ] **Phase 2b — served explore workspace** (DFC108): serve embeds the explore page; bar head stages execute server-side via /api/execute, results land in browser `data.jsonl`; ssql-ui.js completion routed to /api/cursor. Open: browsers read HTTP trailers poorly — may need a buffered-JSON execute mode for error display.
+- [x] **Phase 2b — served explore workspace** (2026-08-19, DFC108 stage 2b): `GET /` lists the served dir's data files; `GET /explore?file=X` (allow-listed) or `?pipeline=…` (strict-tokenized) runs `<head> | ssql to explore TMP` through the 2a stage chain and serves the result — **byte-identical to a local `to explore` artifact** (gated by `TestServeExplorePage/explore-file-is-the-artifact`, sabotage-verified). The head runs server-side at page-generation time; the page's bar/builder/grid run the wasm tail locally as shipped. Deliberately NOT in 2b (moved to 2c, where the divider owns them): re-running the head without a page reload, and routing bar completion for head stages to /api/cursor. Trailer-reading concern also moves to 2c.
 - [ ] **Phase 2c — the split proper** (DFC108): divider in the bar, local wasm re-runs for tail edits, cut-point equivalence gate.
 - [ ] **serve HTTP hardening (post-2a)**: `-readonly` (gate `to FILE`/`tee` writers), concurrent-execute semaphore, WebSocket/SSE variant if 2b needs push.
 

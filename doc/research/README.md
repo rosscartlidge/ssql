@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-08-18 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-08-19 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -86,7 +86,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC076 | 2026-04-08 | 2026-04-08 | [Awesome Go PR](./awesome-go-pr.md) |
 | DFC077 | 2026-04-08 | 2026-04-08 | [Golang Weekly Submission](./golang-weekly-submission.md) |
 | DFC078 | 2026-04-08 | 2026-04-08 | [Reddit Post Drafts](./reddit-drafts.md) |
-| DFC079 | 2026-04-09 | 2026-05-13 | [ssql serve — Browser UI with Native Backend](./ssql-serve-proposal.md) |
+| DFC079 | 2026-04-09 | 2026-08-19 | [ssql serve — Browser UI with Native Backend](./ssql-serve-proposal.md) |
 | DFC080 | 2026-04-09 | 2026-04-11 | [WASI Build — Portable WebAssembly Binary](./wasi-build.md) |
 | DFC081 | 2026-04-26 | 2026-04-28 | [`ssql generate go -typed` — Phase 2 Proposal](./typed-codegen-proposal.md) |
 | DFC082 | 2026-04-26 | 2026-04-27 | [`ssql/typed` — Concurrency Proposal](./typed-concurrency-proposal.md) |

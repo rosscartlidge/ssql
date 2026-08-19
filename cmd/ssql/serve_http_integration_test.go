@@ -234,3 +234,81 @@ func execBashIn(dir, cmdline string) (string, error) {
 	}
 	return out.String(), nil
 }
+
+func TestServeExplorePage(t *testing.T) {
+	addr := startServeHTTPProcess(t)
+	base := "http://" + addr
+
+	t.Run("index-lists-files", func(t *testing.T) {
+		resp, err := http.Get(base + "/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !strings.Contains(string(b), "employees.csv") || !strings.Contains(string(b), "/explore?file=") {
+			t.Errorf("index missing file links: %.300s", b)
+		}
+	})
+
+	t.Run("explore-file-is-the-artifact", func(t *testing.T) {
+		resp, err := http.Get(base + "/explore?file=employees.csv")
+		if err != nil {
+			t.Fatal(err)
+		}
+		served, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+		// The served workspace must be byte-identical to a locally
+		// generated `to explore` artifact — serve adds no second
+		// implementation of anything.
+		bin, data := corpusBin(t), corpusData(t)
+		local := t.TempDir() + "/local.html"
+		if _, err := execBashIn(data, fmt.Sprintf(
+			"%s from employees.csv | %s to explore -title employees.csv %s", bin, bin, local)); err != nil {
+			t.Fatalf("local artifact: %v", err)
+		}
+		want, err := exec.Command("cat", local).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(served, want) {
+			t.Errorf("served page differs from local artifact (served %d bytes, local %d bytes)",
+				len(served), len(want))
+		}
+	})
+
+	t.Run("explore-pipeline-head-runs-server-side", func(t *testing.T) {
+		resp, err := http.Get(base + "/explore?pipeline=" +
+			"ssql%20from%20employees.csv%20%7C%20ssql%20where%20-if%20dept%20eq%20Engineering")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("status %d: %.300s", resp.StatusCode, b)
+		}
+		s := string(b)
+		if !strings.Contains(s, "Engineering") || strings.Contains(s, `"Sales"`) {
+			t.Error("head pipeline did not filter server-side")
+		}
+	})
+
+	t.Run("explore-rejects-traversal", func(t *testing.T) {
+		resp, body := func() (*http.Response, string) {
+			resp, err := http.Get(base + "/explore?file=..%2F..%2Fetc%2Fpasswd")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return resp, string(b)
+		}()
+		if resp.StatusCode != 404 {
+			t.Errorf("status %d body %s", resp.StatusCode, body)
+		}
+	})
+}
