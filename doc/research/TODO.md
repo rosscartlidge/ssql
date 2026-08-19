@@ -138,7 +138,10 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 ## ssql serve (see ssql-serve-proposal.md rev 2)
 
 - [x] **Phase 1 — SSH-CLI operator console** (v4.44.0). `status` / `schema` / `count` / `head [-n N] [-t]` against in-memory dataset. Pubkey auth, multi-user sessions, no per-query startup cost.
-- [ ] **Phase 2 — HTTP+WebSocket+browser UI** (the original rev-1 design). `-listen-http :8080` alongside `-listen-ssh :2222`; shared `serveState`; embedded UI with charts, file browser, pipeline editor; REST endpoints per rev-1. ~1 week for core server, ~1 week for UI polish — shorter than rev-1 thought because the dataset-cache and `cli.Complete`/`cli.ExecuteWith` plumbing is already done.
+- [x] **Phase 2a — HTTP transport** (2026-08-19, DFC108 stage 2a): `serve -listen-http ADDR -dir DIR` with REST endpoints — `/api/execute` (strict-tokenized pipeline → self-exec stage chain, streamed output, mid-stream failures in X-Ssql-Exit-Code/X-Ssql-Error trailers), `/api/cursor` (cursor-protocol passthrough: completion/help/value-sampling), `/api/files`, `/api/health`. Stateless per-request over -dir (decided over shared serveState); loopback default, non-loopback REFUSES to start without -token; Jupyter-style trust model (-dir is cwd, not a sandbox). Departure from rev-1: self-exec per stage instead of in-process `cli.ExecuteWith` — exec-lane semantics by construction, `execute-matches-direct` is the differential gate.
+- [ ] **Phase 2b — served explore workspace** (DFC108): serve embeds the explore page; bar head stages execute server-side via /api/execute, results land in browser `data.jsonl`; ssql-ui.js completion routed to /api/cursor. Open: browsers read HTTP trailers poorly — may need a buffered-JSON execute mode for error display.
+- [ ] **Phase 2c — the split proper** (DFC108): divider in the bar, local wasm re-runs for tail edits, cut-point equivalence gate.
+- [ ] **serve HTTP hardening (post-2a)**: `-readonly` (gate `to FILE`/`tee` writers), concurrent-execute semaphore, WebSocket/SSE variant if 2b needs push.
 
 ## Adoption (see adoption-plan.md)
 

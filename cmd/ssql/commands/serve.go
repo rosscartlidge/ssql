@@ -47,14 +47,15 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("Run an SSH-accessible operator console serving an in-memory dataset").
 		ClauseDescription("Loads PATH at startup, then accepts SSH connections that run a small ssql CLI against the loaded data with no per-query startup cost").
 		Example("ssql serve data.csv -listen :2222 -authorized-keys ./keys", "Default serve loopback-open").
+		Example("ssql serve -listen-http 127.0.0.1:8080 -dir /data", "HTTP protocol: per-request pipelines over /data").
+		Example("ssql serve -listen-http 0.0.0.0:8080 -dir /data -token SECRET", "HTTP on all interfaces (token required)").
 		Example("ssql serve data.csv -listen 127.0.0.1:2222 -host-key ./host_key -authorized-keys ./keys", "Bind loopback-only").
 
 		Flag("PATH").
 			String().
-			Required().
 			Completer(&cf.FileCompleter{Pattern: "*"}).
 			Global().
-			Help("Dataset to load into memory (CSV / JSON / JSONL — autodetected by extension)").
+			Help("Dataset to load into memory for the SSH protocol (CSV / JSON / JSONL — autodetected by extension). Optional when -listen-http is given").
 			Done().
 
 		Flag("-listen").
@@ -86,6 +87,34 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Welcome banner shown on session connect").
 			Done().
 
+		Flag("-listen-http").
+			String().
+			Global().
+			Default("").
+			Help("HTTP listen address (e.g. 127.0.0.1:8080) — enables the REST protocol (execute/cursor/files/health)").
+			Done().
+
+		Flag("-dir").
+			String().
+			Global().
+			Default(".").
+			Help("Working directory for HTTP pipelines and /api/files (NOT a sandbox — see -token)").
+			Done().
+
+		Flag("-token").
+			String().
+			Global().
+			Default("").
+			Help("Bearer token for the HTTP protocol; REQUIRED when -listen-http binds a non-loopback address").
+			Done().
+
+		Flag("-http-timeout").
+			Int().
+			Global().
+			Default(300).
+			Help("Per-request wall-clock limit in seconds for HTTP pipeline execution").
+			Done().
+
 		Flag("-session-dir").
 			String().
 			Global().
@@ -101,9 +130,53 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			authKeys, _ := ctx.GlobalFlags["-authorized-keys"].(string)
 			welcome, _ := ctx.GlobalFlags["-welcome"].(string)
 			sessionDir, _ := ctx.GlobalFlags["-session-dir"].(string)
+			listenHTTP, _ := ctx.GlobalFlags["-listen-http"].(string)
+			httpDir, _ := ctx.GlobalFlags["-dir"].(string)
+			token, _ := ctx.GlobalFlags["-token"].(string)
+			httpTimeout, _ := ctx.GlobalFlags["-http-timeout"].(int)
+
+			if path == "" && listenHTTP == "" {
+				return fmt.Errorf("ssql serve: need a dataset PATH (SSH protocol), -listen-http ADDR (HTTP protocol), or both")
+			}
+
+			rootCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// Honour Ctrl-C / SIGTERM for graceful shutdown.
+			sigs := make(chan os.Signal, 1)
+			signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigs
+				fmt.Fprintln(ctx.Stderr(), "ssql serve: shutting down…")
+				cancel()
+			}()
+
+			var httpDone <-chan error
+			if listenHTTP != "" {
+				var err error
+				_, httpDone, err = startServeHTTP(rootCtx, serveHTTPOptions{
+					Addr:    listenHTTP,
+					Dir:     httpDir,
+					Token:   token,
+					Timeout: time.Duration(httpTimeout) * time.Second,
+					Stderr:  ctx.Stderr(),
+				})
+				if err != nil {
+					return err
+				}
+			}
 
 			if path == "" {
-				return fmt.Errorf("ssql serve: PATH required")
+				// HTTP-only mode: block until shutdown or server error.
+				select {
+				case err := <-httpDone:
+					if rootCtx.Err() != nil {
+						return nil // graceful shutdown
+					}
+					return err
+				case <-rootCtx.Done():
+					return nil
+				}
 			}
 
 			srv, err := loadServerDataset(path)
@@ -119,18 +192,6 @@ func RegisterServe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			cli := buildServeCLI()
-
-			rootCtx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			// Honour Ctrl-C / SIGTERM for graceful shutdown.
-			sigs := make(chan os.Signal, 1)
-			signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-			go func() {
-				<-sigs
-				fmt.Fprintln(ctx.Stderr(), "ssql serve: shutting down…")
-				cancel()
-			}()
 
 			return autossh.Serve(rootCtx, cli, autossh.Options{
 				Addr:           listen,

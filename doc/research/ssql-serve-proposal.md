@@ -18,7 +18,7 @@ one daemon**.
 | Variant | Shipped | Module | Audience | Notes |
 | --- | --- | --- | --- | --- |
 | **SSH-CLI** | ✅ v4.44.0 | `cmd/ssql/commands/serve.go` | power users at a terminal | `status` / `schema` / `count` / `head` against in-memory data; pubkey auth; multi-user sessions |
-| **HTTP+WebSocket+UI** | ⏳ proposed (rev-1 design below) | future | browser users wanting charts + visual exploration | the entire rev-1 design from "Tier 2" onward, now layered on the Phase-1 shared infrastructure |
+| **HTTP+WebSocket+UI** | 🔶 transport shipped (Phase 2a, 2026-08-19 — `-listen-http`, /api/execute + /api/cursor + /api/files + /api/health; see DFC108 and `cmd/ssql/commands/serve_http.go`); UI is Phase 2b | browser users wanting charts + visual exploration | executes via per-stage self-exec (exec-lane semantics), NOT `cli.ExecuteWith` — rev-1's open question resolved as its option 2, processes instead of io.Pipe |
 
 ### Dual-protocol design (rev 2)
 
