@@ -5,6 +5,37 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.66.0] - 2026-08-19
+
+### Added
+- **`ssql serve` HTTP protocol (DFC108 / DFC079 Phase 2)** — `ssql serve
+  -listen-http ADDR -dir DIR` serves stateless per-request pipelines:
+  - `POST /api/execute` — `{"pipeline": "ssql … | ssql …"}` streamed, or
+    `?mode=buffered` for a JSON envelope. Strict no-shell tokenizer:
+    redirection, process substitution, backticks, `$()`, `;`/`&` are
+    loud errors. Per-stage self-exec — exec-lane semantics exactly.
+  - `POST /api/cursor` — completion/help/value-sampling over HTTP.
+  - `GET /` and `GET /explore?file=X|?pipeline=…` — the served explore
+    workspace, byte-identical to a local `to explore` artifact, with the
+    head pipeline run server-side at page-generation time.
+  - Loopback by default; refuses non-loopback bind without `-token`.
+- **The split pipeline divider** — in a served workspace, a head input
+  appears above the pipeline bar: the head (including `from ssh …
+  -- pushdown`) runs on the server, its result replaces the page's
+  `data.jsonl`, and the local wasm tail re-runs instantly. Cut-point
+  equivalence is gated: splitting a pipeline at any stage must produce
+  the same result as running it in one place.
+
+### Fixed
+- **`from`/`tee` no longer alphabetize field order** — JSONL output now
+  preserves the record's own column order across wire hops (`tee
+  out.jsonl` → `from out.jsonl` used to scramble columns; visible in
+  `to table`/`to csv` column order). Found by the new cut-point
+  equivalence gate.
+- **`update -set-expr` schema header typed numeric results as
+  `string`** — the new field's type is now refined from the first
+  computed value.
+
 ## [4.65.0] - 2026-08-18
 
 ### Added
