@@ -47,3 +47,4 @@ Thumbs.db
 default.pgo
 .claude/
 .docsearch-cache.jsonl
+/ssql-playground
