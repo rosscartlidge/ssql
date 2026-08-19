@@ -548,11 +548,14 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInf
 	if len(options.fieldOrder) > 0 {
 		order = options.fieldOrder
 	} else {
-		// Use sorted field names for deterministic output
+		// Record (schema) order, NOT alphabetical: Record.All() is
+		// deterministic since records carry ordered schemas, and the
+		// header must preserve field order across wire hops — the old
+		// sort scrambled column order on every tee/from round-trip
+		// (found by the DFC108 cut-point equivalence gate).
 		for k := range firstRecord.All() {
 			order = append(order, k)
 		}
-		sort.Strings(order)
 	}
 
 	// Infer schema from first record

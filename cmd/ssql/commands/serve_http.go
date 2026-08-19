@@ -273,6 +273,7 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	buffered := r.URL.Query().Get("mode") == "buffered"
 
 	ctx := r.Context()
 	if o.Timeout > 0 {
@@ -284,6 +285,22 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	ch, err := startStageChain(ctx, self, o.Dir, stages)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	if buffered {
+		// Browser mode: fetch() can't read HTTP trailers, so collect
+		// everything and answer in one JSON envelope. Workspace head
+		// runs are snapshot-shaped anyway (the result lands in the
+		// page's data.jsonl); streaming clients keep the default mode.
+		out, _ := io.ReadAll(ch.out)
+		code := 0
+		if runErr := ch.wait(); runErr != nil {
+			code = 1
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"output": string(out), "stderr": ch.stderr(), "code": code,
+		})
 		return
 	}
 

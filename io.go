@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -942,7 +941,12 @@ func ReadJSON(filename string) (iter.Seq[Record], error) {
 	seq := func(yield func(Record) bool) {
 		defer file.Close()
 
-		// Use the io.Reader version
+		// Use the io.Reader version. NOTE: this legacy reader parses
+		// nested arrays/objects into structured values ([]any / map),
+		// unlike ParseJSONLine's JSONString representation — swapping
+		// in ReadJSONLFromReader here breaks that public contract
+		// (TestJSONComplexTypesRoundTrip). The faster reader can only
+		// land together with a nested-type decision; see TODO.
 		for record := range ReadJSONFromReader(file) {
 			if !yield(record) {
 				return
@@ -1129,12 +1133,15 @@ func WriteJSONLWithInferredSchemaToWriter(sb iter.Seq[Record], writer io.Writer)
 		return nil
 	}
 
-	// Build alphabetical field list + types map from the first record.
+	// Field list + types map from the first record, in the record's
+	// own (schema) order — the header must carry field order across
+	// wire hops, not scramble it (alphabetizing here cost column
+	// order on every tee/from round-trip; found by the DFC108
+	// cut-point equivalence gate).
 	fields := make([]string, 0, 16)
 	for k := range first.All() {
 		fields = append(fields, k)
 	}
-	sort.Strings(fields)
 	types := make(map[string]string, len(fields))
 	for _, f := range fields {
 		v, _ := Get[any](first, f)
@@ -2776,10 +2783,11 @@ func TeeFile(filename string, fieldOrder ...string) Filter[Record, Record] {
 					wroteHeader = true
 					fields := fieldOrder
 					if len(fields) == 0 {
+						// Record order, not alphabetical — the header
+						// carries field order across wire hops.
 						for k := range r.All() {
 							fields = append(fields, k)
 						}
-						sort.Strings(fields)
 					}
 					types := make(map[string]string, len(fields))
 					for _, fld := range fields {

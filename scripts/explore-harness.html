@@ -121,7 +121,56 @@ async function run() {
         rec("builder-click-1", click1.includes('-if dept'), click1);
         rec("builder-click-2", click2.includes('-if name'), click2);
         rec("old-string-input-gone", !doc.querySelector('.pipeline-string-input'), "still present");
+        // Server mode (DFC108 2c) must be DORMANT in a standalone
+        // artifact — the head row only appears when the URL carries a
+        // head and /api/health answers. getComputedStyle, not inline
+        // style (the files-bar lesson).
+        rec("server-head-dormant",
+            w.getComputedStyle(doc.getElementById('serverHead')).display === 'none',
+            w.getComputedStyle(doc.getElementById('serverHead')).display);
     } catch (e) { rec("bar", false, String(e)); }
+    // Server-mode flow: load the SAME artifact with ?file=…&srvtest=1
+    // (the test hook skips the /api/health probe) and stub __srvFetch —
+    // head run must land the envelope in data.jsonl and re-run the tail.
+    try {
+        const f2 = document.createElement('iframe');
+        f2.style.cssText = 'width:1200px;height:700px';
+        f2.src = document.getElementById('ex').getAttribute('src') + '?file=remote.csv&srvtest=1';
+        document.body.appendChild(f2);
+        await new Promise(r => f2.addEventListener('load', r, { once: true }));
+        const w2 = f2.contentWindow;
+        for (let i = 0; i < 400; i++) { if (w2.ssqlEngine || w2.ssqlEngineError) break; await pause(50); }
+        const doc2 = w2.document;
+        rec("server-head-visible",
+            w2.getComputedStyle(doc2.getElementById('serverHead')).display !== 'none',
+            w2.getComputedStyle(doc2.getElementById('serverHead')).display);
+        rec("server-head-prefilled",
+            doc2.getElementById('headInput').value === 'ssql from remote.csv',
+            doc2.getElementById('headInput').value);
+        const envelope = {
+            output: '{"_schema":{"fields":["svc","n"],"types":{"svc":"string","n":"int"}}}\n' +
+                    '{"svc":"api","n":41}\n{"svc":"web","n":7}\n',
+            stderr: '', code: 0,
+        };
+        let fetched = null;
+        w2.__srvFetch = (url, opts) => {
+            fetched = { url: String(url), body: opts && opts.body };
+            return Promise.resolve({ ok: true, json: () => Promise.resolve(envelope) });
+        };
+        doc2.getElementById('pipeline').value = 'ssql from data.jsonl | ssql sort n -desc';
+        await w2.exploreRunHead();
+        rec("server-head-posts-pipeline",
+            fetched && fetched.url.includes('/api/execute') && fetched.body.includes('remote.csv'),
+            JSON.stringify(fetched));
+        rec("server-head-feeds-tail", w2.exploreLastRowCount === 2, "rows=" + w2.exploreLastRowCount);
+        // Head failure must surface, not silently keep stale data.
+        w2.__srvFetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ output: '', stderr: 'boom', code: 1 }) });
+        await w2.exploreRunHead();
+        rec("server-head-failure-loud",
+            doc2.getElementById('status').textContent.includes('boom') ||
+            doc2.getElementById('status').textContent.includes('Head failed'),
+            doc2.getElementById('status').textContent);
+    } catch (e) { rec("server-mode", false, String(e)); }
     fin();
 }
 function fin() { document.getElementById('results').textContent = "DONE\n" + out.join("\n"); }

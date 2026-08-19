@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"os"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -311,4 +312,114 @@ func TestServeExplorePage(t *testing.T) {
 			t.Errorf("status %d body %s", resp.StatusCode, body)
 		}
 	})
+}
+
+func TestServeExecuteBufferedMode(t *testing.T) {
+	addr := startServeHTTPProcess(t)
+	base := "http://" + addr
+
+	resp, body := postJSON(t, base+"/api/execute?mode=buffered",
+		map[string]string{"pipeline": "ssql from employees.csv | ssql where -if nosuch eq x"}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var out struct {
+		Output, Stderr string
+		Code           int
+	}
+	json.Unmarshal([]byte(body), &out)
+	if out.Code == 0 || !strings.Contains(out.Stderr, "nosuch") {
+		t.Errorf("buffered failure envelope = %+v", out)
+	}
+
+	_, body2 := postJSON(t, base+"/api/execute?mode=buffered",
+		map[string]string{"pipeline": "ssql from employees.csv | ssql group-by dept -count n | ssql sort dept"}, nil)
+	var ok2 struct {
+		Output string
+		Code   int
+	}
+	json.Unmarshal([]byte(body2), &ok2)
+	if ok2.Code != 0 || !strings.Contains(ok2.Output, `"dept"`) {
+		t.Errorf("buffered success envelope = %+v", ok2)
+	}
+}
+
+// TestServeCutPointEquivalence is the DFC108 seam gate: for every cut
+// of a pipeline, running the head via /api/execute, landing the result
+// as data.jsonl (exactly what the served workspace does), and running
+// the tail locally over it must equal running the whole pipeline in
+// one place. The wire (schema-headed JSONL) must not change results.
+func TestServeCutPointEquivalence(t *testing.T) {
+	addr := startServeHTTPProcess(t)
+	base := "http://" + addr
+	bin, data := corpusBin(t), corpusData(t)
+
+	pipelines := [][]string{
+		{"ssql from employees.csv", "ssql where -if age gt 30", "ssql group-by dept -count n -sum salary total", "ssql sort dept"},
+		{"ssql from employees.csv", "ssql sort salary -desc", "ssql limit 7", "ssql include name salary dept"},
+		{"ssql from employees.csv", "ssql update -set-expr pay 'salary / 12'", "ssql where -if-expr 'pay > 4000'", "ssql sort name"},
+	}
+	for pi, stages := range pipelines {
+		full := strings.Join(stages, " | ")
+		want, err := execBashIn(data, strings.ReplaceAll(full, "ssql ", bin+" "))
+		if err != nil {
+			t.Fatalf("pipeline %d full run: %v", pi, err)
+		}
+		for cut := 1; cut < len(stages); cut++ {
+			t.Run(fmt.Sprintf("p%d-cut%d", pi, cut), func(t *testing.T) {
+				head := strings.Join(stages[:cut], " | ")
+				resp, body := postJSON(t, base+"/api/execute?mode=buffered",
+					map[string]string{"pipeline": head}, nil)
+				if resp.StatusCode != 200 {
+					t.Fatalf("head status %d: %s", resp.StatusCode, body)
+				}
+				var env struct {
+					Output string
+					Code   int
+				}
+				json.Unmarshal([]byte(body), &env)
+				if env.Code != 0 {
+					t.Fatalf("head failed: %s", body)
+				}
+				scratch := t.TempDir()
+				if err := writeFile(scratch+"/data.jsonl", env.Output); err != nil {
+					t.Fatal(err)
+				}
+				tail := bin + " from data.jsonl"
+				for _, st := range stages[cut:] {
+					tail += " | " + strings.Replace(st, "ssql ", bin+" ", 1)
+				}
+				got, err := execBashIn(scratch, tail)
+				if err != nil {
+					t.Fatalf("tail run: %v", err)
+				}
+				if normalizeWireNumerics(got) != normalizeWireNumerics(want) {
+					t.Errorf("cut at %d changed results\n--- split:\n%s--- whole:\n%s", cut, got, want)
+				}
+			})
+		}
+	}
+}
+
+// normalizeWireNumerics folds the _schema header's int/float
+// distinction — the one thing a JSON wire hop cannot preserve (a sum
+// of ints is float64 in-process but its whole values re-infer as int
+// after serialization; values themselves compare exactly). The same
+// normalization the equivalence harness applies. Everything else —
+// field order, field names, every data byte — must survive the seam
+// untouched.
+func normalizeWireNumerics(out string) string {
+	lines := strings.SplitN(out, "\n", 2)
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], `{"_schema"`) {
+		return out
+	}
+	hdr := strings.ReplaceAll(lines[0], `"float"`, `"int"`)
+	if len(lines) == 2 {
+		return hdr + "\n" + lines[1]
+	}
+	return hdr
+}
+
+func writeFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o644)
 }

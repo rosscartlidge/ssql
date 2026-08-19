@@ -3531,6 +3531,12 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
     {{if .WasmEnabled}}
     <div id="pipelineBar" style="position:relative; padding:10px 16px; border-bottom:1px solid var(--border-color); background:var(--panel-bg); font-family:monospace;">
         <div id="status" style="font-size:12px; color:#6c757d; margin-bottom:6px;">Loading engine…</div>
+        <div id="serverHead" style="display:none; gap:6px; align-items:center; margin-bottom:6px;">
+            <span title="Server head — this part runs on the ssql serve host">&#128421;</span>
+            <input id="headInput" spellcheck="false" style="flex:1; font-family:inherit; font-size:13px; padding:6px 8px; box-sizing:border-box; background:var(--bg-color); color:var(--text-color); border:1px solid #6c9bd1; border-radius:4px;">
+            <button id="headRun" style="padding:4px 12px; white-space:nowrap;">Run head &#9656;</button>
+            <span style="opacity:0.6; font-size:12px; white-space:nowrap;">&#9656; data.jsonl</span>
+        </div>
         <textarea id="pipeline" rows="2" spellcheck="false" placeholder="ssql from data.jsonl | …  (suggestions appear as you type; Tab accepts; Alt-h = help)" style="width:100%; font-family:inherit; font-size:13px; padding:8px; box-sizing:border-box; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px;"></textarea>
         <div id="completions" style="position:absolute; display:none; background:var(--panel-bg); border:1px solid #6c9bd1; border-radius:6px; max-height:200px; overflow-y:auto; z-index:1000; font-size:13px; min-width:160px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
         <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -3776,6 +3782,68 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             showCreatedFiles();
             refreshFileList();
         };
+        // Server mode (DFC108 2c). This artifact is byte-identical whether
+        // opened from disk or served by ssql serve — the page decides at
+        // LOAD time: the serve URL carries the head pipeline (?file=X →
+        // "ssql from X"; ?pipeline=…) and /api/health answers same-origin.
+        // In server mode the head input appears fused above the tail bar:
+        // the head runs on the server, its result replaces data.jsonl, and
+        // the local tail re-runs. Two pipeline SEGMENTS with distinct
+        // roles — never two copies of one pipeline (the builder/bar
+        // unification lesson).
+        function srvFetch() { return window.__srvFetch || window.fetch.bind(window); }
+        function srvUrl(path, extra) {
+            const params = new URLSearchParams(extra || '');
+            const token = new URLSearchParams(location.search).get('token');
+            if (token) params.set('token', token);
+            const q = params.toString();
+            return path + (q ? '?' + q : '');
+        }
+        async function exploreDetectServerMode() {
+            const params = new URLSearchParams(location.search);
+            let head = '';
+            if (params.get('file')) head = 'ssql from ' + params.get('file');
+            else if (params.get('pipeline')) head = params.get('pipeline');
+            if (!head) return;
+            if (!params.get('srvtest')) {
+                try {
+                    const r = await srvFetch()(srvUrl('/api/health'));
+                    if (!r.ok) return;
+                } catch (e) { return; }
+            }
+            document.getElementById('headInput').value = head;
+            document.getElementById('serverHead').style.display = 'flex';
+        }
+        window.exploreRunHead = async function() {
+            const head = document.getElementById('headInput').value.trim().replace(/[|\s]+$/, '');
+            if (!head) return;
+            const status = document.getElementById('status');
+            status.textContent = 'Running head on server…';
+            let res;
+            try {
+                const r = await srvFetch()(srvUrl('/api/execute', 'mode=buffered'),
+                    { method: 'POST', body: JSON.stringify({ pipeline: head }) });
+                res = await r.json();
+            } catch (e) {
+                status.textContent = 'Server unreachable: ' + e;
+                return;
+            }
+            if (res.error || res.code !== 0) {
+                status.textContent = 'Head failed: ' + (res.error || res.stderr || 'unknown error');
+                showOutput({ stdout: '', stderr: res.detail || res.stderr || res.error || '', exitCode: 1 }, 'Head pipeline failed');
+                return;
+            }
+            _fsWriteFile('data.jsonl', res.output);
+            status.textContent = 'Head OK — re-running tail…';
+            window.exploreRunBar();
+            status.textContent = window.SSQL_UI_READY_TEXT || 'Ready.';
+        };
+        document.getElementById('headRun').addEventListener('click', () => window.exploreRunHead());
+        document.getElementById('headInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); window.exploreRunHead(); }
+        });
+        exploreDetectServerMode();
+
         document.getElementById('barRun').addEventListener('click', window.exploreRunBar);
         document.getElementById('barHelp').addEventListener('click', () => helpAtCursor());
         document.getElementById('barReset').addEventListener('click', () => {

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"iter"
 	"maps"
 	"strings"
 	"time"
@@ -370,6 +371,48 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 								} else {
 									outputSchema.AddField(upd.field, lib.InferTypeString(parseValue(upd.literal)))
 								}
+							}
+						}
+					}
+				}
+			}
+
+			// Expr-created fields were provisionally labeled string —
+			// refine them from the first record's actual computed value
+			// before the header goes out (a static "string" label lied
+			// for numeric expressions; found by the DFC108 cut-point
+			// equivalence gate). Pull-peek keeps streaming intact.
+			if outputSchema != nil {
+				var exprFields []string
+				for _, clause := range clauses {
+					for _, upd := range clause.updates {
+						if upd.isExpr && !schemaAndRecords.Schema.HasField(upd.field) {
+							exprFields = append(exprFields, upd.field)
+						}
+					}
+				}
+				if len(exprFields) > 0 {
+					next, stop := iter.Pull(updated)
+					first, ok := next()
+					if ok {
+						for _, f := range exprFields {
+							if v, exists := ssql.Get[any](first, f); exists {
+								outputSchema.AddField(f, lib.InferTypeString(v))
+							}
+						}
+					}
+					updated = func(yield func(ssql.Record) bool) {
+						defer stop()
+						if ok && !yield(first) {
+							return
+						}
+						for {
+							r, more := next()
+							if !more {
+								return
+							}
+							if !yield(r) {
+								return
 							}
 						}
 					}
