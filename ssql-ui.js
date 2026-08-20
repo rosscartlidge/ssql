@@ -421,6 +421,12 @@ window.ssqlUIBindCompletion = createCompletionBinding;
 
 const schemaFieldsCache = new Map(); // upstream text -> field names
 
+// The cache is keyed by upstream TEXT, so anything that rewrites a vFS
+// file under the same name (a server-head run replacing data.jsonl, a
+// re-upload, a bar run that tees a file) must clear it — the text is
+// unchanged but the schema behind it may not be.
+window.ssqlUISchemaCacheClear = () => schemaFieldsCache.clear();
+
 function schemaFieldsAtCursor(before) {
     const src = ssqlExec(['-complete-source', before], '').stdout.trim();
     if (!src) return null;
@@ -689,6 +695,7 @@ function showCreatedFiles() {
 // Clears the schema cache (new data = new fields) and confirms in the
 // status line. Pages hook window.ssqlUIOnUpload for their own refresh.
 function ssqlUIWriteUpload(name, contents) {
+    window.ssqlUISchemaCacheClear();
     _fsWriteFile(name, contents);
     schemaFieldsCache.clear();
     setTransientStatus('Uploaded ' + name + ' — use it in pipelines by name');
