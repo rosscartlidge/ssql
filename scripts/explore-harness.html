@@ -340,6 +340,47 @@ async function run() {
             doc2.getElementById('status').textContent.includes('+1.6s one-time compile'),
             doc2.getElementById('status').textContent);
         doc2.getElementById('headTyped').checked = false;
+
+        // Share link: captures head + typed + loaded files + tail as a
+        // #s= fragment; decoding restores the exact setup.
+        doc2.getElementById('headInput').value = 'ssql from big.csv | ssql limit 9';
+        doc2.getElementById('headTyped').checked = true;
+        ta2.value = 'ssql from data.jsonl | ssql sort k';
+        w2.exploreShareSetup();
+        await settle();
+        const su = w2.exploreLastShareUrl || '';
+        let decoded = {};
+        try {
+            const frag = su.split('#s=')[1];
+            decoded = JSON.parse(decodeURIComponent(escape(w2.atob(frag.replace(/-/g, '+').replace(/_/g, '/')))));
+        } catch (e) {}
+        rec("share-url-roundtrip",
+            su.includes('#s=') && decoded.h === 'ssql from big.csv | ssql limit 9' &&
+            decoded.y === true && decoded.t === 'ssql from data.jsonl | ssql sort k' &&
+            Array.isArray(decoded.f) && decoded.f.includes('kind.csv'),
+            su.slice(0, 80) + ' decoded=' + JSON.stringify(decoded));
+        doc2.getElementById('headTyped').checked = false;
+
+        // Restore: a fresh page with the fragment populates the inputs
+        // even when the auto-runs fail (no server in the harness).
+        const setupFrag = w2.btoa(unescape(encodeURIComponent(JSON.stringify(
+            { h: 'ssql from other.csv | ssql limit 7', t: 'ssql from data.jsonl | ssql top -field n 3', y: true, f: [] }
+        )))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        const f3 = document.createElement('iframe');
+        f3.style.cssText = 'width:1200px;height:700px';
+        f3.src = document.getElementById('ex').getAttribute('src') + '?file=remote.csv&srvtest=1#s=' + setupFrag;
+        document.body.appendChild(f3);
+        await new Promise(r => f3.addEventListener('load', r, { once: true }));
+        const w3 = f3.contentWindow;
+        for (let i = 0; i < 400; i++) { if (w3.ssqlEngine || w3.ssqlEngineError) break; await pause(50); }
+        await settle();
+        const doc3 = w3.document;
+        rec("share-restore-inputs",
+            doc3.getElementById('headInput').value === 'ssql from other.csv | ssql limit 7' &&
+            doc3.getElementById('headTyped').checked === true &&
+            doc3.getElementById('pipeline').value === 'ssql from data.jsonl | ssql top -field n 3',
+            doc3.getElementById('headInput').value + ' | typed=' + doc3.getElementById('headTyped').checked +
+            ' | tail=' + doc3.getElementById('pipeline').value);
     } catch (e) { rec("server-mode", false, String(e)); }
     fin();
 }

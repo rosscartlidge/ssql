@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"net"
 	"reflect"
 	"strings"
 	"testing"
@@ -62,6 +63,24 @@ func TestJoinRightFile(t *testing.T) {
 	for _, c := range cases {
 		if got := joinRightFile(c.stage); got != c.want {
 			t.Errorf("joinRightFile(%q) = %q, want %q", c.stage, got, c.want)
+		}
+	}
+}
+
+func TestIsTailscaleIP(t *testing.T) {
+	cases := []struct {
+		ip   string
+		want bool
+	}{
+		{"100.64.0.1", true}, {"100.106.137.79", true}, {"100.127.255.255", true},
+		{"100.63.255.255", false}, {"100.128.0.0", false},
+		{"127.0.0.1", false}, {"192.168.1.5", false}, {"10.0.0.1", false},
+		{"fd7a:115c:a1e0::e601:8991", true},
+		{"fd7a:115c:a1e1::1", false}, {"fe80::1", false}, {"::1", false},
+	}
+	for _, c := range cases {
+		if got := isTailscaleIP(net.ParseIP(c.ip)); got != c.want {
+			t.Errorf("isTailscaleIP(%s) = %v, want %v", c.ip, got, c.want)
 		}
 	}
 }

@@ -86,14 +86,32 @@ func startServeHTTP(ctx context.Context, o serveHTTPOptions) (string, <-chan err
 	}
 	o.Dir = dir
 
+	// `tailscale:PORT` sugar: bind this machine's Tailscale address
+	// without looking it up (DFC079's "or with Tailscale, access
+	// directly").
+	if host, port, err := net.SplitHostPort(o.Addr); err == nil && host == "tailscale" {
+		ip, err := tailscaleAddr()
+		if err != nil {
+			return "", nil, fmt.Errorf("serve -listen-http tailscale:%s: %w", port, err)
+		}
+		o.Addr = net.JoinHostPort(ip.String(), port)
+	}
+
 	ln, err := net.Listen("tcp", o.Addr)
 	if err != nil {
 		return "", nil, fmt.Errorf("serve -listen-http: %w", err)
 	}
 	if o.Token == "" && !listenerIsLoopback(ln) {
-		ln.Close()
-		return "", nil, fmt.Errorf(
-			"serve -listen-http %s binds a non-loopback address without -token — refusing to start (pipelines run with this process's authority; add -token TOKEN or bind 127.0.0.1)", o.Addr)
+		// A tailnet is WireGuard-authenticated and encrypted — treat a
+		// Tailscale bind as trusted, but say the trust assumption out
+		// loud. Any OTHER non-loopback bind still refuses.
+		if ta, ok := ln.Addr().(*net.TCPAddr); ok && isTailscaleIP(ta.IP) {
+			fmt.Fprintf(o.Stderr, "ssql serve: tailnet-trusted mode — anyone on your tailnet (including shared nodes) can run pipelines as this user; add -token for defense in depth\n")
+		} else {
+			ln.Close()
+			return "", nil, fmt.Errorf(
+				"serve -listen-http %s binds a non-loopback address without -token — refusing to start (pipelines run with this process's authority; add -token TOKEN, bind 127.0.0.1, or bind your Tailscale address / tailscale:PORT)", o.Addr)
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -867,4 +885,42 @@ func serveTypedHeadBinary(ctx context.Context, self, dir string, stages [][]stri
 		return "", false, 0, err
 	}
 	return bin, false, time.Since(t0), nil
+}
+
+// isTailscaleIP reports whether ip belongs to Tailscale's address
+// space: the CGNAT IPv4 range 100.64.0.0/10 or the tailnet IPv6 ULA
+// prefix fd7a:115c:a1e0::/48.
+func isTailscaleIP(ip net.IP) bool {
+	if v4 := ip.To4(); v4 != nil {
+		return v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127
+	}
+	if v6 := ip.To16(); v6 != nil {
+		return v6[0] == 0xfd && v6[1] == 0x7a && v6[2] == 0x11 && v6[3] == 0x5c && v6[4] == 0xa1 && v6[5] == 0xe0
+	}
+	return false
+}
+
+// tailscaleAddr returns this machine's Tailscale IP (IPv4 preferred).
+func tailscaleAddr() (net.IP, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	var v6 net.IP
+	for _, a := range addrs {
+		ipn, ok := a.(*net.IPNet)
+		if !ok || !isTailscaleIP(ipn.IP) {
+			continue
+		}
+		if ipn.IP.To4() != nil {
+			return ipn.IP, nil
+		}
+		if v6 == nil {
+			v6 = ipn.IP
+		}
+	}
+	if v6 != nil {
+		return v6, nil
+	}
+	return nil, fmt.Errorf("no Tailscale address found on any interface (is tailscale up?)")
 }

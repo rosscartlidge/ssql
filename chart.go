@@ -3548,6 +3548,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <button id="barRun" style="padding:4px 14px;">Run → grid</button>
             <button id="barCopyCli" style="padding:4px 14px; display:none;" title="Copy the composed head+tail as one ssql pipeline, runnable in the server's data directory">⎘ Copy CLI</button>
+            <button id="barShare" style="padding:4px 14px; display:none;" title="Copy a link that restores this whole setup — head, ⚡ typed, loaded server files, and the tail pipeline">🔗 Share</button>
             <button id="barHelp" onmousedown="event.preventDefault()" style="padding:4px 14px;">? Help</button>
             <button id="barReset" style="padding:4px 14px;">Reset data</button>
             <input type="file" id="barUpload" accept=".csv,.tsv,.json,.jsonl" style="display:none">
@@ -3823,13 +3824,19 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             document.getElementById('headInput').value = head;
             document.getElementById('serverHead').style.display = 'flex';
             document.getElementById('barCopyCli').style.display = '';
+            document.getElementById('barShare').style.display = '';
             renderServerFiles();
+            restoreSharedSetup();
         }
         // Server files as click-to-load chips: loading writes the raw
         // bytes into the vFS under the SAME name, so direct-file join
         // ("ssql join kind.csv -using k") and file completion work on
         // them exactly like uploads. Large files are refused loudly by
         // the server — reduce those through a head pipeline instead.
+        function exploreLoadServerFile(name, contents) {
+            ssqlUIWriteUpload(name, contents);
+            if (!loadedServerFiles.includes(name)) loadedServerFiles.push(name);
+        }
         async function renderServerFiles() {
             let files;
             try {
@@ -3856,7 +3863,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                             setTransientStatus(err.error || ('loading ' + f.name + ' failed'));
                             return;
                         }
-                        ssqlUIWriteUpload(f.name, await r.text());
+                        exploreLoadServerFile(f.name, await r.text());
                         setTransientStatus(f.name + ' loaded — join it by name, e.g. ssql join ' + f.name + ' -using FIELD');
                     } catch (err) { setTransientStatus('loading ' + f.name + ' failed: ' + err); }
                 });
@@ -3945,7 +3952,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         document.getElementById('headInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.defaultPrevented) { e.preventDefault(); window.exploreRunHead(); }
         });
-        exploreDetectServerMode();
 
         // Copy-as-CLI: the head and tail are ONE pipeline split at
         // data.jsonl — compose them back into a single ssql command
@@ -3986,6 +3992,60 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         };
         document.getElementById('barCopyCli').addEventListener('click', () => window.exploreCopyCli());
 
+        // Share links: the WHOLE setup (head, ⚡ typed, loaded server
+        // files, tail) rides the URL fragment as base64url JSON — the
+        // fragment never reaches the server, so page generation stays
+        // keyed by ?file/?pipeline. Restore is ONE-WAY at load time:
+        // populate the inputs, reload the side files, run head then
+        // tail. No live hash sync — that pattern already bit us once
+        // (the builder/bar clobber bug).
+        let loadedServerFiles = [];
+        const b64url = {
+            enc: (s2) => btoa(unescape(encodeURIComponent(s2))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+            dec: (s2) => decodeURIComponent(escape(atob(s2.replace(/-/g, '+').replace(/_/g, '/')))),
+        };
+        window.exploreShareSetup = function() {
+            const setup = {
+                h: document.getElementById('headInput').value,
+                t: document.getElementById('pipeline').value,
+                y: document.getElementById('headTyped').checked,
+                f: loadedServerFiles,
+            };
+            const link = location.origin + location.pathname + location.search + '#s=' + b64url.enc(JSON.stringify(setup));
+            window.exploreLastShareUrl = link;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(link).then(
+                    () => setTransientStatus('Share link copied — restores head, files, and tail'),
+                    () => setTransientStatus('Clipboard blocked — link: ' + link));
+            } else {
+                setTransientStatus('Clipboard unavailable — link: ' + link);
+            }
+        };
+        document.getElementById('barShare').addEventListener('click', () => window.exploreShareSetup());
+        async function restoreSharedSetup() {
+            const m = location.hash.match(/^#s=([A-Za-z0-9_-]+)$/);
+            if (!m) return;
+            let setup;
+            try { setup = JSON.parse(b64url.dec(m[1])); } catch (e) { return; }
+            // Inputs first, so a failed run still leaves the setup
+            // visible and editable.
+            if (setup.h) document.getElementById('headInput').value = setup.h;
+            if (typeof setup.y === 'boolean') document.getElementById('headTyped').checked = setup.y;
+            if (setup.t) document.getElementById('pipeline').value = setup.t;
+            for (const name of setup.f || []) {
+                try {
+                    const r = await srvFetch()(srvUrl('/api/raw', 'file=' + encodeURIComponent(name)));
+                    if (r.ok) exploreLoadServerFile(name, await r.text());
+                } catch (e) { /* file load is best-effort on restore */ }
+            }
+            if (setup.h) await window.exploreRunHead();
+            if (setup.t && window.exploreRunBar) window.exploreRunBar();
+        }
+        // Kick off server-mode detection LAST: its srvtest path runs
+        // synchronously to restoreSharedSetup, which needs every const
+        // above to be initialized (TDZ — caught by the harness).
+        exploreDetectServerMode();
+
         document.getElementById('barRun').addEventListener('click', window.exploreRunBar);
         document.getElementById('barHelp').addEventListener('click', () => helpAtCursor());
         document.getElementById('barReset').addEventListener('click', () => {
@@ -4012,9 +4072,12 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 if (typeof stepsToOps !== 'function') return;
                 const ta = document.getElementById('pipeline');
                 if (!ta) return;
+                // Empty builder: only seed the default into a BLANK bar —
+                // overwriting existing text clobbered share-link restores
+                // (this effect fires on mount AFTER the restore ran).
                 ta.value = pipelineSteps.length
                     ? opsToText(stepsToOps(pipelineSteps))
-                    : 'ssql from data.jsonl | ';
+                    : (ta.value.trim() ? ta.value : 'ssql from data.jsonl | ');
             }, [pipelineSteps]);
             const [pipelineResult, setPipelineResult] = useState(null);
             const chartRef = useRef(null);

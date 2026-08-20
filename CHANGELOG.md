@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Tailscale-friendly serve** — `-listen-http tailscale:8080` binds
+  this machine's Tailscale address without looking it up, and binding
+  a Tailscale address (100.64/10 or fd7a:115c:a1e0::/48) is allowed
+  WITHOUT `-token`, with a loud startup notice naming the trust
+  assumption (a tailnet is WireGuard-authenticated; shared nodes and
+  other tailnet users are included — add `-token` for defense in
+  depth). Any other non-loopback bind still refuses without a token.
+- **🔗 Share links for the served workspace** — one click copies a URL
+  that restores the whole setup: head pipeline, ⚡ typed toggle, loaded
+  server files, and the tail. The setup rides the URL fragment
+  (base64url JSON — never sent to the server); opening the link
+  reloads the side files, runs the head, and re-runs the tail.
+  One-way restore at load only — no live hash sync.
 - **⚡ typed heads: compile-and-run on the server** — the head row's
   new toggle sends `engine=typed`: the server renders the head to a
   `.ssql` script, compiles it via `generate go -mode typed` into a
