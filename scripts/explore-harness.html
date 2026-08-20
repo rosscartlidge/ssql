@@ -10,6 +10,9 @@ async function pause(ms) {
     try { await fetch('check.html?w=' + Math.random(), { cache: 'no-store' }); } catch (e) {}
     await new Promise(r => setTimeout(r, ms));
 }
+// Flush the async completion machinery (awaited executors) before
+// asserting UI state; instant under virtual time.
+async function settle() { for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 5)); }
 async function run() {
     const frame = document.getElementById('ex');
     if (frame.contentDocument === null || frame.contentDocument.readyState !== 'complete') {
@@ -55,6 +58,7 @@ async function run() {
         ta.value = "ssql from data.jsonl | ssql where -if ";
         ta.selectionStart = ta.selectionEnd = ta.value.length;
         ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        await settle();
         rec("bar-field-completion", popupOpen() && items().includes("salary") && items().includes("dept"),
             popupOpen() ? items().join(",") : "no popup; status: " + doc.getElementById('status').textContent);
         if (popupOpen()) ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
@@ -62,7 +66,7 @@ async function run() {
         // Help at the cursor renders into the output panel.
         ta.value = "ssql from data.jsonl | ssql group-by dept -count";
         ta.selectionStart = ta.selectionEnd = ta.value.length;
-        doc.getElementById('barHelp').click();
+        await w.helpAtCursor();
         const helpText = doc.getElementById('output').textContent;
         rec("bar-help", /Count records|result/i.test(helpText), helpText.slice(0, 120));
 
@@ -170,6 +174,76 @@ async function run() {
             doc2.getElementById('status').textContent.includes('boom') ||
             doc2.getElementById('status').textContent.includes('Head failed'),
             doc2.getElementById('status').textContent);
+
+        // Head-input completion over /api/cursor: the SAME machinery as
+        // the tail bar, with an HTTP executor. The stub answers the
+        // cursor protocol; Tab must pop SERVER file candidates and
+        // accept into the head input.
+        const cursorCalls = [];
+        w2.__srvFetch = (url, opts) => {
+            const u = String(url);
+            if (u.includes('/api/cursor')) {
+                const req = JSON.parse(opts.body);
+                cursorCalls.push(req);
+                const v = req.argv[0];
+                let stdout = '';
+                if (v === '-cursor-stage') stdout = req.argv[1];
+                else if (v === '-complete') stdout = 'events-jan.csv\nevents-feb.csv\n';
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ stdout, stderr: '', code: 0 }) });
+            }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ output: '', stderr: '', code: 0 }) });
+        };
+        const hi = doc2.getElementById('headInput');
+        hi.focus();
+        hi.value = 'ssql from ';
+        hi.selectionStart = hi.selectionEnd = hi.value.length;
+        hi.dispatchEvent(new w2.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        await settle();
+        const popup2 = doc2.getElementById('completions');
+        const items2 = [...popup2.children].map(d => d.textContent);
+        rec("head-complete-popup", popup2.style.display === 'block' && items2.includes('events-jan.csv'),
+            popup2.style.display + " " + items2.join(","));
+        rec("head-complete-protocol", cursorCalls.some(c => c.argv[0] === '-complete'),
+            JSON.stringify(cursorCalls.map(c => c.argv[0])));
+        // Passive popup: Tab accepts the highlighted candidate.
+        hi.dispatchEvent(new w2.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        await settle();
+        rec("head-complete-accept", hi.value === 'ssql from events-jan.csv ', JSON.stringify(hi.value));
+        // Enter in the head input still runs the head (passive popup
+        // closed; run listener respects completion's preventDefault).
+        let ranHead = 0;
+        const origRunHead = w2.exploreRunHead;
+        w2.exploreRunHead = () => { ranHead++; };
+        hi.dispatchEvent(new w2.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+        await settle();
+        w2.exploreRunHead = origRunHead;
+        rec("head-enter-still-runs", ranHead === 1, "ranHead=" + ranHead);
+        // Field-name completion in the head: the engine answers a field
+        // slot with Use-Ctrl-O; the binding then asks -complete-source
+        // for the upstream and /api/schema-fields for its output fields.
+        w2.__srvFetch = (url, opts) => {
+            const u = String(url);
+            const req = JSON.parse(opts.body);
+            if (u.includes('/api/cursor')) {
+                const v = req.argv[0];
+                let stdout = '';
+                if (v === '-cursor-stage') stdout = req.argv[1].split('|').pop().trimStart();
+                else if (v === '-complete-source') stdout = 'ssql from events.csv';
+                else if (v === '-complete') stdout = 'Use-Ctrl-O\n';
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ stdout, stderr: '', code: 0 }) });
+            }
+            if (u.includes('/api/schema-fields')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ fields: ['service', 'status', 'duration'] }) });
+            }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ output: '', stderr: '', code: 0 }) });
+        };
+        hi.value = 'ssql from events.csv | ssql where -if ';
+        hi.selectionStart = hi.selectionEnd = hi.value.length;
+        hi.focus();
+        hi.dispatchEvent(new w2.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        await settle();
+        const items3 = [...doc2.getElementById('completions').children].map(d => d.textContent);
+        rec("head-field-names", items3.includes('service') && items3.includes('duration'), items3.join(","));
     } catch (e) { rec("server-mode", false, String(e)); }
     fin();
 }

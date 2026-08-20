@@ -3839,8 +3839,47 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             status.textContent = window.SSQL_UI_READY_TEXT || 'Ready.';
         };
         document.getElementById('headRun').addEventListener('click', () => window.exploreRunHead());
+        // Completion for the head input rides the SAME machinery as the
+        // tail bar, with an HTTP executor: the cursor protocol goes to
+        // /api/cursor, so subcommands, flags, operators, SERVER file
+        // paths and sampled values all complete against the serve host.
+        // Bound before the Enter-runs-head listener: an arrow-activated
+        // completion accept preventDefaults Enter, which the run
+        // listener respects; a passive popup never steals Enter.
+        const srvCursorExec = async (args, stdin, env) => {
+            const body = { argv: args };
+            if (env && env.AUTOCLI_CACHE_FILE) body.env = { AUTOCLI_CACHE_FILE: env.AUTOCLI_CACHE_FILE };
+            const r = await srvFetch()(srvUrl('/api/cursor'), { method: 'POST', body: JSON.stringify(body) });
+            const res = await r.json();
+            return { stdout: res.stdout || '', stderr: res.stderr || '', exitCode: res.code || 0 };
+        };
+        // Pipeline-aware field names for the head (the CLI's Ctrl-O):
+        // -complete-source picks the upstream at the cursor, then the
+        // SERVER runs it under SSQL_MODE=schema via /api/schema-fields.
+        const srvSchemaCache = new Map();
+        const srvSchemaFields = async (before) => {
+            const src = (await srvCursorExec(['-complete-source', before], '')).stdout.trim();
+            if (!src) return null;
+            if (srvSchemaCache.has(src)) return srvSchemaCache.get(src);
+            try {
+                const r = await srvFetch()(srvUrl('/api/schema-fields'),
+                    { method: 'POST', body: JSON.stringify({ pipeline: src }) });
+                const res = await r.json();
+                const fields = res.fields && res.fields.length ? res.fields : null;
+                if (srvSchemaCache.size > 30) srvSchemaCache.clear();
+                srvSchemaCache.set(src, fields);
+                return fields;
+            } catch (e) { return null; }
+        };
+        window.ssqlUIBindCompletion({
+            input: document.getElementById('headInput'),
+            exec: srvCursorExec,
+            ready: () => document.getElementById('serverHead').style.display !== 'none',
+            schemaFields: srvSchemaFields,
+            bigValueSource: () => false, // sampling runs (and is capped) server-side
+        });
         document.getElementById('headInput').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); window.exploreRunHead(); }
+            if (e.key === 'Enter' && !e.defaultPrevented) { e.preventDefault(); window.exploreRunHead(); }
         });
         exploreDetectServerMode();
 

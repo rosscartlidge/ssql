@@ -423,3 +423,59 @@ func normalizeWireNumerics(out string) string {
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
+
+func TestServeCursorEnv(t *testing.T) {
+	addr := startServeHTTPProcess(t)
+	base := "http://" + addr
+
+	// Value sampling: AUTOCLI_CACHE_FILE is the one allowed env var —
+	// completing a value slot with it set returns real data values.
+	resp, body := postJSON(t, base+"/api/cursor", map[string]any{
+		"argv": []string{"-complete", "5", "where", "-if", "dept", "eq", ""},
+		"env":  map[string]string{"AUTOCLI_CACHE_FILE": "employees.csv"},
+	}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Stdout string
+		Code   int
+	}
+	json.Unmarshal([]byte(body), &out)
+	if out.Code != 0 || !strings.Contains(out.Stdout, "Engineering") {
+		t.Errorf("value completion = %+v", out)
+	}
+
+	// Any other env var is rejected loudly.
+	resp2, body2 := postJSON(t, base+"/api/cursor", map[string]any{
+		"argv": []string{"-complete", "1", "where", ""},
+		"env":  map[string]string{"PATH": "/tmp/evil"},
+	}, nil)
+	if resp2.StatusCode != 400 || !strings.Contains(body2, "not allowed") {
+		t.Errorf("env allowlist: status %d body %s", resp2.StatusCode, body2)
+	}
+}
+
+func TestServeSchemaFields(t *testing.T) {
+	addr := startServeHTTPProcess(t)
+	base := "http://" + addr
+
+	resp, body := postJSON(t, base+"/api/schema-fields",
+		map[string]string{"pipeline": "ssql from employees.csv | ssql group-by dept -count n"}, nil)
+	if resp.StatusCode != 200 || !strings.Contains(body, `"dept"`) || !strings.Contains(body, `"n"`) ||
+		strings.Contains(body, `"salary"`) {
+		t.Errorf("status %d body %s", resp.StatusCode, body)
+	}
+
+	resp2, _ := postJSON(t, base+"/api/schema-fields",
+		map[string]string{"pipeline": "ssql from nope.csv"}, nil)
+	if resp2.StatusCode != 422 {
+		t.Errorf("missing file: status %d", resp2.StatusCode)
+	}
+
+	resp3, _ := postJSON(t, base+"/api/schema-fields",
+		map[string]string{"pipeline": "ssql from a.csv > x"}, nil)
+	if resp3.StatusCode != 400 {
+		t.Errorf("shellism: status %d", resp3.StatusCode)
+	}
+}

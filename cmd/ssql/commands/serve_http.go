@@ -106,6 +106,9 @@ func startServeHTTP(ctx context.Context, o serveHTTPOptions) (string, <-chan err
 	mux.HandleFunc("POST /api/cursor", func(w http.ResponseWriter, r *http.Request) {
 		serveCursor(w, r, o)
 	})
+	mux.HandleFunc("POST /api/schema-fields", func(w http.ResponseWriter, r *http.Request) {
+		serveSchemaFields(w, r, o)
+	})
 
 	srv := &http.Server{Handler: serveAuth(o.Token, mux)}
 	addr := ln.Addr().String()
@@ -360,12 +363,15 @@ type stageChain struct {
 
 // startStageChain wires and starts `self stage[0] | self stage[1] | …`
 // in dir under ctx.
-func startStageChain(ctx context.Context, self, dir string, stages [][]string) (*stageChain, error) {
+func startStageChain(ctx context.Context, self, dir string, stages [][]string, extraEnv ...string) (*stageChain, error) {
 	ch := &stageChain{stderrs: make([]bytes.Buffer, len(stages))}
 	ch.cmds = make([]*exec.Cmd, len(stages))
 	for i, args := range stages {
 		ch.cmds[i] = exec.CommandContext(ctx, self, args...)
 		ch.cmds[i].Dir = dir
+		if len(extraEnv) > 0 {
+			ch.cmds[i].Env = append(os.Environ(), extraEnv...)
+		}
 		ch.cmds[i].Stderr = &ch.stderrs[i]
 		if i > 0 {
 			pipe, err := ch.cmds[i-1].StdoutPipe()
@@ -438,11 +444,22 @@ var serveCursorVerbs = map[string]bool{
 
 func serveCursor(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	var req struct {
-		Argv []string `json:"argv"`
+		Argv []string          `json:"argv"`
+		Env  map[string]string `json:"env,omitempty"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil || len(req.Argv) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "body must be {\"argv\": [\"-complete\", …]}"})
 		return
+	}
+	// Env is allow-listed: completion needs exactly the value-sampling
+	// parameter the bash script and the playground pass. Anything else
+	// is rejected loudly rather than silently dropped.
+	for k := range req.Env {
+		if k != "AUTOCLI_CACHE_FILE" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": fmt.Sprintf("env %q not allowed on /api/cursor (only AUTOCLI_CACHE_FILE)", k)})
+			return
+		}
 	}
 	if !serveCursorVerbs[req.Argv[0]] {
 		writeJSON(w, http.StatusBadRequest, map[string]any{
@@ -459,6 +476,12 @@ func serveCursor(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, self, req.Argv...)
 	cmd.Dir = o.Dir
+	if len(req.Env) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range req.Env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -593,4 +616,51 @@ func serveExplorePage(w http.ResponseWriter, r *http.Request, o serveHTTPOptions
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	http.ServeFile(w, r, tmpPath)
+}
+
+// serveSchemaFields answers pipeline-aware field-name completion (the
+// CLI's Ctrl-O, the wasm tail's schemaFieldsAtCursor) for HTTP-bound
+// inputs: run the given upstream pipeline under SSQL_MODE=schema —
+// commands transform a schema header instead of data, so only file
+// headers are read — then `generate schema` prints the field names.
+// The pipeline goes through the same strict tokenizer as /api/execute.
+func serveSchemaFields(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
+	var req struct {
+		Pipeline string `json:"pipeline"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil || strings.TrimSpace(req.Pipeline) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "body must be {\"pipeline\": \"ssql …\"}"})
+		return
+	}
+	stages, err := splitServePipeline(req.Pipeline)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	stages = append(stages, []string{"generate", "schema"})
+	self, err := os.Executable()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	ch, err := startStageChain(ctx, self, o.Dir, stages, "SSQL_MODE=schema")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	out, _ := io.ReadAll(ch.out)
+	if runErr := ch.wait(); runErr != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error": "schema pipeline failed", "detail": ch.stderr()})
+		return
+	}
+	fields := []string{}
+	for _, l := range strings.Split(string(out), "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			fields = append(fields, t)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"fields": fields})
 }

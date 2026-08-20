@@ -5,6 +5,22 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Head-input completion in the served workspace** — the server-head
+  input now has the full completion/help stack (Tab, as-you-type
+  suggestions, Alt-h help, value sampling) backed by the serve host via
+  `/api/cursor`: subcommands, flags, operators, SERVER file paths and
+  sampled values all complete in the browser. `ssql-ui.js`'s machinery
+  became a factory (`ssqlUIBindCompletion`) usable over any input +
+  executor, sync (wasm) or async (HTTP); `/api/cursor` accepts an
+  allow-listed `env` (`AUTOCLI_CACHE_FILE` only) for value sampling.
+  Pipeline-aware FIELD-NAME completion works too: the new
+  `POST /api/schema-fields` runs the upstream pipeline server-side
+  under `SSQL_MODE=schema` (headers only, no data read) — so Tab on
+  `-if ` in the head completes the upstream's actual output fields.
+
 ## [4.66.0] - 2026-08-19
 
 ### Added

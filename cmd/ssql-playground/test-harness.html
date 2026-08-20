@@ -54,27 +54,27 @@ async function run() {
     // 1. Caret at end of "-sum salary" in a mid-pipeline group-by stage.
     const p1 = "ssql from employees.csv\n| ssql group-by dept -sum salary";
     ta.value = p1; ta.selectionStart = ta.selectionEnd = p1.length;
-    w.helpAtCursor();
+    await w.helpAtCursor();
     record("flag-arg-help", output().includes("Sum field values"), output().slice(0, 200));
 
     // 2. Caret on an -if-expr expression argument -> functions reference appended.
     const p2 = "ssql from employees.csv | ssql where -if-expr 'salary > 5'";
     ta.value = p2; ta.selectionStart = ta.selectionEnd = p2.length;
-    w.helpAtCursor();
+    await w.helpAtCursor();
     record("expr-arg-functions", output().includes("EXPRESSION FUNCTIONS AVAILABLE"), output().slice(0, 200));
 
     // 3. Caret mid-pipeline: end of FIRST stage while a second exists —
     //    must get help for `from`, not for the last stage.
     const p3 = "ssql from employees.csv | ssql to table";
     ta.value = p3; ta.selectionStart = ta.selectionEnd = "ssql from employees.csv".length;
-    w.helpAtCursor();
+    await w.helpAtCursor();
     record("first-stage-help", /from|input|file/i.test(output()) && !/to table/.test(label()), label() + " :: " + output().slice(0, 200));
 
     // 4. Empty textarea -> the ROOT overview (the empty line is a stage
     //    start now, so help describes ssql itself — better than the old
     //    "put the cursor somewhere" scolding).
     ta.value = ""; ta.selectionStart = ta.selectionEnd = 0;
-    w.helpAtCursor();
+    await w.helpAtCursor();
     record("empty-help-overview", /Unix-style data processing|COMMANDS|subcommand/i.test(output()), output().slice(0, 120));
 
     // 5. Alt-h keydown path reaches the same handler.
@@ -84,20 +84,23 @@ async function run() {
     record("alt-h-keydown", /descending|Sort/i.test(output()), output().slice(0, 200));
 
     // --- Tab completion ---
-    const tab = (shift) => ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Tab', shiftKey: !!shift, bubbles: true, cancelable: true }));
+    const tab = async (shift) => { ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Tab', shiftKey: !!shift, bubbles: true, cancelable: true })); await settle(); };
     const key = (k) => ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
     const popup = () => doc.getElementById('completions');
     const popupOpen = () => popup().style.display === 'block';
+    // The completion machinery is async (awaited executors — HTTP-capable
+    // bindings); flush microtasks + timers before asserting UI state.
+    const settle = async () => { for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 5)); };
     const setLine = (s) => { ta.value = s; ta.selectionStart = ta.selectionEnd = s.length; };
 
     // 6. Single candidate: "ssql gr" + Tab -> "ssql group-by " inserted, no popup.
     setLine("ssql gr");
-    tab();
+    await tab();
     record("tab-single-insert", ta.value === "ssql group-by " && !popupOpen(), JSON.stringify(ta.value));
 
     // 7. Multi candidate: "ssql where -i" + Tab -> popup listing -if and -if-expr.
     setLine("ssql from employees.csv | ssql where -i");
-    tab();
+    await tab();
     const items = () => [...popup().children].map(d => d.textContent);
     record("tab-popup-multi", popupOpen() && items().includes("-if") && items().includes("-if-expr"), items().join(","));
 
@@ -112,7 +115,7 @@ async function run() {
 
     // 9. File completion lists the virtual FS: "ssql from csv " + Tab.
     setLine("ssql from csv ");
-    tab();
+    await tab();
     const fileOK = (popupOpen() && items().some(x => x.includes("employees.csv"))) || ta.value.includes("employees.csv");
     record("tab-file-vfs", fileOK, popupOpen() ? items().join(",") : JSON.stringify(ta.value));
     if (popupOpen()) key('Escape');
@@ -122,7 +125,7 @@ async function run() {
     //     transparently completes from the LIVE upstream schema instead —
     //     popup lists the employees.csv fields.
     setLine("ssql from employees.csv | ssql where -if ");
-    tab();
+    await tab();
     record("tab-field-auto", popupOpen() && items().includes("salary") && items().includes("dept"),
         popupOpen() ? items().join(",") : "no popup; status: " + doc.getElementById('status').textContent);
     if (popupOpen()) key('Escape');
@@ -130,12 +133,13 @@ async function run() {
     // 10b. Unique partial via explicit Ctrl-O: "sa" -> "salary ".
     setLine("ssql from employees.csv | ssql where -if sa");
     ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'o', ctrlKey: true, bubbles: true, cancelable: true }));
+    await settle();
     record("ctrl-o-unique-insert", ta.value === "ssql from employees.csv | ssql where -if salary ", JSON.stringify(ta.value));
 
     // 10c. PIPELINE-AWARE: after a group-by, the schema is the grouped
     //      fields + aggregates — salary must be gone, cnt present.
     setLine("ssql from employees.csv | ssql group-by dept -count cnt | ssql sort ");
-    tab();
+    await tab();
     const pipeFields = popupOpen() ? items() : [];
     record("tab-field-pipeline-aware",
         popupOpen() && pipeFields.includes("cnt") && pipeFields.includes("dept") && !pipeFields.includes("salary"),
@@ -147,7 +151,7 @@ async function run() {
     //      {"type":"field_cache",...} in the popup) — single candidate
     //      inserts cleanly.
     setLine("ssql from csv cu");
-    tab();
+    await tab();
     record("tab-file-no-directive-junk",
         ta.value === "ssql from csv customers.csv " && !popupOpen(),
         JSON.stringify(ta.value) + (popupOpen() ? " popup: " + items().join(",") : ""));
@@ -155,7 +159,7 @@ async function run() {
     // 10e. ...and the directive it carries enables downstream VALUE
     //      completion: values of `country` from the cached file.
     setLine("ssql from csv customers.csv | ssql where -if country eq ");
-    tab();
+    await tab();
     const valueOK = (popupOpen() && items().includes("US")) || / US $/.test(ta.value) || ta.value.endsWith("US ");
     record("tab-value-completion", valueOK,
         popupOpen() ? items().join(",") : JSON.stringify(ta.value));
@@ -166,14 +170,14 @@ async function run() {
     //      delimiter fix (ssql) and sampler detection (autocli 4.12.1).
     w._fsWriteFile('piped.tsv', 'name|age|dept\nAlice|30|Eng\nBob|25|Sales\n');
     setLine("ssql from tsv piped.tsv | ssql where -if ");
-    tab();
+    await tab();
     record("tab-pipe-tsv-fields", popupOpen() && items().includes("dept") && items().includes("age"),
         popupOpen() ? items().join(",") : "no popup; status: " + doc.getElementById('status').textContent);
     if (popupOpen()) key('Escape');
     setLine("ssql from tsv piped.t");
-    tab(); // completes the path -> caches the file for value sampling
+    await tab(); // completes the path -> caches the file for value sampling
     setLine("ssql from tsv piped.tsv | ssql where -if dept eq ");
-    tab();
+    await tab();
     record("tab-pipe-tsv-values", popupOpen() && items().includes("Eng") && items().includes("Sales"),
         popupOpen() ? items().join(",") : JSON.stringify(ta.value));
     if (popupOpen()) key('Escape');
@@ -184,7 +188,7 @@ async function run() {
     //      Values contain spaces -> accepted candidate must be quoted.
     w._fsWriteFile('friends.tsv', 'name,age,school\nPeter Allworth,46,Knox\nJames Dunn,46,Knox\nRoss Cartlidge,45,SSBHS\n');
     setLine("ssql from tsv friends.tsv | ssql where -if name eq ");
-    tab();
+    await tab();
     const friendsOK = popupOpen() && items().includes("Peter Allworth") && items().includes("Ross Cartlidge");
     let quotedOK = false;
     if (popupOpen()) {
@@ -268,7 +272,7 @@ async function run() {
 
     // C. Tab accepts the passive suggestion.
     await typeInto("ssql from employees.csv | ssql gro");
-    tab();
+    await tab();
     record("auto-tab-accepts", ta.value === "ssql from employees.csv | ssql group-by " && !popupOpen(), JSON.stringify(ta.value));
 
     // D. After arrow-activation, Enter DOES accept.
@@ -303,7 +307,7 @@ async function run() {
     //    REPLACE "ssql" with a subcommand).
     await typeInto("ssql from employees.csv | ssql");
     record("auto-no-popup-on-ssql-word", !popupOpen(), popupOpen() ? items().join(",") : "");
-    tab();
+    await tab();
     record("tab-noop-on-ssql-word", ta.value === "ssql from employees.csv | ssql" && !popupOpen(), JSON.stringify(ta.value));
 
     // I. …but right after "ssql " the subcommand list auto-pops (the
@@ -313,7 +317,7 @@ async function run() {
     let insertOK = false;
     if (popupOpen()) {
         const first = items()[0];
-        tab(); // passive popup: Tab accepts
+        await tab(); // passive popup: Tab accepts
         insertOK = ta.value === "ssql from employees.csv | ssql " + first + " ";
     }
     record("auto-subcommands-after-space", subsOK, subsOK ? "" : (popupOpen() ? items().join(",") : "no popup"));
@@ -323,7 +327,7 @@ async function run() {
     //    acceptance inserts the "ssql " boilerplate.
     await typeInto("ssql from employees.csv | fr");
     const jOK = popupOpen() && items().includes("from");
-    if (popupOpen()) tab();
+    if (popupOpen()) await tab();
     record("auto-prefixless-partial", jOK && ta.value === "ssql from employees.csv | ssql from ", JSON.stringify(ta.value));
 
     // K. Bare "| " is a discovery slot too: subcommands pop, acceptance
@@ -333,7 +337,7 @@ async function run() {
     let kInsert = false;
     if (popupOpen()) {
         const first = items()[0];
-        tab();
+        await tab();
         kInsert = ta.value === "ssql from employees.csv | ssql " + first + " ";
     }
     record("auto-pipe-discovery", kOK && kInsert, JSON.stringify(ta.value));
@@ -341,18 +345,18 @@ async function run() {
     // L. First word of a fresh pipeline, no prefix typed at all.
     await typeInto("wh");
     const lOK = popupOpen() && items().includes("where");
-    if (popupOpen()) tab();
+    if (popupOpen()) await tab();
     record("auto-first-word-prefixless", lOK && ta.value === "ssql where ", JSON.stringify(ta.value));
 
     // M. Tab in an EMPTY textarea lists all subcommands; acceptance
     //    starts the pipeline with "ssql <cmd> ".
     setLine("");
-    tab();
+    await tab();
     const mOK = popupOpen() && items().includes("from") && items().includes("where") && items().includes("group-by");
     let mInsert = false;
     if (popupOpen()) {
         const first = items()[0];
-        tab();
+        await tab();
         mInsert = ta.value === "ssql " + first + " ";
     }
     record("tab-empty-textarea-subcommands", mOK && mInsert, JSON.stringify(ta.value));
@@ -361,7 +365,7 @@ async function run() {
     //    the pipe, gluing " ssql <cmd> " after it.
     await typeInto("ssql from employees.csv |");
     const nOK = popupOpen() && items().includes("where");
-    if (popupOpen()) tab();
+    if (popupOpen()) await tab();
     record("auto-bare-pipe-preserved", nOK && ta.value.startsWith("ssql from employees.csv | ssql "),
         JSON.stringify(ta.value));
 
@@ -373,7 +377,7 @@ async function run() {
     const oShown = clearVisible();
     clearBtn.click();
     const oCleared = ta.value === '' && !clearVisible() && !popupOpen() && doc.activeElement === ta;
-    tab();
+    await tab();
     record("clear-button", oShown && oCleared && popupOpen() && items().includes("from"),
         "shown=" + oShown + " value=" + JSON.stringify(ta.value) + " visAfter=" + clearVisible() + " popup=" + popupOpen());
     if (popupOpen()) key('Escape');
