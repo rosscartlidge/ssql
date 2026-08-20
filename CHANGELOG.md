@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Stale field-name completion after a head re-run** — the tail's
+  field cache is keyed by pipeline text, so a head run that changed
+  `data.jsonl`'s schema kept completing the OLD fields. The cache now
+  clears whenever the virtual FS is rewritten (head runs, uploads, bar
+  runs that create files).
+- **Serve pipelines deadlocked when a downstream stage exited early** —
+  `ssql from big.csv | ssql limit 10` over `/api/execute` hung forever
+  (instant in a shell): the stage chain kept the parent's copies of
+  intermediate pipe ends open, so producers never got EPIPE and blocked
+  on the full 64KB pipe buffer. Stages now own their pipe ends
+  exclusively (like a shell), and chain status uses shell semantics —
+  upstream death by SIGPIPE after an early-exiting consumer is normal
+  termination, not failure.
+- **The served index no longer opens huge files whole** — data files
+  over 32MB open with a VISIBLE `ssql limit 1000` stage in the head
+  input (edit or remove it there); direct `?file=` hits redirect to the
+  same sampled form. A 1.2GB CSV used to become a multi-GB page.
+
 ### Added
 - **Head-input completion in the served workspace** — the server-head
   input now has the full completion/help stack (Tab, as-you-type

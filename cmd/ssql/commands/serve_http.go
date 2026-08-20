@@ -52,6 +52,15 @@ type serveHTTPOptions struct {
 	Stderr  io.Writer     // startup/diagnostic log
 }
 
+// serveSampleThreshold: above this size, the explore workspace for a
+// bare file opens with a VISIBLE `limit` stage in the head instead of
+// materializing the whole file into the page (a 1.2GB CSV made a
+// multi-GB page). The user sees the limit in the head input and can
+// edit or remove it — honest sampling, not silent truncation.
+const serveSampleThreshold = 32 << 20
+
+const serveSampleRows = 1000
+
 // serveDataExtensions is what /api/files lists.
 var serveDataExtensions = map[string]bool{
 	".csv": true, ".tsv": true, ".json": true, ".jsonl": true,
@@ -363,9 +372,24 @@ type stageChain struct {
 
 // startStageChain wires and starts `self stage[0] | self stage[1] | …`
 // in dir under ctx.
+//
+// Intermediate links are explicit os.Pipe()s and the parent CLOSES its
+// copies right after starting the children — like a shell, the
+// children must be the only holders. (The first version used
+// exec.StdoutPipe, whose read end the parent keeps until Wait: when a
+// downstream stage exited early — `… | limit 10` on a 1.2GB file —
+// upstream never got EPIPE, filled the 64KB pipe buffer, and the
+// chain deadlocked. Found live by Ross; pinned by
+// TestServeExecuteEarlyExit.)
 func startStageChain(ctx context.Context, self, dir string, stages [][]string, extraEnv ...string) (*stageChain, error) {
 	ch := &stageChain{stderrs: make([]bytes.Buffer, len(stages))}
 	ch.cmds = make([]*exec.Cmd, len(stages))
+	var parentCopies []*os.File
+	closeParentCopies := func() {
+		for _, f := range parentCopies {
+			f.Close()
+		}
+	}
 	for i, args := range stages {
 		ch.cmds[i] = exec.CommandContext(ctx, self, args...)
 		ch.cmds[i].Dir = dir
@@ -374,35 +398,63 @@ func startStageChain(ctx context.Context, self, dir string, stages [][]string, e
 		}
 		ch.cmds[i].Stderr = &ch.stderrs[i]
 		if i > 0 {
-			pipe, err := ch.cmds[i-1].StdoutPipe()
+			r, w, err := os.Pipe()
 			if err != nil {
+				closeParentCopies()
 				return nil, err
 			}
-			ch.cmds[i].Stdin = pipe
+			ch.cmds[i-1].Stdout = w
+			ch.cmds[i].Stdin = r
+			parentCopies = append(parentCopies, r, w)
 		}
 	}
 	out, err := ch.cmds[len(ch.cmds)-1].StdoutPipe()
 	if err != nil {
+		closeParentCopies()
 		return nil, err
 	}
 	ch.out = out
 	for _, c := range ch.cmds {
 		if err := c.Start(); err != nil {
+			closeParentCopies()
 			return nil, err
 		}
 	}
+	// The children hold dups now; the parent must not keep the pipes
+	// alive or early-exiting consumers can't EPIPE their producers.
+	closeParentCopies()
 	return ch, nil
 }
 
-// wait waits for every stage; the first stage error (if any) wins.
+// wait waits for every stage, with shell status semantics: the LAST
+// stage's error wins; an upstream stage killed by a signal (SIGPIPE
+// after its consumer exited early — `limit`, `head`-like flows) is
+// normal termination, not failure. Upstream real exit codes still
+// count when the last stage succeeded.
 func (ch *stageChain) wait() error {
-	var firstErr error
-	for _, c := range ch.cmds {
-		if err := c.Wait(); err != nil && firstErr == nil {
-			firstErr = err
+	var lastErr, upstreamErr error
+	for i, c := range ch.cmds {
+		err := c.Wait()
+		if err == nil {
+			continue
+		}
+		if i == len(ch.cmds)-1 {
+			lastErr = err
+			continue
+		}
+		// ExitCode() == -1 means death by signal — expected upstream
+		// when downstream closed the pipe early.
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == -1 {
+			continue
+		}
+		if upstreamErr == nil {
+			upstreamErr = err
 		}
 	}
-	return firstErr
+	if lastErr != nil {
+		return lastErr
+	}
+	return upstreamErr
 }
 
 // stderr joins the non-empty per-stage stderr captures.
@@ -526,6 +578,12 @@ func serveIndex(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	if o.Token != "" {
 		tokenQ = "&token=" + url.QueryEscape(o.Token)
 	}
+	sizeOf := func(name string) int64 {
+		if st, err := os.Stat(filepath.Join(o.Dir, name)); err == nil {
+			return st.Size()
+		}
+		return 0
+	}
 	var b strings.Builder
 	b.WriteString(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>ssql serve</title>
 <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:3rem auto;padding:0 1rem}
@@ -533,7 +591,13 @@ li{margin:.4rem 0}code{background:#eee;padding:1px 5px;border-radius:3px}</style
 <h1>ssql serve</h1><p>Data files in <code>` + html.EscapeString(o.Dir) + `</code> — click one to open its explore workspace:</p><ul>`)
 	for _, n := range names {
 		esc := html.EscapeString(n)
-		b.WriteString(`<li><a href="/explore?file=` + url.QueryEscape(n) + tokenQ + `">` + esc + `</a></li>`)
+		if sizeOf(n) > serveSampleThreshold {
+			pipe := fmt.Sprintf("ssql from %s | ssql limit %d", n, serveSampleRows)
+			b.WriteString(`<li><a href="/explore?pipeline=` + url.QueryEscape(pipe) + tokenQ + `">` + esc +
+				`</a> <span style="opacity:.6">(large — opens sampled; edit the head to change)</span></li>`)
+		} else {
+			b.WriteString(`<li><a href="/explore?file=` + url.QueryEscape(n) + tokenQ + `">` + esc + `</a></li>`)
+		}
 	}
 	b.WriteString(`</ul><p>Or run a head pipeline server-side and explore its result:<br>
 <code>/explore?pipeline=` + html.EscapeString(url.QueryEscape("ssql from FILE.csv | ssql where -if …")) + `</code></p>
@@ -564,6 +628,17 @@ func serveExplorePage(w http.ResponseWriter, r *http.Request, o serveHTTPOptions
 		if !slices.Contains(names, file) {
 			writeJSON(w, http.StatusNotFound, map[string]any{
 				"error": fmt.Sprintf("%q is not a data file in the served directory", file)})
+			return
+		}
+		if st, err := os.Stat(filepath.Join(o.Dir, file)); err == nil && st.Size() > serveSampleThreshold {
+			// Redirect to the sampled pipeline form so the limit is
+			// VISIBLE in the head input rather than silently applied.
+			q := url.Values{}
+			q.Set("pipeline", fmt.Sprintf("ssql from %s | ssql limit %d", file, serveSampleRows))
+			if o.Token != "" {
+				q.Set("token", o.Token)
+			}
+			http.Redirect(w, r, "/explore?"+q.Encode(), http.StatusFound)
 			return
 		}
 		stages = [][]string{{"from", file}}

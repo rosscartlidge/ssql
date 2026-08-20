@@ -479,3 +479,55 @@ func TestServeSchemaFields(t *testing.T) {
 		t.Errorf("shellism: status %d", resp3.StatusCode)
 	}
 }
+
+// TestServeExecuteEarlyExit pins the pipe-ownership fix: a downstream
+// stage that exits early (limit) must EPIPE its producer instead of
+// deadlocking. The first stage-chain implementation kept the parent's
+// copy of intermediate pipe ends open until Wait, so `from big | limit
+// 10` filled the 64KB pipe buffer and hung forever (found live on a
+// 1.2GB CSV).
+func TestServeExecuteEarlyExit(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	b.WriteString("id,val\n")
+	for i := 0; i < 200000; i++ { // ~2MB >> the 64KB pipe buffer
+		fmt.Fprintf(&b, "%d,%d\n", i, i*7)
+	}
+	if err := os.WriteFile(dir+"/big.csv", []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := corpusBin(t)
+	cmd := exec.Command(bin, "serve", "-listen-http", "127.0.0.1:0", "-dir", dir)
+	stderr, _ := cmd.StderrPipe()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	sc := bufio.NewScanner(stderr)
+	var addr string
+	for sc.Scan() {
+		if i := strings.Index(sc.Text(), "listening on "); i >= 0 {
+			addr = strings.Fields(sc.Text()[i+len("listening on "):])[0]
+			break
+		}
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	body, _ := json.Marshal(map[string]string{"pipeline": "ssql from csv big.csv | ssql limit 10"})
+	req, _ := http.NewRequest("POST", "http://"+addr+"/api/execute?mode=buffered", bytes.NewReader(body))
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("early-exit pipeline did not complete (deadlock regression): %v", err)
+	}
+	out, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var env struct {
+		Output string
+		Code   int
+	}
+	json.Unmarshal(out, &env)
+	if env.Code != 0 || strings.Count(env.Output, "\n") > 12 {
+		t.Errorf("envelope = code %d, %d lines", env.Code, strings.Count(env.Output, "\n"))
+	}
+}

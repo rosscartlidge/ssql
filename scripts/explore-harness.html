@@ -244,6 +244,34 @@ async function run() {
         await settle();
         const items3 = [...doc2.getElementById('completions').children].map(d => d.textContent);
         rec("head-field-names", items3.includes('service') && items3.includes('duration'), items3.join(","));
+        doc2.getElementById('completions').style.display = 'none';
+
+        // Regression (found by Ross): a head run that CHANGES the output
+        // fields must invalidate the tail's field-name cache — the cache
+        // key ("ssql from data.jsonl") doesn't change, the file does.
+        const ta2 = doc2.getElementById('pipeline');
+        const tailFields = async () => {
+            ta2.focus();
+            ta2.value = 'ssql from data.jsonl | ssql where -if ';
+            ta2.selectionStart = ta2.selectionEnd = ta2.value.length;
+            ta2.dispatchEvent(new w2.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+            await settle();
+            const got = [...doc2.getElementById('completions').children].map(d => d.textContent);
+            ta2.dispatchEvent(new w2.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+            return got;
+        };
+        // Warm the cache on the CURRENT data.jsonl (svc/n from the first
+        // head run), then re-run the head with DIFFERENT fields.
+        const before2 = await tailFields();
+        w2.__srvFetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({
+            output: '{"_schema":{"fields":["region","total"],"types":{"region":"string","total":"int"}}}\n' +
+                    '{"region":"emea","total":9}\n', stderr: '', code: 0 }) });
+        doc2.getElementById('headInput').value = 'ssql from other.csv';
+        await w2.exploreRunHead();
+        const after2 = await tailFields();
+        rec("head-refresh-invalidates-tail-fields",
+            before2.includes('svc') && after2.includes('region') && !after2.includes('svc'),
+            "before=" + before2.join(",") + " after=" + after2.join(","));
     } catch (e) { rec("server-mode", false, String(e)); }
     fin();
 }

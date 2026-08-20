@@ -3781,6 +3781,8 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             if (window.exploreSetRows) window.exploreSetRows(rows);
             showCreatedFiles();
             refreshFileList();
+            // Runs can write files (tee) that later stages complete from.
+            if (window.ssqlUISchemaCacheClear) window.ssqlUISchemaCacheClear();
         };
         // Server mode (DFC108 2c). This artifact is byte-identical whether
         // opened from disk or served by ssql serve — the page decides at
@@ -3834,6 +3836,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 return;
             }
             _fsWriteFile('data.jsonl', res.output);
+            // data.jsonl changed under the same name — the tail's
+            // field-name cache is keyed by pipeline text and would
+            // serve the OLD schema (found by Ross: head producing new
+            // fields, tail completing the old ones).
+            if (window.ssqlUISchemaCacheClear) window.ssqlUISchemaCacheClear();
             status.textContent = 'Head OK — re-running tail…';
             window.exploreRunBar();
             status.textContent = window.SSQL_UI_READY_TEXT || 'Ready.';
