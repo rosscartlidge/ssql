@@ -15,6 +15,8 @@ trap 'rm -rf "$tmp"; kill "${srv:-0}" 2>/dev/null || true' EXIT
 go build -o "$tmp/ssql" ./cmd/ssql
 printf 'name,dept,salary\nAlice,Eng,95000\nBob,Sales,65000\nCarol,Eng,105000\nDave,Sales,70000\n' > "$tmp/exp.csv"
 "$tmp/ssql" from csv "$tmp/exp.csv" | "$tmp/ssql" to explore -wasm "$tmp/exp_explore.html" >/dev/null
+# The empty-workspace artifact (GET / flow): zero records, -allow-empty.
+"$tmp/ssql" from jsonl /dev/null | "$tmp/ssql" to explore -wasm -allow-empty "$tmp/exp_empty.html" >/dev/null
 cp scripts/explore-harness.html "$tmp/check.html"
 
 port="${EXPLORE_TEST_PORT:-8938}"

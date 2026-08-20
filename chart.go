@@ -3070,6 +3070,7 @@ type ExploreConfig struct {
 	FsPolyfillJS  string `json:"-"`           // Content of fs-polyfill.js (inlined in HTML)
 	SsqlUIJS      string `json:"-"`           // Content of ssql-ui.js (shared completion/help/pipeline layer)
 	WasmBinary    string `json:"-"`           // Base64 of the GZIPPED slim engine wasm (embedded in HTML)
+	AllowEmpty    bool   `json:"-"`           // Permit zero records (served empty workspace); loud error otherwise
 }
 
 // DefaultExploreConfig provides sensible defaults for interactive data exploration.
@@ -3121,7 +3122,12 @@ func DataExplore(records iter.Seq[Record], config ExploreConfig, filename string
 	for record := range records {
 		recordSlice = append(recordSlice, record)
 	}
-	if len(recordSlice) == 0 {
+	if len(recordSlice) == 0 && !config.AllowEmpty {
+		// Loud by default: an accidentally-empty pipeline should not
+		// produce a quietly blank page. AllowEmpty is for pages that
+		// are MEANT to start blank (the served empty workspace, where
+		// the user types the head and the data arrives from the
+		// server).
 		return fmt.Errorf("no data to explore")
 	}
 
@@ -3270,9 +3276,9 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 padding: 8px;
             }
             .table-area {
-                /* !important: the React element carries an inline
-                   height:100% that would override the media rule */
-                height: 50dvh !important;
+                /* autoHeight grid: the container must NOT constrain it
+                   (!important beats the React inline height:100%) */
+                height: auto !important;
             }
             #pipelineBar { padding: 8px; }
             /* inline font-size:13px on the elements — override it */
@@ -3281,6 +3287,10 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             #headInput { flex-basis: 100%; }
             #pipelineBar button { padding: 8px 14px; }
             #completions { max-width: calc(100vw - 24px); }
+            /* vertical swipes over the chart scroll the PAGE (Plotly's
+               touch handlers would otherwise trap them); pinch/tap still
+               reach the plot */
+            .chart-area { touch-action: pan-y; }
         }
 
         .left-panel {
@@ -3576,7 +3586,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             <label style="font-size:12px; white-space:nowrap; cursor:pointer;" title="Compile the head to typed Go on the server (cached by pipeline) — big scans run several times faster"><input type="checkbox" id="headTyped"> &#9889; typed</label>
             <span style="opacity:0.6; font-size:12px; white-space:nowrap;">&#9656; data.jsonl</span>
         </div>
-        <div id="serverFiles" style="display:none; font-size:12px; margin-bottom:6px; color:#6c757d;"></div>
+        <div id="serverFiles" style="display:none; font-size:12px; margin-bottom:6px; color:#6c757d; gap:6px; align-items:flex-start;">
+            <select id="serverFileSelect" multiple size="4" style="min-width:220px; max-width:60%; font-family:inherit; font-size:12px; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px;"></select>
+            <button id="serverFileLoad" style="padding:4px 12px; white-space:nowrap;">Load into workspace</button>
+            <span style="max-width:30%;">Loaded files join by name in the pipeline, e.g. <code>ssql join kind.csv -using FIELD</code></span>
+        </div>
         <textarea id="pipeline" rows="2" spellcheck="false" placeholder="ssql from data.jsonl | …  (suggestions appear as you type; Tab accepts; Alt-h = help)" style="width:100%; font-family:inherit; font-size:13px; padding:8px; box-sizing:border-box; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px;"></textarea>
         <div id="completions" style="position:absolute; display:none; background:var(--panel-bg); border:1px solid #6c9bd1; border-radius:6px; max-height:200px; overflow-y:auto; z-index:1000; font-size:13px; min-width:160px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
         <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
@@ -3598,9 +3612,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
 
     {{if .WasmEnabled}}<script>{{.SsqlUIJS}}</script>{{end}}
     <script>
-        // Data from the pipeline
-        const DATA = {{.DataJSON}};
-        const SCHEMA = {{.SchemaJSON}};
+        // Data from the pipeline. Null-coalesce: Go marshals a
+        // zero-record slice as null, and DATA.length on null killed the
+        // whole React app on the empty workspace page.
+        const DATA = ({{.DataJSON}}) || [];
+        const SCHEMA = ({{.SchemaJSON}}) || {};
         const CONFIG = {{.ConfigJSON}};
 
         // WASM module (initialized asynchronously if enabled)
@@ -3848,14 +3864,18 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             let head = '';
             if (params.get('file')) head = 'ssql from ' + params.get('file');
             else if (params.get('pipeline')) head = params.get('pipeline');
-            if (!head) return;
+            // Server mode is decided by the PROBE, not the URL: an empty
+            // workspace (GET /) has no head param, but the head input
+            // still appears — prefilled "ssql from " so Tab immediately
+            // completes the server's files. Standalone artifacts stay
+            // dormant (the probe fails).
             if (!params.get('srvtest')) {
                 try {
                     const r = await srvFetch()(srvUrl('/api/health'));
                     if (!r.ok) return;
                 } catch (e) { return; }
             }
-            document.getElementById('headInput').value = head;
+            document.getElementById('headInput').value = head || 'ssql from ';
             document.getElementById('serverHead').style.display = 'flex';
             document.getElementById('barCopyCli').style.display = '';
             document.getElementById('barShare').style.display = '';
@@ -3871,6 +3891,12 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             ssqlUIWriteUpload(name, contents);
             if (!loadedServerFiles.includes(name)) loadedServerFiles.push(name);
         }
+        // Server files as a multi-select: pick several side tables, load
+        // them into the browser FS in one go (each under its own name,
+        // so direct-file join and completion work on them like uploads).
+        // Oversized files are visible but disabled — the server refuses
+        // them anyway; reduce those through a head pipeline.
+        const SERVER_FILE_MAX = 32 * 1024 * 1024;
         async function renderServerFiles() {
             let files;
             try {
@@ -3879,32 +3905,47 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             } catch (e) { return; }
             if (!files.length) return;
             serverFileNames = files.map(f => f.name);
-            const el = document.getElementById('serverFiles');
-            el.textContent = '';
-            el.appendChild(document.createTextNode('Server files (click to load into the workspace for joins): '));
-            files.forEach((f, i) => {
-                if (i > 0) el.appendChild(document.createTextNode(' \u00b7 '));
-                const a = document.createElement('a');
-                a.href = '#';
-                a.textContent = f.name;
-                a.title = (f.size >> 10) + 'KB — load into the browser FS as ' + f.name;
-                a.addEventListener('click', async (e) => {
-                    e.preventDefault();
-                    try {
-                        const r = await srvFetch()(srvUrl('/api/raw', 'file=' + encodeURIComponent(f.name)));
-                        if (!r.ok) {
-                            const err = await r.json().catch(() => ({}));
-                            setTransientStatus(err.error || ('loading ' + f.name + ' failed'));
-                            return;
-                        }
-                        exploreLoadServerFile(f.name, await r.text());
-                        setTransientStatus(f.name + ' loaded — join it by name, e.g. ssql join ' + f.name + ' -using FIELD');
-                    } catch (err) { setTransientStatus('loading ' + f.name + ' failed: ' + err); }
-                });
-                el.appendChild(a);
-            });
-            el.style.display = 'block';
+            const sel = document.getElementById('serverFileSelect');
+            sel.innerHTML = '';
+            for (const f of files) {
+                const opt = document.createElement('option');
+                opt.value = f.name;
+                const kb = f.size >= (1 << 20) ? (f.size / (1 << 20)).toFixed(1) + 'MB' : (f.size >> 10) + 'KB';
+                if (f.size > SERVER_FILE_MAX) {
+                    opt.textContent = f.name + ' (' + kb + ' — too large; reduce via a head pipeline)';
+                    opt.disabled = true;
+                } else {
+                    opt.textContent = f.name + ' (' + kb + ')';
+                }
+                sel.appendChild(opt);
+            }
+            document.getElementById('serverFiles').style.display = 'flex';
         }
+        window.exploreLoadSelectedFiles = async function() {
+            const sel = document.getElementById('serverFileSelect');
+            const names = [...sel.selectedOptions].map(o => o.value);
+            if (!names.length) {
+                setTransientStatus('Select one or more server files first');
+                return;
+            }
+            const ok = [], failed = [];
+            for (const name of names) {
+                try {
+                    const r = await srvFetch()(srvUrl('/api/raw', 'file=' + encodeURIComponent(name)));
+                    if (!r.ok) {
+                        const err = await r.json().catch(() => ({}));
+                        failed.push(name + (err.error ? ' (' + err.error + ')' : ''));
+                        continue;
+                    }
+                    exploreLoadServerFile(name, await r.text());
+                    ok.push(name);
+                } catch (e) { failed.push(name + ' (' + e + ')'); }
+            }
+            let msg = ok.length ? 'Loaded ' + ok.join(', ') + ' — join by name, e.g. ssql join ' + ok[0] + ' -using FIELD' : '';
+            if (failed.length) msg += (msg ? '  ⚠ ' : '⚠ ') + 'failed: ' + failed.join('; ');
+            setTransientStatus(msg || 'Nothing loaded');
+        };
+        document.getElementById('serverFileLoad').addEventListener('click', () => window.exploreLoadSelectedFiles());
         window.exploreRunHead = async function() {
             const head = document.getElementById('headInput').value.trim().replace(/[|\s]+$/, '');
             if (!head) return;
@@ -4209,7 +4250,12 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     minWidth: 100
                 },
                 pagination: true,
-                paginationPageSize: CONFIG.pageSize || 50,
+                // Phones: autoHeight — the grid grows to fit its page of
+                // rows and the PAGE scrolls (fixed-height mode collapsed
+                // the rows viewport to 0px inside the mobile column
+                // layout, leaving only the pagination footer visible).
+                domLayout: window.matchMedia('(max-width: 768px)').matches ? 'autoHeight' : 'normal',
+                paginationPageSize: window.matchMedia('(max-width: 768px)').matches ? 20 : (CONFIG.pageSize || 50),
                 paginationPageSizeSelector: [20, 50, 100, 500],
                 rowSelection: { mode: 'multiRow' },
                 onGridReady: (params) => {
@@ -4311,8 +4357,14 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         };
                 }
 
+                // Phones: drag-pan must NOT trap the page scroll — a swipe
+                // on the chart should scroll to the table, not pan the plot
+                // (taps still show tooltips). Paired with touch-action:
+                // pan-y on .chart-area in the mobile CSS.
+                const mobileChart = window.matchMedia('(max-width: 768px)').matches;
                 const layout = {
                     margin: { t: 30, r: 30, b: 50, l: 60 },
+                    dragmode: mobileChart ? false : 'zoom',
                     // automargin: long category labels (kind names, service
                     // paths) grow the axis margin — and auto-rotate — instead
                     // of being clipped by the fixed margins.
@@ -4761,7 +4813,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                             },
                                 React.createElement('span', { className: 'field-name' }, field),
                                 React.createElement('span', { className: 'field-type' },
-                                    SCHEMA.summary.fieldTypes[field] || (typeof (displayData[0] || {})[field] === 'number' ? 'number' : 'string')
+                                    ((SCHEMA.summary && SCHEMA.summary.fieldTypes) || {})[field] || (typeof (displayData[0] || {})[field] === 'number' ? 'number' : 'string')
                                 )
                             )
                         )

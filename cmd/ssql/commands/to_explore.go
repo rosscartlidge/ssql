@@ -29,6 +29,13 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			Help("Generate Go code instead of executing").
 			Done().
 
+		Flag("-allow-empty").
+			Bool().
+			Global().
+			Default(false).
+			Help("Permit zero input records (a deliberately blank workspace page); without it, empty input is a loud error").
+			Done().
+
 		Flag("-title").
 			String().
 			Global().
@@ -140,6 +147,8 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			config := ssql.DefaultExploreConfig()
 			config.Title = title
 			config.Theme = theme
+			allowEmpty, _ := ctx.GlobalFlags["-allow-empty"].(bool)
+			config.AllowEmpty = allowEmpty
 			config.InitialXField = xField
 			config.InitialYField = yField
 			config.PageSize = pageSize

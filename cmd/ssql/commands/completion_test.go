@@ -32,6 +32,7 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	RegisterCorrelate(cmd)
 	RegisterFFT(cmd)
 	RegisterIFFT(cmd)
+	RegisterMerge(cmd)
 
 	// Define expected field completion for each command
 	// Format: command -> flag -> arg index that should have field completion
@@ -56,6 +57,9 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 		},
 		"exclude": {
 			"FIELDS": {0}, // variadic fields
+		},
+		"merge": {
+			"-if": {0}, // catalog metadata field is arg 0 (from -catalog CSV header)
 		},
 		"rename": {
 			"-as": {0}, // old-field is arg 0

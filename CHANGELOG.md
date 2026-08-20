@@ -7,12 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`GET /` goes straight to the workspace** — the click-a-file index
+  page is gone; the root redirects to an empty workspace whose head
+  prefills `ssql from ` so Tab immediately completes the server's
+  files. `to explore` gains `-allow-empty` (a deliberately blank page;
+  empty input stays a loud error without it). Server mode is now
+  decided by the /api/health probe, not URL parameters.
+
+### Fixed
+- **Dead placeholder hints where completion actually works** (audit
+  prompted by the join fix): join's `-on`/`-as` right-side args now
+  hint the actionable `Use-Ctrl-O` instead of `<right-field>` (Ctrl-O
+  resolves them from the right source since the CompleteSource fix),
+  and `merge -if` gained real completers — field names from the
+  `-catalog` CSV's header (`FieldsFromFlag`), values via sampling
+  (`FieldValuesFrom`) — replacing inert `<field>`/`<value>`. The
+  remaining angle-bracket hints are all invented-name or non-field
+  slots, correctly non-completable.
+- **Browser Tab on the join's right-side `-on` field did nothing** —
+  the engine hints `<right-field>` there, which the browser's
+  field-completion trigger set didn't recognize (Ctrl-O in the CLI
+  worked; browser Tab stayed silent). The trigger vocabulary now
+  covers `<field>`/`<right-field>` alongside `Use-Ctrl-O`/`<FIELD>`;
+  invented-name hints (`<field-name>`, `<result-field>`) stay
+  non-completable.
+- **Empty workspace crashed on the first head run** — the zero-record
+  page marshaled `DATA`/`SCHEMA` as `null` (Go nil-slice JSON), and two
+  null dereferences (`DATA.length` at load; `SCHEMA.summary.fieldTypes`
+  in the field list after the head populated fields) crashed the React
+  app — grid and charts vanished while the bar kept working. Both
+  null-coalesced; the harness now exercises the real zero-record
+  artifact end to end (head run → rows AND columns appear).
+
 ### Added
 - **Mobile-friendly workspace layout** — at phone widths the page goes
   single-column with the data grid above the builder panel, bars and
   buttons wrap, inputs jump to 16px (defusing iOS zoom-on-focus), and
   the layout uses dynamic-viewport heights so mobile URL bars don't
-  fight it. Pairs with the existing tap-to-accept completion.
+  fight it. Swipes over the chart scroll the PAGE (Plotly drag-pan is
+  disabled at phone widths — taps still show tooltips — and the chart
+  frame gets touch-action: pan-y), so the table below the graph is
+  reachable — and visible: the grid switches to autoHeight on phones
+  (fixed-height mode collapsed its rows viewport to 0px, leaving only
+  the pagination footer) with a 20-row page size. Pairs with the existing tap-to-accept completion.
 - **Tailscale-friendly serve** — `-listen-http tailscale:8080` binds
   this machine's Tailscale address without looking it up, and binding
   a Tailscale address (100.64/10 or fd7a:115c:a1e0::/48) is allowed
@@ -77,9 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when crowded) instead of clipping; the chart frame has a drag handle
   (bottom edge) for when dense charts need more room.
 - **Server files load into the workspace for joins** — in a served
-  workspace, the serve directory's data files appear as click-to-load
-  chips: loading writes the raw bytes into the browser FS under the
-  same name, so the tail can `ssql join kind.csv -using k` directly
+  workspace, a multi-select list of the serve directory's data files
+  (with sizes; oversized entries visible but disabled) loads the
+  selected side tables into the browser FS in one go, each under its
+  own name, so the tail can `ssql join kind.csv -using k` directly
   (new `GET /api/raw`, allow-listed; files >32MB refuse loudly —
   reduce those through a head pipeline).
 - **Head-input completion in the served workspace** — the server-head

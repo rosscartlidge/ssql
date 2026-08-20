@@ -54,13 +54,16 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 		Flag("-if").
 			Arg("field").
-				Completer(&cf.NoCompleter{Hint: "<field>"}).
+				// Prune filters address the CATALOG's columns — complete
+				// them from the -catalog CSV's header (the FieldsFromFlag
+				// rule: never NoCompleter when a data file can answer).
+				FieldsFromFlag("-catalog").
 				Done().
 			Arg("op").
 				Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains"}}).
 				Done().
 			Arg("value").
-				Completer(&cf.NoCompleter{Hint: "<value>"}).
+				FieldValuesFrom("-catalog", "field").
 				Done().
 			Accumulate().
 			Global().

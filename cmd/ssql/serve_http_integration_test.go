@@ -240,15 +240,29 @@ func TestServeExplorePage(t *testing.T) {
 	addr := startServeHTTPProcess(t)
 	base := "http://" + addr
 
-	t.Run("index-lists-files", func(t *testing.T) {
-		resp, err := http.Get(base + "/")
+	t.Run("root-redirects-to-workspace", func(t *testing.T) {
+		client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}}
+		resp, err := client.Get(base + "/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 302 || resp.Header.Get("Location") != "/explore" {
+			t.Errorf("status %d location %q", resp.StatusCode, resp.Header.Get("Location"))
+		}
+	})
+
+	t.Run("explore-no-params-is-empty-workspace", func(t *testing.T) {
+		resp, err := http.Get(base + "/explore")
 		if err != nil {
 			t.Fatal(err)
 		}
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if !strings.Contains(string(b), "employees.csv") || !strings.Contains(string(b), "/explore?file=") {
-			t.Errorf("index missing file links: %.300s", b)
+		if resp.StatusCode != 200 || !strings.Contains(string(b), "ssqlUIReady") {
+			t.Errorf("status %d, workspace marker missing (%.200s)", resp.StatusCode, b)
 		}
 	})
 

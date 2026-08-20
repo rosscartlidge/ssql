@@ -44,7 +44,10 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		FieldsFromFlag("").
 		Done().
 		Arg("right-field").
-		Completer(&cf.NoCompleter{Hint: "<right-field>"}).
+		// Ctrl-O (and the browser's Tab) resolve this from the join's
+		// right source since the direct-file/procsub CompleteSource fix
+		// — hint the actionable key, not a dead placeholder.
+		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
 		Done().
 		Accumulate().
 		Local().
@@ -52,7 +55,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-as").
 		Arg("right-field").
-		Completer(&cf.NoCompleter{Hint: "<right-field>"}).
+		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
 		Done().
 		Arg("new-name").
 		Completer(&cf.NoCompleter{Hint: "<new-name>"}).

@@ -29,7 +29,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"net"
 	"net/http"
@@ -116,7 +115,18 @@ func startServeHTTP(ctx context.Context, o serveHTTPOptions) (string, <-chan err
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		serveIndex(w, r, o)
+		// Straight to the workspace: head completion lists the server's
+		// files (Tab after "ssql from "), so a click-a-file index page
+		// is a needless detour.
+		q := url.Values{}
+		if o.Token != "" {
+			q.Set("token", o.Token)
+		}
+		target := "/explore"
+		if enc := q.Encode(); enc != "" {
+			target += "?" + enc
+		}
+		http.Redirect(w, r, target, http.StatusFound)
 	})
 	mux.HandleFunc("GET /explore", func(w http.ResponseWriter, r *http.Request) {
 		serveExplorePage(w, r, o)
@@ -616,48 +626,6 @@ func listDataFiles(dir string) ([]string, error) {
 	return names, nil
 }
 
-// serveIndex renders a minimal landing page: the served directory's
-// data files, each linking to its explore workspace. Any configured
-// token is threaded through the links (the Jupyter ?token= pattern).
-func serveIndex(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
-	names, err := listDataFiles(o.Dir)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	tokenQ := ""
-	if o.Token != "" {
-		tokenQ = "&token=" + url.QueryEscape(o.Token)
-	}
-	sizeOf := func(name string) int64 {
-		if st, err := os.Stat(filepath.Join(o.Dir, name)); err == nil {
-			return st.Size()
-		}
-		return 0
-	}
-	var b strings.Builder
-	b.WriteString(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>ssql serve</title>
-<style>body{font-family:system-ui,sans-serif;max-width:640px;margin:3rem auto;padding:0 1rem}
-li{margin:.4rem 0}code{background:#eee;padding:1px 5px;border-radius:3px}</style></head><body>
-<h1>ssql serve</h1><p>Data files in <code>` + html.EscapeString(o.Dir) + `</code> — click one to open its explore workspace:</p><ul>`)
-	for _, n := range names {
-		esc := html.EscapeString(n)
-		if sizeOf(n) > serveSampleThreshold {
-			pipe := fmt.Sprintf("ssql from %s | ssql limit %d", n, serveSampleRows)
-			b.WriteString(`<li><a href="/explore?pipeline=` + url.QueryEscape(pipe) + tokenQ + `">` + esc +
-				`</a> <span style="opacity:.6">(large — opens sampled; edit the head to change)</span></li>`)
-		} else {
-			b.WriteString(`<li><a href="/explore?file=` + url.QueryEscape(n) + tokenQ + `">` + esc + `</a></li>`)
-		}
-	}
-	b.WriteString(`</ul><p>Or run a head pipeline server-side and explore its result:<br>
-<code>/explore?pipeline=` + html.EscapeString(url.QueryEscape("ssql from FILE.csv | ssql where -if …")) + `</code></p>
-<p>API: <code>POST /api/execute</code> · <code>POST /api/cursor</code> · <code>GET /api/files</code> · <code>GET /api/health</code></p>
-</body></html>`)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(b.String()))
-}
-
 // serveExplorePage runs `<head pipeline> | ssql to explore TMP` through
 // the stage chain and serves the generated workspace — byte-identical
 // to a locally generated `to explore` artifact (wasm engine included on
@@ -668,6 +636,7 @@ li{margin:.4rem 0}code{background:#eee;padding:1px 5px;border-radius:3px}</style
 func serveExplorePage(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	var stages [][]string
 	var title string
+	var emptyOK bool
 	switch {
 	case r.URL.Query().Get("file") != "":
 		file := r.URL.Query().Get("file")
@@ -703,8 +672,11 @@ func serveExplorePage(w http.ResponseWriter, r *http.Request, o serveHTTPOptions
 		}
 		title = "pipeline result"
 	default:
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "need ?file=NAME or ?pipeline=ssql …"})
-		return
+		// Empty workspace: no data yet — the user types the head
+		// ("ssql from <Tab>" completes the server's files) and runs it.
+		stages = [][]string{{"from", "jsonl", "/dev/null"}}
+		title = "ssql workspace"
+		emptyOK = true
 	}
 
 	tmp, err := os.CreateTemp("", "ssql-serve-explore-*.html")
@@ -715,7 +687,11 @@ func serveExplorePage(w http.ResponseWriter, r *http.Request, o serveHTTPOptions
 	tmpPath := tmp.Name()
 	tmp.Close()
 	defer os.Remove(tmpPath)
-	stages = append(stages, []string{"to", "explore", "-title", title, tmpPath})
+	exploreStage := []string{"to", "explore", "-title", title}
+	if emptyOK {
+		exploreStage = append(exploreStage, "-allow-empty")
+	}
+	stages = append(stages, append(exploreStage, tmpPath))
 
 	self, err := os.Executable()
 	if err != nil {

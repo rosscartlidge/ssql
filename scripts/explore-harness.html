@@ -279,7 +279,8 @@ async function run() {
             const u = String(url);
             if (u.includes('/api/files')) {
                 return Promise.resolve({ ok: true, json: () => Promise.resolve({
-                    files: [{ name: 'kind.csv', size: 120 }, { name: 'relationship.csv', size: 90 }] }) });
+                    files: [{ name: 'kind.csv', size: 120 }, { name: 'relationship.csv', size: 90 },
+                            { name: 'huge.csv', size: 40 << 20 }] }) });
             }
             if (u.includes('/api/raw')) {
                 return Promise.resolve({ ok: true, json: () => Promise.resolve({}),
@@ -288,17 +289,44 @@ async function run() {
             return Promise.resolve({ ok: false, json: () => Promise.resolve({ error: 'unexpected' }) });
         };
         await w2.renderServerFiles();
-        const chips = [...doc2.getElementById('serverFiles').querySelectorAll('a')].map(a => a.textContent);
-        rec("server-files-listed", chips.includes('kind.csv') && chips.includes('relationship.csv'), chips.join(","));
-        [...doc2.getElementById('serverFiles').querySelectorAll('a')][0].click();
+        const sfSel = doc2.getElementById('serverFileSelect');
+        const opts2 = [...sfSel.options];
+        rec("server-files-listed",
+            opts2.some(o => o.value === 'kind.csv') && opts2.some(o => o.value === 'relationship.csv'),
+            opts2.map(o => o.value).join(","));
+        rec("server-files-oversize-disabled",
+            opts2.find(o => o.value === 'huge.csv').disabled === true &&
+            opts2.find(o => o.value === 'kind.csv').disabled === false,
+            opts2.map(o => o.value + ':' + o.disabled).join(","));
+        // Multi-select BOTH loadable files, load in one go.
+        opts2.find(o => o.value === 'kind.csv').selected = true;
+        opts2.find(o => o.value === 'relationship.csv').selected = true;
+        await w2.exploreLoadSelectedFiles();
         await settle();
-        rec("server-file-loaded", doc2.getElementById('fileList').textContent.includes('kind.csv'),
+        rec("server-file-loaded",
+            doc2.getElementById('fileList').textContent.includes('kind.csv') &&
+            doc2.getElementById('fileList').textContent.includes('relationship.csv'),
             doc2.getElementById('fileList').textContent);
         // data.jsonl currently holds {region:"emea",total:9} — join the
         // loaded side table by name, real wasm execution.
         ta2.value = 'ssql from data.jsonl | ssql join kind.csv -using region';
         w2.exploreRunBar();
         rec("server-file-joins", w2.exploreLastRowCount === 1, "rows=" + w2.exploreLastRowCount);
+
+        // Regression (found by Ross): Tab on the join's RIGHT-side -on
+        // field must complete from the right FILE — the engine hints
+        // <right-field> there, which the trigger set didn't recognize
+        // (^O worked in the CLI; browser Tab did nothing).
+        ta2.focus();
+        ta2.value = 'ssql from data.jsonl | ssql join kind.csv -on region ';
+        ta2.selectionStart = ta2.selectionEnd = ta2.value.length;
+        ta2.dispatchEvent(new w2.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        await settle();
+        const rightItems = [...doc2.getElementById('completions').children].map(d => d.textContent);
+        rec("join-right-field-tab",
+            rightItems.includes('region') && rightItems.includes('label'),
+            rightItems.join(",") + " status=" + doc2.getElementById('status').textContent);
+        ta2.dispatchEvent(new w2.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
 
         // Copy-as-CLI: head + (tail minus its data.jsonl source) as one
         // pipeline, with a loud note for browser-only files.
@@ -392,7 +420,67 @@ async function run() {
         rec("mobile-input-16px",
             w4.getComputedStyle(w4.document.getElementById('pipeline')).fontSize === '16px',
             w4.getComputedStyle(w4.document.getElementById('pipeline')).fontSize);
+        // Swipes over the chart must scroll the page, not pan the plot:
+        // touch-action pan-y on the frame, dragmode disabled in Plotly.
+        rec("mobile-chart-pan-y",
+            w4.getComputedStyle(w4.document.querySelector('.chart-area')).touchAction === 'pan-y',
+            w4.getComputedStyle(w4.document.querySelector('.chart-area')).touchAction);
+        let plot4 = null;
+        for (let i = 0; i < 100; i++) {
+            plot4 = w4.document.querySelector('.js-plotly-plot');
+            if (plot4 && plot4._fullLayout) break;
+            await pause(50);
+        }
+        rec("mobile-chart-dragmode-off",
+            plot4 && plot4._fullLayout && plot4._fullLayout.dragmode === false,
+            plot4 && plot4._fullLayout ? String(plot4._fullLayout.dragmode) : 'no plot');
+        // Regression (found by Ross): fixed-height grid mode collapsed
+        // the rows viewport to 0px on mobile — pagination footer visible,
+        // rows invisible. autoHeight mode must give the rows real height.
+        const vp4 = w4.document.querySelector('.ag-body-viewport');
+        const rows4 = w4.document.querySelectorAll('.ag-row').length;
+        rec("mobile-grid-rows-visible",
+            vp4 && vp4.offsetHeight >= 42 && rows4 > 0,
+            "viewport h=" + (vp4 && vp4.offsetHeight) + " rows=" + rows4);
         f4.remove();
+
+        // Empty workspace (GET / flow): server mode reveals with NO url
+        // head — the input prefills "ssql from " ready for Tab.
+        const f5 = document.createElement('iframe');
+        f5.style.cssText = 'width:1200px;height:600px';
+        f5.src = 'exp_empty.html?srvtest=1'; // the REAL zero-record artifact
+        document.body.appendChild(f5);
+        await new Promise(r => f5.addEventListener('load', r, { once: true }));
+        const w5 = f5.contentWindow;
+        const errs5 = [];
+        w5.addEventListener('error', e => errs5.push(String(e.message) + ' @ ' + String(e.error && e.error.stack).split('\n').slice(0,4).join(' <- ')));
+        for (let i = 0; i < 400; i++) { if (w5.ssqlEngine || w5.ssqlEngineError) break; await pause(50); }
+        await settle();
+        rec("empty-workspace-head-ready",
+            w5.getComputedStyle(w5.document.getElementById('serverHead')).display !== 'none' &&
+            w5.document.getElementById('headInput').value === 'ssql from ',
+            "display=" + w5.getComputedStyle(w5.document.getElementById('serverHead')).display +
+            " head=" + JSON.stringify(w5.document.getElementById('headInput').value));
+        // From EMPTY, a head run must light up the grid: rows AND columns.
+        w5.__srvFetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({
+            output: '{"_schema":{"fields":["svc","n"],"types":{"svc":"string","n":"int"}}}\n' +
+                    '{"svc":"api","n":4}\n{"svc":"web","n":2}\n',
+            stderr: '', code: 0, engine: 'exec', runMs: 12 }) });
+        w5.document.getElementById('headInput').value = 'ssql from events.csv';
+        await w5.exploreRunHead();
+        await settle();
+        const hdrs5 = [...w5.document.querySelectorAll('.ag-header-cell-text')].map(e => e.textContent);
+        rec("empty-workspace-head-populates-grid",
+            w5.exploreLastRowCount === 2 && hdrs5.includes('svc') && hdrs5.includes('n') &&
+            w5.document.querySelectorAll('.ag-row').length === 2,
+            "rows=" + w5.exploreLastRowCount + " headers=" + hdrs5.join(",") +
+            " agrows=" + w5.document.querySelectorAll('.ag-row').length +
+            " gridroot=" + !!w5.document.querySelector('.ag-root-wrapper') +
+            " container=" + !!w5.document.querySelector('.explorer-container') +
+            " setRows=" + typeof w5.exploreSetRows +
+            " errs=" + errs5.join(" | ") +
+            " status=" + w5.document.getElementById('status').textContent);
+        f5.remove();
 
         rec("share-restore-inputs",
             doc3.getElementById('headInput').value === 'ssql from other.csv | ssql limit 7' &&

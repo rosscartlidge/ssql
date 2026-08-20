@@ -294,6 +294,13 @@ function createCompletionBinding(opts) {
         return (i > 0 && ta.value[i - 1] === '|') ? ' ssql ' : 'ssql ';
     }
 
+    // Hints that mean "an EXISTING field goes here" — completable from
+    // the upstream (or, for a join's right side, from the right-source
+    // file via -complete-source). <field-name>/<result-field>/<name>
+    // are names the user INVENTS and stay non-completable.
+    const FIELD_HINTS = ['Use-Ctrl-O', '<FIELD>', '<field>', '<right-field>'];
+    const hasFieldHint = (hints) => hints.some(h => FIELD_HINTS.includes(h));
+
     async function completeAtCursor() {
         const ctx = await cursorContext();
         if (!ctx) return;
@@ -302,7 +309,7 @@ function createCompletionBinding(opts) {
         if (cands.length === 0) {
             // A field slot: the engine can't see across pipes, but a
             // schema-capable binding can.
-            if (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>')) {
+            if (hasFieldHint(hints)) {
                 if (schemaFields) { await fieldCompleteAtCursor(); }
                 else setTransientStatus('A field name goes here (type it — this input has no upstream schema view)');
                 return;
@@ -351,7 +358,7 @@ function createCompletionBinding(opts) {
         if (!ctx) { if (passiveOpen) hideCompletions(); return; }
         if (ctx.pos === 0) { if (passiveOpen) hideCompletions(); return; }
         let { cands, hints } = await completionCandidates(ctx, true);
-        if (!cands.length && schemaFields && (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>'))) {
+        if (!cands.length && schemaFields && (hasFieldHint(hints))) {
             const fields = await schemaFields(ctx.before);
             if (fields) cands = fields.filter(f => f.startsWith(cur));
         }
