@@ -26,6 +26,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -41,6 +42,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"
 )
 
@@ -289,6 +291,11 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 		return
 	}
 	buffered := r.URL.Query().Get("mode") == "buffered"
+	engine := r.URL.Query().Get("engine")
+	if engine != "" && engine != "exec" && engine != "typed" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("engine %q not supported (exec or typed)", engine)})
+		return
+	}
 
 	ctx := r.Context()
 	if o.Timeout > 0 {
@@ -297,17 +304,38 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 		defer cancel()
 	}
 
-	ch, err := startStageChain(ctx, self, o.Dir, stages)
+	engineUsed := "exec"
+	var compileMs int64
+	var ch *stageChain
+	if engine == "typed" {
+		bin, cached, dur, cerr := serveTypedHeadBinary(ctx, self, o.Dir, stages)
+		if cerr != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error": "typed compile failed", "detail": cerr.Error()})
+			return
+		}
+		compileMs = dur.Milliseconds()
+		if cached {
+			engineUsed = "typed-cached"
+		} else {
+			engineUsed = "typed-compiled"
+		}
+		ch, err = startStageChain(ctx, bin, o.Dir, [][]string{{}})
+	} else {
+		ch, err = startStageChain(ctx, self, o.Dir, stages)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	w.Header().Set("X-Ssql-Engine", engineUsed)
 
 	if buffered {
 		// Browser mode: fetch() can't read HTTP trailers, so collect
 		// everything and answer in one JSON envelope. Workspace head
 		// runs are snapshot-shaped anyway (the result lands in the
 		// page's data.jsonl); streaming clients keep the default mode.
+		t0 := time.Now()
 		out, _ := io.ReadAll(ch.out)
 		code := 0
 		if runErr := ch.wait(); runErr != nil {
@@ -315,6 +343,8 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"output": string(out), "stderr": ch.stderr(), "code": code,
+			"engine": engineUsed, "compileMs": compileMs,
+			"runMs": time.Since(t0).Milliseconds(),
 		})
 		return
 	}
@@ -774,4 +804,67 @@ func serveRawFile(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	http.ServeFile(w, r, path)
+}
+
+// serveTypedHeadBinary returns a compiled typed-mode binary for the
+// given (already-validated) stages, building into a per-user cache on
+// miss. The cache key is the rendered script plus this binary's
+// version+commit, so upgrades never serve stale codegen. This is the
+// ssh pushdown's codegen-symmetric design one hop closer: the same
+// `generate go -script -mode typed` the remote end runs.
+func serveTypedHeadBinary(ctx context.Context, self, dir string, stages [][]string) (string, bool, time.Duration, error) {
+	var sb strings.Builder
+	for i, args := range stages {
+		if i > 0 {
+			sb.WriteString("| ")
+		}
+		sb.WriteString("ssql")
+		for _, a := range args {
+			sb.WriteString(" ")
+			sb.WriteString(ssql.ShellQuote(a))
+		}
+		sb.WriteString("\n")
+	}
+	script := sb.String()
+
+	sum := sha256.Sum256([]byte(script + "\x00" + version.Version + "\x00" + version.Commit))
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil {
+		cacheRoot = os.TempDir()
+	}
+	cacheDir := filepath.Join(cacheRoot, "ssql-serve")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", false, 0, err
+	}
+	bin := filepath.Join(cacheDir, fmt.Sprintf("head-%x", sum[:12]))
+	if _, err := os.Stat(bin); err == nil {
+		return bin, true, 0, nil
+	}
+
+	t0 := time.Now()
+	scriptFile, err := os.CreateTemp("", "ssql-serve-head-*.ssql")
+	if err != nil {
+		return "", false, 0, err
+	}
+	scriptPath := scriptFile.Name()
+	defer os.Remove(scriptPath)
+	if _, err := scriptFile.WriteString(script); err != nil {
+		scriptFile.Close()
+		return "", false, 0, err
+	}
+	scriptFile.Close()
+
+	tmpBin := bin + ".tmp"
+	cmd := exec.CommandContext(ctx, self, "generate", "go", "-script", scriptPath, "-mode", "typed", "-build", tmpBin)
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		os.Remove(tmpBin)
+		return "", false, 0, fmt.Errorf("%v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if err := os.Rename(tmpBin, bin); err != nil {
+		return "", false, 0, err
+	}
+	return bin, false, time.Since(t0), nil
 }

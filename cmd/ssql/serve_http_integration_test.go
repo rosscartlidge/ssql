@@ -396,6 +396,35 @@ func TestServeCutPointEquivalence(t *testing.T) {
 				if normalizeWireNumerics(got) != normalizeWireNumerics(want) {
 					t.Errorf("cut at %d changed results\n--- split:\n%s--- whole:\n%s", cut, got, want)
 				}
+
+				// Typed-head lane (pipeline 0 only — each cut compiles):
+				// the compiled head must feed the tail to the same result.
+				if pi == 0 {
+					resp, body := postJSON(t, base+"/api/execute?mode=buffered&engine=typed",
+						map[string]string{"pipeline": head}, nil)
+					if resp.StatusCode != 200 {
+						t.Fatalf("typed head status %d: %s", resp.StatusCode, body)
+					}
+					var tenv struct {
+						Output, Engine string
+						Code           int
+					}
+					json.Unmarshal([]byte(body), &tenv)
+					if tenv.Code != 0 || !strings.HasPrefix(tenv.Engine, "typed") {
+						t.Fatalf("typed head env: %s", body)
+					}
+					tscratch := t.TempDir()
+					if err := writeFile(tscratch+"/data.jsonl", tenv.Output); err != nil {
+						t.Fatal(err)
+					}
+					tgot, err := execBashIn(tscratch, tail)
+					if err != nil {
+						t.Fatalf("typed tail run: %v", err)
+					}
+					if normalizeWireNumerics(tgot) != normalizeWireNumerics(want) {
+						t.Errorf("TYPED cut at %d changed results\n--- split:\n%s--- whole:\n%s", cut, tgot, want)
+					}
+				}
 			})
 		}
 	}
@@ -588,5 +617,41 @@ func TestServeRawFileTooLarge(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(string(b), "head pipeline") {
 		t.Errorf("status %d body %s", resp.StatusCode, b)
+	}
+}
+
+
+func TestServeTypedHeadCache(t *testing.T) {
+	addr := startServeHTTPProcess(t)
+	base := "http://" + addr
+	pipe := map[string]string{"pipeline": "ssql from employees.csv | ssql sort name | ssql limit 3"}
+
+	_, body1 := postJSON(t, base+"/api/execute?mode=buffered&engine=typed", pipe, nil)
+	var e1 struct{ Engine string }
+	json.Unmarshal([]byte(body1), &e1)
+	// First call may hit a cache from an earlier test run (the cache is
+	// per-user and keyed by script+version) — either engine value is
+	// legitimate; the SECOND call must be a cache hit.
+	if !strings.HasPrefix(e1.Engine, "typed") {
+		t.Fatalf("first: %s", body1)
+	}
+	_, body2 := postJSON(t, base+"/api/execute?mode=buffered&engine=typed", pipe, nil)
+	var e2 struct {
+		Engine string
+		Code   int
+	}
+	json.Unmarshal([]byte(body2), &e2)
+	if e2.Engine != "typed-cached" || e2.Code != 0 {
+		t.Errorf("second: %s", body2)
+	}
+}
+
+func TestServeTypedHeadCompileFailureIsLoud(t *testing.T) {
+	addr := startServeHTTPProcess(t)
+	base := "http://" + addr
+	resp, body := postJSON(t, base+"/api/execute?mode=buffered&engine=typed",
+		map[string]string{"pipeline": "ssql from nope.csv | ssql limit 3"}, nil)
+	if resp.StatusCode != 422 || !strings.Contains(body, "typed compile failed") {
+		t.Errorf("status %d body %s", resp.StatusCode, body)
 	}
 }

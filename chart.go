@@ -3539,6 +3539,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             <span title="Server head — this part runs on the ssql serve host">&#128421;</span>
             <input id="headInput" spellcheck="false" style="flex:1; font-family:inherit; font-size:13px; padding:6px 8px; box-sizing:border-box; background:var(--bg-color); color:var(--text-color); border:1px solid #6c9bd1; border-radius:4px;">
             <button id="headRun" style="padding:4px 12px; white-space:nowrap;">Run head &#9656;</button>
+            <label style="font-size:12px; white-space:nowrap; cursor:pointer;" title="Compile the head to typed Go on the server (cached by pipeline) — big scans run several times faster"><input type="checkbox" id="headTyped"> &#9889; typed</label>
             <span style="opacity:0.6; font-size:12px; white-space:nowrap;">&#9656; data.jsonl</span>
         </div>
         <div id="serverFiles" style="display:none; font-size:12px; margin-bottom:6px; color:#6c757d;"></div>
@@ -3869,8 +3870,9 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             const status = document.getElementById('status');
             status.textContent = 'Running head on server…';
             let res;
+            const typed = document.getElementById('headTyped').checked;
             try {
-                const r = await srvFetch()(srvUrl('/api/execute', 'mode=buffered'),
+                const r = await srvFetch()(srvUrl('/api/execute', 'mode=buffered' + (typed ? '&engine=typed' : '')),
                     { method: 'POST', body: JSON.stringify({ pipeline: head }) });
                 res = await r.json();
             } catch (e) {
@@ -3890,7 +3892,15 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             if (window.ssqlUISchemaCacheClear) window.ssqlUISchemaCacheClear();
             status.textContent = 'Head OK — re-running tail…';
             window.exploreRunBar();
-            status.textContent = window.SSQL_UI_READY_TEXT || 'Ready.';
+            // Report the head's wall time so engine differences are
+            // VISIBLE (exec vs typed on a big scan is the whole story).
+            const rows = (res.output.match(/\n/g) || []).length - 1;
+            const secs = res.runMs != null ? (res.runMs / 1000).toFixed(res.runMs < 10000 ? 2 : 1) + 's' : '';
+            let note = 'Head OK — ' + Math.max(rows, 0) + ' rows' + (secs ? ' in ' + secs : '');
+            if (res.engine === 'typed-compiled') note += ' (typed; +' + (res.compileMs / 1000).toFixed(1) + 's one-time compile, cached for re-runs)';
+            else if (res.engine === 'typed-cached') note += ' (typed, cache hit)';
+            else note += ' (exec — try ⚡ typed for big scans)';
+            status.textContent = note;
         };
         document.getElementById('headRun').addEventListener('click', () => window.exploreRunHead());
         // Completion for the head input rides the SAME machinery as the

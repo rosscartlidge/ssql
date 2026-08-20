@@ -321,6 +321,25 @@ async function run() {
         rec("copy-cli-warns-browser-only",
             doc2.getElementById('status').textContent.includes('laptop.csv exists only in this browser'),
             doc2.getElementById('status').textContent);
+
+        // ⚡ typed toggle: the head run must carry engine=typed and the
+        // status must report the honest compile/cache state.
+        let typedUrl = '';
+        w2.__srvFetch = (url) => {
+            typedUrl = String(url);
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({
+                output: '{"_schema":{"fields":["k"],"types":{"k":"int"}}}\n{"k":1}\n',
+                stderr: '', code: 0, engine: 'typed-compiled', compileMs: 1600, runMs: 2340 }) });
+        };
+        doc2.getElementById('headTyped').checked = true;
+        doc2.getElementById('headInput').value = 'ssql from big.csv | ssql limit 5';
+        await w2.exploreRunHead();
+        rec("head-typed-param", typedUrl.includes('engine=typed'), typedUrl);
+        rec("head-typed-status",
+            doc2.getElementById('status').textContent.includes('in 2.34s') &&
+            doc2.getElementById('status').textContent.includes('+1.6s one-time compile'),
+            doc2.getElementById('status').textContent);
+        doc2.getElementById('headTyped').checked = false;
     } catch (e) { rec("server-mode", false, String(e)); }
     fin();
 }

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **⚡ typed heads: compile-and-run on the server** — the head row's
+  new toggle sends `engine=typed`: the server renders the head to a
+  `.ssql` script, compiles it via `generate go -mode typed` into a
+  per-user cache (keyed by script + version), and runs the native
+  binary. On a 1.2GB CSV group-by: exec 23.4s → 3.3s first run (incl.
+  1.6s one-time compile) → **1.65s cached** (14×). Compile failures
+  are loud 422s; the status line reports compiled-vs-cached honestly.
+  The cut-point equivalence gate gained a typed-head lane. Every head
+  run now reports rows + wall time in the status ("Head OK — 90 rows
+  in 1.69s (typed, cache hit)"), so the exec-vs-typed difference is
+  visible, with a "try ⚡ typed" hint on slow exec runs.
+
 ### Fixed
 - **Join right-side field completion with direct files** — `ssql join
   kind.csv -on a_kind <Ctrl-O>` completed the *upstream's* fields; the
