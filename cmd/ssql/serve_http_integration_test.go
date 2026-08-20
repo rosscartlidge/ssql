@@ -531,3 +531,62 @@ func TestServeExecuteEarlyExit(t *testing.T) {
 		t.Errorf("envelope = code %d, %d lines", env.Code, strings.Count(env.Output, "\n"))
 	}
 }
+
+func TestServeRawFile(t *testing.T) {
+	addr := startServeHTTPProcess(t)
+	base := "http://" + addr
+
+	resp, err := http.Get(base + "/api/raw?file=customers.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.HasPrefix(string(b), "customer_id,") {
+		t.Errorf("status %d body %.80s", resp.StatusCode, b)
+	}
+
+	for _, f := range []string{"nope.csv", "..%2F..%2Fetc%2Fpasswd", ""} {
+		resp, err := http.Get(base + "/api/raw?file=" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 404 {
+			t.Errorf("%q: status %d, want 404", f, resp.StatusCode)
+		}
+	}
+}
+
+func TestServeRawFileTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	big := make([]byte, 33<<20)
+	copy(big, []byte("a,b\n1,2\n"))
+	if err := os.WriteFile(dir+"/huge.csv", big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := corpusBin(t)
+	cmd := exec.Command(bin, "serve", "-listen-http", "127.0.0.1:0", "-dir", dir)
+	stderr, _ := cmd.StderrPipe()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	sc := bufio.NewScanner(stderr)
+	var addr string
+	for sc.Scan() {
+		if i := strings.Index(sc.Text(), "listening on "); i >= 0 {
+			addr = strings.Fields(sc.Text()[i+len("listening on "):])[0]
+			break
+		}
+	}
+	resp, err := http.Get("http://" + addr + "/api/raw?file=huge.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(string(b), "head pipeline") {
+		t.Errorf("status %d body %s", resp.StatusCode, b)
+	}
+}

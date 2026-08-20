@@ -3315,10 +3315,14 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
 
         .chart-area {
             height: 350px;
+            min-height: 200px;
             background: var(--panel-bg);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             margin-bottom: 16px;
+            /* drag the bottom-right corner to give dense charts room */
+            resize: vertical;
+            overflow: hidden;
         }
 
         .table-area {
@@ -3537,10 +3541,12 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             <button id="headRun" style="padding:4px 12px; white-space:nowrap;">Run head &#9656;</button>
             <span style="opacity:0.6; font-size:12px; white-space:nowrap;">&#9656; data.jsonl</span>
         </div>
+        <div id="serverFiles" style="display:none; font-size:12px; margin-bottom:6px; color:#6c757d;"></div>
         <textarea id="pipeline" rows="2" spellcheck="false" placeholder="ssql from data.jsonl | …  (suggestions appear as you type; Tab accepts; Alt-h = help)" style="width:100%; font-family:inherit; font-size:13px; padding:8px; box-sizing:border-box; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px;"></textarea>
         <div id="completions" style="position:absolute; display:none; background:var(--panel-bg); border:1px solid #6c9bd1; border-radius:6px; max-height:200px; overflow-y:auto; z-index:1000; font-size:13px; min-width:160px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
         <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <button id="barRun" style="padding:4px 14px;">Run → grid</button>
+            <button id="barCopyCli" style="padding:4px 14px; display:none;" title="Copy the composed head+tail as one ssql pipeline, runnable in the server's data directory">⎘ Copy CLI</button>
             <button id="barHelp" onmousedown="event.preventDefault()" style="padding:4px 14px;">? Help</button>
             <button id="barReset" style="padding:4px 14px;">Reset data</button>
             <input type="file" id="barUpload" accept=".csv,.tsv,.json,.jsonl" style="display:none">
@@ -3815,6 +3821,47 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             }
             document.getElementById('headInput').value = head;
             document.getElementById('serverHead').style.display = 'flex';
+            document.getElementById('barCopyCli').style.display = '';
+            renderServerFiles();
+        }
+        // Server files as click-to-load chips: loading writes the raw
+        // bytes into the vFS under the SAME name, so direct-file join
+        // ("ssql join kind.csv -using k") and file completion work on
+        // them exactly like uploads. Large files are refused loudly by
+        // the server — reduce those through a head pipeline instead.
+        async function renderServerFiles() {
+            let files;
+            try {
+                const r = await srvFetch()(srvUrl('/api/files'));
+                files = (await r.json()).files || [];
+            } catch (e) { return; }
+            if (!files.length) return;
+            serverFileNames = files.map(f => f.name);
+            const el = document.getElementById('serverFiles');
+            el.textContent = '';
+            el.appendChild(document.createTextNode('Server files (click to load into the workspace for joins): '));
+            files.forEach((f, i) => {
+                if (i > 0) el.appendChild(document.createTextNode(' \u00b7 '));
+                const a = document.createElement('a');
+                a.href = '#';
+                a.textContent = f.name;
+                a.title = (f.size >> 10) + 'KB — load into the browser FS as ' + f.name;
+                a.addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    try {
+                        const r = await srvFetch()(srvUrl('/api/raw', 'file=' + encodeURIComponent(f.name)));
+                        if (!r.ok) {
+                            const err = await r.json().catch(() => ({}));
+                            setTransientStatus(err.error || ('loading ' + f.name + ' failed'));
+                            return;
+                        }
+                        ssqlUIWriteUpload(f.name, await r.text());
+                        setTransientStatus(f.name + ' loaded — join it by name, e.g. ssql join ' + f.name + ' -using FIELD');
+                    } catch (err) { setTransientStatus('loading ' + f.name + ' failed: ' + err); }
+                });
+                el.appendChild(a);
+            });
+            el.style.display = 'block';
         }
         window.exploreRunHead = async function() {
             const head = document.getElementById('headInput').value.trim().replace(/[|\s]+$/, '');
@@ -3889,6 +3936,45 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             if (e.key === 'Enter' && !e.defaultPrevented) { e.preventDefault(); window.exploreRunHead(); }
         });
         exploreDetectServerMode();
+
+        // Copy-as-CLI: the head and tail are ONE pipeline split at
+        // data.jsonl — compose them back into a single ssql command
+        // runnable in the server's data directory. Files that exist
+        // only in the browser (uploads) get a loud note.
+        let serverFileNames = [];
+        window.exploreCopyCli = function() {
+            const head = document.getElementById('headInput').value.trim().replace(/[|\s]+$/, '');
+            const tail = document.getElementById('pipeline').value.trim().replace(/[|\s]+$/, '');
+            let cmd;
+            const m = tail.match(/^ssql\s+from\s+data\.jsonl\s*(\|\s*|$)/);
+            if (m && head) {
+                const rest = tail.slice(m[0].length).trim();
+                cmd = rest ? head + ' | ' + rest : head;
+            } else {
+                // Tail reads a real file (e.g. a loaded server table) —
+                // it IS the CLI pipeline already.
+                cmd = tail;
+            }
+            window.exploreLastCopiedCli = cmd;
+            const notes = [];
+            for (const tok of cmd.split(/\s+/)) {
+                if (/\.(csv|tsv|json|jsonl|parquet|arrow)$/i.test(tok) &&
+                    tok !== 'data.jsonl' &&
+                    serverFileNames.length && !serverFileNames.includes(tok)) {
+                    notes.push(tok + ' exists only in this browser — copy it to the server first');
+                }
+            }
+            const suffix = notes.length ? '  ⚠ ' + notes.join('; ') : '';
+            const report = (prefix) => setTransientStatus(prefix + cmd + suffix);
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(cmd).then(
+                    () => report('Copied: '),
+                    () => report('Clipboard blocked — pipeline: '));
+            } else {
+                report('Clipboard unavailable — pipeline: ');
+            }
+        };
+        document.getElementById('barCopyCli').addEventListener('click', () => window.exploreCopyCli());
 
         document.getElementById('barRun').addEventListener('click', window.exploreRunBar);
         document.getElementById('barHelp').addEventListener('click', () => helpAtCursor());
@@ -4120,8 +4206,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
 
                 const layout = {
                     margin: { t: 30, r: 30, b: 50, l: 60 },
-                    xaxis: { title: xField },
-                    yaxis: { title: yField },
+                    // automargin: long category labels (kind names, service
+                    // paths) grow the axis margin — and auto-rotate — instead
+                    // of being clipped by the fixed margins.
+                    xaxis: { title: xField, automargin: true },
+                    yaxis: { title: yField, automargin: true },
                     paper_bgcolor: 'transparent',
                     plot_bgcolor: 'transparent',
                     font: { color: '{{if eq .Theme "dark"}}#e9ecef{{else}}#212529{{end}}' }
@@ -4697,10 +4786,19 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         )
                     ),
 
-                    // Chart Area
+                    // Chart Area (resizable — a ResizeObserver tells Plotly
+                    // to relayout when the user drags the frame)
                     React.createElement('div', {
                         className: 'chart-area',
-                        ref: chartRef
+                        ref: (el) => {
+                            chartRef.current = el;
+                            if (el && !el.dataset.resizeObserved) {
+                                el.dataset.resizeObserved = '1';
+                                new ResizeObserver(() => {
+                                    if (el.querySelector('.js-plotly-plot')) Plotly.Plots.resize(el);
+                                }).observe(el);
+                            }
+                        }
                     }),
 
                     // Table Area

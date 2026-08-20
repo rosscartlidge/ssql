@@ -118,6 +118,9 @@ func startServeHTTP(ctx context.Context, o serveHTTPOptions) (string, <-chan err
 	mux.HandleFunc("POST /api/schema-fields", func(w http.ResponseWriter, r *http.Request) {
 		serveSchemaFields(w, r, o)
 	})
+	mux.HandleFunc("GET /api/raw", func(w http.ResponseWriter, r *http.Request) {
+		serveRawFile(w, r, o)
+	})
 
 	srv := &http.Server{Handler: serveAuth(o.Token, mux)}
 	addr := ln.Addr().String()
@@ -738,4 +741,37 @@ func serveSchemaFields(w http.ResponseWriter, r *http.Request, o serveHTTPOption
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"fields": fields})
+}
+
+// serveRawFile hands a data file's raw bytes to the browser so the
+// workspace can load side tables (join inputs) into its virtual FS
+// under their own names. Allow-listed against the directory listing;
+// files over serveSampleThreshold refuse loudly — reduce them through
+// a head pipeline instead of shipping them whole to a browser.
+func serveRawFile(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
+	file := r.URL.Query().Get("file")
+	names, err := listDataFiles(o.Dir)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if file == "" || !slices.Contains(names, file) {
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": fmt.Sprintf("%q is not a data file in the served directory", file)})
+		return
+	}
+	path := filepath.Join(o.Dir, file)
+	st, err := os.Stat(path)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if st.Size() > serveSampleThreshold {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
+			"error": fmt.Sprintf("%s is %dMB — too large to load raw into a browser; reduce it through a head pipeline (e.g. ssql from %s | ssql limit 1000) and use data.jsonl",
+				file, st.Size()>>20, file)})
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	http.ServeFile(w, r, path)
 }

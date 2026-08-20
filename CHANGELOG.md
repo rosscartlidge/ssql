@@ -27,6 +27,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same sampled form. A 1.2GB CSV used to become a multi-GB page.
 
 ### Added
+- **⎘ Copy CLI** — in a served workspace, one click copies the composed
+  head + tail as a single ssql pipeline runnable in the server's data
+  directory (the tail's `from data.jsonl` splices onto the head; a tail
+  reading a real file copies as-is). Files that exist only in the
+  browser (uploads) get a loud warning in the status line.
+- **Charts fit long labels and the frame is resizable** — Plotly
+  `automargin` grows the axes to fit long category labels (rotating
+  when crowded) instead of clipping; the chart frame has a drag handle
+  (bottom edge) for when dense charts need more room.
+- **Server files load into the workspace for joins** — in a served
+  workspace, the serve directory's data files appear as click-to-load
+  chips: loading writes the raw bytes into the browser FS under the
+  same name, so the tail can `ssql join kind.csv -using k` directly
+  (new `GET /api/raw`, allow-listed; files >32MB refuse loudly —
+  reduce those through a head pipeline).
 - **Head-input completion in the served workspace** — the server-head
   input now has the full completion/help stack (Tab, as-you-type
   suggestions, Alt-h help, value sampling) backed by the serve host via

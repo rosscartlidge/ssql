@@ -272,6 +272,55 @@ async function run() {
         rec("head-refresh-invalidates-tail-fields",
             before2.includes('svc') && after2.includes('region') && !after2.includes('svc'),
             "before=" + before2.join(",") + " after=" + after2.join(","));
+
+        // Server-files panel: click-to-load a side table into the vFS,
+        // then JOIN it in the tail by name (direct-file join).
+        w2.__srvFetch = (url) => {
+            const u = String(url);
+            if (u.includes('/api/files')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({
+                    files: [{ name: 'kind.csv', size: 120 }, { name: 'relationship.csv', size: 90 }] }) });
+            }
+            if (u.includes('/api/raw')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({}),
+                    text: () => Promise.resolve('region,label\nemea,Europe\napac,AsiaPac\n') });
+            }
+            return Promise.resolve({ ok: false, json: () => Promise.resolve({ error: 'unexpected' }) });
+        };
+        await w2.renderServerFiles();
+        const chips = [...doc2.getElementById('serverFiles').querySelectorAll('a')].map(a => a.textContent);
+        rec("server-files-listed", chips.includes('kind.csv') && chips.includes('relationship.csv'), chips.join(","));
+        [...doc2.getElementById('serverFiles').querySelectorAll('a')][0].click();
+        await settle();
+        rec("server-file-loaded", doc2.getElementById('fileList').textContent.includes('kind.csv'),
+            doc2.getElementById('fileList').textContent);
+        // data.jsonl currently holds {region:"emea",total:9} — join the
+        // loaded side table by name, real wasm execution.
+        ta2.value = 'ssql from data.jsonl | ssql join kind.csv -using region';
+        w2.exploreRunBar();
+        rec("server-file-joins", w2.exploreLastRowCount === 1, "rows=" + w2.exploreLastRowCount);
+
+        // Copy-as-CLI: head + (tail minus its data.jsonl source) as one
+        // pipeline, with a loud note for browser-only files.
+        doc2.getElementById('headInput').value = 'ssql from shuffled.csv | ssql limit 100000';
+        ta2.value = 'ssql from data.jsonl | ssql join kind.csv -using region | ssql top -field n 5';
+        w2.exploreCopyCli();
+        rec("copy-cli-composes",
+            w2.exploreLastCopiedCli === 'ssql from shuffled.csv | ssql limit 100000 | ssql join kind.csv -using region | ssql top -field n 5',
+            w2.exploreLastCopiedCli);
+        // Tail reading a real file directly IS the CLI pipeline.
+        ta2.value = 'ssql from kind.csv | ssql limit 3';
+        w2.exploreCopyCli();
+        rec("copy-cli-direct-tail", w2.exploreLastCopiedCli === 'ssql from kind.csv | ssql limit 3',
+            w2.exploreLastCopiedCli);
+        // Browser-only file → warning in the status.
+        w2.ssqlUIWriteUpload('laptop.csv', 'a\n1\n');
+        ta2.value = 'ssql from data.jsonl | ssql join laptop.csv -using a';
+        w2.exploreCopyCli();
+        await settle();
+        rec("copy-cli-warns-browser-only",
+            doc2.getElementById('status').textContent.includes('laptop.csv exists only in this browser'),
+            doc2.getElementById('status').textContent);
     } catch (e) { rec("server-mode", false, String(e)); }
     fin();
 }
