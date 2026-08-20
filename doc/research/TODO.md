@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-08-19
+Last modified: 2026-08-20
 
 [Back to Index](./README.md)
 
@@ -86,6 +86,10 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Multi-file predicate/aggregation pushdown** — `from csv *.csv | where ...` → `from csv *.csv -- where ...`
 - [x] **Merge catalog predicate/aggregation pushdown** — same pattern for `merge -catalog`
 - [x] **SSH pushdown with expressions** — already works. The pushdown rule copies all `where` args (including `-if-expr`) wholesale.
+
+## UI Architecture
+
+- [ ] **Framework question — settled position (2026-08-20, Ross + Claude), don't relitigate from scratch:** the explore workspace is a HYBRID — the builder/grid/chart panel is already React; the interactive layer (pipeline bar, head row, completion) is vanilla, shared with the playground via `ssql-ui.js`. Decision: stay hybrid for now. Rationale: (1) responsive/mobile is a CSS problem — a framework wouldn't have prevented or fixed any of it; (2) the real hazard is the vanilla↔React BOUNDARY (three bugs: builder/bar hash-sync clobber, mount-effect overwriting share-restored bar text, TDZ wiring order) — mitigate by shrinking the boundary (last-writer-wins doctrine), not by migrating; (3) a full migration costs the zero-build-step property (Go-string templates, self-contained artifacts — load-bearing for byte-identical served pages and the no-CDN constraint) and forks or React-ifies the playground's shared ssql-ui.js. **Trigger to revisit:** serve growing real app ambitions (multi-tab sessions, persistent/collaborative state) making vanilla state coordination lose repeated fights — then write a DFC, with Preact + htm (React semantics, ~4KB, NO build step) as the first candidate to evaluate, so the self-contained-artifact story survives.
 
 ## Performance
 

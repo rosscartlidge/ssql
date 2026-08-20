@@ -3247,6 +3247,40 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         .explorer-container {
             display: flex;
             height: 100vh;
+            height: 100dvh; /* mobile URL bars — dvh where supported */
+        }
+
+        /* Mobile: single column, data first, builder below. Inputs go to
+           16px — anything smaller triggers iOS zoom-on-focus, which is
+           most of what "broken on a phone" feels like. */
+        @media (max-width: 768px) {
+            .explorer-container {
+                flex-direction: column-reverse; /* main content above the panel */
+                height: auto;
+                min-height: 100dvh;
+            }
+            .left-panel {
+                width: auto;
+                flex-shrink: 1;
+                border-right: none;
+                border-top: 1px solid var(--border-color);
+            }
+            .main-content {
+                overflow: visible;
+                padding: 8px;
+            }
+            .table-area {
+                /* !important: the React element carries an inline
+                   height:100% that would override the media rule */
+                height: 50dvh !important;
+            }
+            #pipelineBar { padding: 8px; }
+            /* inline font-size:13px on the elements — override it */
+            #pipeline, #headInput { font-size: 16px !important; }
+            #serverHead { flex-wrap: wrap; }
+            #headInput { flex-basis: 100%; }
+            #pipelineBar button { padding: 8px 14px; }
+            #completions { max-width: calc(100vw - 24px); }
         }
 
         .left-panel {

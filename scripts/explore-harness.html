@@ -375,6 +375,25 @@ async function run() {
         for (let i = 0; i < 400; i++) { if (w3.ssqlEngine || w3.ssqlEngineError) break; await pause(50); }
         await settle();
         const doc3 = w3.document;
+        // Mobile layout: at phone width the container goes column-reverse
+        // (data above the builder) and inputs hit 16px (iOS zoom guard).
+        const f4 = document.createElement('iframe');
+        f4.style.cssText = 'width:390px;height:700px';
+        f4.src = document.getElementById('ex').getAttribute('src');
+        document.body.appendChild(f4);
+        await new Promise(r => f4.addEventListener('load', r, { once: true }));
+        const w4 = f4.contentWindow;
+        for (let i = 0; i < 100; i++) { if (w4.document.querySelector('.explorer-container')) break; await pause(50); }
+        await settle();
+        const cont4 = w4.document.querySelector('.explorer-container');
+        rec("mobile-column-layout",
+            w4.getComputedStyle(cont4).flexDirection === 'column-reverse',
+            w4.getComputedStyle(cont4).flexDirection);
+        rec("mobile-input-16px",
+            w4.getComputedStyle(w4.document.getElementById('pipeline')).fontSize === '16px',
+            w4.getComputedStyle(w4.document.getElementById('pipeline')).fontSize);
+        f4.remove();
+
         rec("share-restore-inputs",
             doc3.getElementById('headInput').value === 'ssql from other.csv | ssql limit 7' &&
             doc3.getElementById('headTyped').checked === true &&

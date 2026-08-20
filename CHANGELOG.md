@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Mobile-friendly workspace layout** — at phone widths the page goes
+  single-column with the data grid above the builder panel, bars and
+  buttons wrap, inputs jump to 16px (defusing iOS zoom-on-focus), and
+  the layout uses dynamic-viewport heights so mobile URL bars don't
+  fight it. Pairs with the existing tap-to-accept completion.
 - **Tailscale-friendly serve** — `-listen-http tailscale:8080` binds
   this machine's Tailscale address without looking it up, and binding
   a Tailscale address (100.64/10 or fd7a:115c:a1e0::/48) is allowed
