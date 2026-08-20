@@ -13,120 +13,16 @@
 //              window.SSQL_UI_READY_TEXT — status restore text (optional)
 //              window.ssqlUIOnInput      — extra input hook (optional)
 
-// --- Help at cursor ---
-// The CLI's Alt-h binding, in the browser: -cursor-stage extracts the
-// paren-aware pipeline stage at the caret, -help-at renders autocli help
-// for the word the caret sits on (plus the expression-function reference
-// on expression args). Same Go code as the terminal keybinding.
+// --- Completion bindings ---
+// All help/completion machinery lives in a FACTORY: a binding ties one
+// input element to one executor. The default binding is the #pipeline
+// textarea over the global ssqlExec (the WASM bridge). Pages can attach
+// the same machinery to other inputs with other executors via
+// window.ssqlUIBindCompletion — the explore server-head input uses an
+// HTTP executor that POSTs the cursor protocol to /api/cursor (DFC108).
+// Executors may be sync (wasm) or async (fetch): every call is awaited.
 
-// cursorContext: the shared caret math for help + Tab completion. Extracts
-// the paren-aware stage at the caret via -cursor-stage, splits it, and
-// computes the COMP_WORDS-style word index (program name at 0; trailing
-// whitespace = caret on a new empty word) — ported from the bash bindings.
-// Returns null when the caret isn't on an ssql stage.
-function cursorContext() {
-    if (!window.ssqlUIReady) return null;
-    const ta = document.getElementById('pipeline');
-    const before = ta.value.slice(0, ta.selectionStart);
-    // An empty (or all-whitespace) line IS a stage start: offer the
-    // subcommand list with the "ssql " prefix pending.
-    if (!before.trim()) {
-        return { ta, before, words: ['ssql', ''], args: [''], pos: 1, prefixNeeded: true };
-    }
-    const stage = ssqlExec(['-cursor-stage', before], '').stdout;
-    if (/^ssql(\s|$)/.test(stage)) {
-        const words = shellSplit(stage); // words[0] === 'ssql'
-        const args = words.slice(1);
-        let pos;
-        if (/\s$/.test(stage)) { // caret sits on a new empty word
-            pos = words.length;
-            args.push('');
-        } else {
-            pos = words.length - 1;
-        }
-        return { ta, before, words, args, pos };
-    }
-    // Stage-start boilerplate: every stage begins "ssql ", so a bare
-    // stage ("| ") or a single partial word ("| fr") is treated as if
-    // "ssql " were already typed — completion offers subcommands and
-    // ACCEPTANCE inserts the prefix (ctx.prefixNeeded → compState.prefix).
-    const t = stage.trim();
-    if ((t === '' || /^[a-z][a-z-]*$/.test(t)) && !/\s\S/.test(stage)) {
-        return { ta, before, words: ['ssql', t], args: [t], pos: 1, prefixNeeded: true };
-    }
-    return null;
-}
-
-function helpAtCursor() {
-    if (!window.ssqlUIReady) return;
-    const ctx = cursorContext();
-    if (!ctx) {
-        showOutput({ stdout: '', stderr: 'Put the cursor on an ssql command or flag, then ask for help (Alt-h).', exitCode: 1 }, 'Help');
-        return;
-    }
-    const res = ssqlExec(['-help-at', String(ctx.pos), ...ctx.args], '');
-    if (res.exitCode !== 0 || !res.stdout.trim()) {
-        showOutput({ stdout: '', stderr: res.stderr || 'No help available here.', exitCode: 1 }, 'Help');
-        return;
-    }
-    showOutput(res, 'Help — ' + (ctx.words[ctx.pos] || ctx.words[ctx.words.length - 1] || 'ssql'));
-}
-
-// --- Tab completion ---
-// Tab calls the CLI's own completion engine (`-complete N words...`, the
-// same protocol bash completion uses) through the WASM bridge. File
-// completion lists the virtual FS, so the sample datasets complete too.
-// Angle-bracket entries (<VALUE>, <FIELD>) and Use-Ctrl-O are display
-// hints from the engine, not insertable candidates.
-
-let compState = null; // { cands, sel } while the popup is open
-
-// Env accumulated from completion directives — the playground's
-// equivalent of the bash script's `export AUTOCLI_CACHE_FILE=…`.
-// Completing a data-file path caches it here, which enables downstream
-// VALUE completion (`where -if country eq <Tab>` → real values).
-let completionEnv = {};
-
-// valueSourceFile: the data file feeding the cursor position, derived
-// from the PIPELINE rather than the tab-completion cache. Bash needs the
-// cache because its completion can't see across pipes; this (and the
-// CLI's Ctrl-O value phase) can. One Go implementation —
-// commands.ValueSourceFile via the -value-source protocol flag.
-function valueSourceFile(before) {
-    return ssqlExec(['-value-source', before], '').stdout.trim() || null;
-}
-
-function completionCandidates(ctx, cheapOnly) {
-    const env = Object.assign({}, completionEnv);
-    const derived = valueSourceFile(ctx.before);
-    // cheapOnly (the as-you-type path): skip value sampling for large
-    // sources — the engine reads up to 10k records per query, which
-    // would stutter typing. Tab still samples unconditionally.
-    if (derived) {
-        const big = cheapOnly && (_fsReadFileBytes(derived) || []).length > (1 << 20);
-        if (!big) env.AUTOCLI_CACHE_FILE = derived;
-    }
-    const out = ssqlExec(['-complete', String(ctx.pos), ...ctx.args], '', env).stdout;
-    const cands = [], hints = [];
-    for (const l of out.split('\n').map(s => s.trim()).filter(Boolean)) {
-        // {"type":...} lines are protocol directives, not candidates —
-        // the bash completion script consumes them the same way.
-        if (/^\{.*\}$/.test(l)) {
-            try {
-                const d = JSON.parse(l);
-                if (d.type === 'field_cache' && d.filepath) {
-                    completionEnv.AUTOCLI_CACHE_FILE = d.filepath;
-                } else if (d.type === 'env' && d.key) {
-                    completionEnv[d.key] = d.value || '';
-                }
-            } catch (e) { /* not a directive — ignore the line */ }
-            continue;
-        }
-        if (/^<.*>$/.test(l) || l === 'Use-Ctrl-O' || l === 'Values-Use-Ctrl-O') hints.push(l);
-        else cands.push(l);
-    }
-    return { cands, hints };
-}
+// --- shared pure helpers ---
 
 // Values can contain spaces ("Peter Allworth") — quote on insert so the
 // pipeline still parses as one argument.
@@ -136,12 +32,10 @@ function maybeQuote(cand) {
 
 // The raw partial word being completed: the non-whitespace run ending at
 // the caret (raw text, unlike the shell-split word — fine for the
-// flag/subcommand/file candidates the engine returns).
+// flag/subcommand/file candidates the engine returns). Stops at
+// whitespace OR a pipe — mirrors the bash binding's ${line##*[ |]}.
 function currentRawWord(ta) {
     const before = ta.value.slice(0, ta.selectionStart);
-    // Stop at whitespace OR a pipe — mirrors the bash binding's
-    // ${line##*[ |]}. Without the pipe, the "word" after a bare "|" was
-    // the pipe itself, and acceptance ate it.
     return before.match(/([^\s|]*)$/)[1];
 }
 
@@ -159,7 +53,7 @@ function longestCommonPrefix(list) {
     return p;
 }
 
-// Caret pixel position via the mirror-div trick: clone the textarea's text
+// Caret pixel position via the mirror-div trick: clone the input's text
 // metrics, render the text up to the caret plus a marker span, and read
 // the marker's position.
 function caretPixelPos(ta) {
@@ -175,7 +69,7 @@ function caretPixelPos(ta) {
     div.style.whiteSpace = 'pre-wrap';
     div.style.wordWrap = 'break-word';
     div.style.width = ta.clientWidth + 'px';
-    div.style.left = ta.offsetLeft + 'px'; // overlay the textarea exactly
+    div.style.left = ta.offsetLeft + 'px'; // overlay the input exactly
     div.style.top = ta.offsetTop + 'px';
     div.textContent = ta.value.slice(0, ta.selectionStart);
     const marker = document.createElement('span');
@@ -188,158 +82,6 @@ function caretPixelPos(ta) {
     };
     div.remove();
     return pos;
-}
-
-function showCompletions(ta, cands, prefix) {
-    // passive until the user arrows into the list: Enter stays a newline,
-    // typing keeps filtering; Tab or click accepts.
-    compState = { cands, sel: 0, passive: true, prefix: prefix || '' };
-    const el = document.getElementById('completions');
-    el.innerHTML = '';
-    cands.forEach((c, i) => {
-        const d = document.createElement('div');
-        d.textContent = c;
-        if (i === 0) d.className = 'sel';
-        // mousedown, not click: click fires after the textarea blurs and
-        // the caret context is gone.
-        d.addEventListener('mousedown', e => { e.preventDefault(); acceptCompletion(i); });
-        el.appendChild(d);
-    });
-    const pos = caretPixelPos(ta);
-    el.style.left = Math.max(0, Math.min(pos.left, ta.offsetLeft + ta.clientWidth - 180)) + 'px';
-    el.style.top = (pos.top + 2) + 'px';
-    el.style.display = 'block';
-}
-
-function hideCompletions() {
-    compState = null;
-    document.getElementById('completions').style.display = 'none';
-}
-
-function moveCompletionSel(delta) {
-    if (!compState) return;
-    compState.passive = false;
-    const n = compState.cands.length;
-    compState.sel = (compState.sel + delta + n) % n;
-    const el = document.getElementById('completions');
-    [...el.children].forEach((d, i) => d.className = i === compState.sel ? 'sel' : '');
-    el.children[compState.sel].scrollIntoView({ block: 'nearest' });
-}
-
-function acceptCompletion(idx) {
-    if (!compState) return;
-    const ta = document.getElementById('pipeline');
-    const cand = compState.cands[idx ?? compState.sel];
-    const isDir = cand.endsWith('/');
-    insertCompletion(ta, currentRawWord(ta).length, compState.prefix + maybeQuote(cand), !isDir);
-    hideCompletions();
-    ta.focus();
-}
-
-// --- Pipeline-aware field-name completion (the CLI's Ctrl-O) ---
-// -complete-source picks the command whose schema feeds the cursor
-// (paren-aware: procsub interiors, join right-side fields). That upstream
-// runs through the pipeline simulator under SSQL_MODE=schema — commands
-// transform a schema header instead of data, so only file headers are
-// read — and `generate schema` prints the resulting field names.
-// Unlike the terminal (where bash scopes Tab to one command), the
-// playground sees the whole pipeline, so Tab triggers this automatically
-// whenever the engine answers a field slot with the Use-Ctrl-O hint.
-
-const schemaFieldsCache = new Map(); // upstream text -> field names
-
-function schemaFieldsAtCursor(before) {
-    const src = ssqlExec(['-complete-source', before], '').stdout.trim();
-    if (!src) return null;
-    if (schemaFieldsCache.has(src)) return schemaFieldsCache.get(src);
-    try {
-        const env = { SSQL_MODE: 'schema' };
-        const stages = parsePipeline(src, true, false, env);
-        let data = '';
-        for (const args of stages) {
-            const res = ssqlExec(args, data, env);
-            if (res.exitCode !== 0) return null;
-            data = res.stdout;
-        }
-        const g = ssqlExec(['generate', 'schema'], data, null);
-        if (g.exitCode !== 0) return null;
-        const fields = g.stdout.split('\n').map(s => s.trim()).filter(Boolean);
-        if (schemaFieldsCache.size > 30) schemaFieldsCache.clear();
-        schemaFieldsCache.set(src, fields);
-        return fields;
-    } catch (e) {
-        return null;
-    }
-}
-
-function fieldCompleteAtCursor() {
-    const ta = document.getElementById('pipeline');
-    const before = ta.value.slice(0, ta.selectionStart);
-    if (!before.trim()) return;
-    const fields = schemaFieldsAtCursor(before);
-    if (!fields || !fields.length) {
-        setTransientStatus('No upstream schema found for field completion');
-        return;
-    }
-    const cur = currentRawWord(ta);
-    const matches = fields.filter(f => f.startsWith(cur));
-    if (!matches.length) {
-        setTransientStatus('No field matches ' + JSON.stringify(cur) + ' (fields: ' + fields.join(', ') + ')');
-        return;
-    }
-    if (matches.length === 1) {
-        insertCompletion(ta, cur.length, maybeQuote(matches[0]), true);
-        return;
-    }
-    const lcp = longestCommonPrefix(matches);
-    if (lcp.length > cur.length) insertCompletion(ta, cur.length, lcp, false);
-    showCompletions(ta, matches);
-}
-
-function completeAtCursor() {
-    const ta = document.getElementById('pipeline');
-    const ctx = cursorContext();
-    if (!ctx) return;
-    if (ctx.pos === 0) return; // caret on the program word itself
-    const { cands, hints } = completionCandidates(ctx);
-    if (cands.length === 0) {
-        // A field slot: the engine can't see across pipes, but we can —
-        // complete from the live upstream schema.
-        if (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>')) {
-            fieldCompleteAtCursor();
-            return;
-        }
-        if (hints.includes('Values-Use-Ctrl-O')) {
-            setTransientStatus('A field value goes here, but no source file was found to sample values from');
-        } else if (hints.length) {
-            // Engine hints are honest but terse — translate the common
-            // ones ("this is a slot you fill in, nothing to complete").
-            const friendly = {
-                '<name>': 'a new field name goes here — your choice, just type it',
-                '<expression>': 'an expression goes here — press "? Help" (Alt-h) for the function reference',
-                '<init-expr>': 'an init expression, e.g. {s:0} — see "? Help" (Alt-h)',
-                '<every-expr>': 'a per-record expression, e.g. {s:s+salary} — see "? Help" (Alt-h)',
-                '<final-expr>': 'a final expression over the state, e.g. s — see "? Help" (Alt-h)',
-                '<FILE>': 'a file path goes here',
-            };
-            setTransientStatus(hints.map(h => friendly[h] || ('expected here: ' + h)).join(' · '));
-        }
-        return;
-    }
-    const stagePrefix = pendingPrefix(ta, ctx.prefixNeeded);
-    if (cands.length === 1) {
-        insertCompletion(ta, currentRawWord(ta).length, stagePrefix + maybeQuote(cands[0]), !cands[0].endsWith('/'));
-        return;
-    }
-    // Bash-style: extend to the longest common prefix, then show the list
-    // (skipped when the "ssql " prefix is pending — extending an
-    // unprefixed partial would leave invalid text).
-    const cur = currentRawWord(ta);
-    if (!stagePrefix) {
-        const lcp = longestCommonPrefix(cands);
-        if (lcp.length > cur.length) insertCompletion(ta, cur.length, lcp, false);
-    }
-    showCompletions(ta, cands, stagePrefix);
 }
 
 // Completion hints in the status line are TRANSIENT: they fade back to
@@ -361,105 +103,361 @@ function clearTransientStatus() {
     }
 }
 
-// --- As-you-type completion ---
-// A debounced input listener pops the same completion popup PASSIVELY
-// while typing (>=1 char of the current word): typing keeps filtering,
-// Tab or click accepts, Enter stays a newline until the user arrows into
-// the list, Escape suppresses suggestions for the current word. Value
-// sampling auto-triggers only for small sources (Tab always may).
+// --- the factory ---
+// opts: { input:  the textarea/input element (required)
+//         exec:   (args, stdin, env?) -> result | Promise<result>
+//                 where result = {stdout, stderr, exitCode} (required)
+//         ready:  () => bool (default: window.ssqlUIReady)
+//         schemaFields: async (before) => fields|null — pipeline-aware
+//                 field-name provider (Ctrl-O). Omit when the executor
+//                 can't run schema-mode pipelines (e.g. the HTTP head
+//                 binding); field slots then fall back to a status hint.
+//         bigValueSource: (file) => bool — skip as-you-type value
+//                 sampling for large sources (default: vFS size check;
+//                 the HTTP binding uses () => false — sampling happens
+//                 server-side and is capped there). }
+function createCompletionBinding(opts) {
+    const ta = opts.input;
+    const exec = opts.exec;
+    const ready = opts.ready || (() => window.ssqlUIReady);
+    const schemaFields = opts.schemaFields || null;
+    const bigValueSource = opts.bigValueSource ||
+        (f => (typeof _fsReadFileBytes === 'function' ? (_fsReadFileBytes(f) || []).length : 0) > (1 << 20));
 
-let autoSuggestTimer = null;
-let suppressWordStart = -1; // Escape'd word start; cleared on word change
+    let compState = null; // { cands, sel, passive, prefix } while the popup is open
+    // Env accumulated from completion directives — the equivalent of the
+    // bash script's `export AUTOCLI_CACHE_FILE=…`. Completing a data-file
+    // path caches it here, enabling downstream VALUE completion.
+    let completionEnv = {};
+    let autoSuggestTimer = null;
+    let suppressWordStart = -1; // Escape'd word start; cleared on word change
 
-function currentWordStart(ta) {
-    return ta.selectionStart - currentRawWord(ta).length;
-}
-
-// pendingPrefix: the boilerplate to insert at a prefixless stage start —
-// with a leading space when the caret sits directly after "|".
-function pendingPrefix(ta, needed) {
-    if (!needed) return '';
-    const i = currentWordStart(ta);
-    return (i > 0 && ta.value[i - 1] === '|') ? ' ssql ' : 'ssql ';
-}
-
-function autoSuggest() {
-    const ta = document.getElementById('pipeline');
-    if (!window.ssqlUIReady || document.activeElement !== ta) return;
-    const cur = currentRawWord(ta);
-    const passiveOpen = compState && compState.passive;
-    if (currentWordStart(ta) === suppressWordStart) return;
-    const ctx = cursorContext();
-    if (!ctx) { if (passiveOpen) hideCompletions(); return; }
-    // The caret on the program word itself ("ssql|") is position 0 —
-    // bash never completes it, and accepting would REPLACE "ssql" with a
-    // subcommand. Stay quiet until after the space.
-    if (ctx.pos === 0) { if (passiveOpen) hideCompletions(); return; }
-    // Empty current word: suggestions pop here too — the popup is
-    // PASSIVE (never steals Enter or typing), so showing what fits at
-    // every position is pure discovery. This is also the only way to
-    // summon a list on mobile, where there is no Tab key: after
-    // "from csv " the file list just appears; tap to accept.
-
-    let { cands, hints } = completionCandidates(ctx, true);
-    if (!cands.length && (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>'))) {
-        const fields = schemaFieldsAtCursor(ctx.before);
-        if (fields) cands = fields.filter(f => f.startsWith(cur));
-    }
-    if (!cands.length) { if (compState && compState.passive) hideCompletions(); return; }
-    showCompletions(ta, cands, pendingPrefix(ta, ctx.prefixNeeded));
-}
-
-document.getElementById('pipeline').addEventListener('input', () => {
-    if (window.ssqlUIOnInput) window.ssqlUIOnInput();
-    clearTransientStatus();
-    if (autoSuggestTimer) clearTimeout(autoSuggestTimer);
-    autoSuggestTimer = setTimeout(autoSuggest, 150);
-});
-
-document.getElementById('pipeline').addEventListener('keydown', e => {
-    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H')) {
-        e.preventDefault();
-        helpAtCursor();
-        return;
-    }
-    if (compState) {
-        switch (e.key) {
-            case 'ArrowDown': e.preventDefault(); moveCompletionSel(1); return;
-            case 'ArrowUp': e.preventDefault(); moveCompletionSel(-1); return;
-            case 'Tab':
-                e.preventDefault();
-                // Passive popup: Tab accepts the highlighted candidate
-                // (bash-like). After arrow-activation, Tab cycles.
-                if (compState.passive) { acceptCompletion(); } else { moveCompletionSel(e.shiftKey ? -1 : 1); }
-                return;
-            case 'Enter':
-                // Passive popup must never steal Enter — close it and let
-                // the newline happen. Accept only after arrow-activation.
-                if (compState.passive) { hideCompletions(); return; }
-                e.preventDefault(); acceptCompletion(); return;
-            case 'Escape':
-                e.preventDefault();
-                suppressWordStart = currentWordStart(document.getElementById('pipeline'));
-                hideCompletions();
-                return;
-            default: hideCompletions(); // fall through: let the key type
+    // cursorContext: the shared caret math for help + Tab completion —
+    // COMP_WORDS-style word index, ported from the bash bindings.
+    async function cursorContext() {
+        if (!ready()) return null;
+        const before = ta.value.slice(0, ta.selectionStart);
+        if (!before.trim()) {
+            return { before, words: ['ssql', ''], args: [''], pos: 1, prefixNeeded: true };
         }
-        return;
+        const stage = (await exec(['-cursor-stage', before], '')).stdout;
+        if (/^ssql(\s|$)/.test(stage)) {
+            const words = shellSplit(stage); // words[0] === 'ssql'
+            const args = words.slice(1);
+            let pos;
+            if (/\s$/.test(stage)) { // caret sits on a new empty word
+                pos = words.length;
+                args.push('');
+            } else {
+                pos = words.length - 1;
+            }
+            return { before, words, args, pos };
+        }
+        // Stage-start boilerplate: every stage begins "ssql ", so a bare
+        // stage ("| ") or a single partial word ("| fr") is treated as if
+        // "ssql " were already typed.
+        const t = stage.trim();
+        if ((t === '' || /^[a-z][a-z-]*$/.test(t)) && !/\s\S/.test(stage)) {
+            return { before, words: ['ssql', t], args: [t], pos: 1, prefixNeeded: true };
+        }
+        return null;
     }
-    if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-        e.preventDefault();
-        completeAtCursor();
-        return;
+
+    async function helpAtCursor() {
+        if (!ready()) return;
+        const ctx = await cursorContext();
+        if (!ctx) {
+            showOutput({ stdout: '', stderr: 'Put the cursor on an ssql command or flag, then ask for help (Alt-h).', exitCode: 1 }, 'Help');
+            return;
+        }
+        const res = await exec(['-help-at', String(ctx.pos), ...ctx.args], '');
+        if (res.exitCode !== 0 || !res.stdout.trim()) {
+            showOutput({ stdout: '', stderr: res.stderr || 'No help available here.', exitCode: 1 }, 'Help');
+            return;
+        }
+        showOutput(res, 'Help — ' + (ctx.words[ctx.pos] || ctx.words[ctx.words.length - 1] || 'ssql'));
     }
-    // Ctrl-O: explicit field-name completion, CLI parity. preventDefault is
-    // load-bearing — the browser default is "open file".
-    if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'o' || e.key === 'O')) {
-        e.preventDefault();
-        fieldCompleteAtCursor();
+
+    // valueSourceFile: the data file feeding the cursor position, derived
+    // from the PIPELINE (paren-aware) — one Go implementation,
+    // commands.ValueSourceFile via the -value-source protocol flag.
+    async function valueSourceFile(before) {
+        return (await exec(['-value-source', before], '')).stdout.trim() || null;
     }
+
+    async function completionCandidates(ctx, cheapOnly) {
+        const env = Object.assign({}, completionEnv);
+        const derived = await valueSourceFile(ctx.before);
+        // cheapOnly (the as-you-type path): skip value sampling for large
+        // sources — the engine reads up to 10k records per query, which
+        // would stutter typing. Tab still samples unconditionally.
+        if (derived && !(cheapOnly && bigValueSource(derived))) {
+            env.AUTOCLI_CACHE_FILE = derived;
+        }
+        const out = (await exec(['-complete', String(ctx.pos), ...ctx.args], '', env)).stdout;
+        const cands = [], hints = [];
+        for (const l of out.split('\n').map(x => x.trim()).filter(Boolean)) {
+            // {"type":...} lines are protocol directives, not candidates.
+            if (/^\{.*\}$/.test(l)) {
+                try {
+                    const d = JSON.parse(l);
+                    if (d.type === 'field_cache' && d.filepath) {
+                        completionEnv.AUTOCLI_CACHE_FILE = d.filepath;
+                    } else if (d.type === 'env' && d.key) {
+                        completionEnv[d.key] = d.value || '';
+                    }
+                } catch (e) { /* not a directive — ignore the line */ }
+                continue;
+            }
+            if (/^<.*>$/.test(l) || l === 'Use-Ctrl-O' || l === 'Values-Use-Ctrl-O') hints.push(l);
+            else cands.push(l);
+        }
+        return { cands, hints };
+    }
+
+    function showCompletions(cands, prefix) {
+        // passive until the user arrows into the list: Enter stays inert,
+        // typing keeps filtering; Tab or click accepts.
+        compState = { cands, sel: 0, passive: true, prefix: prefix || '' };
+        const el = document.getElementById('completions');
+        el.innerHTML = '';
+        cands.forEach((c, i) => {
+            const d = document.createElement('div');
+            d.textContent = c;
+            if (i === 0) d.className = 'sel';
+            // mousedown, not click: click fires after the input blurs and
+            // the caret context is gone.
+            d.addEventListener('mousedown', e => { e.preventDefault(); acceptCompletion(i); });
+            el.appendChild(d);
+        });
+        const pos = caretPixelPos(ta);
+        el.style.left = Math.max(0, Math.min(pos.left, ta.offsetLeft + ta.clientWidth - 180)) + 'px';
+        el.style.top = (pos.top + 2) + 'px';
+        el.style.display = 'block';
+    }
+
+    function hideCompletions() {
+        compState = null;
+        document.getElementById('completions').style.display = 'none';
+    }
+
+    function moveCompletionSel(delta) {
+        if (!compState) return;
+        compState.passive = false;
+        const n = compState.cands.length;
+        compState.sel = (compState.sel + delta + n) % n;
+        const el = document.getElementById('completions');
+        [...el.children].forEach((d, i) => d.className = i === compState.sel ? 'sel' : '');
+        el.children[compState.sel].scrollIntoView({ block: 'nearest' });
+    }
+
+    function acceptCompletion(idx) {
+        if (!compState) return;
+        const cand = compState.cands[idx ?? compState.sel];
+        const isDir = cand.endsWith('/');
+        insertCompletion(ta, currentRawWord(ta).length, compState.prefix + maybeQuote(cand), !isDir);
+        hideCompletions();
+        ta.focus();
+    }
+
+    async function fieldCompleteAtCursor() {
+        const before = ta.value.slice(0, ta.selectionStart);
+        if (!before.trim()) return;
+        const fields = schemaFields ? await schemaFields(before) : null;
+        if (!fields || !fields.length) {
+            setTransientStatus('No upstream schema found for field completion');
+            return;
+        }
+        const cur = currentRawWord(ta);
+        const matches = fields.filter(f => f.startsWith(cur));
+        if (!matches.length) {
+            setTransientStatus('No field matches ' + JSON.stringify(cur) + ' (fields: ' + fields.join(', ') + ')');
+            return;
+        }
+        if (matches.length === 1) {
+            insertCompletion(ta, cur.length, maybeQuote(matches[0]), true);
+            return;
+        }
+        const lcp = longestCommonPrefix(matches);
+        if (lcp.length > cur.length) insertCompletion(ta, cur.length, lcp, false);
+        showCompletions(matches);
+    }
+
+    // pendingPrefix: the boilerplate to insert at a prefixless stage
+    // start — with a leading space when the caret sits after "|".
+    function currentWordStart() {
+        return ta.selectionStart - currentRawWord(ta).length;
+    }
+    function pendingPrefix(needed) {
+        if (!needed) return '';
+        const i = currentWordStart();
+        return (i > 0 && ta.value[i - 1] === '|') ? ' ssql ' : 'ssql ';
+    }
+
+    async function completeAtCursor() {
+        const ctx = await cursorContext();
+        if (!ctx) return;
+        if (ctx.pos === 0) return; // caret on the program word itself
+        const { cands, hints } = await completionCandidates(ctx);
+        if (cands.length === 0) {
+            // A field slot: the engine can't see across pipes, but a
+            // schema-capable binding can.
+            if (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>')) {
+                if (schemaFields) { await fieldCompleteAtCursor(); }
+                else setTransientStatus('A field name goes here (type it — this input has no upstream schema view)');
+                return;
+            }
+            if (hints.includes('Values-Use-Ctrl-O')) {
+                setTransientStatus('A field value goes here, but no source file was found to sample values from');
+            } else if (hints.length) {
+                const friendly = {
+                    '<name>': 'a new field name goes here — your choice, just type it',
+                    '<expression>': 'an expression goes here — press "? Help" (Alt-h) for the function reference',
+                    '<init-expr>': 'an init expression, e.g. {s:0} — see "? Help" (Alt-h)',
+                    '<every-expr>': 'a per-record expression, e.g. {s:s+salary} — see "? Help" (Alt-h)',
+                    '<final-expr>': 'a final expression over the state, e.g. s — see "? Help" (Alt-h)',
+                    '<FILE>': 'a file path goes here',
+                };
+                setTransientStatus(hints.map(h => friendly[h] || ('expected here: ' + h)).join(' · '));
+            }
+            return;
+        }
+        const stagePrefix = pendingPrefix(ctx.prefixNeeded);
+        if (cands.length === 1) {
+            insertCompletion(ta, currentRawWord(ta).length, stagePrefix + maybeQuote(cands[0]), !cands[0].endsWith('/'));
+            return;
+        }
+        // Bash-style: extend to the longest common prefix, then show the
+        // list (skipped when the "ssql " prefix is pending).
+        const cur = currentRawWord(ta);
+        if (!stagePrefix) {
+            const lcp = longestCommonPrefix(cands);
+            if (lcp.length > cur.length) insertCompletion(ta, cur.length, lcp, false);
+        }
+        showCompletions(cands, stagePrefix);
+    }
+
+    // --- As-you-type completion ---
+    // Debounced passive popup; Escape suppresses per word-start. Async
+    // executors add a staleness guard: if the caret or text moved while
+    // a request was in flight, the answer is dropped, not shown.
+    async function autoSuggest() {
+        if (!ready() || document.activeElement !== ta) return;
+        const cur = currentRawWord(ta);
+        const passiveOpen = compState && compState.passive;
+        if (currentWordStart() === suppressWordStart) return;
+        const snapshot = ta.value + ' ' + ta.selectionStart;
+        const ctx = await cursorContext();
+        if (!ctx) { if (passiveOpen) hideCompletions(); return; }
+        if (ctx.pos === 0) { if (passiveOpen) hideCompletions(); return; }
+        let { cands, hints } = await completionCandidates(ctx, true);
+        if (!cands.length && schemaFields && (hints.includes('Use-Ctrl-O') || hints.includes('<FIELD>'))) {
+            const fields = await schemaFields(ctx.before);
+            if (fields) cands = fields.filter(f => f.startsWith(cur));
+        }
+        if (ta.value + ' ' + ta.selectionStart !== snapshot) return; // stale
+        if (!cands.length) { if (compState && compState.passive) hideCompletions(); return; }
+        showCompletions(cands, pendingPrefix(ctx.prefixNeeded));
+    }
+
+    ta.addEventListener('input', () => {
+        if (window.ssqlUIOnInput) window.ssqlUIOnInput();
+        clearTransientStatus();
+        if (autoSuggestTimer) clearTimeout(autoSuggestTimer);
+        autoSuggestTimer = setTimeout(autoSuggest, 150);
+    });
+
+    ta.addEventListener('keydown', e => {
+        if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'h' || e.key === 'H')) {
+            e.preventDefault();
+            helpAtCursor();
+            return;
+        }
+        if (compState) {
+            switch (e.key) {
+                case 'ArrowDown': e.preventDefault(); moveCompletionSel(1); return;
+                case 'ArrowUp': e.preventDefault(); moveCompletionSel(-1); return;
+                case 'Tab':
+                    e.preventDefault();
+                    if (compState.passive) { acceptCompletion(); } else { moveCompletionSel(e.shiftKey ? -1 : 1); }
+                    return;
+                case 'Enter':
+                    // Passive popup must never steal Enter — close it and
+                    // let the key do its thing (newline, or the head
+                    // input's run-on-Enter).
+                    if (compState.passive) { hideCompletions(); return; }
+                    e.preventDefault(); acceptCompletion(); return;
+                case 'Escape':
+                    e.preventDefault();
+                    suppressWordStart = currentWordStart();
+                    hideCompletions();
+                    return;
+                default: hideCompletions(); // fall through: let the key type
+            }
+            return;
+        }
+        if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            e.preventDefault();
+            completeAtCursor();
+            return;
+        }
+        // Ctrl-O: explicit field-name completion, CLI parity.
+        if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'o' || e.key === 'O')) {
+            e.preventDefault();
+            fieldCompleteAtCursor();
+        }
+    });
+    ta.addEventListener('blur', () => setTimeout(hideCompletions, 150));
+
+    return { helpAtCursor, completeAtCursor, fieldCompleteAtCursor, hideCompletions, cursorContext };
+}
+window.ssqlUIBindCompletion = createCompletionBinding;
+
+// --- Pipeline-aware field-name completion (the CLI's Ctrl-O) ---
+// -complete-source picks the command whose schema feeds the cursor;
+// that upstream runs through the pipeline simulator under
+// SSQL_MODE=schema and `generate schema` prints the field names. WASM
+// only — the default binding's schemaFields provider.
+
+const schemaFieldsCache = new Map(); // upstream text -> field names
+
+function schemaFieldsAtCursor(before) {
+    const src = ssqlExec(['-complete-source', before], '').stdout.trim();
+    if (!src) return null;
+    if (schemaFieldsCache.has(src)) return schemaFieldsCache.get(src);
+    try {
+        const env = { SSQL_MODE: 'schema' };
+        const stages = parsePipeline(src, true, false, env);
+        let data = '';
+        for (const args of stages) {
+            const res = ssqlExec(args, data, env);
+            if (res.exitCode !== 0) return null;
+            data = res.stdout;
+        }
+        const g = ssqlExec(['generate', 'schema'], data, null);
+        if (g.exitCode !== 0) return null;
+        const fields = g.stdout.split('\n').map(x => x.trim()).filter(Boolean);
+        if (schemaFieldsCache.size > 30) schemaFieldsCache.clear();
+        schemaFieldsCache.set(src, fields);
+        return fields;
+    } catch (e) {
+        return null;
+    }
+}
+
+// --- The default binding: #pipeline over the WASM bridge ---
+// Created at load; the delegating globals keep the page contract that
+// predates the factory (pages and harnesses call helpAtCursor() etc.).
+const ssqlUIPipelineBinding = createCompletionBinding({
+    input: document.getElementById('pipeline'),
+    exec: (args, stdin, env) => ssqlExec(args, stdin, env),
+    schemaFields: (before) => schemaFieldsAtCursor(before),
 });
-document.getElementById('pipeline').addEventListener('blur', () => setTimeout(hideCompletions, 150));
+function helpAtCursor() { return ssqlUIPipelineBinding.helpAtCursor(); }
+function completeAtCursor() { return ssqlUIPipelineBinding.completeAtCursor(); }
+function fieldCompleteAtCursor() { return ssqlUIPipelineBinding.fieldCompleteAtCursor(); }
+function hideCompletions() { return ssqlUIPipelineBinding.hideCompletions(); }
+
 
 
 // --- Pipeline parser ---
