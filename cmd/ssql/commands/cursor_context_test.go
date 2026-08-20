@@ -24,6 +24,21 @@ func TestCompleteSource(t *testing.T) {
 			"",
 		},
 		{
+			"join right-side field with DIRECT file completes from that file",
+			"ssql from shuffled.csv | ssql limit 0 | ssql join kind.csv -on a_kind ",
+			"ssql from kind.csv",
+		},
+		{
+			"join -as right-side field with direct file",
+			"ssql from a.csv | ssql join lookup.tsv -as ",
+			"ssql from lookup.tsv",
+		},
+		{
+			"join LEFT-side field (-on first arg) still completes upstream",
+			"ssql from shuffled.csv | ssql join kind.csv -on ",
+			"ssql from shuffled.csv",
+		},
+		{
 			"simple procsub does NOT confuse the top-level split (join left field)",
 			"ssql from data.csv | ssql join <(ssql from kind.csv) -on ",
 			"ssql from data.csv",

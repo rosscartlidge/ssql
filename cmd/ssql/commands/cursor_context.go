@@ -2,6 +2,7 @@ package commands
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -268,6 +269,36 @@ func CompleteSource(before string) string {
 		if ps := firstProcsub(stage); ps != "" {
 			return strings.TrimSpace(ps)
 		}
+		// Direct-file right side (v4.62's `join kind.csv`): the fields
+		// come from that file, so the source is a synthesized read of
+		// it. Without this the slot fell through to the UPSTREAM and
+		// completed the left side's fields (found by Ross: `join
+		// kind.csv -on a_kind ^O` offered shuffled.csv's fields).
+		if f := joinRightFile(stage); f != "" {
+			return "ssql from " + f
+		}
 	}
 	return upstreamOf(before)
+}
+
+// joinRightFile returns the join's direct-file right-side argument
+// (the first positional token after "join" that looks like a data
+// file), or "" when the right side is a procsub or absent.
+func joinRightFile(stage string) string {
+	toks := tokenizeStage(stage)
+	for i, t := range toks {
+		if t != "join" || i+1 >= len(toks) {
+			continue
+		}
+		next := toks[i+1]
+		if strings.HasPrefix(next, "-") || strings.HasPrefix(next, "<(") {
+			return ""
+		}
+		switch strings.ToLower(filepath.Ext(next)) {
+		case ".csv", ".tsv", ".json", ".jsonl":
+			return next
+		}
+		return ""
+	}
+	return ""
 }

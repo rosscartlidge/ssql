@@ -49,3 +49,19 @@ func TestSplitServePipeline(t *testing.T) {
 		}
 	}
 }
+
+func TestJoinRightFile(t *testing.T) {
+	cases := []struct{ stage, want string }{
+		{"ssql join kind.csv -on a_kind ", "kind.csv"},
+		{"ssql join lookup.jsonl -as ", "lookup.jsonl"},
+		{"ssql join <(ssql from kind.csv) -on a_kind ", ""},
+		{"ssql join -on a_kind ", ""},
+		{"ssql join notafile -on x ", ""},
+		{"ssql where -if a eq b ", ""},
+	}
+	for _, c := range cases {
+		if got := joinRightFile(c.stage); got != c.want {
+			t.Errorf("joinRightFile(%q) = %q, want %q", c.stage, got, c.want)
+		}
+	}
+}

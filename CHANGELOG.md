@@ -5,6 +5,15 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Join right-side field completion with direct files** — `ssql join
+  kind.csv -on a_kind <Ctrl-O>` completed the *upstream's* fields; the
+  right-side slot only knew the procsub form. It now synthesizes
+  `ssql from kind.csv` as the completion source, fixing the CLI's
+  Ctrl-O, the workspace bar, and the served head input in one place.
+
 ## [4.67.0] - 2026-08-20
 
 ### Fixed
