@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-08-20
+Last modified: 2026-08-21
 
 [Back to Index](./README.md)
 
@@ -89,7 +89,7 @@ Tracked issues and feature gaps discovered during development.
 
 ## Next up (queued by Ross, 2026-08-20)
 
-- [ ] **`ssql sample` command** — like SQL's TABLESAMPLE: random row sampling as a first-class stage (vs `limit`'s prefix bias — the served workspace's big-file sampling currently uses `limit 1000`, which samples the FILE HEAD, not the distribution). Design questions: `-n N` (reservoir, exact count) vs `-percent P` (Bernoulli, streaming) vs both; `-seed` for reproducibility (equivalence gates need determinism — a seeded sample must be byte-identical across all lanes, so the RNG must live in the ssql package and be identical in exec/record/typed/parallel/SQL: DuckDB `USING SAMPLE ... REPEATABLE`); parallel lanes need a defined shard-merge semantics for reservoir sampling. Once it exists, the workspace's big-file redirect should use it instead of limit.
+- [ ] **`ssql sample` command** — designed in [DFC110](./dfc110_sample_command.md) (seeded splitmix64 in the ssql package for cross-lane byte-identity; SerialOnly v1; DuckDB translation unseeded-only with loud -seed refusal; workspace big-file redirect switches from limit to sample). Ready to implement.
 - [ ] **Optimizer (`generate ssql`) in the explore head + tail** — surface the pipeline optimizer in the served workspace: an "optimize" action that shows the rewritten head (predicate reorder, pushdown into `from ssh`, top-N collapse) before running it, and similarly for the tail. Mechanics exist (`ssql generate ssql`, the playground's Optimize button); the serve side needs an endpoint (or an allow-listed verb) and the UI a place to show the rewrite diff. Composes with ⚡ typed heads (optimize, then compile the optimized form — cache key must be the OPTIMIZED script).
 
 ## UI Architecture
