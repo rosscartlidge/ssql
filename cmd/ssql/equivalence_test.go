@@ -548,6 +548,38 @@ func orderedLabel(ordered bool) string {
 
 var equivCases = []EquivCase{
 	{
+		// DFC110: a SEEDED sample must select the identical row set in
+		// every Go lane — selection is a pure function of (seed, row
+		// index) via the spec-stable RNG in the ssql package. The
+		// duckdb lane is skipped by design: DuckDB's RNG cannot
+		// reproduce ssql's seeded selection (generate sql refuses
+		// -seed loudly); an unseeded statistical translation is
+		// covered by TestTranslateSampleSQL.
+		Name: "sample_seeded",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
+			`{{.bin}} sample 7 -seed 42 | {{.bin}} sort city`,
+		Ordered: true,
+		Skip:    map[string]string{"duckdb": "seeded sampling has no cross-engine deterministic equivalent (DFC110)"},
+	},
+	{
+		// sample 0 = pass-through dial (the limit-0 convention): the
+		// stage must vanish identically everywhere, duckdb included.
+		Name: "sample_zero_passthrough",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
+			`{{.bin}} sample 0 | {{.bin}} sort city`,
+		Ordered: true,
+	},
+	{
+		// from -sample (byte-offset, DFC110 amendment): seeded selection
+		// must be byte-identical across the Go lanes — exec and codegen
+		// share ssql.SampleCSVFile. duckdb: seeded refusal by design.
+		Name: "from_sample_seeded",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv -sample 5 -sample-seed 7 | ` +
+			`{{.bin}} sort city`,
+		Ordered: true,
+		Skip:    map[string]string{"duckdb": "seeded sampling has no cross-engine deterministic equivalent (DFC110)"},
+	},
+	{
 		Name:     "identity",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv`,
 		Ordered:  false, // parallel output is unordered

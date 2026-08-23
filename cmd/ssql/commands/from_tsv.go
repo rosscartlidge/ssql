@@ -40,6 +40,18 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Global().
 		Help("Don't preserve file order in pushdown (faster, lower memory)").
 		Done().
+		Flag("-sample").
+		Int().
+		Global().
+		Default(0).
+		Help("Fast approximate sample of N rows via byte-offset seeks (probability ~ line length; use the `sample` stage for exact uniform). 0 = read everything").
+		Done().
+		Flag("-sample-seed").
+		Int().
+		Global().
+		Default(0).
+		Help("Seed for -sample; when omitted, one is chosen and printed to stderr").
+		Done().
 		Flag("FILE").
 		String().
 		Variadic().
@@ -50,6 +62,21 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
+
+			sampleN, _ := ctx.GlobalFlags["-sample"].(int)
+			sampleSeed, _ := ctx.GlobalFlags["-sample-seed"].(int)
+			if sampleN > 0 {
+				if len(cfg.files) != 1 {
+					return fmt.Errorf("from %s -sample needs exactly one file (got %d) — for stdin or multi-file input use the `sample` pipe stage", "tsv", len(cfg.files))
+				}
+				if len(ctx.RemainingArgs) > 0 {
+					return fmt.Errorf("from tsv -sample cannot combine with pushdown (--)")
+				}
+				return executeFromTSVSample(cfg.files[0], sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), cfg.generate)
+			}
+			if sampleN < 0 {
+				return fmt.Errorf("from tsv -sample must be positive, got %d", sampleN)
+			}
 
 			if len(ctx.RemainingArgs) > 0 {
 				if len(cfg.files) == 0 {
@@ -235,4 +262,19 @@ func readTSVHeaders(r io.Reader) ([]string, error) {
 	header := scanner.Text()
 	sep := ssql.DetectTSVSeparator(header)
 	return strings.Split(header, string(sep)), nil
+}
+
+// executeFromTSVSample is the -sample path for TSV (byte-offset
+// sampling; delimiter auto-detected by the standard TSV reader).
+func executeFromTSVSample(inputFile string, n int, seed int64, seedGiven bool, generate bool) error {
+	resolvedSeed := resolveSampleSeed(seed, seedGiven)
+	if shouldGenerate(generate) {
+		return generateFromFileSampleCode("ssql.SampleTSVFile", "input TSV file", inputFile, n, resolvedSeed)
+	}
+	records, err := ssql.SampleTSVFile(inputFile, n, resolvedSeed)
+	if err != nil {
+		return err
+	}
+	records = wrapWithFieldCaching(records, inputFile)
+	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
 }

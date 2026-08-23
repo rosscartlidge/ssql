@@ -73,6 +73,7 @@ func buildRootCommand() *cf.Command {
 	cmd = commands.RegisterConventions(cmd)
 	cmd = commands.RegisterFrom(cmd)
 	cmd = commands.RegisterLimit(cmd)
+	cmd = commands.RegisterSample(cmd)
 	cmd = commands.RegisterOffset(cmd)
 	cmd = commands.RegisterTee(cmd)
 	cmd = commands.RegisterSort(cmd)

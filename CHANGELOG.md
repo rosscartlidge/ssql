@@ -5,6 +5,30 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`ssql sample` — seeded random row sampling (DFC110)** —
+  `sample N` (exact count, reservoir) or `sample -percent P`
+  (Bernoulli, streaming); `sample 0` is the pass-through dial like
+  `limit 0`. `-seed` makes the selection reproducible and
+  byte-identical across every backend (exec and generated record/
+  typed code share one spec-stable RNG in the ssql package —
+  `ssql.SampleN`/`ssql.SamplePercent`); when omitted, the chosen seed
+  prints to stderr so any exploratory sample can be re-run.
+  `generate sql` translates unseeded sampling to DuckDB
+  `USING SAMPLE` and refuses `-seed` loudly (no cross-engine
+  deterministic equivalent).
+- **`from csv/tsv/jsonl -sample N` — byte-offset sampling at the source** —
+  the exact `sample` stage must read its whole input (21s on a 1.2GB
+  CSV); `-sample` picks random byte offsets and seeks instead: 14ms
+  for 1000 rows, whole-file representative, seeded-deterministic
+  (same spec-stable RNG; `-sample-seed`), at the price of approximate
+  uniformity (probability ∝ line length — documented). Falls back to
+  the exact reservoir on small files. The served workspace's big-file
+  redirect opens with `from csv X -sample 1000` — fast AND
+  representative, replacing prefix-biased `limit`.
+
 ## [4.68.0] - 2026-08-20
 
 ### Changed

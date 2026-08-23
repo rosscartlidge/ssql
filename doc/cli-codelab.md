@@ -527,6 +527,57 @@ ssql from big.csv | ssql limit 1000 | ssql group-by dept -sum salary total   # s
 ssql from big.csv | ssql limit 0    | ssql group-by dept -sum salary total   # full run
 ```
 
+### Random Samples with SAMPLE
+
+`limit` gives you the file's HEAD — often one shard, one day, one
+region. `sample` gives you a uniform random slice (SQL's TABLESAMPLE):
+
+```bash
+# Exactly 1000 uniformly-chosen rows (reservoir sampling)
+ssql from big.csv | ssql sample 1000
+
+# ~5% of rows, streaming (each row kept independently)
+ssql from big.csv | ssql sample -percent 5
+
+# Reproducible: same seed, same rows — every run, every backend
+ssql from big.csv | ssql sample 1000 -seed 42
+```
+
+**The `sample` stage reads its entire input** — exact uniformity
+requires it (the last row must get its chance), so unlike `limit`
+there is no early exit. For big FILES, sample at the source instead:
+`from csv -sample N` picks random byte offsets and seeks (Ross's
+algorithm) — 14ms vs 21s for 1000 rows of a 1.2GB CSV — at the price
+of approximate uniformity (a row's chance is proportional to its byte
+length; near-uniform for near-uniform rows):
+
+```bash
+# Exact uniform — reads everything (slow on GBs)
+ssql from big.csv | ssql sample 1000
+
+# Approximate uniform via byte-offset seeks — milliseconds on GBs
+ssql from csv big.csv -sample 1000 [-sample-seed 42]
+```
+
+`-sample` works on `from csv`, `from tsv` (delimiter auto-detected),
+and `from jsonl` (a leading `_schema` header is honoured; JSON arrays
+refuse — they aren't line-oriented). It needs a single seekable file:
+stdin and multi-file input are loud errors — use the `sample` stage
+there. Parquet source sampling is queued.
+
+When you omit `-seed`, one is chosen and printed to stderr
+(`sample: seed 1755741234 (pass -seed … to reproduce)`) so any
+exploratory result can be re-run exactly. `sample 0` is the same
+pass-through dial as `limit 0`. Output keeps input order — `sample`
+selects rows, it doesn't shuffle them.
+
+Seeded samples are byte-identical across execution and generated Go
+(the selection is a pure function of the seed and row index).
+`generate sql` translates unseeded sampling to DuckDB's
+`USING SAMPLE`; a seeded sample has no cross-engine deterministic
+equivalent, so `-seed` there is a loud error rather than a silent
+approximation.
+
 ### Count Rows with COUNT
 
 Drain a pipeline and print the row count to stdout (like `wc -l`).

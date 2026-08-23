@@ -17,41 +17,35 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 		Description("Read JSON file(s) or stdin").
 		Example("ssql from json data.json | ssql to table", "Read JSON file").
 		Example("ssql from json *.json | ssql to table", "Read multiple JSON files").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-merge-schemas").
-			Bool().
-			Global().
-			Help("Allow files with different fields (merge schemas)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Allow files with different fields (merge schemas)").
+		Done().
 		Flag("-source").
-			String().
-			Global().
-			Default("").
-			Help("Add field with source filename: -source file").
-			Done().
-
+		String().
+		Global().
+		Default("").
+		Help("Add field with source filename: -source file").
+		Done().
 		Flag("-unordered").
-			Bool().
-			Global().
-			Help("Don't preserve file order in pushdown (faster, lower memory)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Don't preserve file order in pushdown (faster, lower memory)").
+		Done().
 		Flag("FILE").
-			String().
-			Variadic().
-			Completer(&cf.FileCompleter{Pattern: "*.json"}).
-			Global().
-			Default("").
-			Help("Input JSON file(s) (or stdin if not specified)").
-			Done().
-
+		String().
+		Variadic().
+		Completer(&cf.FileCompleter{Pattern: "*.json"}).
+		Global().
+		Default("").
+		Help("Input JSON file(s) (or stdin if not specified)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
 
@@ -83,43 +77,64 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 		Description("Read JSONL file(s) or stdin").
 		Example("ssql from jsonl data.jsonl | ssql to table", "Read JSONL file").
 		Example("ssql from jsonl *.jsonl | ssql to table", "Read multiple JSONL files").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-merge-schemas").
-			Bool().
-			Global().
-			Help("Allow files with different fields (merge schemas)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Allow files with different fields (merge schemas)").
+		Done().
 		Flag("-source").
-			String().
-			Global().
-			Default("").
-			Help("Add field with source filename: -source file").
-			Done().
-
+		String().
+		Global().
+		Default("").
+		Help("Add field with source filename: -source file").
+		Done().
 		Flag("-unordered").
-			Bool().
-			Global().
-			Help("Don't preserve file order in pushdown (faster, lower memory)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Don't preserve file order in pushdown (faster, lower memory)").
+		Done().
+		Flag("-sample").
+		Int().
+		Global().
+		Default(0).
+		Help("Fast approximate sample of N rows via byte-offset seeks (probability ~ line length; use the `sample` stage for exact uniform). 0 = read everything").
+		Done().
+		Flag("-sample-seed").
+		Int().
+		Global().
+		Default(0).
+		Help("Seed for -sample; when omitted, one is chosen and printed to stderr").
+		Done().
 		Flag("FILE").
-			String().
-			Variadic().
-			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-			Global().
-			Default("").
-			Help("Input JSONL file(s) (or stdin if not specified)").
-			Done().
-
+		String().
+		Variadic().
+		Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
+		Global().
+		Default("").
+		Help("Input JSONL file(s) (or stdin if not specified)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
+
+			sampleN, _ := ctx.GlobalFlags["-sample"].(int)
+			sampleSeed, _ := ctx.GlobalFlags["-sample-seed"].(int)
+			if sampleN > 0 {
+				if len(cfg.files) != 1 {
+					return fmt.Errorf("from %s -sample needs exactly one file (got %d) — for stdin or multi-file input use the `sample` pipe stage", "jsonl", len(cfg.files))
+				}
+				if len(ctx.RemainingArgs) > 0 {
+					return fmt.Errorf("from jsonl -sample cannot combine with pushdown (--)")
+				}
+				return executeFromJSONLSample(cfg.files[0], sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), cfg.generate)
+			}
+			if sampleN < 0 {
+				return fmt.Errorf("from jsonl -sample must be positive, got %d", sampleN)
+			}
 
 			if len(ctx.RemainingArgs) > 0 {
 				if len(cfg.files) == 0 {
@@ -228,4 +243,19 @@ func readJSONSchemaAware(r io.Reader) iter.Seq[ssql.Record] {
 
 	// JSONL — use schema-aware reader that strips _schema headers
 	return lib.ReadJSONLWithSchema(br).Records
+}
+
+// executeFromJSONLSample is the -sample path for JSONL (byte-offset
+// sampling; honours a leading _schema header; JSON arrays refuse).
+func executeFromJSONLSample(inputFile string, n int, seed int64, seedGiven bool, generate bool) error {
+	resolvedSeed := resolveSampleSeed(seed, seedGiven)
+	if shouldGenerate(generate) {
+		return generateFromFileSampleCode("ssql.SampleJSONLFile", "input JSONL file", inputFile, n, resolvedSeed)
+	}
+	records, err := ssql.SampleJSONLFile(inputFile, n, resolvedSeed)
+	if err != nil {
+		return err
+	}
+	records = wrapWithFieldCaching(records, inputFile)
+	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
 }

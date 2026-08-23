@@ -83,6 +83,7 @@ type sqlQuery struct {
 	orderBy      []string
 	limit        string
 	offset       string
+	sampled      bool // FROM already carries a USING SAMPLE clause
 	comments     []string // original ssql commands
 
 	// columns tracks the current output field names, seeded from the source
@@ -122,6 +123,12 @@ func needsWrap(q *sqlQuery, cmd string) bool {
 		return len(q.orderBy) > 0 || limited // top imposes its own order + limit
 	case "limit":
 		return q.limit != ""
+	case "sample":
+		// USING SAMPLE binds to the FROM clause, i.e. BEFORE every other
+		// clause of the same SELECT — so anything already accumulated
+		// must be materialised first for pipeline order to hold.
+		return q.sampled || len(q.whereClauses) > 0 || len(q.selectExprs) > 0 ||
+			len(q.groupBy) > 0 || len(q.orderBy) > 0 || limited || q.distinct || len(q.joins) > 0
 	case "offset":
 		return limited // `limit 10 | offset 5` ≠ LIMIT 10 OFFSET 5 (which skips first)
 	case "join":
@@ -241,6 +248,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		err = translateSort(q, args[2:])
 	case "limit":
 		err = translateLimit(q, args[2:])
+	case "sample":
+		err = translateSample(q, args[2:])
 	case "offset":
 		err = translateOffset(q, args[2:])
 	case "top":
@@ -303,21 +312,49 @@ func translateFrom(q *sqlQuery, args []string) error {
 		return fmt.Errorf("from requires a file argument")
 	}
 
+	// -sample at the source (DFC110 amendment): unseeded translates to
+	// DuckDB's approximate system sampling — an honest match, both are
+	// probability-proportional-to-storage; a given seed is refused like
+	// the sample stage's (no cross-engine deterministic equivalent).
+	var sampleN string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-sample-seed":
+			return fmt.Errorf("from -sample-seed has no SQL equivalent — DuckDB cannot reproduce ssql's seeded byte-offset selection; drop -sample-seed or use generate go")
+		case "-sample":
+			if i+1 < len(args) {
+				sampleN = args[i+1]
+			}
+		}
+	}
+
 	// Handle format subcommands: from csv FILE, from parquet FILE, etc.
 	switch args[0] {
 	case "csv", "tsv", "json", "jsonl", "arrow", "parquet", "xlsx":
 		if len(args) < 2 {
 			return fmt.Errorf("from %s requires a file argument", args[0])
 		}
-		// Collect file paths (skip flags starting with -)
+		// Collect file paths — skip flags AND the values of
+		// value-taking flags (a bare `-sample 5` used to read '5' as a
+		// second file).
+		valueFlags := map[string]bool{
+			"-sample": true, "-sample-seed": true, "-type": true, "-t": true,
+			"-default-type": true, "-dt": true, "-source": true,
+		}
 		var files []string
-		for _, a := range args[1:] {
+		rest := args[1:]
+		for i := 0; i < len(rest); i++ {
+			a := rest[i]
 			if a == "--" {
 				break
 			}
-			if !strings.HasPrefix(a, "-") {
-				files = append(files, a)
+			if strings.HasPrefix(a, "-") {
+				if valueFlags[a] {
+					i++
+				}
+				continue
 			}
+			files = append(files, a)
 		}
 		if len(files) == 1 {
 			q.fromClause = quoteFile(files[0])
@@ -344,6 +381,13 @@ func translateFrom(q *sqlQuery, args []string) error {
 	default:
 		// Bare: from FILE
 		q.fromClause = quoteFile(args[0])
+	}
+	if sampleN != "" && sampleN != "0" {
+		// reservoir, not system: DuckDB's system sampling is
+		// percentage-only. Both sides are unseeded statistical samples
+		// of N rows; the duckdb equivalence lane asserts cardinality.
+		q.fromClause += " USING SAMPLE " + sampleN + " ROWS (reservoir)"
+		q.sampled = true
 	}
 	return nil
 }
@@ -578,6 +622,45 @@ func translateLimit(q *sqlQuery, args []string) error {
 	if len(args) > 0 {
 		q.limit = args[0]
 	}
+	return nil
+}
+
+// translateSample renders DuckDB's USING SAMPLE on the FROM clause.
+// Seeded sampling is REFUSED loudly: DuckDB's RNG cannot match ssql's
+// spec-stable generator, so a seeded sample has no cross-engine
+// deterministic equivalent (DFC110) — the Go lanes stay byte-identical
+// under -seed; the SQL lane covers unseeded, statistically-equivalent
+// sampling only.
+func translateSample(q *sqlQuery, args []string) error {
+	var n, percent string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-seed":
+			return fmt.Errorf("sample -seed has no SQL equivalent — DuckDB's RNG cannot reproduce ssql's seeded selection; drop -seed for a statistical sample, or use generate go")
+		case "-percent", "-p":
+			if i+1 < len(args) {
+				percent = args[i+1]
+				i++
+			}
+		case "-generate", "-g":
+		default:
+			if !strings.HasPrefix(args[i], "-") && n == "" {
+				n = args[i]
+			}
+		}
+	}
+	if n == "0" {
+		return nil // pass-through dial: stage vanishes (matches Go codegen)
+	}
+	switch {
+	case percent != "":
+		q.fromClause += " USING SAMPLE " + percent + "% (bernoulli)"
+	case n != "":
+		q.fromClause += " USING SAMPLE " + n + " ROWS (reservoir)"
+	default:
+		return fmt.Errorf("sample: need N or -percent")
+	}
+	q.sampled = true
 	return nil
 }
 

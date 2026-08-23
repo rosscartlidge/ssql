@@ -2,12 +2,14 @@
 
 Reference: DFC110
 Created: 2026-08-21
-Last modified: 2026-08-21
+Last modified: 2026-08-23
 
 [Back to Index](./README.md)
 
-**Status:** Design — for comment (queued by Ross 2026-08-20; expands
-the sketch in [DFC050](./future-development.md) Priority 4)
+**Status:** Implemented 2026-08-22 as designed (one emendation:
+`-percent 0` is a loud error rather than pass-through — `sample 0` is
+the dial; a zero percentage reading as "everything" was too confusing
+to ship).
 
 ## Problem
 
@@ -97,12 +99,45 @@ Consequences:
 
 ## Workspace integration (the motivating consumer)
 
-The served workspace's big-file redirect changes from
-`ssql from X | ssql limit 1000` to `ssql from X | ssql sample 1000`
-— head sampling becomes representative instead of prefix-biased, and
-the visible-stage convention is preserved (the user sees and can
-edit/dial the sample). ⚡ typed heads compose automatically (the RNG
-is package code the codegen calls).
+**Amended after live testing (Ross, 2026-08-23):** pure `sample 1000`
+reads the whole file — reservoir sampling cannot early-exit — which
+cost 21s on the 1.2GB fixture vs limit's 0.013s. The redirect
+therefore composes the dials: `ssql from X | ssql limit 100000 |
+ssql sample 1000` (0.18s) — a bounded read window with uniform
+sampling inside it, both stages visible and dialable (`limit 0` =
+true whole-file uniformity, accepting the read). The codelab
+documents the full-read characteristic. ⚡ typed heads compose
+automatically (the RNG is package code the codegen calls).
+
+## Amendment 2 (2026-08-23): byte-offset sampling at the source
+
+Ross, after the windowed compromise: "what about [an] algorithm that
+picks N lines and estimates their position ... uses seek and search
+for the next line — it would be fast and every line has equal chance."
+Implemented as `ssql.SampleCSVFile` + `from csv/tsv -sample N
+[-sample-seed S]`: draw offsets via the same splitmix64, scan back to
+line start, dedupe by start offset, parse each line under the header
+schema via the STANDARD CSV reader (one parser, one dialect). 14ms
+for 1000 rows of the 1.2GB fixture — after fixing a first version
+that read the 4MB line-cap per sampled line (~4GB of page-cache
+traffic; chunked grow-on-demand reads now). One honest asterisk:
+selection probability is proportional to line LENGTH (system/block
+sampling), vs the stage's exact reservoir — documented, and the
+equal-chance claim holds only for near-uniform rows. Seeded
+determinism survives (offsets are pure functions of seed and draw
+index over fixed file bytes): the equivalence gate runs
+from_sample_seeded byte-identical across the Go lanes; generate sql
+translates unseeded -sample to USING SAMPLE N ROWS (reservoir) and
+refuses -sample-seed loudly. Fallbacks to the exact reservoir: file
+smaller than ~8n bytes, or collision-redraw exhaustion. The
+workspace big-file redirect now opens `from csv X -sample 1000` —
+whole-file representative AND fast, superseding the limit-window
+compromise. Same-day follow-up (Ross): the core generalized to
+`sampleLineStarts` with TSV (delimiter auto-detect via the standard
+reader) and JSONL wrappers (leading _schema header honoured; JSON
+arrays refuse loudly — not line-oriented); all three `from`
+subcommands carry -sample/-sample-seed with identical stdin/
+multi-file/pushdown refusals.
 
 ## Out of scope (v1)
 

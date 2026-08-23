@@ -465,3 +465,65 @@ func TestTranslateTopSQL(t *testing.T) {
 		})
 	}
 }
+
+func TestTranslateSampleSQL(t *testing.T) {
+	// Unseeded forms translate to DuckDB USING SAMPLE.
+	q := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateSample(q, []string{"-percent", "5"}); err != nil {
+		t.Fatal(err)
+	}
+	if q.fromClause != "'x.csv' USING SAMPLE 5% (bernoulli)" || !q.sampled {
+		t.Errorf("percent form: %q sampled=%v", q.fromClause, q.sampled)
+	}
+
+	q2 := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateSample(q2, []string{"1000"}); err != nil {
+		t.Fatal(err)
+	}
+	if q2.fromClause != "'x.csv' USING SAMPLE 1000 ROWS (reservoir)" {
+		t.Errorf("N form: %q", q2.fromClause)
+	}
+
+	// Seeded sampling REFUSES loudly (DFC110): no cross-engine
+	// deterministic equivalent.
+	q3 := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateSample(q3, []string{"7", "-seed", "42"}); err == nil ||
+		!strings.Contains(err.Error(), "no SQL equivalent") {
+		t.Errorf("seeded: want loud refusal, got %v", err)
+	}
+
+	// sample 0 = pass-through dial: stage vanishes.
+	q4 := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateSample(q4, []string{"0"}); err != nil || q4.sampled || q4.fromClause != "'x.csv'" {
+		t.Errorf("zero dial: %v %q", err, q4.fromClause)
+	}
+
+	// USING SAMPLE binds to FROM — anything accumulated must wrap first.
+	q5 := &sqlQuery{fromClause: "'x.csv'", whereClauses: []string{"a > 1"}}
+	if !needsWrap(q5, "sample") {
+		t.Error("sample after where must wrap")
+	}
+	q6 := &sqlQuery{fromClause: "'x.csv'"}
+	if needsWrap(q6, "sample") {
+		t.Error("sample on bare from must not wrap")
+	}
+}
+
+func TestTranslateFromSampleSQL(t *testing.T) {
+	// from -sample N → USING SAMPLE on the FROM clause; the N value
+	// must NOT be mistaken for a file (regression: read_csv_auto
+	// (['kind.csv','5'])).
+	q := &sqlQuery{}
+	if err := translateFrom(q, []string{"csv", "kind.csv", "-sample", "5"}); err != nil {
+		t.Fatal(err)
+	}
+	if q.fromClause != "'kind.csv' USING SAMPLE 5 ROWS (reservoir)" || !q.sampled {
+		t.Errorf("got %q sampled=%v", q.fromClause, q.sampled)
+	}
+	// Seeded refusal.
+	q2 := &sqlQuery{}
+	if err := translateFrom(q2, []string{"csv", "kind.csv", "-sample", "5", "-sample-seed", "42"}); err == nil ||
+		!strings.Contains(err.Error(), "no SQL equivalent") {
+		t.Errorf("seeded: want refusal, got %v", err)
+	}
+}

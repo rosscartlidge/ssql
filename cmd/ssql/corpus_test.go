@@ -195,6 +195,28 @@ func TestPipelineCorpus(t *testing.T) {
 	}
 
 	cases := []PipelineCase{
+		{
+			// DFC110: seeded sample must compile and run in all three
+			// modes (byte-identity is TestPipelineEquivalence's job;
+			// this is the compile-and-run smoke). Seed fixed so the
+			// selected rows are stable.
+			Name:     "sample_seeded",
+			Pipeline: `{{.bin}} from {{.data}}/shuffled.csv | {{.bin}} sample 5 -seed 42 | {{.bin}} to table`,
+			Contains: []string{"city", "pop"},
+		},
+		{
+			// DFC110 amendment: byte-offset file sampling at the source.
+			// Approximate-uniform (probability ~ line length) but seeded
+			// and deterministic — all three modes must compile and run.
+			Name:     "from_sample_seeded",
+			Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv -sample 5 -sample-seed 7 | {{.bin}} to table`,
+			Contains: []string{"city", "pop"},
+		},
+		{
+			Name:     "from_sample_tsv",
+			Pipeline: `{{.bin}} from tsv {{.data}}/employees.tsv -sample 3 -sample-seed 7 | {{.bin}} to table`,
+			Contains: []string{"name", "dept"},
+		},
 		// --- Sources / sinks ----------------------------------
 		{
 			Name:     "from_csv_to_table",

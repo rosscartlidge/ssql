@@ -654,7 +654,24 @@ func serveExplorePage(w http.ResponseWriter, r *http.Request, o serveHTTPOptions
 			// Redirect to the sampled pipeline form so the limit is
 			// VISIBLE in the head input rather than silently applied.
 			q := url.Values{}
-			q.Set("pipeline", fmt.Sprintf("ssql from %s | ssql limit %d", file, serveSampleRows))
+			// Byte-offset sampling at the source (Ross's algorithm,
+			// DFC110 amendment): whole-file representative AND fast
+			// (14ms vs 21s for the exact reservoir on a 1.2GB CSV).
+			// Visible and dialable in the head as always. Line formats
+			// only; other big formats (parquet/arrow) fall back to the
+			// exact sample stage — slower but honest.
+			var pipe string
+			switch strings.ToLower(filepath.Ext(file)) {
+			case ".csv":
+				pipe = fmt.Sprintf("ssql from csv %s -sample %d", file, serveSampleRows)
+			case ".tsv":
+				pipe = fmt.Sprintf("ssql from tsv %s -sample %d", file, serveSampleRows)
+			case ".jsonl":
+				pipe = fmt.Sprintf("ssql from jsonl %s -sample %d", file, serveSampleRows)
+			default:
+				pipe = fmt.Sprintf("ssql from %s | ssql sample %d", file, serveSampleRows)
+			}
+			q.Set("pipeline", pipe)
 			if o.Token != "" {
 				q.Set("token", o.Token)
 			}
@@ -792,7 +809,7 @@ func serveRawFile(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	}
 	if st.Size() > serveSampleThreshold {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{
-			"error": fmt.Sprintf("%s is %dMB — too large to load raw into a browser; reduce it through a head pipeline (e.g. ssql from %s | ssql limit 1000) and use data.jsonl",
+			"error": fmt.Sprintf("%s is %dMB — too large to load raw into a browser; reduce it through a head pipeline (e.g. ssql from %s | ssql sample 1000) and use data.jsonl",
 				file, st.Size()>>20, file)})
 		return
 	}
