@@ -118,6 +118,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC108 | 2026-08-18 | 2026-08-18 | [Split Pipelines: Server Head, Browser Tail](./dfc108_split_pipelines_server_browser.md) |
 | DFC109 | 2026-08-18 | 2026-08-18 | [Record→Typed Re-entry: Typed Pipelines over SSH Sources](./dfc109_record_to_typed_reentry.md) |
 | DFC110 | 2026-08-21 | 2026-08-23 | [`ssql sample` — Seeded Random Row Sampling](./dfc110_sample_command.md) |
+| DFC111 | 2026-08-23 | 2026-08-23 | [Sampling a 1.2GB CSV in 14 Milliseconds: A Case Study](./dfc111_sampling_case_study.md) |
 
 <!-- DFC-INDEX-END -->
 
