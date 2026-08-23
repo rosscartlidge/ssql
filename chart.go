@@ -3583,6 +3583,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             <span title="Server head — this part runs on the ssql serve host">&#128421;</span>
             <input id="headInput" spellcheck="false" style="flex:1; font-family:inherit; font-size:13px; padding:6px 8px; box-sizing:border-box; background:var(--bg-color); color:var(--text-color); border:1px solid #6c9bd1; border-radius:4px;">
             <button id="headRun" style="padding:4px 12px; white-space:nowrap;">Run head &#9656;</button>
+            <button id="headOptimize" title="Rewrite the head with the pipeline optimizer (filter merges, sort+limit collapse, ssh pushdown) — preview before applying" style="padding:4px 10px;">&#9881;</button>
             <label style="font-size:12px; white-space:nowrap; cursor:pointer;" title="Compile the head to typed Go on the server (cached by pipeline) — big scans run several times faster"><input type="checkbox" id="headTyped"> &#9889; typed</label>
             <span style="opacity:0.6; font-size:12px; white-space:nowrap;">&#9656; data.jsonl</span>
         </div>
@@ -3595,6 +3596,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         <div id="completions" style="position:absolute; display:none; background:var(--panel-bg); border:1px solid #6c9bd1; border-radius:6px; max-height:200px; overflow-y:auto; z-index:1000; font-size:13px; min-width:160px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
         <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <button id="barRun" style="padding:4px 14px;">Run → grid</button>
+            <button id="barOptimize" title="Rewrite this pipeline with the optimizer — preview before applying" style="padding:4px 10px;">&#9881; Optimize</button>
             <button id="barCopyCli" style="padding:4px 14px; display:none;" title="Copy the composed head+tail as one ssql pipeline, runnable in the server's data directory">⎘ Copy CLI</button>
             <button id="barShare" style="padding:4px 14px; display:none;" title="Copy a link that restores this whole setup — head, ⚡ typed, loaded server files, and the tail pipeline">🔗 Share</button>
             <button id="barHelp" onmousedown="event.preventDefault()" style="padding:4px 14px;">? Help</button>
@@ -4056,6 +4058,9 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 }
             }
             const suffix = notes.length ? '  ⚠ ' + notes.join('; ') : '';
+            // Warning shows SYNCHRONOUSLY — a slow/blocked clipboard
+            // must not delay "this file only exists in your browser".
+            if (notes.length) setTransientStatus('⚠ ' + notes.join('; '));
             const report = (prefix) => setTransientStatus(prefix + cmd + suffix);
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(cmd).then(
@@ -4120,6 +4125,57 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         // synchronously to restoreSharedSetup, which needs every const
         // above to be initialized (TDZ — caught by the harness).
         exploreDetectServerMode();
+
+        // Optimizer (DFC065 in the workspace): both buttons preview the
+        // rewrite in the output panel with an Apply action — never a
+        // silent input rewrite. Tail optimizes IN-BROWSER via the wasm
+        // engine (the playground's proven flow); the head goes to
+        // /api/optimize (server-side, where ssh pushdown is real).
+        function showOptimizeResult(target, original, optimized, rewrites, apply) {
+            const lines = [];
+            if (!optimized || optimized === original.trim()) {
+                showOutput({ stdout: 'No rewrites apply to this pipeline — it is already in optimal form.', stderr: '', exitCode: 0 }, 'Optimize — ' + target);
+                return;
+            }
+            for (const rw of rewrites) lines.push(rw);
+            lines.push('');
+            lines.push('before: ' + original.trim());
+            lines.push('after:  ' + optimized);
+            showOutput({ stdout: lines.join('\n'), stderr: '', exitCode: 0 }, 'Optimize — ' + target);
+            const out = document.getElementById('output');
+            const btn = document.createElement('button');
+            btn.textContent = 'Apply to ' + target;
+            btn.style.cssText = 'margin-top:8px; padding:4px 14px;';
+            btn.addEventListener('click', () => { apply(optimized); out.style.display = 'none'; });
+            out.appendChild(btn);
+        }
+        window.exploreOptimizeTail = function() {
+            const ta = document.getElementById('pipeline');
+            const text = ta.value.trim().replace(/[|\s]+$/, '');
+            if (!text) return;
+            const res = executePipeline(text + ' | ssql generate ssql -explain', true);
+            if (res.exitCode !== 0) { showOutput(res, 'Optimize failed'); return; }
+            const rewrites = (res.stderr || '').split('\n').map(l => l.trim()).filter(l => l.startsWith('['));
+            showOptimizeResult('pipeline', text, res.stdout.trim(), rewrites,
+                (opt) => { ta.value = opt; });
+        };
+        window.exploreOptimizeHead = async function() {
+            const head = document.getElementById('headInput').value.trim().replace(/[|\s]+$/, '');
+            if (!head) return;
+            let res;
+            try {
+                const r = await srvFetch()(srvUrl('/api/optimize'), { method: 'POST', body: JSON.stringify({ pipeline: head }) });
+                res = await r.json();
+            } catch (e) { setTransientStatus('Optimize failed: ' + e); return; }
+            if (res.error) {
+                showOutput({ stdout: '', stderr: (res.detail || res.error), exitCode: 1 }, 'Optimize failed');
+                return;
+            }
+            showOptimizeResult('head', head, res.optimized, res.rewrites || [],
+                (opt) => { document.getElementById('headInput').value = opt; });
+        };
+        document.getElementById('barOptimize').addEventListener('click', () => window.exploreOptimizeTail());
+        document.getElementById('headOptimize').addEventListener('click', () => window.exploreOptimizeHead());
 
         document.getElementById('barRun').addEventListener('click', window.exploreRunBar);
         document.getElementById('barHelp').addEventListener('click', () => helpAtCursor());

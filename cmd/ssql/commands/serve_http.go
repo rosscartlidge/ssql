@@ -148,6 +148,9 @@ func startServeHTTP(ctx context.Context, o serveHTTPOptions) (string, <-chan err
 	mux.HandleFunc("POST /api/schema-fields", func(w http.ResponseWriter, r *http.Request) {
 		serveSchemaFields(w, r, o)
 	})
+	mux.HandleFunc("POST /api/optimize", func(w http.ResponseWriter, r *http.Request) {
+		serveOptimize(w, r, o)
+	})
 	mux.HandleFunc("GET /api/raw", func(w http.ResponseWriter, r *http.Request) {
 		serveRawFile(w, r, o)
 	})
@@ -916,4 +919,64 @@ func tailscaleAddr() (net.IP, error) {
 		return v6, nil
 	}
 	return nil, fmt.Errorf("no Tailscale address found on any interface (is tailscale up?)")
+}
+
+// serveOptimize runs the strict-tokenized pipeline through the stage
+// chain in fragment mode (SSQL_MODE=record) with a `generate ssql
+// -explain` tail and returns the optimizer's rewritten pipeline plus
+// the named rewrite annotations. The same peephole optimizer the CLI
+// and playground use — one implementation (DFC065).
+func serveOptimize(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
+	var req struct {
+		Pipeline string `json:"pipeline"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil || strings.TrimSpace(req.Pipeline) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "body must be {\"pipeline\": \"ssql …\"}"})
+		return
+	}
+	stages, err := splitServePipeline(req.Pipeline)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	stages = append(stages, []string{"generate", "ssql", "-explain"})
+	self, err := os.Executable()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	ch, err := startStageChain(ctx, self, o.Dir, stages, "SSQL_MODE=record")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	out, _ := io.ReadAll(ch.out)
+	if runErr := ch.wait(); runErr != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error": "optimize failed", "detail": ch.stderr()})
+		return
+	}
+	// stdout carries the final pipeline; the "[rewrite-name] before →
+	// after" -explain annotations ride stderr.
+	var rewrites []string
+	var optimized string
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			optimized = l
+		}
+	}
+	for _, l := range strings.Split(ch.stderr(), "\n") {
+		if l = strings.TrimSpace(l); strings.HasPrefix(l, "[") {
+			rewrites = append(rewrites, l)
+		}
+	}
+	if rewrites == nil {
+		rewrites = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"optimized": optimized, "rewrites": rewrites,
+		"changed": optimized != strings.TrimSpace(req.Pipeline),
+	})
 }

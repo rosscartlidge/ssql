@@ -669,3 +669,41 @@ func TestServeTypedHeadCompileFailureIsLoud(t *testing.T) {
 		t.Errorf("status %d body %s", resp.StatusCode, body)
 	}
 }
+func TestServeOptimize(t *testing.T) {
+	addr := startServeHTTPProcess(t)
+	base := "http://" + addr
+
+	resp, body := postJSON(t, base+"/api/optimize",
+		map[string]string{"pipeline": "ssql from employees.csv | ssql sort salary -desc | ssql limit 3"}, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Optimized string
+		Rewrites  []string
+		Changed   bool
+	}
+	json.Unmarshal([]byte(body), &out)
+	if !out.Changed || !strings.Contains(out.Optimized, "top 3 -field salary") {
+		t.Errorf("optimize = %+v", out)
+	}
+	if len(out.Rewrites) == 0 || !strings.Contains(out.Rewrites[0], "sort-limit-to-top") {
+		t.Errorf("rewrites = %v", out.Rewrites)
+	}
+
+	// Already-optimal pipeline: changed=false, honest.
+	_, body2 := postJSON(t, base+"/api/optimize",
+		map[string]string{"pipeline": "ssql from employees.csv | ssql limit 3"}, nil)
+	var out2 struct{ Changed bool }
+	json.Unmarshal([]byte(body2), &out2)
+	if out2.Changed {
+		t.Errorf("noop pipeline reported changed: %s", body2)
+	}
+
+	// Shellisms refuse like every other pipeline endpoint.
+	resp3, _ := postJSON(t, base+"/api/optimize",
+		map[string]string{"pipeline": "ssql from a.csv > x"}, nil)
+	if resp3.StatusCode != 400 {
+		t.Errorf("shellism: status %d", resp3.StatusCode)
+	}
+}

@@ -129,6 +129,33 @@ async function run() {
         // artifact — the head row only appears when the URL carries a
         // head and /api/health answers. getComputedStyle, not inline
         // style (the files-bar lesson).
+        // Optimizer on the tail: REAL wasm run of generate ssql; the
+        // preview must show before/after and Apply must rewrite the bar.
+        ta.value = 'ssql from data.jsonl | ssql sort salary -desc | ssql limit 2';
+        w.exploreOptimizeTail();
+        await settle();
+        const optOut = doc.getElementById('output').textContent;
+        // (No [rewrite-name] annotations on the wasm path — success
+        // stderr is dropped by executePipeline; the before/after diff
+        // carries the story. The HEAD path has annotations.)
+        rec("tail-optimize-preview",
+            optOut.includes('top 2 -field salary') && optOut.includes('before:'),
+            JSON.stringify(optOut.slice(0, 200)));
+        const applyBtn = [...doc.getElementById('output').querySelectorAll('button')]
+            .find(b => b.textContent.startsWith('Apply'));
+        rec("tail-optimize-apply-btn", !!applyBtn, "no Apply button");
+        if (applyBtn) { applyBtn.click(); await settle(); }
+        rec("tail-optimize-applied",
+            ta.value === 'ssql from data.jsonl | ssql top 2 -field salary', ta.value);
+        // No-rewrite case is honest, no Apply button offered.
+        ta.value = 'ssql from data.jsonl | ssql limit 2';
+        w.exploreOptimizeTail();
+        await settle();
+        rec("tail-optimize-honest-noop",
+            doc.getElementById('output').textContent.includes('already in optimal form') &&
+            ![...doc.getElementById('output').querySelectorAll('button')].some(b => b.textContent.startsWith('Apply')),
+            doc.getElementById('output').textContent.slice(0, 120));
+
         rec("server-head-dormant",
             w.getComputedStyle(doc.getElementById('serverHead')).display === 'none',
             w.getComputedStyle(doc.getElementById('serverHead')).display);
@@ -218,6 +245,32 @@ async function run() {
         await settle();
         w2.exploreRunHead = origRunHead;
         rec("head-enter-still-runs", ranHead === 1, "ranHead=" + ranHead);
+        // Head optimize: /api/optimize answers; preview + Apply rewrite
+        // the HEAD input.
+        w2.__srvFetch = (url, opts) => {
+            const u = String(url);
+            if (u.includes('/api/optimize')) {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({
+                    optimized: 'ssql from ssh node1 /data/x.csv -- where -if kind gt 100',
+                    rewrites: ['[ssh-predicate-pushdown] where moves to the remote'],
+                    changed: true }) });
+            }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ output: '', stderr: '', code: 0 }) });
+        };
+        doc2.getElementById('headInput').value = 'ssql from ssh node1 /data/x.csv | ssql where -if kind gt 100';
+        await w2.exploreOptimizeHead();
+        await settle();
+        const headOptOut = doc2.getElementById('output').textContent;
+        rec("head-optimize-preview",
+            headOptOut.includes('ssh-predicate-pushdown') && headOptOut.includes('after:'),
+            headOptOut.slice(0, 160));
+        const headApply = [...doc2.getElementById('output').querySelectorAll('button')]
+            .find(b => b.textContent.startsWith('Apply'));
+        if (headApply) { headApply.click(); await settle(); }
+        rec("head-optimize-applied",
+            doc2.getElementById('headInput').value === 'ssql from ssh node1 /data/x.csv -- where -if kind gt 100',
+            doc2.getElementById('headInput').value);
+
         // Field-name completion in the head: the engine answers a field
         // slot with Use-Ctrl-O; the binding then asks -complete-source
         // for the upstream and /api/schema-fields for its output fields.

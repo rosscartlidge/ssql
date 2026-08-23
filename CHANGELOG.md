@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **⚙ Optimize in the served workspace** — both the head and the tail
+  bar gain an Optimize button: the rewrite (filter merges, sort+limit
+  → top, ssh/catalog pushdown) previews in the output panel with
+  before/after — and named rewrite annotations for the head — plus an
+  Apply action; inputs are never silently rewritten, and an
+  already-optimal pipeline says so. Head optimizes server-side via the
+  new `POST /api/optimize` (where ssh pushdown is real); the tail
+  optimizes in-browser through the wasm engine. Composes with ⚡ typed
+  heads (apply-then-run keys the compile cache on the optimized text).
+- **Copy CLI's browser-only-file warning shows synchronously** — a
+  slow or blocked clipboard no longer delays it.
 - **`ssql sample` — seeded random row sampling (DFC110)** —
   `sample N` (exact count, reservoir) or `sample -percent P`
   (Bernoulli, streaming); `sample 0` is the pass-through dial like
