@@ -580,6 +580,15 @@ var equivCases = []EquivCase{
 		Skip:    map[string]string{"duckdb": "seeded sampling has no cross-engine deterministic equivalent (DFC110)"},
 	},
 	{
+		// Agg-less group-by (DISTINCT semantics) — the parallel lane
+		// now runs typed.DistinctParallel instead of Serial()+Distinct
+		// (6.7s → 1.5s on 14.6M parquet rows); the distinct SET must be
+		// identical in every lane.
+		Name:     "groupby_no_aggs_distinct",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} group-by pop | {{.bin}} sort pop`,
+		Ordered:  true,
+	},
+	{
 		Name:     "identity",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv`,
 		Ordered:  false, // parallel output is unordered

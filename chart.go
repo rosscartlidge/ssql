@@ -3071,6 +3071,7 @@ type ExploreConfig struct {
 	SsqlUIJS      string `json:"-"`           // Content of ssql-ui.js (shared completion/help/pipeline layer)
 	WasmBinary    string `json:"-"`           // Base64 of the GZIPPED slim engine wasm (embedded in HTML)
 	AllowEmpty    bool   `json:"-"`           // Permit zero records (served empty workspace); loud error otherwise
+	Version       string `json:"-"`           // ssql version shown in the ready text (set by the CLI; stale-page diagnosis)
 }
 
 // DefaultExploreConfig provides sensible defaults for interactive data exploration.
@@ -3184,6 +3185,7 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 		FsPolyfillJS template.JS
 		SsqlUIJS     template.JS
 		WasmBinary   template.JS
+		Version      string
 	}{
 		Title:       config.Title,
 		DataJSON:    template.JS(dataJSON),
@@ -3195,6 +3197,7 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 		FsPolyfillJS: template.JS(config.FsPolyfillJS),
 		SsqlUIJS:     template.JS(config.SsqlUIJS),
 		WasmBinary:   template.JS(config.WasmBinary),
+		Version:      config.Version,
 	}
 
 	if err := tmpl.Execute(writer, templateData); err != nil {
@@ -3783,7 +3786,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 // pipeline bar run against it like any file.
                 _fsWriteFile('data.jsonl', DATA.map(r => JSON.stringify(r)).join('\n') + '\n');
                 window.ssqlUIReady = true;
-                window.SSQL_UI_READY_TEXT = 'Engine ready — pipeline runs against data.jsonl';
+                window.SSQL_UI_READY_TEXT = 'Engine ready — pipeline runs against data.jsonl (ssql v{{.Version}})';
                 const bar = document.getElementById('pipeline');
                 if (bar && !bar.value) bar.value = 'ssql from data.jsonl | ';
                 const st = document.getElementById('status');

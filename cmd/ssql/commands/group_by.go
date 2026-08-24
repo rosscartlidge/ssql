@@ -486,19 +486,31 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 				return lib.WriteErrorAndExit(getCommandString(), derr)
 			}
 			groupedVar := uniqueVarName("grouped", fragments)
-			distinctCode := fmt.Sprintf("%s := typed.Distinct(func(r %s) %s { return r })(%s)",
+			// Dual templates: DistinctParallel keeps the upstream
+			// Stream parallel (per-shard dedupe, tiny serial merge —
+			// the SerialOnly form cost 6.7s vs 1.5s on 14.6M parquet
+			// rows); the planner downgrades to the serial Distinct
+			// when the upstream is already iter.Seq.
+			parallelCode := fmt.Sprintf("%s := typed.DistinctParallel(%s, func(r %s) %s { return r })",
+				groupedVar, projVar, derived.TypeName, derived.TypeName)
+			serialCode := fmt.Sprintf("%s := typed.Distinct(func(r %s) %s { return r })(%s)",
 				groupedVar, derived.TypeName, derived.TypeName, projVar)
 			// Empty Command on the second fragment: both fragments
 			// belong to the same source command (`ssql group-by FIELD`),
 			// and the assembler builds the pipeline-comment list from
 			// each fragment's Command — recording the same command
 			// twice would duplicate it in the output header.
-			distinctFrag := lib.NewStmtFragment(groupedVar, projVar, distinctCode,
+			distinctFrag := lib.NewStmtFragment(groupedVar, projVar, parallelCode,
 				[]string{"github.com/rosscartlidge/ssql/v4/typed"}, "")
 			distinctFrag.InputTypedSchema = derived
 			distinctFrag.OutputTypedSchema = derived
 			distinctFrag.Capabilities = &lib.Capabilities{
-				Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true,
+				Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped,
+			}
+			distinctFrag.AltCodeIfSeq = serialCode
+			distinctFrag.AltImportsIfSeq = []string{"github.com/rosscartlidge/ssql/v4/typed"}
+			distinctFrag.AltCapabilitiesIfSeq = &lib.Capabilities{
+				Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped,
 			}
 			return lib.WriteCodeFragment(distinctFrag)
 		} else {

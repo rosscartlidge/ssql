@@ -78,3 +78,26 @@ func TestParallelFromSliceManyShards(t *testing.T) {
 		}
 	}
 }
+
+func TestDistinctParallel(t *testing.T) {
+	for _, shards := range []int{1, 3, 16} {
+		data := make([]int, 5000)
+		for i := range data {
+			data[i] = i % 37
+		}
+		got := slices.Collect(DistinctParallel(ParallelFromSlice(data, shards), func(v int) int { return v }))
+		if len(got) != 37 {
+			t.Fatalf("shards=%d: %d distinct, want 37", shards, len(got))
+		}
+		seen := map[int]bool{}
+		for _, v := range got {
+			if seen[v] {
+				t.Fatalf("shards=%d: duplicate %d", shards, v)
+			}
+			seen[v] = true
+		}
+	}
+	if got := slices.Collect(DistinctParallel(ParallelFromSlice([]int{}, 4), func(v int) int { return v })); len(got) != 0 {
+		t.Fatalf("empty: %v", got)
+	}
+}

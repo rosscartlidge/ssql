@@ -5,6 +5,31 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Agg-less `group-by` (and `distinct`) now run parallel in typed
+  mode** — `group-by relationship` with no aggregations was
+  SerialOnly (14.6M rows through one core: 6.7s) while the `-count`
+  form ran GroupByParallel (1.5s) — a gap the new rows/s display
+  made visible immediately. New `typed.DistinctParallel` (per-shard
+  parallel dedupe, tiny serial merge) dual-templated into both
+  commands: 6.7s → 1.5s on the motivating pipeline. (Served ⚡ typed
+  heads pick this up at the next release — their compiles pin the
+  published module.)
+- **`from parquet FILE` heads showed no rows/s** — the input-row
+  analyzer knew the bare `from X.parquet` spelling but mistook the
+  `parquet` subcommand word for the file; and `-columns` values were
+  read as extra files (same class). Both fixed — the column-pruned
+  parquet head now shows its true throughput (0.18s over 14.6M rows
+  ≈ 81M rows/s).
+
+### Added
+- **The workspace ready text names its build** — `Engine ready … (ssql
+  v4.70.0)` — so "is this tab/serve stale?" is answerable at a glance
+  (prompted by a rows/s sighting that turned out to be a pre-upgrade
+  serve process still running).
+
 ## [4.70.0] - 2026-08-24
 
 ### Added

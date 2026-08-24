@@ -107,6 +107,8 @@ func TestHeadInputRows(t *testing.T) {
 		{"non-from source", [][]string{{"sample", "5"}}, 0, false},
 		{"missing file", [][]string{{"from", "csv", "nope.csv"}}, 0, false},
 		{"parquet missing file", [][]string{{"from", "nope.parquet"}}, 0, false},
+		{"parquet SUBCOMMAND missing file", [][]string{{"from", "parquet", "nope.parquet"}}, 0, false},
+		{"columns values are not files", [][]string{{"from", "parquet", "nope.parquet", "-columns", "a", "b"}}, 0, false},
 	}
 	for _, c := range cases {
 		got, ok := headInputRows(dir, c.stages)

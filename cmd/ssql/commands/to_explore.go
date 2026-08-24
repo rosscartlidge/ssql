@@ -7,6 +7,7 @@ import (
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/wasm"
 )
 
@@ -149,6 +150,7 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			config.Theme = theme
 			allowEmpty, _ := ctx.GlobalFlags["-allow-empty"].(bool)
 			config.AllowEmpty = allowEmpty
+			config.Version = version.Version
 			config.InitialXField = xField
 			config.InitialYField = yField
 			config.PageSize = pageSize

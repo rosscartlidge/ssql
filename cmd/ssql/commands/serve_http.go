@@ -1057,10 +1057,12 @@ func headInputRows(dir string, stages [][]string) (int64, bool) {
 		return 0, false
 	}
 	args := src[1:]
-	// Optional format subcommand.
+	// Optional format subcommand. (parquet missing here mistook the
+	// subcommand word for the file — found by Ross: `from parquet X`
+	// showed no rows/s while bare `from X.parquet` did.)
 	format := ""
 	switch {
-	case len(args) > 0 && (args[0] == "csv" || args[0] == "tsv" || args[0] == "jsonl"):
+	case len(args) > 0 && (args[0] == "csv" || args[0] == "tsv" || args[0] == "jsonl" || args[0] == "parquet"):
 		format = args[0]
 		args = args[1:]
 	case len(args) > 0 && args[0] == "json":
@@ -1078,6 +1080,14 @@ func headInputRows(dir string, stages [][]string) (int64, bool) {
 			}
 		case a == "-sample-seed", a == "-type", a == "-t", a == "-default-type", a == "-dt", a == "-source":
 			i++
+		case a == "-columns" || a == "-c":
+			// Accumulate flag: consume every bare value that follows —
+			// they are column names, not files (found by Ross:
+			// `-columns relationship` read the column as a second
+			// file → multi-file → rows/s omitted).
+			for i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+			}
 		case strings.HasPrefix(a, "-"):
 		case file == "":
 			file = a
@@ -1088,20 +1098,19 @@ func headInputRows(dir string, stages [][]string) (int64, bool) {
 	if file == "" {
 		return 0, false
 	}
+	if format == "parquet" || strings.ToLower(filepath.Ext(file)) == ".parquet" {
+		if sampleN >= 0 {
+			return sampleN, true
+		}
+		n, err := ssql.ParquetRowCount(filepath.Join(dir, file))
+		if err != nil {
+			return 0, false
+		}
+		return capByEarlyLimit(n, stages), true
+	}
 	if format == "" {
 		switch strings.ToLower(filepath.Ext(file)) {
 		case ".csv", ".tsv", ".jsonl":
-		case ".parquet":
-			// Parquet carries its row count in the footer — exact and
-			// O(footer), better than any line scan.
-			if sampleN >= 0 {
-				return sampleN, true
-			}
-			n, err := ssql.ParquetRowCount(filepath.Join(dir, file))
-			if err != nil {
-				return 0, false
-			}
-			return capByEarlyLimit(n, stages), true
 		default:
 			return 0, false
 		}

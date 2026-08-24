@@ -78,19 +78,24 @@ func generateDistinctCode() error {
 
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {
-		// distinct is SerialOnly — planner inserts Stream.Serial()
-		// upstream automatically when input is a Stream.
-		// All Tier-1/1.5 supported field types are Go-comparable
-		// (string/numeric/bool/time.Time/pointer), so we can dedup by
-		// the row value itself. Pointer fields compare by identity,
-		// not by pointed-to value — note in the doc, but uncommon
-		// for typical CSV data.
-		code := fmt.Sprintf("%s := typed.Distinct(func(r %s) %s { return r })(%s)",
+		// Dual templates: DistinctParallel dedupes per shard in
+		// parallel (serial merge over ~distinct-count rows); the
+		// planner downgrades to the serial Distinct on iter.Seq
+		// upstreams. All Tier-1/1.5 supported field types are
+		// Go-comparable (string/numeric/bool/time.Time/pointer), so we
+		// dedup by the row value itself. Pointer fields compare by
+		// identity, not pointed-to value — uncommon for CSV data.
+		parallelCode := fmt.Sprintf("%s := typed.DistinctParallel(%s, func(r %s) %s { return r })",
+			outputVar, inputVar, prevSchema.TypeName, prevSchema.TypeName)
+		serialCode := fmt.Sprintf("%s := typed.Distinct(func(r %s) %s { return r })(%s)",
 			outputVar, prevSchema.TypeName, prevSchema.TypeName, inputVar)
-		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+		frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
 		frag.InputTypedSchema = prevSchema
 		frag.OutputTypedSchema = prevSchema
-		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
+		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped}
+		frag.AltCodeIfSeq = serialCode
+		frag.AltImportsIfSeq = []string{"github.com/rosscartlidge/ssql/v4/typed"}
+		frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 		return lib.WriteCodeFragment(frag)
 	}
 
