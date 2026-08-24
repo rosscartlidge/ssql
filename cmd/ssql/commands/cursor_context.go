@@ -265,6 +265,17 @@ func CompleteSource(before string) string {
 	}
 	segs := splitTopLevelPipes(before)
 	stage := strings.TrimLeft(segs[len(segs)-1], " \t")
+	// A field slot inside a `from` stage itself (-columns on parquet/
+	// arrow): the fields come from the stage's OWN file — synthesize a
+	// bare read of it (bare, so ALL columns are offered even after
+	// some are picked). Found by Ross: `from parquet X -columns ^O`
+	// fell through to upstreamOf, which is empty for a first stage.
+	if f, fmtSub := fromOwnFileFieldSlot(stage); f != "" {
+		if fmtSub != "" {
+			return "ssql from " + fmtSub + " " + f
+		}
+		return "ssql from " + f
+	}
 	if joinRightFieldSlot(stage) {
 		if ps := firstProcsub(stage); ps != "" {
 			return strings.TrimSpace(ps)
@@ -301,4 +312,51 @@ func joinRightFile(stage string) string {
 		return ""
 	}
 	return ""
+}
+
+// fromOwnFileFieldSlot reports the (file, format-subcommand) of a
+// `from` stage whose cursor sits on a -columns value — a field slot
+// answered by the stage's own file rather than any upstream.
+func fromOwnFileFieldSlot(stage string) (string, string) {
+	toks := tokenizeStage(stage)
+	if len(toks) < 2 || toks[0] != "ssql" || toks[1] != "from" {
+		return "", ""
+	}
+	rest := toks[2:]
+	// Completed tokens only — drop the partial under the cursor.
+	if !strings.HasSuffix(stage, " ") && !strings.HasSuffix(stage, "\t") && len(rest) > 0 {
+		rest = rest[:len(rest)-1]
+	}
+	if len(rest) == 0 {
+		return "", ""
+	}
+	// Cursor must be on a -columns value (Accumulate: every arg after
+	// the flag until the next flag is a column).
+	inColumns := false
+	fmtSub := ""
+	file := ""
+	valueFlags := map[string]bool{
+		"-sample": true, "-sample-seed": true, "-type": true, "-t": true,
+		"-default-type": true, "-dt": true, "-source": true,
+	}
+	for i := 0; i < len(rest); i++ {
+		t := rest[i]
+		switch {
+		case t == "-columns" || t == "-c":
+			inColumns = true
+		case strings.HasPrefix(t, "-"):
+			inColumns = false
+			if valueFlags[t] {
+				i++
+			}
+		case i == 0 && (t == "csv" || t == "tsv" || t == "json" || t == "jsonl" || t == "parquet" || t == "arrow" || t == "xlsx" || t == "wav"):
+			fmtSub = t
+		case !inColumns && file == "":
+			file = t
+		}
+	}
+	if !inColumns || file == "" {
+		return "", ""
+	}
+	return file, fmtSub
 }

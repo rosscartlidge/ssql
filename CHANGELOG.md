@@ -5,6 +5,29 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Parquet field-name completion answers from the footer** — Tab or
+  Ctrl-O after a parquet source used to decode the ENTIRE file to
+  list its columns (schema mode had no parquet branch and fell
+  through to a full read — 14.6M rows to answer a metadata question,
+  on every completion probe). It now reads the footer: O(footer),
+  real wire types (parquet stores them — `int`/`float`/`bool`/
+  `string` instead of `any`), `-columns` respected. Ctrl-O works on
+  `from parquet X -columns ` itself too (found by Ross): a field slot
+  inside a `from` stage now resolves against the stage's OWN file —
+  first stages have no upstream, so the old protocol answered
+  nothing. Value completion for parquet (data sampling) is queued
+  separately — it needs an autocli extension hook.
+- **Head runs show throughput** — the workspace status now reads e.g.
+  `Head OK — 14.6M → 40 rows in 1.65s (8.9M rows/s)`: input rows over
+  wall time, the number that shows what a run actually did. Zero
+  per-run overhead: line formats get a one-time newline count cached
+  by (path, size, mtime); parquet reads the exact count from its
+  footer; `-sample N` sources report N; an early `limit` caps it;
+  anything unknowable omits the input side rather than guess.
+
 ## [4.69.0] - 2026-08-23
 
 ### Added

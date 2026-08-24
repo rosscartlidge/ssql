@@ -2,6 +2,7 @@ package commands
 
 import (
 	"net"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -82,5 +83,47 @@ func TestIsTailscaleIP(t *testing.T) {
 		if got := isTailscaleIP(net.ParseIP(c.ip)); got != c.want {
 			t.Errorf("isTailscaleIP(%s) = %v, want %v", c.ip, got, c.want)
 		}
+	}
+}
+
+func TestHeadInputRows(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(dir+"/d.csv", []byte("a,b\n1,2\n3,4\n5,6\n"), 0o644)
+	os.WriteFile(dir+"/d.jsonl", []byte("{\"a\":1}\n{\"a\":2}\n"), 0o644)
+
+	cases := []struct {
+		name   string
+		stages [][]string
+		want   int64
+		ok     bool
+	}{
+		{"csv header subtracted", [][]string{{"from", "csv", "d.csv"}}, 3, true},
+		{"bare from by ext", [][]string{{"from", "d.csv"}}, 3, true},
+		{"jsonl no header", [][]string{{"from", "jsonl", "d.jsonl"}}, 2, true},
+		{"sample wins", [][]string{{"from", "csv", "d.csv", "-sample", "2", "-sample-seed", "1"}}, 2, true},
+		{"limit caps", [][]string{{"from", "csv", "d.csv"}, {"limit", "2"}}, 2, true},
+		{"limit larger than file", [][]string{{"from", "csv", "d.csv"}, {"limit", "99"}}, 3, true},
+		{"json array unsafe", [][]string{{"from", "json", "d.json"}}, 0, false},
+		{"non-from source", [][]string{{"sample", "5"}}, 0, false},
+		{"missing file", [][]string{{"from", "csv", "nope.csv"}}, 0, false},
+		{"parquet missing file", [][]string{{"from", "nope.parquet"}}, 0, false},
+	}
+	for _, c := range cases {
+		got, ok := headInputRows(dir, c.stages)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("%s: got (%d,%v), want (%d,%v)", c.name, got, ok, c.want, c.ok)
+		}
+	}
+
+	// Cache: second call must not re-read (mutate the file KEEPING
+	// size+mtime is hard portably; instead verify the cache entry
+	// exists and a changed file invalidates).
+	if _, err := os.Stat(dir + "/d.csv"); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(dir+"/d.csv", []byte("a,b\n1,2\n"), 0o644)
+	got, ok := headInputRows(dir, [][]string{{"from", "csv", "d.csv"}})
+	if !ok || got != 1 {
+		t.Errorf("after rewrite: got (%d,%v), want (1,true)", got, ok)
 	}
 }

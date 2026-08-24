@@ -39,6 +39,26 @@ func TestCompleteSource(t *testing.T) {
 			"ssql from shuffled.csv",
 		},
 		{
+			"from -columns completes from the stage's OWN file",
+			"ssql from parquet shuffled.parquet -columns ",
+			"ssql from parquet shuffled.parquet",
+		},
+		{
+			"from -columns after picked columns still offers the file",
+			"ssql from parquet shuffled.parquet -columns a_kind z_kind ",
+			"ssql from parquet shuffled.parquet",
+		},
+		{
+			"from FILE slot itself is not a field slot",
+			"ssql from parquet ",
+			"",
+		},
+		{
+			"-columns then another flag ends the field run",
+			"ssql from parquet x.parquet -columns a -sample ",
+			"",
+		},
+		{
 			"simple procsub does NOT confuse the top-level split (join left field)",
 			"ssql from data.csv | ssql join <(ssql from kind.csv) -on ",
 			"ssql from data.csv",

@@ -3977,10 +3977,19 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             status.textContent = 'Head OK — re-running tail…';
             window.exploreRunBar();
             // Report the head's wall time so engine differences are
-            // VISIBLE (exec vs typed on a big scan is the whole story).
+            // VISIBLE (exec vs typed on a big scan is the whole story) —
+            // and INPUT rows/sec, the number that shows what the run
+            // actually did (a group-by reads millions, emits dozens).
+            // inputRows costs the server one cached line count.
             const rows = (res.output.match(/\n/g) || []).length - 1;
             const secs = res.runMs != null ? (res.runMs / 1000).toFixed(res.runMs < 10000 ? 2 : 1) + 's' : '';
-            let note = 'Head OK — ' + Math.max(rows, 0) + ' rows' + (secs ? ' in ' + secs : '');
+            const fmtN = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? Math.round(n / 1e3) + 'k' : String(n);
+            let note = 'Head OK — ';
+            if (res.inputRows != null) note += fmtN(res.inputRows) + ' → ';
+            note += Math.max(rows, 0) + ' rows' + (secs ? ' in ' + secs : '');
+            if (res.inputRows != null && res.runMs > 0) {
+                note += ' (' + fmtN(Math.round(res.inputRows / (res.runMs / 1000))) + ' rows/s)';
+            }
             if (res.engine === 'typed-compiled') note += ' (typed; +' + (res.compileMs / 1000).toFixed(1) + 's one-time compile, cached for re-runs)';
             else if (res.engine === 'typed-cached') note += ' (typed, cache hit)';
             else note += ' (exec — try ⚡ typed for big scans)';

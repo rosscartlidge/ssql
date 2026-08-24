@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -2197,5 +2198,31 @@ func TestLimitZeroSkipsGeneration(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestParquetSchemaMode: schema mode must answer from the FOOTER —
+// real types, and never a data decode (before the branch existed it
+// read the whole file to list columns).
+func TestParquetSchemaMode(t *testing.T) {
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	pq := dir + "/t.parquet"
+	cmd := exec.Command("bash", "-c",
+		fmt.Sprintf(`printf 'n,s\n1,a\n2,b\n' | %s from csv /dev/stdin | %s to parquet %s`, bin, bin, pq))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("write parquet: %v\n%s", err, out)
+	}
+	out, err := exec.Command("bash", "-c",
+		"SSQL_MODE=schema "+bin+" from "+pq).CombinedOutput()
+	if err != nil {
+		t.Fatalf("schema mode: %v\n%s", err, out)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"n":"int"`) || !strings.Contains(s, `"s":"string"`) {
+		t.Errorf("schema types missing: %s", s)
+	}
+	if strings.Contains(s, `{"n":1`) {
+		t.Errorf("schema mode leaked data rows: %s", s)
 	}
 }

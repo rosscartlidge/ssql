@@ -31,3 +31,11 @@ func WriteParquet(records iter.Seq[Record], filename string, opts ...ParquetWrit
 func WriteParquetToWriter(records iter.Seq[Record], w io.Writer, opts ...ParquetWriteOption) error {
 	return fmt.Errorf("parquet support not available in slim build")
 }
+
+func ParquetRowCount(filename string) (int64, error) {
+	return 0, fmt.Errorf("parquet support is not included in slim builds")
+}
+
+func ParquetSchemaFields(filename string) ([]string, map[string]string, error) {
+	return nil, nil, fmt.Errorf("parquet support is not included in slim builds")
+}

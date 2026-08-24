@@ -39,6 +39,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -372,11 +373,15 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 		if runErr := ch.wait(); runErr != nil {
 			code = 1
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"output": string(out), "stderr": ch.stderr(), "code": code,
 			"engine": engineUsed, "compileMs": compileMs,
 			"runMs": time.Since(t0).Milliseconds(),
-		})
+		}
+		if rows, ok := headInputRows(o.Dir, stages); ok {
+			resp["inputRows"] = rows
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -979,4 +984,153 @@ func serveOptimize(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 		"optimized": optimized, "rewrites": rewrites,
 		"changed": optimized != strings.TrimSpace(req.Pipeline),
 	})
+}
+
+// --- input-row accounting for head throughput display ---
+//
+// "8.9M rows/s" is the number that shows what a head run actually did
+// (a group-by reads millions and emits dozens). Counting input rows
+// must not slow the run, so the server counts a source file's lines
+// ONCE — a pure bytes.Count newline scan at memory bandwidth — and
+// caches by (path, size, mtime). Every later head over that file pays
+// a single stat. When the source is `-sample N`, rows read is N by
+// construction; anything else (stdin-less multi-stage sources,
+// non-line formats) omits the input side rather than guess.
+
+type lineCountEntry struct {
+	size  int64
+	mtime int64
+	count int64
+}
+
+var (
+	lineCountMu    sync.Mutex
+	lineCountCache = map[string]lineCountEntry{}
+)
+
+// cachedLineCount returns the number of newline-terminated lines in
+// path, cached against size+mtime.
+func cachedLineCount(path string) (int64, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	lineCountMu.Lock()
+	e, ok := lineCountCache[path]
+	lineCountMu.Unlock()
+	if ok && e.size == st.Size() && e.mtime == st.ModTime().UnixNano() {
+		return e.count, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	buf := make([]byte, 1<<20)
+	var n int64
+	for {
+		m, err := f.Read(buf)
+		n += int64(bytes.Count(buf[:m], []byte{'\n'}))
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	lineCountMu.Lock()
+	lineCountCache[path] = lineCountEntry{st.Size(), st.ModTime().UnixNano(), n}
+	lineCountMu.Unlock()
+	return n, nil
+}
+
+// headInputRows estimates the rows the head's SOURCE stage reads, or
+// (0, false) when no honest estimate exists. Line formats only; a
+// header line is subtracted; -sample N wins (that IS the read count);
+// a bare `limit N` immediately after the source caps it.
+func headInputRows(dir string, stages [][]string) (int64, bool) {
+	if len(stages) == 0 {
+		return 0, false
+	}
+	src := stages[0]
+	if len(src) == 0 || src[0] != "from" {
+		return 0, false
+	}
+	args := src[1:]
+	// Optional format subcommand.
+	format := ""
+	switch {
+	case len(args) > 0 && (args[0] == "csv" || args[0] == "tsv" || args[0] == "jsonl"):
+		format = args[0]
+		args = args[1:]
+	case len(args) > 0 && args[0] == "json":
+		return 0, false // may be an array file — no line==row guarantee
+	}
+	var file string
+	sampleN := int64(-1)
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-sample":
+			if i+1 < len(args) {
+				fmt.Sscanf(args[i+1], "%d", &sampleN)
+				i++
+			}
+		case a == "-sample-seed", a == "-type", a == "-t", a == "-default-type", a == "-dt", a == "-source":
+			i++
+		case strings.HasPrefix(a, "-"):
+		case file == "":
+			file = a
+		default:
+			return 0, false // multi-file — no single count
+		}
+	}
+	if file == "" {
+		return 0, false
+	}
+	if format == "" {
+		switch strings.ToLower(filepath.Ext(file)) {
+		case ".csv", ".tsv", ".jsonl":
+		case ".parquet":
+			// Parquet carries its row count in the footer — exact and
+			// O(footer), better than any line scan.
+			if sampleN >= 0 {
+				return sampleN, true
+			}
+			n, err := ssql.ParquetRowCount(filepath.Join(dir, file))
+			if err != nil {
+				return 0, false
+			}
+			return capByEarlyLimit(n, stages), true
+		default:
+			return 0, false
+		}
+	}
+	if sampleN >= 0 {
+		return sampleN, true
+	}
+	lines, err := cachedLineCount(filepath.Join(dir, file))
+	if err != nil {
+		return 0, false
+	}
+	rows := lines
+	if strings.ToLower(filepath.Ext(file)) != ".jsonl" && format != "jsonl" {
+		rows-- // delimited header line
+	}
+	if rows < 0 {
+		rows = 0
+	}
+	return capByEarlyLimit(rows, stages), true
+}
+
+// capByEarlyLimit caps rows by a `limit N` immediately after the
+// source — the pipeline then reads only N rows.
+func capByEarlyLimit(rows int64, stages [][]string) int64 {
+	if len(stages) > 1 && len(stages[1]) >= 2 && stages[1][0] == "limit" {
+		var lim int64
+		if _, err := fmt.Sscanf(stages[1][1], "%d", &lim); err == nil && lim > 0 && lim < rows {
+			return lim
+		}
+	}
+	return rows
 }

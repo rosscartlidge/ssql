@@ -420,6 +420,20 @@ async function run() {
             doc2.getElementById('status').textContent.includes('in 2.34s') &&
             doc2.getElementById('status').textContent.includes('+1.6s one-time compile'),
             doc2.getElementById('status').textContent);
+        // Throughput display: inputRows in the envelope → "N → M rows
+        // … (X rows/s)" in the status.
+        w2.__srvFetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({
+            output: '{"_schema":{"fields":["k"],"types":{"k":"int"}}}\n{"k":1}\n{"k":2}\n',
+            stderr: '', code: 0, engine: 'typed-cached', compileMs: 0, runMs: 1650,
+            inputRows: 14628366 }) });
+        await w2.exploreRunHead();
+        {
+            const st5 = doc2.getElementById('status').textContent;
+            rec("head-rows-per-sec",
+                st5.includes('14.6M \u2192') && st5.includes('2 rows') && st5.includes('8.9M rows/s'),
+                [st5.includes('14.6M \u2192'), st5.includes('2 rows'), st5.includes('8.9M rows/s'),
+                 [...st5.slice(9, 20)].map(c => c.codePointAt(0).toString(16)).join(',')].join(' | '));
+        }
         doc2.getElementById('headTyped').checked = false;
 
         // Share link: captures head + typed + loaded files + tail as a

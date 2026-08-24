@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-08-23 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-08-24 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -120,6 +120,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC110 | 2026-08-21 | 2026-08-23 | [`ssql sample` — Seeded Random Row Sampling](./dfc110_sample_command.md) |
 | DFC111 | 2026-08-23 | 2026-08-23 | [Sampling a 1.2GB CSV in 14 Milliseconds: A Case Study](./dfc111_sampling_case_study.md) |
 | DFC112 | 2026-08-23 | 2026-08-23 | [Cloud Data Strategy: Mounts, Serve-in-Region, and `from https://`](./dfc112_cloud_data_strategy.md) |
+| DFC113 | 2026-08-24 | 2026-08-24 | [The Scale Gate: Budget Assertions on Large Fixtures](./dfc113_scale_gate.md) |
 
 <!-- DFC-INDEX-END -->
 

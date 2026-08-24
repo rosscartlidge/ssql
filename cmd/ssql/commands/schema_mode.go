@@ -51,6 +51,21 @@ func writeSchemaModeOutput(w io.Writer, names []string) error {
 	return lib.WriteJSONLWithSchema(w, schema, func(func(ssql.Record) bool) {})
 }
 
+// writeSchemaModeOutputTyped is writeSchemaModeOutput for sources that
+// KNOW their types (parquet footers) — downstream schemaOps and the
+// header consumers see real wire types instead of "any".
+func writeSchemaModeOutputTyped(w io.Writer, names []string, types map[string]string) error {
+	schema := lib.NewSchema()
+	for _, n := range names {
+		t := types[n]
+		if t == "" {
+			t = "any"
+		}
+		schema.AddField(n, t)
+	}
+	return lib.WriteJSONLWithSchema(w, schema, func(func(ssql.Record) bool) {})
+}
+
 // schemaModeJSONNames reads field names from a JSON/JSONL source under
 // schema mode: the _schema header when present, otherwise the first
 // record's keys.

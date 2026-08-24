@@ -239,3 +239,70 @@ func WriteParquetToWriter(records iter.Seq[Record], w io.Writer, opts ...Parquet
 	}
 	return pqarrow.WriteTable(tbl, w, chunk, props, arrProps)
 }
+
+// ParquetRowCount returns the exact row count from a parquet file's
+// footer metadata — O(footer read), no data scan. Used by serve's
+// head-throughput display (rows/sec) where line formats need a cached
+// newline count but parquet carries the answer natively.
+func ParquetRowCount(filename string) (int64, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	pf, err := file.NewParquetReader(f)
+	if err != nil {
+		return 0, fmt.Errorf("reading parquet footer: %w", err)
+	}
+	defer pf.Close()
+	return pf.NumRows(), nil
+}
+
+// ParquetSchemaFields returns the column names and ssql wire types
+// ("int"/"float"/"bool"/"string") from a parquet file's footer —
+// O(footer), no data pages read. Powers schema mode (and therefore
+// field-name completion) for parquet sources: before this, a schema
+// query decoded the ENTIRE file to answer a metadata question.
+func ParquetSchemaFields(filename string) ([]string, map[string]string, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	pf, err := file.NewParquetReader(f)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading parquet footer: %w", err)
+	}
+	defer pf.Close()
+	reader, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{}, memory.DefaultAllocator)
+	if err != nil {
+		return nil, nil, err
+	}
+	arrowSchema, err := reader.Schema()
+	if err != nil {
+		return nil, nil, err
+	}
+	names := make([]string, 0, arrowSchema.NumFields())
+	types := make(map[string]string, arrowSchema.NumFields())
+	for i := 0; i < arrowSchema.NumFields(); i++ {
+		fld := arrowSchema.Field(i)
+		names = append(names, fld.Name)
+		types[fld.Name] = wireTypeForArrow(fld.Type)
+	}
+	return names, types, nil
+}
+
+// wireTypeForArrow maps an arrow type to the ssql wire-type vocabulary.
+func wireTypeForArrow(t arrow.DataType) string {
+	switch t.ID() {
+	case arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
+		arrow.UINT8, arrow.UINT16, arrow.UINT32, arrow.UINT64:
+		return "int"
+	case arrow.FLOAT16, arrow.FLOAT32, arrow.FLOAT64:
+		return "float"
+	case arrow.BOOL:
+		return "bool"
+	default:
+		return "string"
+	}
+}
