@@ -25,7 +25,6 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql where -if age gt 18", "Read CSV (infers format from extension)").
 		Example("ssql from csv data.csv -type zipcode string", "Read CSV with explicit format and type overrides")
 
-
 	// Format subcommands
 	registerFromCSV(fromCmd)
 	registerFromTSV(fromCmd)
@@ -42,22 +41,25 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 	// Bare "from FILE" handler — infers format from extension
 	fromCmd.
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
+		Flag("-records").
+		Bool().
+		Global().
+		Default(false).
+		Help("Print only the record count this invocation would produce (cheapest per format: parquet footer, line count for csv/tsv/jsonl) and exit").
+		Done().
 		Flag("FILE").
-			String().
-			Variadic().
-			Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,parquet,wav,xlsx}"}).
-			Global().
-			Default("").
-			Help("Input file (format inferred from extension). Reads JSONL from stdin if not specified.").
-			Done().
-
+		String().
+		Variadic().
+		Completer(&cf.FileCompleter{Pattern: "*.{csv,tsv,json,jsonl,arrow,parquet,wav,xlsx}"}).
+		Global().
+		Default("").
+		Help("Input file (format inferred from extension). Reads JSONL from stdin if not specified.").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var files []string
 			var generate bool
@@ -99,6 +101,9 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Detect format from extension, delegate
+			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
+				return runFromRecords("", []string{inputFile}, -1)
+			}
 			lower := strings.ToLower(inputFile)
 			switch {
 			case strings.HasSuffix(lower, ".csv"):

@@ -5,6 +5,21 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`from … -records`** — print only the record count that exact
+  invocation would produce, computed the cheapest way the format
+  allows: parquet footer (instant), newline scan for csv/tsv/jsonl
+  (`_schema` header excluded), `-sample N` interplay handled by
+  from's own flag grammar, multi-file sums; stdin and JSON arrays
+  refuse loudly (`use | ssql count`). Like completion, help, and
+  schema mode, the answer lives in the command that owns the format —
+  serve's throughput display now execs `-records` instead of
+  re-parsing from-args with a copy of the grammar (which had
+  accumulated three drift bugs in a week). Serve caches counts by
+  stage argv, invalidated by a fingerprint of the served directory.
+
 ## [4.71.0] - 2026-08-25
 
 ### Fixed

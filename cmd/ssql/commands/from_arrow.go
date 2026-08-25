@@ -14,21 +14,18 @@ func registerFromArrow(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("arrow").
 		Description("Read Arrow file or stdin").
 		Example("ssql from arrow data.arrow | ssql to table", "Read Arrow file (10-20x faster than CSV)").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.arrow"}).
-			Global().
-			Default("").
-			Help("Input Arrow file (or stdin if not specified)").
-			Done().
-
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.arrow"}).
+		Global().
+		Default("").
+		Help("Input Arrow file (or stdin if not specified)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var generate bool

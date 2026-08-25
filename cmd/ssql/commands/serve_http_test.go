@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"net"
 	"os"
 	"reflect"
@@ -86,46 +87,38 @@ func TestIsTailscaleIP(t *testing.T) {
 	}
 }
 
-func TestHeadInputRows(t *testing.T) {
+func TestHeadInputRowsShape(t *testing.T) {
+	// The count itself now comes from `from -records` (covered by the
+	// CLI integration tests) — here we pin the thin wrapper's pure
+	// parts: non-from stages return false without exec'ing anything
+	// (self="" would fail loudly otherwise), and the early-limit cap.
+	if _, ok := headInputRows(context.Background(), "", t.TempDir(), [][]string{{"sample", "5"}}); ok {
+		t.Error("non-from stage must return false")
+	}
+	if _, ok := headInputRows(context.Background(), "", t.TempDir(), nil); ok {
+		t.Error("empty stages must return false")
+	}
+	if got := capByEarlyLimit(100, [][]string{{"from", "x.csv"}, {"limit", "7"}}); got != 7 {
+		t.Errorf("limit cap: %d", got)
+	}
+	if got := capByEarlyLimit(5, [][]string{{"from", "x.csv"}, {"limit", "7"}}); got != 5 {
+		t.Errorf("limit larger than count: %d", got)
+	}
+	if got := capByEarlyLimit(100, [][]string{{"from", "x.csv"}, {"sort", "a"}}); got != 100 {
+		t.Errorf("no limit: %d", got)
+	}
+}
+
+func TestDirDataFingerprint(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(dir+"/d.csv", []byte("a,b\n1,2\n3,4\n5,6\n"), 0o644)
-	os.WriteFile(dir+"/d.jsonl", []byte("{\"a\":1}\n{\"a\":2}\n"), 0o644)
-
-	cases := []struct {
-		name   string
-		stages [][]string
-		want   int64
-		ok     bool
-	}{
-		{"csv header subtracted", [][]string{{"from", "csv", "d.csv"}}, 3, true},
-		{"bare from by ext", [][]string{{"from", "d.csv"}}, 3, true},
-		{"jsonl no header", [][]string{{"from", "jsonl", "d.jsonl"}}, 2, true},
-		{"sample wins", [][]string{{"from", "csv", "d.csv", "-sample", "2", "-sample-seed", "1"}}, 2, true},
-		{"limit caps", [][]string{{"from", "csv", "d.csv"}, {"limit", "2"}}, 2, true},
-		{"limit larger than file", [][]string{{"from", "csv", "d.csv"}, {"limit", "99"}}, 3, true},
-		{"json array unsafe", [][]string{{"from", "json", "d.json"}}, 0, false},
-		{"non-from source", [][]string{{"sample", "5"}}, 0, false},
-		{"missing file", [][]string{{"from", "csv", "nope.csv"}}, 0, false},
-		{"parquet missing file", [][]string{{"from", "nope.parquet"}}, 0, false},
-		{"parquet SUBCOMMAND missing file", [][]string{{"from", "parquet", "nope.parquet"}}, 0, false},
-		{"columns values are not files", [][]string{{"from", "parquet", "nope.parquet", "-columns", "a", "b"}}, 0, false},
+	os.WriteFile(dir+"/a.csv", []byte("x\n1\n"), 0o644)
+	f1 := dirDataFingerprint(dir)
+	f2 := dirDataFingerprint(dir)
+	if f1 != f2 || f1 == "" {
+		t.Fatalf("unstable fingerprint: %q vs %q", f1, f2)
 	}
-	for _, c := range cases {
-		got, ok := headInputRows(dir, c.stages)
-		if ok != c.ok || (ok && got != c.want) {
-			t.Errorf("%s: got (%d,%v), want (%d,%v)", c.name, got, ok, c.want, c.ok)
-		}
-	}
-
-	// Cache: second call must not re-read (mutate the file KEEPING
-	// size+mtime is hard portably; instead verify the cache entry
-	// exists and a changed file invalidates).
-	if _, err := os.Stat(dir + "/d.csv"); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(dir+"/d.csv", []byte("a,b\n1,2\n"), 0o644)
-	got, ok := headInputRows(dir, [][]string{{"from", "csv", "d.csv"}})
-	if !ok || got != 1 {
-		t.Errorf("after rewrite: got (%d,%v), want (1,true)", got, ok)
+	os.WriteFile(dir+"/a.csv", []byte("x\n1\n2\n"), 0o644)
+	if dirDataFingerprint(dir) == f1 {
+		t.Error("file change did not change fingerprint")
 	}
 }

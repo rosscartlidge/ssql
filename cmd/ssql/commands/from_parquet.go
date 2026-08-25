@@ -16,31 +16,41 @@ func registerFromParquet(cmd *cf.SubcommandBuilder) {
 		Example("ssql from parquet data.parquet | ssql to table", "Read Parquet file").
 		Example("ssql from parquet data.parquet -columns name -columns age -columns dept | ssql to table", "Read only selected columns (faster for wide files)").
 		Example("ssql from parquet data.parquet | ssql to csv output.csv", "Convert Parquet to CSV").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
-			Global().
-			Required().
-			Help("Input Parquet file (random access required, no stdin)").
-			Done().
-
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
+		Global().
+		Required().
+		Help("Input Parquet file (random access required, no stdin)").
+		Done().
+		Flag("-records").
+		Bool().
+		Global().
+		Default(false).
+		Help("Print only the record count this invocation would produce (cheapest per format: parquet footer, line count for csv/tsv/jsonl) and exit").
+		Done().
 		Flag("-columns", "-c").
-			Arg("column").
-				FieldsFromFlag("FILE").
-				Done().
-			Accumulate().
-			Global().
-			Help("Column to read (repeat for multiple). Omit for all columns. Reduces I/O for wide files.").
-			Done().
-
+		Arg("column").
+		FieldsFromFlag("FILE").
+		Done().
+		Accumulate().
+		Global().
+		Help("Column to read (repeat for multiple). Omit for all columns. Reduces I/O for wide files.").
+		Done().
 		Handler(func(ctx *cf.Context) error {
+			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
+				file, _ := ctx.GlobalFlags["FILE"].(string)
+				var files []string
+				if file != "" {
+					files = []string{file}
+				}
+				return runFromRecords("parquet", files, -1)
+			}
 			var inputFile string
 			var generate bool
 

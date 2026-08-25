@@ -36,6 +36,12 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Default("").
 		Help("Add field with source filename: -source file").
 		Done().
+		Flag("-records").
+		Bool().
+		Global().
+		Default(false).
+		Help("Print only the record count this invocation would produce (cheapest per format: parquet footer, line count for csv/tsv/jsonl) and exit").
+		Done().
 		Flag("-sample").
 		Int().
 		Global().
@@ -122,6 +128,13 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 				unordered = uVal.(bool)
 			}
 
+			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
+				sn := int64(-1)
+				if v, _ := ctx.GlobalFlags["-sample"].(int); v > 0 {
+					sn = int64(v)
+				}
+				return runFromRecords("csv", files, sn)
+			}
 			sampleN, _ := ctx.GlobalFlags["-sample"].(int)
 			sampleSeed, _ := ctx.GlobalFlags["-sample-seed"].(int)
 			if sampleN > 0 {

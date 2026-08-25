@@ -40,6 +40,12 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Global().
 		Help("Don't preserve file order in pushdown (faster, lower memory)").
 		Done().
+		Flag("-records").
+		Bool().
+		Global().
+		Default(false).
+		Help("Print only the record count this invocation would produce (cheapest per format: parquet footer, line count for csv/tsv/jsonl) and exit").
+		Done().
 		Flag("-sample").
 		Int().
 		Global().
@@ -63,6 +69,13 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Handler(func(ctx *cf.Context) error {
 			cfg := extractMultiFileConfig(ctx)
 
+			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
+				sn := int64(-1)
+				if v, _ := ctx.GlobalFlags["-sample"].(int); v > 0 {
+					sn = int64(v)
+				}
+				return runFromRecords("tsv", cfg.files, sn)
+			}
 			sampleN, _ := ctx.GlobalFlags["-sample"].(int)
 			sampleSeed, _ := ctx.GlobalFlags["-sample-seed"].(int)
 			if sampleN > 0 {

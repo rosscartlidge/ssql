@@ -15,28 +15,24 @@ func registerFromWAV(cmd *cf.SubcommandBuilder) {
 		Description("Read WAV audio file").
 		Example("ssql from wav audio.wav | ssql fft -field amplitude", "Read WAV for FFT analysis").
 		Example("ssql from wav stereo.wav -channel 0 | ssql to table", "Read left channel only").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-channel", "-ch").
-			Int().
-			Global().
-			Default(-1).
-			Help("Extract specific channel (0=left, 1=right). Default: mix to mono.").
-			Done().
-
+		Int().
+		Global().
+		Default(-1).
+		Help("Extract specific channel (0=left, 1=right). Default: mix to mono.").
+		Done().
 		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.wav"}).
-			Global().
-			Default("").
-			Help("Input WAV file").
-			Done().
-
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.wav"}).
+		Global().
+		Default("").
+		Help("Input WAV file").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var generate bool

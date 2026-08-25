@@ -359,3 +359,26 @@ func SampleJSONLFile(filename string, n int, seed int64) (iter.Seq[Record], erro
 		}
 	}, nil
 }
+
+// CountFileLines returns the number of newline-terminated lines in
+// path — a pure bytes.Count scan at memory bandwidth (~0.15s/GB).
+// The cheap-count backbone of `from -records` for line formats.
+func CountFileLines(path string) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	buf := make([]byte, 1<<20)
+	var n int64
+	for {
+		m, err := f.Read(buf)
+		n += int64(bytes.Count(buf[:m], []byte{'\n'}))
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+}

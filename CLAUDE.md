@@ -60,6 +60,9 @@ Every `doc/research/*.md` carries a DFC (Doc For Comment) reference — a stable
 
 ## Development Principles (CRITICAL)
 
+### Commands Are the Authority on Themselves (CRITICAL)
+A command owns its flag grammar, format knowledge, and semantics — consumers needing facts about what a command reads, produces, or means MUST ask it through a protocol (`-complete`, `-help-at`, `SSQL_MODE=schema`, `-generate` fragments, `from -records`), NEVER re-parse its arguments elsewhere. An external parse is a second implementation of the command's grammar, and second implementations drift: serve's hand-rolled from-args parser took three drift bugs in one week before being replaced by exec'ing `from … -records` (the fix was deleting the copy, not improving it). When a consumer needs a NEW fact about a command, grow the command a protocol surface for it. Known legacy exception under repair: the SQL assembler parses fragment Command strings (see DFC115 and codegen-ir-evolution.md) — do not copy that approach. Full reasoning: `doc/research/dfc115_commands_are_the_authority.md`.
+
 ### Refactor While You Work
 Whenever fixing bugs or adding features, always look for opportunities to refactor and simplify the surrounding code. Extract shared helpers, remove duplication, simplify control flow. Leave the code better than you found it.
 

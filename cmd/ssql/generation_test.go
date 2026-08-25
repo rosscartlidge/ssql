@@ -2226,3 +2226,49 @@ func TestParquetSchemaMode(t *testing.T) {
 		t.Errorf("schema mode leaked data rows: %s", s)
 	}
 }
+
+// TestFromRecords: the -records protocol prints one integer — the
+// record count of that exact from invocation, cheapest per format —
+// and refuses loudly where no cheap count exists.
+func TestFromRecords(t *testing.T) {
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	os.WriteFile(dir+"/d.csv", []byte("a,b\n1,2\n3,4\n5,6\n"), 0o644)
+	os.WriteFile(dir+"/e.csv", []byte("a,b\n7,8\n"), 0o644)
+	os.WriteFile(dir+"/d.jsonl", []byte("{\"_schema\":{\"fields\":[\"a\"],\"types\":{\"a\":\"int\"}}}\n{\"a\":1}\n{\"a\":2}\n"), 0o644)
+	os.WriteFile(dir+"/arr.json", []byte("[{\"a\":1}]"), 0o644)
+
+	run := func(args string) (string, error) {
+		out, err := exec.Command("bash", "-c", "cd "+dir+" && "+bin+" "+args).CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	cases := []struct {
+		args, want string
+	}{
+		{"from csv d.csv -records", "3"},
+		{"from d.csv -records", "3"},                       // bare, by extension
+		{"from csv d.csv e.csv -records", "4"},             // multi-file sum
+		{"from jsonl d.jsonl -records", "2"},               // _schema header excluded
+		{"from csv d.csv -sample 2 -sample-seed 1 -records", "2"},
+		{"from csv d.csv -sample 99 -sample-seed 1 -records", "3"}, // sample > rows
+	}
+	for _, c := range cases {
+		got, err := run(c.args)
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q err %v, want %q", c.args, got, err, c.want)
+		}
+	}
+	if out, err := run("from arr.json -records"); err == nil || !strings.Contains(out, "JSON array") {
+		t.Errorf("array: want loud refusal, got %q %v", out, err)
+	}
+	if out, err := run("from csv -records < d.csv"); err == nil || !strings.Contains(out, "stdin") {
+		t.Errorf("stdin: want loud refusal, got %q %v", out, err)
+	}
+	// Parquet: write one, count via footer.
+	if _, err := run("from csv d.csv | " + bin + " to parquet d.parquet"); err != nil {
+		t.Fatalf("write parquet: %v", err)
+	}
+	if got, err := run("from parquet d.parquet -records"); err != nil || got != "3" {
+		t.Errorf("parquet: got %q err %v", got, err)
+	}
+}

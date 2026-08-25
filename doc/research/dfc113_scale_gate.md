@@ -2,7 +2,7 @@
 
 Reference: DFC113
 Created: 2026-08-24
-Last modified: 2026-08-24
+Last modified: 2026-08-25
 
 [Back to Index](./README.md)
 
@@ -69,12 +69,17 @@ Initial case table (each pinned to a bug above):
 | `schema-mode-csv` | `SSQL_MODE=schema from big.csv` | < 1s (header only) |
 | `sample-source` | `from csv big.csv -sample 1000` | < 1s (was 21s full-read / 1.1s cap-read) |
 | `serve-early-exit` | `/api/execute` of `from big.csv \| limit 10` | < 2s (deadlock = timeout; replaces the size-tuned 2MB fixture in TestServeExecuteEarlyExit) |
-| `serve-line-count` | second head run over big.csv (count cached) | runMs delta < 0.5s vs first |
+| `records-parquet` | `from big.parquet -records` | < 1s (footer read; a data decode blows it) |
+| `records-csv` | `from big.csv -records` | < 3s (one newline scan; a parse-path blows it) |
+| `serve-records-cache` | second head run over big.csv | wall delta < 0.5s vs first (the argv-keyed records cache must hit; verified manually today at 0.18s→0.03s — this automates it) |
 | `exec-csv-scan` | `from big.csv \| count` | < 10× `wc -l` wall on the same file (parse-path amplification guard) |
 | `jsonl-roundtrip` | `tee big.jsonl` then `from big.jsonl \| count` | < 2× the csv scan (the legacy-reader 4× class) |
 
 New scale-sensitive features add a case here the way result-changing
-commands add an equivalence case.
+commands add an equivalence case. (Already accrued since this doc was
+written: the `-records` protocol replaced the line-count cache — its
+rows above are the updated form, and the serve cache-hit timing is
+verified only manually until this gate exists.)
 
 ### Watch it fail
 

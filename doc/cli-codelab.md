@@ -578,6 +578,22 @@ Seeded samples are byte-identical across execution and generated Go
 equivalent, so `-seed` there is a loud error rather than a silent
 approximation.
 
+### Fast Row Counts with -records
+
+`from … -records` prints the record count of that exact invocation —
+computed the cheap way, without reading data it doesn't have to:
+
+```bash
+ssql from big.parquet -records            # footer metadata: instant
+ssql from csv big.csv -records            # newline scan: ~0.15s/GB
+ssql from csv a.csv b.csv -records        # multi-file: the sum
+ssql from csv big.csv -sample 1000 -records   # what -sample would emit
+```
+
+Stdin and JSON arrays have no cheap count and refuse loudly — use
+`| ssql count` there (which reads everything). The served workspace's
+rows/s display is powered by this protocol.
+
 ### Count Rows with COUNT
 
 Drain a pipeline and print the row count to stdout (like `wc -l`).

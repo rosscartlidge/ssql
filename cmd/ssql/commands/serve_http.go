@@ -378,7 +378,7 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 			"engine": engineUsed, "compileMs": compileMs,
 			"runMs": time.Since(t0).Milliseconds(),
 		}
-		if rows, ok := headInputRows(o.Dir, stages); ok {
+		if rows, ok := headInputRows(r.Context(), self, o.Dir, stages); ok {
 			resp["inputRows"] = rows
 		}
 		writeJSON(w, http.StatusOK, resp)
@@ -989,147 +989,81 @@ func serveOptimize(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 // --- input-row accounting for head throughput display ---
 //
 // "8.9M rows/s" is the number that shows what a head run actually did
-// (a group-by reads millions and emits dozens). Counting input rows
-// must not slow the run, so the server counts a source file's lines
-// ONCE — a pure bytes.Count newline scan at memory bandwidth — and
-// caches by (path, size, mtime). Every later head over that file pays
-// a single stat. When the source is `-sample N`, rows read is N by
-// construction; anything else (stdin-less multi-stage sources,
-// non-line formats) omits the input side rather than guess.
+// (a group-by reads millions and emits dozens). The COUNT comes from
+// the source command itself: `from … -records` prints the record
+// count of that exact invocation, computed the cheapest way the
+// format allows (parquet footer, newline scan for line formats,
+// -sample interplay — all parsed by from's own flag grammar). This
+// replaced a hand-rolled re-parse of from-args that accumulated three
+// drift bugs in a week (parquet subcommand, -columns values, -sample
+// handling); serve now execs the knowledge owner instead of copying
+// it.
+//
+// Line-format counts cost ~0.15s/GB per call, so serve caches by the
+// stage-0 argv (opaque — no parsing), invalidated by a fingerprint of
+// the served directory's data files (one readdir; any change flushes
+// the cache). Coarse but correct, and grammar-free.
 
-type lineCountEntry struct {
-	size  int64
-	mtime int64
-	count int64
+type recordsCacheEntry struct {
+	fingerprint string
+	count       int64
 }
 
 var (
-	lineCountMu    sync.Mutex
-	lineCountCache = map[string]lineCountEntry{}
+	recordsCacheMu sync.Mutex
+	recordsCache   = map[string]recordsCacheEntry{}
 )
 
-// cachedLineCount returns the number of newline-terminated lines in
-// path, cached against size+mtime.
-func cachedLineCount(path string) (int64, error) {
-	st, err := os.Stat(path)
+// dirDataFingerprint summarizes the data files in dir (name, size,
+// mtime) — the invalidation key for the records cache.
+func dirDataFingerprint(dir string) string {
+	names, err := listDataFiles(dir)
 	if err != nil {
-		return 0, err
+		return "err:" + err.Error()
 	}
-	lineCountMu.Lock()
-	e, ok := lineCountCache[path]
-	lineCountMu.Unlock()
-	if ok && e.size == st.Size() && e.mtime == st.ModTime().UnixNano() {
-		return e.count, nil
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	buf := make([]byte, 1<<20)
-	var n int64
-	for {
-		m, err := f.Read(buf)
-		n += int64(bytes.Count(buf[:m], []byte{'\n'}))
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return 0, err
+	var b strings.Builder
+	for _, n := range names {
+		if st, err := os.Stat(filepath.Join(dir, n)); err == nil {
+			fmt.Fprintf(&b, "%s:%d:%d;", n, st.Size(), st.ModTime().UnixNano())
 		}
 	}
-	lineCountMu.Lock()
-	lineCountCache[path] = lineCountEntry{st.Size(), st.ModTime().UnixNano(), n}
-	lineCountMu.Unlock()
-	return n, nil
+	return b.String()
 }
 
-// headInputRows estimates the rows the head's SOURCE stage reads, or
-// (0, false) when no honest estimate exists. Line formats only; a
-// header line is subtracted; -sample N wins (that IS the read count);
-// a bare `limit N` immediately after the source caps it.
-func headInputRows(dir string, stages [][]string) (int64, bool) {
-	if len(stages) == 0 {
+// headInputRows asks the head's SOURCE stage for its record count via
+// the -records protocol. (0, false) when the stage isn't a from, the
+// format has no cheap count, or the exec fails — omission over
+// guessing, always.
+func headInputRows(ctx context.Context, self, dir string, stages [][]string) (int64, bool) {
+	if len(stages) == 0 || len(stages[0]) == 0 || stages[0][0] != "from" {
 		return 0, false
 	}
-	src := stages[0]
-	if len(src) == 0 || src[0] != "from" {
-		return 0, false
+	key := strings.Join(stages[0], "\x00")
+	fp := dirDataFingerprint(dir)
+	recordsCacheMu.Lock()
+	if e, ok := recordsCache[key]; ok && e.fingerprint == fp {
+		recordsCacheMu.Unlock()
+		return capByEarlyLimit(e.count, stages), true
 	}
-	args := src[1:]
-	// Optional format subcommand. (parquet missing here mistook the
-	// subcommand word for the file — found by Ross: `from parquet X`
-	// showed no rows/s while bare `from X.parquet` did.)
-	format := ""
-	switch {
-	case len(args) > 0 && (args[0] == "csv" || args[0] == "tsv" || args[0] == "jsonl" || args[0] == "parquet"):
-		format = args[0]
-		args = args[1:]
-	case len(args) > 0 && args[0] == "json":
-		return 0, false // may be an array file — no line==row guarantee
-	}
-	var file string
-	sampleN := int64(-1)
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "-sample":
-			if i+1 < len(args) {
-				fmt.Sscanf(args[i+1], "%d", &sampleN)
-				i++
-			}
-		case a == "-sample-seed", a == "-type", a == "-t", a == "-default-type", a == "-dt", a == "-source":
-			i++
-		case a == "-columns" || a == "-c":
-			// Accumulate flag: consume every bare value that follows —
-			// they are column names, not files (found by Ross:
-			// `-columns relationship` read the column as a second
-			// file → multi-file → rows/s omitted).
-			for i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-			}
-		case strings.HasPrefix(a, "-"):
-		case file == "":
-			file = a
-		default:
-			return 0, false // multi-file — no single count
-		}
-	}
-	if file == "" {
-		return 0, false
-	}
-	if format == "parquet" || strings.ToLower(filepath.Ext(file)) == ".parquet" {
-		if sampleN >= 0 {
-			return sampleN, true
-		}
-		n, err := ssql.ParquetRowCount(filepath.Join(dir, file))
-		if err != nil {
-			return 0, false
-		}
-		return capByEarlyLimit(n, stages), true
-	}
-	if format == "" {
-		switch strings.ToLower(filepath.Ext(file)) {
-		case ".csv", ".tsv", ".jsonl":
-		default:
-			return 0, false
-		}
-	}
-	if sampleN >= 0 {
-		return sampleN, true
-	}
-	lines, err := cachedLineCount(filepath.Join(dir, file))
+	recordsCacheMu.Unlock()
+
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	args := append(append([]string{}, stages[0]...), "-records")
+	cmd := exec.CommandContext(cctx, self, args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
 	if err != nil {
 		return 0, false
 	}
-	rows := lines
-	if strings.ToLower(filepath.Ext(file)) != ".jsonl" && format != "jsonl" {
-		rows-- // delimited header line
+	var n int64
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &n); err != nil {
+		return 0, false
 	}
-	if rows < 0 {
-		rows = 0
-	}
-	return capByEarlyLimit(rows, stages), true
+	recordsCacheMu.Lock()
+	recordsCache[key] = recordsCacheEntry{fp, n}
+	recordsCacheMu.Unlock()
+	return capByEarlyLimit(n, stages), true
 }
 
 // capByEarlyLimit caps rows by a `limit N` immediately after the

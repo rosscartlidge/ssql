@@ -120,8 +120,9 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC110 | 2026-08-21 | 2026-08-23 | [`ssql sample` — Seeded Random Row Sampling](./dfc110_sample_command.md) |
 | DFC111 | 2026-08-23 | 2026-08-23 | [Sampling a 1.2GB CSV in 14 Milliseconds: A Case Study](./dfc111_sampling_case_study.md) |
 | DFC112 | 2026-08-23 | 2026-08-23 | [Cloud Data Strategy: Mounts, Serve-in-Region, and `from https://`](./dfc112_cloud_data_strategy.md) |
-| DFC113 | 2026-08-24 | 2026-08-24 | [The Scale Gate: Budget Assertions on Large Fixtures](./dfc113_scale_gate.md) |
+| DFC113 | 2026-08-24 | 2026-08-25 | [The Scale Gate: Budget Assertions on Large Fixtures](./dfc113_scale_gate.md) |
 | DFC114 | 2026-08-25 | 2026-08-25 | [642k to 98M Rows per Second: A Performance Journey](./dfc114_performance_journey.md) |
+| DFC115 | 2026-08-25 | 2026-08-25 | [Commands Are the Authority on Themselves](./dfc115_commands_are_the_authority.md) |
 
 <!-- DFC-INDEX-END -->
 

@@ -13,27 +13,23 @@ func registerFromXLSX(cmd *cf.SubcommandBuilder) {
 		Description("Read Excel spreadsheet").
 		Example("ssql from xlsx data.xlsx | ssql to table", "Read Excel spreadsheet").
 		Example("ssql from xlsx workbook.xlsx -sheet Sales | ssql to csv", "Read specific sheet").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-sheet").
-			String().
-			Global().
-			Default("").
-			Help("Sheet name to read (default: first sheet)").
-			Done().
-
+		String().
+		Global().
+		Default("").
+		Help("Sheet name to read (default: first sheet)").
+		Done().
 		Flag("FILE").
-			String().
-			Completer(&cf.FileCompleter{Pattern: "*.xlsx"}).
-			Global().
-			Help("Input XLSX file (required — XLSX cannot be read from stdin)").
-			Done().
-
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.xlsx"}).
+		Global().
+		Help("Input XLSX file (required — XLSX cannot be read from stdin)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var generate bool
