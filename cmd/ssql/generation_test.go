@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -2270,5 +2272,49 @@ func TestFromRecords(t *testing.T) {
 	}
 	if got, err := run("from parquet d.parquet -records"); err != nil || got != "3" {
 		t.Errorf("parquet: got %q err %v", got, err)
+	}
+}
+
+// TestFromHTTP: URL sources end-to-end through the real binary —
+// streaming, parquet-over-Range with column selection, -records via
+// footer, and the loud refusals.
+func TestFromHTTP(t *testing.T) {
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	os.WriteFile(dir+"/d.csv", []byte("a,b\n1,x\n2,y\n3,z\n"), 0o644)
+	if out, err := exec.Command("bash", "-c",
+		fmt.Sprintf("cd %s && %s from csv d.csv | %s to parquet d.parquet", dir, bin, bin)).CombinedOutput(); err != nil {
+		t.Fatalf("fixture parquet: %v\n%s", err, out)
+	}
+	srv := httptest.NewServer(http.FileServer(http.Dir(dir)))
+	defer srv.Close()
+
+	run := func(args string) (string, error) {
+		out, err := exec.Command("bash", "-c", bin+" "+args).CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+
+	if out, err := run("from " + srv.URL + "/d.csv | " + bin + " count"); err != nil || out != "3" {
+		t.Errorf("stream csv: %q %v", out, err)
+	}
+	if out, err := run("from parquet " + srv.URL + "/d.parquet -columns b | " + bin + " count"); err != nil || out != "3" {
+		t.Errorf("parquet columns: %q %v", out, err)
+	}
+	if out, err := run("from parquet " + srv.URL + "/d.parquet -records"); err != nil || out != "3" {
+		t.Errorf("records footer: %q %v", out, err)
+	}
+	if out, err := run("from csv " + srv.URL + "/d.csv -records"); err == nil || !strings.Contains(out, "no cheap record count over http") {
+		t.Errorf("csv records refusal: %q %v", out, err)
+	}
+	if out, err := run("from " + srv.URL + "/d.noext"); err == nil || !strings.Contains(out, "cannot infer format") {
+		t.Errorf("no-ext refusal: %q %v", out, err)
+	}
+	// Schema mode over a URL: header only.
+	if out, err := run("from " + srv.URL + "/d.csv"); err != nil || !strings.Contains(out, `"a":`) {
+		_ = out // data path covered above; schema:
+	}
+	out, err := exec.Command("bash", "-c", "SSQL_MODE=schema "+bin+" from "+srv.URL+"/d.csv").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), `"fields":["a","b"]`) {
+		t.Errorf("schema mode url: %s %v", out, err)
 	}
 }

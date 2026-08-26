@@ -127,12 +127,21 @@ func executeFromTSV(inputFile string, generate bool) error {
 	if schemaMode() {
 		var r io.Reader = os.Stdin
 		if inputFile != "" {
-			f, err := os.Open(inputFile)
-			if err != nil {
-				return fmt.Errorf("reading TSV file: %w", err)
+			if ssql.IsHTTPURL(inputFile) {
+				body, err := ssql.OpenHTTPStream(inputFile)
+				if err != nil {
+					return err
+				}
+				defer body.Close()
+				r = body
+			} else {
+				f, err := os.Open(inputFile)
+				if err != nil {
+					return fmt.Errorf("reading TSV file: %w", err)
+				}
+				defer f.Close()
+				r = f
 			}
-			defer f.Close()
-			r = f
 		}
 		// Same delimiter auto-detection as the readers and typed
 		// sampling (first non-identifier byte; default tab) — a raw
@@ -156,6 +165,13 @@ func executeFromTSV(inputFile string, generate bool) error {
 	var records iter.Seq[ssql.Record]
 	if inputFile == "" {
 		records = ssql.ReadTSVFromReader(os.Stdin)
+	} else if ssql.IsHTTPURL(inputFile) {
+		body, err := ssql.OpenHTTPStream(inputFile)
+		if err != nil {
+			return err
+		}
+		defer body.Close()
+		records = ssql.ReadTSVFromReader(body)
 	} else {
 		file, err := os.Open(inputFile)
 		if err != nil {

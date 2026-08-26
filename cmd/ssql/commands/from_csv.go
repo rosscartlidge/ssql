@@ -184,12 +184,21 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 	if schemaMode() {
 		var r io.Reader = os.Stdin
 		if inputFile != "" {
-			f, err := os.Open(inputFile)
-			if err != nil {
-				return fmt.Errorf("reading file: %w", err)
+			if ssql.IsHTTPURL(inputFile) {
+				body, err := ssql.OpenHTTPStream(inputFile)
+				if err != nil {
+					return err
+				}
+				defer body.Close()
+				r = body
+			} else {
+				f, err := os.Open(inputFile)
+				if err != nil {
+					return fmt.Errorf("reading file: %w", err)
+				}
+				defer f.Close()
+				r = f
 			}
-			defer f.Close()
-			r = f
 		}
 		headers, _ := readCSVHeadersFromReader(r)
 		return writeSchemaModeOutput(os.Stdout, headers)
@@ -209,6 +218,13 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 
 	if inputFile == "" {
 		records = ssql.ReadCSVFromReader(os.Stdin, csvConfig)
+	} else if ssql.IsHTTPURL(inputFile) {
+		body, ferr := ssql.OpenHTTPStream(inputFile)
+		if ferr != nil {
+			return ferr
+		}
+		defer body.Close()
+		records = ssql.ReadCSVFromReader(body, csvConfig)
 	} else {
 		file, ferr := os.Open(inputFile)
 		if ferr != nil {
@@ -245,7 +261,15 @@ func executeFromCSVSample(inputFile string, typeOverrides map[string]string, def
 		return err
 	}
 	var csvHeaders []string
-	if f, ferr := os.Open(inputFile); ferr == nil {
+	if ssql.IsHTTPURL(inputFile) {
+		// One streamed read of the header line keeps output column
+		// order = file order (without it the reader's internal sorted
+		// schema leaked through as alphabetical columns).
+		if body, ferr := ssql.OpenHTTPStream(inputFile); ferr == nil {
+			csvHeaders, _ = readCSVHeadersFromReader(body)
+			body.Close()
+		}
+	} else if f, ferr := os.Open(inputFile); ferr == nil {
 		csvHeaders, _ = readCSVHeadersFromReader(f)
 		f.Close()
 	}

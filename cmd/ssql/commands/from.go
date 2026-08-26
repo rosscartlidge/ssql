@@ -104,6 +104,22 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
 				return runFromRecords("", []string{inputFile}, -1)
 			}
+			// http(s) URLs route by PATH extension (a presigned URL's
+			// query would defeat filepath-based sniffing).
+			if ssql.IsHTTPURL(inputFile) {
+				switch ssql.HTTPURLExt(inputFile) {
+				case ".csv":
+					return executeFromCSV(inputFile, nil, "auto", generate)
+				case ".tsv":
+					return executeFromTSV(inputFile, generate)
+				case ".json", ".jsonl", ".ndjson":
+					return executeFromJSON(inputFile, generate)
+				case ".parquet":
+					return executeFromParquet(inputFile, nil, generate)
+				default:
+					return fmt.Errorf("from %s: cannot infer format from URL path — use an explicit subcommand (from csv URL, from parquet URL, …)", inputFile)
+				}
+			}
 			lower := strings.ToLower(inputFile)
 			switch {
 			case strings.HasSuffix(lower, ".csv"):

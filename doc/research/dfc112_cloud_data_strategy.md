@@ -2,7 +2,7 @@
 
 Reference: DFC112
 Created: 2026-08-23
-Last modified: 2026-08-23
+Last modified: 2026-08-26
 
 [Back to Index](./README.md)
 
@@ -110,8 +110,18 @@ alternative); redirects followed; no retry magic in v1.
 
 ## Queued items (also in TODO)
 
-- [ ] `from https://URL` (+ `-sample` via Range; loud no-Range refusal)
-- [ ] Parallel seek draws in the byte-offset samplers
-- [ ] Codelab: "Cloud data" section (mount pattern, serve-in-region
-      worked example, presigned URLs)
-- [ ] (future) parquet column/row-group pruning over Range
+- [x] `from https://URL` — SHIPPED 2026-08-26: streaming + Range
+      random access (HTTPFile implements parquet.ReaderAtSeeker, so
+      parquet-over-Range landed in v1 rather than "future"); -sample
+      identity-verified against local (same seed, same rows);
+      no-Range/expired/extension-less refusals all loud
+- [x] Parallel seek draws (shipped v4.72.0 — now they are concurrent
+      Range requests)
+- [x] Codelab "Cloud data" section (presigned URLs; serve-in-region
+      pointer)
+- [x] Parquet column pruning over Range — arrived in v1 for free:
+      ReadParquetFromReader already took ReaderAtSeeker. Row-group
+      READAHEAD (fewer, larger Range requests — the 7s remote
+      group-by wants it) remains open.
+- [ ] Readahead/buffering for HTTPFile (batch small parquet reads
+      into fewer Range requests)

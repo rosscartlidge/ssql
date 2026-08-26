@@ -35,6 +35,9 @@ func SampleCSVFile(filename string, n int, seed int64, config ...CSVConfig) (ite
 	if len(config) > 0 {
 		cfg = config[0]
 	}
+	if IsHTTPURL(filename) {
+		return sampleCSVHTTP(filename, n, seed, cfg)
+	}
 	f, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
@@ -119,7 +122,7 @@ func SampleCSVFile(filename string, n int, seed int64, config ...CSVConfig) (ite
 // lineStartAt returns the byte offset of the start of the line
 // containing off (scanning backward for the preceding newline, never
 // before dataStart).
-func lineStartAt(f *os.File, off, dataStart int64, buf []byte) (int64, bool) {
+func lineStartAt(f io.ReaderAt, off, dataStart int64, buf []byte) (int64, bool) {
 	pos := off
 	for scanned := 0; scanned < sampleFileMaxLine; {
 		lo := pos - int64(len(buf))
@@ -150,7 +153,7 @@ func lineStartAt(f *os.File, off, dataStart int64, buf []byte) (int64, bool) {
 // Reads in small chunks, growing only when the line doesn't fit —
 // the first version read the 4MB cap per line, turning a 1000-line
 // sample into ~4GB of page-cache traffic (the entire 1.1s wall).
-func readLineAt(f *os.File, start, size int64) ([]byte, bool) {
+func readLineAt(f io.ReaderAt, start, size int64) ([]byte, bool) {
 	chunk := int64(4096)
 	for {
 		remain := size - start
@@ -181,7 +184,7 @@ func readLineAt(f *os.File, start, size int64) ([]byte, bool) {
 // containing line's start, dedupe, redraw collisions (bounded) — and
 // returns them in file order. ok=false when n distinct lines couldn't
 // be found (caller falls back to an exact full read).
-func sampleLineStarts(f *os.File, size, dataStart int64, n int, seed int64) ([]int64, bool) {
+func sampleLineStarts(f io.ReaderAt, size, dataStart int64, n int, seed int64) ([]int64, bool) {
 	span := size - dataStart
 	if span <= 0 {
 		return nil, false
@@ -412,4 +415,57 @@ func CountFileLines(path string) (int64, error) {
 			return 0, err
 		}
 	}
+}
+
+// sampleCSVHTTP is SampleCSVFile over an http(s) URL: seeks become
+// Range requests (the parallel draw batches become concurrent Range
+// fetches — exactly why the draws were parallelized, DFC112). The
+// small-file/collision fallbacks stream the whole body through the
+// exact reservoir instead of a local re-open.
+func sampleCSVHTTP(url string, n int, seed int64, cfg CSVConfig) (iter.Seq[Record], error) {
+	h, err := OpenHTTPFile(url)
+	if err != nil {
+		return nil, err
+	}
+	size := h.Size()
+
+	head := make([]byte, 64*1024)
+	m, _ := h.ReadAt(head, 0)
+	head = head[:m]
+	nl := bytes.IndexByte(head, '\n')
+	fullFallback := func() (iter.Seq[Record], error) {
+		body, err := OpenHTTPStream(url)
+		if err != nil {
+			return nil, err
+		}
+		return SampleN[Record](n, seed)(ReadCSVFromReader(body, cfg)), nil
+	}
+	if nl < 0 || int64(nl+1) >= size || size-int64(nl+1) < int64(n)*8 {
+		return fullFallback()
+	}
+	headerLine := strings.TrimRight(string(head[:nl]), "\r")
+	dataStart := int64(nl + 1)
+
+	ordered, ok := sampleLineStarts(h, size, dataStart, n, seed)
+	if !ok {
+		return fullFallback()
+	}
+	return func(yield func(Record) bool) {
+		lineBuf := make([]byte, 0, 4096)
+		for _, st := range ordered {
+			line, ok := readLineAt(h, st, size)
+			if !ok {
+				continue
+			}
+			lineBuf = lineBuf[:0]
+			lineBuf = append(lineBuf, headerLine...)
+			lineBuf = append(lineBuf, '\n')
+			lineBuf = append(lineBuf, line...)
+			for r := range ReadCSVFromReader(bytes.NewReader(lineBuf), cfg) {
+				if !yield(r) {
+					return
+				}
+			}
+		}
+	}, nil
 }

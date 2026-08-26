@@ -177,12 +177,21 @@ func executeFromJSON(inputFile string, generate bool) error {
 	if schemaMode() {
 		var r io.Reader = os.Stdin
 		if inputFile != "" {
-			f, err := lib.OpenInputFile(inputFile)
-			if err != nil {
-				return err
+			if ssql.IsHTTPURL(inputFile) {
+				body, err := ssql.OpenHTTPStream(inputFile)
+				if err != nil {
+					return err
+				}
+				defer body.Close()
+				r = body
+			} else {
+				f, err := lib.OpenInputFile(inputFile)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				r = f
 			}
-			defer f.Close()
-			r = f
 		}
 		return writeSchemaModeOutput(os.Stdout, schemaModeJSONNames(r))
 	}
@@ -194,6 +203,13 @@ func executeFromJSON(inputFile string, generate bool) error {
 	var records iter.Seq[ssql.Record]
 	if inputFile == "" {
 		records = readJSONSchemaAware(os.Stdin)
+	} else if ssql.IsHTTPURL(inputFile) {
+		body, err := ssql.OpenHTTPStream(inputFile)
+		if err != nil {
+			return err
+		}
+		defer body.Close()
+		records = readJSONSchemaAware(body)
 	} else {
 		file, err := lib.OpenInputFile(inputFile)
 		if err != nil {

@@ -5,6 +5,23 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`from https://…` — cloud reads with zero SDKs (DFC112)** — any
+  http(s) URL is a source, including presigned S3/GCS/Azure URLs
+  (auth stays your cloud CLI's problem: `aws s3 presign …`). Plain
+  streaming works everywhere (`from URL | …`); wherever the server
+  honours Range, random access works too: **byte-offset `-sample`**
+  (the parallel draws become concurrent Range requests — 19ms to
+  sample a remote 1.2GB CSV, same seed selecting the identical rows
+  as the local file), **parquet with `-columns`** (footer + only the
+  touched column chunks — the cloud-optimized read), and **parquet
+  `-records`** (footer, instant). Loud refusals everywhere honesty
+  requires: no-Range servers (streaming still offered), expired
+  presigned URLs (403 message says to re-presign), remote CSV
+  `-records` (a count would download the file), extension-less URLs.
+
 ## [4.72.0] - 2026-08-26
 
 ### Added

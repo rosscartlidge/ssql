@@ -47,6 +47,19 @@ func runFromRecords(format string, files []string, sampleN int64) error {
 }
 
 func fromRecordsCountOne(format, file string) (int64, error) {
+	if ssql.IsHTTPURL(file) {
+		f := format
+		if f == "" {
+			switch ssql.HTTPURLExt(file) {
+			case ".parquet":
+				f = "parquet"
+			}
+		}
+		if f == "parquet" {
+			return ssql.ParquetRowCount(file) // footer via Range: cheap
+		}
+		return 0, fmt.Errorf("no cheap record count over http for %s — a remote line count would download the file; use `| ssql count`", file)
+	}
 	f := format
 	if f == "" {
 		switch strings.ToLower(filepath.Ext(file)) {

@@ -578,6 +578,33 @@ Seeded samples are byte-identical across execution and generated Go
 equivalent, so `-seed` there is a loud error rather than a silent
 approximation.
 
+### Cloud Data over HTTPS
+
+Any http(s) URL is a source — no cloud SDKs, no credentials in ssql.
+For private buckets, presign with your cloud's own CLI:
+
+```bash
+# Public or presigned URL — streaming read
+ssql from https://example.com/data/events.csv | ssql group-by service -count n
+
+# S3 via a presigned URL (auth stays aws-cli's problem)
+URL=$(aws s3 presign s3://mybucket/events.csv --expires-in 3600)
+ssql from csv "$URL" | ssql where -if status ge 400 | ssql to table
+
+# Random access when the server supports Range (S3/GCS/Azure all do):
+ssql from csv "$URL" -sample 1000          # byte-offset sample, seconds not minutes
+ssql from parquet "$PURL" -columns svc     # footer + one column's byte ranges
+ssql from parquet "$PURL" -records         # row count from the footer, instant
+```
+
+Format comes from the URL's path extension; use an explicit
+subcommand (`from csv URL`) when the path has none. Servers that
+ignore Range refuse the random-access forms loudly — plain streaming
+still works. Expired presigned URLs produce a clear 403 message. For
+heavy repeated work against cloud data, the better pattern is still
+`ssql serve` on a VM in the data's region (compute near the data —
+see the serve section).
+
 ### Fast Row Counts with -records
 
 `from … -records` prints the record count of that exact invocation —
