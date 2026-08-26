@@ -104,37 +104,29 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
 				return runFromRecords("", []string{inputFile}, -1)
 			}
-			// http(s) URLs route by PATH extension (a presigned URL's
-			// query would defeat filepath-based sniffing).
-			if ssql.IsHTTPURL(inputFile) {
-				switch ssql.HTTPURLExt(inputFile) {
-				case ".csv":
-					return executeFromCSV(inputFile, nil, "auto", generate)
-				case ".tsv":
-					return executeFromTSV(inputFile, generate)
-				case ".json", ".jsonl", ".ndjson":
-					return executeFromJSON(inputFile, generate)
-				case ".parquet":
-					return executeFromParquet(inputFile, nil, generate)
-				default:
-					return fmt.Errorf("from %s: cannot infer format from URL path — use an explicit subcommand (from csv URL, from parquet URL, …)", inputFile)
-				}
+			// Route via the format authority table (DFC116) — the
+			// extension grammar lives there; the reactions differ:
+			// unknown URL exts refuse loudly (a presigned URL's query
+			// never reaches pathExt), unknown local exts default to
+			// JSON (historical contract).
+			fi, known := formatForPath(inputFile)
+			if ssql.IsHTTPURL(inputFile) && !known {
+				return fmt.Errorf("from %s: cannot infer format from URL path — use an explicit subcommand (from csv URL, from parquet URL, …)", inputFile)
 			}
-			lower := strings.ToLower(inputFile)
-			switch {
-			case strings.HasSuffix(lower, ".csv"):
+			switch fi.Name {
+			case "csv":
 				return executeFromCSV(inputFile, nil, "auto", generate)
-			case strings.HasSuffix(lower, ".tsv"):
+			case "tsv":
 				return executeFromTSV(inputFile, generate)
-			case strings.HasSuffix(lower, ".json"), strings.HasSuffix(lower, ".jsonl"):
+			case "json", "jsonl":
 				return executeFromJSON(inputFile, generate)
-			case strings.HasSuffix(lower, ".arrow"):
+			case "arrow":
 				return executeFromArrow(inputFile, generate)
-			case strings.HasSuffix(lower, ".parquet"):
+			case "parquet":
 				return executeFromParquet(inputFile, nil, generate)
-			case strings.HasSuffix(lower, ".wav"):
+			case "wav":
 				return executeFromWAV(inputFile, -1, generate)
-			case strings.HasSuffix(lower, ".xlsx"):
+			case "xlsx":
 				return executeFromXLSX(inputFile, "", generate)
 			default:
 				return executeFromJSON(inputFile, generate)

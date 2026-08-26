@@ -24,20 +24,24 @@ import (
 // substitution. Returns records plus a schema (field order from the
 // file header where there is one; types from the first record).
 func readAuxInput(path string) (iter.Seq[ssql.Record], *lib.Schema, error) {
-	ext := strings.ToLower(filepath.Ext(path))
-	if fi, err := os.Stat(path); err == nil && !fi.Mode().IsRegular() {
-		ext = "" // process substitution / FIFO: wire format
+	format := ""
+	if fi, ok := formatForPath(path); ok && fi.DirectAux {
+		format = fi.Name
 	}
+	if st, err := os.Stat(path); err == nil && !st.Mode().IsRegular() {
+		format = "wire" // process substitution / FIFO: wire format
+	}
+	ext := strings.ToLower(filepath.Ext(path)) // csv-vs-tsv split below
 
-	switch ext {
-	case ".csv", ".tsv":
+	switch format {
+	case "csv", "tsv":
 		f, err := os.Open(path)
 		if err != nil {
 			return nil, nil, fmt.Errorf("opening %s: %w", path, err)
 		}
 		var headers []string
 		var records iter.Seq[ssql.Record]
-		if ext == ".csv" {
+		if format == "csv" {
 			headers, _ = readCSVHeadersFromReader(f)
 			f.Seek(0, 0)
 			records = ssql.ReadCSVFromReader(f)
@@ -50,7 +54,7 @@ func readAuxInput(path string) (iter.Seq[ssql.Record], *lib.Schema, error) {
 		records = closeAfter(records, f)
 		return withPeekedSchema(records, headers)
 
-	case ".json":
+	case "json":
 		f, err := os.Open(path)
 		if err != nil {
 			return nil, nil, fmt.Errorf("opening %s: %w", path, err)
@@ -58,13 +62,13 @@ func readAuxInput(path string) (iter.Seq[ssql.Record], *lib.Schema, error) {
 		records := closeAfter(ssql.ReadJSONFromReader(f), f)
 		return withPeekedSchema(records, nil)
 
-	case "", ".jsonl":
+	case "wire", "jsonl":
 		f, err := os.Open(path)
 		if err != nil {
 			return nil, nil, fmt.Errorf("opening %s: %w", path, err)
 		}
 		sr := lib.ReadJSONLWithSchema(f)
-		if ext == ".jsonl" {
+		if format == "jsonl" {
 			// Bare .jsonl needs the schema header (e.g. `ssql tee`
 			// output); a headerless file must fail LOUDLY.
 			// Peek-free check isn't possible before iterating, so the

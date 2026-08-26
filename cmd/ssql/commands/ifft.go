@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"iter"
-	"os"
 	"slices"
 	"strings"
 
@@ -19,43 +18,37 @@ func RegisterIFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from spectrum.csv | ssql ifft -magnitude mag -phase phase", "Reconstruct signal from magnitude and phase").
 		Example("ssql ifft -file spectrum.arrow -magnitude mag -phase phase", "Direct Arrow read (fastest)").
 		Example("ssql from signal.csv | ssql fft -field value -phase | ssql ifft -magnitude magnitude -phase phase", "Round-trip FFT then IFFT").
-
 		Flag("-file").
-			String().
-			Global().
-			Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
-			Help("Input file (Arrow files use optimized direct signal extraction)").
-			Done().
-
+		String().
+		Global().
+		Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
+		Help("Input file (Arrow files use optimized direct signal extraction)").
+		Done().
 		Flag("-magnitude", "-m").
-			String().
-			Global().
-			Required().
-			FieldsFromFlag("-file").
-			Help("Field containing magnitude values").
-			Done().
-
+		String().
+		Global().
+		Required().
+		FieldsFromFlag("-file").
+		Help("Field containing magnitude values").
+		Done().
 		Flag("-phase", "-p").
-			String().
-			Global().
-			Required().
-			FieldsFromFlag("-file").
-			Help("Field containing phase values (in radians)").
-			Done().
-
+		String().
+		Global().
+		Required().
+		FieldsFromFlag("-file").
+		Help("Field containing phase values (in radians)").
+		Done().
 		Flag("-output", "-o").
-			String().
-			Default("signal").
-			Global().
-			Help("Output field name for reconstructed signal (default: signal)").
-			Done().
-
+		String().
+		Default("signal").
+		Global().
+		Help("Output field name for reconstructed signal (default: signal)").
+		Done().
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var magnitudeField string
@@ -106,30 +99,9 @@ func RegisterIFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			} else if inputFile != "" {
 				// Read from other file formats via Records
-				var records []ssql.Record
-				lower := strings.ToLower(inputFile)
-				switch {
-				case strings.HasSuffix(lower, ".csv"):
-					recs, rerr := ssql.ReadCSV(inputFile)
-					if rerr != nil {
-						return fmt.Errorf("reading CSV: %w", rerr)
-					}
-					records = slices.Collect(recs)
-				case strings.HasSuffix(lower, ".json"):
-					recs, rerr := ssql.ReadJSON(inputFile)
-					if rerr != nil {
-						return fmt.Errorf("reading JSON: %w", rerr)
-					}
-					records = slices.Collect(recs)
-				case strings.HasSuffix(lower, ".jsonl"):
-					file, ferr := os.Open(inputFile)
-					if ferr != nil {
-						return fmt.Errorf("opening JSONL file: %w", ferr)
-					}
-					defer file.Close()
-					records = slices.Collect(lib.ReadJSONL(file))
-				default:
-					return fmt.Errorf("unsupported file format: %s", inputFile)
+				records, rerr := readRecordsFile(inputFile)
+				if rerr != nil {
+					return rerr
 				}
 				magnitude = make([]float64, len(records))
 				phase = make([]float64, len(records))

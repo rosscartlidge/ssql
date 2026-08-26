@@ -5,6 +5,22 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Format authority table (DFC116 F1+F2)** — extension→format
+  knowledge lived in twelve places (from routing, aux inputs, serve
+  suggestions and /api/files listing, -records, completion hooks,
+  typed-join codegen, and five identical read blocks across the DSP
+  commands); it now lives once, in `commands/format_table.go`,
+  colocated with `from`. Includes the capability facts consumers were
+  restating — which formats support byte-offset `-sample` (serve had
+  its own copy of that flag grammar), which are direct-aux-readable,
+  which are binary. Behavior preserved; a new format registers in one
+  place and every consumer inherits it. Bonus: `.ndjson` now routes
+  identically everywhere (bare `from` previously handled it only by
+  accidental fallback) and serve file listings derive from the table.
+
 ## [4.73.0] - 2026-08-26
 
 ### Added

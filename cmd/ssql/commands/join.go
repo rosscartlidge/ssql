@@ -495,11 +495,14 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'join' must follow a typed-mode source"))
 		}
-		lower := strings.ToLower(rightFile)
+		joinFmt := ""
+		if fi, ok := formatForPath(rightFile); ok {
+			joinFmt = fi.Name
+		}
 		var rightSchema *lib.TypedSchema
 		var rightStructDef, readCode string
-		switch {
-		case strings.HasSuffix(lower, ".csv"):
+		switch joinFmt {
+		case "csv":
 			var err error
 			rightSchema, rightStructDef, err = lib.SampleCSVSchema(rightFile, "", 0)
 			if err != nil {
@@ -507,7 +510,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 					fmt.Errorf("ssql generate go -typed: %w", err))
 			}
 			readCode = fmt.Sprintf("right%s := typed.ReadCSV[%s](%q)", rightSchema.TypeName, rightSchema.TypeName, rightFile)
-		case strings.HasSuffix(lower, ".tsv"):
+		case "tsv":
 			var delim byte
 			var err error
 			rightSchema, rightStructDef, delim, err = lib.SampleTSVSchema(rightFile, "", 0)

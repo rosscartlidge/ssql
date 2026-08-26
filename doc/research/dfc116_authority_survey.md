@@ -50,7 +50,16 @@ templates for fixing the violations.
 
 ## Findings, ranked by drift-risk × fix-cost
 
-### F1. Extension→format routing exists in ~7 places (HIGH risk, LOW cost)
+### F1. Extension→format routing exists in ~7 places (HIGH risk, LOW cost) — FIXED 2026-08-26
+
+Implemented as `cmd/ssql/commands/format_table.go` (formatForPath +
+capability bits, colocated with from). The build swept in FIVE more
+sites the survey's first grep missed (`HasSuffix` variants): the DSP
+commands' five identical read blocks (now one `readRecordsFile`
+helper), `serve.go`'s dataset loader, `join.go`'s typed right-side
+codegen, and `serveDataExtensions` (now derived from the table — a
+new format auto-appears in /api/files). Twelve sites → one table.
+Pinned by `TestFormatForPath`. Original finding below for the record.
 
 `from.go` (bare-form routing — the authority), `aux_input.go`
 (direct-file join/merge/union), `union.go`, `from_records.go`,
@@ -65,7 +74,7 @@ shape that cost the playground six commands for months.
 routing so the knowledge lives once. Callers keep their differing
 *reactions* (route, refuse, suggest); they stop owning the *facts*.
 
-### F2. serve encodes which formats support `-sample` (HIGH risk, folds into F1)
+### F2. serve encodes which formats support `-sample` — FIXED 2026-08-26 (Sampleable bit in the F1 table)
 
 The `serve_http.go` switch doesn't just route — it knows `from csv
 FILE -sample N` is valid but parquet needs the `sample` stage
@@ -131,7 +140,7 @@ completeness so the survey is the one place to look.
 
 ## Suggested order
 
-1. F1+F2 (one unit, immediate drift-risk reduction)
+1. ~~F1+F2~~ done 2026-08-26 (twelve sites, not seven — see F1)
 2. F6 (one test, minutes)
 3. F3+F4 via W3 (next autocli round)
 4. W2 (when readonly's conservatism first annoys someone real)

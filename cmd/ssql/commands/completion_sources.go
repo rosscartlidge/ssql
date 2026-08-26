@@ -15,7 +15,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -31,15 +30,6 @@ func init() {
 
 var errCompletionBuiltin = fmt.Errorf("autocli built-in handles this source")
 
-// completionSourceExt is the format extension of a completion source,
-// URL-aware (a presigned URL's query string must not defeat it).
-func completionSourceExt(source string) string {
-	if ssql.IsHTTPURL(source) {
-		return ssql.HTTPURLExt(source)
-	}
-	return strings.ToLower(filepath.Ext(source))
-}
-
 // completionFieldSource answers field names for parquet files and
 // http(s) URLs by exec'ing `SSQL_MODE=schema ssql from SOURCE` and
 // parsing the `_schema` header — the same protocol Ctrl-O and serve
@@ -47,7 +37,10 @@ func completionSourceExt(source string) string {
 // here with zero grammar duplication. (.arrow is left to the hint:
 // `from arrow` has no schema mode yet — see TODO.)
 func completionFieldSource(source string) ([]string, error) {
-	if !ssql.IsHTTPURL(source) && completionSourceExt(source) != ".parquet" {
+	fi, known := formatForPath(source)
+	// .arrow stays at the hint until `from arrow` grows schema mode.
+	answerable := known && fi.Binary && fi.Name == "parquet"
+	if !ssql.IsHTTPURL(source) && !answerable {
 		return nil, errCompletionBuiltin
 	}
 	self, err := os.Executable()
@@ -75,29 +68,29 @@ func completionFieldSource(source string) ([]string, error) {
 // prunes to the one column, and over http fetches only its byte
 // ranges) and URL line formats (streamed, first maxRecords records).
 func completionFieldValueSource(source, field string, maxSamples, maxRecords int) ([]string, error) {
-	ext := completionSourceExt(source)
+	fi, known := formatForPath(source)
 	isURL := ssql.IsHTTPURL(source)
 
 	var records func(yield func(ssql.Record) bool)
 	var closer io.Closer
 	switch {
-	case ext == ".parquet":
+	case known && fi.Name == "parquet":
 		seq, err := ssql.ReadParquetColumns(source, []string{field})
 		if err != nil {
 			return nil, err
 		}
 		records = seq
-	case isURL && (ext == ".csv" || ext == ".tsv" || ext == ".json" || ext == ".jsonl" || ext == ".ndjson"):
+	case isURL && known && !fi.Binary:
 		body, err := ssql.OpenHTTPStream(source)
 		if err != nil {
 			return nil, err
 		}
 		closer = body
 		r := bufio.NewReader(body)
-		switch ext {
-		case ".csv":
+		switch fi.Name {
+		case "csv":
 			records = ssql.ReadCSVFromReader(r, ssql.DefaultCSVConfig())
-		case ".tsv":
+		case "tsv":
 			records = ssql.ReadTSVFromReader(r)
 		default:
 			records = ssql.ReadJSONFromReader(r)

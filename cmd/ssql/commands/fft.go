@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 
@@ -19,41 +18,35 @@ func RegisterFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql fft -file signal.arrow -field amplitude", "Direct Arrow read (fastest, bypasses Record conversion)").
 		Example("ssql from audio.csv | ssql fft -field sample -rate 44100", "Compute FFT with sample rate for frequency calculation").
 		Example("ssql from data.csv | ssql fft -field value -phase", "Include phase information in output").
-
 		Flag("-file").
-			String().
-			Global().
-			Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
-			Help("Input file (Arrow files use optimized direct signal extraction)").
-			Done().
-
+		String().
+		Global().
+		Completer(&cf.FileCompleter{Pattern: "*.{arrow,csv,json,jsonl}"}).
+		Help("Input file (Arrow files use optimized direct signal extraction)").
+		Done().
 		Flag("-field", "-f").
-			String().
-			Global().
-			Required().
-			FieldsFromFlag("-file").
-			Help("Field containing numeric signal values").
-			Done().
-
+		String().
+		Global().
+		Required().
+		FieldsFromFlag("-file").
+		Help("Field containing numeric signal values").
+		Done().
 		Flag("-rate", "-r").
-			Float().
-			Default(1.0).
-			Global().
-			Help("Sample rate in Hz (for frequency calculation)").
-			Done().
-
+		Float().
+		Default(1.0).
+		Global().
+		Help("Sample rate in Hz (for frequency calculation)").
+		Done().
 		Flag("-phase", "-p").
-			Bool().
-			Global().
-			Help("Include phase information (use +phase to exclude)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Include phase information (use +phase to exclude)").
+		Done().
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var inputFile string
 			var field string
@@ -97,30 +90,9 @@ func RegisterFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			} else if inputFile != "" {
 				// Read from other file formats via Records
-				var records []ssql.Record
-				lower := strings.ToLower(inputFile)
-				switch {
-				case strings.HasSuffix(lower, ".csv"):
-					recs, rerr := ssql.ReadCSV(inputFile)
-					if rerr != nil {
-						return fmt.Errorf("reading CSV: %w", rerr)
-					}
-					records = slices.Collect(recs)
-				case strings.HasSuffix(lower, ".json"):
-					recs, rerr := ssql.ReadJSON(inputFile)
-					if rerr != nil {
-						return fmt.Errorf("reading JSON: %w", rerr)
-					}
-					records = slices.Collect(recs)
-				case strings.HasSuffix(lower, ".jsonl"):
-					file, ferr := os.Open(inputFile)
-					if ferr != nil {
-						return fmt.Errorf("opening JSONL file: %w", ferr)
-					}
-					defer file.Close()
-					records = slices.Collect(lib.ReadJSONL(file))
-				default:
-					return fmt.Errorf("unsupported file format: %s", inputFile)
+				records, rerr := readRecordsFile(inputFile)
+				if rerr != nil {
+					return rerr
 				}
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			} else {

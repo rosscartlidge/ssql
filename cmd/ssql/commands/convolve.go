@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -151,29 +150,10 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			} else if inputFile != "" {
 				// Read from other file formats via Records
-				lower := strings.ToLower(inputFile)
-				switch {
-				case strings.HasSuffix(lower, ".csv"):
-					recs, rerr := ssql.ReadCSV(inputFile)
-					if rerr != nil {
-						return fmt.Errorf("reading CSV: %w", rerr)
-					}
-					records = slices.Collect(recs)
-				case strings.HasSuffix(lower, ".json"):
-					recs, rerr := ssql.ReadJSON(inputFile)
-					if rerr != nil {
-						return fmt.Errorf("reading JSON: %w", rerr)
-					}
-					records = slices.Collect(recs)
-				case strings.HasSuffix(lower, ".jsonl"):
-					file, ferr := os.Open(inputFile)
-					if ferr != nil {
-						return fmt.Errorf("opening JSONL file: %w", ferr)
-					}
-					defer file.Close()
-					records = slices.Collect(lib.ReadJSONL(file))
-				default:
-					return fmt.Errorf("unsupported file format: %s", inputFile)
+				var rerr error
+				records, rerr = readRecordsFile(inputFile)
+				if rerr != nil {
+					return rerr
 				}
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			} else {

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"iter"
 	"os"
-	"path/filepath"
-	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -197,15 +195,19 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 		varName := fmt.Sprintf("unionFile%d", len(sourceCalls)+1)
 		var code string
 		var imports []string
-		switch strings.ToLower(filepath.Ext(file)) {
-		case ".csv":
+		unionFmt := ""
+		if fi, ok := formatForPath(file); ok {
+			unionFmt = fi.Name
+		}
+		switch unionFmt {
+		case "csv":
 			code = fmt.Sprintf(`%s, err := ssql.ReadCSV(%q)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
 		os.Exit(1)
 	}`, varName, file, file)
 			imports = []string{"fmt", "os"}
-		case ".tsv":
+		case "tsv":
 			code = fmt.Sprintf(`%s, err := ssql.ReadTSV(%q)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)

@@ -64,10 +64,12 @@ const serveSampleThreshold = 32 << 20
 
 const serveSampleRows = 1000
 
-// serveDataExtensions is what /api/files lists.
-var serveDataExtensions = map[string]bool{
-	".csv": true, ".tsv": true, ".json": true, ".jsonl": true,
-	".parquet": true, ".arrow": true, ".wav": true, ".xlsx": true,
+// serveDataExt reports whether /api/files lists a file — any format
+// the authority table knows (DFC116: a new format registers there
+// and appears in serve listings automatically).
+func serveDataExt(ext string) bool {
+	_, ok := formatByExt[ext]
+	return ok
 }
 
 // startServeHTTP binds the listener (so ":0" resolves to a real port,
@@ -216,7 +218,7 @@ func serveListFiles(w http.ResponseWriter, dir string) {
 	}
 	files := []fileInfo{}
 	for _, e := range entries {
-		if e.IsDir() || !serveDataExtensions[strings.ToLower(filepath.Ext(e.Name()))] {
+		if e.IsDir() || !serveDataExt(strings.ToLower(filepath.Ext(e.Name()))) {
 			continue
 		}
 		if info, err := e.Info(); err == nil {
@@ -633,7 +635,7 @@ func listDataFiles(dir string) ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if !e.IsDir() && serveDataExtensions[strings.ToLower(filepath.Ext(e.Name()))] {
+		if !e.IsDir() && serveDataExt(strings.ToLower(filepath.Ext(e.Name()))) {
 			names = append(names, e.Name())
 		}
 	}
@@ -676,14 +678,9 @@ func serveExplorePage(w http.ResponseWriter, r *http.Request, o serveHTTPOptions
 			// only; other big formats (parquet/arrow) fall back to the
 			// exact sample stage — slower but honest.
 			var pipe string
-			switch strings.ToLower(filepath.Ext(file)) {
-			case ".csv":
-				pipe = fmt.Sprintf("ssql from csv %s -sample %d", file, serveSampleRows)
-			case ".tsv":
-				pipe = fmt.Sprintf("ssql from tsv %s -sample %d", file, serveSampleRows)
-			case ".jsonl":
-				pipe = fmt.Sprintf("ssql from jsonl %s -sample %d", file, serveSampleRows)
-			default:
+			if fi, ok := formatForPath(file); ok && fi.Sampleable {
+				pipe = fmt.Sprintf("ssql from %s %s -sample %d", fi.Name, file, serveSampleRows)
+			} else {
 				pipe = fmt.Sprintf("ssql from %s | ssql sample %d", file, serveSampleRows)
 			}
 			q.Set("pipeline", pipe)

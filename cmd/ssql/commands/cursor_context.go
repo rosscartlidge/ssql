@@ -2,7 +2,6 @@ package commands
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -305,8 +304,7 @@ func joinRightFile(stage string) string {
 		if strings.HasPrefix(next, "-") || strings.HasPrefix(next, "<(") {
 			return ""
 		}
-		switch strings.ToLower(filepath.Ext(next)) {
-		case ".csv", ".tsv", ".json", ".jsonl":
+		if fi, ok := formatForPath(next); ok && fi.DirectAux {
 			return next
 		}
 		return ""

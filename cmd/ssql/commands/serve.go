@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"slices"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -230,22 +229,25 @@ type serveState struct {
 // or empty if the dataset is empty).
 func loadServerDataset(path string) (*serveState, error) {
 	t0 := time.Now()
-	lower := strings.ToLower(path)
+	dsFmt := ""
+	if fi, ok := formatForPath(path); ok {
+		dsFmt = fi.Name
+	}
 	var records []ssql.Record
-	switch {
-	case strings.HasSuffix(lower, ".csv"):
+	switch dsFmt {
+	case "csv":
 		seq, err := ssql.ReadCSV(path)
 		if err != nil {
 			return nil, err
 		}
 		records = slices.Collect(seq)
-	case strings.HasSuffix(lower, ".tsv"):
+	case "tsv":
 		seq, err := ssql.ReadCSV(path, ssql.CSVConfig{Delimiter: '\t'})
 		if err != nil {
 			return nil, err
 		}
 		records = slices.Collect(seq)
-	case strings.HasSuffix(lower, ".json"), strings.HasSuffix(lower, ".jsonl"):
+	case "json", "jsonl":
 		f, err := os.Open(path)
 		if err != nil {
 			return nil, err

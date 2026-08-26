@@ -17,7 +17,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -50,9 +49,8 @@ func fromRecordsCountOne(format, file string) (int64, error) {
 	if ssql.IsHTTPURL(file) {
 		f := format
 		if f == "" {
-			switch ssql.HTTPURLExt(file) {
-			case ".parquet":
-				f = "parquet"
+			if fi, ok := formatForPath(file); ok {
+				f = fi.Name
 			}
 		}
 		if f == "parquet" {
@@ -62,20 +60,11 @@ func fromRecordsCountOne(format, file string) (int64, error) {
 	}
 	f := format
 	if f == "" {
-		switch strings.ToLower(filepath.Ext(file)) {
-		case ".csv":
-			f = "csv"
-		case ".tsv":
-			f = "tsv"
-		case ".jsonl", ".ndjson":
-			f = "jsonl"
-		case ".json":
-			f = "json"
-		case ".parquet":
-			f = "parquet"
-		default:
+		fi, ok := formatForPath(file)
+		if !ok || !fi.CheapRecords {
 			return 0, fmt.Errorf("no cheap record count for %s (unsupported format)", file)
 		}
+		f = fi.Name
 	}
 	switch f {
 	case "parquet":
