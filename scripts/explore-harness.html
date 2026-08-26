@@ -92,39 +92,33 @@ async function run() {
             w.getComputedStyle(doc.getElementById('filesBar')).display !== 'none' &&
             doc.getElementById('filesBar').textContent.includes('snap.jsonl'),
             doc.getElementById('filesBar').textContent.slice(0, 100));
-        // Builder↔bar unification: the steps→text translator renders the
-        // exact pipeline the bar would show (source always data.jsonl),
-        // quoting spaced values; and running that text is the ONE run path.
-        const txt = w.opsToText(w.stepsToOps([
-            { type: 'where', field: 'dept', operator: 'eq', value: 'Eng' },
-            { type: 'sort', field: 'salary', desc: true },
-        ]));
-        rec("builder-to-text", txt === "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary -desc", txt);
-        const q = w.opsToText(w.stepsToOps([{ type: 'where', field: 'name', operator: 'eq', value: 'Ann E' }]));
-        rec("builder-text-quoting", q.includes("eq 'Ann E'"), q);
-        ta.value = txt;
+        // DFC117: the widget builder is GONE — the bar (real grammar,
+        // real engine) is the only authoring surface. Assert the corpse
+        // stays buried, then cover what the builder tests used to: the
+        // same operations typed as text.
+        rec("builder-widgets-gone",
+            !doc.querySelector('.pipeline-step') && !doc.querySelector('.pipeline-actions'),
+            "builder UI still present");
+        ta.value = "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary -desc";
         w.exploreRunBar();
-        rec("builder-text-runs", w.exploreLastRowCount === 2, "rows=" + w.exploreLastRowCount);
-        // Regression: clicking builder selects must register EVERY time.
-        // The old string-input/URL-hash two-way sync re-parsed the (lossy)
-        // step string on hashchange and clobbered alternate clicks — a
-        // where step with an empty value lost its field on round-trip.
-        const setSelect = (sel, val) => {
-            Object.getOwnPropertyDescriptor(w.HTMLSelectElement.prototype, 'value').set.call(sel, val);
-            sel.dispatchEvent(new w.Event('change', { bubbles: true }));
-        };
-        setSelect([...doc.querySelectorAll('.pipeline-actions select')][0], 'where');
-        await pause(200);
-        const fieldSel = () => doc.querySelector('.pipeline-step').querySelectorAll('select')[0];
-        setSelect(fieldSel(), 'dept');
-        await pause(250);
-        const click1 = ta.value;
-        setSelect(fieldSel(), 'name');
-        await pause(250);
-        const click2 = ta.value;
-        rec("builder-click-1", click1.includes('-if dept'), click1);
-        rec("builder-click-2", click2.includes('-if name'), click2);
-        rec("old-string-input-gone", !doc.querySelector('.pipeline-string-input'), "still present");
+        rec("bar-where-sort-runs", w.exploreLastRowCount === 2, "rows=" + w.exploreLastRowCount);
+        ta.value = "ssql from data.jsonl | ssql update -set note 'hello world' | ssql where -if note eq 'hello world'";
+        w.exploreRunBar();
+        rec("bar-quoted-value", w.exploreLastRowCount === 4, "rows=" + w.exploreLastRowCount);
+        // Multi-line bar (DFC117): a pipeline broken at pipes across
+        // lines is the same pipeline — newlines are whitespace.
+        ta.value = "ssql from data.jsonl |\n  ssql where -if dept eq Eng |\n  ssql sort salary -desc";
+        w.exploreRunBar();
+        rec("bar-multiline-runs", w.exploreLastRowCount === 2, "rows=" + w.exploreLastRowCount);
+        // Enter runs the bar; Shift+Enter does not (it makes a newline).
+        ta.value = "ssql from data.jsonl | ssql limit 1";
+        ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+        await settle();
+        rec("bar-enter-runs", w.exploreLastRowCount === 1, "rows=" + w.exploreLastRowCount);
+        ta.value = "ssql from data.jsonl | ssql limit 3";
+        ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true }));
+        await settle();
+        rec("bar-shift-enter-does-not-run", w.exploreLastRowCount === 1, "rows=" + w.exploreLastRowCount);
         // Server mode (DFC108 2c) must be DORMANT in a standalone
         // artifact — the head row only appears when the URL carries a
         // head and /api/health answers. getComputedStyle, not inline
@@ -193,6 +187,13 @@ async function run() {
         rec("server-head-posts-pipeline",
             fetched && fetched.url.includes('/api/execute') && fetched.body.includes('remote.csv'),
             JSON.stringify(fetched));
+        // DFC117 follow-up (found by Ross: a huge head crashed the tab):
+        // the EXECUTED head carries an implicit visible row cap; the
+        // input text does not.
+        rec("server-head-row-cap",
+            fetched && fetched.body.includes('| ssql limit 10000') &&
+            doc2.getElementById('headInput').value.indexOf('limit 10000') === -1,
+            JSON.stringify(fetched && fetched.body));
         rec("server-head-feeds-tail", w2.exploreLastRowCount === 2, "rows=" + w2.exploreLastRowCount);
         // Head failure must surface, not silently keep stale data.
         w2.__srvFetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ output: '', stderr: 'boom', code: 1 }) });
@@ -481,8 +482,11 @@ async function run() {
         for (let i = 0; i < 100; i++) { if (w4.document.querySelector('.explorer-container')) break; await pause(50); }
         await settle();
         const cont4 = w4.document.querySelector('.explorer-container');
+        // DFC117: single column everywhere — the panel (and the mobile
+        // column-reverse flip that put data above it) is gone.
         rec("mobile-column-layout",
-            w4.getComputedStyle(cont4).flexDirection === 'column-reverse',
+            !w4.document.querySelector('.left-panel') &&
+            w4.getComputedStyle(cont4).flexDirection !== 'column-reverse',
             w4.getComputedStyle(cont4).flexDirection);
         rec("mobile-input-16px",
             w4.getComputedStyle(w4.document.getElementById('pipeline')).fontSize === '16px',

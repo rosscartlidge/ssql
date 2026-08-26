@@ -124,6 +124,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC114 | 2026-08-25 | 2026-08-25 | [642k to 98M Rows per Second: A Performance Journey](./dfc114_performance_journey.md) |
 | DFC115 | 2026-08-25 | 2026-08-25 | [Commands Are the Authority on Themselves](./dfc115_commands_are_the_authority.md) |
 | DFC116 | 2026-08-26 | 2026-08-26 | [Authority Survey: Where DFC115 Thinking Can Still Improve the Code](./dfc116_authority_survey.md) |
+| DFC117 | 2026-08-26 | 2026-08-26 | [Explore Slims to Head + Grid + Bar: Widget Builder and JS Fallback Removed](./dfc117_explore_widgets_removal.md) |
 
 <!-- DFC-INDEX-END -->
 

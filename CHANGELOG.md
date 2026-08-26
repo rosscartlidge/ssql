@@ -5,6 +5,40 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- **The explore widget builder and its JS fallback (DFC117)** — the
+  menu-driven step widgets (8 op types with hand-copied operator and
+  agg-func vocabularies, no completion, a fraction of the commands)
+  went unused in real sessions and were a third grammar surface;
+  with wasm present they only serialized into the pipeline bar
+  anyway. Also removed `jsAggregation`, the no-wasm "fallback" that
+  implemented single group-by with non-ssql coercion (strings became
+  0) — the class DFC107 eliminated. Explore is now head + grid + bar,
+  all backed by the real engine; `-light` pages are honestly
+  grid-browsing-only and engine load failure says so instead of
+  impersonating semantics.
+
+### Changed
+- **Explore workspace is single-column, full width** — the left
+  panel (Fields list, Statistics, Pipeline box) is gone; the grid,
+  chart, head, and bar span the page. The head input matches the
+  grid's width with its controls in a row beneath it; the run buttons
+  name the split — "Run server pipeline" / "Run local pipeline" —
+  and both optimizer buttons read "⚙ Optimise".
+- **Explore head input and pipeline bar are multi-line** — the head
+  becomes a 2-row textarea, the bar grows to 3 rows, both resizable;
+  Enter runs, Shift+Enter inserts a newline, and pipelines broken at
+  pipes across lines parse identically. Copy CLI normalizes newlines
+  so the pasted command is one line.
+- **Server heads carry an implicit visible row cap (10,000)** — a
+  head emitting millions of rows crashed the browser tab (found by
+  Ross). The EXECUTED pipeline gets a trailing `limit 10000`; the
+  input text is untouched, and the status says "capped … refine the
+  head with where/sample/limit" when the cap bites — truncate
+  visibly, never silently.
+
 ## [4.74.0] - 2026-08-26
 
 ### Changed
