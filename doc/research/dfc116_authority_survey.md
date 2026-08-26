@@ -111,7 +111,7 @@ metadata flowing through `SSQL_MODE=schema` headers), fold this in;
 until then it's a contained, documented copy. Cheapest correct move
 today: nothing.
 
-### F6. Browser `FIELD_HINTS` list can drift from the engine (LOW risk, TINY cost)
+### F6. Browser `FIELD_HINTS` list can drift from the engine — FIXED 2026-08-26 (`TestFieldHintTokenInBrowserUI`, both JS copies, sabotage-verified)
 
 `ssql-ui.js` matches hint tokens `['Use-Ctrl-O', '<FIELD>', …]`.
 The tokens are a protocol on purpose, but only the bash side has a
@@ -141,7 +141,7 @@ completeness so the survey is the one place to look.
 ## Suggested order
 
 1. ~~F1+F2~~ done 2026-08-26 (twelve sites, not seven — see F1)
-2. F6 (one test, minutes)
+2. ~~F6~~ done 2026-08-26 (one test, was indeed minutes)
 3. F3+F4 via W3 (next autocli round)
 4. W2 (when readonly's conservatism first annoys someone real)
 5. F7 rides the IR evolution plan
