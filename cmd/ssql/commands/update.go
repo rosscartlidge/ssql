@@ -44,6 +44,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-if-expr", "-x").
 		Arg("expression").
+		Expression().
 		Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).
 		Done().
 		Accumulate().
@@ -66,6 +67,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		FieldsFromFlag("").
 		Done().
 		Arg("expression").
+		Expression().
 		Completer(cf.NoCompleter{Hint: "<expression>"}).
 		Done().
 		Accumulate().

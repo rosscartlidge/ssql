@@ -1,6 +1,26 @@
 package commands
 
-import "testing"
+import (
+	"sync"
+	"testing"
+
+	cf "github.com/rosscartlidge/autocli/v4"
+)
+
+// testCursorTree builds the command tree the cursor derivations
+// consult — the same Register* set the binaries use, built once.
+var testCursorTree = sync.OnceValue(func() *cf.Command {
+	cmd := cf.NewCommand("ssql")
+	cmd = RegisterFrom(cmd)
+	cmd = RegisterWhere(cmd)
+	cmd = RegisterUpdate(cmd)
+	cmd = RegisterGroupBy(cmd)
+	cmd = RegisterJoin(cmd)
+	cmd = RegisterRename(cmd)
+	cmd = RegisterSort(cmd)
+	cmd = RegisterInclude(cmd)
+	return cmd.Handler(func(ctx *cf.Context) error { return nil }).Build()
+})
 
 func TestCompleteSource(t *testing.T) {
 	cases := []struct {
@@ -54,9 +74,21 @@ func TestCompleteSource(t *testing.T) {
 			"",
 		},
 		{
+			// A REAL from-parquet flag ends the -columns run. (The old
+			// hand-walker's case here used -sample, which parquet does
+			// not have — its valueFlags map had mixed the line formats'
+			// grammar in. Spec-derived analysis knows the difference.)
 			"-columns then another flag ends the field run",
-			"ssql from parquet x.parquet -columns a -sample ",
+			"ssql from parquet x.parquet -columns a -records ",
 			"",
+		},
+		{
+			// An UNKNOWN flag is attributed into the accumulate run by
+			// the engine's parse — same reading Tab gets. Engine
+			// consistency over hand-rolled stricter judgment (DFC115).
+			"-columns then an unknown flag stays in the field run",
+			"ssql from parquet x.parquet -columns a -sample ",
+			"ssql from parquet x.parquet",
 		},
 		{
 			"simple procsub does NOT confuse the top-level split (join left field)",
@@ -111,7 +143,7 @@ func TestCompleteSource(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := CompleteSource(tc.before); got != tc.want {
+			if got := CompleteSource(tc.before, testCursorTree()); got != tc.want {
 				t.Errorf("CompleteSource(%q)\n  got  %q\n  want %q", tc.before, got, tc.want)
 			}
 		})
@@ -145,7 +177,7 @@ func TestExprArgAtCursor(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ExprArgAtCursor(tc.args, tc.pos); got != tc.want {
+			if got := ExprArgAtCursor(testCursorTree(), tc.args, tc.pos); got != tc.want {
 				t.Errorf("ExprArgAtCursor(%q, %d) = %v, want %v", tc.args, tc.pos, got, tc.want)
 			}
 		})

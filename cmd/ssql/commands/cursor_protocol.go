@@ -25,11 +25,11 @@ func HandleCursorProtocol(args []string, root func() *cf.Command) (stdout, stder
 	}
 	switch args[0] {
 	case "-complete-source":
-		return CompleteSource(args[1]), "", 0, true
+		return CompleteSource(args[1], root()), "", 0, true
 	case "-cursor-stage":
 		return CursorTopLevelStage(args[1]), "", 0, true
 	case "-value-source":
-		return ValueSourceFile(args[1]), "", 0, true
+		return ValueSourceFile(args[1], root()), "", 0, true
 	case "-help-at":
 		pos, err := strconv.Atoi(args[1])
 		if err != nil {
@@ -42,7 +42,7 @@ func HandleCursorProtocol(args []string, root func() *cf.Command) (stdout, stder
 		}
 		// Writing an expression is hard without knowing the functions —
 		// append the reference when the cursor is on an expression arg.
-		if ExprArgAtCursor(rest, pos) {
+		if ExprArgAtCursor(root(), rest, pos) {
 			help = strings.TrimRight(help, "\n") + "\n\n" + FunctionsReference
 		}
 		return help, "", 0, true

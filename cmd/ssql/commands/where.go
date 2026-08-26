@@ -43,6 +43,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-if-expr", "-x").
 		Arg("expression").
+		Expression().
 		Completer(cf.NoCompleter{Hint: "<boolean-expression>"}).
 		Done().
 		Accumulate().

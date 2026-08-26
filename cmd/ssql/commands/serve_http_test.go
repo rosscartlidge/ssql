@@ -63,7 +63,7 @@ func TestJoinRightFile(t *testing.T) {
 		{"ssql where -if a eq b ", ""},
 	}
 	for _, c := range cases {
-		if got := joinRightFile(c.stage); got != c.want {
+		if got := joinRightFile(c.stage, testCursorTree()); got != c.want {
 			t.Errorf("joinRightFile(%q) = %q, want %q", c.stage, got, c.want)
 		}
 	}

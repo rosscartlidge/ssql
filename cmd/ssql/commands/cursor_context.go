@@ -3,6 +3,8 @@ package commands
 import (
 	"os"
 	"strings"
+
+	cf "github.com/rosscartlidge/autocli/v4"
 )
 
 // Cursor-context analysis for the interactive keybindings (Ctrl-O field
@@ -178,59 +180,19 @@ func CursorTopLevelStage(before string) string {
 	return strings.TrimLeft(segs[len(segs)-1], " \t")
 }
 
-// ExprArgAtCursor reports whether the cursor sits on an expression argument of
-// an expression-bearing flag — so the Alt-h help can append the function
-// reference (writing an expression is hard without knowing the functions).
-// args is the COMP_WORDS-style slice MINUS the program name (args[0] is the
-// command), and pos is the COMP_WORDS index of the cursor (program at 0), the
-// same shape autocli's -help-at / Complete use. Expression slots:
-//
-//	where    -if-expr|-x  <EXPR>
-//	update   -if-expr|-x  <EXPR>            -set-expr|-e <field> <EXPR>
-//	group-by -expr|-e     <EXPR> <name>     -stream-expr <init> <every> <final> <name>
-func ExprArgAtCursor(args []string, pos int) bool {
-	if len(args) == 0 {
-		return false
-	}
-	cmd := args[0]
-	isExprSlot := func(flag string, argIdx int) bool {
-		switch cmd {
-		case "where":
-			return (flag == "-if-expr" || flag == "-x") && argIdx == 0
-		case "update":
-			if (flag == "-if-expr" || flag == "-x") && argIdx == 0 {
-				return true
-			}
-			return (flag == "-set-expr" || flag == "-e") && argIdx == 1
-		case "group-by":
-			if (flag == "-expr" || flag == "-e") && argIdx == 0 {
-				return true
-			}
-			return flag == "-stream-expr" && argIdx >= 0 && argIdx <= 2
-		}
-		return false
-	}
-	// Walk the completed args before the cursor word (at index pos-1), tracking
-	// the current flag and how many positionals it has consumed.
-	end := pos - 1
-	if end > len(args) {
-		end = len(args)
-	}
-	flag := ""
-	argIdx := -1
-	for i := 1; i < end; i++ {
-		t := args[i]
-		switch {
-		case t == "+" || t == "-": // clause separators reset the flag
-			flag, argIdx = "", -1
-		case len(t) > 1 && t[0] == '-':
-			flag, argIdx = t, -1
-		default:
-			argIdx++
-		}
-	}
-	// The cursor word occupies the next positional slot of the current flag.
-	return flag != "" && isExprSlot(flag, argIdx+1)
+// ExprArgAtCursor reports whether the cursor sits on an expression
+// argument of an expression-bearing flag — so the Alt-h help can
+// append the function reference. Derived from the builders'
+// Arg(...).Expression() declarations via the completion engine's own
+// cursor analysis (DFC116 F3): the hand-maintained (command, flag,
+// argIdx) table this replaces silently missed any newly added expr
+// flag. args is COMP_WORDS minus the program name; pos is the
+// COMP_WORDS cursor index (program at 0) — the same shape
+// autocli's -help-at / Complete use.
+func ExprArgAtCursor(tree *cf.Command, args []string, pos int) bool {
+	ctx, _ := tree.AnalyzeCursor(args, pos)
+	return ctx.FlagSpec != nil && ctx.ArgIndex >= 0 &&
+		ctx.ArgIndex < len(ctx.FlagSpec.ArgExpr) && ctx.FlagSpec.ArgExpr[ctx.ArgIndex]
 }
 
 // ValueSourceFile returns the data file feeding the cursor position, for
@@ -239,8 +201,8 @@ func ExprArgAtCursor(args []string, pos int) bool {
 // AUTOCLI_CACHE_FILE tab-completion dance for consumers that can see the
 // whole pipeline (the Ctrl-O binding, the browser playground) — bash Tab
 // can't, which is why the cache exists at all.
-func ValueSourceFile(before string) string {
-	src := CompleteSource(before)
+func ValueSourceFile(before string, tree *cf.Command) string {
+	src := CompleteSource(before, tree)
 	if src == "" {
 		return ""
 	}
@@ -258,7 +220,7 @@ func ValueSourceFile(before string) string {
 //   - cursor inside a process substitution → that procsub's internal upstream;
 //   - cursor at a join right-side field slot → the join's procsub (right source);
 //   - otherwise → the upstream pipeline feeding the current stage.
-func CompleteSource(before string) string {
+func CompleteSource(before string, tree *cf.Command) string {
 	if p, ok := enclosingProcsub(before); ok {
 		return upstreamOf(p)
 	}
@@ -269,7 +231,7 @@ func CompleteSource(before string) string {
 	// bare read of it (bare, so ALL columns are offered even after
 	// some are picked). Found by Ross: `from parquet X -columns ^O`
 	// fell through to upstreamOf, which is empty for a first stage.
-	if f, fmtSub := fromOwnFileFieldSlot(stage); f != "" {
+	if f, fmtSub := fromOwnFileFieldSlot(stage, tree); f != "" {
 		if fmtSub != "" {
 			return "ssql from " + fmtSub + " " + f
 		}
@@ -284,77 +246,78 @@ func CompleteSource(before string) string {
 		// it. Without this the slot fell through to the UPSTREAM and
 		// completed the left side's fields (found by Ross: `join
 		// kind.csv -on a_kind ^O` offered shuffled.csv's fields).
-		if f := joinRightFile(stage); f != "" {
+		if f := joinRightFile(stage, tree); f != "" {
 			return "ssql from " + f
 		}
 	}
 	return upstreamOf(before)
 }
 
-// joinRightFile returns the join's direct-file right-side argument
-// (the first positional token after "join" that looks like a data
-// file), or "" when the right side is a procsub or absent.
-func joinRightFile(stage string) string {
-	toks := tokenizeStage(stage)
-	for i, t := range toks {
-		if t != "join" || i+1 >= len(toks) {
-			continue
-		}
-		next := toks[i+1]
-		if strings.HasPrefix(next, "-") || strings.HasPrefix(next, "<(") {
-			return ""
-		}
-		if fi, ok := formatForPath(next); ok && fi.DirectAux {
-			return next
-		}
+// joinRightFile returns the join's direct-file right-side argument —
+// the FILE positional the join builder declares, bound by the
+// completion engine's parse (DFC116 F4) — or "" when the right side
+// is a procsub or absent.
+func joinRightFile(stage string, tree *cf.Command) string {
+	args, pos, ok := stageCursorArgs(stage)
+	if !ok {
 		return ""
+	}
+	ctx, path := tree.AnalyzeCursor(args, pos)
+	if len(path) != 1 || path[0] != "join" {
+		return ""
+	}
+	f, _ := ctx.GlobalFlags["FILE"].(string)
+	if f == "" || strings.HasPrefix(f, "-") || strings.HasPrefix(f, "<(") {
+		return ""
+	}
+	if fi, ok := formatForPath(f); ok && fi.DirectAux {
+		return f
 	}
 	return ""
 }
 
 // fromOwnFileFieldSlot reports the (file, format-subcommand) of a
-// `from` stage whose cursor sits on a -columns value — a field slot
-// answered by the stage's own file rather than any upstream.
-func fromOwnFileFieldSlot(stage string) (string, string) {
-	toks := tokenizeStage(stage)
-	if len(toks) < 2 || toks[0] != "ssql" || toks[1] != "from" {
+// `from` stage whose cursor sits on a field slot answered by the
+// stage's OWN file (e.g. parquet -columns). Derived (DFC116 F4): the
+// cursor's flag spec declares FieldsFromFlag("FILE") and the engine's
+// parse binds the FILE positional — this replaces a hand-walker that
+// kept its own copy of from's flag arities (the valueFlags map),
+// which silently misclassified any newly added value-taking flag.
+func fromOwnFileFieldSlot(stage string, tree *cf.Command) (string, string) {
+	args, pos, ok := stageCursorArgs(stage)
+	if !ok {
 		return "", ""
 	}
-	rest := toks[2:]
-	// Completed tokens only — drop the partial under the cursor.
-	if !strings.HasSuffix(stage, " ") && !strings.HasSuffix(stage, "\t") && len(rest) > 0 {
-		rest = rest[:len(rest)-1]
-	}
-	if len(rest) == 0 {
+	ctx, path := tree.AnalyzeCursor(args, pos)
+	if len(path) == 0 || path[0] != "from" {
 		return "", ""
 	}
-	// Cursor must be on a -columns value (Accumulate: every arg after
-	// the flag until the next flag is a column).
-	inColumns := false
+	if ctx.FlagSpec == nil || ctx.FlagSpec.FieldsFromFlag != "FILE" {
+		return "", ""
+	}
+	file, _ := ctx.GlobalFlags["FILE"].(string)
+	if file == "" {
+		return "", ""
+	}
 	fmtSub := ""
-	file := ""
-	valueFlags := map[string]bool{
-		"-sample": true, "-sample-seed": true, "-type": true, "-t": true,
-		"-default-type": true, "-dt": true, "-source": true,
-	}
-	for i := 0; i < len(rest); i++ {
-		t := rest[i]
-		switch {
-		case t == "-columns" || t == "-c":
-			inColumns = true
-		case strings.HasPrefix(t, "-"):
-			inColumns = false
-			if valueFlags[t] {
-				i++
-			}
-		case i == 0 && (t == "csv" || t == "tsv" || t == "json" || t == "jsonl" || t == "parquet" || t == "arrow" || t == "xlsx" || t == "wav"):
-			fmtSub = t
-		case !inColumns && file == "":
-			file = t
-		}
-	}
-	if !inColumns || file == "" {
-		return "", ""
+	if len(path) > 1 {
+		fmtSub = path[1]
 	}
 	return file, fmtSub
+}
+
+// stageCursorArgs converts a stage's text (ending at the cursor) into
+// the argv/pos shape AnalyzeCursor takes: argv minus the program
+// word; pos = the COMP_WORDS cursor index (a trailing space means the
+// cursor is on a new empty word).
+func stageCursorArgs(stage string) ([]string, int, bool) {
+	toks := tokenizeStage(stage)
+	if len(toks) < 2 || toks[0] != "ssql" {
+		return nil, 0, false
+	}
+	pos := len(toks) - 1
+	if strings.HasSuffix(stage, " ") || strings.HasSuffix(stage, "\t") {
+		pos = len(toks)
+	}
+	return toks[1:], pos, true
 }

@@ -113,6 +113,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-expr", "-e").
 		Arg("expression").
+		Expression().
 		Completer(cf.NoCompleter{Hint: "<expression>"}).
 		Done().
 		Arg("result-name").
@@ -124,12 +125,15 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Flag("-stream-expr").
 		Arg("init").
+		Expression().
 		Completer(cf.NoCompleter{Hint: "<init-expr>"}).
 		Done().
 		Arg("every").
+		Expression().
 		Completer(cf.NoCompleter{Hint: "<every-expr>"}).
 		Done().
 		Arg("final").
+		Expression().
 		Completer(cf.NoCompleter{Hint: "<final-expr>"}).
 		Done().
 		Arg("result-name").

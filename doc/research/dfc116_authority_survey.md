@@ -82,7 +82,7 @@ fallback. That is `from`'s FLAG grammar living in serve, exactly the
 knowledge class that produced the three drift bugs. Fold a
 `sampleable` capability bit into the F1 table.
 
-### F3. `ExprArgAtCursor` hardcodes expression-slot grammar (MED risk, MED cost)
+### F3. `ExprArgAtCursor` hardcodes expression-slot grammar — FIXED 2026-08-26 (autocli v4.15.0 `Expression()` arg metadata + `AnalyzeCursor`; the 15-case table became the differential gate, sabotage-verified)
 
 `cursor_context.go` maps where/update/group-by flags to expression
 arg indices for the Alt-h function reference. Add an expr flag
@@ -92,7 +92,7 @@ should declare it — autocli arg metadata (`.Expression()` on the arg
 builder) surfaced through the cursor protocol; the map gets derived,
 not hand-written. Pairs with the next autocli release.
 
-### F4. Cursor slot-mapping knows from/join grammar (MED risk, MED cost)
+### F4. Cursor slot-mapping knows from/join grammar — FIXED 2026-08-26 (`fromOwnFileFieldSlot`/`joinRightFile` derive via `AnalyzeCursor` from FieldsFromFlag/FILE declarations; the hand-copied `valueFlags` arity map — which had mixed csv grammar into parquet — is deleted)
 
 `fromOwnFileFieldSlot` / `joinRightFile` in `cursor_context.go`
 pattern-match other commands' stages to find file and field slots.
@@ -133,16 +133,17 @@ completeness so the survey is the one place to look.
 - **W2 (from validateReadonly):** commands declare "writes files /
   executes" via flag metadata; readonly asks instead of judging
   tokens. Removes the false positives without copying grammar.
-- **W3 (from F3/F4):** autocli arg metadata (expression slots, file
-  slots, field slots) exposed through the cursor protocol — the
-  builder declarations become the single source for every cursor
-  consumer (Alt-h, Ctrl-O, browser).
+- **W3 (from F3/F4):** DELIVERED in autocli v4.15.0 — `Expression()`
+  arg metadata, `CompletionContext.FlagSpec`, and exported
+  `Command.AnalyzeCursor` (the engine's subcommand-aware cursor
+  analysis without completion generation). Builder declarations are
+  now the single source for every cursor consumer.
 
 ## Suggested order
 
 1. ~~F1+F2~~ done 2026-08-26 (twelve sites, not seven — see F1)
 2. ~~F6~~ done 2026-08-26 (one test, was indeed minutes)
-3. F3+F4 via W3 (next autocli round)
+3. ~~F3+F4~~ done 2026-08-26 (autocli v4.15.0 — W3 delivered as Expression()/FlagSpec/AnalyzeCursor)
 4. W2 (when readonly's conservatism first annoys someone real)
 5. F7 rides the IR evolution plan
 

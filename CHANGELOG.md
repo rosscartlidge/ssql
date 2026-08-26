@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Cursor grammar derived from flag declarations (DFC116 F3+F4,
+  autocli v4.15.0)** — the Alt-h expression detector and Ctrl-O's
+  own-file/join-right slot resolution now derive from what the
+  command builders declare (`Arg(...).Expression()`, FieldsFromFlag,
+  the FILE positional) via autocli's exported `AnalyzeCursor` — the
+  completion engine's own parse — instead of hand-maintained grammar
+  tables in cursor_context.go. The deleted `valueFlags` arity map had
+  already drifted (it listed `-sample` for parquet, a line-format
+  flag). New expr-bearing flags now get Alt-h's function reference by
+  declaration, automatically.
 - **Format authority table (DFC116 F1+F2)** — extension→format
   knowledge lived in twelve places (from routing, aux inputs, serve
   suggestions and /api/files listing, -records, completion hooks,
