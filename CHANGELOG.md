@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Tab field completion for parquet and http URLs** (autocli
+  v4.14.x host hooks) — `from parquet FILE -columns <Tab>` now
+  completes real column names from the footer instead of the
+  `Use-Ctrl-O` hint, for local files AND http(s) URLs (footer over
+  Range). Completion asks the command: the hook execs
+  `SSQL_MODE=schema ssql from FILE` — the same protocol Ctrl-O and
+  serve use — so any format `from` can route works with zero grammar
+  duplication (DFC115).
+- **Value completion for parquet** — sampling a parquet column for
+  `-if FIELD eq <Tab>`/Ctrl-O values now works (column-pruned via
+  `ReadParquetColumns`, and over http it fetches only that column's
+  byte ranges). URL sources for csv/tsv/jsonl value sampling stream
+  the first records.
+
+### Fixed
+- **Same-command field completion had silently died** — completing a
+  flag's field argument (`from catalog data.csv -if <Tab>`) returned
+  the hint instead of the file's fields: autocli's completion context
+  parses the words before the cursor, that prefix necessarily ends
+  mid-flag, the strict parse failed and threw away the already-parsed
+  FILE positional. autocli v4.14.1 keeps the longest parseable prefix
+  (regression-pinned there and in `TestFieldCompletionSources` here).
 - **`from https://…` — cloud reads with zero SDKs (DFC112)** — any
   http(s) URL is a source, including presigned S3/GCS/Azure URLs
   (auth stays your cloud CLI's problem: `aws s3 presign …`). Plain

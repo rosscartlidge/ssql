@@ -1107,6 +1107,19 @@ func parseSchemaHeaderLine(line []byte) (*Schema, bool) {
 	return NewSchema(hdr.Schema.Fields), true
 }
 
+// ParseSchemaHeaderFields extracts the field list from a `_schema`
+// header line (`{"_schema":{"fields":[...],...}}`). Second return is
+// false when the line isn't a schema header. Exported for consumers of
+// the schema-mode protocol (e.g. completion asking `from` for a
+// file's fields).
+func ParseSchemaHeaderFields(line []byte) ([]string, bool) {
+	sch, ok := parseSchemaHeaderLine(line)
+	if !ok {
+		return nil, false
+	}
+	return sch.Fields(), true
+}
+
 // WriteJSONLWithInferredSchemaToWriter writes records as JSONL prefixed
 // with a `{"_schema":{"fields":[...],"types":{...}}}` header inferred
 // from the first record. Field order is alphabetical (deterministic).
