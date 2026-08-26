@@ -123,6 +123,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC113 | 2026-08-24 | 2026-08-26 | [The Scale Gate: Budget Assertions on Large Fixtures](./dfc113_scale_gate.md) |
 | DFC114 | 2026-08-25 | 2026-08-25 | [642k to 98M Rows per Second: A Performance Journey](./dfc114_performance_journey.md) |
 | DFC115 | 2026-08-25 | 2026-08-25 | [Commands Are the Authority on Themselves](./dfc115_commands_are_the_authority.md) |
+| DFC116 | 2026-08-26 | 2026-08-26 | [Authority Survey: Where DFC115 Thinking Can Still Improve the Code](./dfc116_authority_survey.md) |
 
 <!-- DFC-INDEX-END -->
 
