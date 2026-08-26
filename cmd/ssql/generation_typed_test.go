@@ -427,8 +427,10 @@ func TestTypedDistinct(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)
 	src := runTypedPipeline(t, bin,
 		bin+" from "+emp+" | "+bin+" distinct | "+bin+" to csv")
-	if !strings.Contains(src, "typed.Distinct(") {
-		t.Errorf("expected typed.Distinct call\n%s", src)
+	// Parallel plan emits DistinctParallel; a serial downgrade emits
+	// Distinct — either is the typed dedupe.
+	if !strings.Contains(src, "typed.DistinctParallel(") && !strings.Contains(src, "typed.Distinct(") {
+		t.Errorf("expected a typed.Distinct/DistinctParallel call\n%s", src)
 	}
 	out := goRunGenerated(t, src)
 	// Should be 3 unique rows + header.

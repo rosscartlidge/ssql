@@ -707,3 +707,20 @@ func TestServeOptimize(t *testing.T) {
 		t.Errorf("shellism: status %d", resp3.StatusCode)
 	}
 }
+
+func TestServeReadonly(t *testing.T) {
+	addr := startServeHTTPProcess(t, "-readonly")
+	base := "http://" + addr
+	resp, body := postJSON(t, base+"/api/execute?mode=buffered",
+		map[string]string{"pipeline": "ssql from employees.csv | ssql tee snap.jsonl"}, nil)
+	if resp.StatusCode != 403 || !strings.Contains(body, "tee") {
+		t.Errorf("tee: status %d body %s", resp.StatusCode, body)
+	}
+	resp2, body2 := postJSON(t, base+"/api/execute?mode=buffered",
+		map[string]string{"pipeline": "ssql from employees.csv | ssql limit 2"}, nil)
+	var out struct{ Code int }
+	json.Unmarshal([]byte(body2), &out)
+	if resp2.StatusCode != 200 || out.Code != 0 {
+		t.Errorf("read: status %d body %.120s", resp2.StatusCode, body2)
+	}
+}

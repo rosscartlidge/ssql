@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-08-24
+Last modified: 2026-08-26
 
 [Back to Index](./README.md)
 
@@ -89,7 +89,7 @@ Tracked issues and feature gaps discovered during development.
 
 ## Next up (queued by Ross, 2026-08-20)
 
-- [ ] **Scale gate ([DFC113](./dfc113_scale_gate.md), approved 2026-08-24, for later)** — opt-in `SSQL_SCALE=1 TestScaleBudgets`: one cached ~200MB generated fixture, wall-time CEILING assertions (10× headroom, no stored baselines) on the known scale traps — schema mode (parquet + csv), -sample source, serve early-exit (replaces the size-tuned 2MB deadlock fixture), cached line-count delta, csv-scan vs wc amplification, jsonl reader class. Sabotage-verify each budget at introduction; add to the pre-tag checklist; new scale-sensitive features add cases like equivalence cases. Motivated by five fixture-invisible bugs in one week (table in the DFC).
+- [x] **Scale gate ([DFC113](./dfc113_scale_gate.md)) — implemented 2026-08-26** (cmd/ssql/scale_test.go, pre-tag checklist; sabotage-verified)** — opt-in `SSQL_SCALE=1 TestScaleBudgets`: one cached ~200MB generated fixture, wall-time CEILING assertions (10× headroom, no stored baselines) on the known scale traps — schema mode (parquet + csv), -sample source, serve early-exit (replaces the size-tuned 2MB deadlock fixture), cached line-count delta, csv-scan vs wc amplification, jsonl reader class. Sabotage-verify each budget at introduction; add to the pre-tag checklist; new scale-sensitive features add cases like equivalence cases. Motivated by five fixture-invisible bugs in one week (table in the DFC).
 
 - [ ] **Cloud data ([DFC112](./dfc112_cloud_data_strategy.md), position settled 2026-08-23)**: NO cloud SDKs (presigned URLs + the user's cloud CLI own auth); serve-in-region is the recommended heavy-data pattern (already works). Queued builds: `from https://URL` with Range support (+ -sample via Range, loud no-Range refusal); parallel seek draws in the byte-offset samplers (mounts/https latency — draws are independent, determinism unaffected); codelab "Cloud data" section; (future) parquet column/row-group pruning over Range.
 

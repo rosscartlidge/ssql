@@ -69,6 +69,9 @@ Whenever fixing bugs or adding features, always look for opportunities to refact
 ### If It's Not Tested, It Will Break
 Features without tests will eventually be removed during refactoring (learned when field/value completion was lost in v3.2.0).
 
+### A Fixture That Fits in a Pipe Buffer Tests Nothing About Scale (CRITICAL)
+Perf-sensitive paths (readers, samplers, schema mode, serve chains) need a case in the opt-in scale gate (`SSQL_SCALE=1 … TestScaleBudgets`, `cmd/ssql/scale_test.go`, DFC113) asserting a wall-time ceiling — output oracles pass while complexity bugs ship (five fixture-invisible bugs in one week proved it). Budgets are generous absolute ceilings, never stored baselines. New scale-sensitive features add a case the way result-changing commands add an equivalence case.
+
 ### One Semantics, Many Backends → Test Them Differentially (CRITICAL)
 The same pipeline runs **five ways**: interpreted exec, `generate go` in record/typed/parallel, and `generate sql` (DuckDB). Each is a separate implementation of the same semantics, so **a bug fixed in one path is almost always still live in the others.** Hard-won lesson (the `top`-by-string saga, v4.54–v4.55): the numeric-coercion bug was fixed in exec and typed but left wrong in record codegen AND `generate sql` for two more releases, found only when a user compared two outputs by hand.
 
@@ -150,6 +153,7 @@ After a minor/major release, always do ALL of these:
 
 **Pre-tag gates** (before tagging, in addition to the standard suites):
 - [ ] `SSQL_PERM_TRIPLES=1 go test ./cmd/ssql -run TestPipelinePermutationTriples -timeout=40m` — the opt-in 3-stage permutation gate (~300 pipelines × every lane, several minutes; not part of normal test runs)
+- [ ] `SSQL_SCALE=1 go test ./cmd/ssql -run TestScaleBudgets -timeout=20m` — the opt-in scale gate (DFC113): wall-time budgets on a cached ~120MB fixture; catches complexity/read-amplification regressions that output oracles pass (~15s warm, ~40s on first fixture generation)
 
 **Builds:**
 - [ ] `make deb` — build `ssql_X.Y.Z_amd64.deb` and `ssql-gpu_X.Y.Z_amd64.deb`, commit to repo

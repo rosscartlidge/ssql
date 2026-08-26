@@ -47,11 +47,12 @@ import (
 )
 
 type serveHTTPOptions struct {
-	Addr    string        // listen address, e.g. "127.0.0.1:8080"
-	Dir     string        // working directory for pipelines and /api/files
-	Token   string        // optional bearer token; required for non-loopback
-	Timeout time.Duration // per-request pipeline wall clock
-	Stderr  io.Writer     // startup/diagnostic log
+	Addr     string        // listen address, e.g. "127.0.0.1:8080"
+	Dir      string        // working directory for pipelines and /api/files
+	Token    string        // optional bearer token; required for non-loopback
+	Timeout  time.Duration // per-request pipeline wall clock
+	Readonly bool          // reject pipelines that write files (tee, to FMT FILE, generate -run/-build)
+	Stderr   io.Writer     // startup/diagnostic log
 }
 
 // serveSampleThreshold: above this size, the explore workspace for a
@@ -316,6 +317,12 @@ func serveExecute(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
+	}
+	if o.Readonly {
+		if err := validateReadonly(stages); err != nil {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+			return
+		}
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -1076,4 +1083,40 @@ func capByEarlyLimit(rows int64, stages [][]string) int64 {
 		}
 	}
 	return rows
+}
+
+// validateReadonly rejects USER pipeline stages that write files.
+// Conservative by design: in -readonly mode a `to` sink is allowed
+// only in its plain to-stdout form — any bare token after the format
+// (which may be a FILE, or may be a flag's value we can't classify
+// without copying the command's grammar — DFC115 says don't) rejects,
+// as does -o. tee always writes; generate go -run/-build write and
+// execute. False positives are safe and the errors say exactly why.
+func validateReadonly(stages [][]string) error {
+	for _, st := range stages {
+		if len(st) == 0 {
+			continue
+		}
+		switch st[0] {
+		case "tee":
+			return fmt.Errorf("readonly serve: `tee` writes a file — not permitted (-readonly)")
+		case "to":
+			for i := 2; i < len(st); i++ {
+				a := st[i]
+				if a == "-o" {
+					return fmt.Errorf("readonly serve: `to %s -o` writes a file — not permitted (-readonly)", st[1])
+				}
+				if !strings.HasPrefix(a, "-") {
+					return fmt.Errorf("readonly serve: `to %s %s` may write a file — only plain to-stdout sinks are permitted (-readonly is conservative: flag values also trigger this)", st[1], a)
+				}
+			}
+		case "generate":
+			for _, a := range st[1:] {
+				if a == "-run" || a == "-r" || a == "-build" || a == "-b" {
+					return fmt.Errorf("readonly serve: `generate %s` compiles/writes — not permitted (-readonly)", a)
+				}
+			}
+		}
+	}
+	return nil
 }

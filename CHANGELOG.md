@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The scale gate (DFC113)** — `SSQL_SCALE=1 go test ./cmd/ssql -run
+  TestScaleBudgets`: wall-time budget assertions on a cached ~120MB
+  generated fixture, covering the known scale traps (parquet/csv
+  schema mode, byte-offset sampling, `-records`, the serve early-exit
+  and records-cache, exec/jsonl scan amplification). Opt-in like the
+  triples gate; on the pre-tag checklist; sabotage-verified
+  (reintroducing the parquet full-decode tripped it). Catches the bug
+  class that output oracles pass — five fixture-invisible bugs in one
+  week motivated it.
+- **Parallel seek draws in byte-offset sampling** — `-sample`'s N
+  seeks now run in worker batches (admission stays sequential by draw
+  index, so a seed selects the identical rows); no change on local
+  disk, but on high-latency storage (FUSE cloud mounts) it divides
+  the dominant N×RTT cost by the worker count.
+- **`serve -readonly`** — rejects HTTP pipelines that write files
+  (`tee`, `to FMT FILE`, `-o`, `generate -run/-build`) with loud 403s;
+  conservative by design (unclassifiable bare tokens after a `to`
+  format also reject). Recommended alongside tokenless tailnet binds.
 - **`from … -records`** — print only the record count that exact
   invocation would produce, computed the cheapest way the format
   allows: parquet footer (instant), newline scan for csv/tsv/jsonl

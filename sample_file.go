@@ -18,6 +18,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // sampleFileMaxLine bounds the backward/forward scans around an
@@ -181,21 +182,51 @@ func readLineAt(f *os.File, start, size int64) ([]byte, bool) {
 // returns them in file order. ok=false when n distinct lines couldn't
 // be found (caller falls back to an exact full read).
 func sampleLineStarts(f *os.File, size, dataStart int64, n int, seed int64) ([]int64, bool) {
-	starts := make(map[int64]bool, n)
-	// 4KB backward-scan chunks: typical lines are well under this, and
-	// the chunk size bounds read volume; lineStartAt grows past it as
-	// needed.
-	buf := make([]byte, 4096)
 	span := size - dataStart
 	if span <= 0 {
 		return nil, false
 	}
+	// Draws run in PARALLEL batches: each draw is a pure function of
+	// (seed, draw index) and lineStartAt uses ReadAt (offset-explicit,
+	// safe on a shared *os.File), so concurrency cannot change WHICH
+	// lines a seed selects — only how fast the seeks complete. On
+	// local page cache this is noise; on high-latency storage (FUSE
+	// cloud mounts, future https sources) it is the difference between
+	// N×RTT and N×RTT/workers (DFC112). Dedup and ordering happen
+	// after, exactly as before.
+	const workers = 32
+	starts := make(map[int64]bool, n)
 	maxDraws := int64(n)*20 + 100
-	for draw := int64(0); int64(len(starts)) < int64(n) && draw < maxDraws; draw++ {
-		off := dataStart + int64(sampleHash(seed, draw)%uint64(span))
-		start, ok := lineStartAt(f, off, dataStart, buf)
-		if ok {
-			starts[start] = true
+	batch := make([]int64, workers)
+	for base := int64(0); int64(len(starts)) < int64(n) && base < maxDraws; base += workers {
+		var wg sync.WaitGroup
+		for w := 0; w < workers && base+int64(w) < maxDraws; w++ {
+			w := w
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				buf := make([]byte, 4096)
+				off := dataStart + int64(sampleHash(seed, base+int64(w))%uint64(span))
+				start, ok := lineStartAt(f, off, dataStart, buf)
+				if ok {
+					batch[w] = start
+				} else {
+					batch[w] = -1
+				}
+			}()
+		}
+		wg.Wait()
+		// ADMISSION stays sequential by draw index and stops at n —
+		// this reproduces the serial loop's selected set exactly
+		// (draws beyond the batch's stopping point are wasted seeks,
+		// never extra selections).
+		for w := 0; w < workers && base+int64(w) < maxDraws; w++ {
+			if int64(len(starts)) >= int64(n) {
+				break
+			}
+			if batch[w] >= 0 {
+				starts[batch[w]] = true
+			}
 		}
 	}
 	if int64(len(starts)) < int64(n) {

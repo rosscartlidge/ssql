@@ -122,3 +122,29 @@ func TestDirDataFingerprint(t *testing.T) {
 		t.Error("file change did not change fingerprint")
 	}
 }
+
+func TestValidateReadonly(t *testing.T) {
+	cases := []struct {
+		name    string
+		stages  [][]string
+		wantErr string
+	}{
+		{"plain read allowed", [][]string{{"from", "a.csv"}, {"where", "-if", "x", "gt", "1"}}, ""},
+		{"to stdout allowed", [][]string{{"from", "a.csv"}, {"to", "jsonl"}}, ""},
+		{"tee rejected", [][]string{{"from", "a.csv"}, {"tee", "out.jsonl"}}, "tee"},
+		{"to FILE rejected", [][]string{{"from", "a.csv"}, {"to", "csv", "out.csv"}}, "may write a file"},
+		{"to -o rejected", [][]string{{"from", "a.csv"}, {"to", "markdown", "-o", "x.md"}}, "-o"},
+		{"generate -run rejected", [][]string{{"from", "a.csv"}, {"generate", "go", "-run"}}, "compiles/writes"},
+		{"generate plain allowed", [][]string{{"from", "a.csv"}, {"generate", "sql"}}, ""},
+		{"conservative flag-value rejection", [][]string{{"from", "a.csv"}, {"to", "explore", "-title", "My"}}, "may write a file"},
+	}
+	for _, c := range cases {
+		err := validateReadonly(c.stages)
+		if c.wantErr == "" && err != nil {
+			t.Errorf("%s: unexpected %v", c.name, err)
+		}
+		if c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)) {
+			t.Errorf("%s: got %v, want containing %q", c.name, err, c.wantErr)
+		}
+	}
+}

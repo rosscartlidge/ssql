@@ -2,13 +2,18 @@
 
 Reference: DFC113
 Created: 2026-08-24
-Last modified: 2026-08-25
+Last modified: 2026-08-26
 
 [Back to Index](./README.md)
 
-**Status:** Design — approved for later implementation (Ross,
-2026-08-24: "write up the scale gate as DFC and a TODO - for doing
-later"). Companion to
+**Status:** Implemented 2026-08-26 (`cmd/ssql/scale_test.go`,
+`SSQL_SCALE=1 … TestScaleBudgets`; on the pre-tag checklist). First
+full run: all budgets pass in ~15s warm; sabotage-verified by
+reintroducing the parquet full-decode (tripped at 2.46s vs the 1s
+ceiling). Fixture is ~120MB/3M rows — smaller than the sketch's 200MB
+but clears every trap threshold. The exec/jsonl scans run ~2.6s
+against 60s ceilings (wide headroom by design). serve-records-cache
+asserts the delta AND an absolute cached-run ceiling. Companion to
 [multimode-equivalence-testing.md](./multimode-equivalence-testing.md):
 that doc's doctrine covers the *what comes out* axis; this one covers
 *how much work it took*.
