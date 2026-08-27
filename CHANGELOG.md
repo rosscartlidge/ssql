@@ -5,6 +5,24 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Grid clicks compose with bar/head results** — column filter/sort
+  ops ran over the page's ORIGINAL embedded data, silently discarding
+  whatever the bar (or a server head) had produced; clearing the last
+  filter also left stale rows. Grid ops now apply over the current
+  rows and clearing restores them. Found during the DFC118
+  discussion of the "invisible third segment".
+
+### Added
+- **The grid's ssql segment is visible** — clicking filters/sorts
+  shows the real stages under the grid (`grid: | ssql where -if dept
+  eq Eng | ssql sort salary`), and **Copy CLI appends them**, so the
+  copied command reproduces exactly the rows on screen. Interim
+  truthfulness until DFC118's unified model folds clicks into the
+  bar itself.
+
 ## [4.75.0] - 2026-08-27
 
 ### Removed

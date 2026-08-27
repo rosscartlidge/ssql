@@ -110,6 +110,28 @@ async function run() {
         ta.value = "ssql from data.jsonl |\n  ssql where -if dept eq Eng |\n  ssql sort salary -desc";
         w.exploreRunBar();
         rec("bar-multiline-runs", w.exploreLastRowCount === 2, "rows=" + w.exploreLastRowCount);
+        // Grid ops are a REAL ssql segment over the CURRENT rows
+        // (DFC118 discussion find: they used to run over the ORIGINAL
+        // data, silently discarding bar results), surfaced as text.
+        ta.value = "ssql from data.jsonl | ssql where -if dept eq Eng";
+        w.exploreRunBar();
+        w.exploreApplyGridOps([{ op: 'sort', field: 'salary', desc: false }]);
+        await pause(100);
+        const gridLine = doc.getElementById('gridOpsLine');
+        rec("grid-ops-compose-over-bar",
+            w.exploreLastRowCount === 2, // bar's filter survives the click
+            "rows=" + w.exploreLastRowCount);
+        rec("grid-ops-line-visible",
+            gridLine && gridLine.textContent.includes('| ssql sort salary'),
+            gridLine ? gridLine.textContent : 'no element');
+        rec("grid-ops-copy-tail",
+            (w.exploreGridOpsTail || '').startsWith('| ssql sort'),
+            String(w.exploreGridOpsTail));
+        w.exploreApplyGridOps([]);
+        await pause(100);
+        rec("grid-ops-clear-restores",
+            w.getComputedStyle(gridLine).display === 'none' && !w.exploreGridOpsTail,
+            "display=" + w.getComputedStyle(gridLine).display + " tail=" + String(w.exploreGridOpsTail));
         // Enter runs the bar; Shift+Enter does not (it makes a newline).
         ta.value = "ssql from data.jsonl | ssql limit 1";
         ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
