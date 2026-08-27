@@ -1,0 +1,164 @@
+# A Widget Query Builder Done Right: Spec-Driven and Bijective
+
+Reference: DFC118
+Created: 2026-08-27
+Last modified: 2026-08-27
+
+[Back to Index](./README.md)
+
+**Status:** Discussion — design principles agreed in outline (Ross +
+Claude, 2026-08-27), no build scheduled. Ross: "we do need to think
+about a widget based query builder — but we need to do it right and
+follow our principles — and it needs to be bijective."
+
+Builds on: [DFC117](./dfc117_explore_widgets_removal.md) (why the
+old builder died), [DFC116](./dfc116_authority_survey.md) /
+[DFC115](./dfc115_commands_are_the_authority.md) (commands are the
+authority; the cursor-derivation machinery), DFC108 (the split
+workspace the builder would live in).
+
+## Why revisit at all
+
+DFC117 removed the widget builder because of how it was BUILT, not
+because visual construction is worthless. A builder that actually
+worked would serve: newcomers who don't know the grammar yet (the
+GopherCon audience seeing ssql for the first time), discoverability
+(what CAN this stage do? — a rendered form answers at a glance), and
+touch devices where typing pipelines is genuinely painful. The grid
+already proves the pattern in miniature: click a column filter, watch
+the bar spell it in real ssql — the GUI teaching the CLI. A right
+builder is that, generalized.
+
+## Post-mortem constraints (what "right" means)
+
+The dead builder failed four ways; each failure becomes a hard
+requirement:
+
+1. **It hand-copied grammar** (operator lists, agg menus, window
+   funcs — a third grammar surface that drifted; its `valueFlags`
+   map had csv flags on parquet). → **R1: the builder must contain
+   ZERO command knowledge.** Every form, menu, and vocabulary item is
+   DERIVED from the commands' own self-descriptions at render time.
+2. **It covered ~8 of 30+ commands** — partial coverage taught a
+   dialect. → **R2: coverage is total by construction** — anything
+   registered renders; a new command appears in the builder with no
+   builder change.
+3. **It was one-directional** (steps → text; bar edits never parsed
+   back; "last writer wins"). → **R3: bijective.** Text and widgets
+   are two VIEWS of one model, editable in either, always in sync.
+4. **It had no completion** while the bar had full completion. →
+   **R4: widget inputs get the same completion the bar gets** (they
+   ask the same protocols).
+
+## The design in one sentence
+
+The builder is a FORM RENDERER for the command tree's own
+declarations, whose model is the parsed pipeline itself (argv per
+stage, parsed by the real parser), and whose every dynamic vocabulary
+(fields, operators, values) comes from the completion/schema
+protocols the bar already uses.
+
+### R1+R2: spec-driven rendering (commands are the authority)
+
+The machinery mostly exists after the DFC116 arc:
+
+- autocli builders already declare everything a form needs: flag
+  names/aliases, arg names, arg types, Required/Accumulate/Bool,
+  `Expression()` arg marks, `FieldsFromFlag` (a field slot!),
+  StaticCompleter (an enum — where's operators live HERE, in where's
+  own declaration), FileCompleter (a file slot), help text, examples.
+- What's missing is one protocol surface: a machine-readable dump of
+  the FlagSpec tree — `ssql -spec-json [command]` (autocli feature,
+  same registry help/man generation reads). The builder renders forms
+  from THAT. Growing the command a protocol surface instead of
+  parsing it elsewhere is the DFC115 playbook verbatim.
+- Dynamic vocabularies stay live, not dumped: field names via
+  `SSQL_MODE=schema` at the stage's boundary (the Ctrl-O path — so
+  widgets see post-rename/group-by schemas correctly, which the dead
+  builder never did), values via the sampling path, enums via
+  `-complete` at the arg's position. The embedded engine answers all
+  three in-page today.
+
+A form field is therefore: label = arg name, control = derived from
+the declaration (checkbox for Bool, select fed by -complete for
+enums/fields, text with expression help for Expression args, repeat
+button for Accumulate), tooltip = the flag's own Help text. Nothing
+authored per command, ever.
+
+### R3: bijectivity, stated precisely
+
+The model M is the parsed pipeline: a list of stages, each an argv
+(plus stdin/procsub structure), produced by the REAL parser (the
+engine's parse exposed through the wasm shim — never a JS re-parse).
+Two functions:
+
+- `parse : Text → M` (the engine's own tokenizer/splitter)
+- `print : M → Text` (a canonical serializer: one space between
+  tokens, shell-quoting exactly where needed, ` | ` between stages)
+
+The laws we enforce (true bijection over raw strings is impossible —
+whitespace variants exist — so we state the achievable pair):
+
+1. `parse(print(m)) == m` for every model — print loses nothing.
+2. `print(parse(t)) == canonicalize(t)` — parsing then printing is
+   pure normalization; running canonicalize twice is identity.
+3. **Totality by escape hatch**: any construct the form renderer
+   can't represent (procsub, comments, a flag the spec dump doesn't
+   know, a malformed stage mid-edit) round-trips as an OPAQUE TEXT
+   stage widget — shown as text, edited as text, never dropped or
+   "repaired". Bijectivity must never force partial coverage back in
+   through the side door.
+
+Editing either view mutates M; the other view re-renders from M.
+There is no "sync" code with ordering bugs because there are not two
+states — the dead builder's "last writer wins" comment was the
+autopsy of exactly that mistake.
+
+### R4 and the unification prize
+
+With M in place, the THREE gesture surfaces collapse into one
+architecture: bar edits = parse into M; widget edits = M mutations;
+grid gestures (filter/sort clicks) = M mutations too — today they run
+a parallel ops path that merges awkwardly with bar state. One model,
+three views, one run path (print(M) through the engine). The
+row-count/status story also unifies.
+
+## Testing (gates before features, per the house rules)
+
+- **Round-trip corpus gate**: laws 1–2 property-tested over the
+  pipeline corpus we already maintain (corpus_test pipelines + the
+  harness pipelines + shared-link pipelines), in the browser harness
+  against the real wasm parse. A gate we watch fail: mutate the
+  serializer's quoting and the corpus must scream.
+- **Total-coverage gate**: for every registered command, the spec
+  dump renders a form (no exceptions list allowed to exist).
+- **No-vocabulary gate**: grep the builder source for any literal
+  operator/function name — the dead builder's smell, mechanically
+  banned.
+
+## What this is NOT
+
+- Not scheduled. The bar+grid workspace is the shipping story;
+  this doc exists so the next "should we have widgets?" conversation
+  starts from requirements instead of nostalgia.
+- Not a visual programming language — no dataflow canvas. Stages in
+  a pipe, forms for one stage at a time.
+- Not a JS parser. If the model can't come from the real engine's
+  parse, the design is dead on arrival (that's R1 again).
+
+## Open questions
+
+1. `-spec-json` shape: whole tree at once (startup cost, simple) vs
+   per-command lazy (chatty, always fresh)? Leaning whole-tree — the
+   registry is small and the dump is generated from the same structs.
+2. Mid-edit invalid states: forms want field-by-field editing but M
+   is argv — likely each stage widget holds a draft argv that only
+   commits to M when it parses. Does the draft break law 3 UX?
+3. Clause grammar (`+` separators, repeated -if groups) — the forms
+   must render clause structure, which the spec dump needs to carry
+   (autocli knows it; the dump must not flatten it).
+4. Should the grid's filter/sort mapping migrate onto M in the same
+   change or after? (Same change risks scope; after risks two
+   models coexisting again.)
+5. Mobile: is the builder the primary mobile surface (typing is the
+   pain point there), and does that pull the schedule forward?
