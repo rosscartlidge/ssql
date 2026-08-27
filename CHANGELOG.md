@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows and clearing restores them. Found during the DFC118
   discussion of the "invisible third segment".
 
+### Changed
+- **Explore's default chart type is bar** (was line) — the X-axis
+  auto-pick prefers a categorical field, and a line through unordered
+  categories is spaghetti; bar is reasonable for every first render.
+  Line remains one click away for genuine series.
+
 ### Added
 - **The grid's ssql segment is visible** — clicking filters/sorts
   shows the real stages under the grid (`grid: | ssql where -if dept

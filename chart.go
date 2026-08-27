@@ -3424,7 +3424,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         <div id="serverFiles" style="display:none; font-size:12px; margin-bottom:6px; color:#6c757d; gap:6px; align-items:flex-start;">
             <select id="serverFileSelect" multiple size="4" style="min-width:220px; max-width:60%; font-family:inherit; font-size:12px; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px;"></select>
             <button id="serverFileLoad" style="padding:4px 12px; white-space:nowrap;">Load into workspace</button>
-            <span style="max-width:30%;">Loaded files join by name in the pipeline, e.g. <code>ssql join kind.csv -using FIELD</code></span>
+            <span style="max-width:30%;">Loaded files can be used by name in the local pipeline</span>
         </div>
         <textarea id="pipeline" rows="3" spellcheck="false" placeholder="ssql from data.jsonl | …  (suggestions as you type; Tab accepts; Enter runs; Shift+Enter = newline; Alt-h = help)" style="width:100%; resize:vertical; font-family:inherit; font-size:13px; padding:8px; box-sizing:border-box; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px;"></textarea>
         <div id="completions" style="position:absolute; display:none; background:var(--panel-bg); border:1px solid #6c9bd1; border-radius:6px; max-height:200px; overflow-y:auto; z-index:1000; font-size:13px; min-width:160px; box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
@@ -4021,7 +4021,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         const { useState, useEffect, useRef, useMemo } = React;
 
         function App() {
-            const [chartType, setChartType] = useState('line');
+            const [chartType, setChartType] = useState('bar'); // bar: reasonable for categorical AND numeric X (line spaghettis on the default non-numeric X pick)
             const [xField, setXField] = useState(CONFIG.initialXField || (SCHEMA.fields && SCHEMA.fields[0]) || '');
             const [yField, setYField] = useState(CONFIG.initialYField || (SCHEMA.numericFields && SCHEMA.numericFields[0]) || '');
             const [displayData, setDisplayData] = useState(DATA);
