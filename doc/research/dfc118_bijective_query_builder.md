@@ -17,6 +17,27 @@ old builder died), [DFC116](./dfc116_authority_survey.md) /
 authority; the cursor-derivation machinery), DFC108 (the split
 workspace the builder would live in).
 
+## Terms (the explore workspace, for new readers)
+
+`ssql … | ssql to explore out.html` produces a self-contained
+browser workspace (also what `ssql serve` serves). Its surfaces:
+
+- **The grid** — the data table (AG-Grid). Clicking its column
+  filters/sorts emits real ssql stages.
+- **The bar** — the multi-line text box above the grid holding the
+  pipeline as ordinary ssql text ("ssql from data.jsonl | ssql
+  where …"). It has full completion (suggestions as you type, Tab,
+  Ctrl-O-style field/value lookup, Alt-h help) and runs in the
+  page's embedded wasm build of the REAL ssql engine — "Run local
+  pipeline".
+- **The head** — in served mode only, a second text box above the
+  bar whose pipeline runs on the `ssql serve` host ("Run server
+  pipeline"); its result feeds the bar's pipeline as data.jsonl.
+
+A proposed widget builder would be a fourth surface for AUTHORING
+what the bar holds — which is why every requirement below is stated
+relative to the bar.
+
 ## Why revisit at all
 
 DFC117 removed the widget builder because of how it was BUILT, not
