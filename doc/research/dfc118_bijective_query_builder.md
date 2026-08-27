@@ -47,8 +47,26 @@ requirement:
    back; "last writer wins"). → **R3: bijective.** Text and widgets
    are two VIEWS of one model, editable in either, always in sync.
 4. **It had no completion** while the bar had full completion. →
-   **R4: widget inputs get the same completion the bar gets** (they
-   ask the same protocols).
+   **R4: widget inputs get the same completion the bar gets — by
+   asking the same protocols.** Concretely: when you Tab in the bar
+   today, the completion binding calls the engine's protocol
+   surfaces — `-complete N <argv>` ("what can go at this cursor
+   position?" — where's operator enum answers from where's own
+   StaticCompleter), `SSQL_MODE=schema` ("what fields exist at this
+   point in the pipeline?" — correct even after rename/group-by),
+   the value-sampling path ("what values does this field hold?"),
+   and `-help-at` ("what does this flag mean?"). R4 says a widget is
+   just a different RENDERING of those same answers: the operator
+   dropdown is the `-complete` result at the operator's arg position
+   shown as a select instead of a Tab popup; the field picker is the
+   schema-mode result; the value suggester is the sampling call.
+   Same questions, same answerer (the command, via the engine),
+   different widget on the front. This is what ENFORCES R1: if
+   widgets may only display protocol answers, there is nowhere for a
+   hand-copied vocabulary to live — the dead builder's
+   `['eq','ne','gt',…]` array becomes structurally impossible, and a
+   command that gains an operator updates the widget with zero
+   builder changes.
 
 ## The design in one sentence
 
