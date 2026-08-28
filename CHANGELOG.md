@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Grid clicks write real ssql into the bar (DFC118 Phase 2)** —
+  a column sort or filter now parses the bar's pipeline, replaces
+  the stages the grid previously added (never touching anything you
+  typed or edited — user text always wins), prints the result into
+  the bar, and reruns it through the one run path. The GUI teaches
+  the CLI: click a filter, watch the bar spell it. The parallel
+  grid-ops path, the `grid:` truth line, and Copy CLI's side-channel
+  append are all deleted — the bar is the single truth, so Copy CLI
+  and Share reproduce the screen by construction.
 - **DFC118 Phase 1: the pipeline model** — foundations for the
   bijective builder, no UI change. autocli v4.16.0 grew `-spec-json`
   (machine-readable command-tree dump: flag metadata, expression

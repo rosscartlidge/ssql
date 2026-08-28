@@ -6,9 +6,13 @@ Last modified: 2026-08-28
 
 [Back to Index](./README.md)
 
-**Status:** Phase 1 SHIPPED 2026-08-28 (autocli v4.16.0 `-spec-json`
-+ the model layer with round-trip law gates — no UI change); Phases
-2 (grid ops onto the model) and 3 (the widget forms) unscheduled. Ross: "we do need to think
+**Status:** Phases 1+2 SHIPPED 2026-08-28. Phase 1: autocli v4.16.0
+`-spec-json` + the model layer with round-trip law gates. Phase 2:
+grid gestures are model edits — clicks parse the bar, replace their
+own trailing stages, print, and rerun through the ONE run path;
+the parallel ops path, the grid: truth line, and the Copy CLI
+side-channel are deleted (the bar IS the truth). Phase 3 (the
+widget forms) unscheduled. Ross: "we do need to think
 about a widget based query builder — but we need to do it right and
 follow our principles — and it needs to be bijective."
 
@@ -199,8 +203,10 @@ row-count/status story also unifies.
 3. Clause grammar (`+` separators, repeated -if groups) — the forms
    must render clause structure, which the spec dump needs to carry
    (autocli knows it; the dump must not flatten it).
-4. Should the grid's filter/sort mapping migrate onto M in the same
-   change or after? (Same change risks scope; after risks two
-   models coexisting again.)
+4. ~~Grid migration timing~~ — RESOLVED (Phase 2, next session
+   after Phase 1): the ownership rule that made it safe is "the grid
+   only removes stages IT appended, only from the tail, only if
+   unedited — otherwise everything is user-authored base and new
+   stages append". User edits are never touched (gated).
 5. Mobile: is the builder the primary mobile surface (typing is the
    pain point there), and does that pull the schedule forward?

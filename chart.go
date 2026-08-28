@@ -3874,7 +3874,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 // it IS the CLI pipeline already.
                 cmd = tail;
             }
-            if (window.exploreGridOpsTail) cmd += ' ' + window.exploreGridOpsTail;
             window.exploreLastCopiedCli = cmd;
             const notes = [];
             for (const tok of cmd.split(/\s+/)) {
@@ -4037,7 +4036,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             const gridRef = useRef(null);
             const gridApiRef = useRef(null);
             const gridOpsRef = useRef([]);  // Current grid filter/sort ops
-            const baseRowsRef = useRef(DATA); // Rows the grid ops apply OVER (last bar/head result)
             const suppressGridEvents = useRef(false);  // Prevent re-entrant updates
 
             // Column definitions for AG-Grid
@@ -4091,52 +4089,36 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             };
 
             // Run combined grid + pipeline ops through WASM
-            // Grid ops are a REAL ssql segment appended after the bar:
-            // they run over the CURRENT rows (the last bar/head result,
-            // held in baseRowsRef — a ref because these callbacks live
-            // in stale closures), and their text form is shown under
-            // the grid + appended by Copy CLI. (Previously they ran
-            // over the ORIGINAL embedded DATA, silently discarding
-            // bar/head results — found in the DFC118 discussion.)
-            const gridOpsLineSet = (ops) => {
-                const el = document.getElementById('gridOpsLine');
-                const txt = ops.length
-                    ? ops && opsToStages(ops).map(a => '| ssql ' + a.map(shellQuoteArg).join(' ')).join(' ')
-                    : '';
-                window.exploreGridOpsTail = txt;
-                if (el) {
-                    el.textContent = txt ? 'grid: ' + txt : '';
-                    el.style.display = txt ? 'block' : 'none';
-                }
-            };
-            const runCombinedPipeline = (newGridOps) => {
+            // DFC118 Phase 2: grid gestures are MODEL EDITS on the bar.
+            // A click parses the bar, replaces the grid-owned trailing
+            // stages, prints, and reruns — ONE model, ONE run path. The
+            // grid only ever removes stages IT appended, only from the
+            // tail, and only if the user hasn't edited them (otherwise
+            // the whole bar is treated as user-authored base and the
+            // new stages simply append).
+            const gridAppendedRef = useRef([]); // printed stage texts we own
+            const printStage = (st) => window.ssqlUIPrintModel([st]);
+            const applyGridOpsToBar = (newGridOps) => {
                 gridOpsRef.current = newGridOps;
-                if (!ssqlWasm) return; // Only works with WASM
-                gridOpsLineSet(newGridOps);
-                const base = baseRowsRef.current;
-                if (newGridOps.length === 0) {
-                    // Last filter/sort cleared: back to the bar's rows.
-                    suppressGridEvents.current = true;
-                    if (gridApiRef.current) gridApiRef.current.setGridOption('rowData', base);
-                    window.exploreLastRowCount = base.length;
-                    setPipelineResult({ inputCount: DATA.length, outputCount: base.length });
-                    setTimeout(() => { suppressGridEvents.current = false; }, 0);
-                    return;
+                if (!ssqlWasm) return; // -light: AG-Grid's local sort/filter only
+                const ta = document.getElementById('pipeline');
+                if (!ta) return;
+                let m = window.ssqlUIParseModel(ta.value.trim() || 'ssql from data.jsonl');
+                m = m.filter(st => st.text || (st.argv && st.argv.length));
+                const owned = gridAppendedRef.current;
+                while (owned.length && m.length && printStage(m[m.length - 1]) === owned[owned.length - 1]) {
+                    m.pop(); owned.pop();
                 }
-                try {
-                    const result = ssqlWasm.pipeline(base, newGridOps);
-                    suppressGridEvents.current = true;
-                    if (gridApiRef.current) {
-                        gridApiRef.current.setGridOption('rowData', result);
-                    }
-                    window.exploreLastRowCount = result.length;
-                    setPipelineResult({ inputCount: DATA.length, outputCount: result.length });
-                    setTimeout(() => { suppressGridEvents.current = false; }, 0);
-                } catch(e) {
-                    console.warn('WASM grid pipeline failed:', e);
+                gridAppendedRef.current = [];
+                for (const argv of opsToStages(newGridOps)) {
+                    const st = { argv: ['ssql'].includes(argv[0]) ? argv.slice(1) : argv };
+                    m.push(st);
+                    gridAppendedRef.current.push(printStage(st));
                 }
+                ta.value = window.ssqlUIPrintModel(m);
+                window.exploreRunBar();
             };
-            window.exploreApplyGridOps = runCombinedPipeline; // test hook (harness)
+            window.exploreApplyGridOps = applyGridOpsToBar; // test hook (harness)
 
             // Grid options
             const gridOptions = useMemo(() => ({
@@ -4160,7 +4142,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     // Pipeline-bar integration: run results replace grid rows.
                     window.exploreSetRows = (rows) => {
                         window.exploreLastRowCount = rows.length;
-                        baseRowsRef.current = rows;
                         suppressGridEvents.current = true;
                         params.api.setGridOption('rowData', rows);
                         setPipelineResult({ inputCount: DATA.length, outputCount: rows.length });
@@ -4183,7 +4164,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     const filterOps = convertFilterModelToOps(filterModel);
                     const colState = params.api.getColumnState() || [];
                     const sortOps = convertSortModelToOps(colState);
-                    runCombinedPipeline([...filterOps, ...sortOps]);
+                    applyGridOpsToBar([...filterOps, ...sortOps]);
                 },
                 onSortChanged: (params) => {
                     if (!ssqlWasm || suppressGridEvents.current) return;
@@ -4191,7 +4172,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     const filterOps = convertFilterModelToOps(filterModel);
                     const colState = params.api.getColumnState() || [];
                     const sortOps = convertSortModelToOps(colState);
-                    runCombinedPipeline([...filterOps, ...sortOps]);
+                    applyGridOpsToBar([...filterOps, ...sortOps]);
                 }
             }), []);
 
@@ -4421,13 +4402,6 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         className: 'table-area',
                         ref: gridRef,
                         style: { width: '100%', height: '100%' }
-                    }),
-                    // The grid's clicks build a REAL ssql segment; show it
-                    // (truthfulness: Copy CLI appends it too). DFC118's
-                    // unified model will fold this into the bar itself.
-                    React.createElement('div', {
-                        id: 'gridOpsLine',
-                        style: { display: 'none', fontFamily: 'monospace', fontSize: '12px', opacity: 0.7, padding: '4px 0' }
                     })
                 )
             );

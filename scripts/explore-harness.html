@@ -147,28 +147,39 @@ async function run() {
             rec("model-opaque-procsub", !!opq[0].text && opq[0].text.includes('<('), JSON.stringify(opq));
         }
 
-        // Grid ops are a REAL ssql segment over the CURRENT rows
-        // (DFC118 discussion find: they used to run over the ORIGINAL
-        // data, silently discarding bar results), surfaced as text.
+        // DFC118 Phase 2: grid gestures are MODEL EDITS on the bar —
+        // one model, one run path. Clicks WRITE the stages into the
+        // bar (the GUI teaching the CLI), replace their own stages on
+        // the next gesture, never touch user-authored text, and Copy
+        // CLI reproduces the screen with no side-channel.
         ta.value = "ssql from data.jsonl | ssql where -if dept eq Eng";
         w.exploreRunBar();
         w.exploreApplyGridOps([{ op: 'sort', field: 'salary', desc: false }]);
-        await pause(100);
-        const gridLine = doc.getElementById('gridOpsLine');
+        await pause(150);
+        rec("grid-writes-into-bar",
+            ta.value === "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary",
+            ta.value);
         rec("grid-ops-compose-over-bar",
             w.exploreLastRowCount === 2, // bar's filter survives the click
             "rows=" + w.exploreLastRowCount);
-        rec("grid-ops-line-visible",
-            gridLine && gridLine.textContent.includes('| ssql sort salary'),
-            gridLine ? gridLine.textContent : 'no element');
-        rec("grid-ops-copy-tail",
-            (w.exploreGridOpsTail || '').startsWith('| ssql sort'),
-            String(w.exploreGridOpsTail));
+        w.exploreApplyGridOps([{ op: 'sort', field: 'salary', desc: true }]);
+        await pause(150);
+        rec("grid-gesture-replaces-own-stages",
+            ta.value === "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary -desc",
+            ta.value);
+        // A user edit of the appended stage makes it user-authored:
+        // the next gesture must append, never remove the edit.
+        ta.value = "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary -desc | ssql limit 1";
+        w.exploreApplyGridOps([{ op: 'sort', field: 'name', desc: false }]);
+        await pause(150);
+        rec("grid-never-edits-user-text",
+            ta.value.includes('| ssql limit 1') && ta.value.endsWith('| ssql sort name'),
+            ta.value);
         w.exploreApplyGridOps([]);
-        await pause(100);
-        rec("grid-ops-clear-restores",
-            w.getComputedStyle(gridLine).display === 'none' && !w.exploreGridOpsTail,
-            "display=" + w.getComputedStyle(gridLine).display + " tail=" + String(w.exploreGridOpsTail));
+        await pause(150);
+        rec("grid-clear-restores-base",
+            ta.value.endsWith('| ssql limit 1'),
+            ta.value);
         // Enter runs the bar; Shift+Enter does not (it makes a newline).
         ta.value = "ssql from data.jsonl | ssql limit 1";
         ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
