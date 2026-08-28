@@ -12,7 +12,11 @@ grid gestures are model edits — clicks parse the bar, replace their
 own trailing stages, print, and rerun through the ONE run path;
 the parallel ops path, the grid: truth line, and the Copy CLI
 side-channel are deleted (the bar IS the truth). Phase 3 (the
-widget forms) unscheduled. Ross: "we do need to think
+widget forms) PARKED 2026-08-28 — highest cost, smallest marginal
+value while adoption waits for GopherCon 2027; a cheap "stage
+palette" (command list from -spec-json, click inserts a template
+stage with hint tokens into the bar) is queued in TODO as the
+demand probe. If the palette gets used, build the forms. Ross: "we do need to think
 about a widget based query builder — but we need to do it right and
 follow our principles — and it needs to be bijective."
 
