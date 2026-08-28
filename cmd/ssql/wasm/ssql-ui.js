@@ -524,6 +524,7 @@ function shellSplit(s) {
     const tokens = [];
     let current = '';
     let quote = null;
+    let quoted = false; // saw quotes since last push — '' is a REAL empty arg
     for (let i = 0; i < s.length; i++) {
         const c = s[i];
         if (quote) {
@@ -534,13 +535,14 @@ function shellSplit(s) {
             }
         } else if (c === '"' || c === "'") {
             quote = c;
+            quoted = true;
         } else if (/\s/.test(c)) {
-            if (current) { tokens.push(current); current = ''; }
+            if (current || quoted) { tokens.push(current); current = ''; quoted = false; }
         } else {
             current += c;
         }
     }
-    if (current) tokens.push(current);
+    if (current || quoted) tokens.push(current);
     return tokens;
 }
 
@@ -707,4 +709,66 @@ function ssqlUIWriteUpload(name, contents) {
     schemaFieldsCache.clear();
     setTransientStatus('Uploaded ' + name + ' — use it in pipelines by name');
     if (window.ssqlUIOnUpload) window.ssqlUIOnUpload(name);
+}
+
+// --- Pipeline model (DFC118 Phase 1) ---
+// M = a list of stages; each stage is either {argv:[...]} — tokenized
+// by shellSplit, the SAME tokenizer the run path uses — or
+// {text:"..."} opaque, for stages whose argv round-trip would lose
+// information (process substitutions, comments). The laws:
+//   parseModel(printModel(m)) deep-equals m          (print loses nothing)
+//   printModel(parseModel(t)) is canonical & idempotent
+// Totality comes from the opaque escape hatch — never drop, never
+// "repair". The harness round-trip corpus gate enforces both laws.
+
+// Split a pipeline into top-level stages on '|', respecting quotes
+// and <( ... ) process-substitution nesting.
+function splitModelStages(text) {
+    const stages = [];
+    let cur = '', quote = null, depth = 0;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (quote) {
+            cur += c;
+            if (c === quote) quote = null;
+        } else if (c === '"' || c === "'") {
+            cur += c; quote = c;
+        } else if (c === '<' && text[i + 1] === '(') {
+            cur += '<('; depth++; i++;
+        } else if (c === ')' && depth > 0) {
+            cur += c; depth--;
+        } else if (c === '|' && depth === 0) {
+            stages.push(cur); cur = '';
+        } else {
+            cur += c;
+        }
+    }
+    stages.push(cur);
+    return stages;
+}
+
+function ssqlUIParseModel(text) {
+    return splitModelStages(text).map(raw => {
+        const t = raw.replace(/\s+/g, ' ').trim();
+        // Opaque: procsubs and comments don't survive argv round-trips.
+        if (raw.includes('<(') || raw.includes('#')) return { text: t };
+        let rest = t;
+        if (rest === 'ssql') rest = '';
+        else if (rest.startsWith('ssql ')) rest = rest.slice(5);
+        return { argv: shellSplit(rest) };
+    });
+}
+
+function ssqlUIQuoteArg(a) {
+    a = String(a);
+    return /[\s'"|<>()#]/.test(a) || a === ''
+        ? "'" + a.replace(/'/g, "'\\''") + "'"
+        : a;
+}
+
+function ssqlUIPrintModel(m) {
+    return m.map(st => st.argv
+        ? ('ssql ' + st.argv.map(ssqlUIQuoteArg).join(' ')).trimEnd()
+        : st.text
+    ).join(' | ');
 }

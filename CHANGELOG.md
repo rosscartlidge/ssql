@@ -5,6 +5,25 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **DFC118 Phase 1: the pipeline model** — foundations for the
+  bijective builder, no UI change. autocli v4.16.0 grew `-spec-json`
+  (machine-readable command-tree dump: flag metadata, expression
+  marks, completer kinds with static enums inline — where's operator
+  list came through with `regex`, which the removed widget builder's
+  hand-copied list never had). The workspace gained
+  `ssqlUIParseModel`/`ssqlUIPrintModel` — stages as argv via the run
+  path's own tokenizer, opaque-text escape hatch for procsubs and
+  comments — with round-trip laws property-tested in the harness.
+
+### Fixed
+- **Empty quoted args survive browser execution** — `where -if note
+  eq ''` silently dropped the `''` in the workspace tokenizer, so
+  terminal and browser disagreed on arity. Found by the model
+  round-trip corpus on its first run.
+
 ## [4.76.0] - 2026-08-27
 
 ### Fixed

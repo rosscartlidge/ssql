@@ -110,6 +110,43 @@ async function run() {
         ta.value = "ssql from data.jsonl |\n  ssql where -if dept eq Eng |\n  ssql sort salary -desc";
         w.exploreRunBar();
         rec("bar-multiline-runs", w.exploreLastRowCount === 2, "rows=" + w.exploreLastRowCount);
+        // DFC118 Phase 1: the pipeline MODEL and its round-trip laws.
+        // parseModel(printModel(m)) must deep-equal m (print loses
+        // nothing); printModel(parseModel(t)) must be idempotent
+        // (canonicalization). Opaque stages (procsub, comments) must
+        // survive verbatim — totality, never repair.
+        {
+            const corpus = [
+                "ssql from data.jsonl | ssql where -if dept eq Eng",
+                "ssql from data.jsonl | ssql where -if name eq 'Ann E' | ssql sort salary -desc",
+                "ssql from data.jsonl |\n  ssql group-by dept -sum salary total",
+                "ssql   from    data.jsonl",
+                "ssql from data.jsonl | ssql update -set note '' | ssql where -if note eq ''",
+                "ssql join <(ssql from kind.csv) -on a b",
+                "ssql from x.csv # keep my comment",
+                "ssql from data.jsonl | ssql where -if a gt 5 + -if b lt 3",
+                "ssql from data.jsonl | ssql update -set msg 'it'\\''s'",
+            ];
+            let rtBad = [];
+            for (const t of corpus) {
+                const m = w.ssqlUIParseModel(t);
+                const p = w.ssqlUIPrintModel(m);
+                const m2 = w.ssqlUIParseModel(p);
+                const p2 = w.ssqlUIPrintModel(m2);
+                if (JSON.stringify(m) !== JSON.stringify(m2)) rtBad.push('law1: ' + t + ' :: ' + p);
+                if (p !== p2) rtBad.push('law2: ' + t + ' :: ' + p + ' vs ' + p2);
+            }
+            rec("model-roundtrip-laws", rtBad.length === 0, rtBad.join(' || ').slice(0, 300));
+            // The model's tokenizer IS the run path's tokenizer: an
+            // empty quoted arg must survive to execution (was silently
+            // dropped — terminal and browser disagreed on arity).
+            ta.value = "ssql from data.jsonl | ssql update -set note '' | ssql where -if note eq ''";
+            w.exploreRunBar();
+            rec("empty-quoted-arg-executes", w.exploreLastRowCount === 4, "rows=" + w.exploreLastRowCount);
+            const opq = w.ssqlUIParseModel("ssql join <(ssql from kind.csv) -on a b");
+            rec("model-opaque-procsub", !!opq[0].text && opq[0].text.includes('<('), JSON.stringify(opq));
+        }
+
         // Grid ops are a REAL ssql segment over the CURRENT rows
         // (DFC118 discussion find: they used to run over the ORIGINAL
         // data, silently discarding bar results), surfaced as text.

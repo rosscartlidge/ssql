@@ -2,12 +2,13 @@
 
 Reference: DFC118
 Created: 2026-08-27
-Last modified: 2026-08-27
+Last modified: 2026-08-28
 
 [Back to Index](./README.md)
 
-**Status:** Discussion — design principles agreed in outline (Ross +
-Claude, 2026-08-27), no build scheduled. Ross: "we do need to think
+**Status:** Phase 1 SHIPPED 2026-08-28 (autocli v4.16.0 `-spec-json`
++ the model layer with round-trip law gates — no UI change); Phases
+2 (grid ops onto the model) and 3 (the widget forms) unscheduled. Ross: "we do need to think
 about a widget based query builder — but we need to do it right and
 follow our principles — and it needs to be bijective."
 
@@ -187,9 +188,11 @@ row-count/status story also unifies.
 
 ## Open questions
 
-1. `-spec-json` shape: whole tree at once (startup cost, simple) vs
-   per-command lazy (chatty, always fresh)? Leaning whole-tree — the
-   registry is small and the dump is generated from the same structs.
+1. ~~`-spec-json` shape~~ — RESOLVED (Phase 1): whole tree, one
+   call. Live check: 32 commands dump instantly; where's operator
+   enum came through with `regex` in it — an operator the dead
+   builder's hand-copied list never had. The drift argument, proven
+   by its first output.
 2. Mid-edit invalid states: forms want field-by-field editing but M
    is argv — likely each stage widget holds a draft argv that only
    commits to M when it parses. Does the draft break law 3 UX?
