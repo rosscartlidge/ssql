@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-08-28 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-08-29 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -122,10 +122,11 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC112 | 2026-08-23 | 2026-08-26 | [Cloud Data Strategy: Mounts, Serve-in-Region, and `from https://`](./dfc112_cloud_data_strategy.md) |
 | DFC113 | 2026-08-24 | 2026-08-26 | [The Scale Gate: Budget Assertions on Large Fixtures](./dfc113_scale_gate.md) |
 | DFC114 | 2026-08-25 | 2026-08-25 | [642k to 98M Rows per Second: A Performance Journey](./dfc114_performance_journey.md) |
-| DFC115 | 2026-08-25 | 2026-08-25 | [Commands Are the Authority on Themselves](./dfc115_commands_are_the_authority.md) |
+| DFC115 | 2026-08-25 | 2026-08-29 | [Commands Are the Authority on Themselves](./dfc115_commands_are_the_authority.md) |
 | DFC116 | 2026-08-26 | 2026-08-26 | [Authority Survey: Where DFC115 Thinking Can Still Improve the Code](./dfc116_authority_survey.md) |
 | DFC117 | 2026-08-26 | 2026-08-27 | [Explore Slims to Head + Grid + Bar: Widget Builder and JS Fallback Removed](./dfc117_explore_widgets_removal.md) |
 | DFC118 | 2026-08-27 | 2026-08-28 | [A Widget Query Builder Done Right: Spec-Driven and Bijective](./dfc118_bijective_query_builder.md) |
+| DFC119 | 2026-08-29 | 2026-08-29 | [The Display-Sink Protocol: Chart, Animate, and Every Visual After Them](./dfc119_display_sink_protocol.md) |
 
 <!-- DFC-INDEX-END -->
 

@@ -3635,12 +3635,38 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             reader.onload = () => ssqlUIWriteUpload(file.name, reader.result);
             reader.readAsText(file);
         });
+        // Set by exploreRunHead around its tail rerun: a tail failure in
+        // that window with an unknown-field error means the HEAD's schema
+        // changed under the tail — offer a one-click reset instead of
+        // making the user connect the dots (default stays persistence +
+        // loud failure; reset is the USER'S choice at the useful moment).
+        let exploreHeadJustRan = false;
         window.exploreRunBar = function() {
             let text = document.getElementById('pipeline').value.trim().replace(/[|\s]+$/, '');
             if (!text) return;
             _fsResetWriteLog();
             const res = executePipeline(text + ' | ssql to jsonl', false);
-            if (res.exitCode !== 0) { showOutput(res, 'Pipeline failed'); return; }
+            const afterHead = exploreHeadJustRan;
+            exploreHeadJustRan = false;
+            if (res.exitCode !== 0) {
+                showOutput(res, 'Pipeline failed');
+                if (afterHead && /unknown field/i.test(res.stderr || '')) {
+                    const out = document.getElementById('output');
+                    const note = document.createElement('div');
+                    note.style.cssText = 'margin-top:8px;';
+                    note.textContent = 'The server pipeline produced different fields than this local pipeline expects.';
+                    const btn = document.createElement('button');
+                    btn.textContent = 'Reset local pipeline';
+                    btn.style.cssText = 'margin-top:6px; padding:4px 14px;';
+                    btn.addEventListener('click', () => {
+                        document.getElementById('pipeline').value = 'ssql from data.jsonl';
+                        window.exploreRunBar();
+                    });
+                    out.appendChild(note);
+                    out.appendChild(btn);
+                }
+                return;
+            }
             document.getElementById('output').style.display = 'none';
             const rows = [];
             for (const line of res.stdout.split('\n')) {
@@ -3790,6 +3816,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             // fields, tail completing the old ones).
             if (window.ssqlUISchemaCacheClear) window.ssqlUISchemaCacheClear();
             status.textContent = 'Head OK — re-running tail…';
+            exploreHeadJustRan = true;
             window.exploreRunBar();
             // Report the head's wall time so engine differences are
             // VISIBLE (exec vs typed on a big scan is the whole story) —
@@ -4036,6 +4063,14 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             const gridRef = useRef(null);
             const gridApiRef = useRef(null);
             const gridOpsRef = useRef([]);  // Current grid filter/sort ops
+            // Live axis selections for stale-closure callbacks: the
+            // exploreSetRows preserve-if-valid check read the FIRST
+            // render's xField/yField and clobbered user picks on every
+            // head/bar rerun (found by Ross).
+            const xFieldRef = useRef(xField);
+            const yFieldRef = useRef(yField);
+            useEffect(() => { xFieldRef.current = xField; }, [xField]);
+            useEffect(() => { yFieldRef.current = yField; }, [yField]);
             const suppressGridEvents = useRef(false);  // Prevent re-entrant updates
 
             // Column definitions for AG-Grid
@@ -4149,11 +4184,11 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         if (rows.length > 0) {
                             const rf = Object.keys(rows[0]);
                             const numR = rf.filter(f => typeof rows[0][f] === 'number');
-                            if (!rf.includes(xField)) {
+                            if (!rf.includes(xFieldRef.current)) {
                                 const nonNum = rf.filter(f => typeof rows[0][f] !== 'number');
                                 setXField(nonNum[0] || rf[0] || '');
                             }
-                            if (!rf.includes(yField)) setYField(numR[0] || rf[1] || '');
+                            if (!rf.includes(yFieldRef.current)) setYField(numR[0] || rf[1] || '');
                         }
                         setTimeout(() => { suppressGridEvents.current = false; }, 0);
                     };
@@ -4361,6 +4396,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         React.createElement('div', { className: 'control-group' },
                             React.createElement('label', null, 'X-Axis'),
                             React.createElement('select', {
+                                id: 'xAxisSel',
                                 value: xField,
                                 onChange: (e) => setXField(e.target.value)
                             },
@@ -4372,6 +4408,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         React.createElement('div', { className: 'control-group' },
                             React.createElement('label', null, 'Y-Axis'),
                             React.createElement('select', {
+                                id: 'yAxisSel',
                                 value: yField,
                                 onChange: (e) => setYField(e.target.value)
                             },

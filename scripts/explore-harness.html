@@ -180,6 +180,26 @@ async function run() {
         rec("grid-clear-restores-base",
             ta.value.endsWith('| ssql limit 1'),
             ta.value);
+        // Axis picks survive reruns (stale-closure clobber, found by
+        // Ross: exploreSetRows compared against the FIRST render's
+        // xField). Discriminating fixture: the rerun's rows LACK the
+        // initial field but CONTAIN the user's pick — buggy code sees
+        // the stale initial missing and clobbers; fixed code sees the
+        // pick present and keeps it.
+        {
+            ta.value = "ssql from data.jsonl | ssql group-by dept -sum salary total | ssql rename -as dept team";
+            w.exploreRunBar();
+            await pause(200);
+            const xs = doc.getElementById('xAxisSel');
+            Object.getOwnPropertyDescriptor(w.HTMLSelectElement.prototype, 'value').set.call(xs, 'total');
+            xs.dispatchEvent(new w.Event('change', { bubbles: true }));
+            await pause(150);
+            w.exploreRunBar();
+            await pause(200);
+            rec("axis-picks-survive-rerun",
+                doc.getElementById('xAxisSel').value === 'total',
+                doc.getElementById('xAxisSel').value);
+        }
         // Enter runs the bar; Shift+Enter does not (it makes a newline).
         ta.value = "ssql from data.jsonl | ssql limit 1";
         ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
@@ -265,6 +285,25 @@ async function run() {
             doc2.getElementById('headInput').value.indexOf('limit 10000') === -1,
             JSON.stringify(fetched && fetched.body));
         rec("server-head-feeds-tail", w2.exploreLastRowCount === 2, "rows=" + w2.exploreLastRowCount);
+        // Schema change: the head's fields (svc,n) don't include the
+        // tail's reference → loud failure PLUS a one-click reset (only
+        // in the just-after-head window, only for unknown-field).
+        doc2.getElementById('pipeline').value = 'ssql from data.jsonl | ssql where -if oldfield eq x';
+        await w2.exploreRunHead();
+        const out2 = doc2.getElementById('output');
+        const resetBtn = [...out2.querySelectorAll('button')].find(b => b.textContent === 'Reset local pipeline');
+        rec("reset-tail-offered-on-schema-change", !!resetBtn, out2.textContent.slice(0, 150));
+        if (resetBtn) { resetBtn.click(); await pause(150); }
+        rec("reset-tail-resets-and-runs",
+            doc2.getElementById('pipeline').value === 'ssql from data.jsonl' && w2.exploreLastRowCount === 2,
+            doc2.getElementById('pipeline').value + ' rows=' + w2.exploreLastRowCount);
+        // An ORDINARY tail failure (no head run) must NOT offer reset.
+        doc2.getElementById('pipeline').value = 'ssql from data.jsonl | ssql where -if oldfield eq x';
+        w2.exploreRunBar();
+        await pause(100);
+        rec("reset-tail-not-offered-plain-failure",
+            ![...out2.querySelectorAll('button')].some(b => b.textContent === 'Reset local pipeline'),
+            out2.textContent.slice(0, 120));
         // Head failure must surface, not silently keep stale data.
         w2.__srvFetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({ output: '', stderr: 'boom', code: 1 }) });
         await w2.exploreRunHead();

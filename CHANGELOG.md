@@ -5,6 +5,25 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Chart X/Y picks survive head and bar reruns** — the
+  preserve-if-still-valid check compared against the FIRST render's
+  selections (stale closure), so any rerun whose output lacked the
+  page's initial field clobbered the user's choice even when it was
+  still valid. Third stale-closure bug in the grid callbacks; all
+  now go through refs.
+
+### Added
+- **"Reset local pipeline" on schema change** — when the server
+  pipeline produces different fields and the local pipeline's rerun
+  fails with an unknown-field error, the error panel explains what
+  happened and offers a one-click reset (bar → `ssql from
+  data.jsonl`, rerun). The default stays persistence + loud failure
+  — reset is the user's choice at exactly the useful moment, and
+  ordinary tail failures never offer it.
+
 ## [4.77.0] - 2026-08-28
 
 ### Added

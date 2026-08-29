@@ -2,7 +2,7 @@
 
 Reference: DFC115
 Created: 2026-08-25
-Last modified: 2026-08-25
+Last modified: 2026-08-29
 
 [Back to Index](./README.md)
 
@@ -77,3 +77,34 @@ Before writing code that parses another command's arguments or infers
 its behavior: stop, and add a protocol answer to the command instead.
 If the fact is about a pipeline rather than one command, thread it
 through the existing pipeline protocols (schema mode, fragments).
+
+## The principle, matured (2026-08-29): commands own the CONFIG too
+
+The original formulation covered grammar and semantics — consumers
+ASK, never re-parse. The DFC117→DFC119 arc taught the second half,
+articulated by Ross: **the ssql commands should own all the logic
+AND config.** Any state that determines what the user sees or gets
+must be expressible as command text, because command text is the
+only state that is:
+
+- **durable** — it rides share links, Copy CLI, files, and history;
+- **inspectable** — you can read it, diff it, and paste it in a bug
+  report;
+- **single-parsed** — one grammar, one tokenizer, one meaning.
+
+State held anywhere else is a second store, and second stores drift
+exactly like second parsers. The evidence accumulated fast:
+
+| State outside command text | What happened | Cured by |
+|---|---|---|
+| Widget-builder step state | third grammar surface, one-way sync | DFC117 (deleted) |
+| Grid filter/sort ops | invisible segment; ran on stale data; Copy CLI lied | DFC118 Phase 2 (clicks write the bar) |
+| Chart X/Y/type picks | three stale-closure clobbers; unshareable | DFC119 (config becomes a `to chart` stage) |
+
+**Corollary: a UI is a VIEW and an EDITOR of command text — never an
+owner of state.** The workspace's job is to render the pipeline and
+to write gestures back INTO it (grid clicks, axis dropdowns, future
+palette/forms); the moment it keeps its own copy of anything the
+pipeline could express, the copy is a bug that hasn't fired yet.
+Growing a command's grammar to hold new state (DFC119's `to chart`
+extensions) is the correct move, not a workaround.
