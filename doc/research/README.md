@@ -127,6 +127,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC117 | 2026-08-26 | 2026-08-27 | [Explore Slims to Head + Grid + Bar: Widget Builder and JS Fallback Removed](./dfc117_explore_widgets_removal.md) |
 | DFC118 | 2026-08-27 | 2026-08-28 | [A Widget Query Builder Done Right: Spec-Driven and Bijective](./dfc118_bijective_query_builder.md) |
 | DFC119 | 2026-08-29 | 2026-08-29 | [The Display-Sink Protocol: Chart, Animate, and Every Visual After Them](./dfc119_display_sink_protocol.md) |
+| DFC120 | 2026-08-29 | 2026-08-29 | [Drift Is the Enemy: System-Design Principles from Building ssql](./dfc120_system_design_lessons.md) |
 
 <!-- DFC-INDEX-END -->
 
