@@ -1,9 +1,11 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -146,5 +148,36 @@ func TestValidateReadonly(t *testing.T) {
 		if c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)) {
 			t.Errorf("%s: got %v, want containing %q", c.name, err, c.wantErr)
 		}
+	}
+}
+
+// TestStageChainStderrOrder: the FAILING stage's stderr leads —
+// a stage-0 notice (sample's seed line) must not bury the actual
+// error (found by Ross: "Head pipeline failed" led with the seed).
+func TestStageChainStderrOrder(t *testing.T) {
+	ch := &stageChain{}
+	mk := func(script string) {
+		c := exec.Command("sh", "-c", script)
+		ch.cmds = append(ch.cmds, c)
+		ch.stderrs = append(ch.stderrs, bytes.Buffer{})
+		i := len(ch.cmds) - 1
+		c.Stderr = &ch.stderrs[i]
+		_ = c.Run() // ProcessState is what stderr() consults
+	}
+	mk("echo 'sample: seed 42 (pass -sample-seed 42 to reproduce)' >&2; exit 0")
+	mk("echo 'Error: group-by references unknown field' >&2; exit 1")
+	out := ch.stderr()
+	errIdx := strings.Index(out, "Error: group-by")
+	seedIdx := strings.Index(out, "sample: seed")
+	if errIdx < 0 || seedIdx < 0 || errIdx > seedIdx {
+		t.Fatalf("failing stage's error must lead:\n%s", out)
+	}
+	// Passing-stage stderr stays VERBATIM — /api/optimize parses
+	// [rewrite-name] lines out of it, so no labels there.
+	if !strings.Contains(out, "\nsample: seed") && !strings.HasPrefix(out, "sample: seed") {
+		t.Fatalf("passing-stage note must be verbatim (no label):\n%s", out)
+	}
+	if !strings.Contains(out, "failed: Error: group-by") {
+		t.Fatalf("failing stage should carry its label:\n%s", out)
 	}
 }

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Chart config is a pipeline stage (DFC119 Phase A)** — end the
+  bar with `| ssql to chart -type pie -x dept -y n` and the
+  workspace strips the stage from execution, decodes it via the
+  engine's own `-spec-json` (autocli v4.17.0 `.DisplaySink()`
+  metadata — no list of visual commands exists in the page), and
+  drives the chart panel from it. The panel's controls now EDIT that
+  stage through the model, and every run writes the stage the panel
+  is showing (nothing implicit — Ross's call), so chart state rides
+  share links and Copy CLI by construction. Grid gestures insert
+  their stages before the trailing sink. A stage the
+  spec can't decode executes normally — errors stay loud. In a
+  plain terminal `to chart` behaves exactly as before.
+
+### Fixed
+- **Three error-message truths from one typo** (Ross ran `group-by
+  relationship count count` in a served head): the sample-seed hint
+  named the wrong flag (`-seed` for `from … -sample`, whose flag is
+  `-sample-seed` — context-aware now); serve buried the actual error
+  under stage-0's seed notice (failing stage's stderr now leads,
+  stages labelled); and a dashless aggregate name now gets pointed
+  at its flag ("count" looks like the -count flag) with the
+  unknown-field list deduplicated.
+
+### Removed
+- **HTTPFile readahead: built, benchmarked, deleted** (closing
+  DFC112). The premise was false — arrow already reads whole column
+  chunks (18 requests/22MB on the 1.2GB pruned group-by) and the
+  "7s vs 0.15s" gap was exec-vs-typed-compiled engines, not
+  transport (local exec: 6.97s). Kept: an HTTPFile request counter
+  and a premise gate that reopens the question if a future reader
+  goes chatty.
+
+## [Unreleased]
+
 ### Fixed
 - **Chart X/Y picks survive head and bar reruns** — the
   preserve-if-still-valid check compared against the FIRST render's

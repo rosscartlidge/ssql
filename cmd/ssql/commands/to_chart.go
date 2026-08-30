@@ -14,6 +14,7 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 	colorScales := []string{"viridis", "plasma", "inferno", "magma", "cividis", "turbo"}
 
 	cmd.Subcommand("chart").
+		DisplaySink("chart").
 		Description("Create interactive HTML chart").
 		Example("ssql from data.csv | ssql to chart -x date -y revenue", "Create line chart of revenue over time").
 		Example("ssql from sales.csv | ssql to chart -x product -y sales -y profit", "Create multi-series chart with sales and profit").

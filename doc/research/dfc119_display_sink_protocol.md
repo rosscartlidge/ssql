@@ -2,12 +2,20 @@
 
 Reference: DFC119
 Created: 2026-08-29
-Last modified: 2026-08-29
+Last modified: 2026-08-30
 
 [Back to Index](./README.md)
 
-**Status:** Discussion — architecture agreed in outline (Ross +
-Claude, 2026-08-29), phases below unscheduled. Trigger: head reruns
+**Status:** Phase A SHIPPED 2026-08-30 (autocli v4.17.0
+`.DisplaySink()` in -spec-json; the generic spec-driven decoder; a
+trailing `to chart` stage strips from execution and drives the
+panel; controls edit the stage via the model, appending on first
+touch; undecodable stages execute loudly; the renderer REGISTRY ships in
+Phase A too — dispatch by sink key, unregistered keys fail loudly —
+so Phase B's acceptance test is meaningful from day one). Phase B
+(animate: one declaration + one renderer registration, NO dispatch
+edits — scheduled post-release) and C (one renderer, both worlds)
+pending. Trigger: head reruns
 lost X/Y chart picks (a stale-closure bug, fixed) and Ross's
 observation that the chart config should be a PIPELINE STAGE — plus
 "we want a nice extensible architecture — there are other graphical
@@ -128,7 +136,9 @@ coexist — but no NEW visual should ship two renderers.)
 3. `to explore` itself is a sink that produces the workspace — it
    stays OUT of the protocol (a workspace inside a workspace is
    recursion nobody asked for).
-4. Does the auto-picked default chart WRITE a sink stage into the
-   bar on first render (maximal truthfulness, noisier bar) or stay
-   implicit until the user touches a control (quieter)? Leaning:
-   stay implicit until touched.
+4. ~~Implicit vs always-written~~ — RESOLVED (Ross, 2026-08-30):
+   ALWAYS WRITTEN ("I don't like implicit stuff"). Every successful
+   run without a sink stage writes one reflecting the panel's final
+   state (text-only, no rerun); the bar always spells the chart
+   being shown. Consequence handled: grid stages insert BEFORE the
+   trailing sink (sort-after-chart would be a broken pipeline).

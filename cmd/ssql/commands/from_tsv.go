@@ -296,7 +296,7 @@ func readTSVHeaders(r io.Reader) ([]string, error) {
 // executeFromTSVSample is the -sample path for TSV (byte-offset
 // sampling; delimiter auto-detected by the standard TSV reader).
 func executeFromTSVSample(inputFile string, n int, seed int64, seedGiven bool, generate bool) error {
-	resolvedSeed := resolveSampleSeed(seed, seedGiven)
+	resolvedSeed := resolveSampleSeed(seed, seedGiven, "-sample-seed")
 	if shouldGenerate(generate) {
 		return generateFromFileSampleCode("ssql.SampleTSVFile", "input TSV file", inputFile, n, resolvedSeed)
 	}

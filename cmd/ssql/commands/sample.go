@@ -77,7 +77,7 @@ func RegisterSample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, records)
 			}
 
-			resolvedSeed := resolveSampleSeed(int64(seed), seedGiven)
+			resolvedSeed := resolveSampleSeed(int64(seed), seedGiven, "-seed")
 			if haveN {
 				records = ssql.SampleN[ssql.Record](n, resolvedSeed)(records)
 			} else {
@@ -94,12 +94,15 @@ func RegisterSample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 // resolveSampleSeed returns the user's seed, or picks one and SAYS SO —
 // loud reproducibility: every exploratory sample can be re-run.
-func resolveSampleSeed(seed int64, given bool) int64 {
+func resolveSampleSeed(seed int64, given bool, seedFlag string) int64 {
 	if given {
 		return seed
 	}
 	s := time.Now().UnixNano()
-	fmt.Fprintf(os.Stderr, "sample: seed %d (pass -seed %d to reproduce)\n", s, s)
+	// seedFlag names the CALLER'S flag — `sample` takes -seed, `from
+	// … -sample` takes -sample-seed; a hint naming the wrong flag
+	// sends the user to an unknown-flag error (found by Ross).
+	fmt.Fprintf(os.Stderr, "sample: seed %d (pass %s %d to reproduce)\n", s, seedFlag, s)
 	return s
 }
 
@@ -142,7 +145,7 @@ func generateSampleCode(n int, percent float64, haveN bool, seed int64, seedGive
 		inputVar = "records"
 	}
 	outputVar := uniqueVarName("sampled", fragments)
-	resolvedSeed := resolveSampleSeed(seed, seedGiven)
+	resolvedSeed := resolveSampleSeed(seed, seedGiven, "-seed")
 	params := []lib.CodeParam{
 		{Name: "sample-seed", Default: fmt.Sprintf("%d", resolvedSeed), Help: "sampling RNG seed", VarName: "flagSampleSeed", Type: "int"},
 	}

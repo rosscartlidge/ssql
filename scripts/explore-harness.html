@@ -147,6 +147,9 @@ async function run() {
             rec("model-opaque-procsub", !!opq[0].text && opq[0].text.includes('<('), JSON.stringify(opq));
         }
 
+        // Always-written sinks: bars now end with the chart stage the
+        // panel is showing. dataPart() strips it for data-flow asserts.
+        const dataPart = (v) => v.split(' | ssql to chart')[0];
         // DFC118 Phase 2: grid gestures are MODEL EDITS on the bar —
         // one model, one run path. Clicks WRITE the stages into the
         // bar (the GUI teaching the CLI), replace their own stages on
@@ -157,7 +160,8 @@ async function run() {
         w.exploreApplyGridOps([{ op: 'sort', field: 'salary', desc: false }]);
         await pause(150);
         rec("grid-writes-into-bar",
-            ta.value === "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary",
+            dataPart(ta.value) === "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary" &&
+            ta.value.includes('| ssql to chart -type'),
             ta.value);
         rec("grid-ops-compose-over-bar",
             w.exploreLastRowCount === 2, // bar's filter survives the click
@@ -165,7 +169,7 @@ async function run() {
         w.exploreApplyGridOps([{ op: 'sort', field: 'salary', desc: true }]);
         await pause(150);
         rec("grid-gesture-replaces-own-stages",
-            ta.value === "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary -desc",
+            dataPart(ta.value) === "ssql from data.jsonl | ssql where -if dept eq Eng | ssql sort salary -desc",
             ta.value);
         // A user edit of the appended stage makes it user-authored:
         // the next gesture must append, never remove the edit.
@@ -173,12 +177,12 @@ async function run() {
         w.exploreApplyGridOps([{ op: 'sort', field: 'name', desc: false }]);
         await pause(150);
         rec("grid-never-edits-user-text",
-            ta.value.includes('| ssql limit 1') && ta.value.endsWith('| ssql sort name'),
+            ta.value.includes('| ssql limit 1') && dataPart(ta.value).endsWith('| ssql sort name'),
             ta.value);
         w.exploreApplyGridOps([]);
         await pause(150);
         rec("grid-clear-restores-base",
-            ta.value.endsWith('| ssql limit 1'),
+            dataPart(ta.value).endsWith('| ssql limit 1'),
             ta.value);
         // Axis picks survive reruns (stale-closure clobber, found by
         // Ross: exploreSetRows compared against the FIRST render's
@@ -200,6 +204,75 @@ async function run() {
                 doc.getElementById('xAxisSel').value === 'total',
                 doc.getElementById('xAxisSel').value);
         }
+        // Display sinks (DFC119 Phase A): a trailing `to chart` stage
+        // is CONFIG — stripped from execution, decoded via the spec,
+        // rendered by the panel; controls EDIT the stage via the model.
+        {
+            ta.value = "ssql from data.jsonl | ssql group-by dept -count n | ssql to chart -type pie -x dept -y n";
+            w.exploreRunBar();
+            await pause(250);
+            rec("sink-strips-and-runs-data-stages",
+                w.exploreLastRowCount === 2, // group-by result reached the grid
+                "rows=" + w.exploreLastRowCount);
+            rec("sink-config-drives-panel",
+                doc.getElementById('chartTypeSel').value === 'pie' &&
+                doc.getElementById('xAxisSel').value === 'dept' &&
+                doc.getElementById('yAxisSel').value === 'n',
+                doc.getElementById('chartTypeSel').value + '/' + doc.getElementById('xAxisSel').value + '/' + doc.getElementById('yAxisSel').value);
+            // Control edit rewrites ONLY its flag; user flags survive.
+            const setSel = (el, v) => {
+                Object.getOwnPropertyDescriptor(w.HTMLSelectElement.prototype, 'value').set.call(el, v);
+                el.dispatchEvent(new w.Event('change', { bubbles: true }));
+            };
+            setSel(doc.getElementById('chartTypeSel'), 'bar');
+            await pause(250);
+            rec("sink-control-edits-stage",
+                ta.value.includes('-type bar') && ta.value.includes('-x dept') && ta.value.includes('-y n'),
+                ta.value);
+            // First control touch APPENDS the stage when none exists.
+            ta.value = "ssql from data.jsonl | ssql group-by dept -count n";
+            w.exploreRunBar();
+            await pause(250);
+            setSel(doc.getElementById('chartTypeSel'), 'line');
+            await pause(250);
+            rec("sink-append-on-first-touch",
+                ta.value.includes('| ssql to chart') && ta.value.includes('-type line'),
+                ta.value);
+            // The appended stage carries the WHOLE panel state (type,
+            // x, y) — a stage with only the touched flag shares a
+            // partial chart (found by Ross: bare "-y count").
+            rec("sink-append-captures-full-state",
+                ta.value.includes('-x ') && ta.value.includes('-y '),
+                ta.value);
+            // Unknown flag: NOT decoded — the stage executes and fails
+            // loudly instead of being silently rendered.
+            ta.value = "ssql from data.jsonl | ssql to chart -bogus x";
+            w.exploreRunBar();
+            await pause(250);
+            rec("sink-unknown-flag-loud",
+                doc.getElementById('output').textContent.includes('Pipeline failed') ||
+                doc.getElementById('output').textContent.length > 0,
+                doc.getElementById('output').textContent.slice(0, 100));
+            ta.value = "ssql from data.jsonl";
+            w.exploreRunBar();
+            await pause(250);
+            // Axis guess: all-numeric data takes the first two
+            // NUMERIC fields — never the same field on both axes.
+            ta.value = "ssql from data.jsonl | ssql update -set-expr double 'salary * 2' | ssql include salary double";
+            w.exploreRunBar();
+            await pause(250);
+            rec("axis-guess-all-numeric",
+                doc.getElementById('xAxisSel').value === 'salary' &&
+                doc.getElementById('yAxisSel').value === 'double',
+                doc.getElementById('xAxisSel').value + '/' + doc.getElementById('yAxisSel').value);
+            ta.value = "ssql from data.jsonl";
+            w.exploreRunBar();
+            await pause(250);
+            rec("sink-always-written",
+                ta.value.includes('| ssql to chart -type') && ta.value.includes('-x ') && ta.value.includes('-y '),
+                ta.value);
+        }
+
         // Enter runs the bar; Shift+Enter does not (it makes a newline).
         ta.value = "ssql from data.jsonl | ssql limit 1";
         ta.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
@@ -295,7 +368,7 @@ async function run() {
         rec("reset-tail-offered-on-schema-change", !!resetBtn, out2.textContent.slice(0, 150));
         if (resetBtn) { resetBtn.click(); await pause(150); }
         rec("reset-tail-resets-and-runs",
-            doc2.getElementById('pipeline').value === 'ssql from data.jsonl' && w2.exploreLastRowCount === 2,
+            doc2.getElementById('pipeline').value.startsWith('ssql from data.jsonl') && w2.exploreLastRowCount === 2,
             doc2.getElementById('pipeline').value + ' rows=' + w2.exploreLastRowCount);
         // An ORDINARY tail failure (no head run) must NOT offer reset.
         doc2.getElementById('pipeline').value = 'ssql from data.jsonl | ssql where -if oldfield eq x';

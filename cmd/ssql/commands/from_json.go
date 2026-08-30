@@ -277,7 +277,7 @@ func readJSONSchemaAware(r io.Reader) iter.Seq[ssql.Record] {
 // executeFromJSONLSample is the -sample path for JSONL (byte-offset
 // sampling; honours a leading _schema header; JSON arrays refuse).
 func executeFromJSONLSample(inputFile string, n int, seed int64, seedGiven bool, generate bool) error {
-	resolvedSeed := resolveSampleSeed(seed, seedGiven)
+	resolvedSeed := resolveSampleSeed(seed, seedGiven, "-sample-seed")
 	if shouldGenerate(generate) {
 		return generateFromFileSampleCode("ssql.SampleJSONLFile", "input JSONL file", inputFile, n, resolvedSeed)
 	}

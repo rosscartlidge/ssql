@@ -535,15 +535,31 @@ func (ch *stageChain) wait() error {
 	return upstreamErr
 }
 
-// stderr joins the non-empty per-stage stderr captures.
+// stderr joins the non-empty per-stage stderr captures, each labelled
+// with its stage command, FAILING stages first — a stage-0 notice
+// (e.g. the sample seed) must not bury the actual error below it
+// (found by Ross: "Head pipeline failed" led with the seed line).
 func (ch *stageChain) stderr() string {
-	var parts []string
+	var failed, notes []string
 	for i := range ch.stderrs {
-		if t := strings.TrimSpace(ch.stderrs[i].String()); t != "" {
-			parts = append(parts, t)
+		t := strings.TrimSpace(ch.stderrs[i].String())
+		if t == "" {
+			continue
+		}
+		if ws := ch.cmds[i].ProcessState; ws != nil && ws.ExitCode() != 0 {
+			name := "stage"
+			if i < len(ch.cmds) && len(ch.cmds[i].Args) > 1 {
+				name = ch.cmds[i].Args[1]
+			}
+			failed = append(failed, name+" failed: "+t)
+		} else {
+			// Verbatim: passing-stage stderr is a protocol surface —
+			// /api/optimize parses [rewrite-name] annotation lines out
+			// of it (labelling broke that; caught by TestServeOptimize).
+			notes = append(notes, t)
 		}
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(append(failed, notes...), "\n")
 }
 
 type flushingWriter struct{ w http.ResponseWriter }

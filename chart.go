@@ -3585,6 +3585,17 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     }
                 };
                 window.ssqlEngine = ssqlWasm; // exposed for e2e harnesses
+                // Display sinks (DFC119): ask the engine to describe
+                // itself once; any subcommand marked displaySink in
+                // -spec-json is recognized as a visual stage. No list
+                // of visual commands exists in this page.
+                try {
+                    const specOut = ssqlExec(['-spec-json'], '');
+                    if (specOut.exitCode === 0) {
+                        window.exploreSpec = JSON.parse(specOut.stdout);
+                        exploreSinks = findDisplaySinks(window.exploreSpec, []);
+                    }
+                } catch (e) { console.warn('spec-json unavailable:', e); }
                 // Boot the shared interactive layer: the data lives in the
                 // virtual FS so completion (fields, VALUES) and the
                 // pipeline bar run against it like any file.
@@ -3635,6 +3646,78 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             reader.onload = () => ssqlUIWriteUpload(file.name, reader.result);
             reader.readAsText(file);
         });
+        // --- Display sinks (DFC119 Phase A) ---
+        let exploreSinks = []; // [{path:['to','chart'], key:'chart', spec}]
+        function findDisplaySinks(node, path) {
+            let out = [];
+            if (node.displaySink) out.push({ path: path.slice(), key: node.displaySink, spec: node });
+            for (const [name, sub] of Object.entries(node.subcommands || {})) {
+                out = out.concat(findDisplaySinks(sub, path.concat(name)));
+            }
+            return out;
+        }
+        // matchSinkStage: does this stage argv start with a sink's path?
+        function matchSinkStage(argv) {
+            for (const sk of exploreSinks) {
+                if (sk.path.length <= argv.length && sk.path.every((w, i) => argv[i] === w)) return sk;
+            }
+            return null;
+        }
+        // decodeSinkArgv: generic argv→config, arities from the SPEC —
+        // no renderer ever hand-parses argv. Returns null on any token
+        // the spec doesn't know: the stage then EXECUTES normally so
+        // errors surface loudly instead of being silently rendered.
+        function decodeSinkArgv(sk, argv) {
+            const flags = {};
+            for (const f of sk.spec.flags || []) for (const nm of f.names) flags[nm] = f;
+            const cfg = { _sink: sk.key, _positionals: [] };
+            let i = sk.path.length;
+            while (i < argv.length) {
+                const t = argv[i];
+                if (t.startsWith('-')) {
+                    const f = flags[t];
+                    if (!f) return null;
+                    const name = f.names[0];
+                    if (f.bool) { cfg[name] = true; i++; continue; }
+                    const arity = (f.args || []).length || 1;
+                    const vals = argv.slice(i + 1, i + 1 + arity);
+                    if (vals.length < arity) return null;
+                    if (f.accumulate) { (cfg[name] = cfg[name] || []).push(...vals); }
+                    else cfg[name] = arity === 1 ? vals[0] : vals;
+                    i += 1 + arity;
+                } else {
+                    cfg._positionals.push(t);
+                    i++;
+                }
+            }
+            return cfg;
+        }
+        // exploreWriteChartStage: the chart controls EDIT the trailing
+        // sink stage through the model (grid-click pattern): rewrite
+        // only the flags the control owns; append the stage on first
+        // touch; user-authored flags survive.
+        window.exploreWriteChartStage = function(updates, opts) {
+            const ta = document.getElementById('pipeline');
+            if (!ta) return;
+            let m = window.ssqlUIParseModel(ta.value.trim() || 'ssql from data.jsonl');
+            m = m.filter(st => st.text || (st.argv && st.argv.length));
+            let st = m.length ? m[m.length - 1] : null;
+            let sk = st && st.argv ? matchSinkStage(st.argv) : null;
+            if (!sk) {
+                st = { argv: ['to', 'chart'] };
+                m.push(st);
+                sk = matchSinkStage(st.argv);
+                if (!sk) return; // spec unavailable
+            }
+            for (const [flag, val] of Object.entries(updates)) {
+                const idx = st.argv.indexOf(flag, sk.path.length);
+                if (idx >= 0) { st.argv[idx + 1] = val; }
+                else { st.argv.push(flag, val); }
+            }
+            ta.value = window.ssqlUIPrintModel(m);
+            if (!(opts && opts.norun)) window.exploreRunBar();
+        };
+
         // Set by exploreRunHead around its tail rerun: a tail failure in
         // that window with an unknown-field error means the HEAD's schema
         // changed under the tail — offer a one-click reset instead of
@@ -3644,6 +3727,29 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
         window.exploreRunBar = function() {
             let text = document.getElementById('pipeline').value.trim().replace(/[|\s]+$/, '');
             if (!text) return;
+            // Display sink (DFC119): a decodable trailing sink stage is
+            // CONFIG, not execution — strip it, run the data stages,
+            // hand the config to the renderer. Undecodable (unknown
+            // flag) → leave it in: the engine's error stays loud.
+            let sinkCfg = null;
+            {
+                const m = window.ssqlUIParseModel(text);
+                const last = m.length ? m[m.length - 1] : null;
+                if (last && last.argv) {
+                    const sk = matchSinkStage(last.argv);
+                    if (sk) {
+                        const cfg = decodeSinkArgv(sk, last.argv);
+                        if (cfg) {
+                            sinkCfg = cfg;
+                            text = window.ssqlUIPrintModel(m.slice(0, -1));
+                        }
+                    }
+                }
+                // Always-written (Ross: no implicit state): a run with
+                // no decodable sink stage writes one afterwards, so the
+                // bar always spells the chart being shown.
+                window.exploreSinkAbsent = !sinkCfg;
+            }
             _fsResetWriteLog();
             const res = executePipeline(text + ' | ssql to jsonl', false);
             const afterHead = exploreHeadJustRan;
@@ -3674,6 +3780,14 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 if (t.startsWith('{') && !t.startsWith('{"_schema"')) rows.push(JSON.parse(t));
             }
             if (window.exploreSetRows) window.exploreSetRows(rows);
+            // Renderer registry (DFC119): decoded sink config goes to
+            // the renderer registered for its key — adding a visual is
+            // a declaration plus one registration, never an edit here.
+            if (sinkCfg) {
+                const render = (window.exploreRenderers || {})[sinkCfg._sink];
+                if (render) render(sinkCfg, rows);
+                else showOutput({ stdout: '', stderr: 'no renderer registered for display sink "' + sinkCfg._sink + '"', exitCode: 1 }, 'Display sink');
+            }
             showCreatedFiles();
             refreshFileList();
             // Runs can write files (tee) that later stages complete from.
@@ -4069,8 +4183,42 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             // head/bar rerun (found by Ross).
             const xFieldRef = useRef(xField);
             const yFieldRef = useRef(yField);
+            const chartTypeRef = useRef(chartType);
             useEffect(() => { xFieldRef.current = xField; }, [xField]);
             useEffect(() => { yFieldRef.current = yField; }, [yField]);
+            useEffect(() => { chartTypeRef.current = chartType; }, [chartType]);
+            // Display sink bridge (DFC119): a decoded trailing
+            // to-chart stage drives the panel. applyingSink guards
+            // the write-back loop (applying config re-fires the
+            // selects' onChange).
+            const applyingSink = useRef(false);
+            useEffect(() => {
+                window.exploreRenderers = window.exploreRenderers || {};
+                window.exploreRenderers.chart = (cfg) => {
+                    applyingSink.current = true;
+                    if (cfg['-type']) setChartType(cfg['-type']);
+                    const cx = cfg['-x'], cy = Array.isArray(cfg['-y']) ? cfg['-y'][0] : cfg['-y'];
+                    if (cx) setXField(cx);
+                    if (cy) setYField(cy);
+                    setTimeout(() => { applyingSink.current = false; }, 0);
+                };
+                return () => { delete window.exploreRenderers.chart; };
+            }, []);
+            const controlChanged = (flag, value, setter) => {
+                setter(value);
+                if (applyingSink.current) return;
+                if (!window.exploreWriteChartStage) return;
+                // Write the FULL panel state (changed flag substituted):
+                // the stage must reproduce the chart on screen, not just
+                // the last click — a partial stage shares a partial chart.
+                const full = {
+                    '-type': chartTypeRef.current,
+                    '-x': xFieldRef.current,
+                    '-y': yFieldRef.current,
+                };
+                full[flag] = value;
+                window.exploreWriteChartStage(full);
+            };
             const suppressGridEvents = useRef(false);  // Prevent re-entrant updates
 
             // Column definitions for AG-Grid
@@ -4140,6 +4288,13 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 if (!ta) return;
                 let m = window.ssqlUIParseModel(ta.value.trim() || 'ssql from data.jsonl');
                 m = m.filter(st => st.text || (st.argv && st.argv.length));
+                // A trailing display sink is CONFIG, not data flow — grid
+                // stages insert BEFORE it (sort-after-chart would be a
+                // broken pipeline). Detach, edit, reattach.
+                let sinkStage = null;
+                if (m.length && m[m.length - 1].argv && matchSinkStage(m[m.length - 1].argv)) {
+                    sinkStage = m.pop();
+                }
                 const owned = gridAppendedRef.current;
                 while (owned.length && m.length && printStage(m[m.length - 1]) === owned[owned.length - 1]) {
                     m.pop(); owned.pop();
@@ -4150,6 +4305,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     m.push(st);
                     gridAppendedRef.current.push(printStage(st));
                 }
+                if (sinkStage) m.push(sinkStage);
                 ta.value = window.ssqlUIPrintModel(m);
                 window.exploreRunBar();
             };
@@ -4184,11 +4340,28 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         if (rows.length > 0) {
                             const rf = Object.keys(rows[0]);
                             const numR = rf.filter(f => typeof rows[0][f] === 'number');
-                            if (!rf.includes(xFieldRef.current)) {
-                                const nonNum = rf.filter(f => typeof rows[0][f] !== 'number');
-                                setXField(nonNum[0] || rf[0] || '');
+                            // Axis guess (Ross's rule): x = first string
+                            // field, y = first numeric; ALL-numeric data
+                            // takes the first two numerics — never the
+                            // same field on both axes (the old fallback
+                            // charted salary vs salary).
+                            let fx = xFieldRef.current, fy = yFieldRef.current;
+                            const nonNum = rf.filter(f => typeof rows[0][f] !== 'number');
+                            if (!rf.includes(fx)) {
+                                fx = nonNum[0] || numR[0] || rf[0] || '';
+                                setXField(fx);
                             }
-                            if (!rf.includes(yFieldRef.current)) setYField(numR[0] || rf[1] || '');
+                            if (!rf.includes(fy) || fy === fx) {
+                                fy = numR.find(f => f !== fx) || rf.find(f => f !== fx) || '';
+                                setYField(fy);
+                            }
+                            // Always-written: the bar spells the chart.
+                            if (window.exploreSinkAbsent && window.exploreWriteChartStage) {
+                                window.exploreSinkAbsent = false;
+                                window.exploreWriteChartStage(
+                                    { '-type': chartTypeRef.current, '-x': fx, '-y': fy },
+                                    { norun: true });
+                            }
                         }
                         setTimeout(() => { suppressGridEvents.current = false; }, 0);
                     };
@@ -4384,8 +4557,9 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         React.createElement('div', { className: 'control-group' },
                             React.createElement('label', null, 'Chart Type'),
                             React.createElement('select', {
+                                id: 'chartTypeSel',
                                 value: chartType,
-                                onChange: (e) => setChartType(e.target.value)
+                                onChange: (e) => controlChanged('-type', e.target.value, setChartType)
                             },
                                 React.createElement('option', { value: 'line' }, 'Line'),
                                 React.createElement('option', { value: 'bar' }, 'Bar'),
@@ -4398,7 +4572,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                             React.createElement('select', {
                                 id: 'xAxisSel',
                                 value: xField,
-                                onChange: (e) => setXField(e.target.value)
+                                onChange: (e) => controlChanged('-x', e.target.value, setXField)
                             },
                                 ...allFields.map(f =>
                                     React.createElement('option', { key: f, value: f }, f)
@@ -4410,7 +4584,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                             React.createElement('select', {
                                 id: 'yAxisSel',
                                 value: yField,
-                                onChange: (e) => setYField(e.target.value)
+                                onChange: (e) => controlChanged('-y', e.target.value, setYField)
                             },
                                 ...allFields.map(f =>
                                     React.createElement('option', { key: f, value: f }, f)

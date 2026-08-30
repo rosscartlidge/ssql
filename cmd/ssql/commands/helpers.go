@@ -28,6 +28,38 @@ func fieldNames(r ssql.Record) []string {
 	return names
 }
 
+// dedupeStrings preserves first-occurrence order.
+func dedupeStrings(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, v := range in {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// dashlessFlagHint: an "unknown field" that names a known flag of the
+// command (minus its dash) is almost always a forgotten dash — say so.
+// (Found by Ross: `group-by relationship count count` errored with
+// "unknown field(s): count, count" and no pointer to -count.)
+func dashlessFlagHint(command string, missing []string) string {
+	flagsByCommand := map[string][]string{
+		"group-by": {"count", "sum", "avg", "min", "max", "collect", "expr", "stream-expr", "first", "last"},
+		"sort":     {"desc", "asc"},
+	}
+	for _, m := range missing {
+		for _, fl := range flagsByCommand[command] {
+			if m == fl {
+				return fmt.Sprintf(" — %q looks like the -%s flag; flags need the dash (e.g. -%s)", m, fl, fl)
+			}
+		}
+	}
+	return ""
+}
+
 // validateFields checks that all given field names exist in the record.
 // Returns an error listing missing fields and available fields, or nil if all exist.
 func validateFields(r ssql.Record, fields []string, command string) error {
@@ -38,8 +70,10 @@ func validateFields(r ssql.Record, fields []string, command string) error {
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("%s references unknown field(s): %s (available: %s)",
-			command, strings.Join(missing, ", "), strings.Join(fieldNames(r), ", "))
+		missing = dedupeStrings(missing)
+		return fmt.Errorf("%s references unknown field(s): %s (available: %s)%s",
+			command, strings.Join(missing, ", "), strings.Join(fieldNames(r), ", "),
+			dashlessFlagHint(command, missing))
 	}
 	return nil
 }
@@ -57,11 +91,13 @@ func validateFieldsSchema(schema *lib.Schema, fields []string, command string) e
 		}
 	}
 	if len(missing) > 0 {
+		missing = dedupeStrings(missing)
 		available := make([]string, len(schema.Fields))
 		copy(available, schema.Fields)
 		sort.Strings(available)
-		return fmt.Errorf("%s references unknown field(s): %s (available: %s)",
-			command, strings.Join(missing, ", "), strings.Join(available, ", "))
+		return fmt.Errorf("%s references unknown field(s): %s (available: %s)%s",
+			command, strings.Join(missing, ", "), strings.Join(available, ", "),
+			dashlessFlagHint(command, missing))
 	}
 	return nil
 }

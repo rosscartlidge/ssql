@@ -252,7 +252,7 @@ func executeFromCSVSample(inputFile string, typeOverrides map[string]string, def
 	if err != nil {
 		return err
 	}
-	resolvedSeed := resolveSampleSeed(seed, seedGiven)
+	resolvedSeed := resolveSampleSeed(seed, seedGiven, "-sample-seed")
 	if shouldGenerate(generate) {
 		return generateFromCSVSampleCode(inputFile, n, resolvedSeed)
 	}
