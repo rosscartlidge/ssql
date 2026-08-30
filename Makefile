@@ -270,6 +270,7 @@ explore-wasm:
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/ssql/wasm/wasm_exec.js
 	cp cmd/ssql-playground/fs-polyfill.js cmd/ssql/wasm/fs-polyfill.js
 	cp cmd/ssql-playground/ssql-ui.js cmd/ssql/wasm/ssql-ui.js
+	cp cmd/ssql-playground/ssql-ui-viz.js internal/vizjs/ssql-ui-viz.js
 	@echo "✓ cmd/ssql/wasm/ssql-playground.wasm.gz ($$(du -h cmd/ssql/wasm/ssql-playground.wasm.gz | cut -f1))"
 
 # Build WASM playground (full CLI in browser)

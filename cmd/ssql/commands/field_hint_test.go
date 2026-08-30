@@ -70,3 +70,22 @@ func TestFieldHintTokenInBrowserUI(t *testing.T) {
 		}
 	}
 }
+
+
+// TestVizModuleCopiesIdentical: ssql-ui-viz.js is ONE module in two
+// locations (playground source, wasm embed copy synced by make
+// explore-wasm). A drifted copy means artifact and workspace render
+// differently — the exact disease DFC119 Phase C cures.
+func TestVizModuleCopiesIdentical(t *testing.T) {
+	a, err := os.ReadFile("../../ssql-playground/ssql-ui-viz.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile("../../../internal/vizjs/ssql-ui-viz.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(a) != string(b) {
+		t.Fatal("ssql-ui-viz.js copies differ — run make explore-wasm")
+	}
+}

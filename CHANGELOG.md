@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Orphaned chart-stage fields heal loudly** (found by Ross, in two
+  rounds) — when a data-stage change invalidates the trailing
+  `to chart` stage's fields, the panel first drew a silent blank;
+  a pure refusal then left the TEXT naming a dead field while the
+  chart auto-picked valid axes — inconsistent. The always-written
+  law wins: the stage is rewritten to the auto-picked fields and
+  the status announces the correction ("stage updated: -x name →
+  -x dept"). `to animate` keeps a hard loud refusal (a vanished
+  frame field cannot be guessed), with the available-field
+  vocabulary in the message. Round three (Ross's rename repro)
+  hardened the heal: the stage must FULLY spell a drawable chart —
+  absent axes are filled in, not just invalid ones — and the heal
+  validates its picks against the actual rows (a stale React ref
+  once healed a dead field to another dead field).
+
+### Changed
+- **One renderer, both worlds for animate (DFC119 Phase C)** — the
+  workspace panel and the standalone `to animate` artifact now
+  render through the same embedded ssql-ui-viz.js module, so the
+  animation Copy CLI hands out is pixel-for-pixel the one on screen.
+  The module absorbed the superset of both old players: step /
+  first / last buttons, scrubber, speed select, a loop TOGGLE, and
+  keyboard shortcuts (Space, arrows, Home/End, L) — the workspace
+  gains the full player it never had, and the artifact's bespoke
+  frame JS plus the Go-side frame grouping are deleted. Heatmap
+  color scales stay pinned to the global z-range across frames.
+  (The `to chart` artifact turns out to be Chart.js + five CDN
+  dependencies — its migration onto the shared module is scoped as
+  its own TODO.)
+
+## [Unreleased]
+
 ### Added
 - **`to animate` renders live in the workspace (DFC119 Phase B)** —
   end the bar with `| ssql to animate -frame f -x … -y …` and the

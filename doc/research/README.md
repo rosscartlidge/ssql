@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-08-30 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-08-31 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -126,7 +126,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC116 | 2026-08-26 | 2026-08-26 | [Authority Survey: Where DFC115 Thinking Can Still Improve the Code](./dfc116_authority_survey.md) |
 | DFC117 | 2026-08-26 | 2026-08-27 | [Explore Slims to Head + Grid + Bar: Widget Builder and JS Fallback Removed](./dfc117_explore_widgets_removal.md) |
 | DFC118 | 2026-08-27 | 2026-08-28 | [A Widget Query Builder Done Right: Spec-Driven and Bijective](./dfc118_bijective_query_builder.md) |
-| DFC119 | 2026-08-29 | 2026-08-30 | [The Display-Sink Protocol: Chart, Animate, and Every Visual After Them](./dfc119_display_sink_protocol.md) |
+| DFC119 | 2026-08-29 | 2026-08-31 | [The Display-Sink Protocol: Chart, Animate, and Every Visual After Them](./dfc119_display_sink_protocol.md) |
 | DFC120 | 2026-08-29 | 2026-08-30 | [Drift Is the Enemy: System-Design Principles from Building ssql](./dfc120_system_design_lessons.md) |
 
 <!-- DFC-INDEX-END -->

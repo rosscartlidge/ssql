@@ -1,6 +1,8 @@
 package ssql
 
 import (
+	"github.com/rosscartlidge/ssql/v4/internal/vizjs"
+
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -693,232 +695,56 @@ func generateAnimateHTML(records []Record, config AnimateConfig, filename string
 	writer := bufio.NewWriter(file)
 	defer writer.Flush()
 
-	// Group records by frame, preserving insertion order
-	frameOrder := make(map[string]int)
-	var frames []animateFrameGroup
-
+	// One renderer, both worlds (DFC119 Phase C): the artifact carries
+	// raw rows + the flag-keyed config and calls the SAME ssqlViz
+	// module the workspace panel uses. Frame grouping, ordering, the
+	// player, loop, and the global z-range all live in the module —
+	// the old bespoke per-frame JS (and its Go-side grouping) is gone.
+	var recordMaps []map[string]any
 	for _, record := range records {
-		label := fmt.Sprintf("%v", GetOr(record, config.FrameField, ""))
-		if idx, exists := frameOrder[label]; exists {
-			frames[idx].records = append(frames[idx].records, record)
-		} else {
-			frameOrder[label] = len(frames)
-			frames = append(frames, animateFrameGroup{label: label, records: []Record{record}})
-		}
+		recordMaps = append(recordMaps, maps.Collect(record.All()))
 	}
-
-	if config.ChartType == "heatmap" {
-		return generateAnimateHeatmapHTML(writer, frames, config)
-	}
-	return generateAnimateHistogramHTML(writer, frames, config)
-}
-
-// generateAnimateHeatmapHTML creates animated heatmap HTML
-func generateAnimateHeatmapHTML(writer *bufio.Writer, frames []animateFrameGroup, config AnimateConfig) error {
-	// Collect global X/Y label sets
-	xSet := make(map[string]int)
-	ySet := make(map[string]int)
-	var xLabels, yLabels []string
-
-	for _, frame := range frames {
-		for _, record := range frame.records {
-			xVal := fmt.Sprintf("%v", GetOr(record, config.XField, ""))
-			yVal := fmt.Sprintf("%v", GetOr(record, config.YField, ""))
-			if _, exists := xSet[xVal]; !exists {
-				xSet[xVal] = len(xLabels)
-				xLabels = append(xLabels, xVal)
-			}
-			if _, exists := ySet[yVal]; !exists {
-				ySet[yVal] = len(yLabels)
-				yLabels = append(yLabels, yVal)
-			}
-		}
-	}
-
-	// Build per-frame grids, track global zMin/zMax
-	type heatmapFrame struct {
-		Label string  `json:"label"`
-		Grid  [][]any `json:"grid"`
-	}
-	globalZMin := math.Inf(1)
-	globalZMax := math.Inf(-1)
-
-	var jsonFrames []heatmapFrame
-	for _, frame := range frames {
-		grid := make([][]float64, len(yLabels))
-		for i := range grid {
-			grid[i] = make([]float64, len(xLabels))
-			for j := range grid[i] {
-				grid[i][j] = math.NaN()
-			}
-		}
-		for _, record := range frame.records {
-			xVal := fmt.Sprintf("%v", GetOr(record, config.XField, ""))
-			yVal := fmt.Sprintf("%v", GetOr(record, config.YField, ""))
-			zVal := getNumericValue(GetOr(record, config.ZField, 0.0))
-
-			xi := xSet[xVal]
-			yi := ySet[yVal]
-			grid[yi][xi] = zVal
-
-			if !math.IsNaN(zVal) {
-				if zVal < globalZMin {
-					globalZMin = zVal
-				}
-				if zVal > globalZMax {
-					globalZMax = zVal
-				}
-			}
-		}
-		jsonFrames = append(jsonFrames, heatmapFrame{
-			Label: frame.label,
-			Grid:  nanToNullGrid(grid),
-		})
-	}
-
-	if math.IsInf(globalZMin, 1) {
-		globalZMin = 0
-	}
-	if math.IsInf(globalZMax, -1) {
-		globalZMax = 1
-	}
-
-	framesJSON, err := json.Marshal(jsonFrames)
+	rowsJSON, err := json.Marshal(recordMaps)
 	if err != nil {
-		return fmt.Errorf("marshaling frame data: %w", err)
+		return fmt.Errorf("marshaling rows: %w", err)
 	}
-	xLabelsJSON, err := json.Marshal(xLabels)
-	if err != nil {
-		return fmt.Errorf("marshaling x labels: %w", err)
+	cfg := map[string]any{
+		"-frame": config.FrameField,
+		"-x":     config.XField,
+		"-y":     config.YField,
+		"-type":  config.ChartType,
 	}
-	yLabelsJSON, err := json.Marshal(yLabels)
+	if config.ZField != "" {
+		cfg["-z"] = config.ZField
+	}
+	if config.FPS > 0 {
+		cfg["-fps"] = config.FPS
+	}
+	if config.Loop {
+		cfg["-loop"] = true
+	}
+	if config.ColorScale != "" {
+		cfg["-colorscale"] = config.ColorScale
+	}
+	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("marshaling y labels: %w", err)
+		return fmt.Errorf("marshaling config: %w", err)
 	}
 
 	tmpl := template.Must(template.New("animate").Parse(animateHTMLTemplate))
-	templateData := struct {
-		Title      string
-		ChartType  string
-		FrameField string
-		XField     string
-		YField     string
-		ZField     string
-		Frames     template.JS
-		XLabels    template.JS
-		YLabels    template.JS
-		ZMin       float64
-		ZMax       float64
-		FPS        int
-		Loop       bool
-		ColorScale string
-		Theme      string
+	return tmpl.Execute(writer, struct {
+		Title    string
+		Theme    string
+		RowsJSON template.JS
+		CfgJSON  template.JS
+		VizJS    template.JS
 	}{
-		Title:      config.Title,
-		ChartType:  "heatmap",
-		FrameField: config.FrameField,
-		XField:     config.XField,
-		YField:     config.YField,
-		ZField:     config.ZField,
-		Frames:     template.JS(framesJSON),
-		XLabels:    template.JS(xLabelsJSON),
-		YLabels:    template.JS(yLabelsJSON),
-		ZMin:       globalZMin,
-		ZMax:       globalZMax,
-		FPS:        config.FPS,
-		Loop:       config.Loop,
-		ColorScale: config.ColorScale,
-		Theme:      config.Theme,
-	}
-
-	if err := tmpl.Execute(writer, templateData); err != nil {
-		return err
-	}
-	return writer.Flush()
-}
-
-// generateAnimateHistogramHTML creates animated histogram HTML
-func generateAnimateHistogramHTML(writer *bufio.Writer, frames []animateFrameGroup, config AnimateConfig) error {
-	type histogramFrame struct {
-		Label string    `json:"label"`
-		X     []string  `json:"x"`
-		Y     []float64 `json:"y"`
-	}
-
-	globalYMin := 0.0
-	globalYMax := 0.0
-	first := true
-	var jsonFrames []histogramFrame
-	for _, frame := range frames {
-		var xs []string
-		var ys []float64
-		for _, record := range frame.records {
-			xVal := fmt.Sprintf("%v", GetOr(record, config.XField, ""))
-			yVal := getNumericValue(GetOr(record, config.YField, 0.0))
-			if math.IsNaN(yVal) {
-				yVal = 0
-			}
-			xs = append(xs, xVal)
-			ys = append(ys, yVal)
-			if first || yVal > globalYMax {
-				globalYMax = yVal
-			}
-			if first || yVal < globalYMin {
-				globalYMin = yVal
-			}
-			first = false
-		}
-		jsonFrames = append(jsonFrames, histogramFrame{
-			Label: frame.label,
-			X:     xs,
-			Y:     ys,
-		})
-	}
-
-	framesJSON, err := json.Marshal(jsonFrames)
-	if err != nil {
-		return fmt.Errorf("marshaling frame data: %w", err)
-	}
-
-	tmpl := template.Must(template.New("animate").Parse(animateHTMLTemplate))
-	templateData := struct {
-		Title      string
-		ChartType  string
-		FrameField string
-		XField     string
-		YField     string
-		ZField     string
-		Frames     template.JS
-		XLabels    template.JS
-		YLabels    template.JS
-		ZMin       float64
-		ZMax       float64
-		FPS        int
-		Loop       bool
-		ColorScale string
-		Theme      string
-	}{
-		Title:      config.Title,
-		ChartType:  "histogram",
-		FrameField: config.FrameField,
-		XField:     config.XField,
-		YField:     config.YField,
-		ZField:     "",
-		Frames:     template.JS(framesJSON),
-		XLabels:    template.JS("[]"),
-		YLabels:    template.JS("[]"),
-		ZMin:       globalYMin,
-		ZMax:       globalYMax,
-		FPS:        config.FPS,
-		Loop:       config.Loop,
-		ColorScale: config.ColorScale,
-		Theme:      config.Theme,
-	}
-
-	if err := tmpl.Execute(writer, templateData); err != nil {
-		return err
-	}
-	return writer.Flush()
+		Title:    config.Title,
+		Theme:    config.Theme,
+		RowsJSON: template.JS(rowsJSON),
+		CfgJSON:  template.JS(cfgJSON),
+		VizJS:    template.JS(vizjs.JS),
+	})
 }
 
 const animateHTMLTemplate = `<!DOCTYPE html>
@@ -927,200 +753,51 @@ const animateHTMLTemplate = `<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{.Title}}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
-        body { margin: 0; padding: 0; font-family: system-ui, sans-serif; }
-        #chart { width: 100%; height: calc(100vh - 80px); }
-        .player-bar {
-            position: fixed; bottom: 0; left: 0; right: 0;
-            height: 80px; background: #1a1a2e; color: #fff;
-            display: flex; align-items: center; padding: 0 20px; gap: 12px;
+        body { margin: 0; padding: 0; font-family: system-ui, sans-serif;
+               background: {{if eq .Theme "dark"}}#1a1a1a{{else}}#ffffff{{end}};
+               color: {{if eq .Theme "dark"}}#e9ecef{{else}}#212529{{end}}; }
+        #chart { width: 100%; height: calc(100vh - 72px); }
+        /* The player is BUILT by the shared ssqlViz module (ssql-viz-*
+           classes) — this shell only styles it. */
+        #player {
+            position: fixed; bottom: 0; left: 0; right: 0; height: 72px;
+            background: #1a1a2e; color: #fff; padding: 0 20px;
             box-shadow: 0 -2px 10px rgba(0,0,0,0.3); z-index: 1000;
         }
-        .player-bar button {
-            background: none; border: 1px solid #555; color: #fff;
-            width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 14px; transition: background 0.15s;
+        #player .ssql-viz-play {
+            background: none; border: 1px solid #7c3aed; color: #fff;
+            width: 44px; height: 44px; border-radius: 50%; cursor: pointer;
+            font-size: 16px;
         }
-        .player-bar button:hover { background: #333; }
-        .player-bar button.play-btn { width: 44px; height: 44px; font-size: 18px; border-color: #7c3aed; }
-        .player-bar button.play-btn:hover { background: #7c3aed; }
-        .scrubber { flex: 1; }
-        .scrubber input[type=range] {
-            width: 100%; height: 6px; -webkit-appearance: none; appearance: none;
-            background: #333; border-radius: 3px; outline: none;
+        #player .ssql-viz-play:hover { background: #7c3aed; }
+        #player .ssql-viz-scrub { accent-color: #7c3aed; }
+        #player .ssql-viz-speed {
+            background: #333; color: #fff; border: 1px solid #555;
+            border-radius: 4px; padding: 4px 8px;
         }
-        .scrubber input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none; width: 16px; height: 16px;
-            background: #7c3aed; border-radius: 50%; cursor: pointer;
-        }
-        .frame-info { font-size: 13px; white-space: nowrap; min-width: 160px; text-align: right; }
-        .speed-select {
-            background: #1a1a2e; color: #fff; border: 1px solid #555;
-            border-radius: 4px; padding: 4px 8px; font-size: 13px; cursor: pointer;
-        }
-        .loop-btn.active { border-color: #7c3aed; color: #7c3aed; }
+        #player .ssql-viz-label { font-size: 13px; white-space: nowrap; min-width: 160px; text-align: right; }
+        #err { padding: 24px; font-family: monospace; color: #dc3545; }
     </style>
 </head>
 <body>
     <div id="chart"></div>
-    <div class="player-bar">
-        <button id="btn-first" title="First frame (Home)">&#x23EE;</button>
-        <button id="btn-prev" title="Previous frame (Left)">&#x23F4;</button>
-        <button id="btn-play" class="play-btn" title="Play/Pause (Space)">&#x25B6;</button>
-        <button id="btn-next" title="Next frame (Right)">&#x23F5;</button>
-        <button id="btn-last" title="Last frame (End)">&#x23ED;</button>
-        <div class="scrubber">
-            <input type="range" id="scrubber" min="0" max="0" value="0">
-        </div>
-        <div class="frame-info" id="frame-info">Frame 1/1</div>
-        <select class="speed-select" id="speed-select">
-            <option value="0.25">0.25x</option>
-            <option value="0.5">0.5x</option>
-            <option value="1" selected>1x</option>
-            <option value="2">2x</option>
-            <option value="4">4x</option>
-            <option value="8">8x</option>
-        </select>
-        <button id="btn-loop" class="loop-btn{{if .Loop}} active{{end}}" title="Toggle loop (L)">&#x1F501;</button>
-    </div>
+    <div id="player"></div>
+    <script>{{.VizJS}}</script>
     <script>
-        const CHART_TYPE = '{{.ChartType}}';
-        const FRAMES = {{.Frames}};
-        const X_LABELS = {{.XLabels}};
-        const Y_LABELS = {{.YLabels}};
-        const GLOBAL_ZMIN = {{.ZMin}};
-        const GLOBAL_ZMAX = {{.ZMax}};
-        const BASE_FPS = {{.FPS}};
-        const COLOR_SCALE = '{{.ColorScale}}';
-        const FRAME_FIELD = '{{.FrameField}}';
-        const X_FIELD = '{{.XField}}';
-        const Y_FIELD = '{{.YField}}';
-        const Z_FIELD = '{{.ZField}}';
-
-        let currentFrame = 0;
-        let playing = false;
-        let playInterval = null;
-        let speedMultiplier = 1;
-        let loopEnabled = {{if .Loop}}true{{else}}false{{end}};
-
-        const chartDiv = document.getElementById('chart');
-        const scrubber = document.getElementById('scrubber');
-        const frameInfo = document.getElementById('frame-info');
-        const btnPlay = document.getElementById('btn-play');
-        const btnLoop = document.getElementById('btn-loop');
-
-        scrubber.max = FRAMES.length - 1;
-
-        function getTraceData(idx) {
-            const frame = FRAMES[idx];
-            if (CHART_TYPE === 'heatmap') {
-                return [{
-                    z: frame.grid,
-                    x: X_LABELS,
-                    y: Y_LABELS,
-                    type: 'heatmap',
-                    colorscale: COLOR_SCALE,
-                    zmin: GLOBAL_ZMIN,
-                    zmax: GLOBAL_ZMAX,
-                    colorbar: { title: Z_FIELD }
-                }];
-            } else {
-                return [{
-                    x: frame.x,
-                    y: frame.y,
-                    type: 'bar',
-                    marker: { color: '#7c3aed' }
-                }];
-            }
+        const ROWS = {{.RowsJSON}};
+        const CFG = {{.CfgJSON}};
+        const err = window.ssqlViz.render(
+            document.getElementById('chart'), 'animate', CFG, ROWS,
+            { controlsEl: document.getElementById('player'), title: {{printf "%q" .Title}} });
+        if (err) {
+            document.body.innerHTML = '<div id="err">to animate: ' + err + '</div>';
         }
-
-        function getLayout(idx) {
-            const frame = FRAMES[idx];
-            const layout = {
-                title: frame.label,
-                margin: { t: 50, b: 60, l: 60, r: 30 },
-                xaxis: { title: X_FIELD },
-            };
-            if (CHART_TYPE === 'heatmap') {
-                layout.yaxis = { title: Y_FIELD };
-            } else {
-                const yPad = (GLOBAL_ZMAX - GLOBAL_ZMIN) * 0.05;
-                layout.yaxis = { title: Y_FIELD, range: [GLOBAL_ZMIN - yPad, GLOBAL_ZMAX + yPad] };
-            }
-            return layout;
-        }
-
-        // Initial render
-        Plotly.newPlot(chartDiv, getTraceData(0), getLayout(0), { responsive: true });
-
-        function showFrame(idx) {
-            if (idx < 0 || idx >= FRAMES.length) return;
-            currentFrame = idx;
-            Plotly.react(chartDiv, getTraceData(idx), getLayout(idx));
-            scrubber.value = idx;
-            frameInfo.textContent = 'Frame ' + (idx + 1) + '/' + FRAMES.length + ' (' + FRAMES[idx].label + ')';
-        }
-
-        function startPlayback() {
-            if (playing) return;
-            playing = true;
-            btnPlay.innerHTML = '&#x23F8;';
-            const interval = 1000 / (BASE_FPS * speedMultiplier);
-            playInterval = setInterval(() => {
-                let next = currentFrame + 1;
-                if (next >= FRAMES.length) {
-                    if (loopEnabled) { next = 0; } else { stopPlayback(); return; }
-                }
-                showFrame(next);
-            }, interval);
-        }
-
-        function stopPlayback() {
-            playing = false;
-            btnPlay.innerHTML = '&#x25B6;';
-            if (playInterval) { clearInterval(playInterval); playInterval = null; }
-        }
-
-        function restartPlayback() {
-            if (playing) { stopPlayback(); startPlayback(); }
-        }
-
-        // Controls
-        document.getElementById('btn-play').addEventListener('click', () => playing ? stopPlayback() : startPlayback());
-        document.getElementById('btn-first').addEventListener('click', () => { stopPlayback(); showFrame(0); });
-        document.getElementById('btn-last').addEventListener('click', () => { stopPlayback(); showFrame(FRAMES.length - 1); });
-        document.getElementById('btn-prev').addEventListener('click', () => showFrame(Math.max(0, currentFrame - 1)));
-        document.getElementById('btn-next').addEventListener('click', () => showFrame(Math.min(FRAMES.length - 1, currentFrame + 1)));
-        scrubber.addEventListener('input', (e) => showFrame(parseInt(e.target.value)));
-        document.getElementById('speed-select').addEventListener('change', (e) => {
-            speedMultiplier = parseFloat(e.target.value);
-            restartPlayback();
-        });
-        document.getElementById('btn-loop').addEventListener('click', () => {
-            loopEnabled = !loopEnabled;
-            btnLoop.classList.toggle('active', loopEnabled);
-        });
-
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'SELECT') return;
-            switch(e.code) {
-                case 'Space': e.preventDefault(); playing ? stopPlayback() : startPlayback(); break;
-                case 'ArrowLeft': e.preventDefault(); showFrame(Math.max(0, currentFrame - 1)); break;
-                case 'ArrowRight': e.preventDefault(); showFrame(Math.min(FRAMES.length - 1, currentFrame + 1)); break;
-                case 'Home': e.preventDefault(); showFrame(0); break;
-                case 'End': e.preventDefault(); showFrame(FRAMES.length - 1); break;
-                case 'KeyL': loopEnabled = !loopEnabled; btnLoop.classList.toggle('active', loopEnabled); break;
-            }
-        });
-
-        showFrame(0);
     </script>
 </body>
-</html>`
+</html>
+`
 
 // generateHeatmapHTML creates an HTML file with Plotly.js heatmap visualization
 func generateHeatmapHTML(records []Record, config ChartConfig, filename string) error {
@@ -3175,27 +2852,29 @@ func generateExploreHTML(records []Record, chartData ChartData, config ExploreCo
 	// Execute template
 	tmpl := template.Must(template.New("explore").Parse(exploreHTMLTemplate))
 	templateData := struct {
-		Title       string
-		DataJSON    template.JS
-		SchemaJSON  template.JS
-		ConfigJSON  template.JS
-		Theme       string
-		WasmEnabled bool
+		Title        string
+		DataJSON     template.JS
+		SchemaJSON   template.JS
+		ConfigJSON   template.JS
+		Theme        string
+		WasmEnabled  bool
 		WasmExecJS   template.JS
 		FsPolyfillJS template.JS
 		SsqlUIJS     template.JS
+		SsqlVizJS    template.JS
 		WasmBinary   template.JS
 		Version      string
 	}{
-		Title:       config.Title,
-		DataJSON:    template.JS(dataJSON),
-		SchemaJSON:  template.JS(schemaJSON),
-		ConfigJSON:  template.JS(configJSON),
-		Theme:       config.Theme,
-		WasmEnabled: config.WasmEnabled,
+		Title:        config.Title,
+		DataJSON:     template.JS(dataJSON),
+		SchemaJSON:   template.JS(schemaJSON),
+		ConfigJSON:   template.JS(configJSON),
+		Theme:        config.Theme,
+		WasmEnabled:  config.WasmEnabled,
 		WasmExecJS:   template.JS(config.WasmExecJS),
 		FsPolyfillJS: template.JS(config.FsPolyfillJS),
 		SsqlUIJS:     template.JS(config.SsqlUIJS),
+		SsqlVizJS:    template.JS(vizjs.JS),
 		WasmBinary:   template.JS(config.WasmBinary),
 		Version:      config.Version,
 	}
@@ -3446,7 +3125,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
     {{end}}
     <div id="root"></div>
 
-    {{if .WasmEnabled}}<script>{{.SsqlUIJS}}</script>{{end}}
+    {{if .WasmEnabled}}<script>{{.SsqlUIJS}}</script><script>{{.SsqlVizJS}}</script>{{end}}
     <script>
         // Data from the pipeline. Null-coalesce: Go marshals a
         // zero-record slice as null, and DATA.length on null killed the
@@ -4195,8 +3874,43 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             const applyingSink = useRef(false);
             useEffect(() => {
                 window.exploreRenderers = window.exploreRenderers || {};
-                window.exploreRenderers.chart = (cfg) => {
+                window.exploreRenderers.chart = (cfg, rows) => {
                     animateModeRef.current = false; // chart owns the plot div again
+                    const vc = document.getElementById('vizControls');
+                    if (vc) { vc.style.display = 'none'; vc.innerHTML = ''; }
+                    // A data-stage change can orphan the sink's fields
+                    // (found by Ross, twice): first it drew a silent
+                    // blank; then refusal left text(dead field) vs
+                    // chart(auto-picked) inconsistent. The always-written
+                    // law wins: HEAL the stage to the auto-picked valid
+                    // fields and SAY SO — the bar always spells the
+                    // chart being shown, and corrections are announced.
+                    if (rows && rows.length) {
+                        // The stage must FULLY spell a drawable chart:
+                        // orphaned fields heal to valid picks, ABSENT
+                        // axes are filled in, and the medicine is
+                        // validated against the actual rows (refs are
+                        // only a preference — a stale ref once healed a
+                        // dead field to another dead field).
+                        const have = Object.keys(rows[0]);
+                        const nums = have.filter(f => typeof rows[0][f] === 'number');
+                        const nonNum = have.filter(f => typeof rows[0][f] !== 'number');
+                        const wy = Array.isArray(cfg['-y']) ? cfg['-y'][0] : cfg['-y'];
+                        let vx = (cfg['-x'] && have.includes(cfg['-x'])) ? cfg['-x']
+                            : (have.includes(xFieldRef.current) ? xFieldRef.current : (nonNum[0] || have[0]));
+                        let vy = (wy && have.includes(wy)) ? wy
+                            : (have.includes(yFieldRef.current) && yFieldRef.current !== vx ? yFieldRef.current
+                                : (nums.find(f => f !== vx) || have.find(f => f !== vx) || vx));
+                        const heal = {};
+                        const notes = [];
+                        if (vx !== cfg['-x']) { heal['-x'] = vx; notes.push('-x ' + (cfg['-x'] || '(missing)') + ' → ' + vx); }
+                        if (vy !== wy) { heal['-y'] = vy; notes.push('-y ' + (wy || '(missing)') + ' → ' + vy); }
+                        if (notes.length) {
+                            if (window.exploreWriteChartStage) window.exploreWriteChartStage(heal, { norun: true });
+                            if (typeof setTransientStatus === 'function') setTransientStatus('to chart: stage updated to match the data — ' + notes.join(', '));
+                            Object.assign(cfg, heal);
+                        }
+                    }
                     applyingSink.current = true;
                     if (cfg['-type']) setChartType(cfg['-type']);
                     const cx = cfg['-x'], cy = Array.isArray(cfg['-y']) ? cfg['-y'][0] : cfg['-y'];
@@ -4211,58 +3925,16 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                 // while animateModeRef holds the div.
                 window.exploreRenderers.animate = (cfg, rows) => {
                     const gd = chartRef.current;
-                    const fail = (msg) => showOutput({ stdout: '', stderr: msg, exitCode: 1 }, 'to animate');
                     if (!gd) return;
-                    const ff = cfg['-frame'], fx = cfg['-x'], fy = cfg['-y'];
-                    if (!ff || !fx || !fy) { fail('to animate needs -frame, -x and -y'); return; }
-                    if (!rows.length || !(ff in rows[0])) { fail('frame field "' + ff + '" not in the result rows'); return; }
-                    const type = cfg['-type'] || 'heatmap';
-                    const fz = cfg['-z'];
-                    if (type === 'heatmap' && !fz) { fail('to animate -type heatmap needs -z'); return; }
-                    // Frames in sorted order (numeric-aware).
-                    const groups = new Map();
-                    for (const r of rows) {
-                        const k = String(r[ff]);
-                        if (!groups.has(k)) groups.set(k, []);
-                        groups.get(k).push(r);
-                    }
-                    const keys = [...groups.keys()].sort((a, b) => {
-                        const na = parseFloat(a), nb = parseFloat(b);
-                        return (isNaN(na) || isNaN(nb)) ? a.localeCompare(b) : na - nb;
-                    });
-                    const traceFor = (rs) => {
-                        if (type === 'histogram') {
-                            return { type: 'bar', x: rs.map(r => r[fx]), y: rs.map(r => r[fy]) };
-                        }
-                        const xs = [...new Set(rs.map(r => r[fx]))];
-                        const ys = [...new Set(rs.map(r => r[fy]))];
-                        const zi = new Map(rs.map(r => [r[fx] + '\u0000' + r[fy], r[fz]]));
-                        return {
-                            type: 'heatmap',
-                            x: xs, y: ys,
-                            colorscale: cfg['-colorscale'] || 'Viridis',
-                            z: ys.map(yv => xs.map(xv => zi.get(xv + '\u0000' + yv) ?? null)),
-                        };
-                    };
-                    const frames = keys.map(k => ({ name: k, data: [traceFor(groups.get(k))] }));
-                    const dur = Math.round(1000 / (parseInt(cfg['-fps']) || 5));
-                    const layout = {
-                        title: { text: (CONFIG.title || '') + ' — ' + ff + ' animation' },
-                        updatemenus: [{
-                            type: 'buttons', showactive: false, x: 0, y: 1.15,
-                            buttons: [
-                                { label: '▶', method: 'animate', args: [null, { frame: { duration: dur, redraw: true }, fromcurrent: true, mode: 'immediate' }] },
-                                { label: '⏸', method: 'animate', args: [[null], { frame: { duration: 0 }, mode: 'immediate' }] },
-                            ],
-                        }],
-                        sliders: [{
-                            steps: keys.map(k => ({ label: k, method: 'animate', args: [[k], { frame: { duration: 0, redraw: true }, mode: 'immediate' }] })),
-                        }],
-                    };
                     animateModeRef.current = true;
-                    Plotly.react(gd, frames[0].data, layout).then(() => {
-                        Plotly.addFrames(gd, frames);
+                    const err = window.ssqlViz.render(gd, 'animate', cfg, rows, {
+                        controlsEl: document.getElementById('vizControls'),
+                        title: (CONFIG.title || '') + ' — ' + cfg['-frame'] + ' animation',
                     });
+                    if (err) {
+                        animateModeRef.current = false;
+                        showOutput({ stdout: '', stderr: err, exitCode: 1 }, 'to animate');
+                    }
                 };
                 return () => { delete window.exploreRenderers.chart; delete window.exploreRenderers.animate; };
             }, []);
@@ -4417,6 +4089,12 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                                 fy = numR.find(f => f !== fx) || rf.find(f => f !== fx) || '';
                                 setYField(fy);
                             }
+                            // Refs must be truthful NOW — the sink bridge
+                            // runs synchronously after this, before React
+                            // re-renders (stale refs healed a dead field
+                            // to another dead field; found by Ross).
+                            xFieldRef.current = fx;
+                            yFieldRef.current = fy;
                             // Always-written: the bar spells the chart.
                             if (window.exploreSinkAbsent && window.exploreWriteChartStage) {
                                 window.exploreSinkAbsent = false;
@@ -4671,6 +4349,10 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                         }
                     }),
 
+                    React.createElement('div', {
+                        id: 'vizControls',
+                        style: { display: 'none', alignItems: 'center', gap: '10px', padding: '4px 0' },
+                    }),
                     // Table Area
                     React.createElement('div', {
                         className: 'table-area',

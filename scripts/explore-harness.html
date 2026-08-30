@@ -279,6 +279,44 @@ async function run() {
             rec("animate-missing-frame-loud",
                 doc.getElementById('output').textContent.includes('-frame'),
                 doc.getElementById('output').textContent.slice(0, 120));
+            // Orphaned sink fields (found by Ross): a data-stage change
+            // that invalidates the chart stage's fields must refuse
+            // LOUDLY with the vocabulary — never a silent blank chart.
+            ta.value = "ssql from data.jsonl | ssql group-by dept -count n | ssql to chart -type bar -x name -y salary";
+            w.exploreRunBar();
+            await pause(250);
+            rec("sink-orphan-fields-heal",
+                ta.value.includes('-x dept') && !ta.value.includes('-x name') &&
+                doc.getElementById('status').textContent.includes('stage updated'),
+                ta.value + ' :: ' + doc.getElementById('status').textContent.slice(0, 100));
+            rec("sink-orphan-heal-consistent",
+                doc.getElementById('xAxisSel').value === 'dept',
+                doc.getElementById('xAxisSel').value);
+            ta.value = "ssql from data.jsonl | ssql group-by dept -count n | ssql to animate -frame dept -x name -y n -type histogram";
+            w.exploreRunBar();
+            await pause(250);
+            rec("animate-orphan-fields-loud",
+                doc.getElementById('output').textContent.includes('unknown field'),
+                doc.getElementById('output').textContent.slice(0, 140));
+            // Ross's field-rename repro: pipeline changes rename the
+            // fields AND the sink stage loses its -y entirely. The
+            // stage must heal to a COMPLETE spelling of the shown
+            // chart (valid -x AND -y), loudly.
+            ta.value = "ssql from data.jsonl | ssql group-by dept -count n | ssql to chart -type bar -x dept -y n";
+            w.exploreRunBar();
+            await pause(250);
+            ta.value = "ssql from data.jsonl | ssql group-by name -count cnt | ssql to chart -type bar -x dept";
+            w.exploreRunBar();
+            await pause(300);
+            rec("sink-heal-rename-x",
+                ta.value.includes('-x name') && !ta.value.includes('-x dept'),
+                ta.value);
+            rec("sink-heal-fills-missing-y",
+                ta.value.includes('-y cnt'),
+                ta.value);
+            rec("sink-heal-panel-consistent",
+                doc.getElementById('xAxisSel').value === 'name' && doc.getElementById('yAxisSel').value === 'cnt',
+                doc.getElementById('xAxisSel').value + '/' + doc.getElementById('yAxisSel').value);
             // Back to a chart: the chart renderer reclaims the div.
             ta.value = "ssql from data.jsonl | ssql to chart -type bar -x dept -y salary";
             w.exploreRunBar();
@@ -764,6 +802,25 @@ async function run() {
             " errs=" + errs5.join(" | ") +
             " status=" + w5.document.getElementById('status').textContent);
         f5.remove();
+
+        // DFC119 Phase C: the ANIMATE ARTIFACT renders via the same
+        // ssqlViz module as the workspace — one renderer, both worlds.
+        const fA = document.createElement('iframe');
+        fA.src = 'exp_anim.html';
+        fA.style.cssText = 'width:900px;height:600px;';
+        document.body.appendChild(fA);
+        const wA = fA.contentWindow;
+        for (let i = 0; i < 100; i++) { if (wA.document.readyState === 'complete' && wA.ssqlViz) break; await pause(50); }
+        await pause(600);
+        const gdA = wA.document.getElementById('chart');
+        rec("artifact-uses-shared-module", !!wA.ssqlViz, String(!!wA.ssqlViz));
+        rec("artifact-renders-frames",
+            gdA && gdA._transitionData && gdA._transitionData._frames && gdA._transitionData._frames.length === 2,
+            gdA && gdA._transitionData ? 'frames=' + gdA._transitionData._frames.length : 'no frames');
+        rec("artifact-has-module-player",
+            !!wA.document.querySelector('#player .ssql-viz-play') && !!wA.document.querySelector('#player .ssql-viz-scrub'),
+            wA.document.getElementById('player') ? wA.document.getElementById('player').innerHTML.slice(0, 80) : 'no player');
+        fA.remove();
 
         rec("share-restore-inputs",
             doc3.getElementById('headInput').value === 'ssql from other.csv | ssql limit 7' &&

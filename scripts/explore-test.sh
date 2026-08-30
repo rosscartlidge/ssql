@@ -17,6 +17,9 @@ printf 'name,dept,salary\nAlice,Eng,95000\nBob,Sales,65000\nCarol,Eng,105000\nDa
 "$tmp/ssql" from csv "$tmp/exp.csv" | "$tmp/ssql" to explore -wasm "$tmp/exp_explore.html" >/dev/null
 # The empty-workspace artifact (GET / flow): zero records, -allow-empty.
 "$tmp/ssql" from jsonl /dev/null | "$tmp/ssql" to explore -wasm -allow-empty "$tmp/exp_empty.html" >/dev/null
+# Animate ARTIFACT (DFC119 Phase C): must render via the same ssqlViz module.
+printf 'f,x,y\n1,a,10\n1,b,20\n2,a,30\n2,b,5\n' > "$tmp/anim.csv"
+"$tmp/ssql" from csv "$tmp/anim.csv" | "$tmp/ssql" to animate -frame f -x x -y y -type histogram -output "$tmp/exp_anim.html" >/dev/null
 cp scripts/explore-harness.html "$tmp/check.html"
 
 port="${EXPLORE_TEST_PORT:-8938}"

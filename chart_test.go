@@ -1339,11 +1339,16 @@ func TestAnimateChartHeatmapBasic(t *testing.T) {
 	if !strings.Contains(html, "Plotly") {
 		t.Error("Should use Plotly.js")
 	}
-	if !strings.Contains(html, "heatmap") {
-		t.Error("Should contain heatmap chart type")
+	if !strings.Contains(html, `"-type":"heatmap"`) {
+		t.Error("Should carry the heatmap type in the sink config")
 	}
-	if !strings.Contains(html, "player-bar") {
-		t.Error("Should contain player controls")
+	// DFC119 Phase C: the artifact embeds the SHARED ssqlViz module
+	// and its player shell — no bespoke frame JS.
+	if !strings.Contains(html, "window.ssqlViz") {
+		t.Error("Should embed the shared ssql-ui-viz.js module")
+	}
+	if !strings.Contains(html, `id="player"`) {
+		t.Error("Should contain the player shell")
 	}
 }
 
@@ -1413,11 +1418,14 @@ func TestAnimateChartHistogramBasic(t *testing.T) {
 	}
 	html := string(content)
 
-	if !strings.Contains(html, "bar") {
-		t.Error("Histogram should use bar chart type")
+	if !strings.Contains(html, `"-type":"histogram"`) {
+		t.Error("Should carry the histogram type in the sink config")
 	}
-	if !strings.Contains(html, "player-bar") {
-		t.Error("Should contain player controls")
+	if !strings.Contains(html, "window.ssqlViz") {
+		t.Error("Should embed the shared ssql-ui-viz.js module")
+	}
+	if !strings.Contains(html, `id="player"`) {
+		t.Error("Should contain the player shell")
 	}
 }
 
@@ -1595,14 +1603,14 @@ func TestAnimateChartHTMLContainsPlayerControls(t *testing.T) {
 	}
 	html := string(content)
 
-	controls := []string{"btn-play", "btn-prev", "btn-next", "btn-first", "btn-last", "scrubber", "speed-select", "btn-loop"}
+	// DFC119 Phase C: the player is BUILT by the shared ssqlViz
+	// module — assert its control vocabulary (both worlds get it).
+	controls := []string{"ssql-viz-play", "ssql-viz-prev", "ssql-viz-next", "ssql-viz-first", "ssql-viz-last", "ssql-viz-scrub", "ssql-viz-speed", "ssql-viz-loop"}
 	for _, ctrl := range controls {
 		if !strings.Contains(html, ctrl) {
 			t.Errorf("HTML should contain player control %q", ctrl)
 		}
 	}
-
-	// Check keyboard shortcuts
 	if !strings.Contains(html, "keydown") {
 		t.Error("HTML should have keyboard event listener")
 	}

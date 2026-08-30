@@ -2,7 +2,7 @@
 
 Reference: DFC119
 Created: 2026-08-29
-Last modified: 2026-08-30
+Last modified: 2026-08-31
 
 [Back to Index](./README.md)
 
@@ -16,8 +16,18 @@ so Phase B's acceptance test is meaningful from day one). Phase B
 SHIPPED 2026-08-30 and the acceptance test HELD: the diff is one
 line in to_animate.go (.DisplaySink), one renderer registration
 (Plotly frames: heatmap/histogram by -frame, play/pause/slider,
-fps), and harness gates — zero dispatch edits. Phase C (one
-renderer, both worlds) pending. Trigger: head reruns
+fps), and harness gates — zero dispatch edits. Phase C: the ANIMATE
+slice SHIPPED 2026-08-31 — ssql-ui-viz.js (source:
+cmd/ssql-playground/, embedded once via internal/vizjs, copies gated
+by TestVizModuleCopiesIdentical) renders animate in BOTH worlds: the
+workspace panel and the standalone artifact call the same module,
+which absorbed the superset of both old players (step/first/last,
+scrubber, speed, loop toggle, keyboard shortcuts, global z-range
+pinning) — the artifact's bespoke frame JS and the Go-side frame
+grouping are deleted. REMAINING (scoped out on discovery): the
+`to chart` artifact is Chart.js + five CDN dependencies, not Plotly
+— unifying it is a migration project with feature reconciliation
+(multi-Y, moving averages, zoom plugin) and its own TODO entry. Trigger: head reruns
 lost X/Y chart picks (a stale-closure bug, fixed) and Ross's
 observation that the chart config should be a PIPELINE STAGE — plus
 "we want a nice extensible architecture — there are other graphical
