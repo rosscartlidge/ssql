@@ -2,7 +2,7 @@
 
 Reference: DFC120
 Created: 2026-08-29
-Last modified: 2026-08-29
+Last modified: 2026-08-30
 
 [Back to Index](./README.md)
 
@@ -85,7 +85,98 @@ someone else's names. A survey (our DFC116) found seven candidates
 in thirty seconds of grep; fixing the two worst took a day and
 deleted twelve copies of one fact.
 
-## 3. Configuration is program text
+## 3. What "asking the authority" looks like, concretely
+
+Abstract principles hide the engineering. These are the actual
+protocol surfaces an ssql command exposes — each one a question a
+consumer can ask instead of a fact it would otherwise copy:
+
+**"What can go at this cursor position?"** — the completion protocol.
+Any consumer (bash, the browser workspace, a future form) sends the
+argv and a cursor index; the command's own declaration answers:
+
+    $ ssql -complete 5 from parquet data.parquet -columns ""
+    a_kind
+    a_name
+    relationship
+    ...
+
+Those are real column names, read from the parquet footer by the
+code that owns the format. Enum answers (where's operators) come
+from the same declaration that parses them at runtime — they cannot
+be out of date.
+
+**"What does the word under the cursor mean?"** — `-help-at POS
+argv…` returns the owning flag's documentation for any position; if
+the declaration marks that argument as an expression slot, the
+response appends the expression-function reference. One keystroke in
+any client, and the help came from the declaration, not a manual.
+
+**"What fields exist at this point in the pipeline?"** — the schema
+shadow mode. Set one environment variable and the SAME binaries run
+the pipeline as an abstract interpretation: each stage reads a
+schema header instead of data, applies its transform to the SCHEMA
+(a rename renames, a group-by replaces fields with keys+aggregates),
+and passes it on:
+
+    $ (export SSQL_MODE=schema;        ssql from csv d.csv | ssql group-by dept -count n)        | ssql generate schema
+    dept
+    n
+
+Completion after a five-stage pipeline is exact because the pipeline
+itself computed the answer — no consumer models what group-by does
+to a schema.
+
+**"How many records would you produce?"** — `from -records` prints
+one integer, computed the cheapest way the owner knows (parquet: the
+footer; csv: a newline count). Born after a UI's hand-rolled parser
+of from's arguments took three drift bugs in a week.
+
+**"Describe your entire grammar."** — `-spec-json` dumps the
+declared command tree: flags, arities, per-argument types,
+expression marks, and completer *kinds* (static enums inline;
+dynamic vocabularies marked so consumers ask the live protocols
+above). This is what lets a UI *render* a command without knowing
+any command.
+
+**"Generate yourself."** — each command emits its own compiled-Go
+and SQL representations as fragments; the code generators assemble
+what commands declare rather than reimplementing their semantics.
+
+Two supporting disciplines make the surfaces trustworthy: the
+completion library itself asks the host tool (a hook) for anything
+it can't derive — the library never grows format knowledge — and
+when a protocol can't answer, consumers show an honest, actionable
+hint token rather than a guess.
+
+### Could this be adopted widely?
+
+Mostly, yes — the ingredients are ordinary:
+
+1. **Declare once.** A CLI framework where flags, args, docs,
+   completers, and semantic marks are one declaration (ours is a
+   builder API; Nushell and PowerShell prove the model at
+   ecosystem scale). Everything else derives from it.
+2. **Meta-flags as protocol.** `-complete`, `-help-at`,
+   `-spec-json` are just hidden entry points on the same binary —
+   any tool can add them; Cobra's `__complete` already does the
+   first.
+3. **The shadow schema mode needs one contract**: a wire format
+   whose header carries the schema, so each process can transform
+   metadata instead of data. Any typed-pipeline ecosystem (or any
+   JSON-lines convention with a schema line) can do this; it is the
+   piece we'd most like to see standardized, because it makes
+   *composition* introspectable, not just single commands.
+4. **UI-writes-text needs a lawful model**: a canonical printer, the
+   round-trip laws, and the ownership rule for machine-written
+   spans. None of it is deep; all of it must be property-tested.
+
+The honest cost: the authority must be *runnable* by every consumer
+(our browser runs the real engine as WASM — that decision carries
+the whole architecture), and protocols must be versioned with the
+same care as any public API.
+
+## 4. Configuration is program text
 
 **The failure, three times.** The browser workspace held state the
 pipeline didn't: a widget builder's step list, the grid's
@@ -119,7 +210,7 @@ are property-tested against the same tokenizer the runtime uses —
 the model *cannot* disagree with execution, because it is not a
 second implementation of parsing.
 
-## 4. One semantics, N implementations → differential gates
+## 5. One semantics, N implementations → differential gates
 
 **The failure.** A `top`-by-string-field operation was fixed in two
 of our five execution paths and left silently wrong in the other
@@ -145,7 +236,7 @@ data, so "first N" equalled "sorted N").
 - *When you fix a result bug anywhere, assume it lives everywhere*
   until a gate proves otherwise.
 
-## 5. A gate you haven't watched fail isn't a gate
+## 6. A gate you haven't watched fail isn't a gate
 
 Three times in one week, a freshly written test passed against the
 bug it was meant to catch: one read a counter that only a different
@@ -157,7 +248,7 @@ before trusting it. Sabotage verification is now as much a part of
 writing a test as the assertion is. It costs one extra build cycle
 and it has never once been a waste of time.
 
-## 6. Fail loudly; never impersonate
+## 7. Fail loudly; never impersonate
 
 **The failures.** A browser fallback implemented "group-by" in
 JavaScript with `parseFloat(x) || 0` coercion — strings silently
@@ -186,7 +277,7 @@ filed a bug.
   and the status line says so. Silent truncation reads as "that's
   all the data."
 
-## 7. A fixture that fits in a pipe buffer tests nothing about scale
+## 8. A fixture that fits in a pipe buffer tests nothing about scale
 
 Five performance bugs shipped in one week — quadratic re-reads,
 accidental full-file scans, a serial path where a parallel one was
@@ -209,7 +300,7 @@ input test and fell only to a real pseudo-terminal driving real
 bash, because readline keymaps and completion scoping simply do not
 exist in a fake.
 
-## 8. Recompute; don't cache what you can ask
+## 9. Recompute; don't cache what you can ask
 
 Our completion system once exported field names into shell
 environment variables so completion could work across pipe
@@ -224,7 +315,7 @@ invalidate by construction (we key one server-side cache by argv
 plus a directory fingerprint); otherwise ask the authority again —
 asking is usually cheaper than you think.
 
-## 9. The best fix deletes something
+## 10. The best fix deletes something
 
 The pattern across every arc: serve's parser — deleted for a
 protocol. The TinyGo mini-engine (a third semantics) — deleted for
@@ -237,7 +328,7 @@ must agree, the elegant fix makes one of them *ask* instead of
 does this change delete?" as a design-review question: refactors
 that only add have to justify themselves.
 
-## 10. Keep your negative results
+## 11. Keep your negative results
 
 A channel-per-row concurrency design measured 3× *slower* than
 single-threaded (~100ns per row of channel transit × millions of
@@ -248,7 +339,7 @@ for simple aggregations (7× slower than CPU — memory-bound), same
 treatment. A negative result that isn't recorded will be re-run at
 full price.
 
-## 11. Institutional memory is a system, not a habit
+## 12. Institutional memory is a system, not a habit
 
 None of the above survives on good intentions. The mechanisms that
 made lessons *stick*:
@@ -275,17 +366,67 @@ made lessons *stick*:
   secondary build for *months*; no one will ever have to remember
   that lesson again, because CI remembers it.
 
-## 12. The meta-principle
+## 13. Prior art: is any of this new?
+
+We looked. Most individual mechanisms have honorable precedent —
+and the combination still seems rare.
+
+**Well-established elsewhere:**
+
+- *Runtime completion served by the program itself*: Cobra's hidden
+  `__complete` subcommand, carapace, bash's `complete -C`; our
+  `-complete` differs mainly in being position-exact and paired with
+  the other surfaces.
+- *Declaration-driven signatures, help, and completion in one
+  place*: PowerShell cmdlets and Nushell command signatures are the
+  large-scale proofs that "declare once, derive everything" works —
+  within a single closed shell/runtime.
+- *Runtime self-description that UIs build themselves from*: gRPC
+  server reflection (grpcurl/grpcui construct requests and whole
+  UIs from it) and Kubernetes' OpenAPI discovery behind `kubectl
+  explain` are `-spec-json`'s server-side cousins.
+- *The N×M → N+M protocol pattern*: the Language Server Protocol is
+  the canonical demonstration that putting intelligence in the
+  authority and a protocol in front of it collapses the
+  editor×language matrix. Our cursor protocols are, in effect, an
+  LSP for a command language — same shape, much smaller.
+- *GUI generates syntax*: SPSS's Paste button and Stata's command
+  echo have taught statisticians the CLI for decades — strictly
+  one-way, GUI → text.
+
+**Rare or (to the best of our searching) novel:**
+
+1. **The schema shadow mode across a real POSIX pipe.** Nushell
+   knows types because it is one closed program; we get
+   pipeline-exact schemas across *separate processes composed by
+   the shell*, by running the actual binaries in a
+   metadata-transforming mode. We found no other CLI ecosystem
+   doing abstract interpretation of arbitrary pipe compositions
+   with the production binaries themselves.
+2. **Bijective GUI↔text.** SPSS pastes one way; grpcui builds
+   requests without a canonical text. A workspace where grid
+   clicks and chart controls *edit the command text in place*,
+   under round-trip laws and a machine-span ownership rule — so
+   the GUI and the text are provably views of one model — appears
+   to be genuinely uncommon, possibly new as a disciplined whole.
+3. **The system-wide prohibition as method.** Frameworks make
+   single-sourcing *possible*; treating every second implementation
+   as a defect class — with a greppable audit, protocol growth as
+   the standard fix, and gates that fail on reintroduction — is a
+   discipline we have not seen named elsewhere. It is the part of
+   this paper we most want other teams to steal.
+
+## 14. The meta-principle
 
 Lay the principles side by side and they are one idea wearing ten
 coats: **drift is the enemy.**
 
-Two parsers drift (§2). Two state stores drift (§3). Five backends
-drift (§4). A test and the bug it hunts drift (§5). A fallback and
-the real semantics drift (§6). Performance drifts under fixtures
-too small to feel it (§7). Caches drift from their sources (§8).
-Code that exists drifts; code you deleted cannot (§9). Teams drift
-from their own hard-won knowledge (§10, §11).
+Two parsers drift (§2). Two state stores drift (§4). Five backends
+drift (§5). A test and the bug it hunts drift (§6). A fallback and
+the real semantics drift (§7). Performance drifts under fixtures
+too small to feel it (§8). Caches drift from their sources (§9).
+Code that exists drifts; code you deleted cannot (§10). Teams drift
+from their own hard-won knowledge (§11, §12).
 
 Every mechanism in this paper is an anti-drift device: single
 authorities with protocols, program text as the one store,
