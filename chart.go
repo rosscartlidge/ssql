@@ -4184,6 +4184,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             const xFieldRef = useRef(xField);
             const yFieldRef = useRef(yField);
             const chartTypeRef = useRef(chartType);
+            const animateModeRef = useRef(false); // animate renderer owns the plot div
             useEffect(() => { xFieldRef.current = xField; }, [xField]);
             useEffect(() => { yFieldRef.current = yField; }, [yField]);
             useEffect(() => { chartTypeRef.current = chartType; }, [chartType]);
@@ -4195,6 +4196,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             useEffect(() => {
                 window.exploreRenderers = window.exploreRenderers || {};
                 window.exploreRenderers.chart = (cfg) => {
+                    animateModeRef.current = false; // chart owns the plot div again
                     applyingSink.current = true;
                     if (cfg['-type']) setChartType(cfg['-type']);
                     const cx = cfg['-x'], cy = Array.isArray(cfg['-y']) ? cfg['-y'][0] : cfg['-y'];
@@ -4202,7 +4204,67 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
                     if (cy) setYField(cy);
                     setTimeout(() => { applyingSink.current = false; }, 0);
                 };
-                return () => { delete window.exploreRenderers.chart; };
+                // Phase B: the animate renderer — ONE registration, no
+                // dispatch edits (DFC119's acceptance test). Groups rows
+                // by the -frame field and drives Plotly's frames API in
+                // the same plot area; the normal chart redraw defers
+                // while animateModeRef holds the div.
+                window.exploreRenderers.animate = (cfg, rows) => {
+                    const gd = chartRef.current;
+                    const fail = (msg) => showOutput({ stdout: '', stderr: msg, exitCode: 1 }, 'to animate');
+                    if (!gd) return;
+                    const ff = cfg['-frame'], fx = cfg['-x'], fy = cfg['-y'];
+                    if (!ff || !fx || !fy) { fail('to animate needs -frame, -x and -y'); return; }
+                    if (!rows.length || !(ff in rows[0])) { fail('frame field "' + ff + '" not in the result rows'); return; }
+                    const type = cfg['-type'] || 'heatmap';
+                    const fz = cfg['-z'];
+                    if (type === 'heatmap' && !fz) { fail('to animate -type heatmap needs -z'); return; }
+                    // Frames in sorted order (numeric-aware).
+                    const groups = new Map();
+                    for (const r of rows) {
+                        const k = String(r[ff]);
+                        if (!groups.has(k)) groups.set(k, []);
+                        groups.get(k).push(r);
+                    }
+                    const keys = [...groups.keys()].sort((a, b) => {
+                        const na = parseFloat(a), nb = parseFloat(b);
+                        return (isNaN(na) || isNaN(nb)) ? a.localeCompare(b) : na - nb;
+                    });
+                    const traceFor = (rs) => {
+                        if (type === 'histogram') {
+                            return { type: 'bar', x: rs.map(r => r[fx]), y: rs.map(r => r[fy]) };
+                        }
+                        const xs = [...new Set(rs.map(r => r[fx]))];
+                        const ys = [...new Set(rs.map(r => r[fy]))];
+                        const zi = new Map(rs.map(r => [r[fx] + '\u0000' + r[fy], r[fz]]));
+                        return {
+                            type: 'heatmap',
+                            x: xs, y: ys,
+                            colorscale: cfg['-colorscale'] || 'Viridis',
+                            z: ys.map(yv => xs.map(xv => zi.get(xv + '\u0000' + yv) ?? null)),
+                        };
+                    };
+                    const frames = keys.map(k => ({ name: k, data: [traceFor(groups.get(k))] }));
+                    const dur = Math.round(1000 / (parseInt(cfg['-fps']) || 5));
+                    const layout = {
+                        title: { text: (CONFIG.title || '') + ' — ' + ff + ' animation' },
+                        updatemenus: [{
+                            type: 'buttons', showactive: false, x: 0, y: 1.15,
+                            buttons: [
+                                { label: '▶', method: 'animate', args: [null, { frame: { duration: dur, redraw: true }, fromcurrent: true, mode: 'immediate' }] },
+                                { label: '⏸', method: 'animate', args: [[null], { frame: { duration: 0 }, mode: 'immediate' }] },
+                            ],
+                        }],
+                        sliders: [{
+                            steps: keys.map(k => ({ label: k, method: 'animate', args: [[k], { frame: { duration: 0, redraw: true }, mode: 'immediate' }] })),
+                        }],
+                    };
+                    animateModeRef.current = true;
+                    Plotly.react(gd, frames[0].data, layout).then(() => {
+                        Plotly.addFrames(gd, frames);
+                    });
+                };
+                return () => { delete window.exploreRenderers.chart; delete window.exploreRenderers.animate; };
             }, []);
             const controlChanged = (flag, value, setter) => {
                 setter(value);
@@ -4401,6 +4463,7 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             // Update chart when fields or data change
             useEffect(() => {
                 if (!chartRef.current || !displayData || displayData.length === 0) return;
+                if (animateModeRef.current) return; // an animation owns the div
 
                 const xValues = displayData.map(row => row[xField]);
                 const yValues = displayData.map(row => {

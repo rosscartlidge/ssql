@@ -13,9 +13,11 @@ panel; controls edit the stage via the model, appending on first
 touch; undecodable stages execute loudly; the renderer REGISTRY ships in
 Phase A too — dispatch by sink key, unregistered keys fail loudly —
 so Phase B's acceptance test is meaningful from day one). Phase B
-(animate: one declaration + one renderer registration, NO dispatch
-edits — scheduled post-release) and C (one renderer, both worlds)
-pending. Trigger: head reruns
+SHIPPED 2026-08-30 and the acceptance test HELD: the diff is one
+line in to_animate.go (.DisplaySink), one renderer registration
+(Plotly frames: heatmap/histogram by -frame, play/pause/slider,
+fps), and harness gates — zero dispatch edits. Phase C (one
+renderer, both worlds) pending. Trigger: head reruns
 lost X/Y chart picks (a stale-closure bug, fixed) and Ross's
 observation that the chart config should be a PIPELINE STAGE — plus
 "we want a nice extensible architecture — there are other graphical

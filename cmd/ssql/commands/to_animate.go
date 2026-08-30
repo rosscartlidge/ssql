@@ -14,6 +14,7 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 	chartTypes := []string{"heatmap", "histogram"}
 
 	cmd.Subcommand("animate").
+		DisplaySink("animate").
 		Description("Create animated heatmap or histogram with video-player controls").
 		Example("ssql from spectrogram.jsonl | ssql to animate -frame segment -x freq -y time -z magnitude",
 			"Animated spectrogram over segments").

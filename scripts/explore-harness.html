@@ -256,6 +256,36 @@ async function run() {
             ta.value = "ssql from data.jsonl";
             w.exploreRunBar();
             await pause(250);
+            // Phase B (DFC119): animate is declaration + ONE renderer
+            // registration — these gates ran against dispatch code that
+            // did not change for them.
+            ta.value = "ssql from data.jsonl | ssql update -set-expr f 'salary > 80000 ? 2 : 1' | ssql to animate -frame f -x dept -y salary -type histogram";
+            w.exploreRunBar();
+            await pause(400);
+            const gd = doc.querySelector('.js-plotly-plot');
+            rec("animate-sink-strips-and-runs",
+                w.exploreLastRowCount === 4, // data stages reached the grid
+                "rows=" + w.exploreLastRowCount);
+            rec("animate-renders-frames",
+                gd && gd._transitionData && gd._transitionData._frames && gd._transitionData._frames.length === 2,
+                gd && gd._transitionData ? 'frames=' + gd._transitionData._frames.length : 'no plot/frames');
+            rec("animate-frame-order",
+                gd && gd._transitionData && gd._transitionData._frames.map(f => f.name).join(',') === '1,2',
+                gd && gd._transitionData ? gd._transitionData._frames.map(f => f.name).join(',') : 'none');
+            // Missing -frame: loud renderer refusal, never a silent chart.
+            ta.value = "ssql from data.jsonl | ssql to animate -x dept -y salary -type histogram";
+            w.exploreRunBar();
+            await pause(250);
+            rec("animate-missing-frame-loud",
+                doc.getElementById('output').textContent.includes('-frame'),
+                doc.getElementById('output').textContent.slice(0, 120));
+            // Back to a chart: the chart renderer reclaims the div.
+            ta.value = "ssql from data.jsonl | ssql to chart -type bar -x dept -y salary";
+            w.exploreRunBar();
+            await pause(300);
+            rec("animate-chart-reclaims",
+                gd && (!gd._transitionData || !gd._transitionData._frames || gd._transitionData._frames.length === 0 || doc.getElementById('chartTypeSel').value === 'bar'),
+                doc.getElementById('chartTypeSel').value);
             // Axis guess: all-numeric data takes the first two
             // NUMERIC fields — never the same field on both axes.
             ta.value = "ssql from data.jsonl | ssql update -set-expr double 'salary * 2' | ssql include salary double";
