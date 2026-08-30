@@ -2,7 +2,7 @@
 
 Reference: DFC112
 Created: 2026-08-23
-Last modified: 2026-08-26
+Last modified: 2026-08-30
 
 [Back to Index](./README.md)
 
@@ -123,5 +123,15 @@ alternative); redirects followed; no retry magic in v1.
       ReadParquetFromReader already took ReaderAtSeeker. Row-group
       READAHEAD (fewer, larger Range requests — the 7s remote
       group-by wants it) remains open.
-- [ ] Readahead/buffering for HTTPFile (batch small parquet reads
-      into fewer Range requests)
+- [x] Readahead/buffering for HTTPFile — CLOSED AS NEGATIVE RESULT
+      2026-08-30. Built, benchmarked, deleted. The premise was wrong:
+      arrow's reader already fetches whole column chunks (18 requests
+      / 22MB for the 1.2GB column-pruned group-by), and the "7s vs
+      0.15s" gap was exec-engine compute vs the typed-COMPILED head —
+      local exec of the same pipeline is 6.97s, remote 7.18s (~3%
+      transport). Readahead moved 7.18→6.83s and slightly INCREASED
+      request count. A premise gate remains
+      (TestParquetHTTPRequestEfficiency): if a future reader goes
+      chatty, it fails and readahead becomes worth building. The
+      real remote-speed lever is the ⚡ typed head, which already
+      exists. DFC112 is now fully closed.

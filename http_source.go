@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 )
 
 // IsHTTPURL reports whether path is an http(s) URL — the routing test
@@ -44,7 +45,13 @@ type HTTPFile struct {
 	url  string
 	size int64
 	pos  int64
+	reqs atomic.Int64 // Range requests issued (readahead's test oracle)
 }
+
+// Requests reports how many Range requests this file has issued —
+// the deterministic oracle for readahead tests (request COUNT, not
+// wall time, so the gate can't flake).
+func (h *HTTPFile) Requests() int64 { return h.reqs.Load() }
 
 // OpenHTTPFile probes the URL (HEAD, falling back to a 1-byte Range
 // GET for HEAD-less servers) for its size and Range support. Servers
@@ -110,6 +117,7 @@ func (h *HTTPFile) ReadAt(p []byte, off int64) (int, error) {
 		return 0, err
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", off, end))
+	h.reqs.Add(1)
 	resp, err := httpSourceClient.Do(req)
 	if err != nil {
 		return 0, err
