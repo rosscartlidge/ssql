@@ -1,0 +1,118 @@
+# Capability-Gap Survey: What Peer Tools Have That ssql Doesn't
+
+Reference: DFC122
+Created: 2026-08-31
+Last modified: 2026-08-31
+
+[Back to Index](./README.md)
+
+**Status:** Survey — gaps ranked, nothing scheduled. Trigger: the
+resample discovery (DFC121) made Ross ask what ELSE is missing.
+Method mirrors DFC116: enumerate systematically, judge each against
+ssql's soul, rank by (frequency of need × fit), record the
+rejections so they aren't re-litigated.
+
+## Baseline
+
+ssql today (from `-spec-json`, the authority): cast, convolve,
+correlate, count, distinct, exclude, fft, from (13 sources incl.
+ssh/https/catalog), generate (go/sql/ssql), group-by (aggs, exprs,
+streaming), ifft, include, join (equality hash), limit, merge,
+offset, **pivot** (long→wide), rename, sample, serve, sort,
+spectrogram, tee, to (13 sinks incl. chart/animate/explore), top,
+union, update (set/set-expr/if), where (ops + expr), **window**
+(partition/order/frame functions). Plus DFC121's `resample`
+(designed). Strengths no peer matches: five-backend codegen, the
+served/browser workspace, display sinks, DSP verbs, distributed
+ssh/catalog.
+
+Peers surveyed: Miller (mlr — richest verb set, ~60), qsv/xsv,
+csvkit, jq, nushell (+polars plugin), datamash, and the
+pandas/polars vocabulary users arrive with.
+
+## Tier 1 — clear gaps, high value, strong soul-fit
+
+1. **`tail`** — last N records (mlr tail, coreutils muscle memory).
+   We have limit (head) and offset but no "last N without knowing
+   the count". Trivial build (ring buffer; typed dual-template);
+   already on the wishlist. *Do first — an afternoon.*
+
+2. **`describe`** (mlr summary/stats1, csvkit csvstat, pandas
+   df.describe) — per-field type, count, nulls/missing, distinct,
+   min/max/mean/median for numerics, shortest/longest for strings.
+   THE first command every explorer wants; also exactly what the
+   workspace's deleted Statistics panel should have been (a
+   `describe` stage renders in the grid — no bespoke panel).
+   Composes: `from x.parquet -records`-style cheap paths later.
+
+3. **`melt`** (unpivot; mlr reshape long, pandas melt) — we have
+   pivot but NOT its inverse. Wide→long is what `to chart`/multi-Y
+   actually wants (one value column + a series column). Grammar
+   sketch: `ssql melt -keep ts -value cpu -value mem -into metric
+   value`. High chart synergy; medium build.
+
+4. **`extract`** (regex capture groups → fields; nushell parse, mlr
+   sub/put, the grep→awk gap) — ssql can MATCH regex (where) but
+   not EXTRACT. This is the log-processing door: `from lines
+   app.log | extract -field line -re '(?P<ts>\S+) (?P<lvl>\w+)
+   (?P<msg>.*)'` (named groups become fields, non-matches loud or
+   -skip). Opens a whole audience (the awk/sed refugee). Needs a
+   `from lines` (raw text → single-field records) sibling — check
+   whether stdin JSONL fallback already half-covers. Medium build,
+   outsized reach.
+
+5. **`fill`** (mlr fill-down/fill-empty) — carry values down over
+   missing fields, or default empties: `ssql fill -down region
+   -default status unknown`. Resample's record-level sibling;
+   ragged real-world data (merged sheets, sparse logs). Small
+   build.
+
+## Tier 2 — valuable, schedule on demand
+
+6. **`diff`** — keyed dataset comparison (added/removed/changed
+   records, changed fields): `ssql diff old.csv new.csv -on id`.
+   No CLI peer does this well (csvdiff/daff are niche); constant
+   real need; fits our equivalence-testing culture. Medium.
+7. **`assert`** (mlr check/having-fields, dbt tests in spirit) —
+   pipeline-embedded validation that FAILS LOUDLY: `ssql assert
+   -not-null id -type age int -unique id -if price ge 0`. The
+   loudness doctrine as a user feature; CI-friendly exit codes.
+   Small-medium.
+8. **`to … -by FIELD` (partitioned output)** — one file per group
+   (mlr split). ETL fan-out; composes with existing sinks. Small.
+9. **`from seq`** (mlr seqgen) — generated sequences for demos,
+   docs, testing: `from seq 1 1000000` (+ maybe -expr per row).
+   Trivial; disproportionate documentation value.
+10. **Asof/range join** (kdb aj) — `join -asof -on ts [-tolerance
+    5s]`. Resample's sibling for aligning irregular series without
+    gridding. Post-DFC121; reuse its merge machinery. Medium.
+
+## Tier 3 — surveyed and REJECTED (recorded so we don't re-ask)
+
+- *Terminal bar charts* (mlr bar): `to chart`/workspace own this.
+- *Statistical modeling* (bootstrap, surv, stats2 regression):
+  R/Python territory; our exit is `to parquet`/DuckDB.
+- *Case/whitespace/latin1 cleaners*: expression functions in
+  update -set-expr, not verbs (add exprfn helpers if asked).
+- *sec2gmt etc.*: cast/expr territory; time FUNCTIONS may grow
+  with resample, not verbs.
+- *tac/shuffle/decimate/repeat/fraction*: sort -desc, sample
+  machinery, and exprs cover the real uses.
+- *unsparsify/regularize*: the schema-header wire format already
+  regularizes at boundaries; revisit only if a concrete ragged-
+  JSONL failure shows up.
+- *TUI explorer* (visidata): the workspace is our answer.
+- *Lazy dataframes* (polars): `generate go` IS our answer.
+
+## Recommended order (if Ross wants a "missing verbs" arc)
+
+tail → describe → melt → fill → extract (+from lines) → assert →
+the rest on demand. Every one: package primitive first, thin CLI,
+all-backend fragments where results change (DFC102 gates,
+gap-ridden fixtures for fill/melt), FieldsFromFlag completion,
+spec-json for free, equivalence + scale cases per the checklists.
+
+## Sources
+
+Miller verb reference (miller.readthedocs.io); qsv/csvkit/datamash
+manuals; nushell + polars plugin docs; pandas/polars API vocabulary.
