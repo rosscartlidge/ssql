@@ -203,6 +203,7 @@ func buildCommand() *cf.Command {
 	cmd = commands.RegisterOffset(cmd)
 	cmd = commands.RegisterTee(cmd)
 	cmd = commands.RegisterSort(cmd)
+	cmd = commands.RegisterResample(cmd)
 	cmd = commands.RegisterTop(cmd)
 	cmd = commands.RegisterDistinct(cmd)
 	cmd = commands.RegisterCount(cmd)

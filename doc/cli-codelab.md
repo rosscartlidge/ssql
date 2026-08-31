@@ -578,6 +578,38 @@ Seeded samples are byte-identical across execution and generated Go
 equivalent, so `-seed` there is a loud error rather than a silent
 approximation.
 
+### Time Series: Align, Downsample, Fill
+
+Real-world measurements arrive at irregular times; charts want a
+regular grid. `resample` snaps a timestamp field onto an
+epoch-aligned grid (buckets land on :00/:05 boundaries, and two
+independently resampled series always align — so they join):
+
+```bash
+# One-minute grid, last-observation-carried-forward (the default)
+ssql from metrics.csv | ssql resample -time ts -every 1m -value cpu | ssql to chart -type line -x ts -y cpu
+
+# Interpolate two series onto a 5-second grid
+ssql from sensors.csv | ssql resample -time ts -every 5s -value temp -value rpm -fill linear
+```
+
+Epoch units are auto-detected (announced on stderr; `-time-unit`
+overrides); RFC3339 strings come back as RFC3339. Edges clamp to the
+nearest observation, loudly.
+
+DOWNSAMPLING (many points per bucket → one) is composition, not a
+separate command — `bucket()` snaps to the same grid, and group-by
+brings its whole aggregation vocabulary:
+
+```bash
+ssql from metrics.csv \
+  | ssql update -set-expr b 'bucket(ts, "5m")' \
+  | ssql group-by b -avg cpu cpu -max mem mem
+```
+
+And a gap-filled downsample is just resample applied after the
+group-by — both snap to the same epoch grid, so they compose exactly.
+
 ### Cloud Data over HTTPS
 
 Any http(s) URL is a source — no cloud SDKs, no credentials in ssql.

@@ -136,6 +136,12 @@ func TestScaleBudgets(t *testing.T) {
 		// One newline scan (~0.02s/120MB); a parse-path blows this.
 		budget(t, dir, bin+" from csv big.csv -records", 3*time.Second)
 	})
+	t.Run("resample", func(t *testing.T) {
+		// DFC121: the merge is O(n + grid); a per-grid-point rescan is
+		// O(n·m) and passes every functional test. 3M rows onto a
+		// coarse grid — generous absolute ceiling, no baseline.
+		budget(t, dir, bin+" from csv big.csv | "+bin+" resample -time id -every 1000s -value score > /dev/null", 60*time.Second)
+	})
 	t.Run("exec-csv-scan", func(t *testing.T) {
 		// Parse-amplification guard: the full exec scan, generous cap.
 		budget(t, dir, bin+" from csv big.csv | "+bin+" count", 60*time.Second)

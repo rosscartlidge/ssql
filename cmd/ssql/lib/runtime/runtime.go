@@ -77,6 +77,7 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 	sampleEnv["has"] = func(field string) bool { return false }
 	sampleEnv["getOr"] = func(field string, defaultValue any) any { return defaultValue }
 	sampleEnv["sha256"] = hashSHA256
+	sampleEnv["bucket"] = bucketFn
 	sampleEnv["sha1"] = hashSHA1
 	sampleEnv["md5"] = hashMD5
 	sampleEnv["replaceRegex"] = replaceRegex
@@ -123,6 +124,7 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 
 		// Add hash functions
 		env["sha256"] = hashSHA256
+		env["bucket"] = bucketFn
 		env["sha1"] = hashSHA1
 		env["md5"] = hashMD5
 		env["replaceRegex"] = replaceRegex
@@ -191,6 +193,7 @@ func CompileExprWithFields(expression string, fields []string) (func(ssql.Record
 	sampleEnv["has"] = func(field string) bool { return false }
 	sampleEnv["getOr"] = func(field string, defaultValue any) any { return defaultValue }
 	sampleEnv["sha256"] = hashSHA256
+	sampleEnv["bucket"] = bucketFn
 	sampleEnv["sha1"] = hashSHA1
 	sampleEnv["md5"] = hashMD5
 	sampleEnv["replaceRegex"] = replaceRegex
@@ -238,6 +241,7 @@ func CompileExprWithFields(expression string, fields []string) (func(ssql.Record
 
 		// Add hash functions
 		env["sha256"] = hashSHA256
+		env["bucket"] = bucketFn
 		env["sha1"] = hashSHA1
 		env["md5"] = hashMD5
 		env["replaceRegex"] = replaceRegex

@@ -6,8 +6,18 @@ Last modified: 2026-09-01
 
 [Back to Index](./README.md)
 
-**Status:** Design RESOLVED (open questions settled by Ross,
-2026-09-01) — ready to build, not yet scheduled. The missing piece between ssql and
+**Status:** SHIPPED 2026-09-01 (same-day build) — exec + record +
+typed/parallel lanes through one ResampleRecords (typed re-enters
+typed via a synthesized output struct; equivalence-gated with a
+sabotage-verified case pair; 3M-row scale budget: 2.9s), bucket()
+in VM + transpiler with differential coverage, codelab section.
+Build finding recorded below: the duplicate-timestamp rule became
+HIGHEST-VALUE-WINS (input-order "last wins" was lane-dependent
+across parallel shards). Edge policy became CLAMP-loudly (absence
+is unrepresentable in typed structs — the prime directive caught a
+cross-lane impossibility at design time). REMAINING from resolution
+#4: the generate-sql DuckDB ASOF translation (equivalence cases
+carry explicit skips naming it). The missing piece between ssql and
 real time-series charting: DFC119's chart/animate sinks want evenly
 gridded data, and nothing in the pipeline today produces it.
 

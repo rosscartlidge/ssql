@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-08-31
+Last modified: 2026-09-01
 
 [Back to Index](./README.md)
 
@@ -90,7 +90,7 @@ Tracked issues and feature gaps discovered during development.
 ## Next up (refreshed 2026-09-01 — build-ready first, then polish, then parked)
 
 **Build-ready units, in suggested order:**
-1. `resample` + `bucket()` (DFC121, all questions resolved) — the time-series unlock
+1. ~~`resample` + `bucket()`~~ SHIPPED 2026-09-01 — remaining slice: the generate-sql DuckDB ASOF translation (equivalence skips name it)
 2. Missing-verbs arc Tier 1 (DFC122): tail → describe → melt → fill → extract+from lines
 3. Chart-artifact migration onto ssqlViz (DFC119 remainder — feature-reconciliation project)
 

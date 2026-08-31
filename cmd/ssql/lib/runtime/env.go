@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"fmt"
+	ssql "github.com/rosscartlidge/ssql/v4"
 	"os"
+	"time"
 
 	"github.com/expr-lang/expr"
 )
@@ -28,6 +30,7 @@ func CompileExprEnv(expression string) (func(map[string]any) (any, error), error
 		"sha1":         hashSHA1,
 		"md5":          hashMD5,
 		"replaceRegex": replaceRegex,
+		"bucket":       bucketFn,
 	}
 	program, err := expr.Compile(expression,
 		expr.Env(sampleEnv),
@@ -56,6 +59,7 @@ func CompileExprEnv(expression string) (func(map[string]any) (any, error), error
 		env["sha1"] = hashSHA1
 		env["md5"] = hashMD5
 		env["replaceRegex"] = replaceRegex
+		env["bucket"] = bucketFn
 
 		result, err := expr.Run(program, env)
 		if err != nil {
@@ -154,4 +158,30 @@ func coerceFail(v any, want, expression string) {
 	fmt.Fprintf(os.Stderr, "Error: expression %q produced %T (%v), but the field's type is %s — a typed column cannot change type (use SSQL_MODE=record if the retype is intended)\n",
 		expression, v, v, want)
 	os.Exit(1)
+}
+
+// bucketFn is the expr-lang bucket(ts, "5m") function (DFC121): snap
+// a timestamp to its epoch-aligned bucket, preserving the input
+// family. Delegates to ssql.BucketValue — ONE snap implementation
+// across resample, the VM, and transpiled code.
+func bucketFn(v any, dur string) (any, error) {
+	every, err := time.ParseDuration(dur)
+	if err != nil {
+		return nil, fmt.Errorf("bucket: bad duration %q: %w", dur, err)
+	}
+	if every <= 0 {
+		return nil, fmt.Errorf("bucket: duration must be positive, got %q", dur)
+	}
+	return ssql.BucketValue(coerceEpoch(v), every)
+}
+
+// coerceEpoch widens JSON-int shapes to int64 for bucketing.
+func coerceEpoch(v any) any {
+	switch x := v.(type) {
+	case int:
+		return int64(x)
+	case int32:
+		return int64(x)
+	}
+	return v
 }

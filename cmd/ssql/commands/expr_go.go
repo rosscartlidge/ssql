@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
@@ -596,6 +597,36 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 	}
 
 	switch name {
+	case "bucket":
+		// bucket(ts, "5m") — DFC121. The duration must be a literal so
+		// it can be parsed at CODEGEN time (a dynamic duration would
+		// need runtime parsing; VM fallback handles it). Numeric
+		// timestamps only in transpiled form; string timestamps fall
+		// back to the VM (layout probing is stateful there).
+		if len(args) != 2 {
+			return exprGo{}, fmt.Errorf("bucket() takes (timestamp, duration)")
+		}
+		durLit, ok := args[1].(*ast.StringNode)
+		if !ok {
+			return exprGo{}, fmt.Errorf("bucket() duration must be a string literal for typed codegen")
+		}
+		d, derr := time.ParseDuration(durLit.Value)
+		if derr != nil || d <= 0 {
+			return exprGo{}, fmt.Errorf("bucket() duration %q invalid: %v", durLit.Value, derr)
+		}
+		arg, err := e.node(args[0])
+		if err != nil {
+			return exprGo{}, err
+		}
+		switch arg.Type {
+		case exprGoInt:
+			res := exprGo{Src: fmt.Sprintf("exprfn.BucketInt64(%s, %d)", arg.Src, int64(d)), Type: exprGoInt, Imports: []string{exprfnImport}}
+			return mergeMeta(res, arg), nil
+		case exprGoFloat:
+			res := exprGo{Src: fmt.Sprintf("exprfn.BucketFloat64(%s, %d)", arg.Src, int64(d)), Type: exprGoFloat, Imports: []string{exprfnImport}}
+			return mergeMeta(res, arg), nil
+		}
+		return exprGo{}, fmt.Errorf("bucket() on %s not transpilable (string timestamps use the VM fallback)", arg.Type)
 	case "len":
 		arg, err := one()
 		if err != nil {

@@ -5,6 +5,32 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`ssql resample` — time-series gridding (DFC121)** — snap a
+  timestamp field onto a regular EPOCH-ALIGNED grid and carry
+  numeric fields onto it: `resample -time ts -every 1m -value cpu
+  [-fill previous|next|linear]`. Previous (LOCF, the default), next
+  (backfill), and linear interpolation, per the industry-standard
+  trio; edges clamp to the nearest observation, loudly. Epoch units
+  auto-detect with a stderr announcement (`-time-unit` overrides);
+  string timestamps (RFC3339/SQL datetime/`-time-format`) round-trip
+  in their input family. Duplicate timestamps keep the highest value
+  (deterministic across parallel shards, counted loudly). Works in
+  every Go lane — exec, record, typed, parallel — through ONE shared
+  implementation (the typed template re-enters typed with a
+  synthesized output struct), gated by two new equivalence cases and
+  a 3M-row scale budget. `generate sql` skips resample for now (the
+  DuckDB ASOF translation is the queued follow-up).
+- **`bucket(ts, "5m")` expression function** — snaps a timestamp to
+  its epoch-aligned bucket in expressions, sharing the exact snap
+  arithmetic with resample (one implementation, differential-gated
+  across VM and transpiled code). Downsampling is composition:
+  `update -set-expr b 'bucket(ts, "5m")' | group-by b -avg cpu cpu`,
+  and gap-filling a downsampled series is resample applied after —
+  both halves land on the same epoch grid by construction.
+
 ## [4.79.0] - 2026-08-31
 
 ### Fixed

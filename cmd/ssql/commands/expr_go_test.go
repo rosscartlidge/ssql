@@ -49,6 +49,10 @@ func TestExprToGo(t *testing.T) {
 		{"unary minus preserves type", "-pop", "(-r.Pop)", exprGoInt, ""},
 		{"string concat", `city + "!"`, `(r.City + "!")`, exprGoString, ""},
 
+		// bucket() (DFC121)
+		{"bucket int keeps int", `bucket(pop, "10s")`, `exprfn.BucketInt64(r.Pop, 10000000000)`, exprGoInt, "github.com/rosscartlidge/ssql/v4/exprfn"},
+		{"bucket float keeps float", `bucket(price, "3s")`, `exprfn.BucketFloat64(r.Price, 3000000000)`, exprGoFloat, "github.com/rosscartlidge/ssql/v4/exprfn"},
+
 		// §2b comparison
 		{"int literal compare", "pop > 15", "(r.Pop > 15)", exprGoBool, ""},
 		{"float field int literal", "price > 15", "(r.Price > 15)", exprGoBool, ""},

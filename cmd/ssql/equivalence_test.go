@@ -589,6 +589,25 @@ var equivCases = []EquivCase{
 		Ordered:  true,
 	},
 	{
+		// resample (DFC121): every Go lane calls the ONE
+		// ssql.ResampleRecords (typed shims records at the barrier),
+		// so agreement is by construction — this gate proves it STAYS
+		// that way. pop stands in as epoch seconds; the fixture has
+		// duplicate pops, exercising the order-independent dup rule.
+		Name: "resample_previous",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
+			`{{.bin}} resample -time pop -every 5s -value id`,
+		Ordered: true,
+		Skip:    map[string]string{"duckdb": "generate sql for resample pending (DFC121 ASOF translation — TODO)"},
+	},
+	{
+		Name: "resample_linear",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
+			`{{.bin}} resample -time pop -every 5s -value id -fill linear -time-unit s`,
+		Ordered: true,
+		Skip:    map[string]string{"duckdb": "generate sql for resample pending (DFC121 ASOF translation — TODO)"},
+	},
+	{
 		Name:     "identity",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv`,
 		Ordered:  false, // parallel output is unordered

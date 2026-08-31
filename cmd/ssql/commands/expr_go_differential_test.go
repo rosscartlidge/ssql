@@ -65,6 +65,12 @@ func TestExprGoDifferential(t *testing.T) {
 		"nope ?? 5",
 		// §2d built-ins
 		"len(city)", // rune count — corpus includes a multi-byte city
+		// bucket() (DFC121): epoch snap must agree between VM (via
+		// ssql.BucketValue) and transpiled (exprfn.BucketInt64/Float64)
+		// — one implementation, but the gate proves it stays that way.
+		`bucket(pop, "10s")`,
+		`bucket(price, "3s")`,
+		`bucket(pop * 1000, "1m")`,
 		"abs(pop)",
 		"abs(price)",
 		"round(price)", // corpus includes ±2.5 — half away from zero
