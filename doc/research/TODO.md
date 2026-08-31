@@ -87,7 +87,16 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Merge catalog predicate/aggregation pushdown** — same pattern for `merge -catalog`
 - [x] **SSH pushdown with expressions** — already works. The pushdown rule copies all `where` args (including `-if-expr`) wholesale.
 
-## Next up (queued by Ross, 2026-08-20)
+## Next up (refreshed 2026-09-01 — build-ready first, then polish, then parked)
+
+**Build-ready units, in suggested order:**
+1. `resample` + `bucket()` (DFC121, all questions resolved) — the time-series unlock
+2. Missing-verbs arc Tier 1 (DFC122): tail → describe → melt → fill → extract+from lines
+3. Chart-artifact migration onto ssqlViz (DFC119 remainder — feature-reconciliation project)
+
+**Small polish:** share-link audit items, where-validation message, parquet row-group -sample
+
+**Parked, awaiting a trigger:** bare-prefix bars (feedback), stage palette → Phase 3 (demand), W2 (annoyance), F7 (codegen-IR)
 
 - [x] **Scale gate ([DFC113](./dfc113_scale_gate.md)) — implemented 2026-08-26** (cmd/ssql/scale_test.go, pre-tag checklist; sabotage-verified)** — opt-in `SSQL_SCALE=1 TestScaleBudgets`: one cached ~200MB generated fixture, wall-time CEILING assertions (10× headroom, no stored baselines) on the known scale traps — schema mode (parquet + csv), -sample source, serve early-exit (replaces the size-tuned 2MB deadlock fixture), cached line-count delta, csv-scan vs wc amplification, jsonl reader class. Sabotage-verify each budget at introduction; add to the pre-tag checklist; new scale-sensitive features add cases like equivalence cases. Motivated by five fixture-invisible bugs in one week (table in the DFC).
 
@@ -104,7 +113,7 @@ Tracked issues and feature gaps discovered during development.
 
 - [ ] **`-sample` for parquet (row-group offset sampling)** — csv/tsv/jsonl shipped (DFC110 amendment 2 + follow-up); parquet needs row-group-offset thinking rather than byte offsets.
 - [x] **`ssql sample` command** — designed in [DFC110](./dfc110_sample_command.md) (seeded splitmix64 in the ssql package for cross-lane byte-identity; SerialOnly v1; DuckDB translation unseeded-only with loud -seed refusal; workspace big-file redirect switches from limit to sample). Ready to implement.
-- [ ] **Optimizer (`generate ssql`) in the explore head + tail** — surface the pipeline optimizer in the served workspace: an "optimize" action that shows the rewritten head (predicate reorder, pushdown into `from ssh`, top-N collapse) before running it, and similarly for the tail. Mechanics exist (`ssql generate ssql`, the playground's Optimize button); the serve side needs an endpoint (or an allow-listed verb) and the UI a place to show the rewrite diff. Composes with ⚡ typed heads (optimize, then compile the optimized form — cache key must be the OPTIMIZED script).
+- [x] **Optimizer in the explore head + tail — SHIPPED W34** (⚙ Optimise on both; head via /api/optimize server-side where ssh pushdown is real, tail in-browser via the wasm engine; preview-with-Apply, never a silent rewrite; typed-head cache keyed by the optimized script). Stale entry caught in the 2026-09-01 refresh.
 
 - [x] **Parquet + URL completion (autocli v4.14.x hooks)** — DONE 2026-08-26, generalized past the sampler-registry design: autocli grew `FieldSource`/`FieldValueSource` host hooks (asked before its built-in extractors; error falls back). ssql's FieldSource execs itself in schema mode (DFC115 — covers parquet, URLs, and future formats with no per-extension registry); FieldValueSource samples parquet columns in-process (`ReadParquetColumns`, URL-capable) and streams URL line formats. Bonus find: same-command csv field completion had silently died (dangling-flag prefix parse discarded positionals) — fixed in autocli v4.14.1, gate `TestFieldCompletionSources` + autocli `TestFieldCompletionDanglingFlag`. Remaining honest gap: `.arrow` stays at the hint until `from arrow` grows schema mode.
 
@@ -166,7 +175,7 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 - [x] **Phase 2a — HTTP transport** (2026-08-19, DFC108 stage 2a): `serve -listen-http ADDR -dir DIR` with REST endpoints — `/api/execute` (strict-tokenized pipeline → self-exec stage chain, streamed output, mid-stream failures in X-Ssql-Exit-Code/X-Ssql-Error trailers), `/api/cursor` (cursor-protocol passthrough: completion/help/value-sampling), `/api/files`, `/api/health`. Stateless per-request over -dir (decided over shared serveState); loopback default, non-loopback REFUSES to start without -token; Jupyter-style trust model (-dir is cwd, not a sandbox). Departure from rev-1: self-exec per stage instead of in-process `cli.ExecuteWith` — exec-lane semantics by construction, `execute-matches-direct` is the differential gate.
 - [x] **Phase 2b — served explore workspace** (2026-08-19, DFC108 stage 2b): `GET /` lists the served dir's data files; `GET /explore?file=X` (allow-listed) or `?pipeline=…` (strict-tokenized) runs `<head> | ssql to explore TMP` through the 2a stage chain and serves the result — **byte-identical to a local `to explore` artifact** (gated by `TestServeExplorePage/explore-file-is-the-artifact`, sabotage-verified). The head runs server-side at page-generation time; the page's bar/builder/grid run the wasm tail locally as shipped. Deliberately NOT in 2b (moved to 2c, where the divider owns them): re-running the head without a page reload, and routing bar completion for head stages to /api/cursor. Trailer-reading concern also moves to 2c.
 - [x] **Phase 2c — the split proper** (2026-08-19, DFC108 stage 2c): the explore artifact stays byte-identical; at load it reads its own URL (?file=/?pipeline=) and probes /api/health — server mode reveals a head input fused above the tail bar. Run head → POST /api/execute?mode=buffered (JSON envelope; browsers can't read trailers) → result replaces vFS data.jsonl → local tail re-runs. Head failures loud in status. `TestServeCutPointEquivalence` (every cut × 3 pipelines, sabotage-verified) is the seam gate — it immediately caught two pre-existing bugs: every `from`/`tee` alphabetized field order on output (fixed: record order preserved across wire hops) and `update -set-expr` labeled numeric results "string" (fixed: type refined from first computed value). Residual, normalized in the gate like the equivalence harness: sum-of-ints float→int header flip on the JSON wire. Explore harness at 26 scenarios incl. the server-mode flow. Remaining polish (later): head-input completion via /api/cursor, optimizer-placed cuts.
-- [ ] **serve HTTP hardening (post-2a)**: `-readonly` (gate `to FILE`/`tee` writers), concurrent-execute semaphore, WebSocket/SSE variant if 2b needs push.
+- [ ] **serve HTTP hardening (post-2a)**: ~~`-readonly`~~ (SHIPPED — conservative writer gate with 403s; W2 writes-declaration is its principled successor); remaining: concurrent-execute semaphore, WebSocket/SSE variant if push is ever needed.
 
 ## Adoption (see adoption-plan.md)
 
