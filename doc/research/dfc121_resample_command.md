@@ -2,12 +2,12 @@
 
 Reference: DFC121
 Created: 2026-08-31
-Last modified: 2026-08-31
+Last modified: 2026-09-01
 
 [Back to Index](./README.md)
 
-**Status:** Design — researched and specified (Ross's ask,
-2026-08-31); not yet scheduled. The missing piece between ssql and
+**Status:** Design RESOLVED (open questions settled by Ross,
+2026-09-01) — ready to build, not yet scheduled. The missing piece between ssql and
 real time-series charting: DFC119's chart/animate sinks want evenly
 gridded data, and nothing in the pipeline today produces it.
 
@@ -57,21 +57,34 @@ ssql resample -time ts -every 5m \
   float64 epoch seconds (auto-detect ms/µs/ns by magnitude, the
   usual heuristic — document it), or strings via RFC3339 and SQL
   datetime. `-time-format LAYOUT` for exotics (autocli ArgTime
-  machinery exists).
+  machinery exists). Epoch magnitude is auto-detected (s/ms/µs/ns
+  by range) with a LOUD stderr note of the chosen unit; `-time-unit
+  ns|us|ms|s` (Go duration unit vocabulary) overrides — resolved
+  2026-09-01.
 - `-every DURATION` — the sample period (Go duration syntax; autocli
   has ArgDuration). Required.
 - `-value FIELD` — accumulate; each names a numeric field to carry
   onto the grid. Required (≥1). Non-numeric value fields: loud
   refusal at first record, with the vocabulary.
-- `-fill previous|next|linear` — default **previous** (LOCF is every
-  system's default-ish and matches intuition for dashboards).
-  `nearest` is a cheap fourth mode; note it, don't promise it.
-- `-from`/`-to` — grid bounds. Default: min/max observed timestamp,
-  with the grid ORIGIN at `-from` (or the min) — i.e. grid points
-  are `from + k*every`, k = 0..N, covering through `to`. This is
-  Ross's "integral number of periods from the start"; explicitly
-  NOT epoch-aligned by default (differs from date_bin's origin
-  convention — document loudly; a later `-align epoch` can add it).
+- `-fill previous|next|linear` — default **previous** (RESOLVED
+  2026-09-01: LOCF matches every peer's default and dashboard
+  intuition; the always-written workspace machinery will spell the
+  default out when it writes stages, keeping Ross's no-implicit
+  taste satisfied where it matters). `nearest` is a cheap fourth
+  mode; note it, don't promise it.
+- **The grid is EPOCH-ALIGNED** (resolved 2026-09-01, Ross + the
+  three arguments below): grid points are `k*every` from the Unix
+  epoch, i.e. `floor(ts/every)*every` buckets — the `date_bin`/
+  `time_bucket` convention. Why: (a) STABILITY — appending data
+  never shifts existing bucket boundaries, so reruns and streaming
+  agree; (b) JOINABILITY — two independently resampled series land
+  on the same grid and can be joined; a data-anchored grid almost
+  never aligns across series; (c) human boundaries (5m buckets hit
+  :00/:05). Cost: partial coverage at the edges — accepted, as
+  every peer does. No `-align data` opt-out until someone needs it.
+- `-from`/`-to` — grid bounds, themselves snapped DOWN/UP to the
+  epoch grid (with a stderr note when snapping changed them).
+  Default: the epoch-grid points covering [min, max] observed.
 - Output records: the grid timestamp (same field name, same type
   family as input — RFC3339 in → RFC3339 out) plus the value
   fields. Other input fields are dropped (a resampled record is a
@@ -99,11 +112,11 @@ ssql resample -time ts -every 5m \
 - **All five backends, day one gates** (DFC102 doctrine): exec,
   record codegen, typed codegen get the same `ssql.Resample(...)`
   primitive (CLI thin over package function, per house rules).
-  **`generate sql`**: DuckDB can express previous/next via
-  `generate_series` + `ASOF JOIN` and linear via two asof joins +
-  arithmetic — feasible but fiddly; v1 may declare a loud
-  translator bail-out (precedented) with the DuckDB translation as
-  its own follow-up. DECIDE AT BUILD TIME; either way the
+  **`generate sql`**: RESOLVED 2026-09-01 — v1 SHIPS the DuckDB
+  translation: `generate_series` over the epoch grid + `ASOF JOIN`
+  for previous/next, two asof joins + arithmetic for linear (epoch
+  alignment makes the series generation trivial —
+  `time_bucket`-compatible). The
   equivalence harness runs every lane that exists, with Golden
   oracles on shuffled, gap-ridden fixtures (fixtures MUST contain
   gaps, duplicates, and unsorted rows — a clean fixture tests
@@ -145,19 +158,52 @@ interpolated values, input type preserved for previous/next
 - Scale-gate budget on the merge pass.
 - Sabotage: break the two-pointer advance; the Golden must scream.
 
-## Open questions
+## Downsampling: the other half, by COMPOSITION (added 2026-09-01)
 
-1. Default `-fill`: previous (proposed) or refuse-without-flag
-   (maximally explicit, Ross's no-implicit taste)? Cheap to flip.
-2. Timestamp output format for string inputs: preserve input
-   format vs canonical RFC3339? Leaning preserve-family (RFC3339
-   in → RFC3339 out) for round-trip friendliness.
-3. Epoch-magnitude auto-detect (s/ms/µs/ns): convenient but a
-   guess — is a loud note enough, or should ambiguous magnitudes
-   require `-time-unit`?
-4. `generate sql` v1: loud bail-out or the DuckDB ASOF translation?
-5. Aggregating resample (many observations per bucket → mean/max…)
-   is DOWNSAMPLING — deliberately out of scope here; it's
-   `group-by` on a bucketed field and may deserve its own
-   `-bucket` helper someday. This DFC is the alignment/gridding
-   half only.
+Aggregating many observations per bucket (mean/max/sum per 5m) is
+downsampling. Ross asked for it to be fleshed out; the design
+answer is composition, not a second aggregation vocabulary:
+
+**group-by already owns aggregation grammar** (sum/avg/min/max/
+collect/expr/stream-expr). Duplicating it inside resample as
+`-agg avg` would be a second implementation of that grammar — the
+DFC115 disease. Instead, downsampling = bucketing + group-by:
+
+1. Grow ONE expression function: `bucket(ts, "5m")` — snaps a
+   timestamp to its epoch-aligned bucket (the same snapping code
+   resample uses; one implementation, exported). Then:
+
+       ssql from metrics.csv \
+         | ssql update -set-expr b 'bucket(ts, "5m")' \
+         | ssql group-by b -avg cpu cpu -max mem mem
+
+   gives classic downsampling with group-by's FULL vocabulary,
+   every backend, and streaming (-presorted) for free.
+2. Gap-filling a downsampled series is then… resample applied
+   AFTER group-by (`| ssql resample -time b -every 5m -value cpu`)
+   — buckets with no data get filled per -fill. The two halves
+   compose exactly because both snap to the SAME epoch grid
+   (argument (b) for epoch alignment, again).
+3. A future `resample -agg` convenience can be revisited only if
+   the composition proves too verbose in practice; if so it must
+   DELEGATE to group-by's machinery, never re-implement it.
+
+Deliverables added to the build: the `bucket(ts, dur)` expr
+function (with expr-transpiler + SQL translations — DuckDB
+time_bucket — and TestExprGoDifferential coverage), plus a codelab
+"time series" section showing align, downsample, and
+downsample-then-fill.
+
+## Resolutions (2026-09-01, Ross)
+
+1. `-fill` defaults to **previous**.
+2. Timestamp output **preserves the input family** (RFC3339 in →
+   RFC3339 out; epoch in → epoch out, same unit).
+3. Epoch-unit handling: auto-detect with a loud note; `-time-unit
+   ns|us|ms|s` (Go duration unit strings) to override.
+4. `generate sql` v1 ships the **DuckDB ASOF translation** — no
+   bail-out.
+5. Downsampling fleshed out above — composition via `bucket()` +
+   group-by, not a second aggregation vocabulary.
+6. The grid is **epoch-aligned** (stability, joinability, human
+   boundaries; partial edge buckets accepted).
