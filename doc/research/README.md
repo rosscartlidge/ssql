@@ -128,6 +128,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC118 | 2026-08-27 | 2026-08-28 | [A Widget Query Builder Done Right: Spec-Driven and Bijective](./dfc118_bijective_query_builder.md) |
 | DFC119 | 2026-08-29 | 2026-08-31 | [The Display-Sink Protocol: Chart, Animate, and Every Visual After Them](./dfc119_display_sink_protocol.md) |
 | DFC120 | 2026-08-29 | 2026-08-30 | [Drift Is the Enemy: System-Design Principles from Building ssql](./dfc120_system_design_lessons.md) |
+| DFC121 | 2026-08-31 | 2026-08-31 | [`ssql resample`: Snapping Time Series to a Regular Grid](./dfc121_resample_command.md) |
 
 <!-- DFC-INDEX-END -->
 
