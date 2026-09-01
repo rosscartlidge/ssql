@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
@@ -83,7 +84,7 @@ type sqlQuery struct {
 	orderBy      []string
 	limit        string
 	offset       string
-	sampled      bool // FROM already carries a USING SAMPLE clause
+	sampled      bool     // FROM already carries a USING SAMPLE clause
 	comments     []string // original ssql commands
 
 	// columns tracks the current output field names, seeded from the source
@@ -137,6 +138,11 @@ func needsWrap(q *sqlQuery, cmd string) bool {
 		return projected || len(q.groupBy) > 0 || len(q.orderBy) > 0 || limited
 	case "distinct":
 		return limited
+	case "resample":
+		// resample rebuilds the query around a grid + ASOF joins; any
+		// accumulated state must be materialised as its source.
+		return projected || len(q.whereClauses) > 0 || len(q.groupBy) > 0 ||
+			len(q.orderBy) > 0 || limited || q.distinct || len(q.joins) > 0 || q.sampled
 	}
 	return false
 }
@@ -256,6 +262,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		err = translateTop(q, args[2:])
 	case "distinct":
 		q.distinct = true
+	case "resample":
+		err = translateResample(q, args[2:])
 	case "join":
 		err = translateJoin(q, args[2:], funcFrags)
 	case "union":
@@ -1468,4 +1476,152 @@ func parseCommandArgs(cmd string) []string {
 		args = append(args, current.String())
 	}
 	return args
+}
+
+// translateResample (DFC121 resolution #4): the DuckDB translation —
+// epoch-aligned generate_series grid + ASOF joins. Semantics mirror
+// ssql.ResampleRecords exactly (the equivalence harness arbitrates):
+// per-field series skip NULLs (raggedness), duplicate timestamps keep
+// the highest value, edges clamp to the nearest observation, and the
+// epoch unit is detected by magnitude (max |ts|, matching Go's
+// thresholds) unless -time-unit pins it.
+//
+// v1 scope, loud refusals otherwise: numeric epoch timestamps only
+// (string timestamps and -time-format need TIMESTAMP-typed handling —
+// use generate go), no -from/-to bounds yet.
+func translateResample(q *sqlQuery, args []string) error {
+	var timeField, everyStr, fill, timeUnit string
+	var values []string
+	fill = "previous"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-time":
+			if i+1 < len(args) {
+				timeField = args[i+1]
+				i++
+			}
+		case "-every":
+			if i+1 < len(args) {
+				everyStr = args[i+1]
+				i++
+			}
+		case "-value":
+			if i+1 < len(args) {
+				values = append(values, args[i+1])
+				i++
+			}
+		case "-fill":
+			if i+1 < len(args) {
+				fill = args[i+1]
+				i++
+			}
+		case "-time-unit":
+			if i+1 < len(args) {
+				timeUnit = args[i+1]
+				i++
+			}
+		case "-from", "-to":
+			return fmt.Errorf("resample -from/-to has no SQL translation yet — use generate go")
+		case "-time-format":
+			return fmt.Errorf("resample over string timestamps has no SQL translation — numeric epochs only; use generate go")
+		case "-generate", "-g":
+		}
+	}
+	if timeField == "" || everyStr == "" || len(values) == 0 {
+		return fmt.Errorf("resample: -time, -every and at least one -value are required")
+	}
+	every, err := time.ParseDuration(everyStr)
+	if err != nil || every <= 0 {
+		return fmt.Errorf("resample: bad -every %q", everyStr)
+	}
+	everyNs := int64(every)
+
+	// The epoch unit (in ns): pinned by -time-unit, else detected from
+	// the data by magnitude — Go's exact thresholds.
+	unitExpr := ""
+	switch timeUnit {
+	case "ns":
+		unitExpr = "1"
+	case "us":
+		unitExpr = "1000"
+	case "ms":
+		unitExpr = "1000000"
+	case "s":
+		unitExpr = "1000000000"
+	case "":
+		unitExpr = "(CASE WHEN max(abs(__ts)) >= 1e17 THEN 1 WHEN max(abs(__ts)) >= 1e14 THEN 1000 WHEN max(abs(__ts)) >= 1e11 THEN 1000000 ELSE 1000000000 END)"
+	default:
+		return fmt.Errorf("resample: unknown -time-unit %q (ns|us|ms|s)", timeUnit)
+	}
+
+	tsCol := quoteIdent(timeField)
+	src := q.fromClause
+	if src == "" {
+		return fmt.Errorf("resample: no source to translate")
+	}
+
+	var sb strings.Builder
+	sb.WriteString("(\n  WITH __base AS (SELECT * FROM " + src + " WHERE " + tsCol + " IS NOT NULL),\n")
+	// step in SOURCE units; error() if -every is finer than the unit
+	// (sub-unit grids are unrepresentable in source-unit integers).
+	if timeUnit != "" {
+		// Pinned unit: a bare one-row CTE. (Deriving it FROM __base
+		// without an aggregate yields one row PER BASE ROW and the
+		// cross-join multiplies the grid — caught by the linear
+		// equivalence case.)
+		sb.WriteString("  __unit AS (SELECT " + unitExpr + " AS u),\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("  __unit AS (SELECT %s AS u FROM (SELECT CAST(%s AS BIGINT) AS __ts FROM __base)),\n",
+			unitExpr, tsCol))
+	}
+	sb.WriteString(fmt.Sprintf("  __step AS (SELECT CASE WHEN %d %% u != 0 THEN CAST(error('resample: -every is finer than the epoch unit — use generate go') AS BIGINT) ELSE %d // u END AS s FROM __unit),\n",
+		everyNs, everyNs))
+	sb.WriteString(fmt.Sprintf("  __mm AS (SELECT min(%s) AS mn, max(%s) AS mx FROM __base),\n", tsCol, tsCol))
+	sb.WriteString("  __bounds AS (SELECT CAST(floor(mn * 1.0 / s) * s AS BIGINT) AS lo, CAST(floor(mx * 1.0 / s) * s AS BIGINT) AS hi, s FROM __mm, __step),\n")
+	sb.WriteString("  __grid AS (SELECT __g FROM __bounds, generate_series(lo, hi, s) __t(__g)),\n")
+	for i, v := range values {
+		sb.WriteString(fmt.Sprintf("  __s%d AS (SELECT CAST(%s AS BIGINT) AS __ts, max(CAST(%s AS DOUBLE)) AS v FROM __base WHERE %s IS NOT NULL GROUP BY __ts),\n",
+			i, tsCol, quoteIdent(v), quoteIdent(v)))
+	}
+	sb.WriteString("  __out AS (\n    SELECT __grid.__g AS " + tsCol)
+	for i, v := range values {
+		vc := quoteIdent(v)
+		switch fill {
+		case "previous":
+			sb.WriteString(fmt.Sprintf(",\n      COALESCE(p%d.v, (SELECT v FROM __s%d ORDER BY __ts LIMIT 1)) AS %s", i, i, vc))
+		case "next":
+			sb.WriteString(fmt.Sprintf(",\n      COALESCE(n%d.v, (SELECT v FROM __s%d ORDER BY __ts DESC LIMIT 1)) AS %s", i, i, vc))
+		case "linear":
+			sb.WriteString(fmt.Sprintf(`,
+      CASE
+        WHEN p%d.__ts = __grid.__g THEN p%d.v
+        WHEN p%d.__ts IS NOT NULL AND n%d.__ts IS NOT NULL THEN p%d.v + (__grid.__g - p%d.__ts) * (n%d.v - p%d.v) / CAST(n%d.__ts - p%d.__ts AS DOUBLE)
+        WHEN p%d.__ts IS NULL THEN n%d.v
+        ELSE p%d.v
+      END AS %s`, i, i, i, i, i, i, i, i, i, i, i, i, i, vc))
+		default:
+			return fmt.Errorf("resample: unknown -fill %q (previous|next|linear)", fill)
+		}
+	}
+	sb.WriteString("\n    FROM __grid")
+	for i := range values {
+		switch fill {
+		case "previous":
+			sb.WriteString(fmt.Sprintf("\n    ASOF LEFT JOIN __s%d p%d ON __grid.__g >= p%d.__ts", i, i, i))
+		case "next":
+			sb.WriteString(fmt.Sprintf("\n    ASOF LEFT JOIN __s%d n%d ON __grid.__g <= n%d.__ts", i, i, i))
+		case "linear":
+			sb.WriteString(fmt.Sprintf("\n    ASOF LEFT JOIN __s%d p%d ON __grid.__g >= p%d.__ts", i, i, i))
+			sb.WriteString(fmt.Sprintf("\n    ASOF LEFT JOIN __s%d n%d ON __grid.__g <= n%d.__ts", i, i, i))
+		}
+	}
+	sb.WriteString("\n  )\n  SELECT * FROM __out ORDER BY " + tsCol + "\n)")
+
+	newCols := append([]string{timeField}, values...)
+	*q = sqlQuery{
+		fromClause: sb.String(),
+		comments:   q.comments,
+		columns:    newCols,
+	}
+	return nil
 }

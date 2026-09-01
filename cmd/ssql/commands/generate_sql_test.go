@@ -527,3 +527,87 @@ func TestTranslateFromSampleSQL(t *testing.T) {
 		t.Errorf("seeded: want refusal, got %v", err)
 	}
 }
+
+func TestTranslateResampleSQL(t *testing.T) {
+	// The happy path builds the DFC121 construction: dedup'd per-field
+	// series (max per ts = highest-wins), epoch-aligned generate_series
+	// grid, ASOF join, edge clamp, ORDER BY.
+	q := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateResample(q, []string{"-time", "t", "-every", "10s", "-value", "v"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"generate_series(lo, hi, s)",
+		"ASOF LEFT JOIN __s0 p0 ON __grid.__g >= p0.__ts",
+		"max(CAST(v AS DOUBLE))", // duplicate ts keeps highest value
+		"GROUP BY __ts",          // one row per timestamp
+		"ORDER BY __ts LIMIT 1",  // leading-edge clamp
+		"ORDER BY t",             // grid order defines output order
+		"10000000000",            // -every 10s in ns, awaiting unit division
+		"1e17",                   // magnitude-based unit detection (Go thresholds)
+	} {
+		if !strings.Contains(q.fromClause, want) {
+			t.Errorf("SQL missing %q:\n%s", want, q.fromClause)
+		}
+	}
+	if len(q.columns) != 2 || q.columns[0] != "t" || q.columns[1] != "v" {
+		t.Errorf("columns = %v, want [t v]", q.columns)
+	}
+
+	// -fill next flips the ASOF direction; linear needs BOTH sides.
+	qn := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateResample(qn, []string{"-time", "t", "-every", "1s", "-value", "v", "-fill", "next"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(qn.fromClause, "ASOF LEFT JOIN __s0 n0 ON __grid.__g <= n0.__ts") {
+		t.Errorf("next fill missing forward ASOF:\n%s", qn.fromClause)
+	}
+	ql := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateResample(ql, []string{"-time", "t", "-every", "1s", "-value", "v", "-fill", "linear"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ql.fromClause, "p0 ON __grid.__g >= p0.__ts") ||
+		!strings.Contains(ql.fromClause, "n0 ON __grid.__g <= n0.__ts") ||
+		!strings.Contains(ql.fromClause, "CAST(n0.__ts - p0.__ts AS DOUBLE)") {
+		t.Errorf("linear fill missing dual ASOF + interpolation:\n%s", ql.fromClause)
+	}
+
+	// -time-unit pins the unit — no detection CASE in the SQL.
+	qu := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateResample(qu, []string{"-time", "t", "-every", "5s", "-value", "v", "-time-unit", "s"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(qu.fromClause, "1e17") {
+		t.Errorf("pinned unit should skip magnitude detection:\n%s", qu.fromClause)
+	}
+
+	// v1 refusals are LOUD: string timestamps and bounds have no SQL
+	// translation yet — silence here would mean a silently different
+	// pipeline (the cardinal sin).
+	for _, c := range [][]string{
+		{"-time", "t", "-every", "10s", "-value", "v", "-time-format", "2006-01-02"},
+		{"-time", "t", "-every", "10s", "-value", "v", "-from", "0"},
+		{"-time", "t", "-every", "10s", "-value", "v", "-to", "100"},
+	} {
+		qr := &sqlQuery{fromClause: "'x.csv'"}
+		if err := translateResample(qr, c); err == nil || !strings.Contains(err.Error(), "generate go") {
+			t.Errorf("args %v: want loud refusal pointing at generate go, got %v", c, err)
+		}
+	}
+
+	// Missing requireds refuse too.
+	qm := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateResample(qm, []string{"-time", "t"}); err == nil {
+		t.Error("missing -every/-value: want error")
+	}
+
+	// resample rebuilds the whole query — accumulated state must wrap.
+	qw := &sqlQuery{fromClause: "'x.csv'", whereClauses: []string{"a > 1"}}
+	if !needsWrap(qw, "resample") {
+		t.Error("resample after where must wrap")
+	}
+	qb := &sqlQuery{fromClause: "'x.csv'"}
+	if needsWrap(qb, "resample") {
+		t.Error("resample on bare from must not wrap")
+	}
+}

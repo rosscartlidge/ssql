@@ -15,9 +15,14 @@ Build finding recorded below: the duplicate-timestamp rule became
 HIGHEST-VALUE-WINS (input-order "last wins" was lane-dependent
 across parallel shards). Edge policy became CLAMP-loudly (absence
 is unrepresentable in typed structs — the prime directive caught a
-cross-lane impossibility at design time). REMAINING from resolution
-#4: the generate-sql DuckDB ASOF translation (equivalence cases
-carry explicit skips naming it). The missing piece between ssql and
+cross-lane impossibility at design time). Resolution #4 CLOSED
+2026-09-01: the generate-sql DuckDB ASOF translation shipped
+(epoch grid via generate_series, backward/forward ASOF joins,
+dual-asof + arithmetic for linear, max-per-ts dedup, edge clamps,
+in-SQL magnitude unit detection); the equivalence duckdb-lane
+skips are gone and the lane is sabotage-verified. v1 refuses
+loudly on string timestamps and -from/-to (generate go covers
+those). Nothing remains open in this DFC. The missing piece between ssql and
 real time-series charting: DFC119's chart/animate sinks want evenly
 gridded data, and nothing in the pipeline today produces it.
 

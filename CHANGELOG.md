@@ -5,6 +5,22 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`generate sql` translates `resample` (closing DFC121 resolution
+  #4)** — the DuckDB translation builds an epoch-aligned
+  `generate_series` grid and fills it with `ASOF JOIN`s: previous is
+  one backward asof, next one forward, linear both plus the
+  interpolation arithmetic; duplicate timestamps dedup to the
+  highest value (`max` per ts) and edges clamp to the first/last
+  observation — the exact ssql semantics, now arbitrated by the
+  equivalence gate's duckdb lane (the two skips are gone; the lane
+  was sabotage-verified by skewing the ASOF comparator). Epoch-unit
+  auto-detection runs IN SQL off `max(abs(ts))` with Go's exact
+  thresholds; `-time-unit` pins it. v1 refuses loudly on string
+  timestamps (`-time-format`) and `-from`/`-to` — use `generate go`.
+
 ## [4.80.0] - 2026-09-01
 
 ### Added
@@ -64,7 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependencies — its migration onto the shared module is scoped as
   its own TODO.)
 
-## [Unreleased]
 
 ### Added
 - **`to animate` renders live in the workspace (DFC119 Phase B)** —
@@ -111,7 +126,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a premise gate that reopens the question if a future reader
   goes chatty.
 
-## [Unreleased]
 
 ### Fixed
 - **Chart X/Y picks survive head and bar reruns** — the

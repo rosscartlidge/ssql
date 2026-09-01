@@ -598,14 +598,12 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
 			`{{.bin}} resample -time pop -every 5s -value id`,
 		Ordered: true,
-		Skip:    map[string]string{"duckdb": "generate sql for resample pending (DFC121 ASOF translation — TODO)"},
 	},
 	{
 		Name: "resample_linear",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
 			`{{.bin}} resample -time pop -every 5s -value id -fill linear -time-unit s`,
 		Ordered: true,
-		Skip:    map[string]string{"duckdb": "generate sql for resample pending (DFC121 ASOF translation — TODO)"},
 	},
 	{
 		Name:     "identity",

@@ -90,7 +90,7 @@ Tracked issues and feature gaps discovered during development.
 ## Next up (refreshed 2026-09-01 — build-ready first, then polish, then parked)
 
 **Build-ready units, in suggested order:**
-1. ~~`resample` + `bucket()`~~ SHIPPED 2026-09-01 — remaining slice: the generate-sql DuckDB ASOF translation (equivalence skips name it)
+1. ~~`resample` + `bucket()`~~ SHIPPED 2026-09-01 — COMPLETE incl. the generate-sql DuckDB ASOF translation (duckdb equivalence lane green, sabotage-verified)
 2. Missing-verbs arc Tier 1 (DFC122): tail → describe → melt → fill → extract+from lines
 3. Chart-artifact migration onto ssqlViz (DFC119 remainder — feature-reconciliation project)
 
