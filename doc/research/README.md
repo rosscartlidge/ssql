@@ -130,6 +130,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC120 | 2026-08-29 | 2026-08-30 | [Drift Is the Enemy: System-Design Principles from Building ssql](./dfc120_system_design_lessons.md) |
 | DFC121 | 2026-08-31 | 2026-09-01 | [`ssql resample`: Snapping Time Series to a Regular Grid](./dfc121_resample_command.md) |
 | DFC122 | 2026-08-31 | 2026-08-31 | [Capability-Gap Survey: What Peer Tools Have That ssql Doesn't](./dfc122_capability_gap_survey.md) |
+| DFC123 | 2026-09-03 | 2026-09-03 | [The Pipeline IR: Finishing the Intermediate Representation We Already Have](./dfc123_pipeline_ir.md) |
 
 <!-- DFC-INDEX-END -->
 
