@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -22,6 +23,7 @@ func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
 		Example("(export SSQL_MODE=record; ssql from ssh host /data.csv | ssql where -if status ge 500 | ssql to table) | ssql generate ssql", "Push filter into SSH").
 		Example("(export SSQL_MODE=record; ssql from csv data.csv | ssql sort -desc revenue | ssql limit 10 | ssql to table) | ssql generate ssql", "Rewrite sort+limit as top").
 		Example("(export SSQL_MODE=record; ssql from csv data.csv | ssql where -if age gt 25 | ssql where -if dept eq sales | ssql to table) | ssql generate ssql", "Merge adjacent where commands").
+		Example("ssql generate ssql -pipeline 'ssql from csv data.csv | ssql sort -desc revenue | ssql limit 10 | ssql to table'", "One-shot: optimize the quoted pipeline (rewrites sort+limit as top)").
 		Flag("-run", "-r").
 		Bool().
 		Global().
@@ -34,6 +36,12 @@ func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
 		Default(false).
 		Help("Print applied optimization rules to stderr").
 		Done().
+		Flag("-pipeline", "-p").
+		String().
+		Global().
+		Default("").
+		Help("Run PIPELINE (a quoted ssql pipeline string) in record mode and optimize its fragments — no export/subshell ceremony needed.").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var run bool
 			var explain bool
@@ -44,7 +52,15 @@ func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
 				explain = v.(bool)
 			}
 
-			pipeline, rules, err := optimizePipeline(os.Stdin)
+			var fragSrc io.Reader = os.Stdin
+			if v, ok := ctx.GlobalFlags["-pipeline"]; ok && v.(string) != "" {
+				fragments, err := runPipelineForFragments(v.(string), "record", "ssql -pipeline")
+				if err != nil {
+					return err
+				}
+				fragSrc = bytes.NewReader(fragments)
+			}
+			pipeline, rules, err := optimizePipeline(fragSrc)
 			if err != nil {
 				if err == errEmptyResult {
 					if explain {

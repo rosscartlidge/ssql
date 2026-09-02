@@ -950,8 +950,10 @@ func fixErrorHandling(code string) string {
 
 	replaced := code
 
-	// Pattern 1: return fmt.Errorf("message: %w", err)
-	if findString(replaced, "return fmt.Errorf(") != -1 {
+	// Pattern: return fmt.Errorf("message: %w", err) — every occurrence.
+	// (The replacement text contains "fmt.Errorf(" but never
+	// "return fmt.Errorf(", so this terminates.)
+	for findString(replaced, "return fmt.Errorf(") != -1 {
 		replaced = replaceReturnError(replaced)
 	}
 

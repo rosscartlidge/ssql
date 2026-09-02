@@ -126,6 +126,14 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	if len(funcFragments) > 0 {
 		importSet["iter"] = true
 	}
+	for _, frag := range fragments {
+		// fixErrorHandling rewrites record-sink error returns into
+		// fmt.Fprintf(os.Stderr,...)+os.Exit(1) — that needs "os".
+		if strings.Contains(frag.Code, "return fmt.Errorf(") {
+			importSet["os"] = true
+			importSet["fmt"] = true
+		}
+	}
 	if len(finalFragments) == 0 {
 		// JSONL fallback. Always needs fmt + os. Additionally needs
 		// `iter` and the public ssql package because the typed-shape
@@ -235,9 +243,12 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 		code.WriteString("\tflag.Parse()\n\n")
 	}
 
-	// init fragments — emit code as-is (they include `records := typed.ReadCSV[T]...`)
+	// init fragments — emit code as-is (they include `records := typed.ReadCSV[T]...`),
+	// except record-shaped fragments carrying `return fmt.Errorf(...)`:
+	// typed main() has no error return, so rewrite to stderr + os.Exit
+	// (same as the record assembler).
 	for _, frag := range initFragments {
-		code.WriteString("\t" + frag.Code + "\n")
+		code.WriteString("\t" + fixErrorHandling(frag.Code) + "\n")
 	}
 
 	// stmt fragments — each is a complete typed.X assignment chained from
@@ -249,7 +260,7 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	// final fragments — sinks.
 	if len(finalFragments) > 0 {
 		for _, frag := range finalFragments {
-			code.WriteString("\t" + frag.Code + "\n")
+			code.WriteString("\t" + fixErrorHandling(frag.Code) + "\n")
 		}
 	} else {
 		// No sink — emit JSONL fallback to stdout with a

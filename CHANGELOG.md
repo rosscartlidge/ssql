@@ -5,6 +5,38 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`-pipeline '...'` on every generate command** — one-shot codegen
+  with the pipeline as a single quoted string, replacing the
+  `ssqlgen` shell helper (which needed a bashrc install and, Ross
+  found, wasn't earning its keep): `ssql generate go -run -pipeline
+  'ssql from x.csv | ssql to table'`. `generate go` honors `-mode`
+  (default typed) and is mutually exclusive with `-script`;
+  `generate sql`/`generate ssql` run the string in record mode. The
+  string gets `-script`'s preprocessing, so `# comments` and
+  leading-`|` continuations work.
+
+### Removed
+- **`ssql -shell-helpers` and the `ssqlgen` bash function** — "they
+  are no help :-)" (Ross). `-pipeline` (above) is the replacement and
+  needs no bashrc install. `-shell-init` no longer emits it; the
+  keybinding integrations are untouched.
+
+### Fixed
+- **Record-only sinks compile in typed/parallel mode again** (found
+  by Ross: `generate go -mode typed` on a pipeline ending in
+  `to chart` died with "too many return values") — the typed
+  assembler emitted final fragments verbatim, so a record sink's
+  `return fmt.Errorf(...)` landed in `func main()`, which has no
+  error return. Final and init fragments now go through the same
+  fixErrorHandling rewrite the record assembler uses (stderr +
+  os.Exit(1)), with the `os` import added on demand, and
+  fixErrorHandling now rewrites EVERY occurrence, not just the
+  first. Corpus case `record_sink_in_typed_pipeline_chart` pins all
+  three modes (sabotage-verified: reverting the fix fails typed).
+
 ## [4.81.0] - 2026-09-01
 
 ### Added

@@ -511,6 +511,22 @@ func TestPipelineCorpus(t *testing.T) {
 				`{{.bin}} to csv`,
 			Contains: []string{"name", "salary", "Carol", "105000", "Alice", "95000"},
 		},
+		{
+			// A record-only sink (to chart has no typed template) in a
+			// typed pipeline: the planner shims typed→Record and injects
+			// the RECORD final fragment — whose `return fmt.Errorf(...)`
+			// is illegal in typed main() (no error return). The typed
+			// assembler emitted finals VERBATIM, so this compiled fine in
+			// record mode and broke in typed/parallel (found by Ross,
+			// 2026-09-02, v4.81.0). Now finals go through
+			// fixErrorHandling in both assemblers; this case pins
+			// compile+run of a record sink in all three modes.
+			Name: "record_sink_in_typed_pipeline_chart",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | ` +
+				`{{.bin}} group-by dept -count n | ` +
+				`{{.bin}} to chart -type bar -x dept -y n`,
+			Contains: []string{"Chart created:"},
+		},
 	}
 
 	for _, c := range cases {

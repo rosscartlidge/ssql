@@ -1328,29 +1328,28 @@ func main() {
 }
 ```
 
-### Shortcut: `ssqlgen`
+### Shortcut: `-pipeline`
 
 Typing `-generate` on every stage (or `(export SSQL_MODE=record; …) | ssql
-generate go`) gets tedious. Install the shell helper once:
+generate go`) gets tedious. Every `generate` command takes the whole
+pipeline as one quoted string with `-pipeline`:
 
 ```bash
-eval "$(ssql -shell-helpers)"      # add to ~/.bashrc
+ssql generate go -pipeline 'ssql from data.csv | ssql where -if age gt 25 | ssql to csv'
+#   → prints the generated Go (typed mode by default)
+
+ssql generate go -mode record -run -pipeline 'ssql from x.csv | ssql to csv'
+ssql generate go -optimise -build /tmp/prog -pipeline 'ssql from x.csv | ssql to table'
+ssql generate sql -run -pipeline 'ssql from x.csv | ssql group-by dept -count n | ssql to table'
+ssql generate ssql -pipeline 'ssql from x.csv | ssql sort -desc n | ssql limit 5 | ssql to table'
 ```
 
-Then `ssqlgen` wraps the whole thing — pass the pipeline as one quoted string:
-
-```bash
-ssqlgen 'ssql from data.csv | ssql where -if age gt 25 | ssql to csv'
-#   → prints the generated Go
-
-ssqlgen -record 'ssql from x.csv | ssql to csv' -run    # record mode, compile + run
-ssqlgen 'ssql from x.csv | ssql to table' -optimise -build /tmp/prog
-```
-
-It accepts `-record`/`-typed`/`-parallel` (default `typed`) and forwards any
-`generate go` flags (`-run`, `-build`, `-optimise`, `OUTPUT`) after the
-pipeline. Under the hood it's `(export SSQL_MODE=MODE; PIPELINE) | ssql
-generate go FLAGS`.
+`generate go` takes `-mode record|typed` (default `typed`); `generate sql`
+and `generate ssql` always use record-mode fragments. All the usual flags
+(`-run`, `-build`, `-optimise`, `OUTPUT`) compose. The string gets the same
+preprocessing as `-script` files — `# comments` and leading-`|` continuation
+lines work, so multi-line quoted pipelines are fine. (`-pipeline` replaces the
+removed `ssqlgen` shell helper, which needed a one-time bashrc install.)
 
 ### Compile and Run Generated Code
 

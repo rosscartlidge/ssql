@@ -26,6 +26,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Example("(export SSQL_MODE=typed; ssql from data.csv | ssql to table) | ssql generate go -run -time", "Compile and run, reporting compile and run times on stderr").
 		Example("(export SSQL_MODE=parallel; ssql from data.csv | ssql to table) | ssql generate go -build query", "Compile to a binary named 'query' and exit").
 		Example("(export SSQL_MODE=parallel; ssql from parquet x.parquet | ssql group-by k -count n | ssql to table) | ssql generate go -optimise -run", "Apply pipeline optimiser (column projection etc.), then compile and execute").
+		Example("ssql generate go -run -pipeline 'ssql from data.csv | ssql where -if age gt 25 | ssql to table'", "One-shot: run the quoted pipeline in typed mode, compile and execute (no export/subshell ceremony)").
 		Flag("-run", "-r").
 		Bool().
 		Global().
@@ -63,6 +64,12 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Global().
 		Default("").
 		Help("Read pipeline from a script file (or <(heredoc)) instead of stdin. Strips # comments, joins leading-| continuation lines.").
+		Done().
+		Flag("-pipeline", "-p").
+		String().
+		Global().
+		Default("").
+		Help("Run PIPELINE (a quoted ssql pipeline string) under SSQL_MODE and generate from its fragments — replaces the ssqlgen shell helper. Mutually exclusive with -script; -mode applies.").
 		Done().
 		Flag("-mode").
 		String().
@@ -109,6 +116,10 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			if v, ok := ctx.GlobalFlags["-script"]; ok {
 				scriptPath = v.(string)
 			}
+			var pipelineText string
+			if v, ok := ctx.GlobalFlags["-pipeline"]; ok {
+				pipelineText = v.(string)
+			}
 			if v, ok := ctx.GlobalFlags["-mode"]; ok {
 				scriptMode = v.(string)
 			}
@@ -142,12 +153,21 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			// output of running the .ssql script under bash with
 			// SSQLGO set. Both produce the same JSONL fragment
 			// stream for the assembler.
+			if scriptPath != "" && pipelineText != "" {
+				return fmt.Errorf("ssql generate go: -script and -pipeline are mutually exclusive (both name the pipeline source)")
+			}
 			var fragmentSrc io.Reader = os.Stdin
-			if scriptPath != "" {
+			if scriptPath != "" || pipelineText != "" {
 				if scriptMode == "" {
 					scriptMode = "typed"
 				}
-				fragments, err := runScriptForFragments(scriptPath, scriptMode)
+				var fragments []byte
+				var err error
+				if scriptPath != "" {
+					fragments, err = runScriptForFragments(scriptPath, scriptMode)
+				} else {
+					fragments, err = runPipelineForFragments(pipelineText, scriptMode, "go -pipeline")
+				}
 				if err != nil {
 					return err
 				}
@@ -473,9 +493,20 @@ func runScriptForFragments(scriptPath, mode string) ([]byte, error) {
 			"ssql generate go -script %s: this ssql (v%s) cannot run the script — it requires v%s or newer",
 			scriptPath, version.Version, missing)
 	}
-	pipeline := preprocessScript(string(src))
+	return runPipelineForFragments(string(src), mode, "-script "+scriptPath)
+}
+
+// runPipelineForFragments executes a pipeline string under bash with
+// SSQL_MODE set and returns the JSONL fragment stream it emits. The
+// shared engine behind `-script FILE` and the inline `-pipeline '...'`
+// flag (the ssqlgen shell helper's replacement). The source text goes
+// through preprocessScript first, so multi-line pipelines with
+// # comments and leading-| continuations work in both forms. label
+// names the flag in error messages.
+func runPipelineForFragments(src, mode, label string) ([]byte, error) {
+	pipeline := preprocessScript(src)
 	if pipeline == "" {
-		return nil, fmt.Errorf("ssql generate go -script: %s contains no pipeline", scriptPath)
+		return nil, fmt.Errorf("ssql generate %s: contains no pipeline", label)
 	}
 
 	// `set -o pipefail` is essential: without it, a typo earlier in
@@ -490,7 +521,7 @@ func runScriptForFragments(scriptPath, mode string) ([]byte, error) {
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("ssql generate go -script: pipeline failed (mode=%s): %w", mode, err)
+		return nil, fmt.Errorf("ssql generate %s: pipeline failed (mode=%s): %w", label, mode, err)
 	}
 	return out, nil
 }

@@ -27,5 +27,4 @@ var ShellIntegrations = []ShellIntegration{
 	{"-help-keybinding", "Alt-h: help under cursor · Alt-H: list key bindings", HelpKeybindingScript},
 	{"-code-keybinding", "Alt-g: show the typed Go the pipeline generates", CodeKeybindingScript},
 	{"-run-keybinding", "Alt-r: compile the pipeline as typed Go and run it", RunKeybindingScript},
-	{"-shell-helpers", "ssqlgen: turn a pipeline into Go/SQL", ShellHelpersScript},
 }
