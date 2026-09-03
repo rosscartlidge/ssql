@@ -12,6 +12,9 @@ import (
 
 // RegisterCast registers the cast subcommand for type conversion
 func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
+	// Order behavior (DFC123 §7): neither consumes nor destroys record order.
+	lib.DeclareOrder("cast", lib.OrderTransparent)
+
 	cmd.Subcommand("cast").
 		Description("Convert field types for all records").
 		Example("ssql from data.csv | ssql cast -type age int", "Convert age to integer").

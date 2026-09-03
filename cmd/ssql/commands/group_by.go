@@ -25,6 +25,9 @@ type exprSpec struct {
 
 // RegisterGroupBy registers the group-by subcommand
 func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
+	// Order behavior (DFC123 §7): destroys record order without consuming it.
+	lib.DeclareOrder("group-by", lib.OrderReset)
+
 	cmd.Subcommand("group-by").
 		Description("Group records by fields and apply aggregations").
 		Example("ssql from sales.csv | ssql group-by region", "Get unique values of region field").

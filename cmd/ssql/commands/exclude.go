@@ -11,22 +11,28 @@ import (
 
 // RegisterExclude registers the exclude subcommand
 func RegisterExclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
+	// Order behavior (DFC123 §7): neither consumes nor destroys record order.
+	lib.DeclareOrder("exclude", lib.OrderTransparent)
+
 	cmd.Subcommand("exclude").
 		Description("Exclude specified fields").
 		Example("ssql from data.csv | ssql exclude id created_at updated_at", "Remove metadata fields").
 		Example("ssql from api.json | ssql exclude password token secret_key", "Remove sensitive fields").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FIELDS").
-		String().
-		Variadic().
-		FieldsFromFlag("").
-		Global().
-		Help("Fields to exclude").
-		Done().
+			String().
+			Variadic().
+			FieldsFromFlag("").
+			Global().
+			Help("Fields to exclude").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "exclude")

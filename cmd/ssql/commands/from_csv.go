@@ -405,14 +405,12 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 			code = configCode + `
 	records, err := ssql.ReadCSV(*flagInput, csvConfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading CSV: %w", err))
-		os.Exit(1)
+		return fmt.Errorf("reading CSV: %w", err)
 	}`
 		} else {
 			code = `records, err := ssql.ReadCSV(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading CSV: %w", err))
-		os.Exit(1)
+		return fmt.Errorf("reading CSV: %w", err)
 	}`
 		}
 		imports = []string{"fmt", "os"}

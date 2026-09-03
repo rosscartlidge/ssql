@@ -13,6 +13,9 @@ import (
 
 // RegisterWhere registers the where subcommand
 func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
+	// Order behavior (DFC123 §7): neither consumes nor destroys record order.
+	lib.DeclareOrder("where", lib.OrderTransparent)
+
 	cmd.Subcommand("where").
 		Description("Filter records based on field conditions").
 		ClauseDescription("Conditions within a clause use AND logic. Separate clauses with + for OR logic.").

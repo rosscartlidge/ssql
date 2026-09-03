@@ -236,8 +236,7 @@ func generateFromJSONCode(filename string) error {
 		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input JSON file", VarName: "flagInput"})
 		code = `records, err := ssql.ReadJSONAuto(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading JSON: %w", err))
-		os.Exit(1)
+		return fmt.Errorf("reading JSON: %w", err)
 	}`
 		imports = []string{"fmt", "os"}
 	}

@@ -26,6 +26,54 @@ type Op struct {
 	Argv   []string       `json:"argv,omitempty"`
 	Fields []string       `json:"fields,omitempty"`
 	Args   map[string]any `json:"args,omitempty"`
+
+	// Order is the command's declared effect on record order (DFC123
+	// §7 / slice 4): OrderTransparent, OrderReset, or OrderConsumes.
+	// Empty means undeclared — consumers must treat that as
+	// OrderConsumes (the conservative default: never assume a stage
+	// ignores order). Declared by the command via DeclareOrder in its
+	// Register function; stamped here so the optimiser reads the
+	// command's own statement instead of a central table.
+	Order string `json:"order,omitempty"`
+}
+
+// Order behaviors. A stage is:
+//   - OrderTransparent: neither consumes nor destroys input order
+//     (where, include, rename, …) — a sort upstream still reaches
+//     whatever follows.
+//   - OrderReset: destroys input order without consuming it (sort,
+//     top, group-by, resample) — a sort whose output flows only
+//     through transparent stages into a reset did nothing observable.
+//   - OrderConsumes: input order affects the result (limit selects
+//     WHICH rows, window aggregates neighbours, tee/to fix output
+//     order). The default for anything undeclared.
+const (
+	OrderTransparent = "transparent"
+	OrderReset       = "reset"
+	OrderConsumes    = "consumes"
+)
+
+// orderRegistry holds each command's declaration, keyed by the kind
+// that appears as os.Args[1]. Populated at registration time.
+var orderRegistry = map[string]string{}
+
+// DeclareOrder records a command's order behavior. Call it from the
+// command's Register function — the declaration lives with the
+// command (DFC115: the command is the authority on itself), and the
+// fragment constructors stamp it onto every Op the command emits.
+func DeclareOrder(kind, order string) {
+	switch order {
+	case OrderTransparent, OrderReset, OrderConsumes:
+	default:
+		panic("lib.DeclareOrder: unknown order behavior " + order + " for " + kind)
+	}
+	orderRegistry[kind] = order
+}
+
+// DeclaredOrder returns a command's declared order behavior, or ""
+// when the command has not declared one.
+func DeclaredOrder(kind string) string {
+	return orderRegistry[kind]
 }
 
 // opFromProcessArgs builds the Op for the CURRENT process's stage from
@@ -41,7 +89,7 @@ func opFromProcessArgs() *Op {
 	if len(os.Args) < 2 {
 		return nil
 	}
-	op := &Op{Kind: os.Args[1]}
+	op := &Op{Kind: os.Args[1], Order: orderRegistry[os.Args[1]]}
 	for _, a := range os.Args[2:] {
 		if a == "-generate" || a == "-g" {
 			continue

@@ -101,6 +101,7 @@ type pipelineCmd struct {
 	Kind    string   // "from", "where", "sort", "limit", "group-by", "to", etc.
 	RawArgs []string // all args after the command name (e.g., ["ssh", "host", "/data.csv"])
 	Removed bool     // true if this command was eliminated by an optimization rule
+	Order   string   // the command's DECLARED order behavior (lib.Order*), from Op; "" = undeclared
 
 	// Parsed fields for "from ssh"
 	IsSSH       bool
@@ -313,6 +314,7 @@ func pipelineCmdFor(frag *lib.CodeFragment) *pipelineCmd {
 	cmd := &pipelineCmd{
 		Kind:    frag.Op.Kind,
 		RawArgs: append([]string(nil), frag.Op.Argv...),
+		Order:   frag.Op.Order,
 	}
 	parseCmdFields(cmd)
 	return cmd
@@ -862,39 +864,43 @@ func ruleSortLimitToTop(cmds []*pipelineCmd) []ruleApplication {
 	return rules
 }
 
-// Order behavior per command kind (DFC123 §7): the dead-sort rule
-// scans forward from a sort through ORDER-TRANSPARENT stages (they
-// neither consume nor destroy order); if it reaches an ORDER-RESET
-// stage (destroys order without consuming it) before anything else,
-// the sort was dead. Anything not in either table is conservatively
-// assumed to CONSUME order (limit selects WHICH rows by position,
-// window aggregates over neighbours, tee/to fix output order, sample
-// -seed is input-order-dependent, …) — unknown kinds keep the sort.
+// orderOf returns a stage's order behavior (DFC123 §7 / slice 4):
+// the command's OWN declaration when the fragment carries one
+// (lib.DeclareOrder in its Register function, stamped onto Op.Order),
+// else the legacy by-kind table for fragments from an older ssql, else
+// OrderConsumes — never assume a stage ignores order.
 //
 // Faithfulness note: ssql sort is documented UNSTABLE
 // (slices.SortFunc), so tie order after the later sort is
 // unspecified with or without the earlier one — dropping it is exact
 // under ssql's own contract. If sort ever becomes stable, the
-// faithful rewrite changes (merge the earlier keys); this table and
-// DFC123 §7 pin that as a deliberate decision.
-var orderTransparent = map[string]bool{
-	"where":   true,
-	"include": true,
-	"exclude": true,
-	"rename":  true,
-	"cast":    true,
-	"update":  true,
+// faithful rewrite changes (merge the earlier keys); DFC123 §7 pins
+// that as a deliberate decision.
+func orderOf(cmd *pipelineCmd) string {
+	if cmd.Order != "" {
+		return cmd.Order
+	}
+	if o, ok := legacyOrderByKind[cmd.Kind]; ok {
+		return o
+	}
+	return lib.OrderConsumes
 }
 
-// orderReset: destroys input order without consuming it. A sort whose
-// output flows (through transparent stages only) into one of these
-// did nothing observable. top selects by its OWN field, group-by
-// hashes, resample re-sorts by its time field internally.
-var orderReset = map[string]bool{
-	"sort":     true,
-	"top":      true,
-	"group-by": true,
-	"resample": true,
+// legacyOrderByKind is the fallback for Op-less fragments (older ssql
+// across an SSH boundary). Commands built from this source declare
+// their behavior themselves — this table must never be the first place
+// a new command's order behavior is written down.
+var legacyOrderByKind = map[string]string{
+	"where":    lib.OrderTransparent,
+	"include":  lib.OrderTransparent,
+	"exclude":  lib.OrderTransparent,
+	"rename":   lib.OrderTransparent,
+	"cast":     lib.OrderTransparent,
+	"update":   lib.OrderTransparent,
+	"sort":     lib.OrderReset,
+	"top":      lib.OrderReset,
+	"group-by": lib.OrderReset,
+	"resample": lib.OrderReset,
 }
 
 // ruleSortElimination removes dead sorts: a sort whose order reaches
@@ -910,10 +916,10 @@ func ruleSortElimination(cmds []*pipelineCmd) []ruleApplication {
 			continue
 		}
 		for j := nextNonRemoved(cmds, i); j != -1; j = nextNonRemoved(cmds, j) {
-			if orderTransparent[cmds[j].Kind] {
+			switch orderOf(cmds[j]) {
+			case lib.OrderTransparent:
 				continue
-			}
-			if orderReset[cmds[j].Kind] {
+			case lib.OrderReset:
 				before := renderCmd(cmds[i])
 				cmds[i].Removed = true
 				rules = append(rules, ruleApplication{

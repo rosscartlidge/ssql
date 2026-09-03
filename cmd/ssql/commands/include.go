@@ -11,22 +11,28 @@ import (
 
 // RegisterInclude registers the include subcommand
 func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
+	// Order behavior (DFC123 §7): neither consumes nor destroys record order.
+	lib.DeclareOrder("include", lib.OrderTransparent)
+
 	cmd.Subcommand("include").
 		Description("Include only specified fields").
 		Example("ssql from data.csv | ssql include name age", "Select only name and age columns").
 		Example("ssql from users.json | ssql include email status | ssql to csv out.csv", "Extract email and status to CSV").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FIELDS").
-		String().
-		Variadic().
-		FieldsFromFlag("").
-		Global().
-		Help("Fields to include").
-		Done().
+			String().
+			Variadic().
+			FieldsFromFlag("").
+			Global().
+			Help("Fields to include").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "include")

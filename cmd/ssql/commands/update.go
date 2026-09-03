@@ -14,6 +14,9 @@ import (
 
 // RegisterUpdate registers the update subcommand
 func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
+	// Order behavior (DFC123 §7): neither consumes nor destroys record order.
+	lib.DeclareOrder("update", lib.OrderTransparent)
+
 	cmd.Subcommand("update").
 		Description("Conditionally update record fields with new values").
 		Example("ssql from users.csv | ssql update -if status eq pending -set status approved", "Update status from pending to approved").

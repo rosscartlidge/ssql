@@ -64,3 +64,33 @@ func TestAllStageConstructorsStamp(t *testing.T) {
 		}
 	})
 }
+
+// Order declarations (DFC123 slice 4): a command declares its order
+// behavior once, in its Register function; constructors stamp it onto
+// every Op the command emits; undeclared kinds stamp "" (consumers
+// treat that as OrderConsumes).
+func TestDeclareOrderStampedOnOp(t *testing.T) {
+	DeclareOrder("testcmd-transparent", OrderTransparent)
+	defer delete(orderRegistry, "testcmd-transparent")
+	withArgs(t, []string{"ssql", "testcmd-transparent", "-x"}, func() {
+		frag := NewStmtFragment("v", "records", "c", nil, "ssql testcmd-transparent -x")
+		if frag.Op == nil || frag.Op.Order != OrderTransparent {
+			t.Fatalf("declared order not stamped: %+v", frag.Op)
+		}
+	})
+	withArgs(t, []string{"ssql", "never-declared", "-x"}, func() {
+		frag := NewStmtFragment("v", "records", "c", nil, "ssql never-declared -x")
+		if frag.Op == nil || frag.Op.Order != "" {
+			t.Fatalf("undeclared kind must stamp empty Order, got %+v", frag.Op)
+		}
+	})
+}
+
+func TestDeclareOrderRejectsUnknown(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("DeclareOrder with a bogus behavior must panic at registration")
+		}
+	}()
+	DeclareOrder("bogus", "sideways")
+}

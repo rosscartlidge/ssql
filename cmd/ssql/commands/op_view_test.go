@@ -109,3 +109,56 @@ func TestRuleSortElimination(t *testing.T) {
 		})
 	}
 }
+
+// Slice 4: the dead-sort rule reads each stage's DECLARED order
+// behavior (Op.Order) and only falls back to the by-kind table for
+// Op-less fragments; undeclared, untabled kinds consume order.
+func TestOrderOfPrefersDeclaration(t *testing.T) {
+	// A kind the table knows nothing about, declared transparent by
+	// its (hypothetical) command: the rule must scan straight through
+	// it and remove the dead sort.
+	cmds := []*pipelineCmd{
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql sort pop", Op: &lib.Op{Kind: "sort", Argv: []string{"pop"}, Order: lib.OrderReset}}),
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql mystery", Op: &lib.Op{Kind: "mystery", Order: lib.OrderTransparent}}),
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql sort id", Op: &lib.Op{Kind: "sort", Argv: []string{"id"}, Order: lib.OrderReset}}),
+	}
+	ruleSortElimination(cmds)
+	if !cmds[0].Removed {
+		t.Error("declared-transparent stage should not protect the dead sort")
+	}
+
+	// Same shape, undeclared and untabled: conservative → sort stays.
+	cmds = []*pipelineCmd{
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql sort pop", Op: &lib.Op{Kind: "sort", Argv: []string{"pop"}, Order: lib.OrderReset}}),
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql mystery", Op: &lib.Op{Kind: "mystery"}}),
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql sort id", Op: &lib.Op{Kind: "sort", Argv: []string{"id"}, Order: lib.OrderReset}}),
+	}
+	ruleSortElimination(cmds)
+	if cmds[0].Removed {
+		t.Error("undeclared stage must be treated as order-consuming")
+	}
+
+	// Declaration beats the table: a where DECLARED consuming (as if
+	// its command's semantics changed) protects the sort even though
+	// the legacy table says transparent.
+	cmds = []*pipelineCmd{
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql sort pop", Op: &lib.Op{Kind: "sort", Argv: []string{"pop"}, Order: lib.OrderReset}}),
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql where -if a gt 1", Op: &lib.Op{Kind: "where", Argv: []string{"-if", "a", "gt", "1"}, Order: lib.OrderConsumes}}),
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql sort id", Op: &lib.Op{Kind: "sort", Argv: []string{"id"}, Order: lib.OrderReset}}),
+	}
+	ruleSortElimination(cmds)
+	if cmds[0].Removed {
+		t.Error("the command's own declaration must override the legacy table")
+	}
+
+	// Op-less fragments (older ssql) use the table.
+	cmds = []*pipelineCmd{
+		parsePipelineCmd("ssql sort pop"),
+		parsePipelineCmd("ssql where -if a gt 1"),
+		parsePipelineCmd("ssql sort id"),
+	}
+	ruleSortElimination(cmds)
+	if !cmds[0].Removed {
+		t.Error("Op-less where should fall back to the transparent table entry")
+	}
+}

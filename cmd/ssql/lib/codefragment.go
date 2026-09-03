@@ -466,6 +466,11 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 	// Collect all imports and deduplicate
 	importSet := make(map[string]bool)
 	importSet["github.com/rosscartlidge/ssql/v4"] = true // Always needed
+	// main() reports run()'s error and exits — the pipeline body runs
+	// in an error-returning context, so fragments' `return fmt.Errorf`
+	// is legal as written (DFC123 slice 4: no textual surgery).
+	importSet["fmt"] = true
+	importSet["os"] = true
 
 	if len(allParams) > 0 {
 		importSet["flag"] = true
@@ -628,16 +633,16 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		code.WriteString("\n")
 	}
 
-	// Add main function
-	code.WriteString("func main() {\n")
-
-	if len(allParams) > 0 {
-		code.WriteString("\tflag.Parse()\n\n")
-	}
+	// main reports run()'s error; the pipeline body lives in run()
+	// so every fragment's `return fmt.Errorf(...)` is legal as
+	// emitted. This replaced fixErrorHandling's textual rewriting of
+	// error returns (DFC123 slice 4 — protocol by contract, not by
+	// string surgery).
+	writeMainCallingRun(&code, len(allParams) > 0)
 
 	// Add init fragments (the main data source)
 	for _, frag := range initFragments {
-		code.WriteString("\t" + fixErrorHandling(frag.Code) + "\n")
+		code.WriteString("\t" + frag.Code + "\n")
 	}
 
 	// The main pipeline root is the first init fragment's variable
@@ -669,7 +674,7 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 	// Add final fragments (e.g., to table, to csv)
 	if len(finalFragments) > 0 {
 		for _, frag := range finalFragments {
-			code.WriteString("\t" + fixErrorHandling(frag.Code) + "\n")
+			code.WriteString("\t" + frag.Code + "\n")
 		}
 	} else {
 		// No final fragment - auto-add JSONL output
@@ -691,12 +696,11 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		// codegen mode.
 		code.WriteString("\t// Output records as JSONL with inferred schema header\n")
 		code.WriteString(fmt.Sprintf("\tif err := ssql.WriteJSONLWithInferredSchemaToWriter(%s, os.Stdout); err != nil {\n", outputVar))
-		code.WriteString("\t\tfmt.Fprintf(os.Stderr, \"Error writing output: %%v\\n\", err)\n")
-		code.WriteString("\t\tos.Exit(1)\n")
+		code.WriteString("\t\treturn fmt.Errorf(\"writing output: %w\", err)\n")
 		code.WriteString("\t}\n")
 	}
 
-	code.WriteString("}\n")
+	code.WriteString("\treturn nil\n}\n")
 
 	return code.String(), nil
 }
@@ -963,56 +967,20 @@ func findString(s, substr string) int {
 	return -1
 }
 
-// fixErrorHandling fixes "return fmt.Errorf(...)" to proper main() error handling
-func fixErrorHandling(code string) string {
-	// Replace "return fmt.Errorf(...)" with proper error handling for main()
-	// Pattern: if err != nil { return fmt.Errorf("...", err) }
-
-	// For now, use simple string replacement
-	// TODO: Use more sophisticated parsing if needed
-
-	replaced := code
-
-	// Pattern: return fmt.Errorf("message: %w", err) — every occurrence.
-	// (The replacement text contains "fmt.Errorf(" but never
-	// "return fmt.Errorf(", so this terminates.)
-	for findString(replaced, "return fmt.Errorf(") != -1 {
-		replaced = replaceReturnError(replaced)
+// writeMainCallingRun emits the program entry: main parses flags (when
+// any), calls run(), and reports its error on stderr with exit 1. The
+// pipeline body is emitted into run() by the caller, which must close
+// it with "return nil\n}". Shared by the record and typed assemblers.
+func writeMainCallingRun(code *strings.Builder, hasParams bool) {
+	code.WriteString("func main() {\n")
+	if hasParams {
+		code.WriteString("\tflag.Parse()\n")
 	}
-
-	return replaced
-}
-
-// replaceReturnError replaces "return fmt.Errorf(...)" with proper error handling
-func replaceReturnError(code string) string {
-	// Find "return fmt.Errorf(" and replace with proper error handling
-	returnIdx := findString(code, "return fmt.Errorf(")
-	if returnIdx == -1 {
-		return code
-	}
-
-	// Find the full error message (up to the closing paren)
-	msgStart := returnIdx + len("return fmt.Errorf(")
-	depth := 1
-	msgEnd := msgStart
-
-	for msgEnd < len(code) && depth > 0 {
-		if code[msgEnd] == '(' {
-			depth++
-		} else if code[msgEnd] == ')' {
-			depth--
-		}
-		if depth > 0 {
-			msgEnd++
-		}
-	}
-
-	errorMsg := code[msgStart:msgEnd]
-
-	// Build replacement: fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf(...)) + os.Exit(1)
-	replacement := fmt.Sprintf("fmt.Fprintf(os.Stderr, \"Error: %%v\\n\", fmt.Errorf(%s))\n\t\tos.Exit(1)", errorMsg)
-
-	return code[:returnIdx] + replacement + code[msgEnd+1:]
+	code.WriteString("\tif err := run(); err != nil {\n")
+	code.WriteString("\t\tfmt.Fprintln(os.Stderr, \"Error:\", err)\n")
+	code.WriteString("\t\tos.Exit(1)\n")
+	code.WriteString("\t}\n}\n\n")
+	code.WriteString("func run() error {\n")
 }
 
 // renderImport renders one import line. An entry of the form "alias path"

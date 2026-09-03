@@ -76,8 +76,7 @@ func generateFromArrowCode(filename string) error {
 		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input Arrow file", VarName: "flagInput"})
 		code = `records, err := ssql.ReadArrow(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading Arrow: %w", err))
-		os.Exit(1)
+		return fmt.Errorf("reading Arrow: %w", err)
 	}`
 		imports = []string{"fmt", "os"}
 	}

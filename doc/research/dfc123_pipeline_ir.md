@@ -168,7 +168,11 @@ Consequences:
 3. **Protocol facts as fragment fields** (new): fallible-sink,
    barrier, order behavior (§7) — declared, not recovered by textual
    surgery. `fixErrorHandling` retires in favor of the assembler
-   choosing the wrapper from a declaration.
+   choosing the wrapper from a declaration. *(Shipped as slice 4 with
+   one refinement: fallibility turned out to need no per-fragment
+   declaration at all — a universal `run() error` contract makes
+   every fragment's error return legal, which is simpler than a
+   flag. Order behavior did become a declaration: `Op.Order`.)*
 4. **Operator properties for analysis** (new): the order dimension
    below, alongside the existing shape/parallel `Capabilities`. Each
    property earns its place by powering a rule or a check — no
@@ -308,7 +312,27 @@ than on anything relational. Deliberately left open here.
    structured Args per-command as they next change (each migration
    follows the resample pattern).
 4. **Protocol facts** — fallible/barrier/sink declarations; retire
-   `fixErrorHandling`.
+   `fixErrorHandling`. **SHIPPED 2026-09-03**, in two parts.
+   (a) Fallibility became a CONTRACT rather than a declaration: both
+   assemblers now emit `main()` → `run() error`, so every fragment's
+   `return fmt.Errorf(...)` is legal as written — no per-fragment
+   flag needed, no textual surgery. `fixErrorHandling` and
+   `replaceReturnError` are deleted; nine `from` templates that had
+   hard-coded the old `Fprintf+os.Exit` replacement idiom now emit
+   the idiomatic `return fmt.Errorf`. The v4.81.0 typed-sink compile
+   failure is unrepresentable. (Barrier-ness was already a declared
+   fact: `Capabilities.SerialOnly`.) (b) Order behavior promoted
+   from optimiser tables to command declarations:
+   `lib.DeclareOrder(kind, lib.OrderTransparent|Reset|Consumes)` in
+   each command's Register function, stamped onto `Op.Order` by the
+   constructors; the optimiser's `orderOf` prefers the declaration,
+   falls back to the legacy by-kind table for Op-less fragments,
+   and treats anything undeclared as consuming. Sabotage: `limit`
+   declaring itself transparent fails the ascending liveness pin —
+   the declaration is authoritative. One textual-surgery site
+   remains: `generateSubprocessFunction`'s error-handling rewrite for
+   record func bodies (join/union procsub sources) — the same
+   contract should reach it when func bodies next change.
 5. **Order properties + dead-sort elimination** (§7) as the first new
    IR-certified rule; port `sort+limit→top` and merge-wheres onto the
    same footing.

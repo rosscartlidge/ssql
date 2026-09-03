@@ -202,8 +202,7 @@ func generateFromTSVCode(filename string) error {
 		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input TSV file", VarName: "flagInput"})
 		code = `records, err := ssql.ReadTSV(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading TSV: %w", err))
-		os.Exit(1)
+		return fmt.Errorf("reading TSV: %w", err)
 	}`
 		imports = []string{"fmt", "os"}
 	}

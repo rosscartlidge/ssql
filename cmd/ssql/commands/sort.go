@@ -11,35 +11,43 @@ import (
 
 // RegisterSort registers the sort subcommand
 func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
+	// Order behavior (DFC123 §7): destroys record order without consuming it.
+	lib.DeclareOrder("sort", lib.OrderReset)
+
 	cmd.Subcommand("sort").
 		Description("Sort records by one or more fields").
 		Example("ssql from data.csv | ssql sort name", "Sort by name ascending").
 		Example("ssql from data.csv | ssql sort dept -desc salary", "Sort by dept descending, then salary ascending").
 		Example("ssql from data.csv | ssql sort dept - salary -desc", "Sort by dept ascending, salary descending").
 		ClauseDescription("Each clause specifies fields with a sort direction").
+
 		Flag("FIELDS").
-		String().
-		Variadic().
-		Required().
-		FieldsFromFlag("").
-		Local().
-		Help("Fields to sort by").
-		Done().
+			String().
+			Variadic().
+			Required().
+			FieldsFromFlag("").
+			Local().
+			Help("Fields to sort by").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-desc", "-d").
-		Bool().
-		Local().
-		Help("Sort descending (use +desc for ascending)").
-		Done().
+			Bool().
+			Local().
+			Help("Sort descending (use +desc for ascending)").
+			Done().
+
 		Flag("-asc", "-a").
-		Bool().
-		Local().
-		Help("Sort ascending (default, use +asc for descending)").
-		Done().
+			Bool().
+			Local().
+			Help("Sort ascending (default, use +asc for descending)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {

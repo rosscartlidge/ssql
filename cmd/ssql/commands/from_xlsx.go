@@ -89,8 +89,7 @@ func generateFromXLSXCode(filename string, sheet string) error {
 	} else {
 		code = `records, err := ssql.ReadXLSX(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading XLSX: %w", err))
-		os.Exit(1)
+		return fmt.Errorf("reading XLSX: %w", err)
 	}`
 	}
 

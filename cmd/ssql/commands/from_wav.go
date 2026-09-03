@@ -97,8 +97,7 @@ func generateFromWAVCode(filename string, channel int) error {
 	if filename == "" {
 		code = `records, _, err := ssql.ReadWAVFromReader(os.Stdin)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading WAV: %w", err))
-		os.Exit(1)
+		return fmt.Errorf("reading WAV: %w", err)
 	}`
 		imports = []string{"fmt", "os"}
 	} else {
@@ -112,8 +111,7 @@ func generateFromWAVCode(filename string, channel int) error {
 		} else {
 			code = `records, _, err := ssql.ReadWAV(*flagInput)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading WAV: %w", err))
-		os.Exit(1)
+		return fmt.Errorf("reading WAV: %w", err)
 	}`
 		}
 		imports = []string{"fmt", "os"}

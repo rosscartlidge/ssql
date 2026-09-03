@@ -11,34 +11,42 @@ import (
 
 // RegisterTop registers the top subcommand
 func RegisterTop(cmd *cf.CommandBuilder) *cf.CommandBuilder {
+	// Order behavior (DFC123 §7): destroys record order without consuming it.
+	lib.DeclareOrder("top", lib.OrderReset)
+
 	cmd.Subcommand("top").
 		Description("Select top N records by field value (heap-based, O(K) memory)").
 		Example("ssql from data.csv | ssql top 10 -field salary", "Top 10 by salary (descending)").
 		Example("ssql from data.csv | ssql top 5 -field age -asc", "Bottom 5 by age (ascending)").
 		Example("ssql from sales.csv | ssql top 3 -field revenue | ssql to table", "Top 3 revenue records as table").
+
 		Flag("N").
-		String().
-		Required().
-		Global().
-		Help("Number of records to return").
-		Done().
+			String().
+			Required().
+			Global().
+			Help("Number of records to return").
+			Done().
+
 		Flag("-field", "-f").
-		String().
-		Required().
-		FieldsFromFlag("").
-		Global().
-		Help("Field to rank by").
-		Done().
+			String().
+			Required().
+			FieldsFromFlag("").
+			Global().
+			Help("Field to rank by").
+			Done().
+
 		Flag("-asc").
-		Bool().
-		Global().
-		Help("Return bottom N instead (ascending, use +asc for top N)").
-		Done().
+			Bool().
+			Global().
+			Help("Return bottom N instead (ascending, use +asc for top N)").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var nStr string
 			var field string

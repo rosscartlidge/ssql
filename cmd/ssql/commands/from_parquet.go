@@ -143,8 +143,7 @@ func generateFromParquetCode(filename string, columns []string) error {
 	} else {
 		code = `records, err := ssql.ReadParquetColumns(*flagInput, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", fmt.Errorf("reading Parquet: %w", err))
-		os.Exit(1)
+		return fmt.Errorf("reading Parquet: %w", err)
 	}`
 	}
 

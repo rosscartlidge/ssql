@@ -126,14 +126,9 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	if len(funcFragments) > 0 {
 		importSet["iter"] = true
 	}
-	for _, frag := range fragments {
-		// fixErrorHandling rewrites record-sink error returns into
-		// fmt.Fprintf(os.Stderr,...)+os.Exit(1) — that needs "os".
-		if strings.Contains(frag.Code, "return fmt.Errorf(") {
-			importSet["os"] = true
-			importSet["fmt"] = true
-		}
-	}
+	// main() reports run()'s error and exits (DFC123 slice 4).
+	importSet["fmt"] = true
+	importSet["os"] = true
 	if len(finalFragments) == 0 {
 		// JSONL fallback. Always needs fmt + os. Additionally needs
 		// `iter` and the public ssql package because the typed-shape
@@ -238,17 +233,15 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 		code.WriteString(")\n\n")
 	}
 
-	code.WriteString("func main() {\n")
-	if len(allParams) > 0 {
-		code.WriteString("\tflag.Parse()\n\n")
-	}
+	// main reports run()'s error; the pipeline body lives in run(), so
+	// record-shaped fragments' `return fmt.Errorf(...)` is legal as
+	// emitted — the v4.81.0 typed-sink compile failure is
+	// unrepresentable (DFC123 slice 4).
+	writeMainCallingRun(&code, len(allParams) > 0)
 
-	// init fragments — emit code as-is (they include `records := typed.ReadCSV[T]...`),
-	// except record-shaped fragments carrying `return fmt.Errorf(...)`:
-	// typed main() has no error return, so rewrite to stderr + os.Exit
-	// (same as the record assembler).
+	// init fragments — emit code as-is (they include `records := typed.ReadCSV[T]...`)
 	for _, frag := range initFragments {
-		code.WriteString("\t" + fixErrorHandling(frag.Code) + "\n")
+		code.WriteString("\t" + frag.Code + "\n")
 	}
 
 	// stmt fragments — each is a complete typed.X assignment chained from
@@ -260,7 +253,7 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	// final fragments — sinks.
 	if len(finalFragments) > 0 {
 		for _, frag := range finalFragments {
-			code.WriteString("\t" + fixErrorHandling(frag.Code) + "\n")
+			code.WriteString("\t" + frag.Code + "\n")
 		}
 	} else {
 		// No sink — emit JSONL fallback to stdout with a
@@ -321,12 +314,11 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 			// JSONL without schema. Better than crashing.
 			fmt.Fprintf(&code, "\tif err := typed.WriteJSONLToWriter(%s, os.Stdout); err != nil {\n", outVar)
 		}
-		code.WriteString("\t\tfmt.Fprintf(os.Stderr, \"write: %v\\n\", err)\n")
-		code.WriteString("\t\tos.Exit(1)\n")
+		code.WriteString("\t\treturn fmt.Errorf(\"write: %w\", err)\n")
 		code.WriteString("\t}\n")
 	}
 
-	code.WriteString("}\n")
+	code.WriteString("\treturn nil\n}\n")
 	return code.String(), nil
 }
 

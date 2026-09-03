@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Generated programs run the pipeline in `run() error`** (DFC123
+  slice 4) — `main()` parses flags, calls `run()`, and reports its
+  error with exit 1; every fragment's `return fmt.Errorf(...)` is now
+  legal as emitted in both record and typed programs. This replaces
+  the assemblers' textual rewriting of error returns
+  (`fixErrorHandling`, deleted) — the mechanism behind the v4.81.0
+  typed-sink compile failure — and the nine `from` templates that had
+  hard-coded the old stderr+exit idiom now emit idiomatic error
+  returns. Generated output is more readable and standard Go.
+- **Order behavior is declared by each command** — where/include/
+  exclude/rename/cast/update declare themselves order-transparent
+  and sort/top/group-by/resample order-resetting via
+  `lib.DeclareOrder` in their Register functions, stamped onto the
+  fragment `Op`; the dead-sort rule reads the command's own
+  declaration (the by-kind table survives only as the fallback for
+  fragments from older ssql). Anything undeclared conservatively
+  consumes order. Sabotage-verified: a command falsely declaring
+  itself transparent fails the liveness equivalence pin.
+
+### Fixed
+- **Builder-chain source formatting restored** — a `gofmt -w` during
+  the v4.83.0 bindings work flattened the hierarchical autocli
+  builder-chain indentation and stripped the blank lines between flag
+  blocks in 28 command files (the convention is gofmt-incompatible
+  by design). Restored via 3-way merge, verified gofmt-equal to the
+  flattened versions (no semantic change). Source-only; no runtime
+  effect.
+
 ### Added
 - **Dead-sort elimination in the optimiser (DFC123 §7)** — a sort
   whose order is reset (by a later sort, top, group-by, or resample)
