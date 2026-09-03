@@ -21,9 +21,10 @@ type UnpivotConfig struct {
 
 // UnpivotRecords folds wide records into long ones, the inverse of
 // pivot: one output record per (input record, value field) pair, in
-// input order then Values order. A value field that is absent or null
-// on a record produces no row (SQL UNPIVOT's default; melt would emit
-// NaN). Row-local — no buffering, order-preserving.
+// input order then Values order. A MISSING value — absent, nil, or the
+// empty string (ssql's one definition of missing, DFC124) — produces
+// no row (SQL UNPIVOT's default; melt would emit NaN). Row-local — no
+// buffering, order-preserving.
 func UnpivotRecords(records iter.Seq[Record], cfg UnpivotConfig) iter.Seq[Record] {
 	nameField, valueField := cfg.NameField, cfg.ValueField
 	if nameField == "" {
@@ -53,7 +54,7 @@ func UnpivotRecords(records iter.Seq[Record], cfg UnpivotConfig) iter.Seq[Record
 			}
 			for _, vf := range values {
 				v, ok := fields[vf]
-				if !ok || v == nil {
+				if !ok || v == nil || v == "" {
 					continue
 				}
 				m := MakeMutableRecord()

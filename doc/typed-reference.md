@@ -124,7 +124,7 @@ A tag value of `"-"` excludes the field entirely.
 
 `string`, `bool`, `int`, `int32`, `int64`, `uint64`, `float32`, `float64`,
 `time.Time` (RFC3339 in CSV), and **pointer-to-T** for nullable columns.
-Empty CSV values become the zero value (or `nil` for pointer types).
+Empty CSV values become the zero value (or `nil` for pointer types). **Note:** this differs from the record lanes, where an empty numeric/boolean cell is *absent* (missing) since v4.86 — see `doc/research/dfc124_missing_values.md` §3 for the typed gap and its planned fix (pointer types for partially-empty columns).
 
 Other parse errors silently zero the field in `ReadCSV`; use `ReadCSVSafe`
 to surface them.

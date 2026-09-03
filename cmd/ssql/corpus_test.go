@@ -107,6 +107,7 @@ func corpusData(t *testing.T) string {
 			"employees.tsv": strings.ReplaceAll(corpusEmployeesCSV, ",", "\t"),
 			"customers.tsv": strings.ReplaceAll(corpusCustomersCSV, ",", "\t"),
 			"shuffled.csv":  corpusShuffledCSV,
+			"empties.csv":   corpusEmptiesCSV,
 		}
 		for name, content := range files {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {

@@ -1,6 +1,7 @@
 package ssql
 
 import (
+	"strings"
 	"iter"
 	"testing"
 )
@@ -121,5 +122,48 @@ func TestDescribeEmptyInput(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("restricted empty → %d rows, want 1", n)
+	}
+}
+
+// DFC124: an empty CSV cell in a numeric/bool column is ABSENT (nil
+// slot), never the zero value; an empty text cell stays "".
+func TestCSVEmptyCellIsAbsent(t *testing.T) {
+	csv := "id,n,f,s,b\n1,10,1.5,x,true\n2,,,,\n"
+	var rows []Record
+	for r := range ReadCSVFromReader(strings.NewReader(csv)) {
+		rows = append(rows, r)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d", len(rows))
+	}
+	r := rows[1]
+	if GetOr(r, "n", int64(-1)) != -1 || GetOr(r, "f", -1.0) != -1 || GetOr(r, "b", true) != true {
+		t.Errorf("empty numeric/bool cells must read as missing (GetOr default), got %v", r)
+	}
+	for _, k := range []string{"n", "f", "b"} {
+		v, _ := Get[any](r, k)
+		if v != nil {
+			t.Errorf("%s: want nil slot, got %v (%T)", k, v, v)
+		}
+	}
+	if GetOr(r, "s", "MISSING") != "" {
+		t.Errorf("empty text cell must stay \"\", got %q", GetOr(r, "s", "MISSING"))
+	}
+	if !r.Has("n") {
+		t.Error("the column still exists on the record (Has) even when the value is missing")
+	}
+	// Row 1 unchanged.
+	if GetOr(rows[0], "n", int64(0)) != 10 || GetOr(rows[0], "b", false) != true {
+		t.Errorf("non-empty cells changed: %v", rows[0])
+	}
+	// And it renders as an empty cell, not "<nil>".
+	if got := formatValue(nil); got != "" {
+		t.Errorf("formatValue(nil) = %q, want empty", got)
+	}
+	// describe sees it as missing.
+	for d := range DescribeRecords(ReadCSVFromReader(strings.NewReader(csv)), DescribeConfig{Fields: []string{"n"}}) {
+		if GetOr(d, "missing", int64(0)) != 1 || GetOr(d, "count", int64(0)) != 1 || GetOr(d, "mean", 0.0) != 10 {
+			t.Errorf("describe over empties: %v", d)
+		}
 	}
 }

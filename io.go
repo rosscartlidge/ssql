@@ -283,9 +283,15 @@ func parseAsString(s string) any {
 	return strings.TrimSpace(s)
 }
 
-// parseAsInt parses as int64, returns 0 on error
+// parseAsInt parses as int64. An EMPTY cell is missing → nil (the
+// field is absent; DFC124) — never 0, which would be a value the data
+// does not contain. Other unparsable text still falls back to 0 (a
+// recorded follow-up in DFC124 §3).
 func parseAsInt(s string) any {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
 	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return i
 	}
@@ -296,9 +302,12 @@ func parseAsInt(s string) any {
 	return int64(0)
 }
 
-// parseAsFloat parses as float64, returns 0.0 on error
+// parseAsFloat parses as float64; an empty cell is missing → nil (DFC124).
 func parseAsFloat(s string) any {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
 	if f, err := strconv.ParseFloat(s, 64); err == nil {
 		return f
 	}
@@ -308,6 +317,9 @@ func parseAsFloat(s string) any {
 // parseAsBool parses as bool (true/false, 1/0, yes/no), returns false on error
 func parseAsBool(s string) any {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil // missing (DFC124)
+	}
 	switch strings.ToLower(s) {
 	case "true", "1", "yes", "y", "on":
 		return true
@@ -1603,8 +1615,12 @@ func parseValue(s string) any {
 	return s
 }
 
-// formatValue converts a value to string for output
+// formatValue converts a value to string for output. A missing value
+// (nil slot — DFC124) renders as an empty cell, never "<nil>".
 func formatValue(value any) string {
+	if value == nil {
+		return ""
+	}
 	switch v := value.(type) {
 	case string:
 		return v

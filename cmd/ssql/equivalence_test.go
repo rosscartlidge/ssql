@@ -46,6 +46,16 @@ import (
 // corpusShuffledCSV: distinct city + pop, in neither city- nor pop-sorted
 // order, so "first N by input" differs from "N by value" — the property the
 // alphabetical employees fixture lacked.
+// corpusEmptiesCSV: one all-empty row (DFC124). An empty numeric or
+// boolean cell is ABSENT in the record lanes and NULL in DuckDB; an
+// empty text cell stays "" (commands treat it as missing).
+const corpusEmptiesCSV = `id,n,f,s,b
+1,10,1.5,x,true
+2,,,,
+3,30,3.5,z,false
+4,40,4.5,w,true
+`
+
 const corpusShuffledCSV = `id,city,pop
 7,Mumbai,20
 3,Cairo,10
@@ -705,6 +715,27 @@ var equivCases = []EquivCase{
 		Name:     "unpivot_default_values",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 20 | {{.bin}} exclude city | {{.bin}} unpivot -id id`,
 		Ordered:  false,
+	},
+	{
+		// DFC124: empties are absent → describe's missing/mean agree with
+		// the DuckDB oracle. Typed lanes skipped: the typed reader still
+		// writes zero values (DFC124 §3 — the recorded next step).
+		Name:     "empties_describe",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} describe`,
+		Ordered:  true,
+		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+	},
+	{
+		Name:     "empties_unpivot",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} unpivot -id id -value n -value f`,
+		Ordered:  false,
+		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+	},
+	{
+		Name:     "empties_where_numeric",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} where -if n gt 5 | {{.bin}} include id n`,
+		Ordered:  false,
+		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
 	},
 	{
 		Name:     "identity",

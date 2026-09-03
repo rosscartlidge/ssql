@@ -61,3 +61,15 @@ func TestUnpivotKeepsValueTypes(t *testing.T) {
 		}
 	}
 }
+
+func TestUnpivotSkipsMissing(t *testing.T) {
+	// absent, nil-equivalent, and "" are all missing (DFC124).
+	in := recsOf([]kv{{"k", "r"}, {"a", ""}, {"b", int64(1)}})
+	var names []string
+	for r := range UnpivotRecords(in, UnpivotConfig{IDs: []string{"k"}}) {
+		names = append(names, GetOr(r, "name", ""))
+	}
+	if len(names) != 1 || names[0] != "b" {
+		t.Errorf("empty-string value must produce no row, got %v", names)
+	}
+}

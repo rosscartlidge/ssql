@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **An empty CSV/TSV cell in a numeric or boolean column is now
+  MISSING, not zero** ([DFC124](doc/research/dfc124_missing_values.md)).
+  The record reader used to run a per-column fast parser whose error
+  fallback returned the zero value, so `Bob,5,` read as `feb: 0` — a
+  value the data does not contain — and `describe` reported `missing 0`
+  with a mean pulled toward zero while DuckDB (NULL) told the truth.
+  The record model has one representation of missing: the field is
+  absent (JSON `null` already read that way). Empty numeric/bool cells
+  are now absent (`GetOr` yields the default, JSON writes `null`,
+  CSV/table write an empty cell, round-trips preserve the empties);
+  empty text cells stay `""` and commands treat them as missing
+  (`describe` did; `unpivot` now skips them too). Gated by a new
+  empties fixture in the equivalence corpus against the DuckDB oracle;
+  sabotage-verified. Known gap, recorded not hidden: the typed reader
+  still writes zero values (its cases are skipped by name in the gate)
+  — pointer inference for partially-empty columns is the next step.
+  Also recorded: unparsable non-empty cells (`N/A` in an int column)
+  still become 0 silently, and record CSV typing looks at the first
+  row only — both follow-ups in DFC124 §3.
+
 ### Added
 - **`ssql unpivot` — wide to long, pivot's inverse** (DFC122 Tier 1,
   item 3; the SQL name — DuckDB/SQL Server/Oracle say UNPIVOT — not
