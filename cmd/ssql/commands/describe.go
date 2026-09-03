@@ -39,7 +39,7 @@ func RegisterDescribe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Variadic().
 			FieldsFromFlag("").
 			Global().
-			Help("Fields to profile (default: every field, in first-seen order)").
+			Help("Fields to profile, in this order (default: every field, sorted by name)").
 			Done().
 
 		Flag("-generate", "-g").

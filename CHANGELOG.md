@@ -5,6 +5,31 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **SSH operator console catches up and refuses source-less lines**
+  (Ross: "the ssh server might need a little maintenance"). The
+  console (`ssql serve DATA.csv`) has its own command list and had
+  silently missed every command added this week; it now registers
+  `describe`, `unpivot`, `fill`, `extract`, `resample`, `sample`, and
+  the DSP transforms, and a drift test (`TestServeConsoleRegistration`)
+  fails for any CLI command that is neither registered there nor
+  excluded WITH a reason — a new command must be placed deliberately.
+  A pipeline whose first stage is a transform (`where … | to table`, or
+  a bare `to table`) used to run and print nothing — stage 0 reads an
+  empty stdin by the shell's design — and now refuses with the fix
+  spelled out: *pipeline has no source … start with from-loaded*. This
+  rides on a new pre-execution hook in autocli (`shell.Options.Validate`,
+  shell v0.5.0 / ssh v0.1.14); the shell stays host-agnostic.
+- **The codelab gains an "SSH operator console" section** — the first
+  written runbook for `ssql serve`'s SSH side (keys, connecting, the
+  in-session grammar, `from-loaded`, built-ins).
+
+### Fixed
+- `describe -help` said unrestricted output is in "first-seen order";
+  it is sorted by name (the v4.86 contract).
+
 ## [4.87.0] - 2026-09-03
 
 ### Added

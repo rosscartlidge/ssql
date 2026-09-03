@@ -56,6 +56,21 @@ func buildServeCLI() *cf.Command {
 	b = RegisterGroupBy(b)
 	b = RegisterPivot(b)
 	b = RegisterWindow(b)
+	b = RegisterSample(b)
+	b = RegisterResample(b)
+	b = RegisterDescribe(b)
+	b = RegisterUnpivot(b)
+	b = RegisterFill(b)
+	b = RegisterExtract(b)
+	b = RegisterFFT(b)
+	b = RegisterIFFT(b)
+	b = RegisterConvolve(b)
+	b = RegisterCorrelate(b)
+	b = RegisterSpectrogram(b)
+	// TestServeConsoleRegistration pins this list against the CLI's:
+	// every CLI command is either registered here or named in the
+	// test's exclusion list WITH a reason — a new command must be
+	// placed deliberately, never forgotten (five verbs were, once).
 
 	// Stream-output sinks under `to`. File-writing variants
 	// (parquet/arrow/xlsx/wav/chart/explore/animate) are deliberately
