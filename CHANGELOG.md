@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`generate ssql` no longer mangles values with embedded quotes** —
+  the optimiser re-tokenized the shell-quoted Command string with a
+  parser that cannot represent an embedded single quote, so
+  `where -if name eq O'Brien` came back as `"OBrien"`: a silently
+  different pipeline. Fragments now carry a structured `Op`
+  descriptor (Kind + the stage's own argv, stamped at emission —
+  DFC123 slice 2) and the optimiser consumes it directly; the
+  Command-string parse survives only as the fallback for fragments
+  from older ssql (SSH version skew degrades to old behavior, never
+  a wrong parse). Sabotage-verified: forcing the fallback reproduces
+  the mangling.
+
 ### Changed
 - **Variable bindings are assembler-owned (DFC123 slice 1)** — the
   code assemblers now run a binding-resolution pass

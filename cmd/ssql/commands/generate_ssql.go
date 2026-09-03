@@ -208,7 +208,7 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 	// a join consumes one; a union consumes one per -file /dev/fd/N.
 	var pendingFuncBodies [][]*pipelineCmd
 	for _, frag := range fragments {
-		cmd := parsePipelineCmd(frag.Command)
+		cmd := pipelineCmdFor(frag)
 		// func fragments are side-input sources (join/union), not pipeline
 		// stages — and never CONSUMERS (a union func fragment's Command is
 		// the outer union string, which would otherwise eat its own body).
@@ -216,7 +216,7 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 			cmd.Removed = true
 			var innerCmds []*pipelineCmd
 			for _, bodyFrag := range frag.FuncBody {
-				innerCmds = append(innerCmds, parsePipelineCmd(bodyFrag.Command))
+				innerCmds = append(innerCmds, pipelineCmdFor(bodyFrag))
 			}
 			pendingFuncBodies = append(pendingFuncBodies, innerCmds)
 			cmds = append(cmds, cmd)
@@ -293,6 +293,48 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 // --- Command parsing ---
 
 // parsePipelineCmd parses a Command string like "ssql from ssh host /data.csv" into a pipelineCmd.
+// pipelineCmdFor builds the optimiser's view of a fragment, preferring
+// the structured Op descriptor (DFC123 slice 2) over re-tokenizing the
+// shell-quoted Command string. Op.Argv is the emitting process's own
+// argv — lossless, where parseCommandArgs cannot even represent an
+// embedded single quote. The Command-string path remains as the
+// fallback for fragments without Op (older ssql across an SSH
+// boundary): version skew degrades to the old behavior, never to a
+// wrong parse.
+func pipelineCmdFor(frag *lib.CodeFragment) *pipelineCmd {
+	if frag.Command == "" {
+		// A command's continuation fragment (e.g. group-by's second):
+		// not a pipeline stage of its own.
+		return &pipelineCmd{Removed: true}
+	}
+	if frag.Op == nil || frag.Op.Kind == "" {
+		return parsePipelineCmd(frag.Command)
+	}
+	cmd := &pipelineCmd{
+		Kind:    frag.Op.Kind,
+		RawArgs: append([]string(nil), frag.Op.Argv...),
+	}
+	parseCmdFields(cmd)
+	return cmd
+}
+
+// parseCmdFields populates the per-command parsed fields from
+// Kind+RawArgs — shared by the Op path and the Command-string path.
+func parseCmdFields(cmd *pipelineCmd) {
+	switch cmd.Kind {
+	case "from":
+		parseFromCmd(cmd)
+	case "merge":
+		parseMergeCmd(cmd)
+	case "join":
+		parseJoinCmd(cmd)
+	case "sort":
+		parseSortCmd(cmd)
+	case "limit":
+		parseLimitCmd(cmd)
+	}
+}
+
 func parsePipelineCmd(command string) *pipelineCmd {
 	if command == "" {
 		return &pipelineCmd{Removed: true} // empty command (e.g., group-by second fragment)
@@ -310,20 +352,7 @@ func parsePipelineCmd(command string) *pipelineCmd {
 		Kind:    kind,
 		RawArgs: rawArgs,
 	}
-
-	switch kind {
-	case "from":
-		parseFromCmd(cmd)
-	case "merge":
-		parseMergeCmd(cmd)
-	case "join":
-		parseJoinCmd(cmd)
-	case "sort":
-		parseSortCmd(cmd)
-	case "limit":
-		parseLimitCmd(cmd)
-	}
-
+	parseCmdFields(cmd)
 	return cmd
 }
 

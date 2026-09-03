@@ -41,6 +41,7 @@ type CodeFragment struct {
 	Imports []string    `json:"imports"`          // Required imports (e.g., ["strings", "log"])
 	Command string      `json:"command"`          // The ssql command that generated this fragment (e.g., "ssql from")
 	Error   string      `json:"error,omitempty"`  // Error message for "error" type fragments
+	Op      *Op         `json:"op,omitempty"`     // Structured operation descriptor (DFC123): what the stage MEANS; backends fall back to Command parsing when nil
 	Params  []CodeParam `json:"params,omitempty"` // Parameterizable values for flag generation
 
 	// For "func" type fragments (subprocess functions from process substitution)
@@ -271,7 +272,7 @@ func WriteCodeFragment(frag *CodeFragment) error {
 
 // NewInitFragment creates the first fragment in a pipeline (e.g., from)
 func NewInitFragment(varName, code string, imports []string, command string) *CodeFragment {
-	return &CodeFragment{
+	frag := &CodeFragment{
 		Type:    "init",
 		Var:     varName,
 		Input:   "",
@@ -279,11 +280,15 @@ func NewInitFragment(varName, code string, imports []string, command string) *Co
 		Imports: imports,
 		Command: command,
 	}
+	if command != "" {
+		frag.Op = opFromProcessArgs()
+	}
+	return frag
 }
 
 // NewStmtFragment creates a statement fragment that transforms data
 func NewStmtFragment(varName, inputVar, code string, imports []string, command string) *CodeFragment {
-	return &CodeFragment{
+	frag := &CodeFragment{
 		Type:    "stmt",
 		Var:     varName,
 		Input:   inputVar,
@@ -291,6 +296,10 @@ func NewStmtFragment(varName, inputVar, code string, imports []string, command s
 		Imports: imports,
 		Command: command,
 	}
+	if command != "" {
+		frag.Op = opFromProcessArgs()
+	}
+	return frag
 }
 
 // NewStmtFragmentWithRuntimeImport creates a statement fragment that requires the runtime package
@@ -299,7 +308,7 @@ func NewStmtFragmentWithRuntimeImport(varName, inputVar, code string, imports []
 	// Add runtime import to the imports list
 	runtimeImport := "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
 	allImports := append(imports, runtimeImport)
-	return &CodeFragment{
+	frag := &CodeFragment{
 		Type:    "stmt",
 		Var:     varName,
 		Input:   inputVar,
@@ -307,11 +316,15 @@ func NewStmtFragmentWithRuntimeImport(varName, inputVar, code string, imports []
 		Imports: allImports,
 		Command: command,
 	}
+	if command != "" {
+		frag.Op = opFromProcessArgs()
+	}
+	return frag
 }
 
 // NewFinalFragment creates a final fragment with no output variable (e.g., write-csv)
 func NewFinalFragment(inputVar, code string, imports []string, command string) *CodeFragment {
-	return &CodeFragment{
+	frag := &CodeFragment{
 		Type:    "final",
 		Var:     "",
 		Input:   inputVar,
@@ -319,6 +332,10 @@ func NewFinalFragment(inputVar, code string, imports []string, command string) *
 		Imports: imports,
 		Command: command,
 	}
+	if command != "" {
+		frag.Op = opFromProcessArgs()
+	}
+	return frag
 }
 
 // NewFuncFragment creates a function fragment from subprocess fragments (process substitution)

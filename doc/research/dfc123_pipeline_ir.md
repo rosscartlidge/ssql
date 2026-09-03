@@ -265,6 +265,20 @@ than on anything relational. Deliberately left open here.
 2. **`Op` on the fragment, optimiser consumes it** — `pipelineCmd`
    becomes a view over `Op`; fall back to `Command`-parsing for
    fragments not yet emitting `Op`; migrate per-command.
+   **SHIPPED 2026-09-03**: `lib.Op{Kind, Argv, Fields, Args}` on
+   CodeFragment, stamped centrally in the four stage constructors
+   from the emitting process's own os.Args (continuation fragments
+   stay Op-less — one stage, one Op; func fragments defer to their
+   body fragments' own Ops). The optimiser's `pipelineCmdFor`
+   prefers Op and falls back to Command parsing (older-ssql
+   fragments across SSH degrade gracefully). Building the slice
+   found a LIVE bug the string path had all along: the Command
+   tokenizer can't represent an embedded single quote, so
+   `where -if name eq O'Brien` came out of `generate ssql` as
+   `"OBrien"` — a silently different pipeline. Op.Argv is lossless
+   by construction; regression pinned end-to-end and
+   sabotage-verified (forcing the fallback reproduces the mangling).
+   Fields/Args stay empty until slice 3 grows consumers.
 3. **SQL translator consumes `Op`** — the `translate*` arg-parsers go
    (my week-old `translateResample` parser is the first candidate for
    deletion-by-structure).
