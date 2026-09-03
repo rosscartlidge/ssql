@@ -16,30 +16,35 @@ func registerToParquet(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.csv | ssql to parquet output.parquet", "Convert CSV to Parquet").
 		Example("ssql from large.json | ssql to parquet data.parquet -row-group-size 500000", "Tune row-group size for downstream parallel reads").
 		Example("ssql from large.csv | ssql to parquet data.parquet -compression zstd", "Use ZSTD compression").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-row-group-size").
-		Int().
-		Global().
-		Default(1_000_000).
-		Help("Maximum rows per Parquet row group (default 1_000_000). Smaller → more reader-side parallelism. Pass 0 for a single row group.").
-		Done().
+			Int().
+			Global().
+			Default(1_000_000).
+			Help("Maximum rows per Parquet row group (default 1_000_000). Smaller → more reader-side parallelism. Pass 0 for a single row group.").
+			Done().
+
 		Flag("-compression").
-		String().
-		Global().
-		Default("snappy").
-		Help("Compression codec: snappy (default), gzip, zstd, none").
-		Done().
+			String().
+			Global().
+			Default("snappy").
+			Help("Compression codec: snappy (default), gzip, zstd, none").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
-		Global().
-		Required().
-		Help("Output Parquet file (required)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
+			Global().
+			Required().
+			Help("Output Parquet file (required)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool

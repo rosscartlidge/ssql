@@ -20,73 +20,83 @@ func RegisterMerge(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from sorted1.csv | ssql merge sorted2.jsonl -by timestamp", "Merge two sorted files by timestamp").
 		Example("ssql from chunk1.csv | ssql merge chunk2.jsonl chunk3.jsonl -by dept name", "Merge 3 sorted files by multiple fields").
 		Example("ssql merge -catalog shards.csv -by timestamp -- where -if level eq ERROR", "Merge catalog shards with pushdown").
+
 		Flag("FILE").
-		String().
-		Variadic().
-		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl,csv,tsv}"}).
-		Global().
-		Help("Additional pre-sorted JSONL files to merge. For CSV: <(ssql from csv FILE)").
-		Done().
+			String().
+			Variadic().
+			Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl,csv,tsv}"}).
+			Global().
+			Help("Additional pre-sorted JSONL files to merge. For CSV: <(ssql from csv FILE)").
+			Done().
+
 		Flag("-by", "-b").
-		String().
-		Variadic().
-		Required().
-		FieldsFromFlag("").
-		Global().
-		Help("Fields to merge by (must match sort order of inputs)").
-		Done().
+			String().
+			Variadic().
+			Required().
+			FieldsFromFlag("").
+			Global().
+			Help("Fields to merge by (must match sort order of inputs)").
+			Done().
+
 		Flag("-desc", "-d").
-		Bool().
-		Global().
-		Help("Merge descending (use +desc for ascending)").
-		Done().
+			Bool().
+			Global().
+			Help("Merge descending (use +desc for ascending)").
+			Done().
+
 		Flag("-catalog", "-c").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.csv"}).
-		Global().
-		Default("").
-		Help("Catalog CSV file listing shards (host,path columns)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+			Global().
+			Default("").
+			Help("Catalog CSV file listing shards (host,path columns)").
+			Done().
+
 		Flag("-if").
-		Arg("field").
-		// Prune filters address the CATALOG's columns — complete
-		// them from the -catalog CSV's header (the FieldsFromFlag
-		// rule: never NoCompleter when a data file can answer).
-		FieldsFromFlag("-catalog").
-		Done().
-		Arg("op").
-		Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains"}}).
-		Done().
-		Arg("value").
-		FieldValuesFrom("-catalog", "field").
-		Done().
-		Accumulate().
-		Global().
-		Help("Partition pruning filter on catalog metadata: -if date_from le 2024-03-01").
-		Done().
+			Arg("field").
+				// Prune filters address the CATALOG's columns — complete
+				// them from the -catalog CSV's header (the FieldsFromFlag
+				// rule: never NoCompleter when a data file can answer).
+				FieldsFromFlag("-catalog").
+				Done().
+			Arg("op").
+				Completer(&cf.StaticCompleter{Options: []string{"eq", "ne", "gt", "ge", "lt", "le", "contains"}}).
+				Done().
+			Arg("value").
+				FieldValuesFrom("-catalog", "field").
+				Done().
+			Accumulate().
+			Global().
+			Help("Partition pruning filter on catalog metadata: -if date_from le 2024-03-01").
+			Done().
+
 		Flag("-gpu").
-		Bool().
-		Global().
-		Help("Use GPU-enabled ssql binary on remote hosts").
-		Done().
+			Bool().
+			Global().
+			Help("Use GPU-enabled ssql binary on remote hosts").
+			Done().
+
 		Flag("-shard-field").
-		String().
-		Global().
-		Default("").
-		Help("Add field with host:path to each record").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Add field with host:path to each record").
+			Done().
+
 		Flag("-catalog-used").
-		String().
-		Global().
-		Default("").
-		Completer(&cf.FileCompleter{Pattern: "*.csv"}).
-		Help("Write expanded catalog (after glob expansion + pruning) to CSV file").
-		Done().
+			String().
+			Global().
+			Default("").
+			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+			Help("Write expanded catalog (after glob expansion + pruning) to CSV file").
+			Done().
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var files []string
 			var byFields []string

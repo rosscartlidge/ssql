@@ -14,24 +14,28 @@ func registerToXLSX(cmd *cf.SubcommandBuilder) {
 		Description("Write as Excel XLSX file").
 		Example("ssql from data.csv | ssql to xlsx output.xlsx", "Convert CSV to Excel").
 		Example("ssql from data.json | ssql to xlsx -sheet Sales output.xlsx", "Convert JSON to Excel with custom sheet name").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-sheet").
-		String().
-		Global().
-		Default("").
-		Help("Sheet name (default: Sheet1)").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Sheet name (default: Sheet1)").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.xlsx"}).
-		Global().
-		Required().
-		Help("Output XLSX file (required)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.xlsx"}).
+			Global().
+			Required().
+			Help("Output XLSX file (required)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var sheet string

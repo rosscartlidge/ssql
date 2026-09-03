@@ -13,18 +13,21 @@ func registerToJSON(cmd *cf.SubcommandBuilder) {
 		Description("Write as pretty-printed JSON array").
 		Example("ssql from data.csv | ssql to json", "Convert CSV to pretty JSON").
 		Example("ssql from data.csv | ssql to json output.json", "Write pretty JSON to file").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.json"}).
-		Global().
-		Default("").
-		Help("Output JSON file (or stdout if not specified)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.json"}).
+			Global().
+			Default("").
+			Help("Output JSON file (or stdout if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool
@@ -67,18 +70,21 @@ func registerToJSONL(cmd *cf.SubcommandBuilder) {
 		Description("Write as JSONL (one JSON object per line)").
 		Example("ssql from data.csv | ssql to jsonl", "Convert CSV to JSONL").
 		Example("ssql from data.csv | ssql to jsonl output.jsonl", "Write JSONL to file").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
-		Global().
-		Default("").
-		Help("Output JSONL file (or stdout if not specified)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.jsonl"}).
+			Global().
+			Default("").
+			Help("Output JSONL file (or stdout if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool

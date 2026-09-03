@@ -14,18 +14,21 @@ func registerToArrow(cmd *cf.SubcommandBuilder) {
 		Description("Write as Apache Arrow IPC file (10-20x faster I/O)").
 		Example("ssql from data.csv | ssql to arrow output.arrow", "Convert CSV to Arrow for faster subsequent reads").
 		Example("ssql from large.json | ssql to arrow data.arrow", "Convert JSON to Arrow format").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.arrow"}).
-		Global().
-		Required().
-		Help("Output Arrow file (required)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.arrow"}).
+			Global().
+			Required().
+			Help("Output Arrow file (required)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool

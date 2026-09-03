@@ -21,84 +21,98 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 		Example("ssql from spectro.jsonl | ssql to chart -x time -y frequency -z magnitude -type heatmap", "Create heatmap from spectrogram data").
 		Example("ssql from data.csv | ssql to chart -x frequency -y magnitude -log-x", "Create chart with logarithmic X-axis").
 		Example("ssql from customers.csv | ssql to chart -x age -y spend -color region -type scatter", "Scatter plot with points colored by region").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-x").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("X-axis field").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("X-axis field").
+			Done().
+
 		Flag("-y").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Accumulate().
-		Help("Y-axis field (can specify multiple times for multi-series)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Accumulate().
+			Help("Y-axis field (can specify multiple times for multi-series)").
+			Done().
+
 		Flag("-z").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Z-axis field (for heatmap color values)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Z-axis field (for heatmap color values)").
+			Done().
+
 		Flag("-type", "-t").
-		String().
-		Completer(&cf.StaticCompleter{Options: chartTypes}).
-		Global().
-		Default("line").
-		Help("Chart type: line, bar, scatter, pie, doughnut, radar, heatmap").
-		Done().
+			String().
+			Completer(&cf.StaticCompleter{Options: chartTypes}).
+			Global().
+			Default("line").
+			Help("Chart type: line, bar, scatter, pie, doughnut, radar, heatmap").
+			Done().
+
 		Flag("-log-x").
-		Bool().
-		Global().
-		Help("Use logarithmic scale for X-axis").
-		Done().
+			Bool().
+			Global().
+			Help("Use logarithmic scale for X-axis").
+			Done().
+
 		Flag("-log-y").
-		Bool().
-		Global().
-		Help("Use logarithmic scale for Y-axis").
-		Done().
+			Bool().
+			Global().
+			Help("Use logarithmic scale for Y-axis").
+			Done().
+
 		Flag("-color").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Color-by field for scatter plots (categorical coloring)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Color-by field for scatter plots (categorical coloring)").
+			Done().
+
 		Flag("-colorscale").
-		String().
-		Completer(&cf.StaticCompleter{Options: colorScales}).
-		Global().
-		Default("viridis").
-		Help("Color scale for heatmaps: viridis, plasma, inferno, magma, cividis, turbo").
-		Done().
+			String().
+			Completer(&cf.StaticCompleter{Options: colorScales}).
+			Global().
+			Default("viridis").
+			Help("Color scale for heatmaps: viridis, plasma, inferno, magma, cividis, turbo").
+			Done().
+
 		Flag("-zmin").
-		String().
-		Global().
-		Default("").
-		Help("Minimum value for color scale (heatmap only, empty = auto)").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Minimum value for color scale (heatmap only, empty = auto)").
+			Done().
+
 		Flag("-zmax").
-		String().
-		Global().
-		Default("").
-		Help("Maximum value for color scale (heatmap only, empty = auto)").
-		Done().
+			String().
+			Global().
+			Default("").
+			Help("Maximum value for color scale (heatmap only, empty = auto)").
+			Done().
+
 		Flag("-log-freq").
-		Bool().
-		Global().
-		Help("Use logarithmic Y-axis for spectrograms (heatmap only)").
-		Done().
+			Bool().
+			Global().
+			Help("Use logarithmic Y-axis for spectrograms (heatmap only)").
+			Done().
+
 		Flag("-output", "-o").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.html"}).
-		Global().
-		Default("chart.html").
-		Help("Output HTML file (default: chart.html)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.html"}).
+			Global().
+			Default("chart.html").
+			Help("Output HTML file (default: chart.html)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var xField, zField, colorField, colorScale, chartType, outputFile string
 			var zMinStr, zMaxStr string

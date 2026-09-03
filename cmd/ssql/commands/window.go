@@ -22,199 +22,216 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 		// Global flags
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-presorted").
-		Bool().
-		Global().
-		Help("Input is presorted by partition+order fields (streaming, O(1) memory)").
-		Done().
+			Bool().
+			Global().
+			Help("Input is presorted by partition+order fields (streaming, O(1) memory)").
+			Done().
 
 		// Local flags (clause-scoped)
 		Flag("-partition").
-		String().
-		FieldsFromFlag("").
-		Accumulate().
-		Local().
-		Help("Partition field (repeatable, like SQL PARTITION BY)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Accumulate().
+			Local().
+			Help("Partition field (repeatable, like SQL PARTITION BY)").
+			Done().
+
 		Flag("-order").
-		String().
-		FieldsFromFlag("").
-		Accumulate().
-		Local().
-		Help("Order field (repeatable, like SQL ORDER BY)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Accumulate().
+			Local().
+			Help("Order field (repeatable, like SQL ORDER BY)").
+			Done().
+
 		Flag("-desc").
-		Bool().
-		Local().
-		Help("Sort descending (use +desc for ascending)").
-		Done().
+			Bool().
+			Local().
+			Help("Sort descending (use +desc for ascending)").
+			Done().
+
 		Flag("-preceding").
-		Int().
-		Local().
-		Default(-1).
-		Help("Rows before current row (-1 = unbounded, default: -1)").
-		Done().
+			Int().
+			Local().
+			Default(-1).
+			Help("Rows before current row (-1 = unbounded, default: -1)").
+			Done().
+
 		Flag("-following").
-		Int().
-		Local().
-		Default(0).
-		Help("Rows after current row (-1 = unbounded, default: 0)").
-		Done().
+			Int().
+			Local().
+			Default(0).
+			Help("Rows after current row (-1 = unbounded, default: 0)").
+			Done().
 
 		// Ranking functions
 		Flag("-row-number").
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("ROW_NUMBER() → result field").
-		Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("ROW_NUMBER() → result field").
+			Done().
+
 		Flag("-rank").
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("RANK() → result field").
-		Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("RANK() → result field").
+			Done().
+
 		Flag("-dense-rank").
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("DENSE_RANK() → result field").
-		Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("DENSE_RANK() → result field").
+			Done().
+
 		Flag("-ntile").
-		Arg("n").
-		Completer(&cf.NoCompleter{Hint: "<n>"}).
-		Done().
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("NTILE(n) → result field").
-		Done().
+			Arg("n").
+				Completer(&cf.NoCompleter{Hint: "<n>"}).
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("NTILE(n) → result field").
+			Done().
+
 		Flag("-percent-rank").
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("PERCENT_RANK() → result field").
-		Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("PERCENT_RANK() → result field").
+			Done().
 
 		// Offset functions
 		Flag("-lag").
-		Arg("field").
-		FieldsFromFlag("").
-		Done().
-		Arg("n").
-		Completer(&cf.NoCompleter{Hint: "<offset>"}).
-		Done().
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("LAG(field, n) → result field").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("n").
+				Completer(&cf.NoCompleter{Hint: "<offset>"}).
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("LAG(field, n) → result field").
+			Done().
+
 		Flag("-lead").
-		Arg("field").
-		FieldsFromFlag("").
-		Done().
-		Arg("n").
-		Completer(&cf.NoCompleter{Hint: "<offset>"}).
-		Done().
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("LEAD(field, n) → result field").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("n").
+				Completer(&cf.NoCompleter{Hint: "<offset>"}).
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("LEAD(field, n) → result field").
+			Done().
+
 		Flag("-first").
-		Arg("field").
-		FieldsFromFlag("").
-		Done().
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("FIRST_VALUE(field) → result field").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("FIRST_VALUE(field) → result field").
+			Done().
+
 		Flag("-last").
-		Arg("field").
-		FieldsFromFlag("").
-		Done().
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("LAST_VALUE(field) → result field").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("LAST_VALUE(field) → result field").
+			Done().
 
 		// Aggregate window functions
 		Flag("-sum").
-		Arg("field").
-		FieldsFromFlag("").
-		Done().
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("Windowed SUM(field) → result field").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Windowed SUM(field) → result field").
+			Done().
+
 		Flag("-avg").
-		Arg("field").
-		FieldsFromFlag("").
-		Done().
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("Windowed AVG(field) → result field").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Windowed AVG(field) → result field").
+			Done().
+
 		Flag("-count").
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("Windowed COUNT(*) → result field").
-		Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Windowed COUNT(*) → result field").
+			Done().
+
 		Flag("-min").
-		Arg("field").
-		FieldsFromFlag("").
-		Done().
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("Windowed MIN(field) → result field").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Windowed MIN(field) → result field").
+			Done().
+
 		Flag("-max").
-		Arg("field").
-		FieldsFromFlag("").
-		Done().
-		Arg("result").
-		Completer(&cf.NoCompleter{Hint: "<result-field>"}).
-		Done().
-		Accumulate().
-		Local().
-		Help("Windowed MAX(field) → result field").
-		Done().
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Windowed MAX(field) → result field").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "window")
@@ -539,6 +556,7 @@ func parseLagLeadSpecs(flags map[string]any, flagName string, isLag bool) []ssql
 	}
 	return specs
 }
+
 
 // inferWindowResultType returns the schema type string for a window function result.
 func inferWindowResultType(fn ssql.WindowFunc, inputSchema *lib.Schema) string {

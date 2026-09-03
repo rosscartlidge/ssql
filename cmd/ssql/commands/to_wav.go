@@ -15,24 +15,28 @@ func registerToWAV(cmd *cf.SubcommandBuilder) {
 		Example("ssql from audio.wav | ssql to wav output.wav", "Copy WAV file (round-trip)").
 		Example("ssql from audio.wav | ssql to wav -rate 22050 output.wav", "Resample to 22050 Hz").
 		Example("ssql from signal.jsonl | ssql to wav -rate 44100 audio.wav", "Convert signal data to audio").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-rate", "-r").
-		Int().
-		Global().
-		Default(0).
-		Help("Sample rate in Hz (default: from schema header, or 44100 if not specified)").
-		Done().
+			Int().
+			Global().
+			Default(0).
+			Help("Sample rate in Hz (default: from schema header, or 44100 if not specified)").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.wav"}).
-		Global().
-		Required().
-		Help("Output WAV file (required)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.wav"}).
+			Global().
+			Required().
+			Help("Output WAV file (required)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var sampleRate int

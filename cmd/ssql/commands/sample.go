@@ -21,29 +21,34 @@ func RegisterSample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from big.csv | ssql sample 1000", "Uniform 1000-row sample (seed printed to stderr for reproducibility)").
 		Example("ssql from big.csv | ssql sample -percent 5 | ssql to table", "Keep ~5% of rows, streaming").
 		Example("ssql from big.csv | ssql sample 1000 -seed 42", "Reproducible sample — identical rows every run and in generated code").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("N").
-		Int().
-		Global().
-		Default(-1).
-		Help("Number of rows to keep (exact, uniform); 0 = pass-through (dial the stage off)").
-		Done().
+			Int().
+			Global().
+			Default(-1).
+			Help("Number of rows to keep (exact, uniform); 0 = pass-through (dial the stage off)").
+			Done().
+
 		Flag("-percent", "-p").
-		Float().
-		Global().
-		Default(float64(-1)).
-		Help("Keep each row independently with this probability (0 < P <= 100)").
-		Done().
+			Float().
+			Global().
+			Default(float64(-1)).
+			Help("Keep each row independently with this probability (0 < P <= 100)").
+			Done().
+
 		Flag("-seed").
-		Int().
-		Global().
-		Default(0).
-		Help("RNG seed for reproducible sampling; when omitted, a seed is chosen and printed to stderr").
-		Done().
+			Int().
+			Global().
+			Default(0).
+			Help("RNG seed for reproducible sampling; when omitted, a seed is chosen and printed to stderr").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			n, _ := ctx.GlobalFlags["N"].(int)
 			percent, _ := ctx.GlobalFlags["-percent"].(float64)

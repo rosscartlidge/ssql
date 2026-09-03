@@ -15,17 +15,20 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql limit 10", "Show first 10 records").
 		Example("ssql from large.csv | ssql limit 100 | ssql to table", "Preview first 100 records").
 		Example("ssql from large.csv | ssql limit 0 | ssql to table", "Limit dialled to 0: all records pass through (and code generation skips the stage)").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("N").
-		Int().
-		Required().
-		Global().
-		Help("Number of records to take").
-		Done().
+			Int().
+			Required().
+			Global().
+			Help("Number of records to take").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var n int
 			var generate bool

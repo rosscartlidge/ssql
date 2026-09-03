@@ -15,25 +15,29 @@ func registerToTSV(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.json | ssql to tsv output.tsv", "Convert JSON to TSV").
 		Example("ssql from data.csv | ssql to tsv -separator '|' output.psv", "Use pipe separator").
 		Example("ssql from data.csv | ssql to tsv", "Write TSV to stdout").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-separator", "-s").
-		String().
-		Global().
-		Default("\t").
-		Completer(&cf.StaticCompleter{Options: []string{"\\t", "|", ";", ","}}). // Common separators
-		Help("Field separator character (default: tab)").
-		Done().
+			String().
+			Global().
+			Default("\t").
+			Completer(&cf.StaticCompleter{Options: []string{"\\t", "|", ";", ","}}). // Common separators
+			Help("Field separator character (default: tab)").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.tsv"}).
-		Global().
-		Default("").
-		Help("Output TSV file (or stdout if not specified)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.tsv"}).
+			Global().
+			Default("").
+			Help("Output TSV file (or stdout if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var separator string

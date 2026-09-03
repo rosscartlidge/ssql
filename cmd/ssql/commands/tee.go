@@ -18,17 +18,20 @@ func RegisterTee(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("Write the stream to a file and pass it through (save intermediate results)").
 		Example("ssql from big.csv | ssql where -if x gt 5 | ssql tee filtered.jsonl | ssql group-by k -count n | ssql to table", "Snapshot the filtered records while continuing the pipeline").
 		Example("ssql from a.csv | ssql join <(ssql from b.csv) -using id | ssql tee joined.jsonl | ssql to table", "Keep the join result for later replay: ssql from joined.jsonl").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Required().
-		Global().
-		Help("Output file (schema-headed JSONL — replay with `ssql from FILE`)").
-		Done().
+			String().
+			Required().
+			Global().
+			Help("Output file (schema-headed JSONL — replay with `ssql from FILE`)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "tee")

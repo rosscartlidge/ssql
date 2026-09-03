@@ -22,70 +22,81 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 			"Animated histogram of distributions over years").
 		Example("ssql from data.csv | ssql to animate -frame epoch -x x -y y -z val -fps 10 -loop",
 			"Fast looping heatmap animation").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-frame").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Required().
-		Help("Field that defines animation frames (ordered)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Required().
+			Help("Field that defines animation frames (ordered)").
+			Done().
+
 		Flag("-x").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Required().
-		Help("X-axis field").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Required().
+			Help("X-axis field").
+			Done().
+
 		Flag("-y").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Required().
-		Help("Y-axis field (value field for histogram)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Required().
+			Help("Y-axis field (value field for histogram)").
+			Done().
+
 		Flag("-z").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Z-axis field for heatmap cell values (required for heatmap)").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Z-axis field for heatmap cell values (required for heatmap)").
+			Done().
+
 		Flag("-type").
-		String().
-		Completer(&cf.StaticCompleter{Options: chartTypes}).
-		Global().
-		Default("heatmap").
-		Help("Chart type: heatmap or histogram").
-		Done().
+			String().
+			Completer(&cf.StaticCompleter{Options: chartTypes}).
+			Global().
+			Default("heatmap").
+			Help("Chart type: heatmap or histogram").
+			Done().
+
 		Flag("-fps").
-		Int().
-		Global().
-		Default(5).
-		Help("Playback frames per second (default: 5)").
-		Done().
+			Int().
+			Global().
+			Default(5).
+			Help("Playback frames per second (default: 5)").
+			Done().
+
 		Flag("-colorscale").
-		String().
-		Completer(&cf.StaticCompleter{Options: colorScales}).
-		Global().
-		Default("viridis").
-		Help("Color scale for heatmap: viridis, plasma, inferno, magma, cividis, turbo").
-		Done().
+			String().
+			Completer(&cf.StaticCompleter{Options: colorScales}).
+			Global().
+			Default("viridis").
+			Help("Color scale for heatmap: viridis, plasma, inferno, magma, cividis, turbo").
+			Done().
+
 		Flag("-loop").
-		Bool().
-		Global().
-		Help("Loop playback").
-		Done().
+			Bool().
+			Global().
+			Help("Loop playback").
+			Done().
+
 		Flag("-output", "-o").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.html"}).
-		Global().
-		Default("animate.html").
-		Help("Output HTML file (default: animate.html)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.html"}).
+			Global().
+			Default("animate.html").
+			Help("Output HTML file (default: animate.html)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var frameField, xField, yField, zField, chartType, colorScale, outputFile string
 			var fps int

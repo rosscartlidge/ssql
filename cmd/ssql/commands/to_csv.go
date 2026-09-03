@@ -14,18 +14,21 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 		Description("Write as CSV file").
 		Example("ssql from data.json | ssql to csv output.csv", "Convert JSON to CSV").
 		Example("ssql from data.csv | ssql where -if status eq active | ssql to csv active.csv", "Filter and save to CSV").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.csv"}).
-		Global().
-		Default("").
-		Help("Output CSV file (or stdout if not specified)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
+			Global().
+			Default("").
+			Help("Output CSV file (or stdout if not specified)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var outputFile string
 			var generate bool

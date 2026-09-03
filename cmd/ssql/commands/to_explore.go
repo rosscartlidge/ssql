@@ -23,66 +23,77 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			"Full workspace by default: pipeline bar, completion, uploads, downloads").
 		Example("ssql from big.csv | ssql to explore -light small.html",
 			"Light viewer (~1MB): grid browsing only, no embedded engine").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-allow-empty").
-		Bool().
-		Global().
-		Default(false).
-		Help("Permit zero input records (a deliberately blank workspace page); without it, empty input is a loud error").
-		Done().
+			Bool().
+			Global().
+			Default(false).
+			Help("Permit zero input records (a deliberately blank workspace page); without it, empty input is a loud error").
+			Done().
+
 		Flag("-title").
-		String().
-		Global().
-		Default("Data Explorer").
-		Help("Page title").
-		Done().
+			String().
+			Global().
+			Default("Data Explorer").
+			Help("Page title").
+			Done().
+
 		Flag("-theme").
-		String().
-		Global().
-		Default("light").
-		Completer(&cf.StaticCompleter{Options: []string{"light", "dark"}}).
-		Help("Theme: light or dark").
-		Done().
+			String().
+			Global().
+			Default("light").
+			Completer(&cf.StaticCompleter{Options: []string{"light", "dark"}}).
+			Help("Theme: light or dark").
+			Done().
+
 		Flag("-x").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Initial X-axis field").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Initial X-axis field").
+			Done().
+
 		Flag("-y").
-		String().
-		FieldsFromFlag("").
-		Global().
-		Help("Initial Y-axis field").
-		Done().
+			String().
+			FieldsFromFlag("").
+			Global().
+			Help("Initial Y-axis field").
+			Done().
+
 		Flag("-pagesize").
-		Int().
-		Global().
-		Default(50).
-		Help("Rows per page in table (default 50)").
-		Done().
+			Int().
+			Global().
+			Default(50).
+			Help("Rows per page in table (default 50)").
+			Done().
+
 		Flag("-wasm").
-		Bool().
-		Global().
-		Default(true).
-		Help("Embed the ssql engine for client-side pipelines (DEFAULT; use -light to disable)").
-		Done().
+			Bool().
+			Global().
+			Default(true).
+			Help("Embed the ssql engine for client-side pipelines (DEFAULT; use -light to disable)").
+			Done().
+
 		Flag("-light").
-		Bool().
-		Global().
-		Help("Light viewer: no embedded engine (~1MB page, grid browsing only)").
-		Done().
+			Bool().
+			Global().
+			Help("Light viewer: no embedded engine (~1MB page, grid browsing only)").
+			Done().
+
 		Flag("FILE").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.html"}).
-		Global().
-		Default("explore.html").
-		Help("Output HTML file (default: explore.html)").
-		Done().
+			String().
+			Completer(&cf.FileCompleter{Pattern: "*.html"}).
+			Global().
+			Default("explore.html").
+			Help("Output HTML file (default: explore.html)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var title, theme, xField, yField, outputFile string
 			var pageSize int

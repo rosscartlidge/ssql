@@ -19,28 +19,33 @@ func registerToMarkdown(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.csv | ssql to markdown", "Markdown table, columns in schema order").
 		Example("ssql from data.csv | ssql group-by dept -count n | ssql to markdown", "Paste aggregation results into a PR or issue").
 		Example("ssql from data.csv | ssql to markdown -only name salary", "Only the named columns, in order").
+
 		Flag("-generate", "-g").
-		Bool().
-		Global().
-		Help("Generate Go code instead of executing").
-		Done().
+			Bool().
+			Global().
+			Help("Generate Go code instead of executing").
+			Done().
+
 		Flag("-output", "-o").
-		String().
-		Global().
-		Help("Write to a file instead of stdout: -o report.md").
-		Done().
+			String().
+			Global().
+			Help("Write to a file instead of stdout: -o report.md").
+			Done().
+
 		Flag("-only").
-		Bool().
-		Global().
-		Help("Only show specified fields (hide others)").
-		Done().
+			Bool().
+			Global().
+			Help("Only show specified fields (hide others)").
+			Done().
+
 		Flag("FIELDS").
-		String().
-		Variadic().
-		FieldsFromFlag("").
-		Global().
-		Help("Field names to display first (in order)").
-		Done().
+			String().
+			Variadic().
+			FieldsFromFlag("").
+			Global().
+			Help("Field names to display first (in order)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var generate, onlySpecified bool
 			var fields []string
