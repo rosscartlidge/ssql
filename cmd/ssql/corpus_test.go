@@ -386,6 +386,13 @@ func TestPipelineCorpus(t *testing.T) {
 			Contains: []string{"name", "field", "v", "Alice", "SF", "35"},
 		},
 		{
+			// fill is record-shaped (typed cannot represent missing);
+			// typed/parallel pipelines re-enter record mode via the boundary.
+			Name:     "fill_default_typed_boundary",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} fill -default dept none -default bonus 0 | {{.bin}} include name dept bonus | {{.bin}} to csv`,
+			Contains: []string{"name", "dept", "bonus", "Alice", "Engineering", "0"},
+		},
+		{
 			Name:     "where_then_where_collision",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} where -if salary gt 70000 | {{.bin}} where -if status eq active | {{.bin}} include name | {{.bin}} to csv`,
 			Contains: []string{"name", "Alice"},

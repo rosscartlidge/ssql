@@ -114,7 +114,12 @@ pandas/polars vocabulary users arrive with.
    missing fields, or default empties: `ssql fill -down region
    -default status unknown`. Resample's record-level sibling;
    ragged real-world data (merged sheets, sparse logs). Small
-   build. *Prerequisite settled 2026-09-03:* "missing" is defined by
+   build. **SHIPPED 2026-09-03** exactly per the design notes below:
+   OrderConsumes declared, record-shaped (no typed template — typed
+   cannot hold missing), COALESCE / LAST_VALUE IGNORE NULLS via
+   `SELECT * REPLACE` with loud refusal for unsorted -down, -default
+   literals typed by the field's schema type. *Prerequisite settled
+   2026-09-03:* "missing" is defined by
    [DFC124](./dfc124_missing_values.md) — absent ∨ null ∨ empty
    string; an empty CSV numeric cell is now absent (was 0), so
    `fill -default score 0` will actually see it. Design notes from

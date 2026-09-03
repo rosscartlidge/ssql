@@ -606,6 +606,31 @@ there: when the folded columns mix types (a number column and a text
 column), DuckDB coerces the value column to a common type, while ssql
 keeps each row's own type.
 
+### Fill Gaps with fill
+
+Ragged real-world data — merged-cell spreadsheet exports where a label
+appears only on a block's first row, sparse logs that record a field only
+when it changes, exports where empty means "same as above":
+
+```bash
+ssql from sheet.csv | ssql fill -down region              # carry the last seen value forward
+ssql from data.csv  | ssql fill -default status unknown -default score 0
+ssql from log.csv   | ssql sort ts | ssql fill -down host -default level info
+```
+
+`-down` carries a field's last non-missing value forward over gaps;
+`-default FIELD VALUE` gives missing values a constant (typed by the
+field's schema type — `-default score 0` on an int column is an integer
+0). Down runs before default, so a leading gap with nothing to carry
+takes the default. "Missing" is ssql's one definition: absent, null, or
+empty — and since v4.86 an empty numeric CSV cell *is* missing rather than
+zero, so `fill` sees exactly the cells you'd expect.
+
+`-down` depends on record order (a `sort` before it matters — the
+optimiser knows fill consumes order). In `generate sql` it becomes
+`LAST_VALUE(x IGNORE NULLS) OVER (ORDER BY …)` and `COALESCE`, so
+`-down` needs a preceding `sort` there and refuses loudly without one.
+
 ### Random Samples with SAMPLE
 
 `limit` gives you the file's HEAD — often one shard, one day, one

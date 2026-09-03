@@ -29,6 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row only — both follow-ups in DFC124 §3.
 
 ### Added
+- **`ssql fill` — carry values down, default the missing** (DFC122 Tier
+  1, item 5; the last Tier-1 verb bar `extract`). `-down FIELD` carries
+  the last non-missing value forward over gaps; `-default FIELD VALUE`
+  gives missing values a constant typed by the field's schema type.
+  Down runs before default (a leading gap takes the default). Missing
+  is DFC124's one definition (absent/null/empty). Declared
+  order-consuming (`-down` reads the previous record — the first verb
+  where the parallel form would be semantically wrong, not merely
+  unavailable), so a sort before it is live. Record-shaped by design
+  (typed structs cannot hold a missing value); typed pipelines re-enter
+  record mode via the planner boundary. `generate sql`: `COALESCE` and
+  `LAST_VALUE(x IGNORE NULLS) OVER (ORDER BY …)` via `SELECT *
+  REPLACE`, refusing loudly for `-down` without a preceding sort (the
+  `limit -last` contract). Three equivalence pins incl. the DuckDB
+  oracle; sabotage-verified (disabling the carry fails both the unit
+  table and the duckdb lane).
 - **`ssql unpivot` — wide to long, pivot's inverse** (DFC122 Tier 1,
   item 3; the SQL name — DuckDB/SQL Server/Oracle say UNPIVOT — not
   pandas' `melt`, which the help text points at). `-id` fields copy to

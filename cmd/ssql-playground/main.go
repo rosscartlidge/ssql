@@ -209,6 +209,7 @@ func buildCommand() *cf.Command {
 	cmd = commands.RegisterCount(cmd)
 	cmd = commands.RegisterDescribe(cmd)
 	cmd = commands.RegisterUnpivot(cmd)
+	cmd = commands.RegisterFill(cmd)
 	cmd = commands.RegisterWhere(cmd)
 	cmd = commands.RegisterUpdate(cmd)
 	cmd = commands.RegisterCast(cmd)

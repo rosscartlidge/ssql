@@ -738,6 +738,31 @@ var equivCases = []EquivCase{
 		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
 	},
 	{
+		// fill -default over the empties fixture: 99 is discriminating
+		// (the typed reader's zero-for-empty would NOT be defaulted, so
+		// typed lanes are skipped by name — DFC124 §3).
+		Name:     "fill_default",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} fill -default n 99 -default s unknown | {{.bin}} include id n s`,
+		Ordered:  false,
+		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+	},
+	{
+		// fill -down needs an order: sorted, so the DuckDB LAST_VALUE
+		// window has its ORDER BY; leading gap on row 1 gets the default.
+		Name:     "fill_down_sorted",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} sort id | {{.bin}} fill -down n -down f -default f 0 | {{.bin}} include id n f`,
+		Ordered:  true,
+		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+	},
+	{
+		// Unsorted -down: the SQL lane refuses loudly (Skip records the
+		// contract); the Go lanes agree on arrival order.
+		Name:     "fill_down_unsorted",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} fill -down n | {{.bin}} include id n`,
+		Ordered:  true,
+		Skip:     map[string]string{"duckdb": "fill -down without a preceding sort has no SQL translation (carry order undefined) — refuses loudly by design", "go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+	},
+	{
 		Name:     "identity",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv`,
 		Ordered:  false, // parallel output is unordered

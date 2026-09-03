@@ -782,3 +782,39 @@ func TestTranslateUnpivotSQL(t *testing.T) {
 		t.Error("structured and argv paths diverge")
 	}
 }
+
+func TestTranslateFillSQL(t *testing.T) {
+	// -down without ORDER BY → loud refusal.
+	q := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateFill(q, nil, []string{"-down", "n"}); err == nil || !strings.Contains(err.Error(), "preceding sort") {
+		t.Errorf("unsorted -down: want loud refusal, got %v", err)
+	}
+	// Nothing to do → error.
+	if err := translateFill(&sqlQuery{fromClause: "'x.csv'"}, nil, nil); err == nil {
+		t.Error("fill with no flags must error")
+	}
+	// -default only: COALESCE via * REPLACE; numeric literal bare, text quoted.
+	q = &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateFill(q, nil, []string{"-default", "n", "99", "-default", "s", "unknown"}); err != nil {
+		t.Fatal(err)
+	}
+	sel := q.selectExprs[0]
+	for _, want := range []string{"* REPLACE (", "COALESCE(n, 99) AS n", "COALESCE(s, 'unknown') AS s"} {
+		if !strings.Contains(sel, want) {
+			t.Errorf("missing %q in %s", want, sel)
+		}
+	}
+	// -down with ORDER BY: LAST_VALUE IGNORE NULLS over the query's order,
+	// outer ORDER BY preserved; a field both carried and defaulted nests.
+	q = &sqlQuery{fromClause: "'x.csv'", orderBy: []string{`"id" ASC`}}
+	if err := translateFill(q, nil, []string{"-down", "f", "-default", "f", "0"}); err != nil {
+		t.Fatal(err)
+	}
+	sel = q.selectExprs[0]
+	if !strings.Contains(sel, `COALESCE(LAST_VALUE(f IGNORE NULLS) OVER (ORDER BY "id" ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 0) AS f`) {
+		t.Errorf("down+default should nest: %s", sel)
+	}
+	if len(q.orderBy) != 1 || q.orderBy[0] != `"id" ASC` {
+		t.Errorf("outer order lost: %v", q.orderBy)
+	}
+}

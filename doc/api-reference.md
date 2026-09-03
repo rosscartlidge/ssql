@@ -979,6 +979,26 @@ long := ssql.UnpivotRecords(wide, ssql.UnpivotConfig{IDs: []string{"product"}, V
 
 > 🎯 **Real-World Examples**: See comprehensive join and aggregation patterns in the [Advanced Tutorial](advanced-tutorial.md#stream-joins) section.
 
+### FillRecords
+```go
+func FillRecords(records iter.Seq[Record], cfg FillConfig) iter.Seq[Record]
+func FillFilter(cfg FillConfig) Filter[Record, Record]
+type FillConfig struct{ Down []string; Defaults []FillDefault }
+type FillDefault struct{ Field string; Value any }
+```
+Carries `Down` fields' last non-missing value forward over gaps, then
+gives `Defaults` where a field is still missing (absent, nil, or `""` —
+DFC124). Streams with only the carried state; `Down` makes it
+order-dependent. Backs `ssql fill`.
+
+**Example:**
+```go
+filled := ssql.FillRecords(records, ssql.FillConfig{
+	Down:     []string{"region"},
+	Defaults: []ssql.FillDefault{{Field: "status", Value: "unknown"}},
+})
+```
+
 ### Join Operations
 
 #### JoinPredicate Type

@@ -299,6 +299,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		err = translateDescribe(q, frag.Op, args[2:])
 	case "unpivot":
 		err = translateUnpivot(q, frag.Op, args[2:])
+	case "fill":
+		err = translateFill(q, frag.Op, args[2:])
 	case "join":
 		err = translateJoin(q, args[2:], funcFrags)
 	case "union":
@@ -1896,5 +1898,86 @@ func translateUnpivot(q *sqlQuery, op *lib.Op, args []string) error {
 		comments:   q.comments,
 		columns:    append(append([]string(nil), ids...), col, val),
 	}
+	return nil
+}
+
+
+// translateFill (DFC122 Tier 1): -default → COALESCE(x, v); -down →
+// LAST_VALUE(x IGNORE NULLS) OVER (ORDER BY <the query's ORDER BY>
+// ROWS UNBOUNDED PRECEDING), both applied with DuckDB's
+// `SELECT * REPLACE (...)` so the projection needs no column list.
+// -down needs an order: with no preceding sort it refuses loudly (the
+// limit -last contract — arrival order is undefined in SQL). DuckDB's
+// CSV reader yields NULL for empty cells, matching ssql's missing
+// (DFC124); JSON sources with explicit "" strings would differ — the
+// documented caveat.
+func translateFill(q *sqlQuery, op *lib.Op, args []string) error {
+	var down []string
+	type dflt struct{ field, value string }
+	var defaults []dflt
+	if d, ok := op.StrList("down"); ok || (op != nil && op.Args != nil) {
+		down = d
+		if pairs, ok := op.Args["defaults"].([]any); ok {
+			for _, p := range pairs {
+				if m, ok := p.(map[string]any); ok {
+					f, _ := m["field"].(string)
+					v := fmt.Sprintf("%v", m["value"])
+					defaults = append(defaults, dflt{f, v})
+				}
+			}
+		}
+	} else {
+		for i := 0; i < len(args); i++ {
+			switch args[i] {
+			case "-down":
+				if i+1 < len(args) {
+					down = append(down, args[i+1])
+					i++
+				}
+			case "-default":
+				if i+2 < len(args) {
+					defaults = append(defaults, dflt{args[i+1], args[i+2]})
+					i += 2
+				}
+			}
+		}
+	}
+	if len(down) == 0 && len(defaults) == 0 {
+		return fmt.Errorf("fill: nothing to do (need -down FIELD and/or -default FIELD VALUE)")
+	}
+	if len(down) > 0 && len(q.orderBy) == 0 {
+		return fmt.Errorf("fill -down needs a preceding sort for SQL — carry-forward order is undefined in SQL; add `ssql sort FIELD` before it, or use generate go")
+	}
+	if q.fromClause == "" {
+		return fmt.Errorf("fill: no source to translate")
+	}
+	order := append([]string(nil), q.orderBy...)
+	wrapAsSubquery(q)
+	q.orderBy = order // the output keeps the pipeline's order
+	var repl []string
+	for _, f := range down {
+		c := quoteIdent(f)
+		repl = append(repl, fmt.Sprintf("LAST_VALUE(%s IGNORE NULLS) OVER (ORDER BY %s ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS %s",
+			c, strings.Join(order, ", "), c))
+	}
+	for _, d := range defaults {
+		c := quoteIdent(d.field)
+		lit := d.value
+		if _, err := strconv.ParseFloat(lit, 64); err != nil && lit != "true" && lit != "false" {
+			lit = "'" + escapeSQL(lit) + "'"
+		}
+		// A field defaulted AND carried: default applies after the carry.
+		if slices.Contains(down, d.field) {
+			for i, r := range repl {
+				if strings.HasSuffix(r, " AS "+c) {
+					expr := strings.TrimSuffix(r, " AS "+c)
+					repl[i] = fmt.Sprintf("COALESCE(%s, %s) AS %s", expr, lit, c)
+				}
+			}
+			continue
+		}
+		repl = append(repl, fmt.Sprintf("COALESCE(%s, %s) AS %s", c, lit, c))
+	}
+	q.selectExprs = []string{"* REPLACE (" + strings.Join(repl, ", ") + ")"}
 	return nil
 }
