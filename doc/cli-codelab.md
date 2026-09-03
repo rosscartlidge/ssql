@@ -1397,10 +1397,16 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	records, err := ssql.ReadCSV("sales.csv")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("reading CSV: %w", err)
 	}
 
 	// Multiple operations composed with Chain()
@@ -1421,6 +1427,7 @@ func main() {
 	)(records)
 
 	ssql.WriteCSV(result, "top_performers.csv")
+	return nil
 }
 ```
 
@@ -1469,10 +1476,16 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	records, err := ssql.ReadCSV("sales.csv")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("reading CSV: %w", err)
 	}
 
 	aggregated := ssql.Chain(
@@ -1489,6 +1502,7 @@ func main() {
 	})(aggregated)
 
 	ssql.WriteCSV(sorted, "region_report.csv")
+	return nil
 }
 ```
 

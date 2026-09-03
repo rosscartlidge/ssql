@@ -2,7 +2,7 @@
 
 Reference: DFC122
 Created: 2026-08-31
-Last modified: 2026-08-31
+Last modified: 2026-09-03
 
 [Back to Index](./README.md)
 
@@ -32,10 +32,27 @@ pandas/polars vocabulary users arrive with.
 
 ## Tier 1 — clear gaps, high value, strong soul-fit
 
-1. **`tail`** — last N records (mlr tail, coreutils muscle memory).
-   We have limit (head) and offset but no "last N without knowing
-   the count". Trivial build (ring buffer; typed dual-template);
-   already on the wishlist. *Do first — an afternoon.*
+1. **`limit -last N`** (was: `tail`; renamed 2026-09-03, Ross) — last
+   N records without knowing the count. We have limit (head) and
+   offset. NOT a new `tail` verb, for three reasons recorded so it
+   isn't re-litigated: (a) ssql's data verbs are SQL-flavored
+   (where/limit/offset/group-by/distinct/join/union/top) — `tail`
+   would be the first coreutils-flavored one and immediately begs
+   "where's head?", and a `head` alias for `limit` would need every
+   Kind-keyed table (optimiser rules, needsWrap, order declarations,
+   schema ops, SQL translator) to know both names — the DFC115 drift
+   machine; (b) "head"/"tail" already name the server-side and
+   browser-side pipeline halves in the workspace ("reset tail",
+   "tail-optimize") — an `ssql tail` stage inside the tail pipeline
+   is a vocabulary collision; (c) as a mode of `limit` it inherits
+   all of limit's optimiser/order/barrier knowledge for free and
+   yields a mirror rule (`sort -desc x | limit -last 3` →
+   `top 3 -asc -field x`). Build: ring buffer in every lane; typed is
+   a barrier (limit is already SerialOnly); SQL lane must refuse
+   loudly on an unordered source ("last N" needs an order — the
+   sample -seed precedent) or lower via a preceding ORDER BY. Help
+   text carries the pointer for coreutils muscle memory: "looking
+   for tail? limit -last". *Do first — an afternoon.*
 
 2. **`describe`** (mlr summary/stats1, csvkit csvstat, pandas
    df.describe) — per-field type, count, nulls/missing, distinct,

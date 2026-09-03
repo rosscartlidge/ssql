@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-09-01 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-09-03 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -129,7 +129,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC119 | 2026-08-29 | 2026-08-31 | [The Display-Sink Protocol: Chart, Animate, and Every Visual After Them](./dfc119_display_sink_protocol.md) |
 | DFC120 | 2026-08-29 | 2026-08-30 | [Drift Is the Enemy: System-Design Principles from Building ssql](./dfc120_system_design_lessons.md) |
 | DFC121 | 2026-08-31 | 2026-09-01 | [`ssql resample`: Snapping Time Series to a Regular Grid](./dfc121_resample_command.md) |
-| DFC122 | 2026-08-31 | 2026-08-31 | [Capability-Gap Survey: What Peer Tools Have That ssql Doesn't](./dfc122_capability_gap_survey.md) |
+| DFC122 | 2026-08-31 | 2026-09-03 | [Capability-Gap Survey: What Peer Tools Have That ssql Doesn't](./dfc122_capability_gap_survey.md) |
 | DFC123 | 2026-09-03 | 2026-09-03 | [The Pipeline IR: Finishing the Intermediate Representation We Already Have](./dfc123_pipeline_ir.md) |
 
 <!-- DFC-INDEX-END -->
