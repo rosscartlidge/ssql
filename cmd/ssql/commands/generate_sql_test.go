@@ -818,3 +818,56 @@ func TestTranslateFillSQL(t *testing.T) {
 		t.Errorf("outer order lost: %v", q.orderBy)
 	}
 }
+
+func TestTranslateExtractSQL(t *testing.T) {
+	re := `^(?P<ts>\S+) (?P<lvl>\w+) (?P<msg>.*)$`
+	// Without -skip: loud refusal.
+	q := &sqlQuery{fromClause: "src"}
+	if err := translateExtract(q, nil, []string{"-field", "line", "-re", re}); err == nil || !strings.Contains(err.Error(), "-skip") {
+		t.Errorf("no -skip: want loud refusal, got %v", err)
+	}
+	// With -skip: regexp_extract with the named list, WHERE regexp_matches,
+	// source field excluded, captures projected; column tracking follows.
+	q = &sqlQuery{fromClause: "src", columns: []string{"line_number", "line"}}
+	if err := translateExtract(q, nil, []string{"-field", "line", "-re", re, "-skip"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"regexp_extract(line, '^(?P<ts>", "['ts', 'lvl', 'msg']", "WHERE regexp_matches(line,", "EXCLUDE (line, __m)", "__m.ts AS ts", "__m.msg AS msg"} {
+		if !strings.Contains(q.fromClause, want) {
+			t.Errorf("missing %q:\n%s", want, q.fromClause)
+		}
+	}
+	if len(q.columns) != 4 || q.columns[0] != "line_number" || q.columns[3] != "msg" {
+		t.Errorf("columns = %v", q.columns)
+	}
+	// -keep keeps the source column.
+	q = &sqlQuery{fromClause: "src"}
+	if err := translateExtract(q, nil, []string{"-field", "line", "-re", re, "-skip", "-keep"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q.fromClause, "EXCLUDE (__m)") || strings.Contains(q.fromClause, "EXCLUDE (line") {
+		t.Errorf("-keep must not exclude the source: %s", q.fromClause)
+	}
+	// from lines seeds the two columns.
+	q = &sqlQuery{}
+	if err := translateFrom(q, []string{"lines", "app.log"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q.fromClause, "row_number() OVER () AS line_number") || len(q.columns) != 2 {
+		t.Errorf("from lines: %s / %v", q.fromClause, q.columns)
+	}
+}
+
+func TestNamedOnlyPattern(t *testing.T) {
+	cases := map[string]string{
+		`(?P<a>\d+)-(\d+)`:      `(?P<a>\d+)-(?:\d+)`,
+		`[(](?P<x>.)`:           `[(](?P<x>.)`,
+		`\((?P<y>\w+)\)`:        `\((?P<y>\w+)\)`,
+		`(?:pre)(?P<z>.)(q)`:    `(?:pre)(?P<z>.)(?:q)`,
+	}
+	for in, want := range cases {
+		if got := namedOnlyPattern(in); got != want {
+			t.Errorf("namedOnlyPattern(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

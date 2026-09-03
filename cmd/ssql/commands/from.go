@@ -28,6 +28,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	// Format subcommands
 	registerFromCSV(fromCmd)
 	registerFromTSV(fromCmd)
+	registerFromLines(fromCmd)
 	registerFromJSON(fromCmd)
 	registerFromJSONL(fromCmd)
 	registerFromArrow(fromCmd)
@@ -118,6 +119,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return executeFromCSV(inputFile, nil, "auto", generate)
 			case "tsv":
 				return executeFromTSV(inputFile, generate)
+			case "lines":
+				return executeFromLines(inputFile, generate)
 			case "json", "jsonl":
 				return executeFromJSON(inputFile, generate)
 			case "arrow":

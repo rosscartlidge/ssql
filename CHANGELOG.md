@@ -29,6 +29,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row only — both follow-ups in DFC124 §3.
 
 ### Added
+- **`ssql from lines` + `ssql extract` — text in, fields out** (DFC122
+  Tier 1, the last unit; the grep→awk gap). `from lines` reads raw text
+  as records (`line_number`, 1-based like sed/grep -n, and `line`;
+  `.log`/`.txt` infer it; stdin works). `extract -field F -re REGEX`
+  turns every `(?P<name>…)` group into a string field, replacing the
+  source field (`-keep` retains it); a non-matching record is a LOUD
+  error unless `-skip` drops it; a pattern with no named groups is
+  refused. Every lane: exec, record codegen, a typed template
+  (synthesized struct, regex compiled once; unnamed groups are made
+  non-capturing so submatch indices line up; `typed.Line` +
+  `typed.ReadLines` are the typed source), and `generate sql` — `from
+  lines` as a single-column `read_csv` with `row_number()`, `extract`
+  as DuckDB `regexp_extract` + `regexp_matches`, translated only with
+  `-skip` (SQL cannot fail on a non-matching row). Declared
+  order-transparent. Equivalence-pinned in all lanes incl. the DuckDB
+  oracle on a log fixture with a genuinely non-matching line;
+  sabotage-verified.
+- **API: `ssql.ReadLines` numbers lines from 1** (was 0) — one
+  convention with `from lines`, sed, awk, and grep -n. Unused outside
+  its own test before this release.
 - **`ssql fill` — carry values down, default the missing** (DFC122 Tier
   1, item 5; the last Tier-1 verb bar `extract`). `-down FIELD` carries
   the last non-missing value forward over gaps; `-default FIELD VALUE`

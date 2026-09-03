@@ -999,6 +999,23 @@ filled := ssql.FillRecords(records, ssql.FillConfig{
 })
 ```
 
+### ExtractRecords
+```go
+func ExtractRecords(records iter.Seq[Record], cfg ExtractConfig) (iter.Seq[Record], error)
+func ExtractFilter(cfg ExtractConfig) Filter[Record, Record]
+func CompileExtract(cfg ExtractConfig) (*regexp.Regexp, []string, error)
+type ExtractConfig struct{ Field, Pattern string; Skip, Keep bool }
+```
+Applies a Go regex to `Field`; every named group `(?P<name>…)` becomes a
+string field. A non-matching (or missing) field is a loud error unless
+`Skip` drops the record; the source field is removed unless `Keep`. The
+pattern must have at least one named group. Backs `ssql extract`.
+
+**Example:**
+```go
+out, err := ssql.ExtractRecords(lines, ssql.ExtractConfig{Field: "line", Pattern: `^(?P<ts>\S+) (?P<lvl>\w+) (?P<msg>.*)$`, Skip: true})
+```
+
 ### Join Operations
 
 #### JoinPredicate Type
@@ -1405,6 +1422,16 @@ result := pipeline(numbers)
 ---
 
 ## I/O Operations
+
+### ReadLinesFromReader
+```go
+func ReadLinesFromReader(r io.Reader) iter.Seq[Record]
+func ReadLines(filename string) (iter.Seq[Record], error)
+```
+One record per text line: `line_number` (1-based, like sed/awk/grep -n)
+and `line`. Records share one schema. Backs `ssql from lines`; pair with
+`ExtractRecords`. (`ReadLines` numbered from 0 before v4.86.)
+
 
 > 📁 **Practical Examples**: See file processing patterns in the [Getting Started Guide](codelab-intro.md#working-with-data) and production I/O strategies in the [Advanced Tutorial](advanced-tutorial.md#performance-optimization).
 

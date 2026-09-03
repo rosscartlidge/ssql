@@ -1512,15 +1512,7 @@ func ReadLines(filename string) (iter.Seq[Record], error) {
 	seq := func(yield func(Record) bool) {
 		defer file.Close()
 
-		scanner := bufio.NewScanner(file)
-		lineNum := 0
-		for scanner.Scan() {
-			record := NewRecord(map[string]any{
-				"line":        scanner.Text(),
-				"line_number": int64(lineNum),
-			})
-			lineNum++
-
+		for record := range ReadLinesFromReader(file) {
 			if !yield(record) {
 				return
 			}
@@ -1528,6 +1520,25 @@ func ReadLines(filename string) (iter.Seq[Record], error) {
 	}
 
 	return seq, nil
+}
+
+// ReadLinesFromReader yields one record per text line: line_number
+// (1-based, like sed/awk/grep -n) and line. Records share one schema.
+// Backs `ssql from lines`; pair with ExtractRecords to turn text into
+// fields.
+func ReadLinesFromReader(r io.Reader) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		schema := NewSchema([]string{"line_number", "line"})
+		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024) // long lines happen in logs
+		var n int64
+		for scanner.Scan() {
+			n++
+			if !yield(NewRecordFromSchema(schema, []any{n, scanner.Text()})) {
+				return
+			}
+		}
+	}
 }
 
 // ReadLinesSafe reads text lines with error handling
@@ -1545,11 +1556,11 @@ func ReadLinesSafe(filename string) iter.Seq2[Record, error] {
 		scanner := bufio.NewScanner(file)
 		lineNum := 0
 		for scanner.Scan() {
+			lineNum++ // 1-based, like sed/awk/grep -n
 			record := NewRecord(map[string]any{
 				"line":        scanner.Text(),
 				"line_number": int64(lineNum),
 			})
-			lineNum++
 
 			if !yield(record, nil) {
 				return

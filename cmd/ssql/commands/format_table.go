@@ -60,6 +60,8 @@ var formatByExt = map[string]formatInfo{
 	".arrow":   {Name: "arrow", Binary: true},
 	".wav":     {Name: "wav", Binary: true},
 	".xlsx":    {Name: "xlsx", Binary: true},
+	".log":     {Name: "lines"}, // raw text: one record per line (from lines)
+	".txt":     {Name: "lines"},
 }
 
 // pathExt is the lowercase extension of a local path or http(s) URL

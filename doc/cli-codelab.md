@@ -631,6 +631,43 @@ optimiser knows fill consumes order). In `generate sql` it becomes
 `LAST_VALUE(x IGNORE NULLS) OVER (ORDER BY …)` and `COALESCE`, so
 `-down` needs a preceding `sort` there and refuses loudly without one.
 
+### Text In, Fields Out: from lines + extract
+
+The grep→awk gap: ssql could *match* a regex (`where`) but not *extract*
+from one. `from lines` reads raw text as records (`line_number`, 1-based
+like sed and grep -n, and `line`); `extract` turns a text field into
+fields with named capture groups:
+
+```bash
+ssql from lines app.log \
+  | ssql extract -field line -re '^(?P<ts>\S+) (?P<lvl>\w+) (?P<msg>.*)$' -skip \
+  | ssql to table
+```
+```
+line_number   ts                     lvl    msg
+1             2026-01-01T00:00:01Z   INFO   started
+2             2026-01-01T00:00:02Z   WARN   disk 91%
+4             2026-01-01T00:00:03Z   INFO   done
+```
+
+Every `(?P<name>…)` group becomes a string field; the source field is
+replaced (`-keep` retains it). A record whose field does not match is an
+**error** — you find out on line 3, not from a suspicious count — unless
+`-skip` drops non-matching records (line 3 above). Captures are strings
+on purpose (a status code is text until you say otherwise): follow with
+`cast -int status`, then aggregate. Any string field works, not just
+`line`:
+
+```bash
+ssql from users.csv | ssql extract -field email -re '@(?P<domain>[^@]+)$' -keep | ssql group-by domain -count n
+```
+
+`.log` and `.txt` files infer `from lines` without the subcommand; stdin
+works (`journalctl -o short-iso | ssql from lines | ssql limit -last 20`).
+In `generate sql`, `from lines` reads the file as one text column and
+`extract` becomes DuckDB's `regexp_extract` — but only with `-skip`,
+because SQL cannot fail on a non-matching row the way ssql does.
+
 ### Random Samples with SAMPLE
 
 `limit` gives you the file's HEAD — often one shard, one day, one

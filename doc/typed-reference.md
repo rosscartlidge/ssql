@@ -585,3 +585,20 @@ Phase 2 — still deferred:
 
 See [`doc/research/typed-package-proposal.md`](research/typed-package-proposal.md)
 for the full design and Phase 2 vision.
+
+
+## Text lines
+
+```go
+type Line struct {
+	LineNumber int64  `ssql:"line_number"`
+	Line       string `ssql:"line"`
+}
+func ReadLines(filename string) iter.Seq[Line]
+func ReadLinesFromReader(r io.Reader) iter.Seq[Line]
+```
+
+The typed form of `ssql from lines`: one `Line` per text line, numbered
+from 1. Serial (line boundaries are sequential); the planner inserts no
+parallel form. `extract` in a typed pipeline synthesizes its output struct
+from the kept fields plus one string per named group.

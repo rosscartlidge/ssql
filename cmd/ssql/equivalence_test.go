@@ -56,6 +56,15 @@ const corpusEmptiesCSV = `id,n,f,s,b
 4,40,4.5,w,true
 `
 
+// corpusAppLog: a text log with one line that does not match the
+// timestamp/level/message shape (exercises extract -skip).
+const corpusAppLog = `2026-01-01T00:00:01Z INFO started
+2026-01-01T00:00:02Z WARN disk 91%
+garbage
+2026-01-01T00:00:03Z INFO done
+2026-01-01T00:00:04Z ERROR failed: timeout
+`
+
 const corpusShuffledCSV = `id,city,pop
 7,Mumbai,20
 3,Cairo,10
@@ -761,6 +770,34 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} fill -down n | {{.bin}} include id n`,
 		Ordered:  true,
 		Skip:     map[string]string{"duckdb": "fill -down without a preceding sort has no SQL translation (carry order undefined) — refuses loudly by design", "go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+	},
+	{
+		// from lines: 1-based line_number + line, in file order.
+		Name:     "lines_identity",
+		Pipeline: `{{.bin}} from lines {{.data}}/app.log`,
+		Ordered:  true,
+	},
+	{
+		// extract -skip: named groups → string fields, source field
+		// dropped, non-matching line gone — every lane incl. DuckDB's
+		// regexp_extract + regexp_matches.
+		Name:     "extract_log_skip",
+		Pipeline: `{{.bin}} from lines {{.data}}/app.log | {{.bin}} extract -field line -re '^(?P<ts>\S+) (?P<lvl>\w+) (?P<msg>.*)$' -skip`,
+		Ordered:  true,
+	},
+	{
+		Name:     "extract_keep_then_groupby",
+		Pipeline: `{{.bin}} from lines {{.data}}/app.log | {{.bin}} extract -field line -re '^(?P<ts>\S+) (?P<lvl>\w+) ' -skip -keep | {{.bin}} group-by lvl -count n`,
+		Ordered:  false,
+	},
+	{
+		// extract WITHOUT -skip has no SQL translation (SQL cannot fail
+		// per row); the Skip records the contract. Only matching lines
+		// here so the Go lanes don't fail loudly.
+		Name:     "extract_no_skip_all_match",
+		Pipeline: `{{.bin}} from lines {{.data}}/app.log | {{.bin}} where -if line ne 'garbage' | {{.bin}} extract -field line -re '^(?P<ts>\S+) (?P<lvl>\w+) (?P<msg>.*)$'`,
+		Ordered:  true,
+		Skip:     map[string]string{"duckdb": "extract without -skip refuses SQL translation by design (SQL cannot fail on a non-matching row)"},
 	},
 	{
 		Name:     "identity",

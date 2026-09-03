@@ -15,6 +15,7 @@ import (
 	"time"
 
 	cf "github.com/rosscartlidge/autocli/v4"
+	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
@@ -301,6 +302,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		err = translateUnpivot(q, frag.Op, args[2:])
 	case "fill":
 		err = translateFill(q, frag.Op, args[2:])
+	case "extract":
+		err = translateExtract(q, frag.Op, args[2:])
 	case "join":
 		err = translateJoin(q, args[2:], funcFrags)
 	case "union":
@@ -375,6 +378,22 @@ func translateFrom(q *sqlQuery, args []string) error {
 
 	// Handle format subcommands: from csv FILE, from parquet FILE, etc.
 	switch args[0] {
+	case "lines":
+		// One VARCHAR column per line, numbered in file order
+		// (parallel=false keeps read_csv's row order deterministic).
+		var file string
+		for _, a := range args[1:] {
+			if !strings.HasPrefix(a, "-") {
+				file = a
+				break
+			}
+		}
+		if file == "" {
+			return fmt.Errorf("from lines: SQL translation needs a file (stdin has no SQL equivalent)")
+		}
+		q.fromClause = fmt.Sprintf("(SELECT row_number() OVER () AS line_number, line FROM read_csv(%s, columns={'line': 'VARCHAR'}, header=false, delim='\\x01', quote='', escape='', parallel=false))", quoteFile(file))
+		q.columns = []string{"line_number", "line"}
+		return nil
 	case "csv", "tsv", "json", "jsonl", "arrow", "parquet", "xlsx":
 		if len(args) < 2 {
 			return fmt.Errorf("from %s requires a file argument", args[0])
@@ -1979,5 +1998,93 @@ func translateFill(q *sqlQuery, op *lib.Op, args []string) error {
 		repl = append(repl, fmt.Sprintf("COALESCE(%s, %s) AS %s", c, lit, c))
 	}
 	q.selectExprs = []string{"* REPLACE (" + strings.Join(repl, ", ") + ")"}
+	return nil
+}
+
+
+// translateExtract (DFC122 Tier 1): regexp_extract with the named-group
+// list → a STRUCT, projected to fields; the source field dropped unless
+// -keep. SQL cannot fail per row, so without -skip the translation is
+// REFUSED (a non-match would silently yield empty strings where ssql
+// stops loudly); with -skip, WHERE regexp_matches drops non-matches —
+// the same rows ssql drops.
+func translateExtract(q *sqlQuery, op *lib.Op, args []string) error {
+	var field, re string
+	var names []string
+	skip, keep := false, false
+	if f, ok := op.Str("field"); ok {
+		field = f
+		re, _ = op.Str("re")
+		names, _ = op.StrList("names")
+		if b, ok := op.Args["skip"].(bool); ok {
+			skip = b
+		}
+		if b, ok := op.Args["keep"].(bool); ok {
+			keep = b
+		}
+	} else {
+		for i := 0; i < len(args); i++ {
+			switch args[i] {
+			case "-field":
+				if i+1 < len(args) {
+					field = args[i+1]
+					i++
+				}
+			case "-re":
+				if i+1 < len(args) {
+					re = args[i+1]
+					i++
+				}
+			case "-skip":
+				skip = true
+			case "-keep":
+				keep = true
+			}
+		}
+	}
+	if field == "" || re == "" {
+		return fmt.Errorf("extract: -field and -re are required")
+	}
+	if len(names) == 0 {
+		_, ns, err := ssql.CompileExtract(ssql.ExtractConfig{Pattern: re})
+		if err != nil {
+			return err
+		}
+		names = ns
+	}
+	if !skip {
+		return fmt.Errorf("extract without -skip has no SQL translation — SQL cannot fail on a non-matching row the way ssql does; add -skip, or use generate go")
+	}
+	if q.fromClause == "" {
+		return fmt.Errorf("extract: no source to translate")
+	}
+	wrapAsSubquery(q)
+	src := q.fromClause
+	c := quoteIdent(field)
+	lit := "'" + escapeSQL(re) + "'"
+	var quotedNames []string
+	for _, n := range names {
+		quotedNames = append(quotedNames, "'"+escapeSQL(n)+"'")
+	}
+	exclude := "__m"
+	if !keep {
+		exclude = c + ", __m"
+	}
+	var proj []string
+	for _, n := range names {
+		proj = append(proj, fmt.Sprintf("__m.%s AS %s", quoteIdent(n), quoteIdent(n)))
+	}
+	body := fmt.Sprintf("(\n  SELECT * EXCLUDE (%s), %s\n  FROM (SELECT *, regexp_extract(%s, %s, [%s]) AS __m FROM %s WHERE regexp_matches(%s, %s))\n)",
+		exclude, strings.Join(proj, ", "), c, lit, strings.Join(quotedNames, ", "), src, c, lit)
+	var cols []string
+	if q.columns != nil {
+		for _, col := range q.columns {
+			if col != field || keep {
+				cols = append(cols, col)
+			}
+		}
+		cols = append(cols, names...)
+	}
+	*q = sqlQuery{fromClause: body, comments: q.comments, columns: cols}
 	return nil
 }

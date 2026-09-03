@@ -1,6 +1,7 @@
 package typed
 
 import (
+	"strings"
 	"slices"
 	"testing"
 )
@@ -480,5 +481,15 @@ func TestTakeLast(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("TakeLast(0) = %v, want nothing", got)
+	}
+}
+
+func TestReadLinesFromReader(t *testing.T) {
+	var got []Line
+	for l := range ReadLinesFromReader(strings.NewReader("a\nb\n")) {
+		got = append(got, l)
+	}
+	if len(got) != 2 || got[0].LineNumber != 1 || got[1].Line != "b" {
+		t.Errorf("lines = %+v", got)
 	}
 }

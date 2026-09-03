@@ -32,6 +32,12 @@ pandas/polars vocabulary users arrive with.
 
 ## Tier 1 — clear gaps, high value, strong soul-fit
 
+**TIER 1 COMPLETE 2026-09-03** — all five units shipped in one day
+(`limit -last`, `describe`, `unpivot`, `fill`, `extract` + `from lines`),
+plus [DFC124](./dfc124_missing_values.md) settling "missing" on the way.
+Two names changed on the SQL-vocabulary principle (tail → `limit -last`,
+melt → `unpivot`).
+
 1. **`limit -last N`** (was: `tail`; renamed 2026-09-03, Ross;
    **SHIPPED 2026-09-03** — ring buffer `ssql.TakeLast`/`typed.TakeLast`
    in all lanes, SQL reversed-order wrap with loud refusal on unsorted
@@ -101,7 +107,17 @@ pandas/polars vocabulary users arrive with.
    sketched grammar was `melt -keep … -value … -into metric value`;
    shipped as `unpivot -id … -value … -col metric -val value`.
 4. **`extract`** (regex capture groups → fields; nushell parse, mlr
-   sub/put, the grep→awk gap) — ssql can MATCH regex (where) but
+   sub/put, the grep→awk gap) — **SHIPPED 2026-09-03 with `from
+   lines`**: named groups → STRING fields (cast afterwards — typed
+   inference on captures would diverge from DuckDB's VARCHAR struct),
+   loud non-match unless -skip, -keep for the source field, no
+   unnamed-only patterns; typed template synthesizes the struct and
+   rewrites unnamed groups non-capturing so indices line up;
+   SQL: regexp_extract + regexp_matches, translated ONLY with -skip
+   (SQL cannot fail per row — fail-loud beats a silent empty string).
+   `from lines`: 1-based line_number + line, `.log`/`.txt` inferred,
+   typed.Line source, DuckDB single-column read_csv + row_number.
+   Original note: ssql can MATCH regex (where) but
    not EXTRACT. This is the log-processing door: `from lines
    app.log | extract -field line -re '(?P<ts>\S+) (?P<lvl>\w+)
    (?P<msg>.*)'` (named groups become fields, non-matches loud or

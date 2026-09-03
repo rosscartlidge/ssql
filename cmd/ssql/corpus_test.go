@@ -108,6 +108,7 @@ func corpusData(t *testing.T) string {
 			"customers.tsv": strings.ReplaceAll(corpusCustomersCSV, ",", "\t"),
 			"shuffled.csv":  corpusShuffledCSV,
 			"empties.csv":   corpusEmptiesCSV,
+			"app.log":       corpusAppLog,
 		}
 		for name, content := range files {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -391,6 +392,15 @@ func TestPipelineCorpus(t *testing.T) {
 			Name:     "fill_default_typed_boundary",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} fill -default dept none -default bonus 0 | {{.bin}} include name dept bonus | {{.bin}} to csv`,
 			Contains: []string{"name", "dept", "bonus", "Alice", "Engineering", "0"},
+		},
+		{
+			// from lines (typed.Line source) → extract typed template
+			// (synthesized struct, compiled regex, -skip) → csv, in all
+			// three modes.
+			Name:     "lines_extract_typed",
+			Pipeline: `{{.bin}} from lines {{.data}}/app.log | {{.bin}} extract -field line -re '^(?P<ts>\S+) (?P<lvl>\w+) (?P<msg>.*)$' -skip | {{.bin}} to csv`,
+			Contains: []string{"line_number", "ts", "lvl", "msg", "WARN", "disk 91%", "ERROR"},
+			Excludes: []string{"garbage"},
 		},
 		{
 			Name:     "where_then_where_collision",
