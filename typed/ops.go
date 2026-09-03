@@ -42,6 +42,33 @@ func Limit[T any](n int) func(iter.Seq[T]) iter.Seq[T] {
 	}
 }
 
+// TakeLast keeps the last n items in arrival order (ring buffer, O(n)
+// memory). A barrier: nothing is yielded until the input ends. T -> T.
+func TakeLast[T any](n int) func(iter.Seq[T]) iter.Seq[T] {
+	return func(in iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			if n <= 0 {
+				return
+			}
+			ring := make([]T, 0, n)
+			head := 0
+			for v := range in {
+				if len(ring) < n {
+					ring = append(ring, v)
+				} else {
+					ring[head] = v
+					head = (head + 1) % n
+				}
+			}
+			for i := 0; i < len(ring); i++ {
+				if !yield(ring[(head+i)%len(ring)]) {
+					return
+				}
+			}
+		}
+	}
+}
+
 // Skip drops the first n items. T -> T.
 func Skip[T any](n int) func(iter.Seq[T]) iter.Seq[T] {
 	return func(in iter.Seq[T]) iter.Seq[T] {

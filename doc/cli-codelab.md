@@ -527,6 +527,20 @@ ssql from big.csv | ssql limit 1000 | ssql group-by dept -sum salary total   # s
 ssql from big.csv | ssql limit 0    | ssql group-by dept -sum salary total   # full run
 ```
 
+**Looking for `tail`? That's `limit -last`.** It keeps the last N records
+in arrival order, buffering only N of them however large the input:
+
+```bash
+ssql from server.log.csv | ssql limit -last 20              # the 20 most recent lines
+ssql from sales.csv | ssql sort amount | ssql limit -last 3  # the 3 largest, ascending
+```
+
+ssql's verbs stay SQL-flavored — `limit` is head, so the tail lives
+under the same verb rather than as a coreutils-style command. In
+`generate sql` a `-last` needs a preceding `sort` (SQL has no arrival
+order) and translates as "take N under the reversed order, then restore
+the original"; without a sort it refuses loudly rather than guess.
+
 ### Random Samples with SAMPLE
 
 `limit` gives you the file's HEAD — often one shard, one day, one

@@ -5,6 +5,24 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`limit -last N` — the tail** (DFC122 Tier 1, item 1). The last N
+  records in arrival order, kept under the SQL verb rather than a new
+  `tail` command (ssql's data verbs are SQL-flavored; `limit` IS head;
+  and "head"/"tail" already name the workspace's pipeline halves).
+  A ring buffer of N records — O(N) memory on any input — in every
+  lane: exec, record and typed codegen (`ssql.TakeLast` /
+  `typed.TakeLast`, both barriers), and `generate sql`, which takes N
+  under the REVERSED order then restores the original order — and
+  refuses loudly when no sort precedes it, since SQL has no arrival
+  order. `sort -desc x | limit -last N` is deliberately NOT rewritten
+  to `top` (it is the N smallest, in descending order). Equivalence-
+  pinned three ways incl. the duckdb oracle; sabotage-verified (an
+  off-by-one in the ring failed both the unit table and the duckdb
+  lane).
+
 ## [4.84.0] - 2026-09-03
 
 ### Changed

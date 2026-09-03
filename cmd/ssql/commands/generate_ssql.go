@@ -150,7 +150,8 @@ type pipelineCmd struct {
 	SortField string
 
 	// Limit
-	LimitN string
+	LimitN    string
+	LimitLast bool // limit -last N (tail): not a head — sort+limit→top must not fire
 }
 
 // whereCondition represents a single -if / +if field op value condition.
@@ -548,8 +549,19 @@ func parseSortCmd(cmd *pipelineCmd) {
 }
 
 func parseLimitCmd(cmd *pipelineCmd) {
-	if len(cmd.RawArgs) > 0 {
-		cmd.LimitN = cmd.RawArgs[0]
+	for _, a := range cmd.RawArgs {
+		switch {
+		case a == "-last":
+			cmd.LimitLast = true
+		case !strings.HasPrefix(a, "-") && cmd.LimitN == "":
+			cmd.LimitN = a
+		}
+	}
+	if cmd.LimitLast {
+		// `sort -desc x | limit -last N` is the N SMALLEST in
+		// descending order — not `top N -field x`. Hide N from the
+		// sort-limit-to-top rule (it keys on LimitN != "").
+		cmd.LimitN = ""
 	}
 }
 

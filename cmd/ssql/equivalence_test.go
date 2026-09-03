@@ -641,6 +641,33 @@ var equivCases = []EquivCase{
 		Ordered: true,
 	},
 	{
+		// limit -last (DFC122 Tier 1, kept under the SQL verb): the last
+		// N in arrival order. SQL has no arrival order → the duckdb lane
+		// refuses loudly (Skip records the contract); every Go lane must
+		// agree byte-for-byte.
+		Name:     "limit_last_unsorted",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} limit -last 3`,
+		Ordered:  true,
+		Skip:     map[string]string{"duckdb": "limit -last without a preceding sort has no SQL translation (arrival order undefined) — refuses loudly by design"},
+	},
+	{
+		// With a sort in front, SQL translates: take N under the
+		// REVERSED order, restore the original order outside. All
+		// lanes incl. duckdb.
+		Name:     "limit_last_sorted",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} sort pop | {{.bin}} limit -last 3`,
+		Ordered:  true,
+	},
+	{
+		// The optimiser pin: `sort -desc x | limit -last N` is the N
+		// SMALLEST in descending order — NOT `top N -field x`. The
+		// ssql-opt lane diverges if sort-limit-to-top ever fires on
+		// -last; the duckdb lane pins the ASC/DESC reversal.
+		Name:     "limit_last_desc_is_not_top",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} sort -desc pop | {{.bin}} limit -last 3`,
+		Ordered:  true,
+	},
+	{
 		Name:     "identity",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv`,
 		Ordered:  false, // parallel output is unordered

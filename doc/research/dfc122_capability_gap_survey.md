@@ -32,8 +32,12 @@ pandas/polars vocabulary users arrive with.
 
 ## Tier 1 — clear gaps, high value, strong soul-fit
 
-1. **`limit -last N`** (was: `tail`; renamed 2026-09-03, Ross) — last
-   N records without knowing the count. We have limit (head) and
+1. **`limit -last N`** (was: `tail`; renamed 2026-09-03, Ross;
+   **SHIPPED 2026-09-03** — ring buffer `ssql.TakeLast`/`typed.TakeLast`
+   in all lanes, SQL reversed-order wrap with loud refusal on unsorted
+   input, optimiser leaves `-last` alone, three equivalence pins +
+   duckdb oracle, sabotage-verified) — last N records without knowing
+   the count. We have limit (head) and
    offset. NOT a new `tail` verb, for three reasons recorded so it
    isn't re-litigated: (a) ssql's data verbs are SQL-flavored
    (where/limit/offset/group-by/distinct/join/union/top) — `tail`

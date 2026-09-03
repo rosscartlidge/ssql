@@ -242,6 +242,40 @@ func WhereSafe[T any](predicate func(T) (bool, error)) FilterWithErrors[T, T] {
 //	    ssql.SortBy(func(r ssql.Record) float64 {
 //	        return -ssql.GetOr(r, "revenue", float64(0))
 //	    })(data))
+// TakeLast keeps only the last n elements, in arrival order (the tail
+// of the sequence; `ssql limit -last N`). A ring buffer of n elements
+// — O(n) memory regardless of input length — emitted once the input
+// is exhausted, so TakeLast is a barrier: nothing flows until the source
+// ends. n <= 0 yields nothing.
+//
+// Example:
+//
+//	ssql.TakeLast[ssql.Record](10)(records) // the 10 most recently read records
+func TakeLast[T any](n int) Filter[T, T] {
+	return func(input iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			if n <= 0 {
+				return
+			}
+			ring := make([]T, 0, n)
+			head := 0 // index of the oldest element once the ring is full
+			for v := range input {
+				if len(ring) < n {
+					ring = append(ring, v)
+				} else {
+					ring[head] = v
+					head = (head + 1) % n
+				}
+			}
+			for i := 0; i < len(ring); i++ {
+				if !yield(ring[(head+i)%len(ring)]) {
+					return
+				}
+			}
+		}
+	}
+}
+
 func Limit[T any](n int) Filter[T, T] {
 	return func(input iter.Seq[T]) iter.Seq[T] {
 		return func(yield func(T) bool) {

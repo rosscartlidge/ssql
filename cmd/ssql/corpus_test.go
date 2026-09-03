@@ -352,6 +352,15 @@ func TestPipelineCorpus(t *testing.T) {
 			Excludes: []string{"salary"},
 		},
 		{
+			// limit -last through record/typed/parallel codegen
+			// (typed.TakeLast is SerialOnly — the planner inserts the
+			// Serial boundary in parallel mode).
+			Name:     "limit_last",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} sort salary | {{.bin}} limit -last 2 | {{.bin}} to csv`,
+			Contains: []string{"Alice", "95000", "Carol", "105000"},
+			Excludes: []string{"Bob", "Grace", "David"},
+		},
+		{
 			Name:     "where_then_where_collision",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} where -if salary gt 70000 | {{.bin}} where -if status eq active | {{.bin}} include name | {{.bin}} to csv`,
 			Contains: []string{"name", "Alice"},

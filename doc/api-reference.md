@@ -539,6 +539,19 @@ Takes only the first n elements (SQL LIMIT equivalent).
 first5 := ssql.Limit[int](5)(numbers)
 ```
 
+### TakeLast[T]
+```go
+func TakeLast[T any](n int) Filter[T, T]
+```
+Keeps only the last n elements in arrival order (the tail — `ssql limit
+-last N`). A ring buffer of n elements, so O(n) memory on any input; a
+barrier — nothing is yielded until the input ends. n <= 0 yields nothing.
+
+**Example:**
+```go
+recent := ssql.TakeLast[ssql.Record](10)(records)
+```
+
 ### LimitSafe[T]
 ```go
 func LimitSafe[T any](n int) FilterWithErrors[T, T]

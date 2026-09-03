@@ -663,3 +663,41 @@ func TestTranslateResampleSQLStructuredOp(t *testing.T) {
 		t.Fatal("Kind-only Op must fall back to argv:", err)
 	}
 }
+
+func TestTranslateLimitLast(t *testing.T) {
+	// No ORDER BY → loud refusal (arrival order is undefined in SQL).
+	q := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateLimit(q, []string{"-last", "3"}); err == nil || !strings.Contains(err.Error(), "preceding sort") {
+		t.Errorf("unsorted -last: want loud refusal, got %v", err)
+	}
+	// Flag order shouldn't matter.
+	q = &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateLimit(q, []string{"3", "-last"}); err == nil {
+		t.Error("N before -last must still be recognised as -last")
+	}
+
+	// With ORDER BY: inner query takes N under the REVERSED order,
+	// outer restores the original.
+	q = &sqlQuery{fromClause: "'x.csv'", orderBy: []string{`"pop" DESC`, `"id" ASC`}}
+	if err := translateLimit(q, []string{"-last", "3"}); err != nil {
+		t.Fatal(err)
+	}
+	if q.limit != "" {
+		t.Errorf("outer query must not carry the LIMIT (it belongs to the inner): %q", q.limit)
+	}
+	if len(q.orderBy) != 2 || q.orderBy[0] != `"pop" DESC` || q.orderBy[1] != `"id" ASC` {
+		t.Errorf("outer ORDER BY must be the original: %v", q.orderBy)
+	}
+	inner := q.fromClause
+	for _, want := range []string{`"pop" ASC`, `"id" DESC`, "LIMIT 3"} {
+		if !strings.Contains(inner, want) {
+			t.Errorf("inner subquery missing %q:\n%s", want, inner)
+		}
+	}
+
+	// Plain limit unchanged.
+	q = &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateLimit(q, []string{"7"}); err != nil || q.limit != "7" {
+		t.Errorf("plain limit: err=%v limit=%q", err, q.limit)
+	}
+}

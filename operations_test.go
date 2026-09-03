@@ -1235,3 +1235,59 @@ func TestRecordPipeline(t *testing.T) {
 		t.Errorf("Second record should be Charlie, got %v", GetOr(result[1], "name", ""))
 	}
 }
+
+func TestTakeLast(t *testing.T) {
+	seq := func(n int) iter.Seq[int] {
+		return func(yield func(int) bool) {
+			for i := 1; i <= n; i++ {
+				if !yield(i) {
+					return
+				}
+			}
+		}
+	}
+	collect := func(s iter.Seq[int]) []int {
+		var out []int
+		for v := range s {
+			out = append(out, v)
+		}
+		return out
+	}
+	cases := []struct {
+		name  string
+		total int
+		n     int
+		want  []int
+	}{
+		{"tail of longer input, arrival order kept", 10, 3, []int{8, 9, 10}},
+		{"ring wraps many times", 1000, 4, []int{997, 998, 999, 1000}},
+		{"n larger than input keeps all", 3, 10, []int{1, 2, 3}},
+		{"n equals input", 4, 4, []int{1, 2, 3, 4}},
+		{"n zero yields nothing", 5, 0, nil},
+		{"empty input", 0, 3, nil},
+	}
+	for _, c := range cases {
+		got := collect(TakeLast[int](c.n)(seq(c.total)))
+		if len(got) != len(c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+				break
+			}
+		}
+	}
+	// Early stop from the consumer must be honoured.
+	count := 0
+	for range TakeLast[int](5)(seq(20)) {
+		count++
+		if count == 2 {
+			break
+		}
+	}
+	if count != 2 {
+		t.Errorf("early break: yielded %d", count)
+	}
+}

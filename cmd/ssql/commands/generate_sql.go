@@ -658,9 +658,51 @@ func translateSort(q *sqlQuery, args []string) error {
 }
 
 func translateLimit(q *sqlQuery, args []string) error {
-	if len(args) > 0 {
-		q.limit = args[0]
+	var n string
+	last := false
+	for _, a := range args {
+		switch a {
+		case "-last":
+			last = true
+		case "-generate", "-g":
+		default:
+			if !strings.HasPrefix(a, "-") && n == "" {
+				n = a
+			}
+		}
 	}
+	if !last {
+		if n != "" {
+			q.limit = n
+		}
+		return nil
+	}
+	// limit -last N: the LAST N in the pipeline's current order. SQL
+	// has no arrival order, so this is only translatable when the
+	// query carries an ORDER BY: take N under the REVERSED order,
+	// then restore the original order outside.
+	if len(q.orderBy) == 0 {
+		return fmt.Errorf("limit -last needs a preceding sort for SQL — arrival order is undefined in SQL; add `ssql sort FIELD` before it, or use generate go")
+	}
+	if n == "" {
+		return fmt.Errorf("limit -last: need N")
+	}
+	original := append([]string(nil), q.orderBy...)
+	reversed := make([]string, len(original))
+	for i, e := range original {
+		switch {
+		case strings.HasSuffix(e, " DESC"):
+			reversed[i] = strings.TrimSuffix(e, " DESC") + " ASC"
+		case strings.HasSuffix(e, " ASC"):
+			reversed[i] = strings.TrimSuffix(e, " ASC") + " DESC"
+		default:
+			reversed[i] = e + " DESC" // bare entry sorts ASC by default
+		}
+	}
+	q.orderBy = reversed
+	q.limit = n
+	wrapAsSubquery(q)
+	q.orderBy = original
 	return nil
 }
 

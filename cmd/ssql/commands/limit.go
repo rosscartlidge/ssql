@@ -11,10 +11,17 @@ import (
 // RegisterLimit registers the limit subcommand
 func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("limit").
-		Description("Take first N records (SQL LIMIT); 0 = no limit (pass-through)").
+		Description("Take first N records (SQL LIMIT), or the last N with -last (looking for tail? this is it); 0 = no limit (pass-through)").
 		Example("ssql from data.csv | ssql limit 10", "Show first 10 records").
+		Example("ssql from log.csv | ssql limit -last 20", "The last 20 records in arrival order (tail)").
 		Example("ssql from large.csv | ssql limit 100 | ssql to table", "Preview first 100 records").
 		Example("ssql from large.csv | ssql limit 0 | ssql to table", "Limit dialled to 0: all records pass through (and code generation skips the stage)").
+
+		Flag("-last").
+			Bool().
+			Global().
+			Help("Keep the last N records instead of the first N (tail). Buffers only N records; emits when the input ends").
+			Done().
 
 		Flag("-generate", "-g").
 			Bool().
@@ -43,6 +50,10 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
+			var last bool
+			if v, ok := ctx.GlobalFlags["-last"]; ok {
+				last = v.(bool)
+			}
 
 			if n < 0 {
 				return fmt.Errorf("limit must be non-negative, got %d (use 0 for no limit)", n)
@@ -50,7 +61,7 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateLimitCode(n)
+				return generateLimitCode(n, last)
 			}
 
 			// Read JSONL from stdin (with schema if present)
@@ -60,7 +71,9 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Apply limit — 0 means no limit, pass everything through
 			// (lets pipelines keep a `limit N` stage and dial it to 0
 			// for full runs).
-			if n > 0 {
+			if n > 0 && last {
+				records = ssql.TakeLast[ssql.Record](n)(records)
+			} else if n > 0 {
 				records = ssql.Limit[ssql.Record](n)(records)
 			}
 
@@ -76,7 +89,7 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // generateLimitCode generates Go code for the limit command
-func generateLimitCode(n int) error {
+func generateLimitCode(n int, last bool) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -103,6 +116,12 @@ func generateLimitCode(n int) error {
 	params := []lib.CodeParam{
 		{Name: "limit", Default: fmt.Sprintf("%d", n), Help: "maximum number of records", VarName: "flagLimit", Type: "int"},
 	}
+	// -last: the same shape with the tail primitive (ssql.TakeLast /
+	// typed.TakeLast) — one implementation per runtime, both barriers.
+	fn := "Limit"
+	if last {
+		fn = "TakeLast"
+	}
 
 	// Phase B: when prevSchema==nil, the upstream is Record-mode
 	// (a typed→Record boundary inserted by the planner). Fall
@@ -110,7 +129,7 @@ func generateLimitCode(n int) error {
 	if typedMode() && prevSchema != nil {
 		// limit is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
-		code := fmt.Sprintf("%s := typed.Limit[%s](*flagLimit)(%s)", outputVar, prevSchema.TypeName, inputVar)
+		code := fmt.Sprintf("%s := typed.%s[%s](*flagLimit)(%s)", outputVar, fn, prevSchema.TypeName, inputVar)
 		frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
@@ -119,7 +138,7 @@ func generateLimitCode(n int) error {
 		return lib.WriteCodeFragment(frag)
 	}
 
-	code := fmt.Sprintf("%s := ssql.Limit[ssql.Record](*flagLimit)(%s)", outputVar, inputVar)
+	code := fmt.Sprintf("%s := ssql.%s[ssql.Record](*flagLimit)(%s)", outputVar, fn, inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)

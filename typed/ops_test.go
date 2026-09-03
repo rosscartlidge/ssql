@@ -458,3 +458,27 @@ func TestUnionByCompositeKey(t *testing.T) {
 		t.Errorf("got %#v, want %#v", got, want)
 	}
 }
+
+func TestTakeLast(t *testing.T) {
+	in := func(yield func(int) bool) {
+		for i := 1; i <= 7; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+	var got []int
+	for v := range TakeLast[int](3)(in) {
+		got = append(got, v)
+	}
+	if len(got) != 3 || got[0] != 5 || got[1] != 6 || got[2] != 7 {
+		t.Errorf("TakeLast(3) = %v, want [5 6 7]", got)
+	}
+	got = nil
+	for v := range TakeLast[int](0)(in) {
+		got = append(got, v)
+	}
+	if len(got) != 0 {
+		t.Errorf("TakeLast(0) = %v, want nothing", got)
+	}
+}

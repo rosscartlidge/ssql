@@ -162,3 +162,22 @@ func TestOrderOfPrefersDeclaration(t *testing.T) {
 		t.Error("Op-less where should fall back to the transparent table entry")
 	}
 }
+
+// limit -last is a tail, not a head: sort-limit-to-top must not fire.
+func TestSortLimitToTopSkipsLast(t *testing.T) {
+	cmds := []*pipelineCmd{
+		parsePipelineCmd("ssql sort -desc pop"),
+		parsePipelineCmd("ssql limit -last 3"),
+	}
+	if cmds[1].LimitN != "" || !cmds[1].LimitLast {
+		t.Fatalf("parseLimitCmd: LimitN=%q LimitLast=%v", cmds[1].LimitN, cmds[1].LimitLast)
+	}
+	if rules := ruleSortLimitToTop(cmds); len(rules) != 0 || cmds[0].Kind != "sort" || cmds[1].Removed {
+		t.Errorf("sort-limit-to-top fired on -last: rules=%v kind=%s removed=%v", rules, cmds[0].Kind, cmds[1].Removed)
+	}
+	// And the plain form still does.
+	cmds = []*pipelineCmd{parsePipelineCmd("ssql sort -desc pop"), parsePipelineCmd("ssql limit 3")}
+	if rules := ruleSortLimitToTop(cmds); len(rules) != 1 || cmds[0].Kind != "top" {
+		t.Errorf("plain sort+limit should still become top: %v", rules)
+	}
+}
