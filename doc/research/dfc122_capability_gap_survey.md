@@ -80,12 +80,26 @@ pandas/polars vocabulary users arrive with.
    `describe` stage renders in the grid — no bespoke panel).
    Composes: `from x.parquet -records`-style cheap paths later.
 
-3. **`melt`** (unpivot; mlr reshape long, pandas melt) — we have
-   pivot but NOT its inverse. Wide→long is what `to chart`/multi-Y
-   actually wants (one value column + a series column). Grammar
-   sketch: `ssql melt -keep ts -value cpu -value mem -into metric
-   value`. High chart synergy; medium build.
-
+3. **`unpivot`** (was: `melt`; renamed 2026-09-03, Ross — SQL names:
+   UNPIVOT is the term in DuckDB, SQL Server, Oracle, Snowflake, and it
+   pairs with our existing `pivot`; `melt` is pandas/tidyverse jargon,
+   mentioned in the help text as a pointer only). **SHIPPED
+   2026-09-03**: `-id`/`-value` (accumulate) + `-col`/`-val` output
+   names (the exact inverse of pivot's `-row`/`-col`/`-val`); default
+   values = all non-id fields SORTED (record iteration order is
+   lane-dependent, same contract as describe); absent/null → no row
+   (SQL UNPIVOT default); typed template with synthesized struct when
+   the folded fields share a Go type (all-numeric → float64), record
+   fallback via the planner boundary otherwise; SerialOnly because the
+   typed Stream runtime has no 1:N operator yet (TODO: Stream.SelectMany
+   would make it parallel); DuckDB native UNPIVOT in generate sql
+   (caveat: DuckDB coerces mixed value types to one). Loud refusal when
+   an -id collides with -col/-val. Sabotage-verified via the duckdb
+   oracle. *Original survey note (pre-rename):* ssql had pivot but NOT
+   its inverse; wide→long is what `to chart`/multi-Y actually wants
+   (one value column + a series column) — high chart synergy. The
+   sketched grammar was `melt -keep … -value … -into metric value`;
+   shipped as `unpivot -id … -value … -col metric -val value`.
 4. **`extract`** (regex capture groups → fields; nushell parse, mlr
    sub/put, the grep→awk gap) — ssql can MATCH regex (where) but
    not EXTRACT. This is the log-processing door: `from lines

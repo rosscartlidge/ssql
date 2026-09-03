@@ -370,6 +370,21 @@ func TestPipelineCorpus(t *testing.T) {
 			Excludes: []string{"Grace"},
 		},
 		{
+			// unpivot typed template (homogeneous ints → synthesized
+			// struct, SerialOnly) through all three modes.
+			Name:     "unpivot_typed",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} unpivot -id name -value age -value salary -col metric -val amount | {{.bin}} to csv`,
+			Contains: []string{"metric", "amount", "Alice", "age", "salary", "95000"},
+			Excludes: []string{"dept"},
+		},
+		{
+			// Mixed value types (int + string) → record-shaped stage in
+			// typed pipelines via the planner boundary.
+			Name:     "unpivot_mixed_record_fallback",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} unpivot -id name -value age -value city -col field -val v | {{.bin}} to csv`,
+			Contains: []string{"name", "field", "v", "Alice", "SF", "35"},
+		},
+		{
 			Name:     "where_then_where_collision",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} where -if salary gt 70000 | {{.bin}} where -if status eq active | {{.bin}} include name | {{.bin}} to csv`,
 			Contains: []string{"name", "Alice"},

@@ -297,6 +297,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		err = translateResample(q, frag.Op, args[2:])
 	case "describe":
 		err = translateDescribe(q, frag.Op, args[2:])
+	case "unpivot":
+		err = translateUnpivot(q, frag.Op, args[2:])
 	case "join":
 		err = translateJoin(q, args[2:], funcFrags)
 	case "union":
@@ -1803,6 +1805,96 @@ func translateDescribe(q *sqlQuery, op *lib.Op, args []string) error {
 		selectExprs: []string{`"field"`, `"type"`, `"count"`, `"missing"`, `"distinct"`, `"min"`, `"max"`, `"mean"`, `"median"`},
 		comments:    q.comments,
 		columns:     append([]string(nil), describeColumns...),
+	}
+	return nil
+}
+
+
+// translateUnpivot lowers to DuckDB's native UNPIVOT (DFC122 Tier 1):
+// `UNPIVOT src ON v1, v2 INTO NAME col VALUE val`, projected to
+// ids + col + val. Default value list (all non-id columns, sorted)
+// needs the tracked column list; refuses loudly when unknown. NULLs are
+// excluded by UNPIVOT's default — matching UnpivotRecords, which emits
+// no row for an absent value. Caveat, documented: DuckDB coerces mixed
+// value-column types to a common type (int + varchar → varchar), where
+// ssql keeps each row's own type.
+func translateUnpivot(q *sqlQuery, op *lib.Op, args []string) error {
+	var ids, values []string
+	col, val := "name", "value"
+	if s, ok := op.StrList("ids"); ok {
+		ids = s
+		values, _ = op.StrList("values")
+		if c, ok := op.Str("col"); ok && c != "" {
+			col = c
+		}
+		if v, ok := op.Str("val"); ok && v != "" {
+			val = v
+		}
+	} else {
+		for i := 0; i < len(args); i++ {
+			switch args[i] {
+			case "-id":
+				if i+1 < len(args) {
+					ids = append(ids, args[i+1])
+					i++
+				}
+			case "-value":
+				if i+1 < len(args) {
+					values = append(values, args[i+1])
+					i++
+				}
+			case "-col":
+				if i+1 < len(args) {
+					col = args[i+1]
+					i++
+				}
+			case "-val":
+				if i+1 < len(args) {
+					val = args[i+1]
+					i++
+				}
+			}
+		}
+	}
+	if len(values) == 0 {
+		if q.columns == nil {
+			return fmt.Errorf("unpivot: no -value fields and the SQL translator does not know this source's columns — name the -value fields, or use generate go")
+		}
+		isID := map[string]bool{}
+		for _, id := range ids {
+			isID[id] = true
+		}
+		for _, c := range q.columns {
+			if !isID[c] {
+				values = append(values, c)
+			}
+		}
+		slices.Sort(values)
+	}
+	if len(values) == 0 {
+		return fmt.Errorf("unpivot: nothing to fold (every column is an -id)")
+	}
+	if q.fromClause == "" {
+		return fmt.Errorf("unpivot: no source to translate")
+	}
+	wrapAsSubquery(q)
+	src := q.fromClause
+
+	var on []string
+	for _, v := range values {
+		on = append(on, quoteIdent(v))
+	}
+	var proj []string
+	for _, id := range ids {
+		proj = append(proj, quoteIdent(id))
+	}
+	proj = append(proj, quoteIdent(col), quoteIdent(val))
+	body := fmt.Sprintf("(\n  SELECT %s FROM (\n    UNPIVOT %s ON %s INTO NAME %s VALUE %s\n  )\n)",
+		strings.Join(proj, ", "), src, strings.Join(on, ", "), quoteIdent(col), quoteIdent(val))
+	*q = sqlQuery{
+		fromClause: body,
+		comments:   q.comments,
+		columns:    append(append([]string(nil), ids...), col, val),
 	}
 	return nil
 }

@@ -28,6 +28,7 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	RegisterSort(cmd)
 	RegisterResample(cmd)
 	RegisterDescribe(cmd)
+	RegisterUnpivot(cmd)
 	RegisterGroupBy(cmd)
 	RegisterTo(cmd)
 	RegisterConvolve(cmd)
@@ -75,6 +76,10 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 		},
 		"describe": {
 			"FIELDS": {0}, // fields to profile (variadic)
+		},
+		"unpivot": {
+			"-id":    {0}, // identity field (accumulate)
+			"-value": {0}, // folded field (accumulate)
 		},
 		"group-by": {
 			"FIELDS":   {0}, // group fields (variadic)

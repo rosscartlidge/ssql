@@ -956,6 +956,25 @@ Terminates based on time field values in records.
 
 ## SQL-Style Operations
 
+### UnpivotRecords
+```go
+func UnpivotRecords(records iter.Seq[Record], cfg UnpivotConfig) iter.Seq[Record]
+func UnpivotFilter(cfg UnpivotConfig) Filter[Record, Record]
+type UnpivotConfig struct{ IDs, Values []string; NameField, ValueField string }
+```
+Wide→long fold (SQL UNPIVOT; pivot's inverse): one output record per
+(input record, value field), copying `IDs`, with the field's name in
+`NameField` (default `name`) and its value in `ValueField` (default
+`value`). Empty `Values` = every non-ID field sorted by name. An absent or
+null value produces no row. Row-local and order-preserving. Backs
+`ssql unpivot`.
+
+**Example:**
+```go
+long := ssql.UnpivotRecords(wide, ssql.UnpivotConfig{IDs: []string{"product"}, Values: []string{"jan", "feb"}, NameField: "month", ValueField: "revenue"})
+```
+
+
 *Database-like operations for Record streams*
 
 > 🎯 **Real-World Examples**: See comprehensive join and aggregation patterns in the [Advanced Tutorial](advanced-tutorial.md#stream-joins) section.

@@ -692,6 +692,21 @@ var equivCases = []EquivCase{
 		Ordered:  true,
 	},
 	{
+		// unpivot (DFC122 Tier 1): wide→long, homogeneous int value
+		// columns so every lane incl. DuckDB's native UNPIVOT agrees.
+		// Unordered: row-local expansion, parallel lanes reorder.
+		Name:     "unpivot_ints",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} unpivot -id city -value id -value pop -col k -val v`,
+		Ordered:  false,
+	},
+	{
+		// Default value list (all non-id columns, sorted) + custom
+		// column names, after a filter.
+		Name:     "unpivot_default_values",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 20 | {{.bin}} exclude city | {{.bin}} unpivot -id id`,
+		Ordered:  false,
+	},
+	{
 		Name:     "identity",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv`,
 		Ordered:  false, // parallel output is unordered

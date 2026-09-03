@@ -5,6 +5,26 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`ssql unpivot` — wide to long, pivot's inverse** (DFC122 Tier 1,
+  item 3; the SQL name — DuckDB/SQL Server/Oracle say UNPIVOT — not
+  pandas' `melt`, which the help text points at). `-id` fields copy to
+  every row, each `-value` field becomes a row with its name in `-col`
+  (default `name`) and value in `-val` (default `value`); no `-value`
+  folds every non-id column sorted by name; absent/null values produce
+  no row (SQL UNPIVOT's default). Every lane: exec, record codegen, a
+  typed template with a synthesized output struct when the folded
+  fields share a Go type (all-numeric → float64; mixed types re-enter
+  record mode via the planner boundary), and `generate sql` via
+  DuckDB's native `UNPIVOT`. Declared order-transparent (row-local).
+  An `-id` that collides with `-col`/`-val` refuses loudly — the corpus
+  found the silent overwrite. Two equivalence pins incl. the duckdb
+  oracle; sabotage-verified (dropping the last value field fails both
+  the unit table and the duckdb lane — the Go lanes share one
+  implementation, so only the independent oracle could see it).
+
 ## [4.85.0] - 2026-09-03
 
 ### Added

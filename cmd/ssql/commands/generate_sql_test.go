@@ -745,3 +745,40 @@ func TestTranslateDescribeSQL(t *testing.T) {
 		t.Error("argv fallback must produce the same SQL as the structured path")
 	}
 }
+
+func TestTranslateUnpivotSQL(t *testing.T) {
+	// Explicit values need no column list; ids + col + val projected.
+	q := &sqlQuery{fromClause: "'x.csv'"}
+	op := &lib.Op{Kind: "unpivot", Args: map[string]any{"ids": []any{"name"}, "values": []any{"jan", "feb"}, "col": "month", "val": "revenue"}}
+	if err := translateUnpivot(q, op, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"UNPIVOT", "ON jan, feb", "INTO NAME month VALUE revenue", "SELECT name, month, revenue FROM"} {
+		if !strings.Contains(q.fromClause, want) {
+			t.Errorf("SQL missing %q:\n%s", want, q.fromClause)
+		}
+	}
+	if len(q.columns) != 3 || q.columns[2] != "revenue" {
+		t.Errorf("columns = %v", q.columns)
+	}
+	// Default values: all non-id columns sorted; needs the column list.
+	q = &sqlQuery{fromClause: "'x.csv'", columns: []string{"id", "z", "a"}}
+	if err := translateUnpivot(q, nil, []string{"-id", "id"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q.fromClause, "ON a, z INTO NAME name VALUE value") {
+		t.Errorf("default values must be sorted non-id columns:\n%s", q.fromClause)
+	}
+	q = &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateUnpivot(q, nil, []string{"-id", "id"}); err == nil || !strings.Contains(err.Error(), "name the -value fields") {
+		t.Errorf("default values with unknown columns: want loud refusal, got %v", err)
+	}
+	// Structured and argv paths agree.
+	a := &sqlQuery{fromClause: "'x.csv'"}
+	b := &sqlQuery{fromClause: "'x.csv'"}
+	_ = translateUnpivot(a, op, nil)
+	_ = translateUnpivot(b, nil, []string{"-id", "name", "-value", "jan", "-value", "feb", "-col", "month", "-val", "revenue"})
+	if a.fromClause != b.fromClause {
+		t.Error("structured and argv paths diverge")
+	}
+}

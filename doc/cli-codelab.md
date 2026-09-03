@@ -574,6 +574,38 @@ subset, chart the profile. `generate sql` translates it (exact distinct,
 `median`, DuckDB's types mapped to ssql's names) when the translator knows
 the source columns, and refuses loudly otherwise.
 
+### Unpivot: Wide to Long (pivot's inverse)
+
+Twelve month columns want to be rows before you group, chart, or join:
+
+```bash
+ssql from sales.csv | ssql unpivot -id product -value jan -value feb -value mar -col month -val revenue
+```
+```
+product   month   revenue
+Widget    jan     1200
+Widget    feb     1350
+Widget    mar     990
+Gadget    jan     ...
+```
+
+`-id` fields are copied to every output row; each `-value` field becomes
+one row with its name in `-col` (default `name`) and its value in `-val`
+(default `value`). Omit `-value` to fold every non-id column (sorted by
+name). A value that is absent or null on a record produces no row — SQL
+`UNPIVOT`'s rule. It is the SQL name (DuckDB, SQL Server, Oracle all say
+UNPIVOT); if you know it as *melt*, this is it. `unpivot` then `pivot`
+round-trips:
+
+```bash
+ssql from wide.csv | ssql unpivot -id name -col month -val revenue | ssql pivot -row name -col month -val revenue
+```
+
+In `generate sql` it lowers to DuckDB's native `UNPIVOT`. One caveat
+there: when the folded columns mix types (a number column and a text
+column), DuckDB coerces the value column to a common type, while ssql
+keeps each row's own type.
+
 ### Random Samples with SAMPLE
 
 `limit` gives you the file's HEAD — often one shard, one day, one
