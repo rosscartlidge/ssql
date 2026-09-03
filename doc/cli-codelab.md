@@ -535,6 +535,20 @@ ssql from server.log.csv | ssql limit -last 20              # the 20 most recent
 ssql from sales.csv | ssql sort amount | ssql limit -last 3  # the 3 largest, ascending
 ```
 
+`limit -last` streams the whole input to find its end. When the input
+is a file, ask the source instead — it seeks to the end and reads only
+what it needs:
+
+```bash
+ssql from csv shuffled.csv -last 10        # 0.01s on 14.6M rows (vs ~20s streaming)
+```
+
+Same rows, same order, in every lane; the optimiser rewrites `from csv F |
+limit -last N` into this form for you. `-last` follows the rule for flags
+on `from`: it exists because only the source can seek to the end. (There
+is deliberately no `-limit` or `-skip` on `from` — head is already lazy,
+and skipping N lines costs the same wherever it happens.)
+
 ssql's verbs stay SQL-flavored — `limit` is head, so the tail lives
 under the same verb rather than as a coreutils-style command. In
 `generate sql` a `-last` needs a preceding `sort` (SQL has no arrival

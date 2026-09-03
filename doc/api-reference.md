@@ -1423,6 +1423,20 @@ result := pipeline(numbers)
 
 ## I/O Operations
 
+### TailCSVFile / TailTSVFile / TailJSONLFile
+```go
+func TailCSVFile(filename string, n int, config ...CSVConfig) (iter.Seq[Record], error)
+func TailTSVFile(filename string, n int) (iter.Seq[Record], error)
+func TailJSONLFile(filename string, n int) (iter.Seq[Record], error)
+```
+The last n data lines of a file, read by seeking to the end (O(n) lines,
+file-size independent), parsed under the header's schema with types
+inferred from those lines. Identical rows to `TakeLast(n)` over a full
+read. URLs fall back to a full streaming read. Backs `ssql from … -last N`.
+Shared caveat with the samplers: backward line-scanning assumes
+newline-terminated records.
+
+
 ### ReadLinesFromReader
 ```go
 func ReadLinesFromReader(r io.Reader) iter.Seq[Record]

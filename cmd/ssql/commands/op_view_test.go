@@ -181,3 +181,26 @@ func TestSortLimitToTopSkipsLast(t *testing.T) {
 		t.Errorf("plain sort+limit should still become top: %v", rules)
 	}
 }
+
+// limit-last-to-source: `from csv F | limit -last N` → `from csv F -last N`.
+func TestRuleLimitLastToSource(t *testing.T) {
+	cmds := []*pipelineCmd{parsePipelineCmd("ssql from csv data.csv"), parsePipelineCmd("ssql limit -last 10"), parsePipelineCmd("ssql to table")}
+	rules := ruleLimitLastToSource(cmds)
+	if len(rules) != 1 || !cmds[1].Removed || !strings.Contains(renderCmd(cmds[0]), "-last 10") {
+		t.Errorf("rule should fold the tail into the source: rules=%v from=%s", rules, renderCmd(cmds[0]))
+	}
+	// Not when something sits between them.
+	cmds = []*pipelineCmd{parsePipelineCmd("ssql from csv data.csv"), parsePipelineCmd("ssql where -if a gt 1"), parsePipelineCmd("ssql limit -last 10")}
+	if rules := ruleLimitLastToSource(cmds); len(rules) != 0 || cmds[2].Removed {
+		t.Error("must not fold past an intervening stage (different rows)")
+	}
+	// Not with -sample on the source, nor a plain (head) limit.
+	cmds = []*pipelineCmd{parsePipelineCmd("ssql from csv data.csv -sample 100"), parsePipelineCmd("ssql limit -last 10")}
+	if rules := ruleLimitLastToSource(cmds); len(rules) != 0 {
+		t.Error("must not combine with -sample")
+	}
+	cmds = []*pipelineCmd{parsePipelineCmd("ssql from csv data.csv"), parsePipelineCmd("ssql limit 10")}
+	if rules := ruleLimitLastToSource(cmds); len(rules) != 0 {
+		t.Error("head limit is already lazy — never folded")
+	}
+}

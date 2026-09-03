@@ -129,6 +129,11 @@ func TestScaleBudgets(t *testing.T) {
 		// Byte-offset sampling; the 4MB-per-line bug read ~4GB here.
 		budget(t, dir, bin+" from csv big.csv -sample 1000 -sample-seed 7 > /dev/null", 1*time.Second)
 	})
+	t.Run("from-last", func(t *testing.T) {
+		// Seek-based tail: O(N) lines regardless of file size. A full
+		// read here would take ~3s+; the budget is the feature.
+		budget(t, dir, bin+" from csv big.csv -last 10 > /dev/null", 1*time.Second)
+	})
 	t.Run("records-parquet", func(t *testing.T) {
 		budget(t, dir, bin+" from big.parquet -records", 1*time.Second)
 	})

@@ -116,6 +116,12 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 		Default(0).
 		Help("Seed for -sample; when omitted, one is chosen and printed to stderr").
 		Done().
+		Flag("-last").
+		Int().
+		Global().
+		Default(0).
+		Help("Fast tail: the last N rows via a seek to the end of the file (identical to `| limit -last N`, without reading the middle). 0 = read everything").
+		Done().
 		Flag("FILE").
 		String().
 		Variadic().
@@ -144,6 +150,22 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 					return fmt.Errorf("from jsonl -sample cannot combine with pushdown (--)")
 				}
 				return executeFromJSONLSample(cfg.files[0], sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), cfg.generate)
+			}
+			lastN, _ := ctx.GlobalFlags["-last"].(int)
+			if lastN > 0 {
+				if sampleN > 0 {
+					return fmt.Errorf("from jsonl: -last and -sample are exclusive — pick one")
+				}
+				if len(cfg.files) != 1 {
+					return fmt.Errorf("from jsonl -last needs exactly one file (got %d) — for stdin or multi-file input use `limit -last`", len(cfg.files))
+				}
+				if len(ctx.RemainingArgs) > 0 {
+					return fmt.Errorf("from jsonl -last cannot combine with pushdown (--)")
+				}
+				return executeFromJSONLLast(cfg.files[0], lastN, cfg.generate)
+			}
+			if lastN < 0 {
+				return fmt.Errorf("from jsonl -last must be positive, got %d", lastN)
 			}
 			if sampleN < 0 {
 				return fmt.Errorf("from jsonl -sample must be positive, got %d", sampleN)
@@ -281,6 +303,23 @@ func executeFromJSONLSample(inputFile string, n int, seed int64, seedGiven bool,
 		return generateFromFileSampleCode("ssql.SampleJSONLFile", "input JSONL file", inputFile, n, resolvedSeed)
 	}
 	records, err := ssql.SampleJSONLFile(inputFile, n, resolvedSeed)
+	if err != nil {
+		return err
+	}
+	records = wrapWithFieldCaching(records, inputFile)
+	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+}
+
+
+// executeFromJSONLLast: `from jsonl FILE -last N` (seek-based tail).
+func executeFromJSONLLast(inputFile string, n int, generate bool) error {
+	if schemaMode() {
+		return executeFromJSON(inputFile, generate)
+	}
+	if shouldGenerate(generate) {
+		return generateFromFileLastCode("ssql.TailJSONLFile", "input JSONL file", inputFile, n)
+	}
+	records, err := ssql.TailJSONLFile(inputFile, n)
 	if err != nil {
 		return err
 	}

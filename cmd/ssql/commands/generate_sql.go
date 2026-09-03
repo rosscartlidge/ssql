@@ -364,7 +364,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 	// DuckDB's approximate system sampling — an honest match, both are
 	// probability-proportional-to-storage; a given seed is refused like
 	// the sample stage's (no cross-engine deterministic equivalent).
-	var sampleN string
+	var sampleN, lastN string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-sample-seed":
@@ -372,6 +372,10 @@ func translateFrom(q *sqlQuery, args []string) error {
 		case "-sample":
 			if i+1 < len(args) {
 				sampleN = args[i+1]
+			}
+		case "-last":
+			if i+1 < len(args) {
+				lastN = args[i+1]
 			}
 		}
 	}
@@ -402,7 +406,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// value-taking flags (a bare `-sample 5` used to read '5' as a
 		// second file).
 		valueFlags := map[string]bool{
-			"-sample": true, "-sample-seed": true, "-type": true, "-t": true,
+			"-sample": true, "-sample-seed": true, "-last": true, "-type": true, "-t": true,
 			"-default-type": true, "-dt": true, "-source": true,
 		}
 		var files []string
@@ -452,6 +456,19 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// of N rows; the duckdb equivalence lane asserts cardinality.
 		q.fromClause += " USING SAMPLE " + sampleN + " ROWS (reservoir)"
 		q.sampled = true
+	}
+	if lastN != "" && lastN != "0" {
+		// -last N: the last N rows in FILE order. SQL cannot seek, so
+		// this is the ordered full read + reversed LIMIT, re-ordered —
+		// correct, not fast (the speed win is a Go-lane property).
+		// Needs a deterministic row order: read_csv(parallel=false) for
+		// a single CSV/TSV file; anything else has no ordered read.
+		lower := strings.ToLower(q.fromClause)
+		if !strings.HasPrefix(q.fromClause, "'") || !(strings.HasSuffix(lower, ".csv'") || strings.HasSuffix(lower, ".tsv'")) {
+			return fmt.Errorf("from -last has a SQL translation only for a single CSV/TSV file (file order is undefined for other sources); use generate go")
+		}
+		src := fmt.Sprintf("read_csv(%s, parallel=false)", q.fromClause)
+		q.fromClause = fmt.Sprintf("(SELECT * EXCLUDE (__rn) FROM (SELECT * FROM (SELECT *, row_number() OVER () AS __rn FROM %s) ORDER BY __rn DESC LIMIT %s) ORDER BY __rn)", src, lastN)
 	}
 	return nil
 }

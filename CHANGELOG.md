@@ -5,6 +5,25 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`from csv|tsv|jsonl FILE -last N` — the seek-based tail at the
+  source** (Ross, after finding `from csv shuffled.csv | limit -last 10`
+  reads all 14.6M rows). Seeks to the end and reads only the last N
+  lines: 0.01s vs ~20s, identical rows and order (pinned against
+  `| limit -last N` for csv and tsv at several N, plus the equivalence
+  and DuckDB lanes). Types are inferred from the tail rows; URLs fall
+  back to a full streaming read; stdin/multi-file/pushdown/`-sample`
+  combinations refuse loudly. The optimiser rewrites `from … F | limit
+  -last N` into the source form (`limit-last-to-source`, the tail twin
+  of sort-limit-to-top). `generate sql`: ordered `read_csv(parallel=
+  false)` + reversed LIMIT for a single CSV/TSV (correct, not fast),
+  loud refusal otherwise. Scale-gated: the 3M-row tail must finish in
+  1s (it takes 0.01s). Recorded principle: a flag belongs on `from` only
+  when the SOURCE can do something the pipe stage cannot — which is why
+  there is no `-limit` or `-skip`.
+
 ## [4.86.0] - 2026-09-03
 
 ### Changed

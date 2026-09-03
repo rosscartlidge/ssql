@@ -800,6 +800,19 @@ var equivCases = []EquivCase{
 		Skip:     map[string]string{"duckdb": "extract without -skip refuses SQL translation by design (SQL cannot fail on a non-matching row)"},
 	},
 	{
+		// from -last N: the seek-based tail at the source. Same rows as
+		// `| limit -last N`; every lane incl. DuckDB (ordered full read
+		// + reversed LIMIT — correct, not fast).
+		Name:     "from_last",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv -last 3`,
+		Ordered:  true,
+	},
+	{
+		Name:     "from_last_then_where",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv -last 5 | {{.bin}} where -if pop gt 5`,
+		Ordered:  true,
+	},
+	{
 		Name:     "identity",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv`,
 		Ordered:  false, // parallel output is unordered

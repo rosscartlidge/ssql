@@ -871,3 +871,24 @@ func TestNamedOnlyPattern(t *testing.T) {
 		}
 	}
 }
+
+func TestTranslateFromLastSQL(t *testing.T) {
+	q := &sqlQuery{}
+	if err := translateFrom(q, []string{"csv", "x.csv", "-last", "3"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"read_csv('x.csv', parallel=false)", "row_number() OVER () AS __rn", "ORDER BY __rn DESC LIMIT 3", "EXCLUDE (__rn)", "ORDER BY __rn)"} {
+		if !strings.Contains(q.fromClause, want) {
+			t.Errorf("missing %q:\n%s", want, q.fromClause)
+		}
+	}
+	// -last must not be mistaken for a file (value flag).
+	if strings.Contains(q.fromClause, "'3'") {
+		t.Errorf("-last's N parsed as a file: %s", q.fromClause)
+	}
+	// Only single CSV/TSV files have an ordered read.
+	q = &sqlQuery{}
+	if err := translateFrom(q, []string{"jsonl", "x.jsonl", "-last", "3"}); err == nil || !strings.Contains(err.Error(), "generate go") {
+		t.Errorf("jsonl -last: want loud refusal, got %v", err)
+	}
+}

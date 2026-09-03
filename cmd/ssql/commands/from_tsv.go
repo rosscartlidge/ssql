@@ -58,6 +58,12 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Default(0).
 		Help("Seed for -sample; when omitted, one is chosen and printed to stderr").
 		Done().
+		Flag("-last").
+		Int().
+		Global().
+		Default(0).
+		Help("Fast tail: the last N rows via a seek to the end of the file (identical to `| limit -last N`, without reading the middle). 0 = read everything").
+		Done().
 		Flag("FILE").
 		String().
 		Variadic().
@@ -86,6 +92,22 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 					return fmt.Errorf("from tsv -sample cannot combine with pushdown (--)")
 				}
 				return executeFromTSVSample(cfg.files[0], sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), cfg.generate)
+			}
+			lastN, _ := ctx.GlobalFlags["-last"].(int)
+			if lastN > 0 {
+				if sampleN > 0 {
+					return fmt.Errorf("from tsv: -last and -sample are exclusive — pick one")
+				}
+				if len(cfg.files) != 1 {
+					return fmt.Errorf("from tsv -last needs exactly one file (got %d) — for stdin or multi-file input use `limit -last`", len(cfg.files))
+				}
+				if len(ctx.RemainingArgs) > 0 {
+					return fmt.Errorf("from tsv -last cannot combine with pushdown (--)")
+				}
+				return executeFromTSVLast(cfg.files[0], lastN, cfg.generate)
+			}
+			if lastN < 0 {
+				return fmt.Errorf("from tsv -last must be positive, got %d", lastN)
 			}
 			if sampleN < 0 {
 				return fmt.Errorf("from tsv -sample must be positive, got %d", sampleN)
@@ -305,4 +327,26 @@ func executeFromTSVSample(inputFile string, n int, seed int64, seedGiven bool, g
 	}
 	records = wrapWithFieldCaching(records, inputFile)
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+}
+
+
+// executeFromTSVLast: `from tsv FILE -last N` (seek-based tail).
+func executeFromTSVLast(inputFile string, n int, generate bool) error {
+	if schemaMode() {
+		return executeFromTSV(inputFile, generate)
+	}
+	if shouldGenerate(generate) {
+		return generateFromFileLastCode("ssql.TailTSVFile", "input TSV file", inputFile, n)
+	}
+	records, err := ssql.TailTSVFile(inputFile, n)
+	if err != nil {
+		return err
+	}
+	var headers []string
+	if f, ferr := os.Open(inputFile); ferr == nil {
+		headers, _ = readTSVHeaders(f)
+		f.Close()
+	}
+	records = wrapWithFieldCaching(records, inputFile)
+	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: headers})
 }

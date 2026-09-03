@@ -54,6 +54,12 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Default(0).
 		Help("Seed for -sample; when omitted, one is chosen and printed to stderr").
 		Done().
+		Flag("-last").
+		Int().
+		Global().
+		Default(0).
+		Help("Fast tail: the last N rows via a seek to the end of the file (identical to `| limit -last N`, without reading the middle). 0 = read everything").
+		Done().
 		Flag("-unordered").
 		Bool().
 		Global().
@@ -149,6 +155,22 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 				}
 				return executeFromCSVSample(files[0], typeOverrides, defaultType,
 					sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), generate)
+			}
+			lastN, _ := ctx.GlobalFlags["-last"].(int)
+			if lastN > 0 {
+				if sampleN > 0 {
+					return fmt.Errorf("from csv: -last and -sample are exclusive — pick one")
+				}
+				if len(files) != 1 {
+					return fmt.Errorf("from csv -last needs exactly one file (got %d) — for stdin or multi-file input use `limit -last`", len(files))
+				}
+				if len(ctx.RemainingArgs) > 0 {
+					return fmt.Errorf("from csv -last cannot combine with pushdown (--)")
+				}
+				return executeFromCSVLast(files[0], typeOverrides, defaultType, lastN, generate)
+			}
+			if lastN < 0 {
+				return fmt.Errorf("from csv -last must be positive, got %d", lastN)
 			}
 			if sampleN < 0 {
 				return fmt.Errorf("from csv -sample must be positive, got %d", sampleN)
@@ -560,4 +582,50 @@ func readCSVHeadersFromReader(r io.Reader) ([]string, error) {
 		return nil, err
 	}
 	return headers, nil
+}
+
+
+// executeFromCSVLast: `from csv FILE -last N` — the seek-based tail
+// (ssql.TailCSVFile). Same result as `| limit -last N`; O(N) instead of
+// a full read. Schema mode and codegen follow -sample's shape.
+func executeFromCSVLast(inputFile string, typeOverrides map[string]string, defaultType string, n int, generate bool) error {
+	if schemaMode() {
+		return executeFromCSV(inputFile, typeOverrides, defaultType, generate)
+	}
+	csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
+	if err != nil {
+		return err
+	}
+	if shouldGenerate(generate) {
+		return generateFromFileLastCode("ssql.TailCSVFile", "input CSV file", inputFile, n)
+	}
+	records, err := ssql.TailCSVFile(inputFile, n, csvConfig)
+	if err != nil {
+		return err
+	}
+	var csvHeaders []string
+	if f, ferr := os.Open(inputFile); ferr == nil {
+		csvHeaders, _ = readCSVHeadersFromReader(f)
+		f.Close()
+	}
+	records = wrapWithFieldCaching(records, inputFile)
+	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: csvHeaders})
+}
+
+// generateFromFileLastCode emits the record-mode init fragment for a
+// seek-based tail (CSV/TSV/JSONL share the shape; only the primitive
+// differs). One form for all modes — a Record source works in typed
+// pipelines through the planner boundary, exactly like -sample.
+func generateFromFileLastCode(fn, help, inputFile string, n int) error {
+	params := []lib.CodeParam{
+		{Name: "input", Default: inputFile, Help: help, VarName: "flagInput"},
+		{Name: "last-n", Default: fmt.Sprintf("%d", n), Help: "rows to keep from the end of the file", VarName: "flagLastN", Type: "int"},
+	}
+	code := fmt.Sprintf(`records, err := %s(*flagInput, *flagLastN)
+	if err != nil {
+		return fmt.Errorf("reading tail: %%w", err)
+	}`, fn)
+	frag := lib.NewInitFragment("records", code, []string{"fmt"}, getCommandString())
+	frag.Params = params
+	return lib.WriteCodeFragment(frag)
 }

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"slices"
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
@@ -150,8 +151,9 @@ type pipelineCmd struct {
 	SortField string
 
 	// Limit
-	LimitN    string
-	LimitLast bool // limit -last N (tail): not a head — sort+limit→top must not fire
+	LimitN     string
+	LimitLast  bool   // limit -last N (tail): not a head — sort+limit→top must not fire
+	LimitLastN string // the N of limit -last (LimitN is cleared so the top rule can't see it)
 }
 
 // whereCondition represents a single -if / +if field op value condition.
@@ -273,6 +275,7 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 	// Phase 1 rules (after predicate rules)
 	rules = append(rules, ruleSortLimitToTop(cmds)...)
 	rules = append(rules, ruleSortElimination(cmds)...)
+	rules = append(rules, ruleLimitLastToSource(cmds)...)
 
 	// Phase 4 rules
 	var joinRules []ruleApplication
@@ -561,6 +564,7 @@ func parseLimitCmd(cmd *pipelineCmd) {
 		// `sort -desc x | limit -last N` is the N SMALLEST in
 		// descending order — not `top N -field x`. Hide N from the
 		// sort-limit-to-top rule (it keys on LimitN != "").
+		cmd.LimitLastN = cmd.LimitN
 		cmd.LimitN = ""
 	}
 }
@@ -2327,4 +2331,42 @@ func needsQuoting(s string) bool {
 		}
 	}
 	return false
+}
+
+
+// ruleLimitLastToSource: `from csv|tsv|jsonl FILE | limit -last N` →
+// `from … FILE -last N` — the seek-based tail at the source reads O(N)
+// lines instead of the whole file (the tail twin of sort-limit-to-top).
+// Only when the source is one local file with no -sample/-last already
+// and no pushdown, and the limit is IMMEDIATELY next (anything between
+// them would see different rows).
+func ruleLimitLastToSource(cmds []*pipelineCmd) []ruleApplication {
+	var rules []ruleApplication
+	for i := 0; i < len(cmds); i++ {
+		c := cmds[i]
+		// Single-file sources are parsed by parseFromMultiFileCmd but
+		// IsMultiFile is only set for >1 file — and they render from
+		// RawArgs — so key on the parsed format/files and append to BOTH.
+		if c.Removed || c.Kind != "from" || len(c.MultiFileFiles) != 1 || len(c.MultiFilePushDown) > 0 {
+			continue
+		}
+		switch c.MultiFileFormat {
+		case "csv", "tsv", "jsonl":
+		default:
+			continue
+		}
+		if slices.Contains(c.MultiFileFlags, "-sample") || slices.Contains(c.MultiFileFlags, "-last") {
+			continue
+		}
+		j := nextNonRemoved(cmds, i)
+		if j == -1 || cmds[j].Kind != "limit" || !cmds[j].LimitLast || cmds[j].LimitLastN == "" {
+			continue
+		}
+		before := renderCmd(c) + " | " + renderCmd(cmds[j])
+		c.MultiFileFlags = append(c.MultiFileFlags, "-last", cmds[j].LimitLastN)
+		c.RawArgs = append(c.RawArgs, "-last", cmds[j].LimitLastN)
+		cmds[j].Removed = true
+		rules = append(rules, ruleApplication{Rule: "limit-last-to-source", Before: before, After: renderCmd(c)})
+	}
+	return rules
 }
