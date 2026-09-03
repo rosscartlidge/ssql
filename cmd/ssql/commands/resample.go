@@ -226,7 +226,39 @@ func generateResampleCode(cfg ssql.ResampleConfig) error {
 	code := fmt.Sprintf("%s := ssql.ResampleFilter(%s)(%s)",
 		outputVar, resampleConfigLiteral(cfg), inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
+	stampResampleOp(frag, cfg)
 	return lib.WriteCodeFragment(frag)
+}
+
+// stampResampleOp records resample's SEMANTIC config on the
+// fragment's Op (DFC123 slice 3) so backends that cannot execute Go —
+// the SQL translator — read the command's own parse instead of
+// re-implementing its flag grammar (aliases, defaults, accumulation).
+// The command parses its flags ONCE; a changed default here can no
+// longer drift silently in generate sql.
+func stampResampleOp(frag *lib.CodeFragment, cfg ssql.ResampleConfig) {
+	if frag.Op == nil {
+		return
+	}
+	frag.Op.Fields = append([]string{cfg.TimeField}, cfg.Values...)
+	frag.Op.Args = map[string]any{
+		"time":   cfg.TimeField,
+		"every":  cfg.Every, // nanoseconds
+		"values": cfg.Values,
+		"fill":   cfg.Fill,
+	}
+	if cfg.From != "" {
+		frag.Op.Args["from"] = cfg.From
+	}
+	if cfg.To != "" {
+		frag.Op.Args["to"] = cfg.To
+	}
+	if cfg.TimeUnit != "" {
+		frag.Op.Args["time_unit"] = cfg.TimeUnit
+	}
+	if cfg.TimeFormat != "" {
+		frag.Op.Args["time_format"] = cfg.TimeFormat
+	}
 }
 
 // generateResampleTyped: typed-in, typed-out. The barrier shims T →
@@ -333,6 +365,7 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 	}
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"fmt", "os"}, getCommandString())
+	stampResampleOp(frag, cfg)
 	frag.StructDefs = []string{def.String()}
 	frag.InputTypedSchema = prevSchema
 	frag.OutputTypedSchema = outSchema

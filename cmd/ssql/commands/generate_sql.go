@@ -245,13 +245,25 @@ func assembleSQL(input io.Reader) (string, error) {
 	return renderSQL(q), nil
 }
 
+// stageArgs returns the stage's ["ssql", kind, argv...] view,
+// preferring the fragment's structured Op (DFC123 slice 3 — the
+// process's own argv, lossless) over re-tokenizing the shell-quoted
+// Command string (whose parser cannot represent an embedded single
+// quote). Command parsing survives as the fallback for fragments from
+// an older ssql across an SSH boundary.
+func stageArgs(frag *lib.CodeFragment) []string {
+	if frag.Op != nil && frag.Op.Kind != "" {
+		return append([]string{"ssql", frag.Op.Kind}, frag.Op.Argv...)
+	}
+	return parseCommandArgs(frag.Command)
+}
+
 func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.CodeFragment) error {
-	cmd := frag.Command
-	if cmd == "" {
+	if frag.Command == "" {
 		return nil // skip empty commands (e.g., Aggregate fragment from group-by)
 	}
 
-	args := parseCommandArgs(cmd)
+	args := stageArgs(frag)
 	if len(args) < 2 {
 		return nil
 	}
@@ -282,7 +294,7 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 	case "distinct":
 		q.distinct = true
 	case "resample":
-		err = translateResample(q, args[2:])
+		err = translateResample(q, frag.Op, args[2:])
 	case "join":
 		err = translateJoin(q, args[2:], funcFrags)
 	case "union":
@@ -866,7 +878,7 @@ func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
 		if bodyFrag.Command == "" {
 			continue
 		}
-		args := parseCommandArgs(bodyFrag.Command)
+		args := stageArgs(bodyFrag)
 		if len(args) < 2 {
 			continue
 		}
@@ -1508,7 +1520,35 @@ func parseCommandArgs(cmd string) []string {
 // v1 scope, loud refusals otherwise: numeric epoch timestamps only
 // (string timestamps and -time-format need TIMESTAMP-typed handling —
 // use generate go), no -from/-to bounds yet.
-func translateResample(q *sqlQuery, args []string) error {
+func translateResample(q *sqlQuery, op *lib.Op, args []string) error {
+	// Structured path (DFC123 slice 3): the command recorded its own
+	// parsed config on the Op — no second implementation of its flag
+	// grammar here. Defaults, aliases, and accumulation were already
+	// applied by the command itself.
+	if t, ok := op.Str("time"); ok {
+		if _, refused := op.Str("time_format"); refused {
+			return fmt.Errorf("resample over string timestamps has no SQL translation — numeric epochs only; use generate go")
+		}
+		if _, refused := op.Str("from"); refused {
+			return fmt.Errorf("resample -from/-to has no SQL translation yet — use generate go")
+		}
+		if _, refused := op.Str("to"); refused {
+			return fmt.Errorf("resample -from/-to has no SQL translation yet — use generate go")
+		}
+		everyNs, ok := op.Int64("every")
+		if !ok || everyNs <= 0 {
+			return fmt.Errorf("resample: bad every in op descriptor")
+		}
+		values, ok := op.StrList("values")
+		if !ok || len(values) == 0 {
+			return fmt.Errorf("resample: no values in op descriptor")
+		}
+		fill, _ := op.Str("fill")
+		timeUnit, _ := op.Str("time_unit")
+		return buildResampleSQL(q, t, everyNs, values, fill, timeUnit)
+	}
+
+	// Fallback: parse the stage's argv (fragments from an older ssql).
 	var timeField, everyStr, fill, timeUnit string
 	var values []string
 	fill = "previous"
@@ -1553,7 +1593,16 @@ func translateResample(q *sqlQuery, args []string) error {
 	if err != nil || every <= 0 {
 		return fmt.Errorf("resample: bad -every %q", everyStr)
 	}
-	everyNs := int64(every)
+	return buildResampleSQL(q, timeField, int64(every), values, fill, timeUnit)
+}
+
+// buildResampleSQL is the DuckDB lowering of resample's SEMANTIC
+// config (epoch grid + ASOF joins) — shared by the structured-Op path
+// and the argv fallback, so both produce byte-identical SQL.
+func buildResampleSQL(q *sqlQuery, timeField string, everyNs int64, values []string, fill, timeUnit string) error {
+	if fill == "" {
+		fill = "previous"
+	}
 
 	// The epoch unit (in ns): pinned by -time-unit, else detected from
 	// the data by magnitude — Go's exact thresholds.

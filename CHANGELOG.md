@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`generate sql` reads the stage's own argv (DFC123 slice 3)** —
+  the SQL translator's dispatch (and its join func-body sites) now
+  consumes the fragment's structured Op instead of re-tokenizing the
+  shell-quoted Command string, killing the same embedded-quote
+  mangling there (`where -if name eq O'Brien` now yields
+  `WHERE name = 'O''Brien'`, verified against DuckDB). resample
+  additionally records its full semantic config on the Op
+  (every-ns, values, fill, unit — defaults applied by the command
+  itself), and the translator prefers that over re-implementing the
+  flag grammar; one shared lowering produces byte-identical SQL from
+  either path, and poisoning the stamped config fails the duckdb
+  equivalence lane (sabotage-verified).
 - **`generate ssql` no longer mangles values with embedded quotes** —
   the optimiser re-tokenized the shell-quoted Command string with a
   parser that cannot represent an embedded single quote, so

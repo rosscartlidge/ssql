@@ -281,7 +281,22 @@ than on anything relational. Deliberately left open here.
    Fields/Args stay empty until slice 3 grows consumers.
 3. **SQL translator consumes `Op`** — the `translate*` arg-parsers go
    (my week-old `translateResample` parser is the first candidate for
-   deletion-by-structure).
+   deletion-by-structure). **SHIPPED 2026-09-03 (first cut)**:
+   `stageArgs` gives every translate dispatch (main + func-body
+   sites) the lossless Op.Argv view with Command-parse fallback —
+   the O'Brien quoting class is now dead in `generate sql` too
+   (`WHERE name = 'O''Brien'`, verified against DuckDB). The
+   structured-Args pattern is pinned end-to-end on resample: the
+   command stamps its SEMANTIC config (time/every-ns/values/fill/
+   unit + refusal-relevant from/to/time_format) via
+   `stampResampleOp`, and `translateResample` reads it instead of
+   re-implementing the flag grammar; `buildResampleSQL` is the one
+   lowering behind both front doors (unit test asserts
+   byte-identical SQL). Sabotage: poisoning the stamped fill fails
+   BOTH resample equivalence cases in the duckdb lane. Remaining in
+   this slice's spirit: migrate the other translate* functions to
+   structured Args per-command as they next change (each migration
+   follows the resample pattern).
 4. **Protocol facts** — fallible/barrier/sink declarations; retire
    `fixErrorHandling`.
 5. **Order properties + dead-sort elimination** (§7) as the first new

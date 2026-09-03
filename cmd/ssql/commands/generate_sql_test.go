@@ -533,7 +533,7 @@ func TestTranslateResampleSQL(t *testing.T) {
 	// series (max per ts = highest-wins), epoch-aligned generate_series
 	// grid, ASOF join, edge clamp, ORDER BY.
 	q := &sqlQuery{fromClause: "'x.csv'"}
-	if err := translateResample(q, []string{"-time", "t", "-every", "10s", "-value", "v"}); err != nil {
+	if err := translateResample(q, nil, []string{"-time", "t", "-every", "10s", "-value", "v"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -556,14 +556,14 @@ func TestTranslateResampleSQL(t *testing.T) {
 
 	// -fill next flips the ASOF direction; linear needs BOTH sides.
 	qn := &sqlQuery{fromClause: "'x.csv'"}
-	if err := translateResample(qn, []string{"-time", "t", "-every", "1s", "-value", "v", "-fill", "next"}); err != nil {
+	if err := translateResample(qn, nil, []string{"-time", "t", "-every", "1s", "-value", "v", "-fill", "next"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(qn.fromClause, "ASOF LEFT JOIN __s0 n0 ON __grid.__g <= n0.__ts") {
 		t.Errorf("next fill missing forward ASOF:\n%s", qn.fromClause)
 	}
 	ql := &sqlQuery{fromClause: "'x.csv'"}
-	if err := translateResample(ql, []string{"-time", "t", "-every", "1s", "-value", "v", "-fill", "linear"}); err != nil {
+	if err := translateResample(ql, nil, []string{"-time", "t", "-every", "1s", "-value", "v", "-fill", "linear"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(ql.fromClause, "p0 ON __grid.__g >= p0.__ts") ||
@@ -574,7 +574,7 @@ func TestTranslateResampleSQL(t *testing.T) {
 
 	// -time-unit pins the unit — no detection CASE in the SQL.
 	qu := &sqlQuery{fromClause: "'x.csv'"}
-	if err := translateResample(qu, []string{"-time", "t", "-every", "5s", "-value", "v", "-time-unit", "s"}); err != nil {
+	if err := translateResample(qu, nil, []string{"-time", "t", "-every", "5s", "-value", "v", "-time-unit", "s"}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(qu.fromClause, "1e17") {
@@ -590,14 +590,14 @@ func TestTranslateResampleSQL(t *testing.T) {
 		{"-time", "t", "-every", "10s", "-value", "v", "-to", "100"},
 	} {
 		qr := &sqlQuery{fromClause: "'x.csv'"}
-		if err := translateResample(qr, c); err == nil || !strings.Contains(err.Error(), "generate go") {
+		if err := translateResample(qr, nil, c); err == nil || !strings.Contains(err.Error(), "generate go") {
 			t.Errorf("args %v: want loud refusal pointing at generate go, got %v", c, err)
 		}
 	}
 
 	// Missing requireds refuse too.
 	qm := &sqlQuery{fromClause: "'x.csv'"}
-	if err := translateResample(qm, []string{"-time", "t"}); err == nil {
+	if err := translateResample(qm, nil, []string{"-time", "t"}); err == nil {
 		t.Error("missing -every/-value: want error")
 	}
 
@@ -609,5 +609,57 @@ func TestTranslateResampleSQL(t *testing.T) {
 	qb := &sqlQuery{fromClause: "'x.csv'"}
 	if needsWrap(qb, "resample") {
 		t.Error("resample on bare from must not wrap")
+	}
+}
+
+func TestTranslateResampleSQLStructuredOp(t *testing.T) {
+	// The structured-Op path (DFC123 slice 3) must produce
+	// byte-identical SQL to the argv fallback — one lowering
+	// (buildResampleSQL), two front doors.
+	argvQ := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateResample(argvQ, nil, []string{"-time", "t", "-every", "10s", "-value", "v", "-fill", "linear", "-time-unit", "s"}); err != nil {
+		t.Fatal(err)
+	}
+	op := &lib.Op{
+		Kind: "resample",
+		Args: map[string]any{
+			"time":      "t",
+			"every":     float64(10_000_000_000), // JSON round-trip: numbers decode as float64
+			"values":    []any{"v"},              // JSON round-trip: lists decode as []any
+			"fill":      "linear",
+			"time_unit": "s",
+		},
+	}
+	opQ := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateResample(opQ, op, nil); err != nil {
+		t.Fatal(err)
+	}
+	if opQ.fromClause != argvQ.fromClause {
+		t.Errorf("structured and argv paths diverge:\n--- op:\n%s\n--- argv:\n%s", opQ.fromClause, argvQ.fromClause)
+	}
+
+	// Structured refusals: the command recorded -time-format / -from —
+	// the translator must refuse just as loudly as with argv.
+	for _, extra := range []map[string]any{
+		{"time_format": "2006-01-02"},
+		{"from": "0"},
+		{"to": "100"},
+	} {
+		args := map[string]any{"time": "t", "every": float64(1e9), "values": []any{"v"}}
+		for k, v := range extra {
+			args[k] = v
+		}
+		q := &sqlQuery{fromClause: "'x.csv'"}
+		err := translateResample(q, &lib.Op{Kind: "resample", Args: args}, nil)
+		if err == nil || !strings.Contains(err.Error(), "generate go") {
+			t.Errorf("structured %v: want loud refusal pointing at generate go, got %v", extra, err)
+		}
+	}
+
+	// An Op WITHOUT structured Args (older command emitting only
+	// Kind/Argv) must fall through to argv parsing, not error.
+	q := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateResample(q, &lib.Op{Kind: "resample"}, []string{"-time", "t", "-every", "5s", "-value", "v"}); err != nil {
+		t.Fatal("Kind-only Op must fall back to argv:", err)
 	}
 }
