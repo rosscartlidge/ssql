@@ -295,6 +295,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		q.distinct = true
 	case "resample":
 		err = translateResample(q, frag.Op, args[2:])
+	case "describe":
+		err = translateDescribe(q, frag.Op, args[2:])
 	case "join":
 		err = translateJoin(q, args[2:], funcFrags)
 	case "union":
@@ -399,10 +401,10 @@ func translateFrom(q *sqlQuery, args []string) error {
 			q.fromClause = quoteFile(files[0])
 			// Seed column tracking from the header (generation runs where
 			// the file lives). Non-delimited formats stay unknown.
-			switch args[0] {
-			case "csv":
+			switch {
+			case args[0] == "csv", args[0] != "tsv" && strings.HasSuffix(strings.ToLower(files[0]), ".csv"):
 				q.columns = delimHeader(files[0], ',')
-			case "tsv":
+			case args[0] == "tsv", strings.HasSuffix(strings.ToLower(files[0]), ".tsv"):
 				q.columns = delimHeader(files[0], '\t')
 			}
 		} else {
@@ -1732,6 +1734,75 @@ func buildResampleSQL(q *sqlQuery, timeField string, everyNs int64, values []str
 		fromClause: sb.String(),
 		comments:   q.comments,
 		columns:    newCols,
+	}
+	return nil
+}
+
+
+// translateDescribe (DFC122 Tier 1): one row per field with the SAME
+// definitions as ssql.DescribeRecords — exact distinct, missing =
+// NULL or empty string, median = quantile_cont(0.5), numeric stats
+// NULL (absent in ssql) for non-numeric fields, type names mapped to
+// ssql's int/float/string/bool vocabulary. Needs the source column
+// list (tracked from CSV/TSV headers); refuses loudly when unknown.
+func translateDescribe(q *sqlQuery, op *lib.Op, args []string) error {
+	fields, ok := op.StrList("fields")
+	if !ok {
+		for _, a := range args {
+			if !strings.HasPrefix(a, "-") {
+				fields = append(fields, a)
+			}
+		}
+	}
+	if q.columns == nil {
+		return fmt.Errorf("describe: the SQL translator does not know this source's columns (non-CSV/TSV source or an opaque stage upstream) — use generate go")
+	}
+	if len(fields) == 0 {
+		// Same contract as ssql.DescribeRecords: unrestricted → sorted
+		// by field name.
+		fields = append([]string(nil), q.columns...)
+		slices.Sort(fields)
+	} else {
+		for _, f := range fields {
+			if !slices.Contains(q.columns, f) {
+				return fmt.Errorf("describe: unknown field %q (available: %s)", f, strings.Join(q.columns, ", "))
+			}
+		}
+	}
+	if q.fromClause == "" {
+		return fmt.Errorf("describe: no source to translate")
+	}
+	wrapAsSubquery(q)
+	src := q.fromClause
+
+	const numericTypes = "('TINYINT','SMALLINT','INTEGER','BIGINT','HUGEINT','UTINYINT','USMALLINT','UINTEGER','UBIGINT','UHUGEINT','FLOAT','DOUBLE')"
+	var sb strings.Builder
+	sb.WriteString("(\n  WITH __d AS (SELECT * FROM " + src + ")")
+	for i, f := range fields {
+		c := quoteIdent(f)
+		present := "nullif(CAST(" + c + " AS VARCHAR), '')"
+		ty := "typeof(min(" + c + "))"
+		isNum := "(" + ty + " IN " + numericTypes + " OR " + ty + " LIKE 'DECIMAL%')"
+		isInt := "(" + ty + " IN ('TINYINT','SMALLINT','INTEGER','BIGINT','HUGEINT','UTINYINT','USMALLINT','UINTEGER','UBIGINT','UHUGEINT'))"
+		if i == 0 {
+			sb.WriteString("\n  SELECT ")
+		} else {
+			sb.WriteString("\n  UNION ALL SELECT ")
+		}
+		fmt.Fprintf(&sb, "%d AS __ord, '%s' AS \"field\",\n", i, escapeSQL(f))
+		fmt.Fprintf(&sb, "    CASE WHEN %s THEN 'int' WHEN %s THEN 'float' WHEN %s = 'BOOLEAN' THEN 'bool' ELSE 'string' END AS \"type\",\n", isInt, isNum, ty)
+		fmt.Fprintf(&sb, "    count(%s) AS \"count\", count(*) - count(%s) AS \"missing\",\n", present, present)
+		fmt.Fprintf(&sb, "    count(DISTINCT %s) FILTER (WHERE %s IS NOT NULL) AS \"distinct\",\n", c, present)
+		fmt.Fprintf(&sb, "    CASE WHEN %s THEN CAST(min(%s) AS DOUBLE) END AS \"min\", CASE WHEN %s THEN CAST(max(%s) AS DOUBLE) END AS \"max\",\n", isNum, c, isNum, c)
+		fmt.Fprintf(&sb, "    CASE WHEN %s THEN avg(TRY_CAST(%s AS DOUBLE)) END AS \"mean\", CASE WHEN %s THEN median(TRY_CAST(%s AS DOUBLE)) END AS \"median\"\n", isNum, c, isNum, c)
+		sb.WriteString("  FROM __d")
+	}
+	sb.WriteString("\n  ORDER BY __ord\n)")
+	*q = sqlQuery{
+		fromClause:  sb.String(),
+		selectExprs: []string{`"field"`, `"type"`, `"count"`, `"missing"`, `"distinct"`, `"min"`, `"max"`, `"mean"`, `"median"`},
+		comments:    q.comments,
+		columns:     append([]string(nil), describeColumns...),
 	}
 	return nil
 }

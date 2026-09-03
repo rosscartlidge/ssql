@@ -61,6 +61,20 @@ pandas/polars vocabulary users arrive with.
 2. **`describe`** (mlr summary/stats1, csvkit csvstat, pandas
    df.describe) — per-field type, count, nulls/missing, distinct,
    min/max/mean/median for numerics, shortest/longest for strings.
+   **SHIPPED 2026-09-03** with three recorded decisions: (a)
+   record-shaped in every lane — rows are heterogeneous (numeric
+   stats absent on string fields) and a typed struct would have to
+   lie with zeros/NaN, so typed pipelines re-enter record mode here
+   via the planner boundary (pivot precedent); (b) unrestricted row
+   order is SORTED BY FIELD NAME, not first-seen — the equivalence
+   gate showed first-seen order is lane-dependent (CSV reader keeps
+   header order, generated record code iterates alphabetically) and
+   a lane-dependent contract is no contract; explicit FIELDS keep
+   their given order; (c) shortest/longest-for-strings deferred (the
+   min/max columns stay numeric-only so one column has one type
+   across lanes). SQL: exact distinct + `median`, DuckDB typeof
+   mapped to int/float/string/bool, loud refusal without a known
+   column list. Two bugs caught by the duckdb lane before shipping.
    THE first command every explorer wants; also exactly what the
    workspace's deleted Statistics panel should have been (a
    `describe` stage renders in the grid — no bespoke panel).

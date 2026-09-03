@@ -541,6 +541,39 @@ under the same verb rather than as a coreutils-style command. In
 order) and translates as "take N under the reversed order, then restore
 the original"; without a sort it refuses loudly rather than guess.
 
+### Profile Unfamiliar Data with describe
+
+The first thing to run on a file you have never seen:
+
+```bash
+ssql from customers.csv | ssql describe | ssql to table
+```
+```
+field      type     count   missing   distinct   min    max      mean      median
+------------------------------------------------------------------------------------
+age        int       9980        20         61    18     97      41.2      39
+country    string   10000         0         42
+email      string    9997         3       9997
+spend      float    10000         0       8123    0.0    9120.5  312.44    148.9
+```
+
+One row per field: its type (the most general kind seen), how many values
+are present and missing (absent, null, or empty), how many distinct
+values, and for numeric fields the min/max/mean/median (exact — median is
+the middle value, or the mean of the two middles). Numeric columns are
+blank for non-numeric fields rather than showing a misleading zero. Name
+fields to profile just those, in that order:
+
+```bash
+ssql from customers.csv | ssql describe spend age | ssql to table
+```
+
+Unrestricted output is sorted by field name — the one order every
+backend agrees on. It composes like any stage: filter first, describe the
+subset, chart the profile. `generate sql` translates it (exact distinct,
+`median`, DuckDB's types mapped to ssql's names) when the translator knows
+the source columns, and refuses loudly otherwise.
+
 ### Random Samples with SAMPLE
 
 `limit` gives you the file's HEAD — often one shard, one day, one
@@ -1359,7 +1392,11 @@ ssql generate ssql -pipeline 'ssql from x.csv | ssql sort -desc n | ssql limit 5
 ```
 
 `generate go` takes `-mode record|typed` (default `typed`); `generate sql`
-and `generate ssql` always use record-mode fragments. All the usual flags
+and `generate ssql` always use record-mode fragments. The generated
+program compiles against the *released* ssql module at your binary's
+version — if you are developing ssql itself and a brand-new library
+function comes back `undefined`, point it at your checkout:
+`SSQL_MODULE_DIR=~/src/ssql ssql generate go -run -pipeline '…'`. All the usual flags
 (`-run`, `-build`, `-optimise`, `OUTPUT`) compose. The string gets the same
 preprocessing as `-script` files — `# comments` and leading-`|` continuation
 lines work, so multi-line quoted pipelines are fine. (`-pipeline` replaces the

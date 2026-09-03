@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`SSQL_MODULE_DIR` for `generate go -run`/`-build`** — the generated
+  program compiles against the released ssql module at the running
+  binary's version, so a library function added since the last release
+  is `undefined` there until it ships (Ross hit this with `describe`).
+  Setting `SSQL_MODULE_DIR=/path/to/ssql` adds a `replace` directive to
+  the local checkout — explicit, never inferred — and says so on
+  stderr.
+- **`ssql describe` — profile every field** (DFC122 Tier 1, item 2; the
+  explorer's first command). One row per field: type (the most general
+  kind seen), count, missing (absent/null/empty), exact distinct, and
+  for numeric fields min/max/mean/median (median = middle value or mean
+  of the two middles). Numeric stats are ABSENT on non-numeric fields,
+  not zero. `describe FIELD…` restricts and orders; unrestricted output
+  is sorted by field name — the only order identical across exec,
+  generated code, and SQL (record iteration order differs between
+  them, which the equivalence gate surfaced). Record-shaped by design
+  (heterogeneous rows are the record model's home turf; typed
+  pipelines re-enter record mode at this stage via the planner
+  boundary, as pivot does). `generate sql` translates it — exact
+  `count(DISTINCT)`, `median`, DuckDB type names mapped to ssql's —
+  and refuses loudly when the translator doesn't know the source
+  columns. The duckdb equivalence lane caught two bugs while building
+  it (lane-dependent row order; a silently-dropped FIELDS list), and
+  fails on sabotage of the type vocabulary. Bare `from x.csv` now
+  seeds the SQL translator's column list too (only `from csv x.csv`
+  did before).
 - **`limit -last N` — the tail** (DFC122 Tier 1, item 1). The last N
   records in arrival order, kept under the SQL verb rather than a new
   `tail` command (ssql's data verbs are SQL-flavored; `limit` IS head;

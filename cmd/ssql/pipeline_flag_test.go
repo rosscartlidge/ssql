@@ -97,3 +97,41 @@ func TestPipelineFlag_FailingStageLoud(t *testing.T) {
 		t.Errorf("expected loud pipeline-failed error, got:\n%s", out)
 	}
 }
+
+// SSQL_MODULE_DIR: generate go -run compiles against the released
+// module by default (a not-yet-released library function is
+// "undefined" there); pointing it at the checkout makes the generated
+// program build against local source. Pinned by using describe, which
+// depends on DescribeFilter — present in this checkout regardless of
+// what the proxy has.
+func TestPipelineFlag_ModuleDirReplace(t *testing.T) {
+	csv := writePipelineTestCSV(t)
+	bin := buildSSQLForTypedTest(t)
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bin, filepath.Join(binDir, "ssql")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "generate", "go", "-mode", "record", "-run", "-pipeline",
+		"ssql from "+csv+" | ssql describe age | ssql to csv")
+	cmd.Env = append(os.Environ(), "SSQL_MODULE_DIR="+repo, "PATH="+binDir+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("generate go -run with SSQL_MODULE_DIR: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "compiling against local module") || !strings.Contains(string(out), "age") {
+		t.Errorf("expected local-module notice and describe output, got:\n%s", out)
+	}
+	// A bogus dir refuses loudly rather than silently falling back.
+	cmd = exec.Command(bin, "generate", "go", "-run", "-pipeline", "ssql from "+csv+" | ssql count")
+	cmd.Env = append(os.Environ(), "SSQL_MODULE_DIR=/nonexistent/ssql", "PATH="+binDir+":"+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "no go.mod there") {
+		t.Errorf("bogus SSQL_MODULE_DIR: want loud refusal, got err=%v\n%s", err, out)
+	}
+}

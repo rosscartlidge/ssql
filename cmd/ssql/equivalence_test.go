@@ -215,6 +215,16 @@ func equivParse(t *testing.T, lane, raw string) []map[string]any {
 		if _, isSchema := m["_schema"]; isSchema {
 			continue
 		}
+		// ssql's record model does not distinguish "absent" from
+		// "null" (GetOr yields the default for both), and SQL can only
+		// express absence as NULL. Drop null-valued keys so a lane that
+		// omits a field and a lane that emits null compare equal —
+		// a representation difference, not a value difference.
+		for k, v := range m {
+			if v == nil {
+				delete(m, k)
+			}
+		}
 		recs = append(recs, m)
 	}
 	return recs
@@ -665,6 +675,20 @@ var equivCases = []EquivCase{
 		// -last; the duckdb lane pins the ASC/DESC reversal.
 		Name:     "limit_last_desc_is_not_top",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} sort -desc pop | {{.bin}} limit -last 3`,
+		Ordered:  true,
+	},
+	{
+		// describe (DFC122 Tier 1): one row per field, exact stats,
+		// numeric stats absent on string fields. Every lane incl. the
+		// DuckDB translation (type names mapped to ssql's vocabulary,
+		// median = quantile_cont). Ordered: rows follow field order.
+		Name:     "describe_all",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} describe`,
+		Ordered:  true,
+	},
+	{
+		Name:     "describe_fields_after_where",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 8 | {{.bin}} describe pop city`,
 		Ordered:  true,
 	},
 	{

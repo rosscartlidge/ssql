@@ -27,6 +27,7 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	RegisterRename(cmd)
 	RegisterSort(cmd)
 	RegisterResample(cmd)
+	RegisterDescribe(cmd)
 	RegisterGroupBy(cmd)
 	RegisterTo(cmd)
 	RegisterConvolve(cmd)
@@ -71,6 +72,9 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 		"resample": {
 			"-time":  {0}, // timestamp field
 			"-value": {0}, // value field (accumulate)
+		},
+		"describe": {
+			"FIELDS": {0}, // fields to profile (variadic)
 		},
 		"group-by": {
 			"FIELDS":   {0}, // group fields (variadic)

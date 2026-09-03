@@ -31,7 +31,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Bool().
 		Global().
 		Default(false).
-		Help("Compile and run the generated Go code (mutually exclusive with OUTPUT and -build)").
+		Help("Compile and run the generated Go code (mutually exclusive with OUTPUT and -build). Compiles against the released ssql module at this binary's version; set SSQL_MODULE_DIR=/path/to/ssql to build against a local checkout instead").
 		Done().
 		Flag("-build", "-b").
 		String().
@@ -439,6 +439,25 @@ go 1.23
 
 require github.com/rosscartlidge/ssql/v4 v%s
 `, version.Version)
+	// The generated program compiles against the RELEASED module at
+	// the running binary's own version — so a library function added
+	// since the last release is "undefined" here until it ships.
+	// SSQL_MODULE_DIR points the temp module at a local checkout
+	// instead (the same replace directive the test harness uses), for
+	// developing ssql itself. Explicit, never inferred.
+	if dev := os.Getenv("SSQL_MODULE_DIR"); dev != "" {
+		abs, err := filepath.Abs(dev)
+		if err != nil {
+			os.RemoveAll(dir)
+			return "", "", fmt.Errorf("SSQL_MODULE_DIR: %w", err)
+		}
+		if _, err := os.Stat(filepath.Join(abs, "go.mod")); err != nil {
+			os.RemoveAll(dir)
+			return "", "", fmt.Errorf("SSQL_MODULE_DIR=%s: no go.mod there (expected the ssql checkout root)", dev)
+		}
+		goMod += fmt.Sprintf("\nreplace github.com/rosscartlidge/ssql/v4 => %s\n", abs)
+		fmt.Fprintf(os.Stderr, "ssql generate go: compiling against local module %s (SSQL_MODULE_DIR)\n", abs)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
 		os.RemoveAll(dir)
 		return "", "", fmt.Errorf("writing go.mod: %w", err)

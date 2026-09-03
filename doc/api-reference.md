@@ -632,6 +632,30 @@ result := filter(merged)
 
 *Functions for running aggregations and statistical analysis*
 
+### DescribeRecords
+```go
+func DescribeRecords(records iter.Seq[Record], cfg DescribeConfig) iter.Seq[Record]
+func DescribeFilter(cfg DescribeConfig) Filter[Record, Record]
+type DescribeConfig struct{ Fields []string }
+```
+Profiles a stream: one output record per field with `field`, `type`
+(int/float/string/bool — the most general kind seen), `count`
+(non-missing), `missing` (absent, null, or empty string), `distinct`
+(exact), and — for numeric fields only — `min`, `max`, `mean`, `median`
+(middle value, or the mean of the two middles). Numeric stats are absent,
+not zero, on non-numeric fields. Rows follow `cfg.Fields` when given,
+otherwise field name order (the only order identical across exec,
+generated code, and SQL). A barrier: materializes per-field state. Backs
+`ssql describe`; `DescribeFilter` is the filter-shaped form generated
+code composes.
+
+**Example:**
+```go
+for row := range ssql.DescribeRecords(records, ssql.DescribeConfig{}) {
+	fmt.Println(ssql.GetOr(row, "field", ""), ssql.GetOr(row, "type", ""), ssql.GetOr(row, "distinct", int64(0)))
+}
+```
+
 ### RunningSum
 ```go
 func RunningSum(fieldName string) Filter[Record, Record]

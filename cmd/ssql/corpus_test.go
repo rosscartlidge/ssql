@@ -361,6 +361,15 @@ func TestPipelineCorpus(t *testing.T) {
 			Excludes: []string{"Bob", "Grace", "David"},
 		},
 		{
+			// describe is record-shaped by design (heterogeneous rows);
+			// typed/parallel pipelines re-enter record mode here via the
+			// planner's typed→Record boundary (the pivot precedent).
+			Name:     "describe_after_where",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} where -if status eq active | {{.bin}} describe salary dept | {{.bin}} to csv`,
+			Contains: []string{"salary", "int", "dept", "string", "105000"},
+			Excludes: []string{"Grace"},
+		},
+		{
 			Name:     "where_then_where_collision",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} where -if salary gt 70000 | {{.bin}} where -if status eq active | {{.bin}} include name | {{.bin}} to csv`,
 			Contains: []string{"name", "Alice"},

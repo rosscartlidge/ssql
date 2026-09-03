@@ -701,3 +701,47 @@ func TestTranslateLimitLast(t *testing.T) {
 		t.Errorf("plain limit: err=%v limit=%q", err, q.limit)
 	}
 }
+
+func TestTranslateDescribeSQL(t *testing.T) {
+	// Unknown source columns → loud refusal (the translator can't
+	// enumerate fields it doesn't know).
+	q := &sqlQuery{fromClause: "'x.csv'"}
+	if err := translateDescribe(q, nil, nil); err == nil || !strings.Contains(err.Error(), "generate go") {
+		t.Errorf("nil columns: want loud refusal, got %v", err)
+	}
+	// Unknown requested field → loud, listing the available ones.
+	q = &sqlQuery{fromClause: "'x.csv'", columns: []string{"id", "city"}}
+	if err := translateDescribe(q, nil, []string{"nope"}); err == nil || !strings.Contains(err.Error(), "available: id, city") {
+		t.Errorf("unknown field: want loud refusal with available list, got %v", err)
+	}
+	// Structured Op path: one UNION ALL branch per field, ssql type
+	// vocabulary, exact distinct, median, ordered by field position.
+	q = &sqlQuery{fromClause: "'x.csv'", columns: []string{"id", "city", "pop"}}
+	op := &lib.Op{Kind: "describe", Args: map[string]any{"fields": []any{"pop", "id"}}}
+	if err := translateDescribe(q, op, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`'pop' AS "field"`, `'id' AS "field"`, "UNION ALL", "ORDER BY __ord",
+		`THEN 'int' WHEN`, `THEN 'float' WHEN`, `= 'BOOLEAN' THEN 'bool' ELSE 'string'`,
+		`count(DISTINCT pop) FILTER`, `median(TRY_CAST(pop AS DOUBLE))`,
+	} {
+		if !strings.Contains(q.fromClause, want) {
+			t.Errorf("SQL missing %q:\n%s", want, q.fromClause)
+		}
+	}
+	if strings.Contains(q.fromClause, `'city' AS "field"`) {
+		t.Error("unrequested field must not be described")
+	}
+	if len(q.columns) != len(describeColumns) || q.columns[0] != "field" {
+		t.Errorf("output columns = %v", q.columns)
+	}
+	// Argv fallback (Op-less fragment) selects the same fields.
+	q2 := &sqlQuery{fromClause: "'x.csv'", columns: []string{"id", "city", "pop"}}
+	if err := translateDescribe(q2, nil, []string{"pop", "id"}); err != nil {
+		t.Fatal(err)
+	}
+	if q2.fromClause != q.fromClause {
+		t.Error("argv fallback must produce the same SQL as the structured path")
+	}
+}
