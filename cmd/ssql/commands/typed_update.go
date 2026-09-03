@@ -347,7 +347,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 	closure := fmt.Sprintf(`func(r %s) %s {
 %s	}`, in.TypeName, derived.TypeName, body.String())
 
-	outputVar := uniqueVarName("updated", fragments)
+	outputVar := "updated"
 	parallelCode := fmt.Sprintf("%s := typed.StreamSelect(%s, %s)", outputVar, inputVar, closure)
 	serialCode := fmt.Sprintf("%s := typed.Select(%s)(%s)", outputVar, closure, inputVar)
 

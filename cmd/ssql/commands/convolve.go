@@ -344,7 +344,7 @@ func generateConvolveCode(inputFile, field, outputField, kernelName string, size
 		inputVar = "records"
 	}
 
-	outputVar := uniqueVarName("convolvedRecords", fragments)
+	outputVar := "convolvedRecords"
 
 	var code string
 	if auto {

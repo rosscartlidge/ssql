@@ -77,7 +77,7 @@ func emitTypedProjection(cmdName, typeSuffix, inputVar string, in *lib.TypedSche
 	// borrows "included" too — so a repeated projection (or include →
 	// group-by) would emit two `x :=` for the same x. Make the name unique
 	// against every upstream fragment this process has already seen on stdin.
-	outputVar := uniqueVarName(baseVar, fragments)
+	outputVar := baseVar
 
 	// Emit BOTH templates. typed.StreamSelect is the parallel form
 	// (Stream[T] → Stream[U] — embarrassingly parallel projection,
@@ -123,29 +123,6 @@ func emitTypedProjection(cmdName, typeSuffix, inputVar string, in *lib.TypedSche
 		return "", err
 	}
 	return outputVar, nil
-}
-
-// uniqueVarName returns base, or base+"2", base+"3", … so the result does not
-// collide with the Var of any already-emitted fragment. Projection commands
-// (include/exclude/rename) and group-by's implicit projection draw their output
-// names from a tiny fixed set, so a repeated command — or `include` followed by
-// a no-aggregation `group-by` (which projects like an include) — would otherwise
-// emit two `x :=` for the same x and fail to compile. Each codegen process sees
-// the full upstream fragment stream on stdin, so checking against it yields
-// globally unique names without cross-process coordination.
-func uniqueVarName(base string, fragments []*lib.CodeFragment) string {
-	used := make(map[string]bool, len(fragments))
-	for _, f := range fragments {
-		used[f.Var] = true
-	}
-	if !used[base] {
-		return base
-	}
-	for i := 2; ; i++ {
-		if cand := fmt.Sprintf("%s%d", base, i); !used[cand] {
-			return cand
-		}
-	}
 }
 
 // buildDerivedSchema returns the projected schema plus the Go source

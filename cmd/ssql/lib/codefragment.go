@@ -387,6 +387,12 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 		return "", fmt.Errorf("no code fragments received")
 	}
 
+	// Assembler-owned variable bindings (DFC123 slice 1): assign
+	// final unique names before either assembler or the planner sees
+	// the fragments. Collisions between commands' base names become
+	// structurally impossible here, whatever the commands emitted.
+	ResolveBindings(fragments)
+
 	// Surface per-fragment planning notes (expr tier decisions) under
 	// -explain, for both the record and typed assemblers.
 	if os.Getenv("SSQL_EXPLAIN_PLAN") != "" {

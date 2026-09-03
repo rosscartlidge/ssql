@@ -17,7 +17,6 @@ func RegisterConventions(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql conventions", "List all convention categories").
 		Example("ssql conventions -category evaluation", "How update/filter expressions are evaluated").
 		Example("ssql conventions -category data", "Schema header, numeric types, field ordering").
-
 		Flag("-category", "-c").
 		String().
 		Completer(&cf.StaticCompleter{Options: []string{"evaluation", "data", "pipeline", "codegen"}}).

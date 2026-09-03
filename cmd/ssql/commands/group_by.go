@@ -489,7 +489,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			if derr != nil {
 				return lib.WriteErrorAndExit(getCommandString(), derr)
 			}
-			groupedVar := uniqueVarName("grouped", fragments)
+			groupedVar := "grouped"
 			// Dual templates: DistinctParallel keeps the upstream
 			// Stream parallel (per-shard dedupe, tiny serial merge —
 			// the SerialOnly form cost 6.7s vs 1.5s on 14.6M parquet

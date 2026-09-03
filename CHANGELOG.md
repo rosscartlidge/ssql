@@ -5,6 +5,20 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Variable bindings are assembler-owned (DFC123 slice 1)** — the
+  code assemblers now run a binding-resolution pass
+  (`lib.ResolveBindings`) that assigns unique variable names across
+  the fragment chain, rewriting code Go-token-aware (strings,
+  comments, and selector fields untouched). The 28 per-command
+  `uniqueVarName` call sites are deleted; commands emit their
+  readable base names and collisions are structurally impossible at
+  assembly. Generated output is unchanged for collision-free
+  pipelines; colliding pipelines get the same `name2` disambiguation
+  as before. Sabotage-verified against the v4.50.1 collision bug.
+
 ## [4.82.0] - 2026-09-02
 
 ### Added

@@ -13,8 +13,8 @@ import (
 func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.FieldType) error {
 	// Resolve every cast field, validating existence.
 	type castField struct {
-		f       lib.TypedSchemaField
-		newGoT  string // Go type after the cast (e.g. "int64")
+		f      lib.TypedSchemaField
+		newGoT string // Go type after the cast (e.g. "int64")
 	}
 	resolvedCasts := make(map[string]castField, len(casts))
 	for name, target := range casts {

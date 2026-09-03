@@ -15,21 +15,18 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("Include only specified fields").
 		Example("ssql from data.csv | ssql include name age", "Select only name and age columns").
 		Example("ssql from users.json | ssql include email status | ssql to csv out.csv", "Extract email and status to CSV").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("FIELDS").
-			String().
-			Variadic().
-			FieldsFromFlag("").
-			Global().
-			Help("Fields to include").
-			Done().
-
+		String().
+		Variadic().
+		FieldsFromFlag("").
+		Global().
+		Help("Fields to include").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "include")
@@ -164,7 +161,7 @@ func generateIncludeCode(fields []string) error {
 	includedMap.WriteString("}")
 
 	// Generate code
-	outputVar := uniqueVarName("included", fragments)
+	outputVar := "included"
 	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
 		includedMap := %s
 		mut := r.ToMutable()

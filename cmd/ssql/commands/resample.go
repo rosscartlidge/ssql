@@ -57,72 +57,62 @@ func RegisterResample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			"Interpolate two series onto a 5-second grid").
 		Example("ssql from events.jsonl | ssql resample -time when -every 1h -value n -fill next -from 2026-01-01T00:00:00Z",
 			"Hourly grid from an explicit start, backfilled").
-
 		Flag("-time").
-			Arg("field").
-			FieldsFromFlag("").
-			Done().
-			Global().
-			Required().
-			Help("Timestamp field (int64/float64 epoch — unit auto-detected loudly — or RFC3339/SQL datetime strings)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Global().
+		Required().
+		Help("Timestamp field (int64/float64 epoch — unit auto-detected loudly — or RFC3339/SQL datetime strings)").
+		Done().
 		Flag("-every").
-			String().
-			Global().
-			Required().
-			Help("Sample period as a Go duration (5s, 1m, 2h30m)").
-			Done().
-
+		String().
+		Global().
+		Required().
+		Help("Sample period as a Go duration (5s, 1m, 2h30m)").
+		Done().
 		Flag("-value").
-			Arg("field").
-			FieldsFromFlag("").
-			Done().
-			Accumulate().
-			Global().
-			Required().
-			Help("Numeric field to carry onto the grid (repeat for multiple)").
-			Done().
-
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Accumulate().
+		Global().
+		Required().
+		Help("Numeric field to carry onto the grid (repeat for multiple)").
+		Done().
 		Flag("-fill").
-			String().
-			Completer(&cf.StaticCompleter{Options: []string{"previous", "next", "linear"}}).
-			Default("previous").
-			Global().
-			Help("Fill mode: previous (LOCF, default), next (backfill), linear (interpolate); edges clamp loudly").
-			Done().
-
+		String().
+		Completer(&cf.StaticCompleter{Options: []string{"previous", "next", "linear"}}).
+		Default("previous").
+		Global().
+		Help("Fill mode: previous (LOCF, default), next (backfill), linear (interpolate); edges clamp loudly").
+		Done().
 		Flag("-from").
-			String().
-			Global().
-			Help("Grid start bound (same format as the data); snapped onto the epoch grid, loudly").
-			Done().
-
+		String().
+		Global().
+		Help("Grid start bound (same format as the data); snapped onto the epoch grid, loudly").
+		Done().
 		Flag("-to").
-			String().
-			Global().
-			Help("Grid end bound (same format as the data); snapped onto the epoch grid, loudly").
-			Done().
-
+		String().
+		Global().
+		Help("Grid end bound (same format as the data); snapped onto the epoch grid, loudly").
+		Done().
 		Flag("-time-unit").
-			String().
-			Completer(&cf.StaticCompleter{Options: []string{"ns", "us", "ms", "s"}}).
-			Global().
-			Help("Epoch unit override (default: auto-detected by magnitude, announced on stderr)").
-			Done().
-
+		String().
+		Completer(&cf.StaticCompleter{Options: []string{"ns", "us", "ms", "s"}}).
+		Global().
+		Help("Epoch unit override (default: auto-detected by magnitude, announced on stderr)").
+		Done().
 		Flag("-time-format").
-			String().
-			Global().
-			Help("Go time layout for string timestamps outside RFC3339/SQL datetime").
-			Done().
-
+		String().
+		Global().
+		Help("Go time layout for string timestamps outside RFC3339/SQL datetime").
+		Done().
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "resample")
@@ -224,7 +214,7 @@ func generateResampleCode(cfg ssql.ResampleConfig) error {
 		inputVar = fragments[len(fragments)-1].Var
 		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	}
-	outputVar := uniqueVarName("resampled", fragments)
+	outputVar := "resampled"
 
 	if typedMode() && prevSchema != nil {
 		return generateResampleTyped(cfg, fragments, inputVar, outputVar, prevSchema)

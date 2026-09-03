@@ -740,7 +740,7 @@ func mergeJoinSchemas(left, right *lib.TypedSchema) (*lib.TypedSchema, string) {
 
 // generateJoinStmtWithFunc generates a join statement that calls a function for the right source
 func generateJoinStmtWithFunc(inputVar, funcName, joinType string, clauses []ssql.LookupClause, fragments []*lib.CodeFragment) error {
-	outputVar := uniqueVarName("joined", fragments)
+	outputVar := "joined"
 	var stmtCode string
 	var stmtImports []string
 

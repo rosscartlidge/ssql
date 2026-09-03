@@ -246,7 +246,7 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 		filterBody = fmt.Sprintf("return ssql.DistinctBy(ssql.RecordKey)(ssql.Concat(input%s))", concatArgs)
 	}
 
-	outputVar := uniqueVarName("unioned", fragments)
+	outputVar := "unioned"
 	code := fmt.Sprintf("%s := func(input iter.Seq[ssql.Record]) iter.Seq[ssql.Record] {\n\t\t%s\n\t}(%s)",
 		outputVar, filterBody, inputVar)
 

@@ -19,41 +19,35 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 		Example("ssql from data.csv | ssql to table -max-width 30", "Display with custom column width").
 		Example("ssql from huge.csv | ssql to table --sample 50", "Stream output, infer widths from first 50 records").
 		Example("ssql from data.csv | ssql to table --sample 0", "Materialize all records for perfect column widths").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-max-width").
-			Int().
-			Global().
-			Default(50).
-			Help("Maximum column width (truncate longer values)").
-			Done().
-
+		Int().
+		Global().
+		Default(50).
+		Help("Maximum column width (truncate longer values)").
+		Done().
 		Flag("-sample").
-			Int().
-			Global().
-			Default(100).
-			Help("Records to sample for column widths (0 = materialize all)").
-			Done().
-
+		Int().
+		Global().
+		Default(100).
+		Help("Records to sample for column widths (0 = materialize all)").
+		Done().
 		Flag("-only").
-			Bool().
-			Global().
-			Help("Only show specified fields (hide others)").
-			Done().
-
+		Bool().
+		Global().
+		Help("Only show specified fields (hide others)").
+		Done().
 		Flag("FIELDS").
-			String().
-			Variadic().
-			FieldsFromFlag("").
-			Global().
-			Help("Field names to display first (in order)").
-			Done().
-
+		String().
+		Variadic().
+		FieldsFromFlag("").
+		Global().
+		Help("Field names to display first (in order)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 			var maxWidth int

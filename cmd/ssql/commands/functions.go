@@ -14,21 +14,18 @@ func RegisterFunctions(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql functions", "List all function categories").
 		Example("ssql functions -category string", "Show string functions in detail").
 		Example("ssql functions -examples", "Show common expression patterns").
-
 		Flag("-category", "-c").
-			String().
-			Completer(&cf.StaticCompleter{Options: []string{"string", "math", "array", "type", "date", "map", "bitwise", "hash", "operators", "helpers"}}).
-			Global().
-			Default("").
-			Help("Show detailed help for a category").
-			Done().
-
+		String().
+		Completer(&cf.StaticCompleter{Options: []string{"string", "math", "array", "type", "date", "map", "bitwise", "hash", "operators", "helpers"}}).
+		Global().
+		Default("").
+		Help("Show detailed help for a category").
+		Done().
 		Flag("-examples", "-e").
-			Bool().
-			Global().
-			Help("Show common expression patterns and examples").
-			Done().
-
+		Bool().
+		Global().
+		Help("Show common expression patterns and examples").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var category string
 			var showExamples bool

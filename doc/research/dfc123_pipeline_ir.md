@@ -6,9 +6,9 @@ Last modified: 2026-09-03
 
 [Back to Index](./README.md)
 
-**Status:** Design discussion, 2026-09-03 (Ross + Claude). No code yet —
-this is the charter for the IR arc, the way DFC118/DFC119 anchored the
-workspace arc. Builds on [DFC099](./codegen-ir-evolution.md) (which
+**Status:** Arc charter, 2026-09-03 (Ross + Claude); slice 1
+(assembler-owned bindings) SHIPPED same day — see §10. This anchors
+the IR arc the way DFC118/DFC119 anchored the workspace arc. Builds on [DFC099](./codegen-ir-evolution.md) (which
 stands; nothing here deprecates it) and adds three things: the evidence
 accumulated since June, the **verification** axis, and the **Authority
 Invariant** that keeps the IR from eroding the commands-own-themselves
@@ -249,7 +249,19 @@ than on anything relational. Deliberately left open here.
 ## 10. Sequencing (each slice ships alone, corpus + equivalence gated)
 
 1. **Bindings at the assembler** (DFC099 §4b) — smallest, retires a
-   proven bug class (v4.50.1).
+   proven bug class (v4.50.1). **SHIPPED 2026-09-03**:
+   `lib.ResolveBindings` walks the chain, assigns unique names
+   (env-based most-recent-binding resolution; go/scanner
+   identifier-aware rewriting that skips strings, comments, and
+   selector fields; Var==Input shared-name split — first occurrence
+   is the definition; AltCodeIfSeq rewritten too since the planner
+   swaps it in later). `uniqueVarName` and its 28 per-command call
+   sites deleted — commands emit bare base names. Gates: binder unit
+   tests, collision corpus cases (include|include, where|where,
+   include|group-by), sabotage-verified (disabling the pass
+   reproduces the v4.50.1 "no new variables" error). One contract
+   documented on fragment Code: Var is declared at its first
+   occurrence (the universal `out := F(in)` shape).
 2. **`Op` on the fragment, optimiser consumes it** — `pipelineCmd`
    becomes a view over `Op`; fall back to `Command`-parsing for
    fragments not yet emitting `Op`; migrate per-command.

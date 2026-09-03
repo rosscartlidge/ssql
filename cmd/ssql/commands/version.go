@@ -13,7 +13,6 @@ func RegisterVersion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("version").
 		Description("Show version information").
 		Example("ssql version", "Display the current ssql version").
-
 		Handler(func(ctx *cf.Context) error {
 			gpuStatus := "no"
 			if ssql.GPUAvailable() {

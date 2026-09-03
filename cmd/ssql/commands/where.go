@@ -262,7 +262,7 @@ func generateWhereCode(ctx *cf.Context) error {
 		codeLines = append(codeLines, preVar)
 	}
 
-	outputVar := uniqueVarName("filtered", fragments)
+	outputVar := "filtered"
 	codeLines = append(codeLines, fmt.Sprintf("%s := ssql.Where(%s)(%s)", outputVar, filterCode, inputVar))
 	code := strings.Join(codeLines, "\n")
 
@@ -388,7 +388,7 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 		body = "return " + strings.Join(clauseConds, " || ")
 	}
 
-	outputVar := uniqueVarName("filtered", fragments)
+	outputVar := "filtered"
 	if schemaUsesTime(schema) {
 		imports = append(imports, "time")
 	}

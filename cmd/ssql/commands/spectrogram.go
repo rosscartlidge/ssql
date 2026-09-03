@@ -212,7 +212,7 @@ func generateSpectrogramCode(inputFile, field string, windowSize, hopSize int, w
 		inputVar = "records"
 	}
 
-	outputVar := uniqueVarName("spectrogramRecords", fragments)
+	outputVar := "spectrogramRecords"
 
 	code := fmt.Sprintf(`%s := ssql.SpectrogramFilter(%q, %s)(%s)`,
 		outputVar, field, optsCode, inputVar)

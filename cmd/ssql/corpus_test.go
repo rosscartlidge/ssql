@@ -333,12 +333,29 @@ func TestPipelineCorpus(t *testing.T) {
 			// Regression: include then no-agg group-by both project to a
 			// derived struct. In typed mode the two projections used to be
 			// named "included" → "no new variables on left side of :=" /
-			// type mismatch (uniqueVarName now disambiguates). group-by with
+			// type mismatch (the assembler's ResolveBindings pass now
+			// disambiguates — DFC123 slice 1). group-by with
 			// no aggregations == project-to-keys + distinct.
 			Name:     "include_then_groupby",
 			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} include name dept | {{.bin}} group-by dept | {{.bin}} to csv`,
 			Contains: []string{"Engineering", "Sales", "Marketing"},
 			Excludes: []string{"name", "Alice"}, // group-by dept drops name
+		},
+		{
+			// Binding-collision gates (DFC123 slice 1): commands now emit
+			// bare base names and the assembler's ResolveBindings pass
+			// disambiguates. Repeated same-command stages are the direct
+			// collision shape ("included" twice, "filtered" twice).
+			Name:     "include_then_include",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} include name dept salary | {{.bin}} include name dept | {{.bin}} to csv`,
+			Contains: []string{"name", "dept", "Alice", "Engineering"},
+			Excludes: []string{"salary"},
+		},
+		{
+			Name:     "where_then_where_collision",
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} where -if salary gt 70000 | {{.bin}} where -if status eq active | {{.bin}} include name | {{.bin}} to csv`,
+			Contains: []string{"name", "Alice"},
+			Excludes: []string{"Bob", "Grace"}, // Bob fails salary, Grace fails status
 		},
 
 		// --- Ordering / dedup ---------------------------------

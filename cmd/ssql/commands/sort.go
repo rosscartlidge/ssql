@@ -17,34 +17,29 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql sort dept -desc salary", "Sort by dept descending, then salary ascending").
 		Example("ssql from data.csv | ssql sort dept - salary -desc", "Sort by dept ascending, salary descending").
 		ClauseDescription("Each clause specifies fields with a sort direction").
-
 		Flag("FIELDS").
-			String().
-			Variadic().
-			Required().
-			FieldsFromFlag("").
-			Local().
-			Help("Fields to sort by").
-			Done().
-
+		String().
+		Variadic().
+		Required().
+		FieldsFromFlag("").
+		Local().
+		Help("Fields to sort by").
+		Done().
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("-desc", "-d").
-			Bool().
-			Local().
-			Help("Sort descending (use +desc for ascending)").
-			Done().
-
+		Bool().
+		Local().
+		Help("Sort descending (use +desc for ascending)").
+		Done().
 		Flag("-asc", "-a").
-			Bool().
-			Local().
-			Help("Sort ascending (default, use +asc for descending)").
-			Done().
-
+		Bool().
+		Local().
+		Help("Sort ascending (default, use +asc for descending)").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
@@ -144,7 +139,7 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 	} else {
 		inputVar = "records"
 	}
-	outputVar := uniqueVarName("sorted", fragments)
+	outputVar := "sorted"
 
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {

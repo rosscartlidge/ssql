@@ -15,21 +15,18 @@ func RegisterExclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Description("Exclude specified fields").
 		Example("ssql from data.csv | ssql exclude id created_at updated_at", "Remove metadata fields").
 		Example("ssql from api.json | ssql exclude password token secret_key", "Remove sensitive fields").
-
 		Flag("-generate", "-g").
-			Bool().
-			Global().
-			Help("Generate Go code instead of executing").
-			Done().
-
+		Bool().
+		Global().
+		Help("Generate Go code instead of executing").
+		Done().
 		Flag("FIELDS").
-			String().
-			Variadic().
-			FieldsFromFlag("").
-			Global().
-			Help("Fields to exclude").
-			Done().
-
+		String().
+		Variadic().
+		FieldsFromFlag("").
+		Global().
+		Help("Fields to exclude").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "exclude")
@@ -143,7 +140,7 @@ func generateExcludeCode(fields []string) error {
 	}
 
 	// Generate code
-	outputVar := uniqueVarName("excluded", fragments)
+	outputVar := "excluded"
 	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
 		mut := r.ToMutable()%s
 		return mut.Freeze()

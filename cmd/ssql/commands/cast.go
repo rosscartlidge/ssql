@@ -339,7 +339,7 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 		codeBody.WriteString("\t\t}\n\n")
 	}
 
-	outputVar := uniqueVarName("casted", fragments)
+	outputVar := "casted"
 	body := codeBody.String()
 	castCode := fmt.Sprintf(`%s := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 %s		return mut
