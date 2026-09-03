@@ -208,11 +208,21 @@ stable, the faithful rewrite changes to `sort yyy xxx` — the
 instability is now load-bearing and must be a documented decision, not
 an accident.
 
-**Interim option.** The narrow rule (dead sort across
-order-transparent stages) can ship in today's `generate ssql` as one
-more `pipelineCmd` pattern — user-visible relief now, at the cost of
-one more string-era rule to port later. Ross's call on timing; the IR
-does not gate it.
+**SHIPPED 2026-09-03** (post-slice-3, so the rule already sits on
+Op-fed structure): `ruleSortElimination` grown from the adjacent
+sort-before-group-by rule into the forward scan over the
+`orderTransparent` / `orderReset` tables (conservative default:
+unknown kinds consume order → sort stays). Gates: an 11-row unit
+table, and TWO equivalence liveness pins — because the first
+sabotage (limit added to orderReset) sailed PAST the desc-sort pin:
+`ruleSortLimitToTop` rewrites `sort -desc | limit` to `top` before
+the dead-sort rule runs, so that case pins rule COMPOSITION only.
+The ascending variant reaches the classification and fails the
+sabotage in the ssql-opt lane. Lesson recorded: when rules
+interact, a gate must pin each rule's own decision, not just the
+pipeline's end state. Order behavior still lives as tables inside
+the optimiser — promoting it to command-declared properties belongs
+to the protocol-facts slice (§6.3/§10.4).
 
 ## 8. What the IR does NOT solve (honesty section)
 

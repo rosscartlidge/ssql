@@ -71,3 +71,41 @@ func TestOpArgvSurvivesQuoting(t *testing.T) {
 		t.Errorf("render did not shell-quote the value: %q", rendered)
 	}
 }
+
+// Dead-sort elimination (DFC123 §7): a sort is dead iff its order
+// reaches an order-reset stage across only order-transparent stages.
+// The liveness rows are the miscompile shapes — limit/window/tee
+// CONSUME order, so the sort must survive.
+func TestRuleSortElimination(t *testing.T) {
+	cases := []struct {
+		name     string
+		pipeline []string // command strings, parsed like fragments
+		removed  []bool   // expected Removed per stage after the rule
+	}{
+		{"adjacent sorts", []string{"ssql sort pop", "ssql sort id"}, []bool{true, false}},
+		{"across transparent", []string{"ssql sort pop", "ssql where -if id gt 3", "ssql include id", "ssql sort id"}, []bool{true, false, false, false}},
+		{"live past limit", []string{"ssql sort pop", "ssql limit 5", "ssql sort id"}, []bool{false, false, false}},
+		{"live past limit across transparent", []string{"ssql sort pop", "ssql where -if id gt 3", "ssql limit 5", "ssql sort id"}, []bool{false, false, false, false}},
+		{"before group-by (legacy shape)", []string{"ssql sort pop", "ssql group-by dept -count n"}, []bool{true, false}},
+		{"before group-by across where", []string{"ssql sort pop", "ssql where -if id gt 3", "ssql group-by dept -count n"}, []bool{true, false, false}},
+		{"before resample across update", []string{"ssql sort pop", "ssql update -set x 1", "ssql resample -time t -every 5s -value v"}, []bool{true, false, false}},
+		{"live past window", []string{"ssql sort pop", "ssql window -avg pop m -over 3", "ssql sort id"}, []bool{false, false, false}},
+		{"live past tee", []string{"ssql sort pop", "ssql tee snap.jsonl", "ssql sort id"}, []bool{false, false, false}},
+		{"live at sink", []string{"ssql sort pop", "ssql to csv"}, []bool{false, false}},
+		{"chain of three", []string{"ssql sort a", "ssql sort b", "ssql sort c"}, []bool{true, true, false}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var cmds []*pipelineCmd
+			for _, p := range c.pipeline {
+				cmds = append(cmds, parsePipelineCmd(p))
+			}
+			ruleSortElimination(cmds)
+			for i, want := range c.removed {
+				if cmds[i].Removed != want {
+					t.Errorf("stage %d (%s): removed=%v, want %v", i, c.pipeline[i], cmds[i].Removed, want)
+				}
+			}
+		})
+	}
+}

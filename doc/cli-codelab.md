@@ -1539,7 +1539,16 @@ Use `-explain` to see which rules fired:
 # [ssh-predicate-pushdown] ssql from ssh node1 ... | ssql where ... → ssql from ssh node1 ... -- where ...
 # [ssh-aggregation-pushdown] ... | ssql group-by ... → ... + group-by ...
 # [sort-limit-to-top] ssql sort -desc cnt | ssql limit 10 → ssql top 10 -field cnt
+# [sort-elimination] ssql sort city → (removed — order reset by ssql sort cnt)
 ```
+
+A sort whose order never matters is removed: if the pipeline re-sorts
+(or groups, tops, resamples) before anything order-sensitive sees the
+rows, the earlier sort did no observable work. Filters and projections
+between the two don't protect it (`sort a | where … | sort b` drops
+`sort a`), but `limit`, `window`, `tee`, and output stages do — they
+consume the order, so the sort stays. This is the common cleanup for
+workspace pipelines that accumulate sort stages from grid clicks.
 
 Use `-run` to execute the optimized pipeline directly:
 ```bash

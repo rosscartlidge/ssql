@@ -5,6 +5,24 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Dead-sort elimination in the optimiser (DFC123 §7)** — a sort
+  whose order is reset (by a later sort, top, group-by, or resample)
+  before anything order-sensitive sees the rows is removed by
+  `generate ssql` / `-optimise` / the workspace's optimize preview:
+  `sort a | where … | sort b` drops `sort a`. Order-consuming stages
+  (limit, window, tee, sinks — and conservatively anything
+  unclassified) keep the sort: `sort a | limit 5 | sort b` is
+  untouched, since limit selects WHICH rows by position. Faithful
+  because ssql sort is documented-unstable (tie order unspecified
+  either way — now a pinned decision). The common cleanup for
+  workspace pipelines that accumulate sorts from grid clicks.
+  Equivalence-pinned in both directions and sabotage-verified —
+  including a second liveness pin added when the first sabotage
+  slipped past rule-composition masking.
+
 ## [4.83.0] - 2026-09-03
 
 ### Fixed

@@ -862,24 +862,68 @@ func ruleSortLimitToTop(cmds []*pipelineCmd) []ruleApplication {
 	return rules
 }
 
-// ruleSortElimination removes a sort that immediately precedes a group-by.
+// Order behavior per command kind (DFC123 §7): the dead-sort rule
+// scans forward from a sort through ORDER-TRANSPARENT stages (they
+// neither consume nor destroy order); if it reaches an ORDER-RESET
+// stage (destroys order without consuming it) before anything else,
+// the sort was dead. Anything not in either table is conservatively
+// assumed to CONSUME order (limit selects WHICH rows by position,
+// window aggregates over neighbours, tee/to fix output order, sample
+// -seed is input-order-dependent, …) — unknown kinds keep the sort.
+//
+// Faithfulness note: ssql sort is documented UNSTABLE
+// (slices.SortFunc), so tie order after the later sort is
+// unspecified with or without the earlier one — dropping it is exact
+// under ssql's own contract. If sort ever becomes stable, the
+// faithful rewrite changes (merge the earlier keys); this table and
+// DFC123 §7 pin that as a deliberate decision.
+var orderTransparent = map[string]bool{
+	"where":   true,
+	"include": true,
+	"exclude": true,
+	"rename":  true,
+	"cast":    true,
+	"update":  true,
+}
+
+// orderReset: destroys input order without consuming it. A sort whose
+// output flows (through transparent stages only) into one of these
+// did nothing observable. top selects by its OWN field, group-by
+// hashes, resample re-sorts by its time field internally.
+var orderReset = map[string]bool{
+	"sort":     true,
+	"top":      true,
+	"group-by": true,
+	"resample": true,
+}
+
+// ruleSortElimination removes dead sorts: a sort whose order reaches
+// an order-reset stage across only order-transparent stages (DFC123
+// §7 dead-order elimination — grown from the original adjacent
+// sort-before-group-by rule). `sort x | where p | sort y` drops
+// sort x; `sort x | limit 5 | sort y` keeps it (limit consumes the
+// order — it selects WHICH five rows).
 func ruleSortElimination(cmds []*pipelineCmd) []ruleApplication {
 	var rules []ruleApplication
 	for i := 0; i < len(cmds); i++ {
 		if cmds[i].Removed || cmds[i].Kind != "sort" {
 			continue
 		}
-		j := nextNonRemoved(cmds, i)
-		if j == -1 || cmds[j].Kind != "group-by" {
-			continue
+		for j := nextNonRemoved(cmds, i); j != -1; j = nextNonRemoved(cmds, j) {
+			if orderTransparent[cmds[j].Kind] {
+				continue
+			}
+			if orderReset[cmds[j].Kind] {
+				before := renderCmd(cmds[i])
+				cmds[i].Removed = true
+				rules = append(rules, ruleApplication{
+					Rule:   "sort-elimination",
+					Before: before,
+					After:  "(removed — order reset by " + renderCmd(cmds[j]) + ")",
+				})
+			}
+			break // consumer (or the reset stage itself): stop scanning
 		}
-		before := renderCmd(cmds[i])
-		cmds[i].Removed = true
-		rules = append(rules, ruleApplication{
-			Rule:   "sort-elimination",
-			Before: before,
-			After:  "(removed)",
-		})
 	}
 	return rules
 }

@@ -606,6 +606,41 @@ var equivCases = []EquivCase{
 		Ordered: true,
 	},
 	{
+		// Dead-sort elimination (DFC123 §7): the generate-ssql lane
+		// optimises the first sort away; every lane must still produce
+		// the identical ordered output (ids are unique → the second
+		// sort is a total order, so removal is exact).
+		Name: "dead_sort_across_where",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
+			`{{.bin}} sort -desc pop | {{.bin}} where -if id gt 2 | {{.bin}} sort id`,
+		Ordered: true,
+	},
+	{
+		// The LIVENESS pin — the miscompile shape. limit consumes the
+		// first sort's order (it selects WHICH three rows), so the
+		// optimiser must keep it; if the rule ever fires here, the
+		// generate-ssql lane selects different rows and this case
+		// fails. (Optimises to `top 3 -field pop | sort id` — same
+		// selection, pops are unique.)
+		Name: "live_sort_limit_sort_desc",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
+			`{{.bin}} sort -desc pop | {{.bin}} limit 3 | {{.bin}} sort id`,
+		Ordered: true,
+	},
+	{
+		// Same liveness shape, ASCENDING — this variant is the one
+		// that actually reaches ruleSortElimination's classification:
+		// the desc case above is rewritten to `top` by
+		// ruleSortLimitToTop before the dead-sort rule runs, so it
+		// pins rule COMPOSITION but not the limit-consumes-order
+		// fact. (Found by sabotage: adding limit to orderReset passed
+		// the desc case and fails this one.)
+		Name: "live_sort_limit_sort_asc",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
+			`{{.bin}} sort pop | {{.bin}} limit 3 | {{.bin}} sort id`,
+		Ordered: true,
+	},
+	{
 		Name:     "identity",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv`,
 		Ordered:  false, // parallel output is unordered
