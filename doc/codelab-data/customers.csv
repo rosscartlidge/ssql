@@ -1,0 +1,6 @@
+customer_id,name,country,tier
+1,Acme Corp,US,gold
+2,Globex,DE,silver
+3,Initech,US,bronze
+4,Umbrella,UK,gold
+5,Hooli,US,silver

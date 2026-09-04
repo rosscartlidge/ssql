@@ -1,0 +1,11 @@
+name,age,dept,salary,city,level,hire_date,status
+Alice,35,Engineering,95000,SF,7,2018-03-15,active
+Bob,28,Sales,65000,NYC,4,2021-06-01,active
+Carol,42,Engineering,105000,SF,9,2015-01-10,active
+David,31,Marketing,72000,Chicago,5,2020-04-22,active
+Eve,29,Engineering,88000,SF,6,2019-08-30,active
+Frank,45,Sales,82000,NYC,8,2014-02-18,active
+Grace,33,Marketing,78000,Chicago,6,2017-11-05,inactive
+Heidi,38,Engineering,99000,Seattle,8,2016-07-19,active
+Ivan,26,Sales,58000,NYC,3,2023-01-09,active
+Judy,51,Marketing,91000,Chicago,9,2010-09-01,active

@@ -5,6 +5,7 @@ See also: **[Research & design docs →](research/README.md)**
 ## Getting Started
 
 - [CLI Tutorial](cli-codelab.md) — step-by-step guide to all CLI commands
+- [SSH Operator Console](cli-codelab-serve.md) — runbook for `ssql serve`'s SSH side (keys, connecting, `from-loaded`)
 - [Getting Started Guide](codelab-intro.md) — quick introduction
 - [Advanced Tutorial](advanced-tutorial.md) — production patterns and best practices
 

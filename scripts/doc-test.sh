@@ -289,6 +289,16 @@ for doc_file in $llm_files; do
 done
 
 # Summary
+section "Codelab examples (DFC125)"
+# Every ```bash block of doc/cli-codelab.md runs in a copy of
+# doc/codelab-data against a freshly built binary.
+if "$(dirname "$0")/codelab-run.sh"; then
+    echo -e "${GREEN}✓${NC} codelab examples run clean"
+else
+    echo -e "${RED}✗${NC} codelab examples failed (see above)"
+    ERRORS=$((ERRORS+1))
+fi
+
 section "Summary"
 
 echo "Level 2 additional checks completed"

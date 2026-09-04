@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"sort"
 	"fmt"
 	"strconv"
 	"strings"
@@ -75,53 +76,52 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return generateCastCode(ctx, typeConversions)
 			}
 
-			// Read JSONL from stdin
-			records := lib.ReadJSONL(ctx.Stdin())
-
-			// Build cast filter that converts field types for ALL records
-			var castErr error
-			castValidated := false
-			castFilter := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
-				if castErr != nil {
-					return mut
+			// Read JSONL from stdin WITH its schema header. (cast used the
+			// schema-unaware reader until 2026-09-04: the `_schema` line
+			// became a record, validation failed on it, and rows passed
+			// through unchanged — found by the codelab runner, DFC125.)
+			sr := lib.ReadJSONLWithSchema(ctx.Stdin())
+			var castFields []string
+			for f := range typeConversions {
+				castFields = append(castFields, f)
+			}
+			sort.Strings(castFields)
+			if sr.Schema != nil {
+				if err := validateFieldsSchema(sr.Schema, castFields, "cast"); err != nil {
+					return err
 				}
+			}
+
+			// Cast every record's named fields to the target types.
+			casted := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 				frozen := mut.Freeze()
-
-				// Validate field names on first record
-				if !castValidated {
-					castValidated = true
-					var castFields []string
-					for f := range typeConversions {
-						castFields = append(castFields, f)
-					}
-					if err := validateFields(frozen, castFields, "cast"); err != nil {
-						castErr = err
-						return mut
-					}
-				}
-
 				for field, targetType := range typeConversions {
 					value, exists := ssql.Get[any](frozen, field)
 					if !exists {
 						continue
 					}
-
-					// Convert to target type
-					converted := convertFieldType(value, targetType)
-					mut = applyValueToRecord(mut, field, converted)
+					mut = applyValueToRecord(mut, field, convertFieldType(value, targetType))
 				}
-
 				return mut
-			})
+			})(sr.Records)
 
-			// Apply cast
-			casted := castFilter(records)
-
-			// Write output as JSONL
-			if err := lib.WriteJSONL(ctx.Stdout(), casted); err != nil {
+			// The output schema carries the new types downstream.
+			outSchema := sr.Schema
+			if outSchema != nil {
+				outSchema = &lib.Schema{Fields: append([]string(nil), sr.Schema.Fields...), Types: map[string]string{}}
+				for k, v := range sr.Schema.Types {
+					outSchema.Types[k] = v
+				}
+				for field, targetType := range typeConversions {
+					if t := castTargetWireType(targetType); t != "" {
+						outSchema.Types[field] = t
+					}
+				}
+			}
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outSchema, casted); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
-
+			var castErr error
 			if castErr != nil {
 				return castErr
 			}
@@ -365,4 +365,21 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 	// Create and write fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, castCode, imports, getCommandString())
 	return lib.WriteCodeFragment(frag)
+}
+
+
+// castTargetWireType maps a cast target to the JSONL schema vocabulary
+// ("" when the target has no single wire type).
+func castTargetWireType(target ssql.FieldType) string {
+	switch target {
+	case ssql.FieldTypeInt:
+		return lib.TypeInt
+	case ssql.FieldTypeFloat:
+		return lib.TypeFloat
+	case ssql.FieldTypeString:
+		return lib.TypeString
+	case ssql.FieldTypeBool:
+		return lib.TypeBool
+	}
+	return ""
 }

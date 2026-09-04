@@ -813,6 +813,16 @@ var equivCases = []EquivCase{
 		Ordered:  true,
 	},
 	{
+		// cast in EVERY lane — exec included. cast had only ever been
+		// exercised through codegen (the corpus), so its exec path read
+		// stdin with the schema-unaware reader, saw `_schema` as a
+		// record, and errored "unknown field" while passing rows through
+		// unchanged. Found by the codelab runner (DFC125).
+		Name:     "cast_float_then_filter",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} cast -type pop float | {{.bin}} where -if pop gt 10 | {{.bin}} include id pop`,
+		Ordered:  false,
+	},
+	{
 		Name:     "identity",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv`,
 		Ordered:  false, // parallel output is unordered

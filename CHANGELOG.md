@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The CLI codelab is rewritten as a guided path, and it runs**
+  ([DFC125](doc/research/dfc125_codelab_guided_path.md)). Nobody had
+  ever done the old one — 113 blocks assuming ~30 data files with no
+  setup section and inconsistent schemas; 74 of 106 blocks failed when
+  finally executed. Now: a checked-in fixture world (`doc/codelab-data/`),
+  a runner (`scripts/codelab-run.sh`, wired into `go test` as
+  `TestCodelabRuns` and into `make doc-test`) that executes every bash
+  block in a throwaway copy of the fixtures and fails on a non-zero exit
+  or empty output (blocks that need a remote host or a key press are
+  skipped ONLY by an explicit `# codelab: skip — reason` first line),
+  and Ross's arc: confidence first — setup with `-shell-init` in tmux as
+  the second step, look at a file, answer questions, save and share —
+  then time series, speed, code generation (entered only through
+  `generate go -run -pipeline`), and distributed data last. 39 blocks
+  run, 6 skip with reasons, 0 fail; sabotage-verified (a renamed fixture
+  column fails 10 blocks). The SSH-console runbook moved to
+  `doc/cli-codelab-serve.md`.
 - **SSH operator console catches up and refuses source-less lines**
   (Ross: "the ssh server might need a little maintenance"). The
   console (`ssql serve DATA.csv`) has its own command list and had
@@ -27,6 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-session grammar, `from-loaded`, built-ins).
 
 ### Fixed
+- **`cast` was broken in plain exec** — it read stdin with the
+  schema-unaware JSONL reader, so the `_schema` header became a record,
+  validation failed with "unknown field … (available: _line_number,
+  _schema)", and rows passed through UNCHANGED with a non-zero exit. It
+  had only ever been exercised through codegen (the corpus), never in
+  the exec lane; the codelab runner found it in its first hour. Now uses
+  the schema-aware reader/writer and carries the new types downstream;
+  pinned by a new equivalence case in every lane.
+- `ssql.Limit`'s godoc example had been displaced by `TakeLast`'s (v4.85)
+  — restored (the doc-test tier caught it; that tier is now part of the
+  routine).
 - `describe -help` said unrestricted output is in "first-seen order";
   it is sorted by name (the v4.86 contract).
 

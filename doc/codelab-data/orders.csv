@@ -1,0 +1,11 @@
+order_id,customer_id,product,amount,status,date
+1001,1,Widget,1200,shipped,2026-01-05
+1002,2,Gadget,800,shipped,2026-01-07
+1003,1,Gadget,950,pending,2026-01-09
+1004,3,Widget,300,shipped,2026-01-12
+1005,4,Doohickey,2200,cancelled,2026-01-15
+1006,5,Widget,640,shipped,2026-01-20
+1007,2,Doohickey,1500,shipped,2026-02-02
+1008,1,Widget,1100,shipped,2026-02-04
+1009,4,Gadget,700,pending,2026-02-11
+1010,6,Widget,400,shipped,2026-02-14

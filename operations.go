@@ -228,20 +228,6 @@ func WhereSafe[T any](predicate func(T) (bool, error)) FilterWithErrors[T, T] {
 // LIMITING OPERATIONS - SQL-STYLE
 // ============================================================================
 
-// Limit restricts iterator to first N elements (equivalent to SQL LIMIT).
-// Essential for converting infinite streams to finite ones.
-//
-// Example:
-//
-//	// Get first 10 records
-//	data, _ := ssql.ReadCSV("large_file.csv")
-//	first10 := ssql.Limit[ssql.Record](10)(data)
-//
-//	// Combined with other operations
-//	topCustomers := ssql.Limit[ssql.Record](5)(
-//	    ssql.SortBy(func(r ssql.Record) float64 {
-//	        return -ssql.GetOr(r, "revenue", float64(0))
-//	    })(data))
 // TakeLast keeps only the last n elements, in arrival order (the tail
 // of the sequence; `ssql limit -last N`). A ring buffer of n elements
 // — O(n) memory regardless of input length — emitted once the input
@@ -276,6 +262,20 @@ func TakeLast[T any](n int) Filter[T, T] {
 	}
 }
 
+// Limit restricts iterator to first N elements (equivalent to SQL LIMIT).
+// Essential for converting infinite streams to finite ones.
+//
+// Example:
+//
+//	// Get first 10 records
+//	data, _ := ssql.ReadCSV("large_file.csv")
+//	first10 := ssql.Limit[ssql.Record](10)(data)
+//
+//	// Combined with other operations
+//	topCustomers := ssql.Limit[ssql.Record](5)(
+//	    ssql.SortBy(func(r ssql.Record) float64 {
+//	        return -ssql.GetOr(r, "revenue", float64(0))
+//	    })(data))
 func Limit[T any](n int) Filter[T, T] {
 	return func(input iter.Seq[T]) iter.Seq[T] {
 		return func(yield func(T) bool) {
