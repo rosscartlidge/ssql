@@ -459,19 +459,30 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	// form to MERGEABLE accumulator fields (expr-transpiler Phase 3;
 	// keeps the parallel form); -stream-expr folds lower to accumulator
 	// fields too but force the serial form (Phase 2; fold state is not
-	// mergeable). No -rollup / -cube, no -collect (deferred).
+	// mergeable). -rollup / -cube have their own emitter (typed_rollup.go);
+	// -collect is still deferred.
 	// Phase B fall-throughs: prevSchema==nil → Record-mode upstream;
 	// an expression shape a typed struct can't hold → record path
 	// below, with the reason surfaced under -explain.
 	var typedFallbackNotes []string
 	if typedMode() && prevSchema != nil {
 		if rollup || cube {
-			// No typed runtime for rollup/cube (the enriched output
-			// carries per-grouping-set prefixed fields). Eject to the
-			// record path below — the planner inserts the typed→Record
-			// boundary, so the typed (parallel) upstream is kept.
-			typedFallbackNotes = append(typedFallbackNotes,
-				"record fallback (-rollup / -cube have no typed form)")
+			// Native typed rollup: a parallel detail group-by whose
+			// per-group result is the mergeable aggregation STATE, then
+			// typed.RollupEnrich merges detail groups into every grouping
+			// set (typed_rollup.go). Aggregations without a Merge
+			// (-collect, expressions) eject to the record path below —
+			// the planner inserts the typed→Record boundary, so the
+			// typed (parallel) upstream is kept.
+			mode := ssql.RollupHierarchical
+			if cube {
+				mode = ssql.RollupCube
+			}
+			handled, reason, err := emitTypedRollup(inputVar, prevSchema, groupByFields, aggSpecs, exprSpecs, streamExprSpecs, mode)
+			if handled || err != nil {
+				return err
+			}
+			typedFallbackNotes = append(typedFallbackNotes, fmt.Sprintf("record fallback (%s)", reason))
 		} else if len(aggSpecs) == 0 && len(exprSpecs) == 0 && len(streamExprSpecs) == 0 {
 			// 'group-by FIELDS' with no aggregations is semantically
 			// equivalent to `include FIELDS | distinct` — project to

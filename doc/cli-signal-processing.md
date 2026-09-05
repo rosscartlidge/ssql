@@ -768,7 +768,7 @@ ssql from song.wav | \
   ssql to chart -x frequency -y magnitude -output song_spectrum.html
 
 # The schema header includes sample_rate automatically
-ssql from song.wav | ssql limit 0
+ssql from song.wav | head -1
 # {"_schema":{"fields":["sample","amplitude"],"types":...,"sample_rate":44100}}
 ```
 

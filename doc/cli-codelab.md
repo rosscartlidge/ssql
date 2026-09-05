@@ -337,6 +337,12 @@ standalone. Same pipeline, one command:
 ssql generate go -run -pipeline 'ssql from employees.csv | ssql where -if dept eq Engineering | ssql group-by city -count n | ssql to table'
 ```
 
+`generate go` optimises the pipeline before compiling it — the same
+rewrites `generate ssql` shows you (column pruning on parquet, predicate
+pushdown, dead-sort elimination). The program's header comment records
+both the pipeline you typed and the one it implements; `+O` turns the
+optimiser off.
+
 That generated a Go program, compiled it, and ran it. `-mode typed` (the
 default) uses per-column Go structs and parallel readers where the
 pipeline allows; `-mode record` keeps the dynamic record model. Look at

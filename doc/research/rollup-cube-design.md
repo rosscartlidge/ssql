@@ -2,11 +2,11 @@
 
 Reference: DFC048
 Created: 2026-02-22
-Last modified: 2026-03-12
+Last modified: 2026-09-05
 
 [Back to Index](./README.md)
 
-**Status: Implemented** — Option B chosen (`-rollup`/`-cube` flags on `group-by` with enriched field naming).
+**Status: Implemented** — Option B chosen (`-rollup`/`-cube` flags on `group-by` with enriched field naming). 2026-09-05: two more lanes. `generate sql` translates the enrichment as one subquery per grouping set joined to the detail set (NULL-safe keys; `translateGroupByRollup`), and typed codegen runs it natively — a parallel detail group-by whose per-group result is the mergeable aggregation state, then `typed.RollupEnrich` (14.6M rows: 36 s record fallback → 1.7 s; DuckDB 0.95 s). The grouping sets and the prefix rule are exported (`ssql.RollupGroupingSets`, `ssql.RollupFieldPrefix`) so every lane uses exec's.
 
 ## Problem
 

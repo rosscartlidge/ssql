@@ -1477,6 +1477,19 @@ func Rollup(config RollupConfig) Filter[Record, Record] {
 	}
 }
 
+// RollupGroupingSets returns, in emission order, the field subsets a
+// Rollup with these fields and mode aggregates over — the grand total
+// first, the full detail set last. Exported so other backends (the SQL
+// translator) aggregate over exactly the sets exec does.
+func RollupGroupingSets(fields []string, mode RollupMode) [][]string {
+	return computeGroupingSets(fields, mode)
+}
+
+// RollupFieldPrefix is the naming rule for a grouping set's aggregation
+// results: "" for the grand total, else the fields joined by "_" plus a
+// trailing "_" ("a_kind_z_kind_" + "count").
+func RollupFieldPrefix(fields []string) string { return groupingSetPrefix(fields) }
+
 // computeGroupingSets returns the list of field subsets for the given mode.
 //
 // For RollupHierarchical with fields [a, b, c]:

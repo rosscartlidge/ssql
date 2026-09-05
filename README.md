@@ -194,6 +194,39 @@ ssql conventions     # cross-cutting semantics: update SET, _schema headers, SSQ
 
 [**Interactive shell walkthrough →**](doc/cli-codelab.md#interactive-shell)
 
+### 🏁 **Faster than DuckDB** — measured, on a real 14.6 M-row file
+
+DuckDB is the bar for "fast" on a laptop. Here is the same query on the
+same 660 MB parquet file — a three-field cube with counts at every
+level — as a compiled ssql pipeline and as DuckDB running the SQL that
+`ssql generate sql` produced from it:
+
+```bash
+ssql generate go -run -pipeline 'ssql from parquet shuffled.parquet \
+    | ssql group-by a_kind relationship z_kind -count count -cube | ssql to csv'
+```
+
+| Engine | Wall | Peak memory |
+|---|---:|---:|
+| DuckDB 1.5, `generate sql` output | 0.95 s | 2.7 GB |
+| **ssql `generate go` (typed, default)** | **0.27 s** | **0.69 GB** |
+
+**3.5× faster and a quarter of the memory, in pure Go with no CGO.** Two
+things make it so, and both are automatic. The pipeline optimiser
+(`-O`, on by default) reads the stages downstream of `from parquet`,
+sees that only three of the seven columns are used, and prunes the
+read to them — the same projection DuckDB works out from the query.
+Then the typed planner runs the read and the group-by in parallel
+across every core, and the cube's parent levels are merged from the
+detail groups' state rather than by re-reading rows. `+O` turns the
+optimiser off; the generated program's header records both the pipeline
+you typed and the one it implements.
+
+Honest framing: this is a scan-and-aggregate query, where a pruned
+parallel read wins. On the join-heavy benchmark below DuckDB is still
+ahead. Reproduce it with any parquet file you have — the pipeline is
+the only input.
+
 ### ⚡ **High-Performance Typed Pipelines** — `ssql/typed`
 
 When the schema is known at compile time and the pipeline is hot, the

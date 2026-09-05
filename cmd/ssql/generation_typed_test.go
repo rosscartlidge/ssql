@@ -26,7 +26,7 @@ func buildSSQLForTypedTest(t *testing.T) string {
 // and returns the produced Go source.
 func runTypedPipeline(t *testing.T, bin, pipeline string) string {
 	t.Helper()
-	full := "export SSQLGO=typed && " + pipeline + " | " + bin + " generate go"
+	full := "export SSQLGO=typed && " + pipeline + " | " + bin + " generate go +O"
 	cmd := exec.Command("bash", "-c", full)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -193,7 +193,7 @@ func TestTypedUnsupportedCommandErrors(t *testing.T) {
 	// mixed mode) the planner inserts a typed→Record adapter
 	// upstream, so the pipeline now compiles and runs. Verify that.
 	cmd := exec.Command("bash", "-c",
-		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" pivot -row name -col id -val age | "+bin+" to csv | "+bin+" generate go")
+		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" pivot -row name -col id -val age | "+bin+" to csv | "+bin+" generate go +O")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Phase B should let pivot work under typed mode, got error:\n%s\n--- output:\n%s", err, out)
@@ -510,7 +510,7 @@ func TestTypedUnionSchemaMismatch(t *testing.T) {
 	}
 	bin := buildSSQLForTypedTest(t)
 	cmd := exec.Command("bash", "-c",
-		"export SSQLGO=typed && "+bin+" from "+a+" | "+bin+" union -file "+b+" | "+bin+" to csv | "+bin+" generate go")
+		"export SSQLGO=typed && "+bin+" from "+a+" | "+bin+" union -file "+b+" | "+bin+" to csv | "+bin+" generate go +O")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected union with mismatched schemas to fail, got:\n%s", out)
@@ -674,7 +674,7 @@ func TestTypedUpdateSetExprUnknownFieldLoud(t *testing.T) {
 	}
 	bin := buildSSQLForTypedTest(t)
 	cmd := exec.Command("bash", "-c",
-		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" update -set-expr bonus 'nosuchfield * 0.1' | "+bin+" to csv | "+bin+" generate go")
+		"export SSQLGO=typed && "+bin+" from "+emp+" | "+bin+" update -set-expr bonus 'nosuchfield * 0.1' | "+bin+" to csv | "+bin+" generate go +O")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("expected unknown-field -set-expr to fail generation, got:\n%s", out)
@@ -696,7 +696,7 @@ func TestTypedRecordModeUnaffected(t *testing.T) {
 	}
 	bin := buildSSQLForTypedTest(t)
 	cmd := exec.Command("bash", "-c",
-		"export SSQLGO=1 && "+bin+" from "+emp+" | "+bin+" where -if age gt 25 | "+bin+" to csv | "+bin+" generate go")
+		"export SSQLGO=1 && "+bin+" from "+emp+" | "+bin+" where -if age gt 25 | "+bin+" to csv | "+bin+" generate go +O")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("record-mode pipeline failed: %v\n%s", err, out)
@@ -714,5 +714,43 @@ func TestTypedRecordModeUnaffected(t *testing.T) {
 	// Must NOT mention typed package.
 	if strings.Contains(src, "ssql/v4/typed") {
 		t.Errorf("record-mode regression: typed package leaked into output\n%s", src)
+	}
+}
+
+// TestTypedRollupIsNative pins the typed form of group-by -rollup/-cube
+// (typed_rollup.go): the generated program must use the parallel detail
+// group-by + typed.RollupEnrich, not the record ssql.Rollup fallback
+// behind a typed→Record adapter (36 s vs 1.7 s on 14.6M rows), and its
+// output must match exec exactly. -collect still ejects, loudly noted.
+func TestTypedRollupIsNative(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "rc.csv")
+	if err := os.WriteFile(csvPath, []byte("a,b,v\nx,p,1\nx,q,2\ny,p,3\nx,p,4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	pipe := bin + " from csv " + csvPath + " | " + bin + " group-by a b -count n -sum v tot -avg v mean -min v lo -max v hi -cube | " + bin + " sort a b | " + bin + " to csv"
+
+	src := runTypedPipeline(t, bin, pipe)
+	for _, want := range []string{"typed.GroupByParallel(", "typed.RollupEnrich(", "RollupAgg struct{ ", "typed.RollupSet[", "ABN", "AMean"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("typed cube source lacks %q", want)
+		}
+	}
+	for _, reject := range []string{"ssql.Rollup(", "typed→Record", "ToRecord"} {
+		if strings.Contains(src, reject) {
+			t.Errorf("typed cube source still uses the record fallback (%q)", reject)
+		}
+	}
+	got := goRunGenerated(t, src)
+	exec := equivShell(t, "exec", pipe)
+	if got != exec {
+		t.Errorf("typed cube output differs from exec:\n--- typed\n%s--- exec\n%s", got, exec)
+	}
+
+	// -collect has no mergeable state: the record fallback, noted.
+	explain := equivShell(t, "explain", "export SSQL_MODE=typed && "+bin+" from csv "+csvPath+" | "+bin+" group-by a -collect v vs -count n -rollup | "+bin+" to csv | "+bin+" generate go +O -explain 2>&1 || true")
+	if !strings.Contains(explain, "record fallback (-rollup/-cube with -collect") {
+		t.Errorf("-collect rollup should fall back to record with a reason; explain:\n%s", explain)
 	}
 }

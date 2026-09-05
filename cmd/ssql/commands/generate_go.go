@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"runtime"
+	"regexp"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -49,14 +51,14 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Flag("-optimise", "-O").
 		Bool().
 		Global().
-		Default(false).
-		Help("Apply the pipeline optimiser (same rewrites as 'generate ssql') before generating code — auto-injects column projection, predicate pushdown, etc.").
+		Default(true).
+		Help("Apply the pipeline optimiser (the same rewrites as 'generate ssql': parquet column pruning, predicate pushdown, dead-sort elimination, …) before generating code. ON by default — a compiled program is where speed matters most (one unpruned parquet read was 6× slower and 12× the memory). +O / +optimise turns it off; the generated header records both the pipeline as typed and the one implemented.").
 		Done().
 		Flag("-explain", "-e").
 		Bool().
 		Global().
 		Default(false).
-		Help("With -optimise: print applied optimisation rules to stderr").
+		Help("Print the optimiser's applied rules and the typed planner's per-stage decisions to stderr").
 		Done().
 		Flag("-script", "-s").
 		String().
@@ -174,33 +176,24 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 				fragmentSrc = bytes.NewReader(fragments)
 			}
 
-			if optimise {
+			// The optimiser is on by default (+O turns it off). It is
+			// skipped in the browser build, where re-executing the
+			// rewritten pipeline (a bash subprocess) is impossible — the
+			// playground shows the rewrite through `generate ssql`.
+			if optimise && runtime.GOOS != "js" {
 				return runOptimiseThenGo(fragmentSrc, run, buildOut, outputFile, explain, timeRun)
 			}
 
+			// The inner invocation of an optimising run passes the note
+			// describing the rewrite; the assemblers print it in the
+			// generated header.
+			lib.HeaderNote = os.Getenv(optimiseNoteEnv)
 			code, err := lib.AssembleCodeFragments(fragmentSrc)
 			if err != nil {
 				return fmt.Errorf("assembling code fragments: %w", err)
 			}
 
-			if run {
-				return runGoSource(code, timeRun)
-			}
-			if buildOut != "" {
-				return buildGoSource(code, buildOut)
-			}
-
-			// Write source to output
-			if outputFile != "" {
-				if err := os.WriteFile(outputFile, []byte(code), 0644); err != nil {
-					return fmt.Errorf("writing output file: %w", err)
-				}
-				fmt.Fprintf(os.Stderr, "Generated Go code written to %s\n", outputFile)
-			} else {
-				fmt.Print(code)
-			}
-
-			return nil
+			return emitGoSource(code, run, buildOut, outputFile, timeRun)
 		}).
 		Done()
 }
@@ -249,11 +242,36 @@ func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, expl
 		}
 	}
 
+	// Fast path: nothing to rewrite — assemble the fragments already in
+	// hand. No re-execution, no note; the default costs nothing on a
+	// pipeline the optimiser cannot improve.
+	if len(rules) == 0 {
+		lib.HeaderNote = ""
+		code, err := lib.AssembleCodeFragments(bytes.NewReader(buf))
+		if err != nil {
+			return fmt.Errorf("assembling code fragments: %w", err)
+		}
+		return emitGoSource(code, run, buildOut, outputFile, timeRun)
+	}
+
 	targetMode := detectFragmentMode(buf)
 
-	// Build the inner command. The inner generate-go inherits whichever
-	// output flag was passed to the outer one.
-	inner := pipeline + " | ssql generate go"
+	// Re-execute the rewritten pipeline with THIS binary, not whatever
+	// `ssql` is first on PATH: the rewrite came from these fragments and
+	// the inner generate-go must be the same version (tests build their
+	// own binary; a user may have several). The optimiser renders every
+	// stage as `ssql …`, so substitute the program at each stage start —
+	// the pipeline head, after `| `, and inside `<(` process substitutions.
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locating ssql binary: %w", err)
+	}
+	prog := shellQuote(exe)
+	inner := ssqlStageRe.ReplaceAllString(pipeline, "${1}"+prog+" ")
+
+	// The inner generate-go: +O so it does not optimise again, plus
+	// whichever output flag was passed to the outer one.
+	inner += " | " + prog + " generate go +O"
 	switch {
 	case run:
 		inner += " -run"
@@ -267,10 +285,67 @@ func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, expl
 	}
 
 	cmd := exec.Command("bash", "-c", inner)
-	cmd.Env = setEnvVar(os.Environ(), "SSQL_MODE", targetMode)
+	env := setEnvVar(os.Environ(), "SSQL_MODE", targetMode)
+	env = setEnvVar(env, optimiseNoteEnv, optimiseHeaderNote(buf, rules))
+	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// optimiseNoteEnv carries the header note from the outer (optimising)
+// generate-go to the inner one that assembles the rewritten pipeline.
+const optimiseNoteEnv = "SSQL_GENERATE_HEADER_NOTE"
+
+// ssqlStageRe matches the `ssql` program token at a stage start: the
+// pipeline head, after a pipe, or opening a process substitution.
+var ssqlStageRe = regexp.MustCompile(`(^|\| |<\()ssql `)
+
+// optimiseHeaderNote describes the rewrite for the generated header:
+// the pipeline as typed (from the incoming fragments' Command strings)
+// and the rules that turned it into the one implemented.
+func optimiseHeaderNote(buf []byte, rules []ruleApplication) string {
+	var typed []string
+	dec := json.NewDecoder(bytes.NewReader(buf))
+	for {
+		var frag lib.CodeFragment
+		if err := dec.Decode(&frag); err != nil {
+			break
+		}
+		if frag.Type != "func" && frag.Command != "" {
+			typed = append(typed, frag.Command)
+		}
+	}
+	var sb strings.Builder
+	sb.WriteString("Optimised by generate go (default; +O disables) from the pipeline as typed:\n\n")
+	for _, c := range typed {
+		sb.WriteString(c + " |\n")
+	}
+	sb.WriteString("ssql generate go\n\nRules applied:\n")
+	for _, r := range rules {
+		fmt.Fprintf(&sb, "  %s: %s → %s\n", r.Rule, r.Before, r.After)
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// emitGoSource delivers assembled source the way the flags asked:
+// compile+run, compile to a binary, write a file, or print.
+func emitGoSource(code string, run bool, buildOut, outputFile string, timeRun bool) error {
+	if run {
+		return runGoSource(code, timeRun)
+	}
+	if buildOut != "" {
+		return buildGoSource(code, buildOut)
+	}
+	if outputFile != "" {
+		if err := os.WriteFile(outputFile, []byte(code), 0644); err != nil {
+			return fmt.Errorf("writing output file: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Generated Go code written to %s\n", outputFile)
+		return nil
+	}
+	fmt.Print(code)
+	return nil
 }
 
 // detectFragmentMode peeks the buffered fragment stream to figure

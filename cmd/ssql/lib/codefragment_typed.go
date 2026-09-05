@@ -193,6 +193,9 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 			code.WriteString(cmd + " |\n")
 		}
 		code.WriteString("ssql generate go)\n")
+		if HeaderNote != "" {
+			code.WriteString("\n" + HeaderNote + "\n")
+		}
 		code.WriteString("*/\n\n")
 	}
 

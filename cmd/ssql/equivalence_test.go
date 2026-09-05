@@ -875,12 +875,15 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
-		// -cube (and -rollup) were REJECTED outright by typed-mode codegen.
-		// They now eject to the record ssql.Rollup path via the Phase B
-		// typed→Record boundary — typed/parallel lanes must produce the
-		// exact enrichment exec does. Golden hand-checked: Widget/US
-		// appears twice (100+50), so a wrong grouping diverges.
-		Name: "groupby_cube_typed_eject",
+		// -cube (and -rollup) were REJECTED outright by typed-mode codegen,
+		// then ejected to the record ssql.Rollup path (36 s on 14.6M rows),
+		// and since 2026-09-05 run natively: a parallel detail group-by
+		// carrying mergeable state + typed.RollupEnrich (1.7 s). The
+		// typed/parallel lanes must produce the exact enrichment exec
+		// does; the duckdb lane runs translateGroupByRollup. Golden
+		// hand-checked: Widget/US appears twice (100+50), so a wrong
+		// grouping diverges.
+		Name: "groupby_cube",
 		Pipeline: `{{.bin}} from csv {{.data}}/sales.csv | ` +
 			`{{.bin}} group-by product region -count c -sum amount total -cube`,
 		Ordered: false,
@@ -890,9 +893,17 @@ var equivCases = []EquivCase{
 			{"product": "Gadget", "region": "US", "c": 5, "total": 580, "product_c": 2, "product_total": 280, "region_c": 3, "region_total": 350, "product_region_c": 1, "product_region_total": 200},
 			{"product": "Gadget", "region": "EU", "c": 5, "total": 580, "product_c": 2, "product_total": 280, "region_c": 2, "region_total": 230, "product_region_c": 1, "product_region_total": 80},
 		},
-		Skip: map[string]string{
-			"duckdb": "generate sql refuses -cube (GROUP BY CUBE translation not implemented; loud error)",
-		},
+	},
+	{
+		// -rollup over three fields with every aggregate the translator
+		// knows: the DuckDB lane aggregates each grouping set over the raw
+		// rows through one subquery per set (translateGroupByRollup) and
+		// must match exec's enrichment column for column — including
+		// AVG, which a window-function rewrite could not reproduce.
+		Name: "groupby_rollup_three_fields",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | ` +
+			`{{.bin}} group-by dept city status -count n -sum salary total -avg age mean_age -min level lo -max level hi -rollup`,
+		Ordered: false,
 	},
 	{
 		// Direct-file join (`join FILE.csv`, extension-inferred like

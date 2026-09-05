@@ -378,6 +378,13 @@ func (f *CodeFragment) GetInputVar() string {
 // AssembleCodeFragments reads all code fragments from stdin and assembles them into a complete Go program
 // using ssql.Chain() for better readability. Handles func fragments for process substitution.
 // Returns error if any error fragments are encountered (code generation failed in pipeline).
+// HeaderNote, when non-empty, is appended inside the generated
+// program's header comment by both assemblers. `generate go` sets it
+// when the optimiser rewrote the pipeline (on by default; +O turns it
+// off), so the program records the pipeline as typed AND the one it
+// actually implements — the header must never show only the rewrite.
+var HeaderNote string
+
 func AssembleCodeFragments(input io.Reader) (string, error) {
 	// Read all fragments from stdin
 	var fragments []*CodeFragment
@@ -561,6 +568,9 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 			code.WriteString(cmd + " |\n")
 		}
 		code.WriteString("ssql generate go)\n")
+		if HeaderNote != "" {
+			code.WriteString("\n" + HeaderNote + "\n")
+		}
 		code.WriteString("*/\n\n")
 	}
 

@@ -74,6 +74,9 @@ llm_files="doc/ai-code-generation.md doc/ai-human-guide.md"
 # - ExtractSignalFromWAVChannel: advanced WAV variant
 # - WriteWAVToWriter: ToWriter streaming variant
 excluded_funcs="
+RollupGroupingSets
+RollupFieldPrefix
+ParseJSONLineWithSchemaTypes
 ExtractSignalFromWAVChannel
 WriteWAVToWriter
 DetectTSVSeparator

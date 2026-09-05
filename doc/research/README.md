@@ -55,7 +55,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC045 | 2026-02-13 | 2026-03-20 | [Distributed Processing via SSH](./distributed-ssh-processing.md) |
 | DFC046 | 2026-02-15 | 2026-02-15 | [Italy Sprint: v4.11.0 to v4.16.0](./italy-sprint-v4.11-v4.16.md) |
 | DFC047 | 2026-02-17 | 2026-02-17 | [WASM Module Redesign: TinyGo + Decoupled Architecture](./wasm-tinygo-redesign.md) |
-| DFC048 | 2026-02-22 | 2026-03-12 | [ROLLUP and CUBE Aggregation Design](./rollup-cube-design.md) |
+| DFC048 | 2026-02-22 | 2026-09-05 | [ROLLUP and CUBE Aggregation Design](./rollup-cube-design.md) |
 | DFC049 | 2026-02-24 | 2026-03-12 | [Window / Analytic Functions Design](./window-functions-design.md) |
 | DFC050 | 2026-02-25 | 2026-03-20 | [ssql Future Development](./future-development.md) |
 | DFC051 | 2026-02-26 | 2026-03-20 | [Streaming vs Materialization: Command Survey](./streaming-vs-materialization.md) |
@@ -131,7 +131,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC121 | 2026-08-31 | 2026-09-01 | [`ssql resample`: Snapping Time Series to a Regular Grid](./dfc121_resample_command.md) |
 | DFC122 | 2026-08-31 | 2026-09-03 | [Capability-Gap Survey: What Peer Tools Have That ssql Doesn't](./dfc122_capability_gap_survey.md) |
 | DFC123 | 2026-09-03 | 2026-09-03 | [The Pipeline IR: Finishing the Intermediate Representation We Already Have](./dfc123_pipeline_ir.md) |
-| DFC124 | 2026-09-03 | 2026-09-03 | [Missing Values Across the Lanes: An Empty Cell Is Absent](./dfc124_missing_values.md) |
+| DFC124 | 2026-09-03 | 2026-09-05 | [Missing Values Across the Lanes: An Empty Cell Is Absent](./dfc124_missing_values.md) |
 | DFC125 | 2026-09-04 | 2026-09-05 | [The Codelab as a Guided Path: Confidence Before Sophistication](./dfc125_codelab_guided_path.md) |
 
 <!-- DFC-INDEX-END -->

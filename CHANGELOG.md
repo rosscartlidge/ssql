@@ -5,6 +5,43 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`generate go` optimises by default; `+O` turns it off.** The
+  rewrites `generate ssql` prints (parquet column pruning, predicate
+  pushdown, dead-sort elimination, sort+limit→top, …) now run before
+  code is generated unless `+O` / `+optimise` is given. A compiled
+  program is where speed matters most, and the flag nobody remembered
+  cost 6× the time and 12× the memory on a parquet cube (1.73 s /
+  8.6 GB unpruned → 0.27 s / 0.69 GB pruned; DuckDB on the generated
+  SQL 0.95 s / 2.7 GB). The generated header records both the pipeline
+  as typed and the one implemented, with the rules between them; a
+  pipeline no rule improves takes a zero-cost fast path with
+  byte-identical output to `+O`; the optimised re-execution names the
+  running binary rather than `ssql` on PATH; the browser build skips
+  the optimiser. Pinned by `optimise_default_test.go` and a scale-gate
+  case (`generate-go-run-optimised`).
+- **`group-by -rollup` / `-cube` reach every lane, and the typed lane
+  is fast.** `generate sql` used to refuse them; it now renders exec's
+  enrichment (one row per detail group, every grouping set's aggregates
+  as prefixed columns — not SQL's subtotal rows) as one subquery per
+  grouping set joined to the detail set with NULL-safe keys, so AVG,
+  MIN and MAX are exact where a window rewrite would not be. Typed
+  codegen no longer ejects to the record `ssql.Rollup` fallback: a
+  parallel detail group-by carries the aggregator's mergeable state and
+  the new `typed.RollupEnrich` merges detail groups into each set. On
+  Ross's 14.6M-row parquet cube over three fields: record fallback
+  36.7 s at 9.7 GB → native typed 1.7 s; DuckDB on the generated SQL
+  0.95 s; outputs identical. `-collect` and expression aggregations
+  keep the record fallback, named under `-explain`. The grouping sets
+  and prefix rule are exported (`ssql.RollupGroupingSets`,
+  `ssql.RollupFieldPrefix`) so the lanes share exec's definition; the
+  cube and a three-field rollup are equivalence cases with DuckDB as
+  oracle.
+
+### Fixed
+
 ## [4.88.0] - 2026-09-05
 
 ### Changed

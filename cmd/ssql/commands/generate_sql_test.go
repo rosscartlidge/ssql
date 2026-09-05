@@ -422,13 +422,65 @@ func TestTranslateGroupByFailsLoudly(t *testing.T) {
 	for _, flag := range [][]string{
 		{"dept", "-expr", "total", "sum(values)"},
 		{"dept", "-stream-expr", "0", "state + x", "state", "total"},
-		{"dept", "-rollup", "-count", "cnt"},
-		{"dept", "-cube", "-count", "cnt"},
+		{"dept", "-rollup", "-cube", "-count", "cnt"},
+		{"-rollup", "-count", "cnt"}, // no group field
+		{"dept", "-rollup"},          // no aggregation
 	} {
-		q := &sqlQuery{}
+		q := &sqlQuery{fromClause: "read_csv('x.csv')"}
 		if err := translateGroupBy(q, flag); err == nil {
 			t.Errorf("translateGroupBy(%v): expected error, got none", flag)
 		}
+	}
+}
+
+// TestTranslateGroupByRollupSQL: -rollup/-cube are exec's ENRICHMENT
+// (prefixed parent-level columns on each detail row), not SQL's
+// subtotal rows — one subquery per grouping set, joined to the detail
+// set with NULL-safe equality, aggregates named by ssql.RollupFieldPrefix.
+// (quoteIdent leaves plain identifiers bare.)
+func TestTranslateGroupByRollupSQL(t *testing.T) {
+	q := &sqlQuery{fromClause: "read_csv('x.csv')", whereClauses: []string{`v > 1`}}
+	if err := translateGroupBy(q, []string{"a", "b", "-count", "n", "-avg", "v", "mean", "-rollup"}); err != nil {
+		t.Fatal(err)
+	}
+	got := q.fromClause
+	for _, want := range []string{
+		`WITH __src AS (SELECT * FROM (`, // the WHERE was materialised as the source
+		`WHERE v > 1`,
+		`SELECT __d.a, __d.b, __s0.n, __s0.mean, __s1.a_n, __s1.a_mean, __d.a_b_n, __d.a_b_mean`,
+		`FROM (SELECT a, b, COUNT(*) AS a_b_n, AVG(v) AS a_b_mean FROM __src GROUP BY a, b) AS __d`,
+		`JOIN (SELECT COUNT(*) AS n, AVG(v) AS mean FROM __src) AS __s0 ON TRUE`,
+		`JOIN (SELECT a, COUNT(*) AS a_n, AVG(v) AS a_mean FROM __src GROUP BY a) AS __s1 ON __d.a IS NOT DISTINCT FROM __s1.a`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rollup SQL lacks %q:\n%s", want, got)
+		}
+	}
+	if len(q.whereClauses) != 0 || len(q.selectExprs) != 0 || len(q.groupBy) != 0 {
+		t.Errorf("rollup must leave the query as a bare FROM; got %+v", q)
+	}
+
+	// cube: 2^n sets, (b) present, joined on b
+	q = &sqlQuery{fromClause: "read_csv('x.csv')"}
+	if err := translateGroupBy(q, []string{"a", "b", "-sum", "v", "tot", "-cube"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`AS b_tot FROM __src GROUP BY b) AS __s2 ON __d.b IS NOT DISTINCT FROM __s2.b`,
+		`__s1.a_tot, __s2.b_tot, __d.a_b_tot`,
+	} {
+		if !strings.Contains(q.fromClause, want) {
+			t.Errorf("cube SQL lacks %q:\n%s", want, q.fromClause)
+		}
+	}
+
+	// plain group-by is unchanged by the refactor
+	q = &sqlQuery{}
+	if err := translateGroupBy(q, []string{"dept", "-count", "n", "-sum", "salary", "total"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{`dept`, `COUNT(*) AS n`, `SUM(salary) AS total`}; strings.Join(q.selectExprs, "|") != strings.Join(want, "|") || strings.Join(q.groupBy, "|") != `dept` {
+		t.Errorf("plain group-by changed: select=%v groupBy=%v", q.selectExprs, q.groupBy)
 	}
 }
 

@@ -151,6 +151,17 @@ func TestScaleBudgets(t *testing.T) {
 		// Parse-amplification guard: the full exec scan, generous cap.
 		budget(t, dir, bin+" from csv big.csv | "+bin+" count", 60*time.Second)
 	})
+	t.Run("generate-go-run-optimised", func(t *testing.T) {
+		// `generate go -run` optimises by default: the parquet read is
+		// pruned to the group-by column before the program is compiled.
+		// Budget covers go build + a 3M-row pruned parallel read; an
+		// unpruned read of all four columns still fits, so this pins
+		// "the default path works end to end", and the unit tests pin
+		// "the pruning rule applied". Compiles against THIS checkout.
+		repo, _ := filepath.Abs("../..")
+		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from parquet big.parquet | "+bin+" group-by dept -count n | "+bin+" to csv' > /dev/null", 90*time.Second)
+	})
 	t.Run("jsonl-scan", func(t *testing.T) {
 		// The legacy per-line-Unmarshal reader class was 4× the csv
 		// scan; cap at a similar generous ceiling.

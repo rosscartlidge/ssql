@@ -575,62 +575,58 @@ func sqlLiteral(value string) string {
 	return "'" + escapeSQL(value) + "'"
 }
 
+// sqlAgg is one group-by aggregation: the SQL expression over the raw
+// rows and the ssql result name.
+type sqlAgg struct {
+	expr string // e.g. COUNT(*), SUM("amount")
+	name string // unquoted ssql field name
+}
+
 func translateGroupBy(q *sqlQuery, args []string) error {
 	// Parse: group-by FIELD [FIELD...] [-count name] [-sum field name] [-avg field name] etc.
 	i := 0
 
 	// Collect group-by fields (positional args before first flag)
+	var fields []string
 	for i < len(args) && !strings.HasPrefix(args[i], "-") {
-		q.groupBy = append(q.groupBy, quoteIdent(args[i]))
-		q.selectExprs = append(q.selectExprs, quoteIdent(args[i]))
+		fields = append(fields, args[i])
 		i++
 	}
 
 	// Parse aggregation flags
+	var aggs []sqlAgg
+	rollup, cube := false, false
+	oneField := func(fn string) bool { // -count NAME
+		if i+1 < len(args) {
+			aggs = append(aggs, sqlAgg{fn, args[i+1]})
+			i += 2
+			return true
+		}
+		i++
+		return false
+	}
+	twoField := func(fn string) { // -sum FIELD NAME
+		if i+2 < len(args) {
+			aggs = append(aggs, sqlAgg{fmt.Sprintf("%s(%s)", fn, quoteIdent(args[i+1])), args[i+2]})
+			i += 3
+		} else {
+			i++
+		}
+	}
 	for i < len(args) {
 		switch args[i] {
 		case "-count":
-			if i+1 < len(args) {
-				q.selectExprs = append(q.selectExprs, fmt.Sprintf("COUNT(*) AS %s", quoteIdent(args[i+1])))
-				i += 2
-			} else {
-				i++
-			}
+			oneField("COUNT(*)")
 		case "-sum":
-			if i+2 < len(args) {
-				q.selectExprs = append(q.selectExprs, fmt.Sprintf("SUM(%s) AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
-				i += 3
-			} else {
-				i++
-			}
+			twoField("SUM")
 		case "-avg":
-			if i+2 < len(args) {
-				q.selectExprs = append(q.selectExprs, fmt.Sprintf("AVG(%s) AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
-				i += 3
-			} else {
-				i++
-			}
+			twoField("AVG")
 		case "-min":
-			if i+2 < len(args) {
-				q.selectExprs = append(q.selectExprs, fmt.Sprintf("MIN(%s) AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
-				i += 3
-			} else {
-				i++
-			}
+			twoField("MIN")
 		case "-max":
-			if i+2 < len(args) {
-				q.selectExprs = append(q.selectExprs, fmt.Sprintf("MAX(%s) AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
-				i += 3
-			} else {
-				i++
-			}
+			twoField("MAX")
 		case "-collect":
-			if i+2 < len(args) {
-				q.selectExprs = append(q.selectExprs, fmt.Sprintf("LIST(%s) AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
-				i += 3
-			} else {
-				i++
-			}
+			twoField("LIST")
 		// Silently dropping an aggregation would produce wrong results —
 		// fail loudly on the forms with no SQL translation (yet).
 		case "-expr", "-e":
@@ -638,14 +634,135 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 		case "-stream-expr":
 			return fmt.Errorf("group-by -stream-expr has no SQL translation (expression aggregations are ssql-specific)")
 		case "-rollup":
-			return fmt.Errorf("group-by -rollup is not yet translated to SQL (GROUP BY ROLLUP)")
+			rollup = true
+			i++
 		case "-cube":
-			return fmt.Errorf("group-by -cube is not yet translated to SQL (GROUP BY CUBE)")
+			cube = true
+			i++
 		default:
 			i++
 		}
 	}
 
+	if rollup || cube {
+		if rollup && cube {
+			return fmt.Errorf("cannot use both -rollup and -cube; choose one")
+		}
+		if len(fields) == 0 || len(aggs) == 0 {
+			return fmt.Errorf("-rollup/-cube requires at least one group-by field and one aggregation")
+		}
+		mode := ssql.RollupHierarchical
+		if cube {
+			mode = ssql.RollupCube
+		}
+		return translateGroupByRollup(q, fields, aggs, mode)
+	}
+
+	for _, f := range fields {
+		q.groupBy = append(q.groupBy, quoteIdent(f))
+		q.selectExprs = append(q.selectExprs, quoteIdent(f))
+	}
+	for _, a := range aggs {
+		q.selectExprs = append(q.selectExprs, fmt.Sprintf("%s AS %s", a.expr, quoteIdent(a.name)))
+	}
+	return nil
+}
+
+// translateGroupByRollup renders ssql's -rollup/-cube: NOT SQL's GROUP BY
+// ROLLUP (which adds subtotal ROWS) but exec's enrichment — one row per
+// detail group (all fields) carrying every grouping set's aggregates as
+// prefixed COLUMNS (ssql.RollupFieldPrefix: "" for the grand total,
+// "a_" for (a), "a_b_" for (a, b)). Each set is aggregated over the raw
+// rows exactly as exec does, so every aggregate kind (AVG, MIN, LIST…)
+// is exact — a window-function rewrite would only be right for
+// COUNT/SUM/MIN/MAX. The sets and the naming rule come from the root
+// package (RollupGroupingSets / RollupFieldPrefix), never a second copy.
+//
+// Shape (rollup over a, b with -count n):
+//
+//	(WITH __src AS (SELECT * FROM <source>)
+//	 SELECT __d."a", __d."b", __s0."n", __s1."a_n", __d."a_b_n"
+//	 FROM   (SELECT "a", "b", COUNT(*) AS "a_b_n" FROM __src GROUP BY "a", "b") AS __d
+//	 JOIN   (SELECT COUNT(*) AS "n" FROM __src) AS __s0 ON TRUE
+//	 JOIN   (SELECT "a", COUNT(*) AS "a_n" FROM __src GROUP BY "a") AS __s1
+//	          ON __d."a" IS NOT DISTINCT FROM __s1."a")
+//
+// IS NOT DISTINCT FROM keeps NULL group keys matched, as exec's %v-keyed
+// grouping does. The result replaces the query as its FROM, so later
+// stages apply to the enriched rows.
+func translateGroupByRollup(q *sqlQuery, fields []string, aggs []sqlAgg, mode ssql.RollupMode) error {
+	// Materialise whatever is accumulated (a WHERE, a join, a sample…)
+	// as the source: the sets must all aggregate the same rows.
+	if len(q.whereClauses) > 0 || len(q.joins) > 0 || len(q.selectExprs) > 0 ||
+		len(q.groupBy) > 0 || len(q.orderBy) > 0 || q.limit != "" || q.offset != "" || q.distinct || q.sampled {
+		wrapAsSubquery(q)
+	}
+	src := q.fromClause
+	if src == "" {
+		return fmt.Errorf("group-by -rollup/-cube: no source to translate")
+	}
+
+	sets := ssql.RollupGroupingSets(fields, mode)
+	detail := len(sets) - 1 // the full field set is always last
+	alias := func(i int) string {
+		if i == detail {
+			return "__d"
+		}
+		return fmt.Sprintf("__s%d", i)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("(\n  WITH __src AS (SELECT * FROM " + src + ")\n  SELECT ")
+	var sel []string
+	for _, f := range fields {
+		sel = append(sel, "__d."+quoteIdent(f))
+	}
+	for i, set := range sets {
+		prefix := ssql.RollupFieldPrefix(set)
+		for _, a := range aggs {
+			sel = append(sel, alias(i)+"."+quoteIdent(prefix+a.name))
+		}
+	}
+	sb.WriteString(strings.Join(sel, ", ") + "\n")
+
+	setSelect := func(set []string) string {
+		var cols []string
+		for _, f := range set {
+			cols = append(cols, quoteIdent(f))
+		}
+		prefix := ssql.RollupFieldPrefix(set)
+		for _, a := range aggs {
+			cols = append(cols, fmt.Sprintf("%s AS %s", a.expr, quoteIdent(prefix+a.name)))
+		}
+		sql := "SELECT " + strings.Join(cols, ", ") + " FROM __src"
+		if len(set) > 0 {
+			var g []string
+			for _, f := range set {
+				g = append(g, quoteIdent(f))
+			}
+			sql += " GROUP BY " + strings.Join(g, ", ")
+		}
+		return sql
+	}
+
+	sb.WriteString("  FROM (" + setSelect(sets[detail]) + ") AS __d\n")
+	for i, set := range sets {
+		if i == detail {
+			continue
+		}
+		on := "TRUE"
+		if len(set) > 0 {
+			var conds []string
+			for _, f := range set {
+				conds = append(conds, fmt.Sprintf("__d.%s IS NOT DISTINCT FROM %s.%s", quoteIdent(f), alias(i), quoteIdent(f)))
+			}
+			on = strings.Join(conds, " AND ")
+		}
+		sb.WriteString("  JOIN (" + setSelect(set) + ") AS " + alias(i) + " ON " + on + "\n")
+	}
+	sb.WriteString(")")
+
+	*q = sqlQuery{fromClause: sb.String(), comments: q.comments}
 	return nil
 }
 

@@ -6,7 +6,7 @@ Last modified: 2026-04-29
 
 [Back to Index](./README.md)
 
-**Status:** `-run` shipped 2026-04-28. `-build` shipped 2026-04-28. `-optimise` shipped 2026-04-29.
+**Status:** `-run` shipped 2026-04-28. `-build` shipped 2026-04-28. `-optimise` shipped 2026-04-29. **2026-09-05: `-optimise` is the DEFAULT; `+O` / `+optimise` turns it off** (Ross: a compiled program is where speed matters most — an unpruned parquet read was 6× slower and 12× the memory of the pruned one). With it: a fast path when no rule applies (no re-execution, byte-identical to `+O`), the re-execution names THIS binary rather than `ssql` on PATH, the generated header records the pipeline as typed and the one implemented plus the rules, and the browser build skips the optimiser (no bash to re-execute under). Tests: `optimise_default_test.go`; scale gate `generate-go-run-optimised`.
 
 `-run` was implemented as designed but with one refinement: the
 implementation does **build + exec** (two steps) rather than `go run`
