@@ -2,13 +2,17 @@
 
 Reference: DFC112
 Created: 2026-08-23
-Last modified: 2026-08-30
+Last modified: 2026-09-05
 
 [Back to Index](./README.md)
 
 **Status:** Position — discussed and agreed (Ross + Claude,
-2026-08-23). Records the reasoning so it isn't relitigated; the one
-build item (`from https://` with Range) is queued, not started.
+2026-08-23), and BUILT: `from https://` with Range shipped 2026-08-26
+(v4.73.0) including parquet-over-Range with column pruning, `-sample`
+via parallel Range draws, the presigned-URL auth model, and loud
+refusals; readahead was tried and closed as a negative result
+(2026-08-30). See the checklist at the end. Records the reasoning so
+it isn't relitigated.
 
 Builds on: [DFC108](./dfc108_split_pipelines_server_browser.md)
 (split pipelines), [DFC110](./dfc110_sample_command.md) /

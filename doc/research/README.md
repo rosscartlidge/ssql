@@ -94,7 +94,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC084 | 2026-04-26 | 2026-04-26 | [`ssql/typed` — Performance Improvement Opportunities](./typed-performance-notes.md) |
 | DFC085 | 2026-04-27 | 2026-04-27 | [Tier 3 Codegen — What's Left, and How to Prioritize](./typed-codegen-tier3-roadmap.md) |
 | DFC086 | 2026-04-27 | 2026-04-27 | [Typed GroupByParallel — Sink/Combine/Finalize Proposal](./typed-groupby-parallel-proposal.md) |
-| DFC087 | 2026-04-28 | 2026-04-29 | [`generate go -optimise` and `generate go -run` Proposal](./generate-go-flags-proposal.md) |
+| DFC087 | 2026-04-28 | 2026-09-05 | [`generate go -optimise` and `generate go -run` Proposal](./generate-go-flags-proposal.md) |
 | DFC088 | 2026-04-28 | 2026-05-02 | [Mixed-Mode Pipelines Proposal](./mixed-mode-pipelines-proposal.md) |
 | DFC089 | 2026-04-28 | 2026-04-28 | [Typed Parquet Reader Proposal](./typed-parquet-proposal.md) |
 | DFC090 | 2026-04-30 | 2026-08-11 | [mmap + MADV Readers Proposal](./mmap-readers-proposal.md) |
@@ -119,7 +119,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC109 | 2026-08-18 | 2026-08-18 | [Record→Typed Re-entry: Typed Pipelines over SSH Sources](./dfc109_record_to_typed_reentry.md) |
 | DFC110 | 2026-08-21 | 2026-08-23 | [`ssql sample` — Seeded Random Row Sampling](./dfc110_sample_command.md) |
 | DFC111 | 2026-08-23 | 2026-08-23 | [Sampling a 1.2GB CSV in 14 Milliseconds: A Case Study](./dfc111_sampling_case_study.md) |
-| DFC112 | 2026-08-23 | 2026-08-30 | [Cloud Data Strategy: Mounts, Serve-in-Region, and `from https://`](./dfc112_cloud_data_strategy.md) |
+| DFC112 | 2026-08-23 | 2026-09-05 | [Cloud Data Strategy: Mounts, Serve-in-Region, and `from https://`](./dfc112_cloud_data_strategy.md) |
 | DFC113 | 2026-08-24 | 2026-08-26 | [The Scale Gate: Budget Assertions on Large Fixtures](./dfc113_scale_gate.md) |
 | DFC114 | 2026-08-25 | 2026-08-25 | [642k to 98M Rows per Second: A Performance Journey](./dfc114_performance_journey.md) |
 | DFC115 | 2026-08-25 | 2026-08-29 | [Commands Are the Authority on Themselves](./dfc115_commands_are_the_authority.md) |
