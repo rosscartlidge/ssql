@@ -453,6 +453,9 @@ ssql where -help | head -20
 ssql functions | head -12
 ```
 
-Next: [API reference](api-reference.md) for the Go library the CLI is
-built on; [ai-code-generation.md](ai-code-generation.md) to have an LLM
-write pipelines for you; `doc/research/` for the design record.
+Next on the [learning path](README.md#learning-path): the
+[Signal Processing](cli-signal-processing.md) branch if your data is a
+time series; otherwise the [Getting Started Guide](codelab-intro.md) — the
+Go library the CLI is built on, and what `generate go` produced in §7.
+[ai-code-generation.md](ai-code-generation.md) has an LLM write pipelines
+for you; `doc/research/` is the design record.

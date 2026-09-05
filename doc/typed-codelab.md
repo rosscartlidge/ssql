@@ -2,13 +2,19 @@
 
 *A hands-on tutorial for the high-performance struct-based data path*
 
+Every program below is a complete file, and every one of them *is* run,
+against the current source, by `scripts/codelab-go-run.sh doc/typed-codelab.md`
+(DFC125) — so what you read is what happens.
+
 ## Table of Contents
 
-### Documentation Navigation
-- **[Getting Started Guide](codelab-intro.md)** - Introduction to ssql with `Record`
-- **[API Reference](api-reference.md)** - Full ssql library documentation
-- **[Typed Reference](typed-reference.md)** - Concise reference for `ssql/typed`
-- **[CLI Tutorial](cli-codelab.md)** - Command-line data processing
+### Where you are
+This is step 5 of the [learning path](README.md#learning-path). It assumes
+the **[Getting Started Guide](codelab-intro.md)** (the `Record` API) and the
+**[CLI Codelab](cli-codelab.md)** before it.
+
+- **Before:** [Getting Started Guide](codelab-intro.md) · [CLI Codelab](cli-codelab.md)
+- **Reference:** [Typed Reference](typed-reference.md) · [API Reference](api-reference.md)
 
 ### Steps
 - [When to use it](#when-to-use-it)
@@ -57,6 +63,7 @@ reproduce these numbers yourself in [Step 8](#step-8-measure-the-speedup-yoursel
 Make a fresh module for the codelab:
 
 ```bash
+# codelab: skip — module setup (the runner provides its own module)
 mkdir typed-codelab && cd typed-codelab
 go mod init typed-codelab
 go get github.com/rosscartlidge/ssql/v4@latest
@@ -83,6 +90,7 @@ D01,Engineering,SF
 D02,Sales,NYC
 D03,Marketing,NYC
 EOF
+wc -l employees.csv departments.csv
 ```
 
 Note that `D04` is in employees but missing from departments — we'll
@@ -473,14 +481,15 @@ Clone the ssql repo and run the benchmarks against the same workload
 described in the docs:
 
 ```bash
+# codelab: skip — benchmarks take minutes and generate 600 MB; run by hand
 git clone https://github.com/rosscartlidge/ssql && cd ssql
 
 # Quick comparison (~1 minute, 1M rows × 1 join)
 go test -bench=End2End -benchtime=3x -run=^$ ./typed/...
 
-# Full headline workload (~2 minutes, 10M rows × 3 chained joins —
-# generates 600 MB of CSV under os.TempDir on first run)
-go test -bench=Scale -benchtime=1x -run=^$ -timeout=30m ./typed/...
+# Full headline workload (~5 minutes: the Scale family is six benchmarks,
+# 10M rows × 3 chained joins — generates 600 MB of CSV under os.TempDir on first run)
+go test -bench='Scale(Record|Typed)3Join' -benchtime=1x -run=^$ -timeout=30m ./typed/...
 ```
 
 Expected output (single-threaded, on modern x86):
@@ -494,6 +503,7 @@ If you have DuckDB installed (`~/.local/bin/duckdb` or anywhere on
 PATH), the same workload as a SQL query:
 
 ```bash
+# codelab: skip — needs duckdb and the cloned repo
 go test -bench=DuckDB -benchtime=1x -run=^$ -timeout=10m ./typed/...
 # BenchmarkScaleDuckDB3Join-24    1    0.42 s
 ```
@@ -527,8 +537,8 @@ typed.SortByStable(key)(seq)      // stable for equal keys
 typed.Distinct(key)(seq)          // first occurrence per unique key
 
 // Set ops (multi-input)
-typed.Concat(seq1, seq2, ...)            // preserves duplicates
-typed.Union(key, seq1, seq2, ...)        // concat + dedup
+typed.Concat(seq1, seq2)                 // variadic; preserves duplicates
+typed.Union(key, seq1, seq2)             // variadic; concat + dedup
 
 // Joins
 typed.HashJoin(left, right, leftKey, rightKey, merge)
@@ -580,10 +590,10 @@ output buffers. Same struct types, same struct tags, same pipeline
 shape — the parallel infrastructure is invisible at the source level.
 
 ```bash
-SSQL_MODE=typed ssql from data.csv \
-    | ssql where -if age gt 30 \
-    | ssql group-by dept_id -count n -sum salary total -avg salary mean \
-    | ssql to csv | ssql generate go > pipeline.go
+ssql generate go -mode typed -pipeline 'ssql from employees.csv
+    | ssql where -if years gt 3
+    | ssql group-by dept_id -count n -sum salary total -avg salary mean
+    | ssql to csv' > pipeline.go
 go run pipeline.go
 ```
 

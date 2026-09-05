@@ -12,7 +12,7 @@
 - [Getting Started Guide](codelab-intro.md) - Learn ssql basics step-by-step
 - [CLI Tutorial](cli-codelab.md) - Command-line data processing
 - [Signal Processing](cli-signal-processing.md) - FFT, convolution, and GPU acceleration
-- [Advanced Tutorial](advanced-tutorial.md) - Complex patterns and real-world examples
+- [Typed Codelab](typed-codelab.md) - The high-performance struct-based API
 
 ### API Reference Sections
 - [Installation & Setup](#installation--setup)
@@ -415,7 +415,7 @@ records := []ssql.Record{
 
 *Functions that transform elements from one type to another*
 
-> 💡 **Learn by Example**: See these operations in action in the [Getting Started Guide](codelab-intro.md#basic-transformations) and [Advanced Tutorial](advanced-tutorial.md#complex-aggregations).
+> 💡 **Learn by Example**: See these operations in action in the [Getting Started Guide](codelab-intro.md#your-first-stream) and its [group-by and join](codelab-intro.md#sql-style-operations-group-by-and-join) section.
 
 ### Select[T, U]
 ```go
@@ -879,7 +879,7 @@ Compares two records by multiple order fields with ascending/descending support.
 
 *Functions for windowing and batching streams into slices*
 
-> 🔄 **Infinite Stream Patterns**: Learn advanced windowing for real-time processing in the [Advanced Tutorial](advanced-tutorial.md#windowing-for-infinite-streams).
+> 🔄 **Infinite Stream Patterns**: See windows on finite and endless streams in the [Getting Started Guide](codelab-intro.md#windows-batches-and-time-buckets).
 
 ### CountWindow[T]
 ```go
@@ -977,7 +977,7 @@ long := ssql.UnpivotRecords(wide, ssql.UnpivotConfig{IDs: []string{"product"}, V
 
 *Database-like operations for Record streams*
 
-> 🎯 **Real-World Examples**: See comprehensive join and aggregation patterns in the [Advanced Tutorial](advanced-tutorial.md#stream-joins) section.
+> 🎯 **Real-World Examples**: See a group-by feeding a join in the [Getting Started Guide](codelab-intro.md#sql-style-operations-group-by-and-join).
 
 ### FillRecords
 ```go
@@ -1447,7 +1447,7 @@ and `line`. Records share one schema. Backs `ssql from lines`; pair with
 `ExtractRecords`. (`ReadLines` numbered from 0 before v4.86.)
 
 
-> 📁 **Practical Examples**: See file processing patterns in the [Getting Started Guide](codelab-intro.md#working-with-data) and production I/O strategies in the [Advanced Tutorial](advanced-tutorial.md#performance-optimization).
+> 📁 **Practical Examples**: See file processing patterns in the [Getting Started Guide](codelab-intro.md#reading-real-data).
 
 ### JSONL Schema Headers (CLI Feature)
 
@@ -2113,7 +2113,7 @@ func AutoCorrelateMaxFilter(field, outputField string, maxLag int) Filter[Record
 
 ## Chart & Visualization
 
-> 📊 **Interactive Examples**: See chart creation in action in the [Getting Started Guide](codelab-intro.md#visualizing-data) and advanced dashboard patterns in the [Advanced Tutorial](advanced-tutorial.md#advanced-visualizations).
+> 📊 **Interactive Examples**: See chart creation in action in the [Getting Started Guide](codelab-intro.md#interactive-charts-made-easy).
 
 ### Chart Configuration
 
@@ -2381,7 +2381,7 @@ if err != nil {
 
 ## Error Handling
 
-> 🛡️ **Production Patterns**: Learn robust error handling strategies in the [Advanced Tutorial](advanced-tutorial.md#error-handling-and-resilience).
+> 🛡️ **Production Patterns**: See the safe/unsafe split in practice in the [Getting Started Guide](codelab-intro.md#error-handling).
 
 ssql provides multiple error handling approaches:
 
@@ -2476,7 +2476,7 @@ for value, err := range safeResult {
 ## Related Documentation
 
 - **[Getting Started Guide](codelab-intro.md)** - Learn ssql basics with hands-on examples
-- **[Advanced Tutorial](advanced-tutorial.md)** - Complex patterns, performance optimization, and real-world use cases
+- **[Typed Codelab](typed-codelab.md)** - The high-performance struct-based API
 
 ---
 

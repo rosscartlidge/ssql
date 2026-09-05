@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
-# codelab-run.sh — DFC125: execute every ```bash block of doc/cli-codelab.md
-# in doc/codelab-data against a freshly built ssql, failing on non-zero
-# exit or empty stdout. A block whose FIRST line is
+# codelab-run.sh — DFC125: execute every ```bash block of a CLI codelab
+# (default doc/cli-codelab.md) in a throwaway copy of doc/codelab-data
+# against a freshly built ssql, failing on non-zero exit or empty stdout.
+# A block whose FIRST line is
 #   # codelab: skip — <reason>
-# is skipped and the reason printed. Usage: scripts/codelab-run.sh [-v]
+# is skipped and the reason printed.
+# Usage: scripts/codelab-run.sh [-v] [DOC.md]
 set -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DOC="$ROOT/doc/cli-codelab.md"
 DATA="$ROOT/doc/codelab-data"
-VERBOSE=${1:-}
+VERBOSE=
+for arg in "$@"; do
+  case "$arg" in
+    -v) VERBOSE=1 ;;
+    *) DOC="$arg" ;;
+  esac
+done
+[[ -f "$DOC" ]] || { echo "codelab-run: no such doc: $DOC"; exit 1; }
 BIN_DIR="$(mktemp -d)"
 WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$BIN_DIR" "$WORK" 2>/dev/null; rm -rf "$BIN_DIR" "$WORK"' EXIT
@@ -33,7 +42,16 @@ run_block() {
     return
   fi
   local out rc
-  out="$(cd "$WORK" && timeout 120 bash -c "set -o pipefail; $block" 2>&1)"; rc=$?
+  # set -e: a block is a sequence of commands and EVERY one must succeed —
+  # without it a trailing `echo "Compare …"` masked a failing pipeline
+  # (sabotage: `-kernel moving-average` passed the gate).
+  out="$(cd "$WORK" && timeout 120 bash -c "set -e -o pipefail; $block" 2>&1)"; rc=$?
+  # 141 = an upstream stage killed by SIGPIPE because a downstream
+  # `limit` (or `head`) closed the pipe — ordinary Unix behaviour that
+  # pipefail surfaces and an interactive user never sees. Only reached
+  # when the data outgrows the pipe buffer, which is why small fixtures
+  # never showed it.
+  [[ $rc -eq 141 ]] && rc=0
   if [[ $rc -ne 0 ]]; then
     fail=$((fail+1)); echo "FAIL  block $n (line $startline) exit $rc:"; printf '%s\n' "$block" | sed 's/^/    | /'; printf '%s\n' "$out" | tail -8 | sed 's/^/    > /'
   elif [[ -z "$out" ]]; then
@@ -48,5 +66,5 @@ while IFS= read -r line; do
   if [[ $inblock -eq 1 && "$line" == '```' ]]; then inblock=0; run_block; continue; fi
   if [[ $inblock -eq 1 ]]; then block+="$line"$'\n'; fi
 done < "$DOC"
-echo "codelab-run: $pass passed, $fail failed, $skipped skipped (of $n blocks)"
+echo "codelab-run: $(basename "$DOC"): $pass passed, $fail failed, $skipped skipped (of $n blocks)"
 [[ $fail -eq 0 ]]

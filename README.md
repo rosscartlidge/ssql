@@ -578,52 +578,40 @@ func main() {
 
 ## 🎓 Learning Path
 
-**New to ssql?** We've got you covered with step-by-step guides:
+**New to ssql?** Do the codelabs in this order — each assumes the one before it:
 
-### 1. ⚡ **[CLI Tutorial](doc/cli-codelab.md)**
-*Prototype fast with Unix-style pipelines, generate production code*
-- Quick data exploration with command-line tools
-- Process system commands (ps, df, etc.)
-- Create visualizations with one command
-- Generate Go code from CLI pipelines
+### 1. ⚡ **[CLI Codelab](doc/cli-codelab.md)** — start here
+*Ten minutes to useful, then the sophisticated features one at a time*
+- Look at a file, answer questions about it, save and share the result
+- Tab / Ctrl-O / Alt-h discovery from the prompt (do it inside tmux)
+- Time series, `make it fast`, `generate go -run -pipeline`, distributed data
+- Every block is run by `scripts/codelab-run.sh` — what you read is what happens
 - **Debug pipelines with jq** - [See debugging guide →](doc/cli-debugging.md)
-- **Perfect for rapid prototyping!**
 
-### 2. 📚 **[Getting Started Guide](doc/codelab-intro.md)**
-*Learn the Go library fundamentals with hands-on examples*
+### 2. 📊 **[Signal Processing](doc/cli-signal-processing.md)** — optional CLI branch
+*FFT, filtering, and GPU-accelerated analysis*
+- Frequency analysis with FFT/IFFT
+- Convolution for smoothing and edge detection
+- Cross-correlation, spectrograms, optional GPU acceleration
+
+### 3. 📚 **[Getting Started Guide](doc/codelab-intro.md)** — the Go library
+*Learn the `Record` API the CLI is built on — read it once you have seen `generate go` output*
 - Basic operations (Select, Where, Limit)
 - Working with CSV/JSON/Arrow/XLSX data
   - **⚠️ Note**: CSV auto-parses `"25"` → `int64(25)`, use correct types with `GetOr()`
 - Creating your first visualizations
-- Real-world examples
 
-### 2b. 📊 **[Signal Processing Guide](doc/cli-signal-processing.md)**
-*FFT, filtering, and GPU-accelerated analysis*
-- Frequency analysis with FFT/IFFT
-- Convolution for smoothing and edge detection
-- Cross-correlation for pattern matching
-- Optional GPU acceleration (10-100x speedup)
+### 4. 🚀 **[Typed Codelab](doc/typed-codelab.md)** — hot pipelines
+*The `ssql/typed` struct API: 15× faster, 34× less memory than Record*
+- Typed CSV/JSONL I/O, joins, group-by on your own structs
+- What `SSQL_MODE=typed ssql generate go` emits — and why it is parallel
 
-### 3. 📖 **[API Reference](doc/api-reference.md)**
-*Complete function documentation with examples*
-- All operations organized by category
-- Transform, Filter, Aggregate, Join operations
-- Window processing for real-time data
-- Chart and visualization options
+### 5. 📖 **[API Reference](doc/api-reference.md)** and **[Typed Reference](doc/typed-reference.md)**
+*Complete function documentation with examples — dip in as needed*
 
-### 4. 🎯 **[Advanced Tutorial](doc/advanced-tutorial.md)**
-*Master complex patterns and production techniques*
-- Stream joins and complex aggregations
-- Real-time processing with windowing
-- Infinite stream handling
-- Performance optimization
-
-### 5. 🤖 **[AI Code Generation](doc/ai-human-guide.md)**
-*Generate ssql code from natural language*
+### Side path: 🤖 **[AI Code Generation](doc/ai-human-guide.md)**
+*Generate ssql code from natural language, at any point after the CLI codelab*
 - Use any AI assistant (Claude, ChatGPT, Gemini)
-- Describe what you want, get working code
-- Human-readable, verifiable results
-- Perfect for rapid prototyping
 - **For LLMs**: Copy [ai-code-generation.md](doc/ai-code-generation.md) into your LLM
 
 ## 🔧 Core Capabilities
@@ -1135,10 +1123,10 @@ go run examples/early_termination_example.go
 ## 🚀 What's Next?
 
 1. **[Install ssql](#installation)** and try the quick start
-2. **[Try the CLI](doc/cli-codelab.md)** for rapid prototyping *(in development)*
+2. **[Try the CLI](doc/cli-codelab.md)** for rapid prototyping
 3. **[Follow the Getting Started Guide](doc/codelab-intro.md)** for library fundamentals
 4. **[Try the AI Assistant](doc/ai-human-guide.md)** for code generation
-5. **[Explore Advanced Patterns](doc/advanced-tutorial.md)** for production use
+5. **[Do the Typed Codelab](doc/typed-codelab.md)** for the pipelines that must be fast
 
 ## 📚 Documentation
 

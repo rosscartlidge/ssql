@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -523,6 +524,48 @@ func TestChartGeneration(t *testing.T) {
 	if _, err := os.Stat("chart.html"); err == nil {
 		t.Error("chart.html file was created when it should only generate code")
 		os.Remove("chart.html") // Clean up
+	}
+}
+
+// TestToChartUnknownFieldLoud pins the fail-loudly rule for the chart
+// sink: an axis field that is not in the stream must be an error, not an
+// empty chart with exit 0. Found via the signal-processing guide, whose
+// charts asked for `convolved` where convolve emits `value_convolved`;
+// every one of them "succeeded" (DFC125 runner, 2026-09-05).
+func TestToChartUnknownFieldLoud(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+
+	dir := t.TempDir()
+	csv := filepath.Join(dir, "s.csv")
+	os.WriteFile(csv, []byte("sample,amplitude\n0,0.1\n1,0.2\n2,0.3\n"), 0o644)
+
+	bad := filepath.Join(dir, "bad.html")
+	out, err := exec.Command("bash", "-c",
+		"/tmp/ssql_test from "+csv+" | /tmp/ssql_test to chart -x sample -y convolved -output "+bad).CombinedOutput()
+	if err == nil {
+		t.Fatalf("to chart with an unknown -y field exited 0; output:\n%s", out)
+	}
+	for _, want := range []string{"to chart", "unknown field(s): convolved", "available: amplitude, sample"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("error should mention %q; got:\n%s", want, out)
+		}
+	}
+	if _, statErr := os.Stat(bad); statErr == nil {
+		t.Errorf("an empty chart was still written for the unknown field")
+	}
+
+	good := filepath.Join(dir, "good.html")
+	out, err = exec.Command("bash", "-c",
+		"/tmp/ssql_test from "+csv+" | /tmp/ssql_test to chart -x sample -y amplitude -output "+good).CombinedOutput()
+	if err != nil {
+		t.Fatalf("to chart with valid fields failed: %v\n%s", err, out)
+	}
+	if _, statErr := os.Stat(good); statErr != nil {
+		t.Errorf("valid chart was not written: %v", statErr)
 	}
 }
 

@@ -622,7 +622,7 @@ find [patterns]"
 
 - **[ssql Getting Started](codelab-intro.md)** - Learn ssql fundamentals
 - **[API Reference](api-reference.md)** - Complete function documentation
-- **[Advanced Tutorial](advanced-tutorial.md)** - Complex patterns and optimization
+- **[Typed Codelab](typed-codelab.md)** - The high-performance struct-based API
 
 ### AI Code Generation Resources
 

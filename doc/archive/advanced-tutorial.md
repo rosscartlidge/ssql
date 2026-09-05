@@ -2,6 +2,13 @@
 
 *Master complex stream processing, real-time analytics, and production-ready patterns*
 
+> **ARCHIVED 2026-09-05.** This tutorial predates the v4 `Record` API and
+> 11 of its 13 programs no longer compile. Its useful content — joins and
+> group-by, windows, infinite streams — was ported, verified, and folded
+> into the [Getting Started Guide](../codelab-intro.md), which is run by
+> `scripts/codelab-go-run.sh` on every `make doc-test`. Kept for history;
+> do not copy code from here.
+
 ## Table of Contents
 
 ### Documentation Navigation

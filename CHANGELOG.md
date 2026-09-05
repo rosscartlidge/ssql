@@ -25,6 +25,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run, 6 skip with reasons, 0 fail; sabotage-verified (a renamed fixture
   column fails 10 blocks). The SSH-console runbook moved to
   `doc/cli-codelab-serve.md`.
+- **Every codelab on the learning path runs, and stays run** (DFC125 §4;
+  Ross: "make sure they're correct and keep it that way"). A recommended
+  order — CLI codelab → Signal Processing (optional) → SSH console
+  (optional) → Getting Started (Go `Record`) → Typed codelab → references
+  — is written into `README.md`, `doc/README.md`, and each codelab's
+  header. Two runners gate all four codelabs on `make doc-test` and in
+  `TestCodelabRuns`: `scripts/codelab-run.sh [DOC]` (now parametrised)
+  for the CLI docs, and the new `scripts/codelab-go-run.sh DOC` for the
+  Go docs (programs `go run` in a throwaway module replacing ssql/v4
+  with the checkout; fragments must parse; bash blocks run alongside).
+  Running them found: the Getting Started Quick Demo did not compile;
+  the signal guide used `-kernel moving-average`, passed custom kernels
+  through `-kernel`, charted `convolved` where convolve emits
+  `FIELD_convolved`, and set `SSQLGO=record` on one stage of a
+  pipeline (all fixed; 34 blocks run, 13 skip with reasons); the typed
+  codelab's `SSQL_MODE=typed ssql from …` example had the same
+  one-stage env bug (now `generate go -mode typed -pipeline`). The
+  advanced tutorial (11 of 13 programs pre-v4) is archived to
+  `doc/archive/`; its group-by/join, windows, and infinite-stream
+  content was ported, verified, and folded into Getting Started.
+  Runner lessons: blocks run under `set -e -o pipefail` (a trailing
+  `echo` had masked a failing pipeline through a sabotage), and exit
+  141 from a SIGPIPE'd upstream stage is not a failure.
 - **SSH operator console catches up and refuses source-less lines**
   (Ross: "the ssh server might need a little maintenance"). The
   console (`ssql serve DATA.csv`) has its own command list and had
@@ -44,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-session grammar, `from-loaded`, built-ins).
 
 ### Fixed
+- **`to chart` fails loudly on an unknown axis field.** A typo in `-x`,
+  `-y`, `-z`, or `-color` produced an empty chart and exit 0; it now
+  errors like every other command, naming the field and the available
+  ones (`TestToChartUnknownFieldLoud`). Found because every convolution
+  chart in the signal-processing guide had been silently empty.
 - **`cast` was broken in plain exec** — it read stdin with the
   schema-unaware JSONL reader, so the `_schema` header became a record,
   validation failed with "unknown field … (available: _line_number,

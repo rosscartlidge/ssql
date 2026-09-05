@@ -2,17 +2,22 @@
 
 See also: **[Research & design docs →](research/README.md)**
 
-## Getting Started
+## Learning Path
 
-- [CLI Tutorial](cli-codelab.md) — step-by-step guide to all CLI commands
-- [SSH Operator Console](cli-codelab-serve.md) — runbook for `ssql serve`'s SSH side (keys, connecting, `from-loaded`)
-- [Getting Started Guide](codelab-intro.md) — quick introduction
-- [Advanced Tutorial](advanced-tutorial.md) — production patterns and best practices
+Do the codelabs in this order — each assumes the one before it. Every
+code block in every codelab is executed against the current source on
+`make doc-test` — CLI codelabs by `scripts/codelab-run.sh`, Go codelabs by
+`scripts/codelab-go-run.sh` (DFC125) — so what you read is what happens.
+
+1. [CLI Codelab](cli-codelab.md) — start here: ten minutes to useful, then the sophisticated features one at a time
+2. [Signal Processing](cli-signal-processing.md) — optional CLI branch for time series: FFT, convolution, spectrogram, GPU
+3. [SSH Operator Console](cli-codelab-serve.md) — optional runbook for `ssql serve` when a box holds the data
+4. [Getting Started Guide (Go)](codelab-intro.md) — the `Record` library the CLI is built on; read it once you have seen `generate go` output in the CLI codelab
+5. [Typed Codelab (Go)](typed-codelab.md) — the `ssql/typed` struct API for hot pipelines; what `SSQL_MODE=typed` emits
 
 ## Reference
 
 - [API Reference](api-reference.md) — complete Go library documentation
-- [Typed Codelab](typed-codelab.md) — hands-on tutorial for the `ssql/typed` package
 - [Typed Reference](typed-reference.md) — `ssql/typed` high-performance struct-based API (15× faster, 34× less memory than Record)
 - [Expression Language](EXPRESSIONS.md) — expression syntax for `-if-expr` and `-set-expr`
 - [Debugging Pipelines](cli-debugging.md) — debug with jq, inspect data, profile performance
@@ -33,3 +38,4 @@ See also: **[Research & design docs →](research/README.md)**
 ## Internal
 
 - [Documentation Validation](VALIDATION.md) — automated doc checking system (`make doc-check`)
+- `archive/` — superseded docs kept for history (the pre-v4 Advanced Tutorial among them); nothing there is current

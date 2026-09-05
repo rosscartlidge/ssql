@@ -290,14 +290,24 @@ done
 
 # Summary
 section "Codelab examples (DFC125)"
-# Every ```bash block of doc/cli-codelab.md runs in a copy of
-# doc/codelab-data against a freshly built binary.
-if "$(dirname "$0")/codelab-run.sh"; then
-    echo -e "${GREEN}✓${NC} codelab examples run clean"
-else
-    echo -e "${RED}✗${NC} codelab examples failed (see above)"
-    ERRORS=$((ERRORS+1))
-fi
+# Every code block of every codelab on the learning path runs against
+# the current checkout: CLI codelabs through codelab-run.sh (a copy of
+# doc/codelab-data, freshly built binary), Go codelabs through
+# codelab-go-run.sh (throwaway module replacing ssql/v4 with this tree).
+# Mirrors TestCodelabRuns in cmd/ssql/codelab_test.go — keep the lists equal.
+for spec in \
+    "codelab-run.sh doc/cli-codelab.md" \
+    "codelab-run.sh doc/cli-signal-processing.md" \
+    "codelab-go-run.sh doc/codelab-intro.md" \
+    "codelab-go-run.sh doc/typed-codelab.md"; do
+    set -- $spec
+    if "$(dirname "$0")/$1" "$2"; then
+        echo -e "${GREEN}✓${NC} $2 runs clean"
+    else
+        echo -e "${RED}✗${NC} $2 failed (see above)"
+        ERRORS=$((ERRORS+1))
+    fi
+done
 
 section "Summary"
 

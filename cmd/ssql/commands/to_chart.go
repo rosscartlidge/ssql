@@ -197,6 +197,22 @@ func registerToChart(cmd *cf.SubcommandBuilder) {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
+			// Fail loudly on an unknown axis field: before this check a typo
+			// (or a stale field name after a command renamed its output)
+			// produced an empty chart and exit 0 — the signal-processing
+			// guide charted `convolved` for months where convolve emits
+			// `value_convolved`, and nothing noticed.
+			axisFields := append([]string{xField}, yFields...)
+			if zField != "" {
+				axisFields = append(axisFields, zField)
+			}
+			if colorField != "" {
+				axisFields = append(axisFields, colorField)
+			}
+			if err := validateFieldsSchema(schemaAndRecords.Schema, axisFields, "to chart"); err != nil {
+				return err
+			}
+
 			// Heatmap uses specialized Plotly-based renderer
 			if chartType == "heatmap" {
 				var zMin, zMax float64

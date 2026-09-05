@@ -2,7 +2,7 @@
 
 Reference: DFC125
 Created: 2026-09-04
-Last modified: 2026-09-04
+Last modified: 2026-09-05
 
 [Back to Index](./README.md)
 
@@ -96,3 +96,64 @@ reader to find it.*
   the principle this applies to documentation.
 - `doc/VALIDATION.md` — the L1/L2/L3 tiers; the codelab runner is the
   L2 the codelab never had.
+
+## 4. Follow-through: the other codelabs (2026-09-05)
+
+Ross, reading the rewritten CLI codelab: check the others, the CLI must
+come before the Go package, give a recommended order — and "the most
+important thing is to make sure they're correct and to keep it that way".
+
+**Applying §3 to the rest of the path.** The L1 doc-check compiled Go
+only from the two AI docs and README.md; no Go codelab was gated. Run
+for real: the Getting Started Quick Demo did not compile (unused
+import); the typed codelab was clean; the advanced tutorial had 11 of
+13 programs on pre-v4 idioms; the signal-processing guide passed 20 of
+46 blocks. Every one of those had been "validated" by a check that
+never executed it.
+
+**Two runners, one convention.** `scripts/codelab-run.sh [-v] [DOC]` is
+now parametrised (default `doc/cli-codelab.md`) and gates the signal
+guide too. `scripts/codelab-go-run.sh DOC` is its Go twin: complete
+programs go into their own package in a throwaway module whose go.mod
+`replace`s ssql/v4 with the checkout and are `go run`; fragments must
+parse (gofmt -e, as declarations or as statements, imports split off);
+bash blocks run in the same directory with the same `# codelab: skip —
+reason` rule. `TestCodelabRuns` runs all four docs as parallel
+subtests; `make doc-test` mirrors the list.
+
+**What the gates taught, in order of surprise.**
+
+1. *A block's exit status was its LAST command's.* The first sabotage
+   of the signal guide (`-kernel moving-average`) passed because the
+   block ended in `echo "Compare …"`. Both runners now run blocks under
+   `set -e -o pipefail`. That immediately exposed a masked failure the
+   old runner had passed.
+2. *Exit 141 is not a failure.* A downstream `limit` closes the pipe;
+   the upstream stage dies of SIGPIPE once the data outgrows the pipe
+   buffer. Small fixtures never showed it; the signal guide's 2k-row
+   spectrograms did. Both runners map 141 → ok.
+3. *A sink that does not fail loudly hides everything upstream of it.*
+   Every convolution chart in the guide asked for `-y convolved` where
+   convolve emits `FIELD_convolved`; `to chart` drew an empty chart and
+   exited 0, for months. `to chart` now validates its axis fields
+   against the schema like every other command (`TestToChartUnknownFieldLoud`).
+   Corollary for the runner: "non-empty stdout" is a weak oracle when
+   the command's own success message is the output.
+4. *First-row CSV typing silently corrupts.* A bc-generated `0,0` first
+   row typed both columns int; every later `.0628` became `0`. Recorded
+   and promoted in TODO (DFC124 (c)); the guide now generates with
+   python `%.6f`, which is a workaround, not the fix.
+
+**Content decisions.** The advanced tutorial is archived
+(`doc/archive/advanced-tutorial.md`) rather than ported: it was 2370
+lines that mostly duplicated the API reference. Its three teachable
+parts — group-by feeding a join, count/sliding/time windows, and
+stopping an infinite stream — were rewritten against v4, verified by the
+runner, and folded into the Getting Started guide as three sections. The
+learning path (README.md, doc/README.md, each codelab's header) is: CLI
+codelab → Signal Processing (optional) → SSH console (optional) →
+Getting Started (Go Record) → Typed codelab → references.
+
+**Rule going forward.** A codelab is added to `TestCodelabRuns` the day
+it is written. A doc that is not run is not documentation; it is a
+guess about what the software did once.
