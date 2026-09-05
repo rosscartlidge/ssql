@@ -1528,6 +1528,8 @@ func ReadCSV(filename string, config ...CSVConfig) (iter.Seq[Record], error)
 ```
 Reads CSV file into Record iterator. Returns error if file cannot be opened. **Values are auto-parsed** to appropriate types.
 
+**Column typing.** Each column's type is inferred from a *sample* of the leading data rows (`CSVConfig.InferRows`, default `DefaultInferRows` = 1000): the narrowest of int → float → bool → string that every non-empty sampled value fits (`true`/`false` only for bool; `1`/`0` are ints). Empty cells are absent, never zero. `CSVConfig.TypeOverrides` / `DefaultType` win over inference. A later cell that does not fit its column's type is a **`*ssql.CellError`** (row, column, value, how the type was decided) — the unsafe readers panic with it (their fail-fast contract) and the `*Safe` readers yield it; nothing is ever coerced to 0.
+
 **Example:**
 ```go
 data, err := ssql.ReadCSV("data.csv")
@@ -1543,7 +1545,7 @@ for record := range data {
 ```go
 func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record]
 ```
-Reads CSV from any io.Reader. **Values are auto-parsed** to appropriate types.
+Reads CSV from any io.Reader. **Values are auto-parsed** to appropriate types — see the column typing rules under `ReadCSV`.
 
 #### ReadCSVSafe
 ```go

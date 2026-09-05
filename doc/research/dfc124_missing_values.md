@@ -63,14 +63,30 @@ second missing to keep consistent with the first.
   empty-cell equivalence cases SKIP the typed/parallel lanes with this
   DFC as the stated reason — a visible, named divergence rather than a
   fixture-invisible one.
-- **Unparsable non-empty cells** (`N/A` in an int column) still become
-  the zero value silently in the record reader. Same class of bug
-  (information destroyed before any command sees it); the honest
-  behaviors are absent-with-a-loud-count or a hard error. Follow-up.
-- **First-row-only inference.** The record CSV reader infers each
-  column's type from the FIRST row; an empty first cell makes the whole
-  column a string column. The typed sampler looks at N rows. Follow-up:
-  sample for the record reader too.
+- ~~**Unparsable non-empty cells**~~ **DONE 2026-09-05.** A non-empty
+  cell that does not fit its column's type is a `*ssql.CellError` (row,
+  column, value, and whether the type was sampled or explicit) — a hard
+  error, never a coerced zero. The unsafe readers panic with it (their
+  documented fail-fast contract), the `*Safe` readers yield it, the CLI
+  recovers it into `Error: … override the column type with -type COL
+  TYPE`, and the assembled `main` of generated programs recovers it into
+  `Error:` + exit 1. Int columns no longer truncate `1.5` to 1.
+- ~~**First-row-only inference**~~ **DONE 2026-09-05.** The record CSV
+  reader infers each column from the first `CSVConfig.InferRows` rows
+  (`DefaultInferRows` = 1000; the same figure as the typed sampler and
+  in the range of DuckDB's sniffer): int → float → bool → string, the
+  narrowest every non-empty sampled value fits; all-empty → string.
+  Why it was promoted: the signal-processing codelab's bc-generated
+  sine (`0,0` first) typed both columns int and every `.062789` became
+  0 — a whole signal silently zero. `-sample` now types its sampled
+  rows together and XLSX samples the same way. Stdin is sampled like a
+  file (the first record waits for 1000 rows or EOF — a live CSV feed
+  slower than that is the one case that pays; JSONL, the streaming
+  format, is untouched). The gate: `int_first_row_floats_survive` in
+  the equivalence corpus, DuckDB as the sampling oracle — which on its
+  first run caught an unrelated exec bug (`where -if v gt 0.4` on an
+  int-valued float compared as int → false) and a JSONL reader that
+  ignored the header's float type for whole numbers. Both fixed.
 
 ## 4. Gates
 

@@ -837,21 +837,21 @@ func TestCSVTypeParsing(t *testing.T) {
 		}
 	})
 
-	// Test 2: Boolean column inferred from first row
+	// Test 2: Boolean column inferred from the sample (true/false only —
+	// a column mixing bool words with yes/no or 1/0 is text; see
+	// TestCSVInferenceLattice). Sampling replaced first-row inference
+	// on 2026-09-05 (DFC124 §3).
 	t.Run("booleans_consistent", func(t *testing.T) {
 		csvData := `active
 true
 false
-yes
-no
-1
-0`
+TRUE
+False`
 		reader := strings.NewReader(csvData)
 		seq := ReadCSVFromReader(reader)
 		result := slices.Collect(seq)
 
-		// All values should be parsed as bool since first row is "true"
-		expected := []bool{true, false, true, false, true, false}
+		expected := []bool{true, false, true, false}
 		for i, r := range result {
 			val, ok := Get[any](r, "active")
 			if !ok {

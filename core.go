@@ -1386,6 +1386,18 @@ func ParseJSONLine(line []byte) (MutableRecord, error) {
 // with the same fields, as it avoids creating a new schema per record.
 // Fields not in the schema are silently ignored.
 func ParseJSONLineWithSchema(line []byte, schema *Schema) (Record, error) {
+	return ParseJSONLineWithSchemaTypes(line, schema, nil)
+}
+
+// ParseJSONLineWithSchemaTypes is ParseJSONLineWithSchema with the wire
+// types of a `_schema` header: types[i] is the declared FieldType of
+// schema field i (nil, or FieldTypeAuto for a slot, means "as parsed").
+// JSON cannot distinguish 2.0 from 2, so a float column's whole-number
+// values arrive as integer literals; under a float declaration they are
+// stored as float64, keeping the in-memory type equal to the declared
+// one across every pipe hop (a `where` that received int64(2) under a
+// float header compared it as an int and dropped the row).
+func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType) (Record, error) {
 	values := make([]any, schema.Width())
 	pos := 0
 	n := len(line)
@@ -1455,8 +1467,14 @@ func ParseJSONLineWithSchema(line []byte, schema *Schema) (Record, error) {
 		}
 		pos = newPos
 
-		// Store value at schema index (if field is in schema)
+		// Store value at schema index (if field is in schema), coerced to
+		// the declared wire type where JSON's number syntax lost it.
 		if idx := schema.Index(fieldName); idx >= 0 && value != nil {
+			if idx < len(types) && types[idx] == FieldTypeFloat {
+				if i, ok := value.(int64); ok {
+					value = float64(i)
+				}
+			}
 			values[idx] = value
 		}
 

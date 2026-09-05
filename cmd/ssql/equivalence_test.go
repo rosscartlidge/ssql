@@ -56,6 +56,18 @@ const corpusEmptiesCSV = `id,n,f,s,b
 4,40,4.5,w,true
 `
 
+// corpusIntFirstCSV: the first data row is all ints, later rows are
+// floats (DFC124 §3). First-row inference typed v as int and truncated
+// every later value to 0; the sample must type it float in every lane.
+// Shuffled so a wrong selection diverges.
+const corpusIntFirstCSV = `t,v
+0,0
+3,2
+1,.5
+4,.25
+2,1.5
+`
+
 // corpusAppLog: a text log with one line that does not match the
 // timestamp/level/message shape (exercises extract -skip).
 const corpusAppLog = `2026-01-01T00:00:01Z INFO started
@@ -724,6 +736,36 @@ var equivCases = []EquivCase{
 		Name:     "unpivot_default_values",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 20 | {{.bin}} exclude city | {{.bin}} unpivot -id id`,
 		Ordered:  false,
+	},
+	{
+		// DFC124 §3: column types come from a SAMPLE of leading rows, not
+		// the first row. v opens with `0`; the rows that must survive are
+		// the fractional ones the old reader turned into 0. DuckDB's
+		// sniffer samples too, so the duckdb lane is the independent
+		// oracle; the typed lane samples via SampleCSVSchema.
+		Name:     "int_first_row_floats_survive",
+		Pipeline: `{{.bin}} from csv {{.data}}/int_first.csv | {{.bin}} where -if v gt 0.4 | {{.bin}} include t v`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"t": 3, "v": 2}, {"t": 1, "v": 0.5}, {"t": 2, "v": 1.5},
+		},
+	},
+	{
+		// exec `where -if` compared an int field against a fractional
+		// operand by ParseInt → error → silent false, dropping every row;
+		// the other lanes compare numerically. Found by the int_first case
+		// (a float column whose whole numbers travel as JSON `2`).
+		Name:     "where_int_field_float_operand",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} where -if age gt 29.5 | {{.bin}} include name age`,
+		Ordered:  false,
+	},
+	{
+		// Same fixture through describe: min/max/mean over v must see
+		// the fractions (a truncating reader gives mean 0.6, not 0.85).
+		Name:     "int_first_row_describe",
+		Pipeline: `{{.bin}} from csv {{.data}}/int_first.csv | {{.bin}} describe | {{.bin}} where -if field eq v | {{.bin}} include field min max mean`,
+		Ordered:  false,
+		Skip:     map[string]string{"go-typed": "typed reader: describe FIELDS typed lane N/A here (see empties_*)", "go-parallel": "typed reader: describe FIELDS typed lane N/A here (see empties_*)"},
 	},
 	{
 		// DFC124: empties are absent → describe's missing/mean agree with

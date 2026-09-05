@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -41,6 +42,7 @@ type CSVConfig struct {
 	Fields        []string             // Optional: fields to write (nil = auto-detect all fields in alphabetical order)
 	TypeOverrides map[string]FieldType // Optional: override auto-detection for specific fields
 	DefaultType   FieldType            // Optional: default type for all fields (FieldTypeAuto = auto-detect)
+	InferRows     int                  // Leading data rows sampled to infer column types (0 = DefaultInferRows)
 }
 
 // FieldType represents the type to use when parsing CSV fields
@@ -63,6 +65,7 @@ func DefaultCSVConfig() CSVConfig {
 		Fields:        nil,           // Auto-detect fields
 		TypeOverrides: nil,           // No overrides
 		DefaultType:   FieldTypeAuto, // Auto-detect types
+		InferRows:     DefaultInferRows,
 	}
 }
 
@@ -105,374 +108,48 @@ func (ft FieldType) String() string {
 // CSV OPERATIONS WITH IO.READER/IO.WRITER
 // ============================================================================
 
-// ReadCSVFromReader reads CSV data from an io.Reader and returns an iterator
+// ReadCSVFromReader reads CSV data from an io.Reader and returns an iterator.
+//
+// Column types come from the header's TypeOverrides / DefaultType when
+// set, otherwise they are inferred from the first CSVConfig.InferRows
+// data rows (DefaultInferRows when zero) — int → float → bool → string,
+// the narrowest type every non-empty sampled value fits. A later cell
+// that does not fit its column's type is a *CellError, and this unsafe
+// reader PANICS with it (its documented fail-fast contract): silently
+// coercing it to 0 would hand downstream a value the data never held.
+// Use ReadCSVSafeFromReader to receive the error instead. A malformed
+// row (encoding/csv error) ends the stream, as before.
 func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 	cfg := DefaultCSVConfig()
 	if len(config) > 0 {
 		cfg = config[0]
 	}
-
 	return func(yield func(Record) bool) {
-		// Wrap reader in bufio.Reader for better performance with large files
-		bufferedReader := bufio.NewReader(reader)
-		csvReader := csv.NewReader(bufferedReader)
-		csvReader.Comma = cfg.Delimiter
-		csvReader.Comment = cfg.Comment
-
-		var headers []string
-		if cfg.HasHeaders {
-			headerRow, err := csvReader.Read()
+		readCSVRows(reader, cfg, func(r Record, err error) bool {
 			if err != nil {
-				return
-			}
-			headers = headerRow
-		}
-
-		// Read first data row to infer types (when using auto-detection)
-		firstRow, err := csvReader.Read()
-		if err != nil {
-			return // Empty file or error
-		}
-
-		// Determine field names
-		var fieldNames []string
-		if cfg.HasHeaders && len(headers) > 0 {
-			fieldNames = make([]string, len(headers))
-			copy(fieldNames, headers)
-		} else {
-			fieldNames = make([]string, len(firstRow))
-			for i := range firstRow {
-				fieldNames[i] = fmt.Sprintf("col_%d", i)
-			}
-		}
-
-		// Sort field names and create shared schema ONCE
-		slices.Sort(fieldNames)
-		schema := NewSchema(fieldNames)
-
-		// Build index map: original field position -> schema position
-		var fieldIndices []int // maps CSV column index to schema index
-		if cfg.HasHeaders && len(headers) > 0 {
-			fieldIndices = make([]int, len(headers))
-			for i, h := range headers {
-				fieldIndices[i] = schema.Index(h)
-			}
-		} else {
-			fieldIndices = make([]int, len(firstRow))
-			for i := range firstRow {
-				fieldIndices[i] = schema.Index(fmt.Sprintf("col_%d", i))
-			}
-		}
-
-		// Determine parsers: either from config or inferred from first row
-		var fieldParsers []func(string) any
-		if cfg.HasHeaders && len(headers) > 0 {
-			fieldParsers = make([]func(string) any, len(headers))
-			for i, header := range headers {
-				// Check for explicit override first
-				if cfg.TypeOverrides != nil {
-					if ft, ok := cfg.TypeOverrides[header]; ok {
-						fieldParsers[i] = getParserForType(ft)
-						continue
-					}
+				var ce *CellError
+				if errors.As(err, &ce) {
+					panic(ce)
 				}
-				// If default type is specified (not auto), use it
-				if cfg.DefaultType != FieldTypeAuto {
-					fieldParsers[i] = getParserForType(cfg.DefaultType)
-					continue
-				}
-				// Auto-detect: infer type from first row value, then lock it
-				if i < len(firstRow) {
-					fieldParsers[i] = getParserForType(inferFieldType(firstRow[i]))
-				} else {
-					fieldParsers[i] = parseAsString
-				}
+				return false
 			}
-		} else {
-			// No headers - infer from first row
-			fieldParsers = make([]func(string) any, len(firstRow))
-			for i, value := range firstRow {
-				if cfg.DefaultType != FieldTypeAuto {
-					fieldParsers[i] = getParserForType(cfg.DefaultType)
-				} else {
-					fieldParsers[i] = getParserForType(inferFieldType(value))
-				}
-			}
-		}
-
-		// Process first row using shared schema
-		values := make([]any, schema.Width())
-		for i, value := range firstRow {
-			if i < len(fieldIndices) {
-				values[fieldIndices[i]] = fieldParsers[i](value)
-			}
-		}
-		if !yield(NewRecordFromSchema(schema, values)) {
-			return
-		}
-
-		// Process remaining rows with shared schema
-		numFields := schema.Width()
-		for {
-			row, err := csvReader.Read()
-			if err != nil {
-				return // EOF or error
-			}
-
-			// Allocate new values slice per record (schema is shared)
-			values := make([]any, numFields)
-
-			// Parse values into correct schema positions
-			for i, value := range row {
-				if i < len(fieldIndices) {
-					values[fieldIndices[i]] = fieldParsers[i](value)
-				}
-			}
-
-			// Create record with shared schema (no allocation for schema)
-			if !yield(NewRecordFromSchema(schema, values)) {
-				return
-			}
-		}
+			return yield(r)
+		})
 	}
 }
 
-// inferFieldType determines the FieldType from a sample value
-func inferFieldType(s string) FieldType {
-	s = strings.TrimSpace(s)
-
-	// Try integer
-	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return FieldTypeInt
-	}
-
-	// Try float
-	if _, err := strconv.ParseFloat(s, 64); err == nil {
-		return FieldTypeFloat
-	}
-
-	// Try boolean (explicit true/false only)
-	if s == "true" || s == "false" {
-		return FieldTypeBool
-	}
-
-	// Default to string
-	return FieldTypeString
-}
-
-// getParserForType returns the parser function for a specific FieldType
-func getParserForType(ft FieldType) func(string) any {
-	switch ft {
-	case FieldTypeString:
-		return parseAsString
-	case FieldTypeInt:
-		return parseAsInt
-	case FieldTypeFloat:
-		return parseAsFloat
-	case FieldTypeBool:
-		return parseAsBool
-	default:
-		return parseValue // Should not happen, but fallback to auto
-	}
-}
-
-// Fast type-specific parsers (no type detection overhead)
-
-// parseAsString returns the value as-is (trimmed)
-func parseAsString(s string) any {
-	return strings.TrimSpace(s)
-}
-
-// parseAsInt parses as int64. An EMPTY cell is missing → nil (the
-// field is absent; DFC124) — never 0, which would be a value the data
-// does not contain. Other unparsable text still falls back to 0 (a
-// recorded follow-up in DFC124 §3).
-func parseAsInt(s string) any {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return i
-	}
-	// If it looks like a float, truncate it
-	if f, err := strconv.ParseFloat(s, 64); err == nil {
-		return int64(f)
-	}
-	return int64(0)
-}
-
-// parseAsFloat parses as float64; an empty cell is missing → nil (DFC124).
-func parseAsFloat(s string) any {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	if f, err := strconv.ParseFloat(s, 64); err == nil {
-		return f
-	}
-	return float64(0)
-}
-
-// parseAsBool parses as bool (true/false, 1/0, yes/no), returns false on error
-func parseAsBool(s string) any {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil // missing (DFC124)
-	}
-	switch strings.ToLower(s) {
-	case "true", "1", "yes", "y", "on":
-		return true
-	case "false", "0", "no", "n", "off":
-		return false
-	default:
-		return false
-	}
-}
-
-// ReadCSVSafeFromReader reads CSV data from an io.Reader with error handling
+// ReadCSVSafeFromReader reads CSV data from an io.Reader with error
+// handling: malformed rows and cells that do not fit their column's
+// inferred type (*CellError) are yielded as errors and the read
+// continues with the next row. See ReadCSVFromReader for the typing
+// rules.
 func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Record, error] {
 	cfg := DefaultCSVConfig()
 	if len(config) > 0 {
 		cfg = config[0]
 	}
-
 	return func(yield func(Record, error) bool) {
-		// Wrap reader in bufio.Reader for better performance with large files
-		bufferedReader := bufio.NewReader(reader)
-		csvReader := csv.NewReader(bufferedReader)
-		csvReader.Comma = cfg.Delimiter
-		csvReader.Comment = cfg.Comment
-
-		var headers []string
-		if cfg.HasHeaders {
-			headerRow, err := csvReader.Read()
-			if err != nil {
-				yield(Record{}, fmt.Errorf("failed to read CSV headers: %w", err))
-				return
-			}
-			headers = headerRow
-		}
-
-		// Read first data row to infer types (when using auto-detection)
-		firstRow, err := csvReader.Read()
-		if err == io.EOF {
-			return // Empty file
-		}
-		if err != nil {
-			yield(Record{}, fmt.Errorf("failed to read first CSV row: %w", err))
-			return
-		}
-
-		// Determine field names
-		var fieldNames []string
-		if cfg.HasHeaders && len(headers) > 0 {
-			fieldNames = make([]string, len(headers))
-			copy(fieldNames, headers)
-		} else {
-			fieldNames = make([]string, len(firstRow))
-			for i := range firstRow {
-				fieldNames[i] = fmt.Sprintf("col_%d", i)
-			}
-		}
-
-		// Sort field names and create shared schema ONCE
-		slices.Sort(fieldNames)
-		schema := NewSchema(fieldNames)
-
-		// Build index map: original field position -> schema position
-		var fieldIndices []int
-		if cfg.HasHeaders && len(headers) > 0 {
-			fieldIndices = make([]int, len(headers))
-			for i, h := range headers {
-				fieldIndices[i] = schema.Index(h)
-			}
-		} else {
-			fieldIndices = make([]int, len(firstRow))
-			for i := range firstRow {
-				fieldIndices[i] = schema.Index(fmt.Sprintf("col_%d", i))
-			}
-		}
-
-		// Determine parsers: either from config or inferred from first row
-		var fieldParsers []func(string) any
-		if cfg.HasHeaders && len(headers) > 0 {
-			fieldParsers = make([]func(string) any, len(headers))
-			for i, header := range headers {
-				// Check for explicit override first
-				if cfg.TypeOverrides != nil {
-					if ft, ok := cfg.TypeOverrides[header]; ok {
-						fieldParsers[i] = getParserForType(ft)
-						continue
-					}
-				}
-				// If default type is specified (not auto), use it
-				if cfg.DefaultType != FieldTypeAuto {
-					fieldParsers[i] = getParserForType(cfg.DefaultType)
-					continue
-				}
-				// Auto-detect: infer type from first row value, then lock it
-				if i < len(firstRow) {
-					fieldParsers[i] = getParserForType(inferFieldType(firstRow[i]))
-				} else {
-					fieldParsers[i] = parseAsString
-				}
-			}
-		} else {
-			// No headers - infer from first row
-			fieldParsers = make([]func(string) any, len(firstRow))
-			for i, value := range firstRow {
-				if cfg.DefaultType != FieldTypeAuto {
-					fieldParsers[i] = getParserForType(cfg.DefaultType)
-				} else {
-					fieldParsers[i] = getParserForType(inferFieldType(value))
-				}
-			}
-		}
-
-		// Process first row using shared schema
-		values := make([]any, schema.Width())
-		for i, value := range firstRow {
-			if i < len(fieldIndices) {
-				values[fieldIndices[i]] = fieldParsers[i](value)
-			}
-		}
-		if !yield(NewRecordFromSchema(schema, values), nil) {
-			return
-		}
-
-		// Process remaining rows with shared schema. rowIndex is the
-		// 1-based data-row counter used only for error messages.
-		rowIndex := int64(1)
-		numFields := schema.Width()
-		for {
-			row, err := csvReader.Read()
-			if err == io.EOF {
-				return
-			}
-			if err != nil {
-				if !yield(Record{}, fmt.Errorf("failed to read CSV row %d: %w", rowIndex, err)) {
-					return
-				}
-				continue
-			}
-
-			// Allocate new values slice per record (schema is shared)
-			values := make([]any, numFields)
-
-			// Parse values into correct schema positions
-			for i, value := range row {
-				if i < len(fieldIndices) {
-					values[fieldIndices[i]] = fieldParsers[i](value)
-				}
-			}
-			rowIndex++
-
-			// Create record with shared schema
-			if !yield(NewRecordFromSchema(schema, values), nil) {
-				return
-			}
-		}
+		readCSVRows(reader, cfg, yield)
 	}
 }
 

@@ -102,3 +102,17 @@ func TestCollectParamsRename(t *testing.T) {
 		}
 	})
 }
+
+// The generated main must turn a reader's fail-fast panic
+// (*ssql.CellError, DFC124 §3) into "Error: …" + exit 1, never a stack
+// trace — the same shape as a returned error.
+func TestWriteMainCallingRunRecoversErrorPanics(t *testing.T) {
+	var b strings.Builder
+	writeMainCallingRun(&b, true)
+	got := b.String()
+	for _, want := range []string{"recover()", `r.(error)`, `fmt.Fprintln(os.Stderr, "Error:", err)`, "os.Exit(1)", "panic(r)", "flag.Parse()", "func run() error {"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("main lacks %q:\n%s", want, got)
+		}
+	}
+}

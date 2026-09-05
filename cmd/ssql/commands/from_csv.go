@@ -199,7 +199,8 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 }
 
 // executeFromCSV handles CSV reading for both the subcommand and bare form.
-func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultType string, generate bool) error {
+func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultType string, generate bool) (err error) {
+	defer recoverCellError(&err)
 	// SSQL_MODE=schema: emit just the header as a schema, no data. Covers
 	// both `from csv FILE` and the bare `from FILE` form (both route
 	// here), so neither runs the full read.
@@ -269,7 +270,8 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 // read — 14ms vs 21s for 1000 rows of a 1.2GB file). Schema mode
 // needs no special case: sampling doesn't change the header, and the
 // schemaMode() branch above runs before we get here.
-func executeFromCSVSample(inputFile string, typeOverrides map[string]string, defaultType string, n int, seed int64, seedGiven bool, generate bool) error {
+func executeFromCSVSample(inputFile string, typeOverrides map[string]string, defaultType string, n int, seed int64, seedGiven bool, generate bool) (err error) {
+	defer recoverCellError(&err)
 	csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
 	if err != nil {
 		return err
@@ -588,7 +590,8 @@ func readCSVHeadersFromReader(r io.Reader) ([]string, error) {
 // executeFromCSVLast: `from csv FILE -last N` — the seek-based tail
 // (ssql.TailCSVFile). Same result as `| limit -last N`; O(N) instead of
 // a full read. Schema mode and codegen follow -sample's shape.
-func executeFromCSVLast(inputFile string, typeOverrides map[string]string, defaultType string, n int, generate bool) error {
+func executeFromCSVLast(inputFile string, typeOverrides map[string]string, defaultType string, n int, generate bool) (err error) {
+	defer recoverCellError(&err)
 	if schemaMode() {
 		return executeFromCSV(inputFile, typeOverrides, defaultType, generate)
 	}

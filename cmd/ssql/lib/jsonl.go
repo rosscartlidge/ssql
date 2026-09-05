@@ -284,10 +284,19 @@ func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024)
 
-		// Create shared ssql.Schema from lib.Schema fields
+		// Create shared ssql.Schema from lib.Schema fields, plus the
+		// header's declared types so whole-number floats (JSON `2` under
+		// a float column) come back as float64, not int64.
 		var ssqlSchema *ssql.Schema
+		var wireTypes []ssql.FieldType
 		if schema != nil && len(schema.Fields) > 0 {
 			ssqlSchema = ssql.NewSchema(schema.Fields)
+			wireTypes = make([]ssql.FieldType, ssqlSchema.Width())
+			for _, f := range schema.Fields {
+				if ft, err := ssql.ParseFieldType(schema.Types[f]); err == nil {
+					wireTypes[ssqlSchema.Index(f)] = ft
+				}
+			}
 		}
 
 		for scanner.Scan() {
@@ -298,7 +307,7 @@ func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
 
 			// Use fast parser with shared schema
 			if ssqlSchema != nil {
-				record, err := ssql.ParseJSONLineWithSchema(line, ssqlSchema)
+				record, err := ssql.ParseJSONLineWithSchemaTypes(line, ssqlSchema, wireTypes)
 				if err != nil {
 					continue
 				}

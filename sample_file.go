@@ -100,20 +100,27 @@ func SampleCSVFile(filename string, n int, seed int64, config ...CSVConfig) (ite
 			return
 		}
 		defer f.Close()
-		lineBuf := make([]byte, 0, 4096)
+		// Replay header + ALL sampled lines through one reader so the
+		// column types are inferred over the whole sample: typing each
+		// line alone gave `0` an int slot next to a float in the next
+		// row (the first-row typing bug, per sampled line).
+		buf := make([]byte, 0, 4096*len(ordered))
+		buf = append(buf, headerLine...)
+		lines := 0
 		for _, s := range ordered {
 			line, ok := readLineAt(f, s, size)
 			if !ok {
 				continue
 			}
-			lineBuf = lineBuf[:0]
-			lineBuf = append(lineBuf, headerLine...)
-			lineBuf = append(lineBuf, '\n')
-			lineBuf = append(lineBuf, line...)
-			for r := range ReadCSVFromReader(bytes.NewReader(lineBuf), cfg) {
-				if !yield(r) {
-					return
-				}
+			buf = append(buf, '\n')
+			buf = append(buf, line...)
+			lines++
+		}
+		scfg := cfg
+		scfg.InferRows = lines
+		for r := range ReadCSVFromReader(bytes.NewReader(buf), scfg) {
+			if !yield(r) {
+				return
 			}
 		}
 	}, nil
@@ -451,20 +458,25 @@ func sampleCSVHTTP(url string, n int, seed int64, cfg CSVConfig) (iter.Seq[Recor
 		return fullFallback()
 	}
 	return func(yield func(Record) bool) {
-		lineBuf := make([]byte, 0, 4096)
+		// One reader over header + all sampled lines: see the local-file
+		// sampler above for why the lines are typed together.
+		buf := make([]byte, 0, 4096*len(ordered))
+		buf = append(buf, headerLine...)
+		lines := 0
 		for _, st := range ordered {
 			line, ok := readLineAt(h, st, size)
 			if !ok {
 				continue
 			}
-			lineBuf = lineBuf[:0]
-			lineBuf = append(lineBuf, headerLine...)
-			lineBuf = append(lineBuf, '\n')
-			lineBuf = append(lineBuf, line...)
-			for r := range ReadCSVFromReader(bytes.NewReader(lineBuf), cfg) {
-				if !yield(r) {
-					return
-				}
+			buf = append(buf, '\n')
+			buf = append(buf, line...)
+			lines++
+		}
+		scfg := cfg
+		scfg.InferRows = lines
+		for r := range ReadCSVFromReader(bytes.NewReader(buf), scfg) {
+			if !yield(r) {
+				return
 			}
 		}
 	}, nil

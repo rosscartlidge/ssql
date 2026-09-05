@@ -973,6 +973,18 @@ func findString(s, substr string) int {
 // it with "return nil\n}". Shared by the record and typed assemblers.
 func writeMainCallingRun(code *strings.Builder, hasParams bool) {
 	code.WriteString("func main() {\n")
+	// The unsafe readers (ssql.ReadCSV, ReadXLSX) fail fast with a
+	// panic(*ssql.CellError) on a cell that does not fit its inferred
+	// column type; report it like any other error instead of a trace.
+	code.WriteString("\tdefer func() {\n")
+	code.WriteString("\t\tif r := recover(); r != nil {\n")
+	code.WriteString("\t\t\tif err, ok := r.(error); ok {\n")
+	code.WriteString("\t\t\t\tfmt.Fprintln(os.Stderr, \"Error:\", err)\n")
+	code.WriteString("\t\t\t\tos.Exit(1)\n")
+	code.WriteString("\t\t\t}\n")
+	code.WriteString("\t\t\tpanic(r)\n")
+	code.WriteString("\t\t}\n")
+	code.WriteString("\t}()\n")
 	if hasParams {
 		code.WriteString("\tflag.Parse()\n")
 	}

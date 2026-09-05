@@ -60,6 +60,23 @@ func dashlessFlagHint(command string, missing []string) string {
 	return ""
 }
 
+// recoverCellError turns the CSV/XLSX reader's fail-fast panic (a
+// *ssql.CellError: a cell that does not fit its column's inferred type)
+// into an ordinary command error that also names the override. Use as
+// `defer recoverCellError(&err)` on a named-return exec function; any
+// other panic is re-raised untouched.
+func recoverCellError(err *error) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	if ce, ok := r.(*ssql.CellError); ok {
+		*err = fmt.Errorf("%w — override the column type with `-type %s TYPE` (string, int, float, bool) or fix the data", ce, ce.Column)
+		return
+	}
+	panic(r)
+}
+
 // validateFields checks that all given field names exist in the record.
 // Returns an error listing missing fields and available fields, or nil if all exist.
 func validateFields(r ssql.Record, fields []string, command string) error {
@@ -231,6 +248,9 @@ func compareEqual(fieldValue any, compareValue string) bool {
 		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
 			return v == num
 		}
+		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
+			return float64(v) == num
+		}
 	case float64:
 		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
 			return v == num
@@ -249,6 +269,12 @@ func compareGreater(fieldValue any, compareValue string) bool {
 		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
 			return v > num
 		}
+		// An int field against a fractional operand (`age gt 29.5`) is a
+		// numeric comparison, not a silent false — every other lane
+		// (record/typed codegen, SQL, -if-expr) already compares as numbers.
+		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
+			return float64(v) > num
+		}
 	case float64:
 		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
 			return v > num
@@ -264,6 +290,12 @@ func compareLess(fieldValue any, compareValue string) bool {
 	case int64:
 		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
 			return v < num
+		}
+		// An int field against a fractional operand (`age gt 29.5`) is a
+		// numeric comparison, not a silent false — every other lane
+		// (record/typed codegen, SQL, -if-expr) already compares as numbers.
+		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
+			return float64(v) < num
 		}
 	case float64:
 		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {

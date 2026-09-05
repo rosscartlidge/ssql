@@ -67,6 +67,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-session grammar, `from-loaded`, built-ins).
 
 ### Fixed
+- **CSV column types are inferred from a sample of rows, and a cell that
+  does not fit is an error — never a silent zero** (DFC124 §3). The
+  record reader typed each column from the FIRST row only: a file
+  opening `0,0` made both columns int, and every later `.062789` was
+  truncated to `0` with no error (the whole signal-processing codelab
+  saw zeros; `N/A` in an int column became 0 the same way). Now the
+  first 1000 rows (`CSVConfig.InferRows`, `DefaultInferRows`) decide
+  each column's type — int → float → bool → string, the narrowest that
+  fits — matching the typed lane's sampler and DuckDB's sniffer. A
+  later mismatch is a `*ssql.CellError` naming row, column, value, and
+  how the type was decided; `ssql from csv` exits 1 with the `-type`
+  override in the message, generated programs report it as `Error:`
+  and exit 1 (the assembled `main` recovers the readers' fail-fast
+  panic), and the `*Safe` readers yield it. `-sample` types its rows
+  together (each sampled line used to be typed alone); XLSX samples
+  the same way. Int columns no longer truncate `1.5` to 1.
+- **`where -if` compared an int field against a fractional operand as
+  false.** `age gt 29.5` on an int column parsed the operand as an int,
+  failed, and dropped every row — while `-if-expr`, the record/typed
+  codegen, and SQL all compared numerically. Found by the new
+  `int_first_row_floats_survive` equivalence case (four lanes right,
+  exec wrong); pinned by `where_int_field_float_operand`.
+- **A `_schema` header's float type is honoured for whole-number
+  values.** JSON writes 2.0 as `2`, and the schema-aware JSONL reader
+  handed the next stage `int64(2)` under a column declared float; the
+  declared wire types now coerce at parse time
+  (`ParseJSONLineWithSchemaTypes`).
 - **`to chart` fails loudly on an unknown axis field.** A typo in `-x`,
   `-y`, `-z`, or `-color` produced an empty chart and exit 0; it now
   errors like every other command, naming the field and the available

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -95,17 +96,27 @@ func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error) {
 		fieldIndices[i] = schema.Index(h)
 	}
 
-	// Infer types from second row (first data row) if available
-	var fieldParsers []func(string) any
+	// Infer each column's type from the leading data rows (the sheet is
+	// already in memory; same sampling rule as the CSV reader).
+	var fieldParsers []cellParser
+	var fieldTypes []FieldType
 	if len(rows) > 1 {
-		firstDataRow := rows[1]
-		fieldParsers = make([]func(string) any, len(headers))
+		sample := rows[1:]
+		if len(sample) > DefaultInferRows {
+			sample = sample[:DefaultInferRows]
+		}
+		fieldParsers = make([]cellParser, len(headers))
+		fieldTypes = make([]FieldType, len(headers))
+		colVals := make([]string, 0, len(sample))
 		for i := range headers {
-			if i < len(firstDataRow) {
-				fieldParsers[i] = getParserForType(inferFieldType(firstDataRow[i]))
-			} else {
-				fieldParsers[i] = parseAsString
+			colVals = colVals[:0]
+			for _, row := range sample {
+				if i < len(row) {
+					colVals = append(colVals, row[i])
+				}
 			}
+			fieldTypes[i] = inferColumnType(colVals)
+			fieldParsers[i] = parserForType(fieldTypes[i])
 		}
 	}
 
@@ -115,13 +126,19 @@ func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error) {
 		defer f.Close()
 
 		numFields := schema.Width()
-		for _, row := range dataRows {
+		for rowNum, row := range dataRows {
 			values := make([]any, numFields)
 
 			for i, cell := range row {
 				if i < len(fieldIndices) {
 					if fieldParsers != nil && i < len(fieldParsers) {
-						values[fieldIndices[i]] = fieldParsers[i](cell)
+						v, err := fieldParsers[i](cell)
+						if err != nil {
+							// Same fail-fast contract as ReadCSVFromReader.
+							panic(&CellError{Row: int64(rowNum + 1), Column: headers[i], Value: strings.TrimSpace(cell),
+								Type: fieldTypes[i], Sampled: min(len(dataRows), DefaultInferRows)})
+						}
+						values[fieldIndices[i]] = v
 					} else {
 						values[fieldIndices[i]] = parseValue(cell)
 					}
