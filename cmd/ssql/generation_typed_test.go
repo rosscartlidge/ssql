@@ -771,13 +771,15 @@ func TestTypedFromJSONL(t *testing.T) {
 	os.WriteFile(arr, []byte("[{\"name\":\"Alice\",\"age\":35}]"), 0o644)
 
 	for _, c := range []struct{ file, want string }{
-		{plain, "typed.ReadJSONL[ERow]"},
-		{hdr, "typed.ReadJSONL[TeedRow]"},
+		{plain, "[ERow]("},
+		{hdr, "[TeedRow]("},
 	} {
 		pipe := bin + " from jsonl " + c.file + " | " + bin + " where -if age gt 30 | " + bin + " include name age | " + bin + " to csv"
 		src := runTypedPipeline(t, bin, pipe)
-		if !strings.Contains(src, c.want) || strings.Contains(src, "ReadJSONAuto") {
-			t.Errorf("%s: typed source should read with %s, not the record reader:\n%s", c.file, c.want, src[:min(len(src), 1500)])
+		// Either form: the planner picks ReadJSONLParallel when a
+		// downstream accepts a Stream (where does), else ReadJSONL.
+		if !strings.Contains(src, "typed.ReadJSONL") || !strings.Contains(src, c.want) || strings.Contains(src, "ReadJSONAuto") {
+			t.Errorf("%s: typed source should read with typed.ReadJSONL(Parallel)%s, not the record reader:\n%s", c.file, c.want, src[:min(len(src), 1500)])
 		}
 		if got, exec := goRunGenerated(t, src), equivShell(t, "exec", pipe); got != exec {
 			t.Errorf("%s: typed output differs from exec:\n--- typed\n%s--- exec\n%s", c.file, got, exec)
@@ -787,5 +789,17 @@ func TestTypedFromJSONL(t *testing.T) {
 	explain := equivShell(t, "explain", "export SSQL_MODE=typed && "+bin+" from json "+arr+" | "+bin+" to csv | "+bin+" generate go +O -explain 2>&1 || true")
 	if !strings.Contains(explain, "record fallback") || !strings.Contains(explain, "JSON array") {
 		t.Errorf("JSON array should fall back to record with a reason; explain:\n%s", explain)
+	}
+
+	// A Stream-accepting downstream keeps the parallel reader (step 3).
+	par := runTypedPipeline(t, bin, bin+" from jsonl "+plain+" | "+bin+" group-by name -count n -sum salary total | "+bin+" to csv")
+	if !strings.Contains(par, "typed.ReadJSONLParallel[ERow]") || !strings.Contains(par, "typed.GroupByParallel(") {
+		t.Errorf("group-by downstream should keep the parallel JSONL reader:\n%s", par[:min(len(par), 1500)])
+	}
+	got := goRunGenerated(t, par)
+	for _, want := range []string{"Alice,1,95000.5", "Bob,1,65000", "Carol,1,105000"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("parallel JSONL group-by output lacks %q:\n%s", want, got)
+		}
 	}
 }

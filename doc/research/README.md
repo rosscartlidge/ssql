@@ -91,8 +91,8 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC081 | 2026-04-26 | 2026-04-28 | [`ssql generate go -typed` — Phase 2 Proposal](./typed-codegen-proposal.md) |
 | DFC082 | 2026-04-26 | 2026-04-27 | [`ssql/typed` — Concurrency Proposal](./typed-concurrency-proposal.md) |
 | DFC083 | 2026-04-26 | 2026-04-27 | [`ssql/typed` — Phase 1 Package Proposal](./typed-package-proposal.md) |
-| DFC084 | 2026-04-26 | 2026-04-26 | [`ssql/typed` — Performance Improvement Opportunities](./typed-performance-notes.md) |
-| DFC085 | 2026-04-27 | 2026-04-27 | [Tier 3 Codegen — What's Left, and How to Prioritize](./typed-codegen-tier3-roadmap.md) |
+| DFC084 | 2026-04-26 | 2026-09-06 | [`ssql/typed` — Performance Improvement Opportunities](./typed-performance-notes.md) |
+| DFC085 | 2026-04-27 | 2026-09-06 | [Tier 3 Codegen — What's Left, and How to Prioritize](./typed-codegen-tier3-roadmap.md) |
 | DFC086 | 2026-04-27 | 2026-04-27 | [Typed GroupByParallel — Sink/Combine/Finalize Proposal](./typed-groupby-parallel-proposal.md) |
 | DFC087 | 2026-04-28 | 2026-09-05 | [`generate go -optimise` and `generate go -run` Proposal](./generate-go-flags-proposal.md) |
 | DFC088 | 2026-04-28 | 2026-05-02 | [Mixed-Mode Pipelines Proposal](./mixed-mode-pipelines-proposal.md) |

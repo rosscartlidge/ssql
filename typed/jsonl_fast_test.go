@@ -3,6 +3,7 @@ package typed
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -178,5 +179,52 @@ func BenchmarkReadJSONLEncodingJSON(b *testing.B) {
 		if n != 20000 {
 			b.Fatalf("rows=%d", n)
 		}
+	}
+}
+
+// ReadJSONLParallel yields the same rows as the serial reader (as a
+// multiset), skips the `_schema` header and blank lines, handles an
+// unterminated last line and n larger than the line count.
+func TestReadJSONLParallelMatchesSerial(t *testing.T) {
+	dir := t.TempDir()
+	var sb strings.Builder
+	sb.WriteString("{\"_schema\":{\"fields\":[\"name\",\"age\"],\"types\":{\"name\":\"string\",\"age\":\"int\"}}}\n")
+	for i := 0; i < 1001; i++ {
+		fmt.Fprintf(&sb, "{\"name\":\"u%d\",\"age\":%d,\"score\":%d.25}\n", i, i%90, i)
+		if i%100 == 0 {
+			sb.WriteString("\n") // blank line
+		}
+	}
+	sb.WriteString("{not json}\n")
+	sb.WriteString("{\"name\":\"last\",\"age\":1}") // unterminated
+	path := dir + "/p.jsonl"
+	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	key := func(r fastRow) string { return fmt.Sprintf("%s|%d|%v", r.Name, r.Age, r.Score) }
+	serial := map[string]int{}
+	for r := range ReadJSONL[fastRow](path) {
+		serial[key(r)]++
+	}
+	if len(serial) != 1002 {
+		t.Fatalf("serial read %d distinct rows, want 1002", len(serial))
+	}
+	for _, n := range []int{1, 3, 8, 5000} {
+		got := map[string]int{}
+		st := ReadJSONLParallel[fastRow](path, n)
+		for _, sh := range st.shards {
+			for r := range sh {
+				got[key(r)]++
+			}
+		}
+		if !reflect.DeepEqual(got, serial) {
+			t.Errorf("n=%d: parallel rows differ from serial (%d vs %d distinct)", n, len(got), len(serial))
+		}
+		if n <= 1002 && st.Shards() != n {
+			t.Errorf("n=%d: shards=%d", n, st.Shards())
+		}
+	}
+	if st := ReadJSONLParallel[fastRow](dir+"/missing.jsonl", 4); st.Shards() != 0 {
+		t.Errorf("missing file should yield an empty stream")
 	}
 }

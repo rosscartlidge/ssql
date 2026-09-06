@@ -276,11 +276,10 @@ func generateFromJSONCode(filename string) error {
 // (lib.SampleJSONLSchema — the `_schema` header when present, else a
 // sample of lines) and read it with typed.ReadJSONL, so the REST of the
 // pipeline stays typed. Before this the planner fell back to record
-// mode for the whole program: 14.8 s / 3.9 GB for a 3M-row group-by
-// against 4.2 s / 25 MB with this reader (and 0.27 s for the same rows
-// as CSV — the reader is serial and reflection-based; a positional,
-// parallel form is the next step). A JSON array file has no typed form
-// and takes the record path, noted under -explain.
+// mode for the whole program: 14.8 s / 3.9 GB for a 3M-row group-by;
+// with the positional parallel reader the same group-by is a fraction
+// of a second (roadmap §9 steps 1–3). A JSON array file has no typed
+// form and takes the record path, noted under -explain.
 func generateFromJSONLCodeTyped(filename string) error {
 	schema, structDef, err := lib.SampleJSONLSchema(filename, "", 0)
 	if err != nil {
@@ -300,13 +299,22 @@ func generateFromJSONLCodeTyped(filename string) error {
 	if needsTimeImport(schema) {
 		imports = append(imports, "time")
 	}
-	code := fmt.Sprintf(`records := typed.ReadJSONL[%s](*flagInput)`, schema.TypeName)
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	// Dual templates, as for CSV: the planner keeps the parallel form
+	// (typed.ReadJSONLParallel → Stream[T]) when a downstream stage
+	// accepts a Stream, else swaps to the serial typed.ReadJSONL.
+	parallelCode := fmt.Sprintf(`records := typed.ReadJSONLParallel[%s](*flagInput, runtime.GOMAXPROCS(0))`, schema.TypeName)
+	parallelImports := append(append([]string{}, imports...), "runtime")
+	serialCode := fmt.Sprintf(`records := typed.ReadJSONL[%s](*flagInput)`, schema.TypeName)
+	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}
-	frag.PlanNotes = []string{fmt.Sprintf("typed from jsonl: %d fields inferred from %s (serial reader)", len(schema.Fields), filename)}
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeSeqTyped}
+	frag.IsStream = true
+	frag.PlanNotes = []string{fmt.Sprintf("typed from jsonl: %d fields inferred from %s", len(schema.Fields), filename)}
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeStream}
+	frag.AltCodeIfSeq = serialCode
+	frag.AltImportsIfSeq = imports
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeSeqTyped}
 	return lib.WriteCodeFragment(frag)
 }
 

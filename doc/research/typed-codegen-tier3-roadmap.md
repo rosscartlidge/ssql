@@ -2,7 +2,7 @@
 
 Reference: DFC085
 Created: 2026-04-27
-Last modified: 2026-04-27
+Last modified: 2026-09-06
 
 [Back to Index](./README.md)
 
@@ -321,7 +321,14 @@ event streams.
 
 **Recommendation.** Do when a real JSONL pipeline is the bottleneck.
 
-**Status (2026-09-06): JSONL DONE, steps 1 and 2 of 3.** Step 2 the
+**Status (2026-09-06): JSONL DONE, all three steps.** Step 3 the same
+day: `typed.ReadJSONLParallel` (mmap, SIMD newline index, `_schema`
+header skipped, n equal runs of lines, positional decoder per shard —
+the CSV twin's shape) and `from jsonl` emits dual templates so the
+planner keeps the Stream form when a downstream accepts it. The 3M-row
+typed group-by: **0.21 s / 280 MB** — from 14.8 s / 3.9 GB before step
+1, and faster than the same rows as CSV (0.27 s).
+ Step 2 the
 same day: `typed.ReadJSONL` decodes positionally (`typed/jsonl_fast.go`
 — reflect once per type into a key → fieldDecoder plan, the SAME
 closures the CSV reader uses, walk each line once, write straight into
@@ -331,7 +338,7 @@ fields and the reference for a differential test). 3M-row group-by:
 the allocations. Intentional divergences from encoding/json, pinned: a
 string field takes any value's raw JSON text (exec does the same; a
 mixed column samples as string), and an `ssql` tag names the key when
-there is no `json` tag. Step 3 (newline-sharded parallel form) remains.
+there is no `json` tag.
  The bottleneck was
 real: a typed compile of `from jsonl big.jsonl | group-by …` (3M rows)
 fell back to record mode for the whole program — 14.8 s / 3.9 GB,

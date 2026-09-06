@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`typed.ReadJSONLParallel` — JSONL reads across every core.** The
+  CSV twin's shape (mmap, SIMD newline index, one shard per run of
+  lines), a `_schema` header skipped, the positional decoder in each
+  shard; `from jsonl` in typed mode emits dual templates so the planner
+  keeps the Stream form when a downstream stage (where, join, group-by,
+  per-shard sinks) accepts it. The 3M-row typed JSONL group-by: 0.21 s
+  and 280 MB — two releases ago it was 14.8 s and 3.9 GB, and it is now
+  faster than the same rows read as CSV (0.27 s). Rows within a shard
+  keep file order; cross-shard order is the consumer's, as for CSV.
 - **`typed.ReadJSONL` decodes positionally — 3.6× encoding/json.** The
   type is reflected over ONCE into a key → field plan built from the CSV
   reader's own field decoders; each line is then walked once and values

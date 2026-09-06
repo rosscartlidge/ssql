@@ -524,6 +524,7 @@ typed.ReadCSVSafe[T](filename)           // iter.Seq2[T, error]
 typed.ReadCSV[T](filename, typed.Strict()) // reject schema mismatch
 typed.WriteCSV(seq, filename)
 typed.ReadJSONL[T](filename)
+typed.ReadJSONLParallel[T](filename, n)  // Stream[T]; n<=0 → GOMAXPROCS
 typed.WriteJSONL(seq, filename)
 
 // Operations (single-input)

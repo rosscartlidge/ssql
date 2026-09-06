@@ -348,7 +348,10 @@ using the CSV reader's own field decoders, and each line is walked once
 micro-benchmark. Slice, map and nested-struct fields fall back to
 encoding/json. A string field accepts any JSON value as its raw text
 (as exec does); an `ssql` tag names the key when there is no `json` tag.
-The parallel form is the remaining step (roadmap §9).
+`ReadJSONLParallel[T](file, n)` is the Stream form (mmap + newline
+index + a shard per run of lines, the CSV twin's shape): the same 3M-row
+group-by in **0.21 s**, and it is what `from jsonl` emits when a
+downstream stage accepts a Stream.
 
 ## Aggregation
 
