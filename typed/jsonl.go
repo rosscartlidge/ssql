@@ -9,6 +9,7 @@ import (
 	"io"
 	"iter"
 	"os"
+	"unsafe"
 )
 
 // ReadJSONL streams rows of T from a JSON-Lines file (one JSON object per
@@ -19,10 +20,12 @@ import (
 // where every column gets a value, JSON fields are optional — missing
 // fields leave the corresponding struct field at its zero value.
 //
-// Note: encoding/json uses reflection on every row. For pipelines
-// where JSONL throughput matters more than convenience, consider
-// custom unmarshalling per type or a faster JSON library
-// (e.g. goccy/go-json or bytedance/sonic). See PERFORMANCE-NOTES.md.
+// Decoding is positional: the type is reflected over ONCE to build a
+// key → field plan (jsonl_fast.go), then each line is walked once and
+// values are written straight into the struct — the same fieldDecoder
+// closures the CSV reader uses. A type with a field kind the plan
+// cannot handle (slices, maps, nested structs) falls back to
+// encoding/json for every row.
 func ReadJSONL[T any](filename string) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		f, err := os.Open(filename)
@@ -36,9 +39,36 @@ func ReadJSONL[T any](filename string) iter.Seq[T] {
 
 // ReadJSONLFromReader is the [io.Reader] variant of [ReadJSONL].
 func ReadJSONLFromReader[T any](r io.Reader) iter.Seq[T] {
+	pl, perr := buildJSONLPlan[T]()
+	if perr != nil {
+		return readJSONLReflect[T](r)
+	}
 	return func(yield func(T) bool) {
 		sc := bufio.NewScanner(r)
 		sc.Buffer(make([]byte, 64*1024), 1024*1024) // 1 MB max line
+		for sc.Scan() {
+			line := sc.Bytes()
+			if len(line) == 0 || isSchemaHeaderLine(line) {
+				continue
+			}
+			var row T
+			if err := pl.decode(line, unsafe.Pointer(&row)); err != nil {
+				continue
+			}
+			if !yield(row) {
+				return
+			}
+		}
+	}
+}
+
+// readJSONLReflect is the encoding/json path: the fallback for types
+// the positional plan cannot cover, and the reference the differential
+// test compares against.
+func readJSONLReflect[T any](r io.Reader) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		sc := bufio.NewScanner(r)
+		sc.Buffer(make([]byte, 64*1024), 1024*1024)
 		for sc.Scan() {
 			line := sc.Bytes()
 			if len(line) == 0 || isSchemaHeaderLine(line) {
@@ -81,13 +111,20 @@ func ReadJSONLSafeFromReader[T any](r io.Reader) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		sc := bufio.NewScanner(r)
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
+		pl, perr := buildJSONLPlan[T]()
 		for sc.Scan() {
 			line := sc.Bytes()
 			if len(line) == 0 || isSchemaHeaderLine(line) {
 				continue
 			}
 			var row T
-			if err := json.Unmarshal(line, &row); err != nil {
+			var err error
+			if perr == nil {
+				err = pl.decode(line, unsafe.Pointer(&row))
+			} else {
+				err = json.Unmarshal(line, &row)
+			}
+			if err != nil {
 				if !yield(row, err) {
 					return
 				}

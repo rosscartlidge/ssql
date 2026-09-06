@@ -82,6 +82,12 @@ edge cases.
 
 ### 3. Faster JSONL via `goccy/go-json` or `bytedance/sonic`
 
+**Superseded 2026-09-06** by the "alternative" below, without codegen:
+`typed/jsonl_fast.go` reflects once per type into a key → fieldDecoder
+plan (the CSV reader's closures) and walks each line positionally —
+3.6× encoding/json's throughput, a third of the allocations, no new
+dependency, and independent of encoding/json/v2's graduation.
+
 **Where the cost is now.** `encoding/json` does reflection per call,
 and is generally 5-10× slower than the fastest Go JSON libraries.
 

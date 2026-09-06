@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`typed.ReadJSONL` decodes positionally — 3.6× encoding/json.** The
+  type is reflected over ONCE into a key → field plan built from the CSV
+  reader's own field decoders; each line is then walked once and values
+  written straight into the struct (`typed/jsonl_fast.go`). The 3M-row
+  typed JSONL group-by drops from 4.25 s to 1.13 s (it was 14.8 s two
+  releases ago); the micro-benchmark reads 157 MB/s against 44 MB/s with
+  a third of the allocations. Types with slice, map or nested-struct
+  fields fall back to encoding/json, and a differential test holds the
+  two decoders to identical results on everything both accept. Two
+  deliberate extensions, pinned: a string field accepts any JSON value
+  as its raw text (exec stores nested values the same way), and an
+  `ssql` tag names the key when there is no `json` tag, so a CSV-reader
+  struct reads JSONL unchanged. An empty string is not a time (as in
+  encoding/json; null is how a missing time is spelled).
 - **`from jsonl FILE` has a typed form.** A typed compile of any JSONL
   pipeline used to fall back to record mode for the WHOLE program: a
   3M-row group-by took 14.8 s and 3.9 GB, four times slower than the

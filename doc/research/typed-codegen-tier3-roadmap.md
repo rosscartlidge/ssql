@@ -321,17 +321,26 @@ event streams.
 
 **Recommendation.** Do when a real JSONL pipeline is the bottleneck.
 
-**Status (2026-09-06): JSONL DONE, step 1 of 3.** The bottleneck was
+**Status (2026-09-06): JSONL DONE, steps 1 and 2 of 3.** Step 2 the
+same day: `typed.ReadJSONL` decodes positionally (`typed/jsonl_fast.go`
+— reflect once per type into a key → fieldDecoder plan, the SAME
+closures the CSV reader uses, walk each line once, write straight into
+the struct; encoding/json remains the fallback for slice/map/struct
+fields and the reference for a differential test). 3M-row group-by:
+4.25 s → **1.13 s**; micro-benchmark 157 MB/s vs 44 MB/s, a third of
+the allocations. Intentional divergences from encoding/json, pinned: a
+string field takes any value's raw JSON text (exec does the same; a
+mixed column samples as string), and an `ssql` tag names the key when
+there is no `json` tag. Step 3 (newline-sharded parallel form) remains.
+ The bottleneck was
 real: a typed compile of `from jsonl big.jsonl | group-by …` (3M rows)
 fell back to record mode for the whole program — 14.8 s / 3.9 GB,
 four times slower than the interpreted pipeline. `lib.SampleJSONLSchema`
 infers the struct (the `_schema` header when present, else a sample of
 lines) and `from jsonl` emits `typed.ReadJSONL` (which now skips a
 `_schema` header line): 4.25 s / 25 MB. Struct defs carry `json` tags
-beside `ssql` tags. Steps 2 and 3 — a positional per-struct decoder
-(serial floor measured at 1.7 s) and a newline-sharded parallel form
-(~0.5 s, the CSV path does 0.27 s) — remain. JSON arrays still take the
-record path, noted under `-explain`.
+beside `ssql` tags. JSON arrays still take the record path, noted under
+`-explain`.
 
 ---
 

@@ -341,9 +341,14 @@ struct from the file (`_schema` header when present, else a sample of
 lines; `lib.SampleJSONLSchema`) and emits `ReadJSONL` — added 2026-09-06
 because the previous record-mode fallback made a compiled JSONL
 pipeline four times slower than the interpreted one (14.8 s / 3.9 GB →
-4.25 s / 25 MB on a 3M-row group-by). The reader is still serial and
-reflection-based; the positional and parallel forms that would reach
-CSV speed are the next steps (typed-codegen roadmap §9).
+4.25 s / 25 MB on a 3M-row group-by). **Decoding is positional**
+(2026-09-06): the type is reflected over once into a key → field plan
+using the CSV reader's own field decoders, and each line is walked once
+— 1.13 s on the same group-by, 3.6× encoding/json's throughput in the
+micro-benchmark. Slice, map and nested-struct fields fall back to
+encoding/json. A string field accepts any JSON value as its raw text
+(as exec does); an `ssql` tag names the key when there is no `json` tag.
+The parallel form is the remaining step (roadmap §9).
 
 ## Aggregation
 
