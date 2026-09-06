@@ -321,6 +321,18 @@ event streams.
 
 **Recommendation.** Do when a real JSONL pipeline is the bottleneck.
 
+**Status (2026-09-06): JSONL DONE, step 1 of 3.** The bottleneck was
+real: a typed compile of `from jsonl big.jsonl | group-by …` (3M rows)
+fell back to record mode for the whole program — 14.8 s / 3.9 GB,
+four times slower than the interpreted pipeline. `lib.SampleJSONLSchema`
+infers the struct (the `_schema` header when present, else a sample of
+lines) and `from jsonl` emits `typed.ReadJSONL` (which now skips a
+`_schema` header line): 4.25 s / 25 MB. Struct defs carry `json` tags
+beside `ssql` tags. Steps 2 and 3 — a positional per-struct decoder
+(serial floor measured at 1.7 s) and a newline-sharded parallel form
+(~0.5 s, the CSV path does 0.27 s) — remain. JSON arrays still take the
+record path, noted under `-explain`.
+
 ---
 
 ## 10. Arrow / Parquet typed I/O

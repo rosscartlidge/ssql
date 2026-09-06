@@ -738,6 +738,26 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// `from jsonl` has a typed form (roadmap item 9, 2026-09-06): the
+		// struct is inferred from a sample of lines and the pipeline stays
+		// typed instead of falling back to record mode wholesale. Every
+		// lane must agree on the same rows; the DuckDB lane reads the
+		// plain file with read_json.
+		Name:     "jsonl_typed_where_groupby",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/employees.jsonl | {{.bin}} where -if age gt 30 | {{.bin}} group-by dept -count n -sum salary total`,
+		Ordered:  false,
+	},
+	{
+		// The same rows behind a `_schema` header (a tee'd file): the
+		// typed reader takes the struct from the header and skips the
+		// line; the exec reader coerces by it. DuckDB has no notion of
+		// the header and would read it as a row — skipped by name.
+		Name:     "jsonl_schema_header_where",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/employees_schema.jsonl | {{.bin}} where -if age gt 30 | {{.bin}} include name age`,
+		Ordered:  false,
+		Skip:     map[string]string{"duckdb": "read_json has no notion of ssql's _schema header line"},
+	},
+	{
 		// DFC124 §3: column types come from a SAMPLE of leading rows, not
 		// the first row. v opens with `0`; the rows that must survive are
 		// the fractional ones the old reader turned into 0. DuckDB's

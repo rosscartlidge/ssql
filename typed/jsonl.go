@@ -2,6 +2,7 @@ package typed
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,7 +41,7 @@ func ReadJSONLFromReader[T any](r io.Reader) iter.Seq[T] {
 		sc.Buffer(make([]byte, 64*1024), 1024*1024) // 1 MB max line
 		for sc.Scan() {
 			line := sc.Bytes()
-			if len(line) == 0 {
+			if len(line) == 0 || isSchemaHeaderLine(line) {
 				continue
 			}
 			var row T
@@ -52,6 +53,13 @@ func ReadJSONLFromReader[T any](r io.Reader) iter.Seq[T] {
 			}
 		}
 	}
+}
+
+// isSchemaHeaderLine reports whether a JSONL line is ssql's `_schema`
+// header (written by tee and every ssql stage). It describes the rows;
+// decoding it as a row would yield a zero-valued phantom record.
+func isSchemaHeaderLine(line []byte) bool {
+	return bytes.HasPrefix(line, []byte(`{"_schema"`))
 }
 
 // ReadJSONLSafe is the error-reporting variant of [ReadJSONL].
@@ -75,7 +83,7 @@ func ReadJSONLSafeFromReader[T any](r io.Reader) iter.Seq2[T, error] {
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
 		for sc.Scan() {
 			line := sc.Bytes()
-			if len(line) == 0 {
+			if len(line) == 0 || isSchemaHeaderLine(line) {
 				continue
 			}
 			var row T

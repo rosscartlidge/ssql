@@ -105,3 +105,30 @@ func TestJSONLRoundTripFile(t *testing.T) {
 		t.Errorf("round-trip mismatch:\n  in:  %#v\n  out: %#v", in, out)
 	}
 }
+
+// A leading `_schema` header line (tee, every ssql stage) is metadata:
+// both readers skip it instead of yielding a zero-valued phantom row.
+func TestReadJSONLSkipsSchemaHeader(t *testing.T) {
+	type row struct {
+		Name string `json:"name"`
+		Age  int64  `json:"age"`
+	}
+	in := "{\"_schema\":{\"fields\":[\"name\",\"age\"],\"types\":{\"name\":\"string\",\"age\":\"int\"}}}\n{\"name\":\"Alice\",\"age\":35}\n{\"name\":\"Bob\",\"age\":28}\n"
+	got := slices.Collect(ReadJSONLFromReader[row](strings.NewReader(in)))
+	if len(got) != 2 || got[0].Name != "Alice" || got[1].Age != 28 {
+		t.Errorf("ReadJSONL with header: got %+v", got)
+	}
+	n := 0
+	for r, err := range ReadJSONLSafeFromReader[row](strings.NewReader(in)) {
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if r.Name == "" {
+			t.Errorf("phantom zero row from the header line")
+		}
+		n++
+	}
+	if n != 2 {
+		t.Errorf("safe reader yielded %d rows, want 2", n)
+	}
+}

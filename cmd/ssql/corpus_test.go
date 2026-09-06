@@ -28,6 +28,7 @@ package main
 //   go test ./cmd/ssql -run TestPipelineCorpus -short
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -100,16 +101,18 @@ func corpusData(t *testing.T) string {
 		}
 		corpusDataDir = dir
 		files := map[string]string{
-			"employees.csv": corpusEmployeesCSV,
-			"customers.csv": corpusCustomersCSV,
-			"orders.csv":    corpusOrdersCSV,
-			"sales.csv":     corpusSalesCSV,
-			"employees.tsv": strings.ReplaceAll(corpusEmployeesCSV, ",", "\t"),
-			"customers.tsv": strings.ReplaceAll(corpusCustomersCSV, ",", "\t"),
-			"shuffled.csv":  corpusShuffledCSV,
-			"empties.csv":   corpusEmptiesCSV,
-			"int_first.csv": corpusIntFirstCSV,
-			"app.log":       corpusAppLog,
+			"employees.csv":          corpusEmployeesCSV,
+			"customers.csv":          corpusCustomersCSV,
+			"orders.csv":             corpusOrdersCSV,
+			"sales.csv":              corpusSalesCSV,
+			"employees.tsv":          strings.ReplaceAll(corpusEmployeesCSV, ",", "\t"),
+			"customers.tsv":          strings.ReplaceAll(corpusCustomersCSV, ",", "\t"),
+			"shuffled.csv":           corpusShuffledCSV,
+			"empties.csv":            corpusEmptiesCSV,
+			"int_first.csv":          corpusIntFirstCSV,
+			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
+			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
+			"app.log":                corpusAppLog,
 		}
 		for name, content := range files {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -640,3 +643,58 @@ Gadget,US,200
 Gadget,EU,80
 Widget,US,50
 `
+
+// corpusJSONLFromCSV renders a CSV fixture as JSONL — one object per
+// row, integer-looking cells as numbers — optionally led by the
+// `_schema` header line ssql itself writes (tee, every stage), so the
+// typed reader's header handling is exercised by the equivalence gate.
+func corpusJSONLFromCSV(csvText string, withHeader bool) string {
+	lines := strings.Split(strings.TrimSpace(csvText), "\n")
+	fields := strings.Split(lines[0], ",")
+	isInt := func(s string) bool {
+		if s == "" {
+			return false
+		}
+		for _, c := range s {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	var b strings.Builder
+	if withHeader {
+		types := map[string]string{}
+		first := strings.Split(lines[1], ",")
+		for i, f := range fields {
+			if isInt(first[i]) {
+				types[f] = "int"
+			} else {
+				types[f] = "string"
+			}
+		}
+		hdr, _ := json.Marshal(map[string]any{"_schema": map[string]any{"fields": fields, "types": types}})
+		b.Write(hdr)
+		b.WriteByte('\n')
+	}
+	for _, ln := range lines[1:] {
+		cells := strings.Split(ln, ",")
+		b.WriteByte('{')
+		for i, f := range fields {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			k, _ := json.Marshal(f)
+			b.Write(k)
+			b.WriteByte(':')
+			if isInt(cells[i]) {
+				b.WriteString(cells[i])
+			} else {
+				v, _ := json.Marshal(cells[i])
+				b.Write(v)
+			}
+		}
+		b.WriteString("}\n")
+	}
+	return b.String()
+}

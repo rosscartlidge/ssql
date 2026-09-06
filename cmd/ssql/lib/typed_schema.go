@@ -176,7 +176,10 @@ func RenderStructDef(s *TypedSchema) string {
 		}
 	}
 	for _, f := range s.Fields {
-		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name)
+		// Both tags: `ssql` for the CSV/typed runtime, `json` so
+		// encoding/json (typed.ReadJSONL / WriteJSONL) maps the same
+		// column names — one struct serves every reader and writer.
+		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q json:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name, f.Name)
 	}
 	b.WriteString("}\n")
 	return b.String()

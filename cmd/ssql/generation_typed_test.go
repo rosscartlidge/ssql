@@ -754,3 +754,38 @@ func TestTypedRollupIsNative(t *testing.T) {
 		t.Errorf("-collect rollup should fall back to record with a reason; explain:\n%s", explain)
 	}
 }
+
+// TestTypedFromJSONL pins the typed form of `from jsonl` (roadmap §9):
+// the generated program reads with typed.ReadJSONL into an inferred
+// struct (not the record ReadJSONAuto fallback), for a plain file and
+// for a tee'd file whose `_schema` header drives the struct; output
+// matches exec. A JSON array keeps the record path with a reason.
+func TestTypedFromJSONL(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	dir := t.TempDir()
+	plain := filepath.Join(dir, "e.jsonl")
+	os.WriteFile(plain, []byte("{\"name\":\"Alice\",\"age\":35,\"salary\":95000.5}\n{\"name\":\"Bob\",\"age\":28,\"salary\":65000}\n{\"name\":\"Carol\",\"age\":42,\"salary\":105000}\n"), 0o644)
+	hdr := filepath.Join(dir, "teed.jsonl")
+	os.WriteFile(hdr, []byte("{\"_schema\":{\"fields\":[\"name\",\"age\"],\"types\":{\"name\":\"string\",\"age\":\"int\"}}}\n{\"name\":\"Alice\",\"age\":35}\n{\"name\":\"Bob\",\"age\":28}\n"), 0o644)
+	arr := filepath.Join(dir, "arr.json")
+	os.WriteFile(arr, []byte("[{\"name\":\"Alice\",\"age\":35}]"), 0o644)
+
+	for _, c := range []struct{ file, want string }{
+		{plain, "typed.ReadJSONL[ERow]"},
+		{hdr, "typed.ReadJSONL[TeedRow]"},
+	} {
+		pipe := bin + " from jsonl " + c.file + " | " + bin + " where -if age gt 30 | " + bin + " include name age | " + bin + " to csv"
+		src := runTypedPipeline(t, bin, pipe)
+		if !strings.Contains(src, c.want) || strings.Contains(src, "ReadJSONAuto") {
+			t.Errorf("%s: typed source should read with %s, not the record reader:\n%s", c.file, c.want, src[:min(len(src), 1500)])
+		}
+		if got, exec := goRunGenerated(t, src), equivShell(t, "exec", pipe); got != exec {
+			t.Errorf("%s: typed output differs from exec:\n--- typed\n%s--- exec\n%s", c.file, got, exec)
+		}
+	}
+
+	explain := equivShell(t, "explain", "export SSQL_MODE=typed && "+bin+" from json "+arr+" | "+bin+" to csv | "+bin+" generate go +O -explain 2>&1 || true")
+	if !strings.Contains(explain, "record fallback") || !strings.Contains(explain, "JSON array") {
+		t.Errorf("JSON array should fall back to record with a reason; explain:\n%s", explain)
+	}
+}

@@ -162,6 +162,15 @@ func TestScaleBudgets(t *testing.T) {
 		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
 			bin+" from parquet big.parquet | "+bin+" group-by dept -count n | "+bin+" to csv' > /dev/null", 90*time.Second)
 	})
+	t.Run("generate-go-run-jsonl-typed", func(t *testing.T) {
+		// `from jsonl` in typed mode keeps the pipeline typed (roadmap
+		// item 9). Before: record-mode fallback, 14.8 s / 3.9 GB on this
+		// group-by; after: ~4 s / 25 MB with the serial reflection reader.
+		// Ceiling covers go build + the read; the fallback would blow it.
+		repo, _ := filepath.Abs("../..")
+		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from jsonl big.jsonl | "+bin+" group-by dept -count n | "+bin+" to csv' > /dev/null", 60*time.Second)
+	})
 	t.Run("jsonl-scan", func(t *testing.T) {
 		// The legacy per-line-Unmarshal reader class was 4× the csv
 		// scan; cap at a similar generous ceiling.

@@ -9,13 +9,13 @@ import (
 
 func TestTypeNameFromFilename(t *testing.T) {
 	cases := map[string]string{
-		"employees.csv":         "EmployeesRow",
-		"/tmp/employees.csv":    "EmployeesRow",
-		"q4_sales.tsv":          "Q4SalesRow",
-		"weird-name.csv":        "WeirdNameRow",
-		"123.csv":               "Row123",
-		"":                      "Row",
-		"a.b.c.csv":             "ABCRow", // each dot resets word boundary
+		"employees.csv":      "EmployeesRow",
+		"/tmp/employees.csv": "EmployeesRow",
+		"q4_sales.tsv":       "Q4SalesRow",
+		"weird-name.csv":     "WeirdNameRow",
+		"123.csv":            "Row123",
+		"":                   "Row",
+		"a.b.c.csv":          "ABCRow", // each dot resets word boundary
 	}
 	for in, want := range cases {
 		got := TypeNameFromFilename(in)
@@ -128,5 +128,67 @@ func TestTypedSchemaFromHeader(t *testing.T) {
 	}
 	if _, _, err := TypedSchemaFromHeader(&Schema{}, "T"); err == nil {
 		t.Error("empty schema: want error")
+	}
+}
+
+// SampleJSONLSchema: struct from a `_schema` header when present, else
+// from a sample of lines (first-seen order, narrowest type every
+// non-null value fits); JSON arrays have no typed form.
+func TestSampleJSONLSchema(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	plain := write("events.jsonl", `{"id":1,"score":2,"ok":true,"name":"a","tags":["x","y"],"n":null}
+{"id":2,"score":2.5,"ok":false,"name":"b","tags":[],"n":null,"late":7}
+`)
+	schema, def, err := SampleJSONLSchema(plain, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schema.TypeName != "EventsRow" {
+		t.Errorf("TypeName = %q, want EventsRow", schema.TypeName)
+	}
+	// "n" is null throughout: still a column (it is in the document),
+	// typed string since no value ever said otherwise.
+	want := map[string]string{"id": "int64", "score": "float64", "ok": "bool", "name": "string", "tags": "string", "n": "string", "late": "int64"}
+	if len(schema.Fields) != len(want) {
+		t.Fatalf("fields = %d, want %d: %+v", len(schema.Fields), len(want), schema.Fields)
+	}
+	for _, f := range schema.Fields {
+		if f.GoType != want[f.Name] {
+			t.Errorf("field %s: GoType = %s, want %s", f.Name, f.GoType, want[f.Name])
+		}
+	}
+	var names []string
+	for _, f := range schema.Fields {
+		names = append(names, f.Name)
+	}
+	if got := strings.Join(names, ","); got != "id,score,ok,name,tags,n,late" {
+		t.Errorf("fields must follow JSON key order (new keys appended): got %s", got)
+	}
+	if !strings.Contains(def, "`ssql:\"score\" json:\"score\"`") {
+		t.Errorf("struct def must carry both ssql and json tags:\n%s", def)
+	}
+
+	hdr := write("teed.jsonl", `{"_schema":{"fields":["name","age"],"types":{"name":"string","age":"int"}}}
+{"name":"Alice","age":35}
+`)
+	schema, _, err = SampleJSONLSchema(hdr, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schema.Fields) != 2 || schema.Fields[0].Name != "name" || schema.Fields[1].GoType != "int64" {
+		t.Errorf("header-driven schema wrong: %+v", schema.Fields)
+	}
+
+	arr := write("arr.json", `[{"a":1}]`)
+	if _, _, err := SampleJSONLSchema(arr, "", 0); err == nil || !strings.Contains(err.Error(), "JSON array") {
+		t.Errorf("JSON array should have no typed form, got err=%v", err)
 	}
 }

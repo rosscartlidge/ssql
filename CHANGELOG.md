@@ -5,6 +5,25 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`from jsonl FILE` has a typed form.** A typed compile of any JSONL
+  pipeline used to fall back to record mode for the WHOLE program: a
+  3M-row group-by took 14.8 s and 3.9 GB, four times slower than the
+  interpreted pipeline it was meant to beat. The row struct is now
+  inferred from the file (`lib.SampleJSONLSchema`: the `_schema` header
+  when present, else a sample of lines — int64 → float64 → bool →
+  string, nested values as JSON text) and read with `typed.ReadJSONL`,
+  which now skips a leading `_schema` line: 4.25 s and 25 MB. Generated
+  structs carry `json` tags beside `ssql` tags so one struct serves
+  every reader and writer. JSON arrays keep the record path (noted under
+  `-explain`). Still serial and reflection-based — the positional and
+  parallel forms that would bring it to CSV speed (0.27 s) are the next
+  steps (typed-codegen roadmap §9).
+
+### Fixed
+
 ## [4.89.0] - 2026-09-05
 
 ### Changed

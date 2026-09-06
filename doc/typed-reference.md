@@ -334,6 +334,17 @@ Field mapping follows standard `json:"name"` struct tags. Implementation
 uses `encoding/json` (reflection per row); for high-throughput JSONL
 pipelines see [`doc/research/typed-performance-notes.md`](research/typed-performance-notes.md).
 
+**Header lines.** Both readers skip a leading `{"_schema": …}` line (the
+header `tee` and every ssql stage write), so a tee'd file reads as its
+rows. **Codegen.** `SSQL_MODE=typed … from jsonl FILE` infers the row
+struct from the file (`_schema` header when present, else a sample of
+lines; `lib.SampleJSONLSchema`) and emits `ReadJSONL` — added 2026-09-06
+because the previous record-mode fallback made a compiled JSONL
+pipeline four times slower than the interpreted one (14.8 s / 3.9 GB →
+4.25 s / 25 MB on a 3M-row group-by). The reader is still serial and
+reflection-based; the positional and parallel forms that would reach
+CSV speed are the next steps (typed-codegen roadmap §9).
+
 ## Aggregation
 
 ```go
