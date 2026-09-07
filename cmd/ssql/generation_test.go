@@ -1583,7 +1583,7 @@ func TestJoinGeneration(t *testing.T) {
 			wantStrs: []string{
 				`"type":"func"`,
 				`rightSource1`,
-				`ssql.ReadJSON`,
+				`lib.ReadJSONLWithSchema`, // .jsonl right side is read schema-aware (a _schema header is not a record)
 				`/tmp/test_orders.jsonl`,
 				`"type":"stmt"`,
 				`"var":"joined"`,
@@ -1701,7 +1701,7 @@ func TestJoinGenerationFullPipeline(t *testing.T) {
 		"ssql.InnerJoin",   // Join function
 		"ssql.OnFieldPair", // Different field names predicate
 		"func main()",
-		"ssql.ReadJSON", // For the secondary input (right side)
+		"lib.ReadJSONLWithSchema", // the .jsonl right side, schema-aware
 	}
 
 	for _, expected := range expectations {
