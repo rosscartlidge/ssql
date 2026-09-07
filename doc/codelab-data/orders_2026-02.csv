@@ -1,0 +1,5 @@
+order_id,customer_id,product,amount,status,date
+1007,2,Doohickey,1500,shipped,2026-02-02
+1008,1,Widget,1100,shipped,2026-02-04
+1009,4,Gadget,700,pending,2026-02-11
+1010,6,Widget,400,shipped,2026-02-14

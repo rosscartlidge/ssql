@@ -5,6 +5,23 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`from catalog` local shards run the ssql you have.** A catalog row
+  with host `local` (or this machine's hostname) exec'd `/usr/bin/ssql`,
+  the absolute path the SSH rows must use — so for anyone who installed
+  with `go install`, every local shard failed with "bash: /usr/bin/ssql:
+  No such file or directory". Local rows now run the current executable
+  when it is ssql, or the ssql on PATH from inside a generated program.
+
+### Changed
+- **Codelab section 8 runs.** The catalog example is no longer skipped:
+  `ssql codelab` now writes `shards.csv` over `orders.csv` split by month
+  (two `local` shards), and the section shows the read, metadata pruning
+  with `-if`, `-shard-field` origin tagging, and `--` pushdown against
+  it. The reference line names `-shard-field` (the codelab said `-source`).
+
 ## [4.92.0] - 2026-09-07
 
 ### Changed

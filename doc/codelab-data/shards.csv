@@ -1,0 +1,3 @@
+host,path,format,month
+local,orders_2026-01.csv,csv,2026-01
+local,orders_2026-02.csv,csv,2026-02

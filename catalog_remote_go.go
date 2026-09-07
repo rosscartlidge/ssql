@@ -246,9 +246,13 @@ func startShardSSH(
 ) (io.ReadCloser, func() error, error) {
 	script := buildShardScript(entry, requireVersion, groups)
 	remotePath := fmt.Sprintf("/tmp/ssql-remote-%d-%d.ssql", os.Getpid(), time.Now().UnixNano())
+	bin := "/usr/bin/ssql"
+	if IsLocalHost(entry.Host) {
+		bin = SelfBin(bin) // a local row runs THIS binary, not /usr/bin/ssql
+	}
 	remoteCmd := fmt.Sprintf(
-		"trap 'rm -f %s' EXIT; cat > %s && /usr/bin/ssql generate go -script %s -mode %s -run",
-		remotePath, remotePath, remotePath, mode,
+		"trap 'rm -f %s' EXIT; cat > %s && %s generate go -script %s -mode %s -run",
+		remotePath, remotePath, bin, remotePath, mode,
 	)
 	var cmd *exec.Cmd
 	if IsLocalHost(entry.Host) {

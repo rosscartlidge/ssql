@@ -334,16 +334,40 @@ func cachedHostname() string {
 	return cachedHostnameVal
 }
 
+// SelfBin is the shell-quoted ssql binary to run for shard rows that
+// resolve to this machine (IsLocalHost). Remote rows run the absolute
+// /usr/bin path (the shell-injection rule: never a bare name over ssh);
+// a local row must run the ssql the user actually has — a `go install`
+// user has no /usr/bin/ssql, and until v4.93.0 every local shard failed
+// with "bash: /usr/bin/ssql: No such file or directory". Resolution:
+// the running executable when it IS ssql (ssql, ssql_gpu, a test build
+// named ssql_*), else — inside a generated program, whose executable is
+// the program itself — the ssql on PATH, else fallback.
+func SelfBin(fallback string) string {
+	if p, err := os.Executable(); err == nil && strings.HasPrefix(filepath.Base(p), "ssql") {
+		return ShellQuote(p)
+	}
+	if p, err := exec.LookPath("ssql"); err == nil {
+		return ShellQuote(p)
+	}
+	return fallback
+}
+
 // ProcessCatalogShards connects to each shard via SSH (or locally for
 // hosts that resolve to this machine — see IsLocalHost) and returns a
-// concatenated record stream. remoteBin is "ssql" or "ssql_gpu".
+// concatenated record stream. remoteBin is "ssql" or "ssql_gpu" (an
+// absolute path for ssh rows; local rows run SelfBin).
 // pipelineArgs are push-down commands split on "+". shardField, if
 // non-empty, adds a provenance field to each record with the value
 // "host:path".
 func ProcessCatalogShards(entries []CatalogEntry, remoteBin string, shardField string, pipelineArgs [][]string) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
 		for _, entry := range entries {
-			remoteCmd := BuildRemoteCommand(remoteBin, entry.Path, entry.Format, pipelineArgs)
+			bin := remoteBin
+			if IsLocalHost(entry.Host) {
+				bin = SelfBin(remoteBin)
+			}
+			remoteCmd := BuildRemoteCommand(bin, entry.Path, entry.Format, pipelineArgs)
 
 			var cmd *exec.Cmd
 			if IsLocalHost(entry.Host) {

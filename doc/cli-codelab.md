@@ -495,17 +495,29 @@ ssql from csv employees.csv -- where -if dept eq Sales | ssql to table
 ssql from ssh node1 /data/events.csv -- where -if status ge 500 | ssql group-by service -count n | ssql to table
 ```
 
-A *catalog* is a CSV of shards (host, path, metadata); `from catalog`
-prunes shards by metadata, fans out over SSH, and merges — and the
-optimiser from section 7 pushes your `where` and `group-by` into the
-shards for you (`generate ssql` shows the rewrite). Run it when you have
-more than one machine: [doc/cli-debugging.md](cli-debugging.md) covers
-the rig.
+A *catalog* is a CSV of shards: a host, a path, and whatever metadata
+describes each shard. `shards.csv` here lists `orders.csv` split by
+month — two files, host `local`, a `month` column:
 
 ```bash
-# codelab: skip — needs a shard catalog and SSH hosts
-ssql from catalog shards.csv -if date ge 2026-01-01 | ssql where -if status ge 500 | ssql group-by service -count n | ssql to table
+cat shards.csv
+ssql from catalog shards.csv | ssql group-by status -sum amount total -count n | ssql sort status | ssql to table
 ```
+
+`from catalog` prunes shards by their metadata before opening any of
+them (`-if` on catalog columns), tags each record with its origin if you
+ask, and pushes the stages after `--` into every shard:
+
+```bash
+ssql from catalog shards.csv -if month ge 2026-02 -shard-field shard | ssql group-by shard -count n -sum amount total | ssql to table
+ssql from catalog shards.csv -- where -if status eq shipped | ssql count
+```
+
+On a cluster the host column names SSH hosts from `~/.ssh/config`, the
+shards run where the data lives, and the optimiser from section 7
+pushes your `where` and `group-by` into them for you (`generate ssql`
+shows the rewrite). [doc/cli-debugging.md](cli-debugging.md) covers the
+rig; the same pipeline runs unchanged.
 
 The SSH operator console is the other direction — leave the data where
 it is and log into it: `ssql serve DATA.csv` loads a dataset and answers
@@ -516,8 +528,9 @@ Runbook: [The SSH Operator Console](cli-codelab-serve.md).
 
 Sources: `from FILE` (csv/tsv/json/jsonl/parquet/arrow/xlsx/wav by
 extension; `.log`/`.txt` as lines) · `from csv|tsv|jsonl|parquet|lines FILE…`
-· `from ssh HOST PATH` · `from catalog FILE` — flags `-records`,
-`-sample N`, `-last N`, `-columns` (parquet), `-source`, `--` pushdown.
+· `from ssh HOST PATH` · `from catalog FILE` (`-if` prunes on catalog
+columns, `-shard-field` tags origin) — flags `-records`, `-sample N`,
+`-last N`, `-columns` (parquet), `-source`, `--` pushdown.
 
 Filter / shape: `where` · `include` · `exclude` · `rename` · `cast` ·
 `update` · `distinct` · `limit [-last]` · `offset` · `sample` · `top`.

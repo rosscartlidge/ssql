@@ -11,6 +11,7 @@ restores them after editing.
 |---|---|---|
 | `employees.csv` / `employees.parquet` | 10 people: dept, salary, city, level, hire_date, status (the parquet is the same rows, for `-records`/`-columns`) | Part 1 throughout, Make it fast |
 | `customers.csv` / `orders.csv` | a joinable pair (one order has a customer that does not exist — on purpose) | join, group-by |
+| `shards.csv` + `orders_2026-01.csv` / `orders_2026-02.csv` | a shard catalog: `orders.csv` split by month, both shards `local` (on a cluster the host column names SSH hosts) | from catalog |
 | `sales_wide.csv` | one row per product, one column per quarter (an empty cell on purpose) | unpivot, pivot |
 | `sheet.csv` | a merged-cell spreadsheet export | fill |
 | `app.log` | five log lines and one line of garbage | from lines, extract |
