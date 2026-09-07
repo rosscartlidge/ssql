@@ -31,6 +31,7 @@ import (
 	"iter"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rosscartlidge/ssql/v4/exprfn"
@@ -110,6 +111,18 @@ var tsStringLayouts = []string{
 	"2006-01-02",
 }
 
+// noteEpochUnit reports an auto-detected epoch unit on stderr — but only
+// when it is not seconds. A 10-digit epoch being seconds is the obvious
+// reading and the note carried no information; a millisecond or
+// nanosecond detection is the surprising case worth a line. `-time-unit`
+// silences it either way.
+func noteEpochUnit(warn io.Writer, u time.Duration) {
+	if u == time.Second {
+		return
+	}
+	fmt.Fprintf(warn, "resample: epoch unit auto-detected as %s (override with -time-unit)\n", unitName(u))
+}
+
 func newTSCodec(sample any, cfg ResampleConfig, warn io.Writer) (*tsCodec, error) {
 	switch v := sample.(type) {
 	case int64:
@@ -121,7 +134,7 @@ func newTSCodec(sample any, cfg ResampleConfig, warn io.Writer) (*tsCodec, error
 			}
 		} else {
 			u = detectEpochUnit(float64(v))
-			fmt.Fprintf(warn, "resample: epoch unit auto-detected as %s (override with -time-unit)\n", unitName(u))
+			noteEpochUnit(warn, u)
 		}
 		return &tsCodec{kind: "int", unit: u}, nil
 	case float64:
@@ -133,7 +146,7 @@ func newTSCodec(sample any, cfg ResampleConfig, warn io.Writer) (*tsCodec, error
 			}
 		} else {
 			u = detectEpochUnit(v)
-			fmt.Fprintf(warn, "resample: epoch unit auto-detected as %s (override with -time-unit)\n", unitName(u))
+			noteEpochUnit(warn, u)
 		}
 		return &tsCodec{kind: "float", unit: u}, nil
 	case string:
@@ -396,11 +409,25 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 		}
 		out = append(out, m.Freeze())
 	}
+	// One line for all fields, and only when the clamping says something
+	// about the data. An epoch-aligned grid almost always starts one grid
+	// point before the first observation (and ends one after the last),
+	// so a single clamped edge point per side is inherent to the grid,
+	// not a gap — noting it on every run was noise (Ross, the codelab's
+	// six-row example printed three notes). More than that means the
+	// data really is missing where the grid reaches (`-from`, `-to`, or
+	// a long lead-in) and is worth a line.
+	var noted []string
+	total := 0
 	for _, f := range cfg.Values {
-		if missing[f] > 0 {
-			fmt.Fprintf(warn, "resample: %d grid points outside %s's observed range clamped to the nearest observation (-fill %s needs %s)\n",
-				missing[f], f, fill, fillNeeds(fill))
+		if missing[f] > inherentEdgeClamps(fill) {
+			noted = append(noted, fmt.Sprintf("%s (%d)", f, missing[f]))
+			total += missing[f]
 		}
+	}
+	if len(noted) > 0 {
+		fmt.Fprintf(warn, "resample: %d grid points outside the observed range clamped to the nearest observation: %s (-fill %s needs %s)\n",
+			total, strings.Join(noted, ", "), fill, fillNeeds(fill))
 	}
 	return func(yield func(Record) bool) {
 		for _, r := range out {
@@ -409,6 +436,17 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 			}
 		}
 	}, nil
+}
+
+// inherentEdgeClamps is how many clamped grid points a fill mode
+// produces on any input whose first/last observation is not itself a
+// grid point: previous clamps the leading grid point, next the trailing
+// one, linear both.
+func inherentEdgeClamps(fill string) int {
+	if fill == FillLinear {
+		return 2
+	}
+	return 1
 }
 
 func fillNeeds(fill string) string {

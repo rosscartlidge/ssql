@@ -5,6 +5,44 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`limit` and `sample` dials: no value = pass-through, `0` = no records.**
+  `ssql limit` (no N) and `ssql sample` (no N, no `-percent`) pass every
+  record through and vanish from generated go/sql/ssql — the way to keep
+  a preview stage in a pipeline and dial it off is to delete the number.
+  `limit 0` is now SQL's LIMIT 0 (no records; useful for a header-only
+  `to csv`) and `sample 0` keeps no rows (USING SAMPLE 0 ROWS), in every
+  lane. Until now `limit 0` / `sample 0` were the pass-through dials,
+  which collided with SQL and `head -n 0`. Pinned by the
+  `limit_bare_passthrough` / `limit_zero_is_empty` / `sample_*`
+  equivalence cases and `TestBareLimitSkipsGeneration`.
+- **Typed readers reject empty cells in non-nullable fields.** An empty
+  CSV/TSV cell in a typed `int64`/`float64`/`bool`/`time.Time` field is a
+  fatal `*typed.ReadError` (`column "Age": "" is not int64`) instead of
+  a silent zero value that disagreed with the record lane's absent
+  field (DFC124 (a)). `string` fields keep `""`, pointer fields take
+  `nil`, as before. Zero cost — the decoder already branched on the
+  empty string. Remedies: a pointer field, `-type COL string`, or `fill`.
+
+### Fixed
+- **`resample` is quiet on ordinary input.** The codelab's six-row
+  example printed three stderr notes: the epoch unit detected as
+  seconds (the obvious reading of a 10-digit epoch — now noted only
+  when ms/µs/ns is detected) and, per value field, one grid point
+  clamped at the leading edge (inherent to an epoch-aligned grid,
+  which starts before the first observation). The clamp note now fires
+  only when a field's clamped points exceed that inherent edge, as one
+  line naming each such field with its count (DFC121 amended).
+- **Generated `join FILE` no longer crashes with a nil-pointer error when
+  the right-hand file cannot be opened.** The assembler rewrote every
+  right-source error block to `return nil`, handing the join a nil
+  sequence; it now panics with the open error, which the generated
+  main reports as `Error: opening nope.csv: … no such file` with exit 1.
+  Right-hand `.jsonl` files are read schema-aware (a `_schema` header
+  is not a record), matching union and merge.
+
 ## [4.91.0] - 2026-09-07
 
 ### Changed

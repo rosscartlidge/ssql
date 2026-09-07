@@ -91,8 +91,17 @@ func TestResampleGoldenHandComputed(t *testing.T) {
 			}
 		})
 	}
-	if !strings.Contains(warn.String(), "epoch unit auto-detected as s") {
-		t.Errorf("expected loud unit detection, warn=%q", warn.String())
+	// Seconds is the obvious reading of a 10-digit epoch: no note. The
+	// surprising detections (ms/µs/ns) are still announced.
+	if strings.Contains(warn.String(), "epoch unit auto-detected") {
+		t.Errorf("seconds detection should be silent, warn=%q", warn.String())
+	}
+	var msWarn bytes.Buffer
+	if _, err := newTSCodec(int64(1700000000000), ResampleConfig{}, &msWarn); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msWarn.String(), "epoch unit auto-detected as ms") {
+		t.Errorf("millisecond detection should be noted, warn=%q", msWarn.String())
 	}
 }
 
@@ -143,8 +152,24 @@ func TestResampleEdges(t *testing.T) {
 	if v := GetOr(single[0], "v", float64(-1)); v != 7 {
 		t.Errorf("single obs, linear: edge clamps to the observation, got %v", v)
 	}
-	if !strings.Contains(warn.String(), "clamped") {
-		t.Errorf("clamping must be loud, warn=%q", warn.String())
+	// One clamped point per grid edge is inherent to an epoch-aligned
+	// grid (the grid starts before the first observation), so it is not
+	// noted — the codelab's six-row example used to print three notes.
+	if strings.Contains(warn.String(), "clamped") {
+		t.Errorf("inherent edge clamp must be quiet, warn=%q", warn.String())
+	}
+	// Clamps beyond the edge mean the grid reaches where there is no
+	// data (-from here): that is worth one line, naming the field.
+	warn.Reset()
+	led := collectRS(t, rsRecords("ts", "v", [][2]int64{{100, 7}, {105, 8}}), ResampleConfig{
+		TimeField: "ts", Every: 10 * time.Second, Values: []string{"v"},
+		From: "50", Warn: &warn,
+	})
+	if len(led) < 6 {
+		t.Fatalf("-from 50: want >= 6 grid points, got %d", len(led))
+	}
+	if !strings.Contains(warn.String(), "clamped") || !strings.Contains(warn.String(), "v (") {
+		t.Errorf("clamps beyond the grid edge must be loud and name the field, warn=%q", warn.String())
 	}
 
 	warn.Reset()

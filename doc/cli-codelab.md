@@ -333,16 +333,20 @@ text. Nothing you do there is a separate feature — it is these commands.
 *Why:* sensor and log data arrive at irregular moments; charts and
 joins want a regular grid.
 
-`sensor.csv` has readings every 7–23 seconds. `resample` snaps them to a
-regular, epoch-aligned grid and fills the gaps (carry the previous value
-by default; `-fill linear` interpolates):
+`sensor.csv` has readings every 7–23 seconds. `resample` reads the
+series at regular, epoch-aligned ticks: each tick carries the value in
+effect there — the closest reading before it by default, or `-fill
+linear` to interpolate between neighbours. Readings that fall between
+ticks are not used; where the readings are sparser than the grid, the
+gaps are filled the same way:
 
 ```bash
 ssql from sensor.csv | ssql resample -time ts -every 30s -value temp -value rpm | ssql limit 6 | ssql to table
 ```
 
-Downsampling is a composition, not a second vocabulary: bucket the
-timestamp, then group:
+To keep every reading's contribution — an average or a maximum per
+minute — downsample instead. That is a composition, not a second
+vocabulary: bucket the timestamp, then group:
 
 ```bash
 ssql from sensor.csv | ssql update -set-expr minute 'bucket(ts, "1m")' | ssql group-by minute -avg temp avg_temp -max rpm max_rpm | ssql sort minute | ssql to table

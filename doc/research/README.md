@@ -117,7 +117,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC107 | 2026-08-16 | 2026-08-16 | [Explore on the Playground Engine (retire the TinyGo mini-engine)](./dfc107_explore_on_playground_engine.md) |
 | DFC108 | 2026-08-18 | 2026-08-18 | [Split Pipelines: Server Head, Browser Tail](./dfc108_split_pipelines_server_browser.md) |
 | DFC109 | 2026-08-18 | 2026-08-18 | [Record→Typed Re-entry: Typed Pipelines over SSH Sources](./dfc109_record_to_typed_reentry.md) |
-| DFC110 | 2026-08-21 | 2026-08-23 | [`ssql sample` — Seeded Random Row Sampling](./dfc110_sample_command.md) |
+| DFC110 | 2026-08-21 | 2026-09-07 | [`ssql sample` — Seeded Random Row Sampling](./dfc110_sample_command.md) |
 | DFC111 | 2026-08-23 | 2026-08-23 | [Sampling a 1.2GB CSV in 14 Milliseconds: A Case Study](./dfc111_sampling_case_study.md) |
 | DFC112 | 2026-08-23 | 2026-09-05 | [Cloud Data Strategy: Mounts, Serve-in-Region, and `from https://`](./dfc112_cloud_data_strategy.md) |
 | DFC113 | 2026-08-24 | 2026-08-26 | [The Scale Gate: Budget Assertions on Large Fixtures](./dfc113_scale_gate.md) |
@@ -128,7 +128,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC118 | 2026-08-27 | 2026-08-28 | [A Widget Query Builder Done Right: Spec-Driven and Bijective](./dfc118_bijective_query_builder.md) |
 | DFC119 | 2026-08-29 | 2026-08-31 | [The Display-Sink Protocol: Chart, Animate, and Every Visual After Them](./dfc119_display_sink_protocol.md) |
 | DFC120 | 2026-08-29 | 2026-08-30 | [Drift Is the Enemy: System-Design Principles from Building ssql](./dfc120_system_design_lessons.md) |
-| DFC121 | 2026-08-31 | 2026-09-01 | [`ssql resample`: Snapping Time Series to a Regular Grid](./dfc121_resample_command.md) |
+| DFC121 | 2026-08-31 | 2026-09-07 | [`ssql resample`: Snapping Time Series to a Regular Grid](./dfc121_resample_command.md) |
 | DFC122 | 2026-08-31 | 2026-09-03 | [Capability-Gap Survey: What Peer Tools Have That ssql Doesn't](./dfc122_capability_gap_survey.md) |
 | DFC123 | 2026-09-03 | 2026-09-03 | [The Pipeline IR: Finishing the Intermediate Representation We Already Have](./dfc123_pipeline_ir.md) |
 | DFC124 | 2026-09-03 | 2026-09-07 | [Missing Values Across the Lanes: An Empty Cell Is Absent](./dfc124_missing_values.md) |

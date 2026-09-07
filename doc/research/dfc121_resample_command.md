@@ -2,7 +2,7 @@
 
 Reference: DFC121
 Created: 2026-08-31
-Last modified: 2026-09-01
+Last modified: 2026-09-07
 
 [Back to Index](./README.md)
 
@@ -113,7 +113,15 @@ ssql resample -time ts -every 5m \
   from that record** and — because silent nulls burned us before —
   resample prints a one-line stderr note ("resample: 3 grid points
   before the first observation have no cpu value"). Records still
-  emit (grid completeness is the point).
+  emit (grid completeness is the point). *Amended 2026-09-07 (Ross,
+  running the codelab: "lots of resample output … seems a little
+  noisy"):* one clamped point per grid edge is inherent — an
+  epoch-aligned grid starts before the first observation — and is no
+  longer noted; the note fires only when a field's clamps exceed that
+  (previous/next: 1, linear: 2), as ONE line naming every such field
+  with its count. Likewise the epoch-unit note prints only when the
+  detected unit is not seconds — a 10-digit epoch being seconds is the
+  obvious reading; ms/µs/ns detection is still announced.
 - Empty input: zero records, no grid (a grid over nothing is
   invention).
 - Unsorted input: resample **materializes and sorts by the time
