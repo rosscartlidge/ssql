@@ -412,12 +412,15 @@ Charts are self-contained HTML files with Chart.js — interactive controls, tre
 ## 🚀 Quick Start
 
 ### Prerequisites
-- **Go 1.23+** required for iterator support
+- **Go 1.21+** to run `go install` — it downloads the Go 1.26 toolchain
+  ssql builds with automatically (about a minute, once)
 
 **Don't have Go installed?**
+- Debian/Ubuntu: `sudo apt-get install -y golang-go`
 - macOS: `brew install go`
-- Linux/Windows: [Download from go.dev](https://go.dev/dl/)
-- Verify: `go version` (should show 1.23+)
+- Windows and others: [Download from go.dev](https://go.dev/dl/)
+- No Go at all: prebuilt binaries on the [releases page](https://github.com/rosscartlidge/ssql/releases/latest)
+- Verify: `go version` (should show 1.21+)
 
 ### Installation
 
@@ -433,6 +436,10 @@ ssql version
 
 ```bash
 go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
+
+# go install writes to $HOME/go/bin, which is not on the PATH by default
+echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bashrc
+export PATH="$PATH:$HOME/go/bin"
 
 # Verify installation
 ssql version
@@ -615,6 +622,7 @@ func main() {
 
 ### 1. ⚡ **[CLI Codelab](doc/cli-codelab.md)** — start here
 *Ten minutes to useful, then the sophisticated features one at a time*
+- `go install …` then `ssql codelab` writes the sample data — no clone needed
 - Look at a file, answer questions about it, save and share the result
 - Tab / Ctrl-O / Alt-h discovery from the prompt (do it inside tmux)
 - Time series, `make it fast`, `generate go -run -pipeline`, distributed data

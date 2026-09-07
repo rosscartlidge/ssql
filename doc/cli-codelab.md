@@ -1,7 +1,8 @@
 # ssql CLI Codelab
 
 A guided path through `ssql`, the Unix-pipeline data tool. Every command
-below runs against the small files in `doc/codelab-data/` — and every
+below runs against a handful of small files that `ssql codelab` writes
+out for you (checked in as `doc/codelab-data/`) — and every
 block in this document *is* run, by `scripts/codelab-run.sh`, so what you
 read is what happens (DFC125).
 
@@ -32,30 +33,92 @@ inside tmux — the completion and help popups are half the experience.
 
 ## 1. Setup
 
-Install (Go 1.23+), fetch the codelab data, and step into it:
+**Install Go.** Any Go 1.21 or newer is enough to run `go install`: it
+reads the version ssql is built with from the module and downloads that
+toolchain by itself. On Debian or Ubuntu the distribution package is
+fine (Ubuntu 24.04 ships Go 1.22; the first `go install` then fetches
+Go 1.26 and takes about a minute):
 
 ```bash
-# codelab: skip — installation and clone (run once by hand)
+# codelab: skip — installation (run once by hand)
+sudo apt-get install -y golang-go
 go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
-git clone https://github.com/rosscartlidge/ssql.git
-cd ssql/doc/codelab-data
 ```
 
-Now the most important line in this tutorial. ssql is designed to be
-*discovered from the prompt*: Tab completes commands, flags, field names
-and even field values from your data; Ctrl-O completes fields across a
-whole pipeline; Alt-h explains whatever is under your cursor. Turn it on
-in the shell you're using:
+On macOS use `brew install go`; elsewhere download Go from
+<https://go.dev/dl/>. Prefer not to install Go at all? The
+[releases page](https://github.com/rosscartlidge/ssql/releases/latest)
+has a prebuilt `ssql` for Linux, macOS and Windows — unpack it and put
+the binary somewhere on your PATH.
+
+**Put `ssql` on your PATH.** `go install` writes the binary to
+`$HOME/go/bin` (`$(go env GOPATH)/bin` if you have changed GOPATH),
+which is not on the PATH by default. Add it once for future shells and
+once for this one, then check it answers:
 
 ```bash
-# codelab: skip — shell setup for your interactive session (add to ~/.bashrc)
+# codelab: skip — PATH setup (run once by hand)
+echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bashrc
+export PATH="$PATH:$HOME/go/bin"
+ssql version
+```
+
+**Write out the codelab data.** The sample files ship inside the
+binary — `ssql codelab` writes them to a directory (default
+`ssql-codelab`), so there is nothing to clone:
+
+```bash
+# codelab: skip — data directory (run once by hand)
+ssql codelab
+cd ssql-codelab
+```
+
+If you edit a file while experimenting and want the original back,
+`ssql codelab -force` rewrites the set.
+
+**Start tmux, in that directory.** ssql is designed to be *discovered
+from the prompt*:
+Tab completes commands, flags, field names and even field values from
+your data; Ctrl-O completes fields across a whole pipeline; Alt-h
+explains whatever is under your cursor. Inside tmux those answers open
+as small popups over your command line and vanish when you pick one;
+outside tmux they print inline below the prompt, which works but is
+noisier. tmux is a terminal multiplexer — a program that runs a shell
+inside your terminal window and can draw over it. Install it and start
+it (it needs to be 3.2 or newer for popups; Ubuntu 22.04 and later, and
+Debian 12 and later, qualify):
+
+```bash
+# codelab: skip — tmux (run once by hand)
+sudo apt-get install -y tmux      # macOS: brew install tmux
+tmux
+```
+
+Your prompt comes back with a green status bar along the bottom: you
+are now in a bash shell inside tmux, still in `ssql-codelab`, and
+everything that follows is typed there. When you are done for the day, type `exit` to leave tmux
+like any other shell.
+
+**Turn on completion in that shell.** This is the most important line
+in the tutorial. It works in bash (the default shell on Debian, Ubuntu
+and most Linux; if `echo $SHELL` says something else, run `bash` first):
+
+```bash
+# codelab: skip — shell setup for your interactive session
 eval "$(ssql -shell-init)"
 ```
 
-**Do this inside tmux.** In tmux the completions and help open as
-transient popups over your command line (`tmux display-popup`) and
-vanish when you pick; outside tmux they print inline below the prompt,
-which works but is noisier. Start `tmux`, run the `eval` line, and try:
+It applies to the shell you typed it in. To have it in every new shell,
+add it to your `~/.bashrc` once:
+
+```bash
+# codelab: skip — make the completion permanent (run once by hand)
+echo 'eval "$(ssql -shell-init)"' >> ~/.bashrc
+```
+
+**Try it.** Type each line up to the marked key and press that key
+(`<TAB>` is the Tab key; `<Alt-h>` is holding Alt while pressing h;
+the last two lines are typed without pressing Enter):
 
 ```
 ssql <TAB>                                 # every command
@@ -63,6 +126,11 @@ ssql from employees.csv | ssql where -if <TAB>      # the file's FIELD NAMES
 ssql from employees.csv | ssql where -if dept eq <TAB>   # its VALUES
 ssql from employees.csv | ssql group-by dept -sum salary<Alt-h>   # what is this flag?
 ```
+
+If Alt-h does nothing, your terminal is keeping Alt for itself: press
+Esc and then h instead, or on macOS enable "Use Option as Meta key" in
+the terminal's keyboard settings. Alt-H (capital) lists every key ssql
+binds.
 
 From here on, whenever a flag or field name is mentioned, remember you
 never have to type it from memory.

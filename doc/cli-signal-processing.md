@@ -29,7 +29,9 @@ and every block *is* run by `scripts/codelab-run.sh doc/cli-signal-processing.md
 
 ```bash
 # codelab: skip — installation (run once by hand)
-# Install ssql - works on any system
+# Install ssql - works on any system with Go 1.21+ (go install fetches
+# the toolchain ssql builds with); see the CLI codelab's Setup section
+# for installing Go and putting $HOME/go/bin on your PATH.
 go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 
 # Verify installation

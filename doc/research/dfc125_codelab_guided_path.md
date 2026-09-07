@@ -2,7 +2,7 @@
 
 Reference: DFC125
 Created: 2026-09-04
-Last modified: 2026-09-05
+Last modified: 2026-09-07
 
 [Back to Index](./README.md)
 
@@ -42,6 +42,12 @@ useful things easily before the sophisticated and optimising features.
    `sales_wide.csv`/`sheet.csv`/`app.log`/`sensor.csv`/`signal.csv`
    carry the unpivot, fill, extract, resample, and DSP sections). Every
    example runs against them, from the setup section's `cd`.
+   *Amended 2026-09-07:* the files are embedded in the binary
+   (`doc/codelab-data/embed.go`, package `codelabdata`) and written out
+   by `ssql codelab [DIR]` — the setup had asked readers to clone the
+   whole repository (gigabytes) for 44 KB of fixtures. The runner stages
+   its throwaway copy through the same command, so the gate covers the
+   setup step; `-force` is the only way an existing file is overwritten.
 2. **The codelab is gated.** `scripts/codelab-run.sh` extracts every
    ```` ```bash ```` block, runs it in the fixture directory with
    `set -o pipefail` against a freshly built binary, and fails on a

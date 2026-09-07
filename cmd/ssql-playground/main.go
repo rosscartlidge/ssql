@@ -195,6 +195,7 @@ func buildCommand() *cf.Command {
 		Done()
 
 	cmd = commands.RegisterVersion(cmd)
+	cmd = commands.RegisterCodelab(cmd)
 	cmd = commands.RegisterFunctions(cmd)
 	cmd = commands.RegisterConventions(cmd)
 	cmd = commands.RegisterFrom(cmd)

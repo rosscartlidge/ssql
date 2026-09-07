@@ -2,7 +2,10 @@
 
 The fixture files every example in `doc/cli-codelab.md` runs against —
 small enough to read, consistent enough that the whole tutorial works
-without ever leaving this directory:
+without ever leaving this directory. They are embedded in the `ssql`
+binary (`embed.go`): `ssql codelab [DIR]` writes them out, so a reader
+installs ssql and never clones the repository. `ssql codelab -force`
+restores them after editing.
 
 | file | what it is | used by |
 |---|---|---|
@@ -14,6 +17,6 @@ without ever leaving this directory:
 | `sensor.csv` | irregular timestamps, temp + rpm | resample, bucket, window |
 | `signal.csv` | 5 Hz + 20 Hz at 100 samples/s | fft, spectrogram |
 
-`scripts/codelab-run.sh` executes every bash block of the tutorial here
-(DFC125); if you change a file, the runner tells you which example
-broke.
+`scripts/codelab-run.sh` executes every bash block of the tutorial in a
+directory that `ssql codelab` writes (DFC125); if you change a file, the
+runner tells you which example broke.

@@ -5,6 +5,65 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Typed readers fail fast — no more silently wrong rows.** On a file
+  whose column samples as int and later holds `1.5`, the typed CSV
+  reader kept the row with the cell zeroed, the typed JSONL reader
+  dropped the row, and every typed reader turned a missing file into an
+  empty stream — all with exit status 0, while `ssql from csv` had
+  errored since v4.88.0. `typed.ReadCSV`, `ReadCSVParallel`,
+  `ReadDelim*` and `ReadJSONL*` now panic with a `*typed.ReadError`
+  naming the reader, file, row (CSV/TSV) or line (JSONL), column and
+  value; the `*Safe` readers yield it. Every fan-out consumer (`Serial`,
+  `SerialCount`, `GroupByParallel`, the per-shard sinks, top-k,
+  distinct, `Parallel`'s feeder) re-raises a shard's panic in the
+  caller's goroutine, so a generated program prints `Error: …` and exits
+  1 instead of dying with a goroutine trace. Decode errors now read
+  `column "v": "1.5" is not int64` in both readers. Library callers who
+  relied on the lenient behaviour should use the `*Safe` readers.
+- **TSV columns are typed like CSV columns.** `ssql.ReadTSV*` typed each
+  value on its own (a column could be int on one row and float on the
+  next, and an empty cell was `""`); it now shares the CSV reader's
+  sampled column typing, `*CellError` fail-fast contract and
+  absent-empties rule (DFC124). New: `ReadTSVWithConfig`,
+  `ReadTSVFromReaderWithConfig`, `DefaultTSVConfig`; `SampleTSVFile` and
+  `TailTSVFile` take an optional `CSVConfig`.
+
+### Added
+- **`ssql codelab [DIR]`** writes the CLI codelab's sample data (embedded
+  in the binary from `doc/codelab-data/`, 44 KB) into a directory, default
+  `ssql-codelab`; existing files are never overwritten without `-force`.
+  The tutorial's setup used to be "clone the repository" — gigabytes of
+  history and baked artifacts for ten small files. `scripts/codelab-run.sh`
+  now stages its throwaway copy through the same command, so the gate
+  proves the setup step too (DFC125). The setup section also gained real
+  install steps: the `apt-get` line, why any Go 1.21+ is enough (`go
+  install` fetches the Go 1.26 toolchain itself — verified on a stock
+  Ubuntu 24.04 Go 1.22), and the `$HOME/go/bin` PATH line that `go
+  install` never mentions.
+- **`-type FIELD TYPE` on `from tsv` and `from jsonl`** (and
+  `-default-type` on `from tsv`), the remedy the reader error names.
+  JSONL lines type themselves, so `-type` there is a strict per-record
+  coercion (`ssql.CoerceFieldTypes`, new): int↔float when exact, strings
+  parsed with the CSV cell rules, a fraction into int or a bool into a
+  number is a `*CellError`. Typed codegen honours `-type` /
+  `-default-type` for csv, tsv and jsonl (it refused them before, so the
+  exec error's advice had no typed form); the struct field takes the
+  named type. `-sample` and `-last` generated code now carry the
+  overrides (they dropped them silently).
+
+### Fixed
+- **`union -file X.jsonl` / `merge X.jsonl` generated code compiled for
+  the first time** with a regular (non-procsub) side file — union's
+  template referenced a `ctx` that does not exist in generated programs,
+  merge inlined the file read into a statement fragment the assembler
+  treats as a filter expression. Both read the side file schema-aware
+  now, so a tee'd file's `_schema` header is no longer a phantom record.
+- Generated struct comments say where the types came from and how to
+  override them; `TypeOverrides` render in sorted order (stable source).
+
 ## [4.90.0] - 2026-09-06
 
 ### Changed

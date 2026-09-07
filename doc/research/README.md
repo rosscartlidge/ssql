@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-09-05 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-09-07 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -131,8 +131,8 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC121 | 2026-08-31 | 2026-09-01 | [`ssql resample`: Snapping Time Series to a Regular Grid](./dfc121_resample_command.md) |
 | DFC122 | 2026-08-31 | 2026-09-03 | [Capability-Gap Survey: What Peer Tools Have That ssql Doesn't](./dfc122_capability_gap_survey.md) |
 | DFC123 | 2026-09-03 | 2026-09-03 | [The Pipeline IR: Finishing the Intermediate Representation We Already Have](./dfc123_pipeline_ir.md) |
-| DFC124 | 2026-09-03 | 2026-09-05 | [Missing Values Across the Lanes: An Empty Cell Is Absent](./dfc124_missing_values.md) |
-| DFC125 | 2026-09-04 | 2026-09-05 | [The Codelab as a Guided Path: Confidence Before Sophistication](./dfc125_codelab_guided_path.md) |
+| DFC124 | 2026-09-03 | 2026-09-07 | [Missing Values Across the Lanes: An Empty Cell Is Absent](./dfc124_missing_values.md) |
+| DFC125 | 2026-09-04 | 2026-09-07 | [The Codelab as a Guided Path: Confidence Before Sophistication](./dfc125_codelab_guided_path.md) |
 
 <!-- DFC-INDEX-END -->
 

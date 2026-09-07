@@ -9,7 +9,6 @@
 set -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DOC="$ROOT/doc/cli-codelab.md"
-DATA="$ROOT/doc/codelab-data"
 VERBOSE=
 for arg in "$@"; do
   case "$arg" in
@@ -26,7 +25,10 @@ export PATH="$BIN_DIR:$PATH"
 # Blocks run in a throwaway COPY of the fixtures: examples that write
 # files (to csv, tee, "create sample data") must never touch the
 # checked-in data — the first baseline run overwrote employees.csv.
-cp -r "$DATA"/. "$WORK"/
+# The copy is made the way a reader makes it — `ssql codelab DIR` writes
+# the fixtures embedded in the binary — so the runner also proves the
+# tutorial's own setup step.
+ssql codelab "$WORK" >/dev/null || { echo "codelab-run: ssql codelab failed"; exit 1; }
 # (HOME is left alone: blocks that run `go` need the real module cache,
 # and non-interactive bash -c never writes history or rc files anyway.)
 
