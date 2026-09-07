@@ -98,7 +98,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if inputFile == "" {
 				// No file — default to JSONL from stdin
-				return executeFromJSON("", generate)
+				return executeFromJSON("", defaultTypeArgs(), generate)
 			}
 
 			// Detect format from extension, delegate
@@ -118,11 +118,11 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			case "csv":
 				return executeFromCSV(inputFile, nil, "auto", generate)
 			case "tsv":
-				return executeFromTSV(inputFile, generate)
+				return executeFromTSV(inputFile, defaultTypeArgs(), generate)
 			case "lines":
 				return executeFromLines(inputFile, generate)
 			case "json", "jsonl":
-				return executeFromJSON(inputFile, generate)
+				return executeFromJSON(inputFile, defaultTypeArgs(), generate)
 			case "arrow":
 				return executeFromArrow(inputFile, generate)
 			case "parquet":
@@ -132,7 +132,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			case "xlsx":
 				return executeFromXLSX(inputFile, "", generate)
 			default:
-				return executeFromJSON(inputFile, generate)
+				return executeFromJSON(inputFile, defaultTypeArgs(), generate)
 			}
 		}).
 		Done()

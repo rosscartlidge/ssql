@@ -6,6 +6,7 @@ import (
 	"io"
 	"iter"
 	"os"
+	"sort"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -278,7 +279,8 @@ func executeFromCSVSample(inputFile string, typeOverrides map[string]string, def
 	}
 	resolvedSeed := resolveSampleSeed(seed, seedGiven, "-sample-seed")
 	if shouldGenerate(generate) {
-		return generateFromCSVSampleCode(inputFile, n, resolvedSeed)
+		return generateFromFileSampleCode("ssql.SampleCSVFile", "input CSV file", inputFile, n, resolvedSeed,
+			sourceCodegenExtras{configCode: generateCSVConfigCode(typeOverrides, defaultType)})
 	}
 	records, err := ssql.SampleCSVFile(inputFile, n, resolvedSeed, csvConfig)
 	if err != nil {
@@ -301,32 +303,86 @@ func executeFromCSVSample(inputFile string, typeOverrides map[string]string, def
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: csvHeaders})
 }
 
-// generateFromCSVSampleCode emits the record-mode init fragment for a
-// sampled read; the resolved seed is baked as an overridable param.
-// One form for all modes: a Record source works in typed pipelines
-// too (the planner's Phase B boundary), and a typed template for the
-// sampled source can come later if profiles ask for it.
-func generateFromCSVSampleCode(inputFile string, n int, seed int64) error {
-	return generateFromFileSampleCode("ssql.SampleCSVFile", "input CSV file", inputFile, n, seed)
+// sourceCodegenExtras carries a source stage's `-type` handling into
+// the shared record-mode init fragments: configCode declares
+// `csvConfig` (passed as a trailing argument to the reader) and
+// postCode follows the read (the JSONL coercion). Before v4.91.0 the
+// -sample and -last fragments dropped the overrides silently.
+type sourceCodegenExtras struct {
+	configCode string // e.g. generateCSVConfigCode(...); "" = none
+	postCode   string // e.g. coerceFieldTypesCode(...); "" = none
 }
 
-// generateFromFileSampleCode emits the init fragment for any
-// byte-offset file sampler (CSV/TSV/JSONL share the shape; only the
-// primitive differs).
-func generateFromFileSampleCode(fn, help, inputFile string, n int, seed int64) error {
+func (x sourceCodegenExtras) configArg() string {
+	if x.configCode == "" {
+		return ""
+	}
+	return ", csvConfig"
+}
+
+func (x sourceCodegenExtras) wrap(code string) string {
+	if x.configCode != "" {
+		code = x.configCode + "\n\t" + code
+	}
+	if x.postCode != "" {
+		code += "\n\t" + x.postCode
+	}
+	return code
+}
+
+// generateFromFileSampleCode emits the record-mode init fragment for
+// any byte-offset file sampler (CSV/TSV/JSONL share the shape; only
+// the primitive differs); the resolved seed is baked as an overridable
+// param. One form for all modes: a Record source works in typed
+// pipelines too (the planner's Phase B boundary).
+func generateFromFileSampleCode(fn, help, inputFile string, n int, seed int64, extras sourceCodegenExtras) error {
 	params := []lib.CodeParam{
 		{Name: "input", Default: inputFile, Help: help, VarName: "flagInput"},
 		{Name: "sample-n", Default: fmt.Sprintf("%d", n), Help: "rows to sample", VarName: "flagSampleN", Type: "int"},
 		{Name: "sample-seed", Default: fmt.Sprintf("%d", seed), Help: "sampling RNG seed", VarName: "flagSampleSeed", Type: "int"},
 	}
-	code := fmt.Sprintf(`records, err := %s(*flagInput, *flagSampleN, int64(*flagSampleSeed))
+	code := extras.wrap(fmt.Sprintf(`records, err := %s(*flagInput, *flagSampleN, int64(*flagSampleSeed)%s)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
 		os.Exit(1)
-	}`, fn)
+	}`, fn, extras.configArg()))
 	frag := lib.NewInitFragment("records", code, []string{"fmt", "os"}, getCommandString())
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
+}
+
+// typeOptionsFrom converts the `-type` / `-default-type` flag values
+// into the typed sampler's options.
+func typeOptionsFrom(typeOverrides map[string]string, defaultType string) lib.TypeOptions {
+	if defaultType == "auto" {
+		defaultType = ""
+	}
+	return lib.TypeOptions{Fields: typeOverrides, Default: defaultType}
+}
+
+// coerceFieldTypesCode renders the record-mode statement applying
+// `-type` overrides to a schemaless source (JSONL):
+// `records = ssql.CoerceFieldTypes(records, map[string]ssql.FieldType{…})`.
+// Empty when there are no overrides. Keys are sorted for stable output.
+func coerceFieldTypesCode(typeOverrides map[string]string) string {
+	if len(typeOverrides) == 0 {
+		return ""
+	}
+	fields := make([]string, 0, len(typeOverrides))
+	for f := range typeOverrides {
+		fields = append(fields, f)
+	}
+	sort.Strings(fields)
+	var b strings.Builder
+	b.WriteString("records = ssql.CoerceFieldTypes(records, map[string]ssql.FieldType{")
+	for i, f := range fields {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%q: ssql.FieldType%s", f, capitalizeFieldType(typeOverrides[f]))
+	}
+	b.WriteString("})")
+	return b.String()
 }
 
 // executeFromMultiCSV reads multiple CSV files and outputs merged JSONL.
@@ -473,15 +529,10 @@ func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, 
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'from' from stdin not supported in typed mode (need a file to sample for schema inference)"))
 	}
-	// User-supplied type overrides aren't honored in typed mode for v1
-	// — the inferred types from sampling are authoritative. "auto" is
-	// the flag's default value (no user override).
-	if len(typeOverrides) > 0 || (defaultType != "" && defaultType != "auto") {
-		return lib.WriteErrorAndExit(getCommandString(),
-			fmt.Errorf("ssql generate go -typed: -as / -default-type column overrides not supported in typed mode (schema is inferred from CSV samples)"))
-	}
-
-	schema, structDef, err := lib.SampleCSVSchema(filename, "", 0)
+	// `-type COL TYPE` / `-default-type` fix a column's Go type; the
+	// sample decides the rest. (Typed codegen refused overrides until
+	// v4.91.0 — the remedy the exec error names had no typed form.)
+	schema, structDef, err := lib.SampleCSVSchema(filename, "", 0, typeOptionsFrom(typeOverrides, defaultType))
 	if err != nil {
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: %w", err))
@@ -546,6 +597,13 @@ func generateFromMultiCSVCode(files []string, typeOverrides map[string]string, d
 
 // generateCSVConfigCode generates Go code for CSV config with type overrides
 func generateCSVConfigCode(typeOverrides map[string]string, defaultType string) string {
+	return generateDelimConfigCode(typeOverrides, defaultType, "','")
+}
+
+// generateDelimConfigCode is generateCSVConfigCode with the Delimiter
+// literal supplied — "','" for CSV, "0" (auto-detect from the header)
+// for TSV.
+func generateDelimConfigCode(typeOverrides map[string]string, defaultType string, delimLiteral string) string {
 	// No config needed if using defaults
 	if len(typeOverrides) == 0 && (defaultType == "" || defaultType == "auto") {
 		return ""
@@ -554,7 +612,7 @@ func generateCSVConfigCode(typeOverrides map[string]string, defaultType string) 
 	var parts []string
 	parts = append(parts, "csvConfig := ssql.CSVConfig{")
 	parts = append(parts, "\t\tHasHeaders: true,")
-	parts = append(parts, "\t\tDelimiter:  ',',")
+	parts = append(parts, fmt.Sprintf("\t\tDelimiter:  %s,", delimLiteral))
 	parts = append(parts, "\t\tComment:    '#',")
 
 	// Default type
@@ -564,9 +622,14 @@ func generateCSVConfigCode(typeOverrides map[string]string, defaultType string) 
 
 	// Type overrides
 	if len(typeOverrides) > 0 {
+		fields := make([]string, 0, len(typeOverrides))
+		for f := range typeOverrides {
+			fields = append(fields, f)
+		}
+		sort.Strings(fields) // stable generated source
 		parts = append(parts, "\t\tTypeOverrides: map[string]ssql.FieldType{")
-		for field, typeName := range typeOverrides {
-			parts = append(parts, fmt.Sprintf("\t\t\t%q: ssql.FieldType%s,", field, capitalizeFieldType(typeName)))
+		for _, field := range fields {
+			parts = append(parts, fmt.Sprintf("\t\t\t%q: ssql.FieldType%s,", field, capitalizeFieldType(typeOverrides[field])))
 		}
 		parts = append(parts, "\t\t},")
 	}
@@ -600,7 +663,8 @@ func executeFromCSVLast(inputFile string, typeOverrides map[string]string, defau
 		return err
 	}
 	if shouldGenerate(generate) {
-		return generateFromFileLastCode("ssql.TailCSVFile", "input CSV file", inputFile, n)
+		return generateFromFileLastCode("ssql.TailCSVFile", "input CSV file", inputFile, n,
+			sourceCodegenExtras{configCode: generateCSVConfigCode(typeOverrides, defaultType)})
 	}
 	records, err := ssql.TailCSVFile(inputFile, n, csvConfig)
 	if err != nil {
@@ -619,15 +683,15 @@ func executeFromCSVLast(inputFile string, typeOverrides map[string]string, defau
 // seek-based tail (CSV/TSV/JSONL share the shape; only the primitive
 // differs). One form for all modes — a Record source works in typed
 // pipelines through the planner boundary, exactly like -sample.
-func generateFromFileLastCode(fn, help, inputFile string, n int) error {
+func generateFromFileLastCode(fn, help, inputFile string, n int, extras sourceCodegenExtras) error {
 	params := []lib.CodeParam{
 		{Name: "input", Default: inputFile, Help: help, VarName: "flagInput"},
 		{Name: "last-n", Default: fmt.Sprintf("%d", n), Help: "rows to keep from the end of the file", VarName: "flagLastN", Type: "int"},
 	}
-	code := fmt.Sprintf(`records, err := %s(*flagInput, *flagLastN)
+	code := extras.wrap(fmt.Sprintf(`records, err := %s(*flagInput, *flagLastN%s)
 	if err != nil {
 		return fmt.Errorf("reading tail: %%w", err)
-	}`, fn)
+	}`, fn, extras.configArg()))
 	frag := lib.NewInitFragment("records", code, []string{"fmt"}, getCommandString())
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)

@@ -135,10 +135,13 @@ JSONL "_schema" header
 canonical numeric types
   Scalars are int64 and float64 (never int/int32/float32). CSV auto-parsing
   produces int64 / float64; use int64(0) / float64(0) as GetOr defaults.
-  A CSV column's type is inferred from the first 1000 rows (the narrowest
-  of int, float, bool, string that every non-empty value fits); a later
-  cell that does not fit is an ERROR naming the row and column — never a
-  silent 0. Override with: from csv FILE -type COLUMN TYPE.
+  A CSV or TSV column's type is inferred from the first 1000 rows (the
+  narrowest of int, float, bool, string that every non-empty value fits);
+  a later cell that does not fit is an ERROR naming the row and column —
+  never a silent 0 — in exec AND in generated code (typed readers fail
+  the same way). Override with: from csv|tsv FILE -type COLUMN TYPE.
+  JSONL lines type themselves; a column that is int on one line and float
+  on another is fixed with: from jsonl FILE -type FIELD TYPE.
 
 field ordering
   Record mode emits fields alphabetically; typed mode (generate go) keeps the

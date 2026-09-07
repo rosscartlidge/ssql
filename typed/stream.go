@@ -3,15 +3,16 @@ package typed
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
+	"fmt"
 	"io"
 	"iter"
 	"os"
 	"runtime"
-
-	"github.com/rosscartlidge/ssql/v4/internal/mmap"
-	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/rosscartlidge/ssql/v4/internal/mmap"
 )
 
 // Stream is the PoC type for the typed concurrency proposal — a
@@ -56,12 +57,16 @@ func Parallel[T any](in iter.Seq[T], n int) Stream[T] {
 	}
 
 	work := make(chan T, n*64)
-	go func() {
+	// The feeder runs the source; a fail-fast reader panic there must
+	// reach the consumer, so it is captured and re-raised by every
+	// shard once the channel drains.
+	var feeder shardGroup
+	feeder.Go(func() {
+		defer close(work)
 		for v := range in {
 			work <- v
 		}
-		close(work)
-	}()
+	})
 
 	shards := make([]iter.Seq[T], n)
 	for i := 0; i < n; i++ {
@@ -71,6 +76,7 @@ func Parallel[T any](in iter.Seq[T], n int) Stream[T] {
 					return
 				}
 			}
+			feeder.rethrow()
 		}
 	}
 	return Stream[T]{shards: shards, n: n}
@@ -87,19 +93,17 @@ func Parallel[T any](in iter.Seq[T], n int) Stream[T] {
 func (s Stream[T]) Serial() iter.Seq[T] {
 	return func(yield func(T) bool) {
 		out := make(chan T, s.n*64)
-		var wg sync.WaitGroup
-		wg.Add(len(s.shards))
+		var g shardGroup
 		for _, shard := range s.shards {
 			shard := shard
-			go func() {
-				defer wg.Done()
+			g.Go(func() {
 				for v := range shard {
 					out <- v
 				}
-			}()
+			})
 		}
 		go func() {
-			wg.Wait()
+			g.waitQuiet()
 			close(out)
 		}()
 		for v := range out {
@@ -113,6 +117,9 @@ func (s Stream[T]) Serial() iter.Seq[T] {
 				return
 			}
 		}
+		// Every shard has finished (out is closed): surface a reader's
+		// fail-fast panic here, in the consumer's goroutine.
+		g.rethrow()
 	}
 }
 
@@ -195,20 +202,18 @@ func ParallelFromSlice[T any](data []T, n int) Stream[T] {
 // benchmarks and aggregations.
 func (s Stream[T]) SerialCount() int64 {
 	var total int64
-	var wg sync.WaitGroup
-	wg.Add(len(s.shards))
+	var g shardGroup
 	for _, shard := range s.shards {
 		shard := shard
-		go func() {
-			defer wg.Done()
+		g.Go(func() {
 			var local int64
 			for range shard {
 				local++
 			}
 			atomic.AddInt64(&total, local)
-		}()
+		})
 	}
-	wg.Wait()
+	g.Wait()
 	return total
 }
 
@@ -260,12 +265,10 @@ func (s Stream[T]) WriteCSVToWriter(w io.Writer) error {
 	// Each shard formats into its own buffer in parallel.
 	buffers := make([]*bytes.Buffer, len(s.shards))
 	errs := make([]error, len(s.shards))
-	var wg sync.WaitGroup
-	wg.Add(len(s.shards))
+	var g shardGroup
 	for i, shard := range s.shards {
 		i, shard := i, shard
-		go func() {
-			defer wg.Done()
+		g.Go(func() {
 			buf := &bytes.Buffer{}
 			buffers[i] = buf
 			scw := csv.NewWriter(buf)
@@ -284,9 +287,9 @@ func (s Stream[T]) WriteCSVToWriter(w io.Writer) error {
 			if err := scw.Error(); err != nil {
 				errs[i] = err
 			}
-		}()
+		})
 	}
-	wg.Wait()
+	g.Wait()
 
 	// Sequential dump in shard order.
 	for i, buf := range buffers {
@@ -341,12 +344,10 @@ func GroupByParallel[T, S, O any, K comparable](
 
 	partials := make([]map[K]ParallelAggregator[T, S], nShards)
 	keysPerShard := make([][]K, nShards)
-	var wg sync.WaitGroup
-	wg.Add(nShards)
+	var g shardGroup
 	for i, shard := range in.shards {
 		i, shard := i, shard
-		go func() {
-			defer wg.Done()
+		g.Go(func() {
 			m := make(map[K]ParallelAggregator[T, S])
 			var keys []K
 			for v := range shard {
@@ -361,9 +362,9 @@ func GroupByParallel[T, S, O any, K comparable](
 			}
 			partials[i] = m
 			keysPerShard[i] = keys
-		}()
+		})
 	}
-	wg.Wait()
+	g.Wait()
 
 	final := make(map[K]ParallelAggregator[T, S])
 	var orderedKeys []K
@@ -456,9 +457,10 @@ func ReadCSVParallel[T any](filename string, n int) Stream[T] {
 	// shard closure holds the *Mapped reachable while it reads. NB
 	// ReadDelimParallel must NOT do this — its splitLineAlias strings
 	// alias the buffer, which the GC cannot see into a mapping.
+	const op = "typed.ReadCSVParallel"
 	m, err := mmap.Map(filename)
 	if err != nil {
-		return Stream[T]{shards: nil, n: 0}
+		failRead(op, filename, err)
 	}
 	data := m.Data
 	if len(data) == 0 {
@@ -486,11 +488,11 @@ func ReadCSVParallel[T any](filename string, n int) Stream[T] {
 	hr := csv.NewReader(bytes.NewReader(data[:headerEnd]))
 	header, err := hr.Read()
 	if err != nil {
-		return Stream[T]{shards: nil, n: 0}
+		failRead(op, filename, fmt.Errorf("read header: %w", err))
 	}
 	schema, err := buildReadSchema[T](header, false)
 	if err != nil {
-		return Stream[T]{shards: nil, n: 0}
+		failRead(op, filename, err)
 	}
 
 	// Determine number of data lines. Lines are bounded by newlines;
@@ -537,19 +539,27 @@ func ReadCSVParallel[T any](filename string, n int) Stream[T] {
 		}
 		chunk := data[startByte:endByte]
 
+		firstRow := int64(startLine) + 1 // 1-based data row of this shard's first line
 		shards[i] = func(yield func(T) bool) {
 			// chunk points into mmap'd memory the GC cannot trace — the
 			// KeepAlive pins the mapping until this shard finishes.
 			defer runtime.KeepAlive(m)
 			cr := csv.NewReader(bytes.NewReader(chunk))
 			cr.ReuseRecord = true
+			rowN := firstRow - 1
 			for {
 				rec, err := cr.Read()
 				if err != nil {
-					return
+					if errors.Is(err, io.EOF) {
+						return
+					}
+					failRow(op, filename, rowN+1, err)
 				}
+				rowN++
 				var row T
-				_ = schema.decode(unsafe.Pointer(&row), rec)
+				if err := schema.decode(unsafe.Pointer(&row), rec); err != nil {
+					failRow(op, filename, rowN, err)
+				}
 				if !yield(row) {
 					return
 				}

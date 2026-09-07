@@ -175,7 +175,22 @@ func readCSVRows(reader io.Reader, cfg CSVConfig, yield func(Record, error) bool
 	csvReader := csv.NewReader(bufio.NewReader(reader))
 	csvReader.Comma = cfg.Delimiter
 	csvReader.Comment = cfg.Comment
+	readRows(csvReader, cfg, yield)
+}
 
+// rowReader is the row source readRows types and parses: encoding/csv's
+// Reader, or the delimited-text splitter behind ReadTSV. Read returns
+// io.EOF at the end; a returned slice may be reused by the next Read
+// (readRows clones what it retains for the inference sample).
+type rowReader interface {
+	Read() ([]string, error)
+}
+
+// readRows is the ONE implementation of column typing for row-shaped
+// text input — CSV and TSV share it, so the two formats cannot drift
+// (TSV typed each value on its own until v4.91.0: a column of ints with
+// one "1.5" came out mixed, and an empty cell was "" rather than absent).
+func readRows(csvReader rowReader, cfg CSVConfig, yield func(Record, error) bool) {
 	var headers []string
 	if cfg.HasHeaders {
 		headerRow, err := csvReader.Read()
@@ -210,7 +225,7 @@ func readCSVRows(reader io.Reader, cfg CSVConfig, yield func(Record, error) bool
 			}
 			continue
 		}
-		sample = append(sample, row)
+		sample = append(sample, slices.Clone(row))
 	}
 	if len(sample) == 0 {
 		return

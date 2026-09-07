@@ -127,13 +127,18 @@ func TailCSVFile(filename string, n int, config ...CSVConfig) (iter.Seq[Record],
 
 // TailTSVFile is TailCSVFile for TSV (delimiter auto-detected from the
 // header, as every TSV path does).
-func TailTSVFile(filename string, n int) (iter.Seq[Record], error) {
+func TailTSVFile(filename string, n int, config ...CSVConfig) (iter.Seq[Record], error) {
+	cfg := DefaultTSVConfig()
+	if len(config) > 0 {
+		cfg = config[0]
+	}
+	readTSV := func(r io.Reader) iter.Seq[Record] { return ReadTSVFromReaderWithConfig(r, cfg) }
 	if IsHTTPURL(filename) {
 		body, err := OpenHTTPStream(filename)
 		if err != nil {
 			return nil, err
 		}
-		return tailStream(body, n, ReadTSVFromReader), nil
+		return tailStream(body, n, readTSV), nil
 	}
 	f, size, header, dataStart, err := openForTail(filename, true)
 	if err != nil {
@@ -151,7 +156,7 @@ func TailTSVFile(filename string, n int) (iter.Seq[Record], error) {
 		buf.Write(l)
 		buf.WriteByte('\n')
 	}
-	return ReadTSVFromReader(&buf), nil
+	return readTSV(&buf), nil
 }
 
 // TailJSONLFile returns the last n records of a JSONL file (each line

@@ -56,40 +56,6 @@ func TestCSVLateMismatchIsLoudInExec(t *testing.T) {
 func TestCSVLateMismatchIsLoudInGeneratedRecordCode(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)
 	csv := lateFloatCSV(t)
-
-	gen := exec.Command("bash", "-c", "export SSQL_MODE=record && "+bin+" from csv "+csv+" | "+bin+" count | "+bin+" generate go")
-	src, err := gen.CombinedOutput()
-	if err != nil {
-		t.Fatalf("generate go: %v\n%s", err, src)
-	}
-
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), src, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	repo, _ := filepath.Abs("../..")
-	mod := "module latetest\n\ngo 1.24\n\nrequire github.com/rosscartlidge/ssql/v4 v4.0.0\n\nreplace github.com/rosscartlidge/ssql/v4 => " + repo + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"mod", "tidy"}, {"build", "-o", "prog", "."}} {
-		c := exec.Command("go", args...)
-		c.Dir = dir
-		if out, err := c.CombinedOutput(); err != nil {
-			t.Fatalf("go %v: %v\n%s\n--- source:\n%s", args, err, out, src)
-		}
-	}
-	run := exec.Command(filepath.Join(dir, "prog"))
-	run.Dir = dir
-	out, err := run.CombinedOutput()
-	if err == nil {
-		t.Fatalf("generated program exited 0 on the late float:\n%s", out)
-	}
-	s := string(out)
-	if !strings.Contains(s, "Error:") || !strings.Contains(s, `row 1002, column "v"`) {
-		t.Errorf("generated program should report the cell as an Error, got:\n%s", s)
-	}
-	if strings.Contains(s, "goroutine ") {
-		t.Errorf("generated program printed a stack trace instead of an error:\n%s", s)
-	}
+	out, err := runGeneratedPipeline(t, bin, filepath.Dir(csv), "record", bin+" from csv "+csv+" | "+bin+" count")
+	assertLoudFailure(t, "record csv", out, err, `row 1002, column "v"`)
 }

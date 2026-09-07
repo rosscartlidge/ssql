@@ -51,7 +51,9 @@
 ## Installation & Setup
 
 ### Requirements
-- **Go 1.23+** (required for iterator support)
+- **Go 1.26** is what the module builds with (`go.mod`); any installed
+  Go 1.21+ downloads that toolchain automatically the first time you
+  build, so the distribution's package is enough to start.
 
 ### Step 1: Install Go
 
@@ -62,12 +64,19 @@ If you don't have Go installed:
 brew install go
 ```
 
-**Linux:**
+**Debian / Ubuntu:**
 ```bash
-# Download and install Go 1.23+
-wget https://go.dev/dl/go1.23.0.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.23.0.linux-amd64.tar.gz
-export PATH=$PATH:/usr/local/go/bin
+sudo apt-get install -y golang-go
+```
+
+**Other Linux:** download the tarball from [https://go.dev/dl/](https://go.dev/dl/)
+and follow the instructions there (unpack to `/usr/local`, add
+`/usr/local/go/bin` to your PATH).
+
+Binaries built with `go install` land in `$HOME/go/bin`
+(`$(go env GOPATH)/bin`); add that to your PATH as well:
+```bash
+echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bashrc
 ```
 
 **Windows:**
@@ -1573,6 +1582,40 @@ for record, err := range data {
 func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Record, error]
 ```
 Error-aware version of ReadCSVFromReader.
+
+#### ReadTSV / ReadTSVWithConfig / ReadTSVFromReader / ReadTSVFromReaderWithConfig
+```go
+func ReadTSV(filename string) (iter.Seq[Record], error)
+func ReadTSVWithConfig(filename string, cfg CSVConfig) (iter.Seq[Record], error)
+func ReadTSVFromReader(r io.Reader) iter.Seq[Record]
+func ReadTSVFromReaderWithSeparator(r io.Reader, sep rune) iter.Seq[Record]
+func ReadTSVFromReaderWithConfig(r io.Reader, cfg CSVConfig) iter.Seq[Record]
+func DefaultTSVConfig() CSVConfig
+```
+Delimited text without quoting rules (a field is everything between separators).
+The separator is auto-detected from the header line (`CSVConfig.Delimiter` 0,
+the `DefaultTSVConfig()` value; the first non-identifier rune, default tab).
+**Column typing is the CSV reader's** (since v4.91.0 the two share one
+implementation): `TypeOverrides` / `DefaultType` when set, else inferred from the
+first `InferRows` data rows; a later cell that does not fit its column is a
+`*CellError` and the reader panics with it (fail-fast contract, as `ReadCSV`);
+empty numeric/bool cells are absent. Before v4.91.0 TSV typed each value on
+its own, so a column could be int on one row and float on the next.
+
+#### CoerceFieldTypes
+```go
+func CoerceFieldTypes(records iter.Seq[Record], types map[string]FieldType) iter.Seq[Record]
+```
+Converts the named fields of every record to the given types — the `-type FIELD
+TYPE` override for inputs that carry no column typing of their own (JSONL, where
+each line types itself). Conversions are strict, as the CSV reader's: `int64 →
+float64` and a whole `float64 → int64` are exact; a string parses with the CSV
+cell rules (an empty string makes the field absent); anything → string formats
+the value; a fraction into int, a number into bool, a bool into a number, or an
+unparsable string is a `*CellError` (Row = 1-based record index, `Sampled` 0 =
+explicit type) and the sequence panics with it. Absent fields stay absent.
+`ssql from jsonl FILE -type v float` runs this in exec and emits it in generated
+record code; typed code fixes the struct field instead.
 
 #### WriteCSV
 ```go

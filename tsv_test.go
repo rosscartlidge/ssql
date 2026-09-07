@@ -2,6 +2,7 @@ package ssql
 
 import (
 	"bytes"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -224,5 +225,71 @@ func TestTSVRoundTrip(t *testing.T) {
 		if origActive != rtActive {
 			t.Errorf("record %d: active mismatch: %v != %v", i, origActive, rtActive)
 		}
+	}
+}
+
+// Column typing (v4.91.0): TSV shares the CSV reader's sampled column
+// types — it typed each value on its own before, so an int column with
+// one "1.5" came out mixed and an empty cell was "".
+func TestReadTSVColumnTypingIsLoud(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("id\tv\n")
+	for i := 1; i <= 1001; i++ {
+		fmt.Fprintf(&b, "%d\t%d\n", i, i)
+	}
+	b.WriteString("1002\t1.5\n")
+	src := b.String()
+
+	var rows int
+	func() {
+		defer func() {
+			r := recover()
+			ce, ok := r.(*CellError)
+			if !ok {
+				t.Fatalf("expected *CellError panic, got %v", r)
+			}
+			if ce.Row != 1002 || ce.Column != "v" || ce.Value != "1.5" || ce.Type != FieldTypeInt || ce.Sampled != 1000 {
+				t.Errorf("CellError = %+v", ce)
+			}
+		}()
+		for range ReadTSVFromReader(strings.NewReader(src)) {
+			rows++
+		}
+	}()
+	if rows != 1001 {
+		t.Errorf("rows before the bad cell = %d, want 1001", rows)
+	}
+
+	// The override the error names reads the file cleanly, as float.
+	cfg := DefaultTSVConfig()
+	cfg.TypeOverrides = map[string]FieldType{"v": FieldTypeFloat}
+	var sum float64
+	rows = 0
+	for r := range ReadTSVFromReaderWithConfig(strings.NewReader(src), cfg) {
+		rows++
+		sum += GetOr(r, "v", float64(0))
+	}
+	if rows != 1002 || sum != 501502.5 {
+		t.Errorf("with -type v float: rows=%d sum=%v", rows, sum)
+	}
+}
+
+func TestReadTSVEmptyNumericCellIsAbsent(t *testing.T) {
+	records := slices.Collect(ReadTSVFromReader(strings.NewReader("name\tage\nAlice\t30\nBob\t\n")))
+	if len(records) != 2 {
+		t.Fatalf("rows = %d", len(records))
+	}
+	if _, ok := Get[any](records[1], "age"); ok {
+		t.Errorf("empty numeric cell should be absent (DFC124), got %v", records[1])
+	}
+	if GetOr(records[0], "age", int64(0)) != 30 {
+		t.Errorf("age typed int64: %v", records[0])
+	}
+}
+
+func TestReadTSVSkipsBlankLines(t *testing.T) {
+	records := slices.Collect(ReadTSVFromReader(strings.NewReader("a|b\n1|x\n\n2|y\n")))
+	if len(records) != 2 {
+		t.Errorf("rows = %d, want 2 (blank line skipped, pipe auto-detected)", len(records))
 	}
 }

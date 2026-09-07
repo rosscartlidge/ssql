@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 	"unsafe"
 
@@ -975,12 +974,10 @@ func (s Stream[T]) WriteParquetToWriter(w io.Writer, opts ...ParquetWriteOption)
 	// Each shard builds its own arrow.Record (one row group worth).
 	records := make([]arrow.Record, len(s.shards))
 	errs := make([]error, len(s.shards))
-	var wg sync.WaitGroup
-	wg.Add(len(s.shards))
+	var g shardGroup
 	for i, shard := range s.shards {
 		i, shard := i, shard
-		go func() {
-			defer wg.Done()
+		g.Go(func() {
 			builders := make([]array.Builder, len(plan.encoders))
 			for j, f := range plan.schema.Fields() {
 				builders[j] = array.NewBuilder(mem, f.Type)
@@ -1006,9 +1003,9 @@ func (s Stream[T]) WriteParquetToWriter(w io.Writer, opts ...ParquetWriteOption)
 			for _, c := range cols {
 				c.Release()
 			}
-		}()
+		})
 	}
-	wg.Wait()
+	g.Wait()
 
 	for _, e := range errs {
 		if e != nil {

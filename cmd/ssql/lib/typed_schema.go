@@ -31,8 +31,46 @@ import (
 // The returned struct definition uses ssql:"colname" tags so the typed
 // runtime maps CSV columns case-insensitively even when the CSV header
 // uses snake_case.
-func SampleCSVSchema(filename, typeName string, maxRows int) (*TypedSchema, string, error) {
-	return sampleDelimitedSchema(filename, typeName, maxRows, ',')
+func SampleCSVSchema(filename, typeName string, maxRows int, opts ...TypeOptions) (*TypedSchema, string, error) {
+	return sampleDelimitedSchema(filename, typeName, maxRows, ',', firstTypeOptions(opts))
+}
+
+// TypeOptions carries the user's `-type FIELD TYPE` / `-default-type`
+// overrides into typed schema sampling: an overridden column takes the
+// named type (string, int, float, bool; "auto" = infer) instead of the
+// sampled one. Before v4.91.0 typed codegen REFUSED overrides, so the
+// remedy the exec error names ("override with -type v float") had no
+// typed form.
+type TypeOptions struct {
+	Fields  map[string]string // column → type name
+	Default string            // type for every column without an override ("" / "auto" = infer)
+}
+
+func firstTypeOptions(opts []TypeOptions) TypeOptions {
+	if len(opts) > 0 {
+		return opts[0]
+	}
+	return TypeOptions{}
+}
+
+// goTypeFor maps a `-type` name to the Go field type; ok is false for
+// "auto" (or unknown), meaning "infer".
+func (o TypeOptions) goTypeFor(column string) (string, bool) {
+	name, ok := o.Fields[column]
+	if !ok {
+		name = o.Default
+	}
+	switch strings.ToLower(name) {
+	case "string":
+		return "string", true
+	case "int":
+		return "int64", true
+	case "float":
+		return "float64", true
+	case "bool":
+		return "bool", true
+	}
+	return "", false
 }
 
 // SampleTSVSchema is the [SampleCSVSchema] variant for TSV files. It
@@ -41,12 +79,12 @@ func SampleCSVSchema(filename, typeName string, maxRows int) (*TypedSchema, stri
 // delimiter. Returns the inferred schema, the rendered struct
 // definition, and the detected delimiter byte (so the caller can
 // emit `typed.WithDelim(...)` if it's non-tab).
-func SampleTSVSchema(filename, typeName string, maxRows int) (*TypedSchema, string, byte, error) {
+func SampleTSVSchema(filename, typeName string, maxRows int, opts ...TypeOptions) (*TypedSchema, string, byte, error) {
 	delim, err := detectTSVDelim(filename)
 	if err != nil {
 		return nil, "", 0, err
 	}
-	schema, def, err := sampleDelimitedSchema(filename, typeName, maxRows, rune(delim))
+	schema, def, err := sampleDelimitedSchema(filename, typeName, maxRows, rune(delim), firstTypeOptions(opts))
 	return schema, def, delim, err
 }
 
@@ -94,7 +132,7 @@ func isIdentByte(c byte, first bool) bool {
 // sampleDelimitedSchema is the shared body of [SampleCSVSchema] and
 // [SampleTSVSchema]. delim is passed through to encoding/csv's
 // Comma field (which natively supports any single-rune delimiter).
-func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune) (*TypedSchema, string, error) {
+func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune, opts TypeOptions) (*TypedSchema, string, error) {
 	if maxRows <= 0 {
 		maxRows = 1000
 	}
@@ -148,10 +186,14 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune) (
 		} else {
 			usedNames[gn] = 1
 		}
+		goType := cols[i].resolve()
+		if t, ok := opts.goTypeFor(name); ok {
+			goType = t
+		}
 		fields[i] = TypedSchemaField{
 			Name:   name,
 			GoName: gn,
-			GoType: cols[i].resolve(),
+			GoType: goType,
 		}
 	}
 
@@ -163,7 +205,10 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune) (
 // the given TypedSchema. Field tags use ssql:"colname".
 func RenderStructDef(s *TypedSchema) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "// %s is the row type inferred from the CSV header.\n", s.TypeName)
+	fmt.Fprintf(&b, "// %s is the row type inferred from the input's header and a sample of its rows.\n", s.TypeName)
+	b.WriteString("// A value that does not fit a field's type is a fatal typed.ReadError naming the\n")
+	b.WriteString("// row: fix the data, or set the column type with `-type COL TYPE` on the from stage\n")
+	b.WriteString("// and regenerate.\n")
 	fmt.Fprintf(&b, "type %s struct {\n", s.TypeName)
 	maxName := 0
 	maxType := 0

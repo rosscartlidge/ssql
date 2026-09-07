@@ -184,7 +184,8 @@ func BenchmarkReadJSONLEncodingJSON(b *testing.B) {
 
 // ReadJSONLParallel yields the same rows as the serial reader (as a
 // multiset), skips the `_schema` header and blank lines, handles an
-// unterminated last line and n larger than the line count.
+// unterminated last line and n larger than the line count. (A
+// malformed line is fatal in both — TestReadJSONLLateMismatchFailsLoud.)
 func TestReadJSONLParallelMatchesSerial(t *testing.T) {
 	dir := t.TempDir()
 	var sb strings.Builder
@@ -195,7 +196,6 @@ func TestReadJSONLParallelMatchesSerial(t *testing.T) {
 			sb.WriteString("\n") // blank line
 		}
 	}
-	sb.WriteString("{not json}\n")
 	sb.WriteString("{\"name\":\"last\",\"age\":1}") // unterminated
 	path := dir + "/p.jsonl"
 	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
@@ -223,8 +223,5 @@ func TestReadJSONLParallelMatchesSerial(t *testing.T) {
 		if n <= 1002 && st.Shards() != n {
 			t.Errorf("n=%d: shards=%d", n, st.Shards())
 		}
-	}
-	if st := ReadJSONLParallel[fastRow](dir+"/missing.jsonl", 4); st.Shards() != 0 {
-		t.Errorf("missing file should yield an empty stream")
 	}
 }

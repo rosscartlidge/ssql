@@ -3,7 +3,6 @@ package typed
 import (
 	"container/heap"
 	"iter"
-	"sync"
 )
 
 // Top-k selection for the typed pipeline. The serial forms (TopBy /
@@ -181,20 +180,18 @@ func topkStreamReduce[T any, K Ordered](
 		return nil
 	}
 	partials := make([][]topkEntry[T, K], nShards)
-	var wg sync.WaitGroup
-	wg.Add(nShards)
+	var g shardGroup
 	for i, shard := range in.shards {
 		i, shard := i, shard
-		go func() {
-			defer wg.Done()
+		g.Go(func() {
 			partials[i] = selectN(n, func(emit func(topkEntry[T, K])) {
 				for v := range shard {
 					emit(topkEntry[T, K]{item: v, key: keyFn(v)})
 				}
 			})
-		}()
+		})
 	}
-	wg.Wait()
+	g.Wait()
 	return selectN(n, func(emit func(topkEntry[T, K])) {
 		for _, p := range partials {
 			for _, e := range p {

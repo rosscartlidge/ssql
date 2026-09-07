@@ -9,7 +9,6 @@ import (
 	"iter"
 	"os"
 	"runtime"
-	"sync"
 	"unsafe"
 )
 
@@ -119,14 +118,19 @@ func bytesAsString(b []byte) string {
 // Reflection happens once at file-open time (to build the read schema
 // from the header). The per-row path uses precomputed offset writers
 // only — no reflection per row.
+//
+// Like [ReadCSV] it fails fast: an unreadable file, a header that does
+// not fit T (under [DelimStrict]), or a cell that does not parse as its
+// field's type panics with a *[ReadError]; [ReadDelimSafe] yields those
+// as errors instead.
 func ReadDelim[T any](filename string, opts ...DelimOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		f, err := os.Open(filename)
 		if err != nil {
-			return
+			failRead("typed.ReadDelim", filename, err)
 		}
 		defer f.Close()
-		ReadDelimFromReader[T](f, opts...)(yield)
+		readDelimLoud[T]("typed.ReadDelim", filename, f, resolveDelimOpts(opts), yield)
 	}
 }
 
@@ -134,25 +138,40 @@ func ReadDelim[T any](filename string, opts ...DelimOption) iter.Seq[T] {
 func ReadDelimFromReader[T any](r io.Reader, opts ...DelimOption) iter.Seq[T] {
 	o := resolveDelimOpts(opts)
 	return func(yield func(T) bool) {
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-		if !scanner.Scan() {
+		readDelimLoud[T]("typed.ReadDelimFromReader", "", r, o, yield)
+	}
+}
+
+// readDelimLoud is the shared body of the lossy delimited readers.
+func readDelimLoud[T any](op, source string, r io.Reader, o delimOpts, yield func(T) bool) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			failRead(op, source, fmt.Errorf("read header: %w", err))
+		}
+		return // empty input: zero rows
+	}
+	header := splitLine(scanner.Bytes(), o.delim, nil)
+	schema, err := buildReadSchema[T](header, o.strict)
+	if err != nil {
+		failRead(op, source, err)
+	}
+	var row []string
+	var rowN int64
+	for scanner.Scan() {
+		rowN++
+		row = splitLine(scanner.Bytes(), o.delim, row)
+		var rec T
+		if err := schema.decode(unsafe.Pointer(&rec), row); err != nil {
+			failRow(op, source, rowN, err)
+		}
+		if !yield(rec) {
 			return
 		}
-		header := splitLine(scanner.Bytes(), o.delim, nil)
-		schema, err := buildReadSchema[T](header, o.strict)
-		if err != nil {
-			return
-		}
-		var row []string
-		for scanner.Scan() {
-			row = splitLine(scanner.Bytes(), o.delim, row)
-			var rec T
-			_ = schema.decode(unsafe.Pointer(&rec), row)
-			if !yield(rec) {
-				return
-			}
-		}
+	}
+	if err := scanner.Err(); err != nil {
+		failRow(op, source, rowN+1, err)
 	}
 }
 
@@ -293,8 +312,12 @@ func ReadDelimParallel[T any](filename string, n int, opts ...DelimOption) Strea
 	if n <= 0 {
 		n = runtime.GOMAXPROCS(0)
 	}
+	const op = "typed.ReadDelimParallel"
 	data, err := os.ReadFile(filename)
-	if err != nil || len(data) == 0 {
+	if err != nil {
+		failRead(op, filename, err)
+	}
+	if len(data) == 0 {
 		return Stream[T]{shards: nil, n: 0}
 	}
 
@@ -315,7 +338,7 @@ func ReadDelimParallel[T any](filename string, n int, opts ...DelimOption) Strea
 	header := splitLine(data[:headerEnd], o.delim, nil)
 	schema, err := buildReadSchema[T](header, o.strict)
 	if err != nil {
-		return Stream[T]{shards: nil, n: 0}
+		failRead(op, filename, err)
 	}
 
 	numDataLines := len(newlines) - 1
@@ -350,10 +373,12 @@ func ReadDelimParallel[T any](filename string, n int, opts ...DelimOption) Strea
 			endByte = len(data)
 		}
 		chunk := data[startByte:endByte]
+		firstRow := int64(startLine) + 1
 
 		shards[i] = func(yield func(T) bool) {
 			var row []string
 			off := 0
+			rowN := firstRow - 1
 			for off < len(chunk) {
 				idx := bytes.IndexByte(chunk[off:], '\n')
 				var line []byte
@@ -364,6 +389,7 @@ func ReadDelimParallel[T any](filename string, n int, opts ...DelimOption) Strea
 					line = chunk[off : off+idx]
 					off += idx + 1
 				}
+				rowN++
 				if len(line) == 0 {
 					continue
 				}
@@ -375,7 +401,9 @@ func ReadDelimParallel[T any](filename string, n int, opts ...DelimOption) Strea
 				// passes it to strconv (which doesn't retain).
 				row = splitLineAlias(line, delim, row)
 				var rec T
-				_ = schema.decode(unsafe.Pointer(&rec), row)
+				if err := schema.decode(unsafe.Pointer(&rec), row); err != nil {
+					failRow(op, filename, rowN, err)
+				}
 				if !yield(rec) {
 					return
 				}
@@ -418,13 +446,11 @@ func (s Stream[T]) WriteDelimToWriter(w io.Writer, opts ...DelimOption) error {
 
 	buffers := make([]*bytes.Buffer, len(s.shards))
 	errs := make([]error, len(s.shards))
-	var wg sync.WaitGroup
-	wg.Add(len(s.shards))
+	var g shardGroup
 	delim := o.delim
 	for i, shard := range s.shards {
 		i, shard := i, shard
-		go func() {
-			defer wg.Done()
+		g.Go(func() {
 			buf := &bytes.Buffer{}
 			buffers[i] = buf
 			sbw := bufio.NewWriter(buf)
@@ -442,9 +468,9 @@ func (s Stream[T]) WriteDelimToWriter(w io.Writer, opts ...DelimOption) error {
 			if err := sbw.Flush(); err != nil {
 				errs[i] = err
 			}
-		}()
+		})
 	}
-	wg.Wait()
+	g.Wait()
 
 	for i, buf := range buffers {
 		if errs[i] != nil {

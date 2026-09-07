@@ -28,16 +28,20 @@ type fieldEncoder func(p unsafe.Pointer) string
 type rowSchema struct {
 	decoders []fieldDecoder
 	header   []string
+	types    []string // Go type of the field each column decodes into ("" = no field)
 	encoders []fieldEncoder
 }
 
+// decode fills the struct at p from one row. The error names the
+// column, the offending value and the field type it did not fit —
+// what a user needs to fix the data or widen the field.
 func (rs *rowSchema) decode(p unsafe.Pointer, rec []string) error {
 	if len(rec) < len(rs.decoders) {
-		return fmt.Errorf("typed: row has %d columns, expected %d", len(rec), len(rs.decoders))
+		return fmt.Errorf("row has %d columns, expected %d", len(rec), len(rs.decoders))
 	}
 	for i, dec := range rs.decoders {
 		if err := dec(p, rec[i]); err != nil {
-			return fmt.Errorf("column %q: %w", rs.header[i], err)
+			return fmt.Errorf("column %q: %q is not %s", rs.header[i], strings.TrimSpace(rec[i]), rs.types[i])
 		}
 	}
 	return nil
@@ -93,6 +97,7 @@ func buildReadSchema[T any](header []string, strict bool) (*rowSchema, error) {
 
 	matched := make(map[string]struct{}, len(byName))
 	decoders := make([]fieldDecoder, len(header))
+	types := make([]string, len(header))
 	for col, h := range header {
 		f, ok := byName[strings.ToLower(h)]
 		if !ok {
@@ -107,6 +112,7 @@ func buildReadSchema[T any](header []string, strict bool) (*rowSchema, error) {
 			return nil, fmt.Errorf("field %s: %w", f.Name, err)
 		}
 		decoders[col] = dec
+		types[col] = f.Type.String()
 		matched[strings.ToLower(h)] = struct{}{}
 	}
 
@@ -131,6 +137,7 @@ func buildReadSchema[T any](header []string, strict bool) (*rowSchema, error) {
 	return &rowSchema{
 		decoders: decoders,
 		header:   append([]string(nil), header...),
+		types:    types,
 	}, nil
 }
 
@@ -419,9 +426,12 @@ func resolveOpts(opts []CSVOption) csvOpts {
 	return o
 }
 
-// ReadCSV streams rows of T from a CSV file. Parse errors on individual
-// columns silently zero the field and continue — use [ReadCSVSafe] when
-// you need to surface those errors.
+// ReadCSV streams rows of T from a CSV file. It FAILS FAST: a file that
+// cannot be opened, a header that does not fit T (under [Strict]), a
+// malformed row, or a cell that does not parse as its field's type
+// panics with a *[ReadError] naming the row and column — never a
+// silently zeroed field or a dropped row. Use [ReadCSVSafe] to receive
+// those conditions as error values instead.
 //
 // Reflection happens once at file-open time (to build the read schema
 // from the header). The per-row path uses precomputed offset writers
@@ -432,10 +442,10 @@ func ReadCSV[T any](filename string, opts ...CSVOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		f, err := os.Open(filename)
 		if err != nil {
-			return
+			failRead("typed.ReadCSV", filename, err)
 		}
 		defer f.Close()
-		ReadCSVFromReader[T](f, opts...)(yield)
+		readCSVLoud[T]("typed.ReadCSV", filename, f, resolveOpts(opts), yield)
 	}
 }
 
@@ -443,26 +453,43 @@ func ReadCSV[T any](filename string, opts ...CSVOption) iter.Seq[T] {
 func ReadCSVFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq[T] {
 	o := resolveOpts(opts)
 	return func(yield func(T) bool) {
-		cr := csv.NewReader(r)
-		cr.ReuseRecord = true
-		header, err := cr.Read()
-		if err != nil {
+		readCSVLoud[T]("typed.ReadCSVFromReader", "", r, o, yield)
+	}
+}
+
+// readCSVLoud is the shared body of the lossy CSV readers. An empty
+// input (no header line) is zero rows, not an error — the same as the
+// root package's reader.
+func readCSVLoud[T any](op, source string, r io.Reader, o csvOpts, yield func(T) bool) {
+	cr := csv.NewReader(r)
+	cr.ReuseRecord = true
+	header, err := cr.Read()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
 			return
 		}
-		schema, err := buildReadSchema[T](header, o.strict)
+		failRead(op, source, fmt.Errorf("read header: %w", err))
+	}
+	schema, err := buildReadSchema[T](header, o.strict)
+	if err != nil {
+		failRead(op, source, err)
+	}
+	var rowN int64
+	for {
+		rec, err := cr.Read()
 		if err != nil {
-			return
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			failRow(op, source, rowN+1, err)
 		}
-		for {
-			rec, err := cr.Read()
-			if err != nil {
-				return
-			}
-			var row T
-			_ = schema.decode(unsafe.Pointer(&row), rec)
-			if !yield(row) {
-				return
-			}
+		rowN++
+		var row T
+		if err := schema.decode(unsafe.Pointer(&row), rec); err != nil {
+			failRow(op, source, rowN, err)
+		}
+		if !yield(row) {
+			return
 		}
 	}
 }

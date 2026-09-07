@@ -71,7 +71,11 @@ func recoverCellError(err *error) {
 		return
 	}
 	if ce, ok := r.(*ssql.CellError); ok {
-		*err = fmt.Errorf("%w — override the column type with `-type %s TYPE` (string, int, float, bool) or fix the data", ce, ce.Column)
+		if ce.Sampled == 0 {
+			*err = fmt.Errorf("%w — choose another `-type %s TYPE` (string, int, float, bool) or fix the data", ce, ce.Column)
+		} else {
+			*err = fmt.Errorf("%w — override the column type with `-type %s TYPE` (string, int, float, bool) or fix the data", ce, ce.Column)
+		}
 		return
 	}
 	panic(r)

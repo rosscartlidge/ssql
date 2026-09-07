@@ -192,3 +192,75 @@ func TestSampleJSONLSchema(t *testing.T) {
 		t.Errorf("JSON array should have no typed form, got err=%v", err)
 	}
 }
+
+// `-type COL TYPE` / `-default-type` reach the typed samplers (they
+// were refused by typed codegen until v4.91.0): the override wins over
+// the sample for CSV, TSV, a plain JSONL sample, and a `_schema` header.
+func TestSampleSchemaTypeOptions(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	opts := TypeOptions{Fields: map[string]string{"v": "float", "id": "string"}}
+
+	csv := write("late.csv", "id,v,w\n1,1,1\n2,2,2\n")
+	schema, def, err := SampleCSVSchema(csv, "", 0, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := typesOf(schema); got != "id:string v:float64 w:int64" {
+		t.Errorf("csv: %s", got)
+	}
+	if !strings.Contains(def, "V  float64") && !strings.Contains(def, "V float64") {
+		t.Errorf("struct def should carry the override:\n%s", def)
+	}
+	schema, _, err = SampleCSVSchema(csv, "", 0, TypeOptions{Default: "string", Fields: map[string]string{"w": "int"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := typesOf(schema); got != "id:string v:string w:int64" {
+		t.Errorf("csv default-type: %s", got)
+	}
+
+	tsv := write("late.tsv", "id\tv\n1\t1\n")
+	schema, _, _, err = SampleTSVSchema(tsv, "", 0, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := typesOf(schema); got != "id:string v:float64" {
+		t.Errorf("tsv: %s", got)
+	}
+
+	jsonl := write("late.jsonl", `{"id":1,"v":1}`+"\n")
+	schema, _, err = SampleJSONLSchema(jsonl, "", 0, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := typesOf(schema); got != "id:string v:float64" {
+		t.Errorf("jsonl: %s", got)
+	}
+
+	hdr := write("teed.jsonl", `{"_schema":{"fields":["id","v"],"types":{"id":"int","v":"int"}}}`+"\n"+`{"id":1,"v":1}`+"\n")
+	schema, def, err = SampleJSONLSchema(hdr, "", 0, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := typesOf(schema); got != "id:string v:float64" {
+		t.Errorf("jsonl header: %s", got)
+	}
+	if !strings.Contains(def, "float64") {
+		t.Errorf("header struct def should be re-rendered with the override:\n%s", def)
+	}
+}
+
+func typesOf(s *TypedSchema) string {
+	var parts []string
+	for _, f := range s.Fields {
+		parts = append(parts, f.Name+":"+f.GoType)
+	}
+	return strings.Join(parts, " ")
+}

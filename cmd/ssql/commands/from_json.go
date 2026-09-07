@@ -61,7 +61,7 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 				if len(cfg.files) == 1 {
 					inputFile = cfg.files[0]
 				}
-				return executeFromJSON(inputFile, cfg.generate)
+				return executeFromJSON(inputFile, defaultTypeArgs(), cfg.generate)
 			}
 
 			readFile := func(file *os.File) iter.Seq[ssql.Record] {
@@ -122,6 +122,17 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 		Default(0).
 		Help("Fast tail: the last N rows via a seek to the end of the file (identical to `| limit -last N`, without reading the middle). 0 = read everything").
 		Done().
+		Flag("-type", "-t").
+		Arg("field").
+		Completer(cf.NoCompleter{Hint: "<field-name>"}).
+		Done().
+		Arg("type").
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool"}}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Fix a field's type (JSON lines type themselves; a column that is int on one line and float on another is mixed): -type score float").
+		Done().
 		Flag("FILE").
 		String().
 		Variadic().
@@ -130,8 +141,18 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 		Default("").
 		Help("Input JSONL file(s) (or stdin if not specified)").
 		Done().
-		Handler(func(ctx *cf.Context) error {
+		Handler(func(ctx *cf.Context) (err error) {
+			defer recoverCellError(&err)
 			cfg := extractMultiFileConfig(ctx)
+			typeOverrides := make(map[string]string)
+			if typeVal, ok := ctx.GlobalFlags["-type"]; ok {
+				typeOverrides = parseTypeOverrides(typeVal)
+			}
+			csvConfig, err := buildCSVConfig(typeOverrides, "")
+			if err != nil {
+				return err
+			}
+			types := typeArgs{overrides: typeOverrides, cfg: csvConfig}
 
 			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
 				sn := int64(-1)
@@ -149,7 +170,7 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 				if len(ctx.RemainingArgs) > 0 {
 					return fmt.Errorf("from jsonl -sample cannot combine with pushdown (--)")
 				}
-				return executeFromJSONLSample(cfg.files[0], sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), cfg.generate)
+				return executeFromJSONLSample(cfg.files[0], types, sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), cfg.generate)
 			}
 			lastN, _ := ctx.GlobalFlags["-last"].(int)
 			if lastN > 0 {
@@ -162,7 +183,7 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 				if len(ctx.RemainingArgs) > 0 {
 					return fmt.Errorf("from jsonl -last cannot combine with pushdown (--)")
 				}
-				return executeFromJSONLLast(cfg.files[0], lastN, cfg.generate)
+				return executeFromJSONLLast(cfg.files[0], types, lastN, cfg.generate)
 			}
 			if lastN < 0 {
 				return fmt.Errorf("from jsonl -last must be positive, got %d", lastN)
@@ -183,11 +204,11 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 				if len(cfg.files) == 1 {
 					inputFile = cfg.files[0]
 				}
-				return executeFromJSON(inputFile, cfg.generate)
+				return executeFromJSON(inputFile, types, cfg.generate)
 			}
 
 			readFile := func(file *os.File) iter.Seq[ssql.Record] {
-				return readJSONSchemaAware(file)
+				return ssql.CoerceFieldTypes(readJSONSchemaAware(file), csvConfig.TypeOverrides)
 			}
 			return executeFromMultiFile(cfg, "JSONL", readFile, nil)
 		}).
@@ -195,7 +216,7 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 }
 
 // executeFromJSON handles JSON/JSONL reading for both the subcommand and bare form.
-func executeFromJSON(inputFile string, generate bool) error {
+func executeFromJSON(inputFile string, types typeArgs, generate bool) error {
 	if schemaMode() {
 		var r io.Reader = os.Stdin
 		if inputFile != "" {
@@ -220,9 +241,9 @@ func executeFromJSON(inputFile string, generate bool) error {
 
 	if shouldGenerate(generate) {
 		if typedMode() && inputFile != "" && !ssql.IsHTTPURL(inputFile) {
-			return generateFromJSONLCodeTyped(inputFile)
+			return generateFromJSONLCodeTyped(inputFile, types)
 		}
-		return generateFromJSONCode(inputFile)
+		return generateFromJSONCode(inputFile, types)
 	}
 
 	var records iter.Seq[ssql.Record]
@@ -243,26 +264,30 @@ func executeFromJSON(inputFile string, generate bool) error {
 		defer file.Close()
 		records = readJSONSchemaAware(file)
 	}
+	// `-type FIELD TYPE`: strict per-record coercion (a *CellError on a
+	// value that does not fit; recovered by the handler).
+	records = ssql.CoerceFieldTypes(records, types.cfg.TypeOverrides)
 
 	records = wrapWithFieldCaching(records, inputFile)
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
 }
 
 // generateFromJSONCode generates Go code for reading JSON/JSONL.
-func generateFromJSONCode(filename string) error {
+func generateFromJSONCode(filename string, types typeArgs) error {
 	var code string
 	var imports []string
 	var params []lib.CodeParam
 
+	extras := sourceCodegenExtras{postCode: coerceFieldTypesCode(types.overrides)}
 	if filename == "" {
-		code = `records := ssql.ReadJSONFromReader(os.Stdin)`
+		code = extras.wrap(`records := ssql.ReadJSONFromReader(os.Stdin)`)
 		imports = []string{"os"}
 	} else {
 		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input JSON file", VarName: "flagInput"})
-		code = `records, err := ssql.ReadJSONAuto(*flagInput)
+		code = extras.wrap(`records, err := ssql.ReadJSONAuto(*flagInput)
 	if err != nil {
 		return fmt.Errorf("reading JSON: %w", err)
-	}`
+	}`)
 		imports = []string{"fmt", "os"}
 	}
 
@@ -280,14 +305,14 @@ func generateFromJSONCode(filename string) error {
 // with the positional parallel reader the same group-by is a fraction
 // of a second (roadmap §9 steps 1–3). A JSON array file has no typed
 // form and takes the record path, noted under -explain.
-func generateFromJSONLCodeTyped(filename string) error {
-	schema, structDef, err := lib.SampleJSONLSchema(filename, "", 0)
+func generateFromJSONLCodeTyped(filename string, types typeArgs) error {
+	schema, structDef, err := lib.SampleJSONLSchema(filename, "", 0, types.options())
 	if err != nil {
 		if !typedMode() {
 			return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: %w", err))
 		}
 		// Fall back to the record reader, loudly noted.
-		frag, ferr := recordFromJSONFragment(filename)
+		frag, ferr := recordFromJSONFragment(filename, types)
 		if ferr != nil {
 			return ferr
 		}
@@ -321,12 +346,12 @@ func generateFromJSONLCodeTyped(filename string) error {
 // recordFromJSONFragment builds (without writing) the record-mode
 // `from json/jsonl FILE` init fragment — shared by generateFromJSONCode
 // and the typed path's fallback.
-func recordFromJSONFragment(filename string) (*lib.CodeFragment, error) {
+func recordFromJSONFragment(filename string, types typeArgs) (*lib.CodeFragment, error) {
 	params := []lib.CodeParam{{Name: "input", Default: filename, Help: "input JSON file", VarName: "flagInput"}}
-	code := `records, err := ssql.ReadJSONAuto(*flagInput)
+	code := sourceCodegenExtras{postCode: coerceFieldTypesCode(types.overrides)}.wrap(`records, err := ssql.ReadJSONAuto(*flagInput)
 	if err != nil {
 		return fmt.Errorf("reading JSON: %w", err)
-	}`
+	}`)
 	frag := lib.NewInitFragment("records", code, []string{"fmt", "os"}, getCommandString())
 	frag.Params = params
 	return frag, nil
@@ -361,32 +386,36 @@ func readJSONSchemaAware(r io.Reader) iter.Seq[ssql.Record] {
 
 // executeFromJSONLSample is the -sample path for JSONL (byte-offset
 // sampling; honours a leading _schema header; JSON arrays refuse).
-func executeFromJSONLSample(inputFile string, n int, seed int64, seedGiven bool, generate bool) error {
+func executeFromJSONLSample(inputFile string, types typeArgs, n int, seed int64, seedGiven bool, generate bool) error {
 	resolvedSeed := resolveSampleSeed(seed, seedGiven, "-sample-seed")
 	if shouldGenerate(generate) {
-		return generateFromFileSampleCode("ssql.SampleJSONLFile", "input JSONL file", inputFile, n, resolvedSeed)
+		return generateFromFileSampleCode("ssql.SampleJSONLFile", "input JSONL file", inputFile, n, resolvedSeed,
+			sourceCodegenExtras{postCode: coerceFieldTypesCode(types.overrides)})
 	}
 	records, err := ssql.SampleJSONLFile(inputFile, n, resolvedSeed)
 	if err != nil {
 		return err
 	}
+	records = ssql.CoerceFieldTypes(records, types.cfg.TypeOverrides)
 	records = wrapWithFieldCaching(records, inputFile)
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
 }
 
 
 // executeFromJSONLLast: `from jsonl FILE -last N` (seek-based tail).
-func executeFromJSONLLast(inputFile string, n int, generate bool) error {
+func executeFromJSONLLast(inputFile string, types typeArgs, n int, generate bool) error {
 	if schemaMode() {
-		return executeFromJSON(inputFile, generate)
+		return executeFromJSON(inputFile, types, generate)
 	}
 	if shouldGenerate(generate) {
-		return generateFromFileLastCode("ssql.TailJSONLFile", "input JSONL file", inputFile, n)
+		return generateFromFileLastCode("ssql.TailJSONLFile", "input JSONL file", inputFile, n,
+			sourceCodegenExtras{postCode: coerceFieldTypesCode(types.overrides)})
 	}
 	records, err := ssql.TailJSONLFile(inputFile, n)
 	if err != nil {
 		return err
 	}
+	records = ssql.CoerceFieldTypes(records, types.cfg.TypeOverrides)
 	records = wrapWithFieldCaching(records, inputFile)
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
 }

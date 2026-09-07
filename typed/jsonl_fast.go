@@ -52,6 +52,7 @@ const (
 
 type jsonField struct {
 	name  string
+	typ   string // Go type of the field, for error messages
 	dec   fieldDecoder
 	kind  jsonKind
 	isPtr bool
@@ -125,7 +126,7 @@ func buildJSONLPlan[T any]() (*jsonlPlan, error) {
 		if err != nil {
 			return nil, err
 		}
-		jf := &jsonField{name: name, dec: dec, kind: kind, isPtr: isPtr}
+		jf := &jsonField{name: name, typ: f.Type.String(), dec: dec, kind: kind, isPtr: isPtr}
 		if _, dup := pl.exact[name]; !dup {
 			pl.exact[name] = jf
 		}
@@ -213,10 +214,10 @@ func (pl *jsonlPlan) decode(line []byte, p unsafe.Pointer) error {
 						// The CSV decoder reads an empty cell as the zero time;
 						// in JSON an empty string is not a time (encoding/json
 						// agrees) — null is how a missing time is spelled.
-						return fmt.Errorf("field %q: cannot parse \"\" as RFC 3339 time", f.name)
+						return fmt.Errorf("field %q: \"\" is not an RFC 3339 time", f.name)
 					}
 					if err := f.dec(p, text); err != nil {
-						return fmt.Errorf("field %q: %w", f.name, err)
+						return f.mismatch(text)
 					}
 				default:
 					return fmt.Errorf("field %q: cannot unmarshal string into %s", f.name, kindName(f.kind))
@@ -235,7 +236,7 @@ func (pl *jsonlPlan) decode(line []byte, p unsafe.Pointer) error {
 				switch f.kind {
 				case jkBool, jkString:
 					if err := f.dec(p, lit); err != nil {
-						return fmt.Errorf("field %q: %w", f.name, err)
+						return f.mismatch(lit)
 					}
 				default:
 					return fmt.Errorf("field %q: cannot unmarshal bool into %s", f.name, kindName(f.kind))
@@ -269,11 +270,11 @@ func (pl *jsonlPlan) decode(line []byte, p unsafe.Pointer) error {
 					// The decoders parse immediately and never retain s, so a
 					// zero-copy string view of the line is safe here.
 					if err := f.dec(p, unsafe.String(&num[0], len(num))); err != nil {
-						return fmt.Errorf("field %q: %w", f.name, err)
+						return f.mismatch(string(num))
 					}
 				case jkString:
 					if err := f.dec(p, string(num)); err != nil {
-						return fmt.Errorf("field %q: %w", f.name, err)
+						return f.mismatch(string(num))
 					}
 				default:
 					return fmt.Errorf("field %q: cannot unmarshal number into %s", f.name, kindName(f.kind))
@@ -290,7 +291,7 @@ func (pl *jsonlPlan) decode(line []byte, p unsafe.Pointer) error {
 					return fmt.Errorf("field %q: cannot unmarshal nested JSON into %s", f.name, kindName(f.kind))
 				}
 				if err := f.dec(p, string(line[vStart:e])); err != nil {
-					return fmt.Errorf("field %q: %w", f.name, err)
+					return f.mismatch(string(line[vStart:e]))
 				}
 			}
 		default:
@@ -310,6 +311,12 @@ func (pl *jsonlPlan) decode(line []byte, p unsafe.Pointer) error {
 			return errJSONSyntax
 		}
 	}
+}
+
+// mismatch is the "value does not fit the field" error: names the
+// field, the value and the Go type, like the CSV reader's.
+func (f *jsonField) mismatch(value string) error {
+	return fmt.Errorf("field %q: %q is not %s", f.name, value, f.typ)
 }
 
 func kindName(k jsonKind) string {

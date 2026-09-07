@@ -110,6 +110,7 @@ func corpusData(t *testing.T) string {
 			"shuffled.csv":           corpusShuffledCSV,
 			"empties.csv":            corpusEmptiesCSV,
 			"int_first.csv":          corpusIntFirstCSV,
+			"int_first.tsv":          strings.ReplaceAll(corpusIntFirstCSV, ",", "\t"),
 			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
 			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
 			"app.log":                corpusAppLog,

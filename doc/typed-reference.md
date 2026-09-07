@@ -135,8 +135,17 @@ A tag value of `"-"` excludes the field entirely.
 `time.Time` (RFC3339 in CSV), and **pointer-to-T** for nullable columns.
 Empty CSV values become the zero value (or `nil` for pointer types). **Note:** this differs from the record lanes, where an empty numeric/boolean cell is *absent* (missing) since v4.86 — see `doc/research/dfc124_missing_values.md` §3 for the typed gap and its planned fix (pointer types for partially-empty columns).
 
-Other parse errors silently zero the field in `ReadCSV`; use `ReadCSVSafe`
-to surface them.
+A non-empty value that does not parse as its field's type is **fatal** in the
+lossy readers (`ReadCSV`, `ReadCSVParallel`, `ReadDelim*`, `ReadJSONL*`): they
+panic with a `*typed.ReadError` naming the reader, the file, the row (CSV/TSV:
+1-based data row; JSONL: physical line), the column and the value —
+`typed.ReadCSVParallel late.csv: row 1002: column "v": "1.5" is not int64`. A
+file that cannot be opened, a malformed row and a strict-mode header mismatch
+are the same error. Programs from `ssql generate go` recover it into `Error: …`
+and exit status 1, including when it starts inside a parallel shard. Use the
+`*Safe` readers to receive these as error values instead. (Before v4.91.0 the
+CSV readers kept the row with the cell zeroed, the JSONL readers dropped the
+row, and a missing file was an empty stream with exit 0 — silent, all three.)
 
 > **Note on nullables**: pointer-to-T columns allocate one heap value per
 > non-empty cell. For hot paths with many nullables, consider an explicit
@@ -154,10 +163,22 @@ func ReadCSVSafe[T any](filename string) iter.Seq2[T, error]
 func ReadCSVSafeFromReader[T any](r io.Reader) iter.Seq2[T, error]
 ```
 
-`ReadCSV` is the lossy/fast variant — parse errors and missing files yield no
-rows. `ReadCSVSafe` returns an `iter.Seq2[T, error]` so the consumer can choose
-to halt, log, or skip on each error. Mirrors the `ssql.ReadCSV` /
-`ssql.ReadCSVSafe` split.
+`ReadCSV` is the fast variant and it **fails fast**: a missing file, a
+malformed row or a cell that does not fit its field's type panics with a
+`*typed.ReadError` (see "Supported field types" above). `ReadCSVSafe` returns an
+`iter.Seq2[T, error]` so the consumer can choose to halt, log, or skip on each
+error. Mirrors the `ssql.ReadCSV` / `ssql.ReadCSVSafe` split (`*ssql.CellError`
+there).
+
+```go
+type ReadError struct {
+    Op     string // "typed.ReadCSV", "typed.ReadJSONLParallel", …
+    Source string // file name; "" for an io.Reader
+    Row    int64  // CSV/Delim: 1-based data row (0 = not row-specific)
+    Line   int64  // JSONL: 1-based physical line
+    Err    error
+}
+```
 
 ### Writing CSV
 
@@ -205,7 +226,7 @@ typed.DelimStrict() DelimOption  // mirrors typed.Strict for CSV
 ```
 
 Same struct-tag mapping as `ReadCSV`; same `Stream[T]` per-shard buffer
-sink. **Differs from `ReadCSV` only in that fields are split on a
+sink; same fail-fast `*ReadError` contract. **Differs from `ReadCSV` only in that fields are split on a
 single byte with no quote/escape handling — embedded delimiters or
 newlines produce wrong rows.** Use this when your data is clean
 delimited text; use `ReadCSV` for RFC-4180-correct parsing.
@@ -336,7 +357,11 @@ pipelines see [`doc/research/typed-performance-notes.md`](research/typed-perform
 
 **Header lines.** Both readers skip a leading `{"_schema": …}` line (the
 header `tee` and every ssql stage write), so a tee'd file reads as its
-rows. **Codegen.** `SSQL_MODE=typed … from jsonl FILE` infers the row
+rows. **Errors.** A line that is not a JSON object, or a value that does not
+fit its field (`{"v":1.5}` into `int64`), is a fatal `*ReadError` naming the
+physical line in `ReadJSONL` / `ReadJSONLParallel` (they dropped the line
+silently before v4.91.0); `ReadJSONLSafe` yields it. In a generated program
+the fix is `-type v float` on the `from jsonl` stage. **Codegen.** `SSQL_MODE=typed … from jsonl FILE` infers the row
 struct from the file (`_schema` header when present, else a sample of
 lines; `lib.SampleJSONLSchema`) and emits `ReadJSONL` — added 2026-09-06
 because the previous record-mode fallback made a compiled JSONL

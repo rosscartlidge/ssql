@@ -31,7 +31,11 @@ import (
 //
 // A JSON array file (first non-space byte `[`) has no typed form and
 // returns an error; the caller falls back to record codegen.
-func SampleJSONLSchema(filename, typeName string, maxRows int) (*TypedSchema, string, error) {
+//
+// TypeOptions overrides apply to both sources: an overridden key takes
+// the named type whatever the header or the sample says.
+func SampleJSONLSchema(filename, typeName string, maxRows int, opts ...TypeOptions) (*TypedSchema, string, error) {
+	o := firstTypeOptions(opts)
 	if maxRows <= 0 {
 		maxRows = ssql.DefaultInferRows
 	}
@@ -84,7 +88,16 @@ func SampleJSONLSchema(filename, typeName string, maxRows int) (*TypedSchema, st
 			var hdr map[string]any
 			if jerr := json.Unmarshal(line, &hdr); jerr == nil {
 				if s, ok := ParseSchemaHeader(hdr); ok {
-					return TypedSchemaFromHeader(s, typeName)
+					schema, def, err := TypedSchemaFromHeader(s, typeName)
+					if err == nil && (len(o.Fields) > 0 || o.Default != "") {
+						for i := range schema.Fields {
+							if t, ok := o.goTypeFor(schema.Fields[i].Name); ok {
+								schema.Fields[i].GoType = t
+							}
+						}
+						def = RenderStructDef(schema)
+					}
+					return schema, def, err
 				}
 			}
 		}
@@ -152,6 +165,9 @@ func SampleJSONLSchema(filename, typeName string, maxRows int) (*TypedSchema, st
 			goType = "float64"
 		case c.allBool:
 			goType = "bool"
+		}
+		if t, ok := o.goTypeFor(name); ok {
+			goType = t
 		}
 		gn := goNameFromColumn(name)
 		if usedNames[gn] > 0 {

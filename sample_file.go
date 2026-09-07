@@ -253,7 +253,12 @@ func sampleLineStarts(f io.ReaderAt, size, dataStart int64, n int, seed int64) (
 // SampleTSVFile is [SampleCSVFile] for TSV files: the delimiter is
 // auto-detected from the header line (first non-identifier byte,
 // default tab) — the same single rule every TSV path uses.
-func SampleTSVFile(filename string, n int, seed int64) (iter.Seq[Record], error) {
+func SampleTSVFile(filename string, n int, seed int64, config ...CSVConfig) (iter.Seq[Record], error) {
+	cfg := DefaultTSVConfig()
+	if len(config) > 0 {
+		cfg = config[0]
+	}
+	readTSV := func(r io.Reader) iter.Seq[Record] { return ReadTSVFromReaderWithConfig(r, cfg) }
 	f, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
@@ -275,7 +280,7 @@ func SampleTSVFile(filename string, n int, seed int64) (iter.Seq[Record], error)
 		if ferr != nil {
 			return nil, ferr
 		}
-		return SampleN[Record](n, seed)(ReadTSVFromReader(fh)), nil
+		return SampleN[Record](n, seed)(readTSV(fh)), nil
 	}
 	headerLine := strings.TrimRight(string(head[:nl]), "\r")
 	dataStart := int64(nl + 1)
@@ -287,7 +292,7 @@ func SampleTSVFile(filename string, n int, seed int64) (iter.Seq[Record], error)
 		if ferr != nil {
 			return nil, ferr
 		}
-		return SampleN[Record](n, seed)(ReadTSVFromReader(fh)), nil
+		return SampleN[Record](n, seed)(readTSV(fh)), nil
 	}
 
 	// Replay header+line through the standard TSV reader — its own
@@ -308,7 +313,7 @@ func SampleTSVFile(filename string, n int, seed int64) (iter.Seq[Record], error)
 			lineBuf = append(lineBuf, headerLine...)
 			lineBuf = append(lineBuf, '\n')
 			lineBuf = append(lineBuf, line...)
-			for r := range ReadTSVFromReader(bytes.NewReader(lineBuf)) {
+			for r := range readTSV(bytes.NewReader(lineBuf)) {
 				if !yield(r) {
 					return
 				}

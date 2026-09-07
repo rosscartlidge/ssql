@@ -119,9 +119,9 @@ func TestReadCSVSafeMissingFile(t *testing.T) {
 
 func TestReadCSVRejectsNonStruct(t *testing.T) {
 	src := "x\n1\n"
-	rows := slices.Collect(ReadCSVFromReader[int](strings.NewReader(src)))
-	if len(rows) != 0 {
-		t.Errorf("non-struct T should silently produce no rows in lossy ReadCSV, got %#v", rows)
+	re := catchReadError(t, func() { _ = slices.Collect(ReadCSVFromReader[int](strings.NewReader(src))) })
+	if !strings.Contains(re.Error(), "must be a struct") {
+		t.Errorf("non-struct T should fail loudly in lossy ReadCSV, got %v", re)
 	}
 }
 
@@ -328,9 +328,9 @@ func TestNullableRoundTrip(t *testing.T) {
 
 func TestStrictRejectsUnknownColumn(t *testing.T) {
 	src := "Name,Age,Salary,Active,Extra\nAlice,30,95000.5,true,unknown\n"
-	got := slices.Collect(ReadCSVFromReader[person](strings.NewReader(src), Strict()))
-	if len(got) != 0 {
-		t.Errorf("Strict should produce no rows on extra column, got %#v", got)
+	re := catchReadError(t, func() { _ = slices.Collect(ReadCSVFromReader[person](strings.NewReader(src), Strict())) })
+	if !strings.Contains(re.Error(), "Extra") {
+		t.Errorf("Strict should fail loudly on the extra column, got %v", re)
 	}
 	// Verify Safe variant surfaces the error explicitly.
 	var sawErr error

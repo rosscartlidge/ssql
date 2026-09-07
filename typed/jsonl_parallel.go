@@ -19,7 +19,7 @@ import (
 // (SIMD on amd64), skip a leading `_schema` header line, split the data
 // lines into n equal runs, and give each shard its byte range. Blank
 // lines are skipped and, as in [ReadJSONL], a line that fails to decode
-// is dropped. The positional decoder copies every string it stores and
+// is fatal (panic *[ReadError] naming the line). The positional decoder copies every string it stores and
 // parses numbers immediately, so yielded structs never alias the
 // mapping; each shard pins it with runtime.KeepAlive until it is done.
 // A type the positional plan cannot cover decodes with encoding/json in
@@ -33,9 +33,10 @@ func ReadJSONLParallel[T any](filename string, n int) Stream[T] {
 	if n <= 0 {
 		n = runtime.GOMAXPROCS(0)
 	}
+	const op = "typed.ReadJSONLParallel"
 	m, err := mmap.Map(filename)
 	if err != nil {
-		return Stream[T]{}
+		failRead(op, filename, err)
 	}
 	data := m.Data
 	if len(data) == 0 {
@@ -99,9 +100,11 @@ func ReadJSONLParallel[T any](filename string, n int) Stream[T] {
 			continue
 		}
 		chunk := data[lineStart(lo):lineEnd(hi-1)]
+		firstLine := int64(lo) + 1 // 1-based physical line of this shard's first line
 		shards[i] = func(yield func(T) bool) {
 			defer runtime.KeepAlive(m)
 			rest := chunk
+			lineN := firstLine - 1
 			for len(rest) > 0 {
 				var line []byte
 				if nl := bytes.IndexByte(rest, '\n'); nl >= 0 {
@@ -109,6 +112,7 @@ func ReadJSONLParallel[T any](filename string, n int) Stream[T] {
 				} else {
 					line, rest = rest, nil
 				}
+				lineN++
 				line = bytes.TrimSpace(line)
 				if len(line) == 0 {
 					continue
@@ -121,7 +125,7 @@ func ReadJSONLParallel[T any](filename string, n int) Stream[T] {
 					derr = json.Unmarshal(line, &row)
 				}
 				if derr != nil {
-					continue
+					failLine(op, filename, lineN, derr)
 				}
 				if !yield(row) {
 					return

@@ -36,14 +36,21 @@ func TestReadJSONLSkipsBlankLines(t *testing.T) {
 	}
 }
 
+// The lossy reader fails fast on a bad line (it used to skip it);
+// the rows before it are still yielded.
 func TestReadJSONLLossy(t *testing.T) {
 	src := `{"name":"Alice","age":30}
 {not json}
 {"name":"Bob","age":25}
 `
-	got := slices.Collect(ReadJSONLFromReader[jsonRow](strings.NewReader(src)))
-	if len(got) != 2 {
-		t.Errorf("lossy reader should skip bad lines, got %d (%#v)", len(got), got)
+	var got []jsonRow
+	re := catchReadError(t, func() {
+		for r := range ReadJSONLFromReader[jsonRow](strings.NewReader(src)) {
+			got = append(got, r)
+		}
+	})
+	if re.Line != 2 || len(got) != 1 || got[0].Name != "Alice" {
+		t.Errorf("bad line 2 should be fatal after Alice: err=%v rows=%#v", re, got)
 	}
 }
 

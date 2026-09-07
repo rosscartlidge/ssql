@@ -2,6 +2,7 @@ package ssql
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -41,141 +42,116 @@ func isIdentifierChar(r rune, isFirst bool) bool {
 	return false
 }
 
-// ReadTSV reads records from a TSV file.
-// The separator is auto-detected from the header line.
+// ReadTSV reads records from a TSV file. The separator is auto-detected
+// from the header line; column types are sampled as for [ReadCSV].
 func ReadTSV(filename string) (iter.Seq[Record], error) {
+	return ReadTSVWithConfig(filename, DefaultTSVConfig())
+}
+
+// ReadTSVWithConfig is [ReadTSV] with explicit column types
+// (CSVConfig.TypeOverrides / DefaultType / InferRows). A Delimiter of 0
+// means auto-detect from the header, the TSV default.
+func ReadTSVWithConfig(filename string, cfg CSVConfig) (iter.Seq[Record], error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
-	return ReadTSVFromReader(file), nil
+	return ReadTSVFromReaderWithConfig(file, cfg), nil
+}
+
+// DefaultTSVConfig is [DefaultCSVConfig] with the delimiter left to
+// header auto-detection (Delimiter 0).
+func DefaultTSVConfig() CSVConfig {
+	cfg := DefaultCSVConfig()
+	cfg.Delimiter = 0
+	return cfg
 }
 
 // ReadTSVFromReader reads TSV records from an io.Reader.
 // The separator is auto-detected from the header line.
 func ReadTSVFromReader(r io.Reader) iter.Seq[Record] {
-	return ReadTSVFromReaderWithSeparator(r, 0) // 0 means auto-detect
+	return ReadTSVFromReaderWithConfig(r, DefaultTSVConfig())
 }
 
 // ReadTSVFromReaderWithSeparator reads TSV records with a specific separator.
 // If sep is 0, the separator is auto-detected from the header line.
 func ReadTSVFromReaderWithSeparator(r io.Reader, sep rune) iter.Seq[Record] {
+	cfg := DefaultTSVConfig()
+	cfg.Delimiter = sep
+	return ReadTSVFromReaderWithConfig(r, cfg)
+}
+
+// ReadTSVFromReaderWithConfig reads delimited text without quoting
+// rules (a field is everything between separators) and types columns
+// exactly as [ReadCSVFromReader] does: TypeOverrides / DefaultType when
+// set, else inferred from the first InferRows data rows; a later cell
+// that does not fit is a *CellError and this reader PANICS with it (the
+// same fail-fast contract as the CSV reader; there is no coerced zero
+// and no silently mixed column). Empty cells are absent for non-string
+// columns (DFC124). cfg.Delimiter 0 = auto-detect from the header (the
+// first non-identifier rune, default tab); blank lines are skipped. If
+// r is an io.Closer it is closed when the sequence ends.
+func ReadTSVFromReaderWithConfig(r io.Reader, cfg CSVConfig) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
-		// Handle close if reader is a closer
 		if closer, ok := r.(io.Closer); ok {
 			defer closer.Close()
 		}
-
-		scanner := bufio.NewScanner(r)
-
-		// Read header line
-		if !scanner.Scan() {
-			return
-		}
-		header := scanner.Text()
-
-		// Auto-detect separator if not specified
-		if sep == 0 {
-			sep = DetectTSVSeparator(header)
-		}
-		sepByte := byte(sep)
-
-		// Parse field names - only allocate once for header
-		fields := strings.Split(header, string(sep))
-		numFields := len(fields)
-
-		// Create shared schema for all records
-		schema := NewSchema(fields)
-		fieldIndices := make([]int, numFields)
-		for i, f := range fields {
-			fieldIndices[i] = schema.Index(f)
-		}
-
-		// Pre-allocate values slice (reused across records)
-		width := schema.Width()
-
-		// Read data lines
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
-				continue
-			}
-
-			// Parse fields inline without allocating a slice
-			values := make([]any, width)
-			fieldIdx := 0
-			start := 0
-
-			for i := 0; i <= len(line); i++ {
-				if i == len(line) || line[i] == sepByte {
-					if fieldIdx < numFields {
-						values[fieldIndices[fieldIdx]] = parseTSVValue(line[start:i])
-					}
-					fieldIdx++
-					start = i + 1
+		tr := &tsvRowReader{sc: bufio.NewScanner(r), sep: cfg.Delimiter}
+		tr.sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
+		readRows(tr, cfg, func(rec Record, err error) bool {
+			if err != nil {
+				var ce *CellError
+				if errors.As(err, &ce) {
+					panic(ce)
 				}
+				return false
 			}
-
-			if !yield(NewRecordFromSchema(schema, values)) {
-				return
-			}
-		}
+			return yield(rec)
+		})
 	}
 }
 
-// parseTSVValue parses a TSV field value, converting to appropriate types.
-// Optimized to avoid allocations from failed strconv calls.
-func parseTSVValue(s string) any {
-	if len(s) == 0 {
-		return s
-	}
-
-	// Quick check: does it look like a number?
-	first := s[0]
-	if (first >= '0' && first <= '9') || first == '-' || first == '+' || first == '.' {
-		// Might be a number - check more carefully
-		if looksLikeInt(s) {
-			if i, err := strconv.ParseInt(s, 10, 64); err == nil {
-				return i
-			}
-		}
-		// Try float (includes scientific notation)
-		if f, err := strconv.ParseFloat(s, 64); err == nil {
-			return f
-		}
-	}
-
-	// Check boolean
-	if s == "true" {
-		return true
-	}
-	if s == "false" {
-		return false
-	}
-
-	// Return as string
-	return s
+// tsvRowReader is the [rowReader] for delimited text: the header line
+// fixes the separator (auto-detected when sep is 0), data lines are
+// split on it with no quote handling, blank lines are skipped. The row
+// slice is reused between calls.
+type tsvRowReader struct {
+	sc         *bufio.Scanner
+	sep        rune
+	headerDone bool
+	row        []string
 }
 
-// looksLikeInt checks if a string looks like an integer (digits with optional leading sign).
-// This avoids the allocation from ParseInt's error when parsing non-integers.
-func looksLikeInt(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	start := 0
-	if s[0] == '-' || s[0] == '+' {
-		start = 1
-		if len(s) == 1 {
-			return false
+func (t *tsvRowReader) Read() ([]string, error) {
+	for t.sc.Scan() {
+		line := t.sc.Text()
+		if !t.headerDone {
+			t.headerDone = true
+			if t.sep == 0 {
+				t.sep = DetectTSVSeparator(line)
+			}
+			return strings.Split(line, string(t.sep)), nil
 		}
-	}
-	for i := start; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
+		if line == "" {
+			continue
 		}
+		t.row = t.row[:0]
+		sep := string(t.sep)
+		for {
+			i := strings.Index(line, sep)
+			if i < 0 {
+				t.row = append(t.row, line)
+				break
+			}
+			t.row = append(t.row, line[:i])
+			line = line[i+len(sep):]
+		}
+		return t.row, nil
 	}
-	return true
+	if err := t.sc.Err(); err != nil {
+		return nil, err
+	}
+	return nil, io.EOF
 }
 
 // WriteTSV writes records to a TSV file with tab separator.

@@ -352,10 +352,8 @@ func generateMergeCode(orderBy []ssql.OrderField, files []string) error {
 		inputVar = "records"
 	}
 
-	var codeLines []string
 	var sourceVars []string
 	sourceVars = append(sourceVars, inputVar)
-	needsLibImport := false
 
 	for i, file := range files {
 		varName := fmt.Sprintf("mergeSource%d", i+1)
@@ -407,16 +405,25 @@ func generateMergeCode(orderBy []ssql.OrderField, files []string) error {
 			}
 		}
 
-		// Regular JSONL file
-		needsLibImport = true
+		// Regular JSONL file: its OWN init fragment (as union does), read
+		// schema-aware so a tee'd file's `_schema` header is not a record.
+		// Until v4.91.0 this read was inlined into the merge statement,
+		// which the assembler treats as a filter expression — the
+		// generated program did not compile (first codegen test of a
+		// regular-file merge).
 		sourceVars = append(sourceVars, varName)
-		codeLines = append(codeLines, fmt.Sprintf(`%sFile, err := os.Open(%q)
+		readCode := fmt.Sprintf(`%sFile, err := os.Open(%q)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
 		os.Exit(1)
 	}
 	defer %sFile.Close()
-	%s := lib.ReadJSONL(%sFile)`, varName, file, file, varName, varName, varName))
+	%s := lib.ReadJSONLWithSchema(%sFile).Records`, varName, file, file, varName, varName, varName)
+		fileFrag := lib.NewInitFragment(varName, readCode,
+			[]string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}, "")
+		if err := lib.WriteCodeFragment(fileFrag); err != nil {
+			return fmt.Errorf("writing file read fragment: %w", err)
+		}
 	}
 
 	// Build OrderField slice literal
@@ -425,16 +432,12 @@ func generateMergeCode(orderBy []ssql.OrderField, files []string) error {
 		fields = append(fields, fmt.Sprintf(`{Field: %q, Desc: %v}`, of.Field, of.Desc))
 	}
 
-	codeLines = append(codeLines, fmt.Sprintf("merged := ssql.MergeSorted([]ssql.OrderField{%s}, %s)",
-		strings.Join(fields, ", "), strings.Join(sourceVars, ", ")))
-
+	// A filter-shaped closure, the stmt-fragment contract: the
+	// assembler applies it to the pipeline root.
 	outputVar := "merged"
-	code := strings.Join(codeLines, "\n\t")
-	var imports []string
-	if needsLibImport {
-		imports = []string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}
-	}
+	code := fmt.Sprintf("%s := func(input iter.Seq[ssql.Record]) iter.Seq[ssql.Record] {\n\t\treturn ssql.MergeSorted([]ssql.OrderField{%s}, input%s)\n\t}(%s)",
+		outputVar, strings.Join(fields, ", "), strings.Join(append([]string{""}, sourceVars[1:]...), ", "), inputVar)
 
-	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
+	frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"iter"}, getCommandString())
 	return lib.WriteCodeFragment(frag)
 }

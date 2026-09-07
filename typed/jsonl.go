@@ -26,57 +26,79 @@ import (
 // closures the CSV reader uses. A type with a field kind the plan
 // cannot handle (slices, maps, nested structs) falls back to
 // encoding/json for every row.
+//
+// Like [ReadCSV] it fails fast: an unreadable file, a line that is not
+// a JSON object, a value that does not fit its field's type, or a line
+// over the 1 MB limit panics with a *[ReadError] naming the line;
+// [ReadJSONLSafe] yields those as errors instead. Blank lines and a
+// leading `_schema` header are skipped.
 func ReadJSONL[T any](filename string) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		f, err := os.Open(filename)
 		if err != nil {
-			return
+			failRead("typed.ReadJSONL", filename, err)
 		}
 		defer f.Close()
-		ReadJSONLFromReader[T](f)(yield)
+		readJSONLLoud[T]("typed.ReadJSONL", filename, f, yield)
 	}
 }
 
 // ReadJSONLFromReader is the [io.Reader] variant of [ReadJSONL].
-func ReadJSONLFromReader[T any](r io.Reader) iter.Seq[T] {
-	pl, perr := buildJSONLPlan[T]()
-	if perr != nil {
-		return readJSONLReflect[T](r)
-	}
+func ReadJSONLFromReader[T any](rd io.Reader) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		sc := bufio.NewScanner(r)
-		sc.Buffer(make([]byte, 64*1024), 1024*1024) // 1 MB max line
-		for sc.Scan() {
-			line := sc.Bytes()
-			if len(line) == 0 || isSchemaHeaderLine(line) {
-				continue
-			}
-			var row T
-			if err := pl.decode(line, unsafe.Pointer(&row)); err != nil {
-				continue
-			}
-			if !yield(row) {
-				return
-			}
-		}
+		readJSONLLoud[T]("typed.ReadJSONLFromReader", "", rd, yield)
 	}
 }
 
-// readJSONLReflect is the encoding/json path: the fallback for types
-// the positional plan cannot cover, and the reference the differential
-// test compares against.
-func readJSONLReflect[T any](r io.Reader) iter.Seq[T] {
+// readJSONLLoud is the shared body of the lossy JSONL readers. Types
+// the positional plan cannot cover decode with encoding/json.
+func readJSONLLoud[T any](op, source string, rd io.Reader, yield func(T) bool) {
+	pl, perr := buildJSONLPlan[T]()
+	sc := bufio.NewScanner(rd)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024) // 1 MB max line
+	var lineN int64
+	for sc.Scan() {
+		lineN++
+		line := sc.Bytes()
+		if len(line) == 0 || isSchemaHeaderLine(line) {
+			continue
+		}
+		var row T
+		var err error
+		if perr == nil {
+			err = pl.decode(line, unsafe.Pointer(&row))
+		} else {
+			err = json.Unmarshal(line, &row)
+		}
+		if err != nil {
+			failLine(op, source, lineN, err)
+		}
+		if !yield(row) {
+			return
+		}
+	}
+	if err := sc.Err(); err != nil {
+		failLine(op, source, lineN+1, err)
+	}
+}
+
+// readJSONLReflect is the encoding/json path on its own — the reference
+// the differential test and benchmark compare the positional decoder
+// against. Behaves like [ReadJSONLFromReader] with no positional plan.
+func readJSONLReflect[T any](rd io.Reader) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		sc := bufio.NewScanner(r)
+		sc := bufio.NewScanner(rd)
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
+		var lineN int64
 		for sc.Scan() {
+			lineN++
 			line := sc.Bytes()
 			if len(line) == 0 || isSchemaHeaderLine(line) {
 				continue
 			}
 			var row T
 			if err := json.Unmarshal(line, &row); err != nil {
-				continue
+				failLine("typed.ReadJSONLFromReader", "", lineN, err)
 			}
 			if !yield(row) {
 				return

@@ -64,6 +64,24 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Default(0).
 		Help("Fast tail: the last N rows via a seek to the end of the file (identical to `| limit -last N`, without reading the middle). 0 = read everything").
 		Done().
+		Flag("-type", "-t").
+		Arg("field").
+		Completer(cf.NoCompleter{Hint: "<field-name>"}).
+		Done().
+		Arg("type").
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "auto"}}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Override type for field: -type zipcode string -type age int").
+		Done().
+		Flag("-default-type", "-dt").
+		String().
+		Global().
+		Default("auto").
+		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
+		Help("Default type for all fields: auto (default), string, int, float, bool").
+		Done().
 		Flag("FILE").
 		String().
 		Variadic().
@@ -72,8 +90,20 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Default("").
 		Help("Input TSV file(s) (or stdin if not specified)").
 		Done().
-		Handler(func(ctx *cf.Context) error {
+		Handler(func(ctx *cf.Context) (err error) {
+			defer recoverCellError(&err)
 			cfg := extractMultiFileConfig(ctx)
+			typeOverrides := make(map[string]string)
+			if typeVal, ok := ctx.GlobalFlags["-type"]; ok {
+				typeOverrides = parseTypeOverrides(typeVal)
+			}
+			defaultType, _ := ctx.GlobalFlags["-default-type"].(string)
+			csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
+			if err != nil {
+				return err
+			}
+			csvConfig.Delimiter = 0 // auto-detect from the header
+			types := typeArgs{overrides: typeOverrides, defaultType: defaultType, cfg: csvConfig}
 
 			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
 				sn := int64(-1)
@@ -91,7 +121,7 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 				if len(ctx.RemainingArgs) > 0 {
 					return fmt.Errorf("from tsv -sample cannot combine with pushdown (--)")
 				}
-				return executeFromTSVSample(cfg.files[0], sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), cfg.generate)
+				return executeFromTSVSample(cfg.files[0], types, sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), cfg.generate)
 			}
 			lastN, _ := ctx.GlobalFlags["-last"].(int)
 			if lastN > 0 {
@@ -104,7 +134,7 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 				if len(ctx.RemainingArgs) > 0 {
 					return fmt.Errorf("from tsv -last cannot combine with pushdown (--)")
 				}
-				return executeFromTSVLast(cfg.files[0], lastN, cfg.generate)
+				return executeFromTSVLast(cfg.files[0], types, lastN, cfg.generate)
 			}
 			if lastN < 0 {
 				return fmt.Errorf("from tsv -last must be positive, got %d", lastN)
@@ -125,11 +155,11 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 				if len(cfg.files) == 1 {
 					inputFile = cfg.files[0]
 				}
-				return executeFromTSV(inputFile, cfg.generate)
+				return executeFromTSV(inputFile, types, cfg.generate)
 			}
 
 			readFile := func(file *os.File) iter.Seq[ssql.Record] {
-				return ssql.ReadTSVFromReader(file)
+				return ssql.ReadTSVFromReaderWithConfig(file, csvConfig)
 			}
 			readHeaders := func(filename string) ([]string, error) {
 				file, err := os.Open(filename)
@@ -144,8 +174,23 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Done()
 }
 
+// typeArgs is a source stage's `-type` / `-default-type` state in the
+// three forms its paths need: the raw flag values (codegen), and the
+// resolved CSVConfig (exec).
+type typeArgs struct {
+	overrides   map[string]string
+	defaultType string
+	cfg         ssql.CSVConfig
+}
+
+func (t typeArgs) options() lib.TypeOptions { return typeOptionsFrom(t.overrides, t.defaultType) }
+
+// defaultTypeArgs is "no overrides": sampled column types, delimiter
+// auto-detected.
+func defaultTypeArgs() typeArgs { return typeArgs{cfg: ssql.DefaultTSVConfig()} }
+
 // executeFromTSV handles TSV reading for both the subcommand and bare form.
-func executeFromTSV(inputFile string, generate bool) error {
+func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 	if schemaMode() {
 		var r io.Reader = os.Stdin
 		if inputFile != "" {
@@ -181,26 +226,26 @@ func executeFromTSV(inputFile string, generate bool) error {
 	}
 
 	if shouldGenerate(generate) {
-		return generateFromTSVCode(inputFile)
+		return generateFromTSVCode(inputFile, types)
 	}
 
 	var records iter.Seq[ssql.Record]
 	if inputFile == "" {
-		records = ssql.ReadTSVFromReader(os.Stdin)
+		records = ssql.ReadTSVFromReaderWithConfig(os.Stdin, types.cfg)
 	} else if ssql.IsHTTPURL(inputFile) {
 		body, err := ssql.OpenHTTPStream(inputFile)
 		if err != nil {
 			return err
 		}
 		defer body.Close()
-		records = ssql.ReadTSVFromReader(body)
+		records = ssql.ReadTSVFromReaderWithConfig(body, types.cfg)
 	} else {
 		file, err := os.Open(inputFile)
 		if err != nil {
 			return fmt.Errorf("reading TSV file: %w", err)
 		}
 		defer file.Close()
-		records = ssql.ReadTSVFromReader(file)
+		records = ssql.ReadTSVFromReaderWithConfig(file, types.cfg)
 	}
 
 	records = wrapWithFieldCaching(records, inputFile)
@@ -208,24 +253,37 @@ func executeFromTSV(inputFile string, generate bool) error {
 }
 
 // generateFromTSVCode generates Go code for reading TSV.
-func generateFromTSVCode(filename string) error {
+func generateFromTSVCode(filename string, types typeArgs) error {
 	if typedMode() {
-		return generateFromTSVCodeTyped(filename)
+		return generateFromTSVCodeTyped(filename, types)
 	}
 
 	var code string
 	var imports []string
 	var params []lib.CodeParam
 
+	configCode := generateDelimConfigCode(types.overrides, types.defaultType, "0 /* auto-detect */")
 	if filename == "" {
-		code = `records := ssql.ReadTSVFromReader(os.Stdin)`
+		if configCode != "" {
+			code = configCode + "\n\trecords := ssql.ReadTSVFromReaderWithConfig(os.Stdin, csvConfig)"
+		} else {
+			code = `records := ssql.ReadTSVFromReader(os.Stdin)`
+		}
 		imports = []string{"os"}
 	} else {
 		params = append(params, lib.CodeParam{Name: "input", Default: filename, Help: "input TSV file", VarName: "flagInput"})
-		code = `records, err := ssql.ReadTSV(*flagInput)
+		if configCode != "" {
+			code = configCode + `
+	records, err := ssql.ReadTSVWithConfig(*flagInput, csvConfig)
 	if err != nil {
 		return fmt.Errorf("reading TSV: %w", err)
 	}`
+		} else {
+			code = `records, err := ssql.ReadTSV(*flagInput)
+	if err != nil {
+		return fmt.Errorf("reading TSV: %w", err)
+	}`
+		}
 		imports = []string{"fmt", "os"}
 	}
 
@@ -264,13 +322,13 @@ func typedDelimArg(delim byte) string {
 // definition, and produces a typed.ReadDelim[T] /
 // typed.ReadDelimParallel[T] call. When the detected delimiter is
 // not '\t', emits a typed.WithDelim(...) option.
-func generateFromTSVCodeTyped(filename string) error {
+func generateFromTSVCodeTyped(filename string, types typeArgs) error {
 	if filename == "" {
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'from tsv' from stdin not supported in typed mode (need a file to sample for schema inference)"))
 	}
 
-	schema, structDef, delim, err := lib.SampleTSVSchema(filename, "", 0)
+	schema, structDef, delim, err := lib.SampleTSVSchema(filename, "", 0, types.options())
 	if err != nil {
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: %w", err))
@@ -316,12 +374,13 @@ func readTSVHeaders(r io.Reader) ([]string, error) {
 
 // executeFromTSVSample is the -sample path for TSV (byte-offset
 // sampling; delimiter auto-detected by the standard TSV reader).
-func executeFromTSVSample(inputFile string, n int, seed int64, seedGiven bool, generate bool) error {
+func executeFromTSVSample(inputFile string, types typeArgs, n int, seed int64, seedGiven bool, generate bool) error {
 	resolvedSeed := resolveSampleSeed(seed, seedGiven, "-sample-seed")
 	if shouldGenerate(generate) {
-		return generateFromFileSampleCode("ssql.SampleTSVFile", "input TSV file", inputFile, n, resolvedSeed)
+		return generateFromFileSampleCode("ssql.SampleTSVFile", "input TSV file", inputFile, n, resolvedSeed,
+			sourceCodegenExtras{configCode: generateDelimConfigCode(types.overrides, types.defaultType, "0 /* auto-detect */")})
 	}
-	records, err := ssql.SampleTSVFile(inputFile, n, resolvedSeed)
+	records, err := ssql.SampleTSVFile(inputFile, n, resolvedSeed, types.cfg)
 	if err != nil {
 		return err
 	}
@@ -331,14 +390,15 @@ func executeFromTSVSample(inputFile string, n int, seed int64, seedGiven bool, g
 
 
 // executeFromTSVLast: `from tsv FILE -last N` (seek-based tail).
-func executeFromTSVLast(inputFile string, n int, generate bool) error {
+func executeFromTSVLast(inputFile string, types typeArgs, n int, generate bool) error {
 	if schemaMode() {
-		return executeFromTSV(inputFile, generate)
+		return executeFromTSV(inputFile, types, generate)
 	}
 	if shouldGenerate(generate) {
-		return generateFromFileLastCode("ssql.TailTSVFile", "input TSV file", inputFile, n)
+		return generateFromFileLastCode("ssql.TailTSVFile", "input TSV file", inputFile, n,
+			sourceCodegenExtras{configCode: generateDelimConfigCode(types.overrides, types.defaultType, "0 /* auto-detect */")})
 	}
-	records, err := ssql.TailTSVFile(inputFile, n)
+	records, err := ssql.TailTSVFile(inputFile, n, types.cfg)
 	if err != nil {
 		return err
 	}

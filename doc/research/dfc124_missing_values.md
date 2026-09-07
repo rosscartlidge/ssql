@@ -2,7 +2,7 @@
 
 Reference: DFC124
 Created: 2026-09-03
-Last modified: 2026-09-05
+Last modified: 2026-09-07
 
 [Back to Index](./README.md)
 
@@ -62,7 +62,18 @@ second missing to keep consistent with the first.
   all assume scalar GoTypes). That is its own slice. Until then the
   empty-cell equivalence cases SKIP the typed/parallel lanes with this
   DFC as the stated reason — a visible, named divergence rather than a
-  fixture-invisible one.
+  fixture-invisible one. **The typed lane's silence is gone (2026-09-07,
+  v4.91.0):** the typed readers now fail fast with a `*typed.ReadError`
+  (CSV kept the row with the cell zeroed; JSONL dropped the row; a
+  missing file was an empty stream — all exit 0 before). The `-type`
+  remedy reaches typed codegen (it was refused) and `from tsv` /
+  `from jsonl` grew the flag. Gate: `TestLateMismatchIsLoudInEveryLane`,
+  `TestTypeOverrideMakesEveryLaneAgree` (cmd/ssql/readers_loud_test.go).
+- **TSV** (2026-09-07): the TSV reader typed each value independently
+  (no column lock), so it never erred — a mixed column instead. It now
+  shares `readRows` with CSV: same sample, same `CellError`, same
+  absent-empties rule. `int_first_tsv_floats_survive` in the equivalence
+  corpus.
 - ~~**Unparsable non-empty cells**~~ **DONE 2026-09-05.** A non-empty
   cell that does not fit its column's type is a `*ssql.CellError` (row,
   column, value, and whether the type was sampled or explicit) — a hard

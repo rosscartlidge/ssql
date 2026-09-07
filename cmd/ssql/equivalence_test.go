@@ -771,6 +771,26 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// The same fixture as TSV: the TSV reader typed each value on its
+		// own until v4.91.0 (no column typing at all in exec, so a wrong
+		// answer needed no late row); now it shares readRows with CSV.
+		Name:     "int_first_tsv_floats_survive",
+		Pipeline: `{{.bin}} from tsv {{.data}}/int_first.tsv | {{.bin}} where -if v gt 0.4 | {{.bin}} include t v`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"t": 3, "v": 2}, {"t": 1, "v": 0.5}, {"t": 2, "v": 1.5},
+		},
+	},
+	{
+		// `-type` on from jsonl (new in v4.91.0): exec coerces per record,
+		// record codegen emits ssql.CoerceFieldTypes, typed codegen fixes
+		// the struct field — one answer, five lanes.
+		Name:     "jsonl_type_override_agrees",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/employees.jsonl -type age float -type name string | {{.bin}} where -if age gt 29.5 | {{.bin}} include name age`,
+		Ordered:  false,
+		Skip:     map[string]string{"duckdb": "generate sql does not translate from-stage -type overrides"},
+	},
+	{
 		// exec `where -if` compared an int field against a fractional
 		// operand by ParseInt → error → silent false, dropping every row;
 		// the other lanes compare numerically. Found by the int_first case

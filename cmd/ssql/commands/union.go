@@ -218,11 +218,11 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 			needsLibImport = true
 			code = fmt.Sprintf(`%sHandle, err := os.Open(%q)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error opening %s: %%v\n", err)
+		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
 		os.Exit(1)
 	}
 	defer %sHandle.Close()
-	%s := lib.ReadJSONL(%sHandle)`, varName, file, file, varName, varName, varName)
+	%s := lib.ReadJSONLWithSchema(%sHandle).Records`, varName, file, file, varName, varName, varName)
 			imports = []string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"}
 		}
 		fileFrag := lib.NewInitFragment(varName, code, imports, "")

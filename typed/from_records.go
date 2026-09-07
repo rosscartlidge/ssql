@@ -2,7 +2,6 @@ package typed
 
 import (
 	"iter"
-	"sync"
 )
 
 // FromRecords adapts a Record-mode sequence into a typed sequence by
@@ -61,12 +60,10 @@ func DistinctParallel[T any, K comparable](in Stream[T], key func(T) K) iter.Seq
 		return func(yield func(T) bool) {}
 	}
 	locals := make([][]T, nShards)
-	var wg sync.WaitGroup
+	var g shardGroup
 	for i, shard := range in.shards {
 		i, shard := i, shard
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		g.Go(func() {
 			seen := make(map[K]struct{})
 			var out []T
 			for v := range shard {
@@ -78,10 +75,10 @@ func DistinctParallel[T any, K comparable](in Stream[T], key func(T) K) iter.Seq
 				out = append(out, v)
 			}
 			locals[i] = out
-		}()
+		})
 	}
 	return func(yield func(T) bool) {
-		wg.Wait()
+		g.Wait()
 		seen := make(map[K]struct{})
 		for _, local := range locals {
 			for _, v := range local {
