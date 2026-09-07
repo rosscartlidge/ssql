@@ -48,7 +48,7 @@ useful things easily before the sophisticated and optimising features.
    whole repository (gigabytes) for 44 KB of fixtures. The runner stages
    its throwaway copy through the same command, so the gate covers the
    setup step; `-force` is the only way an existing file is overwritten.
-2. **The codelab is gated.** `scripts/codelab-run.sh` extracts every
+2. **The codelab is gated.** `codelab-run.sh` (moved 2026-09-07 from `scripts/` to `doc/codelab-data/`, so `ssql codelab` ships it and a reader can self-test their install) extracts every
    ```` ```bash ```` block, runs it in the fixture directory with
    `set -o pipefail` against a freshly built binary, and fails on a
    non-zero exit or empty stdout. `TestCodelabRuns` wraps it into the
@@ -117,7 +117,7 @@ import); the typed codelab was clean; the advanced tutorial had 11 of
 46 blocks. Every one of those had been "validated" by a check that
 never executed it.
 
-**Two runners, one convention.** `scripts/codelab-run.sh [-v] [DOC]` is
+**Two runners, one convention.** `doc/codelab-data/codelab-run.sh [-v] [DOC]` is
 now parametrised (default `doc/cli-codelab.md`) and gates the signal
 guide too. `scripts/codelab-go-run.sh DOC` is its Go twin: complete
 programs go into their own package in a throwaway module whose go.mod

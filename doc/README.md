@@ -6,7 +6,7 @@ See also: **[Research & design docs →](research/README.md)**
 
 Do the codelabs in this order — each assumes the one before it. Every
 code block in every codelab is executed against the current source on
-`make doc-test` — CLI codelabs by `scripts/codelab-run.sh`, Go codelabs by
+`make doc-test` — CLI codelabs by `doc/codelab-data/codelab-run.sh`, Go codelabs by
 `scripts/codelab-go-run.sh` (DFC125) — so what you read is what happens.
 
 1. [CLI Codelab](cli-codelab.md) — start here: ten minutes to useful, then the sophisticated features one at a time

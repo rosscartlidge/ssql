@@ -294,13 +294,13 @@ done
 # Summary
 section "Codelab examples (DFC125)"
 # Every code block of every codelab on the learning path runs against
-# the current checkout: CLI codelabs through codelab-run.sh (a copy of
+# the current checkout: CLI codelabs through doc/codelab-data/codelab-run.sh (a copy of
 # doc/codelab-data, freshly built binary), Go codelabs through
 # codelab-go-run.sh (throwaway module replacing ssql/v4 with this tree).
 # Mirrors TestCodelabRuns in cmd/ssql/codelab_test.go — keep the lists equal.
 for spec in \
-    "codelab-run.sh doc/cli-codelab.md" \
-    "codelab-run.sh doc/cli-signal-processing.md" \
+    "../doc/codelab-data/codelab-run.sh doc/cli-codelab.md" \
+    "../doc/codelab-data/codelab-run.sh doc/cli-signal-processing.md" \
     "codelab-go-run.sh doc/codelab-intro.md" \
     "codelab-go-run.sh doc/typed-codelab.md"; do
     set -- $spec

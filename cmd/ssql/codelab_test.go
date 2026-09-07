@@ -6,7 +6,8 @@ package main
 // line. Blocks that cannot run carry an explicit
 // `# codelab: skip — reason` first line.
 //
-//   - CLI codelabs (```bash blocks) run through scripts/codelab-run.sh in
+//   - CLI codelabs (```bash blocks) run through doc/codelab-data/codelab-run.sh
+//     (shipped with the data by `ssql codelab`, so readers can run it too) in
 //     a throwaway copy of doc/codelab-data against a freshly built binary.
 //   - Go codelabs (```go programs, fragments, and ```bash blocks) run
 //     through scripts/codelab-go-run.sh in a throwaway module that
@@ -28,16 +29,16 @@ func TestCodelabRuns(t *testing.T) {
 		doc    string
 		runner string
 	}{
-		{"doc/cli-codelab.md", "codelab-run.sh"},
-		{"doc/cli-signal-processing.md", "codelab-run.sh"},
-		{"doc/codelab-intro.md", "codelab-go-run.sh"},
-		{"doc/typed-codelab.md", "codelab-go-run.sh"},
+		{"doc/cli-codelab.md", "doc/codelab-data/codelab-run.sh"},
+		{"doc/cli-signal-processing.md", "doc/codelab-data/codelab-run.sh"},
+		{"doc/codelab-intro.md", "scripts/codelab-go-run.sh"},
+		{"doc/typed-codelab.md", "scripts/codelab-go-run.sh"},
 	}
 	for _, c := range cases {
 		c := c
 		t.Run(c.doc, func(t *testing.T) {
 			t.Parallel()
-			out, err := exec.Command("bash", "../../scripts/"+c.runner, "../../"+c.doc).CombinedOutput()
+			out, err := exec.Command("bash", "../../"+c.runner, "../../"+c.doc).CombinedOutput()
 			if err != nil {
 				t.Fatalf("%s: codelab blocks failed:\n%s", c.doc, out)
 			}

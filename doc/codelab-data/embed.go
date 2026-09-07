@@ -5,7 +5,7 @@
 // for 44 KB of CSV.
 //
 // The checked-in files in this directory ARE the embedded ones: the
-// codelab runner (scripts/codelab-run.sh) and the tests read the same
+// codelab runner (codelab-run.sh, beside them) and the tests read the same
 // bytes the binary ships, so the two cannot drift.
 package codelabdata
 
@@ -16,12 +16,15 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
-// Files holds the fixture files (data plus the README that describes
-// them). embed.go itself is deliberately not included.
+// Files holds the fixture files: the data, the README that describes
+// them, and codelab-run.sh — the runner that executes every block of the
+// codelab against the installed ssql, so a reader can self-test their
+// install (`./codelab-run.sh`). embed.go itself is not included.
 //
-//go:embed *.csv *.parquet *.log README.md
+//go:embed *.csv *.parquet *.log README.md codelab-run.sh
 var Files embed.FS
 
 // Names lists the embedded fixture files, sorted.
@@ -66,7 +69,11 @@ func Write(dir string, force bool) ([]string, error) {
 			return written, err
 		}
 		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, data, 0o644); err != nil {
+		mode := os.FileMode(0o644)
+		if strings.HasSuffix(name, ".sh") {
+			mode = 0o755
+		}
+		if err := os.WriteFile(path, data, mode); err != nil {
 			return written, err
 		}
 		written = append(written, path)

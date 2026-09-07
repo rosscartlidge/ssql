@@ -47,7 +47,7 @@ func RegisterCodelab(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			for _, path := range written {
 				fmt.Fprintln(ctx.Stdout(), path)
 			}
-			fmt.Fprintf(ctx.Stdout(), "\n%d files written. Next:\n  cd %s\n  eval \"$(ssql -shell-init)\"     # Tab / Ctrl-O / Alt-h completion\n  ssql from employees.csv | ssql to table\nFollow along: https://github.com/rosscartlidge/ssql/blob/main/doc/cli-codelab.md\n", len(written), dir)
+			fmt.Fprintf(ctx.Stdout(), "\n%d files written. Next:\n  cd %s\n  eval \"$(ssql -shell-init)\"     # Tab / Ctrl-O / Alt-h completion\n  ssql from employees.csv | ssql to table\nFollow along: https://github.com/rosscartlidge/ssql/blob/main/doc/cli-codelab.md\nSelf-test: ./codelab-run.sh runs every block of the codelab against this ssql.\n", len(written), dir)
 			return nil
 		}).
 		Done()

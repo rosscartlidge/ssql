@@ -3,8 +3,10 @@
 A guided path through `ssql`, the Unix-pipeline data tool. Every command
 below runs against a handful of small files that `ssql codelab` writes
 out for you (checked in as `doc/codelab-data/`) — and every
-block in this document *is* run, by `scripts/codelab-run.sh`, so what you
-read is what happens (DFC125).
+block in this document *is* run, by `codelab-run.sh`, so what you read
+is what happens (DFC125). `ssql codelab` writes that runner beside the
+data: `./codelab-run.sh` executes every block here against your own
+install.
 
 **How to use it:** Part 1 gets you doing useful things in about ten
 minutes; each block answers a question about the data, and you should

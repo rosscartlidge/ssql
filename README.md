@@ -626,7 +626,7 @@ func main() {
 - Look at a file, answer questions about it, save and share the result
 - Tab / Ctrl-O / Alt-h discovery from the prompt (do it inside tmux)
 - Time series, `make it fast`, `generate go -run -pipeline`, distributed data
-- Every block is run by `scripts/codelab-run.sh` — what you read is what happens
+- Every block is run by `codelab-run.sh`, which `ssql codelab` writes beside the data — what you read is what happens, and you can check it on your own install
 - **Debug pipelines with jq** - [See debugging guide →](doc/cli-debugging.md)
 
 ### 2. 📊 **[Signal Processing](doc/cli-signal-processing.md)** — optional CLI branch

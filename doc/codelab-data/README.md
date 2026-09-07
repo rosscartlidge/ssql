@@ -17,6 +17,9 @@ restores them after editing.
 | `sensor.csv` | irregular timestamps, temp + rpm | resample, bucket, window |
 | `signal.csv` | 5 Hz + 20 Hz at 100 samples/s | fft, spectrogram |
 
-`scripts/codelab-run.sh` executes every bash block of the tutorial in a
-directory that `ssql codelab` writes (DFC125); if you change a file, the
-runner tells you which example broke.
+`codelab-run.sh` (here, and written out with the data) executes every
+bash block of the tutorial in a directory that `ssql codelab` writes
+(DFC125). In the repository it builds ssql from the checkout; beside
+your own copy of the data it uses the `ssql` on your PATH and fetches
+the codelab for that version — a self-test of your install. If you
+change a fixture, the runner tells you which example broke.

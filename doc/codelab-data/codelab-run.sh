@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 # codelab-run.sh — DFC125: execute every ```bash block of a CLI codelab
-# (default doc/cli-codelab.md) in a throwaway copy of doc/codelab-data
-# against a freshly built ssql, failing on non-zero exit or empty stdout.
-# A block whose FIRST line is
+# (default doc/cli-codelab.md) in a throwaway copy of the codelab data,
+# failing on non-zero exit or empty stdout. A block whose FIRST line is
 #   # codelab: skip — <reason>
 # is skipped and the reason printed.
-# Usage: scripts/codelab-run.sh [-v] [DOC.md]
+#
+# It runs in two places:
+#   - In the repository (make doc-test, TestCodelabRuns): builds ssql from
+#     the checkout and reads the doc from doc/.
+#   - Next to the data `ssql codelab` wrote (it ships with the fixtures):
+#     uses the `ssql` on your PATH and, when no doc is given or beside
+#     it, fetches the codelab for that ssql's version from GitHub — so
+#     `./codelab-run.sh` is a self-test of your install.
+# Usage: codelab-run.sh [-v] [DOC.md]     (SSQL_BIN=/path/to/ssql overrides)
 set -o pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DOC="$ROOT/doc/cli-codelab.md"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT=""
+[[ -f "$HERE/../../go.mod" && -d "$HERE/../../cmd/ssql" ]] && ROOT="$(cd "$HERE/../.." && pwd)"
+DOC=""
 VERBOSE=
 for arg in "$@"; do
   case "$arg" in
@@ -16,12 +25,37 @@ for arg in "$@"; do
     *) DOC="$arg" ;;
   esac
 done
-[[ -f "$DOC" ]] || { echo "codelab-run: no such doc: $DOC"; exit 1; }
 BIN_DIR="$(mktemp -d)"
 WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$BIN_DIR" "$WORK" 2>/dev/null; rm -rf "$BIN_DIR" "$WORK"' EXIT
-(cd "$ROOT" && go build -o "$BIN_DIR/ssql" ./cmd/ssql) || { echo "codelab-run: build failed"; exit 1; }
+
+# The binary: SSQL_BIN, else a fresh build when inside the repo, else PATH.
+if [[ -n "${SSQL_BIN:-}" ]]; then
+  ln -s "$(command -v "$SSQL_BIN" || echo "$SSQL_BIN")" "$BIN_DIR/ssql"
+elif [[ -n "$ROOT" ]]; then
+  (cd "$ROOT" && go build -o "$BIN_DIR/ssql" ./cmd/ssql) || { echo "codelab-run: build failed"; exit 1; }
+elif command -v ssql >/dev/null; then
+  ln -s "$(command -v ssql)" "$BIN_DIR/ssql"
+else
+  echo "codelab-run: no ssql on PATH (go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest, then add \$HOME/go/bin to PATH)"; exit 1
+fi
 export PATH="$BIN_DIR:$PATH"
+
+# The doc: argument, else the checkout's, else one beside this script,
+# else the copy tagged with the installed version.
+if [[ -z "$DOC" ]]; then
+  if [[ -n "$ROOT" ]]; then DOC="$ROOT/doc/cli-codelab.md"
+  elif [[ -f "$HERE/cli-codelab.md" ]]; then DOC="$HERE/cli-codelab.md"
+  else
+    ver="$(ssql version | sed -n 's/^ssql v\([0-9.]*\).*/\1/p')"
+    DOC="$WORK/cli-codelab.md"
+    url="https://raw.githubusercontent.com/rosscartlidge/ssql/v$ver/doc/cli-codelab.md"
+    curl -fsSL "$url" -o "$DOC" || { echo "codelab-run: could not fetch $url (pass the doc path as an argument)"; exit 1; }
+    echo "codelab-run: running doc/cli-codelab.md as of v$ver against $(ssql version)"
+  fi
+fi
+[[ -f "$DOC" ]] || { echo "codelab-run: no such doc: $DOC"; exit 1; }
+
 # Blocks run in a throwaway COPY of the fixtures: examples that write
 # files (to csv, tee, "create sample data") must never touch the
 # checked-in data — the first baseline run overwrote employees.csv.

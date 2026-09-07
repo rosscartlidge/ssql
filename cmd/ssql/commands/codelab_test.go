@@ -23,7 +23,7 @@ func TestCodelabWritesEmbeddedFixtures(t *testing.T) {
 	if len(written) != len(names) || len(names) < 9 {
 		t.Fatalf("wrote %d files, embedded %d: %v", len(written), len(names), names)
 	}
-	for _, name := range []string{"employees.csv", "employees.parquet", "orders.csv", "customers.csv", "sensor.csv", "signal.csv", "app.log", "README.md"} {
+	for _, name := range []string{"employees.csv", "employees.parquet", "orders.csv", "customers.csv", "sensor.csv", "signal.csv", "app.log", "README.md", "codelab-run.sh"} {
 		got, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("%s not written: %v", name, err)
@@ -38,6 +38,9 @@ func TestCodelabWritesEmbeddedFixtures(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "embed.go")); err == nil {
 		t.Errorf("embed.go must not ship with the data")
+	}
+	if st, err := os.Stat(filepath.Join(dir, "codelab-run.sh")); err != nil || st.Mode()&0o111 == 0 {
+		t.Errorf("codelab-run.sh must ship executable: %v %v", st, err)
 	}
 
 	// A reader edits a fixture; a second plain run must refuse, naming it.

@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nil`, as before. Zero cost — the decoder already branched on the
   empty string. Remedies: a pointer field, `-type COL string`, or `fill`.
 
+### Added
+- **`ssql codelab` ships the codelab runner.** `codelab-run.sh` moved
+  from `scripts/` to `doc/codelab-data/` and is written out with the
+  data; run `./codelab-run.sh` there and every block of the tutorial
+  executes against your installed `ssql` (fetching the codelab for that
+  version) — an install self-test. Inside the repository it still builds
+  from the checkout for `make doc-test` / `TestCodelabRuns`.
+
 ### Fixed
 - **`resample` is quiet on ordinary input.** The codelab's six-row
   example printed three stderr notes: the epoch unit detected as
