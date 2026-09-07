@@ -192,7 +192,7 @@ ssql conventions     # cross-cutting semantics: update SET, _schema headers, SSQ
 > output otherwise. Bindings are installed in the emacs, vi-insert and
 > vi-command keymaps, so they work whichever editing mode you prefer.
 
-[**Interactive shell walkthrough →**](doc/cli-codelab.md#interactive-shell)
+[**Interactive shell walkthrough →**](doc/cli-codelab.md#1-setup)
 
 ### 🏁 **Faster than DuckDB** — measured, on a real 14.6 M-row file
 

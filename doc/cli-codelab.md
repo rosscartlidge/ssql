@@ -77,10 +77,9 @@ If you edit a file while experimenting and want the original back,
 `ssql codelab -force` rewrites the set.
 
 **Start tmux, in that directory.** ssql is designed to be *discovered
-from the prompt*:
-Tab completes commands, flags, field names and even field values from
-your data; Ctrl-O completes fields across a whole pipeline; Alt-h
-explains whatever is under your cursor. Inside tmux those answers open
+from the prompt*: Tab completes commands, flags and file names; Ctrl-O
+completes field names and field values from your data, at any point in
+a pipeline; Alt-h explains whatever is under your cursor. Inside tmux those answers open
 as small popups over your command line and vanish when you pick one;
 outside tmux they print inline below the prompt, which works but is
 noisier. tmux is a terminal multiplexer — a program that runs a shell
@@ -117,15 +116,25 @@ echo 'eval "$(ssql -shell-init)"' >> ~/.bashrc
 ```
 
 **Try it.** Type each line up to the marked key and press that key
-(`<TAB>` is the Tab key; `<Alt-h>` is holding Alt while pressing h;
-the last two lines are typed without pressing Enter):
+(`<TAB>` is the Tab key; `<Ctrl-O>` is holding Ctrl while pressing o;
+`<Alt-h>` is holding Alt while pressing h; none of these lines is
+finished with Enter):
 
 ```
 ssql <TAB>                                 # every command
-ssql from employees.csv | ssql where -if <TAB>      # the file's FIELD NAMES
-ssql from employees.csv | ssql where -if dept eq <TAB>   # its VALUES
+ssql from emp<TAB>                         # the FILE name
+ssql from employees.csv | ssql where -if <Ctrl-O>        # the file's FIELD NAMES
+ssql from employees.csv | ssql where -if dept eq <Ctrl-O>   # its VALUES
 ssql from employees.csv | ssql group-by dept -sum salary<Alt-h>   # what is this flag?
 ```
+
+Why two keys? bash's Tab completion can only see the command you are
+typing, not the stages before the `|`, so it cannot know which file the
+fields come from. Ctrl-O reads the whole line. If you press Tab in a
+field or value slot anyway, bash inserts a `Use-Ctrl-O` reminder; press
+Ctrl-O and it is replaced with the real completions. (In the `ssql
+serve` workspace, which you meet in section 4, Tab does everything,
+because that console owns the whole line.)
 
 If Alt-h does nothing, your terminal is keeping Alt for itself: press
 Esc and then h instead, or on macOS enable "Use Option as Meta key" in

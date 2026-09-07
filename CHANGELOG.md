@@ -5,7 +5,7 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.91.0] - 2026-09-07
 
 ### Changed
 - **Typed readers fail fast — no more silently wrong rows.** On a file
