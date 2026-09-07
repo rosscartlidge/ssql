@@ -2,7 +2,7 @@
 
 Reference: DFC110
 Created: 2026-08-21
-Last modified: 2026-08-23
+Last modified: 2026-09-07
 
 [Back to Index](./README.md)
 
@@ -29,10 +29,12 @@ ssql from big.csv | ssql sample -percent 5      # ~5% of rows (Bernoulli)
 ssql from big.csv | ssql sample 1000 -seed 42   # reproducible
 ```
 
-- `N` (positional) and `-percent P` are mutually exclusive; one is
-  required. `sample 0` = pass-through, mirroring `limit 0`'s
-  no-limit dial (Ross's convention: dial a stage off instead of
-  editing it out).
+- `N` (positional) and `-percent P` are mutually exclusive. *Amended
+  2026-09-07 (v4.92.0):* neither given = pass-through, mirroring the bare
+  `limit` dial (Ross's convention: dial a stage off instead of editing
+  it out); `sample 0` now keeps no rows (USING SAMPLE 0 ROWS), as `limit
+  0` is SQL's LIMIT 0. Before that the dial was `sample 0` / `limit 0`,
+  which collided with SQL and `head -n 0` (both: nothing).
 - `-seed S` (int64). **Default: seeded randomly, and the chosen seed
   is printed to stderr** (`sample: seed 1755741234`), so any
   exploratory result can be reproduced after the fact. Loud
@@ -104,8 +106,9 @@ reads the whole file — reservoir sampling cannot early-exit — which
 cost 21s on the 1.2GB fixture vs limit's 0.013s. The redirect
 therefore composes the dials: `ssql from X | ssql limit 100000 |
 ssql sample 1000` (0.18s) — a bounded read window with uniform
-sampling inside it, both stages visible and dialable (`limit 0` =
-true whole-file uniformity, accepting the read). The codelab
+sampling inside it, both stages visible and dialable (a bare `limit` —
+delete the number — is true whole-file uniformity, accepting the read;
+before v4.92.0 the dial was `limit 0`). The codelab
 documents the full-read characteristic. ⚡ typed heads compose
 automatically (the RNG is package code the codegen calls).
 

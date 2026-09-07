@@ -889,9 +889,8 @@ func translateSample(q *sqlQuery, args []string) error {
 			}
 		}
 	}
-	if n == "0" {
-		return nil // pass-through dial: stage vanishes (matches Go codegen)
-	}
+	// A bare `sample` (pass-through) emits no fragment, so it never
+	// reaches here; `sample 0` is a real stage: USING SAMPLE 0 ROWS.
 	switch {
 	case percent != "":
 		q.fromClause += " USING SAMPLE " + percent + "% (bernoulli)"

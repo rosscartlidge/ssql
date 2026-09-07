@@ -165,7 +165,9 @@ func equivLanes() []equivLane {
 			}
 			// duckdb -json prints one JSON array; re-emit as JSONL for equivParse.
 			raw := strings.TrimSpace(stdout.String())
-			if raw == "" {
+			// DuckDB 1.5.0 prints the malformed `[{]` for a result with no
+			// rows (LIMIT 0, USING SAMPLE 0 ROWS): zero records.
+			if raw == "" || raw == "[]" || raw == "[{]" {
 				return ""
 			}
 			var rows []map[string]any
@@ -603,12 +605,21 @@ var equivCases = []EquivCase{
 		Skip:    map[string]string{"duckdb": "seeded sampling has no cross-engine deterministic equivalent (DFC110)"},
 	},
 	{
-		// sample 0 = pass-through dial (the limit-0 convention): the
-		// stage must vanish identically everywhere, duckdb included.
-		Name: "sample_zero_passthrough",
+		// bare `sample` = pass-through dial (the bare-limit convention):
+		// the stage must vanish identically everywhere, duckdb included.
+		Name: "sample_bare_passthrough",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
+			`{{.bin}} sample | {{.bin}} sort city`,
+		Ordered: true,
+	},
+	{
+		// `sample 0` keeps no rows in every lane (USING SAMPLE 0 ROWS in
+		// SQL); until v4.92.0 it was the pass-through dial.
+		Name: "sample_zero_is_empty",
 		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | ` +
 			`{{.bin}} sample 0 | {{.bin}} sort city`,
 		Ordered: true,
+		Golden:  []map[string]any{},
 	},
 	{
 		// from -sample (byte-offset, DFC110 amendment): seeded selection
@@ -975,11 +986,12 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
-		// `limit 0` / `offset 0` are pass-throughs (a limit stage you can
-		// dial to 0 for full runs) and MUST vanish from generated
-		// go/sql/ssql — every lane must return exactly the where result.
-		Name:     "limit_zero_passthrough",
-		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 15 | {{.bin}} offset 0 | {{.bin}} limit 0`,
+		// A bare `limit` (no N) and `offset 0` are pass-throughs (a limit
+		// stage you dial off by deleting the number) and MUST vanish from
+		// generated go/sql/ssql — every lane must return exactly the
+		// where result.
+		Name:     "limit_bare_passthrough",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 15 | {{.bin}} offset 0 | {{.bin}} limit`,
 		Ordered:  false,
 		Golden: []map[string]any{
 			{"id": 7, "city": "Mumbai", "pop": 20},
@@ -988,6 +1000,14 @@ var equivCases = []EquivCase{
 			{"id": 2, "city": "Delhi", "pop": 29},
 			{"id": 11, "city": "Bogota", "pop": 25},
 		},
+	},
+	{
+		// `limit 0` is SQL's LIMIT 0: no records in every lane (it was
+		// the pass-through dial until v4.92.0).
+		Name:     "limit_zero_is_empty",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 15 | {{.bin}} limit 0`,
+		Ordered:  false,
+		Golden:   []map[string]any{},
 	},
 	{
 		// +if negation was silently DROPPED by record and typed codegen

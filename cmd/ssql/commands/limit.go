@@ -11,11 +11,11 @@ import (
 // RegisterLimit registers the limit subcommand
 func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("limit").
-		Description("Take first N records (SQL LIMIT), or the last N with -last (looking for tail? this is it); 0 = no limit (pass-through)").
+		Description("Take first N records (SQL LIMIT), or the last N with -last (looking for tail? this is it); no N = no limit, 0 = no records").
 		Example("ssql from data.csv | ssql limit 10", "Show first 10 records").
 		Example("ssql from log.csv | ssql limit -last 20", "The last 20 records in arrival order (tail)").
-		Example("ssql from large.csv | ssql limit 100 | ssql to table", "Preview first 100 records").
-		Example("ssql from large.csv | ssql limit 0 | ssql to table", "Limit dialled to 0: all records pass through (and code generation skips the stage)").
+		Example("ssql from large.csv | ssql limit | ssql to table", "Limit dialled off (no N): all records pass through and code generation skips the stage — edit the number back in for a preview").
+		Example("ssql from large.csv | ssql limit 0 | ssql to csv", "SQL's LIMIT 0: no records, just the header").
 
 		Flag("-last").
 			Bool().
@@ -31,20 +31,22 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 		Flag("N").
 			Int().
-			Required().
+			Default(-1).
 			Global().
-			Help("Number of records to take").
+			Help("Number of records to take; omit it for no limit (the stage passes everything through), 0 for no records").
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
 			var n int
 			var generate bool
 
-			// Get flags from context
+			// N absent (Default -1) = no limit: a `limit N` stage stays in
+			// the pipeline and is dialled off by deleting the number.
+			// Until v4.92.0 the dial was `limit 0`, which collided with
+			// SQL's LIMIT 0 and `head -n 0` (both: nothing).
+			n = -1
 			if nVal, ok := ctx.GlobalFlags["N"]; ok {
 				n = nVal.(int)
-			} else {
-				return fmt.Errorf("N argument is required")
 			}
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
@@ -55,8 +57,8 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				last = v.(bool)
 			}
 
-			if n < 0 {
-				return fmt.Errorf("limit must be non-negative, got %d (use 0 for no limit)", n)
+			if n < -1 {
+				return fmt.Errorf("limit must be non-negative, got %d (omit N for no limit)", n)
 			}
 
 			// Check if generation is enabled (flag or env var)
@@ -68,12 +70,11 @@ func RegisterLimit(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
-			// Apply limit — 0 means no limit, pass everything through
-			// (lets pipelines keep a `limit N` stage and dial it to 0
-			// for full runs).
-			if n > 0 && last {
+			// n == -1: no limit, pass everything through. n == 0: no
+			// records (Limit/TakeLast with 0 yield nothing).
+			if n >= 0 && last {
 				records = ssql.TakeLast[ssql.Record](n)(records)
-			} else if n > 0 {
+			} else if n >= 0 {
 				records = ssql.Limit[ssql.Record](n)(records)
 			}
 
@@ -99,9 +100,10 @@ func generateLimitCode(n int, last bool) error {
 			return fmt.Errorf("writing previous fragment: %w", err)
 		}
 	}
-	// limit 0 = no limit: emit no fragment at all, so the stage vanishes
-	// from generated go/sql/ssql alike.
-	if n == 0 {
+	// bare `limit` (n == -1) = no limit: emit no fragment at all, so the
+	// stage vanishes from generated go/sql/ssql alike. `limit 0` is a
+	// real stage yielding no records (LIMIT 0 in SQL).
+	if n < 0 {
 		return nil
 	}
 	var inputVar string

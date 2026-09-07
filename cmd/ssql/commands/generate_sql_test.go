@@ -544,10 +544,11 @@ func TestTranslateSampleSQL(t *testing.T) {
 		t.Errorf("seeded: want loud refusal, got %v", err)
 	}
 
-	// sample 0 = pass-through dial: stage vanishes.
+	// sample 0 keeps no rows (since v4.92.0 the pass-through dial is a
+	// bare `sample`, which emits no fragment and never reaches SQL).
 	q4 := &sqlQuery{fromClause: "'x.csv'"}
-	if err := translateSample(q4, []string{"0"}); err != nil || q4.sampled || q4.fromClause != "'x.csv'" {
-		t.Errorf("zero dial: %v %q", err, q4.fromClause)
+	if err := translateSample(q4, []string{"0"}); err != nil || !q4.sampled || q4.fromClause != "'x.csv' USING SAMPLE 0 ROWS (reservoir)" {
+		t.Errorf("sample 0: %v %q", err, q4.fromClause)
 	}
 
 	// USING SAMPLE binds to FROM — anything accumulated must wrap first.

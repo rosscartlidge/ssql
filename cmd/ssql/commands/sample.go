@@ -17,7 +17,7 @@ import (
 // seeded sample is byte-identical across every backend.
 func RegisterSample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("sample").
-		Description("Random row sample (SQL TABLESAMPLE); N rows exactly or -percent P; 0 = pass-through").
+		Description("Random row sample (SQL TABLESAMPLE); N rows exactly or -percent P; neither = pass-through, 0 = no records").
 		Example("ssql from big.csv | ssql sample 1000", "Uniform 1000-row sample (seed printed to stderr for reproducibility)").
 		Example("ssql from big.csv | ssql sample -percent 5 | ssql to table", "Keep ~5% of rows, streaming").
 		Example("ssql from big.csv | ssql sample 1000 -seed 42", "Reproducible sample — identical rows every run and in generated code").
@@ -32,7 +32,7 @@ func RegisterSample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Int().
 			Global().
 			Default(-1).
-			Help("Number of rows to keep (exact, uniform); 0 = pass-through (dial the stage off)").
+			Help("Number of rows to keep (exact, uniform); omit N and -percent to dial the stage off (pass-through); 0 = no records").
 			Done().
 
 		Flag("-percent", "-p").
@@ -58,22 +58,25 @@ func RegisterSample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			haveN := n >= 0
 			havePct := percent >= 0
-			if haveN == havePct {
-				return fmt.Errorf("sample: need exactly one of N or -percent (e.g. `sample 1000` or `sample -percent 5`)")
+			if haveN && havePct {
+				return fmt.Errorf("sample: give N or -percent, not both (e.g. `sample 1000` or `sample -percent 5`)")
 			}
 			if havePct && (percent == 0 || percent > 100) {
-				return fmt.Errorf("sample: -percent must be in (0, 100], got %v (for pass-through use `sample 0`)", percent)
+				return fmt.Errorf("sample: -percent must be in (0, 100], got %v (omit N and -percent for pass-through)", percent)
 			}
+			// Neither given = the stage is dialled off: pass everything
+			// through (the same convention as a bare `limit`). Until
+			// v4.92.0 the dial was `sample 0`, which now means no records.
+			passThrough := !haveN && !havePct
 
 			if shouldGenerate(generate) {
-				return generateSampleCode(n, percent, haveN, int64(seed), seedGiven)
+				return generateSampleCode(n, percent, haveN, passThrough, int64(seed), seedGiven)
 			}
 
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
-			// sample 0 = pass-through (the limit-0 dial convention).
-			if haveN && n == 0 {
+			if passThrough {
 				return lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, records)
 			}
 
@@ -122,7 +125,7 @@ func flagWasProvided(_ *cf.Context, name string) bool {
 // at runtime), keeping generated programs reproducible even when the
 // CLI invocation was unseeded. In schema mode this never runs — the
 // exec path is already an identity transform over the header.
-func generateSampleCode(n int, percent float64, haveN bool, seed int64, seedGiven bool) error {
+func generateSampleCode(n int, percent float64, haveN, passThrough bool, seed int64, seedGiven bool) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -132,8 +135,8 @@ func generateSampleCode(n int, percent float64, haveN bool, seed int64, seedGive
 			return fmt.Errorf("writing previous fragment: %w", err)
 		}
 	}
-	// sample 0 = pass-through: the stage vanishes from generated code.
-	if haveN && n == 0 {
+	// bare `sample` = pass-through: the stage vanishes from generated code.
+	if passThrough {
 		return nil
 	}
 	var inputVar string
