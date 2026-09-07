@@ -203,14 +203,14 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 		case "csv":
 			code = fmt.Sprintf(`%s, err := ssql.ReadCSV(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: opening %s: %%v\n", err)
 		os.Exit(1)
 	}`, varName, file, file)
 			imports = []string{"fmt", "os"}
 		case "tsv":
 			code = fmt.Sprintf(`%s, err := ssql.ReadTSV(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: opening %s: %%v\n", err)
 		os.Exit(1)
 	}`, varName, file, file)
 			imports = []string{"fmt", "os"}
@@ -218,7 +218,7 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 			needsLibImport = true
 			code = fmt.Sprintf(`%sHandle, err := os.Open(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening %s: %%v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: opening %s: %%v\n", err)
 		os.Exit(1)
 	}
 	defer %sHandle.Close()

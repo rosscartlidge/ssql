@@ -229,15 +229,68 @@ func TestUnionMergeSideFileSchemaHeaderIsNotARecord(t *testing.T) {
 	if !strings.HasPrefix(string(head), `{"_schema"`) {
 		t.Fatalf("fixture should start with a _schema header:\n%s", head)
 	}
-	for _, cmd := range []string{"union -all -file teed.jsonl", "merge teed.jsonl -by id"} {
-		pipeline := bin + " from csv a.csv | " + bin + " " + cmd + " | " + bin + " count"
+	for _, c := range []struct{ cmd, want, why string }{
+		{"union -all -file teed.jsonl", "6", "3 + 3; a phantom _schema record gives 7"},
+		{"merge teed.jsonl -by id", "6", "3 + 3; a phantom _schema record gives 7"},
+		{"join teed.jsonl -using id", "3", "3 matched rows; a phantom _schema record would not match but must not crash the reader"},
+	} {
+		pipeline := bin + " from csv a.csv | " + bin + " " + c.cmd + " | " + bin + " count"
 		out, err := runGeneratedPipeline(t, bin, dir, "record", pipeline)
 		if err != nil {
-			t.Errorf("%s: %v\n%s", cmd, err, out)
+			t.Errorf("%s: %v\n%s", c.cmd, err, out)
 			continue
 		}
-		if got := strings.TrimSpace(out); got != "6" {
-			t.Errorf("%s: count = %s, want 6 (3 + 3; a phantom _schema record gives 7)", cmd, got)
+		if got := strings.TrimSpace(out); got != c.want {
+			t.Errorf("%s: count = %s, want %s (%s)", c.cmd, got, c.want, c.why)
 		}
+	}
+}
+
+// A join's right-hand file that cannot be opened is fatal in generated
+// record code, as it is in exec mode. Until v4.92.0 the template read
+// `if err != nil { return nil }`: a missing file was an empty right side
+// and the program exited 0 (inner join: no rows; left join: no matches).
+func TestJoinMissingRightFileIsLoud(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.csv"), []byte("id,v\n1,10\n2,20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Generate against a real right file, then run against a missing one
+	// via the generated -join flag.
+	if err := os.WriteFile(filepath.Join(dir, "b.csv"), []byte("id,w\n1,x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, ext := range []string{"csv", "tsv", "json", "jsonl"} {
+		right := "b." + ext
+		if ext != "csv" {
+			conv := exec.Command("bash", "-c", bin+" from csv b.csv | "+bin+" to "+ext+" "+right)
+			conv.Dir = dir
+			if out, err := conv.CombinedOutput(); err != nil {
+				t.Fatalf("to %s: %v\n%s", ext, err, out)
+			}
+		}
+		gen := exec.Command("bash", "-c", "export SSQL_MODE=record && "+bin+" from csv a.csv | "+bin+" join "+right+" -using id | "+bin+" count | "+bin+" generate go")
+		gen.Dir = dir
+		src, err := gen.CombinedOutput()
+		if err != nil {
+			t.Fatalf("generate (%s): %v\n%s", ext, err, src)
+		}
+		prog := filepath.Join(dir, "prog_"+ext)
+		os.MkdirAll(prog, 0o755)
+		os.WriteFile(filepath.Join(prog, "main.go"), src, 0o644)
+		repo, _ := filepath.Abs("../..")
+		os.WriteFile(filepath.Join(prog, "go.mod"), []byte("module m\n\ngo 1.24\n\nrequire github.com/rosscartlidge/ssql/v4 v4.0.0\n\nreplace github.com/rosscartlidge/ssql/v4 => "+repo+"\n"), 0o644)
+		for _, args := range [][]string{{"mod", "tidy"}, {"build", "-o", "prog", "."}} {
+			c := exec.Command("go", args...)
+			c.Dir = prog
+			if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("go %v (%s): %v\n%s", args, ext, err, out)
+			}
+		}
+		run := exec.Command(filepath.Join(prog, "prog"), "-join", "nope."+ext)
+		run.Dir = dir
+		out, err := run.CombinedOutput()
+		assertLoudFailure(t, "record join missing "+ext, string(out), err, "nope."+ext, "no such file")
 	}
 }

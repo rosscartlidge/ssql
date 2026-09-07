@@ -545,24 +545,33 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 	joinParams := []lib.CodeParam{
 		{Name: "join", Default: rightFile, Help: "join file", VarName: "flagJoin"},
 	}
+	// A right-hand file that cannot be opened is a fatal error, exactly
+	// as in exec mode — until v4.92.0 this read `return nil`, so a
+	// missing file was an empty right side (an inner join emitted
+	// nothing, a left join matched nothing) with exit status 0.
+	// .jsonl goes through the schema-aware reader: a `_schema` header
+	// line (ssql tee output) is not a record.
 	var initCode string
-	if strings.HasSuffix(strings.ToLower(rightFile), ".jsonl") || strings.HasSuffix(strings.ToLower(rightFile), ".json") {
-		initCode = `records, err := ssql.ReadJSON(*flagJoin)
+	imports := []string{"fmt", "os"}
+	lower := strings.ToLower(rightFile)
+	switch {
+	case strings.HasSuffix(lower, ".jsonl"):
+		initCode = `joinHandle, err := os.Open(*flagJoin)
 	if err != nil {
-		return nil
-	}`
-	} else if strings.HasSuffix(strings.ToLower(rightFile), ".tsv") {
-		initCode = `records, err := ssql.ReadTSV(*flagJoin)
-	if err != nil {
-		return nil
-	}`
-	} else {
-		initCode = `records, err := ssql.ReadCSV(*flagJoin)
-	if err != nil {
-		return nil
-	}`
+		fmt.Fprintf(os.Stderr, "Error: opening %s: %v\n", *flagJoin, err)
+		os.Exit(1)
 	}
-	initFrag := lib.NewInitFragment("records", initCode, nil, fmt.Sprintf("ssql from %s", rightFile))
+	defer joinHandle.Close()
+	records := lib.ReadJSONLWithSchema(joinHandle).Records`
+		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib")
+	case strings.HasSuffix(lower, ".json"):
+		initCode = joinReadTemplate("ReadJSON")
+	case strings.HasSuffix(lower, ".tsv"):
+		initCode = joinReadTemplate("ReadTSV")
+	default:
+		initCode = joinReadTemplate("ReadCSV")
+	}
+	initFrag := lib.NewInitFragment("records", initCode, imports, fmt.Sprintf("ssql from %s", rightFile))
 	initFrag.Params = joinParams
 
 	// Create func fragment with just the init
@@ -572,6 +581,17 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 	}
 
 	return generateJoinStmtWithFunc(inputVar, funcName, joinType, clauses, fragments)
+}
+
+// joinReadTemplate is the record-mode read of a join's right-hand file
+// with ssql.<reader>: any error (missing file, unreadable cell) is
+// reported and fatal, mirroring the union/merge side-file templates.
+func joinReadTemplate(reader string) string {
+	return `records, err := ssql.` + reader + `(*flagJoin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: opening %s: %v\n", *flagJoin, err)
+		os.Exit(1)
+	}`
 }
 
 // findOutputSchema returns the OutputTypedSchema of the last fragment

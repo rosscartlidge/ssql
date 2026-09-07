@@ -779,46 +779,55 @@ func generateSubprocessFunction(funcFrag *CodeFragment) string {
 	return code.String()
 }
 
-// replaceForFuncReturn converts main() error handling to function return nil
+// replaceForFuncReturn adapts an init fragment's error handling to a
+// `func rightSourceN() iter.Seq[T]` body. A main()-style block
+// (`return fmt.Errorf(...)`) cannot compile there, so every
+// `if err != nil { … }` block that does not already terminate the
+// program (os.Exit / panic) becomes `if err != nil { panic(err) }`:
+// main's recover prints `Error: <err>` and exits 1, so a right-hand
+// file that cannot be opened names itself. Until v4.92.0 the rewrite
+// was `return nil` — a nil iter.Seq, which the join then ranged over
+// and died on with "invalid memory address or nil pointer dereference"
+// instead of the open error.
 func replaceForFuncReturn(code string) string {
-	// Replace patterns like "if err != nil { ... os.Exit(1) }" with "if err != nil { return nil }"
-	// This is a simple heuristic - in practice the error handling should be cleaner
-
-	// For now, just replace the error block pattern
-	if findString(code, "if err != nil") != -1 {
-		// Find and replace the error block
-		start := findString(code, "if err != nil")
-		if start != -1 {
-			// Find the closing brace of the if block
-			depth := 0
-			inBlock := false
-			blockStart := -1
-			blockEnd := -1
-
-			for i := start; i < len(code); i++ {
-				if code[i] == '{' {
-					if !inBlock {
-						inBlock = true
-						blockStart = i
-					}
-					depth++
-				} else if code[i] == '}' {
-					depth--
-					if depth == 0 && inBlock {
-						blockEnd = i
-						break
-					}
+	const marker = "if err != nil"
+	out := ""
+	rest := code
+	for {
+		start := findString(rest, marker)
+		if start == -1 {
+			return out + rest
+		}
+		// Find the block's braces.
+		depth, blockStart, blockEnd := 0, -1, -1
+		for i := start; i < len(rest); i++ {
+			switch rest[i] {
+			case '{':
+				if blockStart == -1 {
+					blockStart = i
+				}
+				depth++
+			case '}':
+				depth--
+				if depth == 0 && blockStart != -1 {
+					blockEnd = i
 				}
 			}
-
-			if blockStart != -1 && blockEnd != -1 {
-				// Replace the entire if block with simpler return nil
-				code = code[:start] + "if err != nil {\n\t\treturn nil\n\t}" + code[blockEnd+1:]
+			if blockEnd != -1 {
+				break
 			}
 		}
+		if blockStart == -1 || blockEnd == -1 {
+			return out + rest
+		}
+		body := rest[blockStart : blockEnd+1]
+		if findString(body, "os.Exit(") != -1 || findString(body, "panic(") != -1 {
+			out += rest[:blockEnd+1]
+		} else {
+			out += rest[:start] + "if err != nil {\n\t\tpanic(err)\n\t}"
+		}
+		rest = rest[blockEnd+1:]
 	}
-
-	return code
 }
 
 // extractPreCompileVars extracts package-level variable declarations from code fragments
