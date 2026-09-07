@@ -18,7 +18,7 @@ in the Go lanes and to nothing in the DuckDB lane. The fact table:
 | Reader | empty numeric cell | empty text cell | JSON `null` |
 |---|---|---|---|
 | record CSV (`ReadCSVFromReader`) | **`0`** (column parser's error fallback) | `""` | field dropped (absent) |
-| typed CSV | **zero value** (documented, `typed-reference.md`) | `""` | n/a |
+| typed CSV | **zero value** until v4.91.0; fatal `ReadError` since (pointer fields nil) | `""` | n/a |
 | DuckDB | `NULL` | `NULL` | `NULL` |
 
 So `describe` on a numeric column with empties reported `missing 0` and
@@ -54,7 +54,7 @@ second missing to keep consistent with the first.
 ## 3. What this does NOT fix yet (recorded, not hidden)
 
 - **The typed lane.** A typed struct cannot hold absence; the typed
-  reader writes the zero value for an empty cell (`typed/io.go`
+  reader wrote the zero value for an empty cell (`typed/io.go`
   decoders: `if s == "" { *p = 0 }`). Pointer types (`*int64`) exist and
   the sampler already picks `*string` for all-empty columns, but making
   it pick pointer types for *partially* empty columns ripples through
@@ -62,7 +62,14 @@ second missing to keep consistent with the first.
   all assume scalar GoTypes). That is its own slice. Until then the
   empty-cell equivalence cases SKIP the typed/parallel lanes with this
   DFC as the stated reason — a visible, named divergence rather than a
-  fixture-invisible one. **The typed lane's silence is gone (2026-09-07,
+  fixture-invisible one. **(a) closed as an error, not a NULL
+  (2026-09-07, Ross: "add an error check to typed provided it doesn't
+  slow things down"):** an empty cell in a non-pointer, non-string
+  field is now a fatal `ReadError` (`column "Age": "" is not int64`) in
+  every typed reader — the same `if s == ""` branch the decoder already
+  took, so zero cost. Pointer inference for partially-empty columns
+  stays future work; the remedy today is a pointer field, `-type COL
+  string`, or `fill`. **The typed lane's silence is gone (2026-09-07,
   v4.91.0):** the typed readers now fail fast with a `*typed.ReadError`
   (CSV kept the row with the cell zeroed; JSONL dropped the row; a
   missing file was an empty stream — all exit 0 before). The `-type`

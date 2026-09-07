@@ -69,14 +69,26 @@ func TestReadCSVTagPrecedence(t *testing.T) {
 	}
 }
 
-func TestReadCSVEmptyValueZero(t *testing.T) {
+// An empty cell in a non-pointer, non-string field is a fatal ReadError
+// (DFC124 (a)): the struct cannot hold absence, and the zero value it
+// used to write silently disagreed with the record lane, where the
+// field is absent. String fields keep "", pointer fields take nil.
+func TestReadCSVEmptyCellIsLoud(t *testing.T) {
 	src := "Name,Age,Salary,Active\nAlice,,,\n"
-	got := slices.Collect(ReadCSVFromReader[person](strings.NewReader(src)))
-	if len(got) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(got))
+	re := catchReadError(t, func() {
+		_ = slices.Collect(ReadCSVFromReader[person](strings.NewReader(src)))
+	})
+	if re.Row != 1 || !strings.Contains(re.Err.Error(), `column "Age": "" is not int64`) {
+		t.Errorf("empty int cell should fail naming the column: %+v", re)
 	}
-	if got[0].Age != 0 || got[0].Salary != 0 || got[0].Active != false {
-		t.Errorf("empty values should produce zero, got: %#v", got[0])
+	type nullable struct {
+		Name string
+		Age  *int64
+		Note string
+	}
+	got := slices.Collect(ReadCSVFromReader[nullable](strings.NewReader("Name,Age,Note\nAlice,,\n")))
+	if len(got) != 1 || got[0].Age != nil || got[0].Note != "" || got[0].Name != "Alice" {
+		t.Errorf("pointer nil / string empty expected, got %#v", got)
 	}
 }
 

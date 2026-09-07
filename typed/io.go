@@ -187,8 +187,7 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	case reflect.Int64:
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
-				*(*int64)(unsafe.Add(p, off)) = 0
-				return nil
+				return errEmptyCell
 			}
 			v, err := strconv.ParseInt(s, 10, 64)
 			if err != nil {
@@ -200,8 +199,7 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	case reflect.Int32:
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
-				*(*int32)(unsafe.Add(p, off)) = 0
-				return nil
+				return errEmptyCell
 			}
 			v, err := strconv.ParseInt(s, 10, 32)
 			if err != nil {
@@ -213,8 +211,7 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	case reflect.Int:
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
-				*(*int)(unsafe.Add(p, off)) = 0
-				return nil
+				return errEmptyCell
 			}
 			v, err := strconv.ParseInt(s, 10, 64)
 			if err != nil {
@@ -226,8 +223,7 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	case reflect.Uint64:
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
-				*(*uint64)(unsafe.Add(p, off)) = 0
-				return nil
+				return errEmptyCell
 			}
 			v, err := strconv.ParseUint(s, 10, 64)
 			if err != nil {
@@ -239,8 +235,7 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	case reflect.Float64:
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
-				*(*float64)(unsafe.Add(p, off)) = 0
-				return nil
+				return errEmptyCell
 			}
 			v, err := strconv.ParseFloat(s, 64)
 			if err != nil {
@@ -252,8 +247,7 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	case reflect.Float32:
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
-				*(*float32)(unsafe.Add(p, off)) = 0
-				return nil
+				return errEmptyCell
 			}
 			v, err := strconv.ParseFloat(s, 32)
 			if err != nil {
@@ -265,8 +259,7 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	case reflect.Bool:
 		return func(p unsafe.Pointer, s string) error {
 			if s == "" {
-				*(*bool)(unsafe.Add(p, off)) = false
-				return nil
+				return errEmptyCell
 			}
 			v, err := strconv.ParseBool(s)
 			if err != nil {
@@ -290,8 +283,7 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 func decodeTime(off uintptr) fieldDecoder {
 	return func(p unsafe.Pointer, s string) error {
 		if s == "" {
-			*(*time.Time)(unsafe.Add(p, off)) = time.Time{}
-			return nil
+			return errEmptyCell
 		}
 		v, err := time.Parse(time.RFC3339, s)
 		if err != nil {
@@ -301,6 +293,15 @@ func decodeTime(off uintptr) fieldDecoder {
 		return nil
 	}
 }
+
+// errEmptyCell is what a non-pointer, non-string decoder returns for an
+// empty cell. A typed struct cannot hold absence, and writing the zero
+// value silently (the behaviour until v4.92.0) made the typed lane
+// disagree with the record lane, where an empty numeric/bool cell is an
+// absent field (DFC124). The row-level wrapper renders it as
+// `column "v": "" is not int64`; pointer fields (*int64) take nil and
+// string fields take "" as before.
+var errEmptyCell = errors.New("empty cell")
 
 // decoderForPointer builds a decoder for *T fields. Empty CSV value
 // becomes a nil pointer; non-empty allocates a fresh T, parses, and

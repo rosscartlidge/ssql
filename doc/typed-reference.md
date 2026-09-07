@@ -133,7 +133,7 @@ A tag value of `"-"` excludes the field entirely.
 
 `string`, `bool`, `int`, `int32`, `int64`, `uint64`, `float32`, `float64`,
 `time.Time` (RFC3339 in CSV), and **pointer-to-T** for nullable columns.
-Empty CSV values become the zero value (or `nil` for pointer types). **Note:** this differs from the record lanes, where an empty numeric/boolean cell is *absent* (missing) since v4.86 — see `doc/research/dfc124_missing_values.md` §3 for the typed gap and its planned fix (pointer types for partially-empty columns).
+An empty CSV/TSV cell is `""` for a `string` field and `nil` for a pointer field (`*int64`, `*string`, …). For any other field type it is a fatal `*typed.ReadError` — `column "Age": "" is not int64` — because a struct cannot hold absence, and the zero value the reader wrote until v4.91.0 silently disagreed with the record lanes, where an empty numeric/boolean cell is an *absent* field (v4.86, `doc/research/dfc124_missing_values.md`). Remedies: declare the field as a pointer type; in generated code, `-type COL string` on the `from` stage keeps the cell as text; or `fill` the data first. The check is a branch the decoder already took (`if s == ""`), so it costs nothing.
 
 A non-empty value that does not parse as its field's type is **fatal** in the
 lossy readers (`ReadCSV`, `ReadCSVParallel`, `ReadDelim*`, `ReadJSONL*`): they
