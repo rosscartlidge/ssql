@@ -516,7 +516,10 @@ ssql from catalog shards.csv -- where -if status eq shipped | ssql count
 On a cluster the host column names SSH hosts from `~/.ssh/config`, the
 shards run where the data lives, and the optimiser from section 7
 pushes your `where` and `group-by` into them for you (`generate ssql`
-shows the rewrite). [doc/cli-debugging.md](cli-debugging.md) covers the
+shows the rewrite). Each host needs ssql installed — any of the usual
+places (`/usr/bin`, `/usr/local/bin`, `~/go/bin`, `~/.local/bin`) is
+found automatically; `-remote-bin PATH`, or a `bin` column in the
+catalog, names it elsewhere. [doc/cli-debugging.md](cli-debugging.md) covers the
 rig; the same pipeline runs unchanged.
 
 The SSH operator console is the other direction — leave the data where

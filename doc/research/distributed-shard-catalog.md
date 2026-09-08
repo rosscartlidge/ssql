@@ -98,6 +98,7 @@ ssql from catalog shards.csv -if region eq europe \
 | Column | Description |
 |--------|-------------|
 | `format` | File format: `csv`, `json`, `jsonl`, `arrow` (default: inferred from extension) |
+| `bin` | Absolute path of ssql on that host (optional, v4.94.0). Default: resolved on the host from `/usr/bin`, `/usr/local/bin`, `~/go/bin`, `~/.local/bin`; `from catalog -remote-bin PATH` sets one path for every row without a `bin` |
 | `*_from` / `*_to` | Range bounds for partition pruning (any field name) |
 | Any other column | Static metadata attached to every record from that shard |
 

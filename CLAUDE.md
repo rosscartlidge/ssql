@@ -121,7 +121,7 @@ When constructing shell commands for remote execution (SSH, bash -c):
 - Use `ssql.ShellQuote()` for all dynamic values
 - Use `exec.Command("ssh", host, cmd)` — no shell interpretation
 - Whitelist-validate constrained values (like format names)
-- **Use absolute paths for ALL commands executed remotely** (`/usr/bin/ssql`, `/usr/bin/head`, etc.) — bare command names can be hijacked via PATH manipulation
+- **Use absolute paths for ALL commands executed remotely** (`/usr/bin/head`, etc.) — bare command names can be hijacked via PATH manipulation. For ssql itself, never hard-code `/usr/bin/ssql`: use `ssql.BuildRemoteCommand` / `ssql.RemoteScriptCommand`, whose prologue resolves the remote binary from a FIXED list of absolute locations (`/usr/bin`, `/usr/local/bin`, `$HOME/go/bin`, `$HOME/.local/bin` — `ssql.RemoteBinPrologue`) or takes the `-remote-bin` / catalog `bin` absolute path; a go-install user has no `/usr/bin/ssql` (v4.94.0)
 - Never concatenate raw strings from files or user input into command strings
 
 ## Development Commands

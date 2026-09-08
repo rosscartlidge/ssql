@@ -46,6 +46,12 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 		Default(false).
 		Help("Use ssql_gpu on remote machines").
 		Done().
+		Flag("-remote-bin").
+		String().
+		Global().
+		Default("").
+		Help("Absolute path of ssql on the shard hosts (default: resolved on each host from /usr/bin, /usr/local/bin, ~/go/bin, ~/.local/bin; a catalog `bin` column overrides per row)").
+		Done().
 		Flag("-shard-field").
 		String().
 		Global().
@@ -93,6 +99,10 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 			shardOrder, _ := ctx.GlobalFlags["-shard-order"].(string)
 			shardConcurrency64, _ := ctx.GlobalFlags["-shard-concurrency"].(int64)
 			keepGoing, _ := ctx.GlobalFlags["-keep-going"].(bool)
+			remoteBinOverride, err := remoteBinFlag(ctx)
+			if err != nil {
+				return err
+			}
 
 			if catalogFile == "" {
 				return fmt.Errorf("usage: ssql from catalog FILE [-if field op value]...")
@@ -108,6 +118,7 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 				Concurrency: int(shardConcurrency64),
 				Order:       shardOrder,
 				KeepGoing:   keepGoing,
+				RemoteBin:   remoteBinOverride,
 			}
 
 			if shouldGenerate(generate) {
@@ -278,7 +289,7 @@ func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilt
 		fmt.Fprintf(os.Stderr, "Expanded catalog written to %s (%d entries)\n", catalogUsedFile, len(entries))
 	}
 
-	remoteBin := sshRemoteBin(gpu)
+	remoteBin := sshRemoteBin(gpu, opts.RemoteBin)
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
 
 	records := ssql.ProcessCatalogShards(entries, remoteBin, shardField, pipelineGroups)
@@ -386,9 +397,10 @@ func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.Catalo
 			Concurrency: shardConcurrency,
 			Order:       *flagShardOrder,
 			KeepGoing:   keepGoing,
+			RemoteBin:   %q,
 		},
 	)`,
-		filterCode, requireVersion, pipelineCode, mode, shardField,
+		filterCode, requireVersion, pipelineCode, mode, shardField, opts.RemoteBin,
 	)
 
 	imports := []string{"fmt", "os", "strconv"}

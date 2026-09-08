@@ -37,6 +37,12 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 		Default(false).
 		Help("Use ssql_gpu on the remote machine").
 		Done().
+		Flag("-remote-bin").
+		String().
+		Global().
+		Default("").
+		Help("Absolute path of ssql on the remote host (default: resolved there from /usr/bin, /usr/local/bin, ~/go/bin, ~/.local/bin)").
+		Done().
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -48,6 +54,11 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			path, _ := ctx.GlobalFlags["PATH"].(string)
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
 			generate, _ := ctx.GlobalFlags["-generate"].(bool)
+			remoteBinOverride, err := remoteBinFlag(ctx)
+			if err != nil {
+				return err
+			}
+			remoteBin := sshRemoteBin(gpu, remoteBinOverride)
 
 			if host == "" || path == "" {
 				return fmt.Errorf("usage: ssql from ssh HOST PATH [-- <remote-pipeline>]")
@@ -62,21 +73,21 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			if len(ctx.RemainingArgs) > 0 {
 				if shouldGenerate(generate) {
 					if typedMode() {
-						return generateFromSSHTypedCode(host, path, gpu, ctx.RemainingArgs)
+						return generateFromSSHTypedCode(host, path, remoteBin, ctx.RemainingArgs)
 					}
-					return generateFromSSHRemoteCode(host, path, gpu, ctx.RemainingArgs)
+					return generateFromSSHRemoteCode(host, path, remoteBin, ctx.RemainingArgs)
 				}
-				return executeFromSSHRemote(host, path, gpu, ctx.RemainingArgs)
+				return executeFromSSHRemote(host, path, remoteBin, ctx.RemainingArgs)
 			}
 
 			// Simple remote read
 			if shouldGenerate(generate) {
 				if typedMode() {
-					return generateFromSSHTypedCode(host, path, gpu, nil)
+					return generateFromSSHTypedCode(host, path, remoteBin, nil)
 				}
-				return generateFromSSHCode(host, path, gpu)
+				return generateFromSSHCode(host, path, remoteBin)
 			}
-			return executeFromSSH(host, path, gpu)
+			return executeFromSSH(host, path, remoteBin)
 		}).
 		Done()
 }
@@ -152,16 +163,15 @@ func completeSSHPath(ctx cf.CompletionContext) ([]string, error) {
 	return []string{ctx.Partial}, nil
 }
 
-// executeFromSSH runs a simple remote read via SSH.
-func executeFromSSH(host, path string, gpu bool) error {
-	remoteBin := sshRemoteBin(gpu)
+// executeFromSSH runs a simple remote read via SSH. remoteBin is a bare
+// name (resolved on the remote) or the -remote-bin absolute path.
+func executeFromSSH(host, path, remoteBin string) error {
 	remoteCmd := ssql.BuildRemoteCommand(remoteBin, path, "", nil)
 	return runSSHAndStreamJSONL(host, remoteCmd)
 }
 
 // executeFromSSHRemote runs a remote pipeline via SSH with push-down.
-func executeFromSSHRemote(host, path string, gpu bool, pipelineArgs []string) error {
-	remoteBin := sshRemoteBin(gpu)
+func executeFromSSHRemote(host, path, remoteBin string, pipelineArgs []string) error {
 	remoteCmd := ssql.BuildRemoteCommand(remoteBin, path, "", ssql.SplitOnPlus(pipelineArgs))
 	return runSSHAndStreamJSONL(host, remoteCmd)
 }
@@ -238,13 +248,30 @@ func runSSHAndStreamJSONL(host, remoteCmd string) error {
 	return nil
 }
 
-// sshRemoteBin returns the absolute path to the remote binary.
+// sshRemoteBin returns the binary to run on the remote: the -remote-bin
+// override (an absolute path) when given, else the bare name, which
+// ssql.RemoteBinPrologue resolves on the remote from the places each
+// install method uses (/usr/bin, /usr/local/bin, ~/go/bin, ~/.local/bin).
 // Uses full path to prevent PATH manipulation attacks on remote machines.
-func sshRemoteBin(gpu bool) string {
-	if gpu {
-		return "/usr/bin/ssql_gpu"
+func sshRemoteBin(gpu bool, override string) string {
+	if override != "" {
+		return override
 	}
-	return "/usr/bin/ssql"
+	if gpu {
+		return "ssql_gpu"
+	}
+	return "ssql"
+}
+
+// remoteBinFlag reads and validates -remote-bin: empty, or an absolute
+// path (the shell-injection rule: nothing on the remote may depend on
+// that shell's PATH).
+func remoteBinFlag(ctx *cf.Context) (string, error) {
+	v, _ := ctx.GlobalFlags["-remote-bin"].(string)
+	if v != "" && !strings.HasPrefix(v, "/") {
+		return "", fmt.Errorf("-remote-bin must be an absolute path on the remote host, got %q", v)
+	}
+	return v, nil
 }
 
 // sshPlainLandingCode renders the Record-mode landing for a simple
@@ -278,8 +305,8 @@ func sshPlainLandingCode(host, path, remoteBin, outVar string) (string, []string
 }
 
 // generateFromSSHCode generates Go code for SSH remote read.
-func generateFromSSHCode(host, path string, gpu bool) error {
-	code, imports, params := sshPlainLandingCode(host, path, sshRemoteBin(gpu), "records")
+func generateFromSSHCode(host, path, remoteBin string) error {
+	code, imports, params := sshPlainLandingCode(host, path, remoteBin, "records")
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
@@ -306,12 +333,14 @@ func generateFromSSHCode(host, path string, gpu bool) error {
 // Self-contained: the .ssql script is baked into the generated
 // source as a const, so the resulting binary is a single artifact
 // — no sibling files to ship.
-func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []string) error {
-	_ = gpu // -gpu is unused in the codegen path — the remote runs
-	// `ssql generate go` regardless. ssql_gpu vs ssql is a runtime
-	// choice on the remote, not something the generator picks.
-
-	code, imports, params := sshScriptLandingCode(host, path, pipelineArgs, "records")
+func generateFromSSHRemoteCode(host, path, remoteBin string, pipelineArgs []string) error {
+	// The remote runs `ssql generate go` whatever -gpu says: ssql_gpu
+	// vs ssql is a runtime choice on the remote, not something the
+	// generator picks — so only a -remote-bin PATH carries through.
+	if !strings.HasPrefix(remoteBin, "/") {
+		remoteBin = "ssql"
+	}
+	code, imports, params := sshScriptLandingCode(host, path, remoteBin, pipelineArgs, "records")
 	frag := lib.NewInitFragment("records", code, imports, getCommandString())
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
@@ -323,7 +352,7 @@ func generateFromSSHRemoteCode(host, path string, gpu bool, pipelineArgs []strin
 // and stream the remote JSONL into outVar as iter.Seq[ssql.Record].
 // Shared by the record generator (outVar "records") and the typed
 // generator (outVar "recordsRaw", converted downstream).
-func sshScriptLandingCode(host, path string, pipelineArgs []string, outVar string) (string, []string, []lib.CodeParam) {
+func sshScriptLandingCode(host, path, remoteBin string, pipelineArgs []string, outVar string) (string, []string, []lib.CodeParam) {
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
 	script := buildRemoteSSQLScript(path, pipelineGroups)
 	remoteMode := pipelineModeFromEnv()
@@ -346,8 +375,7 @@ func sshScriptLandingCode(host, path string, pipelineArgs []string, outVar strin
 	code := fmt.Sprintf(`const remoteSSQLScript = %s
 	const remoteSSQLMode = %q
 	remoteSSQLPath := fmt.Sprintf("/tmp/ssql-remote-%%d-%%d.ssql", os.Getpid(), time.Now().UnixNano())
-	remoteSSQLCmd := fmt.Sprintf("trap 'rm -f %%s' EXIT; cat > %%s && /usr/bin/ssql generate go -script %%s -mode %%s -run",
-		remoteSSQLPath, remoteSSQLPath, remoteSSQLPath, remoteSSQLMode)
+	remoteSSQLCmd := ssql.RemoteScriptCommand(%q, remoteSSQLPath, remoteSSQLMode)
 	sshCmd := exec.Command("ssh", "-o", "BatchMode=yes", *flagHost, remoteSSQLCmd)
 	sshCmd.Stdin = strings.NewReader(remoteSSQLScript)
 	sshCmd.Stderr = os.Stderr
@@ -361,7 +389,7 @@ func sshScriptLandingCode(host, path string, pipelineArgs []string, outVar strin
 		os.Exit(1)
 	}
 	defer sshCmd.Wait()
-	%s := ssql.ReadJSONLFromReader(sshStdout)`, scriptLiteral, remoteMode, outVar)
+	%s := ssql.ReadJSONLFromReader(sshStdout)`, scriptLiteral, remoteMode, remoteBin, outVar)
 
 	imports := []string{"fmt", "os", "os/exec", "strings", "time"}
 	return code, imports, params

@@ -105,8 +105,7 @@ func renderRecordConverter(schema *lib.TypedSchema) string {
 // fragment whose Record landing is converted into the typed runtime.
 // Sampling failure is a loud generate-time error — a user who asked
 // for typed must not silently receive a Record-mode program.
-func generateFromSSHTypedCode(host, path string, gpu bool, pipelineArgs []string) error {
-	remoteBin := sshRemoteBin(gpu)
+func generateFromSSHTypedCode(host, path, remoteBin string, pipelineArgs []string) error {
 	groups := ssql.SplitOnPlus(pipelineArgs)
 
 	header, err := sampleSSHPipelineSchema(host, remoteBin, path, groups)
@@ -123,7 +122,11 @@ func generateFromSSHTypedCode(host, path string, gpu bool, pipelineArgs []string
 	var imports []string
 	var params []lib.CodeParam
 	if len(pipelineArgs) > 0 {
-		landing, imports, params = sshScriptLandingCode(host, path, pipelineArgs, "recordsRaw")
+		scriptBin := remoteBin
+		if !strings.HasPrefix(scriptBin, "/") {
+			scriptBin = "ssql" // see generateFromSSHRemoteCode
+		}
+		landing, imports, params = sshScriptLandingCode(host, path, scriptBin, pipelineArgs, "recordsRaw")
 	} else {
 		landing, imports, params = sshPlainLandingCode(host, path, remoteBin, "recordsRaw")
 	}

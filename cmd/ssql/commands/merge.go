@@ -257,7 +257,7 @@ func executeMergeCatalog(catalogFile string, filters []ssql.CatalogFilter, order
 		fmt.Fprintf(os.Stderr, "Expanded catalog written to %s (%d entries)\n", catalogUsedFile, len(entries))
 	}
 
-	remoteBin := sshRemoteBin(gpu)
+	remoteBin := sshRemoteBin(gpu, "")
 	localBin, _ := os.Executable()
 	if localBin == "" {
 		localBin = "ssql"

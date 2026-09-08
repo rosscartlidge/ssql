@@ -18,6 +18,7 @@ type CatalogEntry struct {
 	Host     string
 	Path     string
 	Format   string
+	Bin      string // optional absolute path of ssql on this shard's host ("bin" column); "" = resolve there
 	Metadata map[string]string
 }
 
@@ -51,7 +52,7 @@ func ReadCatalog(filename string) ([]CatalogEntry, error) {
 	}
 
 	hostIdx, pathIdx := -1, -1
-	formatIdx := -1
+	formatIdx, binIdx := -1, -1
 	for i, h := range headers {
 		switch strings.TrimSpace(strings.ToLower(h)) {
 		case "host":
@@ -60,6 +61,8 @@ func ReadCatalog(filename string) ([]CatalogEntry, error) {
 			pathIdx = i
 		case "format":
 			formatIdx = i
+		case "bin":
+			binIdx = i
 		}
 	}
 	if hostIdx < 0 || pathIdx < 0 {
@@ -84,9 +87,15 @@ func ReadCatalog(filename string) ([]CatalogEntry, error) {
 		if formatIdx >= 0 && formatIdx < len(row) {
 			entry.Format = strings.TrimSpace(row[formatIdx])
 		}
+		if binIdx >= 0 && binIdx < len(row) {
+			entry.Bin = strings.TrimSpace(row[binIdx])
+			if entry.Bin != "" && !strings.HasPrefix(entry.Bin, "/") {
+				return nil, fmt.Errorf("catalog row %s:%s: bin must be an absolute path, got %q", entry.Host, entry.Path, entry.Bin)
+			}
+		}
 		for i, h := range headers {
 			h = strings.TrimSpace(strings.ToLower(h))
-			if h == "host" || h == "path" || h == "format" || h == "fields" {
+			if h == "host" || h == "path" || h == "format" || h == "bin" || h == "fields" {
 				continue
 			}
 			if i < len(row) {
@@ -283,8 +292,18 @@ func WriteCatalog(w io.Writer, entries []CatalogEntry) error {
 		sortedKeys = append(sortedKeys, k)
 	}
 
+	anyBin := false
+	for _, e := range entries {
+		if e.Bin != "" {
+			anyBin = true
+		}
+	}
+
 	// Headers
 	headers := []string{"host", "path"}
+	if anyBin {
+		headers = append(headers, "bin")
+	}
 	if len(sortedKeys) > 0 {
 		headers = append(headers, sortedKeys...)
 	}
@@ -295,6 +314,9 @@ func WriteCatalog(w io.Writer, entries []CatalogEntry) error {
 	// Rows
 	for _, e := range entries {
 		row := []string{e.Host, e.Path}
+		if anyBin {
+			row = append(row, e.Bin)
+		}
 		for _, k := range sortedKeys {
 			row = append(row, e.Metadata[k])
 		}
@@ -305,6 +327,18 @@ func WriteCatalog(w io.Writer, entries []CatalogEntry) error {
 
 	writer.Flush()
 	return writer.Error()
+}
+
+// shardBin picks the ssql binary for one catalog row: the row's own bin
+// column, else the running ssql for a local row, else remoteBin.
+func shardBin(entry CatalogEntry, remoteBin string) string {
+	if entry.Bin != "" {
+		return entry.Bin
+	}
+	if IsLocalHost(entry.Host) {
+		return SelfBin(remoteBin)
+	}
+	return remoteBin
 }
 
 // IsLocalHost returns true when host refers to the machine running this
@@ -334,40 +368,85 @@ func cachedHostname() string {
 	return cachedHostnameVal
 }
 
-// SelfBin is the shell-quoted ssql binary to run for shard rows that
-// resolve to this machine (IsLocalHost). Remote rows run the absolute
-// /usr/bin path (the shell-injection rule: never a bare name over ssh);
-// a local row must run the ssql the user actually has — a `go install`
-// user has no /usr/bin/ssql, and until v4.93.0 every local shard failed
-// with "bash: /usr/bin/ssql: No such file or directory". Resolution:
-// the running executable when it IS ssql (ssql, ssql_gpu, a test build
-// named ssql_*), else — inside a generated program, whose executable is
-// the program itself — the ssql on PATH, else fallback.
+// SelfBin is the ssql binary to run for shard rows that resolve to this
+// machine (IsLocalHost): a `go install` user has no /usr/bin/ssql, and
+// until v4.93.0 every local shard failed with "bash: /usr/bin/ssql: No
+// such file or directory". Resolution: the running executable when it IS
+// ssql (ssql, ssql_gpu, a test build named ssql_*), else — inside a
+// generated program, whose executable is the program itself — the ssql
+// on PATH, else fallback (a bare name, which BuildRemoteCommand resolves
+// with the same candidate list the remote side uses). The result is an
+// unquoted path; the command builders quote it.
 func SelfBin(fallback string) string {
 	if p, err := os.Executable(); err == nil && strings.HasPrefix(filepath.Base(p), "ssql") {
-		return ShellQuote(p)
+		return p
 	}
 	if p, err := exec.LookPath("ssql"); err == nil {
-		return ShellQuote(p)
+		return p
 	}
 	return fallback
 }
 
+// remoteBinDirs is where each install method puts ssql: the .deb
+// (/usr/bin), a release tarball (/usr/local/bin), `go install`
+// ($HOME/go/bin), and a per-user bin. Absolute, so nothing on the
+// remote depends on that shell's PATH (the shell-injection rule).
+var remoteBinDirs = []string{"/usr/bin", "/usr/local/bin", "$HOME/go/bin", "$HOME/.local/bin"}
+
+// RemoteBinPrologue returns the shell text that sets $SSQL on the remote
+// before a remote ssql command runs. bin is either a bare binary name
+// ("ssql" or "ssql_gpu") — resolved there as the first executable among
+// remoteBinDirs, with a one-line error naming the host, the paths tried
+// and the remedies (exit 127) when none exists — or an absolute path
+// (`-remote-bin`, a catalog `bin` column), used as given. Until v4.94.0
+// the remote command was hard-wired to /usr/bin/ssql, which a
+// go-install user does not have.
+func RemoteBinPrologue(bin string) string {
+	if strings.HasPrefix(bin, "/") {
+		return "SSQL=" + ShellQuote(bin) + "; "
+	}
+	var quoted, plain []string
+	for _, d := range remoteBinDirs {
+		quoted = append(quoted, `"`+d+"/"+bin+`"`)
+		plain = append(plain, d+"/"+bin)
+	}
+	return fmt.Sprintf(`SSQL=; for b in %s; do if [ -x "$b" ]; then SSQL="$b"; break; fi; done; `+
+		`if [ -z "$SSQL" ]; then echo "%s: not found on $(hostname): tried %s; install it there with: go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest, or give its path with -remote-bin PATH (catalog: a bin column)" >&2; exit 127; fi; `,
+		strings.Join(quoted, " "), bin, strings.Join(plain, " "))
+}
+
+// remoteBinWord returns the prologue and the command word for bin: an
+// absolute path is quoted and needs no prologue; a bare name resolves
+// through RemoteBinPrologue and runs as "$SSQL".
+func remoteBinWord(bin string) (prologue, word string) {
+	if strings.HasPrefix(bin, "/") {
+		return "", ShellQuote(bin)
+	}
+	return RemoteBinPrologue(bin), `"$SSQL"`
+}
+
+// RemoteScriptCommand is the remote side of ship-and-run: receive a
+// .ssql script on stdin at remotePath, run it with `generate go -script
+// -mode MODE -run`, remove it on exit. bin as for RemoteBinPrologue.
+func RemoteScriptCommand(bin, remotePath, mode string) string {
+	prologue, word := remoteBinWord(bin)
+	return prologue + fmt.Sprintf("trap 'rm -f %s' EXIT; cat > %s && %s generate go -script %s -mode %s -run",
+		remotePath, remotePath, word, remotePath, mode)
+}
+
 // ProcessCatalogShards connects to each shard via SSH (or locally for
 // hosts that resolve to this machine — see IsLocalHost) and returns a
-// concatenated record stream. remoteBin is "ssql" or "ssql_gpu" (an
-// absolute path for ssh rows; local rows run SelfBin).
+// concatenated record stream. remoteBin is a bare name ("ssql" or
+// "ssql_gpu"), resolved on each host by RemoteBinPrologue, or an
+// absolute path (-remote-bin); a row's own bin column wins, and local
+// rows without one run SelfBin.
 // pipelineArgs are push-down commands split on "+". shardField, if
 // non-empty, adds a provenance field to each record with the value
 // "host:path".
 func ProcessCatalogShards(entries []CatalogEntry, remoteBin string, shardField string, pipelineArgs [][]string) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
 		for _, entry := range entries {
-			bin := remoteBin
-			if IsLocalHost(entry.Host) {
-				bin = SelfBin(remoteBin)
-			}
-			remoteCmd := BuildRemoteCommand(bin, entry.Path, entry.Format, pipelineArgs)
+			remoteCmd := BuildRemoteCommand(shardBin(entry, remoteBin), entry.Path, entry.Format, pipelineArgs)
 
 			var cmd *exec.Cmd
 			if IsLocalHost(entry.Host) {
@@ -459,7 +538,9 @@ func SplitOnPlus(args []string) [][]string {
 }
 
 // BuildRemoteCommand constructs a remote ssql command string.
-// remoteBin is "ssql" or "ssql_gpu". path is the data file path.
+// remoteBin is a bare name ("ssql" or "ssql_gpu"), resolved on the
+// remote by RemoteBinPrologue, or an absolute path used as given. path
+// is the data file path.
 // format is the data format (empty or "csv" uses bare "from path",
 // others use "from FORMAT path"). pipelineGroups are push-down
 // commands (each group becomes "| remoteBin group...").
@@ -475,6 +556,8 @@ func isGlob(path string) bool {
 }
 
 func BuildRemoteCommand(remoteBin, path, format string, pipelineGroups [][]string) string {
+	prologue, bin := remoteBinWord(remoteBin)
+	remoteBin = bin
 	var remoteCmd string
 
 	if format != "" && format != "csv" && validFormats[format] {
@@ -490,7 +573,7 @@ func BuildRemoteCommand(remoteBin, path, format string, pipelineGroups [][]strin
 		}
 		remoteCmd += " | " + remoteBin + " " + strings.Join(quoted, " ")
 	}
-	return remoteCmd
+	return prologue + remoteCmd
 }
 
 // readCatalogJSONL reads JSONL from a reader, skipping _schema header lines.

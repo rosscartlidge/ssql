@@ -29,6 +29,11 @@ type CatalogShardOpts struct {
 	// on first error). true = run all shards to completion, return
 	// the first error.
 	KeepGoing bool
+
+	// RemoteBin: absolute path of ssql on the shard hosts (-remote-bin).
+	// "" = resolve on each host (RemoteBinPrologue); a row's bin column
+	// overrides either.
+	RemoteBin string
 }
 
 // ProcessCatalogShardsRemoteGo orchestrates ship-and-run across catalog
@@ -80,7 +85,7 @@ func ProcessCatalogShardsRemoteGo(
 		}
 
 		if opts.Order == "catalog" {
-			runCatalogOrder(ctx, entries, requireVersion, pushdownGroups, mode, shardField, sem, recordErr, yield)
+			runCatalogOrder(ctx, entries, requireVersion, pushdownGroups, mode, shardField, opts.RemoteBin, sem, recordErr, yield)
 			if firstErr != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", firstErr)
 			}
@@ -105,7 +110,7 @@ func ProcessCatalogShardsRemoteGo(
 				if ctx.Err() != nil {
 					return
 				}
-				if err := runShardStream(ctx, e, requireVersion, pushdownGroups, mode, shardField, ch); err != nil {
+				if err := runShardStream(ctx, e, requireVersion, pushdownGroups, mode, shardField, opts.RemoteBin, ch); err != nil {
 					recordErr(fmt.Errorf("shard %s:%s: %w", e.Host, e.Path, err))
 				}
 			}(entry)
@@ -138,6 +143,7 @@ func runCatalogOrder(
 	pushdownGroups [][]string,
 	mode string,
 	shardField string,
+	remoteBin string,
 	sem chan struct{},
 	recordErr func(error),
 	yield func(Record) bool,
@@ -159,7 +165,7 @@ func runCatalogOrder(
 			if ctx.Err() != nil {
 				return
 			}
-			rs, err := runShardCollect(ctx, e, requireVersion, pushdownGroups, mode, shardField)
+			rs, err := runShardCollect(ctx, e, requireVersion, pushdownGroups, mode, shardField, remoteBin)
 			if err != nil {
 				recordErr(fmt.Errorf("shard %s:%s: %w", e.Host, e.Path, err))
 				return
@@ -184,10 +190,10 @@ func runShardStream(
 	entry CatalogEntry,
 	requireVersion string,
 	groups [][]string,
-	mode, shardField string,
+	mode, shardField, remoteBin string,
 	ch chan<- Record,
 ) error {
-	stdout, wait, err := startShardSSH(ctx, entry, requireVersion, groups, mode)
+	stdout, wait, err := startShardSSH(ctx, entry, requireVersion, groups, mode, remoteBin)
 	if err != nil {
 		return err
 	}
@@ -213,9 +219,9 @@ func runShardCollect(
 	entry CatalogEntry,
 	requireVersion string,
 	groups [][]string,
-	mode, shardField string,
+	mode, shardField, remoteBin string,
 ) ([]Record, error) {
-	stdout, wait, err := startShardSSH(ctx, entry, requireVersion, groups, mode)
+	stdout, wait, err := startShardSSH(ctx, entry, requireVersion, groups, mode, remoteBin)
 	if err != nil {
 		return nil, err
 	}
@@ -236,24 +242,22 @@ func runShardCollect(
 
 // startShardSSH builds the per-shard script, opens an ssh process to
 // entry.Host (or bash for "local"/"localhost"), and returns the stdout
-// pipe + wait-for-completion func.
+// pipe + wait-for-completion func. remoteBin "" = resolve ssql on the
+// host (RemoteBinPrologue); the row's bin column or a local row's own
+// executable take precedence (shardBin).
 func startShardSSH(
 	ctx context.Context,
 	entry CatalogEntry,
 	requireVersion string,
 	groups [][]string,
-	mode string,
+	mode, remoteBin string,
 ) (io.ReadCloser, func() error, error) {
 	script := buildShardScript(entry, requireVersion, groups)
 	remotePath := fmt.Sprintf("/tmp/ssql-remote-%d-%d.ssql", os.Getpid(), time.Now().UnixNano())
-	bin := "/usr/bin/ssql"
-	if IsLocalHost(entry.Host) {
-		bin = SelfBin(bin) // a local row runs THIS binary, not /usr/bin/ssql
+	if remoteBin == "" {
+		remoteBin = "ssql"
 	}
-	remoteCmd := fmt.Sprintf(
-		"trap 'rm -f %s' EXIT; cat > %s && %s generate go -script %s -mode %s -run",
-		remotePath, remotePath, bin, remotePath, mode,
-	)
+	remoteCmd := RemoteScriptCommand(shardBin(entry, remoteBin), remotePath, mode)
 	var cmd *exec.Cmd
 	if IsLocalHost(entry.Host) {
 		cmd = exec.CommandContext(ctx, "bash", "-c", remoteCmd)

@@ -448,7 +448,7 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			name:           "from ssh remote multi",
 			cmdLine:        `SSQLGO=1 /tmp/ssql_test from ssh myhost /data/test.csv -- where -if age gt 25 + group-by dept -count cnt`,
 			expectFragment: true,
-			wantSubstring:  `ssql generate go -script`,
+			wantSubstring:  `ssql.RemoteScriptCommand(`, // the remote `generate go -script -run` command, built with the binary resolver
 		},
 		{
 			name:           "from ssh gpu",
