@@ -1002,6 +1002,29 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// String aggregates: max/min over a text column in -expr, in every
+		// Go lane (typed lowering has no shape for max, so it falls back to
+		// record codegen — the result must still agree). SQL has no -expr.
+		Name:     "expr_agg_string_max_min",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -expr 'max(hire_date)' latest -expr 'min(hire_date)' earliest -count n`,
+		Ordered:  false,
+		Skip:     map[string]string{"duckdb": "group-by -expr has no SQL translation (expression aggregations are ssql-specific)"},
+	},
+	{
+		// A field named like an expr builtin (`date`) is the FIELD when used
+		// bare in an expression, in every lane: exec's VM patches it to
+		// $env["date"], the transpiled lanes always read it as a field, SQL
+		// sees a column. Until v4.94.0 exec refused to compile it.
+		Name:     "expr_field_named_like_builtin",
+		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv | {{.bin}} where -if-expr 'date >= "2026-02-01"' | {{.bin}} include id amount`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 3, "amount": 300},
+			{"id": 5, "amount": 500},
+			{"id": 4, "amount": 400},
+		},
+	},
+	{
 		// `limit 0` is SQL's LIMIT 0: no records in every lane (it was
 		// the pass-through dial until v4.92.0).
 		Name:     "limit_zero_is_empty",

@@ -111,6 +111,7 @@ func corpusData(t *testing.T) string {
 			"empties.csv":            corpusEmptiesCSV,
 			"int_first.csv":          corpusIntFirstCSV,
 			"int_first.tsv":          strings.ReplaceAll(corpusIntFirstCSV, ",", "\t"),
+			"dated.csv":              corpusDatedCSV,
 			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
 			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
 			"app.log":                corpusAppLog,
@@ -611,6 +612,16 @@ func TestPipelineCorpus(t *testing.T) {
 }
 
 // --- shared corpus data ---------------------------------------
+
+// corpusDatedCSV has a column named `date` — an expr builtin's name — in
+// shuffled order with distinct values, for the field-shadows-builtin cases.
+const corpusDatedCSV = `id,date,amount
+3,2026-02-02,300
+1,2026-01-05,100
+5,2026-02-28,500
+2,2026-01-20,200
+4,2026-02-10,400
+`
 
 const corpusEmployeesCSV = `name,age,dept,salary,city,level,hire_date,status
 Alice,35,Engineering,95000,SF,7,2018-03-15,active

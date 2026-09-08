@@ -19,6 +19,7 @@ func exprGoTestSchema() *lib.TypedSchema {
 			{Name: "city", GoName: "City", GoType: "string"},
 			{Name: "active", GoName: "Active", GoType: "bool"},
 			{Name: "when", GoName: "When", GoType: "time.Time"},
+			{Name: "date", GoName: "Date", GoType: "string"}, // named like the date() builtin
 		},
 	}
 }

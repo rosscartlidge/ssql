@@ -35,6 +35,7 @@ func CompileExprEnv(expression string) (func(map[string]any) (any, error), error
 	program, err := expr.Compile(expression,
 		expr.Env(sampleEnv),
 		expr.AllowUndefinedVariables(),
+		ssql.ExprFieldShadowing(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("compile expression: %w", err)

@@ -107,6 +107,11 @@ func TestExprGoDifferential(t *testing.T) {
 		`pop > 5 || active`,
 		`not active`,
 		`pop > 5 and not (city == "cairo")`,
+		// a field named like a builtin: bare = the field (the VM patches it
+		// to $env["date"], the transpiler always read it as a field)
+		`date >= "2026-02-01"`,
+		`date == "" ? "none" : date`,
+		`len(date) == 10 && date != ""`,
 	}
 
 	var body strings.Builder
@@ -170,16 +175,17 @@ type Row struct {
 	Qty    int64
 	City   string
 	Active bool
+	Date   string // named like the date() builtin
 }
 
 // Rows are chosen to make wrong emissions diverge: negative values (int()
 // truncation, abs), ±2.5 (round half away from zero), a zero divisor (+Inf
 // parity), multi-byte runes (len), mixed case and affixes (string ops).
 var rows = []Row{
-	{Pop: 7, Price: 2.5, Qty: 2, City: "Oslo", Active: true},
-	{Pop: -3, Price: -2.5, Qty: 3, City: "cairo", Active: false},
-	{Pop: 20, Price: 15.5, Qty: 0, City: " héllo ", Active: true},
-	{Pop: 0, Price: 0, Qty: 1, City: "Ao", Active: false},
+	{Pop: 7, Price: 2.5, Qty: 2, City: "Oslo", Active: true, Date: "2026-01-05"},
+	{Pop: -3, Price: -2.5, Qty: 3, City: "cairo", Active: false, Date: "2026-02-02"},
+	{Pop: 20, Price: 15.5, Qty: 0, City: " héllo ", Active: true, Date: ""},
+	{Pop: 0, Price: 0, Qty: 1, City: "Ao", Active: false, Date: "2026-02-28"},
 }
 
 %s
@@ -212,6 +218,7 @@ func main() {
 			Int("qty", r.Qty).
 			String("city", r.City).
 			Bool("active", r.Active).
+			String("date", r.Date).
 			Freeze()
 	}
 	fail := 0

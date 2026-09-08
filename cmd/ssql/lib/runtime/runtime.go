@@ -85,6 +85,7 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 	program, err := expr.Compile(expression,
 		expr.Env(sampleEnv),
 		expr.AllowUndefinedVariables(),
+		ssql.ExprFieldShadowing(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("compile expression: %w", err)
@@ -167,93 +168,15 @@ type identifierVisitor struct {
 }
 
 func (v *identifierVisitor) Visit(node *ast.Node) {
-	if n, ok := (*node).(*ast.IdentifierNode); ok {
-		if !v.seen[n.Value] {
-			v.seen[n.Value] = true
-			*v.ids = append(*v.ids, n.Value)
+	// A bare identifier, or the $env["name"] form ExprFieldShadowing
+	// rewrites builtin-named fields (date, len, …) into — both are field
+	// references to validate against the first record.
+	if name, ok := ssql.ExprFieldName(*node); ok && name != "$env" {
+		if !v.seen[name] {
+			v.seen[name] = true
+			*v.ids = append(*v.ids, name)
 		}
 	}
-}
-
-// CompileExprWithFields compiles an expression with known field names.
-// This is useful when you know the field names ahead of time and want to
-// ensure they shadow any built-in functions with the same names.
-// The returned function can be used repeatedly on different records.
-func CompileExprWithFields(expression string, fields []string) (func(ssql.Record) (any, error), error) {
-	// Build sample environment with placeholder values for all fields
-	// This ensures field names shadow any built-in functions with the same name
-	sampleEnv := make(map[string]interface{})
-
-	// Add placeholders for all known fields (using nil as placeholder)
-	for _, field := range fields {
-		sampleEnv[field] = nil
-	}
-
-	// Add helper functions
-	sampleEnv["has"] = func(field string) bool { return false }
-	sampleEnv["getOr"] = func(field string, defaultValue any) any { return defaultValue }
-	sampleEnv["sha256"] = hashSHA256
-	sampleEnv["bucket"] = bucketFn
-	sampleEnv["sha1"] = hashSHA1
-	sampleEnv["md5"] = hashMD5
-	sampleEnv["replaceRegex"] = replaceRegex
-
-	program, err := expr.Compile(expression,
-		expr.Env(sampleEnv),
-		expr.AllowUndefinedVariables(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("compile expression: %w", err)
-	}
-
-	// Validate identifiers against known fields at compile time
-	identifiers := extractIdentifiers(program.Node())
-	var missing []string
-	for _, id := range identifiers {
-		if _, ok := sampleEnv[id]; !ok {
-			missing = append(missing, id)
-		}
-	}
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("expression references unknown field(s): %s", strings.Join(missing, ", "))
-	}
-
-	// Return a closure that evaluates the compiled program on a record
-	return func(record ssql.Record) (any, error) {
-		// Build environment with all record fields
-		env := make(map[string]interface{})
-		for k, v := range record.All() {
-			env[k] = v
-		}
-
-		// Add helper functions that close over the record
-		env["has"] = func(field string) bool {
-			_, exists := ssql.Get[any](record, field)
-			return exists
-		}
-
-		env["getOr"] = func(field string, defaultValue any) any {
-			if val, exists := ssql.Get[any](record, field); exists {
-				return val
-			}
-			return defaultValue
-		}
-
-		// Add hash functions
-		env["sha256"] = hashSHA256
-		env["bucket"] = bucketFn
-		env["sha1"] = hashSHA1
-		env["md5"] = hashMD5
-		env["replaceRegex"] = replaceRegex
-
-		// Execute the pre-compiled program with this record's environment
-		result, err := expr.Run(program, env)
-		if err != nil {
-			return nil, fmt.Errorf("execute expression: %w", err)
-		}
-
-		return result, nil
-	}, nil
 }
 
 // MustCompileExpr is like CompileExpr but panics on error.
