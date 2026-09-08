@@ -61,7 +61,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC051 | 2026-02-26 | 2026-03-20 | [Streaming vs Materialization: Command Survey](./streaming-vs-materialization.md) |
 | DFC052 | 2026-02-27 | 2026-03-12 | [Compound Types in ssql: Investigation and Opportunities](./compound-types-investigation.md) |
 | DFC053 | 2026-02-27 | 2026-03-12 | [Streaming Window Functions: Design Report](./streaming-window-functions.md) |
-| DFC054 | 2026-03-10 | 2026-03-20 | [Distributed Shard Catalog](./distributed-shard-catalog.md) |
+| DFC054 | 2026-03-10 | 2026-09-08 | [Distributed Shard Catalog](./distributed-shard-catalog.md) |
 | DFC055 | 2026-03-10 | 2026-03-10 | [`from` Subcommands: Mirroring `to`](./from-subcommands.md) |
 | DFC056 | 2026-03-10 | 2026-03-20 | [SSH Test Environment Setup](./ssh-test-environment.md) |
 | DFC057 | 2026-03-12 | 2026-03-12 | [GitHub Repository Migration Plan](./github-repo-migration.md) |
@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-09-07 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-09-08 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |

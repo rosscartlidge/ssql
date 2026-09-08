@@ -149,7 +149,29 @@ func aggResult(context string, v any) AggregateResult {
 func aggMax(args ...any) (any, error) { return aggExtreme("max", args, 1) }
 func aggMin(args ...any) (any, error) { return aggExtreme("min", args, -1) }
 
-func aggExtreme(name string, args []any, sign int) (any, error) {
+// aggFirst and aggLast are the aggregation environment's first/last: the
+// first or last value of the group in arrival order (records without the
+// field contribute nothing, as ssql.First/Last), of any type.
+func aggFirst(args ...any) (any, error) {
+	vals, err := aggValues("first", args)
+	if err != nil {
+		return nil, err
+	}
+	return vals[0], nil
+}
+
+func aggLast(args ...any) (any, error) {
+	vals, err := aggValues("last", args)
+	if err != nil {
+		return nil, err
+	}
+	return vals[len(vals)-1], nil
+}
+
+// aggValues flattens an aggregation function's arguments — the field
+// arrays the batch env provides, a mapped expression, or scalars — into
+// one list, erroring on an empty group.
+func aggValues(name string, args []any) ([]any, error) {
 	var vals []any
 	for _, a := range args {
 		switch arr := a.(type) {
@@ -173,6 +195,14 @@ func aggExtreme(name string, args []any, sign int) (any, error) {
 	}
 	if len(vals) == 0 {
 		return nil, fmt.Errorf("%s: no values", name)
+	}
+	return vals, nil
+}
+
+func aggExtreme(name string, args []any, sign int) (any, error) {
+	vals, err := aggValues(name, args)
+	if err != nil {
+		return nil, err
 	}
 	best := vals[0]
 	for _, v := range vals[1:] {
@@ -306,15 +336,20 @@ func buildAggBatchEnv(records []Record) (map[string]any, map[string]bool) {
 	env["_records"] = recordMaps
 	env["_count"] = len(records)
 	// max/min over the group, for strings and times as well as numbers
-	// (an env function shadows expr's numeric-only builtin).
+	// (an env function shadows expr's numeric-only builtin); first/last in
+	// arrival order.
 	env["max"] = aggMax
 	env["min"] = aggMin
+	env["first"] = aggFirst
+	env["last"] = aggLast
 
 	// Dummy functions to satisfy type-checker before patching
 	env["count"] = func() int { return 0 }
 	env["avg"] = func(arr []float64) float64 { return 0 }
 	env["max"] = aggMax // the exec env's max/min shadow expr's numeric-only builtins
 	env["min"] = aggMin
+	env["first"] = aggFirst
+	env["last"] = aggLast
 
 	return env, fields
 }
@@ -341,6 +376,13 @@ var aggFunctions = map[string]string{
 	"count": "count",
 	// avg/mean/median need special handling - they don't support predicate form
 	// min/max also need custom handling - expr's builtins take 2 scalars, not arrays
+}
+
+// Functions provided by the aggregation env (aggMax/aggMin/aggFirst/
+// aggLast) that take the group's values: a field array as is, an
+// expression mapped across the records.
+var valueAggFunctions = map[string]bool{
+	"max": true, "min": true, "first": true, "last": true,
 }
 
 // Functions that need sum/len transformation for average
@@ -397,6 +439,24 @@ func (p *aggPatcher) patchCall(node *ast.Node, call *ast.CallNode) {
 			Left:     sumNode,
 			Right:    lenNode,
 		})
+		return
+	}
+
+	// max/min/first/last take the group's values. A bare field is already
+	// an array in the batch env; an expression (`max(price * qty)`) is
+	// mapped across the records first: max(map(_records, .price * .qty)).
+	if valueAggFunctions[ident.Value] && len(call.Arguments) == 1 {
+		if _, bare := ExprFieldName(call.Arguments[0]); !bare {
+			arg := call.Arguments[0]
+			p.transformIdentifiers(&arg)
+			call.Arguments[0] = &ast.BuiltinNode{
+				Name: "map",
+				Arguments: []ast.Node{
+					&ast.IdentifierNode{Value: "_records"},
+					&ast.PredicateNode{Node: arg},
+				},
+			}
+		}
 		return
 	}
 
@@ -494,6 +554,8 @@ func CompileAggExprPatched(expression string, fieldNames []string) (ast.Node, er
 	env["avg"] = func(arr []float64) float64 { return 0 }
 	env["max"] = aggMax // the exec env's max/min shadow expr's numeric-only builtins
 	env["min"] = aggMin
+	env["first"] = aggFirst
+	env["last"] = aggLast
 	program, err := compileAggExpr(expression, fields, env)
 	if err != nil {
 		return nil, err

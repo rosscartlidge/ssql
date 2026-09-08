@@ -1006,7 +1006,7 @@ var equivCases = []EquivCase{
 		// Go lane (typed lowering has no shape for max, so it falls back to
 		// record codegen — the result must still agree). SQL has no -expr.
 		Name:     "expr_agg_string_max_min",
-		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -expr 'max(hire_date)' latest -expr 'min(hire_date)' earliest -count n`,
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -expr 'max(hire_date)' latest -expr 'min(hire_date)' earliest -expr 'first(name)' first_seen -expr 'last(name)' last_seen -expr 'max(salary * 2)' top2 -count n`,
 		Ordered:  false,
 		Skip:     map[string]string{"duckdb": "group-by -expr has no SQL translation (expression aggregations are ssql-specific)"},
 	},

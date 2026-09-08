@@ -13,8 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument for max (type string)" and a `-stream-expr` whose result was a
   string with "need a numeric result" — both as a Go panic trace. The
   aggregation environment's `max`/`min` now order numbers, strings and
-  times over the group, numeric results stay float64, and string, bool
-  and time results are kept as is; a map- or list-valued result is still
+  times over the group, `first`/`last` take the group's first or last
+  value in arrival order, all four accept an expression (`max(price *
+  qty)`), numeric results stay float64, and string, bool and time
+  results are kept as is; a map- or list-valued result is still
   refused, with a message that says what is accepted. In every Go lane.
 - **The CLI reports an internal panic as one `Error: …` line**, exit 1,
   instead of a goroutine dump — the rule generated programs already

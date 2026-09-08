@@ -818,6 +818,11 @@ func TestExprAggStringResults(t *testing.T) {
 		{"max(name)", ExprAgg("max(name)"), "Carol"},
 		{"max(n) stays float64", ExprAgg("max(n)"), 9.0},
 		{"min(n) stays float64", ExprAgg("min(n)"), 3.0},
+		{"first(date)", ExprAgg("first(date)"), "2026-01-05"},
+		{"last(name)", ExprAgg("last(name)"), "Bob"},
+		{"first(n) stays float64", ExprAgg("first(n)"), 3.0},
+		{"max over an expression", ExprAgg("max(n * 2)"), 18.0},
+		{"last over an expression", ExprAgg(`last(name + "!")`), "Bob!"},
 		{"stream string", StreamExprAgg(`{s: ""}`, `{s: date > s ? date : s}`, `s`), "2026-02-14"},
 		{"stream bool", StreamExprAgg(`{b: false}`, `{b: b || n > 8}`, `b`), true},
 	}
