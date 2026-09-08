@@ -5,6 +5,15 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`scripts/codelab-mint.sh` (`make codelab-mint`)** does the CLI codelab
+  from scratch in a fresh Ubuntu 24.04 LXD container as a novice would —
+  Setup verbatim from the doc, the interactive keys through a real pty,
+  the shipped self-test runner, and the blocks it skips — against the
+  published release (DFC126). Its first run found the v4.94.2 fix.
+
 ## [4.94.2] - 2026-09-08
 
 ### Fixed

@@ -48,3 +48,4 @@ default.pgo
 .claude/
 .docsearch-cache.jsonl
 /ssql-playground
+__pycache__/

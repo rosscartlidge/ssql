@@ -2,7 +2,7 @@
 
 .PHONY: help test build clean doc-check doc-test doc-verify doc-update fmt vet all ci install-hooks
 .PHONY: gpu build-gpu install-gpu install-local docker-gpu docker-gpu-image docker-gpu-extract deb
-.PHONY: ai-test ai-test-go ai-test-cli
+.PHONY: ai-test ai-test-go ai-test-cli codelab-mint
 .PHONY: wasm wasm-go
 
 VERSION := $(shell cat cmd/ssql/version/version.txt | tr -d '[:space:]')
@@ -263,6 +263,11 @@ docker-gpu: docker-gpu-extract
 
 # Refresh the embedded explore engine: the SAME slim playground wasm,
 # gzipped for embedding (DFC107 — the TinyGo mini-engine is gone).
+# DFC126: the CLI codelab from scratch in a fresh LXD container, against
+# the PUBLISHED release (needs lxd + network, ~5 min). -k keeps the box.
+codelab-mint:
+	@scripts/codelab-mint.sh
+
 explore-wasm:
 	@echo "Building slim wasm for explore embedding..."
 	GOOS=js GOARCH=wasm go build -tags slim -ldflags="-s -w $(LDFLAGS)" -o /tmp/ssql-explore.wasm ./cmd/ssql-playground
