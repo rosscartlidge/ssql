@@ -480,6 +480,27 @@ func buildGoSource(code, outPath string) error {
 	return nil
 }
 
+// generatedGoLine is the `go` directive for the temp module `-run` and
+// `-build` compile: the FULL version of the toolchain this ssql was built
+// with (go1.26.8 → "1.26.8"). A bare minor ("go 1.23", as it was until
+// v4.94.2) makes an older stock Go try to download a toolchain literally
+// named go1.23, which does not exist: "go: download go1.23 for
+// linux/amd64: toolchain not available" — every Ubuntu 24.04 (Go 1.22)
+// user who installed with `go install` hit it on the codelab's first
+// `generate go -run`. The full version of the building toolchain is the
+// one `go install` already downloaded for them, so it costs nothing;
+// a newer local Go is fine too (the line is a minimum). Development
+// builds report "devel …" — fall back to the module's own floor.
+func generatedGoLine() string {
+	v := strings.TrimPrefix(runtime.Version(), "go")
+	if fullGoVersionRe.MatchString(v) {
+		return v
+	}
+	return "1.26.0"
+}
+
+var fullGoVersionRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
 // compileGoSource is the shared implementation behind [runGoSource]
 // and [buildGoSource]. It writes a temp module containing the user's
 // generated code, runs `go build`, and returns (tempDir, binaryPath).
@@ -510,10 +531,10 @@ func compileGoSource(code, outPath string) (tempDir, binPath string, err error) 
 
 	goMod := fmt.Sprintf(`module ssqlgen
 
-go 1.23
+go %s
 
 require github.com/rosscartlidge/ssql/v4 v%s
-`, version.Version)
+`, generatedGoLine(), version.Version)
 	// The generated program compiles against the RELEASED module at
 	// the running binary's own version — so a library function added
 	// since the last release is "undefined" here until it ships.

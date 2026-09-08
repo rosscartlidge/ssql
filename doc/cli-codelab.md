@@ -51,7 +51,9 @@ On macOS use `brew install go`; elsewhere download Go from
 <https://go.dev/dl/>. Prefer not to install Go at all? The
 [releases page](https://github.com/rosscartlidge/ssql/releases/latest)
 has a prebuilt `ssql` for Linux, macOS and Windows — unpack it and put
-the binary somewhere on your PATH.
+the binary somewhere on your PATH. Everything in this tutorial works
+with it except section 7, *Generate code*, which compiles Go and needs
+the `go` command.
 
 **Put `ssql` on your PATH.** `go install` writes the binary to
 `$HOME/go/bin` (`$(go env GOPATH)/bin` if you have changed GOPATH),
@@ -414,7 +416,12 @@ server-side head, and the next section shows it from the command line.
 ## 7. Generate code
 
 *Why:* the interpreted pipeline is convenient; a compiled one is fast and
-standalone. Same pipeline, one command:
+standalone. This section uses your Go toolchain: the first run fetches
+the ssql library into Go's module cache (and, on an older Go, the
+toolchain the library needs) and takes half a minute; after that a
+pipeline compiles in a second or two. If you installed the prebuilt
+binary instead of Go, install Go as in Setup first. Same pipeline, one
+command:
 
 ```bash
 ssql generate go -run -pipeline 'ssql from employees.csv | ssql where -if dept eq Engineering | ssql group-by city -count n | ssql to table'
@@ -435,9 +442,10 @@ the program instead of running it:
 ssql generate go -pipeline 'ssql from employees.csv | ssql where -if salary gt 90000 | ssql to csv' | head -40
 ```
 
-The same fragments translate to SQL. DuckDB runs it; results are
-byte-identical to the interpreted pipeline — a gate in the test suite
-checks every lane agrees:
+The same fragments translate to SQL. If you have [DuckDB](https://duckdb.org)
+installed, `-run` hands the SQL to it; results are byte-identical to the
+interpreted pipeline — a gate in the test suite checks every lane
+agrees:
 
 ```bash
 ssql generate sql -pipeline 'ssql from employees.csv | ssql where -if status eq active | ssql group-by dept -avg salary avg_salary | ssql to table'

@@ -5,6 +5,23 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`generate go -run` / `-build` work on a stock older Go.** The temp
+  module's `go` line was the bare minor `go 1.23`; an older Go (Ubuntu
+  24.04's 1.22) tries to download a toolchain literally named go1.23,
+  which does not exist — "go: download go1.23 for linux/amd64: toolchain
+  not available" on the codelab's first `generate go -run`. The line is
+  now the full version of the toolchain ssql was built with, which for a
+  `go install` user is the one already in their module cache. Found by
+  doing the codelab from scratch in a fresh Ubuntu 24.04 container.
+
+### Changed
+- Codelab: Setup says the prebuilt binary covers everything but section 7,
+  and section 7 says what its first run downloads and how long it takes;
+  the SQL block is marked as needing DuckDB.
+
 ## [4.94.1] - 2026-09-08
 
 ### Fixed
