@@ -798,25 +798,52 @@ func TestExprAggSum(t *testing.T) {
 	}
 }
 
-// TestExprAggNonNumericPanics: a non-numeric aggregation result must panic
-// with a clear message, not silently coerce to 0 (the old toFloat64 default
-// turned a wrong expression into corrupted-looking data).
-func TestExprAggNonNumericPanics(t *testing.T) {
+// TestExprAggStringResults: aggregation expressions may produce strings
+// (and bools, times) — `max(date)` over ISO dates, a stream fold that
+// carries a name. Until v4.94.0 both panicked ("need a numeric result" /
+// "invalid argument for max (type string)"); numbers stay float64.
+func TestExprAggStringResults(t *testing.T) {
 	records := []Record{
-		NewRecord(map[string]any{"name": "Alice"}),
+		NewRecord(map[string]any{"name": "Alice", "date": "2026-01-05", "n": int64(3)}),
+		NewRecord(map[string]any{"name": "Carol", "date": "2026-02-14", "n": int64(9)}),
+		NewRecord(map[string]any{"name": "Bob", "date": "2026-01-20", "n": int64(5)}),
 	}
+	cases := []struct {
+		name string
+		fn   AggregateFunc
+		want any
+	}{
+		{"max(date)", ExprAgg("max(date)"), "2026-02-14"},
+		{"min(date)", ExprAgg("min(date)"), "2026-01-05"},
+		{"max(name)", ExprAgg("max(name)"), "Carol"},
+		{"max(n) stays float64", ExprAgg("max(n)"), 9.0},
+		{"min(n) stays float64", ExprAgg("min(n)"), 3.0},
+		{"stream string", StreamExprAgg(`{s: ""}`, `{s: date > s ? date : s}`, `s`), "2026-02-14"},
+		{"stream bool", StreamExprAgg(`{b: false}`, `{b: b || n > 8}`, `b`), true},
+	}
+	for _, c := range cases {
+		if got := c.fn(records).GetValue(); got != c.want {
+			t.Errorf("%s: got %#v, want %#v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestExprAggWrongShapePanics: a result that is not a number, string, bool
+// or time (a map here) is a wrong expression and must panic with a clear
+// message — not silently coerce to 0 (the pre-v4.60 behaviour turned a
+// wrong expression into corrupted-looking data).
+func TestExprAggWrongShapePanics(t *testing.T) {
+	records := []Record{NewRecord(map[string]any{"n": int64(1)})}
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatal("expected panic for non-numeric aggregation result, got none")
+			t.Fatal("expected panic for a map-valued aggregation result, got none")
 		}
-		if msg := fmt.Sprint(r); !strings.Contains(msg, "need a numeric result") {
-			t.Errorf("panic message %q should mention 'need a numeric result'", msg)
+		if msg := fmt.Sprint(r); !strings.Contains(msg, "need a number, string, bool or time") {
+			t.Errorf("panic message %q should say what is accepted", msg)
 		}
 	}()
-	// first(names)-style string results have no numeric meaning; use a
-	// stream aggregation whose final expression is a string.
-	StreamExprAgg(`{s: ""}`, `{s: name}`, `s`)(records)
+	StreamExprAgg(`{s: 0}`, `{s: s + n}`, `{x: s}`)(records)
 }
 
 func TestExprAggCount(t *testing.T) {

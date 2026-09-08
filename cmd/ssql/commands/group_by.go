@@ -124,7 +124,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Accumulate().
 		Global().
-		Help("Custom aggregation expression: -expr 'sum(salary * bonus)' total").
+		Help("Custom aggregation expression: -expr 'sum(salary * bonus)' total; sum/avg/count over numbers, max/min over numbers, strings or times (-expr 'max(date)' latest)").
 		Done().
 		Flag("-stream-expr").
 		Arg("init").

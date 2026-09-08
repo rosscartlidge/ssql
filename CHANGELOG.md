@@ -5,6 +5,46 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Aggregation expressions can produce strings, bools and times; `max`/`min`
+  order them.** `group-by -expr 'max(date)' latest` failed with "invalid
+  argument for max (type string)" and a `-stream-expr` whose result was a
+  string with "need a numeric result" — both as a Go panic trace. The
+  aggregation environment's `max`/`min` now order numbers, strings and
+  times over the group, numeric results stay float64, and string, bool
+  and time results are kept as is; a map- or list-valued result is still
+  refused, with a message that says what is accepted. In every Go lane.
+- **The CLI reports an internal panic as one `Error: …` line**, exit 1,
+  instead of a goroutine dump — the rule generated programs already
+  followed. `SSQL_DEBUG=1` keeps the trace.
+- **A field named like an expr function (`date`, `len`, `type`, `max`, …)
+  works as a field in expressions.** `where -if-expr 'date >= "2026-02-01"'`
+  failed to compile ("mismatched types func(...) and string") because
+  expr's checker resolved the bare name to the `date()` builtin. The rule
+  is now *field when bare, function when called* — the rule generated Go
+  already applied — in the interpreter, generated code, SQL and
+  aggregation expressions; `date(date)` still calls the function. A
+  missing field with such a name is still reported as unknown. Fields
+  named like the ssql helpers (`has`, `getOr`, `bucket`, `sha*`, `md5`,
+  `replaceRegex`) remain shadowed (documented).
+- **Remote ssql is found wherever it was installed.** `from ssh`,
+  `from catalog` shards and `merge -catalog` ran `/usr/bin/ssql` on the
+  remote — the .deb's location, and nothing else's: a host where ssql
+  came from `go install` (`~/go/bin`) or a tarball (`/usr/local/bin`)
+  failed with a bare "bash: /usr/bin/ssql: No such file or directory".
+  The remote command now starts with a prologue that picks the first
+  executable among `/usr/bin/ssql`, `/usr/local/bin/ssql`,
+  `$HOME/go/bin/ssql` and `$HOME/.local/bin/ssql` — a fixed list of
+  absolute paths, so nothing depends on the remote shell's PATH — and,
+  when none exists, prints one line naming the host, the paths tried
+  and the remedies (exit 127). New `-remote-bin PATH` on `from ssh` and
+  `from catalog` (absolute; validated) and an optional catalog `bin`
+  column name the binary explicitly, per run or per host. Generated
+  programs build the same command through `ssql.BuildRemoteCommand` /
+  `ssql.RemoteScriptCommand`, so they resolve the same way.
+
 ## [4.93.0] - 2026-09-08
 
 ### Fixed

@@ -161,6 +161,19 @@ func main() {
 			}
 		}
 	}
+	// A panic from deep in a pipeline (an aggregation expression that
+	// produced a map, a reader's CellError that no command recovered) is
+	// an error to the user, not a goroutine dump — the same rule generated
+	// programs follow. SSQL_DEBUG=1 keeps the trace.
+	defer func() {
+		if r := recover(); r != nil {
+			if os.Getenv("SSQL_DEBUG") != "" {
+				panic(r)
+			}
+			fmt.Fprintf(os.Stderr, "Error: %v\n", r)
+			os.Exit(1)
+		}
+	}()
 	cmd := buildRootCommand()
 	if err := cmd.Execute(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

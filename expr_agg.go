@@ -3,6 +3,8 @@ package ssql
 import (
 	"fmt"
 	"maps"
+	"strings"
+	"time"
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
@@ -25,9 +27,9 @@ func ExprAgg(expression string) AggregateFunc {
 	return func(records []Record) AggregateResult {
 		result, err := evalBatchAggExpr(expression, records)
 		if err != nil {
-			panic(fmt.Sprintf("ExprAgg(%q): %v", expression, err))
+			panic(fmt.Errorf("ExprAgg(%q): %w", expression, err))
 		}
-		return AggResult[float64]{val: mustAggFloat64(fmt.Sprintf("ExprAgg(%q)", expression), result)}
+		return aggResult(fmt.Sprintf("ExprAgg(%q)", expression), result)
 	}
 }
 
@@ -51,9 +53,9 @@ func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc {
 	return func(records []Record) AggregateResult {
 		result, err := evalStreamAggExpr(initExpr, everyExpr, finalExpr, records)
 		if err != nil {
-			panic(fmt.Sprintf("StreamExprAgg: %v", err))
+			panic(fmt.Errorf("StreamExprAgg: %w", err))
 		}
-		return AggResult[float64]{val: mustAggFloat64("StreamExprAgg", result)}
+		return aggResult("StreamExprAgg", result)
 	}
 }
 
@@ -83,7 +85,7 @@ func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) 
 	maps.Insert(compileEnv, records[0].All())
 
 	// Compile "every" expression with combined environment
-	everyProgram, err := expr.Compile(everyExpr, expr.Env(compileEnv))
+	everyProgram, err := expr.Compile(everyExpr, expr.Env(compileEnv), ExprFieldShadowing())
 	if err != nil {
 		return nil, fmt.Errorf("compiling every expression: %w", err)
 	}
@@ -105,7 +107,7 @@ func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) 
 	}
 
 	// 4. Compute final result
-	finalProgram, err := expr.Compile(finalExpr, expr.Env(stateMap))
+	finalProgram, err := expr.Compile(finalExpr, expr.Env(stateMap), ExprFieldShadowing())
 	if err != nil {
 		return nil, fmt.Errorf("compiling final expression: %w", err)
 	}
@@ -117,18 +119,117 @@ func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) 
 	return result, nil
 }
 
-// mustAggFloat64 coerces an aggregation expression's result to float64,
-// panicking with a clear message for non-numeric results. The old behaviour
-// (silently returning 0 via toFloat64's default case) turned a wrong
-// expression into corrupted-looking data; panicking matches how
-// ExprAgg/StreamExprAgg already report compile and eval errors.
-func mustAggFloat64(context string, v any) float64 {
+// aggResult types an aggregation expression's result: every numeric
+// result is float64 (as it always was), and a string, bool or time.Time
+// result is kept as is — `max(date)` over ISO dates, a `-stream-expr`
+// that carries a name, a latest timestamp. Anything else (a map, a list,
+// nil) is a wrong expression and panics with a clear message; the old
+// silent coercion to 0 turned that into corrupted-looking data, and until
+// v4.94.0 a string result panicked too ("need a numeric result").
+func aggResult(context string, v any) AggregateResult {
+	switch x := v.(type) {
+	case float64, float32, int, int64, int32, int16, int8,
+		uint, uint64, uint32, uint16, uint8:
+		return AggResult[float64]{val: toFloat64(v)}
+	case string:
+		return AggResult[string]{val: x}
+	case bool:
+		return AggResult[bool]{val: x}
+	case time.Time:
+		return AggResult[time.Time]{val: x}
+	}
+	panic(fmt.Errorf("%s: expression returned %T (%v), need a number, string, bool or time", context, v, v))
+}
+
+// aggMax and aggMin are the aggregation environment's max/min: they take
+// the field arrays the batch env provides (`max(date)` sees every date in
+// the group) or scalars, and order numbers, strings and times — expr's own
+// builtins are numeric-only, which is why `max(date)` used to fail with
+// "invalid argument for max (type string)".
+func aggMax(args ...any) (any, error) { return aggExtreme("max", args, 1) }
+func aggMin(args ...any) (any, error) { return aggExtreme("min", args, -1) }
+
+func aggExtreme(name string, args []any, sign int) (any, error) {
+	var vals []any
+	for _, a := range args {
+		switch arr := a.(type) {
+		case []any:
+			vals = append(vals, arr...)
+		case []float64:
+			for _, v := range arr {
+				vals = append(vals, v)
+			}
+		case []int64:
+			for _, v := range arr {
+				vals = append(vals, v)
+			}
+		case []string:
+			for _, v := range arr {
+				vals = append(vals, v)
+			}
+		default:
+			vals = append(vals, a)
+		}
+	}
+	if len(vals) == 0 {
+		return nil, fmt.Errorf("%s: no values", name)
+	}
+	best := vals[0]
+	for _, v := range vals[1:] {
+		c, err := aggCompare(name, v, best)
+		if err != nil {
+			return nil, err
+		}
+		if c*sign > 0 {
+			best = v
+		}
+	}
+	return best, nil
+}
+
+// aggCompare orders two aggregation values of the same kind: numbers
+// (any width, compared as float64), strings, or times.
+func aggCompare(name string, a, b any) (int, error) {
+	switch x := a.(type) {
+	case string:
+		y, ok := b.(string)
+		if !ok {
+			return 0, fmt.Errorf("%s: mixed types %T and %T", name, a, b)
+		}
+		return strings.Compare(x, y), nil
+	case time.Time:
+		y, ok := b.(time.Time)
+		if !ok {
+			return 0, fmt.Errorf("%s: mixed types %T and %T", name, a, b)
+		}
+		switch {
+		case x.After(y):
+			return 1, nil
+		case x.Before(y):
+			return -1, nil
+		}
+		return 0, nil
+	}
+	if !isNumeric(a) || !isNumeric(b) {
+		return 0, fmt.Errorf("%s: cannot order %T and %T", name, a, b)
+	}
+	fa, fb := toFloat64(a), toFloat64(b)
+	switch {
+	case fa > fb:
+		return 1, nil
+	case fa < fb:
+		return -1, nil
+	}
+	return 0, nil
+}
+
+func isNumeric(v any) bool {
 	switch v.(type) {
 	case float64, float32, int, int64, int32, int16, int8,
 		uint, uint64, uint32, uint16, uint8:
-		return toFloat64(v)
+		return true
 	}
-	panic(fmt.Sprintf("%s: expression returned %T (%v), need a numeric result", context, v, v))
+	return false
 }
 
 // toFloat64 converts various numeric types to float64
@@ -204,10 +305,16 @@ func buildAggBatchEnv(records []Record) (map[string]any, map[string]bool) {
 	// Add _records and _count
 	env["_records"] = recordMaps
 	env["_count"] = len(records)
+	// max/min over the group, for strings and times as well as numbers
+	// (an env function shadows expr's numeric-only builtin).
+	env["max"] = aggMax
+	env["min"] = aggMin
 
 	// Dummy functions to satisfy type-checker before patching
 	env["count"] = func() int { return 0 }
 	env["avg"] = func(arr []float64) float64 { return 0 }
+	env["max"] = aggMax // the exec env's max/min shadow expr's numeric-only builtins
+	env["min"] = aggMin
 
 	return env, fields
 }
@@ -218,6 +325,7 @@ func compileAggExpr(expression string, fields map[string]bool, env map[string]an
 	return expr.Compile(expression,
 		expr.Env(env),
 		expr.Patch(patcher),
+		ExprFieldShadowing(),
 	)
 }
 
@@ -384,6 +492,8 @@ func CompileAggExprPatched(expression string, fieldNames []string) (ast.Node, er
 	env["_count"] = 0
 	env["count"] = func() int { return 0 }
 	env["avg"] = func(arr []float64) float64 { return 0 }
+	env["max"] = aggMax // the exec env's max/min shadow expr's numeric-only builtins
+	env["min"] = aggMin
 	program, err := compileAggExpr(expression, fields, env)
 	if err != nil {
 		return nil, err

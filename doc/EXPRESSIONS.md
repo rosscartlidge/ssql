@@ -325,6 +325,29 @@ ssql update -set-expr total 'getOr("price", 0) * getOr("qty", 1)'
 ssql update -set-expr status 'has("verified") ? "active" : "pending"'
 ```
 
+## Field Names That Match a Function
+
+Columns are often called `date`, `len`, `type`, `max`, `min`, `count` —
+names that are also expr built-in functions. The rule is **field when
+bare, function when called**:
+
+```bash
+ssql from orders.csv | ssql where -if-expr 'date >= "2026-02-01"'            # the field
+ssql from orders.csv | ssql where -if-expr 'date(date) > date("2026-02-01")'  # date(...) is the function, its argument the field
+ssql from orders.csv | ssql update -set-expr month 'date[0:7]'               # slice the field
+ssql from items.csv  | ssql where -if-expr 'len > 2 && len(name) > 3'        # field bare, function called
+```
+
+This holds in every lane — the interpreter, generated Go (record and
+typed) and `generate sql` — and in aggregation expressions, where
+`group-by -expr 'max(date)' latest` orders the group's dates: `max` and
+`min` in an aggregation accept numbers, strings and times, and an
+aggregation's result may be a number, a string, a bool or a time. A field that
+does not exist in the record is still reported as an unknown field even
+when it shares a function's name. The ssql helper names (`has`, `getOr`,
+`bucket`, `sha256`, `sha1`, `md5`, `replaceRegex`) are the one
+exception: a field with one of those names is shadowed by the helper.
+
 ## Common Patterns
 
 ### 1. Data Validation
