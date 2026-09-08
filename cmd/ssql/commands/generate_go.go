@@ -603,6 +603,19 @@ func runPipelineForFragments(src, mode, label string) ([]byte, error) {
 		return nil, fmt.Errorf("ssql generate %s: contains no pipeline", label)
 	}
 
+	// Run every `ssql` stage with THIS binary, not whatever `ssql` is
+	// first on PATH (the optimiser's re-execution does the same). On a
+	// remote shard the ship-and-run command resolves ssql by absolute
+	// path, but the stages inside the shipped script were bare `ssql`:
+	// a stale /usr/local/bin/ssql ahead of /usr/bin on PATH ran them,
+	// emitted fragments the new assembler ignored, and the program had
+	// no pipeline body (v4.94.0, found post-release on the rig).
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("locating ssql binary: %w", err)
+	}
+	pipeline = ssqlStageRe.ReplaceAllString(pipeline, "${1}"+shellQuote(exe)+" ")
+
 	// `set -o pipefail` is essential: without it, a typo earlier in
 	// the pipeline (e.g. `sql from x.csv | ssql group-by ...`) goes
 	// silently and the failed stage's empty output flows downstream,

@@ -5,6 +5,18 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`generate go -script` / `-pipeline` run their `ssql` stages with the
+  running binary, not the first `ssql` on PATH.** On a host with a stale
+  second ssql ahead on PATH, a shipped script's stages ran under the old
+  version, the new assembler ignored their fragments, and the remote
+  program failed with "undefined: records" while the `# require:` check
+  had passed (it ran in the new binary). Found on the SSH rig after the
+  v4.94.0 tag; the optimiser's re-execution already substituted the
+  executable.
+
 ## [4.94.0] - 2026-09-08
 
 ### Fixed
