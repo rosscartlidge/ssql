@@ -175,7 +175,38 @@ ls
 ssql from employees.csv | ssql to table
 ```
 
-Ten people, eight fields. Before anything else, ask the file to describe
+Ten people, eight fields.
+
+**What flows between the stages.** Leave off `to table` and you see the
+form every command reads and writes — JSON Lines, one record per line,
+with a first line that names the fields and their types:
+
+```bash
+ssql from employees.csv | ssql limit 2
+```
+
+```
+{"_schema":{"fields":["name","age","dept",…],"types":{"age":"int","name":"string",…}}}
+{"name":"Alice","age":35,"dept":"Engineering","salary":95000,"city":"SF",…}
+{"name":"Bob","age":28,"dept":"Sales","salary":65000,"city":"NYC",…}
+```
+
+That is the default output of every pipeline: `from` turns the file into
+it, each stage transforms it, and a `to` stage at the end turns it into
+something for people or other programs. Because it is plain JSON Lines,
+you can also stop anywhere — `> saved.jsonl` keeps a result you can read
+back later with `ssql from saved.jsonl`, and `| jq` inspects it.
+
+**Formats.** `from FILE` picks the reader from the extension: `.csv`,
+`.tsv`, `.json`, `.jsonl`, `.parquet`, `.arrow`, `.xlsx`, `.wav`, and
+`.log` or `.txt` as one record per line. Name it instead when the
+extension lies or the input is a pipe: `ssql from csv FILE`, `ssql from
+jsonl -` and so on. On the way out, `to` writes `table`, `csv`, `tsv`,
+`json`, `jsonl`, `parquet`, `arrow`, `xlsx`, `markdown` and `wav`, plus
+the visual sinks `chart`, `explore` and `animate` (section 4). Tab after
+`ssql from ` or `ssql to ` lists them.
+
+Before anything else, ask the file to describe
 itself — one row per field with type, count, missing values, distinct
 values, and the numeric spread:
 
@@ -306,7 +337,8 @@ pipelines faster, bigger, or shareable — the vocabulary does not change.
 
 ## 4. Save and share
 
-Any pipeline ends in a format. `tee` saves a checkpoint *and* passes the
+Any pipeline ends in a format — or in the JSON Lines of section 2 when
+you redirect it to a file. `tee` saves that checkpoint *and* passes the
 rows on, so you can keep going:
 
 ```bash
@@ -564,7 +596,7 @@ Aggregate / reshape: `group-by` · `count` · `describe` · `pivot` ·
 
 Signals: `fft` · `ifft` · `convolve` · `correlate` · `spectrogram`.
 
-Sinks: `to table|csv|tsv|json|jsonl|parquet|arrow|xlsx|wav|chart|explore|animate` · `tee FILE`.
+Sinks: `to table|csv|tsv|json|jsonl|parquet|arrow|xlsx|markdown|wav|chart|explore|animate` · `tee FILE`; no `to` = JSON Lines with a `_schema` header (section 2).
 
 Codegen & serving: `generate go|sql|ssql [-pipeline '…']` · `serve`.
 
