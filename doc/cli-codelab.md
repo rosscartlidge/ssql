@@ -125,11 +125,23 @@ echo 'eval "$(ssql -shell-init)"' >> ~/.bashrc
 finished with Enter):
 
 ```
-ssql <TAB>                                 # every command
+ssql <TAB><TAB>                            # every command
 ssql from emp<TAB>                         # the FILE name
 ssql from employees.csv | ssql where -if <Ctrl-O>        # the file's FIELD NAMES
 ssql from employees.csv | ssql where -if dept eq <Ctrl-O>   # its VALUES
 ssql from employees.csv | ssql group-by dept -sum salary<Alt-h>   # what is this flag?
+```
+
+Why two Tabs on the first line? When more than one completion fits and
+they share no common start, bash rings the bell on the first Tab and
+lists the candidates on the second — that is bash, for every program.
+`ssql from emp<TAB>` completes on the first press because only one file
+fits. To see the list on the first Tab everywhere, add this to
+`~/.bashrc`:
+
+```bash
+# codelab: skip — optional readline setting (run once by hand)
+echo "bind 'set show-all-if-ambiguous on'" >> ~/.bashrc
 ```
 
 Why two keys? bash's Tab completion can only see the command you are

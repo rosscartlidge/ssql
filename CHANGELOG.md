@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Codelab: the first try-it line is `ssql <TAB><TAB>` — bash lists
+  ambiguous completions on the second Tab — with the readline setting
+  that lists on the first offered as an optional `~/.bashrc` line (first
+  review comment).
+
 ### Added
 - **`scripts/codelab-mint.sh` (`make codelab-mint`)** does the CLI codelab
   from scratch in a fresh Ubuntu 24.04 LXD container as a novice would —
