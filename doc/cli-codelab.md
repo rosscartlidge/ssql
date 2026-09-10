@@ -395,10 +395,14 @@ ssql from employees.csv | ssql group-by dept -avg salary avg_salary | ssql to js
 Charts are just another sink — the same pipeline, plus what to plot:
 
 ```bash
-ssql from employees.csv | ssql group-by dept -avg salary avg_salary | ssql to chart -type bar -x dept -y avg_salary -output /tmp/salary_by_dept.html
+ssql from employees.csv | ssql group-by dept -avg salary avg_salary | ssql to chart -type bar -x dept -y avg_salary -output salary_by_dept.html
 ```
 
-Open `/tmp/salary_by_dept.html` in a browser. For an interactive view of
+Open `salary_by_dept.html` in a browser — `xdg-open salary_by_dept.html`
+on Linux, `open salary_by_dept.html` on macOS, or File → Open. It is
+written here, next to the data, on purpose: a browser installed as a
+snap (Chrome and Firefox on Ubuntu) has its own private `/tmp` and
+cannot see files other programs put there. For an interactive view of
 a whole dataset — a grid with a pipeline bar, completion, charts, and the
 same engine running in the page — serve the directory and open the
 workspace:

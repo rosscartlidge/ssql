@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Codelab: the chart is written beside the data instead of `/tmp`, with
+  `xdg-open` / `open` as the way to view it and the reason — a snap
+  browser's private `/tmp` cannot see files written there (review).
+
 ### Added
 - **Alt-h shows the function under the cursor.** Inside an expression
   argument, with the cursor on a function name or inside its
