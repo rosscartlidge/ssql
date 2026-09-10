@@ -128,15 +128,13 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		// EXISTING coercible columns (the result gets typed at runtime by a
 		// MustCoerce* helper). A new field from an untranspilable expression
 		// has no knowable Go type — record fallback.
-		if setExprRaw, ok := clause.Flags["-set-expr"]; ok && setExprRaw != nil {
-			setList, _ := setExprRaw.([]any)
-			for _, setRaw := range setList {
-				setMap, _ := setRaw.(map[string]any)
-				field, _ := setMap["field"].(string)
-				expression, _ := setMap["expression"].(string)
-				if field == "" || expression == "" {
-					continue
-				}
+		exprSets, err := clauseSetExprs(clause)
+		if err != nil {
+			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		for _, se := range exprSets {
+			field, expression := se.field, se.expression
+			{
 				res, err := exprToGo(expression, in, "r")
 				if err == nil {
 					uc.sets = append(uc.sets, setOp{field: field, expr: &res})

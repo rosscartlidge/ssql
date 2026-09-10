@@ -2,7 +2,7 @@
 
 Reference: DFC121
 Created: 2026-08-31
-Last modified: 2026-09-07
+Last modified: 2026-09-10
 
 [Back to Index](./README.md)
 
@@ -194,7 +194,13 @@ DFC115 disease. Instead, downsampling = bucketing + group-by:
 
 1. Grow ONE expression function: `bucket(ts, "5m")` — snaps a
    timestamp to its epoch-aligned bucket (the same snapping code
-   resample uses; one implementation, exported). Then:
+   resample uses; one implementation, exported). *Amended 2026-09-10
+   (Ross, from codelab review):* the flag spelling `update -set-bucket
+   FIELD SOURCE WIDTH` desugars to exactly that expression
+   (`clauseSetExprs` in update.go) — a discoverable form, one
+   implementation, the `where -if` / `-if-expr` pairing pattern — and
+   `bucket()` gained its SQL translation (a magnitude-detecting CASE
+   mirroring `DetectEpochUnitNanos`; numeric epochs only). Then:
 
        ssql from metrics.csv \
          | ssql update -set-expr b 'bucket(ts, "5m")' \

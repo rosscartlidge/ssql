@@ -49,6 +49,7 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-if":       {0}, // field is arg 0
 			"-set":      {0}, // field is arg 0
 			"-set-expr": {0}, // field is arg 0
+			"-set-bucket": {0, 1}, // new field is arg 0, source timestamp arg 1
 		},
 		"cast": {
 			"-type": {0}, // field is arg 0

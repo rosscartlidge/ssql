@@ -1002,6 +1002,41 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// `update -set-bucket FIELD SOURCE WIDTH` is the flag spelling of
+		// -set-expr FIELD 'bucket(SOURCE, "WIDTH")' (one implementation,
+		// exprfn.SnapNanos); both must agree with each other and with
+		// DuckDB, where bucket() translates to a magnitude-detecting CASE.
+		Name:     "set_bucket_flag_seconds",
+		Pipeline: `{{.bin}} from {{.data}}/epochs.csv | {{.bin}} update -set-bucket m ts 1m | {{.bin}} group-by m -sum v total -count n`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"m": 1699999980, "total": 30, "n": 2},
+			{"m": 1700000040, "total": 120, "n": 3},
+		},
+	},
+	{
+		Name:     "set_bucket_expr_seconds",
+		Pipeline: `{{.bin}} from {{.data}}/epochs.csv | {{.bin}} update -set-expr m 'bucket(ts, "1m")' | {{.bin}} group-by m -sum v total -count n`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"m": 1699999980, "total": 30, "n": 2},
+			{"m": 1700000040, "total": 120, "n": 3},
+		},
+	},
+	{
+		// Milliseconds: the unit is read from the value's magnitude.
+		Name:     "set_bucket_flag_millis",
+		Pipeline: `{{.bin}} from {{.data}}/epochs_ms.csv | {{.bin}} update -set-bucket m ts 1m | {{.bin}} include id m`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 3, "m": 1700000040000},
+			{"id": 1, "m": 1699999980000},
+			{"id": 5, "m": 1700000040000},
+			{"id": 2, "m": 1699999980000},
+			{"id": 4, "m": 1700000040000},
+		},
+	},
+	{
 		// String aggregates: max/min over a text column in -expr, in every
 		// Go lane (typed lowering has no shape for max, so it falls back to
 		// record codegen — the result must still agree). SQL has no -expr.

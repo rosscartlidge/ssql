@@ -112,6 +112,8 @@ func corpusData(t *testing.T) string {
 			"int_first.csv":          corpusIntFirstCSV,
 			"int_first.tsv":          strings.ReplaceAll(corpusIntFirstCSV, ",", "\t"),
 			"dated.csv":              corpusDatedCSV,
+			"epochs.csv":             corpusEpochsCSV,
+			"epochs_ms.csv":          corpusEpochsMsCSV,
 			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
 			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
 			"app.log":                corpusAppLog,
@@ -621,6 +623,26 @@ const corpusDatedCSV = `id,date,amount
 5,2026-02-28,500
 2,2026-01-20,200
 4,2026-02-10,400
+`
+
+// corpusEpochsCSV: integer epoch SECONDS in shuffled order, straddling two
+// one-minute buckets (…9980 and …0040), for the -set-bucket / bucket() cases.
+const corpusEpochsCSV = `id,ts,v
+3,1700000044,30
+1,1700000013,10
+5,1700000070,50
+2,1700000030,20
+4,1700000059,40
+`
+
+// corpusEpochsMsCSV: the same instants as epoch MILLISECONDS — the unit
+// is detected from magnitude in every lane, including the SQL CASE.
+const corpusEpochsMsCSV = `id,ts,v
+3,1700000044000,30
+1,1700000013000,10
+5,1700000070000,50
+2,1700000030000,20
+4,1700000059000,40
 `
 
 const corpusEmployeesCSV = `name,age,dept,salary,city,level,hire_date,status

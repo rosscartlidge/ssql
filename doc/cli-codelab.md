@@ -160,7 +160,11 @@ binds.
 From here on, whenever a flag or field name is mentioned, remember you
 never have to type it from memory.
 
-Check what you have:
+**Two checks before starting.** tmux gave you a new shell, so make sure
+it finds `ssql` (that is your `~/.bashrc` PATH line at work — if this
+says "command not found", run the `export PATH=…` line from above in
+this shell) and that you are in the data directory (`ls` should show
+`employees.csv` and friends):
 
 ```bash
 ssql version
@@ -394,10 +398,13 @@ ssql from sensor.csv | ssql resample -time ts -every 30s -value temp -value rpm 
 
 To keep every reading's contribution — an average or a maximum per
 minute — downsample instead. That is a composition, not a second
-vocabulary: bucket the timestamp, then group:
+vocabulary: bucket the timestamp, then group. `update -set-bucket NEW
+SOURCE WIDTH` adds a field holding the timestamp snapped down to the
+width (it is the flag form of `-set-expr minute 'bucket(ts, "1m")'`,
+for when you need the bucket inside a larger expression):
 
 ```bash
-ssql from sensor.csv | ssql update -set-expr minute 'bucket(ts, "1m")' | ssql group-by minute -avg temp avg_temp -max rpm max_rpm | ssql sort minute | ssql to table
+ssql from sensor.csv | ssql update -set-bucket minute ts 1m | ssql group-by minute -avg temp avg_temp -max rpm max_rpm | ssql sort minute | ssql to table
 ```
 
 Window functions rank, lag, and run totals *without collapsing rows*:
@@ -486,7 +493,11 @@ the program instead of running it:
 ssql generate go -pipeline 'ssql from employees.csv | ssql where -if salary gt 90000 | ssql to csv' | head -40
 ```
 
-The same fragments translate to SQL. If you have [DuckDB](https://duckdb.org)
+The same fragments translate to SQL — in [DuckDB](https://duckdb.org)'s
+dialect. Most of what comes out is ordinary SQL (DuckDB follows
+PostgreSQL closely), and the DuckDB-specific parts are the ones that
+read files directly (`FROM 'employees.csv'`, `read_csv(...)`), sampling
+(`USING SAMPLE`), `UNPIVOT` and `EXCLUDE`. If you have DuckDB
 installed, `-run` hands the SQL to it; results are byte-identical to the
 interpreted pipeline — a gate in the test suite checks every lane
 agrees:
@@ -542,6 +553,14 @@ is the difference between shipping a filter and shipping a file:
 ssql from csv employees.csv -- where -if dept eq Sales | ssql to table
 ```
 
+Over SSH, `from ssh HOST PATH` runs ssql *on the host*: it reads the
+file there and streams records back, and the stages after `--` run
+there too, so a filter that keeps 1% of a large file moves 1% of it.
+That means ssql must be installed on every host you fetch from — any of
+the usual places (`/usr/bin`, `/usr/local/bin`, `~/go/bin`,
+`~/.local/bin`) is found; `-remote-bin PATH` names it elsewhere — and
+the host must be reachable as `ssh HOST` from your `~/.ssh/config`:
+
 ```bash
 # codelab: skip — needs an SSH host with ssql installed
 ssql from ssh node1 /data/events.csv -- where -if status ge 500 | ssql group-by service -count n | ssql to table
@@ -566,12 +585,11 @@ ssql from catalog shards.csv -- where -if status eq shipped | ssql count
 ```
 
 On a cluster the host column names SSH hosts from `~/.ssh/config`, the
-shards run where the data lives, and the optimiser from section 7
-pushes your `where` and `group-by` into them for you (`generate ssql`
-shows the rewrite). Each host needs ssql installed — any of the usual
-places (`/usr/bin`, `/usr/local/bin`, `~/go/bin`, `~/.local/bin`) is
-found automatically; `-remote-bin PATH`, or a `bin` column in the
-catalog, names it elsewhere. [doc/cli-debugging.md](cli-debugging.md) covers the
+shards run where the data lives (so, as with `from ssh`, ssql is
+installed on each host; a `bin` column in the catalog names it per host
+when it is somewhere unusual), and the optimiser from section 7 pushes
+your `where` and `group-by` into them for you (`generate ssql` shows
+the rewrite). [doc/cli-debugging.md](cli-debugging.md) covers the
 rig; the same pipeline runs unchanged.
 
 The SSH operator console is the other direction — leave the data where
@@ -588,7 +606,8 @@ columns, `-shard-field` tags origin) — flags `-records`, `-sample N`,
 `-last N`, `-columns` (parquet), `-source`, `--` pushdown.
 
 Filter / shape: `where` · `include` · `exclude` · `rename` · `cast` ·
-`update` · `distinct` · `limit [-last]` · `offset` · `sample` · `top`.
+`update` (`-set`, `-set-expr`, `-set-bucket FIELD TS WIDTH`) · `distinct` ·
+`limit [-last]` · `offset` · `sample` · `top`.
 
 Aggregate / reshape: `group-by` · `count` · `describe` · `pivot` ·
 `unpivot` · `fill` · `extract` · `window` · `resample` · `join` · `union`

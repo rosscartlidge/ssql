@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
@@ -192,6 +193,9 @@ func exprCallToSQL(name string, args []ast.Node) (string, error) {
 			return "COALESCE(" + field + ", " + def + ")", nil
 		}
 	}
+	if name == "bucket" && len(args) == 2 {
+		return bucketToSQL(args[0], args[1])
+	}
 	if sqlFunc, ok := exprFuncs[name]; ok {
 		parts := make([]string, len(args))
 		for i, a := range args {
@@ -232,4 +236,41 @@ func exprNodeDesc(node ast.Node) string {
 		return "the # placeholder"
 	}
 	return fmt.Sprintf("syntax (%T)", node)
+}
+
+// bucketToSQL translates bucket(ts, "WIDTH") over a NUMERIC epoch column
+// exactly as exprfn.BucketInt64 computes it: the unit is read from the
+// value's magnitude (≥1e17 ns, ≥1e14 µs, ≥1e11 ms, else s — the same
+// thresholds as DetectEpochUnitNanos), and the value is snapped down to a
+// multiple of the width expressed in that unit. Per row in SQL where Go
+// detects once per value — identical on any column of one unit. String
+// timestamps (RFC 3339) have no translation here, as for resample: the
+// Go lanes format them back into the input layout, which has no faithful
+// SQL counterpart.
+func bucketToSQL(tsNode, widthNode ast.Node) (string, error) {
+	w, ok := widthNode.(*ast.StringNode)
+	if !ok {
+		return "", fmt.Errorf("bucket(): the width must be a duration literal like \"5m\"")
+	}
+	every, err := time.ParseDuration(w.Value)
+	if err != nil || every <= 0 {
+		return "", fmt.Errorf("bucket(): bad duration %q", w.Value)
+	}
+	ts, err := exprNodeToSQL(tsNode)
+	if err != nil {
+		return "", err
+	}
+	// width in each unit; an integer literal when it divides evenly so an
+	// integer column stays integer (DuckDB's % keeps the operand type).
+	unit := func(nanosPerUnit int64) string {
+		if int64(every)%nanosPerUnit == 0 {
+			return fmt.Sprintf("%d", int64(every)/nanosPerUnit)
+		}
+		return fmt.Sprintf("%g", float64(every)/float64(nanosPerUnit))
+	}
+	snap := func(n string) string { return "(" + ts + " - (" + ts + " % " + n + "))" }
+	return "(CASE WHEN abs(" + ts + ") >= 1e17 THEN " + snap(unit(1)) +
+		" WHEN abs(" + ts + ") >= 1e14 THEN " + snap(unit(1_000)) +
+		" WHEN abs(" + ts + ") >= 1e11 THEN " + snap(unit(1_000_000)) +
+		" ELSE " + snap(unit(1_000_000_000)) + " END)", nil
 }

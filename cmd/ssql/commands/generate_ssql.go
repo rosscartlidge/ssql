@@ -2050,9 +2050,15 @@ func extractUpdateFields(args []string) ([]string, bool) {
 				i += 4
 				continue
 			}
-		case "-if-expr", "-x", "-set-expr":
+		case "-if-expr", "-x", "-set-expr", "-e":
 			return nil, true
-		case "-set":
+		case "-set-bucket", "-b":
+			if i+3 < len(args) {
+				fields = append(fields, args[i+2]) // reads the source timestamp
+				i += 4
+				continue
+			}
+		case "-set", "-s":
 			if i+2 < len(args) {
 				i += 3 // -set field value: doesn't read existing field
 				continue

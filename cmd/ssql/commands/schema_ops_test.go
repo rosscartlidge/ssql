@@ -51,6 +51,7 @@ func TestMutatingSchemaOps(t *testing.T) {
 		{"exclude", []string{"salary"}, []string{"name", "dept"}, true},
 		{"update", []string{"-set", "bonus", "1000"}, []string{"name", "dept", "salary", "bonus"}, true},
 		{"update", []string{"-set-expr", "tax", "salary*0.3"}, []string{"name", "dept", "salary", "tax"}, true},
+		{"update", []string{"-set-bucket", "minute", "salary", "1m"}, []string{"name", "dept", "salary", "minute"}, true},
 		{"update", []string{"-set", "salary", "0"}, []string{"name", "dept", "salary"}, true}, // existing not duplicated
 		{"group-by", []string{"dept"}, []string{"dept"}, true},
 		{"group-by", []string{"dept", "-count", "n", "-sum", "salary", "total"}, []string{"dept", "n", "total"}, true},

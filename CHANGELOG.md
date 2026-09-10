@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`update -set-bucket FIELD SOURCE WIDTH`** — the flag spelling of
+  `-set-expr FIELD 'bucket(SOURCE, "WIDTH")'`: a new field holding the
+  source timestamp snapped down to the width (`-set-bucket minute ts 1m`).
+  Same implementation as the expression and `resample`; Tab completes
+  the fields, a bad width fails at parse time, and it works in every lane.
+  From codelab review ("bucket is very important").
+- **`bucket()` translates to SQL** — a `CASE` that reads the epoch unit
+  from the value's magnitude (s/ms/µs/ns, as the Go lanes do) and snaps
+  with `%`; numeric epochs only. `generate sql` on the codelab's
+  downsampling block now runs in DuckDB and agrees with the other lanes.
+
+### Fixed
+- `generate sql`: a bare `from FILE.csv` (or `.tsv`) now seeds column
+  tracking from the header like `from csv FILE`, so `update -set-expr NEW …`
+  emits an added column instead of `* REPLACE` of a column that does not
+  exist ("Binder Error: Column … in REPLACE list not found").
+
 ### Changed
+- Codelab: section 5's downsampling block uses `-set-bucket`, with the
+  expression form named as the general case.
 - Codelab: section 2 shows the JSON Lines that flow between stages (the
   `_schema` header and a record per line), says it is every pipeline's
   default output, and lists the readers by extension and the `to` sinks;

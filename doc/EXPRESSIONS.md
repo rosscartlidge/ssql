@@ -259,11 +259,23 @@ ssql update -set-expr payload 'toJSON({"name": name, "age": age})'
 | `date(str)` | Parse date string | `date("2026-01-15")` |
 | `duration(str)` | Parse duration (ns, us, ms, s, m, h) | `duration("1h30m")` → `1h30m0s` |
 | `timezone(str)` | Get timezone location | `timezone("America/New_York")` |
+| `bucket(ts, "5m")` | Snap a timestamp down to an epoch-aligned bucket (int/float epochs with the unit read from magnitude, or RFC 3339 strings) | `bucket(ts, "1m")` → `1699999980` |
+
+`bucket` is the downsampling primitive: `update -set-expr minute
+'bucket(ts, "1m")' | group-by minute -avg temp t` averages per minute.
+The flag form `update -set-bucket minute ts 1m` is the same operation
+(Tab completes the fields); use the function when the bucket is part of
+a larger expression. In `generate sql` it becomes a `CASE` that detects
+the epoch unit by magnitude and snaps with `%`; string timestamps have
+no SQL translation.
 
 **Examples:**
 ```bash
 # Add timestamp
 ssql update -set-expr timestamp 'string(now())'
+
+# Per-minute averages (flag form, or -set-expr minute 'bucket(ts, "1m")')
+ssql update -set-bucket minute ts 1m | ssql group-by minute -avg temp avg_temp
 
 # Filter by date
 ssql where -if-expr 'date(created) > date("2026-01-01")'

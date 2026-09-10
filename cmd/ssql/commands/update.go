@@ -77,6 +77,20 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Set field to expression result: -set-expr <field> <expression>").
 		Done().
+		Flag("-set-bucket", "-b").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("source").
+		FieldsFromFlag("").
+		Done().
+		Arg("width").
+		Completer(&cf.DurationCompleter{}).
+		Done().
+		Accumulate().
+		Local().
+		Help("Set field to the source timestamp snapped down to a width: -set-bucket <field> <source> <width> (1m, 5m, 1h — the same as -set-expr <field> 'bucket(<source>, \"<width>\")')").
+		Done().
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "update")
@@ -157,34 +171,23 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				}
 
-				// Parse -set-expr operations and compile expressions ONCE
-				if setExprRaw, ok := clause.Flags["-set-expr"]; ok && setExprRaw != nil {
-					setList, ok := setExprRaw.([]any)
-					if ok {
-						for _, setRaw := range setList {
-							setMap, ok := setRaw.(map[string]any)
-							if !ok {
-								continue
-							}
-
-							field, _ := setMap["field"].(string)
-							expression, _ := setMap["expression"].(string)
-
-							if field != "" && expression != "" {
-								// Compile the expression ONCE
-								eval, err := compileExpression(expression)
-								if err != nil {
-									return fmt.Errorf("compiling expression %q: %w", expression, err)
-								}
-								uc.updates = append(uc.updates, struct {
-									field    string
-									literal  string
-									exprEval func(ssql.Record) (any, error)
-									isExpr   bool
-								}{field: field, exprEval: eval, isExpr: true})
-							}
-						}
+				// -set-expr, and -set-bucket desugared to bucket(...):
+				// compile each expression ONCE.
+				exprSets, err := clauseSetExprs(clause)
+				if err != nil {
+					return err
+				}
+				for _, se := range exprSets {
+					eval, err := compileExpression(se.expression)
+					if err != nil {
+						return fmt.Errorf("compiling expression %q: %w", se.expression, err)
 					}
+					uc.updates = append(uc.updates, struct {
+						field    string
+						literal  string
+						exprEval func(ssql.Record) (any, error)
+						isExpr   bool
+					}{field: se.field, exprEval: eval, isExpr: true})
 				}
 
 				if len(uc.updates) > 0 {
@@ -193,7 +196,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			if len(clauses) == 0 {
-				return fmt.Errorf("no -set or -set-expr operations specified")
+				return fmt.Errorf("no -set, -set-expr or -set-bucket operations specified")
 			}
 
 			// Read JSONL from stdin (with schema if present)
@@ -532,28 +535,17 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 			}
 		}
 
-		// Parse -set-expr operations (expressions)
-		if setExprRaw, ok := clause.Flags["-set-expr"]; ok && setExprRaw != nil {
-			setList, ok := setExprRaw.([]any)
-			if ok {
-				for _, setRaw := range setList {
-					setMap, ok := setRaw.(map[string]any)
-					if !ok {
-						continue
-					}
-
-					field, _ := setMap["field"].(string)
-					expr, _ := setMap["expression"].(string)
-
-					if field != "" {
-						uc.updates = append(uc.updates, struct {
-							field  string
-							value  string
-							isExpr bool
-						}{field, expr, true})
-					}
-				}
-			}
+		// -set-expr, and -set-bucket desugared to bucket(...)
+		exprSets, err := clauseSetExprs(clause)
+		if err != nil {
+			return err
+		}
+		for _, se := range exprSets {
+			uc.updates = append(uc.updates, struct {
+				field  string
+				value  string
+				isExpr bool
+			}{se.field, se.expression, true})
 		}
 
 		if len(uc.updates) > 0 {
@@ -562,7 +554,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	}
 
 	if len(clauses) == 0 {
-		return fmt.Errorf("no -set or -set-expr operations specified")
+		return fmt.Errorf("no -set, -set-expr or -set-bucket operations specified")
 	}
 
 	// Record mode: advisory column types from the upstream fragment let
@@ -886,3 +878,60 @@ func getComparisonValue(value string) string {
 		return fmt.Sprintf("%q", value)
 	}
 }
+
+// setExpr is one field-from-expression assignment in an update clause:
+// a `-set-expr FIELD EXPR` as given, or a `-set-bucket FIELD SOURCE WIDTH`
+// desugared to `bucket(SOURCE, "WIDTH")`. The flag is the discoverable
+// spelling (Tab completes the fields, Alt-h explains it) of the one
+// bucketing implementation — exprfn.SnapNanos, shared with resample and
+// the bucket() expression function (DFC121) — so every lane that handles
+// the expression handles the flag, as `where -if` pairs with `-if-expr`.
+type setExpr struct {
+	field, expression string
+}
+
+// clauseSetExprs collects a clause's -set-expr and -set-bucket
+// assignments in flag order. A -set-bucket width must be a positive Go
+// duration; anything else fails here, at parse time, in every mode.
+func clauseSetExprs(clause cf.Clause) ([]setExpr, error) {
+	var out []setExpr
+	if raw, ok := clause.Flags["-set-expr"]; ok && raw != nil {
+		list, _ := raw.([]any)
+		for _, item := range list {
+			m, _ := item.(map[string]any)
+			field, _ := m["field"].(string)
+			expression, _ := m["expression"].(string)
+			if field != "" && expression != "" {
+				out = append(out, setExpr{field, expression})
+			}
+		}
+	}
+	if raw, ok := clause.Flags["-set-bucket"]; ok && raw != nil {
+		list, _ := raw.([]any)
+		for _, item := range list {
+			m, _ := item.(map[string]any)
+			field, _ := m["field"].(string)
+			source, _ := m["source"].(string)
+			width, _ := m["width"].(string)
+			if field == "" || source == "" || width == "" {
+				continue
+			}
+			se, err := bucketSetExpr(field, source, width)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, se)
+		}
+	}
+	return out, nil
+}
+
+// bucketSetExpr is the desugaring of `-set-bucket FIELD SOURCE WIDTH`.
+func bucketSetExpr(field, source, width string) (setExpr, error) {
+	d, err := time.ParseDuration(width)
+	if err != nil || d <= 0 {
+		return setExpr{}, fmt.Errorf("update -set-bucket %s: width must be a positive duration (30s, 1m, 5m, 1h), got %q", field, width)
+	}
+	return setExpr{field, fmt.Sprintf("bucket(%s, %q)", source, width)}, nil
+}
+

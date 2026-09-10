@@ -166,15 +166,15 @@ func init() {
 		return out, true
 	})
 
-	// update: `-set`/`-set-expr FIELD …` → append FIELD if new.
+	// update: `-set`/`-set-expr`/`-set-bucket FIELD …` → append FIELD if new.
 	registerSchemaOp("update", func(_ any, in []string, args []string) ([]string, bool) {
 		out := slices.Clone(in)
 		_, flags := walkStage(args, map[string]int{
-			"-set": 2, "-s": 2, "-set-expr": 2, "-e": 2,
+			"-set": 2, "-s": 2, "-set-expr": 2, "-e": 2, "-set-bucket": 3, "-b": 3,
 			"-if": 3, "-i": 3, "-if-expr": 1, "-x": 1, "-generate": 0, "-g": 0,
 		})
 		for _, f := range flags {
-			if (f.name == "-set" || f.name == "-set-expr") && len(f.args) >= 1 {
+			if (f.name == "-set" || f.name == "-set-expr" || f.name == "-set-bucket") && len(f.args) >= 1 {
 				if !slices.Contains(out, f.args[0]) {
 					out = append(out, f.args[0])
 				}

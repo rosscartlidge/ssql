@@ -447,8 +447,16 @@ func translateFrom(q *sqlQuery, args []string) error {
 	case "catalog":
 		return fmt.Errorf("from catalog has no SQL equivalent — it is an ssql-specific distributed feature")
 	default:
-		// Bare: from FILE
+		// Bare: from FILE — seed column tracking from the header as the
+		// explicit forms do, so `update -set-expr NEW …` becomes an added
+		// column, not a REPLACE of one that does not exist.
 		q.fromClause = quoteFile(args[0])
+		switch lower := strings.ToLower(args[0]); {
+		case strings.HasSuffix(lower, ".csv"):
+			q.columns = delimHeader(args[0], ',')
+		case strings.HasSuffix(lower, ".tsv"):
+			q.columns = delimHeader(args[0], '\t')
+		}
 	}
 	if sampleN != "" && sampleN != "0" {
 		// reservoir, not system: DuckDB's system sampling is
@@ -1430,6 +1438,25 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				valueSQL: valueSQL,
 			})
 			i += 3
+		case "-set-bucket", "-b":
+			// The flag spelling of -set-expr FIELD 'bucket(SOURCE, "WIDTH")'.
+			if i+3 >= len(args) {
+				return fmt.Errorf("incomplete -set-bucket in update")
+			}
+			se, err := bucketSetExpr(args[i+1], args[i+2], args[i+3])
+			if err != nil {
+				return err
+			}
+			valueSQL, err := exprToSQL(se.expression)
+			if err != nil {
+				return fmt.Errorf("update -set-bucket: %w", err)
+			}
+			assignments = append(assignments, assignment{
+				conds:    append([]string{}, currentConds...),
+				field:    se.field,
+				valueSQL: valueSQL,
+			})
+			i += 4
 		case "-":
 			// Clause separator — reset conditions
 			currentConds = nil
