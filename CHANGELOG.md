@@ -7,12 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Alt-h shows the function under the cursor.** Inside an expression
+  argument, with the cursor on a function name or inside its
+  parentheses, the help popup shows that function's entry (signature,
+  description, example) with a pointer to the full reference; elsewhere
+  in the expression it shows the full reference as before. `ssql
+  functions NAME` prints the same entry at the prompt. The detailed
+  reference gained `bucket()`, which it had never listed.
+
 ### Changed
 - Codelab: the chart is written beside the data instead of `/tmp`, with
   `xdg-open` / `open` as the way to view it and the reason — a snap
   browser's private `/tmp` cannot see files written there (review).
-
-### Changed
 - **Signal-processing codelab, reader's pass** (the same treatment the CLI
   codelab got in review): it opens on the CPU and meets the GPU last —
   the two clone-and-build GPU recipes moved under Performance Tips with
@@ -39,15 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ssql stages interrupted by another command are refused, naming it. The
   pipe splitter also learned that `||` and a `|` inside quotes are not
   stage boundaries (Ctrl-O and Alt-h use the same splitter).
-
-### Added
-- **Alt-h shows the function under the cursor.** Inside an expression
-  argument, with the cursor on a function name or inside its
-  parentheses, the help popup shows that function's entry (signature,
-  description, example) with a pointer to the full reference; elsewhere
-  in the expression it shows the full reference as before. `ssql
-  functions NAME` prints the same entry at the prompt. The detailed
-  reference gained `bucket()`, which it had never listed.
 
 ## [4.96.0] - 2026-09-10
 
