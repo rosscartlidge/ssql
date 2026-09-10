@@ -68,6 +68,32 @@ true
 	if !strings.Contains(ok, "compiled in") || !strings.Contains(ok, "ran in") {
 		t.Errorf("expected inline [ssql: compiled in …, ran in …] timing on success, got:\n%s", ok)
 	}
+
+	// The line is a SHELL pipeline: only the ssql stages compile, and what
+	// follows them receives the compiled program's output as typed. Until
+	// v4.97.0 a trailing `| tr` would have received code fragments.
+	tail := run("ssql from csv " + csv + " | ssql to csv | tr a-z A-Z")
+	if !strings.Contains(tail, "A,B") || strings.Contains(tail, "a,b") || !strings.Contains(tail, "compiled in") {
+		t.Errorf("a trailing non-ssql stage must see the program's output:\n%s", tail)
+	}
+	out := filepath.Join(dir, "out.csv")
+	red := run("ssql from csv " + csv + " | ssql to csv > " + out)
+	if data, err := os.ReadFile(out); err != nil || !strings.HasPrefix(string(data), "a,b\n1,2") {
+		t.Errorf("a trailing redirection must receive the program's output: %v %q\n%s", err, data, red)
+	}
+	// A producer before the ssql stages is kept as the program's stdin —
+	// but typed codegen cannot read stdin (it samples a FILE for the
+	// schema), so today that is a loud, specific refusal, not a crash or
+	// a silent CPU-only fallback.
+	pre := run("cat " + csv + " | ssql from csv - | ssql count")
+	if !strings.Contains(pre, "pipeline failed") || !strings.Contains(pre, "stdin not supported in typed mode") {
+		t.Errorf("a leading producer must be refused loudly by typed codegen:\n%s", pre)
+	}
+	// ssql stages separated by a non-ssql stage cannot compile as one program.
+	mixed := run("ssql from csv " + csv + " | sort | ssql count")
+	if !strings.Contains(mixed, "cannot compile") || !strings.Contains(mixed, `"sort"`) {
+		t.Errorf("an interrupted ssql run must be refused, naming the stage:\n%s", mixed)
+	}
 }
 
 // TestRunKeybindingEmitted confirms `-run-keybinding` emits the function,
@@ -79,7 +105,7 @@ func TestRunKeybindingEmitted(t *testing.T) {
 		t.Fatalf("-run-keybinding: %v", err)
 	}
 	for _, want := range []string{
-		"_ssql_typed_run", "READLINE_LINE", "SSQL_MODE=typed", "generate go -run -time",
+		"_ssql_typed_run", "READLINE_LINE", "SSQL_MODE=typed", "-split-pipeline", "generate go -build",
 		`bind -m emacs -x '"\er": _ssql_typed_run'`,
 		`bind -m vi-insert -x '"\er": _ssql_typed_run'`,
 		`bind -m vi-command -x '"\er": _ssql_typed_run'`,

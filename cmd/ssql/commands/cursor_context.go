@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -20,22 +21,128 @@ import (
 func splitTopLevelPipes(s string) []string {
 	var segs []string
 	depth, start := 0, 0
+	var quote byte
 	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '(':
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(':
 			depth++
-		case ')':
+		case c == ')':
 			if depth > 0 {
 				depth--
 			}
-		case '|':
-			if depth == 0 {
-				segs = append(segs, s[start:i])
-				start = i + 1
+		case c == '|' && depth == 0:
+			// `||` is the shell's OR, not a pipe; and a `|` inside quotes
+			// (`-if-expr 'a || b'`) is expression text.
+			if i+1 < len(s) && s[i+1] == '|' {
+				i++
+				continue
 			}
+			segs = append(segs, s[start:i])
+			start = i + 1
 		}
 	}
 	return append(segs, s[start:])
+}
+
+// SplitPipeline divides a shell line into the part before the ssql
+// pipeline, the maximal contiguous run of `ssql …` stages, and the part
+// after it — so Alt-r/Alt-g can compile the ssql stages alone and leave
+// the rest of the line where the user typed it: `cat x | ssql from csv -
+// | ssql count | tee n.txt` → ("cat x |", "ssql from csv - | ssql count",
+// "| tee n.txt"). A redirection on the last ssql stage (`ssql to table >
+// out.txt`) moves to the suffix. Until v4.97.0 the bindings evaluated the
+// WHOLE line under SSQL_MODE=typed, so a trailing `| less` received code
+// fragments (and, with a pipe on its stdout, passed them on like cat), a
+// `| head -3` truncated the fragment stream, and `> out.txt` swallowed it.
+// Pipes are split paren- and quote-aware (a `<(ssql …)` process
+// substitution stays inside its stage). ssql stages separated by a
+// non-ssql stage cannot be compiled as one program: an error naming the
+// stage in the middle.
+func SplitPipeline(line string) (prefix, segment, suffix string, err error) {
+	segs := splitTopLevelPipes(line)
+	isSSQL := func(seg string) bool {
+		toks := tokenizeStage(strings.TrimSpace(seg))
+		return len(toks) > 0 && (toks[0] == "ssql" || toks[0] == "ssql_gpu")
+	}
+	first, last := -1, -1
+	for i, seg := range segs {
+		if isSSQL(seg) {
+			if first == -1 {
+				first = i
+			}
+			last = i
+		}
+	}
+	if first == -1 {
+		return "", "", "", fmt.Errorf("no ssql stage on the line")
+	}
+	for i := first; i <= last; i++ {
+		if !isSSQL(segs[i]) {
+			return "", "", "", fmt.Errorf("the ssql stages are not contiguous — %q sits between them, so they cannot compile as one program", strings.TrimSpace(segs[i]))
+		}
+	}
+	var lastStage string
+	lastStage, suffix = splitTrailingRedirect(segs[last])
+	trimmed := func(ss []string) []string {
+		out := make([]string, len(ss))
+		for i, s := range ss {
+			out[i] = strings.TrimSpace(s)
+		}
+		return out
+	}
+	middle := append(trimmed(segs[first:last]), lastStage)
+	segment = strings.Join(middle, " | ")
+	if first > 0 {
+		prefix = strings.Join(trimmed(segs[:first]), " | ") + " |"
+	}
+	if last+1 < len(segs) {
+		rest := strings.Join(trimmed(segs[last+1:]), " | ")
+		if suffix != "" {
+			suffix += " "
+		}
+		suffix += "| " + rest
+	}
+	return prefix, segment, strings.TrimSpace(suffix), nil
+}
+
+// splitTrailingRedirect cuts an unquoted, top-level output redirection
+// (`> f`, `>> f`, `2> f`, `&> f`) off the end of a stage: the stage text
+// before it, and the redirection text (or "").
+func splitTrailingRedirect(stage string) (string, string) {
+	depth := 0
+	var quote byte
+	for i := 0; i < len(stage); i++ {
+		c := stage[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			if depth > 0 {
+				depth--
+			}
+		case c == '>' && depth == 0:
+			cut := i
+			// include a preceding fd/ampersand (`2>`, `&>`) in the redirect
+			if cut > 0 && (stage[cut-1] == '2' || stage[cut-1] == '1' || stage[cut-1] == '&') && (cut == 1 || stage[cut-2] == ' ' || stage[cut-2] == '\t') {
+				cut--
+			}
+			return strings.TrimSpace(stage[:cut]), strings.TrimSpace(stage[cut:])
+		}
+	}
+	return strings.TrimSpace(stage), ""
 }
 
 // enclosingProcsub returns the content of the innermost UNCLOSED "<(" in s

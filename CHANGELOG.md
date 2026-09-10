@@ -26,6 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`./codelab-run.sh signal`) and `scripts/codelab-mint.sh` runs both
   codelabs, with `-b BINARY` to exercise a pre-release build (DFC126).
 
+### Fixed
+- **Alt-r and Alt-g act on the `ssql` stages only.** Both bindings
+  evaluated the whole line under `SSQL_MODE=typed`, so a trailing
+  `| less` received code fragments (and, its stdout being a pipe, passed
+  them on like `cat` — the pager was silently dropped), `| head -3`
+  truncated the fragment stream, and `> out.txt` swallowed it. A new
+  `ssql -split-pipeline LINE` protocol call divides the line, paren- and
+  quote-aware, into prefix / ssql stages / suffix; Alt-r builds the
+  program from the stages alone (`generate go -build`) and runs it inside
+  the rest of the line as typed, Alt-g generates from the stages alone.
+  ssql stages interrupted by another command are refused, naming it. The
+  pipe splitter also learned that `||` and a `|` inside quotes are not
+  stage boundaries (Ctrl-O and Alt-h use the same splitter).
+
 ### Added
 - **Alt-h shows the function under the cursor.** Inside an expression
   argument, with the cursor on a function name or inside its

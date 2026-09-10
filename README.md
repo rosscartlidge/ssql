@@ -169,7 +169,7 @@ Then, while editing any `ssql … | ssql …` line:
 | **Ctrl-O** | Complete a **field name or value** from the upstream pipeline — position-aware: names come from the live schema, values are sampled from the pipeline's own source file (spaced values arrive quoted). Works across process substitution and a `join`'s right-hand side |
 | **Alt-h** | **Help for the flag/command under the cursor** — and on an expression argument, the full function reference so you're not writing expressions blind |
 | **Alt-g** | Show the **typed Go** this pipeline compiles to (in a `tmux` popup) — without running it |
-| **Alt-r** | **Compile the pipeline as typed Go and run it** — the fast path, one keystroke away |
+| **Alt-r** | **Compile the pipeline as typed Go and run it** — the fast path, one keystroke away. Only the `ssql` stages compile; a producer before them, or a `| less` / `> file` after them, stays where you typed it |
 | **Ctrl-T** | **Optimise** the pipeline on the line, in place — push filters into SSH, collapse sort+limit to `top`, prune columns |
 | **Alt-H** | List these key bindings |
 

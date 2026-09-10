@@ -32,9 +32,18 @@ _ssql_show_go() {
     # nothing. The clean message goes to a failing STAGE's stderr; generate-go's
     # own stderr just re-wraps it. Capture them separately (a stage's stderr
     # must stay OUT of the fragment stream) and prefer the stage error.
+    # Only the run of ssql stages is generated; a producer before them or a
+    # pager/redirection after them is the shell's business, not the program's.
+    local seg
+    seg=$(command ssql -split-pipeline "$READLINE_LINE" 2>&1 | sed -n 2p)
+    if [[ -z "$seg" ]]; then
+        _ssql_show_help "ssql: cannot generate Go for this line
+
+$(command ssql -split-pipeline "$READLINE_LINE" 2>&1)"; return
+    fi
     local out rc e1 e2 msg
     e1=$(mktemp) && e2=$(mktemp) || { _ssql_show_help "ssql: cannot generate Go (mktemp failed)"; return; }
-    out=$( (export SSQL_MODE=typed; eval "$READLINE_LINE") 2>"$e1" \
+    out=$( (export SSQL_MODE=typed; eval "$seg") 2>"$e1" \
            | command ssql generate go 2>"$e2" )
     rc=$?
     msg=$(<"$e1"); [[ -z "$msg" ]] && msg=$(<"$e2")

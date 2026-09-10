@@ -15,6 +15,7 @@ import (
 //	-complete-source BEFORE   → upstream pipeline for schema-driven completion
 //	-cursor-stage    BEFORE   → current pipeline stage at the cursor
 //	-help-at POS ARGS...      → autocli help for the word at POS
+//	-split-pipeline LINE      → prefix / ssql pipeline / suffix, one per line
 //
 // args is os.Args[1:]; root builds the command tree (called lazily — only
 // -help-at needs it). Returns handled=false when args don't start with a
@@ -30,6 +31,15 @@ func HandleCursorProtocol(args []string, root func() *cf.Command) (stdout, stder
 		return CursorTopLevelStage(args[1]), "", 0, true
 	case "-value-source":
 		return ValueSourceFile(args[1], root()), "", 0, true
+	case "-split-pipeline":
+		// Three lines: the shell prefix (ending in `|`, or empty), the
+		// contiguous ssql pipeline, the shell suffix (starting with `|` or
+		// a redirection, or empty). Used by the Alt-r / Alt-g bindings.
+		prefix, segment, suffix, err := SplitPipeline(args[1])
+		if err != nil {
+			return "", fmt.Sprintf("ssql: %v\n", err), 1, true
+		}
+		return prefix + "\n" + segment + "\n" + suffix + "\n", "", 0, true
 	case "-help-at":
 		pos, err := strconv.Atoi(args[1])
 		if err != nil {

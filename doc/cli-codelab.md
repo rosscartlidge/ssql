@@ -572,6 +572,10 @@ ssql generate ssql -explain -pipeline 'ssql from employees.csv | ssql where -if 
 
 In the workspace this is the **optimise** button; at the prompt, Alt-g
 shows the typed Go for the line you're editing and Alt-r compiles and
+runs it. Both act on the `ssql` stages only: a `| less` or `> out.txt`
+after them, or a `cat file |` before, stays part of your shell line and
+receives the compiled program's output exactly as it would the
+interpreted one. Alt-r compiles and
 runs it (both `-shell-init` keys; popups in tmux):
 
 ```
