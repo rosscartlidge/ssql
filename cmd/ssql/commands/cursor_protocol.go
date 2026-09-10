@@ -40,10 +40,24 @@ func HandleCursorProtocol(args []string, root func() *cf.Command) (stdout, stder
 		if herr != nil {
 			return "", fmt.Sprintf("%v\n", herr), 1, true
 		}
-		// Writing an expression is hard without knowing the functions —
-		// append the reference when the cursor is on an expression arg.
+		// Writing an expression is hard without knowing the functions.
+		// On an expression arg: the cursor on (or inside the call of) a
+		// known function gets that function's entry; anywhere else in the
+		// expression gets the whole reference. The word arrives cut at
+		// the cursor, so the function under it is the trailing
+		// identifier, or the innermost unclosed call around it.
 		if ExprArgAtCursor(root(), rest, pos) {
-			help = strings.TrimRight(help, "\n") + "\n\n" + FunctionsReference
+			ref := FunctionsReference
+			// pos counts the program name at 0; rest starts after it.
+			if pos >= 1 && pos-1 < len(rest) {
+				for _, name := range exprFunctionCandidates(rest[pos-1]) {
+					if entry, ok := FunctionEntry(name); ok {
+						ref = entry + "\n(Alt-h elsewhere in the expression, or `ssql functions`, for the full reference)\n"
+						break
+					}
+				}
+			}
+			help = strings.TrimRight(help, "\n") + "\n\n" + ref
 		}
 		return help, "", 0, true
 	}

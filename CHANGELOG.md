@@ -5,6 +5,17 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Alt-h shows the function under the cursor.** Inside an expression
+  argument, with the cursor on a function name or inside its
+  parentheses, the help popup shows that function's entry (signature,
+  description, example) with a pointer to the full reference; elsewhere
+  in the expression it shows the full reference as before. `ssql
+  functions NAME` prints the same entry at the prompt. The detailed
+  reference gained `bucket()`, which it had never listed.
+
 ## [4.96.0] - 2026-09-10
 
 ### Added

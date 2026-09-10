@@ -337,6 +337,14 @@ ssql update -set-expr total 'getOr("price", 0) * getOr("qty", 1)'
 ssql update -set-expr status 'has("verified") ? "active" : "pending"'
 ```
 
+## Finding a Function
+
+- `ssql functions` — the concise list by category; `ssql functions -category date`
+  one category in detail; `ssql functions bucket` one function's entry.
+- **Alt-h while typing an expression** — inside an `-if-expr` / `-set-expr` /
+  `-expr` argument the popup shows the concise list; with the cursor on a
+  function name or inside its parentheses it shows that function's entry.
+
 ## Field Names That Match a Function
 
 Columns are often called `date`, `len`, `type`, `max`, `min`, `count` —

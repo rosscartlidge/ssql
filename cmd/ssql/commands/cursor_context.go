@@ -321,3 +321,57 @@ func stageCursorArgs(stage string) ([]string, int, bool) {
 	}
 	return toks[1:], pos, true
 }
+
+// exprFunctionCandidates names what the cursor may be on in an
+// expression argument cut at the cursor, most specific first: the
+// identifier being typed or just finished (`upper`, `upper(`), then the
+// innermost call the cursor is inside (`bucket(ts, ` → bucket). The
+// caller keeps the first that is a known function — `upper(trim(name`
+// yields [name trim], and name is a field, so trim's entry is shown.
+func exprFunctionCandidates(uptoCursor string) []string {
+	var out []string
+	isIdent := func(c byte) bool {
+		return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+	}
+	identBefore := func(end int) string {
+		start := end
+		for start > 0 && isIdent(uptoCursor[start-1]) {
+			start--
+		}
+		name := uptoCursor[start:end]
+		if name == "" || (name[0] >= '0' && name[0] <= '9') {
+			return ""
+		}
+		return name
+	}
+	s := strings.TrimRight(uptoCursor, " \t")
+	// A name at (or just before an open paren at) the cursor.
+	if strings.HasSuffix(s, "(") {
+		if name := identBefore(len(s) - 1); name != "" {
+			out = append(out, name)
+		}
+		s = s[:len(s)-1] // the call it opens is not "around" the cursor
+	} else if len(s) > 0 && isIdent(s[len(s)-1]) {
+		if name := identBefore(len(s)); name != "" {
+			out = append(out, name)
+		}
+	}
+	// Then the innermost unclosed call around the cursor.
+	depth := 0
+	for i := len(s) - 1; i >= 0; i-- {
+		switch s[i] {
+		case ')':
+			depth++
+		case '(':
+			if depth == 0 {
+				if name := identBefore(i); name != "" {
+					out = append(out, name)
+				}
+				return out
+			}
+			depth--
+		}
+	}
+	return out
+}
+

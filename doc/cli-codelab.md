@@ -278,7 +278,10 @@ So: `-if … -if …` within a clause is AND, `+` between clauses is OR,
 the lot. The same clause grammar (including `-not`) drives `update -if …
 -set …`, where each clause is one "if these hold, set that" rule. When a
 condition needs arithmetic or functions the flag form cannot say,
-`-if-expr` takes a full expression:
+`-if-expr` takes a full expression. While you type one, Alt-h inside
+the quotes shows the function reference; on a function name, or inside
+its parentheses, it shows just that function (`ssql functions bucket`
+prints the same entry at the prompt):
 
 ```bash
 # Expressions: string functions, arithmetic, comparisons
