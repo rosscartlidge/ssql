@@ -85,7 +85,13 @@ func SplitPipeline(line string) (prefix, segment, suffix string, err error) {
 	}
 	for i := first; i <= last; i++ {
 		if !isSSQL(segs[i]) {
-			return "", "", "", fmt.Errorf("the ssql stages are not contiguous — %q sits between them, so they cannot compile as one program", strings.TrimSpace(segs[i]))
+			between := strings.TrimSpace(segs[i])
+			hint := ""
+			if toks := tokenizeStage(between); len(toks) > 0 && toks[0] == "tee" {
+				// The commonest interloper: a checkpoint. ssql has its own.
+				hint = fmt.Sprintf(" — for a checkpoint inside a compiled pipeline use `ssql %s` (schema-headed JSONL, replay with `ssql from FILE`)", between)
+			}
+			return "", "", "", fmt.Errorf("the ssql stages are not contiguous — %q sits between them, so they cannot compile as one program%s", between, hint)
 		}
 	}
 	var lastStage string

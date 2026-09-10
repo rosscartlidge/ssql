@@ -42,4 +42,8 @@ func TestSplitPipeline(t *testing.T) {
 	if _, _, _, err := SplitPipeline("ssql from a.csv | sort | ssql count"); err == nil || !strings.Contains(err.Error(), `"sort"`) {
 		t.Errorf("the interrupting stage should be named: %v", err)
 	}
+	// A shell tee mid-pipeline (Ross's first try) gets the ssql-native hint.
+	if _, _, _, err := SplitPipeline("ssql from a.csv | ssql sort name | tee /tmp/x | ssql to table"); err == nil || !strings.Contains(err.Error(), "`ssql tee /tmp/x`") {
+		t.Errorf("a shell tee should be redirected to ssql tee: %v", err)
+	}
 }

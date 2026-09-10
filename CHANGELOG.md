@@ -5,7 +5,7 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.97.0] - 2026-09-10
 
 ### Added
 - **Alt-h shows the function under the cursor.** Inside an expression
@@ -43,7 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quote-aware, into prefix / ssql stages / suffix; Alt-r builds the
   program from the stages alone (`generate go -build`) and runs it inside
   the rest of the line as typed, Alt-g generates from the stages alone.
-  ssql stages interrupted by another command are refused, naming it. The
+  ssql stages interrupted by another command are refused, naming it (a
+  shell `tee` in the middle is pointed at `ssql tee FILE`, which compiles). The
   pipe splitter also learned that `||` and a `|` inside quotes are not
   stage boundaries (Ctrl-O and Alt-h use the same splitter).
 
