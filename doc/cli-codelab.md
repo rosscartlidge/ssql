@@ -111,12 +111,21 @@ and most Linux; if `echo $SHELL` says something else, run `bash` first):
 eval "$(ssql -shell-init)"
 ```
 
+What that line does: `ssql -shell-init` prints about 600 lines of plain
+bash — the completion function, the key bindings, nothing else; no
+network, nothing written — and `eval` runs them in this shell. You can
+read it first with `ssql -shell-init | less`. If `ssql` is not found or
+fails, its error goes to the terminal and nothing is evaluated (the
+output is empty), so the shell is unchanged. Prefer a file you can keep
+and read? `ssql -shell-init > ~/.ssql.bash`, then `source ~/.ssql.bash`.
+
 It applies to the shell you typed it in. To have it in every new shell,
-add it to your `~/.bashrc` once:
+add it to your `~/.bashrc` once — guarded, so a machine without ssql
+stays quiet:
 
 ```bash
 # codelab: skip — make the completion permanent (run once by hand)
-echo 'eval "$(ssql -shell-init)"' >> ~/.bashrc
+echo 'command -v ssql >/dev/null && eval "$(ssql -shell-init)"' >> ~/.bashrc
 ```
 
 **Try it.** Type each line up to the marked key and press that key
