@@ -54,6 +54,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Condition using boolean expression: -if-expr <expr> (use +if-expr to negate)").
 		Done().
+		Flag("-not").
+		Bool().
+		Local().
+		Help("Negate this clause's conditions: the -set/-set-expr apply when NOT all of them hold").
+		Done().
 		Flag("-set", "-s").
 		Arg("field").
 		FieldsFromFlag("").
@@ -115,6 +120,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			type updateClause struct {
 				conditions     []Condition
 				whereExprEvals []whereExprEval // For -if-expr / +if-expr (pre-compiled)
+				not            bool            // -not: the sets apply when NOT all conditions hold
 				updates        []struct {
 					field    string
 					literal  string                         // For -set
@@ -127,6 +133,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			for _, clause := range ctx.Clauses {
 				uc := updateClause{}
+				if err := updateNotNeedsCondition(clause); err != nil {
+					return err
+				}
+				uc.not = clauseNot(clause)
 
 				// Parse -if conditions (validates operators)
 				conditions, err := parseConditions(clause.Flags["-if"])
@@ -281,6 +291,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 								break
 							}
 						}
+					}
+
+					// -not flips the whole clause's verdict.
+					if clause.not {
+						allMatch = !allMatch
 					}
 
 					// If clause matches (or has no conditions), apply updates and stop
@@ -486,6 +501,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	type updateClause struct {
 		conditions []Condition
 		whereExprs []ExprCond // For -if-expr / +if-expr expressions
+		not        bool       // -not: the whole condition group negated
 		updates    []struct {
 			field  string
 			value  string
@@ -497,6 +513,10 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 
 	for _, clause := range ctx.Clauses {
 		uc := updateClause{}
+		if err := updateNotNeedsCondition(clause); err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		uc.not = clauseNot(clause)
 
 		// Parse -if conditions (validates operators)
 		conditions, err := parseConditions(clause.Flags["-if"])
@@ -620,6 +640,9 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 			} else {
 				codeBody.WriteString(indent + "} else if ")
 			}
+			if clause.not {
+				codeBody.WriteString("!(")
+			}
 
 			// Generate all conditions with AND logic
 			condCount := 0
@@ -669,6 +692,9 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				}
 				codeBody.WriteString(call)
 				condCount++
+			}
+			if clause.not {
+				codeBody.WriteString(")")
 			}
 
 			codeBody.WriteString(" {\n")
@@ -933,5 +959,14 @@ func bucketSetExpr(field, source, width string) (setExpr, error) {
 		return setExpr{}, fmt.Errorf("update -set-bucket %s: width must be a positive duration (30s, 1m, 5m, 1h), got %q", field, width)
 	}
 	return setExpr{field, fmt.Sprintf("bucket(%s, %q)", source, width)}, nil
+}
+
+// updateNotNeedsCondition rejects a clause that says -not without a
+// condition to negate (NOT true would never apply its sets — a trap).
+func updateNotNeedsCondition(clause cf.Clause) error {
+	if clauseNot(clause) && clause.Flags["-if"] == nil && clause.Flags["-if-expr"] == nil {
+		return fmt.Errorf("update -not needs at least one -if or -if-expr in its clause")
+	}
+	return nil
 }
 

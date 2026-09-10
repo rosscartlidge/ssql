@@ -486,10 +486,29 @@ func translateWhere(q *sqlQuery, args []string) error {
 	// Multiple -if within one clause are AND; clauses separated by + are OR
 	var orGroups []string
 	var currentAnd []string
+	currentNot, invert := false, false
+	closeGroup := func() {
+		if len(currentAnd) == 0 {
+			return
+		}
+		group := strings.Join(currentAnd, " AND ")
+		if currentNot {
+			group = "NOT (" + group + ")"
+		}
+		orGroups = append(orGroups, group)
+		currentAnd = nil
+		currentNot = false
+	}
 
 	i := 0
 	for i < len(args) {
 		switch args[i] {
+		case "-not":
+			currentNot = true
+			i++
+		case "-invert":
+			invert = true
+			i++
 		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
 				return fmt.Errorf("incomplete -if condition")
@@ -516,18 +535,27 @@ func translateWhere(q *sqlQuery, args []string) error {
 			i += 2
 		case "+":
 			// OR separator between clauses
-			if len(currentAnd) > 0 {
-				orGroups = append(orGroups, strings.Join(currentAnd, " AND "))
-				currentAnd = nil
-			}
+			closeGroup()
 			i++
 		default:
 			i++
 		}
 	}
+	closeGroup()
 
-	if len(currentAnd) > 0 {
-		orGroups = append(orGroups, strings.Join(currentAnd, " AND "))
+	if invert {
+		// -invert/-v: the complement of the whole filter (grep -v). No
+		// clauses = match everything, so the complement matches nothing.
+		if len(orGroups) == 0 {
+			q.whereClauses = append(q.whereClauses, "FALSE")
+			return nil
+		}
+		wrapped := make([]string, len(orGroups))
+		for k, g := range orGroups {
+			wrapped[k] = "(" + g + ")"
+		}
+		q.whereClauses = append(q.whereClauses, "NOT ("+strings.Join(wrapped, " OR ")+")")
+		return nil
 	}
 
 	if len(orGroups) == 1 {
@@ -537,7 +565,10 @@ func translateWhere(q *sqlQuery, args []string) error {
 		for i, g := range orGroups {
 			wrapped[i] = "(" + g + ")"
 		}
-		q.whereClauses = append(q.whereClauses, strings.Join(wrapped, " OR "))
+		// whereClauses are ANDed at render time (one entry per where
+		// stage), so an OR of clauses must be one parenthesised term:
+		// `where A + B | where C` is (A OR B) AND C, not A OR (B AND C).
+		q.whereClauses = append(q.whereClauses, "("+strings.Join(wrapped, " OR ")+")")
 	}
 
 	return nil
@@ -1387,10 +1418,22 @@ func translateUpdate(q *sqlQuery, args []string) error {
 	}
 	var assignments []assignment
 	var currentConds []string
+	currentNot := false
+	// clauseConds is the clause's condition group as the CASE arm sees
+	// it: the AND of its conditions, or NOT (…) of that under -not.
+	clauseConds := func() []string {
+		if !currentNot || len(currentConds) == 0 {
+			return append([]string{}, currentConds...)
+		}
+		return []string{"NOT (" + strings.Join(currentConds, " AND ") + ")"}
+	}
 
 	i := 0
 	for i < len(args) {
 		switch args[i] {
+		case "-not":
+			currentNot = true
+			i++
 		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
 				return fmt.Errorf("incomplete -if condition in update")
@@ -1419,7 +1462,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				return fmt.Errorf("incomplete -set in update")
 			}
 			assignments = append(assignments, assignment{
-				conds:    append([]string{}, currentConds...),
+				conds:    clauseConds(),
 				field:    args[i+1],
 				valueSQL: sqlLiteral(args[i+2]),
 			})
@@ -1433,7 +1476,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				return fmt.Errorf("update -set-expr: %w", err)
 			}
 			assignments = append(assignments, assignment{
-				conds:    append([]string{}, currentConds...),
+				conds:    clauseConds(),
 				field:    args[i+1],
 				valueSQL: valueSQL,
 			})
@@ -1452,7 +1495,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				return fmt.Errorf("update -set-bucket: %w", err)
 			}
 			assignments = append(assignments, assignment{
-				conds:    append([]string{}, currentConds...),
+				conds:    clauseConds(),
 				field:    se.field,
 				valueSQL: valueSQL,
 			})
@@ -1460,6 +1503,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		case "-":
 			// Clause separator — reset conditions
 			currentConds = nil
+			currentNot = false
 			i++
 		default:
 			i++

@@ -261,11 +261,24 @@ Writing `+if` instead of `-if` negates that one condition — NOT:
 ssql from employees.csv | ssql where -if dept eq Engineering +if city eq SF | ssql include name dept city | ssql to table
 ```
 
+Two conveniences on top. `-not` inside a clause negates the *whole
+clause* — "not (engineer and over 30)" without rewriting it as two
+clauses — and `-invert` negates the whole `where`, keeping the rows the
+filter would have dropped (grep's `-v`):
+
+```bash
+# Everyone EXCEPT engineers over 30: 7 rows
+ssql from employees.csv | ssql where -not -if dept eq Engineering -if age gt 30 | ssql count
+# The complement of the OR example above: 10 - 6 = 4 rows
+ssql from employees.csv | ssql where -invert -if dept eq Engineering -if age gt 30 + -if city eq Chicago | ssql count
+```
+
 So: `-if … -if …` within a clause is AND, `+` between clauses is OR,
-`+if` is NOT. The same grammar drives `update -if … -set …`, where each
-clause is one "if these hold, set that" rule. When a condition needs
-arithmetic or functions the flag form cannot say, `-if-expr` takes a
-full expression:
+`+if` negates one condition, `-not` negates a clause, `-invert` negates
+the lot. The same clause grammar (including `-not`) drives `update -if …
+-set …`, where each clause is one "if these hold, set that" rule. When a
+condition needs arithmetic or functions the flag form cannot say,
+`-if-expr` takes a full expression:
 
 ```bash
 # Expressions: string functions, arithmetic, comparisons
@@ -627,7 +640,7 @@ extension; `.log`/`.txt` as lines) · `from csv|tsv|jsonl|parquet|lines FILE…`
 columns, `-shard-field` tags origin) — flags `-records`, `-sample N`,
 `-last N`, `-columns` (parquet), `-source`, `--` pushdown.
 
-Filter / shape: `where` · `include` · `exclude` · `rename` · `cast` ·
+Filter / shape: `where` (`-if`, `+if`, `+` between clauses, `-not`, `-invert`) · `include` · `exclude` · `rename` · `cast` ·
 `update` (`-set`, `-set-expr`, `-set-bucket FIELD TS WIDTH`) · `distinct` ·
 `limit [-last]` · `offset` · `sample` · `top`.
 

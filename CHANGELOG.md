@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`where -not` and `where -invert`.** `-not` inside a clause negates the
+  whole clause — `where -not -if dept eq Sales -if age gt 30` is NOT (Sales
+  AND over 30) without the De Morgan rewrite into two clauses — and
+  `-invert` negates the whole `where`, keeping the rows the filter would
+  drop (grep's `-v`; the letter itself is the root `-verbose` alias).
+  `update` takes `-not` on its clauses too. In every lane; a `-not` with
+  nothing to negate is a parse-time error. Suggested by Ross from codelab
+  review; the optimiser leaves negated `where` stages exactly as written.
+
+### Fixed
+- **Optimiser `where-merge` changed the meaning of `where A + B | where C`.**
+  Concatenating the argument lists turned (A OR B) AND C into A OR (B AND
+  C); on the codelab data that was 5 rows instead of 4 in every
+  generated-Go lane. Consecutive `where` stages now merge only when both
+  are a single clause.
+- **`generate sql` lost the parentheses around a multi-clause `where`**
+  when another `where` followed it — the same wrong result in DuckDB (the
+  merge had masked it). An OR of clauses is now one parenthesised term.
+
 ### Changed
+- Codelab: section 2 adds `-not` and `-invert` with runnable blocks and
+  row counts; the reference line lists the full `where` grammar.
 - Codelab: section 2 explains `where`'s clause grammar — `-if … -if …`
   within a clause is AND, `+` between clauses is OR, `+if` is NOT — with
   three runnable blocks and their row counts (review feedback).

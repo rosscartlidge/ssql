@@ -25,10 +25,22 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from users.csv | ssql where -if-expr 'age >= 18 and status == \"active\"'", "Multiple conditions with AND logic").
 		Example("ssql from data.csv | ssql where -if-expr 'has(\"email\") and email contains \"@\"'", "Validate email field exists and format").
 		Example("ssql from sales.csv | ssql where -if-expr '(age >= 18 and verified) or role == \"admin\"'", "Complex boolean logic").
+		Example("ssql from users.csv | ssql where -not -if dept eq Sales -if age gt 30", "NOT (Sales AND over 30): -not negates its whole clause").
+		Example("ssql from users.csv | ssql where -invert -if dept eq Sales + -if dept eq Marketing", "Everything except Sales or Marketing: -invert keeps the rows the filter would drop").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
 		Help("Generate Go code instead of executing").
+		Done().
+		Flag("-invert").
+		Bool().
+		Global().
+		Help("Keep the rows the filter would drop (negate the whole where — grep's -v)").
+		Done().
+		Flag("-not").
+		Bool().
+		Local().
+		Help("Negate this clause: the clause holds when NOT all of its conditions hold").
 		Done().
 		Flag("-if", "-i").
 		Arg("field").
@@ -73,19 +85,25 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			type clauseData struct {
 				conditions []Condition
 				exprEvals  []exprEval
+				not        bool // -not: the clause holds when NOT all conditions hold
 			}
 
 			var clauses []clauseData
+			invert, _ := ctx.GlobalFlags["-invert"].(bool)
 
 			for _, clause := range ctx.Clauses {
 				// Skip empty clauses
 				hasWhere := clause.Flags["-if"] != nil
 				hasWhereExpr := clause.Flags["-if-expr"] != nil
 				if !hasWhere && !hasWhereExpr {
+					if err := whereNotNeedsCondition(clause); err != nil {
+						return err
+					}
 					continue
 				}
 
 				cd := clauseData{}
+				cd.not, _ = clause.Flags["-not"].(bool)
 
 				// Parse -if conditions (validates operators)
 				conditions, err := parseConditions(clause.Flags["-if"])
@@ -120,7 +138,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					return false
 				}
 				if len(clauses) == 0 {
-					return true
+					return !invert // no filter matches everything; inverted, nothing
 				}
 
 				// On first record, validate that all -if field names exist
@@ -177,12 +195,15 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						}
 					}
 
+					if clause.not {
+						clauseMatches = !clauseMatches
+					}
 					if clauseMatches {
-						return true
+						return !invert
 					}
 				}
 
-				return false
+				return invert
 			}
 
 			// Read JSONL from stdin (with schema if present)
@@ -239,8 +260,14 @@ func generateWhereCode(ctx *cf.Context) error {
 	//     boundary)
 	//   - an expression outside the transpilable subset (Tier R: the
 	//     planner inserts the Serial()+toRecord boundary upstream)
+	invert, _ := ctx.GlobalFlags["-invert"].(bool)
+	for _, clause := range ctx.Clauses {
+		if err := whereNotNeedsCondition(clause); err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
+	}
 	if typedMode() && prevSchema != nil {
-		handled, err := generateWhereCodeTyped(ctx.Clauses, inputVar, prevSchema, fragments)
+		handled, err := generateWhereCodeTyped(ctx.Clauses, invert, inputVar, prevSchema, fragments)
 		if handled || err != nil {
 			return err
 		}
@@ -254,7 +281,7 @@ func generateWhereCode(ctx *cf.Context) error {
 	}
 
 	// Generate filter code from clauses
-	filterCode, imports, preCompileVars, params, planNotes, gerr := generateWhereCodeFromClauses(ctx.Clauses, advisory)
+	filterCode, imports, preCompileVars, params, planNotes, gerr := generateWhereCodeFromClauses(ctx.Clauses, invert, advisory)
 	if gerr != nil {
 		return lib.WriteErrorAndExit(getCommandString(), gerr)
 	}
@@ -286,7 +313,7 @@ func generateWhereCode(ctx *cf.Context) error {
 // subset, so the caller can fall back to record-mode codegen (Tier R).
 // Unknown fields and invalid operators stay loud errors: they'd fail in
 // every mode, just later and worse.
-func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.TypedSchema, fragments []*lib.CodeFragment) (bool, error) {
+func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, schema *lib.TypedSchema, fragments []*lib.CodeFragment) (bool, error) {
 	if schema == nil {
 		return true, lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'where' must follow a typed-mode source (e.g. 'from FILE.csv') so the input schema is known"))
@@ -373,23 +400,11 @@ func generateWhereCodeTyped(clauses []cf.Clause, inputVar string, schema *lib.Ty
 		}
 
 		if len(ands) > 0 {
-			if len(ands) == 1 {
-				clauseConds = append(clauseConds, ands[0])
-			} else {
-				clauseConds = append(clauseConds, "("+strings.Join(ands, " && ")+")")
-			}
+			clauseConds = append(clauseConds, joinClauseConds(ands, clauseNot(clause)))
 		}
 	}
 
-	var body string
-	switch len(clauseConds) {
-	case 0:
-		body = "return true"
-	case 1:
-		body = "return " + clauseConds[0]
-	default:
-		body = "return " + strings.Join(clauseConds, " || ")
-	}
+	body := "return " + whereBody(clauseConds, invert)
 
 	outputVar := "filtered"
 	if schemaUsesTime(schema) {
@@ -529,7 +544,7 @@ func schemaUsesTime(s *lib.TypedSchema) bool {
 // source), -if-expr predicates transpile to native GetOr code; otherwise —
 // and for expressions outside the subset — the compiled-VM filter var is
 // emitted as before.
-func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]string) (string, []string, []string, []lib.CodeParam, []string, error) {
+func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map[string]string) (string, []string, []string, []lib.CodeParam, []string, error) {
 	var imports []string
 	var clauseConditions []string
 	var preCompileVars []string
@@ -623,13 +638,9 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]strin
 			andConditions = append(andConditions, call)
 		}
 
-		// Combine AND conditions for this clause
+		// Combine AND conditions for this clause (negated as a whole by -not)
 		if len(andConditions) > 0 {
-			if len(andConditions) == 1 {
-				clauseConditions = append(clauseConditions, andConditions[0])
-			} else {
-				clauseConditions = append(clauseConditions, "("+strings.Join(andConditions, " && ")+")")
-			}
+			clauseConditions = append(clauseConditions, joinClauseConds(andConditions, clauseNot(clause)))
 		}
 	}
 
@@ -637,15 +648,8 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, advisory map[string]strin
 		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime")
 	}
 
-	// Combine clauses with OR
-	var finalCondition string
-	if len(clauseConditions) == 0 {
-		finalCondition = "return true"
-	} else if len(clauseConditions) == 1 {
-		finalCondition = "return " + clauseConditions[0]
-	} else {
-		finalCondition = "return " + strings.Join(clauseConditions, " || ")
-	}
+	// Combine clauses with OR; -invert negates the whole thing.
+	finalCondition := "return " + whereBody(clauseConditions, invert)
 
 	// Build function
 	code := fmt.Sprintf("func(r ssql.Record) bool {\n\t\t%s\n\t}", finalCondition)
@@ -730,3 +734,53 @@ func dedupeImports(imports []string) []string {
 	}
 	return result
 }
+
+// clauseNot reports a clause's -not flag: the clause holds when NOT all of
+// its conditions hold — De Morgan without the rewrite.
+func clauseNot(clause cf.Clause) bool {
+	not, _ := clause.Flags["-not"].(bool)
+	return not
+}
+
+// whereNotNeedsCondition rejects a clause that says -not but has nothing
+// to negate: silently matching nothing (NOT true) would be a trap.
+func whereNotNeedsCondition(clause cf.Clause) error {
+	if clauseNot(clause) && clause.Flags["-if"] == nil && clause.Flags["-if-expr"] == nil {
+		return fmt.Errorf("where -not needs at least one -if or -if-expr in its clause")
+	}
+	return nil
+}
+
+// joinClauseConds renders one clause's AND-ed Go conditions, wrapped in
+// !(…) when the clause is negated. Shared by the record and typed emitters.
+func joinClauseConds(conds []string, not bool) string {
+	var s string
+	if len(conds) == 1 {
+		s = conds[0]
+	} else {
+		s = "(" + strings.Join(conds, " && ") + ")"
+	}
+	if not {
+		return "!(" + s + ")"
+	}
+	return s
+}
+
+// whereBody renders the OR of the clauses, negated as a whole by -invert.
+// No clauses = match everything (so -invert alone matches nothing).
+func whereBody(clauseConds []string, invert bool) string {
+	var body string
+	switch len(clauseConds) {
+	case 0:
+		body = "true"
+	case 1:
+		body = clauseConds[0]
+	default:
+		body = strings.Join(clauseConds, " || ")
+	}
+	if invert {
+		return "!(" + body + ")"
+	}
+	return body
+}
+

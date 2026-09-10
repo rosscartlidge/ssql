@@ -49,6 +49,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 	type updateClause struct {
 		conds     []cond
 		exprConds []string // transpiled -if-expr / +if-expr predicates (already negated)
+		not       bool     // -not: the whole condition group negated
 		sets      []setOp
 	}
 
@@ -60,6 +61,10 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 
 	for _, clause := range ctx.Clauses {
 		var uc updateClause
+		if err := updateNotNeedsCondition(clause); err != nil {
+			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		uc.not = clauseNot(clause)
 
 		// Parse -if / +if conditions.
 		if matchesRaw, ok := clause.Flags["-if"]; ok && matchesRaw != nil {
@@ -263,6 +268,9 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 
 		if len(conds) > 0 {
 			combined := strings.Join(conds, " && ")
+			if c.not {
+				combined = "!(" + combined + ")"
+			}
 			if i == 0 {
 				fmt.Fprintf(&body, "\t\tif %s {\n", combined)
 			} else {

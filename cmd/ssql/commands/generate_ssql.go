@@ -571,6 +571,22 @@ func parseLimitCmd(cmd *pipelineCmd) {
 
 // --- Where condition parsing ---
 
+// whereHasNegationFlags reports a where stage carrying -not (a negated
+// clause) or -invert/-v (the negated whole). The rewrite rules below
+// reason about clauses as plain AND-groups ORed together — merging,
+// splitting conditions off to catalog pruning or a join side, deleting
+// contradictory clauses — and every one of those is unsound under a
+// negation, so such a stage is left exactly as written (pushdown rules
+// that move the WHOLE stage verbatim are unaffected).
+func whereHasNegationFlags(args []string) bool {
+	for _, a := range args {
+		if a == "-not" || a == "-invert" {
+			return true
+		}
+	}
+	return false
+}
+
 // parseWhereArgs parses where RawArgs into structured clauses.
 // Format: [-if field op value]... [-if-expr expr]... [+ [-if ...]...]
 func parseWhereArgs(args []string) []whereClause {
@@ -657,6 +673,17 @@ func ruleWhereMerge(cmds []*pipelineCmd) []ruleApplication {
 		}
 		j := nextNonRemoved(cmds, i)
 		if j == -1 || cmds[j].Kind != "where" {
+			continue
+		}
+		if whereHasNegationFlags(cmds[i].RawArgs) || whereHasNegationFlags(cmds[j].RawArgs) {
+			continue
+		}
+		// Concatenating argument lists is AND only when BOTH stages are a
+		// single clause: `where A + B | where C` is (A OR B) AND C, but the
+		// concatenation `-if A + -if B -if C` reads A OR (B AND C) — five
+		// rows instead of four on the codelab data (found 2026-09-10 while
+		// adding -not/-invert; every generated-Go lane ran the wrong filter).
+		if len(parseWhereArgs(cmds[i].RawArgs)) != 1 || len(parseWhereArgs(cmds[j].RawArgs)) != 1 {
 			continue
 		}
 		before := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
@@ -978,6 +1005,9 @@ func ruleCatalogPredicateExtraction(cmds []*pipelineCmd) []ruleApplication {
 			continue // can't read catalog, skip
 		}
 
+		if whereHasNegationFlags(cmds[j].RawArgs) {
+			continue
+		}
 		clauses := parseWhereArgs(cmds[j].RawArgs)
 		// Only extract from single-clause where (multi-clause OR is harder to split)
 		if len(clauses) != 1 {
@@ -1101,7 +1131,7 @@ func ruleCatalogAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
 func ruleExprCanonicalize(cmds []*pipelineCmd) []ruleApplication {
 	var rules []ruleApplication
 	for i := 0; i < len(cmds); i++ {
-		if cmds[i].Removed || cmds[i].Kind != "where" {
+		if cmds[i].Removed || cmds[i].Kind != "where" || whereHasNegationFlags(cmds[i].RawArgs) {
 			continue
 		}
 		clauses := parseWhereArgs(cmds[i].RawArgs)
@@ -1141,7 +1171,7 @@ func ruleExprCanonicalize(cmds []*pipelineCmd) []ruleApplication {
 func rulePredicateSimplification(cmds []*pipelineCmd) ([]ruleApplication, bool) {
 	var rules []ruleApplication
 	for i := 0; i < len(cmds); i++ {
-		if cmds[i].Removed || cmds[i].Kind != "where" {
+		if cmds[i].Removed || cmds[i].Kind != "where" || whereHasNegationFlags(cmds[i].RawArgs) {
 			continue
 		}
 		clauses := parseWhereArgs(cmds[i].RawArgs)
@@ -1313,7 +1343,7 @@ func simplifyClause(clause whereClause) (whereClause, bool) {
 func rulePredicateReorder(cmds []*pipelineCmd) []ruleApplication {
 	var rules []ruleApplication
 	for i := 0; i < len(cmds); i++ {
-		if cmds[i].Removed || cmds[i].Kind != "where" {
+		if cmds[i].Removed || cmds[i].Kind != "where" || whereHasNegationFlags(cmds[i].RawArgs) {
 			continue
 		}
 		clauses := parseWhereArgs(cmds[i].RawArgs)
@@ -1430,6 +1460,9 @@ func ruleJoinPredicatePushdown(cmds []*pipelineCmd) ([]*pipelineCmd, []ruleAppli
 		}
 
 		// Only handle simple -if predicates (not -if-expr which can reference any field)
+		if whereHasNegationFlags(cmds[j].RawArgs) {
+			continue
+		}
 		clauses := parseWhereArgs(cmds[j].RawArgs)
 		if len(clauses) != 1 {
 			continue // multi-clause OR is harder to split across sides
@@ -1925,6 +1958,9 @@ func extractReferencedFields(cmd *pipelineCmd) ([]string, bool) {
 }
 
 func extractWhereFields(args []string) ([]string, bool) {
+	if whereHasNegationFlags(args) {
+		return nil, true // fields still read; the negated shape is opaque to pruning
+	}
 	clauses := parseWhereArgs(args)
 	var fields []string
 	for _, clause := range clauses {

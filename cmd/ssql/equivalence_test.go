@@ -396,8 +396,15 @@ func TestFlagExprMetamorphic(t *testing.T) {
 		// Update pairs -set an EXISTING field: a conditional -set on a NEW
 		// field has no SQL translation (loud by design), which would knock
 		// out the duckdb lane for both forms.
+		// -not negates a whole clause; -invert/-v negates the whole where.
+		{name: "not_clause", flag: `where -not -if pop gt 15 -if city eq Oslo`, expr: `where -if-expr '!(pop > 15 && city == "Oslo")'`},
+		{name: "not_clause_or", flag: `where -not -if pop gt 15 -if city eq Oslo + -if city eq Lima`, expr: `where -if-expr '!(pop > 15 && city == "Oslo") || city == "Lima"'`},
+		{name: "invert_or", flag: `where -invert -if pop gt 25 + -if city eq Lima`, expr: `where -if-expr '!(pop > 25 || city == "Lima")'`},
+		{name: "invert_short", flag: `where -invert -if pop gt 25`, expr: `where -if-expr '!(pop > 25)'`},
+		{name: "invert_with_not", flag: `where -invert -not -if pop gt 15 -if city eq Oslo`, expr: `where -if-expr 'pop > 15 && city == "Oslo"'`},
 		{name: "update_if", flag: `update -if pop gt 15 -set city big`, expr: `update -if-expr 'pop > 15' -set city big`},
 		{name: "update_negated", flag: `update +if pop gt 15 -set city small`, expr: `update +if-expr 'pop > 15' -set city small`},
+		{name: "update_not_clause", flag: `update -not -if pop gt 15 -if city eq Oslo -set city other`, expr: `update -if-expr '!(pop > 15 && city == "Oslo")' -set city other`},
 		{
 			// String ordering through update's OWN condition emission
 			// (generateConditionCode had the same unconditional-numeric bug
@@ -1000,6 +1007,15 @@ var equivCases = []EquivCase{
 			{"id": 2, "city": "Delhi", "pop": 29},
 			{"id": 11, "city": "Bogota", "pop": 25},
 		},
+	},
+	{
+		// Two consecutive wheres, the first with two OR clauses: (A OR B)
+		// AND C. The optimiser's where-merge concatenated the argument
+		// lists — A OR (B AND C) — so every generated-Go lane filtered
+		// wrong until 2026-09-10; it now merges single-clause stages only.
+		Name:     "where_or_then_where_is_and",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if pop gt 15 + -if city eq Lima | {{.bin}} where -if pop lt 30 | {{.bin}} include id city pop`,
+		Ordered:  false,
 	},
 	{
 		// `update -set-bucket FIELD SOURCE WIDTH` is the flag spelling of
