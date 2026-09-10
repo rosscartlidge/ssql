@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xdg-open` / `open` as the way to view it and the reason — a snap
   browser's private `/tmp` cannot see files written there (review).
 
+### Changed
+- **Signal-processing codelab, reader's pass** (the same treatment the CLI
+  codelab got in review): it opens on the CPU and meets the GPU last —
+  the two clone-and-build GPU recipes moved under Performance Tips with
+  the reason a clone is needed there (the CUDA code is built from source;
+  every other install route is CPU-only); a Setup section states the
+  prerequisites (`ssql`, `python3` for the generated test signals, an
+  empty directory, how to open the charts) and that the CLI codelab is
+  assumed; the spectrogram "output formats" block no longer prints
+  thousands of rows to the terminal; the autocorrelation tip no longer
+  calls an FFT O(n²). The shipped runner takes `signal` as a name
+  (`./codelab-run.sh signal`) and `scripts/codelab-mint.sh` runs both
+  codelabs, with `-b BINARY` to exercise a pre-release build (DFC126).
+
 ### Added
 - **Alt-h shows the function under the cursor.** Inside an expression
   argument, with the cursor on a function name or inside its

@@ -22,7 +22,7 @@ code block in every codelab is executed against the current source on
 - [Expression Language](EXPRESSIONS.md) — expression syntax for `-if-expr` and `-set-expr`
 - [Debugging Pipelines](cli-debugging.md) — debug with jq, inspect data, profile performance
 - [Troubleshooting](cli-troubleshooting.md) — common issues and quick solutions
-- [Signal Processing](cli-signal-processing.md) — GPU-accelerated FFT, convolution, spectrogram
+- [Signal Processing](cli-signal-processing.md) — FFT, convolution, correlation, spectrogram on the CPU; the GPU build as the last section
 
 ## AI Code Generation
 

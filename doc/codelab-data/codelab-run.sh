@@ -12,16 +12,22 @@
 #     uses the `ssql` on your PATH and, when no doc is given or beside
 #     it, fetches the codelab for that ssql's version from GitHub — so
 #     `./codelab-run.sh` is a self-test of your install.
-# Usage: codelab-run.sh [-v] [DOC.md]     (SSQL_BIN=/path/to/ssql overrides)
+# Usage: codelab-run.sh [-v] [DOC.md | cli | signal]   (SSQL_BIN=/path/to/ssql overrides)
+#   `cli` (the default) is doc/cli-codelab.md, `signal` is
+#   doc/cli-signal-processing.md — fetched for the installed version when
+#   not in a checkout.
 set -o pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT=""
 [[ -f "$HERE/../../go.mod" && -d "$HERE/../../cmd/ssql" ]] && ROOT="$(cd "$HERE/../.." && pwd)"
 DOC=""
 VERBOSE=
+DOCNAME=cli-codelab.md
 for arg in "$@"; do
   case "$arg" in
     -v) VERBOSE=1 ;;
+    cli) DOCNAME=cli-codelab.md ;;
+    signal) DOCNAME=cli-signal-processing.md ;;
     *) DOC="$arg" ;;
   esac
 done
@@ -44,14 +50,14 @@ export PATH="$BIN_DIR:$PATH"
 # The doc: argument, else the checkout's, else one beside this script,
 # else the copy tagged with the installed version.
 if [[ -z "$DOC" ]]; then
-  if [[ -n "$ROOT" ]]; then DOC="$ROOT/doc/cli-codelab.md"
-  elif [[ -f "$HERE/cli-codelab.md" ]]; then DOC="$HERE/cli-codelab.md"
+  if [[ -n "$ROOT" ]]; then DOC="$ROOT/doc/$DOCNAME"
+  elif [[ -f "$HERE/$DOCNAME" ]]; then DOC="$HERE/$DOCNAME"
   else
     ver="$(ssql version | sed -n 's/^ssql v\([0-9.]*\).*/\1/p')"
-    DOC="$WORK/cli-codelab.md"
-    url="https://raw.githubusercontent.com/rosscartlidge/ssql/v$ver/doc/cli-codelab.md"
+    DOC="$WORK/$DOCNAME"
+    url="https://raw.githubusercontent.com/rosscartlidge/ssql/v$ver/doc/$DOCNAME"
     curl -fsSL "$url" -o "$DOC" || { echo "codelab-run: could not fetch $url (pass the doc path as an argument)"; exit 1; }
-    echo "codelab-run: running doc/cli-codelab.md as of v$ver against $(ssql version)"
+    echo "codelab-run: running doc/$DOCNAME as of v$ver against $(ssql version)"
   fi
 fi
 [[ -f "$DOC" ]] || { echo "codelab-run: no such doc: $DOC"; exit 1; }

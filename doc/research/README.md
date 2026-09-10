@@ -133,7 +133,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC123 | 2026-09-03 | 2026-09-03 | [The Pipeline IR: Finishing the Intermediate Representation We Already Have](./dfc123_pipeline_ir.md) |
 | DFC124 | 2026-09-03 | 2026-09-07 | [Missing Values Across the Lanes: An Empty Cell Is Absent](./dfc124_missing_values.md) |
 | DFC125 | 2026-09-04 | 2026-09-07 | [The Codelab as a Guided Path: Confidence Before Sophistication](./dfc125_codelab_guided_path.md) |
-| DFC126 | 2026-09-08 | 2026-09-08 | [The Codelab From Scratch in a Mint Container](./dfc126_codelab_from_scratch_in_a_mint_container.md) |
+| DFC126 | 2026-09-08 | 2026-09-10 | [The Codelab From Scratch in a Mint Container](./dfc126_codelab_from_scratch_in_a_mint_container.md) |
 
 <!-- DFC-INDEX-END -->
 

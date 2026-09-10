@@ -2,7 +2,7 @@
 
 Reference: DFC126
 Created: 2026-09-08
-Last modified: 2026-09-08
+Last modified: 2026-09-10
 
 [Back to Index](./README.md)
 
@@ -52,7 +52,13 @@ makes it repeatable.
    on an older Go, a toolchain).
 
 `-k` keeps the container for poking (`lxc exec NAME -- su - ubuntu`);
-otherwise it is deleted. `make codelab-mint` runs it.
+otherwise it is deleted. `make codelab-mint` runs it. *Amended
+2026-09-10:* the script also runs the signal-processing codelab
+(`./codelab-run.sh signal` — the shipped runner learned the two names,
+`cli` and `signal`, fetching the doc for the installed version), and
+`-b BINARY` pushes a local build over the installed one after Setup, so
+a pre-release binary and the runner it embeds can be exercised before
+the tag exists (the install step still tests the published release).
 
 It is not part of `go test` or `make doc-test`: it needs LXD, the
 network, and ~5 minutes, and it tests the *published* release rather

@@ -630,10 +630,11 @@ func main() {
 - **Debug pipelines with jq** - [See debugging guide →](doc/cli-debugging.md)
 
 ### 2. 📊 **[Signal Processing](doc/cli-signal-processing.md)** — optional CLI branch
-*FFT, filtering, and GPU-accelerated analysis*
-- Frequency analysis with FFT/IFFT
-- Convolution for smoothing and edge detection
-- Cross-correlation, spectrograms, optional GPU acceleration
+*FFT, filtering, smoothing and spectrograms on the CPU you have; the GPU build last*
+- Needs only `ssql` and `python3` (the test signals are generated in place)
+- Frequency analysis with FFT/IFFT, convolution for smoothing and edges
+- Cross-correlation and spectrograms; `ssql_gpu` for signals of millions of samples
+- Every block is run by `codelab-run.sh signal`, the same runner as the CLI codelab
 
 ### 3. 📚 **[Getting Started Guide](doc/codelab-intro.md)** — the Go library
 *Learn the `Record` API the CLI is built on — read it once you have seen `generate go` output*

@@ -8,11 +8,22 @@
 # non-zero if any step fails. Nothing from this checkout goes into the
 # container — the point is to test what a reader gets from the proxy.
 #
-# Usage: scripts/codelab-mint.sh [-k] [NAME]     (-k keeps the container)
-# Requires: lxd with the ubuntu: remote, network in containers. ~5 min.
+# Usage: scripts/codelab-mint.sh [-k] [-b BINARY] [NAME]
+#   -k keeps the container; -b BINARY pushes a local build over the
+#   installed one after Setup (so a pre-release binary and the runner it
+#   embeds can be exercised before the tag exists — the install step
+#   itself still tests the published release).
+# Requires: lxd with the ubuntu: remote, network in containers. ~6 min.
 set -o pipefail
-KEEP=; NAME=ssql-codelab
-for a in "$@"; do case "$a" in -k) KEEP=1 ;; *) NAME="$a" ;; esac; done
+KEEP=; NAME=ssql-codelab; LOCALBIN=
+while (( $# )); do
+  case "$1" in
+    -k) KEEP=1 ;;
+    -b) LOCALBIN="$2"; shift ;;
+    *) NAME="$1" ;;
+  esac
+  shift
+done
 say() { printf '\n== %s\n' "$*"; }
 fail=0
 lxc delete -f "$NAME" 2>/dev/null
@@ -30,6 +41,12 @@ export PATH="$PATH:$HOME/go/bin"
 ssql version
 echo "module cache: $(du -sh ~/go/pkg/mod | cut -f1); toolchains: $(ls -d ~/go/pkg/mod/golang.org/toolchain@* 2>/dev/null | xargs -n1 basename | tr "\n" " ")"' || fail=1
 
+if [[ -n "$LOCALBIN" ]]; then
+  say "pushing local build $LOCALBIN over the installed ssql (pre-release check)"
+  lxc file push "$LOCALBIN" "$NAME/home/ubuntu/go/bin/ssql" >/dev/null 2>&1 || fail=1
+  run 'export PATH="$PATH:$HOME/go/bin"; ssql version'
+fi
+
 say "Setup steps 2–4 — data, tmux, completion"
 run 'set -e; export PATH="$PATH:$HOME/go/bin"
 ssql codelab | tail -4
@@ -42,6 +59,9 @@ run 'python3 ~/keys.py' || fail=1
 
 say "The runner the data ships with: every block against the installed ssql"
 run 'export PATH="$PATH:$HOME/go/bin"; cd ~/ssql-codelab && ./codelab-run.sh 2>&1 | tail -4' || fail=1
+
+say "The signal-processing codelab the same way (python3 generates its signals)"
+run 'export PATH="$PATH:$HOME/go/bin"; python3 --version; cd ~/ssql-codelab && ./codelab-run.sh signal 2>&1 | tail -4' || fail=1
 
 say "Blocks the runner skips: generate go -run (first and second run)"
 run 'export PATH="$PATH:$HOME/go/bin"; cd ~/ssql-codelab
