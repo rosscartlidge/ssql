@@ -5,6 +5,13 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Codelab: section 2 explains `where`'s clause grammar — `-if … -if …`
+  within a clause is AND, `+` between clauses is OR, `+if` is NOT — with
+  three runnable blocks and their row counts (review feedback).
+
 ## [4.95.0] - 2026-09-10
 
 ### Added

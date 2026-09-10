@@ -236,14 +236,36 @@ ssql from employees.csv | ssql sort -desc salary | ssql include name dept salary
 ssql from employees.csv | ssql sort hire_date | ssql limit -last 3 | ssql to table
 ```
 
-`limit N` is the first N rows; `limit -last N` is the tail. Conditions
-compose: several `-if` in one `where` are AND; separate groups with `+`
-for OR; `-if-expr` takes a full expression when the flag form runs out:
+`limit N` is the first N rows; `limit -last N` is the tail.
+
+**AND, OR and NOT without an expression language.** A `where` is made
+of *clauses*. Every `-if` inside one clause must hold — that is AND:
 
 ```bash
-# Engineers over 30, OR anyone in Chicago
-ssql from employees.csv | ssql where -if dept eq Engineering -if age gt 30 + -if city eq Chicago | ssql to table
+# Engineers who are over 30 (both conditions): 3 rows
+ssql from employees.csv | ssql where -if dept eq Engineering -if age gt 30 | ssql include name dept age city | ssql to table
 ```
+
+A `+` on its own starts a new clause, and a row passes if *any* clause
+passes — that is OR. Read the `+` as "or, alternatively":
+
+```bash
+# Engineers over 30, OR anyone in Chicago: the 3 rows above plus 3 from Chicago
+ssql from employees.csv | ssql where -if dept eq Engineering -if age gt 30 + -if city eq Chicago | ssql include name dept age city | ssql to table
+```
+
+Writing `+if` instead of `-if` negates that one condition — NOT:
+
+```bash
+# Engineers who are not in SF: 1 row
+ssql from employees.csv | ssql where -if dept eq Engineering +if city eq SF | ssql include name dept city | ssql to table
+```
+
+So: `-if … -if …` within a clause is AND, `+` between clauses is OR,
+`+if` is NOT. The same grammar drives `update -if … -set …`, where each
+clause is one "if these hold, set that" rule. When a condition needs
+arithmetic or functions the flag form cannot say, `-if-expr` takes a
+full expression:
 
 ```bash
 # Expressions: string functions, arithmetic, comparisons
