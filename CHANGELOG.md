@@ -5,6 +5,18 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`doc/tmux-for-ssql.md`** — a five-minute tmux page for codelab readers
+  (review feedback): install and a named session, the `~/.tmux.conf`
+  lines that make the wheel scroll and drag-select copy like a normal
+  terminal (`mouse on`, `history-limit`, `set-clipboard`, plus
+  `escape-time 10` so Alt-h/g/r register at once), the Shift-drag /
+  `xclip` clipboard routes for terminals that ignore OSC 52, detach and
+  reattach, windows and panes for `ssql serve`, and troubleshooting.
+  The codelab's Setup starts `tmux new -s ssql` and links to it.
+
 ## [4.97.0] - 2026-09-10
 
 ### Added

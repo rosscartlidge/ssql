@@ -94,13 +94,19 @@ Debian 12 and later, qualify):
 ```bash
 # codelab: skip — tmux (run once by hand)
 sudo apt-get install -y tmux      # macOS: brew install tmux
-tmux
+tmux new -s ssql
 ```
 
 Your prompt comes back with a green status bar along the bottom: you
 are now in a bash shell inside tmux, still in `ssql-codelab`, and
-everything that follows is typed there. When you are done for the day, type `exit` to leave tmux
-like any other shell.
+everything that follows is typed there. The session is named `ssql`, so
+if you close the terminal or come back tomorrow, `tmux attach -t ssql`
+returns you to it, output and all. New to tmux? [tmux for the ssql
+Codelab](tmux-for-ssql.md) is a five-minute page: the mouse settings
+that make the wheel scroll and drag-select copy like a normal terminal,
+detaching and reattaching, a second shell for `ssql serve`, and the one
+setting (`escape-time`) that makes Alt-h feel instant. When you are done
+for the day, `exit` leaves tmux like any other shell.
 
 **Turn on completion in that shell.** This is the most important line
 in the tutorial. It works in bash (the default shell on Debian, Ubuntu

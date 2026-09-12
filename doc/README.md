@@ -10,6 +10,7 @@ code block in every codelab is executed against the current source on
 `scripts/codelab-go-run.sh` (DFC125) — so what you read is what happens.
 
 1. [CLI Codelab](cli-codelab.md) — start here: ten minutes to useful, then the sophisticated features one at a time
+   - [tmux for the ssql Codelab](tmux-for-ssql.md) — the five things you need from tmux: mouse scrolling and copy like a normal terminal, named sessions and reattaching, a second shell, the `escape-time` setting for the Alt keys
 2. [Signal Processing](cli-signal-processing.md) — optional CLI branch for time series: FFT, convolution, spectrogram, GPU
 3. [SSH Operator Console](cli-codelab-serve.md) — optional runbook for `ssql serve` when a box holds the data
 4. [Getting Started Guide (Go)](codelab-intro.md) — the `Record` library the CLI is built on; read it once you have seen `generate go` output in the CLI codelab
