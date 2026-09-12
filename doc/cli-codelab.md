@@ -214,7 +214,13 @@ That is the default output of every pipeline: `from` turns the file into
 it, each stage transforms it, and a `to` stage at the end turns it into
 something for people or other programs. Because it is plain JSON Lines,
 you can also stop anywhere — `> saved.jsonl` keeps a result you can read
-back later with `ssql from saved.jsonl`, and `| jq` inspects it.
+back later with `ssql from saved.jsonl`, and `| jq` inspects it. For
+*other* tools, end with `to jsonl` (or `to json` for one array) so the
+`_schema` line is left out: `to jsonl` is exactly the newline-delimited
+JSON that DuckDB's `COPY … TO 'f.json'` writes and its `read_json_auto`
+reads, and that PostgreSQL's `row_to_json` produces one row per line;
+`to json` is DuckDB's `ARRAY true` form and Postgres's `json_agg`. With
+the header still in, DuckDB reads one phantom row.
 
 **Formats.** `from FILE` picks the reader from the extension: `.csv`,
 `.tsv`, `.json`, `.jsonl`, `.parquet`, `.arrow`, `.xlsx`, `.wav`, and
