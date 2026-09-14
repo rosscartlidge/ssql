@@ -50,16 +50,39 @@ BOOLEAN, n VARCHAR` with `n` NULL in the first row and `'z'` in the
 second. DuckDB writes `"d":"2026-01-02"`, `"ts":"2026-01-02 10:30:00"`
 (space, no zone), `"n":null`.
 
-### Postgres — not verified
+### Postgres — verified 2026-09-14 (PostgreSQL 16.15 on ssql-node1)
 
-No `psql` on this machine. What §2 says about Postgres is from
-knowledge, not a run: there is no JSON `COPY` format; `row_to_json(t)`
-gives one object per row (NDJSON via `psql -At`), `json_agg(t)` one
-array — the same two shapes. Types: Postgres writes timestamps as
-`2026-01-02T10:30:00` (ISO 8601 with `T`, zone only for
-`timestamptz`), which `convertToTime` accepts. Mark the sentence as
-unverified in §2 or test it in a container (postgres is an `apt-get`
-away in the mint container — DFC126).
+Ross: "what do you think of installing postgres so we can do some
+interoperability tests?" — installed on the LXD rig node the same
+afternoon (`ssh-test-environment.md` §PostgreSQL). Run over ssh with
+SQL on stdin. Postgres → ssql:
+
+| Postgres wrote | ssql read with | Result |
+|---|---|---|
+| `select row_to_json(t) …` through `psql -At` (NDJSON) | `ssql from jsonl pg.jsonl` | rows load; **F1 and F2 reproduce** (`n` NULL in row 1 → column gone; `_line_number` added) |
+| `select json_agg(t) …` (one array) | `ssql from json -` | rows load |
+| `\copy (q) to stdout csv header` | `ssql from csv -` | rows load; NULL → empty string |
+| `numeric '12.50'` | | JSON `12.50` → ssql float `12.5` |
+
+Postgres time forms, which are *not* DuckDB's: `timestamp` →
+`2026-01-02T10:30:00` (ISO with `T`, **no zone**); `timestamptz` →
+`2026-01-01T23:30:00+00:00` (server zone UTC); `date` → `2026-01-02`;
+in CSV `2026-01-02 10:30:00` and `2026-01-01 23:30:00+00` (**two-digit
+zone**). See F3 for which of these ssql parses.
+
+ssql → Postgres:
+
+| ssql wrote | Postgres read with | Result |
+|---|---|---|
+| `to csv` | `\copy emp from stdin csv header` into a typed table | 10 rows, `hire_date` a real DATE |
+| `to jsonl` | `\copy raw from stdin` into a `jsonb` column, then `jsonb_populate_record(null::emp, j)` | rows and types back |
+| `to json` (array) | `jsonb_populate_recordset(null::emp, $j$…$j$::jsonb)` | rows back |
+| bare stream (`_schema` in) | `\copy` into `jsonb` | **one phantom row of three**: `j ? '_schema'` — the same phantom DuckDB shows |
+
+So §2's Postgres sentence is now true as written, with one addition
+worth making: Postgres has no `COPY … TO … (FORMAT JSON)`; the export is
+`row_to_json` / `json_agg` through `psql -At`, and the import is `\copy`
+into `jsonb` plus `jsonb_populate_record(set)`, or CSV both ways.
 
 ## 2. Findings on the way in (DuckDB → ssql)
 
@@ -165,6 +188,19 @@ What the *CLI / wire* does not:
   end to end. This is why `resample`'s SQL translation refuses string
   timestamps ("numeric epochs only") — there is no typed column to hand
   DuckDB.
+- **`date()` is expr-lang's builtin, not ours, and it parses fewer
+  forms than the library.** `lib/runtime/env.go` registers `bucket`,
+  `now`, `duration`; `date` comes from expr-lang v1.17.6
+  (`builtin/builtin.go:508`), whose layouts are `2006-01-02`, `15:04:05`,
+  `2006-01-02 15:04:05`, RFC 3339, RFC 822/850/1123. Verified: DuckDB's
+  `2026-01-02 10:30:00` and `2026-01-02` parse; Postgres's `timestamp`
+  form `2026-01-02T10:30:00` (no zone) fails with `invalid date`,
+  though `convertToTime` accepts it; Postgres CSV `timestamptz`
+  `2026-01-01 23:30:00+00` fails in both. Fix: register an ssql `date`
+  in `env.go` that tries `convertToTime`'s forms plus `2006-01-02
+  15:04:05-07` and `2006-01-02T15:04:05`, so the expression function
+  and `GetOr[time.Time]` agree — and keep the transpiler/SQL lanes in
+  step (`expr_go.go`, `generate_sql.go`).
 - **Bug, independent of any decision:** writing a time into an
   *existing* string field — `update -set-expr ts 'date(ts)'` — hits
   `applyValueToRecordWithTypeCheck` → `coerceToString` → the `default`
@@ -175,9 +211,9 @@ What the *CLI / wire* does not:
   RFC 3339. `coerceToString` needs a `case time.Time: return
   v.Format(time.RFC3339Nano)` regardless of §6 D1.
 
-## 3. Findings on the way out (ssql → DuckDB)
+## 3. Findings on the way out (ssql → DuckDB, ssql → Postgres)
 
-None beyond the header. DuckDB infers BIGINT/DOUBLE/BOOLEAN/VARCHAR from
+None beyond the header, on either engine (Postgres tables in §1). DuckDB infers BIGINT/DOUBLE/BOOLEAN/VARCHAR from
 ssql's JSON scalars, DATE from `YYYY-MM-DD` strings and TIMESTAMP from
 RFC 3339 strings, so a time that ssql *has* as `time.Time` round-trips
 as a typed column. Ints written as JSON numbers stay integral (`salary`
@@ -266,11 +302,14 @@ to stop leading with a counter.
 jsonl f.jsonl` for DuckDB's default export, `from f.json` for `ARRAY
 true`, `duckdb -json … | ssql from json -`; timestamps arrive as strings
 and `date()` parses DuckDB's `2026-01-02 10:30:00` form (or, after D1,
-`cast -type ts time`). Mark the Postgres sentence unverified or verify
-it in the mint container.
+`cast -type ts time`). For Postgres: `psql -At -c "select row_to_json(t)
+from … t" | ssql from jsonl -`, and `\copy` both ways for CSV. Both
+engines are now verified, so the paragraph can say so.
 
 **D6. An interchange gate.** `TestDuckDBInterchange` in `cmd/ssql`,
-skipped without the binary like the equivalence DuckDB lane: `to jsonl`
+skipped without the binary like the equivalence DuckDB lane, and a
+`TestPostgresInterchange` twin gated on `SSQL_TEST_PG_HOST` (psql over
+ssh on the rig node, SQL on stdin): `to jsonl`
 → `read_json_auto` row count and column types; `COPY … TO` NDJSON and
 ARRAY → `from jsonl`/`from json` → row count *and field set*, with a
 NULL-in-first-row column (fails today on F1). The doc claim then has a
@@ -280,12 +319,12 @@ test behind it instead of a check that never ran.
 
 | # | Question | Recommendation |
 |---|---|---|
-| D1 | Add `time` to the wire schema? | Yes (B), explicit only (B1), no separate date type (B2); fix `coerceToString` now either way |
+| D1 | Add `time` to the wire schema? | Yes (B), explicit only (B1), no separate date type (B2); fix `coerceToString` and register ssql's own `date()` now either way |
 | D2 | Keep `_line_number`? | No — CLI reads through the non-injecting reader; library helpers unchanged |
 | D3 | Schema from the first record? | Infer from a bounded sample; late fields are a loud error |
 | D4 | Signal commands without a header? | Emit it |
-| D5 | Codelab reverse direction | Add; Postgres marked unverified until run |
-| D6 | Interchange test | Add, gated on the duckdb binary |
+| D5 | Codelab reverse direction | Add, both engines verified |
+| D6 | Interchange tests | Add: DuckDB gated on the binary, Postgres gated on `SSQL_TEST_PG_HOST` |
 
 Order if all yes: coercion fix + D2 + D4 (small, unblock the codelab
 text) → D3 → D5 → D1 → D6 alongside each.

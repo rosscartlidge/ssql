@@ -2,7 +2,7 @@
 
 Reference: DFC056
 Created: 2026-03-10
-Last modified: 2026-03-20
+Last modified: 2026-09-14
 
 [Back to Index](./README.md)
 
@@ -294,3 +294,32 @@ Once the manual setup works, wrap it in a script:
 ```
 
 These could also be run in CI with a self-hosted runner that has LXD available.
+
+## PostgreSQL on ssql-node1 (added 2026-09-14, DFC128)
+
+For interoperability tests (Postgres ↔ ssql JSON/CSV) a PostgreSQL 16
+server runs on `ssql-node1` — a container, not the workstation, so it is
+a service that disappears with the node. Setup that was run:
+
+```bash
+ssh ssql-node1 'apt-get install -y postgresql'                      # 16.x on ubuntu:24.04
+ssh ssql-node1 "sed -i \"s/^#\\?listen_addresses.*/listen_addresses = '*'/\" /etc/postgresql/16/main/postgresql.conf"
+ssh ssql-node1 'echo "host all all 10.131.56.0/24 scram-sha-256" >> /etc/postgresql/16/main/pg_hba.conf'
+ssh ssql-node1 'systemctl restart postgresql'
+ssh ssql-node1 "sudo -u postgres psql -c \"CREATE ROLE ssql LOGIN PASSWORD 'ssql'\" && sudo -u postgres createdb -O ssql ssql"
+```
+
+Two ways in:
+
+- **Over ssh, no client on the host** (what the tests use): pipe SQL on
+  stdin — `ssh ssql-node1 sudo -u postgres psql -At -d ssql <<'SQL' …
+  SQL`. Quoting in `-c` breaks through ssh's re-parse; stdin does not.
+  `\copy … to stdout csv header` and `\copy t from stdin` work on the
+  same stream, so a whole round trip is one ssh.
+- **From the host**, if `postgresql-client` is installed:
+  `PGPASSWORD=ssql psql -h 10.131.56.27 -U ssql -d ssql` (the subnet is
+  allowed in `pg_hba.conf`; the container IP is static).
+
+Tests gate on `SSQL_TEST_PG_HOST=ssql-node1` and skip without it, like
+`SSQL_TEST_SSH_HOST`. Data lives in the `ssql` database; tests should
+create and drop their own tables (`emp`, `raw*` were the ad-hoc ones).
