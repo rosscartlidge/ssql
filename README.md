@@ -210,6 +210,8 @@ ssql generate go -run -pipeline 'ssql from parquet shuffled.parquet \
 
 | Engine | Wall | Peak memory |
 |---|---:|---:|
+| PostgreSQL 16, `generate sql` output, after an 11 s `COPY` load | 13.0 s | 1.7 GB table |
+| PostgreSQL 16, native `GROUP BY CUBE`, after the same load | 5.1 s | 1.7 GB table |
 | DuckDB 1.5, `generate sql` output | 0.95 s | 2.7 GB |
 | **ssql `generate go` (typed, default)** | **0.27 s** | **0.69 GB** |
 
@@ -226,8 +228,15 @@ you typed and the one it implements.
 
 Honest framing: this is a scan-and-aggregate query, where a pruned
 parallel read wins. On the join-heavy benchmark below DuckDB is still
-ahead. Reproduce it with any parquet file you have — the pipeline is
-the only input.
+ahead. Postgres is in the table for scale, not as a target: it has to
+load the file first, its grouping sets do not parallelise, and the
+cube's `IS NOT DISTINCT FROM` joins cannot hash-join there — on a plain
+three-key `GROUP BY` of the loaded table it runs 0.30 s, level with
+ssql. Same machine and file for every row; the full Postgres run
+(tuned settings, `file_fdw`, plans) is in
+[DuckDB vs ssql](doc/research/duckdb-vs-ssql.md#measured-the-readme-cube-benchmark-on-duckdb-postgresql-and-ssql-2026-09-15).
+Reproduce it with any parquet file you have — the pipeline is the only
+input.
 
 ### ⚡ **High-Performance Typed Pipelines** — `ssql/typed`
 

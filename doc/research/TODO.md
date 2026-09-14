@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-09-14
+Last modified: 2026-09-15
 
 [Back to Index](./README.md)
 
@@ -27,6 +27,8 @@ Tracked issues and feature gaps discovered during development.
 - [x] **include / exclude** — `include` translates to explicit column list, `exclude` uses DuckDB's `SELECT * EXCLUDE (...)`.
 - [x] **from ssh / from catalog** — errors clearly: "has no SQL equivalent — it is an ssql-specific distributed feature".
 - [x] **`top` translation** (v4.55.0) — `translateTop` had gone stale: it looked for the long-removed `-by` flag (so it emitted **no `ORDER BY`**) and treated `args[0]` as N (so `-asc` became `LIMIT -asc`). Now emits `ORDER BY FIELD DESC|ASC LIMIT N` (N = first bare positional; field from `-field`/`-f`; `-asc` → ASC). Covered by `TestTranslateTopSQL`.
+
+- [ ] **Postgres portability of the cube emulation** (measured 2026-09-15, duckdb-vs-ssql.md §Measured): the `-cube`/`-rollup` SQL joins on `IS NOT DISTINCT FROM` (nested loops only in Postgres) through a CTE referenced 7× (materialised, scanned serially) — 13 s on the 14.6 M-row table vs Postgres's own `GROUP BY CUBE` at 5.1 s and its plain parallel GROUP BY at 0.30 s. Not a DuckDB problem (0.91 s). If a Postgres target ever matters: emit native `GROUP BY CUBE` when the dialect has it, or null-safe equality as `a = b OR (a IS NULL AND b IS NULL)`.
 
 ### Remaining quirks (found during the v4.55.0 `top` differential work)
 

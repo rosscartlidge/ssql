@@ -2,7 +2,7 @@
 
 Reference: DFC060
 Created: 2026-03-20
-Last modified: 2026-03-20
+Last modified: 2026-09-15
 
 [Back to Index](./README.md)
 
@@ -445,3 +445,59 @@ The two tools serve different niches:
 | Quick shell one-liners | Both (ssql with completion, DuckDB with SQL) |
 
 The `generate sql` feature would bridge them: prototype in ssql with tab completion and streaming, then generate the DuckDB query for production-scale execution.
+
+## Measured: the README cube benchmark on DuckDB, PostgreSQL and ssql (2026-09-15)
+
+Ross: "could you try our benchmark we used on duckdb to see what postgres
+performance is like". Same machine (24 cores, 62 GB), same 14.6 M-row
+file (`shuffled.csv` 1.2 GB / `shuffled.parquet` 660 MB), same query —
+the README's three-field cube with counts at every level. PostgreSQL
+16.15 runs in the LXD rig container `ssql-node1` with no resource
+limits, so it sees the same cores and memory; the CSV is mounted into
+the container read-only. Postgres cannot query a file in a `FROM`
+clause, so it has two paths: load first (`COPY`), or `file_fdw`.
+
+| Engine / path | Wall | Notes |
+|---|---:|---|
+| **ssql `generate go`, Parquet** (compiled binary, run only) | **0.23–0.28 s** | 0.7 GB peak; +1.3 s compile if you count `-run` |
+| ssql `generate go`, CSV | 1.8–2.0 s | 1.5 GB peak |
+| DuckDB 1.5, Parquet | 0.91 s | 2.6 GB peak |
+| DuckDB 1.5, CSV | 1.40 s | 2.5 GB peak |
+| Postgres `COPY` load of the CSV (once) | 11.3 s | 1.7 GB table |
+| Postgres, generated cube SQL, loaded table, defaults | 13.0 s | serial: the shared CTE is materialised (7 references) and scanned 7× |
+| Postgres, generated cube SQL, tuned¹ | 13.5 s | unchanged — CTE scans cannot be parallel |
+| Postgres, generated cube SQL, `NOT MATERIALIZED` CTE, tuned | **cancelled at 5 min 47 s** | `IS NOT DISTINCT FROM` joins are nested loops in Postgres; without the CTE each inner side is a re-run parallel aggregate |
+| Postgres, native `GROUP BY CUBE`, defaults | 5.8 s | `MixedAggregate` over a serial scan |
+| Postgres, native `GROUP BY CUBE`, tuned¹ | 5.1–5.4 s | parallel scan, but grouping sets are not partially aggregated in PG 16 |
+| Postgres, native `GROUP BY CUBE` via `file_fdw` on the CSV | 11.6 s | single-threaded CSV parse, closest analogue to DuckDB reading the file |
+| Postgres, plain 3-key `GROUP BY` (no cube), tuned¹ | **0.30 s** | partial + finalize hash aggregate over 8 workers |
+
+¹ `work_mem = 1GB`, `max_parallel_workers_per_gather = 8`, parallel
+setup/tuple cost 0, `min_parallel_table_scan_size = 0`.
+
+Results agree: the generated form returns 160 rows on all three
+engines; native `CUBE` returns 590 (every grouping set as its own rows —
+a different shape from ssql's enriched-detail form, listed for
+Postgres's benefit since it is the form its optimiser understands).
+
+**Reading it.** Postgres is a fine aggregator once the data is in a
+table — its plain parallel GROUP BY at 0.30 s is level with compiled
+ssql and ahead of DuckDB — but the cube is where it falls down: grouping
+sets do not parallelise, and the `generate sql` cube emulation (a CTE
+referenced seven times, joined on `IS NOT DISTINCT FROM`) hits two
+Postgres-specific walls at once: a multiply-referenced CTE is
+materialised and scanned serially, and `IS NOT DISTINCT FROM` is not a
+hashable join operator, so the alternative is nested loops. Add the
+11 s load that DuckDB and ssql never pay and the honest comparison is
+~25 s end-to-end for Postgres against 0.9 s and 0.3 s. That is the
+expected result for a row store designed around transactions, not a
+criticism of it; it is the reason "faster than DuckDB" is the claim
+worth making and "faster than Postgres" is not interesting.
+
+**For `generate sql`.** The output is DuckDB's dialect by design
+(codelab §7). Two portability notes from this run for anyone pointing
+it at Postgres: prefer `a = b OR (a IS NULL AND b IS NULL)`, or a
+native `GROUP BY CUBE` rewrite, over `IS NOT DISTINCT FROM` joins; and
+a CTE referenced more than once will be materialised — `NOT
+MATERIALIZED` is worse here, not better. Neither is worth changing the
+DuckDB output for; both belong in the TODO under SQL Generation.
