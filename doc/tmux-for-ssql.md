@@ -1,8 +1,11 @@
 # tmux for the ssql Codelab
 
-The [CLI Codelab](cli-codelab.md) asks you to work inside tmux, because
-ssql's Alt-h, Alt-g and Alt-r answers open as popups over your command
-line there and vanish when you are done. tmux is a terminal multiplexer:
+tmux is optional for the [CLI Codelab](cli-codelab.md): without it,
+ssql's Alt-h, Alt-g and Alt-r answers open in your pager (long ones) or
+print below the prompt (short ones), and everything works. With it they
+open as popups over your command line and vanish when you are done, and
+your session survives closing the terminal. If you already use tmux, or
+want to, this page is the five things that matter for ssql. tmux is a terminal multiplexer:
 a program that runs a shell inside your terminal window, can draw over
 it, and keeps that shell alive if your terminal closes. You need about
 five things from it; this page is those five, with the settings that

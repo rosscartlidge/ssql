@@ -11,8 +11,8 @@ install.
 **How to use it:** Part 1 gets you doing useful things in about ten
 minutes; each block answers a question about the data, and you should
 see the answer. Part 2 adds the sophisticated features one at a time,
-each introduced by the problem it solves. Type the commands yourself
-inside tmux — the completion and help popups are half the experience.
+each introduced by the problem it solves. Type the commands yourself —
+the completion and help at the prompt are half the experience.
 
 ## Table of Contents
 
@@ -80,38 +80,17 @@ cd ssql-codelab
 If you edit a file while experimenting and want the original back,
 `ssql codelab -force` rewrites the set.
 
-**Start tmux, in that directory.** ssql is designed to be *discovered
-from the prompt*: Tab completes commands, flags and file names; Ctrl-O
-completes field names and field values from your data, at any point in
-a pipeline; Alt-h explains whatever is under your cursor. Inside tmux those answers open
-as small popups over your command line and vanish when you pick one;
-outside tmux a long answer (a function reference, generated code) opens
-in your pager — `q` brings the line back — and a short one prints
-inline below the prompt. tmux is the nicer experience, not a
-requirement. tmux is a terminal multiplexer — a program that runs a shell
-inside your terminal window and can draw over it. Install it and start
-it (it needs to be 3.2 or newer for popups; Ubuntu 22.04 and later, and
-Debian 12 and later, qualify):
+**Turn on completion in your shell.** ssql is designed to be
+*discovered from the prompt*: Tab completes commands, flags and file
+names; Ctrl-O completes field names and field values from your data, at
+any point in a pipeline; Alt-h explains whatever is under your cursor.
+A plain terminal is all you need: a long answer opens in your pager
+(`q` brings the line back) and a short one prints below the prompt.
+(Already a tmux user? The answers pop up over your line there —
+[tmux for the ssql Codelab](tmux-for-ssql.md) has the two settings that
+matter. If not, don't bother now; nothing here needs it.)
 
-```bash
-# codelab: skip — tmux (run once by hand)
-sudo apt-get install -y tmux      # macOS: brew install tmux
-tmux new -s ssql
-```
-
-Your prompt comes back with a green status bar along the bottom: you
-are now in a bash shell inside tmux, still in `ssql-codelab`, and
-everything that follows is typed there. The session is named `ssql`, so
-if you close the terminal or come back tomorrow, `tmux attach -t ssql`
-returns you to it, output and all. New to tmux? [tmux for the ssql
-Codelab](tmux-for-ssql.md) is a five-minute page: the mouse settings
-that make the wheel scroll and drag-select copy like a normal terminal,
-detaching and reattaching, a second shell for `ssql serve`, and the one
-setting (`escape-time`) that makes Alt-h feel instant. When you are done
-for the day, `exit` leaves tmux like any other shell.
-
-**Turn on completion in that shell.** This is the most important line
-in the tutorial. It works in bash (the default shell on Debian, Ubuntu
+This is the most important line in the tutorial. It works in bash (the default shell on Debian, Ubuntu
 and most Linux; if `echo $SHELL` says something else, run `bash` first):
 
 ```bash
@@ -177,11 +156,11 @@ binds.
 From here on, whenever a flag or field name is mentioned, remember you
 never have to type it from memory.
 
-**Two checks before starting.** tmux gave you a new shell, so make sure
-it finds `ssql` (that is your `~/.bashrc` PATH line at work — if this
-says "command not found", run the `export PATH=…` line from above in
-this shell) and that you are in the data directory (`ls` should show
-`employees.csv` and friends):
+**Two checks before starting.** Make sure this shell finds `ssql`
+(that is your `~/.bashrc` PATH line at work — if this says "command not
+found", run the `export PATH=…` line from above in this shell) and that
+you are in the data directory (`ls` should show `employees.csv` and
+friends):
 
 ```bash
 ssql version
@@ -590,7 +569,7 @@ runs it. Both act on the `ssql` stages only: a `| less` or `> out.txt`
 after them, or a `cat file |` before, stays part of your shell line and
 receives the compiled program's output exactly as it would the
 interpreted one. Alt-r compiles and
-runs it (both `-shell-init` keys; popups in tmux):
+runs it (both `-shell-init` keys):
 
 ```
 ssql from employees.csv | ssql where -if age gt 30 | ssql to table  <Alt-g>

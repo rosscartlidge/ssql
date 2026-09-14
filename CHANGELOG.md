@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pager` overrides the choice. tmux is now the nicer experience rather
   than a requirement (DFC127 §3).
 
+### Changed
+- Codelab: tmux is no longer a setup step. Completion and help are
+  introduced as working in a plain terminal (the pager fallback makes
+  that true), with a one-line pointer to the tmux page for people who
+  already use it.
+
 ### Fixed
 - **Alt-h inside a quoted expression with spaces** (`-if-expr 'salary >
   1000 && bucket(ts, `) showed only the flag's help: the binding split
