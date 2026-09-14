@@ -13,8 +13,8 @@ time series. It assumes that codelab: `from … | … | to table`, `where`,
 `group-by`, and the prompt's Tab / Ctrl-O / Alt-h are not re-explained.
 Every block *is* run by the codelab runner
 (`./codelab-run.sh signal` beside the data `ssql codelab` writes, or
-`doc/codelab-data/codelab-run.sh doc/cli-signal-processing.md` in the
-repository — DFC125), so what you read is what happens.
+[`doc/codelab-data/codelab-run.sh`](codelab-data/codelab-run.sh) `doc/cli-signal-processing.md` in the
+repository — [DFC125](research/dfc125_codelab_guided_path.md)), so what you read is what happens.
 
 ## Table of Contents
 

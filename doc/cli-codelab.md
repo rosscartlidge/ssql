@@ -2,9 +2,9 @@
 
 A guided path through `ssql`, the Unix-pipeline data tool. Every command
 below runs against a handful of small files that `ssql codelab` writes
-out for you (checked in as `doc/codelab-data/`) — and every
+out for you (checked in as [`doc/codelab-data/`](codelab-data/)) — and every
 block in this document *is* run, by `codelab-run.sh`, so what you read
-is what happens (DFC125). `ssql codelab` writes that runner beside the
+is what happens ([DFC125](research/dfc125_codelab_guided_path.md)). `ssql codelab` writes that runner beside the
 data: `./codelab-run.sh` executes every block here against your own
 install.
 
@@ -682,4 +682,4 @@ Next on the [learning path](README.md#learning-path): the
 time series; otherwise the [Getting Started Guide](codelab-intro.md) — the
 Go library the CLI is built on, and what `generate go` produced in §7.
 [ai-code-generation.md](ai-code-generation.md) has an LLM write pipelines
-for you; `doc/research/` is the design record.
+for you; [`doc/research/`](research/README.md) is the design record.
