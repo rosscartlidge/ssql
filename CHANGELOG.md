@@ -7,15 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **`doc/tmux-for-ssql.md`** — a five-minute tmux page for codelab readers
-  (review feedback): install and a named session, the `~/.tmux.conf`
-  lines that make the wheel scroll and drag-select copy like a normal
-  terminal (`mouse on`, `history-limit`, `set-clipboard`, plus
-  `escape-time 10` so Alt-h/g/r register at once), the Shift-drag /
-  `xclip` clipboard routes for terminals that ignore OSC 52, detach and
-  reattach, windows and panes for `ssql serve`, and troubleshooting.
-  The codelab's Setup starts `tmux new -s ssql` and links to it.
+## [4.98.0] - 2026-09-14
 
 ### Added
 - **Popups without tmux.** Outside tmux, an Alt-h / Alt-g / Alt-r answer
@@ -25,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than a requirement (DFC127 §3).
 
 ### Changed
+- **`doc/tmux-for-ssql.md`** — a five-minute tmux page for codelab readers
+  (review feedback): install and a named session, the `~/.tmux.conf`
+  lines that make the wheel scroll and drag-select copy like a normal
+  terminal (`mouse on`, `history-limit`, `set-clipboard`, plus
+  `escape-time 10` so Alt-h/g/r register at once), the Shift-drag /
+  `xclip` clipboard routes for terminals that ignore OSC 52, detach and
+  reattach, windows and panes for `ssql serve`, and troubleshooting.
+  Linked from the codelab for people who already use tmux.
+- Codelab §2: for other tools, end with `to jsonl` (DuckDB `COPY … TO`
+  / `read_json_auto` NDJSON, Postgres `row_to_json`) or `to json`
+  (DuckDB `ARRAY true`, Postgres `json_agg`) so the `_schema` line is
+  left out — with the header in, DuckDB reads one phantom row (review).
+- DFC127: a Bubble Tea terminal UI is discussed and parked — the shell
+  is the pipeline builder; a console TUI over SSH is a GopherCon-scale
+  unit, revisited at planning.
 - Codelab: tmux is no longer a setup step. Completion and help are
   introduced as working in a plain terminal (the pager fallback makes
   that true), with a one-line pointer to the tmux page for people who
