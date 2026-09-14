@@ -135,6 +135,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC125 | 2026-09-04 | 2026-09-07 | [The Codelab as a Guided Path: Confidence Before Sophistication](./dfc125_codelab_guided_path.md) |
 | DFC126 | 2026-09-08 | 2026-09-10 | [The Codelab From Scratch in a Mint Container](./dfc126_codelab_from_scratch_in_a_mint_container.md) |
 | DFC127 | 2026-09-12 | 2026-09-14 | [A Terminal UI for ssql? (Bubble Tea)](./dfc127_terminal_ui_bubbletea.md) |
+| DFC128 | 2026-09-14 | 2026-09-14 | [JSON Interchange with DuckDB and Postgres, and the Time Type Question](./dfc128_json_interchange_and_time_type.md) |
 
 <!-- DFC-INDEX-END -->
 
