@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.98.1] - 2026-09-14
+
+### Fixed
+- **`go install …@v4.98.0` failed** with `create zip: malformed file
+  path "doc/codelab-data/select 1 as a, 'x' as b"`: a stray DuckDB
+  database (a `duckdb` call had taken its SQL as a filename) was swept
+  into 9ecffec by `git add doc/`. It was never embedded, so the 4.98.0
+  binaries run correctly — but the Go module zip refuses the quote in
+  the name, so `go install …@v4.98.0` fails, and so do `generate go
+  -run` / `-build` and Alt-r from a 4.98.0 binary, which pin the module
+  at the binary's version. Removed; a new
+  root test, `TestModuleZipPaths`, runs every tracked path through
+  `golang.org/x/mod/zip.CheckFiles` (the proxy's own rules) so a bad
+  path fails the unit gate before a tag exists.
+
 ## [4.98.0] - 2026-09-14
 
 ### Added
