@@ -36,31 +36,18 @@ _ssql_help_at() {
     # <(…) process substitution is not a stage boundary, and inside a procsub
     # the stage is within it). See cursor_context.go.
     local before="${READLINE_LINE:0:$READLINE_POINT}"
+    # Only act on ssql stages (paren-aware: a pipe inside <(…) is not a
+    # stage boundary — see cursor_context.go).
     local stage
     stage=$(command ssql -cursor-stage "$before" 2>/dev/null)
-    # Only act on ssql stages.
-    [[ "$stage" == ssql* || "$stage" == ssql ]] || return
+    [[ "$stage" == ssql* ]] || return
 
-    # Split the stage into words (no globbing). words[0] is "ssql".
-    local -a words
-    read -ra words <<< "$stage"
-    (( ${#words[@]} >= 1 )) || return
-
-    # COMP_WORDS-style position: index of the word under the cursor, counting
-    # "ssql" as 0. A trailing space means the cursor is on a new empty word.
-    local pos
-    local -a args=("${words[@]:1}")
-    if [[ "$stage" =~ [[:space:]]$ ]]; then
-        pos=${#words[@]}
-        args+=("")            # the empty word the cursor sits on (read drops it)
-    else
-        pos=$(( ${#words[@]} - 1 ))
-    fi
-
-    # Capture stderr+exit so a failure (e.g. an unrecognized command at the
-    # cursor) surfaces in the popup rather than flashing nothing.
+    # ssql finds the word under the cursor itself, quote-aware: an -if-expr
+    # with spaces is one word (bash's read -ra would split it and lose the
+    # expression argument). Capture stderr+exit so a failure surfaces in the
+    # popup rather than flashing nothing.
     local help rc
-    help=$(command ssql -help-at "$pos" "${args[@]}" 2>&1)
+    help=$(command ssql -help-at-cursor "$before" 2>&1)
     rc=$?
     if (( rc != 0 )) || [[ -z "$help" ]]; then
         _ssql_show_help "ssql: no help available here
@@ -94,7 +81,9 @@ bind -m vi-command -x '"\eH": _ssql_help_keys'
 // is a bare ":") when inside tmux, and inline below the prompt otherwise. Both
 // emitters embed it so each `eval` is self-contained; sourcing both just
 // redefines it identically.
-const ssqlPopupFunc = `# Show text in a tmux popup when inside tmux, inline otherwise.
+const ssqlPopupFunc = `# Show text in a tmux popup when inside tmux; otherwise in the pager when
+# it would not fit below the prompt (and the terminal is interactive); else
+# inline. SSQL_POPUP=inline forces inline, SSQL_POPUP=pager forces the pager.
 _ssql_show_help() {
     [[ -n "$1" ]] || return
     if [[ -n "$TMUX" ]]; then
@@ -112,9 +101,30 @@ _ssql_show_help() {
         # as an argument) so less shows its bare ":" prompt — as it does for
         # piped input — instead of the ugly /tmp/tmp.XXXX path.
         tmux display-popup -w "$w" -h "$h" -E "\${PAGER:-less -R} < '$tmpf'; rm -f '$tmpf'"
+    elif [[ "${SSQL_POPUP:-auto}" != inline && -t 1 && -t 0 ]] && _ssql_needs_pager "$1"; then
+        # No tmux: the pager (less) uses the alternate screen, so a long
+        # answer — the function reference, generated Go — reads like a popup
+        # and 'q' restores the line exactly as it was. Short answers stay
+        # inline, where they are quicker to read than a pager.
+        local tmpf
+        tmpf=$(mktemp) || { printf '\n%s\n' "$1"; return; }
+        printf '%s\n' "$1" > "$tmpf"
+        ${PAGER:-less -R} < "$tmpf"
+        rm -f "$tmpf"
     else
         printf '\n%s\n' "$1"
     fi
+}
+
+# Would this text scroll the prompt away? (more lines than the terminal has,
+# less a margin) — or the user asked for the pager outright.
+_ssql_needs_pager() {
+    [[ "${SSQL_POPUP:-auto}" == pager ]] && return 0
+    local n rows
+    n=$(printf '%s\n' "$1" | wc -l)
+    rows=$LINES
+    [[ "$rows" =~ ^[0-9]+$ && rows -gt 0 ]] || rows=$(tput lines 2>/dev/null || echo 24)
+    (( n > rows - 3 ))
 }
 
 # Strip the redundant per-stage re-reports a codegen error accumulates — each

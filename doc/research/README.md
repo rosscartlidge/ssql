@@ -134,7 +134,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC124 | 2026-09-03 | 2026-09-07 | [Missing Values Across the Lanes: An Empty Cell Is Absent](./dfc124_missing_values.md) |
 | DFC125 | 2026-09-04 | 2026-09-07 | [The Codelab as a Guided Path: Confidence Before Sophistication](./dfc125_codelab_guided_path.md) |
 | DFC126 | 2026-09-08 | 2026-09-10 | [The Codelab From Scratch in a Mint Container](./dfc126_codelab_from_scratch_in_a_mint_container.md) |
-| DFC127 | 2026-09-12 | 2026-09-12 | [A Terminal UI for ssql? (Bubble Tea)](./dfc127_terminal_ui_bubbletea.md) |
+| DFC127 | 2026-09-12 | 2026-09-14 | [A Terminal UI for ssql? (Bubble Tea)](./dfc127_terminal_ui_bubbletea.md) |
 
 <!-- DFC-INDEX-END -->
 

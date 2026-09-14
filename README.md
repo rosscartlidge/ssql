@@ -188,7 +188,9 @@ ssql functions       # ~80 expression functions (also shown by Alt-h on an expr 
 ssql conventions     # cross-cutting semantics: update SET, _schema headers, SSQL_MODE, …
 ```
 
-> Popups use `tmux display-popup` when you're in tmux, falling back to inline
+> Popups use `tmux display-popup` when you're in tmux; outside tmux a long
+> answer opens in `$PAGER` (less: `q` restores the line) and a short one
+> prints inline (`SSQL_POPUP=inline|pager` overrides), falling back to inline
 > output otherwise. Bindings are installed in the emacs, vi-insert and
 > vi-command keymaps, so they work whichever editing mode you prefer.
 

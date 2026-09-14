@@ -66,6 +66,13 @@ true   # swallow the guard-path return status so Output() doesn't error
 		t.Errorf("help on an expression arg missing the function list:\n%s", got)
 	}
 	// On a non-expression arg (the field name of -set-expr), it must NOT append.
+	// An expression WITH SPACES inside quotes is still one word — the
+	// bash-side read -ra split it and lost the expression arg until v4.98.0.
+	spaced := "ssql from csv x.csv | ssql where -if-expr 'salary > 1000 && bucket(ts, "
+	got = run(spaced, len(spaced))
+	if !strings.Contains(got, "bucket(ts, dur)") || strings.Contains(got, "STRING FUNCTIONS") {
+		t.Errorf("Alt-h inside a quoted, spaced expression should show the bucket entry, got:\n%s", got)
+	}
 	fieldLine := "ssql from csv x.csv | ssql update -set-expr "
 	if got := run(fieldLine, len(fieldLine)); strings.Contains(got, "EXPRESSION FUNCTIONS") {
 		t.Errorf("help on the field arg should NOT append functions:\n%s", got)

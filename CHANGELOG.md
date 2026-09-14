@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reattach, windows and panes for `ssql serve`, and troubleshooting.
   The codelab's Setup starts `tmux new -s ssql` and links to it.
 
+### Added
+- **Popups without tmux.** Outside tmux, an Alt-h / Alt-g / Alt-r answer
+  longer than the terminal opens in `$PAGER` (less: `q` restores the
+  line); short answers print inline as before. `SSQL_POPUP=inline` or
+  `pager` overrides the choice. tmux is now the nicer experience rather
+  than a requirement (DFC127 §3).
+
+### Fixed
+- **Alt-h inside a quoted expression with spaces** (`-if-expr 'salary >
+  1000 && bucket(ts, `) showed only the flag's help: the binding split
+  the stage with bash's `read -ra`, which ignores quotes, so the cursor
+  was never on the expression argument. A new `ssql -help-at-cursor
+  BEFORE` protocol call finds the stage and the word under the cursor
+  quote-aware, in one place.
+
 ## [4.97.0] - 2026-09-10
 
 ### Added

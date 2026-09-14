@@ -85,8 +85,10 @@ from the prompt*: Tab completes commands, flags and file names; Ctrl-O
 completes field names and field values from your data, at any point in
 a pipeline; Alt-h explains whatever is under your cursor. Inside tmux those answers open
 as small popups over your command line and vanish when you pick one;
-outside tmux they print inline below the prompt, which works but is
-noisier. tmux is a terminal multiplexer — a program that runs a shell
+outside tmux a long answer (a function reference, generated code) opens
+in your pager — `q` brings the line back — and a short one prints
+inline below the prompt. tmux is the nicer experience, not a
+requirement. tmux is a terminal multiplexer — a program that runs a shell
 inside your terminal window and can draw over it. Install it and start
 it (it needs to be 3.2 or newer for popups; Ubuntu 22.04 and later, and
 Debian 12 and later, qualify):

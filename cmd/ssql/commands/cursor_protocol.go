@@ -15,6 +15,8 @@ import (
 //	-complete-source BEFORE   → upstream pipeline for schema-driven completion
 //	-cursor-stage    BEFORE   → current pipeline stage at the cursor
 //	-help-at POS ARGS...      → autocli help for the word at POS
+//	-help-at-cursor BEFORE    → the same for the word under the cursor, BEFORE
+//	                            being the line up to it (stage + words found here)
 //	-split-pipeline LINE      → prefix / ssql pipeline / suffix, one per line
 //
 // args is os.Args[1:]; root builds the command tree (called lazily — only
@@ -45,31 +47,53 @@ func HandleCursorProtocol(args []string, root func() *cf.Command) (stdout, stder
 		if err != nil {
 			return "", fmt.Sprintf("invalid position: %s\n", args[1]), 1, true
 		}
-		rest := args[2:]
-		help, herr := root().HelpAt(rest, pos)
-		if herr != nil {
-			return "", fmt.Sprintf("%v\n", herr), 1, true
+		return helpAtWords(root(), args[2:], pos)
+	case "-help-at-cursor":
+		// The whole line up to the cursor. The stage at the cursor is found
+		// paren-aware and split into words QUOTE-aware here — the Alt-h
+		// binding used to split with bash's `read -ra`, which ignores
+		// quotes, so an -if-expr containing a space was never recognised as
+		// an expression argument and Alt-h showed only the flag.
+		before := args[1]
+		stage := CursorTopLevelStage(before)
+		toks, openQuote := tokenizeStageOpen(stage)
+		if len(toks) == 0 || (toks[0] != "ssql" && toks[0] != "ssql_gpu") {
+			return "", "not an ssql stage\n", 1, true
 		}
-		// Writing an expression is hard without knowing the functions.
-		// On an expression arg: the cursor on (or inside the call of) a
-		// known function gets that function's entry; anywhere else in the
-		// expression gets the whole reference. The word arrives cut at
-		// the cursor, so the function under it is the trailing
-		// identifier, or the innermost unclosed call around it.
-		if ExprArgAtCursor(root(), rest, pos) {
-			ref := FunctionsReference
-			// pos counts the program name at 0; rest starts after it.
-			if pos >= 1 && pos-1 < len(rest) {
-				for _, name := range exprFunctionCandidates(rest[pos-1]) {
-					if entry, ok := FunctionEntry(name); ok {
-						ref = entry + "\n(Alt-h elsewhere in the expression, or `ssql functions`, for the full reference)\n"
-						break
-					}
-				}
-			}
-			help = strings.TrimRight(help, "\n") + "\n\n" + ref
+		pos := len(toks) - 1
+		// A trailing space starts a new, empty word the cursor sits on —
+		// unless the cursor is still inside an unclosed quote, where the
+		// space is part of the expression being typed.
+		if !openQuote && (strings.HasSuffix(stage, " ") || strings.HasSuffix(stage, "\t")) {
+			toks = append(toks, "")
+			pos = len(toks) - 1
 		}
-		return help, "", 0, true
+		return helpAtWords(root(), toks[1:], pos)
 	}
 	return "", "", 0, false
+}
+
+// helpAtWords is the shared body of -help-at and -help-at-cursor: autocli's
+// help for the word at pos (program name at 0; rest starts after it), and,
+// on an expression argument, the function reference — the entry for the
+// function the cursor is on or inside (exprFunctionCandidates on the word,
+// which arrives cut at the cursor), else the whole list.
+func helpAtWords(tree *cf.Command, rest []string, pos int) (string, string, int, bool) {
+	help, herr := tree.HelpAt(rest, pos)
+	if herr != nil {
+		return "", fmt.Sprintf("%v\n", herr), 1, true
+	}
+	if ExprArgAtCursor(tree, rest, pos) {
+		ref := FunctionsReference
+		if pos >= 1 && pos-1 < len(rest) {
+			for _, name := range exprFunctionCandidates(rest[pos-1]) {
+				if entry, ok := FunctionEntry(name); ok {
+					ref = entry + "\n(Alt-h elsewhere in the expression, or `ssql functions`, for the full reference)\n"
+					break
+				}
+			}
+		}
+		help = strings.TrimRight(help, "\n") + "\n\n" + ref
+	}
+	return help, "", 0, true
 }

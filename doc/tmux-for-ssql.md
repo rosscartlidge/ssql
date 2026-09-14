@@ -101,9 +101,11 @@ Ctrl-b x        close the current pane
 
 ## 5. If something looks wrong
 
-- **The popups print inline instead of floating.** tmux is older than
-  3.2 (`tmux -V`), or the shell you are typing in is not inside tmux
-  (`echo $TMUX` is empty). Inline is the fallback and works.
+- **The popups do not float.** tmux is older than 3.2 (`tmux -V`), or
+  the shell you are typing in is not inside tmux (`echo $TMUX` is
+  empty). Without tmux a long answer opens in your pager (`q` to return)
+  and a short one prints inline — everything still works, tmux just
+  looks nicer.
 - **Alt-h does nothing.** The terminal is keeping Alt for itself: press
   Escape then h, or on macOS enable "Use Option as Meta key" in the
   terminal's keyboard settings.

@@ -2,7 +2,7 @@
 
 Reference: DFC127
 Created: 2026-09-12
-Last modified: 2026-09-12
+Last modified: 2026-09-14
 
 [Back to Index](./README.md)
 
@@ -73,7 +73,13 @@ a popup and needs nothing installed. `interactive-help-at-cursor.md`
 version. This is an hour's work in `ssqlPopupFunc` and would remove
 tmux from the codelab's critical path (tmux would remain the nicer
 experience, not the required one). **This is the thing to do first if
-the tmux friction persists.**
+the tmux friction persists.** *Done 2026-09-14:* `_ssql_show_help`
+sends answers longer than the terminal to `${PAGER:-less -R}` when
+not in tmux and stdout is a terminal; short ones stay inline;
+`SSQL_POPUP=inline|pager` overrides. Building it exposed an older bug —
+the Alt-h binding split the stage with bash's `read -ra`, so a quoted
+expression containing a space was never seen as an expression argument;
+`-help-at-cursor` now does the quote-aware split in Go.
 
 ## 4. The case *for* a TUI: the console over SSH
 

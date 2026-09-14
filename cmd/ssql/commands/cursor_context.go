@@ -202,6 +202,14 @@ func firstProcsub(s string) string {
 // tokenizeStage splits a stage on whitespace at paren depth 0, keeping a
 // <(...) process substitution as a single token.
 func tokenizeStage(s string) []string {
+	toks, _ := tokenizeStageOpen(s)
+	return toks
+}
+
+// tokenizeStageOpen is tokenizeStage plus whether the text ended inside an
+// unclosed quote — the cursor is then still within that last word, and
+// trailing whitespace belongs to it rather than starting a new word.
+func tokenizeStageOpen(s string) ([]string, bool) {
 	var toks []string
 	var cur strings.Builder
 	depth := 0
@@ -211,9 +219,18 @@ func tokenizeStage(s string) []string {
 			cur.Reset()
 		}
 	}
+	var quote byte // inside '…' or "…": spaces do not split (an -if-expr with spaces is ONE word)
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+			cur.WriteByte(c)
+		case c == '\'' || c == '"':
+			quote = c
+			cur.WriteByte(c)
 		case c == '(':
 			depth++
 			cur.WriteByte(c)
@@ -229,7 +246,7 @@ func tokenizeStage(s string) []string {
 		}
 	}
 	flush()
-	return toks
+	return toks, quote != 0
 }
 
 // joinRightFieldSlot reports whether the cursor (end of stage) sits at a join

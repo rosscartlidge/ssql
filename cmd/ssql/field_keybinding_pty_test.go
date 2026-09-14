@@ -37,7 +37,7 @@ def run(vi):
         return o
     time.sleep(0.6); drain()
     send("export PATH=%s:$PATH\n" % binDir); drain()
-    send("unset TMUX\n"); drain()
+    send("unset TMUX; export SSQL_POPUP=inline\n"); drain()
     send("bind 'set keyseq-timeout 1'\n"); drain()      # low timeout: single key must not care
     send('eval "$(ssql -field-keybinding)"\n'); drain()
     if vi:
@@ -72,7 +72,7 @@ def run_value(vi):
         return o
     time.sleep(0.6); drain()
     send("export PATH=%s:$PATH\n" % binDir); drain()
-    send("unset TMUX\n"); drain()
+    send("unset TMUX; export SSQL_POPUP=inline\n"); drain()
     send("bind 'set keyseq-timeout 1'\n"); drain()
     send('eval "$(ssql -field-keybinding)"\n'); drain()
     if vi:
