@@ -10,6 +10,7 @@ require (
 	github.com/rosscartlidge/autocli/shell v0.5.0
 	github.com/rosscartlidge/autocli/ssh v0.1.14
 	github.com/xuri/excelize/v2 v2.10.0
+	golang.org/x/mod v0.35.0
 )
 
 require (
@@ -33,7 +34,6 @@ require (
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/exp v0.0.0-20240222234643-814bf88cf225 // indirect
-	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
