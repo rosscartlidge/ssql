@@ -91,6 +91,8 @@ Tracked issues and feature gaps discovered during development.
 
 ## Next up (refreshed 2026-09-01 — build-ready first, then polish, then parked)
 
+- [ ] **Group-by aggregates: first/last/any/count-distinct/string-agg, then median/percentile/stddev/variance/mode, then arg-max/arg-min** — plan in [DFC129](./dfc129_groupby_aggregates.md) (2026-09-15, Ross: "we are missing some standard aggregation functions"). Decision: flags, not expressions (`-expr` is interpreter-only, ~1.5× slower, and falls off the typed lane for anything but sum/len; no SQL); one `aggDef` registry so a flag stops touching nine files; seven accumulator kinds. Found on the way: **`-min`/`-max` on a string field prints `0` in exec** (typed refuses loudly, DuckDB answers `Bob`, `-expr 'min(name)'` answers `Alice`) — fail-loudly violation + lane disagreement, fix first; `doc/ai-code-generation.md` documents `ssql.First`/`ssql.Last`, which do not exist.
+
 **Build-ready units, in suggested order:**
 1. ~~`resample` + `bucket()`~~ SHIPPED 2026-09-01 — COMPLETE incl. the generate-sql DuckDB ASOF translation (duckdb equivalence lane green, sabotage-verified)
 2. ~~Pipeline IR arc (DFC123) slices 1–4 + dead-sort elimination~~ SHIPPED 2026-09-03 (see the DFC123 entry below for what remains)
