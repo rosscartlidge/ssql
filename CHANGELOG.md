@@ -35,6 +35,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frame are absent — SQL's NULL. Materialised path only: `-presorted`
   refuses these with the reason (the aggregates have no Remove yet).
 
+- **RANGE frames** (DFC130 unit 3): `window -range-preceding V` /
+  `-range-following V` select the rows whose single `-order` value lies
+  within V of the current row's — a number for a numeric field
+  (`-order salary -range-preceding 10000`), a duration for a time field
+  (`-order ts -range-preceding 5m`; `d` for days is accepted), or
+  `unbounded`. Peers (equal order values) are always in the frame, as in
+  SQL's `RANGE … CURRENT ROW`; `-range-preceding 0` is "this row and its
+  peers". Every window function works over a RANGE frame (it resolves per
+  row to an exact ROWS frame). Exec, record codegen and `generate sql`
+  (`RANGE BETWEEN 10000 PRECEDING AND CURRENT ROW`, `INTERVAL '300
+  seconds' PRECEDING`). Loud: two order fields, mixing with
+  `-preceding`/`-following`, a duration on a numeric field or a number on
+  a time field, a text order field. Not streamable yet (`-presorted`
+  refuses). `ssql.WindowFrame` gained `Range`, `RangeTime`,
+  `RangePreceding`, `RangeFollowing`.
+- The library's time conversion (`GetOr(r, f, time.Time{})`, `date()`
+  consumers such as `resample` and RANGE frames) now accepts a plain
+  `YYYY-MM-DD` date as midnight UTC — the form DuckDB and Postgres DATE
+  exports and CSV date columns use.
+
 ### Fixed
 - **`generate go` lost NTILE's argument**: every generated program called
   `ssql.WNtile(0)`, so `window -ntile 4 q` put every row in tile 1 under

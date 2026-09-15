@@ -1149,6 +1149,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 		desc        bool
 		preceding   int
 		following   int
+		rangeP      string // RANGE frame bounds as typed (DFC130 unit 3); "" = ROWS frame
+		rangeF      string
 		funcs       []string // pre-built SQL function expressions like "ROW_NUMBER() AS rn"
 	}
 
@@ -1205,6 +1207,20 @@ func translateWindow(q *sqlQuery, args []string) error {
 		case "-preceding":
 			if i+1 < len(args) {
 				cur.preceding, _ = strconv.Atoi(args[i+1])
+				i += 2
+			} else {
+				i++
+			}
+		case "-range-preceding":
+			if i+1 < len(args) {
+				cur.rangeP = args[i+1]
+				i += 2
+			} else {
+				i++
+			}
+		case "-range-following":
+			if i+1 < len(args) {
+				cur.rangeF = args[i+1]
 				i += 2
 			} else {
 				i++
@@ -1346,6 +1362,12 @@ func translateWindow(q *sqlQuery, args []string) error {
 
 		// Frame clause — only emit if non-default or if aggregate functions present
 		frameSQL := buildFrameSQL(c.preceding, c.following)
+		if c.rangeP != "" || c.rangeF != "" {
+			var err error
+			if frameSQL, err = buildRangeFrameSQL(c.rangeP, c.rangeF); err != nil {
+				return err
+			}
+		}
 		if frameSQL != "" {
 			overParts = append(overParts, frameSQL)
 		}
@@ -1400,6 +1422,40 @@ func sqlTypedLiteral(v any) string {
 		return sqlStringLiteral(x)
 	}
 	return fmt.Sprint(v)
+}
+
+// buildRangeFrameSQL renders a RANGE frame from the CLI's bounds: numbers
+// bare, durations as INTERVAL 'N seconds' (DuckDB and Postgres both accept
+// it against a TIMESTAMP or DATE order column), "unbounded" and 0 as
+// UNBOUNDED / CURRENT ROW.
+func buildRangeFrameSQL(rangeP, rangeF string) (string, error) {
+	bound := func(s, side string) (string, error) {
+		if s == "" {
+			return "CURRENT ROW", nil
+		}
+		v, isTime, err := parseRangeBound(s)
+		if err != nil {
+			return "", fmt.Errorf("window -range-%s: %w", side, err)
+		}
+		switch {
+		case v < 0:
+			return "UNBOUNDED " + strings.ToUpper(side), nil
+		case v == 0:
+			return "CURRENT ROW", nil
+		case isTime:
+			return fmt.Sprintf("INTERVAL '%s seconds' %s", strconv.FormatFloat(v, 'f', -1, 64), strings.ToUpper(side)), nil
+		}
+		return fmt.Sprintf("%s %s", strconv.FormatFloat(v, 'f', -1, 64), strings.ToUpper(side)), nil
+	}
+	start, err := bound(rangeP, "preceding")
+	if err != nil {
+		return "", err
+	}
+	end, err := bound(rangeF, "following")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("RANGE BETWEEN %s AND %s", start, end), nil
 }
 
 func buildFrameSQL(preceding, following int) string {

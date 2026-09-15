@@ -135,7 +135,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC125 | 2026-09-04 | 2026-09-07 | [The Codelab as a Guided Path: Confidence Before Sophistication](./dfc125_codelab_guided_path.md) |
 | DFC126 | 2026-09-08 | 2026-09-10 | [The Codelab From Scratch in a Mint Container](./dfc126_codelab_from_scratch_in_a_mint_container.md) |
 | DFC127 | 2026-09-12 | 2026-09-14 | [A Terminal UI for ssql? (Bubble Tea)](./dfc127_terminal_ui_bubbletea.md) |
-| DFC128 | 2026-09-14 | 2026-09-15 | [JSON Interchange with DuckDB and Postgres, and the Time Type Question](./dfc128_json_interchange_and_time_type.md) |
+| DFC128 | 2026-09-14 | 2026-09-16 | [JSON Interchange with DuckDB and Postgres, and the Time Type Question](./dfc128_json_interchange_and_time_type.md) |
 | DFC129 | 2026-09-15 | 2026-09-15 | [Group-by Aggregates: What Is Missing, and Flags versus Expressions](./dfc129_groupby_aggregates.md) |
 | DFC130 | 2026-09-15 | 2026-09-16 | [Window Analytics: Gaps Against the SQL Set](./dfc130_window_analytics_gaps.md) |
 

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"time"
 	"os"
 	"fmt"
 	"slices"
@@ -62,6 +63,18 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Local().
 			Default(-1).
 			Help("Rows before current row (-1 = unbounded, default: -1)").
+			Done().
+
+		Flag("-range-preceding").
+			String().
+			Local().
+			Help("RANGE frame: rows whose -order value is within VALUE below this row's (a number, or a duration like 5m/2h/7d for a time field; 'unbounded'); needs exactly one -order field").
+			Done().
+
+		Flag("-range-following").
+			String().
+			Local().
+			Help("RANGE frame: rows whose -order value is within VALUE above this row's (number or duration; 'unbounded'; default 0 = the row and its peers)").
 			Done().
 
 		Flag("-following").
@@ -464,15 +477,51 @@ func parseWindowClauses(clauses []cf.Clause) ([]ssql.WindowConfig, error) {
 		}
 
 		// Parse -preceding/-following frame
+		rowsFrameSet := false
 		if raw, ok := clause.Flags["-preceding"]; ok {
 			if v, ok := raw.(int); ok {
 				cfg.Frame.Preceding = v
+				rowsFrameSet = rowsFrameSet || v != -1
 			}
 		}
 		if raw, ok := clause.Flags["-following"]; ok {
 			if v, ok := raw.(int); ok {
 				cfg.Frame.Following = v
+				rowsFrameSet = rowsFrameSet || v != 0
 			}
+		}
+
+		// RANGE frame (DFC130 unit 3): -range-preceding / -range-following
+		rp, hasRP := clause.Flags["-range-preceding"].(string)
+		rf, hasRF := clause.Flags["-range-following"].(string)
+		if (hasRP && rp != "") || (hasRF && rf != "") {
+			if rowsFrameSet {
+				return nil, fmt.Errorf("window: a clause has either a ROWS frame (-preceding/-following) or a RANGE frame (-range-preceding/-range-following), not both")
+			}
+			if len(cfg.OrderBy) != 1 {
+				return nil, fmt.Errorf("window: a RANGE frame needs exactly one -order field (got %d)", len(cfg.OrderBy))
+			}
+			cfg.Frame.Range = true
+			cfg.Frame.RangePreceding, cfg.Frame.RangeFollowing = 0, 0
+			var isTimeP, isTimeF bool
+			if hasRP && rp != "" {
+				v, isTime, err := parseRangeBound(rp)
+				if err != nil {
+					return nil, fmt.Errorf("window -range-preceding: %w", err)
+				}
+				cfg.Frame.RangePreceding, isTimeP = v, isTime
+			}
+			if hasRF && rf != "" {
+				v, isTime, err := parseRangeBound(rf)
+				if err != nil {
+					return nil, fmt.Errorf("window -range-following: %w", err)
+				}
+				cfg.Frame.RangeFollowing, isTimeF = v, isTime
+			}
+			if hasRP && rp != "" && hasRF && rf != "" && isTimeP != isTimeF && cfg.Frame.RangePreceding >= 0 && cfg.Frame.RangeFollowing >= 0 {
+				return nil, fmt.Errorf("window: -range-preceding and -range-following must both be numbers or both be durations")
+			}
+			cfg.Frame.RangeTime = isTimeP || isTimeF
 		}
 
 		// Parse window function specs
@@ -789,7 +838,11 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 				}
 				s.WriteString("},")
 			}
-			s.WriteString(fmt.Sprintf("\n%s\tFrame: ssql.WindowFrame{Preceding: %d, Following: %d},", indent, cfg.Frame.Preceding, cfg.Frame.Following))
+			if cfg.Frame.Range {
+				s.WriteString(fmt.Sprintf("\n%s\tFrame: ssql.WindowFrame{Range: true, RangeTime: %t, RangePreceding: %v, RangeFollowing: %v},", indent, cfg.Frame.RangeTime, cfg.Frame.RangePreceding, cfg.Frame.RangeFollowing))
+			} else {
+				s.WriteString(fmt.Sprintf("\n%s\tFrame: ssql.WindowFrame{Preceding: %d, Following: %d},", indent, cfg.Frame.Preceding, cfg.Frame.Following))
+			}
 			if len(cfg.Specs) > 0 {
 				s.WriteString("\n" + indent + "\tSpecs: []ssql.WindowSpec{")
 				for j, spec := range cfg.Specs {
@@ -962,4 +1015,40 @@ func parseWindowRegistrySpecs(flags map[string]any) []ssql.WindowSpec {
 		}
 	}
 	return specs
+}
+
+
+// parseRangeBound reads a RANGE frame bound: "unbounded" → −1; a number →
+// that distance in the order field's units; a duration ("5m", "2h", "7d" —
+// days are accepted on top of Go's units) → seconds, isTime=true.
+func parseRangeBound(s string) (v float64, isTime bool, err error) {
+	s = strings.TrimSpace(s)
+	if strings.EqualFold(s, "unbounded") {
+		return -1, false, nil
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		if f < 0 {
+			return 0, false, fmt.Errorf("a RANGE distance cannot be negative: %q", s)
+		}
+		return f, false, nil
+	}
+	if d, err := parseDurationWithDays(s); err == nil {
+		if d < 0 {
+			return 0, true, fmt.Errorf("a RANGE duration cannot be negative: %q", s)
+		}
+		return d.Seconds(), true, nil
+	}
+	return 0, false, fmt.Errorf("want a number, a duration (5m, 2h, 7d) or 'unbounded', got %q", s)
+}
+
+// parseDurationWithDays is time.ParseDuration plus a trailing "d" (days).
+func parseDurationWithDays(s string) (time.Duration, error) {
+	if strings.HasSuffix(s, "d") {
+		n, err := strconv.ParseFloat(strings.TrimSuffix(s, "d"), 64)
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(n * float64(24*time.Hour)), nil
+	}
+	return time.ParseDuration(s)
 }

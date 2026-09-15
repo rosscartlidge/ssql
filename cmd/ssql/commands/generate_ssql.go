@@ -2154,6 +2154,11 @@ func extractWindowFields(args []string) ([]string, bool) {
 				i += 2
 				continue
 			}
+		case "-range-preceding", "-range-following":
+			if i+1 < len(args) {
+				i += 2 // a bound, not a field
+				continue
+			}
 		case "-expr":
 			return nil, true
 		}

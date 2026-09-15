@@ -1047,6 +1047,10 @@ func convertToTime(val any) (time.Time, bool) {
 		if t, err := time.Parse("2006-01-02T15:04:05", v); err == nil {
 			return t.UTC(), true
 		}
+		// A plain date is midnight UTC (DuckDB/Postgres DATE exports, CSV dates)
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			return t, true
+		}
 		return time.Time{}, false
 	case int64:
 		// Unix timestamp - always UTC

@@ -1793,6 +1793,17 @@ func SortRecords(orderBy []OrderField) Filter[Record, Record] {
 type WindowFrame struct {
 	Preceding int // rows before current (-1 = UNBOUNDED PRECEDING)
 	Following int // rows after current (-1 = UNBOUNDED FOLLOWING)
+
+	// RANGE frames (DFC130 unit 3): when Range is set, Preceding/Following
+	// are ignored and the frame is the rows whose single ORDER value lies
+	// within RangePreceding below / RangeFollowing above the current row's
+	// (−1 = unbounded; 0 = the current row and its peers). Distances are
+	// in the order field's units, or seconds when RangeTime (the order
+	// field is a time). Resolved per row to an exact ROWS frame.
+	Range          bool
+	RangeTime      bool
+	RangePreceding float64
+	RangeFollowing float64
 }
 
 // WindowSpec defines a single window function computation and its result field name.
@@ -2075,6 +2086,12 @@ func Window(configs []WindowConfig) Filter[Record, Record] {
 // indices is the sorted partition (original record indices).
 // pos is the position within the sorted partition.
 func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen int, frame WindowFrame, orderBy []OrderField) any {
+	if frame.Range {
+		// Resolve the RANGE frame for this row to the equivalent ROWS frame;
+		// every function below then computes exactly as it does over ROWS.
+		start, end := rangeFrameBounds(all, indices, pos, partLen, frame, orderBy)
+		frame = WindowFrame{Preceding: pos - start, Following: end - pos}
+	}
 	switch f := fn.(type) {
 	case wRowNumber:
 		return int64(pos + 1)
@@ -2780,6 +2797,9 @@ func newStreamWindowAgg(fn WindowFunc, frame WindowFrame) (streamWindowAgg, erro
 
 // canStreamWindow checks if a single WindowConfig can be computed in streaming mode.
 func canStreamWindow(cfg WindowConfig) error {
+	if cfg.Frame.Range {
+		return fmt.Errorf("streaming window does not support RANGE frames yet; drop -presorted")
+	}
 	if cfg.Frame.Following < 0 {
 		return fmt.Errorf("streaming window does not support UNBOUNDED FOLLOWING")
 	}

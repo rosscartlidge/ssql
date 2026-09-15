@@ -1434,6 +1434,60 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order name -preceding 1 -arg-max name salary richer -arg-min name salary poorer | {{.bin}} include name richer poorer`,
 		Ordered:  false,
 	},
+	// ---- window, DFC130 unit 3: RANGE frames by value and by time.
+	{
+		// Rows whose salary is within 10000 below this row's (peers included):
+		// SQL's RANGE BETWEEN 10000 PRECEDING AND CURRENT ROW.
+		Name:     "window_range_numeric",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -range-preceding 10000 -count n -sum salary s -string-agg name "," who | {{.bin}} include name n s who`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Eve", "n": 1, "s": 88000, "who": "Eve"},
+			{"name": "Alice", "n": 2, "s": 183000, "who": "Eve,Alice"},
+			{"name": "Carol", "n": 2, "s": 200000, "who": "Alice,Carol"},
+			{"name": "Bob", "n": 1, "s": 65000, "who": "Bob"},
+			{"name": "Frank", "n": 1, "s": 82000, "who": "Frank"},
+			{"name": "David", "n": 1, "s": 72000, "who": "David"},
+			{"name": "Grace", "n": 2, "s": 150000, "who": "David,Grace"},
+		},
+	},
+	{
+		// A duration bound over a DATE order column: the last 14 days per
+		// row. DuckDB reads the CSV dates as DATE and takes RANGE BETWEEN
+		// INTERVAL '1209600 seconds' PRECEDING; ssql parses the plain date.
+		Name:     "window_range_time_14d",
+		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv | {{.bin}} window -order date -range-preceding 14d -sum amount s -count n | {{.bin}} include id s n`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 1, "s": 100, "n": 1},
+			{"id": 2, "s": 200, "n": 1},
+			{"id": 3, "s": 500, "n": 2},
+			{"id": 4, "s": 700, "n": 2},
+			{"id": 5, "s": 500, "n": 1},
+		},
+	},
+	{
+		// Both bounds, on an epoch-seconds column read as a number.
+		Name:     "window_range_epoch_both_bounds",
+		Pipeline: `{{.bin}} from csv {{.data}}/epochs.csv | {{.bin}} window -order ts -range-preceding 20 -range-following 10 -sum v s -count n | {{.bin}} include id s n`,
+		Ordered:  false,
+	},
+	{
+		// RANGE 0 PRECEDING is the current row AND its peers (level 6 appears
+		// twice); UNBOUNDED FOLLOWING counts everything at or above.
+		Name:     "window_range_peers_unbounded",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -order level -range-preceding 0 -range-following unbounded -count peers_and_above | {{.bin}} include name level peers_and_above`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Bob", "level": 4, "peers_and_above": 7},
+			{"name": "David", "level": 5, "peers_and_above": 6},
+			{"name": "Eve", "level": 6, "peers_and_above": 5},
+			{"name": "Grace", "level": 6, "peers_and_above": 5},
+			{"name": "Alice", "level": 7, "peers_and_above": 3},
+			{"name": "Frank", "level": 8, "peers_and_above": 2},
+			{"name": "Carol", "level": 9, "peers_and_above": 1},
+		},
+	},
 	{
 		// A field named like an expr builtin (`date`) is the FIELD when used
 		// bare in an expression, in every lane: exec's VM patches it to

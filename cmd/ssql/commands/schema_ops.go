@@ -236,7 +236,7 @@ func init() {
 	// (-partition/-order/…) don't add fields.
 	registerSchemaOp("window", func(_ any, in []string, args []string) ([]string, bool) {
 		arity := map[string]int{
-			"-partition": 1, "-order": 1, "-preceding": 1, "-following": 1,
+			"-partition": 1, "-order": 1, "-preceding": 1, "-following": 1, "-range-preceding": 1, "-range-following": 1,
 			"-presorted": 0, "-desc": 0, "-generate": 0, "-g": 0,
 			"-row-number": 1, "-rank": 1, "-dense-rank": 1, "-percent-rank": 1, "-count": 1, "-cume-dist": 1,
 			"-ntile": 2, "-first": 2, "-last": 2, "-sum": 2, "-avg": 2, "-min": 2, "-max": 2, "-count-field": 2,

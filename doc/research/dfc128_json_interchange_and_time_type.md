@@ -2,7 +2,7 @@
 
 Reference: DFC128
 Created: 2026-09-14
-Last modified: 2026-09-15
+Last modified: 2026-09-16
 
 [Back to Index](./README.md)
 
@@ -160,7 +160,9 @@ What the *package* does today:
 - Records hold `time.Time` values; `GetOr(r, "ts", time.Time{})`
   converts strings on the fly via `convertToTime` (`core.go:1035`):
   RFC 3339, `2006-01-02 15:04:05` (SQL datetime — DuckDB's export
-  form), `2006-01-02T15:04:05` (no zone → UTC), and int64 epochs.
+  form), `2006-01-02T15:04:05` (no zone → UTC), a plain `2006-01-02`
+  date as midnight UTC (added 2026-09-16 for RANGE frames over DATE
+  columns — DFC130 unit 3), and int64 epochs.
 - The JSON writer emits `time.Time` as RFC 3339 Nano (`core.go:1196`),
   which DuckDB infers as TIMESTAMP (§1).
 - Expressions: `now()`, `date(str)`, `duration(str)`, `bucket(ts, dur)`
