@@ -653,19 +653,17 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 		}
 	}
 	for i < len(args) {
+		// Built-in aggregates come from the registry (aggDefs, DFC129 §6):
+		// -count carries its whole expression, the rest are FN("field").
+		if d, ok := aggDefByFlag(args[i]); ok {
+			if d.hasField {
+				twoField(d.sqlFn)
+			} else {
+				oneField(d.sqlFn)
+			}
+			continue
+		}
 		switch args[i] {
-		case "-count":
-			oneField("COUNT(*)")
-		case "-sum":
-			twoField("SUM")
-		case "-avg":
-			twoField("AVG")
-		case "-min":
-			twoField("MIN")
-		case "-max":
-			twoField("MAX")
-		case "-collect":
-			twoField("LIST")
 		// Silently dropping an aggregation would produce wrong results —
 		// fail loudly on the forms with no SQL translation (yet).
 		case "-expr", "-e":

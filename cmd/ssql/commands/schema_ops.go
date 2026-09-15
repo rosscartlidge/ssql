@@ -189,11 +189,14 @@ func init() {
 	// from argv (unlike pivot, whose columns are data values): the same
 	// computeGroupingSetsForSchema the exec path uses.
 	registerSchemaOp("group-by", func(_ any, in []string, args []string) ([]string, bool) {
-		pos, flags := walkStage(args, map[string]int{
-			"-count": 1, "-sum": 2, "-avg": 2, "-min": 2, "-max": 2,
-			"-collect": 2, "-expr": 2, "-stream-expr": 4,
+		arity := aggFlagArity() // built-in aggregates (aggDefs, DFC129 §6)
+		for k, v := range map[string]int{
+			"-expr": 2, "-stream-expr": 4,
 			"-rollup": 0, "-cube": 0, "-presorted": 0, "-generate": 0, "-g": 0,
-		})
+		} {
+			arity[k] = v
+		}
+		pos, flags := walkStage(args, arity)
 		out := keepPresent(in, pos)
 		var results []string
 		rollupMode := ssql.RollupMode(-1)
@@ -203,8 +206,12 @@ func init() {
 				rollupMode = ssql.RollupHierarchical
 			case "-cube":
 				rollupMode = ssql.RollupCube
-			case "-count", "-sum", "-avg", "-min", "-max", "-collect", "-expr", "-stream-expr":
+			case "-expr", "-stream-expr":
 				if len(f.args) > 0 {
+					results = append(results, f.args[len(f.args)-1])
+				}
+			default:
+				if _, isAgg := aggDefByFlag(f.name); isAgg && len(f.args) > 0 {
 					results = append(results, f.args[len(f.args)-1])
 				}
 			}

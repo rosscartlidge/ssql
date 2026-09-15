@@ -68,10 +68,14 @@ this is why §6 proposes one table):
   the `-expr` path already has (strings, ints, floats, times), typed
   accepts `string` for min/max, equivalence case with a shuffled string
   fixture and a Golden.
-- **`doc/ai-code-generation.md` lists `ssql.First("field")` and
-  `ssql.Last("field")`** as library aggregates. They do not exist (§1
-  grep). The LLM prompt doc is teaching a call that fails to compile.
-  Either add them (this plan does) or delete the lines now.
+- **`doc/ai-code-generation.md` listed `ssql.First("field")` and
+  `ssql.Last("field")`** without their type parameter. The library has
+  `First[T Value]` / `Last[T Value]` (`sql.go`), so the call as written
+  fails to compile with "cannot infer T" — the LLM prompt doc was
+  teaching a non-compiling form. *Fixed in phase 0* (the doc shows
+  `First[T]`, and `MinOf`/`MaxOf`). The generics stay for library
+  callers; the CLI's `-first`/`-last` (phase 1) will use dynamic
+  type-preserving versions like `MinOf`.
 - **`-collect` under explicit `-typed`** exits with "drop -typed for
   now" instead of falling back — the only aggregate that turns a mode
   choice into a failure.
@@ -212,6 +216,16 @@ lanes and not the fifth.
 **Phase 0 — fixes and the registry (½ day).** §2 fixes; the `aggDef`
 table with today's six flags moved onto it, behaviour-preserving,
 existing equivalence cases green; `aggResultType` from the field type.
+*Done 2026-09-15:* `ssql.MinOf`/`MaxOf` (type-preserving, loud on
+unorderable or mixed kinds; `agg_ordered.go`) replace `Min[float64]` in
+exec and record codegen; the typed lane accepts strings and times for
+min/max (`orderedLess` emits `<` or `.Before`); `-collect` under typed
+falls back with a plan note instead of exiting; `aggDefs` in
+`group_by_specs.go` drives flag decoding, exec, codegen, wire types
+(`aggWireType` reads the input field's type — `-min name` is a `string`
+on the wire, `-min salary` an `int`), the SQL map and the arity tables
+the optimiser and schema walker used to keep by hand. New equivalence
+case `groupby_min_max_string` with a Golden, all lanes including DuckDB.
 
 **Phase 1 — the ones people type from memory (1 day).** `-first`,
 `-last`, `-any`, `-count-distinct`, `-string-agg`, plus `-min`/`-max`

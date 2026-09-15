@@ -285,7 +285,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					for _, setFields := range sets {
 						prefix := groupingSetPrefixForSchema(setFields)
 						for _, spec := range aggSpecs {
-							outputSchema.AddField(prefix+spec.result, aggResultType(spec.function))
+							outputSchema.AddField(prefix+spec.result, aggWireType(spec, inputSchema))
 						}
 						for _, spec := range exprSpecs {
 							outputSchema.AddField(prefix+spec.result, "float")
@@ -386,9 +386,9 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						outputSchema.AddField(field, inputSchema.TypeOf(field))
 					}
 				}
-				// Add aggregation result fields
+				// Add aggregation result fields (min/max keep the field's type)
 				for _, spec := range aggSpecs {
-					outputSchema.AddField(spec.result, aggResultType(spec.function))
+					outputSchema.AddField(spec.result, aggWireType(spec, inputSchema))
 				}
 				// Add expression result fields
 				for _, spec := range exprSpecs {
@@ -531,13 +531,14 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 				Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped,
 			}
 			return lib.WriteCodeFragment(distinctFrag)
+		} else if hasAggFn(aggSpecs, "collect") {
+			// -collect has no typed form yet (a slice-typed result
+			// field); like every other unhandled shape it falls back to
+			// record codegen with the reason under -explain — it used to
+			// exit with "drop -typed for now", the one aggregate that
+			// turned a mode choice into a failure (DFC129 §2).
+			typedFallbackNotes = append(typedFallbackNotes, "record fallback (-collect has no typed form yet)")
 		} else {
-			for _, s := range aggSpecs {
-				if s.function == "collect" {
-					return lib.WriteErrorAndExit(getCommandString(),
-						fmt.Errorf("ssql generate go -typed: -collect not yet supported (would need slice-typed result fields); drop -typed for now"))
-				}
-			}
 			// emitTypedGroupBy now always emits dual templates (parallel
 			// + serial) for non-presorted, and the planner picks per
 			// pipeline. -presorted and -stream-expr force SerialOnly
@@ -730,24 +731,24 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	return lib.WriteCodeFragment(frag2)
 }
 
-// generateAggregatorCode generates code for a single aggregator
+// generateAggregatorCode emits the record-codegen expression for a
+// built-in aggregate (aggDefs, DFC129 §6).
 func generateAggregatorCode(spec aggSpec) string {
-	switch spec.function {
-	case "count":
-		return "ssql.Count()"
-	case "sum":
-		return fmt.Sprintf("ssql.Sum(%q)", spec.field)
-	case "avg":
-		return fmt.Sprintf("ssql.Avg(%q)", spec.field)
-	case "min":
-		return fmt.Sprintf("ssql.Min[float64](%q)", spec.field)
-	case "max":
-		return fmt.Sprintf("ssql.Max[float64](%q)", spec.field)
-	case "collect":
-		return fmt.Sprintf("ssql.Collect(%q)", spec.field)
-	default:
+	d, ok := aggDefByFn(spec.function)
+	if !ok {
 		return ""
 	}
+	return d.code(spec.field)
+}
+
+// hasAggFn reports whether any spec uses the named aggregate.
+func hasAggFn(specs []aggSpec, fn string) bool {
+	for _, s := range specs {
+		if s.function == fn {
+			return true
+		}
+	}
+	return false
 }
 
 // buildMapLiteral builds a Go map literal string like: "field1": true, "field2": true
@@ -794,16 +795,3 @@ func groupingSetPrefixForSchema(fields []string) string {
 	return strings.Join(fields, "_") + "_"
 }
 
-// aggResultType returns the schema type for an aggregation function result
-func aggResultType(function string) string {
-	switch function {
-	case "count":
-		return "int"
-	case "sum", "avg", "min", "max":
-		return "float"
-	case "collect":
-		return "json"
-	default:
-		return "float"
-	}
-}

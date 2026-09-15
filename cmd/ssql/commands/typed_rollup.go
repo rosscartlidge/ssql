@@ -59,9 +59,8 @@ func emitTypedRollup(inputVar string, in *lib.TypedSchema, groupFields []string,
 			return true, "", lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: aggregation %q references unknown field %q", s.function, s.field))
 		}
-		if needsNumeric(s.function) && !isNumericGoType(f.GoType) {
-			return true, "", lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires a numeric type, got %s", s.function, s.field, f.GoType))
+		if err := typedAggAccepts(s.function, s.field, f.GoType); err != nil {
+			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 		}
 	}
 

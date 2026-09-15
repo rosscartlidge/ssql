@@ -531,10 +531,10 @@ func TestPermOrderHazard(t *testing.T) {
 	}{
 		{[]string{"group", "limit"}, true},
 		{[]string{"limit", "group"}, false},
-		{[]string{"group", "where", "limit"}, true},   // where preserves the unspecified order
-		{[]string{"group", "sort", "limit"}, false},   // sort restores order
-		{[]string{"group", "top", "limit"}, false},    // top sorts by value
-		{[]string{"group", "update", "limit"}, true},  // update preserves order
+		{[]string{"group", "where", "limit"}, true},  // where preserves the unspecified order
+		{[]string{"group", "sort", "limit"}, false},  // sort restores order
+		{[]string{"group", "top", "limit"}, false},   // top sorts by value
+		{[]string{"group", "update", "limit"}, true}, // update preserves order
 		{[]string{"where", "group", "distinct"}, false},
 		{[]string{"sort", "group", "limit"}, true}, // sort BEFORE group doesn't help
 	}
@@ -1060,6 +1060,23 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -expr 'max(hire_date)' latest -expr 'min(hire_date)' earliest -expr 'first(name)' first_seen -expr 'last(name)' last_seen -expr 'max(salary * 2)' top2 -count n`,
 		Ordered:  false,
 		Skip:     map[string]string{"duckdb": "group-by -expr has no SQL translation (expression aggregations are ssql-specific)"},
+	},
+	{
+		// -min/-max FLAGS on a string field, in every lane. Until v4.99.0
+		// exec and record codegen used Min[float64], which reported 0 for
+		// every group while typed refused and DuckDB answered — the
+		// top-by-string shape again (DFC129 §2). MinOf/MaxOf keep the
+		// field's type; the Golden is the independent oracle (hand-checked
+		// against the fixture: per dept the alphabetically first and last
+		// name, and the salary range).
+		Name:     "groupby_min_max_string",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -min name first_name -max name last_name -min salary lo -max salary hi`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering", "first_name": "Alice", "last_name": "Eve", "lo": 88000, "hi": 105000},
+			{"dept": "Sales", "first_name": "Bob", "last_name": "Frank", "lo": 65000, "hi": 82000},
+			{"dept": "Marketing", "first_name": "David", "last_name": "Grace", "lo": 72000, "hi": 78000},
+		},
 	},
 	{
 		// A field named like an expr builtin (`date`) is the FIELD when used

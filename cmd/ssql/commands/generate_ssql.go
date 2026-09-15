@@ -1982,20 +1982,24 @@ func extractGroupByFields(args []string) ([]string, bool) {
 		i++
 	}
 	for i < len(args) {
+		// Built-in aggregates: step over the flag's args (aggDefs, DFC129
+		// §6); a FIELD RESULT flag also names an input field.
+		if d, ok := aggDefByFlag(args[i]); ok {
+			n := 1
+			if d.hasField {
+				n = 2
+			}
+			if i+n < len(args) {
+				if d.hasField {
+					fields = append(fields, args[i+1])
+				}
+				i += n + 1
+			} else {
+				i++
+			}
+			continue
+		}
 		switch args[i] {
-		case "-count":
-			if i+1 < len(args) {
-				i += 2
-			} else {
-				i++
-			}
-		case "-sum", "-avg", "-min", "-max", "-collect":
-			if i+2 < len(args) {
-				fields = append(fields, args[i+1])
-				i += 3
-			} else {
-				i++
-			}
 		case "-expr", "-stream-expr":
 			return nil, true
 		default:

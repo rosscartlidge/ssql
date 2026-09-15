@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`group-by -min` / `-max` on a string (or time) field** printed `0`
+  for every group in exec and record codegen (`Min[float64]` coerced the
+  string to its zero and said nothing), while the typed lane refused
+  loudly and `generate sql` answered correctly. New library aggregates
+  `ssql.MinOf` / `ssql.MaxOf` keep the field's type — numbers, strings,
+  times — and fail loudly on unorderable or mixed kinds; the typed lane
+  now accepts strings and times for min/max; the result's wire type is
+  the field's own (`-min name` → `string`, `-min salary` → `int`).
+  Equivalence case `groupby_min_max_string` pins all lanes (DFC129 §2).
+- `group-by -collect` under `SSQL_MODE=typed` fell back to record codegen
+  like every other unhandled shape instead of exiting with "drop
+  -typed for now".
+- `doc/ai-code-generation.md` showed `ssql.First("field")` /
+  `ssql.Last("field")` without their required type parameter.
+
+### Internal
+- Built-in group-by aggregates are described once, in the `aggDefs`
+  registry (`cmd/ssql/commands/group_by_specs.go`): flag decoding, the
+  exec aggregator, the record-codegen call, the wire type, the SQL
+  function and the flag arity the optimiser and schema walker use are
+  all derived from it. Adding an aggregate used to touch nine files
+  (DFC129 §6; phase 0 of the plan).
+
 ## [4.98.1] - 2026-09-14
 
 ### Fixed

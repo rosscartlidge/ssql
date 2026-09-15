@@ -62,9 +62,8 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 			return true, "", lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: aggregation %q references unknown field %q", s.function, s.field))
 		}
-		if needsNumeric(s.function) && !isNumericGoType(f.GoType) {
-			return true, "", lib.WriteErrorAndExit(getCommandString(),
-				fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires a numeric type, got %s", s.function, s.field, f.GoType))
+		if err := typedAggAccepts(s.function, s.field, f.GoType); err != nil {
+			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 		}
 	}
 
@@ -414,12 +413,12 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\ta.%s += r.%s\n", s.stateName, s.fieldGo)
 			fmt.Fprintf(&d, "\ta.%s_n++\n", s.stateName)
 		case "min":
-			fmt.Fprintf(&d, "\tif !a.%s_have || r.%s < a.%s {\n", s.stateName, s.fieldGo, s.stateName)
+			fmt.Fprintf(&d, "\tif !a.%s_have || %s {\n", s.stateName, orderedLess(s.fieldGoT, "r."+s.fieldGo, "a."+s.stateName))
 			fmt.Fprintf(&d, "\t\ta.%s = r.%s\n", s.stateName, s.fieldGo)
 			fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 			d.WriteString("\t}\n")
 		case "max":
-			fmt.Fprintf(&d, "\tif !a.%s_have || r.%s > a.%s {\n", s.stateName, s.fieldGo, s.stateName)
+			fmt.Fprintf(&d, "\tif !a.%s_have || %s {\n", s.stateName, orderedLess(s.fieldGoT, "a."+s.stateName, "r."+s.fieldGo))
 			fmt.Fprintf(&d, "\t\ta.%s = r.%s\n", s.stateName, s.fieldGo)
 			fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 			d.WriteString("\t}\n")
@@ -487,12 +486,12 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 				fmt.Fprintf(&d, "\ta.%s += o.%s\n", s.stateName, s.stateName)
 				fmt.Fprintf(&d, "\ta.%s_n += o.%s_n\n", s.stateName, s.stateName)
 			case "min":
-				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || o.%s < a.%s) {\n", s.stateName, s.stateName, s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || %s) {\n", s.stateName, s.stateName, orderedLess(s.fieldGoT, "o."+s.stateName, "a."+s.stateName))
 				fmt.Fprintf(&d, "\t\ta.%s = o.%s\n", s.stateName, s.stateName)
 				fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 				d.WriteString("\t}\n")
 			case "max":
-				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || o.%s > a.%s) {\n", s.stateName, s.stateName, s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || %s) {\n", s.stateName, s.stateName, orderedLess(s.fieldGoT, "a."+s.stateName, "o."+s.stateName))
 				fmt.Fprintf(&d, "\t\ta.%s = o.%s\n", s.stateName, s.stateName)
 				fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 				d.WriteString("\t}\n")
@@ -580,12 +579,31 @@ func buildResultCtor(groupFields []lib.TypedSchemaField, specs []aggSpec, exprPl
 	return strings.TrimRight(b.String(), ",\n")
 }
 
-func needsNumeric(fn string) bool {
+// typedAggAccepts says whether the typed lane can aggregate a field of
+// the given Go type with fn: sum/avg need a number; min/max take any
+// ordered type — numbers, strings and times (DFC129 §5 ordered-extreme);
+// count takes no field. The error is the loud refusal the caller emits.
+func typedAggAccepts(fn, field, goType string) error {
 	switch fn {
-	case "sum", "avg", "min", "max":
-		return true
+	case "sum", "avg":
+		if !isNumericGoType(goType) {
+			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires a numeric type, got %s", fn, field, goType)
+		}
+	case "min", "max":
+		if !isNumericGoType(goType) && goType != "string" && goType != "time.Time" {
+			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires an ordered type (number, string or time), got %s", fn, field, goType)
+		}
 	}
-	return false
+	return nil
+}
+
+// orderedLess emits the Go expression "a < b" for the field's type —
+// time.Time has no < operator, so it becomes a.Before(b).
+func orderedLess(goType, a, b string) string {
+	if goType == "time.Time" {
+		return fmt.Sprintf("%s.Before(%s)", a, b)
+	}
+	return fmt.Sprintf("%s < %s", a, b)
 }
 
 func isNumericGoType(t string) bool {

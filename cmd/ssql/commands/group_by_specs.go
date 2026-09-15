@@ -1,6 +1,120 @@
 package commands
 
-import cf "github.com/rosscartlidge/autocli/v4"
+import (
+	"fmt"
+
+	cf "github.com/rosscartlidge/autocli/v4"
+	"github.com/rosscartlidge/ssql/v4"
+)
+
+// aggDef is the single description of one built-in aggregation flag
+// (DFC129 §6). Every lane derives what it needs from this table —
+// flag decoding (parseAggSpecs), the exec AggregateFunc
+// (buildAggregator), the record-codegen call (generateAggregatorCode),
+// the result's wire type (aggWireType), the SQL function
+// (generate_sql.go), and the flag arity the optimiser and the schema
+// walker use to step over a group-by stage. Adding an aggregate is one
+// entry here plus its typed accumulator kind; before this table a flag
+// touched nine files and could exist in four lanes but not the fifth.
+type aggDef struct {
+	flag     string // "-sum"
+	fn       string // aggSpec.function: "sum"
+	hasField bool   // false for -count, which takes only a result name
+	sqlFn    string // "SUM" → SUM("field"); -count carries the whole expression "COUNT(*)"
+	// wireType is the `_schema` type of the result given the input
+	// field's wire type ("" when unknown or fieldless).
+	wireType func(fieldType string) string
+	build    func(field string) ssql.AggregateFunc // exec
+	code     func(field string) string            // record codegen expression
+}
+
+func wireFixed(t string) func(string) string { return func(string) string { return t } }
+
+// wireOfField keeps the input field's type (min/max of a string is a
+// string); "float" when the input schema does not know the field.
+func wireOfField(fieldType string) string {
+	if fieldType == "" {
+		return "float"
+	}
+	return fieldType
+}
+
+// aggDefs lists the built-in aggregation flags in the order they are
+// declared on the command and decoded from it.
+var aggDefs = []aggDef{
+	{flag: "-count", fn: "count", sqlFn: "COUNT(*)", wireType: wireFixed("int"),
+		build: func(string) ssql.AggregateFunc { return ssql.Count() },
+		code:  func(string) string { return "ssql.Count()" }},
+	{flag: "-sum", fn: "sum", hasField: true, sqlFn: "SUM", wireType: wireFixed("float"),
+		build: ssql.Sum,
+		code:  func(f string) string { return fmt.Sprintf("ssql.Sum(%q)", f) }},
+	{flag: "-avg", fn: "avg", hasField: true, sqlFn: "AVG", wireType: wireFixed("float"),
+		build: ssql.Avg,
+		code:  func(f string) string { return fmt.Sprintf("ssql.Avg(%q)", f) }},
+	// min/max keep the field's type: MinOf/MaxOf order numbers, strings
+	// and times (Min[float64] reported 0 for every string group — DFC129 §2).
+	{flag: "-min", fn: "min", hasField: true, sqlFn: "MIN", wireType: wireOfField,
+		build: ssql.MinOf,
+		code:  func(f string) string { return fmt.Sprintf("ssql.MinOf(%q)", f) }},
+	{flag: "-max", fn: "max", hasField: true, sqlFn: "MAX", wireType: wireOfField,
+		build: ssql.MaxOf,
+		code:  func(f string) string { return fmt.Sprintf("ssql.MaxOf(%q)", f) }},
+	{flag: "-collect", fn: "collect", hasField: true, sqlFn: "LIST", wireType: wireFixed("json"),
+		build: ssql.Collect,
+		code:  func(f string) string { return fmt.Sprintf("ssql.Collect(%q)", f) }},
+}
+
+// aggDefByFlag / aggDefByFn look an aggregate up by its flag ("-sum") or
+// its function name ("sum").
+func aggDefByFlag(flag string) (aggDef, bool) {
+	for _, d := range aggDefs {
+		if d.flag == flag {
+			return d, true
+		}
+	}
+	return aggDef{}, false
+}
+
+func aggDefByFn(fn string) (aggDef, bool) {
+	for _, d := range aggDefs {
+		if d.fn == fn {
+			return d, true
+		}
+	}
+	return aggDef{}, false
+}
+
+// aggFlagArity returns flag → argument count for every built-in
+// aggregation flag (1 for -count, 2 for FIELD RESULT flags) — the table
+// the optimiser and the schema walker use to step over a stage.
+func aggFlagArity() map[string]int {
+	m := make(map[string]int, len(aggDefs))
+	for _, d := range aggDefs {
+		if d.hasField {
+			m[d.flag] = 2
+		} else {
+			m[d.flag] = 1
+		}
+	}
+	return m
+}
+
+// aggWireType is the `_schema` type of an aggregation result, given the
+// input schema (nil when the input had no header).
+func aggWireType(spec aggSpec, in interface {
+	HasField(string) bool
+	TypeOf(string) string
+}) string {
+	d, ok := aggDefByFn(spec.function)
+	if !ok {
+		return "float"
+	}
+	ft := ""
+	if d.hasField && in != nil && in.HasField(spec.field) {
+		ft = in.TypeOf(spec.field)
+	}
+	return d.wireType(ft)
+}
 
 // streamExprSpec represents a streaming custom-aggregation
 // specification (-stream-expr init every final result).
@@ -41,25 +155,24 @@ func parseGroupBySpecs(ctx *cf.Context) groupBySpecs {
 	}
 }
 
-// parseAggSpecs decodes the built-in aggregation flags (-count, -sum,
-// -avg, -min, -max, -collect) into aggSpecs in flag order.
+// parseAggSpecs decodes the built-in aggregation flags (aggDefs) into
+// aggSpecs in registry order.
 func parseAggSpecs(ctx *cf.Context) []aggSpec {
 	var aggs []aggSpec
-	// -count has a single Arg() (result name), so autocli delivers a
-	// bare string rather than a map.
-	if vals, ok := ctx.GlobalFlags["-count"].([]any); ok {
-		for _, v := range vals {
-			if name, ok := v.(string); ok {
-				aggs = append(aggs, aggSpec{function: "count", result: name})
+	for _, d := range aggDefs {
+		if !d.hasField {
+			// A single-Arg() flag (result name only) arrives from autocli
+			// as a bare string rather than a map.
+			if vals, ok := ctx.GlobalFlags[d.flag].([]any); ok {
+				for _, v := range vals {
+					if name, ok := v.(string); ok {
+						aggs = append(aggs, aggSpec{function: d.fn, result: name})
+					}
+				}
 			}
+			continue
 		}
-	}
-	// The field+result aggregations all share the same 2-Arg shape.
-	for _, f := range []struct{ flag, fn string }{
-		{"-sum", "sum"}, {"-avg", "avg"}, {"-min", "min"},
-		{"-max", "max"}, {"-collect", "collect"},
-	} {
-		aggs = append(aggs, fieldResultAggSpecs(ctx, f.flag, f.fn)...)
+		aggs = append(aggs, fieldResultAggSpecs(ctx, d.flag, d.fn)...)
 	}
 	return aggs
 }

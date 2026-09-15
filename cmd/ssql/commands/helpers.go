@@ -352,24 +352,14 @@ func contains(str, substr string) bool {
 	return false
 }
 
-// buildAggregator creates an aggregation function for the given function name and field.
+// buildAggregator creates the exec-lane aggregation function for a
+// built-in aggregate (aggDefs, DFC129 §6).
 func buildAggregator(function, field string) (ssql.AggregateFunc, error) {
-	switch function {
-	case "count":
-		return ssql.Count(), nil
-	case "sum":
-		return ssql.Sum(field), nil
-	case "avg":
-		return ssql.Avg(field), nil
-	case "min":
-		return ssql.Min[float64](field), nil
-	case "max":
-		return ssql.Max[float64](field), nil
-	case "collect":
-		return ssql.Collect(field), nil
-	default:
+	d, ok := aggDefByFn(function)
+	if !ok {
 		return nil, fmt.Errorf("unknown aggregation function: %s", function)
 	}
+	return d.build(field), nil
 }
 
 // chainRecords chains multiple JSONL data sources into a single stream (for union command)

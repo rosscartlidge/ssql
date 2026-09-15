@@ -206,10 +206,12 @@ count := record.Len()
 ssql.Count()                    // ⚠️ NO PARAMETERS! Field name goes in map key
 ssql.Sum("field")               // Takes field parameter
 ssql.Avg("field")
-ssql.Min[T]("field")
+ssql.Min[T]("field")            // T known at compile time (int64, float64, string)
 ssql.Max[T]("field")
-ssql.First("field")
-ssql.Last("field")
+ssql.MinOf("field")             // type-preserving: numbers, strings or times, decided per group
+ssql.MaxOf("field")
+ssql.First[T]("field")          // ⚠️ type parameter is REQUIRED — First("field") does not compile
+ssql.Last[T]("field")
 ssql.Collect("field")
 ```
 
