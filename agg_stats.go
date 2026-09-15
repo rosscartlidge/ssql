@@ -96,20 +96,22 @@ func StdDev(field string) AggregateFunc {
 }
 
 // Welford is the running mean / M2 state for a single-pass variance.
-// Generated typed code embeds the same three fields and the same
-// Add/Merge arithmetic (typed_groupby.go), so the lanes agree.
+// Both running quantities are CompensatedSum accumulators (Neumaier), so
+// the mean update and the M2 update do not drift over long groups.
+// Generated typed code embeds this type and calls Add/Merge/Variance, so
+// the lanes share one arithmetic.
 type Welford struct {
 	N    int64
-	Mean float64
-	M2   float64
+	mean CompensatedSum
+	m2   CompensatedSum
 }
 
 // Add folds one value into the state.
 func (w *Welford) Add(x float64) {
 	w.N++
-	delta := x - w.Mean
-	w.Mean += delta / float64(w.N)
-	w.M2 += delta * (x - w.Mean)
+	delta := x - w.mean.Value()
+	w.mean.Add(delta / float64(w.N))
+	w.m2.Add(delta * (x - w.mean.Value()))
 }
 
 // Merge folds another state in (Chan, Golub & LeVeque), for shard merges.
@@ -122,18 +124,22 @@ func (w *Welford) Merge(o Welford) {
 		return
 	}
 	n := float64(w.N + o.N)
-	delta := o.Mean - w.Mean
-	w.Mean += delta * float64(o.N) / n
-	w.M2 += o.M2 + delta*delta*float64(w.N)*float64(o.N)/n
+	delta := o.mean.Value() - w.mean.Value()
+	w.mean.Add(delta * float64(o.N) / n)
+	w.m2.Merge(o.m2)
+	w.m2.Add(delta * delta * float64(w.N) * float64(o.N) / n)
 	w.N += o.N
 }
+
+// MeanValue is the running mean.
+func (w Welford) MeanValue() float64 { return w.mean.Value() }
 
 // Variance is the sample variance of the state (0 for a single value).
 func (w Welford) Variance() float64 {
 	if w.N < 2 {
 		return 0
 	}
-	return w.M2 / float64(w.N-1)
+	return w.m2.Value() / float64(w.N-1)
 }
 
 // Mode is the most frequent present value of field, keeping its type;

@@ -1192,6 +1192,20 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// -sum / -avg are compensated (Neumaier) in every Go lane: group a
+		// sums to exactly 1 where plain float64 addition — and DuckDB's
+		// SUM(DOUBLE) and kahan_sum — return 0. The typed parallel lane
+		// merges compensated shard states and keeps the 1 too.
+		Name:     "groupby_sum_compensated",
+		Pipeline: `{{.bin}} from csv {{.data}}/precision.csv | {{.bin}} group-by k -sum x total -avg x mean -count n`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"k": "a", "total": 1, "mean": 1.0 / 3, "n": 3},
+			{"k": "b", "total": 0.6, "mean": 0.19999999999999998, "n": 3}, // 0.6/3 in float64
+		},
+		Skip: map[string]string{"duckdb": "DuckDB's SUM(DOUBLE) (and kahan_sum) lose the unit in 1e16 + 1 - 1e16; ssql's Neumaier sum keeps it"},
+	},
+	{
 		// A field named like an expr builtin (`date`) is the FIELD when used
 		// bare in an expression, in every lane: exec's VM patches it to
 		// $env["date"], the transpiled lanes always read it as a field, SQL

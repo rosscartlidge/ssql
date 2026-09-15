@@ -113,6 +113,7 @@ func corpusData(t *testing.T) string {
 			"int_first.tsv":          strings.ReplaceAll(corpusIntFirstCSV, ",", "\t"),
 			"dated.csv":              corpusDatedCSV,
 			"epochs.csv":             corpusEpochsCSV,
+			"precision.csv":          corpusPrecisionCSV,
 			"epochs_ms.csv":          corpusEpochsMsCSV,
 			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
 			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
@@ -732,3 +733,16 @@ func corpusJSONLFromCSV(csvText string, withHeader bool) string {
 	}
 	return b.String()
 }
+
+// corpusPrecisionCSV: a group whose plain float64 sum loses the unit
+// (1e16 + 1 rounds to 1e16, then -1e16 leaves 0) and a group of small
+// floats. Compensated summation (ssql.CompensatedSum) keeps the 1 in every
+// Go lane; DuckDB's SUM and kahan_sum both lose it (checked 2026-09-15).
+const corpusPrecisionCSV = `k,x
+a,10000000000000000
+a,1
+a,-10000000000000000
+b,0.1
+b,0.2
+b,0.3
+`

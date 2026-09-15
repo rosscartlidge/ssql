@@ -58,7 +58,7 @@ func TestStatisticsAggregates(t *testing.T) {
 			b.Add(x)
 		}
 		a.Merge(b)
-		if a.N != whole.N || math.Abs(a.Variance()-whole.Variance()) > 1e-12 || math.Abs(a.Mean-whole.Mean) > 1e-12 {
+		if a.N != whole.N || math.Abs(a.Variance()-whole.Variance()) > 1e-12 || math.Abs(a.MeanValue()-whole.MeanValue()) > 1e-12 {
 			t.Fatalf("merged %+v vs whole %+v", a, whole)
 		}
 		if whole.Variance() != 32.0/7 {

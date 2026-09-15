@@ -35,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-rollup`/`-cube`. Library: `ssql.Median`, `Percentile`, `StdDev`,
   `Variance`, `Mode`.
 
+### Changed
+- **`-sum`, `-avg` and the Welford variance use compensated summation**
+  (Neumaier's variant of Kahan; `ssql.CompensatedSum`) in every Go lane
+  — exec, record codegen, and the typed lane for float columns (integer
+  columns already sum exactly in int64). A long sum of floats is now
+  accurate to about one unit in the last place instead of drifting;
+  `1e16 + 1 − 1e16` is 1, where plain addition (and DuckDB's `SUM`) gives
+  0. Not associative — a parallel merge can still differ from the serial
+  pass in the last bit — but both are now within an ulp of the true sum.
+
 ### Fixed
 - **The optimiser dropped a `sort` feeding `group-by -presorted`.**
   group-by is declared order-resetting, but `-presorted` groups

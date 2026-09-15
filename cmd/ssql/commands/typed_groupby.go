@@ -364,11 +364,19 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		st.fieldGoT = f.GoType
 		switch s.function {
 		case "sum":
+			// Integers sum exactly in their own type; float columns use
+			// the library's compensated accumulator (Neumaier), like exec.
 			st.stateType = f.GoType
+			if isFloatGoType(f.GoType) {
+				st.stateType = "ssql.CompensatedSum"
+			}
 		case "avg":
-			// avg uses two states: running sum (in same numeric type)
-			// plus running count.
+			// avg uses two states: running sum (in same numeric type, or
+			// compensated for floats) plus running count.
 			st.stateType = f.GoType
+			if isFloatGoType(f.GoType) {
+				st.stateType = "ssql.CompensatedSum"
+			}
 			st.needsN = true
 		case "min", "max":
 			// Track value + a "have any" flag.
@@ -430,9 +438,17 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		case "count":
 			fmt.Fprintf(&d, "\ta.%s++\n", s.stateName)
 		case "sum":
-			fmt.Fprintf(&d, "\ta.%s += r.%s\n", s.stateName, s.fieldGo)
+			if isFloatGoType(s.fieldGoT) {
+				fmt.Fprintf(&d, "\ta.%s.Add(float64(r.%s))\n", s.stateName, s.fieldGo)
+			} else {
+				fmt.Fprintf(&d, "\ta.%s += r.%s\n", s.stateName, s.fieldGo)
+			}
 		case "avg":
-			fmt.Fprintf(&d, "\ta.%s += r.%s\n", s.stateName, s.fieldGo)
+			if isFloatGoType(s.fieldGoT) {
+				fmt.Fprintf(&d, "\ta.%s.Add(float64(r.%s))\n", s.stateName, s.fieldGo)
+			} else {
+				fmt.Fprintf(&d, "\ta.%s += r.%s\n", s.stateName, s.fieldGo)
+			}
 			fmt.Fprintf(&d, "\ta.%s_n++\n", s.stateName)
 		case "min":
 			fmt.Fprintf(&d, "\tif !a.%s_have || %s {\n", s.stateName, orderedLess(s.fieldGoT, "r."+s.fieldGo, "a."+s.stateName))
@@ -498,7 +514,13 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		switch s.spec.function {
 		case "count":
 			fmt.Fprintf(&d, "\t\t%s: a.%s,\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
-		case "sum", "min", "max", "first", "last", "any":
+		case "sum":
+			if isFloatGoType(s.fieldGoT) {
+				fmt.Fprintf(&d, "\t\t%s: %s(a.%s.Value()),\n", lib.GoNameFromColumn(s.spec.result), s.fieldGoT, s.stateName)
+			} else {
+				fmt.Fprintf(&d, "\t\t%s: a.%s,\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
+			}
+		case "min", "max", "first", "last", "any":
 			fmt.Fprintf(&d, "\t\t%s: a.%s,\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
 		case "count-distinct":
 			fmt.Fprintf(&d, "\t\t%s: int64(len(a.%s)),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
@@ -519,8 +541,12 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\t\t%s: func() %s { var best *typedModeEntry; var bv %s; for k, e := range a.%s { if best == nil || e.N > best.N || (e.N == best.N && e.First < best.First) { best, bv = e, k } }; return bv }(),\n",
 				lib.GoNameFromColumn(s.spec.result), s.fieldGoT, s.fieldGoT, s.stateName)
 		case "avg":
-			fmt.Fprintf(&d, "\t\t%s: func() float64 { if a.%s_n == 0 { return 0 }; return float64(a.%s) / float64(a.%s_n) }(),\n",
-				lib.GoNameFromColumn(s.spec.result), s.stateName, s.stateName, s.stateName)
+			sumExpr := fmt.Sprintf("float64(a.%s)", s.stateName)
+			if isFloatGoType(s.fieldGoT) {
+				sumExpr = fmt.Sprintf("a.%s.Value()", s.stateName)
+			}
+			fmt.Fprintf(&d, "\t\t%s: func() float64 { if a.%s_n == 0 { return 0 }; return %s / float64(a.%s_n) }(),\n",
+				lib.GoNameFromColumn(s.spec.result), s.stateName, sumExpr, s.stateName)
 		}
 	}
 	for _, p := range exprPlans {
@@ -541,10 +567,20 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		d.WriteString("\tif !ok {\n\t\treturn\n\t}\n")
 		for _, s := range states {
 			switch s.spec.function {
-			case "count", "sum":
+			case "count":
 				fmt.Fprintf(&d, "\ta.%s += o.%s\n", s.stateName, s.stateName)
+			case "sum":
+				if isFloatGoType(s.fieldGoT) {
+					fmt.Fprintf(&d, "\ta.%s.Merge(o.%s)\n", s.stateName, s.stateName)
+				} else {
+					fmt.Fprintf(&d, "\ta.%s += o.%s\n", s.stateName, s.stateName)
+				}
 			case "avg":
-				fmt.Fprintf(&d, "\ta.%s += o.%s\n", s.stateName, s.stateName)
+				if isFloatGoType(s.fieldGoT) {
+					fmt.Fprintf(&d, "\ta.%s.Merge(o.%s)\n", s.stateName, s.stateName)
+				} else {
+					fmt.Fprintf(&d, "\ta.%s += o.%s\n", s.stateName, s.stateName)
+				}
 				fmt.Fprintf(&d, "\ta.%s_n += o.%s_n\n", s.stateName, s.stateName)
 			case "min":
 				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || %s) {\n", s.stateName, s.stateName, orderedLess(s.fieldGoT, "o."+s.stateName, "a."+s.stateName))
@@ -707,6 +743,10 @@ func orderedLess(goType, a, b string) string {
 	return fmt.Sprintf("%s < %s", a, b)
 }
 
+// isFloatGoType: the columns whose sums are compensated (integers sum
+// exactly in their own type).
+func isFloatGoType(t string) bool { return t == "float64" || t == "float32" }
+
 func isNumericGoType(t string) bool {
 	switch t {
 	case "int", "int32", "int64", "uint64", "float32", "float64":
@@ -769,6 +809,10 @@ func typedAggImports(specs []aggSpec, in *lib.TypedSchema) []string {
 			}
 		case "median", "percentile":
 			out = append(out, "sort", "github.com/rosscartlidge/ssql/v4")
+		case "sum", "avg":
+			if f, ok := lookupSchemaField(in, s.field); ok && isFloatGoType(f.GoType) {
+				out = append(out, "github.com/rosscartlidge/ssql/v4")
+			}
 		case "variance":
 			out = append(out, "github.com/rosscartlidge/ssql/v4")
 		case "stddev":

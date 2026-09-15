@@ -292,6 +292,21 @@ ever wanted. Cases `groupby_stats_quantiles`, `groupby_stats_spread`,
 `groupby_mode` (Goldens from DuckDB + Python) and `groupby_cube_stats`;
 watched `groupby_mode` fail on a reversed tie-break.
 
+*Compensated summation, 2026-09-15* (Ross: "what about kahan
+addition?"). `ssql.CompensatedSum` (Neumaier — Kahan proper loses the
+unit when a term exceeds the running sum; so does DuckDB's `kahan_sum`,
+checked) now backs `Sum`, `Avg` and both running quantities of
+`Welford`; the typed template emits it for float32/float64 columns and
+keeps exact int64 sums for integer columns; Merge adds the peer's sum
+and compensation each with compensation. It buys accuracy (a million
+0.1s sum to the correctly rounded 1e5), not associativity: the
+last-ulp caveat above stands, the harness tolerance remains the
+follow-up. Case `groupby_sum_compensated` (Golden 1 and 0.6; DuckDB lane
+skipped with the reason). Not compensated yet: `-expr` sum lowering
+(`+=` terms in expr_agg_lower.go), `window -sum/-avg`, the typed
+standalone `Summer`/`Averager` helpers, `operations.go` running totals —
+listed in TODO.
+
 **Phase 3 — paired (½ day).** `-arg-max F BY R`, `-arg-min F BY R`.
 SQL: `arg_max(F, BY)`; the Postgres note goes in DFC060's portability
 list. Ties: first seen wins, documented, matches DuckDB.

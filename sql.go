@@ -1574,14 +1574,14 @@ func Count() AggregateFunc {
 //	}
 func Sum(field string) AggregateFunc {
 	return func(records []Record) AggregateResult {
-		var sum float64
+		var sum CompensatedSum // Neumaier: a million floats sum to the ulp, not to drift
 		for _, record := range records {
 			// Use type-safe Get with automatic conversion to float64
 			if value, ok := Get[float64](record, field); ok {
-				sum += value
+				sum.Add(value)
 			}
 		}
-		return AggResult[float64]{val: sum}
+		return AggResult[float64]{val: sum.Value()}
 	}
 }
 
@@ -1595,19 +1595,19 @@ func Sum(field string) AggregateFunc {
 //	}
 func Avg(field string) AggregateFunc {
 	return func(records []Record) AggregateResult {
-		var sum float64
+		var sum CompensatedSum
 		var count int64
 		for _, record := range records {
 			// Use type-safe Get with automatic conversion to float64
 			if value, ok := Get[float64](record, field); ok {
-				sum += value
+				sum.Add(value)
 				count++
 			}
 		}
 		if count == 0 {
 			return AggResult[float64]{val: 0.0}
 		}
-		return AggResult[float64]{val: sum / float64(count)}
+		return AggResult[float64]{val: sum.Value() / float64(count)}
 	}
 }
 
