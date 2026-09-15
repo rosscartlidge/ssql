@@ -133,7 +133,7 @@ CURRENT ROW` for numbers — DuckDB and Postgres both accept both.
 
 | # | Unit | Size | Notes |
 |---|---|---|---|
-| 0 | **Equivalence cases for window** — one per function group, shuffled fixture, Goldens from DuckDB, `-presorted` variant, ROWS frames | ½ day | the gate first; it will say whether the five existing aggregates and the offset functions agree across exec / record / DuckDB today |
+| 0 | **Equivalence cases for window** — one per function group, shuffled fixture, Goldens from DuckDB, `-presorted` variant, ROWS frames | ½ day | the gate first; it will say whether the five existing aggregates and the offset functions agree across exec / record / DuckDB today. *Done 2026-09-15* — nine cases, and it said no, three times (§5a). |
 | 1 | `cume_dist`, `nth_value`, `lag`/`lead` default value, `count(F)` | ½ day | completes the ranking/offset families; small, no design |
 | 2 | **Aggregates over frames from the registry**: window's aggregate flags become `aggDefs` lookups; new flags `-stddev -variance -median -percentile -count-distinct -string-agg -mode -arg-max -arg-min -first-arrival?` (no — `-first` is FIRST_VALUE already), compensated sums come for free | 1–1½ days | §3; streaming for Remove-capable kinds, materialised otherwise |
 | 3 | **RANGE frames** (numeric and time) | 1 day | §4; equivalence against DuckDB's RANGE |
@@ -142,6 +142,33 @@ CURRENT ROW` for numbers — DuckDB and Postgres both accept both.
 
 Order: 0 → 1 → 2 → 3, with 4 when the typed story needs it (GopherCon
 planning). Units 0–3 are about three days.
+
+### 5a. What unit 0 found (2026-09-15)
+
+Nine cases (`window_*` in `equivalence_test.go`); three lanes disagreed
+with exec before any was fixed:
+
+1. **NTILE was 0 in every generated program.** `windowFuncToCode`
+   rebuilt the unexported `wNtile{N}` by formatting it with `%v` and
+   parsing the text; `%v` prints `{2}` with no field name, so N read as
+   0 and record and typed codegen put every row in tile 1. The library
+   now renders its own constructor (`ssql.WindowFuncCode`) and exposes
+   `WindowFuncField` / `WindowFuncResultKind`, and the CLI's two
+   type-name-sniffing switches are gone — the DFC115 shape again (a
+   second implementation of the type's structure, in string form).
+2. **The SQL default frame.** `buildFrameSQL` returned "" for ssql's
+   default (unbounded preceding → current row) "because it matches the
+   SQL default". It does not: SQL's default with ORDER BY is RANGE,
+   which includes peers, so `-sum salary run -order status` gave DuckDB
+   whole peer-group sums. Always rendered now.
+3. **The clause separator.** `translateWindow` split clauses on a bare
+   `-`; autocli's separator is `+`. Two clauses collapsed into one and
+   the second's `-desc` sorted the first. `+` and `+desc` handled.
+
+The exec lane was right in all three; the gate's value was the other
+lanes. Note also that the `-lag`/`-lead` edge (no previous row) is an
+absent field in exec and NULL in DuckDB, and the harness's canonical
+form already treats those alike — no change needed.
 
 ## 6. Decisions
 

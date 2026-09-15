@@ -560,34 +560,16 @@ func parseLagLeadSpecs(flags map[string]any, flagName string, isLag bool) []ssql
 
 // inferWindowResultType returns the schema type string for a window function result.
 func inferWindowResultType(fn ssql.WindowFunc, inputSchema *lib.Schema) string {
-	// Use %T to determine the concrete type since the types are unexported
-	typeName := fmt.Sprintf("%T", fn)
-	switch {
-	case strings.HasSuffix(typeName, "wRowNumber"),
-		strings.HasSuffix(typeName, "wRank"),
-		strings.HasSuffix(typeName, "wDenseRank"),
-		strings.HasSuffix(typeName, "wNtile"),
-		strings.HasSuffix(typeName, "wCount"):
-		return "int"
-	case strings.HasSuffix(typeName, "wPercentRank"),
-		strings.HasSuffix(typeName, "wSum"),
-		strings.HasSuffix(typeName, "wAvg"):
-		return "float"
-	case strings.HasSuffix(typeName, "wLag"),
-		strings.HasSuffix(typeName, "wLead"),
-		strings.HasSuffix(typeName, "wFirst"),
-		strings.HasSuffix(typeName, "wLast"),
-		strings.HasSuffix(typeName, "wMin"),
-		strings.HasSuffix(typeName, "wMax"):
-		// Infer from source field if schema available
-		field := extractStructField(fmt.Sprintf("%+v", fn), "Field")
-		if inputSchema != nil && inputSchema.HasField(field) {
-			return inputSchema.TypeOf(field)
-		}
-		return "string"
-	default:
-		return "string"
+	// The library says what each function produces (DFC115); a result
+	// that keeps the source field's type looks the field up in the input
+	// schema.
+	if kind := ssql.WindowFuncResultKind(fn); kind != "" {
+		return kind
 	}
+	if field, ok := ssql.WindowFuncField(fn); ok && inputSchema != nil && inputSchema.HasField(field) {
+		return inputSchema.TypeOf(field)
+	}
+	return "string"
 }
 
 // generateWindowCode generates Go code for the window command.
@@ -683,69 +665,10 @@ func formatWindowFunc(fn ssql.WindowFunc) string {
 	return windowFuncToCode(fn)
 }
 
-// windowFuncToCode converts a WindowFunc to its Go constructor call string.
-// Since the concrete types are unexported, we compare against known instances.
+// windowFuncToCode renders a WindowFunc's Go constructor call. The library
+// owns the rendering (ssql.WindowFuncCode, DFC115): the old version here
+// formatted the unexported struct with %v and parsed the text back, and
+// NTILE's N came out as 0 in every generated program.
 func windowFuncToCode(fn ssql.WindowFunc) string {
-	// Use fmt.Sprintf(%T) to get the type name
-	typeName := fmt.Sprintf("%T", fn)
-
-	switch {
-	case strings.HasSuffix(typeName, "wRowNumber"):
-		return "ssql.WRowNumber()"
-	case strings.HasSuffix(typeName, "wRank"):
-		return "ssql.WRank()"
-	case strings.HasSuffix(typeName, "wDenseRank"):
-		return "ssql.WDenseRank()"
-	case strings.HasSuffix(typeName, "wPercentRank"):
-		return "ssql.WPercentRank()"
-	case strings.HasSuffix(typeName, "wCount"):
-		return "ssql.WCount()"
-	case strings.HasSuffix(typeName, "wNtile"):
-		// Extract N from the struct
-		n := fmt.Sprintf("%v", fn)
-		// Parse {N:3} or similar
-		return fmt.Sprintf("ssql.WNtile(%s)", extractStructField(n, "N"))
-	case strings.HasSuffix(typeName, "wLag"):
-		v := fmt.Sprintf("%+v", fn)
-		return fmt.Sprintf("ssql.WLag(%q, %s)", extractStructField(v, "Field"), extractStructField(v, "Offset"))
-	case strings.HasSuffix(typeName, "wLead"):
-		v := fmt.Sprintf("%+v", fn)
-		return fmt.Sprintf("ssql.WLead(%q, %s)", extractStructField(v, "Field"), extractStructField(v, "Offset"))
-	case strings.HasSuffix(typeName, "wFirst"):
-		v := fmt.Sprintf("%+v", fn)
-		return fmt.Sprintf("ssql.WFirst(%q)", extractStructField(v, "Field"))
-	case strings.HasSuffix(typeName, "wLast"):
-		v := fmt.Sprintf("%+v", fn)
-		return fmt.Sprintf("ssql.WLast(%q)", extractStructField(v, "Field"))
-	case strings.HasSuffix(typeName, "wSum"):
-		v := fmt.Sprintf("%+v", fn)
-		return fmt.Sprintf("ssql.WSum(%q)", extractStructField(v, "Field"))
-	case strings.HasSuffix(typeName, "wAvg"):
-		v := fmt.Sprintf("%+v", fn)
-		return fmt.Sprintf("ssql.WAvg(%q)", extractStructField(v, "Field"))
-	case strings.HasSuffix(typeName, "wMin"):
-		v := fmt.Sprintf("%+v", fn)
-		return fmt.Sprintf("ssql.WMin(%q)", extractStructField(v, "Field"))
-	case strings.HasSuffix(typeName, "wMax"):
-		v := fmt.Sprintf("%+v", fn)
-		return fmt.Sprintf("ssql.WMax(%q)", extractStructField(v, "Field"))
-	default:
-		return fmt.Sprintf("/* unknown window func: %T */", fn)
-	}
-}
-
-// extractStructField extracts a named field from fmt.Sprintf("%+v", struct) output.
-// Input format: "{Field:salary Offset:1}" — extracts value by field name.
-func extractStructField(s, fieldName string) string {
-	key := fieldName + ":"
-	idx := strings.Index(s, key)
-	if idx == -1 {
-		return "0"
-	}
-	start := idx + len(key)
-	end := start
-	for end < len(s) && s[end] != ' ' && s[end] != '}' {
-		end++
-	}
-	return s[start:end]
+	return ssql.WindowFuncCode(fn)
 }

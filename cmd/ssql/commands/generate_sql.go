@@ -1158,7 +1158,11 @@ func translateWindow(q *sqlQuery, args []string) error {
 	i := 0
 	for i < len(args) {
 		switch args[i] {
-		case "-":
+		case "+", "-":
+			// "+" is autocli's clause separator (a bare "-" is accepted for
+			// older pipelines). Until v4.100.0 only "-" was recognised, so a
+			// two-clause window collapsed into one and the second clause's
+			// -desc reordered the first (found by the DFC130 unit-0 gate).
 			// Clause separator
 			clauses = append(clauses, windowClause{preceding: -1, following: 0})
 			cur = &clauses[len(clauses)-1]
@@ -1179,6 +1183,9 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 		case "-desc", "-d":
 			cur.desc = true
+			i++
+		case "+desc", "+d":
+			cur.desc = false // autocli's negated bool: ascending
 			i++
 		case "-preceding":
 			if i+1 < len(args) {
@@ -1335,12 +1342,12 @@ func windowSQLFunc(flag string) string {
 }
 
 func buildFrameSQL(preceding, following int) string {
-	// Default frame (unbounded preceding to current row) matches SQL default
-	// for aggregate window functions when ORDER BY is present, so we can often omit it.
-	// But be explicit when the user specified non-default values.
-	if preceding == -1 && following == 0 {
-		return "" // default — let DuckDB use its own default
-	}
+	// ssql's default frame is ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT
+	// ROW. SQL's default with an ORDER BY is RANGE … CURRENT ROW, which
+	// includes the current row's PEERS (rows tied on the order key) — so a
+	// running sum or LAST_VALUE over tied order values differed between exec
+	// and DuckDB until v4.100.0 (found by the DFC130 unit-0 gate). Always
+	// render the frame explicitly.
 
 	var start, end string
 	if preceding < 0 {

@@ -1240,6 +1240,98 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept status -arg-max name salary top -count n -cube`,
 		Ordered:  false,
 	},
+	// ---- window (DFC130 unit 0): the command had no differential coverage
+	// before 2026-09-15. Fixture: employees.csv — within each dept the
+	// salaries are in neither file nor alphabetical order, so a wrong
+	// ordering diverges. Goldens from DuckDB.
+	{
+		Name:     "window_ranking_by_salary_desc",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -desc -row-number rn -rank rk -dense-rank dr -ntile 2 nt -percent-rank pr | {{.bin}} include name rn rk dr nt pr`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Carol", "rn": 1, "rk": 1, "dr": 1, "nt": 1, "pr": 0},
+			{"name": "Alice", "rn": 2, "rk": 2, "dr": 2, "nt": 1, "pr": 0.5},
+			{"name": "Eve", "rn": 3, "rk": 3, "dr": 3, "nt": 2, "pr": 1},
+			{"name": "Frank", "rn": 1, "rk": 1, "dr": 1, "nt": 1, "pr": 0},
+			{"name": "Bob", "rn": 2, "rk": 2, "dr": 2, "nt": 2, "pr": 1},
+			{"name": "Grace", "rn": 1, "rk": 1, "dr": 1, "nt": 1, "pr": 0},
+			{"name": "David", "rn": 2, "rk": 2, "dr": 2, "nt": 2, "pr": 1},
+		},
+	},
+	{
+		// LAG/LEAD at the partition edge have no value: exec omits the
+		// field, SQL yields NULL — the canonical form must treat them alike.
+		Name:     "window_offset_by_salary",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -lag salary 1 prev -lead salary 1 next -first salary lo -last salary hi | {{.bin}} include name prev next lo hi`,
+		Ordered:  false,
+	},
+	{
+		// Running aggregates over ssql's default frame (ROWS UNBOUNDED
+		// PRECEDING → CURRENT ROW), ordered by salary within dept.
+		Name:     "window_running_aggregates",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -sum salary run -avg salary ravg -count n -min salary mn -max salary mx | {{.bin}} include name run ravg n mn mx`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Eve", "run": 88000, "ravg": 88000, "n": 1, "mn": 88000, "mx": 88000},
+			{"name": "Alice", "run": 183000, "ravg": 91500, "n": 2, "mn": 88000, "mx": 95000},
+			{"name": "Carol", "run": 288000, "ravg": 96000, "n": 3, "mn": 88000, "mx": 105000},
+			{"name": "Bob", "run": 65000, "ravg": 65000, "n": 1, "mn": 65000, "mx": 65000},
+			{"name": "Frank", "run": 147000, "ravg": 73500, "n": 2, "mn": 65000, "mx": 82000},
+			{"name": "David", "run": 72000, "ravg": 72000, "n": 1, "mn": 72000, "mx": 72000},
+			{"name": "Grace", "run": 150000, "ravg": 75000, "n": 2, "mn": 72000, "mx": 78000},
+		},
+	},
+	{
+		// The default frame with TIED order values. ssql's default is ROWS
+		// (cumulative by row); SQL's default with ORDER BY is RANGE, which
+		// includes the current row's peers — the translator used to leave
+		// the frame implicit and DuckDB summed whole peer groups. Found by
+		// this case; the frame is now always rendered explicitly.
+		Name:     "window_default_frame_with_ties",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order status -sum salary run -last name lastn -count cnt | {{.bin}} include name run lastn cnt`,
+		Ordered:  false,
+	},
+	{
+		Name:     "window_rows_frame_moving",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -preceding 1 -following 1 -avg salary mavg -sum salary msum -count mn | {{.bin}} include name mavg msum mn`,
+		Ordered:  false,
+	},
+	{
+		Name:     "window_unbounded_frame",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -preceding -1 -following -1 -sum salary total -max salary top -first name lowest_paid | {{.bin}} include name total top lowest_paid`,
+		Ordered:  false,
+	},
+	{
+		// Two clauses: a per-dept ascending numbering and a global descending
+		// one. The SQL translator recognised only a bare "-" as the clause
+		// separator (autocli's is "+"), so both clauses collapsed into one and
+		// the second clause's -desc re-sorted the first. Found by this case.
+		Name:     "window_two_clauses",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -row-number rn_in_dept + -order salary -desc -row-number rn_overall | {{.bin}} include name rn_in_dept rn_overall`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Eve", "rn_in_dept": 1, "rn_overall": 3},
+			{"name": "Alice", "rn_in_dept": 2, "rn_overall": 2},
+			{"name": "Carol", "rn_in_dept": 3, "rn_overall": 1},
+			{"name": "Bob", "rn_in_dept": 1, "rn_overall": 7},
+			{"name": "Frank", "rn_in_dept": 2, "rn_overall": 4},
+			{"name": "David", "rn_in_dept": 1, "rn_overall": 6},
+			{"name": "Grace", "rn_in_dept": 2, "rn_overall": 5},
+		},
+	},
+	{
+		// Global ranking with a tie (level 6 twice): RANK skips, DENSE_RANK
+		// does not, PERCENT_RANK uses RANK − 1.
+		Name:     "window_global_ranking_with_ties",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -order level -rank rk -dense-rank dr -percent-rank pr -row-number rn | {{.bin}} include name level rk dr pr`,
+		Ordered:  false,
+	},
+	{
+		// -presorted: the streaming O(1)-memory path, fed by an explicit sort.
+		Name:     "window_presorted_streaming",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept salary | {{.bin}} window -presorted -partition dept -order salary -row-number rn -sum salary run -lag salary 1 prev | {{.bin}} include name rn run prev`,
+		Ordered:  false,
+	},
 	{
 		// A field named like an expr builtin (`date`) is the FIELD when used
 		// bare in an expression, in every lane: exec's VM patches it to

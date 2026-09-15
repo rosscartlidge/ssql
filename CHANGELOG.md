@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`generate go` lost NTILE's argument**: every generated program called
+  `ssql.WNtile(0)`, so `window -ntile 4 q` put every row in tile 1 under
+  record and typed codegen while exec and SQL were right. The CLI was
+  formatting the unexported function struct with `%v` and parsing the
+  text back; the library now renders its own constructor call
+  (`ssql.WindowFuncCode`) and reports its source field and result type
+  (`WindowFuncField`, `WindowFuncResultKind`) — DFC115. Found by the
+  DFC130 unit-0 gate.
+- **`generate sql` for `window` left the default frame implicit**, so
+  DuckDB applied SQL's RANGE default and included the current row's
+  PEERS: a running sum or LAST_VALUE over tied order values differed from
+  ssql's documented ROWS frame. The frame is now always rendered.
+- **`generate sql` for `window` did not recognise `+`** as the clause
+  separator (only a bare `-`), so a two-clause window collapsed into one
+  and the second clause's `-desc` re-sorted the first. `+desc` (autocli's
+  negated bool) is honoured too.
+
+### Internal
+- `window` now has nine cases in the N-way equivalence gate (it had none):
+  ranking, offset, running and moving aggregates, unbounded frame, the
+  default frame with ties, two clauses, global ranking with ties, and the
+  `-presorted` streaming path (DFC130 unit 0).
+
 ## [4.99.0] - 2026-09-15
 
 ### Added
