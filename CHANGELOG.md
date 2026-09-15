@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Library: `ssql.WCumeDist`, `WNthValue`, `WLagDefault`, `WLeadDefault`,
   `WCountField`.
 
+- **Every aggregate is a window function** (DFC130 unit 2): `window
+  -stddev F R`, `-variance F R`, `-median F R`, `-percentile F P R`,
+  `-count-distinct F R`, `-string-agg F SEP R`, `-mode F R`, `-arg-max F
+  BY R`, `-arg-min F BY R` — the group-by aggregate registry applied over
+  the frame, so a rolling stddev, a rolling distinct count or a rolling
+  string-agg use the same code as the group-by flags. Exec, record
+  codegen (the library renders its own constructor,
+  `ssql.WAggregate(ssql.WAggSpec{…})`) and `generate sql`
+  (`stddev_samp(f) OVER …`, `quantile_cont`, `count(DISTINCT f)`,
+  `string_agg`, `mode`, `arg_max`). Sample stddev/variance of a one-row
+  frame are absent — SQL's NULL. Materialised path only: `-presorted`
+  refuses these with the reason (the aggregates have no Remove yet).
+
 ### Fixed
 - **`generate go` lost NTILE's argument**: every generated program called
   `ssql.WNtile(0)`, so `window -ntile 4 q` put every row in tile 1 under

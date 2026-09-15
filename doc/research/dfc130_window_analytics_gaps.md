@@ -58,9 +58,9 @@ Against SQL:2003 window functions as DuckDB and Postgres implement them:
 | nth_value(F, n) | ✓ | ✓ | ✓ `-nth-value F N R` (unit 1) | — |
 | sum, avg, count, min, max | ✓ | ✓ | ✓ | — |
 | count(F) (non-null count) | ✓ | ✓ | ✓ `-count-field F R` (unit 1) | — |
-| **stddev / variance** (windowed) | ✓ | ✓ | — | rolling volatility is the classic use of a window |
-| **median / quantile** (windowed) | ✓ (`quantile_cont` over a frame) | ✓ | — | rolling median |
-| **count-distinct, string-agg, first/last-by-arrival, mode, arg-max** over a frame | ✓ (any aggregate can be windowed) | ✓ | — | in SQL every aggregate is a window function; ssql has fifteen aggregates and five of them windowed |
+| stddev / variance (windowed) | ✓ | ✓ | ✓ `-stddev`, `-variance` (unit 2, 2026-09-16; absent for a one-row frame like SQL) | — |
+| median / quantile (windowed) | ✓ (`quantile_cont` over a frame) | ✓ | ✓ `-median`, `-percentile F P R` (unit 2) | — |
+| count-distinct, string-agg, mode, arg-max/min over a frame | ✓ (any aggregate can be windowed) | ✓ | ✓ `-count-distinct`, `-string-agg`, `-mode`, `-arg-max`, `-arg-min` (unit 2) | streaming (`-presorted`) not yet — materialised frames only |
 | ROWS frame | ✓ | ✓ | ✓ | — |
 | **RANGE frame** (by value: `RANGE BETWEEN INTERVAL 5 MINUTE PRECEDING AND CURRENT ROW`) | ✓ | ✓ | — | the time-series frame; `resample` covers the gridded case, nothing covers "last 5 minutes per row" |
 | **GROUPS frame** | ✓ | ✓ | — | rare |
@@ -135,7 +135,7 @@ CURRENT ROW` for numbers — DuckDB and Postgres both accept both.
 |---|---|---|---|
 | 0 | **Equivalence cases for window** — one per function group, shuffled fixture, Goldens from DuckDB, `-presorted` variant, ROWS frames | ½ day | the gate first; it will say whether the five existing aggregates and the offset functions agree across exec / record / DuckDB today. *Done 2026-09-15* — nine cases, and it said no, three times (§5a). |
 | 1 | `cume_dist`, `nth_value`, `lag`/`lead` default value, `count(F)` | ½ day | completes the ranking/offset families; small, no design. *Done 2026-09-16*: `window_extra.go` (types, constructors, streaming aggregators — ring-buffer NTH_VALUE and sliding COUNT(field) for bounded frames, LAG/LEAD defaults through `swLagDefault` and the delayed-lead spec); `WindowFuncCode`/`Field`/`ResultKind` extended; SQL cases with a typed default literal; optimiser and schema arity tables; five equivalence cases (Goldens from DuckDB; `-presorted` variant; COUNT(field) proven to skip a LAG-produced missing value); watched an NTH_VALUE off-by-one fail. |
-| 2 | **Aggregates over frames from the registry**: window's aggregate flags become `aggDefs` lookups; new flags `-stddev -variance -median -percentile -count-distinct -string-agg -mode -arg-max -arg-min -first-arrival?` (no — `-first` is FIRST_VALUE already), compensated sums come for free | 1–1½ days | §3; streaming for Remove-capable kinds, materialised otherwise |
+| 2 | **Aggregates over frames from the registry**: window's aggregate flags become `aggDefs` lookups; new flags `-stddev -variance -median -percentile -count-distinct -string-agg -mode -arg-max -arg-min -first-arrival?` (no — `-first` is FIRST_VALUE already), compensated sums come for free | 1–1½ days | §3; streaming for Remove-capable kinds, materialised otherwise. *Done 2026-09-16 (Ross: "use the registry — nice solution")*: `ssql.WAggregate(WAggSpec)` wraps any `AggregateFunc` over the frame's records (`window_agg.go`); the window command declares the nine flags in a loop over `aggDefs` (`addWindowRegistryFlags`, `parseWindowRegistrySpecs`), so the grammar, P validation, SQL renderer and BY-as-read-column all come from the registry; `WAggSpec.Code` carries the aggregate's constructor so `WindowFuncCode` can rebuild it in generated Go. The existing five (count/sum/avg/min/max) keep their hand-written streaming forms. `MinRows: 2` for stddev/variance — DuckDB's window stddev is NULL for one row where the group-by Welford says 0; the frame path follows SQL. Streaming refused with the reason for all nine (no Remove yet — the honest v1 of §3). Three equivalence cases with DuckDB goldens; watched the one-row stddev fail with MinRows planted to 1. |
 | 3 | **RANGE frames** (numeric and time) | 1 day | §4; equivalence against DuckDB's RANGE |
 | 4 | **Typed window template** | 2 days | the frame accumulator per kind + ranking/offset code; SerialOnly per partition unless `-presorted` |
 | 5 | GROUPS frame, EXCLUDE, per-key direction, FILTER | — | only if asked |
@@ -174,7 +174,7 @@ form already treats those alike — no change needed.
 
 | # | Question | Recommendation |
 |---|---|---|
-| 1 | Windowed aggregates: hand-written per function, or from `aggDefs`? | From the registry (§3); window's five existing cases move onto it too |
+| 1 | Windowed aggregates: hand-written per function, or from `aggDefs`? | **Decided 2026-09-16 (Ross): the registry.** Done for the nine new ones; the five existing keep their streaming forms until a Remove-capable path exists |
 | 2 | RANGE grammar | `-range-preceding V` / `-range-following V`; the order field's type decides number vs duration |
 | 3 | Streaming vs materialised for sliding frames | Materialised everywhere first; streaming where `Remove` exists; fallback with reason |
 | 4 | Typed lane now? | After units 0–3 |

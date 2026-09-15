@@ -49,6 +49,9 @@ func WindowFuncCode(fn WindowFunc) string {
 		return fmt.Sprintf("ssql.WLeadDefault(%q, %d, %s)", f.Field, f.Offset, goLiteral(f.Default))
 	case wCountField:
 		return fmt.Sprintf("ssql.WCountField(%q)", f.Field)
+	case wAgg:
+		return fmt.Sprintf("ssql.WAggregate(ssql.WAggSpec{Name: %q, Field: %q, Extra: %q, Kind: %q, MinRows: %d, Agg: %s, Code: %q})",
+			f.spec.Name, f.spec.Field, f.spec.Extra, f.spec.Kind, f.spec.MinRows, f.spec.Code, f.spec.Code)
 	}
 	panic(fmt.Sprintf("ssql.WindowFuncCode: unknown window function %T", fn))
 }
@@ -81,6 +84,8 @@ func WindowFuncField(fn WindowFunc) (string, bool) {
 		return f.Field, true
 	case wCountField:
 		return f.Field, true
+	case wAgg:
+		return f.spec.Field, true
 	}
 	return "", false
 }
@@ -108,11 +113,13 @@ func goLiteral(v any) string {
 // (percent_rank, sum, avg), or "" when the result has the SOURCE FIELD's
 // type (lag, lead, first, last, min, max).
 func WindowFuncResultKind(fn WindowFunc) string {
-	switch fn.(type) {
+	switch f := fn.(type) {
 	case wRowNumber, wRank, wDenseRank, wNtile, wCount, wCountField:
 		return "int"
 	case wPercentRank, wSum, wAvg, wCumeDist:
 		return "float"
+	case wAgg:
+		return f.spec.Kind
 	}
 	return ""
 }

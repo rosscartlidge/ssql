@@ -1394,6 +1394,46 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept salary | {{.bin}} window -presorted -partition dept -order salary -nth-value name 2 second -count-field name n -lag-default salary 1 0 prev -lead-default name 1 none next | {{.bin}} include name second n prev next`,
 		Ordered:  false,
 	},
+	// ---- window, DFC130 unit 2: registry aggregates over the frame.
+	{
+		// Rolling sample stddev/variance are ABSENT for a one-row frame (SQL's
+		// NULL — the library's Welford says 0 for group-by, the frame path
+		// says nothing below two rows); rolling median and quantile.
+		Name:     "window_rolling_stats",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -stddev salary sd -variance salary v -median salary med -percentile salary 0.9 p90 | {{.bin}} include name sd v med p90`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Eve", "med": 88000, "p90": 88000},
+			{"name": "Alice", "sd": 4949.747468305833, "v": 24500000, "med": 91500, "p90": 94300},
+			{"name": "Carol", "sd": 8544.003745317532, "v": 73000000, "med": 95000, "p90": 103000},
+			{"name": "Bob", "med": 65000, "p90": 65000},
+			{"name": "Frank", "sd": 12020.815280171308, "v": 144500000, "med": 73500, "p90": 80300},
+			{"name": "David", "med": 72000, "p90": 72000},
+			{"name": "Grace", "sd": 4242.640687119285, "v": 18000000, "med": 75000, "p90": 77400},
+		},
+	},
+	{
+		// Rolling count-distinct, string-agg (frame order) and mode.
+		Name:     "window_rolling_set_list_mode",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -count-distinct status st -string-agg name "," names -mode city mc | {{.bin}} include name st names mc`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Eve", "st": 1, "names": "Eve", "mc": "SF"},
+			{"name": "Alice", "st": 1, "names": "Eve,Alice", "mc": "SF"},
+			{"name": "Carol", "st": 1, "names": "Eve,Alice,Carol", "mc": "SF"},
+			{"name": "Bob", "st": 1, "names": "Bob", "mc": "NYC"},
+			{"name": "Frank", "st": 1, "names": "Bob,Frank", "mc": "NYC"},
+			{"name": "David", "st": 1, "names": "David", "mc": "Chicago"},
+			{"name": "Grace", "st": 2, "names": "David,Grace", "mc": "Chicago"},
+		},
+	},
+	{
+		// arg-max / arg-min over a two-row moving frame: the BY field is a
+		// second read column (projection pruning must keep it).
+		Name:     "window_rolling_arg_max_min",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order name -preceding 1 -arg-max name salary richer -arg-min name salary poorer | {{.bin}} include name richer poorer`,
+		Ordered:  false,
+	},
 	{
 		// A field named like an expr builtin (`date`) is the FIELD when used
 		// bare in an expression, in every lane: exec's VM patches it to

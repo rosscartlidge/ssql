@@ -2118,6 +2118,17 @@ func extractWindowFields(args []string) ([]string, bool) {
 	var fields []string
 	i := 0
 	for i < len(args) {
+		if d, ok := isWindowRegistryFlag(args[i]); ok {
+			n := d.arity()
+			if i+n < len(args) {
+				fields = append(fields, args[i+1])
+				if d.extraIsField {
+					fields = append(fields, args[i+2])
+				}
+				i += n + 1
+				continue
+			}
+		}
 		switch args[i] {
 		case "-partition", "-order":
 			if i+1 < len(args) {

@@ -2191,6 +2191,10 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 		}
 		return float64(last+1) / float64(partLen)
 
+	case wAgg:
+		// A registry aggregate over the frame (DFC130 unit 2).
+		return applyFrameAggregate(f, all, indices, frameStart(pos, partLen, frame), frameEnd(pos, partLen, frame))
+
 	case wCountField:
 		start := frameStart(pos, partLen, frame)
 		end := frameEnd(pos, partLen, frame)
@@ -2763,6 +2767,8 @@ func newStreamWindowAgg(fn WindowFunc, frame WindowFrame) (streamWindowAgg, erro
 		return &swCountField{field: f.Field}, nil
 	case wCumeDist:
 		return nil, fmt.Errorf("CUME_DIST cannot be streamed (requires partition size)")
+	case wAgg:
+		return nil, fmt.Errorf("%s over a window cannot be streamed yet (the aggregate has no Remove); drop -presorted", f.spec.Name)
 	case wNtile:
 		return nil, fmt.Errorf("NTILE cannot be streamed (requires partition size)")
 	case wPercentRank:

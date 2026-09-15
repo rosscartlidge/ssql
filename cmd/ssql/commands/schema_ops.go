@@ -249,6 +249,10 @@ func init() {
 			"-sum": true, "-avg": true, "-min": true, "-max": true, "-lag": true, "-lead": true,
 			"-nth-value": true, "-lag-default": true, "-lead-default": true,
 		}
+		for _, d := range windowRegistryDefs() { // DFC130 unit 2: registry aggregates over the frame
+			arity[d.flag] = d.arity()
+			resultFlag[d.flag] = true
+		}
 		out := slices.Clone(in)
 		_, flags := walkStage(args, arity)
 		for _, f := range flags {

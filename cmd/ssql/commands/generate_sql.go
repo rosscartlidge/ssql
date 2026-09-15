@@ -1157,6 +1157,21 @@ func translateWindow(q *sqlQuery, args []string) error {
 
 	i := 0
 	for i < len(args) {
+		// Registry aggregates over the frame (DFC130 unit 2): FIELD [EXTRA] RESULT.
+		if d, ok := isWindowRegistryFlag(args[i]); ok {
+			n := d.arity()
+			if i+n < len(args) {
+				extra := ""
+				if d.extraArg != "" {
+					extra = args[i+2]
+				}
+				cur.funcs = append(cur.funcs, fmt.Sprintf("%s AS %s", d.sql(quoteIdent(args[i+1]), extra), quoteIdent(args[i+n])))
+				i += n + 1
+			} else {
+				i++
+			}
+			continue
+		}
 		switch args[i] {
 		case "+", "-":
 			// "+" is autocli's clause separator (a bare "-" is accepted for

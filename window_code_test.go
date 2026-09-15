@@ -33,3 +33,19 @@ func TestWindowFuncCode(t *testing.T) {
 		}
 	}
 }
+
+// TestWindowFuncCodeAggregate: a registry aggregate over a frame renders a
+// WAggregate call that embeds the aggregate's own constructor code.
+func TestWindowFuncCodeAggregate(t *testing.T) {
+	fn := WAggregate(WAggSpec{Name: "stddev", Field: "v", Kind: "float", MinRows: 2, Agg: StdDev("v"), Code: `ssql.StdDev("v")`})
+	want := `ssql.WAggregate(ssql.WAggSpec{Name: "stddev", Field: "v", Extra: "", Kind: "float", MinRows: 2, Agg: ssql.StdDev("v"), Code: "ssql.StdDev(\"v\")"})`
+	if got := WindowFuncCode(fn); got != want {
+		t.Fatalf("WindowFuncCode(wAgg) =\n%s\nwant\n%s", got, want)
+	}
+	if f, ok := WindowFuncField(fn); !ok || f != "v" {
+		t.Fatalf("WindowFuncField = %q, %v", f, ok)
+	}
+	if k := WindowFuncResultKind(fn); k != "float" {
+		t.Fatalf("WindowFuncResultKind = %q", k)
+	}
+}

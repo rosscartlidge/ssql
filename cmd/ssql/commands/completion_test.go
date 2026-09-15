@@ -128,6 +128,15 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-nth-value":    {0},
 			"-lag-default":  {0},
 			"-lead-default": {0},
+			"-stddev":         {0},
+			"-variance":       {0},
+			"-median":         {0},
+			"-percentile":     {0},
+			"-count-distinct": {0},
+			"-string-agg":     {0},
+			"-mode":           {0},
+			"-arg-max":        {0, 1},
+			"-arg-min":        {0, 1},
 		},
 		// Nested subcommands use "parent/child" notation
 		"to/table": {

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"os"
 	"fmt"
 	"slices"
 	"strconv"
@@ -13,7 +14,7 @@ import (
 
 // RegisterWindow registers the window subcommand
 func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
-	cmd.Subcommand("window").
+	w := cmd.Subcommand("window").
 		Description("Apply SQL-style window functions without collapsing rows").
 		Example("ssql from data.csv | ssql window -row-number rn -order salary -desc", "Number rows by salary descending").
 		Example("ssql from sales.csv | ssql window -sum revenue running_total -partition dept -order date", "Running total per department").
@@ -302,9 +303,15 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Accumulate().
 			Local().
 			Help("Windowed MAX(field) → result field").
-			Done().
+			Done()
 
-		Handler(func(ctx *cf.Context) error {
+	// Every other registry aggregate over the frame (DFC130 unit 2):
+	// -stddev, -variance, -median, -percentile, -count-distinct,
+	// -string-agg, -mode, -arg-max, -arg-min — declared from aggDefs so the
+	// grammar is the group-by grammar.
+	w = addWindowRegistryFlags(w)
+
+	w.Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "window")
 			}
@@ -513,6 +520,9 @@ func parseWindowClauses(clauses []cf.Clause) ([]ssql.WindowConfig, error) {
 		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-max", "field", "result", func(field, result string) ssql.WindowSpec {
 			return ssql.WindowSpec{Function: ssql.WMax(field), ResultName: result}
 		})...)
+
+		// Registry aggregates over the frame (DFC130 unit 2)
+		specs = append(specs, parseWindowRegistrySpecs(clause.Flags)...)
 
 		// Three-arg functions: -ntile n result, -lag field n result, -lead field n result
 		specs = append(specs, parseNtileSpecs(clause.Flags)...)
@@ -832,4 +842,124 @@ func formatWindowFunc(fn ssql.WindowFunc) string {
 // NTILE's N came out as 0 in every generated program.
 func windowFuncToCode(fn ssql.WindowFunc) string {
 	return ssql.WindowFuncCode(fn)
+}
+
+
+// windowRegistryFns lists the aggregate registry entries exposed as window
+// functions over the frame. count/sum/avg/min/max/first/last have native
+// window implementations (with streaming forms) and stay hand-written.
+var windowRegistryFns = []string{"stddev", "variance", "median", "percentile", "count-distinct", "string-agg", "mode", "arg-max", "arg-min"}
+
+func windowRegistryDefs() []aggDef {
+	var out []aggDef
+	for _, fn := range windowRegistryFns {
+		if d, ok := aggDefByFn(fn); ok {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// isWindowRegistryFlag reports whether flag is one of the registry
+// aggregates exposed on window (and returns its def).
+func isWindowRegistryFlag(flag string) (aggDef, bool) {
+	for _, d := range windowRegistryDefs() {
+		if d.flag == flag {
+			return d, true
+		}
+	}
+	return aggDef{}, false
+}
+
+// addWindowRegistryFlags declares one Local, accumulating flag per registry
+// aggregate: FIELD [EXTRA] RESULT, with field completion on FIELD (and on
+// the extra argument when it names a field, -arg-*'s BY).
+func addWindowRegistryFlags(w *cf.SubcommandBuilder) *cf.SubcommandBuilder {
+	for _, d := range windowRegistryDefs() {
+		fb := w.Flag(d.flag).Arg("field").FieldsFromFlag("").Done()
+		if d.extraArg != "" {
+			ab := fb.Arg(d.extraArg)
+			if d.extraIsField {
+				ab = ab.FieldsFromFlag("")
+			} else {
+				ab = ab.Completer(&cf.NoCompleter{Hint: "<" + d.extraArg + ">"})
+			}
+			fb = ab.Done()
+		}
+		fb = fb.Arg("result").Completer(&cf.NoCompleter{Hint: "<result-field>"}).Done()
+		w = fb.Accumulate().Local().Help(windowRegistryHelp(d)).Done()
+	}
+	return w
+}
+
+func windowRegistryHelp(d aggDef) string {
+	args := "field"
+	if d.extraArg != "" {
+		args += ", " + d.extraArg
+	}
+	note := ""
+	if d.fn == "stddev" || d.fn == "variance" {
+		note = "; absent for a frame of one row (SQL's NULL)"
+	}
+	return fmt.Sprintf("Windowed %s over the frame (%s, result name)%s — materialised path only, not -presorted", d.fn, args, note)
+}
+
+// windowAggKind is the result wire type of a registry aggregate: "" when it
+// keeps the field's own type (min/max/first/last/mode/arg-*), else the fixed
+// kind.
+func windowAggKind(d aggDef) string {
+	if d.wireType("bool") == "bool" { // only wireOfField echoes its input
+		return ""
+	}
+	return d.wireType("")
+}
+
+// parseWindowRegistrySpecs decodes the registry aggregate flags of one
+// clause into WindowSpecs wrapping ssql.WAggregate.
+func parseWindowRegistrySpecs(flags map[string]any) []ssql.WindowSpec {
+	var specs []ssql.WindowSpec
+	for _, d := range windowRegistryDefs() {
+		raw, ok := flags[d.flag]
+		if !ok {
+			continue
+		}
+		arr, ok := raw.([]any)
+		if !ok {
+			continue
+		}
+		for _, v := range arr {
+			m, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			field, _ := m["field"].(string)
+			result, _ := m["result"].(string)
+			extra := ""
+			if d.extraArg != "" {
+				extra, _ = m[d.extraArg].(string)
+			}
+			if field == "" || result == "" {
+				continue
+			}
+			if d.check != nil {
+				if err := d.check(extra); err != nil {
+					// Loud: the same message group-by gives.
+					fmt.Fprintf(os.Stderr, "Error: window %s\n", err)
+					os.Exit(1)
+				}
+			}
+			minRows := 1
+			if d.fn == "stddev" || d.fn == "variance" {
+				minRows = 2 // sample statistics are undefined for one row — SQL's NULL
+			}
+			specs = append(specs, ssql.WindowSpec{
+				Function: ssql.WAggregate(ssql.WAggSpec{
+					Name: d.fn, Field: field, Extra: extra, Kind: windowAggKind(d), MinRows: minRows,
+					Agg: d.build(field, extra), Code: d.code(field, extra),
+				}),
+				ResultName: result,
+			})
+		}
+	}
+	return specs
 }
