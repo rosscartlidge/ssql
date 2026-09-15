@@ -42,6 +42,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql group-by dept -collect name all_names", "Collect all names into array per department").
 		Example("ssql from events.csv | ssql group-by session -first url landing -last url exit -count-distinct url pages", "First and last in arrival order; distinct count").
 		Example("ssql from data.csv | ssql group-by dept -string-agg name ', ' members", "Join the group's values into one string").
+		Example("ssql from data.csv | ssql group-by dept -median salary med -percentile salary 0.9 p90 -stddev salary sd -mode city top_city", "Statistics: median, a percentile, sample stddev, most frequent value").
 		Example("ssql from data.csv | ssql group-by dept -expr 'sum(salary * bonus)' total_comp", "Custom expression aggregation").
 		Example("ssql from huge.csv | ssql group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total", "Memory-efficient streaming aggregation").
 		Example("ssql from data.csv | ssql group-by a_kind z_kind -count count -rollup", "Hierarchical rollup with parent-level counts").
@@ -179,6 +180,64 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("Join the group's values with a separator, in arrival order — SQL's string_agg (field name, separator, result name)").
 		Done().
+		Flag("-median").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Median (continuous quantile, like SQL median / percentile_cont 0.5) (field name, result name)").
+		Done().
+		Flag("-percentile").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("p").
+		Completer(cf.NoCompleter{Hint: "<0..1>"}).
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Continuous P-quantile, 0 ≤ P ≤ 1 — SQL quantile_cont / percentile_cont (field name, P, result name)").
+		Done().
+		Flag("-stddev").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Sample standard deviation (n-1), like SQL stddev (field name, result name)").
+		Done().
+		Flag("-variance").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Sample variance (n-1), like SQL variance (field name, result name)").
+		Done().
+		Flag("-mode").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Most frequent value; ties go to the value seen first (field name, result name)").
+		Done().
 		Flag("-expr", "-e").
 		Arg("expression").
 		Expression().
@@ -298,6 +357,9 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 			if err := validateFieldsSchema(inputSchema, fieldsToValidate, "group-by"); err != nil {
+				return err
+			}
+			if err := validateAggSpecs(aggSpecs); err != nil {
 				return err
 			}
 
@@ -516,6 +578,9 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	}
 	if presorted && (rollup || cube) {
 		return fmt.Errorf("-presorted cannot be combined with -rollup or -cube")
+	}
+	if err := validateAggSpecs(aggSpecs); err != nil {
+		return err
 	}
 
 	// Typed-mode branch — emits typed.GroupBy (or typed.GroupByParallel

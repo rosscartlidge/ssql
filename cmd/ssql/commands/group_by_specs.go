@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -33,6 +34,9 @@ type aggDef struct {
 	// typedKind names the accumulator shape the typed lane emits
 	// (typed_groupby.go): "" = not typed (falls back to record codegen).
 	typedKind string
+	// check validates the extra argument at decode time ("" = none):
+	// -percentile's P must be a number in [0, 1].
+	check func(extra string) error
 }
 
 // arity is the number of arguments the flag takes on the command line.
@@ -68,7 +72,33 @@ const (
 	typedKindPositional = "positional"   // first/last: value + have flag, shard-ordered merge
 	typedKindSet        = "set"          // map[T]struct{} → count
 	typedKindStringList = "string-list"  // []string → join
+	typedKindQuantile   = "quantile"     // []float64 → sort → interpolate (median, percentile)
+	typedKindWelford    = "welford"      // n, mean, M2 → variance / stddev
+	typedKindCounts     = "counts"       // map[T]count + first index → mode
 )
+
+// percentileP parses -percentile's P argument; the registry's check
+// rejects anything outside [0, 1] before any lane runs.
+func percentileP(extra string) (float64, error) {
+	p, err := strconv.ParseFloat(strings.TrimSpace(extra), 64)
+	if err != nil || p < 0 || p > 1 {
+		return 0, fmt.Errorf("-percentile: P must be a number between 0 and 1, got %q", extra)
+	}
+	return p, nil
+}
+
+// validateAggSpecs runs each registry entry's check on its extra
+// argument — the one place -percentile's P is validated for every lane.
+func validateAggSpecs(specs []aggSpec) error {
+	for _, s := range specs {
+		if d, ok := aggDefByFn(s.function); ok && d.check != nil {
+			if err := d.check(s.extra); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 
 // wireOfField keeps the input field's type (min/max of a string is a
 // string); "float" when the input schema does not know the field.
@@ -123,6 +153,27 @@ var aggDefs = []aggDef{
 		sql:   func(qf, sep string) string { return fmt.Sprintf("string_agg(%s, %s)", qf, sqlStringLiteral(sep)) },
 		build: func(f, sep string) ssql.AggregateFunc { return ssql.StringAgg(f, sep) },
 		code:  func(f, sep string) string { return fmt.Sprintf("ssql.StringAgg(%q, %q)", f, sep) }},
+	// DFC129 phase 2: statistics. median/percentile are the continuous
+	// quantile (DuckDB quantile_cont, Postgres percentile_cont); stddev and
+	// variance are the SAMPLE statistics like every SQL engine's; mode
+	// breaks ties by first arrival.
+	{flag: "-median", fn: "median", hasField: true, sql: sqlCall("median"), wireType: wireFixed("float"), typedKind: typedKindQuantile,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.Median(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Median(%q)", f) }},
+	{flag: "-percentile", fn: "percentile", hasField: true, extraArg: "p", wireType: wireFixed("float"), typedKind: typedKindQuantile,
+		check: func(extra string) error { _, err := percentileP(extra); return err },
+		sql:   func(qf, p string) string { return fmt.Sprintf("quantile_cont(%s, %s)", qf, strings.TrimSpace(p)) },
+		build: func(f, p string) ssql.AggregateFunc { v, _ := percentileP(p); return ssql.Percentile(f, v) },
+		code:  func(f, p string) string { v, _ := percentileP(p); return fmt.Sprintf("ssql.Percentile(%q, %v)", f, v) }},
+	{flag: "-stddev", fn: "stddev", hasField: true, sql: sqlCall("stddev_samp"), wireType: wireFixed("float"), typedKind: typedKindWelford,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.StdDev(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.StdDev(%q)", f) }},
+	{flag: "-variance", fn: "variance", hasField: true, sql: sqlCall("var_samp"), wireType: wireFixed("float"), typedKind: typedKindWelford,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.Variance(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Variance(%q)", f) }},
+	{flag: "-mode", fn: "mode", hasField: true, sql: sqlCall("mode"), wireType: wireOfField, typedKind: typedKindCounts,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.Mode(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Mode(%q)", f) }},
 }
 
 // aggDefByFlag / aggDefByFn look an aggregate up by its flag ("-sum") or

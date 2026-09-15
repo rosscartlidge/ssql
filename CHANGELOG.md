@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parent levels are joined in row order, as exec does. Library:
   `ssql.FirstOf`, `LastOf`, `CountDistinct`, `StringAgg`.
 
+- **`group-by -median F R`, `-percentile F P R`, `-stddev F R`, `-variance
+  F R`, `-mode F R`** (DFC129 phase 2), every lane. median/percentile are
+  the continuous quantile (DuckDB `median` / `quantile_cont`, Postgres
+  `percentile_cont`), one shared interpolation (`ssql.QuantileCont`);
+  stddev/variance are the SAMPLE statistics (n−1) like every SQL
+  engine's, computed with Welford's single pass (`ssql.Welford`, whose
+  Merge the typed parallel lane uses — a parallel merge can differ from
+  the serial pass in the last digit on arbitrary data, as `-avg` can);
+  mode keeps the field's type and breaks ties by first arrival. P is
+  validated once for every lane (`-percentile: P must be a number
+  between 0 and 1`). All five stay on the typed rollup path under
+  `-rollup`/`-cube`. Library: `ssql.Median`, `Percentile`, `StdDev`,
+  `Variance`, `Mode`.
+
 ### Fixed
 - **The optimiser dropped a `sort` feeding `group-by -presorted`.**
   group-by is declared order-resetting, but `-presorted` groups

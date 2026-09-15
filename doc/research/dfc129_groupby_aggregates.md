@@ -268,6 +268,30 @@ oracles from a hand-computed fixture (float normalisation in the
 harness already tolerates the last digit). Population variants only if
 asked.
 
+*Phase 2 done 2026-09-15.* `agg_stats.go`: `Median`/`Percentile`
+(`QuantileCont` over the sorted values — the one formula both lanes
+call), `StdDev`/`Variance` over an exported `Welford` state (Add +
+Chan/Golub/LeVeque Merge), `Mode` with first-arrival tie-break (DuckDB's
+behaviour on a single-threaded scan; 7/4/5 on the fixture matched).
+Registry gained `check` (P validated in `validateAggSpecs`, called from
+both the exec handler and the codegen entry so every lane refuses `1.5`
+the same way). Typed kinds quantile (`[]float64`, concatenate on Merge,
+sort in Result), welford (`ssql.Welford` embedded — the generated
+program imports the library for the state type), counts
+(`map[T]*typedModeEntry` with a per-accumulator arrival counter; Merge
+offsets the peer's first-seen indices by the receiver's count, so the
+tie-break is shard-order exact). All five are mergeable and stay on the
+typed rollup path. **Caveat measured:** exec, record and serial typed
+are bit-identical (Python's Welford agrees), but the typed PARALLEL
+merge differs in the last digit (94333333.33333337 vs …33) — floating
+point is not associative; `-avg` has the same property. The equivalence
+gate therefore uses the fixture whose variances are exact (73e6,
+144.5e6, 18e6) and keeps stddev out of the cube case; a tolerance option
+in the harness would be the principled follow-up if a real-data case is
+ever wanted. Cases `groupby_stats_quantiles`, `groupby_stats_spread`,
+`groupby_mode` (Goldens from DuckDB + Python) and `groupby_cube_stats`;
+watched `groupby_mode` fail on a reversed tie-break.
+
 **Phase 3 — paired (½ day).** `-arg-max F BY R`, `-arg-min F BY R`.
 SQL: `arg_max(F, BY)`; the Postgres note goes in DFC060's portability
 list. Ties: first seen wins, documented, matches DuckDB.

@@ -1137,6 +1137,61 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// DFC129 phase 2: median and a percentile — the continuous quantile
+		// (DuckDB quantile_cont / Postgres percentile_cont), one shared
+		// interpolation (ssql.QuantileCont) in every Go lane. Golden from
+		// DuckDB and Python on the fixture.
+		Name:     "groupby_stats_quantiles",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -median salary med -percentile salary 0.9 p90 -count n`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering", "med": 95000, "p90": 103000, "n": 3},
+			{"dept": "Sales", "med": 73500, "p90": 80300, "n": 2},
+			{"dept": "Marketing", "med": 75000, "p90": 77400, "n": 2},
+		},
+	},
+	{
+		// DFC129 phase 2: sample stddev and variance (Welford; the typed
+		// parallel lane merges shard states). Floating-point summation is
+		// order-dependent, so a parallel merge can differ from the serial
+		// pass in the LAST digit on arbitrary data (as -avg and -sum can);
+		// this fixture's variances are exact (73e6, 144.5e6, 18e6), so the
+		// Golden — DuckDB's stddev_samp/var_samp — must match bit for bit.
+		Name:     "groupby_stats_spread",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -stddev salary sd -variance salary v`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering", "sd": 8544.003745317532, "v": 73000000},
+			{"dept": "Sales", "sd": 12020.815280171308, "v": 144500000},
+			{"dept": "Marketing", "sd": 4242.640687119285, "v": 18000000},
+		},
+	},
+	{
+		// DFC129 phase 2: -mode keeps the field's type and breaks ties by
+		// FIRST arrival — level is all-distinct per dept, so the answer is
+		// the first row's level (7, 4, 5), which is also what DuckDB's mode
+		// returns on a single-threaded scan; city has a clear winner.
+		Name:     "groupby_mode",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -mode city top_city -mode level top_level`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering", "top_city": "SF", "top_level": 7},
+			{"dept": "Sales", "top_city": "NYC", "top_level": 4},
+			{"dept": "Marketing", "top_city": "Chicago", "top_level": 5},
+		},
+	},
+	{
+		// Statistics under -cube stay on the typed rollup path (quantile
+		// lists concatenate, mode counts add with offset first-seen
+		// indices, count-distinct sets union) and must agree with exec's
+		// row-walking Rollup. stddev is left out here: parent levels merge
+		// Welford states, which can differ from the serial pass in the last
+		// digit (see groupby_stats_spread).
+		Name:     "groupby_cube_stats",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept status -median salary med -mode city mc -count-distinct level lv -count n -cube`,
+		Ordered:  false,
+	},
+	{
 		// A field named like an expr builtin (`date`) is the FIELD when used
 		// bare in an expression, in every lane: exec's VM patches it to
 		// $env["date"], the transpiled lanes always read it as a field, SQL

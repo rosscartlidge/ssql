@@ -159,8 +159,12 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	}
 	aggCtor := fmt.Sprintf("&%s{%s}", aggTypeName, strings.Join(ctorInits, ", "))
 
-	// Assemble all three struct/type definitions.
+	// Assemble all three struct/type definitions (plus the -mode entry
+	// helper when a -mode is present).
 	defs := []string{aggDef}
+	if needsModeEntry(specs) {
+		defs = append(defs, typedModeEntryDef)
+	}
 	if keyStructDef != "" {
 		defs = append(defs, keyStructDef)
 	}
@@ -378,6 +382,12 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			st.stateType = fmt.Sprintf("map[%s]struct{}", f.GoType)
 		case "string-agg":
 			st.stateType = "[]string"
+		case "median", "percentile":
+			st.stateType = "[]float64" // sorted in Result; the group's values
+		case "stddev", "variance":
+			st.stateType = "ssql.Welford" // n, mean, M2 — the library's own state
+		case "mode":
+			st.stateType = fmt.Sprintf("map[%s]*typedModeEntry", f.GoType)
 		}
 		states = append(states, st)
 	}
@@ -394,6 +404,8 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		switch s.spec.function {
 		case "min", "max", "first", "last", "any":
 			fmt.Fprintf(&d, "\t%s_have bool\n", s.stateName)
+		case "mode":
+			fmt.Fprintf(&d, "\t%s_seen int64 // arrival counter for the first-seen tie-break\n", s.stateName)
 		}
 	}
 	for _, p := range exprPlans {
@@ -445,6 +457,14 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\ta.%s[r.%s] = struct{}{}\n", s.stateName, s.fieldGo)
 		case "string-agg":
 			fmt.Fprintf(&d, "\ta.%s = append(a.%s, %s)\n", s.stateName, s.stateName, aggValueStringCode(s.fieldGoT, "r."+s.fieldGo))
+		case "median", "percentile":
+			fmt.Fprintf(&d, "\ta.%s = append(a.%s, float64(r.%s))\n", s.stateName, s.stateName, s.fieldGo)
+		case "stddev", "variance":
+			fmt.Fprintf(&d, "\ta.%s.Add(float64(r.%s))\n", s.stateName, s.fieldGo)
+		case "mode":
+			fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
+			fmt.Fprintf(&d, "\tif e, ok := a.%s[r.%s]; ok {\n\t\te.N++\n\t} else {\n\t\ta.%s[r.%s] = &typedModeEntry{N: 1, First: a.%s_seen}\n\t}\n", s.stateName, s.fieldGo, s.stateName, s.fieldGo, s.stateName)
+			fmt.Fprintf(&d, "\ta.%s_seen++\n", s.stateName)
 		}
 	}
 	for _, p := range exprPlans {
@@ -484,6 +504,20 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\t\t%s: int64(len(a.%s)),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
 		case "string-agg":
 			fmt.Fprintf(&d, "\t\t%s: strings.Join(a.%s, %q),\n", lib.GoNameFromColumn(s.spec.result), s.stateName, s.spec.extra)
+		case "median", "percentile":
+			p := 0.5
+			if s.spec.function == "percentile" {
+				p, _ = percentileP(s.spec.extra)
+			}
+			fmt.Fprintf(&d, "\t\t%s: func() float64 { if len(a.%s) == 0 { return 0 }; sort.Float64s(a.%s); return ssql.QuantileCont(a.%s, %v) }(),\n",
+				lib.GoNameFromColumn(s.spec.result), s.stateName, s.stateName, s.stateName, p)
+		case "variance":
+			fmt.Fprintf(&d, "\t\t%s: a.%s.Variance(),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
+		case "stddev":
+			fmt.Fprintf(&d, "\t\t%s: math.Sqrt(a.%s.Variance()),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
+		case "mode":
+			fmt.Fprintf(&d, "\t\t%s: func() %s { var best *typedModeEntry; var bv %s; for k, e := range a.%s { if best == nil || e.N > best.N || (e.N == best.N && e.First < best.First) { best, bv = e, k } }; return bv }(),\n",
+				lib.GoNameFromColumn(s.spec.result), s.fieldGoT, s.fieldGoT, s.stateName)
 		case "avg":
 			fmt.Fprintf(&d, "\t\t%s: func() float64 { if a.%s_n == 0 { return 0 }; return float64(a.%s) / float64(a.%s_n) }(),\n",
 				lib.GoNameFromColumn(s.spec.result), s.stateName, s.stateName, s.stateName)
@@ -539,6 +573,15 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 				fmt.Fprintf(&d, "\tfor k := range o.%s {\n\t\ta.%s[k] = struct{}{}\n\t}\n", s.stateName, s.stateName)
 			case "string-agg":
 				fmt.Fprintf(&d, "\ta.%s = append(a.%s, o.%s...)\n", s.stateName, s.stateName, s.stateName)
+			case "median", "percentile":
+				fmt.Fprintf(&d, "\ta.%s = append(a.%s, o.%s...)\n", s.stateName, s.stateName, s.stateName)
+			case "stddev", "variance":
+				fmt.Fprintf(&d, "\ta.%s.Merge(o.%s)\n", s.stateName, s.stateName)
+			case "mode":
+				// Peer's arrivals come after the receiver's (shard order): offset its first-seen indices.
+				fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
+				fmt.Fprintf(&d, "\tfor k, oe := range o.%s {\n\t\tif e, ok := a.%s[k]; ok {\n\t\t\te.N += oe.N\n\t\t} else {\n\t\t\ta.%s[k] = &typedModeEntry{N: oe.N, First: a.%s_seen + oe.First}\n\t\t}\n\t}\n", s.stateName, s.stateName, s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\ta.%s_seen += o.%s_seen\n", s.stateName, s.stateName)
 			}
 		}
 		// -expr accumulators merge by addition — sums and counts are
@@ -642,6 +685,15 @@ func typedAggAccepts(fn, field, goType string) error {
 		if strings.HasPrefix(goType, "*") {
 			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q needs a non-nullable column, got %s (run with SSQL_MODE=record)", fn, field, goType)
 		}
+	case "median", "percentile", "stddev", "variance":
+		if !isNumericGoType(goType) {
+			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires a numeric type, got %s", fn, field, goType)
+		}
+	case "mode":
+		// Any comparable, non-nullable column: numbers, strings, times.
+		if strings.HasPrefix(goType, "*") {
+			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q needs a non-nullable column, got %s (run with SSQL_MODE=record)", fn, field, goType)
+		}
 	}
 	return nil
 }
@@ -670,7 +722,7 @@ func aggResultGoType(s aggSpec, in *lib.TypedSchema) string {
 	switch s.function {
 	case "count", "count-distinct":
 		return "int64"
-	case "avg":
+	case "avg", "median", "percentile", "stddev", "variance":
 		return "float64"
 	case "string-agg":
 		return "string"
@@ -688,7 +740,7 @@ func aggResultGoTypeForState(fn, fieldGoType string) string {
 	switch fn {
 	case "count", "count-distinct":
 		return "int64"
-	case "avg":
+	case "avg", "median", "percentile", "stddev", "variance":
 		return "float64"
 	case "string-agg":
 		return "string"
@@ -703,22 +755,36 @@ func aggResultGoTypeForState(fn, fieldGoType string) string {
 func typedAggImports(specs []aggSpec, in *lib.TypedSchema) []string {
 	var out []string
 	for _, s := range specs {
-		if s.function != "string-agg" {
-			continue
-		}
-		out = append(out, "strings")
-		if f, ok := lookupSchemaField(in, s.field); ok {
-			switch f.GoType {
-			case "string":
-			case "time.Time":
-				out = append(out, "time")
-			default:
-				out = append(out, "strconv")
+		switch s.function {
+		case "string-agg":
+			out = append(out, "strings")
+			if f, ok := lookupSchemaField(in, s.field); ok {
+				switch f.GoType {
+				case "string":
+				case "time.Time":
+					out = append(out, "time")
+				default:
+					out = append(out, "strconv")
+				}
 			}
+		case "median", "percentile":
+			out = append(out, "sort", "github.com/rosscartlidge/ssql/v4")
+		case "variance":
+			out = append(out, "github.com/rosscartlidge/ssql/v4")
+		case "stddev":
+			out = append(out, "math", "github.com/rosscartlidge/ssql/v4")
 		}
 	}
 	return out
 }
+
+// typedModeEntryDef is the helper type generated alongside an
+// aggregator that has a -mode: a count plus the arrival index of the
+// value's first occurrence (ties go to the earliest).
+const typedModeEntryDef = "// typedModeEntry counts one value for -mode; First is its arrival index (tie-break).\ntype typedModeEntry struct {\n\tN     int64\n\tFirst int64\n}\n"
+
+// needsModeEntry reports whether any spec is a -mode.
+func needsModeEntry(specs []aggSpec) bool { return hasAggFn(specs, "mode") }
 
 // aggValueStringCode emits the Go expression that formats a value of
 // the given type the way ssql.AggValueString does — the exec lane's

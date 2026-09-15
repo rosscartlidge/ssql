@@ -77,6 +77,9 @@ func emitTypedRollup(inputVar string, in *lib.TypedSchema, groupFields []string,
 	resultName := in.TypeName + "Group"
 	keyType, keyExpr, keyDef := buildGroupKeyType(in, groupSchemaFields)
 	aggDef, _, _ := buildTypedAggregator(aggTypeName, in, specs, nil, nil, groupSchemaFields, resultName, true)
+	if needsModeEntry(specs) {
+		aggDef += "\n" + typedModeEntryDef
+	}
 
 	// The wrapper: the generated aggregator's Result() yields final
 	// values; for rollup the detail stage must hand over the STATE, so

@@ -103,6 +103,11 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-any":            {0},
 			"-count-distinct": {0},
 			"-string-agg":     {0}, // field, then sep, then result-name
+			"-median":         {0},
+			"-percentile":     {0}, // field, then p, then result-name
+			"-stddev":         {0},
+			"-variance":       {0},
+			"-mode":           {0},
 			// Note: -count only takes result-name, not a field to count
 		},
 		// Nested subcommands use "parent/child" notation

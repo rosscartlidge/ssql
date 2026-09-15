@@ -310,9 +310,10 @@ ssql from employees.csv | ssql group-by dept -count n -avg salary avg_salary -ma
 
 The aggregate flags are the SQL set: `-count`, `-sum`, `-avg`, `-min`,
 `-max` (strings and dates too), `-first`, `-last`, `-any`,
-`-count-distinct`, `-string-agg FIELD SEP NAME`, and `-collect` for a
-list. `-first` and `-last` are arrival order, so on a file they are the
-first and last row of each group:
+`-count-distinct`, `-string-agg FIELD SEP NAME`, `-median`,
+`-percentile FIELD P NAME`, `-stddev`, `-variance` (sample, like SQL),
+`-mode`, and `-collect` for a list. `-first` and `-last` are arrival
+order, so on a file they are the first and last row of each group:
 
 ```bash
 # Who was hired first and last per department, how many cities, and everyone's name
