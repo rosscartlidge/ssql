@@ -1332,6 +1332,68 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept salary | {{.bin}} window -presorted -partition dept -order salary -row-number rn -sum salary run -lag salary 1 prev | {{.bin}} include name rn run prev`,
 		Ordered:  false,
 	},
+	// ---- window, DFC130 unit 1: cume_dist, nth_value, lag/lead defaults,
+	// count(field). Goldens from DuckDB.
+	{
+		Name:     "window_cume_dist_nth_value_count_field",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -cume-dist cd -nth-value name 2 second -count-field name n | {{.bin}} include name cd second n`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Eve", "cd": 1.0 / 3, "n": 1},
+			{"name": "Alice", "cd": 2.0 / 3, "second": "Alice", "n": 2},
+			{"name": "Carol", "cd": 1, "second": "Alice", "n": 3},
+			{"name": "Bob", "cd": 0.5, "n": 1},
+			{"name": "Frank", "cd": 1, "second": "Frank", "n": 2},
+			{"name": "David", "cd": 0.5, "n": 1},
+			{"name": "Grace", "cd": 1, "second": "Grace", "n": 2},
+		},
+	},
+	{
+		// LAG/LEAD with a default: a typed literal (0 → int, "none" → string)
+		// stands in at the partition edge in every lane, including the SQL
+		// third argument.
+		Name:     "window_lag_lead_default",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -lag-default salary 1 0 prev -lead-default name 1 none next | {{.bin}} include name prev next`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Eve", "prev": 0, "next": "Alice"},
+			{"name": "Alice", "prev": 88000, "next": "Carol"},
+			{"name": "Carol", "prev": 95000, "next": "none"},
+			{"name": "Bob", "prev": 0, "next": "Frank"},
+			{"name": "Frank", "prev": 65000, "next": "none"},
+			{"name": "David", "prev": 0, "next": "Grace"},
+			{"name": "Grace", "prev": 72000, "next": "none"},
+		},
+	},
+	{
+		// NTH_VALUE and COUNT(field) over a bounded ROWS frame (1 preceding).
+		Name:     "window_bounded_nth_value_count_field",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -preceding 1 -following 0 -nth-value salary 2 nth2 -count-field salary c2 | {{.bin}} include name nth2 c2`,
+		Ordered:  false,
+	},
+	{
+		// COUNT(field) must skip missing values: prev is absent on each
+		// partition's first row (LAG with no earlier row), NULL in SQL.
+		Name:     "window_count_field_skips_missing",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -lag salary 1 prev | {{.bin}} window -partition dept -order salary -count-field prev n_prev -count n_all | {{.bin}} include name n_prev n_all`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Eve", "n_prev": 0, "n_all": 1},
+			{"name": "Alice", "n_prev": 1, "n_all": 2},
+			{"name": "Carol", "n_prev": 2, "n_all": 3},
+			{"name": "Bob", "n_prev": 0, "n_all": 1},
+			{"name": "Frank", "n_prev": 1, "n_all": 2},
+			{"name": "David", "n_prev": 0, "n_all": 1},
+			{"name": "Grace", "n_prev": 1, "n_all": 2},
+		},
+	},
+	{
+		// The same four on the -presorted streaming path (ring buffers and
+		// delayed emission with a default) must equal the materialised path.
+		Name:     "window_presorted_unit1_functions",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept salary | {{.bin}} window -presorted -partition dept -order salary -nth-value name 2 second -count-field name n -lag-default salary 1 0 prev -lead-default name 1 none next | {{.bin}} include name second n prev next`,
+		Ordered:  false,
+	},
 	{
 		// A field named like an expr builtin (`date`) is the FIELD when used
 		// bare in an expression, in every lane: exec's VM patches it to

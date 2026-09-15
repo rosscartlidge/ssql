@@ -2150,6 +2150,58 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 		v, _ := Get[any](all[indices[srcPos]], f.Field)
 		return v
 
+	case wLagDefault:
+		srcPos := pos - f.Offset
+		if srcPos < 0 || srcPos >= partLen {
+			return f.Default
+		}
+		v, ok := Get[any](all[indices[srcPos]], f.Field)
+		if !ok || v == nil {
+			return f.Default
+		}
+		return v
+
+	case wLeadDefault:
+		srcPos := pos + f.Offset
+		if srcPos < 0 || srcPos >= partLen {
+			return f.Default
+		}
+		v, ok := Get[any](all[indices[srcPos]], f.Field)
+		if !ok || v == nil {
+			return f.Default
+		}
+		return v
+
+	case wNthValue:
+		start := frameStart(pos, partLen, frame)
+		end := frameEnd(pos, partLen, frame)
+		idx := start + f.N - 1
+		if f.N < 1 || idx > end {
+			return nil
+		}
+		v, _ := Get[any](all[indices[idx]], f.Field)
+		return v
+
+	case wCumeDist:
+		// Rows whose order value is ≤ the current row's: the end of the
+		// current peer group, over the partition size.
+		last := pos
+		for last+1 < partLen && CompareRecordFields(all[indices[last+1]], all[indices[pos]], orderBy) == 0 {
+			last++
+		}
+		return float64(last+1) / float64(partLen)
+
+	case wCountField:
+		start := frameStart(pos, partLen, frame)
+		end := frameEnd(pos, partLen, frame)
+		var n int64
+		for i := start; i <= end; i++ {
+			if v, ok := Get[any](all[indices[i]], f.Field); ok && v != nil {
+				n++
+			}
+		}
+		return n
+
 	case wFirst:
 		start := frameStart(pos, partLen, frame)
 		v, _ := Get[any](all[indices[start]], f.Field)
@@ -2283,6 +2335,7 @@ type streamWindowLeadSpec struct {
 	field      string
 	offset     int
 	resultName string
+	def        any // LEAD's default where no later row exists (nil = absent)
 }
 
 // --- Concrete streaming window aggregates ---
@@ -2687,8 +2740,29 @@ func newStreamWindowAgg(fn WindowFunc, frame WindowFrame) (streamWindowAgg, erro
 	case wLag:
 		ring := make([]any, f.Offset+1)
 		return &swLag{field: f.Field, offset: f.Offset, ring: ring}, nil
-	case wLead:
+	case wLagDefault:
+		ring := make([]any, f.Offset+1)
+		return &swLagDefault{swLag: swLag{field: f.Field, offset: f.Offset, ring: ring}, def: f.Default}, nil
+	case wLead, wLeadDefault:
 		return nil, nil // handled separately via delayed emission
+	case wNthValue:
+		if f.N < 1 {
+			return nil, fmt.Errorf("NTH_VALUE needs n ≥ 1, got %d", f.N)
+		}
+		if bounded {
+			if f.N > frameSize {
+				return nil, fmt.Errorf("NTH_VALUE(%d) never fills a %d-row frame", f.N, frameSize)
+			}
+			return &swSlidingNthValue{field: f.Field, n: f.N, ring: make([]any, frameSize), size: frameSize}, nil
+		}
+		return &swNthValue{field: f.Field, n: f.N}, nil
+	case wCountField:
+		if bounded {
+			return &swSlidingCountField{field: f.Field, ring: make([]bool, frameSize), size: frameSize}, nil
+		}
+		return &swCountField{field: f.Field}, nil
+	case wCumeDist:
+		return nil, fmt.Errorf("CUME_DIST cannot be streamed (requires partition size)")
 	case wNtile:
 		return nil, fmt.Errorf("NTILE cannot be streamed (requires partition size)")
 	case wPercentRank:
@@ -2768,14 +2842,16 @@ func StreamWindow(configs []WindowConfig) (Filter[Record, Record], error) {
 			agg, _ := newStreamWindowAgg(spec.Function, cfg.Frame) // already validated
 			if agg == nil {
 				// LEAD — handled via delayed emission
-				lead := spec.Function.(wLead)
-				leadSpecs = append(leadSpecs, streamWindowLeadSpec{
-					field:      lead.Field,
-					offset:     lead.Offset,
-					resultName: spec.ResultName,
-				})
-				if lead.Offset > maxLeadOffset {
-					maxLeadOffset = lead.Offset
+				var ls streamWindowLeadSpec
+				switch lead := spec.Function.(type) {
+				case wLead:
+					ls = streamWindowLeadSpec{field: lead.Field, offset: lead.Offset, resultName: spec.ResultName}
+				case wLeadDefault:
+					ls = streamWindowLeadSpec{field: lead.Field, offset: lead.Offset, resultName: spec.ResultName, def: lead.Default}
+				}
+				leadSpecs = append(leadSpecs, ls)
+				if ls.offset > maxLeadOffset {
+					maxLeadOffset = ls.offset
 				}
 			} else {
 				regularAggs = append(regularAggs, swSpecAgg{resultName: spec.ResultName, agg: agg})
@@ -2877,15 +2953,17 @@ func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSp
 				// Apply LEAD values
 				for _, ls := range leadSpecs {
 					lookIdx := bufIdx + ls.offset
+					var v any
 					if lookIdx < bufLen {
-						v, _ := Get[any](buf[lookIdx].record, ls.field)
-						if v == nil {
-							mut.fields[ls.resultName] = nil
-						} else {
-							mut = applyWindowValue(mut, ls.resultName, v)
-						}
-					} else {
+						v, _ = Get[any](buf[lookIdx].record, ls.field)
+					}
+					if v == nil {
+						v = ls.def // LEAD's default, or nil → absent
+					}
+					if v == nil {
 						mut.fields[ls.resultName] = nil
+					} else {
+						mut = applyWindowValue(mut, ls.resultName, v)
 					}
 				}
 				return yield(mut.Freeze())

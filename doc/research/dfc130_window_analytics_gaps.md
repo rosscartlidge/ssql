@@ -2,7 +2,7 @@
 
 Reference: DFC130
 Created: 2026-09-15
-Last modified: 2026-09-15
+Last modified: 2026-09-16
 
 [Back to Index](./README.md)
 
@@ -52,12 +52,12 @@ Against SQL:2003 window functions as DuckDB and Postgres implement them:
 | Function | DuckDB | Postgres | ssql | Gap |
 |---|---|---|---|---|
 | row_number, rank, dense_rank, ntile, percent_rank | ✓ | ✓ | ✓ | — |
-| **cume_dist** | ✓ | ✓ | — | ranking family; `count(rows ≤ current) / partition size` |
-| lag, lead (offset, **default value**) | ✓ (`lag(x, n, default)`) | ✓ | offset only | `-lag F N R` yields missing/null before the start; a default is the common third argument |
+| cume_dist | ✓ | ✓ | ✓ `-cume-dist R` (unit 1, 2026-09-16) | — |
+| lag, lead (offset, default value) | ✓ (`lag(x, n, default)`) | ✓ | ✓ `-lag-default F N DEFAULT R`, `-lead-default` (unit 1) | — |
 | first_value, last_value | ✓ | ✓ | ✓ (`-first`, `-last`) | — |
-| **nth_value(F, n)** | ✓ | ✓ | — | offset family |
+| nth_value(F, n) | ✓ | ✓ | ✓ `-nth-value F N R` (unit 1) | — |
 | sum, avg, count, min, max | ✓ | ✓ | ✓ | — |
-| **count(F)** (non-null count) | ✓ | ✓ | `-count R` is COUNT(*) only | minor |
+| count(F) (non-null count) | ✓ | ✓ | ✓ `-count-field F R` (unit 1) | — |
 | **stddev / variance** (windowed) | ✓ | ✓ | — | rolling volatility is the classic use of a window |
 | **median / quantile** (windowed) | ✓ (`quantile_cont` over a frame) | ✓ | — | rolling median |
 | **count-distinct, string-agg, first/last-by-arrival, mode, arg-max** over a frame | ✓ (any aggregate can be windowed) | ✓ | — | in SQL every aggregate is a window function; ssql has fifteen aggregates and five of them windowed |
@@ -134,7 +134,7 @@ CURRENT ROW` for numbers — DuckDB and Postgres both accept both.
 | # | Unit | Size | Notes |
 |---|---|---|---|
 | 0 | **Equivalence cases for window** — one per function group, shuffled fixture, Goldens from DuckDB, `-presorted` variant, ROWS frames | ½ day | the gate first; it will say whether the five existing aggregates and the offset functions agree across exec / record / DuckDB today. *Done 2026-09-15* — nine cases, and it said no, three times (§5a). |
-| 1 | `cume_dist`, `nth_value`, `lag`/`lead` default value, `count(F)` | ½ day | completes the ranking/offset families; small, no design |
+| 1 | `cume_dist`, `nth_value`, `lag`/`lead` default value, `count(F)` | ½ day | completes the ranking/offset families; small, no design. *Done 2026-09-16*: `window_extra.go` (types, constructors, streaming aggregators — ring-buffer NTH_VALUE and sliding COUNT(field) for bounded frames, LAG/LEAD defaults through `swLagDefault` and the delayed-lead spec); `WindowFuncCode`/`Field`/`ResultKind` extended; SQL cases with a typed default literal; optimiser and schema arity tables; five equivalence cases (Goldens from DuckDB; `-presorted` variant; COUNT(field) proven to skip a LAG-produced missing value); watched an NTH_VALUE off-by-one fail. |
 | 2 | **Aggregates over frames from the registry**: window's aggregate flags become `aggDefs` lookups; new flags `-stddev -variance -median -percentile -count-distinct -string-agg -mode -arg-max -arg-min -first-arrival?` (no — `-first` is FIRST_VALUE already), compensated sums come for free | 1–1½ days | §3; streaming for Remove-capable kinds, materialised otherwise |
 | 3 | **RANGE frames** (numeric and time) | 1 day | §4; equivalence against DuckDB's RANGE |
 | 4 | **Typed window template** | 2 days | the frame accumulator per kind + ranking/offset code; SerialOnly per partition unless `-presorted` |

@@ -39,6 +39,16 @@ func WindowFuncCode(fn WindowFunc) string {
 		return fmt.Sprintf("ssql.WMin(%q)", f.Field)
 	case wMax:
 		return fmt.Sprintf("ssql.WMax(%q)", f.Field)
+	case wCumeDist:
+		return "ssql.WCumeDist()"
+	case wNthValue:
+		return fmt.Sprintf("ssql.WNthValue(%q, %d)", f.Field, f.N)
+	case wLagDefault:
+		return fmt.Sprintf("ssql.WLagDefault(%q, %d, %s)", f.Field, f.Offset, goLiteral(f.Default))
+	case wLeadDefault:
+		return fmt.Sprintf("ssql.WLeadDefault(%q, %d, %s)", f.Field, f.Offset, goLiteral(f.Default))
+	case wCountField:
+		return fmt.Sprintf("ssql.WCountField(%q)", f.Field)
 	}
 	panic(fmt.Sprintf("ssql.WindowFuncCode: unknown window function %T", fn))
 }
@@ -63,8 +73,34 @@ func WindowFuncField(fn WindowFunc) (string, bool) {
 		return f.Field, true
 	case wMax:
 		return f.Field, true
+	case wNthValue:
+		return f.Field, true
+	case wLagDefault:
+		return f.Field, true
+	case wLeadDefault:
+		return f.Field, true
+	case wCountField:
+		return f.Field, true
 	}
 	return "", false
+}
+
+// goLiteral renders a LAG/LEAD default as Go source: the canonical scalar
+// types the CLI's value parser produces.
+func goLiteral(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "nil"
+	case string:
+		return fmt.Sprintf("%q", x)
+	case int64:
+		return fmt.Sprintf("int64(%d)", x)
+	case float64:
+		return fmt.Sprintf("float64(%v)", x)
+	case bool:
+		return fmt.Sprintf("%t", x)
+	}
+	return fmt.Sprintf("%#v", v)
 }
 
 // WindowFuncResultKind is the wire type of a window function's result:
@@ -73,9 +109,9 @@ func WindowFuncField(fn WindowFunc) (string, bool) {
 // type (lag, lead, first, last, min, max).
 func WindowFuncResultKind(fn WindowFunc) string {
 	switch fn.(type) {
-	case wRowNumber, wRank, wDenseRank, wNtile, wCount:
+	case wRowNumber, wRank, wDenseRank, wNtile, wCount, wCountField:
 		return "int"
-	case wPercentRank, wSum, wAvg:
+	case wPercentRank, wSum, wAvg, wCumeDist:
 		return "float"
 	}
 	return ""

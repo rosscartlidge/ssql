@@ -119,6 +119,78 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("PERCENT_RANK() → result field").
 			Done().
 
+		Flag("-cume-dist").
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("CUME_DIST() → result field: fraction of the partition with an order value ≤ this row's").
+			Done().
+
+		Flag("-count-field").
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Windowed COUNT(field) → result field: rows in the frame where the field is present (-count is COUNT(*))").
+			Done().
+
+		Flag("-nth-value").
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("n").
+				Completer(&cf.NoCompleter{Hint: "<n>"}).
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("NTH_VALUE(field, n) → result field: the n-th row of the frame (1-based), absent until the frame has n rows").
+			Done().
+
+		Flag("-lag-default").
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("n").
+				Completer(&cf.NoCompleter{Hint: "<offset>"}).
+				Done().
+			Arg("default").
+				Completer(&cf.NoCompleter{Hint: "<default>"}).
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("LAG(field, n, default) → result field: the default stands in where there is no earlier row").
+			Done().
+
+		Flag("-lead-default").
+			Arg("field").
+				FieldsFromFlag("").
+				Done().
+			Arg("n").
+				Completer(&cf.NoCompleter{Hint: "<offset>"}).
+				Done().
+			Arg("default").
+				Completer(&cf.NoCompleter{Hint: "<default>"}).
+				Done().
+			Arg("result").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("LEAD(field, n, default) → result field: the default stands in where there is no later row").
+			Done().
+
 		// Offset functions
 		Flag("-lag").
 			Arg("field").
@@ -415,6 +487,12 @@ func parseWindowClauses(clauses []cf.Clause) ([]ssql.WindowConfig, error) {
 		specs = append(specs, parseSingleArgSpecs(clause.Flags, "-count", func(result string) ssql.WindowSpec {
 			return ssql.WindowSpec{Function: ssql.WCount(), ResultName: result}
 		})...)
+		specs = append(specs, parseSingleArgSpecs(clause.Flags, "-cume-dist", func(result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WCumeDist(), ResultName: result}
+		})...)
+		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-count-field", "field", "result", func(field, result string) ssql.WindowSpec {
+			return ssql.WindowSpec{Function: ssql.WCountField(field), ResultName: result}
+		})...)
 
 		// Two-arg functions: -first field result, -last field result, -sum field result, -avg field result, -min field result, -max field result
 		specs = append(specs, parseTwoArgSpecs(clause.Flags, "-first", "field", "result", func(field, result string) ssql.WindowSpec {
@@ -440,6 +518,9 @@ func parseWindowClauses(clauses []cf.Clause) ([]ssql.WindowConfig, error) {
 		specs = append(specs, parseNtileSpecs(clause.Flags)...)
 		specs = append(specs, parseLagLeadSpecs(clause.Flags, "-lag", true)...)
 		specs = append(specs, parseLagLeadSpecs(clause.Flags, "-lead", false)...)
+		specs = append(specs, parseFieldNSpecs(clause.Flags, "-nth-value", func(field string, n int) ssql.WindowFunc { return ssql.WNthValue(field, n) })...)
+		specs = append(specs, parseLagLeadDefaultSpecs(clause.Flags, "-lag-default", true)...)
+		specs = append(specs, parseLagLeadDefaultSpecs(clause.Flags, "-lead-default", false)...)
 
 		cfg.Specs = specs
 		configs = append(configs, cfg)
@@ -523,6 +604,86 @@ func parseNtileSpecs(flags map[string]any) []ssql.WindowSpec {
 		}
 	}
 	return specs
+}
+
+// parseFieldNSpecs decodes a (field, n, result) flag such as -nth-value.
+func parseFieldNSpecs(flags map[string]any, flagName string, mk func(field string, n int) ssql.WindowFunc) []ssql.WindowSpec {
+	raw, ok := flags[flagName]
+	if !ok {
+		return nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var specs []ssql.WindowSpec
+	for _, v := range arr {
+		if m, ok := v.(map[string]any); ok {
+			field, _ := m["field"].(string)
+			nStr, _ := m["n"].(string)
+			result, _ := m["result"].(string)
+			if field != "" && nStr != "" && result != "" {
+				n, err := strconv.Atoi(nStr)
+				if err != nil {
+					continue
+				}
+				specs = append(specs, ssql.WindowSpec{Function: mk(field, n), ResultName: result})
+			}
+		}
+	}
+	return specs
+}
+
+// parseLagLeadDefaultSpecs decodes -lag-default / -lead-default (field, n,
+// default, result). The default is typed like any CLI literal (int, float,
+// bool, else string) so exec, generated Go and SQL carry the same value.
+func parseLagLeadDefaultSpecs(flags map[string]any, flagName string, isLag bool) []ssql.WindowSpec {
+	raw, ok := flags[flagName]
+	if !ok {
+		return nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var specs []ssql.WindowSpec
+	for _, v := range arr {
+		if m, ok := v.(map[string]any); ok {
+			field, _ := m["field"].(string)
+			nStr, _ := m["n"].(string)
+			defStr, _ := m["default"].(string)
+			result, _ := m["result"].(string)
+			if field != "" && nStr != "" && result != "" {
+				n, err := strconv.Atoi(nStr)
+				if err != nil {
+					continue
+				}
+				def := windowDefaultLiteral(defStr)
+				if isLag {
+					specs = append(specs, ssql.WindowSpec{Function: ssql.WLagDefault(field, n, def), ResultName: result})
+				} else {
+					specs = append(specs, ssql.WindowSpec{Function: ssql.WLeadDefault(field, n, def), ResultName: result})
+				}
+			}
+		}
+	}
+	return specs
+}
+
+// windowDefaultLiteral types a LAG/LEAD default: int64, float64, bool, else
+// the string itself. (Deliberately not parseValue: a default like
+// "2026-01-01" should stay the text the user typed, not become a time.)
+func windowDefaultLiteral(s string) any {
+	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return i
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	if b, err := strconv.ParseBool(s); err == nil {
+		return b
+	}
+	return s
 }
 
 // parseLagLeadSpecs parses -lag/-lead field n result flags.

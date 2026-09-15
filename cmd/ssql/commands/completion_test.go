@@ -32,6 +32,7 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	RegisterFill(cmd)
 	RegisterExtract(cmd)
 	RegisterGroupBy(cmd)
+	RegisterWindow(cmd)
 	RegisterTo(cmd)
 	RegisterConvolve(cmd)
 	RegisterCorrelate(cmd)
@@ -111,6 +112,22 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-arg-max":        {0, 1}, // field, then the BY field, then result-name
 			"-arg-min":        {0, 1},
 			// Note: -count only takes result-name, not a field to count
+		},
+		"window": {
+			"-partition":    {0},
+			"-order":        {0},
+			"-first":        {0},
+			"-last":         {0},
+			"-sum":          {0},
+			"-avg":          {0},
+			"-min":          {0},
+			"-max":          {0},
+			"-lag":          {0},
+			"-lead":         {0},
+			"-count-field":  {0},
+			"-nth-value":    {0},
+			"-lag-default":  {0},
+			"-lead-default": {0},
 		},
 		// Nested subcommands use "parent/child" notation
 		"to/table": {

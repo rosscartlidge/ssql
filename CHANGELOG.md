@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`window -cume-dist R`, `-nth-value F N R`, `-lag-default F N DEFAULT R`,
+  `-lead-default F N DEFAULT R`, `-count-field F R`** (DFC130 unit 1) —
+  the rest of SQL's ranking and offset families: CUME_DIST (fraction of
+  the partition with an order value ≤ this row's, ties together),
+  NTH_VALUE over the frame (absent until the frame holds n rows),
+  LAG/LEAD with SQL's third argument (a typed literal: `0` is a number,
+  `none` a string), and COUNT(field), the non-null count where `-count`
+  is COUNT(*). Exec, record codegen, `generate sql` (`CUME_DIST()`,
+  `NTH_VALUE(f, n)`, `LAG(f, n, default)`, `COUNT(f)`), and the
+  `-presorted` streaming path for all but CUME_DIST (which needs the
+  partition size, like NTILE and PERCENT_RANK — refused with the reason).
+  Library: `ssql.WCumeDist`, `WNthValue`, `WLagDefault`, `WLeadDefault`,
+  `WCountField`.
+
 ### Fixed
 - **`generate go` lost NTILE's argument**: every generated program called
   `ssql.WNtile(0)`, so `window -ntile 4 q` put every row in tile 1 under

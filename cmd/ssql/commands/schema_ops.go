@@ -238,14 +238,16 @@ func init() {
 		arity := map[string]int{
 			"-partition": 1, "-order": 1, "-preceding": 1, "-following": 1,
 			"-presorted": 0, "-desc": 0, "-generate": 0, "-g": 0,
-			"-row-number": 1, "-rank": 1, "-dense-rank": 1, "-percent-rank": 1, "-count": 1,
-			"-ntile": 2, "-first": 2, "-last": 2, "-sum": 2, "-avg": 2, "-min": 2, "-max": 2,
-			"-lag": 3, "-lead": 3,
+			"-row-number": 1, "-rank": 1, "-dense-rank": 1, "-percent-rank": 1, "-count": 1, "-cume-dist": 1,
+			"-ntile": 2, "-first": 2, "-last": 2, "-sum": 2, "-avg": 2, "-min": 2, "-max": 2, "-count-field": 2,
+			"-lag": 3, "-lead": 3, "-nth-value": 3,
+			"-lag-default": 4, "-lead-default": 4,
 		}
 		resultFlag := map[string]bool{
-			"-row-number": true, "-rank": true, "-dense-rank": true, "-percent-rank": true,
-			"-count": true, "-ntile": true, "-first": true, "-last": true,
+			"-row-number": true, "-rank": true, "-dense-rank": true, "-percent-rank": true, "-cume-dist": true,
+			"-count": true, "-count-field": true, "-ntile": true, "-first": true, "-last": true,
 			"-sum": true, "-avg": true, "-min": true, "-max": true, "-lag": true, "-lead": true,
+			"-nth-value": true, "-lag-default": true, "-lead-default": true,
 		}
 		out := slices.Clone(in)
 		_, flags := walkStage(args, arity)

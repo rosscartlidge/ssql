@@ -7,20 +7,25 @@ import "testing"
 // reconstruction lost (it emitted WNtile(0) in every generated program).
 func TestWindowFuncCode(t *testing.T) {
 	cases := map[string]WindowFunc{
-		"ssql.WRowNumber()":      WRowNumber(),
-		"ssql.WRank()":           WRank(),
-		"ssql.WDenseRank()":      WDenseRank(),
-		"ssql.WNtile(4)":         WNtile(4),
-		"ssql.WPercentRank()":    WPercentRank(),
-		`ssql.WLag("price", 2)`:  WLag("price", 2),
-		`ssql.WLead("price", 1)`: WLead("price", 1),
-		`ssql.WFirst("a b")`:     WFirst("a b"), // a field with a space survives %q
-		`ssql.WLast("x")`:        WLast("x"),
-		`ssql.WSum("amount")`:    WSum("amount"),
-		`ssql.WAvg("amount")`:    WAvg("amount"),
-		"ssql.WCount()":          WCount(),
-		`ssql.WMin("v")`:         WMin("v"),
-		`ssql.WMax("v")`:         WMax("v"),
+		"ssql.WRowNumber()":                  WRowNumber(),
+		"ssql.WRank()":                       WRank(),
+		"ssql.WDenseRank()":                  WDenseRank(),
+		"ssql.WNtile(4)":                     WNtile(4),
+		"ssql.WPercentRank()":                WPercentRank(),
+		`ssql.WLag("price", 2)`:              WLag("price", 2),
+		`ssql.WLead("price", 1)`:             WLead("price", 1),
+		`ssql.WFirst("a b")`:                 WFirst("a b"), // a field with a space survives %q
+		`ssql.WLast("x")`:                    WLast("x"),
+		`ssql.WSum("amount")`:                WSum("amount"),
+		`ssql.WAvg("amount")`:                WAvg("amount"),
+		"ssql.WCount()":                      WCount(),
+		`ssql.WMin("v")`:                     WMin("v"),
+		`ssql.WMax("v")`:                     WMax("v"),
+		"ssql.WCumeDist()":                   WCumeDist(),
+		`ssql.WNthValue("v", 2)`:             WNthValue("v", 2),
+		`ssql.WLagDefault("v", 1, int64(0))`: WLagDefault("v", 1, int64(0)),
+		`ssql.WLeadDefault("v", 2, "none")`:  WLeadDefault("v", 2, "none"),
+		`ssql.WCountField("v")`:              WCountField("v"),
 	}
 	for want, fn := range cases {
 		if got := WindowFuncCode(fn); got != want {

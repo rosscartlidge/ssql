@@ -1240,6 +1240,36 @@ func translateWindow(q *sqlQuery, args []string) error {
 			} else {
 				i++
 			}
+		case "-cume-dist":
+			if i+1 < len(args) {
+				cur.funcs = append(cur.funcs, fmt.Sprintf("CUME_DIST() AS %s", quoteIdent(args[i+1])))
+				i += 2
+			} else {
+				i++
+			}
+		case "-count-field":
+			if i+2 < len(args) {
+				cur.funcs = append(cur.funcs, fmt.Sprintf("COUNT(%s) AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
+				i += 3
+			} else {
+				i++
+			}
+		case "-nth-value":
+			if i+3 < len(args) {
+				cur.funcs = append(cur.funcs, fmt.Sprintf("NTH_VALUE(%s, %s) AS %s", quoteIdent(args[i+1]), args[i+2], quoteIdent(args[i+3])))
+				i += 4
+			} else {
+				i++
+			}
+		// 4-arg: -lag-default/-lead-default field n default result
+		case "-lag-default", "-lead-default":
+			if i+4 < len(args) {
+				sqlFunc := strings.ToUpper(strings.TrimSuffix(args[i][1:], "-default"))
+				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s, %s, %s) AS %s", sqlFunc, quoteIdent(args[i+1]), args[i+2], sqlTypedLiteral(windowDefaultLiteral(args[i+3])), quoteIdent(args[i+4])))
+				i += 5
+			} else {
+				i++
+			}
 		// 2-arg: -ntile n result
 		case "-ntile":
 			if i+2 < len(args) {
@@ -1339,6 +1369,22 @@ func windowSQLFunc(flag string) string {
 	default:
 		return strings.ToUpper(flag[1:])
 	}
+}
+
+// sqlTypedLiteral renders a typed CLI literal (windowDefaultLiteral) as
+// SQL: numbers and booleans bare, strings quoted.
+func sqlTypedLiteral(v any) string {
+	switch x := v.(type) {
+	case int64:
+		return strconv.FormatInt(x, 10)
+	case float64:
+		return strconv.FormatFloat(x, 'g', -1, 64)
+	case bool:
+		return strings.ToUpper(strconv.FormatBool(x))
+	case string:
+		return sqlStringLiteral(x)
+	}
+	return fmt.Sprint(v)
 }
 
 func buildFrameSQL(preceding, following int) string {

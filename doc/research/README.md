@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-09-15 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-09-16 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -137,7 +137,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC127 | 2026-09-12 | 2026-09-14 | [A Terminal UI for ssql? (Bubble Tea)](./dfc127_terminal_ui_bubbletea.md) |
 | DFC128 | 2026-09-14 | 2026-09-15 | [JSON Interchange with DuckDB and Postgres, and the Time Type Question](./dfc128_json_interchange_and_time_type.md) |
 | DFC129 | 2026-09-15 | 2026-09-15 | [Group-by Aggregates: What Is Missing, and Flags versus Expressions](./dfc129_groupby_aggregates.md) |
-| DFC130 | 2026-09-15 | 2026-09-15 | [Window Analytics: Gaps Against the SQL Set](./dfc130_window_analytics_gaps.md) |
+| DFC130 | 2026-09-15 | 2026-09-16 | [Window Analytics: Gaps Against the SQL Set](./dfc130_window_analytics_gaps.md) |
 
 <!-- DFC-INDEX-END -->
 

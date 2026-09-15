@@ -2125,13 +2125,19 @@ func extractWindowFields(args []string) ([]string, bool) {
 				i += 2
 				continue
 			}
-		case "-lag", "-lead":
+		case "-lag", "-lead", "-nth-value":
 			if i+2 < len(args) {
 				fields = append(fields, args[i+1])
 				i += 3 // -lag field N
 				continue
 			}
-		case "-first", "-last", "-sum", "-avg", "-min", "-max":
+		case "-lag-default", "-lead-default":
+			if i+3 < len(args) {
+				fields = append(fields, args[i+1])
+				i += 4 // field N default
+				continue
+			}
+		case "-first", "-last", "-sum", "-avg", "-min", "-max", "-count-field":
 			if i+1 < len(args) {
 				fields = append(fields, args[i+1])
 				i += 2
