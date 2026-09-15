@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.99.0] - 2026-09-15
+
 ### Added
 - **`group-by -first F R`, `-last F R`, `-any F R`, `-count-distinct F R`,
   `-string-agg F SEP R`** (DFC129 phase 1) — the standard aggregates
