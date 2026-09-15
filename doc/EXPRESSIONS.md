@@ -263,6 +263,14 @@ ssql update -set-expr payload 'toJSON({"name": name, "age": age})'
 
 `bucket` is the downsampling primitive: `update -set-expr minute
 'bucket(ts, "1m")' | group-by minute -avg temp t` averages per minute.
+
+Inside `group-by -expr` every field is the group's array, so the array
+builtins aggregate: `first(name)`, `last(name)`, `median(salary)`,
+`len(uniq(city))`, `join(sort(name), ", ")`. The common ones have flags
+that run in every lane, including `generate sql`: `-first`, `-last`,
+`-any`, `-count-distinct`, `-string-agg FIELD SEP NAME`, `-min`/`-max`
+(strings and times too). Prefer the flag when one exists; `-expr` is the
+interpreter-only escape hatch (DFC129).
 The flag form `update -set-bucket minute ts 1m` is the same operation
 (Tab completes the fields); use the function when the bucket is part of
 a larger expression. In `generate sql` it becomes a `CASE` that detects

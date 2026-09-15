@@ -308,6 +308,17 @@ its result column:
 ssql from employees.csv | ssql group-by dept -count n -avg salary avg_salary -max salary top_salary | ssql sort -desc avg_salary | ssql to table
 ```
 
+The aggregate flags are the SQL set: `-count`, `-sum`, `-avg`, `-min`,
+`-max` (strings and dates too), `-first`, `-last`, `-any`,
+`-count-distinct`, `-string-agg FIELD SEP NAME`, and `-collect` for a
+list. `-first` and `-last` are arrival order, so on a file they are the
+first and last row of each group:
+
+```bash
+# Who was hired first and last per department, how many cities, and everyone's name
+ssql from employees.csv | ssql group-by dept -first name first_hired -last name last_hired -count-distinct city cities -string-agg name ", " members | ssql to table
+```
+
 ```bash
 # Top 3 earners without sorting everything (a heap, O(3) memory)
 ssql from employees.csv | ssql top 3 -field salary | ssql include name salary | ssql to table

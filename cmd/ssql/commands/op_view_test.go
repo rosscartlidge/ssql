@@ -204,3 +204,39 @@ func TestRuleLimitLastToSource(t *testing.T) {
 		t.Error("head limit is already lazy — never folded")
 	}
 }
+
+// group-by -presorted CONSUMES order (it groups contiguous runs), so a
+// sort feeding it must survive the dead-sort rule — found by the DFC129
+// phase-1 gate: every codegen lane grouped row by row after the
+// optimiser dropped `sort dept name`. Both the stamped Op.Order path and
+// the Op-less argv fallback must see the flag.
+func TestPresortedGroupByKeepsSort(t *testing.T) {
+	lib.DeclareOrder("group-by", lib.OrderReset)
+	lib.DeclareOrderWhenFlag("group-by", "-presorted", lib.OrderConsumes)
+
+	// Op-less fragments (older ssql across ssh): argv fallback.
+	cmds := []*pipelineCmd{
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql sort dept name"}),
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql group-by dept -presorted -count n"}),
+	}
+	ruleSortElimination(cmds)
+	if cmds[0].Removed {
+		t.Error("sort feeding group-by -presorted must be kept (argv fallback)")
+	}
+	cmds = []*pipelineCmd{
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql sort dept name"}),
+		pipelineCmdFor(&lib.CodeFragment{Command: "ssql group-by dept -count n"}),
+	}
+	ruleSortElimination(cmds)
+	if !cmds[0].Removed {
+		t.Error("sort feeding a plain group-by is dead and must be removed")
+	}
+
+	// Stamped Op: the flag override lands in Op.Order at emission time.
+	if got := lib.OrderForArgv("group-by", []string{"dept", "-presorted", "-count", "n"}); got != lib.OrderConsumes {
+		t.Errorf("OrderForArgv with -presorted = %q, want consumes", got)
+	}
+	if got := lib.OrderForArgv("group-by", []string{"dept", "-count", "n"}); got != lib.OrderReset {
+		t.Errorf("OrderForArgv without -presorted = %q, want reset", got)
+	}
+}

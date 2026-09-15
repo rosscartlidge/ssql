@@ -15,6 +15,7 @@ type aggSpec struct {
 	function string
 	field    string
 	result   string
+	extra    string // the flag's extra argument, when its aggDef declares one (-string-agg's separator)
 }
 
 // exprSpec represents a custom expression aggregation specification
@@ -25,8 +26,12 @@ type exprSpec struct {
 
 // RegisterGroupBy registers the group-by subcommand
 func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
-	// Order behavior (DFC123 §7): destroys record order without consuming it.
+	// Order behavior (DFC123 §7): destroys record order without consuming
+	// it — except under -presorted, which groups contiguous runs and so
+	// CONSUMES the order a preceding sort provides (the optimiser used to
+	// drop that sort; found by the DFC129 phase-1 gate).
 	lib.DeclareOrder("group-by", lib.OrderReset)
+	lib.DeclareOrderWhenFlag("group-by", "-presorted", lib.OrderConsumes)
 
 	cmd.Subcommand("group-by").
 		Description("Group records by fields and apply aggregations").
@@ -35,6 +40,8 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from sales.csv | ssql group-by region -sum amount total_sales", "Sum sales amount by region").
 		Example("ssql from data.csv | ssql group-by dept -count num_employees -avg salary avg_salary -sum hours total_hours", "Multiple aggregations in one command").
 		Example("ssql from data.csv | ssql group-by dept -collect name all_names", "Collect all names into array per department").
+		Example("ssql from events.csv | ssql group-by session -first url landing -last url exit -count-distinct url pages", "First and last in arrival order; distinct count").
+		Example("ssql from data.csv | ssql group-by dept -string-agg name ', ' members", "Join the group's values into one string").
 		Example("ssql from data.csv | ssql group-by dept -expr 'sum(salary * bonus)' total_comp", "Custom expression aggregation").
 		Example("ssql from huge.csv | ssql group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total", "Memory-efficient streaming aggregation").
 		Example("ssql from data.csv | ssql group-by a_kind z_kind -count count -rollup", "Hierarchical rollup with parent-level counts").
@@ -113,6 +120,64 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Accumulate().
 		Global().
 		Help("Collect all field values into array (field name, result name)").
+		Done().
+		Flag("-first").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("First value in arrival order (field name, result name)").
+		Done().
+		Flag("-last").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Last value in arrival order (field name, result name)").
+		Done().
+		Flag("-any").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Any one value from the group — SQL's any_value (field name, result name)").
+		Done().
+		Flag("-count-distinct").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Number of distinct values — SQL's COUNT(DISTINCT f) (field name, result name)").
+		Done().
+		Flag("-string-agg").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("sep").
+		Completer(cf.NoCompleter{Hint: "<separator>"}).
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Join the group's values with a separator, in arrival order — SQL's string_agg (field name, separator, result name)").
 		Done().
 		Flag("-expr", "-e").
 		Arg("expression").
@@ -253,7 +318,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 				aggregations := make(map[string]ssql.AggregateFunc)
 				for _, spec := range aggSpecs {
-					agg, err := buildAggregator(spec.function, spec.field)
+					agg, err := buildAggregator(spec)
 					if err != nil {
 						return err
 					}
@@ -358,7 +423,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Build aggregations map
 			aggregations := make(map[string]ssql.AggregateFunc)
 			for _, spec := range aggSpecs {
-				agg, err := buildAggregator(spec.function, spec.field)
+				agg, err := buildAggregator(spec)
 				if err != nil {
 					return err
 				}
@@ -738,7 +803,7 @@ func generateAggregatorCode(spec aggSpec) string {
 	if !ok {
 		return ""
 	}
-	return d.code(spec.field)
+	return d.code(spec.field, spec.extra)
 }
 
 // hasAggFn reports whether any spec uses the named aggregate.

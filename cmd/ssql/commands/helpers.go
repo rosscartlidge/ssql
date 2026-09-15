@@ -354,12 +354,12 @@ func contains(str, substr string) bool {
 
 // buildAggregator creates the exec-lane aggregation function for a
 // built-in aggregate (aggDefs, DFC129 §6).
-func buildAggregator(function, field string) (ssql.AggregateFunc, error) {
-	d, ok := aggDefByFn(function)
+func buildAggregator(spec aggSpec) (ssql.AggregateFunc, error) {
+	d, ok := aggDefByFn(spec.function)
 	if !ok {
-		return nil, fmt.Errorf("unknown aggregation function: %s", function)
+		return nil, fmt.Errorf("unknown aggregation function: %s", spec.function)
 	}
-	return d.build(field), nil
+	return d.build(spec.field, spec.extra), nil
 }
 
 // chainRecords chains multiple JSONL data sources into a single stream (for union command)

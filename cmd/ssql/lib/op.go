@@ -70,6 +70,40 @@ func DeclareOrder(kind, order string) {
 	orderRegistry[kind] = order
 }
 
+// orderFlagOverrides records commands whose order behavior depends on
+// one of their flags: group-by is OrderReset, but `group-by -presorted`
+// CONSUMES order (it groups contiguous runs, so a sort feeding it is
+// load-bearing — the optimiser dropped that sort and every codegen lane
+// grouped row by row until v4.99.0).
+var orderFlagOverrides = map[string]struct{ flag, order string }{}
+
+// DeclareOrderWhenFlag records that KIND behaves as ORDER when FLAG is
+// present on its argv, overriding DeclareOrder's default. Call it from
+// the command's Register function next to DeclareOrder.
+func DeclareOrderWhenFlag(kind, flag, order string) {
+	switch order {
+	case OrderTransparent, OrderReset, OrderConsumes:
+	default:
+		panic("lib.DeclareOrderWhenFlag: unknown order behavior " + order + " for " + kind)
+	}
+	orderFlagOverrides[kind] = struct{ flag, order string }{flag, order}
+}
+
+// OrderForArgv is the order behavior of one invocation: the flag
+// override when its flag is present, else the declared default ("" if
+// undeclared). Backends that must fall back to argv (Op-less
+// fragments) can call it with the parsed kind and args.
+func OrderForArgv(kind string, argv []string) string {
+	if ov, ok := orderFlagOverrides[kind]; ok {
+		for _, a := range argv {
+			if a == ov.flag {
+				return ov.order
+			}
+		}
+	}
+	return orderRegistry[kind]
+}
+
 // DeclaredOrder returns a command's declared order behavior, or ""
 // when the command has not declared one.
 func DeclaredOrder(kind string) string {
@@ -89,13 +123,14 @@ func opFromProcessArgs() *Op {
 	if len(os.Args) < 2 {
 		return nil
 	}
-	op := &Op{Kind: os.Args[1], Order: orderRegistry[os.Args[1]]}
+	op := &Op{Kind: os.Args[1]}
 	for _, a := range os.Args[2:] {
 		if a == "-generate" || a == "-g" {
 			continue
 		}
 		op.Argv = append(op.Argv, a)
 	}
+	op.Order = OrderForArgv(op.Kind, op.Argv)
 	return op
 }
 

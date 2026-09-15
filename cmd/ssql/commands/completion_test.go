@@ -98,6 +98,11 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-min":     {0}, // field is arg 0
 			"-max":     {0}, // field is arg 0
 			"-collect": {0}, // field is arg 0
+			"-first":          {0},
+			"-last":           {0},
+			"-any":            {0},
+			"-count-distinct": {0},
+			"-string-agg":     {0}, // field, then sep, then result-name
 			// Note: -count only takes result-name, not a field to count
 		},
 		// Nested subcommands use "parent/child" notation

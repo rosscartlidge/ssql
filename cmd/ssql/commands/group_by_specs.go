@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -20,15 +21,54 @@ type aggDef struct {
 	flag     string // "-sum"
 	fn       string // aggSpec.function: "sum"
 	hasField bool   // false for -count, which takes only a result name
-	sqlFn    string // "SUM" → SUM("field"); -count carries the whole expression "COUNT(*)"
+	extraArg string // name of a third argument between field and result ("sep" for -string-agg), or ""
+	// sql renders the aggregate for `generate sql` from the quoted field
+	// identifier and the extra argument (DuckDB dialect).
+	sql func(quotedField, extra string) string
 	// wireType is the `_schema` type of the result given the input
 	// field's wire type ("" when unknown or fieldless).
 	wireType func(fieldType string) string
-	build    func(field string) ssql.AggregateFunc // exec
-	code     func(field string) string            // record codegen expression
+	build    func(field, extra string) ssql.AggregateFunc // exec
+	code     func(field, extra string) string            // record codegen expression
+	// typedKind names the accumulator shape the typed lane emits
+	// (typed_groupby.go): "" = not typed (falls back to record codegen).
+	typedKind string
+}
+
+// arity is the number of arguments the flag takes on the command line.
+func (d aggDef) arity() int {
+	n := 1 // result name
+	if d.hasField {
+		n++
+	}
+	if d.extraArg != "" {
+		n++
+	}
+	return n
 }
 
 func wireFixed(t string) func(string) string { return func(string) string { return t } }
+
+// sqlCall renders FN("field") for the plain one-field aggregates.
+func sqlCall(fn string) func(string, string) string {
+	return func(qf, _ string) string { return fmt.Sprintf("%s(%s)", fn, qf) }
+}
+
+// sqlStringLiteral quotes a Go string as a SQL string literal.
+func sqlStringLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// Typed accumulator kinds (DFC129 §5).
+const (
+	typedKindCount      = "count"        // int64 counter
+	typedKindSum        = "sum"          // running sum in the field's type
+	typedKindAvg        = "avg"          // sum + count
+	typedKindExtreme    = "extreme"      // best value + have flag, ordered compare
+	typedKindPositional = "positional"   // first/last: value + have flag, shard-ordered merge
+	typedKindSet        = "set"          // map[T]struct{} → count
+	typedKindStringList = "string-list"  // []string → join
+)
 
 // wireOfField keeps the input field's type (min/max of a string is a
 // string); "float" when the input schema does not know the field.
@@ -42,26 +82,47 @@ func wireOfField(fieldType string) string {
 // aggDefs lists the built-in aggregation flags in the order they are
 // declared on the command and decoded from it.
 var aggDefs = []aggDef{
-	{flag: "-count", fn: "count", sqlFn: "COUNT(*)", wireType: wireFixed("int"),
-		build: func(string) ssql.AggregateFunc { return ssql.Count() },
-		code:  func(string) string { return "ssql.Count()" }},
-	{flag: "-sum", fn: "sum", hasField: true, sqlFn: "SUM", wireType: wireFixed("float"),
-		build: ssql.Sum,
-		code:  func(f string) string { return fmt.Sprintf("ssql.Sum(%q)", f) }},
-	{flag: "-avg", fn: "avg", hasField: true, sqlFn: "AVG", wireType: wireFixed("float"),
-		build: ssql.Avg,
-		code:  func(f string) string { return fmt.Sprintf("ssql.Avg(%q)", f) }},
+	{flag: "-count", fn: "count", wireType: wireFixed("int"), typedKind: typedKindCount,
+		sql:   func(string, string) string { return "COUNT(*)" },
+		build: func(string, string) ssql.AggregateFunc { return ssql.Count() },
+		code:  func(string, string) string { return "ssql.Count()" }},
+	{flag: "-sum", fn: "sum", hasField: true, sql: sqlCall("SUM"), wireType: wireFixed("float"), typedKind: typedKindSum,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.Sum(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Sum(%q)", f) }},
+	{flag: "-avg", fn: "avg", hasField: true, sql: sqlCall("AVG"), wireType: wireFixed("float"), typedKind: typedKindAvg,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.Avg(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Avg(%q)", f) }},
 	// min/max keep the field's type: MinOf/MaxOf order numbers, strings
 	// and times (Min[float64] reported 0 for every string group — DFC129 §2).
-	{flag: "-min", fn: "min", hasField: true, sqlFn: "MIN", wireType: wireOfField,
-		build: ssql.MinOf,
-		code:  func(f string) string { return fmt.Sprintf("ssql.MinOf(%q)", f) }},
-	{flag: "-max", fn: "max", hasField: true, sqlFn: "MAX", wireType: wireOfField,
-		build: ssql.MaxOf,
-		code:  func(f string) string { return fmt.Sprintf("ssql.MaxOf(%q)", f) }},
-	{flag: "-collect", fn: "collect", hasField: true, sqlFn: "LIST", wireType: wireFixed("json"),
-		build: ssql.Collect,
-		code:  func(f string) string { return fmt.Sprintf("ssql.Collect(%q)", f) }},
+	{flag: "-min", fn: "min", hasField: true, sql: sqlCall("MIN"), wireType: wireOfField, typedKind: typedKindExtreme,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.MinOf(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.MinOf(%q)", f) }},
+	{flag: "-max", fn: "max", hasField: true, sql: sqlCall("MAX"), wireType: wireOfField, typedKind: typedKindExtreme,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.MaxOf(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.MaxOf(%q)", f) }},
+	{flag: "-collect", fn: "collect", hasField: true, sql: sqlCall("LIST"), wireType: wireFixed("json"),
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.Collect(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Collect(%q)", f) }},
+	// DFC129 phase 1. first/last are arrival order — file order on a file
+	// source in every lane (the typed parallel merge is in shard order);
+	// -any is first with SQL's weaker any_value promise.
+	{flag: "-first", fn: "first", hasField: true, sql: sqlCall("first"), wireType: wireOfField, typedKind: typedKindPositional,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.FirstOf(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.FirstOf(%q)", f) }},
+	{flag: "-last", fn: "last", hasField: true, sql: sqlCall("last"), wireType: wireOfField, typedKind: typedKindPositional,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.LastOf(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.LastOf(%q)", f) }},
+	{flag: "-any", fn: "any", hasField: true, sql: sqlCall("any_value"), wireType: wireOfField, typedKind: typedKindPositional,
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.FirstOf(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.FirstOf(%q)", f) }},
+	{flag: "-count-distinct", fn: "count-distinct", hasField: true, wireType: wireFixed("int"), typedKind: typedKindSet,
+		sql:   func(qf, _ string) string { return fmt.Sprintf("COUNT(DISTINCT %s)", qf) },
+		build: func(f, _ string) ssql.AggregateFunc { return ssql.CountDistinct(f) },
+		code:  func(f, _ string) string { return fmt.Sprintf("ssql.CountDistinct(%q)", f) }},
+	{flag: "-string-agg", fn: "string-agg", hasField: true, extraArg: "sep", wireType: wireFixed("string"), typedKind: typedKindStringList,
+		sql:   func(qf, sep string) string { return fmt.Sprintf("string_agg(%s, %s)", qf, sqlStringLiteral(sep)) },
+		build: func(f, sep string) ssql.AggregateFunc { return ssql.StringAgg(f, sep) },
+		code:  func(f, sep string) string { return fmt.Sprintf("ssql.StringAgg(%q, %q)", f, sep) }},
 }
 
 // aggDefByFlag / aggDefByFn look an aggregate up by its flag ("-sum") or
@@ -90,11 +151,7 @@ func aggDefByFn(fn string) (aggDef, bool) {
 func aggFlagArity() map[string]int {
 	m := make(map[string]int, len(aggDefs))
 	for _, d := range aggDefs {
-		if d.hasField {
-			m[d.flag] = 2
-		} else {
-			m[d.flag] = 1
-		}
+		m[d.flag] = d.arity()
 	}
 	return m
 }
@@ -172,15 +229,16 @@ func parseAggSpecs(ctx *cf.Context) []aggSpec {
 			}
 			continue
 		}
-		aggs = append(aggs, fieldResultAggSpecs(ctx, d.flag, d.fn)...)
+		aggs = append(aggs, fieldResultAggSpecs(ctx, d)...)
 	}
 	return aggs
 }
 
-// fieldResultAggSpecs decodes a two-argument aggregation flag whose
-// args are ("field", "result-name") into aggSpecs tagged with fn.
-func fieldResultAggSpecs(ctx *cf.Context, flag, fn string) []aggSpec {
-	vals, ok := ctx.GlobalFlags[flag].([]any)
+// fieldResultAggSpecs decodes a multi-argument aggregation flag whose
+// args are ("field", [extra,] "result-name") into aggSpecs tagged with
+// the def's function name.
+func fieldResultAggSpecs(ctx *cf.Context, d aggDef) []aggSpec {
+	vals, ok := ctx.GlobalFlags[d.flag].([]any)
 	if !ok {
 		return nil
 	}
@@ -192,8 +250,12 @@ func fieldResultAggSpecs(ctx *cf.Context, flag, fn string) []aggSpec {
 		}
 		field, _ := m["field"].(string)
 		result, _ := m["result-name"].(string)
+		extra := ""
+		if d.extraArg != "" {
+			extra, _ = m[d.extraArg].(string)
+		}
 		if field != "" && result != "" {
-			out = append(out, aggSpec{function: fn, field: field, result: result})
+			out = append(out, aggSpec{function: d.fn, field: field, result: result, extra: extra})
 		}
 	}
 	return out

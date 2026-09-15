@@ -635,31 +635,24 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 	// Parse aggregation flags
 	var aggs []sqlAgg
 	rollup, cube := false, false
-	oneField := func(fn string) bool { // -count NAME
-		if i+1 < len(args) {
-			aggs = append(aggs, sqlAgg{fn, args[i+1]})
-			i += 2
-			return true
-		}
-		i++
-		return false
-	}
-	twoField := func(fn string) { // -sum FIELD NAME
-		if i+2 < len(args) {
-			aggs = append(aggs, sqlAgg{fmt.Sprintf("%s(%s)", fn, quoteIdent(args[i+1])), args[i+2]})
-			i += 3
-		} else {
-			i++
-		}
-	}
 	for i < len(args) {
 		// Built-in aggregates come from the registry (aggDefs, DFC129 §6):
-		// -count carries its whole expression, the rest are FN("field").
+		// the def renders its own SQL from the quoted field and the extra
+		// argument; the result name is always the flag's last argument.
 		if d, ok := aggDefByFlag(args[i]); ok {
-			if d.hasField {
-				twoField(d.sqlFn)
+			n := d.arity()
+			if i+n < len(args) {
+				qf, extra := "", ""
+				if d.hasField {
+					qf = quoteIdent(args[i+1])
+				}
+				if d.extraArg != "" {
+					extra = args[i+2]
+				}
+				aggs = append(aggs, sqlAgg{d.sql(qf, extra), args[i+n]})
+				i += n + 1
 			} else {
-				oneField(d.sqlFn)
+				i++
 			}
 			continue
 		}

@@ -236,6 +236,30 @@ needs the shard ordinal (§5). Equivalence cases on **shuffled fixtures
 with distinct values** and `Ordered:false` multiset comparison, DuckDB
 lane, Golden for first/last on a `-presorted` input where the answer is
 defined.
+*Done 2026-09-15.* Library `FirstOf`/`LastOf`/`CountDistinct`/`StringAgg`
++ `AggValueString` (`agg_positional.go`); five `aggDefs` entries (the
+registry gained `extraArg`, a per-def `sql` renderer and `typedKind`);
+typed kinds positional / set / string-list in `typed_groupby.go`
+(`aggValueStringCode` mirrors the library formatting per Go type;
+`typedAggImports` adds strings/strconv/time). **No shard ordinal was
+needed**: `typed.GroupByParallel` merges partials in ascending shard
+order, so first keeps the receiver's value and last takes the peer's.
+One thing the plan missed: under `-rollup`/`-cube` the typed path
+merges parent levels from detail-group state, which joins strings (and
+picks first/last) in *group* order while exec's `Rollup` walks rows in
+file order — so first/last/any/string-agg eject to record codegen there
+(like `-collect`); count-distinct stays typed. Equivalence cases
+`groupby_first_last_any`, `groupby_count_distinct_string_agg` (Goldens)
+and `groupby_cube_order_sensitive_aggs`; DuckDB lane on all three. A
+fourth, `groupby_first_last_presorted_serial`, exists because the
+7-row fixture is one row per shard on the parallel path, so Merge alone
+decides first/last and a planted last-as-first Add passed; `-presorted`
+forces the serial typed path and exercises Add. That case found a
+pre-existing optimiser bug: the dead-sort rule removed `sort dept name`
+before `group-by -presorted` (group-by is declared OrderReset), so every
+codegen lane grouped row by row. Fixed with a flag-conditional order
+declaration (`lib.DeclareOrderWhenFlag("group-by", "-presorted",
+OrderConsumes)`), stamped on the Op and used by the argv fallback.
 
 **Phase 2 — statistics (1 day).** `-median`, `-percentile F P R`,
 `-stddev`, `-variance`, `-mode`. Kinds: ordered-list, welford. SQL:

@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`group-by -first F R`, `-last F R`, `-any F R`, `-count-distinct F R`,
+  `-string-agg F SEP R`** (DFC129 phase 1) — the standard aggregates
+  people type from memory, in every lane: exec, record and typed codegen
+  (mergeable accumulators, so the parallel group-by stays parallel;
+  first/last rely on the shard-ordered merge, so on a file they equal
+  file order), and `generate sql` (`first`, `last`, `any_value`,
+  `COUNT(DISTINCT f)`, `string_agg(f, 'sep')`). first/last/any keep the
+  field's type; count-distinct is an `int`; string-agg formats non-string
+  values the same way in every lane (`ssql.AggValueString`). Under
+  `-rollup`/`-cube` the order-sensitive four take the record path so
+  parent levels are joined in row order, as exec does. Library:
+  `ssql.FirstOf`, `LastOf`, `CountDistinct`, `StringAgg`.
+
 ### Fixed
+- **The optimiser dropped a `sort` feeding `group-by -presorted`.**
+  group-by is declared order-resetting, but `-presorted` groups
+  contiguous runs and so consumes the order the sort provides; the
+  dead-sort rule removed it and every codegen lane (and the optimised
+  exec lane) then grouped row by row. Commands can now declare a
+  flag-conditional order behaviour (`lib.DeclareOrderWhenFlag`); group-by
+  declares `-presorted` as order-consuming, stamped on the fragment's Op
+  and honoured by the Op-less argv fallback. Found by the DFC129 phase-1
+  equivalence case `groupby_first_last_presorted_serial`.
 - **`group-by -min` / `-max` on a string (or time) field** printed `0`
   for every group in exec and record codegen (`Min[float64]` coerced the
   string to its zero and said nothing), while the typed lane refused

@@ -923,6 +923,11 @@ func orderOf(cmd *pipelineCmd) string {
 	if cmd.Order != "" {
 		return cmd.Order
 	}
+	// Op-less fragment (older ssql across an SSH boundary): the command's
+	// own flag-conditional declaration first, then the legacy table.
+	if o := lib.OrderForArgv(cmd.Kind, cmd.RawArgs); o != "" {
+		return o
+	}
 	if o, ok := legacyOrderByKind[cmd.Kind]; ok {
 		return o
 	}
@@ -1985,10 +1990,7 @@ func extractGroupByFields(args []string) ([]string, bool) {
 		// Built-in aggregates: step over the flag's args (aggDefs, DFC129
 		// §6); a FIELD RESULT flag also names an input field.
 		if d, ok := aggDefByFlag(args[i]); ok {
-			n := 1
-			if d.hasField {
-				n = 2
-			}
+			n := d.arity()
 			if i+n < len(args) {
 				if d.hasField {
 					fields = append(fields, args[i+1])

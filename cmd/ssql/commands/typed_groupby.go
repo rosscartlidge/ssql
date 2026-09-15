@@ -197,6 +197,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	if schemaUsesTime(resultSchema) || schemaUsesTime(in) {
 		imports = append(imports, "time")
 	}
+	imports = append(imports, typedAggImports(specs, in)...)
 	imports = dedupeImports(imports)
 	var hoisted []string
 	for _, p := range exprPlans {
@@ -369,6 +370,14 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			// Track value + a "have any" flag.
 			st.stateType = f.GoType
 			st.needsN = true // reuses needsN as "haveValue bool"
+		case "first", "last", "any":
+			// positional: value + have flag; Merge is in shard order so
+			// first/last equal the serial answer on a file source.
+			st.stateType = f.GoType
+		case "count-distinct":
+			st.stateType = fmt.Sprintf("map[%s]struct{}", f.GoType)
+		case "string-agg":
+			st.stateType = "[]string"
 		}
 		states = append(states, st)
 	}
@@ -382,7 +391,8 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		if s.spec.function == "avg" {
 			fmt.Fprintf(&d, "\t%s_n int64\n", s.stateName)
 		}
-		if s.spec.function == "min" || s.spec.function == "max" {
+		switch s.spec.function {
+		case "min", "max", "first", "last", "any":
 			fmt.Fprintf(&d, "\t%s_have bool\n", s.stateName)
 		}
 	}
@@ -422,6 +432,19 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\t\ta.%s = r.%s\n", s.stateName, s.fieldGo)
 			fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 			d.WriteString("\t}\n")
+		case "first", "any":
+			fmt.Fprintf(&d, "\tif !a.%s_have {\n", s.stateName)
+			fmt.Fprintf(&d, "\t\ta.%s = r.%s\n", s.stateName, s.fieldGo)
+			fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
+			d.WriteString("\t}\n")
+		case "last":
+			fmt.Fprintf(&d, "\ta.%s = r.%s\n", s.stateName, s.fieldGo)
+			fmt.Fprintf(&d, "\ta.%s_have = true\n", s.stateName)
+		case "count-distinct":
+			fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
+			fmt.Fprintf(&d, "\ta.%s[r.%s] = struct{}{}\n", s.stateName, s.fieldGo)
+		case "string-agg":
+			fmt.Fprintf(&d, "\ta.%s = append(a.%s, %s)\n", s.stateName, s.stateName, aggValueStringCode(s.fieldGoT, "r."+s.fieldGo))
 		}
 	}
 	for _, p := range exprPlans {
@@ -455,8 +478,12 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		switch s.spec.function {
 		case "count":
 			fmt.Fprintf(&d, "\t\t%s: a.%s,\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
-		case "sum", "min", "max":
+		case "sum", "min", "max", "first", "last", "any":
 			fmt.Fprintf(&d, "\t\t%s: a.%s,\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
+		case "count-distinct":
+			fmt.Fprintf(&d, "\t\t%s: int64(len(a.%s)),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
+		case "string-agg":
+			fmt.Fprintf(&d, "\t\t%s: strings.Join(a.%s, %q),\n", lib.GoNameFromColumn(s.spec.result), s.stateName, s.spec.extra)
 		case "avg":
 			fmt.Fprintf(&d, "\t\t%s: func() float64 { if a.%s_n == 0 { return 0 }; return float64(a.%s) / float64(a.%s_n) }(),\n",
 				lib.GoNameFromColumn(s.spec.result), s.stateName, s.stateName, s.stateName)
@@ -495,6 +522,23 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 				fmt.Fprintf(&d, "\t\ta.%s = o.%s\n", s.stateName, s.stateName)
 				fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
 				d.WriteString("\t}\n")
+			case "first", "any":
+				// Merge runs in shard order (typed.GroupByParallel), so the
+				// receiver holds the earlier shard: keep it if it has a value.
+				fmt.Fprintf(&d, "\tif !a.%s_have && o.%s_have {\n", s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\t\ta.%s = o.%s\n", s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
+				d.WriteString("\t}\n")
+			case "last":
+				fmt.Fprintf(&d, "\tif o.%s_have {\n", s.stateName)
+				fmt.Fprintf(&d, "\t\ta.%s = o.%s\n", s.stateName, s.stateName)
+				fmt.Fprintf(&d, "\t\ta.%s_have = true\n", s.stateName)
+				d.WriteString("\t}\n")
+			case "count-distinct":
+				fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
+				fmt.Fprintf(&d, "\tfor k := range o.%s {\n\t\ta.%s[k] = struct{}{}\n\t}\n", s.stateName, s.stateName)
+			case "string-agg":
+				fmt.Fprintf(&d, "\ta.%s = append(a.%s, o.%s...)\n", s.stateName, s.stateName, s.stateName)
 			}
 		}
 		// -expr accumulators merge by addition — sums and counts are
@@ -593,6 +637,11 @@ func typedAggAccepts(fn, field, goType string) error {
 		if !isNumericGoType(goType) && goType != "string" && goType != "time.Time" {
 			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires an ordered type (number, string or time), got %s", fn, field, goType)
 		}
+	case "count-distinct", "string-agg":
+		// A nullable (*T) column has no value to hash or format.
+		if strings.HasPrefix(goType, "*") {
+			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q needs a non-nullable column, got %s (run with SSQL_MODE=record)", fn, field, goType)
+		}
 	}
 	return nil
 }
@@ -618,11 +667,13 @@ func isNumericGoType(t string) bool {
 // field, given the input schema. count → int64; avg → float64; sum,
 // min, max → same as the source field's type.
 func aggResultGoType(s aggSpec, in *lib.TypedSchema) string {
-	if s.function == "count" {
+	switch s.function {
+	case "count", "count-distinct":
 		return "int64"
-	}
-	if s.function == "avg" {
+	case "avg":
 		return "float64"
+	case "string-agg":
+		return "string"
 	}
 	if f, ok := lookupSchemaField(in, s.field); ok {
 		return f.GoType
@@ -635,11 +686,61 @@ func aggResultGoType(s aggSpec, in *lib.TypedSchema) string {
 // full schema).
 func aggResultGoTypeForState(fn, fieldGoType string) string {
 	switch fn {
-	case "count":
+	case "count", "count-distinct":
 		return "int64"
 	case "avg":
 		return "float64"
+	case "string-agg":
+		return "string"
 	default:
 		return fieldGoType
 	}
+}
+
+// typedAggImports lists the extra imports the generated accumulator
+// needs for the phase-1 kinds: strings for the string-agg join, strconv
+// and time for its value formatting.
+func typedAggImports(specs []aggSpec, in *lib.TypedSchema) []string {
+	var out []string
+	for _, s := range specs {
+		if s.function != "string-agg" {
+			continue
+		}
+		out = append(out, "strings")
+		if f, ok := lookupSchemaField(in, s.field); ok {
+			switch f.GoType {
+			case "string":
+			case "time.Time":
+				out = append(out, "time")
+			default:
+				out = append(out, "strconv")
+			}
+		}
+	}
+	return out
+}
+
+// aggValueStringCode emits the Go expression that formats a value of
+// the given type the way ssql.AggValueString does — the exec lane's
+// StringAgg and the typed lane must produce identical text.
+func aggValueStringCode(goType, v string) string {
+	switch goType {
+	case "string":
+		return v
+	case "int64":
+		return fmt.Sprintf("strconv.FormatInt(%s, 10)", v)
+	case "int", "int32":
+		return fmt.Sprintf("strconv.FormatInt(int64(%s), 10)", v)
+	case "uint64":
+		return fmt.Sprintf("strconv.FormatUint(%s, 10)", v)
+	case "float64":
+		return fmt.Sprintf("strconv.FormatFloat(%s, 'g', -1, 64)", v)
+	case "float32":
+		return fmt.Sprintf("strconv.FormatFloat(float64(%s), 'g', -1, 64)", v)
+	case "bool":
+		return fmt.Sprintf("strconv.FormatBool(%s)", v)
+	case "time.Time":
+		return fmt.Sprintf("%s.Format(time.RFC3339Nano)", v)
+	}
+	return fmt.Sprintf("fmt.Sprint(%s)", v)
 }

@@ -1079,6 +1079,64 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// DFC129 phase 1: -first/-last/-any are ARRIVAL order — file order
+		// on a file source in every lane (exec walks the group's rows,
+		// record codegen the same, the typed parallel merge is in shard
+		// order, DuckDB's first/last on a single-threaded small scan).
+		// Golden from the fixture: per dept the first and last name in
+		// file order.
+		Name:     "groupby_first_last_any",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -first name first_name -last name last_name -any city a_city -count n`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering", "first_name": "Alice", "last_name": "Eve", "a_city": "SF", "n": 3},
+			{"dept": "Sales", "first_name": "Bob", "last_name": "Frank", "a_city": "NYC", "n": 2},
+			{"dept": "Marketing", "first_name": "David", "last_name": "Grace", "a_city": "Chicago", "n": 2},
+		},
+	},
+	{
+		// The same first/last under -presorted, which forces the SERIAL
+		// typed group-by (GroupByOrdered): on the sharded parallel path the
+		// 7-row fixture is one row per shard, so Merge alone decides the
+		// answer and a wrong Add is invisible — this case is the one that
+		// exercises Add's arrival order (watched it fail on a planted
+		// last-as-first Add). Sorted by dept then name, so the Golden is
+		// defined in every lane.
+		Name:     "groupby_first_last_presorted_serial",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept name | {{.bin}} group-by dept -presorted -first name first_name -last name last_name -string-agg name "," names`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering", "first_name": "Alice", "last_name": "Eve", "names": "Alice,Carol,Eve"},
+			{"dept": "Sales", "first_name": "Bob", "last_name": "Frank", "names": "Bob,Frank"},
+			{"dept": "Marketing", "first_name": "David", "last_name": "Grace", "names": "David,Grace"},
+		},
+	},
+	{
+		// DFC129 phase 1: -count-distinct (a set per group, merged by
+		// union) and -string-agg (arrival order, shared value formatting —
+		// the salary column is an int, joined as digits in every lane
+		// including DuckDB's string_agg). level is distinct per dept as
+		// {7,9,6} {4,8} {5,6}: 3, 2, 2.
+		Name:     "groupby_count_distinct_string_agg",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -count-distinct level levels -count-distinct city cities -string-agg name ", " members -string-agg salary ";" pays`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering", "levels": 3, "cities": 1, "members": "Alice, Carol, Eve", "pays": "95000;105000;88000"},
+			{"dept": "Sales", "levels": 2, "cities": 1, "members": "Bob, Frank", "pays": "65000;82000"},
+			{"dept": "Marketing", "levels": 2, "cities": 1, "members": "David, Grace", "pays": "72000;78000"},
+		},
+	},
+	{
+		// Order-sensitive aggregates under -cube: the typed rollup merges
+		// parent levels from detail-group STATE, which would join strings
+		// in group order; it therefore ejects first/last/any/string-agg to
+		// record codegen, and every lane must still agree with exec's
+		// row-walking Rollup. count-distinct stays typed (set union).
+		Name:     "groupby_cube_order_sensitive_aggs",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept status -first name f -string-agg name "," m -count-distinct city c -count n -cube`,
+		Ordered:  false,
+	},
+	{
 		// A field named like an expr builtin (`date`) is the FIELD when used
 		// bare in an expression, in every lane: exec's VM patches it to
 		// $env["date"], the transpiled lanes always read it as a field, SQL

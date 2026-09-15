@@ -35,8 +35,15 @@ func emitTypedRollup(inputVar string, in *lib.TypedSchema, groupFields []string,
 		return false, "-rollup/-cube with -expr/-stream-expr has no typed form", nil
 	}
 	for _, s := range specs {
-		if s.function == "collect" {
+		switch s.function {
+		case "collect":
 			return false, "-rollup/-cube with -collect has no typed form (collect has no mergeable state)", nil
+		case "first", "last", "any", "string-agg":
+			// Parent levels are merged from detail-group state, so an
+			// order-sensitive aggregate would see groups in group order,
+			// not file order; exec's Rollup sees the rows. Record fallback
+			// keeps the lanes identical (DFC129 §5).
+			return false, fmt.Sprintf("-rollup/-cube with -%s is order-sensitive; parent levels need the rows, not merged state", s.function), nil
 		}
 	}
 
@@ -148,6 +155,7 @@ func emitTypedRollup(inputVar string, in *lib.TypedSchema, groupFields []string,
 			detailName, strings.Join(keyCtor, ", "))
 	}
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	imports = append(imports, typedAggImports(specs, in)...) // string-agg needs strings/strconv/time
 	if schemaUsesTime(in) {
 		imports = append(imports, "time")
 	}
