@@ -65,6 +65,16 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 		if err := typedAggAccepts(s.function, s.field, f.GoType); err != nil {
 			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 		}
+		if s.function == "arg-max" || s.function == "arg-min" {
+			bf, ok := lookupSchemaField(in, s.extra)
+			if !ok {
+				return true, "", lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: aggregation %q orders by unknown field %q", s.function, s.extra))
+			}
+			if err := typedAggAccepts("min", s.extra, bf.GoType); err != nil { // BY needs an ordered type
+				return true, "", lib.WriteErrorAndExit(getCommandString(), err)
+			}
+		}
 	}
 
 	// Lower each -expr aggregation via the patcher normal form. Unlike
@@ -343,6 +353,8 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		fieldGoT  string // input field's GoType (empty for count)
 		stateType string // "int64", "float64", "MinMaxState[int64]", etc.
 		needsN    bool   // avg also tracks count
+		byGo      string // -arg-*: the BY field's GoName
+		byGoT     string // -arg-*: the BY field's GoType
 	}
 
 	// Look up source fields once.
@@ -396,6 +408,12 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			st.stateType = "ssql.Welford" // n, mean, M2 — the library's own state
 		case "mode":
 			st.stateType = fmt.Sprintf("map[%s]*typedModeEntry", f.GoType)
+		case "arg-max", "arg-min":
+			// paired: the carried FIELD value plus the best BY seen.
+			st.stateType = f.GoType
+			if bf, ok := byCSV[strings.ToLower(s.extra)]; ok {
+				st.byGo, st.byGoT = bf.GoName, bf.GoType
+			}
 		}
 		states = append(states, st)
 	}
@@ -414,6 +432,9 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\t%s_have bool\n", s.stateName)
 		case "mode":
 			fmt.Fprintf(&d, "\t%s_seen int64 // arrival counter for the first-seen tie-break\n", s.stateName)
+		case "arg-max", "arg-min":
+			fmt.Fprintf(&d, "\t%s_by %s // best BY so far\n", s.stateName, s.byGoT)
+			fmt.Fprintf(&d, "\t%s_have bool\n", s.stateName)
 		}
 	}
 	for _, p := range exprPlans {
@@ -481,6 +502,13 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
 			fmt.Fprintf(&d, "\tif e, ok := a.%s[r.%s]; ok {\n\t\te.N++\n\t} else {\n\t\ta.%s[r.%s] = &typedModeEntry{N: 1, First: a.%s_seen}\n\t}\n", s.stateName, s.fieldGo, s.stateName, s.fieldGo, s.stateName)
 			fmt.Fprintf(&d, "\ta.%s_seen++\n", s.stateName)
+		case "arg-max":
+			// Strictly greater replaces: ties keep the first arrival.
+			fmt.Fprintf(&d, "\tif !a.%s_have || %s {\n\t\ta.%s_by = r.%s\n\t\ta.%s = r.%s\n\t\ta.%s_have = true\n\t}\n",
+				s.stateName, orderedLess(s.byGoT, "a."+s.stateName+"_by", "r."+s.byGo), s.stateName, s.byGo, s.stateName, s.fieldGo, s.stateName)
+		case "arg-min":
+			fmt.Fprintf(&d, "\tif !a.%s_have || %s {\n\t\ta.%s_by = r.%s\n\t\ta.%s = r.%s\n\t\ta.%s_have = true\n\t}\n",
+				s.stateName, orderedLess(s.byGoT, "r."+s.byGo, "a."+s.stateName+"_by"), s.stateName, s.byGo, s.stateName, s.fieldGo, s.stateName)
 		}
 	}
 	for _, p := range exprPlans {
@@ -520,7 +548,7 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			} else {
 				fmt.Fprintf(&d, "\t\t%s: a.%s,\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
 			}
-		case "min", "max", "first", "last", "any":
+		case "min", "max", "first", "last", "any", "arg-max", "arg-min":
 			fmt.Fprintf(&d, "\t\t%s: a.%s,\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
 		case "count-distinct":
 			fmt.Fprintf(&d, "\t\t%s: int64(len(a.%s)),\n", lib.GoNameFromColumn(s.spec.result), s.stateName)
@@ -613,6 +641,13 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 				fmt.Fprintf(&d, "\ta.%s = append(a.%s, o.%s...)\n", s.stateName, s.stateName, s.stateName)
 			case "stddev", "variance":
 				fmt.Fprintf(&d, "\ta.%s.Merge(o.%s)\n", s.stateName, s.stateName)
+			case "arg-max":
+				// Receiver is the earlier shard: the peer replaces only when strictly better.
+				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || %s) {\n\t\ta.%s_by = o.%s_by\n\t\ta.%s = o.%s\n\t\ta.%s_have = true\n\t}\n",
+					s.stateName, s.stateName, orderedLess(s.byGoT, "a."+s.stateName+"_by", "o."+s.stateName+"_by"), s.stateName, s.stateName, s.stateName, s.stateName, s.stateName)
+			case "arg-min":
+				fmt.Fprintf(&d, "\tif o.%s_have && (!a.%s_have || %s) {\n\t\ta.%s_by = o.%s_by\n\t\ta.%s = o.%s\n\t\ta.%s_have = true\n\t}\n",
+					s.stateName, s.stateName, orderedLess(s.byGoT, "o."+s.stateName+"_by", "a."+s.stateName+"_by"), s.stateName, s.stateName, s.stateName, s.stateName, s.stateName)
 			case "mode":
 				// Peer's arrivals come after the receiver's (shard order): offset its first-seen indices.
 				fmt.Fprintf(&d, "\tif a.%s == nil {\n\t\ta.%s = make(%s)\n\t}\n", s.stateName, s.stateName, s.stateType)
@@ -725,6 +760,8 @@ func typedAggAccepts(fn, field, goType string) error {
 		if !isNumericGoType(goType) {
 			return fmt.Errorf("ssql generate go -typed: aggregation %q on field %q requires a numeric type, got %s", fn, field, goType)
 		}
+	case "arg-max", "arg-min":
+		// The carried FIELD can be anything; BY is validated by the caller.
 	case "mode":
 		// Any comparable, non-nullable column: numbers, strings, times.
 		if strings.HasPrefix(goType, "*") {

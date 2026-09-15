@@ -269,8 +269,8 @@ builtins aggregate: `first(name)`, `last(name)`, `median(salary)`,
 `len(uniq(city))`, `join(sort(name), ", ")`. The common ones have flags
 that run in every lane, including `generate sql`: `-first`, `-last`,
 `-any`, `-count-distinct`, `-string-agg FIELD SEP NAME`, `-median`,
-`-percentile FIELD P NAME`, `-stddev`, `-variance`, `-mode`, `-min`/`-max`
-(strings and times too). Prefer the flag when one exists; `-expr` is the
+`-percentile FIELD P NAME`, `-stddev`, `-variance`, `-mode`, `-arg-max
+FIELD BY NAME`, `-arg-min`, `-min`/`-max` (strings and times too). Prefer the flag when one exists; `-expr` is the
 interpreter-only escape hatch (DFC129).
 The flag form `update -set-bucket minute ts 1m` is the same operation
 (Tab completes the fields); use the function when the bucket is part of

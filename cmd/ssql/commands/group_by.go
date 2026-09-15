@@ -43,6 +43,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from events.csv | ssql group-by session -first url landing -last url exit -count-distinct url pages", "First and last in arrival order; distinct count").
 		Example("ssql from data.csv | ssql group-by dept -string-agg name ', ' members", "Join the group's values into one string").
 		Example("ssql from data.csv | ssql group-by dept -median salary med -percentile salary 0.9 p90 -stddev salary sd -mode city top_city", "Statistics: median, a percentile, sample stddev, most frequent value").
+		Example("ssql from data.csv | ssql group-by dept -arg-max name salary top_earner -max salary top_salary", "The name at the highest salary (arg-max name by salary), beside the salary").
 		Example("ssql from data.csv | ssql group-by dept -expr 'sum(salary * bonus)' total_comp", "Custom expression aggregation").
 		Example("ssql from huge.csv | ssql group-by dept -stream-expr '{s:0}' '{s:s+salary}' 's' total", "Memory-efficient streaming aggregation").
 		Example("ssql from data.csv | ssql group-by a_kind z_kind -count count -rollup", "Hierarchical rollup with parent-level counts").
@@ -238,6 +239,34 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("Most frequent value; ties go to the value seen first (field name, result name)").
 		Done().
+		Flag("-arg-max").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("by").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Value of FIELD from the record where BY is largest — SQL arg_max(field, by); ties keep the first (field name, by field, result name)").
+		Done().
+		Flag("-arg-min").
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Arg("by").
+		FieldsFromFlag("").
+		Done().
+		Arg("result-name").
+		Completer(cf.NoCompleter{Hint: "<name>"}).
+		Done().
+		Accumulate().
+		Global().
+		Help("Value of FIELD from the record where BY is smallest — SQL arg_min(field, by); ties keep the first (field name, by field, result name)").
+		Done().
 		Flag("-expr", "-e").
 		Arg("expression").
 		Expression().
@@ -352,9 +381,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			var fieldsToValidate []string
 			fieldsToValidate = append(fieldsToValidate, groupByFields...)
 			for _, spec := range aggSpecs {
-				if spec.field != "" { // count has no field
-					fieldsToValidate = append(fieldsToValidate, spec.field)
-				}
+				fieldsToValidate = append(fieldsToValidate, aggInputFields(spec)...) // FIELD and -arg-*'s BY; count has none
 			}
 			if err := validateFieldsSchema(inputSchema, fieldsToValidate, "group-by"); err != nil {
 				return err

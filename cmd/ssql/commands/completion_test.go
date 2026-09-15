@@ -108,6 +108,8 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-stddev":         {0},
 			"-variance":       {0},
 			"-mode":           {0},
+			"-arg-max":        {0, 1}, // field, then the BY field, then result-name
+			"-arg-min":        {0, 1},
 			// Note: -count only takes result-name, not a field to count
 		},
 		// Nested subcommands use "parent/child" notation

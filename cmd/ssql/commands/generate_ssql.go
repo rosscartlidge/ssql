@@ -1995,6 +1995,9 @@ func extractGroupByFields(args []string) ([]string, bool) {
 				if d.hasField {
 					fields = append(fields, args[i+1])
 				}
+				if d.extraIsField {
+					fields = append(fields, args[i+2]) // -arg-*'s BY is read too (projection pruning must keep it)
+				}
 				i += n + 1
 			} else {
 				i++

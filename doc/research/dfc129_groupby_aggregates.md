@@ -310,6 +310,21 @@ listed in TODO.
 **Phase 3 — paired (½ day).** `-arg-max F BY R`, `-arg-min F BY R`.
 SQL: `arg_max(F, BY)`; the Postgres note goes in DFC060's portability
 list. Ties: first seen wins, documented, matches DuckDB.
+*Done 2026-09-15.* `agg_paired.go` (`ArgMax`/`ArgMin`; BY compared with
+`aggCompare`, strictly-better replaces so ties keep the first arrival).
+Registry gained `extraIsField`: the BY argument gets field completion
+(`-arg-max`: `{0, 1}` in the completion test), exec schema validation
+(`aggInputFields`), and — the one that matters for correctness — a place
+in the optimiser's read-column list, so `from parquet … | group-by
+-arg-max name salary` prunes to dept, name AND salary (verified in the
+`generate ssql` output). Typed kind paired: carried FIELD + best BY +
+have flag; Add replaces on strictly better, Merge takes the peer only
+when strictly better (receiver is the earlier shard → ties keep first).
+Ejected from the typed rollup with first/last/string-agg (tie-break
+depends on row order). Cases `groupby_arg_max_min` (Golden from
+DuckDB), `groupby_arg_max_presorted_serial` (Add path) and
+`groupby_cube_arg_max`. Postgres has no arg_max — DFC060's portability
+list.
 
 Each phase ends with the corpus (`TestPipelineCorpus`), the equivalence
 gate, `TestFieldCompletionConfiguration`, docs (`README` group-by

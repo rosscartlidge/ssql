@@ -23,6 +23,10 @@ type aggDef struct {
 	fn       string // aggSpec.function: "sum"
 	hasField bool   // false for -count, which takes only a result name
 	extraArg string // name of a third argument between field and result ("sep" for -string-agg), or ""
+	// extraIsField marks the extra argument as an INPUT FIELD name
+	// (-arg-max's BY): it gets field completion, schema validation, and
+	// counts as a read column for the optimiser's projection pruning.
+	extraIsField bool
 	// sql renders the aggregate for `generate sql` from the quoted field
 	// identifier and the extra argument (DuckDB dialect).
 	sql func(quotedField, extra string) string
@@ -75,6 +79,7 @@ const (
 	typedKindQuantile   = "quantile"     // []float64 → sort → interpolate (median, percentile)
 	typedKindWelford    = "welford"      // n, mean, M2 → variance / stddev
 	typedKindCounts     = "counts"       // map[T]count + first index → mode
+	typedKindPaired     = "paired"       // best BY + carried FIELD → arg-max / arg-min
 )
 
 // percentileP parses -percentile's P argument; the registry's check
@@ -174,6 +179,29 @@ var aggDefs = []aggDef{
 	{flag: "-mode", fn: "mode", hasField: true, sql: sqlCall("mode"), wireType: wireOfField, typedKind: typedKindCounts,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Mode(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Mode(%q)", f) }},
+	// DFC129 phase 3: FIELD at the extreme BY ("arg-max name by salary");
+	// ties keep the first arrival, as DuckDB's arg_max does.
+	{flag: "-arg-max", fn: "arg-max", hasField: true, extraArg: "by", extraIsField: true, wireType: wireOfField, typedKind: typedKindPaired,
+		sql:   func(qf, by string) string { return fmt.Sprintf("arg_max(%s, %s)", qf, quoteIdent(by)) },
+		build: func(f, by string) ssql.AggregateFunc { return ssql.ArgMax(f, by) },
+		code:  func(f, by string) string { return fmt.Sprintf("ssql.ArgMax(%q, %q)", f, by) }},
+	{flag: "-arg-min", fn: "arg-min", hasField: true, extraArg: "by", extraIsField: true, wireType: wireOfField, typedKind: typedKindPaired,
+		sql:   func(qf, by string) string { return fmt.Sprintf("arg_min(%s, %s)", qf, quoteIdent(by)) },
+		build: func(f, by string) ssql.AggregateFunc { return ssql.ArgMin(f, by) },
+		code:  func(f, by string) string { return fmt.Sprintf("ssql.ArgMin(%q, %q)", f, by) }},
+}
+
+// aggInputFields lists the input field names a spec reads: FIELD, plus
+// the extra argument when it names a field (-arg-max's BY).
+func aggInputFields(s aggSpec) []string {
+	var out []string
+	if s.field != "" {
+		out = append(out, s.field)
+	}
+	if d, ok := aggDefByFn(s.function); ok && d.extraIsField && s.extra != "" {
+		out = append(out, s.extra)
+	}
+	return out
 }
 
 // aggDefByFlag / aggDefByFn look an aggregate up by its flag ("-sum") or

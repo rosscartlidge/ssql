@@ -312,7 +312,9 @@ The aggregate flags are the SQL set: `-count`, `-sum`, `-avg`, `-min`,
 `-max` (strings and dates too), `-first`, `-last`, `-any`,
 `-count-distinct`, `-string-agg FIELD SEP NAME`, `-median`,
 `-percentile FIELD P NAME`, `-stddev`, `-variance` (sample, like SQL),
-`-mode`, and `-collect` for a list. `-first` and `-last` are arrival
+`-mode`, `-arg-max FIELD BY NAME` (the FIELD from the row where BY is
+largest: `-arg-max name salary top_earner` is "who earns the most"),
+`-arg-min`, and `-collect` for a list. `-first` and `-last` are arrival
 order, so on a file they are the first and last row of each group:
 
 ```bash

@@ -38,7 +38,7 @@ func emitTypedRollup(inputVar string, in *lib.TypedSchema, groupFields []string,
 		switch s.function {
 		case "collect":
 			return false, "-rollup/-cube with -collect has no typed form (collect has no mergeable state)", nil
-		case "first", "last", "any", "string-agg":
+		case "first", "last", "any", "string-agg", "arg-max", "arg-min":
 			// Parent levels are merged from detail-group state, so an
 			// order-sensitive aggregate would see groups in group order,
 			// not file order; exec's Rollup sees the rows. Record fallback

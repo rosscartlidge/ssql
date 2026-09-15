@@ -1206,6 +1206,41 @@ var equivCases = []EquivCase{
 		Skip: map[string]string{"duckdb": "DuckDB's SUM(DOUBLE) (and kahan_sum) lose the unit in 1e16 + 1 - 1e16; ssql's Neumaier sum keeps it"},
 	},
 	{
+		// DFC129 phase 3: -arg-max FIELD BY R / -arg-min — FIELD at the
+		// extreme BY, ties to first arrival, BY ordered like -min (numbers,
+		// strings, times), the carried FIELD keeps its type. Golden from
+		// DuckDB's arg_max/arg_min on the fixture.
+		Name:     "groupby_arg_max_min",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -arg-max name salary top -arg-min name salary low -arg-max name level senior -arg-min hire_date salary low_hired -max salary top_salary`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering", "top": "Carol", "low": "Eve", "senior": "Carol", "low_hired": "2019-08-30", "top_salary": 105000},
+			{"dept": "Sales", "top": "Frank", "low": "Bob", "senior": "Frank", "low_hired": "2021-06-01", "top_salary": 82000},
+			{"dept": "Marketing", "top": "Grace", "low": "David", "senior": "Grace", "low_hired": "2020-04-22", "top_salary": 78000},
+		},
+	},
+	{
+		// The same under -presorted, which forces the serial typed
+		// group-by so the accumulator's Add (not only Merge) decides — the
+		// fixture is one row per shard on the parallel path.
+		Name:     "groupby_arg_max_presorted_serial",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept name | {{.bin}} group-by dept -presorted -arg-max name salary top -arg-min name salary low`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"dept": "Engineering", "top": "Carol", "low": "Eve"},
+			{"dept": "Sales", "top": "Frank", "low": "Bob"},
+			{"dept": "Marketing", "top": "Grace", "low": "David"},
+		},
+	},
+	{
+		// -arg-max under -cube: order-sensitive on ties, so the typed
+		// rollup ejects it to record codegen (like first/last); every lane
+		// must still match exec's row-walking Rollup.
+		Name:     "groupby_cube_arg_max",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept status -arg-max name salary top -count n -cube`,
+		Ordered:  false,
+	},
+	{
 		// A field named like an expr builtin (`date`) is the FIELD when used
 		// bare in an expression, in every lane: exec's VM patches it to
 		// $env["date"], the transpiled lanes always read it as a field, SQL

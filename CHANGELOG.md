@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-rollup`/`-cube`. Library: `ssql.Median`, `Percentile`, `StdDev`,
   `Variance`, `Mode`.
 
+- **`group-by -arg-max FIELD BY R` and `-arg-min FIELD BY R`** (DFC129
+  phase 3): the value of FIELD from the record where BY is largest or
+  smallest — `-arg-max name salary top_earner` is "who earns the most".
+  BY orders like `-min` (numbers, strings, times); the carried FIELD keeps
+  its type; ties keep the first arrival, as DuckDB's `arg_max` does. Every
+  lane, with BY validated (an unknown BY is loud in exec and typed) and
+  counted as a read column by the optimiser's projection pruning; SQL
+  emits `arg_max(field, by)`. Under `-rollup`/`-cube` it takes the record
+  path like the other order-sensitive aggregates. Library: `ssql.ArgMax`,
+  `ArgMin`.
+
 ### Changed
 - **`-sum`, `-avg` and the Welford variance use compensated summation**
   (Neumaier's variant of Kahan; `ssql.CompensatedSum`) in every Go lane

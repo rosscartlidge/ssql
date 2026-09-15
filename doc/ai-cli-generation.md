@@ -218,6 +218,7 @@ ssql from sales.csv | ssql group-by region product -sum revenue total -count cou
 ssql from logs.csv | ssql group-by user -count count -collect timestamp timestamps
 ssql from logs.csv | ssql group-by session -first url landing -last url exit -count-distinct url pages -string-agg url " > " path
 ssql from data.csv | ssql group-by dept -median salary med -percentile salary 0.9 p90 -stddev salary sd -mode city top_city
+ssql from data.csv | ssql group-by dept -arg-max name salary top_earner -max salary top_salary   # who earns the most, and how much
 
 # Rollup: enrich rows with parent-level aggregations (grand total + subtotals)
 ssql from sales.csv | ssql group-by region product -count n -sum revenue total -rollup
