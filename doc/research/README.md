@@ -137,6 +137,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC127 | 2026-09-12 | 2026-09-14 | [A Terminal UI for ssql? (Bubble Tea)](./dfc127_terminal_ui_bubbletea.md) |
 | DFC128 | 2026-09-14 | 2026-09-15 | [JSON Interchange with DuckDB and Postgres, and the Time Type Question](./dfc128_json_interchange_and_time_type.md) |
 | DFC129 | 2026-09-15 | 2026-09-15 | [Group-by Aggregates: What Is Missing, and Flags versus Expressions](./dfc129_groupby_aggregates.md) |
+| DFC130 | 2026-09-15 | 2026-09-15 | [Window Analytics: Gaps Against the SQL Set](./dfc130_window_analytics_gaps.md) |
 
 <!-- DFC-INDEX-END -->
 
