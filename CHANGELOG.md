@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.100.0] - 2026-09-16
+
 ### Added
 - **`window -cume-dist R`, `-nth-value F N R`, `-lag-default F N DEFAULT R`,
   `-lead-default F N DEFAULT R`, `-count-field F R`** (DFC130 unit 1) —
@@ -95,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   negated bool) is honoured too.
 
 ### Internal
-- `window` now has nine cases in the N-way equivalence gate (it had none):
+- `window` now has twenty-one cases in the N-way equivalence gate (it had none):
   ranking, offset, running and moving aggregates, unbounded frame, the
   default frame with ties, two clauses, global ranking with ties, and the
   `-presorted` streaming path (DFC130 unit 0).
