@@ -138,6 +138,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC128 | 2026-09-14 | 2026-09-16 | [JSON Interchange with DuckDB and Postgres, and the Time Type Question](./dfc128_json_interchange_and_time_type.md) |
 | DFC129 | 2026-09-15 | 2026-09-15 | [Group-by Aggregates: What Is Missing, and Flags versus Expressions](./dfc129_groupby_aggregates.md) |
 | DFC130 | 2026-09-15 | 2026-09-16 | [Window Analytics: Gaps Against the SQL Set](./dfc130_window_analytics_gaps.md) |
+| DFC131 | 2026-09-16 | 2026-09-16 | [A Read-Only Codelab Workspace on the Tailnet, as a systemd Service](./dfc131_serve_systemd_tailnet_codelab.md) |
 
 <!-- DFC-INDEX-END -->
 
