@@ -2236,29 +2236,29 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 	case wSum:
 		start := frameStart(pos, partLen, frame)
 		end := frameEnd(pos, partLen, frame)
-		var sum float64
+		var sum CompensatedSum // Neumaier, like group-by's -sum (DFC129)
 		for i := start; i <= end; i++ {
 			if v, ok := Get[float64](all[indices[i]], f.Field); ok {
-				sum += v
+				sum.Add(v)
 			}
 		}
-		return sum
+		return sum.Value()
 
 	case wAvg:
 		start := frameStart(pos, partLen, frame)
 		end := frameEnd(pos, partLen, frame)
-		var sum float64
+		var sum CompensatedSum
 		var count int
 		for i := start; i <= end; i++ {
 			if v, ok := Get[float64](all[indices[i]], f.Field); ok {
-				sum += v
+				sum.Add(v)
 				count++
 			}
 		}
 		if count == 0 {
 			return float64(0)
 		}
-		return sum / float64(count)
+		return sum.Value() / float64(count)
 
 	case wCount:
 		start := frameStart(pos, partLen, frame)
@@ -2397,34 +2397,34 @@ func (s *swDenseRank) reset() { s.rank = 0 }
 
 type swSum struct {
 	field string
-	sum   float64
+	sum   CompensatedSum // Neumaier, like the materialised path and group-by's -sum
 }
 
 func (s *swSum) update(record Record, _ int, _ []OrderField, _ *Record) any {
 	if v, ok := Get[float64](record, s.field); ok {
-		s.sum += v
+		s.sum.Add(v)
 	}
-	return s.sum
+	return s.sum.Value()
 }
-func (s *swSum) reset() { s.sum = 0 }
+func (s *swSum) reset() { s.sum = CompensatedSum{} }
 
 type swAvg struct {
 	field string
-	sum   float64
+	sum   CompensatedSum
 	count int64
 }
 
 func (s *swAvg) update(record Record, _ int, _ []OrderField, _ *Record) any {
 	if v, ok := Get[float64](record, s.field); ok {
-		s.sum += v
+		s.sum.Add(v)
 		s.count++
 	}
 	if s.count == 0 {
 		return float64(0)
 	}
-	return s.sum / float64(s.count)
+	return s.sum.Value() / float64(s.count)
 }
-func (s *swAvg) reset() { s.sum = 0; s.count = 0 }
+func (s *swAvg) reset() { s.sum = CompensatedSum{}; s.count = 0 }
 
 type swCount struct{ count int64 }
 

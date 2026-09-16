@@ -55,6 +55,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `YYYY-MM-DD` date as midnight UTC — the form DuckDB and Postgres DATE
   exports and CSV date columns use.
 
+- **A typed lane for `window`** (DFC130 unit 4): `generate go` now emits
+  one `typed.Window` call over the row struct — partition key, order
+  comparator, RANGE key and per-function field closures generated from the
+  typed schema, and an output struct of the input's fields plus one per
+  result (ranks and counts `int64`, percentages and sums `float64`,
+  first/last/min/max the field's type, LAG/LEAD/NTH_VALUE nullable
+  pointers unless a default is given). The typed runtime
+  (`typed/window.go`) mirrors `ssql.Window`'s arithmetic — partitions in
+  first-seen order, ROWS and RANGE frames, every ranking, offset and
+  native aggregate function — and the twenty-one window equivalence cases
+  are its gate. Until now a typed pipeline paid the typed→Record boundary
+  at every window stage. Shapes that stay on the record path, each with
+  its reason under `-explain`: registry aggregates over a frame, a RANGE
+  frame over a text order column, a LAG/LEAD default of another type, a
+  nullable partition or order field, a result that overwrites an input
+  field.
+
+### Changed
+- `window -sum` / `-avg` (materialised and streaming) use the same
+  compensated summation as group-by (DFC129).
+
 ### Fixed
 - **`generate go` lost NTILE's argument**: every generated program called
   `ssql.WNtile(0)`, so `window -ntile 4 q` put every row in tile 1 under

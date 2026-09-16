@@ -805,10 +805,25 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 	}
 
 	var inputVar string
+	var prevSchema *lib.TypedSchema
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
+		prevSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
+	}
+
+	// Typed lane (DFC130 unit 4): one typed.Window call over the row
+	// struct; shapes it cannot hold fall back to the record path below
+	// with the reason under -explain. -presorted changes nothing here —
+	// the typed runtime materialises the partition either way.
+	var typedFallbackNotes []string
+	if typedMode() && prevSchema != nil {
+		handled, reason, err := emitTypedWindow(inputVar, prevSchema, configs)
+		if handled || err != nil {
+			return err
+		}
+		typedFallbackNotes = append(typedFallbackNotes, fmt.Sprintf("record fallback (%s)", reason))
 	}
 
 	outputVar := "windowed"
@@ -864,6 +879,7 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 		code += fmt.Sprintf(",\n})(%s)", inputVar)
 
 		frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
+		frag.PlanNotes = typedFallbackNotes
 		return lib.WriteCodeFragment(frag)
 	}
 
@@ -872,6 +888,7 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 	code += fmt.Sprintf(",\n})(%s)", inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
+	frag.PlanNotes = typedFallbackNotes
 	return lib.WriteCodeFragment(frag)
 }
 

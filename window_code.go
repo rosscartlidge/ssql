@@ -123,3 +123,67 @@ func WindowFuncResultKind(fn WindowFunc) string {
 	}
 	return ""
 }
+
+// WindowFuncDesc is the structural description of a window function for
+// code generators that cannot see the unexported types: Kind is the SQL
+// name in lower case ("row_number", "rank", "dense_rank", "ntile",
+// "percent_rank", "cume_dist", "lag", "lead", "first", "last",
+// "nth_value", "sum", "avg", "count", "count_field", "min", "max",
+// "aggregate"); Field the field read (""), N the offset / tile count /
+// nth, Default LAG/LEAD's default (nil = none). For "aggregate" (a
+// registry aggregate over the frame) Agg is its WAggSpec.
+type WindowFuncDesc struct {
+	Kind    string
+	Field   string
+	N       int
+	Default any
+	Agg     *WAggSpec
+}
+
+// DescribeWindowFunc returns the structural description of fn.
+func DescribeWindowFunc(fn WindowFunc) WindowFuncDesc {
+	switch f := fn.(type) {
+	case wRowNumber:
+		return WindowFuncDesc{Kind: "row_number"}
+	case wRank:
+		return WindowFuncDesc{Kind: "rank"}
+	case wDenseRank:
+		return WindowFuncDesc{Kind: "dense_rank"}
+	case wNtile:
+		return WindowFuncDesc{Kind: "ntile", N: f.N}
+	case wPercentRank:
+		return WindowFuncDesc{Kind: "percent_rank"}
+	case wCumeDist:
+		return WindowFuncDesc{Kind: "cume_dist"}
+	case wLag:
+		return WindowFuncDesc{Kind: "lag", Field: f.Field, N: f.Offset}
+	case wLead:
+		return WindowFuncDesc{Kind: "lead", Field: f.Field, N: f.Offset}
+	case wLagDefault:
+		return WindowFuncDesc{Kind: "lag", Field: f.Field, N: f.Offset, Default: f.Default}
+	case wLeadDefault:
+		return WindowFuncDesc{Kind: "lead", Field: f.Field, N: f.Offset, Default: f.Default}
+	case wFirst:
+		return WindowFuncDesc{Kind: "first", Field: f.Field}
+	case wLast:
+		return WindowFuncDesc{Kind: "last", Field: f.Field}
+	case wNthValue:
+		return WindowFuncDesc{Kind: "nth_value", Field: f.Field, N: f.N}
+	case wSum:
+		return WindowFuncDesc{Kind: "sum", Field: f.Field}
+	case wAvg:
+		return WindowFuncDesc{Kind: "avg", Field: f.Field}
+	case wCount:
+		return WindowFuncDesc{Kind: "count"}
+	case wCountField:
+		return WindowFuncDesc{Kind: "count_field", Field: f.Field}
+	case wMin:
+		return WindowFuncDesc{Kind: "min", Field: f.Field}
+	case wMax:
+		return WindowFuncDesc{Kind: "max", Field: f.Field}
+	case wAgg:
+		spec := f.spec
+		return WindowFuncDesc{Kind: "aggregate", Field: f.spec.Field, Agg: &spec}
+	}
+	panic(fmt.Sprintf("ssql.DescribeWindowFunc: unknown window function %T", fn))
+}
