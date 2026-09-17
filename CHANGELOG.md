@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `generate sql` parenthesises each null-safe join comparison in the
+  `-rollup`/`-cube` emulation, `(a IS NOT DISTINCT FROM b) AND …`:
+  DataFusion parses the bare form as `a IS NOT DISTINCT FROM (b AND c)`
+  and rejects it; DuckDB and Postgres accept both. With that one change
+  the generated SQL runs on DataFusion 54 for six of eight sampled
+  pipelines, identical to DuckDB, and the README cube in 0.16–0.20 s
+  there (DFC132 records the "should ssql generate Rust?" decision: no —
+  DataFusion via `generate sql` is the Rust-ecosystem answer).
+
 ### Fixed
 - **`to table -max-width 0` (and 1, 2, or any negative) panicked** with
   "slice bounds out of range" after printing the header — the truncation

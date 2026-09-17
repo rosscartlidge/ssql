@@ -450,7 +450,7 @@ func TestTranslateGroupByRollupSQL(t *testing.T) {
 		`SELECT __d.a, __d.b, __s0.n, __s0.mean, __s1.a_n, __s1.a_mean, __d.a_b_n, __d.a_b_mean`,
 		`FROM (SELECT a, b, COUNT(*) AS a_b_n, AVG(v) AS a_b_mean FROM __src GROUP BY a, b) AS __d`,
 		`JOIN (SELECT COUNT(*) AS n, AVG(v) AS mean FROM __src) AS __s0 ON TRUE`,
-		`JOIN (SELECT a, COUNT(*) AS a_n, AVG(v) AS a_mean FROM __src GROUP BY a) AS __s1 ON __d.a IS NOT DISTINCT FROM __s1.a`,
+		`JOIN (SELECT a, COUNT(*) AS a_n, AVG(v) AS a_mean FROM __src GROUP BY a) AS __s1 ON (__d.a IS NOT DISTINCT FROM __s1.a)`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("rollup SQL lacks %q:\n%s", want, got)
@@ -466,7 +466,7 @@ func TestTranslateGroupByRollupSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`AS b_tot FROM __src GROUP BY b) AS __s2 ON __d.b IS NOT DISTINCT FROM __s2.b`,
+		`AS b_tot FROM __src GROUP BY b) AS __s2 ON (__d.b IS NOT DISTINCT FROM __s2.b)`,
 		`__s1.a_tot, __s2.b_tot, __d.a_b_tot`,
 	} {
 		if !strings.Contains(q.fromClause, want) {

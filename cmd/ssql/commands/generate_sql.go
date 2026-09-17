@@ -715,7 +715,7 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 //	 FROM   (SELECT "a", "b", COUNT(*) AS "a_b_n" FROM __src GROUP BY "a", "b") AS __d
 //	 JOIN   (SELECT COUNT(*) AS "n" FROM __src) AS __s0 ON TRUE
 //	 JOIN   (SELECT "a", COUNT(*) AS "a_n" FROM __src GROUP BY "a") AS __s1
-//	          ON __d."a" IS NOT DISTINCT FROM __s1."a")
+//	          ON (__d."a" IS NOT DISTINCT FROM __s1."a"))
 //
 // IS NOT DISTINCT FROM keeps NULL group keys matched, as exec's %v-keyed
 // grouping does. The result replaces the query as its FROM, so later
@@ -784,7 +784,10 @@ func translateGroupByRollup(q *sqlQuery, fields []string, aggs []sqlAgg, mode ss
 		if len(set) > 0 {
 			var conds []string
 			for _, f := range set {
-				conds = append(conds, fmt.Sprintf("__d.%s IS NOT DISTINCT FROM %s.%s", quoteIdent(f), alias(i), quoteIdent(f)))
+				// Parenthesised: DataFusion parses `a IS NOT DISTINCT FROM b AND c`
+				// as `a IS NOT DISTINCT FROM (b AND c)` and fails to type it
+				// (DFC132); DuckDB and Postgres accept either form.
+				conds = append(conds, fmt.Sprintf("(__d.%s IS NOT DISTINCT FROM %s.%s)", quoteIdent(f), alias(i), quoteIdent(f)))
 			}
 			on = strings.Join(conds, " AND ")
 		}

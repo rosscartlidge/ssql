@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-09-16
+Last modified: 2026-09-17
 
 [Back to Index](./README.md)
 
@@ -90,6 +90,8 @@ Tracked issues and feature gaps discovered during development.
 - [x] **SSH pushdown with expressions** — already works. The pushdown rule copies all `where` args (including `-if-expr`) wholesale.
 
 ## Next up (refreshed 2026-09-01 — build-ready first, then polish, then parked)
+
+- [ ] **DECIDED: no Rust backend** — [DFC132](./dfc132_rust_target_datafusion.md) (2026-09-17, Ross "unconvinced"; so am I). The check found `generate sql` output already runs on DataFusion 54 unchanged for 6 of 8 pipelines, identical to DuckDB, and the README cube in 0.16–0.20 s (DuckDB 0.92 s) once the generator parenthesised `IS NOT DISTINCT FROM` (shipped). If a Rust-ecosystem ask persists: a `-dialect datafusion|postgres` rendering table for the five DuckDB-only aggregate spellings + `UNPIVOT`, and a DataFusion oracle gated on the Python bindings (a sixth oracle, not a sixth lane).
 
 - [ ] **PARKED: read-only codelab workspace on the tailnet as a systemd service** — [DFC131](./dfc131_serve_systemd_tailnet_codelab.md) (2026-09-16, Ross: "what do you think of having this setup via systemd in readonly mode with the codelab data?" → "write a doc to store for later"). Unit drafted (DynamicUser, ProtectSystem=strict, IPAddressAllow tailnet, ExecStartPre `ssql codelab`, `-listen-http tailscale:8080 -readonly`); the design point is that `-dir` is NOT a sandbox, so systemd does the confining. Half a day when wanted: contrib unit + deb (disabled) + a page beside tmux-for-ssql + smoke test.
 
