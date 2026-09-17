@@ -196,8 +196,133 @@ func equivLanes() []equivLane {
 			return sb.String()
 		}})
 	}
+	// Dialect oracle lanes (DFC132 §4): the same generated SQL rendered
+	// for another engine and executed by it. Opt-in like the SSH rig —
+	// DataFusion needs a Python with the `datafusion` package
+	// (SSQL_DATAFUSION_PYTHON=/path/to/python), Postgres the LXD rig
+	// (SSQL_TEST_PG_HOST=ssql-node1, psql reached over ssh as the postgres
+	// superuser; see doc/research/ssh-test-environment.md §PostgreSQL).
+	// A stage the dialect refuses by design ("has no X translation") skips
+	// the lane for that case with a log line rather than failing it.
+	if py := os.Getenv("SSQL_DATAFUSION_PYTHON"); py != "" {
+		lanes = append(lanes, equivLane{"datafusion", func(t *testing.T, bin, pipeline string) string {
+			sql, skip := equivDialectSQL(t, "datafusion", bin, pipeline)
+			if skip != "" {
+				return skip
+			}
+			script := filepath.Join(t.TempDir(), "run.py")
+			if err := os.WriteFile(script, []byte(datafusionRunner), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(py, script)
+			cmd.Stdin = strings.NewReader(sql)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("lane %q: datafusion failed: %v\n  sql:\n%s\n  stderr:\n%s",
+					"datafusion", err, sql, stderr.String())
+			}
+			return stdout.String()
+		}})
+	}
+	if host := os.Getenv("SSQL_TEST_PG_HOST"); host != "" {
+		lanes = append(lanes, equivLane{"postgres", func(t *testing.T, bin, pipeline string) string {
+			sql, skip := equivDialectSQL(t, "postgres", bin, pipeline)
+			if skip != "" {
+				return skip
+			}
+			script := pgOracleScript(t, sql)
+			cmd := exec.Command("ssh", host, "sudo", "-u", "postgres", "psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-d", "ssql")
+			cmd.Stdin = strings.NewReader(script)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("lane %q: psql failed: %v\n  sql:\n%s\n  stderr:\n%s",
+					"postgres", err, sql, stderr.String())
+			}
+			return stdout.String()
+		}})
+	}
 	return lanes
 }
+
+// equivSkipPrefix marks a lane result that means "this dialect refused the
+// pipeline by design"; runEquivCase logs and drops the lane for the case.
+const equivSkipPrefix = "\x00skip: "
+
+// equivSQLLanes are the lanes that run `generate sql` output; a case's
+// duckdb skip reason (a stage with no SQL translation at all) applies to
+// every one of them.
+var equivSQLLanes = map[string]bool{"duckdb": true, "datafusion": true, "postgres": true}
+
+// equivDialectSQL translates the pipeline for a dialect. A by-design
+// refusal (dialectRefuse's "has no <dialect> translation") returns a skip
+// marker; any other failure is the lane's failure.
+func equivDialectSQL(t *testing.T, dialect, bin, pipeline string) (sql, skip string) {
+	t.Helper()
+	cmd := exec.Command("bash", "-c", "export SSQL_MODE=record && "+pipeline+" | "+bin+" to jsonl | "+bin+" generate sql -dialect "+dialect)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		if strings.Contains(stderr.String(), "has no "+dialect+" translation") {
+			return "", equivSkipPrefix + strings.TrimSpace(stderr.String())
+		}
+		t.Fatalf("lane %q failed to generate:\n  pipeline: %s\n  err: %v\n  stderr:\n%s", dialect, pipeline, err, stderr.String())
+	}
+	return stdout.String(), ""
+}
+
+// datafusionRunner executes the SQL on stdin with the DataFusion Python
+// bindings and prints one JSON object per row (dates and other non-JSON
+// values as strings, the way ssql reads them from CSV).
+const datafusionRunner = `import json, sys
+from datafusion import SessionContext, SessionConfig
+ctx = SessionContext(SessionConfig().set("datafusion.catalog.has_header", "true")).enable_url_table()
+sql = sys.stdin.read().strip().rstrip(";")
+for row in ctx.sql(sql).to_pylist():
+    print(json.dumps(row, default=str))
+`
+
+// pgOracleScript turns generate sql's Postgres output into one psql
+// session: the prologue's CREATE TABLE as TEMP tables (session-scoped, so
+// parallel cases cannot collide and nothing is left behind), each \copy
+// fed from STDIN with the local file's bytes (the rig has no copy of the
+// fixtures), then the statement wrapped in row_to_json so the result is
+// JSONL like every other lane.
+func pgOracleScript(t *testing.T, sql string) string {
+	t.Helper()
+	var script, stmt strings.Builder
+	for _, ln := range strings.Split(sql, "\n") {
+		switch {
+		case strings.HasPrefix(ln, "--   CREATE TABLE IF NOT EXISTS "):
+			script.WriteString("CREATE TEMP TABLE " + strings.TrimPrefix(ln, "--   CREATE TABLE IF NOT EXISTS ") + "\n")
+		case strings.HasPrefix(ln, "--   \\copy "):
+			m := pgCopyRe.FindStringSubmatch(ln)
+			if m == nil {
+				t.Fatalf("lane %q: unparsable \\copy line %q", "postgres", ln)
+			}
+			data, err := os.ReadFile(strings.ReplaceAll(m[2], "''", "'"))
+			if err != nil {
+				t.Fatalf("lane %q: reading fixture: %v", "postgres", err)
+			}
+			script.WriteString("\\copy " + m[1] + " FROM STDIN CSV HEADER" + m[3] + "\n")
+			script.Write(data)
+			if !strings.HasSuffix(string(data), "\n") {
+				script.WriteString("\n")
+			}
+			script.WriteString("\\.\n")
+		case strings.HasPrefix(ln, "--"), strings.TrimSpace(ln) == "":
+		default:
+			stmt.WriteString(ln + "\n")
+		}
+	}
+	body := strings.TrimSpace(stmt.String())
+	body = strings.TrimSuffix(body, ";")
+	script.WriteString("SELECT row_to_json(__r) FROM (\n" + body + "\n) __r;\n")
+	return script.String()
+}
+
+var pgCopyRe = regexp.MustCompile(`^--   \\copy ("[^"]+") FROM '((?:[^']|'')*)' CSV HEADER(.*)$`)
 
 var canonicalIntRe = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
 
@@ -308,10 +433,19 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 
 	results := make(map[string][]map[string]any)
 	for _, ln := range lanes {
-		if reason := c.Skip[ln.name]; reason != "" {
+		reason := c.Skip[ln.name]
+		if reason == "" && equivSQLLanes[ln.name] {
+			reason = c.Skip["duckdb"] // no SQL translation at all → no dialect either
+		}
+		if reason != "" {
 			continue
 		}
-		results[ln.name] = equivParse(t, ln.name, ln.run(t, bin, pipeline))
+		raw := ln.run(t, bin, pipeline)
+		if strings.HasPrefix(raw, equivSkipPrefix) {
+			t.Logf("lane %q skipped (dialect refusal by design): %s", ln.name, strings.TrimPrefix(raw, equivSkipPrefix))
+			continue
+		}
+		results[ln.name] = equivParse(t, ln.name, raw)
 	}
 
 	ref, ok := results["exec"]
@@ -1118,6 +1252,7 @@ var equivCases = []EquivCase{
 		// including DuckDB's string_agg). level is distinct per dept as
 		// {7,9,6} {4,8} {5,6}: 3, 2, 2.
 		Name:     "groupby_count_distinct_string_agg",
+		Skip:     map[string]string{"postgres": "string_agg in arrival order: Postgres feeds the aggregate through an unstable sort by the group key"},
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -count-distinct level levels -count-distinct city cities -string-agg name ", " members -string-agg salary ";" pays`,
 		Ordered:  false,
 		Golden: []map[string]any{
@@ -1133,6 +1268,7 @@ var equivCases = []EquivCase{
 		// record codegen, and every lane must still agree with exec's
 		// row-walking Rollup. count-distinct stays typed (set union).
 		Name:     "groupby_cube_order_sensitive_aggs",
+		Skip:     map[string]string{"postgres": "first/string_agg in arrival order: Postgres's aggregate input order is undefined (unstable sort by the group key)"},
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept status -first name f -string-agg name "," m -count-distinct city c -count n -cube`,
 		Ordered:  false,
 	},
@@ -1172,6 +1308,7 @@ var equivCases = []EquivCase{
 		// the first row's level (7, 4, 5), which is also what DuckDB's mode
 		// returns on a single-threaded scan; city has a clear winner.
 		Name:     "groupby_mode",
+		Skip:     map[string]string{"postgres": "mode ties: Postgres's mode() returns the smallest tied value, ssql the first seen"},
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -mode city top_city -mode level top_level`,
 		Ordered:  false,
 		Golden: []map[string]any{
@@ -1288,6 +1425,7 @@ var equivCases = []EquivCase{
 		// the frame implicit and DuckDB summed whole peer groups. Found by
 		// this case; the frame is now always rendered explicitly.
 		Name:     "window_default_frame_with_ties",
+		Skip:     map[string]string{"postgres": "ROWS frame over tied order keys: Postgres's sort is not stable, so which peer comes first is undefined"},
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order status -sum salary run -last name lastn -count cnt | {{.bin}} include name run lastn cnt`,
 		Ordered:  false,
 	},

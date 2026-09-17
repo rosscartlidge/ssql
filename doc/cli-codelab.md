@@ -551,14 +551,13 @@ the program instead of running it:
 ssql generate go -pipeline 'ssql from employees.csv | ssql where -if salary gt 90000 | ssql to csv' | head -40
 ```
 
-The same fragments translate to SQL — in [DuckDB](https://duckdb.org)'s
-dialect. Most of what comes out is ordinary SQL (DuckDB follows
-PostgreSQL closely), and the DuckDB-specific parts are the ones that
-read files directly (`FROM 'employees.csv'`, `read_csv(...)`), sampling
-(`USING SAMPLE`), `UNPIVOT` and `EXCLUDE`. If you have DuckDB
-installed, `-run` hands the SQL to it; results are byte-identical to the
-interpreted pipeline — a gate in the test suite checks every lane
-agrees:
+The same fragments translate to SQL — by default in
+[DuckDB](https://duckdb.org)'s dialect. Most of what comes out is
+ordinary SQL, and the DuckDB-specific parts are the ones that read files
+directly (`FROM 'employees.csv'`), sampling (`USING SAMPLE`), `UNPIVOT`
+and `EXCLUDE`. If you have DuckDB installed, `-run` hands the SQL to it;
+results are byte-identical to the interpreted pipeline — a gate in the
+test suite checks every lane agrees:
 
 ```bash
 ssql generate sql -pipeline 'ssql from employees.csv | ssql where -if status eq active | ssql group-by dept -avg salary avg_salary | ssql to table'
@@ -567,6 +566,21 @@ ssql generate sql -pipeline 'ssql from employees.csv | ssql where -if status eq 
 ```bash
 # codelab: skip — needs duckdb on PATH
 ssql generate sql -run -pipeline 'ssql from employees.csv | ssql group-by dept -avg salary avg_salary | ssql to table'
+```
+
+`-dialect postgres` or `-dialect datafusion` renders the same pipeline
+for [PostgreSQL](https://www.postgresql.org) or Apache
+[DataFusion](https://datafusion.apache.org): the aggregate spellings
+change (`median` becomes `percentile_cont(0.5) WITHIN GROUP`, `-first`
+becomes `(array_agg(x))[1]`), Postgres gets a `CREATE TABLE` + `\copy`
+prologue because it cannot read a file inside a query, and a stage the
+engine has no form for is refused with a message naming it rather than
+translated approximately. The same equivalence gate runs the generated
+SQL on all three engines when they are available
+([DFC132 §4](research/dfc132_rust_target_datafusion.md)):
+
+```bash
+ssql generate sql -dialect postgres -pipeline 'ssql from employees.csv | ssql group-by dept -median salary median_salary -first name first_hired | ssql to table'
 ```
 
 And ssql can rewrite your pipeline into a better one — merging filters,

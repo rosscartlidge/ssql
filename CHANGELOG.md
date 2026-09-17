@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`generate sql -dialect duckdb|postgres|datafusion`** (DFC132 §4). The
+  same pipeline fragments render for three engines; `duckdb` is the
+  default and its output is unchanged. The dialect changes only the
+  spellings where the engines differ and refuses loudly ("has no postgres
+  translation") what an engine cannot do:
+  - **Sources.** DuckDB and DataFusion read `FROM 'file.csv'`. Postgres
+    cannot read a file in a query, so each source becomes a table named
+    after the file and the header carries a `CREATE TABLE … ; \copy …`
+    prologue (column types inferred from a 1000-row sample: BIGINT,
+    DOUBLE PRECISION, BOOLEAN, DATE for ISO dates, else TEXT). Multi-file
+    sources become `UNION ALL`; `from lines` and `from -last` stay DuckDB-only.
+  - **Aggregates.** `-first/-last/-any/-arg-max/-arg-min/-mode/-median/
+    -percentile/-string-agg/-collect` take the engine's form
+    (`(array_agg(x ORDER BY y DESC))[1]`, `mode() WITHIN GROUP`,
+    `percentile_cont(p) WITHIN GROUP`, `array_agg`, `first_value(x ORDER
+    BY y)` on DataFusion, …); DataFusion has no `mode`; Postgres has no
+    ordered-set or DISTINCT aggregates over a window frame.
+  - **`SELECT *` rewrites** (`exclude`, `rename`, `cast`, `update`,
+    `fill`) use DuckDB's `* EXCLUDE/RENAME/REPLACE` where the engine has
+    them and an explicit column list otherwise (Postgres always,
+    DataFusion for `rename`) — possible while the translator knows the
+    source's columns, refused otherwise.
+  - Also per dialect: regex (`~`, `regexp_like`), `USING SAMPLE` →
+    `ORDER BY random() LIMIT N` / `WHERE random() < p`, `UNPIVOT` →
+    aliased `UNION ALL` with NULLs dropped, subquery aliases (Postgres
+    requires them), all identifiers quoted (Postgres and DataFusion fold
+    unquoted names to lower case), expr-lang `/` cast to a float division
+    (Postgres and DataFusion truncate integers), `contains`/`endsWith`
+    without the DuckDB functions on Postgres. `describe`, `extract` and
+    `resample` remain DuckDB-only.
+  - **`-run`** picks the engine's CLI: `duckdb`, `psql` (loads the
+    sources into TEMP tables first; honours `PGHOST`/`PGDATABASE`/…) or
+    `datafusion-cli`.
+  - **Two more oracle lanes in `TestPipelineEquivalence`**, opt-in like
+    the SSH rig: `SSQL_DATAFUSION_PYTHON=/path/to/python` (a Python with
+    the `datafusion` package) and `SSQL_TEST_PG_HOST=ssql-node1` (psql
+    over ssh, fixtures fed through `\copy … FROM STDIN` into TEMP
+    tables, rows back as `row_to_json`). 107 of the 119 cases agree
+    byte-for-byte across DuckDB, Postgres and DataFusion; the rest are
+    by-design refusals (logged as lane skips) or documented engine
+    differences (Postgres's unstable sort makes arrival-order
+    `first`/`string_agg` and tie order undefined; its `mode()` breaks
+    ties by value). First run of the lanes found and fixed: integer
+    division, NULLs surviving the portable unpivot, DataFusion's
+    `.tsv`/`.jsonl` extensions, and TEXT dates under an INTERVAL RANGE
+    frame.
+
 ### Changed
 - `generate sql` parenthesises each null-safe join comparison in the
   `-rollup`/`-cube` emulation, `(a IS NOT DISTINCT FROM b) AND …`:

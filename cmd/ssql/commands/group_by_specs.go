@@ -135,19 +135,19 @@ var aggDefs = []aggDef{
 	{flag: "-max", fn: "max", hasField: true, sql: sqlCall("MAX"), wireType: wireOfField, typedKind: typedKindExtreme,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.MaxOf(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.MaxOf(%q)", f) }},
-	{flag: "-collect", fn: "collect", hasField: true, sql: sqlCall("LIST"), wireType: wireFixed("json"),
+	{flag: "-collect", fn: "collect", hasField: true, sql: func(qf, _ string) string { return sqlAggCollect(qf) }, wireType: wireFixed("json"),
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Collect(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Collect(%q)", f) }},
 	// DFC129 phase 1. first/last are arrival order — file order on a file
 	// source in every lane (the typed parallel merge is in shard order);
 	// -any is first with SQL's weaker any_value promise.
-	{flag: "-first", fn: "first", hasField: true, sql: sqlCall("first"), wireType: wireOfField, typedKind: typedKindPositional,
+	{flag: "-first", fn: "first", hasField: true, sql: func(qf, _ string) string { return sqlAggFirst(qf) }, wireType: wireOfField, typedKind: typedKindPositional,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.FirstOf(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.FirstOf(%q)", f) }},
-	{flag: "-last", fn: "last", hasField: true, sql: sqlCall("last"), wireType: wireOfField, typedKind: typedKindPositional,
+	{flag: "-last", fn: "last", hasField: true, sql: func(qf, _ string) string { return sqlAggLast(qf) }, wireType: wireOfField, typedKind: typedKindPositional,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.LastOf(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.LastOf(%q)", f) }},
-	{flag: "-any", fn: "any", hasField: true, sql: sqlCall("any_value"), wireType: wireOfField, typedKind: typedKindPositional,
+	{flag: "-any", fn: "any", hasField: true, sql: func(qf, _ string) string { return sqlAggAny(qf) }, wireType: wireOfField, typedKind: typedKindPositional,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.FirstOf(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.FirstOf(%q)", f) }},
 	{flag: "-count-distinct", fn: "count-distinct", hasField: true, wireType: wireFixed("int"), typedKind: typedKindSet,
@@ -155,19 +155,19 @@ var aggDefs = []aggDef{
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.CountDistinct(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.CountDistinct(%q)", f) }},
 	{flag: "-string-agg", fn: "string-agg", hasField: true, extraArg: "sep", wireType: wireFixed("string"), typedKind: typedKindStringList,
-		sql:   func(qf, sep string) string { return fmt.Sprintf("string_agg(%s, %s)", qf, sqlStringLiteral(sep)) },
+		sql:   func(qf, sep string) string { return sqlAggStringAgg(qf, sep) },
 		build: func(f, sep string) ssql.AggregateFunc { return ssql.StringAgg(f, sep) },
 		code:  func(f, sep string) string { return fmt.Sprintf("ssql.StringAgg(%q, %q)", f, sep) }},
 	// DFC129 phase 2: statistics. median/percentile are the continuous
 	// quantile (DuckDB quantile_cont, Postgres percentile_cont); stddev and
 	// variance are the SAMPLE statistics like every SQL engine's; mode
 	// breaks ties by first arrival.
-	{flag: "-median", fn: "median", hasField: true, sql: sqlCall("median"), wireType: wireFixed("float"), typedKind: typedKindQuantile,
+	{flag: "-median", fn: "median", hasField: true, sql: func(qf, _ string) string { return sqlAggMedian(qf) }, wireType: wireFixed("float"), typedKind: typedKindQuantile,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Median(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Median(%q)", f) }},
 	{flag: "-percentile", fn: "percentile", hasField: true, extraArg: "p", wireType: wireFixed("float"), typedKind: typedKindQuantile,
 		check: func(extra string) error { _, err := percentileP(extra); return err },
-		sql:   func(qf, p string) string { return fmt.Sprintf("quantile_cont(%s, %s)", qf, strings.TrimSpace(p)) },
+		sql:   func(qf, p string) string { return sqlAggPercentile(qf, p) },
 		build: func(f, p string) ssql.AggregateFunc { v, _ := percentileP(p); return ssql.Percentile(f, v) },
 		code:  func(f, p string) string { v, _ := percentileP(p); return fmt.Sprintf("ssql.Percentile(%q, %v)", f, v) }},
 	{flag: "-stddev", fn: "stddev", hasField: true, sql: sqlCall("stddev_samp"), wireType: wireFixed("float"), typedKind: typedKindWelford,
@@ -176,17 +176,17 @@ var aggDefs = []aggDef{
 	{flag: "-variance", fn: "variance", hasField: true, sql: sqlCall("var_samp"), wireType: wireFixed("float"), typedKind: typedKindWelford,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Variance(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Variance(%q)", f) }},
-	{flag: "-mode", fn: "mode", hasField: true, sql: sqlCall("mode"), wireType: wireOfField, typedKind: typedKindCounts,
+	{flag: "-mode", fn: "mode", hasField: true, sql: func(qf, _ string) string { return sqlAggMode(qf) }, wireType: wireOfField, typedKind: typedKindCounts,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Mode(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Mode(%q)", f) }},
 	// DFC129 phase 3: FIELD at the extreme BY ("arg-max name by salary");
 	// ties keep the first arrival, as DuckDB's arg_max does.
 	{flag: "-arg-max", fn: "arg-max", hasField: true, extraArg: "by", extraIsField: true, wireType: wireOfField, typedKind: typedKindPaired,
-		sql:   func(qf, by string) string { return fmt.Sprintf("arg_max(%s, %s)", qf, quoteIdent(by)) },
+		sql:   func(qf, by string) string { return sqlAggArgExtreme(qf, quoteIdent(by), true) },
 		build: func(f, by string) ssql.AggregateFunc { return ssql.ArgMax(f, by) },
 		code:  func(f, by string) string { return fmt.Sprintf("ssql.ArgMax(%q, %q)", f, by) }},
 	{flag: "-arg-min", fn: "arg-min", hasField: true, extraArg: "by", extraIsField: true, wireType: wireOfField, typedKind: typedKindPaired,
-		sql:   func(qf, by string) string { return fmt.Sprintf("arg_min(%s, %s)", qf, quoteIdent(by)) },
+		sql:   func(qf, by string) string { return sqlAggArgExtreme(qf, quoteIdent(by), false) },
 		build: func(f, by string) ssql.AggregateFunc { return ssql.ArgMin(f, by) },
 		code:  func(f, by string) string { return fmt.Sprintf("ssql.ArgMin(%q, %q)", f, by) }},
 }

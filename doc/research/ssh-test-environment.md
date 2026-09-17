@@ -2,7 +2,7 @@
 
 Reference: DFC056
 Created: 2026-03-10
-Last modified: 2026-09-15
+Last modified: 2026-09-17
 
 [Back to Index](./README.md)
 
@@ -323,3 +323,25 @@ Two ways in:
 Tests gate on `SSQL_TEST_PG_HOST=ssql-node1` and skip without it, like
 `SSQL_TEST_SSH_HOST`. Data lives in the `ssql` database; tests should
 create and drop their own tables (`emp`, `raw*` were the ad-hoc ones).
+
+**The `postgres` oracle lane** (2026-09-17, DFC132 §4) in
+`TestPipelineEquivalence` is the first consumer: with the variable set,
+every case is also rendered by `generate sql -dialect postgres` and
+executed as one psql session over `ssh $SSQL_TEST_PG_HOST sudo -u
+postgres psql -X -At -v ON_ERROR_STOP=1 -d ssql` — the prologue's
+`CREATE TABLE` becomes `CREATE TEMP TABLE` (session-scoped, so the
+parallel cases cannot collide and nothing is left in the database), each
+`\copy … FROM 'file'` becomes `\copy … FROM STDIN` with the local
+fixture's bytes inline (the rig has no copy of the fixtures), and the
+statement is wrapped in `SELECT row_to_json(__r) FROM (…) __r` so the
+rows come back as JSONL like every other lane. A by-design dialect
+refusal skips the lane for that case with a log line. The `datafusion`
+lane works the same way with `SSQL_DATAFUSION_PYTHON=/path/to/python`
+(a Python with the `datafusion` package importable — `python3 -m venv
+~/.venvs/df && ~/.venvs/df/bin/pip install datafusion`; DataFusion 54 at
+the time of writing). Run both:
+
+```bash
+SSQL_TEST_PG_HOST=ssql-node1 SSQL_DATAFUSION_PYTHON=$VENV/bin/python \
+  go test ./cmd/ssql -run 'TestPipelineEquivalence$' -timeout=30m
+```

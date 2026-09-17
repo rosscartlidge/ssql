@@ -22,16 +22,24 @@ import (
 // registerGenerateSQL registers the "generate sql" subcommand
 func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 	cmd.Subcommand("sql").
-		Description("Generate DuckDB SQL from ssql CLI pipeline").
+		Description("Generate SQL (DuckDB, PostgreSQL or DataFusion dialect) from an ssql CLI pipeline").
 		Example("(export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql to table) | ssql generate sql", "Generate SQL from pipeline").
 		Example("(export SSQL_MODE=record; ssql from data.parquet | ssql group-by dept -sum salary total | ssql to table) | ssql generate sql", "Parquet aggregation query").
 		Example("(export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql to table) | ssql generate sql -run", "Generate and execute with DuckDB").
 		Example("ssql generate sql -run -pipeline 'ssql from data.csv | ssql group-by dept -sum salary total | ssql to table'", "One-shot: translate the quoted pipeline and execute with DuckDB").
+		Example("ssql generate sql -dialect postgres -pipeline 'ssql from data.csv | ssql group-by dept -median salary med | ssql to table'", "Postgres spellings (percentile_cont WITHIN GROUP) plus a CREATE TABLE + \\copy prologue for the source").
 		Flag("-run", "-r").
 		Bool().
 		Global().
 		Default(false).
-		Help("Execute the generated SQL with duckdb").
+		Help("Execute the generated SQL with the dialect's CLI: duckdb, psql (honours PGHOST/PGDATABASE/…, loads the sources into TEMP tables first) or datafusion-cli").
+		Done().
+		Flag("-dialect", "-d").
+		String().
+		Global().
+		Default("duckdb").
+		Completer(&cf.StaticCompleter{Options: sqlDialects}).
+		Help("Target engine: duckdb (default), postgres or datafusion. Same pipeline semantics; engine-specific spellings, and stages with no translation in that engine are refused loudly").
 		Done().
 		Flag("-pipeline", "-p").
 		String().
@@ -55,6 +63,13 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 			if runVal, ok := ctx.GlobalFlags["-run"]; ok {
 				run = runVal.(bool)
 			}
+			dialect := dialectDuckDB
+			if v, ok := ctx.GlobalFlags["-dialect"]; ok {
+				var err error
+				if dialect, err = parseSQLDialect(v.(string)); err != nil {
+					return err
+				}
+			}
 
 			var fragSrc io.Reader = ctx.Stdin()
 			if v, ok := ctx.GlobalFlags["-pipeline"]; ok && v.(string) != "" {
@@ -67,13 +82,25 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 				}
 				fragSrc = bytes.NewReader(fragments)
 			}
+			// The dialect stays set through -run so the engine command
+			// and the Postgres load script see it.
+			prevDialect, prevLoads := sqlDialectCur, pgLoads
+			sqlDialectCur, pgLoads = dialect, nil
+			defer func() { sqlDialectCur, pgLoads = prevDialect, prevLoads }()
 			sql, err := assembleSQL(fragSrc)
 			if err != nil {
 				return fmt.Errorf("assembling SQL: %w", err)
 			}
 
 			if run {
-				cmd := exec.Command("duckdb", "-c", sql)
+				name, args, stdin := sqlRunCommand(sql)
+				if _, err := exec.LookPath(name); err != nil {
+					return fmt.Errorf("generate sql -run -dialect %s needs %s on PATH: %w", dialect, name, err)
+				}
+				cmd := exec.Command(name, args...)
+				if stdin != "" {
+					cmd.Stdin = strings.NewReader(stdin)
+				}
 				cmd.Stdout = ctx.Stdout()
 				cmd.Stderr = ctx.Stderr()
 				return cmd.Run()
@@ -112,6 +139,14 @@ type sqlQuery struct {
 	// pipeline-aware completion uses). nil = unknown; translation then falls
 	// back to assuming referenced columns exist.
 	columns []string
+}
+
+// hasClauses reports whether anything beyond the bare FROM has accumulated
+// — i.e. whether a stage that rebuilds the query around its source must
+// materialise the current query as that source first.
+func (q *sqlQuery) hasClauses() bool {
+	return len(q.whereClauses) > 0 || len(q.joins) > 0 || len(q.selectExprs) > 0 ||
+		len(q.groupBy) > 0 || len(q.orderBy) > 0 || q.limit != "" || q.offset != "" || q.distinct || q.sampled
 }
 
 // needsWrap reports whether translating cmd into q would violate the
@@ -172,7 +207,7 @@ func needsWrap(q *sqlQuery, cmd string) bool {
 func wrapAsSubquery(q *sqlQuery) {
 	sub := renderSelect(q)
 	*q = sqlQuery{
-		fromClause: "(\n" + indentLines(sub, "  ") + "\n)",
+		fromClause: sqlSubquery("(\n" + indentLines(sub, "  ") + "\n)"),
 		comments:   q.comments,
 		columns:    q.columns, // wrapping doesn't change the output schema
 	}
@@ -395,6 +430,9 @@ func translateFrom(q *sqlQuery, args []string) error {
 		if file == "" {
 			return fmt.Errorf("from lines: SQL translation needs a file (stdin has no SQL equivalent)")
 		}
+		if sqlDialectCur != dialectDuckDB {
+			return dialectRefuse("from lines", "needs DuckDB's read_csv to number lines in file order")
+		}
 		q.fromClause = fmt.Sprintf("(SELECT row_number() OVER () AS line_number, line FROM read_csv(%s, columns={'line': 'VARCHAR'}, header=false, delim='\\x01', quote='', escape='', parallel=false))", quoteFile(file))
 		q.columns = []string{"line_number", "line"}
 		return nil
@@ -425,7 +463,11 @@ func translateFrom(q *sqlQuery, args []string) error {
 			files = append(files, a)
 		}
 		if len(files) == 1 {
-			q.fromClause = quoteFile(files[0])
+			src, err := dialectSource(files[0])
+			if err != nil {
+				return err
+			}
+			q.fromClause = src
 			// Seed column tracking from the header (generation runs where
 			// the file lives). Non-delimited formats stay unknown.
 			switch {
@@ -434,13 +476,26 @@ func translateFrom(q *sqlQuery, args []string) error {
 			case args[0] == "tsv", strings.HasSuffix(strings.ToLower(files[0]), ".tsv"):
 				q.columns = delimHeader(files[0], '\t')
 			}
-		} else {
+		} else if sqlDialectCur == dialectDuckDB {
 			// DuckDB: read_csv_auto(['file1.csv', 'file2.csv'])
 			quoted := make([]string, len(files))
 			for i, f := range files {
 				quoted[i] = quoteFile(f)
 			}
 			q.fromClause = fmt.Sprintf("read_csv_auto([%s])", strings.Join(quoted, ", "))
+		} else {
+			// Postgres/DataFusion: one source per file, UNION ALL (the
+			// files must share a header, as ssql's own multi-file read
+			// assumes).
+			var parts []string
+			for _, f := range files {
+				src, err := dialectSource(f)
+				if err != nil {
+					return err
+				}
+				parts = append(parts, "SELECT * FROM "+src)
+			}
+			q.fromClause = sqlSubquery("(" + strings.Join(parts, " UNION ALL ") + ")")
 		}
 	case "ssh":
 		return fmt.Errorf("from ssh has no SQL equivalent — it is an ssql-specific distributed feature")
@@ -450,7 +505,11 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// Bare: from FILE — seed column tracking from the header as the
 		// explicit forms do, so `update -set-expr NEW …` becomes an added
 		// column, not a REPLACE of one that does not exist.
-		q.fromClause = quoteFile(args[0])
+		src, err := dialectSource(args[0])
+		if err != nil {
+			return err
+		}
+		q.fromClause = src
 		switch lower := strings.ToLower(args[0]); {
 		case strings.HasSuffix(lower, ".csv"):
 			q.columns = delimHeader(args[0], ',')
@@ -462,10 +521,13 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// reservoir, not system: DuckDB's system sampling is
 		// percentage-only. Both sides are unseeded statistical samples
 		// of N rows; the duckdb equivalence lane asserts cardinality.
-		q.fromClause += " USING SAMPLE " + sampleN + " ROWS (reservoir)"
+		q.fromClause = sqlSampleRows(q.fromClause, sampleN)
 		q.sampled = true
 	}
 	if lastN != "" && lastN != "0" {
+		if sqlDialectCur != dialectDuckDB {
+			return dialectRefuse("from -last", "needs DuckDB's ordered read_csv(parallel=false); other engines define no file order")
+		}
 		// -last N: the last N rows in FILE order. SQL cannot seek, so
 		// this is the ordered full read + reversed LIMIT, re-ordered —
 		// correct, not fast (the speed win is a Go-lane property).
@@ -588,7 +650,7 @@ func translateCondition(field, op, value string) string {
 		}
 	}
 	if op == "regex" {
-		return fmt.Sprintf("regexp_matches(%s, '%s')", quoteIdent(field), escapeSQL(value))
+		return sqlRegexMatch(quoteIdent(field), "'"+escapeSQL(value)+"'")
 	}
 	return fmt.Sprintf("%s %s %s", quoteIdent(field), sqlOp, sqlLiteral(value))
 }
@@ -642,6 +704,9 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 		if d, ok := aggDefByFlag(args[i]); ok {
 			n := d.arity()
 			if i+n < len(args) {
+				if err := aggDialectRefusal(d.fn, false, false); err != nil {
+					return err
+				}
 				qf, extra := "", ""
 				if d.hasField {
 					qf = quoteIdent(args[i+1])
@@ -723,8 +788,7 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 func translateGroupByRollup(q *sqlQuery, fields []string, aggs []sqlAgg, mode ssql.RollupMode) error {
 	// Materialise whatever is accumulated (a WHERE, a join, a sample…)
 	// as the source: the sets must all aggregate the same rows.
-	if len(q.whereClauses) > 0 || len(q.joins) > 0 || len(q.selectExprs) > 0 ||
-		len(q.groupBy) > 0 || len(q.orderBy) > 0 || q.limit != "" || q.offset != "" || q.distinct || q.sampled {
+	if q.hasClauses() {
 		wrapAsSubquery(q)
 	}
 	src := q.fromClause
@@ -795,7 +859,7 @@ func translateGroupByRollup(q *sqlQuery, fields []string, aggs []sqlAgg, mode ss
 	}
 	sb.WriteString(")")
 
-	*q = sqlQuery{fromClause: sb.String(), comments: q.comments}
+	*q = sqlQuery{fromClause: sqlSubquery(sb.String()), comments: q.comments}
 	return nil
 }
 
@@ -926,9 +990,9 @@ func translateSample(q *sqlQuery, args []string) error {
 	// reaches here; `sample 0` is a real stage: USING SAMPLE 0 ROWS.
 	switch {
 	case percent != "":
-		q.fromClause += " USING SAMPLE " + percent + "% (bernoulli)"
+		q.fromClause = sqlSamplePercent(q.fromClause, percent)
 	case n != "":
-		q.fromClause += " USING SAMPLE " + n + " ROWS (reservoir)"
+		q.fromClause = sqlSampleRows(q.fromClause, n)
 	default:
 		return fmt.Errorf("sample: need N or -percent")
 	}
@@ -1010,12 +1074,16 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 	if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
 		subquery := buildJoinSubquery(funcFrags[len(funcFrags)-1])
 		if subquery != "" {
-			q.joins = append(q.joins, fmt.Sprintf("JOIN (%s) %s", subquery, joinCond))
+			q.joins = append(q.joins, fmt.Sprintf("JOIN %s %s", sqlSubquery("("+subquery+")"), joinCond))
 			return nil
 		}
 	}
 
-	q.joins = append(q.joins, fmt.Sprintf("JOIN %s %s", quoteFile(filePath), joinCond))
+	src, err := dialectSource(filePath)
+	if err != nil {
+		return err
+	}
+	q.joins = append(q.joins, fmt.Sprintf("JOIN %s %s", src, joinCond))
 	return nil
 }
 
@@ -1076,7 +1144,7 @@ func translateUnion(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) e
 	}
 
 	*q = sqlQuery{
-		fromClause: "(\n" + indentLines(strings.Join(parts, "\n"+op+"\n"), "  ") + "\n)",
+		fromClause: sqlSubquery("(\n" + indentLines(strings.Join(parts, "\n"+op+"\n"), "  ") + "\n)"),
 		comments:   q.comments,
 	}
 	return nil
@@ -1155,6 +1223,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 		rangeP      string // RANGE frame bounds as typed (DFC130 unit 3); "" = ROWS frame
 		rangeF      string
 		funcs       []string // pre-built SQL function expressions like "ROW_NUMBER() AS rn"
+		registryFns []string // registry aggregate names used, for the dialect check once the frame is known
 	}
 
 	clauses := []windowClause{{preceding: -1, following: 0}}
@@ -1170,6 +1239,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 				if d.extraArg != "" {
 					extra = args[i+2]
 				}
+				cur.registryFns = append(cur.registryFns, d.fn)
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s AS %s", d.sql(quoteIdent(args[i+1]), extra), quoteIdent(args[i+n])))
 				i += n + 1
 			} else {
@@ -1342,6 +1412,14 @@ func translateWindow(q *sqlQuery, args []string) error {
 
 	// Build SQL OVER clauses
 	for _, c := range clauses {
+		// The frame is known only now: a bounded start (N PRECEDING or a
+		// finite RANGE bound) is what some engines cannot slide over.
+		bounded := c.preceding >= 0 || (c.rangeP != "" && c.rangeP != "unbounded")
+		for _, fn := range c.registryFns {
+			if err := aggDialectRefusal(fn, true, bounded); err != nil {
+				return err
+			}
+		}
 		overParts := []string{}
 
 		if len(c.partitionBy) > 0 {
@@ -1490,33 +1568,42 @@ func buildFrameSQL(preceding, following int) string {
 }
 
 func translateRename(q *sqlQuery, args []string) error {
-	// DuckDB: SELECT * RENAME ("old" AS "new", ...)
-	var renames []string
+	// DuckDB: SELECT * RENAME ("old" AS "new", ...); explicit column list
+	// where the engine lacks the modifier (starProjection).
+	var renames []sqlPair
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-as" && i+2 < len(args) {
-			renames = append(renames, fmt.Sprintf("%s AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
+			renames = append(renames, sqlPair{args[i+1], args[i+2]})
 			i += 2
 		}
 	}
 	if len(renames) > 0 {
-		q.selectExprs = append(q.selectExprs, "* RENAME ("+strings.Join(renames, ", ")+")")
+		sel, err := starProjection(q.columns, nil, nil, renames, "rename")
+		if err != nil {
+			return err
+		}
+		q.selectExprs = append(q.selectExprs, sel)
 	}
 	return nil
 }
 
 func translateCast(q *sqlQuery, args []string) error {
 	// DuckDB: SELECT * REPLACE (CAST("field" AS TYPE) AS "field", ...)
-	var replacements []string
+	var replacements []sqlPair
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-type" && i+2 < len(args) {
 			field, typeName := args[i+1], args[i+2]
 			sqlType := mapTypeToSQL(typeName)
-			replacements = append(replacements, fmt.Sprintf("CAST(%s AS %s) AS %s", quoteIdent(field), sqlType, quoteIdent(field)))
+			replacements = append(replacements, sqlPair{field, fmt.Sprintf("CAST(%s AS %s)", quoteIdent(field), sqlType)})
 			i += 2
 		}
 	}
 	if len(replacements) > 0 {
-		q.selectExprs = append(q.selectExprs, "* REPLACE ("+strings.Join(replacements, ", ")+")")
+		sel, err := starProjection(q.columns, nil, replacements, nil, "cast")
+		if err != nil {
+			return err
+		}
+		q.selectExprs = append(q.selectExprs, sel)
 	}
 	return nil
 }
@@ -1638,7 +1725,8 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		fieldCases[a.field] = append(fieldCases[a.field], a)
 	}
 
-	var replacements, additions []string
+	var replacements []sqlPair
+	var additions []string
 	for _, field := range fieldOrder {
 		cases := fieldCases[field]
 		// `* REPLACE` requires the column to exist; a NEW field (exec creates
@@ -1679,13 +1767,17 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		if isNew {
 			additions = append(additions, fmt.Sprintf("%s AS %s", exprSQL, quoteIdent(field)))
 		} else {
-			replacements = append(replacements, fmt.Sprintf("%s AS %s", exprSQL, quoteIdent(field)))
+			replacements = append(replacements, sqlPair{field, exprSQL})
 		}
 	}
 
 	switch {
 	case len(replacements) > 0:
-		q.selectExprs = append(q.selectExprs, "* REPLACE ("+strings.Join(replacements, ", ")+")")
+		sel, err := starProjection(q.columns, nil, replacements, nil, "update")
+		if err != nil {
+			return err
+		}
+		q.selectExprs = append(q.selectExprs, sel)
 	case len(additions) > 0:
 		q.selectExprs = append(q.selectExprs, "*")
 	}
@@ -1698,9 +1790,9 @@ func mapTypeToSQL(typeName string) string {
 	case "int", "integer", "int64":
 		return "BIGINT"
 	case "float", "float64", "double", "number":
-		return "DOUBLE"
+		return sqlFloatType()
 	case "string", "str", "text":
-		return "VARCHAR"
+		return sqlStringType()
 	case "bool", "boolean":
 		return "BOOLEAN"
 	case "date":
@@ -1722,15 +1814,20 @@ func translateInclude(q *sqlQuery, args []string) error {
 }
 
 func translateExclude(q *sqlQuery, args []string) error {
-	// DuckDB supports SELECT * EXCLUDE (col1, col2)
+	// DuckDB and DataFusion: SELECT * EXCLUDE (col1, col2); Postgres
+	// needs the surviving columns spelled out (starProjection).
 	var cols []string
 	for _, arg := range args {
 		if !strings.HasPrefix(arg, "-") {
-			cols = append(cols, quoteIdent(arg))
+			cols = append(cols, arg)
 		}
 	}
 	if len(cols) > 0 {
-		q.selectExprs = append(q.selectExprs, "* EXCLUDE ("+strings.Join(cols, ", ")+")")
+		sel, err := starProjection(q.columns, cols, nil, nil, "exclude")
+		if err != nil {
+			return err
+		}
+		q.selectExprs = append(q.selectExprs, sel)
 	}
 	return nil
 }
@@ -1740,13 +1837,14 @@ func renderSQL(q *sqlQuery) string {
 
 	// Comment with original pipeline
 	if len(q.comments) > 0 {
-		sb.WriteString("-- Generated by ssql generate sql\n")
+		sb.WriteString(fmt.Sprintf("-- Generated by ssql generate sql (dialect: %s)\n", sqlDialectCur))
 		sb.WriteString("-- Pipeline:\n")
 		for _, c := range q.comments {
 			sb.WriteString("--   " + c + "\n")
 		}
 		sb.WriteString("\n")
 	}
+	renderPGPrologue(&sb)
 
 	sb.WriteString(renderSelect(q))
 	sb.WriteString("\n;\n")
@@ -1837,9 +1935,10 @@ func quoteFile(path string) string {
 }
 
 func quoteIdent(name string) string {
-	// Only quote if the name contains special characters or is a reserved word
-	// For simplicity, quote everything with double quotes (DuckDB standard)
-	if strings.ContainsAny(name, " -./") || isSQLReserved(name) {
+	// DuckDB: quote only names with special characters or reserved words.
+	// Postgres and DataFusion fold unquoted identifiers to lower case, so a
+	// header like "Name" would not resolve — quote everything there.
+	if sqlDialectCur != dialectDuckDB || strings.ContainsAny(name, " -./") || isSQLReserved(name) {
 		return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 	}
 	return name
@@ -1910,6 +2009,9 @@ func parseCommandArgs(cmd string) []string {
 // (string timestamps and -time-format need TIMESTAMP-typed handling —
 // use generate go), no -from/-to bounds yet.
 func translateResample(q *sqlQuery, op *lib.Op, args []string) error {
+	if sqlDialectCur != dialectDuckDB {
+		return dialectRefuse("resample", "the grid + ASOF JOIN rewrite is DuckDB-specific")
+	}
 	// Structured path (DFC123 slice 3): the command recorded its own
 	// parsed config on the Op — no second implementation of its flag
 	// grammar here. Defaults, aliases, and accumulation were already
@@ -2091,6 +2193,9 @@ func buildResampleSQL(q *sqlQuery, timeField string, everyNs int64, values []str
 // ssql's int/float/string/bool vocabulary. Needs the source column
 // list (tracked from CSV/TSV headers); refuses loudly when unknown.
 func translateDescribe(q *sqlQuery, op *lib.Op, args []string) error {
+	if sqlDialectCur != dialectDuckDB {
+		return dialectRefuse("describe", "the per-column TRY_CAST/median profile is DuckDB-specific")
+	}
 	fields, ok := op.StrList("fields")
 	if !ok {
 		for _, a := range args {
@@ -2220,7 +2325,9 @@ func translateUnpivot(q *sqlQuery, op *lib.Op, args []string) error {
 	if q.fromClause == "" {
 		return fmt.Errorf("unpivot: no source to translate")
 	}
-	wrapAsSubquery(q)
+	if q.hasClauses() {
+		wrapAsSubquery(q)
+	}
 	src := q.fromClause
 
 	var on []string
@@ -2234,8 +2341,11 @@ func translateUnpivot(q *sqlQuery, op *lib.Op, args []string) error {
 	proj = append(proj, quoteIdent(col), quoteIdent(val))
 	body := fmt.Sprintf("(\n  SELECT %s FROM (\n    UNPIVOT %s ON %s INTO NAME %s VALUE %s\n  )\n)",
 		strings.Join(proj, ", "), src, strings.Join(on, ", "), quoteIdent(col), quoteIdent(val))
+	if sqlDialectCur != dialectDuckDB {
+		body = sqlUnpivotUnion(src, ids, values, col, val)
+	}
 	*q = sqlQuery{
-		fromClause: body,
+		fromClause: sqlSubquery(body),
 		comments:   q.comments,
 		columns:    append(append([]string(nil), ids...), col, val),
 	}
@@ -2295,11 +2405,14 @@ func translateFill(q *sqlQuery, op *lib.Op, args []string) error {
 	order := append([]string(nil), q.orderBy...)
 	wrapAsSubquery(q)
 	q.orderBy = order // the output keeps the pipeline's order
-	var repl []string
+	if len(down) > 0 && sqlDialectCur == dialectPostgres {
+		return dialectRefuse("fill -down", "Postgres has no IGNORE NULLS for LAST_VALUE")
+	}
+	var repl []sqlPair
 	for _, f := range down {
 		c := quoteIdent(f)
-		repl = append(repl, fmt.Sprintf("LAST_VALUE(%s IGNORE NULLS) OVER (ORDER BY %s ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS %s",
-			c, strings.Join(order, ", "), c))
+		repl = append(repl, sqlPair{f, fmt.Sprintf("LAST_VALUE(%s IGNORE NULLS) OVER (ORDER BY %s ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+			c, strings.Join(order, ", "))})
 	}
 	for _, d := range defaults {
 		c := quoteIdent(d.field)
@@ -2310,16 +2423,19 @@ func translateFill(q *sqlQuery, op *lib.Op, args []string) error {
 		// A field defaulted AND carried: default applies after the carry.
 		if slices.Contains(down, d.field) {
 			for i, r := range repl {
-				if strings.HasSuffix(r, " AS "+c) {
-					expr := strings.TrimSuffix(r, " AS "+c)
-					repl[i] = fmt.Sprintf("COALESCE(%s, %s) AS %s", expr, lit, c)
+				if r.col == d.field {
+					repl[i].val = fmt.Sprintf("COALESCE(%s, %s)", r.val, lit)
 				}
 			}
 			continue
 		}
-		repl = append(repl, fmt.Sprintf("COALESCE(%s, %s) AS %s", c, lit, c))
+		repl = append(repl, sqlPair{d.field, fmt.Sprintf("COALESCE(%s, %s)", c, lit)})
 	}
-	q.selectExprs = []string{"* REPLACE (" + strings.Join(repl, ", ") + ")"}
+	sel, err := starProjection(q.columns, nil, repl, nil, "fill")
+	if err != nil {
+		return err
+	}
+	q.selectExprs = []string{sel}
 	return nil
 }
 
@@ -2331,6 +2447,9 @@ func translateFill(q *sqlQuery, op *lib.Op, args []string) error {
 // stops loudly); with -skip, WHERE regexp_matches drops non-matches —
 // the same rows ssql drops.
 func translateExtract(q *sqlQuery, op *lib.Op, args []string) error {
+	if sqlDialectCur != dialectDuckDB {
+		return dialectRefuse("extract", "named-group regexp_extract is DuckDB-specific")
+	}
 	var field, re string
 	var names []string
 	skip, keep := false, false

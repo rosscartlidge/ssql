@@ -142,6 +142,9 @@ func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if n.Operator == "/" {
+		return sqlDivide(left, right), nil
+	}
 	if op, ok := exprBinaryOps[n.Operator]; ok {
 		return "(" + left + " " + op + " " + right + ")", nil
 	}
@@ -149,13 +152,13 @@ func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 	case "in":
 		return "(" + left + " IN " + right + ")", nil
 	case "contains":
-		return "contains(" + left + ", " + right + ")", nil
+		return sqlContains(left, right), nil
 	case "startsWith":
-		return "starts_with(" + left + ", " + right + ")", nil
+		return sqlStartsWith(left, right), nil
 	case "endsWith":
-		return "ends_with(" + left + ", " + right + ")", nil
+		return sqlEndsWith(left, right), nil
 	case "matches":
-		return "regexp_matches(" + left + ", " + right + ")", nil
+		return sqlRegexMatch(left, right), nil
 	case "??":
 		return "COALESCE(" + left + ", " + right + ")", nil
 	}

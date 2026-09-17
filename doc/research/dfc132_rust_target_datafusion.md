@@ -6,8 +6,8 @@ Last modified: 2026-09-17
 
 [Back to Index](./README.md)
 
-Status: **decision recorded; one generator fix shipped; nothing else
-built.** Ross, 2026-09-17: "I have also been getting questions about
+Status: **decision recorded; `-dialect` and the two oracle lanes built
+the same day (§4a).** Ross, 2026-09-17: "I have also been getting questions about
 generating rust code. I know we talked about this with the IR codegen.
 Do you think it's a good idea (I am unconvinced)" — then "if we did
 should we use an existing runtime or build one in Rust of the same shape
@@ -135,6 +135,46 @@ already runs on DataFusion faster than on DuckDB**, with two dialect gaps.
      oracle for the existing SQL lane*, not a sixth implementation.
 3. **Shipped now:** parenthesised null-safe joins in the rollup/cube
    SQL (the only generator change the check needed).
+
+## 4a. Built the same afternoon
+
+Ross, after reading §4: "actually — I am warming to the dialect idea —
+let's go with it now." What shipped (`cmd/ssql/commands/generate_sql_dialect.go`,
+CHANGELOG "Unreleased"):
+
+- `generate sql -dialect duckdb|postgres|datafusion`, default `duckdb`
+  with output unchanged. One package-level dialect consulted at the
+  sites where the engines differ: the source clause (Postgres: table
+  per file + `CREATE TABLE`/`\copy` prologue with types sampled from
+  the file — DATE for ISO dates so INTERVAL RANGE frames work), the
+  registry aggregates' `sql` renderers, the `SELECT *` modifiers
+  (explicit column lists where an engine lacks them, refused when the
+  columns are unknown), regex, sampling, UNPIVOT (aliased UNION ALL
+  dropping NULLs), subquery aliases, identifier quoting, `/` as float
+  division. Refusals name the stage and the dialect.
+- Two oracle lanes in `TestPipelineEquivalence`, gated on
+  `SSQL_DATAFUSION_PYTHON` and `SSQL_TEST_PG_HOST`. Result on the first
+  full run: 107 of 119 cases byte-identical across DuckDB, Postgres and
+  DataFusion. The lanes found four real generator bugs in that run —
+  integer `/` (SQL truncates, expr-lang does not), NULLs surviving the
+  portable unpivot, DataFusion's unknown `.tsv`/`.jsonl` extensions,
+  TEXT dates under an INTERVAL frame — and four engine differences
+  now recorded as case skips: Postgres's group sort is unstable, so
+  arrival-order `first`/`string_agg` and the order of tied rows under a
+  ROWS frame are undefined there, and its `mode()` breaks ties by value
+  where ssql (and DuckDB, by luck of implementation) keep the first seen.
+- Per-engine gaps found by probing and encoded as refusals: DataFusion
+  54 has no `mode`, no aggregate `ORDER BY` inside a window function
+  (so no windowed `-arg-max`), no exact percentile over a frame, and
+  cannot slide `string_agg` over a bounded frame; Postgres cannot
+  window an ordered-set aggregate or `DISTINCT`, has no `IGNORE NULLS`
+  (so no `fill -down`), and no `* EXCLUDE/RENAME/REPLACE`.
+
+What this changes in §4's framing: the dialect table is exactly what it
+was predicted to be — a rendering table, one file, no new semantics —
+and the oracle lanes are cheap. The unexpected value was the bug yield:
+two engines that share nothing with DuckDB disagreed with it in ways
+the DuckDB lane alone could not see.
 
 ## 5. References
 
