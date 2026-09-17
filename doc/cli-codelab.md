@@ -583,6 +583,53 @@ SQL on all three engines when they are available
 ssql generate sql -dialect postgres -pipeline 'ssql from employees.csv | ssql group-by dept -median salary median_salary -first name first_hired | ssql to table'
 ```
 
+The DataFusion dialect is how an ssql pipeline gets into a Rust program:
+DataFusion is a Rust library, and its SQL front end builds the same
+logical plan the DataFrame API would. Write the SQL to a file, then the
+whole Rust side is this — there is no `generate rust`, because the
+program would contain nothing but this string
+([DFC132 §4b](research/dfc132_rust_target_datafusion.md)):
+
+```bash
+ssql generate sql -dialect datafusion -pipeline 'ssql from employees.csv | ssql where -if status eq active | ssql group-by dept -avg salary avg_salary | ssql to table' pipeline.sql
+```
+
+```toml
+# Cargo.toml
+[dependencies]
+datafusion = "54"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
+```rust
+// src/main.rs
+use datafusion::error::Result;
+use datafusion::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // The two settings ssql's own DataFusion test lane uses: CSV files
+    // have a header row, and a quoted path in FROM ('employees.csv') is
+    // a table. Paths resolve against the working directory.
+    let config = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+    let ctx = SessionContext::new_with_config(config).enable_url_table();
+
+    // What `ssql generate sql -dialect datafusion … pipeline.sql` wrote.
+    // The `--` header comments are fine; sql() takes one statement, so
+    // only the trailing semicolon has to go.
+    let sql = std::fs::read_to_string("pipeline.sql")?;
+    let df = ctx.sql(sql.trim().trim_end_matches(';')).await?;
+
+    df.show().await?; // or df.collect().await? for Arrow RecordBatches,
+                      // df.write_parquet(...) / df.write_csv(...) to write
+    Ok(())
+}
+```
+
+The first `cargo build` compiles DataFusion itself (minutes, a large
+`target/`); after that the program starts in well under a second and
+runs the README's 14.6 M-row cube in about 0.2 s (DFC132 §3).
+
 And ssql can rewrite your pipeline into a better one — merging filters,
 turning sort+limit into `top`, removing a sort that a later sort makes
 pointless:

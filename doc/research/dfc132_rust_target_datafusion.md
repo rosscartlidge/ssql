@@ -176,6 +176,74 @@ and the oracle lanes are cheap. The unexpected value was the bug yield:
 two engines that share nothing with DuckDB disagreed with it in ways
 the DuckDB lane alone could not see.
 
+## 4b. Running the output from Rust, and why that is not a command
+
+Ross, after the release: "given some ssql generated DataFusion SQL — how
+would you call it in Rust?" then "given how simple the Rust is — why
+don't we just implement `generate datafusion`?" The harness, for the
+record (also in the codelab §7):
+
+```toml
+# Cargo.toml
+[dependencies]
+datafusion = "54"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+```
+
+```rust
+// src/main.rs
+use datafusion::error::Result;
+use datafusion::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // The two settings ssql's own DataFusion test lane uses: CSV files
+    // have a header row, and a quoted path in FROM ('employees.csv') is
+    // a table. Paths resolve against the working directory.
+    let config = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
+    let ctx = SessionContext::new_with_config(config).enable_url_table();
+
+    // What `ssql generate sql -dialect datafusion … pipeline.sql` wrote.
+    // The `--` header comments are fine; sql() takes one statement, so
+    // only the trailing semicolon has to go.
+    let sql = std::fs::read_to_string("pipeline.sql")?;
+    let df = ctx.sql(sql.trim().trim_end_matches(';')).await?;
+
+    df.show().await?; // or df.collect().await? for Arrow RecordBatches,
+                      // df.write_parquet(...) / df.write_csv(...) to write
+    Ok(())
+}
+```
+
+`enable_url_table` and `has_header` are the same two settings the
+`datafusion` oracle lane uses through the Python bindings; the header
+comments parse; `sql()` takes exactly one statement, hence the trimmed
+semicolon. `collect()` yields Arrow `RecordBatch`es
+(`arrow_json::LineDelimitedWriter` turns them into the JSONL the ssql
+lanes speak); `write_parquet`/`write_csv` exist on the DataFrame.
+
+**Why not `generate datafusion`.** The Rust is simple because it is
+nearly empty: a fixed fifteen lines around the string `generate sql
+-dialect datafusion` already emits. Making that a generate target buys:
+
+- a toolchain the project does not have — no cargo/rustc on the dev
+  machine or in CI; `-run` would need one, and the first build of the
+  `datafusion` crate is minutes and about a gigabyte of `target/`,
+  against `generate go -run` compiling in seconds;
+- a lane that cannot be gated — every generate format without a test is
+  broken by the next refactor; a cargo-gated test would skip everywhere
+  we run. The Python bindings gave a one-second oracle, which is why
+  the `datafusion` lane exists and a Rust one does not;
+- not what the asker means — "generated Rust" suggests per-stage code
+  to read and extend, as generated Go is. A SQL string in `main.rs` is
+  not that; the DataFrame-API lowering that would be is the §2 project,
+  and it buys no semantics (same logical plan), only appearance.
+
+Decision (2026-09-17): the harness lives in the docs; `generate
+datafusion` as a wrapper is not built; the lowering stays "if someone
+needs to extend the pipeline in Rust, not run it". Revisit when a Rust
+user with a toolchain turns up.
+
 ## 5. References
 
 - `doc/research/codegen-ir-evolution.md` §7 — the original "one IR, N
