@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`to table -max-width 0` (and 1, 2, or any negative) panicked** with
+  "slice bounds out of range" after printing the header — the truncation
+  sliced `width−3` for the ellipsis. Now `0` means **no truncation** (every
+  value in full), a positive cap must be at least 3 and anything else is a
+  validated error at the flag; the record-mode renderers share one
+  `truncateCell` rule with the typed table writer (which already handled
+  0), so exec, record and typed lanes agree. Review question from a
+  codelab reader.
+
 ## [4.100.0] - 2026-09-16
 
 ### Added

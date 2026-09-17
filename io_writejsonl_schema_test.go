@@ -156,3 +156,35 @@ func TestWriteJSONLWithInferredSchema_TypeInference(t *testing.T) {
 		}
 	}
 }
+
+// TestTableMaxWidthZeroAndSmall: -max-width 0 shows every value in full;
+// a cap ≥ 3 truncates with "..."; 1–3 hard-truncate; nothing panics.
+func TestTableMaxWidthZeroAndSmall(t *testing.T) {
+	recs := []Record{NewRecord(map[string]any{"name": "Alexandria the Great", "n": int64(1)})}
+	render := func(w int) string {
+		var b strings.Builder
+		DisplayTableWithFieldsTo(&b, func(yield func(Record) bool) {
+			for _, r := range recs {
+				if !yield(r) {
+					return
+				}
+			}
+		}, w, []string{"name", "n"}, true)
+		return b.String()
+	}
+	if out := render(0); !strings.Contains(out, "Alexandria the Great") {
+		t.Fatalf("maxWidth 0 must not truncate:\n%s", out)
+	}
+	if out := render(8); !strings.Contains(out, "Alexa...") || strings.Contains(out, "Alexandria") {
+		t.Fatalf("maxWidth 8 must truncate to 5 chars + ...:\n%s", out)
+	}
+	for _, w := range []int{1, 2, 3, -1} {
+		out := render(w) // must not panic
+		if strings.Contains(out, "Alexandria the Great") && w > 0 {
+			t.Fatalf("maxWidth %d should hard-truncate:\n%s", w, out)
+		}
+	}
+	if truncateCell("abcdef", 3) != "abc" || truncateCell("abcdef", 6) != "abcdef" || truncateCell("abcdefg", 6) != "abc..." {
+		t.Fatal("truncateCell rules")
+	}
+}

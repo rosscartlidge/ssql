@@ -1673,7 +1673,7 @@ func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth in
 		for field, value := range record.All() {
 			strValue := fmt.Sprintf("%v", value)
 			if len(strValue) > colWidths[field] {
-				colWidths[field] = min(len(strValue), maxWidth)
+				colWidths[field] = capWidth(len(strValue), maxWidth)
 			}
 			if !isNumericOrBoolValue(value) {
 				colRightAlign[field] = false
@@ -1715,10 +1715,7 @@ func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth in
 				strValue = ""
 			}
 
-			// Truncate if too long
-			if len(strValue) > maxWidth {
-				strValue = strValue[:maxWidth-3] + "..."
-			}
+			strValue = truncateCell(strValue, maxWidth)
 
 			if colRightAlign[col] {
 				fmt.Fprintf(w, "%*s", colWidths[col], strValue)
@@ -1894,7 +1891,7 @@ func calculateColumnWidths(columns []string, records []Record, maxWidth int) map
 		for field, value := range record.All() {
 			strValue := fmt.Sprintf("%v", value)
 			if len(strValue) > colWidths[field] {
-				colWidths[field] = min(len(strValue), maxWidth)
+				colWidths[field] = capWidth(len(strValue), maxWidth)
 			}
 		}
 	}
@@ -1916,7 +1913,7 @@ func calculateColumnWidthsAndAlignment(columns []string, records []Record, maxWi
 		for field, value := range record.All() {
 			strValue := fmt.Sprintf("%v", value)
 			if len(strValue) > colWidths[field] {
-				colWidths[field] = min(len(strValue), maxWidth)
+				colWidths[field] = capWidth(len(strValue), maxWidth)
 			}
 			if !isNumericOrBoolValue(value) {
 				colRight[field] = false
@@ -1961,9 +1958,7 @@ func printTableRow(w io.Writer, columns []string, colWidths map[string]int, colR
 		if value, exists := Get[any](record, col); exists {
 			strValue = fmt.Sprintf("%v", value)
 		}
-		if len(strValue) > maxWidth {
-			strValue = strValue[:maxWidth-3] + "..."
-		}
+		strValue = truncateCell(strValue, maxWidth)
 		if colRight[col] {
 			fmt.Fprintf(w, "%*s", colWidths[col], strValue)
 		} else {
@@ -2540,4 +2535,28 @@ func TeeFile(filename string, fieldOrder ...string) Filter[Record, Record] {
 			}
 		}
 	}
+}
+
+// capWidth is a column's width under a cap: maxWidth ≤ 0 means no cap
+// (`to table -max-width 0` — show every value in full).
+func capWidth(n, maxWidth int) int {
+	if maxWidth <= 0 {
+		return n
+	}
+	return min(n, maxWidth)
+}
+
+// truncateCell shortens a cell to maxWidth with a trailing "..." — the
+// same rule as typed.writeTableLines. maxWidth ≤ 0 disables truncation;
+// a cap too small for the ellipsis (1–3) hard-truncates, so no width can
+// make the slice go negative (until v4.100.1 `-max-width 0`, 1, 2 and any
+// negative panicked with "slice bounds out of range").
+func truncateCell(s string, maxWidth int) string {
+	if maxWidth <= 0 || len(s) <= maxWidth {
+		return s
+	}
+	if maxWidth > 3 {
+		return s[:maxWidth-3] + "..."
+	}
+	return s[:maxWidth]
 }

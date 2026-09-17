@@ -30,7 +30,7 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 			Int().
 			Global().
 			Default(50).
-			Help("Maximum column width (truncate longer values)").
+			Help("Maximum column width; longer values end in \"...\". 0 = no truncation, otherwise at least 3").
 			Done().
 
 		Flag("-sample").
@@ -67,6 +67,11 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 
 			if widthVal, ok := ctx.GlobalFlags["-max-width"]; ok {
 				maxWidth = widthVal.(int)
+			}
+			// 0 = no truncation; a positive cap needs room for the "...". Any
+			// other value used to panic deep in the renderer (slice bounds).
+			if maxWidth < 0 || (maxWidth > 0 && maxWidth < 3) {
+				return fmt.Errorf("to table: -max-width must be 0 (no truncation) or at least 3 (room for \"...\"), got %d", maxWidth)
 			}
 
 			if onlyVal, ok := ctx.GlobalFlags["-only"]; ok {
