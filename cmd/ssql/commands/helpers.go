@@ -72,9 +72,9 @@ func recoverCellError(err *error) {
 	}
 	if ce, ok := r.(*ssql.CellError); ok {
 		if ce.Sampled == 0 {
-			*err = fmt.Errorf("%w — choose another `-type %s TYPE` (string, int, float, bool) or fix the data", ce, ce.Column)
+			*err = fmt.Errorf("%w — choose another `-type %s TYPE` (string, int, float, bool, time) or fix the data", ce, ce.Column)
 		} else {
-			*err = fmt.Errorf("%w — override the column type with `-type %s TYPE` (string, int, float, bool) or fix the data", ce, ce.Column)
+			*err = fmt.Errorf("%w — override the column type with `-type %s TYPE` (string, int, float, bool, time) or fix the data", ce, ce.Column)
 		}
 		return
 	}
@@ -244,8 +244,22 @@ func applyOperator(fieldValue any, op string, compareValue string) bool {
 	}
 }
 
+// timeOperand parses a condition's operand for a `time` field (DFC128
+// D1). An operand that is not a time cannot be compared with one: that is
+// a mistake in the command, so it stops the pipeline (main recovers the
+// panic into one Error line) instead of matching nothing.
+func timeOperand(compareValue string) time.Time {
+	t, ok := ssql.ParseTime(compareValue)
+	if !ok {
+		panic(fmt.Sprintf("where: the field is a time but %q is not (use a form like 2026-01-31 or 2026-01-31T10:30:00Z)", compareValue))
+	}
+	return t
+}
+
 func compareEqual(fieldValue any, compareValue string) bool {
 	switch v := fieldValue.(type) {
+	case time.Time:
+		return v.Equal(timeOperand(compareValue))
 	case string:
 		return v == compareValue
 	case int64:
@@ -269,6 +283,8 @@ func compareEqual(fieldValue any, compareValue string) bool {
 
 func compareGreater(fieldValue any, compareValue string) bool {
 	switch v := fieldValue.(type) {
+	case time.Time:
+		return v.After(timeOperand(compareValue))
 	case int64:
 		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
 			return v > num
@@ -291,6 +307,8 @@ func compareGreater(fieldValue any, compareValue string) bool {
 
 func compareLess(fieldValue any, compareValue string) bool {
 	switch v := fieldValue.(type) {
+	case time.Time:
+		return v.Before(timeOperand(compareValue))
 	case int64:
 		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
 			return v < num

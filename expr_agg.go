@@ -85,7 +85,7 @@ func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) 
 	maps.Insert(compileEnv, records[0].All())
 
 	// Compile "every" expression with combined environment
-	everyProgram, err := expr.Compile(everyExpr, expr.Env(compileEnv), ExprFieldShadowing())
+	everyProgram, err := expr.Compile(everyExpr, expr.Env(compileEnv), ExprFieldShadowing(), ExprDate())
 	if err != nil {
 		return nil, fmt.Errorf("compiling every expression: %w", err)
 	}
@@ -107,7 +107,7 @@ func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) 
 	}
 
 	// 4. Compute final result
-	finalProgram, err := expr.Compile(finalExpr, expr.Env(stateMap), ExprFieldShadowing())
+	finalProgram, err := expr.Compile(finalExpr, expr.Env(stateMap), ExprFieldShadowing(), ExprDate())
 	if err != nil {
 		return nil, fmt.Errorf("compiling final expression: %w", err)
 	}
@@ -361,6 +361,7 @@ func compileAggExpr(expression string, fields map[string]bool, env map[string]an
 		expr.Env(env),
 		expr.Patch(patcher),
 		ExprFieldShadowing(),
+		ExprDate(),
 	)
 }
 

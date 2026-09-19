@@ -45,6 +45,12 @@ type pgLoad struct {
 
 var pgLoads []pgLoad
 
+// sqlTimeColumns names the columns a `cast -type F time` stage turned into
+// TIMESTAMPs during this assembly. The translator does not track column
+// types in general; this is the one fact a later bucket() needs to choose
+// the engine's time bucketing over the numeric-epoch arithmetic.
+var sqlTimeColumns = map[string]bool{}
+
 func parseSQLDialect(s string) (sqlDialect, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "duckdb":

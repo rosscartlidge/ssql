@@ -6,9 +6,10 @@ Last modified: 2026-09-19
 
 [Back to Index](./README.md)
 
-Status: **three slices shipped 2026-09-19** — the coercion fix, D2 and
-D4 (§6a), D3 (§6b), D5 (§6c); D1 with the ssql-owned `date()` and D6
-remain open (§6).
+Status: **four slices shipped 2026-09-19** — the coercion fix, D2 and
+D4 (§6a), D3 (§6b), D5 (§6c), D1 core with the ssql-owned `date()`
+(§6d). Open: D1's second unit (`resample` SQL over time columns,
+null-key visibility) and D6 (§6).
 Ross, 2026-09-14: "Have you actually
 checked that duckdb can import json/jsonl from ssql? and what about the
 reverse?" — then "I had assumed you needed to use the to/from commands
@@ -441,6 +442,79 @@ What the runs found:
   TODO; the codelab states the behaviour.
 - NULL round-trips both ways: JSON `null` ↔ absent field, empty CSV cell
   ↔ SQL NULL under `CSV` mode.
+
+## 6d. Shipped 2026-09-19: D1 core — `time` on the wire, ssql's `date()`
+
+Decision taken as recommended in §4: **B** (a wire type), **B1**
+explicit only (no reader auto-detection), **B2** one type (a DATE is
+midnight UTC; `timestamp`/`datetime`/`date` are aliases of `time`).
+
+- **One parser.** `ssql.ParseTime` (`time_parse.go`) is the single list
+  of layouts behind `GetOr[time.Time]`, the wire type, `cast` and
+  `date()`: RFC 3339, SQL datetime, zoneless `T` form, Postgres CSV
+  `timestamptz` (`…+00`), bare date, Unix seconds. `MustParseTime` is
+  the explicit-request form that panics naming the field.
+- **`date()` is ssql's**, registered with `expr.Function` — compile-time
+  binding, NOT an environment entry. That distinction matters: the env
+  route (how `bucket` is registered) would have been clobbered by, or
+  clobbered, a record field named `date`, the most likely column name
+  there is. `date(date)` works. The one side effect: the unknown-field
+  validator saw the `date` callee as a field reference once it stopped
+  being a BuiltinNode; `extractIdentifiers` now counts callee uses of
+  `ssql.ExprCompiledFunctions` separately. Neither the Go transpiler nor
+  the SQL translator handled `date()` before or now (record fallback;
+  loud SQL refusal).
+- **Wire type.** `FieldTypeTime` / `lib.TypeTime = "time"`;
+  `InferTypeString(time.Time)`; header-aware readers coerce a `time`
+  column with `ParseTime` and leave a value they cannot read as it was
+  (never a zero time); `from csv -type F time`; `TypedSchemaFromHeader`
+  maps it to `time.Time`.
+- **cast** in exec, record codegen (`ssql.MustParseTime`) and typed
+  (`castTimeExpression`), loud on a non-time in all three.
+- **where** on a time field compares instants (`Equal/After/Before`)
+  against an operand parsed by `ParseTime`; a non-time operand is an
+  error. Typed `where` had `eq`/`ne` only, against
+  `time.Parse(RFC3339, lit)` with the error dropped — a silently zero
+  time; the literal is now parsed at generation time and emitted as
+  `time.Unix(s, ns).UTC()`. Typed `sort` takes a time key (`UnixNano`,
+  or `Compare` in the multi-key comparator).
+- **SQL.** `mapTypeToSQL("time")` → TIMESTAMP; the assembler records
+  which columns a cast made times (`sqlTimeColumns` — the one column
+  type it tracks) so `bucket()` over them renders `time_bucket(INTERVAL,
+  col, TIMESTAMP '1970-01-01')` / `date_bin` with the epoch origin. The
+  engines default to 2000-01-03, which is a different grid for any width
+  that does not divide 10959 days.
+- **Rendering.** `formatValue` (CSV), the TSV writer, `displayValue`
+  (table/markdown), `convertRecordValue` (`to json`) and
+  `convertToString` (`GetOr[string]`) all render RFC 3339.
+
+**What the gate found** — four equivalence cases
+(`cast_time_where_sort`, `cast_time_mixed_forms_sort`,
+`cast_time_bucket_groupby`, `update_date_function_forms`), run on exec,
+the Go lanes, DuckDB, Postgres and DataFusion:
+
+1. typed `cast` had no time target; typed `where` no ordering on time;
+   typed `sort` refused it; the derived struct lacked the `time` import.
+2. Record-mode `update -set-expr` stored any non-scalar result with
+   `fmt.Sprintf("%v")` — so `now()` or `date(x)` in generated code had
+   ALWAYS produced `2026-01-01 00:00:00 +0000 UTC` where exec stored a
+   time. A pre-existing cross-lane bug, invisible until a case grouped
+   by a time.
+3. DuckDB's `CAST('…+00' AS TIMESTAMP)` shifts into the session time
+   zone, so the mixed-forms case is skipped there with that reason; its
+   golden is the oracle.
+4. The harness needed `equivNormaliseTimes`: `2026-01-20T00:00:00Z`,
+   `2026-01-20 00:00:00` and `2026-01-20` are one instant spelled three
+   ways; applied to every lane and the goldens alike.
+
+Tests: `time_parse_test.go` (forms, junk, `date()` incl. a field named
+`date`, rendering, bucket, field type), `TestTimeWireType` (header,
+cross-process round trip, sinks, loud failures), the four cases.
+
+**Second unit, not done:** `resample` over a time column in SQL (it
+still refuses string timestamps; a cast upstream now gives it a typed
+column to use); null-key visibility in the JSON parser (§6b residual);
+RFC 3339 auto-detection behind a flag, if ever wanted.
 
 Still open, in the recommended order: ~~D3~~ (shipped, §6b; was: sampled schema inference
 so a NULL-in-first-record field is not dropped — the remaining silent

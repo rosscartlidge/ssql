@@ -86,6 +86,7 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 		expr.Env(sampleEnv),
 		expr.AllowUndefinedVariables(),
 		ssql.ExprFieldShadowing(),
+		ssql.ExprDate(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("compile expression: %w", err)
@@ -157,21 +158,40 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 // extractIdentifiers walks the AST and returns all identifier names.
 func extractIdentifiers(node ast.Node) []string {
 	var ids []string
-	seen := make(map[string]bool)
-	ast.Walk(&node, &identifierVisitor{ids: &ids, seen: seen})
-	return ids
+	v := &identifierVisitor{ids: &ids, seen: make(map[string]bool), uses: map[string]int{}, calls: map[string]int{}}
+	ast.Walk(&node, v)
+	fields := ids[:0]
+	for _, name := range ids {
+		if v.uses[name] > v.calls[name] {
+			fields = append(fields, name)
+		}
+	}
+	return fields
 }
 
 type identifierVisitor struct {
 	ids  *[]string
 	seen map[string]bool
+	// uses counts identifier occurrences; calls counts those that were the
+	// callee of a compile-time function (date(x)). Walk is post-order, so
+	// the callee identifier is seen before its CallNode: a name is a field
+	// reference only if it occurs somewhere OTHER than as such a callee —
+	// `date(date)` references the field, `date(ts)` does not.
+	uses  map[string]int
+	calls map[string]int
 }
 
 func (v *identifierVisitor) Visit(node *ast.Node) {
 	// A bare identifier, or the $env["name"] form ExprFieldShadowing
 	// rewrites builtin-named fields (date, len, …) into — both are field
 	// references to validate against the first record.
+	if call, ok := (*node).(*ast.CallNode); ok {
+		if name, ok := ssql.ExprFieldName(call.Callee); ok && ssql.ExprCompiledFunctions[name] {
+			v.calls[name]++
+		}
+	}
 	if name, ok := ssql.ExprFieldName(*node); ok && name != "$env" {
+		v.uses[name]++
 		if !v.seen[name] {
 			v.seen[name] = true
 			*v.ids = append(*v.ids, name)

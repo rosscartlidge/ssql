@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`time` is a wire type** (DFC128 D1). `ssql cast -type ts time` makes
+  a column a time in every lane; the `_schema` header carries `"time"`,
+  so the next stage — another process — reads it back as a time, not a
+  string. On a time column `where -if ts ge 2026-02-01` compares
+  instants, `sort` is chronological whatever form each row was written
+  in, `bucket(ts, "1h")` returns a time, and expressions get the time's
+  methods (`ts.Year()`, `ts.Sub(other)`). Also `from csv FILE -type ts
+  time`. It travels as RFC 3339 and renders that way in every sink. A
+  value that is not a time, or a `where` operand that is not one, **stops
+  the pipeline** with a message naming it. `timestamp`, `datetime` and
+  `date` are aliases: one type, a bare date being midnight UTC.
+  Readers do not auto-detect times; the type is explicit, like every
+  other cast.
+- **ssql's own `date()`**, replacing expr-lang's. It reads every form
+  `cast` and `GetOr[time.Time]` read — so Postgres's zoneless JSON
+  timestamp (`2026-01-02T10:30:00`) and CSV `timestamptz`
+  (`2026-01-01 23:30:00+00`), which the old one rejected, now parse —
+  and keeps `date(str, layout[, zone])`. It is bound at compile time, so
+  a column named `date` still works: `date(date)`.
+- Library: `ssql.ParseTime`, `ssql.MustParseTime`, `ssql.FieldTypeTime`,
+  `ssql.ExprDate()`, `ssql.ExprCompiledFunctions`.
+- `generate sql`: `cast … time` is `CAST(… AS TIMESTAMP)`, and `bucket()`
+  over such a column is the engine's bucketing pinned to the Unix epoch
+  (`time_bucket`; `date_bin` on Postgres and DataFusion) so it lands on
+  the same grid as every other lane.
+- Typed mode: `cast` to and from `time.Time`; `where` gained all six
+  comparisons on a time field (it had `eq`/`ne` only, against a literal
+  that silently became the zero time when it did not parse — the operand
+  is now validated at generation time); `sort` accepts a time field.
+
 ### Changed
 - Codelab §2 gains **"Coming back the other way"**: reading DuckDB's
   `COPY … TO` (one object per line, or `ARRAY true`) and `duckdb -json`,
@@ -15,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and column order (DFC128 D5).
 
 ### Fixed
+- **A time stored by generated code became unreadable text.** Record-mode
+  `update -set-expr t 'now()'` (or `date(…)`) stored Go's `Time.String()`
+  form where the interpreted pipeline stored a time; `GetOr(r, f, "")` of
+  a time, the TSV writer, and the table/markdown/JSON sinks printed the
+  same debug form. All render RFC 3339 now. Found by the new time
+  equivalence cases.
 - **CSV on a pipe, and TSV always, came out with columns in alphabetical
   order.** `psql -c "\copy … TO STDOUT CSV HEADER" | ssql from csv -`
   turned `id,note,amount` into `amount,id,note`: the reader's schema is

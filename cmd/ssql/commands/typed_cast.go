@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -64,12 +65,18 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 
 	// Build the merge function body.
 	var assigns []string
+	var timeImports []string
 	usedStrconv := false
 	for _, f := range in.Fields {
 		out := f
 		cf, isCast := resolvedCasts[strings.ToLower(f.Name)]
 		if !isCast {
 			assigns = append(assigns, fmt.Sprintf("%s: r.%s", out.GoName, out.GoName))
+			continue
+		}
+		if code, imps, ok := castTimeExpression("r."+f.GoName, f.Name, f.GoType, cf.newGoT); ok {
+			timeImports = append(timeImports, imps...)
+			assigns = append(assigns, fmt.Sprintf("%s: %s", out.GoName, code))
 			continue
 		}
 		expr, needsStrconv, err := castExpression("r."+f.GoName, f.GoType, cf.newGoT)
@@ -86,6 +93,14 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	if usedStrconv {
 		imports = append(imports, "strconv")
+	}
+	if schemaUsesTime(derived) {
+		timeImports = append(timeImports, "time") // the derived struct names time.Time
+	}
+	for _, imp := range timeImports {
+		if !slices.Contains(imports, imp) {
+			imports = append(imports, imp)
+		}
 	}
 
 	code := fmt.Sprintf(`casted := typed.Select(func(r %s) %s {
@@ -119,6 +134,8 @@ func castTargetGoType(t ssql.FieldType) (string, error) {
 		return "float64", nil
 	case ssql.FieldTypeBool:
 		return "bool", nil
+	case ssql.FieldTypeTime:
+		return "time.Time", nil
 	default:
 		return "", fmt.Errorf("typed cast does not support FieldType %v", t)
 	}
@@ -186,4 +203,19 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		}
 	}
 	return "", false, fmt.Errorf("conversion from %s to %s not implemented", from, to)
+}
+
+// castTimeExpression is castExpression's time.Time leg, kept apart because
+// it needs the ssql and time imports rather than strconv: a string or
+// int64 column parses with ssql.MustParseTime (the one parser every lane
+// shares; a value that is not a time stops the program, as in exec), and
+// a time column renders as RFC 3339 when cast to string.
+func castTimeExpression(expr, field, from, to string) (code string, imports []string, ok bool) {
+	switch {
+	case to == "time.Time" && (from == "string" || from == "int64"):
+		return fmt.Sprintf("ssql.MustParseTime(%s, %q)", expr, field), []string{"github.com/rosscartlidge/ssql/v4"}, true
+	case to == "string" && from == "time.Time":
+		return fmt.Sprintf("%s.Format(time.RFC3339Nano)", expr), []string{"time"}, true
+	}
+	return "", nil, false
 }

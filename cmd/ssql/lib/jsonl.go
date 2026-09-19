@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rosscartlidge/ssql/v4"
 )
@@ -131,6 +132,14 @@ func inferJSONFieldType(value any) ssql.FieldType {
 // Handles both json.Unmarshal types (float64 for all numbers) and fast parser types (int64/float64)
 func setValueWithType(record ssql.MutableRecord, key string, v any, targetType ssql.FieldType) ssql.MutableRecord {
 	switch targetType {
+	case ssql.FieldTypeTime:
+		// RFC 3339 on the wire → time.Time. A value the header calls a
+		// time but ParseTime cannot read keeps its own type: never a zero
+		// time in place of data.
+		if t, ok := ssql.ParseTime(v); ok {
+			return record.Time(key, t)
+		}
+		return setValueFromJSON(record, key, v)
 	case ssql.FieldTypeFloat:
 		switch val := v.(type) {
 		case float64:
@@ -218,6 +227,9 @@ func convertRecordValue(v any) any {
 	case int64, float64, bool, string, nil:
 		// Canonical types pass through
 		return val
+	case time.Time:
+		// RFC 3339, as `to jsonl` writes it (DFC128 D1)
+		return val.Format(time.RFC3339Nano)
 	case []any:
 		// Convert slice elements recursively (for Collect aggregation results)
 		result := make([]any, len(val))

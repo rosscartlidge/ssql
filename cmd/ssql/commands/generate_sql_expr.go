@@ -8,6 +8,7 @@ import (
 
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // exprToSQL translates an ssql expression (expr-lang, as used by -if-expr and
@@ -262,6 +263,21 @@ func bucketToSQL(tsNode, widthNode ast.Node) (string, error) {
 	ts, err := exprNodeToSQL(tsNode)
 	if err != nil {
 		return "", err
+	}
+	// A column an upstream `cast -type F time` made a TIMESTAMP (DFC128
+	// D1): the engine's own bucketing, pinned to the Unix epoch so it lands
+	// on the grid exprfn.SnapToBucket uses (the engines default to
+	// 2000-01-03, which only coincides for widths that divide 10959 days).
+	if name, ok := ssql.ExprFieldName(tsNode); ok && sqlTimeColumns[name] {
+		if int64(every)%int64(time.Microsecond) != 0 {
+			return "", fmt.Errorf("bucket(): a width finer than a microsecond has no SQL translation over a time column")
+		}
+		interval := fmt.Sprintf("INTERVAL '%d microseconds'", int64(every/time.Microsecond))
+		fn := "time_bucket" // DuckDB
+		if sqlDialectCur != dialectDuckDB {
+			fn = "date_bin" // Postgres, DataFusion
+		}
+		return fmt.Sprintf("%s(%s, %s, TIMESTAMP '1970-01-01 00:00:00')", fn, interval, ts), nil
 	}
 	// width in each unit; an integer literal when it divides evenly so an
 	// integer column stays integer (DuckDB's % keeps the operand type).

@@ -246,6 +246,7 @@ func assembleSQL(input io.Reader) (string, error) {
 	}
 
 	q := &sqlQuery{}
+	sqlTimeColumns = map[string]bool{} // per assembly
 
 	// Collect func fragments (subprocess sources for joins) and build subqueries
 	var funcFrags []*lib.CodeFragment
@@ -1594,6 +1595,13 @@ func translateCast(q *sqlQuery, args []string) error {
 		if args[i] == "-type" && i+2 < len(args) {
 			field, typeName := args[i+1], args[i+2]
 			sqlType := mapTypeToSQL(typeName)
+			if ft, err := ssql.ParseFieldType(typeName); err == nil {
+				if ft == ssql.FieldTypeTime {
+					sqlTimeColumns[field] = true
+				} else {
+					delete(sqlTimeColumns, field)
+				}
+			}
 			replacements = append(replacements, sqlPair{field, fmt.Sprintf("CAST(%s AS %s)", quoteIdent(field), sqlType)})
 			i += 2
 		}
@@ -1795,10 +1803,10 @@ func mapTypeToSQL(typeName string) string {
 		return sqlStringType()
 	case "bool", "boolean":
 		return "BOOLEAN"
+	case "time", "timestamp", "datetime":
+		return "TIMESTAMP"
 	case "date":
 		return "DATE"
-	case "timestamp", "datetime":
-		return "TIMESTAMP"
 	default:
 		return strings.ToUpper(typeName)
 	}

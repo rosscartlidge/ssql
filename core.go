@@ -1009,6 +1009,11 @@ func convertToString(val any) (string, bool) {
 		return v, true
 	case []byte:
 		return string(v), true
+	case time.Time:
+		// RFC 3339, the wire form, so GetOr(r, f, "") of a time reads back
+		// with ParseTime — %v would give Go's unparseable Time.String()
+		// (generated group-by reads its keys this way; DFC128 D1).
+		return v.Format(time.RFC3339Nano), true
 	default:
 		return fmt.Sprintf("%v", val), true
 	}
@@ -1030,35 +1035,7 @@ func convertToBool(val any) (bool, bool) {
 	}
 }
 
-func convertToTime(val any) (time.Time, bool) {
-	switch v := val.(type) {
-	case time.Time:
-		return v, true
-	case string:
-		// Try RFC3339 first (most common for APIs)
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			return t, true
-		}
-		// Try standard SQL datetime format
-		if t, err := time.Parse("2006-01-02 15:04:05", v); err == nil {
-			return t, true
-		}
-		// Try RFC3339 without timezone (assume UTC)
-		if t, err := time.Parse("2006-01-02T15:04:05", v); err == nil {
-			return t.UTC(), true
-		}
-		// A plain date is midnight UTC (DuckDB/Postgres DATE exports, CSV dates)
-		if t, err := time.Parse("2006-01-02", v); err == nil {
-			return t, true
-		}
-		return time.Time{}, false
-	case int64:
-		// Unix timestamp - always UTC
-		return time.Unix(v, 0).UTC(), true
-	default:
-		return time.Time{}, false
-	}
-}
+func convertToTime(val any) (time.Time, bool) { return ParseTime(val) }
 
 // ============================================================================
 // RECORD UTILITY FUNCTIONS
@@ -1474,6 +1451,13 @@ func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType
 		// Store value at schema index (if field is in schema), coerced to
 		// the declared wire type where JSON's number syntax lost it.
 		if idx := schema.Index(fieldName); idx >= 0 && value != nil {
+			if idx < len(types) && types[idx] == FieldTypeTime {
+				// A `time` column is RFC 3339 on the wire; a value that does
+				// not parse keeps its own type rather than become a zero time.
+				if t, ok := ParseTime(value); ok {
+					value = t
+				}
+			}
 			if idx < len(types) && types[idx] == FieldTypeFloat {
 				if i, ok := value.(int64); ok {
 					value = float64(i)

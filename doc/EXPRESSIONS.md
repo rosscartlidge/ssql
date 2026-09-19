@@ -256,10 +256,11 @@ ssql update -set-expr payload 'toJSON({"name": name, "age": age})'
 | Function | Description | Example |
 |----------|-------------|---------|
 | `now()` | Current date/time | `now()` → `2026-02-25T10:30:00+11:00` |
-| `date(str)` | Parse date string | `date("2026-01-15")` |
+| `date(v)` | Parse a time: RFC 3339, `2026-01-15 10:30:00`, `2026-01-15T10:30:00` (UTC), `2026-01-15 10:30:00+00`, a bare date (midnight UTC), Unix seconds. The same forms `cast -type F time` and `GetOr[time.Time]` read — ssql's own function, not expr-lang's | `date("2026-01-15")` |
+| `date(str, layout[, zone])` | Parse with a Go layout, optionally in a named zone | `date("15/01/2026", "02/01/2006")` |
 | `duration(str)` | Parse duration (ns, us, ms, s, m, h) | `duration("1h30m")` → `1h30m0s` |
 | `timezone(str)` | Get timezone location | `timezone("America/New_York")` |
-| `bucket(ts, "5m")` | Snap a timestamp down to an epoch-aligned bucket (int/float epochs with the unit read from magnitude, or RFC 3339 strings) | `bucket(ts, "1m")` → `1699999980` |
+| `bucket(ts, "5m")` | Snap a timestamp down to an epoch-aligned bucket (int/float epochs with the unit read from magnitude, RFC 3339 strings, or a `time` column — time in, time out) | `bucket(ts, "1m")` → `1699999980` |
 
 `bucket` is the downsampling primitive: `update -set-expr minute
 'bucket(ts, "1m")' | group-by minute -avg temp t` averages per minute.
@@ -275,8 +276,16 @@ interpreter-only escape hatch (DFC129).
 The flag form `update -set-bucket minute ts 1m` is the same operation
 (Tab completes the fields); use the function when the bucket is part of
 a larger expression. In `generate sql` it becomes a `CASE` that detects
-the epoch unit by magnitude and snaps with `%`; string timestamps have
-no SQL translation.
+the epoch unit by magnitude and snaps with `%`; over a column made a time
+by `cast -type F time` it becomes the engine's own bucketing pinned to
+the Unix epoch (`time_bucket`, or `date_bin` on Postgres and DataFusion);
+string timestamps have no SQL translation.
+
+A field that is a `time` (after `cast -type F time`, or read from a
+header that says so) is a Go `time.Time` in expressions: `ts.Year()`,
+`ts.Hour()`, `ts.Weekday()`, `ts.Sub(other).Hours()`, `ts < date("2026-02-01")`.
+A record field may itself be called `date`: `date(date)` is the function
+applied to the field.
 
 **Examples:**
 ```bash

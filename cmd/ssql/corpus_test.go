@@ -116,6 +116,10 @@ func corpusData(t *testing.T) string {
 			"precision.csv":          corpusPrecisionCSV,
 			"epochs_ms.csv":          corpusEpochsMsCSV,
 			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
+			// One timestamp column in the forms other tools write (DFC128
+			// D1): SQL datetime, Postgres zoneless JSON, a bare DATE, and
+			// Postgres CSV timestamptz. Chronological order: 2, 4, 3, 1.
+			"mixed_times.csv": "id,ts\n1,2026-03-01 00:00:00\n2,2026-01-01T05:00:00\n3,2026-02-01\n4,2026-01-31 23:30:00+00\n",
 			// A SQL export with nullable columns: NULL in the FIRST row,
 			// values later; an int that widens to float (DFC128 D3).
 			"null_first.jsonl": "{\"id\":1,\"note\":null,\"score\":null}\n{\"id\":2,\"note\":\"b\",\"score\":4}\n{\"id\":3,\"note\":\"c\",\"score\":2.5}\n",

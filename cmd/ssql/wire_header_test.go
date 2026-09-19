@@ -177,9 +177,9 @@ func TestDelimitedColumnOrderFromPipe(t *testing.T) {
 	os.WriteFile(tsvFile, []byte("zeta\talpha\tmiddle\n1\t2\t3\n"), 0o644)
 	for script, want := range map[string]string{
 		"cat " + csvFile + " | " + bin + " from csv - | " + bin + " to csv": "zeta,alpha,\"mid,dle\"\n1,2,3\n",
-		bin + " from " + csvFile + " | " + bin + " to csv":                   "zeta,alpha,\"mid,dle\"\n1,2,3\n",
+		bin + " from " + csvFile + " | " + bin + " to csv":                  "zeta,alpha,\"mid,dle\"\n1,2,3\n",
 		"cat " + tsvFile + " | " + bin + " from tsv - | " + bin + " to csv": "zeta,alpha,middle\n1,2,3\n",
-		bin + " from " + tsvFile + " | " + bin + " to csv":                   "zeta,alpha,middle\n1,2,3\n",
+		bin + " from " + tsvFile + " | " + bin + " to csv":                  "zeta,alpha,middle\n1,2,3\n",
 		// a header that arrives before the data does (live stream)
 		"(printf 'zeta,alpha\\n'; sleep 0.3; printf '1,2\\n') | " + bin + " from csv - | " + bin + " to csv": "zeta,alpha\n1,2\n",
 	} {
@@ -189,6 +189,56 @@ func TestDelimitedColumnOrderFromPipe(t *testing.T) {
 		}
 		if string(out) != want {
 			t.Errorf("%s\n got: %q\nwant: %q", script, out, want)
+		}
+	}
+}
+
+// TestTimeWireType (DFC128 D1): `cast -type F time` makes a time column,
+// the `_schema` header says so, the NEXT process reads it back as a time
+// (methods work, where compares instants, sort is chronological), every
+// sink renders RFC 3339, and a value or operand that is not a time stops
+// the pipeline.
+func TestTimeWireType(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := corpusBin(t)
+	f := filepath.Join(t.TempDir(), "t.csv")
+	os.WriteFile(f, []byte("id,ts\n1,2026-03-01 00:00:00\n2,2026-01-01T05:00:00\n3,2026-02-01\n4,2026-01-31 23:30:00+00\n"), 0o644)
+	cast := bin + " from " + f + " | " + bin + " cast -type ts time"
+	run := func(script string) (string, error) {
+		out, err := exec.Command("bash", "-c", "set -o pipefail; "+script).CombinedOutput()
+		return string(out), err
+	}
+
+	out, err := run(cast + " | head -1")
+	if err != nil || !strings.Contains(out, `"ts":"time"`) {
+		t.Fatalf("header must carry the time type: %v\n%s", err, out)
+	}
+	for script, want := range map[string]string{
+		cast + " | " + bin + " sort ts | " + bin + " include id | " + bin + " to csv":                                          "id\n2\n4\n3\n1\n",
+		cast + " | " + bin + " where -if ts ge 2026-02-01 | " + bin + " sort ts | " + bin + " include id | " + bin + " to csv": "id\n3\n1\n",
+		cast + " | " + bin + " update -set-expr h 'ts.Hour()' | " + bin + " where -if id eq 4 | " + bin + " to csv":            "id,ts,h\n4,2026-01-31T23:30:00Z,23\n",
+		cast + " | " + bin + " where -if id eq 2 | " + bin + " to tsv":                                                         "id\tts\n2\t2026-01-01T05:00:00Z\n",
+		bin + " from csv " + f + " -type ts time | " + bin + " where -if id eq 3 | " + bin + " to csv":                         "id,ts\n3,2026-02-01T00:00:00Z\n",
+	} {
+		if out, err := run(script); err != nil || out != want {
+			t.Errorf("%s\n got: %q (%v)\nwant: %q", script, out, err, want)
+		}
+	}
+	for _, sink := range []string{"to table", "to markdown", "to json", "to jsonl"} {
+		out, err := run(cast + " | " + bin + " where -if id eq 1 | " + bin + " " + sink)
+		if err != nil || !strings.Contains(out, "2026-03-01T00:00:00Z") || strings.Contains(out, "+0000 UTC") {
+			t.Errorf("%s must render RFC 3339: %v\n%s", sink, err, out)
+		}
+	}
+	for script, want := range map[string]string{
+		bin + " from " + f + " | " + bin + " update -set ts junk | " + bin + " cast -type ts time": `field "ts" value junk is not a time`,
+		cast + " | " + bin + " where -if ts gt banana":                                             `the field is a time but "banana" is not`,
+	} {
+		out, err := run(script)
+		if err == nil || !strings.Contains(out, want) {
+			t.Errorf("%s must fail with %q, got %v\n%s", script, want, err, out)
 		}
 	}
 }

@@ -455,17 +455,23 @@ func typedWhereCondition(f lib.TypedSchemaField, op, value string) (exprGo, erro
 	case "bool":
 		lhs = exprGo{Src: field, Type: exprGoBool}
 	case "time.Time":
-		// Narrow legacy support: equality against a parsed literal. Ordering
-		// operators never compiled for time.Time and remain unsupported.
-		if op == "eq" || op == "ne" {
-			lit, err := typedLiteral(f.GoType, value)
-			if err != nil {
-				return exprGo{}, fmt.Errorf("ssql generate go -typed: where %s %s %q: %w", f.Name, op, value, err)
-			}
-			sym := map[string]string{"eq": "==", "ne": "!="}[op]
-			return exprGo{Src: fmt.Sprintf("(%s %s %s)", field, sym, lit), Type: exprGoBool}, nil
+		// The same comparisons exec's compareEqual/Greater/Less make for a
+		// `time` field (DFC128 D1): Equal/After/Before against the operand
+		// parsed by the shared ssql.ParseTime — at GENERATION time, so an
+		// operand that is not a time is an error here, never a zero time.
+		lit, err := typedLiteral(f.GoType, value)
+		if err != nil {
+			return exprGo{}, fmt.Errorf("ssql generate go -typed: where %s %s %q: %w", f.Name, op, value, err)
 		}
-		return exprGo{}, fmt.Errorf("ssql generate go -typed: operator %q not supported for time.Time field %s", op, f.Name)
+		form, ok := map[string]string{
+			"eq": "%s.Equal(%s)", "ne": "!%s.Equal(%s)",
+			"gt": "%s.After(%s)", "ge": "!%s.Before(%s)",
+			"lt": "%s.Before(%s)", "le": "!%s.After(%s)",
+		}[op]
+		if !ok {
+			return exprGo{}, fmt.Errorf("ssql generate go -typed: operator %q not supported for time.Time field %s", op, f.Name)
+		}
+		return exprGo{Src: "(" + fmt.Sprintf(form, field, lit) + ")", Type: exprGoBool, Imports: []string{"time"}}, nil
 	default:
 		return exprGo{}, fmt.Errorf("ssql generate go -typed: where on %s field %s not supported", f.GoType, f.Name)
 	}
@@ -497,12 +503,13 @@ func typedLiteral(goType, value string) (string, error) {
 		}
 		return value, nil
 	case "time.Time":
-		// Compare against a parsed RFC3339 literal.
-		if _, err := strconv.Unquote(`"` + value + `"`); err != nil {
-			// strconv.Unquote validation; just pass value through if it round-trips
-			_ = err
+		// Parsed now, emitted as an exact instant: no runtime parse, and no
+		// silently-zero time when the operand is not one.
+		t, ok := ssql.ParseTime(value)
+		if !ok {
+			return "", fmt.Errorf("the field is a time but %q is not (use a form like 2026-01-31 or 2026-01-31T10:30:00Z)", value)
 		}
-		return fmt.Sprintf("func() time.Time { t, _ := time.Parse(time.RFC3339, %q); return t }()", value), nil
+		return fmt.Sprintf("time.Unix(%d, %d).UTC()", t.Unix(), t.Nanosecond()), nil
 	default:
 		return "", fmt.Errorf("typed where: unsupported field type %s", goType)
 	}

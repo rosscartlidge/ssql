@@ -69,6 +69,8 @@ func (o TypeOptions) goTypeFor(column string) (string, bool) {
 		return "float64", true
 	case "bool":
 		return "bool", true
+	case "time":
+		return "time.Time", true
 	}
 	return "", false
 }
@@ -391,6 +393,8 @@ func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, er
 			goType = "bool"
 		case "string":
 			goType = "string"
+		case "time":
+			goType = "time.Time"
 		default:
 			return nil, "", fmt.Errorf(
 				"typed schema from header: field %q has wire type %q — cannot map to a Go type (run with SSQL_MODE=record)",

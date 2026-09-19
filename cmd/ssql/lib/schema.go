@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/rosscartlidge/ssql/v4"
 )
@@ -18,6 +19,7 @@ const (
 	TypeFloat  = "float"
 	TypeBool   = "bool"
 	TypeJSON   = "json" // arrays, nested objects
+	TypeTime   = "time" // time.Time, RFC 3339 on the wire (DFC128 D1)
 )
 
 // Schema represents the structure of JSONL records with ordered fields and types.
@@ -269,6 +271,8 @@ func InferTypeString(v any) string {
 		return TypeBool
 	case string:
 		return TypeString
+	case time.Time:
+		return TypeTime
 	case []any, ssql.Record, map[string]any:
 		return TypeJSON
 	default:
@@ -287,6 +291,8 @@ func FieldTypeToSchemaType(ft ssql.FieldType) string {
 		return TypeBool
 	case ssql.FieldTypeString:
 		return TypeString
+	case ssql.FieldTypeTime:
+		return TypeTime
 	default:
 		return TypeString
 	}
@@ -303,6 +309,8 @@ func SchemaTypeToFieldType(typ string) ssql.FieldType {
 		return ssql.FieldTypeBool
 	case TypeString:
 		return ssql.FieldTypeString
+	case TypeTime:
+		return ssql.FieldTypeTime
 	case TypeJSON:
 		return ssql.FieldTypeAuto
 	default:

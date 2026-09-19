@@ -186,8 +186,13 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 			if fields[0].desc {
 				fn = "typed.SortByDesc"
 			}
-			code = fmt.Sprintf("%s := %s(func(r %s) %s { return r.%s })(%s)",
-				outputVar, fn, prevSchema.TypeName, fields[0].f.GoType, fields[0].f.GoName, inputVar)
+			keyType, keyExpr := fields[0].f.GoType, "r."+fields[0].f.GoName
+			if keyType == "time.Time" {
+				// time.Time is not cmp.Ordered; its instant is.
+				keyType, keyExpr = "int64", keyExpr+".UnixNano()"
+			}
+			code = fmt.Sprintf("%s := %s(func(r %s) %s { return %s })(%s)",
+				outputVar, fn, prevSchema.TypeName, keyType, keyExpr, inputVar)
 		} else {
 			// Build the comparator: each field contributes a < / > /
 			// 0 chain. Descending fields swap a/b.
@@ -199,6 +204,10 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 				}
 				if i > 0 {
 					cmpBody.WriteString("\n\t\t")
+				}
+				if sf.f.GoType == "time.Time" {
+					cmpBody.WriteString(fmt.Sprintf(`if c := %s.Compare(%s); c != 0 { return c }`, lhs, rhs))
+					continue
 				}
 				cmpBody.WriteString(fmt.Sprintf(`if %s < %s { return -1 }; if %s > %s { return 1 }`, lhs, rhs, lhs, rhs))
 			}
@@ -237,7 +246,7 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 // SortByFunc that takes a cmp closure.
 func isSortableGoType(t string) bool {
 	switch t {
-	case "string", "int", "int32", "int64", "uint64", "float32", "float64":
+	case "string", "int", "int32", "int64", "uint64", "float32", "float64", "time.Time":
 		return true
 	}
 	return false

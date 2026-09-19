@@ -101,6 +101,14 @@ func parseBoolCell(s string) (any, error) {
 	return nil, errCellType
 }
 
+// parseTimeCell parses a declared `time` column (from csv -type F time).
+func parseTimeCell(s string) (any, error) {
+	if t, ok := ParseTime(strings.TrimSpace(s)); ok {
+		return t, nil
+	}
+	return nil, errCellType
+}
+
 // parserForType returns the cell parser for a FieldType.
 func parserForType(ft FieldType) cellParser {
 	switch ft {
@@ -110,6 +118,8 @@ func parserForType(ft FieldType) cellParser {
 		return parseFloatCell
 	case FieldTypeBool:
 		return parseBoolCell
+	case FieldTypeTime:
+		return parseTimeCell
 	default:
 		return parseStringCell
 	}

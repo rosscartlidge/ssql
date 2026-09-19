@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // jsonBufferPool provides reusable buffers for fast JSON encoding
@@ -54,6 +55,7 @@ const (
 	FieldTypeInt                     // Parse as int64
 	FieldTypeFloat                   // Parse as float64
 	FieldTypeBool                    // Parse as bool
+	FieldTypeTime                    // Parse as time.Time (ParseTime's forms); the `time` wire type (DFC128 D1)
 )
 
 // DefaultCSVConfig provides sensible defaults for CSV processing
@@ -83,8 +85,12 @@ func ParseFieldType(s string) (FieldType, error) {
 		return FieldTypeFloat, nil
 	case "bool", "boolean":
 		return FieldTypeBool, nil
+	case "time", "timestamp", "datetime", "date":
+		// One type: Go has no separate date, and a DATE is midnight UTC
+		// (what `from parquet` already does for DuckDB DATE columns).
+		return FieldTypeTime, nil
 	default:
-		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, float, bool)", s)
+		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, float, bool, time)", s)
 	}
 }
 
@@ -99,6 +105,8 @@ func (ft FieldType) String() string {
 		return "float"
 	case FieldTypeBool:
 		return "bool"
+	case FieldTypeTime:
+		return "time"
 	default:
 		return "auto"
 	}
@@ -435,6 +443,13 @@ func inferJSONFieldType(value any) FieldType {
 // coerceToType converts a value to the target FieldType
 func coerceToType(value any, targetType FieldType) any {
 	switch targetType {
+	case FieldTypeTime:
+		// Unparsable input keeps its value: a header that says `time`
+		// must not turn a string it cannot read into a zero time.
+		if t, ok := ParseTime(value); ok {
+			return t
+		}
+		return value
 	case FieldTypeFloat:
 		switch v := value.(type) {
 		case float64:
@@ -1279,6 +1294,16 @@ func parseValue(s string) any {
 	return s
 }
 
+// displayValue renders a value for the human-facing sinks (table,
+// markdown): %v, except a time, which is RFC 3339 like everywhere else —
+// Go's Time.String() ("2026-01-02 10:30:00 +0000 UTC") is a debug form.
+func displayValue(value any) string {
+	if t, ok := value.(time.Time); ok {
+		return t.Format(time.RFC3339Nano)
+	}
+	return fmt.Sprintf("%v", value)
+}
+
 // formatValue converts a value to string for output. A missing value
 // (nil slot — DFC124) renders as an empty cell, never "<nil>".
 func formatValue(value any) string {
@@ -1302,6 +1327,10 @@ func formatValue(value any) string {
 		return strconv.FormatFloat(v, 'g', -1, 64)
 	case bool:
 		return strconv.FormatBool(v)
+	case time.Time:
+		// RFC 3339, the wire form — never Go's Time.String(), which
+		// nothing parses back (DFC128 F3).
+		return v.Format(time.RFC3339Nano)
 	case []any:
 		// Format slice as comma-separated values (for Collect aggregation results)
 		var stringValues []string
@@ -1606,7 +1635,7 @@ func WriteMarkdownTo(w io.Writer, records iter.Seq[Record], fieldOrder []string,
 		for _, col := range columns {
 			cell := ""
 			if v, ok := values[col]; ok {
-				cell = esc(fmt.Sprintf("%v", v))
+				cell = esc(displayValue(v))
 			}
 			b.WriteString(" " + cell + " |")
 		}
@@ -1647,7 +1676,7 @@ func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth in
 
 	for _, record := range allRecords {
 		for field, value := range record.All() {
-			strValue := fmt.Sprintf("%v", value)
+			strValue := displayValue(value)
 			if len(strValue) > colWidths[field] {
 				colWidths[field] = capWidth(len(strValue), maxWidth)
 			}
@@ -1686,7 +1715,7 @@ func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth in
 			// Get value as any type
 			var strValue string
 			if value, exists := Get[any](record, col); exists {
-				strValue = fmt.Sprintf("%v", value)
+				strValue = displayValue(value)
 			} else {
 				strValue = ""
 			}
@@ -1865,7 +1894,7 @@ func calculateColumnWidths(columns []string, records []Record, maxWidth int) map
 	}
 	for _, record := range records {
 		for field, value := range record.All() {
-			strValue := fmt.Sprintf("%v", value)
+			strValue := displayValue(value)
 			if len(strValue) > colWidths[field] {
 				colWidths[field] = capWidth(len(strValue), maxWidth)
 			}
@@ -1887,7 +1916,7 @@ func calculateColumnWidthsAndAlignment(columns []string, records []Record, maxWi
 	}
 	for _, record := range records {
 		for field, value := range record.All() {
-			strValue := fmt.Sprintf("%v", value)
+			strValue := displayValue(value)
 			if len(strValue) > colWidths[field] {
 				colWidths[field] = capWidth(len(strValue), maxWidth)
 			}
@@ -1932,7 +1961,7 @@ func printTableRow(w io.Writer, columns []string, colWidths map[string]int, colR
 		}
 		var strValue string
 		if value, exists := Get[any](record, col); exists {
-			strValue = fmt.Sprintf("%v", value)
+			strValue = displayValue(value)
 		}
 		strValue = truncateCell(strValue, maxWidth)
 		if colRight[col] {

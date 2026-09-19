@@ -89,6 +89,10 @@ func coerceValue(v any, ft FieldType) (any, error) {
 		if b, ok := v.(bool); ok {
 			return b, nil
 		}
+	case FieldTypeTime:
+		if t, ok := ParseTime(v); ok {
+			return t, nil
+		}
 	}
 	return nil, errCellType
 }

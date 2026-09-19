@@ -59,7 +59,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `include F1 F2...` | Keep only named fields | (positional arguments) |
 | `exclude F1 F2...` | Remove named fields | (positional arguments) |
 | `rename` | Rename fields | `-as OLD NEW` |
-| `cast` | Convert field types | `-field F -type TYPE` |
+| `cast` | Convert field types | `-type FIELD TYPE` (string, int, float, bool, time) |
 | `join FILE` | Join with another file | `-using F`, `-on LEFT RIGHT`, `-as OLD NEW`, `-` clause separator |
 | `union` | Combine with stdin streams | `-file F` (JSONL), `-all` (keep duplicates, default removes them) |
 | `fft` | Fast Fourier Transform | `-field F`, `-rate N`, `-phase` |

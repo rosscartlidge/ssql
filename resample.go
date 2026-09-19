@@ -482,6 +482,9 @@ func BucketValue(v any, every time.Duration) (any, error) {
 		return exprfn.BucketInt64(x, int64(every)), nil
 	case float64:
 		return exprfn.BucketFloat64(x, int64(every)), nil
+	case time.Time:
+		// A `time` column (DFC128 D1): time in, time out, same grid.
+		return time.Unix(0, SnapToBucket(x.UnixNano(), every)).UTC(), nil
 	case string:
 		for _, l := range tsStringLayouts {
 			if t, err := time.Parse(l, x); err == nil {

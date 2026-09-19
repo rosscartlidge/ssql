@@ -41,6 +41,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // corpusShuffledCSV: distinct city + pop, in neither city- nor pop-sorted
@@ -388,13 +391,42 @@ func equivParse(t *testing.T, lane, raw string) []map[string]any {
 	return recs
 }
 
+// equivNormaliseTimes renders every string that IS a time (in any form
+// ssql.ParseTime reads) as RFC 3339 UTC. A `time` column is an instant;
+// ssql writes it as 2026-01-20T00:00:00Z, DuckDB's JSON as "2026-01-20
+// 00:00:00", a DATE as "2026-01-20" — three spellings of one value. Applied
+// to every lane and to the goldens alike, so it can only hide a
+// representation difference, never a different instant (DFC128 D1).
+func equivNormaliseTimes(m map[string]any) map[string]any {
+	var out map[string]any
+	for k, v := range m {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		if t, ok := ssql.ParseTime(s); ok {
+			if out == nil {
+				out = make(map[string]any, len(m))
+				for k2, v2 := range m {
+					out[k2] = v2
+				}
+			}
+			out[k] = t.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	if out == nil {
+		return m
+	}
+	return out
+}
+
 // equivCanon renders records as canonical strings: json.Marshal sorts map keys,
 // so column order is normalised. For unordered output the rows are sorted so
 // two lanes with different row order still compare equal.
 func equivCanon(recs []map[string]any, ordered bool) []string {
 	out := make([]string, len(recs))
 	for i, m := range recs {
-		b, _ := json.Marshal(m)
+		b, _ := json.Marshal(equivNormaliseTimes(m))
 		out[i] = string(b)
 	}
 	if !ordered {
@@ -898,6 +930,48 @@ var equivCases = []EquivCase{
 		Name:     "jsonl_typed_where_groupby",
 		Pipeline: `{{.bin}} from jsonl {{.data}}/employees.jsonl | {{.bin}} where -if age gt 30 | {{.bin}} group-by dept -count n -sum salary total`,
 		Ordered:  false,
+	},
+	{
+		// DFC128 D1: `time` is a wire type. cast makes the column a time in
+		// every lane; where compares it as a time (the operand is a DATE
+		// form, the column a timestamp) and sort orders it chronologically.
+		Name:     "cast_time_where_sort",
+		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv | {{.bin}} cast -type date time | {{.bin}} where -if date gt 2026-01-10 | {{.bin}} sort date | {{.bin}} include id date`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 2, "date": "2026-01-20T00:00:00Z"},
+			{"id": 3, "date": "2026-02-02T00:00:00Z"},
+			{"id": 4, "date": "2026-02-10T00:00:00Z"},
+			{"id": 5, "date": "2026-02-28T00:00:00Z"},
+		},
+	},
+	{
+		// The source forms DuckDB, Postgres and APIs write, in one column:
+		// as strings they sort lexically (the space before the T, the date
+		// alone first); as times, chronologically.
+		Name:     "cast_time_mixed_forms_sort",
+		Skip:     map[string]string{"duckdb": "row 4 carries a UTC offset (…23:30:00+00): DuckDB's CAST(VARCHAR AS TIMESTAMP) shifts it into the session time zone, so its order depends on where the test runs; ssql's time is an instant"},
+		Pipeline: `{{.bin}} from csv {{.data}}/mixed_times.csv | {{.bin}} cast -type ts time | {{.bin}} sort ts | {{.bin}} include id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 2}, {"id": 4}, {"id": 3}, {"id": 1}},
+	},
+	{
+		// bucket() over a time column: time in, time out, grouped.
+		Name:     "cast_time_bucket_groupby",
+		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv | {{.bin}} cast -type date time | {{.bin}} update -set-expr fortnight 'bucket(date, "336h")' | {{.bin}} group-by fortnight -count n -sum amount total`,
+		Ordered:  false,
+	},
+	{
+		// ssql's own date(): the forms GetOr[time.Time] reads, including
+		// Postgres's zoneless JSON timestamp that expr-lang's date() refused.
+		Name:     "update_date_function_forms",
+		Skip:     map[string]string{"duckdb": "method calls on a time (date(ts).Day()) have no SQL translation — refused loudly by design"},
+		Pipeline: `{{.bin}} from csv {{.data}}/mixed_times.csv | {{.bin}} update -set-expr day 'date(ts).Day()' -set-expr hour 'date(ts).UTC().Hour()' | {{.bin}} include id day hour`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 1, "day": 1, "hour": 0}, {"id": 2, "day": 1, "hour": 5},
+			{"id": 3, "day": 1, "hour": 0}, {"id": 4, "day": 31, "hour": 23},
+		},
 	},
 	{
 		// DFC128 F1/D3: a field that is NULL (= absent) in the first

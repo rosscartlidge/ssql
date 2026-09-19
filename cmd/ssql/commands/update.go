@@ -761,6 +761,12 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Int(%q, int64(v))\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t\tcase float32:\n")
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Float(%q, float64(v))\n", indent, upd.field))
+				// A time result (date(), now(), bucket() over a time column)
+				// stays a time, as in exec; the catch-all below would store
+				// Go's Time.String(), which nothing parses back (DFC128 D1).
+				stmtBuilder.WriteString(indent + "\t\tcase time.Time:\n")
+				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Time(%q, v)\n", indent, upd.field))
+				needsTime = true
 				stmtBuilder.WriteString(indent + "\t\tdefault:\n")
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.String(%q, fmt.Sprintf(\"%%v\", v))\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t\t}\n")

@@ -31,7 +31,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		FieldsFromFlag("").
 		Done().
 		Arg("type").
-		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool"}}).
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "time"}}).
 		Done().
 		Accumulate().
 		Global().
@@ -100,7 +100,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					if !exists {
 						continue
 					}
-					mut = applyValueToRecord(mut, field, convertFieldType(value, targetType))
+					mut = applyValueToRecord(mut, field, convertFieldType(value, targetType, field))
 				}
 				return mut
 			})(sr.Records)
@@ -133,8 +133,12 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // convertFieldType converts a value to the target FieldType
-func convertFieldType(value any, targetType ssql.FieldType) any {
+func convertFieldType(value any, targetType ssql.FieldType, field string) any {
 	switch targetType {
+	case ssql.FieldTypeTime:
+		// Explicit request: a value that is not a time stops the pipeline
+		// (main recovers the panic into one Error line).
+		return ssql.MustParseTime(value, field)
 	case ssql.FieldTypeString:
 		switch v := value.(type) {
 		case string:
@@ -318,6 +322,9 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Float(%q, 0)\n", field))
 			codeBody.WriteString("\t\t\t}\n")
 
+		case ssql.FieldTypeTime:
+			codeBody.WriteString(fmt.Sprintf("\t\t\tmut = mut.Time(%q, ssql.MustParseTime(val, %q))\n", field, field))
+
 		case ssql.FieldTypeBool:
 			codeBody.WriteString(fmt.Sprintf("\t\t\tswitch v := val.(type) {\n"))
 			codeBody.WriteString("\t\t\tcase bool:\n")
@@ -380,6 +387,8 @@ func castTargetWireType(target ssql.FieldType) string {
 		return lib.TypeString
 	case ssql.FieldTypeBool:
 		return lib.TypeBool
+	case ssql.FieldTypeTime:
+		return lib.TypeTime
 	}
 	return ""
 }

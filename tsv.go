@@ -235,7 +235,7 @@ func formatTSVValue(v any) string {
 		}
 		return "false"
 	default:
-		return fmt.Sprintf("%v", v)
+		return displayValue(v)
 	}
 }
 

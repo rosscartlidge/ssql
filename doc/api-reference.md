@@ -205,6 +205,24 @@ for key, value := range record.All() {
 
 **Supported value types:** `int64`, `float64`, `string`, `bool`, `time.Time`, nested `Record`, `iter.Seq[T]`, and slices.
 
+**Times.** One parser serves every path that turns a value into a time —
+`GetOr(r, "ts", time.Time{})`, the `time` wire type (`FieldTypeTime`,
+`"time"` in a `_schema` header), `cast -type F time` and the expression
+function `date()`:
+
+```go
+t, ok := ssql.ParseTime(v)            // time.Time as is; string in RFC 3339,
+                                      // "2006-01-02 15:04:05", "2006-01-02T15:04:05" (UTC),
+                                      // "2006-01-02 15:04:05+00", "2006-01-02"; int64 Unix seconds
+t := ssql.MustParseTime(v, "ts")      // panics naming the field — an explicit cast must not
+                                      // turn junk into a zero time
+ft, _ := ssql.ParseFieldType("time")  // FieldTypeTime ("timestamp", "datetime", "date" are aliases)
+expr.Compile(src, ssql.ExprFieldShadowing(), ssql.ExprDate()) // ssql's date(), bound at compile time
+```
+
+A time renders as RFC 3339 everywhere it becomes text: JSONL, CSV/TSV,
+tables, and `GetOr(r, "ts", "")`.
+
 ### MutableRecord
 A mutable record type optimized for efficient building.
 
