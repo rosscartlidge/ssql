@@ -8,8 +8,8 @@ Last modified: 2026-09-19
 
 Status: **all six decisions shipped 2026-09-19** — the coercion fix, D2
 and D4 (§6a), D3 (§6b), D5 (§6c), D1 core with the ssql-owned `date()`
-(§6d), D6 (§6e). Open: D1's second unit only (`resample` SQL over time
-columns, null-key visibility in the JSON parser).
+(§6d), D6 (§6e), then `resample` over time columns (§6f). Open:
+null-key visibility in the JSON parser only.
 Ross, 2026-09-14: "Have you actually
 checked that duckdb can import json/jsonl from ssql? and what about the
 reverse?" — then "I had assumed you needed to use the to/from commands
@@ -536,6 +536,41 @@ the pre-D3 behaviour) both tests fail on the nullable column. The
 Postgres test passed on its first run and the DuckDB one needed only a
 test fix — expected, since D2–D5 and D1 had already been driven by the
 same manual runs; the value now is that the claim cannot rot.
+
+## 6f. Shipped 2026-09-19: `resample` over a time column
+
+The unit was filed as "resample SQL over time columns" and turned out to
+start one layer down: the interpreted `resample` rejected a `time.Time`
+field outright ("unsupported type"), so there was nothing for SQL to
+agree with.
+
+- **Library.** `tsCodec` has a fourth family, `time`: `toNanos` is
+  `UnixNano`, `fromNanos` returns a UTC `time.Time`, the output record
+  stores it with `.Time`. `-from`/`-to` against a time column parse with
+  `ParseTime`. No layout to preserve, no epoch unit to detect, so
+  `-time-unit` is irrelevant there. Mixed families stay an error.
+  Record codegen calls the same function; nothing to do.
+- **Typed.** The template shims T → Record → T around the one
+  implementation; it now carries a `time.Time` field through (`.Time`,
+  `GetOr(rec, f, time.Time{})`, the `time` import for the synthesized
+  struct).
+- **SQL.** The numeric lowering is an integer grid (`generate_series`
+  over epoch values, ASOF joins). For a column in `sqlTimeColumns` the
+  same machinery runs on `epoch_us(col)` with the unit pinned to
+  microseconds — the engine's resolution — and the grid point returns as
+  `make_timestamp(__g)`. A width finer than a microsecond trips the
+  existing "finer than the epoch unit" error. String timestamps remain
+  refused; the answer for them is now "cast first".
+- **What the gate found.** Three cases (`resample_time_previous` with a
+  golden taken from the string-date form, `_next`, `_linear`). Typed
+  refused; then `linear` disagreed with DuckDB in the last place at one
+  grid point — the SQL computed `(g−p)·Δv / Δt`, Go computes
+  `((g−p)/Δt)·Δv`. Aligned to Go's association; the old numeric case had
+  simply never hit a value where the two round differently.
+- Tests: `TestResampleTimeFamily` (values and grid identical to the
+  string family for all three fills, bounds, loud errors),
+  `TestTranslateResampleSQLTimeColumn` (and that the numeric lowering is
+  untouched), the three cases.
 
 Still open, in the recommended order: ~~D3~~ (shipped, §6b; was: sampled schema inference
 so a NULL-in-first-record field is not dropped — the remaining silent

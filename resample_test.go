@@ -258,3 +258,72 @@ func TestSnapToBucket(t *testing.T) {
 
 var _ = slices.Contains[[]string] // keep imports honest if edited
 var _ = fmt.Sprintf
+
+// TestResampleTimeFamily (DFC128 D1, second unit): a time.Time timestamp
+// field — a `time` column — is a fourth family: time in, time out, on
+// the same epoch grid and with the same values as the string form of the
+// same data; -from/-to take any form ParseTime reads; a time column mixed
+// with another family, or a bound that is not a time, is loud.
+func TestResampleTimeFamily(t *testing.T) {
+	points := []struct {
+		ts string
+		v  int64
+	}{{"2026-01-01T00:00:12Z", 10}, {"2026-01-01T00:00:31Z", 50}, {"2026-01-01T00:00:58Z", 20}}
+	asTime := func(yield func(Record) bool) {
+		for _, p := range points {
+			tm, _ := ParseTime(p.ts)
+			if !yield(MakeMutableRecord().Time("ts", tm).Int("v", p.v).Freeze()) {
+				return
+			}
+		}
+	}
+	asString := func(yield func(Record) bool) {
+		for _, p := range points {
+			if !yield(MakeMutableRecord().String("ts", p.ts).Int("v", p.v).Freeze()) {
+				return
+			}
+		}
+	}
+	for _, fill := range []string{"previous", "next", "linear"} {
+		var warn bytes.Buffer
+		cfg := ResampleConfig{TimeField: "ts", Every: 10 * time.Second, Values: []string{"v"}, Fill: fill, Warn: &warn}
+		gotT, gotS := collectRS(t, asTime, cfg), collectRS(t, asString, cfg)
+		if len(gotT) != len(gotS) || len(gotT) == 0 {
+			t.Fatalf("%s: %d time rows vs %d string rows", fill, len(gotT), len(gotS))
+		}
+		for i := range gotT {
+			tv, ok := Get[any](gotT[i], "ts")
+			tm, isTime := tv.(time.Time)
+			if !ok || !isTime {
+				t.Fatalf("%s: output timestamp is %T, want time.Time", fill, tv)
+			}
+			if want := GetOr(gotS[i], "ts", ""); tm.Format(time.RFC3339) != want {
+				t.Errorf("%s row %d: grid %s, string family says %s", fill, i, tm.Format(time.RFC3339), want)
+			}
+			if a, b := GetOr(gotT[i], "v", -1.0), GetOr(gotS[i], "v", -2.0); a != b {
+				t.Errorf("%s row %d: value %v, string family says %v", fill, i, a, b)
+			}
+		}
+	}
+
+	var warn bytes.Buffer
+	got := collectRS(t, asTime, ResampleConfig{TimeField: "ts", Every: 10 * time.Second, Values: []string{"v"},
+		From: "2026-01-01 00:00:00", To: "2026-01-01T00:01:20Z", Warn: &warn})
+	first, _ := Get[any](got[0], "ts")
+	last, _ := Get[any](got[len(got)-1], "ts")
+	if !first.(time.Time).Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) || !last.(time.Time).Equal(time.Date(2026, 1, 1, 0, 1, 20, 0, time.UTC)) {
+		t.Errorf("bounds: %v … %v", first, last)
+	}
+
+	if _, err := ResampleRecords(asTime, ResampleConfig{TimeField: "ts", Every: time.Second, Values: []string{"v"}, From: "banana", Warn: &warn}); err == nil || !strings.Contains(err.Error(), `"banana" is not a time`) {
+		t.Errorf("a non-time bound must be loud, got %v", err)
+	}
+	mixed := func(yield func(Record) bool) {
+		tm, _ := ParseTime(points[0].ts)
+		_ = yield(MakeMutableRecord().Time("ts", tm).Int("v", 1).Freeze()) &&
+			yield(MakeMutableRecord().Int("ts", 1767225640).Int("v", 2).Freeze())
+	}
+	if _, err := ResampleRecords(mixed, ResampleConfig{TimeField: "ts", Every: time.Second, Values: []string{"v"}, Warn: &warn}); err == nil || !strings.Contains(err.Error(), "mixed timestamp types") {
+		t.Errorf("mixed families must be loud, got %v", err)
+	}
+}

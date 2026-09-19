@@ -5,6 +5,31 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`resample` over a time column** (DFC128 D1, second unit). After `cast
+  -type ts time` — or reading a header that says `time` — `resample -time
+  ts …` works in every lane: time in, time out, on the same epoch grid and
+  with the same values as the string and numeric forms (it used to fail
+  with "unsupported type time.Time"). `-from`/`-to` take any form the
+  shared time parser reads; a bound that is not a time, or a time column
+  mixed with epochs, is an error. The typed template carries a
+  `time.Time` field through its record shim.
+- **`generate sql` translates `resample` over a time column.** String
+  timestamps were, and are, refused in SQL; a `cast … time` upstream now
+  gives the translator a TIMESTAMP, which it runs through the existing
+  integer grid as epoch microseconds with the unit pinned and returns as
+  a TIMESTAMP (`epoch_us` / `make_timestamp`). DuckDB only, like the rest
+  of `resample`'s SQL.
+
+### Fixed
+- `generate sql`'s linear interpolation for `resample` multiplied before
+  dividing where the Go implementation divides first — the same real
+  number, a different float64 in the last place (`166.66666666666669` vs
+  `…66`). The SQL now uses the Go association, for numeric epochs too.
+  Found by the new `resample_time_linear` equivalence case.
+
 ## [4.102.0] - 2026-09-19
 
 ### Added

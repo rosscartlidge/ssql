@@ -67,7 +67,7 @@ func SnapToBucket(ns int64, every time.Duration) int64 {
 // tsCodec converts between the input's timestamp representation and
 // epoch nanoseconds, preserving the family on output.
 type tsCodec struct {
-	kind   string // "int", "float", "string"
+	kind   string // "int", "float", "string", "time"
 	unit   time.Duration
 	layout string
 }
@@ -162,8 +162,13 @@ func newTSCodec(sample any, cfg ResampleConfig, warn io.Writer) (*tsCodec, error
 			}
 		}
 		return nil, fmt.Errorf("resample: cannot parse timestamp %q (tried RFC3339 and SQL datetime; use -time-format)", v)
+	case time.Time:
+		// A `time` column (cast -type F time, or a header that says so —
+		// DFC128 D1): time in, time out. No layout to preserve, no unit to
+		// detect.
+		return &tsCodec{kind: "time"}, nil
 	}
-	return nil, fmt.Errorf("resample: timestamp field has unsupported type %T (want int64, float64 or string)", sample)
+	return nil, fmt.Errorf("resample: timestamp field has unsupported type %T (want int64, float64, string or time)", sample)
 }
 
 func (c *tsCodec) toNanos(v any) (int64, error) {
@@ -178,7 +183,20 @@ func (c *tsCodec) toNanos(v any) (int64, error) {
 			return 0, fmt.Errorf("resample: mixed timestamp types (%T after %s)", v, c.kind)
 		}
 		return int64(x * float64(c.unit)), nil
+	case time.Time:
+		if c.kind != "time" {
+			return 0, fmt.Errorf("resample: mixed timestamp types (%T after %s)", v, c.kind)
+		}
+		return x.UnixNano(), nil
 	case string:
+		if c.kind == "time" {
+			// A -from/-to bound against a time column: any form ParseTime reads.
+			t, ok := ParseTime(x)
+			if !ok {
+				return 0, fmt.Errorf("resample: %q is not a time (use a form like 2026-01-31 or 2026-01-31T10:30:00Z)", x)
+			}
+			return t.UnixNano(), nil
+		}
 		if c.kind != "string" {
 			return 0, fmt.Errorf("resample: mixed timestamp types (%T after %s)", v, c.kind)
 		}
@@ -197,6 +215,8 @@ func (c *tsCodec) fromNanos(ns int64) any {
 		return ns / int64(c.unit)
 	case "float":
 		return float64(ns) / float64(c.unit)
+	case "time":
+		return time.Unix(0, ns).UTC()
 	default:
 		return time.Unix(0, ns).UTC().Format(c.layout)
 	}
@@ -322,7 +342,7 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 		}
 		s := SnapToBucket(fns, cfg.Every)
 		if s != fns {
-			fmt.Fprintf(warn, "resample: -from snapped down to the epoch grid (%v)\n", codec.fromNanos(s))
+			fmt.Fprintf(warn, "resample: -from snapped down to the epoch grid (%s)\n", displayValue(codec.fromNanos(s)))
 		}
 		gridFrom = s
 	}
@@ -334,7 +354,7 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 		s := SnapToBucket(tns, cfg.Every)
 		if s != tns {
 			s += e // snap UP: include the bucket containing -to
-			fmt.Fprintf(warn, "resample: -to snapped up to the epoch grid (%v)\n", codec.fromNanos(s))
+			fmt.Fprintf(warn, "resample: -to snapped up to the epoch grid (%s)\n", displayValue(codec.fromNanos(s)))
 		}
 		gridTo = s
 	}
@@ -360,6 +380,8 @@ func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Rec
 			m = m.Float(cfg.TimeField, tv)
 		case string:
 			m = m.String(cfg.TimeField, tv)
+		case time.Time:
+			m = m.Time(cfg.TimeField, tv)
 		}
 		for _, f := range cfg.Values {
 			pts := series[f]

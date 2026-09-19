@@ -67,7 +67,7 @@ func RegisterResample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Done().
 			Global().
 			Required().
-			Help("Timestamp field (int64/float64 epoch — unit auto-detected loudly — or RFC3339/SQL datetime strings)").
+			Help("Timestamp field: int64/float64 epoch (unit auto-detected loudly), RFC3339/SQL datetime strings, or a time column (after `cast -type F time`) — the output keeps the input's form").
 			Done().
 
 		Flag("-every").
@@ -286,10 +286,10 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 			fmt.Errorf("ssql generate go -typed: 'resample' references unknown field %q", cfg.TimeField))
 	}
 	switch tsField.GoType {
-	case "int64", "float64", "string":
+	case "int64", "float64", "string", "time.Time":
 	default:
 		return lib.WriteErrorAndExit(getCommandString(),
-			fmt.Errorf("ssql generate go -typed: 'resample' time field %q has type %s (need int64/float64/string)", cfg.TimeField, tsField.GoType))
+			fmt.Errorf("ssql generate go -typed: 'resample' time field %q has type %s (need int64/float64/string/time.Time)", cfg.TimeField, tsField.GoType))
 	}
 	var valFields []lib.TypedSchemaField
 	for _, v := range cfg.Values {
@@ -325,6 +325,8 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 		fmt.Fprintf(&shimSets, ".Float(%q, r.%s)", cfg.TimeField, tsField.GoName)
 	case "string":
 		fmt.Fprintf(&shimSets, ".String(%q, r.%s)", cfg.TimeField, tsField.GoName)
+	case "time.Time":
+		fmt.Fprintf(&shimSets, ".Time(%q, r.%s)", cfg.TimeField, tsField.GoName)
 	}
 	for i, f := range valFields {
 		if f.GoType == "float64" {
@@ -342,6 +344,8 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 		fmt.Fprintf(&outSets, "%s: ssql.GetOr(rec, %q, float64(0)),", tsField.GoName, cfg.TimeField)
 	case "string":
 		fmt.Fprintf(&outSets, "%s: ssql.GetOr(rec, %q, \"\"),", tsField.GoName, cfg.TimeField)
+	case "time.Time":
+		fmt.Fprintf(&outSets, "%s: ssql.GetOr(rec, %q, time.Time{}),", tsField.GoName, cfg.TimeField)
 	}
 	for i, f := range valFields {
 		fmt.Fprintf(&outSets, " %s: ssql.GetOr(rec, %q, float64(0)),", f.GoName, cfg.Values[i])
@@ -377,7 +381,11 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 		})
 	}
 
-	frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"fmt", "os"}, getCommandString())
+	imports := []string{"fmt", "os"}
+	if tsField.GoType == "time.Time" {
+		imports = append(imports, "time") // the synthesized struct and its zero value name it
+	}
+	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
 	stampResampleOp(frag, cfg)
 	frag.StructDefs = []string{def.String()}
 	frag.InputTypedSchema = prevSchema

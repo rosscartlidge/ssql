@@ -279,7 +279,10 @@ a larger expression. In `generate sql` it becomes a `CASE` that detects
 the epoch unit by magnitude and snaps with `%`; over a column made a time
 by `cast -type F time` it becomes the engine's own bucketing pinned to
 the Unix epoch (`time_bucket`, or `date_bin` on Postgres and DataFusion);
-string timestamps have no SQL translation.
+string timestamps have no SQL translation. The same holds for
+`resample`: `generate sql` translates it over numeric epochs and over a
+cast time column (through epoch microseconds, returning a TIMESTAMP), and
+refuses string timestamps — put `cast -type ts time` in front.
 
 A field that is a `time` (after `cast -type F time`, or read from a
 header that says so) is a Go `time.Time` in expressions: `ts.Year()`,

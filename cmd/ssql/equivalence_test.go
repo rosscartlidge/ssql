@@ -831,6 +831,33 @@ var equivCases = []EquivCase{
 		Ordered: true,
 	},
 	{
+		// resample over a `time` column (DFC128 D1, second unit): time in,
+		// time out, on the same epoch grid as the numeric and string
+		// families. The golden is what the STRING-date form of the same
+		// pipeline produced before the column could be a time.
+		Name: "resample_time_previous",
+		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv | {{.bin}} cast -type date time | ` +
+			`{{.bin}} resample -time date -every 336h -value amount`,
+		Ordered: true,
+		Golden: []map[string]any{
+			{"date": "2026-01-01T00:00:00Z", "amount": 100}, {"date": "2026-01-15T00:00:00Z", "amount": 100},
+			{"date": "2026-01-29T00:00:00Z", "amount": 200}, {"date": "2026-02-12T00:00:00Z", "amount": 400},
+			{"date": "2026-02-26T00:00:00Z", "amount": 400},
+		},
+	},
+	{
+		Name: "resample_time_next",
+		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv | {{.bin}} cast -type date time | ` +
+			`{{.bin}} resample -time date -every 336h -value amount -fill next`,
+		Ordered: true,
+	},
+	{
+		Name: "resample_time_linear",
+		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv | {{.bin}} cast -type date time | ` +
+			`{{.bin}} resample -time date -every 168h -value amount -fill linear`,
+		Ordered: true,
+	},
+	{
 		// Dead-sort elimination (DFC123 §7): the generate-ssql lane
 		// optimises the first sort away; every lane must still produce
 		// the identical ordered output (ids are unique → the second

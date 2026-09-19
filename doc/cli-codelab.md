@@ -495,7 +495,9 @@ series at regular, epoch-aligned ticks: each tick carries the value in
 effect there — the closest reading before it by default, or `-fill
 linear` to interpolate between neighbours. Readings that fall between
 ticks are not used; where the readings are sparser than the grid, the
-gaps are filled the same way:
+gaps are filled the same way. The timestamp may be an epoch number, a
+date-time string, or a time column (`cast -type ts time`, section 3);
+the ticks come out in the same form it went in:
 
 ```bash
 ssql from sensor.csv | ssql resample -time ts -every 30s -value temp -value rpm | ssql limit 6 | ssql to table

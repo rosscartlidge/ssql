@@ -945,3 +945,36 @@ func TestTranslateFromLastSQL(t *testing.T) {
 		t.Errorf("jsonl -last: want loud refusal, got %v", err)
 	}
 }
+
+// TestTranslateResampleSQLTimeColumn (DFC128 D1, second unit): after an
+// upstream `cast -type F time` the column is a TIMESTAMP; resample runs
+// its integer grid on epoch MICROSECONDS with the unit pinned and returns
+// a TIMESTAMP — and without the cast the numeric lowering is untouched.
+func TestTranslateResampleSQLTimeColumn(t *testing.T) {
+	sql := assembleFromCommands(t,
+		"ssql from csv data.csv",
+		"ssql cast -type ts time",
+		"ssql resample -time ts -every 1h -value v -fill linear",
+	)
+	for _, want := range []string{
+		`CAST(ts AS TIMESTAMP) AS ts`,
+		"__unit AS (SELECT 1000 AS u)", // pinned: no magnitude detection on a time
+		"min(epoch_us(ts)) AS mn",
+		"CAST(epoch_us(ts) AS BIGINT) AS __ts",
+		"make_timestamp(__grid.__g) AS ts",
+		"(CAST(__grid.__g - p0.__ts AS DOUBLE) / CAST(n0.__ts - p0.__ts AS DOUBLE)) * (n0.v - p0.v)", // exec's association
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %q in:\n%s", want, sql)
+		}
+	}
+	numeric := assembleFromCommands(t, "ssql from csv data.csv", "ssql resample -time ts -every 1h -value v")
+	for _, not := range []string{"epoch_us", "make_timestamp"} {
+		if strings.Contains(numeric, not) {
+			t.Errorf("numeric resample must not use %q:\n%s", not, numeric)
+		}
+	}
+	if !strings.Contains(numeric, "SELECT __grid.__g AS ts") {
+		t.Errorf("numeric grid output changed:\n%s", numeric)
+	}
+}

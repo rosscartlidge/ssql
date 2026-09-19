@@ -2126,6 +2126,19 @@ func buildResampleSQL(q *sqlQuery, timeField string, everyNs int64, values []str
 	if src == "" {
 		return fmt.Errorf("resample: no source to translate")
 	}
+	// tsNum is the timestamp as the integer the grid arithmetic runs on;
+	// gridOut turns a grid point back into the column's own family. A
+	// numeric epoch column is its own integer. A column an upstream `cast
+	// -type F time` made a TIMESTAMP (DFC128 D1) goes through epoch
+	// MICROSECONDS — the engine's resolution — with the unit pinned, and
+	// comes back as a TIMESTAMP: time in, time out, same epoch grid as
+	// every other lane. (-time-unit describes numeric epochs; it has no
+	// meaning for a time, in exec as here.)
+	tsNum, gridOut := tsCol, "__grid.__g"
+	if sqlTimeColumns[timeField] {
+		tsNum, gridOut = "epoch_us("+tsCol+")", "make_timestamp(__grid.__g)"
+		unitExpr, timeUnit = "1000", "us"
+	}
 
 	var sb strings.Builder
 	sb.WriteString("(\n  WITH __base AS (SELECT * FROM " + src + " WHERE " + tsCol + " IS NOT NULL),\n")
@@ -2139,18 +2152,18 @@ func buildResampleSQL(q *sqlQuery, timeField string, everyNs int64, values []str
 		sb.WriteString("  __unit AS (SELECT " + unitExpr + " AS u),\n")
 	} else {
 		sb.WriteString(fmt.Sprintf("  __unit AS (SELECT %s AS u FROM (SELECT CAST(%s AS BIGINT) AS __ts FROM __base)),\n",
-			unitExpr, tsCol))
+			unitExpr, tsNum))
 	}
 	sb.WriteString(fmt.Sprintf("  __step AS (SELECT CASE WHEN %d %% u != 0 THEN CAST(error('resample: -every is finer than the epoch unit — use generate go') AS BIGINT) ELSE %d // u END AS s FROM __unit),\n",
 		everyNs, everyNs))
-	sb.WriteString(fmt.Sprintf("  __mm AS (SELECT min(%s) AS mn, max(%s) AS mx FROM __base),\n", tsCol, tsCol))
+	sb.WriteString(fmt.Sprintf("  __mm AS (SELECT min(%s) AS mn, max(%s) AS mx FROM __base),\n", tsNum, tsNum))
 	sb.WriteString("  __bounds AS (SELECT CAST(floor(mn * 1.0 / s) * s AS BIGINT) AS lo, CAST(floor(mx * 1.0 / s) * s AS BIGINT) AS hi, s FROM __mm, __step),\n")
 	sb.WriteString("  __grid AS (SELECT __g FROM __bounds, generate_series(lo, hi, s) __t(__g)),\n")
 	for i, v := range values {
 		sb.WriteString(fmt.Sprintf("  __s%d AS (SELECT CAST(%s AS BIGINT) AS __ts, max(CAST(%s AS DOUBLE)) AS v FROM __base WHERE %s IS NOT NULL GROUP BY __ts),\n",
-			i, tsCol, quoteIdent(v), quoteIdent(v)))
+			i, tsNum, quoteIdent(v), quoteIdent(v)))
 	}
-	sb.WriteString("  __out AS (\n    SELECT __grid.__g AS " + tsCol)
+	sb.WriteString("  __out AS (\n    SELECT " + gridOut + " AS " + tsCol)
 	for i, v := range values {
 		vc := quoteIdent(v)
 		switch fill {
@@ -2159,10 +2172,13 @@ func buildResampleSQL(q *sqlQuery, timeField string, everyNs int64, values []str
 		case "next":
 			sb.WriteString(fmt.Sprintf(",\n      COALESCE(n%d.v, (SELECT v FROM __s%d ORDER BY __ts DESC LIMIT 1)) AS %s", i, i, vc))
 		case "linear":
+			// frac first, then scale — the association ResampleRecords uses
+			// (p + ((g-p)/(n-p))·Δv). Multiplying before dividing is the
+			// same real number and a different float64 in the last place.
 			sb.WriteString(fmt.Sprintf(`,
       CASE
         WHEN p%d.__ts = __grid.__g THEN p%d.v
-        WHEN p%d.__ts IS NOT NULL AND n%d.__ts IS NOT NULL THEN p%d.v + (__grid.__g - p%d.__ts) * (n%d.v - p%d.v) / CAST(n%d.__ts - p%d.__ts AS DOUBLE)
+        WHEN p%d.__ts IS NOT NULL AND n%d.__ts IS NOT NULL THEN p%d.v + (CAST(__grid.__g - p%d.__ts AS DOUBLE) / CAST(n%d.__ts - p%d.__ts AS DOUBLE)) * (n%d.v - p%d.v)
         WHEN p%d.__ts IS NULL THEN n%d.v
         ELSE p%d.v
       END AS %s`, i, i, i, i, i, i, i, i, i, i, i, i, i, vc))
