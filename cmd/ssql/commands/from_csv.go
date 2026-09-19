@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -241,14 +243,22 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 	var csvHeaders []string
 
 	if inputFile == "" {
-		records = ssql.ReadCSVFromReader(os.Stdin, csvConfig)
+		// A pipe cannot be read twice: peek the header row for the column
+		// order (the reader's own schema is name-sorted), then hand the
+		// same bytes on. Without it `… | ssql from csv -` came out with
+		// its columns in alphabetical order.
+		var in io.Reader
+		csvHeaders, in = peekDelimitedHeader(os.Stdin, ',')
+		records = ssql.ReadCSVFromReader(in, csvConfig)
 	} else if ssql.IsHTTPURL(inputFile) {
 		body, ferr := ssql.OpenHTTPStream(inputFile)
 		if ferr != nil {
 			return ferr
 		}
 		defer body.Close()
-		records = ssql.ReadCSVFromReader(body, csvConfig)
+		var in io.Reader
+		csvHeaders, in = peekDelimitedHeader(body, ',')
+		records = ssql.ReadCSVFromReader(in, csvConfig)
 	} else {
 		file, ferr := os.Open(inputFile)
 		if ferr != nil {
@@ -640,6 +650,40 @@ func generateDelimConfigCode(typeOverrides map[string]string, defaultType string
 }
 
 // readCSVHeadersFromReader reads just the header row from a reader
+// peekDelimitedHeader returns the header row of a delimited stream
+// WITHOUT consuming it, plus the reader to continue with. It grows the
+// peek only until the first newline has arrived, so a slow or live
+// stream is not held for a full buffer; a header longer than the peek
+// limit (or an unparsable one) yields nil and the column order falls
+// back to the records' own.
+func peekDelimitedHeader(r io.Reader, comma rune) ([]string, io.Reader) {
+	const limit = 1 << 20
+	br := bufio.NewReaderSize(r, limit)
+	want := 1
+	for {
+		buf, err := br.Peek(want)
+		if i := bytes.IndexByte(buf, '\n'); i >= 0 || err != nil {
+			if i >= 0 {
+				buf = buf[:i+1]
+			}
+			cr := csv.NewReader(bytes.NewReader(buf))
+			cr.Comma = comma
+			cr.LazyQuotes = true
+			header, herr := cr.Read()
+			if herr != nil {
+				return nil, br
+			}
+			return header, br
+		}
+		// Ask for one byte more than has arrived: Peek fills with whatever
+		// the source has ready, so this follows the stream's own pace.
+		want = br.Buffered() + 1
+		if want > limit {
+			return nil, br
+		}
+	}
+}
+
 func readCSVHeadersFromReader(r io.Reader) ([]string, error) {
 	reader := csv.NewReader(r)
 	headers, err := reader.Read()

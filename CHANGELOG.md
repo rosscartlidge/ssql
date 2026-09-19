@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Codelab §2 gains **"Coming back the other way"**: reading DuckDB's
+  `COPY … TO` (one object per line, or `ARRAY true`) and `duckdb -json`,
+  and Postgres's `row_to_json` and `\copy … TO STDOUT CSV HEADER`, plus
+  loading ssql output into Postgres — with what happens to NULLs, dates
+  and column order (DFC128 D5).
+
 ### Fixed
+- **CSV on a pipe, and TSV always, came out with columns in alphabetical
+  order.** `psql -c "\copy … TO STDOUT CSV HEADER" | ssql from csv -`
+  turned `id,note,amount` into `amount,id,note`: the reader's schema is
+  name-sorted and only the CSV *file* path re-read the header for the
+  order. The header row is now peeked without consuming the stream (it
+  waits for the first newline only, so a live stream is not held), for
+  CSV on stdin and over HTTP and for TSV from any source. Found while
+  verifying the codelab's new Postgres and DuckDB return-trip commands
+  (DFC128 D5), all of which were run as written.
 - **A JSON column that was NULL in the first record was silently
   dropped from the output** (DFC128 F1/D3). A JSON `null` is an absent
   field, `from json`/`from jsonl` inferred the `_schema` header from the

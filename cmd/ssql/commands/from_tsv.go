@@ -229,27 +229,32 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 		return generateFromTSVCode(inputFile, types)
 	}
 
+	// The header row gives the column order (the reader's own schema is
+	// name-sorted) — peeked, not consumed, so it works for a pipe too.
 	var records iter.Seq[ssql.Record]
+	var in io.Reader
+	var tsvHeaders []string
 	if inputFile == "" {
-		records = ssql.ReadTSVFromReaderWithConfig(os.Stdin, types.cfg)
+		tsvHeaders, in = peekDelimitedHeader(os.Stdin, '\t')
 	} else if ssql.IsHTTPURL(inputFile) {
 		body, err := ssql.OpenHTTPStream(inputFile)
 		if err != nil {
 			return err
 		}
 		defer body.Close()
-		records = ssql.ReadTSVFromReaderWithConfig(body, types.cfg)
+		tsvHeaders, in = peekDelimitedHeader(body, '\t')
 	} else {
 		file, err := os.Open(inputFile)
 		if err != nil {
 			return fmt.Errorf("reading TSV file: %w", err)
 		}
 		defer file.Close()
-		records = ssql.ReadTSVFromReaderWithConfig(file, types.cfg)
+		tsvHeaders, in = peekDelimitedHeader(file, '\t')
 	}
+	records = ssql.ReadTSVFromReaderWithConfig(in, types.cfg)
 
 	records = wrapWithFieldCaching(records, inputFile)
-	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: tsvHeaders})
 }
 
 // generateFromTSVCode generates Go code for reading TSV.

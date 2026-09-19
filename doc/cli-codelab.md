@@ -203,6 +203,41 @@ reads, and that PostgreSQL's `row_to_json` produces one row per line;
 `to json` is DuckDB's `ARRAY true` form and Postgres's `json_agg`. With
 the header still in, DuckDB reads one phantom row.
 
+**Coming back the other way** needs nothing special: a file or a pipe
+from another tool simply has no `_schema` line, and `from` works the
+fields out from the first thousand records — so a column that is NULL in
+the first row is still a column (a field that only turns up later than
+that stops the pipeline with a message saying how to widen the sample,
+rather than quietly vanishing). Both shapes read the same way, by
+extension or by name:
+
+```bash
+# codelab: skip — needs duckdb on PATH
+duckdb -c "COPY (SELECT * FROM 'employees.csv') TO 'emp.json'"                      # one object per line
+duckdb -c "COPY (SELECT * FROM 'employees.csv') TO 'emp_array.json' (ARRAY true)"   # one array
+ssql from emp.json | ssql where -if salary gt 90000 | ssql to table
+ssql from emp_array.json | ssql where -if salary gt 90000 | ssql to table
+duckdb -json -c "SELECT dept, avg(salary) AS avg FROM 'employees.csv' GROUP BY dept" | ssql from json - | ssql to table
+```
+
+```bash
+# codelab: skip — needs psql and a database
+psql -At -c "SELECT row_to_json(t) FROM employees t" | ssql from jsonl - | ssql to table
+psql -c "\copy (SELECT * FROM employees) TO STDOUT CSV HEADER" | ssql from csv - | ssql to table
+ssql from employees.csv | ssql to csv | psql -c "\copy employees FROM STDIN CSV HEADER"
+```
+
+Both engines were checked in both directions, NULLs included: an empty
+CSV cell loads as NULL, and a JSON `null` is simply an absent field in
+ssql. Dates and timestamps arrive as strings. They sort and compare
+correctly as they are (ISO order is time order); to compute with one,
+`date(ts)` parses DuckDB's `2026-01-02 10:30:00` and a Postgres
+`timestamptz` — a Postgres `timestamp` without a zone
+(`2026-01-02T10:30:00`) is not yet understood by `date()`
+([DFC128](research/dfc128_json_interchange_and_time_type.md)). Columns
+read from JSON come out in name order, since a JSON object has no column
+order to keep; CSV keeps the header's.
+
 **Formats.** `from FILE` picks the reader from the extension: `.csv`,
 `.tsv`, `.json`, `.jsonl`, `.parquet`, `.arrow`, `.xlsx`, `.wav`, and
 `.log` or `.txt` as one record per line. Name it instead when the

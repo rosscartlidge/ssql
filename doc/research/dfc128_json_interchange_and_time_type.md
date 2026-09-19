@@ -6,9 +6,9 @@ Last modified: 2026-09-19
 
 [Back to Index](./README.md)
 
-Status: **two slices shipped 2026-09-19** — the coercion fix, D2 and D4
-(§6a), then D3 (§6b); D1 with the ssql-owned `date()`, D5 and D6 remain
-open (§6).
+Status: **three slices shipped 2026-09-19** — the coercion fix, D2 and
+D4 (§6a), D3 (§6b), D5 (§6c); D1 with the ssql-owned `date()` and D6
+remain open (§6).
 Ross, 2026-09-14: "Have you actually
 checked that duckdb can import json/jsonl from ssql? and what about the
 reverse?" — then "I had assumed you needed to use the to/from commands
@@ -405,6 +405,42 @@ because F1/F2 are silent loss, not features).
   the WHOLE file still yields no column; no data is lost, only the name.
   Typing it `string` as §5 D3 suggested needs the parser to report null
   keys — left for D1, which touches the same code.
+
+## 6c. Shipped 2026-09-19: D5, the codelab's reverse direction
+
+Codelab §2 has "Coming back the other way": DuckDB `COPY … TO
+'emp.json'` and `(ARRAY true)` read by extension, `duckdb -json … |
+ssql from json -`, Postgres `row_to_json … | ssql from jsonl -`,
+`\copy … TO STDOUT CSV HEADER | ssql from csv -`, and `ssql … to csv |
+psql -c "\copy … FROM STDIN CSV HEADER"`. **Every command was run as
+written** — DuckDB 1.5 locally, PostgreSQL 16 on the rig — with a NULL in
+the first row and both Postgres timestamp types in the data. That is the
+point of this DFC: the paragraph it replaces was written from a check
+that never ran.
+
+What the runs found:
+
+- **`from csv -` sorted the columns.** `id,note,ts,tz,amount` arrived as
+  `amount,id,note,ts,tz`. The CSV reader's schema is name-sorted by
+  design; the file path compensated by re-reading the header for
+  `fieldOrder`, stdin and HTTP could not, and TSV never did, even for
+  files. Fixed with `peekDelimitedHeader` — a non-consuming peek that
+  grows only until the first newline, so a live stream is not held for a
+  buffer. Test `TestDelimitedColumnOrderFromPipe` (quoted header cell,
+  TSV file and pipe, a header that arrives before its data).
+- **`date()` on Postgres's zoneless `timestamp` JSON form
+  (`2026-01-02T10:30:00`) fails — loudly**; DuckDB's `2026-01-02
+  10:30:00` and Postgres `timestamptz` (`…+00:00`) parse. Exactly F3's
+  prediction; the codelab says so rather than pretending, and D1's
+  ssql-owned `date()` closes it.
+- **JSON columns come out in name order** (`amount,id,ts,note` for a
+  source written `id,note,ts,amount`): `ParseJSONLine` builds a map and
+  `NewRecord` sorts its keys, so the object's key order is gone before
+  any schema logic runs. Unlike CSV there is no header to peek; keeping
+  the order needs the parser to emit fields in encounter order. Logged in
+  TODO; the codelab states the behaviour.
+- NULL round-trips both ways: JSON `null` ↔ absent field, empty CSV cell
+  ↔ SQL NULL under `CSV` mode.
 
 Still open, in the recommended order: ~~D3~~ (shipped, §6b; was: sampled schema inference
 so a NULL-in-first-record field is not dropped — the remaining silent

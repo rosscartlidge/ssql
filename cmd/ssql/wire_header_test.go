@@ -158,3 +158,37 @@ func TestNullInFirstRecordSurvives(t *testing.T) {
 		}
 	}
 }
+
+// TestDelimitedColumnOrderFromPipe: `… | ssql from csv -` kept its
+// columns in ALPHABETICAL order (the reader's schema is name-sorted and
+// only the file path re-read the header for the order); TSV lost the
+// order for files too. The header row is now peeked without consuming
+// the stream. Found verifying the Postgres `\copy … TO STDOUT` pipe for
+// the codelab (DFC128 D5).
+func TestDelimitedColumnOrderFromPipe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	csvFile := filepath.Join(dir, "t.csv")
+	tsvFile := filepath.Join(dir, "t.tsv")
+	os.WriteFile(csvFile, []byte("zeta,alpha,\"mid,dle\"\n1,2,3\n"), 0o644)
+	os.WriteFile(tsvFile, []byte("zeta\talpha\tmiddle\n1\t2\t3\n"), 0o644)
+	for script, want := range map[string]string{
+		"cat " + csvFile + " | " + bin + " from csv - | " + bin + " to csv": "zeta,alpha,\"mid,dle\"\n1,2,3\n",
+		bin + " from " + csvFile + " | " + bin + " to csv":                   "zeta,alpha,\"mid,dle\"\n1,2,3\n",
+		"cat " + tsvFile + " | " + bin + " from tsv - | " + bin + " to csv": "zeta,alpha,middle\n1,2,3\n",
+		bin + " from " + tsvFile + " | " + bin + " to csv":                   "zeta,alpha,middle\n1,2,3\n",
+		// a header that arrives before the data does (live stream)
+		"(printf 'zeta,alpha\\n'; sleep 0.3; printf '1,2\\n') | " + bin + " from csv - | " + bin + " to csv": "zeta,alpha\n1,2\n",
+	} {
+		out, err := exec.Command("bash", "-c", script).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", script, err, out)
+		}
+		if string(out) != want {
+			t.Errorf("%s\n got: %q\nwant: %q", script, out, want)
+		}
+	}
+}
