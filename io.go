@@ -748,6 +748,7 @@ func ReadJSONLFromReader(r io.Reader) iter.Seq[Record] {
 		// match the bufio buffer the schema-aware lib reader uses.
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+		var cache schemaCache // headerless input: share one Schema across same-shaped records
 		for scanner.Scan() {
 			line := bytes.TrimSpace(scanner.Bytes())
 			if len(line) == 0 {
@@ -761,7 +762,7 @@ func ReadJSONLFromReader(r io.Reader) iter.Seq[Record] {
 				var mut MutableRecord
 				mut, err = ParseJSONLine(line)
 				if err == nil {
-					record = mut.Freeze()
+					record = cache.freeze(mut)
 				}
 			}
 			if err != nil {
@@ -772,6 +773,37 @@ func ReadJSONLFromReader(r io.Reader) iter.Seq[Record] {
 			}
 		}
 	}
+}
+
+// schemaCache freezes headerless records without building a Schema per
+// record (the #1 performance rule): while consecutive records carry the
+// same field set — every row of an NDJSON export — they share one
+// Schema. A record with a different field set gets its own schema, which
+// becomes the cached one.
+type schemaCache struct {
+	schema *Schema
+}
+
+func (c *schemaCache) freeze(m MutableRecord) Record {
+	if c.schema != nil && len(m.fields) == len(c.schema.fields) {
+		match := true
+		for _, f := range c.schema.fields {
+			if _, ok := m.fields[f]; !ok {
+				match = false
+				break
+			}
+		}
+		if match {
+			values := make([]any, c.schema.Width())
+			for i, f := range c.schema.fields {
+				values[i] = m.fields[f]
+			}
+			return Record{schema: c.schema, values: values}
+		}
+	}
+	record := m.Freeze()
+	c.schema = record.schema
+	return record
 }
 
 // parseSchemaHeaderLine returns (schema, true) if line is a
@@ -981,8 +1013,7 @@ func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record] {
 		lineNumber := int64(0)
 
 		// Schema caching: reuse schema when fields match
-		var cachedSchema *Schema
-		var cachedFields []string // sorted field names of cached schema
+		var cache schemaCache
 
 		for scanner.Scan() {
 			line := scanner.Bytes()
@@ -1012,36 +1043,7 @@ func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record] {
 			mutableRecord.fields["_line_number"] = lineNumber
 			lineNumber++
 
-			// Check if we can reuse the cached schema
-			var record Record
-			if cachedSchema != nil && len(mutableRecord.fields) == len(cachedFields) {
-				// Check if fields match (quick check: same count, then verify all fields exist)
-				allMatch := true
-				for _, f := range cachedFields {
-					if _, ok := mutableRecord.fields[f]; !ok {
-						allMatch = false
-						break
-					}
-				}
-				if allMatch {
-					// Reuse cached schema
-					values := make([]any, cachedSchema.Width())
-					for i, f := range cachedSchema.fields {
-						values[i] = mutableRecord.fields[f]
-					}
-					record = Record{schema: cachedSchema, values: values}
-				}
-			}
-
-			// If we couldn't reuse, create new schema and cache it
-			if record.schema == nil {
-				record = mutableRecord.Freeze()
-				// Cache this schema for potential reuse
-				cachedSchema = record.schema
-				if cachedSchema != nil {
-					cachedFields = cachedSchema.fields
-				}
-			}
+			record := cache.freeze(mutableRecord)
 
 			if !yield(record) {
 				return
@@ -1060,8 +1062,7 @@ func ReadJSONFastSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 		lineNumber := int64(0)
 
 		// Schema caching: reuse schema when fields match
-		var cachedSchema *Schema
-		var cachedFields []string
+		var cache schemaCache
 
 		for scanner.Scan() {
 			line := scanner.Bytes()
@@ -1093,32 +1094,7 @@ func ReadJSONFastSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 			mutableRecord.fields["_line_number"] = lineNumber
 			lineNumber++
 
-			// Check if we can reuse the cached schema
-			var record Record
-			if cachedSchema != nil && len(mutableRecord.fields) == len(cachedFields) {
-				allMatch := true
-				for _, f := range cachedFields {
-					if _, ok := mutableRecord.fields[f]; !ok {
-						allMatch = false
-						break
-					}
-				}
-				if allMatch {
-					values := make([]any, cachedSchema.Width())
-					for i, f := range cachedSchema.fields {
-						values[i] = mutableRecord.fields[f]
-					}
-					record = Record{schema: cachedSchema, values: values}
-				}
-			}
-
-			if record.schema == nil {
-				record = mutableRecord.Freeze()
-				cachedSchema = record.schema
-				if cachedSchema != nil {
-					cachedFields = cachedSchema.fields
-				}
-			}
+			record := cache.freeze(mutableRecord)
 
 			if !yield(record, nil) {
 				return
