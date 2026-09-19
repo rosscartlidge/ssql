@@ -2353,8 +2353,15 @@ func ReadJSONAuto(filename string) (iter.Seq[Record], error) {
 		}, nil
 	}
 
-	// Otherwise parse as JSONL
-	return ReadJSON(filename)
+	// Otherwise parse as JSONL — through the wire-format reader, from the
+	// bytes already in hand: it honours a `_schema` header, shares one
+	// Schema across same-shaped records, and does not inject the synthetic
+	// `_line_number` that ReadJSON adds. The array branch above never
+	// added it, so the same data used to look different by export shape —
+	// and `generate go` (which reads files through this function) disagreed
+	// with the interpreted pipeline (DFC128 D2; caught by the
+	// jsonl_null_in_first_record equivalence case).
+	return ReadJSONLFromReader(bytes.NewReader(data)), nil
 }
 
 // WriteJSONPretty writes records as a pretty-printed JSON array

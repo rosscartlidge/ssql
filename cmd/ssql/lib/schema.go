@@ -204,6 +204,38 @@ func InferFromRecord(record ssql.Record) *Schema {
 	return schema
 }
 
+// InferFromSample creates a schema from the union of a sample's fields,
+// in first-seen order. Headerless sources describe each record only by
+// itself, and a JSON null arrives as an ABSENT field, so one record is
+// not enough: a column that is NULL in the first row must still be in
+// the header, which is authoritative downstream (DFC128 D3). A field's
+// type is the type of its values across the sample: int and float widen
+// to float; any other disagreement is a string.
+func InferFromSample(records []ssql.Record) *Schema {
+	schema := NewSchema()
+	for _, record := range records {
+		for k, v := range record.All() {
+			t := InferTypeString(v)
+			if prev, ok := schema.Types[k]; ok {
+				t = widenWireType(prev, t)
+			}
+			schema.AddField(k, t)
+		}
+	}
+	return schema
+}
+
+// widenWireType merges two observed wire types for one field.
+func widenWireType(a, b string) string {
+	switch {
+	case a == b:
+		return a
+	case (a == TypeInt && b == TypeFloat) || (a == TypeFloat && b == TypeInt):
+		return TypeFloat
+	}
+	return TypeString
+}
+
 // InferFromRecordOrdered creates a schema from a Record using the provided field order.
 // Fields not in the order list are appended at the end.
 func InferFromRecordOrdered(record ssql.Record, fieldOrder []string) *Schema {

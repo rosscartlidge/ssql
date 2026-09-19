@@ -348,6 +348,31 @@ echo "Filtered: $(ssql from data.csv | ssql where ... | wc -l)"
 - Input file is empty
 - Wrong field name in filter
 
+### Issue 9: "field … first appears at record N, after the 1000-record sample"
+
+**Symptoms:**
+```
+Error: field "refund_reason" first appears at record 48211, after the
+1000-record sample the schema header was inferred from; …
+```
+
+**What it means:** JSON and JSONL records describe only themselves, and a
+JSON `null` is an absent field. `ssql from` writes a `_schema` header for
+the stages downstream, and that header is authoritative: sinks take their
+columns from it. So `from` infers it from the first 1000 records (the
+union of their fields, which is why a column that is NULL in the first row
+is kept), and a field that turns up later would otherwise vanish from the
+output without a word. ssql stops instead.
+
+**Fix:** raise the sample so it covers the first occurrence — the message
+gives the number — or make the field present earlier in the data:
+```bash
+SSQL_SCHEMA_SAMPLE=100000 ssql from jsonl events.jsonl | ssql to csv
+```
+`SSQL_SCHEMA_SAMPLE=1` restores first-record inference, for a live stream
+whose first row must be emitted immediately. CSV, TSV and Parquet are not
+affected: they carry their own header.
+
 ---
 
 ## jq Debugging Patterns

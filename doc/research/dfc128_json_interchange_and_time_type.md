@@ -6,8 +6,9 @@ Last modified: 2026-09-19
 
 [Back to Index](./README.md)
 
-Status: **first slice shipped 2026-09-19** — the coercion fix, D2 and D4
-(§6a); D1, D3, D5, D6 and the ssql-owned `date()` remain open (§6).
+Status: **two slices shipped 2026-09-19** — the coercion fix, D2 and D4
+(§6a), then D3 (§6b); D1 with the ssql-owned `date()`, D5 and D6 remain
+open (§6).
 Ross, 2026-09-14: "Have you actually
 checked that duckdb can import json/jsonl from ssql? and what about the
 reverse?" — then "I had assumed you needed to use the to/from commands
@@ -364,7 +365,48 @@ because F1/F2 are silent loss, not features).
   chart` could not validate and drew an empty axis; with a schema it
   refuses. Doc corrected; TODO notes full mode should emit `lag`.
 
-Still open, in the recommended order: **D3** (sampled schema inference
+## 6b. Shipped 2026-09-19: D3, sampled schema inference
+
+- **Where.** `writeWithInferredSchema` (`cmd/ssql/commands/from.go`) is
+  the hub every `from` source writes through. With a `fieldOrder` (CSV,
+  TSV, Parquet — the source has its own header) nothing changed: first
+  record, no buffering, no per-row check. Without one it pulls up to
+  `schemaSampleRowsDefault` = 1000 records (`SSQL_SCHEMA_SAMPLE`
+  overrides; 1 = the old behaviour for live streams), builds the header
+  with `lib.InferFromSample` — union in first-seen order, int+float →
+  float, other disagreement → string — then streams the sample and the
+  rest.
+- **Late fields are loud.** Past the sample each record's fields must be
+  in the header. Same-shaped records share a Schema pointer (the reader
+  cache, §6a correction), so the check is a pointer compare per row and a
+  field walk per new shape. A miss ends the stream and the command exits
+  non-zero: `field "late" first appears at record 3, after the 2-record
+  sample … set SSQL_SCHEMA_SAMPLE to at least 3, or give the field a
+  value in an earlier record`.
+- **Only exec was wrong.** Headerless input piped straight to a sink
+  already unioned all fields (sinks collect everything when there is no
+  header); record codegen and DuckDB kept the column; typed renders the
+  absent cell as a zero value (the known DFC124 §3 divergence). The loss
+  needed `from`'s one-record header.
+- **The gate found a second bug on its first run.** Equivalence case
+  `jsonl_null_in_first_record` (fixture `null_first.jsonl`, Golden rows)
+  failed in the go-record lane: `ssql.ReadJSONAuto`, which generated Go
+  reads files through, still injected `_line_number` on its JSONL branch.
+  It now goes through `ReadJSONLFromReader` from the bytes it has already
+  read. D2 had fixed exec only — the "fixed in one lane, live in the
+  others" rule, caught by the differential gate as designed.
+- **Tests.** `lib.TestInferFromSample`; `TestNullInFirstRecordSurvives`
+  (four entry points × `to csv` exact output, three more sinks, the late
+  field failure with its message); the equivalence case.
+- **Not done: a column that is NULL in every sampled record.** The
+  parser drops nulls before anyone sees the key, so such a field is
+  invisible until its first value — at which point it is either inside
+  the sample (kept) or a loud late-field error. A column that is NULL in
+  the WHOLE file still yields no column; no data is lost, only the name.
+  Typing it `string` as §5 D3 suggested needs the parser to report null
+  keys — left for D1, which touches the same code.
+
+Still open, in the recommended order: ~~D3~~ (shipped, §6b; was: sampled schema inference
 so a NULL-in-first-record field is not dropped — the remaining silent
 loss), **D5** (codelab reverse direction), **D1** (`time` on the wire)
 with the ssql-owned `date()`, **D6** (interchange tests alongside).

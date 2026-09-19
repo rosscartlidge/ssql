@@ -108,3 +108,53 @@ func TestTimeIntoStringFieldIsRFC3339(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestNullInFirstRecordSurvives (DFC128 F1/D3): `from` infers the header
+// from a bounded sample, not the first record, so a nullable column
+// reaches every sink; a field that first appears after the sample is a
+// loud, non-zero failure naming the field, the record and the remedy.
+func TestNullInFirstRecordSurvives(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	jsonl := filepath.Join(dir, "export.jsonl")
+	os.WriteFile(jsonl, []byte("{\"id\":1,\"note\":null}\n{\"id\":2,\"note\":\"hello\"}\n{\"id\":3,\"note\":\"x\",\"late\":7}\n"), 0o644)
+	array := filepath.Join(dir, "export.json")
+	os.WriteFile(array, []byte(`[{"id":1,"note":null},{"id":2,"note":"hello"},{"id":3,"note":"x","late":7}]`), 0o644)
+
+	for _, src := range []string{"from jsonl " + jsonl, "from " + jsonl, "from json " + array, "from " + array} {
+		out, err := exec.Command("bash", "-c", bin+" "+src+" | "+bin+" to csv").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", src, err, out)
+		}
+		if got, want := string(out), "id,note,late\n1,,\n2,hello,\n3,x,7\n"; got != want {
+			t.Errorf("%s\n got: %q\nwant: %q", src, got, want)
+		}
+	}
+	for _, sink := range []string{"to table", "to markdown", "to json"} {
+		out, err := exec.Command("bash", "-c", bin+" from jsonl "+jsonl+" | "+bin+" "+sink).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", sink, err, out)
+		}
+		for _, want := range []string{"note", "hello", "late", "7"} {
+			if !strings.Contains(string(out), want) {
+				t.Errorf("%s lost %q:\n%s", sink, want, out)
+			}
+		}
+	}
+
+	// A field past the sample: loud, non-zero, actionable — never dropped.
+	cmd := exec.Command("bash", "-c", "set -o pipefail; "+bin+" from jsonl "+jsonl+" | "+bin+" to csv")
+	cmd.Env = append(os.Environ(), "SSQL_SCHEMA_SAMPLE=2")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("a field after the sample must fail the pipeline:\n%s", out)
+	}
+	for _, want := range []string{`field "late" first appears at record 3`, "2-record sample", "SSQL_SCHEMA_SAMPLE"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("error lacks %q:\n%s", want, out)
+		}
+	}
+}

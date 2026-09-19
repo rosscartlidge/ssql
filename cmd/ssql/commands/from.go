@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -542,59 +543,109 @@ type writeWithInferredSchemaOptions struct {
 	w          io.Writer // destination; nil means os.Stdout
 }
 
-// writeWithInferredSchema infers schema from first record and writes with schema header
-// If fieldOrder is provided, uses that order; otherwise uses sorted field names for determinism
-// Only buffers first record (O(1) memory), then streams remaining records.
+// schemaSampleRowsDefault is how many records the header of a
+// self-describing-less source (JSON, JSONL, arrow, …) is inferred from.
+// SSQL_SCHEMA_SAMPLE overrides it (1 restores first-record inference for
+// a live stream that must emit its first row immediately).
+const schemaSampleRowsDefault = 1000
+
+func schemaSampleRows() int {
+	if v := os.Getenv("SSQL_SCHEMA_SAMPLE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
+			return n
+		}
+	}
+	return schemaSampleRowsDefault
+}
+
+// writeWithInferredSchema writes records behind an inferred `_schema`
+// header. The header is AUTHORITATIVE downstream — sinks take it as the
+// column list and header-aware readers ignore fields outside it — so it
+// must not miss a field (DFC128 F1/D3):
+//
+//   - With options.fieldOrder (CSV, TSV, parquet…: the source has its own
+//     header) the first record types those fields, as before; nothing is
+//     buffered beyond it.
+//   - Without it (JSON/JSONL and friends, where each record describes only
+//     itself and a JSON null is an ABSENT field) the header is the union
+//     of the fields over a bounded sample, in first-seen order — so a
+//     column that is NULL in the first row survives — and a field that
+//     first appears after the sample is a loud error instead of a column
+//     that silently vanishes.
 func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInferredSchemaOptions) error {
 	var options writeWithInferredSchemaOptions
 	if len(opts) > 0 {
 		options = opts[0]
 	}
-	// Use pull-style iteration to peek at first record
 	next, stop := iter.Pull(records)
 	defer stop()
 
-	// Get first record to infer schema
-	firstRecord, ok := next()
-	if !ok {
-		// No records - nothing to write
-		return nil
+	limit := 1
+	if len(options.fieldOrder) == 0 {
+		limit = schemaSampleRows()
+	}
+	var sample []ssql.Record
+	for len(sample) < limit {
+		r, ok := next()
+		if !ok {
+			break
+		}
+		sample = append(sample, r)
+	}
+	if len(sample) == 0 {
+		return nil // no records - nothing to write
 	}
 
-	// Determine field order
-	var order []string
+	var schema *lib.Schema
 	if len(options.fieldOrder) > 0 {
-		order = options.fieldOrder
+		schema = lib.InferFromRecordOrdered(sample[0], options.fieldOrder)
 	} else {
 		// Record (schema) order, NOT alphabetical: Record.All() is
 		// deterministic since records carry ordered schemas, and the
 		// header must preserve field order across wire hops — the old
 		// sort scrambled column order on every tee/from round-trip
 		// (found by the DFC108 cut-point equivalence gate).
-		for k := range firstRecord.All() {
-			order = append(order, k)
-		}
+		schema = lib.InferFromSample(sample)
 	}
-
-	// Infer schema from first record
-	schema := lib.InferFromRecordOrdered(firstRecord, order)
-
-	// Set sample rate for audio data
 	if options.sampleRate > 0 {
 		schema.SampleRate = options.sampleRate
 	}
 
-	// Create streaming iterator: first record + remaining records
-	allRecords := func(yield func(ssql.Record) bool) {
-		// Yield first record
-		if !yield(firstRecord) {
-			return
+	// Past the sample, every record's fields must be in the header. Records
+	// of one shape share a Schema pointer (the readers cache it), so the
+	// check is one pointer compare per row and a field walk per new shape.
+	var lateErr error
+	checkLate := len(options.fieldOrder) == 0
+	var known map[string]bool
+	var okShape *ssql.Schema
+	if checkLate {
+		known = make(map[string]bool, len(schema.Fields))
+		for _, f := range schema.Fields {
+			known[f] = true
 		}
-		// Stream remaining records
+	}
+
+	allRecords := func(yield func(ssql.Record) bool) {
+		for _, r := range sample {
+			if !yield(r) {
+				return
+			}
+		}
+		n := len(sample)
 		for {
 			r, ok := next()
 			if !ok {
 				return
+			}
+			n++
+			if checkLate && r.Schema() != okShape {
+				for k := range r.KeysIter() {
+					if !known[k] {
+						lateErr = fmt.Errorf("field %q first appears at record %d, after the %d-record sample the schema header was inferred from; the header is authoritative downstream, so the field would be dropped silently — set SSQL_SCHEMA_SAMPLE to at least %d, or give the field a value in an earlier record", k, n, len(sample), n)
+						return
+					}
+				}
+				okShape = r.Schema()
 			}
 			if !yield(r) {
 				return
@@ -602,12 +653,14 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInf
 		}
 	}
 
-	// Write with schema header and ordered fields (streams without buffering)
 	var w io.Writer = os.Stdout
 	if options.w != nil {
 		w = options.w
 	}
-	return lib.WriteJSONLWithSchemaOrdered(w, schema, allRecords)
+	if err := lib.WriteJSONLWithSchemaOrdered(w, schema, allRecords); err != nil {
+		return err
+	}
+	return lateErr
 }
 
 // capitalizeFieldType converts "string" to "String", "int" to "Int", etc.

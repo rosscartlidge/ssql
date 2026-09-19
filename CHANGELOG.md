@@ -8,14 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A JSON column that was NULL in the first record was silently
+  dropped from the output** (DFC128 F1/D3). A JSON `null` is an absent
+  field, `from json`/`from jsonl` inferred the `_schema` header from the
+  first record alone, and the header is authoritative downstream — so
+  `to csv`, `to table`, `to markdown` and `to json` lost the column and
+  every value in it, which bites any SQL export with a nullable column.
+  The header is now the union of the fields over the first 1000 records,
+  in first-seen order, with int and float widening to float. A field that
+  first appears after the sample **fails the pipeline** with a message
+  naming the field, the record number and the remedy
+  (`SSQL_SCHEMA_SAMPLE=N`; `1` restores first-record inference for live
+  streams) instead of vanishing. Sources with their own header (CSV, TSV,
+  Parquet) are untouched. Only the interpreted lane was affected —
+  generated Go and the SQL lanes already kept the column; equivalence
+  case `jsonl_null_in_first_record` now holds them together.
+- **`generate go` and the interpreted pipeline disagreed on JSONL
+  files**: `ssql.ReadJSONAuto` still injected `_line_number` on its JSONL
+  branch (never on its array branch). It now reads JSONL through the
+  wire-format reader — no synthetic field, `_schema` headers honoured —
+  found by the new equivalence case on its first run.
 - **A leading `_line_number` column on every headerless JSONL input.**
   Reading another tool's NDJSON — a DuckDB `COPY … TO 'f.jsonl'`, a psql
   `row_to_json` stream — through `from jsonl`, `from FILE.jsonl` or a
   bare stage on stdin grew a synthetic `_line_number` field, an artifact
   of the library's raw-JSON helpers that nothing in the CLI ever read.
-  Headerless input now goes through the non-injecting, schema-cached
-  reader and yields exactly its own fields (DFC128 D2). The library's
-  `ReadJSON*` helpers are unchanged.
+  Headerless input now goes through the non-injecting reader, which
+  shares one Schema across same-shaped records like the reader it
+  replaced, and yields exactly its own fields (DFC128 D2). Of the
+  library's helpers only `ReadJSONAuto`'s JSONL branch changed (above).
 - **`fft`, `ifft`, `convolve`, `correlate` and `spectrogram` wrote no
   `_schema` header**, so the next stage read them as headerless JSONL —
   which is where users actually met `_line_number` (`fft … | to table`

@@ -900,6 +900,23 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// DFC128 F1/D3: a field that is NULL (= absent) in the first
+		// record. exec's `from` inferred the header from that one record,
+		// the header is authoritative, and every sink dropped `note` and
+		// `score` without a word — exec was the only lane that lost them.
+		// The header is now the union over a bounded sample. Golden pins
+		// the rows; typed lanes render an absent cell as the zero value.
+		Name:     "jsonl_null_in_first_record",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/null_first.jsonl | {{.bin}} where -if id gt 0`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 1},
+			{"id": 2, "note": "b", "score": 4},
+			{"id": 3, "note": "c", "score": 2.5},
+		},
+		Skip: map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+	},
+	{
 		// The same rows behind a `_schema` header (a tee'd file): the
 		// typed reader takes the struct from the header and skips the
 		// line; the exec reader coerces by it. DuckDB has no notion of
