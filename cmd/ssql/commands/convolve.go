@@ -225,7 +225,7 @@ func RegisterConvolve(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Write output as JSONL
-			if err := lib.WriteJSONL(ctx.Stdout(), slices.Values(output)); err != nil {
+			if err := writeWithInferredSchema(slices.Values(output), writeWithInferredSchemaOptions{w: ctx.Stdout()}); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

@@ -3,6 +3,7 @@ package commands
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"iter"
 	"os"
 	"os/exec"
@@ -537,7 +538,8 @@ func buildCSVConfig(typeOverrides map[string]string, defaultType string) (ssql.C
 // writeWithInferredSchemaOptions configures writeWithInferredSchema behavior
 type writeWithInferredSchemaOptions struct {
 	fieldOrder []string
-	sampleRate int // For audio data (0 means not audio)
+	sampleRate int       // For audio data (0 means not audio)
+	w          io.Writer // destination; nil means os.Stdout
 }
 
 // writeWithInferredSchema infers schema from first record and writes with schema header
@@ -601,7 +603,11 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInf
 	}
 
 	// Write with schema header and ordered fields (streams without buffering)
-	return lib.WriteJSONLWithSchemaOrdered(os.Stdout, schema, allRecords)
+	var w io.Writer = os.Stdout
+	if options.w != nil {
+		w = options.w
+	}
+	return lib.WriteJSONLWithSchemaOrdered(w, schema, allRecords)
 }
 
 // capitalizeFieldType converts "string" to "String", "int" to "Int", etc.

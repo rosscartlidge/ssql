@@ -5,6 +5,33 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A leading `_line_number` column on every headerless JSONL input.**
+  Reading another tool's NDJSON — a DuckDB `COPY … TO 'f.jsonl'`, a psql
+  `row_to_json` stream — through `from jsonl`, `from FILE.jsonl` or a
+  bare stage on stdin grew a synthetic `_line_number` field, an artifact
+  of the library's raw-JSON helpers that nothing in the CLI ever read.
+  Headerless input now goes through the non-injecting, schema-cached
+  reader and yields exactly its own fields (DFC128 D2). The library's
+  `ReadJSON*` helpers are unchanged.
+- **`fft`, `ifft`, `convolve`, `correlate` and `spectrogram` wrote no
+  `_schema` header**, so the next stage read them as headerless JSONL —
+  which is where users actually met `_line_number` (`fft … | to table`
+  led with it, and the signal codelab described it as "the row counter
+  every ssql stream carries"). They now write the header like every
+  other command (DFC128 D4); the codelab's tables are corrected. The
+  header also let `to chart` validate that codelab's cross-correlation
+  example, which had been charting `-x lag` — a field full correlation
+  never emits — onto a silently empty axis; it now uses `index` and
+  explains lag = index − (N−1).
+- **A time written into an existing string field was unreadable.**
+  `update -set-expr ts 'date(ts)'` on a string column stored Go's
+  `Time.String()` form (`2026-01-02 10:30:00 +0000 UTC`), which neither
+  ssql, DuckDB nor Postgres parses back; it is now RFC 3339
+  (`2026-01-02T10:30:00Z`), the same form a new field gets (DFC128 F3).
+
 ## [4.101.0] - 2026-09-17
 
 ### Added

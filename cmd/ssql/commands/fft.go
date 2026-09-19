@@ -121,7 +121,7 @@ func RegisterFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			spectrumRecords := ssql.SpectrumToRecords(spectrum, sampleRate)
 
 			// Write output as JSONL
-			if err := lib.WriteJSONL(ctx.Stdout(), spectrumRecords); err != nil {
+			if err := writeWithInferredSchema(spectrumRecords, writeWithInferredSchemaOptions{w: ctx.Stdout()}); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

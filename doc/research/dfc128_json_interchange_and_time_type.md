@@ -2,11 +2,13 @@
 
 Reference: DFC128
 Created: 2026-09-14
-Last modified: 2026-09-16
+Last modified: 2026-09-19
 
 [Back to Index](./README.md)
 
-Status: **decisions needed** (§6). Ross, 2026-09-14: "Have you actually
+Status: **first slice shipped 2026-09-19** — the coercion fix, D2 and D4
+(§6a); D1, D3, D5, D6 and the ssql-owned `date()` remain open (§6).
+Ross, 2026-09-14: "Have you actually
 checked that duckdb can import json/jsonl from ssql? and what about the
 reverse?" — then "I had assumed you needed to use the to/from commands
 to exclude the schema", "what is the real use of the line_numbers in
@@ -330,6 +332,46 @@ test behind it instead of a check that never ran.
 
 Order if all yes: coercion fix + D2 + D4 (small, unblock the codelab
 text) → D3 → D5 → D1 → D6 alongside each.
+
+## 6a. Shipped 2026-09-19: coercion fix, D2, D4
+
+Ross, reviewing the agenda: "let's go with that" (the small trio first,
+because F1/F2 are silent loss, not features).
+
+- **Coercion (F3).** `coerceToString` has a `time.Time` case: RFC 3339
+  Nano, the form a new field already got. `update -set-expr d 'date(d)'`
+  on a string column now round-trips through `convertToTime`, DuckDB
+  and Postgres.
+- **D2.** `lib.ReadJSONL` — the headerless branch every CLI stage and
+  `from jsonl` fall into — reads through `ssql.ReadJSONLFromReader`
+  (no `_line_number`, schema cached across records) instead of
+  `ReadJSONFastFromReader`. The library helpers are untouched, as
+  recommended. This also retires one of the per-record-schema reader
+  sites on the TODO's performance list.
+- **D4.** `fft`, `ifft`, `convolve`, `correlate`, `spectrogram` write
+  through `writeWithInferredSchema` (which gained a writer option so
+  they keep `ctx.Stdout()`); the signal codelab's two tables and its
+  "row counter every ssql stream carries" sentence are corrected.
+- **Gate:** `cmd/ssql/wire_header_test.go` — all five signal commands'
+  first line is a header and `to table` shows no `_line_number`; a
+  headerless NDJSON file yields exactly `a,b` through four entry points
+  (`from jsonl FILE`, `from FILE`, stdin `from jsonl -`, a bare stage);
+  the time coercion renders RFC 3339. Watched failing on all eight
+  assertions with the fixes stashed.
+- **What the header exposed.** `TestCodelabRuns` failed on the signal
+  codelab's cross-correlation block: `to chart -x lag` over full
+  `correlate` output, which has `index`, never `lag`. Headerless, `to
+  chart` could not validate and drew an empty axis; with a schema it
+  refuses. Doc corrected; TODO notes full mode should emit `lag`.
+
+Still open, in the recommended order: **D3** (sampled schema inference
+so a NULL-in-first-record field is not dropped — the remaining silent
+loss), **D5** (codelab reverse direction), **D1** (`time` on the wire)
+with the ssql-owned `date()`, **D6** (interchange tests alongside).
+The other injecting call sites (`from_json.go` stdin codegen,
+`aux_input.go` `.json` side inputs, `completion_sources.go`,
+`format_table.go`'s `ReadJSON`) are library readers on the array/auto
+path and belong to the JSON-reader TODO item, not to this slice.
 
 ## 7. References
 

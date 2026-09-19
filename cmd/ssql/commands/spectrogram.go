@@ -152,7 +152,7 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Convert to records and write as JSONL
 			spectrogramRecords := ssql.SpectrogramToRecords(bins)
-			if err := lib.WriteJSONL(ctx.Stdout(), spectrogramRecords); err != nil {
+			if err := writeWithInferredSchema(spectrogramRecords, writeWithInferredSchemaOptions{w: ctx.Stdout()}); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

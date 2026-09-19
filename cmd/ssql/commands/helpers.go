@@ -716,6 +716,12 @@ func coerceToString(value any) (string, bool) {
 		return strconv.FormatFloat(v, 'g', -1, 64), true
 	case bool:
 		return strconv.FormatBool(v), true
+	case time.Time:
+		// RFC 3339, the form the JSON writer uses for a time in a NEW
+		// field and the one convertToTime, DuckDB and Postgres read back.
+		// The %v default gave Go's Time.String() ("2026-01-02 10:30:00
+		// +0000 UTC"), which nothing parses (DFC128 F3).
+		return v.Format(time.RFC3339Nano), true
 	default:
 		return fmt.Sprintf("%v", v), true
 	}

@@ -123,19 +123,19 @@ ssql from multi_freq.csv | \
   ssql limit 20 | ssql to table
 ```
 
-Output shows frequency bins with their magnitudes (`_line_number` is the
-row counter every ssql stream carries):
+Output shows frequency bins with their magnitudes (`index` is the bin
+number):
 ```
-_line_number   frequency     index   magnitude
------------------------------------------------------
-           0             0       0             2.726159
-           1   0.244140625       1   2.7284801528295475
+frequency     index   magnitude
+--------------------------------------
+           0       0             2.726159
+ 0.244140625       1   2.7284801528295475
 ...
-          41   10.009765625     41   2042.974388801387    <- 10 Hz peak!
+10.009765625      41   2042.974388801387    <- 10 Hz peak!
 ...
-         205   50.048828125    205   957.9693360391922    <- 50 Hz peak!
+50.048828125     205   957.9693360391922    <- 50 Hz peak!
 ...
-         492    120.1171875    492   406.40466674290843   <- 120 Hz peak!
+ 120.1171875     492   406.40466674290843   <- 120 Hz peak!
 ```
 
 ### Visualizing the Frequency Spectrum
@@ -355,14 +355,19 @@ ssql from two_sensors.csv | \
 # Cross-correlate to find the delay
 ssql from two_sensors.csv | \
   ssql correlate -field sensor1 -with sensor2 | \
-  ssql to chart -x lag -y correlation -output cross_corr.html
+  ssql to chart -x index -y correlation -output cross_corr.html
 
-echo "Peak in cross_corr.html shows the 20-sample delay"
+echo "The peak in cross_corr.html sits 20 samples left of the centre"
 ```
+
+Full cross-correlation of two N-sample signals has 2N−1 points, numbered
+by `index`; the centre, `index` N−1, is zero lag, so **lag = index −
+(N−1)**. (Only `-auto -max-lag` output carries a `lag` field directly.)
 
 **Finding the exact delay:**
 ```bash
-# Find the lag with maximum correlation
+# The index with maximum correlation: 479 here, and 479 − 499 = −20 —
+# sensor2 trails sensor1 by 20 samples
 ssql from two_sensors.csv | \
   ssql correlate -field sensor1 -with sensor2 | \
   ssql sort -desc correlation | \
@@ -434,13 +439,13 @@ ssql from chirp.csv | \
 Output shows, for each window, its start `time` (and `time_index`), and
 the magnitude at each frequency bin:
 ```
-_line_number   frequency   magnitude            time   time_index
------------------------------------------------------------------
-           0           0   0.7994205041556737      0            0
-           1     3.90625   1.3536425387430444      0            0
-           2      7.8125    3.756500582337673      0            0
-           3    11.71875   10.869330770522408      0            0    <- rising toward the 10 Hz start
-           4      15.625    26.90292248197318      0            0
+frequency   magnitude            time   time_index
+--------------------------------------------------
+        0   0.7994205041556737      0            0
+  3.90625   1.3536425387430444      0            0
+   7.8125    3.756500582337673      0            0
+ 11.71875   10.869330770522408      0            0    <- rising toward the 10 Hz start
+   15.625    26.90292248197318      0            0
 ...
 ```
 

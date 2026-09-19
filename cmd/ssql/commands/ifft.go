@@ -135,7 +135,7 @@ func RegisterIFFT(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			signalRecords := signalToRecords(signal, outputField)
 
 			// Write output as JSONL
-			if err := lib.WriteJSONL(ctx.Stdout(), signalRecords); err != nil {
+			if err := writeWithInferredSchema(signalRecords, writeWithInferredSchemaOptions{w: ctx.Stdout()}); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

@@ -17,10 +17,15 @@ import (
 // Stdout is a convenience variable for writing to stdout
 var Stdout io.WriteCloser = os.Stdout
 
-// ReadJSONL reads JSONL (JSON Lines) from a reader and returns an iterator of Records
-// Uses fast JSON parsing (avoids reflection) for better performance.
+// ReadJSONL reads headerless JSONL (JSON Lines) from a reader — another
+// tool's NDJSON export, or the output of a stage that wrote no `_schema`
+// line. It goes through ssql.ReadJSONLFromReader, which caches the schema
+// across records and does NOT inject the library's synthetic
+// `_line_number` field: nothing in the CLI ever consumed it, and it showed
+// up as a leading column on every DuckDB/Postgres export (DFC128 F2/D2).
+// The library's ReadJSON* helpers keep their behaviour.
 func ReadJSONL(r io.Reader) iter.Seq[ssql.Record] {
-	return ssql.ReadJSONFastFromReader(r)
+	return ssql.ReadJSONLFromReader(r)
 }
 
 // WriteJSONL writes Records to a writer as JSONL (JSON Lines)
