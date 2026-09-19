@@ -63,7 +63,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC053 | 2026-02-27 | 2026-03-12 | [Streaming Window Functions: Design Report](./streaming-window-functions.md) |
 | DFC054 | 2026-03-10 | 2026-09-08 | [Distributed Shard Catalog](./distributed-shard-catalog.md) |
 | DFC055 | 2026-03-10 | 2026-03-10 | [`from` Subcommands: Mirroring `to`](./from-subcommands.md) |
-| DFC056 | 2026-03-10 | 2026-09-17 | [SSH Test Environment Setup](./ssh-test-environment.md) |
+| DFC056 | 2026-03-10 | 2026-09-19 | [SSH Test Environment Setup](./ssh-test-environment.md) |
 | DFC057 | 2026-03-12 | 2026-03-12 | [GitHub Repository Migration Plan](./github-repo-migration.md) |
 | DFC058 | 2026-03-20 | 2026-04-08 | [ssql Adoption Plan](./adoption-plan.md) |
 | DFC059 | 2026-03-20 | 2026-03-20 | [Catalog Code Generation](./catalog-codegen.md) |

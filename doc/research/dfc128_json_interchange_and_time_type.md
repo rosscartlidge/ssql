@@ -6,10 +6,10 @@ Last modified: 2026-09-19
 
 [Back to Index](./README.md)
 
-Status: **four slices shipped 2026-09-19** — the coercion fix, D2 and
-D4 (§6a), D3 (§6b), D5 (§6c), D1 core with the ssql-owned `date()`
-(§6d). Open: D1's second unit (`resample` SQL over time columns,
-null-key visibility) and D6 (§6).
+Status: **all six decisions shipped 2026-09-19** — the coercion fix, D2
+and D4 (§6a), D3 (§6b), D5 (§6c), D1 core with the ssql-owned `date()`
+(§6d), D6 (§6e). Open: D1's second unit only (`resample` SQL over time
+columns, null-key visibility in the JSON parser).
 Ross, 2026-09-14: "Have you actually
 checked that duckdb can import json/jsonl from ssql? and what about the
 reverse?" — then "I had assumed you needed to use the to/from commands
@@ -515,6 +515,27 @@ cross-process round trip, sinks, loud failures), the four cases.
 still refuses string timestamps; a cast upstream now gives it a typed
 column to use); null-key visibility in the JSON parser (§6b residual);
 RFC 3339 auto-detection behind a flag, if ever wanted.
+
+## 6e. Shipped 2026-09-19: D6, the interchange gates
+
+`cmd/ssql/interchange_test.go`. `TestDuckDBInterchange` is gated on the
+binary like the equivalence lane; `TestPostgresInterchange` on
+`SSQL_TEST_PG_HOST` (psql over ssh, SQL and `\copy … FROM STDIN` data
+on one stdin, a per-process table name dropped in `t.Cleanup`). They
+are this document's §1 as a test: every direction that was checked by
+hand on 2026-09-14 and again for D5, with the inputs that broke things —
+a NULL in the FIRST row, zoneless and zoned timestamps, a whole-number
+float — and assertions on row counts, the exact field SET (no
+`_line_number`, nothing dropped), column order, `typeof(ts) =
+TIMESTAMP` on the DuckDB side and `note IS NULL` on the Postgres side.
+One assertion pins the codelab's warning rather than a success: a plain
+redirect keeps the `_schema` line and DuckDB reads it as a phantom row.
+
+Watched failing: with `SSQL_SCHEMA_SAMPLE=1` (first-record inference,
+the pre-D3 behaviour) both tests fail on the nullable column. The
+Postgres test passed on its first run and the DuckDB one needed only a
+test fix — expected, since D2–D5 and D1 had already been driven by the
+same manual runs; the value now is that the claim cannot rot.
 
 Still open, in the recommended order: ~~D3~~ (shipped, §6b; was: sampled schema inference
 so a NULL-in-first-record field is not dropped — the remaining silent

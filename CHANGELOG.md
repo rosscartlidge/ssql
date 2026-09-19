@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over such a column is the engine's bucketing pinned to the Unix epoch
   (`time_bucket`; `date_bin` on Postgres and DataFusion) so it lands on
   the same grid as every other lane.
+- **Interchange gates** (DFC128 D6): `TestDuckDBInterchange` (runs when
+  `duckdb` is installed) and `TestPostgresInterchange`
+  (`SSQL_TEST_PG_HOST`) execute every claim the codelab makes about
+  moving data to and from the two engines — `COPY … TO` in both JSON
+  shapes, `duckdb -json` on a pipe, `row_to_json`, `json_agg`, `\copy`
+  CSV both ways, `to jsonl`/`to json` into `read_json_auto` and into a
+  `jsonb` column — with a NULL in the first row, both Postgres timestamp
+  types and a whole-number float, asserting row counts, exact field
+  sets, column order and that a `time` column arrives as a TIMESTAMP.
 - Typed mode: `cast` to and from `time.Time`; `where` gained all six
   comparisons on a time field (it had `eq`/`ne` only, against a literal
   that silently became the zero time when it did not parse — the operand

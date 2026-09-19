@@ -2,7 +2,7 @@
 
 Reference: DFC056
 Created: 2026-03-10
-Last modified: 2026-09-17
+Last modified: 2026-09-19
 
 [Back to Index](./README.md)
 
@@ -323,6 +323,17 @@ Two ways in:
 Tests gate on `SSQL_TEST_PG_HOST=ssql-node1` and skip without it, like
 `SSQL_TEST_SSH_HOST`. Data lives in the `ssql` database; tests should
 create and drop their own tables (`emp`, `raw*` were the ad-hoc ones).
+
+**`TestPostgresInterchange`** (2026-09-19, DFC128 D6,
+`cmd/ssql/interchange_test.go`) uses the same variable and the same
+one-stdin psql session: it creates `ssql_ix_<pid>` tables, exports them
+as `row_to_json`, `json_agg` and `\copy … TO STDOUT CSV HEADER` into the
+local binary, loads ssql's CSV and JSONL back with `\copy … FROM STDIN`,
+and drops the tables in cleanup. Run it, with its DuckDB twin:
+
+```bash
+SSQL_TEST_PG_HOST=ssql-node1 go test ./cmd/ssql -run 'Test(DuckDB|Postgres)Interchange' -v
+```
 
 **The `postgres` oracle lane** (2026-09-17, DFC132 §4) in
 `TestPipelineEquivalence` is the first consumer: with the variable set,
