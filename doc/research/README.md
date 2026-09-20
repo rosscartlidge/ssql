@@ -141,6 +141,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC131 | 2026-09-16 | 2026-09-16 | [A Read-Only Codelab Workspace on the Tailnet, as a systemd Service](./dfc131_serve_systemd_tailnet_codelab.md) |
 | DFC132 | 2026-09-17 | 2026-09-17 | [Generating Rust: Decision, and What the DataFusion Check Found](./dfc132_rust_target_datafusion.md) |
 | DFC133 | 2026-09-20 | 2026-09-20 | [Finding the Bugs We Do Not Know About](./dfc133_finding_unknown_bugs.md) |
+| DFC134 | 2026-09-20 | 2026-09-20 | [Pipelines as Data: Safe Programmatic Construction, and Why SQL Cannot Have It](./dfc134_pipelines_as_data.md) |
 
 <!-- DFC-INDEX-END -->
 
