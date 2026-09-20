@@ -641,11 +641,22 @@ func emitTypedJoin(
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'join -on/-using' references unknown right field %q", clause.RightField))
 	}
-	if leftKeyField.GoType != rightKeyField.GoType {
-		return lib.WriteErrorAndExit(getCommandString(),
-			fmt.Errorf("ssql generate go -typed: join key types differ (left %s: %s, right %s: %s)", leftKeyField.Name, leftKeyField.GoType, rightKeyField.Name, rightKeyField.GoType))
-	}
+	// The key is compared as ONE Go type. An int key on one side and a
+	// float on the other is ordinary data — a single 2.5 in one file's
+	// column makes the reader type that whole column float — so numbers
+	// widen to float64, as the other lanes compare them (DFC133: the
+	// interpreted join matched nothing here, and this lane refused).
 	keyType := leftKeyField.GoType
+	leftKeyExpr, rightKeyExpr := "l."+leftKeyField.GoName, "r."+rightKeyField.GoName
+	if leftKeyField.GoType != rightKeyField.GoType {
+		numeric := func(t string) bool { return t == "int64" || t == "float64" }
+		if !numeric(leftKeyField.GoType) || !numeric(rightKeyField.GoType) {
+			return lib.WriteErrorAndExit(getCommandString(),
+				fmt.Errorf("ssql generate go -typed: join key types differ (left %s: %s, right %s: %s)", leftKeyField.Name, leftKeyField.GoType, rightKeyField.Name, rightKeyField.GoType))
+		}
+		keyType = "float64"
+		leftKeyExpr, rightKeyExpr = "float64("+leftKeyExpr+")", "float64("+rightKeyExpr+")"
+	}
 
 	// Build merge function body.
 	var mergeAssignments []string
@@ -668,16 +679,16 @@ func emitTypedJoin(
 	// funcName() — process substitution / file source.
 	makeJoinCode := func(joinFn string) string {
 		return fmt.Sprintf(`joined := %s(%s, %s(),
-		func(l %s) %s { return l.%s },
-		func(r %s) %s { return r.%s },
+		func(l %s) %s { return %s },
+		func(r %s) %s { return %s },
 		func(l %s, r %s) %s {
 			return %s{
 				%s,
 			}
 		})`,
 			joinFn, inputVar, funcName,
-			leftSchema.TypeName, keyType, leftKeyField.GoName,
-			rightSchema.TypeName, keyType, rightKeyField.GoName,
+			leftSchema.TypeName, keyType, leftKeyExpr,
+			rightSchema.TypeName, keyType, rightKeyExpr,
 			leftSchema.TypeName, rightSchema.TypeName, mergedSchema.TypeName,
 			mergedSchema.TypeName,
 			strings.Join(mergeAssignments, ",\n\t\t\t\t"),

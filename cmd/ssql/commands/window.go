@@ -370,6 +370,26 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					windowFields = append(windowFields, o.Field)
 				}
 			}
+			// …and the fields the FUNCTIONS read: `window -sum nosuchfield
+			// total` summed nothing and exited 0 (DFC133 crash sweep). Each
+			// function describes its own input (DescribeWindowFunc); the
+			// registry says whether an aggregate's extra argument is a field.
+			for _, cfg := range configs {
+				for _, spec := range cfg.Specs {
+					d := ssql.DescribeWindowFunc(spec.Function)
+					if d.Field != "" {
+						windowFields = append(windowFields, d.Field)
+					}
+					if d.Agg != nil {
+						if d.Agg.Field != "" {
+							windowFields = append(windowFields, d.Agg.Field)
+						}
+						if def, ok := aggDefByFn(d.Agg.Name); ok && def.extraIsField && d.Agg.Extra != "" {
+							windowFields = append(windowFields, d.Agg.Extra)
+						}
+					}
+				}
+			}
 			if err := validateFieldsSchema(inputSchema, windowFields, "window"); err != nil {
 				return err
 			}

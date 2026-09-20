@@ -60,34 +60,23 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 		return // Not a JSON array
 	}
 
-	// Track field types from first record for consistency
-	var fieldTypes map[string]ssql.FieldType
-
-	// Read array elements
+	// Read array elements. Each value keeps its OWN type, exactly as the
+	// JSON Lines reader does (a whole number is an int, 2.5 a float, "x" a
+	// string, null a field without a value); the `_schema` header then
+	// widens int+float to float and the header-aware readers downstream
+	// apply it. This loop used to lock each field to the type of its FIRST
+	// value and coerce the rest — so a column holding 12 and "12" came out
+	// all numbers or all strings depending on which element was first,
+	// and a filter kept or lost rows accordingly (DFC133 row-order sweep).
 	for decoder.More() {
 		var rec map[string]any
 		if err := decoder.Decode(&rec); err != nil {
 			continue // Skip malformed elements
 		}
 
-		if fieldTypes == nil {
-			fieldTypes = make(map[string]ssql.FieldType)
-		}
-
-		// Build record with consistent types: a field's type is locked by
-		// its first VALUE. A null says nothing about the type, so it never
-		// locks one (a column NULL in the first element used to be locked
-		// as a string) and never takes one (DFC128 §6g).
 		record := ssql.MakeMutableRecord()
 		for k, v := range rec {
-			if v == nil {
-				record = record.Null(k)
-			} else if ft, ok := fieldTypes[k]; ok {
-				record = setValueWithType(record, k, v, ft)
-			} else {
-				fieldTypes[k] = inferJSONFieldType(v)
-				record = setValueFromJSON(record, k, v)
-			}
+			record = setValueFromJSON(record, k, v)
 		}
 
 		if !yield(record.Freeze()) {
@@ -108,27 +97,6 @@ func readJSONLines(r io.Reader, yield func(ssql.Record) bool) {
 			return
 		}
 	}
-}
-
-// coerceValueToType converts a value to the target field type
-func coerceValueToType(v any, ft ssql.FieldType) any {
-	switch ft {
-	case ssql.FieldTypeInt:
-		switch val := v.(type) {
-		case int64:
-			return val
-		case float64:
-			return int64(val)
-		}
-	case ssql.FieldTypeFloat:
-		switch val := v.(type) {
-		case float64:
-			return val
-		case int64:
-			return float64(val)
-		}
-	}
-	return v
 }
 
 // WriteJSON writes Records as JSON.

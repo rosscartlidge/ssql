@@ -959,6 +959,19 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// DFC133 (row-order sweep): an int key joined to a float key. The
+		// library's hash key printed both as "3", then the confirming
+		// Match compared the raw interfaces — int64(3) != float64(3) — and
+		// EVERY row of the join vanished, silently. Typed mode refused
+		// with "join key types differ". Numbers compare as numbers.
+		Name:     "join_int_key_to_float_key",
+		Pipeline: `{{.bin}} from csv {{.data}}/orders_floatkey.csv | {{.bin}} join {{.data}}/customers.csv -using customer_id | {{.bin}} include order_id name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"order_id": 1, "name": "customer_3"}, {"order_id": 2, "name": "customer_1"}, {"order_id": 4, "name": "customer_5"},
+		},
+	},
+	{
 		// DFC128 §6g: filtering on a column whose FIRST row is NULL. exec
 		// validated `where`'s fields against the first record's values and
 		// failed with "unknown field(s): score (available: …, score)".

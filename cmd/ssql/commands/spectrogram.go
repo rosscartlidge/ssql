@@ -136,6 +136,11 @@ func RegisterSpectrogram(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			} else {
 				// Read from stdin (pipeline mode)
 				schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
+				// An unknown -field read as a signal of zeros and produced a
+				// confident, meaningless spectrum (DFC133 crash sweep).
+				if err := validateFieldsSchema(schemaAndRecords.Schema, []string{field}, "spectrogram"); err != nil {
+					return err
+				}
 				records := slices.Collect(schemaAndRecords.Records)
 				signal = ssql.ExtractSignalFromSlice(records, field)
 			}

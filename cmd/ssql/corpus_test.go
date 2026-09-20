@@ -116,6 +116,10 @@ func corpusData(t *testing.T) string {
 			"precision.csv":          corpusPrecisionCSV,
 			"epochs_ms.csv":          corpusEpochsMsCSV,
 			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
+			// A join key that is a FLOAT column on the left (one 2.5 types
+			// the whole column float) and an INT column on the right
+			// (DFC133: the interpreted join matched nothing).
+			"orders_floatkey.csv": "order_id,customer_id\n1,3\n2,1\n3,2.5\n4,5\n",
 			// One timestamp column in the forms other tools write (DFC128
 			// D1): SQL datetime, Postgres zoneless JSON, a bare DATE, and
 			// Postgres CSV timestamptz. Chronological order: 2, 4, 3, 1.

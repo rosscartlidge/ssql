@@ -283,3 +283,67 @@ func TestNullColumnsKeepTheirNames(t *testing.T) {
 		t.Errorf("an unknown field must still fail: %v\n%s", err, out)
 	}
 }
+
+// TestHeaderDoesNotDependOnRowOrder (DFC133 row-order sweep): the `_schema`
+// header — field set AND types — is a property of the data, not of which
+// row happens to be first. A CSV whose first row had an empty cell wrote
+// that column's type as "string" although the reader had typed the column
+// float; a JSON array coerced a whole column to the type of its first
+// value. Promoted from the sweep so the class stays closed.
+func TestHeaderDoesNotDependOnRowOrder(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte(content), 0o644)
+		return p
+	}
+	header := func(file string) string {
+		out, err := exec.Command("bash", "-c", bin+" from "+file+" | head -1").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", file, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	pairs := [][2]string{
+		{write("a1.csv", "id,pop,city\n1,,\n2,3.5,Oslo\n3,7,Lima\n"), write("a2.csv", "id,pop,city\n2,3.5,Oslo\n1,,\n3,7,Lima\n")},
+		{write("b1.tsv", "id\tpop\n1\t\n2\t3.5\n"), write("b2.tsv", "id\tpop\n2\t3.5\n1\t\n")},
+		{write("c1.jsonl", "{\"id\":1,\"pop\":null}\n{\"id\":2,\"pop\":3.5}\n"), write("c2.jsonl", "{\"id\":2,\"pop\":3.5}\n{\"id\":1,\"pop\":null}\n")},
+		{write("d1.json", `[{"id":1,"pop":null},{"id":2,"pop":3.5}]`), write("d2.json", `[{"id":2,"pop":3.5},{"id":1,"pop":null}]`)},
+	}
+	for _, p := range pairs {
+		h1, h2 := header(p[0]), header(p[1])
+		if h1 != h2 {
+			t.Errorf("header depends on row order:\n  %s: %s\n  %s: %s", filepath.Base(p[0]), h1, filepath.Base(p[1]), h2)
+		}
+		if !strings.Contains(h1, `"pop":"float"`) {
+			t.Errorf("%s: pop must be typed float, got %s", filepath.Base(p[0]), h1)
+		}
+	}
+
+	// A column that mixes 12 and "12": each value keeps its own type, so the
+	// answer is the same in either order and in both JSON shapes. (It is 2:
+	// the number 12, and the string "12", which is lexically above "10".)
+	// The array reader used to coerce the column to its first value's type,
+	// so the count depended on which element came first.
+	var counts []string
+	for _, f := range []string{
+		write("m1.json", `[{"k":12},{"k":"12"},{"k":7}]`), write("m2.json", `[{"k":"12"},{"k":12},{"k":7}]`),
+		write("m1.jsonl", "{\"k\":12}\n{\"k\":\"12\"}\n{\"k\":7}\n"), write("m2.jsonl", "{\"k\":\"12\"}\n{\"k\":12}\n{\"k\":7}\n"),
+	} {
+		out, err := exec.Command("bash", "-c", bin+" from "+f+" | "+bin+" where -if k gt 10 | "+bin+" count").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", filepath.Base(f), err, out)
+		}
+		counts = append(counts, strings.TrimSpace(string(out)))
+	}
+	for _, c := range counts {
+		if c != counts[0] || c != "2" {
+			t.Errorf("a mixed column must give the same answer in every order and shape, got %q", counts)
+			break
+		}
+	}
+}

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Two opt-in bug-finding gates** (`SSQL_SWEEP=1`, DFC133).
+  `TestRowOrderSweep` reruns the equivalence corpus with the input rows
+  reordered and adversarial rows appended, in CSV, JSONL and JSON-array
+  form, and requires the same rows and the same header whichever row is
+  first — no second implementation needed. `TestCrashSweep` drives every
+  command and flag from `ssql -spec-json` with degenerate values and
+  inputs and asserts no runtime error, no hang, well-formed output and
+  that an unknown field is an error. Their first runs found the seven
+  defects listed under Fixed.
 - Library: `Record.HasValue(field)` (the field exists AND has a value),
   `MutableRecord.Null(field)`, `ssql.ParseJSONLineWithNulls`.
 - **`resample` over a time column** (DFC128 D1, second unit). After `cast
@@ -26,6 +35,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of `resample`'s SQL.
 
 ### Fixed
+- **`join` silently matched nothing when the key was an integer column
+  on one side and a float column on the other** — which happens as soon
+  as one file has a single `2.5` in the key column, because the reader
+  types the whole column float. The hash key printed both sides alike,
+  then the confirming comparison used the raw values, where an integer 3
+  and a float 3 are unequal: every row vanished, exit 0. Numbers now
+  compare as numbers (and a number never equals text). Typed mode, which
+  refused such a join, widens a numeric key instead. Found by the new
+  row-order sweep (DFC133).
+- **A CSV/TSV header's column type depended on the first row**: an empty
+  cell in row one wrote that column's type as `string` although the
+  reader had typed it float. `from` reads on until every column has shown
+  a value (one record for clean data, as before).
+- **`from json` arrays coerced each column to the type of its first
+  value**, so a column holding `12` and `"12"` came out all numbers or
+  all strings depending on element order, and filters kept or lost rows
+  accordingly. Each value keeps its own type, exactly as `from jsonl`.
+- **`sample N` and `limit -last N` panicked for an absurd N**
+  (`makeslice: cap out of range`).
+- **Unknown field names were accepted** by every `window` function's
+  input field, `exclude`, `rename -as`, `fill -default` (which silently
+  added a column) and `fft`/`spectrogram -field` (an unknown field read
+  as a signal of zeros). All are errors now, naming the available fields.
 - **A NULL in a later row of a JSON array's integer column became `0`.**
   `from json` typed each column from the first element and fell through
   to a zero for a value it could not convert — so `{"n":null}` read as

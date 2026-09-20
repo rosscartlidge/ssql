@@ -8,8 +8,6 @@ import (
 	"io"
 	"iter"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -106,117 +104,6 @@ func setValueFromJSON(record ssql.MutableRecord, key string, v any) ssql.Mutable
 	default:
 		// Unknown type (shouldn't happen with valid JSON) - convert to string
 		return record.String(key, fmt.Sprintf("%v", v))
-	}
-}
-
-// inferJSONFieldType determines the FieldType from a JSON-parsed value
-// Handles both json.Unmarshal types (float64 for all numbers) and fast parser types (int64/float64)
-func inferJSONFieldType(value any) ssql.FieldType {
-	switch value.(type) {
-	case int64:
-		return ssql.FieldTypeInt // Fast parser returns integers as int64
-	case float64:
-		return ssql.FieldTypeFloat // JSON numbers or decimals
-	case bool:
-		return ssql.FieldTypeBool
-	case string:
-		return ssql.FieldTypeString
-	case []any, map[string]any, ssql.Record, ssql.JSONString:
-		return ssql.FieldTypeAuto // Preserve complex types as-is
-	default:
-		return ssql.FieldTypeAuto // Preserve unknown types as-is
-	}
-}
-
-// setValueWithType sets a field on a MutableRecord, coercing to the target type
-// Handles both json.Unmarshal types (float64 for all numbers) and fast parser types (int64/float64)
-func setValueWithType(record ssql.MutableRecord, key string, v any, targetType ssql.FieldType) ssql.MutableRecord {
-	if v == nil {
-		// NULL is NULL in a column of any type. The typed branches below
-		// fall through to a zero for values they cannot convert, which
-		// turned a null in an int column of a JSON array into 0.
-		return record.Null(key)
-	}
-	switch targetType {
-	case ssql.FieldTypeTime:
-		// RFC 3339 on the wire → time.Time. A value the header calls a
-		// time but ParseTime cannot read keeps its own type: never a zero
-		// time in place of data.
-		if t, ok := ssql.ParseTime(v); ok {
-			return record.Time(key, t)
-		}
-		return setValueFromJSON(record, key, v)
-	case ssql.FieldTypeFloat:
-		switch val := v.(type) {
-		case float64:
-			return record.Float(key, val)
-		case int64:
-			return record.Float(key, float64(val))
-		case bool:
-			if val {
-				return record.Float(key, 1)
-			}
-			return record.Float(key, 0)
-		case string:
-			if f, err := strconv.ParseFloat(val, 64); err == nil {
-				return record.Float(key, f)
-			}
-			return record.Float(key, 0)
-		default:
-			return record.Float(key, 0)
-		}
-	case ssql.FieldTypeInt:
-		switch val := v.(type) {
-		case int64:
-			return record.Int(key, val)
-		case float64:
-			return record.Int(key, int64(val))
-		case bool:
-			if val {
-				return record.Int(key, 1)
-			}
-			return record.Int(key, 0)
-		case string:
-			if i, err := strconv.ParseInt(val, 10, 64); err == nil {
-				return record.Int(key, i)
-			}
-			return record.Int(key, 0)
-		default:
-			return record.Int(key, 0)
-		}
-	case ssql.FieldTypeBool:
-		switch val := v.(type) {
-		case bool:
-			return record.Bool(key, val)
-		case int64:
-			return record.Bool(key, val != 0)
-		case float64:
-			return record.Bool(key, val != 0)
-		case string:
-			switch strings.ToLower(val) {
-			case "true", "1", "yes", "y", "on":
-				return record.Bool(key, true)
-			default:
-				return record.Bool(key, false)
-			}
-		default:
-			return record.Bool(key, false)
-		}
-	case ssql.FieldTypeString:
-		switch val := v.(type) {
-		case string:
-			return record.String(key, val)
-		case int64:
-			return record.String(key, strconv.FormatInt(val, 10))
-		case float64:
-			return record.String(key, strconv.FormatFloat(val, 'g', -1, 64))
-		case bool:
-			return record.String(key, strconv.FormatBool(val))
-		default:
-			return record.String(key, fmt.Sprintf("%v", v))
-		}
-	default:
-		return setValueFromJSON(record, key, v)
 	}
 }
 

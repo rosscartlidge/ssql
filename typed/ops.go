@@ -50,7 +50,8 @@ func TakeLast[T any](n int) func(iter.Seq[T]) iter.Seq[T] {
 			if n <= 0 {
 				return
 			}
-			ring := make([]T, 0, n)
+			// Capacity is a hint: a huge N must not fail in make() (DFC133).
+			ring := make([]T, 0, min(n, 1<<16))
 			head := 0
 			for v := range in {
 				if len(ring) < n {

@@ -81,6 +81,15 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Read JSONL from stdin (with schema if present)
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
+			// Renaming a field that does not exist is a typo, not a no-op
+			// (DFC133 crash sweep: `rename -as nosuchfield x` exited 0).
+			var oldFields []string
+			for _, ren := range renames {
+				oldFields = append(oldFields, ren.oldField)
+			}
+			if err := validateFieldsSchema(schemaAndRecords.Schema, oldFields, "rename"); err != nil {
+				return err
+			}
 
 			// Build renamer function using Rename()
 			renamer := func(r ssql.Record) ssql.Record {

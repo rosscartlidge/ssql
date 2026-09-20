@@ -72,6 +72,11 @@ func RegisterExclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Read JSONL from stdin (with schema if present)
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
+			// A name that is not a field is a typo, not a no-op (DFC133
+			// crash sweep: `exclude nosuchfield` exited 0 unchanged).
+			if err := validateFieldsSchema(schemaAndRecords.Schema, fields, "exclude"); err != nil {
+				return err
+			}
 
 			// Build exclusion function - delete excluded fields
 			excluder := func(r ssql.Record) ssql.Record {

@@ -544,7 +544,7 @@ func (p *fieldsJoinPredicate) Match(left, right Record) bool {
 	for _, field := range p.fields {
 		leftVal, leftExists := Get[any](left, field)
 		rightVal, rightExists := Get[any](right, field)
-		if !leftExists || !rightExists || leftVal != rightVal {
+		if !leftExists || !rightExists || !joinValuesEqual(leftVal, rightVal) {
 			return false
 		}
 	}
@@ -565,6 +565,42 @@ func (p *fieldsJoinPredicate) ExtractKey(r Record) (string, bool) {
 	}
 	// Join with separator that's unlikely to appear in data
 	return strings.Join(parts, "\x00"), true
+}
+
+// joinValuesEqual is join-key equality, the confirming check behind the
+// hash key (ExtractKey prints values with %v, so 3 and 3.0 share a
+// bucket). A key column is an int on one side and a float on the other
+// as soon as ONE row of one file holds 2.5 — the CSV reader types the
+// whole column float — and `leftVal != rightVal` on the interfaces made
+// int64(3) and float64(3) unequal: every row of the join silently
+// vanished (found by the DFC133 row-order sweep). Numbers compare as
+// numbers, as they do in SQL and in the hash key; everything else by its
+// printed value, as OnFieldPair always did.
+func joinValuesEqual(a, b any) bool {
+	if a == b {
+		return true
+	}
+	af, aok := joinNumber(a)
+	bf, bok := joinNumber(b)
+	if aok && bok {
+		return af == bf
+	}
+	if aok != bok {
+		return false // a number never equals a non-number by accident of printing
+	}
+	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+}
+
+func joinNumber(v any) (float64, bool) {
+	switch x := v.(type) {
+	case int64:
+		return float64(x), true
+	case float64:
+		return x, true
+	case int:
+		return float64(x), true
+	}
+	return 0, false
 }
 
 // Match implements JoinPredicate for customJoinPredicate
@@ -608,7 +644,7 @@ func (p *fieldPairJoinPredicate) Match(left, right Record) bool {
 	if !leftExists || !rightExists {
 		return false
 	}
-	return fmt.Sprintf("%v", leftVal) == fmt.Sprintf("%v", rightVal)
+	return joinValuesEqual(leftVal, rightVal)
 }
 
 // ExtractKey implements KeyExtractor for hash join optimization.

@@ -243,7 +243,8 @@ func TakeLast[T any](n int) Filter[T, T] {
 			if n <= 0 {
 				return
 			}
-			ring := make([]T, 0, n)
+			// Capacity is a hint: a huge N must not fail in make() (DFC133).
+			ring := make([]T, 0, min(n, 1<<16))
 			head := 0 // index of the oldest element once the ring is full
 			for v := range input {
 				if len(ring) < n {

@@ -580,10 +580,15 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInf
 	next, stop := iter.Pull(records)
 	defer stop()
 
-	limit := 1
-	if len(options.fieldOrder) == 0 {
-		limit = schemaSampleRows()
-	}
+	// How far to read before writing the header. Without a fieldOrder the
+	// whole sample is needed for the field SET. With one (CSV/TSV: the
+	// source named its columns) only the TYPES are open, and the reader has
+	// already typed each column consistently — so read just until every
+	// column has shown a value. For clean data that is one record, as
+	// before; a first row with an empty cell reads on instead of writing
+	// that column's type as "string" (DFC133 row-order sweep: the header
+	// said pop:string or pop:float depending on which row came first).
+	limit := schemaSampleRows()
 	var sample []ssql.Record
 	for len(sample) < limit {
 		r, ok := next()
@@ -591,6 +596,9 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInf
 			break
 		}
 		sample = append(sample, r)
+		if len(options.fieldOrder) > 0 && sampleTypesEvery(sample, options.fieldOrder) {
+			break
+		}
 	}
 	if len(sample) == 0 {
 		return nil // no records - nothing to write
@@ -598,7 +606,19 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInf
 
 	var schema *lib.Schema
 	if len(options.fieldOrder) > 0 {
-		schema = lib.InferFromRecordOrdered(sample[0], options.fieldOrder)
+		// The source's column order, the sample's types.
+		typed := lib.InferFromSample(sample)
+		schema = lib.NewSchema()
+		for _, f := range options.fieldOrder {
+			if t, ok := typed.Types[f]; ok {
+				schema.AddField(f, t)
+			}
+		}
+		for _, f := range typed.Fields {
+			if !schema.HasField(f) {
+				schema.AddField(f, typed.Types[f])
+			}
+		}
 	} else {
 		// Record (schema) order, NOT alphabetical: Record.All() is
 		// deterministic since records carry ordered schemas, and the
@@ -661,6 +681,26 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInf
 		return err
 	}
 	return lateErr
+}
+
+// sampleTypesEvery reports whether every named field has shown a value
+// somewhere in the sample (checking only the newest record against what
+// is still missing would be cheaper; the sample is one record long in the
+// common case, so this stays simple).
+func sampleTypesEvery(sample []ssql.Record, fields []string) bool {
+	for _, f := range fields {
+		seen := false
+		for _, r := range sample {
+			if r.HasValue(f) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			return false
+		}
+	}
+	return true
 }
 
 // capitalizeFieldType converts "string" to "String", "int" to "Int", etc.

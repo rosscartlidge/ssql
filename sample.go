@@ -71,7 +71,10 @@ func SampleN[T any](n int, seed int64) Filter[T, T] {
 				idx int64
 				val T
 			}
-			reservoir := make([]held, 0, n)
+			// Capacity is a hint, not a promise: `sample 999999999999999999`
+			// asked make() for that much and died with "makeslice: cap out
+			// of range" (DFC133 crash sweep). append grows it as rows arrive.
+			reservoir := make([]held, 0, min(n, 1<<16))
 			var i int64
 			for v := range input {
 				if len(reservoir) < n {

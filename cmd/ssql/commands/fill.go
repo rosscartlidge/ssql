@@ -113,6 +113,16 @@ func RegisterFill(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					if err := validateFieldsSchema(schema, cfg.Down, "fill"); err != nil {
 						return err
 					}
+					// -default on a field that does not exist is a typo: it
+					// added a new column holding the default in every row
+					// (DFC133 crash sweep). `update -set` creates fields.
+					var defaultFields []string
+					for _, d := range rawDefaults {
+						defaultFields = append(defaultFields, d[0])
+					}
+					if err := validateFieldsSchema(schema, defaultFields, "fill"); err != nil {
+						return err
+					}
 				}
 			}
 			// Default literals take the field's schema type when known
