@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"math"
 	"os"
 	"time"
 
@@ -117,7 +118,14 @@ func convertRecordValue(v any) any {
 			result[k] = convertRecordValue(subv)
 		}
 		return result
-	case int64, float64, bool, string, nil:
+	case float64:
+		// encoding/json refuses NaN and Infinity outright; JSON has
+		// neither. No value, like the JSONL writer (DFC133).
+		if math.IsNaN(val) || math.IsInf(val, 0) {
+			return nil
+		}
+		return val
+	case int64, bool, string, nil:
 		// Canonical types pass through
 		return val
 	case time.Time:

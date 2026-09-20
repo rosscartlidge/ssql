@@ -57,6 +57,10 @@ func (d aggDef) arity() int {
 
 func wireFixed(t string) func(string) string { return func(string) string { return t } }
 
+// sqlSumOrZero: the empty sum is 0 in ssql (a group whose every value is
+// missing sums to 0); SQL's SUM answers NULL there.
+func sqlSumOrZero(qf, _ string) string { return "COALESCE(SUM(" + qf + "), 0)" }
+
 // sqlCall renders FN("field") for the plain one-field aggregates.
 func sqlCall(fn string) func(string, string) string {
 	return func(qf, _ string) string { return fmt.Sprintf("%s(%s)", fn, qf) }
@@ -121,7 +125,7 @@ var aggDefs = []aggDef{
 		sql:   func(string, string) string { return "COUNT(*)" },
 		build: func(string, string) ssql.AggregateFunc { return ssql.Count() },
 		code:  func(string, string) string { return "ssql.Count()" }},
-	{flag: "-sum", fn: "sum", hasField: true, sql: sqlCall("SUM"), wireType: wireFixed("float"), typedKind: typedKindSum,
+	{flag: "-sum", fn: "sum", hasField: true, sql: sqlSumOrZero, wireType: wireFixed("float"), typedKind: typedKindSum,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Sum(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Sum(%q)", f) }},
 	{flag: "-avg", fn: "avg", hasField: true, sql: sqlCall("AVG"), wireType: wireFixed("float"), typedKind: typedKindAvg,

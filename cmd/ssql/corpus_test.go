@@ -116,6 +116,12 @@ func corpusData(t *testing.T) string {
 			"precision.csv":          corpusPrecisionCSV,
 			"epochs_ms.csv":          corpusEpochsMsCSV,
 			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
+			// DFC133 random differential. `code` is TEXT that sometimes looks
+			// like a number; group b has NO value for v or t; `e` is empty in
+			// every row.
+			// Zero-padded identifiers: text, in every lane (DFC133).
+			"zero_padded.csv": "id,zip,part\n1,02134,007\n2,90210,120\n3,00501,045\n",
+			"missing_groups.csv": "id,g,v,t,code,e\n1,a,1,Oslo,12,\n2,a,3,,abc,\n3,b,,,007,\n4,b,,,x,\n",
 			// A join key that is a FLOAT column on the left (one 2.5 types
 			// the whole column float) and an INT column on the right
 			// (DFC133: the interpreted join matched nothing).

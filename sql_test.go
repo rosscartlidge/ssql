@@ -662,8 +662,15 @@ func TestAvgEmpty(t *testing.T) {
 	avgFn := Avg("score")
 	result := avgFn(records).getValue()
 
-	if result != 0.0 {
-		t.Errorf("Avg of empty should return 0, got %v", result)
+	// The average of nothing is not 0 — it has no value (SQL's NULL). It
+	// returned 0.0 until DFC133's random differential found `-avg f`
+	// answering 0 for a group in which every f was missing. The empty SUM
+	// stays 0: that one is a real answer.
+	if result != nil {
+		t.Errorf("Avg of empty should have no value, got %v", result)
+	}
+	if got := Sum("score")(records).getValue(); got != 0.0 {
+		t.Errorf("Sum of empty should be 0, got %v", got)
 	}
 }
 

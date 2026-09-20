@@ -41,7 +41,7 @@ func Percentile(field string, p float64) AggregateFunc {
 	return func(records []Record) AggregateResult {
 		vals := numericValues(context, records, field)
 		if len(vals) == 0 {
-			return AggResult[string]{val: ""}
+			return aggNoValue{}
 		}
 		sort.Float64s(vals)
 		return AggResult[float64]{val: QuantileCont(vals, p)}
@@ -74,7 +74,7 @@ func Variance(field string) AggregateFunc {
 			w.Add(v)
 		}
 		if w.N == 0 {
-			return AggResult[string]{val: ""}
+			return aggNoValue{}
 		}
 		return AggResult[float64]{val: w.Variance()}
 	}
@@ -89,7 +89,7 @@ func StdDev(field string) AggregateFunc {
 			w.Add(v)
 		}
 		if w.N == 0 {
-			return AggResult[string]{val: ""}
+			return aggNoValue{}
 		}
 		return AggResult[float64]{val: math.Sqrt(w.Variance())}
 	}
@@ -156,7 +156,7 @@ func Mode(field string) AggregateFunc {
 		var order int64
 		for _, r := range records {
 			v, ok := Get[any](r, field)
-			if !ok || v == nil {
+			if !ok || aggMissing(v) {
 				continue
 			}
 			k := distinctKey(v)
@@ -174,7 +174,7 @@ func Mode(field string) AggregateFunc {
 			}
 		}
 		if best == nil {
-			return AggResult[string]{val: ""}
+			return aggNoValue{}
 		}
 		return aggResult(context, best.value)
 	}
@@ -186,7 +186,7 @@ func numericValues(context string, records []Record, field string) []float64 {
 	var vals []float64
 	for _, r := range records {
 		v, ok := Get[any](r, field)
-		if !ok || v == nil {
+		if !ok || aggMissing(v) {
 			continue
 		}
 		if !isNumeric(v) {

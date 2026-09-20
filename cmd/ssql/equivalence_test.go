@@ -959,6 +959,80 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// DFC133 random differential: a CSV column holding 02134 or 007 was
+		// typed int and read as 2134 and 7 — the zeros gone for good. A
+		// zero-padded number is an identifier: the column is text in every
+		// lane, it filters and sorts as text, and DuckDB's sniffer agrees.
+		Name:     "zero_padded_codes_stay_text",
+		Pipeline: `{{.bin}} from csv {{.data}}/zero_padded.csv | {{.bin}} where -if zip startswith 0 | {{.bin}} sort part | {{.bin}} include id zip part`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "zip": "02134", "part": "007"}, {"id": 3, "zip": "00501", "part": "045"}},
+		Skip:     map[string]string{"datafusion": "DataFusion's CSV reader infers 02134 as Int64 — the defect ssql had until DFC133; DuckDB and Postgres agree with ssql"},
+	},
+	{
+		// DFC133 random differential. An aggregate over NO values has no
+		// value — not 0 (Avg did) and not "" (Min/Max/Median did: a present
+		// string the next `where` compared, so group b matched `m le 2`).
+		// The empty SUM is 0 and the SQL lane says COALESCE(SUM, 0). An
+		// empty text cell is missing (DFC124): MIN skips it, COUNT(DISTINCT)
+		// does not count it.
+		Name:     "groupby_aggregates_over_no_values",
+		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} group-by g -count c -sum v total -avg v mean -max v m -min t first_t -count-distinct t nt`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"g": "a", "c": 2, "total": 4, "mean": 2, "m": 3, "first_t": "Oslo", "nt": 1},
+			{"g": "b", "c": 2, "total": 0, "nt": 0},
+		},
+		Skip: map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+	},
+	{
+		// …and a condition on that valueless result is false, its negation true.
+		Name:     "groupby_no_value_then_where",
+		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} group-by g -max v m | {{.bin}} where -if m le 2 + +if m gt 0 | {{.bin}} include g`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"g": "b"}},
+		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+	},
+	{
+		// A literal is typed by the COLUMN it meets, not by its spelling:
+		// `code eq 12` rendered `code = 12` and DuckDB refused to cast the
+		// text column; `-set code 99` mixed VARCHAR and INTEGER in a CASE.
+		Name:     "literal_typed_by_text_column",
+		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} update -if id ge 3 -set code 0099 | {{.bin}} where -if code eq 12 + -if code eq 0099 | {{.bin}} include id`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1}, {"id": 3}, {"id": 4}},
+		Skip:     map[string]string{"go-typed": "typed reader refuses the fixture's empty numeric cells (DFC124 §3)", "go-parallel": "typed reader refuses the fixture's empty numeric cells (DFC124 §3)"},
+	},
+	{
+		// …and the literal written INTO a text column is the token as typed.
+		// `update -set zip 02134` gave three answers in four lanes: exec
+		// parsed it and coerced back ("2134"), record codegen stored the
+		// NUMBER 2134, typed and SQL kept "02134".
+		Name:     "update_literal_into_text_column_keeps_its_spelling",
+		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} update -if id ge 3 -set code 0099 | {{.bin}} where -if id ge 3 | {{.bin}} include id code`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 3, "code": "0099"}, {"id": 4, "code": "0099"}},
+		Skip:     map[string]string{"go-typed": "typed reader refuses the fixture's empty numeric cells (DFC124 §3)", "go-parallel": "typed reader refuses the fixture's empty numeric cells (DFC124 §3)"},
+	},
+
+	{
+		// update's SQL negation is ssql's: +if on a row with no value is
+		// TRUE (rows 3 and 4 have no v), where SQL's bare NOT said NULL.
+		Name:     "update_negated_condition_on_missing",
+		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} update +if v ge 2 -set g z | {{.bin}} include id g`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "g": "z"}, {"id": 2, "g": "a"}, {"id": 3, "g": "z"}, {"id": 4, "g": "z"}},
+		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+	},
+	{
+		// cast of an empty text cell stays missing — it became 0.
+		Name:     "cast_empty_text_stays_missing",
+		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} cast -type e int | {{.bin}} where -if id le 2 | {{.bin}} include id e`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1}, {"id": 2}},
+		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+	},
+	{
 		// DFC133 (row-order sweep): an int key joined to a float key. The
 		// library's hash key printed both as "3", then the confirming
 		// Match compared the raw interfaces — int64(3) != float64(3) — and

@@ -303,3 +303,16 @@ func TestDialectDataFusion(t *testing.T) {
 		t.Errorf("dialect state leaked: %q %v", sqlDialectCur, pgLoads)
 	}
 }
+
+// TestAggRegistryEntriesAreComplete: every built-in aggregate carries all
+// of its parts. A trailing comment once swallowed the rest of the -sum
+// line — wireType and typedKind silently nil — and nothing noticed until
+// `group-by -sum` dereferenced it (DFC133 random differential).
+func TestAggRegistryEntriesAreComplete(t *testing.T) {
+	for _, d := range aggDefs {
+		if d.flag == "" || d.fn == "" || d.sql == nil || d.wireType == nil || d.build == nil || d.code == nil {
+			t.Errorf("aggregate %q (%s) is missing a part: sql=%v wireType=%v build=%v code=%v",
+				d.flag, d.fn, d.sql != nil, d.wireType != nil, d.build != nil, d.code != nil)
+		}
+	}
+}

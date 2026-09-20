@@ -6,9 +6,9 @@ Last modified: 2026-09-20
 
 [Back to Index](./README.md)
 
-Status: **instruments 1 and 2 built and run (§7): seven defects found
-and fixed, none of which any existing test could see. Instruments 3 and
-4 are next.** Ross, 2026-09-20, after a week in which DFC128 closed
+Status: **all four instruments built and run (§7): twenty-one defects
+found and fixed against a suite that was fully green, plus two decisions
+for Ross (§7.6).** Ross, 2026-09-20, after a week in which DFC128 closed
 six planned decisions and surfaced about fifteen defects nobody had asked
 about: "I am worried we might have bugs we don't know about — can you
 think of a way of exercising the system to find bugs?" then "let's write
@@ -173,6 +173,8 @@ what was fixed or filed.
 |---|---|---|---|
 | 2026-09-20 | 1. Row-order sweep (`TestRowOrderSweep`, `SSQL_SWEEP=1`) | 64 pipelines from the equivalence corpus × ~12 reorderings × 3 formats (CSV, JSONL, JSON array), adversarial rows appended; ~30 s | 3 real, 1 expected |
 | 2026-09-20 | 2. Crash sweep (`TestCrashSweep`, `SSQL_SWEEP=1`) | 26 commands, every flag × degenerate values × 6 inputs = 4,998 runs; ~55 s | 1 panic (+2 of the same shape found by reading), 22 unknown fields accepted, 92 artifacts of the sweep itself |
+| 2026-09-20 | 4. Fuzz targets (`go test -fuzz`) | 6 targets × 45–90 s | 4 (one via a side probe) |
+| 2026-09-20 | 3. Random differential (`TestRandomDifferential`, `SSQL_FUZZ=n`) | ~16,000 pipelines over the session; final 10,000 strict across 5 seeds clean; ~70/s | 7 real, 1 of my own, several tester artifacts |
 
 ### 7.1 Row-order sweep
 
@@ -230,15 +232,138 @@ what was fixed or filed.
 4. *Seen by hand while triaging, filed not fixed:* an empty result name
    is accepted (`group-by dept -sum age ''` creates a field named `""`).
 
-### 7.3 What this says about instruments 3 and 4
+### 7.3 Native fuzz targets (instrument 4)
 
-Two cheap, oracle-free sweeps found seven defects in under two minutes
-of machine time, against a suite that was fully green — including one
-(the join) that silently returns an empty result for ordinary data. None
-needed imagination, only inputs nobody had typed. That is a strong prior
-that random differential testing (§5) will pay: it explores the same
-space with a second engine as oracle, where these two could only compare
-ssql with itself.
+`fuzz_test.go` (root) and `cmd/ssql/commands/fuzz_test.go`; 45–90 s per
+target. `FuzzParseTime`, `FuzzReadCSV`, `FuzzExprToSQL` (all three
+dialects) and `FuzzExprToGo` survived. Findings:
+
+1. **The two JSON line parsers disagreed on a duplicate key whose later
+   value is null** — `{"a":true,"a":null}`. JSON's convention is
+   last-wins; the null-dropping parser kept the earlier `true`. Two
+   seconds in. A dropped null now deletes the earlier value.
+2. **Negative zero was not a fixed point**: `-0.0` wrote as `-0` and read
+   back as the integer `0`. Written as `0`.
+3. **`NaN` and `Infinity` made whole rows vanish.** Found by a side probe
+   the fuzzing prompted, not by the fuzzer (text cannot produce a NaN):
+   `update -set-expr z '0.0/0.0'` wrote the bare word `NaN`, the line
+   stopped being JSON, and the NEXT stage skipped the unparseable line —
+   the row gone, exit 0. JSON has no NaN; the writer emits `null` (no
+   value) and the row survives. `to json` likewise.
+4. **The fragment command splitter rewrote non-UTF-8 bytes** as U+FFFD
+   (a Latin-1 file name) and dropped an explicitly empty `''` argument.
+   Latent rather than live: `generate sql` reads structured arguments for
+   the cases checked; the splitter is the fallback. Bytes, and `''` kept.
+
+Filed, not fixed (§7.6): the readers SKIP a line that is not JSON. That
+is what turned finding 3 from an error into silent loss.
+
+### 7.4 Random differential testing (instrument 3)
+
+`TestRandomDifferential`, `SSQL_FUZZ=<n>`: seeded adversarial tables
+(NULLs weighted in, a whole NULL column, a NULL first row, ties, text
+that looks numeric) × random valid pipelines of 1–4 stages over `where`
+(incl. `+if`), `update -if -set`, `group-by` with order-insensitive
+aggregates, `include`, `exclude`, `cast`, sort+limit and `top` on the
+unique id; the interpreter against DuckDB running `generate sql`;
+disagreements shrunk (stages, then rows) and de-duplicated by stage
+shape. About 70 pipelines a second on eight workers: 3,000 in 40 s.
+
+The first run agreed on 81 of 300 — almost all of it the tester's own
+comparison, not ssql (an empty text cell is `""` here and NULL there, by
+DFC124's decision; DuckDB prints booleans, HUGEINT sums and DECIMALs as
+strings; the shrinker emptied whole columns, which changes how both
+engines type them). Each artifact became a generator constraint or a
+representation rule, as §5 requires, and what was left was real:
+
+1. **SQL literals were typed by their spelling, not by the column.**
+   `where -if code eq 12` on a text column rendered `code = 12`, and
+   DuckDB refused to cast the column; `update -set code 12` mixed VARCHAR
+   and INTEGER in a CASE. The assembler now samples the source's column
+   kinds (the Postgres prologue's sampler), follows them through `cast`
+   and the aggregate registry's own result types, and renders the literal
+   for the column it meets (`sqlLiteralFor`).
+2. **`update`'s SQL negation was not ssql's**: `+if` on a row with no
+   value is true here, NULL there. §6g fixed `where` and missed `update`.
+3. **Aggregates over NO values answered `""` or `0`.** `-max v` over a
+   group with no v gave `""` — a present string — and the next stage's
+   `where -if m le 2` compared `""` with `"2"` and matched. `-avg` gave
+   0. They now have no value (a nil slot; `aggNoValue`). The empty SUM is
+   0 and stays 0; the SQL lane says `COALESCE(SUM(x), 0)` to match. **This
+   reverses a DFC129 choice and `Avg`'s documented 0.0 — see §7.6.**
+4. **Aggregates counted the empty string as a value.** DFC124 defines
+   missing for commands as absent ∨ null ∨ `""`; the aggregates skipped
+   only nil, so MIN over {"Oslo", ""} answered `""` and COUNT(DISTINCT)
+   counted it. One `aggMissing` at all nine sites.
+5. **`cast` of an empty text cell gave 0 / false**; it stays missing, in
+   exec and generated record code.
+6. **`update -set zip 02134` gave three answers in four lanes**: exec
+   parsed the literal and coerced it back (`"2134"`), record codegen
+   stored the NUMBER 2134 in a text column, typed and SQL kept `"02134"`.
+   Found only after the promoted case was given a hand-written golden —
+   the tester's first comparison turned number-looking text into numbers
+   on both sides and hid it. The comparison is strict now (text stays
+   text), which immediately found:
+7. **A CSV column holding `007` or `02134` was read as a number.** Type
+   inference accepted whatever `ParseInt` accepts, so zero-padded
+   identifiers — postcodes, part numbers — lost their zeros on read, for
+   good. `ZeroPaddedNumber` keeps such a column text at all three
+   inference sites (record reader, typed sampler, SQL sampler), as
+   DuckDB's sniffer does. DataFusion 54 still reads such a column as
+   Int64 — the promoted case skips that one lane and says why.
+
+Also found on the way: a slip of my own — a trailing comment swallowed
+the rest of the `-sum` registry line, leaving its wire type nil — caught
+by the tester within one run and now pinned by
+`TestAggRegistryEntriesAreComplete`.
+
+Final state: 10,000 strict pipelines across five seeds, no disagreement.
+Promoted: seven equivalence cases (`groupby_aggregates_over_no_values`,
+`groupby_no_value_then_where`, `literal_typed_by_text_column`,
+`update_literal_into_text_column_keeps_its_spelling`,
+`update_negated_condition_on_missing`, `cast_empty_text_stays_missing`,
+`zero_padded_codes_stay_text`), all with goldens, plus unit tests.
+
+### 7.5 Lessons about the instruments themselves
+
+- **A sweep's first run mostly tests the sweep** (the NUL argument; the
+  81/300). Budget for it; do not read the first number as a verdict.
+- **A loose comparison hides exactly the class it normalises away.**
+  Converting number-looking text to numbers was convenient and hid
+  findings 6 and 7. Normalise representation only where an engine forces
+  it (DuckDB's string-printed sums), per column, and nothing else.
+- **Goldens find what differential agreement cannot.** Finding 6 was four
+  lanes giving three answers, invisible to a two-lane comparison that
+  normalised both; writing the expected rows by hand exposed it.
+- **Shrinking changes the question** unless constrained: a table shrunk
+  to one row has all-empty columns, and an all-empty column is its own
+  special case in every engine.
+
+### 7.6 Decisions for Ross
+
+1. **Aggregates over no values (finding 3) reverse recorded choices**:
+   DFC129 made "nothing" the empty string, and `ssql.Avg` documented
+   `0.0` for an empty group. The evidence for changing — `""` is a
+   present value that later conditions compare; SQL agrees with no value
+   — seemed strong enough to proceed, with the tests updated to say so.
+   It is one commit to reverse if you disagree.
+2. **Readers skip lines that are not JSON** (`continue` on a parse
+   error), in every JSONL reader. Between ssql stages a malformed line is
+   a bug somewhere and should be loud; for a user's own file, leniency is
+   arguable. Not changed. It is what made the NaN bug silent.
+3. **`cast` of unparseable text is still 0** (`abc` → 0), the behaviour
+   DFC124 removed from the reader. Only the empty cell was changed here.
+   `cast … time` is already loud.
+
+### 7.7 What the four instruments say together
+
+Twenty-one defects in about five minutes of machine time, against a
+suite that was fully green. Several silently lose or change ordinary
+data: a join returning nothing, rows vanishing on NaN, postcodes losing
+their zeros, a NULL read as 0. None needed imagination, only inputs
+nobody had typed. The cheap oracle-free sweeps found as much as the
+differential one; they are not substitutes — each found what the others
+structurally could not.
 
 ## 8. References
 

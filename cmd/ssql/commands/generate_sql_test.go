@@ -479,7 +479,7 @@ func TestTranslateGroupByRollupSQL(t *testing.T) {
 	if err := translateGroupBy(q, []string{"dept", "-count", "n", "-sum", "salary", "total"}); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{`dept`, `COUNT(*) AS n`, `SUM(salary) AS total`}; strings.Join(q.selectExprs, "|") != strings.Join(want, "|") || strings.Join(q.groupBy, "|") != `dept` {
+	if want := []string{`dept`, `COUNT(*) AS n`, `COALESCE(SUM(salary), 0) AS total`}; strings.Join(q.selectExprs, "|") != strings.Join(want, "|") || strings.Join(q.groupBy, "|") != `dept` {
 		t.Errorf("plain group-by changed: select=%v groupBy=%v", q.selectExprs, q.groupBy)
 	}
 }

@@ -265,6 +265,10 @@ ssql from data.csv | jq '.age' | head -10
 - Field contains non-numeric values (`"N/A"`, `"unknown"`, etc.)
 - CSV has inconsistent data (some rows numeric, some text)
 - Manual JSONL has strings instead of numbers
+- The column holds zero-padded values (`02134`, `007`). Those are
+  identifiers, and ssql keeps such a column as text so the zeros survive
+  (as DuckDB does). If the numbers really are numbers, say so: `ssql from
+  csv data.csv -type code int`, or `ssql cast -type code int` later.
 
 **Solutions:**
 ```bash

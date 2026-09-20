@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Random differential testing** (`SSQL_FUZZ=<n>`, DFC133):
+  `TestRandomDifferential` generates adversarial tables and valid random
+  pipelines, runs the interpreter against DuckDB executing `generate
+  sql`, and shrinks any disagreement to the smallest pipeline and table
+  that still disagree. About 70 pipelines a second; 10,000 across five
+  seeds agree. **Native fuzz targets** for the JSON line parsers, the CSV
+  reader, `ParseTime`, the expression translators and the command
+  splitter (`go test -fuzz`). Between them they found the defects above.
+- Library: `ssql.ZeroPaddedNumber`.
 - **Two opt-in bug-finding gates** (`SSQL_SWEEP=1`, DFC133).
   `TestRowOrderSweep` reruns the equivalence corpus with the input rows
   reordered and adversarial rows appended, in CSV, JSONL and JSON-array
@@ -34,7 +43,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a TIMESTAMP (`epoch_us` / `make_timestamp`). DuckDB only, like the rest
   of `resample`'s SQL.
 
+### Changed
+- **An aggregate over no values has no value.** A group in which a field
+  is missing from every row used to give `""` for `-min`/`-max`/
+  `-median`/`-first`/… and `0` for `-avg`. The `""` was a present string:
+  a following `where -if m le 2` compared it and matched. The result
+  field is now present without a value (SQL's NULL): sinks show an empty
+  cell, and a condition on it is false. `-sum` of nothing is still 0 and
+  `-count` still 0 — those are real answers — and `generate sql` renders
+  `COALESCE(SUM(x), 0)` to agree. Library: `ssql.Avg` no longer returns
+  `0.0` for an empty group. Aggregates also apply DFC124's definition of
+  missing in full: an empty text cell is skipped by `-min`/`-max` and not
+  counted by `-count-distinct`.
+- **A CSV/TSV column of zero-padded numbers is text.** `02134` and `007`
+  were typed int and read as 2134 and 7 — the zeros gone for good. A
+  zero-padded number is an identifier; the column stays text in every
+  lane (record reader, typed sampler, SQL sampler), as DuckDB's sniffer
+  does. `0`, `0.5` and `-0.25` are still numbers; `from csv F -type zip
+  int` overrides.
+
 ### Fixed
+- **Rows vanished when an expression produced NaN or infinity.** `update
+  -set-expr z '0.0/0.0'` wrote the bare word `NaN`, which is not JSON;
+  the next stage skipped the unparseable line and the whole row was gone,
+  exit 0. JSON has no NaN or Infinity: they are written as `null` (no
+  value) and the row survives. Negative zero is written as `0`.
+- **`update -set zip 02134` on a text column** stored `"2134"` in the
+  interpreter and the NUMBER 2134 in generated record code. A literal
+  written into a text column is the token as typed.
+- **`generate sql` typed literals by their spelling.** `where -if code eq
+  12` on a text column rendered `code = 12` and DuckDB refused to cast
+  the column; `update -set code 12` mixed VARCHAR and INTEGER in a CASE.
+  The translator now knows each source column's kind and renders the
+  literal for the column it meets. `update`'s SQL negation also follows
+  ssql's rule (`NOT COALESCE((…), FALSE)`), as `where`'s already did.
+- **`cast` of an empty text cell** gave `0` / `false`; it stays missing.
+- The two JSON line parsers disagreed on a duplicate key whose later
+  value is null (`{"a":true,"a":null}`); last value wins in both.
 - **`join` silently matched nothing when the key was an integer column
   on one side and a float column on the other** — which happens as soon
   as one file has a single `2.5` in the key column, because the reader

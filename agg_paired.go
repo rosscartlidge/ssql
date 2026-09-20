@@ -29,11 +29,11 @@ func pairedExtreme(name, field, by string, sign int) AggregateFunc {
 		found := false
 		for _, r := range records {
 			b, ok := Get[any](r, by)
-			if !ok || b == nil {
+			if !ok || aggMissing(b) {
 				continue
 			}
 			v, ok := Get[any](r, field)
-			if !ok || v == nil {
+			if !ok || aggMissing(v) {
 				continue
 			}
 			if !found {
@@ -52,7 +52,7 @@ func pairedExtreme(name, field, by string, sign int) AggregateFunc {
 			}
 		}
 		if !found {
-			return AggResult[string]{val: ""}
+			return aggNoValue{}
 		}
 		return aggResult(context, carried)
 	}

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // SampleCSVSchema reads the header and up to maxRows data rows from the
@@ -326,6 +328,9 @@ func (c *colInfer) observe(v string) {
 		return
 	}
 	c.any = true
+	if ssql.ZeroPaddedNumber(v) {
+		c.allInt, c.allFlt = false, false // 007 is an identifier, not 7 (DFC133)
+	}
 	if c.allInt {
 		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
 			c.allInt = false

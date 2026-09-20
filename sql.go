@@ -1172,6 +1172,19 @@ func (a AggResult[V]) getValue() any { return a.val }
 func (a AggResult[V]) GetValue() any { return a.val }
 func (a AggResult[V]) sealed()       {}
 
+// aggNoValue is the result of an aggregate over NO values — a group in
+// which the field is missing from every row. It becomes a field without a
+// value (a nil slot), SQL's NULL: sinks show an empty cell, and a later
+// condition on it is false. These aggregates used to answer "" (a present
+// string: `where -if max_n le 2` compared "" with "2" and matched) or, for
+// Avg, 0 (DFC133 random differential). The empty SUM is 0 and COUNT is 0 —
+// those are real answers; an average or an extreme of nothing is not.
+type aggNoValue struct{}
+
+func (aggNoValue) getValue() any { return nil }
+func (aggNoValue) GetValue() any { return nil }
+func (aggNoValue) sealed()       {}
+
 // AggregateFunc defines an aggregation function over a group of records.
 // Takes a slice of records and returns an AggregateResult.
 // The result is guaranteed at compile time to contain a type satisfying Value.
@@ -1622,7 +1635,8 @@ func Sum(field string) AggregateFunc {
 }
 
 // Avg calculates the average of numeric values from a field (SQL AVG(field)).
-// Automatically converts values to float64. Returns 0.0 for empty groups.
+// Automatically converts values to float64. A group with no values has no
+// average: the result field is present without a value (SQL's NULL).
 //
 // Example:
 //
@@ -1641,7 +1655,7 @@ func Avg(field string) AggregateFunc {
 			}
 		}
 		if count == 0 {
-			return AggResult[float64]{val: 0.0}
+			return aggNoValue{} // the average of nothing is not 0
 		}
 		return AggResult[float64]{val: sum.Value() / float64(count)}
 	}

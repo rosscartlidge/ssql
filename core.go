@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -1174,6 +1175,19 @@ func appendJSONValue(buf []byte, v any) []byte {
 	case int64:
 		return strconv.AppendInt(buf, val, 10)
 	case float64:
+		if math.IsNaN(val) || math.IsInf(val, 0) {
+			// JSON has no NaN or Infinity. strconv wrote the bare words,
+			// the line stopped being JSON, and the NEXT stage skipped it:
+			// `update -set-expr z '0.0/0.0'` made the whole row vanish,
+			// exit 0 (DFC133 fuzzing side-probe). null = no value; the row
+			// survives and every reader agrees on what it says.
+			return append(buf, "null"...)
+		}
+		if val == 0 {
+			// Negative zero would be written "-0" and read back as the
+			// integer 0 — not a fixed point (DFC133 fuzzing). It IS zero.
+			return append(buf, '0')
+		}
 		return strconv.AppendFloat(buf, val, 'g', -1, 64)
 	case bool:
 		if val {
@@ -1185,6 +1199,9 @@ func appendJSONValue(buf []byte, v any) []byte {
 	case int32:
 		return strconv.AppendInt(buf, int64(val), 10)
 	case float32:
+		if f := float64(val); math.IsNaN(f) || math.IsInf(f, 0) {
+			return append(buf, "null"...)
+		}
 		return strconv.AppendFloat(buf, float64(val), 'g', -1, 32)
 	case JSONString:
 		// JSONString is already valid JSON - append raw
@@ -1375,6 +1392,12 @@ func parseJSONLine(line []byte, keepNulls bool) (MutableRecord, error) {
 		// slot for the wire-format readers (ParseJSONLineWithNulls).
 		if value != nil || keepNulls {
 			record.fields[fieldName] = value
+		} else {
+			// A dropped null still has to WIN over an earlier value for the
+			// same key: JSON's convention for a duplicate key is that the
+			// last one counts, so {"a":true,"a":null} has no a. Without
+			// this the two parsers disagreed (DFC133 fuzzing, 2 s in).
+			delete(record.fields, fieldName)
 		}
 
 		// Skip whitespace

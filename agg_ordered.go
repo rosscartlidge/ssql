@@ -26,6 +26,21 @@ func MinOf(field string) AggregateFunc { return orderedExtreme("MinOf", field, -
 // MaxOf is the type-preserving maximum; see MinOf.
 func MaxOf(field string) AggregateFunc { return orderedExtreme("MaxOf", field, 1) }
 
+// aggMissing is the aggregates' definition of a missing value — DFC124's,
+// the one `describe` and `unpivot` already used: absent, null, or the
+// empty string. CSV cannot tell an empty string from a missing one, the
+// reader keeps "" so that `where -if s eq ""` stays expressible, and
+// commands treat it as missing. The aggregates skipped only nil, so MIN
+// over {"Oslo", ""} answered "" where SQL answers Oslo, and COUNT(DISTINCT)
+// counted the empty string as a value (DFC133 random differential).
+func aggMissing(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, isString := v.(string)
+	return isString && s == ""
+}
+
 func orderedExtreme(name, field string, sign int) AggregateFunc {
 	context := fmt.Sprintf("%s(%q)", name, field)
 	return func(records []Record) AggregateResult {
@@ -33,7 +48,7 @@ func orderedExtreme(name, field string, sign int) AggregateFunc {
 		found := false
 		for _, r := range records {
 			v, ok := Get[any](r, field)
-			if !ok || v == nil {
+			if !ok || aggMissing(v) {
 				continue
 			}
 			if !found {
@@ -57,7 +72,7 @@ func orderedExtreme(name, field string, sign int) AggregateFunc {
 		if !found {
 			// No value in the group: the string empty value, the one
 			// zero that is visibly "nothing" in every sink.
-			return AggResult[string]{val: ""}
+			return aggNoValue{}
 		}
 		return aggResult(context, best)
 	}

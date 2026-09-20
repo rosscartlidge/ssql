@@ -29,8 +29,8 @@ func TestStatisticsAggregates(t *testing.T) {
 	if got := Variance("s")(aggRecords("s", int64(5))).GetValue(); got != float64(0) {
 		t.Fatalf("Variance of one value = %v, want 0", got)
 	}
-	if got := Median("s")(aggRecords("s", nil)).GetValue(); got != "" {
-		t.Fatalf("Median of nothing = %v, want \"\"", got)
+	if got := Median("s")(aggRecords("s", nil)).GetValue(); got != nil {
+		t.Fatalf("Median of nothing = %v, want nil (no value)", got)
 	}
 
 	t.Run("quantile interpolation", func(t *testing.T) {

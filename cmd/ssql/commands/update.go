@@ -322,6 +322,21 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							_, existsInSchema := schemaFields[upd.field]
 							existingValue, existsInRecord := ssql.Get[any](frozen, upd.field)
 
+							// A LITERAL written into a TEXT column is the token as
+							// typed. It was parsed first (02134 → the int 2134) and
+							// then coerced back to a string: `update -set zip 02134`
+							// stored "2134" (DFC133). The column's type comes from
+							// the header, else from the value being replaced.
+							if !upd.isExpr {
+								_, isText := existingValue.(string)
+								if sch := schemaAndRecords.Schema; sch != nil && sch.HasField(upd.field) {
+									isText = sch.Types[upd.field] == lib.TypeString
+								}
+								if isText {
+									parsedValue = upd.literal
+								}
+							}
+
 							if !existsInSchema {
 								// New field - track its type for defaults
 								if _, typeKnown := newFieldTypes[upd.field]; !typeKnown {
@@ -774,8 +789,13 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				stmtBuilder.WriteString(indent + "}")
 				stmt = stmtBuilder.String()
 			} else {
-				// Generate literal value code
+				// Generate literal value code. Into a TEXT column the literal is
+				// the token as typed, as in exec: parsing 02134 first made
+				// generated code store the NUMBER 2134 in a string column.
 				parsedValue := parseValue(upd.value)
+				if advisoryTypeOf(advisory, upd.field) == "string" {
+					parsedValue = upd.value
+				}
 
 				switch v := parsedValue.(type) {
 				case int64:

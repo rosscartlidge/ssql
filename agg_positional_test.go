@@ -16,8 +16,11 @@ func TestPositionalAggregates(t *testing.T) {
 	if got := LastOf("v")(recs).GetValue(); got != "a" {
 		t.Fatalf("LastOf = %v, want a", got)
 	}
-	if got := FirstOf("v")(aggRecords("v", nil, nil)).GetValue(); got != "" {
-		t.Fatalf("FirstOf on an all-missing group = %v (%T), want \"\"", got, got)
+	if got := FirstOf("v")(aggRecords("v", nil, nil)).GetValue(); got != nil {
+		t.Fatalf("FirstOf on an all-missing group = %v (%T), want nil (no value)", got, got)
+	}
+	if got := CountDistinct("v")(aggRecords("v", "a", "", "a", nil)).GetValue(); got != int64(1) {
+		t.Fatalf("CountDistinct must not count the empty string as a value (DFC124), got %v", got)
 	}
 
 	t.Run("count distinct", func(t *testing.T) {

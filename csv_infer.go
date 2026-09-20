@@ -125,6 +125,19 @@ func parserForType(ft FieldType) cellParser {
 	}
 }
 
+// ZeroPaddedNumber reports whether s is digits with a leading zero that a
+// number would not have: 007, 02134, -05, 00.5 — but not 0, 0.5 or -0.25.
+// Such a value is an identifier (a postcode, an account or part number);
+// type inference must leave its column as text, because parsing it as a
+// number discards the zeros and nothing downstream can put them back.
+// DuckDB's CSV sniffer draws the same line. One rule for every inference
+// site: the CSV/TSV reader, the typed sampler, the SQL prologue sampler.
+func ZeroPaddedNumber(s string) bool {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "-"), "+")
+	return len(s) > 1 && s[0] == '0' && s[1] >= '0' && s[1] <= '9'
+}
+
 // inferColumnType picks the narrowest type every non-empty sampled
 // value fits: int → float → bool → string. Empty cells carry no type
 // information (they are missing); a column with no non-empty sample is
@@ -139,6 +152,11 @@ func inferColumnType(values []string) FieldType {
 			continue
 		}
 		seen = true
+		if ZeroPaddedNumber(v) {
+			// 007, 02134: an identifier that happens to be digits. Read as
+			// a number it loses its zeros for good (DFC133).
+			allInt, allFloat = false, false
+		}
 		if allInt {
 			_, err := strconv.ParseInt(v, 10, 64)
 			allInt = err == nil

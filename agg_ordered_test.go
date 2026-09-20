@@ -51,10 +51,20 @@ func TestMinOfMaxOf(t *testing.T) {
 			t.Fatalf("MaxOf times = %v, want %v", got, t2)
 		}
 	})
-	t.Run("all missing is the empty string, not a zero number", func(t *testing.T) {
+	// No value in the group → NO VALUE (nil, SQL's NULL): not a zero
+	// number, and — since DFC133 — not "" either, which was a present
+	// string that a later `where -if max_n le 2` compared and matched.
+	// An empty text cell counts as missing too (DFC124).
+	t.Run("all missing is no value", func(t *testing.T) {
 		recs := aggRecords("x", nil, nil)
-		if got := MinOf("x")(recs).GetValue(); got != "" {
-			t.Fatalf("MinOf on absent field = %v (%T), want \"\"", got, got)
+		if got := MinOf("x")(recs).GetValue(); got != nil {
+			t.Fatalf("MinOf on absent field = %v (%T), want nil", got, got)
+		}
+		if got := MinOf("x")(aggRecords("x", "", "Oslo", "")).GetValue(); got != "Oslo" {
+			t.Fatalf("MinOf must skip empty strings, got %v", got)
+		}
+		if got := MaxOf("x")(aggRecords("x", "", "")).GetValue(); got != nil {
+			t.Fatalf("MaxOf over only empty strings = %v, want nil", got)
 		}
 	})
 	t.Run("mixed kinds are loud", func(t *testing.T) {

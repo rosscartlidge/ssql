@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // sqlDialect selects the engine `generate sql` renders for. The pipeline
@@ -50,6 +52,33 @@ var pgLoads []pgLoad
 // types in general; this is the one fact a later bucket() needs to choose
 // the engine's time bucketing over the numeric-epoch arithmetic.
 var sqlTimeColumns = map[string]bool{}
+
+// sqlColumnKinds is what the assembler knows about column TYPES: the kind
+// of each source column ("int", "float", "bool", "string", "time"),
+// sampled from a CSV/TSV source at generation time and updated by cast. A
+// column it does not know is simply absent, and literals fall back to the
+// look of the token. It exists so a literal is typed by the column it
+// meets, not by its spelling.
+var sqlColumnKinds = map[string]string{}
+
+// seedColumnKinds samples a delimited source (the Postgres prologue's
+// sampler — the same int → float → bool → text reading the CSV reader
+// does) into sqlColumnKinds.
+func seedColumnKinds(path string, delim rune) {
+	cols, types := pgInferColumns(path, delim)
+	for i, c := range cols {
+		switch types[i] {
+		case "BIGINT":
+			sqlColumnKinds[c] = "int"
+		case "DOUBLE PRECISION":
+			sqlColumnKinds[c] = "float"
+		case "BOOLEAN":
+			sqlColumnKinds[c] = "bool"
+		default: // TEXT, and DATE — a date is text to ssql until it is cast
+			sqlColumnKinds[c] = "string"
+		}
+	}
+}
 
 func parseSQLDialect(s string) (sqlDialect, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
@@ -246,11 +275,17 @@ func pgInferColumns(path string, delim rune) ([]string, []string) {
 var isoDateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 func isIntToken(s string) bool {
+	if ssql.ZeroPaddedNumber(s) {
+		return false
+	}
 	_, err := strconv.ParseInt(s, 10, 64)
 	return err == nil
 }
 
 func isFloatToken(s string) bool {
+	if ssql.ZeroPaddedNumber(s) {
+		return false
+	}
 	_, err := strconv.ParseFloat(s, 64)
 	return err == nil && !strings.EqualFold(s, "nan") && !strings.Contains(strings.ToLower(s), "inf")
 }

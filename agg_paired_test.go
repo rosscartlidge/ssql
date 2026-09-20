@@ -38,8 +38,8 @@ func TestArgMaxArgMin(t *testing.T) {
 	if got := ArgMax("n", "code")(byStr).GetValue(); got != float64(3) {
 		t.Fatalf("ArgMax by string = %v (%T), want 3", got, got)
 	}
-	if got := ArgMax("name", "salary")(aggRecords("x", nil)).GetValue(); got != "" {
-		t.Fatalf("ArgMax of nothing = %v, want \"\"", got)
+	if got := ArgMax("name", "salary")(aggRecords("x", nil)).GetValue(); got != nil {
+		t.Fatalf("ArgMax of nothing = %v, want nil (no value)", got)
 	}
 	t.Run("unorderable BY is loud", func(t *testing.T) {
 		defer func() {

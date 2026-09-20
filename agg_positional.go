@@ -31,11 +31,11 @@ func FirstOf(field string) AggregateFunc {
 	context := fmt.Sprintf("FirstOf(%q)", field)
 	return func(records []Record) AggregateResult {
 		for _, r := range records {
-			if v, ok := Get[any](r, field); ok && v != nil {
+			if v, ok := Get[any](r, field); ok && !aggMissing(v) {
 				return aggResult(context, v)
 			}
 		}
-		return AggResult[string]{val: ""}
+		return aggNoValue{}
 	}
 }
 
@@ -44,11 +44,11 @@ func LastOf(field string) AggregateFunc {
 	context := fmt.Sprintf("LastOf(%q)", field)
 	return func(records []Record) AggregateResult {
 		for i := len(records) - 1; i >= 0; i-- {
-			if v, ok := Get[any](records[i], field); ok && v != nil {
+			if v, ok := Get[any](records[i], field); ok && !aggMissing(v) {
 				return aggResult(context, v)
 			}
 		}
-		return AggResult[string]{val: ""}
+		return aggNoValue{}
 	}
 }
 
@@ -60,7 +60,7 @@ func CountDistinct(field string) AggregateFunc {
 		seen := make(map[any]struct{})
 		for _, r := range records {
 			v, ok := Get[any](r, field)
-			if !ok || v == nil {
+			if !ok || aggMissing(v) {
 				continue
 			}
 			seen[distinctKey(v)] = struct{}{}
@@ -93,7 +93,7 @@ func StringAgg(field, sep string) AggregateFunc {
 	return func(records []Record) AggregateResult {
 		var parts []string
 		for _, r := range records {
-			if v, ok := Get[any](r, field); ok && v != nil {
+			if v, ok := Get[any](r, field); ok && !aggMissing(v) {
 				parts = append(parts, AggValueString(v))
 			}
 		}

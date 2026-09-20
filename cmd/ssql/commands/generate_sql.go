@@ -247,6 +247,7 @@ func assembleSQL(input io.Reader) (string, error) {
 
 	q := &sqlQuery{}
 	sqlTimeColumns = map[string]bool{} // per assembly
+	sqlColumnKinds = map[string]string{}
 
 	// Collect func fragments (subprocess sources for joins) and build subqueries
 	var funcFrags []*lib.CodeFragment
@@ -474,8 +475,10 @@ func translateFrom(q *sqlQuery, args []string) error {
 			switch {
 			case args[0] == "csv", args[0] != "tsv" && strings.HasSuffix(strings.ToLower(files[0]), ".csv"):
 				q.columns = delimHeader(files[0], ',')
+				seedColumnKinds(files[0], ',')
 			case args[0] == "tsv", strings.HasSuffix(strings.ToLower(files[0]), ".tsv"):
 				q.columns = delimHeader(files[0], '\t')
+				seedColumnKinds(files[0], '\t')
 			}
 		} else if sqlDialectCur == dialectDuckDB {
 			// DuckDB: read_csv_auto(['file1.csv', 'file2.csv'])
@@ -514,8 +517,10 @@ func translateFrom(q *sqlQuery, args []string) error {
 		switch lower := strings.ToLower(args[0]); {
 		case strings.HasSuffix(lower, ".csv"):
 			q.columns = delimHeader(args[0], ',')
+			seedColumnKinds(args[0], ',')
 		case strings.HasSuffix(lower, ".tsv"):
 			q.columns = delimHeader(args[0], '\t')
+			seedColumnKinds(args[0], '\t')
 		}
 	}
 	if sampleN != "" && sampleN != "0" {
@@ -663,7 +668,21 @@ func translateCondition(field, op, value string) string {
 	if op == "regex" {
 		return sqlRegexMatch(quoteIdent(field), "'"+escapeSQL(value)+"'")
 	}
-	return fmt.Sprintf("%s %s %s", quoteIdent(field), sqlOp, sqlLiteral(value))
+	return fmt.Sprintf("%s %s %s", quoteIdent(field), sqlOp, sqlLiteralFor(field, value))
+}
+
+// sqlLiteralFor renders a value token for comparison with, or assignment
+// to, FIELD. When the assembler knows the column's kind (sampled from the
+// source CSV/TSV, updated by cast) the COLUMN decides: a text column gets
+// a quoted literal whatever the token looks like — `where -if zip eq
+// 02134`, or `s eq 12` on a column that also holds "abc", rendered `s =
+// 12` and DuckDB refused to cast the column (DFC133 random differential).
+// Unknown column → the token's own look, as before.
+func sqlLiteralFor(field, value string) string {
+	if sqlColumnKinds[field] == "string" {
+		return "'" + escapeSQL(value) + "'"
+	}
+	return sqlLiteral(value)
 }
 
 // sqlLiteral renders a CLI value token as a SQL literal. Numeric and boolean
@@ -726,6 +745,20 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 					extra = args[i+2]
 				}
 				aggs = append(aggs, sqlAgg{d.sql(qf, extra), args[i+n]})
+				// The result column's kind, from the registry's own wire-type
+				// rule (an extreme of a text column is text; a count is an
+				// int) — so a later literal against it is typed by the column
+				// (DFC133). Unknown input kind on a type-preserving aggregate
+				// → leave the result unknown rather than guess.
+				in := ""
+				if d.hasField {
+					in = sqlColumnKinds[args[i+1]]
+				}
+				if wt := d.wireType(in); !(d.hasField && in == "" && wt != d.wireType("string")) {
+					sqlColumnKinds[args[i+n]] = wt
+				} else {
+					delete(sqlColumnKinds, args[i+n])
+				}
 				i += n + 1
 			} else {
 				i++
@@ -1606,6 +1639,7 @@ func translateCast(q *sqlQuery, args []string) error {
 			field, typeName := args[i+1], args[i+2]
 			sqlType := mapTypeToSQL(typeName)
 			if ft, err := ssql.ParseFieldType(typeName); err == nil {
+				sqlColumnKinds[field] = ft.String()
 				if ft == ssql.FieldTypeTime {
 					sqlTimeColumns[field] = true
 				} else {
@@ -1648,7 +1682,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		if !currentNot || len(currentConds) == 0 {
 			return append([]string{}, currentConds...)
 		}
-		return []string{"NOT (" + strings.Join(currentConds, " AND ") + ")"}
+		return []string{sqlNot(strings.Join(currentConds, " AND "))}
 	}
 
 	i := 0
@@ -1663,7 +1697,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			}
 			cond := translateCondition(args[i+1], args[i+2], args[i+3])
 			if args[i][0] == '+' {
-				cond = "NOT (" + cond + ")"
+				cond = sqlNot(cond) // ssql negation: true for an absent value (DFC128 §6g; update missed it — DFC133)
 			}
 			currentConds = append(currentConds, cond)
 			i += 4
@@ -1676,7 +1710,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				return fmt.Errorf("update -if-expr: %w", err)
 			}
 			if args[i][0] == '+' {
-				cond = "NOT (" + cond + ")"
+				cond = sqlNot(cond) // ssql negation: true for an absent value (DFC128 §6g; update missed it — DFC133)
 			}
 			currentConds = append(currentConds, cond)
 			i += 2
@@ -1687,7 +1721,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			assignments = append(assignments, assignment{
 				conds:    clauseConds(),
 				field:    args[i+1],
-				valueSQL: sqlLiteral(args[i+2]),
+				valueSQL: sqlLiteralFor(args[i+1], args[i+2]),
 			})
 			i += 3
 		case "-set-expr", "-e":
@@ -1991,26 +2025,31 @@ func isSQLReserved(name string) bool {
 // parseCommandArgs splits a command string into args, respecting single quotes.
 func parseCommandArgs(cmd string) []string {
 	var args []string
-	var current strings.Builder
-	inQuote := false
+	var current []byte
+	inQuote, quoted := false, false
 
-	for _, c := range cmd {
+	// Bytes, not runes: the three characters that matter are ASCII, and a
+	// rune loop rewrote any byte that is not valid UTF-8 (a Latin-1 file
+	// name) as U+FFFD. `quoted` keeps an explicitly empty argument — `''`
+	// used to vanish, shifting every argument after it (DFC133 fuzzing).
+	for k := 0; k < len(cmd); k++ {
+		c := cmd[k]
 		switch {
 		case c == '\'' && !inQuote:
-			inQuote = true
+			inQuote, quoted = true, true
 		case c == '\'' && inQuote:
 			inQuote = false
 		case c == ' ' && !inQuote:
-			if current.Len() > 0 {
-				args = append(args, current.String())
-				current.Reset()
+			if len(current) > 0 || quoted {
+				args = append(args, string(current))
+				current, quoted = current[:0], false
 			}
 		default:
-			current.WriteRune(c)
+			current = append(current, c)
 		}
 	}
-	if current.Len() > 0 {
-		args = append(args, current.String())
+	if len(current) > 0 || quoted {
+		args = append(args, string(current))
 	}
 	return args
 }

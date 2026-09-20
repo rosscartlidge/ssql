@@ -100,6 +100,14 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					if !exists {
 						continue
 					}
+					// An empty text cell is MISSING (DFC124), and missing has
+					// no number, boolean or time: it stays a field without a
+					// value. It used to fall through the parse failure and
+					// become 0 / false (DFC133 random differential).
+					if s, isString := value.(string); isString && s == "" && targetType != ssql.FieldTypeString {
+						mut = mut.Null(field)
+						continue
+					}
 					mut = applyValueToRecord(mut, field, convertFieldType(value, targetType, field))
 				}
 				return mut
@@ -259,7 +267,13 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 	codeBody.WriteString("\t\tfrozen := mut.Freeze()\n\n")
 
 	for field, targetType := range typeConversions {
-		codeBody.WriteString(fmt.Sprintf("\t\tif val, exists := ssql.Get[any](frozen, %q); exists {\n", field))
+		if targetType == ssql.FieldTypeString {
+			codeBody.WriteString(fmt.Sprintf("\t\tif val, exists := ssql.Get[any](frozen, %q); exists {\n", field))
+		} else {
+			// As in exec: an empty text cell is missing (DFC124) and stays a
+			// field without a value, never 0 / false.
+			codeBody.WriteString(fmt.Sprintf("\t\tif val, exists := ssql.Get[any](frozen, %q); exists && val == \"\" {\n\t\t\tmut = mut.Null(%q)\n\t\t} else if exists {\n", field, field))
+		}
 
 		switch targetType {
 		case ssql.FieldTypeString:
