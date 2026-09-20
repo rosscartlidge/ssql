@@ -856,7 +856,10 @@ func generateConditionCode(field, op, value, goType string) (string, []string, [
 	if err != nil {
 		return "", nil, nil, err
 	}
-	return res.Src, res.Imports, res.Hoisted, nil
+	// exec's rule, as in where's generateCondition: a condition on an
+	// absent value is false for every operator — the typed GetOr's zero
+	// made `-if n ge 0` update rows that have no n (DFC128 §6g).
+	return fmt.Sprintf("(frozen.HasValue(%q) && %s)", field, res.Src), res.Imports, res.Hoisted, nil
 }
 
 // getDefaultValueForComparison returns the default value for GetOr based on the comparison value's type

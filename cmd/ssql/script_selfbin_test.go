@@ -29,6 +29,15 @@ func TestScriptStagesRunThisBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", filepath.Dir(goBin)+":/usr/bin:/bin")
+	// Compile the generated program against THIS checkout, not whatever
+	// module version is published: the test is about which binary the
+	// stages run, and generated code may use a library symbol newer than
+	// the last release (Record.HasValue tripped it, DFC128 §6g).
+	repo, rerr := filepath.Abs("../..")
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	t.Setenv("SSQL_MODULE_DIR", repo)
 	if _, err := exec.LookPath("ssql"); err == nil {
 		t.Skip("an ssql is on the restricted PATH; the test cannot tell which binary ran")
 	}

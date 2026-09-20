@@ -76,8 +76,8 @@ func OpenOutput(filename string) (io.WriteCloser, error) {
 func setValueFromJSON(record ssql.MutableRecord, key string, v any) ssql.MutableRecord {
 	switch val := v.(type) {
 	case nil:
-		// Skip nil values - don't set the field
-		return record
+		// A JSON null: the field exists, without a value (DFC128 §6g).
+		return record.Null(key)
 	case []any:
 		// Convert array to []any for storage (preserves as proper slice, not JSONString)
 		// This allows the array to be serialized back as a JSON array
@@ -131,6 +131,12 @@ func inferJSONFieldType(value any) ssql.FieldType {
 // setValueWithType sets a field on a MutableRecord, coercing to the target type
 // Handles both json.Unmarshal types (float64 for all numbers) and fast parser types (int64/float64)
 func setValueWithType(record ssql.MutableRecord, key string, v any, targetType ssql.FieldType) ssql.MutableRecord {
+	if v == nil {
+		// NULL is NULL in a column of any type. The typed branches below
+		// fall through to a zero for values they cannot convert, which
+		// turned a null in an int column of a JSON array into 0.
+		return record.Null(key)
+	}
 	switch targetType {
 	case ssql.FieldTypeTime:
 		// RFC 3339 on the wire → time.Time. A value the header calls a

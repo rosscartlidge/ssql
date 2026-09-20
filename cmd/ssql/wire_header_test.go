@@ -242,3 +242,44 @@ func TestTimeWireType(t *testing.T) {
 		}
 	}
 }
+
+// TestNullColumnsKeepTheirNames (DFC128 §6g): a column that is NULL in
+// EVERY record still has a name and a place — in the header and in every
+// sink — through all four JSON entry points; a NULL in a later row of an
+// int column is not 0; `where` on a column whose first row is NULL works,
+// and a field that really is unknown is still an error.
+func TestNullColumnsKeepTheirNames(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	jl := filepath.Join(dir, "x.jsonl")
+	arr := filepath.Join(dir, "x.json")
+	os.WriteFile(jl, []byte("{\"id\":1,\"n\":5,\"gone\":null}\n{\"id\":2,\"n\":null,\"gone\":null}\n{\"id\":3,\"n\":7,\"gone\":null}\n"), 0o644)
+	os.WriteFile(arr, []byte(`[{"id":1,"n":5,"gone":null},{"id":2,"n":null,"gone":null},{"id":3,"n":7,"gone":null}]`), 0o644)
+	run := func(script string) (string, error) {
+		out, err := exec.Command("bash", "-c", "set -o pipefail; "+script).CombinedOutput()
+		return string(out), err
+	}
+	for _, src := range []string{bin + " from " + jl, bin + " from " + arr, "cat " + jl + " | " + bin + " from jsonl -", "cat " + arr + " | " + bin + " from json -"} {
+		out, err := run(src + " | " + bin + " include id n gone | " + bin + " to csv")
+		if want := "id,n,gone\n1,5,\n2,,\n3,7,\n"; err != nil || out != want {
+			t.Errorf("%s\n got: %q (%v)\nwant: %q", src, out, err, want)
+		}
+		if out, err := run(src + " | " + bin + " where -if n ge 0 | " + bin + " include id | " + bin + " to csv"); err != nil || out != "id\n1\n3\n" {
+			t.Errorf("%s | where n ge 0: %q (%v) — a NULL must not match as 0", src, out, err)
+		}
+		if out, err := run(src + " | " + bin + " group-by gone -sum n total | " + bin + " to csv"); err != nil || !strings.Contains(out, "12") {
+			t.Errorf("%s | sum: %q (%v)", src, out, err)
+		}
+	}
+	hdr, _ := run(bin + " from " + jl + " | head -1")
+	if !strings.Contains(hdr, `"gone":"string"`) || !strings.Contains(hdr, `"n":"int"`) {
+		t.Errorf("header types: %s", hdr)
+	}
+	out, err := run(bin + " from " + jl + " | " + bin + " where -if nope gt 1")
+	if err == nil || !strings.Contains(out, "unknown field(s): nope") {
+		t.Errorf("an unknown field must still fail: %v\n%s", err, out)
+	}
+}

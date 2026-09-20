@@ -556,7 +556,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 		}
 		group := strings.Join(currentAnd, " AND ")
 		if currentNot {
-			group = "NOT (" + group + ")"
+			group = sqlNot(group)
 		}
 		orGroups = append(orGroups, group)
 		currentAnd = nil
@@ -579,7 +579,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 			field, op, value := args[i+1], args[i+2], args[i+3]
 			cond := translateCondition(field, op, value)
 			if args[i][0] == '+' {
-				cond = "NOT (" + cond + ")"
+				cond = sqlNot(cond)
 			}
 			currentAnd = append(currentAnd, cond)
 			i += 4
@@ -592,7 +592,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 				return fmt.Errorf("where -if-expr: %w", err)
 			}
 			if args[i][0] == '+' {
-				cond = "NOT (" + cond + ")"
+				cond = sqlNot(cond)
 			}
 			currentAnd = append(currentAnd, cond)
 			i += 2
@@ -617,7 +617,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 		for k, g := range orGroups {
 			wrapped[k] = "(" + g + ")"
 		}
-		q.whereClauses = append(q.whereClauses, "NOT ("+strings.Join(wrapped, " OR ")+")")
+		q.whereClauses = append(q.whereClauses, sqlNot(strings.Join(wrapped, " OR ")))
 		return nil
 	}
 
@@ -635,6 +635,16 @@ func translateWhere(q *sqlQuery, args []string) error {
 	}
 
 	return nil
+}
+
+// sqlNot negates a condition the way ssql does. In ssql a condition on an
+// absent value is simply false, so its negation is TRUE: `where +if n ge
+// 0` keeps a row with no n. SQL's NOT over a NULL comparison is NULL and
+// the row is dropped. COALESCE(…, FALSE) first makes the inner condition
+// two-valued — "false when unknown", which is exactly exec's `exists &&
+// op` — and then NOT means what it says (DFC128 §6g).
+func sqlNot(cond string) string {
+	return "NOT COALESCE((" + cond + "), FALSE)"
 }
 
 func translateCondition(field, op, value string) string {

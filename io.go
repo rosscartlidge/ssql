@@ -775,7 +775,7 @@ func ReadJSONLFromReader(r io.Reader) iter.Seq[Record] {
 				record, err = ParseJSONLineWithSchema(line, schema)
 			} else {
 				var mut MutableRecord
-				mut, err = ParseJSONLine(line)
+				mut, err = ParseJSONLineWithNulls(line)
 				if err == nil {
 					record = cache.freeze(mut)
 				}
@@ -2435,8 +2435,8 @@ func addJSONField(record MutableRecord, key string, value any) MutableRecord {
 	case string:
 		return record.String(key, val)
 	case nil:
-		// Skip nil values - don't add field
-		return record
+		// A JSON null: the field exists, without a value (DFC128 §6g).
+		return record.Null(key)
 	case []any, map[string]any:
 		// Convert arrays/objects to JSONString for type safety
 		jsonBytes, err := json.Marshal(val)

@@ -8,8 +8,8 @@ Last modified: 2026-09-19
 
 Status: **all six decisions shipped 2026-09-19** — the coercion fix, D2
 and D4 (§6a), D3 (§6b), D5 (§6c), D1 core with the ssql-owned `date()`
-(§6d), D6 (§6e), then `resample` over time columns (§6f). Open:
-null-key visibility in the JSON parser only.
+(§6d), D6 (§6e), then `resample` over time columns (§6f) and null-key
+visibility (§6g). Nothing from this document remains open.
 Ross, 2026-09-14: "Have you actually
 checked that duckdb can import json/jsonl from ssql? and what about the
 reverse?" — then "I had assumed you needed to use the to/from commands
@@ -571,6 +571,62 @@ agree with.
   string family for all three fills, bounds, loud errors),
   `TestTranslateResampleSQLTimeColumn` (and that the numeric lowering is
   untouched), the three cases.
+
+## 6g. Shipped 2026-09-19: null keys, and what a NULL means in each lane
+
+§6b's residual: the parser dropped a JSON null's KEY, so a column NULL in
+every sampled record was invisible. The fix rests on something the record
+model already had — a **nil slot** (DFC124): the schema has the field,
+the value is nil, `Get` reports it absent, the writers skip it, and the
+header-aware parser already produces exactly that shape for a missing
+value. So nulls now stay as nil slots on the wire-format path
+(`ParseJSONLineWithNulls`, `MutableRecord.Null`; `ParseJSONLine` keeps its
+drop-the-key contract for library users) and `InferFromSample` lets a nil
+name a field without typing it (all-null → `string`, as the CSV reader
+types an all-empty column). Side effect: rows that differ only in which
+values are null share one Schema, where each null used to change the
+record's shape and defeat the cache.
+
+Probing it surfaced four defects that are about NULL rather than about
+names:
+
+1. **`from json` arrays: a later NULL in an int column became 0.** The
+   typed setter's fall-through (`default: record.Int(key, 0)`). Silent
+   corruption: it matched `n ge 0` and was summed. NULL now short-circuits
+   before any type; a null never locks a column's type either. The lines
+   branch of `lib.ReadJSON` was a THIRD copy of the JSONL loop and schema
+   cache with its own first-record type lock; it now delegates to
+   `ssql.ReadJSONLFromReader`.
+2. **`where` on a column NULL in its first row** failed with `unknown
+   field(s): score (available: …, score)` — validation asked the first
+   record for a value. It asks the schema (`Has`). D3 made this urgent:
+   before it the column did not exist at all; after it the column existed
+   and could not be filtered. Also closes the old `update -if … -set F |
+   where -if F` report.
+3. **Record codegen compared an absent value as zero.** The new case
+   `json_array_null_is_not_zero` (`n ge 0`) failed in go-record. Measured
+   the three lanes before touching anything: exec and DuckDB already
+   agreed that a condition on an absent value never matches, `ne`
+   included; generated Go was the outlier, through the typed `GetOr`
+   default, in `where` AND `update -if`. Both emitters now guard with
+   `Record.HasValue`. The existing empties case used `gt 5`, which an
+   absent-as-zero reads the same way — oracle fine, input not
+   discriminating.
+4. **SQL negation.** With record fixed, `where +if n ge 0` split exec
+   from DuckDB: ssql's rule is `exists && op`, so the negation is TRUE
+   for an absent value; SQL's `NOT NULL` is NULL. The SQL lane's job is
+   ssql's semantics, so negations render `NOT COALESCE((…), FALSE)`.
+
+Rule, now uniform across exec, record codegen and SQL: **a condition on
+an absent value is false; its negation is true.** Typed mode still reads
+an absent cell as the zero value (DFC124 §3) and stays skipped on these
+cases.
+
+Cases: `jsonl_where_on_nullable_column`, `json_array_null_is_not_zero`,
+`empties_where_absent_never_matches`, `empties_where_negated_keeps_absent`,
+`empties_update_absent_never_matches` (goldens where a value matters).
+Tests: `TestJSONNullIsANilSlot`, `TestInferFromSampleNulls`,
+`TestJSONArrayNullIsNotZero`, `TestNullColumnsKeepTheirNames`.
 
 Still open, in the recommended order: ~~D3~~ (shipped, §6b; was: sampled schema inference
 so a NULL-in-first-record field is not dropped — the remaining silent

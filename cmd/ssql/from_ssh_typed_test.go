@@ -42,6 +42,16 @@ func TestFromSSHTypedReentry(t *testing.T) {
 	// export below selects codegen (mirrors a clean remote shell).
 	t.Setenv("SSQL_MODE", "")
 	t.Setenv("SSQLGO", "")
+	// The "remote" is this checkout's binary, so the program it compiles
+	// for a pushed-down pipeline must build against this checkout too —
+	// not the published module, which may predate a symbol the generated
+	// code uses (Record.HasValue, DFC128 §6g). A real remote runs a
+	// released binary against its own version.
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSQL_MODULE_DIR", repo)
 
 	cases := []struct {
 		name     string
@@ -80,6 +90,17 @@ func TestFromSSHTypedReentry(t *testing.T) {
 						}
 					}
 					got := goRunGenerated(t, string(src))
+					// The pushed-down stage compiles on the "remote" with
+					// SSQL_MODULE_DIR set, which announces itself on stderr;
+					// goRunGenerated captures both streams. Drop that one
+					// known line — everything else must match byte for byte.
+					var kept []string
+					for _, ln := range strings.SplitAfter(got, "\n") {
+						if !strings.HasPrefix(ln, "ssql generate go: compiling against local module ") {
+							kept = append(kept, ln)
+						}
+					}
+					got = strings.Join(kept, "")
 					if got != string(execOut) {
 						t.Errorf("mode=%s output differs from exec lane\n--- exec:\n%s--- %s:\n%s",
 							mode, execOut, mode, got)

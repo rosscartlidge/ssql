@@ -122,6 +122,9 @@ func corpusData(t *testing.T) string {
 			"mixed_times.csv": "id,ts\n1,2026-03-01 00:00:00\n2,2026-01-01T05:00:00\n3,2026-02-01\n4,2026-01-31 23:30:00+00\n",
 			// A SQL export with nullable columns: NULL in the FIRST row,
 			// values later; an int that widens to float (DFC128 D3).
+			// A JSON ARRAY with NULLs in the first element AND in a later
+			// one: the later null in the int column `n` used to become 0.
+			"null_mixed.json": `[{"id":1,"score":null,"n":5},{"id":2,"score":2.5,"n":null},{"id":3,"score":4,"n":7}]`,
 			"null_first.jsonl": "{\"id\":1,\"note\":null,\"score\":null}\n{\"id\":2,\"note\":\"b\",\"score\":4}\n{\"id\":3,\"note\":\"c\",\"score\":2.5}\n",
 			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
 			"app.log":                corpusAppLog,

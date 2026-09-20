@@ -213,14 +213,28 @@ func InferFromRecord(record ssql.Record) *Schema {
 // the header, which is authoritative downstream (DFC128 D3). A field's
 // type is the type of its values across the sample: int and float widen
 // to float; any other disagreement is a string.
+//
+// A nil slot (a JSON null) names the field without typing it: the type
+// comes from the field's values, and a column that is NULL in every
+// sampled record is a string column — the same call the CSV reader makes
+// for a column with no non-empty sample. Either way the column keeps its
+// name and its place.
 func InferFromSample(records []ssql.Record) *Schema {
 	schema := NewSchema()
+	typed := map[string]bool{}
 	for _, record := range records {
 		for k, v := range record.All() {
-			t := InferTypeString(v)
-			if prev, ok := schema.Types[k]; ok {
-				t = widenWireType(prev, t)
+			if v == nil {
+				if !schema.HasField(k) {
+					schema.AddField(k, TypeString) // placeholder until a value types it
+				}
+				continue
 			}
+			t := InferTypeString(v)
+			if typed[k] {
+				t = widenWireType(schema.Types[k], t)
+			}
+			typed[k] = true
 			schema.AddField(k, t)
 		}
 	}

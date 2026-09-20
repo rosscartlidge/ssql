@@ -699,7 +699,13 @@ func generateCondition(field, op, value, goType string, seen map[string]int) (st
 	if err != nil {
 		return "", nil, nil, err
 	}
-	return res.Src, res.Imports, param, nil
+	// exec's rule is `exists && op(value)`: a condition on an absent value
+	// is false for EVERY operator, as SQL's NULL comparison is. The typed
+	// GetOr above supplies a zero for an absent field, so without this guard
+	// `n ge 0` and `n ne 5` matched rows that have no n at all (found by the
+	// json_array_null_is_not_zero equivalence case, DFC128 §6g). Negation
+	// (+if) is applied by the caller, outside the guard, as in exec.
+	return fmt.Sprintf("(r.HasValue(%q) && %s)", field, res.Src), res.Imports, param, nil
 }
 
 // recordCondLHS resolves a record-mode condition field to a typed GetOr

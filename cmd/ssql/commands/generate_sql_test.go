@@ -376,7 +376,7 @@ func TestTranslateWhereExpr(t *testing.T) {
 	if err := translateWhere(q, []string{"+if", "city", "eq", "Oslo"}); err != nil {
 		t.Fatalf("translateWhere +if: %v", err)
 	}
-	want = `NOT (city = 'Oslo')`
+	want = `NOT COALESCE((city = 'Oslo'), FALSE)`
 	if len(q.whereClauses) != 1 || q.whereClauses[0] != want {
 		t.Errorf("negated whereClauses = %v, want [%s]", q.whereClauses, want)
 	}

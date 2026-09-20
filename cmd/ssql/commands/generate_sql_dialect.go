@@ -100,6 +100,9 @@ func dialectSource(file string) (string, error) {
 	if sqlDialectCur == dialectDataFusion && (strings.HasSuffix(lower, ".tsv") || strings.HasSuffix(lower, ".jsonl")) {
 		return "", dialectRefuse("from "+file, "DataFusion's file table reads .csv, .json and .parquet by extension")
 	}
+	if sqlDialectCur == dialectDataFusion && strings.HasSuffix(lower, ".json") && jsonFileIsArray(file) {
+		return "", dialectRefuse("from "+file, "DataFusion reads .json as one object per line; this file is one JSON array — write it with `ssql to jsonl`")
+	}
 	if sqlDialectCur != dialectPostgres {
 		return quoteFile(file), nil
 	}
@@ -123,6 +126,20 @@ func dialectSource(file string) (string, error) {
 	cols, types := pgInferColumns(file, delim)
 	pgLoads = append(pgLoads, pgLoad{table: table, file: file, delim: delim, columns: cols, types: types})
 	return table, nil
+}
+
+// jsonFileIsArray peeks at a JSON file's first non-blank byte. Unreadable
+// at generation time → false: the engine reports it if it matters.
+func jsonFileIsArray(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	trimmed := strings.TrimLeft(string(buf[:n]), " \t\r\n\ufeff")
+	return strings.HasPrefix(trimmed, "[")
 }
 
 var pgIdentClean = regexp.MustCompile(`[^a-z0-9_]+`)

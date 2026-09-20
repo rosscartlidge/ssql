@@ -531,6 +531,19 @@ func (r Record) Has(field string) bool {
 	return r.schema.Has(field)
 }
 
+// HasValue reports whether the record has the field AND a value for it.
+// Has is about the schema: a nil slot — a SQL NULL, an empty CSV cell —
+// has the field but no value. Conditions use this: a comparison against
+// an absent value is false, whatever the operator (`n ne 5` does not match
+// a row with no n), as in SQL and in the interpreted `where`.
+func (r Record) HasValue(field string) bool {
+	if r.schema == nil {
+		return false
+	}
+	idx := r.schema.Index(field)
+	return idx >= 0 && idx < len(r.values) && r.values[idx] != nil
+}
+
 // Len returns the number of fields in the record
 func (r Record) Len() int {
 	if r.schema == nil {
@@ -685,6 +698,14 @@ func (m *MutableRecord) UnmarshalJSON(data []byte) error {
 // Set adds a field with compile-time type safety (mutates in place)
 func Set[V Value](m MutableRecord, field string, value V) MutableRecord {
 	m.fields[field] = value
+	return m
+}
+
+// Null records that the field exists with no value (a nil slot): Get
+// reports it absent and the writers skip it, but the field is part of the
+// record's schema — a SQL NULL, as opposed to a field that is not there.
+func (m MutableRecord) Null(field string) MutableRecord {
+	m.fields[field] = nil
 	return m
 }
 
@@ -1265,6 +1286,22 @@ func appendJSONMap(buf []byte, m map[string]any) []byte {
 // Handles: strings, numbers (int64/float64), booleans, null, arrays, objects.
 // Arrays and nested objects are stored as JSONString for later parsing if needed.
 func ParseJSONLine(line []byte) (MutableRecord, error) {
+	return parseJSONLine(line, false)
+}
+
+// ParseJSONLineWithNulls is ParseJSONLine for the wire-format readers: a
+// JSON null keeps its KEY, as a nil slot — "this record has the field, it
+// has no value" — instead of vanishing. A nil slot already means exactly
+// that everywhere downstream (Get reports it absent, the writers skip it,
+// header-aware parsing produces the same shape), and keeping the key is
+// what lets schema inference see a nullable column whose sampled rows are
+// all NULL, and lets validation tell "NULL here" from "no such field"
+// (DFC128 §6g).
+func ParseJSONLineWithNulls(line []byte) (MutableRecord, error) {
+	return parseJSONLine(line, true)
+}
+
+func parseJSONLine(line []byte, keepNulls bool) (MutableRecord, error) {
 	record := MakeMutableRecord()
 	pos := 0
 	n := len(line)
@@ -1334,8 +1371,9 @@ func ParseJSONLine(line []byte) (MutableRecord, error) {
 		}
 		pos = newPos
 
-		// Add field to record (skip nil values from JSON null)
-		if value != nil {
+		// Add field to record. A JSON null is dropped, or kept as a nil
+		// slot for the wire-format readers (ParseJSONLineWithNulls).
+		if value != nil || keepNulls {
 			record.fields[fieldName] = value
 		}
 

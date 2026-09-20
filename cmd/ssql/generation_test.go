@@ -663,7 +663,8 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 				// untyped constant in a float64 comparison (Phase B). NB the
 				// fragment is raw JSON, where > is encoded as >.
 				`ssql.GetOr(frozen, \"age\", float64(0))`,
-				`\u003e 30) {`,
+				`frozen.HasValue(\"age\")`, // a condition on an absent value is false (DFC128 §6g)
+				`\u003e 30)) {`,
 			},
 		},
 		{
@@ -755,7 +756,7 @@ func TestNegatedConditionGeneration(t *testing.T) {
 		{
 			name:     "record where +if negates",
 			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test where +if age gt 25 | /tmp/ssql_test generate go +O`,
-			wantStrs: []string{`return !((ssql.GetOr(r, "age"`},
+			wantStrs: []string{`return !((r.HasValue("age") && (ssql.GetOr(r, "age"`}, // negation OUTSIDE the has-value guard, as in exec
 		},
 		{
 			name:     "record where +if-expr negates (not dropped)",
@@ -765,7 +766,7 @@ func TestNegatedConditionGeneration(t *testing.T) {
 		{
 			name:     "record update +if negates",
 			cmdLine:  `export SSQL_MODE=record && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update +if age gt 25 -set tag young | /tmp/ssql_test generate go +O`,
-			wantStrs: []string{`if !((ssql.GetOr(frozen, "age"`},
+			wantStrs: []string{`if !((frozen.HasValue("age") && (ssql.GetOr(frozen, "age"`},
 		},
 		{
 			name:     "record update +if-expr negates (not dropped)",

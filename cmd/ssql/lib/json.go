@@ -70,21 +70,21 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 			continue // Skip malformed elements
 		}
 
-		// First valid record - infer field types
 		if fieldTypes == nil {
 			fieldTypes = make(map[string]ssql.FieldType)
-			for k, v := range rec {
-				fieldTypes[k] = inferJSONFieldType(v)
-			}
 		}
 
-		// Build record with consistent types
+		// Build record with consistent types: a field's type is locked by
+		// its first VALUE. A null says nothing about the type, so it never
+		// locks one (a column NULL in the first element used to be locked
+		// as a string) and never takes one (DFC128 §6g).
 		record := ssql.MakeMutableRecord()
 		for k, v := range rec {
-			if ft, ok := fieldTypes[k]; ok {
+			if v == nil {
+				record = record.Null(k)
+			} else if ft, ok := fieldTypes[k]; ok {
 				record = setValueWithType(record, k, v, ft)
 			} else {
-				// New field - infer and lock its type
 				fieldTypes[k] = inferJSONFieldType(v)
 				record = setValueFromJSON(record, k, v)
 			}
@@ -96,97 +96,16 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 	}
 }
 
-// readJSONLines streams JSONL format line by line
-// Uses fast JSON parsing for better performance.
-// Field types are inferred from the first record and applied consistently.
-// Shares schema across records with the same fields for performance.
+// readJSONLines streams JSONL through the wire-format reader — the one
+// implementation (ssql.ReadJSONLFromReader): `_schema` headers honoured,
+// one Schema shared across same-shaped records, nulls kept as nil slots.
+// This was a third copy of the line loop and the schema cache, with a
+// first-record type lock that coerced later values to the first row's
+// type; header inference now widens instead (InferFromSample).
 func readJSONLines(r io.Reader, yield func(ssql.Record) bool) {
-	scanner := bufio.NewScanner(r)
-
-	// Increase buffer size for large lines
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 1024*1024) // 1MB max token size
-
-	// Track field types from first record for consistency
-	var fieldTypes map[string]ssql.FieldType
-
-	// Schema caching: reuse schema when fields match
-	var cachedSchema *ssql.Schema
-	var cachedFields []string
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue // Skip empty lines
-		}
-
-		// Use fast parser - returns MutableRecord
-		parsed, err := ssql.ParseJSONLine(line)
-		if err != nil {
-			continue // Skip malformed lines
-		}
-
-		// Freeze to get a Record we can work with
-		parsedRecord := parsed.Freeze()
-
-		// First valid record - infer field types
-		if fieldTypes == nil {
-			fieldTypes = make(map[string]ssql.FieldType)
-			for k, v := range parsedRecord.All() {
-				fieldTypes[k] = inferJSONFieldType(v)
-			}
-		}
-
-		// Check if we can reuse the cached schema
-		var record ssql.Record
-		if cachedSchema != nil && parsedRecord.Len() == len(cachedFields) {
-			allMatch := true
-			for _, f := range cachedFields {
-				if _, ok := ssql.Get[any](parsedRecord, f); !ok {
-					allMatch = false
-					break
-				}
-			}
-			if allMatch {
-				// Reuse cached schema - build values slice directly
-				values := make([]any, cachedSchema.Width())
-				for i, f := range cachedFields {
-					if v, ok := ssql.Get[any](parsedRecord, f); ok {
-						// Apply type coercion
-						if ft, ok := fieldTypes[f]; ok {
-							values[i] = coerceValueToType(v, ft)
-						} else {
-							values[i] = v
-						}
-					}
-				}
-				record = ssql.NewRecordFromSchema(cachedSchema, values)
-			}
-		}
-
-		// If we couldn't reuse, create new record and cache schema
-		if record.Schema() == nil {
-			// Build record with consistent types
-			mut := ssql.MakeMutableRecord()
-			for k, v := range parsedRecord.All() {
-				if ft, ok := fieldTypes[k]; ok {
-					mut = setValueWithType(mut, k, v, ft)
-				} else {
-					// New field - infer and lock its type
-					fieldTypes[k] = inferJSONFieldType(v)
-					mut = setValueFromJSON(mut, k, v)
-				}
-			}
-			record = mut.Freeze()
-			// Cache schema for potential reuse
-			cachedSchema = record.Schema()
-			if cachedSchema != nil {
-				cachedFields = cachedSchema.Fields()
-			}
-		}
-
+	for record := range ssql.ReadJSONLFromReader(r) {
 		if !yield(record) {
-			return // Early termination
+			return
 		}
 	}
 }

@@ -959,6 +959,26 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// DFC128 §6g: filtering on a column whose FIRST row is NULL. exec
+		// validated `where`'s fields against the first record's values and
+		// failed with "unknown field(s): score (available: …, score)".
+		Name:     "jsonl_where_on_nullable_column",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/null_first.jsonl | {{.bin}} where -if score gt 3 | {{.bin}} include id score`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 2, "score": 4}},
+		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+	},
+	{
+		// …and a NULL in a LATER element of a JSON array's int column: exec
+		// turned it into 0 (the typed setter's fall-through), so `n ge 0`
+		// matched a row that has no n, and sums were silently wrong.
+		Name:     "json_array_null_is_not_zero",
+		Pipeline: `{{.bin}} from json {{.data}}/null_mixed.json | {{.bin}} where -if n ge 0 | {{.bin}} include id n`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "n": 5}, {"id": 3, "n": 7}},
+		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+	},
+	{
 		// DFC128 D1: `time` is a wire type. cast makes the column a time in
 		// every lane; where compares it as a time (the operand is a DATE
 		// form, the column a timestamp) and sort orders it chronologically.
@@ -1089,6 +1109,33 @@ var equivCases = []EquivCase{
 	{
 		Name:     "empties_unpivot",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} unpivot -id id -value n -value f`,
+		Ordered:  false,
+		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+	},
+	{
+		// A condition on an ABSENT value is false for every operator —
+		// exec's `exists && op`, SQL's NULL comparison. `gt 5` (below) cannot
+		// tell: an absent n read as 0 fails it too. `ge 0` and `ne` can, and
+		// record codegen failed both until it got the HasValue guard
+		// (DFC128 §6g). +if negates outside the guard, so it keeps the row.
+		Name:     "empties_where_absent_never_matches",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} where -if n ge 0 -if n ne 99999 | {{.bin}} include id n`,
+		Ordered:  false,
+		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+	},
+	{
+		// The same rule in update: row 2 has no n, so `-if n ge 0` must not
+		// touch it. `tag` exists beforehand (SQL cannot add a column
+		// conditionally), and the where keeps the case about update.
+		Name:     "empties_update_absent_never_matches",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} update -set tag no | {{.bin}} update -if n ge 0 -set tag hit | {{.bin}} include id tag`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "tag": "hit"}, {"id": 2, "tag": "no"}, {"id": 3, "tag": "hit"}, {"id": 4, "tag": "hit"}},
+		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+	},
+	{
+		Name:     "empties_where_negated_keeps_absent",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} where +if n ge 0 | {{.bin}} include id`,
 		Ordered:  false,
 		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
 	},

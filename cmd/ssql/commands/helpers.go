@@ -81,12 +81,15 @@ func recoverCellError(err *error) {
 	panic(r)
 }
 
-// validateFields checks that all given field names exist in the record.
-// Returns an error listing missing fields and available fields, or nil if all exist.
+// validateFields checks that all given field names exist in the record —
+// that the record's SCHEMA has them, not that this record has a value: a
+// field that is NULL in the first row (a nil slot) is a known field. The
+// value check reported `unknown field(s): score (available: id, score)`
+// for any nullable column whose first row was NULL (DFC128 §6g).
 func validateFields(r ssql.Record, fields []string, command string) error {
 	var missing []string
 	for _, f := range fields {
-		if _, exists := ssql.Get[any](r, f); !exists {
+		if !r.Has(f) {
 			missing = append(missing, f)
 		}
 	}

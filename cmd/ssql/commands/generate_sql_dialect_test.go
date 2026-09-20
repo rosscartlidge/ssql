@@ -269,6 +269,16 @@ func TestDialectDataFusion(t *testing.T) {
 	sql = mustDialect(t, dialectDataFusion, "ssql from csv "+file, "ssql window -order age -string-agg Name , who -median score m")
 	wantAll(t, sql, `string_agg("Name", ',') OVER`, `median("score") OVER`)
 
+	// DataFusion reads .json as NDJSON: a JSON ARRAY file is refused, a
+	// one-object-per-line .json is not.
+	arrayJSON := filepath.Join(filepath.Dir(file), "arr.json")
+	os.WriteFile(arrayJSON, []byte(`  [{"a":1}]`), 0o644)
+	ndJSON := filepath.Join(filepath.Dir(file), "nd.json")
+	os.WriteFile(ndJSON, []byte("{\"a\":1}\n"), 0o644)
+	if _, err := assembleDialect(t, dialectDataFusion, "ssql from json "+ndJSON); err != nil {
+		t.Errorf("an NDJSON .json must translate for datafusion: %v", err)
+	}
+
 	for _, tc := range []struct {
 		cmds []string
 		want string
@@ -276,6 +286,7 @@ func TestDialectDataFusion(t *testing.T) {
 		{[]string{"ssql from csv " + file, "ssql group-by flag -mode note m"}, "-mode has no datafusion translation"},
 		{[]string{"ssql from lines x.txt"}, "from lines has no datafusion translation"},
 		{[]string{"ssql from tsv x.tsv"}, "from x.tsv has no datafusion translation"},
+		{[]string{"ssql from json " + arrayJSON}, "has no datafusion translation"},
 		{[]string{"ssql from csv " + file, "ssql resample -every 1m -time hire_date"}, "resample has no datafusion translation"},
 		{[]string{"ssql from csv " + file, "ssql window -order age -arg-max Name score top"}, "window -arg-max has no datafusion translation"},
 		{[]string{"ssql from csv " + file, "ssql window -order age -percentile score 0.9 p"}, "window -percentile has no datafusion translation"},

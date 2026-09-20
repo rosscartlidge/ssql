@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Library: `Record.HasValue(field)` (the field exists AND has a value),
+  `MutableRecord.Null(field)`, `ssql.ParseJSONLineWithNulls`.
 - **`resample` over a time column** (DFC128 D1, second unit). After `cast
   -type ts time` — or reading a header that says `time` — `resample -time
   ts …` works in every lane: time in, time out, on the same epoch grid and
@@ -24,6 +26,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of `resample`'s SQL.
 
 ### Fixed
+- **A NULL in a later row of a JSON array's integer column became `0`.**
+  `from json` typed each column from the first element and fell through
+  to a zero for a value it could not convert — so `{"n":null}` read as
+  `n = 0`, matched `n ge 0`, and was added into sums. NULL is now NULL in
+  a column of any type, and a null never locks or takes a column's type
+  (a column NULL in the first element used to be locked as a string).
+- **`where` on a column whose first row is NULL failed** with the
+  self-contradicting `unknown field(s): score (available: id, score)`.
+  Validation looked for a VALUE in the first record; it now asks the
+  record's schema. The same fix closes the long-standing report of
+  `update -if … -set nick X | where -if nick …` failing that way. A field
+  that really is unknown is still an error.
+- **A column that is NULL in every record lost its name.** JSON nulls are
+  now kept on the wire-format path as valueless fields (a nil slot: `Get`
+  reports it absent, the writers skip it), so the header and every sink
+  keep the column, typed `string` like an all-empty CSV column. A
+  nullable column that is NULL throughout the schema sample and gets a
+  value later is simply in the header, instead of a late-field error.
+  Rows that differ only in which values are null now share one Schema.
+- **Generated Go matched rows that have no value.** A condition on an
+  absent value is false for every operator — the interpreted `where` and
+  `update -if` have always worked that way, and so does SQL. Record-mode
+  generated code compared a default zero instead, so `-if n ge 0` and
+  `-if n ne 5` matched (and `update -if` updated) rows with an empty `n`.
+  Both emitters now guard with the new `Record.HasValue`.
+- **`generate sql` dropped rows under a negated condition on a NULL.**
+  `where +if n ge 0` keeps a row with no `n` in ssql (the condition is
+  false, so its negation is true); SQL's `NOT (n >= 0)` is NULL there.
+  Negations (`+if`, `-not`, `-invert`) now render as
+  `NOT COALESCE((…), FALSE)`.
 - `generate sql`'s linear interpolation for `resample` multiplied before
   dividing where the Go implementation divides first — the same real
   number, a different float64 in the last place (`166.66666666666669` vs

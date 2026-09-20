@@ -228,8 +228,9 @@ ssql from employees.csv | ssql to csv | psql -c "\copy employees FROM STDIN CSV 
 ```
 
 Both engines were checked in both directions, NULLs included: an empty
-CSV cell loads as NULL, and a JSON `null` is simply an absent field in
-ssql. Dates and timestamps arrive as strings, which sort and compare
+CSV cell loads as NULL, and a JSON `null` is a field without a value in
+ssql — the column keeps its name even if every row is NULL, a condition
+on it is simply false for that row, and it is never mistaken for `0`. Dates and timestamps arrive as strings, which sort and compare
 correctly while they share one ISO form. To compute with one, or when the
 forms are mixed, make the column a time: `ssql cast -type ts time` (section
 3) reads what DuckDB and Postgres write — `2026-01-02 10:30:00`,

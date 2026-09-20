@@ -11,6 +11,7 @@ package main
 // and that the resulting Go compiles + runs.
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,7 +35,7 @@ ssql from `+csv+`
 	}
 
 	bin := buildSSQLForTypedTest(t)
-	out, err := exec.Command(bin, "generate", "go", "-script", script, "-run").CombinedOutput()
+	out, err := scriptRunLocal(t, bin, "generate", "go", "-script", script, "-run")
 	if err != nil {
 		t.Fatalf("generate go -script -run: %v\n%s", err, out)
 	}
@@ -58,7 +59,7 @@ ssql count
 	}
 
 	bin := buildSSQLForTypedTest(t)
-	out, err := exec.Command(bin, "generate", "go", "-script", script, "-run").CombinedOutput()
+	out, err := scriptRunLocal(t, bin, "generate", "go", "-script", script, "-run")
 	if err != nil {
 		t.Fatalf("generate go -script -run: %v\n%s", err, out)
 	}
@@ -121,7 +122,7 @@ ssql from `+csv+`
 	}
 
 	bin := buildSSQLForTypedTest(t)
-	out, err := exec.Command(bin, "generate", "go", "-script", script, "-mode", "record", "-run").CombinedOutput()
+	out, err := scriptRunLocal(t, bin, "generate", "go", "-script", script, "-mode", "record", "-run")
 	if err != nil {
 		t.Fatalf("generate -script -run: %v\n%s", err, out)
 	}
@@ -189,4 +190,29 @@ func TestAssembler_NoInitFragment(t *testing.T) {
 	if !strings.Contains(string(out), "no source (init) fragment") {
 		t.Errorf("expected 'no source (init) fragment' in error; got:\n%s", out)
 	}
+}
+
+// scriptRunLocal runs `generate go … -run` compiling the generated program
+// against THIS checkout (SSQL_MODULE_DIR) rather than the published
+// module: these tests are about script handling, and generated code may
+// use a library symbol newer than the last release — every `where` does
+// since Record.HasValue (DFC128 §6g). Without it they depend on the
+// network and on release timing.
+func scriptRunLocal(t *testing.T, bin string, args ...string) ([]byte, error) {
+	t.Helper()
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, args...)
+	cmd.Env = append(os.Environ(), "SSQL_MODULE_DIR="+repo)
+	// stdout only: SSQL_MODULE_DIR announces itself on stderr, and the
+	// callers compare the program's output exactly. stderr joins the
+	// result on failure, where it is the diagnosis.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return append(stdout.Bytes(), stderr.Bytes()...), err
+	}
+	return stdout.Bytes(), nil
 }
