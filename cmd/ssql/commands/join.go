@@ -561,9 +561,10 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 		fmt.Fprintf(os.Stderr, "Error: opening %s: %v\n", *flagJoin, err)
 		os.Exit(1)
 	}
-	defer joinHandle.Close()
-	records := lib.ReadJSONLWithSchema(joinHandle).Records`
-		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib")
+	// closed when the reader is done, NOT when this function returns: the
+	// reader is lazy (a deferred Close here truncated large side files)
+	records := ssql.CloseWhenDone(lib.ReadJSONLWithSchema(joinHandle).Records, joinHandle)`
+		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib", "github.com/rosscartlidge/ssql/v4")
 	case strings.HasSuffix(lower, ".json"):
 		initCode = joinReadTemplate("ReadJSON")
 	case strings.HasSuffix(lower, ".tsv"):

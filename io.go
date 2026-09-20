@@ -739,6 +739,88 @@ func WriteJSON(sb iter.Seq[Record], filename string) error {
 // already been processed (SSH push-down output, generated-Go remote
 // pipelines, JSONL written by `ssql ... | ssql to jsonl`).
 func ReadJSONLFromReader(r io.Reader) iter.Seq[Record] {
+	return readJSONL(r, nil)
+}
+
+// ReadJSONLFromReaderSkipInvalid is ReadJSONLFromReader for input the
+// caller KNOWS is dirty (a log with stray lines): a line that is not JSON
+// is skipped and counted in *skipped instead of stopping the read. The
+// CLI's `from jsonl -skip-invalid`. An over-long line is still an error —
+// the scanner cannot resynchronise after one.
+func ReadJSONLFromReaderSkipInvalid(r io.Reader, skipped *int64) iter.Seq[Record] {
+	if skipped == nil {
+		skipped = new(int64)
+	}
+	return readJSONL(r, skipped)
+}
+
+// CloseWhenDone closes c when the sequence has been fully read or
+// abandoned. A lazy reader returned from a function cannot be paired with
+// `defer f.Close()` in that function — the file is closed before anyone
+// reads it. Generated `join` did exactly that: with a small side file the
+// data was already buffered and it appeared to work; past the buffer it
+// silently truncated the join's right side, because the read error was
+// ignored (found when the readers became strict, DFC133).
+func CloseWhenDone[T any](seq iter.Seq[T], c io.Closer) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		defer c.Close()
+		for v := range seq {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+
+// LineError is a line of JSON Lines input that cannot be read: not JSON,
+// or longer than MaxJSONLineBytes. The readers panic with it (the
+// iterator has no error channel — the CSV reader's *CellError precedent);
+// it is an error, so the CLI and generated programs report one `Error:`
+// line. Until DFC133 such a line was SKIPPED: `update -set-expr z
+// '0.0/0.0'` once wrote a bare NaN, and the next stage dropped the whole
+// row without a word. Between ssql stages a malformed line is a bug
+// somewhere; in a user's file it is data that would otherwise vanish.
+type LineError struct {
+	Line int64  // 1-based, counting a `_schema` header line
+	Text string // the start of the offending line
+	Err  error
+}
+
+func (e *LineError) Error() string {
+	if errors.Is(e.Err, bufio.ErrTooLong) {
+		return fmt.Sprintf("JSON Lines input: line %d is longer than %d MB — everything after it would be lost", e.Line, MaxJSONLineBytes>>20)
+	}
+	if e.Text == "" {
+		// Not a malformed line: the READ failed (a closed file, a broken
+		// pipe). Saying "is not JSON" here would send people to the data.
+		return fmt.Sprintf("JSON Lines input: read failed after line %d: %v — everything after it would be lost", e.Line-1, e.Err)
+	}
+	hint := "fix the input, or read a file you know is dirty with `ssql from jsonl FILE -skip-invalid`"
+	if strings.HasPrefix(strings.TrimSpace(e.Text), "[") {
+		hint = "this looks like a JSON ARRAY, not JSON Lines — read it with `ssql from json FILE` (or `ssql from json -` on a pipe)"
+	}
+	return fmt.Sprintf("JSON Lines input: line %d is not JSON (%v): %s — %s", e.Line, e.Err, e.Text, hint)
+}
+
+func (e *LineError) Unwrap() error { return e.Err }
+
+// MaxJSONLineBytes is the longest line the JSON Lines readers accept. One
+// record is one line, and `group-by -collect` can make a long one; the
+// buffer grows only as needed. It was 1 MB, and — worse — an over-long
+// line ended the read SILENTLY, dropping every record after it.
+const MaxJSONLineBytes = 64 << 20
+
+// NewLineError builds a LineError, keeping only the start of the line.
+func NewLineError(line int64, text []byte, err error) *LineError {
+	const keep = 80
+	t := string(text)
+	if len(t) > keep {
+		t = t[:keep] + "…"
+	}
+	return &LineError{Line: line, Text: t, Err: err}
+}
+
+func readJSONL(r io.Reader, skipped *int64) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
 		br := bufio.NewReader(r)
 
@@ -754,17 +836,19 @@ func ReadJSONLFromReader(r io.Reader) iter.Seq[Record] {
 		// header, read the rest. Otherwise treat the first line as
 		// a data record (re-prepend).
 		var src io.Reader = br
-		if !firstIsHeader && len(firstLine) > 0 {
+		var lineNo int64
+		if firstIsHeader {
+			lineNo = 1
+		} else if len(firstLine) > 0 {
 			src = io.MultiReader(bytes.NewReader(firstLine), br)
 		}
 
 		scanner := bufio.NewScanner(src)
-		// Records can be large (group-by results with -collect, etc.) —
-		// match the bufio buffer the schema-aware lib reader uses.
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLineBytes)
 
 		var cache schemaCache // headerless input: share one Schema across same-shaped records
 		for scanner.Scan() {
+			lineNo++
 			line := bytes.TrimSpace(scanner.Bytes())
 			if len(line) == 0 {
 				continue
@@ -781,11 +865,18 @@ func ReadJSONLFromReader(r io.Reader) iter.Seq[Record] {
 				}
 			}
 			if err != nil {
+				if skipped == nil {
+					panic(NewLineError(lineNo, line, err))
+				}
+				*skipped++
 				continue
 			}
 			if !yield(record) {
 				return
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			panic(NewLineError(lineNo+1, nil, err))
 		}
 	}
 }

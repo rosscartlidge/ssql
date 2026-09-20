@@ -339,7 +339,45 @@ Promoted: seven equivalence cases (`groupby_aggregates_over_no_values`,
   to one row has all-empty columns, and an all-empty column is its own
   special case in every engine.
 
-### 7.6 Decisions for Ross
+### 7.6 Decisions for Ross — all three taken 2026-09-20
+
+Ross: "what is your feeling on 1, 2 and 3" → "let's do that, I agree."
+Decision 1 stands as shipped. Decisions 2 and 3 were implemented the same
+day (CHANGELOG "stricter about bad data"):
+
+- **`cast` is strict** (was 3). One conversion, `ssql.CastValue`, behind
+  the interpreter, generated record code (`ssql.CastField` — replacing a
+  sixty-line emitted type switch per field, its own copy of the rules)
+  and typed code (`ssql.MustCast`). A value that is not of the target
+  type panics with a `*CastError`, which IS an error, so the CLI and
+  generated programs print one line. (`MustParseTime` had panicked with a
+  string; a generated program printed a Go stack trace for a bad time.)
+  `-invalid missing` leaves such values without a value and counts them;
+  in SQL it is `TRY_CAST`. Re-testing found the SQL lane ROUNDING on
+  cast-to-int where ssql truncates; it truncates explicitly now.
+- **JSON Lines readers are strict** (was 2). `*LineError` with the line
+  number; `from jsonl|json -skip-invalid` is the counted opt-out, refused
+  in generation mode rather than silently emitting a strict program.
+  Surveying the readers for this found two more silent losses: a record
+  longer than the scanner's 1 MB limit ENDED THE READ (nothing checked
+  `scanner.Err()`) — the limit is 64 MB and crossing it is an error; and
+  a stage whose first stdin line was not JSON returned an empty result,
+  exit 0 (a JSON array piped to `where`) — it now says "this looks like a
+  JSON ARRAY … `from json`".
+- **What strictness exposed at once.** The first full run with strict
+  readers failed `TestUnionMergeSideFileSchemaHeaderIsNotARecord` with
+  "read … file already closed". Generated record-mode `join FILE.jsonl`
+  deferred the side file's Close inside the function that RETURNED the
+  lazy reader. Small files were already in the 64 KB buffer; a 450 KB
+  side file joined 214 of 20,000 rows, exit 0 — in every release up to
+  v4.102.0 — because the scanner's error was ignored. `ssql.CloseWhenDone`,
+  and `TestGeneratedJoinReadsAWholeSideFile`. An ignored error is not a
+  style problem; it was hiding the worst bug of the week.
+- The equivalence harness learned that DuckDB 1.5's `-json` prints
+  BOOLEANs as strings, per column, like its HUGEINT rule.
+
+The original text of the three questions follows.
+
 
 1. **Aggregates over no values (finding 3) reverse recorded choices**:
    DFC129 made "nothing" the empty string, and `ssql.Avg` documented

@@ -494,6 +494,30 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 		}
 	}
 
+	// DuckDB's -json prints a BOOLEAN as the STRING "true"/"false" (1.5.0).
+	// In a column where exec has booleans, that is a spelling, not a value.
+	// Per column, so a text column that happens to say "true" stays text.
+	boolCols := map[string]bool{}
+	for _, r := range ref {
+		for k, v := range r {
+			if _, isBool := v.(bool); isBool {
+				boolCols[k] = true
+			}
+		}
+	}
+	for name, rows := range results {
+		if !equivSQLLanes[name] {
+			continue
+		}
+		for _, r := range rows {
+			for k, v := range r {
+				if s, isStr := v.(string); isStr && boolCols[k] && (s == "true" || s == "false") {
+					r[k] = s == "true"
+				}
+			}
+		}
+	}
+
 	// Every lane must match the reference.
 	refC := equivCanon(ref, c.Ordered)
 	for _, ln := range lanes {
@@ -957,6 +981,33 @@ var equivCases = []EquivCase{
 		Name:     "jsonl_typed_where_groupby",
 		Pipeline: `{{.bin}} from jsonl {{.data}}/employees.jsonl | {{.bin}} where -if age gt 30 | {{.bin}} group-by dept -count n -sum salary total`,
 		Ordered:  false,
+	},
+	{
+		// cast is ONE conversion in every lane (ssql.CastValue). Text → int
+		// truncates a fraction (2.9 → 2, -7 stays), as Go and pandas do —
+		// SQL's CAST rounds, so the SQL lane truncates explicitly; booleans
+		// read yes/off/1/TRUE.
+		Name:     "cast_text_to_int_and_bool",
+		Pipeline: `{{.bin}} from csv {{.data}}/castable.csv -type score string | {{.bin}} cast -type score int -type flag bool`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 1, "score": 10, "flag": true}, {"id": 2, "score": 2, "flag": false},
+			{"id": 3, "score": -7, "flag": true}, {"id": 4, "score": 0, "flag": true},
+		},
+		Skip: map[string]string{"duckdb": "generate sql does not translate from-stage -type overrides"},
+	},
+	{
+		// -invalid missing: a value that is not of the type (N/A, maybe)
+		// becomes a field without a value — never 0 or false. Default is to
+		// stop the pipeline (TestCastIsStrict); typed mode's missing is the
+		// zero value (DFC124 §3).
+		Name:     "cast_invalid_missing",
+		Pipeline: `{{.bin}} from csv {{.data}}/uncastable.csv | {{.bin}} cast -type score int -type flag bool -invalid missing`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 1, "score": 10, "flag": true}, {"id": 2}, {"id": 3, "score": 2, "flag": false},
+		},
+		Skip: map[string]string{"go-typed": "typed mode has no missing: an unconvertible value is the zero value (DFC124 §3)", "go-parallel": "typed mode has no missing: an unconvertible value is the zero value (DFC124 §3)"},
 	},
 	{
 		// DFC133 random differential: a CSV column holding 02134 or 007 was

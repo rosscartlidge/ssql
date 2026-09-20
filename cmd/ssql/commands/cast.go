@@ -3,7 +3,7 @@ package commands
 import (
 	"sort"
 	"fmt"
-	"strconv"
+	"slices"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -21,6 +21,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql cast -type age int", "Convert age to integer").
 		Example("ssql from data.csv | ssql cast -type price float -type active bool", "Convert multiple fields").
 		Example("ssql from data.csv | ssql cast -type zipcode string -type phone string", "Preserve leading zeros as strings").
+		Example("ssql from survey.csv | ssql cast -type score int -invalid missing", "Values that are not ints (N/A, unknown) become missing instead of stopping the pipeline").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -35,7 +36,15 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Done().
 		Accumulate().
 		Global().
-		Help("Convert field to type: -type <field> <type>").
+		Help("Convert field to type: -type <field> <type>. A value that is not of that type stops the pipeline (see -invalid)").
+		Done().
+
+		Flag("-invalid").
+		String().
+		Completer(&cf.StaticCompleter{Options: []string{"error", "missing"}}).
+		Global().
+		Default("error").
+		Help("What a value that cannot be converted becomes: error (default — stop, naming the field and value) or missing (the field keeps no value; a count is reported)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
@@ -43,6 +52,16 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
+			}
+			invalidMissing := false
+			if v, ok := ctx.GlobalFlags["-invalid"]; ok {
+				switch fmt.Sprintf("%v", v) {
+				case "error", "":
+				case "missing":
+					invalidMissing = true
+				default:
+					return fmt.Errorf("cast: unknown -invalid %q (choose error or missing)", v)
+				}
 			}
 
 			// Parse -type flag accumulations
@@ -73,7 +92,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateCastCode(ctx, typeConversions)
+				return generateCastCode(ctx, typeConversions, invalidMissing)
 			}
 
 			// Read JSONL from stdin WITH its schema header. (cast used the
@@ -92,23 +111,20 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
-			// Cast every record's named fields to the target types.
+			// Cast every record's named fields to the target types, through
+			// the ONE conversion generated code also calls (ssql.CastField): a
+			// value that is not of the target type stops the pipeline, or —
+			// under -invalid missing — becomes a field without a value.
+			fields := make([]string, 0, len(typeConversions))
+			for f := range typeConversions {
+				fields = append(fields, f)
+			}
+			slices.Sort(fields)
+			var invalid int64
 			casted := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 				frozen := mut.Freeze()
-				for field, targetType := range typeConversions {
-					value, exists := ssql.Get[any](frozen, field)
-					if !exists {
-						continue
-					}
-					// An empty text cell is MISSING (DFC124), and missing has
-					// no number, boolean or time: it stays a field without a
-					// value. It used to fall through the parse failure and
-					// become 0 / false (DFC133 random differential).
-					if s, isString := value.(string); isString && s == "" && targetType != ssql.FieldTypeString {
-						mut = mut.Null(field)
-						continue
-					}
-					mut = applyValueToRecord(mut, field, convertFieldType(value, targetType, field))
+				for _, field := range fields {
+					mut = ssql.CastField(mut, frozen, field, typeConversions[field], invalidMissing, &invalid)
 				}
 				return mut
 			})(sr.Records)
@@ -129,9 +145,9 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outSchema, casted); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
-			var castErr error
-			if castErr != nil {
-				return castErr
+			if invalid > 0 {
+				// -invalid missing is lenient, not silent.
+				fmt.Fprintf(ctx.Stderr(), "cast: %d values could not be converted and were left without a value (-invalid missing)\n", invalid)
 			}
 
 			return nil
@@ -140,98 +156,8 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	return cmd
 }
 
-// convertFieldType converts a value to the target FieldType
-func convertFieldType(value any, targetType ssql.FieldType, field string) any {
-	switch targetType {
-	case ssql.FieldTypeTime:
-		// Explicit request: a value that is not a time stops the pipeline
-		// (main recovers the panic into one Error line).
-		return ssql.MustParseTime(value, field)
-	case ssql.FieldTypeString:
-		switch v := value.(type) {
-		case string:
-			return v
-		case int64:
-			return strconv.FormatInt(v, 10)
-		case float64:
-			return strconv.FormatFloat(v, 'g', -1, 64)
-		case bool:
-			return strconv.FormatBool(v)
-		default:
-			return fmt.Sprintf("%v", v)
-		}
-
-	case ssql.FieldTypeInt:
-		switch v := value.(type) {
-		case int64:
-			return v
-		case float64:
-			return int64(v)
-		case string:
-			if i, err := strconv.ParseInt(v, 10, 64); err == nil {
-				return i
-			}
-			// Try parsing as float first then convert
-			if f, err := strconv.ParseFloat(v, 64); err == nil {
-				return int64(f)
-			}
-			return int64(0)
-		case bool:
-			if v {
-				return int64(1)
-			}
-			return int64(0)
-		default:
-			return int64(0)
-		}
-
-	case ssql.FieldTypeFloat:
-		switch v := value.(type) {
-		case float64:
-			return v
-		case int64:
-			return float64(v)
-		case string:
-			if f, err := strconv.ParseFloat(v, 64); err == nil {
-				return f
-			}
-			return float64(0)
-		case bool:
-			if v {
-				return float64(1)
-			}
-			return float64(0)
-		default:
-			return float64(0)
-		}
-
-	case ssql.FieldTypeBool:
-		switch v := value.(type) {
-		case bool:
-			return v
-		case int64:
-			return v != 0
-		case float64:
-			return v != 0
-		case string:
-			lower := strings.ToLower(v)
-			switch lower {
-			case "true", "1", "yes", "y", "on":
-				return true
-			default:
-				return false
-			}
-		default:
-			return false
-		}
-
-	default:
-		return value
-	}
-}
-
 // generateCastCode generates Go code for the cast command
-func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType) error {
+func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType, invalidMissing bool) error {
 	// Read all previous code fragments from stdin
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
@@ -259,135 +185,51 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 	if typedMode() && prevSchema != nil {
 		// cast is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
-		return emitTypedCast(inputVar, prevSchema, typeConversions)
+		return emitTypedCast(inputVar, prevSchema, typeConversions, invalidMissing)
 	}
 
-	// Generate cast code
+	// Generate cast code: one library call per field — the same
+	// ssql.CastField the interpreter runs, so the lanes cannot drift. (This
+	// used to emit a sixty-line type switch per field, its own copy of the
+	// conversion rules, zeros for unparseable values included.)
+	fields := make([]string, 0, len(typeConversions))
+	for f := range typeConversions {
+		fields = append(fields, f)
+	}
+	slices.Sort(fields)
 	var codeBody strings.Builder
-	codeBody.WriteString("\t\tfrozen := mut.Freeze()\n\n")
-
-	for field, targetType := range typeConversions {
-		if targetType == ssql.FieldTypeString {
-			codeBody.WriteString(fmt.Sprintf("\t\tif val, exists := ssql.Get[any](frozen, %q); exists {\n", field))
-		} else {
-			// As in exec: an empty text cell is missing (DFC124) and stays a
-			// field without a value, never 0 / false.
-			codeBody.WriteString(fmt.Sprintf("\t\tif val, exists := ssql.Get[any](frozen, %q); exists && val == \"\" {\n\t\t\tmut = mut.Null(%q)\n\t\t} else if exists {\n", field, field))
-		}
-
-		switch targetType {
-		case ssql.FieldTypeString:
-			codeBody.WriteString(fmt.Sprintf("\t\t\tswitch v := val.(type) {\n"))
-			codeBody.WriteString("\t\t\tcase string:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.String(%q, v)\n", field))
-			codeBody.WriteString("\t\t\tcase int64:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.String(%q, strconv.FormatInt(v, 10))\n", field))
-			codeBody.WriteString("\t\t\tcase float64:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.String(%q, strconv.FormatFloat(v, 'g', -1, 64))\n", field))
-			codeBody.WriteString("\t\t\tcase bool:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.String(%q, strconv.FormatBool(v))\n", field))
-			codeBody.WriteString("\t\t\tdefault:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.String(%q, fmt.Sprintf(\"%%v\", v))\n", field))
-			codeBody.WriteString("\t\t\t}\n")
-
-		case ssql.FieldTypeInt:
-			codeBody.WriteString(fmt.Sprintf("\t\t\tswitch v := val.(type) {\n"))
-			codeBody.WriteString("\t\t\tcase int64:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Int(%q, v)\n", field))
-			codeBody.WriteString("\t\t\tcase float64:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Int(%q, int64(v))\n", field))
-			codeBody.WriteString("\t\t\tcase string:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tif i, err := strconv.ParseInt(v, 10, 64); err == nil {\n"))
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Int(%q, i)\n", field))
-			codeBody.WriteString("\t\t\t\t} else if f, err := strconv.ParseFloat(v, 64); err == nil {\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Int(%q, int64(f))\n", field))
-			codeBody.WriteString("\t\t\t\t} else {\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Int(%q, 0)\n", field))
-			codeBody.WriteString("\t\t\t\t}\n")
-			codeBody.WriteString("\t\t\tcase bool:\n")
-			codeBody.WriteString("\t\t\t\tif v {\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Int(%q, 1)\n", field))
-			codeBody.WriteString("\t\t\t\t} else {\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Int(%q, 0)\n", field))
-			codeBody.WriteString("\t\t\t\t}\n")
-			codeBody.WriteString("\t\t\tdefault:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Int(%q, 0)\n", field))
-			codeBody.WriteString("\t\t\t}\n")
-
-		case ssql.FieldTypeFloat:
-			codeBody.WriteString(fmt.Sprintf("\t\t\tswitch v := val.(type) {\n"))
-			codeBody.WriteString("\t\t\tcase float64:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Float(%q, v)\n", field))
-			codeBody.WriteString("\t\t\tcase int64:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Float(%q, float64(v))\n", field))
-			codeBody.WriteString("\t\t\tcase string:\n")
-			codeBody.WriteString("\t\t\t\tif f, err := strconv.ParseFloat(v, 64); err == nil {\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Float(%q, f)\n", field))
-			codeBody.WriteString("\t\t\t\t} else {\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Float(%q, 0)\n", field))
-			codeBody.WriteString("\t\t\t\t}\n")
-			codeBody.WriteString("\t\t\tcase bool:\n")
-			codeBody.WriteString("\t\t\t\tif v {\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Float(%q, 1)\n", field))
-			codeBody.WriteString("\t\t\t\t} else {\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Float(%q, 0)\n", field))
-			codeBody.WriteString("\t\t\t\t}\n")
-			codeBody.WriteString("\t\t\tdefault:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Float(%q, 0)\n", field))
-			codeBody.WriteString("\t\t\t}\n")
-
-		case ssql.FieldTypeTime:
-			codeBody.WriteString(fmt.Sprintf("\t\t\tmut = mut.Time(%q, ssql.MustParseTime(val, %q))\n", field, field))
-
-		case ssql.FieldTypeBool:
-			codeBody.WriteString(fmt.Sprintf("\t\t\tswitch v := val.(type) {\n"))
-			codeBody.WriteString("\t\t\tcase bool:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Bool(%q, v)\n", field))
-			codeBody.WriteString("\t\t\tcase int64:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Bool(%q, v != 0)\n", field))
-			codeBody.WriteString("\t\t\tcase float64:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Bool(%q, v != 0)\n", field))
-			codeBody.WriteString("\t\t\tcase string:\n")
-			codeBody.WriteString("\t\t\t\tlower := strings.ToLower(v)\n")
-			codeBody.WriteString("\t\t\t\tswitch lower {\n")
-			codeBody.WriteString("\t\t\t\tcase \"true\", \"1\", \"yes\", \"y\", \"on\":\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Bool(%q, true)\n", field))
-			codeBody.WriteString("\t\t\t\tdefault:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\t\tmut = mut.Bool(%q, false)\n", field))
-			codeBody.WriteString("\t\t\t\t}\n")
-			codeBody.WriteString("\t\t\tdefault:\n")
-			codeBody.WriteString(fmt.Sprintf("\t\t\t\tmut = mut.Bool(%q, false)\n", field))
-			codeBody.WriteString("\t\t\t}\n")
-		}
-
-		codeBody.WriteString("\t\t}\n\n")
+	codeBody.WriteString("\t\tfrozen := mut.Freeze()\n")
+	for _, field := range fields {
+		codeBody.WriteString(fmt.Sprintf("\t\tmut = ssql.CastField(mut, frozen, %q, %s, %t, nil)\n",
+			field, castTargetGoConst(typeConversions[field]), invalidMissing))
 	}
 
 	outputVar := "casted"
-	body := codeBody.String()
 	castCode := fmt.Sprintf(`%s := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 %s		return mut
-	})(%s)`, outputVar, body, inputVar)
-
-	// Only include imports for packages actually used in the body.
-	// Otherwise the generated code fails to compile with
-	// "imported and not used".
+	})(%s)`, outputVar, codeBody.String(), inputVar)
 	var imports []string
-	if strings.Contains(body, "strconv.") {
-		imports = append(imports, "strconv")
-	}
-	if strings.Contains(body, "strings.") {
-		imports = append(imports, "strings")
-	}
-	if strings.Contains(body, "fmt.") {
-		imports = append(imports, "fmt")
-	}
 
 	// Create and write fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, castCode, imports, getCommandString())
 	return lib.WriteCodeFragment(frag)
 }
 
+
+// castTargetGoConst is the ssql.FieldType constant as Go source.
+func castTargetGoConst(t ssql.FieldType) string {
+	switch t {
+	case ssql.FieldTypeInt:
+		return "ssql.FieldTypeInt"
+	case ssql.FieldTypeFloat:
+		return "ssql.FieldTypeFloat"
+	case ssql.FieldTypeBool:
+		return "ssql.FieldTypeBool"
+	case ssql.FieldTypeTime:
+		return "ssql.FieldTypeTime"
+	}
+	return "ssql.FieldTypeString"
+}
 
 // castTargetWireType maps a cast target to the JSONL schema vocabulary
 // ("" when the target has no single wire type).

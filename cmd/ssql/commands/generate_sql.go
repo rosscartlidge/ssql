@@ -1633,11 +1633,27 @@ func translateRename(q *sqlQuery, args []string) error {
 
 func translateCast(q *sqlQuery, args []string) error {
 	// DuckDB: SELECT * REPLACE (CAST("field" AS TYPE) AS "field", ...)
+	// -invalid missing: a value that cannot be converted becomes NULL —
+	// TRY_CAST, where the engine has it. Plain CAST is already strict.
+	castFn := "CAST"
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-invalid" && args[i+1] == "missing" {
+			switch sqlDialectCur {
+			case dialectDuckDB:
+				castFn = "TRY_CAST"
+			case dialectDataFusion:
+				castFn = "try_cast"
+			default:
+				return dialectRefuse("cast -invalid missing", "Postgres has no TRY_CAST")
+			}
+		}
+	}
 	var replacements []sqlPair
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-type" && i+2 < len(args) {
 			field, typeName := args[i+1], args[i+2]
 			sqlType := mapTypeToSQL(typeName)
+			kindBefore := sqlColumnKinds[field] // the cast below updates it
 			if ft, err := ssql.ParseFieldType(typeName); err == nil {
 				sqlColumnKinds[field] = ft.String()
 				if ft == ssql.FieldTypeTime {
@@ -1646,7 +1662,16 @@ func translateCast(q *sqlQuery, args []string) error {
 					delete(sqlTimeColumns, field)
 				}
 			}
-			replacements = append(replacements, sqlPair{field, fmt.Sprintf("CAST(%s AS %s)", quoteIdent(field), sqlType)})
+			expr := fmt.Sprintf("%s(%s AS %s)", castFn, quoteIdent(field), sqlType)
+			if ft, err := ssql.ParseFieldType(typeName); err == nil && ft == ssql.FieldTypeInt && kindBefore != "int" {
+				// ssql's float → int TRUNCATES (2.9 → 2, as Go and pandas do);
+				// SQL's CAST rounds (DuckDB and Postgres give 3). Truncate
+				// explicitly — except from a column already known to be an
+				// int, where a detour through DOUBLE would corrupt values
+				// past 2^53 (DFC133: found re-testing cast).
+				expr = fmt.Sprintf("%s(trunc(%s(%s AS %s)) AS %s)", castFn, castFn, quoteIdent(field), sqlFloatType(), sqlType)
+			}
+			replacements = append(replacements, sqlPair{field, expr})
 			i += 2
 		}
 	}

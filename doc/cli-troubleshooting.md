@@ -377,6 +377,37 @@ SSQL_SCHEMA_SAMPLE=100000 ssql from jsonl events.jsonl | ssql to csv
 whose first row must be emitted immediately. CSV, TSV and Parquet are not
 affected: they carry their own header.
 
+### Issue 10: "JSON Lines input: line N is not JSON"
+
+**Symptoms:**
+```
+Error: JSON Lines input: line 4812 is not JSON (expected '{' at position 0): WARN retrying… — fix the input, or …
+```
+
+**What it means:** every ssql stage reads JSON Lines, one record per
+line. A line that is not JSON used to be skipped without a word, which
+loses records silently, so it is an error now, with the line number and
+the start of the line.
+
+**Fix:**
+- A log or export with stray lines you know about: `ssql from jsonl FILE
+  -skip-invalid` reads the good lines and reports how many it skipped.
+- The message says **"this looks like a JSON ARRAY"**: the file is one
+  `[ … ]`, not one object per line. Read it with `ssql from json FILE`
+  (or `… | ssql from json -`), not by piping it into a stage.
+- The line is between two ssql stages: that is a bug in ssql — please
+  report the pipeline.
+- **"line N is longer than 64 MB"**: one record is one line; a `group-by
+  -collect` over a very large group can produce one this long.
+
+### Issue 11: "cast: field … value … is not an int"
+
+`cast` does not invent values: `N/A`, `unknown` or `-` in a column you
+cast to a number stops the pipeline, naming the field and the value. If
+the data really contains such placeholders, `ssql cast -type score int
+-invalid missing` leaves them empty (never `0`) and reports the count.
+An empty cell is already missing and is never an error.
+
 ---
 
 ## jq Debugging Patterns

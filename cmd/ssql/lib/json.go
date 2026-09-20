@@ -68,10 +68,15 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 	// value and coerce the rest — so a column holding 12 and "12" came out
 	// all numbers or all strings depending on which element was first,
 	// and a filter kept or lost rows accordingly (DFC133 row-order sweep).
+	element := 0
 	for decoder.More() {
 		var rec map[string]any
+		element++
 		if err := decoder.Decode(&rec); err != nil {
-			continue // Skip malformed elements
+			// The decoder cannot resynchronise after a bad element, and the
+			// old `continue` dropped it (and everything the decoder then
+			// misread) silently. An error, like a malformed JSONL line.
+			panic(fmt.Errorf("JSON array input: element %d is not a JSON object: %w", element, err))
 		}
 
 		record := ssql.MakeMutableRecord()

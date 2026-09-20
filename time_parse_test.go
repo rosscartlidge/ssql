@@ -50,9 +50,11 @@ func TestParseTime(t *testing.T) {
 
 func TestMustParseTimePanicsWithTheField(t *testing.T) {
 	defer func() {
-		msg, _ := recover().(string)
-		if msg == "" || !contains(msg, `field "ts"`) || !contains(msg, "junk") {
-			t.Errorf("panic message %q must name the field and the value", msg)
+		// An ERROR, not a string: generated programs report a panic as one
+		// `Error:` line only when it is an error.
+		err, _ := recover().(error)
+		if err == nil || !contains(err.Error(), `field "ts"`) || !contains(err.Error(), "junk") {
+			t.Errorf("panic %v must be an error naming the field and the value", err)
 		}
 	}()
 	MustParseTime("junk", "ts")

@@ -48,7 +48,10 @@ func ParseTime(val any) (time.Time, bool) {
 func MustParseTime(val any, field string) time.Time {
 	t, ok := ParseTime(val)
 	if !ok {
-		panic(fmt.Sprintf("cast: field %q value %v is not a time (accepted: RFC 3339, \"2006-01-02 15:04:05\", \"2006-01-02T15:04:05\", \"2006-01-02\", Unix seconds; use date(value, layout) in -set-expr for another layout)", field, val))
+		// An error, not a string: generated programs turn a panic into an
+		// `Error:` line only when it IS an error (it was a string, so a
+		// bad time in generated code printed a Go stack trace).
+		panic(&CastError{Field: field, Value: val, Target: FieldTypeTime})
 	}
 	return t
 }

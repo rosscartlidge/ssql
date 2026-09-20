@@ -16,7 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seeds agree. **Native fuzz targets** for the JSON line parsers, the CSV
   reader, `ParseTime`, the expression translators and the command
   splitter (`go test -fuzz`). Between them they found the defects above.
-- Library: `ssql.ZeroPaddedNumber`.
+- Library: `ssql.ZeroPaddedNumber`; `ssql.CastValue`, `ssql.CastField`,
+  `ssql.MustCast`, `*ssql.CastError`; `ssql.ReadJSONLFromReaderSkipInvalid`,
+  `*ssql.LineError`, `ssql.MaxJSONLineBytes`. `ssql.ReadJSONLFromReader`
+  now panics with a `*LineError` on a malformed line (it skipped it);
+  `ssql.MustParseTime` panics with an error, not a string.
 - **Two opt-in bug-finding gates** (`SSQL_SWEEP=1`, DFC133).
   `TestRowOrderSweep` reruns the equivalence corpus with the input rows
   reordered and adversarial rows appended, in CSV, JSONL and JSON-array
@@ -43,7 +47,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a TIMESTAMP (`epoch_us` / `make_timestamp`). DuckDB only, like the rest
   of `resample`'s SQL.
 
-### Changed
+### Changed — stricter about bad data
+
+Three behaviours that quietly produced a wrong answer now stop the
+pipeline and say why. Each has an explicit, non-silent way to be lenient.
+
+- **`cast` of a value that is not of the target type is an error.**
+  `cast -type score int` over `N/A` stored `0`, and `maybe` cast to bool
+  stored `false` — the behaviour DFC124 removed from the CSV reader,
+  because the information is gone before any later stage can see it. It
+  now stops, in the interpreter and in generated programs alike, with one
+  line: `cast: field "score" value "N/A" is not an int — fix the data, or
+  use -invalid missing …`. **`cast -invalid missing`** keeps the row,
+  leaves such values without a value (never a zero), and reports how many
+  there were. `generate sql` renders it as `TRY_CAST` (DuckDB, DataFusion;
+  refused for Postgres). Defined conversions still convert: `"2.9"` → int
+  is 2, a bool is 1 or 0.
+- **A line that is not JSON is an error.** Every JSON Lines reader — `from
+  jsonl`, `from FILE.jsonl`, and every stage's stdin — used to SKIP a line
+  it could not parse. That is what turned a bare `NaN` into vanished rows.
+  It now stops with the line number and the start of the line. **`from
+  jsonl FILE -skip-invalid`** (and `from json`) reads a file you know is
+  dirty and reports how many lines it skipped. Also an error now: a bad
+  element in a JSON array (was dropped), and a JSON array piped into a
+  stage (`cat data.json | ssql where …` gave an EMPTY result, exit 0 — the
+  message now names `from json`).
+- **A JSON Lines record longer than 1 MB silently ended the read**, and
+  every record after it was lost: nothing checked the scanner's error.
+  The limit is 64 MB and crossing it is an error naming the line.
 - **An aggregate over no values has no value.** A group in which a field
   is missing from every row used to give `""` for `-min`/`-max`/
   `-median`/`-first`/… and `0` for `-avg`. The `""` was a present string:
@@ -63,6 +94,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   int` overrides.
 
 ### Fixed
+- **Generated `join FILE.jsonl` silently truncated a large side file.**
+  Record-mode generated code opened the side file and deferred its close
+  inside the function that returned the lazy reader, so the file was
+  closed before it was read. A small file was already buffered and
+  appeared to work; a 450 KB side file joined **214 of 20,000 rows**,
+  exit 0, because the read error was ignored. Present in v4.102.0 and
+  earlier; the interpreter was never affected. Found the moment the
+  readers stopped ignoring read errors. New `ssql.CloseWhenDone`.
+- **A bad time in a generated program printed a Go stack trace**:
+  `MustParseTime` panicked with a string, and generated programs turn a
+  panic into an `Error:` line only when it is an error. Every cast failure
+  is a `*CastError` now.
+- `cast` is one conversion in every lane (`ssql.CastField`). Generated
+  record code used to carry its own sixty-line copy of the rules per
+  field, which is how it drifted. `generate sql` truncates a fraction
+  when casting to int, as ssql does (`2.9` → 2); SQL's `CAST` rounds.
 - **Rows vanished when an expression produced NaN or infinity.** `update
   -set-expr z '0.0/0.0'` wrote the bare word `NaN`, which is not JSON;
   the next stage skipped the unparseable line and the whole row was gone,

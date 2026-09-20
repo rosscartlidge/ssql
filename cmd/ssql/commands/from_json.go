@@ -38,6 +38,12 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 		Global().
 		Help("Don't preserve file order in pushdown (faster, lower memory)").
 		Done().
+		Flag("-skip-invalid").
+		Bool().
+		Global().
+		Default(false).
+		Help("Skip lines that are not JSON and report how many, instead of stopping. For a file you know is dirty; by default a malformed line is an error, because a skipped record is a wrong result").
+		Done().
 		Flag("FILE").
 		String().
 		Variadic().
@@ -46,8 +52,13 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 		Default("").
 		Help("Input JSON file(s) (or stdin if not specified)").
 		Done().
-		Handler(func(ctx *cf.Context) error {
+		Handler(func(ctx *cf.Context) (err error) {
 			cfg := extractMultiFileConfig(ctx)
+			doneSkip, skipErr := armSkipInvalid(ctx, cfg.generate)
+			if skipErr != nil {
+				return skipErr
+			}
+			defer doneSkip()
 
 			if len(ctx.RemainingArgs) > 0 {
 				if len(cfg.files) == 0 {
@@ -133,6 +144,12 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 		Global().
 		Help("Fix a field's type (JSON lines type themselves; a column that is int on one line and float on another is mixed): -type score float").
 		Done().
+		Flag("-skip-invalid").
+		Bool().
+		Global().
+		Default(false).
+		Help("Skip lines that are not JSON and report how many, instead of stopping. For a file you know is dirty; by default a malformed line is an error, because a skipped record is a wrong result").
+		Done().
 		Flag("FILE").
 		String().
 		Variadic().
@@ -144,6 +161,11 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 		Handler(func(ctx *cf.Context) (err error) {
 			defer recoverCellError(&err)
 			cfg := extractMultiFileConfig(ctx)
+			doneSkip, skipErr := armSkipInvalid(ctx, cfg.generate)
+			if skipErr != nil {
+				return skipErr
+			}
+			defer doneSkip()
 			typeOverrides := make(map[string]string)
 			if typeVal, ok := ctx.GlobalFlags["-type"]; ok {
 				typeOverrides = parseTypeOverrides(typeVal)
@@ -381,7 +403,41 @@ func readJSONSchemaAware(r io.Reader) iter.Seq[ssql.Record] {
 	}
 
 	// JSONL — use schema-aware reader that strips _schema headers
+	if fromJSONSkipInvalid != nil {
+		return lib.ReadJSONLWithSchemaSkipInvalid(br, fromJSONSkipInvalid).Records
+	}
 	return lib.ReadJSONLWithSchema(br).Records
+}
+
+// fromJSONSkipInvalid is non-nil while a `from json|jsonl -skip-invalid`
+// invocation runs: the count of lines skipped because they were not JSON.
+// `from` is one read per process, so this is set once by the handler.
+var fromJSONSkipInvalid *int64
+
+// armSkipInvalid reads -skip-invalid and returns the function to defer:
+// it reports how many lines were skipped — lenient is not silent. In
+// generation mode the flag is refused for now: the generated readers have
+// no skipping form, and emitting a strict program for a lenient request
+// would change what the pipeline means.
+func armSkipInvalid(ctx *cf.Context, generate bool) (func(), error) {
+	if on, _ := ctx.GlobalFlags["-skip-invalid"].(bool); !on {
+		return func() {}, nil
+	}
+	if shouldGenerate(generate) {
+		return nil, fmt.Errorf("from -skip-invalid has no generated form yet — clean the file first (`ssql from jsonl FILE -skip-invalid | ssql to jsonl clean.jsonl`) and generate from that")
+	}
+	var skipped int64
+	fromJSONSkipInvalid = &skipped
+	return func() {
+		fromJSONSkipInvalid = nil
+		if skipped > 0 {
+			noun := "lines"
+			if skipped == 1 {
+				noun = "line"
+			}
+			fmt.Fprintf(ctx.Stderr(), "from: skipped %d %s that were not JSON (-skip-invalid)\n", skipped, noun)
+		}
+	}, nil
 }
 
 // executeFromJSONLSample is the -sample path for JSONL (byte-offset

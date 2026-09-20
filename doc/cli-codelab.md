@@ -431,8 +431,11 @@ ssql from employees.csv | ssql rename -as dept department | ssql cast -type leve
 otherwise; cast it and `where` compares instants, `sort` is
 chronological whatever form each row was written in, and expressions get
 the time's methods (`.Year()`, `.Weekday()`, `.Sub(…)`). It travels
-between stages as RFC 3339, and a value that is not a time stops the
-pipeline rather than becoming one:
+between stages as RFC 3339. A cast never invents a value: one that is not
+of the type — `N/A` in a column you cast to int, `soon` in one you cast to
+time — stops the pipeline and names the field and the value, rather than
+becoming `0`. Add `-invalid missing` when the data really is like that:
+those values are left empty, and `cast` says how many there were.
 
 ```bash
 ssql from employees.csv | ssql cast -type hire_date time | ssql where -if hire_date ge 2021-01-01 | ssql update -set-expr year 'hire_date.Year()' | ssql include name hire_date year | ssql sort hire_date | ssql to table

@@ -121,6 +121,10 @@ func corpusData(t *testing.T) string {
 			// every row.
 			// Zero-padded identifiers: text, in every lane (DFC133).
 			"zero_padded.csv": "id,zip,part\n1,02134,007\n2,90210,120\n3,00501,045\n",
+			// cast: text holding numbers written as ints and floats, booleans
+			// in several spellings, and values that are NOT of the type.
+			"castable.csv":   "id,score,flag\n1,10,yes\n2,2.9,off\n3,-7,1\n4,0.5,TRUE\n",
+			"uncastable.csv": "id,score,flag\n1,10,yes\n2,N/A,maybe\n3,2.9,no\n",
 			"missing_groups.csv": "id,g,v,t,code,e\n1,a,1,Oslo,12,\n2,a,3,,abc,\n3,b,,,007,\n4,b,,,x,\n",
 			// A join key that is a FLOAT column on the left (one 2.5 types
 			// the whole column float) and an INT column on the right

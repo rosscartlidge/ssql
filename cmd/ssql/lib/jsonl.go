@@ -154,53 +154,57 @@ type SchemaAndRecords struct {
 // If the first line is a schema header (contains "_schema" key), it is parsed and returned.
 // Otherwise, returns nil schema and all records including the first line.
 func ReadJSONLWithSchema(r io.Reader) *SchemaAndRecords {
+	return readJSONLSchemaAndRecords(r, nil)
+}
+
+// ReadJSONLWithSchemaSkipInvalid is ReadJSONLWithSchema for a source the
+// user has declared dirty (`from jsonl FILE -skip-invalid`): lines that
+// are not JSON are skipped and counted in *skipped.
+func ReadJSONLWithSchemaSkipInvalid(r io.Reader, skipped *int64) *SchemaAndRecords {
+	if skipped == nil {
+		skipped = new(int64)
+	}
+	return readJSONLSchemaAndRecords(r, skipped)
+}
+
+// readJSONLSchemaAndRecords is every stage's stdin. A line that is not
+// JSON panics with *ssql.LineError (main reports it as one Error line)
+// unless skipped is non-nil. It used to SKIP such lines — and if the
+// FIRST line was not JSON it returned nothing at all, so `cat data.json |
+// ssql where …` on a JSON array produced an empty result and exit 0.
+func readJSONLSchemaAndRecords(r io.Reader, skipped *int64) *SchemaAndRecords {
 	br := bufio.NewReader(r)
+	empty := &SchemaAndRecords{Records: func(yield func(ssql.Record) bool) {}}
 
 	// Read first line to check for schema
 	firstLine, err := br.ReadBytes('\n')
-	if err != nil && len(firstLine) == 0 {
-		// Empty or error - return empty iterator
-		return &SchemaAndRecords{
-			Schema:  nil,
-			Records: func(yield func(ssql.Record) bool) {},
-		}
+	if err != nil && len(bytes.TrimSpace(firstLine)) == 0 {
+		return empty // no input at all
 	}
 
-	// Try to parse first line as JSON
+	// A schema header is a JSON object; anything else is data for the
+	// line reader, which decides what an invalid line means.
 	var firstRecord map[string]any
-	if err := json.Unmarshal(bytes.TrimSpace(firstLine), &firstRecord); err != nil {
-		// Invalid JSON - return empty iterator
-		return &SchemaAndRecords{
-			Schema:  nil,
-			Records: func(yield func(ssql.Record) bool) {},
+	if json.Unmarshal(bytes.TrimSpace(firstLine), &firstRecord) == nil {
+		if schema, ok := ParseSchemaHeader(firstRecord); ok {
+			return &SchemaAndRecords{Schema: schema, Records: readJSONLWithSchema(br, schema, skipped)}
 		}
 	}
 
-	// Check if first line is a schema header
-	if schema, ok := ParseSchemaHeader(firstRecord); ok {
-		// Schema found - read remaining records with type coercion
-		return &SchemaAndRecords{
-			Schema:  schema,
-			Records: readJSONLWithSchema(br, schema),
-		}
-	}
-
-	// First line is data - prepend it back and read all records
+	// First line is data (or not JSON) - prepend it back and read everything
 	combined := io.MultiReader(bytes.NewReader(firstLine), br)
-	return &SchemaAndRecords{
-		Schema:  nil,
-		Records: ReadJSONL(combined),
+	if skipped != nil {
+		return &SchemaAndRecords{Records: ssql.ReadJSONLFromReaderSkipInvalid(combined, skipped)}
 	}
+	return &SchemaAndRecords{Records: ReadJSONL(combined)}
 }
 
-// readJSONLWithSchema reads JSONL using schema for type coercion.
-// Uses fast JSON parsing with schema-based type coercion.
-// Shares a single ssql.Schema across all records for performance.
-func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
+// readJSONLWithSchema reads the records AFTER a `_schema` header line,
+// coercing by it. Shares a single ssql.Schema across all records.
+func readJSONLWithSchema(r io.Reader, schema *Schema, skipped *int64) iter.Seq[ssql.Record] {
 	return func(yield func(ssql.Record) bool) {
 		scanner := bufio.NewScanner(r)
-		buf := make([]byte, 0, 64*1024)
-		scanner.Buffer(buf, 1024*1024)
+		scanner.Buffer(make([]byte, 0, 64*1024), ssql.MaxJSONLineBytes)
 
 		// Create shared ssql.Schema from lib.Schema fields, plus the
 		// header's declared types so whole-number floats (JSON `2` under
@@ -217,31 +221,36 @@ func readJSONLWithSchema(r io.Reader, schema *Schema) iter.Seq[ssql.Record] {
 			}
 		}
 
+		lineNo := int64(1) // the header was line 1
 		for scanner.Scan() {
+			lineNo++
 			line := scanner.Bytes()
-			if len(line) == 0 {
+			if len(bytes.TrimSpace(line)) == 0 {
 				continue
 			}
-
-			// Use fast parser with shared schema
+			var record ssql.Record
+			var err error
 			if ssqlSchema != nil {
-				record, err := ssql.ParseJSONLineWithSchemaTypes(line, ssqlSchema, wireTypes)
-				if err != nil {
-					continue
-				}
-				if !yield(record) {
-					return
-				}
+				record, err = ssql.ParseJSONLineWithSchemaTypes(line, ssqlSchema, wireTypes)
 			} else {
-				// No schema - fall back to creating schema per record
-				parsed, err := ssql.ParseJSONLine(line)
-				if err != nil {
-					continue
-				}
-				if !yield(parsed.Freeze()) {
-					return
+				var parsed ssql.MutableRecord
+				if parsed, err = ssql.ParseJSONLineWithNulls(line); err == nil {
+					record = parsed.Freeze()
 				}
 			}
+			if err != nil {
+				if skipped == nil {
+					panic(ssql.NewLineError(lineNo, line, err))
+				}
+				*skipped++
+				continue
+			}
+			if !yield(record) {
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			panic(ssql.NewLineError(lineNo+1, nil, err))
 		}
 	}
 }

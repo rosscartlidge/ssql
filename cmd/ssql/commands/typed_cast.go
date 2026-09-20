@@ -11,7 +11,7 @@ import (
 
 // emitTypedCast generates a typed.Select call that casts the named
 // fields to new Go types, producing a derived struct.
-func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.FieldType) error {
+func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.FieldType, invalidMissing bool) error {
 	// Resolve every cast field, validating existence.
 	type castField struct {
 		f      lib.TypedSchemaField
@@ -73,6 +73,19 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 		if !isCast {
 			assigns = append(assigns, fmt.Sprintf("%s: r.%s", out.GoName, out.GoName))
 			continue
+		}
+		// A TEXT field cast to a number or a bool is the one place a value
+		// can fail to convert. Strict by default, through the same
+		// ssql.CastValue the other lanes use (it panics with a *CastError,
+		// which the generated main reports as one Error line). Under
+		// -invalid missing the typed lane's "missing" is the zero value
+		// (DFC124 §3), which the lenient closures below already produce.
+		if f.GoType == "string" && !invalidMissing {
+			if target, ok := map[string]string{"int64": "ssql.FieldTypeInt", "float64": "ssql.FieldTypeFloat", "bool": "ssql.FieldTypeBool"}[cf.newGoT]; ok {
+				timeImports = append(timeImports, "github.com/rosscartlidge/ssql/v4")
+				assigns = append(assigns, fmt.Sprintf("%s: ssql.MustCast[%s](r.%s, %s, %q)", out.GoName, cf.newGoT, f.GoName, target, f.Name))
+				continue
+			}
 		}
 		if code, imps, ok := castTimeExpression("r."+f.GoName, f.Name, f.GoType, cf.newGoT); ok {
 			timeImports = append(timeImports, imps...)

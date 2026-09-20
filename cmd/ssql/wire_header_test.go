@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -233,7 +235,7 @@ func TestTimeWireType(t *testing.T) {
 		}
 	}
 	for script, want := range map[string]string{
-		bin + " from " + f + " | " + bin + " update -set ts junk | " + bin + " cast -type ts time": `field "ts" value junk is not a time`,
+		bin + " from " + f + " | " + bin + " update -set ts junk | " + bin + " cast -type ts time": `field "ts" value "junk" is not a time`,
 		cast + " | " + bin + " where -if ts gt banana":                                             `the field is a time but "banana" is not`,
 	} {
 		out, err := run(script)
@@ -345,5 +347,153 @@ func TestHeaderDoesNotDependOnRowOrder(t *testing.T) {
 			t.Errorf("a mixed column must give the same answer in every order and shape, got %q", counts)
 			break
 		}
+	}
+}
+
+// TestCastIsStrict: a value that is not of the target type STOPS the
+// pipeline — it used to become 0 or false, the behaviour DFC124 removed
+// from the CSV reader — with one Error line naming the field, the value
+// and the way out, in the interpreter and in generated programs alike (a
+// generated program used to print a Go stack trace for a bad time, because
+// the panic was a string). -invalid missing keeps the row and says how
+// many values it could not convert.
+func TestCastIsStrict(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := corpusBin(t)
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "c.csv")
+	os.WriteFile(f, []byte("id,score,flag,when\n1,10,yes,2026-01-02\n2,N/A,maybe,soon\n3,,no,\n"), 0o644)
+	run := func(script string) (string, error) {
+		cmd := exec.Command("bash", "-c", "set -o pipefail; "+script)
+		cmd.Env = append(os.Environ(), "SSQL_MODULE_DIR="+repo)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	for target, want := range map[string]string{
+		"-type score int":   `field "score" value "N/A" is not an int`,
+		"-type score float": `field "score" value "N/A" is not a float`,
+		"-type flag bool":   `field "flag" value "maybe" is not a bool`,
+		"-type when time":   `field "when" value "soon" is not a time`,
+	} {
+		for _, script := range []string{
+			bin + " from " + f + " | " + bin + " cast " + target + " | " + bin + " to csv",
+			bin + " generate go -run -mode record -pipeline '" + bin + " from " + f + " | " + bin + " cast " + target + " | " + bin + " to csv'",
+			bin + " generate go -run -mode typed -pipeline '" + bin + " from " + f + " | " + bin + " cast " + target + " | " + bin + " to csv'",
+		} {
+			out, err := run(script)
+			if err == nil || !strings.Contains(out, want) || !strings.Contains(out, "-invalid missing") {
+				t.Errorf("%s\n must fail with %q and name the way out; got err=%v\n%s", script, want, err, out)
+			}
+			if strings.Contains(out, "goroutine ") || strings.Contains(out, "panic:") {
+				t.Errorf("%s printed a Go stack trace instead of one Error line:\n%s", script, out)
+			}
+		}
+	}
+	out, err := run(bin + " from " + f + " | " + bin + " cast -type score int -type flag bool -invalid missing | " + bin + " to csv")
+	if err != nil || !strings.Contains(out, "2 values could not be converted") || !strings.Contains(out, "\n2,,,soon\n") || !strings.Contains(out, "\n3,,false,\n") {
+		t.Errorf("-invalid missing must keep the rows, leave bad values empty and count them: %v\n%s", err, out)
+	}
+	if out, err := run(bin + " from " + f + " | " + bin + " cast -type score int -invalid zero"); err == nil || !strings.Contains(out, "unknown -invalid") {
+		t.Errorf("an unknown -invalid mode must be refused: %v\n%s", err, out)
+	}
+}
+
+// TestMalformedJSONLIsAnError (DFC133 §7.6): at the CLI, a line that is
+// not JSON stops the pipeline — from a file, on a stage's stdin, in a JSON
+// array — with the line number and the way out. `-skip-invalid` reads a
+// dirty file and says how many lines it skipped. It used to skip them
+// silently; and a stage whose FIRST stdin line was not JSON returned
+// nothing at all, exit 0.
+func TestMalformedJSONLIsAnError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	dirty := filepath.Join(dir, "dirty.jsonl")
+	os.WriteFile(dirty, []byte("{\"id\":1}\nnot json at all\n{\"id\":2}\n"), 0o644)
+	run := func(script string) (string, error) {
+		out, err := exec.Command("bash", "-c", "set -o pipefail; "+script).CombinedOutput()
+		return string(out), err
+	}
+	for _, script := range []string{
+		bin + " from jsonl " + dirty + " | " + bin + " to csv",
+		bin + " from " + dirty + " | " + bin + " to csv",
+		"cat " + dirty + " | " + bin + " where -if id gt 0 | " + bin + " to csv",
+		"cat " + dirty + " | " + bin + " to csv",
+	} {
+		out, err := run(script)
+		if err == nil || !strings.Contains(out, "line 2 is not JSON") {
+			t.Errorf("%s\n must fail naming line 2; got err=%v\n%s", script, err, out)
+		}
+	}
+	out, err := run(bin + " from jsonl " + dirty + " -skip-invalid | " + bin + " to csv")
+	if err != nil || !strings.Contains(out, "skipped 1 line that were not JSON") || !strings.Contains(out, "id\n1\n2\n") {
+		t.Errorf("-skip-invalid must read the good lines and report the skip: %v\n%s", err, out)
+	}
+	out, err = run("printf '[\\n{\"id\":1}\\n]\\n' | " + bin + " where -if id gt 0")
+	if err == nil || !strings.Contains(out, "JSON ARRAY") || !strings.Contains(out, "from json") {
+		t.Errorf("an array on a stage's stdin must be named as one (it used to give an empty result, exit 0): %v\n%s", err, out)
+	}
+	out, err = run("printf '[{\"id\":1}, oops]' | " + bin + " from json - | " + bin + " to csv")
+	if err == nil || !strings.Contains(out, "element 2 is not a JSON object") {
+		t.Errorf("a bad array element must be an error: %v\n%s", err, out)
+	}
+	out, err = run("export SSQL_MODE=record; " + bin + " from jsonl " + dirty + " -skip-invalid | " + bin + " generate go")
+	if err == nil || !strings.Contains(out, "no generated form yet") {
+		t.Errorf("-skip-invalid in generation mode must refuse, not emit a strict program: %v\n%s", err, out)
+	}
+}
+
+// TestGeneratedJoinReadsAWholeSideFile: generated record-mode `join FILE.jsonl`
+// opened the side file and DEFERRED ITS CLOSE inside the function that
+// returned the lazy reader — closed before anyone read it. A small file was
+// already in the 64 KB buffer and appeared to work; a 450 KB side file
+// joined 214 of 20,000 rows, exit 0, because the read error was ignored
+// (v4.102.0 and earlier). Found when the JSON Lines readers became strict
+// (DFC133 §7.6); ssql.CloseWhenDone closes when the reader is finished.
+func TestGeneratedJoinReadsAWholeSideFile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary and a generated program")
+	}
+	bin := corpusBin(t)
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	var left, right strings.Builder
+	left.WriteString("id,v\n")
+	right.WriteString("id,w\n")
+	const n = 20000 // ~450 KB of JSON Lines: several buffers' worth
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&left, "%d,%d\n", i, i*10)
+		fmt.Fprintf(&right, "%d,%d\n", i, i*7)
+	}
+	os.WriteFile(filepath.Join(dir, "left.csv"), []byte(left.String()), 0o644)
+	os.WriteFile(filepath.Join(dir, "right.csv"), []byte(right.String()), 0o644)
+	run := func(script string) string {
+		cmd := exec.Command("bash", "-c", "set -o pipefail; "+script)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "SSQL_MODULE_DIR="+repo)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("%s: %v\n%s", script, err, stderr.String())
+		}
+		return strings.TrimSpace(stdout.String())
+	}
+	run(bin + " from csv right.csv | " + bin + " tee side.jsonl > /dev/null")
+	pipeline := bin + " from csv left.csv | " + bin + " join side.jsonl -using id | " + bin + " count"
+	if got := run(pipeline); got != fmt.Sprint(n) {
+		t.Fatalf("interpreter joined %s rows, want %d", got, n)
+	}
+	if got := run(bin + " generate go -run -mode record -pipeline '" + pipeline + "'"); got != fmt.Sprint(n) {
+		t.Errorf("generated record-mode join read %s of %d side-file rows", got, n)
 	}
 }
