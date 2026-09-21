@@ -2,11 +2,13 @@
 
 Reference: DFC134
 Created: 2026-09-20
-Last modified: 2026-09-20
+Last modified: 2026-09-22
 
 [Back to Index](./README.md)
 
-Status: **exploration — nothing built; three experiments run (§3).**
+Status: **exploration — nothing built; three experiments run (§3); the
+two grammar questions are decided (§5.2 `-arg`, §5.3 `-param`, Ross
+2026-09-22).**
 Ross, 2026-09-20: "generating SQL safely programmatically calls for a lot
 of complex operations to ensure no SQL injection is possible. I have a
 strong feeling that ssql pipelines could be expressed as a simple schema
@@ -130,6 +132,13 @@ column called `-desc`. This is CWE-88, argument injection, and it is the
 one place where a structured pipeline can still be steered by data. It is
 also the easiest to close (§5.2).
 
+(Correction, 2026-09-22: autocli's parser does recognise `--`, but not as
+"the rest are positionals". It stops parsing and hands everything after it
+to `ctx.RemainingArgs`, which `from ssh HOST -- PIPELINE` and `from
+catalog` use for the push-down pipeline. For every other command the
+elements after `--` are simply dropped, hence "no fields specified". So
+`--` is not missing; it is **taken**, which matters for §5.2.)
+
 **3.3 Expression arguments are a string language again.**
 
 ```
@@ -182,18 +191,132 @@ is where the shell's grammar, and therefore injection, re-enters. The
 runner is the piece that turns §2 from an observation into a guarantee.
 It is also what a library binding in any language would call.
 
-**5.2 Close option injection in positional slots.** Two complementary
-fixes, both in autocli: honour `--` as "no more flags"; and have the
-document runner *always* insert it before positionals, so a document can
-never be misread whatever its values. Optionally, refuse at validation
-time any positional element that matches one of the command's own flag
-names unless the document marks it as a value.
+**5.2 Close option injection: `-arg`, a flag form for every positional
+(DECIDED, Ross 2026-09-22).** Positional arguments stay as the
+convenience people type. Alongside them every command gains one reserved
+flag that carries a positional *by arity*:
 
-**5.3 Parameters for expressions.** `-set-expr total 'price * $rate'
--param rate 1.1`: the expression text is fixed by the program's author,
-values arrive in slots, and expr-lang receives them as environment
-variables rather than source. Same shape as a prepared statement, needed
-only for the expression arguments.
+```
+ssql include name -generate                  # human form; "-generate" is read as a flag
+ssql include -arg name -arg -generate        # safe form; both are field names
+ssql sort -arg -desc                         # sorts by a column called "-desc"
+ssql sort -arg dept - -arg salary -desc      # clauses still work: bare "-" separates, "-desc" is the flag
+```
+
+`-arg VALUE` means exactly "append VALUE to the current clause's
+positionals, without looking at it". It takes one argument, so §3.1's
+result applies unchanged: once `-arg` has claimed its element, the content
+is never syntax. Repeating it is the project's own `.Accumulate()` rule
+(never in-argument delimiters) applied to positionals. Bare positionals and
+`-arg` may be mixed; order of appearance is the order of the slot.
+
+Why this and not the conventional `--` (which the first draft of this
+section proposed):
+
+- **One mechanism, already proven.** Flag slots are safe because they bind
+  by count. `-arg` puts positionals under the same rule. `--` is a
+  different mechanism, a mode switch, and a serializer that forgets it once
+  reopens the hole silently. A forgotten `-arg` is visible in the document:
+  a bare element where none is allowed.
+- **`--` cannot coexist with clauses.** `-` and `+` are clause separators.
+  After "no more flags", is a later `-` a separator or a column called `-`?
+  Either answer breaks something: multi-clause commands become
+  unwritable in the safe form, or the safe form is not safe. `-arg` is per
+  element, so the question never arises.
+- **`--` is taken.** It already means "what follows is the pushed-down
+  pipeline" for `from ssh` and `from catalog` (§3.2 correction).
+- **It makes the document grammar regular.** In canonical form, after the
+  command path every element is either a declared flag name or is consumed
+  by the preceding flag's arity. There are no bare data elements at all, so
+  a validator needs no "could this be a flag?" heuristic: anything else is
+  rejected outright.
+
+Where it lives: **autocli, once** (Ross, 2026-09-22), not per command.
+Sketch: in `Command.Parse`, before the flag branch, `arg == "-arg"` takes
+`args[i+1]` verbatim into `currentClause.Positional` (error if there is no
+next element); the name is reserved, so the builder refuses a command
+that declares its own `-arg` (exact match only; `group-by -arg-max` /
+`-arg-min` are different names and unaffected). `-spec-json` advertises it
+so consumers need not know it by folklore. Completion after `-arg` is the
+completion of the positional slot it fills. `-generate` fragments and
+`generate ssql` keep emitting the human form unless a value begins with
+`-` or `+` or is a separator, in which case they MUST emit `-arg` (no
+such pipeline can be written today, so this is new ground, not a
+regression risk).
+
+What stays bare: the **command path** (`from`, `csv`, `group-by`). It is
+not data; it comes from the closed vocabulary in `-spec-json` and the
+validator checks it by lookup. A program must never take a command name
+from untrusted input without that lookup, which is policy (§5.4), not
+syntax.
+
+The document runner (§5.1) emits only the `-arg` form. Tests: the §3.2
+probes become permanent cases (a CSV with columns `-generate`, `-desc`,
+`-`, `+`, `--` through `include`, `sort`, `exclude`, `group-by`), and
+DFC133's random tester gains hostile column names, which exercises every
+command's positional slot for free.
+
+**5.3 Parameters for expressions: real variables, clause scope, declared
+types (DECIDED, Ross 2026-09-22).**
+
+```
+ssql update -set-expr total 'price * rate' -param rate float 1.1
+ssql where  -if-expr 'name == who'         -param who string 'x" || true || "'
+ssql where  -if-expr 'age > lo' -param lo int 18 + -if-expr 'age > lo' -param lo int 65
+```
+
+- **Binding, not substitution.** The expression text is fixed by the
+  program's author and compiled once. A parameter is a variable in
+  expr-lang's environment, exactly as a field is. The value never passes
+  through the expression grammar, so there is nothing to escape. (The first
+  draft wrote `$rate`, which read as textual substitution; that spelling is
+  withdrawn.) The second example above is §3.3's attack string, now inert:
+  it is compared, not parsed.
+- **Clause scope.** An expression sees the `-param`s written in its own
+  clause, all of them, wherever in the clause they appear. One clause can
+  hold several expressions (`-if-expr` twice, `-set-expr` for several
+  fields) and they share the clause's parameters. Another clause may reuse
+  a name with a different value (third example). This is the scope autocli
+  already gives `.Local()` flags, so nothing new is invented, and a command
+  without clauses has one clause, so for it the scope is the command.
+  Pipeline-wide scope is rejected: stages are separate processes, so it
+  would have to travel in the environment, which is state outside the
+  command text (DFC115).
+- **Declared type: `-param NAME TYPE VALUE`.** TYPE is from the wire
+  format's closed set (`string`, `int`, `float`, `bool`, `time`). Inferring
+  the type from the value's spelling is precisely the zero-padded bug
+  DFC133 fixed (`02134` is a postcode, not 2134), and a parameter is the
+  slot built to hold untrusted text, so it is the last place to guess.
+  `string "12"` stays a string. A VALUE that is not of TYPE is a parse-time
+  error via `ssql.CastValue` (strict, as of v4.103.0).
+- **Collisions are errors.** Names stay bare because `price * rate` reads
+  as intended. If a parameter has the same name as a field of the input,
+  the command fails, naming both; silent precedence either way would let
+  data (a new column upstream) change what an expression means. A
+  parameter no expression uses is also an error (a typo'd name must not
+  pass quietly). Names must be expr identifiers.
+- **Lowering, all lanes.** exec: an entry in the expr env. Record and
+  typed codegen: a typed Go variable, and because generated programs
+  already lift literals into runtime flags, the parameter becomes a **flag
+  of the compiled binary**: a prepared statement in the full sense, built
+  once and re-run with new values. The expr→Go transpiler treats the name
+  as an identifier of the declared type (no guessing, which typed mode
+  needs anyway). `generate sql`: a literal rendered by the declared type
+  through `sqlLiteralFor`'s quoting; host-language placeholders (`$1`) are
+  a possible later option for the DFC132 harnesses. `generate ssql`: the
+  `-param` triple verbatim.
+- **Where it lives.** The commands own the flag (where, update, group-by
+  `-expr`, anything marked `.Expression()`), sharing one helper that
+  builds the env and the codegen declarations; autocli needs nothing new
+  beyond what `.Local()` and three-argument flags already give.
+  `-spec-json` shows `-param` like any flag. Tests: equivalence cases with
+  the attack string as a value in every lane including DuckDB, and
+  `TestExprGoDifferential` entries for each parameter type.
+
+Rule for generated pipelines, restated: **values go in flag slots; where
+an expression is unavoidable, values go in `-param`; nothing untrusted is
+ever concatenated into expression text.** With §5.2 that leaves no slot in
+which data can become syntax.
 
 **5.4 A policy layer over the document.** Allowed commands; file
 arguments confined to given roots (the spec already marks which arguments
@@ -208,7 +331,13 @@ method signatures *are* the spec; and the text ⇄ document round trip the
 bijective builder (DFC118) already needs.
 
 Rough size: 5.1 and 5.2 are days, and together they make the central
-claim true. 5.3–5.5 are each a unit of their own and can follow demand.
+claim true for flag-form pipelines. 5.3 is a unit of its own and is what
+extends the claim to expressions. 5.4–5.5 can follow demand.
+
+Suggested order: 5.2 first (autocli release, then the hostile-column
+tests in ssql; it is small, self-contained and fixes a bug that exists
+today regardless of this DFC), then 5.3, then 5.1, whose runner can then
+emit the canonical form from its first day.
 
 ## 6. Open questions
 
@@ -217,7 +346,9 @@ claim true. 5.3–5.5 are each a unit of their own and can follow demand.
   is friendlier and typed (25 is a number), but it is a second spelling of
   every command, which DFC115 warns against. Leaning: argv is the
   canonical form; the named form, if wanted, is *generated* from
-  `-spec-json` and compiles to argv, never the reverse.
+  `-spec-json` and compiles to argv, never the reverse. With §5.2 the
+  canonical argv has no bare data elements, which is what makes that
+  compilation (and its validation) mechanical.
 - **Process substitution** (`join <(ssql from …)`) is a shell feature. In
   a document it becomes a nested pipeline in an argument position —
   cleaner than the text form, and it removes the last reason a runner

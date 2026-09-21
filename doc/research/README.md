@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-09-20 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-09-22 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -141,7 +141,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC131 | 2026-09-16 | 2026-09-16 | [A Read-Only Codelab Workspace on the Tailnet, as a systemd Service](./dfc131_serve_systemd_tailnet_codelab.md) |
 | DFC132 | 2026-09-17 | 2026-09-17 | [Generating Rust: Decision, and What the DataFusion Check Found](./dfc132_rust_target_datafusion.md) |
 | DFC133 | 2026-09-20 | 2026-09-20 | [Finding the Bugs We Do Not Know About](./dfc133_finding_unknown_bugs.md) |
-| DFC134 | 2026-09-20 | 2026-09-20 | [Pipelines as Data: Safe Programmatic Construction, and Why SQL Cannot Have It](./dfc134_pipelines_as_data.md) |
+| DFC134 | 2026-09-20 | 2026-09-22 | [Pipelines as Data: Safe Programmatic Construction, and Why SQL Cannot Have It](./dfc134_pipelines_as_data.md) |
 
 <!-- DFC-INDEX-END -->
 
