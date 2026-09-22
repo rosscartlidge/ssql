@@ -5,6 +5,32 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **A `-if` literal that is not of the field's kind is an error in every
+  lane** (`where -if age gt abc` on a numeric `age`, `-if ok eq maybe` on
+  a bool, `-if age contains 3`; and `-if-field` over two kinds). Until
+  now exec was silently false, record codegen read `abc` as 0 and
+  filtered `age > 0`, typed codegen and DuckDB were loud: three
+  behaviours for one command. The rule is `-param`'s: the operand's kind
+  is the field's kind, and a value not of that kind is an error, not a
+  coercion. Unchanged and consistent: a fractional literal on an int
+  column compares as a number, a numeric-looking literal on a text
+  column compares as text, an empty literal against a non-text field is
+  false. One `ssql.LiteralOp` / `ssql.FieldOp` serves exec and generated
+  record code; a runtime re-parameterisation (`./prog -age-gt abc`) is
+  loud too.
+
+- **`generate go -build PATH` no longer prints "Compiled binary written
+  to PATH"** on success: the caller named the path, and the line was noise
+  in scripts (`go build -o` is silent too).
+
+### Fixed
+- **A generated record program with `to csv` failed on an empty result**
+  ("file already closed"): the CSV writer re-iterated the source after
+  materialising it for the header.
+
 ## [4.106.0] - 2026-09-23
 
 ### Added

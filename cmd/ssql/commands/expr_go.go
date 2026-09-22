@@ -52,6 +52,10 @@ type exprGo struct {
 	// to a float64 context without an explicit float64(...) wrap, which keeps
 	// emissions like `r.Price > 15` readable.
 	lit bool
+
+	// field names the record field an operand reads, for messages about the
+	// literal it is compared with ("" for a computed operand).
+	field string
 }
 
 const exprfnImport = "github.com/rosscartlidge/ssql/v4/exprfn"

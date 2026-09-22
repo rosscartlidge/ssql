@@ -27,7 +27,7 @@ func TestCondOpToExprGo(t *testing.T) {
 		{"typed int eq float literal", typedInt, "eq", "7.5", "", "(float64(r.Pop) == 7.5)", ""},
 		{"typed string lexicographic", typedStr, "gt", "Lima", "", `(r.City > "Lima")`, ""},
 		{"typed contains", typedStr, "contains", "an", "", `strings.Contains(r.City, "an")`, "strings"},
-		{"record param numeric", recInt, "ge", "14", "flagPopGe", `(ssql.GetOr(r, "pop", float64(0)) >= ssql.ParseFloat64(*flagPopGe))`, ""},
+		{"record param numeric", recInt, "ge", "14", "flagPopGe", `(ssql.GetOr(r, "pop", float64(0)) >= ssql.MustNumber(*flagPopGe, "", "ge"))`, ""},
 		{"record param string", recStr, "ne", "Oslo", "flagCityNe", `(ssql.GetOr(r, "city", "") != *flagCityNe)`, ""},
 		{"record param contains", recStr, "contains", "an", "flagCityContains", `strings.Contains(ssql.GetOr(r, "city", ""), *flagCityContains)`, "strings"},
 		{"record param regex compiles at call site", recStr, "regex", "^[A-M]", "flagCityRegex", `regexp.MustCompile(*flagCityRegex).MatchString(ssql.GetOr(r, "city", ""))`, "regexp"},
@@ -44,7 +44,7 @@ func TestCondOpToExprGo(t *testing.T) {
 			if got.Type != exprGoBool {
 				t.Errorf("type = %s, want bool", got.Type)
 			}
-			if tt.wantImp != "" && !contains(strings.Join(got.Imports, ","), tt.wantImp) {
+			if tt.wantImp != "" && !strings.Contains(strings.Join(got.Imports, ","), tt.wantImp) {
 				t.Errorf("imports %v missing %q", got.Imports, tt.wantImp)
 			}
 		})
@@ -70,8 +70,8 @@ func TestCondOpToExprGo(t *testing.T) {
 			op, val string
 			wantErr string
 		}{
-			{"invalid numeric literal", typedInt, "gt", "banana", "invalid numeric literal"},
-			{"contains on numeric", typedInt, "contains", "x", "requires a string field"},
+			{"invalid numeric literal", typedInt, "gt", "banana", `"banana" is not`},
+			{"contains on numeric", typedInt, "contains", "x", "needs a text field"},
 			{"invalid regex at codegen", typedStr, "regex", "([", "invalid regex"},
 			{"unknown operator", typedInt, "frobnicate", "1", "unknown where operator"},
 			{"ordering on bool", exprGo{Src: "r.Active", Type: exprGoBool}, "gt", "true", "not defined for bool"},

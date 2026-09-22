@@ -236,7 +236,7 @@ func TestTimeWireType(t *testing.T) {
 	}
 	for script, want := range map[string]string{
 		bin + " from " + f + " | " + bin + " update -set ts junk | " + bin + " cast -type ts time": `field "ts" value "junk" is not a time`,
-		cast + " | " + bin + " where -if ts gt banana":                                             `the field is a time but "banana" is not`,
+		cast + " | " + bin + " where -if ts gt banana":                                             `field "ts" is a time but "banana" is not`,
 	} {
 		out, err := run(script)
 		if err == nil || !strings.Contains(out, want) {

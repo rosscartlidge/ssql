@@ -266,7 +266,12 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					// Check all conditions in this clause (AND logic)
 					allMatch := true
 					for _, cond := range clause.conditions {
-						if !matchCondition(frozen, cond) {
+						ok, err := matchCondition(frozen, cond)
+						if err != nil {
+							evalErr = err // a literal not of the field's kind: wrong for the run
+							return mut
+						}
+						if !ok {
 							allMatch = false
 							break
 						}
@@ -915,6 +920,11 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 // decls (literal-regex compiled vars) go to the caller's preCompileVars —
 // previously the pattern was recompiled PER ROW.
 func generateConditionCode(field, op, value, goType string) (string, []string, []string, error) {
+	if goType == "" {
+		// The field's kind is a runtime fact here: the shared primitive
+		// reads it per row and reports a literal not of that kind.
+		return fmt.Sprintf("ssql.CompareLiteral(frozen, %q, %q, %q)", field, op, value), nil, nil, nil
+	}
 	lhs := recordCondLHS("frozen", field, op, value, goType)
 	res, err := condOpToExprGo(lhs, op, value, "")
 	if err != nil {

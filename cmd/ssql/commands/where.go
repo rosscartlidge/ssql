@@ -173,7 +173,12 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 					// Check -if / +if conditions
 					for _, cond := range clause.conditions {
-						if !matchCondition(r, cond) {
+						ok, err := matchCondition(r, cond)
+						if err != nil {
+							filterErr = err // a literal not of the field's kind: wrong for the run
+							return false
+						}
+						if !ok {
 							clauseMatches = false
 							break
 						}
@@ -497,13 +502,13 @@ func typedWhereCondition(f lib.TypedSchemaField, op, value string) (exprGo, erro
 	var lhs exprGo
 	switch f.GoType {
 	case "int64", "int", "int32", "uint64":
-		lhs = exprGo{Src: field, Type: exprGoInt}
+		lhs = exprGo{Src: field, Type: exprGoInt, field: f.Name}
 	case "float64", "float32":
-		lhs = exprGo{Src: field, Type: exprGoFloat}
+		lhs = exprGo{Src: field, Type: exprGoFloat, field: f.Name}
 	case "string":
-		lhs = exprGo{Src: field, Type: exprGoString}
+		lhs = exprGo{Src: field, Type: exprGoString, field: f.Name}
 	case "bool":
-		lhs = exprGo{Src: field, Type: exprGoBool}
+		lhs = exprGo{Src: field, Type: exprGoBool, field: f.Name}
 	case "time.Time":
 		// The same comparisons exec's compareEqual/Greater/Less make for a
 		// `time` field (DFC128 D1): Equal/After/Before against the operand
@@ -772,6 +777,14 @@ func generateCondition(field, op, value, goType string, seen map[string]int) (st
 	// Only the LHS resolution stays here: record mode types the GetOr by
 	// the advisory field type (exec branches on the runtime field type),
 	// falling back to the value-form heuristic without one.
+	// Without an advisory type the field's kind is a runtime fact: the
+	// shared primitive reads it per row and reports a literal not of that
+	// kind, exactly as exec does (guessing the kind from the literal's
+	// spelling compared a number's text when the guess was wrong).
+	if goType == "" {
+		src := fmt.Sprintf("ssql.CompareLiteral(r, %q, %q, *%s)", field, op, varName)
+		return src, nil, param, nil
+	}
 	lhs := recordCondLHS("r", field, op, value, goType)
 	res, err := condOpToExprGo(lhs, op, value, varName)
 	if err != nil {
@@ -791,26 +804,13 @@ func generateCondition(field, op, value, goType string, seen map[string]int) (st
 // pre-existing record behaviour); comparisons branch on the advisory type
 // when known, else on the value's form.
 func recordCondLHS(recv, field, op, value, goType string) exprGo {
-	switch op {
-	case "contains", "startswith", "endswith", "regex":
-		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, \"\")", recv, field), Type: exprGoString}
-	}
-	numeric := false
 	switch goType {
 	case "int64", "float64":
-		numeric = true
-	case "string":
-		numeric = false
+		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, float64(0))", recv, field), Type: exprGoFloat, field: field}
 	case "bool":
-		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, false)", recv, field), Type: exprGoBool}
-	default:
-		_, err := strconv.ParseFloat(value, 64)
-		numeric = err == nil
+		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, false)", recv, field), Type: exprGoBool, field: field}
 	}
-	if numeric {
-		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, float64(0))", recv, field), Type: exprGoFloat}
-	}
-	return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, \"\")", recv, field), Type: exprGoString}
+	return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, \"\")", recv, field), Type: exprGoString, field: field}
 }
 
 // dedupeImports removes duplicate imports

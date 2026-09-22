@@ -457,7 +457,7 @@ func buildGoSource(code, outPath string) error {
 	}
 	defer os.RemoveAll(dir)
 
-	fmt.Fprintf(os.Stderr, "Compiled binary written to %s\n", outPath)
+	// Silent on success, as `go build -o` is: the caller named the path.
 	return nil
 }
 

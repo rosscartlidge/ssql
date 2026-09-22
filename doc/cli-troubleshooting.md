@@ -408,6 +408,17 @@ the data really contains such placeholders, `ssql cast -type score int
 -invalid missing` leaves them empty (never `0`) and reports the count.
 An empty cell is already missing and is never an error.
 
+### Issue 12a: "field X is a number but "abc" is not"
+
+A `-if FIELD OP VALUE` literal is read in the field's kind. A numeric
+field against `abc` (or `3O` with a letter O), a bool against `maybe`,
+a string operator (`contains`, `startswith`, `endswith`, `regex`) on a
+number: these cannot be compared, so the pipeline stops rather than
+matching nothing. `-if-field` over two kinds (a number against text) is
+the same. A fractional literal on an int column and a numeric-looking
+literal on a text column are fine (number and text comparison
+respectively); an empty literal against a non-text field is simply false.
+
 ### Issue 12: "parameter X has the same name as a field" / "-param X: no expression in the clause uses it"
 
 `-param NAME TYPE VALUE` binds NAME as a variable of the clause's

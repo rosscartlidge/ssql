@@ -659,12 +659,11 @@ func TestUpdateConditionalGeneration(t *testing.T) {
 				`"type":"stmt"`,
 				`ssql.Update`,
 				`frozen`,
-				// The shared condition lowering emits the literal as an
-				// untyped constant in a float64 comparison (Phase B). NB the
-				// fragment is raw JSON, where > is encoded as >.
-				`ssql.GetOr(frozen, \"age\", float64(0))`,
-				`frozen.HasValue(\"age\")`, // a condition on an absent value is false (DFC128 §6g)
-				`\u003e 30)) {`,
+				// With no advisory column type (a bare init fragment), the
+				// field's kind is a runtime fact: the shared primitive reads
+				// it per row, is false on an absent field (DFC128 §6g), and
+				// is loud on a literal not of the field's kind (2026-09-23).
+				`ssql.CompareLiteral(frozen, \"age\", \"gt\", \"30\")`,
 			},
 		},
 		{

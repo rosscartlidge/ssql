@@ -1,10 +1,10 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"iter"
 	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -136,19 +136,28 @@ type Condition struct {
 }
 
 // matchCondition evaluates one condition on a record: a literal or, for
-// -if-field, the other field's value. Either side absent is false.
-func matchCondition(r ssql.Record, c Condition) bool {
+// -if-field, the other field's value. An absent field is false. A literal
+// that is not of the field's kind is a *ssql.CompareError, wrong for the
+// run, not the row: callers stop on it.
+func matchCondition(r ssql.Record, c Condition) (bool, error) {
 	var match bool
 	if c.FieldRHS {
 		match = ssql.FieldOp(r, c.Field, c.Operator, c.Value)
-	} else {
-		fieldValue, exists := ssql.Get[any](r, c.Field)
-		match = exists && applyOperator(fieldValue, c.Operator, c.Value)
+	} else if fieldValue, exists := ssql.Get[any](r, c.Field); exists {
+		var err error
+		match, err = ssql.LiteralOp(fieldValue, c.Operator, c.Value)
+		if err != nil {
+			var ce *ssql.CompareError
+			if errors.As(err, &ce) {
+				ce.Field = c.Field
+			}
+			return false, err
+		}
 	}
 	if c.Negated {
 		match = !match
 	}
-	return match
+	return match, nil
 }
 
 // parseConditions parses -if flag values from autocli into Conditions.
@@ -217,6 +226,12 @@ func parseExprConds(flagValue any) []ExprCond {
 	return out
 }
 
+// validOperators is the set of recognized comparison operators.
+var validOperators = map[string]bool{
+	"eq": true, "ne": true, "gt": true, "ge": true, "lt": true, "le": true,
+	"contains": true, "startswith": true, "endswith": true, "regex": true,
+}
+
 // conditionFields returns the unique field names from a slice of conditions.
 func conditionFields(conditions []Condition) []string {
 	seen := make(map[string]bool)
@@ -232,166 +247,6 @@ func conditionFields(conditions []Condition) []string {
 		}
 	}
 	return fields
-}
-
-// applyOperator applies a comparison operator.
-// validOperators is the set of recognized comparison operators.
-var validOperators = map[string]bool{
-	"eq": true, "ne": true, "gt": true, "ge": true, "lt": true, "le": true,
-	"contains": true, "startswith": true, "endswith": true, "regex": true,
-}
-
-func applyOperator(fieldValue any, op string, compareValue string) bool {
-	switch op {
-	case "eq":
-		return compareEqual(fieldValue, compareValue)
-	case "ne":
-		return !compareEqual(fieldValue, compareValue)
-	case "gt":
-		return compareGreater(fieldValue, compareValue)
-	case "ge":
-		return compareGreater(fieldValue, compareValue) || compareEqual(fieldValue, compareValue)
-	case "lt":
-		return compareLess(fieldValue, compareValue)
-	case "le":
-		return compareLess(fieldValue, compareValue) || compareEqual(fieldValue, compareValue)
-	case "contains":
-		return compareContains(fieldValue, compareValue)
-	case "startswith":
-		return compareStartsWith(fieldValue, compareValue)
-	case "endswith":
-		return compareEndsWith(fieldValue, compareValue)
-	case "regex":
-		return comparePattern(fieldValue, compareValue)
-	default:
-		return false
-	}
-}
-
-// timeOperand parses a condition's operand for a `time` field (DFC128
-// D1). An operand that is not a time cannot be compared with one: that is
-// a mistake in the command, so it stops the pipeline (main recovers the
-// panic into one Error line) instead of matching nothing.
-func timeOperand(compareValue string) time.Time {
-	t, ok := ssql.ParseTime(compareValue)
-	if !ok {
-		panic(fmt.Sprintf("where: the field is a time but %q is not (use a form like 2026-01-31 or 2026-01-31T10:30:00Z)", compareValue))
-	}
-	return t
-}
-
-func compareEqual(fieldValue any, compareValue string) bool {
-	switch v := fieldValue.(type) {
-	case time.Time:
-		return v.Equal(timeOperand(compareValue))
-	case string:
-		return v == compareValue
-	case int64:
-		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
-			return v == num
-		}
-		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
-			return float64(v) == num
-		}
-	case float64:
-		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
-			return v == num
-		}
-	case bool:
-		if b, err := strconv.ParseBool(compareValue); err == nil {
-			return v == b
-		}
-	}
-	return fmt.Sprintf("%v", fieldValue) == compareValue
-}
-
-func compareGreater(fieldValue any, compareValue string) bool {
-	switch v := fieldValue.(type) {
-	case time.Time:
-		return v.After(timeOperand(compareValue))
-	case int64:
-		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
-			return v > num
-		}
-		// An int field against a fractional operand (`age gt 29.5`) is a
-		// numeric comparison, not a silent false — every other lane
-		// (record/typed codegen, SQL, -if-expr) already compares as numbers.
-		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
-			return float64(v) > num
-		}
-	case float64:
-		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
-			return v > num
-		}
-	case string:
-		return v > compareValue
-	}
-	return false
-}
-
-func compareLess(fieldValue any, compareValue string) bool {
-	switch v := fieldValue.(type) {
-	case time.Time:
-		return v.Before(timeOperand(compareValue))
-	case int64:
-		if num, err := strconv.ParseInt(compareValue, 10, 64); err == nil {
-			return v < num
-		}
-		// An int field against a fractional operand (`age gt 29.5`) is a
-		// numeric comparison, not a silent false — every other lane
-		// (record/typed codegen, SQL, -if-expr) already compares as numbers.
-		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
-			return float64(v) < num
-		}
-	case float64:
-		if num, err := strconv.ParseFloat(compareValue, 64); err == nil {
-			return v < num
-		}
-	case string:
-		return v < compareValue
-	}
-	return false
-}
-
-func compareContains(fieldValue any, compareValue string) bool {
-	if str, ok := fieldValue.(string); ok {
-		return contains(str, compareValue)
-	}
-	return false
-}
-
-func compareStartsWith(fieldValue any, compareValue string) bool {
-	if str, ok := fieldValue.(string); ok {
-		return len(str) >= len(compareValue) && str[:len(compareValue)] == compareValue
-	}
-	return false
-}
-
-func compareEndsWith(fieldValue any, compareValue string) bool {
-	if str, ok := fieldValue.(string); ok {
-		return len(str) >= len(compareValue) && str[len(str)-len(compareValue):] == compareValue
-	}
-	return false
-}
-
-func comparePattern(fieldValue any, pattern string) bool {
-	if str, ok := fieldValue.(string); ok {
-		matched, err := regexp.MatchString(pattern, str)
-		if err != nil {
-			return false
-		}
-		return matched
-	}
-	return false
-}
-
-func contains(str, substr string) bool {
-	for i := 0; i <= len(str)-len(substr); i++ {
-		if str[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // buildAggregator creates the exec-lane aggregation function for a

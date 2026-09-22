@@ -1505,3 +1505,18 @@ func TestReadCSVFromReaderMalformedRowIsLoud(t *testing.T) {
 		})
 	}
 }
+
+// An empty sequence must not be iterated twice: the writer materialises
+// once for the header and used to fall back to the source when nothing
+// came, re-reading a closed file.
+func TestWriteCSVToWriterEmptySourceReadOnce(t *testing.T) {
+	reads := 0
+	src := func(yield func(Record) bool) { reads++ }
+	var buf strings.Builder
+	if err := WriteCSVToWriter(src, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 1 {
+		t.Errorf("source iterated %d times, want 1", reads)
+	}
+}

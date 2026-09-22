@@ -176,6 +176,7 @@ func WriteCSVToWriter(sb iter.Seq[Record], writer io.Writer, config ...CSVConfig
 
 	var fields []string
 	var recordsBuffer []Record
+	materialized := false
 
 	// Determine fields to write
 	if cfg.Fields != nil {
@@ -183,6 +184,7 @@ func WriteCSVToWriter(sb iter.Seq[Record], writer io.Writer, config ...CSVConfig
 		fields = cfg.Fields
 	} else {
 		// Auto-detect: materialize all records to collect unique field names
+		materialized = true
 		fieldSet := make(map[string]bool)
 		for record := range sb {
 			recordsBuffer = append(recordsBuffer, record)
@@ -215,9 +217,13 @@ func WriteCSVToWriter(sb iter.Seq[Record], writer io.Writer, config ...CSVConfig
 		}
 	}
 
-	// Write data rows
+	// Write data rows. Once materialized the source must not be iterated
+	// again: an EMPTY result used to fall back to the original sequence,
+	// re-reading a CSV whose file was already closed ("failed to read CSV
+	// headers: file already closed" from every generated record program
+	// whose filter matched nothing; found 2026-09-23).
 	dataSource := sb
-	if len(recordsBuffer) > 0 {
+	if materialized {
 		// Use buffered records if we materialized for field detection
 		dataSource = func(yield func(Record) bool) {
 			for _, record := range recordsBuffer {

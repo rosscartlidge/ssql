@@ -7,6 +7,7 @@ import (
 
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // The ONE lowering for `FIELD OP VALUE` flag conditions (convergence Phase
@@ -29,6 +30,12 @@ import (
 // generated programs keep their adjustable filter flags; otherwise the VALUE
 // is emitted as a validated literal.
 func condOpToExprGo(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
+	// An empty literal against a non-text field is false (no value equals
+	// "no value"), as exec's LiteralOp has it; the lifted flag, if any,
+	// stays declared and unused.
+	if value == "" && lhs.Type != exprGoString && !isStringCondOp(op) {
+		return exprGo{Src: "false", Type: exprGoBool}, nil
+	}
 	switch op {
 	case "eq", "ne", "gt", "ge", "lt", "le":
 		sym := map[string]string{"eq": "==", "ne": "!=", "gt": ">", "ge": ">=", "lt": "<", "le": "<="}[op]
@@ -40,7 +47,7 @@ func condOpToExprGo(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 
 	case "contains", "startswith", "endswith":
 		if lhs.Type != exprGoString {
-			return exprGo{}, fmt.Errorf("operator %q requires a string field, got %s", op, lhs.Type)
+			return exprGo{}, &ssql.CompareError{Field: lhs.field, Op: op, Value: value, Kind: condKindName(lhs.Type)}
 		}
 		fn := map[string]string{"contains": "strings.Contains", "startswith": "strings.HasPrefix", "endswith": "strings.HasSuffix"}[op]
 		rhs := condStringRHS(value, rhsParam)
@@ -49,7 +56,7 @@ func condOpToExprGo(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 
 	case "regex":
 		if lhs.Type != exprGoString {
-			return exprGo{}, fmt.Errorf("operator \"regex\" requires a string field, got %s", lhs.Type)
+			return exprGo{}, &ssql.CompareError{Field: lhs.field, Op: op, Value: value, Kind: condKindName(lhs.Type)}
 		}
 		if rhsParam != "" {
 			// Parameterized pattern: it isn't known until flag.Parse, so it
@@ -81,28 +88,35 @@ func condOpToExprGo(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 func condRHS(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 	switch lhs.Type {
 	case exprGoInt, exprGoFloat:
-		if rhsParam != "" {
-			return exprGo{Src: "ssql.ParseFloat64(*" + rhsParam + ")", Type: exprGoFloat}, nil
+		// The literal is validated HERE whether or not it lifts to a
+		// runtime flag (the lifted form once emitted ParseFloat64(*flag),
+		// which read "abc" as 0 and filtered `age > 0`); the flag's
+		// runtime value is guarded by MustNumber, which panics with the
+		// same *CompareError exec reports.
+		_, intErr := strconv.ParseInt(value, 10, 64)
+		_, floatErr := strconv.ParseFloat(value, 64)
+		if intErr != nil && floatErr != nil {
+			return exprGo{}, &ssql.CompareError{Field: lhs.field, Op: op, Value: value, Kind: "float"}
 		}
-		if _, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if rhsParam != "" {
+			return exprGo{Src: fmt.Sprintf("ssql.MustNumber(*%s, %q, %q)", rhsParam, lhs.field, op), Type: exprGoFloat}, nil
+		}
+		if intErr == nil {
 			return exprGo{Src: value, Type: exprGoInt, lit: true}, nil
 		}
-		if _, err := strconv.ParseFloat(value, 64); err == nil {
-			return exprGo{Src: value, Type: exprGoFloat, lit: true}, nil
-		}
-		return exprGo{}, fmt.Errorf("invalid numeric literal %q for a %s field", value, lhs.Type)
+		return exprGo{Src: value, Type: exprGoFloat, lit: true}, nil
 	case exprGoString:
 		return exprGo{Src: condStringRHS(value, rhsParam), Type: exprGoString}, nil
 	case exprGoBool:
 		if op != "eq" && op != "ne" {
 			return exprGo{}, fmt.Errorf("operator %q is not defined for bool fields", op)
 		}
-		if rhsParam != "" {
-			return exprGo{Src: "(*" + rhsParam + " == \"true\")", Type: exprGoBool}, nil
-		}
 		b, err := strconv.ParseBool(value)
 		if err != nil {
-			return exprGo{}, fmt.Errorf("invalid bool literal %q", value)
+			return exprGo{}, &ssql.CompareError{Field: lhs.field, Op: op, Value: value, Kind: "bool"}
+		}
+		if rhsParam != "" {
+			return exprGo{Src: fmt.Sprintf("ssql.MustBool(*%s, %q, %q)", rhsParam, lhs.field, op), Type: exprGoBool}, nil
 		}
 		return exprGo{Src: strconv.FormatBool(b), Type: exprGoBool}, nil
 	}
@@ -217,4 +231,21 @@ func condLiteral(n ast.Node) (value string, isBool, ok bool) {
 		return strconv.FormatBool(l.Value), true, true
 	}
 	return "", false, false
+}
+
+func isStringCondOp(op string) bool {
+	return op == "contains" || op == "startswith" || op == "endswith" || op == "regex"
+}
+
+// condKindName renders a transpiler type as CompareError's kind word.
+func condKindName(t exprGoType) string {
+	switch t {
+	case exprGoInt:
+		return "int"
+	case exprGoFloat:
+		return "float"
+	case exprGoBool:
+		return "bool"
+	}
+	return string(t)
 }

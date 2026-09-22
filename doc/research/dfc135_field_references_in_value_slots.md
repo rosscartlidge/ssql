@@ -217,10 +217,11 @@ Departures:
   binding a typed `GetOr` natively: absence is a runtime property and the
   VM is where the absent-value rule is implemented once (`runtime.ErrAbsent`).
   Typed mode binds natively (a struct is never absent).
-- **`-if-field`'s mixed-kind rule is "false", not "loud"** (§3.1 said
-  loud): `-if` itself is silently false on `age gt abc`, and `FieldOp`
-  follows `-if`. Loudness for a numeric/text pairing would be a change to
-  `-if` too, and is a separate decision (TODO).
+- ~~`-if-field`'s mixed-kind rule is "false", not "loud"~~ **Resolved
+  2026-09-23**: Ross chose loud for `-if` as well (measured: exec silently
+  false, record codegen silently wrong with `abc` read as 0, typed and
+  DuckDB loud). `ssql.LiteralOp` for `-if`, `FieldOp` for `-if-field`,
+  one `*CompareError`, every lane; `TestMixedKindComparisonsAreLoud`.
 
 Found and fixed, none about the new flags:
 1. **exec `update` zero-filled a new field on unmatched rows** (`false`,
