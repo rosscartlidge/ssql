@@ -82,6 +82,39 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 			}
 		}
 
+		// -if-field / +if-field: native over struct fields, else the stage
+		// falls back to record mode where ssql.FieldOp decides per row.
+		fieldConds, err := parseFieldConditions(clause.Flags["-if-field"])
+		if err != nil {
+			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		for _, fc := range fieldConds {
+			res, ok, err := fieldCondTypedGo(in, fc)
+			if err != nil {
+				return true, "", lib.WriteErrorAndExit(getCommandString(), err)
+			}
+			if !ok {
+				return false, fmt.Sprintf("-if-field %s %s %s: no native form for the field types", fc.Field, fc.Operator, fc.Value), nil
+			}
+			exprImports = append(exprImports, res.Imports...)
+			uc.exprConds = append(uc.exprConds, res.Src)
+		}
+
+		// -set-field FIELD SOURCE: a typed read of SOURCE, assigned like a
+		// -set-expr result (retype checks and new-field typing included).
+		for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
+			src, ok := lookupSchemaField(in, sf.source)
+			if !ok {
+				return true, "", lib.WriteErrorAndExit(getCommandString(),
+					fmt.Errorf("ssql generate go -typed: '-set-field' references unknown field %q (schema has %s)", sf.source, fieldNamesList(in)))
+			}
+			operand, ok := typedOperand(src)
+			if !ok {
+				return false, fmt.Sprintf("-set-field %s %s: source type %s has no typed form", sf.target, sf.source, src.GoType), nil
+			}
+			uc.sets = append(uc.sets, setOp{field: sf.target, expr: &operand})
+		}
+
 		// -if-expr / +if-expr: native transpile (Tier N), else VM with a
 		// static env (Tier V) — either way the stage stays typed. -param
 		// bindings (in scope for the -set-expr family too) become flags.
@@ -95,7 +128,10 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 		}
 		params = append(params, exprParamsCodeParams(exprParams)...)
-		paramVars := exprParamsGoVars(exprParams)
+		paramVars := exprParamsGoFieldVarsTyped(exprParamsGoVars(exprParams), exprParams, in, "r")
+		if exprParamsNeedSSQL(exprParams) {
+			exprImports = append(exprImports, "github.com/rosscartlidge/ssql/v4")
+		}
 		for _, ec := range exprConds {
 			var src string
 			res, err := exprToGoBoolParams(ec.Expression, in, "r", paramVars)

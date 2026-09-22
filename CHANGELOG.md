@@ -5,6 +5,44 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Field references in value slots** (DFC135): `where`/`update
+  -if-field FIELD OP FIELD` compares two fields with the ten `-if`
+  operators (either side absent is false; `+if-field` negates);
+  `update -set-field FIELD SOURCE` copies a column, type and absence
+  included; `-param-field NAME TYPE FIELD` binds a column per row as a
+  variable of the clause's expressions, viewed as TYPE, so expression
+  text stays fixed whether a name is a literal or a column, and columns
+  whose names are not identifiers (`1st`, `a.b`) become reachable. In
+  every lane: exec and record codegen share `ssql.FieldOp` /
+  `ssql.CopyField`; typed codegen compares struct fields natively;
+  `generate sql` renders the columns (`CAST` when a declared type
+  differs). This replaces DFC101's `@field` sigil: a slot's kind is fixed
+  by the flag, never by a value's spelling, so `-if token eq "@token"`
+  is a comparison with the text `@token`.
+
+### Fixed
+- **`update` filled a new field with the type's zero on rows no clause
+  matched** (`false`, `0`, `""`), where record codegen leaves it absent and
+  `generate sql` refuses the case as untranslatable. Exec now leaves it
+  absent (DFC124).
+- **`generate sql`: an `-if-expr` written after the `-set` it guards in
+  the same `update` clause was ignored**, making the assignment
+  unconditional. Conditions are now read from the completed clause.
+- **`generate ssql`'s where rewrites dropped flags they did not model**
+  (`-param`, `-param-field`, `-if-field`), e.g. canonicalising
+  `-if-expr 'k >= "b"' -param-field k string 1st` into `-if k ge b`.
+  A `where` carrying anything beyond `-if`/`-if-expr`/`+` is now left
+  alone by those rules.
+- **`update` did not validate the fields its conditions read**: `-if
+  nosuchfield eq 1` matched nothing silently. Unknown fields in `-if`,
+  `-if-field`, `-set-field`'s source and `-param-field` are loud now.
+- **A `-param-field` whose column is absent compared as nil** (`l != r`
+  was true; SQL's NULL made it false). An absent field parameter gives
+  the expression no value: a condition is false, a set assigns nothing.
+
 ## [4.105.0] - 2026-09-22
 
 ### Added

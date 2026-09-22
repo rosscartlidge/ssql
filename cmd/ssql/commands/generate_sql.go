@@ -619,6 +619,16 @@ func translateWhere(q *sqlQuery, args []string) error {
 			i++
 		case "-param", "-p":
 			i += 4 // read by sqlClauseParams
+		case "-if-field", "+if-field":
+			if i+3 >= len(args) {
+				return fmt.Errorf("incomplete -if-field condition")
+			}
+			cond := translateFieldCondition(args[i+1], args[i+2], args[i+3])
+			if args[i][0] == '+' {
+				cond = sqlNot(cond)
+			}
+			currentAnd = append(currentAnd, cond)
+			i += 4
 		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
 				return fmt.Errorf("incomplete -if condition")
@@ -1740,8 +1750,8 @@ func translateUpdate(q *sqlQuery, args []string) error {
 	// valueSQL is an already-rendered SQL expression (literal or translated
 	// -set-expr), inserted verbatim into THEN/ELSE.
 	type assignment struct {
-		conds    []string // AND conditions of the clause itself (own; no guards)
-		clause   int      // clause index, for the first-match-wins guards
+		clause   int      // clause index: its conditions come from clauseGroups once the clause is complete
+		conds    []string // filled at CASE-build time: own group + first-match-wins guards
 		field    string
 		valueSQL string
 	}
@@ -1783,6 +1793,28 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			i++
 		case "-param", "-p":
 			i += 4 // read by sqlClauseParams
+		case "-if-field", "+if-field":
+			if i+3 >= len(args) {
+				return fmt.Errorf("incomplete -if-field condition in update")
+			}
+			cond := translateFieldCondition(args[i+1], args[i+2], args[i+3])
+			if args[i][0] == '+' {
+				cond = sqlNot(cond)
+			}
+			currentConds = append(currentConds, cond)
+			i += 4
+		case "-set-field":
+			// The target takes the source column's value; an absent source
+			// is a NULL, which the CASE's ELSE preserves for unmatched rows.
+			if i+2 >= len(args) {
+				return fmt.Errorf("incomplete -set-field in update")
+			}
+			assignments = append(assignments, assignment{
+				clause:   clauseIdx,
+				field:    args[i+1],
+				valueSQL: quoteIdent(args[i+2]),
+			})
+			i += 3
 		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
 				return fmt.Errorf("incomplete -if condition in update")
@@ -1811,7 +1843,6 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				return fmt.Errorf("incomplete -set in update")
 			}
 			assignments = append(assignments, assignment{
-				conds:    clauseConds(),
 				clause:   clauseIdx,
 				field:    args[i+1],
 				valueSQL: sqlLiteralFor(args[i+1], args[i+2]),
@@ -1826,7 +1857,6 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				return fmt.Errorf("update -set-expr: %w", err)
 			}
 			assignments = append(assignments, assignment{
-				conds:    clauseConds(),
 				clause:   clauseIdx,
 				field:    args[i+1],
 				valueSQL: valueSQL,
@@ -1846,7 +1876,6 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				return fmt.Errorf("update -set-bucket: %w", err)
 			}
 			assignments = append(assignments, assignment{
-				conds:    clauseConds(),
 				clause:   clauseIdx,
 				field:    se.field,
 				valueSQL: valueSQL,
@@ -1894,7 +1923,13 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		elseSQL := quoteIdent(field) // default: preserve original value
 		covered := map[int]bool{}
 		for _, c := range cases {
-			conds := append([]string{}, c.conds...)
+			// The clause's own conditions, read AFTER the clause was fully
+			// parsed: an -if-expr written after the -set it guards used to
+			// be missed (found 2026-09-22 by the -param-field probes).
+			var conds []string
+			if c.clause < len(clauseGroups) && clauseGroups[c.clause] != "" {
+				conds = append(conds, clauseGroups[c.clause])
+			}
 			for k := 0; k < c.clause && k < len(clauseGroups); k++ {
 				if !covered[k] && clauseGroups[k] != "" {
 					conds = append(conds, sqlNot(clauseGroups[k]))

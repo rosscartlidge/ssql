@@ -422,9 +422,23 @@ ssql from orders.csv | ssql where  -if-expr 'ts >= since'          -param since 
   (`./report -param-since 2026-06-01`); `generate sql` renders a literal
   of the declared type.
 
+- **A column as a parameter.** `-param-field NAME TYPE FIELD` binds NAME
+  per row to FIELD's value viewed as TYPE (cast with `cast`'s strict
+  rules; a value not of TYPE is an error; an absent FIELD gives the
+  expression no value, so a condition is false and a set assigns
+  nothing). The expression text stays fixed whether `rate` is a literal
+  (`-param rate float 1.1`) or a column (`-param-field rate float
+  discount`), and a column whose name is not an identifier is reachable:
+  `-param-field n int 1st`. A field parameter is part of the program's
+  shape, so it is not a flag of the generated binary.
+
 Rule for programs that build pipelines: **values go in flag slots
-(`-if FIELD OP VALUE`, `-param`), never into expression text.**
-[DFC134](research/dfc134_pipelines_as_data.md) has the reasoning.
+(`-if FIELD OP VALUE`, `-param`), never into expression text; a slot's
+kind is fixed by the flag, never by the value's spelling** (`@name` is
+the text `@name`; two fields compare with `-if-field`).
+[DFC134](research/dfc134_pipelines_as_data.md) and
+[DFC135](research/dfc135_field_references_in_value_slots.md) have the
+reasoning.
 
 ## Common Patterns
 

@@ -86,7 +86,7 @@ func TestCrashSweep(t *testing.T) {
 			findings = append(findings, finding{"PANIC", line, first})
 		case err != nil && strings.TrimSpace(stderr.String()) == "":
 			findings = append(findings, finding{"SILENT-FAIL", line, "non-zero exit with nothing on stderr"})
-		case err == nil && unknownField && feed != "empty-stdin" && feed != "header-only" && !sweepCreatesFields[args[0]+" "+args[1]]:
+		case err == nil && unknownField && feed != "empty-stdin" && feed != "header-only":
 			findings = append(findings, finding{"UNKNOWN-FIELD-ACCEPTED", line, "exit 0 for a field that does not exist"})
 		case err == nil && !sweepWellFormed(stdout.String()):
 			findings = append(findings, finding{"MALFORMED", line, strings.SplitN(stdout.String(), "\n", 2)[0]})
@@ -111,7 +111,7 @@ func TestCrashSweep(t *testing.T) {
 			if flag == "-generate" || flag == "-file" || flag == "-output" {
 				continue
 			}
-			for _, variant := range sweepArgVariants(f) {
+			for _, variant := range sweepArgVariants(f, sweepCreatesFields[name+" "+flag]) {
 				args := []string{name}
 				if strings.HasPrefix(flag, "-") || strings.HasPrefix(flag, "+") {
 					args = append(args, flag)
@@ -140,9 +140,10 @@ func TestCrashSweep(t *testing.T) {
 	t.Logf("crash sweep: %d commands, %d runs, %d distinct findings %v", len(names), runs, len(seen), byKind)
 }
 
-// sweepCreatesFields: flags whose field argument NAMES A NEW FIELD by
-// design, so a name that does not exist yet is the point, not a typo.
-var sweepCreatesFields = map[string]bool{"update -set": true, "update -set-expr": true, "update -set-bucket": true}
+// sweepCreatesFields: flags whose FIRST field argument NAMES A NEW FIELD
+// by design, so a name that does not exist yet is the point, not a typo.
+// Their other field arguments (-set-field's SOURCE) must exist.
+var sweepCreatesFields = map[string]bool{"update -set": true, "update -set-expr": true, "update -set-bucket": true, "update -set-field": true}
 
 type sweepSpec struct {
 	Subcommands map[string]sweepCmd `json:"subcommands"`
@@ -170,7 +171,7 @@ type sweepVariant struct {
 // sweepArgVariants builds the flag's argument lists: a plausible one (a
 // real field, a small number), then one degenerate value at a time per
 // argument, the others held plausible.
-func sweepArgVariants(f sweepFlag) []sweepVariant {
+func sweepArgVariants(f sweepFlag, creates bool) []sweepVariant {
 	if f.Bool || len(f.Args) == 0 {
 		return []sweepVariant{{}}
 	}
@@ -205,7 +206,7 @@ func sweepArgVariants(f sweepFlag) []sweepVariant {
 		for _, b := range bad {
 			v := append([]string(nil), plausible...)
 			v[i] = b
-			out = append(out, sweepVariant{values: v, unknownField: a.Completer == "fields" && b == "nosuchfield"})
+			out = append(out, sweepVariant{values: v, unknownField: a.Completer == "fields" && b == "nosuchfield" && !(i == 0 && creates)})
 		}
 	}
 	return out

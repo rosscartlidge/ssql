@@ -127,6 +127,14 @@ func corpusData(t *testing.T) string {
 			// Shuffled, distinct values, and name order != -desc order, so a
 			// misread key or direction diverges.
 			"hostile.csv": "name,-generate,-desc,+x,-\ncal,3,7,q,k\namy,1,9,p,m\nbob,2,5,r,l\ndee,4,1,s,j\n",
+			// Two numeric columns whose order differs row to row, a text pair
+			// where one is a prefix/suffix/pattern of the other on some rows
+			// (DFC135 field-to-field flags). No empty text cell: that is ""
+			// here and NULL in DuckDB (DFC124), a divergence, not a finding.
+			"pairs.csv": "id,a,b,s,p,q\n1,5,7,hello,ell,^h\n2,9,3,world,wor,^z\n3,4,4,abc,abc,^a\n4,2,8,xyz,y,^q\n5,6,1,hello,lo,lo$\n",
+			// The same with an absent numeric cell (row 5 has no b): typed
+			// structs cannot hold absence (DFC124 §3), so cases on it skip typed.
+			"pairs_absent.csv": "id,a,b\n1,5,7\n2,9,3\n5,6,\n",
 			// SQL-injection strings as VALUES and as a column name that needs
 			// quoting: apostrophes, a comment marker, a statement terminator,
 			// LIKE metacharacters. Every lane must treat them as data.

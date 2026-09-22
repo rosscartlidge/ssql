@@ -590,9 +590,24 @@ func parseLimitCmd(cmd *pipelineCmd) {
 // contradictory clauses — and every one of those is unsound under a
 // negation, so such a stage is left exactly as written (pushdown rules
 // that move the WHOLE stage verbatim are unaffected).
+// whereHasNegationFlags reports a where stage the structured view
+// (parseWhereArgs / buildWhereArgs: -if, -if-expr and + only) cannot
+// represent: -not / -invert, and since DFC134/DFC135 -param, -param-field
+// and -if-field, whose meaning a rewrite through that view would drop (the
+// canonicaliser turned `-if-expr 'k >= "b"' -param-field k string 1st`
+// into `-if k ge b`, found 2026-09-22). Every rule that rewrites where
+// through the view skips such a stage; a rule that only READS it (predicate
+// pushdown deciding which side a condition belongs to) is conservative too.
 func whereHasNegationFlags(args []string) bool {
-	for _, a := range args {
-		if a == "-not" || a == "-invert" {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch a {
+		case "-if", "-i", "+if", "+i":
+			i += 3
+		case "-if-expr", "-x", "+if-expr", "+x":
+			i++
+		case "+":
+		default:
 			return true
 		}
 	}

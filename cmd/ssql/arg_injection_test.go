@@ -36,7 +36,9 @@ func TestArgumentsAreNotSyntax(t *testing.T) {
 	records := run(t, "", "from", "csv", hostile)
 
 	t.Run("a value spelled like a root flag is a value", func(t *testing.T) {
-		for _, v := range []string{"-shell-init", "--shell-init", "-field-keybinding", "-completion-script", "-spec-json", "-help", "-generate", "-arg", "--", "+", "-"} {
+		// "@name" is a literal too: a value's spelling never makes it a
+		// field reference (DFC135 replaced the @field sigil with -if-field).
+		for _, v := range []string{"-shell-init", "--shell-init", "-field-keybinding", "-completion-script", "-spec-json", "-help", "-generate", "-arg", "--", "+", "-", "@name", "@@name"} {
 			out := run(t, records, "where", "-if", "name", "eq", v)
 			if strings.Contains(out, "complete ") || strings.Contains(out, "bind ") || strings.Contains(out, "USAGE") || strings.Contains(out, `"code"`) {
 				t.Errorf("where -if name eq %s produced something other than records:\n%.300s", v, out)
@@ -44,6 +46,13 @@ func TestArgumentsAreNotSyntax(t *testing.T) {
 			if strings.Contains(out, "amy") {
 				t.Errorf("where -if name eq %s matched rows it should not:\n%s", v, out)
 			}
+		}
+	})
+
+	t.Run("a -param value spelled like a field is a value", func(t *testing.T) {
+		out := run(t, records, "where", "-if-expr", "name == who", "-param", "who", "string", "@name")
+		if strings.Contains(out, "amy") {
+			t.Errorf("-param who string @name compared to the column:\n%s", out)
 		}
 	})
 

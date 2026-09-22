@@ -66,7 +66,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Filter using boolean expression: -if-expr <expr> (use +if-expr to negate)").
 		Done()
-	exprParamFlag(sub).
+	ifFieldFlag(exprParamFlag(sub)).
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 
@@ -85,9 +85,10 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				negated bool
 			}
 			type clauseData struct {
-				conditions []Condition
-				exprEvals  []exprEval
-				not        bool // -not: the clause holds when NOT all conditions hold
+				conditions  []Condition
+				exprEvals   []exprEval
+				paramFields []string // columns -param-field reads: validated like -if's
+				not         bool     // -not: the clause holds when NOT all conditions hold
 			}
 
 			var clauses []clauseData
@@ -95,10 +96,16 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			for _, clause := range ctx.Clauses {
 				// Skip empty clauses
-				hasWhere := clause.Flags["-if"] != nil
+				hasWhere := clause.Flags["-if"] != nil || clause.Flags["-if-field"] != nil
 				hasWhereExpr := clause.Flags["-if-expr"] != nil
 				if !hasWhere && !hasWhereExpr {
 					if err := whereNotNeedsCondition(clause); err != nil {
+						return err
+					}
+					// A parameter with no expression to use it is an error,
+					// not a clause to skip (the crash sweep found `-param-field
+					// x x nosuchfield` exiting 0 here: never parsed).
+					if _, err := clauseExprParams(clause, nil, nil); err != nil {
 						return err
 					}
 					continue
@@ -107,8 +114,8 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				cd := clauseData{}
 				cd.not, _ = clause.Flags["-not"].(bool)
 
-				// Parse -if conditions (validates operators)
-				conditions, err := parseConditions(clause.Flags["-if"])
+				// Parse -if and -if-field conditions (validates operators)
+				conditions, err := clauseConditions(clause)
 				if err != nil {
 					return err
 				}
@@ -122,12 +129,13 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					return err
 				}
 				for _, ec := range exprConds {
-					compiled, err := runtime.CompileExprParams(ec.Expression, exprParamsEnv(params))
+					compiled, err := compileClauseExpr(ec.Expression, params)
 					if err != nil {
 						return fmt.Errorf("compiling expression %q: %w", ec.Expression, err)
 					}
 					cd.exprEvals = append(cd.exprEvals, exprEval{eval: compiled, negated: ec.Negated})
 				}
+				cd.paramFields = exprParamFieldNames(params)
 
 				clauses = append(clauses, cd)
 			}
@@ -136,6 +144,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			var allFilterFields []string
 			for _, cd := range clauses {
 				allFilterFields = append(allFilterFields, conditionFields(cd.conditions)...)
+				allFilterFields = append(allFilterFields, cd.paramFields...)
 			}
 
 			// Build filter that uses pre-compiled expressions
@@ -164,12 +173,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 					// Check -if / +if conditions
 					for _, cond := range clause.conditions {
-						fieldValue, exists := ssql.Get[any](r, cond.Field)
-						match := exists && applyOperator(fieldValue, cond.Operator, cond.Value)
-						if cond.Negated {
-							match = !match
-						}
-						if !match {
+						if !matchCondition(r, cond) {
 							clauseMatches = false
 							break
 						}
@@ -181,11 +185,14 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							result, err := ee.eval(r)
 							if err != nil {
 								var collision *runtime.ParamCollisionError
-								if errors.As(err, &collision) {
-									filterErr = err // wrong for the run, not the row
+								var cast *ssql.CastError
+								if errors.As(err, &collision) || errors.As(err, &cast) {
+									filterErr = err // wrong for the run (a collision) or the data (a strict cast), not the row
 									return false
 								}
-								fmt.Fprintf(ctx.Stderr(), "Error evaluating expression: %v\n", err)
+								if !errors.Is(err, runtime.ErrAbsent) {
+									fmt.Fprintf(ctx.Stderr(), "Error evaluating expression: %v\n", err)
+								}
 								clauseMatches = false
 								break
 							}
@@ -377,6 +384,25 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 			}
 		}
 
+		// -if-field / +if-field: native over the struct fields when the
+		// pairing has a form; otherwise the whole stage falls back to
+		// record mode (handled=false), where ssql.FieldOp decides per row.
+		fieldConds, err := parseFieldConditions(clause.Flags["-if-field"])
+		if err != nil {
+			return true, lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		for _, fc := range fieldConds {
+			res, ok, err := fieldCondTypedGo(schema, fc)
+			if err != nil {
+				return true, lib.WriteErrorAndExit(getCommandString(), err)
+			}
+			if !ok {
+				return false, nil
+			}
+			imports = append(imports, res.Imports...)
+			ands = append(ands, res.Src)
+		}
+
 		// -if-expr / +if-expr: transpile to native Go (Tier N); outside the
 		// subset, evaluate with the VM against a static env (Tier V) — the
 		// stage stays typed either way, so downstream stages keep their
@@ -387,9 +413,13 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 			return true, lib.WriteErrorAndExit(getCommandString(), err)
 		}
 		params = append(params, exprParamsCodeParams(exprParams)...)
+		typedVars := exprParamsGoFieldVarsTyped(exprParamsGoVars(exprParams), exprParams, schema, "r")
+		if exprParamsNeedSSQL(exprParams) {
+			imports = append(imports, "github.com/rosscartlidge/ssql/v4")
+		}
 		for _, ec := range exprConds {
 			var cond string
-			res, err := exprToGoBoolParams(ec.Expression, schema, "r", exprParamsGoVars(exprParams))
+			res, err := exprToGoBoolParams(ec.Expression, schema, "r", typedVars)
 			switch {
 			case err == nil:
 				cond = res.Src
@@ -622,6 +652,16 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map
 			}
 		}
 
+		// -if-field / +if-field: the shared runtime primitive (exec's exact
+		// semantics), readable in the generated program.
+		fieldConds, err := parseFieldConditions(clause.Flags["-if-field"])
+		if err != nil {
+			return "", nil, nil, nil, nil, err
+		}
+		for _, fc := range fieldConds {
+			andConditions = append(andConditions, fieldCondRecordGo(fc, "r"))
+		}
+
 		// Process -if-expr / +if-expr conditions. parseExprConds handles the
 		// map form negated entries arrive in — a plain string type-assert
 		// silently dropped every +if-expr condition. -param bindings become
@@ -632,8 +672,9 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map
 			return "", nil, nil, nil, nil, err
 		}
 		params = append(params, exprParamsCodeParams(exprParams)...)
-		paramVars := exprParamsGoVars(exprParams)
+		paramVars := exprParamsGoVars(exprParams) // field params take the VM tier, where absence is uniform
 		paramThunk := exprParamsGoThunk(exprParams)
+		paramFields := exprParamsGoFields(exprParams)
 		if exprParamsNeedSSQL(exprParams) {
 			imports = append(imports, "github.com/rosscartlidge/ssql/v4")
 		}
@@ -674,7 +715,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map
 			}
 			exprCounter++
 			varName := fmt.Sprintf("exprFilter%d", exprCounter)
-			preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExprFilter", ec.Expression, paramThunk))
+			preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExprFilter", ec.Expression, paramThunk, paramFields))
 			call := fmt.Sprintf("%s(r)", varName)
 			if ec.Negated {
 				call = "!" + call
@@ -795,8 +836,8 @@ func clauseNot(clause cf.Clause) bool {
 // whereNotNeedsCondition rejects a clause that says -not but has nothing
 // to negate: silently matching nothing (NOT true) would be a trap.
 func whereNotNeedsCondition(clause cf.Clause) error {
-	if clauseNot(clause) && clause.Flags["-if"] == nil && clause.Flags["-if-expr"] == nil {
-		return fmt.Errorf("where -not needs at least one -if or -if-expr in its clause")
+	if clauseNot(clause) && clause.Flags["-if"] == nil && clause.Flags["-if-expr"] == nil && clause.Flags["-if-field"] == nil {
+		return fmt.Errorf("where -not needs at least one -if, -if-field or -if-expr in its clause")
 	}
 	return nil
 }

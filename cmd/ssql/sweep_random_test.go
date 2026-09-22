@@ -275,13 +275,39 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 	target := 1 + rng.Intn(4)
 	for tries := 0; len(stages) < target && tries < 40; tries++ {
 		var st string
-		switch rng.Intn(9) {
+		switch rng.Intn(10) {
 		case 0, 1, 2: // where
 			f := pick(rng, cols)
 			if !condOK(f) {
 				continue
 			}
 			st = "where " + genCond(rng, f, kind[f])
+		case 9: // DFC135: field against field, flag form or -param-field
+			// Two numeric columns (k, n as ints; f float) compare as numbers
+			// in every lane; both must be free of NULL-vs-"" ambiguity, which
+			// numeric columns are (an empty numeric cell is absent everywhere).
+			var nums []string
+			for _, c := range cols {
+				if (kind[c] == "int" || kind[c] == "float") && c != "id" {
+					nums = append(nums, c)
+				}
+			}
+			if len(nums) < 2 {
+				continue
+			}
+			a, b := nums[rng.Intn(len(nums))], nums[rng.Intn(len(nums))]
+			if a == b {
+				continue
+			}
+			op := pick(rng, []string{"eq", "ne", "gt", "ge", "lt", "le"})
+			if rng.Intn(2) == 0 {
+				st = fmt.Sprintf("where %s %s %s %s", pick(rng, []string{"-if-field", "-if-field", "+if-field"}), a, op, b)
+			} else {
+				// The same comparison as an expression with both sides bound
+				// by -param-field, viewed as float.
+				sym := map[string]string{"eq": "==", "ne": "!=", "gt": ">", "ge": ">=", "lt": "<", "le": "<="}[op]
+				st = fmt.Sprintf("where -if-expr 'l %s r' -param-field l float %s -param-field r float %s", sym, a, b)
+			}
 		case 3: // update an existing field conditionally
 			f := pick(rng, cols)
 			tgt := pick(rng, cols)

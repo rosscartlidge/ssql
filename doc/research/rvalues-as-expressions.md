@@ -2,7 +2,7 @@
 
 Reference: DFC101
 Created: 2026-06-28
-Last modified: 2026-06-29
+Last modified: 2026-09-22
 
 [Back to Index](./README.md)
 
@@ -114,6 +114,8 @@ properties — and weighing them sharpens *why* the structured form pays off in
 some places but not others.
 
 ### Gap 1: `field OP field` — the `@field` value sigil ✅ recommended
+
+> **Superseded 2026-09-22 by [DFC135](./dfc135_field_references_in_value_slots.md):** a value's spelling must not change a slot's kind (DFC134), so the sigil is replaced by `-if-field`, `-set-field` and `-param-field`. The rest of this document stands.
 
 `-if FIELD OP VALUE` can't compare two fields, because an unquoted token in
 value position is a **string literal** (`-if dept eq sales` means the string

@@ -338,6 +338,19 @@ CITY=SF
 ssql from employees.csv | ssql where -if-expr 'salary > floor && city == where' -param floor int 100000 -param where string "$CITY" | ssql to table
 ```
 
+Two fields compare with `-if-field` (Tab completes both names), and
+`-set-field` copies one column to another. In an expression,
+`-param-field NAME TYPE FIELD` binds a column per row under a name of
+your choosing, viewed as TYPE: the expression text stays fixed whether
+`rate` is a literal or a column, and a column whose name is not an
+identifier (`1st`, `a.b`) becomes usable:
+
+```bash
+ssql from employees.csv | ssql where -if-field age gt level | ssql include name age level | ssql to table
+ssql from employees.csv | ssql update -set-field grade level | ssql include name grade | ssql limit 3 | ssql to table
+ssql from employees.csv | ssql where -if-expr 'salary / n > 12000' -param-field n float level | ssql include name salary level | ssql to table
+```
+
 Operators for `-if`: `eq ne gt ge lt le contains startswith endswith regex`.
 Everything in the pipe is JSONL, so any stage can follow any other, and
 `to csv`/`to json` swap the output shape at the end:

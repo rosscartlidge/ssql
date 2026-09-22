@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -31,6 +32,11 @@ func StaticParams(m map[string]any) Params {
 	return func() map[string]any { return m }
 }
 
+// ErrAbsent: a -param-field's column is absent on this row, so the
+// expression has no value. Callers treat it as "false" for a condition and
+// "assign nothing" for a set, quietly; it is not a failure.
+var ErrAbsent = errors.New("expression has no value: a -param-field column is absent on this row")
+
 // ParamCollisionError: a parameter shares its name with a field of the
 // input. It is wrong for the whole run, not for the row, so commands stop
 // on it rather than treating it as a per-row evaluation failure.
@@ -40,15 +46,44 @@ func (e *ParamCollisionError) Error() string {
 	return fmt.Sprintf("parameter %s has the same name as a field of the input; rename the parameter", strings.Join(e.Names, ", "))
 }
 
+// FieldParam is `-param-field NAME TYPE FIELD` (DFC135): NAME is bound per
+// row to FIELD's value cast to Type. An absent FIELD leaves NAME unbound on
+// that row (a condition on it is then false, its negation true); a value
+// not of Type is loud, as `cast` is.
+type FieldParam struct {
+	Field string
+	Type  ssql.FieldType
+}
+
+// FieldParams maps parameter names to the field each views.
+type FieldParams map[string]FieldParam
+
 // paramBinding resolves a Params thunk once and checks, on the first record
 // seen, that no parameter shares a name with a field of the input. Silent
 // precedence either way would let data (a new upstream column) change what
-// an expression means; the collision is an error naming both.
+// an expression means; the collision is an error naming both. Field
+// parameters are re-bound on every record.
 type paramBinding struct {
 	thunk   Params
+	fields  FieldParams
 	once    sync.Once
 	values  map[string]any
 	checked bool
+}
+
+// names lists every parameter the binding declares, static and field.
+func (b *paramBinding) names() []string {
+	if b == nil {
+		return nil
+	}
+	var out []string
+	for n := range b.resolve() {
+		out = append(out, n)
+	}
+	for n := range b.fields {
+		out = append(out, n)
+	}
+	return out
 }
 
 func (b *paramBinding) resolve() map[string]any {
@@ -60,16 +95,20 @@ func (b *paramBinding) resolve() map[string]any {
 }
 
 // apply adds the parameters to env and, once, checks for a field collision
-// using has (true when the input record carries that name).
-func (b *paramBinding) apply(env map[string]any, has func(string) bool) error {
+// using has (true when the input record carries that name); get reads a
+// field for the field parameters.
+func (b *paramBinding) apply(env map[string]any, has func(string) bool, get func(string) (any, bool)) error {
+	if b == nil {
+		return nil
+	}
 	values := b.resolve()
-	if len(values) == 0 {
+	if len(values) == 0 && len(b.fields) == 0 {
 		return nil
 	}
 	if !b.checked {
 		b.checked = true
 		var clash []string
-		for name := range values {
+		for _, name := range b.names() {
 			if has(name) {
 				clash = append(clash, name)
 			}
@@ -81,6 +120,22 @@ func (b *paramBinding) apply(env map[string]any, has func(string) bool) error {
 	}
 	for k, v := range values {
 		env[k] = v
+	}
+	for name, fp := range b.fields {
+		v, ok := get(fp.Field)
+		if !ok || v == nil {
+			// The absent-value rule (DFC124/DFC128): an expression over a
+			// missing value has no value. A condition is then false, a
+			// -set-expr assigns nothing. (Binding nothing and letting the
+			// VM see nil made `l != r` TRUE on an absent r while SQL's
+			// NULL made it false; found by the random tester.)
+			return ErrAbsent
+		}
+		cast, ok := ssql.CastValue(v, fp.Type)
+		if !ok {
+			return &ssql.CastError{Field: fp.Field, Value: v, Target: fp.Type}
+		}
+		env[name] = cast
 	}
 	return nil
 }
@@ -101,6 +156,50 @@ func ExprIdentifiers(expression string) ([]string, error) {
 // environment (see Params).
 func CompileExprParams(expression string, params Params) (func(ssql.Record) (any, error), error) {
 	return compileExpr(expression, &paramBinding{thunk: params})
+}
+
+// CompileExprParamsFields is CompileExprParams with per-row field
+// parameters (see FieldParam).
+func CompileExprParamsFields(expression string, params Params, fields FieldParams) (func(ssql.Record) (any, error), error) {
+	return compileExpr(expression, &paramBinding{thunk: params, fields: fields})
+}
+
+func MustCompileExprParamsFields(expression string, params Params, fields FieldParams) func(ssql.Record) (any, error) {
+	eval, err := CompileExprParamsFields(expression, params, fields)
+	if err != nil {
+		panic(fmt.Sprintf("failed to compile expression %q: %v", expression, err))
+	}
+	return eval
+}
+
+func MustCompileExprFilterParamsFields(expression string, params Params, fields FieldParams) func(ssql.Record) bool {
+	eval, err := CompileExprParamsFields(expression, params, fields)
+	if err != nil {
+		panic(fmt.Sprintf("failed to compile expression %q: %v", expression, err))
+	}
+	return exprFilter(eval)
+}
+
+// The Tier-V (typed codegen) forms with field parameters: the field is
+// read from the caller's env map.
+func MustCompileExprEnvParamsFields(expression string, params Params, fields FieldParams) func(map[string]any) (any, error) {
+	eval, err := compileExprEnv(expression, &paramBinding{thunk: params, fields: fields})
+	if err != nil {
+		panic(fmt.Sprintf("failed to compile expression %q: %v", expression, err))
+	}
+	return eval
+}
+
+func MustCompileExprFilterEnvParamsFields(expression string, params Params, fields FieldParams) func(map[string]any) bool {
+	eval := MustCompileExprEnvParamsFields(expression, params, fields)
+	return func(f map[string]any) bool {
+		result, err := eval(f)
+		if err != nil {
+			return false
+		}
+		b, ok := result.(bool)
+		return ok && b
+	}
 }
 
 // CompileExprFilterParams is CompileExprFilter with parameters.

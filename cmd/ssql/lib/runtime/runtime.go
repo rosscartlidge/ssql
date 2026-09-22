@@ -133,19 +133,26 @@ func compileExpr(expression string, params *paramBinding) (func(ssql.Record) (an
 			_, exists := ssql.Get[any](record, field)
 			return exists
 		}
-		if err := params.apply(env, has); err != nil {
+		get := func(field string) (any, bool) { return ssql.Get[any](record, field) }
+		if err := params.apply(env, has, get); err != nil {
 			return nil, err
 		}
 
 		// Add helper functions that close over the record
-		exprHelpers(env, has, func(field string) (any, bool) { return ssql.Get[any](record, field) })
+		exprHelpers(env, has, get)
 
-		// On first record, check that expression identifiers exist as fields or known functions
+		// On first record, check that expression identifiers exist as fields
+		// or known functions. A declared parameter is known even when its
+		// field is absent on this row.
 		if !validated {
 			validated = true
+			declared := map[string]bool{}
+			for _, n := range params.names() {
+				declared[n] = true
+			}
 			var missing []string
 			for _, id := range identifiers {
-				if _, ok := env[id]; !ok {
+				if _, ok := env[id]; !ok && !declared[id] {
 					missing = append(missing, id)
 				}
 			}

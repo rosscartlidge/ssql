@@ -108,7 +108,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC098 | 2026-06-21 | 2026-06-22 | [Interactive Help at the Cursor — Design Exploration](./interactive-help-at-cursor.md) |
 | DFC099 | 2026-06-24 | 2026-06-24 | [Codegen: evolving the fragment system (and why *not* go/ast)](./codegen-ir-evolution.md) |
 | DFC100 | 2026-06-25 | 2026-06-25 | [Expression support in `generate go`: transpile to native Go (performance-first)](./expr-codegen-transpilation.md) |
-| DFC101 | 2026-06-28 | 2026-06-29 | [Should all rvalues be expressions? (and why the structured flags stay)](./rvalues-as-expressions.md) |
+| DFC101 | 2026-06-28 | 2026-09-22 | [Should all rvalues be expressions? (and why the structured flags stay)](./rvalues-as-expressions.md) |
 | DFC102 | 2026-07-02 | 2026-07-03 | [When one pipeline has five implementations: a divergence bug and the differential harness that kills it](./multimode-equivalence-testing.md) |
 | DFC103 | 2026-07-04 | 2026-08-10 | [Expr→Go transpiler: implementation plan](./expr-transpiler-implementation-plan.md) |
 | DFC104 | 2026-08-10 | 2026-08-10 | [Compiling an Embedded Expression Language into a Query Pipeline Code Generator: An Experience Report](./expr-transpiler-paper.md) |

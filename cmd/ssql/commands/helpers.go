@@ -132,6 +132,23 @@ type Condition struct {
 	Operator string
 	Value    string
 	Negated  bool // true when specified as +if (negate the match)
+	FieldRHS bool // -if-field: Value is the right-hand FIELD's name, not a literal (DFC135)
+}
+
+// matchCondition evaluates one condition on a record: a literal or, for
+// -if-field, the other field's value. Either side absent is false.
+func matchCondition(r ssql.Record, c Condition) bool {
+	var match bool
+	if c.FieldRHS {
+		match = ssql.FieldOp(r, c.Field, c.Operator, c.Value)
+	} else {
+		fieldValue, exists := ssql.Get[any](r, c.Field)
+		match = exists && applyOperator(fieldValue, c.Operator, c.Value)
+	}
+	if c.Negated {
+		match = !match
+	}
+	return match
 }
 
 // parseConditions parses -if flag values from autocli into Conditions.
@@ -160,7 +177,7 @@ func parseConditions(flagValue any) ([]Condition, error) {
 		if !validOperators[op] {
 			return nil, fmt.Errorf("unknown operator %q (valid: eq, ne, gt, ge, lt, le, contains, startswith, endswith, regex)", op)
 		}
-		conditions = append(conditions, Condition{field, op, value, negated})
+		conditions = append(conditions, Condition{Field: field, Operator: op, Value: value, Negated: negated})
 	}
 	return conditions, nil
 }
@@ -208,6 +225,10 @@ func conditionFields(conditions []Condition) []string {
 		if !seen[c.Field] {
 			seen[c.Field] = true
 			fields = append(fields, c.Field)
+		}
+		if c.FieldRHS && !seen[c.Value] {
+			seen[c.Value] = true
+			fields = append(fields, c.Value)
 		}
 	}
 	return fields
@@ -735,22 +756,6 @@ func coerceToString(value any) (string, bool) {
 		return v.Format(time.RFC3339Nano), true
 	default:
 		return fmt.Sprintf("%v", v), true
-	}
-}
-
-// getDefaultForValue returns the default/zero value for the same type as the input value
-func getDefaultForValue(value any) any {
-	switch value.(type) {
-	case int64, int, int32, int16, int8, uint, uint64, uint32, uint16, uint8:
-		return int64(0)
-	case float64, float32:
-		return float64(0)
-	case bool:
-		return false
-	case string:
-		return ""
-	default:
-		return ""
 	}
 }
 

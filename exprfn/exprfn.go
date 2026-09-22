@@ -5,7 +5,10 @@
 // strings.*/math.* calls. Zero dependencies; everything inlinable.
 package exprfn
 
-import "unicode/utf8"
+import (
+	"regexp"
+	"unicode/utf8"
+)
 
 // Abs is expr-lang's type-preserving abs(): int stays int, float stays float.
 func Abs[T int64 | float64](v T) T {
@@ -66,4 +69,13 @@ func BucketInt64(v int64, everyNanos int64) int64 {
 func BucketFloat64(v float64, everyNanos int64) float64 {
 	u := DetectEpochUnitNanos(v)
 	return float64(SnapNanos(int64(v*float64(u)), everyNanos)) / float64(u)
+}
+
+// RegexMatch reports whether s matches pattern, compiled per call: the
+// pattern is a row value (`where -if-field path regex pat`, DFC135), so
+// there is nothing to hoist. An invalid pattern is false, as ssql.FieldOp
+// treats it.
+func RegexMatch(pattern, s string) bool {
+	re, err := regexp.Compile(pattern)
+	return err == nil && re.MatchString(s)
 }

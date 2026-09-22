@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"iter"
 	"maps"
@@ -97,7 +98,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Set field to the source timestamp snapped down to a width: -set-bucket <field> <source> <width> (1m, 5m, 1h — the same as -set-expr <field> 'bucket(<source>, \"<width>\")')").
 		Done()
-	exprParamFlag(sub).
+	setFieldFlag(ifFieldFlag(exprParamFlag(sub))).
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "update")
@@ -119,19 +120,22 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				eval    func(ssql.Record) (any, error)
 				negated bool
 			}
+			type updateOp struct {
+				field    string
+				literal  string                         // For -set
+				exprEval func(ssql.Record) (any, error) // For -set-expr (pre-compiled)
+				isExpr   bool
+				source   string // For -set-field: the field copied (DFC135)
+			}
 			type updateClause struct {
 				conditions     []Condition
 				whereExprEvals []whereExprEval // For -if-expr / +if-expr (pre-compiled)
 				not            bool            // -not: the sets apply when NOT all conditions hold
-				updates        []struct {
-					field    string
-					literal  string                         // For -set
-					exprEval func(ssql.Record) (any, error) // For -set-expr (pre-compiled)
-					isExpr   bool
-				}
+				updates        []updateOp
 			}
 
 			var clauses []updateClause
+			var readFields []string // fields the clauses READ: validated against the first record
 
 			for _, clause := range ctx.Clauses {
 				uc := updateClause{}
@@ -141,7 +145,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				uc.not = clauseNot(clause)
 
 				// Parse -if conditions (validates operators)
-				conditions, err := parseConditions(clause.Flags["-if"])
+				conditions, err := clauseConditions(clause)
 				if err != nil {
 					return err
 				}
@@ -160,9 +164,10 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if err != nil {
 					return err
 				}
-				env := exprParamsEnv(params)
+				readFields = append(readFields, conditionFields(conditions)...)
+				readFields = append(readFields, exprParamFieldNames(params)...)
 				for _, ec := range exprConds {
-					eval, err := runtime.CompileExprParams(ec.Expression, env)
+					eval, err := compileClauseExpr(ec.Expression, params)
 					if err != nil {
 						return fmt.Errorf("compiling where-expr %q: %w", ec.Expression, err)
 					}
@@ -183,30 +188,26 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							value, _ := setMap["value"].(string)
 
 							if field != "" {
-								uc.updates = append(uc.updates, struct {
-									field    string
-									literal  string
-									exprEval func(ssql.Record) (any, error)
-									isExpr   bool
-								}{field: field, literal: value, isExpr: false})
+								uc.updates = append(uc.updates, updateOp{field: field, literal: value, isExpr: false})
 							}
 						}
 					}
 				}
 
+				// -set-field FIELD SOURCE: copy a field's value and type.
+				for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
+					uc.updates = append(uc.updates, updateOp{field: sf.target, source: sf.source})
+					readFields = append(readFields, sf.source)
+				}
+
 				// -set-expr, and -set-bucket desugared to bucket(...):
 				// compile each expression ONCE.
 				for _, se := range exprSets {
-					eval, err := runtime.CompileExprParams(se.expression, env)
+					eval, err := compileClauseExpr(se.expression, params)
 					if err != nil {
 						return fmt.Errorf("compiling expression %q: %w", se.expression, err)
 					}
-					uc.updates = append(uc.updates, struct {
-						field    string
-						literal  string
-						exprEval func(ssql.Record) (any, error)
-						isExpr   bool
-					}{field: se.field, exprEval: eval, isExpr: true})
+					uc.updates = append(uc.updates, updateOp{field: se.field, exprEval: eval, isExpr: true})
 				}
 
 				if len(uc.updates) > 0 {
@@ -230,7 +231,6 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			warnedFields := make(map[string]bool)
 
 			// Track new fields and their types (determined from first assignment)
-			newFieldTypes := make(map[string]any) // field -> default value for type
 
 			// Collect all fields being set across all clauses
 			allSetFields := make(map[string]bool)
@@ -252,10 +252,13 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if isFirstRecord {
 					schemaFields = maps.Collect(frozen.All())
 					isFirstRecord = false
+					// -if / -if-field / -set-field / -param-field name fields
+					// that must exist; an unknown one is a typo, loud.
+					if err := validateFields(frozen, readFields, "update"); err != nil {
+						evalErr = err
+						return mut
+					}
 				}
-
-				// Track which new fields get set in this record
-				newFieldsSetThisRecord := make(map[string]bool)
 
 				// Evaluate clauses in order - first match wins
 				clauseMatched := false
@@ -263,12 +266,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					// Check all conditions in this clause (AND logic)
 					allMatch := true
 					for _, cond := range clause.conditions {
-						fieldValue, exists := ssql.Get[any](frozen, cond.Field)
-						match := exists && applyOperator(fieldValue, cond.Operator, cond.Value)
-						if cond.Negated {
-							match = !match
-						}
-						if !match {
+						if !matchCondition(frozen, cond) {
 							allMatch = false
 							break
 						}
@@ -279,7 +277,15 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						for _, we := range clause.whereExprEvals {
 							result, err := we.eval(frozen)
 							if err != nil {
-								fmt.Fprintf(ctx.Stderr(), "Error evaluating where-expr: %v\n", err)
+								var collision *runtime.ParamCollisionError
+								var cast *ssql.CastError
+								if errors.As(err, &collision) || errors.As(err, &cast) {
+									evalErr = err // wrong for the run, not the row
+									return mut
+								}
+								if !errors.Is(err, runtime.ErrAbsent) {
+									fmt.Fprintf(ctx.Stderr(), "Error evaluating where-expr: %v\n", err)
+								}
 								allMatch = false
 								break
 							}
@@ -313,10 +319,17 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						for _, upd := range clause.updates {
 							var parsedValue any
 
+							if upd.source != "" {
+								mut = ssql.CopyField(mut, frozen, upd.field, upd.source)
+								continue
+							}
 							// Check if this is an expression or a literal
 							if upd.isExpr {
 								// Evaluate using pre-compiled expression
 								result, err := upd.exprEval(frozen)
+								if errors.Is(err, runtime.ErrAbsent) {
+									continue // no value: the field is left as it is (absent if new)
+								}
 								if err != nil {
 									evalErr = fmt.Errorf("evaluating expression for field %q: %w", upd.field, err)
 									return mut
@@ -347,11 +360,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							}
 
 							if !existsInSchema {
-								// New field - track its type for defaults
-								if _, typeKnown := newFieldTypes[upd.field]; !typeKnown {
-									newFieldTypes[upd.field] = getDefaultForValue(parsedValue)
-								}
-								newFieldsSetThisRecord[upd.field] = true
+								// New field
 								mut = applyValueToRecord(mut, upd.field, parsedValue)
 							} else {
 								// Existing field - coerce to existing type if needed
@@ -367,30 +376,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				}
 
-				// For new fields that weren't set in this record, apply defaults
-				for field, defaultVal := range newFieldTypes {
-					if !newFieldsSetThisRecord[field] {
-						// Check if field already exists in record (set by previous records processing)
-						if _, exists := ssql.Get[any](frozen, field); !exists {
-							mut = applyValueToRecord(mut, field, defaultVal)
-						}
-					}
-				}
-
-				// If no clause matched but we have new fields being introduced,
-				// we still need to add defaults for new fields
-				if !clauseMatched {
-					for field := range allSetFields {
-						if _, existsInSchema := schemaFields[field]; !existsInSchema {
-							// This is a new field - if we have a type for it, add default
-							if defaultVal, hasType := newFieldTypes[field]; hasType {
-								if _, exists := ssql.Get[any](frozen, field); !exists {
-									mut = applyValueToRecord(mut, field, defaultVal)
-								}
-							}
-						}
-					}
-				}
+				// A new field a clause did not set on this row stays ABSENT
+				// (DFC124): until 2026-09-22 exec filled it with the type's
+				// zero (false, 0, ""), which record codegen never did and the
+				// SQL lane refuses as untranslatable, so exec was the odd lane.
+				_ = clauseMatched
 
 				return mut
 			})
@@ -529,8 +519,9 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 		not        bool        // -not: the whole condition group negated
 		updates    []struct {
 			field  string
-			value  string
+			value  string // the literal, the expression, or for isCopy the source field
 			isExpr bool
+			isCopy bool // -set-field (DFC135)
 		}
 	}
 
@@ -544,7 +535,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 		uc.not = clauseNot(clause)
 
 		// Parse -if conditions (validates operators)
-		conditions, err := parseConditions(clause.Flags["-if"])
+		conditions, err := clauseConditions(clause)
 		if err != nil {
 			return err
 		}
@@ -574,7 +565,8 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 							field  string
 							value  string
 							isExpr bool
-						}{field, value, false})
+							isCopy bool
+						}{field, value, false, false})
 					}
 				}
 			}
@@ -590,7 +582,16 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				field  string
 				value  string
 				isExpr bool
-			}{se.field, se.expression, true})
+				isCopy bool
+			}{se.field, se.expression, true, false})
+		}
+		for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
+			uc.updates = append(uc.updates, struct {
+				field  string
+				value  string
+				isExpr bool
+				isCopy bool
+			}{sf.target, sf.source, false, true})
 		}
 		if uc.params, err = clauseExprParams(clause, uc.whereExprs, exprSets); err != nil {
 			return lib.WriteErrorAndExit(getCommandString(), err)
@@ -642,9 +643,9 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 			needsFrozen = true
 			break
 		}
-		// Need frozen if there are expressions
+		// Need frozen if there are expressions or field copies
 		for _, upd := range clause.updates {
-			if upd.isExpr {
+			if upd.isExpr || upd.isCopy {
 				needsFrozen = true
 				break
 			}
@@ -662,8 +663,9 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	for i, clause := range clauses {
 		indent := "\t\t"
 		codeParams = append(codeParams, exprParamsCodeParams(clause.params)...)
-		paramVars := exprParamsGoVars(clause.params)
+		paramVars := exprParamsGoVars(clause.params) // field params take the VM tier, where absence is uniform
 		paramThunk := exprParamsGoThunk(clause.params)
+		paramFields := exprParamsGoFields(clause.params)
 		if exprParamsNeedSSQL(clause.params) {
 			extraImports = append(extraImports, "github.com/rosscartlidge/ssql/v4")
 		}
@@ -684,6 +686,11 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 			for _, cond := range clause.conditions {
 				if condCount > 0 {
 					codeBody.WriteString(" && ")
+				}
+				if cond.FieldRHS {
+					codeBody.WriteString(fieldCondRecordGo(cond, "frozen"))
+					condCount++
+					continue
 				}
 				condCode, condImports, condHoisted, cerr := generateConditionCode(cond.Field, cond.Operator, cond.Value, advisoryTypeOf(advisory, cond.Field))
 				if cerr != nil {
@@ -722,7 +729,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 					needsRuntime = true
 					exprCounter++
 					varName := fmt.Sprintf("exprFilter%d", exprCounter)
-					preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExprFilter", we.Expression, paramThunk))
+					preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExprFilter", we.Expression, paramThunk, paramFields))
 					call = varName + "(frozen)"
 				}
 				if we.Negated {
@@ -746,6 +753,14 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 		// Generate update statements
 		for _, upd := range clause.updates {
 			var stmt string
+
+			if upd.isCopy {
+				// -set-field: the shared primitive keeps the source's type and
+				// its absence. The target's advisory type is the source's.
+				codeBody.WriteString(fmt.Sprintf("%smut = ssql.CopyField(mut, frozen, %q, %q)\n", indent, upd.field, upd.value))
+				noteAssign(upd.field, advisory[upd.value])
+				continue
+			}
 
 			// Check if this is an expression
 			if upd.isExpr {
@@ -777,13 +792,15 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				needsRuntime = true
 				exprCounter++
 				varName := fmt.Sprintf("exprEval%d", exprCounter)
-				preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExpr", upd.value, paramThunk))
+				preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExpr", upd.value, paramThunk, paramFields))
 
 				// Generate code to use pre-compiled expression
 				var stmtBuilder strings.Builder
 				stmtBuilder.WriteString(indent + "{\n")
 				stmtBuilder.WriteString(indent + "\tresult, err := " + varName + "(frozen)\n")
-				stmtBuilder.WriteString(indent + "\tif err != nil {\n")
+				stmtBuilder.WriteString(indent + "\tif errors.Is(err, runtime.ErrAbsent) {\n")
+				stmtBuilder.WriteString(indent + "\t\t// no value on this row: the field is left as it is\n")
+				stmtBuilder.WriteString(indent + "\t} else if err != nil {\n")
 				// Match exec: an eval error fails the pipeline loudly.
 				// (Previously the generated code silently set the field to "".)
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\tfmt.Fprintf(os.Stderr, \"Error: update -set-expr %s: %%v\\n\", err)\n", indent, upd.field))
@@ -877,7 +894,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 		imports = append(imports, "time")
 	}
 	if needsRuntime {
-		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime", "fmt", "os")
+		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime", "errors", "fmt", "os")
 	}
 	imports = dedupeImports(append(imports, extraImports...))
 
@@ -1020,8 +1037,8 @@ func bucketSetExpr(field, source, width string) (setExpr, error) {
 // updateNotNeedsCondition rejects a clause that says -not without a
 // condition to negate (NOT true would never apply its sets — a trap).
 func updateNotNeedsCondition(clause cf.Clause) error {
-	if clauseNot(clause) && clause.Flags["-if"] == nil && clause.Flags["-if-expr"] == nil {
-		return fmt.Errorf("update -not needs at least one -if or -if-expr in its clause")
+	if clauseNot(clause) && clause.Flags["-if"] == nil && clause.Flags["-if-expr"] == nil && clause.Flags["-if-field"] == nil {
+		return fmt.Errorf("update -not needs at least one -if, -if-field or -if-expr in its clause")
 	}
 	return nil
 }

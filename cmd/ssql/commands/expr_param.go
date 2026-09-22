@@ -35,12 +35,14 @@ import (
 // flag of the binary (-param-NAME) so the program is a prepared statement,
 // re-runnable with new values; generate sql renders a literal by TYPE.
 
-// ExprParam is one parsed -param.
+// ExprParam is one parsed -param, or -param-field when Field is set
+// (DFC135): NAME then views FIELD's value, cast to Type, per row.
 type ExprParam struct {
 	Name  string
 	Type  ssql.FieldType
-	Value any // int64 / float64 / string / bool / time.Time, by Type
+	Value any // int64 / float64 / string / bool / time.Time, by Type (static only)
 	raw   string
+	Field string // -param-field: the column viewed; Value and raw are unused
 }
 
 var exprParamName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -67,43 +69,98 @@ func exprParamFlag(sb *cf.SubcommandBuilder) *cf.SubcommandBuilder {
 		Accumulate().
 		Local().
 		Help("Bind NAME as a variable of this clause's expressions: -param <name> <type> <value>; the value is data, never expression text").
+		Done().
+		Flag("-param-field").
+		Arg("name").
+		Completer(cf.NoCompleter{Hint: "<identifier>"}).
+		Done().
+		Arg("type").
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "time"}}).
+		Done().
+		Arg("field").
+		FieldsFromFlag("").
+		Done().
+		Accumulate().
+		Local().
+		Help("Bind NAME, per row, to FIELD's value viewed as TYPE: -param-field <name> <type> <field> (a column whose name is not an identifier, or a typed view of one)").
 		Done()
 }
 
-// parseExprParams reads a clause's -param entries.
-func parseExprParams(flagValue any) ([]ExprParam, error) {
-	list, ok := flagValue.([]any)
-	if !ok {
-		return nil, nil
-	}
+// parseExprParams reads a clause's -param entries, and its -param-field
+// entries when given.
+func parseExprParams(flagValue any, fieldFlagValue ...any) ([]ExprParam, error) {
 	var out []ExprParam
 	seen := map[string]bool{}
-	for _, raw := range list {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _ := m["name"].(string)
-		typ, _ := m["type"].(string)
-		value, _ := m["value"].(string)
+	declare := func(flag, name, typ string) (ssql.FieldType, error) {
 		if !exprParamName.MatchString(name) || exprParamReserved[name] {
-			return nil, fmt.Errorf("-param: %q is not a valid parameter name (letters, digits and _, not starting with a digit, not an expression keyword)", name)
+			return 0, fmt.Errorf("%s: %q is not a valid parameter name (letters, digits and _, not starting with a digit, not an expression keyword)", flag, name)
 		}
 		if seen[name] {
-			return nil, fmt.Errorf("-param %s: declared twice in one clause", name)
+			return 0, fmt.Errorf("%s %s: declared twice in one clause", flag, name)
 		}
 		seen[name] = true
 		ft, err := ssql.ParseFieldType(typ)
 		if err != nil || ft == ssql.FieldTypeAuto {
-			return nil, fmt.Errorf("-param %s: type must be one of string, int, float, bool, time (got %q)", name, typ)
+			return 0, fmt.Errorf("%s %s: type must be one of string, int, float, bool, time (got %q)", flag, name, typ)
 		}
-		v, ok := ssql.CastValue(value, ft)
+		return ft, nil
+	}
+	if list, ok := flagValue.([]any); ok {
+		for _, raw := range list {
+			m, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := m["name"].(string)
+			typ, _ := m["type"].(string)
+			value, _ := m["value"].(string)
+			ft, err := declare("-param", name, typ)
+			if err != nil {
+				return nil, err
+			}
+			v, ok := ssql.CastValue(value, ft)
+			if !ok {
+				return nil, fmt.Errorf("-param %s: %q is not a valid %s", name, value, ft)
+			}
+			out = append(out, ExprParam{Name: name, Type: ft, Value: v, raw: value})
+		}
+	}
+	for _, fv := range fieldFlagValue {
+		list, ok := fv.([]any)
 		if !ok {
-			return nil, fmt.Errorf("-param %s: %q is not a valid %s", name, value, ft)
+			continue
 		}
-		out = append(out, ExprParam{Name: name, Type: ft, Value: v, raw: value})
+		for _, raw := range list {
+			m, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := m["name"].(string)
+			typ, _ := m["type"].(string)
+			field, _ := m["field"].(string)
+			ft, err := declare("-param-field", name, typ)
+			if err != nil {
+				return nil, err
+			}
+			if field == "" {
+				return nil, fmt.Errorf("-param-field %s: a field name is required", name)
+			}
+			out = append(out, ExprParam{Name: name, Type: ft, Field: field})
+		}
 	}
 	return out, nil
+}
+
+// exprParamFieldNames lists the columns -param-field entries read, for
+// first-record validation (an unknown column is loud, as for -if).
+func exprParamFieldNames(params []ExprParam) []string {
+	var out []string
+	for _, p := range params {
+		if p.Field != "" {
+			out = append(out, p.Field)
+		}
+	}
+	return out
 }
 
 // checkExprParamsUsed rejects a parameter that none of the clause's
@@ -125,26 +182,49 @@ func checkExprParamsUsed(params []ExprParam, expressions []string) error {
 	var unused []string
 	for _, p := range params {
 		if !used[p.Name] {
-			unused = append(unused, p.Name)
+			flag := "-param"
+			if p.Field != "" {
+				flag = "-param-field"
+			}
+			unused = append(unused, flag+" "+p.Name)
 		}
 	}
 	if len(unused) > 0 {
 		sort.Strings(unused)
-		return fmt.Errorf("-param %s: no expression in the clause uses it", strings.Join(unused, ", "))
+		return fmt.Errorf("%s: no expression in the clause uses it", strings.Join(unused, ", "))
 	}
 	return nil
 }
 
-// exprParamsEnv is the interpreter's binding.
+// exprParamsEnv is the interpreter's static binding (values); field
+// parameters are exprParamsFields.
 func exprParamsEnv(params []ExprParam) runtime.Params {
-	if len(params) == 0 {
-		return nil
-	}
 	m := make(map[string]any, len(params))
 	for _, p := range params {
-		m[p.Name] = p.Value
+		if p.Field == "" {
+			m[p.Name] = p.Value
+		}
 	}
 	return runtime.StaticParams(m)
+}
+
+// exprParamsFields is the interpreter's per-row binding.
+func exprParamsFields(params []ExprParam) runtime.FieldParams {
+	var out runtime.FieldParams
+	for _, p := range params {
+		if p.Field != "" {
+			if out == nil {
+				out = runtime.FieldParams{}
+			}
+			out[p.Name] = runtime.FieldParam{Field: p.Field, Type: p.Type}
+		}
+	}
+	return out
+}
+
+// compileClauseExpr compiles one expression with the clause's parameters.
+func compileClauseExpr(expression string, params []ExprParam) (func(ssql.Record) (any, error), error) {
+	return runtime.CompileExprParamsFields(expression, exprParamsEnv(params), exprParamsFields(params))
 }
 
 // exprParamsExpressions lists the expression texts of a clause for the
@@ -200,40 +280,95 @@ func (p ExprParam) goValue() string {
 	return "*" + p.varName()
 }
 
-// exprParamsCodeParams collects the flag declarations.
+// exprParamsCodeParams collects the flag declarations. A field parameter
+// is part of the program's shape, not a runtime value: it does not lift.
 func exprParamsCodeParams(params []ExprParam) []lib.CodeParam {
 	var out []lib.CodeParam
 	for _, p := range params {
-		out = append(out, p.codeParam())
+		if p.Field == "" {
+			out = append(out, p.codeParam())
+		}
 	}
 	return out
 }
 
-// exprParamsGoVars gives the native transpiler a binding per parameter.
-// Time is outside the transpiler's type lattice; an expression that uses a
-// time parameter refuses natively and takes the VM path.
+// exprParamGoType maps a declared type to the transpiler's lattice; "" for
+// time, which refuses quietly (VM tier).
+func exprParamGoType(ft ssql.FieldType) exprGoType {
+	switch ft {
+	case ssql.FieldTypeInt:
+		return exprGoInt
+	case ssql.FieldTypeFloat:
+		return exprGoFloat
+	case ssql.FieldTypeString:
+		return exprGoString
+	case ssql.FieldTypeBool:
+		return exprGoBool
+	}
+	return ""
+}
+
+// exprParamsGoVars gives the native transpiler a binding per static
+// parameter (field parameters are bound by exprParamsGoFieldVars, which
+// needs the schema).
 func exprParamsGoVars(params []ExprParam) map[string]exprGo {
-	if len(params) == 0 {
+	vars := map[string]exprGo{}
+	for _, p := range params {
+		if p.Field == "" {
+			vars[p.Name] = exprGo{Src: p.goValue(), Type: exprParamGoType(p.Type)}
+		}
+	}
+	if len(vars) == 0 {
 		return nil
 	}
-	vars := make(map[string]exprGo, len(params))
+	return vars
+}
+
+// exprParamsGoFieldVarsTyped binds the field parameters for TYPED mode
+// (a struct is never absent): the struct field when its Go type is the
+// declared type, a MustCast otherwise. Record mode leaves field parameters
+// to the VM tier, where absence is handled uniformly (runtime.ErrAbsent).
+func exprParamsGoFieldVarsTyped(vars map[string]exprGo, params []ExprParam, schema *lib.TypedSchema, recv string) map[string]exprGo {
 	for _, p := range params {
-		var t exprGoType
-		switch p.Type {
-		case ssql.FieldTypeInt:
-			t = exprGoInt
-		case ssql.FieldTypeFloat:
-			t = exprGoFloat
-		case ssql.FieldTypeString:
-			t = exprGoString
-		case ssql.FieldTypeBool:
-			t = exprGoBool
-		default:
-			// Type "" is the transpiler's cue to refuse quietly (VM tier).
+		if p.Field == "" {
+			continue
 		}
-		vars[p.Name] = exprGo{Src: p.goValue(), Type: t}
+		t := exprParamGoType(p.Type)
+		f, ok := lookupSchemaField(schema, p.Field)
+		if !ok || t == "" {
+			continue
+		}
+		if vars == nil {
+			vars = map[string]exprGo{}
+		}
+		if f.GoType == string(t) {
+			vars[p.Name] = exprGo{Src: recv + "." + f.GoName, Type: t}
+			continue
+		}
+		vars[p.Name] = exprGo{Src: fmt.Sprintf("ssql.MustCast[%s](%s.%s, ssql.FieldType%s, %q)", t, recv, f.GoName, exprFieldTypeConst(p.Type), p.Field), Type: t}
 	}
 	return vars
+}
+
+// exprFieldTypeConst renders the ssql.FieldType constant suffix.
+func exprFieldTypeConst(ft ssql.FieldType) string {
+	return strings.ToUpper(ft.String()[:1]) + ft.String()[1:]
+}
+
+// exprParamsGoFields renders the runtime.FieldParams literal for the VM
+// forms; "" when there are none.
+func exprParamsGoFields(params []ExprParam) string {
+	var parts []string
+	for _, p := range params {
+		if p.Field != "" {
+			parts = append(parts, fmt.Sprintf("%q: {Field: %q, Type: ssql.FieldType%s}", p.Name, p.Field, exprFieldTypeConst(p.Type)))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	sort.Strings(parts)
+	return "runtime.FieldParams{" + strings.Join(parts, ", ") + "}"
 }
 
 // exprParamsGoThunk renders the runtime.Params argument for the VM forms:
@@ -243,12 +378,16 @@ func exprParamsGoThunk(params []ExprParam) string {
 	if len(params) == 0 {
 		return ""
 	}
-	sorted := append([]ExprParam(nil), params...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-	parts := make([]string, len(sorted))
-	for i, p := range sorted {
-		parts[i] = strconv.Quote(p.Name) + ": " + p.goValue()
+	var parts []string
+	for _, p := range params {
+		if p.Field == "" {
+			parts = append(parts, strconv.Quote(p.Name)+": "+p.goValue())
+		}
 	}
+	if len(parts) == 0 {
+		return ""
+	}
+	sort.Strings(parts)
 	return "func() map[string]any { return map[string]any{" + strings.Join(parts, ", ") + "} }"
 }
 
@@ -256,7 +395,7 @@ func exprParamsGoThunk(params []ExprParam) string {
 // (time parsing), so the emitter can add the import.
 func exprParamsNeedSSQL(params []ExprParam) bool {
 	for _, p := range params {
-		if p.Type == ssql.FieldTypeTime {
+		if p.Type == ssql.FieldTypeTime || p.Field != "" {
 			return true
 		}
 	}
@@ -264,8 +403,17 @@ func exprParamsNeedSSQL(params []ExprParam) bool {
 }
 
 // SQL. A parameter renders as a literal of its declared type; the value
-// goes through the same quoting every string literal does.
+// goes through the same quoting every string literal does. A field
+// parameter is the column, with a CAST when its known kind differs from
+// the declared type.
 func (p ExprParam) sqlLiteral() string {
+	if p.Field != "" {
+		col := quoteIdent(p.Field)
+		if kind, ok := sqlColumnKinds[p.Field]; ok && kind == p.Type.String() {
+			return col
+		}
+		return "CAST(" + col + " AS " + mapTypeToSQL(p.Type.String()) + ")"
+	}
 	switch v := p.Value.(type) {
 	case int64:
 		return strconv.FormatInt(v, 10)
@@ -289,11 +437,11 @@ func (p ExprParam) sqlLiteral() string {
 // use of every parameter by the interpreter, not here.
 func sqlClauseParams(args []string, sep string) ([]map[string]ExprParam, error) {
 	var out []map[string]ExprParam
-	var list []any
+	var list, fieldList []any
 	flush := func() error {
 		var m map[string]ExprParam
-		if list != nil {
-			params, err := parseExprParams(list)
+		if list != nil || fieldList != nil {
+			params, err := parseExprParams(list, fieldList)
 			if err != nil {
 				return err
 			}
@@ -303,7 +451,7 @@ func sqlClauseParams(args []string, sep string) ([]map[string]ExprParam, error) 
 			}
 		}
 		out = append(out, m)
-		list = nil
+		list, fieldList = nil, nil
 		return nil
 	}
 	for i := 0; i < len(args); i++ {
@@ -313,6 +461,12 @@ func sqlClauseParams(args []string, sep string) ([]map[string]ExprParam, error) 
 				return nil, fmt.Errorf("incomplete -param")
 			}
 			list = append(list, map[string]any{"name": args[i+1], "type": args[i+2], "value": args[i+3]})
+			i += 3
+		case "-param-field":
+			if i+3 >= len(args) {
+				return nil, fmt.Errorf("incomplete -param-field")
+			}
+			fieldList = append(fieldList, map[string]any{"name": args[i+1], "type": args[i+2], "field": args[i+3]})
 			i += 3
 		case sep:
 			if err := flush(); err != nil {
@@ -329,7 +483,7 @@ func sqlClauseParams(args []string, sep string) ([]map[string]ExprParam, error) 
 // clauseExprParams parses a clause's -param flags and checks each is used
 // by one of the clause's expressions.
 func clauseExprParams(clause cf.Clause, conds []ExprCond, sets []setExpr) ([]ExprParam, error) {
-	params, err := parseExprParams(clause.Flags["-param"])
+	params, err := parseExprParams(clause.Flags["-param"], clause.Flags["-param-field"])
 	if err != nil {
 		return nil, err
 	}
@@ -341,11 +495,17 @@ func clauseExprParams(clause cf.Clause, conds []ExprCond, sets []setExpr) ([]Exp
 
 // exprVMCompileDecl renders the record-mode pre-compiled VM var: the plain
 // compile call, or the Params form when the clause has parameters.
-func exprVMCompileDecl(varName, compileFn, expression, thunk string) string {
-	if thunk == "" {
-		return fmt.Sprintf("var %s = runtime.%s(%q)", varName, compileFn, expression)
+func exprVMCompileDecl(varName, compileFn, expression, thunk, fields string) string {
+	switch {
+	case fields != "":
+		if thunk == "" {
+			thunk = "nil"
+		}
+		return fmt.Sprintf("var %s = runtime.%sParamsFields(%q, %s, %s)", varName, compileFn, expression, thunk, fields)
+	case thunk != "":
+		return fmt.Sprintf("var %s = runtime.%sParams(%q, %s)", varName, compileFn, expression, thunk)
 	}
-	return fmt.Sprintf("var %s = runtime.%sParams(%q, %s)", varName, compileFn, expression, thunk)
+	return fmt.Sprintf("var %s = runtime.%s(%q)", varName, compileFn, expression)
 }
 
 // isUnknownField reports the transpiler's unknown-field refusal, which

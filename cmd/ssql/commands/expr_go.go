@@ -898,17 +898,26 @@ func exprTierV(varPrefix, compileFn, expression string, schema *lib.TypedSchema,
 	envFn, envDecl := exprEnvConstructor(schema)
 	imports = []string{exprRuntimeImport}
 	thunk := exprParamsGoThunk(params)
+	// The typed runtime import is aliased exprvm; the FieldParams literal
+	// names the package as runtime, so spell it for the alias.
+	fields := strings.Replace(exprParamsGoFields(params), "runtime.FieldParams", "exprvm.FieldParams", 1)
 	// The hoisted var is content-addressed; the bindings are part of the
 	// content (the same text with other parameters is another predicate).
-	v := varPrefix + exprGoHash(expression+thunk)
+	v := varPrefix + exprGoHash(expression+thunk+fields)
 	var decl string
-	if thunk == "" {
-		decl = fmt.Sprintf("var %s = exprvm.%s(%q)", v, compileFn, expression)
-	} else {
-		decl = fmt.Sprintf("var %s = exprvm.%sParams(%q, %s)", v, compileFn, expression, thunk)
-		if exprParamsNeedSSQL(params) {
-			imports = append(imports, "github.com/rosscartlidge/ssql/v4")
+	switch {
+	case fields != "":
+		if thunk == "" {
+			thunk = "nil"
 		}
+		decl = fmt.Sprintf("var %s = exprvm.%sParamsFields(%q, %s, %s)", v, compileFn, expression, thunk, fields)
+	case thunk != "":
+		decl = fmt.Sprintf("var %s = exprvm.%sParams(%q, %s)", v, compileFn, expression, thunk)
+	default:
+		decl = fmt.Sprintf("var %s = exprvm.%s(%q)", v, compileFn, expression)
+	}
+	if exprParamsNeedSSQL(params) {
+		imports = append(imports, "github.com/rosscartlidge/ssql/v4")
 	}
 	return v + "(" + envFn + "(r))", imports, []string{envDecl, decl}, nil
 }

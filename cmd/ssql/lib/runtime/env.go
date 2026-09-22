@@ -48,10 +48,11 @@ func compileExprEnv(expression string, params *paramBinding) (func(map[string]an
 			_, ok := fields[field]
 			return ok
 		}
-		if err := params.apply(env, has); err != nil {
+		get := func(field string) (any, bool) { v, ok := fields[field]; return v, ok }
+		if err := params.apply(env, has, get); err != nil {
 			return nil, err
 		}
-		exprHelpers(env, has, func(field string) (any, bool) { v, ok := fields[field]; return v, ok })
+		exprHelpers(env, has, get)
 
 		result, err := expr.Run(program, env)
 		if err != nil {

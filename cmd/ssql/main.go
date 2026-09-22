@@ -13,8 +13,9 @@ import (
 // Flags that support +flag negation with arguments.
 // Boolean flags all support + negation automatically.
 var negatableArgFlags = map[string]bool{
-	"-if":      true,
-	"-if-expr": true,
+	"-if":       true,
+	"-if-expr":  true,
+	"-if-field": true,
 }
 
 // ssqlPrefixHandler interprets +flag as negation of -flag.
@@ -32,7 +33,7 @@ func ssqlPrefixHandler(flagName string, hasPlus bool, value interface{}) interfa
 	// Multi-arg flags: only -if and -if-expr support negation
 	if m, ok := value.(map[string]any); ok {
 		if !negatableArgFlags[flagName] {
-			fmt.Fprintf(os.Stderr, "Error: +%s is not supported — only +if and +if-expr support negation\n", flagName[1:])
+			fmt.Fprintf(os.Stderr, "Error: +%s is not supported — only +if, +if-field and +if-expr support negation\n", flagName[1:])
 			os.Exit(1)
 		}
 		m["_negated"] = true

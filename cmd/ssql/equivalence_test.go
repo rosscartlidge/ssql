@@ -1070,6 +1070,79 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// DFC135 -if-field: numeric field against field, int/int and the
+		// absent side (row 5 has no b) false; negation true. Golden by hand.
+		Name:     "if_field_numeric",
+		Pipeline: `{{.bin}} from csv {{.data}}/pairs.csv | {{.bin}} where -if-field a lt b | {{.bin}} include id`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1}, {"id": 4}},
+	},
+	{
+		Name:     "if_field_numeric_negated",
+		Pipeline: `{{.bin}} from csv {{.data}}/pairs.csv | {{.bin}} where +if-field a lt b | {{.bin}} include id`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 2}, {"id": 3}, {"id": 5}},
+	},
+	{
+		// The absent side: false, and its negation true (row 5 has no b).
+		Name:     "if_field_absent_side",
+		Pipeline: `{{.bin}} from csv {{.data}}/pairs_absent.csv | {{.bin}} where +if-field a lt b | {{.bin}} include id`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 2}, {"id": 5}},
+		Skip:     map[string]string{"go-typed": "a typed struct cannot hold an absent int (DFC124 §3)", "go-parallel": "a typed struct cannot hold an absent int (DFC124 §3)"},
+	},
+	{
+		// -set-field from an absent source leaves the target absent.
+		Name:     "set_field_absent_source",
+		Pipeline: `{{.bin}} from csv {{.data}}/pairs_absent.csv | {{.bin}} update -set-field a b | {{.bin}} include id a`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "a": 7}, {"id": 2, "a": 3}, {"id": 5}},
+		Skip:     map[string]string{"go-typed": "a typed struct cannot hold an absent int (DFC124 §3)", "go-parallel": "a typed struct cannot hold an absent int (DFC124 §3)"},
+	},
+	{
+		// The string operators with a FIELD as the pattern: contains,
+		// startswith, endswith, regex.
+		Name:     "if_field_text_ops",
+		Pipeline: `{{.bin}} from csv {{.data}}/pairs.csv | {{.bin}} update -set-expr c 's contains p ? 1 : 0' -set-expr st 's startsWith p ? 1 : 0' -set-expr en 's endsWith p ? 1 : 0' | {{.bin}} where -if-field s regex q | {{.bin}} include id c st en`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "c": 1, "st": 0, "en": 0}, {"id": 3, "c": 1, "st": 1, "en": 1}, {"id": 5, "c": 1, "st": 0, "en": 1}},
+	},
+	{
+		// -if-field with the string operators directly (the flag form, not
+		// the expression): same rows as above.
+		Name:     "if_field_text_ops_flags",
+		Pipeline: `{{.bin}} from csv {{.data}}/pairs.csv | {{.bin}} where -if-field s contains p -if-field s endswith p + -if-field s startswith p | {{.bin}} include id`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 2}, {"id": 3}, {"id": 5}},
+	},
+	{
+		// -set-field: copy a column (type kept), conditionally; an absent
+		// source leaves the target absent (row 5's b). Golden by hand.
+		Name:     "set_field_copy",
+		Pipeline: `{{.bin}} from csv {{.data}}/pairs.csv | {{.bin}} update -if-field a gt b -set-field a b | {{.bin}} include id a`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "a": 5}, {"id": 2, "a": 3}, {"id": 3, "a": 4}, {"id": 4, "a": 2}, {"id": 5, "a": 1}},
+	},
+	{
+		// -param-field: the same expression text with a literal and with a
+		// column bound to the same name; typed views (int column as float,
+		// text column as string). Golden by hand: a*1.5 > b, or a*a > b on
+		// the one row where s == p.
+		Name:     "param_field_literal_vs_column",
+		Pipeline: `{{.bin}} from csv {{.data}}/pairs.csv | {{.bin}} where -if-expr 'a * rate > b' -param rate float 1.5 + -if-expr 'a * rate > b && s == tag' -param-field rate float a -param-field tag string p | {{.bin}} include id`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1}, {"id": 2}, {"id": 3}, {"id": 5}},
+	},
+	{
+		// -param-field over a column whose name is not an expression
+		// identifier, and the SQL CAST when the declared type differs from
+		// the column's kind.
+		Name:     "param_field_cast_view",
+		Pipeline: `{{.bin}} from csv {{.data}}/inject.csv | {{.bin}} where -if-expr 'k >= "b"' -param-field k string 1st | {{.bin}} update -set-expr n2 'n * 2' -param-field n float id | {{.bin}} include id n2`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 2, "n2": 4}, {"id": 3, "n2": 6}, {"id": 4, "n2": 8}, {"id": 5, "n2": 10}},
+	},
+	{
 		// DFC134 §4/§6: injection strings in every value slot (-if, -param,
 		// -set) and a digit-led column name, through every lane including
 		// generate sql executed by DuckDB. The row whose note IS the attack

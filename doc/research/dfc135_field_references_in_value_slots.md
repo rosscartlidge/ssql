@@ -6,9 +6,14 @@ Last modified: 2026-09-22
 
 [Back to Index](./README.md)
 
-Status: **proposal for review (Ross, 2026-09-22: "I think I need to
-review this"). Nothing built.** Supersedes only Gap 1 of DFC101 (the
-`@field` sigil); the rest of DFC101 stands.
+Status: **BUILT 2026-09-22** (Ross: "I am convinced we should add all
+three"); §9 records what building it found. The §7 open points are resolved as proposed:
+the `-field` suffix names; all ten operators on `-if-field`; strict cast
+on `-param-field`; an absent SOURCE leaves `-set-field`'s target absent;
+DFC101's Gap 1 is superseded by this DFC, the rest of DFC101 stands.
+Honest weighting (§3.5): `-param-field` is the one expressions cannot
+replace; `-if-field` and `-set-field` are ergonomics (completion, no
+quoting, guaranteed native).
 
 ## 1. The gap
 
@@ -132,6 +137,19 @@ ssql update -set-expr diff 'actual - planned' -param-field actual float actual_t
   arithmetic and functions, with `-param` and `-param-field` as the
   slots that feed them.
 
+### 3.5 What each one buys over `-if-expr` / `-set-expr`
+
+Asked directly (Ross: "so the big win … is that we get the field
+completion?"). For `-if-field` and `-set-field`, yes, and no quoting,
+and a guaranteed native lowering; `-if-expr 'a > b'` with fixed text is
+exactly as safe, so these two are convenience. `-param-field` is
+different: a program holding fixed expression text can choose literal or
+column at build time without editing the source (the injection door);
+columns whose names are not expression identifiers (`1st`, `a.b`,
+`x-y`, `select`) become reachable; and a typed view is declared once
+instead of `float(x)` scattered through the text and re-derived per
+lane.
+
 ## 4. Lowering, five lanes
 
 | Lane | `-if-field a gt b` | `-set-field t s` | `-param-field n int c` |
@@ -189,6 +207,47 @@ slots.
 5. **DFC101 Gap 1.** Mark it `Deprecated-by: DFC135` for the sigil only;
    DFC101's main argument (keep structured flags; expressions grow) is
    unaffected and stays the decision record.
+
+## 9. What building it found (2026-09-22)
+
+Built as designed, with two departures and four pre-existing defects.
+
+Departures:
+- **Record codegen leaves `-param-field` to the VM tier** rather than
+  binding a typed `GetOr` natively: absence is a runtime property and the
+  VM is where the absent-value rule is implemented once (`runtime.ErrAbsent`).
+  Typed mode binds natively (a struct is never absent).
+- **`-if-field`'s mixed-kind rule is "false", not "loud"** (§3.1 said
+  loud): `-if` itself is silently false on `age gt abc`, and `FieldOp`
+  follows `-if`. Loudness for a numeric/text pairing would be a change to
+  `-if` too, and is a separate decision (TODO).
+
+Found and fixed, none about the new flags:
+1. **exec `update` zero-filled a new field on unmatched rows** (`false`,
+   `0`, `""`); record codegen left it absent, SQL refused the case.
+   Pre-DFC124 behaviour; exec now leaves it absent.
+2. **`generate sql` ignored an `-if-expr` written after the `-set` it
+   guards** in the same clause (conditions were snapshotted per `-set`).
+3. **`generate ssql`'s where rewrites dropped unknown flags**: the
+   canonicaliser turned `-if-expr 'k >= "b"' -param-field k string 1st`
+   into `-if k ge b`. Its structured view models `-if`/`-if-expr`/`+`
+   only; every rule using it now skips a `where` with anything else.
+4. **An absent `-param-field` column compared as nil** (`l != r` true in
+   exec, false in SQL), found by the random tester within 1,500 cases of
+   adding the field forms. Now: no value → condition false, set nothing.
+
+5. From the crash sweep (DFC133 instrument 2), on the new flags
+   themselves: `update -set-field a nosuchfield` and `-if-field a eq
+   nosuchfield` exited 0 (update validated no read fields at all), and
+   `where -param-field x x nosuchfield` exited 0 because a clause with no
+   expression was skipped before its parameters were parsed. Both loud
+   now; the sweep's create-a-field exemption is per argument, so
+   `-set-field`'s target may be new and its source must exist.
+
+Gates: nine equivalence cases in every lane (sabotage-checked: a reversed
+int comparison in `FieldOp` fails four lanes), `@name` and `@@name` as
+literals in `TestArgumentsAreNotSyntax`, the random tester drawing
+`-if-field` and `-param-field` (6,000 pipelines over four seeds agree).
 
 ## 8. References
 
