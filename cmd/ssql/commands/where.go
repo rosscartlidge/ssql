@@ -9,6 +9,7 @@ import (
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
 )
 
 // RegisterWhere registers the where subcommand
@@ -16,7 +17,7 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	// Order behavior (DFC123 §7): neither consumes nor destroys record order.
 	lib.DeclareOrder("where", lib.OrderTransparent)
 
-	cmd.Subcommand("where").
+	sub := cmd.Subcommand("where").
 		Description("Filter records based on field conditions").
 		ClauseDescription("Conditions within a clause use AND logic. Separate clauses with + for OR logic.").
 		Example("ssql from data.csv | ssql where -if age gt 18", "Filter records where age > 18").
@@ -64,7 +65,8 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Accumulate().
 		Local().
 		Help("Filter using boolean expression: -if-expr <expr> (use +if-expr to negate)").
-		Done().
+		Done()
+	exprParamFlag(sub).
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 
@@ -112,9 +114,15 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 				cd.conditions = conditions
 
-				// Parse and compile -if-expr / +if-expr conditions ONCE
-				for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
-					compiled, err := compileExpression(ec.Expression)
+				// Parse and compile -if-expr / +if-expr conditions ONCE, with
+				// the clause's -param bindings in their environment.
+				exprConds := parseExprConds(clause.Flags["-if-expr"])
+				params, err := clauseExprParams(clause, exprConds, nil)
+				if err != nil {
+					return err
+				}
+				for _, ec := range exprConds {
+					compiled, err := runtime.CompileExprParams(ec.Expression, exprParamsEnv(params))
 					if err != nil {
 						return fmt.Errorf("compiling expression %q: %w", ec.Expression, err)
 					}
@@ -172,6 +180,11 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 						for _, ee := range clause.exprEvals {
 							result, err := ee.eval(r)
 							if err != nil {
+								var collision *runtime.ParamCollisionError
+								if errors.As(err, &collision) {
+									filterErr = err // wrong for the run, not the row
+									return false
+								}
 								fmt.Fprintf(ctx.Stderr(), "Error evaluating expression: %v\n", err)
 								clauseMatches = false
 								break
@@ -329,6 +342,7 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 	var hoisted []string
 	var planNotes []string
 	var clauseConds []string
+	var params []lib.CodeParam
 	for _, clause := range clauses {
 		var ands []string
 
@@ -366,10 +380,16 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 		// -if-expr / +if-expr: transpile to native Go (Tier N); outside the
 		// subset, evaluate with the VM against a static env (Tier V) — the
 		// stage stays typed either way, so downstream stages keep their
-		// parallel forms.
-		for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+		// parallel forms. -param bindings become flags of the binary.
+		exprConds := parseExprConds(clause.Flags["-if-expr"])
+		exprParams, err := clauseExprParams(clause, exprConds, nil)
+		if err != nil {
+			return true, lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		params = append(params, exprParamsCodeParams(exprParams)...)
+		for _, ec := range exprConds {
 			var cond string
-			res, err := exprToGoBool(ec.Expression, schema, "r")
+			res, err := exprToGoBoolParams(ec.Expression, schema, "r", exprParamsGoVars(exprParams))
 			switch {
 			case err == nil:
 				cond = res.Src
@@ -377,12 +397,11 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 				hoisted = append(hoisted, res.Hoisted...)
 				planNotes = append(planNotes, fmt.Sprintf("expr %q: native", ec.Expression))
 			default:
-				var unknownField *exprUnknownFieldError
-				if errors.As(err, &unknownField) {
+				if exprIsLoud(err) {
 					return true, lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'where -if-expr': %w", err))
 				}
-				call, tvImports, tvHoisted, verr := exprTierVFilter(ec.Expression, schema)
+				call, tvImports, tvHoisted, verr := exprTierVFilterParams(ec.Expression, schema, exprParams)
 				if verr != nil {
 					// Doesn't even compile in the VM — invalid in every mode.
 					return true, lib.WriteErrorAndExit(getCommandString(),
@@ -423,6 +442,7 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 		outputVar, schema.TypeName, body, inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
+	frag.Params = params
 	frag.InputTypedSchema = schema
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = hoisted // package-level decls (hoisted regexp/VM vars), deduped by the assembler
@@ -604,8 +624,20 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map
 
 		// Process -if-expr / +if-expr conditions. parseExprConds handles the
 		// map form negated entries arrive in — a plain string type-assert
-		// silently dropped every +if-expr condition.
-		for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+		// silently dropped every +if-expr condition. -param bindings become
+		// flags of the binary, read after flag.Parse.
+		exprConds := parseExprConds(clause.Flags["-if-expr"])
+		exprParams, err := clauseExprParams(clause, exprConds, nil)
+		if err != nil {
+			return "", nil, nil, nil, nil, err
+		}
+		params = append(params, exprParamsCodeParams(exprParams)...)
+		paramVars := exprParamsGoVars(exprParams)
+		paramThunk := exprParamsGoThunk(exprParams)
+		if exprParamsNeedSSQL(exprParams) {
+			imports = append(imports, "github.com/rosscartlidge/ssql/v4")
+		}
+		for _, ec := range exprConds {
 			// Native first (Phase 4): needs advisory types, a boolean
 			// result, and no hoisted decls (the record assembler has no
 			// package-level slot for regexp vars — those stay on the VM).
@@ -613,7 +645,13 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map
 			// validates against the real first record, and mid-pipeline
 			// commands may legitimately have reshaped the rows.
 			if advisory != nil {
-				res, err := exprToGoRecord(ec.Expression, advisory, "r")
+				res, err := exprToGoRecordParams(ec.Expression, advisory, "r", paramVars)
+				if exprIsLoud(err) {
+					var unknownField *exprUnknownFieldError
+					if !errors.As(err, &unknownField) {
+						return "", nil, nil, nil, nil, err // a parameter/field collision, wrong in every mode
+					}
+				}
 				if err == nil && res.Type == exprGoBool && len(res.Hoisted) == 0 {
 					cond := res.Src
 					if ec.Negated {
@@ -636,8 +674,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map
 			}
 			exprCounter++
 			varName := fmt.Sprintf("exprFilter%d", exprCounter)
-			preCompileVars = append(preCompileVars,
-				fmt.Sprintf("var %s = runtime.MustCompileExprFilter(%q)", varName, ec.Expression))
+			preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExprFilter", ec.Expression, paramThunk))
 			call := fmt.Sprintf("%s(r)", varName)
 			if ec.Negated {
 				call = "!" + call

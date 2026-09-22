@@ -29,7 +29,22 @@ type CodeParam struct {
 	Default string `json:"default"`        // Default value from original pipeline
 	Help    string `json:"help"`           // Flag help text
 	VarName string `json:"var"`            // Go variable name used in code (e.g., "flagInput")
-	Type    string `json:"type,omitempty"` // "string" (default), "int"
+	Type    string `json:"type,omitempty"` // "string" (default), "int", "float", "bool"
+}
+
+// flagDecl renders the flag declaration line for a lifted value. Default is
+// the pipeline's literal token: emitted bare for the numeric and bool kinds
+// (it was validated as one when the command parsed it), quoted for strings.
+func (p CodeParam) flagDecl() string {
+	switch p.Type {
+	case "int":
+		return fmt.Sprintf("\t%s = flag.Int(%q, %s, %q)\n", p.VarName, p.Name, p.Default, p.Help)
+	case "float":
+		return fmt.Sprintf("\t%s = flag.Float64(%q, %s, %q)\n", p.VarName, p.Name, p.Default, p.Help)
+	case "bool":
+		return fmt.Sprintf("\t%s = flag.Bool(%q, %s, %q)\n", p.VarName, p.Name, p.Default, p.Help)
+	}
+	return fmt.Sprintf("\t%s = flag.String(%q, %q, %q)\n", p.VarName, p.Name, p.Default, p.Help)
 }
 
 // CodeFragment represents a piece of generated Go code in a pipeline
@@ -599,11 +614,7 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 	if len(allParams) > 0 {
 		code.WriteString("var (\n")
 		for _, p := range allParams {
-			if p.Type == "int" {
-				code.WriteString(fmt.Sprintf("\t%s = flag.Int(%q, %s, %q)\n", p.VarName, p.Name, p.Default, p.Help))
-			} else {
-				code.WriteString(fmt.Sprintf("\t%s = flag.String(%q, %q, %q)\n", p.VarName, p.Name, p.Default, p.Help))
-			}
+			code.WriteString(p.flagDecl())
 		}
 		code.WriteString(")\n\n")
 	}

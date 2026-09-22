@@ -47,7 +47,12 @@ func CompileExprFilter(expression string) (func(ssql.Record) bool, error) {
 	if err != nil {
 		return nil, err
 	}
+	return exprFilter(eval), nil
+}
 
+// exprFilter is the predicate view of an evaluator: false on an evaluation
+// error and on a non-boolean result.
+func exprFilter(eval func(ssql.Record) (any, error)) func(ssql.Record) bool {
 	return func(r ssql.Record) bool {
 		result, err := eval(r)
 		if err != nil {
@@ -55,7 +60,7 @@ func CompileExprFilter(expression string) (func(ssql.Record) bool, error) {
 		}
 		boolResult, ok := result.(bool)
 		return ok && boolResult
-	}, nil
+	}
 }
 
 // MustCompileExprFilter is like CompileExprFilter but panics on error.
@@ -72,15 +77,29 @@ func MustCompileExprFilter(expression string) func(ssql.Record) bool {
 // The returned function can be used repeatedly on different records.
 // The result can be any type (int, float, bool, string, etc.)
 func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
+	return compileExpr(expression, nil)
+}
+
+// exprHelpers are the functions every expression environment carries.
+func exprHelpers(env map[string]any, has func(string) bool, get func(string) (any, bool)) {
+	env["has"] = has
+	env["getOr"] = func(field string, defaultValue any) any {
+		if val, exists := get(field); exists {
+			return val
+		}
+		return defaultValue
+	}
+	env["sha256"] = hashSHA256
+	env["bucket"] = bucketFn
+	env["sha1"] = hashSHA1
+	env["md5"] = hashMD5
+	env["replaceRegex"] = replaceRegex
+}
+
+func compileExpr(expression string, params *paramBinding) (func(ssql.Record) (any, error), error) {
 	// Compile the expression once with a sample environment for type inference
 	sampleEnv := make(map[string]interface{})
-	sampleEnv["has"] = func(field string) bool { return false }
-	sampleEnv["getOr"] = func(field string, defaultValue any) any { return defaultValue }
-	sampleEnv["sha256"] = hashSHA256
-	sampleEnv["bucket"] = bucketFn
-	sampleEnv["sha1"] = hashSHA1
-	sampleEnv["md5"] = hashMD5
-	sampleEnv["replaceRegex"] = replaceRegex
+	exprHelpers(sampleEnv, func(string) bool { return false }, func(string) (any, bool) { return nil, false })
 
 	program, err := expr.Compile(expression,
 		expr.Env(sampleEnv),
@@ -110,26 +129,16 @@ func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 		for k, v := range record.All() {
 			env[k] = v
 		}
-
-		// Add helper functions that close over the record
-		env["has"] = func(field string) bool {
+		has := func(field string) bool {
 			_, exists := ssql.Get[any](record, field)
 			return exists
 		}
-
-		env["getOr"] = func(field string, defaultValue any) any {
-			if val, exists := ssql.Get[any](record, field); exists {
-				return val
-			}
-			return defaultValue
+		if err := params.apply(env, has); err != nil {
+			return nil, err
 		}
 
-		// Add hash functions
-		env["sha256"] = hashSHA256
-		env["bucket"] = bucketFn
-		env["sha1"] = hashSHA1
-		env["md5"] = hashMD5
-		env["replaceRegex"] = replaceRegex
+		// Add helper functions that close over the record
+		exprHelpers(env, has, func(field string) (any, bool) { return ssql.Get[any](record, field) })
 
 		// On first record, check that expression identifiers exist as fields or known functions
 		if !validated {

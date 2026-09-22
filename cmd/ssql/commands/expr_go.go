@@ -101,11 +101,16 @@ func exprNodeToGoWith(n ast.Node, schema *lib.TypedSchema, recv string, vars map
 // advisory map (CSV name → Go type, sampled by the source). Same walker,
 // same semantics tables — only the field emission differs.
 func exprToGoRecord(expression string, advisory map[string]string, recv string) (exprGo, error) {
+	return exprToGoRecordParams(expression, advisory, recv, nil)
+}
+
+// exprToGoRecordParams is exprToGoRecord with -param bindings.
+func exprToGoRecordParams(expression string, advisory map[string]string, recv string, params map[string]exprGo) (exprGo, error) {
 	tree, err := parser.Parse(expression)
 	if err != nil {
 		return exprGo{}, fmt.Errorf("expression %q: %w", expression, err)
 	}
-	env := &exprGoEnv{recv: recv, advisory: make(map[string]lib.TypedSchemaField, len(advisory))}
+	env := &exprGoEnv{recv: recv, advisory: make(map[string]lib.TypedSchemaField, len(advisory)), params: params}
 	for name, goType := range advisory {
 		env.advisory[strings.ToLower(name)] = lib.TypedSchemaField{Name: name, GoType: goType}
 		env.names = append(env.names, name)
@@ -118,9 +123,28 @@ func exprToGoRecord(expression string, advisory map[string]string, recv string) 
 	return res, nil
 }
 
+// exprToGoParams is exprToGo with -param bindings.
+func exprToGoParams(expression string, schema *lib.TypedSchema, recv string, params map[string]exprGo) (exprGo, error) {
+	tree, err := parser.Parse(expression)
+	if err != nil {
+		return exprGo{}, fmt.Errorf("expression %q: %w", expression, err)
+	}
+	env := newExprGoEnv(schema, recv)
+	env.params = params
+	res, err := env.node(tree.Node)
+	if err != nil {
+		return exprGo{}, fmt.Errorf("expression %q: %w", expression, err)
+	}
+	return res, nil
+}
+
 // exprToGoBool is exprToGo + "result must be bool" (for -if-expr / +if-expr).
 func exprToGoBool(expression string, schema *lib.TypedSchema, recv string) (exprGo, error) {
-	res, err := exprToGo(expression, schema, recv)
+	return exprToGoBoolParams(expression, schema, recv, nil)
+}
+
+func exprToGoBoolParams(expression string, schema *lib.TypedSchema, recv string, params map[string]exprGo) (exprGo, error) {
+	res, err := exprToGoParams(expression, schema, recv, params)
 	if err != nil {
 		return exprGo{}, err
 	}
@@ -146,6 +170,13 @@ type exprGoEnv struct {
 	vars   map[string]exprGo // extra bindings, e.g. "s" → {Src: "a.se0_s", Type: float64}
 
 	advisory map[string]lib.TypedSchemaField // record mode: lowercase name → {Name, GoType}
+
+	// params are -param bindings (DFC134 §5.3), resolved BEFORE fields: a
+	// name that is both is a loud error (silent precedence would let a new
+	// upstream column change an expression's meaning). A parameter whose
+	// type is outside the lattice (time) refuses quietly → the VM tier,
+	// where it is an ordinary env variable.
+	params map[string]exprGo
 }
 
 func newExprGoEnv(schema *lib.TypedSchema, recv string) *exprGoEnv {
@@ -195,14 +226,39 @@ func (e *exprGoEnv) known(name string) bool {
 	if _, ok := e.advisory[strings.ToLower(name)]; ok {
 		return true
 	}
+	if _, ok := e.params[name]; ok {
+		return true
+	}
 	_, ok := e.vars[name]
 	return ok
+}
+
+// param resolves a -param binding; handled=false means name is not one.
+func (e *exprGoEnv) param(name string) (res exprGo, handled bool, err error) {
+	p, ok := e.params[name]
+	if !ok {
+		return exprGo{}, false, nil
+	}
+	_, isField := e.fields[strings.ToLower(name)]
+	if !isField {
+		_, isField = e.advisory[strings.ToLower(name)]
+	}
+	if isField {
+		return exprGo{}, true, &exprLoudError{err: fmt.Errorf("parameter %s has the same name as a field of the input; rename the parameter", name)}
+	}
+	if p.Type == "" {
+		return exprGo{}, true, fmt.Errorf("parameter %q has a type outside the native subset", name)
+	}
+	return p, true, nil
 }
 
 // field resolves an identifier: schema field first (record shadows state),
 // then extra bindings. Schema fields admit only the MVP scalar types. In
 // record mode (advisory set), fields emit typed ssql.GetOr calls.
 func (e *exprGoEnv) field(name string) (exprGo, error) {
+	if res, handled, err := e.param(name); handled {
+		return res, err
+	}
 	if e.advisory != nil {
 		f, ok := e.advisory[strings.ToLower(name)]
 		if !ok {
@@ -816,31 +872,45 @@ func exprTierVValidate(expression string) error {
 // MustCompileExprFilterEnv var (false on eval error / non-bool, matching the
 // record path) applied to the schema's env constructor.
 func exprTierVFilter(expression string, schema *lib.TypedSchema) (call string, imports, hoisted []string, err error) {
-	if err := exprTierVValidate(expression); err != nil {
-		return "", nil, nil, err
-	}
-	envFn, envDecl := exprEnvConstructor(schema)
-	filterVar := "exprFilterEnv" + exprGoHash(expression)
-	decl := fmt.Sprintf("var %s = exprvm.MustCompileExprFilterEnv(%q)", filterVar, expression)
-	return filterVar + "(" + envFn + "(r))",
-		[]string{exprRuntimeImport},
-		[]string{envDecl, decl},
-		nil
+	return exprTierVFilterParams(expression, schema, nil)
+}
+
+// exprTierVFilterParams is exprTierVFilter with -param bindings: the
+// parameters ride in a thunk read after flag.Parse (runtime.Params).
+func exprTierVFilterParams(expression string, schema *lib.TypedSchema, params []ExprParam) (call string, imports, hoisted []string, err error) {
+	return exprTierV("exprFilterEnv", "MustCompileExprFilterEnv", expression, schema, params)
 }
 
 // exprTierVEval builds the Tier-V evaluation pieces for -set-expr: a hoisted
 // MustCompileExprEnv var and the call source producing (any, error).
 func exprTierVEval(expression string, schema *lib.TypedSchema) (call string, imports, hoisted []string, err error) {
+	return exprTierVEvalParams(expression, schema, nil)
+}
+
+func exprTierVEvalParams(expression string, schema *lib.TypedSchema, params []ExprParam) (call string, imports, hoisted []string, err error) {
+	return exprTierV("exprEvalEnv", "MustCompileExprEnv", expression, schema, params)
+}
+
+func exprTierV(varPrefix, compileFn, expression string, schema *lib.TypedSchema, params []ExprParam) (call string, imports, hoisted []string, err error) {
 	if err := exprTierVValidate(expression); err != nil {
 		return "", nil, nil, err
 	}
 	envFn, envDecl := exprEnvConstructor(schema)
-	evalVar := "exprEvalEnv" + exprGoHash(expression)
-	decl := fmt.Sprintf("var %s = exprvm.MustCompileExprEnv(%q)", evalVar, expression)
-	return evalVar + "(" + envFn + "(r))",
-		[]string{exprRuntimeImport},
-		[]string{envDecl, decl},
-		nil
+	imports = []string{exprRuntimeImport}
+	thunk := exprParamsGoThunk(params)
+	// The hoisted var is content-addressed; the bindings are part of the
+	// content (the same text with other parameters is another predicate).
+	v := varPrefix + exprGoHash(expression+thunk)
+	var decl string
+	if thunk == "" {
+		decl = fmt.Sprintf("var %s = exprvm.%s(%q)", v, compileFn, expression)
+	} else {
+		decl = fmt.Sprintf("var %s = exprvm.%sParams(%q, %s)", v, compileFn, expression, thunk)
+		if exprParamsNeedSSQL(params) {
+			imports = append(imports, "github.com/rosscartlidge/ssql/v4")
+		}
+	}
+	return v + "(" + envFn + "(r))", imports, []string{envDecl, decl}, nil
 }
 
 // exprTierReason renders an exprToGo refusal for a -explain plan note,

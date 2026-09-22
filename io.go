@@ -135,11 +135,14 @@ func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
 		readCSVRows(reader, cfg, func(r Record, err error) bool {
 			if err != nil {
-				var ce *CellError
-				if errors.As(err, &ce) {
-					panic(ce)
-				}
-				return false
+				// A malformed row (a bare quote in an unquoted field, a
+				// wrong field count) is an error, not the end of the file:
+				// returning false here ended the read silently, so a CSV
+				// with one bad row read as its rows before it, exit 0
+				// (DFC133 class; found 2026-09-22). The panic reaches the
+				// CLI's recover and the generated program's, which print
+				// it as an Error and exit 1, as *CellError already did.
+				panic(err)
 			}
 			return yield(r)
 		})

@@ -10,6 +10,7 @@ import (
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
 )
 
 // RegisterUpdate registers the update subcommand
@@ -17,7 +18,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	// Order behavior (DFC123 §7): neither consumes nor destroys record order.
 	lib.DeclareOrder("update", lib.OrderTransparent)
 
-	cmd.Subcommand("update").
+	sub := cmd.Subcommand("update").
 		Description("Conditionally update record fields with new values").
 		Example("ssql from users.csv | ssql update -if status eq pending -set status approved", "Update status from pending to approved").
 		Example("ssql from sales.csv | ssql update -set-expr total 'price * qty'", "Calculate total using expression").
@@ -95,7 +96,8 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Accumulate().
 		Local().
 		Help("Set field to the source timestamp snapped down to a width: -set-bucket <field> <source> <width> (1m, 5m, 1h — the same as -set-expr <field> 'bucket(<source>, \"<width>\")')").
-		Done().
+		Done()
+	exprParamFlag(sub).
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "update")
@@ -147,9 +149,20 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 				// Parse and compile -if-expr / +if-expr conditions ONCE
 				// (parseExprConds handles the negated map form — a plain
-				// string type-assert silently dropped +if-expr entries)
-				for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
-					eval, err := compileExpression(ec.Expression)
+				// string type-assert silently dropped +if-expr entries),
+				// with the clause's -param bindings in their environment.
+				exprConds := parseExprConds(clause.Flags["-if-expr"])
+				exprSets, err := clauseSetExprs(clause)
+				if err != nil {
+					return err
+				}
+				params, err := clauseExprParams(clause, exprConds, exprSets)
+				if err != nil {
+					return err
+				}
+				env := exprParamsEnv(params)
+				for _, ec := range exprConds {
+					eval, err := runtime.CompileExprParams(ec.Expression, env)
 					if err != nil {
 						return fmt.Errorf("compiling where-expr %q: %w", ec.Expression, err)
 					}
@@ -183,12 +196,8 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 				// -set-expr, and -set-bucket desugared to bucket(...):
 				// compile each expression ONCE.
-				exprSets, err := clauseSetExprs(clause)
-				if err != nil {
-					return err
-				}
 				for _, se := range exprSets {
-					eval, err := compileExpression(se.expression)
+					eval, err := runtime.CompileExprParams(se.expression, env)
 					if err != nil {
 						return fmt.Errorf("compiling expression %q: %w", se.expression, err)
 					}
@@ -515,8 +524,9 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	// Parse clauses - each clause has optional -match conditions and required -set/-set-expr operations
 	type updateClause struct {
 		conditions []Condition
-		whereExprs []ExprCond // For -if-expr / +if-expr expressions
-		not        bool       // -not: the whole condition group negated
+		whereExprs []ExprCond  // For -if-expr / +if-expr expressions
+		params     []ExprParam // -param bindings, in scope for every expression of the clause
+		not        bool        // -not: the whole condition group negated
 		updates    []struct {
 			field  string
 			value  string
@@ -582,6 +592,9 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				isExpr bool
 			}{se.field, se.expression, true})
 		}
+		if uc.params, err = clauseExprParams(clause, uc.whereExprs, exprSets); err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
 
 		if len(uc.updates) > 0 {
 			clauses = append(clauses, uc)
@@ -619,6 +632,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	exprCounter := 0
 	needsTime := false
 	needsRuntime := false
+	var codeParams []lib.CodeParam // -param bindings lifted to flags of the binary
 
 	// Check if we need frozen (for reading in conditions or evaluating expressions)
 	needsFrozen := false
@@ -647,6 +661,12 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	// Generate clause evaluation (first-match-wins)
 	for i, clause := range clauses {
 		indent := "\t\t"
+		codeParams = append(codeParams, exprParamsCodeParams(clause.params)...)
+		paramVars := exprParamsGoVars(clause.params)
+		paramThunk := exprParamsGoThunk(clause.params)
+		if exprParamsNeedSSQL(clause.params) {
+			extraImports = append(extraImports, "github.com/rosscartlidge/ssql/v4")
+		}
 
 		// Generate condition check for this clause
 		if len(clause.conditions) > 0 || len(clause.whereExprs) > 0 {
@@ -687,7 +707,11 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				}
 				var call string
 				if advisory != nil {
-					if res, err := exprToGoRecord(we.Expression, advisory, "frozen"); err == nil && res.Type == exprGoBool && len(res.Hoisted) == 0 {
+					res, err := exprToGoRecordParams(we.Expression, advisory, "frozen", paramVars)
+					if err != nil && exprIsLoud(err) && !isUnknownField(err) {
+						return lib.WriteErrorAndExit(getCommandString(), err) // parameter/field collision
+					}
+					if err == nil && res.Type == exprGoBool && len(res.Hoisted) == 0 {
 						call = res.Src
 						extraImports = append(extraImports, res.Imports...)
 						planNotes = append(planNotes, fmt.Sprintf("expr %q: native (record, advisory types)", we.Expression))
@@ -698,8 +722,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 					needsRuntime = true
 					exprCounter++
 					varName := fmt.Sprintf("exprFilter%d", exprCounter)
-					preCompileVars = append(preCompileVars,
-						fmt.Sprintf("var %s = runtime.MustCompileExprFilter(%q)", varName, we.Expression))
+					preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExprFilter", we.Expression, paramThunk))
 					call = varName + "(frozen)"
 				}
 				if we.Negated {
@@ -732,7 +755,11 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				// expressions cannot eval-error at runtime (the walker's
 				// subset is total — division by zero is +Inf).
 				if advisory != nil {
-					if res, err := exprToGoRecord(upd.value, advisory, "frozen"); err == nil && len(res.Hoisted) == 0 {
+					res, err := exprToGoRecordParams(upd.value, advisory, "frozen", paramVars)
+					if err != nil && exprIsLoud(err) && !isUnknownField(err) {
+						return lib.WriteErrorAndExit(getCommandString(), err) // parameter/field collision
+					}
+					if err == nil && len(res.Hoisted) == 0 {
 						setter := map[exprGoType]string{
 							exprGoInt: "Int", exprGoFloat: "Float", exprGoString: "String", exprGoBool: "Bool",
 						}[res.Type]
@@ -750,8 +777,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				needsRuntime = true
 				exprCounter++
 				varName := fmt.Sprintf("exprEval%d", exprCounter)
-				preCompileVars = append(preCompileVars,
-					fmt.Sprintf("var %s = runtime.MustCompileExpr(%q)", varName, upd.value))
+				preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExpr", upd.value, paramThunk))
 
 				// Generate code to use pre-compiled expression
 				var stmtBuilder strings.Builder
@@ -857,6 +883,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 
 	// Create and write fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
+	frag.Params = codeParams
 	frag.PlanNotes = planNotes
 	frag.AdvisoryTypes = newAdvisory
 	return lib.WriteCodeFragment(frag)

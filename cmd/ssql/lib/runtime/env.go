@@ -23,15 +23,12 @@ import (
 // code emits a per-schema env constructor); helpers (has/getOr, hash
 // functions) are layered on top without mutating the caller's map.
 func CompileExprEnv(expression string) (func(map[string]any) (any, error), error) {
-	sampleEnv := map[string]any{
-		"has":          func(field string) bool { return false },
-		"getOr":        func(field string, defaultValue any) any { return defaultValue },
-		"sha256":       hashSHA256,
-		"sha1":         hashSHA1,
-		"md5":          hashMD5,
-		"replaceRegex": replaceRegex,
-		"bucket":       bucketFn,
-	}
+	return compileExprEnv(expression, nil)
+}
+
+func compileExprEnv(expression string, params *paramBinding) (func(map[string]any) (any, error), error) {
+	sampleEnv := map[string]any{}
+	exprHelpers(sampleEnv, func(string) bool { return false }, func(string) (any, bool) { return nil, false })
 	program, err := expr.Compile(expression,
 		expr.Env(sampleEnv),
 		expr.AllowUndefinedVariables(),
@@ -47,21 +44,14 @@ func CompileExprEnv(expression string) (func(map[string]any) (any, error), error
 		for k, v := range fields {
 			env[k] = v
 		}
-		env["has"] = func(field string) bool {
+		has := func(field string) bool {
 			_, ok := fields[field]
 			return ok
 		}
-		env["getOr"] = func(field string, defaultValue any) any {
-			if v, ok := fields[field]; ok {
-				return v
-			}
-			return defaultValue
+		if err := params.apply(env, has); err != nil {
+			return nil, err
 		}
-		env["sha256"] = hashSHA256
-		env["sha1"] = hashSHA1
-		env["md5"] = hashMD5
-		env["replaceRegex"] = replaceRegex
-		env["bucket"] = bucketFn
+		exprHelpers(env, has, func(field string) (any, bool) { v, ok := fields[field]; return v, ok })
 
 		result, err := expr.Run(program, env)
 		if err != nil {

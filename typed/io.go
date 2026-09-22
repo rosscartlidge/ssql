@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unsafe"
+
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // timeType is cached so decoderFor doesn't allocate a reflect.Type per call.
@@ -273,21 +275,19 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	}
 }
 
-// decodeTime parses RFC3339 timestamps. Empty value → zero time.
-//
-// Note: time.Parse with a fixed layout is not the absolute fastest path
-// — a hand-rolled RFC3339 parser is ~3x faster — but it handles all
-// edge cases (timezones, fractional seconds) correctly and is the
-// natural choice for a generic library. See PERFORMANCE-NOTES.md for
-// the optimization opportunity.
+// decodeTime parses a time cell in the forms every other lane accepts
+// (ssql.ParseTime: RFC 3339, "2006-01-02 15:04:05", "2006-01-02", …). It
+// accepted RFC 3339 alone until 2026-09-22, so `from csv -type d time`
+// over a date-only column read in exec and record mode and failed in
+// typed mode. Empty cell → errEmptyCell, as for every non-string type.
 func decodeTime(off uintptr) fieldDecoder {
 	return func(p unsafe.Pointer, s string) error {
 		if s == "" {
 			return errEmptyCell
 		}
-		v, err := time.Parse(time.RFC3339, s)
-		if err != nil {
-			return err
+		v, ok := ssql.ParseTime(s)
+		if !ok {
+			return fmt.Errorf("%q is not a time", s)
 		}
 		*(*time.Time)(unsafe.Add(p, off)) = v
 		return nil

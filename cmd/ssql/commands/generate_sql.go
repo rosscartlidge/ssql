@@ -470,12 +470,14 @@ func translateFrom(q *sqlQuery, args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("from %s requires a file argument", args[0])
 		}
-		// Collect file paths — skip flags AND the values of
-		// value-taking flags (a bare `-sample 5` used to read '5' as a
-		// second file).
-		valueFlags := map[string]bool{
-			"-sample": true, "-sample-seed": true, "-last": true, "-type": true, "-t": true,
-			"-default-type": true, "-dt": true, "-source": true,
+		// Collect file paths — skip flags AND the arguments of
+		// argument-taking flags, by arity (a bare `-sample 5` used to read
+		// '5' as a second file; `-type date time` read 'time' as one until
+		// 2026-09-22, because this table said -type takes one argument).
+		// This is a copy of from's grammar (DFC115 legacy exception).
+		flagArity := map[string]int{
+			"-sample": 1, "-sample-seed": 1, "-last": 1, "-type": 2, "-t": 2,
+			"-default-type": 1, "-dt": 1, "-source": 1, cf.ArgFlag: 1,
 		}
 		var files []string
 		rest := args[1:]
@@ -484,10 +486,13 @@ func translateFrom(q *sqlQuery, args []string) error {
 			if a == "--" {
 				break
 			}
+			if a == cf.ArgFlag && i+1 < len(rest) {
+				files = append(files, rest[i+1])
+				i++
+				continue
+			}
 			if strings.HasPrefix(a, "-") {
-				if valueFlags[a] {
-					i++
-				}
+				i += flagArity[a]
 				continue
 			}
 			files = append(files, a)
@@ -596,6 +601,11 @@ func translateWhere(q *sqlQuery, args []string) error {
 		currentNot = false
 	}
 
+	clauseParams, err := sqlClauseParams(args, "+")
+	if err != nil {
+		return fmt.Errorf("where: %w", err)
+	}
+	clauseIdx := 0
 	i := 0
 	for i < len(args) {
 		switch args[i] {
@@ -605,6 +615,8 @@ func translateWhere(q *sqlQuery, args []string) error {
 		case "-invert":
 			invert = true
 			i++
+		case "-param", "-p":
+			i += 4 // read by sqlClauseParams
 		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
 				return fmt.Errorf("incomplete -if condition")
@@ -620,7 +632,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 			if i+1 >= len(args) {
 				return fmt.Errorf("incomplete -if-expr")
 			}
-			cond, err := exprToSQL(args[i+1])
+			cond, err := exprToSQLParams(args[i+1], clauseParams[clauseIdx])
 			if err != nil {
 				return fmt.Errorf("where -if-expr: %w", err)
 			}
@@ -632,6 +644,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 		case "+":
 			// OR separator between clauses
 			closeGroup()
+			clauseIdx++
 			i++
 		default:
 			i++
@@ -1725,7 +1738,8 @@ func translateUpdate(q *sqlQuery, args []string) error {
 	// valueSQL is an already-rendered SQL expression (literal or translated
 	// -set-expr), inserted verbatim into THEN/ELSE.
 	type assignment struct {
-		conds    []string // AND conditions for this clause
+		conds    []string // AND conditions of the clause itself (own; no guards)
+		clause   int      // clause index, for the first-match-wins guards
 		field    string
 		valueSQL string
 	}
@@ -1734,19 +1748,39 @@ func translateUpdate(q *sqlQuery, args []string) error {
 	currentNot := false
 	// clauseConds is the clause's condition group as the CASE arm sees
 	// it: the AND of its conditions, or NOT (…) of that under -not.
+	// update is first-match-wins: a clause applies only to rows no EARLIER
+	// clause matched. So every arm carries NOT(earlier clause) for each
+	// preceding conditional clause; an unconditional clause after those
+	// (the else) becomes conditional on none of them having matched. The
+	// CASE built per field below cannot express this on its own, because a
+	// field set only in a later clause has no WHEN arm for the earlier ones.
+	var clauseGroups []string // per clause index: its own condition group ANDed ("" = unconditional)
+	clauseIdx := 0
 	clauseConds := func() []string {
 		if !currentNot || len(currentConds) == 0 {
 			return append([]string{}, currentConds...)
 		}
 		return []string{sqlNot(strings.Join(currentConds, " AND "))}
 	}
+	closeClause := func() {
+		clauseGroups = append(clauseGroups, strings.Join(clauseConds(), " AND "))
+		currentConds = nil
+		currentNot = false
+		clauseIdx++
+	}
 
+	clauseParams, err := sqlClauseParams(args, "-")
+	if err != nil {
+		return fmt.Errorf("update: %w", err)
+	}
 	i := 0
 	for i < len(args) {
 		switch args[i] {
 		case "-not":
 			currentNot = true
 			i++
+		case "-param", "-p":
+			i += 4 // read by sqlClauseParams
 		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
 				return fmt.Errorf("incomplete -if condition in update")
@@ -1761,7 +1795,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			if i+1 >= len(args) {
 				return fmt.Errorf("incomplete -if-expr in update")
 			}
-			cond, err := exprToSQL(args[i+1])
+			cond, err := exprToSQLParams(args[i+1], clauseParams[clauseIdx])
 			if err != nil {
 				return fmt.Errorf("update -if-expr: %w", err)
 			}
@@ -1776,6 +1810,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			}
 			assignments = append(assignments, assignment{
 				conds:    clauseConds(),
+				clause:   clauseIdx,
 				field:    args[i+1],
 				valueSQL: sqlLiteralFor(args[i+1], args[i+2]),
 			})
@@ -1784,12 +1819,13 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			if i+2 >= len(args) {
 				return fmt.Errorf("incomplete -set-expr in update")
 			}
-			valueSQL, err := exprToSQL(args[i+2])
+			valueSQL, err := exprToSQLParams(args[i+2], clauseParams[clauseIdx])
 			if err != nil {
 				return fmt.Errorf("update -set-expr: %w", err)
 			}
 			assignments = append(assignments, assignment{
 				conds:    clauseConds(),
+				clause:   clauseIdx,
 				field:    args[i+1],
 				valueSQL: valueSQL,
 			})
@@ -1803,25 +1839,26 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			if err != nil {
 				return err
 			}
-			valueSQL, err := exprToSQL(se.expression)
+			valueSQL, err := exprToSQLParams(se.expression, clauseParams[clauseIdx])
 			if err != nil {
 				return fmt.Errorf("update -set-bucket: %w", err)
 			}
 			assignments = append(assignments, assignment{
 				conds:    clauseConds(),
+				clause:   clauseIdx,
 				field:    se.field,
 				valueSQL: valueSQL,
 			})
 			i += 4
 		case "-":
-			// Clause separator — reset conditions
-			currentConds = nil
-			currentNot = false
+			// Clause separator: the next clause applies only where this one did not
+			closeClause()
 			i++
 		default:
 			i++
 		}
 	}
+	closeClause()
 
 	// Group assignments by target field to build a single CASE expression per field
 	fieldCases := make(map[string][]assignment)
@@ -1845,9 +1882,24 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		// Conditional sets become WHEN arms; an unconditional set becomes the
 		// ELSE (last one wins). No conditionals at all → plain value, since
 		// `CASE ELSE x END` (no WHEN) is a SQL syntax error.
+		// A clause applies only to rows no EARLIER clause matched. CASE
+		// gives that for free when every earlier clause has an arm for this
+		// field; for an earlier conditional clause that does NOT set the
+		// field, the arm carries NOT(that clause) explicitly, so a field set
+		// only in a later or else clause is not set on rows an earlier
+		// clause claimed.
 		var whens []assignment
 		elseSQL := quoteIdent(field) // default: preserve original value
+		covered := map[int]bool{}
 		for _, c := range cases {
+			conds := append([]string{}, c.conds...)
+			for k := 0; k < c.clause && k < len(clauseGroups); k++ {
+				if !covered[k] && clauseGroups[k] != "" {
+					conds = append(conds, sqlNot(clauseGroups[k]))
+				}
+			}
+			covered[c.clause] = true
+			c.conds = conds
 			if len(c.conds) > 0 {
 				whens = append(whens, c)
 			} else {

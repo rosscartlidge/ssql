@@ -18,7 +18,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arguments are bound by count and never read as syntax. Advertised in
   `-spec-json` as `positionalFlag`.
 
+- **`-param NAME TYPE VALUE`: expression parameters** on `where` and
+  `update` (DFC134 §5.3). NAME becomes a variable of the clause's
+  `-if-expr` / `-set-expr` expressions; the value is data whatever it
+  contains, so `-if-expr 'name == who' -param who string "$INPUT"` cannot
+  be steered by `$INPUT` the way splicing it into the text can. TYPE is
+  declared (`string`, `int`, `float`, `bool`, `time`), never inferred;
+  scope is the clause; a name that is also a field, or a parameter no
+  expression uses, is an error. In every lane: the interpreter binds the
+  value; `generate go` lifts each parameter into a `-param-NAME` flag of
+  the compiled program, so the binary is a prepared statement re-runnable
+  with new values; `generate sql` renders a literal of the declared type.
+
 ### Fixed
+- **A malformed CSV row ended the read silently.** A bare `"` in an
+  unquoted field, or a row with the wrong number of fields, made
+  `from csv` return the rows before it and exit 0. It is an error now, in
+  exec and generated programs alike.
+- **`generate sql` rendered a later `update` clause as unconditional.**
+  `update -if a gt 1 -set x 2 - -set y 9` set `y` on every row; update is
+  first-match-wins, so the else-clause applies only where no earlier
+  clause matched. Each field's CASE now carries NOT(earlier clause) for an
+  earlier clause that did not set that field.
+- **`generate sql` read `from csv F -type COL time` as two files** (`-type`
+  takes two arguments; the translator's table said one).
+- **Record codegen for `from csv -type COL time` emitted `FieldTypeAuto`**
+  (a second copy of the type-name table lacked `time`), so the column
+  stayed text in that lane and time comparisons matched nothing. The copy
+  is gone; it asks `ssql.ParseFieldType`.
+- **Typed codegen's CSV reader accepted only RFC 3339 times**, so `-type
+  COL time` over a date-only column failed in typed mode and read
+  everywhere else. It now accepts the forms `ssql.ParseTime` does.
 - **A value spelled like a root flag printed a shell script.** `ssql where
   -if name eq -shell-init` (or `-field-keybinding`, …) emitted the bash
   integration script instead of filtering: `main` looked for those flags in

@@ -6,9 +6,9 @@ Last modified: 2026-09-22
 
 [Back to Index](./README.md)
 
-Status: **§5.2 (`-arg`) BUILT 2026-09-22 — autocli v4.18.0 plus the ssql
-half, see §5.2a for what building it found. §5.3 (`-param`) decided, not
-built. §5.1, §5.4, §5.5 not started.**
+Status: **§5.2 (`-arg`) and §5.3 (`-param`) BUILT 2026-09-22** — autocli
+v4.18.0 plus the ssql halves; §5.2a and §5.3a record what building each
+found. §5.1 (the shell-free runner), §5.4, §5.5 not started.
 Ross, 2026-09-20: "generating SQL safely programmatically calls for a lot
 of complex operations to ensure no SQL injection is possible. I have a
 strong feeling that ssql pipelines could be expressed as a simple schema
@@ -363,6 +363,41 @@ Rule for generated pipelines, restated: **values go in flag slots; where
 an expression is unavoidable, values go in `-param`; nothing untrusted is
 ever concatenated into expression text.** With §5.2 that leaves no slot in
 which data can become syntax.
+
+**5.3a What building it found (2026-09-22).** Built as designed on `where`
+and `update` (the two commands with `-if-expr` / `-set-expr`; `group-by`'s
+aggregation expressions are a follow-up, TODO). Shape: one
+`runtime.Params` thunk read on first evaluation, because a generated
+program's package-level vars initialise before `flag.Parse`; the same
+`paramBinding` serves the interpreter, record VM, and typed Tier-V lanes,
+and the native transpiler takes the bindings as typed variables resolved
+BEFORE fields (collision loud, time quiet → VM). The equivalence cases
+(`param_*`) pass in every lane including DuckDB, and disabling the SQL
+rendering fails all four in the duckdb lane. Found on the way, all
+pre-existing, all fixed, none about parameters:
+
+1. **A malformed CSV row ended the read silently, exit 0.** The injection
+   fixture had a bare `"`; `ReadCSVFromReader` returned false on the row
+   error. Now a panic → `Error:`, as `*CellError` already was. Also
+   caught: a ragged row.
+2. **`generate sql` rendered a later `update` clause as unconditional**
+   (first-match-wins lost when a field is set only in the else-clause).
+   Each field's CASE now carries NOT(earlier) for earlier clauses that
+   did not set it; when they did, CASE order suffices and no guard is
+   emitted.
+3. **Three copies of one table, three drifts.** `from csv -type COL time`:
+   record codegen's type-name copy lacked `time` (→ FieldTypeAuto, text
+   column, comparisons matched nothing); the SQL `from` translator's
+   flag-arity copy said `-type` takes one argument (→ `time` read as a
+   second file); typed's CSV decoder accepted RFC 3339 only (→ date-only
+   column failed in typed mode alone). DFC115 again: each copy of a
+   command's grammar drifts independently, and the equivalence gate is
+   what finds them.
+
+Pattern worth naming: the two units of this DFC found nine defects, none
+in the feature being built. Writing a case that must agree across five
+lanes on a hostile fixture is a bug-finding instrument in its own right
+(DFC133's thesis), and the hostile fixture is the discriminating input.
 
 **5.4 A policy layer over the document.** Allowed commands; file
 arguments confined to given roots (the spec already marks which arguments

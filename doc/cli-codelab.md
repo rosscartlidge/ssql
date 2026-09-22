@@ -327,6 +327,16 @@ prints the same entry at the prompt):
 ssql from employees.csv | ssql where -if-expr 'salary / age > 2500 && status == "active"' | ssql include name age salary | ssql to table
 ```
 
+When a value comes from outside (a script variable, a form field), do
+not splice it into the expression text: bind it with `-param NAME TYPE
+VALUE`, and the expression names it like a field. The value is then data
+whatever it contains, and a generated program exposes it as a flag:
+
+```bash
+CITY=SF
+ssql from employees.csv | ssql where -if-expr 'salary > floor && city == where' -param floor int 100000 -param where string "$CITY" | ssql to table
+```
+
 Operators for `-if`: `eq ne gt ge lt le contains startswith endswith regex`.
 Everything in the pipe is JSONL, so any stage can follow any other, and
 `to csv`/`to json` swap the output shape at the end:

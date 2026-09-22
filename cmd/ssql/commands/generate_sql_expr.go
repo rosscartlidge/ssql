@@ -20,10 +20,23 @@ import (
 // subset of the language with a faithful SQL equivalent and fails loudly on
 // anything else; silently emitting broken SQL is worse than refusing.
 func exprToSQL(expression string) (string, error) {
+	return exprToSQLParams(expression, nil)
+}
+
+// sqlExprParams are the -param bindings of the clause whose expression is
+// being translated: an identifier that names one renders as a literal of
+// its declared type instead of a column (DFC134 §5.3). Set for the duration
+// of one exprToSQLParams call; the translator is a tree of plain functions.
+var sqlExprParams map[string]ExprParam
+
+// exprToSQLParams is exprToSQL with a clause's -param bindings.
+func exprToSQLParams(expression string, params map[string]ExprParam) (string, error) {
 	tree, err := parser.Parse(expression)
 	if err != nil {
 		return "", fmt.Errorf("expression %q: %w", expression, err)
 	}
+	sqlExprParams = params
+	defer func() { sqlExprParams = nil }()
 	sql, err := exprNodeToSQL(tree.Node)
 	if err != nil {
 		return "", fmt.Errorf("expression %q: %w — rewrite with SQL-translatable constructs, or use -if", expression, err)
@@ -61,6 +74,9 @@ func exprNodeToSQL(node ast.Node) (string, error) {
 	case *ast.NilNode:
 		return "NULL", nil
 	case *ast.IdentifierNode:
+		if p, ok := sqlExprParams[n.Value]; ok {
+			return p.sqlLiteral(), nil
+		}
 		return quoteIdent(n.Value), nil
 	case *ast.IntegerNode:
 		return strconv.Itoa(n.Value), nil

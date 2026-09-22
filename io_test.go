@@ -2,6 +2,7 @@ package ssql
 
 import (
 	"bytes"
+	"errors"
 	"iter"
 	"maps"
 	"os"
@@ -1474,5 +1475,33 @@ func TestTeeFile(t *testing.T) {
 	}
 	if b, err := os.ReadFile(empty); err != nil || len(b) != 0 {
 		t.Errorf("empty tee: err=%v len=%d", err, len(b))
+	}
+}
+
+// A malformed CSV row is an error, not the end of the file. ReadCSVFromReader
+// used to return quietly at the first bad row, so a file with a bare quote in
+// an unquoted field read as the rows before it and exit 0 (DFC133 class,
+// found 2026-09-22 while writing an injection fixture).
+func TestReadCSVFromReaderMalformedRowIsLoud(t *testing.T) {
+	for name, data := range map[string]string{
+		"bare quote":              "a,b\n1,x\"y\n2,z\n",
+		"ragged row":              "a,b\n1,2\n3\n",
+		"bare quote in first row": "a,b\n1,x\"y\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				err, ok := r.(error)
+				var re *RowError
+				if !ok || !errors.As(err, &re) || !strings.Contains(err.Error(), "failed to read CSV row") {
+					t.Fatalf("want a panic carrying a *RowError, got %v", r)
+				}
+			}()
+			n := 0
+			for range ReadCSVFromReader(strings.NewReader(data)) {
+				n++
+			}
+			t.Fatalf("read %d rows and stopped quietly", n)
+		})
 	}
 }

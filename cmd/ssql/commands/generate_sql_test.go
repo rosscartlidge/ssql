@@ -1003,3 +1003,31 @@ func TestCollapseArgFlag(t *testing.T) {
 		t.Errorf("trailing -arg: got %q, %v", got, err)
 	}
 }
+
+// update is first-match-wins: a later clause applies only to rows no
+// earlier clause matched. When a field is set only in a later clause, the
+// CASE for it must carry NOT(earlier clause); when every earlier clause
+// sets the field too, CASE's own order suffices and no guard is emitted.
+// The translator rendered a later unconditional clause as unconditional
+// (found 2026-09-22 via the -param equivalence cases).
+func TestUpdateFirstMatchWinsGuards(t *testing.T) {
+	q := &sqlQuery{}
+	if err := translateUpdate(q, []string{"-if", "a", "gt", "1", "-set", "x", "2", "-", "-set", "y", "9"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "* REPLACE (CASE WHEN a > 1 THEN 2 ELSE x END AS x, CASE WHEN NOT COALESCE((a > 1), FALSE) THEN 9 ELSE y END AS y)"
+	if len(q.selectExprs) != 1 || q.selectExprs[0] != want {
+		t.Errorf("got %v\nwant %s", q.selectExprs, want)
+	}
+
+	q = &sqlQuery{}
+	if err := translateUpdate(q, []string{"-if", "a", "gt", "5", "-set", "x", "1", "-", "-if", "b", "gt", "1", "-set", "y", "7", "-", "-set", "x", "3"}); err != nil {
+		t.Fatal(err)
+	}
+	// x: clause 0 sets it, clause 1 does not (guard), clause 2 is the else after both.
+	// y: only clause 1 sets it, guarded by NOT(clause 0).
+	want = "* REPLACE (CASE WHEN a > 5 THEN 1 WHEN NOT COALESCE((b > 1), FALSE) THEN 3 ELSE x END AS x, CASE WHEN b > 1 AND NOT COALESCE((a > 5), FALSE) THEN 7 ELSE y END AS y)"
+	if len(q.selectExprs) != 1 || q.selectExprs[0] != want {
+		t.Errorf("got %v\nwant %s", q.selectExprs, want)
+	}
+}

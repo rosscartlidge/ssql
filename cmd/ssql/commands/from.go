@@ -703,18 +703,15 @@ func sampleTypesEvery(sample []ssql.Record, fields []string) bool {
 	return true
 }
 
-// capitalizeFieldType converts "string" to "String", "int" to "Int", etc.
+// capitalizeFieldType renders a -type name as the suffix of the
+// ssql.FieldType constant generated code uses. It asks ssql.ParseFieldType,
+// the one table of type names; its own copy of that table lacked "time"
+// for a release (DFC128 D1), so `from csv -type ts time` generated
+// FieldTypeAuto and record-mode time comparisons silently matched nothing.
 func capitalizeFieldType(typeName string) string {
-	switch strings.ToLower(typeName) {
-	case "string", "str", "text":
-		return "String"
-	case "int", "integer", "int64":
-		return "Int"
-	case "float", "float64", "double", "number":
-		return "Float"
-	case "bool", "boolean":
-		return "Bool"
-	default:
+	ft, err := ssql.ParseFieldType(typeName)
+	if err != nil || ft == ssql.FieldTypeAuto {
 		return "Auto"
 	}
+	return strings.ToUpper(ft.String()[:1]) + ft.String()[1:]
 }

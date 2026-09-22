@@ -206,6 +206,20 @@ func readCSVRows(reader io.Reader, cfg CSVConfig, yield func(Record, error) bool
 	readRows(csvReader, cfg, yield)
 }
 
+// RowError is a row of delimited text that could not be read as a row: a
+// bare quote in an unquoted field, a wrong number of fields, an
+// unterminated quote. Row is the 1-based data row. It is the malformed-row
+// counterpart of *CellError (a cell not of its column's type) and of the
+// JSON Lines reader's *LineError: the unsafe readers panic with it, the
+// safe readers yield it.
+type RowError struct {
+	Row int64
+	Err error
+}
+
+func (e *RowError) Error() string { return fmt.Sprintf("failed to read CSV row %d: %v", e.Row, e.Err) }
+func (e *RowError) Unwrap() error { return e.Err }
+
 // rowReader is the row source readRows types and parses: encoding/csv's
 // Reader, or the delimited-text splitter behind ReadTSV. Read returns
 // io.EOF at the end; a returned slice may be reused by the next Read
@@ -248,7 +262,7 @@ func readRows(csvReader rowReader, cfg CSVConfig, yield func(Record, error) bool
 		}
 		rowIndex++
 		if err != nil {
-			if !yield(Record{}, fmt.Errorf("failed to read CSV row %d: %w", rowIndex, err)) {
+			if !yield(Record{}, &RowError{Row: rowIndex, Err: err}) {
 				return
 			}
 			continue
@@ -341,7 +355,7 @@ func readRows(csvReader rowReader, cfg CSVConfig, yield func(Record, error) bool
 		}
 		rowIndex++
 		if err != nil {
-			if !yield(Record{}, fmt.Errorf("failed to read CSV row %d: %w", rowIndex, err)) {
+			if !yield(Record{}, &RowError{Row: rowIndex, Err: err}) {
 				return
 			}
 			continue

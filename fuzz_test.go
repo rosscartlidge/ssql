@@ -88,9 +88,13 @@ func FuzzReadCSV(f *testing.F) {
 		read := func() (n int, width int) {
 			defer func() {
 				if r := recover(); r != nil {
+					// The two documented failures: a cell not of its column's
+					// type, and a row that is not a row (a malformed row used
+					// to END the read quietly; since 2026-09-22 it is loud).
 					var ce *CellError
-					if e, ok := r.(error); !ok || !errors.As(e, &ce) {
-						panic(r) // anything but the documented CellError is a finding
+					var re *RowError
+					if e, ok := r.(error); !ok || !(errors.As(e, &ce) || errors.As(e, &re)) {
+						panic(r) // anything else is a finding
 					}
 					n, width = -1, -1
 				}

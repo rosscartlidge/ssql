@@ -1021,6 +1021,55 @@ var equivCases = []EquivCase{
 		Skip:     map[string]string{"datafusion": "DataFusion's CSV reader infers 02134 as Int64 — the defect ssql had until DFC133; DuckDB and Postgres agree with ssql"},
 	},
 	{
+		// `from csv -type COL time` in RECORD codegen emitted FieldTypeAuto
+		// (its own copy of the type-name table lacked "time"), so the column
+		// stayed a string and a time comparison matched nothing in that lane
+		// only (found 2026-09-22). Golden by hand from dated.csv.
+		Name:     "from_csv_type_time_all_lanes",
+		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv -type date time | {{.bin}} where -if-expr 'date >= since' -param since time 2026-01-15 | {{.bin}} group-by -count n`,
+		Ordered:  false,
+	},
+	{
+		// DFC134 §5.3: -param NAME TYPE VALUE binds a VARIABLE of the clause's
+		// expressions. Typed float and int, two parameters shared by one
+		// expression, native transpile in both Go lanes, literal in SQL.
+		// Golden by hand: pop*1.5 > 15 → pop > 10.
+		Name:     "param_float_int_where",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if-expr 'pop * rate > lo' -param rate float 1.5 -param lo int 15 | {{.bin}} sort id | {{.bin}} include id pop`,
+		Ordered:  true,
+		Golden: []map[string]any{{"id": 1, "pop": 31}, {"id": 2, "pop": 29}, {"id": 4, "pop": 11}, {"id": 5, "pop": 37},
+			{"id": 7, "pop": 20}, {"id": 8, "pop": 14}, {"id": 11, "pop": 25}},
+	},
+	{
+		// §3.3's attack string as a PARAMETER: it is compared, not parsed,
+		// in every lane including the SQL one (where it must also survive
+		// SQL quoting). Golden: nothing is called that, so only Oslo.
+		Name:     "param_string_attack_is_data",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if-expr 'city == who' -param who string "x' || 1=1 || '" + -if-expr 'city == who' -param who string Oslo | {{.bin}} include id city`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "city": "Oslo"}},
+	},
+	{
+		// Clause scope: the same name bound differently in two update
+		// clauses, shared by -if-expr and -set-expr within a clause; a bool
+		// parameter; first-match-wins (the SQL translator used to render a
+		// later unconditional clause as unconditional, found 2026-09-22).
+		// Golden by hand.
+		Name:     "param_clause_scope_update",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} where -if-expr 'id <= 4' | {{.bin}} update -if-expr 'pop > lo && big' -param lo int 20 -param big bool true -set-expr pop 'pop * k' -param k int 2 - -set-expr city 'tag' -param tag string small | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{{"id": 1, "city": "Oslo", "pop": 62}, {"id": 2, "city": "Delhi", "pop": 58},
+			{"id": 3, "city": "small", "pop": 10}, {"id": 4, "city": "small", "pop": 11}},
+	},
+	{
+		// A time parameter: outside the Go transpiler's lattice, so the Go
+		// lanes take the VM tier with a parsed time; SQL renders a TIMESTAMP
+		// literal. Golden by hand from dated.csv.
+		Name:     "param_time_where",
+		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv | {{.bin}} cast -type date time | {{.bin}} where -if-expr 'date >= since' -param since time 2026-01-15 | {{.bin}} group-by -count n`,
+		Ordered:  false,
+	},
+	{
 		// DFC134 §5.2: -arg VALUE is a positional whatever VALUE looks like.
 		// Sort DESCENDING by a column called "-desc", keep columns called
 		// "-desc" and "-generate" (bare, the latter flips include into code

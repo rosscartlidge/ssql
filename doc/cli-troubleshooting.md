@@ -408,7 +408,17 @@ the data really contains such placeholders, `ssql cast -type score int
 -invalid missing` leaves them empty (never `0`) and reports the count.
 An empty cell is already missing and is never an error.
 
-### Issue 12: A column or file whose name starts with `-` or `+`
+### Issue 12: "parameter X has the same name as a field" / "-param X: no expression in the clause uses it"
+
+`-param NAME TYPE VALUE` binds NAME as a variable of the clause's
+expressions. Two things are refused on purpose: a name that is also a
+column of the input (rename the parameter; silently preferring either
+would let a new upstream column change your expression), and a parameter
+that no `-if-expr` or `-set-expr` in the same clause mentions (usually a
+typo in the expression). Parameters are clause-scoped: one written before
+`+` or `-` is not visible after it.
+
+### Issue 13: A column or file whose name starts with `-` or `+`
 
 A bare argument that begins with `-` or `+` is read as a flag, and a bare
 `-` or `+` separates clauses, so `ssql include -total` fails with "unknown

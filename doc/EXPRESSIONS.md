@@ -391,6 +391,41 @@ when it shares a function's name. The ssql helper names (`has`, `getOr`,
 `bucket`, `sha256`, `sha1`, `md5`, `replaceRegex`) are the one
 exception: a field with one of those names is shadowed by the helper.
 
+## Parameters: Values That Are Never Expression Text
+
+An expression is source text, so a value spliced into it is parsed as
+code: `-if-expr "name == \"$USER\""` with `USER='x" || true || "'` matches
+every row. That is SQL injection with another grammar. `-param NAME TYPE
+VALUE` binds NAME as a **variable** of the clause's expressions instead;
+the value is data, whatever it contains:
+
+```bash
+ssql from orders.csv | ssql where  -if-expr 'name == who'          -param who string "$USER"
+ssql from orders.csv | ssql update -set-expr total 'price * rate'  -param rate float 1.1
+ssql from orders.csv | ssql where  -if-expr 'ts >= since'          -param since time 2026-03-01
+```
+
+- **Typed, never inferred.** TYPE is one of `string`, `int`, `float`,
+  `bool`, `time`; a VALUE that is not of TYPE is an error. `string 12` is
+  the text `"12"`, `int 007` is 7.
+- **Clause scope.** Every expression in the clause sees every `-param`
+  written in it (`-if-expr` and `-set-expr` share them); another clause
+  may bind the same name to another value:
+  `where -if-expr 'n > lo' -param lo int 5 + -if-expr 'n > lo' -param lo int 50`.
+- **Errors, not precedence.** A parameter named like a field of the
+  input is an error (a new upstream column must not change what an
+  expression means), and so is a parameter no expression in the clause
+  uses.
+- **Every lane.** The interpreter binds the value; `generate go` lifts
+  each parameter into a flag of the compiled program, `-param-NAME`, so
+  the binary is a prepared statement you re-run with new values
+  (`./report -param-since 2026-06-01`); `generate sql` renders a literal
+  of the declared type.
+
+Rule for programs that build pipelines: **values go in flag slots
+(`-if FIELD OP VALUE`, `-param`), never into expression text.**
+[DFC134](research/dfc134_pipelines_as_data.md) has the reasoning.
+
 ## Common Patterns
 
 ### 1. Data Validation

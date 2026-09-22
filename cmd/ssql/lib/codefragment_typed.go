@@ -227,11 +227,7 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	if len(allParams) > 0 {
 		code.WriteString("var (\n")
 		for _, p := range allParams {
-			if p.Type == "int" {
-				fmt.Fprintf(&code, "\t%s = flag.Int(%q, %s, %q)\n", p.VarName, p.Name, p.Default, p.Help)
-			} else {
-				fmt.Fprintf(&code, "\t%s = flag.String(%q, %q, %q)\n", p.VarName, p.Name, p.Default, p.Help)
-			}
+			code.WriteString(p.flagDecl())
 		}
 		code.WriteString(")\n\n")
 	}

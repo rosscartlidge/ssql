@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -55,6 +54,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 
 	var clauses []updateClause
 	var exprImports []string
+	var params []lib.CodeParam
 	var hoisted []string
 	var planNotes []string
 	tierVSets := 0
@@ -83,10 +83,22 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		}
 
 		// -if-expr / +if-expr: native transpile (Tier N), else VM with a
-		// static env (Tier V) — either way the stage stays typed.
-		for _, ec := range parseExprConds(clause.Flags["-if-expr"]) {
+		// static env (Tier V) — either way the stage stays typed. -param
+		// bindings (in scope for the -set-expr family too) become flags.
+		exprConds := parseExprConds(clause.Flags["-if-expr"])
+		exprSets, err := clauseSetExprs(clause)
+		if err != nil {
+			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		exprParams, err := clauseExprParams(clause, exprConds, exprSets)
+		if err != nil {
+			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		params = append(params, exprParamsCodeParams(exprParams)...)
+		paramVars := exprParamsGoVars(exprParams)
+		for _, ec := range exprConds {
 			var src string
-			res, err := exprToGoBool(ec.Expression, in, "r")
+			res, err := exprToGoBoolParams(ec.Expression, in, "r", paramVars)
 			switch {
 			case err == nil:
 				src = res.Src
@@ -94,12 +106,11 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				hoisted = append(hoisted, res.Hoisted...)
 				planNotes = append(planNotes, fmt.Sprintf("expr %q: native", ec.Expression))
 			default:
-				var unknownField *exprUnknownFieldError
-				if errors.As(err, &unknownField) {
+				if exprIsLoud(err) {
 					return true, "", lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'update -if-expr': %w", err))
 				}
-				call, tvImports, tvHoisted, verr := exprTierVFilter(ec.Expression, in)
+				call, tvImports, tvHoisted, verr := exprTierVFilterParams(ec.Expression, in, exprParams)
 				if verr != nil {
 					return true, "", lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'update -if-expr' %q: %w", ec.Expression, verr))
@@ -133,14 +144,10 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		// EXISTING coercible columns (the result gets typed at runtime by a
 		// MustCoerce* helper). A new field from an untranspilable expression
 		// has no knowable Go type — record fallback.
-		exprSets, err := clauseSetExprs(clause)
-		if err != nil {
-			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
-		}
 		for _, se := range exprSets {
 			field, expression := se.field, se.expression
 			{
-				res, err := exprToGo(expression, in, "r")
+				res, err := exprToGoParams(expression, in, "r", paramVars)
 				if err == nil {
 					uc.sets = append(uc.sets, setOp{field: field, expr: &res})
 					exprImports = append(exprImports, res.Imports...)
@@ -148,8 +155,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 					planNotes = append(planNotes, fmt.Sprintf("expr %q: native", expression))
 					continue
 				}
-				var unknownField *exprUnknownFieldError
-				if errors.As(err, &unknownField) {
+				if exprIsLoud(err) {
 					return true, "", lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'update -set-expr': %w", err))
 				}
@@ -160,7 +166,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				if _, ok := exprCoerceFunc(f.GoType); !ok {
 					return false, fmt.Sprintf("-set-expr %s %q: column type %s has no Tier-V coercion", field, expression, f.GoType), nil
 				}
-				call, tvImports, tvHoisted, verr := exprTierVEval(expression, in)
+				call, tvImports, tvHoisted, verr := exprTierVEvalParams(expression, in, exprParams)
 				if verr != nil {
 					return true, "", lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'update -set-expr' %q: %w", expression, verr))
@@ -358,6 +364,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 	serialCode := fmt.Sprintf("%s := typed.Select(%s)(%s)", outputVar, closure, inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
+	frag.Params = params
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = derived
 	frag.StructDefs = append(defs, hoisted...) // + hoisted regexp/VM vars, deduped by the assembler
