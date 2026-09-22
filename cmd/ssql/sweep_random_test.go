@@ -186,6 +186,24 @@ func genTable(rng *rand.Rand) *randTable {
 
 func pick(rng *rand.Rand, xs []string) string { return xs[rng.Intn(len(xs))] }
 
+// pos writes a positional either bare or in its flag form (-arg VALUE,
+// DFC134 §5.2), half and half: the form a program emits must mean the same
+// as the one a person types in every lane, the SQL one included.
+func pos(rng *rand.Rand, v string) string {
+	if rng.Intn(2) == 0 {
+		return v
+	}
+	return "-arg " + v
+}
+
+func posAll(rng *rand.Rand, vs []string) string {
+	out := make([]string, len(vs))
+	for i, v := range vs {
+		out[i] = pos(rng, v)
+	}
+	return strings.Join(out, " ")
+}
+
 // ---- pipelines ----
 
 // genPipeline draws 1–4 stages, tracking the current columns and their
@@ -268,7 +286,7 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 					newKind[name] = map[bool]string{true: "int", false: "string"}[fn == "count-distinct"]
 				}
 			}
-			st = "group-by " + key + " " + strings.Join(aggs, " ")
+			st = "group-by " + pos(rng, key) + " " + strings.Join(aggs, " ")
 			cols, kind, grouped = newCols, newKind, true
 		case 5: // include a subset
 			if len(cols) < 3 {
@@ -280,14 +298,14 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 					keep = append(keep, f)
 				}
 			}
-			st = "include " + strings.Join(keep, " ")
+			st = "include " + posAll(rng, keep)
 			cols = keep
 		case 6: // exclude one
 			if len(cols) < 3 {
 				continue
 			}
 			i := 1 + rng.Intn(len(cols)-1)
-			st = "exclude " + cols[i]
+			st = "exclude " + pos(rng, cols[i])
 			cols = slices.Delete(slices.Clone(cols), i, i+1)
 		case 7: // positional, only on the unique id so ties cannot matter
 			if grouped || !slices.Contains(cols, "id") {
@@ -295,9 +313,9 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 			}
 			nrow := 1 + rng.Intn(4)
 			if rng.Intn(2) == 0 {
-				st = fmt.Sprintf("sort %sid | ssql limit %d", pick(rng, []string{"", "-desc "}), nrow)
+				st = fmt.Sprintf("sort %s%s | ssql limit %s", pick(rng, []string{"", "-desc "}), pos(rng, "id"), pos(rng, fmt.Sprint(nrow)))
 			} else {
-				st = fmt.Sprintf("top %s%d -field id", pick(rng, []string{"", "-asc "}), nrow)
+				st = fmt.Sprintf("top %s%s -field id", pick(rng, []string{"", "-asc "}), pos(rng, fmt.Sprint(nrow)))
 			}
 		case 8: // cast int → float (the one cast every engine agrees on)
 			var ints []string

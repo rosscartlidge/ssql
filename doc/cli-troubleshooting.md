@@ -408,6 +408,24 @@ the data really contains such placeholders, `ssql cast -type score int
 -invalid missing` leaves them empty (never `0`) and reports the count.
 An empty cell is already missing and is never an error.
 
+### Issue 12: A column or file whose name starts with `-` or `+`
+
+A bare argument that begins with `-` or `+` is read as a flag, and a bare
+`-` or `+` separates clauses, so `ssql include -total` fails with "unknown
+flag" and `ssql include name -generate` does something else entirely.
+Write the argument with `-arg`, which every command accepts:
+
+```bash
+ssql from -arg -weird.csv | ssql include -arg name -arg -total | ssql sort -arg -total -desc
+```
+
+`-arg VALUE` is exactly the bare argument, in order, whatever VALUE looks
+like. **Programs that build pipelines from data should write every
+positional this way**, so that no value can be read as a flag. Values of
+ordinary flags (`where -if name eq -x`) never needed it: a flag's arguments
+are taken by count. `generate sql` does not yet translate such names and
+says so; direct execution, `generate go` and `generate ssql` do.
+
 ---
 
 ## jq Debugging Patterns

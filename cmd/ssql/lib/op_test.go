@@ -2,6 +2,7 @@ package lib
 
 import (
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -93,4 +94,25 @@ func TestDeclareOrderRejectsUnknown(t *testing.T) {
 		}
 	}()
 	DeclareOrder("bogus", "sideways")
+}
+
+// StripGenerateFlag removes the flag, never a positional carried by -arg
+// (DFC134 §5.2: a column really can be called "-generate"). Before this the
+// recorded Op of `exclude -arg -generate` ended in a dangling "-arg", and
+// every consumer that replayed it failed or, worse, misread it.
+func TestStripGenerateFlag(t *testing.T) {
+	tests := []struct{ in, want []string }{
+		{[]string{"name", "-generate"}, []string{"name"}},
+		{[]string{"-g", "name"}, []string{"name"}},
+		{[]string{"-arg", "-generate"}, []string{"-arg", "-generate"}},
+		{[]string{"-arg", "-g", "-generate"}, []string{"-arg", "-g"}},
+		{[]string{"-arg", "-arg", "-generate"}, []string{"-arg", "-arg"}},
+		{[]string{"-arg"}, []string{"-arg"}},
+		{nil, []string{}},
+	}
+	for _, tt := range tests {
+		if got := StripGenerateFlag(tt.in); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("StripGenerateFlag(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
 }

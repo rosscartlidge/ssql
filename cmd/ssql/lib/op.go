@@ -119,17 +119,34 @@ func DeclaredOrder(kind string) string {
 // carrying a non-empty Command: a command's continuation fragments
 // (e.g. group-by's second fragment) pass command == "" and stay
 // Op-less, exactly as they are Command-less — one stage, one Op.
+// StripGenerateFlag returns args without the -generate / -g flag, which
+// the generation context implies. An element that is the VALUE of
+// autocli's -arg is a positional, never that flag (a column really can be
+// called "-generate": DFC134 §5.2), and is kept. Known gap, in TODO.md: a
+// flag ARGUMENT spelled -generate (`where -if name eq -generate`) is still
+// dropped, because telling it apart needs the command's arities.
+func StripGenerateFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-arg" && i+1 < len(args) {
+			out = append(out, a, args[i+1])
+			i++
+			continue
+		}
+		if a == "-generate" || a == "-g" {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 func opFromProcessArgs() *Op {
 	if len(os.Args) < 2 {
 		return nil
 	}
-	op := &Op{Kind: os.Args[1]}
-	for _, a := range os.Args[2:] {
-		if a == "-generate" || a == "-g" {
-			continue
-		}
-		op.Argv = append(op.Argv, a)
-	}
+	op := &Op{Kind: os.Args[1], Argv: StripGenerateFlag(os.Args[2:])}
 	op.Order = OrderForArgv(op.Kind, op.Argv)
 	return op
 }

@@ -6,9 +6,9 @@ Last modified: 2026-09-22
 
 [Back to Index](./README.md)
 
-Status: **exploration — nothing built; three experiments run (§3); the
-two grammar questions are decided (§5.2 `-arg`, §5.3 `-param`, Ross
-2026-09-22).**
+Status: **§5.2 (`-arg`) BUILT 2026-09-22 — autocli v4.18.0 plus the ssql
+half, see §5.2a for what building it found. §5.3 (`-param`) decided, not
+built. §5.1, §5.4, §5.5 not started.**
 Ross, 2026-09-20: "generating SQL safely programmatically calls for a lot
 of complex operations to ensure no SQL injection is possible. I have a
 strong feeling that ssql pipelines could be expressed as a simple schema
@@ -255,6 +255,52 @@ probes become permanent cases (a CSV with columns `-generate`, `-desc`,
 `-`, `+`, `--` through `include`, `sort`, `exclude`, `group-by`), and
 DFC133's random tester gains hostile column names, which exercises every
 command's positional slot for free.
+
+**5.2a What building it found (2026-09-22).** autocli's half was a day's
+work and went as designed; ssql's interpreter needed *no* change (it reads
+parsed positionals from autocli). Everything below was found by writing the
+hostile-column equivalence cases (`hostile.csv`: columns `-generate`,
+`-desc`, `+x`, `-`) and watching lanes disagree. Each is a consumer that
+re-reads argv by hand, which is DFC115's thesis restated as a security
+property: **every second reading of the arguments is a place where data
+can become syntax.**
+
+1. **§3.1 was not entirely true.** `ssql where -if name eq -shell-init`
+   printed the bash completion script: `main` scanned *every* argument for
+   its root flags. A flag slot is safe from autocli's parser, but not from
+   code that looks at `os.Args` before the parser does. Fixed (first
+   argument only); `TestArgumentsAreNotSyntax` now feeds every root flag,
+   `-generate`, `-arg`, `--` and both separators through a flag slot.
+2. **`generate ssql`'s optimiser produced a wrong result.** Its sort reader
+   took the KEY `-desc` for the direction flag and fused `sort -arg name
+   -arg -desc | limit 2` (ascending, two keys) into `top 2 -field name`.
+   Because the optimiser runs ahead of `generate go`, four of five lanes
+   were wrong. The reader now understands `-arg` and fuses only what `top`
+   can express (one key, one clause, descending). Gate:
+   `hostile_names_two_key_sort_is_not_top`, watched failing.
+3. **`generate sql` silently dropped the column and the ORDER BY.** Its
+   translators tell a positional from a flag by a leading dash. `-arg` with
+   an ordinary value is collapsed to the bare form (so the program-emitted
+   form costs no backend: `arg_form_equals_bare_form`, all lanes, and the
+   random tester now writes half its positionals as `-arg`); a value that
+   would be misread is **refused**. Expressing it needs the translators to
+   take parsed positionals from the `Op` (the DFC115 legacy exception).
+4. **Generation mode corrupted its own record.** The `-generate` stripper
+   removed the *value* in `exclude -arg -generate`, leaving a dangling
+   `-arg` in the fragment. One `lib.StripGenerateFlag` now serves `Op` and
+   command string. Still open: a flag ARGUMENT spelled `-generate` (`where
+   -if name eq -generate`) is dropped from the record, because telling it
+   apart needs arities; the clean fix is for autocli to hand back the
+   classified argv rather than ssql re-deriving it.
+
+Also a bonus: `ssql from -arg csv` reads a file called `csv` (bare, that is
+the `csv` subcommand), so `-arg` removes the data-vs-command-name ambiguity
+as well.
+
+Not done yet: the UIs that write pipeline text (the explore builder, serve's
+grid) still emit bare positionals, so a hostile column name chosen in a UI
+produces a wrong command line; they should emit `-arg` when the name needs
+it. TODO.md.
 
 **5.3 Parameters for expressions: real variables, clause scope, declared
 types (DECIDED, Ross 2026-09-22).**

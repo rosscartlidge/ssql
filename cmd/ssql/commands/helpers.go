@@ -494,24 +494,14 @@ func lastNamedCommand(fragments []*lib.CodeFragment) string {
 // Returns something like "ssql from data.csv" or "ssql where -if age gt 18"
 // Properly quotes arguments that contain shell special characters
 func getCommandString() string {
-	// Filter out -generate and -g flags
-	var args []string
-	skipNext := false
-	for i, arg := range os.Args {
-		if skipNext {
-			skipNext = false
-			continue
-		}
-		if arg == "-generate" || arg == "-g" {
-			continue
-		}
-		// For the binary name, use just "ssql" instead of full path
-		if i == 0 {
-			args = append(args, "ssql")
-		} else {
-			// Quote the argument if it needs quoting for shell safety
-			args = append(args, ssql.ShellQuote(arg))
-		}
+	if len(os.Args) == 0 {
+		return ""
+	}
+	// For the binary name, use just "ssql" instead of full path
+	args := []string{"ssql"}
+	for _, arg := range lib.StripGenerateFlag(os.Args[1:]) {
+		// Quote the argument if it needs quoting for shell safety
+		args = append(args, ssql.ShellQuote(arg))
 	}
 	return strings.Join(args, " ")
 }

@@ -143,7 +143,10 @@ func main() {
 	// autocli, not here; the const-script ones (keybindings)
 	// are intercepted before autocli. WriteString (not fmt.Print) because the
 	// bash bodies contain literal %s that vet would flag as Printf directives.
-	for _, a := range os.Args[1:] {
+	// Root flags: only the FIRST argument can be one. Scanning every
+	// argument made a VALUE spelled like one (`where -if name eq
+	// -shell-init`) print the script instead of filtering (DFC134).
+	for _, a := range os.Args[1:min(2, len(os.Args))] {
 		// -shell-init: emit EVERYTHING in one eval (completion + every script).
 		if a == "-shell-init" || a == "--shell-init" {
 			os.Stdout.WriteString(buildRootCommand().GenerateCompletionScript())

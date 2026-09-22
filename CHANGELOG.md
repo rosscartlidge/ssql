@@ -5,6 +5,40 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`-arg VALUE`, the flag form of a positional argument, on every
+  command** (autocli v4.18.0, DFC134 §5.2). A bare argument beginning with
+  `-` or `+` is read as a flag, so a column called `-generate` switched
+  `include` into code generation and a column called `-desc` could not be
+  sorted by. `ssql include -arg name -arg -generate`, `ssql sort -arg
+  -desc -desc`, `ssql from -arg -weird.csv` now work. Programs that build
+  pipelines from data should write every positional this way: a flag's
+  arguments are bound by count and never read as syntax. Advertised in
+  `-spec-json` as `positionalFlag`.
+
+### Fixed
+- **A value spelled like a root flag printed a shell script.** `ssql where
+  -if name eq -shell-init` (or `-field-keybinding`, …) emitted the bash
+  integration script instead of filtering: `main` looked for those flags in
+  every argument. Only the first argument can be one now.
+- **`generate ssql` turned an ascending two-key sort into a descending
+  `top`** when the second key was a column called `-desc` (`sort -arg name
+  -arg -desc | limit 2` became `top 2 -field name`); since the optimiser
+  runs ahead of `generate go`, every generated lane was wrong. The sort
+  reader now understands `-arg`, and fuses only a single-key, single-clause
+  descending sort (a multi-key `sort -desc a b | limit N` is no longer
+  fused either: `top` cannot express the tie-break).
+- **`generate sql` silently dropped a positional given with `-arg`** when
+  it began with `-` or `+` (`include -arg name -arg -desc` produced `SELECT
+  name`). Ordinary values through `-arg` translate as the bare form; names
+  the translators cannot express are refused with an error.
+- **Generation mode corrupted the recorded stage** of `exclude -arg
+  -generate`: the `-generate` stripper removed the VALUE and left a dangling
+  `-arg`. One shared `lib.StripGenerateFlag` now serves both the fragment's
+  `Op` and its command string.
+
 ## [4.103.0] - 2026-09-20
 
 ### Added

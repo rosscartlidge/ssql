@@ -536,18 +536,34 @@ func parseJoinCmd(cmd *pipelineCmd) {
 	cmd.JoinIsProcessSub = strings.HasPrefix(cmd.JoinFile, "/dev/fd/")
 }
 
+// parseSortCmd reads a sort stage for ruleSortLimitToTop, which may only
+// fire on the one shape `top` can express: a single key, a single clause,
+// descending. Anything else (a second key, a clause separator, an argument
+// it does not recognise) leaves SortField empty so the rule cannot fire.
+// Every flag of sort is boolean, so the only element that consumes the
+// next one is autocli's -arg, whose VALUE is a field whatever it looks
+// like (DFC134 §5.2): `sort -arg name -arg -desc` is an ASCENDING two-key
+// sort, which the old reading turned into `top -field name`.
 func parseSortCmd(cmd *pipelineCmd) {
-	for _, arg := range cmd.RawArgs {
-		switch arg {
-		case "-desc", "-d":
+	var fields []string
+	simple := true
+	for i := 0; i < len(cmd.RawArgs); i++ {
+		switch arg := cmd.RawArgs[i]; {
+		case arg == cf.ArgFlag && i+1 < len(cmd.RawArgs):
+			i++
+			fields = append(fields, cmd.RawArgs[i])
+		case arg == "-desc" || arg == "-d":
 			cmd.SortDesc = true
-		case "-asc", "-a":
+		case arg == "-asc" || arg == "-a":
 			// default
+		case strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "+"):
+			simple = false // a clause separator, or a flag this reader does not know
 		default:
-			if !strings.HasPrefix(arg, "-") && cmd.SortField == "" {
-				cmd.SortField = arg
-			}
+			fields = append(fields, arg)
 		}
+	}
+	if simple && len(fields) == 1 {
+		cmd.SortField = fields[0]
 	}
 }
 

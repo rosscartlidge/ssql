@@ -296,12 +296,41 @@ func stageArgs(frag *lib.CodeFragment) []string {
 	return parseCommandArgs(frag.Command)
 }
 
+// collapseArgFlag rewrites the flag form of a positional (`-arg VALUE`,
+// autocli's ArgFlag, DFC134 §5.2) to the bare form the translators below
+// understand. They tell positionals from flags by a leading dash, which is
+// exactly the reading -arg exists to prevent, so a VALUE that would be
+// misread (leading - or +, or a clause separator) is REFUSED rather than
+// silently dropped from the query. Expressing those needs the translators
+// to take parsed positionals from the Op instead of re-reading argv (DFC115
+// legacy exception; TODO.md).
+func collapseArgFlag(args []string) ([]string, error) {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != cf.ArgFlag || i+1 >= len(args) {
+			out = append(out, args[i])
+			continue
+		}
+		v := args[i+1]
+		if strings.HasPrefix(v, "-") || strings.HasPrefix(v, "+") {
+			return nil, fmt.Errorf("generate sql cannot yet express the argument %q given with %s (a name beginning with - or +); "+
+				"generate go and direct execution handle it", v, cf.ArgFlag)
+		}
+		out = append(out, v)
+		i++
+	}
+	return out, nil
+}
+
 func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.CodeFragment) error {
 	if frag.Command == "" {
 		return nil // skip empty commands (e.g., Aggregate fragment from group-by)
 	}
 
-	args := stageArgs(frag)
+	args, err := collapseArgFlag(stageArgs(frag))
+	if err != nil {
+		return err
+	}
 	if len(args) < 2 {
 		return nil
 	}
@@ -311,7 +340,6 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 	if needsWrap(q, name) {
 		wrapAsSubquery(q)
 	}
-	var err error
 	switch name {
 	case "from":
 		err = translateFrom(q, args[2:])
@@ -1223,7 +1251,10 @@ func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
 		if bodyFrag.Command == "" {
 			continue
 		}
-		args := stageArgs(bodyFrag)
+		args, err := collapseArgFlag(stageArgs(bodyFrag))
+		if err != nil {
+			return "" // the caller reports a side it cannot build
+		}
 		if len(args) < 2 {
 			continue
 		}

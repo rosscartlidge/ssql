@@ -1021,6 +1021,47 @@ var equivCases = []EquivCase{
 		Skip:     map[string]string{"datafusion": "DataFusion's CSV reader infers 02134 as Int64 — the defect ssql had until DFC133; DuckDB and Postgres agree with ssql"},
 	},
 	{
+		// DFC134 §5.2: -arg VALUE is a positional whatever VALUE looks like.
+		// Sort DESCENDING by a column called "-desc", keep columns called
+		// "-desc" and "-generate" (bare, the latter flips include into code
+		// generation). Golden is hand-written from the fixture.
+		Name:     "hostile_names_include_sort",
+		Pipeline: `{{.bin}} from csv {{.data}}/hostile.csv | {{.bin}} sort -arg -desc -desc | {{.bin}} include -arg name -arg -desc -arg -generate`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "amy", "-desc": 9, "-generate": 1}, {"name": "cal", "-desc": 7, "-generate": 3},
+			{"name": "bob", "-desc": 5, "-generate": 2}, {"name": "dee", "-desc": 1, "-generate": 4}},
+		Skip: map[string]string{"duckdb": "generate sql refuses a positional beginning with - or + loudly (its translators re-read argv by leading dash; TODO.md, DFC134 §5.2)"},
+	},
+	{
+		// The generate-ssql optimiser read the KEY "-desc" as the descending
+		// flag and fused this ASCENDING two-key sort + limit into
+		// `top 2 -field name` (dee, cal). Golden = the two smallest names.
+		Name:     "hostile_names_two_key_sort_is_not_top",
+		Pipeline: `{{.bin}} from csv {{.data}}/hostile.csv | {{.bin}} sort -arg name -arg -desc | {{.bin}} limit 2 | {{.bin}} include -arg name`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"name": "amy"}, {"name": "bob"}},
+		Skip:     map[string]string{"duckdb": "generate sql refuses a positional beginning with - or + loudly (its translators re-read argv by leading dash; TODO.md, DFC134 §5.2)"},
+	},
+	{
+		// Separators and a plus-prefixed name as data, through exclude; and
+		// a flag slot (-field) holding a hostile name after the optimiser
+		// DOES fuse (single key, descending): top 2 by "-desc".
+		Name:     "hostile_names_exclude_then_top",
+		Pipeline: `{{.bin}} from csv {{.data}}/hostile.csv | {{.bin}} exclude -arg - -arg +x -arg -generate | {{.bin}} sort -arg -desc -desc | {{.bin}} limit 2`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"name": "amy", "-desc": 9}, {"name": "cal", "-desc": 7}},
+		Skip:     map[string]string{"duckdb": "generate sql refuses a positional beginning with - or + loudly (its translators re-read argv by leading dash; TODO.md, DFC134 §5.2)"},
+	},
+	{
+		// -arg with ordinary values is the bare form exactly, in EVERY lane
+		// including the SQL ones (which collapse it): the form a program
+		// emits must not cost it a backend.
+		Name:     "arg_form_equals_bare_form",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} sort -arg pop -desc | {{.bin}} include -arg city -arg pop | {{.bin}} limit -arg 3`,
+		Ordered:  true,
+	},
+	{
 		// DFC133 random differential. An aggregate over NO values has no
 		// value — not 0 (Avg did) and not "" (Min/Max/Median did: a present
 		// string the next `where` compared, so group b matched `m le 2`).

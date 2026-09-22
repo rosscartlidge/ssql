@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -976,5 +977,29 @@ func TestTranslateResampleSQLTimeColumn(t *testing.T) {
 	}
 	if !strings.Contains(numeric, "SELECT __grid.__g AS ts") {
 		t.Errorf("numeric grid output changed:\n%s", numeric)
+	}
+}
+
+// The SQL translators tell positionals from flags by a leading dash, so
+// -arg VALUE is collapsed to the bare form when that reading is right and
+// REFUSED when it is not: before this, `include -arg name -arg -desc`
+// silently produced SELECT name.
+func TestCollapseArgFlag(t *testing.T) {
+	got, err := collapseArgFlag([]string{"ssql", "sort", "-arg", "pop", "-desc", "-arg", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"ssql", "sort", "pop", "-desc", ""}; !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	for _, hostile := range []string{"-desc", "-", "+", "+x", "--", "-arg"} {
+		_, err := collapseArgFlag([]string{"ssql", "include", "-arg", "name", "-arg", hostile})
+		if err == nil || !strings.Contains(err.Error(), strconv.Quote(hostile)) {
+			t.Errorf("hostile positional %q: want a refusal naming it, got %v", hostile, err)
+		}
+	}
+	// A trailing -arg is left for the command's own parser to reject.
+	if got, err := collapseArgFlag([]string{"ssql", "sort", "-arg"}); err != nil || len(got) != 3 {
+		t.Errorf("trailing -arg: got %q, %v", got, err)
 	}
 }

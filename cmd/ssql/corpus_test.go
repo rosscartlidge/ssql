@@ -121,6 +121,12 @@ func corpusData(t *testing.T) string {
 			// every row.
 			// Zero-padded identifiers: text, in every lane (DFC133).
 			"zero_padded.csv": "id,zip,part\n1,02134,007\n2,90210,120\n3,00501,045\n",
+			// Column names that ARE syntax when written bare: a real flag of
+			// include/sort (-generate, -desc), both clause separators, and a
+			// plus-prefixed name. Reachable only through -arg (DFC134 §5.2).
+			// Shuffled, distinct values, and name order != -desc order, so a
+			// misread key or direction diverges.
+			"hostile.csv": "name,-generate,-desc,+x,-\ncal,3,7,q,k\namy,1,9,p,m\nbob,2,5,r,l\ndee,4,1,s,j\n",
 			// cast: text holding numbers written as ints and floats, booleans
 			// in several spellings, and values that are NOT of the type.
 			"castable.csv":   "id,score,flag\n1,10,yes\n2,2.9,off\n3,-7,1\n4,0.5,TRUE\n",
