@@ -1070,6 +1070,20 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// DFC134 §4/§6: injection strings in every value slot (-if, -param,
+		// -set) and a digit-led column name, through every lane including
+		// generate sql executed by DuckDB. The row whose note IS the attack
+		// string is selected, and only it; nothing is dropped, nothing is
+		// commented out. Golden by hand.
+		Name:     "sql_injection_strings_are_data",
+		Pipeline: `{{.bin}} from csv {{.data}}/inject.csv | {{.bin}} where -if note eq "'; DROP TABLE t; --" + -if-expr 'note == who' -param who string "x' OR '1'='1" + -if note contains "%_" | {{.bin}} update -set 1st "it's -- fine */" | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 2, "note": "'; DROP TABLE t; --", "1st": "it's -- fine */"},
+			{"id": 3, "note": "x' OR '1'='1", "1st": "it's -- fine */"},
+			{"id": 4, "note": "50%_off", "1st": "it's -- fine */"}},
+	},
+	{
 		// DFC134 §5.2: -arg VALUE is a positional whatever VALUE looks like.
 		// Sort DESCENDING by a column called "-desc", keep columns called
 		// "-desc" and "-generate" (bare, the latter flips include into code

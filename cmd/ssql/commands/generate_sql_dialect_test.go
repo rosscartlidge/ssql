@@ -112,7 +112,7 @@ func TestDialectDuckDBUnchanged(t *testing.T) {
 		"ssql group-by dept -median salary med -first name f -collect level lv -arg-max name salary top -mode level m -string-agg name , names",
 		"ssql exclude m",
 	)
-	wantAll(t, sql, "(dialect: duckdb)", "FROM 'data.csv' USING SAMPLE 5 ROWS (reservoir)", "regexp_matches(name, '^A')",
+	wantAll(t, sql, "(dialect: duckdb)", "FROM read_csv('data.csv', header=true, quote='\"', escape='\"', delim=',') USING SAMPLE 5 ROWS (reservoir)", "regexp_matches(name, '^A')",
 		"median(salary)", "first(name)", "LIST(level)", "arg_max(name, salary)", "mode(level)", "string_agg(name, ',')", "* EXCLUDE (m)")
 	wantNone(t, sql, `"dept"`, "AS __q", "\\copy")
 }

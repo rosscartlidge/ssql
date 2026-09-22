@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -120,10 +122,9 @@ type randTable struct {
 
 func (tb *randTable) csv() string {
 	var b strings.Builder
-	b.WriteString(strings.Join(tb.cols, ",") + "\n")
-	for _, r := range tb.rows {
-		b.WriteString(strings.Join(r, ",") + "\n")
-	}
+	w := csv.NewWriter(&b)
+	w.Write(tb.cols)
+	w.WriteAll(tb.rows)
 	return b.String()
 }
 
@@ -139,22 +140,41 @@ var (
 	randInts    = []string{"0", "1", "-1", "2", "3", "7", "10", "100", "-5", "9007199254740993"}
 	randFloats  = []string{"0.5", "1.5", "2.0", "-0.25", "3.75", "10.0", "0.1", "100.5"}
 	randStrings = []string{"a", "b", "ab", "abc", "Oslo", "lima", "x y", "12", "007", "é", "A", "zz", "a_b", "50%"}
-	randBools   = []string{"true", "false"}
+	// randHostile are values that are syntax in some grammar between the
+	// document and the engine: SQL quoting and comments, shell quoting, CSV
+	// quoting, LIKE metacharacters, expr-lang operators. DFC134's claim is
+	// that none of them can be anything but a value; this is where it is
+	// tested at volume, in every literal slot and every cell.
+	randHostile = []string{`'`, `''`, `'; DROP TABLE t; --`, `x' OR '1'='1`, `--`, `/* c */`, `"`, `a"b`, `\`, `%`, `_`, `a,b`, `$1`, `${x}`, `x" || true || "`, `;`, `NULL`, `null`, `1e3`, `0x1`}
+	// randHostileNames are column names that need quoting in SQL and are
+	// still plain words to a shell: reserved words, a dash, a dot, a digit
+	// first. (A name beginning with - or + is left to the -arg cases: the
+	// SQL translators refuse it loudly, DFC134 §5.2a.3.)
+	randHostileNames = []string{"select", "from", "where", "order", "group", "x-y", "a.b", "1st", "Mixed", "ünï", "s"}
+	randBools        = []string{"true", "false"}
 )
 
 // genTable: 3–10 rows over id (unique, never null) plus one column of each
 // kind, with NULLs weighted in — including, sometimes, the whole first row
 // and a whole column — and duplicate keys so group-by has groups.
 func genTable(rng *rand.Rand) *randTable {
-	tb := &randTable{cols: []string{"id", "k", "n", "f", "s", "b"},
-		kind: map[string]string{"id": "int", "k": "int", "n": "int", "f": "float", "s": "string", "b": "bool"}}
+	sName := "s"
+	if rng.Intn(3) == 0 {
+		sName = pick(rng, randHostileNames)
+	}
+	tb := &randTable{cols: []string{"id", "k", "n", "f", sName, "b"},
+		kind: map[string]string{"id": "int", "k": "int", "n": "int", "f": "float", sName: "string", "b": "bool"}}
+	pool := randStrings
+	if rng.Intn(3) == 0 {
+		pool = append(append([]string{}, randStrings...), randHostile...)
+	}
 	nrows := 3 + rng.Intn(8)
 	nullCol := -1
 	if rng.Intn(6) == 0 {
 		nullCol = 2 + rng.Intn(4) // n, f, s or b entirely NULL
 	}
 	for i := 0; i < nrows; i++ {
-		row := []string{strconv.Itoa(i + 1), strconv.Itoa(1 + rng.Intn(3)), pick(rng, randInts), pick(rng, randFloats), pick(rng, randStrings), pick(rng, randBools)}
+		row := []string{strconv.Itoa(i + 1), strconv.Itoa(1 + rng.Intn(3)), pick(rng, randInts), pick(rng, randFloats), pick(rng, pool), pick(rng, randBools)}
 		for c := 1; c < len(row); c++ {
 			if c == nullCol || rng.Intn(5) == 0 || (i == 0 && rng.Intn(3) == 0) {
 				row[c] = ""
@@ -180,6 +200,22 @@ func genTable(rng *rand.Rand) *randTable {
 		if !has {
 			tb.rows[len(tb.rows)-1][c] = map[string]string{"int": "4", "float": "4.5", "string": "q", "bool": "true"}[tb.kind[tb.cols[c]]]
 		}
+	}
+	// The string column must LOOK like text to both engines: a column whose
+	// only values are "12" and "1e3" is an int/float column to ssql's
+	// inference and to DuckDB's, and the generator's later string
+	// assignment to it is then a type error, not a finding.
+	sc := 4
+	textual := false
+	for _, r := range tb.rows {
+		if v := r[sc]; v != "" {
+			if _, err := strconv.ParseFloat(strings.TrimPrefix(v, "0x"), 64); err != nil && strings.ToLower(v) != "true" && strings.ToLower(v) != "false" {
+				textual = true
+			}
+		}
+	}
+	if !textual {
+		tb.rows[len(tb.rows)-1][sc] = "q"
 	}
 	return tb
 }
@@ -252,7 +288,7 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 			if tgt == "id" || !condOK(f) {
 				continue
 			}
-			st = "update " + genCond(rng, f, kind[f]) + " -set " + tgt + " " + genLiteral(rng, kind[tgt])
+			st = "update " + genCond(rng, f, kind[f]) + " -set " + tgt + " " + randQuote(genLiteral(rng, kind[tgt]))
 		case 4: // group-by
 			if grouped || len(cols) < 3 {
 				continue
@@ -344,9 +380,18 @@ func genCond(rng *rand.Rand, f, k string) string {
 	case "bool":
 		return fmt.Sprintf("%s %s %s %s", flag, f, pick(rng, []string{"eq", "ne"}), pick(rng, randBools))
 	default:
+		if exprParamName.MatchString(f) && !exprKeyword[f] && rng.Intn(3) == 0 {
+			// The same comparison as an expression with the value bound by
+			// -param (DFC134 §5.3): the value must be data in every lane.
+			op := pick(rng, []string{"==", "!="})
+			return fmt.Sprintf("%s %s -param who string %s", strings.Replace(flag, "if", "if-expr", 1), randQuote(f+" "+op+" who"), randQuote(genLiteral(rng, k)))
+		}
 		return fmt.Sprintf("%s %s %s %s", flag, f, pick(rng, []string{"eq", "ne", "contains", "startswith", "endswith"}), randQuote(genLiteral(rng, k)))
 	}
 }
+
+var exprParamName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var exprKeyword = map[string]bool{"select": false, "from": false, "and": true, "or": true, "not": true, "in": true, "nil": true, "true": true, "false": true, "let": true, "if": true, "else": true}
 
 func genLiteral(rng *rand.Rand, k string) string {
 	switch k {
@@ -356,6 +401,9 @@ func genLiteral(rng *rand.Rand, k string) string {
 		return pick(rng, []string{"0", "0.5", "1.5", "2", "10"})
 	case "bool":
 		return pick(rng, randBools)
+	}
+	if rng.Intn(3) == 0 {
+		return pick(rng, randHostile)
 	}
 	return pick(rng, []string{"a", "b", "ab", "Oslo", "x y", "12", "A", "z"})
 }

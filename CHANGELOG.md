@@ -5,6 +5,35 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Injection fuzz** (DFC134 §6): the random differential tester now
+  draws SQL-injection strings (apostrophes, comment markers, statement
+  terminators, LIKE metacharacters, shell and CSV quoting) as cell values
+  and in every literal slot (`-if`, `-set`, `-param`), and SQL-hostile
+  column names (reserved words, dashes, dots, a leading digit), running
+  the generated SQL in DuckDB against the interpreter. Equivalence case
+  `sql_injection_strings_are_data` pins the property in every lane.
+
+### Fixed
+- **Generated Go could be broken by a value containing `*/`.** The
+  program's header repeats the pipeline inside a block comment; a `-set`
+  value `fine */` ended the comment and the rest compiled as code. The
+  sequence is now split in the header.
+- **`generate sql`: `contains`/`startswith`/`endswith` with `%`, `_` or
+  `\` in the value matched the wrong rows.** The pattern escaped them
+  with a backslash but declared no `ESCAPE`, and DuckDB has no default
+  escape character; `contains '%'` matched a literal backslash. `ESCAPE
+  '\'` is emitted and a backslash in the value is escaped too.
+- **`generate sql`: DuckDB's CSV sniffer took an apostrophe as the quote
+  character.** A cell `'; DROP TABLE t; --` merged two rows into one. The
+  generated `read_csv` now pins `quote='"', escape='"'` and the
+  delimiter; types are still inferred.
+- **`generate sql`: a column name with a leading digit or non-ASCII
+  letters was emitted bare** (`SELECT 1st` is the literal 1 aliased
+  `st`). `quoteIdent` quotes anything that is not a plain identifier.
+
 ## [4.104.0] - 2026-09-22
 
 ### Added

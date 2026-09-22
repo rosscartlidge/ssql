@@ -127,6 +127,10 @@ func corpusData(t *testing.T) string {
 			// Shuffled, distinct values, and name order != -desc order, so a
 			// misread key or direction diverges.
 			"hostile.csv": "name,-generate,-desc,+x,-\ncal,3,7,q,k\namy,1,9,p,m\nbob,2,5,r,l\ndee,4,1,s,j\n",
+			// SQL-injection strings as VALUES and as a column name that needs
+			// quoting: apostrophes, a comment marker, a statement terminator,
+			// LIKE metacharacters. Every lane must treat them as data.
+			"inject.csv": "id,note,1st\n1,plain,a\n2,\"'; DROP TABLE t; --\",b\n3,\"x' OR '1'='1\",c\n4,50%_off,d\n5,\"it's\",e\n",
 			// cast: text holding numbers written as ints and floats, booleans
 			// in several spellings, and values that are NOT of the type.
 			"castable.csv":   "id,score,flag\n1,10,yes\n2,2.9,off\n3,-7,1\n4,0.5,TRUE\n",

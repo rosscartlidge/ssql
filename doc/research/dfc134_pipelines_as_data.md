@@ -490,9 +490,23 @@ all on 2026-09-22.
   unsafe string underneath it to get wrong".
 - **Does `generate sql` undo it?** It emits SQL text from pipeline
   arguments, so it is itself a SQL builder and must quote correctly
-  (`escapeSQL`, `quoteIdent`; DFC133's fuzzing covers the expression
-  translator, not yet the statement as a whole). Worth a targeted fuzz:
-  adversarial field names and values through `generate sql`, executed.
+  (`escapeSQL`, `quoteIdent`, `quoteFile`, `escapeLike`). **Answered
+  2026-09-22 (Ross: "so can we create safe SQL from our json?")**: the
+  random tester now draws injection strings as cell values and in every
+  literal slot, plus SQL-hostile column names, and runs the SQL in
+  DuckDB against exec. First run found four defects, none of them an
+  injection in the sense of a value becoming a statement, all of them a
+  value or name mis-rendered: `1st` emitted bare (`SELECT 1st` = `1 AS
+  st`); DuckDB's sniffer taking `'` as the CSV quote character (fixed by
+  pinning the dialect in `read_csv`); LIKE patterns escaped without an
+  `ESCAPE` clause (DuckDB has no default, so `contains '%'` matched a
+  backslash); and, from the equivalence case, a `-set` value containing
+  `*/` ending the generated Go program's header comment so the rest
+  compiled as code. After the fixes: 6,500 pipelines over four seeds,
+  no disagreement. The answer is yes, with the property resting on those
+  four quoting functions, which the fuzz now exercises at volume. The
+  identifier half is bounded by §5.2a.3 (names beginning with `-`/`+`
+  are refused by the SQL lane, not mis-rendered).
 
 ## 7. References
 

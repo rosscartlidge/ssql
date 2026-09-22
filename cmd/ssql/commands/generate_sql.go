@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -133,6 +134,8 @@ type sqlQuery struct {
 	offset       string
 	sampled      bool     // FROM already carries a USING SAMPLE clause
 	comments     []string // original ssql commands
+	csvSource    string   // DuckDB: the single CSV/TSV file FROM reads, for from -last's ordered re-read
+	csvDelim     byte
 
 	// columns tracks the current output field names, seeded from the source
 	// CSV/TSV header and advanced by each stage's schemaOp (the same rules
@@ -509,17 +512,21 @@ func translateFrom(q *sqlQuery, args []string) error {
 			case args[0] == "csv", args[0] != "tsv" && strings.HasSuffix(strings.ToLower(files[0]), ".csv"):
 				q.columns = delimHeader(files[0], ',')
 				seedColumnKinds(files[0], ',')
+				q.csvSource, q.csvDelim = files[0], ','
 			case args[0] == "tsv", strings.HasSuffix(strings.ToLower(files[0]), ".tsv"):
 				q.columns = delimHeader(files[0], '\t')
 				seedColumnKinds(files[0], '\t')
+				q.csvSource, q.csvDelim = files[0], '\t'
+			}
+			if q.csvSource != "" && sqlDialectCur == dialectDuckDB {
+				q.fromClause = duckReadCSV([]string{q.csvSource}, q.csvDelim, "")
 			}
 		} else if sqlDialectCur == dialectDuckDB {
-			// DuckDB: read_csv_auto(['file1.csv', 'file2.csv'])
-			quoted := make([]string, len(files))
-			for i, f := range files {
-				quoted[i] = quoteFile(f)
+			delim := byte(',')
+			if args[0] == "tsv" || strings.HasSuffix(strings.ToLower(files[0]), ".tsv") {
+				delim = '\t'
 			}
-			q.fromClause = fmt.Sprintf("read_csv_auto([%s])", strings.Join(quoted, ", "))
+			q.fromClause = duckReadCSV(files, delim, "")
 		} else {
 			// Postgres/DataFusion: one source per file, UNION ALL (the
 			// files must share a header, as ssql's own multi-file read
@@ -572,11 +579,10 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// correct, not fast (the speed win is a Go-lane property).
 		// Needs a deterministic row order: read_csv(parallel=false) for
 		// a single CSV/TSV file; anything else has no ordered read.
-		lower := strings.ToLower(q.fromClause)
-		if !strings.HasPrefix(q.fromClause, "'") || !(strings.HasSuffix(lower, ".csv'") || strings.HasSuffix(lower, ".tsv'")) {
+		if q.csvSource == "" {
 			return fmt.Errorf("from -last has a SQL translation only for a single CSV/TSV file (file order is undefined for other sources); use generate go")
 		}
-		src := fmt.Sprintf("read_csv(%s, parallel=false)", q.fromClause)
+		src := duckReadCSV([]string{q.csvSource}, q.csvDelim, "parallel=false")
 		q.fromClause = fmt.Sprintf("(SELECT * EXCLUDE (__rn) FROM (SELECT * FROM (SELECT *, row_number() OVER () AS __rn FROM %s) ORDER BY __rn DESC LIMIT %s) ORDER BY __rn)", src, lastN)
 	}
 	return nil
@@ -699,11 +705,11 @@ func translateCondition(field, op, value string) string {
 		// contains, startswith, endswith
 		switch op {
 		case "contains":
-			return fmt.Sprintf("%s LIKE '%%%s%%'", quoteIdent(field), escapeLike(value))
+			return fmt.Sprintf("%s LIKE '%%%s%%' ESCAPE '\\'", quoteIdent(field), escapeLike(value))
 		case "startswith":
-			return fmt.Sprintf("%s LIKE '%s%%'", quoteIdent(field), escapeLike(value))
+			return fmt.Sprintf("%s LIKE '%s%%' ESCAPE '\\'", quoteIdent(field), escapeLike(value))
 		case "endswith":
-			return fmt.Sprintf("%s LIKE '%%%s'", quoteIdent(field), escapeLike(value))
+			return fmt.Sprintf("%s LIKE '%%%s' ESCAPE '\\'", quoteIdent(field), escapeLike(value))
 		}
 	}
 	if op == "regex" {
@@ -2094,11 +2100,43 @@ func quoteFile(path string) string {
 	return "'" + escapeSQL(path) + "'"
 }
 
+// duckReadCSV renders DuckDB's read_csv for files ssql wrote or read as
+// RFC 4180 delimited text, with the dialect PINNED: quote and escape are
+// the double quote and the delimiter is known. Left to its sniffer, DuckDB
+// took an apostrophe in a cell (`'; DROP TABLE t; --`) as the quote
+// character and merged two rows into one (found by the injection fuzz,
+// 2026-09-22). Types are still inferred. extra is appended verbatim
+// (`parallel=false` for an ordered read).
+func duckReadCSV(files []string, delim byte, extra string) string {
+	quoted := make([]string, len(files))
+	for i, f := range files {
+		quoted[i] = quoteFile(f)
+	}
+	src := quoted[0]
+	if len(quoted) > 1 {
+		src = "[" + strings.Join(quoted, ", ") + "]"
+	}
+	opts := `header=true, quote='"', escape='"', delim=','`
+	if delim == '\t' {
+		opts = `header=true, quote='"', escape='"', delim='\t'`
+	}
+	if extra != "" {
+		opts += ", " + extra
+	}
+	return fmt.Sprintf("read_csv(%s, %s)", src, opts)
+}
+
+// sqlPlainIdent is a name every engine reads bare: ASCII letters, digits
+// and _, not starting with a digit. Anything else is quoted.
+var sqlPlainIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 func quoteIdent(name string) string {
-	// DuckDB: quote only names with special characters or reserved words.
-	// Postgres and DataFusion fold unquoted identifiers to lower case, so a
-	// header like "Name" would not resolve — quote everything there.
-	if sqlDialectCur != dialectDuckDB || strings.ContainsAny(name, " -./") || isSQLReserved(name) {
+	// DuckDB: quote names that are not plain identifiers (a space, a dash,
+	// a dot, a leading digit — `1st` bare is the literal 1 aliased st — a
+	// non-ASCII letter) and reserved words. Postgres and DataFusion fold
+	// unquoted identifiers to lower case, so a header like "Name" would
+	// not resolve — quote everything there.
+	if sqlDialectCur != dialectDuckDB || !sqlPlainIdent.MatchString(name) || isSQLReserved(name) {
 		return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 	}
 	return name
@@ -2108,7 +2146,14 @@ func escapeSQL(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
+// escapeLike renders a value for a LIKE pattern with ESCAPE '\': the
+// backslash first (a literal one in the value must not escape what
+// follows), then the two metacharacters, then SQL quoting. The ESCAPE
+// clause is required: DuckDB has no default escape character, so without
+// it `contains '%'` matched a literal backslash and nothing else (found
+// by the injection fuzz, 2026-09-22).
 func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "%", "\\%")
 	s = strings.ReplaceAll(s, "_", "\\_")
 	return escapeSQL(s)

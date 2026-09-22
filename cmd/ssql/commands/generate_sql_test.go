@@ -296,7 +296,7 @@ func TestTranslateConditionLiterals(t *testing.T) {
 		t.Errorf("string: got %q, want %q", got, want)
 	}
 	// Pattern operators keep their quoted-string form regardless of the token.
-	if got, want := translateCondition("code", "contains", "15"), "code LIKE '%15%'"; got != want {
+	if got, want := translateCondition("code", "contains", "15"), `code LIKE '%15%' ESCAPE '\'`; got != want {
 		t.Errorf("contains: got %q, want %q", got, want)
 	}
 }
@@ -571,7 +571,9 @@ func TestTranslateFromSampleSQL(t *testing.T) {
 	if err := translateFrom(q, []string{"csv", "kind.csv", "-sample", "5"}); err != nil {
 		t.Fatal(err)
 	}
-	if q.fromClause != "'kind.csv' USING SAMPLE 5 ROWS (reservoir)" || !q.sampled {
+	// The CSV dialect is pinned (quote and escape are the double quote):
+	// DuckDB's sniffer took an apostrophe in a cell as the quote character.
+	if q.fromClause != `read_csv('kind.csv', header=true, quote='"', escape='"', delim=',') USING SAMPLE 5 ROWS (reservoir)` || !q.sampled {
 		t.Errorf("got %q sampled=%v", q.fromClause, q.sampled)
 	}
 	// Seeded refusal.
@@ -931,7 +933,7 @@ func TestTranslateFromLastSQL(t *testing.T) {
 	if err := translateFrom(q, []string{"csv", "x.csv", "-last", "3"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"read_csv('x.csv', parallel=false)", "row_number() OVER () AS __rn", "ORDER BY __rn DESC LIMIT 3", "EXCLUDE (__rn)", "ORDER BY __rn)"} {
+	for _, want := range []string{"read_csv('x.csv', header=true, quote='\"', escape='\"', delim=',', parallel=false)", "row_number() OVER () AS __rn", "ORDER BY __rn DESC LIMIT 3", "EXCLUDE (__rn)", "ORDER BY __rn)"} {
 		if !strings.Contains(q.fromClause, want) {
 			t.Errorf("missing %q:\n%s", want, q.fromClause)
 		}
@@ -1029,5 +1031,26 @@ func TestUpdateFirstMatchWinsGuards(t *testing.T) {
 	want = "* REPLACE (CASE WHEN a > 5 THEN 1 WHEN NOT COALESCE((b > 1), FALSE) THEN 3 ELSE x END AS x, CASE WHEN b > 1 AND NOT COALESCE((a > 5), FALSE) THEN 7 ELSE y END AS y)"
 	if len(q.selectExprs) != 1 || q.selectExprs[0] != want {
 		t.Errorf("got %v\nwant %s", q.selectExprs, want)
+	}
+}
+
+
+// LIKE metacharacters and the escape character itself in a value are
+// literal: the pattern escapes them and declares ESCAPE, which DuckDB
+// needs (it has no default). Found by the injection fuzz: `contains '%'`
+// matched a literal backslash and nothing else.
+func TestTranslateConditionLikeEscapes(t *testing.T) {
+	cases := map[string]string{
+		"%":     `s LIKE '%\%%' ESCAPE '\'`,
+		"_":     `s LIKE '%\_%' ESCAPE '\'`,
+		`\`:    `s LIKE '%\\%' ESCAPE '\'`,
+		"50%":   `s LIKE '%50\%%' ESCAPE '\'`,
+		"it's":  `s LIKE '%it''s%' ESCAPE '\'`,
+		`a\%b`: `s LIKE '%a\\\%b%' ESCAPE '\'`,
+	}
+	for v, want := range cases {
+		if got := translateCondition("s", "contains", v); got != want {
+			t.Errorf("contains %q: got %s, want %s", v, got, want)
+		}
 	}
 }
