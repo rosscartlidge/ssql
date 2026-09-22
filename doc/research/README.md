@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-09-22 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-09-23 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -108,7 +108,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC098 | 2026-06-21 | 2026-06-22 | [Interactive Help at the Cursor — Design Exploration](./interactive-help-at-cursor.md) |
 | DFC099 | 2026-06-24 | 2026-06-24 | [Codegen: evolving the fragment system (and why *not* go/ast)](./codegen-ir-evolution.md) |
 | DFC100 | 2026-06-25 | 2026-06-25 | [Expression support in `generate go`: transpile to native Go (performance-first)](./expr-codegen-transpilation.md) |
-| DFC101 | 2026-06-28 | 2026-09-22 | [Should all rvalues be expressions? (and why the structured flags stay)](./rvalues-as-expressions.md) |
+| DFC101 | 2026-06-28 | 2026-09-23 | [Should all rvalues be expressions? (and why the structured flags stay)](./rvalues-as-expressions.md) |
 | DFC102 | 2026-07-02 | 2026-07-03 | [When one pipeline has five implementations: a divergence bug and the differential harness that kills it](./multimode-equivalence-testing.md) |
 | DFC103 | 2026-07-04 | 2026-08-10 | [Expr→Go transpiler: implementation plan](./expr-transpiler-implementation-plan.md) |
 | DFC104 | 2026-08-10 | 2026-08-10 | [Compiling an Embedded Expression Language into a Query Pipeline Code Generator: An Experience Report](./expr-transpiler-paper.md) |
@@ -142,7 +142,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC132 | 2026-09-17 | 2026-09-17 | [Generating Rust: Decision, and What the DataFusion Check Found](./dfc132_rust_target_datafusion.md) |
 | DFC133 | 2026-09-20 | 2026-09-20 | [Finding the Bugs We Do Not Know About](./dfc133_finding_unknown_bugs.md) |
 | DFC134 | 2026-09-20 | 2026-09-22 | [Pipelines as Data: Safe Programmatic Construction, and Why SQL Cannot Have It](./dfc134_pipelines_as_data.md) |
-| DFC135 | 2026-09-22 | 2026-09-22 | [Field References in Value Slots: `-if-field`, `-set-field`, `-param-field`](./dfc135_field_references_in_value_slots.md) |
+| DFC135 | 2026-09-22 | 2026-09-23 | [Field References in Value Slots: `-if-field`, `-set-field`, `-param-field`](./dfc135_field_references_in_value_slots.md) |
 
 <!-- DFC-INDEX-END -->
 
