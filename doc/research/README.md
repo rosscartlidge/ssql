@@ -142,6 +142,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC132 | 2026-09-17 | 2026-09-17 | [Generating Rust: Decision, and What the DataFusion Check Found](./dfc132_rust_target_datafusion.md) |
 | DFC133 | 2026-09-20 | 2026-09-20 | [Finding the Bugs We Do Not Know About](./dfc133_finding_unknown_bugs.md) |
 | DFC134 | 2026-09-20 | 2026-09-22 | [Pipelines as Data: Safe Programmatic Construction, and Why SQL Cannot Have It](./dfc134_pipelines_as_data.md) |
+| DFC135 | 2026-09-22 | 2026-09-22 | [Field References in Value Slots: `-if-field`, `-set-field`, `-param-field`](./dfc135_field_references_in_value_slots.md) |
 
 <!-- DFC-INDEX-END -->
 
