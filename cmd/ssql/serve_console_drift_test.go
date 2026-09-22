@@ -30,6 +30,7 @@ var consoleExcluded = map[string]string{
 	"Functions":   "meta — expression function reference (could be added)",
 	"Conventions": "meta — could be added",
 	"Codelab":     "writes the tutorial fixtures to the local filesystem — a CLI setup step, not an operator action",
+	"Run":         "executes a server-side pipeline document, which can hold any stage (writers included) — the console's readonly guarantees cannot see inside it",
 }
 
 func TestServeConsoleRegistration(t *testing.T) {

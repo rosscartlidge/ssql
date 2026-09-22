@@ -27,7 +27,8 @@ the completion and help at the prompt are half the experience.
 6. [Make it fast](#6-make-it-fast)
 7. [Generate code](#7-generate-code)
 8. [Distributed data](#8-distributed-data)
-9. [Reference](#9-reference)
+9. [Pipelines from programs](#9-pipelines-from-programs)
+10. [Reference](#10-reference)
 
 ---
 
@@ -783,7 +784,69 @@ it is and log into it: `ssql serve DATA.csv` loads a dataset and answers
 over SSH with this same vocabulary (`from-loaded | where … | to table`).
 Runbook: [The SSH Operator Console](cli-codelab-serve.md).
 
-## 9. Reference
+## 9. Pipelines from programs
+
+*Why:* a program that builds a pipeline from a user's choices (a report
+screen, an API with `?sort=`) must not let those choices change the
+pipeline's shape. In SQL that takes a query builder; here the pipeline is
+already a list of argument lists, so a program writes that list and
+`ssql run` executes it **with no shell**:
+
+```bash
+cat > /tmp/report.json <<'EOF'
+[
+  ["from", "csv", "-arg", "employees.csv"],
+  ["where", "-if", "dept", "eq", "Engineering"],
+  ["where", "-if-expr", "salary > floor", "-param", "floor", "int", "100000"],
+  ["sort", "-arg", "salary", "-desc"],
+  ["include", "-arg", "name", "-arg", "salary"],
+  ["to", "table"]
+]
+EOF
+ssql run /tmp/report.json
+```
+
+Each untrusted value occupies one element, so there is no sequence of
+characters that can end it. Three habits make that a guarantee rather
+than a likelihood:
+
+- **Positionals as `-arg VALUE`.** A bare element beginning with `-` is
+  a flag; `-arg` binds it by count like any flag argument. The command
+  path (`from`, `csv`) is not data: take it from a fixed vocabulary.
+- **Values in flag slots, never in expression text.** `-if FIELD OP
+  VALUE` and `-param NAME TYPE VALUE` are slots; `-if-expr` is source.
+- **Check before running.** Every stage is validated against the real
+  command grammar before any starts, so an invalid document fails whole,
+  with the stage named, and a sink at the end never runs:
+
+```bash
+ssql run -check /tmp/report.json && echo valid
+ssql run -print /tmp/report.json
+```
+
+`-print` renders the shell form, for a human to read or to paste. A
+nested list in an argument's place is a nested pipeline whose output the
+stage reads as a file, the shell's `<(…)` without the shell:
+
+```bash
+cat > /tmp/joined.json <<'EOF'
+[
+  ["from", "csv", "-arg", "orders.csv"],
+  ["join", ["from", "csv", "-arg", "customers.csv"], "-using", "customer_id"],
+  ["limit", "-arg", "2"],
+  ["include", "-arg", "order_id", "-arg", "name", "-arg", "amount"],
+  ["to", "table"]
+]
+EOF
+ssql run /tmp/joined.json
+```
+
+`SSQL_MODE=record ssql run doc.json | ssql generate go` generates code
+from a document exactly as from the typed pipeline: the stages are the
+same processes. The reasoning, and the SQL comparison, is in
+[DFC134](research/dfc134_pipelines_as_data.md).
+
+## 10. Reference
 
 Sources: `from FILE` (csv/tsv/json/jsonl/parquet/arrow/xlsx/wav by
 extension; `.log`/`.txt` as lines) · `from csv|tsv|jsonl|parquet|lines FILE…`

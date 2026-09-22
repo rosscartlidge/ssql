@@ -449,59 +449,11 @@ type stageChain struct {
 }
 
 // startStageChain wires and starts `self stage[0] | self stage[1] | …`
-// in dir under ctx.
-//
-// Intermediate links are explicit os.Pipe()s and the parent CLOSES its
-// copies right after starting the children — like a shell, the
-// children must be the only holders. (The first version used
-// exec.StdoutPipe, whose read end the parent keeps until Wait: when a
-// downstream stage exited early — `… | limit 10` on a 1.2GB file —
-// upstream never got EPIPE, filled the 64KB pipe buffer, and the
-// chain deadlocked. Found live by Ross; pinned by
-// TestServeExecuteEarlyExit.)
+// in dir under ctx, capturing each stage's stderr and exposing the last
+// stage's stdout as ch.out. The pipe discipline lives in startChain,
+// which the pipeline-document runner (`ssql run`) shares.
 func startStageChain(ctx context.Context, self, dir string, stages [][]string, extraEnv ...string) (*stageChain, error) {
-	ch := &stageChain{stderrs: make([]bytes.Buffer, len(stages))}
-	ch.cmds = make([]*exec.Cmd, len(stages))
-	var parentCopies []*os.File
-	closeParentCopies := func() {
-		for _, f := range parentCopies {
-			f.Close()
-		}
-	}
-	for i, args := range stages {
-		ch.cmds[i] = exec.CommandContext(ctx, self, args...)
-		ch.cmds[i].Dir = dir
-		if len(extraEnv) > 0 {
-			ch.cmds[i].Env = append(os.Environ(), extraEnv...)
-		}
-		ch.cmds[i].Stderr = &ch.stderrs[i]
-		if i > 0 {
-			r, w, err := os.Pipe()
-			if err != nil {
-				closeParentCopies()
-				return nil, err
-			}
-			ch.cmds[i-1].Stdout = w
-			ch.cmds[i].Stdin = r
-			parentCopies = append(parentCopies, r, w)
-		}
-	}
-	out, err := ch.cmds[len(ch.cmds)-1].StdoutPipe()
-	if err != nil {
-		closeParentCopies()
-		return nil, err
-	}
-	ch.out = out
-	for _, c := range ch.cmds {
-		if err := c.Start(); err != nil {
-			closeParentCopies()
-			return nil, err
-		}
-	}
-	// The children hold dups now; the parent must not keep the pipes
-	// alive or early-exiting consumers can't EPIPE their producers.
-	closeParentCopies()
-	return ch, nil
+	return startChain(ctx, self, stages, chainOptions{Dir: dir, Env: extraEnv})
 }
 
 // wait waits for every stage, with shell status semantics: the LAST
@@ -1111,6 +1063,10 @@ func validateReadonly(stages [][]string) error {
 			continue
 		}
 		switch st[0] {
+		case "run":
+			// A document can hold any stage, writers included; the
+			// readonly check cannot see inside a file argument.
+			return fmt.Errorf("readonly serve: `run` executes a pipeline document — not permitted (-readonly)")
 		case "tee":
 			return fmt.Errorf("readonly serve: `tee` writes a file — not permitted (-readonly)")
 		case "to":

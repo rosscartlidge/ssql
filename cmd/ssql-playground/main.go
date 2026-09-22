@@ -232,6 +232,7 @@ func buildCommand() *cf.Command {
 	cmd = commands.RegisterTo(cmd)
 	cmd = commands.RegisterGenerate(cmd)
 	cmd = commands.RegisterServe(cmd)
+	cmd = commands.RegisterRun(cmd)
 
 	return cmd.Handler(func(ctx *cf.Context) error {
 		return fmt.Errorf("no command specified")

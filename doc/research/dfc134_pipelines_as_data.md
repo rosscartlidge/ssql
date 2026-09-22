@@ -6,9 +6,11 @@ Last modified: 2026-09-22
 
 [Back to Index](./README.md)
 
-Status: **§5.2 (`-arg`) and §5.3 (`-param`) BUILT 2026-09-22** — autocli
-v4.18.0 plus the ssql halves; §5.2a and §5.3a record what building each
-found. §5.1 (the shell-free runner), §5.4, §5.5 not started.
+Status: **§5.1 (`ssql run`), §5.2 (`-arg`) and §5.3 (`-param`) BUILT
+2026-09-22** — autocli v4.18.0 / v4.19.0 plus the ssql halves; §5.1a,
+§5.2a and §5.3a record what building each found. The central claim of §4
+now holds end to end for a document run by `ssql run`. §5.4 (policy) and
+§5.5 (derived artefacts) not started.
 Ross, 2026-09-20: "generating SQL safely programmatically calls for a lot
 of complex operations to ensure no SQL injection is possible. I have a
 strong feeling that ssql pipelines could be expressed as a simple schema
@@ -190,6 +192,48 @@ equivalence harness all run pipelines as strings through `bash -c`; that
 is where the shell's grammar, and therefore injection, re-enters. The
 runner is the piece that turns §2 from an observation into a guarantee.
 It is also what a library binding in any language would call.
+
+**5.1a What building it found (2026-09-22).** `ssql run DOC` in
+`commands/run.go` + `pipeline_doc.go`. Decisions taken while building:
+
+- **Document shape**: a JSON list of stages, each a list of strings; a
+  list in an argument's place is a nested pipeline (a list of strings
+  there is the one-stage shorthand); `{"pipeline": […]}` is accepted so
+  policy fields (§5.4) can sit beside the stages later. Numbers are
+  refused with "write it as a string: the command decides what it is",
+  since typing by JSON kind would be a second type system.
+- **Validation asks the parser.** autocli gained `Command.Check(args)`:
+  Execute's walk, parse and required-flag validation with no handler.
+  The runner validates every stage, nested ones included, before any
+  starts; a failure names the stage (`stage 2 (where): flag -bogus:
+  unknown flag`). No copy of the grammar exists in the runner, per
+  DFC115. The command path must be a command name (a stage may not start
+  with `-`), and `run` inside a document is refused.
+- **Execution reuses serve's chain.** `startStageChain` became a thin
+  wrapper over a shared `startChain` (explicit `os.Pipe`s, parent closes
+  its copies so an early-exiting consumer EPIPEs its producer, shell
+  status semantics on wait). Nested pipelines run as their own chain
+  writing into a pipe whose read end the stage receives as `/dev/fd/3+k`
+  via `ExtraFiles`: process substitution without a shell.
+- **`-print` renders the shell form verbatim**, quoted: it means exactly
+  what the document means, because both hand the same elements to the
+  same parser. The runner does not insert `-arg`; a document that needs
+  it and lacks it is wrong in both forms (the builder's job, §5.5).
+- **`serve -readonly` refuses `run`**: a document can hold any stage and
+  the readonly check cannot see inside a file argument.
+
+Tests: `TestRunDocument` uses the document's own shell rendering, run by
+bash, as the oracle (byte-identical output on a hostile fixture with a
+nested join and a `-param` attack string), plus -check refusing before a
+sink runs, a failing stage named, early exit not a failure, generation
+mode passing through. Two doc-layer unit tests against a small fake
+root. Nothing new was found this time; the two earlier units had already
+walked the argv re-readers.
+
+Not done: the text → document direction (a shell parser is a shell
+grammar; the honest source is the fragments' `Op.Argv`, i.e. `generate
+ssql -json` or similar, §5.5); a JSON Schema for the document generated
+from `-spec-json` (§5.5); policy (§5.4).
 
 **5.2 Close option injection: `-arg`, a flag form for every positional
 (DECIDED, Ross 2026-09-22).** Positional arguments stay as the
@@ -415,10 +459,8 @@ Rough size: 5.1 and 5.2 are days, and together they make the central
 claim true for flag-form pipelines. 5.3 is a unit of its own and is what
 extends the claim to expressions. 5.4–5.5 can follow demand.
 
-Suggested order: 5.2 first (autocli release, then the hostile-column
-tests in ssql; it is small, self-contained and fixes a bug that exists
-today regardless of this DFC), then 5.3, then 5.1, whose runner can then
-emit the canonical form from its first day.
+Order taken: 5.2 (autocli v4.18.0, hostile-column tests), 5.3, then 5.1,
+all on 2026-09-22.
 
 ## 6. Open questions
 

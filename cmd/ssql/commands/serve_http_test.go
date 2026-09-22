@@ -139,6 +139,7 @@ func TestValidateReadonly(t *testing.T) {
 		{"generate -run rejected", [][]string{{"from", "a.csv"}, {"generate", "go", "-run"}}, "compiles/writes"},
 		{"generate plain allowed", [][]string{{"from", "a.csv"}, {"generate", "sql"}}, ""},
 		{"conservative flag-value rejection", [][]string{{"from", "a.csv"}, {"to", "explore", "-title", "My"}}, "may write a file"},
+		{"run rejected: a document can hold any stage", [][]string{{"run", "doc.json"}}, "pipeline document"},
 	}
 	for _, c := range cases {
 		err := validateReadonly(c.stages)

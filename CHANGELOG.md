@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arguments are bound by count and never read as syntax. Advertised in
   `-spec-json` as `positionalFlag`.
 
+- **`ssql run DOC`: run a pipeline document with no shell** (DFC134 §5.1).
+  The document is the pipeline as argv, a JSON list of stages each a list
+  of argument strings; a nested list in an argument's place is a nested
+  pipeline whose output the stage reads as a file (the shell's `<(…)`,
+  without the shell). Every stage is validated against the real command
+  grammar (autocli v4.19.0 `Command.Check`) before any starts, so an
+  invalid document fails whole with the stage named and a sink at the end
+  never runs. `-check` validates only, `-print` renders the shell form,
+  `-stdin` reads the document from stdin. Stages inherit the environment,
+  so `SSQL_MODE=record ssql run doc.json | ssql generate go` works as
+  from a typed pipeline. `serve -readonly` refuses `run`. Codelab §9.
 - **`-param NAME TYPE VALUE`: expression parameters** on `where` and
   `update` (DFC134 §5.3). NAME becomes a variable of the clause's
   `-if-expr` / `-set-expr` expressions; the value is data whatever it
