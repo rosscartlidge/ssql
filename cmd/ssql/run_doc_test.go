@@ -174,6 +174,44 @@ func TestRunDocument(t *testing.T) {
 		}
 	})
 
+	t.Run("generate -json: the document as fragment source, no shell", func(t *testing.T) {
+		doc := write("gen2.json", `[["from","csv","-arg","inject.csv"],["where","-if","note","eq","'; DROP TABLE t; --"],["update","-set","1st","x */ y"],["to","csv"]]`)
+		sql, stderr, err := run(t, "", "generate", "sql", "-json", doc)
+		if err != nil || !strings.Contains(sql, `note = '''; DROP TABLE t; --'`) || !strings.Contains(sql, `"1st"`) {
+			t.Errorf("generate sql -json: %v\n%s\n%s", err, sql, stderr)
+		}
+		text, _, err := run(t, "", "generate", "ssql", "-json", doc)
+		if err != nil || !strings.HasPrefix(text, "ssql from csv -arg inject.csv | ssql where") {
+			t.Errorf("generate ssql -json: %v\n%s", err, text)
+		}
+		norm, _, err := run(t, "", "generate", "json", "-json", doc, "-compact")
+		if err != nil || !strings.HasPrefix(norm, `[["from","csv","-arg","inject.csv"],["where"`) {
+			t.Errorf("generate json -json: %v\n%s", err, norm)
+		}
+		// generate go -json compiles against the checkout and runs.
+		bin2 := filepath.Join(dir, "gen2bin")
+		cmd := exec.Command(bin, "generate", "go", "-json", doc, "-build", bin2)
+		cmd.Dir = data
+		cmd.Env = append(os.Environ(), "SSQL_MODULE_DIR="+mustRepoRoot(t))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("generate go -json -build: %v\n%s", err, out)
+		}
+		prog := exec.Command(bin2)
+		prog.Dir = data
+		got, err := prog.Output()
+		if err != nil || string(got) != "id,note,1st\n2,'; DROP TABLE t; --,x */ y\n" {
+			t.Errorf("compiled program: %v\n%s", err, got)
+		}
+		// Exclusive sources; an invalid document refused before anything runs.
+		if _, stderr, err := run(t, "", "generate", "sql", "-json", doc, "-pipeline", "x"); err == nil || !strings.Contains(stderr, "mutually exclusive") {
+			t.Errorf("want exclusivity error, got %v\n%s", err, stderr)
+		}
+		bad := write("gen2bad.json", `[["frob"],["to","csv"]]`)
+		if _, stderr, err := run(t, "", "generate", "sql", "-json", bad); err == nil || !strings.Contains(stderr, "stage 1 (frob)") {
+			t.Errorf("want validation error, got %v\n%s", err, stderr)
+		}
+	})
+
 	t.Run("generation mode passes through to the stages", func(t *testing.T) {
 		doc := write("gen.json", `[["from","csv","-arg","shuffled.csv"],["where","-if","pop","gt","10"],["to","csv"]]`)
 		cmd := exec.Command(bin, "run", doc)

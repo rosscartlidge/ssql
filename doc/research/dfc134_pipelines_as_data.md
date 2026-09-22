@@ -230,6 +230,15 @@ mode passing through. Two doc-layer unit tests against a small fake
 root. Nothing new was found this time; the two earlier units had already
 walked the argv re-readers.
 
+Document → SQL/Go directly (Ross: "should we have `-json file` for
+`generate`?"): `generate go|sql|ssql|json -json FILE` runs the document
+through the runner under the generation mode and generates from the
+fragments; one `generateFragmentSource` helper serves all four and the
+existing `-pipeline`/`-script` (shell text through bash) alongside.
+Building it exposed that `ssql frob` printed the banner and exited 0, so
+`Check` accepted a misspelt command: autocli v4.20.0 makes a bare unknown
+word an unknown command whether or not the root has a handler.
+
 Text → document (Ross, same day: "do we have a `generate json`?"):
 `generate json` builds the document from each fragment's `Op.Argv`, the
 stage's own argv, so no shell text is parsed; a func fragment (process

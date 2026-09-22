@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -22,7 +21,7 @@ import (
 
 // registerGenerateSQL registers the "generate sql" subcommand
 func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("sql").
+	sub := cmd.Subcommand("sql").
 		Description("Generate SQL (DuckDB, PostgreSQL or DataFusion dialect) from an ssql CLI pipeline").
 		Example("(export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql to table) | ssql generate sql", "Generate SQL from pipeline").
 		Example("(export SSQL_MODE=record; ssql from data.parquet | ssql group-by dept -sum salary total | ssql to table) | ssql generate sql", "Parquet aggregation query").
@@ -47,7 +46,8 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 		Global().
 		Default("").
 		Help("Run PIPELINE (a quoted ssql pipeline string) in record mode and translate its fragments — no export/subshell ceremony needed.").
-		Done().
+		Done()
+	jsonDocFlag(sub, "translate").
 		Flag("OUTPUT").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.sql"}).
@@ -72,16 +72,12 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 				}
 			}
 
-			var fragSrc io.Reader = ctx.Stdin()
-			if v, ok := ctx.GlobalFlags["-pipeline"]; ok && v.(string) != "" {
-				// SQL translation reads record-mode fragments (the
-				// assembler parses their Command strings), so the
-				// mode is fixed — not a user knob here.
-				fragments, err := runPipelineForFragments(v.(string), "record", "sql -pipeline")
-				if err != nil {
-					return err
-				}
-				fragSrc = bytes.NewReader(fragments)
+			// SQL translation reads record-mode fragments, so the mode
+			// is fixed; -pipeline (shell) or -json (no shell) name the
+			// pipeline, else the fragments arrive on stdin.
+			fragSrc, err := generateFragmentSource(ctx, "record", "sql")
+			if err != nil {
+				return err
 			}
 			// The dialect stays set through -run so the engine command
 			// and the Postgres load script see it.

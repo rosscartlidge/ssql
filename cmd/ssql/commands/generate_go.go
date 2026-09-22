@@ -20,9 +20,10 @@ import (
 
 // registerGenerateGo registers the "generate go" subcommand
 func registerGenerateGo(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("go").
+	sub := cmd.Subcommand("go").
 		Description("Generate Go code from ssql CLI pipeline").
 		Example("ssql from -g data.csv | ssql where -g -if age gt 18 | ssql generate go", "Generate Go code from pipeline").
+		Example("ssql generate go -json pipeline.json -build ./report", "Compile a pipeline document, no shell").
 		Example("(export SSQL_MODE=record && ssql from data.csv | ssql limit 10 | ssql generate go) > prog.go", "Generate using environment variable").
 		Example("(export SSQL_MODE=parallel; ssql from data.csv | ssql to table) | ssql generate go -run", "Generate, compile, and execute in one shot").
 		Example("(export SSQL_MODE=typed; ssql from data.csv | ssql to table) | ssql generate go -run -time", "Compile and run, reporting compile and run times on stderr").
@@ -78,8 +79,9 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Completer(&cf.StaticCompleter{Options: []string{"record", "typed"}}).
 		Global().
 		Default("").
-		Help("With -script: SSQL_MODE value for the script (record or typed; parallel is a deprecated alias for typed). Default: typed.").
-		Done().
+		Help("With -script/-pipeline/-json: SSQL_MODE value for the pipeline (record or typed; parallel is a deprecated alias for typed). Default: typed.").
+		Done()
+	jsonDocFlag(sub, "generate Go from").
 		Flag("OUTPUT").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.go"}).
@@ -93,7 +95,6 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			var buildOut string
 			var optimise bool
 			var explain bool
-			var scriptPath string
 			var scriptMode string
 
 			if outVal, ok := ctx.GlobalFlags["OUTPUT"]; ok {
@@ -114,13 +115,6 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			var timeRun bool
 			if v, ok := ctx.GlobalFlags["-time"]; ok {
 				timeRun = v.(bool)
-			}
-			if v, ok := ctx.GlobalFlags["-script"]; ok {
-				scriptPath = v.(string)
-			}
-			var pipelineText string
-			if v, ok := ctx.GlobalFlags["-pipeline"]; ok {
-				pipelineText = v.(string)
 			}
 			if v, ok := ctx.GlobalFlags["-mode"]; ok {
 				scriptMode = v.(string)
@@ -151,29 +145,16 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 				os.Setenv("SSQL_EXPLAIN_PLAN", "1")
 			}
 
-			// Source of code fragments: stdin by default, or the
-			// output of running the .ssql script under bash with
-			// SSQLGO set. Both produce the same JSONL fragment
-			// stream for the assembler.
-			if scriptPath != "" && pipelineText != "" {
-				return fmt.Errorf("ssql generate go: -script and -pipeline are mutually exclusive (both name the pipeline source)")
+			// Source of code fragments: stdin by default, or a pipeline
+			// named by -script / -pipeline (shell text, run by bash) or
+			// -json (a document, run by the shell-free runner), every one
+			// producing the same JSONL fragment stream for the assembler.
+			if scriptMode == "" {
+				scriptMode = "typed"
 			}
-			var fragmentSrc io.Reader = os.Stdin
-			if scriptPath != "" || pipelineText != "" {
-				if scriptMode == "" {
-					scriptMode = "typed"
-				}
-				var fragments []byte
-				var err error
-				if scriptPath != "" {
-					fragments, err = runScriptForFragments(scriptPath, scriptMode)
-				} else {
-					fragments, err = runPipelineForFragments(pipelineText, scriptMode, "go -pipeline")
-				}
-				if err != nil {
-					return err
-				}
-				fragmentSrc = bytes.NewReader(fragments)
+			fragmentSrc, err := generateFragmentSource(ctx, scriptMode, "go")
+			if err != nil {
+				return err
 			}
 
 			// The optimiser is on by default (+O turns it off). It is

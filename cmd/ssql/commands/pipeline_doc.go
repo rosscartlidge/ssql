@@ -296,7 +296,7 @@ func startChain(ctx context.Context, self string, stages [][]string, o chainOpti
 // runPipelineDoc runs a document with the runner's own stdin, stdout and
 // stderr, nested pipelines wired as /dev/fd/N. It returns the first
 // failure with the stage named, shell status semantics (stageChain.wait).
-func runPipelineDoc(ctx context.Context, root *cf.Command, self string, stages []docStage, stdin io.Reader, stdout, stderr io.Writer) error {
+func runPipelineDoc(ctx context.Context, root *cf.Command, self string, stages []docStage, stdin io.Reader, stdout, stderr io.Writer, env ...string) error {
 	var nestedChains []*stageChain
 	var nestedClose []*os.File
 	defer func() {
@@ -321,7 +321,7 @@ func runPipelineDoc(ctx context.Context, root *cf.Command, self string, stages [
 			// The nested pipeline writes into w; the stage reads r as
 			// /dev/fd/(3+k). The parent's copies close once both have
 			// started, so an early-exiting reader EPIPEs the writer.
-			nested, err := runPipelineDocTo(ctx, self, a.Nested, w, stderr)
+			nested, err := runPipelineDocTo(ctx, self, a.Nested, w, stderr, env...)
 			w.Close()
 			if err != nil {
 				r.Close()
@@ -334,7 +334,7 @@ func runPipelineDoc(ctx context.Context, root *cf.Command, self string, stages [
 		extra[i] = files
 		argv[i] = st.argv(func(k int) string { return fmt.Sprintf("/dev/fd/%d", 3+k) })
 	}
-	ch, err := startChain(ctx, self, argv, chainOptions{Stdin: stdin, Stdout: stdout, Stderr: stderrs, Extra: extra})
+	ch, err := startChain(ctx, self, argv, chainOptions{Stdin: stdin, Stdout: stdout, Stderr: stderrs, Extra: extra, Env: env})
 	// The stages hold their dups of the nested read ends now.
 	for _, f := range nestedClose {
 		f.Close()
@@ -354,7 +354,7 @@ func runPipelineDoc(ctx context.Context, root *cf.Command, self string, stages [
 
 // runPipelineDocTo starts a nested document writing to w (recursively
 // wiring its own nested pipelines) and returns it running.
-func runPipelineDocTo(ctx context.Context, self string, stages []docStage, w *os.File, stderr io.Writer) (*stageChain, error) {
+func runPipelineDocTo(ctx context.Context, self string, stages []docStage, w *os.File, stderr io.Writer, env ...string) (*stageChain, error) {
 	for _, st := range stages {
 		for _, a := range st {
 			if a.Nested != nil {
@@ -371,7 +371,7 @@ func runPipelineDocTo(ctx context.Context, self string, stages []docStage, w *os
 		argv[i] = st.argv(nil)
 		stderrs[i] = stderr
 	}
-	return startChain(ctx, self, argv, chainOptions{Stdout: w, Stderr: stderrs})
+	return startChain(ctx, self, argv, chainOptions{Stdout: w, Stderr: stderrs, Env: env})
 }
 
 // waitNamed is wait with the failing stage named in the error.
@@ -396,4 +396,80 @@ func (ch *stageChain) waitNamed(root *cf.Command, stages []docStage) error {
 		return lastErr
 	}
 	return upstreamErr
+}
+
+// jsonDocFlag registers -json FILE on a generate subcommand: the pipeline
+// document as the fragment source, run by the shell-free runner (DFC134
+// §5.1) under the generation mode. The twin of -script / -pipeline, which
+// take shell text and run it through bash.
+func jsonDocFlag(sb *cf.SubcommandBuilder, what string) *cf.SubcommandBuilder {
+	return sb.
+		Flag("-json", "-j").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.json"}).
+		Global().
+		Default("").
+		Help("Run the pipeline document FILE (as `ssql run` does: no shell, validated first) and " + what + " its fragments. Mutually exclusive with -pipeline/-script.").
+		Done()
+}
+
+// runDocForFragments validates and runs a pipeline document with SSQL_MODE
+// set for every stage, returning the fragment stream the stages emit.
+func runDocForFragments(root *cf.Command, path, mode, label string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("ssql generate %s: %w", label, err)
+	}
+	stages, err := parsePipelineDoc(data)
+	if err != nil {
+		return nil, fmt.Errorf("ssql generate %s: %w", label, err)
+	}
+	if err := checkPipelineDoc(root, stages, ""); err != nil {
+		return nil, fmt.Errorf("ssql generate %s: %w", label, err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	if err := runPipelineDoc(context.Background(), root, self, stages, nil, &out, os.Stderr, "SSQL_MODE="+mode); err != nil {
+		return nil, fmt.Errorf("ssql generate %s: pipeline failed (mode=%s): %w", label, mode, err)
+	}
+	return out.Bytes(), nil
+}
+
+// generateFragmentSource resolves a generate subcommand's fragment source:
+// stdin unless exactly one of -pipeline, -script or -json names it.
+// mode is the SSQL_MODE the stages run under.
+func generateFragmentSource(ctx *cf.Context, mode, label string) (io.Reader, error) {
+	get := func(name string) string {
+		v, _ := ctx.GlobalFlags[name].(string)
+		return v
+	}
+	pipeline, script, doc := get("-pipeline"), get("-script"), get("-json")
+	set := 0
+	for _, v := range []string{pipeline, script, doc} {
+		if v != "" {
+			set++
+		}
+	}
+	if set > 1 {
+		return nil, fmt.Errorf("ssql generate %s: -pipeline, -script and -json are mutually exclusive (each names the pipeline source)", label)
+	}
+	var fragments []byte
+	var err error
+	switch {
+	case doc != "":
+		fragments, err = runDocForFragments(ctx.Command, doc, mode, label+" -json")
+	case script != "":
+		fragments, err = runScriptForFragments(script, mode)
+	case pipeline != "":
+		fragments, err = runPipelineForFragments(pipeline, mode, label+" -pipeline")
+	default:
+		return ctx.Stdin(), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(fragments), nil
 }

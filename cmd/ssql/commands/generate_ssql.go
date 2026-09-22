@@ -2,7 +2,6 @@ package commands
 
 import (
 	"slices"
-	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -19,7 +18,7 @@ import (
 
 // registerGenerateSSQL registers the "generate ssql" subcommand
 func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("ssql").
+	sub := cmd.Subcommand("ssql").
 		Description("Optimize an ssql pipeline by rewriting it with fewer commands").
 		Example("(export SSQL_MODE=record; ssql from ssh host /data.csv | ssql where -if status ge 500 | ssql to table) | ssql generate ssql", "Push filter into SSH").
 		Example("(export SSQL_MODE=record; ssql from csv data.csv | ssql sort -desc revenue | ssql limit 10 | ssql to table) | ssql generate ssql", "Rewrite sort+limit as top").
@@ -42,7 +41,8 @@ func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
 		Global().
 		Default("").
 		Help("Run PIPELINE (a quoted ssql pipeline string) in record mode and optimize its fragments — no export/subshell ceremony needed.").
-		Done().
+		Done()
+	jsonDocFlag(sub, "optimize").
 		Handler(func(ctx *cf.Context) error {
 			var run bool
 			var explain bool
@@ -53,13 +53,9 @@ func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
 				explain = v.(bool)
 			}
 
-			var fragSrc io.Reader = os.Stdin
-			if v, ok := ctx.GlobalFlags["-pipeline"]; ok && v.(string) != "" {
-				fragments, err := runPipelineForFragments(v.(string), "record", "ssql -pipeline")
-				if err != nil {
-					return err
-				}
-				fragSrc = bytes.NewReader(fragments)
+			fragSrc, err := generateFragmentSource(ctx, "record", "ssql")
+			if err != nil {
+				return err
 			}
 			pipeline, rules, err := optimizePipeline(fragSrc)
 			if err != nil {

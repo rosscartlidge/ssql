@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`generate go|sql|ssql|json -json FILE`: a pipeline document as the
+  fragment source.** The shell-free twin of `-pipeline` and `-script`:
+  the document is validated whole and run by the same runner as `ssql
+  run`, under the generation mode, and its fragments are generated from.
+  `ssql generate sql -json report.json -dialect postgres` and `ssql
+  generate go -json report.json -build ./report` need no shell and no
+  `SSQL_MODE`. `-mode` applies to `go`. The three source flags are
+  mutually exclusive.
 - **Injection fuzz** (DFC134 §6): the random differential tester now
   draws SQL-injection strings (apostrophes, comment markers, statement
   terminators, LIKE metacharacters, shell and CSV quoting) as cell values
@@ -17,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sql_injection_strings_are_data` pins the property in every lane.
 
 ### Fixed
+- **`ssql frob` printed the banner and exited 0.** A bare word that names
+  no command is an unknown command now (autocli v4.20.0), whether or not
+  the root has a handler; `run -check` and `generate -json` inherit it,
+  so a misspelt command in a document is refused before anything runs.
 - **Generated Go could be broken by a value containing `*/`.** The
   program's header repeats the pipeline inside a block comment; a `-set`
   value `fine */` ended the comment and the rest compiled as code. The

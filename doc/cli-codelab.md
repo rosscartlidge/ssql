@@ -848,9 +848,17 @@ as a document from the stages' own arguments, ready for `run`:
 (export SSQL_MODE=record; ssql from orders.csv | ssql where -if status eq shipped | ssql join customers.csv -using customer_id | ssql to table) | ssql generate json
 ```
 
-`SSQL_MODE=record ssql run doc.json | ssql generate go` generates code
-from a document exactly as from the typed pipeline: the stages are the
-same processes. The reasoning, and the SQL comparison, is in
+A document is also a source for `generate`: `-json FILE` runs it the way
+`run` does, with no shell, and generates from its fragments. So a
+program that holds a document gets SQL, Go or the optimised text in one
+step:
+
+```bash
+ssql generate sql -json /tmp/report.json
+ssql generate ssql -json /tmp/report.json
+```
+
+The reasoning, and the SQL comparison, is in
 [DFC134](research/dfc134_pipelines_as_data.md).
 
 ## 10. Reference

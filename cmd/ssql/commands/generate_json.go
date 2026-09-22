@@ -16,7 +16,7 @@ import (
 // the argument that named its /dev/fd. `run -print` is the other direction,
 // so text → document → text round-trips.
 func registerGenerateJSON(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("json").
+	sub := cmd.Subcommand("json").
 		Description("Emit the pipeline as a document for `ssql run`: a JSON list of stages, each the stage's own argv").
 		Example("(export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql to csv) | ssql generate json > pipeline.json", "Capture a typed pipeline as a document").
 		Example("ssql run pipeline.json", "Run it later, with no shell").
@@ -28,8 +28,19 @@ func registerGenerateJSON(cmd *cf.SubcommandBuilder) {
 			Help("The whole document on one line").
 			Done().
 
+		Flag("-pipeline", "-p").
+			String().
+			Global().
+			Default("").
+			Help("Run PIPELINE (a quoted ssql pipeline string) in record mode and emit its document: shell text in, document out").
+			Done()
+	jsonDocFlag(sub, "re-emit (normalise)").
 		Handler(func(ctx *cf.Context) error {
-			fragments, err := lib.ReadCodeFragmentsFromReader(ctx.Stdin())
+			src, err := generateFragmentSource(ctx, "record", "json")
+			if err != nil {
+				return err
+			}
+			fragments, err := lib.ReadCodeFragmentsFromReader(src)
 			if err != nil {
 				return fmt.Errorf("reading fragments: %w", err)
 			}
