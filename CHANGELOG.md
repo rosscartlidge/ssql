@@ -5,7 +5,7 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.104.0] - 2026-09-22
 
 ### Added
 - **`-arg VALUE`, the flag form of a positional argument, on every
@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-stdin` reads the document from stdin. Stages inherit the environment,
   so `SSQL_MODE=record ssql run doc.json | ssql generate go` works as
   from a typed pipeline. `serve -readonly` refuses `run`. Codelab §9.
+- **`generate json`: the pipeline as a document for `ssql run`.** Emits
+  one JSON stage per line from each fragment's own argv (`Op.Argv`, never
+  parsed shell text); a process substitution becomes a nested pipeline.
+  `run -print` is the other direction, and the round trip document → shell
+  → `generate json` is byte-identical (pinned by `TestRunDocument`).
 - **`-param NAME TYPE VALUE`: expression parameters** on `where` and
   `update` (DFC134 §5.3). NAME becomes a variable of the clause's
   `-if-expr` / `-set-expr` expressions; the value is data whatever it

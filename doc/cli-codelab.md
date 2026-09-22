@@ -841,6 +841,13 @@ EOF
 ssql run /tmp/joined.json
 ```
 
+The other direction is `generate json`: a pipeline you typed, captured
+as a document from the stages' own arguments, ready for `run`:
+
+```bash
+(export SSQL_MODE=record; ssql from orders.csv | ssql where -if status eq shipped | ssql join customers.csv -using customer_id | ssql to table) | ssql generate json
+```
+
 `SSQL_MODE=record ssql run doc.json | ssql generate go` generates code
 from a document exactly as from the typed pipeline: the stages are the
 same processes. The reasoning, and the SQL comparison, is in

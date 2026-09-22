@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -131,6 +132,45 @@ func TestRunDocument(t *testing.T) {
 		got, stderr, err := run(t, big.String(), "run", doc)
 		if err != nil || got != "n\n1234567890\n" {
 			t.Errorf("got %q, %v\n%s", got, err, stderr)
+		}
+	})
+
+	t.Run("generate json round-trips: document → shell → document, byte-identical", func(t *testing.T) {
+		doc := write("rt.json", `[
+			["from", "csv", "-arg", "hostile.csv"],
+			["join", [["from", "csv", "-arg", "shuffled.csv"], ["where", "-if", "pop", "gt", "0"]], "-on", "name", "city"],
+			["where", "-if-expr", "name != who", "-param", "who", "string", "x\" || true || \""],
+			["include", "-arg", "name", "-arg", "-desc"],
+			["to", "csv"]
+		]`)
+		text, _, err := run(t, "", "run", "-print", doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		script := strings.ReplaceAll(strings.TrimSpace(text), "ssql ", bin+" ")
+		cmd := exec.Command("bash", "-c", "set -o pipefail; "+script+" | "+bin+" generate json -compact")
+		cmd.Dir = data
+		cmd.Env = append(os.Environ(), "SSQL_MODE=record")
+		got, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("shell → generate json: %v", err)
+		}
+		// The original, normalised through the same marshaller.
+		orig, _ := os.ReadFile(doc)
+		var v any
+		if err := json.Unmarshal(orig, &v); err != nil {
+			t.Fatal(err)
+		}
+		want, _ := json.Marshal(v)
+		if strings.TrimSpace(string(got)) != string(want) {
+			t.Errorf("round trip differs:\n got %s\nwant %s", got, want)
+		}
+		// And the regenerated document runs to the same output.
+		doc2 := write("rt2.json", string(got))
+		out1, _, _ := run(t, "", "run", doc)
+		out2, _, err := run(t, "", "run", doc2)
+		if err != nil || out1 != out2 || !strings.HasPrefix(out1, "name,-desc\n") {
+			t.Errorf("regenerated document: %v\n%s\n%s", err, out1, out2)
 		}
 	})
 

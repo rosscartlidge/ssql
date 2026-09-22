@@ -230,9 +230,14 @@ mode passing through. Two doc-layer unit tests against a small fake
 root. Nothing new was found this time; the two earlier units had already
 walked the argv re-readers.
 
-Not done: the text → document direction (a shell parser is a shell
-grammar; the honest source is the fragments' `Op.Argv`, i.e. `generate
-ssql -json` or similar, §5.5); a JSON Schema for the document generated
+Text → document (Ross, same day: "do we have a `generate json`?"):
+`generate json` builds the document from each fragment's `Op.Argv`, the
+stage's own argv, so no shell text is parsed; a func fragment (process
+substitution) becomes the nested pipeline in the `/dev/fd` argument it
+fed. With `run -print` the round trip document → shell → document is
+byte-identical (pinned), which is DFC118's bijection for the document
+form. A fragment without an `Op` (an older ssql over SSH) is refused
+rather than parsed. Not done: a JSON Schema for the document generated
 from `-spec-json` (§5.5); policy (§5.4).
 
 **5.2 Close option injection: `-arg`, a flag form for every positional
