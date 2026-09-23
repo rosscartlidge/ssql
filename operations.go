@@ -829,9 +829,9 @@ func RunningSum(fieldName string) Filter[Record, Record] {
 				// Copy original record
 				maps.Insert(outputRecord.fields, record.All())
 				// Add running sum fields
-				outputRecord.fields["running_sum"] = runningTotal
-				outputRecord.fields["running_count"] = int64(count)
-				outputRecord.fields["running_avg"] = runningTotal / float64(count)
+				outputRecord.put("running_sum", runningTotal)
+				outputRecord.put("running_count", int64(count))
+				outputRecord.put("running_avg", runningTotal/float64(count))
 
 				if !yield(outputRecord.Freeze()) {
 					return
@@ -875,9 +875,9 @@ func RunningAverage(fieldName string, windowSize int) Filter[Record, Record] {
 				// Create output record
 				outputRecord := MakeMutableRecord()
 				maps.Insert(outputRecord.fields, record.All())
-				outputRecord.fields["moving_avg"] = avg
-				outputRecord.fields["window_size"] = int64(len(window))
-				outputRecord.fields["total_count"] = int64(count)
+				outputRecord.put("moving_avg", avg)
+				outputRecord.put("window_size", int64(len(window)))
+				outputRecord.put("total_count", int64(count))
 
 				if !yield(outputRecord.Freeze()) {
 					return
@@ -909,8 +909,8 @@ func ExponentialMovingAverage(fieldName string, alpha float64) Filter[Record, Re
 				// Create output record
 				outputRecord := MakeMutableRecord()
 				maps.Insert(outputRecord.fields, record.All())
-				outputRecord.fields["ema"] = ema
-				outputRecord.fields["alpha"] = alpha
+				outputRecord.put("ema", ema)
+				outputRecord.put("alpha", alpha)
 
 				if !yield(outputRecord.Freeze()) {
 					return
@@ -946,9 +946,9 @@ func RunningMinMax(fieldName string) Filter[Record, Record] {
 				// Create output record
 				outputRecord := MakeMutableRecord()
 				maps.Insert(outputRecord.fields, record.All())
-				outputRecord.fields["running_min"] = min
-				outputRecord.fields["running_max"] = max
-				outputRecord.fields["running_range"] = max - min
+				outputRecord.put("running_min", min)
+				outputRecord.put("running_max", max)
+				outputRecord.put("running_range", max-min)
 
 				if !yield(outputRecord.Freeze()) {
 					return
@@ -976,9 +976,9 @@ func RunningCount(fieldName string) Filter[Record, Record] {
 				// Create output record
 				outputRecord := MakeMutableRecord()
 				maps.Insert(outputRecord.fields, record.All())
-				outputRecord.fields["distinct_counts"] = counts
-				outputRecord.fields["total_count"] = totalCount
-				outputRecord.fields["distinct_values"] = int64(len(counts))
+				outputRecord.put("distinct_counts", counts)
+				outputRecord.put("total_count", totalCount)
+				outputRecord.put("distinct_values", int64(len(counts)))
 
 				if !yield(outputRecord.Freeze()) {
 					return

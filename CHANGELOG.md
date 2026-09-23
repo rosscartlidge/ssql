@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Column order is the same in every lane, and it is the order you
+  asked for.** A generated record program's output was alphabetical
+  whatever `include` said (Ross: "why the field order change"): the CSV
+  reader sorted its header into the schema, `MutableRecord.Freeze`
+  sorted the map's keys, and the writers sorted the union of names.
+  Now a record keeps its field order through every mutation, the CSV
+  reader keeps header order, `include a b c` yields `a b c` in exec,
+  record and typed (`ssql.Project`), a field a stage adds lands at the
+  end, `join` gives left's columns then right's new ones, and
+  `group-by`'s result columns come out in the order their flags were
+  typed (built-ins as typed, then `-expr`, then `-stream-expr`; exec,
+  record and typed used the aggregate registry's order, SQL the command
+  line's). The writers place a column first seen on a later row after
+  its predecessor there (`window -lag`'s column on row 2). The
+  equivalence gate now compares column order across lanes instead of
+  normalising it away. Library: `ssql.AggregateOrdered`, `ssql.NamedAgg`,
+  `RollupConfig.Ordered`, `ssql.Project`; `Aggregate(map)` emits sorted.
 - **A `-if` literal that is not of the field's kind is an error in every
   lane** (`where -if age gt abc` on a numeric `age`, `-if ok eq maybe` on
   a bool, `-if age contains 3`; and `-if-field` over two kinds). Until

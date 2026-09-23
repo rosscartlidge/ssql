@@ -3,7 +3,6 @@ package ssql
 import (
 	"fmt"
 	"iter"
-	"maps"
 	"math"
 	"sort"
 	"strings"
@@ -79,12 +78,16 @@ func innerJoinNested(
 // This is optimized for high-throughput join operations by avoiding the
 // MutableRecord -> Freeze() copy overhead.
 func mergeRecords(left, right Record) Record {
-	// Pre-allocate with combined capacity
-	// Copy left fields directly
-	merged := maps.Collect(left.All())
-	// Copy right fields (may override left on field name collision)
-	maps.Insert(merged, right.All())
-	return NewRecord(merged)
+	// Left's fields in left's order, then right's new ones in right's
+	// order (a collision keeps its left position with right's value).
+	m := MakeMutableRecordWithCapacity(left.Len() + right.Len())
+	for k, v := range left.All() {
+		m.put(k, v)
+	}
+	for k, v := range right.All() {
+		m.put(k, v)
+	}
+	return m.Freeze()
 }
 
 // innerJoinHash performs O(n+m) hash-based inner join
@@ -793,22 +796,21 @@ func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record
 // If renames is empty, all right fields are copied (standard merge behavior).
 // If renames has entries, only those fields are copied with the specified new names.
 func mergeWithRenames(left, right Record, renames map[string]string) Record {
-	// Start with a copy of left
-	merged := maps.Collect(left.All())
-
 	if renames == nil {
-		// No renames specified - copy all right fields (standard merge)
-		maps.Insert(merged, right.All())
-	} else {
-		// Only copy specified fields with new names
-		for rightField, newName := range renames {
-			if val, exists := Get[any](right, rightField); exists {
-				merged[newName] = val
-			}
+		return mergeRecords(left, right)
+	}
+	// Left in left's order, then the selected right fields under their
+	// new names, in right's order.
+	m := MakeMutableRecordWithCapacity(left.Len() + len(renames))
+	for k, v := range left.All() {
+		m.put(k, v)
+	}
+	for rightField, val := range right.All() {
+		if newName, ok := renames[rightField]; ok {
+			m.put(newName, val)
 		}
 	}
-
-	return NewRecord(merged)
+	return m.Freeze()
 }
 
 // ============================================================================
@@ -862,11 +864,11 @@ func GroupBy[K comparable](sequenceField string, keyField string, keyFn func(Rec
 				result := MakeMutableRecord()
 
 				// Set the key field
-				result.fields[keyField] = key
+				result.put(keyField, key)
 
 				// Add the sequence of group members as an iter.Seq[Record]
 				groupRecords := groups[key]
-				result.fields[sequenceField] = func() iter.Seq[Record] {
+				result.put(sequenceField, func() iter.Seq[Record] {
 					return func(yield func(Record) bool) {
 						for _, record := range groupRecords {
 							if !yield(record) {
@@ -874,7 +876,7 @@ func GroupBy[K comparable](sequenceField string, keyField string, keyFn func(Rec
 							}
 						}
 					}
-				}()
+				}())
 
 				if !yield(result.Freeze()) {
 					return
@@ -943,8 +945,8 @@ func groupByOneField(sequenceField, field string) Filter[Record, Record] {
 			for _, key := range keys {
 				groupRecords := groups[key]
 				result := MakeMutableRecord()
-				result.fields[field] = key
-				result.fields[sequenceField] = recordsToSeq(groupRecords)
+				result.put(field, key)
+				result.put(sequenceField, recordsToSeq(groupRecords))
 
 				if !yield(result.Freeze()) {
 					return
@@ -998,9 +1000,9 @@ func groupByTwoFields(sequenceField, field1, field2 string) Filter[Record, Recor
 			for _, key := range keys {
 				groupRecords := groups[key]
 				result := MakeMutableRecord()
-				result.fields[field1] = key[0]
-				result.fields[field2] = key[1]
-				result.fields[sequenceField] = recordsToSeq(groupRecords)
+				result.put(field1, key[0])
+				result.put(field2, key[1])
+				result.put(sequenceField, recordsToSeq(groupRecords))
 
 				if !yield(result.Freeze()) {
 					return
@@ -1054,9 +1056,9 @@ func groupByMultipleFields(sequenceField string, fields []string) Filter[Record,
 					if i >= 8 {
 						break
 					}
-					result.fields[field] = key[i]
+					result.put(field, key[i])
 				}
-				result.fields[sequenceField] = recordsToSeq(groupRecords)
+				result.put(sequenceField, recordsToSeq(groupRecords))
 
 				if !yield(result.Freeze()) {
 					return
@@ -1123,9 +1125,9 @@ func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, 
 					// Group changed — emit buffered group
 					result := MakeMutableRecord()
 					for i, field := range fields {
-						result.fields[field] = currentKeyValues[i]
+						result.put(field, currentKeyValues[i])
 					}
-					result.fields[sequenceField] = recordsToSeq(buffer)
+					result.put(sequenceField, recordsToSeq(buffer))
 					if !yield(result.Freeze()) {
 						return
 					}
@@ -1141,9 +1143,9 @@ func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, 
 			if len(buffer) > 0 {
 				result := MakeMutableRecord()
 				for i, field := range fields {
-					result.fields[field] = currentKeyValues[i]
+					result.put(field, currentKeyValues[i])
 				}
-				result.fields[sequenceField] = recordsToSeq(buffer)
+				result.put(sequenceField, recordsToSeq(buffer))
 				yield(result.Freeze())
 			}
 		}
@@ -1213,6 +1215,33 @@ type AggregateFunc func([]Record) AggregateResult
 //	        return -ssql.GetOr(r, "total_revenue", float64(0))
 //	    })(summary))
 func Aggregate(sequenceField string, aggregations map[string]AggregateFunc) Filter[Record, Record] {
+	// A map has no order; results come out sorted by name. Callers that
+	// know the order the user named (the CLI) use AggregateOrdered.
+	names := make([]string, 0, len(aggregations))
+	for n := range aggregations {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	aggs := make([]NamedAgg, len(names))
+	for i, n := range names {
+		aggs[i] = NamedAgg{Name: n, Fn: aggregations[n]}
+	}
+	return AggregateOrdered(sequenceField, aggs)
+}
+
+// NamedAgg is one aggregation result: the field it produces and the
+// function that computes it.
+type NamedAgg struct {
+	Name string
+	Fn   AggregateFunc
+}
+
+// AggregateOrdered is Aggregate with the result fields in the order given,
+// which is the order `group-by` names them (keys first, then each -sum /
+// -count / -expr result as written); exec and generated code share it so
+// the two lanes' column order cannot drift (until 2026-09-23 generated
+// code iterated a map and the columns came out in random order).
+func AggregateOrdered(sequenceField string, aggregations []NamedAgg) Filter[Record, Record] {
 	return func(input iter.Seq[Record]) iter.Seq[Record] {
 		return func(yield func(Record) bool) {
 			for record := range input {
@@ -1221,7 +1250,7 @@ func Aggregate(sequenceField string, aggregations map[string]AggregateFunc) Filt
 				// Copy all fields except the sequence field
 				for field, value := range record.All() {
 					if field != sequenceField {
-						result.fields[field] = value
+						result.put(field, value)
 					}
 				}
 
@@ -1235,9 +1264,9 @@ func Aggregate(sequenceField string, aggregations map[string]AggregateFunc) Filt
 						}
 
 						// Apply all aggregation functions (type-safe at compile time)
-						for name, aggFn := range aggregations {
-							aggResult := aggFn(records)
-							result.fields[name] = aggResult.getValue()
+						for _, agg := range aggregations {
+							aggResult := agg.Fn(records)
+							result.put(agg.Name, aggResult.getValue())
 						}
 					}
 				}
@@ -1403,8 +1432,26 @@ const (
 // RollupConfig specifies the fields, aggregations, and mode for a rollup operation.
 type RollupConfig struct {
 	Fields       []string                 // Group-by fields in order
-	Aggregations map[string]AggregateFunc // Named aggregation functions
+	Aggregations map[string]AggregateFunc // Named aggregation functions (results sorted by name)
+	Ordered      []NamedAgg               // The same, in the order to emit; takes precedence over Aggregations
 	Mode         RollupMode               // Rollup or Cube
+}
+
+// aggs returns the aggregations in emission order.
+func (c RollupConfig) aggs() []NamedAgg {
+	if c.Ordered != nil {
+		return c.Ordered
+	}
+	names := make([]string, 0, len(c.Aggregations))
+	for n := range c.Aggregations {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]NamedAgg, len(names))
+	for i, n := range names {
+		out[i] = NamedAgg{Name: n, Fn: c.Aggregations[n]}
+	}
+	return out
 }
 
 // Rollup performs hierarchical or cube aggregation, enriching each detail-level row
@@ -1430,6 +1477,7 @@ type RollupConfig struct {
 //	enriched := ssql.Rollup(config)(records)
 //	// Each row: dept, region, dept_region_count, dept_count, count
 func Rollup(config RollupConfig) Filter[Record, Record] {
+	aggs := config.aggs()
 	return func(input iter.Seq[Record]) iter.Seq[Record] {
 		return func(yield func(Record) bool) {
 			// 1. Materialize all input records
@@ -1469,8 +1517,8 @@ func Rollup(config RollupConfig) Filter[Record, Record] {
 				for _, key := range groupOrder {
 					members := groups[key]
 					results := make(aggResults)
-					for name, aggFn := range config.Aggregations {
-						results[name] = aggFn(members).getValue()
+					for _, agg := range aggs {
+						results[agg.Name] = agg.Fn(members).getValue()
 					}
 					setResults[i][key] = results
 				}
@@ -1500,7 +1548,7 @@ func Rollup(config RollupConfig) Filter[Record, Record] {
 				for _, field := range config.Fields {
 					val, exists := Get[any](representative, field)
 					if exists {
-						mut.fields[field] = val
+						mut.put(field, val)
 					}
 				}
 
@@ -1511,9 +1559,8 @@ func Rollup(config RollupConfig) Filter[Record, Record] {
 					prefix := groupingSetPrefix(setFields)
 
 					if results, ok := setResults[i][lookupKey]; ok {
-						for aggName, value := range results {
-							fieldName := prefix + aggName
-							mut.fields[fieldName] = value
+						for _, agg := range aggs {
+							mut.put(prefix+agg.Name, results[agg.Name])
 						}
 					}
 				}
@@ -2119,7 +2166,7 @@ func Window(configs []WindowConfig) Filter[Record, Record] {
 				mut := r.ToMutable()
 				for field, val := range results[origIdx] {
 					if val == nil {
-						mut.fields[field] = nil
+						mut.put(field, nil)
 					} else {
 						mut = applyWindowValue(mut, field, val)
 					}
@@ -2382,7 +2429,7 @@ func applyWindowValue(mut MutableRecord, field string, val any) MutableRecord {
 	case bool:
 		return mut.Bool(field, v)
 	default:
-		mut.fields[field] = val
+		mut.put(field, val)
 		return mut
 	}
 }
@@ -2976,7 +3023,7 @@ func streamWindowImmediate(allAggs []swSpecAgg, partitionBy []string, orderBy []
 				for _, sa := range allAggs {
 					val := sa.agg.update(record, pos, orderBy, prevRecord)
 					if val == nil {
-						mut.fields[sa.resultName] = nil
+						mut.put(sa.resultName, nil)
 					} else {
 						mut = applyWindowValue(mut, sa.resultName, val)
 					}
@@ -3018,10 +3065,13 @@ func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSp
 
 			emitRecord := func(pr pendingRecord, bufIdx int, bufLen int) bool {
 				mut := pr.record.ToMutable()
-				// Apply regular agg values
-				for name, val := range pr.aggValues {
+				// Apply regular agg values, in spec order (the record keeps
+				// insertion order; a map walk here would be random).
+				for _, sa := range regularAggs {
+					name := sa.resultName
+					val := pr.aggValues[name]
 					if val == nil {
-						mut.fields[name] = nil
+						mut.put(name, nil)
 					} else {
 						mut = applyWindowValue(mut, name, val)
 					}
@@ -3037,7 +3087,7 @@ func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSp
 						v = ls.def // LEAD's default, or nil → absent
 					}
 					if v == nil {
-						mut.fields[ls.resultName] = nil
+						mut.put(ls.resultName, nil)
 					} else {
 						mut = applyWindowValue(mut, ls.resultName, v)
 					}

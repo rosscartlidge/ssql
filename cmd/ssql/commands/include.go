@@ -79,20 +79,10 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Build included fields map
-			includedMap := make(map[string]bool)
-			for _, field := range fields {
-				includedMap[field] = true
-			}
-
-			// Build inclusion function - delete fields not in the included list
+			// Keep the named fields, in the order named (ssql.Project: the
+			// same primitive generated record code calls).
 			includer := func(r ssql.Record) ssql.Record {
-				mut := r.ToMutable()
-				for k := range r.All() {
-					if !includedMap[k] {
-						mut = mut.Delete(k)
-					}
-				}
-				return mut.Freeze()
+				return ssql.Project(r, fields...)
 			}
 
 			// Apply inclusion
@@ -154,30 +144,16 @@ func generateIncludeCode(fields []string) error {
 		return err
 	}
 
-	// Generate field list
-	// Build included fields map
-	var includedMap strings.Builder
-	includedMap.WriteString("map[string]bool{")
-	for i, field := range fields {
-		if i > 0 {
-			includedMap.WriteString(", ")
-		}
-		includedMap.WriteString(fmt.Sprintf("%q: true", field))
-	}
-	includedMap.WriteString("}")
-
-	// Generate code
+	// The named fields, in the order named: ssql.Project, the primitive
+	// exec's include calls too.
 	outputVar := "included"
+	quoted := make([]string, len(fields))
+	for i, f := range fields {
+		quoted[i] = fmt.Sprintf("%q", f)
+	}
 	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
-		includedMap := %s
-		mut := r.ToMutable()
-		for k := range r.All() {
-			if !includedMap[k] {
-				mut = mut.Delete(k)
-			}
-		}
-		return mut.Freeze()
-	})(%s)`, outputVar, includedMap.String(), inputVar)
+		return ssql.Project(r, %s)
+	})(%s)`, outputVar, strings.Join(quoted, ", "), inputVar)
 
 	// Create stmt fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -285,7 +286,7 @@ type groupBySpecs struct {
 // parseGroupBySpecs decodes all aggregation and modifier flags from a
 // parsed group-by Context. It is total and side-effect-free.
 func parseGroupBySpecs(ctx *cf.Context) groupBySpecs {
-	return groupBySpecs{
+	specs := groupBySpecs{
 		aggs:        parseAggSpecs(ctx),
 		exprs:       parseExprSpecs(ctx),
 		streamExprs: parseStreamExprSpecs(ctx),
@@ -293,6 +294,21 @@ func parseGroupBySpecs(ctx *cf.Context) groupBySpecs {
 		cube:        groupByBoolFlag(ctx, "-cube"),
 		presorted:   groupByBoolFlag(ctx, "-presorted"),
 	}
+	// Result columns come out in the order their flags were typed: the
+	// built-in aggregates as typed, then the -expr results as typed, then
+	// -stream-expr (SQL has no -expr, so the buckets never interleave
+	// there). Sorted here, once, so every emission site inherits it.
+	order := specs.resultOrder(ctx)
+	if len(order) > 0 {
+		pos := make(map[string]int, len(order))
+		for i, n := range order {
+			pos[n] = i
+		}
+		sort.SliceStable(specs.aggs, func(i, j int) bool { return pos[specs.aggs[i].result] < pos[specs.aggs[j].result] })
+		sort.SliceStable(specs.exprs, func(i, j int) bool { return pos[specs.exprs[i].result] < pos[specs.exprs[j].result] })
+		sort.SliceStable(specs.streamExprs, func(i, j int) bool { return pos[specs.streamExprs[i].result] < pos[specs.streamExprs[j].result] })
+	}
+	return specs
 }
 
 // parseAggSpecs decodes the built-in aggregation flags (aggDefs) into
@@ -399,4 +415,86 @@ func parseStreamExprSpecs(ctx *cf.Context) []streamExprSpec {
 func groupByBoolFlag(ctx *cf.Context, name string) bool {
 	v, _ := ctx.GlobalFlags[name].(bool)
 	return v
+}
+
+// resultOrder returns every aggregation result name in the order its flag
+// was TYPED on the command line, interleaving the built-in flags, -expr
+// and -stream-expr. autocli keeps each flag's own occurrences in order but
+// not their interleaving, so the order is recovered from the stage's argv
+// with the subcommand's declared arities (the same declaration autocli
+// parsed with, so a result name that looks like a flag cannot mislead
+// it). Every lane emits result columns in this order (until 2026-09-23
+// exec, record and typed used the aggregate registry's order and SQL the
+// command line's; the column-order gate caught the split).
+func (s groupBySpecs) resultOrder(ctx *cf.Context) []string {
+	// Position of each flag occurrence in argv, as (flag, k): the k-th
+	// occurrence of that flag.
+	if ctx.Command == nil {
+		return nil // a hand-built Context (tests): registry order
+	}
+	sc := ctx.Command.GetSubcommand("group-by")
+	if sc == nil {
+		return nil
+	}
+	arity := map[string]int{}
+	canon := map[string]string{}
+	for _, f := range sc.Flags {
+		for _, n := range f.Names {
+			arity[n] = f.ArgCount
+			canon[n] = f.Names[0]
+		}
+	}
+	type occ struct {
+		flag string
+		k    int
+	}
+	var occs []occ
+	count := map[string]int{}
+	args := ctx.RawArgs
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == cf.ArgFlag {
+			i++
+			continue
+		}
+		name, ok := canon[a]
+		if !ok && strings.HasPrefix(a, "+") {
+			name, ok = canon["-"+a[1:]]
+		}
+		if !ok {
+			continue
+		}
+		occs = append(occs, occ{name, count[name]})
+		count[name]++
+		i += arity[a]
+	}
+	// The k-th spec of each flag, in the order specs were collected.
+	byFlag := map[string][]string{}
+	for _, a := range s.aggs {
+		f := aggFlagFor(a.function)
+		byFlag[f] = append(byFlag[f], a.result)
+	}
+	for _, e := range s.exprs {
+		byFlag["-expr"] = append(byFlag["-expr"], e.result)
+	}
+	for _, e := range s.streamExprs {
+		byFlag["-stream-expr"] = append(byFlag["-stream-expr"], e.result)
+	}
+	var order []string
+	for _, o := range occs {
+		if names := byFlag[o.flag]; o.k < len(names) {
+			order = append(order, names[o.k])
+		}
+	}
+	return order
+}
+
+// aggFlagFor maps an aggregate function name back to its flag.
+func aggFlagFor(fn string) string {
+	for _, d := range aggDefs {
+		if d.fn == fn {
+			return d.flag
+		}
+	}
+	return ""
 }

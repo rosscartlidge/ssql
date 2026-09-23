@@ -207,7 +207,7 @@ func CopyField(m MutableRecord, src Record, target, source string) MutableRecord
 	if !ok {
 		return m.Delete(target)
 	}
-	m.fields[target] = v
+	m.put(target, v)
 	return m
 }
 
@@ -368,4 +368,18 @@ func MustBool(literal, field, op string) bool {
 		panic(&CompareError{Field: field, Op: op, Value: literal, Kind: "bool"})
 	}
 	return b
+}
+
+// Project returns r with only the named fields, in the order named: the
+// record form of `include a b c`. A named field the record lacks is left
+// out (absence stays absent). One implementation for exec and generated
+// record code, so the two lanes' column order cannot drift.
+func Project(r Record, fields ...string) Record {
+	m := MakeMutableRecordWithCapacity(len(fields))
+	for _, f := range fields {
+		if v, ok := Get[any](r, f); ok {
+			m.put(f, v)
+		}
+	}
+	return m.Freeze()
 }

@@ -287,10 +287,12 @@ func readRows(csvReader rowReader, cfg CSVConfig, yield func(Record, error) bool
 		}
 	}
 
-	// Shared schema, created ONCE (the #1 performance rule); records
-	// are positional against it, so map CSV column → schema slot.
+	// Shared schema, created ONCE (the #1 performance rule), in HEADER
+	// order: a record's field order is its schema's, and the header is
+	// the order the file's author chose. (Sorted until 2026-09-23, which
+	// made every record-mode output alphabetical.) Records are positional
+	// against it, so map CSV column → schema slot.
 	fieldNames := slices.Clone(colNames)
-	slices.Sort(fieldNames)
 	schema := NewSchema(fieldNames)
 	fieldIndices := make([]int, ncols)
 	for i, name := range colNames {

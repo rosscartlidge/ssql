@@ -104,6 +104,84 @@ type EquivCase struct {
 	Ordered  bool              // output order is semantically defined
 	Golden   []map[string]any  // optional implementation-independent oracle
 	Skip     map[string]string // lane name -> skip reason
+
+	// ColumnsUnordered opts a case out of the column-order comparison, for
+	// the shapes where a lane's order is legitimately its own (say why).
+	ColumnsUnordered bool
+}
+
+// equivCommon is a filtered to the names also in b, keeping a's order.
+func equivCommon(a, b []string) []string {
+	in := make(map[string]bool, len(b))
+	for _, n := range b {
+		in[n] = true
+	}
+	var out []string
+	for _, n := range a {
+		if in[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// equivColumnOrder is the positional union of a lane's JSONL key order
+// (the writers' rule: a key first seen in a later row goes after the key
+// that precedes it there), for comparing column order across lanes.
+func equivColumnOrder(raw string) []string {
+	var fields []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") || strings.HasPrefix(line, `{"_schema"`) {
+			continue
+		}
+		dec := json.NewDecoder(strings.NewReader(line))
+		depth, prev := 0, ""
+		for {
+			tok, err := dec.Token()
+			if err != nil {
+				break
+			}
+			switch v := tok.(type) {
+			case json.Delim:
+				switch v {
+				case '{', '[':
+					depth++
+				case '}', ']':
+					depth--
+				}
+			case string:
+				if depth != 1 {
+					continue
+				}
+				// A key at depth 1 is followed by its value; skip the value.
+				key := v
+				var val any
+				if err := dec.Decode(&val); err != nil {
+					break
+				}
+				if !seen[key] {
+					seen[key] = true
+					placed := false
+					if prev != "" {
+						for i, f := range fields {
+							if f == prev {
+								fields = slices.Insert(fields, i+1, key)
+								placed = true
+								break
+							}
+						}
+					}
+					if !placed {
+						fields = append(fields, key)
+					}
+				}
+				prev = key
+			}
+		}
+	}
+	return fields
 }
 
 // equivLane is one result-producing path.
@@ -173,27 +251,17 @@ func equivLanes() []equivLane {
 			if raw == "" || raw == "[]" || raw == "[{]" {
 				return ""
 			}
-			var rows []map[string]any
+			// One JSONL line per row, VERBATIM: DuckDB's key order is its
+			// SELECT order, which the column-order comparison needs (a
+			// round trip through Go maps sorted it). The HUGEINT-as-string
+			// normalisation is applied to the parsed rows in runEquivCase.
+			var rows []json.RawMessage
 			if err := json.Unmarshal([]byte(raw), &rows); err != nil {
 				t.Fatalf("lane %q: bad duckdb -json output: %v\n%s", "duckdb", err, raw)
 			}
-			// duckdb -json renders HUGEINT (e.g. SUM over BIGINT) as a JSON
-			// string. ssql's CSV reader parses canonical integer strings as
-			// numbers anyway, so converting them back is normalising a
-			// representation difference, not masking a value difference.
-			for _, r := range rows {
-				for k, v := range r {
-					if s, ok := v.(string); ok && canonicalIntRe.MatchString(s) {
-						if f, err := strconv.ParseFloat(s, 64); err == nil {
-							r[k] = f
-						}
-					}
-				}
-			}
 			var sb strings.Builder
 			for _, r := range rows {
-				b, _ := json.Marshal(r)
-				sb.Write(b)
+				sb.Write(r)
 				sb.WriteByte('\n')
 			}
 			return sb.String()
@@ -464,6 +532,7 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 	lanes := equivLanes()
 
 	results := make(map[string][]map[string]any)
+	columns := make(map[string][]string)
 	for _, ln := range lanes {
 		reason := c.Skip[ln.name]
 		if reason == "" && equivSQLLanes[ln.name] {
@@ -478,11 +547,32 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 			continue
 		}
 		results[ln.name] = equivParse(t, ln.name, raw)
+		columns[ln.name] = equivColumnOrder(raw)
 	}
 
 	ref, ok := results["exec"]
 	if !ok {
 		t.Fatal("exec lane is the reference oracle and must not be skipped")
+	}
+
+	// Column ORDER is part of the result too (since 2026-09-23: the record
+	// lane's writers and readers keep it, `include` names it, so a
+	// pipeline's columns come out the same in every lane). Compared as the
+	// positional union of each lane's JSONL key order against exec's.
+	if !c.ColumnsUnordered {
+		for name, cols := range columns {
+			if name == "exec" || len(cols) == 0 || len(columns["exec"]) == 0 {
+				continue
+			}
+			// Over the columns both lanes have: a column one lane never
+			// emits (every value absent in exec, NULL in SQL) is a
+			// presence difference the value comparison judges, not an
+			// order difference.
+			a, b := equivCommon(columns["exec"], cols), equivCommon(cols, columns["exec"])
+			if !slices.Equal(a, b) {
+				t.Errorf("lane %q column order differs from exec:\n  exec: %v\n  %s: %v", name, columns["exec"], name, cols)
+			}
+		}
 	}
 
 	// Ground truth: exec must match the implementation-independent
@@ -513,6 +603,15 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 			for k, v := range r {
 				if s, isStr := v.(string); isStr && boolCols[k] && (s == "true" || s == "false") {
 					r[k] = s == "true"
+				}
+				// duckdb -json renders HUGEINT (e.g. SUM over BIGINT) as a
+				// JSON string. ssql's CSV reader parses canonical integer
+				// strings as numbers anyway, so converting them back is
+				// normalising a representation difference.
+				if s, isStr := v.(string); isStr && canonicalIntRe.MatchString(s) {
+					if f, err := strconv.ParseFloat(s, 64); err == nil {
+						r[k] = f
+					}
 				}
 			}
 		}

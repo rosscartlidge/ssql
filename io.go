@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -183,31 +184,30 @@ func WriteCSVToWriter(sb iter.Seq[Record], writer io.Writer, config ...CSVConfig
 		// Use explicitly provided fields
 		fields = cfg.Fields
 	} else {
-		// Auto-detect: materialize all records to collect unique field names
+		// Auto-detect: materialize all records to collect the field names,
+		// in order of first appearance (a record's own order is its
+		// schema's, so a CSV read and filtered keeps its header order; a
+		// field a later record adds goes at the end). Sorting here made
+		// every generated record program's output alphabetical, whatever
+		// `include` said (until 2026-09-23).
 		materialized = true
-		fieldSet := make(map[string]bool)
+		var order columnOrder
 		for record := range sb {
 			recordsBuffer = append(recordsBuffer, record)
+			prev := ""
 			for field, val := range record.All() {
 				// Skip complex fields (iter.Seq, Record) and internal metadata fields
-				if !isIterSeq(val) {
-					if _, isRecord := val.(Record); !isRecord {
-						// Skip internal metadata fields starting with underscore
-						if !strings.HasPrefix(field, "_") {
-							fieldSet[field] = true
-						}
-					}
+				if isIterSeq(val) || strings.HasPrefix(field, "_") {
+					continue
 				}
+				if _, isRecord := val.(Record); isRecord {
+					continue
+				}
+				order.add(field, prev)
+				prev = field
 			}
 		}
-
-		// Sort field names alphabetically for consistent ordering
-		for field := range fieldSet {
-			fields = append(fields, field)
-		}
-
-		// Sort using standard library
-		slices.Sort(fields)
+		fields = order.fields
 	}
 
 	// Write headers if enabled
@@ -414,16 +414,16 @@ func ReadJSONFromReader(reader io.Reader) iter.Seq[Record] {
 			record := MakeMutableRecord()
 			for key, value := range rawRecord.All() {
 				if ft, ok := fieldTypes[key]; ok {
-					record.fields[key] = coerceToType(value, ft)
+					record.put(key, coerceToType(value, ft))
 				} else {
 					// New field not seen in first record - infer and lock its type
 					fieldTypes[key] = inferJSONFieldType(value)
-					record.fields[key] = value
+					record.put(key, value)
 				}
 			}
 
 			// Add line number metadata
-			record.fields["_line_number"] = lineNumber
+			record.put("_line_number", lineNumber)
 			lineNumber++
 
 			if !yield(record.Freeze()) {
@@ -565,15 +565,15 @@ func ReadJSONSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 			record := MakeMutableRecord()
 			for key, value := range rawRecord.All() {
 				if ft, ok := fieldTypes[key]; ok {
-					record.fields[key] = coerceToType(value, ft)
+					record.put(key, coerceToType(value, ft))
 				} else {
 					// New field not seen in first record - infer and lock its type
 					fieldTypes[key] = inferJSONFieldType(value)
-					record.fields[key] = value
+					record.put(key, value)
 				}
 			}
 
-			record.fields["_line_number"] = lineNumber
+			record.put("_line_number", lineNumber)
 			lineNumber++
 
 			if !yield(record.Freeze(), nil) {
@@ -599,17 +599,17 @@ func WriteJSONToWriter(sb iter.Seq[Record], writer io.Writer) error {
 			case JSONString:
 				// Parse JSONString back to structured data to avoid double-encoding
 				if parsed, err := v.Parse(); err == nil {
-					jsonRecord.fields[key] = parsed
+					jsonRecord.put(key, parsed)
 				} else {
 					// Fallback to string if parsing fails
-					jsonRecord.fields[key] = string(v)
+					jsonRecord.put(key, string(v))
 				}
 			default:
 				if isIterSeq(value) {
 					// Convert iter.Seq to array for JSON
-					jsonRecord.fields[key] = materializeSequence(value)
+					jsonRecord.put(key, materializeSequence(value))
 				} else {
-					jsonRecord.fields[key] = value
+					jsonRecord.put(key, value)
 				}
 			}
 		}
@@ -1155,7 +1155,7 @@ func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record] {
 			}
 
 			// Add line number metadata
-			mutableRecord.fields["_line_number"] = lineNumber
+			mutableRecord.put("_line_number", lineNumber)
 			lineNumber++
 
 			record := cache.freeze(mutableRecord)
@@ -1206,7 +1206,7 @@ func ReadJSONFastSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 			}
 
 			// Add line number metadata
-			mutableRecord.fields["_line_number"] = lineNumber
+			mutableRecord.put("_line_number", lineNumber)
 			lineNumber++
 
 			record := cache.freeze(mutableRecord)
@@ -1956,34 +1956,55 @@ func buildColumnOrderWithSample(columnSet map[string]bool, fieldOrder []string, 
 // codegen so that Record-mode generated programs produce the same
 // column order as the interactive CLI pipeline.
 func naturalColumnOrder(columnSet map[string]bool, records []Record) []string {
-	var columns []string
-	seen := make(map[string]bool, len(columnSet))
-
-	// Phase 1: schema-driven order from the first record that has one.
+	var order columnOrder
 	for _, r := range records {
 		sch := r.Schema()
 		if sch == nil {
 			continue
 		}
+		prev := ""
 		for _, f := range sch.Fields() {
-			if columnSet[f] && !seen[f] {
-				columns = append(columns, f)
-				seen[f] = true
+			if !columnSet[f] {
+				continue
+			}
+			order.add(f, prev)
+			prev = f
+		}
+	}
+	return order.fields
+}
+
+// columnOrder merges the field orders of a stream of records into one
+// column list: a record's own order is its schema's (header order, or the
+// order `include` named), and a field first seen in a LATER record is
+// placed after the field that precedes it there, so a column absent from
+// the first row (`window -lag`'s prev on row 1) still lands where the
+// stage put it rather than at the end. (Until 2026-09-23 the writers
+// sorted, so every record-mode output was alphabetical.)
+type columnOrder struct {
+	fields []string
+	seen   map[string]bool
+}
+
+func (c *columnOrder) add(field, prev string) {
+	if c.seen == nil {
+		c.seen = map[string]bool{}
+	}
+	if c.seen[field] {
+		return
+	}
+	c.seen[field] = true
+	if prev != "" {
+		for i, f := range c.fields {
+			if f == prev {
+				c.fields = slices.Insert(c.fields, i+1, field)
+				return
 			}
 		}
-		break // first record's schema is enough; downstream commands share it
 	}
-
-	// Phase 2: any unseen columns alphabetically (typically empty).
-	var extras []string
-	for c := range columnSet {
-		if !seen[c] {
-			extras = append(extras, c)
-		}
-	}
-	slices.Sort(extras)
-	columns = append(columns, extras...)
-	return columns
+	// No known predecessor (the record's first field, or one whose
+	// predecessor is a skipped column): append.
+	c.fields = append(c.fields, field)
 }
 
 // calculateColumnWidths calculates the maximum display width for each column
@@ -2296,14 +2317,14 @@ func parseDataLine(line string, columns []ColumnInfo, _ bool) Record {
 				// Last field gets all remaining tokens joined with spaces
 				remainingTokens := tokens[i:]
 				value := strings.Join(remainingTokens, " ")
-				record.fields[col.Name] = parseCommandValue(value)
+				record.put(col.Name, parseCommandValue(value))
 			} else {
 				// Regular field gets single token
-				record.fields[col.Name] = parseCommandValue(tokens[i])
+				record.put(col.Name, parseCommandValue(tokens[i]))
 			}
 		} else {
 			// No more tokens, use empty string
-			record.fields[col.Name] = ""
+			record.put(col.Name, "")
 		}
 	}
 
@@ -2328,14 +2349,14 @@ func parseDataLineSafe(line string, columns []ColumnInfo, _ bool) (Record, error
 				// Last field gets all remaining tokens joined with spaces
 				remainingTokens := tokens[i:]
 				value := strings.Join(remainingTokens, " ")
-				record.fields[col.Name] = parseCommandValue(value)
+				record.put(col.Name, parseCommandValue(value))
 			} else {
 				// Regular field gets single token
-				record.fields[col.Name] = parseCommandValue(tokens[i])
+				record.put(col.Name, parseCommandValue(tokens[i]))
 			}
 		} else {
 			// No more tokens, use empty string
-			record.fields[col.Name] = ""
+			record.put(col.Name, "")
 		}
 	}
 
@@ -2472,8 +2493,17 @@ func ReadJSONAuto(filename string) (iter.Seq[Record], error) {
 		return func(yield func(Record) bool) {
 			for _, rec := range records {
 				record := MakeMutableRecord()
-				for k, v := range rec {
-					record = addJSONField(record, k, v)
+				// A decoded JSON object is a map: its key order is gone, so
+				// the record's is sorted (deterministic; the source order is
+				// the open TODO on JSON input). Without this a MutableRecord,
+				// which keeps insertion order, took the map's random one.
+				keys := make([]string, 0, len(rec))
+				for k := range rec {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					record = addJSONField(record, k, rec[k])
 				}
 				if !yield(record.Freeze()) {
 					return

@@ -405,22 +405,22 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					mode = ssql.RollupCube
 				}
 
-				aggregations := make(map[string]ssql.AggregateFunc)
+				var aggregations []ssql.NamedAgg
 				for _, spec := range aggSpecs {
 					agg, err := buildAggregator(spec)
 					if err != nil {
 						return err
 					}
-					aggregations[spec.result] = agg
+					aggregations = append(aggregations, ssql.NamedAgg{Name: spec.result, Fn: agg})
 				}
 				for _, spec := range exprSpecs {
-					aggregations[spec.result] = ssql.ExprAgg(spec.expression)
+					aggregations = append(aggregations, ssql.NamedAgg{Name: spec.result, Fn: ssql.ExprAgg(spec.expression)})
 				}
 
 				config := ssql.RollupConfig{
-					Fields:       groupByFields,
-					Aggregations: aggregations,
-					Mode:         mode,
+					Fields:  groupByFields,
+					Ordered: aggregations, // the order named: the schema header's
+					Mode:    mode,
 				}
 
 				result := ssql.Rollup(config)(records)
@@ -510,25 +510,25 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Build aggregations map
-			aggregations := make(map[string]ssql.AggregateFunc)
+			var aggregations []ssql.NamedAgg
 			for _, spec := range aggSpecs {
 				agg, err := buildAggregator(spec)
 				if err != nil {
 					return err
 				}
-				aggregations[spec.result] = agg
+				aggregations = append(aggregations, ssql.NamedAgg{Name: spec.result, Fn: agg})
 			}
 			// Add expression aggregations using ssql.ExprAgg()
 			for _, spec := range exprSpecs {
-				aggregations[spec.result] = ssql.ExprAgg(spec.expression)
+				aggregations = append(aggregations, ssql.NamedAgg{Name: spec.result, Fn: ssql.ExprAgg(spec.expression)})
 			}
 			// Add streaming expression aggregations using ssql.StreamExprAgg()
 			for _, spec := range streamExprSpecs {
-				aggregations[spec.result] = ssql.StreamExprAgg(spec.initExpr, spec.everyExpr, spec.finalExpr)
+				aggregations = append(aggregations, ssql.NamedAgg{Name: spec.result, Fn: ssql.StreamExprAgg(spec.initExpr, spec.everyExpr, spec.finalExpr)})
 			}
 
-			// Apply Aggregate
-			aggregated := ssql.Aggregate("_group", aggregations)(grouped)
+			// Apply Aggregate, results in the order named (the schema header's)
+			aggregated := ssql.AggregateOrdered("_group", aggregations)(grouped)
 
 			// Build output schema: group-by fields + aggregation result fields
 			var outputSchema *lib.Schema
@@ -734,26 +734,26 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 				aggLines.WriteString(",\n")
 			}
 			first = false
-			aggLines.WriteString(fmt.Sprintf("\t\t\t%q: %s", spec.result, generateAggregatorCode(spec)))
+			aggLines.WriteString(fmt.Sprintf("\t\t\t{Name: %q, Fn: %s}", spec.result, generateAggregatorCode(spec)))
 		}
 		for _, spec := range exprSpecs {
 			if !first {
 				aggLines.WriteString(",\n")
 			}
 			first = false
-			aggLines.WriteString(fmt.Sprintf("\t\t\t%q: ssql.ExprAgg(%q)", spec.result, spec.expression))
+			aggLines.WriteString(fmt.Sprintf("\t\t\t{Name: %q, Fn: ssql.ExprAgg(%q)}", spec.result, spec.expression))
 		}
 		for _, spec := range streamExprSpecs {
 			if !first {
 				aggLines.WriteString(",\n")
 			}
 			first = false
-			aggLines.WriteString(fmt.Sprintf("\t\t\t%q: ssql.StreamExprAgg(%q, %q, %q)", spec.result, spec.initExpr, spec.everyExpr, spec.finalExpr))
+			aggLines.WriteString(fmt.Sprintf("\t\t\t{Name: %q, Fn: ssql.StreamExprAgg(%q, %q, %q)}", spec.result, spec.initExpr, spec.everyExpr, spec.finalExpr))
 		}
 
 		code := fmt.Sprintf(`rollupResult := ssql.Rollup(ssql.RollupConfig{
 		Fields: []string{%s},
-		Aggregations: map[string]ssql.AggregateFunc{
+		Ordered: []ssql.NamedAgg{
 %s,
 		},
 		Mode: %s,
@@ -838,14 +838,14 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	// Fragment 2: Aggregate
 	// Note: Empty command string since this is part of the same CLI command as Fragment 1
 	var aggCode strings.Builder
-	aggCode.WriteString("aggregated := ssql.Aggregate(\"_group\", map[string]ssql.AggregateFunc{\n")
+	aggCode.WriteString("aggregated := ssql.AggregateOrdered(\"_group\", []ssql.NamedAgg{\n")
 	first := true
 	for _, spec := range aggSpecs {
 		if !first {
 			aggCode.WriteString(",\n")
 		}
 		first = false
-		aggCode.WriteString(fmt.Sprintf("\t\t%q: %s", spec.result, generateAggregatorCode(spec)))
+		aggCode.WriteString(fmt.Sprintf("\t\t{Name: %q, Fn: %s}", spec.result, generateAggregatorCode(spec)))
 	}
 	// Add expression aggregations using ssql.ExprAgg()
 	for _, spec := range exprSpecs {
@@ -853,7 +853,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			aggCode.WriteString(",\n")
 		}
 		first = false
-		aggCode.WriteString(fmt.Sprintf("\t\t%q: ssql.ExprAgg(%q)", spec.result, spec.expression))
+		aggCode.WriteString(fmt.Sprintf("\t\t{Name: %q, Fn: ssql.ExprAgg(%q)}", spec.result, spec.expression))
 	}
 	// Add streaming expression aggregations using ssql.StreamExprAgg()
 	for _, spec := range streamExprSpecs {
@@ -861,7 +861,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			aggCode.WriteString(",\n")
 		}
 		first = false
-		aggCode.WriteString(fmt.Sprintf("\t\t%q: ssql.StreamExprAgg(%q, %q, %q)", spec.result, spec.initExpr, spec.everyExpr, spec.finalExpr))
+		aggCode.WriteString(fmt.Sprintf("\t\t{Name: %q, Fn: ssql.StreamExprAgg(%q, %q, %q)}", spec.result, spec.initExpr, spec.everyExpr, spec.finalExpr))
 	}
 	aggCode.WriteString(",\n\t})(grouped)")
 

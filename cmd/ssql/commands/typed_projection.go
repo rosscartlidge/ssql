@@ -174,16 +174,20 @@ func buildDerivedSchema(in *lib.TypedSchema, typeSuffix string, fields []string,
 				}
 			}
 		}
-		for _, f := range in.Fields {
-			keep := true
-			present := listed[strings.ToLower(f.Name)]
-			if exclude {
-				keep = !present
-			} else {
-				keep = present
+		if exclude {
+			for _, f := range in.Fields {
+				if !listed[strings.ToLower(f.Name)] {
+					derived.Fields = append(derived.Fields, f)
+				}
 			}
-			if keep {
-				derived.Fields = append(derived.Fields, f)
+		} else {
+			// include: the named fields in the ORDER NAMED, as exec's
+			// schema header and record codegen's ssql.Project have it
+			// (input order until 2026-09-23, a column-order divergence).
+			for _, name := range fields {
+				if f, ok := lookupSchemaField(in, name); ok {
+					derived.Fields = append(derived.Fields, f)
+				}
 			}
 		}
 		if len(derived.Fields) == 0 {

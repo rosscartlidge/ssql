@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"sort"
 
 	"github.com/rosscartlidge/ssql/v4"
 )
@@ -80,8 +81,17 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 		}
 
 		record := ssql.MakeMutableRecord()
-		for k, v := range rec {
-			record = setValueFromJSON(record, k, v)
+		// A decoded object is a map: its key order is gone, so the record's
+		// is sorted (deterministic; the source order is the open TODO on
+		// JSON input). A MutableRecord keeps insertion order, so a map walk
+		// here would make the column order random.
+		keys := make([]string, 0, len(rec))
+		for k := range rec {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			record = setValueFromJSON(record, k, rec[k])
 		}
 
 		if !yield(record.Freeze()) {

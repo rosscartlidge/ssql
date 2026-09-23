@@ -43,7 +43,9 @@ func TestWriteJSONLWithInferredSchema_BasicShape(t *testing.T) {
 	if !strings.HasPrefix(lines[0], `{"_schema":`) {
 		t.Errorf("first line should be schema header; got: %s", lines[0])
 	}
-	for _, want := range []string{`"fields":["age","name"]`, `"age":"int"`, `"name":"string"`} {
+	// Fields in the order the records were built (name, then age), not
+	// sorted: MutableRecord keeps insertion order since 2026-09-23.
+	for _, want := range []string{`"fields":["name","age"]`, `"age":"int"`, `"name":"string"`} {
 		if !strings.Contains(lines[0], want) {
 			t.Errorf("schema line missing %q; got: %s", want, lines[0])
 		}

@@ -1308,7 +1308,7 @@ func TestIncludeGeneration(t *testing.T) {
 				`"type":"stmt"`,
 				`"var":"included"`,
 				`ssql.Select`,
-				`includedMap`,
+				`ssql.Project(r, \"name\", \"age\")`, // the named fields, in the order named (raw JSON, quotes escaped)
 			},
 		},
 		{

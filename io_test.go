@@ -1520,3 +1520,31 @@ func TestWriteCSVToWriterEmptySourceReadOnce(t *testing.T) {
 		t.Errorf("source iterated %d times, want 1", reads)
 	}
 }
+
+// Column order in the writers follows the records: header order, then a
+// field first seen in a later record placed after its predecessor there.
+func TestColumnOrderFollowsRecords(t *testing.T) {
+	rows := []Record{
+		MakeMutableRecord().String("name", "a").Int("salary", 1).Freeze(),
+		MakeMutableRecord().String("name", "b").Int("prev", 1).Int("salary", 2).Freeze(),
+		MakeMutableRecord().String("name", "c").Int("prev", 2).Int("salary", 3).String("note", "x").Freeze(),
+	}
+	seq := func(yield func(Record) bool) {
+		for _, r := range rows {
+			if !yield(r) {
+				return
+			}
+		}
+	}
+	var buf strings.Builder
+	if err := WriteCSVToWriter(seq, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.SplitN(buf.String(), "\n", 2)[0]; got != "name,prev,salary,note" {
+		t.Errorf("csv header %q", got)
+	}
+	set := map[string]bool{"name": true, "prev": true, "salary": true, "note": true}
+	if got := strings.Join(naturalColumnOrder(set, rows), ","); got != "name,prev,salary,note" {
+		t.Errorf("table order %q", got)
+	}
+}

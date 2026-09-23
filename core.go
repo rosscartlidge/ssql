@@ -9,6 +9,7 @@ import (
 	"maps"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -378,6 +379,15 @@ type Value interface {
 //	updated := record.Int("age", int64(31))  // Creates new Record
 type MutableRecord struct {
 	fields map[string]any
+	// order is the fields' insertion order, shared between copies of the
+	// value like the map is (a pointer), so Freeze can build the schema in
+	// the order the record was built: a record read from a CSV keeps its
+	// header order through ToMutable/Set/Freeze, and a field added by
+	// `update` lands at the end. Until 2026-09-23 Freeze sorted the map's
+	// keys, so every mutation in a generated record program (and inside
+	// exec, which papers over it with the _schema header) came out
+	// alphabetical. nil means "built from a map with no order": sorted.
+	order *[]string
 }
 
 // MakeMutableRecord creates an empty MutableRecord for efficient building.
@@ -390,12 +400,36 @@ type MutableRecord struct {
 //	    Int("population", int64(873965)).
 //	    Freeze()
 func MakeMutableRecord() MutableRecord {
-	return MutableRecord{fields: make(map[string]any)}
+	return MutableRecord{fields: make(map[string]any), order: new([]string)}
 }
 
 // MakeMutableRecordWithCapacity creates a MutableRecord with pre-allocated capacity
 func MakeMutableRecordWithCapacity(capacity int) MutableRecord {
-	return MutableRecord{fields: make(map[string]any, capacity)}
+	order := make([]string, 0, capacity)
+	return MutableRecord{fields: make(map[string]any, capacity), order: &order}
+}
+
+// put is the ONE write into a MutableRecord's fields: it records a new
+// field's position. Every setter goes through it.
+func (m MutableRecord) put(field string, value any) {
+	if _, exists := m.fields[field]; !exists && m.order != nil {
+		*m.order = append(*m.order, field)
+	}
+	m.fields[field] = value
+}
+
+// orderedKeys returns the fields in insertion order when known, else
+// sorted (a record built from a map).
+func (m MutableRecord) orderedKeys() []string {
+	if m.order == nil || len(*m.order) != len(m.fields) {
+		keys := make([]string, 0, len(m.fields))
+		for k := range m.fields {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return keys
+	}
+	return *m.order
 }
 
 // NewRecord creates a Record from a map (for compatibility).
@@ -426,20 +460,30 @@ func NewRecord(fields map[string]any) Record {
 // Freeze converts a MutableRecord to an immutable Record.
 // Creates a new Schema and values slice from the MutableRecord's map.
 func (m MutableRecord) Freeze() Record {
-	return NewRecord(m.fields)
+	if len(m.fields) == 0 {
+		return Record{}
+	}
+	keys := m.orderedKeys()
+	values := make([]any, len(keys))
+	for i, k := range keys {
+		values[i] = m.fields[k]
+	}
+	return Record{schema: NewSchema(keys), values: values}
 }
 
 // ToMutable creates a mutable copy of a Record for modification.
 // This preserves immutability by creating a map copy from the Record's values.
 func (r Record) ToMutable() MutableRecord {
 	if r.schema == nil {
-		return MutableRecord{fields: make(map[string]any)}
+		return MakeMutableRecord()
 	}
 	m := make(map[string]any, len(r.schema.fields))
+	order := make([]string, len(r.schema.fields))
 	for i, field := range r.schema.fields {
 		m[field] = r.values[i]
+		order[i] = field
 	}
-	return MutableRecord{fields: m}
+	return MutableRecord{fields: m, order: &order}
 }
 
 // ============================================================================
@@ -698,7 +742,7 @@ func (m *MutableRecord) UnmarshalJSON(data []byte) error {
 
 // Set adds a field with compile-time type safety (mutates in place)
 func Set[V Value](m MutableRecord, field string, value V) MutableRecord {
-	m.fields[field] = value
+	m.put(field, value)
 	return m
 }
 
@@ -706,23 +750,41 @@ func Set[V Value](m MutableRecord, field string, value V) MutableRecord {
 // reports it absent and the writers skip it, but the field is part of the
 // record's schema — a SQL NULL, as opposed to a field that is not there.
 func (m MutableRecord) Null(field string) MutableRecord {
-	m.fields[field] = nil
+	m.put(field, nil)
 	return m
 }
 
 // Delete removes a field (mutates in place)
 func (m MutableRecord) Delete(field string) MutableRecord {
+	if _, exists := m.fields[field]; !exists {
+		return m
+	}
 	delete(m.fields, field)
+	if m.order != nil {
+		*m.order = slices.DeleteFunc(*m.order, func(f string) bool { return f == field })
+	}
 	return m
 }
 
-// Rename renames a field (mutates in place)
+// Rename renames a field (mutates in place), keeping its position.
 // If the old field doesn't exist, this is a no-op.
 // If the new field name already exists, it will be overwritten.
 func (m MutableRecord) Rename(oldField, newField string) MutableRecord {
-	if val, exists := m.fields[oldField]; exists {
-		m.fields[newField] = val
-		delete(m.fields, oldField)
+	val, exists := m.fields[oldField]
+	if !exists || oldField == newField {
+		return m
+	}
+	if _, clash := m.fields[newField]; clash {
+		m.Delete(newField)
+	}
+	delete(m.fields, oldField)
+	m.fields[newField] = val
+	if m.order != nil {
+		for i, f := range *m.order {
+			if f == oldField {
+				(*m.order)[i] = newField
+			}
+		}
 	}
 	return m
 }
@@ -1391,7 +1453,7 @@ func parseJSONLine(line []byte, keepNulls bool) (MutableRecord, error) {
 		// Add field to record. A JSON null is dropped, or kept as a nil
 		// slot for the wire-format readers (ParseJSONLineWithNulls).
 		if value != nil || keepNulls {
-			record.fields[fieldName] = value
+			record.put(fieldName, value)
 		} else {
 			// A dropped null still has to WIN over an earlier value for the
 			// same key: JSON's convention for a duplicate key is that the
@@ -2299,7 +2361,7 @@ func dotFlattenRecord(record Record, prefix, separator string, fields ...string)
 			maps.Insert(result.fields, flattened.All())
 		} else {
 			// For non-record values (including sequences), or fields not to be flattened, keep as-is
-			result.fields[newKey] = value
+			result.put(newKey, value)
 		}
 	}
 
@@ -2346,7 +2408,7 @@ func dotFlattenRecordWithSeqs(record Record, prefix, separator string, fields ..
 			}
 		} else {
 			// For non-record, non-sequence values, or fields not to be flattened, keep as-is
-			nonSeqRecord.fields[newKey] = value
+			nonSeqRecord.put(newKey, value)
 		}
 	}
 
@@ -2373,7 +2435,7 @@ func dotFlattenRecordWithSeqs(record Record, prefix, separator string, fields ..
 
 		// Add corresponding element from each sequence
 		for j, fieldName := range seqFields {
-			result.fields[fieldName] = seqValues[j][i]
+			result.put(fieldName, seqValues[j][i])
 		}
 
 		results = append(results, result.Freeze())
@@ -2435,7 +2497,7 @@ func crossFlattenRecord(r Record, _ string, fields ...string) []Record {
 		mut := cr.ToMutable()
 		for _, f := range nonSeqFields {
 			if val, ok := Get[any](r, f); ok {
-				mut.fields[f] = val
+				mut.put(f, val)
 			}
 		}
 		results = append(results, mut.Freeze())
