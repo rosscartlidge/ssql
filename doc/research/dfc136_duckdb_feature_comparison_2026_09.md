@@ -72,7 +72,7 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Rollup / cube | ● | ● | ssql's enriched-detail shape, not grouping-set rows |
 | Window functions | ● (all) | ● (17) | row_number, rank, dense_rank, ntile, percent_rank, cume_dist, lag/lead, first/last/nth_value, running aggregates; ROWS and RANGE frames (DFC130) |
 | Joins | ● (all, incl. ASOF, lateral) | ◐ | inner, left, right, full; equi-join only; no ASOF, no anti/semi, no non-equi |
-| Pivot / unpivot | ● | ◐ | `pivot` with one aggregate; no unpivot |
+| Pivot / unpivot | ● | ● | `pivot -func` with one aggregate per call; `unpivot` |
 | Set operations | ● | ◐ | `union` (all); no INTERSECT/EXCEPT |
 | Subqueries, CTEs | ● | ○ | ssql's answer is pipes and process substitution |
 | Recursive queries | ● | ○ | |
