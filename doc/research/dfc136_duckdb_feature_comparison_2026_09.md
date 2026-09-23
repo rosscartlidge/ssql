@@ -21,14 +21,22 @@ repeated.
 
 DuckDB is a complete analytical database: every SQL feature an analyst
 expects, a mature optimiser, extensions, bindings in every language, and
-an installed base. ssql is a pipeline tool with a much smaller surface
-that has three properties DuckDB does not have and, by design, cannot
+an installed base. ssql is a pipeline tool with a smaller surface
+that has four properties DuckDB does not have and, by design, cannot
 easily acquire: a compiled program per pipeline that beats DuckDB on the
-workloads it covers (0.23 s to 0.91 s on the README cube), a pipeline
+workloads it covers (0.23 s to 0.91 s on the README cube); a pipeline
 form that is safe to construct from untrusted data without a query
-builder, and five interchangeable executions of the same semantics that
-are checked against each other and against DuckDB itself. On breadth
-ssql is far behind; on those three axes it is ahead; and the two are
+builder; five interchangeable executions of the same semantics that
+are checked against each other and against DuckDB itself; and a
+simpler mental model: a pipeline reads in the order it runs, each stage
+sees only what the previous one produced, and any prefix can be cut and
+inspected, so a pipeline grows by appending a stage, completion and help
+know the data at the cursor's position, and the line a person builds by
+Tab is the same document a program builds by JSON. On breadth
+ssql is narrower: the gaps are ecosystem (connectors, extensions,
+bindings) and engine (out-of-core, vectorisation), plus a short list of
+relational features that DFC137 covers; on the core analyst workload
+the two columns match. On those four axes it is ahead; and the two are
 complementary, which `generate sql` makes literal.
 
 ## 2. Feature matrix
@@ -210,10 +218,21 @@ is built by a program, or the result must be a program.
    against DuckDB, Postgres and DataFusion.** A user gets exec, three Go
    forms and three SQL dialects from one command line, and the project's
    tests are the reason to trust that they agree.
-4. **Streams, SSH, shards, live data, signal processing, charts, an
+4. **A simpler mental model, and the construction that follows from
+   it.** A pipeline reads in the order it runs and each stage sees only
+   the previous stage's output; SQL's written order is not its
+   evaluation order (SELECT first, evaluated near last), and what a pipe
+   says by adjacency SQL says by nesting, which is what CTEs and
+   subqueries are for. So the state at any point is a prefix you can cut
+   and look at (`| ssql to table`), a pipeline is built by appending a
+   stage, not by editing a statement; each stage is one small grammar; Tab completes commands, flags, field names and values
+   with knowledge of the pipe so far; `Alt-h` explains the word under
+   the cursor; `-spec-json` lets a UI render the same grammar. DuckDB's
+   shell completes keywords and table names, and SQL is edited in place.
+   This is the same property as (2) seen from the keyboard: the argv a
+   person builds interactively is the document a program builds.
+5. **Streams, SSH, shards, live data, signal processing, charts, an
    explorer, a served console.** The Unix-tool half of the design.
-5. **Completion and help that know the data**: field names and values
-   across the pipe, help at the cursor, a grammar UIs can render.
 
 ## 6. Suggested next units, from this comparison
 
