@@ -168,7 +168,7 @@ After a minor/major release, always do ALL of these:
 
 **Documentation audit:**
 - [ ] Run `make doc-check` (L1 validation)
-- [ ] Check README.md — version numbers, examples reflect new features
+- [ ] Check README.md — version numbers (the `.deb` URLs in Installation Option 6 are pinned to a version and went stale 4.34.0 → 4.107.0 once), examples reflect new features
 - [ ] Check doc/cli-codelab.md — command syntax, flags, examples up to date
 - [ ] Check doc/api-reference.md — new/changed functions documented
 - [ ] Check doc/ai-code-generation.md — new features have examples

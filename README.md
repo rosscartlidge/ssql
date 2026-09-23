@@ -472,23 +472,41 @@ echo 'eval "$(ssql -shell-init)"' >> ~/.bashrc && source ~/.bashrc
 
 #### Option 3: Download Binary
 
-Pre-built binaries for all platforms are available on [GitHub Releases](https://github.com/rosscartlidge/ssql/releases). Download the archive for your OS/architecture, extract, and add to your PATH.
+Pre-built binaries for Linux, macOS and Windows (amd64 and arm64) are on
+[GitHub Releases](https://github.com/rosscartlidge/ssql/releases/latest).
+Download the archive for your OS and architecture, extract, and put `ssql`
+on your PATH:
+
+```bash
+# Linux amd64 shown; the archive is ssql_VERSION_OS_ARCH.tar.gz (.zip on Windows)
+V=$(curl -s https://api.github.com/repos/rosscartlidge/ssql/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+curl -LO https://github.com/rosscartlidge/ssql/releases/download/v$V/ssql_${V}_linux_amd64.tar.gz
+tar xzf ssql_${V}_linux_amd64.tar.gz
+sudo install ssql /usr/local/bin/
+ssql version
+```
+
+Each release also ships `ssql-slim_VERSION_OS_ARCH` archives: a smaller
+build without `ssql serve` and the embedded explorer engine
+(`to explore -wasm`), for containers and constrained hosts.
 
 #### Option 4: WASI (run anywhere)
 
 A single `.wasm` binary that runs on any platform with a WASI runtime ([wasmtime](https://wasmtime.dev/), wasmer, Docker+WASM):
 
 ```bash
-# Download from GitHub Releases
-curl -LO https://github.com/rosscartlidge/ssql/releases/latest/download/ssql_wasi.tar.gz
-tar xzf ssql_wasi.tar.gz
+# Download from GitHub Releases (the archive is versioned: ssql_VERSION_wasi.tar.gz)
+V=$(curl -s https://api.github.com/repos/rosscartlidge/ssql/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+curl -LO https://github.com/rosscartlidge/ssql/releases/download/v$V/ssql_${V}_wasi.tar.gz
+tar xzf ssql_${V}_wasi.tar.gz
 
 # Run with wasmtime
 wasmtime ssql.wasm version
 wasmtime --dir=. ssql.wasm from data.csv | wasmtime ssql.wasm where -if age gt 25 | wasmtime ssql.wasm to table
 ```
 
-No Go, no cross-compilation — one binary for every platform. 14MB slim build.
+No Go, no cross-compilation — one binary for every platform (slim build, 6 MB
+download). `wasmtime compile ssql.wasm` precompiles it to near-native speed.
 
 #### Option 5: GPU Acceleration (optional)
 
@@ -548,15 +566,15 @@ Pre-built `.deb` packages are available for amd64 Linux systems:
 
 **Standard version (no GPU dependencies):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.34.0_amd64.deb
-sudo dpkg -i ssql_4.34.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.107.0_amd64.deb
+sudo dpkg -i ssql_4.107.0_amd64.deb
 ssql version
 ```
 
 **GPU-accelerated version (requires NVIDIA CUDA runtime):**
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.34.0_amd64.deb
-sudo dpkg -i ssql-gpu_4.34.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql-gpu_4.107.0_amd64.deb
+sudo dpkg -i ssql-gpu_4.107.0_amd64.deb
 ssql version
 ```
 
@@ -1146,13 +1164,13 @@ Run these to see ssql in action:
 
 ```bash
 # Interactive chart showcase
-go run examples/chart_demo.go
+go run ./examples/chart_demo
 
 # Data analysis pipeline
-go run examples/functional_example.go
+go run ./examples/functional_example
 
 # Real-time processing
-go run examples/early_termination_example.go
+go run ./examples/early_termination_example
 ```
 
 ## 🌟 Why Choose ssql?
