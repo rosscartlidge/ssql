@@ -13,12 +13,21 @@ var Version = strings.TrimSpace(gitVersion)
 var gitVersion string
 
 // Commit is the short git commit hash.
-// Primary: Go's built-in VCS info (works for local builds from git repo).
-// Fallback: commit.txt (works for go install from module proxy).
-var Commit = detectCommit()
+// Set by the linker (-X ...version.Commit=HASH) for release artifacts
+// such as the .deb, whose build tree is necessarily dirty (the target
+// removes the old packages first). Otherwise detected at init:
+// Go's built-in VCS info (local builds, shows -dirty), then commit.txt
+// (go install from the module proxy).
+var Commit string
 
 //go:embed commit.txt
 var gitCommit string
+
+func init() {
+	if Commit == "" {
+		Commit = detectCommit()
+	}
+}
 
 func detectCommit() string {
 	// Try Go's built-in VCS info first (local builds)

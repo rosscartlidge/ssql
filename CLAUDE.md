@@ -156,7 +156,7 @@ After a minor/major release, always do ALL of these:
 - [ ] `SSQL_SCALE=1 go test ./cmd/ssql -run TestScaleBudgets -timeout=20m` — the opt-in scale gate (DFC113): wall-time budgets on a cached ~120MB fixture; catches complexity/read-amplification regressions that output oracles pass (~15s warm, ~40s on first fixture generation)
 
 **Builds:**
-- [ ] `make deb` — build `ssql_X.Y.Z_amd64.deb` and `ssql-gpu_X.Y.Z_amd64.deb`; it also rewrites the README's `.deb` install pins to X.Y.Z. Commit the debs AND README.md together (`make doc-check` Check 10 fails if pins, debs and version.txt disagree)
+- [ ] `make deb` — build `ssql_X.Y.Z_amd64.deb` and `ssql-gpu_X.Y.Z_amd64.deb` (stamped with HEAD's hash via `RELEASE_LDFLAGS`, so run it on the tagged commit; dev builds keep Go's VCS stamp with `-dirty`); it also rewrites the README's `.deb` install pins to X.Y.Z. Commit the debs AND README.md together (`make doc-check` Check 10 fails if pins, debs and version.txt disagree)
 - [ ] `make install-local` — refresh BOTH `$GOPATH/bin/ssql` and `$GOPATH/bin/ssql_gpu` so the developer's shell resolves the latest version on the next `ssql` / `ssql_gpu` invocation. Verify final lines print `ssql vX.Y.Z` for both (no `gpu: no` + `gpu: yes` version mismatch). Replaces the older "`make build-gpu` and test" step which left the gpu binary out of `$GOPATH/bin` — gpu drifted from v4.32.0 to v4.44.0 unnoticed before being caught at v4.44.0 release.
 - [ ] `make playground` — rebuild WASM playground locally if you want to test it before the release push (CI rebuilds and deploys it anyway)
 - [ ] `make explore-wasm` — refresh the embedded explore engine (`cmd/ssql/wasm/ssql-playground.wasm.gz`) and commit it, so `to explore -wasm` ships the released engine

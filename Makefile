@@ -7,7 +7,12 @@
 
 VERSION := $(shell cat cmd/ssql/version/version.txt | tr -d '[:space:]')
 COMMIT := $(shell git rev-parse --short=8 HEAD)
-LDFLAGS := -X github.com/rosscartlidge/ssql/v4/cmd/ssql/version.Commit=$(COMMIT)
+# Development builds leave LDFLAGS empty so the binary reports Go's VCS
+# stamp (HEAD, plus -dirty when the tree is modified). Release artifacts
+# built from a tagged commit pass RELEASE_LDFLAGS: the deb target has to
+# delete the old packages before building, which would stamp -dirty.
+LDFLAGS :=
+RELEASE_LDFLAGS := -X github.com/rosscartlidge/ssql/v4/cmd/ssql/version.Commit=$(COMMIT)
 
 # Default target
 help:
@@ -131,20 +136,23 @@ release: ci doc-verify
 # Build debian packages for current version
 VERSION := $(shell cat cmd/ssql/version/version.txt)
 
-deb: build-gpu
+deb: gpu
 	@echo "Building debian packages for v$(VERSION)..."
 	@# Remove old debs
 	rm -f ssql_*_amd64.deb ssql-gpu_*_amd64.deb
 	@# Standard package
 	rm -rf /tmp/ssql-deb
 	mkdir -p /tmp/ssql-deb/DEBIAN /tmp/ssql-deb/usr/bin
-	go build -ldflags "$(LDFLAGS)" -o /tmp/ssql-deb/usr/bin/ssql ./cmd/ssql
+	go build -ldflags "$(RELEASE_LDFLAGS)" -o /tmp/ssql-deb/usr/bin/ssql ./cmd/ssql
 	printf 'Package: ssql\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: amd64\nDepends: libc6\nMaintainer: Ross Cartlidge <ross@cartlidge.com>\nDescription: Unix-style data processing tools\nHomepage: https://github.com/rosscartlidge/ssql\n' > /tmp/ssql-deb/DEBIAN/control
 	dpkg-deb --build /tmp/ssql-deb ssql_$(VERSION)_amd64.deb
 	@# GPU package
 	rm -rf /tmp/ssql-gpu-deb
 	mkdir -p /tmp/ssql-gpu-deb/DEBIAN /tmp/ssql-gpu-deb/usr/bin /tmp/ssql-gpu-deb/usr/lib
-	cp ssql_gpu /tmp/ssql-gpu-deb/usr/bin/ssql_gpu
+	CGO_ENABLED=1 \
+	CGO_LDFLAGS="-L$(PWD)/gpu -L/usr/local/cuda/lib64" \
+	LD_LIBRARY_PATH="$(PWD)/gpu:/usr/local/cuda/lib64" \
+	go build -tags gpu -ldflags "$(RELEASE_LDFLAGS)" -o /tmp/ssql-gpu-deb/usr/bin/ssql_gpu ./cmd/ssql
 	cp gpu/libssqlgpu.so /tmp/ssql-gpu-deb/usr/lib/
 	printf 'Package: ssql-gpu\nVersion: $(VERSION)\nSection: utils\nPriority: optional\nArchitecture: amd64\nDepends: libc6, libcudart12\nMaintainer: Ross Cartlidge <ross@cartlidge.com>\nDescription: Unix-style data processing tools (GPU-accelerated)\nHomepage: https://github.com/rosscartlidge/ssql\n' > /tmp/ssql-gpu-deb/DEBIAN/control
 	printf '#!/bin/sh\nldconfig\n' > /tmp/ssql-gpu-deb/DEBIAN/postinst
