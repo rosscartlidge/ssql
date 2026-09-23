@@ -38,8 +38,8 @@ the completion and help at the prompt are half the experience.
 
 **Install Go.** Any Go 1.21 or newer is enough to run `go install`: it
 reads the version ssql is built with from the module and downloads that
-toolchain by itself. On Debian or Ubuntu the distribution package is
-fine (Ubuntu 24.04 ships Go 1.22; the first `go install` then fetches
+toolchain by itself. On Ubuntu 24.04 or Debian 13 the distribution
+package is fine (Go 1.22 / 1.24; the first `go install` then fetches
 Go 1.26 and takes about a minute):
 
 ```bash
@@ -48,8 +48,23 @@ sudo apt-get install -y golang-go
 go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 ```
 
-On macOS use `brew install go`; elsewhere download Go from
-<https://go.dev/dl/>. Prefer not to install Go at all? The
+On **Ubuntu 22.04** `golang-go` is Go 1.18, which is too old to fetch a
+newer toolchain: `go install` fails with eight lines like
+`package cmp is not in GOROOT (/usr/lib/go-1.18/src/cmp)`. Install the
+newer package Ubuntu ships alongside it and use that `go`:
+
+```bash
+# codelab: skip — Ubuntu 22.04 only (run once by hand)
+sudo apt-get install -y golang-1.22-go
+export PATH="/usr/lib/go-1.22/bin:$PATH"   # add to ~/.bashrc too
+go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
+```
+
+Debian 12's `golang-go` is Go 1.19, also too old: download Go from
+<https://go.dev/dl/>. On macOS use `brew install go`; elsewhere download
+Go from <https://go.dev/dl/>. Prefer not to install Go at all? On
+Debian or Ubuntu there is a `.deb` (see the README's Installation
+section), and the
 [releases page](https://github.com/rosscartlidge/ssql/releases/latest)
 has a prebuilt `ssql` for Linux, macOS and Windows — unpack it and put
 the binary somewhere on your PATH. Everything in this tutorial works

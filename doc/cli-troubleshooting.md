@@ -449,6 +449,39 @@ says so; direct execution, `generate go` and `generate ssql` do.
 
 ---
 
+### Issue 14: `go install` fails with "package cmp is not in GOROOT"
+
+**Symptoms:** `go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest`
+prints several lines like
+`package cmp is not in GOROOT (/usr/lib/go-1.18/src/cmp)`,
+`package iter is not in GOROOT`, `package maps is not in GOROOT`, and no
+binary appears in `~/go/bin`.
+
+**Cause:** The `go` command is older than 1.21. From 1.21 on, `go`
+reads the toolchain ssql needs from its module and downloads it; an
+older `go` tries to compile ssql and its dependencies itself and cannot
+find the standard-library packages added since. Ubuntu 22.04's
+`golang-go` is Go 1.18 and Debian 12's is Go 1.19, so this is what
+`sudo apt-get install golang-go` gives you there.
+
+**Solution:**
+
+```bash
+go version              # 1.18 or 1.19 confirms it
+
+# Ubuntu 22.04: the distribution also ships a newer Go
+sudo apt-get install -y golang-1.22-go
+export PATH="/usr/lib/go-1.22/bin:$PATH"     # add to ~/.bashrc too
+go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
+
+# Debian 12 and others: install Go from https://go.dev/dl/
+# No Go at all: use the .deb or a release binary (README, Installation)
+```
+
+The PATH line matters after the install too: `ssql generate go -build`
+calls `go`, and only a 1.21+ `go` can dispatch to the downloaded 1.26
+toolchain.
+
 ## jq Debugging Patterns
 
 ### Pattern: Inspect pipeline at any stage

@@ -424,13 +424,18 @@ Charts are self-contained HTML files with Chart.js — interactive controls, tre
 
 ### Prerequisites
 - **Go 1.21+** to run `go install` — it downloads the Go 1.26 toolchain
-  ssql builds with automatically (about a minute, once)
+  ssql builds with automatically (about a minute, once). Older Go cannot
+  do that and fails with `package cmp is not in GOROOT` and similar.
 
 **Don't have Go installed?**
-- Debian/Ubuntu: `sudo apt-get install -y golang-go`
+- Ubuntu 24.04+, Debian 13+: `sudo apt-get install -y golang-go`
+- Ubuntu 22.04 (`golang-go` is Go 1.18, too old): `sudo apt-get install -y golang-1.22-go`
+  and use `/usr/lib/go-1.22/bin/go` (put that directory first on your PATH)
+- Debian 12 (`golang-go` is Go 1.19, too old): [download Go from go.dev](https://go.dev/dl/)
 - macOS: `brew install go`
 - Windows and others: [Download from go.dev](https://go.dev/dl/)
-- No Go at all: prebuilt binaries on the [releases page](https://github.com/rosscartlidge/ssql/releases/latest)
+- No Go at all: the [Debian package](#option-6-debian-packages) or a
+  [prebuilt binary](#option-3-download-binary) — everything but `generate go` works without Go
 - Verify: `go version` (should show 1.21+)
 
 ### Installation
