@@ -54,7 +54,7 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Glob / many files as one source | ● | ● | `from csv a.csv b.csv -source file` |
 | stdin as a source | ◐ | ● | ssql: every command reads stdin |
 | Infinite / live streams | ○ | ● | the pipeline model; `merge` for k-way sorted streams |
-| Lazy, bounded-memory streaming | ○ (materialises) | ● | except barriers (sort, group-by) |
+| Lazy, bounded-memory streaming | ◐ (pipelined, vectorised; a query is over a finite input) | ● | ssql: except barriers (sort, group-by), which DuckDB spills and ssql holds in memory (DFC137) |
 
 ### 2.2 Transforming
 
@@ -76,18 +76,18 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Set operations | ● | ◐ | `union` (all); no INTERSECT/EXCEPT |
 | Subqueries, CTEs | ● | ○ | ssql's answer is pipes and process substitution |
 | Recursive queries | ● | ○ | |
-| Time-series resampling with fill | ○ (`time_bucket` only) | ● | `resample` to a grid with previous/next/linear fill |
+| Time-series resampling with fill | ◐ (`time_bucket`; `generate_series` + ASOF join gives previous-fill) | ● | `resample` to a grid with previous/next/linear fill in one command |
 | Fill missing (carry down, default) | ◐ (window tricks) | ● | `fill -down`, `-default` |
 | Describe / profile | ● (`SUMMARIZE`) | ● | `describe` |
 | Signal processing (FFT, convolution, correlation, STFT) | ○ | ● | GPU-accelerated build for the heavy ones |
-| Nested / list / struct types | ● | ◐ | records and sequences exist in the library; the CLI treats them as opaque |
+| Nested / list / struct types | ● | ◐ | `group-by -collect` builds lists; expressions have list/map functions (`map`, `filter`, `split`, `fromJSON`, `flatten`); no unnest command, and typed codegen and `generate sql` do not carry nested values |
 | Full-text search, spatial, vector | ● (ext) | ○ | |
 
 ### 2.3 Expressions
 
 | Feature | DuckDB | ssql | Note |
 |---|:-:|:-:|---|
-| Expression language | SQL | expr-lang | ssql: 49 functions, arrays, lambdas; five lanes must agree (transpiler differential gate) |
+| Expression language | SQL | expr-lang | ssql: ~70 documented functions, arrays, lambdas; five lanes must agree (transpiler differential gate) |
 | Regular expressions | ● | ● | Go RE2 vs DuckDB RE2: the same engine |
 | Date/time functions | ● (rich) | ◐ | one `time` type, `date()`, `bucket()`, duration arithmetic; formatting and calendar functions are thin |
 | String functions | ● | ● | |
@@ -129,8 +129,8 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Library bindings | ● Python, R, Java, Node, Go, Rust, … | ● Go only | DFC132 chose not to add Rust |
 | Tab completion | ◐ (keywords) | ● | commands, flags, field names and values, across the pipe |
 | Help at cursor | ○ | ● | `Alt-h`, `-help-at` |
-| Machine-readable grammar | ○ | ● | `-spec-json`; UIs render from it |
-| Safe programmatic construction | ◐ prepared statements bind values only; identifiers need a query builder | ● | a pipeline document is argv; `-arg`, `-param`, `ssql run`, `generate json` (DFC134); injection fuzz at volume |
+| Machine-readable grammar | ◐ (`duckdb_functions()`, `duckdb_keywords()` catalogs; no grammar) | ● | `-spec-json`; UIs render from it |
+| Safe programmatic construction | ◐ prepared statements bind values only; `json_serialize_sql` / `json_execute_serialized_sql` give a JSON AST to build against | ● | a pipeline document is argv; `-arg`, `-param`, `ssql run`, `generate json` (DFC134); injection fuzz at volume |
 | Read-only / policy | ● (read-only mode) | ◐ | `serve -readonly`; document policy (DFC134 §5.4) not built |
 | Emit SQL for another engine | ○ | ● | `generate sql -dialect duckdb\|postgres\|datafusion` |
 | Emit another engine's program | ○ | ● | generated Go; Rust harness for DataFusion documented (DFC132) |
