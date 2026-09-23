@@ -48,7 +48,7 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Excel | ● (ext) | ● | |
 | Raw text lines + regex extract | ◐ (`read_text`, regexp fns) | ● | `from lines`, `extract -skip` |
 | WAV audio | ○ | ● | for the signal commands |
-| Remote files (S3, HTTP) | ● (httpfs) | ○ | ssql: SSH only |
+| Remote files (HTTP, S3-style object stores) | ● (httpfs, signs S3 requests itself) | ● | `from https://` with Range, parquet column pruning over Range, `-sample` by Range draws; object stores via presigned URLs by design (DFC112: no SDK, the user's own credential flow) |
 | Files over SSH, sharded catalogs, push-down | ○ | ● | `from ssh`, `from catalog`, `-- PIPELINE` push-down |
 | Databases (Postgres, MySQL, SQLite) | ● (ext) | ○ | ssql has no connector; `generate sql -dialect postgres` runs the other way |
 | Glob / many files as one source | ● | ● | `from csv a.csv b.csv -source file` |
@@ -189,8 +189,10 @@ In rough order of how often a user would hit it:
 5. **Bindings.** Go only. DFC132 decided against Rust; Python is the one
    that would change adoption, and `ssql run` plus `generate json` make
    a thin binding possible without a second implementation.
-6. **Ecosystem.** Extensions, remote storage, database connectors, an
-   installed base. Not a feature gap to close so much as a fact.
+6. **Ecosystem.** Extensions, database connectors, an installed base.
+   (Remote storage is not a gap: `from https://` with Range and
+   presigned URLs covers object stores, DFC112; DuckDB additionally
+   signs S3 requests itself.) Not a feature gap to close so much as a fact.
 
 Not gaps, by design: SQL as the interface, a persistent database, the
 columnar engine. DFC060's argument holds: these are what DuckDB is, and
