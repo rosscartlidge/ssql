@@ -152,9 +152,13 @@ deb: build-gpu
 	printf '#!/bin/sh\nldconfig\n' > /tmp/ssql-gpu-deb/DEBIAN/postrm
 	chmod 755 /tmp/ssql-gpu-deb/DEBIAN/postrm
 	dpkg-deb --build /tmp/ssql-gpu-deb ssql-gpu_$(VERSION)_amd64.deb
+	@# README pins the .deb file names; move the pins with the artifacts
+	@# (doc-check Check 10 fails if they disagree with version.txt)
+	sed -i -E 's/(ssql(-gpu)?_)[0-9]+\.[0-9]+\.[0-9]+(_amd64\.deb)/\1$(VERSION)\3/g' README.md
 	@echo ""
 	@echo "✓ Built ssql_$(VERSION)_amd64.deb"
 	@echo "✓ Built ssql-gpu_$(VERSION)_amd64.deb"
+	@echo "✓ README.md .deb pins set to $(VERSION)"
 
 # Install git hooks
 install-hooks:

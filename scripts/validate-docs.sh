@@ -386,6 +386,28 @@ else
     fail "DFC metadata problems — run scripts/dfc.py --stamp && scripts/dfc.py --index"
 fi
 
+# Check 10: README release pins match version.txt. The .deb URLs in the
+# Installation section name a versioned file; `make deb` rewrites them,
+# and this catches a release where that step was skipped (the pin sat at
+# 4.34.0 through ~70 releases before this check existed).
+section "10. Checking README release pins against version.txt"
+
+VERSION=$(tr -d '[:space:]' < cmd/ssql/version/version.txt)
+readme_pins=$(grep -oE 'ssql(-gpu)?_[0-9]+\.[0-9]+\.[0-9]+_amd64\.deb' README.md | sed -E 's/.*_([0-9.]+)_amd64\.deb/\1/' | sort -u)
+if [[ -z "$readme_pins" ]]; then
+    fail "README.md has no .deb install pins (expected ssql_${VERSION}_amd64.deb)"
+elif [[ "$readme_pins" != "$VERSION" ]]; then
+    fail "README.md .deb pins are $(echo $readme_pins | tr ' ' ',') but version.txt is $VERSION — run make deb"
+else
+    pass "README.md .deb pins are $VERSION"
+fi
+deb_files=$(ls ssql_*_amd64.deb ssql-gpu_*_amd64.deb 2>/dev/null | sed -E 's/.*_([0-9.]+)_amd64\.deb/\1/' | sort -u)
+if [[ -n "$deb_files" && "$deb_files" != "$VERSION" ]]; then
+    fail "committed .deb files are $(echo $deb_files | tr ' ' ',') but version.txt is $VERSION — run make deb"
+else
+    pass "committed .deb files match version.txt"
+fi
+
 # Summary
 section "Summary"
 
