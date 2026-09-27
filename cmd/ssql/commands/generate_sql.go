@@ -1160,6 +1160,7 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 
 	filePath := args[0]
 	var joinCond string
+	var leftKey, rightKey []string
 	joinKind := "JOIN"
 	// -on L R needs both sides named: the accumulated query is folded
 	// into a subquery aliased __l and the right source aliased __r
@@ -1173,10 +1174,12 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 		case "-using", "-u":
 			if i+1 < len(args) {
 				joinCond = fmt.Sprintf("USING (%s)", quoteIdent(args[i+1]))
+				leftKey, rightKey = []string{args[i+1]}, []string{args[i+1]}
 				i++
 			}
 		case "-on", "-o":
 			if i+2 < len(args) {
+				leftKey, rightKey = []string{args[i+1]}, []string{args[i+2]}
 				if args[i+1] == args[i+2] {
 					// one key column in the result, as ssql keeps one field
 					joinCond = fmt.Sprintf("USING (%s)", quoteIdent(args[i+1]))
@@ -1197,11 +1200,30 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 				}
 				i++
 			}
+		case "-as", "-suffix", "-exclude-left", "-exclude-right":
+			// Silently dropped until v4.108, which changed the columns.
+			return fmt.Errorf("join %s has no SQL translation yet — rename or drop the columns with `rename` / `exclude` after the join, or use generate go", args[i])
 		}
 	}
 
 	if joinCond == "" {
 		joinCond = "ON TRUE"
+	}
+
+	// A non-key column on both sides: exec refuses (a silent overwrite is
+	// a wrong answer); SQL would emit two columns of one name. Refuse the
+	// same way when both field lists are known.
+	if len(leftKey) > 0 {
+		var rightFields []string
+		if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
+			rightFields = fragmentFields(funcFrags[len(funcFrags)-1].FuncBody)
+		} else {
+			rightFields = sideFileFields(filePath)
+		}
+		clauses := []ssql.LookupClause{{LeftField: leftKey[0], RightField: rightKey[0]}}
+		if _, err := resolveJoin(q.columns, rightFields, clauses, joinOptions{}); err != nil {
+			return err
+		}
 	}
 	if aliased {
 		*q = sqlQuery{

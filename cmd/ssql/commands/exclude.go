@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -78,17 +77,11 @@ func RegisterExclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return err
 			}
 
-			// Build exclusion function - delete excluded fields
-			excluder := func(r ssql.Record) ssql.Record {
-				mut := r.ToMutable()
-				for _, field := range fields {
-					mut = mut.Delete(field)
-				}
-				return mut.Freeze()
-			}
-
-			// Apply exclusion
-			excludedRecords := ssql.Select(excluder)(records)
+			// Drop the named fields (ssql.Without: the primitive generated
+			// record code calls too)
+			excludedRecords := ssql.Select(func(r ssql.Record) ssql.Record {
+				return ssql.Without(r, fields...)
+			})(records)
 
 			// Update schema to remove excluded fields
 			var outputSchema *lib.Schema
@@ -144,18 +137,11 @@ func generateExcludeCode(fields []string) error {
 		return err
 	}
 
-	// Generate delete statements
-	var deleteStmts strings.Builder
-	for _, field := range fields {
-		deleteStmts.WriteString(fmt.Sprintf("\n\t\tmut = mut.Delete(%q)", field))
-	}
-
-	// Generate code
+	// Generate code: ssql.Without, the primitive exec calls
 	outputVar := "excluded"
 	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
-		mut := r.ToMutable()%s
-		return mut.Freeze()
-	})(%s)`, outputVar, deleteStmts.String(), inputVar)
+		return ssql.Without(r, %s)
+	})(%s)`, outputVar, quotedList(fields), inputVar)
 
 	// Create stmt fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())

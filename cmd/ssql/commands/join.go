@@ -3,8 +3,10 @@ package commands
 import (
 	"fmt"
 	"iter"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -125,9 +127,11 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("join condition required: use -using <field> OR -on <left> <right>")
 			}
 
+			opts := joinOptions{suffix: suffix, excludeLeft: excludeLeft, excludeRight: excludeRight}
+
 			// Check if generation mode is enabled
 			if shouldGenerate(generate) {
-				return generateJoinCode(rightFile, joinType, clauses)
+				return generateJoinCode(rightFile, joinType, clauses, opts)
 			}
 
 			// Read left-side input from stdin (with schema if present)
@@ -148,95 +152,15 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("right-side file %s has no schema header — pipe through ssql first: ssql join <(ssql from jsonl %s) ...", rightFile, rightFile)
 			}
 
-			// Validate join field names against schemas
-			for _, clause := range clauses {
-				if leftSchema != nil && !leftSchema.HasField(clause.LeftField) {
-					return fmt.Errorf("join left field %q not found (available: %s)",
-						clause.LeftField, strings.Join(leftSchema.Fields, ", "))
-				}
-				if rightSchema != nil && !rightSchema.HasField(clause.RightField) {
-					return fmt.Errorf("join right field %q not found (available: %s)",
-						clause.RightField, strings.Join(rightSchema.Fields, ", "))
-				}
+			var leftFields []string
+			if leftSchema != nil {
+				leftFields = leftSchema.Fields
 			}
-
-			// Handle field collision, suffix, and exclude flags
-			if leftSchema != nil && rightSchema != nil {
-				// Collect join key fields
-				joinKeys := make(map[string]bool)
-				for _, c := range clauses {
-					joinKeys[c.LeftField] = true
-					if c.LeftField != c.RightField {
-						joinKeys[c.RightField] = true
-					}
-				}
-
-				leftFields := make(map[string]bool)
-				for _, f := range leftSchema.Fields {
-					leftFields[f] = true
-				}
-
-				// Apply -suffix to ALL non-key right fields (not just collisions)
-				if suffix != "" {
-					if len(clauses) > 0 && clauses[0].FieldRenames == nil {
-						clauses[0].FieldRenames = make(map[string]string)
-					}
-					for _, rf := range rightSchema.Fields {
-						if joinKeys[rf] {
-							continue
-						}
-						suffixed := rf + suffix
-						// Check suffixed name doesn't collide with left
-						if leftFields[suffixed] {
-							return fmt.Errorf("join: suffixed field %q collides with left-side field", suffixed)
-						}
-						clauses[0].FieldRenames[rf] = suffixed
-					}
-				}
-
-				// Check for remaining collisions (when no suffix and no exclude)
-				if suffix == "" && !excludeLeft && !excludeRight {
-					var collisions []string
-					for _, rf := range rightSchema.Fields {
-						if joinKeys[rf] {
-							continue
-						}
-						// Check if -as renames handle this field
-						renamed := false
-						for _, c := range clauses {
-							if _, ok := c.FieldRenames[rf]; ok {
-								renamed = true
-								break
-							}
-						}
-						if !renamed && leftFields[rf] {
-							collisions = append(collisions, rf)
-						}
-					}
-					if len(collisions) > 0 {
-						return fmt.Errorf("join field collision: %s exist in both sides — use -as to rename, -suffix to auto-rename, or -exclude-left/-exclude-right",
-							strings.Join(collisions, ", "))
-					}
-				}
+			plan, err := resolveJoin(leftFields, rightSchema.Fields, clauses, opts)
+			if err != nil {
+				return err
 			}
-
-			// Collect join key fields for exclude logic
-			joinKeys := make(map[string]bool)
-			for _, c := range clauses {
-				joinKeys[c.LeftField] = true
-				if c.LeftField != c.RightField {
-					joinKeys[c.RightField] = true
-				}
-			}
-
-			// -exclude-right: set empty FieldRenames so LookupJoin copies nothing from right
-			if excludeRight {
-				for i := range clauses {
-					if clauses[i].FieldRenames == nil {
-						clauses[i].FieldRenames = make(map[string]string)
-					}
-				}
-			}
+			clauses = plan.clauses
 
 			// Execute join
 			var joined iter.Seq[ssql.Record]
@@ -311,24 +235,14 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Apply -exclude-left: remove non-key left fields from output
-			if excludeLeft && leftSchema != nil {
-				excludeFields := make(map[string]bool)
-				for _, f := range leftSchema.Fields {
-					if !joinKeys[f] {
-						excludeFields[f] = true
-					}
-				}
+			if len(plan.dropLeft) > 0 {
 				joined = ssql.Select(func(r ssql.Record) ssql.Record {
-					mut := r.ToMutable()
-					for f := range excludeFields {
-						mut = mut.Delete(f)
-					}
-					return mut.Freeze()
+					return ssql.Without(r, plan.dropLeft...)
 				})(joined)
 				if outputSchema != nil {
 					filtered := lib.NewSchema()
 					for _, f := range outputSchema.Fields {
-						if !excludeFields[f] {
+						if !slices.Contains(plan.dropLeft, f) {
 							filtered.AddField(f, outputSchema.TypeOf(f))
 						}
 					}
@@ -343,6 +257,157 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		}).
 		Done()
 	return cmd
+}
+
+// joinOptions are the flags that shape the merged row beyond the key.
+type joinOptions struct {
+	suffix                    string
+	excludeLeft, excludeRight bool
+}
+
+func (o joinOptions) any() bool { return o.suffix != "" || o.excludeLeft || o.excludeRight }
+
+// joinPlan is what resolveJoin decides: the clauses with every rename
+// the flags imply, and the non-key left fields -exclude-left drops.
+type joinPlan struct {
+	clauses  []ssql.LookupClause
+	dropLeft []string
+}
+
+// resolveJoin applies the merge rules ONCE for every lane (exec calls it
+// with the real schemas, the generators with the fields they can see;
+// nil = unknown, and a rule that needs an unknown side is skipped, or
+// refused when the user asked for it): key fields must exist; -suffix
+// renames every non-key right field; -exclude-right copies nothing from
+// the right; -exclude-left drops the non-key left fields; and with none
+// of those, a non-key field present on BOTH sides is refused rather than
+// silently overwritten (until v4.108 only exec refused: record codegen
+// let the right win, typed the left, and SQL emitted both columns).
+func resolveJoin(leftFields, rightFields []string, clauses []ssql.LookupClause, opts joinOptions) (joinPlan, error) {
+	plan := joinPlan{clauses: slices.Clone(clauses)}
+	for i := range plan.clauses {
+		plan.clauses[i].FieldRenames = maps.Clone(plan.clauses[i].FieldRenames)
+	}
+	clauses = plan.clauses
+	for _, c := range clauses {
+		if leftFields != nil && !slices.Contains(leftFields, c.LeftField) {
+			return plan, fmt.Errorf("join left field %q not found (available: %s)", c.LeftField, strings.Join(leftFields, ", "))
+		}
+		if rightFields != nil && !slices.Contains(rightFields, c.RightField) {
+			return plan, fmt.Errorf("join right field %q not found (available: %s)", c.RightField, strings.Join(rightFields, ", "))
+		}
+	}
+	joinKeys := make(map[string]bool)
+	for _, c := range clauses {
+		joinKeys[c.LeftField] = true
+		joinKeys[c.RightField] = true
+	}
+	if opts.suffix != "" {
+		if rightFields == nil {
+			return plan, fmt.Errorf("join -suffix needs the right side's field names, which are not known here — name the renames with -as, or read the file directly (join FILE.csv)")
+		}
+		if len(clauses) > 0 && clauses[0].FieldRenames == nil {
+			clauses[0].FieldRenames = make(map[string]string)
+		}
+		for _, rf := range rightFields {
+			if joinKeys[rf] {
+				continue
+			}
+			suffixed := rf + opts.suffix
+			if slices.Contains(leftFields, suffixed) {
+				return plan, fmt.Errorf("join: suffixed field %q collides with left-side field", suffixed)
+			}
+			clauses[0].FieldRenames[rf] = suffixed
+		}
+	}
+	if !opts.any() && leftFields != nil && rightFields != nil {
+		var collisions []string
+		for _, rf := range rightFields {
+			if joinKeys[rf] {
+				continue
+			}
+			renamed := false
+			for _, c := range clauses {
+				if _, ok := c.FieldRenames[rf]; ok {
+					renamed = true
+					break
+				}
+			}
+			if !renamed && slices.Contains(leftFields, rf) {
+				collisions = append(collisions, rf)
+			}
+		}
+		if len(collisions) > 0 {
+			return plan, fmt.Errorf("join field collision: %s exist in both sides — use -as to rename, -suffix to auto-rename, or -exclude-left/-exclude-right",
+				strings.Join(collisions, ", "))
+		}
+	}
+	if opts.excludeRight {
+		for i := range clauses {
+			if clauses[i].FieldRenames == nil {
+				clauses[i].FieldRenames = make(map[string]string)
+			}
+		}
+	}
+	if opts.excludeLeft {
+		if leftFields == nil {
+			return plan, fmt.Errorf("join -exclude-left needs the left side's field names, which are not known here — use `include` on the left instead")
+		}
+		for _, f := range leftFields {
+			if !joinKeys[f] {
+				plan.dropLeft = append(plan.dropLeft, f)
+			}
+		}
+	}
+	return plan, nil
+}
+
+// fragmentFields is the field list a record-mode fragment chain yields,
+// as far as it can be known at generation time: the source's advisory
+// columns folded through each stage's schemaOp (the same per-command
+// rules completion and SSQL_MODE=schema use). nil when unknown (a
+// source without advisory types, or a stage whose output the rules
+// cannot predict).
+func fragmentFields(fragments []*lib.CodeFragment) []string {
+	var fields []string
+	seeded := false
+	for _, f := range fragments {
+		if f.Type == "func" || f.Command == "" || f.Op == nil || f.Op.Kind == "" {
+			continue
+		}
+		if !seeded {
+			if f.AdvisoryTypes == nil {
+				return nil
+			}
+			fields = slices.Sorted(maps.Keys(f.AdvisoryTypes))
+			seeded = true
+			continue
+		}
+		switch f.Op.Kind {
+		case "join", "union", "merge":
+			return nil // another source's columns, which the rules cannot see
+		}
+		out, ok := lookupSchemaOp(f.Op.Kind)(nil, fields, f.Op.Argv)
+		if !ok {
+			return nil
+		}
+		fields = out
+	}
+	if !seeded {
+		return nil
+	}
+	return fields
+}
+
+// sideFileFields returns a named side file's field names from its
+// header (through readAuxInput, as exec reads it); nil when unreadable
+// or headerless.
+func sideFileFields(file string) []string {
+	_, schema, err := readAuxInput(file)
+	if err != nil || schema == nil {
+		return nil
+	}
+	return schema.Fields
 }
 
 // parseJoinClauses parses clauses into LookupClauses
@@ -414,7 +479,7 @@ func parseJoinClauses(clauses []cf.Clause) []ssql.LookupClause {
 // Handles two scenarios:
 // 1. Direct JSONL file: generates a simple function to read the file
 // 2. Process substitution (/dev/fd/N): wraps subprocess fragments into a function
-func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) error {
+func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, opts joinOptions) error {
 	// Read all previous code fragments from stdin (if any)
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
@@ -436,6 +501,20 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 		leftSchema = fragments[len(fragments)-1].OutputTypedSchema
 	} else {
 		inputVar = "records"
+	}
+
+	// The merge rules, resolved against the fields each source kind
+	// lets generation see (typed: both schemas, in emitTypedJoin).
+	leftFields := fragmentFields(fragments)
+	if leftSchema != nil {
+		leftFields = typedFieldNames(leftSchema)
+	}
+	resolve := func(rightFields []string) (joinPlan, error) {
+		plan, err := resolveJoin(leftFields, rightFields, clauses, opts)
+		if err != nil {
+			return plan, lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		return plan, nil
 	}
 
 	// Generate unique function name for the right source
@@ -474,7 +553,12 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 					return lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'join' must follow a typed-mode source"))
 				}
-				return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, joinType)
+				return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, joinType, opts)
+			}
+
+			plan, err := resolve(fragmentFields(rightFragments))
+			if err != nil {
+				return err
 			}
 
 			// Create a func fragment that wraps the subprocess pipeline
@@ -484,7 +568,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 			}
 
 			// Generate join statement using the function call
-			return generateJoinStmtWithFunc(inputVar, funcName, joinType, clauses, fragments)
+			return generateJoinStmtWithFunc(inputVar, funcName, joinType, plan)
 		}
 		// If reading fragments failed, fall through to normal file handling
 	}
@@ -538,7 +622,13 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 			fmt.Sprintf("ssql from %s", rightFile),
 			clauses,
 			joinType,
+			opts,
 		)
+	}
+
+	plan, err := resolve(sideFileFields(rightFile))
+	if err != nil {
+		return err
 	}
 
 	// For regular files, create a simple func fragment that reads the file
@@ -582,7 +672,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 		return fmt.Errorf("writing func fragment: %w", err)
 	}
 
-	return generateJoinStmtWithFunc(inputVar, funcName, joinType, clauses, fragments)
+	return generateJoinStmtWithFunc(inputVar, funcName, joinType, plan)
 }
 
 // joinReadTemplate is the record-mode read of a join's right-hand file
@@ -617,7 +707,15 @@ func emitTypedJoin(
 	subCommandStr string,
 	clauses []ssql.LookupClause,
 	joinType string,
+	opts joinOptions,
 ) error {
+	if opts.any() {
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: join -suffix / -exclude-left / -exclude-right are not supported in typed mode (single-clause joins without renames only); use SSQL_MODE=record"))
+	}
+	if _, err := resolveJoin(typedFieldNames(leftSchema), typedFieldNames(rightSchema), clauses, opts); err != nil {
+		return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: %w", err))
+	}
 	if joinType != "" && joinType != "inner" {
 		// An unmatched left row of a left/full join has its right fields
 		// ABSENT; a typed struct cannot hold absence (DFC124 §3) and zero
@@ -784,14 +882,24 @@ func mergeJoinSchemas(left, right *lib.TypedSchema) (*lib.TypedSchema, string) {
 	return merged, b.String()
 }
 
+// typedFieldNames are a typed schema's CSV column names.
+func typedFieldNames(s *lib.TypedSchema) []string {
+	out := make([]string, len(s.Fields))
+	for i, f := range s.Fields {
+		out[i] = f.Name
+	}
+	return out
+}
+
 // generateJoinStmtWithFunc generates a join statement that calls a function for the right source
-func generateJoinStmtWithFunc(inputVar, funcName, joinType string, clauses []ssql.LookupClause, fragments []*lib.CodeFragment) error {
+func generateJoinStmtWithFunc(inputVar, funcName, joinType string, plan joinPlan) error {
+	clauses := plan.clauses
 	outputVar := "joined"
 	var stmtCode string
 	var stmtImports []string
 
 	// For single clause without renames, use traditional join
-	if len(clauses) == 1 && len(clauses[0].FieldRenames) == 0 {
+	if len(clauses) == 1 && clauses[0].FieldRenames == nil {
 		clause := clauses[0]
 		var predicateCode string
 
@@ -808,10 +916,21 @@ func generateJoinStmtWithFunc(inputVar, funcName, joinType string, clauses []ssq
 		clausesCode := generateClausesCode(clauses)
 		stmtCode = fmt.Sprintf("%s := ssql.LookupJoin(%s(), %s)(%s)", outputVar, funcName, clausesCode, inputVar)
 	}
-
 	// Write stmt fragment
 	stmtFrag := lib.NewStmtFragment(outputVar, inputVar, stmtCode, stmtImports, getCommandString())
-	return lib.WriteCodeFragment(stmtFrag)
+	if err := lib.WriteCodeFragment(stmtFrag); err != nil {
+		return err
+	}
+	if len(plan.dropLeft) > 0 {
+		// -exclude-left: the non-key left fields, dropped after the merge,
+		// as a continuation fragment (Command ""), the way group-by's
+		// second fragment is: the assembler expects each stmt to end in
+		// its (inputVar), which it rewires when it re-plans.
+		drop := fmt.Sprintf("joinedLeftExcluded := ssql.Select(func(r ssql.Record) ssql.Record { return ssql.Without(r, %s) })(%s)",
+			quotedList(plan.dropLeft), outputVar)
+		return lib.WriteCodeFragment(lib.NewStmtFragment("joinedLeftExcluded", outputVar, drop, nil, ""))
+	}
+	return nil
 }
 
 // generateClausesCode generates Go code for []ssql.LookupClause using the Lookup() helper

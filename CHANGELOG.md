@@ -32,6 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   differential tester draws self-`except`/`intersect` stages.
 
 ### Fixed
+- **A `join` field collision is refused in every lane.** A non-key
+  column present on both sides was refused by exec ("use -as, -suffix,
+  or -exclude-*") but silently merged by generated code: record let the
+  right side win, typed the left, and `generate sql` emitted two columns
+  of one name. The merge rules now live in one resolver that every lane
+  calls with the field names it can see (a named file's header, a
+  `<(pipeline)>`'s columns folded through its stages, a typed schema).
+  Record codegen also honours `-suffix`, `-exclude-left` and
+  `-exclude-right`, which generation mode had dropped; typed and SQL
+  refuse those flags loudly instead of ignoring them. `ssql.Without` is
+  the record primitive behind `exclude` and `-exclude-left` in both
+  lanes.
 - **`join -type left|right|full` was ignored by `generate sql`** (every
   join was inner) and **`join -on L R` rendered `ON t1.L = t2.R`** with
   aliases nothing defined, a binder error in every engine. The join kind

@@ -383,3 +383,14 @@ func Project(r Record, fields ...string) Record {
 	}
 	return m.Freeze()
 }
+
+// Without returns r with the named fields removed, the others in their
+// order: the record form of `exclude a b` and of join's -exclude-left.
+// One implementation for exec and generated record code.
+func Without(r Record, fields ...string) Record {
+	m := r.ToMutable()
+	for _, f := range fields {
+		m = m.Delete(f)
+	}
+	return m.Freeze()
+}
