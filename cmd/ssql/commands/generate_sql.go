@@ -1569,6 +1569,16 @@ func translateSetOp(q *sqlQuery, name string, args []string, funcFrags []*lib.Co
 	}
 
 	if len(leftKey) == 0 {
+		if all && sqlDialectCur == dialectDataFusion {
+			// DataFusion's EXCEPT ALL / INTERSECT ALL are membership tests
+			// over all columns (every left row whose value is / is not on
+			// the right, duplicates kept), not the standard's count
+			// arithmetic that DuckDB, Postgres and ssql implement: two
+			// left alices against one right alice give two / none there,
+			// one / one everywhere else (the equivalence gate's DataFusion
+			// lane, v4.108).
+			return dialectRefuse(name+" -all", "DataFusion's "+op+" keeps or drops every duplicate rather than one per right row")
+		}
 		// `SELECT … LIMIT n EXCEPT …` is a syntax error: an ordered or
 		// limited left side is folded into a subquery first.
 		if len(q.orderBy) > 0 || q.limit != "" || q.offset != "" {
