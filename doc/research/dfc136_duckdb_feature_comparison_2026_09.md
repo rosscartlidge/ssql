@@ -62,7 +62,7 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Glob / many files as one source | ● | ● | `from csv a.csv b.csv -source file` |
 | stdin as a source | ◐ | ● | ssql: every command reads stdin |
 | Infinite / live streams | ○ | ● | the pipeline model; `merge` for k-way sorted streams |
-| Lazy, bounded-memory streaming | ◐ (pipelined, vectorised; a query is over a finite input) | ● | ssql: except barriers (sort, group-by), which DuckDB spills and ssql holds in memory (DFC137) |
+| Lazy, bounded-memory streaming | ◐ (pipelined, vectorised; a query is over a finite input) | ● | ssql: except barriers (sort, group-by), which spill on request (`-spill`, DFC137 §1) |
 
 ### 2.2 Transforming
 
@@ -122,7 +122,7 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Parallelism | ● automatic | ● in typed codegen | `Stream[T]` sharding for source, filter, join, group-by; interpreter is serial |
 | Query optimiser | ● cost-based | ◐ rule-based | `generate ssql`: pushdown, column pruning, dead-sort elimination, sort+limit to top, expression canonicalisation |
 | Compile a query to a native program | ○ | ● | `generate go`: typed structs, no reflection, parallel; parameters become flags |
-| Out-of-core (spill to disk) | ● | ○ | barriers (sort, group-by) are in memory |
+| Out-of-core (spill to disk) | ● automatic | ◐ opt-in | `sort`/`group-by -spill DIR -memory SIZE` (DFC137 §1, built 2026-09-27); `top`, `distinct`, `window` stay in memory |
 | Persistent database | ● | ○ | ssql is stateless; `serve` holds one dataset in memory |
 | Client/server | ○ (embedded) | ● | `serve`: SSH console and HTTP API over an in-memory dataset |
 | Distributed execution | ○ | ● | catalog of shards over SSH, pipeline pushed to each |
@@ -196,7 +196,9 @@ In rough order of how often a user would hit it:
    will be, which is a deliberate limit.
 4. **Out-of-core barriers.** A `sort` or `group-by` over data larger than
    memory fails in ssql and spills in DuckDB. `merge` and `-presorted`
-   are the workarounds; a spilling sort is a real unit.
+   are the workarounds; a spilling sort is a real unit. *Update
+   2026-09-27: built as opt-in `-spill DIR` (DFC137 §1a); DuckDB's is
+   automatic, ssql's is asked for.*
 5. **Bindings.** Go only. DFC132 decided against Rust; Python is the one
    that would change adoption, and `ssql run` plus `generate json` make
    a thin binding possible without a second implementation.
@@ -248,7 +250,7 @@ In the order I would take them, none started:
    interval values; each with transpiler and SQL translation and a
    differential entry.
 3. Spilling sort and group-by (§4.4), with the scale gate deciding the
-   ceiling.
+   ceiling — **built 2026-09-27** (DFC137 §1a).
 4. INTERSECT/EXCEPT (§4.3) — **built 2026-09-26** (DFC137 §3a).
 5. A Python binding over `ssql run` documents (§4.5), after DFC134's
    JSON Schema (§5.5), so the binding is generated, not written.

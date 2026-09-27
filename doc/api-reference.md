@@ -1160,6 +1160,32 @@ ssql from products.csv | ssql join <(ssql from categories.csv) \
     -on dest_cat cat_id -as cat_name dest_name
 ```
 
+### SortRecordsSpill
+
+```go
+type SpillConfig struct {
+    Dir         string // run directory's parent ("" = the system temp dir)
+    MemoryBytes int64  // run budget, estimated; 0 = 1 GiB
+}
+func SortRecordsSpill(orderBy []OrderField, cfg SpillConfig) Filter[Record, Record]
+func ParseMemorySize(s string) (int64, error)   // "512M", "4G", bytes
+```
+
+`SortRecords` with bounded memory: runs of at most the budget are sorted
+in memory and written under `Dir` (gob-encoded, so every value keeps its
+type), then k-way merged with `MergeSorted`. An input that fits in one run
+is sorted in memory and nothing is written. Stable, like `SortRecords`
+(both are, so the two agree on ties). The run directory is removed when
+the merge ends, when the consumer stops early, and on SIGINT/SIGTERM. A
+record holding a sequence or nested record cannot be spilled (panic with
+a clear message).
+
+**CLI equivalent:**
+```bash
+ssql from huge.csv | ssql sort ts -spill /var/tmp -memory 2G
+ssql from huge.csv | ssql group-by key -sum x total -spill /var/tmp   # sort then stream
+```
+
 ### AsofJoin
 
 ```go

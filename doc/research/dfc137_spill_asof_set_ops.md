@@ -6,8 +6,9 @@ Last modified: 2026-09-27
 
 [Back to Index](./README.md)
 
-Status: **§3 (except/intersect) BUILT 2026-09-26; §2 (ASOF join) BUILT
-2026-09-27; §1 (spill) open.**
+Status: **ALL BUILT.** §3 (except/intersect) 2026-09-26; §2 (ASOF join)
+2026-09-27; §1 (spilling sort and group-by) 2026-09-27. Each part's
+"built" subsection records what differed from the plan.
 DFC136 §4 ranked the gaps between ssql and DuckDB; Ross asked how three
 of them would be done and then for a DFC, reviewed it on 2026-09-26 and
 agreed with the leanings in §5 (opt-in spill, ASOF as a mode on `join`,
@@ -108,6 +109,44 @@ path, which a spill flag does not disturb.
 - Equivalence: `sort -spill` and `group-by -spill` cases; the lanes must
   agree with and without the flag.
 - Interrupt: runs are gone after SIGINT.
+
+### 1a. Built (2026-09-27)
+
+As designed (§1.2–§1.4, opt-in `-spill DIR`, `-memory SIZE`), with
+these particulars:
+
+- Runs are **gob-encoded**, not JSONL: a run must give back every value
+  with its type (a time as a time, an int as an int), and the library's
+  JSONL reader would return a time as text — the merge would then sort
+  and emit strings. The runs are private and deleted, so their being
+  inspectable mattered less than their being exact. A record holding a
+  sequence or nested record refuses to spill.
+- The library owns the run directory: `SortRecordsSpill` makes a fresh
+  `ssql-spill-*` under `cfg.Dir` at the first flush and removes it when
+  the merge ends, when the consumer stops early, and on SIGINT/SIGTERM
+  (a handler armed on first use removes every live run directory and
+  exits 130/143; verified by interrupting a 1.5M-row sort mid-run).
+  Exec and generated record programs make the same one call — the
+  record assembler rewrites a fragment's first assignment to the
+  fragment's variable, so a multi-statement setup could not live in
+  generated code anyway.
+- The run budget is an estimate of the live heap, calibrated on the
+  scale fixture to be within a factor of two of RSS growth (`-memory
+  64M` → 126 MB RSS, `256M` → 371 MB).
+- `sort` in memory is now stable (`slices.SortedStableFunc`), as §1.2
+  proposed, so the two forms agree on ties and an ordered equivalence
+  case can compare them byte for byte.
+- `group-by -spill` is sort-then-stream (§1.3's first form): the exec
+  handler sorts and sets presorted; record codegen emits the spill sort
+  as a continuation fragment before the `StreamGroupByFields` one, so
+  the other generators translate the stage once. Hash partitioning was
+  not built (§5.5: only after measurement).
+- Measured on the 3M-row scale fixture (`sort dept -desc score`):
+  in memory 19.9 s / 1.0 GB RSS; `-memory 16M` 33.3 s / 101 MB;
+  `-memory 256M` 33.3 s / 371 MB. The time is the codec, not the merge
+  width: gob with `[]any` values costs ~4 µs per record to write and
+  read back. A hand-rolled binary codec would take most of that 13 s
+  back; noted in TODO, not done here.
 
 ## 2. ASOF join
 
@@ -325,7 +364,7 @@ join is inner) and renders `join -on` with undefined `t1`/`t2` aliases.
 2. ASOF join (two days): the largest gap for the users ssql has; the
    typed lane is the long part. **Done** (§2a), in a day.
 3. Spilling sort, then group-by as sort-then-stream (two days), typed
-   spill later on demand.
+   spill later on demand. **Done** (§1a), in an afternoon.
 
 ## 5. Open points for review
 

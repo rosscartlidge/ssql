@@ -232,7 +232,7 @@ func TestUnionMergeSideFileSchemaHeaderIsNotARecord(t *testing.T) {
 	for _, c := range []struct{ cmd, want, why string }{
 		{"union -all -file teed.jsonl", "6", "3 + 3; a phantom _schema record gives 7"},
 		{"merge teed.jsonl -by id", "6", "3 + 3; a phantom _schema record gives 7"},
-		{"join teed.jsonl -using id", "3", "3 matched rows; a phantom _schema record would not match but must not crash the reader"},
+		{"join teed.jsonl -using id -exclude-right", "3", "3 matched rows (the side file's v would collide, so nothing is brought across); a phantom _schema record would not match but must not crash the reader"},
 	} {
 		pipeline := bin + " from csv a.csv | " + bin + " " + c.cmd + " | " + bin + " count"
 		out, err := runGeneratedPipeline(t, bin, dir, "record", pipeline)

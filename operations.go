@@ -382,10 +382,13 @@ func SortBy[T any, K cmp.Ordered](keyFn func(T) K) Filter[T, T] {
 
 // SortFunc sorts elements using a comparator function.
 // The comparator should return a negative number when a < b, zero when a == b,
-// and a positive number when a > b.
+// and a positive number when a > b. The sort is STABLE: equal elements
+// keep their input order, so `sort` and `sort -spill` (whose runs are
+// stably sorted and stably merged) agree on ties, and every lane's
+// output for a sort on a non-unique key is the same.
 func SortFunc[T any](cmpFn func(T, T) int) Filter[T, T] {
 	return func(input iter.Seq[T]) iter.Seq[T] {
-		return slices.Values(slices.SortedFunc(input, cmpFn))
+		return slices.Values(slices.SortedStableFunc(input, cmpFn))
 	}
 }
 

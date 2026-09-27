@@ -1903,6 +1903,23 @@ var equivCases = []EquivCase{
 		Golden:   []map[string]any{{"ev": "e1", "r": "r0"}, {"ev": "e2", "r": "r10"}},
 	},
 	{
+		// sort -spill (DFC137 §1): a 1 KB run budget over the 20-row
+		// fixture makes many runs and a real merge; the output must be
+		// exactly the in-memory sort's, ordered, in every lane (SQL drops
+		// the flag: spilling is the engine's job). Salary ties are broken
+		// by name so the order is total.
+		Name:     "sort_spill_ordered",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept -desc salary name -spill {{.data}} -memory 1K | {{.bin}} include name dept salary`,
+		Ordered:  true,
+	},
+	{
+		// group-by -spill: the sorted-run group-by must equal the hashed
+		// one, aggregates that need the whole group (median) included.
+		Name:     "group_by_spill",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept city -count n -sum salary total -median salary med -spill {{.data}} -memory 1K`,
+		Ordered:  false,
+	},
+	{
 		Name: "join_procsub_csv",
 		Pipeline: `{{.bin}} from csv {{.data}}/orders.csv | ` +
 			`{{.bin}} join <({{.bin}} from csv {{.data}}/customers.csv) -using customer_id | ` +

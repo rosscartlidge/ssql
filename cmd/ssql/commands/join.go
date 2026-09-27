@@ -261,14 +261,17 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							outputSchema.AddField(field, leftSchema.TypeOf(field))
 						}
 					}
+					// the renamed fields in the RIGHT schema's order, not the
+					// map's (a range over the map put -suffix columns in a
+					// different order on different runs)
 					for _, clause := range clauses {
-						for rightField, newName := range clause.FieldRenames {
-							typ := lib.TypeString
-							if rightSchema != nil && rightSchema.HasField(rightField) {
-								typ = rightSchema.TypeOf(rightField)
+						for _, rightField := range rightSchema.Fields {
+							newName, ok := clause.FieldRenames[rightField]
+							if !ok {
+								continue
 							}
 							if !outputSchema.HasField(newName) {
-								outputSchema.AddField(newName, typ)
+								outputSchema.AddField(newName, rightSchema.TypeOf(rightField))
 							}
 						}
 					}
@@ -460,8 +463,8 @@ func fragmentFields(fragments []*lib.CodeFragment) []string {
 // or headerless.
 func sideFileFields(file string) []string {
 	_, schema, err := readAuxInput(file)
-	if err != nil || schema == nil {
-		return nil
+	if err != nil || schema == nil || len(schema.Fields) == 0 {
+		return nil // an empty or unreadable file is not a field list
 	}
 	return schema.Fields
 }

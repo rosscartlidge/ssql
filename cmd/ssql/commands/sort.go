@@ -48,10 +48,27 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Help("Sort ascending (default, use +asc for descending)").
 			Done().
 
+		Flag("-spill").
+			String().
+			Completer(&cf.FileCompleter{DirsOnly: true, Hint: "<DIR>"}).
+			Global().
+			Help("Out-of-core sort: write sorted runs of -memory size under DIR and merge them (bounded memory; DFC137)").
+			Done().
+
+		Flag("-memory").
+			String().
+			Global().
+			Help("Run size for -spill: bytes or 512M, 4G (default 1G)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			var generate bool
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
+			}
+			spill, err := parseSpillSpec(ctx)
+			if err != nil {
+				return err
 			}
 
 			// Parse clauses into OrderField slice
@@ -98,7 +115,7 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateSortCode(orderBy)
+				return generateSortCode(orderBy, spill)
 			}
 
 			// Read JSONL from stdin (with schema if present)
@@ -114,8 +131,17 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return err
 			}
 
-			// Sort using SortRecords (proper cross-type comparison)
-			result := ssql.SortRecords(orderBy)(records)
+			// Sort using SortRecords (proper cross-type comparison), or
+			// the out-of-core form under -spill
+			sortFilter := ssql.SortRecords(orderBy)
+			if spill.active() {
+				f, err := spillSort(orderBy, spill)
+				if err != nil {
+					return err
+				}
+				sortFilter = f
+			}
+			result := sortFilter(records)
 
 			// Write output as JSONL (preserving schema if present)
 			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, result); err != nil {
@@ -129,7 +155,7 @@ func RegisterSort(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // generateSortCode generates Go code for the sort command
-func generateSortCode(orderBy []ssql.OrderField) error {
+func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -148,6 +174,17 @@ func generateSortCode(orderBy []ssql.OrderField) error {
 		inputVar = "records"
 	}
 	outputVar := "sorted"
+
+	// -spill: the out-of-core sort is record-mode only; in typed mode
+	// the stage falls back to record (the planner inserts the typed →
+	// record adapter upstream) with the reason under -explain.
+	if spill.active() {
+		frag := spillSortFragment(outputVar, inputVar, orderBy, spill, getCommandString())
+		if typedMode() && prevSchema != nil {
+			frag.PlanNotes = []string{"record fallback (-spill: the out-of-core sort has no typed form)"}
+		}
+		return lib.WriteCodeFragment(frag)
+	}
 
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {

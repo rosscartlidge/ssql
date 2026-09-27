@@ -333,6 +333,9 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 				continue
 			}
 			aggs := []string{"-count c"}
+			if rng.Intn(3) == 0 {
+				aggs = append(aggs, "-spill {{DIR}} -memory 1K") // DFC137 §1: sort-then-stream group-by
+			}
 			newCols, newKind := []string{key, "c"}, map[string]string{key: kind[key], "c": "int"}
 			for _, f := range cols {
 				if f == key || rng.Intn(2) == 0 {
@@ -384,7 +387,10 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 			}
 			nrow := 1 + rng.Intn(4)
 			if rng.Intn(2) == 0 {
-				st = fmt.Sprintf("sort %s%s | ssql limit %s", pick(rng, []string{"", "-desc "}), pos(rng, "id"), pos(rng, fmt.Sprint(nrow)))
+				// half the sorts spill (DFC137 §1) with a 1 KB run budget, so
+				// every table makes several runs and a real merge
+				spill := pick(rng, []string{"", " -spill {{DIR}} -memory 1K"})
+				st = fmt.Sprintf("sort %s%s%s | ssql limit %s", pick(rng, []string{"", "-desc "}), pos(rng, "id"), spill, pos(rng, fmt.Sprint(nrow)))
 			} else {
 				st = fmt.Sprintf("top %s%s -field id", pick(rng, []string{"", "-asc "}), pos(rng, fmt.Sprint(nrow)))
 			}
@@ -548,7 +554,7 @@ type randDiff struct{ bin, duckdb, dir string }
 func (rd *randDiff) script(file string, stages []string) string {
 	p := rd.bin + " from csv " + file
 	for _, s := range stages {
-		s = strings.ReplaceAll(strings.ReplaceAll(s, "{{FILE}}", file), "{{BIN}}", rd.bin)
+		s = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(s, "{{FILE}}", file), "{{BIN}}", rd.bin), "{{DIR}}", rd.dir)
 		p += " | " + rd.bin + " " + s
 	}
 	return p

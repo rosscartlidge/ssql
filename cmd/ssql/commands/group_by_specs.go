@@ -281,6 +281,7 @@ type groupBySpecs struct {
 	rollup      bool
 	cube        bool
 	presorted   bool
+	spill       spillSpec
 }
 
 // parseGroupBySpecs decodes all aggregation and modifier flags from a
@@ -294,6 +295,7 @@ func parseGroupBySpecs(ctx *cf.Context) groupBySpecs {
 		cube:        groupByBoolFlag(ctx, "-cube"),
 		presorted:   groupByBoolFlag(ctx, "-presorted"),
 	}
+	specs.spill, _ = parseSpillSpec(ctx) // its error is reported by the handlers
 	// Result columns come out in the order their flags were typed: the
 	// built-in aggregates as typed, then the -expr results as typed, then
 	// -stream-expr (SQL has no -expr, so the buckets never interleave

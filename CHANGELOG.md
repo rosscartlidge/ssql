@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Out-of-core `sort` and `group-by`** (DFC137 §1), opt-in with
+  `-spill DIR [-memory SIZE]`: `sort` writes stably sorted runs of at
+  most SIZE (default 1G) under DIR and k-way merges them, deleting the
+  run directory when done, when the consumer stops early, and on
+  SIGINT/SIGTERM; `group-by -spill` is that sort on the group fields
+  followed by the presorted streaming aggregation, so every aggregate
+  (median, percentile, mode included) works unchanged. The result is
+  byte-identical to the in-memory form. Runs are gob-encoded, so a time
+  stays a time. Library `ssql.SortRecordsSpill`, `ssql.SpillConfig`,
+  `ssql.ParseMemorySize`. Record codegen makes the same one call, with
+  the directory as the program's own `-spill` flag; typed codegen
+  falls back to record for the stage with a plan note; `generate sql`
+  drops the flags (spilling is the engine's job). On the 3M-row scale
+  fixture: in memory 20 s / 1.0 GB RSS; `-memory 16M` 33 s / 100 MB.
+  The scale gate has a `sort-spill` ceiling; equivalence cases
+  `sort_spill_ordered` and `group_by_spill`; the random tester spills
+  half its sorts and a third of its group-bys.
+- **`sort` is stable** (`ssql.SortFunc` uses `slices.SortedStableFunc`),
+  so equal keys keep input order in every lane and the in-memory and
+  spilling forms agree on ties.
 - **ASOF join** (DFC137 §2), a mode on `join`: `ssql from trades.csv |
   ssql join quotes.csv -using sym -asof ts` gives each trade the quote
   in force at its time, the nearest right row at or before (`-after`:
@@ -49,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   differential tester draws self-`except`/`intersect` stages.
 
 ### Fixed
+- **`join FILE.json` (and `union`/`merge` with a `.json` side file) read
+  the file as JSON Lines**, so a `to json` file, which is an array,
+  matched nothing ("right field not found (available: )"). Side files
+  now use the array-or-lines reader `from json` uses.
 - **A stage other than `from`/`where` inside a `join`/`union` `<(…)>`
   source was silently dropped by `generate sql`**: `join <(ssql from
   x.csv | ssql include a b)` joined the whole file. Side pipelines now go

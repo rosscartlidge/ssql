@@ -147,6 +147,15 @@ func TestScaleBudgets(t *testing.T) {
 		// coarse grid — generous absolute ceiling, no baseline.
 		budget(t, dir, bin+" from csv big.csv | "+bin+" resample -time id -every 1000s -value score > /dev/null", 60*time.Second)
 	})
+	t.Run("sort-spill", func(t *testing.T) {
+		// DFC137 §1: the out-of-core sort on 3M rows with a 16 MB run
+		// budget (dozens of runs) must be one write and one read of the
+		// data beyond the sort — a re-sort per run, a run reopened per
+		// pull, or an unbuffered codec passes the output oracle and blows
+		// this. Byte-identical to the in-memory sort is the equivalence
+		// gate's business; this is the ceiling. Generous, no baseline.
+		budget(t, dir, bin+" from csv big.csv | "+bin+" sort dept -desc score -spill "+dir+" -memory 16M | "+bin+" count", 90*time.Second)
+	})
 	t.Run("exec-csv-scan", func(t *testing.T) {
 		// Parse-amplification guard: the full exec scan, generous cap.
 		budget(t, dir, bin+" from csv big.csv | "+bin+" count", 60*time.Second)

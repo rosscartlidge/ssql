@@ -193,6 +193,7 @@ func init() {
 		for k, v := range map[string]int{
 			"-expr": 2, "-stream-expr": 4,
 			"-rollup": 0, "-cube": 0, "-presorted": 0, "-generate": 0, "-g": 0,
+			"-spill": 1, "-memory": 1,
 		} {
 			arity[k] = v
 		}

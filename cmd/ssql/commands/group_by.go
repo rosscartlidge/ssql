@@ -304,6 +304,17 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("Input is presorted by group fields (streaming, O(1) memory per group)").
 		Done().
+		Flag("-spill").
+		String().
+		Completer(&cf.FileCompleter{DirsOnly: true, Hint: "<DIR>"}).
+		Global().
+		Help("Out-of-core: sort by the group fields through runs under DIR (see sort -spill), then aggregate as -presorted").
+		Done().
+		Flag("-memory").
+		String().
+		Global().
+		Help("Run size for -spill: bytes or 512M, 4G (default 1G)").
+		Done().
 		Flag("-rollup").
 		Bool().
 		Global().
@@ -362,6 +373,12 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			if presorted && (rollup || cube) {
 				return fmt.Errorf("-presorted cannot be combined with -rollup or -cube")
+			}
+			if _, err := parseSpillSpec(ctx); err != nil {
+				return err
+			}
+			if specs.spill.active() && (rollup || cube || len(groupByFields) == 0) {
+				return fmt.Errorf("-spill needs group-by fields to sort by and cannot be combined with -rollup or -cube")
 			}
 
 			// Check if generation is enabled (flag or env var)
@@ -503,6 +520,17 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Supports built-in aggregations (-count, -sum, etc.), expressions (-expr),
 			// and streaming expressions (-stream-expr) via ssql.StreamExprAgg()
 			var grouped iter.Seq[ssql.Record]
+			if specs.spill.active() {
+				// -spill: the out-of-core sort on the group fields, then the
+				// presorted streaming aggregation — one implementation, no
+				// new aggregation code (DFC137 §1.3)
+				f, err := spillSort(groupOrderBy(groupByFields), specs.spill)
+				if err != nil {
+					return err
+				}
+				records = f(records)
+				presorted = true
+			}
 			if presorted {
 				grouped = ssql.StreamGroupByFields("_group", groupByFields...)(records)
 			} else {
@@ -606,6 +634,12 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	if presorted && (rollup || cube) {
 		return fmt.Errorf("-presorted cannot be combined with -rollup or -cube")
 	}
+	if _, err := parseSpillSpec(ctx); err != nil {
+		return err
+	}
+	if specs.spill.active() && (rollup || cube || len(groupByFields) == 0) {
+		return fmt.Errorf("-spill needs group-by fields to sort by and cannot be combined with -rollup or -cube")
+	}
 	if err := validateAggSpecs(aggSpecs); err != nil {
 		return err
 	}
@@ -622,7 +656,9 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	// an expression shape a typed struct can't hold → record path
 	// below, with the reason surfaced under -explain.
 	var typedFallbackNotes []string
-	if typedMode() && prevSchema != nil {
+	if typedMode() && prevSchema != nil && specs.spill.active() {
+		typedFallbackNotes = append(typedFallbackNotes, "record fallback (-spill: the out-of-core sort has no typed form)")
+	} else if typedMode() && prevSchema != nil {
 		if rollup || cube {
 			// Native typed rollup: a parallel detail group-by whose
 			// per-group result is the mergeable aggregation STATE, then
@@ -817,6 +853,19 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	// Standard path: Generate TWO fragments for GroupByFields + Aggregate
 	// Both built-in aggregations (-count, -sum, etc.) and expressions (-expr) use this path
 
+	// -spill: the out-of-core sort on the group fields first, then the
+	// presorted streaming group-by over it
+	if specs.spill.active() {
+		frag := spillSortFragment("spilled", inputVar, groupOrderBy(groupByFields), specs.spill, "")
+		frag.PlanNotes = typedFallbackNotes
+		typedFallbackNotes = nil
+		if err := lib.WriteCodeFragment(frag); err != nil {
+			return fmt.Errorf("writing spill fragment: %w", err)
+		}
+		inputVar = "spilled"
+		presorted = true
+	}
+
 	// Fragment 1: GroupByFields (or StreamGroupByFields if presorted)
 	groupFunc := "ssql.GroupByFields"
 	if presorted {
@@ -952,3 +1001,12 @@ func groupingSetPrefixForSchema(fields []string) string {
 	return strings.Join(fields, "_") + "_"
 }
 
+// groupOrderBy is the ascending sort on the group fields that -spill
+// performs before the presorted aggregation.
+func groupOrderBy(fields []string) []ssql.OrderField {
+	out := make([]ssql.OrderField, len(fields))
+	for i, f := range fields {
+		out[i] = ssql.OrderField{Field: f}
+	}
+	return out
+}

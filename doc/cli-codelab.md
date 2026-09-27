@@ -647,6 +647,19 @@ The rule behind these flags: a flag lives on `from` only when the
 *source* can do something the pipe stage cannot (seek, read a footer,
 prune a column). `limit` is already lazy, so there is no `-limit`.
 
+Everything streams except the barriers, `sort` and `group-by`, which
+hold their input. For an input larger than memory, `-spill DIR` bounds
+them: `sort` writes sorted runs of `-memory` size (default 1G) under
+`DIR` and merges them; `group-by -spill` sorts by the group fields that
+way and then aggregates one group at a time. The result is exactly the
+in-memory one; the cost is one write and one read of the data. A tiny
+budget here shows the mechanism on the small file:
+
+```bash
+# Sort a file that would not fit: runs on disk, merged in order, same answer
+ssql from employees.csv | ssql sort dept -desc salary -spill . -memory 1K | ssql include name dept salary | ssql limit 3 | ssql to table
+```
+
 For the heavy path, ssql compiles your pipeline to a typed Go program
 that runs in parallel — the workspace's ⚡ button does this for the
 server-side head, and the next section shows it from the command line.

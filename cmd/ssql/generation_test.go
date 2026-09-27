@@ -1363,7 +1363,7 @@ func TestExcludeGeneration(t *testing.T) {
 				`"type":"stmt"`,
 				`"var":"excluded"`,
 				`ssql.Select`,
-				`Delete`,
+				`ssql.Without`,
 				`salary`,
 				`city`,
 			},
@@ -1374,7 +1374,7 @@ func TestExcludeGeneration(t *testing.T) {
 			wantStrs: []string{
 				`"type":"stmt"`,
 				`"var":"excluded"`,
-				`Delete`,
+				`ssql.Without`,
 				`field1`,
 				`field2`,
 				`field3`,
@@ -2039,7 +2039,9 @@ func TestParameterizedCodeGeneration(t *testing.T) {
 		},
 		{
 			name: "flag name deduplication",
-			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test join ` + tmpFile + ` -using name | /tmp/ssql_test generate go +O`,
+			// a self-join: the non-key column collides, which every lane now
+			// refuses, so the right side drops it (-exclude-right)
+			cmd:  `export SSQLGO=1 && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test join ` + tmpFile + ` -using name -exclude-right | /tmp/ssql_test generate go +O`,
 			want: []string{`flag.String("input"`, `flag.String("join"`},
 		},
 	}

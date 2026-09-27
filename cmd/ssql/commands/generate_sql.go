@@ -839,6 +839,8 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 			return fmt.Errorf("group-by -expr has no SQL translation (expression aggregations are ssql-specific)")
 		case "-stream-expr":
 			return fmt.Errorf("group-by -stream-expr has no SQL translation (expression aggregations are ssql-specific)")
+		case "-spill", "-memory":
+			i += 2 // spilling is the engine's job
 		case "-rollup":
 			rollup = true
 			i++
@@ -985,8 +987,12 @@ func translateSort(q *sqlQuery, args []string) error {
 	var clauses []sortClause
 	current := sortClause{}
 
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		switch arg {
+		case "-spill", "-memory":
+			i++ // spilling is the engine's job; the flag and its value are dropped
+			continue
 		case "-desc", "-d":
 			current.desc = true
 		case "-asc", "-a":

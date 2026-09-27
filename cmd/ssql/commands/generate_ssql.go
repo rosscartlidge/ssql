@@ -548,6 +548,8 @@ func parseSortCmd(cmd *pipelineCmd) {
 		case arg == cf.ArgFlag && i+1 < len(cmd.RawArgs):
 			i++
 			fields = append(fields, cmd.RawArgs[i])
+		case (arg == "-spill" || arg == "-memory") && i+1 < len(cmd.RawArgs):
+			i++ // the out-of-core setting; not a field
 		case arg == "-desc" || arg == "-d":
 			cmd.SortDesc = true
 		case arg == "-asc" || arg == "-a":

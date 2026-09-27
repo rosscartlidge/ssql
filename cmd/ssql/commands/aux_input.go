@@ -55,11 +55,13 @@ func readAuxInput(path string) (iter.Seq[ssql.Record], *lib.Schema, error) {
 		return withPeekedSchema(records, headers)
 
 	case "json":
-		f, err := os.Open(path)
+		// array or lines, as `from json` reads it (this branch read lines
+		// only until v4.108, so a `to json` side file — an array — matched
+		// nothing: "right field not found (available: )")
+		records, err := ssql.ReadJSONAuto(path)
 		if err != nil {
 			return nil, nil, fmt.Errorf("opening %s: %w", path, err)
 		}
-		records := closeAfter(ssql.ReadJSONFromReader(f), f)
 		return withPeekedSchema(records, nil)
 
 	case "wire", "jsonl":
