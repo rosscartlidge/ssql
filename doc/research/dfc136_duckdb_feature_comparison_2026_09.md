@@ -2,7 +2,7 @@
 
 Reference: DFC136
 Created: 2026-09-23
-Last modified: 2026-09-23
+Last modified: 2026-09-27
 
 [Back to Index](./README.md)
 
@@ -79,9 +79,9 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Expression aggregates | ● (any expression) | ● | `-expr 'max(price * qty)'`, `-stream-expr` folds; no SQL translation |
 | Rollup / cube | ● | ● | ssql's enriched-detail shape, not grouping-set rows |
 | Window functions | ● (all) | ● (17) | row_number, rank, dense_rank, ntile, percent_rank, cume_dist, lag/lead, first/last/nth_value, running aggregates; ROWS and RANGE frames (DFC130) |
-| Joins | ● (all, incl. ASOF, lateral) | ◐ | inner, left, right, full; equi-join only; no ASOF, no anti/semi, no non-equi |
+| Joins | ● (all, incl. ASOF, lateral) | ◐ | inner, left, right, full; equi-join only; anti/semi via `except`/`intersect -using`; no ASOF, no non-equi |
 | Pivot / unpivot | ● | ● | `pivot -func` with one aggregate per call; `unpivot` |
-| Set operations | ● | ◐ | `union` (all); no INTERSECT/EXCEPT |
+| Set operations | ● | ● | `union`, `except`, `intersect` (ALL forms; keyed forms are the anti/semi-join; DFC137 §3, built 2026-09-26) |
 | Subqueries, CTEs | ● | ○ | ssql's answer is pipes and process substitution |
 | Recursive queries | ● | ○ | |
 | Time-series resampling with fill | ◐ (`time_bucket`; `generate_series` + ASOF join gives previous-fill) | ● | `resample` to a grid with previous/next/linear fill in one command |

@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"sync"
 	"strconv"
 	"strings"
 	"time"
@@ -180,6 +181,22 @@ type Schema struct {
 	fields       []string       // Field names in order
 	indices      map[string]int // Field name → index for O(1) lookup
 	jsonPrefixes [][]byte       // Pre-computed JSON prefixes: `"field":`
+	sorted       []int          // value indices in field-name order, built once for RecordKey
+	sortedOnce   sync.Once
+}
+
+// sortedIndex returns the value indices in field-name order, computed
+// on first use (schemas are shared across every record they describe,
+// so this is one sort per schema, not per record).
+func (s *Schema) sortedIndex() []int {
+	s.sortedOnce.Do(func() {
+		s.sorted = make([]int, len(s.fields))
+		for i := range s.sorted {
+			s.sorted[i] = i
+		}
+		sort.Slice(s.sorted, func(a, b int) bool { return s.fields[s.sorted[a]] < s.fields[s.sorted[b]] })
+	})
+	return s.sorted
 }
 
 // NewSchema creates a Schema from field names.
@@ -1135,15 +1152,18 @@ func RecordKey(r Record) string {
 		return "{}"
 	}
 
-	// Use JSON-like representation for consistent, deterministic keys
-	// Schema.fields is already in sorted order from NewSchema
+	// JSON-like, in FIELD-NAME order, not schema order: since v4.107.0 a
+	// schema keeps its source's column order, so the same row read from
+	// two files whose headers differ in order must still key equal (the
+	// except/intersect equivalence gate caught union and distinct keying
+	// them apart). The sorted index is cached on the schema.
 	var b strings.Builder
 	b.WriteByte('{')
-	for i, k := range r.schema.fields {
-		if i > 0 {
+	for n, i := range r.schema.sortedIndex() {
+		if n > 0 {
 			b.WriteByte(',')
 		}
-		fmt.Fprintf(&b, "%q:%v", k, r.values[i])
+		fmt.Fprintf(&b, "%q:%v", r.schema.fields[i], r.values[i])
 	}
 	b.WriteByte('}')
 	return b.String()

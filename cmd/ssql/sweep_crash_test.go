@@ -63,7 +63,8 @@ func TestCrashSweep(t *testing.T) {
 	// Sources, sinks that write files or open servers, and meta commands
 	// are not pipeline stages; join/union/merge need a second input.
 	skip := map[string]bool{"from": true, "to": true, "generate": true, "serve": true, "codelab": true, "functions": true,
-		"conventions": true, "version": true, "merge": true, "tee": true, "join": true, "union": true}
+		"conventions": true, "version": true, "merge": true, "tee": true, "join": true, "union": true,
+		"except": true, "intersect": true}
 
 	type finding struct{ kind, cmd, detail string }
 	var findings []finding

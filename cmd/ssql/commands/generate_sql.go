@@ -277,6 +277,15 @@ func assembleSQL(input io.Reader) (string, error) {
 		if err := translateFragment(q, frag, funcFrags); err != nil {
 			return "", err
 		}
+		// A stage's side sources are the func fragments emitted since the
+		// previous stage (each emits its own just before itself). Kept
+		// across stages, a second union/except/intersect re-read the
+		// first one's sources (random differential, DFC137). An init
+		// fragment (a named side file) sits between a stage's func
+		// fragments and the stage, so it does not end the group.
+		if frag.Type != "init" {
+			funcFrags = nil
+		}
 	}
 
 	return renderSQL(q), nil
@@ -372,6 +381,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		err = translateJoin(q, args[2:], funcFrags)
 	case "union":
 		err = translateUnion(q, args[2:], funcFrags)
+	case "except", "intersect":
+		err = translateSetOp(q, name, args[2:], funcFrags)
 	case "window":
 		err = translateWindow(q, args[2:])
 	case "rename":
@@ -404,9 +415,12 @@ func advanceColumns(q *sqlQuery, name string, args []string) {
 	switch name {
 	case "from":
 		// translateFrom seeds columns from the source header itself.
-	case "join", "union":
+	case "join":
 		// Adds/merges columns from another source the ops can't see.
 		q.columns = nil
+	case "union", "except", "intersect":
+		// The translation set columns: the left side's (sources are
+		// projected to them by name).
 	default:
 		if q.columns == nil {
 			return
@@ -1223,6 +1237,9 @@ func translateUnion(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) e
 	if unionAll {
 		op = "UNION ALL"
 	}
+	if len(q.orderBy) > 0 || q.limit != "" || q.offset != "" {
+		wrapAsSubquery(q) // `… LIMIT n UNION …` is a syntax error
+	}
 	parts := []string{renderSelect(q)}
 	pi := 0
 	for _, f := range files {
@@ -1237,13 +1254,152 @@ func translateUnion(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) e
 		if sub == "" {
 			return fmt.Errorf("union: source pipeline is too complex to translate (only from/where are supported inside <(…)>)")
 		}
-		parts = append(parts, sub)
+		parts = append(parts, projectByName(sub, q.columns))
 	}
 
 	*q = sqlQuery{
 		fromClause: sqlSubquery("(\n" + indentLines(strings.Join(parts, "\n"+op+"\n"), "  ") + "\n)"),
 		comments:   q.comments,
+		columns:    q.columns,
 	}
+	return nil
+}
+
+// projectByName wraps a set-operation source so its columns come out in
+// the pipeline's order: SQL matches UNION / EXCEPT / INTERSECT columns
+// by POSITION, ssql matches fields by NAME, so a source file whose header
+// is in another order must be projected to the left side's order. When
+// the columns are unknown the source is left as is.
+func projectByName(sub string, columns []string) string {
+	if columns == nil {
+		return sub
+	}
+	cols := make([]string, len(columns))
+	for i, c := range columns {
+		cols[i] = quoteIdent(c)
+	}
+	return "SELECT " + strings.Join(cols, ", ") + "\nFROM (\n" + indentLines(sub, "  ") + "\n) AS __r"
+}
+
+// translateSetOp translates `except` / `intersect` (DFC137 §3). The
+// whole-row form is the SQL set operation: the accumulated query EXCEPT
+// [ALL] / INTERSECT [ALL] each source, wrapped as the new FROM; when the
+// pipeline's columns are known the source is projected to them in order,
+// because SQL matches set-operation columns by POSITION while ssql
+// matches fields by name. The keyed form (-using / -on) is the anti- or
+// semi-join: NOT EXISTS / EXISTS against the source, correlated on the
+// key, which is NULL-safe (a NULL key matches nothing, the absent-key
+// rule: except keeps the row, intersect drops it) where NOT IN is not;
+// distinct unless -all, as the command is.
+func translateSetOp(q *sqlQuery, name string, args []string, funcFrags []*lib.CodeFragment) error {
+	if q.fromClause == "" {
+		return fmt.Errorf("%s requires an upstream source", name)
+	}
+	all := false
+	var files, leftKey, rightKey []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-all", "-a":
+			all = true
+		case "-file", "-f":
+			if i+1 < len(args) {
+				files = append(files, args[i+1])
+				i++
+			}
+		case "-using":
+			if i+1 < len(args) {
+				leftKey = append(leftKey, args[i+1])
+				rightKey = append(rightKey, args[i+1])
+				i++
+			}
+		case "-on":
+			if i+2 < len(args) {
+				leftKey = append(leftKey, args[i+1])
+				rightKey = append(rightKey, args[i+2])
+				i += 2
+			}
+		}
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("%s requires at least one -file source", name)
+	}
+	var procs []*lib.CodeFragment
+	for _, f := range funcFrags {
+		if strings.HasPrefix(f.FuncName, name+"Source") {
+			procs = append(procs, f)
+		}
+	}
+	// source renders one -file as a SELECT over it.
+	pi := 0
+	source := func(f string) (string, error) {
+		if strings.HasPrefix(f, "/dev/fd/") {
+			if pi >= len(procs) {
+				return "", fmt.Errorf("%s: missing source fragment for %s", name, f)
+			}
+			sub := buildJoinSubquery(procs[pi])
+			pi++
+			if sub == "" {
+				return "", fmt.Errorf("%s: source pipeline is too complex to translate (only from/where are supported inside <(…)>)", name)
+			}
+			return sub, nil
+		}
+		src, err := dialectSource(f)
+		if err != nil {
+			return "", err
+		}
+		return "SELECT *\nFROM " + src, nil
+	}
+	op := strings.ToUpper(name)
+	if all {
+		op += " ALL"
+	}
+
+	if len(leftKey) == 0 {
+		// `SELECT … LIMIT n EXCEPT …` is a syntax error: an ordered or
+		// limited left side is folded into a subquery first.
+		if len(q.orderBy) > 0 || q.limit != "" || q.offset != "" {
+			wrapAsSubquery(q)
+		}
+		parts := []string{renderSelect(q)}
+		for _, f := range files {
+			sub, err := source(f)
+			if err != nil {
+				return err
+			}
+			parts = append(parts, projectByName(sub, q.columns))
+		}
+		*q = sqlQuery{
+			fromClause: sqlSubquery("(\n" + indentLines(strings.Join(parts, "\n"+op+"\n"), "  ") + "\n)"),
+			comments:   q.comments,
+			columns:    q.columns,
+		}
+		return nil
+	}
+
+	// Keyed: the current query becomes __l; each source a correlated
+	// EXISTS test in WHERE.
+	*q = sqlQuery{
+		fromClause: "(\n" + indentLines(renderSelect(q), "  ") + "\n) AS __l",
+		comments:   q.comments,
+		columns:    q.columns,
+	}
+	exists := "EXISTS"
+	if name == "except" {
+		exists = "NOT EXISTS"
+	}
+	for _, f := range files {
+		sub, err := source(f)
+		if err != nil {
+			return err
+		}
+		var conds []string
+		for i := range leftKey {
+			conds = append(conds, fmt.Sprintf("__r.%s = __l.%s", quoteIdent(rightKey[i]), quoteIdent(leftKey[i])))
+		}
+		q.whereClauses = append(q.whereClauses, fmt.Sprintf("%s (SELECT 1 FROM (\n%s\n) AS __r WHERE %s)",
+			exists, indentLines(sub, "  "), strings.Join(conds, " AND ")))
+	}
+	q.distinct = !all
 	return nil
 }
 

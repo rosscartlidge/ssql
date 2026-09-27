@@ -1160,6 +1160,46 @@ ssql from products.csv | ssql join <(ssql from categories.csv) \
     -on dest_cat cat_id -as cat_name dest_name
 ```
 
+### Set Operations: Except / Intersect
+
+```go
+type SetKeyFunc func(r Record) (key string, ok bool)
+var WholeRow SetKeyFunc                       // nil: the whole row, by RecordKey
+func FieldsKey(fields ...string) SetKeyFunc   // the named fields; absent → no key
+func Except(right iter.Seq[Record], leftKey, rightKey SetKeyFunc, all bool) Filter[Record, Record]
+func Intersect(right iter.Seq[Record], leftKey, rightKey SetKeyFunc, all bool) Filter[Record, Record]
+```
+
+`Except` keeps the left rows whose key is absent from the right; `Intersect`
+the rows whose key is present. With `WholeRow` on both sides that is SQL
+`EXCEPT` / `INTERSECT`; with `FieldsKey` it is the anti-join / semi-join
+(the left row comes out unchanged). The right side is read in full when the
+first left row arrives; the left streams in input order. `all=false` yields
+each distinct left row once; `all=true` keeps duplicates, and with whole-row
+keys is the multiset `EXCEPT ALL` / `INTERSECT ALL`. A left row with no key
+(an absent field) matches nothing: except keeps it, intersect drops it.
+Numbers key as numbers (an int 3 and a float 3 match); a number never keys
+like the text that prints the same.
+
+**Example:**
+```go
+// Customers with no order (anti-join)
+noOrders := ssql.Except(orders, ssql.FieldsKey("customer_id"), ssql.FieldsKey("customer_id"), false)(customers)
+
+// Rows of today's file not in yesterday's (SQL EXCEPT)
+changed := ssql.Except(yesterday, ssql.WholeRow, ssql.WholeRow, false)(today)
+```
+
+**CLI equivalent:**
+```bash
+ssql from customers.csv | ssql except -file orders.csv -using customer_id
+ssql from today.csv | ssql except -file yesterday.csv
+```
+
+The `typed` package has `Except`, `Intersect` (key functions over struct
+fields), `ExceptAll`, `IntersectAll` (multiset, one comparable row type) and
+`ExceptParallel`, `IntersectParallel` (a per-shard probe of the shared set).
+
 ### GroupBy Operations
 
 #### GroupBy[K]

@@ -22,6 +22,8 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	RegisterCast(cmd)
 	RegisterJoin(cmd)
 	RegisterUnion(cmd)
+	RegisterExcept(cmd)
+	RegisterIntersect(cmd)
 	RegisterInclude(cmd)
 	RegisterExclude(cmd)
 	RegisterRename(cmd)
@@ -58,6 +60,14 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 		"join": {
 			"-using": {0}, // same field name both sides
 			"-on":    {0}, // left-field is arg 0 (right-field is arg 1, not completed from fields)
+		},
+		"except": {
+			"-using": {0},
+			"-on":    {0}, // left-field is arg 0
+		},
+		"intersect": {
+			"-using": {0},
+			"-on":    {0},
 		},
 		"include": {
 			"FIELDS": {0}, // variadic fields

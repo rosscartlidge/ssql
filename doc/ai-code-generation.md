@@ -1079,6 +1079,7 @@ When processing natural language requests, map phrases to ssql operations:
 16. **"smooth/convolve"** → `ssql.ConvolveSame(signal, kernel)`
 17. **"deduplicate/unique"** → `ssql.DistinctBy(keyFn)` or `ssql.DistinctBy(ssql.RecordKey)`
 18. **"combine/union"** → `ssql.Concat()` + optionally `ssql.DistinctBy()`
+18a. **"not in / never / missing from" (anti-join, EXCEPT)** → `ssql.Except(right, ssql.FieldsKey("id"), ssql.FieldsKey("id"), false)` (whole row: `ssql.WholeRow` on both sides); **"also in / at least one" (semi-join, INTERSECT)** → `ssql.Intersect(...)`
 19. **"extract signal"** → `ssql.ExtractSignal(records, field)`
 20. **"read/write excel"** → `ssql.ReadXLSX()`, `ssql.WriteXLSX()`
 21. **"read/write arrow"** → `ssql.ReadArrow()`, `ssql.WriteArrow()`

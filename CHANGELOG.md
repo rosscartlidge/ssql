@@ -5,6 +5,52 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`except` and `intersect`** (DFC137 §3): the two set operations
+  `union` lacked, in every lane. `ssql from a.csv | ssql except -file
+  b.csv` keeps the rows of stdin not in the file (SQL `EXCEPT`);
+  `intersect` the rows in both. With `-using FIELD` (repeat for a
+  composite key) or `-on LEFT RIGHT` they become the anti-join and
+  semi-join: the left row comes out unchanged, nothing from the right is
+  added (`ssql from customers.csv | ssql except -file orders.csv -using
+  customer_id` is "customers with no order"). Distinct by default;
+  `-all` keeps duplicate left rows, and in the whole-row form is
+  `EXCEPT ALL` / `INTERSECT ALL`. An absent key matches nothing: except
+  keeps the row, intersect drops it (DFC124). `-file` takes csv/tsv/json,
+  schema-headed jsonl, or `<(pipeline)`, repeated to apply each in turn.
+  Library: `ssql.Except`, `ssql.Intersect`, `ssql.FieldsKey`,
+  `ssql.WholeRow`; `typed.Except`, `typed.Intersect`, `typed.ExceptAll`,
+  `typed.IntersectAll`, `typed.ExceptParallel`, `typed.IntersectParallel`.
+  Typed codegen probes the shared key set per shard (the distinct form
+  composes `DistinctParallel`); `generate sql` emits `EXCEPT` /
+  `INTERSECT [ALL]` with the source projected to the left side's columns
+  BY NAME, and the keyed forms as NULL-safe `NOT EXISTS` / `EXISTS`.
+  Equivalence cases with goldens on shuffled fixtures with duplicates,
+  a differently ordered right header and an absent key; the random
+  differential tester draws self-`except`/`intersect` stages.
+
+### Fixed
+- **`RecordKey` keyed the same row differently from two files whose
+  headers are in different orders** since v4.107.0 kept column order on
+  schemas, so `union` and `distinct` no longer deduplicated across such
+  sources. Keys are in field-name order again (a sorted index cached per
+  schema). Pinned by `union_dedupes_across_column_order`.
+- **`generate sql` matched `union` columns by position**, SQL's rule,
+  where ssql matches by name: a source file with the same columns in
+  another order produced nonsense rows. Sources are now projected to the
+  left side's columns by name when they are known.
+- **Two `union` stages in one pipeline**: the SQL translation re-read
+  the first stage's `<(…)` sources for the second (func fragments were
+  accumulated across stages). Scoped per stage.
+- **`… | ssql limit N | ssql union …` produced `LIMIT n UNION`**, a
+  syntax error; the ordered or limited left side is folded into a
+  subquery first (also for except/intersect).
+- **Typed `union` with a `<(pipeline)` source failed to compile**
+  (`typed.Union` takes one row type; the inner pipeline yields its own).
+  A compatible source is rebuilt as the left type by field name.
+
 ## [4.107.0] - 2026-09-23
 
 ### Changed

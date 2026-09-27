@@ -223,6 +223,8 @@ func buildCommand() *cf.Command {
 	cmd = commands.RegisterWindow(cmd)
 	cmd = commands.RegisterJoin(cmd)
 	cmd = commands.RegisterUnion(cmd)
+	cmd = commands.RegisterExcept(cmd)
+	cmd = commands.RegisterIntersect(cmd)
 	cmd = commands.RegisterMerge(cmd)
 	cmd = commands.RegisterFFT(cmd)
 	cmd = commands.RegisterIFFT(cmd)

@@ -422,6 +422,31 @@ ssql from orders.csv | ssql join customers.csv -using customer_id | ssql include
 ssql from orders.csv | ssql where -if status eq shipped | ssql join customers.csv -using customer_id | ssql group-by country -sum amount revenue -count orders | ssql sort -desc revenue | ssql to table
 ```
 
+The other way round, "which customers have NOT done something", is not
+a join at all: `except` keeps the rows on stdin whose key is absent from
+a second source, and `intersect` the ones whose key is present. The
+customer row comes out unchanged, nothing from the orders is added. Both
+sides can be files or pipelines:
+
+```bash
+# Customers with no shipped order (an anti-join): Umbrella's orders are cancelled or pending
+ssql from customers.csv | ssql except -file <(ssql from csv orders.csv | ssql where -if status eq shipped) -using customer_id | ssql to table
+```
+
+```bash
+# Customers with at least one pending order (a semi-join)
+ssql from customers.csv | ssql intersect -file <(ssql from csv orders.csv | ssql where -if status eq pending) -using customer_id | ssql to table
+```
+
+Without a key the whole row is compared, which is SQL's `EXCEPT` and
+`INTERSECT`: rows of one file not in another. Both are distinct by
+default; `-all` keeps duplicates.
+
+```bash
+# Shipped orders that are not also small orders
+ssql from orders.csv | ssql where -if status eq shipped | ssql except -file <(ssql from csv orders.csv | ssql where -if amount lt 1000) | ssql include order_id amount | ssql to table
+```
+
 Reshape when the shape is the problem. `pivot` turns a value column into
 columns; `unpivot` is its inverse (the SQL name for "melt"):
 
@@ -903,7 +928,7 @@ Filter / shape: `where` (`-if`, `+if`, `+` between clauses, `-not`, `-invert`) �
 
 Aggregate / reshape: `group-by` · `count` · `describe` · `pivot` ·
 `unpivot` · `fill` · `extract` · `window` · `resample` · `join` · `union`
-· `merge`.
+· `except` · `intersect` · `merge`.
 
 Signals: `fft` · `ifft` · `convolve` · `correlate` · `spectrogram`.
 

@@ -1693,6 +1693,112 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// except / intersect (DFC137 §3). Whole-row: distinct output; the
+		// right file's columns are in another order, so a lane matching
+		// set-operation columns by position (SQL's rule) diverges.
+		Name:     "except_whole_row",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} except -file {{.data}}/setops_right.csv`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 3, "name": "carol", "city": "Rome"},
+			{"id": 2, "name": "bob", "city": "Lima"},
+			{"id": 4, "name": "dan", "city": "Oslo"},
+		},
+	},
+	{
+		// EXCEPT ALL: the one right alice cancels ONE of the two left
+		// alices; carol keeps all three.
+		Name:     "except_all_whole_row",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} except -all -file {{.data}}/setops_right.csv`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 3, "name": "carol", "city": "Rome"},
+			{"id": 3, "name": "carol", "city": "Rome"},
+			{"id": 3, "name": "carol", "city": "Rome"},
+			{"id": 1, "name": "alice", "city": "Oslo"},
+			{"id": 2, "name": "bob", "city": "Lima"},
+			{"id": 4, "name": "dan", "city": "Oslo"},
+		},
+	},
+	{
+		Name:     "intersect_whole_row",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} intersect -file {{.data}}/setops_right.csv`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "name": "alice", "city": "Oslo"}},
+	},
+	{
+		// INTERSECT ALL: min(2 left, 1 right) alice.
+		Name:     "intersect_all_whole_row",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} intersect -all -file {{.data}}/setops_right.csv`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "name": "alice", "city": "Oslo"}},
+	},
+	{
+		// Anti-join: customers with no order, the left row unchanged
+		// (no order fields added), distinct.
+		Name:     "except_keyed_anti_join",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} except -file {{.data}}/setops_orders.csv -on id cust`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 3, "name": "carol", "city": "Rome"},
+			{"id": 2, "name": "bob", "city": "Lima"},
+		},
+	},
+	{
+		// Semi-join with -all: every left row whose customer ordered,
+		// duplicates kept (alice twice); the repeated customer 4 does not
+		// multiply dan.
+		Name:     "intersect_keyed_semi_join_all",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} intersect -all -file {{.data}}/setops_orders.csv -on id cust`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 1, "name": "alice", "city": "Oslo"},
+			{"id": 1, "name": "alice", "city": "Oslo"},
+			{"id": 4, "name": "dan", "city": "Oslo"},
+		},
+	},
+	{
+		// Composite key mixing -on and -using, against a pipeline: order
+		// 12 (4, Oslo) matches dan; 11 (4, Rome) does not; the where
+		// inside removes order 10, so alice no longer matches.
+		Name:     "intersect_composite_key_procsub",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} intersect -file <({{.bin}} from csv {{.data}}/setops_orders.csv | {{.bin}} where -if amount lt 5) -on id cust -using city`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 4, "name": "dan", "city": "Oslo"}},
+	},
+	{
+		// An absent key matches nothing: except keeps the row, intersect
+		// drops it (DFC124). NULL behaves the same under EXISTS.
+		Name:     "except_absent_key",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_absent.csv | {{.bin}} except -file {{.data}}/setops_orders.csv -on id cust`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"name": "nobody"}},
+		Skip:     map[string]string{"go-typed": "a typed struct cannot hold an absent int (DFC124 §3)", "go-parallel": "a typed struct cannot hold an absent int (DFC124 §3)"},
+	},
+	{
+		Name:     "intersect_absent_key",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_absent.csv | {{.bin}} intersect -file {{.data}}/setops_orders.csv -on id cust`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "name": "alice"}, {"id": 4, "name": "dan"}},
+		Skip:     map[string]string{"go-typed": "a typed struct cannot hold an absent int (DFC124 §3)", "go-parallel": "a typed struct cannot hold an absent int (DFC124 §3)"},
+	},
+	{
+		// union dedupes by whole row across sources whose headers are in
+		// different orders (name-keyed, not positional): alice once, zed
+		// joins. Pinned after RecordKey keyed by schema order (v4.107.0)
+		// and the SQL lane matched columns positionally.
+		Name:     "union_dedupes_across_column_order",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} union -file <({{.bin}} from csv {{.data}}/setops_right.csv)`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"id": 3, "name": "carol", "city": "Rome"},
+			{"id": 1, "name": "alice", "city": "Oslo"},
+			{"id": 2, "name": "bob", "city": "Lima"},
+			{"id": 4, "name": "dan", "city": "Oslo"},
+			{"id": 9, "name": "zed", "city": "Rome"},
+		},
+	},
+	{
 		Name: "join_procsub_csv",
 		Pipeline: `{{.bin}} from csv {{.data}}/orders.csv | ` +
 			`{{.bin}} join <({{.bin}} from csv {{.data}}/customers.csv) -using customer_id | ` +

@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-09-23
+Last modified: 2026-09-27
 
 [Back to Index](./README.md)
 
@@ -32,6 +32,8 @@ Tracked issues and feature gaps discovered during development.
 - [x] **`top` translation** (v4.55.0) — `translateTop` had gone stale: it looked for the long-removed `-by` flag (so it emitted **no `ORDER BY`**) and treated `args[0]` as N (so `-asc` became `LIMIT -asc`). Now emits `ORDER BY FIELD DESC|ASC LIMIT N` (N = first bare positional; field from `-field`/`-f`; `-asc` → ASC). Covered by `TestTranslateTopSQL`.
 
 - [ ] **Postgres portability of the cube emulation** (measured 2026-09-15, duckdb-vs-ssql.md §Measured): the `-cube`/`-rollup` SQL joins on `IS NOT DISTINCT FROM` (nested loops only in Postgres) through a CTE referenced 7× (materialised, scanned serially) — 13 s on the 14.6 M-row table vs Postgres's own `GROUP BY CUBE` at 5.1 s and its plain parallel GROUP BY at 0.30 s. Not a DuckDB problem (0.91 s). If a Postgres target ever matters: emit native `GROUP BY CUBE` when the dialect has it, or null-safe equality as `a = b OR (a IS NULL AND b IS NULL)`.
+
+- [ ] **`join -type left|right|full` is ignored by `generate sql`** (found 2026-09-26 building DFC137 §3): `translateJoin` always emits `JOIN` (inner), and `-on L R` renders `ON t1.L = t2.R` with aliases `t1`/`t2` that nothing defines. No equivalence case covers either form (the two join cases use `-using` and inner). Fix together: alias the FROM and the joined source, emit `LEFT|RIGHT|FULL JOIN`, add `join_left_type` and `join_on_different_names` cases with goldens.
 
 ### Remaining quirks (found during the v4.55.0 `top` differential work)
 
@@ -132,7 +134,7 @@ Tracked issues and feature gaps discovered during development.
 - [x] **DFC134 §5.1 `ssql run DOC` — BUILT 2026-09-22** (autocli v4.19.0 `Command.Check` + `commands/run.go`, `pipeline_doc.go`): shell-free runner over a JSON argv document, validated whole before any stage starts, nested pipelines as /dev/fd. See DFC134 §5.1a.
 - [x] **DFC135 `-if-field`, `-set-field`, `-param-field` — BUILT 2026-09-22**, every lane; see DFC135 §9 for the four pre-existing defects it surfaced.
 - [x] **`-if` literal not of the field's kind — LOUD in every lane, 2026-09-23** (Ross: option 1). Measured first: exec silently false, record codegen silently WRONG (`abc` read as 0), typed and DuckDB loud. `ssql.LiteralOp` / `FieldOp` + `*CompareError`; `TestMixedKindComparisonsAreLoud`, sabotage-checked. Found on the way: a generated record `to csv` program failed on any empty result (double iteration of a closed source).
-- [ ] **DFC137: spilling sort/group-by, ASOF join, intersect/except** (proposal 2026-09-23, from the DFC136 gap ranking; awaiting review). Order proposed: except/intersect (half a day, closes anti/semi too), ASOF join (two days), spill (two days, sort-then-stream for group-by).
+- [ ] **DFC137: spilling sort/group-by, ASOF join, intersect/except** (proposal 2026-09-23, reviewed and agreed 2026-09-26). `except`/`intersect` BUILT 2026-09-26 (§3a; closes anti/semi-join too). Next: ASOF join as a mode on `join` (§2), then opt-in spill (§1, sort-then-stream for group-by).
 - [ ] **DFC134 §5.5: a JSON Schema for pipeline documents** (2026-09-22): document ⇄ text is done (`run -print`, `generate json`, round trip pinned). A JSON Schema derived from `-spec-json` would let any language validate before calling `run`; typed builder libraries after that.
 - [ ] **DFC134 §5.4: policy over a document** (2026-09-22): allowed commands, file roots for file-typed arguments (the spec marks them), no ssh/catalog/-run, budgets. `serve -readonly` and `-dir` become entries. `run -policy FILE`?
 - [ ] **serve's own pipeline text parser** (`splitServePipeline`) is a shell grammar copy; with `run` in place, serve's HTTP API could accept the document form and drop it (2026-09-22).

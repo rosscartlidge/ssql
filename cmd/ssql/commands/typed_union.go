@@ -20,6 +20,7 @@ func emitTypedUnion(inputVar string, leftSchema *lib.TypedSchema, additionalFile
 	for i, file := range additionalFiles {
 		funcName := fmt.Sprintf("unionSource%d", i+1)
 		var sourceFragments []*lib.CodeFragment
+		var rightSchema *lib.TypedSchema
 
 		fileInfo, statErr := os.Stat(file)
 		if statErr == nil && !fileInfo.Mode().IsRegular() {
@@ -29,13 +30,13 @@ func emitTypedUnion(inputVar string, leftSchema *lib.TypedSchema, additionalFile
 				return lib.WriteErrorAndExit(getCommandString(),
 					fmt.Errorf("ssql generate go -typed: union: reading subprocess fragments: %w", err))
 			}
-			rightSchema := findOutputSchema(subFragments)
+			rightSchema = findOutputSchema(subFragments)
 			if rightSchema == nil {
 				return lib.WriteErrorAndExit(getCommandString(),
 					fmt.Errorf("ssql generate go -typed: union: subprocess source did not produce a typed schema (inner pipeline must use typed-mode commands)"))
 			}
 			if err := assertCompatibleSchemas(leftSchema, rightSchema); err != nil {
-				return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: %w", err))
+				return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: union: %w", err))
 			}
 			sourceFragments = subFragments
 		} else {
@@ -45,13 +46,14 @@ func emitTypedUnion(inputVar string, leftSchema *lib.TypedSchema, additionalFile
 				return lib.WriteErrorAndExit(getCommandString(),
 					fmt.Errorf("ssql generate go -typed: 'union' on non-CSV files not yet supported in typed mode"))
 			}
-			rightSchema, _, err := lib.SampleCSVSchema(file, leftSchema.TypeName, 0)
+			var err error
+			rightSchema, _, err = lib.SampleCSVSchema(file, leftSchema.TypeName, 0)
 			if err != nil {
 				return lib.WriteErrorAndExit(getCommandString(),
 					fmt.Errorf("ssql generate go -typed: %w", err))
 			}
 			if err := assertCompatibleSchemas(leftSchema, rightSchema); err != nil {
-				return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: %w", err))
+				return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: union: %w", err))
 			}
 			// Right side reuses the LEFT struct type (we just verified
 			// the schemas match). No new struct definition needed.
@@ -69,7 +71,10 @@ func emitTypedUnion(inputVar string, leftSchema *lib.TypedSchema, additionalFile
 		if err := lib.WriteCodeFragment(funcFrag); err != nil {
 			return fmt.Errorf("writing func fragment: %w", err)
 		}
-		sourceCalls = append(sourceCalls, funcName+"()")
+		// A process substitution yields its own row type; compatible
+		// but differently named, it is rebuilt as the left type (this
+		// used to fail to compile: typed.Union takes one T).
+		sourceCalls = append(sourceCalls, typedConvertCall(funcName+"()", rightSchema, leftSchema))
 	}
 
 	// Build the typed.Concat / typed.Union call.
@@ -105,7 +110,7 @@ func emitTypedUnion(inputVar string, leftSchema *lib.TypedSchema, additionalFile
 // is exact (no implicit widening).
 func assertCompatibleSchemas(a, b *lib.TypedSchema) error {
 	if len(a.Fields) != len(b.Fields) {
-		return fmt.Errorf("union: schemas have different field counts (%s: %d, %s: %d)",
+		return fmt.Errorf("schemas have different field counts (%s: %d, %s: %d)",
 			a.TypeName, len(a.Fields), b.TypeName, len(b.Fields))
 	}
 	bByName := make(map[string]lib.TypedSchemaField, len(b.Fields))
@@ -115,11 +120,11 @@ func assertCompatibleSchemas(a, b *lib.TypedSchema) error {
 	for _, af := range a.Fields {
 		bf, ok := bByName[strings.ToLower(af.Name)]
 		if !ok {
-			return fmt.Errorf("union: field %q present in %s but absent from %s",
+			return fmt.Errorf("field %q present in %s but absent from %s",
 				af.Name, a.TypeName, b.TypeName)
 		}
 		if af.GoType != bf.GoType {
-			return fmt.Errorf("union: field %q has different types (%s.%s: %s, %s.%s: %s)",
+			return fmt.Errorf("field %q has different types (%s.%s: %s, %s.%s: %s)",
 				af.Name, a.TypeName, af.GoName, af.GoType, b.TypeName, bf.GoName, bf.GoType)
 		}
 	}

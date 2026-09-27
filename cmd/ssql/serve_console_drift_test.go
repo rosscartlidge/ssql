@@ -22,6 +22,8 @@ var consoleExcluded = map[string]string{
 	"Join":        "reads server-side file paths (v1 exclusion; see serve_cli.go comment)",
 	"Merge":       "reads server-side file paths (v1 exclusion)",
 	"Union":       "reads server-side file paths (v1 exclusion)",
+	"Except":      "reads server-side file paths (v1 exclusion, as Union)",
+	"Intersect":   "reads server-side file paths (v1 exclusion, as Union)",
 	"Tee":         "writes server-side files",
 	"To":          "console registers its own stream-only subset of `to` (no file-writing sinks)",
 	"Generate":    "codegen is a CLI/dev workflow, not an operator action",

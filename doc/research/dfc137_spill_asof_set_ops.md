@@ -2,14 +2,17 @@
 
 Reference: DFC137
 Created: 2026-09-23
-Last modified: 2026-09-23
+Last modified: 2026-09-27
 
 [Back to Index](./README.md)
 
-Status: **proposal, for review. Nothing built.** DFC136 §4 ranked the
-gaps between ssql and DuckDB; Ross asked how three of them would be done
-and then for a DFC. Each part is independent and can ship on its own.
-Together they are about a week.
+Status: **§3 (except/intersect) BUILT 2026-09-26; §1 and §2 open.**
+DFC136 §4 ranked the gaps between ssql and DuckDB; Ross asked how three
+of them would be done and then for a DFC, reviewed it on 2026-09-26 and
+agreed with the leanings in §5 (opt-in spill, ASOF as a mode on `join`,
+ties last in input order, `intersect` stays a filter, hash partitioning
+only after measurement). Each part is independent and can ship on its
+own. §3a records what building §3 found.
 
 ## 1. Out-of-core `sort` and `group-by`
 
@@ -242,10 +245,45 @@ ways, duplicates on each side, absent keys; DuckDB as the oracle for the
 whole-row forms. Crash sweep and random tester pick the new commands up
 from `-spec-json`.
 
+### 3a. Built (2026-09-26)
+
+As designed, with these particulars:
+
+- `-file` accumulates, as `union`'s does; each source applies in turn
+  (`A EXCEPT B EXCEPT C`). `-using` accumulates into a composite key and
+  mixes with `-on`.
+- `-all` in the keyed form is membership only (every left row whose key
+  is present/absent; a repeated right key does not multiply or cancel);
+  the multiset cancellation is the whole-row form only, which is what
+  SQL has (`EXCEPT ALL` exists, an "anti-join ALL" does not).
+- Library: `ssql.Except` / `Intersect` take two `SetKeyFunc`s (`nil` =
+  `ssql.WholeRow`, or `ssql.FieldsKey(fields…)`); typed has the keyed
+  `Except` / `Intersect`, the multiset `ExceptAll` / `IntersectAll`, and
+  `ExceptParallel` / `IntersectParallel` (a `Stream.Where` over the
+  shared set, as `HashJoinParallel` probes). Typed codegen emits dual
+  templates for one source (the distinct form composes
+  `DistinctParallel` and yields a Seq, as `distinct` does); several
+  sources chain serially.
+- SQL: whole-row is `EXCEPT` / `INTERSECT [ALL]` with the source
+  projected to the left's columns BY NAME (SQL matches by position);
+  keyed is `NOT EXISTS` / `EXISTS` correlated on the key, which is
+  NULL-safe, plus `DISTINCT` unless `-all`.
+
+What the gate found while building it, all fixed in the same unit:
+`RecordKey` had keyed by schema order since the column-order work
+(v4.107.0), so `union`/`distinct` no longer deduplicated the same row
+read from files with differently ordered headers; `generate sql`
+matched `union` columns positionally; the SQL assembler accumulated
+func fragments across stages, so a second `union` (or set op) re-read
+the first's `<(…)` sources; `LIMIT n UNION` was a syntax error; typed
+`union` with a `<(pipeline)` source did not compile. Two more, noted
+in TODO and not fixed here: `generate sql` ignores `join -type` (every
+join is inner) and renders `join -on` with undefined `t1`/`t2` aliases.
+
 ## 4. Order and size
 
 1. `except` / `intersect` (half a day plus cases): smallest, closes four
-   gaps, no new concepts.
+   gaps, no new concepts. **Done** (§3a).
 2. ASOF join (two days): the largest gap for the users ssql has; the
    typed lane is the long part.
 3. Spilling sort, then group-by as sort-then-stream (two days), typed

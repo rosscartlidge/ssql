@@ -129,7 +129,7 @@ type pipelineCmd struct {
 	JoinRightWhere   []string         // where args pushed into right side (rendered as process substitution)
 	JoinIsProcessSub bool             // true if right side is already a process substitution (/dev/fd/N)
 	JoinProcSubCmds  []*pipelineCmd   // parsed inner pipeline commands (for process substitution optimization)
-	UnionProcSubs    [][]*pipelineCmd // union: inner pipelines for each -file /dev/fd/N, in order
+	UnionProcSubs    [][]*pipelineCmd // union/except/intersect: inner pipelines for each -file /dev/fd/N, in order
 
 	// Parsed fields for "merge -catalog"
 	IsMergeCatalog         bool
@@ -205,7 +205,7 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 	// Parse each fragment into a pipelineCmd
 	var cmds []*pipelineCmd
 	// Inner pipelines from func fragments, queued in emission order —
-	// a join consumes one; a union consumes one per -file /dev/fd/N.
+	// a join consumes one; union/except/intersect one per -file /dev/fd/N.
 	var pendingFuncBodies [][]*pipelineCmd
 	for _, frag := range fragments {
 		cmd := pipelineCmdFor(frag)
@@ -227,7 +227,7 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 			cmd.JoinProcSubCmds = pendingFuncBodies[0]
 			pendingFuncBodies = pendingFuncBodies[1:]
 		}
-		if cmd.Kind == "union" {
+		if consumesFileProcSubs(cmd.Kind) {
 			for i := 0; i+1 < len(cmd.RawArgs); i++ {
 				if (cmd.RawArgs[i] == "-file" || cmd.RawArgs[i] == "-f") &&
 					strings.HasPrefix(cmd.RawArgs[i+1], "/dev/fd/") && len(pendingFuncBodies) > 0 {
@@ -2302,12 +2302,12 @@ func renderCmd(cmd *pipelineCmd) string {
 		return shellJoin(parts)
 	}
 
-	if cmd.Kind == "union" && len(cmd.UnionProcSubs) > 0 {
+	if consumesFileProcSubs(cmd.Kind) && len(cmd.UnionProcSubs) > 0 {
 		// Reconstruct -file <(inner pipeline) — the fragment's command
 		// string holds the DEAD /dev/fd/N the generation run happened
 		// to get; rendering it verbatim made replays read a stale fd.
 		var sb strings.Builder
-		sb.WriteString("ssql union")
+		sb.WriteString("ssql " + cmd.Kind)
 		idx := 0
 		i := 0
 		for i < len(cmd.RawArgs) {
@@ -2469,4 +2469,10 @@ func ruleLimitLastToSource(cmds []*pipelineCmd) []ruleApplication {
 		rules = append(rules, ruleApplication{Rule: "limit-last-to-source", Before: before, After: renderCmd(c)})
 	}
 	return rules
+}
+
+// consumesFileProcSubs reports the commands whose side inputs are
+// `-file <(pipeline)` arguments, one func fragment each, in order.
+func consumesFileProcSubs(kind string) bool {
+	return kind == "union" || kind == "except" || kind == "intersect"
 }

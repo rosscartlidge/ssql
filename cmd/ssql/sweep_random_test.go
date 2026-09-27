@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -275,7 +276,7 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 	target := 1 + rng.Intn(4)
 	for tries := 0; len(stages) < target && tries < 40; tries++ {
 		var st string
-		switch rng.Intn(10) {
+		switch rng.Intn(11) {
 		case 0, 1, 2: // where
 			f := pick(rng, cols)
 			if !condOK(f) {
@@ -379,6 +380,42 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 			} else {
 				st = fmt.Sprintf("top %s%s -field id", pick(rng, []string{"", "-asc "}), pos(rng, fmt.Sprint(nrow)))
 			}
+		case 10: // DFC137 §3: except / intersect against a filtered copy of the table
+			// Whole-row (SQL EXCEPT/INTERSECT [ALL]) only while the left still
+			// has the table's columns AND types: after `cast n float` a
+			// whole-row compare against the file's int n is int-vs-double
+			// equality, which SQL decides by casting the int to DOUBLE (lossy
+			// at 2^53+1, a value the tables contain on purpose) and ssql by the
+			// exact printed value — rounding, not semantics. Keyed
+			// (anti/semi-join) on any surviving original column whose cells
+			// are never "" (NULL-vs-"" is a decision, not a finding — see
+			// condOK); keyed numbers compare as float64 in every lane.
+			rf := pick(rng, tb.cols)
+			if !condOK(rf) {
+				continue
+			}
+			right := fmt.Sprintf("<({{BIN}} from csv {{FILE}} | {{BIN}} %s)", "where "+genCond(rng, rf, tb.kind[rf]))
+			op := pick(rng, []string{"except", "intersect"})
+			all := pick(rng, []string{"", "-all "})
+			if !grouped && slices.Equal(cols, tb.cols) && maps.Equal(kind, tb.kind) && rng.Intn(2) == 0 {
+				st = fmt.Sprintf("%s %s-file %s", op, all, right)
+				break
+			}
+			var keys []string
+			for _, c := range cols {
+				if slices.Contains(tb.cols, c) && condOK(c) {
+					keys = append(keys, c)
+				}
+			}
+			if len(keys) == 0 {
+				continue
+			}
+			k := pick(rng, keys)
+			if rng.Intn(2) == 0 {
+				st = fmt.Sprintf("%s %s-file %s -using %s", op, all, right, k)
+			} else {
+				st = fmt.Sprintf("%s %s-file %s -on %s %s", op, all, right, k, k)
+			}
 		case 8: // cast int → float (the one cast every engine agrees on)
 			var ints []string
 			for _, f := range cols {
@@ -456,9 +493,13 @@ func indent(s, p string) string {
 
 type randDiff struct{ bin, duckdb, dir string }
 
+// script joins the stages into a pipeline over file. A stage that reads
+// the table itself as a side input (except/intersect against a filtered
+// copy) names it as {{FILE}} and the binary as {{BIN}}.
 func (rd *randDiff) script(file string, stages []string) string {
 	p := rd.bin + " from csv " + file
 	for _, s := range stages {
+		s = strings.ReplaceAll(strings.ReplaceAll(s, "{{FILE}}", file), "{{BIN}}", rd.bin)
 		p += " | " + rd.bin + " " + s
 	}
 	return p

@@ -135,6 +135,20 @@ func corpusData(t *testing.T) string {
 			// The same with an absent numeric cell (row 5 has no b): typed
 			// structs cannot hold absence (DFC124 §3), so cases on it skip typed.
 			"pairs_absent.csv": "id,a,b\n1,5,7\n2,9,3\n5,6,\n",
+			// Set operations (DFC137 §3). Left: shuffled, one row three
+			// times (3/carol), one twice (1/alice). Right whole-row file has
+			// the SAME columns in a DIFFERENT order (SQL matches set
+			// operations by position; ssql by name — a positional
+			// translation diverges), one shared row (1/alice, once) and one
+			// of its own. Orders: keyed side with a repeated customer (4),
+			// a customer not on the left (9), and a city column for a
+			// composite key.
+			"setops_left.csv":   "id,name,city\n3,carol,Rome\n1,alice,Oslo\n3,carol,Rome\n2,bob,Lima\n1,alice,Oslo\n3,carol,Rome\n4,dan,Oslo\n",
+			"setops_right.csv":  "name,id,city\nalice,1,Oslo\nzed,9,Rome\n",
+			"setops_orders.csv": "order_id,cust,city,amount\n10,1,Oslo,5\n11,4,Rome,9\n12,4,Oslo,2\n13,9,Lima,1\n",
+			// A left row whose key cell is empty: absent in ssql, NULL in
+			// SQL; both match nothing. Typed structs cannot hold absence.
+			"setops_absent.csv": "id,name\n1,alice\n,nobody\n4,dan\n",
 			// SQL-injection strings as VALUES and as a column name that needs
 			// quoting: apostrophes, a comment marker, a statement terminator,
 			// LIKE metacharacters. Every lane must treat them as data.
@@ -568,6 +582,24 @@ func TestPipelineCorpus(t *testing.T) {
 			// Record mode: order_id (snake), typed mode: OrderID (Camel).
 			// Just check the values are joined correctly.
 			Contains: []string{"Widget", "customer_1"},
+		},
+		{
+			// DFC137 §3: anti-join through every Go lane; the
+			// equivalence gate holds the goldens, this pins the shape.
+			Name: "except_anti_join",
+			Pipeline: `{{.bin}} from {{.data}}/setops_left.csv | ` +
+				`{{.bin}} except -file <({{.bin}} from csv {{.data}}/setops_orders.csv | {{.bin}} where -if amount gt 1) -on id cust | ` +
+				`{{.bin}} to table`,
+			Contains: []string{"carol", "bob"},
+			Excludes: []string{"alice", "dan"},
+		},
+		{
+			Name: "intersect_whole_row_direct_file",
+			Pipeline: `{{.bin}} from {{.data}}/setops_left.csv | ` +
+				`{{.bin}} intersect -all -file {{.data}}/setops_right.csv | ` +
+				`{{.bin}} to csv`,
+			Contains: []string{"alice"},
+			Excludes: []string{"carol", "zed"},
 		},
 		{
 			Name: "union_distinct",
