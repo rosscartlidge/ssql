@@ -143,7 +143,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC133 | 2026-09-20 | 2026-09-20 | [Finding the Bugs We Do Not Know About](./dfc133_finding_unknown_bugs.md) |
 | DFC134 | 2026-09-20 | 2026-09-22 | [Pipelines as Data: Safe Programmatic Construction, and Why SQL Cannot Have It](./dfc134_pipelines_as_data.md) |
 | DFC135 | 2026-09-22 | 2026-09-23 | [Field References in Value Slots: `-if-field`, `-set-field`, `-param-field`](./dfc135_field_references_in_value_slots.md) |
-| DFC136 | 2026-09-23 | 2026-09-27 | [ssql and DuckDB, Feature by Feature: Where Things Stand (September 2026)](./dfc136_duckdb_feature_comparison_2026_09.md) |
+| DFC136 | 2026-09-23 | 2026-09-28 | [ssql and DuckDB, Feature by Feature: Where Things Stand (September 2026)](./dfc136_duckdb_feature_comparison_2026_09.md) |
 | DFC137 | 2026-09-23 | 2026-09-27 | [Closing Three DuckDB Gaps: Spilling Sort and Group-by, ASOF Join, INTERSECT/EXCEPT](./dfc137_spill_asof_set_ops.md) |
 
 <!-- DFC-INDEX-END -->

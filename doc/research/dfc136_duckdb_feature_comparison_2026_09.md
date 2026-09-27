@@ -2,20 +2,22 @@
 
 Reference: DFC136
 Created: 2026-09-23
-Last modified: 2026-09-27
+Last modified: 2026-09-28
 
 [Back to Index](./README.md)
 
-Status: **assessment, no decisions.** Ross, 2026-09-23: "a good time to
-do a feature compare with DuckDB. What does it look like now?" The
-previous comparison is [DFC060](./duckdb-vs-ssql.md) (March 2026, with a
-measured appendix from 2026-09-15). Six months of work sit between them:
-typed parallel codegen, `generate sql` with three dialects, the
-strictness programme (DFC133), pipelines as data (DFC134), field
-references (DFC135), consistent column order (v4.107.0). This DFC is the
-state as of ssql v4.107.0 against DuckDB 1.5.0, written to be honest in
-both directions. DFC060's philosophy section still stands and is not
-repeated.
+Status: **assessment, no decisions; updated 2026-09-28 for v4.108.0.**
+Ross, 2026-09-23: "a good time to do a feature compare with DuckDB. What
+does it look like now?" The previous comparison is
+[DFC060](./duckdb-vs-ssql.md) (March 2026, with a measured appendix from
+2026-09-15). Six months of work sit between them: typed parallel
+codegen, `generate sql` with three dialects, the strictness programme
+(DFC133), pipelines as data (DFC134), field references (DFC135),
+consistent column order (v4.107.0). Written against v4.107.0 and DuckDB
+1.5.0; the first draft's §4 ranked the gaps, [DFC137](./dfc137_spill_asof_set_ops.md)
+proposed three of them, and all three shipped in v4.108.0 four days
+later (§8 records what moved). The matrix below is the v4.108.0 state.
+DFC060's philosophy section still stands and is not repeated.
 
 ## 1. The one-paragraph answer
 
@@ -34,10 +36,12 @@ inspected, so a pipeline grows by appending a stage, completion and help
 know the data at the cursor's position, and the line a person builds by
 Tab is the same document a program builds by JSON. On breadth
 ssql is narrower: the gaps are ecosystem (connectors, extensions,
-bindings) and engine (out-of-core, vectorisation), plus a short list of
-relational features that DFC137 covers; on the core analyst workload
-the two columns match. On those four axes it is ahead; and the two are
-complementary, which `generate sql` makes literal.
+bindings), engine (automatic spilling, vectorisation) and the calendar
+functions; the relational list DFC137 named is closed (set operations,
+anti/semi-join, ASOF join, out-of-core barriers on request), and on the
+core analyst workload the two columns match. On those four axes it is
+ahead; and the two are complementary, which `generate sql` makes
+literal.
 
 ## 2. Feature matrix
 
@@ -178,27 +182,24 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 
 In rough order of how often a user would hit it:
 
-1. **Joins.** Equi-join with four types is the whole story. No ASOF join
-   (the time-series join DuckDB is famous for), no anti/semi, no
-   inequality joins. ASOF is the one worth building: `resample` and
-   `window` show the time-series direction, and ASOF is the missing
-   verb. Likely a unit; the typed hash join is the template.
-   *Update 2026-09-27: ASOF (`join -asof`) and anti/semi (`except` /
-   `intersect -using`) are built (DFC137 §2a, §3a); general non-equi
-   joins remain.*
-2. **Date and time functions.** One `time` type and a handful of
+As of v4.108.0. The 2026-09-23 list had six items; three of them
+(joins, set operations, out-of-core) were DFC137 and are done, so this
+is the list after it. The original ranking is kept in §8.
+
+1. **Date and time functions.** One `time` type and a handful of
    functions against DuckDB's full calendar. `strftime`-style
    formatting, `date_trunc` beyond `bucket`, timezone conversion,
    intervals as values. Each is small; together they are a gap people
-   feel daily.
-3. **Set operations and subquery shapes.** INTERSECT/EXCEPT are a day;
-   correlated subqueries are not expressible in a pipeline and never
+   feel daily. Now the largest remaining one.
+2. **Joins beyond equality and ASOF.** General non-equi joins (`ON a.x <
+   b.y`) and LATERAL. Rare in pipeline work; no plan.
+3. **Automatic spilling.** ssql spills when asked (`-spill DIR`), DuckDB
+   decides for itself. DFC137 §1.4 chose opt-in because a wrong estimate
+   either spills needlessly or dies; a `-memory` budget that fails early
+   rather than spills is the next step if anyone wants it. `top`,
+   `distinct` and `window` stay in memory.
+4. **Correlated subqueries.** Not expressible in a pipeline and never
    will be, which is a deliberate limit.
-4. **Out-of-core barriers.** A `sort` or `group-by` over data larger than
-   memory fails in ssql and spills in DuckDB. `merge` and `-presorted`
-   are the workarounds; a spilling sort is a real unit. *Update
-   2026-09-27: built as opt-in `-spill DIR` (DFC137 §1a); DuckDB's is
-   automatic, ssql's is asked for.*
 5. **Bindings.** Go only. DFC132 decided against Rust; Python is the one
    that would change adoption, and `ssql run` plus `generate json` make
    a thin binding possible without a second implementation.
@@ -238,24 +239,59 @@ is built by a program, or the result must be a program.
    person builds interactively is the document a program builds.
 5. **Streams, SSH, shards, live data, signal processing, charts, an
    explorer, a served console.** The Unix-tool half of the design.
+6. **Deterministic where SQL leaves it open.** `sort` is stable; an ASOF
+   tie takes the last right row in input order; `union`, `except` and
+   `intersect` match columns by name, not position. Each is a place
+   where DuckDB's answer is "any of these", and where the five-lane gate
+   needs one answer to compare against.
 
 ## 6. Suggested next units, from this comparison
 
-In the order I would take them, none started:
+The 2026-09-23 list was: ASOF join, date/time functions, spilling sort
+and group-by, INTERSECT/EXCEPT, a Python binding. Three of the five are
+DFC137 and shipped in v4.108.0. What remains, in the order I would take
+them:
 
-1. ASOF join (§4.1) — **built 2026-09-27** (DFC137 §2a): the largest single gap for the time-series users
-   ssql already serves; typed hash join as the template; SQL lane has
-   `ASOF JOIN` in DuckDB and a `LATERAL` emulation elsewhere.
-2. Date/time function set (§4.2): formatting, truncation, timezone,
+1. Date/time function set (§4.1): formatting, truncation, timezone,
    interval values; each with transpiler and SQL translation and a
-   differential entry.
-3. Spilling sort and group-by (§4.4), with the scale gate deciding the
-   ceiling — **built 2026-09-27** (DFC137 §1a).
-4. INTERSECT/EXCEPT (§4.3) — **built 2026-09-26** (DFC137 §3a).
-5. A Python binding over `ssql run` documents (§4.5), after DFC134's
+   differential entry. The one gap on the list that an analyst meets
+   daily.
+2. A Python binding over `ssql run` documents (§4.5), after DFC134's
    JSON Schema (§5.5), so the binding is generated, not written.
+3. A faster run codec for `-spill` (DFC137 §1a: gob over `[]any` is
+   ~4 µs per record each way and is the whole 1.7× over the in-memory
+   sort); typed spill; a `-memory` that fails early instead of spilling.
+   Polish, not gaps.
 
-## 7. References
+## 7. What moved between the 23rd and v4.108.0
+
+The first draft of this DFC was written on 2026-09-23 against
+v4.107.0. DFC137 was written the same day from §4, agreed on the 26th,
+and built on the 26th and 27th. Rows that changed:
+
+| Row | 23 Sept | v4.108.0 |
+|---|:-:|:-:|
+| Set operations | ◐ `union` only | ● `union`, `except`, `intersect`, ALL forms; keyed = anti/semi-join |
+| Joins | ◐ equi only | ◐ equi + ASOF (`join -asof`); non-equi and LATERAL remain |
+| Out-of-core | ○ | ◐ opt-in `-spill DIR -memory SIZE` on `sort` and `group-by` |
+| Lazy streaming | ● except barriers | ● barriers spill on request |
+
+And what the three units' gates found in the code around them, all
+fixed in the same release: `RecordKey` keyed by schema order since
+v4.107.0 (so `union`/`distinct` missed duplicates across reordered
+headers); `generate sql` matched `union` columns by position, dropped
+every stage but `from`/`where` inside a `<(…)>` side, ignored `join
+-type`, rendered `-on` with undefined aliases, and lacked reserved
+words like `at`; typed `join` kept one right row per key and ignored
+`-type`; a join field collision was refused by exec alone; `join
+FILE.json` read an array file as lines; the optimiser pushed
+predicates into ASOF and outer joins' sources. None of these were in
+the 23rd's matrix because none were visible without the discriminating
+fixtures the new units brought. The lesson for the next comparison:
+the matrix counts features; the gates measure whether the lanes agree
+on them, and a ● in one lane is not a ●.
+
+## 8. References
 
 - [DFC060](./duckdb-vs-ssql.md) — the March comparison and the
   2026-09-15 measurements this DFC builds on.
@@ -270,3 +306,7 @@ In the order I would take them, none started:
   cannot have it.
 - [DFC135](./dfc135_field_references_in_value_slots.md) — field
   references in value slots.
+
+
+- [DFC137](./dfc137_spill_asof_set_ops.md) — the three units this
+  comparison led to, each with a "built" subsection.
