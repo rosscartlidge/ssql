@@ -426,6 +426,40 @@ func HashJoinParallel[L, R, O any, K comparable](
 	return Stream[O]{shards: out, n: left.n}
 }
 
+// HashJoinMultiParallel is [HashJoinParallel] with [HashJoinMulti]'s
+// many-to-many semantics: every left row produces one output row per
+// matching right row. The CLI's `join` emits this form — a right side
+// with a repeated key (orders per customer) is the ordinary case, and
+// the single-match form silently kept only the last order per customer
+// (found by the join_left_type equivalence case, 2026-09-27).
+func HashJoinMultiParallel[L, R, O any, K comparable](
+	left Stream[L],
+	right iter.Seq[R],
+	leftKey func(L) K,
+	rightKey func(R) K,
+	merge func(L, R) O,
+) Stream[O] {
+	idx := make(map[K][]R)
+	for r := range right {
+		k := rightKey(r)
+		idx[k] = append(idx[k], r)
+	}
+	out := make([]iter.Seq[O], len(left.shards))
+	for i, shard := range left.shards {
+		shard := shard
+		out[i] = func(yield func(O) bool) {
+			for l := range shard {
+				for _, r := range idx[leftKey(l)] {
+					if !yield(merge(l, r)) {
+						return
+					}
+				}
+			}
+		}
+	}
+	return Stream[O]{shards: out, n: left.n}
+}
+
 // ReadCSVParallel reads a CSV file using n worker goroutines. The
 // file is partitioned by line count: each shard parses a contiguous
 // range of data lines independently. Header is parsed once before

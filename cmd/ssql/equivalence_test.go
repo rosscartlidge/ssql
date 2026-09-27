@@ -1799,6 +1799,53 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// join -type left: customers 2 and 3 have no order and must
+		// survive with the order fields absent. Until v4.108 generate
+		// sql ignored -type (every join was inner).
+		Name: "join_left_type",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} distinct | ` +
+			`{{.bin}} join <({{.bin}} from csv {{.data}}/setops_orders.csv | {{.bin}} exclude city) -on id cust -type left | ` +
+			`{{.bin}} include id name order_id`,
+		Ordered: false,
+		Golden: []map[string]any{
+			{"id": 3, "name": "carol"},
+			{"id": 1, "name": "alice", "order_id": 10},
+			{"id": 2, "name": "bob"},
+			{"id": 4, "name": "dan", "order_id": 11},
+			{"id": 4, "name": "dan", "order_id": 12},
+		},
+		Skip: map[string]string{"go-typed": "an unmatched row's right fields are absent, which a typed struct cannot hold (DFC124 §3); typed refuses -type left", "go-parallel": "same as go-typed"},
+	},
+	{
+		// One-to-many inner join: customer 4 has two orders and must
+		// appear twice. Typed emitted HashJoin (last match per key) until
+		// v4.108, so dan lost an order in that lane only.
+		Name: "join_one_to_many",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} distinct | ` +
+			`{{.bin}} join <({{.bin}} from csv {{.data}}/setops_orders.csv | {{.bin}} exclude city) -on id cust | ` +
+			`{{.bin}} include id name order_id`,
+		Ordered: false,
+		Golden: []map[string]any{
+			{"id": 1, "name": "alice", "order_id": 10},
+			{"id": 4, "name": "dan", "order_id": 11},
+			{"id": 4, "name": "dan", "order_id": 12},
+		},
+	},
+	{
+		// join -on with DIFFERENT names keeps both key fields; the SQL
+		// rendering said ON t1.id = t2.cust with no t1/t2 defined.
+		Name: "join_on_different_names",
+		Pipeline: `{{.bin}} from csv {{.data}}/setops_left.csv | {{.bin}} distinct | ` +
+			`{{.bin}} join <({{.bin}} from csv {{.data}}/setops_orders.csv | {{.bin}} where -if amount gt 1 | {{.bin}} exclude city) -on id cust | ` +
+			`{{.bin}} include id cust name order_id`,
+		Ordered: false,
+		Golden: []map[string]any{
+			{"id": 1, "cust": 1, "name": "alice", "order_id": 10},
+			{"id": 4, "cust": 4, "name": "dan", "order_id": 11},
+			{"id": 4, "cust": 4, "name": "dan", "order_id": 12},
+		},
+	},
+	{
 		Name: "join_procsub_csv",
 		Pipeline: `{{.bin}} from csv {{.data}}/orders.csv | ` +
 			`{{.bin}} join <({{.bin}} from csv {{.data}}/customers.csv) -using customer_id | ` +

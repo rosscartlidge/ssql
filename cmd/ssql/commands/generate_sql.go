@@ -1160,6 +1160,13 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 
 	filePath := args[0]
 	var joinCond string
+	joinKind := "JOIN"
+	// -on L R needs both sides named: the accumulated query is folded
+	// into a subquery aliased __l and the right source aliased __r
+	// (the old rendering said t1/t2, which nothing defined). -using
+	// needs no aliases. Until v4.108 -type was ignored: every join was
+	// inner.
+	aliased := false
 
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
@@ -1170,8 +1177,25 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 			}
 		case "-on", "-o":
 			if i+2 < len(args) {
-				joinCond = fmt.Sprintf("ON t1.%s = t2.%s", quoteIdent(args[i+1]), quoteIdent(args[i+2]))
+				if args[i+1] == args[i+2] {
+					// one key column in the result, as ssql keeps one field
+					joinCond = fmt.Sprintf("USING (%s)", quoteIdent(args[i+1]))
+				} else {
+					joinCond = fmt.Sprintf("ON __l.%s = __r.%s", quoteIdent(args[i+1]), quoteIdent(args[i+2]))
+					aliased = true
+				}
 				i += 2
+			}
+		case "-type", "-t":
+			if i+1 < len(args) {
+				switch args[i+1] {
+				case "inner":
+				case "left", "right", "full":
+					joinKind = strings.ToUpper(args[i+1]) + " JOIN"
+				default:
+					return fmt.Errorf("join -type %s: unknown join type", args[i+1])
+				}
+				i++
 			}
 		}
 	}
@@ -1179,13 +1203,30 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 	if joinCond == "" {
 		joinCond = "ON TRUE"
 	}
+	if aliased {
+		*q = sqlQuery{
+			fromClause: "(\n" + indentLines(renderSelect(q), "  ") + "\n) AS __l",
+			comments:   q.comments,
+			columns:    q.columns,
+		}
+	}
+	rightAlias := func(src string) string {
+		if aliased {
+			return src + " AS __r"
+		}
+		return src
+	}
 
 	// Check if the join file is a process substitution — build a SQL subquery
 	// from the func fragment's body commands
 	if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
 		subquery := buildJoinSubquery(funcFrags[len(funcFrags)-1])
 		if subquery != "" {
-			q.joins = append(q.joins, fmt.Sprintf("JOIN %s %s", sqlSubquery("("+subquery+")"), joinCond))
+			src := "(" + subquery + ")"
+			if !aliased {
+				src = sqlSubquery(src)
+			}
+			q.joins = append(q.joins, fmt.Sprintf("%s %s %s", joinKind, rightAlias(src), joinCond))
 			return nil
 		}
 	}
@@ -1194,7 +1235,7 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 	if err != nil {
 		return err
 	}
-	q.joins = append(q.joins, fmt.Sprintf("JOIN %s %s", src, joinCond))
+	q.joins = append(q.joins, fmt.Sprintf("%s %s %s", joinKind, rightAlias(src), joinCond))
 	return nil
 }
 

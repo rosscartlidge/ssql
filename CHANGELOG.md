@@ -32,6 +32,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   differential tester draws self-`except`/`intersect` stages.
 
 ### Fixed
+- **`join -type left|right|full` was ignored by `generate sql`** (every
+  join was inner) and **`join -on L R` rendered `ON t1.L = t2.R`** with
+  aliases nothing defined, a binder error in every engine. The join kind
+  is emitted; `-on` folds the left side as `__l` and aliases the source
+  `__r` (same-name `-on` is `USING`). Pinned by `join_left_type` and
+  `join_on_different_names`.
+- **Typed `join` lost rows on a one-to-many right side**: it emitted
+  `typed.HashJoin`, which keeps the last right row per key, so a
+  customer with two orders joined to one. Now `HashJoinMulti` and the
+  new `HashJoinMultiParallel`, one output row per match, as every other
+  lane. Pinned by `join_one_to_many`.
+- **Typed `join` ignored `-type`** and emitted an inner join for left,
+  right and full. It now refuses those loudly: an unmatched row's right
+  fields are absent, which a typed struct cannot hold (DFC124 §3); use
+  `SSQL_MODE=record`.
 - **`RecordKey` keyed the same row differently from two files whose
   headers are in different orders** since v4.107.0 kept column order on
   schemas, so `union` and `distinct` no longer deduplicated across such

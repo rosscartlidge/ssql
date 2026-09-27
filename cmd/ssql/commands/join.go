@@ -474,7 +474,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 					return lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'join' must follow a typed-mode source"))
 				}
-				return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses)
+				return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, joinType)
 			}
 
 			// Create a func fragment that wraps the subprocess pipeline
@@ -537,6 +537,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause) e
 			[]*lib.CodeFragment{rightInit},
 			fmt.Sprintf("ssql from %s", rightFile),
 			clauses,
+			joinType,
 		)
 	}
 
@@ -615,7 +616,17 @@ func emitTypedJoin(
 	rightFragments []*lib.CodeFragment,
 	subCommandStr string,
 	clauses []ssql.LookupClause,
+	joinType string,
 ) error {
+	if joinType != "" && joinType != "inner" {
+		// An unmatched left row of a left/full join has its right fields
+		// ABSENT; a typed struct cannot hold absence (DFC124 §3) and zero
+		// values would be a silent semantic change. Refuse, as the
+		// -invalid missing cast does, rather than emit the inner join
+		// this lane emitted for every -type until v4.108.
+		return lib.WriteErrorAndExit(getCommandString(),
+			fmt.Errorf("ssql generate go -typed: join -type %s has no typed form (an unmatched row's right fields are absent, which a struct cannot hold — DFC124 §3); use SSQL_MODE=record", joinType))
+	}
 	if joinTypeIsUnsupported(clauses) {
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: only single-clause joins without -as renames are supported in v1; got %d clause(s) with renames", len(clauses)))
@@ -695,8 +706,11 @@ func emitTypedJoin(
 			strings.Join(mergeAssignments, ",\n\t\t\t\t"),
 		)
 	}
-	parallelCode := makeJoinCode("typed.HashJoinParallel")
-	serialCode := makeJoinCode("typed.HashJoin")
+	// The MULTI forms: a right side with a repeated key (orders per
+	// customer) must yield one row per match, as every other lane does;
+	// HashJoin/HashJoinParallel keep the last right row per key.
+	parallelCode := makeJoinCode("typed.HashJoinMultiParallel")
+	serialCode := makeJoinCode("typed.HashJoinMulti")
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 
 	stmtFrag := lib.NewStmtFragment("joined", inputVar, parallelCode, imports, getCommandString())
