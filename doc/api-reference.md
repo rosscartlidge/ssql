@@ -1160,6 +1160,47 @@ ssql from products.csv | ssql join <(ssql from categories.csv) \
     -on dest_cat cat_id -as cat_name dest_name
 ```
 
+### AsofJoin
+
+```go
+type AsofConfig struct {
+    LeftKeys, RightKeys []string // equality part, pairwise; may be empty (one series)
+    LeftTime, RightTime string   // the ordered fields: numeric or time
+    Forward       bool           // nearest at or after (default: at or before)
+    Strict        bool           // never at the same time
+    Tolerance     float64        // > 0: largest distance that matches (ns for times)
+    KeepUnmatched bool           // left join: unmatched left rows, right fields absent
+}
+func AsofJoin(right iter.Seq[Record], cfg AsofConfig) Filter[Record, Record]
+```
+
+Each left row takes the right row that is current *as of* its time: among
+the right rows with the same key, the nearest at or before the left time
+(the quote in force when the trade happened). The right side is indexed
+per key, sorted by time; the left streams in input order, so the output
+is in left order. Ties on the right time take the last in input order. A
+left row whose key or time is absent matches nothing. The merged row is
+the left fields, then the right's, except a right key or time field that
+shares its name with the left's (the left value is the row's).
+
+**Example:**
+```go
+quoted := ssql.AsofJoin(quotes, ssql.AsofConfig{
+    LeftKeys: []string{"sym"}, RightKeys: []string{"sym"},
+    LeftTime: "ts", RightTime: "ts",
+    Tolerance: float64(5 * time.Minute),
+})(trades)
+```
+
+**CLI equivalent:**
+```bash
+ssql from trades.csv | ssql join quotes.csv -using sym -asof ts -tolerance 5m
+```
+
+The `typed` package has `AsofJoin` and `AsofJoinParallel` (key and time
+accessors over struct fields; the time axis is `int64` nanoseconds or the
+number itself), inner semantics only.
+
 ### Set Operations: Except / Intersect
 
 ```go

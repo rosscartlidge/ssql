@@ -6,7 +6,8 @@ Last modified: 2026-09-27
 
 [Back to Index](./README.md)
 
-Status: **§3 (except/intersect) BUILT 2026-09-26; §1 and §2 open.**
+Status: **§3 (except/intersect) BUILT 2026-09-26; §2 (ASOF join) BUILT
+2026-09-27; §1 (spill) open.**
 DFC136 §4 ranked the gaps between ssql and DuckDB; Ross asked how three
 of them would be done and then for a DFC, reviewed it on 2026-09-26 and
 agreed with the leanings in §5 (opt-in spill, ASOF as a mode on `join`,
@@ -185,6 +186,43 @@ The random tester gains an ASOF stage over two numeric columns of the
 same table joined to itself (a self-ASOF is well defined and the fuzz
 already has the columns).
 
+### 2a. Built (2026-09-27)
+
+As designed (§2.2–§2.5), a mode on `join`: `-asof FIELD` / `-asof-on
+LEFT RIGHT`, `-after`, `-strict`, `-tolerance`, `-type inner|left`, the
+equality part optional. Particulars:
+
+- Algorithm: not the merge walk of §2.4 but an index of the right side
+  per key, sorted by time, and a binary search per left row. The left
+  then streams in INPUT order (the output is in left order, as every
+  other join's is) and needs no sort; the cost is O(m log m + n log m).
+  Ties on the right time take the last in input order (§2.3), in the
+  forward direction too.
+- The time axis is int64 nanoseconds for time fields and float64 for
+  numbers, so a time never compares with a number and nanoseconds are
+  exact. A text field is refused ("order on text is not as of").
+- The merged row keeps the left value of a same-named key or time
+  field; a right time named differently (`-asof-on ts qts`) is an
+  ordinary right column, so it collides with a left field of that name
+  (the random tester found two ASOF stages both adding `r_f`).
+- typed: `typed.AsofJoin[Parallel]` (the right index built once, every
+  left shard probes it); `-type left` refused as for `join` (DFC124 §3).
+- SQL: DuckDB `ASOF [LEFT] JOIN … ON keys AND l.ts >= r.ts` (`<=` for
+  -after, strict forms drop the `=`), `__r.* EXCLUDE (same-named key,
+  time)`, `-tolerance` as a WHERE on the matched distance (inner only;
+  with `-type left` it would need a CASE and is refused); the other
+  dialects refuse. `-as`/`-suffix`/`-exclude-*` are refused with ASOF
+  in every lane.
+- The `generate ssql` optimiser's join predicate pushdown no longer
+  moves a right-only `where` into an ASOF (or left/right/full) join's
+  source; pinned by `TestAsofJoinPushdownGuard`.
+
+Found while building, fixed in the same unit: `generate sql` silently
+dropped every stage but `from`/`where` inside a `<(…)>` side (a
+`join <(… | include a b)` joined the whole file); the reserved-word list
+lacked `at` and its kin; the record-mode field flow did not collapse
+`-arg`.
+
 ## 3. INTERSECT and EXCEPT
 
 ### 3.1 The gap
@@ -285,7 +323,7 @@ join is inner) and renders `join -on` with undefined `t1`/`t2` aliases.
 1. `except` / `intersect` (half a day plus cases): smallest, closes four
    gaps, no new concepts. **Done** (§3a).
 2. ASOF join (two days): the largest gap for the users ssql has; the
-   typed lane is the long part.
+   typed lane is the long part. **Done** (§2a), in a day.
 3. Spilling sort, then group-by as sort-then-stream (two days), typed
    spill later on demand.
 

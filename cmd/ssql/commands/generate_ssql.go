@@ -1490,6 +1490,30 @@ func ruleJoinPredicatePushdown(cmds []*pipelineCmd) ([]*pipelineCmd, []ruleAppli
 		if j == -1 || cmds[j].Kind != "where" {
 			continue
 		}
+		// A predicate on the RIGHT side is only movable into the source
+		// for an inner equi-join: an ASOF join's match depends on which
+		// right rows exist (filtering them changes the nearest), and a
+		// left/right/full join keeps unmatched rows the filter would drop.
+		// A left-only predicate stays movable for inner and left joins.
+		rightMovable, leftMovable := true, true
+		for k, a := range cmds[i].JoinArgs {
+			switch a {
+			case "-asof", "-asof-on":
+				rightMovable = false
+			case "-type", "-t":
+				if k+1 < len(cmds[i].JoinArgs) {
+					switch cmds[i].JoinArgs[k+1] {
+					case "left":
+						rightMovable = false
+					case "right", "full":
+						rightMovable, leftMovable = false, false
+					}
+				}
+			}
+		}
+		if !leftMovable {
+			continue
+		}
 
 		// Only handle simple -if predicates (not -if-expr which can reference any field)
 		if whereHasNegationFlags(cmds[j].RawArgs) {
@@ -1561,6 +1585,10 @@ func ruleJoinPredicatePushdown(cmds []*pipelineCmd) ([]*pipelineCmd, []ruleAppli
 			}
 		}
 
+		if !rightMovable {
+			both = append(both, rightOnly...)
+			rightOnly = nil
+		}
 		if len(leftOnly) == 0 && len(rightOnly) == 0 {
 			continue
 		}

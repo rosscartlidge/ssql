@@ -79,7 +79,7 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Expression aggregates | ● (any expression) | ● | `-expr 'max(price * qty)'`, `-stream-expr` folds; no SQL translation |
 | Rollup / cube | ● | ● | ssql's enriched-detail shape, not grouping-set rows |
 | Window functions | ● (all) | ● (17) | row_number, rank, dense_rank, ntile, percent_rank, cume_dist, lag/lead, first/last/nth_value, running aggregates; ROWS and RANGE frames (DFC130) |
-| Joins | ● (all, incl. ASOF, lateral) | ◐ | inner, left, right, full; equi-join only; anti/semi via `except`/`intersect -using`; no ASOF, no non-equi |
+| Joins | ● (all, incl. ASOF, lateral) | ◐ | inner, left, right, full, ASOF (`join -asof`, DFC137 §2, built 2026-09-27); anti/semi via `except`/`intersect -using`; no general non-equi or lateral |
 | Pivot / unpivot | ● | ● | `pivot -func` with one aggregate per call; `unpivot` |
 | Set operations | ● | ● | `union`, `except`, `intersect` (ALL forms; keyed forms are the anti/semi-join; DFC137 §3, built 2026-09-26) |
 | Subqueries, CTEs | ● | ○ | ssql's answer is pipes and process substitution |
@@ -183,6 +183,9 @@ In rough order of how often a user would hit it:
    inequality joins. ASOF is the one worth building: `resample` and
    `window` show the time-series direction, and ASOF is the missing
    verb. Likely a unit; the typed hash join is the template.
+   *Update 2026-09-27: ASOF (`join -asof`) and anti/semi (`except` /
+   `intersect -using`) are built (DFC137 §2a, §3a); general non-equi
+   joins remain.*
 2. **Date and time functions.** One `time` type and a handful of
    functions against DuckDB's full calendar. `strftime`-style
    formatting, `date_trunc` beyond `bucket`, timezone conversion,
@@ -238,7 +241,7 @@ is built by a program, or the result must be a program.
 
 In the order I would take them, none started:
 
-1. ASOF join (§4.1): the largest single gap for the time-series users
+1. ASOF join (§4.1) — **built 2026-09-27** (DFC137 §2a): the largest single gap for the time-series users
    ssql already serves; typed hash join as the template; SQL lane has
    `ASOF JOIN` in DuckDB and a `LATERAL` emulation elsewhere.
 2. Date/time function set (§4.2): formatting, truncation, timezone,
@@ -246,7 +249,7 @@ In the order I would take them, none started:
    differential entry.
 3. Spilling sort and group-by (§4.4), with the scale gate deciding the
    ceiling.
-4. INTERSECT/EXCEPT (§4.3).
+4. INTERSECT/EXCEPT (§4.3) — **built 2026-09-26** (DFC137 §3a).
 5. A Python binding over `ssql run` documents (§4.5), after DFC134's
    JSON Schema (§5.5), so the binding is generated, not written.
 

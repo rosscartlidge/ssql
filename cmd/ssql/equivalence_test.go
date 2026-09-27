@@ -1846,6 +1846,63 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// ASOF join (DFC137 §2), backward: each trade takes the latest
+		// quote at or before its time within its symbol; the left ts is
+		// the row's (the right's same-named key/time are not merged).
+		Name:     "asof_backward",
+		Pipeline: `{{.bin}} from csv {{.data}}/asof_trades.csv | {{.bin}} join {{.data}}/asof_quotes.csv -using sym -asof ts`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"trade": "t3", "sym": "A", "ts": 49, "q": "a30"},
+			{"trade": "t4", "sym": "B", "ts": 100, "q": "b90"},
+			{"trade": "t2", "sym": "A", "ts": 30, "q": "a30"},
+		},
+	},
+	{
+		Name:     "asof_left",
+		Pipeline: `{{.bin}} from csv {{.data}}/asof_trades.csv | {{.bin}} join {{.data}}/asof_quotes.csv -using sym -asof ts -type left | {{.bin}} include trade q`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"trade": "t3", "q": "a30"}, {"trade": "t1"}, {"trade": "t4", "q": "b90"},
+			{"trade": "t2", "q": "a30"}, {"trade": "t5"}, {"trade": "t6"},
+		},
+		Skip: map[string]string{"go-typed": "an unmatched row's right fields are absent, which a typed struct cannot hold (DFC124 §3)", "go-parallel": "same as go-typed"},
+	},
+	{
+		// Forward and strict against a filtered pipeline: t2 (30) has no
+		// quote strictly after 30 under 50; t1 (5) takes a10; t6 (15) b20.
+		Name:     "asof_forward_strict_procsub",
+		Pipeline: `{{.bin}} from csv {{.data}}/asof_trades.csv | {{.bin}} join <({{.bin}} from csv {{.data}}/asof_quotes.csv | {{.bin}} where -if ts lt 50) -using sym -asof ts -after -strict | {{.bin}} include trade q`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"trade": "t1", "q": "a10"}, {"trade": "t6", "q": "b20"}},
+	},
+	{
+		// -tolerance on a numeric axis: t3 is 19 past a30, too far.
+		Name:     "asof_tolerance",
+		Pipeline: `{{.bin}} from csv {{.data}}/asof_trades.csv | {{.bin}} join {{.data}}/asof_quotes.csv -using sym -asof ts -tolerance 10 | {{.bin}} include trade q`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"trade": "t4", "q": "b90"}, {"trade": "t2", "q": "a30"}},
+	},
+	{
+		// No equality key (one series) and different time names: both
+		// time fields stay in the row.
+		Name:     "asof_no_key_asof_on",
+		Pipeline: `{{.bin}} from csv {{.data}}/asof_trades.csv | {{.bin}} join {{.data}}/asof_readings.csv -asof-on ts qts | {{.bin}} include trade qts q`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"trade": "t3", "qts": 30, "q": "r30"}, {"trade": "t4", "qts": 50, "q": "r50"},
+			{"trade": "t2", "qts": 30, "q": "r30"}, {"trade": "t6", "qts": 10, "q": "r10"},
+		},
+	},
+	{
+		// A time axis with a duration tolerance: e3 has no reading within
+		// 5 minutes before it.
+		Name:     "asof_time_tolerance",
+		Pipeline: `{{.bin}} from csv {{.data}}/asof_events_time.csv -type at time | {{.bin}} join <({{.bin}} from csv {{.data}}/asof_readings_time.csv -type at time) -asof at -tolerance 5m | {{.bin}} include ev r`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"ev": "e1", "r": "r0"}, {"ev": "e2", "r": "r10"}},
+	},
+	{
 		Name: "join_procsub_csv",
 		Pipeline: `{{.bin}} from csv {{.data}}/orders.csv | ` +
 			`{{.bin}} join <({{.bin}} from csv {{.data}}/customers.csv) -using customer_id | ` +

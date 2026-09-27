@@ -16,6 +16,7 @@ restores them after editing.
 | `sheet.csv` | a merged-cell spreadsheet export | fill |
 | `app.log` | five log lines and one line of garbage | from lines, extract |
 | `sensor.csv` | irregular timestamps, temp + rpm | resample, bucket, window |
+| `alarms.csv` | three alarm timestamps inside `sensor.csv`'s range | join -asof |
 | `signal.csv` | 5 Hz + 20 Hz at 100 samples/s | fft, spectrogram |
 
 `codelab-run.sh` (here, and written out with the data) executes every

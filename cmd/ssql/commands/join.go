@@ -21,6 +21,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from users.csv | ssql join orders.csv -using user_id", "Join a file directly — csv/tsv/json inferred from the extension").
 		Example("ssql from users.csv | ssql join orders.jsonl -on user_id order_user_id", "Join on different field names").
 		Example("ssql from data.csv | ssql join <(ssql from kind.csv) -on a_kind kind -as kind_name a_kind_name - -on z_kind kind -as kind_name z_kind_name", "Multiple lookups from same file").
+		Example("ssql from trades.csv | ssql join quotes.csv -using sym -asof ts", "ASOF join: each trade takes the quote in force at its time (DFC137)").
 		ClauseDescription("Each clause performs a separate lookup from the right-side file").
 		Flag("-generate", "-g").
 		Bool().
@@ -82,6 +83,37 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Help("Exclude non-key fields from right side (only bring key + -as fields)").
 		Done().
+		Flag("-asof").
+		String().
+		FieldsFromFlag("").
+		Global().
+		Help("ASOF join on this ordered field (same name both sides): each left row takes the nearest right row at or before its value").
+		Done().
+		Flag("-asof-on").
+		Arg("left-field").
+		FieldsFromFlag("").
+		Done().
+		Arg("right-field").
+		Completer(&cf.NoCompleter{Hint: FieldHintToken}).
+		Done().
+		Global().
+		Help("ASOF join on ordered fields with different names: -asof-on <left> <right>").
+		Done().
+		Flag("-after").
+		Bool().
+		Global().
+		Help("ASOF: the nearest right row at or AFTER the left's (default: at or before)").
+		Done().
+		Flag("-strict").
+		Bool().
+		Global().
+		Help("ASOF: strictly before / after, never at the same value").
+		Done().
+		Flag("-tolerance").
+		String().
+		Global().
+		Help("ASOF: no match farther than this (a duration such as 5m for time fields, a number otherwise)").
+		Done().
 		Flag("FILE").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.{json,jsonl,csv,tsv}"}).
@@ -121,9 +153,14 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Parse all clauses into LookupClauses
 			clauses := parseJoinClauses(ctx.Clauses)
+			asof, err := parseAsofSpec(ctx)
+			if err != nil {
+				return err
+			}
 
-			// Validate we have at least one join condition
-			if len(clauses) == 0 {
+			// Validate we have at least one join condition (an ASOF join
+			// without one treats the right side as a single series)
+			if len(clauses) == 0 && !asof.active() {
 				return fmt.Errorf("join condition required: use -using <field> OR -on <left> <right>")
 			}
 
@@ -131,7 +168,7 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Check if generation mode is enabled
 			if shouldGenerate(generate) {
-				return generateJoinCode(rightFile, joinType, clauses, opts)
+				return generateJoinCode(rightFile, joinType, clauses, opts, asof)
 			}
 
 			// Read left-side input from stdin (with schema if present)
@@ -150,6 +187,10 @@ func RegisterJoin(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// a headerless file silently loses field information.
 			if rightSchema == nil {
 				return fmt.Errorf("right-side file %s has no schema header — pipe through ssql first: ssql join <(ssql from jsonl %s) ...", rightFile, rightFile)
+			}
+
+			if asof.active() {
+				return execAsofJoin(ctx, leftRecords, leftSchema, rightSeq, rightSchema, clauses, asof, joinType, opts)
 			}
 
 			var leftFields []string
@@ -298,9 +339,19 @@ func resolveJoin(leftFields, rightFields []string, clauses []ssql.LookupClause, 
 		}
 	}
 	joinKeys := make(map[string]bool)
+	// A key field is exempt from the collision rule when the two sides
+	// share its NAME (the row keeps one); a right key with its own name
+	// (-on id cust, or an ASOF time named differently) is an ordinary
+	// right column, added to the row, and collides with a left field of
+	// that name like any other (found by the random tester: two ASOF
+	// stages both adding r_f, the second's overwriting the first's).
+	sharedKeys := make(map[string]bool)
 	for _, c := range clauses {
 		joinKeys[c.LeftField] = true
 		joinKeys[c.RightField] = true
+		if c.LeftField == c.RightField {
+			sharedKeys[c.LeftField] = true
+		}
 	}
 	if opts.suffix != "" {
 		if rightFields == nil {
@@ -323,7 +374,7 @@ func resolveJoin(leftFields, rightFields []string, clauses []ssql.LookupClause, 
 	if !opts.any() && leftFields != nil && rightFields != nil {
 		var collisions []string
 		for _, rf := range rightFields {
-			if joinKeys[rf] {
+			if sharedKeys[rf] {
 				continue
 			}
 			renamed := false
@@ -387,7 +438,12 @@ func fragmentFields(fragments []*lib.CodeFragment) []string {
 		case "join", "union", "merge":
 			return nil // another source's columns, which the rules cannot see
 		}
-		out, ok := lookupSchemaOp(f.Op.Kind)(nil, fields, f.Op.Argv)
+		// the argv as the rules read it: -arg VALUE collapsed to VALUE
+		args, err := collapseArgFlag(stageArgs(f))
+		if err != nil || len(args) < 2 {
+			return nil
+		}
+		out, ok := lookupSchemaOp(f.Op.Kind)(nil, fields, args[2:])
 		if !ok {
 			return nil
 		}
@@ -479,7 +535,7 @@ func parseJoinClauses(clauses []cf.Clause) []ssql.LookupClause {
 // Handles two scenarios:
 // 1. Direct JSONL file: generates a simple function to read the file
 // 2. Process substitution (/dev/fd/N): wraps subprocess fragments into a function
-func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, opts joinOptions) error {
+func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, opts joinOptions, asof asofSpec) error {
 	// Read all previous code fragments from stdin (if any)
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
@@ -503,6 +559,16 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		inputVar = "records"
 	}
 
+	// Generate unique function name for the right source
+	// Count existing func fragments to ensure unique naming across the pipeline
+	funcCount := 1
+	for _, frag := range fragments {
+		if frag.Type == "func" {
+			funcCount++
+		}
+	}
+	funcName := fmt.Sprintf("rightSource%d", funcCount)
+
 	// The merge rules, resolved against the fields each source kind
 	// lets generation see (typed: both schemas, in emitTypedJoin).
 	leftFields := fragmentFields(fragments)
@@ -516,16 +582,23 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		}
 		return plan, nil
 	}
-
-	// Generate unique function name for the right source
-	// Count existing func fragments to ensure unique naming across the pipeline
-	funcCount := 1
-	for _, frag := range fragments {
-		if frag.Type == "func" {
-			funcCount++
+	// Record-mode ASOF: the checks the visible fields allow, then one
+	// ssql.AsofJoin statement over the func fragment.
+	asofRecord := func(rightFields []string, rightType func(string) string) error {
+		leftType := noType
+		if len(fragments) > 0 && fragments[len(fragments)-1].AdvisoryTypes != nil {
+			adv := fragments[len(fragments)-1].AdvisoryTypes
+			leftType = func(f string) string { return advisoryToSchemaType(adv[f]) }
 		}
+		if err := asofCheck(leftFields, rightFields, leftType, rightType, clauses, asof, opts); err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		cfg, err := asofConfig(clauses, asof, joinType)
+		if err != nil {
+			return lib.WriteErrorAndExit(getCommandString(), err)
+		}
+		return generateAsofStmt(inputVar, funcName, cfg)
 	}
-	funcName := fmt.Sprintf("rightSource%d", funcCount)
 
 	// Check if rightFile is a non-regular file (e.g., /dev/fd/N, named pipe)
 	// In generation mode, these contain code fragments from the inner command
@@ -553,7 +626,18 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 					return lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: 'join' must follow a typed-mode source"))
 				}
+				if asof.active() {
+					return emitTypedAsofJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, asof, joinType, opts)
+				}
 				return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, joinType, opts)
+			}
+
+			if asof.active() {
+				funcFrag := lib.NewFuncFragment(funcName, rightFragments, subCommandStr)
+				if err := lib.WriteCodeFragment(funcFrag); err != nil {
+					return fmt.Errorf("writing func fragment: %w", err)
+				}
+				return asofRecord(fragmentFields(rightFragments), noType)
 			}
 
 			plan, err := resolve(fragmentFields(rightFragments))
@@ -617,6 +701,10 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		)
 		rightInit.OutputTypedSchema = rightSchema
 		rightInit.StructDefs = []string{rightStructDef}
+		if asof.active() {
+			return emitTypedAsofJoin(inputVar, funcName, leftSchema, rightSchema,
+				[]*lib.CodeFragment{rightInit}, fmt.Sprintf("ssql from %s", rightFile), clauses, asof, joinType, opts)
+		}
 		return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema,
 			[]*lib.CodeFragment{rightInit},
 			fmt.Sprintf("ssql from %s", rightFile),
@@ -626,9 +714,12 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		)
 	}
 
-	plan, err := resolve(sideFileFields(rightFile))
-	if err != nil {
-		return err
+	var plan joinPlan
+	if !asof.active() {
+		plan, err = resolve(sideFileFields(rightFile))
+		if err != nil {
+			return err
+		}
 	}
 
 	// For regular files, create a simple func fragment that reads the file
@@ -672,7 +763,31 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		return fmt.Errorf("writing func fragment: %w", err)
 	}
 
+	if asof.active() {
+		rightType := noType
+		var rightFields []string
+		if _, schema, err := readAuxInput(rightFile); err == nil && schema != nil {
+			rightFields, rightType = schema.Fields, schema.TypeOf
+		}
+		return asofRecord(rightFields, rightType)
+	}
 	return generateJoinStmtWithFunc(inputVar, funcName, joinType, plan)
+}
+
+// advisoryToSchemaType maps a record fragment's advisory Go type to the
+// wire schema's type name.
+func advisoryToSchemaType(goType string) string {
+	switch goType {
+	case "int64":
+		return lib.TypeInt
+	case "float64":
+		return lib.TypeFloat
+	case "time.Time":
+		return lib.TypeTime
+	case "":
+		return ""
+	}
+	return lib.TypeString
 }
 
 // joinReadTemplate is the record-mode read of a join's right-hand file

@@ -259,7 +259,15 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 	// does not write one; aggregates over it are fair game — commands
 	// treat "" as missing, which is what the engines must agree on.
 	condOK := func(f string) bool {
-		if kind[f] != "string" {
+		// An original column keeps its file kind whatever the pipeline's
+		// current map says (after a group-by the map holds only the
+		// group's columns, and a missing entry must not read as "not
+		// text"); a derived column's emptiness is not known here.
+		k, isOrig := tb.kind[f]
+		if !isOrig {
+			k = kind[f]
+		}
+		if k != "string" {
 			return true
 		}
 		c := slices.Index(tb.cols, f)
@@ -276,7 +284,7 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 	target := 1 + rng.Intn(4)
 	for tries := 0; len(stages) < target && tries < 40; tries++ {
 		var st string
-		switch rng.Intn(11) {
+		switch rng.Intn(12) {
 		case 0, 1, 2: // where
 			f := pick(rng, cols)
 			if !condOK(f) {
@@ -416,6 +424,47 @@ func genPipeline(rng *rand.Rand, tb *randTable) []string {
 			} else {
 				st = fmt.Sprintf("%s %s-file %s -on %s %s", op, all, right, k, k)
 			}
+		case 11: // DFC137 §2: ASOF self-join on a numeric axis
+			// The right side is the table's own (id, axis) pairs, the axis
+			// renamed so both time fields survive (-asof-on) and id keeps the
+			// right rows distinct; the equality key is a numeric column that is
+			// never "" (see condOK) or none. Ties on the right axis are the
+			// library test's business (ssql: last in input order; DuckDB:
+			// arbitrary), so the right axis is de-duplicated with distinct.
+			// Right times must be distinct within a key: the right side is
+			// distinct on (key, axis) with id dropped. Only while the left
+			// still has the original numeric columns unchanged in kind.
+			if grouped {
+				continue
+			}
+			var nums []string
+			for _, c := range cols {
+				if slices.Contains(tb.cols, c) && kind[c] == tb.kind[c] && (kind[c] == "int" || kind[c] == "float") && c != "id" {
+					nums = append(nums, c)
+				}
+			}
+			if len(nums) == 0 {
+				continue
+			}
+			axis := pick(rng, nums)
+			raxis := fmt.Sprintf("r%d_%s", len(stages), axis) // unique per stage: a second ASOF's axis must not collide
+			var keyCols []string
+			for _, c := range nums {
+				if c != axis && condOK(c) {
+					keyCols = append(keyCols, c)
+				}
+			}
+			var keyFlag, keyInclude string
+			if len(keyCols) > 0 && rng.Intn(3) > 0 {
+				k := pick(rng, keyCols)
+				keyFlag = " -using " + k
+				keyInclude = " " + k
+			}
+			right := fmt.Sprintf("<({{BIN}} from csv {{FILE}} | {{BIN}} include %s%s | {{BIN}} rename -as %s %s | {{BIN}} distinct)", axis, keyInclude, axis, raxis)
+			dir := pick(rng, []string{"", " -after", " -strict", " -after -strict"})
+			st = fmt.Sprintf("join %s -asof-on %s %s%s%s", right, axis, raxis, keyFlag, dir)
+			cols = append(slices.Clone(cols), raxis)
+			kind[raxis] = kind[axis]
 		case 8: // cast int → float (the one cast every engine agrees on)
 			var ints []string
 			for _, f := range cols {

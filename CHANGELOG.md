@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **ASOF join** (DFC137 §2), a mode on `join`: `ssql from trades.csv |
+  ssql join quotes.csv -using sym -asof ts` gives each trade the quote
+  in force at its time, the nearest right row at or before (`-after`:
+  at or after; `-strict`: never at) within the same key, no farther
+  than `-tolerance` (a duration for time fields, a number otherwise).
+  `-asof-on LEFT RIGHT` for different names; the equality part
+  (`-using`/`-on`) is optional; `-type left` keeps unmatched rows. Ties
+  on the right time take the last in input order (SQL engines pick
+  any). Every lane: `ssql.AsofJoin` in exec and record codegen,
+  `typed.AsofJoin[Parallel]` (the right side indexed once, left shards
+  probe it), `generate sql` as DuckDB's `ASOF [LEFT] JOIN` with a
+  same-named key/time `EXCLUDE`d and `-tolerance` as a WHERE after the
+  match (other dialects refuse). The `generate ssql` optimiser no longer
+  pushes a right-side `where` into an ASOF or left join's source (the
+  match depends on which right rows exist). Six equivalence cases on
+  shuffled fixtures with hand goldens; the random tester draws ASOF
+  self-joins. Codelab §5 has an alarms-against-readings example.
 - **`except` and `intersect`** (DFC137 §3): the two set operations
   `union` lacked, in every lane. `ssql from a.csv | ssql except -file
   b.csv` keeps the rows of stdin not in the file (SQL `EXCEPT`);
@@ -32,6 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   differential tester draws self-`except`/`intersect` stages.
 
 ### Fixed
+- **A stage other than `from`/`where` inside a `join`/`union` `<(…)>`
+  source was silently dropped by `generate sql`**: `join <(ssql from
+  x.csv | ssql include a b)` joined the whole file. Side pipelines now go
+  through the same translator as the main one, and a stage it cannot
+  translate refuses loudly.
+- **`generate sql` quoted too few reserved words**: a column called
+  `at` (or `asof`, `interval`, `user`, `left`, `with`, …) was emitted
+  bare and failed to parse. The reserved list now covers DuckDB's.
+- **A `join -on L R` right key whose name differs from the left's is an
+  ordinary right column** for the collision rule (it is added to the
+  row): a left field of that name is now refused instead of overwritten.
 - **A `join` field collision is refused in every lane.** A non-key
   column present on both sides was refused by exec ("use -as, -suffix,
   or -exclude-*") but silently merged by generated code: record let the

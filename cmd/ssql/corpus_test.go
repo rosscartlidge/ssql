@@ -149,6 +149,16 @@ func corpusData(t *testing.T) string {
 			// A left row whose key cell is empty: absent in ssql, NULL in
 			// SQL; both match nothing. Typed structs cannot hold absence.
 			"setops_absent.csv": "id,name\n1,alice\n,nobody\n4,dan\n",
+			// ASOF join (DFC137 §2): trades and quotes, both shuffled, no
+			// equal timestamps across the files, right times distinct per
+			// symbol (a tie is taken last-in-input by ssql and arbitrarily by
+			// DuckDB, so ties are the library test's business). t1 precedes
+			// every A quote; t6 precedes every B quote; Z has no series.
+			"asof_trades.csv":        "trade,sym,ts\nt3,A,49\nt1,A,5\nt4,B,100\nt2,A,30\nt5,Z,1\nt6,B,15\n",
+			"asof_quotes.csv":        "sym,ts,q\nA,30,a30\nB,20,b20\nA,10,a10\nA,50,a50\nB,90,b90\n",
+			"asof_readings.csv":      "qts,q\n30,r30\n10,r10\n50,r50\n",
+			"asof_events_time.csv":   "ev,at\ne1,2026-01-01T09:04:00Z\ne2,2026-01-01T09:12:00Z\ne3,2026-01-01T08:00:00Z\n",
+			"asof_readings_time.csv": "at,r\n2026-01-01T09:00:00Z,r0\n2026-01-01T09:10:00Z,r10\n",
 			// SQL-injection strings as VALUES and as a column name that needs
 			// quoting: apostrophes, a comment marker, a statement terminator,
 			// LIKE metacharacters. Every lane must treat them as data.

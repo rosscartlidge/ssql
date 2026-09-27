@@ -582,6 +582,18 @@ for when you need the bucket inside a larger expression):
 ssql from sensor.csv | ssql update -set-bucket minute ts 1m | ssql group-by minute -avg temp avg_temp -max rpm max_rpm | ssql sort minute | ssql to table
 ```
 
+Two series sampled at different moments never share a timestamp, so an
+equi-join between them finds nothing. `join -asof FIELD` gives each row
+the other side's row that was *in force* at its time: the nearest at or
+before (`-after` for at or after), within a key when there is one, and
+no farther than `-tolerance`. `alarms.csv` has three alarm times; the
+reading current at each one:
+
+```bash
+# The sensor reading in force when each alarm fired (the alarm's own ts is kept)
+ssql from alarms.csv | ssql join sensor.csv -asof ts | ssql to table
+```
+
 Window functions rank, lag, and run totals *without collapsing rows*:
 
 ```bash

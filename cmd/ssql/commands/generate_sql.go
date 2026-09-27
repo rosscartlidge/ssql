@@ -1159,6 +1159,9 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 	}
 
 	filePath := args[0]
+	if asofIndex := slices.IndexFunc(args, func(a string) bool { return a == "-asof" || a == "-asof-on" }); asofIndex > 0 {
+		return translateAsofJoin(q, args, funcFrags)
+	}
 	var joinCond string
 	var leftKey, rightKey []string
 	joinKind := "JOIN"
@@ -1258,6 +1261,148 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 		return err
 	}
 	q.joins = append(q.joins, fmt.Sprintf("%s %s %s", joinKind, rightAlias(src), joinCond))
+	return nil
+}
+
+// translateAsofJoin renders `join … -asof` (DFC137 §2) as DuckDB's
+// ASOF JOIN, which the other dialects lack (refused; a LATERAL
+// emulation is the day someone needs it). The left side is folded as
+// __l and the source aliased __r; the condition is the equality keys and
+// one inequality (backward: __l.ts >= __r.ts; -after: <=; -strict
+// drops the =). A same-named right key or time column is EXCLUDEd, as
+// the record merge keeps the left value. -tolerance is a WHERE after the
+// match for the inner form (the nearest row beyond it means no nearer
+// one exists); with -type left it would need a CASE and is refused.
+func translateAsofJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) error {
+	if sqlDialectCur != dialectDuckDB {
+		return dialectRefuse("join -asof", "only DuckDB has ASOF JOIN")
+	}
+	filePath := args[0]
+	var leftKeys, rightKeys []string
+	var leftTime, rightTime, tolerance, joinType string
+	forward, strict := false, false
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "-using", "-u":
+			if i+1 < len(args) {
+				leftKeys, rightKeys = append(leftKeys, args[i+1]), append(rightKeys, args[i+1])
+				i++
+			}
+		case "-on", "-o":
+			if i+2 < len(args) {
+				leftKeys, rightKeys = append(leftKeys, args[i+1]), append(rightKeys, args[i+2])
+				i += 2
+			}
+		case "-asof":
+			if i+1 < len(args) {
+				leftTime, rightTime = args[i+1], args[i+1]
+				i++
+			}
+		case "-asof-on":
+			if i+2 < len(args) {
+				leftTime, rightTime = args[i+1], args[i+2]
+				i += 2
+			}
+		case "-after":
+			forward = true
+		case "-strict":
+			strict = true
+		case "-tolerance":
+			if i+1 < len(args) {
+				tolerance = args[i+1]
+				i++
+			}
+		case "-type", "-t":
+			if i+1 < len(args) {
+				joinType = args[i+1]
+				i++
+			}
+		case "-as", "-suffix", "-exclude-left", "-exclude-right":
+			return fmt.Errorf("join -asof: %s is not supported with ASOF", args[i])
+		}
+	}
+	switch joinType {
+	case "", "inner", "left":
+	default:
+		return fmt.Errorf("join -asof: -type %s has no ASOF meaning (inner or left)", joinType)
+	}
+	if joinType == "left" && tolerance != "" {
+		return fmt.Errorf("join -asof -type left -tolerance has no SQL translation yet (the unmatched-beyond-tolerance row needs a CASE) — use generate go")
+	}
+
+	// The source, and the collision check with the visible fields.
+	var src string
+	var rightFields []string
+	if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
+		sub := buildJoinSubquery(funcFrags[len(funcFrags)-1])
+		if sub == "" {
+			return fmt.Errorf("join -asof: source pipeline is too complex to translate (only from/where are supported inside <(…)>)")
+		}
+		src = "(" + sub + ")"
+		rightFields = fragmentFields(funcFrags[len(funcFrags)-1].FuncBody)
+	} else {
+		var err error
+		if src, err = dialectSource(filePath); err != nil {
+			return err
+		}
+		rightFields = sideFileFields(filePath)
+	}
+	var clauses []ssql.LookupClause
+	for i := range leftKeys {
+		clauses = append(clauses, ssql.LookupClause{LeftField: leftKeys[i], RightField: rightKeys[i]})
+	}
+	if err := asofCheck(q.columns, rightFields, noType, noType, clauses, asofSpec{leftTime: leftTime, rightTime: rightTime}, joinOptions{}); err != nil {
+		return err
+	}
+
+	var conds []string
+	for i := range leftKeys {
+		conds = append(conds, fmt.Sprintf("__l.%s = __r.%s", quoteIdent(leftKeys[i]), quoteIdent(rightKeys[i])))
+	}
+	op := map[[2]bool]string{{false, false}: ">=", {false, true}: ">", {true, false}: "<=", {true, true}: "<"}[[2]bool{forward, strict}]
+	conds = append(conds, fmt.Sprintf("__l.%s %s __r.%s", quoteIdent(leftTime), op, quoteIdent(rightTime)))
+
+	var exclude []string
+	for i := range leftKeys {
+		if leftKeys[i] == rightKeys[i] {
+			exclude = append(exclude, quoteIdent(rightKeys[i]))
+		}
+	}
+	if leftTime == rightTime {
+		exclude = append(exclude, quoteIdent(rightTime))
+	}
+	rightStar := "__r.*"
+	if len(exclude) > 0 {
+		rightStar += " EXCLUDE (" + strings.Join(exclude, ", ") + ")"
+	}
+	kind := "ASOF JOIN"
+	if joinType == "left" {
+		kind = "ASOF LEFT JOIN"
+	}
+	var sb strings.Builder
+	sb.WriteString("SELECT __l.*, " + rightStar + "\n")
+	sb.WriteString("FROM (\n" + indentLines(renderSelect(q), "  ") + "\n) AS __l\n")
+	sb.WriteString(kind + " " + src + " AS __r ON " + strings.Join(conds, " AND "))
+	if tolerance != "" {
+		tol, err := asofTolerance(tolerance)
+		if err != nil {
+			return err
+		}
+		lit := strconv.FormatFloat(tol, 'f', -1, 64)
+		if _, err := strconv.ParseFloat(tolerance, 64); err != nil {
+			// a duration: nanoseconds → an INTERVAL for a time axis
+			lit = fmt.Sprintf("INTERVAL '%d microseconds'", int64(tol/1000))
+		}
+		far := fmt.Sprintf("__l.%s - __r.%s", quoteIdent(leftTime), quoteIdent(rightTime))
+		if forward {
+			far = fmt.Sprintf("__r.%s - __l.%s", quoteIdent(rightTime), quoteIdent(leftTime))
+		}
+		sb.WriteString("\nWHERE " + far + " <= " + lit)
+	}
+	*q = sqlQuery{
+		fromClause: sqlSubquery("(\n" + indentLines(sb.String(), "  ") + "\n)"),
+		comments:   q.comments,
+	}
 	return nil
 }
 
@@ -1489,24 +1634,20 @@ func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
 		return ""
 	}
 
-	// Build a mini SQL query from the func body's commands
+	// Build the side's query from the func body's commands with the SAME
+	// translator the main pipeline uses. Until v4.108 only from/where
+	// were handled and every other stage inside <(…)> was silently
+	// dropped: `join <(ssql from x.csv | ssql include a b)` joined the
+	// whole file (the random tester's ASOF stage found it). A stage the
+	// translator refuses makes the side unbuildable (""), which the
+	// caller reports.
 	sub := &sqlQuery{}
 	for _, bodyFrag := range funcFrag.FuncBody {
 		if bodyFrag.Command == "" {
 			continue
 		}
-		args, err := collapseArgFlag(stageArgs(bodyFrag))
-		if err != nil {
-			return "" // the caller reports a side it cannot build
-		}
-		if len(args) < 2 {
-			continue
-		}
-		switch args[1] {
-		case "from":
-			translateFrom(sub, args[2:])
-		case "where":
-			translateWhere(sub, args[2:])
+		if err := translateFragment(sub, bodyFrag, nil); err != nil {
+			return ""
 		}
 	}
 
@@ -1521,13 +1662,7 @@ func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
 	if sub.fromClause == "" {
 		return ""
 	}
-
-	var sb strings.Builder
-	sb.WriteString("SELECT * FROM " + sub.fromClause)
-	if len(sub.whereClauses) > 0 {
-		sb.WriteString(" WHERE " + strings.Join(sub.whereClauses, " AND "))
-	}
-	return sb.String()
+	return renderSelect(sub)
 }
 
 func translateWindow(q *sqlQuery, args []string) error {
@@ -2419,7 +2554,18 @@ func isSQLReserved(name string) bool {
 		"ASC", "DESC", "COUNT", "SUM", "AVG", "MIN", "MAX", "DATE", "TIME",
 		"TIMESTAMP", "INT", "INTEGER", "FLOAT", "DOUBLE", "VARCHAR", "TEXT",
 		"BOOLEAN", "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "DEFAULT",
-		"CHECK", "UNIQUE", "SET", "VALUES", "INTO":
+		"CHECK", "UNIQUE", "SET", "VALUES", "INTO",
+		// DuckDB reserved words met by real headers (an `at` column broke
+		// the first ASOF time case): the Postgres-style reserved list.
+		"AT", "ASOF", "INTERVAL", "CAST", "COLLATE", "COLUMN", "CONSTRAINT",
+		"CROSS", "CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "EXCEPT",
+		"FETCH", "FOR", "FULL", "GRANT", "INNER", "INTERSECT", "IS", "LATERAL",
+		"LEFT", "NATURAL", "ONLY", "OUTER", "OVER", "PARTITION", "PIVOT",
+		"POSITIONAL", "QUALIFY", "RIGHT", "SEMI", "ANTI", "SIMILAR", "SOME",
+		"SYMMETRIC", "TO", "TRAILING", "USING", "WINDOW", "WITH", "ANY", "ARRAY",
+		"BOTH", "CURRENT_USER", "DEFERRABLE", "DO", "LEADING",
+		"LOCALTIME", "LOCALTIMESTAMP", "PLACING", "RETURNING",
+		"SESSION_USER", "USER", "VARIADIC", "VERBOSE":
 		return true
 	}
 	return false

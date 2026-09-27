@@ -23,7 +23,7 @@ func TestCodelabWritesEmbeddedFixtures(t *testing.T) {
 	if len(written) != len(names) || len(names) < 9 {
 		t.Fatalf("wrote %d files, embedded %d: %v", len(written), len(names), names)
 	}
-	for _, name := range []string{"employees.csv", "employees.parquet", "orders.csv", "customers.csv", "sensor.csv", "signal.csv", "app.log", "README.md", "codelab-run.sh"} {
+	for _, name := range []string{"employees.csv", "employees.parquet", "orders.csv", "customers.csv", "sensor.csv", "alarms.csv", "signal.csv", "app.log", "README.md", "codelab-run.sh"} {
 		got, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatalf("%s not written: %v", name, err)
