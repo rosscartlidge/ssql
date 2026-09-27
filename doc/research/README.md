@@ -145,6 +145,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC135 | 2026-09-22 | 2026-09-23 | [Field References in Value Slots: `-if-field`, `-set-field`, `-param-field`](./dfc135_field_references_in_value_slots.md) |
 | DFC136 | 2026-09-23 | 2026-09-28 | [ssql and DuckDB, Feature by Feature: Where Things Stand (September 2026)](./dfc136_duckdb_feature_comparison_2026_09.md) |
 | DFC137 | 2026-09-23 | 2026-09-27 | [Closing Three DuckDB Gaps: Spilling Sort and Group-by, ASOF Join, INTERSECT/EXCEPT](./dfc137_spill_asof_set_ops.md) |
+| DFC138 | 2026-09-28 | 2026-09-28 | [The Pipeline Document on the Wire: SSH, Catalogs and serve Without Shell Text](./dfc138_pipeline_document_on_the_wire.md) |
 
 <!-- DFC-INDEX-END -->
 
