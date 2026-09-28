@@ -1,6 +1,6 @@
 # ssql
 
-**Unix pipelines for data.** Read a file, filter, join, group, sort, and
+**Unix pipelines for tabular data.** Read a file, filter, join, group, sort, and
 write it back, one small command per step, with tab completion that knows
 your columns. Then, when it matters, compile the same pipeline to a
 parallel Go program that beats DuckDB on the workloads it covers.
@@ -51,11 +51,11 @@ against the current release, so what you read is what happens.
   cut and looked at (`| ssql to table`). Tab completes commands, flags,
   field names and values with knowledge of the whole line; `Alt-h`
   explains the word under the cursor.
-- **The same pipeline is a compiled program.** `SSQL_MODE=typed … |
-  ssql generate go -run` builds a standalone parallel Go binary with
-  struct types and no reflection. On a 14.6 M-row parquet cube: ssql
-  0.27 s, DuckDB 0.95 s, a quarter of the memory
-  ([measured](doc/performance.md)).
+- **The same pipeline is a compiled program.** `ssql generate go -run
+  -pipeline 'ssql from … | ssql group-by … | ssql to csv'` builds and
+  runs a standalone parallel Go binary with struct types and no
+  reflection. On a 14.6 M-row parquet cube: ssql 0.27 s, DuckDB 0.95 s,
+  a quarter of the memory ([measured](doc/performance.md)).
 - **The same pipeline is SQL, too.** `ssql generate sql` emits DuckDB,
   Postgres or DataFusion SQL from the stages you typed, and the project's
   tests run every pipeline five ways and assert they agree.
