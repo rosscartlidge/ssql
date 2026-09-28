@@ -160,6 +160,8 @@ trap "rm -rf $TEMP_DIR" EXIT
 files_with_code=(
     "doc/ai-code-generation.md"
     "doc/ai-human-guide.md"
+    "doc/library-tour.md"
+    "doc/install.md"
     "README.md"
 )
 
@@ -393,13 +395,13 @@ fi
 section "10. Checking README release pins against version.txt"
 
 VERSION=$(tr -d '[:space:]' < cmd/ssql/version/version.txt)
-readme_pins=$(grep -oE 'ssql(-gpu)?_[0-9]+\.[0-9]+\.[0-9]+_amd64\.deb' README.md | sed -E 's/.*_([0-9.]+)_amd64\.deb/\1/' | sort -u)
+readme_pins=$(grep -ohE 'ssql(-gpu)?_[0-9]+\.[0-9]+\.[0-9]+_amd64\.deb' README.md doc/install.md | sed -E 's/.*_([0-9.]+)_amd64\.deb/\1/' | sort -u)
 if [[ -z "$readme_pins" ]]; then
-    fail "README.md has no .deb install pins (expected ssql_${VERSION}_amd64.deb)"
+    fail "README.md / doc/install.md have no .deb install pins (expected ssql_${VERSION}_amd64.deb)"
 elif [[ "$readme_pins" != "$VERSION" ]]; then
-    fail "README.md .deb pins are $(echo $readme_pins | tr ' ' ',') but version.txt is $VERSION — run make deb"
+    fail "README.md / doc/install.md .deb pins are $(echo $readme_pins | tr ' ' ',') but version.txt is $VERSION — run make deb"
 else
-    pass "README.md .deb pins are $VERSION"
+    pass "README.md and doc/install.md .deb pins are $VERSION"
 fi
 deb_files=$(ls ssql_*_amd64.deb ssql-gpu_*_amd64.deb 2>/dev/null | sed -E 's/.*_([0-9.]+)_amd64\.deb/\1/' | sort -u)
 if [[ -n "$deb_files" && "$deb_files" != "$VERSION" ]]; then

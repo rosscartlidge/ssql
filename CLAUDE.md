@@ -34,7 +34,7 @@ Maintain weekly journal entries in `journal/YYYY-WNN.md`. Update at end of sessi
 ## Documentation Maintenance (CRITICAL)
 
 Keep documentation in sync with API and CLI changes. Key files:
-- `README.md`, `doc/api-reference.md`, `doc/cli-codelab.md`, `doc/cli-debugging.md`
+- `README.md` (kept to ~100 lines: one pipeline, install, why, learning path; everything else lives in `doc/`), `doc/install.md`, `doc/api-reference.md`, `doc/cli-codelab.md`, `doc/cli-debugging.md`
 - `doc/cli-troubleshooting.md`, `doc/EXPRESSIONS.md`, `doc/ai-code-generation.md`
 - Validate: `make doc-check` (L1), `make doc-test` (L2), `make doc-verify` (L3)
 - Common mistakes: changing API/CLI without updating docs, using old import paths/command names/flag names

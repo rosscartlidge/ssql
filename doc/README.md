@@ -16,6 +16,13 @@ code block in every codelab is executed against the current source on
 4. [Getting Started Guide (Go)](codelab-intro.md) — the `Record` library the CLI is built on; read it once you have seen `generate go` output in the CLI codelab
 5. [Typed Codelab (Go)](typed-codelab.md) — the `ssql/typed` struct API for hot pipelines; what `SSQL_MODE=typed` emits
 
+## Getting the tool
+
+- [Installing ssql](install.md) — Homebrew, `go install`, prebuilt binaries, WASI, the GPU build, the Debian packages, the Go library, and the browser playground
+- [The Shell Experience](cli-shell.md) — `ssql -shell-init`: completion and the Ctrl-O / Alt-h / Alt-g / Alt-r / Ctrl-T bindings
+- [Performance, Measured](performance.md) — the DuckDB comparison and the typed/parallel numbers, with the pipelines that produce them
+- [The Go Library, by Example](library-tour.md) — the `Record` API one capability at a time
+
 ## Reference
 
 - [API Reference](api-reference.md) — complete Go library documentation
