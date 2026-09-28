@@ -33,7 +33,7 @@ curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.108.0_amd64.deb &
 
 Then `ssql version`, and `eval "$(ssql -shell-init)"` in `~/.bashrc` for
 completion and the key bindings. Prebuilt binaries, WASI, the GPU build
-and the Go library: [doc/install.md](doc/install.md). Or try it with no
+(`ssql_gpu`) and the Go library: [doc/install.md](doc/install.md). Or try it with no
 install at all in the [browser playground](https://rosscartlidge.github.io/ssql/playground.html).
 
 ## Ten minutes
@@ -64,8 +64,9 @@ against the current release, so what you read is what happens.
   and no injection ([JSON documents](doc/cli-codelab.md#9-pipelines-from-programs), `ssql run`).
 - **Streams, remote files, signals, charts.** Live input, `from https://`
   with range reads, files over SSH with the filter pushed to the far end,
-  sharded catalogs, FFT and spectrograms, self-contained HTML charts and
-  an explorer.
+  sharded catalogs, FFT, convolution and spectrograms (with an optional
+  CUDA build, `ssql_gpu`, that runs the heavy ones 20 to 300× faster),
+  self-contained HTML charts and an explorer.
 
 Honest limits: no persistent database, no SQL as the interface, no
 correlated subqueries. The full comparison with DuckDB is
