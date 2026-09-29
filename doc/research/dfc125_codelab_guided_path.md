@@ -100,7 +100,7 @@ reader to find it.*
   teaches together.
 - [DFC120](./dfc120_system_design_lessons.md) §"if it's not tested" —
   the principle this applies to documentation.
-- `doc/VALIDATION.md` — the L1/L2/L3 tiers; the codelab runner is the
+- `claude/doc-validation.md` (was `doc/VALIDATION.md` until DFC140) — the L1/L2/L3 tiers; the codelab runner is the
   L2 the codelab never had.
 
 ## 4. Follow-through: the other codelabs (2026-09-05)

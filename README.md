@@ -84,7 +84,6 @@ Side paths: [The shell experience](doc/cli-shell.md) ·
 [Performance, measured](doc/performance.md) ·
 [The Go library by example](doc/library-tour.md) ·
 [AI code generation](doc/ai-human-guide.md) ·
-[Debugging with jq](doc/cli-debugging.md) ·
 [Troubleshooting](doc/cli-troubleshooting.md).
 
 ## Documentation

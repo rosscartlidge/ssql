@@ -713,7 +713,7 @@ As LLM-assisted programming becomes ubiquitous, library designers should conside
 
 ## Appendix A: Implementation
 
-The test harness is implemented in `scripts/test-ai-prompts.sh` (~600 lines of Bash). Test cases are defined in `doc/ai-test-cases.md` using a structured format. System prompts are in `doc/ai-code-generation.md` (Go) and `doc/ai-cli-generation.md` (CLI). Test data files are in `test-data/`.
+The test harness is implemented in `scripts/test-ai-prompts.sh` (~600 lines of Bash). Test cases are defined in `scripts/testdata/ai-test-cases.md` using a structured format. System prompts are in `doc/ai-code-generation.md` (Go) and `doc/ai-cli-generation.md` (CLI). Test data files are in `test-data/`.
 
 **File Inventory:**
 
@@ -721,7 +721,7 @@ The test harness is implemented in `scripts/test-ai-prompts.sh` (~600 lines of B
 |------|---------|-------|
 | [`doc/ai-code-generation.md`](../ai-code-generation.md) | Go code generation prompt | ~900 |
 | [`doc/ai-cli-generation.md`](../ai-cli-generation.md) | CLI pipeline generation prompt | ~500 |
-| [`doc/ai-test-cases.md`](../ai-test-cases.md) | 30 structured test cases | ~600 |
+| [`scripts/testdata/ai-test-cases.md`](../../scripts/testdata/ai-test-cases.md) | 30 structured test cases | ~600 |
 | [`scripts/test-ai-prompts.sh`](../../scripts/test-ai-prompts.sh) | Test runner with Ralph Wiggum loop | ~600 |
 | `test-data/*.csv` | Test data files | 8 files |
 

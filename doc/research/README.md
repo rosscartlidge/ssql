@@ -49,7 +49,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC039 | 2026-01-19 | 2026-01-19 | [FFT Windowing and Sampling Considerations](./fft-windowing-sampling.md) |
 | DFC040 | 2026-01-19 | 2026-03-12 | [What We Learned: GPU Acceleration and Arrow Integration](./gpu-arrow-learnings.md) |
 | DFC041 | 2026-01-25 | 2026-03-20 | [GPU Feature Opportunities](./gpu-feature-opportunities.md) |
-| DFC042 | 2026-01-28 | 2026-03-12 | [AI Prompt Engineering System for ssql](./ai-prompt-system.md) |
+| DFC042 | 2026-01-28 | 2026-09-29 | [AI Prompt Engineering System for ssql](./ai-prompt-system.md) |
 | DFC043 | 2026-01-29 | 2026-04-22 | [LLM-Guided API Design: A Case Study in Iterative Prompt Engineering for Code Generation](./llm-guided-api-design.md) |
 | DFC044 | 2026-02-09 | 2026-03-12 | [Interactive Visualization Research](./interactive-visualization.md) |
 | DFC045 | 2026-02-13 | 2026-03-20 | [Distributed Processing via SSH](./distributed-ssh-processing.md) |

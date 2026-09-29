@@ -2,7 +2,7 @@
 
 Reference: DFC042
 Created: 2026-01-28
-Last modified: 2026-03-12
+Last modified: 2026-09-29
 
 [Back to Index](./README.md)
 
@@ -54,7 +54,7 @@ This prompt teaches an LLM to compose ssql CLI commands via Unix pipes. It cover
 
 ### The Test Suite
 
-`doc/ai-test-cases.md` defines 20 test cases (10 Go, 10 CLI). Each test case has:
+`scripts/testdata/ai-test-cases.md` (in `doc/` until DFC140) defines the test cases — 20 at first, 30 now (15 Go, 15 CLI). Each test case has:
 
 - A natural language prompt (what the user would ask)
 - Expected patterns (strings that must appear in the output)
@@ -92,7 +92,7 @@ The patterns are chosen to catch the most common LLM failures. Expected patterns
 `scripts/test-ai-prompts.sh` automates the improvement cycle:
 
 ```
-1. Parse all test cases from doc/ai-test-cases.md
+1. Parse all test cases from scripts/testdata/ai-test-cases.md
 2. For each test:
    a. Construct a prompt: system prompt + test case description
    b. Feed to claude -p (non-interactive)
@@ -168,8 +168,8 @@ The LLM will produce a pipeline like:
 
 ```bash
 ssql from sales.csv \
-  | ssql group-by -field region -count -sum revenue \
-  | ssql sort -field revenue_sum -desc \
+  | ssql group-by region -count n -sum revenue total \
+  | ssql sort -desc total \
   | ssql to table
 ```
 
@@ -204,7 +204,7 @@ This catches the most common errors without needing to set up a full test module
 
 ### Adding New Test Cases
 
-Edit `doc/ai-test-cases.md` and add a new case following the existing format. Use the next sequential ID (GO-11, CLI-11, etc.). Each case needs:
+Edit `scripts/testdata/ai-test-cases.md` and add a new case following the existing format. Use the next sequential ID (GO-11, CLI-11, etc.). Each case needs:
 
 - A natural language prompt
 - Expected patterns (things the output must contain)
@@ -217,7 +217,7 @@ Then run `make ai-test` to see if the prompts handle the new case. If not, the R
 
 When you discover a new LLM failure pattern:
 
-1. Add a test case for it in `doc/ai-test-cases.md`
+1. Add a test case for it in `scripts/testdata/ai-test-cases.md`
 2. Run `make ai-test` — the new test should fail
 3. Either:
    - Let the Ralph Wiggum loop fix it automatically, or
@@ -236,3 +236,34 @@ The most effective prompt fixes are anti-patterns: showing `❌ WRONG` next to `
 **Objective validation matters.** "Does it compile?" is a better test than "does it look right?" For Go code, compilation catches type errors, missing imports, and wrong function signatures that pattern matching alone would miss. For CLI pipelines, pattern matching catches the most important errors (wrong commands, wrong flags) without needing to execute against real data.
 
 **Filesystem as memory works.** The Ralph Wiggum loop stores prompts on disk and uses `claude -p` for each test. This means the LLM sees the full prompt every time (no context window issues), changes are tracked by git, and the loop can run unattended. The tradeoff is cost — each test case requires an API call — but for 20 tests this is manageable.
+
+## Files and outputs (2026-09-29)
+
+`doc/AI-PROMPT-README.md` used to describe this system a second time; it
+was folded in here under DFC140 (user docs only in `doc/`). The current
+layout:
+
+| File | Purpose |
+|------|---------|
+| `doc/ai-cli-generation.md` | The CLI pipeline prompt (users paste it into an LLM) |
+| `doc/ai-code-generation.md` | The Go code prompt (users paste it into an LLM) |
+| `doc/ai-human-guide.md` | Which prompt to use, how to paste it, how to check the output |
+| `scripts/testdata/ai-test-cases.md` | The 30 structured cases (GO-01..15, CLI-01..15) `test-ai-prompts.sh` parses |
+| `scripts/test-ai-prompts.sh` | The Ralph Wiggum loop (`make ai-test`, `ai-test-go`, `ai-test-cli`) |
+| `scripts/validate-ai-patterns.sh` | Static checks on one generated Go file |
+| `/tmp/ssql-ai-test-results/` | Generated outputs, `ai-test-results.md` and `ai-fix-request.md` — never committed |
+
+`scripts/validate-ai-patterns.sh` checks: the `/v4` import path; no
+rocketlaunchr/streamv3 paths; SQL naming (`Where` not `Filter`, `Limit`
+not `Take`); `if err != nil` after I/O; `GroupByFields` and `Aggregate`
+call shapes (parameterless `Count()`); `Chain()` for multi-step pipelines;
+no direct map access or `SetAny`; `InnerJoin`/`LeftJoin` not bare `Join`;
+`ExtractSignal` before `FFT`; no CLI-only `ExprAgg` in Go; and that the
+file compiles.
+
+Known gaps (TODO.md): the fix-request writer in `test-ai-prompts.sh`
+(L343-405) produced a malformed request on 2026-04-22 (empty failure ID
+and prompt, a `/tmp/…/.sh` path); the cases have nothing for except /
+intersect / `join -asof` / `-spill` / `run` / `generate json`; and the
+prompts themselves carry the signature and flag errors listed in DFC140
+§3.5.

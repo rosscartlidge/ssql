@@ -62,7 +62,6 @@ section "1. Checking Documentation Files"
 
 required_files=(
     "doc/ai-code-generation.md"
-    "doc/AI-PROMPT-README.md"
     "doc/ai-human-guide.md"
     "doc/api-reference.md"
     "README.md"
@@ -85,6 +84,14 @@ old_files=(
     "doc/streamv3-ai-prompt-detailed.md"
     "doc/human-llm-tutorial.md"
     "doc/streamv3-ai-system.md"
+    # DFC140 (2026-09-29): removed or moved out of doc/ — user docs only
+    "doc/cli-debugging.md"
+    "doc/ai-test-results.md"
+    "doc/ai-fix-request.md"
+    "doc/AI-PROMPT-README.md"
+    "doc/ai-test-cases.md"
+    "doc/ai-prompt-improvements.md"
+    "doc/VALIDATION.md"
 )
 
 for file in "${old_files[@]}"; do

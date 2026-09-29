@@ -877,7 +877,7 @@ Error: compiling expression "age >": unexpected end of expression
 - Getting Started: [doc/codelab-intro.md](codelab-intro.md)
 - CLI Tutorial: [doc/cli-codelab.md](cli-codelab.md)
 - API Reference: [doc/api-reference.md](api-reference.md)
-- Debugging Pipelines: [doc/cli-debugging.md](cli-debugging.md)
+- Troubleshooting: [doc/cli-troubleshooting.md](cli-troubleshooting.md)
 
 **Implementation Details:**
 - Expression Integration: [doc/research/expr-integration.md](research/expr-integration.md)

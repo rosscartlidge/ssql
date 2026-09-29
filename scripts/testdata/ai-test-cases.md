@@ -514,10 +514,10 @@ Each test case specifies:
 
 ### CLI-09: Code Generation Pipeline
 
-**Prompt**: Generate a standalone Go program from this pipeline: read users.csv, filter where status equals active, group by dept (as positional arg), count per dept, output to stdout. Remember to export SSQL_MODE=record so all pipeline commands see it.
+**Prompt**: Generate a standalone Go program from this pipeline: read users.csv, filter where status equals active, group by dept (as positional arg), count per dept, output to stdout. Either export SSQL_MODE=record before the pipeline or pass the pipeline to ssql generate go -pipeline '...' -mode record.
 
 **Expected patterns**:
-- `export SSQL_MODE=record`
+- `export SSQL_MODE=record` or `-mode record`
 - `ssql from users.csv`
 - `ssql where`
 - `-if status eq active`
@@ -733,11 +733,12 @@ Each test case specifies:
 - `ssql from users.csv`
 - `ssql to chart`
 - `-x` or `-y`
-- `.html`
+- `-output chart.html` or `-o chart.html`
 - `|`
 
 **Negative patterns**:
 - `chart users.csv` (chart doesn't take FILE argument)
+- `-y salary chart.html` (the output file goes through -output/-o, not a positional argument)
 - `write-chart` (old command)
 
 **Validation**: parse

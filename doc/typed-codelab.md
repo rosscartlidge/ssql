@@ -9,7 +9,7 @@ against the current source, by `scripts/codelab-go-run.sh doc/typed-codelab.md`
 ## Table of Contents
 
 ### Where you are
-This is step 5 of the [learning path](README.md#learning-path). It assumes
+This is step 4 of the [learning path](README.md#learning-path). It assumes
 the **[Getting Started Guide](codelab-intro.md)** (the `Record` API) and the
 **[CLI Codelab](cli-codelab.md)** before it.
 

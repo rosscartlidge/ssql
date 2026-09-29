@@ -862,8 +862,8 @@ shards run where the data lives (so, as with `from ssh`, ssql is
 installed on each host; a `bin` column in the catalog names it per host
 when it is somewhere unusual), and the optimiser from section 7 pushes
 your `where` and `group-by` into them for you (`generate ssql` shows
-the rewrite). [doc/cli-debugging.md](cli-debugging.md) covers the
-rig; the same pipeline runs unchanged.
+the rewrite). The same pipeline runs unchanged against any hosts you
+have SSH access to.
 
 The SSH operator console is the other direction — leave the data where
 it is and log into it: `ssql serve DATA.csv` loads a dataset and answers

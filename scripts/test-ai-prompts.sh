@@ -36,12 +36,12 @@ NC='\033[0m'
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TEST_CASES="$PROJECT_DIR/doc/ai-test-cases.md"
+TEST_CASES="$PROJECT_DIR/scripts/testdata/ai-test-cases.md"
 GO_PROMPT="$PROJECT_DIR/doc/ai-code-generation.md"
 CLI_PROMPT="$PROJECT_DIR/doc/ai-cli-generation.md"
 RESULTS_DIR="/tmp/ssql-ai-test-results"
-RESULTS_FILE="$PROJECT_DIR/doc/ai-test-results.md"
-FIX_REQUEST_FILE="$PROJECT_DIR/doc/ai-fix-request.md"
+RESULTS_FILE="$RESULTS_DIR/ai-test-results.md"   # generated: never committed (DFC140)
+FIX_REQUEST_FILE="$RESULTS_DIR/ai-fix-request.md"
 
 MAX_ITERATIONS=5
 DRY_RUN=false
@@ -352,7 +352,7 @@ generate_fix_request() {
 The following test cases failed. Please update the prompt file to fix these issues.
 
 **Rules:**
-- Do NOT modify the test cases in \`doc/ai-test-cases.md\`
+- Do NOT modify the test cases in \`scripts/testdata/ai-test-cases.md\`
 - Only modify the prompt file: \`$prompt_file\`
 - Focus on adding missing patterns, clarifying instructions, or adding examples
 - Keep changes minimal and targeted to fix the specific failures

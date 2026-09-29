@@ -11,7 +11,7 @@ the current source, by `scripts/codelab-go-run.sh doc/codelab-intro.md`
 ## Table of Contents
 
 ### Where you are
-This is step 4 of the [learning path](README.md#learning-path). It assumes
+This is step 3 of the [learning path](README.md#learning-path). It assumes
 you have done the **[CLI Codelab](cli-codelab.md)** — the Go you write here
 is what `ssql generate go` produces from those pipelines.
 

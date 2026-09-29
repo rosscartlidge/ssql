@@ -13,39 +13,60 @@ Quick reference for common issues and their solutions when using the ssql CLI to
 
 ## Quick Diagnostics
 
-### Pipeline producing no output?
+ssql can inspect its own pipelines; reach for these before reaching for
+`jq`. (A pipeline's raw output starts with a `_schema` header line, so
+`head -1 | jq keys` shows `["_schema"]` and `wc -l` is one too many. When
+you do want jq, end the pipeline with `ssql to jsonl`, which drops the
+header.) The examples use `employees.csv` from `ssql codelab`.
+
+### What fields and types come out of a stage?
 
 ```bash
-# Check each stage
-ssql from data.csv | wc -l                           # How many input records?
-ssql from data.csv | ssql where ... | wc -l      # How many after filter?
-ssql from data.csv | head -1 | jq 'keys'             # What fields exist?
+# Field names and types at the end of a pipeline, from the grammar and the
+# source's header — the data is not read
+ssql generate schema -pipeline 'ssql from employees.csv | ssql group-by dept -count n -avg salary avg_salary' -data | ssql to table
+
+# Type, count, missing and distinct values per field; min/max/mean for numbers
+ssql from employees.csv | ssql describe | ssql to table
+
+# A few rows, as a table
+ssql from employees.csv | ssql limit 3 | ssql to table
 ```
 
-### Filter not matching records?
+### How many records at each stage?
 
 ```bash
-# Inspect the data
-ssql from data.csv | jq '.' | head -3
-
-# Check field type
-ssql from data.csv | jq '.fieldname | type' | head -5
-
-# Test filter manually in jq
-ssql from data.csv | jq 'select(.age > 30)' | head -5
+ssql from csv employees.csv -records          # input count, the cheapest way for the format
+ssql from employees.csv | ssql where -if dept eq Engineering | ssql count
 ```
 
-### GROUP BY results look wrong?
+### Save an intermediate stage and replay it
 
 ```bash
-# Verify grouping keys
-ssql from data.csv | jq -r '.department' | sort | uniq -c
+ssql from employees.csv | ssql where -if dept eq Engineering | ssql tee eng.jsonl | ssql group-by level -count n | ssql to table
+ssql from eng.jsonl | ssql to table           # the saved stage, replayed
+```
 
-# Check for nulls/empties
-ssql from data.csv | jq 'select(.department == null or .department == "")'
+### Check a pipeline before running it
 
-# Inspect GROUP BY output
-ssql from data.csv | ssql group-by dept -count n | jq '.'
+```bash
+ssql generate json -pipeline 'ssql from employees.csv | ssql where -if dept eq Engineering | ssql to table' | ssql run -check -stdin
+```
+
+`generate json` turns the shell form into a pipeline document; `run
+-check` validates its grammar and every field reference against the
+source's schema without reading the data. A misspelt field is reported
+with its stage and the fields that do exist:
+
+```
+Error: run -check: stage 2 (where): where references unknown field(s): dpt (available: age, city, dept, hire_date, level, name, salary, status)
+```
+
+### Prefer jq?
+
+```bash
+ssql from employees.csv | ssql to jsonl | head -1 | jq 'keys'
+ssql from employees.csv | ssql to jsonl | jq -r '.dept' | sort | uniq -c
 ```
 
 ---
@@ -717,7 +738,6 @@ ssql -help
 
 ### Documentation
 
-- [Debugging Guide](./cli-debugging.md) - Comprehensive debugging techniques
 - [README](../README.md) - Quick start and overview
 - [Examples](../examples/) - Working code examples
 
