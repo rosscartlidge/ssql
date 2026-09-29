@@ -148,6 +148,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC138 | 2026-09-28 | 2026-09-29 | [The Pipeline Document on the Wire: SSH, Catalogs and serve Without Shell Text](./dfc138_pipeline_document_on_the_wire.md) |
 | DFC139 | 2026-09-29 | 2026-09-29 | [Where `generate`'s Source Flags Belong: `-pipeline`, `-script`, `-json` and `-mode`](./dfc139_generate_source_flags.md) |
 | DFC140 | 2026-09-29 | 2026-09-29 | [User Documentation Cleanup: Audit and Recommendations](./dfc140_user_doc_cleanup.md) |
+| DFC141 | 2026-09-29 | 2026-09-29 | [`ssql/typed` Roadmap History](./dfc141_typed_roadmap_history.md) |
 
 <!-- DFC-INDEX-END -->
 

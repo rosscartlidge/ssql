@@ -4,16 +4,6 @@ The `ssql/typed` package provides a high-performance, struct-based data path
 alongside the main `ssql.Record` API. Use it when your schema is known at
 compile time and the pipeline is hot.
 
-> **Status:** Phase 1.5 — CSV + JSONL I/O, core operations
-> (Where, Limit, Skip, Select), full join family (Hash, HashMulti,
-> Left, Right, Full), streaming aggregation (GroupBy, GroupByOrdered,
-> standalone Sum/Count/Min/Max/Avg), field types
-> string/bool/int/int32/int64/uint64/float32/float64/time.Time + pointers.
-> Arrow I/O is the next major addition.
-> See [`doc/research/typed-package-proposal.md`](research/typed-package-proposal.md)
-> for the design and [`doc/research/typed-performance-notes.md`](research/typed-performance-notes.md)
-> for known optimization opportunities.
-
 ## When to use it
 
 | Use `ssql.Record` when… | Use `ssql/typed` when… |
@@ -76,7 +66,7 @@ A tag value of `"-"` excludes the field entirely.
 
 `string`, `bool`, `int`, `int32`, `int64`, `uint64`, `float32`, `float64`,
 `time.Time` (RFC3339 in CSV), and **pointer-to-T** for nullable columns.
-An empty CSV/TSV cell is `""` for a `string` field and `nil` for a pointer field (`*int64`, `*string`, …). For any other field type it is a fatal `*typed.ReadError` — `column "Age": "" is not int64` — because a struct cannot hold absence, and the zero value the reader wrote until v4.91.0 silently disagreed with the record lanes, where an empty numeric/boolean cell is an *absent* field (v4.86, `doc/research/dfc124_missing_values.md`). Remedies: declare the field as a pointer type; in generated code, `-type COL string` on the `from` stage keeps the cell as text; or `fill` the data first. The check is a branch the decoder already took (`if s == ""`), so it costs nothing.
+An empty CSV/TSV cell is `""` for a `string` field and `nil` for a pointer field (`*int64`, `*string`, …). For any other field type it is a fatal `*typed.ReadError` — `column "Age": "" is not int64` — because a struct cannot hold absence, and a zero would silently disagree with the `Record` API, where an empty numeric or boolean cell is an *absent* field. Remedies: declare the field as a pointer type; in generated code, `-type COL string` on the `from` stage keeps the cell as text; or `fill` the data first. The check is a branch the decoder already took (`if s == ""`), so it costs nothing.
 
 A non-empty value that does not parse as its field's type is **fatal** in the
 lossy readers (`ReadCSV`, `ReadCSVParallel`, `ReadDelim*`, `ReadJSONL*`): they
@@ -86,9 +76,7 @@ panic with a `*typed.ReadError` naming the reader, the file, the row (CSV/TSV:
 file that cannot be opened, a malformed row and a strict-mode header mismatch
 are the same error. Programs from `ssql generate go` recover it into `Error: …`
 and exit status 1, including when it starts inside a parallel shard. Use the
-`*Safe` readers to receive these as error values instead. (Before v4.91.0 the
-CSV readers kept the row with the cell zeroed, the JSONL readers dropped the
-row, and a missing file was an empty stream with exit 0 — silent, all three.)
+`*Safe` readers to receive these as error values instead.
 
 > **Note on nullables**: pointer-to-T columns allocate one heap value per
 > non-empty cell. For hot paths with many nullables, consider an explicit
@@ -99,12 +87,21 @@ row, and a missing file was an empty stream with exit 0 — silent, all three.)
 ### Reading
 
 ```go
-func ReadCSV[T any](filename string) iter.Seq[T]
-func ReadCSVFromReader[T any](r io.Reader) iter.Seq[T]
+func ReadCSV[T any](filename string, opts ...CSVOption) iter.Seq[T]
+func ReadCSVFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq[T]
+func ReadCSVSafe[T any](filename string, opts ...CSVOption) iter.Seq2[T, error]
+func ReadCSVSafeFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq2[T, error]
+func ReadCSVParallel[T any](filename string, n int) Stream[T]   // n shards, 0 = GOMAXPROCS; see "Stream[T]" below
 
-func ReadCSVSafe[T any](filename string) iter.Seq2[T, error]
-func ReadCSVSafeFromReader[T any](r io.Reader) iter.Seq2[T, error]
+func Strict() CSVOption   // the one CSV option
 ```
+
+By default a CSV column with no matching struct field is dropped and a
+struct field with no matching column stays at its zero value. `Strict()`
+refuses both; pointer fields are always optional. `ReadCSVParallel` parses the header once and gives each shard a
+contiguous range of lines; it holds the file in memory and assumes no
+quoted field contains a newline (files `WriteCSV` produces satisfy that;
+use `ReadCSV` for RFC-4180 parsing of such files).
 
 `ReadCSV` is the fast variant and it **fails fast**: a missing file, a
 malformed row or a cell that does not fit its field's type panics with a
@@ -248,15 +245,61 @@ result := typed.Where(pred1)(typed.Skip[T](10)(typed.Limit[T](100)(input)))
 ```
 
 ```go
-func TakeLast[T any](n int) func(iter.Seq[T]) iter.Seq[T]          // the last n, a ring buffer; a barrier
-func StreamSelect[T, U any](s Stream[T], fn func(T) U) Stream[U]   // Select over a Stream (a free function: methods cannot add type parameters)
-func DistinctParallel[T any, K comparable](in Stream[T], key func(T) K) iter.Seq[T]  // per-shard dedupe, then a serial merge
-func ParallelFromSlice[T any](data []T, n int) Stream[T]           // shard a slice into n contiguous chunks, no channel transit
-func FromRecords[R, T any](src iter.Seq[R], conv func(R) T) iter.Seq[T]          // the Record → typed re-entry boundary
-func FromRecordsParallel[R, T any](src iter.Seq[R], conv func(R) T, n int) Stream[T]
-func (s Stream[T]) Shards() int
-func (s Stream[T]) SerialCount() int64   // drains every shard concurrently, no fan-in channel
+func TakeLast[T any](n int) func(iter.Seq[T]) iter.Seq[T]   // the last n, a ring buffer; a barrier
 ```
+
+### Sorting, distinct, concatenation
+
+```go
+func SortBy[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T]        // ascending by key; not stable
+func SortByDesc[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T]
+func SortByStable[T any, K Ordered](key func(T) K) func(iter.Seq[T]) iter.Seq[T]  // keeps input order among equal keys
+func SortByFunc[T any](cmp func(a, b T) int) func(iter.Seq[T]) iter.Seq[T]        // any comparator: multi-key sorts
+
+func Distinct[T any, K comparable](key func(T) K) func(iter.Seq[T]) iter.Seq[T]   // first occurrence of each key; O(distinct keys) memory
+func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T]                               // one after another, streaming
+func Union[T any, K comparable](key func(T) K, seqs ...iter.Seq[T]) iter.Seq[T]   // Concat then Distinct, one pass
+```
+
+The sorts materialise their input (O(N) memory) and are barriers: the
+planner emits them in the serial form and puts a `Serial()` boundary in
+front when the upstream is a `Stream`. For whole-row distinctness pass
+the row itself as the key (`T` must be comparable); for several columns
+return a small struct. `sort`, `distinct` and `union` in a generated
+program are these functions; `top` is `TopBy` below, not a sort.
+
+### Stream[T]: the parallel form
+
+```go
+type Stream[T any] struct{ /* n shards, each an iter.Seq[T] */ }
+
+func Parallel[T any](in iter.Seq[T], n int) Stream[T]           // shard any iter.Seq: a distributor goroutine, cooperative work-stealing
+func ParallelFromSlice[T any](data []T, n int) Stream[T]        // shard a slice into n contiguous chunks, no channel transit
+func FromRecords[R, T any](src iter.Seq[R], conv func(R) T) iter.Seq[T]              // the Record → typed re-entry boundary
+func FromRecordsParallel[R, T any](src iter.Seq[R], conv func(R) T, n int) Stream[T]
+
+func (s Stream[T]) Where(pred func(T) bool) Stream[T]           // filters every shard independently; pred must be goroutine-safe
+func StreamSelect[T, U any](s Stream[T], fn func(T) U) Stream[U] // Select over a Stream (a free function: methods cannot add type parameters)
+func DistinctParallel[T any, K comparable](in Stream[T], key func(T) K) iter.Seq[T]  // per-shard dedupe, then a serial merge
+func (s Stream[T]) Serial() iter.Seq[T]                         // fan the shards back into one sequence; unordered
+func (s Stream[T]) SerialCount() int64                          // drain every shard concurrently and count, no fan-in channel
+func (s Stream[T]) Shards() int
+```
+
+A `Stream[T]` is a pipeline of `T` partitioned across `n` worker shards.
+It is a separate type from `iter.Seq[T]` because its contract differs:
+output order is shard-concatenation order, not input order, and each
+stage runs in a goroutine per shard. The readers produce one directly
+(`ReadCSVParallel`, `ReadDelimParallel`, `ReadParquetParallel`,
+`ReadJSONLParallel`); `Parallel` shards an existing sequence. The
+parallel joins, set operations, top-k and `GroupByParallel` take a
+`Stream` on the left and return a `Stream` or a merged `iter.Seq`; the
+`Stream` sinks (`WriteCSV`, `WriteDelim`, `WriteParquet` methods) format
+each shard into its own buffer and dump the buffers in shard order,
+skipping the per-row fan-in. `Serial()` is the boundary back to the
+serial API: a `sort`, `distinct` or `to table` downstream forces it, and
+the codegen planner inserts it where needed. Never put a channel between
+every row and its consumer — that is what the shard buffers avoid.
 
 ### Set operations
 
@@ -275,7 +318,7 @@ key is present (a semi-join). `all=false` yields each distinct left row once,
 so `L` must be comparable, which every generated row type is; `all=true` keeps
 duplicates. The parallel forms are a per-shard probe of the shared set (the
 `all=true` semantics); the distinct form composes `DistinctParallel` on top.
-Behind `except` / `intersect` (DFC137 §3).
+Behind the `except` and `intersect` commands.
 
 ### Top-k selection
 
@@ -321,6 +364,7 @@ Use `HashJoinMulti` for many-to-many joins, or `LeftJoin` / `RightJoin` /
 `FullJoin` for outer-join semantics with an explicit `found bool` flag.
 
 ```go
+func HashJoinSized[L, R, O any, K comparable](left iter.Seq[L], right iter.Seq[R], rightSizeHint int, leftKey func(L) K, rightKey func(R) K, merge func(L, R) O) iter.Seq[O]  // pre-size the build map when the right side's count is known
 func HashJoinMulti[L, R, O any, K comparable](...) iter.Seq[O]
 func LeftJoin[L, R, O any, K comparable](
     left, right ..., merge func(L, R, found bool) O,
@@ -339,9 +383,8 @@ func HashJoinMultiParallel[L, R, O any, K comparable](left Stream[L], right iter
 ```
 
 The CLI's `join` emits the **Multi** forms: a right side with a repeated key
-(orders per customer) is the ordinary case, and the single-match form kept
-only the last match per key (found 2026-09-27 by the `join_left_type`
-equivalence case).
+(orders per customer) is the ordinary case, and the single-match form would
+keep only the last match per key.
 
 ### ASOF join
 
@@ -363,7 +406,7 @@ right rows with the same key, the nearest at or before (or after) the left
 time, ties taking the last in input order. `T` is the ordered axis: `int64`
 nanoseconds for a time field (`l.Ts.UnixNano()`) or the number itself. Inner
 semantics; the right side is indexed once, the left streams in input order.
-Behind `join -asof` (DFC137 §2).
+Behind `join -asof`.
 
 ## JSONL I/O
 
@@ -374,36 +417,45 @@ func ReadJSONL[T any](filename string) iter.Seq[T]
 func ReadJSONLFromReader[T any](rd io.Reader) iter.Seq[T]
 func ReadJSONLSafe[T any](filename string) iter.Seq2[T, error]
 func ReadJSONLSafeFromReader[T any](r io.Reader) iter.Seq2[T, error]
+func ReadJSONLParallel[T any](filename string, n int) Stream[T]
 func WriteJSONL[T any](seq iter.Seq[T], filename string) error
 func WriteJSONLToWriter[T any](seq iter.Seq[T], w io.Writer) error
 ```
 
-Field mapping follows standard `json:"name"` struct tags. Implementation
-uses `encoding/json` (reflection per row); for high-throughput JSONL
-pipelines see [`doc/research/typed-performance-notes.md`](research/typed-performance-notes.md).
+Field mapping follows standard `json:"name"` struct tags; an `ssql` tag
+names the key when there is no `json` tag.
 
 **Header lines.** Both readers skip a leading `{"_schema": …}` line (the
 header `tee` and every ssql stage write), so a tee'd file reads as its
 rows. **Errors.** A line that is not a JSON object, or a value that does not
 fit its field (`{"v":1.5}` into `int64`), is a fatal `*ReadError` naming the
-physical line in `ReadJSONL` / `ReadJSONLParallel` (they dropped the line
-silently before v4.91.0); `ReadJSONLSafe` yields it. In a generated program
-the fix is `-type v float` on the `from jsonl` stage. **Codegen.** `SSQL_MODE=typed … from jsonl FILE` infers the row
-struct from the file (`_schema` header when present, else a sample of
-lines; `lib.SampleJSONLSchema`) and emits `ReadJSONL` — added 2026-09-06
-because the previous record-mode fallback made a compiled JSONL
-pipeline four times slower than the interpreted one (14.8 s / 3.9 GB →
-4.25 s / 25 MB on a 3M-row group-by). **Decoding is positional**
-(2026-09-06): the type is reflected over once into a key → field plan
-using the CSV reader's own field decoders, and each line is walked once
-— 1.13 s on the same group-by, 3.6× encoding/json's throughput in the
-micro-benchmark. Slice, map and nested-struct fields fall back to
-encoding/json. A string field accepts any JSON value as its raw text
-(as exec does); an `ssql` tag names the key when there is no `json` tag.
-`ReadJSONLParallel[T](file, n)` is the Stream form (mmap + newline
-index + a shard per run of lines, the CSV twin's shape): the same 3M-row
-group-by in **0.21 s**, and it is what `from jsonl` emits when a
-downstream stage accepts a Stream.
+physical line in `ReadJSONL` / `ReadJSONLParallel`; `ReadJSONLSafe` yields it.
+In a generated program the fix is `-type v float` on the `from jsonl` stage.
+**Decoding is positional:** the type is reflected over once into a
+key → field plan that reuses the CSV reader's field decoders, and each line
+is walked once (about 3.6× the throughput of `encoding/json`). Slice, map
+and nested-struct fields fall back to `encoding/json`. A string field accepts
+any JSON value as its raw text, as the CLI does. **Codegen.** `from jsonl
+FILE` in typed mode infers the row struct from the file (the `_schema`
+header when present, else a sample of lines) and emits `ReadJSONL`, or
+`ReadJSONLParallel` — mmap, a newline index, a shard per run of lines, the
+CSV twin's shape — when a downstream stage accepts a `Stream`.
+
+## Text lines
+
+```go
+type Line struct {
+	LineNumber int64  `ssql:"line_number"`
+	Line       string `ssql:"line"`
+}
+func ReadLines(filename string) iter.Seq[Line]
+func ReadLinesFromReader(r io.Reader) iter.Seq[Line]
+```
+
+The typed form of `ssql from lines`: one `Line` per text line, numbered
+from 1. Serial (line boundaries are sequential); the planner inserts no
+parallel form. `extract` in a typed pipeline synthesizes its output struct
+from the kept fields plus one string per named group.
 
 ## Aggregation
 
@@ -482,6 +534,63 @@ Measured](performance.md) §1; the record-mode `Rollup` that re-keys
 every row per set took 36 s). Generated by
 `SSQL_MODE=typed … group-by … -cube`; aggregations without a Merge
 (`-collect`, expressions) fall back to record codegen.
+
+### Window functions
+
+```go
+func Window[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(iter.Seq[T]) iter.Seq[O]
+
+type WindowClause[T any] struct {
+    Partition func(T) string   // partition key ("" = the whole input)
+    HasOrder  bool
+    Compare   func(a, b T) int // order comparator (0 = peers); nil when !HasOrder
+    Desc      bool             // the single order field is descending (RANGE direction)
+    RangeKey  func(T) float64  // the order field as a number / Unix seconds, for RANGE frames
+    Frame     WindowFrame
+    Specs     []WindowSpec[T]
+}
+type WindowSpec[T any] struct {
+    Kind    WindowKind
+    N       int                      // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
+    Default any                      // LAG/LEAD default (nil = absent)
+    Num     func(T) (float64, bool)  // the numeric field for sum/avg
+    Val     func(T) (any, bool)      // any field for lag, lead, first, last, nth, count, min, max
+}
+type WindowFrame struct {
+    Preceding, Following           int      // rows; -1 = unbounded
+    Range                          bool
+    RangePreceding, RangeFollowing float64  // -1 = unbounded
+}
+const (
+	WRowNumber WindowKind = iota
+	WRank
+	WDenseRank
+	WNtile
+	WPercentRank
+	WCumeDist
+	WLag
+	WLead
+	WFirst
+	WLast
+	WNth
+	WSum
+	WAvg
+	WCount
+	WCountField
+	WMin
+	WMax
+)
+```
+
+The typed form of the `window` command: one clause per `PARTITION BY /
+ORDER BY / frame`, any number of functions per clause, one output row per
+input row. `build` receives the results in clause order then spec order
+and assembles the output struct, which a generated program synthesises
+from the input fields plus one per function. It is a barrier (the
+partition must be complete before a rank is known), so the planner emits
+the serial form. Semantics match the `Record` API's `Window` and the SQL
+translation exactly — the equivalence gate holds all lanes to the same
+output.
 
 ## Worked example
 
@@ -568,159 +677,21 @@ allocates whole `JoinedRow` structs on the stack.
 `Where`, `HashJoin`, `Limit`, `Skip`, and `Select` are pure generics with no
 reflection at all.
 
-## Roadmap
+## What falls back to Record
 
-Phase 1 (shipped):
-- [x] CSV I/O with header inference
-- [x] `Where`, `Limit`, `Skip`, `Select`
-- [x] `HashJoin` (inner)
-- [x] Benchmarks demonstrating the gap
+A `generate go` pipeline in typed mode compiles to this package wherever it
+can. Stages that have no typed form yet run on `Record` — the planner
+inserts the `FromRecords` boundary, or refuses loudly when it cannot — and
+`generate go -explain` names the stage and the reason:
 
-Phase 1.5 (shipped):
-- [x] `time.Time` (RFC3339), `int32`, `uint64`, `float32`
-- [x] Pointer-to-T for nullable columns
-- [x] Full join family: `HashJoinMulti`, `LeftJoin`, `RightJoin`, `FullJoin`
-- [x] JSONL reader/writer (`ReadJSONL`, `ReadJSONLSafe`, `WriteJSONL`)
-- [x] Streaming aggregation: `Count`, `Sum`, `Min`, `Max`, `Avg`,
-      `GroupBy`, `GroupByOrdered`, `Counter`, `Summer`, `Averager`
+- `-collect` (a slice-typed result field)
+- multi-clause joins and `-as` renames; `join -type left|right|full` and
+  `join -asof -type left` (a struct cannot hold an absent right-hand field)
+- `sort -spill` / `group-by -spill` (the out-of-core sort is record-only)
+- `pivot`, `merge`, and the signal-processing commands (`fft`, `convolve`,
+  `spectrogram`, …)
 
-Phase 1.6 (shipped 2026-04-26):
-- [x] `HashJoinSized` with capacity hint for known right-side size
-- [x] Strict-mode CSV reader via `Strict()` option
-- (Tried and rejected: custom byte-level CSV reader — see
-  [`research/typed-performance-notes.md`](research/typed-performance-notes.md))
-
-Phase 1.7 (shipped 2026-04-27 — unblocks Tier 3 codegen):
-- [x] `SortBy[T,K]`, `SortByDesc[T,K]`, `SortByStable[T,K]`
-- [x] `Distinct[T,K]` (streaming, hash-set state)
-- [x] `Concat[T]`, `Union[T,K]`
-- Tier 3 codegen for `sort` / `distinct` / `union` can now wire into
-  these directly. See
-  [`research/typed-package-proposal.md` §6a](research/typed-package-proposal.md#6a-library-phases-after-phase-1).
-
-Phase 1.8+ (open):
-- [ ] Arrow reader/writer (`ReadArrow[T]`, `WriteArrow[T]`)
-- [ ] Faster JSONL via `goccy/go-json` or per-type generated unmarshallers
-- [ ] Hand-rolled RFC3339 time parser (~3× over `time.Parse`)
-
-Phase 2 — Tier 1 shipped (2026-04-26):
-- [x] `SSQL_MODE=typed ssql generate go` — schema-aware code generation that
-  emits calls into this package directly. Tier 1 covers
-  `from FILE.csv` (header sampled at generation time, struct types
-  auto-derived), `where -if FIELD OP VALUE` (literal operators only),
-  `join FILE.csv -using FIELD` (single-key + process-substitution),
-  `to csv`, and `to table`. Other commands abort with a clear error.
-  See [`research/typed-codegen-proposal.md`](research/typed-codegen-proposal.md).
-
-```bash
-# Same prototype pipeline you'd run interactively...
-SSQL_MODE=typed ssql from employees.csv \
-    | ssql where -if years ge 5 \
-    | ssql join departments.csv -using dept_id \
-    | ssql to csv seniors.csv \
-    | ssql generate go > pipeline.go
-
-# ...is now a self-contained, type-safe Go program.
-go run pipeline.go              # uses defaults
-go run pipeline.go -input emp_q4.csv
-```
-
-**Measured impact of typed codegen vs the alternatives**, on 1M
-employees × 1k departments, identical pipeline expression
-(see `cmd/ssql/codegen_bench_test.go`):
-
-| Mode | Wall time | Peak RSS |
-|---|---:|---:|
-| CLI pipeline (interactive) | 3.08 s | 33 MB |
-| Record codegen (`SSQL_MODE=record`) | 2.69 s | 910 MB |
-| **Typed codegen (`SSQL_MODE=typed`)** | **0.77 s** | **8.7 MB** |
-| Speedup vs CLI | **4.0× faster** | — |
-| Speedup vs Record codegen | **3.5× faster** | **104× less memory** |
-
-Typed codegen wins on every dimension simultaneously: single-process
-execution beats the CLI pipeline's per-stage process+pipe overhead,
-and stack-allocated structs beat Record codegen's `map[string]any`
-peak RSS. Reproduce: `go test ./cmd/ssql/ -run TestCodegenBench -timeout 10m -v`.
-
-Phase 2 — Tier 2 shipped (2026-04-26):
-- [x] `limit N` (typed.Limit), `offset N` (typed.Skip)
-- [x] `include` / `exclude` / `rename` (typed.Select with derived struct)
-- [x] `group-by FIELDS… -count -sum -avg -min -max` (typed.GroupBy with
-      synthesized aggregator + result struct, single- or multi-field keys)
-
-Phase 2 — parallel-form codegen shipped (2026-04-27):
-
-> **Merged into `SSQL_MODE=typed` in v4.40.** What started as a separate
-> `SSQL_MODE=parallel` is now what the `typed` planner emits automatically
-> when the pipeline can exploit it; `SSQL_MODE=parallel` survives only as a
-> deprecated alias. The entries below describe that parallel form.
-
-- [x] Same pipeline shape as the serial typed form, with `from`/`where`/`join`/`group-by`/`to csv`/`to table` emitting Stream-based parallel code (typed.ReadCSVParallel + Stream.Where + typed.HashJoinParallel + typed.GroupByParallel).
-- [x] Other typed-aware commands (limit, sort, distinct, union, top, cast, update, include/exclude/rename) drop the pipeline to the serial `iter.Seq[T]` form rather than erroring — the planner picks per stage (since v4.40; before that, parallel mode rejected them).
-- [x] **Per-shard buffer dump CSV sink (2026-04-27)** — `to csv` in the parallel form emits `Stream.WriteCSVToWriter` (no `Serial()` fan-in). Each shard formats into its own buffer in parallel, dumped in shard order. Wide-output workload (7.25M-row CSV write) went from 0.73× typed-serial to **4.4× faster** with this fix. Trade-off: peak memory ~2× output size.
-- [x] **`GroupByParallel` with Sink/Combine/Finalize (2026-04-27)** — `group-by` in the parallel form emits `typed.GroupByParallel`. Each shard accumulates its own partial `map[K]Aggregator`; Combine merges per shard sequentially; Finalize yields rows lazily. Synthesized `<Input>Aggregator` gets a `Merge` method generated from the aggregation specs. **4.0× faster than typed-serial** on the 10M-row × 1 000-group workload (count+sum+avg+min+max).
-- **When the planner picks it:** filter-heavy / aggregating / transform-and-write / group-by pipelines. **4.4× faster** on the CSV write workload (1.3 s vs serial 5.7 s; DuckDB 0.7 s — 1.86× ahead). **4.0× faster** on the group-by workload (0.95 s vs 3.80 s; DuckDB 0.39 s — 2.4× ahead). **6.4× faster** for count-only sinks. The planner keeps the **serial** form when the output is too large to buffer in RAM, when input-order output is required, or when `group-by -presorted` is used. See [`research/typed-codegen-proposal.md` §5d](research/typed-codegen-proposal.md#5d-parallel-mode-codegen-ssqlgoparallel) and [`research/typed-groupby-parallel-proposal.md`](research/typed-groupby-parallel-proposal.md).
-
-Phase 1.8 — TSV / Parquet readers (2026-04-28):
-- [x] **`typed.ReadDelim` / `ReadDelimParallel` / `WriteDelim`** — fast delimited-text reader with no quoting (default '\t'). Zero-copy field strings via `unsafe.String` (parallel only); SIMD-accelerated split via `bytes.IndexByte`. 18% faster than `ReadCSV` on a 14.6 M-row corpus; memory-bandwidth-bound at ~600 MB/s. Use when data is clean (no embedded quotes / delimiters / newlines).
-- [x] **`typed.ReadParquet` / `ReadParquetParallel` / `WriteParquet`** — Parquet input/output via existing Apache Arrow Go dependency. Snappy compression by default. Row groups partition naturally to shards. **`ParquetColumns(...)` is the primary speed lever**: on the 14.6 M-row corpus group-by-with-count benchmark, restricting the read to the single grouped column dropped wall time from 1.51 s to **0.15 s** — a 10× win, within 5× of DuckDB's 0.03 s on the same query. Without column projection Parquet performs about the same as TSV (decompression at ~1–2 GB/s ≈ TSV memory bandwidth ceiling).
-
-Phase 2 — Tier 3a shipped (2026-04-27, on top of Phase 1.7):
-- [x] `sort FIELD` and `sort FIELD -desc` (single-field)
-- [x] `distinct` (full-row dedup; pointer fields compare by identity)
-- [x] `union -file FILE` and `union -file FILE -all` (cross-source
-      schema validation — mismatched fields error with a clear message)
-
-Phase 2 — Tier 3b shipped (2026-04-27, Sprint 1+2 of the Tier 3 roadmap):
-- [x] `top N -field F` (sort + limit composition)
-- [x] Multi-field `sort` via composite comparator (`typed.SortByFunc`)
-- [x] `cast -type FIELD TYPE` — string/int/float/bool conversions; emits a
-      derived struct with the field's Go type changed
-- [x] `update -set FIELD LITERAL` (unconditional, literal values only;
-      adds a derived "Updated" struct when new fields are introduced)
-- [x] `update` with conditional clauses (`-if F OP V -set ...
-      + ...`); first-match-wins as an if/else-if chain
-
-Phase 2 — since shipped (the list this section carried as "still
-deferred" until 2026-09-29; see the journals for each):
-- [x] `-if-expr` / `-set-expr` / `-expr` aggregations: the expr→Go
-  transpiler (`expr_go.go`), with a differential gate against the VM;
-  an untranspilable construct falls back to record codegen loudly
-- [x] `-rollup` / `-cube`: `RollupEnrich` (`typed_rollup.go`)
-- [x] Window analytic functions: `Window` (`typed_window.go`)
-- [x] JSONL and Parquet typed I/O: `ReadJSONL[Parallel]`,
-  `ReadParquet[Parallel]`, `WriteParquet`; `from ssh` in typed mode
-- [x] ASOF join (`AsofJoin[Parallel]`), set operations (`Except`,
-  `Intersect`, the ALL and Parallel forms), many-to-many parallel join
-  (`HashJoinMultiParallel`), `DistinctParallel`, `TopByParallel`,
-  `TakeLast`, the Record→typed boundary (`FromRecords[Parallel]`)
-  (DFC137, 2026-09-26/27)
-
-Still record-only (typed codegen falls back to record for the stage,
-with the reason under `-explain`, or refuses loudly):
-- [ ] `-collect` (a slice-typed result field)
-- [ ] Multi-clause joins and `-as` renames; `join -type left|right|full`
-  and `join -asof -type left` (a struct cannot hold an absent right
-  field, DFC124 §3)
-- [ ] `sort`/`group-by -spill` (the out-of-core sort is record-only)
-- [ ] `pivot`, `merge`, signal processing (FFT, convolve, spectrogram)
-
-See [`doc/research/typed-package-proposal.md`](research/typed-package-proposal.md)
-for the full design and Phase 2 vision.
-
-
-## Text lines
-
-```go
-type Line struct {
-	LineNumber int64  `ssql:"line_number"`
-	Line       string `ssql:"line"`
-}
-func ReadLines(filename string) iter.Seq[Line]
-func ReadLinesFromReader(r io.Reader) iter.Seq[Line]
-```
-
-The typed form of `ssql from lines`: one `Line` per text line, numbered
-from 1. Serial (line boundaries are sequential); the planner inserts no
-parallel form. `extract` in a typed pipeline synthesizes its output struct
-from the kept fields plus one string per named group.
+History and design: [DFC141](research/dfc141_typed_roadmap_history.md)
+records what shipped when; the design is in
+[typed-package-proposal.md](research/typed-package-proposal.md) and
+[typed-codegen-proposal.md](research/typed-codegen-proposal.md).

@@ -631,8 +631,9 @@ throughout (`make doc-check`, `make doc-test`, `go test ./cmd/ssql -run
 **Status (2026-09-29):** Ross decided the §7 points (1 remove-and-merge,
 2 new research doc, 3 `claude/doc-validation.md`, 4 strip, 5 yes but
 deferred to batch 5 because a signature-line check would flag 69 root +
-34 typed exports today, 6 `scripts/testdata/`). Batches 1, 2 and 3 are
-done (commits on main the same day); 4-6 remain. Batch 3 found that the
+34 typed exports today, 6 `scripts/testdata/`). Batches 1-4 are done
+(commits on main the same day); 5-6 remain. Batch 4 moved the Roadmap
+and the stale Status box to [DFC141](./dfc141_typed_roadmap_history.md). Batch 3 found that the
 0.15 s / 0.32 s "conflict" was two machines (the 275HX laptop and the
 Xeon 6154 workstation), not two values: re-measured on the laptop the
 projected group-by is 0.13-0.17 s and the cube 0.28 s; the 1 M-row

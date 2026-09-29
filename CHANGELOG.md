@@ -57,6 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disagreement between typed-reference and performance.md was two
   machines, now both named. typed-reference, typed-codelab and the
   README quote one line and link.
+- **`doc/typed-reference.md` restructured** (DFC140 batch 4). The
+  Phase-1.5 status box and the 140-line Roadmap are gone (history is
+  DFC141 in doc/research); in their place a "What falls back to Record"
+  list. APIs that were documented only inside the Roadmap have
+  sections: `Strict`, `HashJoinSized`, `SortBy`/`SortByDesc`/
+  `SortByStable`/`SortByFunc`, `Distinct`, `Concat`, `Union`, `Window`
+  with its clause/spec/frame types and `WindowKind` constants, and a
+  `Stream[T]` section (`Parallel`, `Stream.Where`, `Serial`,
+  `SerialCount`, the parallel readers and sinks). `ReadCSV` shows its
+  `...CSVOption` parameter; `ReadJSONLParallel` is listed; the JSONL
+  section describes the positional decoder instead of `encoding/json`;
+  "Text lines" sits with the other I/O; no version or date stamps remain.
 - **The API references are complete again, and gated.** `doc/api-reference.md`
   and `doc/typed-reference.md` now mention every exported function and
   method (about 130 record-package and 23 typed exports had accumulated
