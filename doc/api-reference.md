@@ -1,595 +1,354 @@
 # ssql API Reference
 
-*Complete reference for all ssql types, functions, and methods*
+The `Record` API of `github.com/rosscartlidge/ssql/v4`: every exported
+type and function, with what it does and, where it is not obvious, an
+example. Signatures are as `go doc` prints them; `go doc
+github.com/rosscartlidge/ssql/v4.Name` has the source comment for any
+one of them. The [Getting Started Guide](codelab-intro.md) is the
+tutorial; the [`ssql/typed` reference](typed-reference.md) covers the
+struct-based fast path.
 
-> 📖 **Documentation Note**: This is a learning-focused API reference with examples and best practices. For raw API documentation directly from source code, use `go doc github.com/rosscartlidge/ssql/v4` or browse specific functions with `go doc github.com/rosscartlidge/ssql/v4.FunctionName`
->
-> ⚡ **Looking for the high-performance struct-based API?** See the [`ssql/typed` reference](typed-reference.md) — 5–14× faster and 9–2,000× less memory for known-schema pipelines.
+[Back to Documentation](README.md)
 
 ## Table of Contents
 
-### Documentation Navigation
-- [Getting Started Guide](codelab-intro.md) - Learn ssql basics step-by-step
-- [CLI Tutorial](cli-codelab.md) - Command-line data processing
-- [Signal Processing](cli-signal-processing.md) - FFT, convolution, and GPU acceleration
-- [Typed Codelab](typed-codelab.md) - The high-performance struct-based API
-
-### API Reference Sections
-- [Installation & Setup](#installation--setup)
-- [Core Types](#core-types)
-- [Creating Iterators](#creating-iterators)
-- [Transform Operations](#transform-operations)
-- [Filter Operations](#filter-operations)
-- [Limiting & Pagination](#limiting--pagination)
-- [Ordering Operations](#ordering-operations)
-- [Aggregation & Analysis](#aggregation--analysis)
-- [Window Operations](#window-operations)
-- [Early Termination](#early-termination)
-- [SQL-Style Operations](#sql-style-operations)
-  - [Join Operations](#join-operations)
-  - [GroupBy Operations](#groupby-operations)
-  - [Aggregation Functions](#aggregation-functions)
-- [Composition Operations](#composition-operations)
-- [Flattening Operations](#flattening-operations)
-- [Utility Operations](#utility-operations)
-- [I/O Operations](#io-operations)
-  - [CSV Operations](#csv-operations)
-  - [JSON Operations](#json-operations)
-  - [Line Operations](#line-operations)
-  - [Command Output Operations](#command-output-operations)
-  - [Arrow Operations](#arrow-operations)
-  - [XLSX Operations](#xlsx-operations)
-- [Signal Processing](#signal-processing)
-- [Chart & Visualization](#chart--visualization)
-  - [Data Explorer](#data-explorer)
-- [Helper Functions](#helper-functions)
-  - [Record Access](#record-access)
-- [Error Handling](#error-handling)
+1. [Overview](#overview)
+2. [Core Types](#core-types) — Record, MutableRecord, Schema, Value, JSONString, times, Filter
+3. [Record Helpers](#record-helpers) — Get/GetOr/Set, shaping, casting, comparisons, keys
+4. [Creating and Consuming Iterators](#creating-and-consuming-iterators)
+5. [Transform Operations](#transform-operations)
+6. [Filter Operations](#filter-operations)
+7. [Limiting & Pagination](#limiting--pagination) — limit, offset, tail, sampling, early termination
+8. [Ordering Operations](#ordering-operations) — sort, spill, merge, top-k
+9. [Aggregation & Analysis](#aggregation--analysis) — group-by, aggregates, rollup, describe, running stats
+10. [Reshaping](#reshaping) — pivot, unpivot, fill, extract, flatten, hash
+11. [Joins and Set Operations](#joins-and-set-operations)
+12. [Window and Time](#window-and-time) — analytic functions, batch windows, resampling
+13. [Composition](#composition) — Pipe, Chain, Tee
+14. [I/O Operations](#io-operations) — CSV, TSV, JSON, lines, commands, Parquet, Arrow, XLSX, WAV, HTTP, tables
+15. [Signal Processing](#signal-processing)
+16. [Chart & Visualization](#chart--visualization)
+17. [Error Handling](#error-handling)
+18. [Appendix: CLI and Codegen Support](#appendix-cli-and-codegen-support)
 
 ---
 
-## Installation & Setup
+## Overview
 
-### Requirements
-- **Go 1.26** is what the module builds with (`go.mod`); any installed
-  Go 1.21+ downloads that toolchain automatically the first time you
-  build, so the distribution's package is enough to start.
+ssql pipelines are Go 1.23 iterators composed with functions:
 
-### Step 1: Install Go
-
-If you don't have Go installed:
-
-**macOS:**
-```bash
-brew install go
-```
-
-**Debian / Ubuntu:**
-```bash
-sudo apt-get install -y golang-go
-```
-
-**Other Linux:** download the tarball from [https://go.dev/dl/](https://go.dev/dl/)
-and follow the instructions there (unpack to `/usr/local`, add
-`/usr/local/go/bin` to your PATH).
-
-Binaries built with `go install` land in `$HOME/go/bin`
-(`$(go env GOPATH)/bin`); add that to your PATH as well:
-```bash
-echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bashrc
-```
-
-**Windows:**
-Download the installer from [https://go.dev/dl/](https://go.dev/dl/)
-
-**Verify installation:**
-```bash
-go version  # Should show 1.23 or higher
-```
-
-### Step 2: Create a New Project
-
-```bash
-# Create project directory
-mkdir my-ssql-project
-cd my-ssql-project
-
-# Initialize Go module (required for dependency management)
-go mod init myproject
-
-# Or use your GitHub path for a real project:
-# go mod init github.com/yourusername/myproject
-```
-
-### Step 3: Install ssql
-
-```bash
-go get github.com/rosscartlidge/ssql/v4
-```
-
-This will:
-- Download ssql and its dependencies
-- Update your `go.mod` file with the dependency
-- Create/update `go.sum` with checksums
-
-### Step 4: Import and Use
-
-Create a file `main.go`:
 ```go
-package main
+iter.Seq[T]           // a lazy sequence
+iter.Seq2[T, error]   // a lazy sequence that can report a failure per element
+type Filter[T, U any] func(iter.Seq[T]) iter.Seq[U]
+type FilterWithErrors[T, U any] func(iter.Seq2[T, error]) iter.Seq2[U, error]
+```
 
-import (
-    "fmt"
-    "log"
-    "github.com/rosscartlidge/ssql/v4"
-)
+A `Filter` is a function from one sequence to another; a pipeline is a
+chain of them applied to a source:
 
-func main() {
-    data, err := ssql.ReadCSV("data.csv")
-    if err != nil {
-        log.Fatalf("Failed to read CSV: %v", err)
-    }
-
-    for record := range data {
-        name := ssql.GetOr(record, "name", "")
-        fmt.Println(name)
-    }
+```go
+data, err := ssql.ReadCSV("sales.csv")
+if err != nil {
+    log.Fatal(err)
+}
+top := ssql.Chain(
+    ssql.GroupByFields("rows", "region"),
+    ssql.Aggregate("rows", map[string]ssql.AggregateFunc{"total": ssql.Sum("amount")}),
+    ssql.SortBy(func(r ssql.Record) float64 { return -ssql.GetOr(r, "total", 0.0) }),
+    ssql.Limit[ssql.Record](5),
+)(data)
+for r := range top {
+    fmt.Println(ssql.GetOr(r, "region", ""), ssql.GetOr(r, "total", 0.0))
 }
 ```
 
-### Step 5: Run Your Program
-
-```bash
-go run main.go
-```
-
-Or build an executable:
-```bash
-go build
-./my-ssql-project  # or my-ssql-project.exe on Windows
-```
+Nothing runs until the `for` loop pulls; every operation streams, and a
+consumer that stops early stops the source. The CLI is a thin layer over
+these functions, and `ssql generate go` emits programs that call them.
 
 ---
 
 ## Core Types
 
-### Iterator Types
-ssql uses Go 1.23+ iterators as its core abstraction:
-
-```go
-iter.Seq[T]           // Simple iterator
-iter.Seq2[T, error]   // Iterator with error handling
-```
-
 ### Record
-A flexible data structure for heterogeneous data.
+
+A `Record` is an immutable, ordered set of named values. Its fields are
+private; there is no map access.
 
 ```go
-type Record struct {
-    // fields are private - use the provided API to access
-}
+type Record struct { /* private */ }
 ```
 
-**🚨 CRITICAL (v1.0+): Record is an encapsulated struct, NOT a map**
-
-Record fields are **NOT directly accessible**. You MUST use the provided API:
-
-**❌ WRONG - Direct field access (will not compile):**
+**Wrong — Record is not a map (compile errors):**
 ```go
-record["name"] = "Alice"        // ❌ Compile error!
-value := record["age"]          // ❌ Compile error!
-for k, v := range record {      // ❌ Compile error!
+record["name"] = "Alice"
+value := record["age"]
+for k, v := range record { }
 ```
 
-**✅ CORRECT - Use the builder pattern and accessor functions:**
+**Right — build with `MakeMutableRecord`, read with `Get`/`GetOr`:**
 ```go
-// Creating - Use MakeMutableRecord builder
 record := ssql.MakeMutableRecord().
     String("name", "Alice").
     Int("age", int64(30)).
     Float("score", 95.5).
     Freeze()
 
-// Reading - Use Get/GetOr
 name := ssql.GetOr(record, "name", "")
 age, exists := ssql.Get[int64](record, "age")
+updated := ssql.SetImmutable(record, "score", 98.0)   // a new Record; record is unchanged
 
-// Modifying - Use SetImmutable (creates new record)
-updated := ssql.SetImmutable(record, "score", 98.0)
-
-// Iterating - Use .All() method
 for key, value := range record.All() {
     fmt.Printf("%s: %v\n", key, value)
 }
 ```
 
-**Supported value types:** `int64`, `float64`, `string`, `bool`, `time.Time`, nested `Record`, `iter.Seq[T]`, and slices.
+Supported value types are `int64`, `float64`, `string`, `bool`,
+`time.Time`, `JSONString`, a nested `Record`, `[]any`, and the sequence
+types listed under [`Value`](#value-and-orderedvalue). Scalars are always
+`int64` and `float64`; there is no `int`, `int32` or `float32` in a
+Record.
 
-**Times.** One parser serves every path that turns a value into a time —
-`GetOr(r, "ts", time.Time{})`, the `time` wire type (`FieldTypeTime`,
-`"time"` in a `_schema` header), `cast -type F time` and the expression
-function `date()`:
-
-```go
-t, ok := ssql.ParseTime(v)            // time.Time as is; string in RFC 3339,
-                                      // "2006-01-02 15:04:05", "2006-01-02T15:04:05" (UTC),
-                                      // "2006-01-02 15:04:05+00", "2006-01-02"; int64 Unix seconds
-t := ssql.MustParseTime(v, "ts")      // panics naming the field — an explicit cast must not
-                                      // turn junk into a zero time
-ft, _ := ssql.ParseFieldType("time")  // FieldTypeTime ("timestamp", "datetime", "date" are aliases)
-expr.Compile(src, ssql.ExprFieldShadowing(), ssql.ExprDate()) // ssql's date(), bound at compile time
-```
-
-A time renders as RFC 3339 everywhere it becomes text: JSONL, CSV/TSV,
-tables, and `GetOr(r, "ts", "")`.
-
-### MutableRecord
-A mutable record type optimized for efficient building.
-
-```go
-type MutableRecord struct {
-    // fields are private - use the provided methods
-}
-```
-
-MutableRecord is the recommended way to build new records efficiently. Unlike Record methods which create copies, MutableRecord methods modify the same underlying map, avoiding unnecessary allocations.
-
-**Building with MutableRecord:**
-```go
-// Efficient building with mutation
-record := ssql.MakeMutableRecord().
-    String("name", "Alice").
-    Int("age", int64(30)).
-    Float("salary", 95000.50).
-    Bool("active", true).
-    Freeze()  // Convert to immutable Record
-
-// For use in slices, always call .Freeze()
-records := []ssql.Record{
-    ssql.MakeMutableRecord().
-        String("id", "001").
-        Int("count", 42).
-        Freeze(),
-}
-```
-
-**Available Methods:**
-- `.String(field, value)` - Set string field
-- `.Int(field, value)` - Set int64 field
-- `.Float(field, value)` - Set float64 field
-- `.Bool(field, value)` - Set boolean field
-- `.Time(field, value)` - Set time.Time field
-- `.Nested(field, value)` - Set nested Record field
-- `.JSONString(field, value)` - Set JSONString field
-- `.IntSeq(field, value)` - Set int sequence field (also Int8Seq, Int16Seq, Int32Seq, Int64Seq, UintSeq, etc.)
-- `.FloatSeq(field, value)` - Set float sequence (Float32Seq, Float64Seq)
-- `.StringSeq(field, value)` - Set string sequence
-- `.RecordSeq(field, value)` - Set Record sequence
-- `.SetAny(field, value)` - Set any value (use typed methods when possible for type safety)
-- `.Delete(field)` - Remove a field
-- `.Freeze()` - Convert to immutable Record
-- `.Len()` - Get number of fields
-
-### JSONString
-A string type containing valid JSON data.
-
-```go
-type JSONString string
-```
-
-JSONString provides type safety and rich methods for working with JSON-structured data that needs to be embedded in Records.
-
-**Example:**
-```go
-// Create JSONString from Go value
-jsonStr, err := ssql.NewJSONString(map[string]any{
-    "status": "active",
-    "count": 42,
-})
-if err != nil {
-    log.Fatal(err)
-}
-
-// Use in Record
-record := ssql.MakeMutableRecord().
-    String("id", "user123").
-    JSONString("metadata", jsonStr).
-    Freeze()
-
-// Parse back to Go value
-metadata := ssql.GetOr(record, "metadata", ssql.JSONString(""))
-value, err := metadata.Parse()
-
-// Pretty print
-fmt.Println(metadata.Pretty())
-```
-
-**Methods:**
-- `NewJSONString(value any) (JSONString, error)` - Create from Go value
-- `.Parse() (any, error)` - Parse to Go value
-- `.MustParse() any` - Parse or panic
-- `.IsValid() bool` - Check if valid JSON
-- `.Pretty() string` - Pretty-printed JSON
-- `.String() string` - Raw JSON string
-
-### Value Interface
-Type constraint for Record values.
-
-```go
-type Value interface {
-    ~int64 | ~float64 |
-    ~bool | string | time.Time |
-    JSONString | Record |
-    []any |  // For Collect aggregation results
-    iter.Seq[int] | iter.Seq[int8] | iter.Seq[int16] | iter.Seq[int32] | iter.Seq[int64] |
-    iter.Seq[uint] | iter.Seq[uint8] | iter.Seq[uint16] | iter.Seq[uint32] | iter.Seq[uint64] |
-    iter.Seq[float32] | iter.Seq[float64] |
-    iter.Seq[bool] | iter.Seq[string] | iter.Seq[time.Time] |
-    iter.Seq[Record] | iter.Seq[any]  // iter.Seq[any] for CollectSeq results
-}
-```
-
-This interface defines all valid types that can be stored in a Record. Uses a **hybrid approach**:
-- **Canonical scalars**: `int64` and `float64` only (not `int`, `int32`, `float32`, etc.)
-- **Flexible sequences**: Any numeric iterator type allowed (e.g., `iter.Seq[int]`, `iter.Seq[int32]`, etc.)
-- **Collection types**: `[]any` for `Collect` results and `iter.Seq[any]` for `CollectSeq[T]` results
-
-This design eliminates type ambiguity for scalar values while maintaining compatibility with Go's standard library for sequences.
-
-### Filter Types
-Function types for stream transformations:
-
-```go
-type Filter[T, U any] func(iter.Seq[T]) iter.Seq[U]
-type FilterWithErrors[T, U any] func(iter.Seq2[T, error]) iter.Seq2[U, error]
-```
-
----
-
-### Schemas and Record Construction
-
-```go
-func NewSchema(fields []string) *Schema                         // field order preserved
-func NewRecordFromSchema(schema *Schema, values []any) Record   // the fast path: values used directly, not copied
-func NewRecord(fields map[string]any) Record                    // from a map (compatibility; builds a Schema per call)
-func MakeMutableRecordWithCapacity(capacity int) MutableRecord
-func (s *Schema) Has(name string) bool
-func (s *Schema) Index(name string) (int, bool)
-```
-
-Schema sharing is the first performance rule: create one `Schema` per source
-with `NewSchema(headers)` and build every record with `NewRecordFromSchema`
-(the CSV and JSONL readers do). Building a schema per record cost 4× on a
-14.6 M-row file.
-
-Record accessors beyond `GetOr`:
+**Reading and iterating:**
 
 ```go
 func (r Record) Has(field string) bool        // the field exists (a nil slot counts)
 func (r Record) HasValue(field string) bool   // the field exists and holds a value
 func (r Record) Keys() []string
 func (r Record) KeysIter() iter.Seq[string]
+func (r Record) Values() iter.Seq[any]
+func (r Record) All() iter.Seq2[string, any]  // fields in order
+func (r Record) Len() int
+func (r Record) Schema() *Schema
 func (r Record) Clone() Record
-func (r Record) Equal(o Record) bool
-func (r Record) AppendJSON(buf []byte) []byte         // fast JSON, pre-computed field prefixes
-func (r Record) AppendJSONOrdered(buf []byte, order []string) []byte
-func (r Record) TimeSeq(field string) (iter.Seq[time.Time], bool)
-func (r Record) BoolSeq(field string) (iter.Seq[bool], bool)
+func (r Record) Equal(other Record) bool
+func (r Record) ToMutable() MutableRecord
+func (r Record) AppendJSON(buf []byte) []byte                          // fast JSON, pre-computed field prefixes
+func (r Record) AppendJSONOrdered(buf []byte, fieldOrder []string) []byte
 ```
 
-`Record` and `MutableRecord` implement `json.Marshaler` / `json.Unmarshaler`.
-`MutableRecord` also has `Null(field)` (a present field with no value),
-`Rename(old, new)`, `TimeSeq` and `BoolSeq` builders.
+**Immutable setters** — each returns a new Record with one field set:
 
-## Creating Iterators
-
-### From[T]
 ```go
-func From[T any](slice []T) iter.Seq[T]
-```
-Creates an iterator from a slice - convenience wrapper providing a more discoverable API.
-
-**Example:**
-```go
-numbers := ssql.From([]int{1, 2, 3, 4, 5})
-records := ssql.From([]ssql.Record{...})
-```
-
-**Note:** This is equivalent to `slices.Values()` from the standard library, but provides a more intuitive name for users familiar with other streaming libraries.
-
-### From Slices (Standard Library)
-```go
-slices.Values([]T) iter.Seq[T]
-```
-Creates an iterator from a slice (standard library function). You can use either this or `ssql.From()`.
-
-**Example:**
-```go
-numbers := slices.Values([]int{1, 2, 3, 4, 5})
+func (r Record) String(field, value string) Record
+func (r Record) Int(field string, value int64) Record
+func (r Record) Float(field string, value float64) Record
+func (r Record) Bool(field string, value bool) Record
+func (r Record) Time(field string, value time.Time) Record
+func (r Record) JSONString(field string, value JSONString) Record
+func (r Record) Nested(field string, value Record) Record
+func (r Record) IntSeq(field string, value iter.Seq[int]) Record
+func (r Record) Int64Seq(field string, value iter.Seq[int64]) Record
+func (r Record) Float64Seq(field string, value iter.Seq[float64]) Record
+func (r Record) StringSeq(field string, value iter.Seq[string]) Record
+func (r Record) BoolSeq(field string, value iter.Seq[bool]) Record
+func (r Record) TimeSeq(field string, value iter.Seq[time.Time]) Record
+func (r Record) RecordSeq(field string, value iter.Seq[Record]) Record
 ```
 
-### ToChannel[T]
-```go
-func ToChannel[T any](sb iter.Seq[T]) <-chan T
-```
-Converts an iterator to a channel.
+Building several fields this way copies the record each time; use
+`MutableRecord` for construction. `Record` and `MutableRecord` implement
+`json.Marshaler` and `json.Unmarshaler`.
 
-### FromChannelSafe[T]
-```go
-func FromChannelSafe[T any](itemCh <-chan T, errCh <-chan error) iter.Seq2[T, error]
-```
-Creates an iterator from separate item and error channels.
+### MutableRecord
 
-### ToChannelWithErrors[T]
-```go
-func ToChannelWithErrors[T any](sb iter.Seq2[T, error]) (<-chan T, <-chan error)
-```
-Converts an error-aware iterator to separate item and error channels.
+The builder: mutates in place, then `Freeze()` yields the `Record`.
 
-**Example:**
 ```go
-data, err := ssql.ReadCSVSafe("data.csv")
+func MakeMutableRecord() MutableRecord
+func MakeMutableRecordWithCapacity(capacity int) MutableRecord
+
+func (m MutableRecord) String(field, value string) MutableRecord
+func (m MutableRecord) Int(field string, value int64) MutableRecord
+func (m MutableRecord) Float(field string, value float64) MutableRecord
+func (m MutableRecord) Bool(field string, value bool) MutableRecord
+func (m MutableRecord) Time(field string, value time.Time) MutableRecord
+func (m MutableRecord) JSONString(field string, value JSONString) MutableRecord
+func (m MutableRecord) Nested(field string, value Record) MutableRecord
+func (m MutableRecord) IntSeq(field string, value iter.Seq[int]) MutableRecord
+func (m MutableRecord) Int64Seq(field string, value iter.Seq[int64]) MutableRecord
+func (m MutableRecord) Float64Seq(field string, value iter.Seq[float64]) MutableRecord
+func (m MutableRecord) StringSeq(field string, value iter.Seq[string]) MutableRecord
+func (m MutableRecord) BoolSeq(field string, value iter.Seq[bool]) MutableRecord
+func (m MutableRecord) TimeSeq(field string, value iter.Seq[time.Time]) MutableRecord
+func (m MutableRecord) RecordSeq(field string, value iter.Seq[Record]) MutableRecord
+func (m MutableRecord) Null(field string) MutableRecord              // a present field with no value
+func (m MutableRecord) Rename(oldField, newField string) MutableRecord
+func (m MutableRecord) Delete(field string) MutableRecord
+func (m MutableRecord) Len() int
+func (m MutableRecord) Freeze() Record
+```
+
+```go
+records := []ssql.Record{
+    ssql.MakeMutableRecord().String("id", "001").Int("count", 42).Freeze(),
+    ssql.MakeMutableRecord().String("id", "002").Int("count", 7).Freeze(),
+}
+```
+
+There is no `SetAny`: a value of a type outside `Value` cannot be stored.
+The generic [`Set`](#record-helpers) is the type-checked equivalent.
+
+### Schema and fast construction
+
+```go
+type Schema struct { /* private */ }
+func NewSchema(fields []string) *Schema                         // field order preserved
+func NewRecordFromSchema(schema *Schema, values []any) Record   // the fast path: values used directly, not copied
+func NewRecord(fields map[string]any) Record                    // from a map (compatibility; builds a Schema per call)
+func (s *Schema) Fields() []string
+func (s *Schema) Has(field string) bool
+func (s *Schema) Index(field string) int   // -1 when absent
+func (s *Schema) Width() int
+```
+
+Create one `Schema` per source with `NewSchema(headers)` and build every
+record from it with `NewRecordFromSchema`, as the CSV and JSONL readers
+do. A schema per record is several times slower on large files.
+
+### Value and OrderedValue
+
+```go
+type Value interface {
+    ~int64 | ~float64 |
+    ~bool | string | time.Time |
+    JSONString | Record |
+    []any |
+    iter.Seq[int] | iter.Seq[int64] | iter.Seq[float64] |
+    iter.Seq[bool] | iter.Seq[string] | iter.Seq[time.Time] |
+    iter.Seq[Record] | iter.Seq[any]
+}
+type OrderedValue interface { ~int64 | ~float64 | string }
+```
+
+`Value` is the constraint on what a Record holds and what `Set`, `Field`
+and `SetImmutable` accept: canonical scalars (`int64`, `float64`), the
+listed sequence types, `[]any` for `Collect` results and `iter.Seq[any]`
+for `CollectSeq`. `OrderedValue` is the constraint for `Min[T]` /
+`Max[T]`.
+
+### JSONString
+
+A string that holds valid JSON, for structured data embedded in a Record.
+
+```go
+type JSONString string
+func NewJSONString(value any) (JSONString, error)
+func (js JSONString) Parse() (any, error)
+func (js JSONString) MustParse() any
+func (js JSONString) IsValid() bool
+func (js JSONString) Pretty() string
+func (js JSONString) String() string
+```
+
+```go
+meta, err := ssql.NewJSONString(map[string]any{"status": "active", "count": 42})
 if err != nil {
     log.Fatal(err)
 }
-itemCh, errCh := ssql.ToChannelWithErrors(data)
-
-go func() {
-    for err := range errCh {
-        log.Printf("Error: %v", err)
-    }
-}()
-
-for record := range itemCh {
-    // Process record
-}
+record := ssql.MakeMutableRecord().String("id", "user123").JSONString("metadata", meta).Freeze()
+value, err := ssql.GetOr(record, "metadata", ssql.JSONString("")).Parse()
 ```
 
-### MakeMutableRecord
+### Times
+
+One parser serves every path that turns a value into a time: `GetOr(r,
+"ts", time.Time{})`, the `time` wire type, `cast -type F time` and the
+expression function `date()`.
+
 ```go
-func MakeMutableRecord() MutableRecord
-```
-Creates a new mutable record for efficient building. Use `.Freeze()` to convert to a regular `Record` when done building.
+func ParseTime(val any) (time.Time, bool)       // time.Time as is; RFC 3339, "2006-01-02 15:04:05",
+                                                 // "2006-01-02T15:04:05" (UTC), "2006-01-02 15:04:05+00",
+                                                 // "2006-01-02"; int64 Unix seconds
+func MustParseTime(val any, field string) time.Time   // panics naming the field: an explicit cast never yields a zero time
+func ParseFieldType(s string) (FieldType, error)      // "int", "float", "bool", "string", "time" ("timestamp", "datetime", "date" are aliases)
+func (ft FieldType) String() string
 
-**Example:**
+type FieldType int
+const (
+    FieldTypeAuto FieldType = iota
+    FieldTypeString
+    FieldTypeInt
+    FieldTypeFloat
+    FieldTypeBool
+    FieldTypeTime
+)
+
+func ExprFieldShadowing() expr.Option   // expr.Compile option: a field named like a builtin (`date`) is the field when bare
+func ExprDate() expr.Option             // expr.Compile option: ssql's date() in place of expr-lang's
+```
+
+A time renders as RFC 3339 wherever it becomes text: JSONL, CSV/TSV,
+tables, and `GetOr(r, "ts", "")`.
+
+### Filter types
+
 ```go
-// Efficient building with mutation
-record := ssql.MakeMutableRecord().
-    String("name", "Alice").
-    Int("age", 30).
-    Float("score", 95.5).
-    Freeze()  // Convert to frozen Record
-
-// For use in slices, always call .Freeze()
-records := []ssql.Record{
-    ssql.MakeMutableRecord().
-        String("id", "001").
-        Int("count", 42).
-        Freeze(),
-}
+type Filter[T, U any] func(iter.Seq[T]) iter.Seq[U]
+type FilterWithErrors[T, U any] func(iter.Seq2[T, error]) iter.Seq2[U, error]
 ```
 
-**Note:** `MutableRecord` methods mutate in place for efficiency during construction. Call `.Freeze()` to get a regular `Record` for use in pipelines or data structures.
+Every operation below returns one of these, so operations compose with
+`Pipe`, `Chain` or plain application.
 
 ---
 
-## Transform Operations
+## Record Helpers
 
-*Functions that transform elements from one type to another*
+### Field access
 
-> 💡 **Learn by Example**: See these operations in action in the [Getting Started Guide](codelab-intro.md#your-first-stream) and its [group-by and join](codelab-intro.md#sql-style-operations-group-by-and-join) section.
-
-### Select[T, U]
 ```go
-func Select[T, U any](fn func(T) U) Filter[T, U]
-```
-Transforms each element using the provided function (SQL SELECT equivalent).
-
-**Example:**
-```go
-doubled := ssql.Select(func(x int) int { return x * 2 })(numbers)
+func Get[T any](record Record, key string) (T, bool)        // typed read with numeric/string conversion
+func GetOr[T any](record Record, key string, defaultValue T) T
+func Set[V Value](m MutableRecord, field string, value V) MutableRecord   // type-checked set, in place
+func SetImmutable[V Value](r Record, field string, value V) Record        // a new Record with the field set
+func Field[V Value](key string, value V) Record                           // a one-field Record
+func ValidateRecord(r Record) error                                       // every value is a Value
 ```
 
-### Update
 ```go
-func Update(fn func(MutableRecord) MutableRecord) Filter[Record, Record]
-```
-Convenience wrapper around Select for updating record fields. Automatically handles `ToMutable()` and `Freeze()` boilerplate, making field updates more concise.
+age := ssql.GetOr(record, "age", int64(0))     // int64 for whole numbers
+price := ssql.GetOr(record, "price", 0.0)      // float64 for decimals
+name := ssql.GetOr(record, "name", "Unknown")
+n, ok := ssql.Get[int64](record, "count")      // "42" converts; "abc" is !ok
 
-**Example - Update single field:**
-```go
-updated := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
-    return mut.String("status", "processed")
-})(records)
-```
-
-**Example - Update multiple fields:**
-```go
-updated := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
-    return mut.
-        String("status", "active").
-        Time("updated_at", time.Now())
-})(records)
+mut := ssql.MakeMutableRecord()
+mut = ssql.Set(mut, "name", "Alice")
+mut = ssql.Set(mut, "age", int64(30))
+record := mut.Freeze()
 ```
 
-**Example - Computed field:**
+`Get` and `GetOr` convert between numeric kinds and from text
+(`"42"` → `int64(42)`); an absent field or a failed conversion gives
+`ok == false` / the default. Always read CSV numbers as `int64` or
+`float64`, not as strings.
+
+### Shaping
+
 ```go
-updated := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
-    frozen := mut.Freeze()
-    price := ssql.GetOr(frozen, "price", float64(0))
-    qty := ssql.GetOr(frozen, "quantity", int64(0))
-    return mut.Float("total", price * float64(qty))
-})(records)
+func Project(r Record, fields ...string) Record   // only the named fields, in the order named (`include`)
+func Without(r Record, fields ...string) Record   // the named fields removed, the rest in order (`exclude`)
+func CopyField(m MutableRecord, src Record, target, source string) MutableRecord  // `update -set-field`: value and type; an absent source leaves the target absent
 ```
 
-**Equivalent without Update:**
+### Casting
+
 ```go
-// More verbose - need explicit ToMutable() and Freeze()
-updated := ssql.Select(func(r ssql.Record) ssql.Record {
-    return r.ToMutable().String("status", "processed").Freeze()
-})(records)
+func CastValue(v any, target FieldType) (any, bool)   // the one conversion behind `cast`
+func CastField(mut MutableRecord, src Record, field string, target FieldType, invalidMissing bool, invalid *int64) MutableRecord
+type CastError struct{ Field string; Value any; Target FieldType }
+func (e *CastError) Error() string
 ```
 
-### SelectSafe[T, U]
-```go
-func SelectSafe[T, U any](fn func(T) (U, error)) FilterWithErrors[T, U]
-```
-Safe version of Select that handles errors.
+A value that cannot be converted is a `*CastError`, never a zero;
+`CastField` panics with it unless `invalidMissing` leaves the field absent
+and counts it.
 
-### SelectMany[T, U]
-```go
-func SelectMany[T, U any](fn func(T) iter.Seq[U]) Filter[T, U]
-```
-Flattens nested sequences (FlatMap equivalent).
+### Comparisons
 
-**Example:**
-```go
-words := ssql.SelectMany(func(line string) iter.Seq[string] {
-    return slices.Values(strings.Fields(line))
-})(lines)
-```
-
----
-
-## Filter Operations
-
-*Functions that filter elements based on conditions*
-
-### Where[T]
-```go
-func Where[T any](predicate func(T) bool) Filter[T, T]
-```
-Filters elements based on a predicate (SQL WHERE equivalent).
-
-**Example:**
-```go
-evens := ssql.Where(func(x int) bool { return x%2 == 0 })(numbers)
-```
-
-### WhereSafe[T]
-```go
-func WhereSafe[T any](predicate func(T) (bool, error)) FilterWithErrors[T, T]
-```
-Safe version of Where that handles errors.
-
-### Distinct[T]
-```go
-func Distinct[T comparable]() Filter[T, T]
-```
-Removes duplicate elements.
-
-### DistinctBy[T, K]
-```go
-func DistinctBy[T any, K comparable](keyFn func(T) K) Filter[T, T]
-```
-Removes duplicates based on a key function.
-
----
-
-### Field and Literal Comparisons
-
-The primitives behind `where -if`, `-if-field` and `update -if`, shared by exec
-and generated code so the lanes cannot disagree on a comparison:
+The primitives behind `where -if`, `-if-field` and `update -if`; exec
+and generated code share them.
 
 ```go
 func FieldOp(r Record, left, op, right string) bool          // left OP right, both fields of r
@@ -597,704 +356,160 @@ func ValueOp(a any, op string, b any) bool                    // FieldOp on two 
 func FieldOpValues(a any, op string, b any) (bool, error)     // reports a mixed-kind pairing as *CompareError
 func LiteralOp(v any, op, literal string) (bool, error)       // v OP literal, the literal read in v's kind
 func CompareLiteral(r Record, field, op, literal string) bool // LiteralOp on a field; panics *CompareError
-func MustNumber(literal, field, op string) float64            // a runtime flag value for a numeric comparison
-func MustBool(literal, field, op string) bool
+func CompareAny(a, b any) int                                 // -1/0/1: nil first, numbers numerically, then text
+func CompareRecordFields(a, b Record, orderBy []OrderField) int
+type CompareError struct{ Field, Op, Value, Kind string; Fields bool }
+func (e *CompareError) Error() string
 ```
 
-The operators are `where`'s: `eq ne gt ge lt le contains startswith endswith
-regex`. Either side absent makes the condition false (its negation true,
-DFC124). A literal not of the field's kind (`age gt abc`) is a `*CompareError`,
-never a silent false; an int against a fractional literal compares as float64;
+The operators are `where`'s: `eq ne gt ge lt le contains startswith
+endswith regex`. Either side absent makes the condition false. A literal
+not of the field's kind (`age gt abc`) is a `*CompareError`, never a
+silent false; an int against a fractional literal compares as float64;
 the string operators need text on both sides.
 
-### Record Shaping
+### Keys and inference
 
 ```go
-func Project(r Record, fields ...string) Record   // only the named fields, in the order named (`include`)
-func Without(r Record, fields ...string) Record   // the named fields removed, the rest in order (`exclude`, join -exclude-left)
-func CopyField(m MutableRecord, src Record, target, source string) MutableRecord  // `update -set-field`: value AND type; an absent source leaves the target absent
-func CastValue(v any, target FieldType) (any, bool)                                // the one conversion behind `cast`
-func CastField(mut MutableRecord, src Record, field string, target FieldType, invalidMissing bool, invalid *int64) MutableRecord
-func MustCast[T any](v any, target FieldType, field string) T                       // typed generated code; *CastError on failure
+func RecordKey(r Record) string          // one canonical string for the whole row, field order independent (DistinctBy(RecordKey) is SQL UNION)
+func StableKey(value any) string         // canonical text for any value, independent of map order
+func ZeroPaddedNumber(s string) bool     // 007, 02134: an identifier, never a number — one rule for every inference site
 ```
 
-A value that cannot be converted is a failure (`*CastError`), never a zero:
-`"abc"` → int used to be 0, the behaviour DFC124 removed.
+---
+
+## Creating and Consuming Iterators
+
+```go
+func From[T any](slice []T) iter.Seq[T]                    // same as slices.Values, named for discoverability
+func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T]        // all of the first, then the second, …; `union -all`
+func ToChannel[T any](sb iter.Seq[T]) <-chan T
+func FromChannelSafe[T any](itemCh <-chan T, errCh <-chan error) iter.Seq2[T, error]
+func ToChannelWithErrors[T any](sb iter.Seq2[T, error]) (<-chan T, <-chan error)
+
+func Safe[T any](seq iter.Seq[T]) iter.Seq2[T, error]          // bridge into the error-aware world (never errors)
+func Unsafe[T any](seq iter.Seq2[T, error]) iter.Seq[T]        // panic on the first failure
+func IgnoreErrors[T any](seq iter.Seq2[T, error]) iter.Seq[T]  // skip failures
+func CloseWhenDone[T any](seq iter.Seq[T], c io.Closer) iter.Seq[T]
+```
+
+```go
+numbers := ssql.From([]int{1, 2, 3, 4, 5})
+records := slices.Values([]ssql.Record{a, b, c})
+
+itemCh, errCh := ssql.ToChannelWithErrors(ssql.ReadCSVSafe("data.csv"))
+go func() {
+    for err := range errCh {
+        log.Printf("error: %v", err)
+    }
+}()
+for record := range itemCh {
+    _ = record
+}
+```
+
+`CloseWhenDone` closes `c` when the sequence is fully read or abandoned;
+a lazy reader cannot be paired with `defer f.Close()` in the function that
+returns it.
+
+---
+
+## Transform Operations
+
+```go
+func Select[T, U any](fn func(T) U) Filter[T, U]                        // SQL SELECT: one output per input
+func SelectSafe[T, U any](fn func(T) (U, error)) FilterWithErrors[T, U]
+func SelectMany[T, U any](fn func(T) iter.Seq[U]) Filter[T, U]          // flatten: zero or more outputs per input
+func Update(fn func(MutableRecord) MutableRecord) Filter[Record, Record] // Select for Records: ToMutable + Freeze done for you
+```
+
+```go
+doubled := ssql.Select(func(x int) int { return x * 2 })(numbers)
+
+words := ssql.SelectMany(func(line string) iter.Seq[string] {
+    return slices.Values(strings.Fields(line))
+})(lines)
+
+updated := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
+    frozen := mut.Freeze()
+    price := ssql.GetOr(frozen, "price", float64(0))
+    qty := ssql.GetOr(frozen, "quantity", int64(0))
+    return mut.Float("total", price*float64(qty)).Time("updated_at", time.Now())
+})(records)
+```
+
+`Update` is `Select(func(r Record) Record { return fn(r.ToMutable()).Freeze() })`.
+
+---
+
+## Filter Operations
+
+```go
+func Where[T any](predicate func(T) bool) Filter[T, T]                        // SQL WHERE
+func WhereSafe[T any](predicate func(T) (bool, error)) FilterWithErrors[T, T]
+func Distinct[T comparable]() Filter[T, T]                                    // first occurrence of each value
+func DistinctBy[T any, K comparable](keyFn func(T) K) Filter[T, T]            // first occurrence of each key
+```
+
+```go
+evens := ssql.Where(func(x int) bool { return x%2 == 0 })(numbers)
+adults := ssql.Where(func(r ssql.Record) bool { return ssql.GetOr(r, "age", int64(0)) >= 18 })(records)
+unique := ssql.DistinctBy(ssql.RecordKey)(records)   // whole-row distinct, SQL UNION's dedupe
+```
+
+`Distinct` and `DistinctBy` stream in O(distinct keys) memory.
+
+---
 
 ## Limiting & Pagination
 
-*Functions for limiting and paginating streams*
-
-### Limit[T]
 ```go
-func Limit[T any](n int) Filter[T, T]
-```
-Takes only the first n elements (SQL LIMIT equivalent).
-
-**Example:**
-```go
-first5 := ssql.Limit[int](5)(numbers)
-```
-
-### TakeLast[T]
-```go
-func TakeLast[T any](n int) Filter[T, T]
-```
-Keeps only the last n elements in arrival order (the tail — `ssql limit
--last N`). A ring buffer of n elements, so O(n) memory on any input; a
-barrier — nothing is yielded until the input ends. n <= 0 yields nothing.
-
-**Example:**
-```go
-recent := ssql.TakeLast[ssql.Record](10)(records)
-```
-
-### LimitSafe[T]
-```go
+func Limit[T any](n int) Filter[T, T]                 // SQL LIMIT: the first n, then the source stops
 func LimitSafe[T any](n int) FilterWithErrors[T, T]
-```
-Safe version of Limit that handles errors.
-
-### Offset[T]
-```go
-func Offset[T any](n int) Filter[T, T]
-```
-Skips the first n elements (SQL OFFSET equivalent).
-
-### OffsetSafe[T]
-```go
+func Offset[T any](n int) Filter[T, T]                // SQL OFFSET: skip the first n
 func OffsetSafe[T any](n int) FilterWithErrors[T, T]
+func TakeLast[T any](n int) Filter[T, T]              // the last n in arrival order (`limit -last N`): a ring buffer, a barrier
+func SampleN[T any](n int, seed int64) Filter[T, T]           // exactly n rows, reservoir sampling, input order
+func SamplePercent[T any](p float64, seed int64) Filter[T, T] // each row with probability p/100, streaming
 ```
-Safe version of Offset that handles errors.
+
+Sampling is deterministic under a seed; `sample` selects, it does not
+shuffle. File-level byte-offset sampling is [`SampleCSVFile`](#sampling-tailing-and-counting).
+
+### Early termination
+
+```go
+func TakeWhile[T any](predicate func(T) bool) Filter[T, T]
+func TakeUntil[T any](predicate func(T) bool) Filter[T, T]
+func SkipWhile[T any](predicate func(T) bool) Filter[T, T]
+func SkipUntil[T any](predicate func(T) bool) Filter[T, T]
+func Timeout[T any](duration time.Duration) Filter[T, T]                        // stop after wall-clock duration
+func TimeBasedTimeout(timeField string, duration time.Duration) Filter[Record, Record]  // stop when the time field advances by duration
+```
+
+These are how a pipeline over an endless source ends; the [Getting
+Started Guide](codelab-intro.md#infinite-streams) shows them on a live
+stream.
 
 ---
 
 ## Ordering Operations
 
-*Functions for sorting and ordering streams*
-
-### Sort[T]
 ```go
 func Sort[T cmp.Ordered]() Filter[T, T]
-```
-Sorts elements in ascending order.
-
-### SortBy[T, K]
-```go
-func SortBy[T any, K cmp.Ordered](keyFn func(T) K) Filter[T, T]
-```
-Sorts elements by a key function.
-
-### SortDesc[T]
-```go
 func SortDesc[T cmp.Ordered]() Filter[T, T]
-```
-Sorts elements in descending order.
-
-### Reverse[T]
-```go
+func SortBy[T any, K cmp.Ordered](keyFn func(T) K) Filter[T, T]
+func SortFunc[T any](cmpFn func(T, T) int) Filter[T, T]      // by comparator; stable
+func SortRecords(orderBy []OrderField) Filter[Record, Record] // several fields, each ascending or descending, mixed types; stable
 func Reverse[T any]() Filter[T, T]
-```
-Reverses the order of elements.
-
-### MergeSorted
-```go
-func MergeSorted(orderBy []OrderField, sources ...iter.Seq[Record]) iter.Seq[Record]
-```
-K-way merge of pre-sorted Record iterators using a min-heap. Each source must already be sorted by the given `orderBy` fields. Output is a single sorted stream with O(K) memory where K is the number of sources. When records compare equal, lower-indexed sources are emitted first (stable merge).
-
-**Example — Merge sorted shards:**
-```go
-shard1 := ssql.ReadCSV("shard1.csv")
-shard2 := ssql.ReadCSV("shard2.csv")
-shard3 := ssql.ReadCSV("shard3.csv")
-
-merged := ssql.MergeSorted(
-    []ssql.OrderField{{Field: "timestamp"}},
-    shard1, shard2, shard3,
-)
-
-// Output is sorted — use with StreamWindow for O(1) memory analytics
-filter, _ := ssql.StreamWindow([]ssql.WindowConfig{{
-    OrderBy: []ssql.OrderField{{Field: "timestamp"}},
-    Frame:   ssql.WindowFrame{Preceding: -1, Following: 0},
-    Specs:   []ssql.WindowSpec{{Function: ssql.WSum("revenue"), ResultName: "running_total"}},
-}})
-result := filter(merged)
+type OrderField struct{ Field string; Desc bool }
 ```
 
----
-
-### SortFunc[T]
-
-```go
-func SortFunc[T any](cmpFn func(T, T) int) Filter[T, T]
-```
-
-Sorts by a comparator. **Stable**: equal elements keep input order, so `sort`
-and `sort -spill` agree on ties and every lane's output for a non-unique key
-is the same. `SortRecords` is built on it.
-
-### TopBy / BottomBy / TopByFunc / BottomByFunc
-
-```go
-func TopBy[T any, K cmp.Ordered](n int, keyFn func(T) K) Filter[T, T]     // highest first
-func BottomBy[T any, K cmp.Ordered](n int, keyFn func(T) K) Filter[T, T]  // lowest first
-func TopByFunc[T any](n int, cmp func(a, b T) int) Filter[T, T]
-func BottomByFunc[T any](n int, cmp func(a, b T) int) Filter[T, T]
-```
-
-A bounded heap of size n: O(N log n) time, O(n) memory, against a full sort's
-O(N log N) / O(N). The `Func` forms rank by a comparator (`CompareAny` orders
-numbers numerically and everything else lexically, so one field may hold
-mixed values). Behind the `top` command.
-
-### SampleN / SamplePercent
-
-```go
-func SampleN[T any](n int, seed int64) Filter[T, T]         // exactly n rows, reservoir sampling, input order
-func SamplePercent[T any](p float64, seed int64) Filter[T, T] // each row with probability p/100, streaming
-```
-
-Deterministic under a seed (a spec-stable hash, DFC110); `sample` selects, it
-does not shuffle. File-level byte-offset sampling is `SampleCSVFile` below.
-
-### Concat[T]
-
-```go
-func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T]
-```
-
-All of the first sequence, then the second, and so on; supports early
-termination. `union -all` is `Concat`; `union` is `DistinctBy(RecordKey)` over it.
-
-## Aggregation & Analysis
-
-*Functions for running aggregations and statistical analysis*
-
-### DescribeRecords
-```go
-func DescribeRecords(records iter.Seq[Record], cfg DescribeConfig) iter.Seq[Record]
-func DescribeFilter(cfg DescribeConfig) Filter[Record, Record]
-type DescribeConfig struct{ Fields []string }
-```
-Profiles a stream: one output record per field with `field`, `type`
-(int/float/string/bool — the most general kind seen), `count`
-(non-missing), `missing` (absent, null, or empty string), `distinct`
-(exact), and — for numeric fields only — `min`, `max`, `mean`, `median`
-(middle value, or the mean of the two middles). Numeric stats are absent,
-not zero, on non-numeric fields. Rows follow `cfg.Fields` when given,
-otherwise field name order (the only order identical across exec,
-generated code, and SQL). A barrier: materializes per-field state. Backs
-`ssql describe`; `DescribeFilter` is the filter-shaped form generated
-code composes.
-
-**Example:**
-```go
-for row := range ssql.DescribeRecords(records, ssql.DescribeConfig{}) {
-	fmt.Println(ssql.GetOr(row, "field", ""), ssql.GetOr(row, "type", ""), ssql.GetOr(row, "distinct", int64(0)))
-}
-```
-
-### RunningSum
-```go
-func RunningSum(fieldName string) Filter[Record, Record]
-```
-Calculates running sum for a numeric field.
-
-### RunningAverage
-```go
-func RunningAverage(fieldName string, windowSize int) Filter[Record, Record]
-```
-Calculates running average over a sliding window.
-
-### ExponentialMovingAverage
-```go
-func ExponentialMovingAverage(fieldName string, alpha float64) Filter[Record, Record]
-```
-Calculates exponential moving average.
-
-### RunningMinMax
-```go
-func RunningMinMax(fieldName string) Filter[Record, Record]
-```
-Tracks running minimum and maximum values.
-
-### RunningCount
-```go
-func RunningCount(fieldName string) Filter[Record, Record]
-```
-Maintains running count statistics.
-
----
-
-## SQL Window / Analytic Functions
-
-*Compute rankings, offsets, and aggregates over partitions without collapsing rows*
-
-Every input row comes out enriched with computed values — unlike `GroupByFields` which collapses rows.
-
-### Window
-```go
-func Window(configs []WindowConfig) Filter[Record, Record]
-```
-Applies one or more window function configurations to a record stream. Each `WindowConfig` can define its own partitioning, ordering, frame, and set of window functions.
-
-**Types:**
-```go
-type OrderField struct {
-    Field string
-    Desc  bool
-}
-
-type WindowFrame struct {
-    Preceding int  // rows before current (-1 = UNBOUNDED PRECEDING)
-    Following int  // rows after current (-1 = UNBOUNDED FOLLOWING)
-}
-
-type WindowSpec struct {
-    Function   WindowFunc  // The window function to apply
-    ResultName string      // Output field name
-}
-
-type WindowConfig struct {
-    PartitionBy []string      // PARTITION BY fields (empty = whole input)
-    OrderBy     []OrderField  // ORDER BY fields
-    Frame       WindowFrame   // Frame specification
-    Specs       []WindowSpec  // Window functions to compute
-}
-```
-
-**Window Function Constructors:**
-
-| Constructor | SQL Equivalent | Description |
-|-------------|---------------|-------------|
-| `WRowNumber()` | `ROW_NUMBER()` | Sequential number within partition |
-| `WRank()` | `RANK()` | Rank with gaps on ties (1,2,2,4) |
-| `WDenseRank()` | `DENSE_RANK()` | Rank without gaps (1,2,2,3) |
-| `WNtile(n)` | `NTILE(n)` | Distribute into n buckets |
-| `WPercentRank()` | `PERCENT_RANK()` | Relative rank as 0..1 |
-| `WLag(field, n)` | `LAG(field, n)` | Value n rows before |
-| `WLead(field, n)` | `LEAD(field, n)` | Value n rows after |
-| `WFirst(field)` | `FIRST_VALUE(field)` | First value in frame |
-| `WLast(field)` | `LAST_VALUE(field)` | Last value in frame |
-| `WSum(field)` | `SUM(field)` | Sum over frame |
-| `WAvg(field)` | `AVG(field)` | Average over frame |
-| `WCount()` | `COUNT(*)` | Count of rows in frame |
-| `WMin(field)` | `MIN(field)` | Minimum in frame |
-| `WMax(field)` | `MAX(field)` | Maximum in frame |
-
-**Example — Row numbering within partitions:**
-```go
-// Rank employees by salary within each department
-ranked := ssql.Window([]ssql.WindowConfig{{
-    PartitionBy: []string{"dept"},
-    OrderBy:     []ssql.OrderField{{Field: "salary", Desc: true}},
-    Frame:       ssql.WindowFrame{Preceding: -1, Following: 0},
-    Specs: []ssql.WindowSpec{
-        {Function: ssql.WRowNumber(), ResultName: "rank"},
-    },
-}})(employees)
-```
-
-**Example — Running total and lag:**
-```go
-// Running revenue total + previous month's revenue
-enriched := ssql.Window([]ssql.WindowConfig{{
-    PartitionBy: []string{"dept"},
-    OrderBy:     []ssql.OrderField{{Field: "date"}},
-    Frame:       ssql.WindowFrame{Preceding: -1, Following: 0},
-    Specs: []ssql.WindowSpec{
-        {Function: ssql.WSum("revenue"), ResultName: "running_total"},
-        {Function: ssql.WLag("revenue", 1), ResultName: "prev_revenue"},
-    },
-}})(sales)
-```
-
-**Example — Moving average with custom frame:**
-```go
-// 7-day moving average: ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
-smoothed := ssql.Window([]ssql.WindowConfig{{
-    OrderBy: []ssql.OrderField{{Field: "date"}},
-    Frame:   ssql.WindowFrame{Preceding: 6, Following: 0},
-    Specs: []ssql.WindowSpec{
-        {Function: ssql.WAvg("price"), ResultName: "ma7"},
-    },
-}})(prices)
-```
-
-### StreamWindow
-
-```go
-func StreamWindow(configs []WindowConfig) (Filter[Record, Record], error)
-func MustStreamWindow(configs []WindowConfig) Filter[Record, Record]
-```
-
-Streaming variant of `Window()` that processes records incrementally without materializing the full partition. Input **MUST** be presorted by partition fields then order fields. Returns an error if unsupported functions or frames are requested.
-
-**When to use `StreamWindow` vs `Window`:**
-
-| | `Window()` | `StreamWindow()` |
-|---|---|---|
-| Input | Any order | Must be presorted |
-| Memory | O(partition size) | O(frame size) or O(1) |
-| Functions | All 15 | 13 (not NTILE, PERCENT\_RANK) |
-| Frames | All | Following ≤ 0 only |
-| Speed (running aggs) | O(N²) | O(N) |
-
-**Supported frames:**
-- Default frame (`Preceding: -1, Following: 0`) — UNBOUNDED PRECEDING TO CURRENT ROW
-- Bounded frame (`Preceding: N, Following: 0`) — ROWS N,0
-- **Not supported:** `Following > 0` or UNBOUNDED FOLLOWING
-
-**Streaming algorithms by function:**
-
-| Function | Default Frame | Bounded Frame |
-|----------|--------------|---------------|
-| SUM | Running accumulator O(1) | Sliding ring buffer |
-| AVG | Running sum + count | Sliding ring buffer + presence tracking |
-| COUNT | Counter | `min(pos+1, frameSize)` |
-| FIRST | Captured once | Sliding ring buffer |
-| LAST | Current row | Current row |
-| MIN | Running minimum | Monotonic deque O(1) amortized |
-| MAX | Running maximum | Monotonic deque O(1) amortized |
-| LAG(n) | Ring buffer of n+1 | Ring buffer of n+1 |
-| LEAD(n) | Delayed emission buffer | Delayed emission buffer |
-| ROW_NUMBER, RANK, DENSE_RANK | Counter | Counter |
-
-**Example — Streaming running total (O(1) memory):**
-```go
-filter, err := ssql.StreamWindow([]ssql.WindowConfig{{
-    PartitionBy: []string{"dept"},
-    OrderBy:     []ssql.OrderField{{Field: "date"}},
-    Frame:       ssql.WindowFrame{Preceding: -1, Following: 0},
-    Specs: []ssql.WindowSpec{
-        {Function: ssql.WSum("revenue"), ResultName: "running_total"},
-    },
-}})
-// 71x faster than Window() at 10K rows
-```
-
-**Example — 3-row moving average with LAG:**
-```go
-filter, err := ssql.StreamWindow([]ssql.WindowConfig{{
-    OrderBy: []ssql.OrderField{{Field: "date"}},
-    Frame:   ssql.WindowFrame{Preceding: 2, Following: 0},
-    Specs: []ssql.WindowSpec{
-        {Function: ssql.WAvg("price"), ResultName: "ma3"},
-        {Function: ssql.WLag("price", 1), ResultName: "prev_price"},
-    },
-}})
-```
-
-**Example — Sliding MIN/MAX with monotonic deque:**
-```go
-filter, err := ssql.StreamWindow([]ssql.WindowConfig{{
-    OrderBy: []ssql.OrderField{{Field: "date"}},
-    Frame:   ssql.WindowFrame{Preceding: 9, Following: 0}, // 10-row window
-    Specs: []ssql.WindowSpec{
-        {Function: ssql.WMin("price"), ResultName: "low10"},
-        {Function: ssql.WMax("price"), ResultName: "high10"},
-    },
-}})
-```
-
-`MustStreamWindow` is the panic-on-error variant, useful in generated code where configs are known-valid at generation time.
-
-### More Window Functions
-
-```go
-func WLagDefault(field string, offset int, def any) WindowFunc   // LAG(field, offset, default)
-func WLeadDefault(field string, offset int, def any) WindowFunc  // LEAD(field, offset, default)
-func WNthValue(field string, n int) WindowFunc                    // NTH_VALUE(field, n), absent while the frame has fewer than n rows
-func WCumeDist() WindowFunc                                       // CUME_DIST()
-func WCountField(field string) WindowFunc                         // COUNT(field): rows in the frame where field is present
-func WAggregate(spec WAggSpec) WindowFunc                         // any registry aggregate as a window function (materialised path only)
-```
-
-Introspection, used by codegen and the SQL translator so they never re-parse a
-printed value (DFC115):
-
-```go
-func DescribeWindowFunc(fn WindowFunc) WindowFuncDesc
-func WindowFuncCode(fn WindowFunc) string          // the Go constructor call that rebuilds fn (what `generate go` emits)
-func WindowFuncField(fn WindowFunc) (string, bool) // the source field, or "" for ranking/count
-func WindowFuncResultKind(fn WindowFunc) string    // "int", "float", or "" (the source field's type)
-```
-
-### CompareAny
-```go
-func CompareAny(a, b any) int
-```
-Compares two values of any type. Returns -1, 0, or 1. Handles nil (sorts first), cross-type numeric comparison, and string fallback.
-
-### CompareRecordFields
-```go
-func CompareRecordFields(a, b Record, orderBy []OrderField) int
-```
-Compares two records by multiple order fields with ascending/descending support.
-
----
-
-## Batch Window Operations
-
-*Functions for windowing and batching streams into slices*
-
-> 🔄 **Infinite Stream Patterns**: See windows on finite and endless streams in the [Getting Started Guide](codelab-intro.md#windows-batches-and-time-buckets).
-
-### CountWindow[T]
-```go
-func CountWindow[T any](size int) Filter[T, []T]
-```
-Groups elements into fixed-size windows.
-
-**Example:**
-```go
-batches := ssql.CountWindow[int](3)(numbers) // [1,2,3], [4,5,6], ...
-```
-
-### SlidingCountWindow[T]
-```go
-func SlidingCountWindow[T any](windowSize, stepSize int) Filter[T, []T]
-```
-Creates sliding windows with configurable step size.
-
-### TimeWindow[T]
-```go
-func TimeWindow[T any](duration time.Duration, timeField string) Filter[T, []T]
-```
-Groups elements by time intervals.
-
-### SlidingTimeWindow[T]
-```go
-func SlidingTimeWindow[T any](windowDuration, slideDuration time.Duration, timeField string) Filter[T, []T]
-```
-Creates sliding time-based windows.
-
----
-
-## Early Termination
-
-*Functions for controlled stream termination*
-
-### TakeWhile[T]
-```go
-func TakeWhile[T any](predicate func(T) bool) Filter[T, T]
-```
-Takes elements while condition is true.
-
-### TakeUntil[T]
-```go
-func TakeUntil[T any](predicate func(T) bool) Filter[T, T]
-```
-Takes elements until condition becomes true.
-
-### SkipWhile[T]
-```go
-func SkipWhile[T any](predicate func(T) bool) Filter[T, T]
-```
-Skips elements while condition is true.
-
-### SkipUntil[T]
-```go
-func SkipUntil[T any](predicate func(T) bool) Filter[T, T]
-```
-Skips elements until condition becomes true.
-
-### Timeout[T]
-```go
-func Timeout[T any](duration time.Duration) Filter[T, T]
-```
-Terminates stream after specified duration.
-
-### TimeBasedTimeout
-```go
-func TimeBasedTimeout(timeField string, duration time.Duration) Filter[Record, Record]
-```
-Terminates based on time field values in records.
-
----
-
-## SQL-Style Operations
-
-### UnpivotRecords
-```go
-func UnpivotRecords(records iter.Seq[Record], cfg UnpivotConfig) iter.Seq[Record]
-func UnpivotFilter(cfg UnpivotConfig) Filter[Record, Record]
-type UnpivotConfig struct{ IDs, Values []string; NameField, ValueField string }
-```
-Wide→long fold (SQL UNPIVOT; pivot's inverse): one output record per
-(input record, value field), copying `IDs`, with the field's name in
-`NameField` (default `name`) and its value in `ValueField` (default
-`value`). Empty `Values` = every non-ID field sorted by name. An absent or
-null value produces no row. Row-local and order-preserving. Backs
-`ssql unpivot`.
-
-**Example:**
-```go
-long := ssql.UnpivotRecords(wide, ssql.UnpivotConfig{IDs: []string{"product"}, Values: []string{"jan", "feb"}, NameField: "month", ValueField: "revenue"})
-```
-
-
-*Database-like operations for Record streams*
-
-> 🎯 **Real-World Examples**: See a group-by feeding a join in the [Getting Started Guide](codelab-intro.md#sql-style-operations-group-by-and-join).
-
-### FillRecords
-```go
-func FillRecords(records iter.Seq[Record], cfg FillConfig) iter.Seq[Record]
-func FillFilter(cfg FillConfig) Filter[Record, Record]
-type FillConfig struct{ Down []string; Defaults []FillDefault }
-type FillDefault struct{ Field string; Value any }
-```
-Carries `Down` fields' last non-missing value forward over gaps, then
-gives `Defaults` where a field is still missing (absent, nil, or `""` —
-DFC124). Streams with only the carried state; `Down` makes it
-order-dependent. Backs `ssql fill`.
-
-**Example:**
-```go
-filled := ssql.FillRecords(records, ssql.FillConfig{
-	Down:     []string{"region"},
-	Defaults: []ssql.FillDefault{{Field: "status", Value: "unknown"}},
-})
-```
-
-### ExtractRecords
-```go
-func ExtractRecords(records iter.Seq[Record], cfg ExtractConfig) (iter.Seq[Record], error)
-func ExtractFilter(cfg ExtractConfig) Filter[Record, Record]
-func CompileExtract(cfg ExtractConfig) (*regexp.Regexp, []string, error)
-type ExtractConfig struct{ Field, Pattern string; Skip, Keep bool }
-```
-Applies a Go regex to `Field`; every named group `(?P<name>…)` becomes a
-string field. A non-matching (or missing) field is a loud error unless
-`Skip` drops the record; the source field is removed unless `Keep`. The
-pattern must have at least one named group. Backs `ssql extract`.
-
-**Example:**
-```go
-out, err := ssql.ExtractRecords(lines, ssql.ExtractConfig{Field: "line", Pattern: `^(?P<ts>\S+) (?P<lvl>\w+) (?P<msg>.*)$`, Skip: true})
-```
-
-### Join Operations
-
-#### JoinPredicate Type
-
-```go
-type JoinPredicate func(left, right Record) bool
-```
-
-JoinPredicate defines the condition for joining two records. Returns true if the left and right records should be joined together.
-
-**Example:**
-```go
-// Using OnFields helper
-predicate := ssql.OnFields("user_id")
-
-// Custom predicate
-customPredicate := ssql.OnCondition(func(left, right ssql.Record) bool {
-    leftID := ssql.GetOr(left, "user_id", "")
-    rightID := ssql.GetOr(right, "customer_id", "")
-    return leftID == rightID
-})
-```
-
-#### InnerJoin
-```go
-func InnerJoin(rightSeq iter.Seq[Record], predicate JoinPredicate) Filter[Record, Record]
-```
-Performs inner join between two record streams.
-
-#### LeftJoin
-```go
-func LeftJoin(rightSeq iter.Seq[Record], predicate JoinPredicate) Filter[Record, Record]
-```
-Performs left outer join.
-
-#### RightJoin
-```go
-func RightJoin(rightSeq iter.Seq[Record], predicate JoinPredicate) Filter[Record, Record]
-```
-Performs right outer join.
-
-#### FullJoin
-```go
-func FullJoin(rightSeq iter.Seq[Record], predicate JoinPredicate) Filter[Record, Record]
-```
-Performs full outer join.
-
-#### Join Predicates
-
-##### OnFields
-```go
-func OnFields(fields ...string) JoinPredicate
-```
-Creates join predicate based on field equality.
-
-##### OnCondition
-```go
-func OnCondition(condition func(left, right Record) bool) JoinPredicate
-```
-Creates custom join predicate.
-
-##### OnFieldPair
-```go
-func OnFieldPair(leftField, rightField string) JoinPredicate
-```
-Creates join predicate for different field names on left and right sides.
-
-**Example:**
-```go
-// Join where left.user_id equals right.customer_id
-joined := ssql.InnerJoin(
-    rightStream,
-    ssql.OnFieldPair("user_id", "customer_id")
-)(leftStream)
-```
-
-#### LookupJoin
-
-```go
-func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record, Record]
-```
-
-Performs multiple lookup operations from the same right-side data in a single pass. More efficient than multiple separate joins when enriching records from a single lookup table.
-
-**LookupClause:**
-```go
-type LookupClause struct {
-    LeftField    string            // Field name in the left record to match on
-    RightField   string            // Field name in the right record to match on
-    FieldRenames map[string]string // Map of right_field -> new_name for fields to bring in
-}
-```
-
-**Lookup Helper:**
-```go
-func Lookup(leftField, rightField string, renames ...string) LookupClause
-```
-Creates a LookupClause with optional field renames (pairs of old, new names).
-
-**Example:**
-```go
-// Enrich products with category names for both origin and destination
-clauses := []ssql.LookupClause{
-    ssql.Lookup("origin_cat", "cat_id", "cat_name", "origin_name"),
-    ssql.Lookup("dest_cat", "cat_id", "cat_name", "dest_name"),
-}
-enriched := ssql.LookupJoin(categories, clauses)(products)
-```
-
-**CLI equivalent:**
-```bash
-ssql from products.csv | ssql join <(ssql from categories.csv) \
-    -on origin_cat cat_id -as cat_name origin_name \
-    - \
-    -on dest_cat cat_id -as cat_name dest_name
-```
-
-### SortRecordsSpill
+Every sort materialises its input (O(N) memory) and is a barrier.
+`SortFunc` and `SortRecords` are stable: equal elements keep input order,
+so every lane agrees on ties.
+
+### Sorting larger than memory
 
 ```go
 type SpillConfig struct {
@@ -1303,22 +518,331 @@ type SpillConfig struct {
 }
 func SortRecordsSpill(orderBy []OrderField, cfg SpillConfig) Filter[Record, Record]
 func ParseMemorySize(s string) (int64, error)   // "512M", "4G", bytes
+func MergeSorted(orderBy []OrderField, sources ...iter.Seq[Record]) iter.Seq[Record]   // k-way merge of sorted sources, O(k) memory, stable
 ```
 
-`SortRecords` with bounded memory: runs of at most the budget are sorted
-in memory and written under `Dir` (gob-encoded, so every value keeps its
-type), then k-way merged with `MergeSorted`. An input that fits in one run
-is sorted in memory and nothing is written. Stable, like `SortRecords`
-(both are, so the two agree on ties). The run directory is removed when
-the merge ends, when the consumer stops early, and on SIGINT/SIGTERM. A
-record holding a sequence or nested record cannot be spilled (panic with
-a clear message).
+`SortRecordsSpill` is `SortRecords` with bounded memory: runs of at most
+the budget are sorted in memory and written under `Dir` (gob-encoded, so
+every value keeps its type), then k-way merged with `MergeSorted`. An
+input that fits in one run is sorted in memory and nothing is written.
+The run directory is removed when the merge ends, when the consumer stops
+early, and on SIGINT/SIGTERM. A record holding a sequence or nested
+record cannot be spilled (a panic with a clear message). `sort -spill`
+and `group-by -spill` use it.
 
-**CLI equivalent:**
-```bash
-ssql from huge.csv | ssql sort ts -spill /var/tmp -memory 2G
-ssql from huge.csv | ssql group-by key -sum x total -spill /var/tmp   # sort then stream
+```go
+shard1, _ := ssql.ReadCSV("shard1.csv")
+shard2, _ := ssql.ReadCSV("shard2.csv")
+merged := ssql.MergeSorted([]ssql.OrderField{{Field: "timestamp"}}, shard1, shard2)
 ```
+
+### Top-k
+
+```go
+func TopBy[T any, K cmp.Ordered](n int, keyFn func(T) K) Filter[T, T]     // highest first
+func BottomBy[T any, K cmp.Ordered](n int, keyFn func(T) K) Filter[T, T]  // lowest first
+func TopByFunc[T any](n int, cmp func(a, b T) int) Filter[T, T]
+func BottomByFunc[T any](n int, cmp func(a, b T) int) Filter[T, T]
+```
+
+A bounded heap of size n: O(N log n) time and O(n) memory, against a full
+sort's O(N log N) and O(N). The `Func` forms rank by a comparator
+(`CompareAny` orders numbers numerically and everything else lexically,
+so one field may hold mixed values). Behind the `top` command.
+
+---
+
+## Aggregation & Analysis
+
+### Group-by
+
+```go
+func GroupByFields(sequenceField string, fields ...string) Filter[Record, Record]     // one record per distinct key; the group's rows in sequenceField
+func GroupBy[K comparable](sequenceField string, keyField string, keyFn func(Record) K) Filter[Record, Record]
+func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, Record] // input already sorted by the fields: one group in memory (`group-by -presorted`)
+func Aggregate(sequenceField string, aggregations map[string]AggregateFunc) Filter[Record, Record]
+func AggregateOrdered(sequenceField string, aggregations []NamedAgg) Filter[Record, Record]   // result fields in the order given
+type NamedAgg struct{ Name string; Fn AggregateFunc }
+```
+
+```go
+grouped := ssql.GroupByFields("sales", "region", "product")(records)
+results := ssql.Aggregate("sales", map[string]ssql.AggregateFunc{
+    "total_sales": ssql.Sum("amount"),
+    "avg_sale":    ssql.Avg("amount"),
+    "count":       ssql.Count(),
+})(grouped)
+```
+
+`GroupByFields` collects each group's records into `sequenceField`;
+`Aggregate` replaces that field with the named results. `AggregateOrdered`
+is the same with a defined column order, which is what `group-by` emits.
+
+### Aggregate functions
+
+```go
+type AggregateFunc func([]Record) AggregateResult
+type AggregateResult interface{ GetValue() any }   // sealed; only AggResult[V] implements it
+type AggResult[V Value] struct{ /* private */ }
+func (a AggResult[V]) GetValue() any
+
+func Count() AggregateFunc
+func Sum(field string) AggregateFunc
+func Avg(field string) AggregateFunc
+func Min[T OrderedValue](field string) AggregateFunc
+func Max[T OrderedValue](field string) AggregateFunc
+func First[T Value](field string) AggregateFunc
+func Last[T Value](field string) AggregateFunc
+func Collect(field string) AggregateFunc            // every value, as []any
+func CollectSeq[T Value](field string) AggregateFunc // every value of type T, as iter.Seq[any]
+
+func MinOf(field string) AggregateFunc      // keeps the field's own type: numbers, strings, times
+func MaxOf(field string) AggregateFunc
+func FirstOf(field string) AggregateFunc    // first present value in arrival order
+func LastOf(field string) AggregateFunc
+func CountDistinct(field string) AggregateFunc
+func StringAgg(field, sep string) AggregateFunc   // string_agg; values formatted by AggValueString
+func ArgMax(field, by string) AggregateFunc       // FIELD from the record where BY is largest
+func ArgMin(field, by string) AggregateFunc
+func Median(field string) AggregateFunc
+func Mode(field string) AggregateFunc             // the most frequent present value, its own type
+func Percentile(field string, p float64) AggregateFunc   // continuous p-quantile, 0 ≤ p ≤ 1
+func StdDev(field string) AggregateFunc                  // sample
+func Variance(field string) AggregateFunc                // sample (n−1)
+
+func ExprAgg(expression string) AggregateFunc                             // sum(price*qty), count(), avg(x)
+func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc  // a fold with mutable state
+```
+
+```go
+aggs := map[string]ssql.AggregateFunc{
+    "first_name":  ssql.First[string]("name"),
+    "top_amount":  ssql.Max[float64]("amount"),
+    "all_names":   ssql.Collect("name"),
+    "all_amounts": ssql.CollectSeq[float64]("amount"),
+}
+```
+
+These are the aggregates behind `group-by`'s flags. All skip records
+where the field is missing; a group that cannot be ordered or mixes kinds
+is an error, never a silent zero. `Collect` gives a slice (JSON output,
+length checks); `CollectSeq[T]` gives an iterator and drops values not of
+type T.
+
+### Numeric accumulators
+
+```go
+type CompensatedSum struct{ Sum, C float64 }   // Neumaier compensated summation; what -sum, -avg and Welford use
+func (s *CompensatedSum) Add(x float64)
+func (s *CompensatedSum) Merge(o CompensatedSum)
+func (s CompensatedSum) Value() float64
+
+type Welford struct{ N int64 /* private mean, M2 */ }   // single-pass mean and variance
+func (w *Welford) Add(x float64)
+func (w *Welford) Merge(o Welford)          // Chan, Golub & LeVeque, for shard merges
+func (w Welford) MeanValue() float64
+func (w Welford) Variance() float64         // sample, n−1
+
+func QuantileCont(sorted []float64, p float64) float64   // the continuous quantile every lane shares
+func AggValueString(v any) string                        // StringAgg's text form: ints in full, floats shortest round-trip, times RFC 3339
+```
+
+### Rollup and cube
+
+```go
+func Rollup(config RollupConfig) Filter[Record, Record]
+type RollupConfig struct {
+    Fields       []string                 // group-by fields in order
+    Aggregations map[string]AggregateFunc
+    Mode         RollupMode
+}
+type RollupMode int
+const (
+    RollupHierarchical RollupMode = iota // (), (a), (a,b), (a,b,c)
+    RollupCube                           // all 2^n combinations
+)
+```
+
+One row per detail group, enriched with every parent level's aggregates
+under a prefixed name: for grouping set `(dept, region)` and result `R`,
+`dept_region_R`; for `(dept)`, `dept_R`; for the grand total, `R`.
+
+```go
+enriched := ssql.Rollup(ssql.RollupConfig{
+    Fields:       []string{"dept", "region"},
+    Aggregations: map[string]ssql.AggregateFunc{"count": ssql.Count(), "total": ssql.Sum("salary")},
+    Mode:         ssql.RollupHierarchical,
+})(records)
+// each row: dept, region, dept_region_count, dept_region_total, dept_count, dept_total, count, total
+```
+
+### Describe
+
+```go
+func DescribeRecords(records iter.Seq[Record], cfg DescribeConfig) iter.Seq[Record]
+func DescribeFilter(cfg DescribeConfig) Filter[Record, Record]
+type DescribeConfig struct{ Fields []string }
+```
+
+One output record per field: `field`, `type` (the most general kind seen),
+`count` (non-missing), `missing` (absent, null or empty string),
+`distinct` (exact), and for numeric fields `min`, `max`, `mean`, `median`.
+Numeric stats are absent, not zero, on other fields. Rows follow
+`cfg.Fields` when given, otherwise field-name order. A barrier. Behind
+`ssql describe`.
+
+### Running statistics
+
+```go
+func RunningSum(fieldName string) Filter[Record, Record]
+func RunningAverage(fieldName string, windowSize int) Filter[Record, Record]
+func ExponentialMovingAverage(fieldName string, alpha float64) Filter[Record, Record]
+func RunningMinMax(fieldName string) Filter[Record, Record]
+func RunningCount(fieldName string) Filter[Record, Record]
+```
+
+Each adds a field to every record as it passes; the [window
+functions](#window-and-time) are the general form.
+
+---
+
+## Reshaping
+
+### Pivot and unpivot
+
+```go
+func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record]   // cross-tab: colField's values become columns; aggFunc is count|sum|avg|min|max
+func UnpivotRecords(records iter.Seq[Record], cfg UnpivotConfig) iter.Seq[Record]
+func UnpivotFilter(cfg UnpivotConfig) Filter[Record, Record]
+type UnpivotConfig struct{ IDs, Values []string; NameField, ValueField string }
+```
+
+Unpivot is the wide→long fold: one output per (record, value field),
+copying `IDs`, with the field's name in `NameField` (default `name`) and
+its value in `ValueField` (default `value`); empty `Values` means every
+non-ID field. An absent or null value produces no row.
+
+```go
+long := ssql.UnpivotRecords(wide, ssql.UnpivotConfig{
+    IDs: []string{"product"}, Values: []string{"jan", "feb"}, NameField: "month", ValueField: "revenue",
+})
+```
+
+### Fill
+
+```go
+func FillRecords(records iter.Seq[Record], cfg FillConfig) iter.Seq[Record]
+func FillFilter(cfg FillConfig) Filter[Record, Record]
+type FillConfig struct{ Down []string; Defaults []FillDefault }
+type FillDefault struct{ Field string; Value any }
+```
+
+Carries `Down` fields' last non-missing value forward over gaps, then
+gives `Defaults` where a field is still missing. Streams with only the
+carried state.
+
+```go
+filled := ssql.FillRecords(records, ssql.FillConfig{
+    Down:     []string{"region"},
+    Defaults: []ssql.FillDefault{{Field: "status", Value: "unknown"}},
+})
+```
+
+### Extract
+
+```go
+func ExtractRecords(records iter.Seq[Record], cfg ExtractConfig) (iter.Seq[Record], error)
+func ExtractFilter(cfg ExtractConfig) Filter[Record, Record]
+func CompileExtract(cfg ExtractConfig) (*regexp.Regexp, []string, error)
+type ExtractConfig struct{ Field, Pattern string; Skip, Keep bool }
+```
+
+Applies a Go regexp to `Field`; every named group `(?P<name>…)` becomes a
+string field. A non-matching or missing field is an error unless `Skip`
+drops the record; the source field is removed unless `Keep`.
+
+```go
+out, err := ssql.ExtractRecords(lines, ssql.ExtractConfig{
+    Field: "line", Pattern: `^(?P<ts>\S+) (?P<lvl>\w+) (?P<msg>.*)$`, Skip: true,
+})
+```
+
+### Flattening sequences and nested records
+
+```go
+func DotFlatten(separator string, fields ...string) Filter[Record, Record]    // sequences zipped position by position; nested records become prefixed fields
+func CrossFlatten(separator string, fields ...string) Filter[Record, Record]  // Cartesian product of the sequences
+func Materialize(sourceField, targetField, separator string) Filter[Record, Record]   // a sequence joined into one string in targetField (a grouping key)
+func MaterializeJSON(sourceField, targetField string) Filter[Record, Record]          // a sequence or nested record as JSON text in targetField
+```
+
+Field names are kept: `{tags: [a, b], scores: [10, 20]}` dot-flattens to
+`{tags: a, scores: 10}`, `{tags: b, scores: 20}`; sequences of different
+lengths stop at the shortest. A nested record `{user: {name: Alice}}`
+flattens to `user<sep>name`.
+
+### Hash
+
+```go
+func Hash(sourceField, targetField string) Filter[Record, Record]   // hex SHA-256 of a string field: a fixed-length grouping key
+```
+
+---
+
+## Joins and Set Operations
+
+### Join Operations
+
+```go
+type JoinPredicate interface {
+    Match(left, right Record) bool
+}
+type KeyExtractor interface {          // optional on a JoinPredicate: enables the hash join
+    ExtractKey(r Record) (string, bool)
+}
+func OnFields(fields ...string) JoinPredicate                          // equality on the same-named fields (hash join)
+func OnFieldPair(leftField, rightField string) JoinPredicate           // left.a = right.b (hash join)
+func OnCondition(condition func(left, right Record) bool) JoinPredicate // any predicate (nested loop)
+
+func InnerJoin(rightSeq iter.Seq[Record], predicate JoinPredicate) Filter[Record, Record]
+func LeftJoin(rightSeq iter.Seq[Record], predicate JoinPredicate) Filter[Record, Record]
+func RightJoin(rightSeq iter.Seq[Record], predicate JoinPredicate) Filter[Record, Record]
+func FullJoin(rightSeq iter.Seq[Record], predicate JoinPredicate) Filter[Record, Record]
+```
+
+```go
+joined := ssql.InnerJoin(
+    rightStream,
+    ssql.OnFieldPair("user_id", "customer_id"),
+)(leftStream)
+```
+
+The right side is read in full when the first left record arrives; the
+left streams. Outer joins leave the unmatched side's fields absent.
+
+### Lookup join
+
+```go
+func LookupJoin(rightSeq iter.Seq[Record], clauses []LookupClause) Filter[Record, Record]
+type LookupClause struct {
+    LeftField    string            // field of the left record to match on
+    RightField   string            // field of the right record to match on
+    FieldRenames map[string]string // right field → name it takes in the output
+}
+func Lookup(leftField, rightField string, renames ...string) LookupClause   // renames as old, new pairs
+```
+
+Several lookups from one right-side table in a single pass:
+
+```go
+clauses := []ssql.LookupClause{
+    ssql.Lookup("origin_cat", "cat_id", "cat_name", "origin_name"),
+    ssql.Lookup("dest_cat", "cat_id", "cat_name", "dest_name"),
+}
+enriched := ssql.LookupJoin(categories, clauses)(products)
+```
+
+The CLI form is `join FILE -on origin_cat cat_id -as cat_name origin_name - -on dest_cat cat_id -as cat_name dest_name`.
 
 ### AsofJoin
 
@@ -1334,16 +858,13 @@ type AsofConfig struct {
 func AsofJoin(right iter.Seq[Record], cfg AsofConfig) Filter[Record, Record]
 ```
 
-Each left row takes the right row that is current *as of* its time: among
-the right rows with the same key, the nearest at or before the left time
-(the quote in force when the trade happened). The right side is indexed
-per key, sorted by time; the left streams in input order, so the output
-is in left order. Ties on the right time take the last in input order. A
-left row whose key or time is absent matches nothing. The merged row is
-the left fields, then the right's, except a right key or time field that
-shares its name with the left's (the left value is the row's).
+Each left row takes the right row that is current *as of* its time:
+among the right rows with the same key, the nearest at or before the left
+time (the quote in force when the trade happened). The right side is
+indexed per key and sorted by time; the left streams in input order, so
+the output is in left order. Ties on the right time take the last in
+input order. A left row whose key or time is absent matches nothing.
 
-**Example:**
 ```go
 quoted := ssql.AsofJoin(quotes, ssql.AsofConfig{
     LeftKeys: []string{"sym"}, RightKeys: []string{"sym"},
@@ -1352,16 +873,9 @@ quoted := ssql.AsofJoin(quotes, ssql.AsofConfig{
 })(trades)
 ```
 
-**CLI equivalent:**
-```bash
-ssql from trades.csv | ssql join quotes.csv -using sym -asof ts -tolerance 5m
-```
+The CLI form is `join quotes.csv -using sym -asof ts -tolerance 5m`.
 
-The `typed` package has `AsofJoin` and `AsofJoinParallel` (key and time
-accessors over struct fields; the time axis is `int64` nanoseconds or the
-number itself), inner semantics only.
-
-### Set Operations: Except / Intersect
+### Except and Intersect
 
 ```go
 type SetKeyFunc func(r Record) (key string, ok bool)
@@ -1371,538 +885,310 @@ func Except(right iter.Seq[Record], leftKey, rightKey SetKeyFunc, all bool) Filt
 func Intersect(right iter.Seq[Record], leftKey, rightKey SetKeyFunc, all bool) Filter[Record, Record]
 ```
 
-`Except` keeps the left rows whose key is absent from the right; `Intersect`
-the rows whose key is present. With `WholeRow` on both sides that is SQL
-`EXCEPT` / `INTERSECT`; with `FieldsKey` it is the anti-join / semi-join
-(the left row comes out unchanged). The right side is read in full when the
-first left row arrives; the left streams in input order. `all=false` yields
-each distinct left row once; `all=true` keeps duplicates, and with whole-row
-keys is the multiset `EXCEPT ALL` / `INTERSECT ALL`. A left row with no key
-(an absent field) matches nothing: except keeps it, intersect drops it.
-Numbers key as numbers (an int 3 and a float 3 match); a number never keys
-like the text that prints the same.
+`Except` keeps the left rows whose key is absent from the right;
+`Intersect` the rows whose key is present. With `WholeRow` on both sides
+that is SQL `EXCEPT` / `INTERSECT`; with `FieldsKey` it is the anti-join /
+semi-join (the left row comes out unchanged). `all=false` yields each
+distinct left row once; `all=true` keeps duplicates (the multiset `EXCEPT
+ALL` / `INTERSECT ALL` with whole-row keys). A left row with no key
+matches nothing: except keeps it, intersect drops it. Numbers key as
+numbers (an int 3 and a float 3 match); a number never keys like the text
+that prints the same.
 
-**Example:**
 ```go
-// Customers with no order (anti-join)
 noOrders := ssql.Except(orders, ssql.FieldsKey("customer_id"), ssql.FieldsKey("customer_id"), false)(customers)
-
-// Rows of today's file not in yesterday's (SQL EXCEPT)
 changed := ssql.Except(yesterday, ssql.WholeRow, ssql.WholeRow, false)(today)
 ```
 
-**CLI equivalent:**
-```bash
-ssql from customers.csv | ssql except -file orders.csv -using customer_id
-ssql from today.csv | ssql except -file yesterday.csv
-```
+---
 
-The `typed` package has `Except`, `Intersect` (key functions over struct
-fields), `ExceptAll`, `IntersectAll` (multiset, one comparable row type) and
-`ExceptParallel`, `IntersectParallel` (a per-shard probe of the shared set).
+## Window and Time
 
-### Pivot
+### SQL window functions
+
+Every input row comes out enriched with computed values; unlike
+`GroupByFields`, nothing collapses.
 
 ```go
-func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record]
+func Window(configs []WindowConfig) Filter[Record, Record]
+func StreamWindow(configs []WindowConfig) (Filter[Record, Record], error)   // presorted input, O(frame) memory; refuses what it cannot stream
+func MustStreamWindow(configs []WindowConfig) Filter[Record, Record]
+
+type WindowConfig struct {
+    PartitionBy []string      // PARTITION BY (empty = whole input)
+    OrderBy     []OrderField  // ORDER BY
+    Frame       WindowFrame
+    Specs       []WindowSpec
+}
+type WindowSpec struct {
+    Function   WindowFunc
+    ResultName string
+}
+type WindowFrame struct {
+    Preceding int   // rows before the current (-1 = UNBOUNDED PRECEDING)
+    Following int   // rows after (-1 = UNBOUNDED FOLLOWING)
+    Range          bool     // RANGE frame: Preceding/Following ignored, distances in the order field's units
+    RangeTime      bool     // the order field is a time: distances in seconds
+    RangePreceding float64  // -1 = unbounded
+    RangeFollowing float64
+}
 ```
 
-A cross-tabulation: the distinct values of `colField` become columns, each
-cell `aggFunc` (`count`, `sum`, `avg`, `min`, `max`) of `valField` over the
-(row, col) group. The `pivot` command; `UnpivotRecords` is its inverse.
+**Window function constructors:**
 
-### Resampling and Time Buckets
+| Constructor | SQL | Description |
+|---|---|---|
+| `WRowNumber()` | `ROW_NUMBER()` | sequential number within the partition |
+| `WRank()` | `RANK()` | rank with gaps on ties (1,2,2,4) |
+| `WDenseRank()` | `DENSE_RANK()` | rank without gaps (1,2,2,3) |
+| `WNtile(n)` | `NTILE(n)` | bucket 1..n |
+| `WPercentRank()` | `PERCENT_RANK()` | relative rank, 0..1 |
+| `WCumeDist()` | `CUME_DIST()` | cumulative distribution, 0..1 |
+| `WLag(field, n)` | `LAG(field, n)` | the value n rows before |
+| `WLagDefault(field, n, def)` | `LAG(field, n, def)` | with a default where absent |
+| `WLead(field, n)` | `LEAD(field, n)` | the value n rows after |
+| `WLeadDefault(field, n, def)` | `LEAD(field, n, def)` | with a default |
+| `WFirst(field)` | `FIRST_VALUE(field)` | first value in the frame |
+| `WLast(field)` | `LAST_VALUE(field)` | last value in the frame |
+| `WNthValue(field, n)` | `NTH_VALUE(field, n)` | absent while the frame has fewer than n rows |
+| `WSum(field)` | `SUM(field)` | sum over the frame |
+| `WAvg(field)` | `AVG(field)` | average over the frame |
+| `WCount()` | `COUNT(*)` | rows in the frame |
+| `WCountField(field)` | `COUNT(field)` | rows in the frame where field is present |
+| `WMin(field)` | `MIN(field)` | minimum in the frame |
+| `WMax(field)` | `MAX(field)` | maximum in the frame |
+| `WAggregate(spec)` | any aggregate | a registry aggregate (`StdDev`, `Percentile`, …) over the frame; materialised path only |
+
+```go
+func WRowNumber() WindowFunc
+func WRank() WindowFunc
+func WDenseRank() WindowFunc
+func WNtile(n int) WindowFunc
+func WPercentRank() WindowFunc
+func WCumeDist() WindowFunc
+func WLag(field string, offset int) WindowFunc
+func WLagDefault(field string, offset int, def any) WindowFunc
+func WLead(field string, offset int) WindowFunc
+func WLeadDefault(field string, offset int, def any) WindowFunc
+func WFirst(field string) WindowFunc
+func WLast(field string) WindowFunc
+func WNthValue(field string, n int) WindowFunc
+func WSum(field string) WindowFunc
+func WAvg(field string) WindowFunc
+func WCount() WindowFunc
+func WCountField(field string) WindowFunc
+func WMin(field string) WindowFunc
+func WMax(field string) WindowFunc
+func WAggregate(spec WAggSpec) WindowFunc
+type WAggSpec struct {
+    Name    string        // registry function name, e.g. "stddev"
+    Field   string        // the field the aggregate reads
+    Extra   string        // its extra argument (percentile's P, string-agg's separator, arg-max's BY)
+    Kind    string        // result wire type: "int", "float", "string", "json", or "" = the field's own
+    MinRows int           // frames with fewer rows yield an absent value (2 for sample stddev/variance)
+    Agg     AggregateFunc
+    Code    string        // Go source that rebuilds Agg (what `generate go` emits)
+}
+```
+
+```go
+// Rank employees by salary within each department
+ranked := ssql.Window([]ssql.WindowConfig{{
+    PartitionBy: []string{"dept"},
+    OrderBy:     []ssql.OrderField{{Field: "salary", Desc: true}},
+    Frame:       ssql.WindowFrame{Preceding: -1, Following: 0},
+    Specs:       []ssql.WindowSpec{{Function: ssql.WRowNumber(), ResultName: "rank"}},
+}})(employees)
+
+// Running total and the previous row, per department in date order
+enriched := ssql.Window([]ssql.WindowConfig{{
+    PartitionBy: []string{"dept"},
+    OrderBy:     []ssql.OrderField{{Field: "date"}},
+    Frame:       ssql.WindowFrame{Preceding: -1, Following: 0},
+    Specs: []ssql.WindowSpec{
+        {Function: ssql.WSum("revenue"), ResultName: "running_total"},
+        {Function: ssql.WLag("revenue", 1), ResultName: "prev_revenue"},
+    },
+}})(sales)
+
+// 7-row moving average: ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+smoothed := ssql.Window([]ssql.WindowConfig{{
+    OrderBy: []ssql.OrderField{{Field: "date"}},
+    Frame:   ssql.WindowFrame{Preceding: 6, Following: 0},
+    Specs:   []ssql.WindowSpec{{Function: ssql.WAvg("price"), ResultName: "ma7"}},
+}})(prices)
+```
+
+**`Window` vs `StreamWindow`.** `Window` accepts any input order and
+holds a partition in memory. `StreamWindow` needs input already sorted by
+the partition fields then the order fields, and then runs in O(frame size)
+or O(1) memory with running accumulators, ring buffers and monotonic
+deques; it supports the default frame (`Preceding: -1, Following: 0`) and
+bounded frames with `Following: 0`, and returns an error for `NTILE`,
+`PERCENT_RANK`, `Following > 0` or `WAggregate`. `MustStreamWindow` panics
+instead of returning the error, for configurations known valid in
+advance.
+
+```go
+filter, err := ssql.StreamWindow([]ssql.WindowConfig{{
+    OrderBy: []ssql.OrderField{{Field: "date"}},
+    Frame:   ssql.WindowFrame{Preceding: 9, Following: 0},   // 10-row window
+    Specs: []ssql.WindowSpec{
+        {Function: ssql.WMin("price"), ResultName: "low10"},
+        {Function: ssql.WMax("price"), ResultName: "high10"},
+    },
+}})
+if err != nil {
+    log.Fatal(err)
+}
+result := filter(sortedPrices)
+```
+
+### Batch Window Operations
+
+Windows that turn a stream of records into a stream of slices, for
+batch processing and time buckets.
+
+```go
+func CountWindow[T any](size int) Filter[T, []T]                                   // fixed-size batches
+func SlidingCountWindow[T any](windowSize, stepSize int) Filter[T, []T]
+func TimeWindow[T any](duration time.Duration, timeField string) Filter[T, []T]     // by time interval
+func SlidingTimeWindow[T any](windowDuration, slideDuration time.Duration, timeField string) Filter[T, []T]
+```
+
+```go
+batches := ssql.CountWindow[int](3)(numbers)   // [1,2,3], [4,5,6], …
+```
+
+Only one window's records are held at a time, so these work on endless
+streams; the [Getting Started Guide](codelab-intro.md#windows-batches-and-time-buckets)
+shows them.
+
+### Resampling and time buckets
 
 ```go
 func ResampleRecords(records iter.Seq[Record], cfg ResampleConfig) (iter.Seq[Record], error)
-func ResampleFilter(cfg ResampleConfig) Filter[Record, Record]   // the same as a Filter, for generated pipelines
-func SnapToBucket(ns int64, every time.Duration) int64            // epoch-aligned floor, correct before 1970
-func BucketValue(v any, every time.Duration) (any, error)         // the bucket() expression function; keeps the input family
+func ResampleFilter(cfg ResampleConfig) Filter[Record, Record]
+func SnapToBucket(ns int64, every time.Duration) int64     // epoch-aligned floor, correct before 1970
+func BucketValue(v any, every time.Duration) (any, error)  // the bucket() expression function; keeps the input's family
 ```
 
-`ResampleRecords` snaps to an epoch-aligned grid and emits one record per grid
-point with each value field filled per `cfg.Fill` (previous, next, linear).
-`BucketValue` shares the snap, so `update -set-bucket` + `group-by` and
-`resample` land on the same grid.
-
-### GroupBy Operations
-
-#### GroupBy[K]
-```go
-func GroupBy[K comparable](sequenceField string, keyField string, keyFn func(Record) K) Filter[Record, Record]
-```
-Groups records by a key function.
-
-#### GroupByFields
-```go
-func GroupByFields(sequenceField string, fields ...string) Filter[Record, Record]
-```
-Groups records by field values.
-
-**Example:**
-```go
-grouped := ssql.GroupByFields("sales_data", "region", "product")(records)
-```
-
-#### StreamGroupByFields
-
-```go
-func StreamGroupByFields(sequenceField string, fields ...string) Filter[Record, Record]
-```
-
-`GroupByFields` for input already sorted by the group fields: one group in
-memory at a time. `group-by -presorted`, and what `group-by -spill` runs after
-its out-of-core sort.
-
-### Aggregation Functions
-
-#### AggregateFunc Type
-
-```go
-type AggregateFunc func([]Record) any
-```
-
-AggregateFunc defines an aggregation function over a group of records. Takes a slice of records and returns an aggregated value.
-
-**Built-in Aggregation Functions:**
-
-#### Count
-```go
-func Count() AggregateFunc
-```
-Counts records in each group.
-
-#### Sum
-```go
-func Sum(field string) AggregateFunc
-```
-Sums numeric field values.
-
-#### Avg
-```go
-func Avg(field string) AggregateFunc
-```
-Calculates average of numeric field.
-
-#### Min[T] / Max[T]
-```go
-func Min[T cmp.Ordered](field string) AggregateFunc
-func Max[T cmp.Ordered](field string) AggregateFunc
-```
-Finds minimum/maximum field values.
-
-#### First[T] / Last[T]
-```go
-func First[T Value](field string) AggregateFunc
-func Last[T Value](field string) AggregateFunc
-```
-Gets first/last field value in group. Requires type parameter for compile-time type safety.
-
-**Example:**
-```go
-aggregations := map[string]ssql.AggregateFunc{
-    "first_name": ssql.First[string]("name"),
-    "last_sale":  ssql.Last[float64]("amount"),
-}
-```
-
-#### Collect
-```go
-func Collect(field string) AggregateFunc
-```
-Collects all field values into a `[]any` array. Useful when you need the collected values as a slice for further processing or JSON serialization.
-
-#### CollectSeq[T]
-```go
-func CollectSeq[T Value](field string) AggregateFunc
-```
-Collects all field values into an `iter.Seq[any]` iterator. Requires type parameter for compile-time type safety during collection - values that don't match type T are skipped. Returns an iterator (rather than a slice) for memory efficiency with large groups.
-
-**Example:**
-```go
-aggregations := map[string]ssql.AggregateFunc{
-    "all_names":   ssql.Collect("name"),                    // Returns []any
-    "all_amounts": ssql.CollectSeq[float64]("amount"),      // Returns iter.Seq[any], type-safe collection
-}
-```
-
-**When to use:**
-- Use `Collect` when you need a slice (e.g., for JSON output, indexing, or length checks)
-- Use `CollectSeq[T]` when you want type-safe collection and will iterate over results
-
-#### Aggregate
-```go
-func Aggregate(sequenceField string, aggregations map[string]AggregateFunc) Filter[Record, Record]
-```
-Applies multiple aggregations to grouped data.
-
-**Example:**
-```go
-results := ssql.Aggregate("sales_data", map[string]ssql.AggregateFunc{
-    "total_sales": ssql.Sum("amount"),
-    "avg_sale":    ssql.Avg("amount"),
-    "count":       ssql.Count(),
-})(groupedRecords)
-```
-
-#### AggregateOrdered
-
-```go
-type NamedAgg struct { Name string; Fn AggregateFunc }
-func AggregateOrdered(sequenceField string, aggregations []NamedAgg) Filter[Record, Record]
-```
-
-`Aggregate` with the result fields in the order given (the order `group-by`
-names them); exec and generated code share it so the lanes' column order
-cannot drift.
-
-#### Type-preserving, statistical and positional aggregates
-
-```go
-func MinOf(field string) AggregateFunc      // keeps the field's own type; numbers, strings, times
-func MaxOf(field string) AggregateFunc
-func FirstOf(field string) AggregateFunc    // first present value in arrival order
-func LastOf(field string) AggregateFunc
-func CountDistinct(field string) AggregateFunc
-func StringAgg(field, sep string) AggregateFunc   // string_agg; values formatted by AggValueString
-func ArgMax(field, by string) AggregateFunc       // FIELD from the record where BY is largest
-func ArgMin(field, by string) AggregateFunc
-func Median(field string) AggregateFunc
-func Percentile(field string, p float64) AggregateFunc   // continuous p-quantile, 0 ≤ p ≤ 1
-func StdDev(field string) AggregateFunc                  // sample
-func Variance(field string) AggregateFunc                // sample (n−1)
-func QuantileCont(sorted []float64, p float64) float64   // the one formula exec and typed share
-func AggValueString(v any) string                        // StringAgg's text form: ints in full, floats shortest round-trip, times RFC 3339
-```
-
-These are the aggregates behind `group-by`'s `-min`, `-max`, `-first`,
-`-last`, `-count-distinct`, `-string-agg`, `-arg-max`, `-median`,
-`-percentile`, `-stddev`, `-variance` (DFC129). All skip records where the
-field is missing; a group that cannot be ordered or mixes kinds is an error,
-never a silent zero.
-
-#### Expression aggregates
-
-```go
-func ExprAgg(expression string) AggregateFunc                             // sum(price*qty), count(), avg(x)
-func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc  // a fold with mutable state
-func CompileAggExprPatched(expression string, fieldNames []string) (ast.Node, error)
-func ExprFieldName(node ast.Node) (string, bool)
-```
-
-`CompileAggExprPatched` returns the patched normal form the exec path
-evaluates (`sum(x) → sum(_records, #.x)`), which the typed code generator lowers
-to mergeable accumulators: one semantics, two consumers.
-
-#### Rollup
-```go
-func Rollup(config RollupConfig) Filter[Record, Record]
-```
-Performs hierarchical or cube aggregation, enriching each detail-level row with parent-level aggregation results using a field naming convention.
-
-**Types:**
-```go
-type RollupMode int
-const (
-    RollupHierarchical RollupMode = iota // (), (a), (a,b), (a,b,c)
-    RollupCube                           // all 2^n combinations
-)
-
-type RollupConfig struct {
-    Fields       []string                 // Group-by fields in order
-    Aggregations map[string]AggregateFunc // Named aggregation functions
-    Mode         RollupMode               // Rollup or Cube
-}
-```
-
-**Field naming rule:** For grouping set `[f1, f2, ...]` and aggregation result name `R`:
-- `()` → `R` (e.g., `count`)
-- `(dept)` → `dept_R` (e.g., `dept_count`)
-- `(dept, region)` → `dept_region_R` (e.g., `dept_region_count`)
-
-**Example:**
-```go
-config := ssql.RollupConfig{
-    Fields:       []string{"dept", "region"},
-    Aggregations: map[string]ssql.AggregateFunc{
-        "count": ssql.Count(),
-        "total": ssql.Sum("salary"),
-    },
-    Mode: ssql.RollupHierarchical,
-}
-enriched := ssql.Rollup(config)(records)
-// Each row: dept, region, dept_region_count, dept_region_total,
-//           dept_count, dept_total, count, total
-```
-
-Use `RollupCube` mode to add all 2^n field combinations (e.g., adds `region_count` and `region_total`).
+`ResampleRecords` snaps to an epoch-aligned grid and emits one record per
+grid point with each value field filled per `cfg.Fill` (previous, next,
+linear). `BucketValue` shares the snap, so `update -set-bucket` +
+`group-by` and `resample` land on the same grid.
 
 ---
 
-#### AggResult and Welford
+## Composition
 
-```go
-func (a AggResult) GetValue() any      // the aggregate's value (an AggregateFunc's return carries its wire kind too)
-type Welford struct{ … }              // streaming mean/variance accumulator behind -stddev / -variance
-func (w *Welford) MeanValue() float64
-func (w *Welford) Variance() float64  // sample, n−1
-```
-
-#### Rollup helpers
-
-```go
-func RollupGroupingSets(fields []string, mode RollupMode) [][]string  // the sets a rollup aggregates over, in emission order
-func RollupFieldPrefix(fields []string) string                        // "" for the grand total, else "a_b_"
-```
-
-Exported so the SQL translator and typed codegen aggregate over exactly the
-sets exec does.
-
-## Composition Operations
-
-### Pipe[T, U, V]
 ```go
 func Pipe[T, U, V any](f1 Filter[T, U], f2 Filter[U, V]) Filter[T, V]
-```
-Composes two filters into a single filter.
+func Pipe3[T, U, V, W any](f1 Filter[T, U], f2 Filter[U, V], f3 Filter[V, W]) Filter[T, W]
+func Chain[T any](filters ...Filter[T, T]) Filter[T, T]                    // any number of same-type filters
+func PipeWithErrors[T, U, V any](f1 FilterWithErrors[T, U], f2 FilterWithErrors[U, V]) FilterWithErrors[T, V]
+func ChainWithErrors[T any](filters ...FilterWithErrors[T, T]) FilterWithErrors[T, T]
 
-**Example:**
+func Tee[T any](input iter.Seq[T], n int) []iter.Seq[T]       // n independent copies (buffers)
+func LazyTee[T any](input iter.Seq[T], n int) []iter.Seq[T]   // copies that share one pass
+func TeeFile(filename string, fieldOrder ...string) Filter[Record, Record]   // Unix tee: write every record to a schema-headed JSONL file and pass it on
+```
+
 ```go
-// Compose "double" and "add 1" into single filter
 double := ssql.Select(func(x int) int { return x * 2 })
 addOne := ssql.Select(func(x int) int { return x + 1 })
 composed := ssql.Pipe(double, addOne)
 
-result := composed(numbers) // Doubles then adds 1
-```
-
-### Pipe3[T, U, V, W]
-```go
-func Pipe3[T, U, V, W any](f1 Filter[T, U], f2 Filter[U, V], f3 Filter[V, W]) Filter[T, W]
-```
-Composes three filters into a single filter.
-
-### PipeWithErrors[T, U, V]
-```go
-func PipeWithErrors[T, U, V any](f1 FilterWithErrors[T, U], f2 FilterWithErrors[U, V]) FilterWithErrors[T, V]
-```
-Composes two error-handling filters.
-
-### ChainWithErrors[T]
-```go
-func ChainWithErrors[T any](filters ...FilterWithErrors[T, T]) FilterWithErrors[T, T]
-```
-Chains multiple same-type error-handling filters together.
-
----
-
-## Flattening Operations
-
-### DotFlatten
-```go
-func DotFlatten(separator string, fields ...string) Filter[Record, Record]
-```
-Flattens multiple sequence fields using dot product (parallel iteration). If you have sequences of equal length and want to pair up elements at matching positions, use this.
-
-**Example:**
-```go
-// Input: {names: ["Alice", "Bob"], ages: [30, 25]}
-// Output: [{name: "Alice", age: 30}, {name: "Bob", age: 25}]
-flattened := ssql.DotFlatten(",", "names", "ages")(records)
-```
-
-### CrossFlatten
-```go
-func CrossFlatten(separator string, fields ...string) Filter[Record, Record]
-```
-Flattens multiple sequence fields using Cartesian product. Each element from the first sequence is paired with every element from the second sequence.
-
-**Example:**
-```go
-// Input: {colors: ["red", "blue"], sizes: ["S", "M"]}
-// Output: [{color: "red", size: "S"}, {color: "red", size: "M"},
-//          {color: "blue", size: "S"}, {color: "blue", size: "M"}]
-flattened := ssql.CrossFlatten(",", "colors", "sizes")(records)
-```
-
----
-
-## Utility Operations
-
-### Hash
-```go
-func Hash(sourceField, targetField string) Filter[Record, Record]
-```
-Creates a SHA256 hash of a string field for efficient grouping. Useful for grouping on long strings or when you need fixed-length grouping keys. The hash is hex-encoded (64 characters) for readability and compatibility.
-
-**Example:**
-```go
-// Hash long URLs for efficient grouping
-hashed := ssql.Hash("url", "url_hash")(records)
-
-// Now group by the hash instead of the full URL
-grouped := ssql.GroupByFields("data", "url_hash")(hashed)
-```
-
-**Use cases:**
-- Grouping on very long strings (URLs, file paths, etc.)
-- Creating fixed-length keys for external systems
-- Deduplication based on content
-
-### Materialize
-```go
-func Materialize(field string) Filter[Record, Record]
-```
-Converts `iter.Seq` fields to `[]string` for better readability when inspecting data.
-
-### MaterializeJSON
-```go
-func MaterializeJSON(field string) Filter[Record, Record]
-```
-Converts `iter.Seq` and `Record` fields to JSON-compatible types while preserving type information.
-
-### Tee[T]
-```go
-func Tee[T any](input iter.Seq[T], n int) []iter.Seq[T]
-```
-Splits stream into multiple independent streams.
-
-### LazyTee[T]
-```go
-func LazyTee[T any](input iter.Seq[T], n int) []iter.Seq[T]
-```
-Lazy version of Tee for memory efficiency.
-
-### Chain[T]
-```go
-func Chain[T any](filters ...Filter[T, T]) Filter[T, T]
-```
-Chains multiple same-type filters together.
-
-**Example:**
-```go
 pipeline := ssql.Chain(
     ssql.Where(func(x int) bool { return x > 0 }),
     ssql.Where(func(x int) bool { return x < 100 }),
     ssql.Sort[int](),
 )
 result := pipeline(numbers)
+
+teed := ssql.TeeFile("checkpoint.jsonl")(records)   // replay later with ssql from checkpoint.jsonl
 ```
+
+`Pipe` changes the element type between stages; `Chain` keeps it.
+`TeeFile` writes the pipeline wire format (a `_schema` header, then one
+JSON object per line); `fieldOrder` sets the header's order.
 
 ---
 
-### Error-Aware Iterators
-
-```go
-func IgnoreErrors[T any](seq iter.Seq2[T, error]) iter.Seq[T]   // skip failures
-func Unsafe[T any](seq iter.Seq2[T, error]) iter.Seq[T]         // panic on the first failure
-func CloseWhenDone[T any](seq iter.Seq[T], c io.Closer) iter.Seq[T]
-func NewLineError(line int64, text []byte, err error) *LineError
-```
-
-`CloseWhenDone` closes `c` when the sequence is fully read or abandoned; a lazy
-reader cannot be paired with `defer f.Close()` in the function that returns it
-(generated `join` did, and silently truncated large side files). `LineError`
-and `RowError` carry the line or row and unwrap to the cause.
-
-### Keys and Inference Helpers
-
-```go
-func StableKey(value any) string      // canonical text for any value, independent of map order
-func ZeroPaddedNumber(s string) bool  // 007, 02134: an identifier, never a number (one rule for every inference site)
-func ParseFloat64(s string) float64   // 0 on failure; generated flag values
-```
-
 ## I/O Operations
 
-### TailCSVFile / TailTSVFile / TailJSONLFile
+Readers of files return `(iter.Seq[Record], error)`: the error is the
+open failure, and the sequence is lazy. `*FromReader` variants take an
+`io.Reader` and return the sequence alone. `*Safe` variants return
+`iter.Seq2[Record, error]` and yield a row's problem instead of failing;
+the plain readers **fail fast**: a cell that does not fit its column's
+type panics with a [`*CellError`](#error-handling), never a coerced zero.
+
+### CSV Operations
+
 ```go
-func TailCSVFile(filename string, n int, config ...CSVConfig) (iter.Seq[Record], error)
-func TailTSVFile(filename string, n int) (iter.Seq[Record], error)
-func TailJSONLFile(filename string, n int) (iter.Seq[Record], error)
-```
-The last n data lines of a file, read by seeking to the end (O(n) lines,
-file-size independent), parsed under the header's schema with types
-inferred from those lines. Identical rows to `TakeLast(n)` over a full
-read. URLs fall back to a full streaming read. Backs `ssql from … -last N`.
-Shared caveat with the samplers: backward line-scanning assumes
-newline-terminated records.
+func ReadCSV(filename string, config ...CSVConfig) (iter.Seq[Record], error)
+func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record]
+func ReadCSVSafe(filename string, config ...CSVConfig) iter.Seq2[Record, error]
+func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Record, error]
+func WriteCSV(stream iter.Seq[Record], filename string, config ...CSVConfig) error
+func WriteCSVToWriter(stream iter.Seq[Record], writer io.Writer, config ...CSVConfig) error
+func DefaultCSVConfig() CSVConfig
 
-
-### ReadLinesFromReader
-```go
-func ReadLinesFromReader(r io.Reader) iter.Seq[Record]
-func ReadLines(filename string) (iter.Seq[Record], error)
-```
-One record per text line: `line_number` (1-based, like sed/awk/grep -n)
-and `line`. Records share one schema. Backs `ssql from lines`; pair with
-`ExtractRecords`. (`ReadLines` numbered from 0 before v4.86.)
-
-
-> 📁 **Practical Examples**: See file processing patterns in the [Getting Started Guide](codelab-intro.md#reading-real-data).
-
-### JSONL Schema Headers (CLI Feature)
-
-The ssql CLI uses JSONL (JSON Lines) format for inter-command communication. The `from` command automatically emits a schema header that preserves field order and types through pipelines.
-
-**Schema Header Format:**
-```json
-{"_schema":{"fields":["name","age","department"],"types":{"name":"string","age":"int","department":"string"}}}
-```
-
-The schema header contains:
-- `fields`: Array of field names in order (preserves original CSV column order)
-- `types`: Map of field names to their inferred types (`string`, `int`, `float`, `bool`)
-
-**CLI Usage:**
-```bash
-# Schema header is emitted automatically to preserve field order
-ssql from data.csv | ssql where -if age gt 25 | ssql to csv output.csv
-```
-
-**How Schema Flows Through Pipelines:**
-1. `from` emits schema header as first line (automatic)
-2. Transform commands (`where`, `update`, `sort`, etc.) pass records and schema through unchanged
-3. Output commands (`to csv`, `to json`, `to table`) consume schema for field ordering
-4. Final output has consistent field order matching the input
-
-**Note**: The schema header feature is primarily for CLI pipelines. The Go library uses `CSVConfig.Fields` to control CSV field ordering directly:
-```go
-config := ssql.CSVConfig{
-    Fields: []string{"name", "age", "department"},  // Explicit field order
+type CSVConfig struct {
+    HasHeaders    bool
+    Delimiter     rune
+    Comment       rune
+    Fields        []string             // for writing: the columns and their order (nil = every field, alphabetically)
+    TypeOverrides map[string]FieldType // per column, instead of inference
+    DefaultType   FieldType            // for every column not overridden (FieldTypeAuto = infer)
+    InferRows     int                  // leading data rows sampled to infer types (0 = DefaultInferRows, 1000)
 }
-ssql.WriteCSV(records, "output.csv", config)
 ```
 
-### JSON Lines: the Wire Format
+**Column typing.** Each column's type is inferred from a sample of the
+leading data rows (`InferRows`): the narrowest of int → float → bool →
+string that every non-empty sampled value fits (`true`/`false` only for
+bool; `1`/`0` are ints; zero-padded values such as `007` stay text).
+Empty cells are absent, never zero. `TypeOverrides` and `DefaultType` win
+over inference. A later cell that does not fit its column is a
+`*CellError` (row, column, value, and how the type was decided): the plain
+readers panic with it, `ReadCSVSafe` yields it.
 
 ```go
-func ReadJSONLFromReader(r io.Reader) iter.Seq[Record]                      // honours a leading {"_schema":…} header
-func ReadJSONLFromReaderSkipInvalid(r io.Reader, skipped *int64) iter.Seq[Record]  // `from jsonl -skip-invalid`
-func ReadJSONAuto(filename string) (iter.Seq[Record], error)                  // a JSON array or lines, detected
-func ReadJSONFast(filename string) (iter.Seq[Record], error)                  // no reflection, 3-5× ReadJSON
-func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record]
-func ReadJSONFastSafe(filename string) iter.Seq2[Record, error]
-func ReadJSONFastSafeFromReader(reader io.Reader) iter.Seq2[Record, error]
-func WriteJSONFast(sb iter.Seq[Record], filename string) error
-func WriteJSONFastToWriter(sb iter.Seq[Record], writer io.Writer) error
-func WriteJSONLWithInferredSchemaToWriter(sb iter.Seq[Record], writer io.Writer) error  // header inferred from the first record
-func WriteJSONPretty(sb iter.Seq[Record], filename string) error
-func ParseJSONLine(line []byte) (MutableRecord, error)
-func ParseJSONLineWithNulls(line []byte) (MutableRecord, error)              // a JSON null keeps its key as a nil slot
-func ParseJSONLineWithSchema(line []byte, schema *Schema) (Record, error)     // shares one Schema across lines
-func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType) (Record, error)
-func ParseSchemaHeaderFields(line []byte) ([]string, bool)
+data, err := ssql.ReadCSV("data.csv")
+if err != nil {
+    log.Fatalf("open: %v", err)
+}
+for record := range data {
+    age := ssql.GetOr(record, "age", int64(0))    // CSV numbers are int64 or float64, not strings
+    score := ssql.GetOr(record, "score", 0.0)
+    _, _ = age, score
+}
+
+for record, err := range ssql.ReadCSVSafe("data.csv") {
+    if err != nil {
+        log.Printf("skipping: %v", err)
+        continue
+    }
+    _ = record
+}
+
+var buf bytes.Buffer
+if err := ssql.WriteCSVToWriter(records, &buf, ssql.CSVConfig{Fields: []string{"name", "age"}}); err != nil {
+    log.Fatal(err)
+}
 ```
 
-The fast readers cache and reuse schemas while consecutive records share a
-field set. `ParseJSONLineWithSchemaTypes` stores a float column's whole-number
-literals as float64, keeping the in-memory type equal to the declared one
-across every pipe hop.
-
-### TSV Writing and Header Helpers
+### TSV and delimited text
 
 ```go
+func ReadTSV(filename string) (iter.Seq[Record], error)
+func ReadTSVWithConfig(filename string, cfg CSVConfig) (iter.Seq[Record], error)
+func ReadTSVFromReader(r io.Reader) iter.Seq[Record]
+func ReadTSVFromReaderWithSeparator(r io.Reader, sep rune) iter.Seq[Record]
+func ReadTSVFromReaderWithConfig(r io.Reader, cfg CSVConfig) iter.Seq[Record]
+func DefaultTSVConfig() CSVConfig
 func WriteTSV(records iter.Seq[Record], filename string) error
 func WriteTSVToWriter(records iter.Seq[Record], w io.Writer) error
 func WriteTSVWithSeparator(records iter.Seq[Record], filename string, sep rune) error
@@ -1911,48 +1197,166 @@ func DetectTSVSeparator(header string) rune          // the first non-identifier
 func ExtractFieldsFromTSV(filename string) ([]string, error)
 ```
 
-### File Sampling and Counting
+Delimited text without quoting rules: a field is everything between
+separators. The separator is auto-detected from the header line when
+`Delimiter` is 0. Column typing is the CSV reader's.
 
-```go
-func SampleCSVFile(filename string, n int, seed int64, config ...CSVConfig) (iter.Seq[Record], error)
-func SampleTSVFile(filename string, n int, seed int64, config ...CSVConfig) (iter.Seq[Record], error)
-func SampleJSONLFile(filename string, n int, seed int64) (iter.Seq[Record], error)
-func CountFileLines(path string) (int64, error)      // a bytes.Count scan, ~0.15 s/GB
+### JSON and JSON Lines
+
+ssql's JSON is JSON Lines: one object per line. It is also the wire
+format between CLI stages, where the first line is a schema header:
+
+```json
+{"_schema":{"fields":["name","age","department"],"types":{"name":"string","age":"int","department":"string"}}}
 ```
 
-Byte-offset sampling: n seeks instead of a full read (14 ms against 21 s for
-1000 rows of a 1.2 GB file), rows emitted in file order, approximately uniform
-(probability proportional to line length). `from csv -sample N` and `from
--records`.
-
-### HTTP Sources
+The header carries field order and wire types (`string`, `int`, `float`,
+`bool`, `time`, `json`) so that sinks print columns in the source's order
+and a column's type survives every pipe hop. The readers below honour it
+and the writers that say so emit it.
 
 ```go
-func IsHTTPURL(path string) bool
-func OpenHTTPStream(url string) (io.ReadCloser, error)   // a plain GET: the `from https://` read path
-func OpenHTTPFile(url string) (*HTTPFile, error)          // random access over Range requests (parquet footers, sampling)
-func HTTPURLExt(rawurl string) string                     // the path's extension, ignoring a presigned query
+func ReadJSON(filename string) (iter.Seq[Record], error)            // JSON Lines
+func ReadJSONFromReader(reader io.Reader) iter.Seq[Record]
+func ReadJSONSafe(filename string) iter.Seq2[Record, error]
+func ReadJSONSafeFromReader(reader io.Reader) iter.Seq2[Record, error]
+func ReadJSONAuto(filename string) (iter.Seq[Record], error)        // a JSON array or lines, detected
+func ReadJSONLFromReader(r io.Reader) iter.Seq[Record]              // honours a leading {"_schema":…} header
+func ReadJSONLFromReaderSkipInvalid(r io.Reader, skipped *int64) iter.Seq[Record]   // `from jsonl -skip-invalid`
+func ReadJSONFast(filename string) (iter.Seq[Record], error)        // no reflection, 3-5× ReadJSON
+func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record]
+func ReadJSONFastSafe(filename string) iter.Seq2[Record, error]
+func ReadJSONFastSafeFromReader(reader io.Reader) iter.Seq2[Record, error]
+
+func WriteJSON(stream iter.Seq[Record], filename string) error      // one object per line
+func WriteJSONToWriter(stream iter.Seq[Record], writer io.Writer) error
+func WriteJSONFast(sb iter.Seq[Record], filename string) error
+func WriteJSONFastToWriter(sb iter.Seq[Record], writer io.Writer) error
+func WriteJSONLWithInferredSchemaToWriter(sb iter.Seq[Record], writer io.Writer) error  // header inferred from the first record
+func WriteJSONPretty(sb iter.Seq[Record], filename string) error    // a pretty-printed JSON array (`to json`)
+
+func ParseJSONLine(line []byte) (MutableRecord, error)
+func ParseJSONLineWithNulls(line []byte) (MutableRecord, error)              // a JSON null keeps its key as a nil slot
+func ParseJSONLineWithSchema(line []byte, schema *Schema) (Record, error)     // shares one Schema across lines
+func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType) (Record, error)
+func ParseSchemaHeaderFields(line []byte) ([]string, bool)
+func CoerceFieldTypes(records iter.Seq[Record], types map[string]FieldType) iter.Seq[Record]   // `-type FIELD TYPE` for inputs with no column typing
 ```
 
-`HTTPFile` implements `io.ReaderAt` and `io.Seeker` (`ReadAt`, `Seek`, `Size`,
-`Requests` for the count made). A server that does not honour Range is refused
-loudly rather than downloading the whole file per read (DFC112).
+```go
+data, err := ssql.ReadJSON("data.jsonl")
+if err != nil {
+    log.Fatalf("open: %v", err)
+}
+for record, err := range ssql.ReadJSONSafe("data.jsonl") {
+    if err != nil {
+        log.Printf("bad line: %v", err)
+        continue
+    }
+    _ = record
+}
+```
+
+The fast readers cache and reuse schemas while consecutive records share
+a field set. `CoerceFieldTypes` converts the named fields of every record
+strictly (a fraction into int, a number into bool or an unparsable string
+is a `*CellError`); absent fields stay absent.
+
+### Lines
+
+```go
+func ReadLines(filename string) (iter.Seq[Record], error)   // one record per text line: line_number (from 1) and line
+func ReadLinesFromReader(r io.Reader) iter.Seq[Record]
+func ReadLinesSafe(filename string) iter.Seq2[Record, error]
+func WriteLines(stream iter.Seq[Record], filename string) error   // one line per record, from the line field
+```
+
+```go
+lines, err := ssql.ReadLines("app.log")
+if err != nil {
+    log.Fatal(err)
+}
+for r := range lines {
+    fmt.Println(ssql.GetOr(r, "line_number", int64(0)), ssql.GetOr(r, "line", ""))
+}
+```
+
+Pair with [`ExtractRecords`](#extract) to parse the lines.
+
+### Command output
+
+```go
+func ExecCommand(command string, args []string, config ...CommandConfig) (iter.Seq[Record], error)   // run it, parse column-aligned output
+func ExecCommandSafe(command string, args []string, config ...CommandConfig) iter.Seq2[Record, error]
+func ReadCommandOutput(filename string, config ...CommandConfig) (iter.Seq[Record], error)          // the same parse, from a captured file
+func ReadCommandOutputSafe(filename string, config ...CommandConfig) iter.Seq2[Record, error]
+func DefaultCommandConfig() CommandConfig
+
+type CommandConfig struct {
+    HasHeaders    bool   // the first line names the columns
+    TrimSpaces    bool
+    SkipEmpty     bool
+    HeaderPattern string // optional regexp that identifies the header line
+}
+```
+
+```go
+processes, err := ssql.ExecCommand("ps", []string{"-efl"})
+if err != nil {
+    log.Fatalf("start: %v", err)
+}
+for p := range processes {
+    fmt.Println(ssql.GetOr(p, "CMD", ""))
+}
+```
 
 ### Parquet
 
 ```go
 func ReadParquet(filename string) (iter.Seq[Record], error)
-func ReadParquetColumns(filename string, columns []string) (iter.Seq[Record], error)   // 3 of 50 columns is ~94% less I/O
+func ReadParquetColumns(filename string, columns []string) (iter.Seq[Record], error)   // read only these columns: the big lever on wide files
 func ReadParquetFromReader(r parquet.ReaderAtSeeker) (iter.Seq[Record], error)
 func WriteParquet(records iter.Seq[Record], filename string, opts ...ParquetWriteOption) error
 func WriteParquetToWriter(records iter.Seq[Record], w io.Writer, opts ...ParquetWriteOption) error
 func WithCompression(name string) ParquetWriteOption   // snappy (default), gzip, zstd, none
 func WithRowGroupSize(n int) ParquetWriteOption        // default 1_000_000; one row group is one parallel shard
-func ParquetRowCount(filename string) (int64, error)               // from the footer, no scan
+func ParquetRowCount(filename string) (int64, error)                            // from the footer, no scan
 func ParquetSchemaFields(filename string) ([]string, map[string]string, error)  // names and wire types from the footer
 ```
 
-### WAV Audio
+Parquet is a random-access format: a file, not stdin.
+
+### Arrow
+
+```go
+func ReadArrow(filename string) (iter.Seq[Record], error)    // .arrow / .feather
+func ReadArrowFromReader(r io.Reader) iter.Seq[Record]
+func WriteArrow(records iter.Seq[Record], filename string) error   // ZSTD-compressed
+func WriteArrowToWriter(records iter.Seq[Record], w io.Writer) error
+```
+
+Columnar, zero-copy, and the fastest way to move large record sets
+between processes.
+
+### XLSX
+
+```go
+func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error)   // row 1 is the header; types inferred from cells
+func WriteXLSX(records iter.Seq[Record], filename string, config ...XLSXConfig) error
+func ReadXLSXSheetNames(filename string) ([]string, error)
+func DefaultXLSXConfig() XLSXConfig
+type XLSXConfig struct {
+    SheetName string // to read (default: the first) or write (default "Sheet1")
+}
+```
+
+```go
+records, err := ssql.ReadXLSX("workbook.xlsx", ssql.XLSXConfig{SheetName: "Sales"})
+```
+
+XLSX loads the whole file; for streaming, use CSV.
+
+### WAV audio
 
 ```go
 func ReadWAV(filename string) (iter.Seq[Record], *WAVMetadata, error)        // sample, amplitude in [-1, 1]; stereo mixed to mono
@@ -1966,20 +1370,383 @@ func ExtractSignalFromArrow(filename string, field string) (Signal, error)
 func ExtractSignalFromArrowReader(r io.Reader, field string) (Signal, error)
 ```
 
-### Tables
+### HTTP sources
+
+```go
+func IsHTTPURL(path string) bool
+func OpenHTTPStream(url string) (io.ReadCloser, error)   // a plain GET: the `from https://` read path
+func OpenHTTPFile(url string) (*HTTPFile, error)          // random access over Range requests (parquet footers, sampling)
+func HTTPURLExt(rawurl string) string                     // the path's extension, ignoring a presigned query
+type HTTPFile struct { /* private */ }                    // io.ReaderAt + io.Seeker over Range requests
+func (h *HTTPFile) Read(p []byte) (int, error)
+func (h *HTTPFile) ReadAt(p []byte, off int64) (int, error)
+func (h *HTTPFile) Seek(offset int64, whence int) (int64, error)
+func (h *HTTPFile) Size() int64
+func (h *HTTPFile) Requests() int64   // Range requests made so far
+```
+
+A server that does not honour Range is refused rather than downloading
+the whole file per read.
+
+### Sampling, tailing and counting
+
+```go
+func SampleCSVFile(filename string, n int, seed int64, config ...CSVConfig) (iter.Seq[Record], error)
+func SampleTSVFile(filename string, n int, seed int64, config ...CSVConfig) (iter.Seq[Record], error)
+func SampleJSONLFile(filename string, n int, seed int64) (iter.Seq[Record], error)
+func TailCSVFile(filename string, n int, config ...CSVConfig) (iter.Seq[Record], error)
+func TailTSVFile(filename string, n int, config ...CSVConfig) (iter.Seq[Record], error)
+func TailJSONLFile(filename string, n int) (iter.Seq[Record], error)
+func CountFileLines(path string) (int64, error)      // a bytes.Count scan
+```
+
+Sampling seeks to n byte offsets instead of reading the file, and emits
+rows in file order, approximately uniform (probability proportional to
+line length). Tailing seeks to the end and reads the last n lines, parsed
+under the header's schema with types inferred from those lines. Both
+assume newline-terminated records; URLs fall back to a full streaming
+read. Behind `from csv -sample N`, `from … -last N` and `from … -records`.
+
+### Tables and Markdown
 
 ```go
 func DisplayTable(records iter.Seq[Record], maxWidth int)
 func DisplayTableTo(w io.Writer, records iter.Seq[Record], maxWidth int)
+func DisplayTableWithFields(records iter.Seq[Record], maxWidth int, fieldOrder []string, onlySpecified bool)
 func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth int, fieldOrder []string, onlySpecified bool)
 func DisplayTableStreaming(records iter.Seq[Record], maxWidth int, sampleSize int, fieldOrder []string, onlySpecified bool)
 func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int, sampleSize int, fieldOrder []string, onlySpecified bool)
+func WriteMarkdownTo(w io.Writer, records iter.Seq[Record], fieldOrder []string, onlySpecified bool) error   // a GitHub-flavored table; numeric columns right-aligned
 ```
 
-The streaming forms size columns from the first `sampleSize` records and then
-stream (O(sampleSize) memory); `to table` uses them.
+The streaming forms size columns from the first `sampleSize` records and
+then stream (O(sampleSize) memory); `to table` uses them. `to markdown`
+uses `WriteMarkdownTo`.
 
-### Catalogs and Remote Execution
+```go
+var buf bytes.Buffer
+if err := ssql.WriteMarkdownTo(&buf, records, []string{"name", "count"}, false); err != nil {
+    log.Fatal(err)
+}
+fmt.Print(buf.String())
+```
+
+---
+
+## Signal Processing
+
+The [Signal Processing tutorial](cli-signal-processing.md) is the
+hands-on version; the GPU build accelerates FFTs of 16 K samples or more
+and convolution kernels of 16 points or more, automatically.
+
+```go
+type Signal []float64
+type Spectrum struct {
+    Magnitude []float64 // magnitude per frequency bin
+    Phase     []float64 // radians; nil unless FFTWithPhase
+    N         int       // original signal length
+}
+func (s *Spectrum) FrequencyBin(index int, sampleRate float64) float64
+func (s *Spectrum) Len() int
+func GPUAvailable() bool   // true only in the CUDA build with a GPU present
+```
+
+### FFT
+
+```go
+func FFT(signal Signal) (*Spectrum, error)              // magnitude only
+func FFTWithPhase(signal Signal) (*Spectrum, error)     // magnitude and phase (needed to invert)
+func FFTMagnitude(signal Signal) ([]float64, error)
+func IFFT(magnitude, phase []float64) (Signal, error)
+func IFFTToLength(magnitude, phase []float64, length int) (Signal, error)
+```
+
+```go
+signal := ssql.Signal{1, 2, 3, 4, 5, 6, 7, 8}
+spectrum, err := ssql.FFT(signal)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("DC magnitude: %f\n", spectrum.Magnitude[0])
+
+withPhase, _ := ssql.FFTWithPhase(signal)
+reconstructed, _ := ssql.IFFT(withPhase.Magnitude, withPhase.Phase)
+```
+
+### Convolution and correlation
+
+```go
+func Convolve(signal, kernel Signal) (Signal, error)       // len(signal)+len(kernel)-1 outputs
+func ConvolveSame(signal, kernel Signal) (Signal, error)   // same length as the signal
+func AutoConvolve(signal Signal) (Signal, error)
+func AutoConvolveSame(signal Signal) (Signal, error)
+func Correlate(a, b Signal) (Signal, error)                // cross-correlation by lag; peaks mark matches
+func CorrelateSame(a, b Signal) (Signal, error)
+func AutoCorrelate(signal Signal) (Signal, error)          // periodicity
+func AutoCorrelateMax(signal Signal, maxLag int) (Signal, error)
+
+func MovingAverageKernel(size int) Signal
+func GaussianKernel(size int, sigma float64) Signal
+func DiffKernel() Signal      // first derivative: [-1, 1]
+func LaplacianKernel() Signal // second derivative: [1, -2, 1]
+func SobelKernel() Signal     // edge detection: [-1, 0, 1]
+```
+
+```go
+smoothed, _ := ssql.ConvolveSame(signal, ssql.GaussianKernel(11, 2.0))
+```
+
+### Windows and spectrograms
+
+```go
+func HannWindow(n int) Signal
+func HammingWindow(n int) Signal
+func BlackmanWindow(n int) Signal
+func ApplyWindow(signal, window Signal) Signal                       // element-wise product
+func Spectrogram(signal Signal, opts SpectrogramOptions) ([]SpectrogramBin, error)   // STFT: time × frequency × magnitude
+func SpectrogramToRecords(bins []SpectrogramBin) iter.Seq[Record]    // time_index, time, frequency, magnitude
+func SpectrogramFilter(field string, opts SpectrogramOptions) Filter[Record, Record]
+```
+
+### Records and signals
+
+```go
+func ExtractSignal(records iter.Seq[Record], field string) Signal
+func ExtractSignalFromSlice(records []Record, field string) Signal
+func WithSignal(records iter.Seq[Record], field string, signal Signal) iter.Seq[Record]   // add the values as a field
+func SpectrumToRecords(spectrum *Spectrum, sampleRate float64) iter.Seq[Record]           // index, frequency, magnitude, phase
+
+func FFTFilter(field string, sampleRate float64, includePhase bool) Filter[Record, Record]
+func IFFTFilter(magnitudeField, phaseField, outputField string) Filter[Record, Record]
+func ConvolveFilter(field, outputField string, kernel Signal, same bool) Filter[Record, Record]
+func AutoConvolveFilter(field, outputField string, same bool) Filter[Record, Record]
+func CorrelateFilter(fieldA, fieldB, outputField string, same bool) Filter[Record, Record]
+func AutoCorrelateFilter(field, outputField string, same bool) Filter[Record, Record]
+func AutoCorrelateMaxFilter(field, outputField string, maxLag int) Filter[Record, Record]
+```
+
+The `*Filter` forms are the record-stream shape of each operation, for
+use in a `Chain`; they are what `fft`, `convolve` and `correlate` run.
+
+---
+
+## Chart & Visualization
+
+Self-contained HTML files: Chart.js for the standard charts, Plotly for
+heatmaps and animations, AG-Grid for the explorer. The [Getting Started
+Guide](codelab-intro.md#interactive-charts-made-easy) walks through them.
+
+```go
+func QuickChart(data iter.Seq[Record], xField, yField, filename string) error
+func InteractiveChart(data iter.Seq[Record], filename string, config ...ChartConfig) error
+func TimeSeriesChart(data iter.Seq[Record], timeField string, valueFields []string, filename string, config ...ChartConfig) error
+func EnhancedChart(data iter.Seq[Record], config ChartConfig, filename string) error   // multi-series, heatmap, log axes, colour by field
+func HeatmapChart(sb iter.Seq[Record], config HeatmapConfig, filename string) error    // spectrogram-shaped data: colour range, log frequency axis, cursor readout
+func AnimateChart(sb iter.Seq[Record], config AnimateConfig, filename string) error    // a heatmap or histogram per frame, with player controls
+func DefaultChartConfig() ChartConfig
+func DefaultHeatmapConfig() HeatmapConfig
+func DefaultAnimateConfig() AnimateConfig
+```
+
+```go
+type ChartConfig struct {
+    Title              string
+    Width, Height      int
+    ChartType          string            // line, bar, scatter, pie, doughnut, radar, polarArea, heatmap
+    TimeFormat         string            // for a time X axis
+    XAxisType          string            // linear, logarithmic, time, category
+    YAxisType          string            // linear, logarithmic
+    ShowLegend         bool
+    ShowTooltips       bool
+    EnableZoom         bool
+    EnablePan          bool
+    EnableAnimations   bool
+    ShowDataLabels     bool
+    EnableInteractive  bool              // field selection UI
+    EnableCalculations bool              // running averages, etc.
+    ColorScheme        string            // default, vibrant, pastel, monochrome
+    Theme              string            // light, dark
+    ExportFormats      []string          // png, svg, pdf, csv
+    CustomCSS          string
+    Fields             map[string]string // field → data type hints
+    XField             string            // explicit X-axis field
+    YFields            []string          // several Y fields: a multi-series chart
+    ZField             string            // heatmap colour value
+    ColorField         string            // scatter: colour points by this field
+    ColorScale         string            // heatmap: viridis, plasma, inferno, magma
+}
+type HeatmapConfig struct {
+    Title              string
+    XField, YField, ZField string
+    ColorScale         string   // viridis, plasma, inferno, magma, cividis, turbo
+    ZMin, ZMax         float64  // 0 = auto
+    LogFreq            bool     // logarithmic Y axis
+    Theme              string
+    Width, Height      int
+}
+type AnimateConfig struct {
+    Title              string
+    FrameField         string   // partitions the records into frames
+    XField, YField, ZField string
+    ChartType          string   // heatmap or histogram
+    FPS                int
+    Loop               bool
+    ColorScale         string
+    Theme              string
+    Width, Height      int
+}
+```
+
+```go
+config := ssql.DefaultChartConfig()
+config.Title = "Sales Analysis"
+config.ChartType = "bar"
+if err := ssql.InteractiveChart(salesData, "sales_chart.html", config); err != nil {
+    log.Fatal(err)
+}
+
+multi := ssql.DefaultChartConfig()
+multi.XField = "month"
+multi.YFields = []string{"revenue", "expenses", "profit"}
+if err := ssql.EnhancedChart(salesData, multi, "multi_series.html"); err != nil {
+    log.Fatal(err)
+}
+
+heat := ssql.DefaultChartConfig()
+heat.ChartType = "heatmap"
+heat.XField = "time"
+heat.YFields = []string{"frequency"}
+heat.ZField = "magnitude"
+heat.ColorScale = "viridis"
+if err := ssql.EnhancedChart(spectrogramData, heat, "spectrogram.html"); err != nil {
+    log.Fatal(err)
+}
+```
+
+### Data Explorer
+
+```go
+func DataExplore(records iter.Seq[Record], config ExploreConfig, filename string) error
+func DefaultExploreConfig() ExploreConfig   // light theme, 50 rows per page, 1400×800
+type ExploreConfig struct {
+    Title         string
+    Theme         string // light or dark
+    InitialXField string
+    InitialYField string
+    PageSize      int    // rows per page in the table (default 50)
+    Width, Height int
+    WasmEnabled   bool   // load the ssql engine for client-side transforms
+    WasmExecJS    string // set by the CLI: the inlined runtime pieces
+    FsPolyfillJS  string
+    SsqlUIJS      string
+    WasmBinary    string // base64 of the gzipped engine
+    AllowEmpty    bool   // permit zero records (a served, empty workspace)
+    Version       string // shown in the ready text
+}
+```
+
+A self-contained data exploration page: sortable, filterable table; chart
+type switcher; field selectors; group-by aggregation; CSV and PNG export.
+With `WasmEnabled` the page runs ssql itself in the browser, which is
+what `to explore -wasm` produces.
+
+```go
+data, err := ssql.ReadCSV("sales.csv")
+if err != nil {
+    log.Fatal(err)
+}
+cfg := ssql.DefaultExploreConfig()
+cfg.Title = "Sales Analysis"
+cfg.Theme = "dark"
+if err := ssql.DataExplore(data, cfg, "sales_explorer.html"); err != nil {
+    log.Fatal(err)
+}
+```
+
+---
+
+## Error Handling
+
+Two conventions, used consistently:
+
+- **Sources and sinks return an error** for what can fail before or
+  after the stream: opening a file, starting a command, writing.
+- **Per-element problems** go one of two ways. The plain form of an
+  operation or reader stops loudly (a panic carrying a typed error, which
+  a generated program turns into `Error: …` and exit status 1). The
+  `*Safe` form yields `(value, error)` pairs so the consumer decides per
+  element.
+
+```go
+data, err := ssql.ReadCSV("data.csv")        // open failure
+if err != nil {
+    log.Fatalf("open: %v", err)
+}
+if err := ssql.WriteJSON(records, "out.jsonl"); err != nil {   // write failure
+    log.Fatal(err)
+}
+
+for r, err := range ssql.ReadCSVSafe("data.csv") {   // a bad cell does not stop the loop
+    var cell *ssql.CellError
+    if errors.As(err, &cell) {
+        log.Printf("row %d: %q is not %s", cell.Row, cell.Value, cell.Type)
+        continue
+    }
+    if err != nil {
+        log.Fatal(err)
+    }
+    _ = r
+}
+
+safe := ssql.SelectSafe(func(x int) (int, error) {   // a transformation that can fail
+    if x < 0 {
+        return 0, fmt.Errorf("negative: %d", x)
+    }
+    return x * 2, nil
+})(ssql.Safe(numbers))
+```
+
+### Error types
+
+```go
+type CellError struct {                 // a delimited-text cell that does not parse as its column's type
+    Row     int64     // 1-based data row (the header is not counted)
+    Column  string    // column name (or col_N without headers)
+    Value   string    // the offending cell, trimmed
+    Type    FieldType // the type the column was fixed to
+    Sampled int       // rows the type was inferred from; 0 = an explicit override
+}
+func (e *CellError) Error() string
+type RowError struct{ Row int64; Err error }   // a row that could not be read as a row: a bare quote, a wrong field count
+func (e *RowError) Error() string
+type LineError struct {                 // a JSON Lines line that cannot be read
+    Line int64  // 1-based, counting a _schema header line
+    Text string // the start of the offending line
+    Err  error
+}
+func NewLineError(line int64, text []byte, err error) *LineError
+func (e *LineError) Error() string
+```
+
+`CastError` and `CompareError` are under [Record Helpers](#record-helpers).
+All unwrap to their cause, so `errors.As` works through wrapping.
+
+**Practice.** Check the error from every source and sink. Use the plain
+forms for trusted data and prototypes, where the first bad row should
+stop the run. Use the `*Safe` forms where one bad row must not stop the
+run: user uploads, logs, external feeds. Never coerce: an unparsable cell
+is an error in every ssql lane, and a program that turned it into a zero
+would disagree with the CLI on the same file.
+
+---
+
+## Appendix: CLI and Codegen Support
+
+Exported because the CLI, `generate go` programs and the SQL translator
+call them, so that every lane runs the same code. They are stable, but
+you are unlikely to want them in an application.
+
+### Catalogs and remote execution
 
 ```go
 func ReadCatalog(filename string) ([]CatalogEntry, error)        // host, path, optional format and bin; the rest is metadata
@@ -1997,1065 +1764,33 @@ func ShellQuote(s string) string
 func SplitOnPlus(args []string) [][]string    // the `--` push-down's `+` separator
 ```
 
-Every remote command goes through `RemoteBinPrologue` (never a hard-wired
-`/usr/bin/ssql`) and every dynamic value through `ShellQuote`. DFC138 proposes
-sending the pipeline document instead of shell text.
+Every remote command goes through `RemoteBinPrologue`, never a hard-wired
+path, and every dynamic value through `ShellQuote`.
 
-### CSV Operations
+### Window function introspection
 
-**⚠️ Important: CSV Auto-Parsing Behavior**
-
-CSV operations automatically parse string values into appropriate Go types:
-- Numeric strings → `int64` or `float64` (e.g., `"25"` becomes `int64(25)`)
-- Boolean strings → `bool` (e.g., `"true"` becomes `true`)
-- Other values → `string`
-
-This means when reading CSV data, you must use the correct type when accessing fields:
-
-```go
-// CSV file: name,age,score
-//           Alice,30,95.5
-
-data := ssql.ReadCSV("data.csv")
-for record := range data {
-    // ❌ WRONG - age is int64, not string
-    age := ssql.GetOr(record, "age", "")
-
-    // ✅ CORRECT - use int64 for numeric CSV values
-    age := ssql.GetOr(record, "age", int64(0))
-
-    // ✅ CORRECT - use float64 for decimal CSV values
-    score := ssql.GetOr(record, "score", 0.0)
-
-    // ✅ CORRECT - strings remain strings
-    name := ssql.GetOr(record, "name", "")
-}
-```
-
-When filtering CSV data, use the parsed types:
-```go
-// Filter for ages greater than 25
-filtered := ssql.Where(func(r ssql.Record) bool {
-    age := ssql.GetOr(r, "age", int64(0))
-    return age > 25  // Compare as int64
-})(data)
-```
-
-#### ReadCSV
-```go
-func ReadCSV(filename string, config ...CSVConfig) (iter.Seq[Record], error)
-```
-Reads CSV file into Record iterator. Returns error if file cannot be opened. **Values are auto-parsed** to appropriate types.
-
-**Column typing.** Each column's type is inferred from a *sample* of the leading data rows (`CSVConfig.InferRows`, default `DefaultInferRows` = 1000): the narrowest of int → float → bool → string that every non-empty sampled value fits (`true`/`false` only for bool; `1`/`0` are ints). Empty cells are absent, never zero. `CSVConfig.TypeOverrides` / `DefaultType` win over inference. A later cell that does not fit its column's type is a **`*ssql.CellError`** (row, column, value, how the type was decided) — the unsafe readers panic with it (their fail-fast contract) and the `*Safe` readers yield it; nothing is ever coerced to 0.
-
-**Example:**
-```go
-data, err := ssql.ReadCSV("data.csv")
-if err != nil {
-    log.Fatalf("Failed to read CSV: %v", err)
-}
-for record := range data {
-    // Process record
-}
-```
-
-#### ReadCSVFromReader
-```go
-func ReadCSVFromReader(reader io.Reader, config ...CSVConfig) iter.Seq[Record]
-```
-Reads CSV from any io.Reader. **Values are auto-parsed** to appropriate types — see the column typing rules under `ReadCSV`.
-
-#### ReadCSVSafe
-```go
-func ReadCSVSafe(filename string, config ...CSVConfig) iter.Seq2[Record, error]
-```
-Error-aware version of ReadCSV. Returns iterator that yields both records and errors encountered during reading.
-
-**Example:**
-```go
-data, err := ssql.ReadCSVSafe("data.csv")
-if err != nil {
-    log.Fatalf("Failed to open CSV: %v", err)
-}
-for record, err := range data {
-    if err != nil {
-        log.Printf("Error reading record: %v", err)
-        continue
-    }
-    // Process record
-}
-```
-
-#### ReadCSVSafeFromReader
-```go
-func ReadCSVSafeFromReader(reader io.Reader, config ...CSVConfig) iter.Seq2[Record, error]
-```
-Error-aware version of ReadCSVFromReader.
-
-#### ReadTSV / ReadTSVWithConfig / ReadTSVFromReader / ReadTSVFromReaderWithConfig
-```go
-func ReadTSV(filename string) (iter.Seq[Record], error)
-func ReadTSVWithConfig(filename string, cfg CSVConfig) (iter.Seq[Record], error)
-func ReadTSVFromReader(r io.Reader) iter.Seq[Record]
-func ReadTSVFromReaderWithSeparator(r io.Reader, sep rune) iter.Seq[Record]
-func ReadTSVFromReaderWithConfig(r io.Reader, cfg CSVConfig) iter.Seq[Record]
-func DefaultTSVConfig() CSVConfig
-```
-Delimited text without quoting rules (a field is everything between separators).
-The separator is auto-detected from the header line (`CSVConfig.Delimiter` 0,
-the `DefaultTSVConfig()` value; the first non-identifier rune, default tab).
-**Column typing is the CSV reader's** (since v4.91.0 the two share one
-implementation): `TypeOverrides` / `DefaultType` when set, else inferred from the
-first `InferRows` data rows; a later cell that does not fit its column is a
-`*CellError` and the reader panics with it (fail-fast contract, as `ReadCSV`);
-empty numeric/bool cells are absent. Before v4.91.0 TSV typed each value on
-its own, so a column could be int on one row and float on the next.
-
-#### CoerceFieldTypes
-```go
-func CoerceFieldTypes(records iter.Seq[Record], types map[string]FieldType) iter.Seq[Record]
-```
-Converts the named fields of every record to the given types — the `-type FIELD
-TYPE` override for inputs that carry no column typing of their own (JSONL, where
-each line types itself). Conversions are strict, as the CSV reader's: `int64 →
-float64` and a whole `float64 → int64` are exact; a string parses with the CSV
-cell rules (an empty string makes the field absent); anything → string formats
-the value; a fraction into int, a number into bool, a bool into a number, or an
-unparsable string is a `*CellError` (Row = 1-based record index, `Sampled` 0 =
-explicit type) and the sequence panics with it. Absent fields stay absent.
-`ssql from jsonl FILE -type v float` runs this in exec and emits it in generated
-record code; typed code fixes the struct field instead.
-
-#### WriteCSV
-```go
-func WriteCSV(stream iter.Seq[Record], filename string, config ...CSVConfig) error
-```
-Writes Record iterator to CSV file. Fields are auto-detected (all non-underscore, non-complex fields in alphabetical order) unless explicitly specified via config.Fields.
-
-#### WriteCSVToWriter
-```go
-func WriteCSVToWriter(stream iter.Seq[Record], writer io.Writer, config ...CSVConfig) error
-```
-Writes Record iterator to any io.Writer as CSV.
-
-**Example:**
-```go
-var buf bytes.Buffer
-err := ssql.WriteCSVToWriter(records, &buf)
-if err != nil {
-    log.Fatalf("Failed to write CSV: %v", err)
-}
-csvString := buf.String()
-```
-
-#### WriteMarkdownTo
-```go
-func WriteMarkdownTo(w io.Writer, records iter.Seq[Record], fieldOrder []string, onlySpecified bool) error
-```
-Writes records as a GitHub-flavored Markdown table: header row, alignment row (numeric/bool columns right-aligned via `---:`), one row per record. Pipes are escaped and newlines become `<br>`. Column selection follows the same rules as DisplayTableWithFields. Backs `ssql to markdown`.
-
-**Example:**
-```go
-var buf bytes.Buffer
-if err := ssql.WriteMarkdownTo(&buf, records, []string{"name", "count"}, false); err != nil {
-    log.Fatal(err)
-}
-fmt.Print(buf.String()) // paste-ready | name | count | table
-```
-
-#### TeeFile
-```go
-func TeeFile(filename string, fieldOrder ...string) Filter[Record, Record]
-```
-Unix tee for record streams: writes every record to filename as schema-headed JSONL (the pipeline wire format) while passing it through unchanged — snapshot intermediate results mid-pipeline. fieldOrder sets the header's field order (alphabetical from the first record otherwise). Distinct from `Tee`/`LazyTee`, which split a stream into copies. Backs `ssql tee FILE`.
-
-**Example:**
-```go
-teed := ssql.TeeFile("checkpoint.jsonl")(records)
-for r := range teed { /* pipeline continues */ }
-```
-
-#### DefaultCSVConfig
-```go
-func DefaultCSVConfig() CSVConfig
-```
-Returns default CSV configuration.
-
-#### CSVConfig
-```go
-type CSVConfig struct {
-    Delimiter      rune
-    Comment        rune
-    FieldsPerRecord int
-    LazyQuotes     bool
-    TrimLeadingSpace bool
-    Fields         []string  // Explicit field order for writing
-}
-```
-
-### JSON Operations
-
-#### ReadJSON
-```go
-func ReadJSON(filename string) (iter.Seq[Record], error)
-```
-Reads JSONL (JSON Lines) file into Record iterator. Returns error if file cannot be opened.
-
-**Example:**
-```go
-data, err := ssql.ReadJSON("data.jsonl")
-if err != nil {
-    log.Fatalf("Failed to read JSON: %v", err)
-}
-for record := range data {
-    // Process record
-}
-```
-
-#### ReadJSONFromReader
-```go
-func ReadJSONFromReader(reader io.Reader) iter.Seq[Record]
-```
-Reads JSONL from any io.Reader (stdin, network, etc).
-
-#### ReadJSONSafe
-```go
-func ReadJSONSafe(filename string) iter.Seq2[Record, error]
-```
-Error-aware version of ReadJSON. Returns iterator that yields both records and parse errors.
-
-**Example:**
-```go
-data, err := ssql.ReadJSONSafe("data.jsonl")
-if err != nil {
-    log.Fatalf("Failed to open JSON file: %v", err)
-}
-for record, err := range data {
-    if err != nil {
-        log.Printf("Error parsing JSON: %v", err)
-        continue
-    }
-    // Process record
-}
-```
-
-#### ReadJSONSafeFromReader
-```go
-func ReadJSONSafeFromReader(reader io.Reader) iter.Seq2[Record, error]
-```
-Error-aware version of ReadJSONFromReader.
-
-#### WriteJSON
-```go
-func WriteJSON(stream iter.Seq[Record], filename string) error
-```
-Writes Record iterator to JSON file.
-
-#### WriteJSONToWriter
-```go
-func WriteJSONToWriter(stream iter.Seq[Record], writer io.Writer) error
-```
-Writes Record iterator to any io.Writer as JSONL.
-
-### Line Operations
-
-#### ReadLines
-```go
-func ReadLines(filename string) (iter.Seq[Record], error)
-```
-Reads text file line by line into Records with a "line" field. Returns error if file cannot be opened.
-
-**Example:**
-```go
-lines, err := ssql.ReadLines("logfile.txt")
-if err != nil {
-    log.Fatalf("Failed to read file: %v", err)
-}
-for record := range lines {
-    line := ssql.GetOr(record, "line", "")
-    fmt.Println(line)
-}
-```
-
-#### ReadLinesSafe
-```go
-func ReadLinesSafe(filename string) iter.Seq2[Record, error]
-```
-Error-aware version of ReadLines. Returns iterator that yields both records and read errors.
-
-#### WriteLines
-```go
-func WriteLines(stream iter.Seq[Record], filename string) error
-```
-Writes Records to text file, one line per record (uses "line" field).
-
-### Command Output Operations
-
-#### ExecCommand
-```go
-func ExecCommand(command string, args []string, config ...CommandConfig) (iter.Seq[Record], error)
-```
-Executes a command and parses its column-aligned output into Records. Returns error if command fails to start.
-
-**Example:**
-```go
-processes, err := ssql.ExecCommand("ps", []string{"-efl"})
-if err != nil {
-    log.Fatalf("Failed to execute command: %v", err)
-}
-for process := range processes {
-    cmd := ssql.GetOr(process, "CMD", "")
-    fmt.Println(cmd)
-}
-```
-
-#### ReadCommandOutput
-```go
-func ReadCommandOutput(filename string, config ...CommandConfig) (iter.Seq[Record], error)
-```
-Reads previously captured command output from a file and parses column-aligned data. Returns error if file cannot be opened.
-
-#### ReadCommandOutputSafe
-```go
-func ReadCommandOutputSafe(filename string, config ...CommandConfig) iter.Seq2[Record, error]
-```
-Error-aware version of ReadCommandOutput. Returns iterator that yields both records and parse errors.
-
-#### ExecCommandSafe
-```go
-func ExecCommandSafe(command string, args []string, config ...CommandConfig) iter.Seq2[Record, error]
-```
-Error-aware version of ExecCommand. Returns iterator that yields both records and execution errors.
-
-**Example:**
-```go
-processes, err := ssql.ExecCommandSafe("ps", []string{"-efl"})
-if err != nil {
-    log.Fatalf("Failed to start command: %v", err)
-}
-for process, err := range processes {
-    if err != nil {
-        log.Printf("Error parsing output: %v", err)
-        continue
-    }
-    cmd := ssql.GetOr(process, "CMD", "")
-    fmt.Println(cmd)
-}
-```
-
-#### DefaultCommandConfig
-```go
-func DefaultCommandConfig() CommandConfig
-```
-Returns default command parsing configuration.
-
-#### CommandConfig
-```go
-type CommandConfig struct {
-    SkipLines      int
-    TrimSpaces     bool
-    MinColumnWidth int
-}
-```
-
-### Arrow Operations
-
-Apache Arrow format provides high-performance columnar I/O, ideal for large datasets.
-
-#### ReadArrow
-```go
-func ReadArrow(filename string) (iter.Seq[Record], error)
-```
-Reads records from an Arrow file (.arrow or .feather format).
-
-**Example:**
-```go
-records, err := ssql.ReadArrow("data.arrow")
-if err != nil {
-    log.Fatal(err)
-}
-for r := range records {
-    fmt.Println(ssql.GetOr(r, "name", ""))
-}
-```
-
-#### ReadArrowFromReader
-```go
-func ReadArrowFromReader(r io.Reader) iter.Seq[Record]
-```
-Reads Arrow data from an io.Reader.
-
-#### WriteArrow
-```go
-func WriteArrow(records iter.Seq[Record], filename string) error
-```
-Writes records to an Arrow file with ZSTD compression.
-
-**Example:**
-```go
-err := ssql.WriteArrow(records, "output.arrow")
-```
-
-#### WriteArrowToWriter
-```go
-func WriteArrowToWriter(records iter.Seq[Record], w io.Writer) error
-```
-Writes Arrow data to an io.Writer.
-
-**When to use Arrow:**
-- Large datasets (>100K records) - 10-20x faster than CSV/JSON
-- Repeated processing of same data
-- Inter-process data sharing
-- GPU acceleration (data already columnar)
-
-### XLSX Operations
-
-Excel XLSX format support for reading and writing spreadsheets.
-
-#### ReadXLSX
-```go
-func ReadXLSX(filename string, config ...XLSXConfig) (iter.Seq[Record], error)
-```
-Reads records from an Excel XLSX file. Row 1 is treated as headers (field names),
-remaining rows are data. Types are inferred from cell values.
-
-**Example:**
-```go
-// Read first sheet (default)
-records, err := ssql.ReadXLSX("data.xlsx")
-if err != nil {
-    log.Fatal(err)
-}
-for r := range records {
-    name := ssql.GetOr(r, "name", "")
-    age := ssql.GetOr(r, "age", int64(0))
-    fmt.Printf("%s: %d\n", name, age)
-}
-
-// Read a specific sheet
-records, err := ssql.ReadXLSX("workbook.xlsx", ssql.XLSXConfig{SheetName: "Sales"})
-```
-
-#### WriteXLSX
-```go
-func WriteXLSX(records iter.Seq[Record], filename string, config ...XLSXConfig) error
-```
-Writes records to an Excel XLSX file. Field names become headers in row 1.
-
-**Example:**
-```go
-err := ssql.WriteXLSX(records, "output.xlsx")
-
-// Write to a specific sheet
-err := ssql.WriteXLSX(records, "output.xlsx", ssql.XLSXConfig{SheetName: "Results"})
-```
-
-#### XLSXConfig
-```go
-type XLSXConfig struct {
-    SheetName string // Sheet to read/write (default: first sheet for read, "Sheet1" for write)
-}
-```
-
-#### ReadXLSXSheetNames
-```go
-func ReadXLSXSheetNames(filename string) ([]string, error)
-```
-Returns the list of sheet names in an XLSX file. Useful for exploring multi-sheet workbooks.
-
-**When to use XLSX:**
-- Sharing data with Excel users
-- Multi-sheet workbooks with related datasets
-- Preserving numeric types (integers stay integers, unlike CSV)
-
-**When to use CSV instead:**
-- Streaming/pipeline processing (XLSX requires loading entire file)
-- Very large datasets (CSV is more memory-efficient)
-- Simple text-based workflows
-
----
-
-## Signal Processing
-
-> 📈 **Tutorial**: See the [Signal Processing Codelab](cli-signal-processing.md) for hands-on examples with charts.
-
-### Window Functions and Spectrograms
-
-```go
-func HannWindow(n int) Signal
-func HammingWindow(n int) Signal
-func BlackmanWindow(n int) Signal
-func ApplyWindow(signal, window Signal) Signal                       // element-wise product
-func Spectrogram(signal Signal, opts SpectrogramOptions) ([]SpectrogramBin, error)   // STFT: time × frequency × magnitude
-func SpectrogramFilter(field string, opts SpectrogramOptions) Filter[Record, Record]
-func SpectrogramToRecords(bins []SpectrogramBin) iter.Seq[Record]    // time_index, time, frequency, magnitude
-func GPUAvailable() bool                                             // true only in the CUDA build with a GPU present
-```
-
-ssql provides GPU-accelerated signal processing operations for frequency analysis, filtering, and pattern detection.
-
-### Signal Type
-```go
-type Signal []float64
-```
-Represents a time-domain signal as a sequence of float64 values.
-
-### Spectrum Type
-```go
-type Spectrum struct {
-    Magnitude []float64 // Magnitude at each frequency bin
-    Phase     []float64 // Phase in radians (optional, may be nil)
-    N         int       // Original signal length
-}
-```
-Represents frequency-domain data from an FFT.
-
-**Methods:**
-```go
-func (s *Spectrum) FrequencyBin(index int, sampleRate float64) float64
-func (s *Spectrum) Len() int
-```
-
-### FFT Operations
-
-#### FFT
-```go
-func FFT(signal Signal) (*Spectrum, error)
-```
-Computes the Fast Fourier Transform. Returns magnitude only.
-Uses GPU automatically for signals >= 16K samples (28-54x faster).
-
-**Example:**
-```go
-signal := ssql.Signal{1, 2, 3, 4, 5, 6, 7, 8}
-spectrum, err := ssql.FFT(signal)
-if err != nil {
-    log.Fatal(err)
-}
-fmt.Printf("DC component magnitude: %f\n", spectrum.Magnitude[0])
-```
-
-#### FFTWithPhase
-```go
-func FFTWithPhase(signal Signal) (*Spectrum, error)
-```
-Computes FFT with both magnitude and phase (needed for IFFT reconstruction).
-
-#### FFTMagnitude
-```go
-func FFTMagnitude(signal Signal) ([]float64, error)
-```
-Returns just the magnitude array (convenience function).
-
-#### IFFT
-```go
-func IFFT(magnitude, phase []float64) (Signal, error)
-```
-Inverse FFT - reconstructs time-domain signal from frequency-domain data.
-Both magnitude and phase are required for accurate reconstruction.
-
-**Example:**
-```go
-// Round-trip: FFT then IFFT
-spectrum, _ := ssql.FFTWithPhase(signal)
-reconstructed, _ := ssql.IFFT(spectrum.Magnitude, spectrum.Phase)
-```
-
-#### IFFTToLength
-```go
-func IFFTToLength(magnitude, phase []float64, length int) (Signal, error)
-```
-IFFT with specified output length (useful when original length is known).
-
-### Convolution Operations
-
-#### Convolve
-```go
-func Convolve(signal, kernel Signal) (Signal, error)
-```
-Computes convolution. Output length is len(signal) + len(kernel) - 1.
-Uses GPU automatically for kernels >= 16 points (4-500x faster).
-
-**Example:**
-```go
-signal := ssql.Signal{1, 2, 3, 4, 5}
-kernel := ssql.MovingAverageKernel(3)
-smoothed, _ := ssql.Convolve(signal, kernel)
-```
-
-#### ConvolveSame
-```go
-func ConvolveSame(signal, kernel Signal) (Signal, error)
-```
-Convolution with same-length output (like numpy's "same" mode).
-
-#### AutoConvolve / AutoConvolveSame
-```go
-func AutoConvolve(signal Signal) (Signal, error)
-func AutoConvolveSame(signal Signal) (Signal, error)
-```
-Convolve a signal with itself.
-
-### Correlation Operations
-
-#### Correlate
-```go
-func Correlate(a, b Signal) (Signal, error)
-```
-Computes cross-correlation. Measures similarity as a function of lag.
-
-**Example:**
-```go
-// Find where pattern appears in signal
-correlation, _ := ssql.Correlate(signal, pattern)
-// Peaks indicate pattern matches
-```
-
-#### CorrelateSame
-```go
-func CorrelateSame(a, b Signal) (Signal, error)
-```
-Cross-correlation with same-length output.
-
-#### AutoCorrelate
-```go
-func AutoCorrelate(signal Signal) (Signal, error)
-```
-Autocorrelation - measures how similar a signal is to delayed copies of itself.
-Useful for finding repeating patterns and periodicities.
-
-#### AutoCorrelateMax
-```go
-func AutoCorrelateMax(signal Signal, maxLag int) (Signal, error)
-```
-Autocorrelation up to a maximum lag. More efficient than full autocorrelation
-when searching for periodicity below a certain period.
-
-### Built-in Kernels
-
-```go
-func MovingAverageKernel(size int) Signal
-func GaussianKernel(size int, sigma float64) Signal
-func DiffKernel() Signal      // First derivative: [-1, 1]
-func LaplacianKernel() Signal // Second derivative: [1, -2, 1]
-func SobelKernel() Signal     // Edge detection: [-1, 0, 1]
-```
-
-### Record Integration
-
-#### ExtractSignal
-```go
-func ExtractSignal(records iter.Seq[Record], field string) Signal
-func ExtractSignalFromSlice(records []Record, field string) Signal
-```
-Extract numeric field values from records as a Signal.
-
-#### WithSignal
-```go
-func WithSignal(records iter.Seq[Record], field string, signal Signal) iter.Seq[Record]
-```
-Add signal values as a new field to records.
-
-#### SpectrumToRecords
-```go
-func SpectrumToRecords(spectrum *Spectrum, sampleRate float64) iter.Seq[Record]
-```
-Convert spectrum to records with index, frequency, magnitude, and phase fields.
-
-### Pipeline Filters
-
-For use with `Chain()` and code generation:
-
-```go
-func FFTFilter(field string, sampleRate float64, includePhase bool) Filter[Record, Record]
-func IFFTFilter(magnitudeField, phaseField, outputField string) Filter[Record, Record]
-func ConvolveFilter(field, outputField string, kernel Signal, same bool) Filter[Record, Record]
-func AutoConvolveFilter(field, outputField string, same bool) Filter[Record, Record]
-func CorrelateFilter(fieldA, fieldB, outputField string, same bool) Filter[Record, Record]
-func AutoCorrelateFilter(field, outputField string, same bool) Filter[Record, Record]
-func AutoCorrelateMaxFilter(field, outputField string, maxLag int) Filter[Record, Record]
-```
-
----
-
-## Chart & Visualization
-
-> 📊 **Interactive Examples**: See chart creation in action in the [Getting Started Guide](codelab-intro.md#interactive-charts-made-easy).
-
-### HeatmapChart / AnimateChart
-
-```go
-func HeatmapChart(sb iter.Seq[Record], config HeatmapConfig, filename string) error   // spectrogram-shaped data: colour range, log frequency axis, cursor readout
-func AnimateChart(sb iter.Seq[Record], config AnimateConfig, filename string) error   // a heatmap or histogram per frame with player controls
-func DefaultHeatmapConfig() HeatmapConfig
-func DefaultAnimateConfig() AnimateConfig
-func DefaultXLSXConfig() XLSXConfig
-```
-
-### Chart Configuration
-
-#### DefaultChartConfig
-```go
-func DefaultChartConfig() ChartConfig
-```
-Creates default chart configuration.
-
-#### ChartConfig
-```go
-type ChartConfig struct {
-    Title              string            // Chart title
-    Width              int               // Chart width in pixels
-    Height             int               // Chart height in pixels
-    ChartType          string            // "line", "bar", "scatter", "pie", "doughnut", "radar", "polarArea"
-    TimeFormat         string            // Time format for time-based X axis
-    XAxisType          string            // "linear", "logarithmic", "time", "category"
-    YAxisType          string            // "linear", "logarithmic"
-    ShowLegend         bool              // Show chart legend
-    ShowTooltips       bool              // Enable hover tooltips
-    EnableZoom         bool              // Enable zoom functionality
-    EnablePan          bool              // Enable pan functionality
-    EnableAnimations   bool              // Enable chart animations
-    ShowDataLabels     bool              // Show data value labels
-    EnableInteractive  bool              // Enable field selection UI
-    EnableCalculations bool              // Enable running averages, etc.
-    ColorScheme        string            // "default", "vibrant", "pastel", "monochrome"
-    Theme              string            // "light", "dark"
-    ExportFormats      []string          // Export options: "png", "svg", "pdf", "csv"
-    CustomCSS          string            // Custom CSS for chart styling
-    Fields             map[string]string // Field name -> data type hints
-}
-```
-
-ChartConfig provides comprehensive control over chart appearance, behavior, and export options. Use `DefaultChartConfig()` to get sensible defaults, then customize as needed.
-
-### Chart Creation
-
-#### InteractiveChart
-```go
-func InteractiveChart(data iter.Seq[Record], filename string, config ...ChartConfig) error
-```
-Creates interactive HTML chart.
-
-#### TimeSeriesChart
-```go
-func TimeSeriesChart(data iter.Seq[Record], timeField string, valueFields []string, filename string, config ...ChartConfig) error
-```
-Creates time series chart.
-
-#### QuickChart
-```go
-func QuickChart(data iter.Seq[Record], xField, yField, filename string) error
-```
-Creates chart with default settings using specified X and Y fields.
-
-**Example:**
-```go
-config := ssql.DefaultChartConfig()
-config.Title = "Sales Analysis"
-config.ChartType = "bar"
-
-err := ssql.InteractiveChart(
-    salesData,
-    "sales_chart.html",
-    config,
-)
-```
-
-#### EnhancedChart
 ```go
-func EnhancedChart(data iter.Seq[Record], config ChartConfig, filename string) error
+func DescribeWindowFunc(fn WindowFunc) WindowFuncDesc
+func WindowFuncCode(fn WindowFunc) string          // the Go constructor call that rebuilds fn (what `generate go` emits)
+func WindowFuncField(fn WindowFunc) (string, bool) // the source field, or "" for ranking/count
+func WindowFuncResultKind(fn WindowFunc) string    // "int", "float", or "" (the source field's type)
+type WindowFuncDesc struct{ Kind, Field string; N int; Default any; Agg *WAggSpec }
 ```
-Creates advanced charts with support for:
-- Multiple Y-axis fields (multi-series charts)
-- Heatmaps with Z-axis color values (uses Plotly.js)
-- Logarithmic axes
-- Color-by-field for scatter plots
 
-**Example - Multi-series chart:**
-```go
-config := ssql.DefaultChartConfig()
-config.XField = "month"
-config.YFields = []string{"revenue", "expenses", "profit"}
-
-err := ssql.EnhancedChart(salesData, config, "multi_series.html")
-```
-
-**Example - Heatmap:**
-```go
-config := ssql.DefaultChartConfig()
-config.ChartType = "heatmap"
-config.XField = "time"
-config.YFields = []string{"frequency"}  // Y-axis for heatmap
-config.ZField = "magnitude"              // Color values
-config.ColorScale = "viridis"            // viridis, plasma, inferno, magma
-
-err := ssql.EnhancedChart(spectrogramData, config, "spectrogram.html")
-```
-
-**Example - Logarithmic axes:**
-```go
-config := ssql.DefaultChartConfig()
-config.XField = "frequency"
-config.YFields = []string{"magnitude"}
-config.XAxisType = "logarithmic"
-config.YAxisType = "logarithmic"
-
-err := ssql.EnhancedChart(spectrumData, config, "log_plot.html")
-```
-
-**Example - Color by field (scatter):**
-```go
-config := ssql.DefaultChartConfig()
-config.ChartType = "scatter"
-config.XField = "age"
-config.YFields = []string{"income"}
-config.ColorField = "region"  // Points colored by region category
-
-err := ssql.EnhancedChart(customerData, config, "customers.html")
-```
-
-### Data Explorer
-
-#### ExploreConfig
-```go
-type ExploreConfig struct {
-    Title         string // Page title
-    Theme         string // "light" or "dark"
-    InitialXField string // Optional initial X axis field
-    InitialYField string // Optional initial Y axis field
-    PageSize      int    // Rows per page in table (default 50)
-    Width         int    // Explorer width
-    Height        int    // Explorer height
-    WasmEnabled   bool   // Enable client-side ssql WASM transforms
-    WasmExecJS    string // Content of wasm_exec.js (inlined in HTML)
-    SsqlWasmJS    string // Content of ssql-wasm.js (inlined in HTML)
-}
-```
-
-#### DefaultExploreConfig
-```go
-func DefaultExploreConfig() ExploreConfig
-```
-Returns sensible defaults (light theme, 50 rows per page, 1400x800).
-
-#### DataExplore
-```go
-func DataExplore(records iter.Seq[Record], config ExploreConfig, filename string) error
-```
-Creates a self-contained HTML data exploration app with:
-- Sortable/filterable data table (AG-Grid)
-- Chart type switcher (line, bar, scatter, pie)
-- Field selector dropdowns
-- Aggregation UI (group by with sum/avg/count/min/max)
-- Export as CSV or PNG
-
-**Example - Basic explorer:**
-```go
-data, _ := ssql.ReadCSV("sales.csv")
-ssql.DataExplore(data, ssql.DefaultExploreConfig(), "explore.html")
-```
-
-**Example - Customized explorer:**
-```go
-config := ssql.DefaultExploreConfig()
-config.Title = "Sales Analysis"
-config.Theme = "dark"
-config.InitialXField = "date"
-config.InitialYField = "revenue"
-
-data, _ := ssql.ReadCSV("sales.csv")
-ssql.DataExplore(data, config, "sales_explorer.html")
-```
-
----
-
-## Helper Functions
-
-### Record Access
-
-#### Get[T]
-```go
-func Get[T any](record Record, key string) (T, bool)
-```
-Safely gets typed value from Record. Includes automatic type conversion for numeric and string types.
-
-**Example:**
-```go
-name, exists := ssql.Get[string](record, "name")
-if !exists {
-    log.Println("name field not found")
-}
-
-// Type conversion: string "42" → int64(42)
-age, ok := ssql.Get[int64](record, "age")
-```
-
-#### GetOr[T]
-```go
-func GetOr[T any](record Record, key string, defaultValue T) T
-```
-Gets value with default fallback. Includes automatic type conversion.
-
-**Example:**
-```go
-age := ssql.GetOr(record, "age", int64(0))
-name := ssql.GetOr(record, "name", "Unknown")
-```
+### Aggregate expressions and rollup sets
 
-#### Set[V]
 ```go
-func Set[V Value](m MutableRecord, field string, value V) MutableRecord
+func CompileAggExprPatched(expression string, fieldNames []string) (ast.Node, error)   // the patched normal form exec evaluates (sum(x) → sum(_records, #.x))
+func ExprFieldName(node ast.Node) (string, bool)
+func RollupGroupingSets(fields []string, mode RollupMode) [][]string  // the sets a rollup aggregates over, in emission order
+func RollupFieldPrefix(fields []string) string                        // "" for the grand total, else "a_b_"
 ```
-Sets field value in a MutableRecord (mutates in place).
 
-**Example:**
-```go
-mut := ssql.MakeMutableRecord()
-ssql.Set(mut, "name", "Alice")
-ssql.Set(mut, "age", int64(30))
-record := mut.Freeze()
-```
-
-#### SetImmutable[V]
-```go
-func SetImmutable[V Value](r Record, field string, value V) Record
-```
-Creates a new Record with the field value set (immutable operation).
-
-**Example:**
-```go
-updated := ssql.SetImmutable(record, "processed", true)
-// original record is unchanged
-```
-
-#### Field[V]
-```go
-func Field[V Value](key string, value V) Record
-```
-Creates a single-field Record.
-
-**Example:**
-```go
-nameField := ssql.Field("name", "Alice")
-// Returns: Record{"name": "Alice"}
-```
-
-#### ValidateRecord
-```go
-func ValidateRecord(r Record) error
-```
-Validates that a Record contains only supported value types.
-
-**Example:**
-```go
-err := ssql.ValidateRecord(record)
-if err != nil {
-    log.Printf("Invalid record: %v", err)
-}
-```
-
----
-
-## Error Handling
-
-> 🛡️ **Production Patterns**: See the safe/unsafe split in practice in the [Getting Started Guide](codelab-intro.md#error-handling).
-
-ssql provides multiple error handling approaches:
+### Runtime values in generated programs
 
-### Source Functions (I/O Operations)
-Source functions that read from files or execute commands return errors explicitly:
-
-```go
-// Source functions return (iter.Seq[Record], error)
-data, err := ssql.ReadCSV("data.csv")
-if err != nil {
-    log.Fatalf("Failed to open file: %v", err)
-}
-
-records, err := ssql.ReadJSON("data.jsonl")
-if err != nil {
-    log.Fatalf("Failed to open file: %v", err)
-}
-
-lines, err := ssql.ReadLines("logfile.txt")
-if err != nil {
-    log.Fatalf("Failed to open file: %v", err)
-}
-
-processes, err := ssql.ExecCommand("ps", []string{"-efl"})
-if err != nil {
-    log.Fatalf("Failed to execute command: %v", err)
-}
-```
-
-### Sink Functions (Write Operations)
-Sink functions that write to files also return errors:
-
-```go
-err := ssql.WriteCSV(records, "output.csv")
-if err != nil {
-    log.Fatalf("Failed to write CSV: %v", err)
-}
-
-err = ssql.WriteJSON(records, "output.jsonl")
-if err != nil {
-    log.Fatalf("Failed to write JSON: %v", err)
-}
-```
-
-### Filter Operations
-Filter functions have two versions for transformation error handling:
-
-- **Regular functions**: Designed for transformations that don't fail
-- **Safe functions**: Return errors via `iter.Seq2[T, error]` for error-prone transformations
-
-**Example:**
 ```go
-// Regular filter - for transformations that don't fail
-result := ssql.Select(func(x int) int {
-    return x * 2
-})(data)
-
-// Safe filter - for transformations that can fail
-safeResult := ssql.SelectSafe(func(x int) (int, error) {
-    if x < 0 {
-        return 0, fmt.Errorf("negative value: %d", x)
-    }
-    return x * 2, nil
-})(dataWithErrors)
-
-for value, err := range safeResult {
-    if err != nil {
-        log.Printf("Error: %v", err)
-        continue
-    }
-    // Process value
-}
+func MustNumber(literal, field, op string) float64   // a flag value for a numeric comparison; *CompareError if not a number
+func MustBool(literal, field, op string) bool
+func MustCast[T any](v any, target FieldType, field string) T   // typed generated code; *CastError on failure
+func ParseFloat64(s string) float64                  // 0 on failure; flag defaults
 ```
-
-### Best Practices
-
-1. **Always check errors from Source and Sink functions** - These involve I/O and can fail
-2. **Use Safe filters for user input or external data** - Where validation is needed
-3. **Use regular filters for pure transformations** - Cleaner and more efficient
-4. **Fail fast at the source** - Catch file/command errors before processing begins
-
----
-
-## Best Practices
-
-1. **Chain Operations**: Use functional composition for readable pipelines
-2. **Use Type Safety**: Leverage generics for compile-time safety
-3. **Handle Errors**: Use Safe versions for error-prone operations
-4. **Memory Efficiency**: Use lazy evaluation and avoid materializing large datasets
-5. **Performance**: Use appropriate window sizes and batch operations
-
-## Related Documentation
-
-- **[Getting Started Guide](codelab-intro.md)** - Learn ssql basics with hands-on examples
-- **[Typed Codelab](typed-codelab.md)** - The high-performance struct-based API
-
----
-
-*Generated for ssql - Modern Go stream processing library*

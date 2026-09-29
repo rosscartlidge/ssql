@@ -69,6 +69,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `...CSVOption` parameter; `ReadJSONLParallel` is listed; the JSONL
   section describes the positional decoder instead of `encoding/json`;
   "Text lines" sits with the other I/O; no version or date stamps remain.
+- **`doc/api-reference.md` rewritten** (DFC140 batch 5): 18 sections in
+  pipeline order (core types, record helpers, iterators, transform,
+  filter, limit, order, aggregate, reshape, joins and set ops, window and
+  time, composition, I/O, signal, charts, errors, and an appendix for the
+  CLI/codegen-support exports). Every signature now matches `go doc`:
+  `TimeSeq`/`BoolSeq` are setters; the seven nonexistent `MutableRecord`
+  methods and `SetAny` are gone; `Value` lists only the sequence types
+  that exist; `JoinPredicate` is an interface; `AggregateFunc` returns
+  `AggregateResult`; `Min`/`Max` take `OrderedValue`; `Materialize`,
+  `MaterializeJSON`, `TailTSVFile`, `CSVConfig`, `CommandConfig`,
+  `ChartConfig` and `ExploreConfig` show their real parameters and
+  fields; `SortRecords` and `Mode` have signatures; the ten non-compiling
+  examples are fixed; the duplicated MutableRecord, ReadLines, JSONL and
+  Best Practices sections appear once; Installation & Setup is gone
+  (doc/install.md). doc-check Check 11 now requires a signature line per
+  export (`scripts/api-coverage.sh`), not a bare mention.
 - **The API references are complete again, and gated.** `doc/api-reference.md`
   and `doc/typed-reference.md` now mention every exported function and
   method (about 130 record-package and 23 typed exports had accumulated

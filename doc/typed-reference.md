@@ -118,6 +118,7 @@ type ReadError struct {
     Line   int64  // JSONL: 1-based physical line
     Err    error
 }
+func (e *ReadError) Error() string
 ```
 
 ### Writing CSV
@@ -168,8 +169,8 @@ func (s Stream[T]) WriteDelimToWriter(w io.Writer, opts ...DelimOption) error
 // Default delimiter is '\t'. Pass typed.WithDelim(',') for fast clean
 // CSV reading WITHOUT quote handling, '|' / ':' for pipe / colon
 // formats.
-typed.WithDelim(byte) DelimOption
-typed.DelimStrict() DelimOption  // mirrors typed.Strict for CSV
+func WithDelim(b byte) DelimOption
+func DelimStrict() DelimOption   // mirrors Strict for CSV
 ```
 
 Same struct-tag mapping as `ReadCSV`; same `Stream[T]` per-shard buffer
@@ -202,8 +203,8 @@ func WriteParquetToWriter[T any](seq iter.Seq[T], w io.Writer) error
 func (s Stream[T]) WriteParquet(filename string) error
 func (s Stream[T]) WriteParquetToWriter(w io.Writer) error
 
-typed.ParquetStrict() ParquetOption       // reject schema mismatches
-typed.ParquetColumns(names...) ParquetOption  // read only listed columns
+func ParquetStrict() ParquetOption              // reject schema mismatches
+func ParquetColumns(names ...string) ParquetOption  // read only the listed columns
 ```
 
 Snappy compression by default. Reads use the existing
@@ -494,12 +495,37 @@ func GroupByParallel[T, S, O any, K comparable](
 ) iter.Seq[O]
 ```
 
-Prebuilt aggregators: `Counter[T]`, `NewSummer(fn)`, `NewAverager(fn)` —
-all three implement `Merge` so they double as `ParallelAggregator`.
-The parallel constructors are `NewCounter[T]()`, `NewParallelSummer(fn)`,
-`NewParallelAverager(fn)`. Custom accumulators implement the
-`Aggregator[T, R]` interface (serial); add a `Merge(other Aggregator[T, R])`
-method to satisfy `ParallelAggregator[T, R]`.
+```go
+type Aggregator[T, R any] interface { Add(T); Result() R }
+type ParallelAggregator[T, R any] interface { Aggregator[T, R]; Merge(other Aggregator[T, R]) }
+type AggFunc[T, R any] func() Aggregator[T, R]                   // a fresh accumulator per group
+type ParallelAggFunc[T, R any] func() ParallelAggregator[T, R]
+
+type Counter[T any] struct{ N int64 }
+func (c *Counter[T]) Add(T)
+func (c *Counter[T]) Merge(other Aggregator[T, int64])
+func (c *Counter[T]) Result() int64
+type Summer[T any, N Number] struct{ /* private */ }
+func (s *Summer[T, N]) Add(v T)
+func (s *Summer[T, N]) Merge(other Aggregator[T, N])
+func (s *Summer[T, N]) Result() N
+type Averager[T any, N Number] struct{ /* private */ }
+func (a *Averager[T, N]) Add(v T)
+func (a *Averager[T, N]) Merge(other Aggregator[T, float64])
+func (a *Averager[T, N]) Result() float64
+
+func NewSummer[T any, N Number](fn func(T) N) AggFunc[T, N]
+func NewAverager[T any, N Number](fn func(T) N) AggFunc[T, float64]
+func NewCounter[T any]() ParallelAggFunc[T, int64]
+func NewParallelSummer[T any, N Number](fn func(T) N) ParallelAggFunc[T, N]
+func NewParallelAverager[T any, N Number](fn func(T) N) ParallelAggFunc[T, float64]
+```
+
+The prebuilt accumulators all implement `Merge`, so they serve both
+`GroupBy` (through `NewSummer` / `NewAverager`, or `&Counter[T]{}`) and
+`GroupByParallel` (through the `New*` constructors typed as
+`ParallelAggFunc`). A custom accumulator implements `Aggregator[T, R]`;
+add a `Merge` method to use it in the parallel form.
 
 Use `GroupBy` for unordered serial input (buffers all groups in a map).
 Use `GroupByOrdered` when the input is pre-sorted by key (O(1) memory).

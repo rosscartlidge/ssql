@@ -42,9 +42,10 @@ and `release.yml`. The pre-commit hook is installed with
 11. **API reference coverage** (`scripts/api-coverage.sh`): every exported
     function and method of `ssql` and `ssql/typed` is mentioned in
     `doc/api-reference.md` / `doc/typed-reference.md`; exemptions in
-    `doc/api-reference-exclude.txt`. Today this is a word match, not a
-    signature match (DFC140 §7.5 plans the stricter form with the
-    api-reference restructure).
+    `doc/api-reference-exclude.txt`. Since DFC140 batch 5 it requires a
+    signature line: `func Name` for a function, `func (r *Type) Method`
+    for a method, at the start of a line (inside a code block); a bare
+    mention in prose does not count.
 
 ## Level 2: `doc-test.sh`
 

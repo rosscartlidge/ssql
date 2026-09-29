@@ -268,7 +268,7 @@ withTotals := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 })(orders)
 ```
 
-> **Reference**: See [Helper Functions](api-reference.md#helper-functions) for Record access utilities.
+> **Reference**: See [Helper Functions](api-reference.md#record-helpers) for Record access utilities.
 
 ---
 
