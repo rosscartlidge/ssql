@@ -737,14 +737,29 @@ Phase 2 — Tier 3b shipped (2026-04-27, Sprint 1+2 of the Tier 3 roadmap):
 - [x] `update` with conditional clauses (`-if F OP V -set ...
       + ...`); first-match-wins as an if/else-if chain
 
-Phase 2 — still deferred:
-- [ ] `-if-expr` / `-set-expr` / `-expr` aggregations (expression-lang → Go)
-- [ ] Multi-clause joins, `-as` field renames
-- [ ] `-rollup` / `-cube` / `-collect`
-- [ ] JSONL/Arrow/Parquet typed I/O
-- [ ] Window analytic functions
-- [ ] Signal processing (FFT, convolve, etc.)
-- [ ] `pivot`, `merge`, distributed sources
+Phase 2 — since shipped (the list this section carried as "still
+deferred" until 2026-09-29; see the journals for each):
+- [x] `-if-expr` / `-set-expr` / `-expr` aggregations: the expr→Go
+  transpiler (`expr_go.go`), with a differential gate against the VM;
+  an untranspilable construct falls back to record codegen loudly
+- [x] `-rollup` / `-cube`: `RollupEnrich` (`typed_rollup.go`)
+- [x] Window analytic functions: `Window` (`typed_window.go`)
+- [x] JSONL and Parquet typed I/O: `ReadJSONL[Parallel]`,
+  `ReadParquet[Parallel]`, `WriteParquet`; `from ssh` in typed mode
+- [x] ASOF join (`AsofJoin[Parallel]`), set operations (`Except`,
+  `Intersect`, the ALL and Parallel forms), many-to-many parallel join
+  (`HashJoinMultiParallel`), `DistinctParallel`, `TopByParallel`,
+  `TakeLast`, the Record→typed boundary (`FromRecords[Parallel]`)
+  (DFC137, 2026-09-26/27)
+
+Still record-only (typed codegen falls back to record for the stage,
+with the reason under `-explain`, or refuses loudly):
+- [ ] `-collect` (a slice-typed result field)
+- [ ] Multi-clause joins and `-as` renames; `join -type left|right|full`
+  and `join -asof -type left` (a struct cannot hold an absent right
+  field, DFC124 §3)
+- [ ] `sort`/`group-by -spill` (the out-of-core sort is record-only)
+- [ ] `pivot`, `merge`, signal processing (FFT, convolve, spectrogram)
 
 See [`doc/research/typed-package-proposal.md`](research/typed-package-proposal.md)
 for the full design and Phase 2 vision.
