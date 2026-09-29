@@ -26,7 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode now carries TYPES: a CSV/TSV source samples 200 rows with its
   own config (so `-type` holds) instead of reporting every column as
   `any`; a field that survives a stage keeps its type, `rename` moves
-  it, a field a stage creates is `any`.
+  it, `cast -type` retypes it, and a `group-by` aggregate's result has
+  the type the aggregate registry gives it (`-count` int, `-sum`/`-avg`
+  float, `-min`/`-max`/`-first` the field's own), rollup copies
+  included; an `-expr` result is `any`.
 
 ### Fixed
 - **A CSV source over 1 MB lost its header in the peeking reader**:

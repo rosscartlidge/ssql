@@ -100,7 +100,9 @@ func TestSchemaModeTypesAndData(t *testing.T) {
 	}{
 		{"source types", "ssql from csv " + csv, "field,type\nname,string\ndept,string\nsalary,int\nrate,float\nhired,string\n"},
 		{"-type holds", "ssql from csv " + csv + " -type hired time | ssql include name hired", "field,type\nname,string\nhired,time\n"},
-		{"rename moves the type, group-by creates any", "ssql from csv " + csv + " | ssql rename -as salary pay | ssql group-by dept -sum pay total", "field,type\ndept,string\ntotal,any\n"},
+		{"rename moves the type; aggregates from the registry", "ssql from csv " + csv + " | ssql rename -as salary pay | ssql group-by dept -count n -sum pay total -min pay lo -max rate hi -first name who -expr 'max(pay)' e", "field,type\ndept,string\nn,int\ntotal,float\nlo,int\nhi,float\nwho,string\ne,any\n"},
+		{"cast retypes", "ssql from csv " + csv + " | ssql cast -type salary float -type hired time | ssql include salary hired", "field,type\nsalary,float\nhired,time\n"},
+		{"rollup copies carry the base type", "ssql from csv " + csv + " | ssql group-by dept name -count n -rollup", "field,type\ndept,string\nname,string\nn,int\ndept_n,int\ndept_name_n,int\n"},
 		{"through a sink", "ssql from csv " + csv + " | ssql exclude rate | ssql to table", "field,type\nname,string\ndept,string\nsalary,int\nhired,string\n"},
 	}
 	for _, c := range cases {

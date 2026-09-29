@@ -17,6 +17,7 @@ package commands
 
 import (
 	"io"
+	"strings"
 	"iter"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -137,22 +138,33 @@ func runSchemaModeTransform(ctx *cf.Context, cmdName string) error {
 	if !ok {
 		return writeSchemaModeOutput(ctx.Stdout(), nil)
 	}
-	// The rules track names; a field that survives the stage keeps the
-	// type its source gave it, a field the stage creates is "any" (the
-	// rules do not know that -count makes an int, and saying so here
-	// would be a second implementation of every aggregate's type).
+	// The name rules say which fields come out; a field that survives
+	// the stage keeps its source's type, and the stage's type op (where
+	// it has one: group-by from the aggregate registry, cast, rename)
+	// types the fields it creates or retypes. Anything else is "any".
 	types := map[string]string{}
+	inTypes := map[string]string{}
 	if sr.Schema != nil {
+		for _, f := range sr.Schema.Fields {
+			inTypes[f] = sr.Schema.TypeOf(f)
+		}
 		for _, f := range out {
-			if sr.Schema.HasField(f) {
-				types[f] = sr.Schema.TypeOf(f)
+			if t, ok := inTypes[f]; ok {
+				types[f] = t
 			}
 		}
-		// rename moves a field's type with its name: `-as old new`
-		if cmdName == "rename" {
-			for i := 0; i+2 < len(args); i++ {
-				if (args[i] == "-as" || args[i] == "-a") && sr.Schema.HasField(args[i+1]) {
-					types[args[i+2]] = sr.Schema.TypeOf(args[i+1])
+	}
+	if op, ok := schemaTypeOps[cmdName]; ok {
+		created := op(inTypes, args)
+		for _, f := range out {
+			if t, ok := created[f]; ok {
+				types[f] = t
+				continue
+			}
+			// a rollup/cube copy carries its base result's type
+			for base, t := range created {
+				if strings.HasSuffix(f, "_"+base) {
+					types[f] = t
 				}
 			}
 		}

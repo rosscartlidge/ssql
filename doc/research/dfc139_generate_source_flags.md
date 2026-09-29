@@ -214,8 +214,14 @@ field/type table)? Built as `-data`: one `(field, type)` record per
 field on the wire. That only earned its keep once schema mode carried
 types, which it did not (every column `any`): a CSV/TSV source now
 samples 200 rows with its own config in schema mode, a surviving field
-keeps its type through the rules, `rename` moves it, a created field
-is `any`. Completion sees the same header and is unchanged by it.
+keeps its type through the rules, `rename` moves it, `cast` retypes
+it, and a `group-by` aggregate's result is typed by the aggregate
+registry (`aggDef.wireType`, the knowledge `generate sql` already
+uses), so `-count` is an `int` (Ross: "so it can't work out that count
+would be an int?" — it can, from the authority on aggregates, which
+is not a second implementation). Type ops live beside the name ops
+(`registerSchemaTypeOp`). Completion sees the same header and is
+unchanged by it.
 
 What did NOT change: the grammar still declares the flags per leaf, so
 `-spec-json` lists them on each of the four nodes (true to what autocli

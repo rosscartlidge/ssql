@@ -127,7 +127,71 @@ func keepPresent(in, names []string) []string {
 	return out
 }
 
+// schemaTypeOp gives the wire types of the fields a stage CREATES or
+// RETYPES, from the input types and the stage's argv: the group-by
+// aggregates' result types from the registry (aggDef.wireType, the same
+// knowledge `generate sql` uses for column kinds), cast's -type, rename's
+// moved type. Names are the schemaOp's business; a stage with no type
+// op leaves its new fields "any". Registered beside the name ops.
+type schemaTypeOp func(inTypes map[string]string, args []string) map[string]string
+
+var schemaTypeOps = map[string]schemaTypeOp{}
+
+func registerSchemaTypeOp(name string, op schemaTypeOp) { schemaTypeOps[name] = op }
+
 func init() {
+	// group-by: each aggregate's result from the registry; a rollup/cube
+	// copy (prefix_result) has its base result's type; -expr is any.
+	registerSchemaTypeOp("group-by", func(in map[string]string, args []string) map[string]string {
+		arity := aggFlagArity()
+		for k, v := range map[string]int{"-expr": 2, "-stream-expr": 4, "-rollup": 0, "-cube": 0, "-presorted": 0, "-generate": 0, "-g": 0, "-spill": 1, "-memory": 1} {
+			arity[k] = v
+		}
+		_, flags := walkStage(args, arity)
+		out := map[string]string{}
+		for _, f := range flags {
+			d, isAgg := aggDefByFlag(f.name)
+			if !isAgg || len(f.args) == 0 || d.wireType == nil {
+				continue
+			}
+			result := f.args[len(f.args)-1]
+			fieldType := ""
+			if d.hasField && len(f.args) > 1 {
+				fieldType = in[f.args[0]]
+				if fieldType == "any" {
+					fieldType = ""
+				}
+			}
+			if t := d.wireType(fieldType); t != "" {
+				out[result] = t
+			}
+		}
+		return out
+	})
+	// cast: -type FIELD TYPE retypes the field.
+	registerSchemaTypeOp("cast", func(_ map[string]string, args []string) map[string]string {
+		out := map[string]string{}
+		for i := 0; i+2 < len(args); i++ {
+			if args[i] == "-type" || args[i] == "-t" {
+				if ft, err := ssql.ParseFieldType(args[i+2]); err == nil {
+					out[args[i+1]] = ft.String()
+				}
+				i += 2
+			}
+		}
+		return out
+	})
+	// rename: the type moves with the name.
+	registerSchemaTypeOp("rename", func(in map[string]string, args []string) map[string]string {
+		out := map[string]string{}
+		for i := 0; i+2 < len(args); i++ {
+			if (args[i] == "-as" || args[i] == "-a") && in[args[i+1]] != "" {
+				out[args[i+2]] = in[args[i+1]]
+			}
+		}
+		return out
+	})
+
 	// rename: `-as old new` (accumulated) → replace old with new in place.
 	registerSchemaOp("rename", func(_ any, in []string, args []string) ([]string, bool) {
 		out := slices.Clone(in)
