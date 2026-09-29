@@ -85,6 +85,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Best Practices sections appear once; Installation & Setup is gone
   (doc/install.md). doc-check Check 11 now requires a signature line per
   export (`scripts/api-coverage.sh`), not a bare mention.
+- **The LLM prompts corrected** (DFC140 batch 6). `doc/ai-cli-generation.md`
+  is rewritten with every command and flag checked against `-help`: `to
+  json` is a JSON array and `to jsonl` the lines; `to chart` takes
+  `-output`; `correlate -field F -with G`; `distinct` has no flags; a
+  raw CSV is fine on the right of `join`; aggregate results are named by
+  the flag (`-sum amount total` → `total`); the `generate go -pipeline`
+  form is primary; the table covers all ~40 commands including except,
+  intersect, window, pivot, unpivot, top, sample, tee, describe,
+  extract, fill, resample, run and every `from`/`to` format.
+  `doc/ai-code-generation.md`: `ReadWAV`/`ExtractSignalFromWAV`/`WriteWAV`
+  and the chart, heatmap, explorer and animation calls now have their
+  real signatures (config before file name; fields in the config);
+  Parquet, lines, `TeeFile`, `AsofJoin`, `Except`/`Intersect` and a short
+  `ssql/typed` section added; `parallel` marked as a deprecated alias.
+  `doc/ai-human-guide.md` is one page covering both prompts (was 648
+  lines with invented success stories and wrong tool commands). Six CLI
+  test cases added to `scripts/testdata/ai-test-cases.md`.
 - **The API references are complete again, and gated.** `doc/api-reference.md`
   and `doc/typed-reference.md` now mention every exported function and
   method (about 130 record-package and 23 typed exports had accumulated

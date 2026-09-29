@@ -832,6 +832,155 @@ Each test case specifies:
 
 ---
 
+### CLI-16: Anti-Join with Except
+
+**Prompt**: List the customers in customers.csv who have no order in orders.csv (match on customer_id).
+
+**Expected patterns**:
+- `ssql from customers.csv` or `ssql from test-data/customers.csv`
+- `ssql except`
+- `-file orders.csv` or `-file test-data/orders.csv`
+- `-using customer_id` or `-on customer_id customer_id`
+- `|`
+
+**Negative patterns**:
+- `ssql join` (an anti-join is except, not a join plus a filter)
+- `-distinct` (old flag)
+
+**Validation**: parse
+
+**Test Data**: `test-data/customers.csv`, `test-data/orders.csv`
+
+**Expected Output**:
+- `customer_id`
+
+---
+
+### CLI-17: Top N with the top Command
+
+**Prompt**: Show the 3 highest-paid employees from employees.csv as a table.
+
+**Expected patterns**:
+- `ssql from employees.csv` or `ssql from test-data/employees.csv`
+- `ssql top 3 -field salary` or `ssql top 3 -f salary` or `ssql limit 3`
+- `ssql to table`
+- `|`
+
+**Negative patterns**:
+- `sort -field` (sort fields are positional)
+- `head -` (use ssql, not coreutils, inside the pipeline)
+
+**Validation**: parse
+
+**Test Data**: `test-data/employees.csv`
+
+**Expected Output**:
+- `salary`
+
+---
+
+### CLI-18: Window Running Total
+
+**Prompt**: For orders.csv, add a running total of the total field per customer_id in order_id order, keeping every row.
+
+**Expected patterns**:
+- `ssql from orders.csv` or `ssql from test-data/orders.csv`
+- `ssql window`
+- `-partition customer_id`
+- `-order order_id`
+- `-sum total`
+- `|`
+
+**Negative patterns**:
+- `group-by` (a running total keeps every row; group-by collapses them)
+
+**Validation**: parse
+
+**Test Data**: `test-data/orders.csv`
+
+**Expected Output**:
+- `order_id`
+- `customer_id`
+
+---
+
+### CLI-19: Code Generation with -pipeline
+
+**Prompt**: Compile this as a standalone Go program using the -pipeline form (no exported environment variable): read users.csv, keep rows where status equals active, count per dept, output a table.
+
+**Expected patterns**:
+- `ssql generate go`
+- `-pipeline`
+- `ssql from users.csv` or `ssql from test-data/users.csv`
+- `-if status eq active`
+- `ssql group-by dept`
+- `-count`
+- `ssql to table`
+
+**Negative patterns**:
+- `export SSQL_MODE` (the -pipeline form needs no environment variable)
+- `SSQLGO` (deprecated alias)
+- `-generate` (per-command flag, not a pipeline)
+
+**Validation**: parse
+
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `package main`
+
+---
+
+### CLI-20: Expression Parameter
+
+**Prompt**: From users.csv, keep the rows whose salary is above a threshold; make the threshold a named parameter called min of type int with value 50000 and use it in the expression.
+
+**Expected patterns**:
+- `ssql from users.csv` or `ssql from test-data/users.csv`
+- `ssql where`
+- `-param min int 50000`
+- `-if-expr`
+- `salary > min` or `salary >= min`
+- `|`
+
+**Negative patterns**:
+- `where -expr ` (old flag; the expression flag is -if-expr)
+- `-param min 50000` (the parameter takes a type: -param NAME TYPE VALUE)
+
+**Validation**: parse
+
+**Test Data**: `test-data/users.csv`
+
+**Expected Output**:
+- `salary`
+
+---
+
+### CLI-21: Sort Larger Than Memory
+
+**Prompt**: Sort orders.csv by total descending using bounded memory, spilling runs to /tmp, and write the result as CSV to sorted.csv.
+
+**Expected patterns**:
+- `ssql from orders.csv` or `ssql from test-data/orders.csv`
+- `ssql sort`
+- `-spill /tmp`
+- `-desc`
+- `total`
+- `ssql to csv sorted.csv`
+
+**Negative patterns**:
+- `split -l` (splitting a CSV loses the header on every chunk after the first)
+- `sort -field` (sort fields are positional)
+
+**Validation**: parse
+
+**Test Data**: `test-data/orders.csv`
+
+**Expected Output**:
+- `order_id`
+
+---
+
 ## Running Tests
 
 ```bash
@@ -857,7 +1006,7 @@ make ai-test-integration
 To add a new test case:
 
 1. Choose the appropriate section (Go or CLI)
-2. Use the next sequential ID (GO-16, CLI-16, etc.)
+2. Use the next sequential ID (GO-16, CLI-22, etc.)
 3. Include all required fields: Prompt, Expected patterns, Negative patterns, Validation
 4. Add Test Data and Expected Output for integration testing
 5. Run `./scripts/test-ai-prompts.sh --integration` to verify the test works

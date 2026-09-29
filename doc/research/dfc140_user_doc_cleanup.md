@@ -2,7 +2,7 @@
 
 Reference: DFC140
 Created: 2026-09-29
-Last modified: 2026-09-29
+Last modified: 2026-09-30
 
 [Back to Index](./README.md)
 
@@ -631,12 +631,16 @@ throughout (`make doc-check`, `make doc-test`, `go test ./cmd/ssql -run
 **Status (2026-09-29):** Ross decided the §7 points (1 remove-and-merge,
 2 new research doc, 3 `claude/doc-validation.md`, 4 strip, 5 yes but
 deferred to batch 5 because a signature-line check would flag 69 root +
-34 typed exports today, 6 `scripts/testdata/`). Batches 1-5 are done
-(commits on main the same day); 6 remains. Batch 4 moved the Roadmap
+34 typed exports today, 6 `scripts/testdata/`). All six batches are done
+(commits on main 2026-09-29/30). Batch 4 moved the Roadmap
 and the stale Status box to [DFC141](./dfc141_typed_roadmap_history.md).
 Batch 5 rewrote api-reference (3,060 → ~1,800 lines, the 17-section
 layout above, every signature from `go doc`) and made Check 11 require a
-signature line; the gate was watched to fail on a removed line. Batch 3 found that the
+signature line; the gate was watched to fail on a removed line. Batch 6
+rewrote the CLI prompt (every command and flag checked against
+`-help`), fixed the Go prompt's WAV and chart signatures, cut the human
+guide to one page covering both prompts, and added six CLI test cases
+(except, top, window, `generate go -pipeline`, `-param`, `sort -spill`). Batch 3 found that the
 0.15 s / 0.32 s "conflict" was two machines (the 275HX laptop and the
 Xeon 6154 workstation), not two values: re-measured on the laptop the
 projected group-by is 0.13-0.17 s and the cube 0.28 s; the 1 M-row

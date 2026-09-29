@@ -96,11 +96,20 @@ data, err := ssql.ReadXLSX("file.xlsx", ssql.XLSXConfig{SheetName: "Sales"})
 // List sheet names
 sheets, err := ssql.ReadXLSXSheetNames("file.xlsx")
 
-// WAV audio reading (returns records with amplitude field)
-data, err := ssql.ExtractSignalFromWAV("audio.wav")
+// Parquet (a file, not stdin); read only the columns you use on wide files
+data, err := ssql.ReadParquet("file.parquet")
+data, err := ssql.ReadParquetColumns("file.parquet", []string{"dept", "salary"})
+
+// Text lines: one record per line with line_number (from 1) and line
+lines, err := ssql.ReadLines("app.log")
+
+// WAV audio: records with sample and amplitude in [-1, 1] (stereo mixed to mono), plus metadata
+data, meta, err := ssql.ReadWAV("audio.wav")
 if err != nil {
     log.Fatalf("Failed to read WAV: %v", err)
 }
+// or straight to a Signal ([]float64) for the signal functions
+signal, meta, err := ssql.ExtractSignalFromWAV("audio.wav")
 ```
 
 ### Writing Data
@@ -113,9 +122,14 @@ err = ssql.WriteArrow(records, "output.arrow")
 err = ssql.WriteXLSX(records, "output.xlsx")
 err = ssql.WriteXLSX(records, "output.xlsx", ssql.XLSXConfig{SheetName: "Results"})
 
-// Write WAV audio
-metadata := ssql.WAVMetadata{SampleRate: 44100, Channels: 1, BitsPerSample: 16}
-err = ssql.WriteWAV(signal, "output.wav", metadata)
+// Write Parquet
+err = ssql.WriteParquet(records, "output.parquet")
+
+// Write WAV audio: 16-bit PCM mono from an amplitude field; the third argument is the sample rate
+err = ssql.WriteWAV(records, "output.wav", 44100)
+
+// Save a copy of the stream mid-pipeline and pass it on (schema-headed JSONL, replayable with ssql from)
+saved := ssql.TeeFile("checkpoint.jsonl")(records)
 ```
 
 **⚠️ CSV Auto-Parsing**: Numeric strings become `int64`/`float64`, not strings!
@@ -366,6 +380,35 @@ enriched := ssql.LookupJoin(lookupSeq, []ssql.LookupClause{
     ssql.Lookup("dest_type", "type", "description", "dest_desc"),
 })(records)
 // Lookup(leftField, rightField, renameOld, renameNew)
+
+// As-of join: each trade takes the quote in force at its time (same sym, nearest at or before)
+quoted := ssql.AsofJoin(quotes, ssql.AsofConfig{
+    LeftKeys: []string{"sym"}, RightKeys: []string{"sym"},
+    LeftTime: "ts", RightTime: "ts",
+    Tolerance: float64(5 * time.Minute),   // optional: no match beyond this distance
+})(trades)
+
+// Anti-join / semi-join (SQL EXCEPT / INTERSECT by key); WholeRow on both sides compares whole rows
+noOrders := ssql.Except(orders, ssql.FieldsKey("customer_id"), ssql.FieldsKey("customer_id"), false)(customers)
+withOrders := ssql.Intersect(orders, ssql.FieldsKey("customer_id"), ssql.FieldsKey("customer_id"), false)(customers)
+```
+
+### The typed API (known schema, hot pipelines)
+
+`ssql/typed` is the struct-based fast path: same composition shape, no reflection per row, parallel forms. Use it when the user names the columns and types and asks for speed; `ssql.Record` otherwise.
+
+```go
+import "github.com/rosscartlidge/ssql/v4/typed"
+
+type Employee struct {
+    Name   string
+    Dept   string  `ssql:"dept"`
+    Salary float64
+}
+
+rows := typed.ReadCSV[Employee]("employees.csv")   // iter.Seq[Employee]; a bad cell panics with *typed.ReadError
+senior := typed.Where(func(e Employee) bool { return e.Salary > 80000 })(rows)
+total := typed.Sum(senior, func(e Employee) float64 { return e.Salary })
 ```
 
 ---
@@ -933,22 +976,26 @@ func main() {
 
 Beyond `QuickChart` and `InteractiveChart`, ssql provides specialized visualization:
 
+All of these take `(records, config, filename)` — the config before the file name — and the axis fields live in the config.
+
 ```go
 // Enhanced chart with multi-series, heatmap, log axes, color-by-field
 config := ssql.DefaultChartConfig()
 config.Title = "Revenue vs Expenses"
-config.ChartType = "line"   // line, bar, scatter, pie, radar, heatmap
-config.YFields = []string{"revenue", "expenses"}  // Multi-series
-config.LogX = true          // Logarithmic X axis
-config.LogY = true          // Logarithmic Y axis
-config.ColorField = "region"  // Color scatter points by field
-err := ssql.EnhancedChart(records, "chart.html", config)
+config.ChartType = "line"                          // line, bar, scatter, pie, radar, heatmap
+config.XField = "month"
+config.YFields = []string{"revenue", "expenses"}   // multi-series
+config.XAxisType = "logarithmic"                   // linear, logarithmic, time, category
+config.YAxisType = "logarithmic"
+config.ColorField = "region"                       // colour scatter points by this field
+err := ssql.EnhancedChart(records, config, "chart.html")
 
 // Heatmap/spectrogram visualization (Plotly.js) - uses HeatmapConfig
 hConfig := ssql.DefaultHeatmapConfig()
-hConfig.ColorScale = "viridis"  // viridis, plasma, inferno, etc.
-hConfig.LogFreq = true          // Logarithmic frequency axis
-err := ssql.HeatmapChart(records, "xField", "yField", "zField", "heatmap.html", hConfig)
+hConfig.XField, hConfig.YField, hConfig.ZField = "time", "frequency", "magnitude"
+hConfig.ColorScale = "viridis"  // viridis, plasma, inferno, magma, cividis, turbo
+hConfig.LogFreq = true          // logarithmic frequency axis
+err := ssql.HeatmapChart(records, hConfig, "heatmap.html")
 
 // Interactive data explorer (AG-Grid + Plotly.js) - uses ExploreConfig
 eConfig := ssql.DefaultExploreConfig()
@@ -956,15 +1003,16 @@ eConfig.Title = "Sales Explorer"
 eConfig.Theme = "dark"            // "light" or "dark"
 eConfig.InitialXField = "date"
 eConfig.InitialYField = "revenue"
-err := ssql.DataExplore(records, "explorer.html", eConfig)
+err := ssql.DataExplore(records, eConfig, "explorer.html")
 
 // Animated visualization (video-player controls) - uses AnimateConfig
 aConfig := ssql.DefaultAnimateConfig()
-aConfig.ChartType = "heatmap"     // "heatmap" or "histogram"
+aConfig.FrameField = "day"        // one frame per distinct value
+aConfig.XField, aConfig.YField = "x", "y"
+aConfig.ChartType = "histogram"   // "heatmap" (with ZField) or "histogram"
 aConfig.FPS = 10
 aConfig.Loop = true
-aConfig.ColorScale = "plasma"
-err := ssql.AnimateChart(records, "animation.html", aConfig)
+err := ssql.AnimateChart(records, aConfig, "animation.html")
 ```
 
 ### Example 7: Distinct and Union
@@ -1009,9 +1057,12 @@ func main() {
 
 ## Code Generation Rules
 
-> When generating code from a shell pipeline (`ssql ... | ssql generate go`), the
-> mode is selected by `SSQL_MODE` (`record` / `typed` / `parallel`). The older
-> `SSQLGO` variable still works as a deprecated alias.
+> Programs can also be generated from a CLI pipeline: `ssql generate go
+> -pipeline 'ssql from data.csv | ssql where -if age gt 25 | ssql to table'`
+> emits a typed program by default (`-mode record` for the `Record` API shown
+> here; `-run` compiles and runs it). The older form exports `SSQL_MODE`
+> (`record` or `typed`; `parallel` is a deprecated alias of `typed`) and pipes
+> the stages into `ssql generate go`.
 
 ### Core Principles
 
@@ -1080,6 +1131,9 @@ When processing natural language requests, map phrases to ssql operations:
 17. **"deduplicate/unique"** → `ssql.DistinctBy(keyFn)` or `ssql.DistinctBy(ssql.RecordKey)`
 18. **"combine/union"** → `ssql.Concat()` + optionally `ssql.DistinctBy()`
 18a. **"not in / never / missing from" (anti-join, EXCEPT)** → `ssql.Except(right, ssql.FieldsKey("id"), ssql.FieldsKey("id"), false)` (whole row: `ssql.WholeRow` on both sides); **"also in / at least one" (semi-join, INTERSECT)** → `ssql.Intersect(...)`
+18b. **"as of / latest quote before / most recent reading at"** → `ssql.AsofJoin(right, ssql.AsofConfig{...})`
+18c. **"parquet"** → `ssql.ReadParquet()`, `ssql.ReadParquetColumns()`, `ssql.WriteParquet()`; **"log lines / raw text"** → `ssql.ReadLines()` + `ssql.ExtractRecords()`
+18d. **"fast / large file / known columns"** → the `ssql/typed` API (`typed.ReadCSV[T]`, `typed.Where`, `typed.GroupBy`)
 19. **"extract signal"** → `ssql.ExtractSignal(records, field)`
 20. **"read/write excel"** → `ssql.ReadXLSX()`, `ssql.WriteXLSX()`
 21. **"read/write arrow"** → `ssql.ReadArrow()`, `ssql.WriteArrow()`

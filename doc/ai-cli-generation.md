@@ -1,20 +1,18 @@
 # ssql CLI Pipeline Generation Prompt
 
-*Complete reference for generating ssql CLI pipelines from natural language descriptions*
+*Paste this whole file into an LLM, then describe the pipeline you want in plain language.*
 
 ---
 
 ## System Prompt
 
 ```
-You are an expert in ssql, a Unix-style CLI tool for data processing. Generate correct ssql pipelines from natural language descriptions. ssql commands compose via Unix pipes (|) following a Source -> Transform -> Sink pattern.
+You are an expert in ssql, a Unix-style CLI tool for tabular data. Generate correct ssql pipelines from natural language descriptions. ssql commands compose with Unix pipes (|) in a Source -> Transform -> Sink pattern. Use only the commands and flags in this reference; when unsure, say `ssql COMMAND -help` shows the authoritative flags.
 ```
 
 ---
 
 ## Pipeline Architecture
-
-ssql pipelines follow the Unix philosophy: small commands connected by pipes.
 
 ```
 SOURCE -> TRANSFORM(s) -> SINK
@@ -25,499 +23,470 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 
 **Three command categories:**
 
-1. **Source** (`from`): Reads data from files, stdin, or command output
-2. **Transform** (`where`, `update`, `sort`, `group-by`, etc.): Reads from stdin, writes to stdout
-3. **Sink** (`to`): Writes data to files or stdout in specified format
+1. **Source** (`from`): reads a file, stdin, or command output; infers column types from a sample of rows
+2. **Transform** (`where`, `update`, `sort`, `group-by`, …): reads records from stdin, writes records to stdout
+3. **Sink** (`to …`, `count`, `tee`): writes a format to a file or stdout
 
-**Critical rules:**
-- Transform commands read ONLY from stdin -- they do NOT accept file arguments
-- Every pipeline starts with a source (or receives stdin from another pipeline)
-- Pipes (`|`) connect commands -- data flows left to right
+**Rules:**
+- Transform commands read ONLY from stdin; they never take a data file argument
+- Every pipeline starts with `ssql from` (or receives stdin from another ssql pipeline)
+- Between stages the data is JSON Lines with a `_schema` header line that carries field order and types; you never need to look at it, but it is why a pipeline can only be entered through `ssql from`
+- Field names are case-sensitive; a misspelt field stops the pipeline with the list of fields that exist
+- A missing value is *absent* (an empty CSV cell), never zero or `""`; comparisons with an absent value are false
 
 ---
 
-## Command Quick Reference
+## Command Reference
 
-### Source Command
+### Sources
 
-| Command | Description | Key Flags |
-|---------|-------------|-----------|
-| `from FILE` | Read CSV, JSON, JSONL, TSV | (auto-detects format from extension) |
-| `from` | Read from stdin | (pipe data in) |
+| Command | Reads | Notes |
+|---|---|---|
+| `from FILE` | CSV, TSV, JSON, JSONL, Parquet, Arrow, XLSX by extension | the everyday form |
+| `from csv [FILE]` / `from tsv [FILE]` | delimited text; stdin when no FILE | `-type FIELD TYPE` overrides an inferred type; `-sample N` reads a random N rows; `-last N` the last N; `-records` prints only the row count |
+| `from json [FILE]` / `from jsonl [FILE]` | a JSON array / one object per line; stdin when no FILE | `from jsonl -skip-invalid` drops bad lines and reports the count |
+| `from parquet FILE` / `from arrow FILE` / `from xlsx FILE` | columnar and spreadsheet files | `from xlsx -sheet NAME` |
+| `from lines FILE` | raw text: one record per line with `line_number` and `line` | pair with `extract` |
+| `from wav FILE` | audio samples: `sample`, `amplitude` | for the signal commands |
+| `from ssh HOST PATH` | a remote file over SSH | `-- where … + group-by …` pushes stages to the host |
+| `from catalog FILE.csv` | many shards listed in a catalog (host, path) | `-if date ge 2026-01-01` prunes shards by metadata |
 
-### Transform Commands
+### Transforms
 
-| Command | Description | Key Flags |
-|---------|-------------|-----------|
-| `where` | Filter records | `-if FIELD OP VALUE`, `-if-expr EXPR` |
-| `update` | Modify fields | `-if ... -set FIELD VALUE`, `-set-expr FIELD EXPR`, `+` clause separator |
-| `group-by` | Group and aggregate | `FIELDS...` (positional), `-count NAME`, `-sum F NAME`, `-avg F NAME`, `-min F NAME`, `-max F NAME` |
-| `sort` | Sort records | `FIELD` (positional), `-desc` |
-| `limit N` | Take first N records | (positional argument) |
-| `offset N` | Skip first N records | (positional argument) |
-| `distinct` | Remove duplicates | (compares all fields) |
-| `include F1 F2...` | Keep only named fields | (positional arguments) |
-| `exclude F1 F2...` | Remove named fields | (positional arguments) |
-| `rename` | Rename fields | `-as OLD NEW` |
-| `cast` | Convert field types (a value that is not of the type is an error) | `-type FIELD TYPE` (string, int, float, bool, time); `-invalid missing` to leave unconvertible values empty |
-| `join FILE` | Join with another file | `-using F`, `-on LEFT RIGHT`, `-as OLD NEW`, `-` clause separator |
-| `union` | Combine with stdin streams | `-file F` (JSONL), `-all` (keep duplicates, default removes them) |
-| `fft` | Fast Fourier Transform | `-field F`, `-rate N`, `-phase` |
-| `ifft` | Inverse FFT | `-magnitude F`, `-phase F`, `-output F` |
-| `convolve` | Convolution | `-field F`, `-kernel TYPE`, `-size N`, `-sigma F` |
-| `correlate` | Cross-correlation | `-field-a F`, `-field-b F` |
-| `spectrogram` | Short-Time Fourier Transform | `-field F`, `-window-size N`, `-hop N`, `-rate N`, `-window-type TYPE` |
+| Command | Description | Key flags |
+|---|---|---|
+| `where` | filter | `-if FIELD OP VALUE`, `-if-expr 'EXPR'`, `-if-field FIELD OP OTHERFIELD`, `-not` (negate the clause), `-param NAME TYPE VALUE` (a variable for `-if-expr`); conditions in a clause AND; `+` separates OR clauses |
+| `update` | set fields | `-set FIELD VALUE`, `-set-expr FIELD 'EXPR'`, `-set-field FIELD SOURCEFIELD` (copy value and type), `-set-bucket FIELD SOURCE WIDTH` (time bucket), with `-if …` conditions; `+` separates if/else-if/else clauses, first match wins |
+| `group-by FIELDS…` | group and aggregate | `-count NAME`, `-sum F NAME`, `-avg F NAME`, `-min F NAME`, `-max F NAME`, `-first F NAME`, `-last F NAME`, `-collect F NAME`, `-count-distinct F NAME`, `-string-agg F SEP NAME`, `-median F NAME`, `-percentile F P NAME`, `-stddev F NAME`, `-variance F NAME`, `-mode F NAME`, `-arg-max F BY NAME`, `-arg-min F BY NAME`, `-expr NAME 'EXPR'`; `-rollup` / `-cube` add parent-level totals; `-presorted` streams input already sorted by the key; `-spill DIR` bounds memory |
+| `sort FIELDS…` | sort | `-desc` (or `-asc`); `sort a -desc + b` sorts by a descending then b; `-spill DIR -memory 2G` sorts inputs larger than RAM |
+| `top N -field F` | the N largest by F (a bounded heap; cheaper than sort + limit) | `-asc` for the smallest |
+| `limit N` / `offset N` | first N / skip N | `limit -last N` keeps the last N |
+| `sample N` | a random N rows (or `-percent P`) | `-seed S` for a repeatable sample |
+| `distinct` | drop duplicate rows (whole row) | no flags |
+| `include F…` / `exclude F…` | keep / drop columns | positional field names |
+| `rename -as OLD NEW` | rename columns | repeat `-as` |
+| `cast -type FIELD TYPE` | convert types (`string`, `int`, `float`, `bool`, `time`) | `-invalid missing` leaves unconvertible values empty instead of failing |
+| `join FILE` | join with a file or `<(pipeline)` | `-using F` (same name both sides), `-on LEFT RIGHT`, `-as RIGHTFIELD NEWNAME`, `-type inner|left|right|full`, `-suffix _r` (for colliding names), `-exclude-left` / `-exclude-right`; `-asof TIMEFIELD [-tolerance 5m] [-after] [-strict]` for as-of joins; `-` separates several lookups from the same file |
+| `except -file FILE` / `intersect -file FILE` | rows of stdin not in / also in FILE (SQL EXCEPT / INTERSECT) | `-using F` or `-on L R` compares by key (anti-join / semi-join); `-all` keeps duplicates |
+| `union -file FILE` | append another file's rows (SQL UNION) | duplicates removed unless `-all`; repeat `-file` |
+| `merge FILE…` | k-way merge of already sorted files | `-by FIELD` |
+| `window` | SQL window functions, one output per input row | `-partition F -order F [-desc]`, frame `-preceding N -following N`; `-row-number NAME`, `-rank NAME`, `-dense-rank NAME`, `-ntile N NAME`, `-lag F N NAME`, `-lead F N NAME`, `-first F NAME`, `-last F NAME`, `-sum F NAME`, `-avg F NAME`, `-count NAME`, `-min F NAME`, `-max F NAME` |
+| `pivot -row F -col F -val F -func FUNC` | cross-tab; `-func` is count, sum, avg, min or max | |
+| `unpivot -id F… -value F…` | wide to long (melt) | `-col NAME -val NAME` name the two output columns |
+| `fill` | fill missing values | `-down F` carries the last value forward; `-default F VALUE` |
+| `extract -field F -re 'REGEX'` | named groups `(?P<name>…)` become fields | `-skip` drops non-matching rows; `-keep` keeps the source field |
+| `resample -time F -every 5m -value F` | snap timestamps to a grid | `-fill previous|next|linear` |
+| `describe` | one row per field: type, count, missing, distinct, min/max/mean/median | |
+| `fft`, `ifft`, `convolve`, `correlate`, `spectrogram` | signal processing (see below) | |
 
-### Sink Command
+### Sinks
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `to table` | Format as aligned table | `ssql to table` |
-| `to csv [FILE]` | Write CSV | `ssql to csv output.csv` |
-| `to json [FILE]` | Write JSONL | `ssql to json output.jsonl` |
-| `to chart FILE` | Interactive HTML chart | `ssql to chart -x month -y revenue chart.html` |
+| Command | Output |
+|---|---|
+| `to table` | aligned text table on stdout |
+| `to csv [FILE]` / `to tsv [FILE]` | CSV / TSV to FILE or stdout |
+| `to jsonl [FILE]` | one JSON object per line |
+| `to json [FILE]` | a pretty-printed JSON array (not lines) |
+| `to markdown` | a GitHub-flavored table |
+| `to parquet FILE` / `to arrow FILE` / `to xlsx FILE` | columnar and spreadsheet files (Parquet needs a FILE) |
+| `to chart -x F -y F -output FILE.html` | interactive HTML chart; `-type line|bar|scatter|pie|heatmap`, `-z F` for heatmaps; the file goes through `-output` (default `chart.html`), never a positional argument |
+| `to explore FILE.html` | a self-contained data explorer page (`-wasm` embeds the engine so the page runs ssql itself) |
+| `to animate` / `to wav FILE` | animated heatmap or histogram / audio |
+| `count` | prints the number of rows |
+| `tee FILE` | saves the stream to FILE (replay with `ssql from FILE`) and passes it on |
+
+### Code generation and pipelines as data
+
+| Command | Output |
+|---|---|
+| `generate go -pipeline 'PIPELINE'` | a standalone Go program for the pipeline; `-run` compiles and runs it; `-build BIN` writes a binary; `-mode typed` (default: struct types, parallel) or `-mode record`; `-explain` shows what the optimiser did |
+| `generate sql -pipeline 'PIPELINE'` | DuckDB SQL (`-dialect postgres` or `datafusion`) |
+| `generate ssql -pipeline 'PIPELINE'` | the pipeline rewritten with fewer stages; `-explain` says why |
+| `generate json -pipeline 'PIPELINE'` | the pipeline as a JSON document for `ssql run` |
+| `run FILE.json` | run a pipeline document with no shell; `-check` validates commands, flags and field names without running |
+
+The pipeline string inside `-pipeline '…'` is exactly what you would type at the shell, including its sink.
 
 ---
 
 ## Critical Patterns
 
-### 1. I/O Formats
+### 1. I/O
 
 ```bash
-# CSV (default)
-ssql from data.csv | ssql to csv output.csv
-
-# JSON/JSONL
-ssql from data.jsonl | ssql to json output.jsonl
-
-# Unix tools with JSON output
-ip -j addr | ssql from json | ssql to table
-
-# Stdin
-cat data.csv | ssql from csv | ssql to table
-
-# stdout (omit filename in sink)
-ssql from data.csv | ssql to json       # JSONL to stdout
-ssql from data.csv | ssql to csv        # CSV to stdout
-ssql from data.csv | ssql to table      # Formatted table to stdout
+ssql from data.csv | ssql to csv output.csv          # CSV in, CSV out
+ssql from data.jsonl | ssql to jsonl output.jsonl    # JSON Lines in and out
+ssql from data.csv | ssql to json report.json        # a JSON array (pretty-printed)
+ip -j addr | ssql from json | ssql to table          # a command's JSON on stdin
+cat data.csv | ssql from csv | ssql to table         # CSV on stdin
+ssql from data.csv | ssql to csv                     # no FILE: stdout
+ssql from data.csv | ssql to table                   # the default way to look at a result
+ssql from csv big.csv -sample 1000 | ssql to table   # a random 1000 rows while developing
 ```
 
-### 2. Where Clause Operators
+### 2. Where
 
 ```bash
-# Comparison operators
-ssql where -if age gt 25           # greater than
-ssql where -if age ge 25           # greater than or equal
-ssql where -if age lt 25           # less than
-ssql where -if age le 25           # less than or equal
-ssql where -if status eq active    # equal
-ssql where -if status ne pending   # not equal
-
-# String operators
-ssql where -if name contains Alice
-ssql where -if email startswith admin
-ssql where -if domain endswith .com
-ssql where -if code regex "^[A-Z]{3}"
-
-# Expression-based filter (expr-lang syntax)
-ssql where -if-expr 'age > 25 && status == "active"'
-ssql where -if-expr 'amount * quantity > 500'
+ssql where -if age gt 25              # gt ge lt le eq ne
+ssql where -if status eq active
+ssql where -if name contains Ali      # contains startswith endswith regex (text fields)
+ssql where -if code regex '^[A-Z]{3}'
+ssql where -if dept eq Sales -if age gt 30            # AND within a clause
+ssql where -if dept eq Sales + -if dept eq Marketing  # OR between + clauses
+ssql where -not -if status eq active                  # negate the clause
+ssql where -if-field hire_date lt review_date         # compare two fields
+ssql where -if-expr 'age > 25 and status == "active"' # expr-lang; and/or/not, functions
+ssql where -param min int 40 -if-expr 'age > min'     # a typed parameter used by the expression
 ```
 
-### 3. Update Command (If-ElseIf-Else)
+The literal in `-if FIELD OP VALUE` is read in the field's type: `age gt 30` compares numbers; `age gt abc` is an error, not "no rows". Values with spaces are quoted for the shell: `-if city eq "New York"`.
 
-The `update` command uses clause separators (`+`) for conditional logic. Clauses are evaluated first-match-wins.
+### 3. Update (if / else-if / else)
 
 ```bash
-# Simple unconditional update
-ssql from data.csv | ssql update -set status done
-
-# Conditional update (if-elseif-else)
-ssql from data.csv | ssql update \
-  -if revenue gt 10000 -set tier premium \
-  + \
-  -if revenue gt 1000 -set tier standard \
-  + \
-  -set tier basic
-
-# Expression-based set
-ssql from data.csv | ssql update -set-expr total 'price * quantity'
-
-# Combined: conditional with expressions
-ssql from data.csv | ssql update \
-  -if-expr 'amount > 1000' -set-expr discount 'amount * 0.1' \
-  + \
-  -set-expr discount 'amount * 0.05'
+ssql update -set status done                                  # every row
+ssql update -set-expr total 'price * quantity'                # computed
+ssql update -if revenue gt 10000 -set tier premium \
+  + -if revenue gt 1000 -set tier standard \
+  + -set tier basic                                           # first matching clause wins; the last is the else
+ssql update -if-expr 'amount > 1000' -set-expr discount 'amount * 0.1' + -set-expr discount 'amount * 0.05'
+ssql update -set-field customer customer_name                 # copy a field (value and type)
+ssql update -set-bucket minute ts 1m                          # time bucket for a later group-by
 ```
 
-**Clause rules:**
-- Each clause separated by `+`
-- Each clause can have its own `-if` / `-if-expr` condition
-- Each clause can have one or more `-set` / `-set-expr` assignments
-- Last clause without `-if` acts as the "else" branch
-- First matching clause wins (order matters)
+A literal string is `-set FIELD VALUE`. `-set-expr FIELD minor` would read `minor` as a field name; a string in an expression needs its own quotes: `-set-expr tier '"minor"'`.
 
-### 4. Join Command (Multi-Clause)
+### 4. Join
 
-**CRITICAL:** `join`, `merge`, and `union -file` require the right-side file to carry a schema header (JSONL emitted by ssql). Plain CSV/JSONL files WILL fail with `"right-side file X has no schema header"`. Always wrap the file with `<(ssql from FILE)` (bash process substitution) so ssql adds the schema header.
+The right side is a file (CSV, TSV, JSON, JSONL by extension) or a pipeline in process substitution `<(ssql from … | ssql …)`; the left side is stdin.
 
 ```bash
-# Join on same field name — wrap the right-side file with <(ssql from ...)
-ssql from users.csv | ssql join <(ssql from departments.csv) -using dept_id
-
-# Join on different field names
-ssql from users.csv | ssql join <(ssql from orders.csv) -on user_id customer_id
-
-# Join with field rename (avoid collisions)
-ssql from users.csv | ssql join <(ssql from departments.csv) -on dept_id id -as name dept_name
-
-# Multi-clause join (multiple lookups from same file, separated by -)
-ssql from data.csv | ssql join <(ssql from kinds.csv) \
-  -on a_kind kind -as kind_name a_kind_name \
-  - \
-  -on z_kind kind -as kind_name z_kind_name
+ssql from orders.csv | ssql join customers.csv -using customer_id           # same field name both sides
+ssql from users.csv  | ssql join orders.csv -on user_id customer_id         # different names
+ssql from users.csv  | ssql join departments.csv -on dept_id id -as name dept_name   # rename a right field
+ssql from orders.csv | ssql join customers.csv -using customer_id -type left        # keep unmatched orders
+ssql from orders.csv | ssql join customers.csv -using customer_id -suffix _cust     # colliding names get a suffix
+ssql from data.csv   | ssql join kinds.csv -on a_kind kind -as kind_name a_kind_name \
+                                          - -on z_kind kind -as kind_name z_kind_name   # two lookups, `-` separates clauses
+ssql from trades.csv | ssql join quotes.csv -using sym -asof ts -tolerance 5m       # the quote in force at each trade's time
+ssql from orders.csv | ssql join <(ssql from customers.csv | ssql where -if tier eq gold) -using customer_id  # a filtered right side
 ```
 
-**Join rules:**
-- Wrap the right-side file with `<(ssql from FILE)` — raw CSV/JSONL has no schema header and will be rejected
-- `-using FIELD`: Join on same field name in both sides
-- `-on LEFT RIGHT`: Join on different field names
-- `-as OLD NEW`: Rename a field from the right side
-- `-` (dash): Clause separator for multi-clause joins
-- The FILE argument is the right-side lookup table
+A field present on both sides with different values is an error (a silent collision would lose data): rename with `-as`, suffix with `-suffix`, or drop a side's non-key fields altogether with `-exclude-left` / `-exclude-right`.
 
-**WRONG — raw file on right side:**
+### 5. Group-by, rollup, window
+
 ```bash
-ssql from orders.csv | ssql join customers.csv -using customer_id    # FAILS at runtime
+ssql from sales.csv | ssql group-by region -count n                               # FIELDS are positional; aggregates name their result
+ssql from sales.csv | ssql group-by region -count n -sum amount total -avg amount avg -min amount lo -max amount hi
+ssql from sales.csv | ssql group-by region product -sum revenue total               # two grouping fields
+ssql from logs.csv  | ssql group-by session -first url landing -last url exit -count-distinct url pages -string-agg url " > " path
+ssql from data.csv  | ssql group-by dept -median salary med -percentile salary 0.9 p90 -stddev salary sd -arg-max name salary top_earner
+ssql from sales.csv | ssql group-by region product -count n -sum revenue total -rollup    # + region_n, region_total, n, total on every row
+ssql from sales.csv | ssql group-by region product -count n -cube                          # rollup plus every combination
+ssql from orders.csv | ssql window -partition customer_id -order order_id -sum total running -row-number seq   # per-row, nothing collapses
+ssql from sales.csv | ssql pivot -row region -col quarter -val revenue -func sum
 ```
 
-**CORRECT — wrap with process substitution:**
-```bash
-ssql from orders.csv | ssql join <(ssql from customers.csv) -using customer_id
-```
-- Left side always comes from stdin (pipeline)
+The result field of an aggregate is the NAME you give it: after `-sum amount total` the field is `total`, so sort on `total`, not on `amount_sum`.
 
-### 5. Group-By with Aggregation
+### 6. Set operations and deduplication
 
 ```bash
-# Basic group-by with count (field is positional, aggregations take result name)
-ssql from sales.csv | ssql group-by region -count count
-
-# Multiple aggregations (aggregations: -sum FIELD RESULT, -avg FIELD RESULT, etc.)
-ssql from sales.csv | ssql group-by region \
-  -count count \
-  -sum amount total \
-  -avg amount avg_amount \
-  -min amount min_amount \
-  -max amount max_amount
-
-# Multiple grouping fields (all positional before flags)
-ssql from sales.csv | ssql group-by region product -sum revenue total -count count
-
-# Group-by with collect (gather all values)
-ssql from logs.csv | ssql group-by user -count count -collect timestamp timestamps
-ssql from logs.csv | ssql group-by session -first url landing -last url exit -count-distinct url pages -string-agg url " > " path
-ssql from data.csv | ssql group-by dept -median salary med -percentile salary 0.9 p90 -stddev salary sd -mode city top_city
-ssql from data.csv | ssql group-by dept -arg-max name salary top_earner -max salary top_salary   # who earns the most, and how much
-
-# Rollup: enrich rows with parent-level aggregations (grand total + subtotals)
-ssql from sales.csv | ssql group-by region product -count n -sum revenue total -rollup
-# Each row gets: region_product_n, region_product_total, region_n, region_total, n, total
-
-# Cube: like rollup but adds all cross-dimensional combinations
-ssql from sales.csv | ssql group-by region product -count n -cube
-# Each row also gets: product_n (in addition to rollup fields)
+ssql from customers.csv | ssql except -file orders.csv -using customer_id       # customers with no order (anti-join)
+ssql from customers.csv | ssql intersect -file orders.csv -using customer_id    # customers with at least one order (semi-join)
+ssql from today.csv     | ssql except -file yesterday.csv                       # whole rows of today not in yesterday
+ssql from a.csv         | ssql union -file b.csv                                # rows of both, duplicates removed (-all keeps them)
+ssql from data.csv      | ssql distinct                                         # whole-row duplicates removed
+ssql from data.csv      | ssql group-by email -first name name -count n         # one row per key with a count
 ```
 
-### 6. Signal Processing Pipeline
+### 7. Text, missing values, time
 
 ```bash
-# FFT: frequency analysis
-ssql from sensor.csv | ssql fft -field voltage -rate 1000 | ssql to table
+ssql from lines app.log | ssql extract -field line -re '^(?P<ts>\S+) (?P<level>\w+) (?P<msg>.*)$' -skip | ssql where -if level eq ERROR | ssql to table
+ssql from sheet.csv | ssql fill -down region -default status unknown | ssql to table
+ssql from data.csv | ssql cast -type code int -invalid missing | ssql to table
+ssql from sensor.csv | ssql resample -time ts -every 5m -value temp -fill linear | ssql to table
+ssql from data.csv | ssql describe | ssql to table       # what is in this file?
+ssql from data.csv | ssql tee stage1.jsonl | ssql group-by dept -count n | ssql to table    # keep the intermediate result
+```
 
-# FFT with phase information
+### 8. Signal processing
+
+```bash
+ssql from sensor.csv | ssql fft -field voltage -rate 1000 | ssql to table             # frequency, magnitude
 ssql from sensor.csv | ssql fft -field voltage -rate 1000 -phase | ssql to csv spectrum.csv
-
-# Inverse FFT: reconstruct signal
 ssql from spectrum.csv | ssql ifft -magnitude magnitude -phase phase -output signal | ssql to csv
-
-# Convolution: smoothing
 ssql from data.csv | ssql convolve -field value -kernel gaussian -size 11 -sigma 2.0 | ssql to csv
-
-# Cross-correlation
-ssql from signals.csv | ssql correlate -field-a signal1 -field-b signal2 | ssql to csv
-
-# Spectrogram (STFT)
-ssql from audio.csv | ssql spectrogram \
-  -field amplitude \
-  -window-size 1024 \
-  -hop 512 \
-  -rate 44100 \
-  -window-type hann \
-  | ssql to csv spectrogram.csv
+ssql from signals.csv | ssql correlate -field signal1 -with signal2 | ssql to csv       # two fields of the same records
+ssql from signal.csv | ssql correlate -field value -auto -max-lag 100 | ssql to table   # autocorrelation
+ssql from audio.csv | ssql spectrogram -field amplitude -window-size 1024 -hop 512 -rate 44100 -window-type hann | ssql to csv spectrogram.csv
 ```
 
-### 7. Code Generation
+### 9. Code generation
 
-**IMPORTANT:**
-1. Code generation pipelines end with `ssql generate go`, NOT with output commands (`to table`, `to json`, etc.)
-2. Use `export SSQL_MODE=record` (not just `SSQL_MODE=record`) so ALL commands in the pipeline see it
+The pipeline is passed as one string; the sink stays in it. This is the form to prefer.
 
 ```bash
-# Generate Go code from entire pipeline - MUST export for all pipeline stages
-export SSQL_MODE=record && ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -count count | ssql generate go > program.go
-
-# Alternative: subshell with export
-(export SSQL_MODE=record; ssql from data.csv | ssql where -if age gt 25 | ssql generate go) > program.go
-
-# The generated program writes to stdout by default
+# Generate a Go program (typed structs, parallel by default) and keep the source
+ssql generate go -pipeline 'ssql from data.csv | ssql where -if age gt 25 | ssql group-by dept -count n | ssql to table' > program.go
 go run program.go
 
-# WRONG - SSQL_MODE=record without export only affects first command!
-SSQL_MODE=record ssql from data.csv | ssql where -if age gt 25 | ssql generate go   # NO - where doesn't see SSQL_MODE!
+# Compile and run in one step
+ssql generate go -run -pipeline 'ssql from data.csv | ssql where -if age gt 25 | ssql to csv out.csv'
 
-# WRONG - don't put output commands before generate go
-export SSQL_MODE=record && ssql from data.csv | ssql to table | ssql generate go   # NO!
+# Record mode (dynamic schema, map-based rows) when asked for it
+ssql generate go -pipeline '…' -mode record > program.go
+
+# SQL for DuckDB, or the pipeline rewritten by the optimiser
+ssql generate sql  -pipeline 'ssql from data.parquet | ssql group-by dept -count n | ssql to csv' | duckdb
+ssql generate ssql -explain -pipeline 'ssql from data.csv | ssql sort -desc x | ssql limit 5 | ssql to table'
 ```
+
+The older form runs the pipeline with `SSQL_MODE` exported so every stage emits code instead of running; it still works and `ssql generate go` reads the fragments from stdin:
+
+```bash
+(export SSQL_MODE=typed; ssql from data.csv | ssql where -if age gt 25 | ssql to table) | ssql generate go -run
+```
+
+`SSQL_MODE=record` selects record mode there; `SSQL_MODE=parallel` is a deprecated alias of `typed`. Without the `export` (or the subshell) only the first command sees the variable and the pipeline runs instead of generating.
 
 ---
 
 ## Anti-Patterns
 
-### Old Command Names (Pre-v3)
+### Commands and flags that do not exist
 
 | Wrong | Correct |
-|-------|---------|
-| `read-csv FILE` | `from FILE` |
-| `write-csv FILE` | `to csv FILE` |
-| `write-json FILE` | `to json FILE` |
+|---|---|
+| `read-csv FILE`, `write-csv FILE`, `write-json FILE` | `from FILE`, `to csv FILE`, `to jsonl FILE` |
+| `-match FIELD OP VALUE` | `-if FIELD OP VALUE` |
+| `where -expr '…'` | `where -if-expr '…'` |
+| `group-by -field dept` | `group-by dept` (fields are positional) |
+| `sort -field age` | `sort age` |
+| `distinct -field email` | `distinct` has no flags; use `group-by email -first …` for one row per key |
+| `correlate -field-a x -field-b y` | `correlate -field x -with y` |
+| `to chart -x a -y b chart.html` | `to chart -x a -y b -output chart.html` |
+| `to json out.jsonl` for JSON Lines | `to jsonl out.jsonl` (`to json` writes a JSON array) |
+| `join -on FIELD` (same name) | `join -using FIELD` |
+| `join -left-field a -right-field b` / `-right FILE` | `join FILE -on a b` |
+| `union -distinct` | `union` already removes duplicates; `-all` keeps them |
+| `ssql group …` | `ssql group-by …` |
 
-### Old Flag Names (Pre-v3)
-
-| Wrong | Correct |
-|-------|---------|
-| `-match field op value` | `-if field op value` |
-| `-expr 'expression'` | `-if-expr 'expression'` |
-| `-input FILE` on union | (stdin only) |
-
-### Old Join Syntax (Pre-v4)
-
-| Wrong | Correct |
-|-------|---------|
-| `-on FIELD` (same name) | `-using FIELD` |
-| `-left-field F -right-field F` | `-on LEFT RIGHT` |
-| `-right FILE` | positional `FILE` after `join` |
-
-### Transform Commands Don't Take Files
+### Transforms never take a data file
 
 ```bash
-# WRONG - transform commands don't accept file arguments
-ssql where data.csv -if age gt 25       # NO!
-ssql update data.csv -set status done      # NO!
-ssql group-by sales.csv region             # NO!
-
-# CORRECT - pipe from source command
+ssql where data.csv -if age gt 25          # NO
 ssql from data.csv | ssql where -if age gt 25
-ssql from data.csv | ssql update -set status done
-ssql from sales.csv | ssql group-by region -count count
 ```
 
-### Other Mistakes
+### Sorting on a name the aggregate did not produce
 
 ```bash
-# WRONG - using shell redirect instead of ssql to
-ssql from data.csv | ssql where -if age gt 25 > output.json    # NO!
+ssql group-by user -sum amount total | ssql sort amount_sum -desc    # NO: the field is `total`
+ssql group-by user -sum amount total | ssql sort -desc total
+```
 
-# CORRECT - use ssql to for output format
-ssql from data.csv | ssql where -if age gt 25 | ssql to json output.json
+### Shell redirection instead of a sink
 
-# WRONG - missing pipe between commands
-ssql from data.csv ssql where -if age gt 25    # NO!
+```bash
+ssql from data.csv | ssql where -if age gt 25 > out.json     # NO: raw wire format with a _schema line
+ssql from data.csv | ssql where -if age gt 25 | ssql to jsonl out.jsonl
+```
 
-# CORRECT - pipe between commands
-ssql from data.csv | ssql where -if age gt 25
+### Code generation without the sink or without export
 
-# WRONG - using -field flag with group-by (doesn't exist!)
-ssql from data.csv | ssql group-by -field dept -count    # NO!
-
-# CORRECT - fields are positional arguments, aggregations need result names
-ssql from data.csv | ssql group-by dept -count count
-
-# WRONG - using -field flag with sort (doesn't exist!)
-ssql from data.csv | ssql sort -field age    # NO!
-
-# CORRECT - sort field is positional
-ssql from data.csv | ssql sort age
-
-# WRONG - using -distinct flag with union (doesn't exist!)
-ssql from a.csv | ssql union -distinct -file b.jsonl    # NO!
-
-# CORRECT - union removes duplicates by default, use -all to keep them
-ssql from a.csv | ssql union -file <(ssql from b.csv)
+```bash
+SSQL_MODE=record ssql from data.csv | ssql where -if age gt 25 | ssql generate go   # NO: only `from` sees the variable
+ssql generate go -pipeline 'ssql from data.csv | ssql where -if age gt 25 | ssql to table' > program.go
 ```
 
 ---
 
 ## Complete Examples
 
-### Example 1: Employee Analysis
+### Example 1: Employee analysis
 
-**Task**: Find departments with more than 10 high-salary employees from employees.csv
+**Task**: Departments with more than 10 employees earning over 80,000, from employees.csv
 
 ```bash
 ssql from employees.csv \
   | ssql where -if salary gt 80000 \
-  | ssql group-by department -count count \
-  | ssql where -if count gt 10 \
-  | ssql sort count -desc \
+  | ssql group-by department -count n \
+  | ssql where -if n gt 10 \
+  | ssql sort -desc n \
   | ssql to table
 ```
 
-### Example 2: Data Enrichment
+### Example 2: Classification
 
-**Task**: Read orders.csv, classify each order as "large" (amount > 1000), "medium" (> 100), or "small", and summarise by category
+**Task**: Classify each order in orders.csv as large (amount > 1000), medium (> 100) or small, and summarise by class
 
 ```bash
 ssql from orders.csv \
-  | ssql update \
-    -if amount gt 1000 -set size large \
-    + \
-    -if amount gt 100 -set size medium \
-    + \
-    -set size small \
-  | ssql group-by size -count count -sum amount total -avg amount avg \
+  | ssql update -if amount gt 1000 -set size large + -if amount gt 100 -set size medium + -set size small \
+  | ssql group-by size -count n -sum amount total -avg amount avg \
   | ssql to table
 ```
 
-### Example 3: Join and Aggregate
+### Example 3: Join and aggregate
 
-**Task**: Join users with their orders and find total spending per user
+**Task**: Total spending per user, joining users.csv with orders.csv
 
 ```bash
 ssql from users.csv \
   | ssql join orders.csv -using user_id \
-  | ssql group-by user_id name -sum amount total -count count \
-  | ssql sort amount_sum -desc \
+  | ssql group-by user_id name -sum amount total -count orders \
+  | ssql sort -desc total \
   | ssql to table
 ```
 
-### Example 4: Signal Processing
+### Example 4: Anti-join
 
-**Task**: Analyse the frequency content of a sensor signal
+**Task**: Customers in customers.csv who have never ordered (orders.csv)
+
+```bash
+ssql from customers.csv | ssql except -file orders.csv -using customer_id | ssql to table
+```
+
+### Example 5: Running total
+
+**Task**: Each order with the running total of `total` per customer, in order_id order
+
+```bash
+ssql from orders.csv \
+  | ssql window -partition customer_id -order order_id -sum total running_total \
+  | ssql to table
+```
+
+### Example 6: Frequency analysis
+
+**Task**: The 20 strongest frequencies in a 1 kHz sensor signal
 
 ```bash
 ssql from sensor_data.csv \
   | ssql fft -field voltage -rate 1000 \
-  | ssql sort magnitude -desc \
-  | ssql limit 20 \
+  | ssql top 20 -field magnitude \
   | ssql to table
 ```
 
-### Example 5: Spectrogram
-
-**Task**: Generate a spectrogram of an audio signal for time-frequency analysis
+### Example 7: Spectrogram
 
 ```bash
-ssql from audio.csv \
-  | ssql spectrogram -field amplitude -window-size 2048 -rate 44100 \
-  | ssql to csv spectrogram.csv
+ssql from audio.csv | ssql spectrogram -field amplitude -window-size 2048 -rate 44100 | ssql to csv spectrogram.csv
 ```
 
-### Example 6: Multi-Format Pipeline
+### Example 8: CSV in, JSON Lines out
 
-**Task**: Read CSV data, process it, and output as JSON
+**Task**: The 100 active rows with the highest revenue from report.csv, as JSON Lines
 
 ```bash
 ssql from report.csv \
-  | ssql where -if-expr 'revenue > 0 && status == "active"' \
+  | ssql where -if-expr 'revenue > 0 and status == "active"' \
   | ssql include name revenue status \
-  | ssql sort revenue -desc \
-  | ssql limit 100 \
-  | ssql to json top_active.jsonl
+  | ssql top 100 -field revenue \
+  | ssql to jsonl top_active.jsonl
 ```
 
-### Example 7: Multi-Clause Join
-
-**Task**: Enrich data with two lookups from the same reference table
+### Example 9: Two lookups from one reference file
 
 ```bash
 ssql from data.csv \
-  | ssql join reference.csv \
-    -on source_type type -as description source_desc \
-    - \
-    -on dest_type type -as description dest_desc \
+  | ssql join reference.csv -on source_type type -as description source_desc \
+                          - -on dest_type type -as description dest_desc \
   | ssql to csv enriched.csv
 ```
 
-### Example 8: Code Generation
+### Example 10: Code generation
 
-**Task**: Generate a standalone Go program from a pipeline
+**Task**: A standalone Go program for the top 10 products by revenue in the North region
 
 ```bash
-# Must export SSQL_MODE so all pipeline stages see it
-export SSQL_MODE=record && \
-  ssql from sales.csv \
-  | ssql where -if region eq "North" \
-  | ssql group-by product -sum revenue total -count count \
-  | ssql sort revenue_sum -desc \
-  | ssql limit 10 \
-  | ssql generate go > top_products.go
-
-# Run the generated program
+ssql generate go -pipeline 'ssql from sales.csv | ssql where -if region eq North | ssql group-by product -sum revenue total -count n | ssql top 10 -field total | ssql to table' > top_products.go
 go run top_products.go
+```
+
+### Example 11: Logs
+
+**Task**: Count ERROR lines per hour in app.log, whose lines look like `2026-09-29T10:15:02Z ERROR something`
+
+```bash
+ssql from lines app.log \
+  | ssql extract -field line -re '^(?P<ts>\S+) (?P<level>\w+) (?P<msg>.*)$' -skip \
+  | ssql where -if level eq ERROR \
+  | ssql cast -type ts time \
+  | ssql update -set-bucket hour ts 1h \
+  | ssql group-by hour -count n \
+  | ssql to table
 ```
 
 ---
 
 ## Pattern Recognition
 
-Map natural language intent to ssql commands:
-
-| Intent | ssql Commands |
-|--------|--------------|
-| "read / load / open" | `ssql from FILE` |
-| "filter / only / where" | `ssql where -if FIELD OP VALUE` |
-| "filter with expression" | `ssql where -if-expr 'EXPR'` |
-| "update / set / change" | `ssql update -set FIELD VALUE` |
-| "compute / calculate field" | `ssql update -set-expr FIELD 'EXPR'` |
-| "if X then Y else Z" | `ssql update -if ... -set ... + -set ...` |
-| "group by / per / by" | `ssql group-by FIELD` (positional) |
-| "count / total / average" | `-count`, `-sum F`, `-avg F` (on group-by) |
-| "sort / order by" | `ssql sort FIELD [-desc]` (positional) |
-| "top N / first N" | `ssql sort ... \| ssql limit N` |
-| "skip / offset" | `ssql offset N` |
-| "join / combine / lookup" | `ssql join <(ssql from FILE) -using F` or `-on L R` |
-| "merge / union" | `ssql union` (with data piped in) |
-| "keep fields / select columns" | `ssql include F1 F2 ...` |
-| "remove fields / drop columns" | `ssql exclude F1 F2 ...` |
-| "rename field" | `ssql rename -as OLD NEW` |
-| "unique / deduplicate" | `ssql distinct [-field F]` |
-| "output as table" | `ssql to table` |
-| "output as CSV" (no destination named) | `ssql to csv` (stdout, NO filename) |
-| "output as JSON" (no destination named) | `ssql to json` (stdout, NO filename) |
-| "write to FILE.csv" | `ssql to csv FILE.csv` |
-| "write to FILE.json / .jsonl" | `ssql to json FILE.json` |
-| "create chart" | `ssql to chart -x F -y F FILE` |
-| "FFT / frequency" | `ssql fft -field F -rate N` |
-| "spectrogram / STFT" | `ssql spectrogram -field F -window-size N -rate N` |
-| "smooth / convolve" | `ssql convolve -field F -kernel gaussian -size N` |
-| "generate Go code" | `export SSQL_MODE=record && ... \| ssql generate go` |
+| Intent | ssql |
+|---|---|
+| read / load / open | `ssql from FILE` |
+| what fields are there / profile | `ssql describe` |
+| filter / only / where | `ssql where -if FIELD OP VALUE`; expression: `-if-expr 'EXPR'` |
+| not / exclude rows | `ssql where -not -if …` or `ne` |
+| update / set / change | `ssql update -set FIELD VALUE` |
+| compute / calculate | `ssql update -set-expr FIELD 'EXPR'` |
+| if X then Y else Z | `ssql update -if … -set … + -set …` |
+| group by / per / by | `ssql group-by FIELD…` |
+| count / total / average / min / max | `-count N`, `-sum F N`, `-avg F N`, `-min F N`, `-max F N` on group-by |
+| median / percentile / stddev / most common | `-median`, `-percentile F P N`, `-stddev`, `-mode` |
+| who has the highest … | `-arg-max FIELD BY NAME` |
+| subtotals / grand total | `group-by … -rollup` (or `-cube`) |
+| sort / order by | `ssql sort FIELD` or `ssql sort -desc FIELD` |
+| top N / largest N | `ssql top N -field F` (smallest: `-asc`) |
+| first N / skip N / last N | `ssql limit N` / `ssql offset N` / `ssql limit -last N` |
+| a random sample | `ssql sample N` or `from csv FILE -sample N` |
+| join / combine / look up | `ssql join FILE -using F` or `-on L R`; keep unmatched: `-type left` |
+| as of / latest before / most recent quote | `ssql join FILE -using KEY -asof TIME` |
+| not in / never / missing from | `ssql except -file FILE -using KEY` |
+| also in / at least one | `ssql intersect -file FILE -using KEY` |
+| union / append / stack | `ssql union -file FILE` |
+| keep columns / select columns | `ssql include F…` |
+| drop columns | `ssql exclude F…` |
+| rename | `ssql rename -as OLD NEW` |
+| unique rows / deduplicate | `ssql distinct` |
+| convert type / to number / to date | `ssql cast -type F int|float|time` |
+| running total / rank / previous row | `ssql window -partition … -order … -sum F N` / `-rank N` / `-lag F 1 N` |
+| pivot / cross-tab | `ssql pivot -row F -col F -val F -func sum` |
+| melt / wide to long | `ssql unpivot -id F… -value F…` |
+| fill blanks / carry forward | `ssql fill -down F` / `-default F V` |
+| parse log lines / regex fields | `ssql from lines FILE \| ssql extract -field line -re '…'` |
+| per minute / per hour buckets | `ssql update -set-bucket minute ts 1m \| ssql group-by minute …` |
+| regular time grid / interpolate | `ssql resample -time F -every 1m -value F -fill linear` |
+| table on screen | `ssql to table` |
+| CSV / TSV | `ssql to csv [FILE]` / `ssql to tsv [FILE]` |
+| JSON Lines | `ssql to jsonl [FILE]` |
+| JSON array | `ssql to json [FILE]` |
+| Parquet / Excel | `ssql to parquet FILE` / `ssql to xlsx FILE` |
+| chart | `ssql to chart -x F -y F -output FILE.html` |
+| save intermediate result | `ssql tee FILE.jsonl` |
+| how many rows | `ssql count` |
+| FFT / frequencies | `ssql fft -field F -rate N` |
+| smooth | `ssql convolve -field F -kernel gaussian -size N` |
+| spectrogram | `ssql spectrogram -field F -window-size N -rate N` |
+| generate Go / compile / fast version | `ssql generate go -pipeline '…'` (`-run` to execute) |
+| generate SQL | `ssql generate sql -pipeline '…'` |
+| optimise the pipeline | `ssql generate ssql -explain -pipeline '…'` |
 
 ---
 
 ## Validation Checklist
 
-Generated CLI pipelines should have:
-- Pipes (`|`) between every pair of commands
-- `ssql from` as the source (or stdin from another pipeline)
-- Transform commands reading from stdin only (no file arguments)
-- Current flag names (`-if`, `-if-expr`, not `-match`, `-expr`)
-- Current command names (`from`, `to csv`, not `read-csv`, `write-csv`)
-- Current join syntax (`-using`, `-on L R`, not old `-on FIELD`)
-- `+` separator for update clauses (not `;` or `&&`)
-- `-` separator for join clauses
-- `SSQL_MODE=record` for code generation pipelines
+A generated pipeline should have:
+- `ssql from` first, `|` between every pair of commands, a sink last (`to …`, `count` or `tee`)
+- transforms reading stdin only (no data file after `where`, `sort`, …)
+- current flag names (`-if`, `-if-expr`, `-using`, `-on L R`, `-output` for charts)
+- aggregate results referred to by the name given (`-sum amount total` → `total`)
+- `+` between update/where clauses, `-` between join clauses
+- for code generation, `ssql generate go -pipeline '…'` with the sink inside the string
 
 ---
 
-*For complete API documentation: `ssql -help` or `ssql COMMAND -help`*
+*`ssql COMMAND -help` is the authority on every flag; `ssql functions` lists the expression functions.*

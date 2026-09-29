@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-09-29
+Last modified: 2026-09-30
 
 [Back to Index](./README.md)
 
@@ -255,8 +255,9 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 
 ## User documentation cleanup (see dfc140_user_doc_cleanup.md)
 
-- [ ] **Execute DFC140** (batches 1-5 done 2026-09-29; 6 ai-prompt content remains: 5 api-reference + Check 11 signature lines, 6 ai-prompt content remain): 26 files audited 2026-09-29; 3 REMOVE (cli-debugging, ai-test-results, ai-fix-request), 4 MOVE (AI-PROMPT-README, ai-test-cases, ai-prompt-improvements, VALIDATION), 3 RESTRUCTURE (api-reference, typed-reference, doc/README), the rest FIX. Six ordered batches in DFC140 §6; script edits that must travel with each move in §5; open points for Ross in §7.
+- [x] **Execute DFC140** (all six batches done 2026-09-29/30: 5 api-reference + Check 11 signature lines, 6 ai-prompt content remain): 26 files audited 2026-09-29; 3 REMOVE (cli-debugging, ai-test-results, ai-fix-request), 4 MOVE (AI-PROMPT-README, ai-test-cases, ai-prompt-improvements, VALIDATION), 3 RESTRUCTURE (api-reference, typed-reference, doc/README), the rest FIX. Six ordered batches in DFC140 §6; script edits that must travel with each move in §5; open points for Ross in §7.
 - [x] **`cli-signal-processing.md` loop blocks emit phantom rows** (DFC140 §2.1) — fixed 2026-09-29 (batch 2: `… | ssql to jsonl; done | ssql from jsonl`); `TestCodelabLoopHasOneSchema` (`cmd/ssql/codelab_loop_test.go`) asserts the row count and that the doc still carries the idiom.
+- [ ] **`ssql union -help` says "Additional files must be JSONL"** but `union -file customers.csv` reads the CSV through `readAuxInput` (15 rows on the codelab data, 2026-09-30). Fix the description (found in DFC140 batch 6).
 - [ ] **`DescribeConfig` godoc says "first-seen order"; describe.go sorts by field name** (`sort.Strings(order)`). The reference documents the behaviour; fix the source comment (found in DFC140 batch 5).
 - [ ] **`ssql generate go -help` example still says `SSQL_MODE=parallel`** (the `(export SSQL_MODE=parallel; …) | ssql generate go -run` example) — `parallel` is a deprecated alias; the docs now say `typed` everywhere, the help text should too (found during DFC140 batch 2).
 - [x] **Check 11 asserts a word, not a signature** — done 2026-09-29 (DFC140 batch 5): `scripts/api-coverage.sh` requires `func Name` / `func (r *Type) Method` at line start; both references pass; the gate fails on a removed line (verified). Types are still not checked; add if a type ever goes undocumented.
