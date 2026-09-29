@@ -8,14 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **`generate go|sql|ssql|json` share one set of source flags** (DFC139
+- **Every `generate` target shares one set of source flags** (DFC139
   §7): `-pipeline`, `-script`, `-json` and `-mode` are declared once
-  and appear on every target with the same help. `generate
-  sql|ssql|json -script FILE` now work (they refused `-script` by
-  omission); `-mode` is accepted everywhere and must be `record` on the
-  three targets that read record-mode fragments (`-mode typed` there
-  is refused loudly rather than ignored). A drift test pins that every
+  and appear on `go`, `sql`, `ssql`, `json` AND `schema` with the same
+  help. `generate sql|ssql|json -script FILE` now work (they refused
+  `-script` by omission), and `ssql generate schema -pipeline '…'` /
+  `-script` / `-json` list the fields a pipeline produces without the
+  `export SSQL_MODE=schema` dance. `-mode` is accepted everywhere and
+  must be the mode the target consumes (`record` for sql/ssql/json,
+  `schema` for schema; `go` defaults to `typed`); another value is
+  refused loudly rather than ignored. A drift test pins that every
   target carries the four.
+
+### Fixed
+- **Sinks did not pass the schema through in `SSQL_MODE=schema`**: a
+  pipeline ending in `to csv` (any `to` sink) ran the sink for real on
+  the schema header, so `generate schema` after a sink listed nothing.
+  Every `to` sink now passes the schema through unchanged (identity),
+  and writes no file.
 
 ## [4.108.0] - 2026-09-27
 

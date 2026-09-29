@@ -15,13 +15,22 @@ import (
 //	  → person
 //	    <other fields…>
 func registerGenerateSchema(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("schema").
+	sub := cmd.Subcommand("schema").
 		Description("List the fields produced by an SSQL_MODE=schema pipeline (for completion)").
 		Example("(export SSQL_MODE=schema; ssql from csv data.csv | ssql group-by dept -count n) | ssql generate schema", "Fields after group-by").
-		Example("(export SSQL_MODE=schema; ssql from csv data.csv | ssql rename -as name person) | ssql generate schema", "Fields after rename").
+		Example("ssql generate schema -pipeline 'ssql from csv data.csv | ssql rename -as name person'", "The same without the export: the source flags every generate target has").
+		Example("ssql generate schema -json pipeline.json", "Fields a pipeline document produces")
+	// The source flags mean the same here as on every target: run the
+	// pipeline in the mode THIS target consumes (schema) and read what it
+	// writes — a schema header rather than fragments.
+	pipelineSourceFlags(sub, "list the fields of", "schema").
 		Handler(func(ctx *cf.Context) error {
+			src, err := generateFragmentSource(ctx, "schema", "schema")
+			if err != nil {
+				return err
+			}
 			w := ctx.Stdout()
-			for _, name := range readSchemaModeInput(ctx.Stdin()) {
+			for _, name := range readSchemaModeInput(src) {
 				fmt.Fprintln(w, name)
 			}
 			return nil

@@ -199,6 +199,15 @@ What changed for a user:
 - The four flags read the same in every target's `-help`, in the same
   order, and complete the same.
 
+`generate schema` was first left out on the grounds that it reads a
+schema header, not fragments; Ross pointed at its `-help`. The flags
+mean the same thing there ("run the pipeline in the mode this target
+consumes and read what it writes"), so it has them too, with `schema`
+as its fixed `-mode`, and `ssql generate schema -pipeline '…'` lists a
+pipeline's output fields with no `export` dance. Making that work
+found a gap: in schema mode the `to` sinks ran for real on the header
+(no field list after a sink); every sink now passes the schema through.
+
 What did NOT change: the grammar still declares the flags per leaf, so
 `-spec-json` lists them on each of the four nodes (true to what autocli
 parses), and `ssql generate -pipeline X go` still prints `generate`'s

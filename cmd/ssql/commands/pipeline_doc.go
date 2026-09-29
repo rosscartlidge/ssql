@@ -472,12 +472,11 @@ func generateFragmentSource(ctx *cf.Context, mode, label string) (io.Reader, err
 		return v
 	}
 	pipeline, script, doc := get("-pipeline"), get("-script"), get("-json")
-	if m := get("-mode"); m != "" && label != "go" {
-		// sql, ssql and json read record-mode fragments; a typed run
-		// would produce fragments they do not use. Loud, not ignored.
-		if m != "record" {
-			return nil, fmt.Errorf("ssql generate %s: -mode %s has no meaning here (this target reads record-mode fragments); drop -mode or use record", label, m)
-		}
+	if m := get("-mode"); m != "" && label != "go" && m != mode {
+		// sql, ssql and json read record-mode fragments, schema reads a
+		// schema header; a run in another mode would produce output the
+		// target does not consume. Loud, not ignored.
+		return nil, fmt.Errorf("ssql generate %s: -mode %s has no meaning here (this target reads %s-mode output); drop -mode or use %s", label, m, mode, mode)
 	}
 	set := 0
 	for _, v := range []string{pipeline, script, doc} {

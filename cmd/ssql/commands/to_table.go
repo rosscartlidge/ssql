@@ -55,6 +55,9 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "to") // a sink passes the schema through
+			}
 			var generate bool
 			var maxWidth int
 			var onlySpecified bool

@@ -95,6 +95,9 @@ func registerToExplore(cmd *cf.SubcommandBuilder) {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "to") // a sink passes the schema through
+			}
 			var title, theme, xField, yField, outputFile string
 			var pageSize int
 			var generate, useWasm bool

@@ -98,6 +98,9 @@ func registerToAnimate(cmd *cf.SubcommandBuilder) {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "to") // a sink passes the schema through
+			}
 			var frameField, xField, yField, zField, chartType, colorScale, outputFile string
 			var fps int
 			var loop, generate bool

@@ -29,6 +29,9 @@ func registerToJSON(cmd *cf.SubcommandBuilder) {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "to") // a sink passes the schema through
+			}
 			var outputFile string
 			var generate bool
 
@@ -86,6 +89,9 @@ func registerToJSONL(cmd *cf.SubcommandBuilder) {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "to") // a sink passes the schema through
+			}
 			var outputFile string
 			var generate bool
 

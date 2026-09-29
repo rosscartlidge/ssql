@@ -38,6 +38,9 @@ func registerToWAV(cmd *cf.SubcommandBuilder) {
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
+			if schemaMode() {
+				return runSchemaModeTransform(ctx, "to") // a sink passes the schema through
+			}
 			var outputFile string
 			var sampleRate int
 			var generate bool

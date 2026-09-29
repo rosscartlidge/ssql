@@ -32,14 +32,11 @@ func TestGenerateTargetsShareSourceFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	gen, ok := spec.Subcommands["generate"]
-	if !ok || len(gen.Subcommands) < 4 {
-		t.Fatalf("generate has %d targets in -spec-json; expected go, sql, ssql, json (and schema)", len(gen.Subcommands))
+	if !ok || len(gen.Subcommands) < 5 {
+		t.Fatalf("generate has %d targets in -spec-json; expected go, sql, ssql, json, schema", len(gen.Subcommands))
 	}
 	want := []string{"-pipeline", "-script", "-json", "-mode"}
 	for name, leaf := range gen.Subcommands {
-		if name == "schema" {
-			continue // reads a schema header, not fragments
-		}
 		have := map[string]bool{}
 		for _, f := range leaf.Flags {
 			for _, n := range f.Names {
