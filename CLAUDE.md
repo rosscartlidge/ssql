@@ -154,6 +154,7 @@ After a minor/major release, always do ALL of these:
 **Pre-tag gates** (before tagging, in addition to the standard suites):
 - [ ] `SSQL_PERM_TRIPLES=1 go test ./cmd/ssql -run TestPipelinePermutationTriples -timeout=40m` — the opt-in 3-stage permutation gate (~300 pipelines × every lane, several minutes; not part of normal test runs)
 - [ ] `SSQL_SCALE=1 go test ./cmd/ssql -run TestScaleBudgets -timeout=20m` — the opt-in scale gate (DFC113): wall-time budgets on a cached ~120MB fixture; catches complexity/read-amplification regressions that output oracles pass (~15s warm, ~40s on first fixture generation)
+- [ ] `make doc-test` — the L2 doc gate: every code block of every codelab (CLI: `codelab-run.sh`; Go record and typed: `codelab-go-run.sh`) executed against the checkout. Added to the pre-tag gates 2026-09-29 after a week of codelab edits shipped in two releases with only L1 (which compiles a fixed file list that does not include the codelabs) having run; it was green, but by luck
 
 **Builds:**
 - [ ] `make deb` — build `ssql_X.Y.Z_amd64.deb` and `ssql-gpu_X.Y.Z_amd64.deb` (stamped with HEAD's hash via `RELEASE_LDFLAGS`, so run it on the tagged commit; dev builds keep Go's VCS stamp with `-dirty`); it also rewrites the README's `.deb` install pins to X.Y.Z. Commit the debs AND README.md together (`make doc-check` Check 10 fails if pins, debs and version.txt disagree)
