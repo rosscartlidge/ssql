@@ -665,7 +665,20 @@ func peekDelimitedHeader(r io.Reader, comma rune) ([]string, io.Reader) {
 	br := bufio.NewReaderSize(r, limit)
 	want := 1
 	for {
-		buf, err := br.Peek(want)
+		// Look at everything that has arrived, never less than asked and
+		// never past the limit. A regular file fills the whole buffer on
+		// the first read; asking for Buffered()+1 then overshot the limit
+		// and gave up without looking for the newline, so every file over
+		// 1 MB lost its header (schema mode on a 1.2 GB CSV listed no
+		// fields, found by Ross).
+		n := br.Buffered()
+		if n < want {
+			n = want
+		}
+		if n > limit {
+			n = limit
+		}
+		buf, err := br.Peek(n)
 		if i := bytes.IndexByte(buf, '\n'); i >= 0 || err != nil {
 			if i >= 0 {
 				buf = buf[:i+1]
@@ -679,12 +692,12 @@ func peekDelimitedHeader(r io.Reader, comma rune) ([]string, io.Reader) {
 			}
 			return header, br
 		}
+		if n >= limit {
+			return nil, br // a header longer than the peek limit
+		}
 		// Ask for one byte more than has arrived: Peek fills with whatever
 		// the source has ready, so this follows the stream's own pace.
-		want = br.Buffered() + 1
-		if want > limit {
-			return nil, br
-		}
+		want = n + 1
 	}
 }
 

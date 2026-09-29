@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, a field a stage creates is `any`.
 
 ### Fixed
+- **A CSV source over 1 MB lost its header in the peeking reader**:
+  `peekDelimitedHeader` (the header peek for `from csv -` on stdin,
+  `from https://` bodies, and now schema mode) asked for one byte past
+  what had arrived, which on a regular file is the whole 1 MB buffer,
+  overshot its limit and gave up before looking for the newline. Schema
+  mode on a 1.2 GB CSV listed no fields (found by Ross); an HTTP CSV
+  body that arrived in one large read fell back to the records' own
+  column order. It now searches everything buffered, up to the limit.
 - **Sinks did not pass the schema through in `SSQL_MODE=schema`**: a
   pipeline ending in `to csv` (any `to` sink) ran the sink for real on
   the schema header, so `generate schema` after a sink listed nothing.
