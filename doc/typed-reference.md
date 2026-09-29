@@ -28,89 +28,32 @@ exploratory work and dynamic-schema cases; `ssql/typed` for the inner loop.
 
 ## Performance
 
-### Headline: 10M rows × 3 chained joins (end-to-end with CSV I/O)
+On a 10 M-row, three-chained-join workload `ssql/typed` runs in 4.94 s
+where `ssql.Record` takes 74.8 s — 15× faster, 34× less memory — and
+DuckDB does the same joins in 0.42 s. On a scan-and-aggregate cube over a
+14.6 M-row parquet file the picture reverses: the typed program
+`generate go` emits runs in 0.28 s against DuckDB's 0.96 s, because the
+optimiser prunes the read to the columns used and the planner runs the
+read and the group-by in parallel. Every number, the machine it ran on,
+and the command that reproduces it is in
+[Performance, Measured](performance.md).
 
-| Implementation | Time | Memory allocated | Allocations |
-|---|---:|---:|---:|
-| `ssql.Record` | 74.8 s | 37.7 GB | 544 M |
-| **`ssql/typed`** | **4.94 s** | **1.10 GB** | **20.0 M** |
-| **vs Record** | **15.1×** | **34.2× less** | **27.2× fewer** |
-
-All three pipelines produce 7.25 M output rows (correctness validated).
-A 75-second batch job becomes 5 seconds; 38 GB of allocations becomes 1 GB.
-
-### How does this compare to DuckDB?
-
-For context, the same workload run via the DuckDB CLI on the same files:
-
-| Implementation | Time | Notes |
-|---|---:|---|
-| `ssql.Record` | 74.8 s | row-based, `map[string]any` |
-| **`ssql/typed`** | **4.94 s** | row-based, struct fields, pure Go |
-| DuckDB CLI v1.5.0 | 0.42 s | columnar + SIMD, native C++, ~50 MB binary |
-
-DuckDB is ~12× faster than `ssql/typed` on that join-heavy workload.
-Most of that gap comes from **columnar storage with vectorized SIMD
-execution** — fundamental architectural advantages that no row-based
-runtime can match without rewriting around Apache Arrow or similar.
-
-The picture reverses on scan-and-aggregate queries once the pipeline
-optimiser prunes the read (2026-09-05, 14.6 M-row parquet, three-field
-`-cube` with counts): DuckDB on the `generate sql` output 0.95 s / 2.7 GB;
-the `generate go` typed program **0.27 s / 0.69 GB** — a pruned parallel
-parquet read of the three columns used, a parallel detail group-by, and
-`RollupEnrich` for the parent levels. `generate go` optimises by default
-(`+O` disables); the unoptimised program read all seven columns in 1.73 s
-and 8.6 GB, which is why the default changed.
-
-Where `ssql/typed` competes:
+Where `ssql/typed` competes with a columnar engine:
 
 - **Zero native dependency** — pure Go, no CGO, no shared library, no
   `~/.local/bin/duckdb` install step. Drops into any Go program with
   `go get`.
-- **~5 KB of source on the data path** — `typed/io.go` + `typed/ops.go`
-  + `typed/agg.go` total 600 LOC. Trivially auditable.
+- **Small** — the data path is a few files of plain Go, auditable in an
+  afternoon.
 - **Streaming, not materializing** — pipelines are `iter.Seq[T]` all the
   way down. DuckDB materializes intermediate join results.
 - **Composes with the rest of Go** — joining streamed data against a
   `chan T` or a custom reader is one line. DuckDB requires bridging
   through SQL or a connection.
 
-For pure throughput on static datasets, DuckDB wins. For embedded
-Go pipelines that need a typed, streaming, dependency-free fast path,
-`ssql/typed` is the right tool.
-
-### Smaller workload: 1M rows × 1 join
-
-| Implementation | Time | Memory | Allocs |
-|---|---:|---:|---:|
-| `ssql.Record`, end-to-end | 2,006 ms | 909 MB | 19.6 M |
-| `ssql/typed`, end-to-end | **386 ms** | **96 MB** | **2.0 M** |
-| `ssql.Record`, compute-only | 1,009 ms | 644 MB | 11.6 M |
-| `ssql/typed`, compute-only | **69 ms** | **0.3 MB** | **20** |
-
-End-to-end: **5.2× faster, 9.4× less memory.**
-Compute-only (CSV stripped): **14.5× faster, 2,000× less memory.**
-
-The compute-only number isolates the Record-vs-struct cost. The end-to-end
-number includes CSV reading on both sides; ssql/typed's reflection-built
-decoder costs ~20% over a hand-rolled positional reader, which is the price
-of keeping the API generic.
-
-### Reproducing
-
-```bash
-# Quick benches (~1 minute, 1M-row workload)
-go test -bench=. -benchtime=3x -run=^$ ./typed/...
-
-# Headline benches (~2 minutes, 10M × 3-join workload — generates 600 MB CSV)
-go test -bench=Scale -benchtime=1x -run=^$ -timeout=30m ./typed/...
-
-# DuckDB baseline (requires duckdb on PATH, reuses the dataset)
-go test -bench=DuckDB -benchtime=1x -run=^$ -timeout=10m ./typed/...
-```
-
-Hardware: Intel Core Ultra 9 275HX, single-threaded.
+For pure throughput on static join-heavy datasets, DuckDB wins. For
+embedded Go pipelines that need a typed, streaming, dependency-free fast
+path, `ssql/typed` is the right tool.
 
 ## Field tags
 
@@ -270,10 +213,9 @@ Snappy compression by default. Reads use the existing
 `github.com/apache/arrow/go/v18/parquet` dependency that ssql
 already imports for Record-mode Parquet.
 
-**`ParquetColumns` is the primary lever.** A 14.6M-row corpus
-group-by-with-count benchmark went from **1.51 s** (read all 7
-columns) to **0.15 s** (read only the column needed for the
-group key) — a 10× speedup. For wide tables it's the difference
+**`ParquetColumns` is the primary lever.** Restricting a 14.6 M-row
+group-by to its one key column made it 10× faster
+([Performance, Measured](performance.md) §2 has the run). For wide tables it's the difference
 between Parquet feeling fast and feeling like CSV-with-extra-steps.
 
 The parallel reader assigns Parquet row groups to shards
@@ -534,8 +476,10 @@ group-by — `GroupByParallel` with an aggregator whose result is its own
 mergeable STATE — makes the only pass over the rows; `RollupEnrich`
 then merges the detail states that share each set's key and builds the
 output row. Work is #groups × #sets, so a 14.6M-row, 161-group cube
-costs what the plain group-by costs (1.7 s; the record-mode `Rollup`
-that re-keys every row per set took 36 s). Generated by
+costs what the plain group-by costs (about 1.7 s unoptimised on the
+14.6 M-row file, 0.28 s with the read pruned — [Performance,
+Measured](performance.md) §1; the record-mode `Rollup` that re-keys
+every row per set took 36 s). Generated by
 `SSQL_MODE=typed … group-by … -cube`; aggregations without a Merge
 (`-collect`, expressions) fall back to record codegen.
 

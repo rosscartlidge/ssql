@@ -631,8 +631,15 @@ throughout (`make doc-check`, `make doc-test`, `go test ./cmd/ssql -run
 **Status (2026-09-29):** Ross decided the §7 points (1 remove-and-merge,
 2 new research doc, 3 `claude/doc-validation.md`, 4 strip, 5 yes but
 deferred to batch 5 because a signature-line check would flag 69 root +
-34 typed exports today, 6 `scripts/testdata/`). Batches 1 and 2 are
-done (commits on main the same day); 3-6 remain.
+34 typed exports today, 6 `scripts/testdata/`). Batches 1, 2 and 3 are
+done (commits on main the same day); 4-6 remain. Batch 3 found that the
+0.15 s / 0.32 s "conflict" was two machines (the 275HX laptop and the
+Xeon 6154 workstation), not two values: re-measured on the laptop the
+projected group-by is 0.13-0.17 s and the cube 0.28 s; the 1 M-row
+codegen table was re-measured too (typed is now the planner-parallel
+program: 0.14 s, not the 0.77 s serial figure from April). The 32-core
+machine of the parallel-vs-serial table could not be identified and is
+labelled as such.
 
 1. **Removes and moves** (§3.5 AI family, VALIDATION, cli-debugging
    merge into troubleshooting), with the script edits in §5, the

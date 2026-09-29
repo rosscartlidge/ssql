@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixed as DFC140 §2-§3 list. `cli-signal-processing.md`'s shell loops
   no longer concatenate one `_schema` header per iteration (phantom
   rows); `TestCodelabLoopHasOneSchema` pins the row count.
+- **`doc/performance.md` is the single source for every benchmark**
+  (DFC140 batch 3). Each table names its machine and date; the cube,
+  the projected group-by and the 1 M-row three-model comparison were
+  re-measured on the Core Ultra 9 275HX on 2026-09-29 (cube 0.28 s vs
+  DuckDB 0.96 s; the default typed program is now the planner-parallel
+  one at 0.14 s, 14.6× the interactive pipeline). The 0.15 s / 0.32 s
+  disagreement between typed-reference and performance.md was two
+  machines, now both named. typed-reference, typed-codelab and the
+  README quote one line and link.
 - **The API references are complete again, and gated.** `doc/api-reference.md`
   and `doc/typed-reference.md` now mention every exported function and
   method (about 130 record-package and 23 typed exports had accumulated

@@ -48,16 +48,12 @@ The two APIs interoperate, so it's normal to use Record for the
 exploration phase and switch to typed for the hot pipelines that
 ship to production.
 
-**Performance**, measured on a 10M-row, 3-chained-join workload:
-
-| Implementation | Time | Memory allocated | Allocations |
-|---|---:|---:|---:|
-| `ssql.Record` | 74.8 s | 37.7 GB | 544 M |
-| **`ssql/typed`** | **4.94 s** | **1.10 GB** | **20 M** |
-| DuckDB v1.5 CLI | 0.42 s | — | — |
-
-**15× faster, 34× less memory** — and in pure Go with no CGO. You'll
-reproduce these numbers yourself in [Step 8](#step-8-measure-the-speedup-yourself).
+**Performance:** on a 10 M-row, three-chained-join workload `ssql/typed`
+runs in 4.94 s where `ssql.Record` takes 74.8 s — 15× faster, 34× less
+memory, in pure Go with no CGO — and DuckDB does it in 0.42 s.
+[Performance, Measured](performance.md) has the tables and the machine;
+you reproduce these numbers yourself in
+[Step 8](#step-8-measure-the-speedup-yourself).
 
 ## Setup
 
@@ -486,7 +482,7 @@ go test -bench=End2End -benchtime=3x -run=^$ ./typed/...
 go test -bench='Scale(Record|Typed)3Join' -benchtime=1x -run=^$ -timeout=30m ./typed/...
 ```
 
-Expected output (single-threaded, on modern x86):
+Expected output (single-threaded; the Core Ultra 9 275HX in [Performance, Measured](performance.md)):
 
 ```
 BenchmarkScaleRecord3Join-24    1   74.8 s    37.7 GB     544 M allocs

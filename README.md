@@ -54,7 +54,7 @@ against the current release, so what you read is what happens.
 - **The same pipeline is a compiled program.** `ssql generate go -run
   -pipeline 'ssql from … | ssql group-by … | ssql to csv'` builds and
   runs a standalone parallel Go binary with struct types and no
-  reflection. On a 14.6 M-row parquet cube: ssql 0.27 s, DuckDB 0.95 s,
+  reflection. On a 14.6 M-row parquet cube: ssql 0.28 s, DuckDB 0.96 s,
   a quarter of the memory ([measured](doc/performance.md)).
 - **The same pipeline is SQL, too.** `ssql generate sql` emits DuckDB,
   Postgres or DataFusion SQL from the stages you typed, and the project's
