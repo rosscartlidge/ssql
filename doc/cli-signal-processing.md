@@ -14,7 +14,7 @@ time series. It assumes that codelab: `from … | … | to table`, `where`,
 Every block *is* run by the codelab runner
 (`./codelab-run.sh signal` beside the data `ssql codelab` writes, or
 [`doc/codelab-data/codelab-run.sh`](codelab-data/codelab-run.sh) `doc/cli-signal-processing.md` in the
-repository — [DFC125](research/dfc125_codelab_guided_path.md)), so what you read is what happens.
+repository), so what you read is what happens.
 
 ## Table of Contents
 
@@ -473,9 +473,16 @@ for window in hann hamming blackman none; do
     ssql where -if time_index eq 8 | \
     ssql sort -desc magnitude | \
     ssql limit 3 | \
-    ssql update -set window $window
-done | ssql to table
+    ssql update -set window $window | \
+    ssql to jsonl
+done | ssql from jsonl | ssql to table
 ```
+
+Each iteration is a pipeline of its own, with its own `_schema` header
+line; concatenating four of them would hand `to table` three header
+lines as data. Ending each body with `to jsonl` (plain JSON Lines, no
+header) and reading the whole stream back through one `from jsonl` gives
+the table a single schema.
 
 | Window | Best For |
 |--------|----------|
@@ -964,11 +971,12 @@ for offset in $(seq 0 $window 10000000); do
     ssql offset $offset | \
     ssql limit $window | \
     ssql_gpu fft -field value -rate 1000 | \
-    ssql update -set window_start $offset
+    ssql update -set window_start $offset | \
+    ssql to jsonl                       # plain JSON Lines: one schema when read back
 done > spectrogram.jsonl
 
 # Analyze: find peak frequency in each time window
-cat spectrogram.jsonl | \
+ssql from jsonl spectrogram.jsonl | \
   ssql group-by window_start -max magnitude peak_magnitude
 ```
 
@@ -983,8 +991,10 @@ for offset in $(seq 0 1000000 10000000); do
     ssql_gpu fft -field value -rate 1000 | \
     ssql sort magnitude -desc | \
     ssql limit 1 | \
-    ssql update -set chunk_offset $offset
+    ssql update -set chunk_offset $offset | \
+    ssql to jsonl
 done > dominant_frequencies.jsonl
+ssql from jsonl dominant_frequencies.jsonl | ssql to table
 ```
 
 **Option C: Use CPU for very large single-shot FFT**
@@ -1014,12 +1024,14 @@ grep -c FFT fft_program.go
 
 **Step 3: Build and run with GPU support**
 ```bash
-# codelab: skip — needs a Go module with the gpu build tag and a CUDA library
-# Build with gpu tag
-go build -tags gpu -o fft_program fft_program.go
+# codelab: skip — needs a Go module with the gpu build tag and the CUDA library
+# The generated file is a main package; give it a module and build with the gpu tag
+mkdir fft_program && mv fft_program.go fft_program/main.go && cd fft_program
+go mod init fft_program && go mod tidy
+go build -tags gpu -o fft_program .     # needs libssqlgpu.so from the GPU build above
 
-# Run normally (library is in system path)
-./fft_program < input.csv
+# The program reads multi_freq.csv itself (the path from the pipeline), not stdin
+cp ../multi_freq.csv . && ./fft_program
 ```
 
 **Without `-tags gpu`:** Code still works but uses CPU only. This is useful for:

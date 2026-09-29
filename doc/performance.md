@@ -45,12 +45,13 @@ ssql. Same machine and file for every row; the full Postgres run
 [DuckDB vs ssql](research/duckdb-vs-ssql.md#measured-the-readme-cube-benchmark-on-duckdb-postgresql-and-ssql-2026-09-15).
 Reproduce it with any parquet file you have — the pipeline is the only
 input.
+
 ## High-performance typed pipelines: `ssql/typed`
 
 When the schema is known at compile time and the pipeline is hot, the
 `ssql/typed` subpackage gives you a struct-based fast path with the same
-shape as the main API. Measured against the same 10M row × 3 chained
-join workload:
+shape as the main API. Measured on the same 10M row × 3 chained
+join workload (Intel Core Ultra 9 275HX, single-threaded):
 
 | Implementation | Time | Memory | Allocations |
 |---|---:|---:|---:|
@@ -59,8 +60,8 @@ join workload:
 | DuckDB v1.5 CLI | 0.42 s | — | — |
 
 **15× faster, 34× less memory** vs the Record API — within an order of
-magnitude of DuckDB, in pure Go with zero CGO and ~600 LOC on the data
-path. Same iter.Seq[T] composition shape as the main API:
+magnitude of DuckDB, in pure Go with zero CGO. Same iter.Seq[T]
+composition shape as the main API:
 
 ```go
 type Employee struct {
@@ -90,17 +91,17 @@ joined := typed.HashJoin(seniors, depts,
 Use `ssql.Record` for prototyping and dynamic schemas; switch to
 `ssql/typed` when you know your schema and the pipeline is hot.
 
-**Or skip the rewrite entirely** — `ssql generate go -typed` translates a
-shell pipeline directly into a typed Go program with auto-derived struct
+**Or skip the rewrite entirely** — `ssql generate go -pipeline '…'`
+(typed is the default mode) translates a shell pipeline directly into a
+typed Go program with auto-derived struct
 types. The same prototype pipeline you'd run interactively becomes a
 self-contained, compiled, schema-safe binary:
 
 ```bash
-SSQL_MODE=typed ssql from employees.csv \
-    | ssql where -if years ge 5 \
-    | ssql join departments.csv -using dept_id \
-    | ssql to csv seniors.csv \
-    | ssql generate go > pipeline.go
+ssql generate go -pipeline 'ssql from employees.csv
+    | ssql where -if years ge 5
+    | ssql join departments.csv -using dept_id
+    | ssql to csv seniors.csv' > pipeline.go
 go run pipeline.go
 ```
 
@@ -115,8 +116,8 @@ Measured against the same shell pipeline run three ways (1M rows ×
 | Typed vs CLI | **4.0× faster** | — |
 | Typed vs Record codegen | **3.5× faster** | **104× less memory** |
 
-**As of v4.40, `SSQL_MODE=typed` automatically runs the same pipeline
-across all cores when there's parallelism to exploit.** A planner
+**Typed mode runs the same pipeline across all cores when there is
+parallelism to exploit.** A planner
 inspects every stage and picks per-pipeline: parallel CSV read +
 parallel `Where`/`HashJoin`/`GroupBy` + per-shard CSV output
 buffers when reachable, serial `iter.Seq[T]` when a `sort` /
@@ -129,21 +130,18 @@ var flip needed. Measured on a 32-core machine, 10 M-row corpus:
 | Group-by 1 000 dept_ids, count + sum + avg + min + max | 3.80 s | **0.95 s (4.0× faster)** | 0.39 s |
 
 ```bash
-SSQL_MODE=typed ssql from data.csv \
-    | ssql group-by dept_id -count n -sum salary total -avg salary mean \
-    | ssql to csv | ssql generate go > pipeline.go
-go run pipeline.go
+ssql generate go -run -pipeline 'ssql from data.csv
+    | ssql group-by dept_id -count n -sum salary total -avg salary mean
+    | ssql to csv'
 ```
 
-`SSQL_MODE=parallel` is kept as a silent alias for backwards
-compatibility. The planner backs off to serial when needed —
-e.g., `from | sort | to csv` correctly downgrades to
-`typed.ReadCSV` to avoid Stream→Serial fan-in cost. Tier 3
-commands (`pivot`, `signal`, `merge -catalog`, `from ssh`,
-`from catalog`, `where -if-expr`, `update -set-expr`) work too
-via Phase B mixed-mode: the planner inserts a typed→Record
-adapter so the parallel-parse stages still happen, then the
-Tier 3 stage runs on Records.
+The planner backs off to serial when a stage needs it: `from | sort |
+to csv` reads with the serial `typed.ReadCSV`, because a global sort
+would only pay for the parallel fan-in. A stage that has no typed form
+yet runs on Records behind an adapter, so the parallel parse still
+happens; the [Typed Reference](typed-reference.md) lists those stages,
+and `generate go -explain` says which form each stage of your pipeline
+got.
 
 ### Real-world: 14.6 M-row group-by on a 72-thread Xeon
 
@@ -170,11 +168,11 @@ into independent wins multiplied together: ~4× from collapsing 3
 processes to 1 (no JSONL transit), ~13× from struct types over
 `map[string]any` (no allocation per row, no GC), ~1.6× from
 parallelism on the CSV path, ~1.6× from column projection on Parquet,
-and ~2.4× from multi-row-group parallelism. For column-projected
-Parquet on a wide table, `ssql generate ssql` infers which columns
-are actually used downstream and rewrites the pipeline with
-`-columns …` automatically; `ssql to parquet -row-group-size 1000000`
-(default since v4.37.3) writes parquet with row-group boundaries
-the parallel reader can shard across.
+and ~2.4× from multi-row-group parallelism. The column projection is
+automatic: the optimiser (`-O`, on by default in `generate go` and
+`generate ssql`) reads the downstream stages and prunes the Parquet read
+to the columns they use. `ssql to parquet` writes 1 M-row row groups by
+default (`-row-group-size`), which is what the parallel reader shards
+across.
 
-[**Codelab →**](typed-codelab.md) | [**Reference →**](typed-reference.md) | [**Codegen design →**](research/typed-codegen-proposal.md) | [**GroupByParallel design →**](research/typed-groupby-parallel-proposal.md)
+[**Codelab →**](typed-codelab.md) | [**Reference →**](typed-reference.md) | Design notes: [typed codegen](research/typed-codegen-proposal.md), [parallel group-by](research/typed-groupby-parallel-proposal.md)

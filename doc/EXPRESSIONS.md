@@ -271,8 +271,8 @@ builtins aggregate: `first(name)`, `last(name)`, `median(salary)`,
 that run in every lane, including `generate sql`: `-first`, `-last`,
 `-any`, `-count-distinct`, `-string-agg FIELD SEP NAME`, `-median`,
 `-percentile FIELD P NAME`, `-stddev`, `-variance`, `-mode`, `-arg-max
-FIELD BY NAME`, `-arg-min`, `-min`/`-max` (strings and times too). Prefer the flag when one exists; `-expr` is the
-interpreter-only escape hatch (DFC129).
+FIELD BY NAME`, `-arg-min`, `-min`/`-max` (strings and times too). Prefer the flag when one exists: flags translate to SQL as well;
+`-expr` does not.
 The flag form `update -set-bucket minute ts 1m` is the same operation
 (Tab completes the fields); use the function when the bucket is part of
 a larger expression. In `generate sql` it becomes a `CASE` that detects
@@ -436,9 +436,6 @@ Rule for programs that build pipelines: **values go in flag slots
 (`-if FIELD OP VALUE`, `-param`), never into expression text; a slot's
 kind is fixed by the flag, never by the value's spelling** (`@name` is
 the text `@name`; two fields compare with `-if-field`).
-[DFC134](research/dfc134_pipelines_as_data.md) and
-[DFC135](research/dfc135_field_references_in_value_slots.md) have the
-reasoning.
 
 ## Common Patterns
 
@@ -519,7 +516,7 @@ ssql where -if-expr '(age >= 18 and status == "active") or role == "admin"'
 
 **Pattern matching:**
 ```bash
-ssql where -if-expr 'startsWith(email, "admin@") or endsWith(email, "@company.com")'
+ssql where -if-expr 'email startsWith "admin@" or email endsWith "@company.com"'
 ```
 
 ### 5. String Manipulation
@@ -598,31 +595,26 @@ ssql from sales.csv | \
 
 **Generate optimized Go code from expressions:**
 ```bash
-# Set environment variable for code generation
-export SSQL_MODE=record
-
-# Build pipeline with expressions
-ssql from data.csv | \
-  ssql where -if-expr 'price * qty > 1000' | \
-  ssql update -set-expr total 'price * qty' | \
-  ssql update -set-expr tier 'total > 5000 ? "premium" : "standard"' | \
-  ssql generate go > program.go
-
-# Compile and run (10-100x faster than CLI)
-go run program.go
+# The pipeline stages see SSQL_MODE and emit code instead of running;
+# generate go compiles and runs the program (or > program.go to keep it)
+(export SSQL_MODE=typed
+ ssql from data.csv | \
+   ssql where -if-expr 'price * qty > 1000' | \
+   ssql update -set-expr total 'price * qty' | \
+   ssql update -set-expr tier 'total > 5000 ? "premium" : "standard"' | \
+   ssql to table) | ssql generate go -run
 ```
 
-**Generated code features (v4.57.0+):**
+**Generated code:**
 - Expressions **transpile to native Go** in generated programs — a
   predicate like `price * qty > 1000` becomes plain Go comparisons, not
-  an interpreted evaluation (typed, parallel, AND record modes)
+  an interpreted evaluation (in typed and record modes alike)
 - Zero allocations per row on the native path (~3ns/row typed,
-  ~28ns/row record — vs ~1.3µs + 1KB of garbage per row for the
-  interpreted VM it replaced)
-- Expressions outside the native subset automatically fall back to the
-  embedded VM **per expression** — the rest of the pipeline keeps its
-  typed/parallel form. Run `generate go -explain` to see the chosen
-  tier and reason for every expression
+  ~28ns/row record)
+- An expression outside the native subset runs in the embedded
+  expression VM **for that expression only** — the rest of the pipeline
+  keeps its typed/parallel form. `generate go -explain` says which
+  expressions became Go and which did not, and why
 - Clean, readable Go code; full type safety
 
 ## Performance
@@ -631,13 +623,13 @@ go run program.go
 - Expressions compile once at startup (~100 microseconds), then
   evaluate at ~1-2 microseconds per record via the expr-lang VM
 
-**Generated code (`generate go`, v4.57.0+):**
+**Generated code (`generate go`):**
 - Native-subset expressions cost single-digit nanoseconds per row with
   zero allocations; measured end-to-end on 5M rows, an expression
   filter + group-by pipeline runs ~19x faster (and in 3.6x less
-  memory) than the pre-4.57 generated code, and `-stream-expr` folds
-  drop from gigabytes to megabytes of peak memory (see
-  `doc/research/expr-transpiler-paper.md` for the full measurements)
+  memory) than interpreting the same expressions in the generated
+  program, and `-stream-expr` folds drop from gigabytes to megabytes of
+  peak memory
 - `group-by -expr` aggregations generate mergeable accumulators and
   keep the parallel group-by; `-stream-expr` folds generate typed
   accumulators (serial — folds don't merge)
@@ -645,12 +637,11 @@ go run program.go
 **Best Practices:**
 1. ✅ Use expressions for complex logic (vs. multiple commands)
 2. ✅ Use code generation for production workloads
-3. ✅ Check `generate go -explain` — it names the tier per expression;
-   an unexpected "VM" or "record fallback" note tells you exactly which
-   construct to rewrite for the native path
+3. ✅ Check `generate go -explain` — it says which expressions became
+   native Go and which run in the embedded VM, and names the construct
+   to rewrite for the native path
 4. ✅ In `group-by -expr`, prefer `count()` (native, parallel) over the
-   `len(field)` group-size idiom — the latter relies on the VM's
-   per-group value-array binding and forces a record fallback
+   `len(field)` group-size idiom, which runs in the VM
 
 ## Examples by Use Case
 
@@ -759,10 +750,8 @@ Expressions do **not** support comments. Keep expressions concise and use comman
 ### Flags vs expressions — which to use?
 
 `-if FIELD OP VALUE` and `-if-expr 'FIELD OP VALUE'` produce **identical
-results** — this equivalence is enforced by a dedicated differential test
-suite, and both forms compile to the same native code in generated
-programs (they share one lowering internally). The difference is
-ergonomics and analyzability:
+results**, and both forms compile to the same code in generated
+programs. The difference is ergonomics and analyzability:
 
 **Prefer the flag form when it can express the condition:**
 - **Tab completion** works on every part: field names from the live
@@ -796,7 +785,9 @@ alone.
 - Set multiple fields with multiple `-set-expr` flags
 - Combine with `-set` for literal values
 - Use `-if` for conditional updates (first-match-wins)
-- Clause separators: `+` (OR), `-` (exclusive OR)
+- Clause separators: `+` and `-` both start a new clause; the first
+  clause whose conditions match applies its updates and the rest are
+  skipped (if-then-else)
 
 **Examples:**
 ```bash
@@ -809,10 +800,11 @@ ssql update -set-expr total 'price * qty' -set-expr tax 'total * 0.08'
 # Conditional with expression
 ssql update -if dept eq Sales -set-expr commission 'revenue * 0.05'
 
-# If-else logic with clauses
+# If-else logic with clauses (a literal value is -set; -set-expr would
+# read `minor` as a field name)
 ssql update \
-  -if age lt 18 -set-expr category 'minor' + \
-  -if age ge 18 -set-expr category 'adult'
+  -if age lt 18 -set category minor + \
+  -if age ge 18 -set category adult
 ```
 
 ### where command
@@ -821,9 +813,9 @@ ssql update \
 
 **Features:**
 - Expression must return boolean value
-- Combine with `-if` conditions using OR logic
-- Multiple `-expr` within clause use AND logic
-- Clause separators: `+` (OR)
+- Combine with `-if` conditions; everything in one clause must hold (AND)
+- Multiple `-if-expr` within a clause use AND logic
+- Clause separators: `+` (OR between clauses)
 
 **Examples:**
 ```bash
@@ -831,13 +823,13 @@ ssql update \
 ssql where -if-expr 'price * qty > 1000'
 
 # Multiple expressions (AND within clause)
-ssql where -if-expr 'age >= 18' -expr 'status == "active"'
+ssql where -if-expr 'age >= 18' -if-expr 'status == "active"'
 
 # Multiple clauses (OR between clauses)
-ssql where -if-expr 'dept == "Sales"' + -expr 'dept == "Marketing"'
+ssql where -if-expr 'dept == "Sales"' + -if-expr 'dept == "Marketing"'
 
 # Combine with -if
-ssql where -if verified eq true -expr 'age >= 18'
+ssql where -if verified eq true -if-expr 'age >= 18'
 ```
 
 ## Error Handling
@@ -852,20 +844,26 @@ $ ssql where -if-expr 'age >'
 Error: compiling expression "age >": unexpected end of expression
 ```
 
-**Runtime Errors:**
-- Logged to stderr, processing continues
-- Failed expressions result in default/empty values
-- Record marked with empty field value
+**Runtime Errors** stop the pipeline. An expression that cannot be
+evaluated for a record — a conversion that fails, a field the record does
+not have — is an error, never a default or an empty value, in the CLI and
+in generated programs alike:
+
+```bash
+$ ssql from employees.csv | ssql update -set-expr x 'int("abc")'
+Error: evaluating expression for field "x": execute expression: invalid operation: int(abc) (1:1)
+$ ssql from employees.csv | ssql update -set-expr x 'nosuch + 1'
+Error: evaluating expression for field "x": expression references unknown field(s): nosuch
+```
 
 **Type Errors:**
-- `where -expr` requires boolean result (enforced at compile-time)
-- Type mismatches in operations logged at runtime
+- `where -if-expr` must produce a boolean; anything else is refused
+  before the first record: `Expression must return boolean, got int64`
 
 **Best Practices:**
-1. ✅ Test expressions on small datasets first
-2. ✅ Use `has()` and `getOr()` for optional fields
-3. ✅ Check error output with `2>&1 | grep Error`
-4. ✅ Use `jq` to inspect intermediate results
+1. ✅ Test expressions on a sample first (`ssql from csv data.csv -sample 1000`)
+2. ✅ Use `has()` and `getOr()` for fields that are genuinely optional
+3. ✅ Inspect intermediate results with `ssql limit 5 | ssql to table` or `ssql describe`
 
 ## Further Reading
 
@@ -879,13 +877,10 @@ Error: compiling expression "age >": unexpected end of expression
 - API Reference: [doc/api-reference.md](api-reference.md)
 - Troubleshooting: [doc/cli-troubleshooting.md](cli-troubleshooting.md)
 
-**Implementation Details:**
-- Expression Integration: [doc/research/expr-integration.md](research/expr-integration.md)
-- Implementation Plan: [doc/research/expr-implementation-plan.md](research/expr-implementation-plan.md)
-- Design Decisions: [doc/research/expression-evaluation-design.md](research/expression-evaluation-design.md)
+**Design notes:** [how expressions become native Go](research/expr-transpiler-paper.md), with the measurements behind the numbers above.
 
 ---
 
 **Ready to use expressions?** Start with simple examples and build up to complex pipelines. Use `ssql update -help` and `ssql where -help` for quick reference.
 
-*Powered by [expr-lang](https://expr-lang.org/) - Fast, safe, and expressive* ✨
+*Powered by [expr-lang](https://expr-lang.org/).*

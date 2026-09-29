@@ -9,7 +9,7 @@ the data. Start it in the data's directory; the only setup is an
 
 ```bash
 cp ~/.ssh/id_ed25519.pub ./ssql_serve_authorized_keys
-ssql serve shuffled.csv -listen 127.0.0.1:2222      # :2222 to accept non-loopback
+ssql serve employees.csv -listen 127.0.0.1:2222      # :2222 to accept non-loopback
 ```
 
 It generates `./ssql_serve_host_key` on first run and prints how many
@@ -43,4 +43,5 @@ server-side paths). `-session-dir DIR` keeps per-user history and
 `:set vi/emacs` across sessions; `-welcome` sets the banner.
 
 The same process can also serve the browser workspace
-(`-listen-http 127.0.0.1:8080 -dir DIR`) — see the serve section.
+(`-listen-http 127.0.0.1:8080 -dir DIR`) — see
+[section 4 of the codelab](cli-codelab.md#4-save-and-share).

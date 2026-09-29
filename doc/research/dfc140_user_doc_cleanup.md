@@ -628,6 +628,12 @@ Ordered so each batch is one reviewable commit and the gates stay green
 throughout (`make doc-check`, `make doc-test`, `go test ./cmd/ssql -run
 'Codelab|Doc'`).
 
+**Status (2026-09-29):** Ross decided the §7 points (1 remove-and-merge,
+2 new research doc, 3 `claude/doc-validation.md`, 4 strip, 5 yes but
+deferred to batch 5 because a signature-line check would flag 69 root +
+34 typed exports today, 6 `scripts/testdata/`). Batches 1 and 2 are
+done (commits on main the same day); 3-6 remain.
+
 1. **Removes and moves** (§3.5 AI family, VALIDATION, cli-debugging
    merge into troubleshooting), with the script edits in §5, the
    `.gitignore` entries, and `doc/README.md` restructured (§3.1). One

@@ -4,9 +4,8 @@
 
 Work in a fresh module (`mkdir intro && cd intro && go mod init intro &&
 go get github.com/rosscartlidge/ssql/v4@latest`); every program below is a
-complete file you can `go run`, and every one of them *is* run, against
-the current source, by `scripts/codelab-go-run.sh doc/codelab-intro.md`
-(DFC125) — so what you read is what happens.
+complete file you can `go run`, and every one of them is run against the
+current source before a release — so what you read is what happens.
 
 ## Table of Contents
 
@@ -76,7 +75,7 @@ func main() {
         panic(err)
     }
 
-    fmt.Println("📊 Interactive chart created: sales_chart.html")
+    fmt.Println("Interactive chart created: sales_chart.html")
     fmt.Println("Open it in your browser and try:")
     fmt.Println("  • Switching between chart types")
     fmt.Println("  • Changing X/Y fields")
@@ -87,7 +86,7 @@ func main() {
 
 Run it with `go run demo.go` and open `sales_chart.html` in your browser. You just created an interactive, responsive chart with field selection, multiple chart types, and export capabilities!
 
-> 💡 **Next Step**: Check the [Chart & Visualization](api-reference.md#chart--visualization) section in the API reference for more chart options.
+> **Next Step**: Check the [Chart & Visualization](api-reference.md#chart--visualization) section in the API reference for more chart options.
 
 ---
 
@@ -110,7 +109,7 @@ Think of it as the Unix pipeline philosophy applied to structured data, with bui
 3. **Functional Operations**: Composable functions like `Select`, `Where`, `GroupBy`
 4. **Interactive Visualization**: Built-in charting with zero configuration
 
-> 📚 **Deep Dive**: See [Core Types](api-reference.md#core-types) for detailed type information.
+> **Deep Dive**: See [Core Types](api-reference.md#core-types) for detailed type information.
 
 ---
 
@@ -154,7 +153,7 @@ func main() {
 
 This demonstrates the functional composition approach. Each operation returns a new iterator that can be chained together.
 
-> 📚 **Learn More**: Explore [Transform Operations](api-reference.md#transform-operations) and [Filter Operations](api-reference.md#filter-operations) in the API reference.
+> **Learn More**: Explore [Transform Operations](api-reference.md#transform-operations) and [Filter Operations](api-reference.md#filter-operations) in the API reference.
 
 ---
 
@@ -269,7 +268,7 @@ withTotals := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 })(orders)
 ```
 
-> 📚 **Reference**: See [Helper Functions](api-reference.md#helper-functions) for Record access utilities.
+> **Reference**: See [Helper Functions](api-reference.md#helper-functions) for Record access utilities.
 
 ---
 
@@ -344,7 +343,7 @@ if err != nil {
 }
 ```
 
-> 📚 **Reference**: See [I/O Operations](api-reference.md#io-operations) for all supported formats.
+> **Reference**: See [I/O Operations](api-reference.md#io-operations) for all supported formats.
 
 ---
 
@@ -409,7 +408,7 @@ func main() {
 }
 ```
 
-> 💡 **Pro Tip**: For real log files, the CLI's `from lines` + `extract` (see the [CLI Codelab](cli-codelab.md)) does this parsing with a named-group regex, and `generate go` shows you the Go.
+> **Pro Tip**: For real log files, the CLI's `from lines` + `extract` (see the [CLI Codelab](cli-codelab.md)) does this parsing with a named-group regex, and `generate go` shows you the Go.
 
 ---
 
@@ -463,7 +462,7 @@ for window := range windows {
 // Results: [[2, 4, 6], [8, 10]]
 ```
 
-> 📚 **Learn More**: The next three sections compose these into group-bys, joins, windows, and endless streams.
+> **Learn More**: The next three sections compose these into group-bys, joins, windows, and endless streams.
 
 ---
 
@@ -536,7 +535,7 @@ side's fields are simply absent); `OnCondition(func(l, r Record) bool)`
 joins on any predicate. Aggregations: `Count`, `Sum`, `Avg`, `Min[T]`,
 `Max[T]`, `Collect` (the group's values as a list).
 
-> 📚 **Reference**: [Join Operations](api-reference.md#join-operations) and [Aggregation](api-reference.md#aggregation-operations).
+> **Reference**: [Join Operations](api-reference.md#join-operations) and [Aggregation](api-reference.md#aggregation--analysis).
 
 ---
 
@@ -608,7 +607,7 @@ Windows hold only one window's records in memory at a time, so they work
 on streams of any length — including the endless ones below. The CLI's
 `window` and `resample` commands are built on them.
 
-> 📚 **Reference**: [Window Operations](api-reference.md#window-operations).
+> **Reference**: [Window Operations](api-reference.md#batch-window-operations).
 
 ---
 
@@ -673,7 +672,7 @@ all compose onto an infinite source; only the terminal loop decides how
 much of it is ever produced. Combine `Timeout` with `CountWindow` for
 "summarise every N readings until the shift ends".
 
-> 📚 **Reference**: [Stream Control](api-reference.md#stream-control) — `Limit`, `Skip`, `TakeWhile`, `Timeout`, `Tee`.
+> **Reference**: [Stream Control](api-reference.md#limiting--pagination) — `Limit`, `Skip`, `TakeWhile`, `Timeout`, `Tee`.
 
 ---
 
@@ -732,7 +731,7 @@ func main() {
     // For time series, you would use:
     // ssql.TimeSeriesChart(data, "date", []string{"sales", "units"}, "trends.html", config2)
 
-    fmt.Println("📊 Charts created:")
+    fmt.Println("Charts created:")
     fmt.Println("  • sales_dashboard.html - Interactive bar chart")
     fmt.Println("\nFeatures to try:")
     fmt.Println("  • Switch between bar, line, scatter, pie charts")
@@ -756,118 +755,84 @@ config.EnableZoom = true
 config.ColorScheme = "vibrant"   // "vibrant", "pastel", "monochrome"
 ```
 
-> 📚 **Reference**: See [Chart & Visualization](api-reference.md#chart--visualization) for all chart options.
+> **Reference**: See [Chart & Visualization](api-reference.md#chart--visualization) for all chart options.
 
 ---
 
 ## Error Handling
 
-ssql provides both safe and unsafe versions of operations:
+Every operation has a plain form and a `*Safe` form. The plain form
+(`Select`, `Where`, `ReadCSV`) yields values and stops at the first
+problem; the `*Safe` form yields `(value, error)` pairs so you can decide
+per row. Readers never coerce bad data quietly: a CSV cell that does not
+parse as its column's type is an error naming the row, the column and
+the value.
 
-### Unsafe (Fast, Fail-Fast)
 ```go
-// Panics on error - good for development and trusted data
-result := ssql.Select(func(x string) int {
-    // This might panic if x is not a valid number
-    return mustParseInt(x)
-})(data)
-```
+package main
 
-### Safe (Error Handling)
-```go
-// Returns errors - good for production and untrusted data
-safeResult := ssql.SelectSafe(func(x string) (int, error) {
-    return strconv.Atoi(x)
-})(dataWithErrors)
+import (
+	"errors"
+	"fmt"
+	"os"
 
-for value, err := range safeResult {
-    if err != nil {
-        log.Printf("Error processing value: %v", err)
-        continue
-    }
-    // Process valid value
-    fmt.Printf("Parsed: %d\n", value)
+	"github.com/rosscartlidge/ssql/v4"
+)
+
+func main() {
+	csv := "name,age\nAlice,30\nBob,thirty\nCarol,41\n"
+	if err := os.WriteFile("people.csv", []byte(csv), 0o644); err != nil {
+		panic(err)
+	}
+
+	// Force the column type so the bad cell is an error rather than
+	// turning the whole column into text (the sample would otherwise see it).
+	cfg := ssql.DefaultCSVConfig()
+	cfg.TypeOverrides = map[string]ssql.FieldType{"age": ssql.FieldTypeInt}
+
+	good := 0
+	for r, err := range ssql.ReadCSVSafe("people.csv", cfg) {
+		if err != nil {
+			var cell *ssql.CellError
+			if errors.As(err, &cell) {
+				fmt.Printf("row %d: column %q has %q, not %s\n", cell.Row, cell.Column, cell.Value, cell.Type)
+				continue // skip the row, keep reading
+			}
+			fmt.Println("read failed:", err) // the file itself: missing, malformed
+			return
+		}
+		good++
+		fmt.Println(ssql.GetOr(r, "name", ""), ssql.GetOr(r, "age", int64(0)))
+	}
+	fmt.Println(good, "good rows")
 }
 ```
 
-### I/O Error Handling
-```go
-// ReadCSV returns error - always check it
-data, err := ssql.ReadCSV("data.csv")
-if err != nil {
-    log.Fatalf("Failed to read CSV: %v", err)
-}
+Output:
 
-// WriteJSON returns error - handle it
-err = ssql.WriteJSON(processedData, "output.json")
-if err != nil {
-    log.Fatalf("Failed to write JSON: %v", err)
-}
+```
+Alice 30
+row 2: column "age" has "thirty", not int
+Carol 41
+2 good rows
 ```
 
-> 📚 **Reference**: [Error Handling](api-reference.md#error-handling) in the API reference lists every `*Safe` variant.
+The same shape applies downstream: `SelectSafe`, `WhereSafe` and
+`ReadJSONSafe` return `iter.Seq2[T, error]`, and `WriteCSV` /
+`WriteJSON` return an error you check once. Use the plain forms for
+trusted data and prototypes; use the `*Safe` forms where one bad row
+must not stop the run.
+
+> **Reference**: [Error Handling](api-reference.md#error-handling) in the API reference lists every `*Safe` variant.
 
 ---
 
-## What's Next?
+## What's Next
 
-You've learned the fundamentals! Here's your learning path:
+- **[Typed Codelab](typed-codelab.md)** — the same pipelines on your own structs, parallel by default, for the pipelines that must be fast
+- **[API Reference](api-reference.md)** — every function; `GroupByFields`, `Aggregate`, `InnerJoin`, the windows and the `*Safe` variants are all there
+- **[Signal Processing](cli-signal-processing.md)** — `resample`, `fft`, `convolve` over the time series you built windows on
+- **Examples** — the `examples/` directory of the repository has complete programs
 
-### Immediate Next Steps
-1. **Try the examples** in this guide with your own data
-2. **Explore the [API Reference](api-reference.md)** for all available functions
-3. **Do the [Typed Codelab](typed-codelab.md)** — the struct-based API for the pipelines that must be fast
-
-### Where the rest lives
-
-- **Group by, aggregate, join** — [above](#sql-style-operations-group-by-and-join), and `GroupByFields`/`Aggregate`/`InnerJoin` in the [API Reference](api-reference.md)
-- **Windows and time series** — [above](#windows-batches-and-time-buckets); `resample`, `fft`, `convolve` in the [Signal Processing](cli-signal-processing.md) guide
-- **Infinite streams** — [above](#infinite-streams)
-- **Speed** — the [Typed Codelab](typed-codelab.md): the same pipelines on your own structs, parallel by default
-
-### Production Considerations
-- **Performance optimization** with lazy evaluation
-- **Memory management** for large datasets
-- **Error recovery** strategies
-- **Monitoring and observability**
-
-> 📚 **Next Read**: the [Typed Codelab](typed-codelab.md) — 15× faster, 34× less memory, same pipeline shape.
-
----
-
-## Try It Yourself
-
-### Exercise 1: Data Analysis Pipeline
-Create a CSV file with some data and build a complete analysis pipeline:
-
-1. Read CSV data
-2. Filter and transform records
-3. Group by categories
-4. Calculate aggregations
-5. Create an interactive chart
-
-### Exercise 2: Log Processing
-Process log files or command output:
-
-1. Parse text into structured records
-2. Filter by log level or patterns
-3. Count occurrences by category
-4. Visualize trends over time
-
-### Exercise 3: API Data Processing
-Fetch data from a REST API and visualize it:
-
-1. Fetch JSON from HTTP endpoint
-2. Transform and clean the data
-3. Combine with local data sources
-4. Create dashboard with multiple charts
-
-### Need Help?
-
-- **[API Reference](api-reference.md)** - Complete function documentation
-- **[Typed Codelab](typed-codelab.md)** - The high-performance struct-based API
-- **Examples** - Check the `examples/` directory for working code
-
----
-
-*Ready for speed? Head to the [Typed Codelab](typed-codelab.md).*
+Then point it at your own data: read a CSV, filter and transform,
+group and aggregate, chart the result.

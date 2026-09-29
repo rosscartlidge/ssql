@@ -88,13 +88,11 @@ West,Gadget,3100`
 
 </details>
 
-**Or use the CLI:**
-
 ## Core capabilities
 
 ### SQL-Style Data Processing
 
-**Quick view:
+**Quick view:**
 ```go
 // Group sales by region, calculate totals, get top 5
 topRegions := ssql.Chain(
@@ -158,7 +156,7 @@ func main() {
 
 ### Real-Time Stream Processing
 
-**Quick view:
+**Quick view:**
 ```go
 // Process sensor data in 5-minute windows
 windowed := ssql.TimeWindow[ssql.Record](5*time.Minute, "timestamp")(sensorStream)
@@ -212,7 +210,7 @@ func main() {
 
 ### Interactive Dashboards
 
-**Quick view:
+**Quick view:**
 ```go
 config := ssql.DefaultChartConfig()
 config.Title = "Sales Dashboard"
@@ -265,7 +263,7 @@ func main() {
 
 ### Signal Processing
 
-**Quick view:
+**Quick view:**
 ```go
 // FFT analysis, filtering, and reconstruction
 spectrum, _ := ssql.FFTWithPhase(signal)
@@ -321,7 +319,7 @@ func main() {
 
 </details>
 
-**CLI Usage:
+**CLI Usage:**
 ```bash
 # FFT analysis
 ssql from audio.csv | ssql fft -field amplitude -rate 44100 | ssql to table
@@ -332,25 +330,23 @@ ssql from spectrum.csv | ssql ifft -magnitude mag -phase phase | ssql to csv fil
 # Smoothing with convolution
 ssql from sensor.csv | ssql convolve -field reading -kernel gaussian -size 11 -same
 
-# Cross-correlation to find patterns
-ssql from signal.csv | ssql correlate -field reading -with template.csv
+# Cross-correlation of two fields of the same records
+ssql from signal.csv | ssql correlate -field reading -with template
 ```
 
-**Features:
+**Features:**
 - **FFT/IFFT** - Forward and inverse FFT for frequency analysis and signal reconstruction
 - **Convolution** - Signal filtering with built-in kernels (avg, gaussian, diff, laplacian, sobel)
 - **Correlation** - Cross-correlation and autocorrelation for pattern matching
 - **Pipeline Integration** - Works with ssql's record-based pipelines
 - **Works everywhere** - CPU implementations included, no special setup required
 
-**GPU Acceleration (optional):
-Signal processing works out of the box using CPU. For large datasets, optional CUDA GPU acceleration provides 10-100x speedup. See [GPU installation instructions](install.md#option-5-gpu-acceleration-optional) for setup via Docker (recommended) or local CUDA toolkit.
-
-GPU is used automatically when available for FFT >= 1024 points or convolution kernels >= 64 points.
+**GPU Acceleration (optional):**
+Signal processing works out of the box on the CPU. An optional CUDA build accelerates FFT, convolution and correlation on large signals; see [GPU installation](install.md#option-5-gpu-acceleration-optional) for the Docker or local-toolkit build. The GPU build uses the GPU automatically for FFTs of 16 K samples or more and convolution kernels of 16 points or more; smaller inputs stay on the CPU, where they are faster.
 
 ### Data Integration
 
-**Quick view:
+**Quick view:**
 ```go
 // Join customer and order data
 customerOrders := ssql.InnerJoin(
@@ -405,51 +401,14 @@ func main() {
 
 ### Distributed Processing
 
-**Quick view:
-```bash
-# Read a remote file via SSH with push-down filtering
-ssql from ssh myserver /data/events.csv -- where -if status eq error | ssql to table
-
-# Read multiple shards from a catalog CSV with partition pruning
-ssql from catalog shards.csv -if date ge 2025-03-01 | ssql group-by service -count n
-```
-
-<details>
-<summary>Click for more examples</summary>
-
-```bash
-# Multi-step push-down: filter and aggregate on each remote shard
-ssql from ssh myserver /data/events.csv \
-  -- where -if status ge 400 + group-by service -count cnt | \
-  ssql to table
-
-# Catalog with range pruning and two-level aggregation
-ssql from catalog shards.csv -if date ge 2025-02-01 \
-  -- where -if status ge 400 + group-by service -count cnt | \
-  ssql group-by service -sum cnt total_errors | \
-  ssql to table
-
-# Add provenance to track which shard each record came from
-ssql from catalog shards.csv -shard-field _shard | ssql to table
-
-# Use ssql_gpu on remote hosts
-ssql from ssh myserver /data/events.csv -gpu | ssql to table
-```
-
-**Features:
-- **`from ssh`** - Read remote files via SSH, push-down filters to reduce transfer
-- **`from catalog`** - Read multiple shards from a catalog CSV mapping hosts to file paths
-- **Partition pruning** - Skip irrelevant shards using range (`X_from`/`X_to`) or exact-value metadata
-- **Push-down** - Send filter and aggregation stages to remote hosts with `--` separator
-- **Local shards** - Catalog entries with `host=local` or `host=localhost` are read directly
-- **Code generation** - `from ssh` supports `-generate` / `SSQL_MODE=record`
-- **Pipeline optimizer** - `generate ssql` automatically pushes filters into SSH/catalog, collapses sort+limit to top, prunes Parquet columns, and more (12 optimization rules)
-
-</details>
+This is CLI territory rather than library API: `from ssh` reads a remote
+file with the filters pushed to the host, `from catalog` fans one pipeline
+out across shards, and `generate ssql` pushes stages into them. Section 8
+of the [CLI Codelab](cli-codelab.md#8-distributed-data) covers it.
 
 ### Expression Support
 
-**Quick view:
+**Quick view:**
 ```bash
 # Calculate derived fields with expressions
 ssql update -set-expr total 'price * qty'
@@ -459,113 +418,15 @@ ssql update -set-expr tier 'revenue > 10000 ? "gold" : "silver"'
 ssql where -if-expr 'age >= 18 and status == "active"'
 ```
 
-<details>
-<summary>📋 <b>Click for complete, runnable code and features</b></summary>
-
-ssql supports powerful expression evaluation for computed fields and complex filters using the [expr-lang](https://expr-lang.org/) library.
-
-**CLI Examples:
-```bash
-# Calculated fields
-echo 'name,price,qty
-Widget,10.50,3
-Gadget,25.00,2' | ssql from | \
-  ssql update -set-expr total 'price * qty' | \
-  ssql update -set-expr discount 'total > 50 ? total * 0.1 : 0'
-
-# Complex filtering
-echo 'name,age,email,status
-Alice,30,alice@example.com,active
-Bob,17,bob@example.com,pending
-Carol,25,carol@example.com,active' | ssql from | \
-  ssql where -if-expr 'age >= 18 and status == "active" and has("email")'
-
-# String manipulation
-echo 'email
-  ALICE@EXAMPLE.COM
-bob@test.com' | ssql from | \
-  ssql update -set-expr email 'lower(trim(email))'
-```
-
-**Library Examples:
-```go
-package main
-
-import (
-    "fmt"
-    "log"
-    "github.com/rosscartlidge/ssql/v4"
-    "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
-)
-
-func main() {
-    // Read sales data
-    sales, err := ssql.ReadCSV("sales.csv")
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Compile expression once
-    calcTotal := runtime.MustCompileExpr("price * qty")
-
-    // Apply to all records
-    updated := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
-        frozen := mut.Freeze()
-        result, _ := calcTotal(frozen)
-        if total, ok := result.(float64); ok {
-            return mut.Float("total", total)
-        }
-        return mut
-    })(sales)
-
-    // Process results
-    for record := range updated {
-        total := ssql.GetOr(record, "total", 0.0)
-        fmt.Printf("Total: $%.2f\n", total)
-    }
-}
-```
-
-**Features:
-- **30+ built-in functions** - Math (round, abs, min, max), string (upper, lower, trim, split), array (filter, map, sum), and type conversion
-- **All operators** - Arithmetic (`+`, `-`, `*`, `/`, `%`, `**`), comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`), logical (`and`, `or`, `not`)
-- **Advanced syntax** - Ternary operator (`? :`), nil coalescing (`??`), membership (`in`), pipe (`|`)
-- **Helper functions** - `has(field)` check existence, `getOr(field, default)` safe access with defaults
-- **High performance** - Compile once (~100µs), evaluate many (~1-2µs per record)
-- **Type safety** - Boolean expressions type-checked at compile time
-- **Code generation** - Expressions pre-compiled in generated Go programs
-
-**Use Cases:
-- **Data validation** - `where -if-expr 'age >= 0 and age <= 120 and has("email")'`
-- **Data cleaning** - `update -set-expr email 'lower(trim(email))'`
-- **Calculations** - `update -set-expr total 'round(price * qty * (1 - discount / 100))'`
-- **Categorization** - `update -set-expr tier 'revenue > 10000 ? "gold" : "silver"'`
-- **Complex filters** - `where -expr '(age >= 18 and status == "active") or role == "admin"'`
-
-**Performance:
-```bash
-# CLI execution (~1ms overhead for 1M records)
-ssql from huge.csv | ssql where -if-expr 'price * qty > 1000'
-
-# Code generation: expressions transpile to native Go (v4.57.0+) —
-# ~3ns/row with zero allocations instead of ~1.3µs of interpreted VM,
-# and a measured 19x end-to-end on a 5M-row filter+aggregate pipeline
-# (use -explain to see the chosen tier per expression)
-export SSQL_MODE=parallel
-ssql from huge.csv | \
-  ssql where -if-expr 'price * qty > 1000' | \
-  ssql update -set-expr total 'price * qty' | \
-  ssql generate go > optimized.go
-go run optimized.go
-```
-
-**Full documentation:** [Expression Language Reference](EXPRESSIONS.md)
-
-</details>
+Expressions are a CLI feature: the language, its functions and its
+error behaviour are in the [Expression Language](EXPRESSIONS.md)
+reference. In a Go program you write the expression as Go; `generate go`
+does exactly that for a pipeline, compiling each expression to native
+code.
 
 ## Try the examples
 
-Run these to see ssql in action:
+Run these from a clone of the repository to see ssql in action:
 
 ```bash
 # Interactive chart showcase

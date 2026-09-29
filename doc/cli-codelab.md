@@ -63,8 +63,8 @@ go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest
 Debian 12's `golang-go` is Go 1.19, also too old: download Go from
 <https://go.dev/dl/>. On macOS use `brew install go`; elsewhere download
 Go from <https://go.dev/dl/>. Prefer not to install Go at all? On
-Debian or Ubuntu there is a `.deb` (see the README's Installation
-section), and the
+Debian or Ubuntu there is a `.deb` (see
+[Installing ssql](install.md#option-6-debian-packages)), and the
 [releases page](https://github.com/rosscartlidge/ssql/releases/latest)
 has a prebuilt `ssql` for Linux, macOS and Windows — unpack it and put
 the binary somewhere on your PATH. Everything in this tutorial works
@@ -114,7 +114,7 @@ and most Linux; if `echo $SHELL` says something else, run `bash` first):
 eval "$(ssql -shell-init)"
 ```
 
-What that line does: `ssql -shell-init` prints about 600 lines of plain
+What that line does: `ssql -shell-init` prints a few hundred lines of plain
 bash — the completion function, the key bindings, nothing else; no
 network, nothing written — and `eval` runs them in this shell. You can
 read it first with `ssql -shell-init | less`. If `ssql` is not found or
@@ -778,7 +778,8 @@ async fn main() -> Result<()> {
 
 The first `cargo build` compiles DataFusion itself (minutes, a large
 `target/`); after that the program starts in well under a second and
-runs the README's 14.6 M-row cube in about 0.2 s (DFC132 §3).
+runs the 14.6 M-row cube from [Performance, Measured](performance.md)
+in about 0.2 s.
 
 And ssql can rewrite your pipeline into a better one — merging filters,
 turning sort+limit into `top`, removing a sort that a later sort makes
@@ -793,8 +794,7 @@ shows the typed Go for the line you're editing and Alt-r compiles and
 runs it. Both act on the `ssql` stages only: a `| less` or `> out.txt`
 after them, or a `cat file |` before, stays part of your shell line and
 receives the compiled program's output exactly as it would the
-interpreted one. Alt-r compiles and
-runs it (both `-shell-init` keys):
+interpreted one:
 
 ```
 ssql from employees.csv | ssql where -if age gt 30 | ssql to table  <Alt-g>
@@ -969,7 +969,7 @@ Signals: `fft` · `ifft` · `convolve` · `correlate` · `spectrogram`.
 
 Sinks: `to table|csv|tsv|json|jsonl|parquet|arrow|xlsx|markdown|wav|chart|explore|animate` · `tee FILE`; no `to` = JSON Lines with a `_schema` header (section 2).
 
-Codegen & serving: `generate go|sql|ssql [-pipeline '…']` · `serve`.
+Codegen & serving: `generate go|sql|ssql|json|schema [-pipeline '…']` · `run` · `serve` · `codelab`.
 
 Every command answers `ssql CMD -help` and `ssql CMD -man`; expression
 functions are listed by `ssql functions`; `ssql conventions` explains

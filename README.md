@@ -91,5 +91,5 @@ Side paths: [The shell experience](doc/cli-shell.md) ·
 **[All documentation →](doc/README.md)** · **[Research and design docs →](doc/research/README.md)** · **[Changelog](CHANGELOG.md)**
 
 Questions, issues and contributions are welcome on
-[GitHub](https://github.com/rosscartlidge/ssql). ssql is Go 1.23+,
-pure Go, no CGO; `import "github.com/rosscartlidge/ssql/v4"`.
+[GitHub](https://github.com/rosscartlidge/ssql). ssql installs with Go 1.21+ (it fetches the toolchain it
+builds with), pure Go, no CGO; `import "github.com/rosscartlidge/ssql/v4"`.

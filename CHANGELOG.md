@@ -28,6 +28,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused with the available columns, in exec and in schema mode.
 
 ### Changed
+- **User documentation cleanup, batches 1-2 of DFC140** (26 files
+  audited against v4.109.0). Removed from `doc/`: `cli-debugging.md`
+  (every jq recipe broken by the `_schema` header; its role is now the
+  "Quick Diagnostics" section of `cli-troubleshooting.md`, which uses
+  ssql itself — `describe`, `generate schema -data`, `count`, `tee`,
+  `generate json | run -check -stdin`), the script-generated
+  `ai-test-results.md` / `ai-fix-request.md` (now written under
+  `/tmp/ssql-ai-test-results/`), and the maintainer files
+  `AI-PROMPT-README.md` (folded into DFC042), `VALIDATION.md` (now
+  `claude/doc-validation.md`), `ai-test-cases.md` (now
+  `scripts/testdata/`), `ai-prompt-improvements.md` (archive).
+  `cli-troubleshooting.md` Issues 1-8 rewritten around the errors ssql
+  now raises (unknown fields, wrong-kind literals), `cast`, `-spill` and
+  `-not`; `EXPRESSIONS.md` corrected (`-if-expr`, not `-expr`; AND within
+  a clause; expression errors fail the pipeline); `library-tour.md`,
+  `performance.md`, `typed-codelab.md`, `codelab-intro.md`,
+  `install.md`, `cli-shell.md`, `cli-codelab-serve.md` and the doc index
+  fixed as DFC140 §2-§3 list. `cli-signal-processing.md`'s shell loops
+  no longer concatenate one `_schema` header per iteration (phantom
+  rows); `TestCodelabLoopHasOneSchema` pins the row count.
 - **The API references are complete again, and gated.** `doc/api-reference.md`
   and `doc/typed-reference.md` now mention every exported function and
   method (about 130 record-package and 23 typed exports had accumulated

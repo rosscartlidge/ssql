@@ -1,6 +1,7 @@
 # Codelab data
 
-The fixture files every example in `doc/cli-codelab.md` runs against —
+The fixture files every example in `doc/cli-codelab.md` runs against
+(`signal.csv` also serves `doc/cli-signal-processing.md`) —
 small enough to read, consistent enough that the whole tutorial works
 without ever leaving this directory. They are embedded in the `ssql`
 binary (`embed.go`): `ssql codelab [DIR]` writes them out, so a reader
@@ -20,8 +21,8 @@ restores them after editing.
 | `signal.csv` | 5 Hz + 20 Hz at 100 samples/s | fft, spectrogram |
 
 `codelab-run.sh` (here, and written out with the data) executes every
-bash block of the tutorial in a directory that `ssql codelab` writes
-(DFC125). In the repository it builds ssql from the checkout; beside
+bash block of the tutorial in a directory that `ssql codelab` writes.
+In the repository it builds ssql from the checkout; beside
 your own copy of the data it uses the `ssql` on your PATH and fetches
 the codelab for that version — a self-test of your install. If you
 change a fixture, the runner tells you which example broke.

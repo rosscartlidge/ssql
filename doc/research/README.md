@@ -50,7 +50,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC040 | 2026-01-19 | 2026-03-12 | [What We Learned: GPU Acceleration and Arrow Integration](./gpu-arrow-learnings.md) |
 | DFC041 | 2026-01-25 | 2026-03-20 | [GPU Feature Opportunities](./gpu-feature-opportunities.md) |
 | DFC042 | 2026-01-28 | 2026-09-29 | [AI Prompt Engineering System for ssql](./ai-prompt-system.md) |
-| DFC043 | 2026-01-29 | 2026-04-22 | [LLM-Guided API Design: A Case Study in Iterative Prompt Engineering for Code Generation](./llm-guided-api-design.md) |
+| DFC043 | 2026-01-29 | 2026-09-29 | [LLM-Guided API Design: A Case Study in Iterative Prompt Engineering for Code Generation](./llm-guided-api-design.md) |
 | DFC044 | 2026-02-09 | 2026-03-12 | [Interactive Visualization Research](./interactive-visualization.md) |
 | DFC045 | 2026-02-13 | 2026-03-20 | [Distributed Processing via SSH](./distributed-ssh-processing.md) |
 | DFC046 | 2026-02-15 | 2026-02-15 | [Italy Sprint: v4.11.0 to v4.16.0](./italy-sprint-v4.11-v4.16.md) |
@@ -132,7 +132,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC122 | 2026-08-31 | 2026-09-03 | [Capability-Gap Survey: What Peer Tools Have That ssql Doesn't](./dfc122_capability_gap_survey.md) |
 | DFC123 | 2026-09-03 | 2026-09-03 | [The Pipeline IR: Finishing the Intermediate Representation We Already Have](./dfc123_pipeline_ir.md) |
 | DFC124 | 2026-09-03 | 2026-09-07 | [Missing Values Across the Lanes: An Empty Cell Is Absent](./dfc124_missing_values.md) |
-| DFC125 | 2026-09-04 | 2026-09-07 | [The Codelab as a Guided Path: Confidence Before Sophistication](./dfc125_codelab_guided_path.md) |
+| DFC125 | 2026-09-04 | 2026-09-29 | [The Codelab as a Guided Path: Confidence Before Sophistication](./dfc125_codelab_guided_path.md) |
 | DFC126 | 2026-09-08 | 2026-09-10 | [The Codelab From Scratch in a Mint Container](./dfc126_codelab_from_scratch_in_a_mint_container.md) |
 | DFC127 | 2026-09-12 | 2026-09-14 | [A Terminal UI for ssql? (Bubble Tea)](./dfc127_terminal_ui_bubbletea.md) |
 | DFC128 | 2026-09-14 | 2026-09-20 | [JSON Interchange with DuckDB and Postgres, and the Time Type Question](./dfc128_json_interchange_and_time_type.md) |

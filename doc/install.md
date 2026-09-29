@@ -4,6 +4,25 @@ Every way to get `ssql` onto a machine, from Homebrew to the GPU build, plus the
 
 [Back to Documentation](README.md)
 
+## Try it without installing
+
+The full CLI runs in your browser via WebAssembly:
+
+**[Launch Playground →](https://rosscartlidge.github.io/ssql/playground.html)** *(instant — optimized WASM, ~13MB)*
+
+**[Launch Full Terminal →](https://rosscartlidge.github.io/ssql-terminal/)** *(real Linux with bash, tab completion, pipes — boots in ~20s)*
+
+Features:
+- Type real ssql pipelines and see results instantly
+- **Optimize** — see the pipeline optimizer rewrite your commands with `-explain`
+- **Generate Go** — compile pipelines to standalone Go code
+- **Generate SQL** — convert to DuckDB-compatible SQL
+- **Process substitution** — `<(ssql from ... | ssql where ...)` works in joins
+- Sample datasets included (employees, orders, customers)
+- Upload your own CSV files
+
+> **Note:** SSH and catalog commands require network access and are not available in the browser. Use Optimize or Generate Go to see how those pipelines would be rewritten.
+
 ## Prerequisites
 - **Go 1.21+** to run `go install` — it downloads the Go 1.26 toolchain
   ssql builds with automatically (about a minute, once). Older Go cannot
@@ -97,7 +116,7 @@ download). `wasmtime compile ssql.wasm` precompiles it to near-native speed.
 
 ### Option 5: GPU Acceleration (optional)
 
-For 10-50x faster FFT, convolution, and correlation on large signals:
+For GPU-accelerated FFT, convolution and correlation on large signals (16 K samples and up; smaller inputs stay on the CPU, where they are faster):
 
 **Requirements:**
 - NVIDIA GPU with CUDA support
@@ -181,7 +200,7 @@ go mod init myproject  # Initialize Go module (required!)
 go get github.com/rosscartlidge/ssql/v4
 ```
 
-## Hello ssql (Go library)
+**Step 3: Check it builds** — a complete program; the [Getting Started Guide](codelab-intro.md) takes it from here
 ```go
 package main
 
@@ -206,54 +225,3 @@ func main() {
     }
 }
 ```
-
-## Your first chart (Go library)
-```go
-package main
-
-import (
-    "slices"
-    "github.com/rosscartlidge/ssql/v4"
-)
-
-func main() {
-    // Create sample data
-    monthlyRevenue := []ssql.Record{
-        ssql.MakeMutableRecord().String("month", "Jan").Float("revenue", 120000).Freeze(),
-        ssql.MakeMutableRecord().String("month", "Feb").Float("revenue", 135000).Freeze(),
-        ssql.MakeMutableRecord().String("month", "Mar").Float("revenue", 118000).Freeze(),
-    }
-
-    data := slices.Values(monthlyRevenue)
-
-    // Generate interactive chart
-    ssql.QuickChart(data, "month", "revenue", "revenue_chart.html")
-    // Opens in browser with zoom, pan, and export features
-}
-```
-
-## Try it without installing: the browser playground
-
-Try ssql without installing anything — the full CLI runs in your browser via WebAssembly:
-
-**[Launch Playground →](https://rosscartlidge.github.io/ssql/playground.html)** *(instant — optimized WASM, ~13MB)*
-
-**[Launch Full Terminal →](https://rosscartlidge.github.io/ssql-terminal/)** *(real Linux with bash, tab completion, pipes — boots in ~20s)*
-
-Or build the playground locally:
-```bash
-make playground
-cd cmd/ssql-playground && python3 -m http.server 8080
-# Open http://localhost:8080/playground.html
-```
-
-Features:
-- Type real ssql pipelines and see results instantly
-- **Optimize** — see the pipeline optimizer rewrite your commands with `-explain`
-- **Generate Go** — compile pipelines to standalone Go code
-- **Generate SQL** — convert to DuckDB-compatible SQL
-- **Process substitution** — `<(ssql from ... | ssql where ...)` works in joins
-- Sample datasets included (employees, orders, customers)
-- Upload your own CSV files
-
-> **Note:** SSH and catalog commands require network access and are not available in the browser. Use Optimize or Generate Go to see how those pipelines would be rewritten.
