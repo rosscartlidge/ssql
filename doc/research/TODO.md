@@ -252,3 +252,10 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 ## Release Infrastructure
 
 - [x] **Regenerate the `GH_PAT` secret** (found 2026-07-03, v4.56.0 release): the goreleaser workflow's Homebrew-tap push failed with `401 Bad credentials` against `rosscartlidge/homebrew-ssql` — the PAT worked for v4.55.0 on 2026-07-01, so it expired/was revoked in between. The GitHub Release itself succeeded (14 assets); only the tap push uses `GH_PAT` (`.goreleaser.yml` line ~89). v4.56.0's cask was updated manually (homebrew-ssql commit 228e46a). Regenerated + secret updated 2026-07-03; will be exercised (and proven) by the next tagged release's automatic tap push.
+
+## User documentation cleanup (see dfc140_user_doc_cleanup.md)
+
+- [ ] **Execute DFC140** once Ross has reviewed it: 26 files audited 2026-09-29; 3 REMOVE (cli-debugging, ai-test-results, ai-fix-request), 4 MOVE (AI-PROMPT-README, ai-test-cases, ai-prompt-improvements, VALIDATION), 3 RESTRUCTURE (api-reference, typed-reference, doc/README), the rest FIX. Six ordered batches in DFC140 §6; script edits that must travel with each move in §5; open points for Ross in §7.
+- [ ] **`cli-signal-processing.md` loop blocks emit phantom rows** (DFC140 §2.1): `for … done | ssql to table` concatenates one `_schema` line per iteration and the runner's substring oracle does not see the empty row. Fix the three blocks and tighten that oracle to equality.
+- [ ] **Check 11 asserts a word, not a signature**: `scripts/api-coverage.sh` passes when an export's name appears anywhere (`Mode`, `SortRecords` have no signature line). Make it require `func Name`/`type Name` (DFC140 §7.5).
+- [ ] **`test-ai-prompts.sh` fix-request writer is malformed** (empty failure ID, empty prompt, `/tmp/…/.sh` path — see `doc/ai-fix-request.md` L19-30 before it is removed); and `scripts/test-ai-code-generation.sh` / `test-ai-generation.sh` depend on a `test-output/` dir that no longer exists (dead; delete with the DFC140 sweep).
