@@ -504,3 +504,79 @@ func generateFragmentSource(ctx *cf.Context, mode, label string) (io.Reader, err
 	}
 	return bytes.NewReader(fragments), nil
 }
+
+// checkPipelineFields validates a document's FIELD references before
+// anything runs (DFC138 §4), by asking the commands themselves: the
+// source stage runs under SSQL_MODE=schema and answers with its header
+// (names and, since v4.109, types); every following stage then runs in
+// ordinary exec mode on that header ALONE — no rows — so the command's
+// own validation refuses a field it reads that is not there ("field
+// "statuss" not found (available: …)") and its output header, with the
+// fields it creates, feeds the next stage. No table of which arguments
+// are reads and which create fields is needed: `update -set new 1` is
+// legal because update says so. Nested pipelines (a join's <(…)>) are
+// checked first, as sources of their own. The walk stops at a sink or
+// tee (they write files) and where a stage's header is not known (its
+// output is inferred from rows it did not get); syntax has already
+// been checked to the end by checkPipelineDoc.
+func checkPipelineFields(ctx context.Context, root *cf.Command, self string, stages []docStage, where string) error {
+	if len(stages) == 0 {
+		return nil
+	}
+	for i, st := range stages {
+		for j, a := range st {
+			if a.Nested != nil {
+				loc := fmt.Sprintf("%sstage %d (%s), argument %d: ", where, i+1, st.name(root), j+1)
+				if err := checkPipelineFields(ctx, root, self, a.Nested, loc); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	// Exec mode for the stages whatever the caller's environment says:
+	// an inherited SSQL_MODE=record would make them emit fragments.
+	env := []string{"SSQL_MODE=", "SSQLGO="}
+	var out, errb bytes.Buffer
+	if err := runPipelineDoc(ctx, root, self, stages[:1], nil, &out, &errb, "SSQL_MODE=schema", "SSQLGO="); err != nil {
+		return fmt.Errorf("%sstage 1 (%s): %s", where, stages[0].name(root), firstStderrLine(errb.Bytes(), err))
+	}
+	header := schemaHeaderLine(out.Bytes())
+	for i := 1; i < len(stages) && header != nil; i++ {
+		st := stages[i]
+		if first := st[0].Text; first == "to" || first == "tee" {
+			break
+		}
+		out.Reset()
+		errb.Reset()
+		if err := runPipelineDoc(ctx, root, self, stages[i:i+1], bytes.NewReader(header), &out, &errb, env...); err != nil {
+			return fmt.Errorf("%sstage %d (%s): %s", where, i+1, st.name(root), firstStderrLine(errb.Bytes(), err))
+		}
+		header = schemaHeaderLine(out.Bytes())
+	}
+	return nil
+}
+
+// schemaHeaderLine returns the `_schema` header line of a stage's output
+// (with its newline), or nil when the output carries none.
+func schemaHeaderLine(out []byte) []byte {
+	line := out
+	if i := bytes.IndexByte(out, '\n'); i >= 0 {
+		line = out[:i+1]
+	}
+	if !bytes.Contains(line, []byte(`"_schema"`)) {
+		return nil
+	}
+	return line
+}
+
+// firstStderrLine is a stage's own error message (its first stderr line
+// without the "Error: " prefix), or the exit error when it wrote none.
+func firstStderrLine(stderr []byte, err error) string {
+	for _, line := range strings.Split(strings.TrimSpace(string(stderr)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return strings.TrimPrefix(line, "Error: ")
+		}
+	}
+	return err.Error()
+}

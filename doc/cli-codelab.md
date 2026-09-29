@@ -902,8 +902,10 @@ than a likelihood:
 - **Values in flag slots, never in expression text.** `-if FIELD OP
   VALUE` and `-param NAME TYPE VALUE` are slots; `-if-expr` is source.
 - **Check before running.** Every stage is validated against the real
-  command grammar before any starts, so an invalid document fails whole,
-  with the stage named, and a sink at the end never runs:
+  command grammar, and then its field references are checked by running
+  each stage on its input's schema alone (no rows, no output file), so a
+  document that names a field no earlier stage produces fails whole, with
+  the stage named and the fields available there, before anything runs:
 
 ```bash
 ssql run -check /tmp/report.json && echo valid

@@ -222,6 +222,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Read JSONL from stdin (with schema if present)
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
+			// Field names checked against the header up front (as where);
+			// the first-record check below remains for headerless input.
+			if err := validateFieldsSchema(schemaAndRecords.Schema, readFields, "update"); err != nil {
+				return err
+			}
 
 			// Track schema from first record
 			var schemaFields map[string]any // field -> sample value (for type inference)

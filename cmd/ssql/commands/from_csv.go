@@ -231,6 +231,9 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 			return err
 		}
 		headers, in := peekDelimitedHeader(r, ',')
+		if err := checkTypeOverrideColumns(headers, typeOverrides, "from csv"); err != nil {
+			return err
+		}
 		return writeSchemaModeDelimited(os.Stdout, headers, ssql.ReadCSVFromReader(in, csvConfig))
 	}
 
@@ -276,6 +279,9 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 		records = ssql.ReadCSVFromReader(file, csvConfig)
 	}
 
+	if err := checkTypeOverrideColumns(csvHeaders, typeOverrides, "from csv"); err != nil {
+		return err
+	}
 	records = wrapWithFieldCaching(records, inputFile)
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: csvHeaders})
 }

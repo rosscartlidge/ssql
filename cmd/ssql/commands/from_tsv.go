@@ -224,6 +224,9 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 		if err != nil {
 			headers = strings.Split(line, string(delim))
 		}
+		if err := checkTypeOverrideColumns(headers, types.overrides, "from tsv"); err != nil {
+			return err
+		}
 		// hand the header line back so the reader sees the whole file
 		cfg := types.cfg
 		cfg.Delimiter = rune(delim)

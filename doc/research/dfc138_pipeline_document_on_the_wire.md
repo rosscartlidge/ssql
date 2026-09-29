@@ -2,7 +2,7 @@
 
 Reference: DFC138
 Created: 2026-09-28
-Last modified: 2026-09-28
+Last modified: 2026-09-29
 
 [Back to Index](./README.md)
 
@@ -184,6 +184,35 @@ cost is one extra ssh round trip, and it can be skipped with
 Serve gets it for free: `/api/check` with a document returns the
 first error with its stage, which the explorer can show inline.
 
+### 4a. Built (2026-09-29): the field check, as part of `-check`
+
+Ross: "lets build the field check now — part of -check" (settling §7.3:
+no separate flag). Built differently from the sketch above, and better:
+instead of a table of field slots from `-spec-json` folded through the
+schema rules, **the commands themselves are asked**. The source stage
+runs under `SSQL_MODE=schema` and answers its header (names and, since
+v4.109, types); every later stage runs in ordinary exec mode on that
+header ALONE, no rows, so the command's own validation refuses a field
+it reads that is not there, and the header it writes (with the fields it
+creates) feeds the next stage. No per-command knowledge, and no false
+positive on `update -set new 1`, which a field-slot table would have
+flagged because the slot completes from existing fields. Nested
+pipelines are checked first as sources of their own; the walk stops at
+`to`/`tee` (they write files) and where a stage's header is not known
+(one inferred from rows it did not get). Errors read
+`stage 3 (where): where references unknown field(s): amount (available:
+n, status)`, or `stage 2 (join), argument 2: stage 2 (where): …` inside
+a nested pipeline.
+
+It exposed that `where` and `update` validated field names against the
+FIRST RECORD, not the header, so on a header alone a typo passed; both
+now check the header up front (the first-record check stays for
+headerless input), which also means they fail before reading any row.
+Not covered yet: a sink's own field flags (`to chart -x`), and kind
+errors (`age gt abc`) which the commands raise per row. Pinned by
+`TestRunCheckFields`, including that `-check` writes no sink file and
+ignores an inherited `SSQL_MODE`.
+
 ## 5. What it takes
 
 - `run -mode` (a switch to the existing `generate go -json -run`),
@@ -238,11 +267,9 @@ Roughly two days; the ssh and catalog halves are one shape.
    `-mode`: the document is explicit about everything else, and an
    environment variable is one more thing that has to cross the wire.
 2. §3.4 no text fallback for old remotes. I lean loud refusal.
-3. §4 `-check-fields` as a separate flag or part of `-check`. I lean
-   part of `-check` (fields are syntax from the user's point of view)
-   with `-check-syntax` for the grammar-only form, since the field
-   check needs to read a header and may be slow on a remote object
-   store.
+3. §4 `-check-fields` as a separate flag or part of `-check`. **Decided
+   2026-09-29: part of `-check`** (§4a); a grammar-only form can be added
+   if a remote header read ever proves slow.
 4. §3.2 whether `from ssh` runs the remote check before every push, or
    only under `-check`. I lean before every push: the round trip is
    cheap next to reading a file, and an error before data moves is the

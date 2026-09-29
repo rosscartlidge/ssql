@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"slices"
 	"bufio"
 	"fmt"
 	"io"
@@ -714,4 +715,25 @@ func capitalizeFieldType(typeName string) string {
 		return "Auto"
 	}
 	return strings.ToUpper(ft.String()[:1]) + ft.String()[1:]
+}
+
+// checkTypeOverrideColumns refuses a -type override naming a column the
+// header does not have: a typo there used to be accepted silently (the
+// override simply never applied), which `run -check` inherited. headers
+// nil means the header could not be read; nothing is checked then.
+func checkTypeOverrideColumns(headers []string, overrides map[string]string, cmd string) error {
+	if headers == nil || len(overrides) == 0 {
+		return nil
+	}
+	var missing []string
+	for col := range overrides {
+		if !slices.Contains(headers, col) {
+			missing = append(missing, col)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	slices.Sort(missing)
+	return fmt.Errorf("%s: -type names column(s) not in the header: %s (available: %s)", cmd, strings.Join(missing, ", "), strings.Join(headers, ", "))
 }

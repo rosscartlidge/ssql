@@ -234,6 +234,13 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Read JSONL from stdin (with schema if present)
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
+			// With a schema header the field names are checked up front,
+			// before any row — so `run -check`, which feeds a stage its
+			// header alone, sees the typo; the first-record check below
+			// remains for headerless input.
+			if err := validateFieldsSchema(schemaAndRecords.Schema, allFilterFields, "where"); err != nil {
+				return err
+			}
 
 			// Apply filter
 			filtered := ssql.Where(filter)(records)

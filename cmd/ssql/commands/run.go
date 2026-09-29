@@ -40,7 +40,7 @@ func RegisterRun(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-check").
 			Bool().
 			Global().
-			Help("Validate the document and exit; nothing runs").
+			Help("Validate the document and exit; nothing runs. Checks the grammar (commands, flags, arity) and then the FIELD references: each stage is run on its input's schema alone, so a field a stage reads that no earlier stage produced is reported with the stage number and the fields available there").
 			Done().
 
 		Flag("-print").
@@ -78,12 +78,15 @@ func RegisterRun(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				fmt.Fprintln(ctx.Stdout(), renderPipelineDoc(stages))
 				return nil
 			}
-			if ctx.GetBool("-check", false) {
-				return nil
-			}
 			self, err := os.Executable()
 			if err != nil {
 				return fmt.Errorf("run: %w", err)
+			}
+			if ctx.GetBool("-check", false) {
+				if err := checkPipelineFields(context.Background(), ctx.Command, self, stages, ""); err != nil {
+					return fmt.Errorf("run -check: %w", err)
+				}
+				return nil
 			}
 			// Ctrl-C reaches the children through the context; they are
 			// in this process group anyway, this makes the exit orderly.

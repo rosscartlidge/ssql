@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`ssql run -check` validates field references, not only grammar**
+  (DFC138 §4a). The source stage answers its header under schema mode;
+  every later stage runs on that header alone, so a field a stage reads
+  that no earlier stage produced is refused with the stage number and
+  the fields available there (`stage 3 (where): where references
+  unknown field(s): amount (available: n, status)`), nested pipelines
+  included. Fields a stage creates are visible downstream; nothing runs
+  on data and no sink file is written.
+
+### Fixed
+- **`where` and `update` checked field names against the first record
+  rather than the schema header**, so a typo on a header-only input
+  passed silently. Both now validate against the header up front (and
+  fail before reading a row); the first-record check remains for
+  headerless input.
+- **`from csv|tsv -type COLUMN TYPE` on a column the header does not
+  have was accepted silently** (the override never applied). It is
+  refused with the available columns, in exec and in schema mode.
+
 ### Changed
 - **The API references are complete again, and gated.** `doc/api-reference.md`
   and `doc/typed-reference.md` now mention every exported function and
