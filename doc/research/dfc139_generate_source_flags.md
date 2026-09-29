@@ -46,16 +46,45 @@ miniature.
 with a different meaning on each (compile and execute; feed the SQL to
 the dialect's CLI; execute the optimised pipeline). It stays per target.
 
-## 2. What autocli does today
+## 2. What autocli does today (measured, v4.20.0)
 
-Flags declared `Global()` on the **root** command (`ssql`) are inherited
-by every subcommand: `parseSubcommand` builds a temporary command from
-`rootGlobalFlags() + leaf.Flags` so a root global may be written after
-the subcommand word (`ssql where -complete 3 …`); completion, help and
-`-spec-json` merge the same list. An **intermediate** command's flags
-(`generate`'s own, if it had any) are not inherited by its nested
-subcommands, and whether the parser accepts `ssql generate -pipeline X
-go` (a flag between the parent and the leaf) is untested.
+Read from `parser.go` (`ExecuteWith`, `parseRootGlobalFlags`,
+`parseSubcommand`) and `subcommand.go` (`rootGlobalFlags`,
+`demotedRootGlobalFlags`), then confirmed with a probe program: a root
+global `-verbose`, a parent `gen` declaring its own global `-pipeline`,
+leaves `gen go` / `gen sql` declaring `-run`.
+
+| Spelling | Result |
+|---|---|
+| `app gen go -run` | runs the leaf; `-run=true` |
+| `app gen go -pipeline X -run` | **`flag -pipeline: unknown flag`** — the parent's flag is not visible in the leaf |
+| `app gen -pipeline X go` | **prints `gen`'s help** — the tree walk consumes subcommand NAMES only; a flag stops it at `gen`, which has no handler, so it shows help; `go` is never reached |
+| `app gen -pipeline X` | prints `gen`'s help (same reason) |
+| `app gen go -verbose`, `app -verbose gen go` | both run; the root global is accepted before or after the leaf |
+| `app gen go -help` | lists `-run` only: neither the root global nor the parent's flag |
+| `app -complete 3 gen go -` | offers `-run`, `--help`; the root global appears only on its own prefix (`-v` → `-verbose`, the demoted rule); the parent's `-pipeline` never |
+| `app -complete 2 gen -` | offers `-pipeline` (the parent's own completion works at the parent) |
+| `-spec-json` | `-verbose` on the root node, `-pipeline` on `gen`, `-run` on each leaf: a flag lives on exactly the node that declared it |
+
+So, today: a parent's flag is parsed **only** when the parent is the
+leaf being executed (which `generate` never is, having no handler), it
+is not inherited downward, and a flag placed between the parent and the
+leaf ends the subcommand walk. Root globals are the one inherited kind:
+parsed before the walk (`parseRootGlobalFlags`) or after the leaf (the
+temporary command in `parseSubcommand` is `rootGlobalFlags() +
+leaf.Flags`), offered by completion in demoted form, absent from leaf
+help, and present once in `-spec-json` on the root.
+
+Consequences for the options: **A needs a parser change** (flags
+between parent and leaf are not parsed at all), so "just move the
+flags" is not a cheap option; **B is a change to one list** in four
+places (`parseSubcommand`, the completion merges, help, spec) from
+"root globals" to "every ancestor's globals", with the demotion
+question in §3.B; **C needs nothing** from autocli.
+
+The probe (`main.go`, 40 lines) is the natural first test of B: the
+same eight spellings with the expected results flipped for the parent
+flag.
 
 ## 3. Options
 
@@ -79,12 +108,15 @@ no spelling change, and `-script`/`-mode` reach every target the moment
 they are declared once. Also makes `ssql generate -pipeline '…' go`
 legal as a by-product, which costs nothing.
 
-Touches: autocli `parseSubcommand`, the completion merge points (four
-call sites in `completion_script.go`), `help.go`, `spec_json.go`, plus
-a test that an intermediate global shows in a nested leaf's parse,
-help, completion and spec; then ssql declares the four flags on
-`generate` and deletes the per-target copies. About half a day, one
-autocli minor version.
+Touches: autocli `parseSubcommand` (the temporary command's flag list),
+the four completion merge points in `completion_script.go`, `help.go`
+(leaf help should list inherited flags, which it does not even for root
+globals today — a separate small gap), `spec_json.go` (either list the
+inherited flags on each leaf, or leave them on the declaring node and
+let consumers walk up; the `serve` explorer and DFC134's schema read
+`-spec-json`, so this is a real choice), plus the §2 probe as a test;
+then ssql declares the four flags on `generate` and deletes the
+per-target copies. About half a day, one autocli minor version.
 
 Risk: the demoted-globals rule (root globals are offered only on a
 specific prefix so they do not crowd a leaf's `-<TAB>`) must decide
