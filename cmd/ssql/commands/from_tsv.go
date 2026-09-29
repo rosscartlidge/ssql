@@ -214,15 +214,21 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 		// sampling (first non-identifier byte; default tab) — a raw
 		// tab split here made Ctrl-O field completion on a
 		// pipe-delimited file offer one bogus "name|age|dept" field.
-		line, _ := bufio.NewReader(r).ReadString('\n')
+		br := bufio.NewReader(r)
+		line, _ := br.ReadString('\n')
 		line = strings.TrimRight(line, "\r\n")
+		delim := lib.DetectDelimInHeader(line)
 		cr := csv.NewReader(strings.NewReader(line))
-		cr.Comma = rune(lib.DetectDelimInHeader(line))
+		cr.Comma = rune(delim)
 		headers, err := cr.Read()
 		if err != nil {
-			headers = strings.Split(line, string(lib.DetectDelimInHeader(line)))
+			headers = strings.Split(line, string(delim))
 		}
-		return writeSchemaModeOutput(os.Stdout, headers)
+		// hand the header line back so the reader sees the whole file
+		cfg := types.cfg
+		cfg.Delimiter = rune(delim)
+		in := io.MultiReader(strings.NewReader(line+"\n"), br)
+		return writeSchemaModeDelimited(os.Stdout, headers, ssql.ReadTSVFromReaderWithConfig(in, cfg))
 	}
 
 	if shouldGenerate(generate) {

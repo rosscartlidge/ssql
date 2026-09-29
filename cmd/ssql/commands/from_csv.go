@@ -226,8 +226,12 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 				r = f
 			}
 		}
-		headers, _ := readCSVHeadersFromReader(r)
-		return writeSchemaModeOutput(os.Stdout, headers)
+		csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
+		if err != nil {
+			return err
+		}
+		headers, in := peekDelimitedHeader(r, ',')
+		return writeSchemaModeDelimited(os.Stdout, headers, ssql.ReadCSVFromReader(in, csvConfig))
 	}
 
 	if shouldGenerate(generate) {

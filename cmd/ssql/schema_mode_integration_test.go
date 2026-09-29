@@ -80,3 +80,43 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// Schema mode carries TYPES from a delimited source (a sampled read with
+// the source's own config, so -type holds) through the rules: a
+// surviving field keeps its type, rename moves it, a created field is
+// "any". `generate schema -data` puts the list on the wire as
+// (field, type) records, so it can flow into any sink.
+func TestSchemaModeTypesAndData(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	dir := t.TempDir()
+	csv := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(csv, []byte("name,dept,salary,rate,hired\nAlice,eng,100,1.5,2026-01-05T09:00:00Z\nBob,ops,90,2,2026-02-01T09:00:00Z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name     string
+		pipeline string
+		want     string
+	}{
+		{"source types", "ssql from csv " + csv, "field,type\nname,string\ndept,string\nsalary,int\nrate,float\nhired,string\n"},
+		{"-type holds", "ssql from csv " + csv + " -type hired time | ssql include name hired", "field,type\nname,string\nhired,time\n"},
+		{"rename moves the type, group-by creates any", "ssql from csv " + csv + " | ssql rename -as salary pay | ssql group-by dept -sum pay total", "field,type\ndept,string\ntotal,any\n"},
+		{"through a sink", "ssql from csv " + csv + " | ssql exclude rate | ssql to table", "field,type\nname,string\ndept,string\nsalary,int\nhired,string\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			script := bin + " generate schema -pipeline " + shellQuoteForTest(strings.ReplaceAll(c.pipeline, "ssql ", bin+" ")) + " -data | " + bin + " to csv"
+			out, err := exec.Command("bash", "-c", script).CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s: %v\n%s", script, err, out)
+			}
+			if string(out) != c.want {
+				t.Errorf("got:\n%s\nwant:\n%s", out, c.want)
+			}
+		})
+	}
+}
+
+func shellQuoteForTest(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}

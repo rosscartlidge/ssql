@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused loudly rather than ignored. A drift test pins that every
   target carries the four.
 
+- **`ssql generate schema … -data`** puts the field list on the wire as
+  `(field, type)` records, so `ssql generate schema -pipeline '…' -data |
+  ssql to table` shows a pipeline's output columns and types. Schema
+  mode now carries TYPES: a CSV/TSV source samples 200 rows with its
+  own config (so `-type` holds) instead of reporting every column as
+  `any`; a field that survives a stage keeps its type, `rename` moves
+  it, a field a stage creates is `any`.
+
 ### Fixed
 - **Sinks did not pass the schema through in `SSQL_MODE=schema`**: a
   pipeline ending in `to csv` (any `to` sink) ran the sink for real on

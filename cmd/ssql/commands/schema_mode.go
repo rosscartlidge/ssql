@@ -17,6 +17,7 @@ package commands
 
 import (
 	"io"
+	"iter"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -66,6 +67,39 @@ func writeSchemaModeOutputTyped(w io.Writer, names []string, types map[string]st
 	return lib.WriteJSONLWithSchema(w, schema, func(func(ssql.Record) bool) {})
 }
 
+// schemaModeSampleRows is how many records a delimited source reads in
+// schema mode to type its columns: enough for the reader's inference
+// to see a float below the ints, cheap on any file.
+const schemaModeSampleRows = 200
+
+// writeSchemaModeDelimited is the schema-mode output of a CSV/TSV source
+// WITH types: the header names in file order, and each column's wire
+// type from a sample read with the same config (so `-type ts time` and
+// `-default-type` hold) — schema mode carried names only ("any") until
+// v4.109, which is why `generate schema -data` showed no types. A read
+// error in the sample (a malformed row, a cell that will not cast)
+// leaves the column untyped ("any") rather than failing completion.
+func writeSchemaModeDelimited(w io.Writer, headers []string, records iter.Seq[ssql.Record]) error {
+	types := map[string]string{}
+	func() {
+		defer func() { _ = recover() }() // a bad cell types nothing; exec reports it
+		var sample []ssql.Record
+		for rec := range records {
+			sample = append(sample, rec)
+			if len(sample) >= schemaModeSampleRows {
+				break
+			}
+		}
+		schema := lib.InferFromSample(sample)
+		for _, h := range headers {
+			if schema.HasField(h) {
+				types[h] = schema.TypeOf(h)
+			}
+		}
+	}()
+	return writeSchemaModeOutputTyped(w, headers, types)
+}
+
 // schemaModeJSONNames reads field names from a JSON/JSONL source under
 // schema mode: the _schema header when present, otherwise the first
 // record's keys.
@@ -90,7 +124,11 @@ func schemaModeJSONNames(r io.Reader) []string {
 // supplies the argv the op decodes. An undeterminable op (ok=false)
 // emits an empty schema, which propagates downstream as "no fields".
 func runSchemaModeTransform(ctx *cf.Context, cmdName string) error {
-	in := readSchemaModeInput(ctx.Stdin())
+	sr := lib.ReadJSONLWithSchema(ctx.Stdin())
+	var in []string
+	if sr.Schema != nil {
+		in = sr.Schema.Fields
+	}
 	args := ctx.RawArgs
 	if len(args) > 0 && args[0] == cmdName {
 		args = args[1:]
@@ -99,5 +137,25 @@ func runSchemaModeTransform(ctx *cf.Context, cmdName string) error {
 	if !ok {
 		return writeSchemaModeOutput(ctx.Stdout(), nil)
 	}
-	return writeSchemaModeOutput(ctx.Stdout(), out)
+	// The rules track names; a field that survives the stage keeps the
+	// type its source gave it, a field the stage creates is "any" (the
+	// rules do not know that -count makes an int, and saying so here
+	// would be a second implementation of every aggregate's type).
+	types := map[string]string{}
+	if sr.Schema != nil {
+		for _, f := range out {
+			if sr.Schema.HasField(f) {
+				types[f] = sr.Schema.TypeOf(f)
+			}
+		}
+		// rename moves a field's type with its name: `-as old new`
+		if cmdName == "rename" {
+			for i := 0; i+2 < len(args); i++ {
+				if (args[i] == "-as" || args[i] == "-a") && sr.Schema.HasField(args[i+1]) {
+					types[args[i+2]] = sr.Schema.TypeOf(args[i+1])
+				}
+			}
+		}
+	}
+	return writeSchemaModeOutputTyped(ctx.Stdout(), out, types)
 }

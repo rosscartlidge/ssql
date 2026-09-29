@@ -208,6 +208,15 @@ pipeline's output fields with no `export` dance. Making that work
 found a gap: in schema mode the `to` sinks ran for real on the header
 (no field list after a sink); every sink now passes the schema through.
 
+Ross, on trying it: could `generate schema` emit the normal inter-stage
+JSONL so the list can flow on (`… -data | ssql to table`, a
+field/type table)? Built as `-data`: one `(field, type)` record per
+field on the wire. That only earned its keep once schema mode carried
+types, which it did not (every column `any`): a CSV/TSV source now
+samples 200 rows with its own config in schema mode, a surviving field
+keeps its type through the rules, `rename` moves it, a created field
+is `any`. Completion sees the same header and is unchanged by it.
+
 What did NOT change: the grammar still declares the flags per leaf, so
 `-spec-json` lists them on each of the four nodes (true to what autocli
 parses), and `ssql generate -pipeline X go` still prints `generate`'s

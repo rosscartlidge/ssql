@@ -273,6 +273,14 @@ values, and the numeric spread:
 ssql from employees.csv | ssql describe | ssql to table
 ```
 
+To see just the columns and their types, ask the pipeline for its schema;
+`-data` makes the answer a table like any other, and the pipeline can be
+as long as you like (the types follow the fields through it):
+
+```bash
+ssql generate schema -pipeline 'ssql from csv employees.csv | ssql group-by dept -count n -avg salary avg' -data | ssql to table
+```
+
 `describe` is the first thing to run on *any* unfamiliar file. Then the
 everyday moves — take a few rows, filter, sort, pick columns:
 
