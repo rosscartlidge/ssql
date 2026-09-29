@@ -62,7 +62,17 @@ usually right. Look for:
 - `-if-expr` (not `-expr`), `-using` / `-on L R` for joins, `-output` for chart files
 - `ssql generate go -pipeline '…'` for a compiled version, with the sink inside the string
 
-For a Go program, `go run` it. Then check that it:
+For a Go program, `go run` it. The first lines should look like this,
+with the error from the reader checked before anything else:
+
+```go
+data, err := ssql.ReadCSV("sales.csv")
+if err != nil {
+    log.Fatalf("read sales.csv: %v", err)
+}
+```
+
+Then check that it:
 
 - reads with `ssql.ReadCSV` (or `ReadJSON`, `ReadParquet`, …) and checks the error
 - reads fields with `ssql.GetOr(r, "age", int64(0))` — CSV numbers are `int64` or `float64`, never strings — and builds records with `ssql.MakeMutableRecord()…Freeze()`; there is no map access
