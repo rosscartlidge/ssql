@@ -398,18 +398,43 @@ func (ch *stageChain) waitNamed(root *cf.Command, stages []docStage) error {
 	return upstreamErr
 }
 
-// jsonDocFlag registers -json FILE on a generate subcommand: the pipeline
-// document as the fragment source, run by the shell-free runner (DFC134
-// §5.1) under the generation mode. The twin of -script / -pipeline, which
-// take shell text and run it through bash.
-func jsonDocFlag(sb *cf.SubcommandBuilder, what string) *cf.SubcommandBuilder {
+// pipelineSourceFlags registers the fragment-source flags on a generate
+// target, ONCE for all four (DFC139 §3.C, the half-way step before the
+// flags can live on `generate` itself): -pipeline, -script and -json each
+// name where the fragments come from instead of stdin, -mode the
+// SSQL_MODE the source pipeline runs under. verb is what the target does
+// with the fragments ("generate Go from", "translate", "optimize",
+// "re-emit"). Every generate leaf MUST call this; the registration drift
+// test pins it, since -script had gone missing from three targets by
+// being declared per target.
+func pipelineSourceFlags(sb *cf.SubcommandBuilder, verb, modeDefault string) *cf.SubcommandBuilder {
 	return sb.
+		Flag("-pipeline", "-p").
+		String().
+		Global().
+		Default("").
+		Help("Run PIPELINE (a quoted ssql pipeline string) under -mode and " + verb + " its fragments — no export/subshell ceremony. Mutually exclusive with -script/-json.").
+		Done().
+		Flag("-script", "-s").
+		String().
+		Completer(&cf.FileCompleter{Pattern: "*.ssql"}).
+		Global().
+		Default("").
+		Help("Run the pipeline in script FILE (or <(heredoc)) under -mode and " + verb + " its fragments; # comments stripped, leading-| continuation lines joined. Mutually exclusive with -pipeline/-json.").
+		Done().
 		Flag("-json", "-j").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.json"}).
 		Global().
 		Default("").
-		Help("Run the pipeline document FILE (as `ssql run` does: no shell, validated first) and " + what + " its fragments. Mutually exclusive with -pipeline/-script.").
+		Help("Run the pipeline document FILE (as `ssql run` does: no shell, validated first) under -mode and " + verb + " its fragments. Mutually exclusive with -pipeline/-script.").
+		Done().
+		Flag("-mode").
+		String().
+		Completer(&cf.StaticCompleter{Options: []string{"record", "typed"}}).
+		Global().
+		Default("").
+		Help("With -pipeline/-script/-json: the SSQL_MODE the source pipeline runs under (record or typed; parallel is a deprecated alias for typed). Default: " + modeDefault + ".").
 		Done()
 }
 
@@ -447,6 +472,13 @@ func generateFragmentSource(ctx *cf.Context, mode, label string) (io.Reader, err
 		return v
 	}
 	pipeline, script, doc := get("-pipeline"), get("-script"), get("-json")
+	if m := get("-mode"); m != "" && label != "go" {
+		// sql, ssql and json read record-mode fragments; a typed run
+		// would produce fragments they do not use. Loud, not ignored.
+		if m != "record" {
+			return nil, fmt.Errorf("ssql generate %s: -mode %s has no meaning here (this target reads record-mode fragments); drop -mode or use record", label, m)
+		}
+	}
 	set := 0
 	for _, v := range []string{pipeline, script, doc} {
 		if v != "" {

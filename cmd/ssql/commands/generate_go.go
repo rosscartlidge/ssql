@@ -60,28 +60,8 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Global().
 		Default(false).
 		Help("Print the optimiser's applied rules and the typed planner's per-stage decisions to stderr").
-		Done().
-		Flag("-script", "-s").
-		String().
-		Completer(&cf.FileCompleter{Pattern: "*.ssql"}).
-		Global().
-		Default("").
-		Help("Read pipeline from a script file (or <(heredoc)) instead of stdin. Strips # comments, joins leading-| continuation lines.").
-		Done().
-		Flag("-pipeline", "-p").
-		String().
-		Global().
-		Default("").
-		Help("Run PIPELINE (a quoted ssql pipeline string) under SSQL_MODE and generate from its fragments — replaces the ssqlgen shell helper. Mutually exclusive with -script; -mode applies.").
-		Done().
-		Flag("-mode").
-		String().
-		Completer(&cf.StaticCompleter{Options: []string{"record", "typed"}}).
-		Global().
-		Default("").
-		Help("With -script/-pipeline/-json: SSQL_MODE value for the pipeline (record or typed; parallel is a deprecated alias for typed). Default: typed.").
 		Done()
-	jsonDocFlag(sub, "generate Go from").
+	pipelineSourceFlags(sub, "generate Go from", "typed").
 		Flag("OUTPUT").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.go"}).

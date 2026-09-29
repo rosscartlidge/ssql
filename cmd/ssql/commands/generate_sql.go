@@ -40,14 +40,8 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 		Default("duckdb").
 		Completer(&cf.StaticCompleter{Options: sqlDialects}).
 		Help("Target engine: duckdb (default), postgres or datafusion. Same pipeline semantics; engine-specific spellings, and stages with no translation in that engine are refused loudly").
-		Done().
-		Flag("-pipeline", "-p").
-		String().
-		Global().
-		Default("").
-		Help("Run PIPELINE (a quoted ssql pipeline string) in record mode and translate its fragments — no export/subshell ceremony needed.").
 		Done()
-	jsonDocFlag(sub, "translate").
+	pipelineSourceFlags(sub, "translate", "record").
 		Flag("OUTPUT").
 		String().
 		Completer(&cf.FileCompleter{Pattern: "*.sql"}).

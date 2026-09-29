@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-09-28
+Last modified: 2026-09-29
 
 [Back to Index](./README.md)
 
@@ -135,7 +135,7 @@ Tracked issues and feature gaps discovered during development.
 - [x] **DFC134 §5.1 `ssql run DOC` — BUILT 2026-09-22** (autocli v4.19.0 `Command.Check` + `commands/run.go`, `pipeline_doc.go`): shell-free runner over a JSON argv document, validated whole before any stage starts, nested pipelines as /dev/fd. See DFC134 §5.1a.
 - [x] **DFC135 `-if-field`, `-set-field`, `-param-field` — BUILT 2026-09-22**, every lane; see DFC135 §9 for the four pre-existing defects it surfaced.
 - [x] **`-if` literal not of the field's kind — LOUD in every lane, 2026-09-23** (Ross: option 1). Measured first: exec silently false, record codegen silently WRONG (`abc` read as 0), typed and DuckDB loud. `ssql.LiteralOp` / `FieldOp` + `*CompareError`; `TestMixedKindComparisonsAreLoud`, sabotage-checked. Found on the way: a generated record `to csv` program failed on any empty result (double iteration of a closed source).
-- [ ] **DFC139: where `generate`'s source flags belong** (2026-09-29, for a decision): `-pipeline`/`-script`/`-json`/`-mode` are declared per target and have drifted (`-script` and `-mode` only on `go`); options: move to `generate` (spelling changes), autocli inherits ancestor globals (recommended), declare once via a helper (fallback).
+- [ ] **DFC139: where `generate`'s source flags belong** (2026-09-29): the half-way step is BUILT (§7: `pipelineSourceFlags` declares `-pipeline`/`-script`/`-json`/`-mode` once, every target carries them, drift test). Open: whether autocli should grow ancestor-global inheritance so the four collapse to one declaration on `generate` (§8: worth it when a second parent needs shared flags); the spelling stays `generate go -pipeline`.
 - [ ] **DFC138: the pipeline document on the wire** (proposal 2026-09-28, awaiting review): `from ssh` / `from catalog` / `serve` send the JSON document to a constant `ssql run -` instead of rendering shell text (`BuildRemoteCommand`, `SplitOnPlus`, `RemoteScriptCommand` retire); `run -mode exec|record|typed` runs it interpreted or as compiled typed Go on the remote; `run -check` validates field references from the grammar's field slots plus the schema fold, on the remote's real header before data moves; equivalence lanes `ssh-exec`/`ssh-typed` and injection-across-the-wire on the rig.
 - [ ] **DFC137: spilling sort/group-by, ASOF join, intersect/except** (proposal 2026-09-23, reviewed and agreed 2026-09-26). ALL BUILT: `except`/`intersect` 2026-09-26 (§3a); ASOF join 2026-09-27 (§2a); `sort`/`group-by -spill` 2026-09-27 (§1a). Follow-ups: a faster run codec (gob with `[]any` is ~4 µs/record each way — the spilling sort is 1.7× the in-memory one on the scale fixture and the codec is all of it); typed spill (typed falls back to record for the stage); hash-partitioned group-by only if sort-then-stream measures too slow.
 - [ ] **DFC134 §5.5: a JSON Schema for pipeline documents** (2026-09-22): document ⇄ text is done (`run -print`, `generate json`, round trip pinned). A JSON Schema derived from `-spec-json` would let any language validate before calling `run`; typed builder libraries after that.

@@ -6,10 +6,12 @@ Last modified: 2026-09-29
 
 [Back to Index](./README.md)
 
-Status: **problem statement and options, for a decision. Nothing built.**
-Ross, 2026-09-29: "do you think `-script`, `-pipeline` and `-json`
-should be options of `ssql generate` and not `ssql generate go|…`, as
-it's valid for all forms?"
+Status: **option C built 2026-09-29 as the half-way step (§7); A or B
+still for a decision.** Ross, 2026-09-29: "do you think `-script`,
+`-pipeline` and `-json` should be options of `ssql generate` and not
+`ssql generate go|…`, as it's valid for all forms?" and, after the
+autocli deep dive in §2: "as a half-way step we ensure consistency
+where possible between the child flags now."
 
 ## 1. The problem
 
@@ -36,6 +38,8 @@ declared per target, and it has drifted:
 | `-json` | ● | ● | ● | ● |
 | `-script` | ● | ○ | ○ | ○ |
 | `-mode` | ● | ○ (always record) | ○ | ○ |
+
+(The state on 2026-09-29 before §7; every cell is ● now.)
 
 `ssql generate sql -script q.ssql` is refused for no reason anyone
 decided; nobody added it when `-script` grew on `go`. That is the
@@ -173,7 +177,58 @@ have sharp edges in completion. Either way the drift is closed and
 4. Whether `-run` should also be looked at while here (its three
    meanings are three flags sharing a name).
 
-## 7. References
+## 7. Built: option C, the half-way step (2026-09-29)
+
+`pipelineSourceFlags(sub, verb, modeDefault)` in `pipeline_doc.go`
+declares `-pipeline`, `-script`, `-json` and `-mode` once, with one help
+text per flag parameterised by what the target does with the fragments;
+all four targets call it (`jsonDocFlag` and the per-target copies are
+gone). `TestGenerateTargetsShareSourceFlags` reads `-spec-json` and
+asserts every `generate` leaf except `schema` carries all four; watched
+to fail with one target's call removed.
+
+What changed for a user:
+
+- `ssql generate sql|ssql|json -script FILE` work (they refused
+  `-script` before, by omission).
+- `-mode` is accepted on every target. On `sql`, `ssql` and `json` it
+  must be `record` (their default); `-mode typed` is refused loudly:
+  "has no meaning here (this target reads record-mode fragments)". On
+  `go` the default stays `typed`. §4's question is answered: refuse,
+  not ignore.
+- The four flags read the same in every target's `-help`, in the same
+  order, and complete the same.
+
+What did NOT change: the grammar still declares the flags per leaf, so
+`-spec-json` lists them on each of the four nodes (true to what autocli
+parses), and `ssql generate -pipeline X go` still prints `generate`'s
+help (§2). A fifth target would have to call the helper; the drift test
+is what makes forgetting loud.
+
+## 8. Way forward
+
+The half-way step removes the user-visible inconsistency and the drift
+risk. What remains is a question about where the grammar SAYS the flags
+live, and it is now purely a design choice with no bug behind it:
+
+- **Stay here (C).** Nothing more to do. The flags are leaf flags that
+  happen to be identical, which is what the parser implements.
+- **B, when autocli grows ancestor-global inheritance.** Then the four
+  declarations collapse to one on `generate`, `-spec-json` shows the
+  flags once on `generate` (a consumer walks up), leaf help lists
+  inherited flags (fixing the same gap for root globals), and the
+  spelling stays `generate go -pipeline`. Half a day in autocli plus an
+  hour in ssql; the §2 probe becomes the test. Worth doing when a
+  second parent-with-shared-flags appears (`serve`? `from`?), not for
+  `generate` alone.
+- **A is off the table** unless the source-first spelling is wanted for
+  its own sake: it needs the parser to accept flags between parent and
+  leaf, and it changes every documented example.
+
+The decision that remains is therefore B-later versus stay, and it can
+wait for a second use case.
+
+## 9. References
 
 - [DFC115](./dfc115_commands_are_the_authority.md) — one grammar, one
   place.

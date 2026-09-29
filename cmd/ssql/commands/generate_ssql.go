@@ -35,14 +35,8 @@ func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
 		Global().
 		Default(false).
 		Help("Print applied optimization rules to stderr").
-		Done().
-		Flag("-pipeline", "-p").
-		String().
-		Global().
-		Default("").
-		Help("Run PIPELINE (a quoted ssql pipeline string) in record mode and optimize its fragments — no export/subshell ceremony needed.").
 		Done()
-	jsonDocFlag(sub, "optimize").
+	pipelineSourceFlags(sub, "optimize", "record").
 		Handler(func(ctx *cf.Context) error {
 			var run bool
 			var explain bool

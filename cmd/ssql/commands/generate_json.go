@@ -26,15 +26,8 @@ func registerGenerateJSON(cmd *cf.SubcommandBuilder) {
 			Bool().
 			Global().
 			Help("The whole document on one line").
-			Done().
-
-		Flag("-pipeline", "-p").
-			String().
-			Global().
-			Default("").
-			Help("Run PIPELINE (a quoted ssql pipeline string) in record mode and emit its document: shell text in, document out").
 			Done()
-	jsonDocFlag(sub, "re-emit (normalise)").
+	pipelineSourceFlags(sub, "re-emit (normalise)", "record").
 		Handler(func(ctx *cf.Context) error {
 			src, err := generateFragmentSource(ctx, "record", "json")
 			if err != nil {

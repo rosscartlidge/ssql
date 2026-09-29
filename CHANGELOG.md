@@ -5,6 +5,18 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`generate go|sql|ssql|json` share one set of source flags** (DFC139
+  §7): `-pipeline`, `-script`, `-json` and `-mode` are declared once
+  and appear on every target with the same help. `generate
+  sql|ssql|json -script FILE` now work (they refused `-script` by
+  omission); `-mode` is accepted everywhere and must be `record` on the
+  three targets that read record-mode fragments (`-mode typed` there
+  is refused loudly rather than ignored). A drift test pins that every
+  target carries the four.
+
 ## [4.108.0] - 2026-09-27
 
 ### Added
