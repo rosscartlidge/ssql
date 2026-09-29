@@ -8,11 +8,11 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"os"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -147,19 +147,33 @@ func TestServeHTTPEndpoints(t *testing.T) {
 		}
 	})
 
-	t.Run("execute-unknown-field-fails-in-trailer", func(t *testing.T) {
-		// A field typo errors AFTER the _schema header is already on
-		// the wire, so it is a mid-stream failure: HTTP 200, but the
-		// X-Ssql-Exit-Code/X-Ssql-Error trailers carry the verdict.
-		resp, _ := postJSON(t, base+"/api/execute",
+	t.Run("execute-unknown-field-is-422", func(t *testing.T) {
+		// A field typo is refused against the schema header before any
+		// row is read (where validates up front), so nothing reaches the
+		// wire: a clean 422 whose body names the field and the fields
+		// that exist. (Until 2026-09-29 this failed mid-stream and the
+		// verdict rode in the trailers; the next subtest keeps that path.)
+		resp, body := postJSON(t, base+"/api/execute",
 			map[string]string{"pipeline": "ssql from employees.csv | ssql where -if nosuch eq x"}, nil)
+		if resp.StatusCode != 422 || !strings.Contains(body, "nosuch") || !strings.Contains(body, "available") {
+			t.Errorf("status %d body %s", resp.StatusCode, body)
+		}
+	})
+
+	t.Run("execute-midstream-error-fails-in-trailer", func(t *testing.T) {
+		// An expression that fails on the first record errors AFTER the
+		// _schema header is already on the wire, so it is a mid-stream
+		// failure: HTTP 200, but the X-Ssql-Exit-Code/X-Ssql-Error
+		// trailers carry the verdict.
+		resp, _ := postJSON(t, base+"/api/execute",
+			map[string]string{"pipeline": `ssql from employees.csv | ssql update -set-expr x 'int("abc")'`}, nil)
 		if resp.StatusCode != 200 {
 			t.Fatalf("status %d", resp.StatusCode)
 		}
 		if resp.Trailer.Get("X-Ssql-Exit-Code") == "0" {
 			t.Error("exit trailer claims success for a failed pipeline")
 		}
-		if !strings.Contains(resp.Trailer.Get("X-Ssql-Error"), "nosuch") {
+		if !strings.Contains(resp.Trailer.Get("X-Ssql-Error"), "abc") {
 			t.Errorf("error trailer = %q", resp.Trailer.Get("X-Ssql-Error"))
 		}
 	})
@@ -633,7 +647,6 @@ func TestServeRawFileTooLarge(t *testing.T) {
 		t.Errorf("status %d body %s", resp.StatusCode, b)
 	}
 }
-
 
 func TestServeTypedHeadCache(t *testing.T) {
 	addr := startServeHTTPProcess(t)
