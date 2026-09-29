@@ -5,6 +5,21 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **The API references are complete again, and gated.** `doc/api-reference.md`
+  and `doc/typed-reference.md` now mention every exported function and
+  method (about 130 record-package and 23 typed exports had accumulated
+  undocumented: the DFC135 comparison primitives, `Without`,
+  `AggregateOrdered`, the statistical and positional aggregates, the
+  remaining window functions, parquet, WAV, HTTP, sampling, catalog and
+  remote helpers; typed set operations, ASOF, `HashJoinMultiParallel`,
+  `DistinctParallel`, `FromRecords`, `ParallelFromSlice`, the reader/writer
+  variants). `make doc-check` Check 11 (`scripts/api-coverage.sh`) fails
+  when an export is missing from its reference, with
+  `doc/api-reference-exclude.txt` for the deliberate exemptions.
+
 ## [4.109.0] - 2026-09-29
 
 ### Changed

@@ -1,0 +1,11 @@
+# Exports scripts/api-coverage.sh does not require the reference docs to
+# mention: standard-library interface plumbing (json.Marshaler, error
+# unwrapping), which the docs describe by the interface, not the method.
+# One name per line, as PACKAGE.Name or PACKAGE.Type.Method.
+ssql.LineError.Unwrap
+ssql.RowError.Unwrap
+ssql.MutableRecord.MarshalJSON
+ssql.MutableRecord.UnmarshalJSON
+ssql.Record.MarshalJSON
+ssql.Record.UnmarshalJSON
+typed.ReadError.Unwrap

@@ -410,6 +410,18 @@ else
     pass "committed .deb files match version.txt"
 fi
 
+# Check 11: every exported function/method of ssql and ssql/typed is
+# mentioned in its reference doc (scripts/api-coverage.sh, with the
+# deliberate exemptions in doc/api-reference-exclude.txt). ~130 root and
+# 23 typed exports had gone undocumented before this check (2026-09-29).
+section "11. Checking API reference coverage"
+
+if out=$(scripts/api-coverage.sh 2>&1); then
+    pass "API references mention every export"
+else
+    fail "API reference gaps — add a section or an exemption: $(echo "$out" | grep 'not mentioned' | tr '\n' ' ')"
+fi
+
 # Summary
 section "Summary"
 

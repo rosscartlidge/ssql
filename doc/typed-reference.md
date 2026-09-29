@@ -205,6 +205,13 @@ serial form: `Stream.Serial()` then `WriteCSV` — slower but streaming. Order
 within each shard is preserved; across shards it is shard-concatenation order
 (rows from shard 0 before shard 1, etc.) — same as `Stream.Serial()`.
 
+Tables:
+
+```go
+func WriteTableToWriter[T any](seq iter.Seq[T], w io.Writer, maxWidth ...int) error   // width-aligned; numbers right-justified
+func WriteTableSelectedToWriter[T any](seq iter.Seq[T], w io.Writer, cols []TableColumn[T], maxWidth ...int) error
+```
+
 ### TSV / Delimited (no quoting)
 
 ```go
@@ -236,6 +243,10 @@ strings (each row's strings alias into the file's mmap'd bytes via
 `unsafe.String`) and uses `bytes.IndexByte` for SIMD-accelerated
 field splitting. This makes the parser cost competitive with the
 memory-bandwidth ceiling.
+
+```go
+func ReadDelimSafeFromReader[T any](r io.Reader, opts ...DelimOption) iter.Seq2[T, error]
+```
 
 ### Parquet
 
@@ -271,6 +282,13 @@ memory is roughly `nShards × max-row-group-size`. If the file has
 fewer row groups than `n`, `n` is reduced to match — Parquet
 doesn't allow splitting within a row group without re-decoding it.
 
+Write options (shared with the record package):
+
+```go
+func WithCompression(name string) ParquetWriteOption   // snappy (default), gzip, zstd, none
+func WithRowGroupSize(n int) ParquetWriteOption        // default 1_000_000; one row group is one ReadParquetParallel shard
+```
+
 ### Operations
 
 ```go
@@ -286,6 +304,36 @@ shape as the main `ssql` package, so a typed pipeline reads identically:
 ```go
 result := typed.Where(pred1)(typed.Skip[T](10)(typed.Limit[T](100)(input)))
 ```
+
+```go
+func TakeLast[T any](n int) func(iter.Seq[T]) iter.Seq[T]          // the last n, a ring buffer; a barrier
+func StreamSelect[T, U any](s Stream[T], fn func(T) U) Stream[U]   // Select over a Stream (a free function: methods cannot add type parameters)
+func DistinctParallel[T any, K comparable](in Stream[T], key func(T) K) iter.Seq[T]  // per-shard dedupe, then a serial merge
+func ParallelFromSlice[T any](data []T, n int) Stream[T]           // shard a slice into n contiguous chunks, no channel transit
+func FromRecords[R, T any](src iter.Seq[R], conv func(R) T) iter.Seq[T]          // the Record → typed re-entry boundary
+func FromRecordsParallel[R, T any](src iter.Seq[R], conv func(R) T, n int) Stream[T]
+func (s Stream[T]) Shards() int
+func (s Stream[T]) SerialCount() int64   // drains every shard concurrently, no fan-in channel
+```
+
+### Set operations
+
+```go
+func Except[L comparable, R any, K comparable](right iter.Seq[R], leftKey func(L) K, rightKey func(R) K, all bool) func(iter.Seq[L]) iter.Seq[L]
+func Intersect[L comparable, R any, K comparable](right iter.Seq[R], leftKey func(L) K, rightKey func(R) K, all bool) func(iter.Seq[L]) iter.Seq[L]
+func ExceptAll[T comparable](right iter.Seq[T]) func(iter.Seq[T]) iter.Seq[T]      // SQL EXCEPT ALL: each right row cancels one left row
+func IntersectAll[T comparable](right iter.Seq[T]) func(iter.Seq[T]) iter.Seq[T]   // SQL INTERSECT ALL
+func ExceptParallel[L any, R any, K comparable](left Stream[L], right iter.Seq[R], leftKey func(L) K, rightKey func(R) K) Stream[L]
+func IntersectParallel[L any, R any, K comparable](left Stream[L], right iter.Seq[R], leftKey func(L) K, rightKey func(R) K) Stream[L]
+```
+
+`Except` keeps the left rows whose key is absent from the right (an anti-join
+with field keys, SQL `EXCEPT` with identity keys); `Intersect` the rows whose
+key is present (a semi-join). `all=false` yields each distinct left row once,
+so `L` must be comparable, which every generated row type is; `all=true` keeps
+duplicates. The parallel forms are a per-shard probe of the shared set (the
+`all=true` semantics); the distinct form composes `DistinctParallel` on top.
+Behind `except` / `intersect` (DFC137 §3).
 
 ### Top-k selection
 
@@ -341,14 +389,51 @@ func FullJoin[L, R, O any, K comparable](
 ) iter.Seq[O]
 ```
 
+The parallel forms take a `Stream[L]` on the left and probe one shared map:
+
+```go
+func HashJoinParallel[L, R, O any, K comparable](left Stream[L], right iter.Seq[R], leftKey func(L) K, rightKey func(R) K, merge func(L, R) O) Stream[O]
+func HashJoinMultiParallel[L, R, O any, K comparable](left Stream[L], right iter.Seq[R], leftKey func(L) K, rightKey func(R) K, merge func(L, R) O) Stream[O]
+```
+
+The CLI's `join` emits the **Multi** forms: a right side with a repeated key
+(orders per customer) is the ordinary case, and the single-match form kept
+only the last match per key (found 2026-09-27 by the `join_left_type`
+equivalence case).
+
+### ASOF join
+
+```go
+type AsofOptions struct {
+    Forward   bool    // the nearest at or after instead of at or before
+    Strict    bool    // never an equal time
+    Tolerance float64 // when > 0, the largest distance that matches, in T's unit
+}
+func AsofJoin[L, R, O any, K comparable, T int64 | float64](
+    right iter.Seq[R], leftKey func(L) K, rightKey func(R) K,
+    leftTime func(L) T, rightTime func(R) T, opts AsofOptions, merge func(L, R) O,
+) func(iter.Seq[L]) iter.Seq[O]
+func AsofJoinParallel[L, R, O any, K comparable, T int64 | float64](left Stream[L], right iter.Seq[R], ...) Stream[O]
+```
+
+Each left row takes the right row that is current *as of* its time: among the
+right rows with the same key, the nearest at or before (or after) the left
+time, ties taking the last in input order. `T` is the ordered axis: `int64`
+nanoseconds for a time field (`l.Ts.UnixNano()`) or the number itself. Inner
+semantics; the right side is indexed once, the left streams in input order.
+Behind `join -asof` (DFC137 §2).
+
 ## JSONL I/O
 
 For newline-delimited JSON (`one object per line`), use the JSONL pair:
 
 ```go
 func ReadJSONL[T any](filename string) iter.Seq[T]
+func ReadJSONLFromReader[T any](rd io.Reader) iter.Seq[T]
 func ReadJSONLSafe[T any](filename string) iter.Seq2[T, error]
+func ReadJSONLSafeFromReader[T any](r io.Reader) iter.Seq2[T, error]
 func WriteJSONL[T any](seq iter.Seq[T], filename string) error
+func WriteJSONLToWriter[T any](seq iter.Seq[T], w io.Writer) error
 ```
 
 Field mapping follows standard `json:"name"` struct tags. Implementation
@@ -388,7 +473,9 @@ func Max[T any, N Ordered](seq iter.Seq[T], fn func(T) N) (N, bool)
 func Avg[T any, N Number](seq iter.Seq[T], fn func(T) N) (float64, int64)
 ```
 
-Standalone aggregates over an entire stream. For per-group results:
+Standalone aggregates over an entire stream (the `Counter`, `Summer` and
+`Averager` accumulators expose `Result()` for a finished group). For per-group
+results:
 
 ```go
 func GroupBy[T, S, O any, K comparable](
