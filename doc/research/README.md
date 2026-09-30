@@ -149,6 +149,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC139 | 2026-09-29 | 2026-09-29 | [Where `generate`'s Source Flags Belong: `-pipeline`, `-script`, `-json` and `-mode`](./dfc139_generate_source_flags.md) |
 | DFC140 | 2026-09-29 | 2026-09-30 | [User Documentation Cleanup: Audit and Recommendations](./dfc140_user_doc_cleanup.md) |
 | DFC141 | 2026-09-29 | 2026-09-29 | [`ssql/typed` Roadmap History](./dfc141_typed_roadmap_history.md) |
+| DFC142 | 2026-09-30 | 2026-09-30 | [Panics as the Library's Error Channel: What Embedding ssql in a Server Needs](./dfc142_panics_as_error_channel.md) |
 
 <!-- DFC-INDEX-END -->
 
