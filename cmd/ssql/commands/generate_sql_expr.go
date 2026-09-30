@@ -146,6 +146,30 @@ func exprUnaryToSQL(n *ast.UnaryNode) (string, error) {
 }
 
 func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
+	// `x == nil` / `x != nil`: SQL's `x = NULL` is never true (NULL, not
+	// a boolean), so an absent-field test lowered that way selected no
+	// rows while exec, record and typed returned the guarded ones (the
+	// codelab's lag guard `prev_temp != nil`; found 2026-09-30). NULL is
+	// how a SQL column expresses an absent record field, so the test is
+	// IS [NOT] NULL, the same lowering `has(f)` already uses.
+	if n.Operator == "==" || n.Operator == "!=" {
+		_, leftNil := n.Left.(*ast.NilNode)
+		_, rightNil := n.Right.(*ast.NilNode)
+		if leftNil != rightNil {
+			other := n.Right
+			if rightNil {
+				other = n.Left
+			}
+			operand, err := exprNodeToSQL(other)
+			if err != nil {
+				return "", err
+			}
+			if n.Operator == "==" {
+				return "(" + operand + " IS NULL)", nil
+			}
+			return "(" + operand + " IS NOT NULL)", nil
+		}
+	}
 	left, err := exprNodeToSQL(n.Left)
 	if err != nil {
 		return "", err

@@ -2209,6 +2209,36 @@ var equivCases = []EquivCase{
 		Ordered:  false,
 	},
 	{
+		// `prev != nil` after a LAG guards the first row of each partition.
+		// generate sql lowered `!= nil` to `<> NULL`, which is never true,
+		// so DuckDB returned NO rows while exec, record and typed returned
+		// the guarded ones — the codelab's sensor-delta pipeline, found by
+		// Ross on 2026-09-30 comparing `run` with `generate sql -run`.
+		// Golden by hand: salary ascending within dept, delta = salary −
+		// previous salary.
+		Name:     "window_lag_nil_guard",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -lag salary 1 prev | {{.bin}} where -if-expr 'prev != nil' | {{.bin}} update -set-expr delta 'salary - prev' | {{.bin}} include name delta`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Alice", "delta": 7000},
+			{"name": "Carol", "delta": 10000},
+			{"name": "Frank", "delta": 17000},
+			{"name": "Grace", "delta": 6000},
+		},
+	},
+	{
+		// The complement: `== nil` selects the partition's first row (the
+		// lowest salary per dept). Golden by hand.
+		Name:     "window_lag_eq_nil",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -lag salary 1 prev | {{.bin}} where -if-expr 'prev == nil' | {{.bin}} include name`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Eve"},
+			{"name": "Bob"},
+			{"name": "David"},
+		},
+	},
+	{
 		// Running aggregates over ssql's default frame (ROWS UNBOUNDED
 		// PRECEDING → CURRENT ROW), ordered by salary within dept.
 		Name:     "window_running_aggregates",

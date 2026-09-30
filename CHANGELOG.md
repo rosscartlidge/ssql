@@ -5,6 +5,20 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`generate sql` lowered `x == nil` / `x != nil` to `x = NULL` /
+  `x <> NULL`**, which SQL never evaluates true, so a pipeline guarding
+  a `window -lag` result with `where -if-expr 'prev != nil'` returned
+  every row in exec, record and typed and NO rows through DuckDB,
+  PostgreSQL or DataFusion (found by comparing `ssql run` with
+  `ssql generate sql -run` on the codelab's sensor-delta pipeline).
+  A nil comparison is now `IS NULL` / `IS NOT NULL`, the lowering
+  `has(f)` already used. Two equivalence cases (`window_lag_nil_guard`,
+  `window_lag_eq_nil`) pin every lane; both fail on the DuckDB lane
+  without the fix.
+
 ## [4.110.0] - 2026-09-30
 
 ### Added

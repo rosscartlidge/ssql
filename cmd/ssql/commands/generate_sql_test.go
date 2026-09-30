@@ -321,6 +321,12 @@ func TestExprToSQL(t *testing.T) {
 		{`x ?? 0`, `COALESCE(x, 0)`},
 		{`pop in [1, 2, 3]`, `(pop IN (1, 2, 3))`},
 		{`has("email")`, `(email IS NOT NULL)`},
+		// x == nil / x != nil are IS [NOT] NULL: `x <> NULL` is never true
+		// and dropped every row of the codelab's lag guard (2026-09-30).
+		{`prev_temp != nil`, `(prev_temp IS NOT NULL)`},
+		{`prev_temp == nil`, `(prev_temp IS NULL)`},
+		{`nil != prev_temp`, `(prev_temp IS NOT NULL)`},
+		{`prev_temp != nil && temp > 20`, `((prev_temp IS NOT NULL) AND (temp > 20))`},
 		{`getOr("score", 0) > 5`, `(COALESCE(score, 0) > 5)`},
 		{`int(x) > 5`, `(CAST(x AS BIGINT) > 5)`},
 		{`not active`, `(NOT active)`},
