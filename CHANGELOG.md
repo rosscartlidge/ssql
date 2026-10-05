@@ -7,7 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`ssql.Recover`, `ssql.Run`, `ssql.Safely`, `ssql.ToChannelErr`**
+  (DFC142 steps 1-4): the library reports a mid-stream failure by
+  panicking with an `error` value; these are the one place a program
+  turns that into an ordinary error. `defer ssql.Recover(&err)` or
+  `ssql.Run(fn)` around the loop that drives the pipeline; `Safely`
+  turns any `Filter` into a `FilterWithErrors` whose last element is
+  `(zero, err)` on failure; `ToChannelErr` is `ToChannel` with a
+  `wait()` that reports the failure (`ToChannel` is deprecated: a
+  failure there was lost). The CLI's `main`, every generated program's
+  `main()` and `recoverCellError` now share `Run`/`Recover`.
+
 ### Fixed
+- **Four helpers let a stage panic escape every recover**: `LazyTee`,
+  `Timeout`, `ToChannel` and `ToChannelWithErrors` pulled their input in
+  a goroutine with no recover, so a bad cell inside them killed the
+  process even under a caller's recover. They capture and re-raise in
+  the consumer (`panicGroup`, the root copy of typed's shard capture);
+  `ToChannelWithErrors` delivers it on the error channel; the catalog
+  remote-shard goroutines report it as that shard's error. `Timeout`
+  also called `yield` from its producer goroutine, which the
+  range-over-func contract forbids; it now forwards over a channel.
+- **Every panic value is an `error`**: seven sites panicked with a
+  string (`WindowFuncCode`, `DescribeWindowFunc`, `WAggregate`,
+  `MustStreamWindow`, `JSONString.MustParse`, two in `lib/op.go`), so a
+  generic recover could not convert them uniformly.
+  `TestPanicValuesAreErrors` scans the sources for the pattern.
+- **Record-mode `to csv` and `to tsv` generated code ignored the
+  writer's error**, so a program whose output file could not be created
+  exited 0 with nothing written (`to tsv` in every mode, since it has
+  only the record emission). Two corpus cases
+  (`sink_unwritable_csv_fails`, `sink_unwritable_tsv_fails`) assert a
+  non-zero exit in every lane.
+
+### Changed
+- **`generate go -run` prints its "compiling against local module"
+  notice only with `-explain`.** Whoever set `SSQL_MODULE_DIR` knows;
+  the line was landing in the combined output of anything that captures
+  the program's output. `doc/codelab-data/codelab-run.sh` and the
+  `cmd/ssql` test package now set `SSQL_MODULE_DIR` to the checkout, so
+  generated programs under test compile against the source being tested
+  rather than the last release (where a new export such as `ssql.Run`
+  does not exist yet).
 - **`generate sql` lowered `x == nil` / `x != nil` to `x = NULL` /
   `x <> NULL`**, which SQL never evaluates true, so a pipeline guarding
   a `window -lag` result with `where -if-expr 'prev != nil'` returned

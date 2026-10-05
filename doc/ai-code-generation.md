@@ -413,6 +413,26 @@ total := typed.Sum(senior, func(e Employee) float64 { return e.Salary })
 
 ---
 
+### Errors inside a long-running program
+
+A pipeline fails fast: a bad cell, a failed cast or an unorderable group
+stops it with a panic whose value is an `error`. A `main()` can let it
+end the program (print `Error:` and exit 1). A server must recover it in
+the handler that drives the loop, or take the failure as a value:
+
+```go
+func handle(path string) (err error) {
+    defer ssql.Recover(&err)          // the panic becomes err; errors.As(err, &cellErr) works
+    // … read, filter, range …
+    return nil
+}
+// or: err := ssql.Run(func() error { … })
+// or: for r, err := range ssql.Safely(pipeline)(ssql.ReadCSVSafe(path)) { … }
+```
+
+Never turn a bad cell into a zero to keep going; use `ssql.ReadCSVSafe`
+and skip the row explicitly if that is what the user wants.
+
 ## ⛔ CRITICAL ANTI-PATTERNS
 
 **LLMs often hallucinate these WRONG APIs - DO NOT USE:**

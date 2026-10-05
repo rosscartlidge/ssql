@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-09-30
+Last modified: 2026-10-05
 
 [Back to Index](./README.md)
 
@@ -257,8 +257,9 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 
 - [x] **Execute DFC140** (all six batches done 2026-09-29/30: 5 api-reference + Check 11 signature lines, 6 ai-prompt content remain): 26 files audited 2026-09-29; 3 REMOVE (cli-debugging, ai-test-results, ai-fix-request), 4 MOVE (AI-PROMPT-README, ai-test-cases, ai-prompt-improvements, VALIDATION), 3 RESTRUCTURE (api-reference, typed-reference, doc/README), the rest FIX. Six ordered batches in DFC140 §6; script edits that must travel with each move in §5; open points for Ross in §7.
 - [x] **`cli-signal-processing.md` loop blocks emit phantom rows** (DFC140 §2.1) — fixed 2026-09-29 (batch 2: `… | ssql to jsonl; done | ssql from jsonl`); `TestCodelabLoopHasOneSchema` (`cmd/ssql/codelab_loop_test.go`) asserts the row count and that the doc still carries the idiom.
-- [ ] **Record-mode `to csv FILE` generated code ignores `WriteCSV`'s error** (`ssql.WriteCSV(aggregated, *flagOutput)` with no check; typed checks it) — a record program exits 0 on an unwritable output. Fix in `to_csv.go`'s record file form + a corpus case writing to an unwritable path expecting exit 1 in every lane (found writing DFC142 §5a, 2026-09-30).
-- [ ] **DFC142: panics as the library's error channel — TOP PRIORITY (Ross, 2026-09-30: "fixing the Go code to be able to integrate elegantly into a service is now our most important task")** — §5 steps 1-4 then §5a library mode; §6 questions first. Independent bug regardless: `ToChannel`, `ToChannelWithErrors`, `LazyTee` and `Timeout` consume their input in a goroutine with no recover, so an upstream `*CellError` panic inside them kills the process even under a caller's recover (verified 2026-09-30).
+- [x] **Record-mode `to csv FILE` generated code ignores `WriteCSV`'s error** — fixed 2026-10-05 (DFC142 step 0; `to tsv` too, in every mode); corpus cases `sink_unwritable_{csv,tsv}_fails`. Was: (`ssql.WriteCSV(aggregated, *flagOutput)` with no check; typed checks it) — a record program exits 0 on an unwritable output. Fix in `to_csv.go`'s record file form + a corpus case writing to an unwritable path expecting exit 1 in every lane (found writing DFC142 §5a, 2026-09-30).
+- [ ] **`LazyTee` drops a value for a slow consumer** (buffered channel full → `default:` branch discards it; the comment admits it). Silent data loss; either block (backpressure) or fail loudly. Found in DFC142 step 1, 2026-10-05.
+- [ ] **DFC142: panics as the library's error channel — TOP PRIORITY (Ross, 2026-09-30: "fixing the Go code to be able to integrate elegantly into a service is now our most important task")** — §5 steps 1-4 DONE 2026-10-05 (`Recover`/`Run`/`Safely`/`ToChannelErr`, escape hatches closed, error-valued panics gated); REMAINING: §5a library mode (`generate go -package -func`), its own plan. Independent bug regardless: `ToChannel`, `ToChannelWithErrors`, `LazyTee` and `Timeout` consume their input in a goroutine with no recover, so an upstream `*CellError` panic inside them kills the process even under a caller's recover (verified 2026-09-30).
 - [ ] **`generate sql`: a `window -order F` followed by `limit N` has no outer ORDER BY**, so SQL's LIMIT may take different rows from exec's (exec emits the window's order). Seen while fixing the nil-comparison bug (2026-09-30; DuckDB happened to keep the order). Either carry the window order into an ORDER BY before LIMIT or refuse the shape; add an `Ordered` equivalence case.
 - [ ] **`ssql union -help` says "Additional files must be JSONL"** but `union -file customers.csv` reads the CSV through `readAuxInput` (15 rows on the codelab data, 2026-09-30). Fix the description (found in DFC140 batch 6).
 - [ ] **`DescribeConfig` godoc says "first-seen order"; describe.go sorts by field name** (`sort.Strings(order)`). The reference documents the behaviour; fix the source comment (found in DFC140 batch 5).

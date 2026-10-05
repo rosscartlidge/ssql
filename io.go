@@ -2397,19 +2397,45 @@ func parseCommandValue(s string) any {
 // CHANNEL OPERATIONS
 // ============================================================================
 
-// ToChannel converts an iterator to a channel
+// ToChannel converts an iterator to a channel. The sequence is pulled in
+// a goroutine of its own, so a pipeline failure there cannot reach the
+// receiver: the channel simply closes early. Prefer ToChannelErr, which
+// reports that failure, or ToChannelWithErrors(Safe(seq)).
+//
+// Deprecated: a stage failure is lost; use ToChannelErr.
 func ToChannel[T any](sb iter.Seq[T]) <-chan T {
+	ch, _ := ToChannelErr(sb)
+	return ch
+}
+
+// ToChannelErr converts an iterator to a channel and a wait function.
+// The sequence is pulled in a goroutine; when the channel closes — the
+// sequence ended, or a stage panicked — wait returns nil or that
+// failure as an error. Until DFC142 step 1 a stage panic in the
+// goroutine tore the process down from there, bypassing every recover.
+//
+//	ch, wait := ssql.ToChannelErr(records)
+//	for r := range ch { … }
+//	if err := wait(); err != nil { … }
+func ToChannelErr[T any](sb iter.Seq[T]) (<-chan T, func() error) {
 	ch := make(chan T)
-	go func() {
+	var g panicGroup
+	g.Go(func() {
 		defer close(ch)
 		for item := range sb {
 			ch <- item
 		}
-	}()
-	return ch
+	})
+	return ch, func() error {
+		g.waitQuiet()
+		return g.captured()
+	}
 }
 
-// ToChannelWithErrors converts an error-aware iterator to channels
+// ToChannelWithErrors converts an error-aware iterator to channels. The
+// sequence is pulled in a goroutine; a stage panic there is delivered on
+// the error channel (as the error it carries) instead of crashing the
+// process (DFC142 step 1).
 func ToChannelWithErrors[T any](sb iter.Seq2[T, error]) (<-chan T, <-chan error) {
 	itemCh := make(chan T)
 	errCh := make(chan error, 1)
@@ -2417,6 +2443,11 @@ func ToChannelWithErrors[T any](sb iter.Seq2[T, error]) (<-chan T, <-chan error)
 	go func() {
 		defer close(itemCh)
 		defer close(errCh)
+		defer func() {
+			if r := recover(); r != nil {
+				errCh <- panicError(r)
+			}
+		}()
 
 		for item, err := range sb {
 			if err != nil {

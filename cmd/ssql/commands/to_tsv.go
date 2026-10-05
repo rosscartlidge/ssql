@@ -103,12 +103,22 @@ func generateToTSVCode(filename string, sep rune) error {
 	var code string
 	var imports []string
 	var params []lib.CodeParam
+	// The writer's error is checked (DFC142 step 0: these were bare
+	// calls, and a program whose output file could not be created exited
+	// 0 with nothing written — in every mode, since to tsv has only this
+	// record-shaped emission).
+	imports = append(imports, "fmt", "os")
 	if filename == "" {
-		code = fmt.Sprintf(`ssql.WriteTSVToWriterWithSeparator(%s, os.Stdout, %q)`, inputVar, sep)
-		imports = append(imports, "os")
+		code = fmt.Sprintf(`if err := ssql.WriteTSVToWriterWithSeparator(%s, os.Stdout, %q); err != nil {
+		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar, sep)
 	} else {
 		params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output TSV file", VarName: "flagOutput"})
-		code = fmt.Sprintf(`ssql.WriteTSVWithSeparator(%s, *flagOutput, %q)`, inputVar, sep)
+		code = fmt.Sprintf(`if err := ssql.WriteTSVWithSeparator(%s, *flagOutput, %q); err != nil {
+		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar, sep)
 	}
 
 	frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())

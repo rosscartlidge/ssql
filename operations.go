@@ -757,8 +757,11 @@ func LazyTee[T any](input iter.Seq[T], n int) []iter.Seq[T] {
 		channels[i] = make(chan T, 100) // Buffered to handle temporary speed differences
 	}
 
-	// Start broadcaster goroutine
-	go func() {
+	// The broadcaster pulls the input in its own goroutine; a stage panic
+	// there is captured and re-raised in whichever consumer drains next
+	// (DFC142 step 1 — it used to tear the process down from here).
+	var g panicGroup
+	g.Go(func() {
 		defer func() {
 			for _, ch := range channels {
 				close(ch)
@@ -782,7 +785,7 @@ func LazyTee[T any](input iter.Seq[T], n int) []iter.Seq[T] {
 				}
 			}
 		}
-	}()
+	})
 
 	// Create output iterators
 	streams := make([]iter.Seq[T], n)
@@ -803,6 +806,9 @@ func LazyTee[T any](input iter.Seq[T], n int) []iter.Seq[T] {
 					return
 				}
 			}
+			// The channel closed: the broadcaster finished or panicked.
+			// Wait for it (its close runs before the capture) and re-raise.
+			g.Wait()
 		}
 	}
 
@@ -1273,27 +1279,43 @@ func Timeout[T any](duration time.Duration) Filter[T, T] {
 			ctx, cancel := context.WithTimeout(context.Background(), duration)
 			defer cancel()
 
-			done := make(chan struct{})
-
-			go func() {
-				defer close(done)
+			// The producer pulls the input in its own goroutine so the clock
+			// can cut it off, and forwards each value over ch; yield is
+			// called HERE, in the consumer's goroutine, as the range-over-func
+			// contract requires (it was called from the producer until
+			// 2026-10-05). A stage panic in the producer is captured and
+			// re-raised here after the channel closes (DFC142 step 1).
+			ch := make(chan T)
+			var g panicGroup
+			g.Go(func() {
+				defer close(ch)
 				for v := range input {
 					select {
+					case ch <- v:
 					case <-ctx.Done():
-						return // Timeout reached
-					default:
-						if !yield(v) {
-							return
-						}
+						return // Timeout reached, or the consumer stopped
 					}
 				}
-			}()
+			})
 
-			select {
-			case <-done:
-				// Processing completed normally
-			case <-ctx.Done():
-				// Timeout reached
+			for {
+				select {
+				case v, ok := <-ch:
+					if !ok {
+						g.Wait() // producer finished: re-raise its panic, if any
+						return
+					}
+					if !yield(v) {
+						cancel()
+						g.Wait()
+						return
+					}
+				case <-ctx.Done():
+					// Timeout reached. The producer sees ctx.Done on its next
+					// send; a value already pulled is dropped, as before.
+					g.Wait()
+					return
+				}
 			}
 		}
 	}

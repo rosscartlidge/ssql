@@ -39,6 +39,19 @@ func runTypedPipeline(t *testing.T, bin, pipeline string) string {
 // the program's stdout.
 func goRunGenerated(t *testing.T, src string) string {
 	t.Helper()
+	out, err := goRunGeneratedResult(t, src)
+	if err != nil {
+		t.Fatalf("run generated: %v\n%s", err, out)
+	}
+	return out
+}
+
+// goRunGeneratedResult builds the generated source (a build failure is
+// fatal) and runs it, returning the combined output and the run error
+// so a caller can assert that a program FAILS (DFC142 step 0: the
+// record-mode to csv/tsv sinks exited 0 on an unwritable output).
+func goRunGeneratedResult(t *testing.T, src string) (string, error) {
+	t.Helper()
 	dir := t.TempDir()
 	mainGo := filepath.Join(dir, "main.go")
 	if err := os.WriteFile(mainGo, []byte(src), 0o644); err != nil {
@@ -65,10 +78,7 @@ func goRunGenerated(t *testing.T, src string) string {
 	run := exec.Command(filepath.Join(dir, "prog"))
 	run.Dir = dir
 	out, err := run.CombinedOutput()
-	if err != nil {
-		t.Fatalf("run generated: %v\n%s", err, out)
-	}
-	return string(out)
+	return string(out), err
 }
 
 func TestTypedFromToCSV(t *testing.T) {

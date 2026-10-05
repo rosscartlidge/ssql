@@ -70,7 +70,8 @@ func recoverCellError(err *error) {
 	if r == nil {
 		return
 	}
-	if ce, ok := r.(*ssql.CellError); ok {
+	var ce *ssql.CellError
+	if e, ok := r.(error); ok && errors.As(e, &ce) {
 		if ce.Sampled == 0 {
 			*err = fmt.Errorf("%w — choose another `-type %s TYPE` (string, int, float, bool, time) or fix the data", ce, ce.Column)
 		} else {

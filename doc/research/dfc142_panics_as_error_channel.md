@@ -2,7 +2,7 @@
 
 Reference: DFC142
 Created: 2026-09-30
-Last modified: 2026-09-30
+Last modified: 2026-10-05
 
 [Back to Index](./README.md)
 
@@ -445,6 +445,41 @@ exit 1 in every lane.
    or a fifth target (`generate lib`)?** A flag pair shares the source
    flags (DFC139's `pipelineSourceFlags`) for free and keeps "Go out" in
    one place; a target reads better in `-help`. Proposed: flags.
+
+## 8. Decisions and status
+
+Ross, 2026-10-05, on §6: (1) keep Must/Unsafe/programmer-error sites as
+panics but with `error` values; (2) both `Recover` and `Run`; (3)
+`Safely` yields `(zero, err)` once then stops; (4) the catalog
+goroutines get the same capture; (5) library mode: rows in, `iter.Seq2`
+out, sink dropped, params struct; (6) as `-package`/`-func` flags on
+`generate go`; scope now: foundations (§5 steps 1-4 + the sink fix),
+library mode as a separate plan.
+
+**Done 2026-10-05 (foundations):** the record `to csv`/`to tsv` error
+drop (both emissions each; `to tsv` had only the record one, so every
+mode was affected) with two ExpectFail corpus cases; `panicGroup`
+(`goroutine.go`) behind `LazyTee`, `Timeout` (which also stopped calling
+`yield` from its producer goroutine), `ToChannelErr` (new; `ToChannel`
+deprecated), `ToChannelWithErrors` (panic → `errCh`), and the two catalog
+shard goroutines (panic → `recordErr`); the seven string panics are
+errors and `TestPanicValuesAreErrors` scans the sources; `Recover`/`Run`
+(`recover.go`) used by `cmd/ssql/main.go`, the generated `main()`
+(`writeMainCallingRun`, which also made the typed assembler always
+import `ssql`, `fmt`, `os`) and `recoverCellError`; `Safely` in
+`core.go` with one test per failure kind. Each gate was watched to fail
+first: the sink corpus case exited 0, the three goroutine tests took the
+test binary down, the scan listed seven sites. A throwaway in-process
+service handling a bad-cell CSV through `Run` and through `Safely` got
+the `*CellError` both times and stayed alive. `generate go -run`
+compiles against the released module, so until the next release it
+needs `SSQL_MODULE_DIR=<checkout>` to find `ssql.Run`.
+
+**Found on the way, TODO:** `LazyTee` drops a value for a consumer whose
+buffered channel is full (its own comment says so) — silent data loss,
+out of scope here.
+
+**Next:** §5a Shape 2, library mode, as its own plan.
 
 ## 7. Related
 

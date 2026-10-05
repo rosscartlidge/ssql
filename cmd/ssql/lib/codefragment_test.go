@@ -105,12 +105,17 @@ func TestCollectParamsRename(t *testing.T) {
 
 // The generated main must turn a reader's fail-fast panic
 // (*ssql.CellError, DFC124 §3) into "Error: …" + exit 1, never a stack
-// trace — the same shape as a returned error.
+// trace — the same shape as a returned error. Since DFC142 step 3 it
+// does so through ssql.Run, the one conversion shared with the CLI and
+// with embedding services, instead of its own recover body.
 func TestWriteMainCallingRunRecoversErrorPanics(t *testing.T) {
 	var b strings.Builder
 	writeMainCallingRun(&b, true)
 	got := b.String()
-	for _, want := range []string{"recover()", `r.(error)`, `fmt.Fprintln(os.Stderr, "Error:", err)`, "os.Exit(1)", "panic(r)", "flag.Parse()", "func run() error {"} {
+	if strings.Contains(got, "recover()") {
+		t.Errorf("main carries its own recover; it must use ssql.Run:\n%s", got)
+	}
+	for _, want := range []string{"ssql.Run(run)", `fmt.Fprintln(os.Stderr, "Error:", err)`, "os.Exit(1)", "flag.Parse()", "func run() error {"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("main lacks %q:\n%s", want, got)
 		}

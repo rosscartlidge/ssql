@@ -53,7 +53,7 @@ func WindowFuncCode(fn WindowFunc) string {
 		return fmt.Sprintf("ssql.WAggregate(ssql.WAggSpec{Name: %q, Field: %q, Extra: %q, Kind: %q, MinRows: %d, Agg: %s, Code: %q})",
 			f.spec.Name, f.spec.Field, f.spec.Extra, f.spec.Kind, f.spec.MinRows, f.spec.Code, f.spec.Code)
 	}
-	panic(fmt.Sprintf("ssql.WindowFuncCode: unknown window function %T", fn))
+	panic(fmt.Errorf("ssql.WindowFuncCode: unknown window function %T", fn))
 }
 
 // WindowFuncField is the source field a window function reads ("" and
@@ -185,5 +185,5 @@ func DescribeWindowFunc(fn WindowFunc) WindowFuncDesc {
 		spec := f.spec
 		return WindowFuncDesc{Kind: "aggregate", Field: f.spec.Field, Agg: &spec}
 	}
-	panic(fmt.Sprintf("ssql.DescribeWindowFunc: unknown window function %T", fn))
+	panic(fmt.Errorf("ssql.DescribeWindowFunc: unknown window function %T", fn))
 }

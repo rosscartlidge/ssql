@@ -164,12 +164,22 @@ func generateToCSVCode(filename string) error {
 		return lib.WriteCodeFragment(frag)
 	}
 
+	// The writer's error is checked: until 2026-10-05 these two emissions
+	// were bare calls, so a record program whose output file could not be
+	// created exited 0 with nothing written (DFC142 step 0; the typed
+	// emissions above always checked).
+	imports = append(imports, "fmt", "os")
 	if filename == "" {
-		code = fmt.Sprintf(`ssql.WriteCSVToWriter(%s, os.Stdout)`, inputVar)
-		imports = append(imports, "os")
+		code = fmt.Sprintf(`if err := ssql.WriteCSVToWriter(%s, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar)
 	} else {
 		params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output CSV file", VarName: "flagOutput"})
-		code = fmt.Sprintf(`ssql.WriteCSV(%s, *flagOutput)`, inputVar)
+		code = fmt.Sprintf(`if err := ssql.WriteCSV(%s, *flagOutput); err != nil {
+		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar)
 	}
 
 	frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())

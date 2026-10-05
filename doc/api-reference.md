@@ -383,7 +383,8 @@ func ZeroPaddedNumber(s string) bool     // 007, 02134: an identifier, never a n
 ```go
 func From[T any](slice []T) iter.Seq[T]                    // same as slices.Values, named for discoverability
 func Concat[T any](seqs ...iter.Seq[T]) iter.Seq[T]        // all of the first, then the second, …; `union -all`
-func ToChannel[T any](sb iter.Seq[T]) <-chan T
+func ToChannelErr[T any](sb iter.Seq[T]) (<-chan T, func() error)  // pulled in a goroutine; wait() returns nil or the stage failure
+func ToChannel[T any](sb iter.Seq[T]) <-chan T                      // Deprecated: a stage failure closes the channel and is lost; use ToChannelErr
 func FromChannelSafe[T any](itemCh <-chan T, errCh <-chan error) iter.Seq2[T, error]
 func ToChannelWithErrors[T any](sb iter.Seq2[T, error]) (<-chan T, <-chan error)
 
@@ -1705,6 +1706,45 @@ safe := ssql.SelectSafe(func(x int) (int, error) {   // a transformation that ca
     return x * 2, nil
 })(ssql.Safe(numbers))
 ```
+
+### Recovering a pipeline failure in-process
+
+```go
+func Recover(err *error)                          // defer ssql.Recover(&err) in the function whose loop drives the pipeline
+func Run(fn func() error) (err error)             // fn's error, or the pipeline panic as an error
+func Safely[T, U any](f Filter[T, U]) FilterWithErrors[T, U]   // a stage failure becomes the stream's last element, (zero, err)
+```
+
+The contract: a plain form fails fast with a panic whose value is an
+`error` (typed for data errors, so `errors.As` works); it surfaces in
+the goroutine that pulls the pipeline, and the helpers that pull in a
+goroutine of their own (`LazyTee`, `Timeout`, `ToChannelErr`,
+`ToChannelWithErrors`) re-raise or report it there, never from the
+background. So a service needs one of two things:
+
+```go
+// One recover around the loop: the CLI and every generated program do this.
+func handle(path string) (err error) {
+    defer ssql.Recover(&err)
+    src, err := ssql.ReadCSV(path)
+    if err != nil {
+        return err
+    }
+    for r := range pipeline(src) { … }
+    return nil
+}
+// or, as a value: err := ssql.Run(func() error { … })
+
+// Or the failure as a stream element, composable with ChainWithErrors:
+for r, err := range ssql.Safely(pipeline)(ssql.ReadCSVSafe(path)) {
+    var cell *ssql.CellError
+    if errors.As(err, &cell) { … }
+}
+```
+
+Neither changes what is an error: an unparsable cell stops the run in
+every ssql lane, and a program that turned it into a zero would disagree
+with the CLI on the same file.
 
 ### Error types
 

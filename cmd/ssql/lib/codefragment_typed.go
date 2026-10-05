@@ -163,6 +163,11 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 			importSet["github.com/rosscartlidge/ssql/v4"] = true
 		}
 	}
+	// main() is `if err := ssql.Run(run); err != nil { fmt.Fprintln(os.Stderr, …); os.Exit(1) }`
+	// in every mode (DFC142 step 3), so these three are always needed.
+	importSet["github.com/rosscartlidge/ssql/v4"] = true
+	importSet["fmt"] = true
+	importSet["os"] = true
 	imports := make([]string, 0, len(importSet))
 	for imp := range importSet {
 		imports = append(imports, imp)

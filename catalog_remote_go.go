@@ -99,6 +99,11 @@ func ProcessCatalogShardsRemoteGo(
 			wg.Add(1)
 			go func(e CatalogEntry) {
 				defer wg.Done()
+				defer func() { // a panic in a shard runner is that shard's error, not the process's end
+					if r := recover(); r != nil {
+						recordErr(fmt.Errorf("shard %s:%s: %w", e.Host, e.Path, panicError(r)))
+					}
+				}()
 				if sem != nil {
 					select {
 					case sem <- struct{}{}:
@@ -154,6 +159,11 @@ func runCatalogOrder(
 		wg.Add(1)
 		go func(i int, e CatalogEntry) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					recordErr(fmt.Errorf("shard %s:%s: %w", e.Host, e.Path, panicError(r)))
+				}
+			}()
 			if sem != nil {
 				select {
 				case sem <- struct{}{}:

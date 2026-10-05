@@ -101,7 +101,11 @@ func TestPipelineFlag_FailingStageLoud(t *testing.T) {
 // SSQL_MODULE_DIR: generate go -run compiles against the released
 // module by default (a not-yet-released library function is
 // "undefined" there); pointing it at the checkout makes the generated
-// program build against local source. Pinned by using describe, which
+// program build against local source. The package's TestMain sets it
+// for every test (the generated main() calls ssql.Run, which is in the
+// checkout before it is in any release — DFC142); this test sets it
+// explicitly and asserts the -explain notice and the loud refusal of a
+// bogus directory. Pinned by using describe, which
 // depends on DescribeFilter — present in this checkout regardless of
 // what the proxy has.
 func TestPipelineFlag_ModuleDirReplace(t *testing.T) {
@@ -118,7 +122,7 @@ func TestPipelineFlag_ModuleDirReplace(t *testing.T) {
 	if err := os.Symlink(bin, filepath.Join(binDir, "ssql")); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "generate", "go", "-mode", "record", "-run", "-pipeline",
+	cmd := exec.Command(bin, "generate", "go", "-mode", "record", "-run", "-explain", "-pipeline",
 		"ssql from "+csv+" | ssql describe age | ssql to csv")
 	cmd.Env = append(os.Environ(), "SSQL_MODULE_DIR="+repo, "PATH="+binDir+":"+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()

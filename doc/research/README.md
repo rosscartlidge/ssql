@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-09-30 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-10-05 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -149,7 +149,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC139 | 2026-09-29 | 2026-09-29 | [Where `generate`'s Source Flags Belong: `-pipeline`, `-script`, `-json` and `-mode`](./dfc139_generate_source_flags.md) |
 | DFC140 | 2026-09-29 | 2026-09-30 | [User Documentation Cleanup: Audit and Recommendations](./dfc140_user_doc_cleanup.md) |
 | DFC141 | 2026-09-29 | 2026-09-29 | [`ssql/typed` Roadmap History](./dfc141_typed_roadmap_history.md) |
-| DFC142 | 2026-09-30 | 2026-09-30 | [Panics as the Library's Error Channel: What Embedding ssql in a Server Needs](./dfc142_panics_as_error_channel.md) |
+| DFC142 | 2026-09-30 | 2026-10-05 | [Panics as the Library's Error Channel: What Embedding ssql in a Server Needs](./dfc142_panics_as_error_channel.md) |
 
 <!-- DFC-INDEX-END -->
 

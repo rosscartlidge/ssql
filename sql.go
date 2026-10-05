@@ -3156,7 +3156,7 @@ func streamWindowDelayed(regularAggs []swSpecAgg, leadSpecs []streamWindowLeadSp
 func MustStreamWindow(configs []WindowConfig) Filter[Record, Record] {
 	f, err := StreamWindow(configs)
 	if err != nil {
-		panic(fmt.Sprintf("MustStreamWindow: %v", err))
+		panic(fmt.Errorf("MustStreamWindow: %w", err))
 	}
 	return f
 }

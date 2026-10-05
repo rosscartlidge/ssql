@@ -92,6 +92,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			if v, ok := ctx.GlobalFlags["-explain"]; ok {
 				explain = v.(bool)
 			}
+			explainBuild = explain
 			var timeRun bool
 			if v, ok := ctx.GlobalFlags["-time"]; ok {
 				timeRun = v.(bool)
@@ -480,6 +481,10 @@ var fullGoVersionRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 // either in Go's module cache (typical after `go install
 // github.com/rosscartlidge/ssql/v4/cmd/ssql@vX.Y.Z`) or available
 // to fetch from the proxy.
+// explainBuild mirrors -explain for compileGoSource, which has no flag
+// context: the SSQL_MODULE_DIR notice prints only when asked.
+var explainBuild bool
+
 func compileGoSource(code, outPath string) (tempDir, binPath string, err error) {
 	if _, err := exec.LookPath("go"); err != nil {
 		return "", "", fmt.Errorf("ssql generate go: 'go' binary not found in PATH (a Go toolchain is required)")
@@ -513,7 +518,12 @@ require github.com/rosscartlidge/ssql/v4 v%s
 			return "", "", fmt.Errorf("SSQL_MODULE_DIR=%s: no go.mod there (expected the ssql checkout root)", dev)
 		}
 		goMod += fmt.Sprintf("\nreplace github.com/rosscartlidge/ssql/v4 => %s\n", abs)
-		fmt.Fprintf(os.Stderr, "ssql generate go: compiling against local module %s (SSQL_MODULE_DIR)\n", abs)
+		// The notice is -explain output: whoever set the variable knows;
+		// a test harness that sets it for every run (cmd/ssql's TestMain)
+		// must not find it in the program's combined output.
+		if explainBuild {
+			fmt.Fprintf(os.Stderr, "ssql generate go: compiling against local module %s (SSQL_MODULE_DIR)\n", abs)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
 		os.RemoveAll(dir)

@@ -51,6 +51,10 @@ type PipelineCase struct {
 	Pipeline string
 	Contains []string // substrings the program output must contain
 	Excludes []string // substrings the program output must NOT contain
+	// ExpectFail: the generated program must exit non-zero (its combined
+	// output is what Contains/Excludes match). A sink that cannot write
+	// its file must say so and fail in EVERY lane (DFC142 step 0).
+	ExpectFail bool
 	// SkipTyped/SkipParallel: non-empty reason → skip that mode.
 	SkipRecord   string
 	SkipTyped    string
@@ -204,6 +208,18 @@ func corpusData(t *testing.T) string {
 // returns its stdout.
 func runCorpusPipeline(t *testing.T, mode, pipeline string) string {
 	t.Helper()
+	out, err := runCorpusPipelineResult(t, mode, pipeline)
+	if err != nil {
+		t.Fatalf("run generated: %v\n%s", err, out)
+	}
+	return out
+}
+
+// runCorpusPipelineResult is runCorpusPipeline returning the generated
+// program's combined output and run error instead of failing on a
+// non-zero exit, for ExpectFail cases.
+func runCorpusPipelineResult(t *testing.T, mode, pipeline string) (string, error) {
+	t.Helper()
 	bin := corpusBin(t)
 	data := corpusData(t)
 	cmdline := strings.NewReplacer("{{.bin}}", bin, "{{.data}}", data).Replace(pipeline)
@@ -224,7 +240,7 @@ func runCorpusPipeline(t *testing.T, mode, pipeline string) string {
 			mode, full, err, src)
 	}
 
-	return goRunGenerated(t, string(src))
+	return goRunGeneratedResult(t, string(src))
 }
 
 // runCorpusCase exercises a single PipelineCase across all modes
@@ -247,7 +263,16 @@ func runCorpusCase(t *testing.T, c PipelineCase) {
 				t.Skip(m.skip)
 			}
 			t.Parallel()
-			out := runCorpusPipeline(t, m.env, c.Pipeline)
+			var out string
+			if c.ExpectFail {
+				var err error
+				out, err = runCorpusPipelineResult(t, m.env, c.Pipeline)
+				if err == nil {
+					t.Errorf("generated program exited 0; the pipeline must fail\n--- pipeline:\n%s\n--- output:\n%s", c.Pipeline, out)
+				}
+			} else {
+				out = runCorpusPipeline(t, m.env, c.Pipeline)
+			}
 			for _, want := range c.Contains {
 				if !strings.Contains(out, want) {
 					t.Errorf("output missing %q\n--- pipeline:\n%s\n--- output:\n%s",
@@ -272,6 +297,22 @@ func TestPipelineCorpus(t *testing.T) {
 	}
 
 	cases := []PipelineCase{
+		{
+			// A sink that cannot write its file must fail in every lane.
+			// Until 2026-10-05 the record-mode to csv / to tsv emissions
+			// ignored the writer's error, so a record program exited 0
+			// with nothing written (DFC142 step 0).
+			Name:       "sink_unwritable_csv_fails",
+			Pipeline:   `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} to csv /nonexistent-ssql-dir/out.csv`,
+			ExpectFail: true,
+			Contains:   []string{"no such file or directory"},
+		},
+		{
+			Name:       "sink_unwritable_tsv_fails",
+			Pipeline:   `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} to tsv /nonexistent-ssql-dir/out.tsv`,
+			ExpectFail: true,
+			Contains:   []string{"no such file or directory"},
+		},
 		{
 			// DFC110: seeded sample must compile and run in all three
 			// modes (byte-identity is TestPipelineEquivalence's job;

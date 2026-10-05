@@ -40,6 +40,11 @@ if [[ -n "${SSQL_BIN:-}" ]]; then
   ln -s "$(command -v "$SSQL_BIN" || echo "$SSQL_BIN")" "$BIN_DIR/ssql"
 elif [[ -n "$ROOT" ]]; then
   (cd "$ROOT" && go build -o "$BIN_DIR/ssql" ./cmd/ssql) || { echo "codelab-run: build failed"; exit 1; }
+  # `generate go -run` compiles the generated program against the RELEASED
+  # module at the binary's version; in the repository it must compile
+  # against this checkout (as codelab-go-run.sh's `replace` does), or a
+  # new export the generated code uses is "undefined" until the release.
+  export SSQL_MODULE_DIR="$ROOT"
 elif command -v ssql >/dev/null; then
   ln -s "$(command -v ssql)" "$BIN_DIR/ssql"
 else

@@ -309,7 +309,7 @@ func (js JSONString) Parse() (any, error) {
 func (js JSONString) MustParse() any {
 	result, err := js.Parse()
 	if err != nil {
-		panic(fmt.Sprintf("failed to parse JSONString: %v", err))
+		panic(fmt.Errorf("failed to parse JSONString: %w", err))
 	}
 	return result
 }
@@ -2022,6 +2022,54 @@ func Unsafe[T any](seq iter.Seq2[T, error]) iter.Seq[T] {
 			}
 			if !yield(v) {
 				return
+			}
+		}
+	}
+}
+
+// Safely runs f under a recover and reports a pipeline failure as a
+// stream element: the elements come through with a nil error, and a
+// stage panic — a cell that does not fit its column, a value a cast
+// cannot convert, a group that cannot be ordered, a spill that cannot be
+// written — ends the sequence with (zero, err) as its last element
+// instead of propagating (the ReadCSVSafe idiom; errors.As works on the
+// typed errors). An error carried by the input ends it the same way.
+// Compose with PipeWithErrors / ChainWithErrors; wrap a plain source
+// with Safe. This is the per-pipeline alternative to Recover for code
+// that wants the failure as a value (DFC142 step 4):
+//
+//	out := ssql.Safely(ssql.Chain(ssql.GroupByFields("g", "dept"), ssql.Aggregate("g", aggs)))(ssql.ReadCSVSafe(path))
+//	for r, err := range out {
+//	    if err != nil { … }
+//	}
+func Safely[T, U any](f Filter[T, U]) FilterWithErrors[T, U] {
+	return func(input iter.Seq2[T, error]) iter.Seq2[U, error] {
+		return func(yield func(U, error) bool) {
+			var inErr error
+			plain := func(yieldT func(T) bool) {
+				for v, err := range input {
+					if err != nil {
+						inErr = err
+						return
+					}
+					if !yieldT(v) {
+						return
+					}
+				}
+			}
+			stopped := false
+			err := Run(func() error {
+				for u := range f(plain) {
+					if !yield(u, nil) {
+						stopped = true
+						return nil
+					}
+				}
+				return inErr
+			})
+			if err != nil && !stopped {
+				var zero U
+				yield(zero, err)
 			}
 		}
 	}

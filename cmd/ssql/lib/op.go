@@ -1,5 +1,6 @@
 package lib
 
+import "fmt"
 import "os"
 
 // Op is the language-neutral operation descriptor on a CodeFragment
@@ -65,7 +66,7 @@ func DeclareOrder(kind, order string) {
 	switch order {
 	case OrderTransparent, OrderReset, OrderConsumes:
 	default:
-		panic("lib.DeclareOrder: unknown order behavior " + order + " for " + kind)
+		panic(fmt.Errorf("lib.DeclareOrder: unknown order behavior %s for %s", order, kind))
 	}
 	orderRegistry[kind] = order
 }
@@ -84,7 +85,7 @@ func DeclareOrderWhenFlag(kind, flag, order string) {
 	switch order {
 	case OrderTransparent, OrderReset, OrderConsumes:
 	default:
-		panic("lib.DeclareOrderWhenFlag: unknown order behavior " + order + " for " + kind)
+		panic(fmt.Errorf("lib.DeclareOrderWhenFlag: unknown order behavior %s for %s", order, kind))
 	}
 	orderFlagOverrides[kind] = struct{ flag, order string }{flag, order}
 }

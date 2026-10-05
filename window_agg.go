@@ -27,7 +27,7 @@ func (wAgg) windowFunc() {}
 // Remove), so `-presorted` streaming refuses it with the reason.
 func WAggregate(spec WAggSpec) WindowFunc {
 	if spec.Agg == nil {
-		panic(fmt.Sprintf("ssql.WAggregate(%q): nil aggregate", spec.Name))
+		panic(fmt.Errorf("ssql.WAggregate(%q): nil aggregate", spec.Name))
 	}
 	if spec.MinRows < 1 {
 		spec.MinRows = 1

@@ -424,6 +424,47 @@ reference. In a Go program you write the expression as Go; `generate go`
 does exactly that for a pipeline, compiling each expression to native
 code.
 
+## Embedding in a service
+
+A pipeline fails fast: a cell that does not fit its column, a value a
+cast cannot convert or a group that cannot be ordered stops the run with
+a panic whose value is an `error` (typed, so `errors.As` works). In the
+CLI and in a generated program that panic is recovered at the process
+boundary. In a long-running service there is no such boundary, so put one
+around the loop that drives the pipeline, or ask for the failure as a
+value:
+
+```go
+// One recover per request: the process survives, the handler gets the error.
+func handle(path string) (err error) {
+    defer ssql.Recover(&err)
+    src, err := ssql.ReadCSV(path)
+    if err != nil {
+        return err
+    }
+    for r := range pipeline(src) {
+        emit(r)
+    }
+    return nil
+}
+
+// Or the failure as the stream's last element:
+for r, err := range ssql.Safely(pipeline)(ssql.ReadCSVSafe(path)) {
+    var cell *ssql.CellError
+    if errors.As(err, &cell) {
+        log.Printf("row %d: %q is not %s", cell.Row, cell.Value, cell.Type)
+        break
+    }
+    emit(r)
+}
+```
+
+`ssql.Run(func() error { … })` is the closure form of `Recover`. The
+helpers that pull a sequence in their own goroutine (`Timeout`,
+`LazyTee`, `ToChannelErr`) report a failure to the consumer, not from
+the background. The [API Reference](api-reference.md#error-handling)
+has the contract.
+
 ## Try the examples
 
 Run these from a clone of the repository to see ssql in action:

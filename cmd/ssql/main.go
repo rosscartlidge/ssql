@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/rosscartlidge/ssql/v4"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -127,6 +128,7 @@ func buildRootCommand() *cf.Command {
 }
 
 func main() {
+	var err error
 	// Paren-aware cursor-context protocol (-complete-source, -cursor-stage,
 	// -help-at) for the Ctrl-O / Alt-h keybindings — shared with the browser
 	// playground via commands.HandleCursorProtocol. WriteString (not
@@ -172,17 +174,12 @@ func main() {
 	// produced a map, a reader's CellError that no command recovered) is
 	// an error to the user, not a goroutine dump — the same rule generated
 	// programs follow. SSQL_DEBUG=1 keeps the trace.
-	defer func() {
-		if r := recover(); r != nil {
-			if os.Getenv("SSQL_DEBUG") != "" {
-				panic(r)
-			}
-			fmt.Fprintf(os.Stderr, "Error: %v\n", r)
-			os.Exit(1)
-		}
-	}()
-	cmd := buildRootCommand()
-	if err := cmd.Execute(os.Args[1:]); err != nil {
+	if os.Getenv("SSQL_DEBUG") == "" {
+		err = ssql.Run(func() error { return buildRootCommand().Execute(os.Args[1:]) })
+	} else {
+		err = buildRootCommand().Execute(os.Args[1:]) // a panic keeps its trace
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
