@@ -251,6 +251,7 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 
 ## Release Infrastructure
 
+- [ ] **Regenerate `GH_PAT` again** (2026-10-05, v4.111.0): goreleaser's Homebrew cask step failed with `GET …/repos/rosscartlidge/homebrew-ssql: 401 Bad credentials` — the PAT regenerated 2026-07-03 has expired. 14 assets were published; the cask was updated by hand (homebrew-ssql 3ce59cd). When regenerating, pick a longer expiry or a fine-grained token on the one repo, and note the expiry date here.
 - [x] **Regenerate the `GH_PAT` secret** (found 2026-07-03, v4.56.0 release): the goreleaser workflow's Homebrew-tap push failed with `401 Bad credentials` against `rosscartlidge/homebrew-ssql` — the PAT worked for v4.55.0 on 2026-07-01, so it expired/was revoked in between. The GitHub Release itself succeeded (14 assets); only the tap push uses `GH_PAT` (`.goreleaser.yml` line ~89). v4.56.0's cask was updated manually (homebrew-ssql commit 228e46a). Regenerated + secret updated 2026-07-03; will be exercised (and proven) by the next tagged release's automatic tap push.
 
 ## User documentation cleanup (see dfc140_user_doc_cleanup.md)
