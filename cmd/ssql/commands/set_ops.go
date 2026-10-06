@@ -295,14 +295,12 @@ func sideFileReadCode(varName, file string) (code string, imports []string, need
 		}
 		return fmt.Sprintf(`%s, err := ssql.%s(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: opening %s: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("opening %s: %%w", err)
 	}`, varName, reader, file, file), []string{"fmt", "os"}, false
 	default:
 		return fmt.Sprintf(`%sHandle, err := os.Open(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: opening %s: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("opening %s: %%w", err)
 	}
 	defer %sHandle.Close()
 	%s := lib.ReadJSONLWithSchema(%sHandle).Records`, varName, file, file, varName, varName, varName),

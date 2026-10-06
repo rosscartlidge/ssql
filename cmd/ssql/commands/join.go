@@ -743,8 +743,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 	case strings.HasSuffix(lower, ".jsonl"):
 		initCode = `joinHandle, err := os.Open(*flagJoin)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: opening %s: %v\n", *flagJoin, err)
-		os.Exit(1)
+		return fmt.Errorf("opening %s: %w", *flagJoin, err)
 	}
 	// closed when the reader is done, NOT when this function returns: the
 	// reader is lazy (a deferred Close here truncated large side files)
@@ -799,8 +798,7 @@ func advisoryToSchemaType(goType string) string {
 func joinReadTemplate(reader string) string {
 	return `records, err := ssql.` + reader + `(*flagJoin)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: opening %s: %v\n", *flagJoin, err)
-		os.Exit(1)
+		return fmt.Errorf("opening %s: %w", *flagJoin, err)
 	}`
 }
 
@@ -978,8 +976,9 @@ func mergeJoinSchemas(left, right *lib.TypedSchema) (*lib.TypedSchema, string) {
 		}
 		merged.Fields = append(merged.Fields, f)
 	}
-	// Render struct with no tags — this is a synthetic merge type, not
-	// meant to round-trip through CSV reading.
+	// Tagged like every generated row type: `ssql` for the typed
+	// runtime, `json` so a library caller's encoding/json sees the
+	// pipeline's column names (DFC142 library mode).
 	var b strings.Builder
 	fmt.Fprintf(&b, "// %s is the merged row type produced by the join.\n", merged.TypeName)
 	fmt.Fprintf(&b, "type %s struct {\n", merged.TypeName)
@@ -994,7 +993,7 @@ func mergeJoinSchemas(left, right *lib.TypedSchema) (*lib.TypedSchema, string) {
 		}
 	}
 	for _, f := range merged.Fields {
-		fmt.Fprintf(&b, "\t%-*s %s\n", maxName, f.GoName, f.GoType)
+		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q json:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name, f.Name)
 	}
 	b.WriteString("}\n")
 	return merged, b.String()

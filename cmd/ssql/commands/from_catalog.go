@@ -380,8 +380,7 @@ func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.Catalo
 
 	code := fmt.Sprintf(`entries, err := ssql.ReadCatalog(*flagCatalog)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%%w", err)
 	}
 	entries = ssql.PruneCatalog(entries, %s)
 	entries = ssql.ExpandCatalogGlobs(entries)

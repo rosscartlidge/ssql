@@ -411,6 +411,13 @@ func (f *CodeFragment) GetInputVar() string {
 var HeaderNote string
 
 func AssembleCodeFragments(input io.Reader) (string, error) {
+	return AssembleCodeFragmentsWith(input, AssembleOptions{})
+}
+
+// AssembleCodeFragmentsWith is AssembleCodeFragments with the skeleton
+// chosen by opts: a package-main program by default, an importable
+// function when opts.Package is set (library mode, codefragment_library.go).
+func AssembleCodeFragmentsWith(input io.Reader, opts AssembleOptions) (string, error) {
 	// Read all fragments from stdin
 	var fragments []*CodeFragment
 	decoder := json.NewDecoder(input)
@@ -450,6 +457,11 @@ func AssembleCodeFragments(input io.Reader) (string, error) {
 				fmt.Fprintf(os.Stderr, "[plan] %s: %s\n", frag.Command, note)
 			}
 		}
+	}
+
+	// Library mode: one skeleton for both record and typed fragments.
+	if opts.Package != "" {
+		return assembleLibrary(fragments, opts)
 	}
 
 	// Phase 2: if any fragment carries a typed schema, route through the

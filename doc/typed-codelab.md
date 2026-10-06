@@ -543,6 +543,14 @@ which form the planner chose and why.
 > scripts using `parallel` keep working; new code should just use
 > `typed`.
 
+**Importing instead of running.** `generate go -package NAME -func NAME`
+emits the same typed pipeline as a function — `func F(in iter.Seq[Row],
+p FParams) iter.Seq2[Out, error]` with a `FFromCSV(r io.Reader, p)`
+reader form — for a program that already exists: a service, a test, a
+batch job with its own main. The library form runs the serial typed
+plan (its input is a sequence the caller owns, not a file the planner
+can shard). See [CLI Codelab § 7](cli-codelab.md#7-generate-code).
+
 ## Cheat sheet
 
 ```go

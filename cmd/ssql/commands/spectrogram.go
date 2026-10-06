@@ -192,14 +192,12 @@ func generateSpectrogramCode(inputFile, field string, windowSize, hopSize int, w
 	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
 		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error extracting signal: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error extracting signal: %%w", err)
 	}
 
 	spectrogramBins, err := ssql.Spectrogram(signal, %s)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error computing spectrogram: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error computing spectrogram: %%w", err)
 	}
 
 	spectrogramRecords := ssql.SpectrogramToRecords(spectrogramBins)`,

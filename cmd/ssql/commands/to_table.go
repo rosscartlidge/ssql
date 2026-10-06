@@ -236,14 +236,14 @@ func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpec
 	// Emit a TableColumn[<RowType>]-typed slice literal then call
 	// typed.WriteTableSelectedToWriter.
 	var b strings.Builder
-	fmt.Fprintf(&b, "if err := typed.WriteTableSelectedToWriter(%s, ctx.Stdout(), []typed.TableColumn[%s]{\n", inputVar, schema.TypeName)
+	fmt.Fprintf(&b, "if err := typed.WriteTableSelectedToWriter(%s, os.Stdout, []typed.TableColumn[%s]{\n", inputVar, schema.TypeName)
 	for _, f := range selected {
 		right := isNumericOrBoolGoType(f.GoType)
 		fmt.Fprintf(&b, "\t\t{Header: %q, Format: func(r *%s) string { return fmt.Sprintf(\"%%v\", r.%s) }, RightAlign: %t},\n",
 			f.Name, schema.TypeName, f.GoName, right)
 	}
 	fmt.Fprintf(&b, "\t}, %d); err != nil {\n", maxWidth)
-	b.WriteString("\t\tfmt.Fprintf(ctx.Stderr(), \"to table: %v\\n\", err)\n")
+	b.WriteString("\t\tfmt.Fprintf(os.Stderr, \"to table: %v\\n\", err)\n")
 	b.WriteString("\t\tos.Exit(1)\n")
 	b.WriteString("\t}")
 	return b.String()

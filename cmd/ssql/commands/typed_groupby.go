@@ -327,7 +327,7 @@ func renderResultStructDef(s *lib.TypedSchema) string {
 		}
 	}
 	for _, f := range s.Fields {
-		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name)
+		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q json:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name, f.Name)
 	}
 	b.WriteString("}\n")
 	return b.String()

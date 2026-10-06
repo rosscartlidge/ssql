@@ -58,7 +58,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 		}
 	}
 	for _, f := range derived.Fields {
-		fmt.Fprintf(&sb, "\t%-*s %-*s `ssql:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name)
+		fmt.Fprintf(&sb, "\t%-*s %-*s `ssql:%q json:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name, f.Name)
 	}
 	sb.WriteString("}\n")
 	structDef := sb.String()

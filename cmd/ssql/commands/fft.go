@@ -153,14 +153,12 @@ func generateFFTCode(inputFile, field string, sampleRate float64, includePhase b
 		// Direct Arrow extraction - bypasses Record conversion
 		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error extracting signal: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error extracting signal: %%w", err)
 	}
 
 	spectrum, err := ssql.FFT%s(signal)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error computing FFT: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error computing FFT: %%w", err)
 	}
 
 	fftRecords := ssql.SpectrumToRecords(spectrum, %v)`,

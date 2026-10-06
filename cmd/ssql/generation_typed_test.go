@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,16 +53,32 @@ func goRunGenerated(t *testing.T, src string) string {
 // record-mode to csv/tsv sinks exited 0 on an unwritable output).
 func goRunGeneratedResult(t *testing.T, src string) (string, error) {
 	t.Helper()
+	return goRunGeneratedModule(t, "typedtest", map[string]string{"main.go": src})
+}
+
+// goRunGeneratedModule writes files (path → source, subdirectories
+// allowed) into a temp module that replaces ssql with this checkout,
+// builds the main package at its root and runs it, returning the
+// combined output and the run error. A build failure is fatal and
+// prints every file. Library mode (generate go -package) needs the
+// multi-file form: the generated package plus a driver main.
+func goRunGeneratedModule(t *testing.T, module string, files map[string]string) (string, error) {
+	t.Helper()
 	dir := t.TempDir()
-	mainGo := filepath.Join(dir, "main.go")
-	if err := os.WriteFile(mainGo, []byte(src), 0o644); err != nil {
-		t.Fatal(err)
+	for name, src := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	repo, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	mod := "module typedtest\n\ngo 1.24\n\nrequire github.com/rosscartlidge/ssql/v4 v4.0.0\n\nreplace github.com/rosscartlidge/ssql/v4 => " + repo + "\n"
+	mod := "module " + module + "\n\ngo 1.24\n\nrequire github.com/rosscartlidge/ssql/v4 v4.0.0\n\nreplace github.com/rosscartlidge/ssql/v4 => " + repo + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(mod), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +90,11 @@ func goRunGeneratedResult(t *testing.T, src string) (string, error) {
 	build := exec.Command("go", "build", "-o", "prog", ".")
 	build.Dir = dir
 	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build generated:\n%s\n--- source:\n%s", out, src)
+		var all strings.Builder
+		for name, src := range files {
+			fmt.Fprintf(&all, "--- %s:\n%s\n", name, src)
+		}
+		t.Fatalf("go build generated:\n%s\n%s", out, all.String())
 	}
 	run := exec.Command(filepath.Join(dir, "prog"))
 	run.Dir = dir

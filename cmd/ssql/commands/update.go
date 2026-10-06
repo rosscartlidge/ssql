@@ -813,8 +813,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				stmtBuilder.WriteString(indent + "\t} else if err != nil {\n")
 				// Match exec: an eval error fails the pipeline loudly.
 				// (Previously the generated code silently set the field to "".)
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\tfmt.Fprintf(os.Stderr, \"Error: update -set-expr %s: %%v\\n\", err)\n", indent, upd.field))
-				stmtBuilder.WriteString(indent + "\t\tos.Exit(1)\n")
+				stmtBuilder.WriteString(fmt.Sprintf("%s\t\tpanic(fmt.Errorf(\"update -set-expr %s: %%w\", err))\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t} else {\n")
 				stmtBuilder.WriteString(indent + "\t\tswitch v := result.(type) {\n")
 				stmtBuilder.WriteString(indent + "\t\tcase int64:\n")

@@ -769,19 +769,17 @@ func LazyTee[T any](input iter.Seq[T], n int) []iter.Seq[T] {
 		}()
 
 		for v := range input {
-			// Send to all channels
-			for i, ch := range channels {
+			// Send to every consumer, blocking on a full buffer: that is the
+			// backpressure the doc promises. Until 2026-10-05 a `default:`
+			// branch dropped the value for any consumer whose buffer was full
+			// — silent data loss for both consumers once the producer
+			// outpaced them (a 1,000-element source delivered 201 and 150).
+			for _, ch := range channels {
 				select {
 				case ch <- v:
-					// Successfully sent to this channel
 				case <-done:
 					// One of the consumers has terminated, stop broadcasting
 					return
-				default:
-					// Channel is full - consumer is too slow
-					// For now, we'll drop the value for this consumer
-					// In production, you might want different backpressure strategies
-					_ = i // Just to use the variable
 				}
 			}
 		}

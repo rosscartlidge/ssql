@@ -5,6 +5,48 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Library mode: `ssql generate go -package NAME [-func NAME]`** (DFC142
+  §5a shape 2). The pipeline is assembled as an importable function
+  `func F(in iter.Seq[Row], p FParams) iter.Seq2[Out, error]` instead of
+  a `package main`: the source stage becomes the input sequence (a
+  `FFromCSV`/`FFromTSV(r io.Reader, p)` reader form is added for a
+  delimited-file source), every `-param` and lifted literal becomes a
+  field of `FParams` (`FDefaults()` holds the pipeline's literals), the
+  sink is dropped, and the body runs under `ssql.Safely` so a stage
+  failure ends the sequence with an error. Generated type names are
+  prefixed with the function name so several pipelines can share a
+  package. Works in record and typed mode (the serial typed plan; the
+  parallel library form is a follow-up). `-package` is incompatible
+  with `-run`/`-build`; the optimiser forwards both flags.
+- **Every generated row struct carries `json` tags** with the pipeline's
+  column names (group-by results, joins, update, cast, projection,
+  extract, resample, unpivot, rollup), so a library caller's
+  `encoding/json` emits the same names the CLI does.
+- `TestStageCodeNeverExits`: a generated stage (init or stmt fragment)
+  must not call `os.Exit`; `TestLibraryMode` and a `go-lib` lane in
+  `TestPipelineEquivalence` compile and run the library form against the
+  exec lane.
+
+### Fixed
+- **`LazyTee` dropped values for a slow consumer**: its broadcast loop
+  had a `default:` branch that discarded a value whenever a consumer's
+  buffer was full (a 1,000-element source delivered 201 and 150). It
+  now blocks, the backpressure its doc promised.
+- **Generated stage code no longer exits the process.** Twenty emitters
+  (side-file reads in join/union/merge/set-ops, the sampled, Parquet,
+  XLSX, WAV, SSH and catalog sources, the four signal commands, resample,
+  extract without `-skip`, update's expression error) printed to stderr
+  and called `os.Exit(1)`; they now return the error from `run()` or
+  panic with it, which `ssql.Run` reports identically in a program and
+  `ssql.Safely` delivers in a library. The four signal commands and the
+  typed `to table FIELDS` sink also referenced `ctx.Stdout()`/`ctx.Stderr()`,
+  names that do not exist in a generated program.
+- `generate go -help` examples say `SSQL_MODE=typed` (`parallel` is a
+  deprecated alias).
+
 ## [4.111.0] - 2026-10-05
 
 ### Added

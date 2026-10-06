@@ -290,12 +290,10 @@ func sshPlainLandingCode(host, path, remoteBin, outVar string) (string, []string
 	sshCmd.Stderr = os.Stderr
 	sshStdout, err := sshCmd.StdoutPipe()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%%w", err)
 	}
 	if err := sshCmd.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%%w", err)
 	}
 	defer sshCmd.Wait()
 	%s := ssql.ReadJSONLFromReader(sshStdout)`, remoteBin, outVar)
@@ -381,12 +379,10 @@ func sshScriptLandingCode(host, path, remoteBin string, pipelineArgs []string, o
 	sshCmd.Stderr = os.Stderr
 	sshStdout, err := sshCmd.StdoutPipe()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%%w", err)
 	}
 	if err := sshCmd.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%%w", err)
 	}
 	defer sshCmd.Wait()
 	%s := ssql.ReadJSONLFromReader(sshStdout)`, scriptLiteral, remoteMode, remoteBin, outVar)

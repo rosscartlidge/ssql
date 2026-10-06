@@ -175,19 +175,16 @@ func generateIFFTCode(inputFile, magnitudeField, phaseField, outputField string)
 	if inputFile != "" && strings.HasSuffix(strings.ToLower(inputFile), ".arrow") {
 		code := fmt.Sprintf(`magnitude, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error extracting magnitude: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error extracting magnitude: %%w", err)
 	}
 	phase, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error extracting phase: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error extracting phase: %%w", err)
 	}
 
 	signal, err := ssql.IFFT(magnitude, phase)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error computing IFFT: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error computing IFFT: %%w", err)
 	}
 
 	ifftRecords := signalToRecordsFunc(signal, %q)`,

@@ -97,7 +97,7 @@ func emitTypedRollup(inputVar string, in *lib.TypedSchema, groupFields []string,
 	fmt.Fprintf(&d, "// %s is one full-key group with its aggregation state (the rollup's detail level).\n", detailName)
 	fmt.Fprintf(&d, "type %s struct {\n", detailName)
 	for _, f := range groupSchemaFields {
-		fmt.Fprintf(&d, "\t%s %s `ssql:%q`\n", f.GoName, f.GoType, f.Name)
+		fmt.Fprintf(&d, "\t%s %s `ssql:%q json:%q`\n", f.GoName, f.GoType, f.Name, f.Name)
 	}
 	fmt.Fprintf(&d, "\tState *%s\n}\n", aggTypeName)
 	detailSchema := &lib.TypedSchema{TypeName: detailName, Fields: append(append([]lib.TypedSchemaField{}, groupSchemaFields...),

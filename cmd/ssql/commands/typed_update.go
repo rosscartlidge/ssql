@@ -340,8 +340,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				n := tierVSets
 				fmt.Fprintf(&body, "\t\t\tv%d, err%d := %s\n", n, n, s.tierVCall)
 				fmt.Fprintf(&body, "\t\t\tif err%d != nil {\n", n)
-				fmt.Fprintf(&body, "\t\t\t\tfmt.Fprintf(os.Stderr, \"Error evaluating expression %%q: %%v\\n\", %q, err%d)\n", s.tierVExpr, n)
-				fmt.Fprintf(&body, "\t\t\t\tos.Exit(1)\n")
+				fmt.Fprintf(&body, "\t\t\t\tpanic(fmt.Errorf(\"evaluating expression %%q: %%w\", %q, err%d))\n", s.tierVExpr, n)
 				fmt.Fprintf(&body, "\t\t\t}\n")
 				fmt.Fprintf(&body, "\t\t\tout.%s = %s(v%d, %q)\n", f.GoName, coerce, n, s.tierVExpr)
 				continue
@@ -382,7 +381,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		imports = append(imports, "time")
 	}
 	if tierVSets > 0 {
-		imports = append(imports, "fmt", "os") // the eval-error exit path
+		imports = append(imports, "fmt") // the eval-error panic path
 	}
 	imports = dedupeImports(imports)
 
@@ -515,7 +514,7 @@ func renderUpdateStructDef(s *lib.TypedSchema) string {
 		}
 	}
 	for _, f := range s.Fields {
-		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name)
+		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q json:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name, f.Name)
 	}
 	b.WriteString("}\n")
 	return b.String()

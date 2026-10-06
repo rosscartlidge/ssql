@@ -337,10 +337,10 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 	fmt.Fprintf(&def, "// %s is the synthesized unpivot output row (DFC122).\n", typeName)
 	fmt.Fprintf(&def, "type %s struct {\n", typeName)
 	for _, f := range idFields {
-		fmt.Fprintf(&def, "\t%s %s `ssql:%q`\n", f.GoName, f.GoType, f.Name)
+		fmt.Fprintf(&def, "\t%s %s `ssql:%q json:%q`\n", f.GoName, f.GoType, f.Name, f.Name)
 	}
-	fmt.Fprintf(&def, "\t%s string `ssql:%q`\n", nameGo, cfg.NameField)
-	fmt.Fprintf(&def, "\t%s %s `ssql:%q`\n", valueGo, valType, cfg.ValueField)
+	fmt.Fprintf(&def, "\t%s string `ssql:%q json:%q`\n", nameGo, cfg.NameField, cfg.NameField)
+	fmt.Fprintf(&def, "\t%s %s `ssql:%q json:%q`\n", valueGo, valType, cfg.ValueField, cfg.ValueField)
 	def.WriteString("}")
 
 	var idCopy strings.Builder

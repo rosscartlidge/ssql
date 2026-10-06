@@ -212,6 +212,39 @@ func equivLanes() []equivLane {
 		goLane("go-record", "record"),
 		goLane("go-typed", "typed"),
 		goLane("go-parallel", "parallel"),
+		// The library form (generate go -package, DFC142 §5a): the typed
+		// pipeline assembled as an importable function, driven by a
+		// generated main that reads the fixture through its FromCSV /
+		// FromTSV reader form and prints the rows as JSON. Skipped when
+		// the source is not a plain delimited file (no reader form) or
+		// library mode refuses the pipeline (several sources).
+		{"go-lib", func(t *testing.T, bin, pipeline string) string {
+			fixture, reader := equivLibrarySource(pipeline)
+			if fixture == "" {
+				return equivSkipPrefix + "library mode: the source is not a plain delimited file"
+			}
+			cmd := exec.Command("bash", "-c", "export SSQLGO=typed && "+pipeline+" | "+bin+" generate go -package lib -func Pipe")
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				if strings.Contains(stderr.String(), "library mode:") {
+					return equivSkipPrefix + strings.TrimSpace(stderr.String())
+				}
+				t.Fatalf("lane go-lib: generate failed:\n  pipeline: %s\n  stderr:\n%s", pipeline, stderr.String())
+			}
+			src := stdout.String()
+			if !strings.Contains(src, "func Pipe"+reader+"(") {
+				return equivSkipPrefix + "library mode: the source has no reader form"
+			}
+			out, err := goRunGeneratedModule(t, "libtest", map[string]string{
+				"lib/pipe.go": src,
+				"main.go":     libraryDriver("lib", "Pipe", "Pipe"+reader, fixture),
+			})
+			if err != nil {
+				t.Fatalf("lane go-lib: driver failed: %v\n%s", err, out)
+			}
+			return out
+		}},
 		{"ssql-opt", func(t *testing.T, bin, pipeline string) string {
 			gen := equivShell(t, "ssql-opt-gen", "export SSQLGO=1 && "+
 				pipeline+" | "+bin+" to jsonl | "+bin+" generate ssql")
@@ -535,6 +568,9 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 	columns := make(map[string][]string)
 	for _, ln := range lanes {
 		reason := c.Skip[ln.name]
+		if reason == "" && ln.name == "go-lib" {
+			reason = c.Skip["go-typed"] // the library form is the typed plan
+		}
 		if reason == "" && equivSQLLanes[ln.name] {
 			reason = c.Skip["duckdb"] // no SQL translation at all → no dialect either
 		}
@@ -2922,4 +2958,38 @@ var equivCases = []EquivCase{
 			{"dept": "Sales"},
 		},
 	},
+}
+
+// equivLibrarySource returns the delimited file a pipeline's `from`
+// stage reads and the library reader form that matches it (FromCSV /
+// FromTSV), or "" when the source is anything else: another format, a
+// source with flags (sampling, type overrides), stdin.
+func equivLibrarySource(pipeline string) (fixture, reader string) {
+	tokens := strings.Fields(pipeline)
+	for i := 1; i+1 < len(tokens); i++ {
+		if tokens[i] != "from" {
+			continue
+		}
+		path, format := tokens[i+1], ""
+		next := i + 2
+		if path == "csv" || path == "tsv" {
+			format = path
+			if next >= len(tokens) {
+				return "", ""
+			}
+			path = tokens[next]
+			next++
+		}
+		if next < len(tokens) && tokens[next] != "|" {
+			return "", "" // a source flag: no reader form
+		}
+		switch {
+		case format == "csv" || (format == "" && strings.HasSuffix(path, ".csv")):
+			return path, "FromCSV"
+		case format == "tsv" || (format == "" && strings.HasSuffix(path, ".tsv")):
+			return path, "FromTSV"
+		}
+		return "", ""
+	}
+	return "", ""
 }

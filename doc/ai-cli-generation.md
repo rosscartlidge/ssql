@@ -100,6 +100,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | Command | Output |
 |---|---|
 | `generate go -pipeline 'PIPELINE'` | a standalone Go program for the pipeline; `-run` compiles and runs it; `-build BIN` writes a binary; `-mode typed` (default: struct types, parallel) or `-mode record`; `-explain` shows what the optimiser did |
+| `generate go -package PKG -func NAME -pipeline 'PIPELINE' FILE.go` | an importable Go function instead of a program: rows in (`iter.Seq[Row]`), rows out (`iter.Seq2[Out, error]`), parameters as a struct, the sink dropped, a stage failure returned as the last element; `NAMEFromCSV(io.Reader, params)` for a CSV source |
 | `generate sql -pipeline 'PIPELINE'` | DuckDB SQL (`-dialect postgres` or `datafusion`) |
 | `generate ssql -pipeline 'PIPELINE'` | the pipeline rewritten with fewer stages; `-explain` says why |
 | `generate json -pipeline 'PIPELINE'` | the pipeline as a JSON document for `ssql run` |
@@ -238,6 +239,9 @@ ssql generate go -run -pipeline 'ssql from data.csv | ssql where -if age gt 25 |
 
 # Record mode (dynamic schema, map-based rows) when asked for it
 ssql generate go -pipeline '…' -mode record > program.go
+
+# A library for a service: func Headcount(in, p) iter.Seq2[…, error], no main, no flags, no exit
+ssql generate go -package reports -func Headcount -pipeline 'ssql from data.csv | ssql where -param min int 30 -if-expr "age > min" | ssql group-by dept -count n' reports/headcount.go
 
 # SQL for DuckDB, or the pipeline rewritten by the optimiser
 ssql generate sql  -pipeline 'ssql from data.parquet | ssql group-by dept -count n | ssql to csv' | duckdb

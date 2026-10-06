@@ -363,8 +363,7 @@ func generateFromFileSampleCode(fn, help, inputFile string, n int, seed int64, e
 	}
 	code := extras.wrap(fmt.Sprintf(`records, err := %s(*flagInput, *flagSampleN, int64(*flagSampleSeed)%s)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("%%w", err)
 	}`, fn, extras.configArg()))
 	frag := lib.NewInitFragment("records", code, []string{"fmt", "os"}, getCommandString())
 	frag.Params = params

@@ -2,7 +2,7 @@
 
 Reference: DFC142
 Created: 2026-09-30
-Last modified: 2026-10-05
+Last modified: 2026-10-06
 
 [Back to Index](./README.md)
 
@@ -479,7 +479,35 @@ needs `SSQL_MODULE_DIR=<checkout>` to find `ssql.Run`.
 buffered channel is full (its own comment says so) — silent data loss,
 out of scope here.
 
-**Next:** §5a Shape 2, library mode, as its own plan.
+**Done 2026-10-06 (library mode, Ross's two further choices: serial plan
+first, type names prefixed with the function name):** `generate go
+-package P -func F` → `lib.AssembleCodeFragmentsWith` →
+`assembleLibrary` (`codefragment_library.go`), one skeleton for record
+and typed fragments: source → `in` (+ `FFromCSV`/`FFromTSV` reader
+form), `CodeParam` list → `FParams` + `FDefaults()` with `flagX := &p.X`
+bindings so stage code compiles unchanged (the second renderer of the
+one list; the first is `flagDecl`), finals dropped with their params and
+imports, body under `ssql.Safely(...)(ssql.Safe(in))`, subprocess
+functions take `p`, unused imports pruned against the emitted text,
+typed sources downgraded to their serial alternative before the planner
+runs. Prerequisite found by the typed-assembler survey: twenty stage
+emitters called `os.Exit(1)` inside `run()` or a closure (and four
+signal commands plus `to table FIELDS` referenced a phantom `ctx`) — all
+now return or panic with the error; `TestStageCodeNeverExits` scans
+every stage family's fragments. Every derived row struct now carries
+`json` tags, so a caller's `encoding/json` names the pipeline's columns
+(the first library driver printed `N`/`Product`). Gates: lib unit tests,
+`TestLibraryMode` (both modes vs exec, params change the result, join
+side file takes `p`, bad cell is the typed terminal error and the process
+survives, two functions share a package, optimiser forwards the flags,
+refusals), and a `go-lib` lane in `TestPipelineEquivalence`. `LazyTee`
+fixed first (test watched to fail: 201/150 of 1,000).
+
+**Follow-up:** the parallel library form — a `Shards` field and a
+`typed.Parallel(in, n)` distributor (or `ParallelFromSlice` for a slice
+input) so a library function can keep the planner's parallel plan;
+`union`/`merge`/set-ops side files as additional inputs; a reader form
+for non-delimited sources.
 
 ## 7. Related
 

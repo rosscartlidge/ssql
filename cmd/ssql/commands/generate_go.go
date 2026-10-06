@@ -25,10 +25,11 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Example("ssql from -g data.csv | ssql where -g -if age gt 18 | ssql generate go", "Generate Go code from pipeline").
 		Example("ssql generate go -json pipeline.json -build ./report", "Compile a pipeline document, no shell").
 		Example("(export SSQL_MODE=record && ssql from data.csv | ssql limit 10 | ssql generate go) > prog.go", "Generate using environment variable").
-		Example("(export SSQL_MODE=parallel; ssql from data.csv | ssql to table) | ssql generate go -run", "Generate, compile, and execute in one shot").
+		Example("(export SSQL_MODE=typed; ssql from data.csv | ssql to table) | ssql generate go -run", "Generate, compile, and execute in one shot").
 		Example("(export SSQL_MODE=typed; ssql from data.csv | ssql to table) | ssql generate go -run -time", "Compile and run, reporting compile and run times on stderr").
-		Example("(export SSQL_MODE=parallel; ssql from data.csv | ssql to table) | ssql generate go -build query", "Compile to a binary named 'query' and exit").
-		Example("(export SSQL_MODE=parallel; ssql from parquet x.parquet | ssql group-by k -count n | ssql to table) | ssql generate go -optimise -run", "Apply pipeline optimiser (column projection etc.), then compile and execute").
+		Example("(export SSQL_MODE=typed; ssql from data.csv | ssql to table) | ssql generate go -build query", "Compile to a binary named 'query' and exit").
+		Example("(export SSQL_MODE=typed; ssql from parquet x.parquet | ssql group-by k -count n | ssql to table) | ssql generate go -optimise -run", "Apply pipeline optimiser (column projection etc.), then compile and execute").
+		Example("ssql generate go -package reports -func Headcount -pipeline 'ssql from employees.csv | ssql where -param min int 30 -if-expr \"age > min\" | ssql group-by dept -count n' reports/headcount.go", "Library mode: an importable func Headcount(in iter.Seq[…], p HeadcountParams) iter.Seq2[…, error] — rows in, rows out, no main, no flags, no exit").
 		Example("ssql generate go -run -pipeline 'ssql from data.csv | ssql where -if age gt 25 | ssql to table'", "One-shot: run the quoted pipeline in typed mode, compile and execute (no export/subshell ceremony)").
 		Flag("-run", "-r").
 		Bool().
@@ -60,6 +61,18 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 		Global().
 		Default(false).
 		Help("Print the optimiser's applied rules and the typed planner's per-stage decisions to stderr").
+		Done().
+		Flag("-package").
+		String().
+		Global().
+		Default("").
+		Help("Library mode: emit `package NAME` with an importable function instead of a program. The source becomes the function's input sequence (plus a FromCSV/FromTSV reader form for a delimited-file source), parameters become a struct, the sink is dropped and a stage failure ends the returned iter.Seq2 with an error instead of exiting. Writes to OUTPUT or stdout; incompatible with -run and -build").
+		Done().
+		Flag("-func").
+		String().
+		Global().
+		Default("").
+		Help("Library mode: the exported function's name (with -package; default Pipeline). Generated type names are prefixed with it so several pipelines can share a package").
 		Done()
 	pipelineSourceFlags(sub, "generate Go from", "typed").
 		Flag("OUTPUT").
@@ -99,6 +112,19 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			}
 			if v, ok := ctx.GlobalFlags["-mode"]; ok {
 				scriptMode = v.(string)
+			}
+			var libOpts lib.AssembleOptions
+			if v, ok := ctx.GlobalFlags["-package"]; ok {
+				libOpts.Package = v.(string)
+			}
+			if v, ok := ctx.GlobalFlags["-func"]; ok {
+				libOpts.Func = v.(string)
+			}
+			if libOpts.Func != "" && libOpts.Package == "" {
+				return fmt.Errorf("ssql generate go: -func names the library function and needs -package NAME")
+			}
+			if libOpts.Package != "" && (run || buildOut != "") {
+				return fmt.Errorf("ssql generate go: -package emits an importable library, which has nothing to run or build; write it with OUTPUT (or stdout) and import it from your program")
 			}
 
 			// At most one of {-run, -build, OUTPUT} may be set — they
@@ -143,14 +169,14 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			// rewritten pipeline (a bash subprocess) is impossible — the
 			// playground shows the rewrite through `generate ssql`.
 			if optimise && runtime.GOOS != "js" {
-				return runOptimiseThenGo(fragmentSrc, run, buildOut, outputFile, explain, timeRun)
+				return runOptimiseThenGo(fragmentSrc, run, buildOut, outputFile, explain, timeRun, libOpts)
 			}
 
 			// The inner invocation of an optimising run passes the note
 			// describing the rewrite; the assemblers print it in the
 			// generated header.
 			lib.HeaderNote = os.Getenv(optimiseNoteEnv)
-			code, err := lib.AssembleCodeFragments(fragmentSrc)
+			code, err := lib.AssembleCodeFragmentsWith(fragmentSrc, libOpts)
 			if err != nil {
 				return fmt.Errorf("assembling code fragments: %w", err)
 			}
@@ -173,7 +199,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 // parent's environment) handles the user's own subshell-export
 // patterns naturally — see doc/research/generate-go-flags-proposal.md
 // §2b for the discussion.
-func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, explain, timeRun bool) error {
+func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, explain, timeRun bool, libOpts lib.AssembleOptions) error {
 	// Buffer stdin once — we feed it to optimizePipeline AND parse it
 	// again to detect the target SSQLGO mode for re-execution.
 	buf, err := io.ReadAll(in)
@@ -209,7 +235,7 @@ func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, expl
 	// pipeline the optimiser cannot improve.
 	if len(rules) == 0 {
 		lib.HeaderNote = ""
-		code, err := lib.AssembleCodeFragments(bytes.NewReader(buf))
+		code, err := lib.AssembleCodeFragmentsWith(bytes.NewReader(buf), libOpts)
 		if err != nil {
 			return fmt.Errorf("assembling code fragments: %w", err)
 		}
@@ -234,6 +260,9 @@ func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, expl
 	// The inner generate-go: +O so it does not optimise again, plus
 	// whichever output flag was passed to the outer one.
 	inner += " | " + prog + " generate go +O"
+	if libOpts.Package != "" {
+		inner += " -package " + shellQuote(libOpts.Package) + " -func " + shellQuote(libOpts.Func)
+	}
 	switch {
 	case run:
 		inner += " -run"
@@ -300,7 +329,14 @@ func emitGoSource(code string, run bool, buildOut, outputFile string, timeRun bo
 		return buildGoSource(code, buildOut)
 	}
 	if outputFile != "" {
-		if err := os.WriteFile(outputFile, []byte(code), 0644); err != nil {
+		// A library's natural home is its package directory
+	// (`-package reports … reports/headcount.go`): make it on demand.
+	if dir := filepath.Dir(outputFile); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("creating %s: %w", dir, err)
+		}
+	}
+	if err := os.WriteFile(outputFile, []byte(code), 0644); err != nil {
 			return fmt.Errorf("writing output file: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Generated Go code written to %s\n", outputFile)

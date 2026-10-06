@@ -137,3 +137,39 @@ func TestToChannelErrReportsPanic(t *testing.T) {
 		t.Fatalf("clean sequence: wait() = %v", err)
 	}
 }
+
+// LazyTee promises backpressure; it used to drop a value for a consumer
+// whose buffer was full (DFC140/142 finding, 2026-10-05). A slow consumer
+// must still see every element.
+func TestLazyTeeDropsNothingForSlowConsumer(t *testing.T) {
+	const n = 1000
+	src := func(yield func(int) bool) {
+		for i := 0; i < n; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+	streams := LazyTee(src, 2)
+	fast, slow := make(chan int, 1), make(chan int, 1)
+	go func() {
+		c := 0
+		for range streams[0] {
+			c++
+		}
+		fast <- c
+	}()
+	go func() {
+		c := 0
+		for range streams[1] {
+			c++
+			if c%50 == 0 {
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
+		slow <- c
+	}()
+	if f, s := <-fast, <-slow; f != n || s != n {
+		t.Fatalf("fast consumer got %d, slow consumer got %d; want %d each", f, s, n)
+	}
+}

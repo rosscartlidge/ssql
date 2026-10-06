@@ -213,7 +213,7 @@ func buildDerivedSchema(in *lib.TypedSchema, typeSuffix string, fields []string,
 		}
 	}
 	for _, f := range derived.Fields {
-		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name)
+		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q json:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name, f.Name)
 	}
 	b.WriteString("}\n")
 	return derived, b.String(), nil

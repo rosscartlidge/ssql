@@ -211,7 +211,7 @@ func generateExtractCode(cfg ssql.ExtractConfig, names []string) error {
 			if f.Name == cfg.Field && !cfg.Keep {
 				continue
 			}
-			fmt.Fprintf(&def, "\t%s %s `ssql:%q`\n", f.GoName, f.GoType, f.Name)
+			fmt.Fprintf(&def, "\t%s %s `ssql:%q json:%q`\n", f.GoName, f.GoType, f.Name, f.Name)
 			fmt.Fprintf(&copyFields, "%s: r.%s, ", f.GoName, f.GoName)
 			out.Fields = append(out.Fields, f)
 		}
@@ -226,7 +226,7 @@ func generateExtractCode(cfg ssql.ExtractConfig, names []string) error {
 				goName += "_"
 			}
 			used[goName] = true
-			fmt.Fprintf(&def, "\t%s string `ssql:%q`\n", goName, n)
+			fmt.Fprintf(&def, "\t%s string `ssql:%q json:%q`\n", goName, n, n)
 			fmt.Fprintf(&capSets, "%s: m[%d], ", goName, i+1)
 			out.Fields = append(out.Fields, lib.TypedSchemaField{Name: n, GoName: goName, GoType: "string"})
 		}
@@ -240,12 +240,12 @@ func generateExtractCode(cfg ssql.ExtractConfig, names []string) error {
 		if cfg.Skip {
 			body.WriteString("\t\t\t\tcontinue\n")
 		} else {
-			fmt.Fprintf(&body, "\t\t\t\tfmt.Fprintf(os.Stderr, \"extract: %%q does not match %%q (use -skip to drop non-matching records)\\n\", r.%s, re.String())\n\t\t\t\tos.Exit(1)\n", src.GoName)
+			fmt.Fprintf(&body, "\t\t\t\tpanic(fmt.Errorf(\"extract: %%q does not match %%q (use -skip to drop non-matching records)\", r.%s, re.String()))\n", src.GoName)
 		}
 		fmt.Fprintf(&body, "\t\t\t}\n\t\t\tif !yield(%s{%s%s}) {\n\t\t\t\treturn\n\t\t\t}\n\t\t}\n\t}", typeName, copyFields.String(), capSets.String())
 		imports := []string{"regexp"}
 		if !cfg.Skip {
-			imports = append(imports, "fmt", "os")
+			imports = append(imports, "fmt")
 		}
 		frag := lib.NewStmtFragment(outputVar, inputVar, body.String(), imports, getCommandString())
 		frag.StructDefs = []string{def.String()}

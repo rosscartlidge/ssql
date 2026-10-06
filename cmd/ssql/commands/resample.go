@@ -311,9 +311,9 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 	var def strings.Builder
 	fmt.Fprintf(&def, "// %s is the synthesized resample output row (DFC121).\n", typeName)
 	fmt.Fprintf(&def, "type %s struct {\n", typeName)
-	fmt.Fprintf(&def, "\t%s %s `ssql:%q`\n", tsField.GoName, tsField.GoType, cfg.TimeField)
+	fmt.Fprintf(&def, "\t%s %s `ssql:%q json:%q`\n", tsField.GoName, tsField.GoType, cfg.TimeField, cfg.TimeField)
 	for i, f := range valFields {
-		fmt.Fprintf(&def, "\t%s float64 `ssql:%q`\n", f.GoName, cfg.Values[i])
+		fmt.Fprintf(&def, "\t%s float64 `ssql:%q json:%q`\n", f.GoName, cfg.Values[i], cfg.Values[i])
 	}
 	def.WriteString("}")
 	// Shim in: T → Record with just the fields resample needs.
@@ -359,8 +359,7 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 		}
 	}, %s)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
+		return fmt.Errorf("resample: %%w", err)
 	}
 	%s := func(yield func(%s) bool) {
 		for rec := range %sRecs {

@@ -266,8 +266,7 @@ func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, 
 		if !auto {
 			signalBExtract = fmt.Sprintf(`signalB, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error extracting second signal: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error extracting second signal: %%w", err)
 	}
 
 	`, inputFile, fieldB)
@@ -275,14 +274,12 @@ func generateCorrelateCode(inputFile, fieldA, fieldB, outputField string, auto, 
 
 		code := fmt.Sprintf(`signalA, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error extracting signal: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error extracting signal: %%w", err)
 	}
 
 	%sresult, err := %s
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error computing correlation: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error computing correlation: %%w", err)
 	}
 
 	correlatedRecords := signalToRecordsFunc(result, %q)`,

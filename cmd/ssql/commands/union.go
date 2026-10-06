@@ -203,23 +203,20 @@ func generateUnionCode(additionalFiles []string, unionAll bool) error {
 		case "csv":
 			code = fmt.Sprintf(`%s, err := ssql.ReadCSV(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: opening %s: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("opening %s: %%w", err)
 	}`, varName, file, file)
 			imports = []string{"fmt", "os"}
 		case "tsv":
 			code = fmt.Sprintf(`%s, err := ssql.ReadTSV(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: opening %s: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("opening %s: %%w", err)
 	}`, varName, file, file)
 			imports = []string{"fmt", "os"}
 		default:
 			needsLibImport = true
 			code = fmt.Sprintf(`%sHandle, err := os.Open(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: opening %s: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("opening %s: %%w", err)
 	}
 	defer %sHandle.Close()
 	%s := lib.ReadJSONLWithSchema(%sHandle).Records`, varName, file, file, varName, varName, varName)

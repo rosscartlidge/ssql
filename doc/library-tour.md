@@ -426,6 +426,40 @@ code.
 
 ## Embedding in a service
 
+The shortest route from a pipeline to a service is to let `ssql` write
+the function:
+
+```bash
+ssql generate go -package reports -func Headcount -pipeline 'ssql from employees.csv | ssql where -param min int 30 -if-expr "age > min" | ssql group-by dept -count n' reports/headcount.go
+```
+
+```go
+// Generated: rows in, rows out, parameters per call, no main, no flags,
+// no os.Exit. A stage failure is the sequence's last element.
+func Headcount(in iter.Seq[HeadcountEmployeesRow], p HeadcountParams) iter.Seq2[HeadcountEmployeesRowGroup, error]
+func HeadcountFromCSV(r io.Reader, p HeadcountParams) iter.Seq2[HeadcountEmployeesRowGroup, error]
+func HeadcountDefaults() HeadcountParams // the pipeline's own literals
+
+// In a handler:
+p := reports.HeadcountDefaults()
+p.Min = minFromQuery(req)
+enc := json.NewEncoder(w) // row types carry json tags with the column names
+for g, err := range reports.HeadcountFromCSV(upload, p) {
+    if err != nil {
+        var cell *typed.ReadError
+        if errors.As(err, &cell) { http.Error(w, err.Error(), 422); return }
+        http.Error(w, err.Error(), 500); return
+    }
+    enc.Encode(g)
+}
+```
+
+Two pipelines over the same file can share a package: every generated
+type is prefixed with the function's name. The library form is the
+serial typed plan; the parallel form of a library function is on the
+roadmap.
+
+For a pipeline you write by hand, the same contract is one helper away.
 A pipeline fails fast: a cell that does not fit its column, a value a
 cast cannot convert or a group that cannot be ordered stops the run with
 a panic whose value is an `error` (typed, so `errors.As` works). In the

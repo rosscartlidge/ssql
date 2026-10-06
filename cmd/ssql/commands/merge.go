@@ -414,8 +414,7 @@ func generateMergeCode(orderBy []ssql.OrderField, files []string) error {
 		sourceVars = append(sourceVars, varName)
 		readCode := fmt.Sprintf(`%sFile, err := os.Open(%q)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: opening %s: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("opening %s: %%w", err)
 	}
 	defer %sFile.Close()
 	%s := lib.ReadJSONLWithSchema(%sFile).Records`, varName, file, file, varName, varName, varName)

@@ -308,6 +308,24 @@ func TestPipelineCorpus(t *testing.T) {
 			Contains:   []string{"no such file or directory"},
 		},
 		{
+			// Stage code must never exit the process: inside a library
+			// function (generate go -package) there is no main() to report
+			// it. A non-matching line without -skip is an error that ends
+			// the program with Error: and exit 1 in every mode (DFC142 lib).
+			Name:       "extract_nomatch_fails",
+			Pipeline:   `{{.bin}} from lines {{.data}}/app.log | {{.bin}} extract -field line -re '^(?P<ts>\S+) (?P<level>[A-Z]+) (?P<msg>.*)$' | {{.bin}} to csv`,
+			ExpectFail: true,
+			Contains:   []string{"does not match"},
+		},
+		{
+			// The typed `to table FIELDS` sink emitted ctx.Stdout(), a name
+			// that does not exist in a generated program (found 2026-10-06).
+			Name:     "to_table_selected_fields",
+			Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} to table name dept -only`,
+			Contains: []string{"Alice", "Engineering"},
+			Excludes: []string{"salary"},
+		},
+		{
 			Name:       "sink_unwritable_tsv_fails",
 			Pipeline:   `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} to tsv /nonexistent-ssql-dir/out.tsv`,
 			ExpectFail: true,

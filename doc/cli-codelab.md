@@ -701,6 +701,56 @@ the program instead of running it:
 ssql generate go -pipeline 'ssql from employees.csv | ssql where -if salary gt 90000 | ssql to csv' | head -40
 ```
 
+A program is one shape; a **library** is the other. `-package NAME`
+emits an importable Go function instead of a `main`: the source stage
+becomes the function's input sequence (plus a `FromCSV` reader form for
+a CSV source), every `-param` becomes a field of a params struct, the
+sink is dropped because the caller consumes the rows, and a failure in
+any stage ends the returned sequence with an error instead of exiting
+the process — the shape a long-running service needs:
+
+```bash
+ssql generate go -package reports -func Headcount -pipeline 'ssql from employees.csv | ssql where -param min int 30 -if-expr "age > min" | ssql group-by dept -count n -avg salary avg | ssql to csv' reports/headcount.go
+grep -n '^func \|^type ' reports/headcount.go
+```
+
+The caller is ordinary Go: rows in, rows out, parameters per call, and
+`errors.As` on the terminal error:
+
+```bash
+mkdir -p headcount && cd headcount && cp -r ../reports . && cat > main.go <<'EOF'
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"headcount/reports"
+)
+
+func main() {
+	f, _ := os.Open("../employees.csv")
+	p := reports.HeadcountDefaults() // Min: 30, the pipeline's own value
+	p.Min = 40
+	for g, err := range reports.HeadcountFromCSV(f, p) {
+		if err != nil {
+			fmt.Println("failed:", err) // the process is still running
+			return
+		}
+		fmt.Printf("%s: %d people, mean salary %.0f\n", g.Dept, g.N, g.Avg)
+	}
+}
+EOF
+go mod init headcount >/dev/null 2>&1 && go get github.com/rosscartlidge/ssql/v4@latest >/dev/null 2>&1
+[ -n "$SSQL_MODULE_DIR" ] && go mod edit -replace github.com/rosscartlidge/ssql/v4="$SSQL_MODULE_DIR"  # only inside the ssql repo
+go mod tidy >/dev/null 2>&1 && go run .
+```
+
+The function's row and result types are plain structs with `json` tags
+naming the pipeline's columns, so a handler can `json.NewEncoder(w)`
+them straight out. [Library Tour § Embedding in a
+service](library-tour.md#embedding-in-a-service) has the service shape.
+
 The same fragments translate to SQL — by default in
 [DuckDB](https://duckdb.org)'s dialect. Most of what comes out is
 ordinary SQL, and the DuckDB-specific parts are the ones that read files

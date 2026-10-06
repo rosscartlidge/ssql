@@ -317,14 +317,12 @@ func generateConvolveCode(inputFile, field, outputField, kernelName string, size
 
 		code := fmt.Sprintf(`signal, err := ssql.ExtractSignalFromArrow(%q, %q)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error extracting signal: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error extracting signal: %%w", err)
 	}
 
 	result, err := %s
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error computing convolution: %%v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Error computing convolution: %%w", err)
 	}
 
 	convolvedRecords := signalToRecordsFunc(result, %q)`,
