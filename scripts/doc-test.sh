@@ -301,6 +301,7 @@ section "Codelab examples (DFC125)"
 for spec in \
     "../doc/codelab-data/codelab-run.sh doc/cli-codelab.md" \
     "../doc/codelab-data/codelab-run.sh doc/cli-signal-processing.md" \
+    "../doc/codelab-data/codelab-run.sh doc/research/dfc143_library_mode.md" \
     "codelab-go-run.sh doc/codelab-intro.md" \
     "codelab-go-run.sh doc/typed-codelab.md"; do
     set -- $spec

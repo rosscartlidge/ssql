@@ -282,23 +282,68 @@ typed codelab Step 9, typed reference (`ParallelBatched`), AI CLI
 generation table, `claude/concurrency.md` §1 and §10, CHANGELOG
 `[Unreleased]`, DFC142 §8, TODO.
 
-## 4. Worked example
+## 4. Worked example — the exact procedure, as run
 
-On the codelab data (`doc/codelab-data/employees.csv`: `name, age, dept,
-salary, city, level, hire_date, status`).
+Run on 2026-10-06 with the **installed** binary (`ssql v4.112.0 (build:
+48ee0baa)`), in an empty directory, with no checkout and the default
+Go module proxy — the way a user meets it. Every command below is what
+was typed; every output is pasted from that run. The bash blocks of
+this section are executable as written: `doc/codelab-data/codelab-run.sh
+doc/research/dfc143_library_mode.md` runs them in a scratch directory
+(the one block that starts a server is marked skip and its transcript
+is shown instead).
 
-### 4.1 Generate
+### 4.1 The data
+
+`ssql codelab DIR` writes the codelab data set, including
+`employees.csv` (`name, age, dept, salary, city, level, hire_date,
+status`), with no network:
 
 ```bash
-ssql generate go -package reports -func Headcount \
-  -pipeline 'ssql from employees.csv | ssql where -param min int 30 -if-expr "age > min" | ssql group-by dept -count n -avg salary avg_salary | ssql to csv headcount.csv' \
-  reports/headcount.go
+[ -f employees.csv ] || ssql codelab . >/dev/null
+head -3 employees.csv
 ```
+
+```
+name,age,dept,salary,city,level,hire_date,status
+Alice,35,Engineering,95000,SF,7,2018-03-15,active
+Bob,28,Sales,65000,NYC,4,2021-06-01,active
+```
+
+### 4.2 Generate the library
 
 The sink `to csv headcount.csv` is part of the pipeline as you would
 run it at the shell; the library drops it and says so in its header.
+`reports/` is created on demand.
 
-### 4.2 What came out (`reports/headcount.go`, verbatim apart from the aggregator's method bodies)
+```bash
+ssql generate go -package reports -func Headcount -pipeline 'ssql from employees.csv | ssql where -param min int 30 -if-expr "age > min" | ssql group-by dept -count n -avg salary avg_salary | ssql to csv headcount.csv' reports/headcount.go
+gofmt -w reports/headcount.go
+grep -n '^func \|^type ' reports/headcount.go
+```
+
+```
+Generated Go code written to reports/headcount.go
+25:type HeadcountEmployeesRow struct {
+37:type HeadcountEmployeesRowAggregator struct {
+43:func (a *HeadcountEmployeesRowAggregator) Add(r HeadcountEmployeesRow) {
+49:func (a *HeadcountEmployeesRowAggregator) Result() HeadcountEmployeesRowAggregatorResult {
+56:func (a *HeadcountEmployeesRowAggregator) Merge(other typed.Aggregator[HeadcountEmployeesRow, HeadcountEmployeesRowAggregatorResult]) {
+67:type HeadcountEmployeesRowAggregatorResult struct {
+73:type HeadcountEmployeesRowGroup struct {
+81:type HeadcountParams struct {
+87:func HeadcountDefaults() HeadcountParams {
+95:func Headcount(in iter.Seq[HeadcountEmployeesRow], p HeadcountParams) iter.Seq2[HeadcountEmployeesRowGroup, error] {
+123:func HeadcountFromCSV(r io.Reader, p HeadcountParams) iter.Seq2[HeadcountEmployeesRowGroup, error] {
+```
+
+The `gofmt -w` is needed with v4.112.0, whose library output was not
+gofmt-clean (stage templates indent for a `run()` body; in the
+library they sit one level deeper). From the next release the
+assembler formats the file itself (`go/format`); the command is then a
+no-op and harmless.
+
+### 4.3 What came out (`reports/headcount.go`, verbatim apart from the aggregator's method bodies)
 
 ```go
 package reports
@@ -399,9 +444,13 @@ stage written against a flag pointer reads a struct field. `Shards`
 exists because `where` and `group-by` have parallel forms; a pipeline
 of `sort` alone would get `records := in` and no `Shards`.
 
-### 4.3 A caller
+### 4.4 A caller
 
-```go
+A command-line demo (defaults, then a changed parameter, then bad
+data) and an HTTP handler in one `main`:
+
+```bash
+cat > main.go <<'EOF'
 package main
 
 import (
@@ -413,8 +462,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rosscartlidge/ssql/v4/typed"
 	"example/reports"
+	"github.com/rosscartlidge/ssql/v4/typed"
 )
 
 // GET /headcount?min=40 with the CSV as the request body.
@@ -441,6 +490,7 @@ func headcount(w http.ResponseWriter, r *http.Request) {
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		http.HandleFunc("/headcount", headcount)
+		fmt.Println("listening on :8080")
 		http.ListenAndServe(":8080", nil)
 		return
 	}
@@ -454,7 +504,7 @@ func main() {
 	p.Min = 45
 	f2, _ := os.Open("employees.csv")
 	fmt.Printf("\nmin=%d\n", p.Min)
-	for g, _ := range reports.HeadcountFromCSV(f2, p) {
+	for g := range reports.HeadcountFromCSV(f2, p) {
 		fmt.Printf("%s: %d people, mean salary %.0f\n", g.Dept, g.N, g.AvgSalary)
 	}
 	fmt.Println("\nbad data:")
@@ -466,14 +516,26 @@ func main() {
 		}
 	}
 }
+EOF
+gofmt -l main.go; echo "main.go: $(wc -l < main.go) lines"
 ```
 
-With a `go.mod` requiring `github.com/rosscartlidge/ssql/v4` (the
-library uses `ssql.Safely` and `typed.ParallelBatched`, so it needs the
-release that carries them; until then a `replace` to the checkout):
+### 4.5 The module, and the run
+
+The library uses `ssql.Safely` and `typed.ParallelBatched`, so the
+module must require the release that carries them, v4.112.0 or later.
+`go mod tidy` alone may pick an older version the proxy already knows,
+so pin it with `go get`:
+
+```bash
+go mod init example >/dev/null 2>&1
+go get github.com/rosscartlidge/ssql/v4@v4.112.0 >/dev/null 2>&1
+if [ -n "$SSQL_MODULE_DIR" ]; then go mod edit -replace github.com/rosscartlidge/ssql/v4="$SSQL_MODULE_DIR"; fi  # only inside the ssql repository
+go mod tidy >/dev/null 2>&1
+go vet ./... && go run .
+```
 
 ```
-$ go run .
 defaults {Min:30 Shards:0}
 {Engineering 3 99666.66666666667} <nil>
 {Marketing 3 80333.33333333333} <nil>
@@ -493,7 +555,42 @@ DFC142 set out to make possible. The `(zero, err)` arrives after any
 rows that were already complete; here `group-by` is a barrier, so the
 bad row stops the group before anything is yielded.
 
-### 4.4 Rows that are already in memory
+### 4.6 The HTTP handler
+
+Build the binary, start it, send the CSV as a request body with a
+parameter in the query, send a bad body, and check the server is still
+answering. Stop it by its PID — not with a `pkill -f` pattern, which
+can match more than you meant (see the journal for 2026-10-06).
+
+```bash
+# codelab: skip — starts a server on :8080
+go build -o headcount-demo . && ./headcount-demo serve > serve.log 2>&1 &
+PID=$!
+until curl -s -o /dev/null http://localhost:8080/; do sleep 0.5; done
+curl -s --data-binary @employees.csv 'http://localhost:8080/headcount?min=40'
+printf 'name,age,dept,salary,city,level,hire_date,status\nZed,forty,Eng,1,x,L1,2020-01-01,active\n' | curl -s -w 'HTTP %{http_code}\n' --data-binary @- 'http://localhost:8080/headcount'
+curl -s -w 'HTTP %{http_code}\n' --data-binary @employees.csv 'http://localhost:8080/headcount?min=30'
+kill $PID
+```
+
+```
+{"dept":"Engineering","n":1,"avg_salary":105000}
+{"dept":"Sales","n":1,"avg_salary":82000}
+{"dept":"Marketing","n":1,"avg_salary":91000}
+typed.ReadCSVFromReader: row 1: column "age": "forty" is not int64
+HTTP 422
+{"dept":"Engineering","n":3,"avg_salary":99666.66666666667}
+{"dept":"Marketing","n":3,"avg_salary":80333.33333333333}
+{"dept":"Sales","n":1,"avg_salary":82000}
+HTTP 200
+```
+
+The JSON keys are the pipeline's column names because the generated
+structs carry `json` tags (§3.4). The bad body is a 422 with the typed
+error's message, and the next request is served: no process boundary
+was needed.
+
+### 4.7 Rows that are already in memory
 
 `Headcount` takes any `iter.Seq[HeadcountEmployeesRow]`:
 

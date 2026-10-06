@@ -22,6 +22,7 @@ package lib
 
 import (
 	"fmt"
+	"go/format"
 	"regexp"
 	"sort"
 	"strconv"
@@ -376,6 +377,14 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 		code.WriteString(")\n\n")
 	}
 	code.WriteString(rest.String())
+	// A library is a file the caller commits beside hand-written Go:
+	// hand it over gofmt-clean. (Stage templates indent for a run()
+	// body; here they sit one level deeper.) A formatting error is a
+	// bug in the generator, but the unformatted source still compiles,
+	// so emit it rather than fail.
+	if formatted, err := format.Source([]byte(code.String())); err == nil {
+		return string(formatted), nil
+	}
 	return code.String(), nil
 }
 
