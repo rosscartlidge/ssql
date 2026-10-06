@@ -274,7 +274,8 @@ program are these functions; `top` is `TopBy` below, not a sort.
 ```go
 type Stream[T any] struct{ /* n shards, each an iter.Seq[T] */ }
 
-func Parallel[T any](in iter.Seq[T], n int) Stream[T]           // shard any iter.Seq: a distributor goroutine, cooperative work-stealing
+func Parallel[T any](in iter.Seq[T], n int) Stream[T]           // shard any iter.Seq: a distributor goroutine, one channel transit PER ROW (slow; see ParallelBatched)
+func ParallelBatched[T any](in iter.Seq[T], n int) Stream[T]    // shard any iter.Seq in batches of 1024 rows: streams, one transit per batch (a generated library's entry point)
 func ParallelFromSlice[T any](data []T, n int) Stream[T]        // shard a slice into n contiguous chunks, no channel transit
 func FromRecords[R, T any](src iter.Seq[R], conv func(R) T) iter.Seq[T]              // the Record → typed re-entry boundary
 func FromRecordsParallel[R, T any](src iter.Seq[R], conv func(R) T, n int) Stream[T]
@@ -292,7 +293,8 @@ It is a separate type from `iter.Seq[T]` because its contract differs:
 output order is shard-concatenation order, not input order, and each
 stage runs in a goroutine per shard. The readers produce one directly
 (`ReadCSVParallel`, `ReadDelimParallel`, `ReadParquetParallel`,
-`ReadJSONLParallel`); `Parallel` shards an existing sequence. The
+`ReadJSONLParallel`); `ParallelBatched` shards an existing sequence
+(`Parallel` is its per-row ancestor, kept for reference). The
 parallel joins, set operations, top-k and `GroupByParallel` take a
 `Stream` on the left and return a `Stream` or a merged `iter.Seq`; the
 `Stream` sinks (`WriteCSV`, `WriteDelim`, `WriteParquet` methods) format

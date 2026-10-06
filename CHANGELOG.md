@@ -18,8 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sink is dropped, and the body runs under `ssql.Safely` so a stage
   failure ends the sequence with an error. Generated type names are
   prefixed with the function name so several pipelines can share a
-  package. Works in record and typed mode (the serial typed plan; the
-  parallel library form is a follow-up). `-package` is incompatible
+  package. Works in record and typed mode. In typed mode the planner
+  runs as for a program: the input enters the `Stream` runtime through
+  the new **`typed.ParallelBatched`** (rows cross to the shards in
+  batches of 1024, so a caller-owned sequence parallelises without the
+  per-row channel that made `typed.Parallel` slower than serial) and a
+  `Shards` field (0 = every core) sets the width; when no stage has a
+  parallel form the input is used as is. `-package` is incompatible
   with `-run`/`-build`; the optimiser forwards both flags.
 - **Every generated row struct carries `json` tags** with the pipeline's
   column names (group-by results, joins, update, cast, projection,

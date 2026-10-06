@@ -9,6 +9,7 @@ import (
 	"iter"
 	"os"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -601,5 +602,85 @@ func ReadCSVParallel[T any](filename string, n int) Stream[T] {
 		}
 	}
 	runtime.KeepAlive(m) // the setup above also read the mapping
+	return Stream[T]{shards: shards, n: n}
+}
+
+// parallelBatchSize is the number of rows ParallelBatched hands a shard
+// per channel transit. At 1024 the ~100 ns send+receive pair that made
+// per-row Parallel 3× slower than serial (claude/concurrency.md §1)
+// costs about 0.1 ns a row.
+const parallelBatchSize = 1024
+
+// ParallelBatched converts an iter.Seq[T] the caller owns into a
+// Stream[T] without a channel transit per row: the feeder pulls rows
+// into batches of parallelBatchSize and sends each batch once; every
+// shard takes whole batches (cooperative, like [Parallel]) and iterates
+// them in pure stack code. It is the entry point for a generated
+// library function (`generate go -package`), whose input is a sequence
+// rather than a file [ReadCSVParallel] could shard by byte range, and
+// it streams — memory is bounded by n×2 batches, unlike
+// [FromRecordsParallel], which materialises the whole input. n=0 means
+// runtime.GOMAXPROCS(0).
+//
+// A fail-fast panic in the source is captured in the feeder and
+// re-raised by every shard once the batches drain, so it reaches the
+// consumer's recover. A consumer that stops early releases the feeder.
+func ParallelBatched[T any](in iter.Seq[T], n int) Stream[T] {
+	if n <= 0 {
+		n = runtime.GOMAXPROCS(0)
+	}
+	work := make(chan []T, n*2)
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	// Batches are recycled: a shard hands its emptied batch back for
+	// the feeder to refill. Without this every batch is a fresh
+	// ~100 KB large-object allocation (zeroed on allocation, collected
+	// soon after) — 10 M rows cost 560 MB of allocation and most of
+	// the distributor's time went to the allocator and the GC.
+	pool := sync.Pool{New: func() any {
+		b := make([]T, 0, parallelBatchSize)
+		return &b
+	}}
+	var feeder shardGroup
+	feeder.Go(func() {
+		defer close(work)
+		batch := (*pool.Get().(*[]T))[:0]
+		flush := func() bool {
+			if len(batch) == 0 {
+				return true
+			}
+			select {
+			case work <- batch:
+				batch = (*pool.Get().(*[]T))[:0]
+				return true
+			case <-stop:
+				return false
+			}
+		}
+		for v := range in {
+			batch = append(batch, v)
+			if len(batch) == parallelBatchSize && !flush() {
+				return
+			}
+		}
+		flush()
+	})
+	shards := make([]iter.Seq[T], n)
+	for i := 0; i < n; i++ {
+		shards[i] = func(yield func(T) bool) {
+			for batch := range work {
+				for _, v := range batch {
+					if !yield(v) {
+						stopOnce.Do(func() { close(stop) })
+						return
+					}
+				}
+				clear(batch) // drop references held by the rows
+				b := batch[:0]
+				pool.Put(&b)
+			}
+			feeder.rethrow()
+		}
+	}
 	return Stream[T]{shards: shards, n: n}
 }

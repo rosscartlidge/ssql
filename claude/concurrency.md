@@ -52,6 +52,8 @@ for i := 0; i < n; i++ {
 
 The only channel in the entire critical path is now the fan-in to `Serial()` — and even that is bypassed by `SerialCount()` for aggregation sinks (atomic add per shard, no transit).
 
+**When the source is a sequence you do not own (2026-10-06): batch it.** A generated library function (`generate go -package`) receives an `iter.Seq[T]` from its caller, so neither slice partitioning nor byte-range partitioning applies. `typed.ParallelBatched(in, n)` pulls rows into batches of 1024 and sends each batch once; shards take whole batches. Measured on the same 10 M-row three-join workload with a `SerialCount` sink: `ParallelFromSlice` 0.13 s, `ParallelBatched` from an in-memory sequence 0.17 s (≈ 4 ns a row), per-row `Parallel` 5.3 s. A trap met on the way: the first comparison drained the batched form through `Serial()` and the slice form through `SerialCount()`, and the 4.4 s it reported was the per-row fan-in channel, not the distributor — **compare distributors with the same sink.**
+
 **Practical implication.** Any future "parallelize this command" work must first answer: *where does the per-row channel go?* If the answer is "in the hot path", redesign before benchmarking.
 
 ## 2. Slice Partitioning Beats Channel Fan-Out for In-Memory Data
@@ -238,8 +240,14 @@ The race detector caught a couple of issues during PoC development:
 // Materialized → parallel:
 stream := typed.ParallelFromSlice(data, runtime.GOMAXPROCS(0))
 
-// iter.Seq → parallel (only when CHANNEL TRANSIT < per-row work):
-stream := typed.Parallel(seq, n)  // channel-based; usually too expensive
+// iter.Seq → parallel, streaming: rows cross the channel in batches of
+// 1024, so the transit costs ~0.1 ns/row. The entry point of a generated
+// library function (`generate go -package`), whose input is a sequence
+// the caller owns, not a file to shard by byte range (2026-10-06):
+stream := typed.ParallelBatched(seq, n)
+
+// iter.Seq → parallel PER ROW: the §1 negative result, kept for reference
+stream := typed.Parallel(seq, n)  // ~100 ns/row of channel transit
 
 // Apply parallel-aware ops:
 filtered := stream.Where(pred)

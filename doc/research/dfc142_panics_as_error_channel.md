@@ -503,11 +503,34 @@ survives, two functions share a package, optimiser forwards the flags,
 refusals), and a `go-lib` lane in `TestPipelineEquivalence`. `LazyTee`
 fixed first (test watched to fail: 201/150 of 1,000).
 
-**Follow-up:** the parallel library form — a `Shards` field and a
-`typed.Parallel(in, n)` distributor (or `ParallelFromSlice` for a slice
-input) so a library function can keep the planner's parallel plan;
-`union`/`merge`/set-ops side files as additional inputs; a reader form
-for non-delimited sources.
+**Done 2026-10-06, later the same day (parallel library form; Ross:
+"the loss of parallelism … will cause significant performance
+degradation"):** `typed.ParallelBatched(in, n)` — the feeder pulls rows
+into batches of 1024 and sends each batch once, shards take whole
+batches (cooperative, like `Parallel`) and iterate them in stack code;
+streams with memory bounded by 2n batches; a source panic is captured
+in the feeder and re-raised by the shards; an early stop releases the
+feeder. The library's typed init is `records :=
+typed.ParallelBatched(in, *flagShards)` with `records := in` as
+`AltCodeIfSeq`, so the planner keeps or drops the parallel plan exactly
+as for a program; a `Shards` field (default 0 = every core) appears in
+`FParams` only when the parallel source survived planning; a `Stream`
+at the end is drained with `.Serial()`. Measured on the 10 M-row three-join scale workload (24 threads, idle
+machine, `SerialCount` sink in every variant): `ParallelFromSlice` 0.13 s
+(the floor: no distributor), `ParallelBatched` from an in-memory
+sequence 0.17 s (≈ 4 ns a row for the distributor), per-row `Parallel`
+from the same sequence 5.3 s (the §1 negative result), `ParallelBatched`
+fed by `typed.ReadCSV` 3.4 s (the serial parse is the bound; typed serial
+end to end was 5.3 s). The first measurement said 4.4 s for the batched
+form and sent me after allocation (a `sync.Pool` cut 560 MB to 6 MB and
+changed nothing): the copied benchmark drained through `Serial()`, a
+per-row fan-in channel over 7.25 M rows, while the slice benchmark
+counted with `SerialCount()` — the sink, not the distributor, was the
+number. Benchmarks `BenchmarkScaleTypedBatched{Parallel,InMemory}3Join`
+and `BenchmarkScaleTypedPerRowInMemory3Join` stay beside the slice one.
+
+**Follow-up:** `union`/`merge`/set-ops side files as additional inputs; a
+reader form for non-delimited sources.
 
 ## 7. Related
 

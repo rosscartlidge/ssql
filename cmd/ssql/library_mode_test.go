@@ -84,7 +84,14 @@ func TestLibraryMode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("generate: %v\n%s", err, src)
 			}
-			for _, want := range []string{"package reports", "func Totals(in iter.Seq[", "func TotalsFromCSV(r io.Reader, p TotalsParams)", "type TotalsParams struct {\n\tMin float64", "ssql.Safely("} {
+			wants := []string{"package reports", "func Totals(in iter.Seq[", "func TotalsFromCSV(r io.Reader, p TotalsParams)", "ssql.Safely("}
+			if mode == "typed" {
+				// the parallel plan: a Shards field beside the pipeline's own parameter
+				wants = append(wants, "type TotalsParams struct {\n\tMin    float64", "Shards int", "typed.ParallelBatched(in, *flagShards)")
+			} else {
+				wants = append(wants, "type TotalsParams struct {\n\tMin float64", "records := in")
+			}
+			for _, want := range wants {
 				if !strings.Contains(src, want) {
 					t.Errorf("library lacks %q:\n%s", want, src)
 				}

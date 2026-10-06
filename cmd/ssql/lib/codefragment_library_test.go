@@ -31,9 +31,7 @@ func TestLibraryRecordSkeleton(t *testing.T) {
 		"type AdultsParams struct {\n\tMin int // -param-min 30\n}",
 		"func AdultsDefaults() AdultsParams {\n\treturn AdultsParams{Min: 30}",
 		"flagParamMin := &p.Min",
-		"return ssql.Safely(func(records iter.Seq[ssql.Record]) iter.Seq[ssql.Record] {",
-		"filtered := ssql.Where(exprFilter1(*flagParamMin))(records)",
-		"return filtered\n",
+		"return ssql.Safely(func(in iter.Seq[ssql.Record]) iter.Seq[ssql.Record] {\n\t\trecords := in\n\t\tfiltered := ssql.Where(exprFilter1(*flagParamMin))(records)\n\t\treturn filtered\n",
 		"})(ssql.Safe(in))",
 		"var exprFilter1 = runtime.MustCompileExprFilter(\"age > min\")\n",
 		"func AdultsFromCSV(r io.Reader, p AdultsParams) iter.Seq2[ssql.Record, error] {\n\treturn Adults(ssql.ReadCSVFromReader(r), p)",
@@ -81,22 +79,59 @@ func TestLibraryTypedSkeletonPrefixesTypes(t *testing.T) {
 	for _, want := range []string{
 		"type PipelinePeopleRow struct {",
 		"func Pipeline(in iter.Seq[PipelinePeopleRow], p PipelineParams) iter.Seq2[PipelinePeopleRow, error] {",
-		"type PipelineParams struct {\n\tLimit int // -limit 30\n}",
-		// the serial plan: the Stream form is swapped for its iter.Seq alternative
-		"filtered := typed.Where(func(r PipelinePeopleRow) bool { return r.Age > int64(*flagLimit) })(records)",
+		"type PipelineParams struct {\n\tLimit  int // -limit 30\n\tShards int // -shards 0\n}",
+		"return PipelineParams{Limit: 30, Shards: 0}",
+		// the parallel plan: where accepts a Stream, so the source enters
+		// the Stream runtime in batches and the result is drained at the end
+		"records := typed.ParallelBatched(in, *flagShards)",
+		"filtered := records.Where(func(r PipelinePeopleRow) bool { return r.Age > int64(*flagLimit) })",
+		"return filtered.Serial()",
 		"func PipelineFromCSV(r io.Reader, p PipelineParams) iter.Seq2[PipelinePeopleRow, error] {\n\treturn Pipeline(typed.ReadCSVFromReader[PipelinePeopleRow](r), p)",
 	} {
 		if !strings.Contains(code, want) {
 			t.Errorf("library lacks %q:\n%s", want, code)
 		}
 	}
-	for _, bad := range []string{"records.Where(", ".Serial()", "runtime.GOMAXPROCS", "\t\"runtime\"\n", "\t\"os\"\n", "flagInput", "WriteCSV"} {
+	for _, bad := range []string{"typed.Where(", "runtime.GOMAXPROCS", "\t\"runtime\"\n", "\t\"os\"\n", "flagInput", "WriteCSV"} {
 		if strings.Contains(code, bad) {
 			t.Errorf("library contains %q:\n%s", bad, code)
 		}
 	}
 	if strings.Contains(code, " PeopleRow") || strings.Contains(code, "[PeopleRow]") {
 		t.Errorf("an unprefixed PeopleRow survived:\n%s", code)
+	}
+}
+
+// When no stage can run in the Stream runtime the planner takes the
+// serial alternative: the input is used as is and there is no Shards
+// parameter to tune.
+func TestLibraryTypedSerialPlanWhenNothingIsParallel(t *testing.T) {
+	schema := &TypedSchema{TypeName: "PeopleRow", Fields: []TypedSchemaField{{Name: "name", GoName: "Name", GoType: "string"}}}
+	src := NewInitFragment("records", "records := typed.ReadCSVParallel[PeopleRow](*flagInput, runtime.GOMAXPROCS(0))", []string{"github.com/rosscartlidge/ssql/v4/typed", "runtime"}, "ssql from people.csv")
+	src.Params = []CodeParam{{Name: "input", Default: "people.csv", VarName: "flagInput"}}
+	src.OutputTypedSchema = schema
+	src.StructDefs = []string{RenderStructDef(schema)}
+	src.IsStream = true
+	src.Capabilities = &Capabilities{Accepts: ShapeNone, Produces: ShapeStream}
+	src.AltCodeIfSeq = "records := typed.ReadCSV[PeopleRow](*flagInput)"
+	src.AltCapabilitiesIfSeq = &Capabilities{Accepts: ShapeNone, Produces: ShapeSeqTyped}
+	sorted := NewStmtFragment("sorted", "records", "sorted := typed.SortBy(records, func(r PeopleRow) string { return r.Name })", []string{"github.com/rosscartlidge/ssql/v4/typed"}, "ssql sort name")
+	sorted.InputTypedSchema, sorted.OutputTypedSchema = schema, schema
+	sorted.Capabilities = &Capabilities{Accepts: ShapeSeqTyped, Produces: ShapeSeqTyped, SerialOnly: true}
+
+	code, err := assembleLibrary([]*CodeFragment{src, sorted}, AssembleOptions{Package: "reports", Func: "Sorted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"records := in\n", "return sorted\n", "type SortedParams struct {\n}"} {
+		if !strings.Contains(code, want) {
+			t.Errorf("library lacks %q:\n%s", want, code)
+		}
+	}
+	for _, bad := range []string{"ParallelBatched", "Shards", ".Serial()"} {
+		if strings.Contains(code, bad) {
+			t.Errorf("library contains %q:\n%s", bad, code)
+		}
 	}
 }
 
@@ -117,7 +152,9 @@ func TestLibraryRefusals(t *testing.T) {
 func TestLibraryStmtAdaptsErrorReturns(t *testing.T) {
 	in := "var exprX = runtime.MustCompileExpr(\"a\")\n\tout, err := ssql.ResampleRecords(records, cfg)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"resample: %w\", err)\n\t}\n\tif bad {\n\t\treturn err\n\t}\n\tf := func(yield func(int) bool) {\n\t\tif !yield(1) {\n\t\t\treturn\n\t\t}\n\t}"
 	got := libraryStmt(in, nil)
-	for _, want := range []string{"panic(fmt.Errorf(\"resample: %w\", err))", "\t\tpanic(err)\n", "\t\t\treturn\n"} {
+	// The var line was the fragment's first line, so the kept lines lose
+	// its continuation tab.
+	for _, want := range []string{"panic(fmt.Errorf(\"resample: %w\", err))", "\tpanic(err)\n", "\t\treturn\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("libraryStmt lacks %q:\n%s", want, got)
 		}

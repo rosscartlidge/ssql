@@ -1,6 +1,7 @@
 package typed
 
 import (
+	"errors"
 	"runtime"
 	"slices"
 	"sort"
@@ -143,5 +144,66 @@ func TestStreamEarlyTermination(t *testing.T) {
 	// test -race` or by the test runner's timeout.
 	if seen < 1 {
 		t.Errorf("loop should have run at least once")
+	}
+}
+
+func TestParallelBatchedRoundTrip(t *testing.T) {
+	in := make([]int, 10*parallelBatchSize+7) // several full batches and a partial one
+	for i := range in {
+		in[i] = i
+	}
+	s := ParallelBatched(slices.Values(in), 4)
+	if s.Shards() != 4 {
+		t.Errorf("Shards() = %d, want 4", s.Shards())
+	}
+	got := slices.Collect(s.Serial())
+	sort.Ints(got)
+	if !slices.Equal(got, in) {
+		t.Errorf("round-trip lost or duplicated values: got %d, want %d", len(got), len(in))
+	}
+	if ParallelBatched(slices.Values([]int{1}), 0).Shards() != runtime.GOMAXPROCS(0) {
+		t.Error("n=0 should mean GOMAXPROCS")
+	}
+}
+
+func TestParallelBatchedPanicReachesConsumer(t *testing.T) {
+	src := func(yield func(int) bool) {
+		for i := 0; i < 3*parallelBatchSize; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+		panic(&ReadError{Op: "test", Row: 3 * parallelBatchSize, Err: errors.New("bad cell")})
+	}
+	var got any
+	func() {
+		defer func() { got = recover() }()
+		for range ParallelBatched(src, 3).Serial() {
+		}
+	}()
+	if _, ok := got.(*ReadError); !ok {
+		t.Fatalf("recovered %v (%T), want the *ReadError", got, got)
+	}
+}
+
+func TestParallelBatchedEarlyStopReleasesFeeder(t *testing.T) {
+	endless := func(yield func(int) bool) {
+		for i := 0; ; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	}
+	n := 0
+	for range ParallelBatched(endless, 4).Serial() {
+		n++
+		if n == 10 {
+			break
+		}
+	}
+	// If the feeder were still blocked on a full channel this test
+	// would leak it; the race detector and -count runs would show it.
+	if n != 10 {
+		t.Fatalf("n = %d", n)
 	}
 }

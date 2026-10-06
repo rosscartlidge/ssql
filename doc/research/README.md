@@ -150,6 +150,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC140 | 2026-09-29 | 2026-09-30 | [User Documentation Cleanup: Audit and Recommendations](./dfc140_user_doc_cleanup.md) |
 | DFC141 | 2026-09-29 | 2026-09-29 | [`ssql/typed` Roadmap History](./dfc141_typed_roadmap_history.md) |
 | DFC142 | 2026-09-30 | 2026-10-06 | [Panics as the Library's Error Channel: What Embedding ssql in a Server Needs](./dfc142_panics_as_error_channel.md) |
+| DFC143 | 2026-10-06 | 2026-10-06 | [Library mode: `ssql generate go -package` — what was built, and an example](./dfc143_library_mode.md) |
 
 <!-- DFC-INDEX-END -->
 

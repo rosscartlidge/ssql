@@ -455,9 +455,10 @@ for g, err := range reports.HeadcountFromCSV(upload, p) {
 ```
 
 Two pipelines over the same file can share a package: every generated
-type is prefixed with the function's name. The library form is the
-serial typed plan; the parallel form of a library function is on the
-roadmap.
+type is prefixed with the function's name. The typed form runs the same
+parallel plan a generated program does — the input enters the `Stream`
+runtime through `typed.ParallelBatched`, and `Shards` in the params
+struct (0 = every core) sets the width.
 
 For a pipeline you write by hand, the same contract is one helper away.
 A pipeline fails fast: a cell that does not fit its column, a value a

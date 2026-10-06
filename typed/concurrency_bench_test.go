@@ -85,6 +85,232 @@ func BenchmarkScaleTypedParallel3Join(b *testing.B) {
 	}
 }
 
+// BenchmarkScaleTypedBatchedParallel3Join is the same pipeline through
+// ParallelBatched: rows enter the Stream in batches of 1024, so the
+// per-row channel cost that sank Parallel is amortised away while the
+// input still streams (the library form's entry point).
+func BenchmarkScaleTypedBatchedParallel3Join(b *testing.B) {
+	setupScaleData(b)
+	n := runtime.GOMAXPROCS(0)
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		data := ReadCSV[scaleData](scaleDataFile)
+		depts := ReadCSV[scaleDept](scaleDeptFile)
+		regs := ReadCSV[scaleRegion](scaleRegFile)
+		cities := ReadCSV[scaleCity](scaleCityFile)
+
+		// Convert the input to a parallel Stream as early as possible
+		// so filter + all three joins run in parallel.
+		stream := ParallelBatched(data, n)
+
+		filtered := stream.Where(func(r scaleData) bool { return r.Age > 30 })
+
+		j1 := HashJoinParallel(filtered, depts,
+			func(l scaleData) string { return l.DeptID },
+			func(r scaleDept) string { return r.DeptID },
+			func(l scaleData, r scaleDept) scaleJoin1 {
+				return scaleJoin1{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: r.DeptName, RegionID: r.RegionID,
+				}
+			})
+
+		j2 := HashJoinParallel(j1, regs,
+			func(l scaleJoin1) string  { return l.RegionID },
+			func(r scaleRegion) string { return r.RegionID },
+			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
+				return scaleJoin2{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: l.DeptName, RegionID: l.RegionID,
+					RegionName: r.RegionName, CityID: r.CityID,
+				}
+			})
+
+		j3 := HashJoinParallel(j2, cities,
+			func(l scaleJoin2) string { return l.CityID },
+			func(r scaleCity) string  { return r.CityID },
+			func(l scaleJoin2, r scaleCity) scaleJoin3 {
+				return scaleJoin3{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: l.DeptName, RegionID: l.RegionID,
+					RegionName: l.RegionName, CityID: l.CityID,
+					City: r.City, Country: r.Country,
+				}
+			})
+
+		count := j3.SerialCount()
+		if count == 0 {
+			b.Fatal("expected non-zero count")
+		}
+		b.ReportMetric(float64(count), "rows_out")
+		b.ReportMetric(float64(n), "shards")
+	}
+}
+
+// BenchmarkScaleTypedSliceParallel3Join uses ParallelFromSlice (no
+// channels on the input side) and SerialCount (no channels on the
+// output side). The input slice is materialized once before the
+// timer starts so the bench measures pure compute parallelism.
+//
+// Compare this against BenchmarkScaleTypedCompute (single-threaded
+// preloaded) for an apples-to-apples speedup figure.
+
+// BenchmarkScaleTypedBatchedInMemory3Join feeds ParallelBatched from an
+// in-memory sequence so the distributor is measured on its own against
+// ParallelFromSlice (the floor) and Parallel (the per-row channel).
+func BenchmarkScaleTypedBatchedInMemory3Join(b *testing.B) {
+	setupScaleData(b)
+	// Materialised before the timer, like SliceParallel: the number
+	// isolates the distributor's cost from the CSV parse.
+	var data []scaleData
+	for r := range ReadCSV[scaleData](scaleDataFile) {
+		data = append(data, r)
+	}
+	n := runtime.GOMAXPROCS(0)
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		depts := ReadCSV[scaleDept](scaleDeptFile)
+		regs := ReadCSV[scaleRegion](scaleRegFile)
+		cities := ReadCSV[scaleCity](scaleCityFile)
+
+		// Convert the input to a parallel Stream as early as possible
+		// so filter + all three joins run in parallel.
+		stream := ParallelBatched(slicesValues(data), n)
+
+		filtered := stream.Where(func(r scaleData) bool { return r.Age > 30 })
+
+		j1 := HashJoinParallel(filtered, depts,
+			func(l scaleData) string { return l.DeptID },
+			func(r scaleDept) string { return r.DeptID },
+			func(l scaleData, r scaleDept) scaleJoin1 {
+				return scaleJoin1{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: r.DeptName, RegionID: r.RegionID,
+				}
+			})
+
+		j2 := HashJoinParallel(j1, regs,
+			func(l scaleJoin1) string  { return l.RegionID },
+			func(r scaleRegion) string { return r.RegionID },
+			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
+				return scaleJoin2{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: l.DeptName, RegionID: l.RegionID,
+					RegionName: r.RegionName, CityID: r.CityID,
+				}
+			})
+
+		j3 := HashJoinParallel(j2, cities,
+			func(l scaleJoin2) string { return l.CityID },
+			func(r scaleCity) string  { return r.CityID },
+			func(l scaleJoin2, r scaleCity) scaleJoin3 {
+				return scaleJoin3{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: l.DeptName, RegionID: l.RegionID,
+					RegionName: l.RegionName, CityID: l.CityID,
+					City: r.City, Country: r.Country,
+				}
+			})
+
+		count := j3.SerialCount()
+		if count == 0 {
+			b.Fatal("expected non-zero count")
+		}
+		b.ReportMetric(float64(count), "rows_out")
+		b.ReportMetric(float64(n), "shards")
+	}
+}
+
+// BenchmarkScaleTypedSliceParallel3Join uses ParallelFromSlice (no
+// channels on the input side) and SerialCount (no channels on the
+// output side). The input slice is materialized once before the
+// timer starts so the bench measures pure compute parallelism.
+//
+// Compare this against BenchmarkScaleTypedCompute (single-threaded
+// preloaded) for an apples-to-apples speedup figure.
+
+
+// BenchmarkScaleTypedPerRowInMemory3Join is the per-row channel
+// distributor on the same in-memory input — the reference negative result
+// of claude/concurrency.md §1 without the CSV parse in the number.
+func BenchmarkScaleTypedPerRowInMemory3Join(b *testing.B) {
+	setupScaleData(b)
+	// Materialised before the timer, like SliceParallel: the number
+	// isolates the distributor's cost from the CSV parse.
+	var data []scaleData
+	for r := range ReadCSV[scaleData](scaleDataFile) {
+		data = append(data, r)
+	}
+	n := runtime.GOMAXPROCS(0)
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		depts := ReadCSV[scaleDept](scaleDeptFile)
+		regs := ReadCSV[scaleRegion](scaleRegFile)
+		cities := ReadCSV[scaleCity](scaleCityFile)
+
+		// Convert the input to a parallel Stream as early as possible
+		// so filter + all three joins run in parallel.
+		stream := Parallel(slicesValues(data), n)
+
+		filtered := stream.Where(func(r scaleData) bool { return r.Age > 30 })
+
+		j1 := HashJoinParallel(filtered, depts,
+			func(l scaleData) string { return l.DeptID },
+			func(r scaleDept) string { return r.DeptID },
+			func(l scaleData, r scaleDept) scaleJoin1 {
+				return scaleJoin1{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: r.DeptName, RegionID: r.RegionID,
+				}
+			})
+
+		j2 := HashJoinParallel(j1, regs,
+			func(l scaleJoin1) string  { return l.RegionID },
+			func(r scaleRegion) string { return r.RegionID },
+			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
+				return scaleJoin2{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: l.DeptName, RegionID: l.RegionID,
+					RegionName: r.RegionName, CityID: r.CityID,
+				}
+			})
+
+		j3 := HashJoinParallel(j2, cities,
+			func(l scaleJoin2) string { return l.CityID },
+			func(r scaleCity) string  { return r.CityID },
+			func(l scaleJoin2, r scaleCity) scaleJoin3 {
+				return scaleJoin3{
+					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
+					DeptName: l.DeptName, RegionID: l.RegionID,
+					RegionName: l.RegionName, CityID: l.CityID,
+					City: r.City, Country: r.Country,
+				}
+			})
+
+		count := j3.SerialCount()
+		if count == 0 {
+			b.Fatal("expected non-zero count")
+		}
+		b.ReportMetric(float64(count), "rows_out")
+		b.ReportMetric(float64(n), "shards")
+	}
+}
+
+// BenchmarkScaleTypedSliceParallel3Join uses ParallelFromSlice (no
+// channels on the input side) and SerialCount (no channels on the
+// output side). The input slice is materialized once before the
+// timer starts so the bench measures pure compute parallelism.
+//
+// Compare this against BenchmarkScaleTypedCompute (single-threaded
+// preloaded) for an apples-to-apples speedup figure.
+
+
 // BenchmarkScaleTypedSliceParallel3Join uses ParallelFromSlice (no
 // channels on the input side) and SerialCount (no channels on the
 // output side). The input slice is materialized once before the

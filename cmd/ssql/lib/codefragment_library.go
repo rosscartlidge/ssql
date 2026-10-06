@@ -14,9 +14,11 @@ package lib
 // under ssql.Safely so a stage failure ends the sequence with
 // (zero, err) instead of exiting the process. Generated type names are
 // prefixed with F so two pipelines over the same file can share a
-// package. v1 emits the serial typed plan (the input is an iter.Seq the
-// caller owns, not a file the planner can shard); the parallel library
-// form is the recorded follow-up.
+// package. The typed source becomes typed.ParallelBatched(in, p.Shards)
+// — rows enter the Stream in batches, no channel transit per row
+// (claude/concurrency.md §1) — with `records := in` as its serial
+// alternative, so the planner keeps or drops the parallel plan exactly
+// as it does for a program.
 
 import (
 	"fmt"
@@ -63,16 +65,43 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 	prefixTypeNames(fragments, fn)
 
 	typed := isTypedPipeline(fragments)
+
+	// The source stage becomes the function's input. Its original code
+	// still decides the reader form (FromCSV / FromTSV), so look before
+	// rewriting. In typed mode the input enters the Stream runtime
+	// through typed.ParallelBatched, with the plain sequence as the
+	// serial alternative the planner may choose.
+	var srcInit *CodeFragment
+	for _, f := range fragments {
+		if f.Type == "init" {
+			if srcInit != nil {
+				return "", fmt.Errorf("library mode: a pipeline with several sources (%q and %q) is not supported yet — the function takes one input sequence", srcInit.Command, f.Command)
+			}
+			srcInit = f
+		}
+	}
+	if srcInit == nil {
+		return "", fmt.Errorf("library mode: the pipeline has no source stage")
+	}
+	if typed && srcInit.OutputTypedSchema == nil {
+		return "", fmt.Errorf("ssql generate go -typed: source %q cannot enter typed mode (no sampled schema); run with SSQL_MODE=record", srcInit.Command)
+	}
+	origSrcCode := srcInit.Code
+	if typed {
+		srcInit.Code = srcInit.Var + " := typed.ParallelBatched(in, *flagShards)"
+		srcInit.Imports = append(libraryKeptImports(srcInit.Imports), "github.com/rosscartlidge/ssql/v4/typed")
+		srcInit.IsStream = true
+		srcInit.Capabilities = &Capabilities{Accepts: ShapeNone, Produces: ShapeStream}
+		srcInit.AltCodeIfSeq = srcInit.Var + " := in"
+		srcInit.AltImportsIfSeq = libraryKeptImports(srcInit.Imports)
+		srcInit.AltCapabilitiesIfSeq = &Capabilities{Accepts: ShapeNone, Produces: ShapeSeqTyped}
+	} else {
+		srcInit.Code = srcInit.Var + " := in"
+		srcInit.Imports = libraryKeptImports(srcInit.Imports)
+	}
+
 	if typed {
 		tagRecordModeFragments(fragments)
-		// The input is an iter.Seq the caller supplies, never a Stream:
-		// force the serial plan by downgrading every source before the
-		// planner runs, so each stage takes its serial alternative.
-		for _, f := range fragments {
-			if f.Type == "init" && f.AltCodeIfSeq != "" {
-				applySerialSourceAlternative(f)
-			}
-		}
 		fragments = applyPlannerBoundaries(fragments)
 		for _, frag := range fragments {
 			if frag.Type == "func" && len(frag.FuncBody) > 0 {
@@ -95,32 +124,25 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 			funcs = append(funcs, frag)
 		}
 	}
-	if len(inits) == 0 {
-		return "", fmt.Errorf("library mode: the pipeline has no source stage")
-	}
-	if len(inits) > 1 {
-		return "", fmt.Errorf("library mode: a pipeline with several sources (%q and %q) is not supported yet — the function takes one input sequence", inits[0].Command, inits[1].Command)
-	}
 	src := inits[0]
-	if typed && src.OutputTypedSchema == nil {
-		return "", fmt.Errorf("ssql generate go -typed: source %q cannot enter typed mode (no sampled schema); run with SSQL_MODE=record", src.Command)
-	}
 
-	// Element types.
+	// Element types. A Stream at the end is drained with .Serial().
 	inType, outType := "ssql.Record", "ssql.Record"
 	last := src
 	if len(stmts) > 0 {
 		last = stmts[len(stmts)-1]
 	}
+	returnExpr := last.Var
 	if typed {
 		inType = src.OutputTypedSchema.TypeName
 		switch {
 		case last.Capabilities != nil && last.Capabilities.Produces == ShapeSeqRecord:
 			outType = "ssql.Record"
-		case last.Capabilities != nil && last.Capabilities.Produces == ShapeStream:
-			return "", fmt.Errorf("library mode: internal error — %q still produces a Stream after the serial plan", last.Command)
 		case last.OutputTypedSchema != nil:
 			outType = last.OutputTypedSchema.TypeName
+			if last.Capabilities != nil && last.Capabilities.Produces == ShapeStream {
+				returnExpr = last.Var + ".Serial()"
+			}
 		default:
 			return "", fmt.Errorf("library mode: cannot determine the element type %q produces", last.Command)
 		}
@@ -141,6 +163,9 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 		if !drop[p.VarName] {
 			params = append(params, p)
 		}
+	}
+	if strings.Contains(src.Code, "*flagShards") {
+		params = append(params, CodeParam{Name: "shards", Default: "0", Help: "parallel shards (0 = every core)", VarName: "flagShards", Type: "int"})
 	}
 	fields := libraryFields(params)
 	paramsType := fn + "Params"
@@ -214,14 +239,16 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 		body.WriteString(indentLines(strings.TrimRight(d, "\n"), "\t\t"))
 		body.WriteString("\n")
 	}
+	body.WriteString(indentLines(src.Code, "\t\t"))
+	body.WriteString("\n")
 	for _, s := range stmts {
 		body.WriteString(indentLines(libraryStmt(s.Code, usesParam), "\t\t"))
 		body.WriteString("\n")
 	}
-	fmt.Fprintf(&body, "\t\treturn %s\n", last.Var)
+	fmt.Fprintf(&body, "\t\treturn %s\n", returnExpr)
 
 	// Reader form for a delimited-file source.
-	readerFn, readerExpr := libraryReaderForm(src, typed, inType)
+	readerFn, readerExpr := libraryReaderForm(origSrcCode, typed, inType)
 
 	// Imports: the kept fragments' plus what the skeleton uses, pruned
 	// to those the emitted text references (an import a stage listed
@@ -235,9 +262,7 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 		importSet["io"] = true
 	}
 	for _, imp := range src.Imports {
-		switch imp {
-		case "", "runtime", "fmt", "os", "flag":
-		default:
+		if imp != "" {
 			importSet[imp] = true
 		}
 	}
@@ -274,8 +299,12 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 	fmt.Fprintf(&rest, "// %s holds the pipeline's parameters. A zero value is NOT the\n", paramsType)
 	fmt.Fprintf(&rest, "// pipeline's own literals: start from %sDefaults().\n", fn)
 	fmt.Fprintf(&rest, "type %s struct {\n", paramsType)
+	nameW, typeW := 0, 0
 	for _, f := range fields {
-		fmt.Fprintf(&rest, "\t%s %s // -%s %s\n", f.GoName, f.GoType, f.Param.Name, f.Param.Default)
+		nameW, typeW = max(nameW, len(f.GoName)), max(typeW, len(f.GoType))
+	}
+	for _, f := range fields {
+		fmt.Fprintf(&rest, "\t%-*s %-*s // -%s %s\n", nameW, f.GoName, typeW, f.GoType, f.Param.Name, f.Param.Default)
 	}
 	rest.WriteString("}\n\n")
 	fmt.Fprintf(&rest, "// %sDefaults returns the parameter values the pipeline was written with.\n", fn)
@@ -294,7 +323,7 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 	rest.WriteString("// range body, as with any iterator.\n")
 	fmt.Fprintf(&rest, "func %s(in iter.Seq[%s], p %s) iter.Seq2[%s, error] {\n", fn, inType, paramsType, outType)
 	rest.WriteString(bindParams(fields, "\t"))
-	fmt.Fprintf(&rest, "\treturn ssql.Safely(func(%s iter.Seq[%s]) iter.Seq[%s] {\n", src.Var, inType, outType)
+	fmt.Fprintf(&rest, "\treturn ssql.Safely(func(in iter.Seq[%s]) iter.Seq[%s] {\n", inType, outType)
 	rest.WriteString(body.String())
 	rest.WriteString("\t})(ssql.Safe(in))\n}\n")
 	if readerFn != "" {
@@ -470,12 +499,21 @@ var (
 // delivers it).
 func libraryStmt(code string, keepVar func(string) bool) string {
 	var kept []string
-	for _, line := range splitLines(code) {
+	droppedFirst := false
+	for i, line := range splitLines(code) {
 		t := trimSpace(line)
 		if startsWith(t, "var ") && findString(t, "runtime.MustCompile") != -1 && (keepVar == nil || !keepVar(t)) {
+			droppedFirst = droppedFirst || i == 0
 			continue
 		}
 		kept = append(kept, line)
+	}
+	if droppedFirst {
+		// A fragment's first line is flush left and its continuation
+		// lines carry one tab; with the first line gone, drop that tab.
+		for i, line := range kept {
+			kept[i] = strings.TrimPrefix(line, "\t")
+		}
 	}
 	code = joinLines(kept)
 	code = returnErrorfRe.ReplaceAllString(code, "${1}panic(${2})")
@@ -495,15 +533,15 @@ func indentLines(code, indent string) string {
 
 var (
 	recordReadRe = regexp.MustCompile(`ssql\.Read(CSV|TSV)\(\*flagInput((?:,[^\n]*?)?)\)\s*\n`)
-	typedReadRe  = regexp.MustCompile(`typed\.Read(CSV|Delim)\[[A-Za-z0-9_.]+\]\(\*flagInput\)`)
+	typedReadRe  = regexp.MustCompile(`typed\.Read(CSV|Delim)(?:Parallel)?\[[A-Za-z0-9_.]+\]\(\*flagInput(?:, runtime\.GOMAXPROCS\(0\))?\)`)
 )
 
 // libraryReaderForm decides whether the source was a plain delimited
 // file read and, if so, returns the reader function's suffix (FromCSV /
 // FromTSV) and the expression that reads `r` into iter.Seq[inType].
-func libraryReaderForm(src *CodeFragment, typed bool, inType string) (suffix, expr string) {
+func libraryReaderForm(srcCode string, typed bool, inType string) (suffix, expr string) {
 	if typed {
-		m := typedReadRe.FindStringSubmatch(src.Code)
+		m := typedReadRe.FindStringSubmatch(srcCode)
 		if m == nil {
 			return "", ""
 		}
@@ -512,7 +550,7 @@ func libraryReaderForm(src *CodeFragment, typed bool, inType string) (suffix, ex
 		}
 		return "FromTSV", fmt.Sprintf("typed.ReadDelimFromReader[%s](r)", inType)
 	}
-	m := recordReadRe.FindStringSubmatch(src.Code + "\n")
+	m := recordReadRe.FindStringSubmatch(srcCode + "\n")
 	if m == nil {
 		return "", ""
 	}
@@ -559,4 +597,19 @@ func mergeBodyImports(body []*CodeFragment) []string {
 		}
 	}
 	return out
+}
+
+// libraryKeptImports drops from a source's import list what its replaced
+// code needed (the reader, the flag block, the process) and keeps what
+// its struct definition may still reference (time for time.Time fields).
+func libraryKeptImports(imports []string) []string {
+	var kept []string
+	for _, imp := range imports {
+		switch imp {
+		case "", "runtime", "fmt", "os", "flag", "github.com/rosscartlidge/ssql/v4/typed":
+		default:
+			kept = append(kept, imp)
+		}
+	}
+	return kept
 }

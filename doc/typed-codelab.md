@@ -547,9 +547,11 @@ which form the planner chose and why.
 emits the same typed pipeline as a function — `func F(in iter.Seq[Row],
 p FParams) iter.Seq2[Out, error]` with a `FFromCSV(r io.Reader, p)`
 reader form — for a program that already exists: a service, a test, a
-batch job with its own main. The library form runs the serial typed
-plan (its input is a sequence the caller owns, not a file the planner
-can shard). See [CLI Codelab § 7](cli-codelab.md#7-generate-code).
+batch job with its own main. The planner runs as for a program: the
+input enters the `Stream` runtime through `typed.ParallelBatched` (rows
+cross to the shards in batches, so a sequence the caller owns parallelises
+without a per-row channel), and `FParams.Shards` sets the width. See
+[CLI Codelab § 7](cli-codelab.md#7-generate-code).
 
 ## Cheat sheet
 
