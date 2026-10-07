@@ -363,6 +363,58 @@ good at, and `-collect` already produces its inverse. Together they make
 Arguments about Level 3: real, but driven by Parquet/Arrow and the typed
 lane's speed on nested data, which no current user has asked for.
 
+## 6a. A position on the old dichotomy (2026-10-08)
+
+Ross asked where this stands on the long-standing argument in database
+design: should every value be scalar, with structure expressed through
+further tables, or may a value itself be structured? The position this
+document takes, and which §7 follows from:
+
+**The dichotomy is real at the storage layer and mostly dissolves at the
+pipeline layer, and ssql sits at the pipeline layer.** Codd's case for
+first normal form was about data at rest, owned by the database and
+mutated over time: a nested list cannot be indexed, joined on or
+updated one element at a time without rewriting the row, and the
+anomalies follow. Those arguments are strong there, and the nested
+forms that won in practice, JSON columns and document stores, paid for
+their convenience with exactly those anomalies. A normalised schema is
+the honest shape of persistent data.
+
+ssql owns nothing at rest. It reads a stream, transforms it, and
+writes it out; its rows are a snapshot of a moment, not a model of the
+world. A nested value in that setting is not a design choice someone
+made badly, it is the shape the data arrived in, and the only question
+is whether the tool can take it apart. So ssql does not need a view on
+how databases should be designed. It needs the two operations that
+move between the shapes: `explode`, which turns one row holding a list
+into many scalar rows, and `-collect`, which comes back. Those are the
+normalise and denormalise moves; a stream tool with both can meet data
+in either form and hand it on flat, which is where ssql is good.
+
+Inside a row, the scalar discipline should win. A list inside a field
+is a second, weaker table with no name and no join key. The moment a
+user wants to filter it, aggregate it or join on its elements, they
+are better served by exploding it into rows and using the commands
+that exist than by a parallel family of list functions. That is why
+Level 2 (the structural commands) ranks above Level 3 (a typed nested
+tier). DuckDB can afford both tiers because it is a database and
+people keep nested columns in it for years; ssql's nested values are
+transient, something to unpack early or carry through untouched.
+
+The one place the scalar discipline must not win is identity. A nested
+value that is passing through must survive unchanged, and the lanes
+must agree on what it is. Flattening it on the way in, as some tools
+do, destroys information and makes the output differ from the input
+for a user who never asked. Carry it as one typed thing (`json`), let
+the user open it when they need to, and keep the rest of the tool
+scalar.
+
+In three words: normalised at rest, scalar in the operators, honest
+about the shape at the edges. Levels 0–2 are that position made
+concrete; Level 3 is the point where ssql would start to be a
+database, which is a reason to defer it rather than a reason it is
+wrong.
+
 ## 7. Recommendation
 
 1. **Level 0 now**, as a bug batch with no new semantics: one
