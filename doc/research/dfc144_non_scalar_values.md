@@ -2,7 +2,7 @@
 
 Reference: DFC144
 Created: 2026-10-07
-Last modified: 2026-10-07
+Last modified: 2026-10-08
 Deprecates: [DFC052](./compound-types-investigation.md)
 
 [Back to Index](./README.md)

@@ -2,11 +2,12 @@
 
 Reference: DFC136
 Created: 2026-09-23
-Last modified: 2026-09-28
+Last modified: 2026-10-08
 
 [Back to Index](./README.md)
 
-Status: **assessment, no decisions; updated 2026-09-28 for v4.108.0.**
+Status: **assessment, no decisions; updated 2026-09-28 for v4.108.0;
+addendum §7a on non-scalar values 2026-10-08 (see DFC144).**
 Ross, 2026-09-23: "a good time to do a feature compare with DuckDB. What
 does it look like now?" The previous comparison is
 [DFC060](./duckdb-vs-ssql.md) (March 2026, with a measured appendix from
@@ -92,7 +93,7 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Fill missing (carry down, default) | ◐ (window tricks) | ● | `fill -down`, `-default` |
 | Describe / profile | ● (`SUMMARIZE`) | ● | `describe` |
 | Signal processing (FFT, convolution, correlation, STFT) | ○ | ● | GPU-accelerated build for the heavy ones |
-| Nested / list / struct types | ● | ◐ | `group-by -collect` builds lists; expressions have list/map functions (`map`, `filter`, `split`, `fromJSON`, `flatten`); no unnest command, and typed codegen and `generate sql` do not carry nested values |
+| Nested / list / struct types | ● | ○ | Re-assessed 2026-10-08 (§7a, [DFC144](./dfc144_non_scalar_values.md)): nested JSON passes through as text and nothing can look inside it — `len(tags)` counts characters, `addr.city` errors; `group-by -collect` builds a list that is text one stage later; the expression list/map functions work only on values built inside the expression. The ◐ of September was generous |
 | Full-text search, spatial, vector | ● (ext) | ○ | |
 
 ### 2.3 Expressions
@@ -191,19 +192,25 @@ is the list after it. The original ranking is kept in §8.
    formatting, `date_trunc` beyond `bucket`, timezone conversion,
    intervals as values. Each is small; together they are a gap people
    feel daily. Now the largest remaining one.
-2. **Joins beyond equality and ASOF.** General non-equi joins (`ON a.x <
+2. **Non-scalar values** (added 2026-10-08, §7a). Anyone whose data
+   arrives as JSON — API exports, logs — meets it on the first
+   question: `len(tags)` silently gives the wrong number. DuckDB has
+   LIST/STRUCT with a full function family and UNNEST, and a JSON type
+   with paths as the fallback. [DFC144](./dfc144_non_scalar_values.md)
+   has the survey, four levels of support and the decisions.
+3. **Joins beyond equality and ASOF.** General non-equi joins (`ON a.x <
    b.y`) and LATERAL. Rare in pipeline work; no plan.
-3. **Automatic spilling.** ssql spills when asked (`-spill DIR`), DuckDB
+4. **Automatic spilling.** ssql spills when asked (`-spill DIR`), DuckDB
    decides for itself. DFC137 §1.4 chose opt-in because a wrong estimate
    either spills needlessly or dies; a `-memory` budget that fails early
    rather than spills is the next step if anyone wants it. `top`,
    `distinct` and `window` stay in memory.
-4. **Correlated subqueries.** Not expressible in a pipeline and never
+5. **Correlated subqueries.** Not expressible in a pipeline and never
    will be, which is a deliberate limit.
-5. **Bindings.** Go only. DFC132 decided against Rust; Python is the one
+6. **Bindings.** Go only. DFC132 decided against Rust; Python is the one
    that would change adoption, and `ssql run` plus `generate json` make
    a thin binding possible without a second implementation.
-6. **Ecosystem.** Extensions, database connectors, an installed base.
+7. **Ecosystem.** Extensions, database connectors, an installed base.
    (Remote storage is not a gap: `from https://` with Range and
    presigned URLs covers object stores, DFC112; DuckDB additionally
    signs S3 requests itself.) Not a feature gap to close so much as a fact.
@@ -256,9 +263,15 @@ them:
    interval values; each with transpiler and SQL translation and a
    differential entry. The one gap on the list that an analyst meets
    daily.
-2. A Python binding over `ssql run` documents (§4.5), after DFC134's
+2. Non-scalar values, Levels 0–2 of
+   [DFC144](./dfc144_non_scalar_values.md) (added 2026-10-08, §7a): one
+   in-memory representation and `json` as the honest schema type, then
+   expressions that see nested values, then `explode`/`flatten` and
+   dotted paths as field names. The September list did not have it
+   because the matrix row under-stated the gap.
+3. A Python binding over `ssql run` documents (§4.6), after DFC134's
    JSON Schema (§5.5), so the binding is generated, not written.
-3. A faster run codec for `-spill` (DFC137 §1a: gob over `[]any` is
+4. A faster run codec for `-spill` (DFC137 §1a: gob over `[]any` is
    ~4 µs per record each way and is the whole 1.7× over the in-memory
    sort); typed spill; a `-memory` that fails early instead of spilling.
    Polish, not gaps.
@@ -291,6 +304,63 @@ fixtures the new units brought. The lesson for the next comparison:
 the matrix counts features; the gates measure whether the lanes agree
 on them, and a ● in one lane is not a ●.
 
+## 7a. Addendum, 2026-10-08: non-scalar values were under-weighted here
+
+Ross, 2026-10-08: "I don't think we talked enough about the lack of
+non-scalar values in our DFC136 survey." He is right. §2.2 gave the
+row a ◐ on the strength of `-collect` and the expression language's
+list functions, and §4 did not rank it at all. Measured on v4.112.0
+for [DFC144](./dfc144_non_scalar_values.md), the real position is:
+
+- **Nested JSON passes through the pipeline unchanged, as text.** The
+  wire reader captures an array or object as a `JSONString`, so after
+  one pipe hop every nested value is opaque text whatever it was
+  before. `to table` and `to csv` show the JSON; that is the whole of
+  the support.
+- **Nothing can look inside it.** `len(tags)` on `["go","rust"]` is
+  13, `tags[0]` is 91 (the byte `[`), `addr.city` and `"go" in tags`
+  are errors. The expression language's thirty list and map functions
+  work only on values built inside the expression (`split`,
+  `fromJSON(string(x))`), and a non-scalar result is stored as
+  `fmt.Sprintf("%v")` text.
+- **`-collect` is a list for one stage.** It writes wire type `json`,
+  the next stage reads it as text, and `len(names)` is a character
+  count. It has no typed form and no `window` form.
+- **Three in-memory representations exist**, chosen by the reader
+  (`JSONString`; `[]any` plus nested `Record` from `from json` on an
+  array file, with random key order; `[]any` plus `map` in the legacy
+  library reader), and the lanes disagree: generated code holds
+  `JSONString`, DuckDB reads the same file into native STRUCT/LIST, and
+  `len` means characters in one and elements in the other.
+- **The `_schema` type `json` exists but is not honoured**: it flips to
+  `string` after a hop, `cast` and `ParseFieldType` reject it, typed
+  codegen refuses it, `SSQL_MODE=schema` says `any`.
+- Six concrete bugs sit under this (DFC144 §1.5): `to json`
+  double-encodes nested values, `Record.Equal` and group-by would panic
+  on an in-memory `[]any`, `isValueType` disagrees with the `Value`
+  constraint.
+
+Against DuckDB this is not a ◐. DuckDB has a **typed tier** — LIST
+(1-based, sliceable), STRUCT (fixed keys, dot access, `s.*`), MAP,
+UNION, a complete `list_*` family with lambdas, `UNNEST` with
+recursion — and an **untyped tier**, the JSON type with `->`/`->>` and
+JSONPath, and `read_json` infers the first and falls back to the second
+per column. ssql has the fallback tier's storage without its
+operations.
+
+What this changes in this document: the matrix row is ○ (§2.2), the
+gap is ranked second in §4 (after date and time functions, which more
+people meet, and ahead of everything else), and §6 gains the unit.
+What it does not change: the one-paragraph answer (§1) and the
+"where ssql is ahead" list (§5) stand; this is a gap in the data model,
+not in the pipeline idea, and DFC144's Level 0–2 close it without
+touching the scalar fast path. The design discussion — one
+representation (`JSONString`), `json` as the schema type every stage
+honours, expressions that parse referenced fields lazily,
+`explode`/`flatten`, dotted paths as field names completable from
+`SSQL_MODE=schema`, and the typed nested tier deferred — is in DFC144
+§§4–7; its seven decisions are §8 there.
+
 ## 8. References
 
 - [DFC060](./duckdb-vs-ssql.md) — the March comparison and the
@@ -310,3 +380,6 @@ on them, and a ● in one lane is not a ●.
 
 - [DFC137](./dfc137_spill_asof_set_ops.md) — the three units this
   comparison led to, each with a "built" subsection.
+- [DFC144](./dfc144_non_scalar_values.md) — non-scalar values: the
+  survey behind §7a, DuckDB's two tiers, four levels of support, the
+  decisions. Supersedes [DFC052](./compound-types-investigation.md).
