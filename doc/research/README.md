@@ -59,7 +59,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC049 | 2026-02-24 | 2026-03-12 | [Window / Analytic Functions Design](./window-functions-design.md) |
 | DFC050 | 2026-02-25 | 2026-03-20 | [ssql Future Development](./future-development.md) |
 | DFC051 | 2026-02-26 | 2026-03-20 | [Streaming vs Materialization: Command Survey](./streaming-vs-materialization.md) |
-| DFC052 | 2026-02-27 | 2026-03-12 | [Compound Types in ssql: Investigation and Opportunities](./compound-types-investigation.md) |
+| DFC052 | 2026-02-27 | 2026-10-07 | [Compound Types in ssql: Investigation and Opportunities](./compound-types-investigation.md) |
 | DFC053 | 2026-02-27 | 2026-03-12 | [Streaming Window Functions: Design Report](./streaming-window-functions.md) |
 | DFC054 | 2026-03-10 | 2026-09-08 | [Distributed Shard Catalog](./distributed-shard-catalog.md) |
 | DFC055 | 2026-03-10 | 2026-03-10 | [`from` Subcommands: Mirroring `to`](./from-subcommands.md) |
@@ -151,6 +151,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC141 | 2026-09-29 | 2026-09-29 | [`ssql/typed` Roadmap History](./dfc141_typed_roadmap_history.md) |
 | DFC142 | 2026-09-30 | 2026-10-06 | [Panics as the Library's Error Channel: What Embedding ssql in a Server Needs](./dfc142_panics_as_error_channel.md) |
 | DFC143 | 2026-10-06 | 2026-10-06 | [Library mode: `ssql generate go -package` — what was built, and an example](./dfc143_library_mode.md) |
+| DFC144 | 2026-10-07 | 2026-10-07 | [Non-scalar field values: a survey, what DuckDB does, and the options](./dfc144_non_scalar_values.md) |
 
 <!-- DFC-INDEX-END -->
 

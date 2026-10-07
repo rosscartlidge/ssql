@@ -2,7 +2,8 @@
 
 Reference: DFC052
 Created: 2026-02-27
-Last modified: 2026-03-12
+Last modified: 2026-10-07
+Deprecated-by: [DFC144](./dfc144_non_scalar_values.md)
 
 [Back to Index](./README.md)
 
