@@ -28,7 +28,7 @@ go install github.com/rosscartlidge/ssql/v4/cmd/ssql@latest   # any Go 1.21+; th
 Debian and Ubuntu, no Go needed:
 
 ```bash
-curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.112.0_amd64.deb && sudo dpkg -i ssql_4.112.0_amd64.deb
+curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.113.0_amd64.deb && sudo dpkg -i ssql_4.113.0_amd64.deb
 ```
 
 Then `ssql version`, and `eval "$(ssql -shell-init)"` in `~/.bashrc` for
