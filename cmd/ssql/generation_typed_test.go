@@ -790,7 +790,9 @@ func TestTypedRollupIsNative(t *testing.T) {
 // the generated program reads with typed.ReadJSONL into an inferred
 // struct (not the record ReadJSONAuto fallback), for a plain file and
 // for a tee'd file whose `_schema` header drives the struct; output
-// matches exec. A JSON array keeps the record path with a reason.
+// matches exec. A JSON array file reads with typed.ReadJSON into a
+// struct sampled from its elements (2026-10-09; it kept the record path
+// with a reason before).
 func TestTypedFromJSONL(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)
 	dir := t.TempDir()
@@ -817,9 +819,19 @@ func TestTypedFromJSONL(t *testing.T) {
 		}
 	}
 
+	arrPipe := bin + " from json " + arr + " | " + bin + " include name age | " + bin + " to csv"
+	arrSrc := runTypedPipeline(t, bin, arrPipe)
+	// Either form: ReadJSONParallel when a downstream accepts a Stream
+	// (include does), else ReadJSON.
+	if !strings.Contains(arrSrc, "typed.ReadJSON") || !strings.Contains(arrSrc, "[ArrRow](") || strings.Contains(arrSrc, "ReadJSONAuto") {
+		t.Errorf("a JSON array file should read with typed.ReadJSON(Parallel)[ArrRow], not the record reader:\n%s", arrSrc[:min(len(arrSrc), 1500)])
+	}
+	if got, exec := goRunGenerated(t, arrSrc), equivShell(t, "exec", arrPipe); got != exec {
+		t.Errorf("array file: typed output differs from exec:\n--- typed\n%s--- exec\n%s", got, exec)
+	}
 	explain := equivShell(t, "explain", "export SSQL_MODE=typed && "+bin+" from json "+arr+" | "+bin+" to csv | "+bin+" generate go +O -explain 2>&1 || true")
-	if !strings.Contains(explain, "record fallback") || !strings.Contains(explain, "JSON array") {
-		t.Errorf("JSON array should fall back to record with a reason; explain:\n%s", explain)
+	if !strings.Contains(explain, "typed from json (array)") {
+		t.Errorf("explain should note the array sampling; explain:\n%s", explain)
 	}
 
 	// A Stream-accepting downstream keeps the parallel reader (step 3).

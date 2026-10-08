@@ -318,17 +318,19 @@ func generateFromJSONCode(filename string, types typeArgs) error {
 	return lib.WriteCodeFragment(frag)
 }
 
-// generateFromJSONLCodeTyped is the typed form of `from jsonl FILE`
+// generateFromJSONLCodeTyped is the typed form of `from json|jsonl FILE`
 // (typed-codegen roadmap item 9): infer the row struct from the file
-// (lib.SampleJSONLSchema — the `_schema` header when present, else a
-// sample of lines) and read it with typed.ReadJSONL, so the REST of the
+// (lib.SampleJSONSchema — the `_schema` header when present, else a
+// sample of lines or array elements) and read it with typed.ReadJSONL
+// or, for a JSON array file, typed.ReadJSON, so the REST of the
 // pipeline stays typed. Before this the planner fell back to record
 // mode for the whole program: 14.8 s / 3.9 GB for a 3M-row group-by;
 // with the positional parallel reader the same group-by is a fraction
-// of a second (roadmap §9 steps 1–3). A JSON array file has no typed
-// form and takes the record path, noted under -explain.
+// of a second (roadmap §9 steps 1–3). Array files took the record path
+// until 2026-10-09 (the typed/go-lib lanes skipped every array-file
+// equivalence case, which is how an array-file SQL bug stayed hidden).
 func generateFromJSONLCodeTyped(filename string, types typeArgs) error {
-	schema, structDef, err := lib.SampleJSONLSchema(filename, "", 0, types.options())
+	schema, structDef, isArray, err := lib.SampleJSONSchema(filename, "", 0, types.options())
 	if err != nil {
 		if !typedMode() {
 			return lib.WriteErrorAndExit(getCommandString(), fmt.Errorf("ssql generate go -typed: %w", err))
@@ -348,16 +350,22 @@ func generateFromJSONLCodeTyped(filename string, types typeArgs) error {
 	}
 	// Dual templates, as for CSV: the planner keeps the parallel form
 	// (typed.ReadJSONLParallel → Stream[T]) when a downstream stage
-	// accepts a Stream, else swaps to the serial typed.ReadJSONL.
-	parallelCode := fmt.Sprintf(`records := typed.ReadJSONLParallel[%s](*flagInput, 0)`, schema.TypeName)
+	// accepts a Stream, else swaps to the serial typed.ReadJSONL. A JSON
+	// array file reads with the ReadJSON twins (one scanner feeding the
+	// decoding shards; there is no newline index to split on).
+	reader, shape := "JSONL", "jsonl"
+	if isArray {
+		reader, shape = "JSON", "json (array)"
+	}
+	parallelCode := fmt.Sprintf(`records := typed.Read%sParallel[%s](*flagInput, 0)`, reader, schema.TypeName)
 	parallelImports := append([]string{}, imports...)
-	serialCode := fmt.Sprintf(`records := typed.ReadJSONL[%s](*flagInput)`, schema.TypeName)
+	serialCode := fmt.Sprintf(`records := typed.Read%s[%s](*flagInput)`, reader, schema.TypeName)
 	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}
 	frag.IsStream = true
-	frag.PlanNotes = []string{fmt.Sprintf("typed from jsonl: %d fields inferred from %s", len(schema.Fields), filename)}
+	frag.PlanNotes = []string{fmt.Sprintf("typed from %s: %d fields inferred from %s", shape, len(schema.Fields), filename)}
 	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeStream}
 	frag.AltCodeIfSeq = serialCode
 	frag.AltImportsIfSeq = imports

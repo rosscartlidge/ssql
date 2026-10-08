@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Typed codegen for JSON array files.** `from json FILE.json` (a JSON
+  array, the shape an API export or `to json` writes) in `SSQL_MODE=typed`
+  now keeps the pipeline typed: the sampler reads the first elements for
+  the row struct (`lib.SampleJSONSchema`, which reports the file's shape)
+  and the program reads with the new `typed.ReadJSON` /
+  `typed.ReadJSONParallel` (one goroutine scans the document into
+  elements with `encoding/json`'s Decoder and hands them to decoding
+  shards in batches; `typed.ReadJSONFromReader` for an `io.Reader`).
+  Errors are `*typed.ReadError` with `Row` the 1-based element index.
+  Array files took the record path before, so the typed and parallel
+  lanes skipped every array-file equivalence case — which is how the
+  `REPLACE` bug below stayed hidden. The array-file cases now run every
+  Go lane, four more array-file cases (`explode`, `flatten`, a path in
+  `group-by`, `group-by -expr` over lists) were added, and the scale gate
+  gained `generate-go-run-json-array-typed` over a 3M-element array.
+
 ### Fixed
 
 - `generate sql` on a JSON **array** file emitted `SELECT * REPLACE (… AS

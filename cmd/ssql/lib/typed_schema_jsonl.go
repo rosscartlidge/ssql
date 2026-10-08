@@ -11,30 +11,28 @@ import (
 	"github.com/rosscartlidge/ssql/v4"
 )
 
-// SampleJSONLSchema infers the typed row struct for a JSONL file so
-// `from jsonl FILE` has a typed form (typed-codegen roadmap item 9;
-// before it, a typed compile of any JSONL pipeline fell back to record
-// mode for the WHOLE program — 14.8 s and 3.9 GB for a 3M-row
-// group-by that the typed CSV path does in 0.27 s).
-//
-// Two sources of truth, in order:
-//
-//  1. A leading `_schema` header line (a tee'd or ssql-written file):
-//     its field order and wire types are authoritative — no sampling.
-//  2. Otherwise the first maxRows lines (DefaultInferRows when zero),
-//     parsed with the same fast line parser exec uses; fields are in
-//     JSON key order (new keys appended as first seen) and typed by
-//     the narrowest Go type every non-null value fits: int64 →
-//     float64 → bool → string. Nested objects and arrays parse as JSON
-//     text and are string fields. A key that is null throughout the
-//     sample is still a column — a string field.
-//
-// A JSON array file (first non-space byte `[`) has no typed form and
-// returns an error; the caller falls back to record codegen.
-//
-// TypeOptions overrides apply to both sources: an overridden key takes
-// the named type whatever the header or the sample says.
+// SampleJSONLSchema is SampleJSONSchema without the shape flag, kept for
+// callers that know their file is JSON Lines (a JSON array file is
+// accepted too; the reader to pair with the schema is then ReadJSON).
 func SampleJSONLSchema(filename, typeName string, maxRows int, opts ...TypeOptions) (*TypedSchema, string, error) {
+	schema, def, _, err := SampleJSONSchema(filename, typeName, maxRows, opts...)
+	return schema, def, err
+}
+
+// SampleJSONSchema infers the typed row struct for a JSON source so
+// `from json|jsonl FILE` can stay typed: the `_schema` header when the
+// lines carry one (authoritative), else a sample of objects — the first
+// maxRows (0 → ssql.DefaultInferRows) lines of a JSON Lines file, or the
+// first maxRows elements of a JSON ARRAY file (`[{…},{…}]`, told apart
+// by the first non-blank byte; isArray reports which, so the caller
+// pairs the schema with typed.ReadJSON rather than typed.ReadJSONL).
+// Types: all int → int64, numeric → float64, all bool → bool, else
+// string (a field never seen non-null is string); a nested array or
+// object is a string holding its text, flagged JSON. Field order is the
+// key order of the first object that has each key — a Record iterates
+// alphabetically, which would reorder the user's columns. opts override
+// per field as for CSV (`-type FIELD TYPE`).
+func SampleJSONSchema(filename, typeName string, maxRows int, opts ...TypeOptions) (schema *TypedSchema, structDef string, isArray bool, err error) {
 	o := firstTypeOptions(opts)
 	if maxRows <= 0 {
 		maxRows = ssql.DefaultInferRows
@@ -44,24 +42,22 @@ func SampleJSONLSchema(filename, typeName string, maxRows int, opts ...TypeOptio
 	}
 	f, err := os.Open(filename)
 	if err != nil {
-		return nil, "", fmt.Errorf("typed schema sample: %w", err)
+		return nil, "", false, fmt.Errorf("typed schema sample: %w", err)
 	}
 	defer f.Close()
 
 	br := bufio.NewReaderSize(f, 1<<20)
-	// Peek past leading whitespace: a JSON array is not JSONL.
+	// Peek past leading whitespace: a JSON array is sampled by element.
 	for {
-		b, err := br.Peek(1)
-		if err != nil {
-			return nil, "", fmt.Errorf("typed schema sample: %s is empty", filename)
+		b, perr := br.Peek(1)
+		if perr != nil {
+			return nil, "", false, fmt.Errorf("typed schema sample: %s is empty", filename)
 		}
 		if b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r' {
 			br.ReadByte()
 			continue
 		}
-		if b[0] == '[' {
-			return nil, "", fmt.Errorf("typed schema sample: %s is a JSON array, not JSONL (no typed form)", filename)
-		}
+		isArray = b[0] == '['
 		break
 	}
 
@@ -71,49 +67,16 @@ func SampleJSONLSchema(filename, typeName string, maxRows int, opts ...TypeOptio
 	var order []string
 	infer := map[string]*colInfer{}
 	rows := 0
-	for rows < maxRows {
-		line, err := br.ReadBytes('\n')
-		if len(line) == 0 && err != nil {
-			break
-		}
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			if err != nil {
-				break
-			}
-			continue
-		}
-		// The header is authoritative when present (only ever the first line).
-		if rows == 0 && bytes.HasPrefix(line, []byte(`{"_schema"`)) {
-			var hdr map[string]any
-			if jerr := json.Unmarshal(line, &hdr); jerr == nil {
-				if s, ok := ParseSchemaHeader(hdr); ok {
-					schema, def, err := TypedSchemaFromHeader(s, typeName)
-					if err == nil && (len(o.Fields) > 0 || o.Default != "") {
-						for i := range schema.Fields {
-							if t, ok := o.goTypeFor(schema.Fields[i].Name); ok {
-								schema.Fields[i].GoType = t
-							}
-						}
-						def = RenderStructDef(schema)
-					}
-					return schema, def, err
-				}
-			}
-		}
-		mut, perr := ssql.ParseJSONLine(line)
+	// observe folds one object's keys and values into the inference;
+	// false when the bytes are not a JSON object (no type information).
+	observe := func(obj []byte) bool {
+		mut, perr := ssql.ParseJSONLine(obj)
 		if perr != nil {
-			if err != nil {
-				break
-			}
-			continue // a malformed line carries no type information
+			return false
 		}
 		rows++
 		rec := mut.Freeze()
-		// Field order is the JSON key order of the line (a Record
-		// iterates its schema alphabetically, which would reorder the
-		// user's columns); new keys are appended as first seen.
-		for _, k := range topLevelJSONKeys(line) {
+		for _, k := range topLevelJSONKeys(obj) {
 			if _, ok := infer[k]; !ok {
 				infer[k] = &colInfer{allInt: true, allNum: true, allBool: true}
 				order = append(order, k)
@@ -146,12 +109,60 @@ func SampleJSONLSchema(filename, typeName string, maxRows int, opts ...TypeOptio
 				c.allBool = false
 			}
 		}
-		if err == io.EOF {
-			break
+		return true
+	}
+
+	if isArray {
+		dec := json.NewDecoder(br)
+		if _, derr := dec.Token(); derr != nil { // the opening '['
+			return nil, "", true, fmt.Errorf("typed schema sample: %s: %w", filename, derr)
+		}
+		for rows < maxRows && dec.More() {
+			var raw json.RawMessage
+			if derr := dec.Decode(&raw); derr != nil {
+				return nil, "", true, fmt.Errorf("typed schema sample: %s: element %d: %w", filename, rows+1, derr)
+			}
+			observe(raw)
+		}
+	} else {
+		for rows < maxRows {
+			line, rerr := br.ReadBytes('\n')
+			if len(line) == 0 && rerr != nil {
+				break
+			}
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				if rerr != nil {
+					break
+				}
+				continue
+			}
+			// The header is authoritative when present (only ever the first line).
+			if rows == 0 && bytes.HasPrefix(line, []byte(`{"_schema"`)) {
+				var hdr map[string]any
+				if jerr := json.Unmarshal(line, &hdr); jerr == nil {
+					if s, ok := ParseSchemaHeader(hdr); ok {
+						schema, def, herr := TypedSchemaFromHeader(s, typeName)
+						if herr == nil && (len(o.Fields) > 0 || o.Default != "") {
+							for i := range schema.Fields {
+								if t, ok := o.goTypeFor(schema.Fields[i].Name); ok {
+									schema.Fields[i].GoType = t
+								}
+							}
+							def = RenderStructDef(schema)
+						}
+						return schema, def, false, herr
+					}
+				}
+			}
+			observe(line) // a malformed line carries no type information
+			if rerr == io.EOF {
+				break
+			}
 		}
 	}
 	if rows == 0 {
-		return nil, "", fmt.Errorf("typed schema sample: %s has no JSON rows", filename)
+		return nil, "", isArray, fmt.Errorf("typed schema sample: %s has no JSON rows", filename)
 	}
 
 	fields := make([]TypedSchemaField, 0, len(order))
@@ -181,8 +192,8 @@ func SampleJSONLSchema(filename, typeName string, maxRows int, opts ...TypeOptio
 		}
 		fields = append(fields, TypedSchemaField{Name: name, GoName: gn, GoType: goType, JSON: c.json && goType == "string"})
 	}
-	schema := &TypedSchema{TypeName: typeName, Fields: fields}
-	return schema, RenderStructDef(schema), nil
+	schema = &TypedSchema{TypeName: typeName, Fields: fields}
+	return schema, RenderStructDef(schema), isArray, nil
 }
 
 // topLevelJSONKeys returns an object line's top-level keys in document

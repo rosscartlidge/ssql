@@ -940,9 +940,6 @@ var equivCases = []EquivCase{
 		Ordered:          true,
 		ColumnsUnordered: true,
 		Skip: map[string]string{
-			"go-typed":    "a JSON array file has no typed form (sampling is JSONL only)",
-			"go-parallel": "a JSON array file has no typed form (sampling is JSONL only)",
-			"go-lib":      "a JSON array file has no typed form (sampling is JSONL only)",
 			"datafusion":  "DataFusion refuses a JSON array file",
 			"postgres":    "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
 		},
@@ -957,11 +954,52 @@ var equivCases = []EquivCase{
 		Ordered:          true,
 		ColumnsUnordered: true,
 		Skip: map[string]string{
-			"go-typed":    "a JSON array file has no typed form (sampling is JSONL only)",
-			"go-parallel": "a JSON array file has no typed form (sampling is JSONL only)",
-			"go-lib":      "a JSON array file has no typed form (sampling is JSONL only)",
 			"datafusion":  "DataFusion refuses a JSON array file",
 			"postgres":    "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
+		},
+	},
+	// The same nested operations over the JSON ARRAY file (typed form via
+	// typed.ReadJSON since 2026-10-09). The array fixture carries the
+	// same rows as nested.jsonl with the keys in a different order, so a
+	// lane that confuses the two shapes diverges here.
+	{
+		Name:             "explode_tags_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} explode tags | {{.bin}} include id tags`,
+		ColumnsUnordered: true,
+		Skip: map[string]string{
+			"datafusion": "DataFusion refuses a JSON array file",
+			"postgres":   "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
+		},
+	},
+	{
+		Name:             "flatten_addr_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} where -if-expr 'addr != nil' | {{.bin}} flatten addr | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip: map[string]string{
+			"duckdb":     "flatten has no SQL translation (keys are data; DFC144 L2)",
+			"datafusion": "flatten has no SQL translation (keys are data; DFC144 L2)",
+			"postgres":   "flatten has no SQL translation (keys are data; DFC144 L2)",
+		},
+	},
+	{
+		Name:     "path_in_groupby_array_file",
+		Pipeline: `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} where -if-expr 'addr != nil' | {{.bin}} group-by addr.city -count n | {{.bin}} sort addr.city`,
+		Ordered:  true,
+		Skip: map[string]string{
+			"duckdb":     "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+			"datafusion": "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+			"postgres":   "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+		},
+	},
+	{
+		Name:             "groupby_expr_over_lists_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} group-by -expr 'len(name)' n -expr 'sort(uniq(flatten(tags)))' all_tags -expr 'len(flatten(scores))' nscores`,
+		ColumnsUnordered: true,
+		Skip: map[string]string{
+			"duckdb":     "group-by -expr over nested values has no SQL translation (DFC144 L1)",
+			"datafusion": "group-by -expr over nested values has no SQL translation (DFC144 L1)",
+			"postgres":   "group-by -expr over nested values has no SQL translation (DFC144 L1)",
 		},
 	},
 	// DFC144 Level 1: expressions see nested values as lists and maps, in

@@ -187,9 +187,47 @@ func TestSampleJSONLSchema(t *testing.T) {
 		t.Errorf("header-driven schema wrong: %+v", schema.Fields)
 	}
 
-	arr := write("arr.json", `[{"a":1}]`)
-	if _, _, err := SampleJSONLSchema(arr, "", 0); err == nil || !strings.Contains(err.Error(), "JSON array") {
-		t.Errorf("JSON array should have no typed form, got err=%v", err)
+	// A JSON ARRAY file samples by element (typed form since 2026-10-09;
+	// it was refused before): key order of the first element that has
+	// each key, nested values flagged JSON, isArray reported so the
+	// caller pairs the schema with typed.ReadJSON.
+	arr := write("arr.json", `
+	[ {"id":3,"name":"Carol","tags":["rust"],"addr":{"zip":"30301"},"pct":1},
+	  {"id":1,"name":"Alice","tags":[],"pct":0.5,"late":true} ]`)
+	schema, def, isArray, err := SampleJSONSchema(arr, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isArray {
+		t.Error("isArray should be true for an array file")
+	}
+	names = names[:0]
+	gotTypes := map[string]string{}
+	for _, f := range schema.Fields {
+		names = append(names, f.Name)
+		gotTypes[f.Name] = f.GoType
+		if (f.Name == "tags" || f.Name == "addr") && !f.JSON {
+			t.Errorf("field %s should be flagged JSON", f.Name)
+		}
+	}
+	if got := strings.Join(names, ","); got != "id,name,tags,addr,pct,late" {
+		t.Errorf("array fields must follow element key order (new keys appended): got %s", got)
+	}
+	wantArr := map[string]string{"id": "int64", "name": "string", "tags": "string", "addr": "string", "pct": "float64", "late": "bool"}
+	for k, w := range wantArr {
+		if gotTypes[k] != w {
+			t.Errorf("array field %s: GoType = %s, want %s", k, gotTypes[k], w)
+		}
+	}
+	if !strings.Contains(def, "ArrRow struct") {
+		t.Errorf("struct def should be named from the file:\n%s", def)
+	}
+	if _, _, isArray, err := SampleJSONSchema(plain, "", 0); err != nil || isArray {
+		t.Errorf("JSONL file: isArray=%v err=%v, want false, nil", isArray, err)
+	}
+	empty := write("empty.json", "[]")
+	if _, _, _, err := SampleJSONSchema(empty, "", 0); err == nil || !strings.Contains(err.Error(), "no JSON rows") {
+		t.Errorf("empty array should report no rows, got %v", err)
 	}
 }
 

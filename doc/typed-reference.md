@@ -411,9 +411,11 @@ nanoseconds for a time field (`l.Ts.UnixNano()`) or the number itself. Inner
 semantics; the right side is indexed once, the left streams in input order.
 Behind `join -asof`.
 
-## JSONL I/O
+## JSONL and JSON array I/O
 
-For newline-delimited JSON (`one object per line`), use the JSONL pair:
+For newline-delimited JSON (`one object per line`), use the JSONL pair;
+for a JSON **array** document (`[ {…}, {…} ]`, the shape an API export or
+`to json` writes), the `ReadJSON` twins:
 
 ```go
 func ReadJSONL[T any](filename string) iter.Seq[T]
@@ -421,6 +423,9 @@ func ReadJSONLFromReader[T any](rd io.Reader) iter.Seq[T]
 func ReadJSONLSafe[T any](filename string) iter.Seq2[T, error]
 func ReadJSONLSafeFromReader[T any](r io.Reader) iter.Seq2[T, error]
 func ReadJSONLParallel[T any](filename string, n int) Stream[T]
+func ReadJSON[T any](filename string) iter.Seq[T]              // a JSON array file
+func ReadJSONFromReader[T any](rd io.Reader) iter.Seq[T]
+func ReadJSONParallel[T any](filename string, n int) Stream[T]
 func WriteJSONL[T any](seq iter.Seq[T], filename string) error
 func WriteJSONLToWriter[T any](seq iter.Seq[T], w io.Writer) error
 ```
@@ -447,6 +452,20 @@ FILE` in typed mode infers the row struct from the file (the `_schema`
 header when present, else a sample of lines) and emits `ReadJSONL`, or
 `ReadJSONLParallel` — mmap, a newline index, a shard per run of lines, the
 CSV twin's shape — when a downstream stage accepts a `Stream`.
+
+**JSON array files.** `ReadJSON` streams the elements of an array
+document with `encoding/json`'s Decoder (the file is not loaded whole)
+and decodes each with the same positional plan, so a nested value lands
+in a `string` field as its raw text. A document that is not an array,
+or an element that is not an object or does not fit, is a fatal
+`*ReadError` whose `Row` is the 1-based element index. There is no
+newline index to shard on, so `ReadJSONParallel` has one goroutine scan
+the document into elements and hand them to `n` decoding shards in
+batches (`ParallelBatched` applied before the decode); a consumer that
+stops early releases the scanner. `from json FILE.json` in typed mode
+samples the first elements for the row struct (key order of the first
+element that has each key) and emits these readers (2026-10-09; array
+files took the record path before).
 
 ## Text lines
 

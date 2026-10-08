@@ -28,7 +28,7 @@ import (
 
 // scaleGenVersion keys the cached fixture directory: bump when the
 // generator changes and stale fixtures regenerate.
-const scaleGenVersion = 1
+const scaleGenVersion = 2
 
 const scaleRows = 3_000_000 // ~120MB CSV: clears every known trap threshold
 
@@ -39,7 +39,8 @@ var (
 )
 
 // scaleDir returns the cached fixture dir, generating on first use:
-// big.csv (3M rows), big.jsonl and big.parquet derived from it.
+// big.csv (3M rows), big.jsonl, big.json (a JSON array) and big.parquet
+// derived from it.
 func scaleDir(t *testing.T) string {
 	t.Helper()
 	scaleDirOnce.Do(func() {
@@ -75,6 +76,7 @@ func scaleDir(t *testing.T) string {
 		bin := corpusBin(t)
 		for _, cmdline := range []string{
 			bin + " from csv big.csv | " + bin + " tee big.jsonl > /dev/null",
+			bin + " from csv big.csv | " + bin + " to json big.json",
 			bin + " from csv big.csv | " + bin + " to parquet big.parquet",
 		} {
 			c := exec.Command("bash", "-c", cmdline)
@@ -179,6 +181,15 @@ func TestScaleBudgets(t *testing.T) {
 		repo, _ := filepath.Abs("../..")
 		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
 			bin+" from jsonl big.jsonl | "+bin+" group-by dept -count n | "+bin+" to csv' > /dev/null", 60*time.Second)
+	})
+	t.Run("generate-go-run-json-array-typed", func(t *testing.T) {
+		// `from json FILE.json` (a JSON ARRAY) in typed mode reads with
+		// typed.ReadJSONParallel — one scanner feeding decoding shards
+		// (2026-10-09; before: record fallback for the whole program, as
+		// JSONL was before roadmap item 9). Same ceiling as the JSONL twin.
+		repo, _ := filepath.Abs("../..")
+		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from json big.json | "+bin+" group-by dept -count n | "+bin+" to csv' > /dev/null", 60*time.Second)
 	})
 	t.Run("jsonl-scan", func(t *testing.T) {
 		// The legacy per-line-Unmarshal reader class was 4× the csv

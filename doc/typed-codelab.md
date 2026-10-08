@@ -565,6 +565,8 @@ typed.ReadCSV[T](filename, typed.Strict()) // reject schema mismatch
 typed.WriteCSV(seq, filename)
 typed.ReadJSONL[T](filename)
 typed.ReadJSONLParallel[T](filename, n)  // Stream[T]; n<=0 → GOMAXPROCS
+typed.ReadJSON[T](filename)              // a JSON array file: [ {…}, {…} ]
+typed.ReadJSONParallel[T](filename, n)   // Stream[T]; one scanner, n decoding shards
 typed.WriteJSONL(seq, filename)
 
 // Operations (single-input)
