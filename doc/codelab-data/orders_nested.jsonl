@@ -1,0 +1,5 @@
+{"order_id":1003,"customer":"carol","placed":"2026-03-02","items":[{"sku":"PEN","qty":10,"price":1.5},{"sku":"PAD","qty":2,"price":4.0}],"tags":["gift"]}
+{"order_id":1001,"customer":"alice","placed":"2026-03-01","items":[{"sku":"PEN","qty":3,"price":1.5},{"sku":"INK","qty":1,"price":12.0},{"sku":"PAD","qty":1,"price":4.0}],"tags":["rush","gift"]}
+{"order_id":1004,"customer":"dan","placed":"2026-03-02","items":[],"tags":[]}
+{"order_id":1002,"customer":"bob","placed":"2026-03-01","items":[{"sku":"INK","qty":2,"price":12.0}],"tags":["rush"]}
+{"order_id":1005,"customer":"alice","placed":"2026-03-03","items":[{"sku":"PAD","qty":5,"price":4.0}]}

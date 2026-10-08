@@ -4,11 +4,13 @@ import (
 	"cmp"
 	"container/heap"
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -1387,4 +1389,233 @@ func SkipUntil[T any](predicate func(T) bool) Filter[T, T] {
 func ParseFloat64(s string) float64 {
 	f, _ := strconv.ParseFloat(s, 64)
 	return f
+}
+
+// Explode is UNNEST for a nested list (DFC144 Level 2): one output row per
+// element of the list in field, with the field holding the element (a
+// scalar as the scalar it is, a nested element as JSON text) and every
+// other field repeated. An empty, missing or null list yields no row —
+// DuckDB's UNNEST semantics — or, with keepEmpty, one row in which the
+// field has no value. A value that is neither a list nor absent is an
+// error: exploding a scalar or an object is almost always a mistake, and
+// flatten is the verb for an object.
+func Explode(field string, keepEmpty bool) Filter[Record, Record] {
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			row := 0
+			for record := range input {
+				row++
+				v, ok := Get[any](record, field)
+				var list []any
+				switch x := ExprValue(v).(type) {
+				case nil:
+				case []any:
+					list = x
+				default:
+					if !ok {
+						break
+					}
+					panic(fmt.Errorf("explode: row %d: field %q holds %s, not a list (use flatten for an object)", row, field, describeValue(x)))
+				}
+				if len(list) == 0 {
+					if keepEmpty {
+						if !yield(record.ToMutable().Null(field).Freeze()) {
+							return
+						}
+					}
+					continue
+				}
+				for _, elem := range list {
+					mut := record.ToMutable()
+					if js, nested := NestedValue(elem); nested {
+						mut = mut.JSONString(field, js)
+					} else if elem == nil {
+						mut = mut.Null(field)
+					} else {
+						mut = setScalar(mut, field, elem)
+					}
+					if !yield(mut.Freeze()) {
+						return
+					}
+				}
+			}
+		}
+	}
+}
+
+// FlattenField is `s.*` for a nested object (DFC144 Level 2): the keys of
+// the object in field become sibling fields named field.key, in the
+// object's own key order; a nested object recurses to depth levels (1 =
+// the object's keys only), and a value below that depth, or a list, stays
+// JSON text. The field itself is removed unless keep. The key set is
+// fixed by the FIRST row that has the object (a DuckDB STRUCT has the same
+// keys in every row); a later row with a key the first did not have is an
+// error naming it, rather than a column that silently exists for some
+// rows. Rows without the field, or with a null, pass through unchanged. A
+// value that is not an object is an error (explode is the verb for a list).
+func FlattenField(field string, depth int, keep bool) Filter[Record, Record] {
+	if depth < 1 {
+		depth = 1
+	}
+	return func(input iter.Seq[Record]) iter.Seq[Record] {
+		return func(yield func(Record) bool) {
+			var keys []string // the fixed key set (full dotted names), from the first object
+			known := map[string]bool{}
+			row := 0
+			for record := range input {
+				row++
+				v, ok := Get[any](record, field)
+				js, isJSON := v.(JSONString)
+				if !ok || v == nil || (isJSON && js == "") {
+					if !yield(record) {
+						return
+					}
+					continue
+				}
+				if !isJSON || !strings.HasPrefix(strings.TrimSpace(string(js)), "{") {
+					panic(fmt.Errorf("flatten: row %d: field %q holds %s, not an object (use explode for a list)", row, field, describeValue(v)))
+				}
+				pairs, err := flattenObject(js, field, depth)
+				if err != nil {
+					panic(fmt.Errorf("flatten: row %d: field %q: %w", row, field, err))
+				}
+				if keys == nil {
+					for _, p := range pairs {
+						keys = append(keys, p.key)
+						known[p.key] = true
+					}
+				}
+				mut := record.ToMutable()
+				if !keep {
+					mut = mut.Delete(field)
+				}
+				seen := map[string]bool{}
+				for _, p := range pairs {
+					if !known[p.key] {
+						panic(fmt.Errorf("flatten: row %d: field %q has key %q, which the first row's object does not have (keys must be the same in every row, as a DuckDB STRUCT's are; normalise upstream)", row, field, strings.TrimPrefix(p.key, field+".")))
+					}
+					seen[p.key] = true
+					if js, nested := NestedValue(p.val); nested {
+						mut = mut.JSONString(p.key, js)
+					} else if p.val == nil {
+						mut = mut.Null(p.key)
+					} else {
+						mut = setScalar(mut, p.key, p.val)
+					}
+				}
+				for _, k := range keys {
+					if !seen[k] {
+						mut = mut.Null(k) // a key the first row had and this row lacks: no value
+					}
+				}
+				if !yield(mut.Freeze()) {
+					return
+				}
+			}
+		}
+	}
+}
+
+type flatPair struct {
+	key string
+	val any
+}
+
+// flattenObject lists an object's keys in document order (encoding/json's
+// map loses it, so the text is scanned) with their values, recursing into
+// nested objects to depth.
+func flattenObject(js JSONString, prefix string, depth int) ([]flatPair, error) {
+	order, err := jsonObjectKeyOrder(string(js))
+	if err != nil {
+		return nil, err
+	}
+	parsed, ok := ExprValue(js).(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("not an object")
+	}
+	var out []flatPair
+	for _, k := range order {
+		name := prefix + "." + k
+		v := parsed[k]
+		if sub, isObj := v.(map[string]any); isObj && depth > 1 {
+			subJS := JSONValue(sub)
+			subPairs, err := flattenObject(subJS, name, depth-1)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, subPairs...)
+			continue
+		}
+		out = append(out, flatPair{name, v})
+	}
+	return out, nil
+}
+
+// jsonObjectKeyOrder returns a JSON object's top-level keys in document
+// order.
+func jsonObjectKeyOrder(text string) ([]string, error) {
+	dec := json.NewDecoder(strings.NewReader(text))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, fmt.Errorf("not an object")
+	}
+	var keys []string
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		k, ok := kt.(string)
+		if !ok {
+			return nil, fmt.Errorf("malformed object")
+		}
+		keys = append(keys, k)
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return nil, err
+		}
+	}
+	return keys, nil
+}
+
+// setScalar puts a parsed JSON scalar into a record with its own type.
+func setScalar(mut MutableRecord, field string, v any) MutableRecord {
+	switch x := v.(type) {
+	case int64:
+		return mut.Int(field, x)
+	case float64:
+		return mut.Float(field, x)
+	case bool:
+		return mut.Bool(field, x)
+	case string:
+		return mut.String(field, x)
+	case time.Time:
+		return mut.Time(field, x)
+	}
+	return mut.String(field, fmt.Sprintf("%v", v))
+}
+
+// describeValue names a value's kind for an error message.
+func describeValue(v any) string {
+	switch x := v.(type) {
+	case JSONString:
+		t := strings.TrimSpace(string(x))
+		if strings.HasPrefix(t, "{") {
+			return "an object"
+		}
+		if strings.HasPrefix(t, "[") {
+			return "a list"
+		}
+		return "JSON text"
+	case map[string]any:
+		return "an object"
+	case []any:
+		return "a list"
+	case string:
+		return fmt.Sprintf("the string %q", x)
+	}
+	return fmt.Sprintf("a %T (%v)", v, v)
 }

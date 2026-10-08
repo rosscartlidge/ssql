@@ -801,7 +801,10 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				// Pre-compile expression and use runtime function
 				needsRuntime = true
 				exprCounter++
-				varName := fmt.Sprintf("exprEval%d", exprCounter)
+				// Stage-indexed: two update stages in one program each hoist
+				// their own vars (the per-stage counter alone collided —
+				// `exprEval1 redeclared`; found by DFC144's two-update case).
+				varName := fmt.Sprintf("exprEval%d_%d", len(fragments), exprCounter)
 				preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExpr", upd.value, paramThunk, paramFields))
 
 				// Generate code to use pre-compiled expression
@@ -835,7 +838,12 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Time(%q, v)\n", indent, upd.field))
 				needsTime = true
 				stmtBuilder.WriteString(indent + "\t\tdefault:\n")
-				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.String(%q, fmt.Sprintf(\"%%v\", v))\n", indent, upd.field))
+				// A list or map result is a nested value: JSON text (DFC144 L1).
+				stmtBuilder.WriteString(indent + "\t\t\tif js, ok := ssql.NestedValue(v); ok {\n")
+				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\t\tmut = mut.JSONString(%q, js)\n", indent, upd.field))
+				stmtBuilder.WriteString(indent + "\t\t\t} else {\n")
+				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\t\tmut = mut.String(%q, fmt.Sprintf(\"%%v\", v))\n", indent, upd.field))
+				stmtBuilder.WriteString(indent + "\t\t\t}\n")
 				stmtBuilder.WriteString(indent + "\t\t}\n")
 				stmtBuilder.WriteString(indent + "\t}\n")
 				stmtBuilder.WriteString(indent + "}")

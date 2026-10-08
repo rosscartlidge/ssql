@@ -359,8 +359,8 @@ func generateFromTSVCodeTyped(filename string, types typeArgs) error {
 	}
 
 	// Always emit BOTH templates; planner picks per pipeline.
-	parallelCode := fmt.Sprintf(`records := typed.ReadDelimParallel[%s](*flagInput, runtime.GOMAXPROCS(0)%s)`, schema.TypeName, delimArg)
-	parallelImports := append(append([]string{}, imports...), "runtime")
+	parallelCode := fmt.Sprintf(`records := typed.ReadDelimParallel[%s](*flagInput, 0%s)`, schema.TypeName, delimArg)
+	parallelImports := append([]string{}, imports...)
 	serialCode := fmt.Sprintf(`records := typed.ReadDelim[%s](*flagInput%s)`, schema.TypeName, delimArg)
 	serialImports := append([]string{}, imports...)
 

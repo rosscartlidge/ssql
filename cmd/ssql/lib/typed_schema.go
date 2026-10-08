@@ -389,6 +389,7 @@ func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, er
 	usedNames := make(map[string]int, len(s.Fields))
 	for i, name := range s.Fields {
 		var goType string
+		var isJSON bool
 		switch s.Types[name] {
 		case "int":
 			goType = "int64"
@@ -400,6 +401,12 @@ func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, er
 			goType = "string"
 		case "time":
 			goType = "time.Time"
+		case "json":
+			// A nested value is its JSON text in the typed lane (the fast
+			// JSONL decoder takes raw JSON into a string field); the
+			// typed→Record boundary re-wraps it as a JSONString.
+			goType = "string"
+			isJSON = true
 		default:
 			return nil, "", fmt.Errorf(
 				"typed schema from header: field %q has wire type %q — cannot map to a Go type (run with SSQL_MODE=record)",
@@ -412,7 +419,7 @@ func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, er
 		} else {
 			usedNames[gn] = 1
 		}
-		fields[i] = TypedSchemaField{Name: name, GoName: gn, GoType: goType}
+		fields[i] = TypedSchemaField{Name: name, GoName: gn, GoType: goType, JSON: isJSON}
 	}
 	schema := &TypedSchema{TypeName: typeName, Fields: fields}
 	return schema, RenderStructDef(schema), nil

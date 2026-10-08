@@ -111,15 +111,15 @@ func compileExpr(expression string, params *paramBinding) (func(ssql.Record) (an
 		return nil, fmt.Errorf("compile expression: %w", err)
 	}
 
-	// Extract identifiers from the AST so we can validate fields on first record.
-	// Skip validation if the expression handles missing fields explicitly via ??, has(), or getOr().
+	// Extract identifiers from the AST: the fields to validate on the first
+	// record (skipped when the expression handles missing fields itself via
+	// ??, has() or getOr()), and the fields whose nested values are opened
+	// for the expression (DFC144 Level 1) — a JSONString the expression
+	// never names is left as it is.
 	handlesMissing := strings.Contains(expression, "??") ||
 		strings.Contains(expression, "has(") ||
 		strings.Contains(expression, "getOr(")
-	var identifiers []string
-	if !handlesMissing {
-		identifiers = extractIdentifiers(program.Node())
-	}
+	identifiers := extractIdentifiers(program.Node())
 
 	// Return a closure that evaluates the compiled program on a record
 	validated := false
@@ -129,11 +129,27 @@ func compileExpr(expression string, params *paramBinding) (func(ssql.Record) (an
 		for k, v := range record.All() {
 			env[k] = v
 		}
+		// A nested value the expression names is the list or map it is,
+		// not its text: len(tags) counts elements, tags[0] is the first,
+		// addr.city reads the key, "go" in tags works (DFC144 Level 1).
+		for _, id := range identifiers {
+			if js, ok := env[id].(ssql.JSONString); ok {
+				env[id] = ssql.ExprValue(js)
+			}
+		}
+		// Columns named by a dotted path (items.qty after `flatten items`,
+		// or a `-collect`ed addr.city) are reachable as items.qty: the
+		// expression's `items` is a map of those columns when no field is
+		// named items itself (DFC144 Level 2).
+		ssql.SynthesizeDottedFields(env, identifiers)
 		has := func(field string) bool {
 			_, exists := ssql.Get[any](record, field)
 			return exists
 		}
-		get := func(field string) (any, bool) { return ssql.Get[any](record, field) }
+		get := func(field string) (any, bool) {
+			v, ok := ssql.Get[any](record, field)
+			return ssql.ExprValue(v), ok
+		}
 		if err := params.apply(env, has, get); err != nil {
 			return nil, err
 		}
@@ -144,7 +160,7 @@ func compileExpr(expression string, params *paramBinding) (func(ssql.Record) (an
 		// On first record, check that expression identifiers exist as fields
 		// or known functions. A declared parameter is known even when its
 		// field is absent on this row.
-		if !validated {
+		if !validated && !handlesMissing {
 			validated = true
 			declared := map[string]bool{}
 			for _, n := range params.names() {

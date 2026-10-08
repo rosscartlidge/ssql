@@ -64,6 +64,13 @@ var exprFuncs = map[string]string{
 	"min": "least", "max": "greatest",
 }
 
+// exprListFuncs maps expr-lang list functions to DuckDB's list_* family
+// (DFC144 Level 1); argument order matches in every entry.
+var exprListFuncs = map[string]string{
+	"sort": "list_sort", "uniq": "list_distinct", "flatten": "flatten",
+	"join": "array_to_string", "reverse": "list_reverse",
+}
+
 // exprCasts maps expr-lang conversion functions to SQL cast types.
 var exprCasts = map[string]string{
 	"int": "BIGINT", "float": "DOUBLE", "string": "VARCHAR",
@@ -123,6 +130,8 @@ func exprNodeToSQL(node ast.Node) (string, error) {
 			return "", fmt.Errorf("%s has no SQL translation", exprNodeDesc(n.Callee))
 		}
 		return exprCallToSQL(ident.Value, n.Arguments)
+	case *ast.MemberNode:
+		return exprMemberToSQL(n)
 	case *ast.BuiltinNode:
 		return exprCallToSQL(n.Name, n.Arguments)
 	}
@@ -176,7 +185,15 @@ func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 	}
 	if n.Operator == "in" {
 		if _, ok := n.Right.(*ast.ArrayNode); !ok {
-			return "", fmt.Errorf("`in` needs a list literal for SQL translation")
+			// `x in field`: the field is a nested list (DFC144 Level 1).
+			if sqlDialectCur != dialectDuckDB {
+				return "", dialectRefuse("`in` over a list field", "list_contains is DuckDB's")
+			}
+			right, err := exprNodeToSQL(n.Right)
+			if err != nil {
+				return "", err
+			}
+			return "list_contains(" + right + ", " + left + ")", nil
 		}
 	}
 	right, err := exprNodeToSQL(n.Right)
@@ -239,6 +256,23 @@ func exprCallToSQL(name string, args []ast.Node) (string, error) {
 	}
 	if name == "bucket" && len(args) == 2 {
 		return bucketToSQL(args[0], args[1])
+	}
+	if sqlFunc, ok := exprListFuncs[name]; ok {
+		// List functions over a nested value (DFC144 Level 1): DuckDB's
+		// list_* family; the other dialects have no form for a value whose
+		// type the translator does not know.
+		if sqlDialectCur != dialectDuckDB {
+			return "", dialectRefuse(fmt.Sprintf("%s() over a list", name), "list functions are DuckDB's")
+		}
+		parts := make([]string, len(args))
+		for i, a := range args {
+			s, err := exprNodeToSQL(a)
+			if err != nil {
+				return "", err
+			}
+			parts[i] = s
+		}
+		return sqlFunc + "(" + strings.Join(parts, ", ") + ")", nil
 	}
 	if sqlFunc, ok := exprFuncs[name]; ok {
 		parts := make([]string, len(args))
@@ -332,4 +366,33 @@ func bucketToSQL(tsNode, widthNode ast.Node) (string, error) {
 		" WHEN abs(" + ts + ") >= 1e14 THEN " + snap(unit(1_000)) +
 		" WHEN abs(" + ts + ") >= 1e11 THEN " + snap(unit(1_000_000)) +
 		" ELSE " + snap(unit(1_000_000_000)) + " END)", nil
+}
+
+// exprMemberToSQL translates member access on a nested value (DFC144
+// Level 1): `addr.city` on an object is struct_extract, `tags[0]` on a
+// list is list_extract (expr-lang indexes from 0, DuckDB from 1; a
+// negative index counts from the end in both). DuckDB reads a JSON file's
+// nested values as STRUCT/LIST natively; the other dialects have no
+// matching form for a value whose type the translator does not know, so
+// they refuse.
+func exprMemberToSQL(n *ast.MemberNode) (string, error) {
+	if sqlDialectCur != dialectDuckDB {
+		return "", dialectRefuse("member access on a nested value", "struct_extract/list_extract are DuckDB's")
+	}
+	base, err := exprNodeToSQL(n.Node)
+	if err != nil {
+		return "", err
+	}
+	switch p := n.Property.(type) {
+	case *ast.StringNode:
+		return "struct_extract(" + base + ", '" + strings.ReplaceAll(p.Value, "'", "''") + "')", nil
+	case *ast.IntegerNode:
+		return fmt.Sprintf("list_extract(%s, %d)", base, p.Value+1), nil
+	case *ast.UnaryNode:
+		// tags[-1]: expr-lang parses the index as a unary minus on a literal.
+		if lit, ok := p.Node.(*ast.IntegerNode); ok && p.Operator == "-" {
+			return fmt.Sprintf("list_extract(%s, %d)", base, -lit.Value), nil
+		}
+	}
+	return "", fmt.Errorf("member access with a computed key has no SQL translation")
 }

@@ -57,6 +57,7 @@ const (
 	FieldTypeFloat                   // Parse as float64
 	FieldTypeBool                    // Parse as bool
 	FieldTypeTime                    // Parse as time.Time (ParseTime's forms); the `time` wire type (DFC128 D1)
+	FieldTypeJSON                    // A nested value (array or object) held as its JSON text, a JSONString; the `json` wire type (DFC144 Level 0)
 )
 
 // DefaultCSVConfig provides sensible defaults for CSV processing
@@ -90,8 +91,10 @@ func ParseFieldType(s string) (FieldType, error) {
 		// One type: Go has no separate date, and a DATE is midnight UTC
 		// (what `from parquet` already does for DuckDB DATE columns).
 		return FieldTypeTime, nil
+	case "json":
+		return FieldTypeJSON, nil
 	default:
-		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, float, bool, time)", s)
+		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, float, bool, time, json)", s)
 	}
 }
 
@@ -108,6 +111,8 @@ func (ft FieldType) String() string {
 		return "bool"
 	case FieldTypeTime:
 		return "time"
+	case FieldTypeJSON:
+		return "json"
 	default:
 		return "auto"
 	}
@@ -1058,7 +1063,7 @@ func inferJSONType(v any) string {
 		return "bool"
 	case string:
 		return "string"
-	case []any, Record, map[string]any:
+	case JSONString, []any, Record, map[string]any:
 		return "json"
 	default:
 		return "string"
@@ -1654,7 +1659,7 @@ func resolveDisplayColumns(columnSet map[string]bool, allRecords []Record, field
 	if len(fieldOrder) > 0 {
 		specifiedSet := make(map[string]bool)
 		for _, field := range fieldOrder {
-			if columnSet[field] {
+			if columnSet[field] || pathHeadIn(columnSet, field) {
 				columns = append(columns, field)
 				specifiedSet[field] = true
 			}
@@ -1926,7 +1931,7 @@ func buildColumnOrderWithSample(columnSet map[string]bool, fieldOrder []string, 
 	if len(fieldOrder) > 0 {
 		specifiedSet := make(map[string]bool)
 		for _, field := range fieldOrder {
-			if columnSet[field] {
+			if columnSet[field] || pathHeadIn(columnSet, field) {
 				columns = append(columns, field)
 				specifiedSet[field] = true
 			}
@@ -2732,4 +2737,16 @@ func truncateCell(s string, maxWidth int) string {
 		return s[:maxWidth-3] + "..."
 	}
 	return s[:maxWidth]
+}
+
+// pathHeadIn reports whether a dotted path's longest leading segment is
+// one of the columns, so `to table addr.city` shows the path (its cells
+// come from Get, which resolves paths — DFC144 Level 2).
+func pathHeadIn(columns map[string]bool, path string) bool {
+	for i := strings.LastIndexByte(path, '.'); i > 0; i = strings.LastIndexByte(path[:i], '.') {
+		if columns[path[:i]] {
+			return true
+		}
+	}
+	return false
 }

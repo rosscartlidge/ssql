@@ -3,7 +3,6 @@ package runtime
 import (
 	"fmt"
 	ssql "github.com/rosscartlidge/ssql/v4"
-	"os"
 	"time"
 
 	"github.com/expr-lang/expr"
@@ -147,10 +146,30 @@ func MustCoerceBool(v any, expression string) bool {
 	return false
 }
 
+// MustCoerceJSON types a result for a `json` field (a string holding a
+// nested value's text): a list or map result is marshalled, JSON text is
+// kept, anything else is the type mismatch the other coercers report.
+func MustCoerceJSON(v any, expression string) string {
+	switch x := v.(type) {
+	case ssql.JSONString:
+		return string(x)
+	case string:
+		return x
+	}
+	if js, ok := ssql.NestedValue(v); ok {
+		return string(js)
+	}
+	coerceFail(v, "json", expression)
+	return ""
+}
+
+// coerceFail reports a result the field cannot hold. It panics with an
+// error value, which main() reports as `Error: …` and exits 1, and a
+// library function (generate go -package) returns as the stream's last
+// element (DFC142); until 2026-10-08 it called os.Exit itself.
 func coerceFail(v any, want, expression string) {
-	fmt.Fprintf(os.Stderr, "Error: expression %q produced %T (%v), but the field's type is %s — a typed column cannot change type (use SSQL_MODE=record if the retype is intended)\n",
-		expression, v, v, want)
-	os.Exit(1)
+	panic(fmt.Errorf("expression %q produced %T (%v), but the field's type is %s — a typed column cannot change type (use SSQL_MODE=record if the retype is intended)",
+		expression, v, v, want))
 }
 
 // bucketFn is the expr-lang bucket(ts, "5m") function (DFC121): snap

@@ -438,7 +438,11 @@ In a generated program the fix is `-type v float` on the `from jsonl` stage.
 key → field plan that reuses the CSV reader's field decoders, and each line
 is walked once (about 3.6× the throughput of `encoding/json`). Slice, map
 and nested-struct fields fall back to `encoding/json`. A string field accepts
-any JSON value as its raw text, as the CLI does. **Codegen.** `from jsonl
+any JSON value as its raw text, as the CLI does — and that is how a `json`
+wire-type field (a nested array or object) is typed: a `string` holding
+the text, written back as JSON at the typed→Record boundary
+(`ssql.JSONOrNull`), so a typed program passes nested values through
+unchanged (DFC144 Level 0). **Codegen.** `from jsonl
 FILE` in typed mode infers the row struct from the file (the `_schema`
 header when present, else a sample of lines) and emits `ReadJSONL`, or
 `ReadJSONLParallel` — mmap, a newline index, a shard per run of lines, the

@@ -75,6 +75,8 @@ func buildRootCommand() *cf.Command {
 	cmd = commands.RegisterUnpivot(cmd)
 	cmd = commands.RegisterFill(cmd)
 	cmd = commands.RegisterExtract(cmd)
+	cmd = commands.RegisterExplode(cmd)
+	cmd = commands.RegisterFlatten(cmd)
 	cmd = commands.RegisterWhere(cmd)
 	cmd = commands.RegisterUpdate(cmd)
 	cmd = commands.RegisterCast(cmd)

@@ -206,6 +206,31 @@ ssql update -set-expr high_count 'count(filter(prices, {# > 100}))'
 ssql where -if-expr 'none(scores, {# < 60})'
 ```
 
+### Nested values: lists and objects in a field
+
+A field that holds a JSON array or object (a nested value, wire type
+`json`: a `tags` list from a JSON file, the list `group-by -collect`
+builds, an `addr` object) **is that list or object inside an
+expression** — not its text. Every array and map function above applies
+to it, `tags[0]`, `tags[-1]` and `addr.city` read into it, and `"go" in
+tags` tests membership:
+
+```bash
+ssql from jsonl events.jsonl | ssql where -if-expr '"go" in tags'
+ssql from jsonl events.jsonl | ssql update -set-expr n 'len(tags)' -set-expr city 'addr.city' -set-expr top 'sort(scores)[-1]'
+ssql from csv orders.csv | ssql group-by customer -collect product products | ssql update -set-expr n 'len(products)'
+```
+
+A result that is a list or map (`split(csv, ",")`, `filter(tags, …)`,
+`{a: 1}`) is stored as a nested value too, so the next stage can open it
+again (`len(parts)`), or `explode` it into rows. Only the fields an
+expression names are parsed, once per row; a field it does not mention
+costs nothing. In `generate sql` these translate to DuckDB's
+`struct_extract`, `list_extract`, `list_contains` and the `list_*`
+functions; the other dialects refuse them by name. (Before 2026-10-08,
+`len(tags)` on `["go","rust"]` was 13 — the text's length — and the
+workaround was `fromJSON(string(tags))`, which is no longer needed.)
+
 ### Type & Encoding Functions
 
 **Type Conversion:**

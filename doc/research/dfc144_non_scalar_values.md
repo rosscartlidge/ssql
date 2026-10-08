@@ -435,6 +435,80 @@ wrong.
 
 ## 8. Decisions for Ross
 
+**Answered in plan mode, 2026-10-08:** (1) Levels 0 + 1 + 2, Level 3
+deferred; (2) `JSONString` everywhere, including `ssql.ReadJSON`
+(`TestJSONComplexTypesRoundTrip` rewritten to the new contract);
+(3) dotted paths `addr.city` and `tags.0` wherever a field name is,
+brackets in expressions only, a literal dotted field wins; (4) `explode`
+on an empty or missing list gives zero rows, `-keep-empty` one null
+row; (5) two verbs, `explode` and `flatten`; (6) a non-scalar expression
+result is stored as `json`; (7) Level 3's spelling reserved as
+`list<int>` / `struct{city:string,…}`, `json` the fallback.
+
+**Built — Level 0 (2026-10-08):** one representation (`setValueFromJSON`,
+`readJSONArray` with raw messages so nested text and its key order
+survive, `Record.UnmarshalJSON`, `Collect`); `FieldTypeJSON` and the
+`json` wire type through `ParseFieldType`, `InferTypeString`,
+`inferJSONType`, the two schema tables, `cast` (validates the text),
+`TypedSchemaFromHeader` (→ `string` with a `JSON` flag) and the typed
+JSONL sampler; the typed→Record boundary wraps a `json` field with
+`ssql.JSONOrNull` (an empty text is no value — the first `nested_passthrough`
+run wrote `"addr":,` for a row whose object was missing); schema mode
+types JSON sources from a sample and reads array files; bugs (a)–(e)
+fixed with unit tests; equivalence cases `nested_passthrough`,
+`nested_array_file_passthrough` (columns unordered: the array reader
+still sorts top-level keys, TODO), `collect_is_json_on_the_wire`.
+
+**Built — Level 1 (2026-10-08):** `ssql.ExprValue` opens a `JSONString`
+for an expression (whole numbers as int64, empty text as no value) and
+`ssql.NestedValue`/`JSONValue` close a slice or map result back into
+one; the environment builder (`runtime.go`) always computes the
+identifier set and parses only the fields the expression names,
+`has`/`getOr` parse on demand, `group-by -expr`'s batch env parses its
+arrays, the typed Tier-V env constructor wraps `json` fields the same
+way; results: `applyValueToRecord`, the generated `update` switch,
+`aggResult` and the typed `MustCoerceJSON` store any slice or map as
+`json`; the typed and record transpilers refuse a `json` field (VM
+fallback); SQL: `struct_extract`, `list_extract` (0→1-based, negative
+kept), `list_contains`, `list_sort`/`list_distinct`/`flatten`/
+`array_to_string`, DuckDB only, with `jsonHeader` seeding the JSON
+source's columns so a new field is an added column. Three pre-existing
+bugs surfaced and fixed: stage-local hoisted var names collided across
+two `update` stages; parallel sources' `runtime` import clashed with a
+record-fallback stage's expression runtime; the typed coercers exited
+the process. Gates: `TestExprValue*`, `TestNestedValue*`,
+`TestCompileExprOpensNestedValues`, `TestExprToGoNestedFieldRefuses`,
+SQL rows, equivalence `expr_len_and_index_list`, `expr_member_object`,
+`expr_in_list_filter`, `set_expr_split_to_json_then_len`,
+`groupby_expr_over_lists`. Noted for later: a typed program cannot tell
+a missing nested field from a null one (`has(addr)` differs from exec on
+such a row; `addr != nil` agrees).
+
+**Built — Level 2 (2026-10-08):** `ssql.Get`/`Has`/`HasValue` resolve a
+dotted path on a `Schema.Index` miss (`pathValue`: longest leading
+segment that is a field wins, then object keys and 0-based list indices
+through the JSON text; a nested leaf is JSON text); `Schema.HasFieldOrPath`
+for validation (21 callers through `validateFieldsSchema`); `include`
+and `group-by` headers keep a path column (typed `any`); `to table` keeps
+a requested path whose head is a column; the typed lane falls back to
+record mode for a `where`/`sort`/`group-by` stage naming a path
+(`nestedPathIn`); `flagVarName` treats a dot as a word break (a lifted
+literal for `addr.city` made `flagAddr.cityNe`). `explode` and `flatten`
+(`ssql.Explode`, `ssql.FlattenField`; the commands learn the output
+header from the first row through `peekFirst`); `explode` → DuckDB
+`unnest` in a `* REPLACE` projection; `flatten` and `-keep-empty`
+refused in SQL. Schema mode lists a JSON object's keys as paths
+(`lib.NestedPaths`). Gates: `TestGetResolvesDottedPaths`,
+`TestExplodeListField`, `TestFlattenObjectField`, corpus `explode_tags`,
+`flatten_addr_then_path_groupby`, `path_in_where_without_flatten`,
+equivalence `explode_tags`, `explode_then_groupby`, `explode_keep_empty`,
+`flatten_addr`, `path_in_where`, `path_in_sort_and_include`,
+`path_in_groupby`, `path_literal_dot_wins` (a `dotted.csv` fixture);
+codelab §3 "Nested JSON" on a new `events.jsonl`. Not done: paths in
+`generate sql` (a DuckDB `struct_extract` spelling for a field position
+is straightforward; left for the next pass), `window -collect`, a typed
+`-collect`.
+
 1. Scope: Level 0 only, 0+1, 0+1+2, or plan Level 3 too?
 2. One in-memory representation: `JSONString` everywhere (recommended),
    even inside `ssql.ReadJSON`, whose structured output a test

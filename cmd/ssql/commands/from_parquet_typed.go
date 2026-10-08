@@ -63,8 +63,8 @@ func generateFromParquetCodeTyped(filename string, columns []string) error {
 	}
 
 	// Always emit BOTH templates; planner picks per pipeline.
-	parallelCode := fmt.Sprintf(`records := typed.ReadParquetParallel[%s](*flagInput, runtime.GOMAXPROCS(0)%s)`, schema.TypeName, colsArg)
-	parallelImports := append(append([]string{}, imports...), "runtime")
+	parallelCode := fmt.Sprintf(`records := typed.ReadParquetParallel[%s](*flagInput, 0%s)`, schema.TypeName, colsArg)
+	parallelImports := append([]string{}, imports...)
 	serialCode := fmt.Sprintf(`records := typed.ReadParquet[%s](*flagInput%s)`, schema.TypeName, colsArg)
 	serialImports := append([]string{}, imports...)
 

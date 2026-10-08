@@ -673,7 +673,7 @@ func buildInlineToRecordExpr(inputVar string, schema *TypedSchema) string {
 	valueExtractors := make([]string, len(schema.Fields))
 	for i, f := range schema.Fields {
 		fieldNames[i] = fmt.Sprintf("%q", f.Name)
-		valueExtractors[i] = "v." + f.GoName
+		valueExtractors[i] = typedFieldAsRecordValue(f)
 	}
 	return fmt.Sprintf(`func() iter.Seq[ssql.Record] {
 		schema := ssql.NewSchema([]string{%s})
@@ -704,7 +704,7 @@ func buildToRecordBoundary(outputVar, inputVar string, schema *TypedSchema) *Cod
 	valueExtractors := make([]string, len(schema.Fields))
 	for i, f := range schema.Fields {
 		fieldNames[i] = fmt.Sprintf("%q", f.Name)
-		valueExtractors[i] = "v." + f.GoName
+		valueExtractors[i] = typedFieldAsRecordValue(f)
 	}
 	code := fmt.Sprintf(`%s := func() iter.Seq[ssql.Record] {
 		schema := ssql.NewSchema([]string{%s})
@@ -840,4 +840,16 @@ func serialOnlyTag(serialOnly bool) string {
 		return ", SerialOnly=true"
 	}
 	return ""
+}
+
+// typedFieldAsRecordValue is the expression that puts a typed struct
+// field into a Record: the field itself, or, for a `json` wire type (a
+// string holding a nested value's text), the text re-wrapped as an
+// ssql.JSONString so the Record writer emits it as JSON, not as a quoted
+// string (DFC144 Level 0).
+func typedFieldAsRecordValue(f TypedSchemaField) string {
+	if f.JSON {
+		return "ssql.JSONOrNull(v." + f.GoName + ")"
+	}
+	return "v." + f.GoName
 }

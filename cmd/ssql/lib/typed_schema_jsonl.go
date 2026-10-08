@@ -66,7 +66,7 @@ func SampleJSONLSchema(filename, typeName string, maxRows int, opts ...TypeOptio
 	}
 
 	type colInfer struct {
-		seen, allInt, allNum, allBool bool
+		seen, allInt, allNum, allBool, json bool
 	}
 	var order []string
 	infer := map[string]*colInfer{}
@@ -136,6 +136,9 @@ func SampleJSONLSchema(filename, typeName string, maxRows int, opts ...TypeOptio
 				c.allInt = false
 			case bool:
 				c.allInt, c.allNum = false, false
+			case ssql.JSONString:
+				c.allInt, c.allNum, c.allBool = false, false, false
+				c.json = true
 			default:
 				c.allInt, c.allNum, c.allBool = false, false, false
 			}
@@ -176,7 +179,7 @@ func SampleJSONLSchema(filename, typeName string, maxRows int, opts ...TypeOptio
 		} else {
 			usedNames[gn] = 1
 		}
-		fields = append(fields, TypedSchemaField{Name: name, GoName: gn, GoType: goType})
+		fields = append(fields, TypedSchemaField{Name: name, GoName: gn, GoType: goType, JSON: c.json && goType == "string"})
 	}
 	schema := &TypedSchema{TypeName: typeName, Fields: fields}
 	return schema, RenderStructDef(schema), nil

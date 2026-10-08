@@ -28,6 +28,8 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	RegisterExclude(cmd)
 	RegisterRename(cmd)
 	RegisterSort(cmd)
+	RegisterExplode(cmd)
+	RegisterFlatten(cmd)
 	RegisterResample(cmd)
 	RegisterDescribe(cmd)
 	RegisterUnpivot(cmd)
@@ -101,6 +103,12 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 		},
 		"extract": {
 			"-field": {0}, // the text field to match
+		},
+		"explode": {
+			"FIELD": {0}, // the list field (DFC144 Level 2)
+		},
+		"flatten": {
+			"FIELD": {0}, // the object field (DFC144 Level 2)
 		},
 		"group-by": {
 			"FIELDS":   {0}, // group fields (variadic)

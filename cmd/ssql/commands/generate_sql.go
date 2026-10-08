@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bufio"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -161,7 +162,7 @@ func needsWrap(q *sqlQuery, cmd string) bool {
 		// group-by owns the SELECT list and grouping; anything already
 		// projected/grouped/ordered/limited must be materialised first.
 		return projected || len(q.groupBy) > 0 || len(q.orderBy) > 0 || limited || q.distinct
-	case "update", "rename", "cast", "include", "exclude":
+	case "update", "rename", "cast", "include", "exclude", "explode":
 		// One SELECT holds one projection spec.
 		return projected || limited
 	case "window":
@@ -369,6 +370,10 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 		err = translateUnpivot(q, frag.Op, args[2:])
 	case "fill":
 		err = translateFill(q, frag.Op, args[2:])
+	case "explode":
+		return translateExplode(q, frag.Op, args[2:])
+	case "flatten":
+		return fmt.Errorf("flatten has no SQL translation yet — an object's keys are data, unknown when the SQL is generated; use generate go, or name the keys with update -set-expr k 'field.k'")
 	case "extract":
 		err = translateExtract(q, frag.Op, args[2:])
 	case "join":
@@ -521,6 +526,13 @@ func translateFrom(q *sqlQuery, args []string) error {
 				q.columns = delimHeader(files[0], '\t')
 				seedColumnKinds(files[0], '\t')
 				q.csvSource, q.csvDelim = files[0], '\t'
+			case args[0] == "json", args[0] == "jsonl", strings.HasSuffix(strings.ToLower(files[0]), ".json"), strings.HasSuffix(strings.ToLower(files[0]), ".jsonl"):
+				// A JSON source's columns from its first object (keys in
+				// document order), kinds from its values — so a later
+				// `update -set-expr new …` is an added column, not a
+				// `* REPLACE` of one that does not exist (DFC144 Level 1
+				// found this: every JSON source left q.columns unknown).
+				q.columns = jsonHeader(files[0])
 			}
 			if q.csvSource != "" && sqlDialectCur == dialectDuckDB {
 				q.fromClause = duckReadCSV([]string{q.csvSource}, q.csvDelim, "")
@@ -3159,5 +3171,83 @@ func translateExtract(q *sqlQuery, op *lib.Op, args []string) error {
 		cols = append(cols, names...)
 	}
 	*q = sqlQuery{fromClause: body, comments: q.comments, columns: cols}
+	return nil
+}
+
+// jsonHeader is the column list of a JSON or JSON Lines file for the SQL
+// translator: the first object's keys in document order (a `_schema`
+// header's field list when the file has one), with sqlColumnKinds seeded
+// from the first object's values ("json" for a nested value). nil when
+// the file cannot be read, which leaves the schema unknown as before.
+func jsonHeader(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	sr := lib.ReadJSONLWithSchema(bufio.NewReader(f))
+	if sr.Schema != nil && len(sr.Schema.Fields) > 0 {
+		for _, c := range sr.Schema.Fields {
+			sqlColumnKinds[c] = sr.Schema.Types[c]
+		}
+		return append([]string(nil), sr.Schema.Fields...)
+	}
+	var cols []string
+	func() {
+		defer func() { _ = recover() }() // a malformed first line: unknown schema
+		for rec := range sr.Records {
+			for k := range rec.KeysIter() {
+				cols = append(cols, k)
+				if v, ok := ssql.Get[any](rec, k); ok {
+					sqlColumnKinds[k] = lib.InferTypeString(v)
+				}
+			}
+			break
+		}
+	}()
+	return cols
+}
+
+// translateExplode (DFC144 Level 2): DuckDB's UNNEST in the select list —
+// one row per element, the other columns repeated, an empty or NULL list
+// yielding no row, exactly ssql's default. -keep-empty (one row with no
+// value) has no single-SELECT form yet and is refused; the other dialects
+// have no form for a value whose type the translator does not know.
+func translateExplode(q *sqlQuery, op *lib.Op, args []string) error {
+	if sqlDialectCur != dialectDuckDB {
+		return dialectRefuse("explode", "UNNEST over a nested list is DuckDB's")
+	}
+	var field string
+	keepEmpty := false
+	if f, ok := op.Str("field"); ok {
+		field = f
+		if b, ok := op.Args["keep_empty"].(bool); ok {
+			keepEmpty = b
+		}
+	} else {
+		for i := 0; i < len(args); i++ {
+			switch {
+			case args[i] == "-keep-empty":
+				keepEmpty = true
+			case args[i] == "-generate", args[i] == "-g":
+			case !strings.HasPrefix(args[i], "-") && field == "":
+				field = args[i]
+			}
+		}
+	}
+	if field == "" {
+		return fmt.Errorf("explode: FIELD is required")
+	}
+	if keepEmpty {
+		return fmt.Errorf("explode -keep-empty has no SQL translation (UNNEST drops an empty list; the one-null-row form needs a LATERAL join) — drop the flag, or use generate go")
+	}
+	if needsWrap(q, "explode") {
+		wrapAsSubquery(q)
+	}
+	sel, err := starProjection(q.columns, nil, []sqlPair{{field, "unnest(" + quoteIdent(field) + ")"}}, nil, "explode")
+	if err != nil {
+		return err
+	}
+	q.selectExprs = append(q.selectExprs, sel)
 	return nil
 }

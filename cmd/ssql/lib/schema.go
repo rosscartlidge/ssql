@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -83,6 +84,23 @@ func (s *Schema) TypeOf(name string) string {
 func (s *Schema) HasField(name string) bool {
 	_, ok := s.Types[name]
 	return ok
+}
+
+// HasFieldOrPath is HasField, or true for a dotted path (addr.city,
+// tags.0) whose longest leading segment is a field holding a nested
+// value — type `json`, or an untyped (`any`/unknown) column that may be
+// one (DFC144 Level 2). Validation uses it; a literal dotted field is
+// still found by HasField first.
+func (s *Schema) HasFieldOrPath(name string) bool {
+	if s.HasField(name) {
+		return true
+	}
+	for i := strings.LastIndexByte(name, '.'); i > 0; i = strings.LastIndexByte(name[:i], '.') {
+		if t, ok := s.Types[name[:i]]; ok {
+			return t == TypeJSON || t == "any" || t == ""
+		}
+	}
+	return false
 }
 
 // Clone creates a deep copy of the schema.
@@ -287,7 +305,7 @@ func InferTypeString(v any) string {
 		return TypeString
 	case time.Time:
 		return TypeTime
-	case []any, ssql.Record, map[string]any:
+	case ssql.JSONString, []any, ssql.Record, map[string]any:
 		return TypeJSON
 	default:
 		return TypeString
@@ -307,6 +325,8 @@ func FieldTypeToSchemaType(ft ssql.FieldType) string {
 		return TypeString
 	case ssql.FieldTypeTime:
 		return TypeTime
+	case ssql.FieldTypeJSON:
+		return TypeJSON
 	default:
 		return TypeString
 	}
@@ -326,8 +346,73 @@ func SchemaTypeToFieldType(typ string) ssql.FieldType {
 	case TypeTime:
 		return ssql.FieldTypeTime
 	case TypeJSON:
-		return ssql.FieldTypeAuto
+		return ssql.FieldTypeJSON
 	default:
 		return ssql.FieldTypeString
 	}
+}
+
+// NestedPath is one completable path into a nested object: its dotted
+// name (addr.city) and the wire type of the value there.
+type NestedPath struct {
+	Name string
+	Type string
+}
+
+// NestedPaths lists an object's top-level keys as paths under field, in
+// the object's own key order, typed from their values (a nested value is
+// `json`). Schema mode emits them so Tab completes addr.city after
+// `from events.jsonl |` (DFC144 Level 2).
+func NestedPaths(field string, js ssql.JSONString) []NestedPath {
+	parsed, ok := ssql.ExprValue(js).(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys, err := jsonObjectKeys(string(js))
+	if err != nil {
+		return nil
+	}
+	out := make([]NestedPath, 0, len(keys))
+	for _, k := range keys {
+		v := parsed[k]
+		t := "any"
+		if v != nil {
+			if nested, isNested := ssql.NestedValue(v); isNested {
+				t = InferTypeString(nested)
+			} else {
+				t = InferTypeString(v)
+			}
+		}
+		out = append(out, NestedPath{Name: field + "." + k, Type: t})
+	}
+	return out
+}
+
+// jsonObjectKeys returns a JSON object's top-level keys in document order.
+func jsonObjectKeys(text string) ([]string, error) {
+	dec := json.NewDecoder(strings.NewReader(text))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, fmt.Errorf("not an object")
+	}
+	var keys []string
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		k, ok := kt.(string)
+		if !ok {
+			return nil, fmt.Errorf("malformed object")
+		}
+		keys = append(keys, k)
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return nil, err
+		}
+	}
+	return keys, nil
 }

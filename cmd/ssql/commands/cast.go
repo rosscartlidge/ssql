@@ -32,7 +32,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		FieldsFromFlag("").
 		Done().
 		Arg("type").
-		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "time"}}).
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "time", "json"}}).
 		Done().
 		Accumulate().
 		Global().
@@ -227,6 +227,8 @@ func castTargetGoConst(t ssql.FieldType) string {
 		return "ssql.FieldTypeBool"
 	case ssql.FieldTypeTime:
 		return "ssql.FieldTypeTime"
+	case ssql.FieldTypeJSON:
+		return "ssql.FieldTypeJSON"
 	}
 	return "ssql.FieldTypeString"
 }
@@ -245,6 +247,8 @@ func castTargetWireType(target ssql.FieldType) string {
 		return lib.TypeBool
 	case ssql.FieldTypeTime:
 		return lib.TypeTime
+	case ssql.FieldTypeJSON:
+		return lib.TypeJSON
 	}
 	return ""
 }

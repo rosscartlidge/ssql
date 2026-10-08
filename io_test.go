@@ -1084,41 +1084,45 @@ func TestJSONComplexTypesRoundTrip(t *testing.T) {
 		t.Errorf("Completed should be false (bool), got %v (%T)", val, val)
 	}
 
-	// Verify iter.Seq fields become arrays
-	tagsValue, ok := Get[[]any](reconstructedRecords[0], "tags")
+	// A nested value — whatever the writer held (iter.Seq, nested Record,
+	// JSONString) — reads back as the ONE representation of a nested
+	// value, a JSONString holding its JSON text (DFC144 Level 0). Until
+	// 2026-10-08 ReadJSON returned []any and map[string]any here, a
+	// second representation beside the wire's.
+	tagsJSON, ok := Get[JSONString](reconstructedRecords[0], "tags")
 	if !ok {
 		val, _ := Get[any](reconstructedRecords[0], "tags")
-		t.Errorf("Tags should be array after round-trip, got %T", val)
-	} else {
-		if len(tagsValue) != 2 {
-			t.Errorf("Tags should have 2 elements, got %d", len(tagsValue))
-		}
-		if tagsValue[0] != "urgent" || tagsValue[1] != "security" {
-			t.Errorf("Tags data not preserved correctly: %v", tagsValue)
-		}
+		t.Fatalf("Tags should be a JSONString after round-trip, got %T", val)
+	}
+	if parsed, err := tagsJSON.Parse(); err != nil {
+		t.Errorf("Tags JSON does not parse: %v", err)
+	} else if list, ok := parsed.([]any); !ok || len(list) != 2 || list[0] != "urgent" || list[1] != "security" {
+		t.Errorf("Tags data not preserved correctly: %v", parsed)
 	}
 
-	// Verify Record fields become map[string]any
-	metadataValue, ok := Get[map[string]any](reconstructedRecords[0], "metadata")
+	metaJSON, ok := Get[JSONString](reconstructedRecords[0], "metadata")
 	if !ok {
 		val, _ := Get[any](reconstructedRecords[0], "metadata")
-		t.Errorf("Metadata should be map after round-trip, got %T", val)
-	} else {
-		if metadataValue["priority"] != "high" {
-			t.Errorf("Metadata priority should be 'high', got %v", metadataValue["priority"])
-		}
+		t.Fatalf("Metadata should be a JSONString after round-trip, got %T", val)
+	}
+	if parsed, err := metaJSON.Parse(); err != nil {
+		t.Errorf("Metadata JSON does not parse: %v", err)
+	} else if m, ok := parsed.(map[string]any); !ok || m["priority"] != "high" {
+		t.Errorf("Metadata priority should be 'high', got %v", parsed)
 	}
 
-	// Verify JSONString is parsed (not double-encoded)
-	configValue, ok := Get[map[string]any](reconstructedRecords[0], "config")
+	// A JSONString written is a JSONString read: not double-encoded.
+	configJSON2, ok := Get[JSONString](reconstructedRecords[0], "config")
 	if !ok {
 		val, _ := Get[any](reconstructedRecords[0], "config")
-		t.Errorf("Config should be parsed map, got %T", val)
-	} else {
-		// JSON converts all numbers to float64
-		if timeout, ok := configValue["timeout"].(float64); !ok || timeout != 30 {
-			t.Errorf("Config timeout should be 30, got %v (%T)", configValue["timeout"], configValue["timeout"])
-		}
+		t.Fatalf("Config should be a JSONString after round-trip, got %T", val)
+	}
+	if parsed, err := configJSON2.Parse(); err != nil {
+		t.Errorf("Config JSON does not parse: %v", err)
+	} else if m, ok := parsed.(map[string]any); !ok {
+		t.Errorf("Config should parse to an object, got %T", parsed)
+	} else if timeout, ok := m["timeout"].(float64); !ok || timeout != 30 {
+		t.Errorf("Config timeout should be 30, got %v (%T)", m["timeout"], m["timeout"])
 	}
 }
 

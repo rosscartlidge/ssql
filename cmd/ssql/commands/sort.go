@@ -186,6 +186,17 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 		return lib.WriteCodeFragment(frag)
 	}
 
+	// A dotted path into a nested value (addr.city) has no typed form:
+	// record mode resolves it (DFC144 Level 2).
+	if typedMode() && prevSchema != nil {
+		var names []string
+		for _, of := range orderBy {
+			names = append(names, of.Field)
+		}
+		if nestedPathIn(prevSchema, names...) {
+			prevSchema = nil
+		}
+	}
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {
 		// Sort is SerialOnly — the planner inserts Stream.Serial()

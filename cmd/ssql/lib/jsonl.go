@@ -77,21 +77,24 @@ func setValueFromJSON(record ssql.MutableRecord, key string, v any) ssql.Mutable
 	case nil:
 		// A JSON null: the field exists, without a value (DFC128 §6g).
 		return record.Null(key)
-	case []any:
-		// Convert array to []any for storage (preserves as proper slice, not JSONString)
-		// This allows the array to be serialized back as a JSON array
-		result := make([]any, len(val))
-		for i, elem := range val {
-			result[i] = elem
+	case ssql.JSONString:
+		return record.JSONString(key, val)
+	case json.RawMessage:
+		// A nested array or object, kept as its text (compacted) — the one
+		// representation of a nested value (DFC144 Level 0). Until
+		// 2026-10-08 an array became a []any and an object a nested Record
+		// built by a map walk, so its key order was random.
+		var buf bytes.Buffer
+		if err := json.Compact(&buf, val); err != nil {
+			return record.String(key, string(val))
 		}
-		return ssql.Set(record, key, result)
-	case map[string]any:
-		// Nested object - convert to Record recursively
-		nested := ssql.MakeMutableRecord()
-		for k, subv := range val {
-			nested = setValueFromJSON(nested, k, subv)
+		return record.JSONString(key, ssql.JSONString(buf.String()))
+	case []any, map[string]any:
+		js, err := ssql.NewJSONString(val)
+		if err != nil {
+			return record.String(key, fmt.Sprintf("%v", val))
 		}
-		return ssql.Set(record, key, nested.Freeze())
+		return record.JSONString(key, js)
 	case float64:
 		// JSON numbers are always float64 - check if it's actually an integer
 		if val == float64(int64(val)) {
@@ -131,6 +134,10 @@ func convertRecordValue(v any) any {
 	case time.Time:
 		// RFC 3339, as `to jsonl` writes it (DFC128 D1)
 		return val.Format(time.RFC3339Nano)
+	case ssql.JSONString:
+		// Already JSON: emit it as such, not as a quoted string (the
+		// double-encoding of DFC144 §1.5 a).
+		return json.RawMessage(val)
 	case []any:
 		// Convert slice elements recursively (for Collect aggregation results)
 		result := make([]any, len(val))

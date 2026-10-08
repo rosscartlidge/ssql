@@ -397,7 +397,7 @@ func TestFieldTypeConversions(t *testing.T) {
 		{TypeFloat, ssql.FieldTypeFloat},
 		{TypeBool, ssql.FieldTypeBool},
 		{TypeString, ssql.FieldTypeString},
-		{TypeJSON, ssql.FieldTypeAuto},
+		{TypeJSON, ssql.FieldTypeJSON},    // a nested value (DFC144 Level 0)
 		{"unknown", ssql.FieldTypeString}, // Unknown maps to string
 	}
 

@@ -95,6 +95,10 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				for _, field := range fields {
 					if schemaAndRecords.Schema.HasField(field) {
 						outputSchema.AddField(field, schemaAndRecords.Schema.TypeOf(field))
+					} else if schemaAndRecords.Schema.HasFieldOrPath(field) {
+						// A dotted path into a nested value (addr.city): a new
+						// column whose type the header cannot know (DFC144 L2).
+						outputSchema.AddField(field, "any")
 					}
 				}
 			}

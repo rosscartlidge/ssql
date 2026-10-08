@@ -7,7 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **One representation of a nested value: `JSONString`** (DFC144 Level
+  0). Every reader — the JSONL wire, `from json` on a JSON array file,
+  `ssql.ReadJSON`, `Record.UnmarshalJSON` — now turns a nested array or
+  object into a `JSONString` holding its text (compacted, keys in
+  source order), and `group-by -collect` emits its list as one. Until
+  now the value's Go type depended on the reader (`[]any` and a nested
+  `Record` from an array file, with random key order; `[]any` and
+  `map[string]any` from the library reader; text on the wire), and a
+  `-collect` list was text after one pipe. Library callers that read
+  `[]any`/`map[string]any` back from `ReadJSON` read a `JSONString` and
+  call `Parse()`.
+- **`json` is the schema type of a nested value, everywhere**: inferred
+  for a `JSONString`, preserved across hops, accepted by
+  `ParseFieldType` (`FieldTypeJSON`), shown by `SSQL_MODE=schema`
+  (which also now samples a JSON array file instead of returning no
+  names), mapped by typed codegen to a `string` field that the
+  typed→Record boundary writes back as JSON (`ssql.JSONOrNull`).
+  `cast -type F json` validates the text.
+
+- **Expressions see nested values** (DFC144 Level 1). A `json` field
+  is the list or object it holds inside `where -if-expr`, `update
+  -set-expr` and `group-by -expr`: `len(tags)` counts elements,
+  `tags[0]` and `tags[-1]` index, `addr.city` reads a key, `"go" in
+  tags` tests membership, and every array and map function applies. A
+  list or map result (`split`, `filter`, a map literal) is stored as a
+  `json` value the next stage can open again. Only the fields an
+  expression names are parsed. In the typed lane the transpiler refuses
+  such fields so the VM handles them; `generate sql` translates member
+  access, indexing, `in` over a list and `sort`/`uniq`/`flatten`/`join`
+  for DuckDB (`struct_extract`, `list_extract`, `list_contains`,
+  `list_*`) and refuses them by name elsewhere. Before: `len(tags)` on
+  `["go","rust"]` was 13, `tags[0]` was 91, `addr.city` errored.
+- **`explode FIELD [-keep-empty]`** and **`flatten FIELD [-depth N] [-keep]`**
+  (DFC144 Level 2): one row per element of a JSON list (SQL UNNEST, the
+  inverse of `group-by -collect`; an empty or missing list gives no row,
+  `-keep-empty` one row with no value); an object's keys as columns
+  `FIELD.key`, keys fixed by the first row (a later row with a new key
+  fails naming it, as a STRUCT would). Record-shaped stages; the planner
+  inserts the boundary in a typed pipeline. `generate sql` translates
+  `explode` to DuckDB's `unnest`; `flatten` and `-keep-empty` are refused
+  by name. Library: `ssql.Explode`, `ssql.FlattenField`.
+- **Dotted paths as field names** (DFC144 Level 2): `addr.city`, `tags.0`
+  (0-based; negative from the end) wherever a field name goes — `where
+  -if`, `sort`, `group-by`, `include`, `to table`, the aggregates —
+  resolved by `ssql.Get` on the JSON text; a literal field containing a
+  dot wins. A typed pipeline falls back to record mode for the stage
+  that names a path. `SSQL_MODE=schema` lists a JSON source's nested
+  names (`addr.city: string`), so Ctrl-O completes them; `cast -type F
+  json` and schema mode on a JSON array file work.
+- `generate sql` knows a JSON source's columns (from its first
+  object), so `update -set-expr` of a new field is an added column
+  rather than a `* REPLACE` DuckDB rejects.
+
 ### Fixed
+- Two `update -set-expr` (or two `where -if-expr`) stages in one
+  generated program declared the same hoisted variable
+  (`exprEval1 redeclared`); names are stage-indexed now.
+- A typed program with a parallel source and a record-fallback
+  expression stage imported Go's `runtime` and ssql's expression runtime
+  under one name and did not compile; parallel sources now pass `0`
+  (every core) and import nothing.
+- The typed expression runtime's coercers exited the process on a type
+  mismatch; they panic with an error, which a program reports and a
+  library returns (DFC142).
+- `to json` double-encoded nested values (`"tags": "[\"x\"]"`); they are
+  emitted as JSON.
+- `Record.Equal` panicked on a `[]any` value; grouping by an in-memory
+  `[]any` would have panicked; `isValueType` disagreed with the `Value`
+  constraint (DFC144 §1.5 c, d, e).
+- A typed program's `to jsonl` of a `from jsonl` source with a nested
+  field that was missing on some rows wrote invalid JSON (an empty
+  value in place of the field).
 - **Library output is gofmt-clean**: `generate go -package` formats the
   file with `go/format` before writing it (stage templates indent for a
   `run()` body; in a library they sit one level deeper). v4.112.0 users

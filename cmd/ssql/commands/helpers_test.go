@@ -37,7 +37,8 @@ func TestApplyValueToRecord(t *testing.T) {
 
 		// Special cases
 		{name: "nil→empty string", field: "optional", value: nil, wantType: "string", wantValue: ""},
-		{name: "complex type→string", field: "data", value: []int{1, 2, 3}, wantType: "string", wantValue: "[1 2 3]"},
+		// a slice result is a nested value: JSON text (DFC144 Level 1; was fmt's "[1 2 3]")
+		{name: "complex type→json", field: "data", value: []int{1, 2, 3}, wantType: "json", wantValue: ssql.JSONString("[1,2,3]")},
 	}
 
 	for _, tt := range tests {

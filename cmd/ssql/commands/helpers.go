@@ -82,6 +82,31 @@ func recoverCellError(err *error) {
 	panic(r)
 }
 
+// nestedPathIn reports whether any name is a dotted path into a `json`
+// field of the typed schema (addr.city). The typed lane has no path
+// resolution (a struct field is the nested value's text), so a stage that
+// names one falls back to record mode, where ssql.Get resolves it
+// (DFC144 Level 2).
+func nestedPathIn(schema *lib.TypedSchema, names ...string) bool {
+	if schema == nil {
+		return false
+	}
+	for _, name := range names {
+		if _, ok := lookupSchemaField(schema, name); ok {
+			continue // a literal field with a dot wins
+		}
+		for i := strings.LastIndexByte(name, '.'); i > 0; i = strings.LastIndexByte(name[:i], '.') {
+			if f, ok := lookupSchemaField(schema, name[:i]); ok {
+				if f.JSON {
+					return true
+				}
+				break
+			}
+		}
+	}
+	return false
+}
+
 // validateFields checks that all given field names exist in the record —
 // that the record's SCHEMA has them, not that this record has a value: a
 // field that is NULL in the first row (a nil slot) is a known field. The
@@ -111,7 +136,7 @@ func validateFieldsSchema(schema *lib.Schema, fields []string, command string) e
 	}
 	var missing []string
 	for _, f := range fields {
-		if !schema.HasField(f) {
+		if !schema.HasFieldOrPath(f) {
 			missing = append(missing, f)
 		}
 	}
@@ -389,7 +414,9 @@ func flagVarName(s string) string {
 	var result strings.Builder
 	upper := true
 	for _, c := range s {
-		if c == '-' || c == '_' {
+		// A separator — or any rune a Go identifier cannot hold (the dot of a
+		// path like addr.city, a space, a slash) — starts a new word.
+		if c == '-' || c == '_' || c == '.' || !(unicode.IsLetter(c) || unicode.IsDigit(c)) {
 			upper = true
 			continue
 		}
@@ -507,6 +534,11 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 			coerced = true
 		}
 		return mut.String(field, coercedVal), coerced
+
+	case ssql.JSONString:
+		// A nested field takes a nested result (or whatever the expression
+		// produced, by its own type); there is no coercion into JSON text.
+		return applyValueToRecord(mut, field, value), false
 
 	default:
 		// Unknown existing type, apply with natural type
@@ -655,6 +687,13 @@ func applyValueToRecord(mut ssql.MutableRecord, field string, value any) ssql.Mu
 		// For nil values, set as empty string (or could skip)
 		return mut.String(field, "")
 	default:
+		// A list or map result (split's []string, filter's []any, a map
+		// literal) is a nested value: JSON text, `json` on the wire
+		// (DFC144 Level 1). Until 2026-10-08 it was fmt's "%v" ("[x y]"),
+		// which nothing downstream could use.
+		if js, ok := ssql.NestedValue(v); ok {
+			return mut.JSONString(field, js)
+		}
 		// For unknown types, convert to string
 		return mut.String(field, fmt.Sprintf("%v", v))
 	}

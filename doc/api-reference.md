@@ -231,6 +231,39 @@ for `CollectSeq`. `OrderedValue` is the constraint for `Min[T]` /
 ### JSONString
 
 A string that holds valid JSON, for structured data embedded in a Record.
+**It is the one representation of a nested value** (DFC144 Level 0,
+2026-10-08): every reader — the wire, `from json` on an array file,
+`ReadJSON`, `ReadJSONAuto` — turns a JSON array or object into a
+`JSONString` holding its text (compacted, keys in source order), and
+`Collect` returns its list as one. The `_schema` wire type of such a
+field is `json`; `FieldTypeJSON` is its `FieldType` (`ParseFieldType("json")`,
+`cast -type F json`, which validates the text). A typed program holds a
+`json` field as a `string` and its typed→Record boundary calls
+`JSONOrNull` to put it back on the wire as JSON. `[]any` and
+`map[string]any` are no longer produced by any reader (they remain legal
+`Value`s for in-memory use).
+
+```go
+func JSONOrNull(text string) any                    // JSONString(text), or nil for "" — a typed program's json field back on the wire
+func ExprValue(v any) any                           // what an expression sees for a field: a JSONString parsed to []any / map[string]any (whole numbers int64), else v
+func NestedValue(v any) (JSONString, bool)          // a slice, map or JSONString result as JSON text; false for scalars and strings
+func JSONValue(v any) JSONString                    // json.Marshal as a JSONString (panics with an error on a value that cannot be marshalled)
+func SynthesizeDottedFields(env map[string]any, identifiers []string) // columns named items.qty (after flatten) reachable as items.qty in an expression environment
+```
+
+`Get`, `GetOr`, `Has` and `HasValue` resolve a **dotted path** into a
+nested value when the name is not a field: `GetOr(r, "addr.city", "")`,
+`GetOr(r, "tags.0", "")` (0-based, negative from the end), `a.b.c`
+through nested objects; the longest leading segment that is a field is
+the head, so a literal field named `a.b` wins (DFC144 Level 2). Every
+command's field reads go through `Get`, which is how `where -if
+addr.city eq NYC` works with no command-level support.
+
+`ExprValue` opens a nested value for the expression language (DFC144
+Level 1): `len(tags)`, `tags[0]`, `addr.city` and `"go" in tags` work on
+a `json` field. `NestedValue` closes a list or map result back into one;
+`update -set-expr`, `group-by -expr` and the generated code call it, so
+a `split(…)` result is a `json` list the next stage can open.
 
 ```go
 type JSONString string
@@ -594,7 +627,7 @@ func Min[T OrderedValue](field string) AggregateFunc
 func Max[T OrderedValue](field string) AggregateFunc
 func First[T Value](field string) AggregateFunc
 func Last[T Value](field string) AggregateFunc
-func Collect(field string) AggregateFunc            // every value, as []any
+func Collect(field string) AggregateFunc            // every value, as a JSONString list (`json` on the wire)
 func CollectSeq[T Value](field string) AggregateFunc // every value of type T, as iter.Seq[any]
 
 func MinOf(field string) AggregateFunc      // keeps the field's own type: numbers, strings, times
@@ -754,6 +787,8 @@ filled := ssql.FillRecords(records, ssql.FillConfig{
 ```go
 func ExtractRecords(records iter.Seq[Record], cfg ExtractConfig) (iter.Seq[Record], error)
 func ExtractFilter(cfg ExtractConfig) Filter[Record, Record]
+func Explode(field string, keepEmpty bool) Filter[Record, Record]        // one row per element of a json list field (UNNEST); empty/missing → no row, or one null row with keepEmpty; a non-list value panics with an error
+func FlattenField(field string, depth int, keep bool) Filter[Record, Record] // a json object's keys → fields field.key (depth levels); keys fixed by the first row, a new key later panics naming it
 func CompileExtract(cfg ExtractConfig) (*regexp.Regexp, []string, error)
 type ExtractConfig struct{ Field, Pattern string; Skip, Keep bool }
 ```
@@ -1217,7 +1252,7 @@ and a column's type survives every pipe hop. The readers below honour it
 and the writers that say so emit it.
 
 ```go
-func ReadJSON(filename string) (iter.Seq[Record], error)            // JSON Lines
+func ReadJSON(filename string) (iter.Seq[Record], error)            // JSON Lines; nested values are JSONString (since 2026-10-08)
 func ReadJSONFromReader(reader io.Reader) iter.Seq[Record]
 func ReadJSONSafe(filename string) iter.Seq2[Record, error]
 func ReadJSONSafeFromReader(reader io.Reader) iter.Seq2[Record, error]

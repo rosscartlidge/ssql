@@ -9,7 +9,8 @@ import (
 )
 
 // TestCLIPanicIsAnErrorLine: a panic from deep in a pipeline (here an
-// aggregation expression whose result is a map) reaches the user as one
+// aggregation expression whose result is nil — a map or list is a json
+// value since DFC144 Level 1) reaches the user as one
 // "Error: …" line with exit 1, not a goroutine dump — the rule generated
 // programs already follow. SSQL_DEBUG=1 keeps the trace.
 func TestCLIPanicIsAnErrorLine(t *testing.T) {
@@ -18,15 +19,15 @@ func TestCLIPanicIsAnErrorLine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.csv"), []byte("k,n\nx,1\nx,2\ny,3\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pipeline := bin + " from csv a.csv | " + bin + " group-by k -stream-expr '{s:0}' '{s:s+n}' '{x:s}' r"
+	pipeline := bin + " from csv a.csv | " + bin + " group-by k -stream-expr '{s:0}' '{s:s+n}' 'nil' r"
 	c := exec.Command("bash", "-c", pipeline)
 	c.Dir = dir
 	out, err := c.CombinedOutput()
 	if err == nil {
-		t.Fatalf("a map-valued aggregation must fail:\n%s", out)
+		t.Fatalf("a nil-valued aggregation must fail:\n%s", out)
 	}
 	s := string(out)
-	if !strings.Contains(s, "Error: StreamExprAgg: expression returned map") || strings.Contains(s, "goroutine ") || strings.Contains(s, "panic:") {
+	if !strings.Contains(s, "Error: StreamExprAgg: expression returned <nil>") || strings.Contains(s, "goroutine ") || strings.Contains(s, "panic:") {
 		t.Errorf("want one Error line, no trace:\n%s", s)
 	}
 

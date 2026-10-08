@@ -298,6 +298,23 @@ func generateWhereCode(ctx *cf.Context) error {
 			return lib.WriteErrorAndExit(getCommandString(), err)
 		}
 	}
+	// A dotted path into a nested value (addr.city) has no typed form:
+	// record mode resolves it through ssql.Get (DFC144 Level 2).
+	if typedMode() && prevSchema != nil {
+		var names []string
+		for _, clause := range ctx.Clauses {
+			if raw, ok := clause.Flags["-if"]; ok {
+				if conds, err := parseConditions(raw); err == nil {
+					for _, c := range conds {
+						names = append(names, c.Field)
+					}
+				}
+			}
+		}
+		if nestedPathIn(prevSchema, names...) {
+			prevSchema = nil
+		}
+	}
 	if typedMode() && prevSchema != nil {
 		handled, err := generateWhereCodeTyped(ctx.Clauses, invert, inputVar, prevSchema, fragments)
 		if handled || err != nil {
@@ -313,7 +330,7 @@ func generateWhereCode(ctx *cf.Context) error {
 	}
 
 	// Generate filter code from clauses
-	filterCode, imports, preCompileVars, params, planNotes, gerr := generateWhereCodeFromClauses(ctx.Clauses, invert, advisory)
+	filterCode, imports, preCompileVars, params, planNotes, gerr := generateWhereCodeFromClauses(ctx.Clauses, invert, advisory, len(fragments))
 	if gerr != nil {
 		return lib.WriteErrorAndExit(getCommandString(), gerr)
 	}
@@ -613,7 +630,7 @@ func schemaUsesTime(s *lib.TypedSchema) bool {
 // source), -if-expr predicates transpile to native GetOr code; otherwise —
 // and for expressions outside the subset — the compiled-VM filter var is
 // emitted as before.
-func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map[string]string) (string, []string, []string, []lib.CodeParam, []string, error) {
+func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map[string]string, stage int) (string, []string, []string, []lib.CodeParam, []string, error) {
 	var imports []string
 	var clauseConditions []string
 	var preCompileVars []string
@@ -726,7 +743,9 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map
 				planNotes = append(planNotes, fmt.Sprintf("expr %q: VM (no advisory column types from upstream)", ec.Expression))
 			}
 			exprCounter++
-			varName := fmt.Sprintf("exprFilter%d", exprCounter)
+			// Stage-indexed: two where stages in one program each hoist their
+			// own vars (the per-stage counter alone collided; DFC144 found it).
+			varName := fmt.Sprintf("exprFilter%d_%d", stage, exprCounter)
 			preCompileVars = append(preCompileVars, exprVMCompileDecl(varName, "MustCompileExprFilter", ec.Expression, paramThunk, paramFields))
 			call := fmt.Sprintf("%s(r)", varName)
 			if ec.Negated {

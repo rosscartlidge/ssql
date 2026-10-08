@@ -135,8 +135,8 @@ func generateFromSSHTypedCode(host, path, remoteBin string, pipelineArgs []strin
 		"github.com/rosscartlidge/ssql/v4/typed")
 
 	conv := renderRecordConverter(schema)
-	parallelCode := fmt.Sprintf("%s\n\trecords := typed.FromRecordsParallel(recordsRaw, %s, runtime.GOMAXPROCS(0))", landing, conv)
-	parallelImports := append(append([]string{}, imports...), "runtime")
+	parallelCode := fmt.Sprintf("%s\n\trecords := typed.FromRecordsParallel(recordsRaw, %s, 0)", landing, conv)
+	parallelImports := append([]string{}, imports...)
 	serialCode := fmt.Sprintf("%s\n\trecords := typed.FromRecords(recordsRaw, %s)", landing, conv)
 
 	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())

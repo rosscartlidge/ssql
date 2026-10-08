@@ -138,7 +138,12 @@ func aggResult(context string, v any) AggregateResult {
 	case time.Time:
 		return AggResult[time.Time]{val: x}
 	}
-	panic(fmt.Errorf("%s: expression returned %T (%v), need a number, string, bool or time", context, v, v))
+	if js, ok := NestedValue(v); ok {
+		// A list or map result is a nested value: JSON text, `json` on
+		// the wire (DFC144 Level 1).
+		return AggResult[JSONString]{val: js}
+	}
+	panic(fmt.Errorf("%s: expression returned %T (%v), need a number, string, bool, time, list or map", context, v, v))
 }
 
 // aggMax and aggMin are the aggregation environment's max/min: they take
@@ -320,10 +325,14 @@ func buildAggBatchEnv(records []Record) (map[string]any, map[string]bool) {
 	for _, r := range records {
 		recMap := make(map[string]any)
 		for k, v := range r.All() {
+			v = ExprValue(v) // a nested value is its list or map (DFC144 L1)
 			fieldValues[k] = append(fieldValues[k], v)
 			recMap[k] = v
 			fields[k] = true
 		}
+		// sum(items.qty) is patched to a per-record #.items.qty: give each
+		// record map the same items.* synthesis the field arrays get.
+		SynthesizeDottedFields(recMap, nil)
 		recordMaps = append(recordMaps, recMap)
 	}
 
@@ -331,6 +340,8 @@ func buildAggBatchEnv(records []Record) (map[string]any, map[string]bool) {
 	for field, values := range fieldValues {
 		env[field] = values
 	}
+	// items.qty columns (after flatten) as items.qty arrays in -expr.
+	SynthesizeDottedFields(env, nil)
 
 	// Add _records and _count
 	env["_records"] = recordMaps
@@ -574,8 +585,11 @@ func (t *identifierTransformer) Visit(node *ast.Node) {
 		return
 	}
 
-	// Check if this identifier is a known field
-	if !t.Fields[ident.Value] {
+	// Check if this identifier is a known field — or the head of dotted
+	// columns (items.qty after `flatten items`), which the record maps
+	// synthesise as a nested map, so #.items.qty reads the row's value
+	// (DFC144 Level 2).
+	if !t.Fields[ident.Value] && !t.headsDottedField(ident.Value) {
 		return // Not a field, leave as-is
 	}
 
@@ -585,4 +599,15 @@ func (t *identifierTransformer) Visit(node *ast.Node) {
 		Node:     &ast.PointerNode{},
 		Property: &ast.StringNode{Value: ident.Value},
 	})
+}
+
+// headsDottedField reports whether some known field is named head.<rest>.
+func (t *identifierTransformer) headsDottedField(head string) bool {
+	prefix := head + "."
+	for f := range t.Fields {
+		if strings.HasPrefix(f, prefix) {
+			return true
+		}
+	}
+	return false
 }

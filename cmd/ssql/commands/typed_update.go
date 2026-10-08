@@ -199,7 +199,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				if !exists {
 					return false, fmt.Sprintf("-set-expr %s %q: new field from an untranspilable expression — its Go type is unknowable in typed mode", field, expression), nil
 				}
-				if _, ok := exprCoerceFunc(f.GoType); !ok {
+				if _, ok := exprCoerceFunc(f); !ok {
 					return false, fmt.Sprintf("-set-expr %s %q: column type %s has no Tier-V coercion", field, expression, f.GoType), nil
 				}
 				call, tvImports, tvHoisted, verr := exprTierVEvalParams(expression, in, exprParams)
@@ -335,7 +335,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				// Tier V: evaluate in the VM, type the result with the loud
 				// runtime coercer (eval errors fail the pipeline, matching
 				// exec's -set-expr contract).
-				coerce, _ := exprCoerceFunc(f.GoType) // presence checked at parse
+				coerce, _ := exprCoerceFunc(f) // presence checked at parse
 				tierVSets++
 				n := tierVSets
 				fmt.Fprintf(&body, "\t\t\tv%d, err%d := %s\n", n, n, s.tierVCall)

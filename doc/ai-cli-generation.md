@@ -75,6 +75,9 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `unpivot -id F… -value F…` | wide to long (melt) | `-col NAME -val NAME` name the two output columns |
 | `fill` | fill missing values | `-down F` carries the last value forward; `-default F VALUE` |
 | `extract -field F -re 'REGEX'` | named groups `(?P<name>…)` become fields | `-skip` drops non-matching rows; `-keep` keeps the source field |
+| `explode FIELD` | one row per element of a JSON list field (SQL UNNEST; the inverse of `group-by -collect`) | an empty or missing list gives no row; `-keep-empty` gives one row with no value |
+| `flatten FIELD` | a JSON object field's keys become columns `FIELD.key` | `-depth N` for nested objects; `-keep` keeps the object; keys are fixed by the first row |
+| dotted paths `addr.city`, `tags.0` | name a value inside a JSON field wherever a field name goes (`where -if`, `sort`, `group-by`, `include`, `to table`) | a literal field containing a dot wins; inside expressions `addr.city`, `tags[0]`, `len(tags)`, `"go" in tags` work on the real list or object |
 | `resample -time F -every 5m -value F` | snap timestamps to a grid | `-fill previous|next|linear` |
 | `describe` | one row per field: type, count, missing, distinct, min/max/mean/median | |
 | `fft`, `ifft`, `convolve`, `correlate`, `spectrogram` | signal processing (see below) | |

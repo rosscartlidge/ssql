@@ -16,9 +16,10 @@ package commands
 // See doc/research/schema-aware-completion.md §5–§6.
 
 import (
+	"bufio"
 	"io"
-	"strings"
 	"iter"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -101,22 +102,81 @@ func writeSchemaModeDelimited(w io.Writer, headers []string, records iter.Seq[ss
 	return writeSchemaModeOutputTyped(w, headers, types)
 }
 
-// schemaModeJSONNames reads field names from a JSON/JSONL source under
-// schema mode: the _schema header when present, otherwise the first
-// record's keys.
-func schemaModeJSONNames(r io.Reader) []string {
-	sr := lib.ReadJSONLWithSchema(r)
-	if sr.Schema != nil && len(sr.Schema.Fields) > 0 {
-		return sr.Schema.Fields
-	}
-	for rec := range sr.Records {
-		var names []string
-		for k := range rec.KeysIter() {
-			names = append(names, k)
+// writeSchemaModeJSON is the schema-mode output of a JSON/JSONL source:
+// the _schema header's names and types when present, otherwise the
+// names in the first record's key order, typed from a sample like a
+// delimited source (so a nested value shows `json`, not `any` — DFC144
+// Level 0).
+func writeSchemaModeJSON(w io.Writer, r io.Reader) error {
+	br := bufio.NewReader(r)
+	var records iter.Seq[ssql.Record]
+	for {
+		b, err := br.Peek(1)
+		if err != nil {
+			return writeSchemaModeOutputTyped(w, nil, nil)
 		}
-		return names
+		if b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r' {
+			br.ReadByte()
+			continue
+		}
+		break
 	}
-	return nil
+	if b, _ := br.Peek(1); b[0] == '[' {
+		// A JSON array file has no header; sample its elements (this path
+		// returned no names at all until 2026-10-08).
+		records = lib.ReadJSON(br)
+	} else {
+		sr := lib.ReadJSONLWithSchema(br)
+		if sr.Schema != nil && len(sr.Schema.Fields) > 0 {
+			return writeSchemaModeOutputTyped(w, sr.Schema.Fields, sr.Schema.Types)
+		}
+		records = sr.Records
+	}
+	var names []string
+	types := map[string]string{}
+	func() {
+		defer func() { _ = recover() }() // a bad line types nothing; exec reports it
+		var sample []ssql.Record
+		for rec := range records {
+			if names == nil {
+				for k := range rec.KeysIter() {
+					names = append(names, k)
+				}
+			}
+			sample = append(sample, rec)
+			if len(sample) >= schemaModeSampleRows {
+				break
+			}
+		}
+		schema := lib.InferFromSample(sample)
+		for _, n := range names {
+			if schema.HasField(n) {
+				types[n] = schema.TypeOf(n)
+			}
+		}
+		// A nested object's keys are completable paths: addr.city, addr.zip
+		// (one level; a list's indices are typed by hand). The first row
+		// that has the object names them, as flatten does (DFC144 Level 2).
+		var nested []string
+		for _, n := range names {
+			if types[n] != lib.TypeJSON {
+				continue
+			}
+			for _, rec := range sample {
+				js, ok := ssql.Get[ssql.JSONString](rec, n)
+				if !ok || !strings.HasPrefix(strings.TrimSpace(string(js)), "{") {
+					continue
+				}
+				for _, p := range lib.NestedPaths(n, js) {
+					nested = append(nested, p.Name)
+					types[p.Name] = p.Type
+				}
+				break
+			}
+		}
+		names = append(names, nested...)
+	}()
+	return writeSchemaModeOutputTyped(w, names, types)
 }
 
 // runSchemaModeTransform applies a transform command's schemaOp to the

@@ -7,9 +7,10 @@ Do these in order; each assumes the one before it.
 1. [CLI Codelab](cli-codelab.md) — start here: ten minutes to useful, then the sophisticated features one at a time
    - [SSH Operator Console](cli-codelab-serve.md) — runbook for `ssql serve` when a box holds the data (section 8 of the codelab)
    - [tmux for the ssql Codelab](tmux-for-ssql.md) — the five things you need from tmux: mouse scrolling and copy, named sessions, a second shell, `escape-time` for the Alt keys
-2. [Signal Processing](cli-signal-processing.md) — optional CLI branch for time series: FFT, convolution, correlation, spectrogram; the GPU build as the last section
-3. [Getting Started Guide (Go)](codelab-intro.md) — the `Record` library the CLI is built on; read it once you have seen `generate go` output
-4. [Typed Codelab (Go)](typed-codelab.md) — the `ssql/typed` struct API for hot pipelines; what `generate go` emits by default
+2. [Structured Data](cli-nested-data.md) — optional CLI branch for JSON with lists and objects inside fields: dotted paths, expressions over lists, `explode`, `flatten`, `-collect`
+3. [Signal Processing](cli-signal-processing.md) — optional CLI branch for time series: FFT, convolution, correlation, spectrogram; the GPU build as the last section
+4. [Getting Started Guide (Go)](codelab-intro.md) — the `Record` library the CLI is built on; read it once you have seen `generate go` output
+5. [Typed Codelab (Go)](typed-codelab.md) — the `ssql/typed` struct API for hot pipelines; what `generate go` emits by default
 
 ## Install and set up
 

@@ -62,6 +62,8 @@ func buildServeCLI() *cf.Command {
 	b = RegisterUnpivot(b)
 	b = RegisterFill(b)
 	b = RegisterExtract(b)
+	b = RegisterExplode(b)
+	b = RegisterFlatten(b)
 	b = RegisterFFT(b)
 	b = RegisterIFFT(b)
 	b = RegisterConvolve(b)

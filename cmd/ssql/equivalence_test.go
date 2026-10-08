@@ -922,6 +922,164 @@ func orderedLabel(ordered bool) string {
 }
 
 var equivCases = []EquivCase{
+	// DFC144 Level 0: a nested value is one representation (JSONString)
+	// in every lane and survives every hop as the same JSON.
+	{
+		Name:     "nested_passthrough",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} where -if id gt 1`,
+		Skip: map[string]string{
+			"datafusion": "DataFusion's JSON reader has no struct form for a nested object (DFC144 L0)",
+			"postgres":   "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
+		},
+	},
+	{
+		// ColumnsUnordered: the array-file reader sorts top-level keys
+		// (TODO "JSON input column order"); DuckDB keeps the source order.
+		Name:             "nested_array_file_passthrough",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip: map[string]string{
+			"go-typed":    "a JSON array file has no typed form (sampling is JSONL only)",
+			"go-parallel": "a JSON array file has no typed form (sampling is JSONL only)",
+			"go-lib":      "a JSON array file has no typed form (sampling is JSONL only)",
+			"datafusion":  "DataFusion refuses a JSON array file",
+			"postgres":    "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
+		},
+	},
+	// DFC144 Level 1: expressions see nested values as lists and maps, in
+	// every lane; a non-scalar result is a json value.
+	{
+		Name:     "expr_len_and_index_list",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} where -if-expr 'len(tags) > 0 and len(scores) > 0' | {{.bin}} update -set-expr n 'len(tags)' -set-expr first 'tags[0]' -set-expr top 'sort(scores)[-1]'`,
+		Skip: map[string]string{
+			"datafusion": "member access on a nested value is DuckDB-only in SQL (DFC144 L1)",
+			"postgres":   "member access on a nested value is DuckDB-only in SQL (DFC144 L1)",
+		},
+	},
+	{
+		Name:     "expr_member_object",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} where -if-expr 'addr != nil' | {{.bin}} update -set-expr city 'addr.city'`,
+		Skip: map[string]string{
+			"datafusion": "member access on a nested value is DuckDB-only in SQL (DFC144 L1)",
+			"postgres":   "member access on a nested value is DuckDB-only in SQL (DFC144 L1)",
+		},
+	},
+	{
+		Name:     "expr_in_list_filter",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} where -if-expr '"go" in tags'`,
+		Skip: map[string]string{
+			"datafusion": "`in` over a list field is DuckDB-only in SQL (DFC144 L1)",
+			"postgres":   "`in` over a list field is DuckDB-only in SQL (DFC144 L1)",
+		},
+	},
+	{
+		// split's []string becomes a json list, which the next stage can
+		// open again (len) — the two-hop test DFC052 had no answer for.
+		Name:     "set_expr_split_to_json_then_len",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -set-expr parts 'split(name, "a")' | {{.bin}} update -set-expr n 'len(parts)' | {{.bin}} include name parts n`,
+		Skip: map[string]string{
+			"duckdb":     "split to a list then len has no SQL translation yet (DFC144 L1)",
+			"datafusion": "split to a list then len has no SQL translation yet (DFC144 L1)",
+			"postgres":   "split to a list then len has no SQL translation yet (DFC144 L1)",
+		},
+	},
+	{
+		Name:     "groupby_expr_over_lists",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} group-by -expr 'len(name)' n -expr 'sort(uniq(flatten(tags)))' all_tags`,
+		Skip: map[string]string{
+			"duckdb":     "group-by -expr over nested values has no SQL translation (DFC144 L1)",
+			"datafusion": "group-by -expr over nested values has no SQL translation (DFC144 L1)",
+			"postgres":   "group-by -expr over nested values has no SQL translation (DFC144 L1)",
+		},
+	},
+	// DFC144 Level 2: explode, flatten, dotted paths as field names.
+	{
+		Name:     "explode_tags",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} explode tags | {{.bin}} include id tags`,
+		Skip: map[string]string{
+			"datafusion": "UNNEST over a nested list is DuckDB-only in SQL (DFC144 L2)",
+			"postgres":   "UNNEST over a nested list is DuckDB-only in SQL (DFC144 L2)",
+		},
+	},
+	{
+		Name:     "explode_then_groupby",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} explode tags | {{.bin}} group-by tags -count n | {{.bin}} sort tags`,
+		Ordered:  true,
+		Skip: map[string]string{
+			"datafusion": "UNNEST over a nested list is DuckDB-only in SQL (DFC144 L2)",
+			"postgres":   "UNNEST over a nested list is DuckDB-only in SQL (DFC144 L2)",
+		},
+	},
+	{
+		Name:     "explode_keep_empty",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} explode tags -keep-empty | {{.bin}} include id tags`,
+		Skip: map[string]string{
+			"duckdb":     "explode -keep-empty has no SQL translation (DFC144 L2)",
+			"datafusion": "explode -keep-empty has no SQL translation (DFC144 L2)",
+			"postgres":   "explode -keep-empty has no SQL translation (DFC144 L2)",
+		},
+	},
+	{
+		Name:             "flatten_addr",
+		Pipeline:         `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} where -if-expr 'addr != nil' | {{.bin}} flatten addr`,
+		ColumnsUnordered: true,
+		Skip: map[string]string{
+			"duckdb":     "flatten has no SQL translation (keys are data; DFC144 L2)",
+			"datafusion": "flatten has no SQL translation (keys are data; DFC144 L2)",
+			"postgres":   "flatten has no SQL translation (keys are data; DFC144 L2)",
+		},
+	},
+	{
+		Name:     "path_in_where",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} where -if addr.city eq NYC`,
+		Skip: map[string]string{
+			"duckdb":     "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+			"datafusion": "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+			"postgres":   "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+		},
+	},
+	{
+		Name:     "path_in_sort_and_include",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} where -if-expr 'addr != nil' | {{.bin}} sort addr.zip | {{.bin}} include id addr.city tags.0`,
+		Ordered:  true,
+		Skip: map[string]string{
+			"duckdb":     "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+			"datafusion": "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+			"postgres":   "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+		},
+	},
+	{
+		Name:     "path_in_groupby",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} where -if-expr 'addr != nil' | {{.bin}} group-by addr.city -count n | {{.bin}} sort addr.city`,
+		Ordered:  true,
+		Skip: map[string]string{
+			"duckdb":     "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+			"datafusion": "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+			"postgres":   "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+		},
+	},
+	{
+		// A literal field named "a.b" beside a json field "a" with key b:
+		// the literal wins everywhere.
+		Name:     "path_literal_dot_wins",
+		Pipeline: `{{.bin}} from csv {{.data}}/dotted.csv | {{.bin}} where -if a.b eq lit2 | {{.bin}} include n a.b`,
+		Skip: map[string]string{
+			"go-typed":    "a CSV cell holding JSON is a string in the typed lane; the path test is record-mode (DFC144 L2)",
+			"go-parallel": "a CSV cell holding JSON is a string in the typed lane; the path test is record-mode (DFC144 L2)",
+			"go-lib":      "a CSV cell holding JSON is a string in the typed lane; the path test is record-mode (DFC144 L2)",
+		},
+	},
+	{
+		Name:     "collect_is_json_on_the_wire",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -collect name names | {{.bin}} sort dept`,
+		Ordered:  true,
+		Skip: map[string]string{
+			"duckdb":     "LIST() element order is undefined across engines",
+			"datafusion": "array_agg element order is undefined across engines",
+			"postgres":   "array_agg element order is undefined across engines",
+		},
+	},
 	{
 		// DFC110: a SEEDED sample must select the identical row set in
 		// every Go lane — selection is a pure function of (seed, row

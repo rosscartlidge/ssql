@@ -258,7 +258,7 @@ func executeFromJSON(inputFile string, types typeArgs, generate bool) error {
 				r = f
 			}
 		}
-		return writeSchemaModeOutput(os.Stdout, schemaModeJSONNames(r))
+		return writeSchemaModeJSON(os.Stdout, r)
 	}
 
 	if shouldGenerate(generate) {
@@ -349,8 +349,8 @@ func generateFromJSONLCodeTyped(filename string, types typeArgs) error {
 	// Dual templates, as for CSV: the planner keeps the parallel form
 	// (typed.ReadJSONLParallel → Stream[T]) when a downstream stage
 	// accepts a Stream, else swaps to the serial typed.ReadJSONL.
-	parallelCode := fmt.Sprintf(`records := typed.ReadJSONLParallel[%s](*flagInput, runtime.GOMAXPROCS(0))`, schema.TypeName)
-	parallelImports := append(append([]string{}, imports...), "runtime")
+	parallelCode := fmt.Sprintf(`records := typed.ReadJSONLParallel[%s](*flagInput, 0)`, schema.TypeName)
+	parallelImports := append([]string{}, imports...)
 	serialCode := fmt.Sprintf(`records := typed.ReadJSONL[%s](*flagInput)`, schema.TypeName)
 	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
 	frag.Params = params

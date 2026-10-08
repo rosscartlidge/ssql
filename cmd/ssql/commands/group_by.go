@@ -447,8 +447,8 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if inputSchema != nil {
 					outputSchema = lib.NewSchema()
 					for _, field := range groupByFields {
-						if inputSchema.HasField(field) {
-							outputSchema.AddField(field, inputSchema.TypeOf(field))
+						if inputSchema.HasFieldOrPath(field) {
+							outputSchema.AddField(field, keyWireType(inputSchema, field))
 						}
 					}
 					// Add all prefixed aggregation fields
@@ -504,8 +504,8 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if inputSchema != nil {
 					outputSchema = lib.NewSchema()
 					for _, field := range groupByFields {
-						if inputSchema.HasField(field) {
-							outputSchema.AddField(field, inputSchema.TypeOf(field))
+						if inputSchema.HasFieldOrPath(field) {
+							outputSchema.AddField(field, keyWireType(inputSchema, field))
 						}
 					}
 				}
@@ -564,8 +564,8 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				outputSchema = lib.NewSchema()
 				// Add group-by fields with their input types
 				for _, field := range groupByFields {
-					if inputSchema.HasField(field) {
-						outputSchema.AddField(field, inputSchema.TypeOf(field))
+					if inputSchema.HasFieldOrPath(field) {
+						outputSchema.AddField(field, keyWireType(inputSchema, field))
 					}
 				}
 				// Add aggregation result fields (min/max keep the field's type)
@@ -738,11 +738,21 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			// (GroupByOrdered needs contiguous keys; fold state is not
 			// mergeable), single-template emission. The `useParallel` arg
 			// is vestigial now — kept for API stability but ignored.
-			handled, reason, err := emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, exprSpecs, streamExprSpecs, presorted, true)
-			if handled || err != nil {
-				return err
+			var aggFieldNames []string
+			for _, s := range aggSpecs {
+				aggFieldNames = append(aggFieldNames, s.field)
 			}
-			typedFallbackNotes = append(typedFallbackNotes, fmt.Sprintf("record fallback (%s)", reason))
+			if nestedPathIn(prevSchema, append(append([]string{}, groupByFields...), aggFieldNames...)...) {
+				// A dotted path into a nested value (addr.city) has no typed
+				// form: record mode resolves it (DFC144 Level 2).
+				typedFallbackNotes = append(typedFallbackNotes, "record fallback (a dotted path into a nested value)")
+			} else {
+				handled, reason, err := emitTypedGroupBy(inputVar, prevSchema, groupByFields, aggSpecs, exprSpecs, streamExprSpecs, presorted, true)
+				if handled || err != nil {
+					return err
+				}
+				typedFallbackNotes = append(typedFallbackNotes, fmt.Sprintf("record fallback (%s)", reason))
+			}
 		}
 	}
 
@@ -1009,4 +1019,14 @@ func groupOrderBy(fields []string) []ssql.OrderField {
 		out[i] = ssql.OrderField{Field: f}
 	}
 	return out
+}
+
+// keyWireType is a group key's wire type: the input column's, or "any"
+// for a dotted path into a nested value (addr.city), which the header
+// cannot type but must still name (DFC144 Level 2).
+func keyWireType(in *lib.Schema, field string) string {
+	if t := in.TypeOf(field); t != "" {
+		return t
+	}
+	return "any"
 }

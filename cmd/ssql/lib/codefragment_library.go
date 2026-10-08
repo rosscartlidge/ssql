@@ -542,7 +542,7 @@ func indentLines(code, indent string) string {
 
 var (
 	recordReadRe = regexp.MustCompile(`ssql\.Read(CSV|TSV)\(\*flagInput((?:,[^\n]*?)?)\)\s*\n`)
-	typedReadRe  = regexp.MustCompile(`typed\.Read(CSV|Delim)(?:Parallel)?\[[A-Za-z0-9_.]+\]\(\*flagInput(?:, runtime\.GOMAXPROCS\(0\))?\)`)
+	typedReadRe  = regexp.MustCompile(`typed\.Read(CSV|Delim)(?:Parallel)?\[[A-Za-z0-9_.]+\]\(\*flagInput(?:, (?:0|runtime\.GOMAXPROCS\(0\)))?\)`)
 )
 
 // libraryReaderForm decides whether the source was a plain delimited

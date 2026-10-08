@@ -1824,7 +1824,14 @@ func Collect(field string) AggregateFunc {
 		if result == nil {
 			result = []any{}
 		}
-		return AggResult[[]any]{val: result}
+		// The one representation of a nested value: the list as JSON text
+		// (DFC144 Level 0). A `[]any` held only in memory was a list for
+		// one stage and text after the first pipe.
+		js, err := NewJSONString(result)
+		if err != nil {
+			panic(fmt.Errorf("collect %q: %w", field, err))
+		}
+		return AggResult[JSONString]{val: js}
 	}
 }
 

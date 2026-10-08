@@ -840,8 +840,19 @@ func TestExprAggStringResults(t *testing.T) {
 	}
 }
 
-// TestExprAggWrongShapePanics: a result that is not a number, string, bool
-// or time (a map here) is a wrong expression and must panic with a clear
+// TestExprAggMapResultIsJSON: a map (or list) result is a nested value —
+// JSON text, `json` on the wire (DFC144 Level 1). Until 2026-10-08 it
+// panicked as a wrong shape.
+func TestExprAggMapResultIsJSON(t *testing.T) {
+	records := []Record{NewRecord(map[string]any{"n": int64(1)})}
+	got := StreamExprAgg(`{s: 0}`, `{s: s + n}`, `{x: s}`)(records).GetValue()
+	if js, ok := got.(JSONString); !ok || string(js) != `{"x":1}` {
+		t.Fatalf("map result = %#v, want the JSONString {\"x\":1}", got)
+	}
+}
+
+// TestExprAggWrongShapePanics: a result that is none of the accepted
+// shapes (nil here) is a wrong expression and must panic with a clear
 // message — not silently coerce to 0 (the pre-v4.60 behaviour turned a
 // wrong expression into corrupted-looking data).
 func TestExprAggWrongShapePanics(t *testing.T) {
@@ -849,13 +860,13 @@ func TestExprAggWrongShapePanics(t *testing.T) {
 	defer func() {
 		r := recover()
 		if r == nil {
-			t.Fatal("expected panic for a map-valued aggregation result, got none")
+			t.Fatal("expected panic for a nil aggregation result, got none")
 		}
-		if msg := fmt.Sprint(r); !strings.Contains(msg, "need a number, string, bool or time") {
+		if msg := fmt.Sprint(r); !strings.Contains(msg, "need a number, string, bool, time, list or map") {
 			t.Errorf("panic message %q should say what is accepted", msg)
 		}
 	}()
-	StreamExprAgg(`{s: 0}`, `{s: s + n}`, `{x: s}`)(records)
+	StreamExprAgg(`{s: 0}`, `{s: s + n}`, `nil`)(records)
 }
 
 func TestExprAggCount(t *testing.T) {

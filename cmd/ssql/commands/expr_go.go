@@ -293,6 +293,11 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 		return exprGo{}, &exprUnknownFieldError{
 			msg: fmt.Sprintf("unknown field %q (schema has %s)", name, e.fieldNames())}
 	}
+	if f.JSON {
+		// The struct field is the nested value's TEXT; len(), indexing and
+		// member access mean the list or map, which only the VM does.
+		return exprGo{}, fmt.Errorf("field %q is a nested value (json), which has no native Go emission", name)
+	}
 	switch f.GoType {
 	case "int64":
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoInt}, nil
@@ -857,6 +862,12 @@ func exprEnvConstructor(schema *lib.TypedSchema) (name string, decl string) {
 	fmt.Fprintf(&b, "// %s builds the expr-lang env for Tier-V (VM) expressions over %s.\n", name, schema.TypeName)
 	fmt.Fprintf(&b, "func %s(r %s) map[string]any {\n\treturn map[string]any{\n", name, schema.TypeName)
 	for _, f := range schema.Fields {
+		if f.JSON {
+			// A nested value: the expression sees the list or map, not
+			// the text (DFC144 Level 1), as exec's environment does.
+			fmt.Fprintf(&b, "\t\t%q: ssql.ExprValue(ssql.JSONString(r.%s)),\n", f.Name, f.GoName)
+			continue
+		}
 		fmt.Fprintf(&b, "\t\t%q: r.%s,\n", f.Name, f.GoName)
 	}
 	b.WriteString("\t}\n}")
@@ -936,8 +947,11 @@ func exprTierReason(expression string, err error) string {
 // helper that types a Tier-V result for assignment (loud exit on mismatch —
 // a typed column cannot retype). ok=false for column types with no coercion
 // (time.Time etc.), which forces record fallback.
-func exprCoerceFunc(goType string) (string, bool) {
-	switch goType {
+func exprCoerceFunc(f lib.TypedSchemaField) (string, bool) {
+	if f.JSON {
+		return "exprvm.MustCoerceJSON", true
+	}
+	switch f.GoType {
 	case "int64":
 		return "exprvm.MustCoerceInt64", true
 	case "float64":

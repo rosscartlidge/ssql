@@ -2,6 +2,7 @@ package lib
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,7 +72,7 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 	// and a filter kept or lost rows accordingly (DFC133 row-order sweep).
 	element := 0
 	for decoder.More() {
-		var rec map[string]any
+		var rec map[string]json.RawMessage
 		element++
 		if err := decoder.Decode(&rec); err != nil {
 			// The decoder cannot resynchronise after a bad element, and the
@@ -91,7 +92,16 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			record = setValueFromJSON(record, k, rec[k])
+			raw := bytes.TrimSpace(rec[k])
+			if len(raw) > 0 && (raw[0] == '[' || raw[0] == '{') {
+				record = setValueFromJSON(record, k, json.RawMessage(raw)) // nested: JSON text
+				continue
+			}
+			var v any
+			if err := json.Unmarshal(raw, &v); err != nil {
+				panic(fmt.Errorf("JSON array input: element %d, key %q: %w", element, k, err))
+			}
+			record = setValueFromJSON(record, k, v)
 		}
 
 		if !yield(record.Freeze()) {

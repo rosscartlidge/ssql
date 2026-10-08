@@ -16,6 +16,8 @@ restores them after editing.
 | `sales_wide.csv` | one row per product, one column per quarter (an empty cell on purpose) | unpivot, pivot |
 | `sheet.csv` | a merged-cell spreadsheet export | fill |
 | `app.log` | five log lines and one line of garbage | from lines, extract |
+| `events.jsonl` | six JSON rows with a `tags` list, an `addr` object and a `scores` list (one empty list, one missing object) | nested values: explode, flatten, `addr.city` paths, `len(tags)` |
+| `orders_nested.jsonl` | five orders whose `items` is a list of `{sku, qty, price}` objects (one empty) | explode then flatten to a revenue table ([Structured Data](../cli-nested-data.md)) |
 | `sensor.csv` | irregular timestamps, temp + rpm | resample, bucket, window |
 | `alarms.csv` | three alarm timestamps inside `sensor.csv`'s range | join -asof |
 | `signal.csv` | 5 Hz + 20 Hz at 100 samples/s | fft, spectrogram |

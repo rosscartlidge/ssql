@@ -1,6 +1,7 @@
 package ssql
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,9 +12,9 @@ import (
 	"reflect"
 	"slices"
 	"sort"
-	"sync"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -540,22 +541,88 @@ func Get[T any](r Record, field string) (T, bool) {
 
 	idx := r.schema.Index(field)
 	if idx < 0 || idx >= len(r.values) {
+		// Not a field: a dotted PATH into a nested value (addr.city,
+		// tags.0) resolves through the JSON text (DFC144 Level 2). A
+		// literal field with a dot in its name was found by Index above.
+		if val, ok := r.pathValue(field); ok {
+			return asType[T](val)
+		}
 		return zero, false
 	}
+	return asType[T](r.values[idx])
+}
 
-	val := r.values[idx]
-
-	// Direct type assertion first (fast path)
+// asType is Get's value step: the direct assertion, then convertTo.
+func asType[T any](val any) (T, bool) {
+	var zero T
 	if typed, ok := val.(T); ok {
 		return typed, true
 	}
-
-	// Smart type conversion (slower path)
 	if converted, ok := convertTo[T](val); ok {
 		return converted, true
 	}
-
 	return zero, false
+}
+
+// pathValue resolves a dotted path (addr.city, tags.0, a.b.c) into a
+// nested value: the longest leading segment that is a field is the head
+// (so a literal field "a.b" wins over a path into "a"), its JSONString is
+// parsed, and the remaining segments step through objects by key and
+// lists by 0-based index (negative from the end). The leaf is the scalar
+// it is (whole numbers int64), or JSON text for a nested leaf. A head
+// that is not a JSONString, or a step that does not exist, is "no such
+// field".
+func (r Record) pathValue(path string) (any, bool) {
+	if r.schema == nil || len(path) == 0 {
+		return nil, false
+	}
+	for i := strings.LastIndexByte(path, '.'); i > 0; i = strings.LastIndexByte(path[:i], '.') {
+		idx := r.schema.Index(path[:i])
+		if idx < 0 || idx >= len(r.values) {
+			continue
+		}
+		js, ok := r.values[idx].(JSONString)
+		if !ok {
+			return nil, false
+		}
+		return jsonPathValue(js, path[i+1:])
+	}
+	return nil, false
+}
+
+// jsonPathValue steps through parsed JSON text by the dotted rest of a
+// path.
+func jsonPathValue(js JSONString, rest string) (any, bool) {
+	cur := ExprValue(js)
+	for _, step := range strings.Split(rest, ".") {
+		switch c := cur.(type) {
+		case map[string]any:
+			v, ok := c[step]
+			if !ok {
+				return nil, false
+			}
+			cur = v
+		case []any:
+			i, err := strconv.Atoi(step)
+			if err != nil {
+				return nil, false
+			}
+			if i < 0 {
+				i += len(c)
+			}
+			if i < 0 || i >= len(c) {
+				return nil, false
+			}
+			cur = c[i]
+		default:
+			return nil, false
+		}
+	}
+	switch cur.(type) {
+	case []any, map[string]any:
+		return JSONValue(cur), true
+	}
+	return cur, true
 }
 
 // GetOr retrieves a typed value with a default fallback.
@@ -585,12 +652,17 @@ func GetOr[T any](r Record, field string, defaultVal T) T {
 	return defaultVal
 }
 
-// Has checks if a field exists
+// Has checks if a field exists — or, for a dotted path (addr.city), that
+// the path resolves into a nested value (DFC144 Level 2).
 func (r Record) Has(field string) bool {
 	if r.schema == nil {
 		return false
 	}
-	return r.schema.Has(field)
+	if r.schema.Has(field) {
+		return true
+	}
+	_, ok := r.pathValue(field)
+	return ok
 }
 
 // HasValue reports whether the record has the field AND a value for it.
@@ -603,7 +675,11 @@ func (r Record) HasValue(field string) bool {
 		return false
 	}
 	idx := r.schema.Index(field)
-	return idx >= 0 && idx < len(r.values) && r.values[idx] != nil
+	if idx < 0 {
+		v, ok := r.pathValue(field)
+		return ok && v != nil
+	}
+	return idx < len(r.values) && r.values[idx] != nil
 }
 
 // Len returns the number of fields in the record
@@ -702,11 +778,29 @@ func (r Record) Equal(other Record) bool {
 		if otherIdx < 0 {
 			return false
 		}
-		if r.values[i] != other.values[otherIdx] {
+		if !valuesEqual(r.values[i], other.values[otherIdx]) {
 			return false
 		}
 	}
 	return true
+}
+
+// valuesEqual compares two field values. Scalars, JSONString and time
+// compare with ==; a value whose type == would panic on (a slice, a map,
+// a Record holding one) compares structurally. Until 2026-10-08 Equal
+// used == directly and panicked on a []any (DFC144 §1.5 c).
+func valuesEqual(a, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
+	if ta != tb {
+		return false
+	}
+	if ta.Comparable() {
+		return a == b
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // ============================================================================
@@ -727,15 +821,56 @@ func (r Record) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// UnmarshalJSON implements json.Unmarshaler
+// UnmarshalJSON implements json.Unmarshaler. A nested array or object
+// becomes a JSONString holding its text (the one representation of a
+// nested value, DFC144 Level 0); scalars decode as encoding/json does.
 func (r *Record) UnmarshalJSON(data []byte) error {
-	fields := make(map[string]any)
-	if err := json.Unmarshal(data, &fields); err != nil {
+	raw := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+	fields := make(map[string]any, len(raw))
+	for k, v := range raw {
+		val, err := jsonRawToValue(v)
+		if err != nil {
+			return err
+		}
+		fields[k] = val
 	}
 	// Use NewRecord to create schema and values
 	*r = NewRecord(fields)
 	return nil
+}
+
+// JSONOrNull is the record value for a typed program's `json` field: the
+// text re-wrapped as a JSONString, or no value when the text is empty
+// (the field was missing or null in the row — a struct string has no
+// other way to say so). Generated typed→Record boundaries call it; an
+// empty JSONString written raw would be invalid JSON on the wire.
+func JSONOrNull(text string) any {
+	if text == "" {
+		return nil
+	}
+	return JSONString(text)
+}
+
+// jsonRawToValue turns one raw JSON value into a record value: an array
+// or object is a JSONString (compacted), anything else decodes as
+// encoding/json does (numbers as float64).
+func jsonRawToValue(raw json.RawMessage) (any, error) {
+	t := bytes.TrimSpace(raw)
+	if len(t) > 0 && (t[0] == '[' || t[0] == '{') {
+		var buf bytes.Buffer
+		if err := json.Compact(&buf, t); err != nil {
+			return nil, err
+		}
+		return JSONString(buf.String()), nil
+	}
+	var v any
+	if err := json.Unmarshal(t, &v); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 // MarshalJSON implements json.Marshaler for MutableRecord
@@ -1928,6 +2063,9 @@ func isValueType(value any) bool {
 	// Record type
 	case Record:
 		return true
+	// Aggregation results (Collect), in the Value constraint since v4
+	case []any:
+		return true
 	// Iterator types - all numeric variants allowed for ergonomics
 	case iter.Seq[int], iter.Seq[int8], iter.Seq[int16], iter.Seq[int32], iter.Seq[int64]:
 		return true
@@ -2632,8 +2770,9 @@ func isSimpleValue(value any) bool {
 		return true
 	case JSONString:
 		return true
-	// Complex types not allowed for grouping
-	case Record:
+	// Complex types not allowed for grouping: a Record, and a slice or
+	// map (which would panic as a map key; DFC144 §1.5 d)
+	case Record, []any, map[string]any:
 		return false
 	default:
 		// Check if it's an iter.Seq (not allowed)

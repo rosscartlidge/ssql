@@ -1,0 +1,6 @@
+{"id":3,"user":"carol","tags":["rust","wasm"],"addr":{"city":"Atlanta","zip":"30301"},"scores":[7,3]}
+{"id":1,"user":"alice","tags":["go","rust"],"addr":{"city":"NYC","zip":"10001"},"scores":[10,20,30]}
+{"id":4,"user":"dan","tags":[],"addr":{"city":"Chicago","zip":"60601"},"scores":[1]}
+{"id":2,"user":"bob","tags":["c"],"addr":{"city":"SF","zip":"94105"},"scores":[5]}
+{"id":6,"user":"frank","tags":["go","wasm","c"],"addr":{"city":"NYC","zip":"10002"},"scores":[9,9]}
+{"id":5,"user":"eve","tags":["go"],"scores":[]}

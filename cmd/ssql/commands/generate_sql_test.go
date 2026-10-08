@@ -333,6 +333,11 @@ func TestExprToSQL(t *testing.T) {
 		{`active ? "yes" : "no"`, `(CASE WHEN active THEN 'yes' ELSE 'no' END)`},
 		{`min(a, b) < 10`, `(least(a, b) < 10)`},
 		{`abs(actual - expected) < 0.01`, `(abs((actual - expected)) < 0.01)`},
+		// nested values (DFC144 Level 1): member access and list membership
+		{`foo.bar > 1`, `(struct_extract(foo, 'bar') > 1)`},
+		{`tags[0] == "go"`, `(list_extract(tags, 1) = 'go')`},
+		{`tags[-1] == "go"`, `(list_extract(tags, -1) = 'go')`},
+		{`x in ids`, `list_contains(ids, x)`},
 	}
 	for _, c := range cases {
 		got, err := exprToSQL(c.in)
@@ -350,9 +355,8 @@ func TestExprToSQL(t *testing.T) {
 	failures := []struct{ in, wantSub string }{
 		{`split(name, ",")`, "split"},
 		{`all(items, # > 0)`, "all"},
-		{`foo.bar > 1`, "member access"},
+		{`foo[bar] > 1`, "computed key"},
 		{`trimPrefix(name, "x")`, "trimPrefix"},
-		{`x in ids`, "list literal"},
 	}
 	for _, f := range failures {
 		_, err := exprToSQL(f.in)

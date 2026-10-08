@@ -534,6 +534,10 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 func advisoryFromSchema(schema *lib.TypedSchema) map[string]string {
 	m := make(map[string]string, len(schema.Fields))
 	for _, f := range schema.Fields {
+		if f.JSON {
+			m[f.Name] = "json" // a nested value: no native emission, the VM opens it
+			continue
+		}
 		m[f.Name] = f.GoType
 	}
 	return m
@@ -572,8 +576,8 @@ func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, 
 	// fragments and either keeps the parallel form (typed.ReadCSVParallel
 	// → Stream[T]) or downgrades to the serial alternative
 	// (typed.ReadCSV → iter.Seq[T]) when no downstream needs Stream.
-	parallelCode := fmt.Sprintf(`records := typed.ReadCSVParallel[%s](*flagInput, runtime.GOMAXPROCS(0))`, schema.TypeName)
-	parallelImports := append(append([]string{}, imports...), "runtime")
+	parallelCode := fmt.Sprintf(`records := typed.ReadCSVParallel[%s](*flagInput, 0)`, schema.TypeName)
+	parallelImports := append([]string{}, imports...)
 	serialCode := fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput)`, schema.TypeName)
 	serialImports := append([]string{}, imports...)
 

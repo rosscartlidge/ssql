@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -145,4 +146,63 @@ func TestCustomFunctions(t *testing.T) {
 			t.Errorf("sha256 hash length = %d, want 64", len(got))
 		}
 	})
+}
+
+// DFC144 Level 1: an expression sees a nested value as the list or map it
+// is. Before 2026-10-08 len(tags) on ["go","rust"] was 13 (the text's
+// length) and tags[0] was 91 (the byte '[').
+func TestCompileExprOpensNestedValues(t *testing.T) {
+	rec := ssql.MakeMutableRecord().
+		String("name", "Alice").
+		JSONString("tags", ssql.JSONString(`["go","rust"]`)).
+		JSONString("addr", ssql.JSONString(`{"city":"NYC","zip":"10001"}`)).
+		JSONString("scores", ssql.JSONString(`[10,20,30]`)).
+		Freeze()
+	cases := map[string]any{
+		`len(tags)`:               2,
+		`tags[0]`:                 "go",
+		`addr.city`:               "NYC",
+		`"go" in tags`:            true,
+		`sort(scores)[-1]`:        int64(30),
+		`len(getOr("tags", []))`:  2,
+		`len(name)`:               5,
+	}
+	for expr, want := range cases {
+		eval, err := CompileExpr(expr)
+		if err != nil {
+			t.Fatalf("compile %q: %v", expr, err)
+		}
+		got, err := eval(rec)
+		if err != nil {
+			t.Fatalf("eval %q: %v", expr, err)
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("%s = %v (%T), want %v", expr, got, got, want)
+		}
+	}
+}
+
+// After `flatten items`, the columns are named items.qty, items.price;
+// an expression reaches them as items.qty (DFC144 Level 2).
+func TestCompileExprReachesDottedColumns(t *testing.T) {
+	rec := ssql.MakeMutableRecord().
+		Int("items.qty", 3).
+		Float("items.price", 1.5).
+		String("items.sku", "PEN").
+		String("other", "x").
+		Freeze()
+	eval, err := CompileExpr(`items.qty * items.price`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := eval(rec)
+	if err != nil || fmt.Sprint(got) != "4.5" {
+		t.Fatalf("items.qty * items.price = %v, %v", got, err)
+	}
+	// a real field named like the head wins
+	rec2 := ssql.MakeMutableRecord().String("a", "real").String("a.b", "col").Freeze()
+	eval2, _ := CompileExpr(`a`)
+	if got, _ := eval2(rec2); got != "real" {
+		t.Errorf("a real field must win over synthesis, got %v", got)
+	}
 }

@@ -260,3 +260,32 @@ func TestExprToGoBool(t *testing.T) {
 		t.Errorf("error %q should name the boolean contract", err)
 	}
 }
+
+// A `json` field (a nested value held as its text) has no native emission:
+// len(), indexing, member access and even a bare reference mean the list
+// or map, which only the VM has (DFC144 Level 1). A silent string-length
+// len() would be the wrong answer the CLI gave before 2026-10-08.
+func TestExprToGoNestedFieldRefuses(t *testing.T) {
+	schema := &lib.TypedSchema{TypeName: "Row", Fields: []lib.TypedSchemaField{
+		{Name: "tags", GoName: "Tags", GoType: "string", JSON: true},
+		{Name: "n", GoName: "N", GoType: "int64"},
+	}}
+	for _, expr := range []string{"len(tags)", `tags == "x"`, "tags + 1"} {
+		if _, err := exprToGo(expr, schema, "r"); err == nil || !strings.Contains(err.Error(), "nested value") {
+			t.Errorf("exprToGo(%q) = %v, want a nested-value refusal", expr, err)
+		}
+	}
+	// Indexing and `in` over a field refuse before the field is even
+	// looked at (member access, non-literal list): still a refusal.
+	for _, expr := range []string{"tags[0]", `"go" in tags`} {
+		if _, err := exprToGo(expr, schema, "r"); err == nil {
+			t.Errorf("exprToGo(%q) succeeded; it must refuse (VM fallback)", expr)
+		}
+	}
+	if _, err := exprToGoRecord("len(tags)", map[string]string{"tags": "json", "n": "int64"}, "r"); err == nil || !strings.Contains(err.Error(), "json") {
+		t.Errorf("record advisory json field: %v, want a refusal naming json", err)
+	}
+	if _, err := exprToGo("n + 1", schema, "r"); err != nil {
+		t.Errorf("a scalar beside a json field still transpiles: %v", err)
+	}
+}

@@ -61,6 +61,21 @@ func castTypeNoun(t FieldType) string {
 // non-zero; a numeric string may be written as a float ("2.5" → int 2).
 func CastValue(v any, target FieldType) (any, bool) {
 	switch target {
+	case FieldTypeJSON:
+		// A nested value: its JSON text. A JSONString is accepted as it is;
+		// a string must be a well-formed JSON array or object (DFC144 L0).
+		switch x := v.(type) {
+		case JSONString:
+			if x.IsValid() {
+				return x, true
+			}
+		case string:
+			t := strings.TrimSpace(x)
+			if len(t) > 0 && (t[0] == '[' || t[0] == '{') && JSONString(t).IsValid() {
+				return JSONString(t), true
+			}
+		}
+		return nil, false
 	case FieldTypeString:
 		switch x := v.(type) {
 		case string:
@@ -161,6 +176,8 @@ func CastField(mut MutableRecord, src Record, field string, target FieldType, in
 		return mut.Null(field)
 	}
 	switch x := out.(type) {
+	case JSONString:
+		return mut.JSONString(field, x)
 	case string:
 		return mut.String(field, x)
 	case int64:

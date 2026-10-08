@@ -513,6 +513,49 @@ those values are left empty, and `cast` says how many there were.
 ssql from employees.csv | ssql cast -type hire_date time | ssql where -if hire_date ge 2021-01-01 | ssql update -set-expr year 'hire_date.Year()' | ssql include name hire_date year | ssql sort hire_date | ssql to table
 ```
 
+### Nested JSON: lists and objects in a field
+
+JSON data often arrives with structure inside a field: a list of tags, an
+address object. `events.jsonl` has both. ssql carries such a value
+through the pipeline as one `json` field, and three things let you work
+with it. A **dotted path** names something inside the value wherever a
+field name goes — `addr.city`, `tags.0` (the first element) — so `where`,
+`sort`, `group-by`, `include` and `to table` reach in without any new
+syntax:
+
+```bash
+ssql from events.jsonl | ssql where -if addr.city eq NYC | ssql to table user addr.city tags.0 -only
+```
+
+**Expressions see the value as the list or object it is** — `len(tags)`
+counts elements, `"go" in tags` tests membership, and every list and map
+function in [EXPRESSIONS](EXPRESSIONS.md) applies:
+
+```bash
+ssql from events.jsonl | ssql where -if-expr '"go" in tags and len(scores) > 0' | ssql update -set-expr n 'len(tags)' -set-expr best 'sort(scores)[-1]' | ssql include user n best | ssql to table
+```
+
+And two commands change the shape. `explode` makes one row per list
+element — the move that turns nested data into the flat rows everything
+else is good at — and `flatten` turns an object's keys into columns named
+`addr.city`, `addr.zip`:
+
+```bash
+ssql from events.jsonl | ssql explode tags | ssql group-by tags -count n | ssql sort -desc n | ssql to table
+```
+
+```bash
+ssql from events.jsonl | ssql flatten addr | ssql group-by addr.city -count n | ssql sort addr.city | ssql to table
+```
+
+A row whose list is empty gives no row (add `-keep-empty` for one row
+with no value, as a left join would); `group-by -collect` is the inverse
+of `explode`. A nested value that just passes through is written back
+exactly as it came, as JSON. The [Structured Data](cli-nested-data.md)
+codelab takes this further — a list of item objects to a revenue table,
+the rules `flatten` enforces, and how the same pipelines come out as Go
+and as SQL.
+
 That is the everyday toolkit. Everything in Part 2 makes these same
 pipelines faster, bigger, or shareable — the vocabulary does not change.
 

@@ -185,6 +185,9 @@ func corpusData(t *testing.T) string {
 			// A JSON ARRAY with NULLs in the first element AND in a later
 			// one: the later null in the int column `n` used to become 0.
 			"null_mixed.json": `[{"id":1,"score":null,"n":5},{"id":2,"score":2.5,"n":null},{"id":3,"score":4,"n":7}]`,
+			"nested.jsonl":      corpusNestedJSONL,
+			"dotted.csv":        "a.b,a,n\nlit1,\"{\"\"b\"\":\"\"path1\"\"}\",1\nlit2,\"{\"\"b\"\":\"\"path2\"\"}\",2\n",
+			"nested_array.json": corpusNestedArrayJSON,
 			"null_first.jsonl": "{\"id\":1,\"note\":null,\"score\":null}\n{\"id\":2,\"note\":\"b\",\"score\":4}\n{\"id\":3,\"note\":\"c\",\"score\":2.5}\n",
 			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
 			"app.log":                corpusAppLog,
@@ -306,6 +309,25 @@ func TestPipelineCorpus(t *testing.T) {
 			Pipeline:   `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} to csv /nonexistent-ssql-dir/out.csv`,
 			ExpectFail: true,
 			Contains:   []string{"no such file or directory"},
+		},
+		{
+			// DFC144 Level 2: explode and flatten are record-shaped stages
+			// (the planner inserts the boundary in a typed pipeline).
+			Name:     "explode_tags",
+			Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} explode tags | {{.bin}} group-by tags -count n | {{.bin}} sort tags | {{.bin}} to csv`,
+			Contains: []string{"go,2", "rust,2", "c,1"},
+			Excludes: []string{"Dan"},
+		},
+		{
+			Name:     "flatten_addr_then_path_groupby",
+			Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} flatten addr | {{.bin}} where -if addr.city ne "" | {{.bin}} sort id | {{.bin}} include id addr.city addr.zip | {{.bin}} to csv`,
+			Contains: []string{"id,addr.city,addr.zip", "1,NYC,10001", "4,Chicago,60601"},
+		},
+		{
+			Name:     "path_in_where_without_flatten",
+			Pipeline: `{{.bin}} from jsonl {{.data}}/nested.jsonl | {{.bin}} where -if addr.city eq NYC | {{.bin}} include name tags.0 | {{.bin}} to csv`,
+			Contains: []string{"name,tags.0", "Alice,go"},
+			Excludes: []string{"Bob"},
 		},
 		{
 			// Stage code must never exit the process: inside a library
@@ -888,4 +910,24 @@ a,-10000000000000000
 b,0.1
 b,0.2
 b,0.3
+`
+
+// Nested values (DFC144): shuffled rows, distinct scalars, a list and an
+// object per row, one row with an empty list and one with a missing
+// field, so a lane that stringifies, re-orders keys or drops a nested
+// value diverges.
+const corpusNestedJSONL = `{"id":3,"name":"Carol","tags":["rust"],"addr":{"zip":"30301","city":"Atlanta"},"scores":[7,3]}
+{"id":1,"name":"Alice","tags":["go","rust"],"addr":{"zip":"10001","city":"NYC"},"scores":[10,20,30]}
+{"id":4,"name":"Dan","tags":[],"addr":{"zip":"60601","city":"Chicago"},"scores":[1]}
+{"id":2,"name":"Bob","tags":["c"],"addr":{"zip":"94105","city":"SF"},"scores":[5]}
+{"id":5,"name":"Eve","tags":["go"],"scores":[]}
+`
+
+const corpusNestedArrayJSON = `[
+ {"id":3,"name":"Carol","tags":["rust"],"addr":{"zip":"30301","city":"Atlanta"},"scores":[7,3]},
+ {"id":1,"name":"Alice","tags":["go","rust"],"addr":{"zip":"10001","city":"NYC"},"scores":[10,20,30]},
+ {"id":4,"name":"Dan","tags":[],"addr":{"zip":"60601","city":"Chicago"},"scores":[1]},
+ {"id":2,"name":"Bob","tags":["c"],"addr":{"zip":"94105","city":"SF"},"scores":[5]},
+ {"id":5,"name":"Eve","tags":["go"],"scores":[]}
+]
 `

@@ -24,7 +24,7 @@ import (
 // codelab against the installed ssql, so a reader can self-test their
 // install (`./codelab-run.sh`). embed.go itself is not included.
 //
-//go:embed *.csv *.parquet *.log README.md codelab-run.sh
+//go:embed *.csv *.parquet *.log *.jsonl README.md codelab-run.sh
 var Files embed.FS
 
 // Names lists the embedded fixture files, sorted.
