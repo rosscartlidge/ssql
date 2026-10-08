@@ -3185,17 +3185,17 @@ func jsonHeader(path string) []string {
 		return nil
 	}
 	defer f.Close()
-	sr := lib.ReadJSONLWithSchema(bufio.NewReader(f))
-	if sr.Schema != nil && len(sr.Schema.Fields) > 0 {
-		for _, c := range sr.Schema.Fields {
-			sqlColumnKinds[c] = sr.Schema.Types[c]
+	fields, types, records := openJSONSource(bufio.NewReader(f))
+	if records == nil {
+		for _, c := range fields {
+			sqlColumnKinds[c] = types[c]
 		}
-		return append([]string(nil), sr.Schema.Fields...)
+		return append([]string(nil), fields...)
 	}
 	var cols []string
 	func() {
 		defer func() { _ = recover() }() // a malformed first line: unknown schema
-		for rec := range sr.Records {
+		for rec := range records {
 			for k := range rec.KeysIter() {
 				cols = append(cols, k)
 				if v, ok := ssql.Get[any](rec, k); ok {

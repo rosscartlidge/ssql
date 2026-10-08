@@ -102,18 +102,18 @@ func writeSchemaModeDelimited(w io.Writer, headers []string, records iter.Seq[ss
 	return writeSchemaModeOutputTyped(w, headers, types)
 }
 
-// writeSchemaModeJSON is the schema-mode output of a JSON/JSONL source:
-// the _schema header's names and types when present, otherwise the
-// names in the first record's key order, typed from a sample like a
-// delimited source (so a nested value shows `json`, not `any` — DFC144
-// Level 0).
-func writeSchemaModeJSON(w io.Writer, r io.Reader) error {
-	br := bufio.NewReader(r)
-	var records iter.Seq[ssql.Record]
+// openJSONSource reads a JSON source (a JSON array file or JSON Lines,
+// told apart by the first non-blank byte) far enough to know its shape:
+// a `_schema` header's fields and types when the lines carry one, else
+// the records to sample. Shared by schema mode and the SQL translator's
+// column seeding (jsonHeader) so the two cannot disagree about which
+// files have a header (the translator read array files as lines until
+// 2026-10-08 and so knew no columns for them).
+func openJSONSource(br *bufio.Reader) (fields []string, types map[string]string, records iter.Seq[ssql.Record]) {
 	for {
 		b, err := br.Peek(1)
 		if err != nil {
-			return writeSchemaModeOutputTyped(w, nil, nil)
+			return nil, nil, nil
 		}
 		if b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r' {
 			br.ReadByte()
@@ -124,13 +124,24 @@ func writeSchemaModeJSON(w io.Writer, r io.Reader) error {
 	if b, _ := br.Peek(1); b[0] == '[' {
 		// A JSON array file has no header; sample its elements (this path
 		// returned no names at all until 2026-10-08).
-		records = lib.ReadJSON(br)
-	} else {
-		sr := lib.ReadJSONLWithSchema(br)
-		if sr.Schema != nil && len(sr.Schema.Fields) > 0 {
-			return writeSchemaModeOutputTyped(w, sr.Schema.Fields, sr.Schema.Types)
-		}
-		records = sr.Records
+		return nil, nil, lib.ReadJSON(br)
+	}
+	sr := lib.ReadJSONLWithSchema(br)
+	if sr.Schema != nil && len(sr.Schema.Fields) > 0 {
+		return sr.Schema.Fields, sr.Schema.Types, nil
+	}
+	return nil, nil, sr.Records
+}
+
+// writeSchemaModeJSON is the schema-mode output of a JSON/JSONL source:
+// the _schema header's names and types when present, otherwise the
+// names in the first record's key order, typed from a sample like a
+// delimited source (so a nested value shows `json`, not `any` — DFC144
+// Level 0).
+func writeSchemaModeJSON(w io.Writer, r io.Reader) error {
+	fields, headerTypes, records := openJSONSource(bufio.NewReader(r))
+	if records == nil {
+		return writeSchemaModeOutputTyped(w, fields, headerTypes)
 	}
 	var names []string
 	types := map[string]string{}

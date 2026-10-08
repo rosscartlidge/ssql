@@ -5,6 +5,18 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `generate sql` on a JSON **array** file emitted `SELECT * REPLACE (… AS
+  new)` for a column an `update -set-expr` creates, which DuckDB
+  refuses (`Column "new" in REPLACE list not found`): the translator's
+  column seeding read the file as JSON Lines and so knew no columns.
+  Schema mode and the translator now share one array-or-lines reader
+  (`openJSONSource`); pinned by the `nested_array_file_new_path_column`
+  equivalence case. Found re-measuring DFC136 §7b against v4.113.0.
+
 ## [4.113.0] - 2026-10-08
 
 ### Changed

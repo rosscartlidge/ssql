@@ -7,7 +7,9 @@ Last modified: 2026-10-08
 [Back to Index](./README.md)
 
 Status: **assessment, no decisions; updated 2026-09-28 for v4.108.0;
-addendum §7a on non-scalar values 2026-10-08 (see DFC144).**
+addendum §7a on non-scalar values 2026-10-08 (see DFC144); §7b
+re-measures that row against v4.113.0, which shipped DFC144 Levels 0–2
+the same day.**
 Ross, 2026-09-23: "a good time to do a feature compare with DuckDB. What
 does it look like now?" The previous comparison is
 [DFC060](./duckdb-vs-ssql.md) (March 2026, with a measured appendix from
@@ -93,7 +95,7 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Fill missing (carry down, default) | ◐ (window tricks) | ● | `fill -down`, `-default` |
 | Describe / profile | ● (`SUMMARIZE`) | ● | `describe` |
 | Signal processing (FFT, convolution, correlation, STFT) | ○ | ● | GPU-accelerated build for the heavy ones |
-| Nested / list / struct types | ● | ○ | Re-assessed 2026-10-08 (§7a, [DFC144](./dfc144_non_scalar_values.md)): nested JSON passes through as text and nothing can look inside it — `len(tags)` counts characters, `addr.city` errors; `group-by -collect` builds a list that is text one stage later; the expression list/map functions work only on values built inside the expression. The ◐ of September was generous |
+| Nested / list / struct types | ● | ◐ | v4.113.0 (§7b, [DFC144](./dfc144_non_scalar_values.md) Levels 0–2): one `json` type every stage honours; expressions see lists and maps (`len(tags)` is 2, `tags[0]`, `addr.city`, `"go" in tags`, results stored as `json`); `explode` / `flatten`; dotted paths wherever a field name goes, completable; `-collect` round-trips. No typed nested tier (DuckDB's LIST/STRUCT/MAP/UNION with lambdas and recursive UNNEST) — [DFC145](./dfc145_nested_tables.md) records the design and "not now". Was ○ in §7a (2026-10-08 morning), ◐ in September on weaker grounds |
 | Full-text search, spatial, vector | ● (ext) | ○ | |
 
 ### 2.3 Expressions
@@ -192,12 +194,17 @@ is the list after it. The original ranking is kept in §8.
    formatting, `date_trunc` beyond `bucket`, timezone conversion,
    intervals as values. Each is small; together they are a gap people
    feel daily. Now the largest remaining one.
-2. **Non-scalar values** (added 2026-10-08, §7a). Anyone whose data
-   arrives as JSON — API exports, logs — meets it on the first
-   question: `len(tags)` silently gives the wrong number. DuckDB has
-   LIST/STRUCT with a full function family and UNNEST, and a JSON type
-   with paths as the fallback. [DFC144](./dfc144_non_scalar_values.md)
-   has the survey, four levels of support and the decisions.
+2. **Non-scalar values** (added 2026-10-08, §7a; narrowed the same
+   day, §7b). The first-question failures are gone in v4.113.0:
+   `len(tags)` counts elements, `addr.city` is a field name, `explode`
+   is UNNEST. What DuckDB still has and ssql does not is the **typed**
+   nested tier — LIST/STRUCT/MAP/UNION as column types with a function
+   family, lambdas and recursive UNNEST — and the `nest` inverse of
+   `flatten`. [DFC144](./dfc144_non_scalar_values.md) has the survey
+   and the "Built" notes; [DFC145](./dfc145_nested_tables.md) the
+   design for the typed tier and the decision not to build it yet. The
+   remaining gap is one of depth, met by fewer people than the
+   date/time one.
 3. **Joins beyond equality and ASOF.** General non-equi joins (`ON a.x <
    b.y`) and LATERAL. Rare in pipeline work; no plan.
 4. **Automatic spilling.** ssql spills when asked (`-spill DIR`), DuckDB
@@ -263,12 +270,13 @@ them:
    interval values; each with transpiler and SQL translation and a
    differential entry. The one gap on the list that an analyst meets
    daily.
-2. Non-scalar values, Levels 0–2 of
-   [DFC144](./dfc144_non_scalar_values.md) (added 2026-10-08, §7a): one
-   in-memory representation and `json` as the honest schema type, then
-   expressions that see nested values, then `explode`/`flatten` and
-   dotted paths as field names. The September list did not have it
-   because the matrix row under-stated the gap.
+2. ~~Non-scalar values, Levels 0–2 of
+   [DFC144](./dfc144_non_scalar_values.md)~~ — shipped in v4.113.0 the
+   day it was added (§7b). What is left of the unit: `nest FIELD COL…`
+   (flatten's inverse, DuckDB `struct_pack`), dotted paths and
+   `flatten` in `generate sql`, `window -collect` and a typed
+   `-collect`; the typed nested tier itself is
+   [DFC145](./dfc145_nested_tables.md), deferred.
 3. A Python binding over `ssql run` documents (§4.6), after DFC134's
    JSON Schema (§5.5), so the binding is generated, not written.
 4. A faster run codec for `-spill` (DFC137 §1a: gob over `[]any` is
@@ -359,7 +367,72 @@ representation (`JSONString`), `json` as the schema type every stage
 honours, expressions that parse referenced fields lazily,
 `explode`/`flatten`, dotted paths as field names completable from
 `SSQL_MODE=schema`, and the typed nested tier deferred — is in DFC144
-§§4–7; its seven decisions are §8 there.
+§§4–7; its seven decisions are §8 there. §7b, written after the build
+the same day, re-measures the row.
+
+## 7b. Addendum, 2026-10-08 (evening): Levels 0–2 shipped in v4.113.0
+
+Ross: "could you update the DuckDB comparison DFC now that we have done
+the 0–2 work from DFC144." The probe table of DFC144 §1.1, re-run on
+the installed v4.113.0 against a JSON array file with `tags` a list
+and `addr` an object, in every lane that applies:
+
+| Probe | v4.112.0 (§7a) | v4.113.0 | DuckDB |
+|---|---|---|---|
+| `len(tags)` on `["go","rust"]` | 13 (characters) | 2 | 2 |
+| `tags[0]` | 91 (the byte `[`) | `go` | `tags[1]` is `go` |
+| `addr.city` in an expression | error | `NYC` | `NYC` |
+| `"go" in tags` | error | true | `list_contains` |
+| `where -if addr.city eq NYC`, `include id addr.city`, `sort`/`group-by` on a path | unknown field | works; a literal `a.b` column wins | `struct_extract` |
+| `explode tags` → `group-by tags -count` | no command | 3 rows, counts | `UNNEST` |
+| `flatten addr` | no command | `addr.city`, `addr.zip` columns | `addr.*` |
+| `-collect` then `len()` next stage | characters | elements (round-trips as `json`) | `list()` |
+| `SSQL_MODE=schema` on a JSON file | names only, `any` | `addr: json`, `tags: json`, `addr.city: string`, `addr.zip: string` | `DESCRIBE` gives STRUCT/LIST |
+| In-memory representations | three | one (`JSONString`) | one typed |
+| `to json` of a nested value | double-encoded | emitted as JSON | — |
+
+Every lane agrees on these: exec, record and typed Go, the library
+form, and DuckDB through `generate sql` (which now emits
+`struct_extract`, `list_extract` with the 0→1 shift, `list_contains`,
+`list_sort`/`list_distinct`/`flatten`/`array_to_string` and `unnest`).
+The `TestPipelineEquivalence` cases named in DFC144 §8 "Built" pin
+them. Writing this addendum found one more lane disagreement:
+`generate sql` seeded a JSON **array** file's columns by reading it as
+JSON Lines, knew none, and emitted `* REPLACE (… AS city)` for a new
+path column — fixed by sharing the array-or-lines detection
+(`openJSONSource`) between schema mode and the translator, with an
+equivalence case watched to fail first. One more instance of "a bug
+fixed in one path is still live in the others".
+
+**What the row's ◐ means now.** ssql has the whole of DuckDB's untyped
+tier and more than DuckDB's JSON type offers at the command line:
+paths are field names everywhere a field name goes and Ctrl-O completes
+them; `explode` and `flatten` are one word each; the scalar fast path
+is untouched (a `JSONString` is parsed only when an expression names
+it). What ssql does not have is DuckDB's **typed** tier:
+
+- LIST/STRUCT/MAP/UNION as column types, so a nested field's shape is
+  known to the schema and to typed codegen. ssql types every nested
+  value `json`; a typed program holds the text in a `string` and opens
+  it per row.
+- The `list_*` family with lambdas (`list_transform`, `list_filter`,
+  `list_reduce`). ssql's expression language has `map`/`filter`/`sum`
+  closures over a parsed list inside one expression, which covers the
+  row-local cases, but nothing composes across stages the way a
+  `list<struct>` column does.
+- Recursive UNNEST and `struct_pack` (the inverse of `flatten`; ssql
+  spells it `update -set-expr addr '{city: city, zip: zip}' | exclude
+  city zip` until a `nest` command exists).
+- In `generate sql`: `flatten` (keys are data) and `explode -keep-empty`
+  (needs LATERAL) are refused by name; Postgres and DataFusion refuse
+  nested values entirely (the PG prologue copies CSV text).
+- `window -collect` and a typed `-collect` remain record-only.
+
+The honest ranking in §4 moves this gap from second to a tie for third:
+the daily failures are closed; what remains is depth that API-export
+and log work rarely needs, and [DFC145](./dfc145_nested_tables.md) has
+the design (the one structured value is a relation; commands scope into
+it with `-in FIELD`; a `table{…}` type tier) and the reasons to wait.
 
 ## 8. References
 
@@ -382,4 +455,8 @@ honours, expressions that parse referenced fields lazily,
   comparison led to, each with a "built" subsection.
 - [DFC144](./dfc144_non_scalar_values.md) — non-scalar values: the
   survey behind §7a, DuckDB's two tiers, four levels of support, the
-  decisions. Supersedes [DFC052](./compound-types-investigation.md).
+  decisions and the "Built" notes behind §7b. Supersedes
+  [DFC052](./compound-types-investigation.md).
+- [DFC145](./dfc145_nested_tables.md) — nested tables: the typed tier
+  as a relation-valued field, with the nested relational research; the
+  "not now" that keeps §7b's row at ◐.

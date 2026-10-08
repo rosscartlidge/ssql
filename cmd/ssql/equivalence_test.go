@@ -947,6 +947,23 @@ var equivCases = []EquivCase{
 			"postgres":    "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
 		},
 	},
+	{
+		// A NEW column from a path on a JSON ARRAY file: the SQL translator
+		// must know the file's columns (openJSONSource) or it emits
+		// `* REPLACE (… AS city)` for a column that does not exist — it
+		// read array files as JSON Lines and knew none until 2026-10-08.
+		Name:             "nested_array_file_new_path_column",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} where -if-expr 'addr != nil' | {{.bin}} update -set-expr city 'addr.city' | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip: map[string]string{
+			"go-typed":    "a JSON array file has no typed form (sampling is JSONL only)",
+			"go-parallel": "a JSON array file has no typed form (sampling is JSONL only)",
+			"go-lib":      "a JSON array file has no typed form (sampling is JSONL only)",
+			"datafusion":  "DataFusion refuses a JSON array file",
+			"postgres":    "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
+		},
+	},
 	// DFC144 Level 1: expressions see nested values as lists and maps, in
 	// every lane; a non-scalar result is a json value.
 	{
