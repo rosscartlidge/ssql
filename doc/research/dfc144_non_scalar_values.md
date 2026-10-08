@@ -330,6 +330,14 @@ in the schema header, a struct-inference rule to specify and test, a
 typed `explode` (a `[]T` field to rows), and `cast -type tags list`
 questions. Nothing in §1 needs it; a Parquet-with-lists workload would.
 
+**Superseded in shape by [DFC145](./dfc145_nested_tables.md)
+(2026-10-08):** the typed tier is better framed as *nested tables* — the
+one structured value that gets commands is a list of same-keyed objects
+(a JSONL stream in a field), every row command gains a `-in FIELD` scope
+to run one level down, `nest`/`explode` are the structural pair, and
+`table{…}` is the header spelling with `json` as the fallback. Read
+DFC145 before building anything called Level 3.
+
 ## 5. What each lane needs, per level
 
 | | exec | record codegen | typed / parallel | SQL (DuckDB · PG · DF) | library form |
@@ -428,7 +436,9 @@ wrong.
    [-depth N]`, dotted paths accepted wherever a field name is, nested
    names from `SSQL_MODE=schema` for completion, `window -collect` and
    a typed `-collect` as the obvious gaps.
-4. **Level 3 deferred** until a workload needs it; the schema grammar
+4. **Level 3 deferred** until a workload needs it — and when it comes,
+   built as [DFC145](./dfc145_nested_tables.md)'s nested tables with
+   `-in FIELD` scoping, not as a bare typed-schema tier; the schema grammar
    for it (`list<T>`, `struct{…}`) is the one thing worth deciding early
    so Level 0's `json` is its untyped fallback, exactly as DuckDB's
    `JSON` is the fallback for `read_json`'s inference.
@@ -525,6 +535,10 @@ is straightforward; left for the next pass), `window -collect`, a typed
    `struct{city:string}` or DuckDB's `INTEGER[]` / `STRUCT(city VARCHAR)`?
 
 ## 9. Related
+
+- [DFC145](./dfc145_nested_tables.md) — nested tables: the one
+  structured value is a relation and commands scope into it with
+  `-in FIELD`; the decision record that frames Level 3 (2026-10-08).
 
 - [DFC052](./compound-types-investigation.md) — the first survey
   (2026-02); its Options A–D and two phases are Levels 1–2 here.

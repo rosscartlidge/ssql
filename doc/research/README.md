@@ -152,6 +152,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC142 | 2026-09-30 | 2026-10-06 | [Panics as the Library's Error Channel: What Embedding ssql in a Server Needs](./dfc142_panics_as_error_channel.md) |
 | DFC143 | 2026-10-06 | 2026-10-06 | [Library mode: `ssql generate go -package` — what was built, and an example](./dfc143_library_mode.md) |
 | DFC144 | 2026-10-07 | 2026-10-08 | [Non-scalar field values: a survey, what DuckDB does, and the options](./dfc144_non_scalar_values.md) |
+| DFC145 | 2026-10-08 | 2026-10-08 | [Nested tables: the one structured value is a relation, and commands scope into it](./dfc145_nested_tables.md) |
 
 <!-- DFC-INDEX-END -->
 
