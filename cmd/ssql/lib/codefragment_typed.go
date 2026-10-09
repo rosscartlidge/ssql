@@ -1,6 +1,7 @@
 package lib
 
 import (
+	"slices"
 	"fmt"
 	"os"
 	"regexp"
@@ -69,6 +70,12 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	// stale, so re-aggregate after planning.
 	for _, frag := range fragments {
 		if frag.Type == "func" && len(frag.FuncBody) > 0 {
+			// A record-only stage (or a typed template that fell back)
+			// inside the subprocess declares nothing, as at top level;
+			// tag it so the body planner splices the typed→record
+			// adapters before it (the body compiled a typed Stream into
+			// a record stage until 2026-10-09).
+			tagRecordModeFragments(frag.FuncBody)
 			frag.FuncBody = applyPlannerBoundaries(frag.FuncBody)
 			seen := make(map[string]bool)
 			frag.Imports = frag.Imports[:0]
@@ -366,17 +373,14 @@ func generateTypedSubprocessFunction(funcFrag *CodeFragment) string {
 		fmt.Fprintf(&b, "// %s\n", funcFrag.Command)
 	}
 
-	// Find the body's output type from the last init/stmt fragment.
-	var typeName string
-	for i := len(funcFrag.FuncBody) - 1; i >= 0; i-- {
-		f := funcFrag.FuncBody[i]
-		if f.OutputTypedSchema != nil {
-			typeName = f.OutputTypedSchema.TypeName
-			break
-		}
-	}
-	if typeName == "" {
-		typeName = "any"
+	// The body's output type is what its LAST stage produces: a
+	// record-shaped tail (a record-only stage, a fallback) returns
+	// records. The backward scan that skipped nil schemas typed the
+	// function after an EARLIER stage and the program did not compile
+	// (2026-10-09).
+	typeName := "ssql.Record"
+	if schema := TailTypedSchema(funcFrag.FuncBody); schema != nil {
+		typeName = schema.TypeName
 	}
 
 	fmt.Fprintf(&b, "func %s() iter.Seq[%s] {\n", funcFrag.FuncName, typeName)
@@ -697,6 +701,59 @@ func buildInlineToRecordExpr(inputVar string, schema *TypedSchema) string {
 // (outside the per-row loop, per the schema-sharing rule) and
 // converts each typed struct value to an ssql.Record via
 // NewRecordFromSchema.
+// TailTypedSchema is the typed schema a fragment chain ENDS with: the
+// last init/stmt fragment's OutputTypedSchema, nil when that stage is
+// record-shaped (a record-only command, a typed template that fell
+// back). Consumers of a subprocess chain (join, union, the function
+// renderer) must look here, not at the last fragment that HAS a schema.
+func TailTypedSchema(fragments []*CodeFragment) *TypedSchema {
+	for i := len(fragments) - 1; i >= 0; i-- {
+		f := fragments[i]
+		if f == nil {
+			continue
+		}
+		if f.Type == "init" || f.Type == "stmt" {
+			return f.OutputTypedSchema
+		}
+	}
+	return nil
+}
+
+// EndInRecords appends the typed→record adapters (Serial() first when
+// the tail is a Stream) to a chain that ends typed, so a record consumer
+// — a record-mode join over a typed subprocess, as when a join key is a
+// dotted path — reads records. A chain already ending in records is
+// returned as is.
+func EndInRecords(fragments []*CodeFragment) []*CodeFragment {
+	schema := TailTypedSchema(fragments)
+	if schema == nil {
+		return fragments
+	}
+	var last *CodeFragment
+	for i := len(fragments) - 1; i >= 0 && last == nil; i-- {
+		if f := fragments[i]; f != nil && (f.Type == "init" || f.Type == "stmt") {
+			last = f
+		}
+	}
+	upstreamVar := last.Var
+	out := slices.Clone(fragments)
+	if last.Capabilities != nil && last.Capabilities.Produces == ShapeStream {
+		serialVar := upstreamVar + "Serial"
+		out = append(out, &CodeFragment{
+			Type:              "stmt",
+			Var:               serialVar,
+			Input:             upstreamVar,
+			Code:              serialVar + " := " + upstreamVar + ".Serial()",
+			Imports:           []string{"github.com/rosscartlidge/ssql/v4/typed"},
+			InputTypedSchema:  schema,
+			OutputTypedSchema: schema,
+			Capabilities:      &Capabilities{Accepts: ShapeStream, Produces: ShapeSeqTyped},
+		})
+		upstreamVar = serialVar
+	}
+	return append(out, buildToRecordBoundary(upstreamVar+"AsRecord", upstreamVar, schema))
+}
+
 func buildToRecordBoundary(outputVar, inputVar string, schema *TypedSchema) *CodeFragment {
 	// Build the schema's field-name list (input CSV names) and the
 	// matching value-extractor list (`v.GoName`), in declaration order.

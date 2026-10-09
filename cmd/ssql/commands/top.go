@@ -138,6 +138,11 @@ func generateTopCode(n int, field string, asc bool) error {
 		{Name: "top", Default: fmt.Sprintf("%d", n), Help: "number of top records", VarName: "flagTop", Type: "int"},
 	}
 
+	// A dotted path into a nested value has no typed form: record mode
+	// resolves it through ssql.Get (DFC144 Level 2).
+	if nestedPathIn(prevSchema, field) {
+		prevSchema = nil
+	}
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {
 		f, ok := lookupSchemaField(prevSchema, field)

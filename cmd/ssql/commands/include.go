@@ -139,6 +139,11 @@ func generateIncludeCode(fields []string) error {
 		inputVar = "records"
 	}
 
+	// A dotted path into a nested value (addr.city) has no typed form:
+	// record mode resolves it through ssql.Get (DFC144 Level 2).
+	if nestedPathIn(prevSchema, fields...) {
+		prevSchema = nil
+	}
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream.
 	if typedMode() && prevSchema != nil {
 		// include is SerialOnly — planner inserts Stream.Serial()

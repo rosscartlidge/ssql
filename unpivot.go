@@ -53,13 +53,16 @@ func UnpivotRecords(records iter.Seq[Record], cfg UnpivotConfig) iter.Seq[Record
 				sort.Strings(values)
 			}
 			for _, vf := range values {
-				v, ok := fields[vf]
+				// Named fields read through Get: a dotted path into a nested
+				// value (addr.zip) unpivots like any field. The key map
+				// above only has top-level names (2026-10-09).
+				v, ok := Get[any](r, vf)
 				if !ok || v == nil || v == "" {
 					continue
 				}
 				m := MakeMutableRecord()
 				for _, id := range cfg.IDs {
-					if iv, ok := fields[id]; ok {
+					if iv, ok := Get[any](r, id); ok {
 						m = setAnyField(m, id, iv)
 					}
 				}
@@ -90,6 +93,8 @@ func setAnyField(m MutableRecord, field string, v any) MutableRecord {
 		return m.Bool(field, x)
 	case Record:
 		return m.Nested(field, x)
+	case JSONString:
+		return m.JSONString(field, x) // a nested value stays json (it was stringified until 2026-10-09)
 	default:
 		return m.String(field, fmt.Sprintf("%v", x))
 	}

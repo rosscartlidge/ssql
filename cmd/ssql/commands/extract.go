@@ -194,6 +194,11 @@ func generateExtractCode(cfg ssql.ExtractConfig, names []string) error {
 		}
 	}
 
+	// A dotted path into a nested value has no typed form: record mode
+	// resolves it through ssql.Get (DFC144 Level 2).
+	if nestedPathIn(prev, cfg.Field) {
+		prev = nil
+	}
 	if typedMode() && prev != nil {
 		src, ok := lookupSchemaField(prev, cfg.Field)
 		if !ok {

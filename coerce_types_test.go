@@ -1,7 +1,9 @@
 package ssql
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -84,5 +86,24 @@ func TestCoerceFieldTypesIsStrict(t *testing.T) {
 	in := recordsOf(map[string]any{"a": int64(1)})
 	if n := len(slices.Collect(CoerceFieldTypes(slices.Values(in), nil))); n != 1 {
 		t.Errorf("no-op coercion lost rows: %d", n)
+	}
+}
+
+// TestCoerceFieldTypesRefusesPath: `-type addr.zip int` names a key inside
+// a nested value; retyping it would write a literal "addr.zip" column
+// beside the object, so it is refused loudly (it was silent until
+// 2026-10-09).
+func TestCoerceFieldTypesRefusesPath(t *testing.T) {
+	in := recsOf([]kv{{"addr", JSONString(`{"zip":"10001"}`)}})
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected a panic for a path target, got none")
+		}
+		if msg := fmt.Sprint(r); !strings.Contains(msg, "path into a nested value") {
+			t.Errorf("panic = %q, want the path explanation", msg)
+		}
+	}()
+	for range CoerceFieldTypes(in, map[string]FieldType{"addr.zip": FieldTypeInt}) {
 	}
 }

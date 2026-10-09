@@ -227,6 +227,18 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if err := validateFieldsSchema(schemaAndRecords.Schema, readFields, "update"); err != nil {
 				return err
 			}
+			// A -set target that is a path into a nested value (addr.city)
+			// would make a literal "addr.city" column that shadows the path
+			// — refused; the object is rebuilt with -set-expr instead.
+			var setTargets []string
+			for _, clause := range clauses {
+				for _, upd := range clause.updates {
+					setTargets = append(setTargets, upd.field)
+				}
+			}
+			if err := validateWriteTargets(schemaAndRecords.Schema, setTargets, "update", "set a key inside the object by rebuilding it, e.g. -set-expr addr '{...addr, city: \"NYC\"}', or use another name for a new column"); err != nil {
+				return err
+			}
 
 			// Track schema from first record
 			var schemaFields map[string]any // field -> sample value (for type inference)
@@ -513,6 +525,29 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	// from an untranspilable expression, a -set-expr retyping a column)
 	// — Tier R: execution continues into the record path below and the
 	// planner inserts the Serial()+toRecord boundary.
+	if typedMode() && prevSchema != nil {
+		// A dotted path into a nested value in a condition or a -set-field
+		// source has no typed form: record mode resolves it (DFC144 L2).
+		var names []string
+		for _, clause := range ctx.Clauses {
+			if conds, err := parseConditions(clause.Flags["-if"]); err == nil {
+				for _, c := range conds {
+					names = append(names, c.Field)
+				}
+			}
+			if conds, err := parseFieldConditions(clause.Flags["-if-field"]); err == nil {
+				for _, c := range conds {
+					names = append(names, c.Field, c.Value)
+				}
+			}
+			for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
+				names = append(names, sf.source)
+			}
+		}
+		if nestedPathIn(prevSchema, names...) {
+			prevSchema = nil
+		}
+	}
 	if typedMode() && prevSchema != nil {
 		handled, reason, err := emitTypedUpdate(ctx, inputVar, prevSchema, fragments)
 		if handled || err != nil {

@@ -185,12 +185,12 @@ func clauseStrings(clause cf.Clause, flag string) []string {
 // per row.
 func (k setOpKey) validate(cmdName string, left, right *lib.Schema) error {
 	for _, f := range k.left {
-		if left != nil && !left.HasField(f) {
+		if left != nil && !left.HasFieldOrPath(f) {
 			return fmt.Errorf("%s: left field %q not found (available: %s)", cmdName, f, strings.Join(left.Fields, ", "))
 		}
 	}
 	for _, f := range k.right {
-		if right != nil && !right.HasField(f) {
+		if right != nil && !right.HasFieldOrPath(f) {
 			return fmt.Errorf("%s: right field %q not found (available: %s)", cmdName, f, strings.Join(right.Fields, ", "))
 		}
 	}

@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"iter"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -120,7 +119,7 @@ func asofCheck(leftFields, rightFields []string, leftType, rightType func(string
 		return t == "" || t == lib.TypeInt || t == lib.TypeFloat || t == lib.TypeTime
 	}
 	if leftFields != nil {
-		if !slices.Contains(leftFields, a.leftTime) {
+		if !fieldListHasOrPath(leftFields, a.leftTime) {
 			return fmt.Errorf("join -asof: left field %q not found (available: %s)", a.leftTime, strings.Join(leftFields, ", "))
 		}
 		if t := leftType(a.leftTime); !ordered(t) {
@@ -128,7 +127,7 @@ func asofCheck(leftFields, rightFields []string, leftType, rightType func(string
 		}
 	}
 	if rightFields != nil {
-		if !slices.Contains(rightFields, a.rightTime) {
+		if !fieldListHasOrPath(rightFields, a.rightTime) {
 			return fmt.Errorf("join -asof: right field %q not found (available: %s)", a.rightTime, strings.Join(rightFields, ", "))
 		}
 		if t := rightType(a.rightTime); !ordered(t) {

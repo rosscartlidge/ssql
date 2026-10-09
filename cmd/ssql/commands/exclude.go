@@ -76,6 +76,9 @@ func RegisterExclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if err := validateFieldsSchema(schemaAndRecords.Schema, fields, "exclude"); err != nil {
 				return err
 			}
+			if err := validateWriteTargets(schemaAndRecords.Schema, fields, "exclude", "flatten the object first and exclude the column, or rebuild the value with update -set-expr"); err != nil {
+				return err
+			}
 
 			// Drop the named fields (ssql.Without: the primitive generated
 			// record code calls too)

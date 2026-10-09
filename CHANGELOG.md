@@ -7,11 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dotted paths in every field position** (a survey after `join -on`
+  rejected one). `join -on` / `-using` / `-asof-on` and the set-operation
+  keys accept a path; `describe` and `unpivot` read a path (both reported
+  nothing for one, without an error); the typed lane falls back to record
+  mode for a path in `include`, `update -if`, `top`, `window`, `extract`,
+  `where -if-field`, `unpivot`, `join` and `to table` (which silently
+  dropped the column). A path as a WRITE target — `cast -type`, `rename
+  -as`, `exclude`, `fill`, `update -set`, `from -type` — is refused by
+  name with the way to do it (`cast` left the data alone while the
+  schema header claimed the new type).
+- **A record-only stage inside a process substitution** (`join <(… |
+  flatten addr | …)`) in typed mode now gets its typed→record adapters,
+  and the subprocess function returns what its last stage produces; the
+  generated program did not compile before.
+- `lib.Schema.HasField` accepts a field listed without a type (unpivot's
+  mixed value column), which the next stage refused as unknown while
+  listing it as available; a nested value carried by `unpivot -id` or
+  `fill` stays `json` instead of becoming text.
+
 ### Added
 
 - **`ssql conventions -category nested`.** The structured-value
   conventions in the binary: the one `json` type, dotted paths wherever a
-  field name goes (and that `join -on` does not take one yet), lists and
+  field name goes and that a path is never a write target, lists and
   objects inside expressions, `explode`/`flatten`/`-collect`, aggregates
   that do not nest in `group-by -expr`, and what `generate sql`
   translates. The overview gained a "Structured values" section.

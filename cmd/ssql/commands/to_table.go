@@ -146,6 +146,12 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 
 	// Phase B fall-through: prevSchema==nil → Record-mode upstream
 	// (e.g. pivot/signal). Falls through to ssql.DisplayTable below.
+	// A dotted path among the columns (addr.city) has no typed form; the
+	// typed table silently dropped it until 2026-10-09 — record mode
+	// resolves it through ssql.Get (DFC144 Level 2).
+	if nestedPathIn(prevSchema, fields...) {
+		prevSchema = nil
+	}
 	if typedMode() && prevSchema != nil {
 		// Width-aligned table output. typed.WriteTableToWriter
 		// uses struct-tag info to right-align numeric/bool columns

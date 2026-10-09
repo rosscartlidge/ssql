@@ -37,6 +37,12 @@ func CoerceFieldTypes(records iter.Seq[Record], types map[string]FieldType) iter
 				if !ok {
 					continue
 				}
+				if !rec.schema.Has(field) {
+					// Get resolved a dotted path into a nested value: -type
+					// cannot retype a key inside it (it would have written a
+					// literal "addr.zip" column beside the object).
+					panic(fmt.Errorf("-type %s: %q is a path into a nested value and cannot be retyped; flatten first and cast, or update -set-expr", field, field))
+				}
 				cv, err := coerceValue(v, ft)
 				if err != nil {
 					panic(&CellError{Row: row, Column: field, Value: fmt.Sprint(v), Type: ft})

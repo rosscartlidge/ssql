@@ -921,6 +921,15 @@ func orderedLabel(ordered bool) string {
 	return "as multiset"
 }
 
+// pathSQLSkip: the SQL lanes have no translation for a dotted path in a
+// field position yet (DFC144 L2); the Go lanes resolve it through
+// ssql.Get (typed falls back to record mode).
+var pathSQLSkip = map[string]string{
+	"duckdb":     "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+	"datafusion": "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+	"postgres":   "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
+}
+
 var equivCases = []EquivCase{
 	// DFC144 Level 0: a nested value is one representation (JSONString)
 	// in every lane and survives every hop as the same JSON.
@@ -991,6 +1000,85 @@ var equivCases = []EquivCase{
 			"datafusion": "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
 			"postgres":   "a dotted path as a field name has no SQL translation yet (DFC144 L2)",
 		},
+	},
+	{
+		Name:             "join_on_path_key_array_file",
+		// The right side stays typed end to end: a record-only stage inside
+		// a process substitution gets no typed→record boundary yet (TODO).
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} join <({{.bin}} from json {{.data}}/nested_array.json | {{.bin}} include name | {{.bin}} rename -as name who | {{.bin}} update -set-expr city 'who == "Alice" ? "NYC" : (who == "Bob" ? "SF" : "none")') -on addr.city city | {{.bin}} include id who | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip:             pathSQLSkip,
+	},
+	{
+		// A record-only stage (flatten) INSIDE the process substitution:
+		// the typed lane compiled the body's typed Stream straight into
+		// the record stage, and typed the function after an earlier typed
+		// stage, until 2026-10-09 (the keys here are plain fields).
+		Name:             "join_procsub_record_tail_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} join <({{.bin}} from json {{.data}}/nested_array.json | {{.bin}} where -if-expr 'addr != nil' | {{.bin}} flatten addr | {{.bin}} include name addr.city | {{.bin}} rename -as name who -as addr.city city) -on name who | {{.bin}} include id city | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip: map[string]string{
+			"duckdb":     "flatten has no SQL translation (DFC144 L2)",
+			"datafusion": "flatten has no SQL translation (DFC144 L2)",
+			"postgres":   "flatten has no SQL translation (DFC144 L2)",
+		},
+	},
+	{
+		Name:             "describe_path_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} describe addr.zip`,
+		ColumnsUnordered: true,
+		Skip:             pathSQLSkip,
+	},
+	{
+		Name:             "unpivot_path_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} unpivot -id addr.city -value addr.zip | {{.bin}} sort value`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip:             pathSQLSkip,
+	},
+	{
+		Name:             "include_path_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} include id addr.city | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip:             pathSQLSkip,
+	},
+	{
+		Name:             "update_if_path_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} update -if addr.city eq NYC -set hit 1 | {{.bin}} include id hit | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip:             pathSQLSkip,
+	},
+	{
+		Name:             "top_by_path_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} top 2 -field addr.zip | {{.bin}} include id | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip:             pathSQLSkip,
+	},
+	{
+		Name:             "window_lag_path_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} window -order id -lag addr.zip 1 prev | {{.bin}} include id prev | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip:             pathSQLSkip,
+	},
+	{
+		Name:             "extract_path_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} extract -field addr.zip -re '(?P<z3>[0-9]{3})' -skip | {{.bin}} include id z3 | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip:             pathSQLSkip,
+	},
+	{
+		Name:             "where_if_field_path_array_file",
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} where -if-field addr.city ne name | {{.bin}} include id | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip:             pathSQLSkip,
 	},
 	{
 		Name:             "groupby_expr_over_lists_array_file",

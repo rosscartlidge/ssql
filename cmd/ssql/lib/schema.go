@@ -80,10 +80,15 @@ func (s *Schema) TypeOf(name string) string {
 	return s.Types[name]
 }
 
-// HasField returns true if the schema contains the field.
+// HasField returns true if the schema contains the field — typed, or
+// listed in Fields without a type (unpivot leaves a mixed-type value
+// column untyped; until 2026-10-09 the next stage then refused the
+// column as unknown while listing it as available).
 func (s *Schema) HasField(name string) bool {
-	_, ok := s.Types[name]
-	return ok
+	if _, ok := s.Types[name]; ok {
+		return true
+	}
+	return slices.Contains(s.Fields, name)
 }
 
 // HasFieldOrPath is HasField, or true for a dotted path (addr.city,

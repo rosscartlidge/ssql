@@ -251,6 +251,11 @@ func generateUnpivotCode(cfg ssql.UnpivotConfig) error {
 		}
 	}
 
+	// A dotted path among the ids or values has no typed form: record
+	// mode resolves it through ssql.Get (DFC144 Level 2).
+	if nestedPathIn(prevSchema, append(append([]string{}, cfg.IDs...), cfg.Values...)...) {
+		prevSchema = nil
+	}
 	if typedMode() && prevSchema != nil {
 		if frag, ok := generateUnpivotTyped(cfg, fragments, inputVar, outputVar, prevSchema); ok {
 			stamp(frag)

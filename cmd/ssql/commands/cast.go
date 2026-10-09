@@ -109,6 +109,9 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if err := validateFieldsSchema(sr.Schema, castFields, "cast"); err != nil {
 					return err
 				}
+				if err := validateWriteTargets(sr.Schema, castFields, "cast", "flatten the object first and cast the column, or rebuild the value with update -set-expr"); err != nil {
+					return err
+				}
 			}
 
 			// Cast every record's named fields to the target types, through

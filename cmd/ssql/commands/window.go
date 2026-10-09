@@ -839,6 +839,26 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 	// the typed runtime materialises the partition either way.
 	var typedFallbackNotes []string
 	if typedMode() && prevSchema != nil {
+		// A dotted path into a nested value (addr.city) in any field
+		// position has no typed form: record mode resolves it through
+		// ssql.Get (DFC144 Level 2).
+		var names []string
+		for _, cfg := range configs {
+			names = append(names, cfg.PartitionBy...)
+			for _, of := range cfg.OrderBy {
+				names = append(names, of.Field)
+			}
+			for _, sp := range cfg.Specs {
+				if f, ok := ssql.WindowFuncField(sp.Function); ok && f != "" {
+					names = append(names, f)
+				}
+			}
+		}
+		if nestedPathIn(prevSchema, names...) {
+			prevSchema = nil
+		}
+	}
+	if typedMode() && prevSchema != nil {
 		handled, reason, err := emitTypedWindow(inputVar, prevSchema, configs)
 		if handled || err != nil {
 			return err

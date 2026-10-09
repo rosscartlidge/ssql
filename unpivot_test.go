@@ -73,3 +73,21 @@ func TestUnpivotSkipsMissing(t *testing.T) {
 		t.Errorf("empty-string value must produce no row, got %v", names)
 	}
 }
+
+// TestUnpivotPath: -id and -value names that are dotted paths into a
+// nested value are read through Get (until 2026-10-09 the key map held
+// top-level names only, so a path produced no rows and no error).
+func TestUnpivotPath(t *testing.T) {
+	in := recsOf(
+		[]kv{{"id", int64(1)}, {"addr", JSONString(`{"city":"NYC","zip":"10001"}`)}},
+		[]kv{{"id", int64(2)}}, // no addr → no row
+	)
+	var got [][3]any
+	for r := range UnpivotRecords(in, UnpivotConfig{IDs: []string{"addr.city"}, Values: []string{"addr.zip"}}) {
+		got = append(got, [3]any{GetOr(r, "addr.city", ""), GetOr(r, "name", ""), GetOr(r, "value", "")})
+	}
+	want := [][3]any{{"NYC", "addr.zip", "10001"}}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+}

@@ -90,6 +90,9 @@ func RegisterRename(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if err := validateFieldsSchema(schemaAndRecords.Schema, oldFields, "rename"); err != nil {
 				return err
 			}
+			if err := validateWriteTargets(schemaAndRecords.Schema, oldFields, "rename", "lift it into a column with update -set-expr NAME 'PATH', or flatten the object first"); err != nil {
+				return err
+			}
 
 			// Build renamer function using Rename()
 			renamer := func(r ssql.Record) ssql.Record {

@@ -106,6 +106,7 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 		fragments = applyPlannerBoundaries(fragments)
 		for _, frag := range fragments {
 			if frag.Type == "func" && len(frag.FuncBody) > 0 {
+				tagRecordModeFragments(frag.FuncBody) // a record stage in the body, as at top level
 				frag.FuncBody = applyPlannerBoundaries(frag.FuncBody)
 				frag.Imports = mergeBodyImports(frag.FuncBody)
 			}

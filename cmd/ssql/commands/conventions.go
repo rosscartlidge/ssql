@@ -197,10 +197,13 @@ one representation: the json type
 
 dotted paths wherever a field name goes
   addr.city, tags.0, tags.-1, a.b.c name what is inside a nested value in
-  any field position: where -if, sort, group-by, include, update, to table …
-  (join -on does not take a path yet: flatten first). A literal field whose
-  name contains a dot wins over the path reading. Schema mode and Ctrl-O list an object's keys as completable
-  paths (one level); a list index is typed by hand.
+  any field position: where -if, sort, group-by, include, join -on, window,
+  describe, to table … A path is READ anywhere but WRITTEN nowhere: as a
+  target of cast -type, rename -as, exclude, fill or update -set it is
+  refused by name (flatten first, or rebuild the object with -set-expr).
+  A literal field whose name contains a dot wins over the path reading.
+  Schema mode and Ctrl-O list an object's keys as completable paths (one
+  level); a list index is typed by hand.
 
     ssql from events.jsonl | ssql where -if addr.city eq NYC | ssql group-by addr.city -count n
 

@@ -1,8 +1,8 @@
 package ssql
 
 import (
-	"strings"
 	"iter"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +27,8 @@ func recsOf(rows ...[]kv) iter.Seq[Record] {
 					mr = mr.Float(f.k, x)
 				case bool:
 					mr = mr.Bool(f.k, x)
+				default:
+					mr = setAnyField(mr, f.k, f.v) // JSONString: a nested value
 				}
 			}
 			if !yield(mr.Freeze()) {
@@ -165,5 +167,31 @@ func TestCSVEmptyCellIsAbsent(t *testing.T) {
 		if GetOr(d, "missing", int64(0)) != 1 || GetOr(d, "count", int64(0)) != 1 || GetOr(d, "mean", 0.0) != 10 {
 			t.Errorf("describe over empties: %v", d)
 		}
+	}
+}
+
+// TestDescribePath: a dotted path into a nested value (addr.zip) is a
+// field like any other to describe — read through Get. Until 2026-10-09
+// the restricted walk matched top-level keys only and reported a path
+// as all-missing (count 0, missing N) without an error.
+func TestDescribePath(t *testing.T) {
+	in := recsOf(
+		[]kv{{"id", int64(1)}, {"addr", JSONString(`{"city":"NYC","zip":"10001"}`)}},
+		[]kv{{"id", int64(2)}, {"addr", JSONString(`{"city":"SF","zip":"94105"}`)}},
+		[]kv{{"id", int64(3)}},
+	)
+	var rows []Record
+	for r := range DescribeRecords(in, DescribeConfig{Fields: []string{"addr.zip"}}) {
+		rows = append(rows, r)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	r := rows[0]
+	if f := GetOr(r, "field", ""); f != "addr.zip" {
+		t.Errorf("field = %q", f)
+	}
+	if c, m, d := GetOr(r, "count", int64(-1)), GetOr(r, "missing", int64(-1)), GetOr(r, "distinct", int64(-1)); c != 2 || m != 1 || d != 2 {
+		t.Errorf("count/missing/distinct = %d/%d/%d, want 2/1/2", c, m, d)
 	}
 }

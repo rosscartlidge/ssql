@@ -334,10 +334,13 @@ func resolveJoin(leftFields, rightFields []string, clauses []ssql.LookupClause, 
 	}
 	clauses = plan.clauses
 	for _, c := range clauses {
-		if leftFields != nil && !slices.Contains(leftFields, c.LeftField) {
+		// A key may be a dotted path into a nested value (addr.city): the
+		// lookup reads it through ssql.Get like every other field position
+		// (DFC144 Level 2; refused by name until 2026-10-09).
+		if leftFields != nil && !fieldListHasOrPath(leftFields, c.LeftField) {
 			return plan, fmt.Errorf("join left field %q not found (available: %s)", c.LeftField, strings.Join(leftFields, ", "))
 		}
-		if rightFields != nil && !slices.Contains(rightFields, c.RightField) {
+		if rightFields != nil && !fieldListHasOrPath(rightFields, c.RightField) {
 			return plan, fmt.Errorf("join right field %q not found (available: %s)", c.RightField, strings.Join(rightFields, ", "))
 		}
 	}
@@ -572,6 +575,25 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 	}
 	funcName := fmt.Sprintf("rightSource%d", funcCount)
 
+	// A key that is a dotted path into a nested value (addr.city) has no
+	// typed form: the join falls back to record mode, where ssql.Get
+	// resolves it (DFC144 Level 2; it exited until 2026-10-09).
+	var leftKeys, rightKeys []string
+	for _, c := range clauses {
+		leftKeys = append(leftKeys, c.LeftField)
+		rightKeys = append(rightKeys, c.RightField)
+	}
+	if asof.active() {
+		leftKeys = append(leftKeys, asof.leftTime)
+		rightKeys = append(rightKeys, asof.rightTime)
+	}
+	pathKey := nestedPathIn(leftSchema, leftKeys...)
+	// A right side whose last stage is record-shaped joins in record mode
+	// too (the func returns records; it exited as "no typed schema" before).
+	typedJoin := func(rightSchema *lib.TypedSchema) bool {
+		return typedMode() && rightSchema != nil && !pathKey && !nestedPathIn(rightSchema, rightKeys...)
+	}
+
 	// The merge rules, resolved against the fields each source kind
 	// lets generation see (typed: both schemas, in emitTypedJoin).
 	leftFields := fragmentFields(fragments)
@@ -619,8 +641,7 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 			subCommandStr := strings.Join(subCommands, " | ")
 
 			// Typed mode: subprocess fragments must carry a schema.
-			if typedMode() {
-				rightSchema := findOutputSchema(rightFragments)
+			if rightSchema := findOutputSchema(rightFragments); typedJoin(rightSchema) {
 				if rightSchema == nil {
 					return lib.WriteErrorAndExit(getCommandString(),
 						fmt.Errorf("ssql generate go -typed: right side of join did not produce a typed schema (inner pipeline must use typed-mode commands)"))
@@ -635,15 +656,20 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 				return emitTypedJoin(inputVar, funcName, leftSchema, rightSchema, rightFragments, subCommandStr, clauses, joinType, opts)
 			}
 
+			// The record join reads records: a right side that ends typed
+			// (typed mode, the join itself in record mode for a path key)
+			// gets the typed→record adapters appended.
+			rightFields := fragmentFields(rightFragments)
+			rightFragments = lib.EndInRecords(rightFragments)
 			if asof.active() {
 				funcFrag := lib.NewFuncFragment(funcName, rightFragments, subCommandStr)
 				if err := lib.WriteCodeFragment(funcFrag); err != nil {
 					return fmt.Errorf("writing func fragment: %w", err)
 				}
-				return asofRecord(fragmentFields(rightFragments), noType)
+				return asofRecord(rightFields, noType)
 			}
 
-			plan, err := resolve(fragmentFields(rightFragments))
+			plan, err := resolve(rightFields)
 			if err != nil {
 				return err
 			}
@@ -660,8 +686,10 @@ func generateJoinCode(rightFile, joinType string, clauses []ssql.LookupClause, o
 		// If reading fragments failed, fall through to normal file handling
 	}
 
-	// Typed-mode regular-file path: sample the right-side file ourselves.
-	if typedMode() {
+	// Typed-mode regular-file path: sample the right-side file ourselves
+	// (a CSV/TSV right side has no nested values; only a left path key
+	// sends the join to record mode).
+	if typedMode() && !pathKey {
 		if leftSchema == nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'join' must follow a typed-mode source"))
@@ -804,13 +832,12 @@ func joinReadTemplate(reader string) string {
 
 // findOutputSchema returns the OutputTypedSchema of the last fragment
 // in the slice that has one set, or nil.
+// findOutputSchema is the typed schema a subprocess chain ends with —
+// nil when its last stage is record-shaped (it skipped back to an
+// earlier typed stage until 2026-10-09, so a right side ending in a
+// record fallback was joined on the wrong columns).
 func findOutputSchema(fragments []*lib.CodeFragment) *lib.TypedSchema {
-	for i := len(fragments) - 1; i >= 0; i-- {
-		if fragments[i].OutputTypedSchema != nil {
-			return fragments[i].OutputTypedSchema
-		}
-	}
-	return nil
+	return lib.TailTypedSchema(fragments)
 }
 
 // emitTypedJoin writes the func+stmt fragments for a typed-mode join.

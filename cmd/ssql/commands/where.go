@@ -310,6 +310,11 @@ func generateWhereCode(ctx *cf.Context) error {
 					}
 				}
 			}
+			if conds, err := parseFieldConditions(clause.Flags["-if-field"]); err == nil {
+				for _, c := range conds {
+					names = append(names, c.Field, c.Value)
+				}
+			}
 		}
 		if nestedPathIn(prevSchema, names...) {
 			prevSchema = nil

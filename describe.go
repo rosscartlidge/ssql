@@ -68,19 +68,25 @@ func DescribeRecords(records iter.Seq[Record], cfg DescribeConfig) iter.Seq[Reco
 			return s
 		}
 		var total int64
-		want := map[string]bool{}
-		for _, f := range cfg.Fields {
-			want[f] = true
-		}
 		for r := range records {
 			total++
 			seen := map[string]bool{}
-			for k, v := range r.All() {
-				if restrict && !want[k] {
-					continue
+			if restrict {
+				// Named fields read through Get, so a dotted path into a
+				// nested value (addr.zip) is described like any field; the
+				// key walk below saw only top-level names and reported a
+				// path as all-missing (2026-10-09).
+				for _, f := range cfg.Fields {
+					if v, ok := Get[any](r, f); ok {
+						seen[f] = true
+						get(f).observe(v)
+					}
 				}
-				seen[k] = true
-				get(k).observe(v)
+			} else {
+				for k, v := range r.All() {
+					seen[k] = true
+					get(k).observe(v)
+				}
 			}
 			// Fields known (restricted, or seen in earlier records) but
 			// absent from this record are missing here.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,6 +125,49 @@ func validateFields(r ssql.Record, fields []string, command string) error {
 		return fmt.Errorf("%s references unknown field(s): %s (available: %s)%s",
 			command, strings.Join(missing, ", "), strings.Join(fieldNames(r), ", "),
 			dashlessFlagHint(command, missing))
+	}
+	return nil
+}
+
+// fieldListHasOrPath is HasFieldOrPath over a plain list of field names
+// (the join validators work from lists, not schemas): the name itself,
+// or a dotted path whose longest leading segment is a field (DFC144
+// Level 2). Without types the head's kind is unknown; the runtime read
+// (ssql.Get) resolves the path or finds nothing, as for any key.
+func fieldListHasOrPath(fields []string, name string) bool {
+	if slices.Contains(fields, name) {
+		return true
+	}
+	for i := strings.LastIndexByte(name, '.'); i > 0; i = strings.LastIndexByte(name[:i], '.') {
+		if slices.Contains(fields, name[:i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateWriteTargets refuses a dotted path into a nested value as a
+// field a command WRITES — cast's -type, rename's old name, exclude,
+// fill, update's -set target. A path is readable anywhere (ssql.Get
+// resolves it) but writable nowhere yet: until 2026-10-09 these passed
+// validation (HasFieldOrPath) and then did nothing, or lied — `cast
+// -type addr.zip int` left the data alone while the schema header said
+// int. hint names the way to do it.
+func validateWriteTargets(schema *lib.Schema, fields []string, command, hint string) error {
+	if schema == nil {
+		return nil
+	}
+	for _, f := range fields {
+		if !schema.HasField(f) && schema.HasFieldOrPath(f) {
+			head := f
+			for i := strings.LastIndexByte(f, '.'); i > 0; i = strings.LastIndexByte(f[:i], '.') {
+				if schema.HasField(f[:i]) {
+					head = f[:i]
+					break
+				}
+			}
+			return fmt.Errorf("%s: %q is a path into the nested value %q — a path can be read anywhere but not written; %s", command, f, head, hint)
+		}
 	}
 	return nil
 }
