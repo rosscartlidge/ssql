@@ -434,7 +434,7 @@ func pipelineSourceFlags(sb *cf.SubcommandBuilder, verb, modeDefault string) *cf
 		Completer(&cf.StaticCompleter{Options: []string{"record", "typed"}}).
 		Global().
 		Default("").
-		Help("With -pipeline/-script/-json: the SSQL_MODE the source pipeline runs under (record or typed; parallel is a deprecated alias for typed). Default: " + modeDefault + ".").
+		Help("With -pipeline/-script/-json: the SSQL_MODE the source pipeline runs under (record or typed; parallel is a deprecated alias for typed). Default: the shell's SSQL_MODE when this target can use it, else " + modeDefault + ".").
 		Done()
 }
 
@@ -461,6 +461,25 @@ func runDocForFragments(root *cf.Command, path, mode, label string) ([]byte, err
 		return nil, fmt.Errorf("ssql generate %s: pipeline failed (mode=%s): %w", label, mode, err)
 	}
 	return out.Bytes(), nil
+}
+
+// sourceModeFromEnv is the SSQL_MODE a -pipeline/-script/-json source
+// runs under when -mode is not given: the calling shell's SSQL_MODE (or
+// the deprecated SSQLGO) when it names a codegen mode — record, typed,
+// or parallel as typed's alias, SSQLGO=1/true as record's — else
+// fallback. Until 2026-10-09 the flag forms ignored the environment, so
+// `export SSQL_MODE=record; ssql generate go -run -pipeline …` ran the
+// stages typed.
+func sourceModeFromEnv(fallback string) string {
+	switch m := strings.ToLower(modeEnv()); m {
+	case "record", "typed":
+		return m
+	case "parallel":
+		return "typed"
+	case "1", "true":
+		return "record"
+	}
+	return fallback
 }
 
 // generateFragmentSource resolves a generate subcommand's fragment source:

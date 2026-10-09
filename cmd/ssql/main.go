@@ -48,6 +48,10 @@ func buildRootCommand() *cf.Command {
 		Version(version.Version).
 		Description("Unix-style data processing tools").
 		PrefixHandler(ssqlPrefixHandler).
+		// An argument no command declares is a typo, not a no-op:
+		// `ssql distinct addr.city` and `ssql count foo` ran as the bare
+		// command until 2026-10-09 (autocli v4.21.0).
+		StrictPositionals().
 
 		// Root global flags
 		Flag("-verbose", "-v").

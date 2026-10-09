@@ -157,7 +157,7 @@ func registerGenerateGo(cmd *cf.SubcommandBuilder) {
 			// -json (a document, run by the shell-free runner), every one
 			// producing the same JSONL fragment stream for the assembler.
 			if scriptMode == "" {
-				scriptMode = "typed"
+				scriptMode = sourceModeFromEnv("typed")
 			}
 			fragmentSrc, err := generateFragmentSource(ctx, scriptMode, "go")
 			if err != nil {

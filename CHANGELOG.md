@@ -5,6 +5,23 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A stray positional argument is an error.** `ssql distinct addr.city`
+  and `ssql count foo` ran as the bare command and dropped the argument;
+  every command now refuses an argument it does not declare, naming it
+  (`unexpected argument "foo": count takes no positional arguments`).
+  autocli v4.21.0's `StrictPositionals`, opted into at ssql's root;
+  declared and variadic positionals are unaffected. It caught a codelab
+  block on the way: `from parquet … -columns name salary` had been
+  reading `name` alone (`-columns` takes one column per flag).
+- **`generate go -pipeline` / `-script` / `-json` honour `SSQL_MODE`.**
+  Without `-mode` the stages ran typed whatever the shell's `SSQL_MODE`
+  said; they now run under it (record or typed; parallel as typed's
+  alias), else typed. An explicit `-mode` still wins.
+
 ## [4.113.3] - 2026-10-09
 
 ### Fixed

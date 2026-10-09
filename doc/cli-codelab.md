@@ -691,7 +691,7 @@ ssql from csv employees.csv -last 3 | ssql include name hire_date | ssql to tabl
 ```bash
 # A fast approximate sample via byte-offset seeks, and only the columns you need
 ssql from csv employees.csv -sample 3 -sample-seed 7 | ssql include name | ssql to table
-ssql from parquet employees.parquet -columns name salary | ssql limit 3 | ssql to table
+ssql from parquet employees.parquet -columns name -columns salary | ssql limit 3 | ssql to table
 ```
 
 The rule behind these flags: a flag lives on `from` only when the
