@@ -136,6 +136,22 @@ ssql stops and names the expression rather than inventing a value. And
 a row with no `addr` has `addr` equal to `nil` in an expression, so
 `addr != nil` is the test for "has an address" that works everywhere.
 
+The same holds in `group-by -expr`, where aggregates follow SQL's rule
+and do not nest: the outer `sum`, `max`, `avg` or `count` aggregates
+over the group, and inside its argument the same names are the ordinary
+list functions over one row's own list. So `sum(sum(scores))` totals
+every score in the city, `max(len(tags))` is the widest tag list, and a
+closure's `#` is the closure's own element:
+
+```bash
+ssql from events.jsonl | ssql where -if-expr 'addr != nil' | ssql group-by addr.city -expr 'sum(sum(scores))' total -expr 'max(len(tags))' widest -expr 'len(filter(scores, sum(#) > 10))' big | ssql sort -desc total | ssql to table
+```
+
+A bare list field outside an aggregate is the group's array of lists
+(`len(filter(scores, …))` above counts rows), inside one it is the row's
+list (`sum(scores)` would add lists and stop with an error — write
+`sum(sum(scores))`).
+
 ## 5. Explode: a list becomes rows
 
 `explode FIELD` is SQL's UNNEST: one output row per element of the list,
@@ -207,6 +223,15 @@ ssql from orders_nested.jsonl | ssql explode items | ssql flatten items | ssql g
 
 Order 1004 has no items and so contributes no line; if a report must
 list every order, explode with `-keep-empty` before aggregating.
+
+When the question is about whole orders rather than line items, the
+lists can stay in place: aggregate over each order's list with a nested
+aggregate, no explode or flatten needed. Here Dan's empty order counts
+as an order with nothing in it, which explode would have dropped:
+
+```bash
+ssql from orders_nested.jsonl | ssql group-by customer -expr 'sum(len(items))' lines -expr 'sum(sum(map(items, #.qty)))' units -expr 'avg(sum(map(items, #.qty * #.price)))' avg_order | ssql sort customer | ssql to table
+```
 
 ## 8. Collect: the way back
 
@@ -294,6 +319,7 @@ cannot type.
 | "has an address" | `-if-expr 'addr != nil'` |
 | one row per list element | `explode FIELD` (`-keep-empty`: a row with no value for an empty or missing list) |
 | an object's keys as columns | `flatten FIELD` (`-depth N`, `-keep`); columns are `FIELD.key`, keys fixed by the first row |
+| a total or best over every row's list, per group | `group-by KEY -expr 'sum(sum(scores))' total -expr 'max(max(scores))' best` — aggregates do not nest; the inner one is the row's list function |
 | a list per group | `group-by KEY -collect FIELD RESULT` |
 | JSON text in a CSV cell as a nested value | `cast -type FIELD json` |
 | the schema, with nested names | `(export SSQL_MODE=schema; ssql from f.jsonl) \| ssql generate schema -data` |

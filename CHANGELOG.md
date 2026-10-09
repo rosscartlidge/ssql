@@ -5,6 +5,21 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`ssql conventions -category nested`.** The structured-value
+  conventions in the binary: the one `json` type, dotted paths wherever a
+  field name goes (and that `join -on` does not take one yet), lists and
+  objects inside expressions, `explode`/`flatten`/`-collect`, aggregates
+  that do not nest in `group-by -expr`, and what `generate sql`
+  translates. The overview gained a "Structured values" section.
+- **Nested aggregates in the Structured Data codelab.** Two new blocks:
+  per-city totals over each row's list (`sum(sum(scores))`,
+  `max(len(tags))`, a closure's own `sum(#)`) and per-customer order
+  statistics over the `items` list in place, no explode needed.
+
 ## [4.113.2] - 2026-10-09
 
 ### Fixed
