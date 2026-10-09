@@ -994,7 +994,7 @@ var equivCases = []EquivCase{
 	},
 	{
 		Name:             "groupby_expr_over_lists_array_file",
-		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} group-by -expr 'len(name)' n -expr 'sort(uniq(flatten(tags)))' all_tags -expr 'len(flatten(scores))' nscores`,
+		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} group-by -expr 'len(name)' n -expr 'sort(uniq(flatten(tags)))' all_tags -expr 'len(flatten(scores))' nscores -expr 'sum(sum(scores))' total -expr 'max(len(tags))' widest -expr 'len(filter(scores, sum(#) > 10))' big`,
 		ColumnsUnordered: true,
 		Skip: map[string]string{
 			"duckdb":     "group-by -expr over nested values has no SQL translation (DFC144 L1)",

@@ -8,6 +8,8 @@ import (
 
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/conf"
+	"github.com/expr-lang/expr/parser"
 	"github.com/expr-lang/expr/vm"
 )
 
@@ -367,19 +369,134 @@ func buildAggBatchEnv(records []Record) (map[string]any, map[string]bool) {
 
 // compileAggExpr compiles an aggregation expression with AST patching
 func compileAggExpr(expression string, fields map[string]bool, env map[string]any) (*vm.Program, error) {
-	patcher := &aggPatcher{Fields: fields}
-	return expr.Compile(expression,
-		expr.Env(env),
-		expr.Patch(patcher),
-		ExprFieldShadowing(),
-		ExprDate(),
-	)
+	opts := []expr.Option{expr.Env(env), ExprFieldShadowing(), ExprDate()}
+	// The scope pre-parse must see the same env: a bare `count()` parses
+	// only because the env's dummy overrides expr's two-argument builtin.
+	cfg := conf.CreateNew()
+	for _, op := range opts {
+		op(cfg)
+	}
+	tree, err := parser.ParseWithConfig(expression, cfg)
+	if err != nil {
+		return nil, err
+	}
+	patcher := &aggPatcher{Fields: fields, Nested: nestedAggOffsets(tree.Node)}
+	return expr.Compile(expression, append([]expr.Option{expr.Patch(patcher)}, opts...)...)
 }
 
 // aggPatcher transforms natural aggregation syntax to expr-lang predicate form
 // e.g., sum(salary * bonus) → sum(_records, .salary * .bonus)
 type aggPatcher struct {
 	Fields map[string]bool // Known field names
+	Nested map[int]bool    // source offsets of aggregate calls below group level (nestedAggOffsets)
+}
+
+// isAggName reports whether name is one of the aggregate spellings the
+// patcher lifts over the group: sum/count, avg/mean, max/min/first/last.
+func isAggName(name string) bool {
+	_, ok := aggFunctions[name]
+	return ok || avgFunctions[name] || valueAggFunctions[name]
+}
+
+// nestedAggOffsets walks the parsed expression top-down and returns the
+// source offsets of every aggregate call that is NOT at group level: one
+// inside another aggregate's argument, or inside a closure (`#` scope).
+// Aggregates do not nest (SQL's rule): the argument of a group aggregate
+// is per-row code, and there `sum`, `max`, `count` keep expr's ordinary
+// meaning over the row's own values — `sum(sum(scores))` totals every
+// list, `max(len(tags))` is the longest list, `sum(map(scores, sum(#)))`
+// is the user's closure. Scope is a top-down property and expr.Patch
+// walks bottom-up (an inner call is visited before its outer one), so it
+// is computed once here, keyed by position, which the compile's own
+// parse of the same text shares. Until 2026-10-09 every nested call was
+// lifted and failed with `map[string]interface {} + int`.
+func nestedAggOffsets(root ast.Node) map[int]bool {
+	nested := map[int]bool{}
+	var walk func(n ast.Node, inner bool)
+	walk = func(n ast.Node, inner bool) {
+		if n == nil {
+			return
+		}
+		switch n := n.(type) {
+		case *ast.CallNode:
+			if id, ok := n.Callee.(*ast.IdentifierNode); ok && isAggName(id.Value) {
+				if inner {
+					nested[n.Location().From] = true
+				}
+				inner = true
+			}
+		case *ast.BuiltinNode:
+			if isAggName(n.Name) {
+				if inner {
+					nested[n.Location().From] = true
+				}
+				inner = true
+			}
+		case *ast.PredicateNode:
+			inner = true
+		}
+		forEachChild(n, func(c ast.Node) { walk(c, inner) })
+	}
+	walk(root, false)
+	return nested
+}
+
+// forEachChild calls f on each direct child of n (the node shapes
+// ast.Walk descends into).
+func forEachChild(n ast.Node, f func(ast.Node)) {
+	switch n := n.(type) {
+	case *ast.UnaryNode:
+		f(n.Node)
+	case *ast.BinaryNode:
+		f(n.Left)
+		f(n.Right)
+	case *ast.ChainNode:
+		f(n.Node)
+	case *ast.MemberNode:
+		f(n.Node)
+		f(n.Property)
+	case *ast.SliceNode:
+		f(n.Node)
+		if n.From != nil {
+			f(n.From)
+		}
+		if n.To != nil {
+			f(n.To)
+		}
+	case *ast.CallNode:
+		f(n.Callee)
+		for _, a := range n.Arguments {
+			f(a)
+		}
+	case *ast.BuiltinNode:
+		for _, a := range n.Arguments {
+			f(a)
+		}
+	case *ast.PredicateNode:
+		f(n.Node)
+	case *ast.ConditionalNode:
+		f(n.Cond)
+		f(n.Exp1)
+		f(n.Exp2)
+	case *ast.VariableDeclaratorNode:
+		f(n.Value)
+		f(n.Expr)
+	case *ast.SequenceNode:
+		for _, a := range n.Nodes {
+			f(a)
+		}
+	case *ast.ArrayNode:
+		for _, a := range n.Nodes {
+			f(a)
+		}
+	case *ast.MapNode:
+		for _, a := range n.Pairs {
+			f(a)
+		}
+	case *ast.PairNode:
+		f(n.Key)
+		f(n.Value)
+	}
 }
 
 // Aggregation functions that support predicate form in expr-lang
@@ -404,6 +521,9 @@ var avgFunctions = map[string]bool{
 }
 
 func (p *aggPatcher) Visit(node *ast.Node) {
+	if p.Nested[(*node).Location().From] {
+		return // below group level: expr's own sum/max/count over row values
+	}
 	switch n := (*node).(type) {
 	case *ast.CallNode:
 		p.patchCall(node, n)

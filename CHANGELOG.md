@@ -5,6 +5,23 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Nested aggregates in `group-by -expr`.** Aggregates no longer nest
+  (SQL's rule): `sum`, `count`, `avg`, `min`, `max`, `first`, `last`
+  are lifted over the group only at the top level of the expression.
+  Inside an aggregate's argument, or inside a closure, the same names are
+  expr's ordinary list functions over the row's own values, so
+  `sum(sum(scores))` totals every row's list, `max(max(scores))` is the
+  best score, `avg(sum(scores))` the mean row total and
+  `len(filter(scores, sum(#) > 10))` counts rows by their total. Before,
+  every `sum(…)` at any depth was rewritten over the records and a nested
+  one failed with `invalid operation: map[string]interface {} + int`.
+  Scope is computed once on a pre-parse of the expression (top-down,
+  keyed by source position) because expr's patcher walks bottom-up.
+
 ## [4.113.1] - 2026-10-09
 
 ### Added

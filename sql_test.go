@@ -869,6 +869,42 @@ func TestExprAggWrongShapePanics(t *testing.T) {
 	StreamExprAgg(`{s: 0}`, `{s: s + n}`, `nil`)(records)
 }
 
+// TestExprAggNested: aggregates do not nest (SQL's rule). The argument of
+// a group aggregate is per-row code, and there sum/max/avg/len keep
+// expr's ordinary meaning over the row's own values: `sum(sum(scores))`
+// totals every list, `max(max(scores))` is the best score, a closure's
+// `#` is the closure's. Until 2026-10-09 the patcher lifted every call
+// over the records, so the inner one summed record maps and failed with
+// `map[string]interface {} + int` (found by the array-file gate).
+func TestExprAggNested(t *testing.T) {
+	records := []Record{
+		NewRecord(map[string]any{"scores": JSONString(`[7,3]`), "tags": JSONString(`["rust"]`)}),
+		NewRecord(map[string]any{"scores": JSONString(`[10,20,30]`), "tags": JSONString(`["go","rust"]`)}),
+		NewRecord(map[string]any{"scores": JSONString(`[1]`), "tags": JSONString(`[]`)}),
+	}
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"sum(sum(scores))", 71.0},
+		{"max(max(scores))", 30.0},
+		{"avg(sum(scores))", 71.0 / 3},
+		{"sum(len(tags))", 3.0},
+		{"max(len(tags))", 2.0},
+		{"sum(sum(scores) > 5 ? 1 : 0)", 2.0},
+		{"len(flatten(scores))", 6.0},             // group level: scores is the array of lists
+		{"len(filter(scores, sum(#) > 10))", 1.0}, // sum(#) is the closure's own
+		{"sum(len(scores))", 6.0},                 // row level: each row's list length, summed
+		{"count()", 3.0},                          // the bare dummy still parses
+	}
+	for _, c := range cases {
+		got := ExprAgg(c.expr)(records).GetValue()
+		if got != c.want {
+			t.Errorf("%s: got %#v, want %#v", c.expr, got, c.want)
+		}
+	}
+}
+
 func TestExprAggCount(t *testing.T) {
 	records := []Record{
 		NewRecord(map[string]any{"name": "Alice"}),

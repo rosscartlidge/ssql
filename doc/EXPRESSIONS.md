@@ -298,6 +298,18 @@ that run in every lane, including `generate sql`: `-first`, `-last`,
 `-percentile FIELD P NAME`, `-stddev`, `-variance`, `-mode`, `-arg-max
 FIELD BY NAME`, `-arg-min`, `-min`/`-max` (strings and times too). Prefer the flag when one exists: flags translate to SQL as well;
 `-expr` does not.
+
+The aggregates themselves — `sum`, `count`, `avg`, `min`, `max`,
+`first`, `last` — take a per-row expression and aggregate it over the
+group: `sum(price * qty)`, `max(len(tags))`. Aggregates do not nest, as
+in SQL: inside an aggregate's argument the same names are expr's
+ordinary list functions over the row's own values, so `sum(sum(scores))`
+totals every row's list, `max(max(scores))` is the best single score and
+`avg(sum(scores))` the mean row total. A closure's `#` is the closure's
+wherever it appears (`len(filter(scores, sum(#) > 10))` counts the rows
+whose scores total more than 10). A list field inside an aggregate is
+the row's list, so `sum(scores)` adds lists and fails; outside one it is
+the group's array of lists, so `len(flatten(scores))` counts every score.
 The flag form `update -set-bucket minute ts 1m` is the same operation
 (Tab completes the fields); use the function when the bucket is part of
 a larger expression. In `generate sql` it becomes a `CASE` that detects
