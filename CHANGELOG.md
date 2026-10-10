@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mis-typed. Library: `FindTableSchema`, `ReadTableSchema`,
   `ParseTableSchema`, `WriteDatapackage`, `WriteCSVSidecar`,
   `TableSchemaJSON`.
+- **`ssql conventions` states the time-zone rule** (DFC147, decided
+  ahead of the date functions): a `time` is an instant; reading its
+  calendar uses one zone, chosen where the stream starts (`from -tz`,
+  else `TZ`, else `/etc/localtime`, as `date(1)` and DuckDB do) and
+  carried in the `_schema` header; `TZ=UTC` pins a run; every
+  serialisation (`generate sql`, `go`, `json`) will freeze the zone by
+  name into its output.
 
 ### Fixed
 

@@ -249,6 +249,29 @@ The same autocli `Command` tree powers the bash CLI today AND drives long-runnin
 - [ ] Golang Weekly submission
 - [ ] Awesome Go PR
 
+## Environment variables (raised 2026-10-10 with DFC147's TZ rule)
+
+Rule proposed in DFC147 §5.7: an environment variable that changes a
+pipeline's RESULTS must have a flag form and travel in the stream (the
+zone is the first); one that changes what runs, or how fast, may stay in
+the environment as inter-process plumbing. Audit against that rule, at a
+later cleanup (Ross, 2026-10-10: "better left to a later cleanup"):
+
+- [ ] `SSQL_SCHEMA_SAMPLE` — changes the inferred `_schema` header, i.e.
+  results; the one variable that fails the rule today. Give `from` a flag
+  and keep the variable as its default.
+- [ ] `-generate` on every command — the third spelling of the mode beside
+  `SSQL_MODE` (plumbing) and `generate -pipeline … -mode` (text, DFC139).
+  Docs already lead with the other two (codelab: 11 `-pipeline`, 3
+  `SSQL_MODE=`, 0 `-generate`). Deprecate, remove at v5.
+- [ ] `SSQLGO` — deprecated alias since v4.46.0; remove at v5 (the corpus
+  drives it on purpose for back-compat until then).
+- Keep: `SSQL_MODE` (how a shell pipeline of separate processes agrees to
+  emit fragments; `generate -pipeline` and Ctrl-O's schema probe set it
+  for their subprocesses — the thing env is for; observable, never a
+  silent result change), `SSQL_MODULE_DIR` (developer build knob, like
+  GOFLAGS).
+
 ## Release Infrastructure
 
 - [x] **Regenerate `GH_PAT` again** (2026-10-05, v4.111.0) — Ross set a new secret the same day (`gh secret set GH_PAT`); PROVEN 2026-10-06: the v4.112.0 goreleaser run pushed the cask itself (homebrew-ssql 6d4f5c2). Earlier note — NOT yet proven: re-running the failed job cannot test it because goreleaser first re-uploads the archives and GitHub refuses duplicates, so the step never runs. The v4.112.0 release is the proof; if its cask push fails 401 again, check the token's expiry and scope (Contents read/write on homebrew-ssql). Was: goreleaser's Homebrew cask step failed with `GET …/repos/rosscartlidge/homebrew-ssql: 401 Bad credentials` — the PAT regenerated 2026-07-03 has expired. 14 assets were published; the cask was updated by hand (homebrew-ssql 3ce59cd). When regenerating, pick a longer expiry or a fine-grained token on the one repo, and note the expiry date here.

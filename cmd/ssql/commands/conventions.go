@@ -60,6 +60,14 @@ Data model:
     as <(ssql from jsonl FILE) to add it.
   - canonical numeric types are int64 and float64 (CSV auto-parses to these).
   - field order: record mode is alphabetical; typed mode keeps struct order.
+  - time: a "time" field is an instant (RFC 3339 on the wire, keeping the
+    offset it came with; compared and sorted as instants). Reading its
+    calendar — hour, day, week, month truncation, formatting — uses a zone
+    chosen ONCE where the stream starts (from … -tz ZONE, else TZ, else
+    /etc/localtime, as date(1) and DuckDB do) and carried in the _schema
+    header; later commands read the header, never the environment. TZ=UTC
+    pins a run; tz(ts, "Australia/Sydney") picks a zone for one expression
+    (DFC147). bucket and resample snap to the Unix epoch, zone-free.
 
 Pipeline:
   - every data command reads stdin and writes stdout (Unix pipelines).
@@ -98,7 +106,7 @@ func printConventionCategory(ctx *cf.Context, category string) error {
 	case "evaluation", "eval":
 		fmt.Fprint(ctx.Stdout(), conventionEvaluation)
 	case "data", "data-model", "schema":
-		fmt.Fprint(ctx.Stdout(), conventionData)
+		fmt.Fprintf(ctx.Stdout(), "%s", conventionData) // the text has a strftime %d
 	case "pipeline":
 		fmt.Fprint(ctx.Stdout(), conventionPipeline)
 	case "nested", "structured", "json":
@@ -168,6 +176,42 @@ field ordering
   Record mode emits fields alphabetically; typed mode (generate go) keeps the
   struct field order. Both contain the same fields — only the column order of
   some sinks differs.
+
+time and zones
+  A "time" field is an instant. On the wire it is RFC 3339 with the offset
+  it came with (2026-01-05T10:30:00+11:00 and 2026-01-04T23:30:00Z are the
+  SAME value: equal, and sorted together). It comes from cast -type F time,
+  from csv -type F time, a schema sidecar, or a _schema header; the forms
+  read are RFC 3339, "2026-01-05 10:30:00", a bare date (midnight UTC) and
+  Unix seconds.
+
+  Reading the calendar of an instant — hour(ts), day(ts), week(ts),
+  trunc(ts, "month"), format(ts, "%Y-%m-%d"), hour(now()) — needs a zone.
+  The zone is chosen ONCE, where the stream starts, and travels with it:
+  the source command (from, from ssh, a catalog) takes -tz ZONE, else the
+  TZ environment variable, else /etc/localtime — exactly as date(1), Go
+  and DuckDB resolve it — and writes the name into the _schema header.
+  Every later command reads the header, never its own environment, so a
+  pipeline has one zone from end to end, tee keeps it, and a remote or
+  server-side stage cannot leak its machine's zone in. So:
+
+    ssql from data.csv -tz Australia/Sydney | …   # say it in the pipeline
+    TZ=UTC ssql from data.csv | …                  # pin a run (CI)
+    hour(tz(ts, "Australia/Sydney"))              # one zone for one expression
+
+  Everything that serialises a pipeline freezes the zone into text:
+  generate sql writes SET TimeZone = 'Australia/Sydney' by name, generate
+  go a time.LoadLocation literal, generate json/ssql a -tz on the from
+  stage — so the output gives the same answer wherever it runs and says
+  what it assumed. Environments without a shell (the WASM playground,
+  serve, a JSON pipeline document) supply -tz the same way. The rule
+  behind it: an environment variable that changes RESULTS must have a flag
+  and travel in the stream; one that changes what runs (SSQL_MODE) may stay
+  in the environment. The date functions are DFC147
+  (doc/research/dfc147_date_time_functions.md).
+
+  bucket(ts, "5m"), -set-bucket and resample snap to the Unix epoch and do
+  not depend on the zone; trunc(ts, "day") does (local midnight).
 `
 
 const conventionPipeline = `PIPELINE:

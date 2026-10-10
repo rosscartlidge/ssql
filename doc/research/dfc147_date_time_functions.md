@@ -96,7 +96,8 @@ date, Unix seconds as an int) — the rule `bucket` already follows, so an
 untyped RFC 3339 string column works in the VM without a `cast`. The
 typed lane transpiles natively only over a `time.Time` column (§8.2);
 the SQL lane only over a column it knows is a time (§8.3). Nil in, nil
-out. Results are evaluated in UTC unless a `tz()` says otherwise (§5.1).
+out. Calendar readings are in the local zone (`TZ`, then
+`/etc/localtime`) unless a `tz()` says otherwise (§5.1).
 
 ### 4.1 Parts
 
@@ -132,8 +133,8 @@ Monday (ISO), as DuckDB's and Postgres's `date_trunc('week')` do.
 | per unit: `time.Date(y, m, 1, …)` etc.; week: back `(Weekday()+6)%7` days | `date_trunc('UNIT', ts)` | `date_trunc('UNIT', ts)` | `date_trunc('UNIT', ts)` |
 
 `bucket` stays for fixed widths (`5m`, `90s`, `6h`) and keeps its
-epoch-aligned semantics; `trunc(ts, "day")` and `bucket(ts, "24h")`
-agree in UTC. The unit is a string literal in all lanes (as `bucket`'s
+epoch-aligned semantics, zone-free; `trunc(ts, "day")` and
+`bucket(ts, "24h")` agree only under `TZ=UTC`. The unit is a string literal in all lanes (as `bucket`'s
 width is), so a bad unit is a compile error, not a per-row one.
 
 ### 4.3 Formatting and parsing
@@ -154,8 +155,9 @@ name.
 
 ### 4.4 Zone conversion
 
-`tz(ts, ZONE)` returns the same instant with its parts in `ZONE`
-(`time.In`). On its own it changes nothing a sink prints (RFC 3339 of
+`tz(ts, ZONE)` is new (today the only form is the Go method
+`ts.In(timezone("…"))`, VM-only). It returns the same instant with its
+parts in `ZONE` (`time.In`). On its own it changes nothing a sink prints (RFC 3339 of
 the same instant, different offset); it exists to compose:
 `hour(tz(ts, "Australia/Sydney"))`, `trunc(tz(ts, "Europe/Zurich"),
 "day")` (local midnight, as an instant), `format(tz(ts, "America/New_York"),
@@ -163,7 +165,7 @@ the same instant, different offset); it exists to compose:
 
 | Go | DuckDB | Postgres | DataFusion |
 |---|---|---|---|
-| `ts.In(loc)` with `loc` hoisted | `(ts AT TIME ZONE 'ZONE')` on a TIMESTAMPTZ, i.e. `(ts::TIMESTAMPTZ AT TIME ZONE 'ZONE')` under `TimeZone = 'UTC'` | `(ts AT TIME ZONE 'UTC' AT TIME ZONE 'ZONE')` | `to_local_time(ts AT TIME ZONE 'ZONE')` if the oracle lane confirms, else refuse |
+| `ts.In(loc)` with `loc` hoisted | `(ts::TIMESTAMPTZ AT TIME ZONE 'ZONE')`, the session zone pinned by the prologue (§5.1) | `(ts::TIMESTAMPTZ AT TIME ZONE 'ZONE')`, same pin | `to_local_time(ts AT TIME ZONE 'ZONE')` if the oracle lane confirms, else refuse |
 
 The existing `timezone(str)` (a `*time.Location` value) stays for
 `ts.In(...)` compatibility and is dropped from the docs' front table.
@@ -200,28 +202,65 @@ hour), not elapsed whole units.
 These are the places where lanes disagree today or would without a
 rule. Each one is a Golden equivalence case when built.
 
-### 5.1 Parts and truncation are UTC unless `tz()` says otherwise
+### 5.1 Calendar readings are local, honouring `TZ`; `tz()` overrides
 
-The alternatives were the value's own offset (Go) and the session zone
-(DuckDB, Postgres). The value's offset is not representable in SQL: a
-`TIMESTAMPTZ` is an instant, and the `+11:00` the CSV cell carried is
-gone once read. The session zone depends on the machine, and a
-pipeline that gives different answers on a laptop in Sydney and a
-server in UTC is the kind of bug this project's differential gate
-exists to prevent. UTC is the one choice every lane can make
-deterministically, and it is what `bucket` and `resample` already do.
+Decided with Ross 2026-10-10 (the first draft said UTC-only; §10.1 has
+the reversal). A `time` is an instant. Reading its calendar — a part,
+`trunc`, `format`, and `hour(now())` — needs a zone, and the zone is the
+**local** one: the `TZ` environment variable, then `/etc/localtime`,
+exactly as `date(1)`, Go's `time.Local` and DuckDB resolve it (probed:
+DuckDB's session `TimeZone` is `UTC` under `TZ=UTC` and `Australia/Sydney`
+under `TZ=Australia/Sydney`). `tz(ts, ZONE)` picks a zone for one
+expression. `TZ=UTC ssql …` pins a run.
 
-So: the SQL prologue sets the session zone (`SET TimeZone = 'UTC'` for
-DuckDB, `SET timezone TO 'UTC'` for Postgres, the
-`datafusion.execution.time_zone` option for DataFusion); the VM and the
-transpiler call the part on `ts.UTC()`; `tz()` is the only way to a
-local wall clock. The doc sentence: "parts are UTC; wrap the time in
-`tz()` for a zone".
+Why not UTC-only, which is deterministic without the environment:
+`hour(now())` at two in the afternoon in Sydney would say 3, and every
+expression would grow a `tz()` wrapper, which is the hidden state moved
+into the pipeline text a hundred times over. Why not the value's own
+offset, which is what Go's `ts.Hour()` does today: SQL cannot see it
+(a `TIMESTAMPTZ` is an instant; the `+11:00` the cell carried is gone
+once read), so no SQL lane could agree.
 
-Consequence to document: `hour(date("2026-01-05T10:30:00+11:00"))` is
-23. A user who wants 10 writes `hour(tz(ts, "Australia/Sydney"))`, or
-reads the file with the zone in mind. `ts.Hour()` keeps Go's answer
-in the VM for anyone who used it, but the docs stop showing it.
+Where the zone lives — §5.7 has the full argument — is the stream's
+`_schema` header: the source command resolves it once (its `-tz`, else
+`TZ`, else `/etc/localtime`) and writes it beside `fields`; every later
+command reads the header and never the environment. Per lane:
+
+- **exec and the VM:** the source stamps `"tz"` into the header; a
+  downstream command's expression environment loads that location once
+  per process and evaluates parts on `ts.In(loc)`. A stream whose
+  header has no `tz` (older `tee` output, a plain JSONL file through
+  `from jsonl`) resolves as a source would.
+- **generated Go:** the planner reads the zone from the `from` stage
+  (its `-tz`, else resolved at generation time) and emits one
+  package-level `time.LoadLocation` literal; the program does not read
+  `TZ` at run time, so it is reproducible like the SQL.
+- **generated SQL:** the prologue pins the zone **by name in the text**
+  — `SET TimeZone = 'Australia/Sydney'` (DuckDB), `SET timezone TO
+  '…'` (Postgres), `datafusion.execution.time_zone` (DataFusion) —
+  from the same source. Resolution is `TZ`, else the `/etc/localtime`
+  symlink's path after `zoneinfo/`. When no name resolves (a copied
+  rather than linked `/etc/localtime`, a `TZ` such as `EST5EDT`), the
+  source refuses with "set -tz or TZ to an IANA zone name" rather than
+  guessing. The generated SQL and Go therefore give the same answer
+  wherever they run, and say which zone they assumed.
+- **`generate json` and `generate ssql`** write the resolved `-tz` onto
+  the `from` stage, so a serialised pipeline is portable.
+- **`from ssh`** ships `-tz` in the remote command text, so a UTC server
+  never leaks its zone into a Sydney pipeline.
+- **`-explain`** prints the zone a pipeline resolved to.
+- **the equivalence harness** sets `TZ=UTC` for every lane and runs
+  `tz_hour` a second time under `TZ=Australia/Sydney`, so both the
+  honouring and the pins are proven; a third run gives `-tz` on `from`
+  under a different `TZ` and expects the flag to win in every lane.
+
+Consequence to document: the same pipeline on a laptop in Sydney and a
+server in UTC gives different `hour()` values, as `date` does; the fix
+is the same, set `TZ`. `hour(date("2026-01-05T10:30:00+11:00"))` is 10
+in Sydney and 23 under `TZ=UTC`, and `from … -tz Australia/Sydney`
+says 10 anywhere. `ts.Hour()` keeps Go's own-offset
+answer in the VM for anyone who used it, but the docs stop showing it.
+`bucket` and `resample` stay zone-free (epoch-aligned), as today.
 
 ### 5.2 Week starts Monday
 
@@ -272,6 +311,72 @@ time). `format` is `string`. In a typed program a time result needs
 `exprvm.MustCoerceTime` (new) so a `-set-expr` into an existing time
 column stays native; a new column of type time is synthesised as
 `time.Time` by the `-set-expr` schema op as `bucket` does now.
+
+### 5.7 Where the zone lives: chosen at the source, carried in the stream
+
+Ross, 2026-10-10: what about the environments that have no `bash` —
+the WASM playground, `serve`, a JSON pipeline document? Should every
+command take a `-tz`, or a generic `-env NAME VALUE` for any variable
+we add?
+
+The tension is between the Unix convention (§5.1: the environment
+decides) and the authority principle (DFC115: any state that changes
+what the user sees must be expressible as pipeline text; a bare `TZ`
+is exactly the hidden state it exists to stop). One rule satisfies
+both:
+
+> **Consult the environment once, at the source, and carry the answer
+> in the stream as text.**
+
+- **`-tz ZONE` on the source commands only** — `from` (every form),
+  `from ssh`, catalog sources. Default `TZ`, then `/etc/localtime`. No
+  other command needs the flag: only the stream's origin resolves
+  anything. (If a downstream re-stamp ever matters, `-tz` on a command
+  that rewrites the header is a small later addition, not a design
+  now.)
+- **The zone travels in the `_schema` header**, as a `"tz"` key beside
+  `"fields"`. `lib.ParseSchemaHeader` reads only the keys it knows and
+  tolerates siblings (checked 2026-10-10), so an older binary
+  downstream ignores it. `tee` preserves it for free; `tz()` stays the
+  per-expression override; `now()` reads the header zone like
+  everything else, so a pipeline's clock and its calendar agree.
+- **Every serialisation freezes it into text**: `generate sql` the
+  `SET` by name, `generate go` a `LoadLocation` literal, `generate
+  json`/`generate ssql` a `-tz` on the `from` stage, `from ssh` a `-tz`
+  in the remote command. The environment is read in one process, once.
+- **Two streams, two zones** (`join`, `union`, `merge` of inputs whose
+  headers name different zones): refuse with the hint to put `-tz` on
+  one source, rather than pick silently.
+
+Each environment Ross named then has one answer:
+
+| Environment | Where the zone comes from |
+|---|---|
+| shell | `-tz`, else `TZ`, else `/etc/localtime`, at `from` |
+| WASM playground, `to explore -wasm` | no environment; the shim passes the browser's zone (`Intl.DateTimeFormat().resolvedOptions().timeZone`) as `from`'s default; the pipeline text shows `-tz` when the user picks one |
+| `serve` | the source runs on the server; the console is an editor of pipeline text (DFC115 matured), so it writes `-tz` onto the `from` stage rather than sending a header or a cookie; the server's environment is only the fallback |
+| JSON pipeline document (`ssql run`, DFC134) | portable when its `from` stage states `-tz`; `generate json` materialises the resolved zone so a document written on one machine runs the same on another |
+| `from ssh`, catalog shards | the local `from` resolves; the remote command text carries `-tz` |
+
+**Not a generic `-env NAME VALUE`.** It would reimplement the shell
+inside every command and make hidden state an unbounded feature. The
+inventory does not need it either: ssql reads three variables.
+`SSQL_MODE` changes what runs, not results, is observable (the output
+is fragments, not data), already has its text forms (`-generate`,
+`generate -pipeline … -mode`, DFC139) and is legitimately
+inter-process plumbing — the thing an environment is for.
+`SSQL_MODULE_DIR` is a developer build knob like `GOFLAGS`.
+`SSQL_SCHEMA_SAMPLE` changes the inferred header, so it changes
+results, and is the one that fails the rule; it should gain a flag on
+`from` with the variable as default. The rule for the next variable
+anyone is tempted to add:
+
+> An environment variable that changes a pipeline's **results** must
+> have a flag form and travel in the stream. One that changes what
+> runs, or how fast, may stay in the environment.
+
+The audit (that flag, deprecating `-generate` and the `SSQLGO` alias at
+v5) is in TODO.md under "Environment variables"; Ross: a later cleanup.
 
 ## 6. The strftime subset
 
@@ -379,14 +484,20 @@ and `now`; the implementations live in the root package next to
 and generated code call one implementation. `ExprCompiledFunctions`
 grows the names that could collide with field names (`day`, `month`,
 `year`, `week` are plausible column names: compile-time binding as for
-`date`, so `month(month)` works).
+`date`, so `month(month)` works). The zone: `from` gains `-tz` (a
+`StaticCompleter` over the IANA names from `$ZONEINFO`/`/usr/share/zoneinfo`),
+`lib.Schema` a `TZ string` written and read with the header, and the
+expression environment builders (`helpers.go`, `expr_agg.go`) take the
+location from the stream's schema; `ssql.ResolveZone(flag string)
+(name string, loc *time.Location, err error)` in the root package is
+the one resolver (flag, `TZ`, `/etc/localtime` symlink, else error).
 
 ### 8.2 Transpiler
 
 `exprGoTime` joins the lattice; a `time.Time` field emits natively
 instead of refusing. Each function has a case in `exprToGo`: parts to
-`ts.UTC().Year()` etc. (one `UTC()` per part, hoisted when the same
-field is used twice), `trunc`/`add`/`diff`/`format` to `exprfn`
+`ts.In(ssqlZone).Year()` etc. over the package-level location the
+planner emits from the `from` stage's zone (§5.7), `trunc`/`add`/`diff`/`format` to `exprfn`
 helpers that call the root functions, `tz` to `.In(loc)` with the
 location hoisted as a package-level `var` (`time.LoadLocation` once,
 panic at init on a bad zone, which codegen already validated). A time
@@ -404,7 +515,8 @@ so `generate_sql_expr.go` gets a `timeFuncToSQL(name, args)` switch
 beside `bucketToSQL`, dispatching on `sqlDialectCur`, refusing with
 `dialectRefuse` where §4 says refuse, and refusing a non-time argument
 (`sqlColumnKinds`) with the `cast` remedy. The prologue gains the
-session-zone `SET` (§5.1). A `-set-expr` whose result is a time marks
+session-zone `SET` from the `from` stage's resolved zone (§5.7); the
+`-tz` arrives through the fragment's argv as `-type` does today. A `-set-expr` whose result is a time marks
 the column in `sqlTimeColumns` so a later `bucket`/`trunc` chooses the
 time form.
 
@@ -419,11 +531,15 @@ time form.
   Sunday/Monday boundary), `add_month_clamps` (Golden: the five
   month-end rows), `diff_month_boundaries` (Golden), `format_strftime`
   (Golden), `tz_hour` (Golden: the `+11:00`/`Z` rows of §2 give 23 and
-  10 in UTC, 10 and 21 in Sydney), `set_bucket_month_flag`,
+  10 under `TZ=UTC`, 10 and 21 under `TZ=Australia/Sydney`; run both
+  ways), `from_tz_flag_wins` (`from … -tz Australia/Sydney` under
+  `TZ=UTC`, every lane), `tee_carries_tz` (a `tee`'d stream read back
+  on a `TZ=UTC` run keeps Sydney), `join_tz_mismatch_refused`,
+  `set_bucket_month_flag`,
   `from_csv_format_dmy` (the §7.2 reader), `cast_format_dmy`,
   `to_csv_time_format` (exec/record/typed; the sink has no SQL lane).
-- Watch-it-fail: before the prologue `SET`, `tz_hour` diverges in the
-  duckdb lane on a non-UTC machine; before the clamping helper,
+- Watch-it-fail: before the prologue `SET`, generate the SQL under one
+  `TZ` and run DuckDB under another and `tz_hour` follows the runner; before the clamping helper,
   `add_month_clamps` diverges in the Go lanes.
 - `TestFieldCompletionConfiguration` for the new flags; `ssql functions
   date` lists the set; `make doc-check` and `make doc-test` over the
@@ -436,15 +552,18 @@ paragraph; `doc/cli-codelab.md` gains a "Dates" section (read a d/m/Y
 file with `-format`, `trunc` to month, `group-by`, `format` on the way
 out through `-time-format`); `doc/api-reference.md` for the root
 functions; `generate sql` dialect table rows; DFC136 §4.1 and §6 marked
-built; DFC146 §5 format refusal retired; `functions.go`
+built; DFC146 §5 format refusal retired; `ssql conventions -category
+data` (the time-zone rule, added 2026-10-10 ahead of the build);
+`functions.go`
 `writeDateFunctions`; CHANGELOG Added.
 
 ## 9. Build order
 
 Three batches, each shippable:
 
-- **A. Functions** (§4, §5, §8.1–8.4 for the functions): VM, transpiler
-  with `exprGoTime`, SQL per dialect, prologue zone, differential and
+- **A. Functions** (§4, §5, §8.1–8.4 for the functions): `from -tz`,
+  the header's `tz`, `ResolveZone`; VM, transpiler with `exprGoTime`,
+  SQL per dialect, prologue zone, differential and
   equivalence cases, docs. The bulk of the work and the whole of the
   DFC136 gap.
 - **B. Patterns** (§4.3, §6, §7.2): the strftime converter, `format`,
@@ -459,13 +578,14 @@ sitting.
 
 ## 10. Open questions for Ross
 
-1. **UTC by default (§5.1).** The alternative is to make the session
-   zone a pipeline setting (`SSQL_TZ`, or `-tz` on the reader) and
-   emit it in the SQL prologue, so parts come out local on purpose
-   rather than by machine. I prefer UTC + `tz()` because it is one rule
-   with no hidden state, and nothing in the pipeline text would say
-   which zone a `-tz`-less run used. But a `-tz` reader flag could be
-   added later without conflict.
+1. ~~**UTC by default (§5.1).**~~ **Resolved 2026-10-10: local, honouring
+   `TZ`.** Ross asked what to do with the `TZ` variable; the answer is
+   the Unix one. The first draft preferred UTC-only for determinism;
+   §5.1 records why that loses (`hour(now())`); §5.7 (same day) records
+   where the zone lives — resolved once at the source, carried in the
+   `_schema` header, frozen by name into every serialisation — which
+   is what keeps the generated SQL and Go reproducible and answers the
+   no-shell environments.
 2. **Names.** `trunc`/`add`/`diff` are short; `date_trunc`/`date_add`/
    `date_diff` are what SQL users type. The expression language's
    existing style is short (`bucket`, `len`, `uniq`), and `trunc` is
