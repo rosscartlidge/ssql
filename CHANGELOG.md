@@ -7,7 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CSV schema sidecars (DFC146).** A delimited file's column types can
+  be stated once, beside it, in a standard file: W3C CSV on the Web
+  metadata (`X.csv-metadata.json`, or `csv-metadata.json` in the
+  directory) or a Frictionless Data Package (`datapackage.json` naming
+  the file). `from csv`, `from tsv` and the bare `from FILE` find it and
+  take its types instead of sampling — in exec, schema mode (now
+  sample-free when every column is typed), `-sample`/`-last`, record and
+  typed programs, and `generate sql` (DuckDB `read_csv(types=…)`, the
+  Postgres table's column types; DataFusion refuses). Your own `-type`
+  wins; `-no-sidecar` ignores it; `-sidecar FILE` names one elsewhere.
+  `to csv FILE -sidecar` writes a Frictionless package beside the output
+  (merging into an existing one), and `generate schema -datapackage`
+  prints a pipeline's schema in that form, so a CSV round trip keeps its
+  types. Types map integer → int, number → float, boolean → bool,
+  date/datetime → time, object/array → json; a `dialect` without a
+  header row or with another delimiter, and a date `format` the reader
+  cannot honour, are refused with the remedy rather than silently
+  mis-typed. Library: `FindTableSchema`, `ReadTableSchema`,
+  `ParseTableSchema`, `WriteDatapackage`, `WriteCSVSidecar`,
+  `TableSchemaJSON`.
+
 ### Fixed
+
+- **`from csv -type COL json` reads the cell as a nested value.** The
+  declaration was accepted and the cell stayed text, so `addr.city`
+  never resolved and completion listed no paths; the reader now takes a
+  JSON array or object cell as its `JSONString` (any other text in the
+  column is a cell error), the typed sampler types the column as json,
+  and record codegen emits the right constant (it wrote `FieldTypeJson`,
+  a compile error).
+- **`generate sql` translates the from stage's `-type`.** It was ignored
+  (the `cast_text_to_int_and_bool` equivalence case had skipped the
+  duckdb lane for that reason); DuckDB now reads the file with the
+  declared types. What that skip really hid: DuckDB's `CAST AS BOOLEAN`
+  does not read `yes`/`off` as ssql's cast does — the skip stays, with
+  its true reason.
 
 - **Ctrl-O completes nested data: names to depth, values through the
   path walk.** Field names: schema mode listed an object's keys one

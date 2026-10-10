@@ -125,7 +125,17 @@ func sqlSubquery(body string) string {
 // Postgres, which cannot read files in a query — the table is named after
 // the file and the prologue carries the CREATE TABLE + \copy to load it.
 func dialectSource(file string) (string, error) {
+	return dialectSourceTyped(file, nil)
+}
+
+// dialectSourceTyped is dialectSource with the source's declared column
+// types (-type and a schema sidecar, DFC146): Postgres's table takes
+// them; DataFusion's file table infers and cannot, so they are refused.
+func dialectSourceTyped(file string, overrides map[string]string) (string, error) {
 	lower := strings.ToLower(file)
+	if sqlDialectCur == dialectDataFusion && len(overrides) > 0 {
+		return "", dialectRefuse("from -type / schema sidecar", "DataFusion's file table infers its column types")
+	}
 	if sqlDialectCur == dialectDataFusion && (strings.HasSuffix(lower, ".tsv") || strings.HasSuffix(lower, ".jsonl")) {
 		return "", dialectRefuse("from "+file, "DataFusion's file table reads .csv, .json and .parquet by extension")
 	}
@@ -153,6 +163,11 @@ func dialectSource(file string) (string, error) {
 		}
 	}
 	cols, types := pgInferColumns(file, delim)
+	for i, c := range cols {
+		if t, ok := overrides[c]; ok {
+			types[i] = pgColumnType(t, types[i])
+		}
+	}
 	pgLoads = append(pgLoads, pgLoad{table: table, file: file, delim: delim, columns: cols, types: types})
 	return table, nil
 }
@@ -644,4 +659,22 @@ func sqlDivide(left, right string) string {
 		return "(" + left + " / " + right + ")"
 	}
 	return "(CAST(" + left + " AS " + sqlFloatType() + ") / " + right + ")"
+}
+
+// pgColumnType is the Postgres column type for a declared ssql type;
+// "auto" keeps the inferred one.
+func pgColumnType(typeName, inferred string) string {
+	switch typeName {
+	case "int":
+		return "BIGINT"
+	case "float":
+		return "DOUBLE PRECISION"
+	case "bool":
+		return "BOOLEAN"
+	case "time":
+		return "TIMESTAMP"
+	case "string":
+		return "TEXT"
+	}
+	return inferred
 }

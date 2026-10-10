@@ -55,7 +55,8 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Global().
 		Default(false).
 		Help("Print only the record count this invocation would produce (cheapest per format: parquet footer, line count for csv/tsv/jsonl) and exit").
-		Done().
+		Done()
+	sidecarFlags(fromCmd).
 		Flag("FILE").
 		String().
 		Variadic().
@@ -118,10 +119,27 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return fmt.Errorf("from %s: cannot infer format from URL path — use an explicit subcommand (from csv URL, from parquet URL, …)", inputFile)
 			}
 			switch fi.Name {
-			case "csv":
-				return executeFromCSV(inputFile, nil, "auto", generate)
-			case "tsv":
-				return executeFromTSV(inputFile, defaultTypeArgs(), generate)
+			case "csv", "tsv":
+				// A delimited file's schema sidecar applies in the bare
+				// form too (DFC146).
+				sidecar, noSidecar := sidecarFlagValues(ctx)
+				overrides, err := resolveSidecarTypes([]string{inputFile}, nil, sidecar, noSidecar)
+				if err != nil {
+					return err
+				}
+				if fi.Name == "csv" {
+					return executeFromCSV(inputFile, overrides, "auto", generate)
+				}
+				types := defaultTypeArgs()
+				if len(overrides) > 0 {
+					cfg, err := buildCSVConfig(overrides, "auto")
+					if err != nil {
+						return err
+					}
+					cfg.Delimiter = 0 // auto-detect from the header
+					types = typeArgs{overrides: overrides, defaultType: "auto", cfg: cfg}
+				}
+				return executeFromTSV(inputFile, types, generate)
 			case "lines":
 				return executeFromLines(inputFile, generate)
 			case "json", "jsonl":
@@ -713,6 +731,9 @@ func capitalizeFieldType(typeName string) string {
 	ft, err := ssql.ParseFieldType(typeName)
 	if err != nil || ft == ssql.FieldTypeAuto {
 		return "Auto"
+	}
+	if ft == ssql.FieldTypeJSON {
+		return "JSON" // the constant is FieldTypeJSON (emitted "Json" until 2026-10-10: a compile error)
 	}
 	return strings.ToUpper(ft.String()[:1]) + ft.String()[1:]
 }

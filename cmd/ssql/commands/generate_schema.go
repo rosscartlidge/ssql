@@ -34,14 +34,26 @@ func registerGenerateSchema(cmd *cf.SubcommandBuilder) {
 			Help("Emit the fields as records (field, type) on the normal wire, so the list can flow on: … -data | ssql to table").
 			Done().
 
+		Flag("-datapackage").
+			Bool().
+			Global().
+			Help("Print the fields as a Frictionless Table Schema ({\"fields\": [{name, type}]}) — the sidecar `to csv -sidecar` writes, for a pipeline's output (DFC146)").
+			Done().
+
 		Handler(func(ctx *cf.Context) error {
 			src, err := generateFragmentSource(ctx, "schema", "schema")
 			if err != nil {
 				return err
 			}
 			asData, _ := ctx.GlobalFlags["-data"].(bool)
-			if asData {
+			asPackage, _ := ctx.GlobalFlags["-datapackage"].(bool)
+			switch {
+			case asData && asPackage:
+				return fmt.Errorf("generate schema: -data and -datapackage are exclusive — pick one")
+			case asData:
 				return writeSchemaAsRecords(ctx.Stdout(), src)
+			case asPackage:
+				return writeSchemaAsTableSchema(ctx.Stdout(), src)
 			}
 			w := ctx.Stdout()
 			for _, name := range readSchemaModeInput(src) {
@@ -73,4 +85,23 @@ func writeSchemaAsRecords(w io.Writer, src io.Reader) error {
 		}
 	}
 	return lib.WriteJSONLWithSchema(w, out, records)
+}
+
+// writeSchemaAsTableSchema prints the final schema header as a
+// Frictionless Table Schema document (DFC146): the wire types mapped to
+// the standard's names; a column schema mode could not type is `any`.
+func writeSchemaAsTableSchema(w io.Writer, src io.Reader) error {
+	sr := lib.ReadJSONLWithSchema(src)
+	var fields []ssql.TableField
+	if sr.Schema != nil {
+		for _, name := range sr.Schema.Fields {
+			fields = append(fields, ssql.TableField{Name: name, Type: wireFieldType(sr.Schema.TypeOf(name))})
+		}
+	}
+	out, err := ssql.TableSchemaJSON(fields)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(out)
+	return err
 }

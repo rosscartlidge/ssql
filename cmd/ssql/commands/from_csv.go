@@ -17,12 +17,13 @@ import (
 )
 
 func registerFromCSV(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("csv").
+	sub := cmd.Subcommand("csv").
 		Description("Read CSV file(s) or stdin").
 		Example("ssql from csv data.csv | ssql to table", "Read CSV file").
 		Example("ssql from csv *.csv | ssql to table", "Read multiple CSV files").
 		Example("ssql from csv *.csv -merge-schemas | ssql to table", "Merge files with different headers").
 		Example("ssql from csv data.csv -type zipcode string -type phone string", "Force fields to string").
+		Example("ssql from csv sales.csv -sidecar datapackage.json | ssql to table", "Column types from a Frictionless package (found beside the file by default)").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -73,11 +74,11 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Completer(cf.NoCompleter{Hint: "<field-name>"}).
 		Done().
 		Arg("type").
-		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "auto"}}).
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "time", "json", "auto"}}).
 		Done().
 		Accumulate().
 		Global().
-		Help("Override type for field: -type zipcode string -type age int").
+		Help("Override type for field: -type zipcode string -type age int -type addr json (a JSON cell as a nested value)").
 		Done().
 		Flag("-default-type", "-dt").
 		String().
@@ -85,7 +86,8 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Default("auto").
 		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
 		Help("Default type for all fields: auto (default), string, int, float, bool").
-		Done().
+		Done()
+	sidecarFlags(sub).
 		Flag("FILE").
 		String().
 		Variadic().
@@ -130,6 +132,12 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 			}
 			if typeVal, ok := ctx.GlobalFlags["-type"]; ok {
 				typeOverrides = parseTypeOverrides(typeVal)
+			}
+			// A schema sidecar's types sit under the user's (DFC146).
+			sidecar, noSidecar := sidecarFlagValues(ctx)
+			var err error
+			if typeOverrides, err = resolveSidecarTypes(files, typeOverrides, sidecar, noSidecar); err != nil {
+				return err
 			}
 
 			var unordered bool
@@ -234,7 +242,7 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 		if err := checkTypeOverrideColumns(headers, typeOverrides, "from csv"); err != nil {
 			return err
 		}
-		return writeSchemaModeDelimited(os.Stdout, headers, ssql.ReadCSVFromReader(in, csvConfig))
+		return writeSchemaModeDelimited(os.Stdout, headers, typeOverrides, ssql.ReadCSVFromReader(in, csvConfig))
 	}
 
 	if shouldGenerate(generate) {

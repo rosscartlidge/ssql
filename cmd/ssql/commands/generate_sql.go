@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -127,6 +128,7 @@ type sqlQuery struct {
 	comments     []string // original ssql commands
 	csvSource    string   // DuckDB: the single CSV/TSV file FROM reads, for from -last's ordered re-read
 	csvDelim     byte
+	csvTypes     string   // DuckDB: the read_csv types={…} option from -type and a sidecar ("" = infer)
 
 	// columns tracks the current output field names, seeded from the source
 	// CSV/TSV header and advanced by each stage's schemaOp (the same rules
@@ -489,7 +491,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// This is a copy of from's grammar (DFC115 legacy exception).
 		flagArity := map[string]int{
 			"-sample": 1, "-sample-seed": 1, "-last": 1, "-type": 2, "-t": 2,
-			"-default-type": 1, "-dt": 1, "-source": 1, cf.ArgFlag: 1,
+			"-default-type": 1, "-dt": 1, "-source": 1, "-sidecar": 1, cf.ArgFlag: 1,
 		}
 		var files []string
 		rest := args[1:]
@@ -509,8 +511,28 @@ func translateFrom(q *sqlQuery, args []string) error {
 			}
 			files = append(files, a)
 		}
+		// The source's column types: `-type` and a schema sidecar
+		// (DFC146), resolved the way the command resolves them. They type
+		// DuckDB's read_csv and the Postgres table; DataFusion's file
+		// table infers and refuses them. (From-stage -type was ignored
+		// here until 2026-10-10.)
+		var typeFile string
 		if len(files) == 1 {
-			src, err := dialectSource(files[0])
+			typeFile = files[0]
+		}
+		typeOverrides, err := sidecarTypesFromArgs(rest, typeFile)
+		if err != nil {
+			return err
+		}
+		for col, t := range typeOverrides {
+			if ft, err := ssql.ParseFieldType(t); err != nil {
+				return fmt.Errorf("from %s -type %s: %w", args[0], col, err)
+			} else if ft == ssql.FieldTypeJSON {
+				return fmt.Errorf("from %s: column %s is json (a nested value read from delimited text), which has no SQL translation yet — use generate go", args[0], col)
+			}
+		}
+		if len(files) == 1 {
+			src, err := dialectSourceTyped(files[0], typeOverrides)
 			if err != nil {
 				return err
 			}
@@ -534,22 +556,28 @@ func translateFrom(q *sqlQuery, args []string) error {
 				// found this: every JSON source left q.columns unknown).
 				q.columns = jsonHeader(files[0])
 			}
-			if q.csvSource != "" && sqlDialectCur == dialectDuckDB {
-				q.fromClause = duckReadCSV([]string{q.csvSource}, q.csvDelim, "")
+			if q.csvSource != "" {
+				applyTypeOverrideKinds(typeOverrides)
+				q.csvTypes = duckTypesOption(typeOverrides)
+				if sqlDialectCur == dialectDuckDB {
+					q.fromClause = duckReadCSV([]string{q.csvSource}, q.csvDelim, q.csvTypes)
+				}
 			}
 		} else if sqlDialectCur == dialectDuckDB {
 			delim := byte(',')
 			if args[0] == "tsv" || strings.HasSuffix(strings.ToLower(files[0]), ".tsv") {
 				delim = '\t'
 			}
-			q.fromClause = duckReadCSV(files, delim, "")
+			applyTypeOverrideKinds(typeOverrides)
+			q.fromClause = duckReadCSV(files, delim, duckTypesOption(typeOverrides))
 		} else {
 			// Postgres/DataFusion: one source per file, UNION ALL (the
 			// files must share a header, as ssql's own multi-file read
 			// assumes).
+			applyTypeOverrideKinds(typeOverrides)
 			var parts []string
 			for _, f := range files {
-				src, err := dialectSource(f)
+				src, err := dialectSourceTyped(f, typeOverrides)
 				if err != nil {
 					return err
 				}
@@ -598,7 +626,11 @@ func translateFrom(q *sqlQuery, args []string) error {
 		if q.csvSource == "" {
 			return fmt.Errorf("from -last has a SQL translation only for a single CSV/TSV file (file order is undefined for other sources); use generate go")
 		}
-		src := duckReadCSV([]string{q.csvSource}, q.csvDelim, "parallel=false")
+		extra := "parallel=false"
+		if q.csvTypes != "" {
+			extra += ", " + q.csvTypes
+		}
+		src := duckReadCSV([]string{q.csvSource}, q.csvDelim, extra)
 		q.fromClause = fmt.Sprintf("(SELECT * EXCLUDE (__rn) FROM (SELECT * FROM (SELECT *, row_number() OVER () AS __rn FROM %s) ORDER BY __rn DESC LIMIT %s) ORDER BY __rn)", src, lastN)
 	}
 	return nil
@@ -2531,6 +2563,53 @@ func duckReadCSV(files []string, delim byte, extra string) string {
 		opts += ", " + extra
 	}
 	return fmt.Sprintf("read_csv(%s, %s)", src, opts)
+}
+
+// duckTypesOption renders -type / sidecar overrides as read_csv's
+// types={'col': 'TYPE', …} option (sorted; "" when none).
+func duckTypesOption(overrides map[string]string) string {
+	if len(overrides) == 0 {
+		return ""
+	}
+	cols := slices.Sorted(maps.Keys(overrides))
+	parts := make([]string, 0, len(cols))
+	for _, c := range cols {
+		parts = append(parts, fmt.Sprintf("'%s': '%s'", escapeSQL(c), duckColumnType(overrides[c])))
+	}
+	return "types={" + strings.Join(parts, ", ") + "}"
+}
+
+// duckColumnType is DuckDB's type for an ssql type name (json refused
+// upstream).
+func duckColumnType(typeName string) string {
+	switch typeName {
+	case "int":
+		return "BIGINT"
+	case "float":
+		return "DOUBLE"
+	case "bool":
+		return "BOOLEAN"
+	case "time":
+		return "TIMESTAMP"
+	}
+	return "VARCHAR"
+}
+
+// applyTypeOverrideKinds records the source's declared column kinds
+// over the sampled ones, as `cast -type` does for its casts.
+func applyTypeOverrideKinds(overrides map[string]string) {
+	for col, t := range overrides {
+		ft, err := ssql.ParseFieldType(t)
+		if err != nil || ft == ssql.FieldTypeAuto {
+			continue
+		}
+		sqlColumnKinds[col] = ft.String()
+		if ft == ssql.FieldTypeTime {
+			sqlTimeColumns[col] = true
+		} else {
+			delete(sqlTimeColumns, col)
+		}
+	}
 }
 
 // sqlPlainIdent is a name every engine reads bare: ASCII letters, digits

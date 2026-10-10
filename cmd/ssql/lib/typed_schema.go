@@ -73,8 +73,22 @@ func (o TypeOptions) goTypeFor(column string) (string, bool) {
 		return "bool", true
 	case "time":
 		return "time.Time", true
+	case "json":
+		// A nested value is its JSON text in the typed lane (as a json
+		// field from a JSONL header); the typed→Record boundary re-wraps
+		// it as a JSONString. The reader keeps the cell as text.
+		return "string", true
 	}
 	return "", false
+}
+
+// isJSON reports whether column is overridden to json.
+func (o TypeOptions) isJSON(column string) bool {
+	name, ok := o.Fields[column]
+	if !ok {
+		name = o.Default
+	}
+	return strings.EqualFold(name, "json")
 }
 
 // SampleTSVSchema is the [SampleCSVSchema] variant for TSV files. It
@@ -191,13 +205,16 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune, o
 			usedNames[gn] = 1
 		}
 		goType := cols[i].resolve()
+		var isJSON bool
 		if t, ok := opts.goTypeFor(name); ok {
 			goType = t
+			isJSON = t == "string" && opts.isJSON(name)
 		}
 		fields[i] = TypedSchemaField{
 			Name:   name,
 			GoName: gn,
 			GoType: goType,
+			JSON:   isJSON,
 		}
 	}
 

@@ -1430,7 +1430,36 @@ var equivCases = []EquivCase{
 			{"id": 1, "score": 10, "flag": true}, {"id": 2, "score": 2, "flag": false},
 			{"id": 3, "score": -7, "flag": true}, {"id": 4, "score": 0, "flag": true},
 		},
-		Skip: map[string]string{"duckdb": "generate sql does not translate from-stage -type overrides"},
+		// The from-stage -type now translates (DFC146); what remains is
+		// the cast: DuckDB's BOOLEAN cast reads true/false/1/0 only, not
+		// yes/off as ssql.CastValue does.
+		Skip: map[string]string{"duckdb": "DuckDB's CAST AS BOOLEAN does not read yes/off (ssql's cast does)"},
+	},
+	{
+		// DFC146: a schema sidecar beside the file types its columns in
+		// every lane — exec, both codegen lanes and generate sql (DuckDB
+		// read_csv types=). `when` is a time (the filter would fail on
+		// text), `code` is text the sample would call a number, so a lane
+		// that ignores the sidecar diverges or errors. Golden by hand.
+		Name:     "sidecar_types_all_lanes",
+		Pipeline: `{{.bin}} from csv {{.data}}/sidecar_sales.csv | {{.bin}} where -if-expr 'when >= since' -param since time 2026-01-06 | {{.bin}} sort -desc amount | {{.bin}} include id amount code`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 3, "amount": 30, "code": "1e3"}, {"id": 2, "amount": 20, "code": "4e0"}, {"id": 4, "amount": 5, "code": "3.0"},
+		},
+	},
+	{
+		// The same file with the sidecar switched off: the sample's types
+		// (code is a number; the duckdb lane agrees because its sniffer
+		// reads the same text) — pins that -no-sidecar is honoured in
+		// every lane too, since a lane that still read the sidecar would
+		// keep code as text.
+		Name:     "sidecar_off_all_lanes",
+		Pipeline: `{{.bin}} from csv {{.data}}/sidecar_sales.csv -no-sidecar | {{.bin}} sort -desc amount | {{.bin}} include id amount code`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 3, "amount": 30, "code": 1000}, {"id": 2, "amount": 20, "code": 4}, {"id": 1, "amount": 10, "code": 2.5}, {"id": 4, "amount": 5, "code": 3},
+		},
 	},
 	{
 		// -invalid missing: a value that is not of the type (N/A, maybe)

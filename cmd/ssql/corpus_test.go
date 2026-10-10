@@ -170,6 +170,16 @@ func corpusData(t *testing.T) string {
 			// cast: text holding numbers written as ints and floats, booleans
 			// in several spellings, and values that are NOT of the type.
 			"castable.csv":   "id,score,flag\n1,10,yes\n2,2.9,off\n3,-7,1\n4,0.5,TRUE\n",
+			// DFC146: a CSV typed by a Frictionless sidecar (the package
+			// below names only this file). `when` is a date the sample
+			// would leave a string; `code` is text the sample would call a
+			// number (1e3, 3.0) — every lane must read what the sidecar
+			// says. Shuffled, distinct amounts. (No canonical integer in
+			// code: the duckdb lane's HUGEINT normalisation reads "12"
+			// back as a number, so it could not discriminate.)
+			"sidecar_sales.csv": "id,amount,when,code\n3,30,2026-01-07,1e3\n1,10,2026-01-05,2.50\n4,5,2026-01-08,3.0\n2,20,2026-01-06,4e0\n",
+			"datapackage.json": `{"resources":[{"name":"sidecar_sales","path":"sidecar_sales.csv","schema":{"fields":[
+{"name":"id","type":"integer"},{"name":"amount","type":"number"},{"name":"when","type":"date"},{"name":"code","type":"string"}]}}]}`,
 			"uncastable.csv": "id,score,flag\n1,10,yes\n2,N/A,maybe\n3,2.9,no\n",
 			"missing_groups.csv": "id,g,v,t,code,e\n1,a,1,Oslo,12,\n2,a,3,,abc,\n3,b,,,007,\n4,b,,,x,\n",
 			// A join key that is a FLOAT column on the left (one 2.5 types

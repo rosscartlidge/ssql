@@ -15,7 +15,7 @@ import (
 )
 
 func registerFromTSV(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("tsv").
+	sub := cmd.Subcommand("tsv").
 		Description("Read TSV file(s) or stdin").
 		Example("ssql from tsv data.tsv | ssql to table", "Read TSV file").
 		Example("ssql from tsv *.tsv | ssql to table", "Read multiple TSV files").
@@ -69,11 +69,11 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Completer(cf.NoCompleter{Hint: "<field-name>"}).
 		Done().
 		Arg("type").
-		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "auto"}}).
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "time", "json", "auto"}}).
 		Done().
 		Accumulate().
 		Global().
-		Help("Override type for field: -type zipcode string -type age int").
+		Help("Override type for field: -type zipcode string -type age int -type addr json (a JSON cell as a nested value)").
 		Done().
 		Flag("-default-type", "-dt").
 		String().
@@ -81,7 +81,8 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Default("auto").
 		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
 		Help("Default type for all fields: auto (default), string, int, float, bool").
-		Done().
+		Done()
+	sidecarFlags(sub).
 		Flag("FILE").
 		String().
 		Variadic().
@@ -96,6 +97,11 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 			typeOverrides := make(map[string]string)
 			if typeVal, ok := ctx.GlobalFlags["-type"]; ok {
 				typeOverrides = parseTypeOverrides(typeVal)
+			}
+			// A schema sidecar's types sit under the user's (DFC146).
+			sidecar, noSidecar := sidecarFlagValues(ctx)
+			if typeOverrides, err = resolveSidecarTypes(cfg.files, typeOverrides, sidecar, noSidecar); err != nil {
+				return err
 			}
 			defaultType, _ := ctx.GlobalFlags["-default-type"].(string)
 			csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
@@ -231,7 +237,7 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 		cfg := types.cfg
 		cfg.Delimiter = rune(delim)
 		in := io.MultiReader(strings.NewReader(line+"\n"), br)
-		return writeSchemaModeDelimited(os.Stdout, headers, ssql.ReadTSVFromReaderWithConfig(in, cfg))
+		return writeSchemaModeDelimited(os.Stdout, headers, types.overrides, ssql.ReadTSVFromReaderWithConfig(in, cfg))
 	}
 
 	if shouldGenerate(generate) {

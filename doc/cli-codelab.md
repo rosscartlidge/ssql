@@ -600,6 +600,35 @@ clicking a column header inserts a `sort` stage, choosing chart axes
 writes a `to chart` stage, and **Copy CLI** hands back the pipeline as
 text. Nothing you do there is a separate feature — it is these commands.
 
+### Keep the types with the CSV
+
+A CSV carries names and text; every reader has to guess the types from
+a sample, and a sample cannot see a float on row ten thousand, a date
+in a local format, or a code like `1e3` that is text. `to csv -sidecar`
+writes the pipeline's types beside the file as a Frictionless
+`datapackage.json` — the schema format data portals and the Python
+`frictionless` library read — and `from csv` reads it back, so the
+types survive the round trip without a sample and without `-type`:
+
+```bash
+mkdir -p typed
+ssql from employees.csv | ssql update -set-expr bonus 'salary * 0.1' | ssql to csv typed/employees.csv -sidecar
+cat typed/datapackage.json
+ssql from typed/employees.csv | ssql where -if bonus gt 8000 | ssql to table
+```
+
+The same discovery honours a W3C CSV on the Web file
+(`employees.csv-metadata.json`) beside the data, and a package someone
+else published: a column it types `string` stays text whatever the
+cells look like, a `date` column arrives as a time. Your own `-type`
+wins over the sidecar, `-no-sidecar` ignores it, and `-sidecar FILE`
+names one that lives elsewhere. To see the schema a pipeline would
+write without writing data:
+
+```bash
+ssql generate schema -datapackage -pipeline 'ssql from employees.csv | ssql group-by dept -avg salary avg_salary'
+```
+
 ---
 
 # Part 2 — Going further

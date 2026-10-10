@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
@@ -19,6 +20,12 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 			Bool().
 			Global().
 			Help("Generate Go code instead of executing").
+			Done().
+
+		Flag("-sidecar").
+			Bool().
+			Global().
+			Help("Also write datapackage.json beside FILE — a Frictionless Table Schema with the columns' types, which `from csv` reads back (DFC146). An existing package there keeps its other resources").
 			Done().
 
 		Flag("FILE").
@@ -43,10 +50,14 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
+			sidecar, _ := ctx.GlobalFlags["-sidecar"].(bool)
+			if sidecar && outputFile == "" {
+				return sidecarNeedsFile("to csv")
+			}
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateToCSVCode(outputFile)
+				return generateToCSVCode(outputFile, sidecar)
 			}
 
 			// Read JSONL from stdin (with schema if present)
@@ -55,21 +66,59 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 
 			// Build CSV config with field order from schema if present
 			config := ssql.DefaultCSVConfig()
+			known := map[string]ssql.FieldType{}
 			if schemaAndRecords.Schema != nil {
 				config.Fields = schemaAndRecords.Schema.Fields
+				for _, f := range config.Fields {
+					if t := wireFieldType(schemaAndRecords.Schema.TypeOf(f)); t != ssql.FieldTypeAuto {
+						known[f] = t
+					}
+				}
 			}
 
 			// Write as CSV with field order
-			if outputFile == "" {
+			switch {
+			case outputFile == "":
 				return ssql.WriteCSVToWriter(records, ctx.Stdout(), config)
-			} else {
+			case sidecar:
+				// The header's types are exact; the values fill in what
+				// it does not say (a json column's shape).
+				return ssql.WriteCSVSidecar(records, outputFile, known, config)
+			default:
 				return ssql.WriteCSV(records, outputFile, config)
 			}
 		}).
 		Done()
 }
 
-func generateToCSVCode(filename string) error {
+// sidecarFieldsLiteral renders a typed schema as the []ssql.TableField
+// literal a generated program hands to WriteDatapackage: the struct's
+// types are known at generation time (a json column has no shape there:
+// `any`).
+func sidecarFieldsLiteral(schema *lib.TypedSchema) string {
+	var b strings.Builder
+	b.WriteString("[]ssql.TableField{")
+	for i, f := range schema.Fields {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "{Name: %q, Type: %s}", f.Name, fieldTypeConst(goFieldType(f.GoType, f.JSON)))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+// sidecarWriteCode is the statement after a typed CSV write that writes
+// the package beside the output file.
+func sidecarWriteCode(schema *lib.TypedSchema) string {
+	return fmt.Sprintf(`
+	if err := ssql.WriteDatapackage(*flagOutput, %s); err != nil {
+		fmt.Fprintf(os.Stderr, "write sidecar: %%v\n", err)
+		os.Exit(1)
+	}`, sidecarFieldsLiteral(schema))
+}
+
+func generateToCSVCode(filename string, sidecar bool) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -137,8 +186,15 @@ func generateToCSVCode(filename string) error {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
+			if sidecar {
+				streamCode += sidecarWriteCode(prevSchema)
+				serialCode += sidecarWriteCode(prevSchema)
+			}
 		}
 		imports = []string{"github.com/rosscartlidge/ssql/v4/typed", "fmt", "os"}
+		if sidecar && filename != "" {
+			imports = append(imports, "github.com/rosscartlidge/ssql/v4")
+		}
 		// Default code: pick based on the upstream IsStream flag at
 		// emission time. The planner will swap to AltCodeIfSeq if it
 		// later determines the upstream is iter.Seq.
@@ -176,7 +232,13 @@ func generateToCSVCode(filename string) error {
 	}`, inputVar)
 	} else {
 		params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output CSV file", VarName: "flagOutput"})
-		code = fmt.Sprintf(`if err := ssql.WriteCSV(%s, *flagOutput); err != nil {
+		writer := "ssql.WriteCSV(%s, *flagOutput)"
+		if sidecar {
+			// The package's types are observed from the records as they
+			// are written (a record program has no schema header).
+			writer = "ssql.WriteCSVSidecar(%s, *flagOutput, nil)"
+		}
+		code = fmt.Sprintf(`if err := `+writer+`; err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)

@@ -1064,3 +1064,41 @@ func TestTranslateConditionLikeEscapes(t *testing.T) {
 		}
 	}
 }
+
+// TestFromCSVTypesSQL (DFC146): the from stage's -type overrides and a
+// schema sidecar beside the file type DuckDB's read_csv (types={…}),
+// the user's -type over the sidecar's; -no-sidecar drops it; a json
+// column has no SQL form and is refused loudly. From-stage -type was
+// silently ignored by the translator until 2026-10-10.
+func TestFromCSVTypesSQL(t *testing.T) {
+	dir := t.TempDir()
+	csv := dir + "/s.csv"
+	os.WriteFile(csv, []byte("id,zip,when\n1,02134,2026-01-05\n"), 0o644)
+	sql := assembleFromCommands(t, "ssql from csv "+csv+" -type zip string -t when time", "ssql to jsonl")
+	if !strings.Contains(sql, "types={'when': 'TIMESTAMP', 'zip': 'VARCHAR'}") {
+		t.Errorf("-type not translated:\n%s", sql)
+	}
+	os.WriteFile(dir+"/datapackage.json", []byte(`{"resources":[{"path":"s.csv","schema":{"fields":[{"name":"id","type":"integer"},{"name":"zip","type":"string"},{"name":"when","type":"date"}]}}]}`), 0o644)
+	sql = assembleFromCommands(t, "ssql from csv "+csv, "ssql to jsonl")
+	if !strings.Contains(sql, "types={'id': 'BIGINT', 'when': 'TIMESTAMP', 'zip': 'VARCHAR'}") {
+		t.Errorf("sidecar not translated:\n%s", sql)
+	}
+	sql = assembleFromCommands(t, "ssql from csv "+csv+" -type id float", "ssql to jsonl")
+	if !strings.Contains(sql, "'id': 'DOUBLE'") {
+		t.Errorf("user -type must win over the sidecar:\n%s", sql)
+	}
+	sql = assembleFromCommands(t, "ssql from csv "+csv+" -no-sidecar", "ssql to jsonl")
+	if strings.Contains(sql, "types=") {
+		t.Errorf("-no-sidecar still typed:\n%s", sql)
+	}
+	// -last keeps the types on its ordered re-read.
+	sql = assembleFromCommands(t, "ssql from csv "+csv+" -last 1", "ssql to jsonl")
+	if !strings.Contains(sql, "parallel=false, types={") {
+		t.Errorf("-last lost the types:\n%s", sql)
+	}
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(lib.CodeFragment{Type: "stmt", Command: "ssql from csv " + csv + " -type zip json"})
+	if _, err := assembleSQL(&buf); err == nil || !strings.Contains(err.Error(), "json") {
+		t.Errorf("a json column must be refused, got %v", err)
+	}
+}

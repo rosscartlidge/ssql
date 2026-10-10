@@ -81,9 +81,26 @@ const schemaModeSampleRows = 200
 // v4.109, which is why `generate schema -data` showed no types. A read
 // error in the sample (a malformed row, a cell that will not cast)
 // leaves the column untyped ("any") rather than failing completion.
-func writeSchemaModeDelimited(w io.Writer, headers []string, records iter.Seq[ssql.Record]) error {
+// When overrides (the user's -type plus a sidecar's, DFC146) type every
+// column, no row is read: the schema is exact without a sample.
+func writeSchemaModeDelimited(w io.Writer, headers []string, overrides map[string]string, records iter.Seq[ssql.Record]) error {
 	types := map[string]string{}
 	names := headers
+	if len(headers) > 0 && len(overrides) >= len(headers) {
+		complete := true
+		for _, h := range headers {
+			t, ok := overrides[h]
+			if !ok || t == "auto" {
+				complete = false
+				break
+			}
+			types[h] = t
+		}
+		if complete {
+			return writeSchemaModeOutputTyped(w, headers, types)
+		}
+		clear(types)
+	}
 	func() {
 		defer func() { _ = recover() }() // a bad cell types nothing; exec reports it
 		sample := sampleSchemaRows(records)

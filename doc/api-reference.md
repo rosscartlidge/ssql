@@ -1189,7 +1189,57 @@ bool; `1`/`0` are ints; zero-padded values such as `007` stay text).
 Empty cells are absent, never zero. `TypeOverrides` and `DefaultType` win
 over inference. A later cell that does not fit its column is a
 `*CellError` (row, column, value, and how the type was decided): the plain
-readers panic with it, `ReadCSVSafe` yields it.
+readers panic with it, `ReadCSVSafe` yields it. A column overridden to
+`FieldTypeJSON` reads each cell's JSON array or object as a nested value
+(a `JSONString`); any other text in that column is a `CellError`.
+
+### Schema sidecars
+
+```go
+type TableField struct { Name string; Type FieldType; Shape string } // Shape: "object" / "array" for a json field, else ""
+type TableSchema struct { Fields []TableField; Source, Kind string }  // Kind: "csvw" or "frictionless"
+
+func FindTableSchema(csvPath string) (*TableSchema, error)                       // the discovery rule; (nil, nil) when none
+func ReadTableSchema(sidecarPath, csvPath string) (*TableSchema, error)         // a named sidecar
+func ParseTableSchema(data []byte, csvBase, dir string) (*TableSchema, error)  // any of the three shapes
+func (s *TableSchema) TypeOverrides() map[string]string                         // column → ssql type name, for CSVConfig
+func WriteDatapackage(csvPath string, fields []TableField) error                // datapackage.json beside csvPath (merged)
+func WriteCSVSidecar(records iter.Seq[Record], filename string, known map[string]FieldType, config ...CSVConfig) error
+func TableFieldsFromRecords(records iter.Seq[Record], known map[string]FieldType) (iter.Seq[Record], func() []TableField)
+func TableSchemaJSON(fields []TableField) ([]byte, error)                       // a Frictionless Table Schema document
+func TableTypeName(f TableField) string                                         // integer, number, boolean, datetime, string, object, array, any
+```
+
+A delimited file's types can be stated once, beside it, in a standard
+sidecar (DFC146): W3C CSV on the Web metadata (`X.csv-metadata.json`, or
+`csv-metadata.json` in the directory) or a Frictionless Data Package
+(`datapackage.json` with a resource whose `path` names the file).
+`FindTableSchema` applies that discovery rule in that order;
+`TypeOverrides` turns the result into `CSVConfig.TypeOverrides` (via
+`ParseFieldType`), so the reader takes the sidecar's types instead of
+sampling. Types map: integer → int, number/decimal/double → float,
+boolean → bool, date/datetime/time → time (ISO forms; any other `format`
+is refused), object/array/json → json, string → string, any → infer. A
+`dialect` without a header row, or with a delimiter the reader is not
+using, is refused with the remedy. `WriteCSVSidecar` writes the CSV and
+a package describing it, typing columns from the values written (or
+from `known`); `WriteDatapackage` keeps an existing package's other
+resources.
+
+```go
+schema, err := ssql.FindTableSchema("sales.csv")
+cfg := ssql.DefaultCSVConfig()
+if schema != nil {
+    cfg.TypeOverrides = map[string]ssql.FieldType{}
+    for col, name := range schema.TypeOverrides() {
+        cfg.TypeOverrides[col], _ = ssql.ParseFieldType(name)
+    }
+}
+rows, err := ssql.ReadCSV("sales.csv", cfg)
+
+// Lossless round trip: the package beside out.csv types it for the next reader.
+err = ssql.WriteCSVSidecar(rows, "out/out.csv", nil)
+```
 
 ```go
 data, err := ssql.ReadCSV("data.csv")

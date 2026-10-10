@@ -3,6 +3,7 @@ package ssql
 import (
 	"bufio"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -120,9 +121,28 @@ func parserForType(ft FieldType) cellParser {
 		return parseBoolCell
 	case FieldTypeTime:
 		return parseTimeCell
+	case FieldTypeJSON:
+		return parseJSONCell
 	default:
 		return parseStringCell
 	}
+}
+
+// parseJSONCell reads a cell declared json (`-type COL json`, a sidecar's
+// object/array column): an array or object is the nested value, as its
+// own text; an empty cell is missing; anything else is a cell error —
+// the column was declared nested and this cell is not (DFC146; before
+// 2026-10-10 the declaration was accepted and the cell stayed text, so
+// no path into it resolved).
+func parseJSONCell(s string) (any, error) {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return nil, nil
+	}
+	if (t[0] == '{' || t[0] == '[') && json.Valid([]byte(t)) {
+		return JSONString(t), nil
+	}
+	return nil, errCellType
 }
 
 // ZeroPaddedNumber reports whether s is digits with a leading zero that a

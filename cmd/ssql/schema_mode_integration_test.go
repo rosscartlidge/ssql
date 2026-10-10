@@ -108,6 +108,19 @@ func TestSchemaModeTypesAndData(t *testing.T) {
 		t.Fatal(err)
 	}
 	nestedWant := "field,type\nid,int\naddr,json\ntags,json\naddr.city,string\naddr.geo,json\naddr.geo.lat,float\n"
+	// DFC146: a sidecar typing every column makes schema mode sample-free.
+	// The package declares types the data contradicts (amount is text,
+	// id a float); a sampled read would say int/int, so the output proves
+	// no row was read.
+	sidecarDir := filepath.Join(dir, "sc")
+	os.MkdirAll(sidecarDir, 0o755)
+	sidecarCSV := filepath.Join(sidecarDir, "s.csv")
+	if err := os.WriteFile(sidecarCSV, []byte("id,amount\n1,10\n2,20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sidecarDir, "datapackage.json"), []byte(`{"resources":[{"path":"s.csv","schema":{"fields":[{"name":"id","type":"number"},{"name":"amount","type":"string"}]}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		name     string
 		pipeline string
@@ -118,6 +131,10 @@ func TestSchemaModeTypesAndData(t *testing.T) {
 			"field,type\naddr,json\nid,int\ntags,json\naddr.city,string\naddr.geo,json\naddr.geo.lat,float\n"},
 		{"nested paths from a headed jsonl", "ssql from jsonl " + nestedJSONL, nestedWant},
 		{"nested paths survive a stage", "ssql from jsonl " + nestedJSONL + " | ssql where -if addr.geo.lat gt 1", nestedWant},
+		{"sidecar types without a sample", "ssql from csv " + sidecarCSV, "field,type\nid,float\namount,string\n"},
+		{"sidecar under the user's -type", "ssql from csv " + sidecarCSV + " -type id int", "field,type\nid,int\namount,string\n"},
+		{"-no-sidecar samples", "ssql from csv " + sidecarCSV + " -no-sidecar", "field,type\nid,int\namount,int\n"},
+		{"bare from reads the sidecar", "ssql from " + sidecarCSV, "field,type\nid,float\namount,string\n"},
 		{"-type holds", "ssql from csv " + csv + " -type hired time | ssql include name hired", "field,type\nname,string\nhired,time\n"},
 		{"rename moves the type; aggregates from the registry", "ssql from csv " + csv + " | ssql rename -as salary pay | ssql group-by dept -count n -sum pay total -min pay lo -max rate hi -first name who -expr 'max(pay)' e", "field,type\ndept,string\nn,int\ntotal,float\nlo,int\nhi,float\nwho,string\ne,any\n"},
 		{"cast retypes", "ssql from csv " + csv + " | ssql cast -type salary float -type hired time | ssql include salary hired", "field,type\nsalary,float\nhired,time\n"},
