@@ -14,9 +14,9 @@ import (
 // dialects and formats the readers cannot honour are refused.
 func TestTableSchemaParse(t *testing.T) {
 	want := []TableField{
-		{"id", FieldTypeInt, ""}, {"amount", FieldTypeFloat, ""}, {"ok", FieldTypeBool, ""},
-		{"when", FieldTypeTime, ""}, {"zip", FieldTypeString, ""}, {"addr", FieldTypeJSON, "object"},
-		{"tags", FieldTypeJSON, "array"}, {"free", FieldTypeAuto, ""},
+		{"id", FieldTypeInt, "", ""}, {"amount", FieldTypeFloat, "", ""}, {"ok", FieldTypeBool, "", ""},
+		{"when", FieldTypeTime, "", ""}, {"zip", FieldTypeString, "", ""}, {"addr", FieldTypeJSON, "object", ""},
+		{"tags", FieldTypeJSON, "array", ""}, {"free", FieldTypeAuto, "", ""},
 	}
 	cases := []struct{ name, doc, csvBase, kind string }{
 		{"frictionless package", `{"resources":[{"name":"other","path":"other.csv","schema":{"fields":[{"name":"x","type":"string"}]}},
@@ -67,10 +67,21 @@ func TestTableSchemaParse(t *testing.T) {
 	refused := []struct{ name, doc, want string }{
 		{"no header", `{"fields":[{"name":"a","type":"string"}],"x":1,"resources":[{"path":"s.csv","dialect":{"header":false},"schema":{"fields":[{"name":"a"}]}}]}`, "no header row"},
 		{"semicolon", `{"resources":[{"path":"s.csv","dialect":{"delimiter":";"},"schema":{"fields":[{"name":"a"}]}}]}`, "from tsv"},
-		{"date format", `{"fields":[{"name":"d","type":"date","format":"%d/%m/%Y"}]}`, "date format"},
+		{"date format that cannot be parsed", `{"fields":[{"name":"d","type":"date","format":"%j"}]}`, "date format"},
 		{"unknown type", `{"fields":[{"name":"d","type":"money"}]}`, "unknown type"},
 		{"other files only", `{"resources":[{"path":"other.csv","schema":{"fields":[{"name":"a"}]}}]}`, "other files"},
 		{"not a sidecar", `{"hello":1}`, "neither"},
+	}
+	// A parsable date format is honoured (DFC147 §7.2): Frictionless as
+	// strftime, CSVW as a Unicode pattern converted to it.
+	for _, c := range []struct{ doc, want string }{
+		{`{"fields":[{"name":"d","type":"date","format":"%d/%m/%Y"}]}`, "%d/%m/%Y"},
+		{`{"tableSchema":{"columns":[{"name":"d","datatype":{"base":"date","format":"dd/MM/yyyy"}}]}}`, "%d/%m/%Y"},
+	} {
+		ts, err := ParseTableSchema([]byte(c.doc), "s.csv", t.TempDir())
+		if err != nil || ts.Fields[0].Type != FieldTypeTime || ts.Fields[0].Format != c.want || ts.TimeFormats()["d"] != c.want {
+			t.Errorf("format %s: %v %v", c.doc, ts, err)
+		}
 	}
 	for _, c := range refused {
 		_, err := ParseTableSchema([]byte(c.doc), "s.csv", t.TempDir())
@@ -115,13 +126,13 @@ func TestFindTableSchema(t *testing.T) {
 func TestWriteDatapackage(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.csv")
-	if err := WriteDatapackage(a, []TableField{{"id", FieldTypeInt, ""}, {"addr", FieldTypeJSON, "object"}, {"n", FieldTypeAuto, ""}}); err != nil {
+	if err := WriteDatapackage(a, []TableField{{"id", FieldTypeInt, "", ""}, {"addr", FieldTypeJSON, "object", ""}, {"n", FieldTypeAuto, "", ""}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteDatapackage(filepath.Join(dir, "b.csv"), []TableField{{"x", FieldTypeFloat, ""}}); err != nil {
+	if err := WriteDatapackage(filepath.Join(dir, "b.csv"), []TableField{{"x", FieldTypeFloat, "", ""}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteDatapackage(a, []TableField{{"id", FieldTypeString, ""}}); err != nil {
+	if err := WriteDatapackage(a, []TableField{{"id", FieldTypeString, "", ""}}); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "datapackage.json"))
@@ -161,7 +172,7 @@ func TestTableFieldsFromRecords(t *testing.T) {
 	for range seq {
 	}
 	got := fields()
-	want := []TableField{{"n", FieldTypeFloat, ""}, {"s", FieldTypeJSON, ""}, {"j", FieldTypeJSON, "object"}, {"late", FieldTypeString, ""}}
+	want := []TableField{{"n", FieldTypeFloat, "", ""}, {"s", FieldTypeJSON, "", ""}, {"j", FieldTypeJSON, "object", ""}, {"late", FieldTypeString, "", ""}}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %v want %v", got, want)
 	}

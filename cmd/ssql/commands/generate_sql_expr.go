@@ -257,6 +257,9 @@ func exprCallToSQL(name string, args []ast.Node) (string, error) {
 	if name == "bucket" && len(args) == 2 {
 		return bucketToSQL(args[0], args[1])
 	}
+	if sql, ok, err := timeFuncToSQL(name, args); ok {
+		return sql, err
+	}
 	if sqlFunc, ok := exprListFuncs[name]; ok {
 		// List functions over a nested value (DFC144 Level 1): DuckDB's
 		// list_* family; the other dialects have no form for a value whose
@@ -346,12 +349,13 @@ func bucketToSQL(tsNode, widthNode ast.Node) (string, error) {
 		if int64(every)%int64(time.Microsecond) != 0 {
 			return "", fmt.Errorf("bucket(): a width finer than a microsecond has no SQL translation over a time column")
 		}
+		ts = sqlTimeColumnRef(name)
 		interval := fmt.Sprintf("INTERVAL '%d microseconds'", int64(every/time.Microsecond))
 		fn := "time_bucket" // DuckDB
 		if sqlDialectCur != dialectDuckDB {
 			fn = "date_bin" // Postgres, DataFusion
 		}
-		return fmt.Sprintf("%s(%s, %s, TIMESTAMP '1970-01-01 00:00:00')", fn, interval, ts), nil
+		return fmt.Sprintf("%s(%s, %s, %s)", fn, interval, ts, sqlEpochOrigin()), nil
 	}
 	// width in each unit; an integer literal when it divides evenly so an
 	// integer column stays integer (DuckDB's % keeps the operand type).
@@ -395,4 +399,432 @@ func exprMemberToSQL(n *ast.MemberNode) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("member access with a computed key has no SQL translation")
+}
+
+// --- calendar functions (DFC147 §4, §8.3) ----------------------------
+//
+// A time in SQL is an instant (sqlTimestampType). Reading its calendar
+// needs a zone, named EXPLICITLY in the emitted text — the pipeline's
+// (sqlZone) or the one a tz() gave the value — never the session's:
+// `(e AT TIME ZONE 'Z')` is the local wall clock as a naive TIMESTAMP on
+// DuckDB and Postgres (the same construct the other way turns a wall
+// clock back into an instant), so parts, truncation and calendar
+// addition are read on the wall clock and the result comes back as an
+// instant. DataFusion reads a TIMESTAMP as UTC and has no portable
+// zone conversion here: it serves a UTC pipeline and refuses otherwise.
+
+// timeFuncToSQL translates the calendar functions; ok=false when name is
+// not one of them.
+func timeFuncToSQL(name string, args []ast.Node) (string, bool, error) {
+	isPart := false
+	for _, p := range ssql.TimeParts {
+		if p == name {
+			isPart = true
+		}
+	}
+	switch {
+	case isPart, name == "date_trunc", name == "date_add", name == "date_diff", name == "tz", name == "now", name == "date" && len(args) == 1,
+		name == "strftime", name == "strptime", name == "date" && len(args) == 2:
+	default:
+		return "", false, nil
+	}
+	sqlNeedsZone = true
+	sql, err := timeFuncSQL(name, args)
+	return sql, true, err
+}
+
+// sqlTimeExpr is a translated time-valued expression: the instant and the
+// zone its calendar is read in.
+type sqlTimeExpr struct {
+	instant string
+	zone    string
+}
+
+func (t sqlTimeExpr) wall() string { return "(" + t.instant + " AT TIME ZONE '" + escapeSQL(t.zone) + "')" }
+
+func sqlInstantOfWall(wall, zone string) string {
+	return "(" + wall + " AT TIME ZONE '" + escapeSQL(zone) + "')"
+}
+
+// sqlTimeArg translates a time operand: a column the assembly knows is a
+// time, a tz(), or another calendar function; anything else is refused
+// with the cast remedy (a VARCHAR column has no calendar).
+func sqlTimeArg(fn string, node ast.Node) (sqlTimeExpr, error) {
+	zone := sqlZone
+	if zone == "" {
+		return sqlTimeExpr{}, fmt.Errorf("%s(): the pipeline's time zone is unknown — set -tz on the source or TZ", fn)
+	}
+	if name, ok := ssql.ExprFieldName(node); ok {
+		if _, isParam := sqlExprParams[name]; !isParam {
+			if !sqlTimeColumns[name] {
+				return sqlTimeExpr{}, fmt.Errorf("%s(%s): a time column is needed — cast -type %s time (or -type on the source)", fn, name, name)
+			}
+			return sqlTimeExpr{instant: sqlTimeColumnRef(name), zone: zone}, nil
+		}
+		if p := sqlExprParams[name]; p.Type == ssql.FieldTypeTime {
+			return sqlTimeExpr{instant: p.sqlLiteral(), zone: zone}, nil
+		}
+		return sqlTimeExpr{}, fmt.Errorf("%s(%s): the parameter is not a time", fn, name)
+	}
+	var callee string
+	var cargs []ast.Node
+	switch n := node.(type) {
+	case *ast.CallNode:
+		if id, ok := n.Callee.(*ast.IdentifierNode); ok {
+			callee, cargs = id.Value, n.Arguments
+		}
+	case *ast.BuiltinNode:
+		callee, cargs = n.Name, n.Arguments
+	}
+	switch callee {
+	case "tz":
+		if len(cargs) != 2 {
+			return sqlTimeExpr{}, fmt.Errorf("tz(ts, zone) takes two arguments")
+		}
+		z, ok := cargs[1].(*ast.StringNode)
+		if !ok {
+			return sqlTimeExpr{}, fmt.Errorf("tz(): the zone must be a string literal")
+		}
+		if _, err := time.LoadLocation(z.Value); err != nil {
+			return sqlTimeExpr{}, fmt.Errorf("tz: %v", err)
+		}
+		inner, err := sqlTimeArg("tz", cargs[0])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		return sqlTimeExpr{instant: inner.instant, zone: z.Value}, nil
+	case "date_trunc", "date_add", "now", "date", "bucket":
+		sql, err := timeFuncSQLZoned(callee, cargs)
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		return sql, nil
+	}
+	return sqlTimeExpr{}, fmt.Errorf("%s(): the argument is not a time column or time expression (cast -type F time)", fn)
+}
+
+// timeFuncSQL renders one calendar function call as SQL text.
+func timeFuncSQL(name string, args []ast.Node) (string, error) {
+	switch name {
+	case "date_trunc", "date_add", "now", "date", "strptime":
+		t, err := timeFuncSQLZoned(name, args)
+		if err != nil {
+			return "", err
+		}
+		return t.instant, nil
+	case "strftime":
+		if len(args) != 2 {
+			return "", fmt.Errorf("strftime(ts, pattern) takes two arguments")
+		}
+		pat, ok := args[1].(*ast.StringNode)
+		if !ok {
+			return "", fmt.Errorf("strftime(): the pattern must be a string literal")
+		}
+		if _, _, err := ssql.StrftimeLayout(pat.Value); err != nil {
+			return "", err
+		}
+		t, err := sqlTimeArg("strftime", args[0])
+		if err != nil {
+			return "", err
+		}
+		switch sqlDialectCur {
+		case dialectPostgres:
+			pg, err := ssql.PgToChar(pat.Value)
+			if err != nil {
+				return "", err
+			}
+			return "to_char(" + t.wall() + ", '" + escapeSQL(pg) + "')", nil
+		case dialectDataFusion:
+			if t.zone != "UTC" {
+				return "", dialectRefuse("strftime() in zone "+t.zone, "DataFusion reads timestamps as UTC; run the pipeline with -tz UTC")
+			}
+			return "to_char(" + t.instant + ", '" + escapeSQL(pat.Value) + "')", nil
+		}
+		return "strftime(" + t.wall() + ", '" + escapeSQL(pat.Value) + "')", nil
+	case "tz":
+		t, err := sqlTimeArg("tz", &ast.CallNode{Callee: &ast.IdentifierNode{Value: "tz"}, Arguments: args})
+		if err != nil {
+			return "", err
+		}
+		return t.instant, nil // the same instant; the zone travels to the enclosing function
+	case "date_diff":
+		return dateDiffSQL(args)
+	}
+	// a part
+	if len(args) != 1 {
+		return "", fmt.Errorf("%s() takes one argument", name)
+	}
+	t, err := sqlTimeArg(name, args[0])
+	if err != nil {
+		return "", err
+	}
+	if name == "epoch" {
+		switch sqlDialectCur {
+		case dialectPostgres:
+			return "CAST(EXTRACT(EPOCH FROM " + t.instant + ") AS BIGINT)", nil
+		case dialectDataFusion:
+			return "CAST(date_part('epoch', " + t.instant + ") AS BIGINT)", nil
+		}
+		return "CAST(epoch(" + t.instant + ") AS BIGINT)", nil
+	}
+	switch sqlDialectCur {
+	case dialectDuckDB:
+		fn := map[string]string{"dow": "dayofweek", "doy": "dayofyear"}[name]
+		if fn == "" {
+			fn = name
+		}
+		return fn + "(" + t.wall() + ")", nil
+	case dialectPostgres:
+		if name == "second" {
+			return "CAST(FLOOR(EXTRACT(second FROM " + t.wall() + ")) AS BIGINT)", nil
+		}
+		return "CAST(EXTRACT(" + name + " FROM " + t.wall() + ") AS BIGINT)", nil
+	default: // DataFusion: UTC pipelines only
+		if t.zone != "UTC" {
+			return "", dialectRefuse(name+"() in zone "+t.zone, "DataFusion reads timestamps as UTC; run the pipeline with -tz UTC")
+		}
+		return "CAST(date_part('" + name + "', " + t.instant + ") AS BIGINT)", nil
+	}
+}
+
+// timeFuncSQLZoned renders the time-valued functions, keeping the zone the
+// calendar was read in so an enclosing part reads the same one (as the VM
+// does: TruncTime returns a time in that location).
+func timeFuncSQLZoned(name string, args []ast.Node) (sqlTimeExpr, error) {
+	switch name {
+	case "now":
+		if len(args) != 0 {
+			return sqlTimeExpr{}, fmt.Errorf("now() takes no arguments")
+		}
+		return sqlTimeExpr{instant: "now()", zone: sqlZone}, nil
+	case "date":
+		if len(args) == 2 {
+			return timeFuncSQLZoned("strptime", args)
+		}
+		arg, err := exprNodeToSQL(args[0])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		return sqlTimeExpr{instant: "CAST(" + arg + " AS " + sqlTimestampType() + ")", zone: sqlZone}, nil
+	case "strptime":
+		if len(args) != 2 {
+			return sqlTimeExpr{}, fmt.Errorf("strptime(text, pattern) takes two arguments")
+		}
+		pat, ok := args[1].(*ast.StringNode)
+		if !ok {
+			return sqlTimeExpr{}, fmt.Errorf("strptime(): the pattern must be a string literal")
+		}
+		if _, err := ssql.TimeLayout(pat.Value); err != nil {
+			return sqlTimeExpr{}, err
+		}
+		if !ssql.IsStrftime(pat.Value) {
+			return sqlTimeExpr{}, fmt.Errorf("strptime(): a Go layout has no SQL form — write the pattern as strftime (%%d/%%m/%%Y)")
+		}
+		arg, err := exprNodeToSQL(args[0])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		return sqlTimeExpr{instant: sqlStrptime(arg, pat.Value), zone: sqlZone}, nil
+	case "bucket":
+		if len(args) != 2 {
+			return sqlTimeExpr{}, fmt.Errorf("bucket() takes (timestamp, duration)")
+		}
+		t, err := sqlTimeArg("bucket", args[0])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		sql, err := bucketToSQL(args[0], args[1])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		return sqlTimeExpr{instant: sql, zone: t.zone}, nil
+	case "date_trunc":
+		if len(args) != 2 {
+			return sqlTimeExpr{}, fmt.Errorf("date_trunc(ts, unit) takes two arguments")
+		}
+		unit, err := sqlCalendarUnit("date_trunc", args[1])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		t, err := sqlTimeArg("date_trunc", args[0])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		if sqlDialectCur == dialectDataFusion {
+			if t.zone != "UTC" {
+				return sqlTimeExpr{}, dialectRefuse("date_trunc() in zone "+t.zone, "DataFusion reads timestamps as UTC; run the pipeline with -tz UTC")
+			}
+			return sqlTimeExpr{instant: "date_trunc('" + unit + "', " + t.instant + ")", zone: t.zone}, nil
+		}
+		return sqlTimeExpr{instant: sqlInstantOfWall("date_trunc('"+unit+"', "+t.wall()+")", t.zone), zone: t.zone}, nil
+	case "date_add":
+		if len(args) != 3 {
+			return sqlTimeExpr{}, fmt.Errorf("date_add(ts, n, unit) takes three arguments")
+		}
+		unit, err := sqlCalendarUnit("date_add", args[2])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		t, err := sqlTimeArg("date_add", args[0])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		n, err := exprNodeToSQL(args[1])
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		interval, err := sqlInterval(n, unit)
+		if err != nil {
+			return sqlTimeExpr{}, err
+		}
+		switch unit {
+		case "hour", "minute", "second": // absolute: on the instant
+			return sqlTimeExpr{instant: "(" + t.instant + " + " + interval + ")", zone: t.zone}, nil
+		}
+		if sqlDialectCur == dialectDataFusion {
+			if t.zone != "UTC" {
+				return sqlTimeExpr{}, dialectRefuse("date_add() in zone "+t.zone, "DataFusion reads timestamps as UTC; run the pipeline with -tz UTC")
+			}
+			return sqlTimeExpr{instant: "(" + t.instant + " + " + interval + ")", zone: t.zone}, nil
+		}
+		return sqlTimeExpr{instant: sqlInstantOfWall("("+t.wall()+" + "+interval+")", t.zone), zone: t.zone}, nil
+	}
+	return sqlTimeExpr{}, fmt.Errorf("%s has no SQL translation", name)
+}
+
+// sqlStrptime parses text with a strftime pattern as an instant: the text
+// is a wall clock in the pipeline zone (ssql.ParseStrftime), so the naive
+// result is placed there with AT TIME ZONE.
+func sqlStrptime(text, pattern string) string {
+	switch sqlDialectCur {
+	case dialectPostgres:
+		pg, err := ssql.PgToChar(pattern)
+		if err != nil {
+			pg = pattern // PgToChar refuses only %z and a literal quote; to_timestamp will say so
+		}
+		// to_timestamp reads the text in the session zone (UTC): take the
+		// wall clock back and place it in the pipeline zone.
+		return sqlInstantOfWall("(to_timestamp("+text+", '"+escapeSQL(pg)+"') AT TIME ZONE 'UTC')", sqlZone)
+	case dialectDataFusion:
+		return "to_timestamp(" + text + ", '" + escapeSQL(pattern) + "')" // UTC pipelines only (callers refuse otherwise)
+	}
+	return sqlInstantOfWall("strptime("+text+", '"+escapeSQL(pattern)+"')", sqlZone)
+}
+
+// sqlCalendarUnit reads a literal unit argument.
+func sqlCalendarUnit(fn string, node ast.Node) (string, error) {
+	s, ok := node.(*ast.StringNode)
+	if !ok {
+		return "", fmt.Errorf("%s(): the unit must be a string literal", fn)
+	}
+	if !ssql.ValidCalendarUnit(s.Value) {
+		return "", fmt.Errorf("%s: unit %q is not one of %s", fn, s.Value, strings.Join(ssql.CalendarUnits, ", "))
+	}
+	return s.Value, nil
+}
+
+// sqlInterval is n units as an interval: a literal count inline, an
+// expression through the engine's constructor.
+func sqlInterval(n, unit string) (string, error) {
+	plural := map[string]string{"year": "years", "quarter": "months", "month": "months", "week": "weeks", "day": "days", "hour": "hours", "minute": "mins", "second": "secs"}[unit]
+	if unit == "quarter" {
+		n = "(" + n + ") * 3"
+	}
+	switch sqlDialectCur {
+	case dialectPostgres:
+		return "make_interval(" + plural + " => " + n + ")", nil
+	case dialectDataFusion:
+		if _, err := strconv.Atoi(n); err != nil {
+			return "", dialectRefuse("date_add() with a computed count", "DataFusion intervals are literals")
+		}
+		return "INTERVAL '" + n + " " + unit + "'", nil
+	}
+	du := strings.ToUpper(unit)
+	if unit == "quarter" {
+		du = "MONTH"
+	}
+	return "INTERVAL (" + n + ") " + du, nil
+}
+
+// dateDiffSQL counts unit boundaries crossed (ssql.DiffCalendar): DuckDB's
+// date_diff over the wall clocks; Postgres by the unit's own arithmetic.
+func dateDiffSQL(args []ast.Node) (string, error) {
+	if len(args) != 3 {
+		return "", fmt.Errorf("date_diff(unit, start, end) takes three arguments")
+	}
+	unit, err := sqlCalendarUnit("date_diff", args[0])
+	if err != nil {
+		return "", err
+	}
+	a, err := sqlTimeArg("date_diff", args[1])
+	if err != nil {
+		return "", err
+	}
+	b, err := sqlTimeArg("date_diff", args[2])
+	if err != nil {
+		return "", err
+	}
+	// Both read in the start's zone, as DiffCalendar does.
+	la, lb := a.wall(), sqlTimeExpr{instant: b.instant, zone: a.zone}.wall()
+	switch sqlDialectCur {
+	case dialectDuckDB:
+		return "date_diff('" + unit + "', " + la + ", " + lb + ")", nil
+	case dialectPostgres:
+		ex := func(part, w string) string { return "EXTRACT(" + part + " FROM " + w + ")" }
+		switch unit {
+		case "year":
+			return "CAST(" + ex("year", lb) + " - " + ex("year", la) + " AS BIGINT)", nil
+		case "quarter":
+			return "CAST((" + ex("year", lb) + "*4 + " + ex("quarter", lb) + ") - (" + ex("year", la) + "*4 + " + ex("quarter", la) + ") AS BIGINT)", nil
+		case "month":
+			return "CAST((" + ex("year", lb) + "*12 + " + ex("month", lb) + ") - (" + ex("year", la) + "*12 + " + ex("month", la) + ") AS BIGINT)", nil
+		case "week":
+			return "CAST((CAST(" + lb + " AS DATE) - CAST(" + la + " AS DATE)) / 7 AS BIGINT)", nil
+		case "day":
+			return "CAST(CAST(" + lb + " AS DATE) - CAST(" + la + " AS DATE) AS BIGINT)", nil
+		}
+		secs := map[string]string{"hour": "3600", "minute": "60", "second": "1"}[unit]
+		return "CAST(FLOOR(EXTRACT(EPOCH FROM (date_trunc('" + unit + "', " + lb + ") - date_trunc('" + unit + "', " + la + "))) / " + secs + ") AS BIGINT)", nil
+	}
+	return "", dialectRefuse("date_diff()", "DataFusion has no date_diff")
+}
+
+// exprResultIsTime reports whether an expression's value is a time: a
+// time column, a parameter of type time, or a time-valued calendar
+// function at the top — so a -set-expr column can be typed for later
+// stages.
+func exprResultIsTime(expression string) bool {
+	tree, err := parser.Parse(expression)
+	if err != nil {
+		return false
+	}
+	if name, ok := ssql.ExprFieldName(tree.Node); ok {
+		return sqlTimeColumns[name]
+	}
+	var callee string
+	switch n := tree.Node.(type) {
+	case *ast.CallNode:
+		if id, ok := n.Callee.(*ast.IdentifierNode); ok {
+			callee = id.Value
+		}
+		if callee == "date" && len(n.Arguments) != 1 {
+			return false
+		}
+	case *ast.BuiltinNode:
+		callee = n.Name
+		if callee == "date" && len(n.Arguments) != 1 {
+			return false
+		}
+	}
+	switch callee {
+	case "date_trunc", "date_add", "tz", "now", "date", "strptime":
+		return true
+	case "bucket": // a time in, a time out
+		if n, ok := tree.Node.(*ast.CallNode); ok && len(n.Arguments) == 2 {
+			if name, ok := ssql.ExprFieldName(n.Arguments[0]); ok {
+				return sqlTimeColumns[name]
+			}
+		}
+	}
+	return false
 }

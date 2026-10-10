@@ -150,6 +150,38 @@ func CastValue(v any, target FieldType) (any, bool) {
 	return nil, false
 }
 
+// CastFieldFormat is CastField to a time through a pattern (strftime or a
+// Go layout — `cast -type F time -format F PATTERN`): text that does not
+// match is invalid like any other unconvertible value; an empty cell is
+// missing; a time stays as it is.
+func CastFieldFormat(mut MutableRecord, src Record, field, pattern string, invalidMissing bool, invalid *int64) MutableRecord {
+	v, ok := Get[any](src, field)
+	if !ok {
+		return mut
+	}
+	if t, isTime := v.(time.Time); isTime {
+		return mut.Time(field, t)
+	}
+	s, isString := v.(string)
+	if !isString {
+		s = fmt.Sprint(v)
+	}
+	if s == "" {
+		return mut.Null(field)
+	}
+	t, err := ParseStrftime(s, pattern)
+	if err != nil {
+		if !invalidMissing {
+			panic(&CastError{Field: field, Value: v, Target: FieldTypeTime})
+		}
+		if invalid != nil {
+			*invalid++
+		}
+		return mut.Null(field)
+	}
+	return mut.Time(field, t)
+}
+
 // CastField casts one field of a record being rebuilt: src is the record
 // as read, mut the record under construction. A field with no value stays
 // as it is; an empty text cell is MISSING (DFC124) and becomes a field

@@ -662,6 +662,49 @@ for when you need the bucket inside a larger expression):
 ssql from sensor.csv | ssql update -set-bucket minute ts 1m | ssql group-by minute -avg temp avg_temp -max rpm max_rpm | ssql sort minute | ssql to table
 ```
 
+### Dates
+
+*Why:* most dates arrive as text in somebody's local convention, and
+most questions about them are calendar questions — which month, which
+weekday, how many days ago.
+
+`shipments.csv` has `05/01/2026 09:15` dates. A column like that is a
+time once you say its pattern; `-format` takes the strftime language
+DuckDB and Python use (`%d/%m/%Y %H:%M`), and `-type shipped time` is
+implied. The text has no zone of its own, so it is read as a wall clock
+in the pipeline's zone — yours, from `TZ` or the system, unless the
+source says `-tz`:
+
+```bash
+ssql from shipments.csv -format shipped '%d/%m/%Y %H:%M' -tz Australia/Sydney | ssql update -set-expr month 'date_trunc(shipped, "month")' -set-expr weekday 'dow(shipped)' -set-expr hour 'hour(shipped)' | ssql include id shipped month weekday hour | ssql to table
+```
+
+The calendar functions are DuckDB's: `year`, `month`, `day`, `hour`,
+`minute`, `second`, `dow` (Sunday is 0), `doy`, `week` (ISO), `quarter`,
+`epoch`; `date_trunc(ts, "month")`, `date_add(ts, 1, "month")` (month
+ends clamp: Jan 31 + 1 month is Feb 28), `date_diff("day", a, b)`
+(boundaries crossed), `tz(ts, "America/New_York")` to read one value in
+another zone, `strftime(ts, "%b %-d")` to format. `update -set-bucket NEW
+SOURCE month` is the flag form of `date_trunc`, and a sink's
+`-time-format` renders every time column the way you want to see it
+without turning it into text:
+
+```bash
+ssql from shipments.csv -format shipped '%d/%m/%Y %H:%M' -tz Australia/Sydney | ssql update -set-bucket month shipped month | ssql group-by month -count n -sum parcels parcels | ssql sort month | ssql to table -time-format '%b %Y'
+```
+
+```bash
+# Tenure from an ISO date column (read as UTC, as database exports are): whole years crossed
+ssql from csv employees.csv -type hire_date time | ssql update -set-expr years 'date_diff("year", hire_date, date("2026-01-01"))' -set-expr hired 'strftime(hire_date, "%b %-d, %Y")' | ssql include name hired years | ssql sort name | ssql limit 3 | ssql to table
+```
+
+The zone is chosen once, where the stream starts (`-tz`, else `TZ`,
+else `/etc/localtime`), travels in the stream's header so every later
+command reads the same calendar, and is frozen by name into anything
+`generate` writes — a generated program or SQL answers the same wherever
+it runs. `ssql conventions -category data` has the rule; `ssql functions
+-category date` the list.
+
 Two series sampled at different moments never share a timestamp, so an
 equi-join between them finds nothing. `join -asof FIELD` gives each row
 the other side's row that was *in force* at its time: the nearest at or

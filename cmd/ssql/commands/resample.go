@@ -117,7 +117,7 @@ func RegisterResample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-time-format").
 			String().
 			Global().
-			Help("Go time layout for string timestamps outside RFC3339/SQL datetime").
+			Help("Pattern of string timestamps outside RFC 3339 / SQL datetime: strftime (%d/%m/%Y %H:%M) or a Go layout").
 			Done().
 
 		Flag("-generate", "-g").
@@ -182,10 +182,7 @@ func RegisterResample(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 // resampleOutputSchema: the time field keeps its input type; every
 // value field becomes float64 (interpolation's type).
 func resampleOutputSchema(in *lib.Schema, cfg ssql.ResampleConfig) *lib.Schema {
-	out := &lib.Schema{
-		Fields: append([]string{cfg.TimeField}, cfg.Values...),
-		Types:  map[string]string{},
-	}
+	out := in.Derive(append([]string{cfg.TimeField}, cfg.Values...), map[string]string{})
 	tsType := "int"
 	if in != nil && in.Types != nil {
 		if t, ok := in.Types[cfg.TimeField]; ok {

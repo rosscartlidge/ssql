@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"syscall/js"
+	_ "time/tzdata" // IANA zones for -tz/tz() in the browser, which has no zoneinfo (DFC147)
 
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/commands"
@@ -13,6 +14,18 @@ import (
 )
 
 func main() {
+	// The browser has no TZ or /etc/localtime; its own zone (an IANA name)
+	// is the pipeline's default, through the same TZ rule as a shell
+	// (ssql.ResolveZone reads TZ first). DFC147 §5.7.
+	if os.Getenv("TZ") == "" {
+		func() {
+			defer func() { _ = recover() }() // no Intl: the UTC fallback applies
+			zone := js.Global().Get("Intl").Get("DateTimeFormat").New().Call("resolvedOptions").Get("timeZone").String()
+			if zone != "" && zone != "<undefined>" {
+				os.Setenv("TZ", zone)
+			}
+		}()
+	}
 	js.Global().Set("ssqlExec", js.FuncOf(jsExec))
 	js.Global().Set("ssqlWriteFile", js.FuncOf(jsWriteFile))
 	js.Global().Set("ssqlReady", true)

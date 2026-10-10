@@ -151,10 +151,15 @@ func newTSCodec(sample any, cfg ResampleConfig, warn io.Writer) (*tsCodec, error
 		return &tsCodec{kind: "float", unit: u}, nil
 	case string:
 		if cfg.TimeFormat != "" {
-			if _, err := time.Parse(cfg.TimeFormat, v); err != nil {
+			// strftime or a Go layout, by the % rule (DFC147 §7.3).
+			layout, err := TimeLayout(cfg.TimeFormat)
+			if err != nil {
+				return nil, fmt.Errorf("resample -time-format: %w", err)
+			}
+			if _, err := time.Parse(layout, v); err != nil {
 				return nil, fmt.Errorf("resample: %q does not parse with -time-format %q: %w", v, cfg.TimeFormat, err)
 			}
-			return &tsCodec{kind: "string", layout: cfg.TimeFormat}, nil
+			return &tsCodec{kind: "string", layout: layout}, nil
 		}
 		for _, l := range tsStringLayouts {
 			if _, err := time.Parse(l, v); err == nil {
@@ -506,7 +511,7 @@ func BucketValue(v any, every time.Duration) (any, error) {
 		return exprfn.BucketFloat64(x, int64(every)), nil
 	case time.Time:
 		// A `time` column (DFC128 D1): time in, time out, same grid.
-		return time.Unix(0, SnapToBucket(x.UnixNano(), every)).UTC(), nil
+		return BucketTime(x, every), nil
 	case string:
 		for _, l := range tsStringLayouts {
 			if t, err := time.Parse(l, x); err == nil {
@@ -516,6 +521,13 @@ func BucketValue(v any, every time.Duration) (any, error) {
 		return nil, fmt.Errorf("bucket: cannot parse timestamp %q", x)
 	}
 	return nil, fmt.Errorf("bucket: unsupported timestamp type %T", v)
+}
+
+// BucketTime snaps a time to its epoch-aligned bucket of width every
+// (zone-free: the grid is the Unix epoch's). One form for the VM
+// (BucketValue) and transpiled code.
+func BucketTime(t time.Time, every time.Duration) time.Time {
+	return time.Unix(0, SnapToBucket(t.UnixNano(), every)).UTC()
 }
 
 // ResampleFilter wraps ResampleRecords as a Filter for generated

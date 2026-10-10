@@ -207,11 +207,17 @@ time and zones
   serve, a JSON pipeline document) supply -tz the same way. The rule
   behind it: an environment variable that changes RESULTS must have a flag
   and travel in the stream; one that changes what runs (SSQL_MODE) may stay
-  in the environment. The date functions are DFC147
-  (doc/research/dfc147_date_time_functions.md).
+  in the environment. The functions: ssql functions -category date
+  (year … epoch, date_trunc, date_add, date_diff, tz; DFC147).
 
   bucket(ts, "5m"), -set-bucket and resample snap to the Unix epoch and do
-  not depend on the zone; trunc(ts, "day") does (local midnight).
+  not depend on the zone; date_trunc(ts, "day") does (local midnight).
+
+  Text with no zone of its own: an ISO form (2026-01-05T09:15:00,
+  2026-01-05 09:15:00, a bare date) read by -type … time, cast or date(v)
+  is UTC, as database exports are; text read through a PATTERN (-format,
+  cast -format, strptime, date(text, pattern)) is a wall clock in the
+  pipeline's zone, as a hand-written 05/01/2026 09:15 is.
 `
 
 const conventionPipeline = `PIPELINE:

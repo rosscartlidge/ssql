@@ -61,6 +61,67 @@ var sqlTimeColumns = map[string]bool{}
 // meets, not by its spelling.
 var sqlColumnKinds = map[string]string{}
 
+// sqlZone is the pipeline's time zone for this assembly (DFC147 §5.7):
+// the from stage's materialised `-tz`, else the generating process's. The
+// calendar functions name it explicitly in the SQL they emit; the session
+// zone is pinned to UTC (renderZonePrologue) so the engine reads zoneless
+// text as ssql does. sqlNeedsZone records that a time type or function
+// was emitted, so the pin is written only when it matters.
+var sqlZone string
+var sqlNeedsZone bool
+
+// sqlTextTimeColumns names the columns a JSON source's `_schema` header
+// types as time but the engine reads as text (its JSON reader infers
+// VARCHAR for RFC 3339 strings in mixed offsets): a reference to one as
+// a time casts it. A cast or -type stage replaces the entry.
+var sqlTextTimeColumns = map[string]bool{}
+
+// sqlTimeColumnRef is the SQL for a time column: the identifier, cast to
+// the instant type when the engine holds it as text.
+func sqlTimeColumnRef(name string) string {
+	if sqlTextTimeColumns[name] {
+		return "CAST(" + quoteIdent(name) + " AS " + sqlTimestampType() + ")"
+	}
+	return quoteIdent(name)
+}
+
+// sqlTimestampType is the engine type of an ssql `time`: an instant
+// (TIMESTAMPTZ) on DuckDB and Postgres — a naive TIMESTAMP drops the
+// offset of a `…+11:00` cell (probed 2026-10-10) — and DataFusion's
+// TIMESTAMP, which it reads as UTC.
+func sqlTimestampType() string {
+	sqlNeedsZone = true
+	if sqlDialectCur == dialectDataFusion {
+		return "TIMESTAMP"
+	}
+	return "TIMESTAMPTZ"
+}
+
+// sqlEpochOrigin is the Unix epoch as a literal of sqlTimestampType, the
+// origin bucket() and resample pin their grids to.
+func sqlEpochOrigin() string {
+	if sqlDialectCur == dialectDataFusion {
+		return "TIMESTAMP '1970-01-01 00:00:00'"
+	}
+	return "TIMESTAMPTZ '1970-01-01 00:00:00+00'"
+}
+
+// renderZonePrologue pins the session zone to UTC when the statement
+// involves a time, so zoneless text parses as ssql reads it (UTC) and
+// every calendar reading is the explicit `AT TIME ZONE` the functions
+// emit, never the machine's zone. DataFusion needs no pin (UTC-naive).
+func renderZonePrologue(sb *strings.Builder) {
+	if !sqlNeedsZone {
+		return
+	}
+	switch sqlDialectCur {
+	case dialectDuckDB:
+		sb.WriteString("SET TimeZone = 'UTC';\n\n")
+	case dialectPostgres:
+		sb.WriteString("SET timezone TO 'UTC';\n\n")
+	}
+}
+
 // seedColumnKinds samples a delimited source (the Postgres prologue's
 // sampler — the same int → float → bool → text reading the CSV reader
 // does) into sqlColumnKinds.
@@ -328,6 +389,9 @@ func renderPGPrologue(sb *strings.Builder) {
 // collide); false renders CREATE TABLE IF NOT EXISTS for a one-off load.
 func pgLoadScript(temp bool) string {
 	var sb strings.Builder
+	if sqlNeedsZone {
+		sb.WriteString("SET timezone TO 'UTC';\n") // zoneless cells load as UTC, as ssql reads them
+	}
 	for _, l := range pgLoads {
 		if l.columns == nil {
 			fmt.Fprintf(&sb, "-- %s was not readable at generation time: CREATE TABLE %s with its header's column names, then\n", l.file, l.table)
@@ -672,7 +736,7 @@ func pgColumnType(typeName, inferred string) string {
 	case "bool":
 		return "BOOLEAN"
 	case "time":
-		return "TIMESTAMP"
+		return sqlTimestampType()
 	case "string":
 		return "TEXT"
 	}

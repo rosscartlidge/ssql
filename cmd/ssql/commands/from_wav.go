@@ -11,7 +11,7 @@ import (
 )
 
 func registerFromWAV(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("wav").
+	zoneFlag(cmd.Subcommand("wav")).
 		Description("Read WAV audio file").
 		Example("ssql from wav audio.wav | ssql fft -field amplitude", "Read WAV for FFT analysis").
 		Example("ssql from wav stereo.wav -channel 0 | ssql to table", "Read left channel only").
@@ -34,6 +34,9 @@ func registerFromWAV(cmd *cf.SubcommandBuilder) {
 		Help("Input WAV file").
 		Done().
 		Handler(func(ctx *cf.Context) error {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			var inputFile string
 			var generate bool
 			var channel int = -1
@@ -116,7 +119,7 @@ func generateFromWAVCode(filename string, channel int) error {
 		imports = []string{"fmt", "os"}
 	}
 
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

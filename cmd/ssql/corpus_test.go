@@ -116,6 +116,11 @@ func corpusData(t *testing.T) string {
 			"int_first.csv":          corpusIntFirstCSV,
 			"int_first.tsv":          strings.ReplaceAll(corpusIntFirstCSV, ",", "\t"),
 			"dated.csv":              corpusDatedCSV,
+			"times.csv":              corpusTimesCSV,
+			"times_sydney.jsonl":     corpusTimesSydneyJSONL,
+			"dmy.csv":                corpusDMYCSV,
+			"dmy_sidecar/dmy.csv":    corpusDMYCSV,
+			"dmy_sidecar/datapackage.json": `{"resources":[{"path":"dmy.csv","schema":{"fields":[{"name":"id","type":"integer"},{"name":"when","type":"date","format":"%d/%m/%Y"},{"name":"n","type":"integer"}]}}]}`,
 			"epochs.csv":             corpusEpochsCSV,
 			"precision.csv":          corpusPrecisionCSV,
 			"epochs_ms.csv":          corpusEpochsMsCSV,
@@ -203,6 +208,10 @@ func corpusData(t *testing.T) string {
 			"app.log":                corpusAppLog,
 		}
 		for name, content := range files {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+				corpusDataErr = err
+				return
+			}
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 				corpusDataErr = err
 				return
@@ -799,6 +808,36 @@ const corpusDatedCSV = `id,date,amount
 5,2026-02-28,500
 2,2026-01-20,200
 4,2026-02-10,400
+`
+
+// corpusTimesCSV (DFC147): instants in three offsets, a month end, a leap
+// day, a Sunday/Monday boundary and a DST-change day, shuffled, with
+// distinct ids and values — so a wrong zone, clamp or boundary count
+// diverges somewhere.
+const corpusTimesCSV = `id,ts,n
+3,2026-01-31T12:00:00Z,30
+1,2026-01-04T23:30:00Z,10
+5,2024-02-29T20:15:30-05:00,50
+2,2026-01-05T10:30:00+11:00,20
+4,2026-04-05T02:30:00+11:00,40
+6,2026-01-11T23:59:59Z,60
+`
+
+// corpusDMYCSV: dates in a day-first pattern, for -format and strptime.
+const corpusDMYCSV = `id,when,n
+2,31/01/2026,20
+1,05/01/2026,10
+3,29/02/2024,30
+`
+
+// corpusTimesSydneyJSONL is a tee'd stream whose header names its zone.
+const corpusTimesSydneyJSONL = `{"_schema":{"fields":["id","ts","n"],"types":{"id":"int","ts":"time","n":"int"},"tz":"Australia/Sydney"}}
+{"id":3,"ts":"2026-01-31T12:00:00Z","n":30}
+{"id":1,"ts":"2026-01-04T23:30:00Z","n":10}
+{"id":5,"ts":"2024-02-29T20:15:30-05:00","n":50}
+{"id":2,"ts":"2026-01-05T10:30:00+11:00","n":20}
+{"id":4,"ts":"2026-04-05T02:30:00+11:00","n":40}
+{"id":6,"ts":"2026-01-11T23:59:59Z","n":60}
 `
 
 // corpusEpochsCSV: integer epoch SECONDS in shuffled order, straddling two

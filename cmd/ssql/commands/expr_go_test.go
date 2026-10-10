@@ -52,6 +52,20 @@ func TestExprToGo(t *testing.T) {
 
 		// bucket() (DFC121)
 		{"bucket int keeps int", `bucket(pop, "10s")`, `exprfn.BucketInt64(r.Pop, 10000000000)`, exprGoInt, "github.com/rosscartlidge/ssql/v4/exprfn"},
+		// DFC147 calendar functions over a time column: the pipeline zone
+		// unless tz() names one; results are times or int64s.
+		{"time part in the pipeline zone", `hour(when)`, `ssql.MustTimePart(r.When, "hour", ssql.StreamLocation())`, exprGoInt, "github.com/rosscartlidge/ssql/v4"},
+		{"time part in a tz zone", `hour(tz(when, "Australia/Sydney"))`, `ssql.MustTimePart(r.When.In(exprLoc` + exprGoHash("Australia/Sydney") + `), "hour", exprLoc` + exprGoHash("Australia/Sydney") + `)`, exprGoInt, "github.com/rosscartlidge/ssql/v4"},
+		{"date_trunc is a time", `date_trunc(when, "month")`, `ssql.MustTruncTime(r.When, "month", ssql.StreamLocation())`, exprGoTime, ""},
+		{"date_add", `date_add(when, 1, "month")`, `ssql.MustAddCalendar(r.When, int64(1), "month", ssql.StreamLocation())`, exprGoTime, ""},
+		{"date_diff", `date_diff("day", when, when)`, `ssql.MustDiffCalendar("day", r.When, r.When, ssql.StreamLocation())`, exprGoInt, ""},
+		{"time compare", `when > date_add(when, 1, "day")`, `(r.When.Compare(ssql.MustAddCalendar(r.When, int64(1), "day", ssql.StreamLocation())) > 0)`, exprGoBool, ""},
+		{"time equality", `when == when`, `r.When.Equal(r.When)`, exprGoBool, ""},
+		{"bucket over a time", `bucket(when, "1h")`, `ssql.BucketTime(r.When, 3600000000000)`, exprGoTime, ""},
+		{"now in the pipeline zone", `now()`, `time.Now().In(ssql.StreamLocation())`, exprGoTime, "time"},
+		{"strftime in the pipeline zone", `strftime(when, "%Y-%m-%d")`, `ssql.MustFormatStrftime(r.When, "%Y-%m-%d", ssql.StreamLocation())`, exprGoString, ""},
+		{"strptime of a string column", `strptime(city, "%d/%m/%Y")`, `ssql.MustParseTimeLayout(r.City, "%d/%m/%Y", "city")`, exprGoTime, ""},
+		{"date with a strftime pattern", `date(city, "%d/%m/%Y")`, `ssql.MustParseTimeLayout(r.City, "%d/%m/%Y", "city")`, exprGoTime, ""},
 		{"bucket float keeps float", `bucket(price, "3s")`, `exprfn.BucketFloat64(r.Price, 3000000000)`, exprGoFloat, "github.com/rosscartlidge/ssql/v4/exprfn"},
 
 		// §2b comparison
@@ -168,9 +182,13 @@ func TestExprToGoRecord(t *testing.T) {
 		})
 	}
 
-	t.Run("advisory-untypeable field refuses", func(t *testing.T) {
-		if _, err := exprToGoRecord("when > when", advisory, "r"); err == nil {
-			t.Errorf("time.Time advisory field must refuse")
+	t.Run("advisory time field reads with a zero default", func(t *testing.T) {
+		got, err := exprToGoRecord(`hour(when)`, advisory, "r")
+		if err != nil {
+			t.Fatalf("time.Time advisory field: %v", err)
+		}
+		if want := `ssql.MustTimePart(ssql.GetOr(r, "when", time.Time{}), "hour", ssql.StreamLocation())`; got.Src != want {
+			t.Errorf("got %s\nwant %s", got.Src, want)
 		}
 	})
 	t.Run("unknown field errors", func(t *testing.T) {
@@ -220,7 +238,14 @@ func TestExprToGoErrors(t *testing.T) {
 		{"string plus int", `city + 1`, "numeric"},
 		{"string compared to int", `city > 5`, "cannot compare"},
 		{"cross-type equality", `city == 7`, "cannot compare"},
-		{"time field refuses", `when > 5`, "time.Time"},
+		{"time compared with a number", `when > 5`, "cannot compare time.Time"},
+		{"time arithmetic is the VM's", `when - when`, "numeric"},
+		{"date_trunc needs a literal unit", `date_trunc(when, city)`, "literal unit"},
+		{"date_trunc bad unit", `date_trunc(when, "fortnight")`, "fortnight"},
+		{"part over a string column", `hour(city)`, "time column"},
+		{"tz bad zone", `tz(when, "Mars/Olympus")`, "Mars"},
+		{"strftime bad directive", `strftime(when, "%Q")`, "%Q"},
+		{"strptime slow directive", `strptime(city, "%j")`, "cannot be parsed"},
 		{"float modulo", "price % 2", "integer"},
 		{"dynamic matches pattern", "city matches city", "literal pattern"},
 		// The VM returns the winning operand with its OWN type (min(-3, -2.5)

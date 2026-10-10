@@ -15,7 +15,7 @@ import (
 )
 
 func registerFromTSV(cmd *cf.SubcommandBuilder) {
-	sub := cmd.Subcommand("tsv").
+	sub := zoneFlag(cmd.Subcommand("tsv")).
 		Description("Read TSV file(s) or stdin").
 		Example("ssql from tsv data.tsv | ssql to table", "Read TSV file").
 		Example("ssql from tsv *.tsv | ssql to table", "Read multiple TSV files").
@@ -82,7 +82,7 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
 		Help("Default type for all fields: auto (default), string, int, float, bool").
 		Done()
-	sidecarFlags(sub).
+	formatFlag(sidecarFlags(sub), readerFormatHelp).
 		Flag("FILE").
 		String().
 		Variadic().
@@ -92,6 +92,9 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Help("Input TSV file(s) (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) (err error) {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			defer recoverCellError(&err)
 			cfg := extractMultiFileConfig(ctx)
 			typeOverrides := make(map[string]string)
@@ -100,9 +103,14 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 			}
 			// A schema sidecar's types sit under the user's (DFC146).
 			sidecar, noSidecar := sidecarFlagValues(ctx)
-			if typeOverrides, err = resolveSidecarTypes(cfg.files, typeOverrides, sidecar, noSidecar); err != nil {
+			formats, err := parseFormatFlags(ctx)
+			if err != nil {
 				return err
 			}
+			if typeOverrides, formats, err = resolveSidecarTypes(cfg.files, typeOverrides, sidecar, noSidecar, formats); err != nil {
+				return err
+			}
+			typeOverrides = applyTimeFormats(typeOverrides, formats)
 			defaultType, _ := ctx.GlobalFlags["-default-type"].(string)
 			csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
 			if err != nil {
@@ -307,7 +315,7 @@ func generateFromTSVCode(filename string, types typeArgs) error {
 		imports = []string{"fmt", "os"}
 	}
 
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
@@ -365,12 +373,13 @@ func generateFromTSVCodeTyped(filename string, types typeArgs) error {
 	}
 
 	// Always emit BOTH templates; planner picks per pipeline.
-	parallelCode := fmt.Sprintf(`records := typed.ReadDelimParallel[%s](*flagInput, 0%s)`, schema.TypeName, delimArg)
+	fmtOpts := timeFormatOptionsCode(fromTimeFormats, "DelimTimeFormat")
+	parallelCode := fmt.Sprintf(`records := typed.ReadDelimParallel[%s](*flagInput, 0%s%s)`, schema.TypeName, delimArg, fmtOpts)
 	parallelImports := append([]string{}, imports...)
-	serialCode := fmt.Sprintf(`records := typed.ReadDelim[%s](*flagInput%s)`, schema.TypeName, delimArg)
+	serialCode := fmt.Sprintf(`records := typed.ReadDelim[%s](*flagInput%s%s)`, schema.TypeName, delimArg, fmtOpts)
 	serialImports := append([]string{}, imports...)
 
-	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
+	frag := fromInitFragment("records", parallelCode, parallelImports)
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}

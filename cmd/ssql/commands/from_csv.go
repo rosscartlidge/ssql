@@ -17,7 +17,7 @@ import (
 )
 
 func registerFromCSV(cmd *cf.SubcommandBuilder) {
-	sub := cmd.Subcommand("csv").
+	sub := zoneFlag(cmd.Subcommand("csv")).
 		Description("Read CSV file(s) or stdin").
 		Example("ssql from csv data.csv | ssql to table", "Read CSV file").
 		Example("ssql from csv *.csv | ssql to table", "Read multiple CSV files").
@@ -87,7 +87,7 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
 		Help("Default type for all fields: auto (default), string, int, float, bool").
 		Done()
-	sidecarFlags(sub).
+	formatFlag(sidecarFlags(sub), readerFormatHelp).
 		Flag("FILE").
 		String().
 		Variadic().
@@ -97,6 +97,9 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Help("Input CSV file(s) (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			var files []string
 			var generate, mergeSchemas bool
 			var defaultType, sourceField string
@@ -135,10 +138,14 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 			}
 			// A schema sidecar's types sit under the user's (DFC146).
 			sidecar, noSidecar := sidecarFlagValues(ctx)
-			var err error
-			if typeOverrides, err = resolveSidecarTypes(files, typeOverrides, sidecar, noSidecar); err != nil {
+			formats, err := parseFormatFlags(ctx)
+			if err != nil {
 				return err
 			}
+			if typeOverrides, formats, err = resolveSidecarTypes(files, typeOverrides, sidecar, noSidecar, formats); err != nil {
+				return err
+			}
+			typeOverrides = applyTimeFormats(typeOverrides, formats)
 
 			var unordered bool
 			if uVal, ok := ctx.GlobalFlags["-unordered"]; ok {
@@ -373,7 +380,7 @@ func generateFromFileSampleCode(fn, help, inputFile string, n int, seed int64, e
 	if err != nil {
 		return fmt.Errorf("%%w", err)
 	}`, fn, extras.configArg()))
-	frag := lib.NewInitFragment("records", code, []string{"fmt", "os"}, getCommandString())
+	frag := fromInitFragment("records", code, []string{"fmt", "os"})
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
@@ -384,7 +391,7 @@ func typeOptionsFrom(typeOverrides map[string]string, defaultType string) lib.Ty
 	if defaultType == "auto" {
 		defaultType = ""
 	}
-	return lib.TypeOptions{Fields: typeOverrides, Default: defaultType}
+	return lib.TypeOptions{Fields: typeOverrides, Default: defaultType, Formats: fromTimeFormats}
 }
 
 // coerceFieldTypesCode renders the record-mode statement applying
@@ -523,7 +530,7 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 		imports = []string{"fmt", "os"}
 	}
 
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	// Advisory column types for the record-mode expr transpiler (Phase 4):
 	// the same sampling typed mode trusts. Only without user type
@@ -584,12 +591,13 @@ func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, 
 	// fragments and either keeps the parallel form (typed.ReadCSVParallel
 	// → Stream[T]) or downgrades to the serial alternative
 	// (typed.ReadCSV → iter.Seq[T]) when no downstream needs Stream.
-	parallelCode := fmt.Sprintf(`records := typed.ReadCSVParallel[%s](*flagInput, 0)`, schema.TypeName)
+	fmtOpts := timeFormatOptionsCode(fromTimeFormats, "TimeFormat")
+	parallelCode := fmt.Sprintf(`records := typed.ReadCSVParallel[%s](*flagInput, 0%s)`, schema.TypeName, fmtOpts)
 	parallelImports := append([]string{}, imports...)
-	serialCode := fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput)`, schema.TypeName)
+	serialCode := fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput%s)`, schema.TypeName, fmtOpts)
 	serialImports := append([]string{}, imports...)
 
-	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
+	frag := fromInitFragment("records", parallelCode, parallelImports)
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}
@@ -636,7 +644,7 @@ func generateCSVConfigCode(typeOverrides map[string]string, defaultType string) 
 // for TSV.
 func generateDelimConfigCode(typeOverrides map[string]string, defaultType string, delimLiteral string) string {
 	// No config needed if using defaults
-	if len(typeOverrides) == 0 && (defaultType == "" || defaultType == "auto") {
+	if len(typeOverrides) == 0 && (defaultType == "" || defaultType == "auto") && len(fromTimeFormats) == 0 {
 		return ""
 	}
 
@@ -663,6 +671,9 @@ func generateDelimConfigCode(typeOverrides map[string]string, defaultType string
 			parts = append(parts, fmt.Sprintf("\t\t\t%q: ssql.FieldType%s,", field, capitalizeFieldType(typeOverrides[field])))
 		}
 		parts = append(parts, "\t\t},")
+	}
+	if lit := timeFormatsLiteral(fromTimeFormats); lit != "" {
+		parts = append(parts, lit)
 	}
 
 	parts = append(parts, "\t}")
@@ -770,7 +781,7 @@ func generateFromFileLastCode(fn, help, inputFile string, n int, extras sourceCo
 	if err != nil {
 		return fmt.Errorf("reading tail: %%w", err)
 	}`, fn, extras.configArg()))
-	frag := lib.NewInitFragment("records", code, []string{"fmt"}, getCommandString())
+	frag := fromInitFragment("records", code, []string{"fmt"})
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

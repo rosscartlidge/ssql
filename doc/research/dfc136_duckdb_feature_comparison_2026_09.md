@@ -2,7 +2,7 @@
 
 Reference: DFC136
 Created: 2026-09-23
-Last modified: 2026-10-08
+Last modified: 2026-10-10
 
 [Back to Index](./README.md)
 
@@ -189,11 +189,15 @@ As of v4.108.0. The 2026-09-23 list had six items; three of them
 (joins, set operations, out-of-core) were DFC137 and are done, so this
 is the list after it. The original ranking is kept in §8.
 
-1. **Date and time functions.** One `time` type and a handful of
-   functions against DuckDB's full calendar. `strftime`-style
-   formatting, `date_trunc` beyond `bucket`, timezone conversion,
-   intervals as values. Each is small; together they are a gap people
-   feel daily. Now the largest remaining one.
+1. ~~**Date and time functions.**~~ **Built 2026-10-10
+   ([DFC147](./dfc147_date_time_functions.md)):** the parts (`year` …
+   `epoch`), `date_trunc`, `date_add`, `date_diff`, `tz`, `strftime`,
+   `strptime`, a pipeline zone carried in the `_schema` header, `-format`
+   on the readers and `cast`, `-time-format` on the sinks — every lane,
+   DuckDB's names. What DuckDB still has: `INTERVAL` as a column type,
+   `date_part` over intervals, `make_date`/`make_timestamp`, locale
+   names, `last_day`, `age()`. Was "one `time` type and a handful of
+   functions; the largest remaining gap".
 2. **Non-scalar values** (added 2026-10-08, §7a; narrowed the same
    day, §7b). The first-question failures are gone in v4.113.0:
    `len(tags)` counts elements, `addr.city` is a field name, `explode`
@@ -266,10 +270,9 @@ and group-by, INTERSECT/EXCEPT, a Python binding. Three of the five are
 DFC137 and shipped in v4.108.0. What remains, in the order I would take
 them:
 
-1. Date/time function set (§4.1): formatting, truncation, timezone,
-   interval values; each with transpiler and SQL translation and a
-   differential entry. The one gap on the list that an analyst meets
-   daily.
+1. ~~Date/time function set (§4.1)~~ — shipped 2026-10-10 as
+   [DFC147](./dfc147_date_time_functions.md), every lane with
+   differential and equivalence entries.
 2. ~~Non-scalar values, Levels 0–2 of
    [DFC144](./dfc144_non_scalar_values.md)~~ — shipped in v4.113.0 the
    day it was added (§7b). What is left of the unit: `nest FIELD COL…`

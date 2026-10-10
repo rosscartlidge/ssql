@@ -166,7 +166,7 @@ func stringList(v any) []string {
 }
 
 func unpivotOutputSchema(in *lib.Schema, cfg ssql.UnpivotConfig) *lib.Schema {
-	out := &lib.Schema{Types: map[string]string{}}
+	out := in.Derive(nil, map[string]string{})
 	for _, id := range cfg.IDs {
 		out.Fields = append(out.Fields, id)
 		if in != nil && in.Types != nil {

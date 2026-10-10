@@ -29,16 +29,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mis-typed. Library: `FindTableSchema`, `ReadTableSchema`,
   `ParseTableSchema`, `WriteDatapackage`, `WriteCSVSidecar`,
   `TableSchemaJSON`.
-- **`ssql conventions` states the time-zone rule** (DFC147, decided
-  ahead of the date functions): a `time` is an instant; reading its
-  calendar uses one zone, chosen where the stream starts (`from -tz`,
-  else `TZ`, else `/etc/localtime`, as `date(1)` and DuckDB do) and
-  carried in the `_schema` header; `TZ=UTC` pins a run; every
-  serialisation (`generate sql`, `go`, `json`) will freeze the zone by
-  name into its output.
+- **Calendar functions (DFC147).** `year(ts)`, `month`, `day`, `hour`,
+  `minute`, `second`, `dow` (Sunday 0), `doy`, `week` (ISO), `quarter`,
+  `epoch`; `date_trunc(ts, unit)`; `date_add(ts, n, unit)` (months and
+  years clamp to the month's end, as DuckDB and Postgres do);
+  `date_diff(unit, start, end)` (unit boundaries crossed, DuckDB's
+  `date_diff`); `tz(ts, zone)`; `now()` in the pipeline zone. DuckDB's
+  names and argument orders. Every function accepts a `time` or anything
+  `date()` reads, in every lane: the expression VM, typed and record
+  programs (native Go, a `time.Time` column no longer forces the VM
+  fallback), and `generate sql` for DuckDB and Postgres (the engine's
+  own functions, the zone named explicitly in every call; DataFusion
+  serves a UTC pipeline). `update -set-bucket NAME SOURCE month` is the
+  flag form of `date_trunc`. A time is an instant in SQL too:
+  `-type`/`cast … time` columns are `TIMESTAMPTZ`, so a cell's offset is
+  no longer lost.
+- **The pipeline's time zone.** Reading a time's calendar needs a zone,
+  and the zone is chosen once, where the stream starts, and carried in
+  the `_schema` header (`"tz"`): `from … -tz ZONE` (IANA name, Tab
+  completes it), else `TZ`, else `/etc/localtime`, as `date(1)` and
+  DuckDB resolve it. Every later command adopts the header's zone and
+  never reads its own environment; `tee` keeps it; `from ssh` sends it
+  to the remote `from`; two inputs naming different zones are refused.
+  `generate sql`, `generate go`, `generate json` and `generate ssql`
+  freeze the resolved name into their output (the SQL pins its session
+  to UTC and names the zone in each calendar call), so a serialised
+  pipeline answers the same wherever it runs. `TZ=UTC ssql …` pins a
+  run; the playground uses the browser's zone. `ssql conventions
+  -category data` states the rule; `lib.Schema.TZ`, `ssql.ResolveZone`,
+  `ssql.StreamZone` in the library.
+- **strftime patterns everywhere a time pattern is given (DFC147 §6).**
+  `strftime(ts, "%Y-%m-%d %H:%M")` formats on the pipeline zone's wall
+  clock, `strptime(text, "%d/%m/%Y")` parses, and
+  `date(text, pattern)` takes a `%` pattern too — the language DuckDB,
+  Python and DataFusion share, converted once to a Go layout; a pattern
+  without `%` is still a Go layout. Supported directives are listed in
+  doc/EXPRESSIONS.md; the rest are refused by name. Every lane: VM,
+  typed and record programs, DuckDB `strftime`/`strptime`, Postgres
+  `to_char`/`to_timestamp`, DataFusion `to_char`/`to_timestamp`.
+- **`-format COL PATTERN` on `from csv`, `from tsv`, bare `from` and
+  `cast`** reads a time column whose cells are not RFC 3339 (`-type COL
+  time` is implied) — in exec, record and typed programs (a per-column
+  `typed.TimeFormat` reader option) and `generate sql` (DuckDB
+  `read_csv(timestampformat=…)`, one pattern per read; `strptime` for
+  `cast`; Postgres `to_timestamp`). A schema sidecar's date `format`
+  (Frictionless strftime, CSVW's `dd/MM/yyyy`) is now honoured through
+  the same map instead of refused (DFC146 §5). Library:
+  `CSVConfig.TimeFormats`, `CastFieldFormat`, `MustParseTimeLayout`,
+  `TableSchema.TimeFormats`.
+- **`-time-format PATTERN` on `to csv`, `to tsv`, `to table` and `to
+  markdown`** renders every time column with the pattern on the
+  pipeline zone's wall clock — `2026-01-05` instead of
+  `2026-01-05T00:00:00Z` — without changing the column's type, in exec,
+  record and typed programs. `resample -time-format` takes a strftime
+  pattern as well as a Go layout. Library: `CSVConfig.TimeFormat`,
+  `TSVConfig`/`WriteTSVOpts`, `DisplayOptions`/`DisplayTableOpts`/
+  `WriteMarkdownOpts`, `FormatTimePattern`, `typed.OutputTimeFormat`.
 
 ### Fixed
 
+- **Header properties survived no stage.** `cast`, `fill`, `extract`,
+  `flatten`, `unpivot`, `resample` and `describe` rebuilt their output
+  `_schema` from a struct literal and `Clone()` copied only fields and
+  types, so the audio `sample_rate` (and now the zone) was dropped at
+  any of them; they derive the output schema from the input's
+  (`lib.Schema.Derive`), and `TestHeaderPropertiesSurvive` pipes a
+  stamped stream through every command.
+- **A `time` column's wire type in a tee'd file and in a generated
+  program's JSONL was `string`** (`inferJSONType` did not know
+  `time.Time`); it is `time`.
+- **Text parsed through a pattern is a wall clock in the pipeline
+  zone.** `-format`, `cast -format`, `strptime` and `date(text, pattern)`
+  read `05/01/2026 09:15` as that time in the pipeline's zone (`-tz`,
+  `TZ`), as the person who wrote it meant; an ISO export through
+  `date(v)`, `-type … time` or `cast -type … time` stays UTC when it
+  names no zone (DFC128). `date(text, layout)` used to read a Go-layout
+  text as UTC; the three-argument form with a zone is unchanged.
+- **`generate sql` let DuckDB infer DATE and TIMESTAMP columns from a
+  CSV** that ssql reads as text (ssql never infers a time without
+  `-type`), so a later `cast -format` met a DATE; `read_csv` is now
+  pinned to ssql's four inferred types (`auto_type_candidates`), and a
+  JSONL source's `_schema` header row no longer appears as a row of
+  NULLs in an unfiltered DuckDB result.
+- **A typed program's `to table` printed a time column in Go's debug
+  form** (`2026-01-05 10:30:00 +0000 UTC`) when columns were selected;
+  it prints RFC 3339 like the CLI.
 - **`from csv -type COL json` reads the cell as a nested value.** The
   declaration was accepted and the cell stayed text, so `addr.city`
   never resolved and completion listed no paths; the reader now takes a

@@ -123,7 +123,7 @@ func RegisterFlatten(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 // then the first row's new FIELD.key fields in its order, typed from
 // their values.
 func flattenOutputSchema(in *lib.Schema, first ssql.Record, field string, keep bool) *lib.Schema {
-	out := &lib.Schema{Types: map[string]string{}}
+	out := in.Derive(nil, map[string]string{})
 	for _, f := range in.Fields {
 		if f == field && !keep {
 			continue

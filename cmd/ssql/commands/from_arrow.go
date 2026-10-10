@@ -11,7 +11,7 @@ import (
 )
 
 func registerFromArrow(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("arrow").
+	zoneFlag(cmd.Subcommand("arrow")).
 		Description("Read Arrow file or stdin").
 		Example("ssql from arrow data.arrow | ssql to table", "Read Arrow file (10-20x faster than CSV)").
 		Flag("-generate", "-g").
@@ -27,6 +27,9 @@ func registerFromArrow(cmd *cf.SubcommandBuilder) {
 		Help("Input Arrow file (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			var inputFile string
 			var generate bool
 
@@ -81,7 +84,7 @@ func generateFromArrowCode(filename string) error {
 		imports = []string{"fmt", "os"}
 	}
 
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

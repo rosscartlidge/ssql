@@ -6,10 +6,10 @@ Last modified: 2026-10-10
 
 [Back to Index](./README.md)
 
-Status: **proposal, for comment.** Nothing built. The semantics in §5
-were probed against DuckDB v1.5.0 on 2026-10-10; the Postgres and
-DataFusion columns are from their documentation and are pinned by the
-oracle lanes when built.
+Status: **built 2026-10-10 (A, B and C — §11).** The semantics in §5
+were probed against DuckDB v1.5.0; the Postgres and DataFusion
+emissions follow their documentation and are pinned by the oracle lanes
+when those rigs are present.
 
 ## 1. The question
 
@@ -586,11 +586,117 @@ sitting.
    `_schema` header, frozen by name into every serialisation — which
    is what keeps the generated SQL and Go reproducible and answers the
    no-shell environments.
-2. **Names.** `trunc`/`add`/`diff` are short; `date_trunc`/`date_add`/
-   `date_diff` are what SQL users type. The expression language's
-   existing style is short (`bucket`, `len`, `uniq`), and `trunc` is
-   not otherwise taken (`floor`/`ceil`/`round` are the numeric ones).
-   I lean short.
-3. **`-format` on `cast`, or only on the readers.** A `cast` that
-   parses `d/m/Y` text mid-pipeline is useful when the source is JSON
-   or a `tee`; it costs little once the reader has it. Included.
+2. ~~**Names.**~~ **Resolved 2026-10-10 (plan mode): SQL-style.**
+   `date_trunc(ts, "month")`, `date_add(ts, 1, "month")`,
+   `date_diff("day", a, b)` (DuckDB's argument order, part first),
+   `strftime(ts, pattern)` and `strptime(str, pattern)` (DuckDB's
+   names; `date(str, pattern)` also takes a `%` pattern); the parts stay
+   bare (`year(ts)` …); `tz(ts, zone)` keeps its short name because
+   DuckDB's `timezone(zone, ts)` collides with ssql's existing
+   `timezone(str)`. A DuckDB user types what they know; §4 is read with
+   these names.
+3. ~~**`-format` on `cast`, or only on the readers.**~~ **Resolved
+   2026-10-10 (plan mode): readers and `cast`.** A `cast` that parses
+   d/m/Y text mid-pipeline is useful when the source is JSON or a `tee`;
+   it costs little once the reader has it. Spelled `-format COL PATTERN`
+   (accumulated pairs, like `-type COL TYPE`), on `from csv`/`from tsv`/
+   bare `from` and on `cast`.
+4. **Scope (plan mode, 2026-10-10): A + B + C together**, three commits,
+   one minor release at the end. The plan is in the session's plan file;
+   §7 "Built" notes land per batch.
+
+## 11. Built (2026-10-10)
+
+All three batches, one working day, one commit. What the plan said and
+what the code found on the way.
+
+**Functions and zone (A).** `time_calendar.go` and `time_zone.go` in
+the root package hold the one implementation (`TruncTime`, `AddCalendar`,
+`DiffCalendar`, `TimePart`, `BucketTime`; `ResolveZone`, `StreamZone`,
+`PinStreamZone`, `AdoptStreamZone`); `ExprTimeFunctions` binds them for
+the VM under their names AND under `__fn_` aliases, because expr-lang's
+checker resolves an env variable before a function — `group-by -expr`
+over data with a `day` column would have said "int64 is not callable";
+`ExprFieldShadowing` rewrites the call to the alias. The transpiler
+gained `exprGoTime`; `-set-expr` into a time column and a new time
+column both work natively. `from -tz` (Tab completes the zoneinfo tree)
+pins the zone; `lib.Schema.TZ` carries it; `lib.ReadJSONLWithSchema`
+adopts it; `Schema.WriteHeader` fills it into every header written, so
+no command can drop it (the first survival sweep found seven that
+rebuilt their schema from a struct literal — they now `Derive` it, which
+also stopped losing `SampleRate`). The source's `fromInitFragment`
+materialises `-tz NAME` into the fragment's argv; the two program
+assemblers read it there (`lib.PipelineZone`) and set it at the top of
+`main` (a library package in `init`), so no template can miss it — the
+first attempt put the statement in the init fragment's code and the
+serial alternative lost it.
+
+**SQL.** Three things the plan did not know. (1) DuckDB's
+`read_csv(types={'c':'TIMESTAMP'})` DROPS a cell's offset
+(`…+11:00` reads as 10:30 naive), so a `time` column is `TIMESTAMPTZ`
+on DuckDB and Postgres; under the pinned UTC session that reads every
+form as `ParseTime` does, including zoneless text. (2) With the column
+an instant, the session zone is irrelevant to the functions: every
+calendar reading is `(col AT TIME ZONE 'Zone')` with the zone named in
+the text — the pipeline's, or a `tz()`'s — and a truncation or addition
+comes back the same way; `SET TimeZone = 'UTC'` is emitted only for
+parse fidelity, and only when a time is involved. (3) DuckDB's CSV
+sniffer made DATE/TIMESTAMP columns of text ssql reads as text, which a
+later `cast -format` then met as a DATE; `read_csv` is pinned to ssql's
+four inferred types. A JSONL source's `_schema` line was a row of NULLs
+to DuckDB (visible only in an unfiltered pipeline): dropped in the
+source clause; its `time` header type makes the VARCHAR column castable.
+`timestampformat` is honoured for naive TIMESTAMP columns only, so a
+`-format` column loads naive and is placed in the pipeline zone with
+`AT TIME ZONE`.
+
+**Patterns (B).** `strftime.go`: `StrftimeLayout` converts once to a Go
+layout (fast path), with a slow formatter for `%j %G %V %u` and a lone
+`%f`, which Go has no token for; literal runs containing digits or the
+letters Go reads as tokens (J, M, P, p, Z, _) also take the slow path.
+`PgToChar` for Postgres (literals double-quoted; `%z` refused),
+`UTS35ToStrftime` for CSVW's `dd/MM/yyyy`. **Decision made during the
+build:** text parsed through a pattern (`-format`, `cast -format`,
+`strptime`, `date(str, pattern)`) is a wall clock in the PIPELINE zone,
+not UTC — a `05/01/2026 09:15` someone typed is local time, where an ISO
+export is UTC (`ParseTime`, DFC128) — in every lane (`AT TIME ZONE` on
+DuckDB's and Postgres's naive results). `date(str, layout)` therefore
+changed from UTC to the pipeline zone; the three-argument form with an
+explicit zone is unchanged.
+
+**Flags (C).** `-set-bucket` takes a calendar unit (`date_trunc`);
+`-format COL PATTERN` on `from csv`/`tsv`/bare `from` and `cast`
+(`CSVConfig.TimeFormats`, `typed.TimeFormat`, `CastFieldFormat`); the
+sidecar's date `format` feeds the same map (DFC146 §5 refusal retired);
+`-time-format` on `to csv|tsv|table|markdown` (`CSVConfig.TimeFormat`,
+`TSVConfig`, `DisplayOptions`, `typed.OutputTimeFormat`), the column's
+type unchanged; `resample -time-format` takes strftime by the `%` rule.
+The typed `to table` with selected columns printed Go's `Time.String()`
+form; it prints RFC 3339 now.
+
+**Gates.** Root: `TestTruncTime`, `TestAddCalendar`, `TestDiffCalendar`,
+`TestTimePart`, `TestExprTimeFunctions`, `TestResolveZone`,
+`TestStreamZone`, `TestFormatStrftime`, `TestParseStrftime`,
+`TestPgToChar`, `TestUTS35ToStrftime`, `TestCastFieldFormat`,
+`TestSinkTimeFormat`. Transpiler: `TestExprToGo` rows,
+`TestExprGoDifferential` corpus (29 calendar entries over a fixture with
+three offsets, a leap day and a DST day; the program runs under Sydney).
+SQL: `TestCalendarFunctionsSQL` per dialect. Equivalence (every lane,
+`EquivCase.Env`, the harness pinned to `TZ=UTC`): `time_parts_all_lanes`,
+`from_tz_flag_wins`, `tz_env_sydney`, `tee_carries_tz`,
+`trunc_month_groupby_sydney`, `trunc_week_monday`,
+`date_add_month_clamps`, `date_diff_boundaries`, `set_bucket_month_flag`,
+`from_csv_format_dmy`, `cast_format_dmy`, `sidecar_date_format`,
+`strftime_all_lanes`, `strptime_all_lanes`; `cast_time_mixed_forms_sort`
+lost its duckdb skip. `TestHeaderPropertiesSurvive` (26 commands),
+`TestNowFollowsZone`, `TestZoneCompletion`, `TestSinkTimeFormatLanes`
+(exec/record/typed), typed `TestReadCSVTimeFormat`,
+`TestWriteCSVOutputTimeFormat`. Watched fail: the typed lanes without
+the zone (every `-tz` case diverged until the assemblers set it), the
+duckdb lane on `cast_format_dmy` (DATE sniffed), `tee_carries_tz` (the
+ghost NULL row).
+
+**Follow-ups** are in TODO.md under DFC147: `-format` on JSON sources,
+two patterns in one DuckDB read, Postgres `from -format`, DataFusion
+`date_diff` and non-UTC zones, a downstream `-tz`, `age`/`last_day`/
+`make_date`, `INTERVAL` as a column type, `SSQL_SCHEMA_SAMPLE` as a flag.

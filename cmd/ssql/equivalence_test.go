@@ -108,6 +108,12 @@ type EquivCase struct {
 	// ColumnsUnordered opts a case out of the column-order comparison, for
 	// the shapes where a lane's order is legitimately its own (say why).
 	ColumnsUnordered bool
+
+	// Env is extra environment for every lane (NAME=value). The harness
+	// pins TZ=UTC first, so a case that needs another zone says so here
+	// and it reaches exec, the generated programs and the engines alike
+	// (DFC147: the zone must not depend on the machine the gate runs on).
+	Env []string
 }
 
 // equivCommon is a filtered to the names also in b, keeping a's order.
@@ -187,7 +193,7 @@ func equivColumnOrder(raw string) []string {
 // equivLane is one result-producing path.
 type equivLane struct {
 	name string
-	run  func(t *testing.T, bin, pipeline string) string // returns raw JSONL
+	run  func(t *testing.T, bin, pipeline string, env []string) string // returns raw JSONL
 }
 
 func equivSentinel(mode string) string {
@@ -199,15 +205,15 @@ func equivSentinel(mode string) string {
 
 func equivLanes() []equivLane {
 	goLane := func(name, mode string) equivLane {
-		return equivLane{name, func(t *testing.T, bin, pipeline string) string {
-			src := equivShell(t, name, "export SSQLGO="+equivSentinel(mode)+" && "+
-				pipeline+" | "+bin+" to jsonl | "+bin+" generate go")
-			return goRunGenerated(t, src)
+		return equivLane{name, func(t *testing.T, bin, pipeline string, env []string) string {
+			src := equivShellEnv(t, name, "export SSQLGO="+equivSentinel(mode)+" && "+
+				pipeline+" | "+bin+" to jsonl | "+bin+" generate go", env)
+			return goRunGeneratedEnv(t, src, env)
 		}}
 	}
 	lanes := []equivLane{
-		{"exec", func(t *testing.T, bin, pipeline string) string {
-			return equivShell(t, "exec", pipeline+" | "+bin+" to jsonl")
+		{"exec", func(t *testing.T, bin, pipeline string, env []string) string {
+			return equivShellEnv(t, "exec", pipeline+" | "+bin+" to jsonl", env)
 		}},
 		goLane("go-record", "record"),
 		goLane("go-typed", "typed"),
@@ -218,12 +224,13 @@ func equivLanes() []equivLane {
 		// FromTSV reader form and prints the rows as JSON. Skipped when
 		// the source is not a plain delimited file (no reader form) or
 		// library mode refuses the pipeline (several sources).
-		{"go-lib", func(t *testing.T, bin, pipeline string) string {
+		{"go-lib", func(t *testing.T, bin, pipeline string, env []string) string {
 			fixture, reader := equivLibrarySource(pipeline)
 			if fixture == "" {
 				return equivSkipPrefix + "library mode: the source is not a plain delimited file"
 			}
 			cmd := exec.Command("bash", "-c", "export SSQLGO=typed && "+pipeline+" | "+bin+" generate go -package lib -func Pipe")
+			cmd.Env = append(os.Environ(), env...)
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 			if err := cmd.Run(); err != nil {
@@ -236,18 +243,18 @@ func equivLanes() []equivLane {
 			if !strings.Contains(src, "func Pipe"+reader+"(") {
 				return equivSkipPrefix + "library mode: the source has no reader form"
 			}
-			out, err := goRunGeneratedModule(t, "libtest", map[string]string{
+			out, err := goRunGeneratedModuleEnv(t, "libtest", map[string]string{
 				"lib/pipe.go": src,
 				"main.go":     libraryDriver("lib", "Pipe", "Pipe"+reader, fixture),
-			})
+			}, env)
 			if err != nil {
 				t.Fatalf("lane go-lib: driver failed: %v\n%s", err, out)
 			}
 			return out
 		}},
-		{"ssql-opt", func(t *testing.T, bin, pipeline string) string {
-			gen := equivShell(t, "ssql-opt-gen", "export SSQLGO=1 && "+
-				pipeline+" | "+bin+" to jsonl | "+bin+" generate ssql")
+		{"ssql-opt", func(t *testing.T, bin, pipeline string, env []string) string {
+			gen := equivShellEnv(t, "ssql-opt-gen", "export SSQLGO=1 && "+
+				pipeline+" | "+bin+" to jsonl | "+bin+" generate ssql", env)
 			// generate ssql emits a pipeline that invokes bare `ssql`; run it
 			// with the test binary. Strip any comment lines first.
 			var parts []string
@@ -259,7 +266,7 @@ func equivLanes() []equivLane {
 				parts = append(parts, ln)
 			}
 			opt := strings.ReplaceAll(strings.Join(parts, " "), "ssql ", bin+" ")
-			return equivShell(t, "ssql-opt", opt)
+			return equivShellEnv(t, "ssql-opt", opt, env)
 		}},
 	}
 	// The DuckDB lane is the independent second-engine oracle: the pipeline is
@@ -267,10 +274,11 @@ func equivLanes() []equivLane {
 	// shares nothing with ssql — a unanimous-but-wrong answer across the Go
 	// lanes can't fool it. Only present when a duckdb binary is available.
 	if duckdb := duckdbBinary(); duckdb != "" {
-		lanes = append(lanes, equivLane{"duckdb", func(t *testing.T, bin, pipeline string) string {
-			sql := equivShell(t, "duckdb-gen", "export SSQL_MODE=record && "+
-				pipeline+" | "+bin+" to jsonl | "+bin+" generate sql")
+		lanes = append(lanes, equivLane{"duckdb", func(t *testing.T, bin, pipeline string, env []string) string {
+			sql := equivShellEnv(t, "duckdb-gen", "export SSQL_MODE=record && "+
+				pipeline+" | "+bin+" to jsonl | "+bin+" generate sql", env)
 			cmd := exec.Command(duckdb, "-json", "-c", sql)
+			cmd.Env = append(os.Environ(), env...)
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 			if err := cmd.Run(); err != nil {
@@ -309,8 +317,8 @@ func equivLanes() []equivLane {
 	// A stage the dialect refuses by design ("has no X translation") skips
 	// the lane for that case with a log line rather than failing it.
 	if py := os.Getenv("SSQL_DATAFUSION_PYTHON"); py != "" {
-		lanes = append(lanes, equivLane{"datafusion", func(t *testing.T, bin, pipeline string) string {
-			sql, skip := equivDialectSQL(t, "datafusion", bin, pipeline)
+		lanes = append(lanes, equivLane{"datafusion", func(t *testing.T, bin, pipeline string, env []string) string {
+			sql, skip := equivDialectSQL(t, "datafusion", bin, pipeline, env)
 			if skip != "" {
 				return skip
 			}
@@ -319,6 +327,7 @@ func equivLanes() []equivLane {
 				t.Fatal(err)
 			}
 			cmd := exec.Command(py, script)
+			cmd.Env = append(os.Environ(), env...)
 			cmd.Stdin = strings.NewReader(sql)
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -330,8 +339,8 @@ func equivLanes() []equivLane {
 		}})
 	}
 	if host := os.Getenv("SSQL_TEST_PG_HOST"); host != "" {
-		lanes = append(lanes, equivLane{"postgres", func(t *testing.T, bin, pipeline string) string {
-			sql, skip := equivDialectSQL(t, "postgres", bin, pipeline)
+		lanes = append(lanes, equivLane{"postgres", func(t *testing.T, bin, pipeline string, env []string) string {
+			sql, skip := equivDialectSQL(t, "postgres", bin, pipeline, env)
 			if skip != "" {
 				return skip
 			}
@@ -362,9 +371,10 @@ var equivSQLLanes = map[string]bool{"duckdb": true, "datafusion": true, "postgre
 // equivDialectSQL translates the pipeline for a dialect. A by-design
 // refusal (dialectRefuse's "has no <dialect> translation") returns a skip
 // marker; any other failure is the lane's failure.
-func equivDialectSQL(t *testing.T, dialect, bin, pipeline string) (sql, skip string) {
+func equivDialectSQL(t *testing.T, dialect, bin, pipeline string, env []string) (sql, skip string) {
 	t.Helper()
 	cmd := exec.Command("bash", "-c", "export SSQL_MODE=record && "+pipeline+" | "+bin+" to jsonl | "+bin+" generate sql -dialect "+dialect)
+	cmd.Env = append(os.Environ(), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -448,8 +458,15 @@ func duckdbBinary() string {
 // equivShell runs a bash pipeline and returns stdout, failing with stderr on
 // error (stderr is kept separate so it never contaminates the captured data).
 func equivShell(t *testing.T, lane, script string) string {
+	return equivShellEnv(t, lane, script, nil)
+}
+
+// equivShellEnv is equivShell with extra environment (a case's Env after
+// the harness's TZ=UTC pin).
+func equivShellEnv(t *testing.T, lane, script string, env []string) string {
 	t.Helper()
 	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -577,7 +594,7 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 		if reason != "" {
 			continue
 		}
-		raw := ln.run(t, bin, pipeline)
+		raw := ln.run(t, bin, pipeline, append([]string{"TZ=UTC"}, c.Env...))
 		if strings.HasPrefix(raw, equivSkipPrefix) {
 			t.Logf("lane %q skipped (dialect refusal by design): %s", ln.name, strings.TrimPrefix(raw, equivSkipPrefix))
 			continue
@@ -1494,6 +1511,130 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv -type date time | {{.bin}} where -if-expr 'date >= since' -param since time 2026-01-15 | {{.bin}} group-by -count n`,
 		Ordered:  false,
 	},
+	// --- DFC147: calendar functions and the pipeline zone. Goldens from
+	// Python's datetime/zoneinfo (an independent calendar), under the
+	// harness's TZ=UTC pin unless the case says otherwise.
+	{
+		Name:     "time_parts_all_lanes",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr h 'hour(ts)' -set-expr d 'day(ts)' -set-expr w 'week(ts)' -set-expr dw 'dow(ts)' -set-expr q 'quarter(ts)' -set-expr e 'epoch(ts)' | {{.bin}} include id h d w dw q e | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "h": 23, "d": 4, "w": 1, "dw": 0, "q": 1, "e": 1767569400},
+			{"id": 2, "h": 23, "d": 4, "w": 1, "dw": 0, "q": 1, "e": 1767569400},
+			{"id": 3, "h": 12, "d": 31, "w": 5, "dw": 6, "q": 1, "e": 1769860800},
+			{"id": 4, "h": 15, "d": 4, "w": 14, "dw": 6, "q": 2, "e": 1775316600},
+			{"id": 5, "h": 1, "d": 1, "w": 9, "dw": 5, "q": 1, "e": 1709255730},
+			{"id": 6, "h": 23, "d": 11, "w": 2, "dw": 0, "q": 1, "e": 1768175999}},
+	},
+	{
+		// The zone comes from -tz (Sydney), the harness runs under UTC: the
+		// flag wins in every lane, including the SQL the engine runs.
+		Name:     "from_tz_flag_wins",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time -tz Australia/Sydney | {{.bin}} update -set-expr h 'hour(ts)' | {{.bin}} include id h | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "h": 10}, {"id": 2, "h": 10}, {"id": 3, "h": 23}, {"id": 4, "h": 2}, {"id": 5, "h": 12}, {"id": 6, "h": 10}},
+	},
+	{
+		// No -tz: TZ decides, and the case's Env says Sydney.
+		Name:     "tz_env_sydney",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr h 'hour(ts)' -set-expr u 'hour(tz(ts, "UTC"))' | {{.bin}} include id h u | {{.bin}} sort id`,
+		Ordered:  true,
+		Env:      []string{"TZ=Australia/Sydney"},
+		Golden:   []map[string]any{{"id": 1, "h": 10, "u": 23}, {"id": 2, "h": 10, "u": 23}, {"id": 3, "h": 23, "u": 12}, {"id": 4, "h": 2, "u": 15}, {"id": 5, "h": 12, "u": 1}, {"id": 6, "h": 10, "u": 23}},
+	},
+	{
+		// A tee'd stream's header names Sydney; read back under UTC, the
+		// header wins (the environment is read once, at the source).
+		Name:     "tee_carries_tz",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/times_sydney.jsonl | {{.bin}} update -set-expr h 'hour(ts)' | {{.bin}} include id h | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "h": 10}, {"id": 2, "h": 10}, {"id": 3, "h": 23}, {"id": 4, "h": 2}, {"id": 5, "h": 12}, {"id": 6, "h": 10}},
+	},
+	{
+		Name:     "trunc_month_groupby_sydney",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time -tz Australia/Sydney | {{.bin}} update -set-expr m 'date_trunc(ts, "month")' | {{.bin}} group-by m -sum n total | {{.bin}} sort m`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"m": "2024-02-29T13:00:00Z", "total": 50}, {"m": "2025-12-31T13:00:00Z", "total": 120}, {"m": "2026-03-31T13:00:00Z", "total": 40}},
+	},
+	{
+		// ISO weeks start on Monday: a Sunday truncates to the Monday before.
+		Name:     "trunc_week_monday",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr wk 'date_trunc(ts, "week")' | {{.bin}} include id wk | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{{"id": 1, "wk": "2025-12-29T00:00:00Z"}, {"id": 2, "wk": "2025-12-29T00:00:00Z"}, {"id": 3, "wk": "2026-01-26T00:00:00Z"},
+			{"id": 4, "wk": "2026-03-30T00:00:00Z"}, {"id": 5, "wk": "2024-02-26T00:00:00Z"}, {"id": 6, "wk": "2026-01-05T00:00:00Z"}},
+	},
+	{
+		// Jan 31 + 1 month is Feb 28 and Feb 29 + 1 year is Feb 28: the
+		// engines clamp, Go's AddDate would roll over.
+		Name:     "date_add_month_clamps",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr a 'date_add(ts, 1, "month")' -set-expr y 'date_add(ts, 1, "year")' | {{.bin}} include id a y | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{{"id": 1, "a": "2026-02-04T23:30:00Z", "y": "2027-01-04T23:30:00Z"}, {"id": 2, "a": "2026-02-04T23:30:00Z", "y": "2027-01-04T23:30:00Z"},
+			{"id": 3, "a": "2026-02-28T12:00:00Z", "y": "2027-01-31T12:00:00Z"}, {"id": 4, "a": "2026-05-04T15:30:00Z", "y": "2027-04-04T15:30:00Z"},
+			{"id": 5, "a": "2024-04-01T01:15:30Z", "y": "2025-03-01T01:15:30Z"}, {"id": 6, "a": "2026-02-11T23:59:59Z", "y": "2027-01-11T23:59:59Z"}},
+	},
+	{
+		// Boundaries crossed, not elapsed units; negative when the end is first.
+		Name:     "date_diff_boundaries",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr dm 'date_diff("month", ts, date("2026-03-01"))' -set-expr dd 'date_diff("day", ts, date("2026-03-01"))' -set-expr dh 'date_diff("hour", ts, date("2026-03-01"))' | {{.bin}} include id dm dd dh | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{{"id": 1, "dm": 2, "dd": 56, "dh": 1321}, {"id": 2, "dm": 2, "dd": 56, "dh": 1321}, {"id": 3, "dm": 2, "dd": 29, "dh": 684},
+			{"id": 4, "dm": -1, "dd": -34, "dh": -831}, {"id": 5, "dm": 24, "dd": 730, "dh": 17519}, {"id": 6, "dm": 2, "dd": 49, "dh": 1153}},
+	},
+	{
+		// -format COL PATTERN on the reader (DFC147 §7.2): a day-first
+		// column is a time in every lane (DuckDB through timestampformat).
+		Name:     "from_csv_format_dmy",
+		Pipeline: `{{.bin}} from csv {{.data}}/dmy.csv -format when '%d/%m/%Y' | {{.bin}} update -set-expr m 'month(when)' -set-expr d 'day(when)' | {{.bin}} include id when m d | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{{"id": 1, "when": "2026-01-05T00:00:00Z", "m": 1, "d": 5}, {"id": 2, "when": "2026-01-31T00:00:00Z", "m": 1, "d": 31},
+			{"id": 3, "when": "2024-02-29T00:00:00Z", "m": 2, "d": 29}},
+	},
+	{
+		// The same through cast -format mid-pipeline (strptime in SQL).
+		Name:     "cast_format_dmy",
+		Pipeline: `{{.bin}} from csv {{.data}}/dmy.csv | {{.bin}} cast -format when '%d/%m/%Y' | {{.bin}} update -set-expr m 'month(when)' | {{.bin}} include id when m | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{{"id": 1, "when": "2026-01-05T00:00:00Z", "m": 1}, {"id": 2, "when": "2026-01-31T00:00:00Z", "m": 1},
+			{"id": 3, "when": "2024-02-29T00:00:00Z", "m": 2}},
+	},
+	{
+		// A sidecar's date format is honoured (the DFC146 refusal, retired).
+		Name:     "sidecar_date_format",
+		Pipeline: `{{.bin}} from csv {{.data}}/dmy_sidecar/dmy.csv | {{.bin}} update -set-expr y 'year(when)' | {{.bin}} include id y | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "y": 2026}, {"id": 2, "y": 2026}, {"id": 3, "y": 2024}},
+	},
+	{
+		// strftime: the pipeline zone's wall clock, Python's directives
+		// (DuckDB's strftime, Postgres's to_char).
+		Name:     "strftime_all_lanes",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time -tz Australia/Sydney | {{.bin}} update -set-expr s 'strftime(ts, "%Y-%m-%d %H:%M")' -set-expr u 'strftime(tz(ts, "UTC"), "%d/%m/%y %I:%M %p")' -set-expr w 'strftime(ts, "%a %b %-d")' | {{.bin}} include id s u w | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "s": "2026-01-05 10:30", "u": "04/01/26 11:30 PM", "w": "Mon Jan 5"},
+			{"id": 2, "s": "2026-01-05 10:30", "u": "04/01/26 11:30 PM", "w": "Mon Jan 5"},
+			{"id": 3, "s": "2026-01-31 23:00", "u": "31/01/26 12:00 PM", "w": "Sat Jan 31"},
+			{"id": 4, "s": "2026-04-05 02:30", "u": "04/04/26 03:30 PM", "w": "Sun Apr 5"},
+			{"id": 5, "s": "2024-03-01 12:15", "u": "01/03/24 01:15 AM", "w": "Fri Mar 1"},
+			{"id": 6, "s": "2026-01-12 10:59", "u": "11/01/26 11:59 PM", "w": "Mon Jan 12"}},
+	},
+	{
+		// strptime of a text column: a wall clock in the pipeline zone (UTC under the harness pin) in every lane.
+		Name:     "strptime_all_lanes",
+		Pipeline: `{{.bin}} from csv {{.data}}/dmy.csv | {{.bin}} update -set-expr t 'strptime(when, "%d/%m/%Y")' | {{.bin}} update -set-expr e 'epoch(t)' | {{.bin}} include id t e | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{{"id": 1, "t": "2026-01-05T00:00:00Z", "e": 1767571200}, {"id": 2, "t": "2026-01-31T00:00:00Z", "e": 1769817600},
+			{"id": 3, "t": "2024-02-29T00:00:00Z", "e": 1709164800}},
+	},
+	{
+		// The flag form of date_trunc, grouped.
+		Name:     "set_bucket_month_flag",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-bucket mo ts month | {{.bin}} group-by mo -count c | {{.bin}} sort mo`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"mo": "2024-03-01T00:00:00Z", "c": 1}, {"mo": "2026-01-01T00:00:00Z", "c": 4}, {"mo": "2026-04-01T00:00:00Z", "c": 1}}, // row 5 is Mar 1 01:15 UTC
+	},
 	{
 		// DFC134 §5.3: -param NAME TYPE VALUE binds a VARIABLE of the clause's
 		// expressions. Typed float and int, two parameters shared by one
@@ -1776,8 +1917,11 @@ var equivCases = []EquivCase{
 		// The source forms DuckDB, Postgres and APIs write, in one column:
 		// as strings they sort lexically (the space before the T, the date
 		// alone first); as times, chronologically.
+		// Row 4 carries a UTC offset (…23:30:00+00). The duckdb lane was
+		// skipped while a time was a naive TIMESTAMP (the CAST shifted the
+		// offset into the session zone); as an instant (TIMESTAMPTZ) under
+		// the pinned UTC session it agrees (DFC147).
 		Name:     "cast_time_mixed_forms_sort",
-		Skip:     map[string]string{"duckdb": "row 4 carries a UTC offset (…23:30:00+00): DuckDB's CAST(VARCHAR AS TIMESTAMP) shifts it into the session time zone, so its order depends on where the test runs; ssql's time is an instant"},
 		Pipeline: `{{.bin}} from csv {{.data}}/mixed_times.csv | {{.bin}} cast -type ts time | {{.bin}} sort ts | {{.bin}} include id`,
 		Ordered:  true,
 		Golden:   []map[string]any{{"id": 2}, {"id": 4}, {"id": 3}, {"id": 1}},

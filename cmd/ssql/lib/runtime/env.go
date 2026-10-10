@@ -28,12 +28,10 @@ func CompileExprEnv(expression string) (func(map[string]any) (any, error), error
 func compileExprEnv(expression string, params *paramBinding) (func(map[string]any) (any, error), error) {
 	sampleEnv := map[string]any{}
 	exprHelpers(sampleEnv, func(string) bool { return false }, func(string) (any, bool) { return nil, false })
-	program, err := expr.Compile(expression,
+	program, err := expr.Compile(expression, append([]expr.Option{
 		expr.Env(sampleEnv),
 		expr.AllowUndefinedVariables(),
-		ssql.ExprFieldShadowing(),
-		ssql.ExprDate(),
-	)
+	}, ssql.ExprStandardOptions()...)...)
 	if err != nil {
 		return nil, fmt.Errorf("compile expression: %w", err)
 	}
@@ -167,6 +165,17 @@ func MustCoerceJSON(v any, expression string) string {
 // error value, which main() reports as `Error: …` and exits 1, and a
 // library function (generate go -package) returns as the stream's last
 // element (DFC142); until 2026-10-08 it called os.Exit itself.
+// MustCoerceTime types a result for a time.Time column: a time passes
+// through; anything ParseTime reads (an RFC 3339 string, Unix seconds) is
+// parsed, so a VM expression that produced the wire form still assigns.
+func MustCoerceTime(v any, expression string) time.Time {
+	if t, ok := ssql.ParseTime(v); ok {
+		return t
+	}
+	coerceFail(v, "time.Time", expression)
+	return time.Time{}
+}
+
 func coerceFail(v any, want, expression string) {
 	panic(fmt.Errorf("expression %q produced %T (%v), but the field's type is %s — a typed column cannot change type (use SSQL_MODE=record if the retype is intended)",
 		expression, v, v, want))

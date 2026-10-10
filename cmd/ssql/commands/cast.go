@@ -16,7 +16,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	// Order behavior (DFC123 §7): neither consumes nor destroys record order.
 	lib.DeclareOrder("cast", lib.OrderTransparent)
 
-	cmd.Subcommand("cast").
+	formatFlag(cmd.Subcommand("cast"), castFormatHelp).
 		Description("Convert field types for all records").
 		Example("ssql from data.csv | ssql cast -type age int", "Convert age to integer").
 		Example("ssql from data.csv | ssql cast -type price float -type active bool", "Convert multiple fields").
@@ -86,13 +86,26 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
+			// -format COL PATTERN: a time parsed with a pattern (DFC147 §7.2);
+			// -type COL time is implied.
+			formats, err := parseFormatFlags(ctx)
+			if err != nil {
+				return err
+			}
+			for field := range formats {
+				if t, ok := typeConversions[field]; ok && t != ssql.FieldTypeTime {
+					return fmt.Errorf("cast -format %s: the field is cast to %s, not time", field, t)
+				}
+				typeConversions[field] = ssql.FieldTypeTime
+			}
+
 			if len(typeConversions) == 0 {
 				return fmt.Errorf("no -type conversions specified")
 			}
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateCastCode(ctx, typeConversions, invalidMissing)
+				return generateCastCode(ctx, typeConversions, invalidMissing, formats)
 			}
 
 			// Read JSONL from stdin WITH its schema header. (cast used the
@@ -127,6 +140,10 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			casted := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 				frozen := mut.Freeze()
 				for _, field := range fields {
+					if pattern := formats[field]; pattern != "" {
+						mut = ssql.CastFieldFormat(mut, frozen, field, pattern, invalidMissing, &invalid)
+						continue
+					}
 					mut = ssql.CastField(mut, frozen, field, typeConversions[field], invalidMissing, &invalid)
 				}
 				return mut
@@ -135,7 +152,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// The output schema carries the new types downstream.
 			outSchema := sr.Schema
 			if outSchema != nil {
-				outSchema = &lib.Schema{Fields: append([]string(nil), sr.Schema.Fields...), Types: map[string]string{}}
+				outSchema = sr.Schema.Derive(append([]string(nil), sr.Schema.Fields...), map[string]string{})
 				for k, v := range sr.Schema.Types {
 					outSchema.Types[k] = v
 				}
@@ -160,7 +177,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 }
 
 // generateCastCode generates Go code for the cast command
-func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType, invalidMissing bool) error {
+func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType, invalidMissing bool, formats map[string]string) error {
 	// Read all previous code fragments from stdin
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
@@ -188,7 +205,7 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 	if typedMode() && prevSchema != nil {
 		// cast is SerialOnly — planner inserts Stream.Serial()
 		// upstream automatically when input is a Stream.
-		return emitTypedCast(inputVar, prevSchema, typeConversions, invalidMissing)
+		return emitTypedCast(inputVar, prevSchema, typeConversions, invalidMissing, formats)
 	}
 
 	// Generate cast code: one library call per field — the same
@@ -203,6 +220,10 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 	var codeBody strings.Builder
 	codeBody.WriteString("\t\tfrozen := mut.Freeze()\n")
 	for _, field := range fields {
+		if pattern := formats[field]; pattern != "" {
+			codeBody.WriteString(fmt.Sprintf("\t\tmut = ssql.CastFieldFormat(mut, frozen, %q, %q, %t, nil)\n", field, pattern, invalidMissing))
+			continue
+		}
 		codeBody.WriteString(fmt.Sprintf("\t\tmut = ssql.CastField(mut, frozen, %q, %s, %t, nil)\n",
 			field, castTargetGoConst(typeConversions[field]), invalidMissing))
 	}

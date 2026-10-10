@@ -11,7 +11,7 @@ import (
 
 // emitTypedCast generates a typed.Select call that casts the named
 // fields to new Go types, producing a derived struct.
-func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.FieldType, invalidMissing bool) error {
+func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.FieldType, invalidMissing bool, formats map[string]string) error {
 	// Resolve every cast field, validating existence.
 	type castField struct {
 		f      lib.TypedSchemaField
@@ -87,7 +87,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 				continue
 			}
 		}
-		if code, imps, ok := castTimeExpression("r."+f.GoName, f.Name, f.GoType, cf.newGoT); ok {
+		if code, imps, ok := castTimeExpression("r."+f.GoName, f.Name, f.GoType, cf.newGoT, formats[f.Name]); ok {
 			timeImports = append(timeImports, imps...)
 			assigns = append(assigns, fmt.Sprintf("%s: %s", out.GoName, code))
 			continue
@@ -223,8 +223,11 @@ func castExpression(expr, from, to string) (string, bool, error) {
 // int64 column parses with ssql.MustParseTime (the one parser every lane
 // shares; a value that is not a time stops the program, as in exec), and
 // a time column renders as RFC 3339 when cast to string.
-func castTimeExpression(expr, field, from, to string) (code string, imports []string, ok bool) {
+func castTimeExpression(expr, field, from, to, pattern string) (code string, imports []string, ok bool) {
 	switch {
+	case to == "time.Time" && pattern != "" && from == "string":
+		// -format: the pattern's layout, strftime or Go (DFC147 §7.2).
+		return fmt.Sprintf("ssql.MustParseTimeLayout(%s, %q, %q)", expr, pattern, field), []string{"github.com/rosscartlidge/ssql/v4"}, true
 	case to == "time.Time" && (from == "string" || from == "int64"):
 		return fmt.Sprintf("ssql.MustParseTime(%s, %q)", expr, field), []string{"github.com/rosscartlidge/ssql/v4"}, true
 	case to == "string" && from == "time.Time":

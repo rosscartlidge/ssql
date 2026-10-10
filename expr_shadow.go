@@ -47,6 +47,14 @@ func (fieldShadowPatcher) Visit(node *ast.Node) {
 			if _, isID := n.Callee.(*ast.IdentifierNode); !isID {
 				n.Callee = &ast.IdentifierNode{Value: name}
 			}
+			// A call to one of ssql's compile-time calendar functions
+			// (hour, day, date_trunc, …) is bound under an alias as well,
+			// so a compile env that declares a VARIABLE of that name (a
+			// column called `day`, group-by -expr's field arrays) still
+			// calls the function: "field when bare, function when called".
+			if ExprCompiledFunctions[name] && name != "date" {
+				n.Callee = &ast.IdentifierNode{Value: exprFnAlias(name)}
+			}
 		}
 	}
 }

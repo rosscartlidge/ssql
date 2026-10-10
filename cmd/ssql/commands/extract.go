@@ -144,7 +144,7 @@ func extractOutputSchema(in *lib.Schema, cfg ssql.ExtractConfig, names []string)
 	if in == nil {
 		return nil
 	}
-	out := &lib.Schema{Types: map[string]string{}}
+	out := in.Derive(nil, map[string]string{})
 	for _, f := range in.Fields {
 		if f == cfg.Field && !cfg.Keep {
 			continue

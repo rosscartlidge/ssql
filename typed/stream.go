@@ -237,18 +237,18 @@ func (s Stream[T]) SerialCount() int64 {
 // shard, input order is preserved. Between shards, original input
 // order is NOT preserved (because Parallel/ParallelFromSlice
 // partition by chunk).
-func (s Stream[T]) WriteCSV(filename string) error {
+func (s Stream[T]) WriteCSV(filename string, opts ...WriteOption) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return s.WriteCSVToWriter(f)
+	return s.WriteCSVToWriter(f, opts...)
 }
 
 // WriteCSVToWriter is the [io.Writer] variant of [Stream.WriteCSV].
-func (s Stream[T]) WriteCSVToWriter(w io.Writer) error {
-	schema, err := buildWriteSchema[T]()
+func (s Stream[T]) WriteCSVToWriter(w io.Writer, opts ...WriteOption) error {
+	schema, err := buildWriteSchema[T](opts...)
 	if err != nil {
 		return err
 	}
@@ -480,7 +480,8 @@ func HashJoinMultiParallel[L, R, O any, K comparable](
 // plus ~8 bytes per line for the newline-offset index. For our
 // 600 MB / 10M-row workload that's ~680 MB. Negligible compared to
 // the saved CSV-read time.
-func ReadCSVParallel[T any](filename string, n int) Stream[T] {
+func ReadCSVParallel[T any](filename string, n int, opts ...CSVOption) Stream[T] {
+	o := resolveOpts(opts)
 	if n <= 0 {
 		n = runtime.GOMAXPROCS(0)
 	}
@@ -525,7 +526,7 @@ func ReadCSVParallel[T any](filename string, n int) Stream[T] {
 	if err != nil {
 		failRead(op, filename, fmt.Errorf("read header: %w", err))
 	}
-	schema, err := buildReadSchema[T](header, false)
+	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
 	if err != nil {
 		failRead(op, filename, err)
 	}

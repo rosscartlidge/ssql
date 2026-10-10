@@ -3,11 +3,14 @@ package typed
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 type person struct {
@@ -409,5 +412,87 @@ func TestReadCSVMalformedHeader(t *testing.T) {
 	}
 	if !errors.Is(sawErr, sawErr) { // sanity — error is non-nil
 		t.Errorf("got: %v", sawErr)
+	}
+}
+
+// TestReadCSVTimeFormat (DFC147 §7.2): a time column whose cells follow a
+// pattern reads through TimeFormat, in the serial and parallel readers.
+func TestReadCSVTimeFormat(t *testing.T) {
+	type row struct {
+		ID   int64     `ssql:"id"`
+		When time.Time `ssql:"when"`
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dmy.csv")
+	if err := os.WriteFile(path, []byte("id,when\n1,05/01/2026\n2,31/01/2026\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ssql.SetStreamZone("UTC"); err != nil { // zoneless cells are a wall clock in the pipeline zone
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC)
+	var got []row
+	for r := range ReadCSV[row](path, TimeFormat("when", "%d/%m/%Y")) {
+		got = append(got, r)
+	}
+	if len(got) != 2 || !got[1].When.Equal(want) {
+		t.Errorf("serial: %+v", got)
+	}
+	got = nil
+	ReadCSVParallel[row](path, 2, TimeFormat("when", "%d/%m/%Y")).Serial()(func(r row) bool { got = append(got, r); return true })
+	if len(got) != 2 {
+		t.Fatalf("parallel: %+v", got)
+	}
+	for _, r := range got {
+		if r.ID == 2 && !r.When.Equal(want) {
+			t.Errorf("parallel: %+v", r)
+		}
+	}
+	// Without the format the cells are not RFC 3339: a loud read error.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("a day-first cell without a format must fail")
+			}
+		}()
+		for range ReadCSV[row](path) {
+		}
+	}()
+}
+
+// TestWriteCSVOutputTimeFormat (DFC147 §7.3): the typed CSV writers and
+// the stream's per-shard writer render times with the sink's pattern.
+func TestWriteCSVOutputTimeFormat(t *testing.T) {
+	type row struct {
+		ID   int64     `ssql:"id"`
+		When time.Time `ssql:"when"`
+	}
+	if err := ssql.SetStreamZone("UTC"); err != nil { // the pattern renders on the pipeline zone's wall clock
+		t.Fatal(err)
+	}
+	rows := []row{{1, time.Date(2026, 1, 4, 23, 30, 0, 0, time.UTC)}}
+	seq := func(yield func(row) bool) {
+		for _, r := range rows {
+			if !yield(r) {
+				return
+			}
+		}
+	}
+	var plain, patterned bytes.Buffer
+	if err := WriteCSVToWriter(seq, &plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCSVToWriter(seq, &patterned, OutputTimeFormat("%Y-%m-%d")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plain.String(), "2026-01-04T23:30:00Z") || !strings.Contains(patterned.String(), "1,2026-01-04\n") {
+		t.Errorf("plain %q patterned %q", plain.String(), patterned.String())
+	}
+	var streamed bytes.Buffer
+	if err := ParallelFromSlice(rows, 1).WriteCSVToWriter(&streamed, OutputTimeFormat("%d/%m/%Y")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(streamed.String(), "1,04/01/2026") {
+		t.Errorf("stream: %q", streamed.String())
 	}
 }

@@ -28,6 +28,14 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 			Help("Also write datapackage.json beside FILE — a Frictionless Table Schema with the columns' types, which `from csv` reads back (DFC146). An existing package there keeps its other resources").
 			Done().
 
+		Flag("-time-format").
+			String().
+			Global().
+			Default("").
+			Completer(&cf.StaticCompleter{Options: []string{"%Y-%m-%d", "%Y-%m-%d %H:%M", "%d/%m/%Y", "%H:%M:%S", "%b %-d, %Y", "2006-01-02"}}).
+			Help("Render time columns with a pattern on the pipeline zone's wall clock: -time-format '%Y-%m-%d %H:%M' (strftime, or a Go layout). Default: RFC 3339. The column stays a time (a -sidecar still says datetime)").
+			Done().
+
 		Flag("FILE").
 			String().
 			Completer(&cf.FileCompleter{Pattern: "*.csv"}).
@@ -54,10 +62,14 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 			if sidecar && outputFile == "" {
 				return sidecarNeedsFile("to csv")
 			}
+			timeFormat, err := sinkTimeFormat(ctx)
+			if err != nil {
+				return err
+			}
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateToCSVCode(outputFile, sidecar)
+				return generateToCSVCode(outputFile, sidecar, timeFormat)
 			}
 
 			// Read JSONL from stdin (with schema if present)
@@ -66,6 +78,7 @@ func registerToCSV(cmd *cf.SubcommandBuilder) {
 
 			// Build CSV config with field order from schema if present
 			config := ssql.DefaultCSVConfig()
+			config.TimeFormat = timeFormat
 			known := map[string]ssql.FieldType{}
 			if schemaAndRecords.Schema != nil {
 				config.Fields = schemaAndRecords.Schema.Fields
@@ -118,7 +131,14 @@ func sidecarWriteCode(schema *lib.TypedSchema) string {
 	}`, sidecarFieldsLiteral(schema))
 }
 
-func generateToCSVCode(filename string, sidecar bool) error {
+func generateToCSVCode(filename string, sidecar bool, timeFormat string) error {
+	// The sinks' -time-format (DFC147 §7.3): an option on the typed
+	// writers, a config on the record ones.
+	typedOpt, recordCfg := "", ""
+	if timeFormat != "" {
+		typedOpt = fmt.Sprintf(", typed.OutputTimeFormat(%q)", timeFormat)
+		recordCfg = fmt.Sprintf(", ssql.CSVConfigWithTimeFormat(%q)", timeFormat)
+	}
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -168,24 +188,24 @@ func generateToCSVCode(filename string, sidecar bool) error {
 		// inserted Serial() / source downgrade).
 		var streamCode, serialCode string
 		if filename == "" {
-			streamCode = fmt.Sprintf(`if err := %s.WriteCSVToWriter(os.Stdout); err != nil {
+			streamCode = fmt.Sprintf(`if err := %s.WriteCSVToWriter(os.Stdout%s); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar)
-			serialCode = fmt.Sprintf(`if err := typed.WriteCSVToWriter(%s, os.Stdout); err != nil {
+	}`, inputVar, typedOpt)
+			serialCode = fmt.Sprintf(`if err := typed.WriteCSVToWriter(%s, os.Stdout%s); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar)
+	}`, inputVar, typedOpt)
 		} else {
 			params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output CSV file", VarName: "flagOutput"})
-			streamCode = fmt.Sprintf(`if err := %s.WriteCSV(*flagOutput); err != nil {
+			streamCode = fmt.Sprintf(`if err := %s.WriteCSV(*flagOutput%s); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar)
-			serialCode = fmt.Sprintf(`if err := typed.WriteCSV(%s, *flagOutput); err != nil {
+	}`, inputVar, typedOpt)
+			serialCode = fmt.Sprintf(`if err := typed.WriteCSV(%s, *flagOutput%s); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar)
+	}`, inputVar, typedOpt)
 			if sidecar {
 				streamCode += sidecarWriteCode(prevSchema)
 				serialCode += sidecarWriteCode(prevSchema)
@@ -226,17 +246,17 @@ func generateToCSVCode(filename string, sidecar bool) error {
 	// emissions above always checked).
 	imports = append(imports, "fmt", "os")
 	if filename == "" {
-		code = fmt.Sprintf(`if err := ssql.WriteCSVToWriter(%s, os.Stdout); err != nil {
+		code = fmt.Sprintf(`if err := ssql.WriteCSVToWriter(%s, os.Stdout%s); err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar)
+	}`, inputVar, recordCfg)
 	} else {
 		params = append(params, lib.CodeParam{Name: "output", Default: filename, Help: "output CSV file", VarName: "flagOutput"})
-		writer := "ssql.WriteCSV(%s, *flagOutput)"
+		writer := "ssql.WriteCSV(%s, *flagOutput" + recordCfg + ")"
 		if sidecar {
 			// The package's types are observed from the records as they
 			// are written (a record program has no schema header).
-			writer = "ssql.WriteCSVSidecar(%s, *flagOutput, nil)"
+			writer = "ssql.WriteCSVSidecar(%s, *flagOutput, nil" + recordCfg + ")"
 		}
 		code = fmt.Sprintf(`if err := `+writer+`; err != nil {
 		fmt.Fprintf(os.Stderr, "write: %%v\n", err)

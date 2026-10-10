@@ -22,7 +22,7 @@ var linesTypedSchema = &lib.TypedSchema{
 }
 
 func registerFromLines(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("lines").
+	zoneFlag(cmd.Subcommand("lines")).
 		Description("Read raw text: one record per line with line_number (1-based) and line — pair with extract to turn text into fields").
 		Example("ssql from lines app.log | ssql extract -field line -re '^(?P<ts>\\S+) (?P<lvl>\\w+) (?P<msg>.*)$' -skip", "Parse a log into fields").
 		Example("ssql from lines notes.txt | ssql where -if line contains TODO", "grep, but the result is records").
@@ -40,6 +40,9 @@ func registerFromLines(cmd *cf.SubcommandBuilder) {
 		Help("Text file (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			var file string
 			if v, ok := ctx.GlobalFlags["FILE"]; ok {
 				file, _ = v.(string)
@@ -89,7 +92,7 @@ func generateFromLinesCode(filename string) error {
 			code = `records := typed.ReadLines(*flagInput)`
 			imports = []string{"github.com/rosscartlidge/ssql/v4/typed"}
 		}
-		frag := lib.NewInitFragment("records", code, imports, getCommandString())
+		frag := fromInitFragment("records", code, imports)
 		frag.Params = params
 		frag.OutputTypedSchema = linesTypedSchema
 		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeNone, Produces: lib.ShapeSeqTyped}
@@ -104,7 +107,7 @@ func generateFromLinesCode(filename string) error {
 	}`
 		imports = []string{"fmt"}
 	}
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

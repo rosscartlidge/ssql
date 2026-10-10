@@ -583,7 +583,7 @@ func TestTranslateFromSampleSQL(t *testing.T) {
 	}
 	// The CSV dialect is pinned (quote and escape are the double quote):
 	// DuckDB's sniffer took an apostrophe in a cell as the quote character.
-	if q.fromClause != `read_csv('kind.csv', header=true, quote='"', escape='"', delim=',') USING SAMPLE 5 ROWS (reservoir)` || !q.sampled {
+	if q.fromClause != `read_csv('kind.csv', header=true, quote='"', escape='"', delim=',', auto_type_candidates=['BIGINT', 'DOUBLE', 'BOOLEAN', 'VARCHAR']) USING SAMPLE 5 ROWS (reservoir)` || !q.sampled {
 		t.Errorf("got %q sampled=%v", q.fromClause, q.sampled)
 	}
 	// Seeded refusal.
@@ -943,7 +943,7 @@ func TestTranslateFromLastSQL(t *testing.T) {
 	if err := translateFrom(q, []string{"csv", "x.csv", "-last", "3"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"read_csv('x.csv', header=true, quote='\"', escape='\"', delim=',', parallel=false)", "row_number() OVER () AS __rn", "ORDER BY __rn DESC LIMIT 3", "EXCLUDE (__rn)", "ORDER BY __rn)"} {
+	for _, want := range []string{"read_csv('x.csv', header=true, quote='\"', escape='\"', delim=',', auto_type_candidates=['BIGINT', 'DOUBLE', 'BOOLEAN', 'VARCHAR'], parallel=false)", "row_number() OVER () AS __rn", "ORDER BY __rn DESC LIMIT 3", "EXCLUDE (__rn)", "ORDER BY __rn)"} {
 		if !strings.Contains(q.fromClause, want) {
 			t.Errorf("missing %q:\n%s", want, q.fromClause)
 		}
@@ -970,7 +970,7 @@ func TestTranslateResampleSQLTimeColumn(t *testing.T) {
 		"ssql resample -time ts -every 1h -value v -fill linear",
 	)
 	for _, want := range []string{
-		`CAST(ts AS TIMESTAMP) AS ts`,
+		`CAST(ts AS TIMESTAMPTZ) AS ts`, // an instant (DFC147): a naive TIMESTAMP drops a cell's offset
 		"__unit AS (SELECT 1000 AS u)", // pinned: no magnitude detection on a time
 		"min(epoch_us(ts)) AS mn",
 		"CAST(epoch_us(ts) AS BIGINT) AS __ts",
@@ -1075,12 +1075,12 @@ func TestFromCSVTypesSQL(t *testing.T) {
 	csv := dir + "/s.csv"
 	os.WriteFile(csv, []byte("id,zip,when\n1,02134,2026-01-05\n"), 0o644)
 	sql := assembleFromCommands(t, "ssql from csv "+csv+" -type zip string -t when time", "ssql to jsonl")
-	if !strings.Contains(sql, "types={'when': 'TIMESTAMP', 'zip': 'VARCHAR'}") {
+	if !strings.Contains(sql, "types={'when': 'TIMESTAMPTZ', 'zip': 'VARCHAR'}") {
 		t.Errorf("-type not translated:\n%s", sql)
 	}
 	os.WriteFile(dir+"/datapackage.json", []byte(`{"resources":[{"path":"s.csv","schema":{"fields":[{"name":"id","type":"integer"},{"name":"zip","type":"string"},{"name":"when","type":"date"}]}}]}`), 0o644)
 	sql = assembleFromCommands(t, "ssql from csv "+csv, "ssql to jsonl")
-	if !strings.Contains(sql, "types={'id': 'BIGINT', 'when': 'TIMESTAMP', 'zip': 'VARCHAR'}") {
+	if !strings.Contains(sql, "types={'id': 'BIGINT', 'when': 'TIMESTAMPTZ', 'zip': 'VARCHAR'}") {
 		t.Errorf("sidecar not translated:\n%s", sql)
 	}
 	sql = assembleFromCommands(t, "ssql from csv "+csv+" -type id float", "ssql to jsonl")

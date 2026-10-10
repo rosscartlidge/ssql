@@ -92,11 +92,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		FieldsFromFlag("").
 		Done().
 		Arg("width").
-		Completer(&cf.DurationCompleter{}).
+		Completer(&cf.ChainCompleter{Completers: []cf.Completer{&cf.DurationCompleter{}, &cf.StaticCompleter{Options: ssql.CalendarUnits}}}).
 		Done().
 		Accumulate().
 		Local().
-		Help("Set field to the source timestamp snapped down to a width: -set-bucket <field> <source> <width> (1m, 5m, 1h — the same as -set-expr <field> 'bucket(<source>, \"<width>\")')").
+		Help("Set field to the source timestamp snapped down to a width: -set-bucket <field> <source> <width> — a duration (1m, 5m, 1h: the same as -set-expr <field> 'bucket(<source>, \"<width>\")') or a calendar unit (day, week, month, quarter, year: date_trunc in the pipeline's zone)").
 		Done()
 	setFieldFlag(ifFieldFlag(exprParamFlag(sub))).
 		Handler(func(ctx *cf.Context) error {
@@ -821,7 +821,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 					}
 					if err == nil && len(res.Hoisted) == 0 {
 						setter := map[exprGoType]string{
-							exprGoInt: "Int", exprGoFloat: "Float", exprGoString: "String", exprGoBool: "Bool",
+							exprGoInt: "Int", exprGoFloat: "Float", exprGoString: "String", exprGoBool: "Bool", exprGoTime: "Time",
 						}[res.Type]
 						stmt = fmt.Sprintf("%smut = mut.%s(%q, %s)", indent, setter, upd.field, res.Src)
 						extraImports = append(extraImports, res.Imports...)
@@ -1084,9 +1084,13 @@ func clauseSetExprs(clause cf.Clause) ([]setExpr, error) {
 
 // bucketSetExpr is the desugaring of `-set-bucket FIELD SOURCE WIDTH`.
 func bucketSetExpr(field, source, width string) (setExpr, error) {
+	if ssql.ValidCalendarUnit(width) {
+		// A calendar unit: date_trunc in the pipeline's zone (DFC147 §7.1).
+		return setExpr{field, fmt.Sprintf("date_trunc(%s, %q)", source, width)}, nil
+	}
 	d, err := time.ParseDuration(width)
 	if err != nil || d <= 0 {
-		return setExpr{}, fmt.Errorf("update -set-bucket %s: width must be a positive duration (30s, 1m, 5m, 1h), got %q", field, width)
+		return setExpr{}, fmt.Errorf("update -set-bucket %s: width must be a positive duration (30s, 1m, 5m, 1h) or a calendar unit (%s), got %q", field, strings.Join(ssql.CalendarUnits, ", "), width)
 	}
 	return setExpr{field, fmt.Sprintf("bucket(%s, %q)", source, width)}, nil
 }

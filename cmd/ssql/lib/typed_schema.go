@@ -46,6 +46,7 @@ func SampleCSVSchema(filename, typeName string, maxRows int, opts ...TypeOptions
 type TypeOptions struct {
 	Fields  map[string]string // column → type name
 	Default string            // type for every column without an override ("" / "auto" = infer)
+	Formats map[string]string // column → time pattern (-format COL PATTERN): the column is a time read with it
 }
 
 func firstTypeOptions(opts []TypeOptions) TypeOptions {
@@ -209,6 +210,9 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune, o
 		if t, ok := opts.goTypeFor(name); ok {
 			goType = t
 			isJSON = t == "string" && opts.isJSON(name)
+		}
+		if _, formatted := opts.Formats[name]; formatted {
+			goType = "time.Time" // a pattern declares the column a time
 		}
 		fields[i] = TypedSchemaField{
 			Name:   name,

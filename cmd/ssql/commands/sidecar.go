@@ -48,9 +48,9 @@ func sidecarFlagValues(ctx *cf.Context) (sidecar string, disabled bool) {
 // explicit -sidecar applies to all of them). The user's own -type for a
 // column wins. The sidecar's dialect and formats the readers cannot
 // honour are errors from the parser (DFC146 §5).
-func resolveSidecarTypes(files []string, overrides map[string]string, sidecar string, disabled bool) (map[string]string, error) {
+func resolveSidecarTypes(files []string, overrides map[string]string, sidecar string, disabled bool, formats map[string]string) (map[string]string, map[string]string, error) {
 	if disabled {
-		return overrides, nil
+		return overrides, formats, nil
 	}
 	var ts *ssql.TableSchema
 	var err error
@@ -65,10 +65,10 @@ func resolveSidecarTypes(files []string, overrides map[string]string, sidecar st
 		ts, err = ssql.FindTableSchema(files[0])
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if ts == nil {
-		return overrides, nil
+		return overrides, formats, nil
 	}
 	if overrides == nil {
 		overrides = map[string]string{}
@@ -78,14 +78,24 @@ func resolveSidecarTypes(files []string, overrides map[string]string, sidecar st
 			overrides[name] = t
 		}
 	}
-	return overrides, nil
+	// A time column's cell pattern (DFC147 §7.2), under the user's -format.
+	for name, pattern := range ts.TimeFormats() {
+		if formats == nil {
+			formats = map[string]string{}
+		}
+		if _, user := formats[name]; !user {
+			formats[name] = pattern
+		}
+	}
+	return overrides, formats, nil
 }
 
 // sidecarTypesFromArgs is resolveSidecarTypes for a translator that
-// holds the source's argv (the SQL assembler): the -type / -t pairs and
-// the sidecar flags are read from args, and the sidecar is resolved for
-// file. Returns the merged overrides, column → ssql type name.
-func sidecarTypesFromArgs(args []string, file string) (map[string]string, error) {
+// holds the source's argv (the SQL assembler): the -type / -t pairs, the
+// -format pairs and the sidecar flags are read from args, and the sidecar
+// is resolved for file. Returns the merged overrides (column → ssql type
+// name, a formatted column implied time) and the time formats.
+func sidecarTypesFromArgs(args []string, file string) (map[string]string, map[string]string, error) {
 	overrides := map[string]string{}
 	var sidecar string
 	var disabled bool
@@ -109,7 +119,16 @@ func sidecarTypesFromArgs(args []string, file string) (map[string]string, error)
 	if file != "" {
 		files = []string{file}
 	}
-	return resolveSidecarTypes(files, overrides, sidecar, disabled)
+	overrides, formats, err := resolveSidecarTypes(files, overrides, sidecar, disabled, timeFormatsFromArgs(args))
+	if err != nil {
+		return nil, nil, err
+	}
+	for col := range formats {
+		if t, ok := overrides[col]; !ok || t == "" || t == "auto" {
+			overrides[col] = "time"
+		}
+	}
+	return overrides, formats, nil
 }
 
 // wireFieldType is the ssql.FieldType of a wire type name from a schema

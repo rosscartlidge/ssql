@@ -952,9 +952,13 @@ func serveOptimize(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 	if rewrites == nil {
 		rewrites = []string{}
 	}
+	// changed means a rewrite was applied. The text alone cannot say:
+	// generate ssql materialises the pipeline's zone (`-tz NAME` on the
+	// source, DFC147 §5.7), so an already-optimal pipeline's text differs
+	// from what was typed without being a rewrite.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"optimized": optimized, "rewrites": rewrites,
-		"changed": optimized != strings.TrimSpace(req.Pipeline),
+		"changed": len(rewrites) > 0,
 	})
 }
 

@@ -112,7 +112,7 @@ func TestDialectDuckDBUnchanged(t *testing.T) {
 		"ssql group-by dept -median salary med -first name f -collect level lv -arg-max name salary top -mode level m -string-agg name , names",
 		"ssql exclude m",
 	)
-	wantAll(t, sql, "(dialect: duckdb)", "FROM read_csv('data.csv', header=true, quote='\"', escape='\"', delim=',') USING SAMPLE 5 ROWS (reservoir)", "regexp_matches(name, '^A')",
+	wantAll(t, sql, "(dialect: duckdb)", "FROM read_csv('data.csv', header=true, quote='\"', escape='\"', delim=',', auto_type_candidates=['BIGINT', 'DOUBLE', 'BOOLEAN', 'VARCHAR']) USING SAMPLE 5 ROWS (reservoir)", "regexp_matches(name, '^A')",
 		"median(salary)", "first(name)", "LIST(level)", "arg_max(name, salary)", "mode(level)", "string_agg(name, ',')", "* EXCLUDE (m)")
 	wantNone(t, sql, `"dept"`, "AS __q", "\\copy")
 }
@@ -315,4 +315,59 @@ func TestAggRegistryEntriesAreComplete(t *testing.T) {
 				d.flag, d.fn, d.sql != nil, d.wireType != nil, d.build != nil, d.code != nil)
 		}
 	}
+}
+
+// TestCalendarFunctionsSQL (DFC147 §8.3): the calendar functions name
+// the pipeline's zone explicitly, read the wall clock with AT TIME ZONE
+// on an instant column, and the session is pinned to UTC; a column the
+// assembly does not know as a time is refused with the cast remedy;
+// DataFusion serves a UTC pipeline only.
+func TestCalendarFunctionsSQL(t *testing.T) {
+	file := dialectFixture(t)
+	from := "ssql from csv " + file + " -type hire_date time -tz Australia/Sydney"
+	upd := `ssql update -set-expr h 'hour(hire_date)' -set-expr m 'date_trunc(hire_date, "month")' -set-expr a 'date_add(hire_date, 1, "month")' -set-expr d 'date_diff("day", hire_date, date("2026-03-01"))' -set-expr u 'hour(tz(hire_date, "UTC"))' -set-expr e 'epoch(hire_date)'`
+
+	sql := mustDialect(t, dialectDuckDB, from, upd)
+	wantAll(t, sql, "SET TimeZone = 'UTC';", "'hire_date': 'TIMESTAMPTZ'",
+		`hour((hire_date AT TIME ZONE 'Australia/Sydney')) AS h`,
+		`(date_trunc('month', (hire_date AT TIME ZONE 'Australia/Sydney')) AT TIME ZONE 'Australia/Sydney') AS m`,
+		`(((hire_date AT TIME ZONE 'Australia/Sydney') + INTERVAL (1) MONTH) AT TIME ZONE 'Australia/Sydney') AS a`,
+		`date_diff('day', (hire_date AT TIME ZONE 'Australia/Sydney'), (CAST('2026-03-01' AS TIMESTAMPTZ) AT TIME ZONE 'Australia/Sydney')) AS d`,
+		`hour((hire_date AT TIME ZONE 'UTC')) AS u`,
+		`CAST(epoch(hire_date) AS BIGINT) AS e`)
+
+	sql = mustDialect(t, dialectPostgres, from, upd)
+	wantAll(t, sql, "SET timezone TO 'UTC';", `"hire_date" TIMESTAMPTZ`,
+		`CAST(EXTRACT(hour FROM ("hire_date" AT TIME ZONE 'Australia/Sydney')) AS BIGINT) AS "h"`,
+		`make_interval(months => 1)`,
+		`CAST(CAST((CAST('2026-03-01' AS TIMESTAMPTZ) AT TIME ZONE 'Australia/Sydney') AS DATE) - CAST(("hire_date" AT TIME ZONE 'Australia/Sydney') AS DATE) AS BIGINT) AS "d"`,
+		`CAST(EXTRACT(EPOCH FROM "hire_date") AS BIGINT) AS "e"`)
+
+	// A later stage sees the -set-expr column as a time.
+	sql = mustDialect(t, dialectDuckDB, from, `ssql update -set-expr m 'date_trunc(hire_date, "month")'`, `ssql update -set-expr y 'year(m)'`)
+	wantAll(t, sql, `year((m AT TIME ZONE 'Australia/Sydney')) AS y`)
+
+	// No zone pin when nothing is a time.
+	wantNone(t, mustDialect(t, dialectDuckDB, "ssql from csv "+file, "ssql where -if age gt 1"), "SET TimeZone")
+
+	refused := []struct {
+		dialect sqlDialect
+		cmds    []string
+		want    string
+	}{
+		{dialectDuckDB, []string{"ssql from csv " + file + " -tz UTC", `ssql update -set-expr h 'hour(hire_date)'`}, "cast -type hire_date time"},
+		{dialectDuckDB, []string{from, `ssql update -set-expr h 'date_trunc(hire_date, "fortnight")'`}, "fortnight"},
+		{dialectDuckDB, []string{from, `ssql update -set-expr h 'tz(hire_date, "Mars/Olympus")'`}, "Mars"},
+		{dialectDataFusion, []string{"ssql from csv " + file + " -tz Australia/Sydney", `ssql cast -type hire_date time`, `ssql update -set-expr h 'hour(hire_date)'`}, "-tz UTC"},
+		{dialectDataFusion, []string{"ssql from csv " + file + " -tz UTC", `ssql cast -type hire_date time`, `ssql update -set-expr d 'date_diff("day", hire_date, hire_date)'`}, "date_diff"},
+	}
+	for _, r := range refused {
+		if _, err := assembleDialect(t, r.dialect, r.cmds...); err == nil || !strings.Contains(err.Error(), r.want) {
+			t.Errorf("%s %v: err=%v, want %q", r.dialect, r.cmds, err, r.want)
+		}
+	}
+	// DataFusion, UTC pipeline: parts and truncation translate.
+	sql = mustDialect(t, dialectDataFusion, "ssql from csv "+file+" -tz UTC", "ssql cast -type hire_date time", `ssql update -set-expr h 'hour(hire_date)' -set-expr m 'date_trunc(hire_date, "month")'`)
+	wantAll(t, sql, `CAST(date_part('hour', "hire_date") AS BIGINT) AS "h"`, `date_trunc('month', "hire_date") AS "m"`)
+	wantNone(t, sql, "SET ")
 }

@@ -13,7 +13,7 @@ import (
 )
 
 func registerFromJSON(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("json").
+	zoneFlag(cmd.Subcommand("json")).
 		Description("Read JSON file(s) or stdin").
 		Example("ssql from json data.json | ssql to table", "Read JSON file").
 		Example("ssql from json *.json | ssql to table", "Read multiple JSON files").
@@ -53,6 +53,9 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 		Help("Input JSON file(s) (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) (err error) {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			cfg := extractMultiFileConfig(ctx)
 			doneSkip, skipErr := armSkipInvalid(ctx, cfg.generate)
 			if skipErr != nil {
@@ -84,7 +87,7 @@ func registerFromJSON(cmd *cf.SubcommandBuilder) {
 }
 
 func registerFromJSONL(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("jsonl").
+	zoneFlag(cmd.Subcommand("jsonl")).
 		Description("Read JSONL file(s) or stdin").
 		Example("ssql from jsonl data.jsonl | ssql to table", "Read JSONL file").
 		Example("ssql from jsonl *.jsonl | ssql to table", "Read multiple JSONL files").
@@ -159,6 +162,9 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 		Help("Input JSONL file(s) (or stdin if not specified)").
 		Done().
 		Handler(func(ctx *cf.Context) (err error) {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			defer recoverCellError(&err)
 			cfg := extractMultiFileConfig(ctx)
 			doneSkip, skipErr := armSkipInvalid(ctx, cfg.generate)
@@ -239,6 +245,7 @@ func registerFromJSONL(cmd *cf.SubcommandBuilder) {
 
 // executeFromJSON handles JSON/JSONL reading for both the subcommand and bare form.
 func executeFromJSON(inputFile string, types typeArgs, generate bool) error {
+	peekHeaderZone(inputFile)
 	if schemaMode() {
 		var r io.Reader = os.Stdin
 		if inputFile != "" {
@@ -313,7 +320,7 @@ func generateFromJSONCode(filename string, types typeArgs) error {
 		imports = []string{"fmt", "os"}
 	}
 
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
@@ -360,7 +367,7 @@ func generateFromJSONLCodeTyped(filename string, types typeArgs) error {
 	parallelCode := fmt.Sprintf(`records := typed.Read%sParallel[%s](*flagInput, 0)`, reader, schema.TypeName)
 	parallelImports := append([]string{}, imports...)
 	serialCode := fmt.Sprintf(`records := typed.Read%s[%s](*flagInput)`, reader, schema.TypeName)
-	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
+	frag := fromInitFragment("records", parallelCode, parallelImports)
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}
@@ -382,7 +389,7 @@ func recordFromJSONFragment(filename string, types typeArgs) (*lib.CodeFragment,
 	if err != nil {
 		return fmt.Errorf("reading JSON: %w", err)
 	}`)
-	frag := lib.NewInitFragment("records", code, []string{"fmt", "os"}, getCommandString())
+	frag := fromInitFragment("records", code, []string{"fmt", "os"})
 	frag.Params = params
 	return frag, nil
 }

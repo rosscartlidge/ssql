@@ -15,7 +15,7 @@ import (
 )
 
 func registerFromCatalog(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("catalog").
+	zoneFlag(cmd.Subcommand("catalog")).
 		Description("Read from a shard catalog (CSV mapping host+path to data files)").
 		Example("ssql from catalog shards.csv | ssql to table", "Read all shards in catalog").
 		Example("ssql from catalog shards.csv -if date ge 2025-03-01 | ssql to table", "Partition pruning").
@@ -91,6 +91,9 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 		Help("Generate Go code instead of executing").
 		Done().
 		Handler(func(ctx *cf.Context) error {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			catalogFile, _ := ctx.GlobalFlags["FILE"].(string)
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
 			shardField, _ := ctx.GlobalFlags["-shard-field"].(string)
@@ -403,7 +406,7 @@ func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.Catalo
 	)
 
 	imports := []string{"fmt", "os", "strconv"}
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

@@ -248,7 +248,7 @@ func assembleTypedFragments(fragments []*CodeFragment) (string, error) {
 	// record-shaped fragments' `return fmt.Errorf(...)` is legal as
 	// emitted — the v4.81.0 typed-sink compile failure is
 	// unrepresentable (DFC123 slice 4).
-	writeMainCallingRun(&code, len(allParams) > 0)
+	writeMainCallingRun(&code, len(allParams) > 0, PipelineZone(fragments))
 
 	// init fragments — emit code as-is (they include `records := typed.ReadCSV[T]...`)
 	for _, frag := range initFragments {

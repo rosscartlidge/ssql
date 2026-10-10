@@ -28,6 +28,12 @@ type Schema struct {
 	Fields     []string          `json:"fields"`                // Ordered field names
 	Types      map[string]string `json:"types"`                 // Field -> type string
 	SampleRate int               `json:"sample_rate,omitempty"` // Audio sample rate (0 if not audio)
+
+	// TZ is the pipeline's time zone (IANA name), chosen once by the
+	// source command and carried in the header so every later command
+	// reads the calendar in it (DFC147 §5.7). Empty: the reader resolves
+	// for itself (an older stream).
+	TZ string `json:"tz,omitempty"`
 }
 
 // NewSchema creates an empty schema.
@@ -108,12 +114,32 @@ func (s *Schema) HasFieldOrPath(name string) bool {
 	return false
 }
 
-// Clone creates a deep copy of the schema.
+// Clone creates a deep copy of the schema, stream properties included.
 func (s *Schema) Clone() *Schema {
-	clone := NewSchema()
+	clone := s.Derive(nil, nil)
 	clone.Fields = slices.Clone(s.Fields)
 	maps.Copy(clone.Types, s.Types)
 	return clone
+}
+
+// Derive is a new schema with the given fields and types that KEEPS the
+// stream-level properties of s (the zone, the audio sample rate). Every
+// command that rebuilds its output schema from its input's must derive
+// it this way rather than from a struct literal, or the properties are
+// lost at that stage (SampleRate was, before DFC147). s may be nil.
+func (s *Schema) Derive(fields []string, types map[string]string) *Schema {
+	out := NewSchema()
+	if fields != nil {
+		out.Fields = fields
+	}
+	if types != nil {
+		out.Types = types
+	}
+	if s != nil {
+		out.SampleRate = s.SampleRate
+		out.TZ = s.TZ
+	}
+	return out
 }
 
 // Len returns the number of fields in the schema.
@@ -130,15 +156,25 @@ type schemaContent struct {
 	Fields     []string          `json:"fields"`
 	Types      map[string]string `json:"types"`
 	SampleRate int               `json:"sample_rate,omitempty"` // Audio sample rate (0 if not audio)
+	TZ         string            `json:"tz,omitempty"`          // the pipeline's zone (DFC147)
 }
 
-// WriteHeader writes the schema as a JSONL header line.
+// WriteHeader writes the schema as a JSONL header line. The zone is the
+// schema's, else the process's (the one adopted from the input header, or
+// resolved from the environment once): every stream a command writes
+// names the pipeline's zone, whichever path built its schema (DFC147
+// §5.7).
 func (s *Schema) WriteHeader(w io.Writer) error {
+	tz := s.TZ
+	if tz == "" {
+		tz = ssql.StreamZoneName()
+	}
 	header := schemaHeader{
 		Schema: schemaContent{
 			Fields:     s.Fields,
 			Types:      s.Types,
 			SampleRate: s.SampleRate,
+			TZ:         tz,
 		},
 	}
 	data, err := json.Marshal(header)
@@ -158,6 +194,7 @@ func (s *Schema) MarshalJSON() ([]byte, error) {
 		Fields:     s.Fields,
 		Types:      s.Types,
 		SampleRate: s.SampleRate,
+		TZ:         s.TZ,
 	})
 }
 
@@ -204,6 +241,9 @@ func ParseSchemaHeader(data map[string]any) (*Schema, bool) {
 	// Extract sample_rate (for audio data)
 	if sampleRate, ok := schemaMap["sample_rate"].(float64); ok {
 		schema.SampleRate = int(sampleRate)
+	}
+	if tz, ok := schemaMap["tz"].(string); ok {
+		schema.TZ = tz
 	}
 
 	return schema, true

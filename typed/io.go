@@ -75,7 +75,7 @@ func columnName(f reflect.StructField) (name string, skip bool) {
 // When strict is true, the function fails if any header column has
 // no matching struct field, OR if any required (non-pointer) struct
 // field has no matching column.
-func buildReadSchema[T any](header []string, strict bool) (*rowSchema, error) {
+func buildReadSchema[T any](header []string, strict bool, timeFormats map[string]string) (*rowSchema, error) {
 	var zero T
 	rt := reflect.TypeOf(zero)
 	if rt == nil || rt.Kind() != reflect.Struct {
@@ -113,6 +113,13 @@ func buildReadSchema[T any](header []string, strict bool) (*rowSchema, error) {
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", f.Name, err)
 		}
+		if pattern, ok := timeFormats[strings.ToLower(h)]; ok && f.Type == timeType {
+			layout, err := ssql.TimeLayout(pattern)
+			if err != nil {
+				return nil, fmt.Errorf("field %s: %w", f.Name, err)
+			}
+			dec = decodeTimeLayout(f.Offset, layout)
+		}
 		decoders[col] = dec
 		types[col] = f.Type.String()
 		matched[strings.ToLower(h)] = struct{}{}
@@ -143,8 +150,31 @@ func buildReadSchema[T any](header []string, strict bool) (*rowSchema, error) {
 	}, nil
 }
 
+// WriteOption configures the CSV, delimited and table writers.
+type WriteOption func(*writeOpts)
+
+type writeOpts struct {
+	timeFormat string // a time.Time column's output pattern ("" = RFC 3339)
+}
+
+// OutputTimeFormat renders every time.Time column with a pattern —
+// strftime ("%Y-%m-%d %H:%M") or a Go layout — on the pipeline zone's
+// wall clock (ssql.FormatTimePattern): the sinks' -time-format.
+func OutputTimeFormat(pattern string) WriteOption {
+	return func(o *writeOpts) { o.timeFormat = pattern }
+}
+
+func resolveWriteOpts(opts []WriteOption) writeOpts {
+	var o writeOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
 // buildWriteSchema produces the header and per-field encoders for type T.
-func buildWriteSchema[T any]() (*rowSchema, error) {
+func buildWriteSchema[T any](opts ...WriteOption) (*rowSchema, error) {
+	o := resolveWriteOpts(opts)
 	var zero T
 	rt := reflect.TypeOf(zero)
 	if rt == nil || rt.Kind() != reflect.Struct {
@@ -161,7 +191,7 @@ func buildWriteSchema[T any]() (*rowSchema, error) {
 		if skip {
 			continue
 		}
-		enc, err := encoderFor(f.Type, f.Offset)
+		enc, err := encoderFor(f.Type, f.Offset, o.timeFormat)
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", f.Name, err)
 		}
@@ -280,6 +310,21 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 // accepted RFC 3339 alone until 2026-09-22, so `from csv -type d time`
 // over a date-only column read in exec and record mode and failed in
 // typed mode. Empty cell → errEmptyCell, as for every non-string type.
+// decodeTimeLayout is decodeTime for a column read through a pattern.
+func decodeTimeLayout(off uintptr, layout string) fieldDecoder {
+	return func(p unsafe.Pointer, s string) error {
+		if s == "" {
+			return errEmptyCell
+		}
+		v, err := time.ParseInLocation(layout, s, ssql.StreamLocation()) // a local clock: the pipeline zone
+		if err != nil {
+			return fmt.Errorf("%q does not match the column's time format", s)
+		}
+		*(*time.Time)(unsafe.Add(p, off)) = v
+		return nil
+	}
+}
+
 func decodeTime(off uintptr) fieldDecoder {
 	return func(p unsafe.Pointer, s string) error {
 		if s == "" {
@@ -336,18 +381,21 @@ func decoderForPointer(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	}, nil
 }
 
-func encoderFor(t reflect.Type, off uintptr) (fieldEncoder, error) {
+func encoderFor(t reflect.Type, off uintptr, timeFormat string) (fieldEncoder, error) {
 	if t == timeType {
 		return func(p unsafe.Pointer) string {
 			t := *(*time.Time)(unsafe.Add(p, off))
 			if t.IsZero() {
 				return ""
 			}
+			if timeFormat != "" {
+				return ssql.FormatTimePattern(t, timeFormat)
+			}
 			return t.Format(time.RFC3339)
 		}, nil
 	}
 	if t.Kind() == reflect.Pointer {
-		return encoderForPointer(t, off)
+		return encoderForPointer(t, off, timeFormat)
 	}
 	switch t.Kind() {
 	case reflect.String:
@@ -388,9 +436,9 @@ func encoderFor(t reflect.Type, off uintptr) (fieldEncoder, error) {
 }
 
 // encoderForPointer builds an encoder for *T fields. nil pointer → empty string.
-func encoderForPointer(t reflect.Type, off uintptr) (fieldEncoder, error) {
+func encoderForPointer(t reflect.Type, off uintptr, timeFormat string) (fieldEncoder, error) {
 	elem := t.Elem()
-	inner, err := encoderFor(elem, 0)
+	inner, err := encoderFor(elem, 0, timeFormat)
 	if err != nil {
 		return nil, fmt.Errorf("pointer to %v: %w", elem, err)
 	}
@@ -408,7 +456,20 @@ func encoderForPointer(t reflect.Type, off uintptr) (fieldEncoder, error) {
 type CSVOption func(*csvOpts)
 
 type csvOpts struct {
-	strict bool
+	strict      bool
+	timeFormats map[string]string // lower-cased column → pattern (TimeFormat)
+}
+
+// TimeFormat reads a time.Time column whose cells follow a pattern
+// (strftime "%d/%m/%Y" or a Go layout) rather than the RFC 3339 and SQL
+// forms ssql.ParseTime accepts — `from csv -format COL PATTERN`.
+func TimeFormat(column, pattern string) CSVOption {
+	return func(o *csvOpts) {
+		if o.timeFormats == nil {
+			o.timeFormats = map[string]string{}
+		}
+		o.timeFormats[strings.ToLower(column)] = pattern
+	}
 }
 
 // Strict makes ReadCSV* fail on schema mismatch: any CSV column without
@@ -471,7 +532,7 @@ func readCSVLoud[T any](op, source string, r io.Reader, o csvOpts, yield func(T)
 		}
 		failRead(op, source, fmt.Errorf("read header: %w", err))
 	}
-	schema, err := buildReadSchema[T](header, o.strict)
+	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
 	if err != nil {
 		failRead(op, source, err)
 	}
@@ -523,7 +584,7 @@ func ReadCSVSafeFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq2[T, e
 			yield(zero, fmt.Errorf("typed.ReadCSV: read header: %w", err))
 			return
 		}
-		schema, err := buildReadSchema[T](header, o.strict)
+		schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
 		if err != nil {
 			var zero T
 			yield(zero, err)
@@ -558,18 +619,18 @@ func ReadCSVSafeFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq2[T, e
 // WriteCSV writes a sequence of T as CSV. The header row is taken from
 // struct field names (or `ssql:"name"`/`csv:"name"` tags). Encoder
 // closures are built once before the loop.
-func WriteCSV[T any](seq iter.Seq[T], filename string) error {
+func WriteCSV[T any](seq iter.Seq[T], filename string, opts ...WriteOption) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return WriteCSVToWriter(seq, f)
+	return WriteCSVToWriter(seq, f, opts...)
 }
 
 // WriteCSVToWriter is the [io.Writer] variant of [WriteCSV].
-func WriteCSVToWriter[T any](seq iter.Seq[T], w io.Writer) error {
-	schema, err := buildWriteSchema[T]()
+func WriteCSVToWriter[T any](seq iter.Seq[T], w io.Writer, opts ...WriteOption) error {
+	schema, err := buildWriteSchema[T](opts...)
 	if err != nil {
 		return err
 	}

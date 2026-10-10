@@ -9,7 +9,7 @@ import (
 )
 
 func registerFromXLSX(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("xlsx").
+	zoneFlag(cmd.Subcommand("xlsx")).
 		Description("Read Excel spreadsheet").
 		Example("ssql from xlsx data.xlsx | ssql to table", "Read Excel spreadsheet").
 		Example("ssql from xlsx workbook.xlsx -sheet Sales | ssql to csv", "Read specific sheet").
@@ -31,6 +31,9 @@ func registerFromXLSX(cmd *cf.SubcommandBuilder) {
 		Help("Input XLSX file (required — XLSX cannot be read from stdin)").
 		Done().
 		Handler(func(ctx *cf.Context) error {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			var inputFile string
 			var generate bool
 			var sheet string
@@ -93,7 +96,7 @@ func generateFromXLSXCode(filename string, sheet string) error {
 	}
 
 	imports := []string{"fmt", "os"}
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

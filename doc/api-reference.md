@@ -310,10 +310,91 @@ const (
 
 func ExprFieldShadowing() expr.Option   // expr.Compile option: a field named like a builtin (`date`) is the field when bare
 func ExprDate() expr.Option             // expr.Compile option: ssql's date() in place of expr-lang's
+func ExprTimeFunctions() []expr.Option  // the calendar functions below as expression functions (year(ts) … tz, now)
+func ExprStandardOptions() []expr.Option // shadowing + date() + the calendar functions: what every ssql compile site passes
 ```
 
 A time renders as RFC 3339 wherever it becomes text: JSONL, CSV/TSV,
 tables, and `GetOr(r, "ts", "")`.
+
+**The calendar, and the pipeline's zone (DFC147).** A time is an
+instant; reading its calendar needs a zone. The CLI chooses one where a
+stream starts (`from -tz`, else `TZ`, else `/etc/localtime`) and
+carries it in the `_schema` header; a library program sets it once.
+
+```go
+func ResolveZone(flag string) (name string, loc *time.Location, err error) // flag, else TZ, else /etc/localtime; an IANA name or an error
+func SetStreamZone(name string) error      // the process's pipeline zone (generated programs call MustSetStreamZone)
+func PinStreamZone(name string) error      // as SetStreamZone, and a header's zone does not replace it (-tz)
+func AdoptStreamZone(name string)          // a header's zone: first wins, a second different one is a mismatch
+func StreamZone() (name string, loc *time.Location, err error) // the zone set, adopted, or resolved once from the environment
+func StreamZoneName() string               // "" when none can be named
+func StreamLocation() *time.Location       // for generated code: the zone, or UTC when none resolves
+func StreamZoneMismatch() error            // two inputs named different zones (join/union/merge refuse)
+func TimeIsZoned(t time.Time) bool         // t carries a named zone (tz(), date(str, layout, zone)) rather than a parsed offset
+
+var CalendarUnits = []string{"year", "quarter", "month", "week", "day", "hour", "minute", "second"}
+var TimeParts = []string{"year", "month", "day", "hour", "minute", "second", "dow", "doy", "week", "quarter", "epoch"}
+func TruncTime(t time.Time, unit string, loc *time.Location) (time.Time, error)        // start of the unit in loc; weeks start Monday
+func AddCalendar(t time.Time, n int64, unit string, loc *time.Location) (time.Time, error) // months/years clamp to the month's end
+func DiffCalendar(unit string, a, b time.Time, loc *time.Location) (int64, error)      // unit boundaries crossed (weeks: callers divide by 7 — MustDiffCalendar does)
+func TimePart(t time.Time, part string, loc *time.Location) (int64, error)             // dow Sunday = 0, week ISO, epoch zone-free
+func ValidCalendarUnit(unit string) bool
+func BucketTime(t time.Time, every time.Duration) time.Time                            // epoch-aligned, zone-free
+// Generated code calls the Must* forms (the unit or zone was validated at generation time):
+func MustTruncTime(t time.Time, unit string, loc *time.Location) time.Time
+func MustAddCalendar(t time.Time, n int64, unit string, loc *time.Location) time.Time
+func MustDiffCalendar(unit string, a, b time.Time, loc *time.Location) int64   // weeks divided by 7
+func MustTimePart(t time.Time, part string, loc *time.Location) int64
+func MustLoadZone(name string) *time.Location
+func MustSetStreamZone(name string) *time.Location
+```
+
+**Patterns (strftime).** Wherever a time pattern is given — `strftime(ts,
+pattern)`, `strptime(text, pattern)`, `-format` and `-time-format` flags,
+a sidecar's date format — a pattern containing `%` is strftime (the
+language DuckDB, Python and DataFusion share: `%Y-%m-%d %H:%M`, `%d/%m/%Y`,
+`%b %-d`) and anything else is a Go layout. Supported: `%Y %y %m %-m %d
+%-d %H %I %M %S %f %p %b %B %a %A %j %z %Z %G %V %u %%`; refused by name
+otherwise (`%U`, `%e`, …). Patterns are converted once to a Go layout;
+`%j`, `%G`, `%V`, `%u` and a lone `%f` format through a slower path and
+cannot be parsed.
+
+```go
+func IsStrftime(pattern string) bool                                  // contains %
+func StrftimeLayout(pattern string) (layout string, slow bool, err error) // Go layout, or slow=true when Go has no token
+func TimeLayout(pattern string) (string, error)                       // either language → a Go layout for parsing
+func FormatStrftime(t time.Time, pattern string) (string, error)      // t in its own location
+func MustFormatStrftime(t time.Time, pattern string, loc *time.Location) string
+func ParseStrftime(s, pattern string) (time.Time, error)              // zoneless text is a wall clock in the pipeline zone (StreamLocation)
+func MustParseTimeLayout(val any, pattern, field string) time.Time    // cast -format in generated code: a mismatch panics with a *CastError
+func PgToChar(pattern string) (string, error)                         // the Postgres to_char spelling (%z and a literal " refused)
+func UTS35ToStrftime(pattern string) (string, error)                  // CSVW / XSD "dd/MM/yyyy" → "%d/%m/%Y"
+func FormatTimePattern(t time.Time, pattern string) string           // a sink's rendering: the pattern on the pipeline zone's wall clock; "" = RFC 3339 Nano
+func ValidateTimePattern(pattern string) error                        // a -time-format value, checked once
+```
+
+The writers take the pattern through their configs: `CSVConfig.TimeFormat`
+(`CSVConfigWithTimeFormat(pattern)` for the default config with one),
+`TSVConfig{Separator, TimeFormat}` with `WriteTSVOpts(records, filename,
+cfg)` / `WriteTSVOptsToWriter(records, w, cfg)`, and `DisplayOptions` for
+the table and markdown writers:
+
+```go
+type DisplayOptions struct {
+    MaxWidth      int      // column cap, 0 = none
+    Fields        []string // column order (first), as DisplayTableWithFields takes it
+    OnlySpecified bool     // only those columns
+    Sample        int      // table: rows sampled for widths; 0 buffers every row
+    TimeFormat    string   // pattern for time columns; "" = RFC 3339
+}
+func DisplayTableOpts(w io.Writer, records iter.Seq[Record], o DisplayOptions)
+func WriteMarkdownOpts(w io.Writer, records iter.Seq[Record], o DisplayOptions) error
+type TSVConfig struct { Separator rune; TimeFormat string }
+func WriteTSVOpts(records iter.Seq[Record], filename string, cfg TSVConfig) error
+func WriteTSVOptsToWriter(records iter.Seq[Record], w io.Writer, cfg TSVConfig) error
+func CSVConfigWithTimeFormat(pattern string) CSVConfig
+```
 
 ### Filter types
 
@@ -370,6 +451,7 @@ func CopyField(m MutableRecord, src Record, target, source string) MutableRecord
 ```go
 func CastValue(v any, target FieldType) (any, bool)   // the one conversion behind `cast`
 func CastField(mut MutableRecord, src Record, field string, target FieldType, invalidMissing bool, invalid *int64) MutableRecord
+func CastFieldFormat(mut MutableRecord, src Record, field, pattern string, invalidMissing bool, invalid *int64) MutableRecord // to a time through a pattern (cast -format)
 type CastError struct{ Field string; Value any; Target FieldType }
 func (e *CastError) Error() string
 ```
@@ -1177,6 +1259,8 @@ type CSVConfig struct {
     Comment       rune
     Fields        []string             // for writing: the columns and their order (nil = every field, alphabetically)
     TypeOverrides map[string]FieldType // per column, instead of inference
+    TimeFormats   map[string]string    // reading: a time column's cell pattern (strftime or Go layout) — from csv -format
+    TimeFormat    string               // writing: render times with this pattern on the pipeline zone's wall clock — to csv -time-format
     DefaultType   FieldType            // for every column not overridden (FieldTypeAuto = infer)
     InferRows     int                  // leading data rows sampled to infer types (0 = DefaultInferRows, 1000)
 }
@@ -1203,6 +1287,7 @@ func FindTableSchema(csvPath string) (*TableSchema, error)                      
 func ReadTableSchema(sidecarPath, csvPath string) (*TableSchema, error)         // a named sidecar
 func ParseTableSchema(data []byte, csvBase, dir string) (*TableSchema, error)  // any of the three shapes
 func (s *TableSchema) TypeOverrides() map[string]string                         // column → ssql type name, for CSVConfig
+func (s *TableSchema) TimeFormats() map[string]string                           // column → strftime pattern of a time field with a format, for CSVConfig.TimeFormats
 func WriteDatapackage(csvPath string, fields []TableField) error                // datapackage.json beside csvPath (merged)
 func WriteCSVSidecar(records iter.Seq[Record], filename string, known map[string]FieldType, config ...CSVConfig) error
 func TableFieldsFromRecords(records iter.Seq[Record], known map[string]FieldType) (iter.Seq[Record], func() []TableField)

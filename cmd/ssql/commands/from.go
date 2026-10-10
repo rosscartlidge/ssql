@@ -56,7 +56,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Default(false).
 		Help("Print only the record count this invocation would produce (cheapest per format: parquet footer, line count for csv/tsv/jsonl) and exit").
 		Done()
-	sidecarFlags(fromCmd).
+	formatFlag(zoneFlag(sidecarFlags(fromCmd)), readerFormatHelp).
 		Flag("FILE").
 		String().
 		Variadic().
@@ -66,6 +66,9 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Help("Input file (format inferred from extension). Reads JSONL from stdin if not specified.").
 		Done().
 		Handler(func(ctx *cf.Context) error {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			var files []string
 			var generate bool
 
@@ -123,10 +126,15 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				// A delimited file's schema sidecar applies in the bare
 				// form too (DFC146).
 				sidecar, noSidecar := sidecarFlagValues(ctx)
-				overrides, err := resolveSidecarTypes([]string{inputFile}, nil, sidecar, noSidecar)
+				formats, err := parseFormatFlags(ctx)
 				if err != nil {
 					return err
 				}
+				overrides, formats, err := resolveSidecarTypes([]string{inputFile}, nil, sidecar, noSidecar, formats)
+				if err != nil {
+					return err
+				}
+				overrides = applyTimeFormats(overrides, formats)
 				if fi.Name == "csv" {
 					return executeFromCSV(inputFile, overrides, "auto", generate)
 				}
@@ -220,7 +228,7 @@ func executeFromMultiFile(cfg multiFileConfig, format string, readFile fileReade
 		// Emit an init fragment with the command string for the optimizer (generate ssql).
 		// Go code generation for multi-file is not yet supported — the code field is empty,
 		// but the command string allows generate ssql to optimize the pipeline.
-		frag := lib.NewInitFragment("records", "", nil, getCommandString())
+		frag := fromInitFragment("records", "", nil)
 		return lib.WriteCodeFragment(frag)
 	}
 
@@ -540,6 +548,10 @@ func buildCSVConfig(typeOverrides map[string]string, defaultType string) (ssql.C
 		config.DefaultType = dt
 	}
 
+	if len(fromTimeFormats) > 0 {
+		config.TimeFormats = fromTimeFormats
+	}
+
 	// Parse type overrides
 	if len(typeOverrides) > 0 {
 		config.TypeOverrides = make(map[string]ssql.FieldType)
@@ -649,6 +661,9 @@ func writeWithInferredSchema(records iter.Seq[ssql.Record], opts ...writeWithInf
 	if options.sampleRate > 0 {
 		schema.SampleRate = options.sampleRate
 	}
+	// The pipeline's zone (DFC147 §5.7): pinned by -tz, adopted from an
+	// input header, else resolved from the environment once.
+	schema.TZ = ssql.StreamZoneName()
 
 	// Past the sample, every record's fields must be in the header. Records
 	// of one shape share a Schema pointer (the readers cache it), so the

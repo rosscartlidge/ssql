@@ -126,3 +126,28 @@ func TestFieldCompletionSources(t *testing.T) {
 		}
 	}
 }
+
+// TestZoneCompletion (DFC147): `from … -tz` completes IANA zone names
+// from the system zoneinfo tree, UTC first.
+func TestZoneCompletion(t *testing.T) {
+	bin := corpusBin(t)
+	out, err := exec.Command(bin, "-complete", "5", "from", "csv", "x.csv", "-tz", "Australia/Sy").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Australia/Sydney") {
+		t.Errorf("zone completion: %s", out)
+	}
+	out, _ = exec.Command(bin, "-complete", "5", "from", "csv", "x.csv", "-tz", "").CombinedOutput()
+	all := "\n" + string(out)
+	for _, want := range []string{"\nUTC\n", "\nEurope/Zurich\n", "\nAmerica/New_York\n"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("zone list lacks %q", strings.TrimSpace(want))
+		}
+	}
+	for _, not := range []string{"\nFactory\n", "\nposixrules\n", "zone.tab", "\nposix/"} {
+		if strings.Contains(all, not) {
+			t.Errorf("zone list has the data file %q", strings.TrimSpace(not))
+		}
+	}
+}

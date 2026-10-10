@@ -73,6 +73,21 @@ Subcommand("command-name").
     Done().
 ```
 
+## Source flags and stream properties (DFC147)
+
+A fact about the whole stream — its time zone — is resolved by the
+SOURCE command (`from … -tz`, else `TZ`, else `/etc/localtime`), written
+into the `_schema` header, adopted by every reader (`lib.ReadJSONLWithSchema`
+→ `ssql.AdoptStreamZone`) and written back by `Schema.WriteHeader`. Two
+rules follow: a command that rebuilds its output schema derives it from
+the input's (`in.Derive(fields, types)`, never a `&lib.Schema{…}` literal —
+`TestHeaderPropertiesSurvive` pipes a stamped stream through every
+command), and a source emits its fragment through `fromInitFragment`, which
+materialises the resolved zone into the fragment's argv so `generate
+go|sql|json|ssql` all see `-tz NAME`. Time patterns (`-format`,
+`-time-format`) are strftime when they contain `%`, else Go layouts
+(`ssql.TimeLayout`, `ssql.FormatTimePattern`).
+
 ## Key Patterns
 - **Global flags**: `ctx.GlobalFlags["-flagname"]` - applies to entire command
 - **Local flags**: `ctx.Clauses[i].Flags["-flagname"]` - applies per clause (with `+` separator)

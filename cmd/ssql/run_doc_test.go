@@ -26,10 +26,14 @@ func TestRunDocument(t *testing.T) {
 		}
 		return p
 	}
+	// TZ pinned: every serialisation materialises the pipeline's zone as
+	// `-tz NAME` on the source (DFC147 §5.7), and the expectations below
+	// spell it.
 	run := func(t *testing.T, stdin string, args ...string) (string, string, error) {
 		t.Helper()
 		cmd := exec.Command(bin, args...)
 		cmd.Dir = data
+		cmd.Env = append(os.Environ(), "TZ=UTC")
 		cmd.Stdin = strings.NewReader(stdin)
 		var out, errb bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &errb
@@ -150,17 +154,19 @@ func TestRunDocument(t *testing.T) {
 		script := strings.ReplaceAll(strings.TrimSpace(text), "ssql ", bin+" ")
 		cmd := exec.Command("bash", "-c", "set -o pipefail; "+script+" | "+bin+" generate json -compact")
 		cmd.Dir = data
-		cmd.Env = append(os.Environ(), "SSQL_MODE=record")
+		cmd.Env = append(os.Environ(), "SSQL_MODE=record", "TZ=UTC")
 		got, err := cmd.Output()
 		if err != nil {
 			t.Fatalf("shell → generate json: %v", err)
 		}
-		// The original, normalised through the same marshaller.
+		// The original, normalised through the same marshaller, with the
+		// zone every source materialises (DFC147 §5.7).
 		orig, _ := os.ReadFile(doc)
 		var v any
 		if err := json.Unmarshal(orig, &v); err != nil {
 			t.Fatal(err)
 		}
+		v = withZone(v, "UTC")
 		want, _ := json.Marshal(v)
 		if strings.TrimSpace(string(got)) != string(want) {
 			t.Errorf("round trip differs:\n got %s\nwant %s", got, want)
@@ -181,11 +187,11 @@ func TestRunDocument(t *testing.T) {
 			t.Errorf("generate sql -json: %v\n%s\n%s", err, sql, stderr)
 		}
 		text, _, err := run(t, "", "generate", "ssql", "-json", doc)
-		if err != nil || !strings.HasPrefix(text, "ssql from csv -arg inject.csv | ssql where") {
+		if err != nil || !strings.HasPrefix(text, "ssql from csv -arg inject.csv -tz UTC | ssql where") {
 			t.Errorf("generate ssql -json: %v\n%s", err, text)
 		}
 		norm, _, err := run(t, "", "generate", "json", "-json", doc, "-compact")
-		if err != nil || !strings.HasPrefix(norm, `[["from","csv","-arg","inject.csv"],["where"`) {
+		if err != nil || !strings.HasPrefix(norm, `[["from","csv","-arg","inject.csv","-tz","UTC"],["where"`) {
 			t.Errorf("generate json -json: %v\n%s", err, norm)
 		}
 		// generate go -json compiles against the checkout and runs.
@@ -222,4 +228,29 @@ func TestRunDocument(t *testing.T) {
 			t.Errorf("fragments expected: %v\n%.300s", err, out)
 		}
 	})
+}
+
+// withZone appends `-tz ZONE` to every from stage of a parsed pipeline
+// document (nested sources included) — the form a source materialises.
+func withZone(v any, zone string) any {
+	stages, ok := v.([]any)
+	if !ok {
+		return v
+	}
+	for i, st := range stages {
+		stage, ok := st.([]any)
+		if !ok || len(stage) == 0 {
+			continue
+		}
+		if name, _ := stage[0].(string); name == "from" {
+			stage = append(stage, "-tz", zone)
+		}
+		for j, a := range stage {
+			if nested, ok := a.([]any); ok {
+				stage[j] = withZone(nested, zone)
+			}
+		}
+		stages[i] = stage
+	}
+	return stages
 }

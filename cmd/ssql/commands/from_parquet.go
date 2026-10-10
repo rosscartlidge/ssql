@@ -11,7 +11,7 @@ import (
 )
 
 func registerFromParquet(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("parquet").
+	zoneFlag(cmd.Subcommand("parquet")).
 		Description("Read Parquet file (columnar format, DuckDB compatible)").
 		Example("ssql from parquet data.parquet | ssql to table", "Read Parquet file").
 		Example("ssql from parquet data.parquet -columns name -columns age -columns dept | ssql to table", "Read only selected columns (faster for wide files)").
@@ -43,6 +43,9 @@ func registerFromParquet(cmd *cf.SubcommandBuilder) {
 		Help("Column to read (repeat for multiple). Omit for all columns. Reduces I/O for wide files.").
 		Done().
 		Handler(func(ctx *cf.Context) error {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
 				file, _ := ctx.GlobalFlags["FILE"].(string)
 				var files []string
@@ -146,7 +149,7 @@ func generateFromParquetCode(filename string, columns []string) error {
 	}`
 	}
 
-	frag := lib.NewInitFragment("records", code, []string{"fmt", "os"}, getCommandString())
+	frag := fromInitFragment("records", code, []string{"fmt", "os"})
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

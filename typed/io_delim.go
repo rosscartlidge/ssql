@@ -9,6 +9,7 @@ import (
 	"iter"
 	"os"
 	"runtime"
+	"strings"
 	"unsafe"
 )
 
@@ -17,8 +18,25 @@ import (
 type DelimOption func(*delimOpts)
 
 type delimOpts struct {
-	delim  byte
-	strict bool
+	delim       byte
+	strict      bool
+	timeFormats map[string]string
+	timeFormat  string // output pattern for time.Time columns (DelimOutputTimeFormat)
+}
+
+// DelimOutputTimeFormat is [OutputTimeFormat] for the delimited writers.
+func DelimOutputTimeFormat(pattern string) DelimOption {
+	return func(o *delimOpts) { o.timeFormat = pattern }
+}
+
+// DelimTimeFormat is [TimeFormat] for the delimited readers.
+func DelimTimeFormat(column, pattern string) DelimOption {
+	return func(o *delimOpts) {
+		if o.timeFormats == nil {
+			o.timeFormats = map[string]string{}
+		}
+		o.timeFormats[strings.ToLower(column)] = pattern
+	}
 }
 
 // WithDelim sets the field delimiter. Default is '\t' (tab).
@@ -153,7 +171,7 @@ func readDelimLoud[T any](op, source string, r io.Reader, o delimOpts, yield fun
 		return // empty input: zero rows
 	}
 	header := splitLine(scanner.Bytes(), o.delim, nil)
-	schema, err := buildReadSchema[T](header, o.strict)
+	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
 	if err != nil {
 		failRead(op, source, err)
 	}
@@ -203,7 +221,7 @@ func ReadDelimSafeFromReader[T any](r io.Reader, opts ...DelimOption) iter.Seq2[
 			return
 		}
 		header := splitLine(scanner.Bytes(), o.delim, nil)
-		schema, err := buildReadSchema[T](header, o.strict)
+		schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
 		if err != nil {
 			var zero T
 			yield(zero, err)
@@ -246,7 +264,7 @@ func WriteDelim[T any](seq iter.Seq[T], filename string, opts ...DelimOption) er
 // WriteDelimToWriter is the [io.Writer] variant of [WriteDelim].
 func WriteDelimToWriter[T any](seq iter.Seq[T], w io.Writer, opts ...DelimOption) error {
 	o := resolveDelimOpts(opts)
-	schema, err := buildWriteSchema[T]()
+	schema, err := buildWriteSchema[T](OutputTimeFormat(o.timeFormat))
 	if err != nil {
 		return err
 	}
@@ -336,7 +354,7 @@ func ReadDelimParallel[T any](filename string, n int, opts ...DelimOption) Strea
 
 	headerEnd := newlines[0]
 	header := splitLine(data[:headerEnd], o.delim, nil)
-	schema, err := buildReadSchema[T](header, o.strict)
+	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
 	if err != nil {
 		failRead(op, filename, err)
 	}
@@ -431,7 +449,7 @@ func (s Stream[T]) WriteDelim(filename string, opts ...DelimOption) error {
 // WriteDelimToWriter is the [io.Writer] variant of [Stream.WriteDelim].
 func (s Stream[T]) WriteDelimToWriter(w io.Writer, opts ...DelimOption) error {
 	o := resolveDelimOpts(opts)
-	schema, err := buildWriteSchema[T]()
+	schema, err := buildWriteSchema[T](OutputTimeFormat(o.timeFormat))
 	if err != nil {
 		return err
 	}

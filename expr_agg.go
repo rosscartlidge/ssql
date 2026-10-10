@@ -87,7 +87,7 @@ func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) 
 	maps.Insert(compileEnv, records[0].All())
 
 	// Compile "every" expression with combined environment
-	everyProgram, err := expr.Compile(everyExpr, expr.Env(compileEnv), ExprFieldShadowing(), ExprDate())
+	everyProgram, err := expr.Compile(everyExpr, append([]expr.Option{expr.Env(compileEnv)}, ExprStandardOptions()...)...)
 	if err != nil {
 		return nil, fmt.Errorf("compiling every expression: %w", err)
 	}
@@ -109,7 +109,7 @@ func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) 
 	}
 
 	// 4. Compute final result
-	finalProgram, err := expr.Compile(finalExpr, expr.Env(stateMap), ExprFieldShadowing(), ExprDate())
+	finalProgram, err := expr.Compile(finalExpr, append([]expr.Option{expr.Env(stateMap)}, ExprStandardOptions()...)...)
 	if err != nil {
 		return nil, fmt.Errorf("compiling final expression: %w", err)
 	}
@@ -369,7 +369,7 @@ func buildAggBatchEnv(records []Record) (map[string]any, map[string]bool) {
 
 // compileAggExpr compiles an aggregation expression with AST patching
 func compileAggExpr(expression string, fields map[string]bool, env map[string]any) (*vm.Program, error) {
-	opts := []expr.Option{expr.Env(env), ExprFieldShadowing(), ExprDate()}
+	opts := append([]expr.Option{expr.Env(env)}, ExprStandardOptions()...)
 	// The scope pre-parse must see the same env: a bare `count()` parses
 	// only because the env's dummy overrides expr's two-argument builtin.
 	cfg := conf.CreateNew()

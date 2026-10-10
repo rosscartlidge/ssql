@@ -112,11 +112,28 @@ func TestExprGoDifferential(t *testing.T) {
 		`date >= "2026-02-01"`,
 		`date == "" ? "none" : date`,
 		`len(date) == 10 && date != ""`,
+		// DFC147 calendar functions: the pipeline zone (set to Sydney by
+		// the program), tz(), month-end clamping, boundary differences,
+		// a time compare, bucket over a time. `when` has +11:00, Z and
+		// -05:00 rows, a leap day and a month end.
+		`hour(when)`, `day(when)`, `dow(when)`, `doy(when)`, `week(when)`, `quarter(when)`, `epoch(when)`,
+		`year(when)`, `month(when)`, `minute(when)`, `second(when)`,
+		`hour(tz(when, "UTC"))`, `day(tz(when, "America/New_York"))`,
+		`date_trunc(when, "month")`, `date_trunc(when, "week")`, `date_trunc(tz(when, "UTC"), "day")`,
+		`date_add(when, 1, "month")`, `date_add(when, 1, "year")`, `date_add(when, -3, "day")`, `date_add(when, 36, "hour")`,
+		`date_diff("month", when, date_add(when, 1, "month"))`, `date_diff("day", when, date_trunc(when, "month"))`,
+		`date_diff("hour", tz(when, "UTC"), when)`,
+		`when > date_trunc(when, "day")`, `when == date_trunc(when, "second")`,
+		`bucket(when, "1h")`,
+		`hour(date_trunc(when, "day"))`, `hour(date_add(tz(when, "UTC"), 1, "day"))`,
+		`strftime(when, "%Y-%m-%d %H:%M:%S")`, `strftime(when, "%d/%m/%y %I:%M %p")`, `strftime(tz(when, "UTC"), "%a %b %-d %j %V %u")`,
+		`strptime("05/01/2026", "%d/%m/%Y") < when`, `date("2026-01-05", "2006-01-02") == strptime("2026-01-05", "%Y-%m-%d")`,
+		`hour(strptime("05/01/2026 10:30", "%d/%m/%Y %H:%M"))`, // parsed as UTC, read in the pipeline zone
 	}
 
 	var body strings.Builder
 	imports := map[string]bool{
-		"fmt": true, "os": true, "reflect": true,
+		"fmt": true, "os": true, "reflect": true, "time": true,
 		"github.com/rosscartlidge/ssql/v4":                      true,
 		"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime": true,
 	}
@@ -176,16 +193,25 @@ type Row struct {
 	City   string
 	Active bool
 	Date   string // named like the date() builtin
+	When   time.Time
+}
+
+func mustTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(err)
+	}
+	return t
 }
 
 // Rows are chosen to make wrong emissions diverge: negative values (int()
 // truncation, abs), ±2.5 (round half away from zero), a zero divisor (+Inf
 // parity), multi-byte runes (len), mixed case and affixes (string ops).
 var rows = []Row{
-	{Pop: 7, Price: 2.5, Qty: 2, City: "Oslo", Active: true, Date: "2026-01-05"},
-	{Pop: -3, Price: -2.5, Qty: 3, City: "cairo", Active: false, Date: "2026-02-02"},
-	{Pop: 20, Price: 15.5, Qty: 0, City: " héllo ", Active: true, Date: ""},
-	{Pop: 0, Price: 0, Qty: 1, City: "Ao", Active: false, Date: "2026-02-28"},
+	{Pop: 7, Price: 2.5, Qty: 2, City: "Oslo", Active: true, Date: "2026-01-05", When: mustTime("2026-01-04T23:30:00Z")},
+	{Pop: -3, Price: -2.5, Qty: 3, City: "cairo", Active: false, Date: "2026-02-02", When: mustTime("2026-01-31T12:00:00+11:00")},
+	{Pop: 20, Price: 15.5, Qty: 0, City: " héllo ", Active: true, Date: "", When: mustTime("2024-02-29T20:15:30-05:00")},
+	{Pop: 0, Price: 0, Qty: 1, City: "Ao", Active: false, Date: "2026-02-28", When: mustTime("2026-04-05T02:30:00+11:00")},
 }
 
 %s
@@ -199,6 +225,8 @@ func same(a, b any) bool {
 
 func norm(v any) any {
 	switch x := v.(type) {
+	case time.Time:
+		return x.UTC().Format(time.RFC3339Nano) // the instant; a tz() Location is not a difference
 	case int:
 		return int64(x)
 	case int32:
@@ -210,6 +238,7 @@ func norm(v any) any {
 }
 
 func main() {
+	ssql.MustSetStreamZone("Australia/Sydney") // the pipeline zone both paths read
 	records := make([]ssql.Record, len(rows))
 	for i, r := range rows {
 		records[i] = ssql.MakeMutableRecord().
@@ -219,6 +248,7 @@ func main() {
 			String("city", r.City).
 			Bool("active", r.Active).
 			String("date", r.Date).
+			Time("when", r.When).
 			Freeze()
 	}
 	fail := 0

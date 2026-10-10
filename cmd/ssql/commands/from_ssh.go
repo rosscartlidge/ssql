@@ -14,7 +14,7 @@ import (
 )
 
 func registerFromSSH(cmd *cf.SubcommandBuilder) {
-	cmd.Subcommand("ssh").
+	zoneFlag(cmd.Subcommand("ssh")).
 		Description("Read from a remote file via SSH.").
 		Example("ssql from ssh server /data/logs.csv | ssql to table", "Read remote CSV").
 		Example("ssql from ssh server /data/logs.csv -- where -if status eq error", "Push filter to remote").
@@ -50,6 +50,9 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 		Help("Generate Go code instead of executing").
 		Done().
 		Handler(func(ctx *cf.Context) error {
+			if err := resolveFromZone(ctx); err != nil {
+				return err
+			}
 			host, _ := ctx.GlobalFlags["HOST"].(string)
 			path, _ := ctx.GlobalFlags["PATH"].(string)
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
@@ -207,6 +210,9 @@ func buildRemoteSSQLScript(path string, pipelineGroups [][]string) string {
 	sb.WriteString("\n")
 	sb.WriteString("ssql from ")
 	sb.WriteString(ssql.ShellQuote(path))
+	if z := ssql.StreamZoneName(); z != "" {
+		sb.WriteString(" -tz " + ssql.ShellQuote(z)) // the local pipeline's zone (DFC147 §5.7)
+	}
 	sb.WriteString("\n")
 	for _, group := range pipelineGroups {
 		sb.WriteString("| ssql ")
@@ -305,7 +311,7 @@ func sshPlainLandingCode(host, path, remoteBin, outVar string) (string, []string
 // generateFromSSHCode generates Go code for SSH remote read.
 func generateFromSSHCode(host, path, remoteBin string) error {
 	code, imports, params := sshPlainLandingCode(host, path, remoteBin, "records")
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }
@@ -339,7 +345,7 @@ func generateFromSSHRemoteCode(host, path, remoteBin string, pipelineArgs []stri
 		remoteBin = "ssql"
 	}
 	code, imports, params := sshScriptLandingCode(host, path, remoteBin, pipelineArgs, "records")
-	frag := lib.NewInitFragment("records", code, imports, getCommandString())
+	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
 	return lib.WriteCodeFragment(frag)
 }

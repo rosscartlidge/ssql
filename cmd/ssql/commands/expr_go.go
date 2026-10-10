@@ -12,6 +12,7 @@ import (
 	"github.com/expr-lang/expr/ast"
 	"github.com/expr-lang/expr/parser"
 
+	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
 )
@@ -27,9 +28,11 @@ import (
 // names the construct and the CALLER decides which fallback tier applies —
 // unlike exprToSQL's callers, an error here is usually not fatal.
 
-// exprGoType is the transpiler's type lattice. MVP: the four scalar types
-// typed schemas produce from CSV. time.Time, pointers and sequences are
-// deliberately outside — identifiers of those types refuse to transpile.
+// exprGoType is the transpiler's type lattice: the four scalar types typed
+// schemas produce from CSV, and time.Time (DFC147: a `time` column, read
+// through the calendar functions; arithmetic on times stays outside —
+// the VM's result is a time.Duration, which no column holds). Pointers
+// and sequences are outside — identifiers of those types refuse.
 type exprGoType string
 
 const (
@@ -37,7 +40,21 @@ const (
 	exprGoFloat  exprGoType = "float64"
 	exprGoString exprGoType = "string"
 	exprGoBool   exprGoType = "bool"
+	exprGoTime   exprGoType = "time.Time"
 )
+
+// ssqlImport is the root package, for the calendar helpers transpiled
+// calendar functions call.
+const ssqlImport = "github.com/rosscartlidge/ssql/v4"
+
+// zoneSrc is the Go expression for the zone a calendar function reads in:
+// the location a tz() gave the value (hoisted), else the pipeline's.
+func zoneSrc(v exprGo) string {
+	if v.zoneVar != "" {
+		return v.zoneVar
+	}
+	return "ssql.StreamLocation()"
+}
 
 func (t exprGoType) numeric() bool { return t == exprGoInt || t == exprGoFloat }
 
@@ -56,6 +73,11 @@ type exprGo struct {
 	// field names the record field an operand reads, for messages about the
 	// literal it is compared with ("" for a computed operand).
 	field string
+
+	// zoneVar names the hoisted *time.Location a tz() put on a time value:
+	// a calendar function over it reads that zone, as the VM does for a
+	// zoned time (ssql.TimeIsZoned). "" is the pipeline zone.
+	zoneVar string
 }
 
 const exprfnImport = "github.com/rosscartlidge/ssql/v4/exprfn"
@@ -281,6 +303,8 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, \"\")", e.recv, f.Name), Type: exprGoString}, nil
 		case "bool":
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, false)", e.recv, f.Name), Type: exprGoBool}, nil
+		case "time.Time":
+			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, time.Time{})", e.recv, f.Name), Type: exprGoTime, Imports: []string{"time"}}, nil
 		}
 		return exprGo{}, fmt.Errorf("field %q has advisory type %s, which has no native Go emission", name, f.GoType)
 	}
@@ -307,6 +331,8 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoString}, nil
 	case "bool":
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoBool}, nil
+	case "time.Time":
+		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoTime}, nil
 	}
 	return exprGo{}, fmt.Errorf("field %q has type %s, which has no native Go emission", name, f.GoType)
 }
@@ -535,6 +561,19 @@ func exprCompare(op string, left, right exprGo, equality bool) (exprGo, error) {
 		// lexicographic — Go string compare matches
 	case equality && left.Type == exprGoBool && right.Type == exprGoBool:
 		// bool == bool is fine
+	case left.Type == exprGoTime && right.Type == exprGoTime:
+		// Instants: Equal/Compare, never ==, which also compares the
+		// Location (a tz() value would differ from the same instant).
+		var src string
+		switch op {
+		case "==":
+			src = left.Src + ".Equal(" + right.Src + ")"
+		case "!=":
+			src = "!" + left.Src + ".Equal(" + right.Src + ")"
+		default:
+			src = "(" + left.Src + ".Compare(" + right.Src + ") " + op + " 0)"
+		}
+		return mergeMeta(exprGo{Src: src, Type: exprGoBool}, left, right), nil
 	default:
 		return exprGo{}, fmt.Errorf("cannot compare %s with %s (%s)", left.Type, right.Type, op)
 	}
@@ -690,6 +729,9 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		case exprGoFloat:
 			res := exprGo{Src: fmt.Sprintf("exprfn.BucketFloat64(%s, %d)", arg.Src, int64(d)), Type: exprGoFloat, Imports: []string{exprfnImport}}
 			return mergeMeta(res, arg), nil
+		case exprGoTime:
+			res := exprGo{Src: fmt.Sprintf("ssql.BucketTime(%s, %d)", arg.Src, int64(d)), Type: exprGoTime, Imports: []string{ssqlImport}}
+			return mergeMeta(res, arg), nil
 		}
 		return exprGo{}, fmt.Errorf("bucket() on %s not transpilable (string timestamps use the VM fallback)", arg.Type)
 	case "len":
@@ -817,7 +859,175 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		res := exprGo{Src: fn + "(" + a.Src + ", " + b.Src + ")", Type: exprGoBool, Imports: []string{"strings"}}
 		return mergeMeta(res, a, b), nil
 	}
+	if res, handled, err := e.timeCall(name, args); handled {
+		return res, err
+	}
 	return exprGo{}, fmt.Errorf("function %q has no native Go emission", name)
+}
+
+// timeCall transpiles the calendar functions (DFC147 §4) over a time
+// operand: parts, date_trunc, date_add, date_diff, tz, now, and bucket
+// over a time. Units and zones must be literals (validated here, so the
+// Must* helpers cannot fail at run time). A string operand is refused —
+// the VM parses it per row; a typed program casts the column.
+func (e *exprGoEnv) timeCall(name string, args []ast.Node) (exprGo, bool, error) {
+	isPart := false
+	for _, p := range ssql.TimeParts {
+		if p == name {
+			isPart = true
+		}
+	}
+	lit := func(what string, n ast.Node) (string, error) {
+		s, ok := n.(*ast.StringNode)
+		if !ok {
+			return "", fmt.Errorf("%s() needs a literal %s for native Go emission", name, what)
+		}
+		return s.Value, nil
+	}
+	timeArg := func(n ast.Node) (exprGo, error) {
+		v, err := e.node(n)
+		if err != nil {
+			return exprGo{}, err
+		}
+		if v.Type != exprGoTime {
+			return exprGo{}, fmt.Errorf("%s() over %s: a time column is needed (cast -type F time); the VM reads strings", name, v.Type)
+		}
+		return v, nil
+	}
+	switch {
+	case isPart:
+		if len(args) != 1 {
+			return exprGo{}, true, fmt.Errorf("%s() takes one argument", name)
+		}
+		v, err := timeArg(args[0])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		res := exprGo{Src: fmt.Sprintf("ssql.MustTimePart(%s, %q, %s)", v.Src, name, zoneSrc(v)), Type: exprGoInt, Imports: []string{ssqlImport}}
+		return mergeMeta(res, v), true, nil
+	case name == "date_trunc":
+		if len(args) != 2 {
+			return exprGo{}, true, fmt.Errorf("date_trunc(ts, unit) takes two arguments")
+		}
+		unit, err := lit("unit", args[1])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		if !ssql.ValidCalendarUnit(unit) {
+			return exprGo{}, true, fmt.Errorf("date_trunc: unit %q is not one of %s", unit, strings.Join(ssql.CalendarUnits, ", "))
+		}
+		v, err := timeArg(args[0])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		res := exprGo{Src: fmt.Sprintf("ssql.MustTruncTime(%s, %q, %s)", v.Src, unit, zoneSrc(v)), Type: exprGoTime, Imports: []string{ssqlImport}, zoneVar: v.zoneVar}
+		return mergeMeta(res, v), true, nil
+	case name == "date_add":
+		if len(args) != 3 {
+			return exprGo{}, true, fmt.Errorf("date_add(ts, n, unit) takes three arguments")
+		}
+		unit, err := lit("unit", args[2])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		if !ssql.ValidCalendarUnit(unit) {
+			return exprGo{}, true, fmt.Errorf("date_add: unit %q is not one of %s", unit, strings.Join(ssql.CalendarUnits, ", "))
+		}
+		v, err := timeArg(args[0])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		n, err := e.node(args[1])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		if n.Type != exprGoInt {
+			return exprGo{}, true, fmt.Errorf("date_add: n must be an integer, got %s", n.Type)
+		}
+		res := exprGo{Src: fmt.Sprintf("ssql.MustAddCalendar(%s, int64(%s), %q, %s)", v.Src, n.Src, unit, zoneSrc(v)), Type: exprGoTime, Imports: []string{ssqlImport}, zoneVar: v.zoneVar}
+		return mergeMeta(res, v, n), true, nil
+	case name == "date_diff":
+		if len(args) != 3 {
+			return exprGo{}, true, fmt.Errorf("date_diff(unit, start, end) takes three arguments")
+		}
+		unit, err := lit("unit", args[0])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		if !ssql.ValidCalendarUnit(unit) {
+			return exprGo{}, true, fmt.Errorf("date_diff: unit %q is not one of %s", unit, strings.Join(ssql.CalendarUnits, ", "))
+		}
+		a, err := timeArg(args[1])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		b, err := timeArg(args[2])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		res := exprGo{Src: fmt.Sprintf("ssql.MustDiffCalendar(%q, %s, %s, %s)", unit, a.Src, b.Src, zoneSrc(a)), Type: exprGoInt, Imports: []string{ssqlImport}}
+		return mergeMeta(res, a, b), true, nil
+	case name == "tz":
+		if len(args) != 2 {
+			return exprGo{}, true, fmt.Errorf("tz(ts, zone) takes two arguments")
+		}
+		zone, err := lit("zone", args[1])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		if _, err := time.LoadLocation(zone); err != nil {
+			return exprGo{}, true, fmt.Errorf("tz: %v", err)
+		}
+		v, err := timeArg(args[0])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		varName := "exprLoc" + exprGoHash(zone)
+		decl := fmt.Sprintf("var %s = ssql.MustLoadZone(%s)", varName, strconv.Quote(zone))
+		res := exprGo{Src: v.Src + ".In(" + varName + ")", Type: exprGoTime, Imports: []string{ssqlImport}, Hoisted: []string{decl}, zoneVar: varName}
+		return mergeMeta(res, v), true, nil
+	case name == "now":
+		if len(args) != 0 {
+			return exprGo{}, true, fmt.Errorf("now() takes no arguments")
+		}
+		return exprGo{Src: "time.Now().In(ssql.StreamLocation())", Type: exprGoTime, Imports: []string{"time", ssqlImport}}, true, nil
+	case name == "strftime":
+		if len(args) != 2 {
+			return exprGo{}, true, fmt.Errorf("strftime(ts, pattern) takes two arguments")
+		}
+		pattern, err := lit("pattern", args[1])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		if _, _, err := ssql.StrftimeLayout(pattern); err != nil {
+			return exprGo{}, true, err
+		}
+		v, err := timeArg(args[0])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		res := exprGo{Src: fmt.Sprintf("ssql.MustFormatStrftime(%s, %s, %s)", v.Src, strconv.Quote(pattern), zoneSrc(v)), Type: exprGoString, Imports: []string{ssqlImport}}
+		return mergeMeta(res, v), true, nil
+	case name == "strptime", name == "date" && len(args) == 2:
+		pattern, err := lit("pattern", args[1])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		if _, err := ssql.TimeLayout(pattern); err != nil {
+			return exprGo{}, true, err
+		}
+		v, err := e.node(args[0])
+		if err != nil {
+			return exprGo{}, true, err
+		}
+		if v.Type != exprGoString {
+			return exprGo{}, true, fmt.Errorf("%s(): the text must be a string, got %s", name, v.Type)
+		}
+		fieldName, _ := ssql.ExprFieldName(args[0]) // names the column in the error a bad value raises
+		res := exprGo{Src: fmt.Sprintf("ssql.MustParseTimeLayout(%s, %s, %q)", v.Src, strconv.Quote(pattern), fieldName), Type: exprGoTime, Imports: []string{ssqlImport}}
+		return mergeMeta(res, v), true, nil
+	}
+	return exprGo{}, false, nil
 }
 
 // exprGoFieldArg extracts the literal field name from a has("field") /
@@ -960,6 +1170,8 @@ func exprCoerceFunc(f lib.TypedSchemaField) (string, bool) {
 		return "exprvm.MustCoerceString", true
 	case "bool":
 		return "exprvm.MustCoerceBool", true
+	case "time.Time":
+		return "exprvm.MustCoerceTime", true
 	}
 	return "", false
 }

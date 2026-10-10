@@ -84,7 +84,9 @@ func exprDate(args ...any) (any, error) {
 			return nil, fmt.Errorf("date(value, layout[, zone]) takes strings")
 		}
 		if len(args) == 2 {
-			t, err := time.Parse(layout, s)
+			// A % pattern is strftime (DFC147 §4.3); anything else the Go
+			// layout it always was.
+			t, err := ParseStrftime(s, layout)
 			if err != nil {
 				return nil, fmt.Errorf("invalid date %v", err)
 			}
@@ -111,7 +113,13 @@ func exprDate(args ...any) (any, error) {
 // (expr.Function) rather than through the environment. A validator that
 // checks an expression's identifiers against the record must not read a
 // call to one of these as a reference to a field of the same name.
-var ExprCompiledFunctions = map[string]bool{"date": true}
+var ExprCompiledFunctions = func() map[string]bool {
+	m := map[string]bool{"date": true, "date_trunc": true, "date_add": true, "date_diff": true, "tz": true, "now": true, "strftime": true, "strptime": true}
+	for _, p := range TimeParts {
+		m[p] = true
+	}
+	return m
+}()
 
 // ExprDate replaces expr-lang's builtin date() with ssql's. It is a
 // compile-time function, not an environment entry, so a record field

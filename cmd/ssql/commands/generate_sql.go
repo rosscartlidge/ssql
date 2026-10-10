@@ -244,6 +244,8 @@ func assembleSQL(input io.Reader) (string, error) {
 	q := &sqlQuery{}
 	sqlTimeColumns = map[string]bool{} // per assembly
 	sqlColumnKinds = map[string]string{}
+	sqlZone, sqlNeedsZone = ssql.StreamZoneName(), false // the from stage's -tz replaces the fallback
+	sqlTextTimeColumns = map[string]bool{}
 
 	// Collect func fragments (subprocess sources for joins) and build subqueries
 	var funcFrags []*lib.CodeFragment
@@ -491,10 +493,16 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// This is a copy of from's grammar (DFC115 legacy exception).
 		flagArity := map[string]int{
 			"-sample": 1, "-sample-seed": 1, "-last": 1, "-type": 2, "-t": 2,
-			"-default-type": 1, "-dt": 1, "-source": 1, "-sidecar": 1, cf.ArgFlag: 1,
+			"-default-type": 1, "-dt": 1, "-source": 1, "-sidecar": 1, "-tz": 1, "-format": 2, cf.ArgFlag: 1,
 		}
 		var files []string
 		rest := args[1:]
+		// The pipeline's zone, materialised by the source (DFC147 §5.7).
+		for i := 0; i+1 < len(rest); i++ {
+			if rest[i] == "-tz" {
+				sqlZone = rest[i+1]
+			}
+		}
 		for i := 0; i < len(rest); i++ {
 			a := rest[i]
 			if a == "--" {
@@ -520,7 +528,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 		if len(files) == 1 {
 			typeFile = files[0]
 		}
-		typeOverrides, err := sidecarTypesFromArgs(rest, typeFile)
+		typeOverrides, timeFormats, err := sidecarTypesFromArgs(rest, typeFile)
 		if err != nil {
 			return err
 		}
@@ -554,12 +562,46 @@ func translateFrom(q *sqlQuery, args []string) error {
 				// `update -set-expr new …` is an added column, not a
 				// `* REPLACE` of one that does not exist (DFC144 Level 1
 				// found this: every JSON source left q.columns unknown).
-				q.columns = jsonHeader(files[0])
+				var headed bool
+				q.columns, headed = jsonHeader(files[0])
+				if headed && sqlDialectCur == dialectDuckDB {
+					// A `_schema` header line is a row of NULLs to the
+					// engine's JSON reader (and a `_schema` STRUCT column):
+					// drop both, so an unfiltered stream has no ghost row.
+					q.fromClause = "(SELECT * EXCLUDE (_schema) FROM " + q.fromClause + " WHERE _schema IS NULL)"
+				}
 			}
 			if q.csvSource != "" {
 				applyTypeOverrideKinds(typeOverrides)
 				q.csvTypes = duckTypesOption(typeOverrides)
-				if sqlDialectCur == dialectDuckDB {
+				if len(timeFormats) > 0 {
+					// -format COL PATTERN (DFC147 §7.2): DuckDB's read_csv
+					// takes ONE timestampformat, honoured for naive
+					// TIMESTAMP columns only (probed 2026-10-10: a
+					// TIMESTAMPTZ column reads NULL under it), so the
+					// formatted columns load naive and are cast to the
+					// instant type in the session's UTC — ssql reads a
+					// zoneless cell as UTC too.
+					if sqlDialectCur != dialectDuckDB {
+						return dialectRefuse("from -format", "read the column as text and cast -format it")
+					}
+					var pattern string
+					var casts []string
+					for _, col := range slices.Sorted(maps.Keys(timeFormats)) {
+						p := timeFormats[col]
+						if !ssql.IsStrftime(p) {
+							return fmt.Errorf("from -format %s: a Go layout has no SQL translation — write the pattern as strftime (%%d/%%m/%%Y)", col)
+						}
+						if pattern != "" && p != pattern {
+							return fmt.Errorf("from -format: DuckDB's read_csv takes one timestamp format per read (%q and %q given) — cast -format the second column instead", pattern, p)
+						}
+						pattern = p
+						q.csvTypes = strings.Replace(q.csvTypes, quoteSQLString(col)+": 'TIMESTAMPTZ'", quoteSQLString(col)+": 'TIMESTAMP'", 1)
+						casts = append(casts, sqlInstantOfWall(quoteIdent(col), sqlZone)+" AS "+quoteIdent(col)) // the cells are a wall clock in the pipeline zone
+					}
+					q.csvTypes += ", timestampformat='" + escapeSQL(pattern) + "'"
+					q.fromClause = "(SELECT * REPLACE (" + strings.Join(casts, ", ") + ") FROM " + duckReadCSV([]string{q.csvSource}, q.csvDelim, q.csvTypes) + ")"
+				} else if sqlDialectCur == dialectDuckDB {
 					q.fromClause = duckReadCSV([]string{q.csvSource}, q.csvDelim, q.csvTypes)
 				}
 			}
@@ -1939,9 +1981,26 @@ func translateWindow(q *sqlQuery, args []string) error {
 		}
 
 		if len(c.orderBy) > 0 {
+			// A time-width RANGE frame (14d) orders by a time: exec parses a
+			// string timestamp column for it (RangeTime), so the SQL casts a
+			// column the assembly does not know as a time to the instant
+			// type (DuckDB's sniffer no longer makes a DATE of it; DFC147).
+			timeRange := false
+			for _, b := range []string{c.rangeP, c.rangeF} {
+				if _, isTime, err := parseRangeBound(b); b != "" && err == nil && isTime {
+					timeRange = true
+				}
+			}
 			quoted := make([]string, len(c.orderBy))
 			for j, f := range c.orderBy {
-				quoted[j] = quoteIdent(f)
+				switch {
+				case sqlTimeColumns[f]:
+					quoted[j] = sqlTimeColumnRef(f)
+				case timeRange:
+					quoted[j] = "CAST(" + quoteIdent(f) + " AS " + sqlTimestampType() + ")"
+				default:
+					quoted[j] = quoteIdent(f)
+				}
 				if c.desc {
 					quoted[j] += " DESC"
 				}
@@ -2112,6 +2171,15 @@ func translateCast(q *sqlQuery, args []string) error {
 			}
 		}
 	}
+	// -format COL PATTERN: the field parses through strptime (DFC147 §7.2);
+	// -type COL time is implied.
+	formats := timeFormatsFromArgs(args)
+	args = append([]string(nil), args...)
+	for _, col := range slices.Sorted(maps.Keys(formats)) {
+		if !containsTypeFor(args, col) {
+			args = append(args, "-type", col, "time")
+		}
+	}
 	var replacements []sqlPair
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-type" && i+2 < len(args) {
@@ -2120,6 +2188,7 @@ func translateCast(q *sqlQuery, args []string) error {
 			kindBefore := sqlColumnKinds[field] // the cast below updates it
 			if ft, err := ssql.ParseFieldType(typeName); err == nil {
 				sqlColumnKinds[field] = ft.String()
+				delete(sqlTextTimeColumns, field) // the cast makes it a real timestamp
 				if ft == ssql.FieldTypeTime {
 					sqlTimeColumns[field] = true
 				} else {
@@ -2127,6 +2196,13 @@ func translateCast(q *sqlQuery, args []string) error {
 				}
 			}
 			expr := fmt.Sprintf("%s(%s AS %s)", castFn, quoteIdent(field), sqlType)
+			if pattern := formats[field]; pattern != "" {
+				if !ssql.IsStrftime(pattern) {
+					return fmt.Errorf("cast -format %s: a Go layout has no SQL translation — write the pattern as strftime (%%d/%%m/%%Y)", field)
+				}
+				sqlNeedsZone = true
+				expr = sqlStrptime(quoteIdent(field), pattern)
+			}
 			if ft, err := ssql.ParseFieldType(typeName); err == nil && ft == ssql.FieldTypeInt && kindBefore != "int" {
 				// ssql's float → int TRUNCATES (2.9 → 2, as Go and pandas do);
 				// SQL's CAST rounds (DuckDB and Postgres give 3). Truncate
@@ -2263,6 +2339,14 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			valueSQL, err := exprToSQLParams(args[i+2], clauseParams[clauseIdx])
 			if err != nil {
 				return fmt.Errorf("update -set-expr: %w", err)
+			}
+			// A time-valued expression (date_trunc, date_add, tz, now, a
+			// time column) makes the column a time for later stages'
+			// bucket()/calendar functions (DFC147).
+			if exprResultIsTime(args[i+2]) {
+				sqlColumnKinds[args[i+1]] = "time"
+				sqlTimeColumns[args[i+1]] = true
+				delete(sqlTextTimeColumns, args[i+1])
 			}
 			assignments = append(assignments, assignment{
 				clause:   clauseIdx,
@@ -2401,7 +2485,7 @@ func mapTypeToSQL(typeName string) string {
 	case "bool", "boolean":
 		return "BOOLEAN"
 	case "time", "timestamp", "datetime":
-		return "TIMESTAMP"
+		return sqlTimestampType()
 	case "date":
 		return "DATE"
 	default:
@@ -2449,6 +2533,7 @@ func renderSQL(q *sqlQuery) string {
 		}
 		sb.WriteString("\n")
 	}
+	renderZonePrologue(&sb)
 	renderPGPrologue(&sb)
 
 	sb.WriteString(renderSelect(q))
@@ -2555,9 +2640,14 @@ func duckReadCSV(files []string, delim byte, extra string) string {
 	if len(quoted) > 1 {
 		src = "[" + strings.Join(quoted, ", ") + "]"
 	}
-	opts := `header=true, quote='"', escape='"', delim=','`
+	// The same inference ssql's reader applies — int, float, bool, else
+	// text (DFC133): DuckDB's sniffer would also make a DATE or TIMESTAMP
+	// of a date-looking column, which ssql never does without -type, and
+	// a later cast -format / strptime of that column then met a DATE
+	// (DFC147). A -type or sidecar still names the exact type in types={}.
+	opts := `header=true, quote='"', escape='"', delim=',', auto_type_candidates=['BIGINT', 'DOUBLE', 'BOOLEAN', 'VARCHAR']`
 	if delim == '\t' {
-		opts = `header=true, quote='"', escape='"', delim='\t'`
+		opts = `header=true, quote='"', escape='"', delim='\t', auto_type_candidates=['BIGINT', 'DOUBLE', 'BOOLEAN', 'VARCHAR']`
 	}
 	if extra != "" {
 		opts += ", " + extra
@@ -2590,7 +2680,7 @@ func duckColumnType(typeName string) string {
 	case "bool":
 		return "BOOLEAN"
 	case "time":
-		return "TIMESTAMP"
+		return sqlTimestampType()
 	}
 	return "VARCHAR"
 }
@@ -3258,20 +3348,23 @@ func translateExtract(q *sqlQuery, op *lib.Op, args []string) error {
 // header's field list when the file has one), with sqlColumnKinds seeded
 // from the first object's values ("json" for a nested value). nil when
 // the file cannot be read, which leaves the schema unknown as before.
-func jsonHeader(path string) []string {
+func jsonHeader(path string) (cols []string, headed bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer f.Close()
 	fields, types, records, headed := openJSONSource(bufio.NewReader(f))
 	if headed {
 		for _, c := range fields {
 			sqlColumnKinds[c] = types[c]
+			if types[c] == "time" {
+				sqlTimeColumns[c] = true // the calendar functions read it (DFC147) …
+				sqlTextTimeColumns[c] = true // … through a cast: the engine reads the JSON text as VARCHAR
+			}
 		}
-		return append([]string(nil), fields...)
+		return append([]string(nil), fields...), true
 	}
-	var cols []string
 	func() {
 		defer func() { _ = recover() }() // a malformed first line: unknown schema
 		for rec := range records {
@@ -3284,7 +3377,7 @@ func jsonHeader(path string) []string {
 			break
 		}
 	}()
-	return cols
+	return cols, false
 }
 
 // translateExplode (DFC144 Level 2): DuckDB's UNNEST in the select list —
@@ -3330,3 +3423,17 @@ func translateExplode(q *sqlQuery, op *lib.Op, args []string) error {
 	q.selectExprs = append(q.selectExprs, sel)
 	return nil
 }
+
+// containsTypeFor reports whether args already carry `-type col …`.
+func containsTypeFor(args []string, col string) bool {
+	for i := 0; i+2 < len(args); i++ {
+		if (args[i] == "-type" || args[i] == "-t") && args[i+1] == col {
+			return true
+		}
+	}
+	return false
+}
+
+// quoteSQLString renders s as a SQL string literal (the spelling
+// duckTypesOption uses for column names).
+func quoteSQLString(s string) string { return "'" + escapeSQL(s) + "'" }

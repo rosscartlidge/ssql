@@ -101,12 +101,10 @@ func compileExpr(expression string, params *paramBinding) (func(ssql.Record) (an
 	sampleEnv := make(map[string]interface{})
 	exprHelpers(sampleEnv, func(string) bool { return false }, func(string) (any, bool) { return nil, false })
 
-	program, err := expr.Compile(expression,
+	program, err := expr.Compile(expression, append([]expr.Option{
 		expr.Env(sampleEnv),
 		expr.AllowUndefinedVariables(),
-		ssql.ExprFieldShadowing(),
-		ssql.ExprDate(),
-	)
+	}, ssql.ExprStandardOptions()...)...)
 	if err != nil {
 		return nil, fmt.Errorf("compile expression: %w", err)
 	}
@@ -223,6 +221,9 @@ func (v *identifierVisitor) Visit(node *ast.Node) {
 		}
 	}
 	if name, ok := ssql.ExprFieldName(*node); ok && name != "$env" {
+		if strings.HasPrefix(name, ssql.ExprFnAliasPrefix) {
+			return // the alias ExprFieldShadowing gave a calendar-function call
+		}
 		v.uses[name]++
 		if !v.seen[name] {
 			v.seen[name] = true

@@ -45,6 +45,16 @@ type CSVConfig struct {
 	TypeOverrides map[string]FieldType // Optional: override auto-detection for specific fields
 	DefaultType   FieldType            // Optional: default type for all fields (FieldTypeAuto = auto-detect)
 	InferRows     int                  // Leading data rows sampled to infer column types (0 = DefaultInferRows)
+	TimeFormats   map[string]string    // Optional: a time column's pattern (strftime "%d/%m/%Y" or a Go layout), when its cells are not RFC 3339 (DFC147 §7.2)
+	TimeFormat    string               // Optional, writing: render every time with this pattern on the pipeline zone's wall clock (to csv -time-format); "" = RFC 3339 Nano
+}
+
+// CSVConfigWithTimeFormat is the default config with an output time
+// pattern — what a generated program passes for `to csv -time-format`.
+func CSVConfigWithTimeFormat(pattern string) CSVConfig {
+	c := DefaultCSVConfig()
+	c.TimeFormat = pattern
+	return c
 }
 
 // FieldType represents the type to use when parsing CSV fields
@@ -243,7 +253,7 @@ func WriteCSVToWriter(sb iter.Seq[Record], writer io.Writer, config ...CSVConfig
 		row := make([]string, len(fields))
 		for i, field := range fields {
 			if value, exists := Get[any](record, field); exists {
-				row[i] = formatValue(value)
+				row[i] = formatValueIn(value, cfg.TimeFormat)
 			}
 		}
 
@@ -936,11 +946,13 @@ func parseSchemaHeaderLine(line []byte) (*Schema, bool) {
 		Schema struct {
 			Fields []string          `json:"fields"`
 			Types  map[string]string `json:"types"`
+			TZ     string            `json:"tz"`
 		} `json:"_schema"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(line), &hdr); err != nil {
 		return nil, false
 	}
+	AdoptStreamZone(hdr.Schema.TZ)
 	if len(hdr.Schema.Fields) == 0 {
 		// Not a schema header (or an empty one — treat as data).
 		return nil, false
@@ -1004,15 +1016,7 @@ func WriteJSONLWithInferredSchemaToWriter(sb iter.Seq[Record], writer io.Writer)
 
 	// Emit the schema header. Using encoding/json directly keeps the
 	// ssql package free of cross-package dependencies on cmd/ssql/lib.
-	header := struct {
-		Schema struct {
-			Fields []string          `json:"fields"`
-			Types  map[string]string `json:"types"`
-		} `json:"_schema"`
-	}{}
-	header.Schema.Fields = fields
-	header.Schema.Types = types
-	hdr, err := json.Marshal(&header)
+	hdr, err := json.Marshal(wireSchemaHeader(fields, types))
 	if err != nil {
 		return fmt.Errorf("marshaling _schema header: %w", err)
 	}
@@ -1065,6 +1069,8 @@ func inferJSONType(v any) string {
 		return "string"
 	case JSONString, []any, Record, map[string]any:
 		return "json"
+	case time.Time:
+		return "time" // the wire type (DFC128 D1); was "string" until DFC147
 	default:
 		return "string"
 	}
@@ -1402,16 +1408,44 @@ func parseValue(s string) any {
 // displayValue renders a value for the human-facing sinks (table,
 // markdown): %v, except a time, which is RFC 3339 like everywhere else —
 // Go's Time.String() ("2026-01-02 10:30:00 +0000 UTC") is a debug form.
-func displayValue(value any) string {
+func displayValue(value any) string { return displayValueIn(value, "") }
+
+// displayValueIn is displayValue with a sink's -time-format pattern
+// (FormatTimePattern; "" is RFC 3339).
+func displayValueIn(value any, timeFormat string) string {
 	if t, ok := value.(time.Time); ok {
-		return t.Format(time.RFC3339Nano)
+		return FormatTimePattern(t, timeFormat)
 	}
 	return fmt.Sprintf("%v", value)
 }
 
+// DisplayOptions configures the table and markdown writers: column order
+// and selection as DisplayTableWithFields takes them, the width cap, the
+// streaming sample size (0 = buffer every row for exact widths), and the
+// time pattern a sink renders time columns with (DFC147 §7.3).
+type DisplayOptions struct {
+	MaxWidth      int
+	Fields        []string
+	OnlySpecified bool
+	Sample        int
+	TimeFormat    string
+}
+
+// DisplayTableOpts prints records as a table per the options.
+func DisplayTableOpts(w io.Writer, records iter.Seq[Record], o DisplayOptions) {
+	if o.Sample > 0 {
+		displayTableStreaming(w, records, o)
+		return
+	}
+	displayTableBuffered(w, records, o)
+}
+
 // formatValue converts a value to string for output. A missing value
 // (nil slot — DFC124) renders as an empty cell, never "<nil>".
-func formatValue(value any) string {
+func formatValue(value any) string { return formatValueIn(value, "") }
+
+// formatValueIn is formatValue with a sink's time pattern.
+func formatValueIn(value any, timeFormat string) string {
 	if value == nil {
 		return ""
 	}
@@ -1434,8 +1468,8 @@ func formatValue(value any) string {
 		return strconv.FormatBool(v)
 	case time.Time:
 		// RFC 3339, the wire form — never Go's Time.String(), which
-		// nothing parses back (DFC128 F3).
-		return v.Format(time.RFC3339Nano)
+		// nothing parses back (DFC128 F3) — or the sink's pattern.
+		return FormatTimePattern(v, timeFormat)
 	case []any:
 		// Format slice as comma-separated values (for Collect aggregation results)
 		var stringValues []string
@@ -1685,6 +1719,12 @@ func resolveDisplayColumns(columnSet map[string]bool, allRecords []Record, field
 // <br> so cells can't break the table. Column selection/ordering follows
 // the same rules as [DisplayTableWithFields].
 func WriteMarkdownTo(w io.Writer, records iter.Seq[Record], fieldOrder []string, onlySpecified bool) error {
+	return WriteMarkdownOpts(w, records, DisplayOptions{Fields: fieldOrder, OnlySpecified: onlySpecified})
+}
+
+// WriteMarkdownOpts is WriteMarkdownTo with DisplayOptions (a time pattern).
+func WriteMarkdownOpts(w io.Writer, records iter.Seq[Record], o DisplayOptions) error {
+	fieldOrder, onlySpecified := o.Fields, o.OnlySpecified
 	var allRecords []Record
 	columnSet := make(map[string]bool)
 	for record := range records {
@@ -1740,7 +1780,7 @@ func WriteMarkdownTo(w io.Writer, records iter.Seq[Record], fieldOrder []string,
 		for _, col := range columns {
 			cell := ""
 			if v, ok := values[col]; ok {
-				cell = esc(displayValue(v))
+				cell = esc(displayValueIn(v, o.TimeFormat))
 			}
 			b.WriteString(" " + cell + " |")
 		}
@@ -1752,6 +1792,11 @@ func WriteMarkdownTo(w io.Writer, records iter.Seq[Record], fieldOrder []string,
 
 // DisplayTableWithFieldsTo is like [DisplayTableWithFields] but writes to the given writer.
 func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth int, fieldOrder []string, onlySpecified bool) {
+	displayTableBuffered(w, records, DisplayOptions{MaxWidth: maxWidth, Fields: fieldOrder, OnlySpecified: onlySpecified})
+}
+
+func displayTableBuffered(w io.Writer, records iter.Seq[Record], o DisplayOptions) {
+	maxWidth, fieldOrder, onlySpecified := o.MaxWidth, o.Fields, o.OnlySpecified
 	// Collect records and determine columns
 	var allRecords []Record
 	columnSet := make(map[string]bool)
@@ -1781,7 +1826,7 @@ func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth in
 
 	for _, record := range allRecords {
 		for field, value := range record.All() {
-			strValue := displayValue(value)
+			strValue := displayValueIn(value, o.TimeFormat)
 			if len(strValue) > colWidths[field] {
 				colWidths[field] = capWidth(len(strValue), maxWidth)
 			}
@@ -1820,7 +1865,7 @@ func DisplayTableWithFieldsTo(w io.Writer, records iter.Seq[Record], maxWidth in
 			// Get value as any type
 			var strValue string
 			if value, exists := Get[any](record, col); exists {
-				strValue = displayValue(value)
+				strValue = displayValueIn(value, o.TimeFormat)
 			} else {
 				strValue = ""
 			}
@@ -1862,6 +1907,11 @@ func DisplayTableStreaming(records iter.Seq[Record], maxWidth int, sampleSize in
 // writing to the specified writer. Samples the first sampleSize records to determine
 // column widths, then streams remaining records without buffering.
 func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int, sampleSize int, fieldOrder []string, onlySpecified bool) {
+	displayTableStreaming(w, records, DisplayOptions{MaxWidth: maxWidth, Sample: sampleSize, Fields: fieldOrder, OnlySpecified: onlySpecified})
+}
+
+func displayTableStreaming(w io.Writer, records iter.Seq[Record], o DisplayOptions) {
+	maxWidth, sampleSize, fieldOrder, onlySpecified := o.MaxWidth, o.Sample, o.Fields, o.OnlySpecified
 	if sampleSize <= 0 {
 		sampleSize = 100
 	}
@@ -1895,7 +1945,7 @@ func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int
 	// streaming mode commits to alignment after the sample — if a
 	// later non-numeric value lands in a "right" column we just
 	// keep right-aligning it (truncating widths is the same trade).
-	colWidths, colRightAlign := calculateColumnWidthsAndAlignment(columns, sample, maxWidth)
+	colWidths, colRightAlign := calculateColumnWidthsAndAlignment(columns, sample, maxWidth, o.TimeFormat)
 
 	// Print header and separator
 	printTableHeader(w, columns, colWidths)
@@ -1903,7 +1953,7 @@ func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int
 
 	// Print sampled records
 	for _, record := range sample {
-		printTableRow(w, columns, colWidths, colRightAlign, record, maxWidth)
+		printTableRow(w, columns, colWidths, colRightAlign, record, maxWidth, o.TimeFormat)
 	}
 
 	// Phase 2: stream remaining records
@@ -1912,7 +1962,7 @@ func DisplayTableStreamingTo(w io.Writer, records iter.Seq[Record], maxWidth int
 		if !ok {
 			break
 		}
-		printTableRow(w, columns, colWidths, colRightAlign, record, maxWidth)
+		printTableRow(w, columns, colWidths, colRightAlign, record, maxWidth, o.TimeFormat)
 	}
 }
 
@@ -2013,14 +2063,14 @@ func (c *columnOrder) add(field, prev string) {
 }
 
 // calculateColumnWidths calculates the maximum display width for each column
-func calculateColumnWidths(columns []string, records []Record, maxWidth int) map[string]int {
+func calculateColumnWidths(columns []string, records []Record, maxWidth int, timeFormat string) map[string]int {
 	colWidths := make(map[string]int)
 	for _, col := range columns {
 		colWidths[col] = len(col) // Start with header width
 	}
 	for _, record := range records {
 		for field, value := range record.All() {
-			strValue := displayValue(value)
+			strValue := displayValueIn(value, timeFormat)
 			if len(strValue) > colWidths[field] {
 				colWidths[field] = capWidth(len(strValue), maxWidth)
 			}
@@ -2033,7 +2083,7 @@ func calculateColumnWidths(columns []string, records []Record, maxWidth int) map
 // also decides per-column alignment. A column is right-aligned when
 // every sampled value is numeric/bool; any non-numeric value in the
 // sample forces it to left-aligned.
-func calculateColumnWidthsAndAlignment(columns []string, records []Record, maxWidth int) (map[string]int, map[string]bool) {
+func calculateColumnWidthsAndAlignment(columns []string, records []Record, maxWidth int, timeFormat string) (map[string]int, map[string]bool) {
 	colWidths := make(map[string]int)
 	colRight := make(map[string]bool, len(columns))
 	for _, col := range columns {
@@ -2042,7 +2092,7 @@ func calculateColumnWidthsAndAlignment(columns []string, records []Record, maxWi
 	}
 	for _, record := range records {
 		for field, value := range record.All() {
-			strValue := displayValue(value)
+			strValue := displayValueIn(value, timeFormat)
 			if len(strValue) > colWidths[field] {
 				colWidths[field] = capWidth(len(strValue), maxWidth)
 			}
@@ -2080,14 +2130,14 @@ func printTableSeparator(w io.Writer, columns []string, colWidths map[string]int
 // printTableRow prints a single data row. colRight selects per-column
 // alignment: right-justified when true (numeric/bool), left-justified
 // when false.
-func printTableRow(w io.Writer, columns []string, colWidths map[string]int, colRight map[string]bool, record Record, maxWidth int) {
+func printTableRow(w io.Writer, columns []string, colWidths map[string]int, colRight map[string]bool, record Record, maxWidth int, timeFormat string) {
 	for i, col := range columns {
 		if i > 0 {
 			fmt.Fprint(w, "   ")
 		}
 		var strValue string
 		if value, exists := Get[any](record, col); exists {
-			strValue = displayValue(value)
+			strValue = displayValueIn(value, timeFormat)
 		}
 		strValue = truncateCell(strValue, maxWidth)
 		if colRight[col] {
@@ -2684,15 +2734,7 @@ func TeeFile(filename string, fieldOrder ...string) Filter[Record, Record] {
 						v, _ := Get[any](r, fld)
 						types[fld] = inferJSONType(v)
 					}
-					header := struct {
-						Schema struct {
-							Fields []string          `json:"fields"`
-							Types  map[string]string `json:"types"`
-						} `json:"_schema"`
-					}{}
-					header.Schema.Fields = fields
-					header.Schema.Types = types
-					hdr, err := json.Marshal(&header)
+					hdr, err := json.Marshal(wireSchemaHeader(fields, types))
 					if err != nil {
 						die(err)
 					}
@@ -2749,4 +2791,22 @@ func pathHeadIn(columns map[string]bool, path string) bool {
 		}
 	}
 	return false
+}
+
+// wireSchemaHeader is the `_schema` header line's value for the root
+// package's writers (generated programs' JSONL sink, TeeFile): fields,
+// types and the pipeline's zone (DFC147 §5.7), so a stream a generated
+// program writes carries the zone exactly as the CLI's does.
+func wireSchemaHeader(fields []string, types map[string]string) any {
+	header := struct {
+		Schema struct {
+			Fields []string          `json:"fields"`
+			Types  map[string]string `json:"types"`
+			TZ     string            `json:"tz,omitempty"`
+		} `json:"_schema"`
+	}{}
+	header.Schema.Fields = fields
+	header.Schema.Types = types
+	header.Schema.TZ = StreamZoneName()
+	return &header
 }

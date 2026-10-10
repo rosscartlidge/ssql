@@ -39,8 +39,14 @@ func runTypedPipeline(t *testing.T, bin, pipeline string) string {
 // goRunGenerated writes src to a temp module, builds it, and returns
 // the program's stdout.
 func goRunGenerated(t *testing.T, src string) string {
+	return goRunGeneratedEnv(t, src, nil)
+}
+
+// goRunGeneratedEnv is goRunGenerated with extra environment for the run
+// (the equivalence harness's TZ pin, DFC147).
+func goRunGeneratedEnv(t *testing.T, src string, env []string) string {
 	t.Helper()
-	out, err := goRunGeneratedResult(t, src)
+	out, err := goRunGeneratedModuleEnv(t, "typedtest", map[string]string{"main.go": src}, env)
 	if err != nil {
 		t.Fatalf("run generated: %v\n%s", err, out)
 	}
@@ -63,6 +69,12 @@ func goRunGeneratedResult(t *testing.T, src string) (string, error) {
 // prints every file. Library mode (generate go -package) needs the
 // multi-file form: the generated package plus a driver main.
 func goRunGeneratedModule(t *testing.T, module string, files map[string]string) (string, error) {
+	return goRunGeneratedModuleEnv(t, module, files, nil)
+}
+
+// goRunGeneratedModuleEnv is goRunGeneratedModule with extra environment
+// for the program's run (not its build).
+func goRunGeneratedModuleEnv(t *testing.T, module string, files map[string]string, env []string) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	for name, src := range files {
@@ -98,6 +110,7 @@ func goRunGeneratedModule(t *testing.T, module string, files map[string]string) 
 	}
 	run := exec.Command(filepath.Join(dir, "prog"))
 	run.Dir = dir
+	run.Env = append(os.Environ(), env...)
 	out, err := run.CombinedOutput()
 	return string(out), err
 }

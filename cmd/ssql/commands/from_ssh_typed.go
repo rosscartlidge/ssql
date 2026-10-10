@@ -139,7 +139,7 @@ func generateFromSSHTypedCode(host, path, remoteBin string, pipelineArgs []strin
 	parallelImports := append([]string{}, imports...)
 	serialCode := fmt.Sprintf("%s\n\trecords := typed.FromRecords(recordsRaw, %s)", landing, conv)
 
-	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
+	frag := fromInitFragment("records", parallelCode, parallelImports)
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}

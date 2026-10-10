@@ -682,7 +682,7 @@ func AssembleCodeFragmentsWith(input io.Reader, opts AssembleOptions) (string, e
 	// emitted. This replaced fixErrorHandling's textual rewriting of
 	// error returns (DFC123 slice 4 — protocol by contract, not by
 	// string surgery).
-	writeMainCallingRun(&code, len(allParams) > 0)
+	writeMainCallingRun(&code, len(allParams) > 0, PipelineZone(fragments))
 
 	// Add init fragments (the main data source)
 	for _, frag := range initFragments {
@@ -1024,8 +1024,14 @@ func findString(s, substr string) int {
 // any), calls run(), and reports its error on stderr with exit 1. The
 // pipeline body is emitted into run() by the caller, which must close
 // it with "return nil\n}". Shared by the record and typed assemblers.
-func writeMainCallingRun(code *strings.Builder, hasParams bool) {
+func writeMainCallingRun(code *strings.Builder, hasParams bool, zone string) {
 	code.WriteString("func main() {\n")
+	if zone != "" {
+		// The pipeline's zone, resolved by the source when the program
+		// was generated (DFC147 §5.7): the program answers the same
+		// wherever it runs, like the SQL that names it.
+		fmt.Fprintf(code, "\tssql.MustSetStreamZone(%q)\n", zone)
+	}
 	if hasParams {
 		code.WriteString("\tflag.Parse()\n")
 	}
@@ -1132,4 +1138,22 @@ func startsWith(s, prefix string) bool {
 		}
 	}
 	return true
+}
+
+// PipelineZone is the zone the pipeline's source resolved, materialised
+// into the init fragment's argv as `-tz NAME` (DFC147 §5.7); "" when no
+// source names one (an older fragment stream), in which case the
+// generated program resolves from its own environment, as the CLI would.
+func PipelineZone(fragments []*CodeFragment) string {
+	for _, f := range fragments {
+		if f.Type != "init" || f.Op == nil {
+			continue
+		}
+		for i := 0; i+1 < len(f.Op.Argv); i++ {
+			if f.Op.Argv[i] == "-tz" {
+				return f.Op.Argv[i+1]
+			}
+		}
+	}
+	return ""
 }

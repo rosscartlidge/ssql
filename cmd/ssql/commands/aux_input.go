@@ -70,6 +70,9 @@ func readAuxInput(path string) (iter.Seq[ssql.Record], *lib.Schema, error) {
 			return nil, nil, fmt.Errorf("opening %s: %w", path, err)
 		}
 		sr := lib.ReadJSONLWithSchema(f)
+		if err := ssql.StreamZoneMismatch(); err != nil {
+			return nil, nil, err
+		}
 		if format == "jsonl" {
 			// Bare .jsonl needs the schema header (e.g. `ssql tee`
 			// output); a headerless file must fail LOUDLY.

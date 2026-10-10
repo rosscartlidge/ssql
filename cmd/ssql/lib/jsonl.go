@@ -194,6 +194,11 @@ func readJSONLSchemaAndRecords(r io.Reader, skipped *int64) *SchemaAndRecords {
 	var firstRecord map[string]any
 	if json.Unmarshal(bytes.TrimSpace(firstLine), &firstRecord) == nil {
 		if schema, ok := ParseSchemaHeader(firstRecord); ok {
+			// The stream's zone becomes this process's (DFC147 §5.7):
+			// the first header wins, an explicit -tz is kept, a second
+			// header naming another zone is a mismatch for the joining
+			// command to refuse (ssql.StreamZoneMismatch).
+			ssql.AdoptStreamZone(schema.TZ)
 			return &SchemaAndRecords{Schema: schema, Records: readJSONLWithSchema(br, schema, skipped)}
 		}
 	}

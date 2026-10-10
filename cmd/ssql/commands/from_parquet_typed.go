@@ -68,7 +68,7 @@ func generateFromParquetCodeTyped(filename string, columns []string) error {
 	serialCode := fmt.Sprintf(`records := typed.ReadParquet[%s](*flagInput%s)`, schema.TypeName, colsArg)
 	serialImports := append([]string{}, imports...)
 
-	frag := lib.NewInitFragment("records", parallelCode, parallelImports, getCommandString())
+	frag := fromInitFragment("records", parallelCode, parallelImports)
 	frag.Params = params
 	frag.OutputTypedSchema = schema
 	frag.StructDefs = []string{structDef}

@@ -1,6 +1,7 @@
 package ssql
 
 import (
+	"time"
 	"bufio"
 	"encoding/csv"
 	"encoding/json"
@@ -108,6 +109,23 @@ func parseTimeCell(s string) (any, error) {
 		return t, nil
 	}
 	return nil, errCellType
+}
+
+// parseTimeCellPattern parses a time column whose cells follow a pattern
+// (strftime or a Go layout — TimeLayout). The layout is converted once; a
+// pattern that cannot be parsed makes every cell an error naming it.
+func parseTimeCellPattern(pattern string) cellParser {
+	layout, lerr := TimeLayout(pattern)
+	return func(s string) (any, error) {
+		if lerr != nil {
+			return nil, lerr
+		}
+		t, err := time.ParseInLocation(layout, strings.TrimSpace(s), StreamLocation()) // a local clock: the pipeline zone
+		if err != nil {
+			return nil, errCellType
+		}
+		return t, nil
+	}
 }
 
 // parserForType returns the cell parser for a FieldType.
@@ -341,6 +359,12 @@ func readRows(csvReader rowReader, cfg CSVConfig, yield func(Record, error) bool
 			sampled[i] = len(sample)
 		}
 		parsers[i] = parserForType(types[i])
+		if pattern := cfg.TimeFormats[name]; pattern != "" {
+			// A declared pattern makes the column a time read with it
+			// (-format COL PATTERN, a sidecar's date format).
+			types[i] = FieldTypeTime
+			parsers[i] = parseTimeCellPattern(pattern)
+		}
 	}
 
 	width := schema.Width()

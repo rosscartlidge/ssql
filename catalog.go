@@ -566,6 +566,10 @@ func BuildRemoteCommand(remoteBin, path, format string, pipelineGroups [][]strin
 		// Unknown formats are ignored — use bare "from path" which infers from extension
 		remoteCmd = remoteBin + " from " + ShellQuote(path)
 	}
+	// The local pipeline's zone, not the remote machine's (DFC147 §5.7).
+	if z := StreamZoneName(); z != "" {
+		remoteCmd += " -tz " + ShellQuote(z)
+	}
 	for _, group := range pipelineGroups {
 		quoted := make([]string, len(group))
 		for i, arg := range group {

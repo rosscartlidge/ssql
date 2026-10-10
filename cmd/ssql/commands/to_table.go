@@ -46,6 +46,14 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 			Help("Only show specified fields (hide others)").
 			Done().
 
+		Flag("-time-format").
+			String().
+			Global().
+			Default("").
+			Completer(&cf.StaticCompleter{Options: []string{"%Y-%m-%d", "%Y-%m-%d %H:%M", "%d/%m/%Y", "%H:%M:%S", "%b %-d, %Y", "2006-01-02"}}).
+			Help("Render time columns with a pattern on the pipeline zone's wall clock: -time-format '%Y-%m-%d %H:%M' (strftime, or a Go layout). Default: RFC 3339").
+			Done().
+
 		Flag("FIELDS").
 			String().
 			Variadic().
@@ -95,9 +103,14 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 				}
 			}
 
+			timeFormat, err := sinkTimeFormat(ctx)
+			if err != nil {
+				return err
+			}
+
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
-				return generateToTableCode(maxWidth, fields, onlySpecified)
+				return generateToTableCode(maxWidth, fields, onlySpecified, timeFormat)
 			}
 
 			// Read all records from stdin (with schema if present)
@@ -109,17 +122,15 @@ func registerToTable(cmd *cf.SubcommandBuilder) {
 				fields = schemaAndRecords.Schema.Fields
 			}
 
-			if sampleSize > 0 {
-				ssql.DisplayTableStreamingTo(ctx.Stdout(), records, maxWidth, sampleSize, fields, onlySpecified)
-			} else {
-				ssql.DisplayTableWithFieldsTo(ctx.Stdout(), records, maxWidth, fields, onlySpecified)
-			}
+			ssql.DisplayTableOpts(ctx.Stdout(), records, ssql.DisplayOptions{
+				MaxWidth: maxWidth, Fields: fields, OnlySpecified: onlySpecified, Sample: sampleSize, TimeFormat: timeFormat,
+			})
 			return nil
 		}).
 		Done()
 }
 
-func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) error {
+func generateToTableCode(maxWidth int, fields []string, onlySpecified bool, timeFormat string) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -167,40 +178,44 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 		// when the previous fragment produces a Stream.
 		_ = prevIsStream
 		imports := []string{"fmt", "github.com/rosscartlidge/ssql/v4/typed", "os"}
-		code := generateTypedToTableCode(prevSchema, fields, onlySpecified, inputVar, maxWidth)
+		code, needsSSQL := generateTypedToTableCode(prevSchema, fields, onlySpecified, inputVar, maxWidth, timeFormat)
+		if needsSSQL {
+			imports = append(imports, "github.com/rosscartlidge/ssql/v4")
+		}
 		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
 		frag.InputTypedSchema = prevSchema
 		frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone, SerialOnly: true}
 		return lib.WriteCodeFragment(frag)
 	}
 
+	// Column order: the user's fields, else the upstream command's natural
+	// order (e.g. group-by; without it the generated program rendered
+	// columns alphabetically, mismatching the CLI's schema-preserved
+	// order), else alphabetical (DisplayTable's historical default).
+	order, only := fields, onlySpecified
+	if len(order) == 0 {
+		order, only = prevRecordFields, false
+	}
+	fieldsStr := "nil"
+	if len(order) > 0 {
+		quotedFields := make([]string, len(order))
+		for i, f := range order {
+			quotedFields[i] = fmt.Sprintf("%q", f)
+		}
+		fieldsStr = "[]string{" + joinStrings(quotedFields, ", ") + "}"
+	}
 	var code string
+	var imports []string
 	switch {
-	case len(fields) > 0:
-		// User explicitly specified column order
-		quotedFields := make([]string, len(fields))
-		for i, f := range fields {
-			quotedFields[i] = fmt.Sprintf("%q", f)
-		}
-		fieldsStr := "[]string{" + joinStrings(quotedFields, ", ") + "}"
-		code = fmt.Sprintf("ssql.DisplayTableWithFields(%s, %d, %s, %t)", inputVar, maxWidth, fieldsStr, onlySpecified)
-	case len(prevRecordFields) > 0:
-		// Upstream command (e.g. group-by) populated the natural
-		// field order. Without this, the generated program would
-		// render columns alphabetically — mismatching the CLI
-		// pipeline's JSONL-schema-preserved order.
-		quotedFields := make([]string, len(prevRecordFields))
-		for i, f := range prevRecordFields {
-			quotedFields[i] = fmt.Sprintf("%q", f)
-		}
-		fieldsStr := "[]string{" + joinStrings(quotedFields, ", ") + "}"
-		code = fmt.Sprintf("ssql.DisplayTableWithFields(%s, %d, %s, false)", inputVar, maxWidth, fieldsStr)
+	case timeFormat != "":
+		code = fmt.Sprintf("ssql.DisplayTableOpts(os.Stdout, %s, ssql.DisplayOptions{MaxWidth: %d, Fields: %s, OnlySpecified: %t, TimeFormat: %q})", inputVar, maxWidth, fieldsStr, only, timeFormat)
+		imports = []string{"os"}
+	case len(order) > 0:
+		code = fmt.Sprintf("ssql.DisplayTableWithFields(%s, %d, %s, %t)", inputVar, maxWidth, fieldsStr, only)
 	default:
-		// No upstream order info; fall back to alphabetical (current
-		// behaviour, matches DisplayTable's historical default).
 		code = fmt.Sprintf("ssql.DisplayTable(%s, %d)", inputVar, maxWidth)
 	}
-	frag := lib.NewFinalFragment(inputVar, code, nil, getCommandString())
+	frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
 	return lib.WriteCodeFragment(frag)
 }
 
@@ -209,13 +224,15 @@ func generateToTableCode(maxWidth int, fields []string, onlySpecified bool) erro
 // (the common case — print everything in struct order); calls
 // typed.WriteTableSelectedToWriter with a one-TableColumn-per-field
 // list when fields/onlySpecified are set.
-func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpecified bool, inputVar string, maxWidth int) string {
-	// No field selection — let the helper read the struct schema.
-	if len(fields) == 0 && !onlySpecified {
+func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpecified bool, inputVar string, maxWidth int, timeFormat string) (code string, needsSSQL bool) {
+	// No field selection and no time pattern — let the helper read the
+	// struct schema. (A -time-format goes through the column list below,
+	// where a time field's Format closure applies it.)
+	if len(fields) == 0 && !onlySpecified && timeFormat == "" {
 		return fmt.Sprintf(`if err := typed.WriteTableToWriter(%s, os.Stdout, %d); err != nil {
 		fmt.Fprintf(os.Stderr, "to table: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar, maxWidth)
+	}`, inputVar, maxWidth), false
 	}
 
 	// Resolve fields in display order.
@@ -245,6 +262,14 @@ func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpec
 	fmt.Fprintf(&b, "if err := typed.WriteTableSelectedToWriter(%s, os.Stdout, []typed.TableColumn[%s]{\n", inputVar, schema.TypeName)
 	for _, f := range selected {
 		right := isNumericOrBoolGoType(f.GoType)
+		if f.GoType == "time.Time" {
+			// RFC 3339 like exec's table (fmt's %v printed Go's debug
+			// form until DFC147), or the sink's -time-format.
+			needsSSQL = true
+			fmt.Fprintf(&b, "\t\t{Header: %q, Format: func(r *%s) string { return ssql.FormatTimePattern(r.%s, %q) }, RightAlign: %t},\n",
+				f.Name, schema.TypeName, f.GoName, timeFormat, right)
+			continue
+		}
 		fmt.Fprintf(&b, "\t\t{Header: %q, Format: func(r *%s) string { return fmt.Sprintf(\"%%v\", r.%s) }, RightAlign: %t},\n",
 			f.Name, schema.TypeName, f.GoName, right)
 	}
@@ -252,7 +277,7 @@ func generateTypedToTableCode(schema *lib.TypedSchema, fields []string, onlySpec
 	b.WriteString("\t\tfmt.Fprintf(os.Stderr, \"to table: %v\\n\", err)\n")
 	b.WriteString("\t\tos.Exit(1)\n")
 	b.WriteString("\t}")
-	return b.String()
+	return b.String(), needsSSQL
 }
 
 func isNumericOrBoolGoType(t string) bool {

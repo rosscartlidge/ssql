@@ -110,7 +110,7 @@ func TestCollectParamsRename(t *testing.T) {
 // with embedding services, instead of its own recover body.
 func TestWriteMainCallingRunRecoversErrorPanics(t *testing.T) {
 	var b strings.Builder
-	writeMainCallingRun(&b, true)
+	writeMainCallingRun(&b, true, "")
 	got := b.String()
 	if strings.Contains(got, "recover()") {
 		t.Errorf("main carries its own recover; it must use ssql.Run:\n%s", got)

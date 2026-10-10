@@ -38,6 +38,14 @@ func registerToMarkdown(cmd *cf.SubcommandBuilder) {
 			Help("Only show specified fields (hide others)").
 			Done().
 
+		Flag("-time-format").
+			String().
+			Global().
+			Default("").
+			Completer(&cf.StaticCompleter{Options: []string{"%Y-%m-%d", "%Y-%m-%d %H:%M", "%d/%m/%Y", "%H:%M:%S", "%b %-d, %Y", "2006-01-02"}}).
+			Help("Render time columns with a pattern on the pipeline zone's wall clock: -time-format '%Y-%m-%d %H:%M' (strftime, or a Go layout). Default: RFC 3339").
+			Done().
+
 		Flag("FIELDS").
 			String().
 			Variadic().
@@ -75,8 +83,12 @@ func registerToMarkdown(cmd *cf.SubcommandBuilder) {
 				}
 			}
 
+			timeFormat, err := sinkTimeFormat(ctx)
+			if err != nil {
+				return err
+			}
 			if shouldGenerate(generate) {
-				return generateToMarkdownCode(fields, onlySpecified, outputFile)
+				return generateToMarkdownCode(fields, onlySpecified, outputFile, timeFormat)
 			}
 
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
@@ -96,7 +108,7 @@ func registerToMarkdown(cmd *cf.SubcommandBuilder) {
 				defer f.Close()
 				out = f
 			}
-			if err := ssql.WriteMarkdownTo(out, records, fields, onlySpecified); err != nil {
+			if err := ssql.WriteMarkdownOpts(out, records, ssql.DisplayOptions{Fields: fields, OnlySpecified: onlySpecified, TimeFormat: timeFormat}); err != nil {
 				return fmt.Errorf("to markdown: %w", err)
 			}
 			return nil
@@ -109,7 +121,7 @@ func registerToMarkdown(cmd *cf.SubcommandBuilder) {
 // Phase B machinery tags this Record-mode final fragment and inserts the
 // Serial()+toRecord() boundary — the typed (parallel) upstream is kept
 // and the sink renders from Records, exactly matching exec.
-func generateToMarkdownCode(fields []string, onlySpecified bool, outputFile string) error {
+func generateToMarkdownCode(fields []string, onlySpecified bool, outputFile string, timeFormat string) error {
 	fragments, err := lib.ReadAllCodeFragments()
 	if err != nil {
 		return fmt.Errorf("reading code fragments: %w", err)
@@ -145,6 +157,13 @@ func generateToMarkdownCode(fields []string, onlySpecified bool, outputFile stri
 		fieldsStr = "[]string{" + joinStrings(quoted, ", ") + "}"
 	}
 
+	// One call shape, with or without a time pattern (DFC147 §7.3).
+	call := func(w string) string {
+		if timeFormat != "" {
+			return fmt.Sprintf("ssql.WriteMarkdownOpts(%s, %s, ssql.DisplayOptions{Fields: %s, OnlySpecified: %t, TimeFormat: %q})", w, inputVar, fieldsStr, onlySpecified, timeFormat)
+		}
+		return fmt.Sprintf("ssql.WriteMarkdownTo(%s, %s, %s, %t)", w, inputVar, fieldsStr, onlySpecified)
+	}
 	var code string
 	var params []lib.CodeParam
 	if outputFile != "" {
@@ -155,15 +174,15 @@ func generateToMarkdownCode(fields []string, onlySpecified bool, outputFile stri
 		os.Exit(1)
 	}
 	defer mdOut.Close()
-	if err := ssql.WriteMarkdownTo(mdOut, %s, %s, %t); err != nil {
+	if err := %s; err != nil {
 		fmt.Fprintf(os.Stderr, "to markdown: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar, fieldsStr, onlySpecified)
+	}`, call("mdOut"))
 	} else {
-		code = fmt.Sprintf(`if err := ssql.WriteMarkdownTo(os.Stdout, %s, %s, %t); err != nil {
+		code = fmt.Sprintf(`if err := %s; err != nil {
 		fmt.Fprintf(os.Stderr, "to markdown: %%v\n", err)
 		os.Exit(1)
-	}`, inputVar, fieldsStr, onlySpecified)
+	}`, call("os.Stdout"))
 	}
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt", "os"}, getCommandString())
 	frag.Params = params

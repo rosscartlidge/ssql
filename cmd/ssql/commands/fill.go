@@ -194,7 +194,7 @@ func fillOutputSchema(in *lib.Schema, cfg ssql.FillConfig) *lib.Schema {
 	if in == nil {
 		return nil
 	}
-	out := &lib.Schema{Fields: append([]string(nil), in.Fields...), Types: map[string]string{}}
+	out := in.Derive(append([]string(nil), in.Fields...), map[string]string{})
 	for k, v := range in.Types {
 		out.Types[k] = v
 	}

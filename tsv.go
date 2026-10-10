@@ -176,6 +176,33 @@ func WriteTSVToWriter(records iter.Seq[Record], w io.Writer) error {
 
 // WriteTSVToWriterWithSeparator writes records as TSV to an io.Writer with a custom separator.
 func WriteTSVToWriterWithSeparator(records iter.Seq[Record], w io.Writer, sep rune) error {
+	return WriteTSVOptsToWriter(records, w, TSVConfig{Separator: sep})
+}
+
+// TSVConfig configures the TSV writers: the separator (0 = tab) and the
+// pattern time values are rendered with (to tsv -time-format; "" = RFC
+// 3339 Nano).
+type TSVConfig struct {
+	Separator  rune
+	TimeFormat string
+}
+
+// WriteTSVOpts writes records to a file per the config.
+func WriteTSVOpts(records iter.Seq[Record], filename string, cfg TSVConfig) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return WriteTSVOptsToWriter(records, file, cfg)
+}
+
+// WriteTSVOptsToWriter writes records as TSV per the config.
+func WriteTSVOptsToWriter(records iter.Seq[Record], w io.Writer, cfg TSVConfig) error {
+	sep := cfg.Separator
+	if sep == 0 {
+		sep = '\t'
+	}
 	buf := bufio.NewWriter(w)
 	defer buf.Flush()
 
@@ -204,7 +231,7 @@ func WriteTSVToWriterWithSeparator(records iter.Seq[Record], w io.Writer, sep ru
 				}
 			}
 			val, _ := Get[any](record, field)
-			if _, err := buf.WriteString(formatTSVValue(val)); err != nil {
+			if _, err := buf.WriteString(formatTSVValue(val, cfg.TimeFormat)); err != nil {
 				return err
 			}
 		}
@@ -217,7 +244,7 @@ func WriteTSVToWriterWithSeparator(records iter.Seq[Record], w io.Writer, sep ru
 }
 
 // formatTSVValue formats a value for TSV output.
-func formatTSVValue(v any) string {
+func formatTSVValue(v any, timeFormat string) string {
 	if v == nil {
 		return ""
 	}
@@ -235,7 +262,7 @@ func formatTSVValue(v any) string {
 		}
 		return "false"
 	default:
-		return displayValue(v)
+		return displayValueIn(v, timeFormat)
 	}
 }
 

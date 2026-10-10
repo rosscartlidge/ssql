@@ -26,9 +26,10 @@ import (
 // "array" for a json field when known (Frictionless tells them apart;
 // a value written tells it too), else "".
 type TableField struct {
-	Name  string
-	Type  FieldType
-	Shape string
+	Name   string
+	Type   FieldType
+	Shape  string
+	Format string // a time field's cell pattern as strftime ("" = the ISO / RFC 3339 forms the reader knows)
 }
 
 // TableSchema is a sidecar's description of a delimited file.
@@ -47,6 +48,18 @@ func (s *TableSchema) TypeOverrides() map[string]string {
 	for _, f := range s.Fields {
 		if f.Type != FieldTypeAuto {
 			out[f.Name] = f.Type.String()
+		}
+	}
+	return out
+}
+
+// TimeFormats is the schema's time patterns as `-format COL PATTERN`
+// values: every time field with a format, as strftime.
+func (s *TableSchema) TimeFormats() map[string]string {
+	out := map[string]string{}
+	for _, f := range s.Fields {
+		if f.Type == FieldTypeTime && f.Format != "" {
+			out[f.Name] = f.Format
 		}
 	}
 	return out
@@ -208,11 +221,11 @@ func parseFrictionlessSchema(data []byte) (*TableSchema, error) {
 		if f.Name == "" {
 			return nil, fmt.Errorf("a field has no name")
 		}
-		ft, shape, err := sidecarFieldType(f.Name, f.Type, f.Format)
+		ft, shape, format, err := sidecarFieldType(f.Name, f.Type, f.Format, false)
 		if err != nil {
 			return nil, err
 		}
-		out.Fields = append(out.Fields, TableField{Name: f.Name, Type: ft, Shape: shape})
+		out.Fields = append(out.Fields, TableField{Name: f.Name, Type: ft, Shape: shape, Format: format})
 	}
 	return out, nil
 }
@@ -300,11 +313,11 @@ func parseCSVW(top map[string]json.RawMessage, csvBase, dir string) (*TableSchem
 					base, format = obj.Base, obj.Format
 				}
 			}
-			ft, shape, err := sidecarFieldType(name, base, format)
+			ft, shape, strf, err := sidecarFieldType(name, base, format, true)
 			if err != nil {
 				return nil, err
 			}
-			out.Fields = append(out.Fields, TableField{Name: name, Type: ft, Shape: shape})
+			out.Fields = append(out.Fields, TableField{Name: name, Type: ft, Shape: shape, Format: strf})
 		}
 		return out, nil
 	}
@@ -346,8 +359,7 @@ func checkDialect(delimiter string, header *bool) error {
 }
 
 // isoTimeFormats are the sidecar date formats the reader's fixed layouts
-// cover (ParseTime); any other format is refused rather than leaving a
-// `time` column as unparsed text.
+// already cover (ParseTime): they need no pattern.
 var isoTimeFormats = map[string]bool{
 	"": true, "default": true, "any": true,
 	"yyyy-MM-dd": true, "yyyy-MM-ddTHH:mm:ss": true, "yyyy-MM-ddTHH:mm:ssZ": true, "yyyy-MM-dd HH:mm:ss": true,
@@ -355,32 +367,46 @@ var isoTimeFormats = map[string]bool{
 }
 
 // sidecarFieldType maps a sidecar type name (either standard's) to the
-// ssql field type and, for json, the value's shape.
-func sidecarFieldType(name, typeName, format string) (FieldType, string, error) {
+// ssql field type, for json the value's shape, and for a time with a
+// format the cell pattern as strftime (CSVW writes Unicode patterns,
+// Frictionless strftime; uts35 says which). A format the reader cannot
+// parse is refused by name (DFC147 §7.2 made the parsable ones honoured;
+// DFC146 refused them all).
+func sidecarFieldType(name, typeName, format string, uts35 bool) (FieldType, string, string, error) {
 	switch strings.ToLower(typeName) {
 	case "integer", "int", "long", "short", "byte", "year":
-		return FieldTypeInt, "", nil
+		return FieldTypeInt, "", "", nil
 	case "number", "decimal", "double", "float":
-		return FieldTypeFloat, "", nil
+		return FieldTypeFloat, "", "", nil
 	case "boolean", "bool":
-		return FieldTypeBool, "", nil
+		return FieldTypeBool, "", "", nil
 	case "date", "datetime", "time", "timestamp":
-		if !isoTimeFormats[format] {
-			return 0, "", fmt.Errorf("field %q: date format %q is not supported (ssql reads ISO 8601 / RFC 3339 forms) — drop the format or read the column as text with -type %s string", name, format, name)
+		if isoTimeFormats[format] {
+			return FieldTypeTime, "", "", nil
 		}
-		return FieldTypeTime, "", nil
+		strf := format
+		if uts35 {
+			var err error
+			if strf, err = UTS35ToStrftime(format); err != nil {
+				return 0, "", "", fmt.Errorf("field %q: date format %q: %v — read the column as text with -type %s string", name, format, err, name)
+			}
+		}
+		if _, err := TimeLayout(strf); err != nil {
+			return 0, "", "", fmt.Errorf("field %q: date format %q: %v — read the column as text with -type %s string", name, format, err, name)
+		}
+		return FieldTypeTime, "", strf, nil
 	case "object", "geojson":
-		return FieldTypeJSON, "object", nil
+		return FieldTypeJSON, "object", "", nil
 	case "array":
-		return FieldTypeJSON, "array", nil
+		return FieldTypeJSON, "array", "", nil
 	case "json":
-		return FieldTypeJSON, "", nil
+		return FieldTypeJSON, "", "", nil
 	case "string", "", "yearmonth", "duration", "geopoint", "anyuri":
-		return FieldTypeString, "", nil
+		return FieldTypeString, "", "", nil
 	case "any":
-		return FieldTypeAuto, "", nil
+		return FieldTypeAuto, "", "", nil
 	}
-	return 0, "", fmt.Errorf("field %q: unknown type %q (integer, number, boolean, date/datetime, string, object, array, any)", name, typeName)
+	return 0, "", "", fmt.Errorf("field %q: unknown type %q", name, typeName)
 }
 
 // TableTypeName is the Frictionless type name a field is written as.

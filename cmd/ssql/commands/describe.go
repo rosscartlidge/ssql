@@ -87,7 +87,7 @@ func RegisterDescribe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 			out := ssql.DescribeRecords(sr.Records, cfg)
-			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), describeOutputSchema(), out); err != nil {
+			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), describeOutputSchema(sr.Schema), out); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 			return nil
@@ -96,15 +96,15 @@ func RegisterDescribe(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	return cmd
 }
 
-func describeOutputSchema() *lib.Schema {
-	return &lib.Schema{
-		Fields: append([]string(nil), describeColumns...),
-		Types: map[string]string{
+func describeOutputSchema(in *lib.Schema) *lib.Schema {
+	return in.Derive(
+		append([]string(nil), describeColumns...),
+		map[string]string{
 			"field": lib.TypeString, "type": lib.TypeString,
 			"count": lib.TypeInt, "missing": lib.TypeInt, "distinct": lib.TypeInt,
 			"min": lib.TypeFloat, "max": lib.TypeFloat, "mean": lib.TypeFloat, "median": lib.TypeFloat,
 		},
-	}
+	)
 }
 
 // generateDescribeCode emits the record-shaped stage. describe's

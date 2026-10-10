@@ -67,9 +67,14 @@ func TestRemoteBinPrologueResolves(t *testing.T) {
 		}
 	}
 
-	// An absolute path is used as given, no prologue.
-	if got := BuildRemoteCommand("/opt/ssql", "/d", "", nil); got != "/opt/ssql from /d" {
-		t.Errorf("absolute remoteBin: %q", got)
+	// An absolute path is used as given, no prologue; the local pipeline's
+	// zone rides along (DFC147 §5.7).
+	want := "/opt/ssql from /d"
+	if z := StreamZoneName(); z != "" {
+		want += " -tz " + ShellQuote(z)
+	}
+	if got := BuildRemoteCommand("/opt/ssql", "/d", "", nil); got != want {
+		t.Errorf("absolute remoteBin: %q, want %q", got, want)
 	}
 	if got := RemoteScriptCommand("/opt/ssql", "/tmp/s", "record"); strings.Contains(got, "SSQL=") || !strings.HasPrefix(got, "trap 'rm -f /tmp/s' EXIT; cat > /tmp/s && /opt/ssql generate go") {
 		t.Errorf("absolute script command: %q", got)

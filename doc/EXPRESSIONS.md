@@ -278,17 +278,74 @@ ssql update -set-expr payload 'toJSON({"name": name, "age": age})'
 
 ### Date Functions
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `now()` | Current date/time | `now()` → `2026-02-25T10:30:00+11:00` |
-| `date(v)` | Parse a time: RFC 3339, `2026-01-15 10:30:00`, `2026-01-15T10:30:00` (UTC), `2026-01-15 10:30:00+00`, a bare date (midnight UTC), Unix seconds. The same forms `cast -type F time` and `GetOr[time.Time]` read — ssql's own function, not expr-lang's | `date("2026-01-15")` |
-| `date(str, layout[, zone])` | Parse with a Go layout, optionally in a named zone | `date("15/01/2026", "02/01/2006")` |
-| `duration(str)` | Parse duration (ns, us, ms, s, m, h) | `duration("1h30m")` → `1h30m0s` |
-| `timezone(str)` | Get timezone location | `timezone("America/New_York")` |
-| `bucket(ts, "5m")` | Snap a timestamp down to an epoch-aligned bucket (int/float epochs with the unit read from magnitude, RFC 3339 strings, or a `time` column — time in, time out) | `bucket(ts, "1m")` → `1699999980` |
+A `time` field — from `cast -type F time`, `from csv -type F time`, a
+schema sidecar, or a `_schema` header that says so — is an **instant**.
+Reading its calendar needs a zone, and the zone is the pipeline's
+(see "The pipeline's zone" below): `hour(ts)` is the hour on the wall
+clock there. Every function below also accepts what `ParseTime` reads
+(an RFC 3339 or `2026-01-15 10:30:00` string, a bare date, Unix
+seconds), so an untyped CSV column works in exec; typed programs and
+`generate sql` need the column to be a `time`.
 
-`bucket` is the downsampling primitive: `update -set-expr minute
-'bucket(ts, "1m")' | group-by minute -avg temp t` averages per minute.
+| Function | Result | Description | Example |
+|----------|--------|-------------|---------|
+| `now()` | time | The current instant | `hour(now())` → the local hour |
+| `date(v)` | time | Parse a time: RFC 3339, `2026-01-15 10:30:00`, `2026-01-15T10:30:00` (UTC), `2026-01-15 10:30:00+00`, a bare date (midnight UTC), Unix seconds — the same forms `cast -type F time` reads | `date("2026-01-15")` |
+| `date(str, pattern[, zone])` | time | Parse with a pattern — strftime when it contains `%`, else a Go layout — optionally in a named zone | `date("15/01/2026", "%d/%m/%Y")` |
+| `year(ts)`, `month(ts)`, `day(ts)`, `hour(ts)`, `minute(ts)`, `second(ts)` | int | Calendar parts in the pipeline zone | `hour(ts)` → `10` |
+| `dow(ts)` | int | Day of week, Sunday = 0 | `dow(date("2026-01-05"))` → `1` |
+| `doy(ts)` | int | Day of year, 1–366 | |
+| `week(ts)` | int | ISO week number, 1–53 | `week(date("2026-12-31"))` → `53` |
+| `quarter(ts)` | int | 1–4 | |
+| `epoch(ts)` | int | Unix seconds (zone-free; the inverse of `date(int)`) | `epoch(ts) * 1000` for milliseconds |
+| `date_trunc(ts, unit)` | time | The start of ts's year, quarter, month, week (Monday), day, hour, minute or second | `date_trunc(ts, "month")` |
+| `date_add(ts, n, unit)` | time | ts plus n units; months and years clamp to the month's end (Jan 31 + 1 month is Feb 28), days and weeks keep the wall clock across a DST change, hours and smaller are absolute | `date_add(ts, -1, "month")` |
+| `date_diff(unit, start, end)` | int | Unit **boundaries crossed** from start to end (Jan 31 → Feb 1 is 1 month; 00:59 → 01:00 is 1 hour), negative when end is first; weeks are days ÷ 7 | `date_diff("day", created, now())` |
+| `tz(ts, zone)` | time | The same instant, read in another zone by the functions around it | `hour(tz(ts, "America/New_York"))` |
+| `strftime(ts, pattern)` | string | Format on the pipeline zone's wall clock with strftime directives (`%Y %m %d %H %M %S %f %p %b %B %a %A %j %z %Z %G %V %u %%`, and `%-d`/`%-m` unpadded) — DuckDB's and Python's language | `strftime(ts, "%Y-%m-%d %H:%M")` → `2026-01-05 10:30` |
+| `strptime(text, pattern)` | time | Parse text with a strftime pattern; text with no zone of its own is a wall clock in the pipeline zone (an ISO export through `date(v)` is UTC) | `strptime(when, "%d/%m/%Y")` |
+| `bucket(ts, "5m")` | same as in | Snap down to an epoch-aligned bucket of a fixed width (int/float epochs with the unit read from magnitude, RFC 3339 strings, or a `time`); zone-free | `bucket(ts, "1m")` |
+| `duration(str)` | duration | Parse a Go duration (ns, us, ms, s, m, h) | `ts + duration("1h30m")` |
+
+The names and argument orders are DuckDB's (`date_trunc`, `date_add`,
+`date_diff(part, start, end)`), so what you type here is what you would
+type in SQL, and `generate sql` emits the engine's own functions for all
+of them. A field may share a function's name: bare `day` is the field,
+`day(ts)` is the function.
+
+`date_trunc` is for calendar units and `bucket` for fixed widths
+(`90s`, `6h`); they agree on `day`/`24h` only under `-tz UTC`. The flag
+form `update -set-bucket minute ts 1m` takes either: a duration is
+`bucket`, a unit name (`month`) is `date_trunc`. Prefer the flag when it
+says what you mean: it completes and translates like the function.
+
+**The pipeline's zone.** Chosen once, where the stream starts, and
+carried in the `_schema` header: the source command takes `-tz ZONE`
+(an IANA name, `Australia/Sydney`, `UTC`), else the `TZ` environment
+variable, else `/etc/localtime` — as `date(1)` and DuckDB resolve it.
+Every later command reads the header's zone, never its own
+environment, so a pipeline has one zone end to end, `tee` keeps it, a
+remote `from ssh` stage cannot leak its machine's zone in, and
+everything that serialises a pipeline freezes the name into its text
+(`generate sql` pins the session to UTC and names the zone in every
+calendar call; `generate go` sets it before reading; `generate json`
+writes `-tz` onto the from stage). `TZ=UTC ssql …` pins a run. A
+pipeline's two inputs naming different zones is refused: put `-tz` on
+one source.
+
+```bash
+ssql from data.csv -tz Australia/Sydney | ssql update -set-expr h 'hour(ts)'   # say it
+TZ=UTC ssql from data.csv | …                                                 # pin a run
+```
+
+**Patterns on the flags.** The same strftime language serves the
+readers and the sinks, so a date that is not RFC 3339 never needs an
+expression: `from csv -format when '%d/%m/%Y'` reads a day-first column
+as a time (`-type when time` is implied; a schema sidecar's date format
+does the same), `cast -format when '%d/%m/%Y'` parses one mid-pipeline,
+and `to csv|tsv|table|markdown -time-format '%Y-%m-%d'` renders every
+time column on the pipeline zone's wall clock without changing its type
+(a `-sidecar` still says datetime). A pattern without `%` is a Go layout.
 
 Inside `group-by -expr` every field is the group's array, so the array
 builtins aggregate: `first(name)`, `last(name)`, `median(salary)`,
@@ -310,30 +367,33 @@ wherever it appears (`len(filter(scores, sum(#) > 10))` counts the rows
 whose scores total more than 10). A list field inside an aggregate is
 the row's list, so `sum(scores)` adds lists and fails; outside one it is
 the group's array of lists, so `len(flatten(scores))` counts every score.
-The flag form `update -set-bucket minute ts 1m` is the same operation
-(Tab completes the fields); use the function when the bucket is part of
-a larger expression. In `generate sql` it becomes a `CASE` that detects
-the epoch unit by magnitude and snaps with `%`; over a column made a time
-by `cast -type F time` it becomes the engine's own bucketing pinned to
-the Unix epoch (`time_bucket`, or `date_bin` on Postgres and DataFusion);
-string timestamps have no SQL translation. The same holds for
-`resample`: `generate sql` translates it over numeric epochs and over a
-cast time column (through epoch microseconds, returning a TIMESTAMP), and
-refuses string timestamps — put `cast -type ts time` in front.
 
-A field that is a `time` (after `cast -type F time`, or read from a
-header that says so) is a Go `time.Time` in expressions: `ts.Year()`,
-`ts.Hour()`, `ts.Weekday()`, `ts.Sub(other).Hours()`, `ts < date("2026-02-01")`.
-A record field may itself be called `date`: `date(date)` is the function
-applied to the field.
+In `generate sql`, `bucket` over a `time` column becomes the engine's own
+bucketing pinned to the Unix epoch (`time_bucket`, or `date_bin` on
+Postgres and DataFusion), over a numeric epoch a `CASE` that detects the
+unit by magnitude and snaps with `%`; string timestamps have no SQL
+translation. The same holds for `resample`: `generate sql` translates it
+over numeric epochs and over a time column (through epoch
+microseconds), and refuses string timestamps — put `cast -type ts time`
+in front.
+
+A `time` value is still a Go `time.Time` in expressions, so `ts <
+date("2026-02-01")`, `ts - other` (a duration) and `ts + duration("1h")`
+work. Go's methods (`ts.Hour()`, `ts.Weekday()`) also still work, but
+they read the value's own offset as it was parsed, not the pipeline
+zone, and exist only in the VM lane — use the functions.
 
 **Examples:**
 ```bash
-# Add timestamp
-ssql update -set-expr timestamp 'string(now())'
-
 # Per-minute averages (flag form, or -set-expr minute 'bucket(ts, "1m")')
 ssql update -set-bucket minute ts 1m | ssql group-by minute -avg temp avg_temp
+
+# Monthly totals in Sydney's calendar, whatever machine runs it
+ssql from sales.csv -type when time -tz Australia/Sydney | ssql update -set-bucket month when month | ssql group-by month -sum amount total
+
+# Business hours, age in days
+ssql where -if-expr 'hour(ts) >= 9 && hour(ts) < 17 && dow(ts) in [1,2,3,4,5]'
+ssql update -set-expr age_days 'date_diff("day", created, now())'
 
 # Filter by date
 ssql where -if-expr 'date(created) > date("2026-01-01")'

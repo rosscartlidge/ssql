@@ -296,6 +296,11 @@ func assembleLibrary(fragments []*CodeFragment, opts AssembleOptions) (string, e
 	if len(preVars) > 0 {
 		rest.WriteString("\n")
 	}
+	// The pipeline's zone (DFC147 §5.7): a library has no main, so the
+	// package sets it when loaded — the same zone the source resolved.
+	if zone := PipelineZone([]*CodeFragment{src}); zone != "" {
+		fmt.Fprintf(&rest, "// The pipeline's time zone, as the source resolved it when this package was generated.\nfunc init() { ssql.MustSetStreamZone(%q) }\n\n", zone)
+	}
 	rest.WriteString(funcText.String())
 
 	fmt.Fprintf(&rest, "// %s holds the pipeline's parameters. A zero value is NOT the\n", paramsType)

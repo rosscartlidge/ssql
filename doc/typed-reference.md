@@ -91,9 +91,10 @@ func ReadCSV[T any](filename string, opts ...CSVOption) iter.Seq[T]
 func ReadCSVFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq[T]
 func ReadCSVSafe[T any](filename string, opts ...CSVOption) iter.Seq2[T, error]
 func ReadCSVSafeFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq2[T, error]
-func ReadCSVParallel[T any](filename string, n int) Stream[T]   // n shards, 0 = GOMAXPROCS; see "Stream[T]" below
+func ReadCSVParallel[T any](filename string, n int, opts ...CSVOption) Stream[T]   // n shards, 0 = GOMAXPROCS; see "Stream[T]" below
 
-func Strict() CSVOption   // the one CSV option
+func Strict() CSVOption                        // header must match T exactly
+func TimeFormat(column, pattern string) CSVOption // a time.Time column read through a pattern (strftime "%d/%m/%Y" or a Go layout) — from csv -format
 ```
 
 By default a CSV column with no matching struct field is dropped and a
@@ -122,6 +123,13 @@ func (e *ReadError) Error() string
 ```
 
 ### Writing CSV
+
+```go
+type WriteOption func(*writeOpts)
+func OutputTimeFormat(pattern string) WriteOption // render time.Time columns with a pattern (strftime or Go layout) on the pipeline zone's wall clock — to csv -time-format
+```
+The CSV writers (`WriteCSV`, `WriteCSVToWriter`, `Stream.WriteCSV`,
+`Stream.WriteCSVToWriter`) take `opts ...WriteOption`.
 
 ```go
 func WriteCSV[T any](seq iter.Seq[T], filename string) error
@@ -171,6 +179,8 @@ func (s Stream[T]) WriteDelimToWriter(w io.Writer, opts ...DelimOption) error
 // formats.
 func WithDelim(b byte) DelimOption
 func DelimStrict() DelimOption   // mirrors Strict for CSV
+func DelimTimeFormat(column, pattern string) DelimOption // mirrors TimeFormat
+func DelimOutputTimeFormat(pattern string) DelimOption   // mirrors OutputTimeFormat (writing)
 ```
 
 Same struct-tag mapping as `ReadCSV`; same `Stream[T]` per-shard buffer
