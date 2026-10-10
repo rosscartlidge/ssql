@@ -93,12 +93,31 @@ func TestSchemaModeTypesAndData(t *testing.T) {
 	if err := os.WriteFile(csv, []byte("name,dept,salary,rate,hired\nAlice,eng,100,1.5,2026-01-05T09:00:00Z\nBob,ops,90,2,2026-02-01T09:00:00Z\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Nested sources: the paths inside an object follow its field, to
+	// depth, from a JSON array file and from a JSONL file whose header
+	// already types the field json (the latter listed none until
+	// 2026-10-09).
+	nestedJSON := filepath.Join(dir, "n.json")
+	if err := os.WriteFile(nestedJSON, []byte(`[{"id":1,"addr":{"city":"NYC","geo":{"lat":40.7}},"tags":["go"]}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nestedJSONL := filepath.Join(dir, "n.jsonl")
+	if err := os.WriteFile(nestedJSONL, []byte(`{"_schema":{"fields":["id","addr","tags"],"types":{"id":"int","addr":"json","tags":"json"}}}
+{"id":1,"addr":{"city":"NYC","geo":{"lat":40.7}},"tags":["go"]}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nestedWant := "field,type\nid,int\naddr,json\ntags,json\naddr.city,string\naddr.geo,json\naddr.geo.lat,float\n"
 	cases := []struct {
 		name     string
 		pipeline string
 		want     string
 	}{
 		{"source types", "ssql from csv " + csv, "field,type\nname,string\ndept,string\nsalary,int\nrate,float\nhired,string\n"},
+		{"nested paths from a json array", "ssql from json " + nestedJSON, // an array file's columns come out sorted
+			"field,type\naddr,json\nid,int\ntags,json\naddr.city,string\naddr.geo,json\naddr.geo.lat,float\n"},
+		{"nested paths from a headed jsonl", "ssql from jsonl " + nestedJSONL, nestedWant},
+		{"nested paths survive a stage", "ssql from jsonl " + nestedJSONL + " | ssql where -if addr.geo.lat gt 1", nestedWant},
 		{"-type holds", "ssql from csv " + csv + " -type hired time | ssql include name hired", "field,type\nname,string\nhired,time\n"},
 		{"rename moves the type; aggregates from the registry", "ssql from csv " + csv + " | ssql rename -as salary pay | ssql group-by dept -count n -sum pay total -min pay lo -max rate hi -first name who -expr 'max(pay)' e", "field,type\ndept,string\nn,int\ntotal,float\nlo,int\nhi,float\nwho,string\ne,any\n"},
 		{"cast retypes", "ssql from csv " + csv + " | ssql cast -type salary float -type hired time | ssql include salary hired", "field,type\nsalary,float\nhired,time\n"},

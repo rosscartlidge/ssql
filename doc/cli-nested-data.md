@@ -67,8 +67,11 @@ ssql from events.jsonl | ssql sort id | ssql to table
 
 The schema header says what each field is. Ask for it the way
 completion does, and notice the nested names it lists for the object
-field — `addr.city`, `addr.zip` — which is why Tab (via Ctrl-O) can
-complete them at the prompt:
+field — `addr.city`, `addr.zip`, and on into nested objects to three
+levels (`addr.geo.lat`) — which is why Ctrl-O can complete them at the
+prompt. Ctrl-O at a value slot samples through the same path, so
+`where -if addr.city eq` offers the cities, and a list field offers its
+JSON text, quoted for the shell:
 
 ```bash
 (export SSQL_MODE=schema; ssql from events.jsonl) | ssql generate schema -data | ssql to table

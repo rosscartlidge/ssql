@@ -84,6 +84,25 @@ printf '%%s' "$READLINE_LINE"
 		struct{ in, want string }{base + " | ssql where -if dept eq Values-Use-Ctrl-O ", base + " | ssql where -if dept eq x "},
 		struct{ in, want string }{base + " | ssql group-by Use-Ctrl-O ", base + " | ssql group-by "},
 	)
+	// Nested data (DFC144 Level 2): Ctrl-O names paths to depth
+	// (addr.geo.lat, not just addr.geo), samples values through the
+	// path walk, and single-quotes a value the shell would mangle (a
+	// JSON list's brackets and quotes, an apostrophe) — not only a
+	// spaced one.
+	nested := filepath.Join(dir, "n.json")
+	if err := os.WriteFile(nested, []byte(`[{"id":1,"name":"ann","addr":{"city":"NYC","geo":{"lat":40.7}},"tags":["go","rust"],"note":"it's"},
+{"id":2,"name":"bob","addr":{"city":"SF","geo":{"lat":37.7}},"tags":["go","rust"],"note":"it's"}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nbase := "ssql from json " + nested
+	cases = append(cases,
+		struct{ in, want string }{nbase + " | ssql where -if addr.c", nbase + " | ssql where -if addr.city "},
+		struct{ in, want string }{nbase + " | ssql where -if addr.g", nbase + " | ssql where -if addr.geo"}, // addr.geo / addr.geo.lat: common prefix
+		struct{ in, want string }{nbase + " | ssql sort addr.geo.l", nbase + " | ssql sort addr.geo.lat "},
+		struct{ in, want string }{nbase + " | ssql where -if addr.city eq N", nbase + " | ssql where -if addr.city eq NYC "},
+		struct{ in, want string }{nbase + " | ssql where -if tags eq ", nbase + ` | ssql where -if tags eq '["go","rust"]' `},
+		struct{ in, want string }{nbase + " | ssql where -if note eq ", nbase + ` | ssql where -if note eq 'it'\''s' `},
+	)
 	for _, c := range cases {
 		if got := run(c.in); got != c.want {
 			t.Errorf("in=%q\n got=%q\nwant=%q", c.in, got, c.want)

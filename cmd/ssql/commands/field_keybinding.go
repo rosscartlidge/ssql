@@ -57,6 +57,12 @@ const FieldKeybindingScript = `# ssql field-completion keybinding — install wi
 # Rebind elsewhere by changing the bind lines at the bottom.
 
 # Longest common prefix of the arguments.
+# True when a completed value must be single-quoted to survive the
+# shell: anything beyond the characters a bare word keeps as-is.
+_ssql_needs_quote() {
+    [[ "$1" == *[^A-Za-z0-9._/:@%+=,-]* ]]
+}
+
 _ssql_lcp() {
     local prefix="$1" s
     shift
@@ -136,11 +142,14 @@ _ssql_complete_field() {
                 local vn=${#vals[@]}
                 if (( vn == 1 )); then
                     local vv="${vals[0]}" vinsert
-                    if [[ "$vv" == *[[:space:]]* ]]; then
-                        # Spaced value: replace the typed partial with the
-                        # fully single-quoted value so it parses as one arg.
-                        READLINE_LINE="${READLINE_LINE:0:$((READLINE_POINT-${#partial}))}'$vv' ${READLINE_LINE:$READLINE_POINT}"
-                        READLINE_POINT=$(( READLINE_POINT - ${#partial} + ${#vv} + 3 ))
+                    if _ssql_needs_quote "$vv"; then
+                        # A value the shell would split or expand (a space,
+                        # a JSON list's brackets and quotes): replace the
+                        # typed partial with the whole value single-quoted
+                        # so it parses as one arg.
+                        local vq="${vv//\'/\'\\\'\'}"
+                        READLINE_LINE="${READLINE_LINE:0:$((READLINE_POINT-${#partial}))}'$vq' ${READLINE_LINE:$READLINE_POINT}"
+                        READLINE_POINT=$(( READLINE_POINT - ${#partial} + ${#vq} + 3 ))
                     else
                         vinsert="${vv:${#vpartial}} "
                         READLINE_LINE="${READLINE_LINE:0:$READLINE_POINT}${vinsert}${READLINE_LINE:$READLINE_POINT}"
@@ -151,8 +160,9 @@ _ssql_complete_field() {
                     local vlcp vinsert
                     vlcp="$(_ssql_lcp "${vals[@]}")"
                     vinsert="${vlcp:${#vpartial}}"
-                    # Never insert an unquoted spaced prefix — just list.
-                    [[ "$vinsert" == *[[:space:]]* ]] && vinsert=""
+                    # Never insert an unquoted prefix the shell would
+                    # mangle — just list.
+                    _ssql_needs_quote "$vinsert" && vinsert=""
                     printf '\n%s\n' "${vals[*]}"
                     if [[ -n "$vinsert" ]]; then
                         READLINE_LINE="${READLINE_LINE:0:$READLINE_POINT}${vinsert}${READLINE_LINE:$READLINE_POINT}"

@@ -665,3 +665,34 @@ func TestWriteJSONLWithSchemaNilSchema(t *testing.T) {
 		t.Errorf("should contain data: %s", output)
 	}
 }
+
+// TestNestedPathsDepth: the paths inside an object are listed in
+// document order, nested objects are walked to NestedPathDepth, and
+// lists are not walked (DFC144 Level 2; depth added 2026-10-09 so
+// addr.geo.lat completes, not only addr.geo).
+func TestNestedPathsDepth(t *testing.T) {
+	js := ssql.JSONString(`{"zip":"10001","city":"NYC","geo":{"lat":40.7,"box":{"n":1,"deep":{"x":true}}},"tags":["a","b"],"none":null}`)
+	got := NestedPaths("addr", js)
+	want := []NestedPath{
+		{"addr.zip", "string"},
+		{"addr.city", "string"},
+		{"addr.geo", "json"},
+		{"addr.geo.lat", "float"},
+		{"addr.geo.box", "json"},
+		{"addr.geo.box.n", "int"},
+		{"addr.geo.box.deep", "json"}, // depth 3: listed, not walked
+		{"addr.tags", "json"},         // a list: listed, not walked
+		{"addr.none", "any"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v\nwant %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] got %v want %v", i, got[i], want[i])
+		}
+	}
+	if NestedPaths("tags", ssql.JSONString(`["a","b"]`)) != nil {
+		t.Error("a list has no paths")
+	}
+}

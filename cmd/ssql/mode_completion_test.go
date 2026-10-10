@@ -107,4 +107,22 @@ func TestFieldCompletionSources(t *testing.T) {
 	if !contains(vals, "sales") || !contains(vals, "eng") {
 		t.Errorf("parquet value completion = %v, want sales+eng", vals)
 	}
+
+	// JSON array VALUE sampling, a dotted field and a list (was <VALUE>
+	// for every field of a .json, and Go syntax for a list of a .jsonl).
+	js := dir + "/n.json"
+	if err := os.WriteFile(js, []byte(`[{"addr":{"city":"NYC"},"tags":["go","rust"]},{"addr":{"city":"SF"},"tags":["c"]}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ field, want string }{{"addr.city", "NYC SF"}, {"tags", `["c"] ["go","rust"]`}} {
+		cmd := exec.Command(bin, "-complete", "5", "where", "-if", c.field, "eq", "")
+		cmd.Env = append(os.Environ(), "AUTOCLI_CACHE_FILE="+js)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("value complete %s: %v\n%s", c.field, err, out)
+		}
+		if got := strings.Join(strings.Fields(string(out)), " "); got != c.want {
+			t.Errorf("json value completion %s = %q, want %q", c.field, got, c.want)
+		}
+	}
 }

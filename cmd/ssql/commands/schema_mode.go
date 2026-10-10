@@ -83,37 +83,75 @@ const schemaModeSampleRows = 200
 // leaves the column untyped ("any") rather than failing completion.
 func writeSchemaModeDelimited(w io.Writer, headers []string, records iter.Seq[ssql.Record]) error {
 	types := map[string]string{}
+	names := headers
 	func() {
 		defer func() { _ = recover() }() // a bad cell types nothing; exec reports it
-		var sample []ssql.Record
-		for rec := range records {
-			sample = append(sample, rec)
-			if len(sample) >= schemaModeSampleRows {
-				break
-			}
-		}
+		sample := sampleSchemaRows(records)
 		schema := lib.InferFromSample(sample)
 		for _, h := range headers {
 			if schema.HasField(h) {
 				types[h] = schema.TypeOf(h)
 			}
 		}
+		names = nestedPathNames(headers, types, sample)
 	}()
-	return writeSchemaModeOutputTyped(w, headers, types)
+	return writeSchemaModeOutputTyped(w, names, types)
+}
+
+// sampleSchemaRows reads the rows schema mode types a source from.
+func sampleSchemaRows(records iter.Seq[ssql.Record]) []ssql.Record {
+	var sample []ssql.Record
+	for rec := range records {
+		sample = append(sample, rec)
+		if len(sample) >= schemaModeSampleRows {
+			break
+		}
+	}
+	return sample
+}
+
+// nestedPathNames appends the completable paths inside the sample's
+// json-typed fields to names and types them: addr.city, addr.geo.lat
+// (to lib.NestedPathDepth; a list's indices are typed by hand). The
+// first sampled row holding an object names it, as flatten does
+// (DFC144 Level 2). Every source's schema mode goes through here, so a
+// JSONL file with a header and a delimited source list the same paths
+// a JSON array file does (until 2026-10-09 only the array file did).
+func nestedPathNames(names []string, types map[string]string, sample []ssql.Record) []string {
+	var nested []string
+	for _, n := range names {
+		if types[n] != lib.TypeJSON {
+			continue
+		}
+		for _, rec := range sample {
+			js, ok := ssql.Get[ssql.JSONString](rec, n)
+			if !ok || !strings.HasPrefix(strings.TrimSpace(string(js)), "{") {
+				continue
+			}
+			for _, p := range lib.NestedPaths(n, js) {
+				nested = append(nested, p.Name)
+				types[p.Name] = p.Type
+			}
+			break
+		}
+	}
+	return append(names, nested...)
 }
 
 // openJSONSource reads a JSON source (a JSON array file or JSON Lines,
 // told apart by the first non-blank byte) far enough to know its shape:
-// a `_schema` header's fields and types when the lines carry one, else
-// the records to sample. Shared by schema mode and the SQL translator's
+// a `_schema` header's fields and types when the lines carry one
+// (headed), and the records either way — a headed file's for sampling
+// what its json-typed fields hold, a headless file's for naming and
+// typing its columns. Shared by schema mode and the SQL translator's
 // column seeding (jsonHeader) so the two cannot disagree about which
 // files have a header (the translator read array files as lines until
 // 2026-10-08 and so knew no columns for them).
-func openJSONSource(br *bufio.Reader) (fields []string, types map[string]string, records iter.Seq[ssql.Record]) {
+func openJSONSource(br *bufio.Reader) (fields []string, types map[string]string, records iter.Seq[ssql.Record], headed bool) {
 	for {
 		b, err := br.Peek(1)
 		if err != nil {
-			return nil, nil, nil
+			return nil, nil, nil, false
 		}
 		if b[0] == ' ' || b[0] == '\t' || b[0] == '\n' || b[0] == '\r' {
 			br.ReadByte()
@@ -124,39 +162,37 @@ func openJSONSource(br *bufio.Reader) (fields []string, types map[string]string,
 	if b, _ := br.Peek(1); b[0] == '[' {
 		// A JSON array file has no header; sample its elements (this path
 		// returned no names at all until 2026-10-08).
-		return nil, nil, lib.ReadJSON(br)
+		return nil, nil, lib.ReadJSON(br), false
 	}
 	sr := lib.ReadJSONLWithSchema(br)
 	if sr.Schema != nil && len(sr.Schema.Fields) > 0 {
-		return sr.Schema.Fields, sr.Schema.Types, nil
+		return sr.Schema.Fields, sr.Schema.Types, sr.Records, true
 	}
-	return nil, nil, sr.Records
+	return nil, nil, sr.Records, false
 }
 
 // writeSchemaModeJSON is the schema-mode output of a JSON/JSONL source:
 // the _schema header's names and types when present, otherwise the
 // names in the first record's key order, typed from a sample like a
 // delimited source (so a nested value shows `json`, not `any` — DFC144
-// Level 0).
+// Level 0); either way the paths inside its json-typed objects follow.
 func writeSchemaModeJSON(w io.Writer, r io.Reader) error {
-	fields, headerTypes, records := openJSONSource(bufio.NewReader(r))
-	if records == nil {
-		return writeSchemaModeOutputTyped(w, fields, headerTypes)
-	}
-	var names []string
+	fields, headerTypes, records, headed := openJSONSource(bufio.NewReader(r))
+	names := fields
 	types := map[string]string{}
+	for k, t := range headerTypes {
+		types[k] = t
+	}
 	func() {
 		defer func() { _ = recover() }() // a bad line types nothing; exec reports it
-		var sample []ssql.Record
-		for rec := range records {
-			if names == nil {
-				for k := range rec.KeysIter() {
-					names = append(names, k)
-				}
-			}
-			sample = append(sample, rec)
-			if len(sample) >= schemaModeSampleRows {
-				break
+		if headed {
+			names = nestedPathNames(fields, types, sampleSchemaRows(records))
+			return
+		}
+		sample := sampleSchemaRows(records)
+		if len(sample) > 0 {
+			for k := range sample[0].KeysIter() {
+				names = append(names, k)
 			}
 		}
 		schema := lib.InferFromSample(sample)
@@ -165,27 +201,7 @@ func writeSchemaModeJSON(w io.Writer, r io.Reader) error {
 				types[n] = schema.TypeOf(n)
 			}
 		}
-		// A nested object's keys are completable paths: addr.city, addr.zip
-		// (one level; a list's indices are typed by hand). The first row
-		// that has the object names them, as flatten does (DFC144 Level 2).
-		var nested []string
-		for _, n := range names {
-			if types[n] != lib.TypeJSON {
-				continue
-			}
-			for _, rec := range sample {
-				js, ok := ssql.Get[ssql.JSONString](rec, n)
-				if !ok || !strings.HasPrefix(strings.TrimSpace(string(js)), "{") {
-					continue
-				}
-				for _, p := range lib.NestedPaths(n, js) {
-					nested = append(nested, p.Name)
-					types[p.Name] = p.Type
-				}
-				break
-			}
-		}
-		names = append(names, nested...)
+		names = nestedPathNames(names, types, sample)
 	}()
 	return writeSchemaModeOutputTyped(w, names, types)
 }

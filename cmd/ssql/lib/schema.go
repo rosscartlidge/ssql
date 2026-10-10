@@ -364,31 +364,51 @@ type NestedPath struct {
 	Type string
 }
 
-// NestedPaths lists an object's top-level keys as paths under field, in
-// the object's own key order, typed from their values (a nested value is
-// `json`). Schema mode emits them so Tab completes addr.city after
-// `from events.jsonl |` (DFC144 Level 2).
+// NestedPathDepth bounds how far NestedPaths walks into an object:
+// addr.city is one level, addr.geo.lat two. Deep documents (an API
+// export with a config blob) would otherwise flood a completion list.
+const NestedPathDepth = 3
+
+// NestedPaths lists an object's keys as paths under field, in the
+// object's own key order, typed from their values (a nested value is
+// `json`), and walks into nested objects to NestedPathDepth so
+// addr.geo.lat is offered as well as addr.geo. Lists are not walked (an
+// index is typed by hand). Schema mode emits them so Ctrl-O completes
+// addr.city after `from events.jsonl |` (DFC144 Level 2).
 func NestedPaths(field string, js ssql.JSONString) []NestedPath {
-	parsed, ok := ssql.ExprValue(js).(map[string]any)
-	if !ok {
+	return nestedPaths(field, js, NestedPathDepth)
+}
+
+func nestedPaths(field string, js ssql.JSONString, depth int) []NestedPath {
+	if depth == 0 {
 		return nil
 	}
 	keys, err := jsonObjectKeys(string(js))
 	if err != nil {
 		return nil
 	}
+	// Raw children keep their own text, so a nested object's keys come
+	// out in document order (re-marshalling a map would sort them).
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(js), &raw); err != nil {
+		return nil
+	}
 	out := make([]NestedPath, 0, len(keys))
 	for _, k := range keys {
-		v := parsed[k]
+		child := ssql.JSONString(raw[k])
 		t := "any"
-		if v != nil {
+		if v := ssql.ExprValue(child); v != nil {
 			if nested, isNested := ssql.NestedValue(v); isNested {
 				t = InferTypeString(nested)
 			} else {
 				t = InferTypeString(v)
 			}
 		}
-		out = append(out, NestedPath{Name: field + "." + k, Type: t})
+		name := field + "." + k
+		out = append(out, NestedPath{Name: name, Type: t})
+		if t == TypeJSON {
+			out = append(out, nestedPaths(name, child, depth-1)...)
+		}
 	}
 	return out
 }

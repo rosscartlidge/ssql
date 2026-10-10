@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ctrl-O completes nested data: names to depth, values through the
+  path walk.** Field names: schema mode listed an object's keys one
+  level deep and only for a JSON array file; it now walks to depth three
+  (`addr.geo.lat`, not just `addr.geo`; lists are not walked) from every
+  source whose field is `json` — a JSONL file with a `_schema` header
+  and a delimited source listed none. Values: the sampler could not open
+  a `.json` array file at all (every field answered `<VALUE>`), printed
+  Go syntax for a list or object from a `.jsonl` (`[go rust]`), and knew
+  no dotted paths. Local csv/tsv/json/jsonl now sample through ssql's
+  own readers like parquet and URLs already did, so `addr.city eq
+  <Ctrl-O>` offers `NYC`, `tags.0` offers the elements and `tags`
+  offers the JSON text — which the binding single-quotes, as it does
+  any value the shell would mangle (an apostrophe too), not only a
+  spaced one.
+
 - **A stray positional argument is an error.** `ssql distinct addr.city`
   and `ssql count foo` ran as the bare command and dropped the argument;
   every command now refuses an argument it does not declare, naming it

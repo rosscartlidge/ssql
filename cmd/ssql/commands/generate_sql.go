@@ -3185,8 +3185,8 @@ func jsonHeader(path string) []string {
 		return nil
 	}
 	defer f.Close()
-	fields, types, records := openJSONSource(bufio.NewReader(f))
-	if records == nil {
+	fields, types, records, headed := openJSONSource(bufio.NewReader(f))
+	if headed {
 		for _, c := range fields {
 			sqlColumnKinds[c] = types[c]
 		}

@@ -147,3 +147,29 @@ emacs + vi). Parsing is exhaustively unit-tested in `cursor_context_test.go`.
 - **Remote (`from ssh`) field names need Ctrl-O:** there is no remote field-name cache (removed in v4.50.0). Field names downstream of an SSH source come from Ctrl-O, which runs the pipeline under `SSQL_MODE=schema` — including the remote read — to get the live schema.
 - **Connection warmup requires tab on HOST:** The background SSH connection starts when HOST is tab-completed. If typed manually, no warmup occurs (PATH completion still works, just slower on first use).
 - **Right-field completion is join-specific:** `-complete-source` recognizes the right-side slots of `join`'s `-on`/`-as`. Other commands that take a `<(…)>` source would need the same slot rule added.
+
+## Nested data (DFC144 Level 2, 2026-10-09)
+
+Field NAMES: schema mode (`SSQL_MODE=schema … | generate schema`) lists
+the paths inside every `json`-typed object field to `lib.NestedPathDepth`
+(3: `addr.city`, `addr.geo`, `addr.geo.lat`), from any source — a JSON
+array file, a JSONL file whose `_schema` already says `json`, a delimited
+source — via one step, `nestedPathNames` in `schema_mode.go`. Lists are
+not walked (`tags.0` is typed by hand). Ctrl-O's prefix match then
+completes `addr.c` → `addr.city`.
+
+Field VALUES: `completionFieldValueSource` (`completion_sources.go`, the
+autocli `FieldValueSource` hook) samples EVERY line format `from` reads —
+local or URL, csv/tsv/json/jsonl — through ssql's own readers and
+`ssql.Get`, so a dotted field samples through the same path walk `where`
+uses and a nested value is offered as its JSON text. autocli's built-in
+line sampler is left only the formats `from` does not route; it could
+not open a `.json` array file, printed `%v` of a list (`[go rust]`) and
+knew no paths. The binding single-quotes a completed value whenever it
+holds anything outside `[A-Za-z0-9._/:@%+=,-]` (`_ssql_needs_quote`),
+escaping an apostrophe, so `'["go","rust"]'` lands as one argument.
+Object values are still dropped by the binding's `{`-prefixed directive
+filter — an object is a poor `eq` operand anyway. Gates:
+`TestNestedPathsDepth` (lib), `TestCompletionFieldValueSourceLocal`
+(commands), `TestFieldKeybinding`, `TestFieldCompletionSources`,
+`TestSchemaModeTypesAndData` (cmd/ssql).
