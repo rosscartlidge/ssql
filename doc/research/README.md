@@ -154,6 +154,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC144 | 2026-10-07 | 2026-10-08 | [Non-scalar field values: a survey, what DuckDB does, and the options](./dfc144_non_scalar_values.md) |
 | DFC145 | 2026-10-08 | 2026-10-08 | [Nested tables: the one structured value is a relation, and commands scope into it](./dfc145_nested_tables.md) |
 | DFC146 | 2026-10-10 | 2026-10-10 | [CSV schema sidecars: CSVW and Frictionless Table Schema](./dfc146_csv_schema_sidecars.md) |
+| DFC147 | 2026-10-10 | 2026-10-10 | [Date and time: the function set, and where syntax earns its place](./dfc147_date_time_functions.md) |
 
 <!-- DFC-INDEX-END -->
 
