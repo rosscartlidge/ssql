@@ -5,6 +5,20 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`ssql functions` listed five date functions** (`now`, `date`,
+  `duration`, `timezone`, `bucket`) after v4.114.0 added seventeen; only
+  `-category date` had been updated, and its grouped lines (`year(ts)
+  month(ts) …` on one line) hid most of them from the per-function
+  lookup. The concise listing names all 22, the detailed one gives each
+  its own line, and `TestFunctionEntry` now gates both directions: every
+  function in any category is in the concise listing, and every function
+  the expression engine binds (ssql's compile-time functions and the
+  runtime's helpers) has an entry in both.
+
 ## [4.114.0] - 2026-10-11
 
 ### Added

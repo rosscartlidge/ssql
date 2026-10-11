@@ -1,6 +1,11 @@
 package commands
 
 import (
+	"github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime"
+	"maps"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,6 +25,28 @@ func TestFunctionEntry(t *testing.T) {
 	}
 	if _, ok := FunctionEntry("nosuch"); ok {
 		t.Errorf("nosuch should have no entry")
+	}
+	// Every function the detailed reference lists (any category) is in
+	// the concise `ssql functions` listing too — the date category grew
+	// 17 functions in DFC147 and the plain listing kept showing the old
+	// five. The concise reference is what a user sees first.
+	entryRe := regexp.MustCompile(`^  ([A-Za-z_][A-Za-z0-9_]*)\(`)
+	for _, line := range strings.Split(functionCatalog(), "\n") {
+		if m := entryRe.FindStringSubmatch(line); m != nil && !strings.Contains(FunctionsReference, m[1]+"(") {
+			t.Errorf("the detailed reference lists %s but `ssql functions` does not", m[1])
+		}
+	}
+	// And every function the expression engine binds is documented:
+	// ssql's compile-time functions (the calendar set, date) and the
+	// runtime's environment helpers. A new function cannot ship unlisted.
+	engine := append(slices.Sorted(maps.Keys(ssql.ExprCompiledFunctions)), runtime.HelperNames()...)
+	for _, name := range engine {
+		if _, ok := FunctionEntry(name); !ok {
+			t.Errorf("the expression engine binds %s but `ssql functions -category …` has no entry for it", name)
+		}
+		if !strings.Contains(FunctionsReference, name+"(") {
+			t.Errorf("the expression engine binds %s but `ssql functions` does not list it", name)
+		}
 	}
 	// Every function the concise reference lists has a detailed entry.
 	for _, line := range strings.Split(FunctionsReference, "\n") {

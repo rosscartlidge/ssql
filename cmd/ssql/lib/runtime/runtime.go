@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/expr-lang/expr"
@@ -78,6 +79,19 @@ func MustCompileExprFilter(expression string) func(ssql.Record) bool {
 // The result can be any type (int, float, bool, string, etc.)
 func CompileExpr(expression string) (func(ssql.Record) (any, error), error) {
 	return compileExpr(expression, nil)
+}
+
+// HelperNames are the functions exprHelpers puts in every expression
+// environment — for the `ssql functions` drift gate.
+func HelperNames() []string {
+	env := map[string]any{}
+	exprHelpers(env, func(string) bool { return false }, func(string) (any, bool) { return nil, false })
+	names := make([]string, 0, len(env))
+	for n := range env {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // exprHelpers are the functions every expression environment carries.
