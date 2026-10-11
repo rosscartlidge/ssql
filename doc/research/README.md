@@ -75,7 +75,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-03-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
-| DFC068 | 2026-03-21 | 2026-10-11 | [TODO](./TODO.md) |
+| DFC068 | 2026-03-21 | 2026-10-12 | [TODO](./TODO.md) |
 | DFC069 | 2026-03-21 | 2026-03-21 | [Browser-Based Linux for ssql Playground](./wasm-linux-options.md) |
 | DFC070 | 2026-03-21 | 2026-03-21 | [Design: ssql WASM Playground](./wasm-playground.md) |
 | DFC071 | 2026-03-28 | 2026-03-28 | [Multi-file `ssql from` — Design Doc](./multi-file-from.md) |
@@ -155,6 +155,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC145 | 2026-10-08 | 2026-10-08 | [Nested tables: the one structured value is a relation, and commands scope into it](./dfc145_nested_tables.md) |
 | DFC146 | 2026-10-10 | 2026-10-10 | [CSV schema sidecars: CSVW and Frictionless Table Schema](./dfc146_csv_schema_sidecars.md) |
 | DFC147 | 2026-10-10 | 2026-10-10 | [Date and time: the function set, and where syntax earns its place](./dfc147_date_time_functions.md) |
+| DFC148 | 2026-10-12 | 2026-10-12 | [DuckDB's "view-only mode" post, reproduced in ssql: findings, fixes and gaps](./dfc148_duckdb_view_only_mode.md) |
 
 <!-- DFC-INDEX-END -->
 

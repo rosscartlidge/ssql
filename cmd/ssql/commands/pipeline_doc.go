@@ -374,6 +374,22 @@ func runPipelineDocTo(ctx context.Context, self string, stages []docStage, w *os
 	return startChain(ctx, self, argv, chainOptions{Stdout: w, Stderr: stderrs, Env: env})
 }
 
+// errStdoutClosed: the document's last stage died of SIGPIPE writing to
+// run's stdout. Not a failure of the document; run turns it into its own
+// SIGPIPE death (exitBrokenPipe), exactly what the stage would have done
+// in a shell pipeline. Until 2026-10-11 it was reported as
+// `Error: run: stage 1 (…): signal: broken pipe` with exit status 1.
+var errStdoutClosed = errors.New("stdout closed by its reader")
+
+// exitBrokenPipe ends the process the way a write to a closed stdout
+// ends any ssql stage: the Go runtime turns EPIPE on fd 1 into death by
+// SIGPIPE (exit status 141 in a shell). Where no signal comes (a write
+// that succeeds, or a platform without SIGPIPE), the shell's number.
+func exitBrokenPipe() {
+	os.Stdout.Write([]byte("\n"))
+	os.Exit(141)
+}
+
 // waitNamed is wait with the failing stage named in the error.
 func (ch *stageChain) waitNamed(root *cf.Command, stages []docStage) error {
 	var lastErr, upstreamErr error
@@ -382,8 +398,15 @@ func (ch *stageChain) waitNamed(root *cf.Command, stages []docStage) error {
 		if err == nil {
 			continue
 		}
-		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == -1 && i < len(ch.cmds)-1 {
-			continue // killed by SIGPIPE after its consumer exited early: normal
+		if killedByBrokenPipe(err) {
+			if i < len(ch.cmds)-1 {
+				continue // its consumer exited early: normal
+			}
+			// The last stage writes to run's own stdout: its reader (a
+			// shell `| limit 3` after run) is gone, and run ends the way
+			// that stage did — silently, by SIGPIPE.
+			lastErr = errStdoutClosed
+			continue
 		}
 		named := fmt.Errorf("stage %d (%s): %w", i+1, stages[i].name(root), err)
 		if i == len(ch.cmds)-1 {

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"context"
 	"fmt"
 	"io"
@@ -97,6 +98,9 @@ func RegisterRun(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				stdin = ctx.Stdin()
 			}
 			if err := runPipelineDoc(runCtx, ctx.Command, self, stages, stdin, ctx.Stdout(), ctx.Stderr()); err != nil {
+				if errors.Is(err, errStdoutClosed) {
+					exitBrokenPipe()
+				}
 				return fmt.Errorf("run: %w", err)
 			}
 			return nil

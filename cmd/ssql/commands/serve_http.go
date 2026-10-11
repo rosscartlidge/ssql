@@ -24,6 +24,7 @@ package commands
 // REFUSES to bind non-loopback without -token.
 
 import (
+	"errors"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -461,6 +462,19 @@ func startStageChain(ctx context.Context, self, dir string, stages [][]string, e
 // after its consumer exited early — `limit`, `head`-like flows) is
 // normal termination, not failure. Upstream real exit codes still
 // count when the last stage succeeded.
+// killedByBrokenPipe reports whether a stage died of SIGPIPE: it wrote
+// after its reader had gone, which in a pipeline means a consumer
+// downstream finished early (`… | limit 3`) — normal, as in a shell.
+// Only SIGPIPE: both wait loops excused death by ANY signal until
+// 2026-10-11, so a stage the OOM killer took (SIGKILL) passed silently.
+func killedByBrokenPipe(err error) bool {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return false
+	}
+	return exitedBySIGPIPE(ee)
+}
+
 func (ch *stageChain) wait() error {
 	var lastErr, upstreamErr error
 	for i, c := range ch.cmds {
@@ -472,10 +486,8 @@ func (ch *stageChain) wait() error {
 			lastErr = err
 			continue
 		}
-		// ExitCode() == -1 means death by signal — expected upstream
-		// when downstream closed the pipe early.
-		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == -1 {
-			continue
+		if killedByBrokenPipe(err) {
+			continue // downstream closed the pipe early
 		}
 		if upstreamErr == nil {
 			upstreamErr = err

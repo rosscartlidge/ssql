@@ -30,6 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ssql run doc | ssql limit 3` reported an error.** When the reader
+  after `run` exited early, the document's last stage died of SIGPIPE
+  writing to `run`'s stdout, and `run` printed `Error: run: stage 1 (…):
+  signal: broken pipe` and exited 1. It now ends as the same stage would
+  in a shell pipeline: silently, killed by SIGPIPE (status 141).
+- **A pipeline stage killed by a signal other than SIGPIPE passed
+  silently.** `run` and `serve` excused an upstream stage's death by any
+  signal as "its consumer exited early", so one taken by the OOM killer
+  (SIGKILL) did not fail the pipeline. Only SIGPIPE is excused now.
 - **The optimiser pruned Parquet columns that reached the output.**
   `from parquet F | sort id | to csv` was rewritten to `from parquet F
   -columns id …` and printed one column — in `generate ssql`, the ⚙

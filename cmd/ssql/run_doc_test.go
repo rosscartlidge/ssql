@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"bytes"
 	"encoding/json"
 	"os"
@@ -253,4 +254,51 @@ func withZone(v any, zone string) any {
 		stages[i] = stage
 	}
 	return stages
+}
+
+// TestRunEarlyReaderExit: `ssql run doc | ssql limit 1` ends the way
+// `ssql from … | ssql limit 1` does — silently, killed by SIGPIPE (shell
+// status 141) — whether the document's last stage is its first or not.
+// Until 2026-10-11 run reported `stage 1 (…): signal: broken pipe` and
+// exited 1. A real failure in the document is still loud.
+func TestRunEarlyReaderExit(t *testing.T) {
+	bin := corpusBin(t)
+	data := corpusData(t)
+	dir := t.TempDir()
+	// Enough output that the writer is still writing when limit exits.
+	var b strings.Builder
+	b.WriteString("id,v\n")
+	for i := 0; i < 200000; i++ {
+		fmt.Fprintf(&b, "%d,%d\n", i, i*7)
+	}
+	big := filepath.Join(dir, "big.csv")
+	os.WriteFile(big, []byte(b.String()), 0o644)
+	docs := map[string]string{
+		"one":  fmt.Sprintf(`[["from","csv",%q]]`, big),
+		"two":  fmt.Sprintf(`[["from","csv",%q],["include","v"]]`, big),
+		"fail": fmt.Sprintf(`[["from","csv",%q]]`, filepath.Join(dir, "nope.csv")),
+	}
+	status := func(line string) (string, string) {
+		t.Helper()
+		cmd := exec.Command("bash", "-c", line+`; echo "${PIPESTATUS[0]}"`)
+		cmd.Dir = data
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, _ := cmd.Output()
+		return strings.TrimSpace(string(out)), stderr.String()
+	}
+	direct, _ := status(bin + " from csv " + big + " | " + bin + " limit 1 >/dev/null")
+	for _, name := range []string{"one", "two"} {
+		p := filepath.Join(dir, name+".json")
+		os.WriteFile(p, []byte(docs[name]), 0o644)
+		got, stderr := status(bin + " run " + p + " | " + bin + " limit 1 >/dev/null")
+		if got != direct || stderr != "" {
+			t.Errorf("%s: run status %s (direct %s), stderr %q", name, got, direct, stderr)
+		}
+	}
+	p := filepath.Join(dir, "fail.json")
+	os.WriteFile(p, []byte(docs["fail"]), 0o644)
+	if got, stderr := status(bin + " run " + p + " | " + bin + " limit 1 >/dev/null"); got != "1" || !strings.Contains(stderr, "nope.csv") {
+		t.Errorf("a failing document: status %s, stderr %q", got, stderr)
+	}
 }
