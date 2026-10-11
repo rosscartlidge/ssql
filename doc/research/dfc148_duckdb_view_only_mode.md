@@ -7,7 +7,7 @@ Last modified: 2026-10-12
 [Back to Index](./README.md)
 
 Status: **five of the post's problems fixed 2026-10-11 (unreleased, after
-v4.114.1); five gaps open (§4).**
+v4.114.1); six gaps open (§4).**
 
 ## 1. The post
 
@@ -53,7 +53,7 @@ consumer query identically. `generate sql` through `run` emits DuckDB SQL
 for the document, including DuckDB's own `RENAME` for step 3.
 
 Running the post step by step found five problems in ssql (§3). All five are
-fixed. It also left five gaps (§4).
+fixed. It also left six gaps (§4).
 
 ## 3. Problems found and fixed
 
@@ -360,6 +360,78 @@ directly through `readAuxInput`; CLAUDE.md already lists this ("Parquet/arrow
 route via procsub for now"). Or documents could gain nested sub-pipelines.
 The first is small and general. For a same-schema union, multi-file
 `from parquet` (§3.3) already covers most cases.
+
+### 4.6 Pushdown happens once at generate time, not every time the view is queried
+
+When DuckDB queries a view, it reads only the columns the query uses, every
+time. ssql can push the needed columns into a run document's read, but only
+in the modes where it can see the whole pipeline, and only at the moment the
+pipeline is generated.
+
+Run plainly, `run` cannot see the commands after it in the shell pipe, so it
+reads every column:
+
+```bash
+ssql run services.json | ssql group-by station_name -count calls \
+  | ssql sort -desc calls | ssql limit 3          # all 8 columns
+```
+
+The generate modes see the whole chain, including what is inside the
+document. `generate ssql` optimises the interpreted pipeline, and checked on
+2026-10-12 it emits:
+
+```
+$ (export SSQL_MODE=record; ssql run services.json | ssql group-by station_name -count calls \
+    | ssql sort -desc calls | ssql limit 3) | ssql generate ssql
+ssql from parquet https://blobs.duckdb.org/train_services.parquet -tz Australia/Sydney -columns station_name | ssql group-by station_name -count calls | ssql top 3 -field calls
+```
+
+It reads one column and turns `sort | limit` into `top`. `generate go`
+uses the same field collection (`collectDownstreamFields`), and DuckDB
+prunes the SQL lane's `read_parquet` itself; neither was timed here. On this 1.6 MB file the
+optimised form took 2.1–2.3 s, against 2.5–2.7 s for the plain one. On a
+large remote file, with most columns unused, the gap would be much larger,
+because fewer column chunks would be fetched (§3.1).
+
+**The gap is when the optimising happens, not whether it can.** The
+generated pipeline has the document's contents copied into it: the URL, the
+zone and the column list. If the document changes later (the data moves to a
+glob, as in step 2, or a column is renamed, as in step 3), the generated
+pipeline keeps reading the old source until someone regenerates it. That
+loses the main point of a view: a stable interface over a definition that
+can change. ssql currently offers two choices:
+
+| Form | Follows the document when it changes | Reads only the columns used |
+|---|---|---|
+| `ssql run services.json \| …` | yes | no |
+| `generate ssql` / `go` / `sql` output | no (copied in at generate time) | yes |
+| DuckDB view | yes | yes |
+
+**Proposal options:**
+
+- (a) **`run` takes a projection.** `run services.json -columns
+  station_name` resolves the document when it runs, then applies the
+  optimiser's pushdown to it as if an `include` stage followed.
+  `generate ssql` would emit `ssql run services.json -columns station_name |
+  …`, keeping the reference instead of copying the document in. A
+  `rename` inside the document means the consumer's names are not the
+  file's names, so the projection must be mapped back through the
+  document's stages. An equivalence case over step 3 (the rename view)
+  must pin this. The generated Go and SQL lanes could
+  do the same only by reading the document when the program runs, which they
+  do not do today. Small for exec and `generate ssql`, medium for the rest.
+- (b) **Documents include documents.** The consumer's query is itself a
+  document whose first stage refers to the view
+  (`[["run","services.json"],["group-by","station_name","-count","calls"], …]`).
+  `run` resolves the reference, then optimises the combined chain before
+  executing it. This is a view and a query composed at query time, which is
+  exactly what DuckDB does. It also needs a rule against cycles. It overlaps
+  with named views (§4.4), and the two should be designed together.
+- (c) **Leave it, and document it.** Regenerate when the view changes.
+
+Recommendation: (a) now, for exec and `generate ssql`, because it is the
+smallest change that keeps both properties in the interpreted path. Fold (b)
+into the §4.4 design.
 
 ## 5. Lessons
 
