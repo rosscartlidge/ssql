@@ -54,6 +54,29 @@ func TestCollectDownstreamFields_GroupByBarrier(t *testing.T) {
 			),
 			want: []string{"relationship", "z_sequence"},
 		},
+		{
+			// No stage narrows the record: every source column reaches the
+			// output, so nothing may be pruned (2026-10-11: this pipeline
+			// was rewritten to `-columns relationship` and printed one).
+			name: "pass-through stages keep every column",
+			cmds: mkcmds(
+				"ssql from parquet shuffled.parquet",
+				"ssql where -if z_sequence gt 5",
+				"ssql sort relationship",
+				"ssql to csv",
+			),
+			allOK: true,
+		},
+		{
+			name: "include narrows",
+			cmds: mkcmds(
+				"ssql from parquet shuffled.parquet",
+				"ssql sort z_sequence",
+				"ssql include relationship z_sequence",
+				"ssql update -set-expr x 'z_sequence * 2'",
+			),
+			want: []string{"relationship", "z_sequence"},
+		},
 	}
 
 	for _, tc := range cases {

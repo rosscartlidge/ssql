@@ -22,6 +22,7 @@ import (
 	"github.com/apache/arrow/go/v18/parquet/compress"
 	"github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	ssql "github.com/rosscartlidge/ssql/v4"
 )
 
 // ParquetOption configures a Parquet reader. Pass to [ReadParquet],
@@ -65,15 +66,58 @@ func resolveParquetOpts(opts []ParquetOption) parquetOpts {
 // Reflection happens once at file-open time. Per-row decoding uses
 // Arrow column arrays directly — no string parsing, no boxing
 // through `any`.
+//
+// A file that cannot be opened or read panics with a *[ReadError], as
+// [ReadCSV] does (until 2026-10-11 it silently yielded nothing — a
+// missing file was an empty table).
 func ReadParquet[T any](filename string, opts ...ParquetOption) iter.Seq[T] {
+	o := resolveParquetOpts(opts)
 	return func(yield func(T) bool) {
 		f, err := os.Open(filename)
 		if err != nil {
-			return
+			failRead("typed.ReadParquet", filename, err)
 		}
 		defer f.Close()
-		ReadParquetFromReaderAt[T](f, opts...)(yield)
+		readParquet[T](f, o, yield, func(err error) bool {
+			failRead("typed.ReadParquet", filename, err)
+			return false
+		})
 	}
+}
+
+// ReadParquetFiles is [ReadParquet] over several files read in order as
+// one sequence. Paths may be glob patterns, expanded when the sequence
+// runs ([ssql.ExpandFilePatterns]); the files must share one schema
+// ([ssql.CheckParquetSchemas]).
+func ReadParquetFiles[T any](paths []string, opts ...ParquetOption) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for _, f := range expandParquetFiles("typed.ReadParquetFiles", paths) {
+			cont := true
+			ReadParquet[T](f, opts...)(func(row T) bool {
+				cont = yield(row)
+				return cont
+			})
+			if !cont {
+				return
+			}
+		}
+	}
+}
+
+// expandParquetFiles is the multi-file readers' shared front: the
+// patterns expanded and the schemas checked, loudly.
+func expandParquetFiles(op string, paths []string) []string {
+	files, err := ssql.ExpandFilePatterns(paths)
+	if err == nil && len(files) == 0 {
+		err = fmt.Errorf("no Parquet files given")
+	}
+	if err == nil && len(files) > 1 {
+		err = ssql.CheckParquetSchemas(files)
+	}
+	if err != nil {
+		failRead(op, strings.Join(paths, " "), err)
+	}
+	return files
 }
 
 // ReadParquetSafe is the error-reporting variant of [ReadParquet].
@@ -569,86 +613,123 @@ func yieldTableRows[T any](tbl arrow.Table, plan *parquetReadPlan, yield func(T)
 // group without re-decoding it.
 //
 // n=0 means runtime.GOMAXPROCS(0). If the file has fewer row
-// groups than n, n is reduced accordingly.
+// groups than n, n is reduced accordingly. A file that cannot be
+// opened or read panics with a *[ReadError] (until 2026-10-11 it
+// produced an empty stream).
 func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) Stream[T] {
+	return readParquetUnitsParallel[T]("typed.ReadParquetParallel", []string{filename}, n, opts)
+}
+
+// ReadParquetFilesParallel is [ReadParquetParallel] over several files:
+// the shards share out every file's row groups. Paths may be glob
+// patterns ([ssql.ExpandFilePatterns]); the files must share one schema
+// ([ssql.CheckParquetSchemas]).
+func ReadParquetFilesParallel[T any](paths []string, n int, opts ...ParquetOption) Stream[T] {
+	return readParquetUnitsParallel[T]("typed.ReadParquetFilesParallel", expandParquetFiles("typed.ReadParquetFilesParallel", paths), n, opts)
+}
+
+// parquetUnit is one row group of one file: the parallel readers'
+// unit of work.
+type parquetUnit struct{ file, rg int }
+
+func readParquetUnitsParallel[T any](op string, files []string, n int, opts []ParquetOption) Stream[T] {
 	o := resolveParquetOpts(opts)
 	if n <= 0 {
 		n = runtime.GOMAXPROCS(0)
 	}
 
-	// Open once to read metadata. Each shard re-opens the file
-	// because pqarrow.FileReader is not safe for concurrent use
-	// from multiple goroutines (it shares state for read-coalescing).
-	f0, err := os.Open(filename)
-	if err != nil {
+	// Read each footer once for its row-group count; the first file's
+	// schema builds the plan (the files share one, checked by the
+	// caller). Each shard re-opens the files because pqarrow.FileReader
+	// is not safe for concurrent use from multiple goroutines (it shares
+	// state for read-coalescing).
+	var plan *parquetReadPlan
+	var units []parquetUnit
+	for fi, name := range files {
+		f, err := os.Open(name)
+		if err != nil {
+			failRead(op, name, err)
+		}
+		pf, err := file.NewParquetReader(f)
+		if err != nil {
+			f.Close()
+			failRead(op, name, err)
+		}
+		if plan == nil {
+			reader, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{}, memory.DefaultAllocator)
+			if err == nil {
+				var sch *arrow.Schema
+				if sch, err = reader.Schema(); err == nil {
+					plan, err = buildParquetReadPlan[T](sch, o)
+				}
+			}
+			if err != nil {
+				pf.Close()
+				f.Close()
+				failRead(op, name, err)
+			}
+		}
+		for rg := 0; rg < pf.NumRowGroups(); rg++ {
+			units = append(units, parquetUnit{fi, rg})
+		}
+		pf.Close()
+		f.Close()
+	}
+	if len(units) == 0 {
 		return Stream[T]{shards: nil, n: 0}
 	}
-	pf0, err := file.NewParquetReader(f0)
-	if err != nil {
-		f0.Close()
-		return Stream[T]{shards: nil, n: 0}
-	}
-	reader0, err := pqarrow.NewFileReader(pf0, pqarrow.ArrowReadProperties{}, memory.DefaultAllocator)
-	if err != nil {
-		pf0.Close()
-		f0.Close()
-		return Stream[T]{shards: nil, n: 0}
-	}
-	arrowSchema, err := reader0.Schema()
-	if err != nil {
-		pf0.Close()
-		f0.Close()
-		return Stream[T]{shards: nil, n: 0}
-	}
-	plan, err := buildParquetReadPlan[T](arrowSchema, o)
-	if err != nil {
-		pf0.Close()
-		f0.Close()
-		return Stream[T]{shards: nil, n: 0}
-	}
-	nRowGroups := pf0.NumRowGroups()
-	pf0.Close()
-	f0.Close()
-	if nRowGroups == 0 {
-		return Stream[T]{shards: nil, n: 0}
-	}
-	if n > nRowGroups {
-		n = nRowGroups
+	if n > len(units) {
+		n = len(units)
 	}
 
-	// Partition row groups across shards round-robin so a long row
-	// group at the end doesn't leave one worker idle. Contiguous
-	// would also work; round-robin balances variance.
-	shardRowGroups := make([][]int, n)
-	for i := 0; i < nRowGroups; i++ {
-		shardRowGroups[i%n] = append(shardRowGroups[i%n], i)
+	// Partition units across shards round-robin so a long row group at
+	// the end doesn't leave one worker idle. Contiguous would also
+	// work; round-robin balances variance.
+	shardUnits := make([][]parquetUnit, n)
+	for i, u := range units {
+		shardUnits[i%n] = append(shardUnits[i%n], u)
 	}
 
 	shards := make([]iter.Seq[T], n)
 	for i := 0; i < n; i++ {
-		rgs := shardRowGroups[i]
+		mine := shardUnits[i]
 		shards[i] = func(yield func(T) bool) {
-			f, err := os.Open(filename)
-			if err != nil {
-				return
+			var f *os.File
+			var pf *file.Reader
+			var reader *pqarrow.FileReader
+			cur := -1
+			closeCur := func() {
+				if pf != nil {
+					pf.Close()
+				}
+				if f != nil {
+					f.Close()
+				}
+				f, pf, reader = nil, nil, nil
 			}
-			defer f.Close()
-			pf, err := file.NewParquetReader(f)
-			if err != nil {
-				return
-			}
-			defer pf.Close()
-			reader, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{}, memory.DefaultAllocator)
-			if err != nil {
-				return
-			}
+			defer closeCur()
 			ctx := context.Background()
 			// Read one row group at a time so peak memory is one
 			// row group (not all-shard's row groups).
-			for _, rg := range rgs {
-				tbl, err := reader.ReadRowGroups(ctx, plan.colIndices, []int{rg})
+			for _, u := range mine {
+				if u.file != cur {
+					closeCur()
+					name := files[u.file]
+					var err error
+					if f, err = os.Open(name); err != nil {
+						failRead(op, name, err)
+					}
+					if pf, err = file.NewParquetReader(f); err != nil {
+						failRead(op, name, err)
+					}
+					if reader, err = pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{}, memory.DefaultAllocator); err != nil {
+						failRead(op, name, err)
+					}
+					cur = u.file
+				}
+				tbl, err := reader.ReadRowGroups(ctx, plan.colIndices, []int{u.rg})
 				if err != nil {
-					return
+					failRead(op, files[u.file], err)
 				}
 				cont := true
 				yieldTableRows[T](tbl, plan, func(row T) bool {
@@ -667,7 +748,6 @@ func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) S
 	}
 	return Stream[T]{shards: shards, n: n}
 }
-
 
 // ---- Write path ----
 

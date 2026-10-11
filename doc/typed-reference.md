@@ -207,6 +207,8 @@ func ReadParquetSafe[T any](filename string, opts ...ParquetOption) iter.Seq2[T,
 func ReadParquetFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...ParquetOption) iter.Seq[T]
 func ReadParquetSafeFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...ParquetOption) iter.Seq2[T, error]
 func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) Stream[T]
+func ReadParquetFiles[T any](paths []string, opts ...ParquetOption) iter.Seq[T]                    // several files or globs, in order; one shared schema
+func ReadParquetFilesParallel[T any](paths []string, n int, opts ...ParquetOption) Stream[T]      // shards share out every file's row groups
 
 func WriteParquet[T any](seq iter.Seq[T], filename string) error
 func WriteParquetToWriter[T any](seq iter.Seq[T], w io.Writer) error
@@ -216,6 +218,11 @@ func (s Stream[T]) WriteParquetToWriter(w io.Writer) error
 func ParquetStrict() ParquetOption              // reject schema mismatches
 func ParquetColumns(names ...string) ParquetOption  // read only the listed columns
 ```
+
+A file that cannot be opened or read panics with a `*ReadError`, as
+the CSV readers do (the Parquet readers yielded nothing until
+2026-10-11, so a missing file read as an empty table). The `Safe`
+variants still report errors through the sequence.
 
 Snappy compression by default. Reads use the existing
 `github.com/apache/arrow/go/v18/parquet` dependency that ssql

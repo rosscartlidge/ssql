@@ -1485,7 +1485,10 @@ for p := range processes {
 
 ```go
 func ReadParquet(filename string) (iter.Seq[Record], error)
-func ReadParquetColumns(filename string, columns []string) (iter.Seq[Record], error)   // read only these columns: the big lever on wide files
+func ReadParquetColumns(filename string, columns []string) (iter.Seq[Record], error)   // read only these columns, in the order given: the big lever on wide files
+func ReadParquetFiles(paths, columns []string) (iter.Seq[Record], error)   // several files (or glob patterns) in order as one stream; they must share one schema
+func CheckParquetSchemas(files []string) error                             // same columns, order and types as the first file, or an error naming the difference
+func ExpandFilePatterns(args []string) ([]string, error)                   // globs → sorted matches in place; no match and ** are errors; URLs untouched
 func ReadParquetFromReader(r parquet.ReaderAtSeeker) (iter.Seq[Record], error)
 func WriteParquet(records iter.Seq[Record], filename string, opts ...ParquetWriteOption) error
 func WriteParquetToWriter(records iter.Seq[Record], w io.Writer, opts ...ParquetWriteOption) error
@@ -1554,6 +1557,9 @@ func (h *HTTPFile) ReadAt(p []byte, off int64) (int, error)
 func (h *HTTPFile) Seek(offset int64, whence int) (int64, error)
 func (h *HTTPFile) Size() int64
 func (h *HTTPFile) Requests() int64   // Range requests made so far
+func (h *HTTPFile) Prefetch(ranges []ByteRange) error   // fetch ranges concurrently (adjacent ones merged up to 4MB); ReadAt inside one is served from memory
+func (h *HTTPFile) DropPrefetched()                      // release the prefetched bytes
+type ByteRange struct{ Off, Len int64 }
 ```
 
 A server that does not honour Range is refused rather than downloading

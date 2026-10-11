@@ -2393,3 +2393,53 @@ func TestFromHTTP(t *testing.T) {
 		t.Errorf("schema mode url: %s %v", out, err)
 	}
 }
+
+// TestGenerateStageFailureIsLoud: a stage that fails in generate mode
+// must fail the generator, naming that stage — never leave an empty
+// fragment stream that the next stage reads as the start of a pipeline.
+// 2026-10-11: a rename with a bad argument (refused by the grammar,
+// before the handler could write an error fragment) let group-by head
+// the chain, and generate sql printed a FROM-less query and exited 0.
+// Every generator is checked, through a shell pipe and through a run
+// document; the stages in between relay the failure without re-reporting
+// it, and a chain with no source at all (a crashed stage) is refused.
+func TestGenerateStageFailureIsLoud(t *testing.T) {
+	bin := corpusBin(t)
+	dir := t.TempDir()
+	os.WriteFile(dir+"/d.csv", []byte("a,b\n1,x\n2,y\n"), 0o644)
+	os.WriteFile(dir+"/bad.json", []byte(`[["from","csv","d.csv"],["rename","a","z"]]`), 0o644)
+	run := func(line string) (string, error) {
+		cmd := exec.Command("bash", "-c", "cd "+dir+" && "+line) // no pipefail: the exit status is the generator's own
+		cmd.Env = append(os.Environ(), "SSQL_MODE=record", "SSQLGO=")
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	const bad = `unexpected argument "a"`
+	for _, gen := range []string{"sql", "go", "ssql", "json"} {
+		for _, head := range []string{
+			bin + " from csv d.csv | " + bin + " rename a z",
+			bin + " run bad.json",
+		} {
+			line := head + " | " + bin + " group-by b -count n | " + bin + " to table | " + bin + " generate " + gen
+			out, err := run(line)
+			if err == nil {
+				t.Errorf("generate %s exited 0 after a failed stage:\n%s\n%s", gen, line, out)
+				continue
+			}
+			if !strings.Contains(out, "code generation failed in ssql ") || !strings.Contains(out, bad) {
+				t.Errorf("generate %s does not name the failed stage:\n%s", gen, out)
+			}
+			if strings.Contains(out, "failed in ssql group-by") || strings.Contains(out, "failed in ssql to table") {
+				t.Errorf("generate %s: a relaying stage re-reported the failure:\n%s", gen, out)
+			}
+			if strings.Contains(out, "SELECT") {
+				t.Errorf("generate %s printed a query anyway:\n%s", gen, out)
+			}
+		}
+	}
+	// No source at all: what a stage that crashed without a fragment leaves.
+	out, err := run("true | " + bin + " group-by b -count n | " + bin + " generate sql")
+	if err == nil || !strings.Contains(out, "the pipeline has no source") {
+		t.Errorf("headless chain: err=%v\n%s", err, out)
+	}
+}

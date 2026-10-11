@@ -234,6 +234,17 @@ func NewErrorFragment(command string, err error) *CodeFragment {
 	}
 }
 
+// UpstreamFailure is an error fragment as a downstream reader meets it:
+// an earlier stage failed to generate. A stage that hits one relays the
+// ORIGINAL fragment (commands.ReportGenerateFailure) rather than wrapping
+// it, so the assembler names the stage that failed and nothing between
+// re-reports it.
+type UpstreamFailure struct{ Frag *CodeFragment }
+
+func (e *UpstreamFailure) Error() string {
+	return fmt.Sprintf("code generation failed in %s: %s", e.Frag.Command, e.Frag.Error)
+}
+
 // WriteErrorAndExit writes an error fragment and returns the error
 // This should be used when code generation fails - it ensures the error
 // propagates through the pipeline so generate go can detect it
@@ -267,7 +278,7 @@ func ReadCodeFragmentsFromReader(r io.Reader) ([]*CodeFragment, error) {
 
 		// Check for error fragment - pipeline generation failed
 		if frag.Type == "error" {
-			return nil, fmt.Errorf("code generation failed in %s: %s", frag.Command, frag.Error)
+			return nil, &UpstreamFailure{Frag: &frag}
 		}
 
 		fragments = append(fragments, &frag)
@@ -434,7 +445,7 @@ func AssembleCodeFragmentsWith(input io.Reader, opts AssembleOptions) (string, e
 
 		// Check for error fragment - pipeline generation failed
 		if frag.Type == "error" {
-			return "", fmt.Errorf("code generation failed in %s: %s", frag.Command, frag.Error)
+			return "", &UpstreamFailure{Frag: &frag}
 		}
 
 		fragments = append(fragments, &frag)

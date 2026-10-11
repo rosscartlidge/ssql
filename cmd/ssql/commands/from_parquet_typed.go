@@ -31,22 +31,25 @@ import (
 // Not implemented here yet — for now users get column projection by
 // either (a) passing `-columns` explicitly, or (b) running
 // `generate ssql` first and piping the result back through `from`.
-func generateFromParquetCodeTyped(filename string, columns []string) error {
-	if filename == "" {
-		return lib.WriteErrorAndExit(getCommandString(),
-			fmt.Errorf("ssql generate go -typed: 'from parquet' requires a file (random access format, no stdin)"))
-	}
-
-	schema, err := readParquetTypedSchema(filename, columns)
+func generateFromParquetCodeTyped(args, files []string, columns []string) error {
+	schema, err := readParquetTypedSchema(files[0], columns)
 	if err != nil {
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: %w", err))
 	}
 	structDef := lib.RenderStructDef(schema)
 
-	params := []lib.CodeParam{{
-		Name: "input", Default: filename, Help: "input Parquet file", VarName: "flagInput",
-	}}
+	// One plain file keeps the -input parameter; several, or a pattern,
+	// are written in as given (a glob expands when the program runs).
+	var params []lib.CodeParam
+	parallelRead, serialRead := "typed.ReadParquetFilesParallel", "typed.ReadParquetFiles"
+	source := goStringSlice(args)
+	if singleParquetFile(args) {
+		params = []lib.CodeParam{{
+			Name: "input", Default: args[0], Help: "input Parquet file", VarName: "flagInput",
+		}}
+		parallelRead, serialRead, source = "typed.ReadParquetParallel", "typed.ReadParquet", "*flagInput"
+	}
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	if needsTimeImport(schema) {
 		imports = append(imports, "time")
@@ -63,9 +66,9 @@ func generateFromParquetCodeTyped(filename string, columns []string) error {
 	}
 
 	// Always emit BOTH templates; planner picks per pipeline.
-	parallelCode := fmt.Sprintf(`records := typed.ReadParquetParallel[%s](*flagInput, 0%s)`, schema.TypeName, colsArg)
+	parallelCode := fmt.Sprintf(`records := %s[%s](%s, 0%s)`, parallelRead, schema.TypeName, source, colsArg)
 	parallelImports := append([]string{}, imports...)
-	serialCode := fmt.Sprintf(`records := typed.ReadParquet[%s](*flagInput%s)`, schema.TypeName, colsArg)
+	serialCode := fmt.Sprintf(`records := %s[%s](%s%s)`, serialRead, schema.TypeName, source, colsArg)
 	serialImports := append([]string{}, imports...)
 
 	frag := fromInitFragment("records", parallelCode, parallelImports)

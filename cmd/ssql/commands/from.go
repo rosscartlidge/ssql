@@ -92,10 +92,32 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				generate = genVal.(bool)
 			}
 
-			// Bare form only supports single file
+			// Parquet files, several or a pattern: from parquet reads them
+			// as one stream (its own multi-file reader, not the format
+			// table's single-file route).
+			if len(files) > 0 {
+				if fi, _ := formatForPath(files[0]); fi.Name == "parquet" {
+					expanded, err := ssql.ExpandFilePatterns(files)
+					if err != nil {
+						return err
+					}
+					if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
+						return runFromRecords("parquet", expanded, -1)
+					}
+					return executeFromParquet(files, expanded, nil, generate)
+				}
+			}
+
+			// The bare form reads one file otherwise; say which
+			// subcommand reads several of this kind.
 			if len(files) > 1 {
-				return fmt.Errorf("bare 'from' only supports a single file — for multiple files use: ssql from csv %s %s ...",
-					files[0], files[1])
+				switch fi, _ := formatForPath(files[0]); fi.Name {
+				case "csv", "tsv", "json", "jsonl":
+					return fmt.Errorf("bare 'from' only supports a single file — for multiple files use: ssql from %s %s %s ...",
+						fi.Name, files[0], files[1])
+				default:
+					return fmt.Errorf("bare 'from' only supports a single file, and %s files are read one at a time", files[0])
+				}
 			}
 
 			inputFile := ""
@@ -154,8 +176,6 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				return executeFromJSON(inputFile, defaultTypeArgs(), generate)
 			case "arrow":
 				return executeFromArrow(inputFile, generate)
-			case "parquet":
-				return executeFromParquet(inputFile, nil, generate)
 			case "wav":
 				return executeFromWAV(inputFile, -1, generate)
 			case "xlsx":

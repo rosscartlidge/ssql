@@ -2,7 +2,7 @@
 
 Reference: DFC112
 Created: 2026-08-23
-Last modified: 2026-09-05
+Last modified: 2026-10-11
 
 [Back to Index](./README.md)
 
@@ -139,3 +139,14 @@ alternative); redirects followed; no retry magic in v1.
       chatty, it fails and readahead becomes worth building. The
       real remote-speed lever is the ⚡ typed head, which already
       exists. DFC112 is now fully closed.
+- [x] Concurrent column-chunk prefetch — BUILT 2026-10-11, on new
+      evidence. The negative result above holds (the request COUNT was
+      already right), but it was measured on a low-latency link. From
+      Australia to blobs.duckdb.org each request costs ~350ms and arrow
+      issues them serially: 34 requests, 13.5s for a 1.6MB file.
+      `HTTPFile.Prefetch` fetches the selected chunks' ranges (from the
+      footer, merged when adjacent up to 4MB) concurrently, 16 in
+      flight, before decoding: 3 requests, 2.4s (DuckDB: 2.3s). Gate:
+      `TestParquetHTTPConcurrentChunks` (peak in-flight requests against
+      a latency server, the coalesced request count, equality with the
+      local read, and pruning).

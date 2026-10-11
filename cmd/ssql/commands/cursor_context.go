@@ -425,10 +425,13 @@ func fromOwnFileFieldSlot(stage string, tree *cf.Command) (string, string) {
 	if ctx.FlagSpec == nil || ctx.FlagSpec.FieldsFromFlag != "FILE" {
 		return "", ""
 	}
-	file, _ := ctx.GlobalFlags["FILE"].(string)
-	if file == "" {
+	// FILE is variadic on from parquet (several files share one schema,
+	// so the first names it) and single elsewhere.
+	files := parquetFileArgs(ctx.GlobalFlags["FILE"])
+	if len(files) == 0 {
 		return "", ""
 	}
+	file := files[0]
 	fmtSub := ""
 	if len(path) > 1 {
 		fmtSub = path[1]

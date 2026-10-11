@@ -4,6 +4,7 @@ package typed
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -196,4 +197,61 @@ func TestParquetTimestamps(t *testing.T) {
 	if !got[1].When.Equal(t2) || got[1].Value != 200 {
 		t.Errorf("row 1: %v", got[1])
 	}
+}
+
+// TestParquetFiles: several files (a list or a glob) read as one
+// sequence in order, serially and in parallel across every file's row
+// groups; a schema mismatch and a missing file panic with a *ReadError
+// (the parquet readers yielded nothing on error until 2026-10-11).
+func TestParquetFiles(t *testing.T) {
+	dir := t.TempDir()
+	var want []pqRow
+	for f, n := range []int{3, 0, 5} { // an empty file in the middle
+		var rows []pqRow
+		for i := 0; i < n; i++ {
+			rows = append(rows, pqRow{Name: "u", Age: int64(f*100 + i), Dept: "D"})
+		}
+		want = append(want, rows...)
+		if err := WriteParquet(slices.Values(rows), filepath.Join(dir, fmt.Sprintf("part-%d.parquet", f)), WithRowGroupSize(2)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := slices.Collect(ReadParquetFiles[pqRow]([]string{filepath.Join(dir, "part-*.parquet")}))
+	if !slices.Equal(got, want) {
+		t.Errorf("serial over a glob:\n got %v\nwant %v", got, want)
+	}
+	ages := func(rows []pqRow) []int64 {
+		var out []int64
+		for _, r := range rows {
+			out = append(out, r.Age)
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, n := range []int{1, 3, 8} {
+		par := slices.Collect(ReadParquetFilesParallel[pqRow]([]string{filepath.Join(dir, "part-*.parquet")}, n).Serial())
+		if !slices.Equal(ages(par), ages(want)) {
+			t.Errorf("parallel n=%d: %v, want %v", n, ages(par), ages(want))
+		}
+	}
+
+	type other struct{ Name string }
+	if err := WriteParquet(slices.Values([]other{{"x"}}), filepath.Join(dir, "zz.parquet")); err != nil {
+		t.Fatal(err)
+	}
+	mustReadError := func(what string, fn func()) {
+		t.Helper()
+		defer func() {
+			r := recover()
+			if _, ok := r.(*ReadError); !ok {
+				t.Errorf("%s: recovered %v (%T), want a *ReadError", what, r, r)
+			}
+		}()
+		fn()
+	}
+	mustReadError("mismatch", func() {
+		slices.Collect(ReadParquetFiles[pqRow]([]string{filepath.Join(dir, "*.parquet")}))
+	})
+	mustReadError("missing serial", func() { slices.Collect(ReadParquet[pqRow](filepath.Join(dir, "nope.parquet"))) })
+	mustReadError("missing parallel", func() { ReadParquetParallel[pqRow](filepath.Join(dir, "nope.parquet"), 2) })
 }

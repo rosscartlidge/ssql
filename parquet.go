@@ -54,6 +54,121 @@ func ReadParquetColumns(filename string, columns []string) (iter.Seq[Record], er
 	return readParquetFromReaderWithColumns(f, columns)
 }
 
+// ReadParquetFiles reads several Parquet files as one stream, in order:
+// the files of each argument in turn, a glob argument's matches sorted
+// (ExpandFilePatterns). The files must share one schema
+// (CheckParquetSchemas) — the error names the file and the column that
+// differ — so every backend reads them alike. A file that fails to open
+// partway through the stream panics with the error (ssql.Run reports
+// it). One file is exactly ReadParquetColumns.
+func ReadParquetFiles(paths, columns []string) (iter.Seq[Record], error) {
+	files, err := ExpandFilePatterns(paths)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no Parquet files given")
+	}
+	if len(files) == 1 {
+		return ReadParquetColumns(files[0], columns)
+	}
+	if err := CheckParquetSchemas(files); err != nil {
+		return nil, err
+	}
+	return func(yield func(Record) bool) {
+		for _, f := range files {
+			seq, err := ReadParquetColumns(f, columns)
+			if err != nil {
+				panic(fmt.Errorf("%s: %w", f, err))
+			}
+			for r := range seq {
+				if !yield(r) {
+					return
+				}
+			}
+		}
+	}, nil
+}
+
+// CheckParquetSchemas reads each file's footer and requires the same
+// columns, in the same order, with the same types as the first file.
+// Strict on purpose: DuckDB's read_parquet over a list binds the files
+// to the first one's schema, the typed backend decodes into a struct
+// derived from it, and the record backend would otherwise carry a
+// different column set per file — one rule keeps them in agreement.
+func CheckParquetSchemas(files []string) error {
+	var first []parquetColumnType
+	for i, f := range files {
+		cols, err := parquetColumnTypes(f)
+		if err != nil {
+			return fmt.Errorf("%s: %w", f, err)
+		}
+		if i == 0 {
+			first = cols
+			continue
+		}
+		if d := diffParquetColumns(first, cols); d != "" {
+			return fmt.Errorf("%s does not match %s: %s — files read together must share one schema", f, files[0], d)
+		}
+	}
+	return nil
+}
+
+type parquetColumnType struct{ name, typ string }
+
+func parquetColumnTypes(filename string) ([]parquetColumnType, error) {
+	var r parquet.ReaderAtSeeker
+	if IsHTTPURL(filename) {
+		h, err := OpenHTTPFile(filename)
+		if err != nil {
+			return nil, err
+		}
+		r = h
+	} else {
+		f, err := os.Open(filename)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		r = f
+	}
+	pf, err := file.NewParquetReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("reading parquet footer: %w", err)
+	}
+	defer pf.Close()
+	reader, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{}, memory.DefaultAllocator)
+	if err != nil {
+		return nil, err
+	}
+	sch, err := reader.Schema()
+	if err != nil {
+		return nil, err
+	}
+	cols := make([]parquetColumnType, sch.NumFields())
+	for i, f := range sch.Fields() {
+		cols[i] = parquetColumnType{f.Name, f.Type.String()}
+	}
+	return cols, nil
+}
+
+// diffParquetColumns describes the first difference, or "" when equal.
+func diffParquetColumns(want, got []parquetColumnType) string {
+	for i := 0; i < len(want) || i < len(got); i++ {
+		switch {
+		case i >= len(got):
+			return fmt.Sprintf("it lacks column %q", want[i].name)
+		case i >= len(want):
+			return fmt.Sprintf("it has an extra column %q", got[i].name)
+		case want[i].name != got[i].name:
+			return fmt.Sprintf("column %d is %q, not %q", i+1, got[i].name, want[i].name)
+		case want[i].typ != got[i].typ:
+			return fmt.Sprintf("column %q is %s, not %s", got[i].name, got[i].typ, want[i].typ)
+		}
+	}
+	return ""
+}
+
 // ReadParquetFromReader reads all columns from a Parquet reader.
 func ReadParquetFromReader(r parquet.ReaderAtSeeker) (iter.Seq[Record], error) {
 	return readParquetFromReaderWithColumns(r, nil)
@@ -79,19 +194,26 @@ func readParquetFromReaderWithColumns(r parquet.ReaderAtSeeker, columns []string
 	}
 
 	// Resolve column indices
+	// Selected columns come out in the order given — as the typed
+	// reader, schema mode and the SQL projection have them (this reader
+	// used the file's order until 2026-10-11, and skipped an unknown name
+	// unless none matched).
 	var colIndices []int
 	if len(columns) > 0 {
-		colSet := make(map[string]bool)
-		for _, c := range columns {
-			colSet[strings.TrimSpace(c)] = true
-		}
+		byName := make(map[string]int, arrowSchema.NumFields())
 		for i, field := range arrowSchema.Fields() {
-			if colSet[field.Name] {
-				colIndices = append(colIndices, i)
-			}
+			byName[field.Name] = i
 		}
-		if len(colIndices) == 0 {
-			return nil, fmt.Errorf("none of the requested columns found in Parquet schema")
+		for _, c := range columns {
+			i, ok := byName[strings.TrimSpace(c)]
+			if !ok {
+				names := make([]string, 0, arrowSchema.NumFields())
+				for _, f := range arrowSchema.Fields() {
+					names = append(names, f.Name)
+				}
+				return nil, fmt.Errorf("column %q not found in Parquet schema (columns: %s)", c, strings.Join(names, ", "))
+			}
+			colIndices = append(colIndices, i)
 		}
 	} else {
 		// All columns
@@ -104,6 +226,13 @@ func readParquetFromReaderWithColumns(r parquet.ReaderAtSeeker, columns []string
 	var rowGroups []int
 	for i := 0; i < pf.NumRowGroups(); i++ {
 		rowGroups = append(rowGroups, i)
+	}
+
+	if h, ok := r.(*HTTPFile); ok {
+		if err := h.Prefetch(parquetChunkRanges(pf, arrowSchema, colIndices, rowGroups, h.Size())); err != nil {
+			return nil, fmt.Errorf("reading Parquet column chunks: %w", err)
+		}
+		defer h.DropPrefetched()
 	}
 
 	tbl, err := reader.ReadRowGroups(ctx, colIndices, rowGroups)
@@ -145,6 +274,48 @@ func readParquetFromReaderWithColumns(r parquet.ReaderAtSeeker, columns []string
 			}
 		}
 	}, nil
+}
+
+// parquetChunkRanges lists the byte range of every column chunk the
+// reader is about to read: the leaf columns under the selected fields,
+// in every selected row group. The range is the one arrow's
+// RowGroupReader computes (dictionary page first when it precedes the
+// data, plus the PARQUET-816 padding for old parquet-mr files), so
+// arrow's own ReadAt lands inside it.
+func parquetChunkRanges(pf *file.Reader, sch *arrow.Schema, colIndices, rowGroups []int, size int64) []ByteRange {
+	const maxDictHeaderSize = 100 // arrow's PARQUET-816 padding
+	selected := make(map[string]bool, len(colIndices))
+	for _, i := range colIndices {
+		selected[sch.Field(i).Name] = true
+	}
+	md := pf.MetaData()
+	var leaves []int
+	for j := 0; j < md.Schema.NumColumns(); j++ {
+		if path := md.Schema.Column(j).ColumnPath(); len(path) > 0 && selected[path[0]] {
+			leaves = append(leaves, j)
+		}
+	}
+	var ranges []ByteRange
+	for _, rg := range rowGroups {
+		rgMeta := md.RowGroup(rg)
+		for _, j := range leaves {
+			col, err := rgMeta.ColumnChunk(j)
+			if err != nil {
+				continue // arrow reports it when it reads the chunk
+			}
+			start := col.DataPageOffset()
+			if col.HasDictionaryPage() && col.DictionaryPageOffset() > 0 && start > col.DictionaryPageOffset() {
+				start = col.DictionaryPageOffset()
+			}
+			length := col.TotalCompressedSize()
+			if start < 0 || length <= 0 || start >= size {
+				continue
+			}
+			length += min(maxDictHeaderSize, size-(start+length))
+			ranges = append(ranges, ByteRange{Off: start, Len: length})
+		}
+	}
+	return ranges
 }
 
 // ParquetWriteOption configures a Parquet writer. Pass to

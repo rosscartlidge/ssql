@@ -232,7 +232,7 @@ func assembleSQL(input io.Reader) (string, error) {
 			return "", fmt.Errorf("decoding fragment: %w", err)
 		}
 		if frag.Type == "error" {
-			return "", fmt.Errorf("code generation failed in %s: %s", frag.Command, frag.Error)
+			return "", &lib.UpstreamFailure{Frag: &frag}
 		}
 		fragments = append(fragments, &frag)
 	}
@@ -249,10 +249,23 @@ func assembleSQL(input io.Reader) (string, error) {
 
 	// Collect func fragments (subprocess sources for joins) and build subqueries
 	var funcFrags []*lib.CodeFragment
+	sourced := false
 	for _, frag := range fragments {
 		if frag.Type == "func" {
 			funcFrags = append(funcFrags, frag)
 			continue // don't add to comments — shown as part of the join comment
+		}
+		if !sourced && frag.Command != "" {
+			// The chain must begin at a source. A stage that failed
+			// without an error fragment (a crash) leaves the next one
+			// heading the chain, and the query had no FROM.
+			if a := stageArgs(frag); len(a) >= 2 {
+				if a[1] != "from" {
+					return "", fmt.Errorf("the pipeline has no source: it begins at `%s`, not a `from` stage — "+
+						"if an earlier stage failed its error is above; generate sql needs the whole pipeline", frag.Command)
+				}
+				sourced = true
+			}
 		}
 		if frag.Command != "" {
 			cmd := frag.Command
@@ -482,7 +495,10 @@ func translateFrom(q *sqlQuery, args []string) error {
 		q.fromClause = fmt.Sprintf("(SELECT row_number() OVER () AS line_number, line FROM read_csv(%s, columns={'line': 'VARCHAR'}, header=false, delim='\\x01', quote='', escape='', parallel=false))", quoteFile(file))
 		q.columns = []string{"line_number", "line"}
 		return nil
-	case "csv", "tsv", "json", "jsonl", "arrow", "parquet", "xlsx":
+	case "parquet":
+		files, columns := parquetSourceArgs(args[1:])
+		return translateParquetSource(q, files, columns)
+	case "csv", "tsv", "json", "jsonl", "arrow", "xlsx":
 		if len(args) < 2 {
 			return fmt.Errorf("from %s requires a file argument", args[0])
 		}
@@ -632,6 +648,12 @@ func translateFrom(q *sqlQuery, args []string) error {
 	case "catalog":
 		return fmt.Errorf("from catalog has no SQL equivalent — it is an ssql-specific distributed feature")
 	default:
+		// Bare Parquet, several files or a pattern: the command reads
+		// them all (from.go routes them to from parquet), so does this.
+		if strings.HasSuffix(strings.ToLower(args[0]), ".parquet") {
+			files, _ := parquetSourceArgs(args)
+			return translateParquetSource(q, files, nil)
+		}
 		// Bare: from FILE — seed column tracking from the header as the
 		// explicit forms do, so `update -set-expr NEW …` becomes an added
 		// column, not a REPLACE of one that does not exist.
@@ -2618,6 +2640,76 @@ func sqlOperator(op string) string {
 	default:
 		return "="
 	}
+}
+
+// parquetSourceArgs splits a from parquet stage's arguments into its
+// files and its -columns, by arity (a copy of the command's grammar,
+// DFC115 legacy exception). -columns was missing from the shared table,
+// so `from parquet F -columns a` read `a` as a second file and the query
+// used read_csv over all three (found 2026-10-11).
+func parquetSourceArgs(args []string) (files, columns []string) {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--":
+			return
+		case a == cf.ArgFlag && i+1 < len(args):
+			files = append(files, args[i+1])
+			i++
+		case (a == "-columns" || a == "-c") && i+1 < len(args):
+			columns = append(columns, args[i+1])
+			i++
+		case a == "-tz" && i+1 < len(args):
+			sqlZone = args[i+1] // the pipeline's zone, materialised by the source (DFC147 §5.7)
+			i++
+		case strings.HasPrefix(a, "-"):
+		default:
+			files = append(files, a)
+		}
+	}
+	return
+}
+
+// translateParquetSource is the FROM for Parquet files. One plain file is
+// read by name, as before. Several, a pattern (DuckDB expands it when the
+// query runs, as the command does), or a path under a key=value directory
+// go through read_parquet with hive_partitioning off: ssql derives no
+// partition columns, and DuckDB's auto-detection added one only its lane
+// had — `part/type=X/f.parquet` grew a `type` column (found 2026-10-11).
+// -columns becomes the projection, in the order given.
+func translateParquetSource(q *sqlQuery, files, columns []string) error {
+	if len(files) == 0 {
+		return fmt.Errorf("from parquet requires a file argument")
+	}
+	plain := len(files) == 1 && !strings.ContainsAny(files[0], "*?[")
+	var src string
+	switch {
+	case plain && (sqlDialectCur != dialectDuckDB || !strings.Contains(files[0], "=")):
+		var err error
+		if src, err = dialectSource(files[0]); err != nil {
+			return err
+		}
+	case sqlDialectCur != dialectDuckDB:
+		return dialectRefuse("from parquet over several files or a pattern", "needs DuckDB's read_parquet")
+	default:
+		quoted := make([]string, len(files))
+		for i, f := range files {
+			if strings.Contains(f, "**") && !ssql.IsHTTPURL(f) {
+				return fmt.Errorf("%s: recursive ** is not supported — name each directory level with *", f)
+			}
+			quoted[i] = quoteFile(f)
+		}
+		src = "read_parquet([" + strings.Join(quoted, ", ") + "], hive_partitioning=false)"
+	}
+	if len(columns) > 0 {
+		idents := make([]string, len(columns))
+		for i, c := range columns {
+			idents[i] = quoteIdent(c)
+		}
+		src = "(SELECT " + strings.Join(idents, ", ") + " FROM " + src + ")"
+		q.columns = append([]string(nil), columns...)
+	}
+	q.fromClause = src
+	return nil
 }
 
 func quoteFile(path string) string {

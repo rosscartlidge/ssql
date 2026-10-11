@@ -1514,6 +1514,43 @@ var equivCases = []EquivCase{
 	// --- DFC147: calendar functions and the pipeline zone. Goldens from
 	// Python's datetime/zoneinfo (an independent calendar), under the
 	// harness's TZ=UTC pin unless the case says otherwise.
+	// Multi-file Parquet (2026-10-11): a quoted glob, expanded by ssql
+	// in exec and in the generated programs and by DuckDB in the SQL lane;
+	// three files of distinct amounts, so a file dropped or read twice
+	// changes every group.
+	{
+		Name:     "parquet_glob_groupby",
+		Pipeline: `{{.bin}} from parquet '{{.data}}/pq/*.parquet' | {{.bin}} group-by region -sum amount total -count n | {{.bin}} sort region`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"region": "east", "total": 23.75, "n": 2},
+			{"region": "north", "total": 52.5, "n": 2},
+			{"region": "south", "total": 24.75, "n": 2}},
+	},
+	{
+		// An explicit list with -columns in a non-file order: the
+		// projection keeps the order given (the record reader used the
+		// file's, and the SQL lane read the column names as more files).
+		Name:     "parquet_list_columns",
+		Pipeline: `{{.bin}} from parquet {{.data}}/pq/c.parquet {{.data}}/pq/a.parquet -columns name -columns id | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"name": "amy", "id": 2}, {"name": "fay", "id": 4}, {"name": "cal", "id": 7}},
+	},
+	{
+		// Bare from over a glob routes to from parquet in every lane.
+		Name:     "parquet_bare_glob",
+		Pipeline: `{{.bin}} from '{{.data}}/pq/*.parquet' | {{.bin}} where -if amount gt 10 | {{.bin}} include id amount | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 4, "amount": 15}, {"id": 5, "amount": 40}, {"id": 7, "amount": 12.5}, {"id": 9, "amount": 21.5}},
+	},
+	{
+		// One file under region=north/: no lane derives a region column
+		// (DuckDB's hive auto-detection added one to its lane alone).
+		Name:     "parquet_hive_dir_single",
+		Pipeline: `{{.bin}} from parquet {{.data}}/pqhive/region=north/data.parquet | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 3, "name": "gus", "amount": 2.5}, {"id": 6, "name": "hal", "amount": 9}},
+	},
 	{
 		Name:     "time_parts_all_lanes",
 		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr h 'hour(ts)' -set-expr d 'day(ts)' -set-expr w 'week(ts)' -set-expr dw 'dow(ts)' -set-expr q 'quarter(ts)' -set-expr e 'epoch(ts)' | {{.bin}} include id h d w dw q e | {{.bin}} sort id`,

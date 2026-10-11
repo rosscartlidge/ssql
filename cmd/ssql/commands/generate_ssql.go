@@ -187,7 +187,7 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 			return "", nil, fmt.Errorf("decoding fragment: %w", err)
 		}
 		if frag.Type == "error" {
-			return "", nil, fmt.Errorf("code generation failed in %s: %s", frag.Command, frag.Error)
+			return "", nil, &lib.UpstreamFailure{Frag: &frag}
 		}
 		fragments = append(fragments, &frag)
 	}
@@ -1958,11 +1958,16 @@ func collectDownstreamFields(cmds []*pipelineCmd, startIdx int) (map[string]bool
 		// (already added above). Without this stop, downstream references
 		// to aggregation outputs (e.g. a -count result named "count") leak
 		// back as phantom source columns the file does not contain.
-		if redefinesSourceSchema(cmds[j]) {
-			break
+		if redefinesSourceSchema(cmds[j]) || cmds[j].Kind == "include" {
+			return needed, false
 		}
 	}
-	return needed, false
+	// No stage narrowed the record, so every source column reaches the
+	// output: `from parquet F | sort id | to csv` was pruned to
+	// `-columns id` and printed one column (found 2026-10-11 by the
+	// parquet_hive_dir_single equivalence case; exec was right, every
+	// compiled lane and the optimiser wrong).
+	return nil, true
 }
 
 // redefinesSourceSchema reports whether a command fully replaces the stream

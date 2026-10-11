@@ -125,6 +125,15 @@ func corpusData(t *testing.T) string {
 			"precision.csv":          corpusPrecisionCSV,
 			"epochs_ms.csv":          corpusEpochsMsCSV,
 			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
+			// Multi-file Parquet (2026-10-11): three files of one schema
+			// read as one stream (a list, a glob), a file of another schema
+			// (refused), and one file under a key=value directory, which
+			// DuckDB's hive auto-detection gave an extra column.
+			"pq/a.parquet":                     corpusParquet(true, pqRow{7, "cal", "north", 12.5}, pqRow{2, "amy", "south", 3.25}),
+			"pq/b.parquet":                     corpusParquet(true, pqRow{5, "bob", "north", 40}, pqRow{1, "dee", "east", 8.75}, pqRow{9, "eve", "south", 21.5}),
+			"pq/c.parquet":                     corpusParquet(true, pqRow{4, "fay", "east", 15}),
+			"pqbad/other.parquet":              corpusParquet(false, pqRow{8, "gil", "", 1}),
+			"pqhive/region=north/data.parquet": corpusParquet(false, pqRow{6, "hal", "", 9}, pqRow{3, "gus", "", 2.5}),
 			// DFC133 random differential. `code` is TEXT that sometimes looks
 			// like a number; group b has NO value for v or t; `e` is empty in
 			// every row.

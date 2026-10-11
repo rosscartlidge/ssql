@@ -186,6 +186,9 @@ func main() {
 		err = buildRootCommand().Execute(os.Args[1:]) // a panic keeps its trace
 	}
 	if err != nil {
+		if commands.ReportGenerateFailure(os.Args[1:], err) {
+			os.Exit(1) // relayed an earlier stage's failure; it already said why
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

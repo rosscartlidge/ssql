@@ -82,7 +82,7 @@ func pipelineDocFromFragments(fragments []*lib.CodeFragment) ([]any, error) {
 	var pending []*lib.CodeFragment // func fragments awaiting their consumer
 	for _, frag := range fragments {
 		if frag.Type == "error" {
-			return nil, fmt.Errorf("pipeline stage failed to generate: %s", strings.TrimSpace(frag.Code))
+			return nil, &lib.UpstreamFailure{Frag: frag}
 		}
 		if frag.Type == "func" {
 			pending = append(pending, frag)

@@ -16,6 +16,7 @@ func registerFromParquet(cmd *cf.SubcommandBuilder) {
 		Example("ssql from parquet data.parquet | ssql to table", "Read Parquet file").
 		Example("ssql from parquet data.parquet -columns name -columns age -columns dept | ssql to table", "Read only selected columns (faster for wide files)").
 		Example("ssql from parquet data.parquet | ssql to csv output.csv", "Convert Parquet to CSV").
+		Example("ssql from parquet 'sales/year=*/*.parquet' | ssql group-by region -sum amount total", "Read every matching file as one stream (the quoted glob is expanded each time the pipeline runs)").
 		Flag("-generate", "-g").
 		Bool().
 		Global().
@@ -23,10 +24,11 @@ func registerFromParquet(cmd *cf.SubcommandBuilder) {
 		Done().
 		Flag("FILE").
 		String().
+		Variadic().
 		Completer(&cf.FileCompleter{Pattern: "*.parquet"}).
 		Global().
 		Required().
-		Help("Input Parquet file (random access required, no stdin)").
+		Help("Input Parquet file(s) or glob patterns, read in order as one stream; the files must share one schema (random access required, no stdin)").
 		Done().
 		Flag("-records").
 		Bool().
@@ -46,20 +48,14 @@ func registerFromParquet(cmd *cf.SubcommandBuilder) {
 			if err := resolveFromZone(ctx); err != nil {
 				return err
 			}
+			files, err := ssql.ExpandFilePatterns(parquetFileArgs(ctx.GlobalFlags["FILE"]))
+			if err != nil {
+				return err
+			}
 			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
-				file, _ := ctx.GlobalFlags["FILE"].(string)
-				var files []string
-				if file != "" {
-					files = []string{file}
-				}
 				return runFromRecords("parquet", files, -1)
 			}
-			var inputFile string
 			var generate bool
-
-			if fileVal, ok := ctx.GlobalFlags["FILE"]; ok {
-				inputFile = fileVal.(string)
-			}
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
 				generate = genVal.(bool)
 			}
@@ -76,21 +72,50 @@ func registerFromParquet(cmd *cf.SubcommandBuilder) {
 				}
 			}
 
-			return executeFromParquet(inputFile, columns, generate)
+			return executeFromParquet(parquetFileArgs(ctx.GlobalFlags["FILE"]), files, columns, generate)
 		}).
 		Done()
 }
 
-// executeFromParquet handles Parquet reading.
-func executeFromParquet(inputFile string, columns []string, generate bool) error {
+// parquetFileArgs is the FILE flag's value as given (patterns
+// unexpanded): a variadic flag arrives as []any, an older single one as
+// a string.
+func parquetFileArgs(v any) []string {
+	var out []string
+	switch v := v.(type) {
+	case []string:
+		out = v
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+	case string:
+		if v != "" {
+			out = []string{v}
+		}
+	}
+	return out
+}
+
+// executeFromParquet handles Parquet reading. args are the FILE
+// arguments as given (the generated program keeps a glob and expands it
+// when it runs); files are their expansion now.
+func executeFromParquet(args, files []string, columns []string, generate bool) error {
+	if len(files) == 0 {
+		return fmt.Errorf("Parquet requires a file (random access format, no stdin support)")
+	}
+	if len(files) > 1 {
+		if err := ssql.CheckParquetSchemas(files); err != nil {
+			return err
+		}
+	}
 	// Schema mode answers from the FOOTER — names AND real wire types,
 	// O(footer). Before this branch existed, a schema query fell
 	// through to a full-file decode (14.6M rows to list two columns).
 	if schemaMode() {
-		if inputFile == "" {
-			return fmt.Errorf("Parquet requires a file (random access format, no stdin support)")
-		}
-		names, types, err := ssql.ParquetSchemaFields(inputFile)
+		names, types, err := ssql.ParquetSchemaFields(files[0])
 		if err != nil {
 			return fmt.Errorf("reading Parquet schema: %w", err)
 		}
@@ -101,52 +126,60 @@ func executeFromParquet(inputFile string, columns []string, generate bool) error
 	}
 
 	if shouldGenerate(generate) {
-		return generateFromParquetCode(inputFile, columns)
+		return generateFromParquetCode(args, files, columns)
 	}
 
-	if inputFile == "" {
-		return fmt.Errorf("Parquet requires a file (random access format, no stdin support)")
-	}
-
-	records, err := ssql.ReadParquetColumns(inputFile, columns)
+	records, err := ssql.ReadParquetFiles(files, columns)
 	if err != nil {
 		return fmt.Errorf("reading Parquet file: %w", err)
 	}
 
-	records = wrapWithFieldCaching(records, inputFile)
+	records = wrapWithFieldCaching(records, files[0])
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
 }
 
-// generateFromParquetCode generates Go code for reading Parquet.
-func generateFromParquetCode(filename string, columns []string) error {
+// singleParquetFile reports whether the arguments name one file with no
+// pattern — the case generated code keeps its -input parameter for.
+func singleParquetFile(args []string) bool {
+	return len(args) == 1 && (ssql.IsHTTPURL(args[0]) || !strings.ContainsAny(args[0], "*?["))
+}
+
+// goStringSlice renders a []string literal.
+func goStringSlice(items []string) string {
+	quoted := make([]string, len(items))
+	for i, c := range items {
+		quoted[i] = fmt.Sprintf("%q", c)
+	}
+	return "[]string{" + strings.Join(quoted, ", ") + "}"
+}
+
+// generateFromParquetCode generates Go code for reading Parquet. One
+// plain file keeps the -input parameter; several, or a pattern, are
+// written into the program as given, so a glob is expanded when the
+// program runs.
+func generateFromParquetCode(args, files []string, columns []string) error {
 	if typedMode() {
-		return generateFromParquetCodeTyped(filename, columns)
+		return generateFromParquetCodeTyped(args, files, columns)
 	}
-	if filename == "" {
-		return fmt.Errorf("Parquet code generation requires a file (no stdin support)")
-	}
-
-	params := []lib.CodeParam{
-		{Name: "input", Default: filename, Help: "input Parquet file", VarName: "flagInput"},
-	}
-
-	var code string
+	colLiteral := "nil"
 	if len(columns) > 0 {
-		// Build Go string slice literal for the columns
-		quoted := make([]string, len(columns))
-		for i, c := range columns {
-			quoted[i] = fmt.Sprintf("%q", c)
+		colLiteral = goStringSlice(columns)
+	}
+	var code string
+	var params []lib.CodeParam
+	if singleParquetFile(args) {
+		params = []lib.CodeParam{
+			{Name: "input", Default: args[0], Help: "input Parquet file", VarName: "flagInput"},
 		}
-		colLiteral := "[]string{" + strings.Join(quoted, ", ") + "}"
 		code = fmt.Sprintf(`records, err := ssql.ReadParquetColumns(*flagInput, %s)
 	if err != nil {
 		return fmt.Errorf("reading Parquet: %%w", err)
 	}`, colLiteral)
 	} else {
-		code = `records, err := ssql.ReadParquetColumns(*flagInput, nil)
+		code = fmt.Sprintf(`records, err := ssql.ReadParquetFiles(%s, %s)
 	if err != nil {
-		return fmt.Errorf("reading Parquet: %w", err)
-	}`
+		return fmt.Errorf("reading Parquet: %%w", err)
+	}`, goStringSlice(args), colLiteral)
 	}
 
 	frag := fromInitFragment("records", code, []string{"fmt", "os"})

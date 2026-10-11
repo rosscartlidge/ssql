@@ -148,3 +148,16 @@ func TestHTTPURLExt(t *testing.T) {
 		}
 	}
 }
+
+func TestCoalesceRanges(t *testing.T) {
+	in := []ByteRange{{100, 50}, {0, 100}, {150, 10}, {300, 10}, {305, 20}, {1000, 900}}
+	got := coalesceRanges(in, 200)
+	want := []ByteRange{{0, 160}, {300, 25}, {1000, 900}}
+	if !slices.Equal(got, want) {
+		t.Errorf("coalesce = %v, want %v", got, want)
+	}
+	// The limit stops a merge; touching ranges past it stay separate.
+	if got := coalesceRanges([]ByteRange{{0, 150}, {150, 100}}, 200); len(got) != 2 {
+		t.Errorf("limit ignored: %v", got)
+	}
+}

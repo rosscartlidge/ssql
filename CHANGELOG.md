@@ -5,6 +5,84 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`from parquet` reads several files as one stream.** `from parquet
+  a.parquet b.parquet`, or a quoted glob such as `from parquet
+  'sales/year=*/*.parquet'`, which ssql expands each time the pipeline
+  runs (so a run document or a generated program picks up new files, as
+  DuckDB's `read_parquet('…/*.parquet')` does). Bare `from` routes
+  Parquet lists and globs the same way. The files must share one schema
+  (columns, order and types); a mismatch names the file and the column.
+  A glob that matches nothing, and `**`, are errors. Every backend:
+  exec, record and typed codegen (`ssql.ReadParquetFiles`,
+  `typed.ReadParquetFiles`, `typed.ReadParquetFilesParallel`, whose
+  shards share out every file's row groups), and `generate sql`
+  (`read_parquet([…], hive_partitioning=false)`). New library API:
+  `ssql.ReadParquetFiles`, `ssql.CheckParquetSchemas`,
+  `ssql.ExpandFilePatterns`. This is the DuckDB "view-only mode" post's
+  layout-change step: a run document over one file can switch to a
+  partitioned directory and its consumers' queries do not change.
+  `-columns` field completion reads the first file (autocli v4.21.2,
+  whose field completer now accepts a variadic FILE).
+
+### Fixed
+
+- **The optimiser pruned Parquet columns that reached the output.**
+  `from parquet F | sort id | to csv` was rewritten to `from parquet F
+  -columns id …` and printed one column — in `generate ssql`, the ⚙
+  Optimise flow and every compiled lane (exec was right). Pruning now
+  requires a stage that narrows the record (`include`, `group-by`).
+- **`generate sql` for `from parquet F -columns a`** read the column
+  names as more files and the query used `read_csv` over all of them;
+  `-columns` is now the projection.
+- **DuckDB added a partition column to a Parquet file under a
+  `key=value/` directory** (its hive auto-detection), a column only the
+  SQL lane had. `generate sql` turns hive partitioning off for such a
+  path; ssql derives no partition columns.
+- **Parquet `-columns` order**: the record reader returned the selected
+  columns in the file's order, while the typed reader, schema mode and
+  the SQL projection kept the order given; all keep the order given now,
+  and an unknown column is refused by name (it was skipped unless none
+  matched).
+- **The typed Parquet readers dropped errors.** `typed.ReadParquet` and
+  `typed.ReadParquetParallel` yielded nothing for a missing or unreadable
+  file, so a generated program printed an empty result; they panic with a
+  `*typed.ReadError` now, as the CSV readers do.
+- **Bare `from` with several files suggested `from csv`** whatever their
+  format; it names the right subcommand, or says the format is read one
+  file at a time.
+
+- **`generate sql` printed a query with no FROM, and exited 0, after an
+  earlier stage failed.** A stage whose arguments the grammar refused
+  (`rename a z` without `-as`) exited before writing the error fragment
+  that generate mode uses to carry a failure down the pipe. The next
+  stage read the empty stream as the start of a pipeline, and `generate
+  sql`, `generate ssql` and `generate json` assembled what was left;
+  only `generate go` already refused a chain with no source. Now any
+  command failing in generate mode writes an error fragment, the stages
+  in between pass the original on without re-reporting it, and every
+  generator fails with one line naming the stage that broke. `generate
+  sql` also refuses a chain that does not begin at `from` (what a crashed
+  stage leaves). `generate json` printed an empty message for a failed
+  stage; it now prints the stage and its error.
+
+- **Remote Parquet was slow over a long round trip.** `from parquet
+  https://…` fetched each column chunk with its own Range request, one
+  after another, so the time was latency × chunks: 13.5s for DuckDB's
+  1.6MB `train_services.parquet` from Australia (34 requests at ~350ms),
+  where curl took 0.5s. The reader now works out the selected chunks'
+  byte ranges from the footer, merges adjacent ones (up to 4MB a
+  request) and fetches them concurrently (16 in flight) before decoding:
+  3 requests and 2.4s, DuckDB's own time for the same query. Column
+  pruning still fetches only the selected columns. New library API:
+  `HTTPFile.Prefetch`, `HTTPFile.DropPrefetched`, `ByteRange`. The
+  prefetched bytes are held until the row groups are decoded, so peak
+  memory for a remote read grows by the compressed size of the columns
+  read.
+
 ## [4.114.1] - 2026-10-11
 
 ### Fixed

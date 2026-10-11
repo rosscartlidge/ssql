@@ -39,3 +39,11 @@ func ParquetRowCount(filename string) (int64, error) {
 func ParquetSchemaFields(filename string) ([]string, map[string]string, error) {
 	return nil, nil, fmt.Errorf("parquet support is not included in slim builds")
 }
+
+func ReadParquetFiles(paths, columns []string) (iter.Seq[Record], error) {
+	return nil, fmt.Errorf("parquet support not available in slim build")
+}
+
+func CheckParquetSchemas(files []string) error {
+	return fmt.Errorf("parquet support not available in slim build")
+}

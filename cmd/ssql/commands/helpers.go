@@ -406,6 +406,33 @@ func shouldGenerate(flagValue bool) bool {
 		envValue == "typed" || envValue == "parallel"
 }
 
+// ReportGenerateFailure writes an error fragment when a command fails in
+// generate mode, whatever failed: the grammar refusing an argument
+// before the handler ran, or the handler itself. Without it the stage
+// exits leaving an EMPTY fragment stream, the next stage reads that as
+// the start of a pipeline, and generate sql printed a FROM-less query
+// and exited 0 (2026-10-11). Every fragment reader refuses an error
+// fragment, so the failure now reaches the assembler. A failure that IS
+// an upstream stage's error fragment is relayed unchanged and reported
+// true: that stage already said why, so the caller stays quiet. The
+// generate commands themselves are skipped: their output is SQL or Go,
+// not fragments, and their error is the one line the user reads.
+func ReportGenerateFailure(args []string, err error) (relayed bool) {
+	if len(args) == 0 || args[0] == "generate" {
+		return false
+	}
+	if !shouldGenerate(len(lib.StripGenerateFlag(args)) != len(args)) {
+		return false
+	}
+	var up *lib.UpstreamFailure
+	if errors.As(err, &up) {
+		lib.WriteCodeFragment(up.Frag)
+		return true
+	}
+	lib.WriteCodeFragment(lib.NewErrorFragment(getCommandString(), err))
+	return false
+}
+
 // typedMode returns true when the pipeline is running under
 // SSQL_MODE=typed (the modern unified mode) or SSQL_MODE=parallel
 // (deprecated alias retained for backwards compatibility). The
