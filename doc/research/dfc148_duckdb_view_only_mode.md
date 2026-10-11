@@ -284,6 +284,47 @@ ssql reads only `https://` URLs, including presigned S3 URLs; this was
 DFC112's choice. The post's examples use `s3://`. A public bucket can be
 read over its https endpoint, but the user has to rewrite the URL.
 
+**Rewriting by hand (works today).** The rewrite turns `s3://BUCKET/KEY`
+into `https://BUCKET.s3.amazonaws.com/KEY`. This is the virtual-hosted
+style; S3 redirects to the bucket's region. The path-style
+`https://s3.amazonaws.com/BUCKET/KEY` also works for us-east-1 buckets.
+The pinned form is `https://BUCKET.s3.REGION.amazonaws.com/KEY`; the
+region is in the `x-amz-bucket-region` header of a `HEAD` on the bucket
+root. Keys are used as they are, apart from URL-escaping: `=` and `/` pass
+through, and a space becomes `%20` or `+`.
+
+The example is NOAA's public GHCN-Daily bucket (us-east-1). This was
+checked on 2026-10-12 from Australia, and a single-file read took 2.2 s.
+
+```bash
+# s3://noaa-ghcn-pds/parquet/by_station/STATION=ACW00011604/ELEMENT=PGTM/1319b53f4d184b32aa3415f9beaf7cd2_0.snappy.parquet
+# becomes
+ssql from parquet 'https://noaa-ghcn-pds.s3.amazonaws.com/parquet/by_station/STATION=ACW00011604/ELEMENT=PGTM/1319b53f4d184b32aa3415f9beaf7cd2_0.snappy.parquet' \
+  | ssql limit 3 | ssql to table
+```
+
+```
+ID            DATE       DATA_VALUE   M_FLAG   Q_FLAG   S_FLAG   OBS_TIME
+-------------------------------------------------------------------------
+ACW00011604   19490201         1300            (null)   X        (null)
+ACW00011604   19490210          624            (null)   X        (null)
+ACW00011604   19490215          724            (null)   X        (null)
+```
+
+The same bucket shows the limits of the rewrite:
+
+- **No globs over https.** `ExpandFilePatterns` passes a URL through
+  unexpanded, so `…/STATION=*/ELEMENT=PGTM/*.parquet` cannot be read.
+  Expanding it needs a ListObjects call, which is what S3 offers for
+  directories. A public bucket answers that without credentials:
+  `https://noaa-ghcn-pds.s3.amazonaws.com/?list-type=2&prefix=parquet/by_station/`.
+  So glob support for public buckets is within reach of option (a).
+- **The partition keys stay in the path.** `STATION` and `ELEMENT` do not
+  become columns (§4.2). Here `ID` repeats the station anyway, but
+  `ELEMENT` is lost.
+- **Private buckets need a presigned URL.** `aws s3 presign s3://BUCKET/KEY`
+  prints an https URL that `from parquet` reads as is (DFC112).
+
 **Proposal options:**
 
 - (a) Rewrite only public `s3://bucket/key` URLs to the virtual-hosted
@@ -292,8 +333,9 @@ read over its https endpoint, but the user has to rewrite the URL.
   a bucket for globs is the hard part.
 - (c) Leave it, and document the rewrite.
 
-Recommendation: (a) when someone needs it. Globs over `s3://` need
-ListObjects, so (a) covers single objects only.
+Recommendation: (a) when someone needs it, covering single objects first.
+Globs need ListObjects; a public bucket answers it without credentials, so
+glob support can come in a second step of (a), without the SDK.
 
 ### 4.4 No named views in one file
 
