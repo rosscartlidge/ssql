@@ -30,6 +30,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`to parquet` and `to arrow` wrote times as text.** A time column
+  (DuckDB's DATE or TIMESTAMP, or any `-type F time`) was written as a
+  string column holding Go's `2023-05-15 00:00:00 +0000 UTC`, which
+  DuckDB saw as VARCHAR and ssql read back as a string. Times are now
+  timestamps (microseconds, UTC), the same type the typed lane writes.
+  The record writers also took every column's type from the first
+  record only: a column null in row 1 became a string, a float after an
+  int was truncated to an int, and a field that first appeared in a
+  later record was dropped. Each column is now typed from all of its
+  values, and the `_schema` header's types are used for columns with no
+  values. An empty result writes a valid zero-row file with the header's
+  columns; with no input at all the sinks fail with "nothing to write"
+  and leave no file, where they used to leave a 0-byte file that the
+  next reader could not open. Library: `ssql.WithColumnTypes`,
+  `ssql.WithArrowColumnTypes`; `WriteArrow` takes options; with no
+  records and no declared columns, `WriteArrowToWriter` and
+  `WriteParquetToWriter` now return an error instead of nil (they wrote
+  zero bytes, which is not a valid file).
+- **Generated `to parquet`, `to arrow` and `to wav` programs did not
+  compile.** Their error branch referred to an undefined `ctx`; typed
+  `to parquet` also emitted the parallel form after a serial source
+  (`records.WriteParquet undefined`). It now offers both forms to the
+  planner, as `to csv` does. Schema mode reports Parquet timestamp and
+  date columns as `time` (it said `string` while the data was a time).
+- **Generated record programs read a JSONL header's `time` columns as
+  strings.** `ssql.ReadJSONAuto` and `ReadJSONLFromReader` took the
+  field list from a `_schema` header and ignored its types, so a tee'd
+  file's time column was a string in `generate go` record mode (and
+  `to parquet` there wrote VARCHAR) where exec had a time. They now
+  coerce by the header's types, as each stage's stdin reader does
+  (`ssql.SchemaWireTypes`, shared by both).
+- **Typed programs read a missing or null JSONL value as 0.** A row
+  `{"id":1}` or `{"id":1,"n":null}` under an `int64` column became
+  `n = 0` (a time column, year 1), where exec reads the value as
+  absent: `to csv` printed `1,0` against exec's `1,`. A plain struct
+  field cannot hold absence, so the generated reader now fails the read
+  naming the line, the typed CSV readers' rule for an empty cell
+  (DFC124); remedies are `-type n string`, `fill`, or record mode.
+  Library: `typed.RequireValues()`, a `JSONOption` that every typed JSON
+  and JSON Lines reader now accepts; without it the readers keep
+  `encoding/json`'s zero values.
+
 - **`ssql run doc | ssql limit 3` reported an error.** When the reader
   after `run` exited early, the document's last stage died of SIGPIPE
   writing to `run`'s stdout, and `run` printed `Error: run: stage 1 (…):

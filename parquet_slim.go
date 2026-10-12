@@ -23,6 +23,9 @@ type ParquetWriteOption func(*struct{})
 
 func WithRowGroupSize(n int) ParquetWriteOption      { return func(*struct{}) {} }
 func WithCompression(name string) ParquetWriteOption { return func(*struct{}) {} }
+func WithColumnTypes(fields []string, types map[string]string) ParquetWriteOption {
+	return func(*struct{}) {}
+}
 
 func WriteParquet(records iter.Seq[Record], filename string, opts ...ParquetWriteOption) error {
 	return fmt.Errorf("parquet support not available in slim build")

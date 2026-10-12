@@ -3,10 +3,12 @@
 package ssql
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"os"
+	"time"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
@@ -174,37 +176,52 @@ func arrowValueToGo(arr arrow.Array, idx int) any {
 	}
 }
 
-// WriteArrow writes Records to an Arrow IPC file.
-func WriteArrow(records iter.Seq[Record], filename string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("creating Arrow file: %w", err)
-	}
-	defer file.Close()
+// ArrowWriteOption configures [WriteArrow] / [WriteArrowToWriter].
+type ArrowWriteOption func(*arrowWriteOpts)
 
-	return WriteArrowToWriter(records, file)
+type arrowWriteOpts struct {
+	columns *declaredColumns
+}
+
+// WithArrowColumnTypes declares the stream's columns and their ssql
+// wire types ("int", "float", "bool", "time", "string", …), as a
+// `_schema` header carries them. See [WithColumnTypes].
+func WithArrowColumnTypes(fields []string, types map[string]string) ArrowWriteOption {
+	return func(o *arrowWriteOpts) { o.columns = &declaredColumns{fields: fields, types: types} }
+}
+
+// WriteArrow writes Records to an Arrow IPC file. The file is created
+// only once the records have been collected and typed, so an input with
+// nothing to write leaves no file behind.
+func WriteArrow(records iter.Seq[Record], filename string, opts ...ArrowWriteOption) error {
+	o := arrowWriteOpts{}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	all, schema, err := collectForArrow(records, o.columns)
+	if err != nil {
+		return err
+	}
+	return writeFileWith(filename, "Arrow", func(w io.Writer) error {
+		return writeArrowIPC(all, schema, w)
+	})
 }
 
 // WriteArrowToWriter writes Records to an Arrow IPC format writer.
-func WriteArrowToWriter(records iter.Seq[Record], w io.Writer) error {
+func WriteArrowToWriter(records iter.Seq[Record], w io.Writer, opts ...ArrowWriteOption) error {
+	o := arrowWriteOpts{}
+	for _, fn := range opts {
+		fn(&o)
+	}
+	all, schema, err := collectForArrow(records, o.columns)
+	if err != nil {
+		return err
+	}
+	return writeArrowIPC(all, schema, w)
+}
+
+func writeArrowIPC(all []Record, schema *arrow.Schema, w io.Writer) error {
 	mem := memory.DefaultAllocator
-
-	// Collect records to determine schema and build batches
-	var allRecords []Record
-	var schema *arrow.Schema
-
-	for record := range records {
-		if schema == nil {
-			schema = recordToArrowSchema(record)
-		}
-		allRecords = append(allRecords, record)
-	}
-
-	if len(allRecords) == 0 {
-		return nil // Nothing to write
-	}
-
-	// Create file writer with ZSTD compression
 	fw, err := ipc.NewFileWriter(w,
 		ipc.WithSchema(schema),
 		ipc.WithAllocator(mem),
@@ -214,54 +231,168 @@ func WriteArrowToWriter(records iter.Seq[Record], w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("creating Arrow writer: %w", err)
 	}
-	defer fw.Close()
-
-	// Build record batch from all records
-	batch, err := recordsToArrowBatch(allRecords, schema, mem)
+	batch, err := recordsToArrowBatch(all, schema, mem)
 	if err != nil {
+		fw.Close()
 		return fmt.Errorf("building Arrow batch: %w", err)
 	}
 	defer batch.Release()
-
-	// Write the batch
 	if err := fw.Write(batch); err != nil {
+		fw.Close()
 		return fmt.Errorf("writing Arrow batch: %w", err)
 	}
+	// Close writes the footer; its error is the file's.
+	return fw.Close()
+}
 
+// writeFileWith creates filename and runs write on it, removing the
+// file if the write fails so no truncated file is left for a reader.
+func writeFileWith(filename, format string, write func(io.Writer) error) error {
+	f, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("creating %s file: %w", format, err)
+	}
+	if err := write(f); err != nil {
+		f.Close()
+		os.Remove(filename)
+		return err
+	}
+	// pqarrow closes the file itself when it finishes; that is not an error.
+	if err := f.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+		os.Remove(filename)
+		return err
+	}
 	return nil
 }
 
-// recordToArrowSchema infers an Arrow schema from a Record.
-func recordToArrowSchema(record Record) *arrow.Schema {
-	var fields []arrow.Field
-
-	for k, v := range record.All() {
-		// Skip internal fields
-		if len(k) > 0 && k[0] == '_' {
-			continue
-		}
-
-		arrowType := goTypeToArrowType(v)
-		fields = append(fields, arrow.Field{Name: k, Type: arrowType, Nullable: true})
-	}
-
-	return arrow.NewSchema(fields, nil)
+// declaredColumns is a stream's `_schema` header: its column order and
+// wire types. It settles what the values cannot: a column that is null
+// in every row, and the columns of an input with no rows at all.
+type declaredColumns struct {
+	fields []string
+	types  map[string]string
 }
 
-// goTypeToArrowType converts a Go type to an Arrow type.
-func goTypeToArrowType(v any) arrow.DataType {
+// collectForArrow buffers the records and types every column from
+// every value it holds (see arrowColumnKind), so a column that is null
+// in row 1, or an int in row 1 and a float in row 2, is typed from all
+// of its values and not from the first record. Columns appear in the
+// declared order, then in the order they are first seen. An input with
+// no records and no declared columns is an error: there is no schema
+// to write, and a zero-byte file is not Arrow or Parquet.
+func collectForArrow(records iter.Seq[Record], declared *declaredColumns) ([]Record, *arrow.Schema, error) {
+	var names []string
+	kinds := map[string]arrowColumnKind{}
+	add := func(name string, k arrowColumnKind) {
+		if len(name) > 0 && name[0] == '_' {
+			return // internal fields
+		}
+		old, seen := kinds[name]
+		if !seen {
+			names = append(names, name)
+		}
+		kinds[name] = widenArrowKind(old, k)
+	}
+	if declared != nil {
+		for _, f := range declared.fields {
+			add(f, arrowKindForWireType(declared.types[f]))
+		}
+	}
+	var all []Record
+	for record := range records {
+		for k, v := range record.All() {
+			add(k, arrowKindOf(v))
+		}
+		all = append(all, record)
+	}
+	if len(names) == 0 {
+		return nil, nil, fmt.Errorf("nothing to write: the input has no records and no schema")
+	}
+	fields := make([]arrow.Field, len(names))
+	for i, n := range names {
+		fields[i] = arrow.Field{Name: n, Type: kinds[n].arrowType(), Nullable: true}
+	}
+	return all, arrow.NewSchema(fields, nil), nil
+}
+
+// arrowColumnKind is the arrow type of a column, decided from every
+// value in it. Kinds widen: null joins anything, int and float make
+// float, and any other mix makes string.
+type arrowColumnKind int
+
+const (
+	arrowKindNull arrowColumnKind = iota
+	arrowKindInt
+	arrowKindFloat
+	arrowKindBool
+	arrowKindTime
+	arrowKindString
+)
+
+// arrowTimestampType is how a time is written: microseconds, adjusted
+// to UTC — the same type typed.WriteParquet writes, so the record and
+// typed lanes produce the same file.
+var arrowTimestampType = &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}
+
+func arrowKindOf(v any) arrowColumnKind {
 	switch v.(type) {
-	case int64:
-		return arrow.PrimitiveTypes.Int64
-	case float64:
-		return arrow.PrimitiveTypes.Float64
-	case string:
-		return arrow.BinaryTypes.String
+	case nil:
+		return arrowKindNull
+	case int64, int, int32:
+		return arrowKindInt
+	case float64, float32:
+		return arrowKindFloat
 	case bool:
-		return arrow.FixedWidthTypes.Boolean
+		return arrowKindBool
+	case time.Time:
+		return arrowKindTime
 	default:
-		// Default to string for complex types
-		return arrow.BinaryTypes.String
+		return arrowKindString
+	}
+}
+
+func arrowKindForWireType(t string) arrowColumnKind {
+	switch t {
+	case "":
+		return arrowKindNull
+	case "int":
+		return arrowKindInt
+	case "float":
+		return arrowKindFloat
+	case "bool":
+		return arrowKindBool
+	case "time":
+		return arrowKindTime
+	default:
+		return arrowKindString
+	}
+}
+
+func widenArrowKind(a, b arrowColumnKind) arrowColumnKind {
+	switch {
+	case a == b || b == arrowKindNull:
+		return a
+	case a == arrowKindNull:
+		return b
+	case (a == arrowKindInt && b == arrowKindFloat) || (a == arrowKindFloat && b == arrowKindInt):
+		return arrowKindFloat
+	default:
+		return arrowKindString
+	}
+}
+
+func (k arrowColumnKind) arrowType() arrow.DataType {
+	switch k {
+	case arrowKindInt:
+		return arrow.PrimitiveTypes.Int64
+	case arrowKindFloat:
+		return arrow.PrimitiveTypes.Float64
+	case arrowKindBool:
+		return arrow.FixedWidthTypes.Boolean
+	case arrowKindTime:
+		return arrowTimestampType
+	default:
+		return arrow.BinaryTypes.String // also a column null in every row
 	}
 }
 
@@ -284,7 +415,7 @@ func recordsToArrowBatch(records []Record, schema *arrow.Schema, mem memory.Allo
 	for _, record := range records {
 		for i, field := range schema.Fields() {
 			val, exists := Get[any](record, field.Name)
-			if !exists {
+			if !exists || val == nil {
 				builders[i].AppendNull()
 				continue
 			}
@@ -309,14 +440,20 @@ func recordsToArrowBatch(records []Record, schema *arrow.Schema, mem memory.Allo
 	return batch, nil
 }
 
-// appendValueToBuilder appends a Go value to an Arrow builder.
+// appendValueToBuilder appends a non-nil Go value to the builder of the
+// column type collectForArrow chose for it. Widening guarantees the
+// value fits: an int in a float column is converted, and anything in a
+// string column is written as its wire text (formatValue: RFC 3339 for
+// a time, never Go's Time.String()).
 func appendValueToBuilder(builder array.Builder, val any) {
 	switch b := builder.(type) {
 	case *array.Int64Builder:
 		switch v := val.(type) {
 		case int64:
 			b.Append(v)
-		case float64:
+		case int:
+			b.Append(int64(v))
+		case int32:
 			b.Append(int64(v))
 		default:
 			b.AppendNull()
@@ -325,23 +462,29 @@ func appendValueToBuilder(builder array.Builder, val any) {
 		switch v := val.(type) {
 		case float64:
 			b.Append(v)
+		case float32:
+			b.Append(float64(v))
 		case int64:
+			b.Append(float64(v))
+		case int:
+			b.Append(float64(v))
+		case int32:
 			b.Append(float64(v))
 		default:
 			b.AppendNull()
 		}
-	case *array.StringBuilder:
-		switch v := val.(type) {
-		case string:
-			b.Append(v)
-		default:
-			b.Append(fmt.Sprintf("%v", v))
+	case *array.TimestampBuilder:
+		if t, ok := val.(time.Time); ok {
+			b.Append(arrow.Timestamp(t.UnixMicro()))
+		} else {
+			b.AppendNull()
 		}
+	case *array.StringBuilder:
+		b.Append(formatValue(val))
 	case *array.BooleanBuilder:
-		switch v := val.(type) {
-		case bool:
+		if v, ok := val.(bool); ok {
 			b.Append(v)
-		default:
+		} else {
 			b.AppendNull()
 		}
 	default:

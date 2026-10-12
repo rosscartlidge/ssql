@@ -24,6 +24,9 @@ import (
 //   - an unknown key is skipped (any value shape);
 //   - a missing key leaves the field at its zero value;
 //   - JSON null leaves a plain field zero and sets a pointer field nil;
+//   - under [RequireValues], a missing key or a null in a plain
+//     non-string field is a row error instead (the field cannot hold
+//     absence; DFC124);
 //   - a string field takes a JSON string's unescaped text, and a
 //     number, bool, object or array as its raw JSON text (exec stores
 //     nested values the same way; encoding/json would reject the row);
@@ -56,12 +59,31 @@ type jsonField struct {
 	dec   fieldDecoder
 	kind  jsonKind
 	isPtr bool
+	req   int // bit in the row's seen set under RequireValues; -1 when the field may be absent
 }
 
 type jsonlPlan struct {
-	exact map[string]*jsonField
-	lower map[string]*jsonField
+	exact    map[string]*jsonField
+	lower    map[string]*jsonField
+	required []*jsonField // by req bit; empty unless RequireValues
 }
+
+// JSONOption configures the JSON and JSON Lines readers (ReadJSONL,
+// ReadJSONLParallel, ReadJSON, ReadJSONParallel and the FromReader forms).
+type JSONOption func(*jsonOpts)
+
+type jsonOpts struct {
+	requireValues bool
+}
+
+// RequireValues makes a missing key or a JSON null in a plain (non-pointer)
+// numeric, bool or time.Time field a row error, rather than the zero value
+// encoding/json leaves. In ssql an absent value is a missing field, not 0,
+// false or year 1, and a plain field cannot hold absence: the same rule
+// the CSV readers apply to an empty cell (DFC124). Pointer fields still
+// take nil and string fields "". Generated programs pass it; without it
+// the readers keep encoding/json's behaviour.
+func RequireValues() JSONOption { return func(o *jsonOpts) { o.requireValues = true } }
 
 // jsonFieldName mirrors encoding/json's tag rule (`json:"name,omitempty"`,
 // "-" excludes), falling back to the CSV column name.
@@ -97,7 +119,11 @@ func jsonKindFor(t reflect.Type) (jsonKind, error) {
 }
 
 // buildJSONLPlan reflects over T once. An error means "use encoding/json".
-func buildJSONLPlan[T any]() (*jsonlPlan, error) {
+func buildJSONLPlan[T any](opts ...JSONOption) (*jsonlPlan, error) {
+	var o jsonOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
 	var zero T
 	rt := reflect.TypeOf(zero)
 	if rt == nil || rt.Kind() != reflect.Struct {
@@ -126,7 +152,11 @@ func buildJSONLPlan[T any]() (*jsonlPlan, error) {
 		if err != nil {
 			return nil, err
 		}
-		jf := &jsonField{name: name, typ: f.Type.String(), dec: dec, kind: kind, isPtr: isPtr}
+		jf := &jsonField{name: name, typ: f.Type.String(), dec: dec, kind: kind, isPtr: isPtr, req: -1}
+		if o.requireValues && !isPtr && kind != jkString {
+			jf.req = len(pl.required)
+			pl.required = append(pl.required, jf)
+		}
 		if _, dup := pl.exact[name]; !dup {
 			pl.exact[name] = jf
 		}
@@ -150,6 +180,29 @@ var errJSONSyntax = errors.New("invalid JSON")
 // decode fills the struct at p from one JSONL line. p must point at a
 // zero-valued T (the callers allocate `var row T` per line).
 func (pl *jsonlPlan) decode(line []byte, p unsafe.Pointer) error {
+	if len(pl.required) == 0 {
+		return pl.decodeFields(line, p, nil)
+	}
+	var inline [4]uint64 // 256 required fields without a heap allocation
+	seen := inline[:]
+	if n := (len(pl.required) + 63) / 64; n > len(inline) {
+		seen = make([]uint64, n)
+	}
+	if err := pl.decodeFields(line, p, seen); err != nil {
+		return err
+	}
+	for _, f := range pl.required {
+		if seen[f.req/64]&(1<<(f.req%64)) == 0 {
+			return fmt.Errorf("field %q: missing, and %s cannot hold an absent value", f.name, f.typ)
+		}
+	}
+	return nil
+}
+
+// decodeFields is decode's line walk. seen is nil unless RequireValues:
+// then each required field's bit is set when it takes a value, and a
+// null into one is an error.
+func (pl *jsonlPlan) decodeFields(line []byte, p unsafe.Pointer, seen []uint64) error {
 	i := skipWS(line, 0)
 	if i >= len(line) || line[i] != '{' {
 		return errJSONSyntax
@@ -187,6 +240,12 @@ func (pl *jsonlPlan) decode(line []byte, p unsafe.Pointer) error {
 			key = line[kStart:kEnd]
 		}
 		f := pl.lookup(key)
+		if seen != nil && f != nil && f.req >= 0 {
+			if line[i] == 'n' {
+				return fmt.Errorf("field %q: null is not %s", f.name, f.typ)
+			}
+			seen[f.req/64] |= 1 << (f.req % 64)
+		}
 
 		// value
 		vStart := i

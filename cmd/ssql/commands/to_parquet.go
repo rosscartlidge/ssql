@@ -88,10 +88,14 @@ func registerToParquet(cmd *cf.SubcommandBuilder) {
 			schemaAndRecords := lib.ReadJSONLWithSchema(ctx.Stdin())
 			records := schemaAndRecords.Records
 
-			if err := ssql.WriteParquet(records, outputFile,
+			opts := []ssql.ParquetWriteOption{
 				ssql.WithRowGroupSize(rowGroupSize),
 				ssql.WithCompression(compression),
-			); err != nil {
+			}
+			if s := schemaAndRecords.Schema; s != nil {
+				opts = append(opts, ssql.WithColumnTypes(s.Fields, s.Types))
+			}
+			if err := ssql.WriteParquet(records, outputFile, opts...); err != nil {
 				return fmt.Errorf("writing Parquet file: %w", err)
 			}
 
@@ -141,27 +145,38 @@ func generateToParquetCode(filename string, rowGroupSize int, compression string
 		// Stream → call Stream.WriteParquet (per-shard one row group);
 		// iter.Seq[T] → call typed.WriteParquet (single row group of
 		// configured size).
-		var code string
+		streamCode := fmt.Sprintf(`if err := %s.WriteParquet(*flagOutput%s); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar, optsArg)
+		serialCode := fmt.Sprintf(`if err := typed.WriteParquet(%s, *flagOutput%s); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
+		os.Exit(1)
+	}`, inputVar, optsArg)
+		imports := []string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/typed"}
+		code := serialCode
 		if prevIsStream {
-			code = fmt.Sprintf(`if err := %s.WriteParquet(*flagOutput%s); err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error writing Parquet: %%v\n", err)
-		os.Exit(1)
-	}`, inputVar, optsArg)
-		} else {
-			code = fmt.Sprintf(`if err := typed.WriteParquet(%s, *flagOutput%s); err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error writing Parquet: %%v\n", err)
-		os.Exit(1)
-	}`, inputVar, optsArg)
+			code = streamCode
 		}
-		frag := lib.NewFinalFragment(inputVar, code,
-			[]string{"fmt", "os", "github.com/rosscartlidge/ssql/v4/typed"}, getCommandString())
+		frag := lib.NewFinalFragment(inputVar, code, imports, getCommandString())
+		// Both forms, like to csv: the planner swaps to the iter.Seq
+		// form when the upstream turns out serial (the Stream form
+		// alone did not compile after a source downgrade).
+		if prevIsStream {
+			frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeNone}
+			frag.AltCodeIfSeq = serialCode
+			frag.AltImportsIfSeq = imports
+			frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone}
+		} else {
+			frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeNone}
+		}
 		frag.Params = params
 		frag.InputTypedSchema = prevSchema
 		return lib.WriteCodeFragment(frag)
 	}
 
 	code := fmt.Sprintf(`if err := ssql.WriteParquet(%s, *flagOutput, ssql.WithRowGroupSize(%d), ssql.WithCompression(%q)); err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error writing Parquet: %%v\n", err)
+		fmt.Fprintf(os.Stderr, "Error writing Parquet: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, rowGroupSize, compression)
 

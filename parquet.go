@@ -325,6 +325,17 @@ type ParquetWriteOption func(*parquetWriteOpts)
 type parquetWriteOpts struct {
 	rowGroupSize int64
 	compression  string
+	columns      *declaredColumns
+}
+
+// WithColumnTypes declares the stream's columns and their ssql wire
+// types ("int", "float", "bool", "time", "string", …), as a `_schema`
+// header carries them. Values still decide a column's type (an int
+// column holding a float is written as float), but a declared column
+// that is null in every row keeps its type, and an input with no rows
+// writes a valid zero-row file with these columns instead of failing.
+func WithColumnTypes(fields []string, types map[string]string) ParquetWriteOption {
+	return func(o *parquetWriteOpts) { o.columns = &declaredColumns{fields: fields, types: types} }
 }
 
 // WithRowGroupSize sets the maximum number of rows per Parquet row
@@ -373,45 +384,38 @@ func parquetCompressionCodec(name string) compress.Compression {
 // in parallel by `typed.ReadParquetParallel` or DuckDB). Adjust
 // via [WithRowGroupSize] / [WithCompression].
 func WriteParquet(records iter.Seq[Record], filename string, opts ...ParquetWriteOption) error {
-	f, err := os.Create(filename)
+	o := resolveParquetWriteOpts(opts)
+	all, schema, err := collectForArrow(records, o.columns)
 	if err != nil {
-		return fmt.Errorf("creating Parquet file: %w", err)
+		return err
 	}
-	defer f.Close()
-
-	return WriteParquetToWriter(records, f, opts...)
+	return writeFileWith(filename, "Parquet", func(w io.Writer) error {
+		return writeParquetTable(all, schema, w, o)
+	})
 }
 
 // WriteParquetToWriter writes Records to a Parquet format writer.
 // Same defaults as [WriteParquet].
 func WriteParquetToWriter(records iter.Seq[Record], w io.Writer, opts ...ParquetWriteOption) error {
-	mem := memory.DefaultAllocator
 	o := resolveParquetWriteOpts(opts)
-
-	// Collect records to build Arrow table
-	var allRecords []Record
-	var arrowSchema *arrow.Schema
-
-	for record := range records {
-		if arrowSchema == nil {
-			arrowSchema = recordToArrowSchema(record)
-		}
-		allRecords = append(allRecords, record)
+	all, schema, err := collectForArrow(records, o.columns)
+	if err != nil {
+		return err
 	}
+	return writeParquetTable(all, schema, w, o)
+}
 
-	if len(allRecords) == 0 || arrowSchema == nil {
-		return nil
-	}
-
-	// Build Arrow record batch
-	batch, err := recordsToArrowBatch(allRecords, arrowSchema, mem)
+// writeParquetTable writes collected records; an empty slice with a
+// declared schema writes a valid zero-row file.
+func writeParquetTable(all []Record, schema *arrow.Schema, w io.Writer, o parquetWriteOpts) error {
+	mem := memory.DefaultAllocator
+	batch, err := recordsToArrowBatch(all, schema, mem)
 	if err != nil {
 		return fmt.Errorf("building Arrow batch: %w", err)
 	}
 	defer batch.Release()
 
-	// Convert batch to table
-	tbl := array.NewTableFromRecords(arrowSchema, []arrow.Record{batch})
+	tbl := array.NewTableFromRecords(schema, []arrow.Record{batch})
 	defer tbl.Release()
 
 	props := parquet.NewWriterProperties(
@@ -420,9 +424,12 @@ func WriteParquetToWriter(records iter.Seq[Record], w io.Writer, opts ...Parquet
 	arrProps := pqarrow.NewArrowWriterProperties()
 
 	chunk := o.rowGroupSize
-	nRows := int64(len(allRecords))
+	nRows := int64(len(all))
 	if chunk <= 0 || chunk > nRows {
 		chunk = nRows
+	}
+	if chunk == 0 {
+		chunk = 1 // pqarrow needs a positive chunk size even for zero rows
 	}
 	return pqarrow.WriteTable(tbl, w, chunk, props, arrProps)
 }
@@ -514,6 +521,8 @@ func wireTypeForArrow(t arrow.DataType) string {
 		return "float"
 	case arrow.BOOL:
 		return "bool"
+	case arrow.TIMESTAMP, arrow.DATE32, arrow.DATE64:
+		return "time" // the reader yields time.Time for these
 	default:
 		return "string"
 	}

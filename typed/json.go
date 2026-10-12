@@ -25,27 +25,27 @@ import (
 // not fit its field panics with a *[ReadError] whose Row is the 1-based
 // element index. Elements are scanned with encoding/json's Decoder, so
 // the file is streamed, not loaded; whitespace and layout do not matter.
-func ReadJSON[T any](filename string) iter.Seq[T] {
+func ReadJSON[T any](filename string, opts ...JSONOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		f, err := os.Open(filename)
 		if err != nil {
 			failRead("typed.ReadJSON", filename, err)
 		}
 		defer f.Close()
-		readJSONArrayLoud[T]("typed.ReadJSON", filename, f, yield)
+		readJSONArrayLoud[T]("typed.ReadJSON", filename, f, yield, opts)
 	}
 }
 
 // ReadJSONFromReader is the [io.Reader] variant of [ReadJSON].
-func ReadJSONFromReader[T any](rd io.Reader) iter.Seq[T] {
+func ReadJSONFromReader[T any](rd io.Reader, opts ...JSONOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		readJSONArrayLoud[T]("typed.ReadJSONFromReader", "", rd, yield)
+		readJSONArrayLoud[T]("typed.ReadJSONFromReader", "", rd, yield, opts)
 	}
 }
 
 // readJSONArrayLoud is the shared body of the lossy array readers.
-func readJSONArrayLoud[T any](op, source string, rd io.Reader, yield func(T) bool) {
-	pl, perr := buildJSONLPlan[T]()
+func readJSONArrayLoud[T any](op, source string, rd io.Reader, yield func(T) bool, opts []JSONOption) {
+	pl, perr := buildJSONLPlan[T](opts...)
 	var row T
 	for raw, idx := range jsonArrayElements(op, source, rd) {
 		row = *new(T)
@@ -119,7 +119,7 @@ type rawBatch struct {
 // raised in whichever shard meets them, or re-raised from the scanner
 // by every shard when the document itself is bad. A consumer that stops
 // early releases the scanner.
-func ReadJSONParallel[T any](filename string, n int) Stream[T] {
+func ReadJSONParallel[T any](filename string, n int, opts ...JSONOption) Stream[T] {
 	if n <= 0 {
 		n = runtime.GOMAXPROCS(0)
 	}
@@ -156,7 +156,7 @@ func ReadJSONParallel[T any](filename string, n int) Stream[T] {
 		}
 		flush()
 	})
-	pl, perr := buildJSONLPlan[T]()
+	pl, perr := buildJSONLPlan[T](opts...)
 	shards := make([]iter.Seq[T], n)
 	for i := 0; i < n; i++ {
 		shards[i] = func(yield func(T) bool) {

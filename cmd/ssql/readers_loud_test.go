@@ -294,3 +294,53 @@ func TestJoinMissingRightFileIsLoud(t *testing.T) {
 		assertLoudFailure(t, "record join missing "+ext, string(out), err, "nope."+ext, "no such file")
 	}
 }
+
+// A JSONL row with a key missing or null in a numeric column: exec reads
+// it as an absent field, and the typed lane read it as 0 (a plain int64
+// cannot hold absence) — `{"id":1}` printed `1,0` where exec printed
+// `1,`. Missing is how ssql itself writes an absent value (`to jsonl`,
+// `tee`), so both spellings must fail the typed read, in the parallel
+// and the serial reader, naming the line (typed.RequireValues; the CSV
+// readers' empty-cell rule, DFC124). The record lane must agree with
+// exec.
+func TestJSONLAbsentValueIsLoudInTyped(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	dir := t.TempDir()
+	for name, last := range map[string]string{
+		"missing.jsonl": `{"id":1002}`,
+		"null.jsonl":    `{"id":1002,"v":null}`,
+	} {
+		var b strings.Builder
+		for i := 1; i <= 1001; i++ {
+			fmt.Fprintf(&b, `{"id":%d,"v":%d}`+"\n", i, i)
+		}
+		b.WriteString(last + "\n")
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agg := fmt.Sprintf(lateAgg, bin, bin)
+	for _, tc := range []struct{ file, want string }{
+		{"missing.jsonl", `field "v": missing, and int64 cannot hold an absent value`},
+		{"null.jsonl", `field "v": null is not int64`},
+	} {
+		parallel := bin + " from jsonl " + tc.file + agg
+		out, err := runGeneratedPipeline(t, bin, dir, "typed", parallel)
+		assertLoudFailure(t, "typed parallel "+tc.file, out, err, "typed.ReadJSONLParallel "+tc.file+": line 1002", tc.want)
+		serial := bin + " from jsonl " + tc.file + " | " + bin + " limit 2000 | " + bin + " to csv"
+		out, err = runGeneratedPipeline(t, bin, dir, "typed", serial)
+		assertLoudFailure(t, "typed serial "+tc.file, out, err, "typed.ReadJSONL "+tc.file+": line 1002", tc.want)
+
+		// exec and record keep the row with v absent: sum 501501 over 1002 rows.
+		c := exec.Command("bash", "-c", parallel)
+		c.Dir = dir
+		execOut, err := c.CombinedOutput()
+		if err != nil || !strings.Contains(string(execOut), "501501") || !strings.Contains(string(execOut), "1002") {
+			t.Errorf("exec %s: %v\n%s", tc.file, err, execOut)
+		}
+		recOut, err := runGeneratedPipeline(t, bin, dir, "record", parallel)
+		if err != nil || recOut != string(execOut) {
+			t.Errorf("record %s differs from exec: %v\n%s\nexec:\n%s", tc.file, err, recOut, execOut)
+		}
+	}
+}

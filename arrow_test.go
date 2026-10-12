@@ -120,18 +120,30 @@ func TestArrowWriteToWriter(t *testing.T) {
 }
 
 func TestArrowEmptyRecords(t *testing.T) {
-	// Test with no records
+	// No records and no declared columns: there is no schema, and zero
+	// bytes are not an Arrow file, so the writer refuses (it used to
+	// return nil having written nothing).
 	var records []Record
-
 	var buf bytes.Buffer
-	err := WriteArrowToWriter(slices.Values(records), &buf)
-	if err != nil {
-		t.Fatalf("WriteArrowToWriter with empty records failed: %v", err)
+	if err := WriteArrowToWriter(slices.Values(records), &buf); err == nil {
+		t.Fatal("empty records, no schema: want an error")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("empty records, no schema: wrote %d bytes", buf.Len())
 	}
 
-	// Empty records should produce no output (nothing to write)
-	if buf.Len() != 0 {
-		t.Errorf("Expected empty output for empty records, got %d bytes", buf.Len())
+	// With declared columns an empty input is a valid zero-row file.
+	buf.Reset()
+	if err := WriteArrowToWriter(slices.Values(records), &buf,
+		WithArrowColumnTypes([]string{"a"}, map[string]string{"a": "int"})); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for range ReadArrowFromReader(bytes.NewReader(buf.Bytes())) {
+		n++
+	}
+	if buf.Len() == 0 || n != 0 {
+		t.Errorf("declared columns: %d bytes, %d rows; want a zero-row file", buf.Len(), n)
 	}
 }
 

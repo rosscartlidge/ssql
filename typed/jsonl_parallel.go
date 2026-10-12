@@ -29,7 +29,7 @@ import (
 // (GroupByParallel, per-shard sinks) define the cross-shard order, as
 // for the CSV twin. Memory: ~file size (the mapping) plus 8 bytes per
 // line for the index.
-func ReadJSONLParallel[T any](filename string, n int) Stream[T] {
+func ReadJSONLParallel[T any](filename string, n int, opts ...JSONOption) Stream[T] {
 	if n <= 0 {
 		n = runtime.GOMAXPROCS(0)
 	}
@@ -86,7 +86,7 @@ func ReadJSONLParallel[T any](filename string, n int) Stream[T] {
 	}
 	perShard := (dataLines + n - 1) / n
 
-	plan, perr := buildJSONLPlan[T]()
+	plan, perr := buildJSONLPlan[T](opts...)
 
 	shards := make([]iter.Seq[T], n)
 	for i := 0; i < n; i++ {

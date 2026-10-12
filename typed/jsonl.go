@@ -32,28 +32,28 @@ import (
 // over the 1 MB limit panics with a *[ReadError] naming the line;
 // [ReadJSONLSafe] yields those as errors instead. Blank lines and a
 // leading `_schema` header are skipped.
-func ReadJSONL[T any](filename string) iter.Seq[T] {
+func ReadJSONL[T any](filename string, opts ...JSONOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		f, err := os.Open(filename)
 		if err != nil {
 			failRead("typed.ReadJSONL", filename, err)
 		}
 		defer f.Close()
-		readJSONLLoud[T]("typed.ReadJSONL", filename, f, yield)
+		readJSONLLoud[T]("typed.ReadJSONL", filename, f, yield, opts)
 	}
 }
 
 // ReadJSONLFromReader is the [io.Reader] variant of [ReadJSONL].
-func ReadJSONLFromReader[T any](rd io.Reader) iter.Seq[T] {
+func ReadJSONLFromReader[T any](rd io.Reader, opts ...JSONOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		readJSONLLoud[T]("typed.ReadJSONLFromReader", "", rd, yield)
+		readJSONLLoud[T]("typed.ReadJSONLFromReader", "", rd, yield, opts)
 	}
 }
 
 // readJSONLLoud is the shared body of the lossy JSONL readers. Types
 // the positional plan cannot cover decode with encoding/json.
-func readJSONLLoud[T any](op, source string, rd io.Reader, yield func(T) bool) {
-	pl, perr := buildJSONLPlan[T]()
+func readJSONLLoud[T any](op, source string, rd io.Reader, yield func(T) bool, opts []JSONOption) {
+	pl, perr := buildJSONLPlan[T](opts...)
 	sc := bufio.NewScanner(rd)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024) // 1 MB max line
 	var lineN int64
@@ -115,7 +115,7 @@ func isSchemaHeaderLine(line []byte) bool {
 }
 
 // ReadJSONLSafe is the error-reporting variant of [ReadJSONL].
-func ReadJSONLSafe[T any](filename string) iter.Seq2[T, error] {
+func ReadJSONLSafe[T any](filename string, opts ...JSONOption) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		f, err := os.Open(filename)
 		if err != nil {
@@ -124,16 +124,16 @@ func ReadJSONLSafe[T any](filename string) iter.Seq2[T, error] {
 			return
 		}
 		defer f.Close()
-		ReadJSONLSafeFromReader[T](f)(yield)
+		ReadJSONLSafeFromReader[T](f, opts...)(yield)
 	}
 }
 
 // ReadJSONLSafeFromReader is the [io.Reader] variant of [ReadJSONLSafe].
-func ReadJSONLSafeFromReader[T any](r io.Reader) iter.Seq2[T, error] {
+func ReadJSONLSafeFromReader[T any](r io.Reader, opts ...JSONOption) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		sc := bufio.NewScanner(r)
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
-		pl, perr := buildJSONLPlan[T]()
+		pl, perr := buildJSONLPlan[T](opts...)
 		for sc.Scan() {
 			line := sc.Bytes()
 			if len(line) == 0 || isSchemaHeaderLine(line) {

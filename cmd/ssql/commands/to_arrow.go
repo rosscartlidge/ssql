@@ -58,7 +58,11 @@ func registerToArrow(cmd *cf.SubcommandBuilder) {
 			records := schemaAndRecords.Records
 
 			// Write as Arrow
-			if err := ssql.WriteArrow(records, outputFile); err != nil {
+			var opts []ssql.ArrowWriteOption
+			if s := schemaAndRecords.Schema; s != nil {
+				opts = append(opts, ssql.WithArrowColumnTypes(s.Fields, s.Types))
+			}
+			if err := ssql.WriteArrow(records, outputFile, opts...); err != nil {
 				return fmt.Errorf("writing Arrow file: %w", err)
 			}
 
@@ -90,7 +94,7 @@ func generateToArrowCode(filename string) error {
 		{Name: "output", Default: filename, Help: "output Arrow file", VarName: "flagOutput"},
 	}
 	code := fmt.Sprintf(`if err := ssql.WriteArrow(%s, *flagOutput); err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error writing Arrow: %%v\n", err)
+		fmt.Fprintf(os.Stderr, "Error writing Arrow: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar)
 

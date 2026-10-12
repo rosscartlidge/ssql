@@ -435,14 +435,15 @@ for a JSON **array** document (`[ {…}, {…} ]`, the shape an API export or
 `to json` writes), the `ReadJSON` twins:
 
 ```go
-func ReadJSONL[T any](filename string) iter.Seq[T]
-func ReadJSONLFromReader[T any](rd io.Reader) iter.Seq[T]
-func ReadJSONLSafe[T any](filename string) iter.Seq2[T, error]
-func ReadJSONLSafeFromReader[T any](r io.Reader) iter.Seq2[T, error]
-func ReadJSONLParallel[T any](filename string, n int) Stream[T]
-func ReadJSON[T any](filename string) iter.Seq[T]              // a JSON array file
-func ReadJSONFromReader[T any](rd io.Reader) iter.Seq[T]
-func ReadJSONParallel[T any](filename string, n int) Stream[T]
+func ReadJSONL[T any](filename string, opts ...JSONOption) iter.Seq[T]
+func ReadJSONLFromReader[T any](rd io.Reader, opts ...JSONOption) iter.Seq[T]
+func ReadJSONLSafe[T any](filename string, opts ...JSONOption) iter.Seq2[T, error]
+func ReadJSONLSafeFromReader[T any](r io.Reader, opts ...JSONOption) iter.Seq2[T, error]
+func ReadJSONLParallel[T any](filename string, n int, opts ...JSONOption) Stream[T]
+func ReadJSON[T any](filename string, opts ...JSONOption) iter.Seq[T]   // a JSON array file
+func ReadJSONFromReader[T any](rd io.Reader, opts ...JSONOption) iter.Seq[T]
+func ReadJSONParallel[T any](filename string, n int, opts ...JSONOption) Stream[T]
+func RequireValues() JSONOption   // a missing key or null in a plain non-string field is an error
 func WriteJSONL[T any](seq iter.Seq[T], filename string) error
 func WriteJSONLToWriter[T any](seq iter.Seq[T], w io.Writer) error
 ```
@@ -456,6 +457,15 @@ rows. **Errors.** A line that is not a JSON object, or a value that does not
 fit its field (`{"v":1.5}` into `int64`), is a fatal `*ReadError` naming the
 physical line in `ReadJSONL` / `ReadJSONLParallel`; `ReadJSONLSafe` yields it.
 In a generated program the fix is `-type v float` on the `from jsonl` stage.
+**Absent values.** By default a missing key or a JSON `null` leaves a plain
+field at its zero value, as `encoding/json` does, and sets a pointer field to
+nil. With `RequireValues()` a missing key or null in a plain numeric, bool or
+`time.Time` field is a `*ReadError` instead (`field "v": null is not int64`,
+`field "v": missing, and int64 cannot hold an absent value`); string fields
+still take `""`. ssql reads an absent value as a missing field, not `0`, and
+writes one by leaving the key out, so generated programs pass it: the typed
+CSV readers' empty-cell rule (DFC124). The remedies are `-type v string` on
+the `from jsonl` stage, `fill`, or record mode.
 **Decoding is positional:** the type is reflected over once into a
 key → field plan that reuses the CSV reader's field decoders, and each line
 is walked once (about 3.6× the throughput of `encoding/json`). Slice, map

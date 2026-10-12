@@ -16,11 +16,19 @@ func ReadArrowFromReader(r io.Reader) iter.Seq[Record] {
 	return func(yield func(Record) bool) {}
 }
 
-func WriteArrow(records iter.Seq[Record], filename string) error {
+// ArrowWriteOption is a slim-build stub for the option type defined in
+// the !slim variant.
+type ArrowWriteOption func(*struct{})
+
+func WithArrowColumnTypes(fields []string, types map[string]string) ArrowWriteOption {
+	return func(*struct{}) {}
+}
+
+func WriteArrow(records iter.Seq[Record], filename string, opts ...ArrowWriteOption) error {
 	return fmt.Errorf("arrow support not available in slim build")
 }
 
-func WriteArrowToWriter(records iter.Seq[Record], w io.Writer) error {
+func WriteArrowToWriter(records iter.Seq[Record], w io.Writer, opts ...ArrowWriteOption) error {
 	return fmt.Errorf("arrow support not available in slim build")
 }
 

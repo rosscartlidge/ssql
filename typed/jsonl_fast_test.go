@@ -225,3 +225,37 @@ func TestReadJSONLParallelMatchesSerial(t *testing.T) {
 		}
 	}
 }
+
+// RequireValues: a missing key or null in a plain numeric, bool or time
+// field is a row error; pointer fields take nil, string fields "", and
+// without the option the decoder keeps encoding/json's zero values.
+func TestJSONLRequireValues(t *testing.T) {
+	strict, err := buildJSONLPlan[fastRow](RequireValues())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lax, _ := buildJSONLPlan[fastRow]()
+	full := `"name":"n","age":1,"score":1.5,"active":true,"small":1,"big":1,"when":"2026-09-06T10:00:00Z"`
+	for _, tc := range []struct{ line, want string }{
+		{`{` + full + `}`, ""},
+		{`{` + full + `,"note":null,"count":null,"Plain":null}`, ""}, // pointers nil, string ""
+		{`{` + full + `,"name":null}`, ""},                           // a string field takes null as ""
+		{`{"name":"n","score":1.5,"active":true,"small":1,"big":1,"when":"2026-09-06T10:00:00Z"}`, `field "age": missing, and int64 cannot hold an absent value`},
+		{`{` + full + `,"age":null}`, `field "age": null is not int64`},
+		{`{` + strings.Replace(full, `"active":true`, `"active":null`, 1) + `}`, `field "active": null is not bool`},
+		{`{` + strings.Replace(full, `,"when":"2026-09-06T10:00:00Z"`, ``, 1) + `}`, `field "when": missing, and time.Time cannot hold an absent value`},
+		{`{"AGE":1,` + strings.Replace(full, `"age":1,`, ``, 1) + `}`, ""}, // a case-insensitive key counts
+	} {
+		var r fastRow
+		err := strict.decode([]byte(tc.line), unsafe.Pointer(&r))
+		if tc.want == "" && err != nil {
+			t.Errorf("%s: %v", tc.line, err)
+		}
+		if tc.want != "" && (err == nil || err.Error() != tc.want) {
+			t.Errorf("%s: err %v, want %q", tc.line, err, tc.want)
+		}
+		if err := lax.decode([]byte(tc.line), unsafe.Pointer(new(fastRow))); err != nil {
+			t.Errorf("%s: without RequireValues: %v", tc.line, err)
+		}
+	}
+}

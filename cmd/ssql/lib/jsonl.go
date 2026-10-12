@@ -225,12 +225,7 @@ func readJSONLWithSchema(r io.Reader, schema *Schema, skipped *int64) iter.Seq[s
 		var wireTypes []ssql.FieldType
 		if schema != nil && len(schema.Fields) > 0 {
 			ssqlSchema = ssql.NewSchema(schema.Fields)
-			wireTypes = make([]ssql.FieldType, ssqlSchema.Width())
-			for _, f := range schema.Fields {
-				if ft, err := ssql.ParseFieldType(schema.Types[f]); err == nil {
-					wireTypes[ssqlSchema.Index(f)] = ft
-				}
-			}
+			wireTypes = ssql.SchemaWireTypes(ssqlSchema, schema.Types)
 		}
 
 		lineNo := int64(1) // the header was line 1

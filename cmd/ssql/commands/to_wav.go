@@ -116,7 +116,7 @@ func generateToWAVCode(filename string, sampleRate int) error {
 		{Name: "output", Default: filename, Help: "output WAV file", VarName: "flagOutput"},
 	}
 	code := fmt.Sprintf(`if err := ssql.WriteWAV(%s, *flagOutput, %d); err != nil {
-		fmt.Fprintf(ctx.Stderr(), "Error writing WAV: %%v\n", err)
+		fmt.Fprintf(os.Stderr, "Error writing WAV: %%v\n", err)
 		os.Exit(1)
 	}`, inputVar, sampleRate)
 

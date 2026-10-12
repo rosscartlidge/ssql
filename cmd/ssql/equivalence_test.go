@@ -1854,7 +1854,7 @@ var equivCases = []EquivCase{
 			{"g": "a", "c": 2, "total": 4, "mean": 2, "m": 3, "first_t": "Oslo", "nt": 1},
 			{"g": "b", "c": 2, "total": 0, "nt": 0},
 		},
-		Skip: map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
 	},
 	{
 		// …and a condition on that valueless result is false, its negation true.
@@ -1862,7 +1862,7 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} group-by g -max v m | {{.bin}} where -if m le 2 + +if m gt 0 | {{.bin}} include g`,
 		Ordered:  false,
 		Golden:   []map[string]any{{"g": "b"}},
-		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
 	},
 	{
 		// A literal is typed by the COLUMN it meets, not by its spelling:
@@ -1893,7 +1893,7 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} update +if v ge 2 -set g z | {{.bin}} include id g`,
 		Ordered:  false,
 		Golden:   []map[string]any{{"id": 1, "g": "z"}, {"id": 2, "g": "a"}, {"id": 3, "g": "z"}, {"id": 4, "g": "z"}},
-		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
 	},
 	{
 		// cast of an empty text cell stays missing — it became 0.
@@ -1901,7 +1901,7 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/missing_groups.csv | {{.bin}} cast -type e int | {{.bin}} where -if id le 2 | {{.bin}} include id e`,
 		Ordered:  false,
 		Golden:   []map[string]any{{"id": 1}, {"id": 2}},
-		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
 	},
 	{
 		// DFC133 (row-order sweep): an int key joined to a float key. The
@@ -1924,7 +1924,7 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from jsonl {{.data}}/null_first.jsonl | {{.bin}} where -if score gt 3 | {{.bin}} include id score`,
 		Ordered:  false,
 		Golden:   []map[string]any{{"id": 2, "score": 4}},
-		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
 	},
 	{
 		// …and a NULL in a LATER element of a JSON array's int column: exec
@@ -1934,7 +1934,7 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from json {{.data}}/null_mixed.json | {{.bin}} where -if n ge 0 | {{.bin}} include id n`,
 		Ordered:  false,
 		Golden:   []map[string]any{{"id": 1, "n": 5}, {"id": 3, "n": 7}},
-		Skip:     map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
 	},
 	{
 		// DFC128 D1: `time` is a wire type. cast makes the column a time in
@@ -1996,7 +1996,7 @@ var equivCases = []EquivCase{
 			{"id": 2, "note": "b", "score": 4},
 			{"id": 3, "note": "c", "score": 2.5},
 		},
-		Skip: map[string]string{"go-typed": "typed reader: absent field → zero value (DFC124 §3)", "go-parallel": "typed reader: absent field → zero value (DFC124 §3)"},
+		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
 	},
 	{
 		// The same rows behind a `_schema` header (a tee'd file): the
@@ -2065,13 +2065,13 @@ var equivCases = []EquivCase{
 		Name:     "empties_describe",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} describe`,
 		Ordered:  true,
-		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
 		Name:     "empties_unpivot",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} unpivot -id id -value n -value f`,
 		Ordered:  false,
-		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
 		// A condition on an ABSENT value is false for every operator —
@@ -2082,7 +2082,7 @@ var equivCases = []EquivCase{
 		Name:     "empties_where_absent_never_matches",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} where -if n ge 0 -if n ne 99999 | {{.bin}} include id n`,
 		Ordered:  false,
-		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
 		// The same rule in update: row 2 has no n, so `-if n ge 0` must not
@@ -2092,19 +2092,19 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} update -set tag no | {{.bin}} update -if n ge 0 -set tag hit | {{.bin}} include id tag`,
 		Ordered:  false,
 		Golden:   []map[string]any{{"id": 1, "tag": "hit"}, {"id": 2, "tag": "no"}, {"id": 3, "tag": "hit"}, {"id": 4, "tag": "hit"}},
-		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
 		Name:     "empties_where_negated_keeps_absent",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} where +if n ge 0 | {{.bin}} include id`,
 		Ordered:  false,
-		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
 		Name:     "empties_where_numeric",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} where -if n gt 5 | {{.bin}} include id n`,
 		Ordered:  false,
-		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
 		// fill -default over the empties fixture: 99 is discriminating
@@ -2113,7 +2113,7 @@ var equivCases = []EquivCase{
 		Name:     "fill_default",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} fill -default n 99 -default s unknown | {{.bin}} include id n s`,
 		Ordered:  false,
-		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
 		// fill -down needs an order: sorted, so the DuckDB LAST_VALUE
@@ -2121,7 +2121,7 @@ var equivCases = []EquivCase{
 		Name:     "fill_down_sorted",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} sort id | {{.bin}} fill -down n -down f -default f 0 | {{.bin}} include id n f`,
 		Ordered:  true,
-		Skip:     map[string]string{"go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
 		// Unsorted -down: the SQL lane refuses loudly (Skip records the
@@ -2129,7 +2129,7 @@ var equivCases = []EquivCase{
 		Name:     "fill_down_unsorted",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} fill -down n | {{.bin}} include id n`,
 		Ordered:  true,
-		Skip:     map[string]string{"duckdb": "fill -down without a preceding sort has no SQL translation (carry order undefined) — refuses loudly by design", "go-typed": "typed reader: empty cell → zero value (DFC124 §3)", "go-parallel": "typed reader: empty cell → zero value (DFC124 §3)"},
+		Skip:     map[string]string{"duckdb": "fill -down without a preceding sort has no SQL translation (carry order undefined) — refuses loudly by design", "go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
 		// from lines: 1-based line_number + line, in file order.

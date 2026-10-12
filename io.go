@@ -851,9 +851,10 @@ func readJSONL(r io.Reader, skipped *int64) iter.Seq[Record] {
 		// Read first line; might be a {"_schema":…} header.
 		firstLine, _ := br.ReadBytes('\n')
 		var schema *Schema
+		var wireTypes []FieldType
 		var firstIsHeader bool
 		if len(bytes.TrimSpace(firstLine)) > 0 {
-			schema, firstIsHeader = parseSchemaHeaderLine(firstLine)
+			schema, wireTypes, firstIsHeader = parseSchemaHeaderLineTypes(firstLine)
 		}
 
 		// Build the iterator source: if first line was the schema
@@ -880,7 +881,7 @@ func readJSONL(r io.Reader, skipped *int64) iter.Seq[Record] {
 			var record Record
 			var err error
 			if schema != nil {
-				record, err = ParseJSONLineWithSchema(line, schema)
+				record, err = ParseJSONLineWithSchemaTypes(line, schema, wireTypes)
 			} else {
 				var mut MutableRecord
 				mut, err = ParseJSONLineWithNulls(line)
@@ -942,6 +943,14 @@ func (c *schemaCache) freeze(m MutableRecord) Record {
 // maps. Errors return (nil, false) — callers treat the line as a
 // data record in that case.
 func parseSchemaHeaderLine(line []byte) (*Schema, bool) {
+	schema, _, ok := parseSchemaHeaderLineTypes(line)
+	return schema, ok
+}
+
+// parseSchemaHeaderLineTypes is parseSchemaHeaderLine that also returns
+// the header's declared wire types, slot by slot (SchemaWireTypes), for
+// ParseJSONLineWithSchemaTypes.
+func parseSchemaHeaderLineTypes(line []byte) (*Schema, []FieldType, bool) {
 	var hdr struct {
 		Schema struct {
 			Fields []string          `json:"fields"`
@@ -950,14 +959,29 @@ func parseSchemaHeaderLine(line []byte) (*Schema, bool) {
 		} `json:"_schema"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(line), &hdr); err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	AdoptStreamZone(hdr.Schema.TZ)
 	if len(hdr.Schema.Fields) == 0 {
 		// Not a schema header (or an empty one — treat as data).
-		return nil, false
+		return nil, nil, false
 	}
-	return NewSchema(hdr.Schema.Fields), true
+	schema := NewSchema(hdr.Schema.Fields)
+	return schema, SchemaWireTypes(schema, hdr.Schema.Types), true
+}
+
+// SchemaWireTypes maps a `_schema` header's types to the slots of schema:
+// result[i] is the declared FieldType of schema field i, FieldTypeAuto
+// where the header names none or a type this reader does not know. It is
+// the types argument of ParseJSONLineWithSchemaTypes.
+func SchemaWireTypes(schema *Schema, types map[string]string) []FieldType {
+	wire := make([]FieldType, schema.Width())
+	for i, f := range schema.fields {
+		if ft, err := ParseFieldType(types[f]); err == nil {
+			wire[i] = ft
+		}
+	}
+	return wire
 }
 
 // ParseSchemaHeaderFields extracts the field list from a `_schema`

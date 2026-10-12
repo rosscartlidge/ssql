@@ -360,13 +360,17 @@ func generateFromJSONLCodeTyped(filename string, types typeArgs) error {
 	// accepts a Stream, else swaps to the serial typed.ReadJSONL. A JSON
 	// array file reads with the ReadJSON twins (one scanner feeding the
 	// decoding shards; there is no newline index to split on).
+	// typed.RequireValues: a missing key or null in a plain non-string
+	// field fails the read instead of becoming 0/false/year 1 — exec
+	// reads it as absent, which a plain struct field cannot hold (the
+	// typed CSV readers' empty-cell rule, DFC124).
 	reader, shape := "JSONL", "jsonl"
 	if isArray {
 		reader, shape = "JSON", "json (array)"
 	}
-	parallelCode := fmt.Sprintf(`records := typed.Read%sParallel[%s](*flagInput, 0)`, reader, schema.TypeName)
+	parallelCode := fmt.Sprintf(`records := typed.Read%sParallel[%s](*flagInput, 0, typed.RequireValues())`, reader, schema.TypeName)
 	parallelImports := append([]string{}, imports...)
-	serialCode := fmt.Sprintf(`records := typed.Read%s[%s](*flagInput)`, reader, schema.TypeName)
+	serialCode := fmt.Sprintf(`records := typed.Read%s[%s](*flagInput, typed.RequireValues())`, reader, schema.TypeName)
 	frag := fromInitFragment("records", parallelCode, parallelImports)
 	frag.Params = params
 	frag.OutputTypedSchema = schema

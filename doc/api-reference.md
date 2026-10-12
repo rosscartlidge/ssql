@@ -1392,7 +1392,7 @@ func ReadJSONFromReader(reader io.Reader) iter.Seq[Record]
 func ReadJSONSafe(filename string) iter.Seq2[Record, error]
 func ReadJSONSafeFromReader(reader io.Reader) iter.Seq2[Record, error]
 func ReadJSONAuto(filename string) (iter.Seq[Record], error)        // a JSON array or lines, detected
-func ReadJSONLFromReader(r io.Reader) iter.Seq[Record]              // honours a leading {"_schema":…} header
+func ReadJSONLFromReader(r io.Reader) iter.Seq[Record]              // honours a leading {"_schema":…} header, its fields and types
 func ReadJSONLFromReaderSkipInvalid(r io.Reader, skipped *int64) iter.Seq[Record]   // `from jsonl -skip-invalid`
 func ReadJSONFast(filename string) (iter.Seq[Record], error)        // no reflection, 3-5× ReadJSON
 func ReadJSONFastFromReader(reader io.Reader) iter.Seq[Record]
@@ -1410,6 +1410,7 @@ func ParseJSONLine(line []byte) (MutableRecord, error)
 func ParseJSONLineWithNulls(line []byte) (MutableRecord, error)              // a JSON null keeps its key as a nil slot
 func ParseJSONLineWithSchema(line []byte, schema *Schema) (Record, error)     // shares one Schema across lines
 func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType) (Record, error)
+func SchemaWireTypes(schema *Schema, types map[string]string) []FieldType   // a `_schema` header's types by slot, for ParseJSONLineWithSchemaTypes
 func ParseSchemaHeaderFields(line []byte) ([]string, bool)
 func CoerceFieldTypes(records iter.Seq[Record], types map[string]FieldType) iter.Seq[Record]   // `-type FIELD TYPE` for inputs with no column typing
 ```
@@ -1494,19 +1495,29 @@ func WriteParquet(records iter.Seq[Record], filename string, opts ...ParquetWrit
 func WriteParquetToWriter(records iter.Seq[Record], w io.Writer, opts ...ParquetWriteOption) error
 func WithCompression(name string) ParquetWriteOption   // snappy (default), gzip, zstd, none
 func WithRowGroupSize(n int) ParquetWriteOption        // default 1_000_000; one row group is one parallel shard
+func WithColumnTypes(fields []string, types map[string]string) ParquetWriteOption   // a _schema header's columns: keeps an all-null column's type; an empty input writes a zero-row file
 func ParquetRowCount(filename string) (int64, error)                            // from the footer, no scan
 func ParquetSchemaFields(filename string) ([]string, map[string]string, error)  // names and wire types from the footer
 ```
 
 Parquet is a random-access format: a file, not stdin.
 
+The writers type each column from all of its values: int and float
+make float, any other mix makes string, a `time.Time` is a timestamp
+(microseconds, UTC — the type `typed.WriteParquet` writes), and a
+field first seen in a later record is still written. With no records
+and no declared columns there is no schema, so the writers return an
+error and create no file. `ParquetSchemaFields` reports timestamp and
+date columns as `time`.
+
 ### Arrow
 
 ```go
 func ReadArrow(filename string) (iter.Seq[Record], error)    // .arrow / .feather
 func ReadArrowFromReader(r io.Reader) iter.Seq[Record]
-func WriteArrow(records iter.Seq[Record], filename string) error   // ZSTD-compressed
-func WriteArrowToWriter(records iter.Seq[Record], w io.Writer) error
+func WriteArrow(records iter.Seq[Record], filename string, opts ...ArrowWriteOption) error   // ZSTD-compressed
+func WriteArrowToWriter(records iter.Seq[Record], w io.Writer, opts ...ArrowWriteOption) error
+func WithArrowColumnTypes(fields []string, types map[string]string) ArrowWriteOption   // as WithColumnTypes
 ```
 
 Columnar, zero-copy, and the fastest way to move large record sets
