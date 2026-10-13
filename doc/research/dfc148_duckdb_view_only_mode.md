@@ -2,7 +2,7 @@
 
 Reference: DFC148
 Created: 2026-10-12
-Last modified: 2026-10-12
+Last modified: 2026-10-13
 
 [Back to Index](./README.md)
 
@@ -250,6 +250,12 @@ running it. Second, a timeout and a size cap.
 Effort: small.
 
 ### 4.2 Hive partition columns are not derived
+
+**Superseded (2026-10-13):** the `-hive` flag proposed below is replaced by
+[DFC149](./dfc149_hive_partitions_as_derived_catalog.md), which derives
+the partition columns through `from catalog` — a hand-written catalog
+over the same files already attaches the column, prunes on `-if`, and
+has the optimiser extract a downstream `where` into the pruning.
 
 `from parquet 'part/type=*/*.parquet'` now reads all the files, but it does
 not add `type` as a column, as DuckDB's `hive_partitioning` does. The post
