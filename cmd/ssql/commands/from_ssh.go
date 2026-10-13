@@ -66,6 +66,15 @@ func registerFromSSH(cmd *cf.SubcommandBuilder) {
 			if host == "" || path == "" {
 				return fmt.Errorf("usage: ssql from ssh HOST PATH [-- <remote-pipeline>]")
 			}
+			if schemaMode() {
+				// The remote file's schema, asked of the remote ssql (it
+				// answered nothing before; DFC149 §4.5 with catalogs).
+				sch, err := shardSchema(ssql.CatalogEntry{Host: host, Path: path}, remoteBin, ssql.SplitOnPlus(ctx.RemainingArgs))
+				if err != nil {
+					return err
+				}
+				return writeSchemaModeOutputTyped(os.Stdout, sch.Fields, sch.Types)
+			}
 
 			// If RemainingArgs present (after --), it's a push-down pipeline.
 			// In codegen mode (SSQLGO set), the generated Go ships the

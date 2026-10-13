@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"github.com/rosscartlidge/ssql/v4"
 	"slices"
 	"encoding/csv"
 	"encoding/json"
@@ -1438,36 +1439,15 @@ func conditionCost(op string) int {
 // readCatalogMetadataColumns reads the catalog CSV header and returns the set of
 // metadata column names (collapsing field_from/field_to to field).
 func readCatalogMetadataColumns(filename string) (cols, rangeCols map[string]bool, err error) {
-	f, err := os.Open(filename)
+	names, ranges, err := ssql.CatalogColumns(filename)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer f.Close()
-
-	reader := csv.NewReader(f)
-	headers, err := reader.Read()
-	if err != nil {
-		return nil, nil, err
+	cols = make(map[string]bool, len(names))
+	for _, n := range names {
+		cols[n] = true
 	}
-
-	cols = make(map[string]bool)
-	rangeCols = make(map[string]bool)
-	for _, h := range headers {
-		h = strings.TrimSpace(strings.ToLower(h))
-		if h == "host" || h == "path" || h == "format" || h == "fields" {
-			continue
-		}
-		base := h
-		if strings.HasSuffix(h, "_from") {
-			base = strings.TrimSuffix(h, "_from")
-			rangeCols[base] = true
-		} else if strings.HasSuffix(h, "_to") {
-			base = strings.TrimSuffix(h, "_to")
-			rangeCols[base] = true
-		}
-		cols[base] = true
-	}
-	return cols, rangeCols, nil
+	return cols, ranges, nil
 }
 
 // --- Phase 4 optimization rules ---

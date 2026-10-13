@@ -34,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`from catalog` and `from ssh` answer schema mode.** `SSQL_MODE=schema`
+  printed nothing for either (exit 0, no header), so completion, the
+  typed lane and the optimiser were blind to them. A catalog now answers
+  with its first pruned shard's own schema — asked of the shard command,
+  local or over ssh, with the pushdown stages applied, so a shard-side
+  `group-by` shows its output — plus `-shard-field` and the catalog's
+  exact metadata columns as strings, in header order (range `_from`/`_to`
+  columns prune only and are not fields); `from ssh` with the remote
+  file's schema. First slice of DFC149. Library: `ssql.CatalogColumns`
+  (a catalog's metadata columns and range bases, the one reader of the
+  catalog header — the optimiser's copy lacked `bin`), `ssql.ShardBin`.
 - **`to lines FIELD`**, the twin of `from lines`: one record's field as
   one line of text, rendered as `to csv` would (a string as itself, a
   `json` value as its JSON text, a time in RFC 3339). Its reason to

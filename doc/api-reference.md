@@ -1979,6 +1979,8 @@ you are unlikely to want them in an application.
 
 ```go
 func ReadCatalog(filename string) ([]CatalogEntry, error)        // host, path, optional format and bin; the rest is metadata
+func CatalogColumns(filename string) (cols []string, ranges map[string]bool, err error)   // the metadata columns in header order; range pairs by base name, also in ranges
+func ShardBin(entry CatalogEntry, remoteBin string) string   // the ssql a shard runs: its bin column, else remoteBin, else SelfBin locally
 func WriteCatalog(w io.Writer, entries []CatalogEntry) error
 func PruneCatalog(entries []CatalogEntry, filters []CatalogFilter) []CatalogEntry   // range (from/to) and exact-value pruning
 func ExpandCatalogGlobs(entries []CatalogEntry) []CatalogEntry   // local globs and remote `echo` expansion

@@ -95,7 +95,7 @@ func ReadCatalog(filename string) ([]CatalogEntry, error) {
 		}
 		for i, h := range headers {
 			h = strings.TrimSpace(strings.ToLower(h))
-			if h == "host" || h == "path" || h == "format" || h == "bin" || h == "fields" {
+			if isCatalogReservedColumn(h) {
 				continue
 			}
 			if i < len(row) {
@@ -106,6 +106,58 @@ func ReadCatalog(filename string) ([]CatalogEntry, error) {
 	}
 
 	return entries, nil
+}
+
+// isCatalogReservedColumn: the catalog columns that locate and read a
+// shard, as opposed to describing its data. One list — ReadCatalog and
+// CatalogColumns both consult it (the optimiser kept its own copy, which
+// lacked "bin").
+func isCatalogReservedColumn(h string) bool {
+	switch h {
+	case "host", "path", "format", "bin", "fields":
+		return true
+	}
+	return false
+}
+
+// CatalogColumns reads a catalog's header and returns its metadata
+// columns in header order: an exact column by its name, a range pair by
+// its base name once (`date_from`,`date_to` → `date`, also in ranges).
+// Exact columns become string fields of every record from the shard;
+// range columns prune only. This is what a consumer learns about a
+// catalog's data without opening a shard (schema mode, the optimiser's
+// predicate extraction).
+func CatalogColumns(filename string) (cols []string, ranges map[string]bool, err error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opening catalog: %w", err)
+	}
+	defer f.Close()
+	headers, err := csv.NewReader(f).Read()
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading catalog headers: %w", err)
+	}
+	ranges = map[string]bool{}
+	seen := map[string]bool{}
+	for _, h := range headers {
+		h = strings.TrimSpace(strings.ToLower(h))
+		if isCatalogReservedColumn(h) {
+			continue
+		}
+		base := h
+		if strings.HasSuffix(h, "_from") {
+			base = strings.TrimSuffix(h, "_from")
+			ranges[base] = true
+		} else if strings.HasSuffix(h, "_to") {
+			base = strings.TrimSuffix(h, "_to")
+			ranges[base] = true
+		}
+		if !seen[base] {
+			seen[base] = true
+			cols = append(cols, base)
+		}
+	}
+	return cols, ranges, nil
 }
 
 // PruneCatalog filters catalog entries based on pruning conditions.
@@ -331,6 +383,11 @@ func WriteCatalog(w io.Writer, entries []CatalogEntry) error {
 
 // shardBin picks the ssql binary for one catalog row: the row's own bin
 // column, else the running ssql for a local row, else remoteBin.
+// ShardBin is the ssql to run for a shard: the row's own bin column,
+// else remoteBin (a bare name resolved on the host, or -remote-bin's
+// path), else SelfBin for a local row.
+func ShardBin(entry CatalogEntry, remoteBin string) string { return shardBin(entry, remoteBin) }
+
 func shardBin(entry CatalogEntry, remoteBin string) string {
 	if entry.Bin != "" {
 		return entry.Bin

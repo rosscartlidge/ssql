@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"os/exec"
+	"bytes"
 	"encoding/csv"
 	"fmt"
 	"os"
@@ -124,6 +126,9 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 				RemoteBin:   remoteBinOverride,
 			}
 
+			if schemaMode() {
+				return schemaModeFromCatalog(catalogFile, gpu, filters, shardField, opts, ctx.RemainingArgs)
+			}
 			if shouldGenerate(generate) {
 				return generateFromCatalogCode(catalogFile, gpu, filters, shardField, opts, ctx.RemainingArgs)
 			}
@@ -297,6 +302,80 @@ func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilt
 
 	records := ssql.ProcessCatalogShards(entries, remoteBin, shardField, pipelineGroups)
 	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+}
+
+// schemaModeFromCatalog answers SSQL_MODE=schema for a catalog (DFC149
+// §4.5; it answered nothing before, so completion and the typed lane were
+// blind to a catalog): the first pruned shard's own schema — asked of the
+// shard command, local or over ssh, with the pushdown stages applied, so
+// the shard stays the authority on its format — then the fields
+// ProcessCatalogShards adds to every record: -shard-field and the
+// catalog's exact metadata columns, as strings, in header order. No
+// shard left after pruning: the added fields alone.
+func schemaModeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
+	entries, err := ssql.ReadCatalog(catalogFile)
+	if err != nil {
+		return err
+	}
+	cols, ranges, err := ssql.CatalogColumns(catalogFile)
+	if err != nil {
+		return err
+	}
+	entries = ssql.ExpandCatalogGlobs(ssql.PruneCatalog(entries, filters))
+
+	var names []string
+	types := map[string]string{}
+	if len(entries) > 0 {
+		sch, err := shardSchema(entries[0], sshRemoteBin(gpu, opts.RemoteBin), ssql.SplitOnPlus(pipelineArgs))
+		if err != nil {
+			return err
+		}
+		names = append(names, sch.Fields...)
+		for f, t := range sch.Types {
+			types[f] = t
+		}
+	}
+	add := func(name string) {
+		if _, present := types[name]; present {
+			return // a shard column of the same name: the record keeps one slot
+		}
+		names = append(names, name)
+		types[name] = "string"
+	}
+	if shardField != "" {
+		add(shardField)
+	}
+	for _, c := range cols {
+		if !ranges[c] {
+			add(c)
+		}
+	}
+	return writeSchemaModeOutputTyped(os.Stdout, names, types)
+}
+
+// shardSchema asks one shard for its schema: the same command the shard
+// would run to produce records (ssql.BuildRemoteCommand, with any
+// pushdown groups), under SSQL_MODE=schema, locally or over ssh. The
+// shard answers with its _schema header, fields and types.
+func shardSchema(entry ssql.CatalogEntry, remoteBin string, groups [][]string) (*lib.Schema, error) {
+	remoteCmd := "export SSQL_MODE=schema; " + ssql.BuildRemoteCommand(ssql.ShardBin(entry, remoteBin), entry.Path, entry.Format, groups)
+	var cmd *exec.Cmd
+	if ssql.IsLocalHost(entry.Host) {
+		cmd = exec.Command("bash", "-c", remoteCmd)
+	} else {
+		cmd = exec.Command("ssh", entry.Host, remoteCmd)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("shard %s:%s schema: %v: %s", entry.Host, entry.Path, err, strings.TrimSpace(stderr.String()))
+	}
+	sch := lib.ReadJSONLWithSchema(bytes.NewReader(out)).Schema
+	if sch == nil {
+		return nil, fmt.Errorf("shard %s:%s schema: no _schema header in its schema-mode output", entry.Host, entry.Path)
+	}
+	return sch, nil
 }
 
 // generateFromCatalogCode emits an init fragment that orchestrates

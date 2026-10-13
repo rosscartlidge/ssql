@@ -155,6 +155,14 @@ per record (the #1 performance rule).
 
 ### 4.5 Schema mode
 
+**Built 2026-10-13** (first slice; also `from ssh`): `schemaModeFromCatalog`
+and `shardSchema` in `cmd/ssql/commands/from_catalog.go`, `ssql.CatalogColumns`
+as the one reader of the catalog header (the optimiser's
+`readCatalogMetadataColumns` is now a view of it). Gates:
+`TestSchemaModeCatalog` (watched fail with the branch disabled),
+`TestSchemaModeFromSSH` (rig-gated; the rig's nodes were moved from
+v4.94.0 to v4.115.0 for it, since `-tz` reaches every shard command).
+
 `SSQL_MODE=schema` for a catalog: the first pruned shard's schema (via
 the shard's own schema mode, remote or local — a command is the
 authority on itself) plus the metadata columns as `string`, plus
@@ -211,7 +219,7 @@ own.
 
 ## 6. Order of work
 
-1. §4.5 schema mode (its own slice; useful on its own).
+1. ~~§4.5 schema mode~~ DONE 2026-10-13.
 2. §4.1 derivation + §4.2 glob form + the optimiser's derived columns,
    exec and `generate ssql`, with the gates. This is the post's step.
 3. §4.4 fast path, Parquet first, with the scale case.
