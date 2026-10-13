@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/expr-lang/expr/file"
 	"github.com/expr-lang/expr/parser"
 	"github.com/rosscartlidge/ssql/v4"
 )
@@ -36,6 +37,26 @@ func StaticParams(m map[string]any) Params {
 // expression has no value. Callers treat it as "false" for a condition and
 // "assign nothing" for a set, quietly; it is not a failure.
 var ErrAbsent = errors.New("expression has no value: a -param-field column is absent on this row")
+
+// IsAbsentValueError reports whether an evaluation error means "this row
+// has no value for the expression": ErrAbsent, or expr-lang's refusal to
+// operate on a nil operand (`invalid operation: <nil> > time.Time` when a
+// compared column is null on this row). Callers treat it as "no match"
+// for a condition and "assign nothing" for a set, quietly — the absent-
+// value rule every lane follows (a null compares false in SQL; the
+// transpiled Go compares false). Any other error is the run's, and loud.
+// This is the one place that knows expr-lang's wording; a test pins it
+// against the real VM.
+func IsAbsentValueError(err error) bool {
+	if errors.Is(err, ErrAbsent) {
+		return true
+	}
+	var fe *file.Error
+	if errors.As(err, &fe) {
+		return strings.HasPrefix(fe.Message, "invalid operation:") && strings.Contains(fe.Message, "<nil>")
+	}
+	return false
+}
 
 // ParamCollisionError: a parameter shares its name with a field of the
 // input. It is wrong for the whole run, not for the row, so commands stop

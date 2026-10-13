@@ -58,13 +58,20 @@ func TestCompileExprFilterEnv(t *testing.T) {
 		t.Errorf("pop > 5 with pop=7 should pass")
 	}
 
+	// A non-boolean result is the run's error, not a quiet false (it was
+	// false until 2026-10-13, hiding a mistyped expression).
 	nonBool, err := CompileExprFilterEnv("pop + 1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if nonBool(fields) {
-		t.Errorf("non-bool result must filter false")
-	}
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("non-bool result must fail the run")
+			}
+		}()
+		nonBool(fields)
+	}()
 
 	evalErr, err := CompileExprFilterEnv("missing + 1")
 	if err != nil {

@@ -186,7 +186,7 @@ time and zones
   Unix seconds.
 
   Reading the calendar of an instant — hour(ts), day(ts), week(ts),
-  trunc(ts, "month"), format(ts, "%Y-%m-%d"), hour(now()) — needs a zone.
+  date_trunc(ts, "month"), strftime(ts, "%Y-%m-%d"), hour(now()) — needs a zone.
   The zone is chosen ONCE, where the stream starts, and travels with it:
   the source command (from, from ssh, a catalog) takes -tz ZONE, else the
   TZ environment variable, else /etc/localtime — exactly as date(1), Go

@@ -51,16 +51,26 @@ func CompileExprFilter(expression string) (func(ssql.Record) bool, error) {
 	return exprFilter(eval), nil
 }
 
-// exprFilter is the predicate view of an evaluator: false on an evaluation
-// error and on a non-boolean result.
+// exprFilter is the predicate view of an evaluator: false when the row has
+// no value for the expression (IsAbsentValueError); any other evaluation
+// error, and a non-boolean result, panic — the generated program fails as
+// exec does. It returned false on EVERY error until 2026-10-13, so a
+// record program's `where -if-expr 'date(x) > …'` silently dropped the
+// rows whose x was not a date, where exec stopped with the error.
 func exprFilter(eval func(ssql.Record) (any, error)) func(ssql.Record) bool {
 	return func(r ssql.Record) bool {
 		result, err := eval(r)
 		if err != nil {
-			return false
+			if IsAbsentValueError(err) {
+				return false
+			}
+			panic(fmt.Errorf("where -if-expr: evaluating expression: %w", err))
 		}
 		boolResult, ok := result.(bool)
-		return ok && boolResult
+		if !ok {
+			panic(fmt.Errorf("where -if-expr: expression must return a boolean, got %T", result))
+		}
+		return boolResult
 	}
 }
 

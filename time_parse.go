@@ -66,6 +66,9 @@ var exprDateExtraLayouts = []string{"15:04:05", time.RFC822, time.RFC850, time.R
 func exprDate(args ...any) (any, error) {
 	switch len(args) {
 	case 1:
+		if args[0] == nil {
+			return nil, nil // an absent value stays absent, as every other time function reads nil
+		}
 		if t, ok := ParseTime(args[0]); ok {
 			return t, nil
 		}

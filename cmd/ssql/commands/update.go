@@ -259,10 +259,12 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Build update filter with first-match-wins clause evaluation (using pre-compiled expressions)
 			var evalErr error
+			var recordNo int64 // input records seen, for the error
 			updateFilter := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 				if evalErr != nil {
 					return mut
 				}
+				recordNo++
 				frozen := mut.Freeze()
 
 				// On first record, capture the schema
@@ -305,10 +307,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 									evalErr = err // wrong for the run, not the row
 									return mut
 								}
-								if !errors.Is(err, runtime.ErrAbsent) {
-									fmt.Fprintf(ctx.Stderr(), "Error evaluating where-expr: %v\n", err)
+								if !runtime.IsAbsentValueError(err) {
+									evalErr = fmt.Errorf("evaluating -if-expr: %w", err) // the run's error, not the row's (it was printed and the row skipped)
+									return mut
 								}
-								allMatch = false
+								allMatch = false // no value on this row: not a match
 								break
 							}
 
@@ -349,7 +352,7 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							if upd.isExpr {
 								// Evaluate using pre-compiled expression
 								result, err := upd.exprEval(frozen)
-								if errors.Is(err, runtime.ErrAbsent) {
+								if runtime.IsAbsentValueError(err) {
 									continue // no value: the field is left as it is (absent if new)
 								}
 								if err != nil {
@@ -478,13 +481,20 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 			}
 
+			// The stream ends at the record whose expression failed: the
+			// records after it used to pass through WITHOUT the field, so
+			// a null date on row 7 left rows 8.. blank and the Error line
+			// scrolled off above a full table (exit 1 all along). The
+			// error names the record.
+			updated = stopOnError(updated, &evalErr)
+
 			// Write output as JSONL (preserving schema if present)
 			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, updated); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
 			if evalErr != nil {
-				return evalErr
+				return fmt.Errorf("record %d: %w", recordNo, evalErr)
 			}
 
 			return nil
@@ -846,7 +856,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				var stmtBuilder strings.Builder
 				stmtBuilder.WriteString(indent + "{\n")
 				stmtBuilder.WriteString(indent + "\tresult, err := " + varName + "(frozen)\n")
-				stmtBuilder.WriteString(indent + "\tif errors.Is(err, runtime.ErrAbsent) {\n")
+				stmtBuilder.WriteString(indent + "\tif runtime.IsAbsentValueError(err) {\n")
 				stmtBuilder.WriteString(indent + "\t\t// no value on this row: the field is left as it is\n")
 				stmtBuilder.WriteString(indent + "\t} else if err != nil {\n")
 				// Match exec: an eval error fails the pipeline loudly.
@@ -854,6 +864,10 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\tpanic(fmt.Errorf(\"update -set-expr %s: %%w\", err))\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t} else {\n")
 				stmtBuilder.WriteString(indent + "\t\tswitch v := result.(type) {\n")
+				// A nil result (date() of a null) is an absent value, as in
+				// exec; the catch-all wrote the text "<nil>".
+				stmtBuilder.WriteString(indent + "\t\tcase nil:\n")
+				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Null(%q)\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t\tcase int64:\n")
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Int(%q, v)\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t\tcase float64:\n")
@@ -946,7 +960,7 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 		imports = append(imports, "time")
 	}
 	if needsRuntime {
-		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime", "errors", "fmt", "os")
+		imports = append(imports, "github.com/rosscartlidge/ssql/v4/cmd/ssql/lib/runtime", "fmt", "os")
 	}
 	imports = dedupeImports(append(imports, extraImports...))
 
@@ -1104,3 +1118,19 @@ func updateNotNeedsCondition(clause cf.Clause) error {
 	return nil
 }
 
+// stopOnError yields records until *failed is set — by the stage's own
+// closure, while producing the record that is then NOT yielded. A
+// stage's error must end its output, not thin it; the stage counts its
+// input records itself so the error can name the one that failed.
+func stopOnError(records iter.Seq[ssql.Record], failed *error) iter.Seq[ssql.Record] {
+	return func(yield func(ssql.Record) bool) {
+		for r := range records {
+			if *failed != nil {
+				return
+			}
+			if !yield(r) {
+				return
+			}
+		}
+	}
+}

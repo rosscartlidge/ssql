@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`date()` of a null was an error, and the error thinned the output
+  instead of ending it.** On the DFC148 train data, `update -set-expr
+  time 'date(departure_time)'` stopped at the first station with no
+  departure: `invalid date <nil>`, and the records after it passed
+  through WITHOUT the field, so the Error line scrolled off above a full
+  table with blanks from that row on (exit 1 all along). Now `date(null)`
+  is an absent value, as `hour()`, `date_trunc()` and the other time
+  functions already read a null; and an expression that does fail ends
+  the stage's output at that record and names it (`record 7: evaluating
+  expression for field "time": …`). `where -if-expr` likewise: it printed
+  "Error evaluating expression", dropped the row and exited 0 — a silent
+  wrong answer — and now fails the run; a comparison whose operand is
+  null on the row is no match, quietly, as in SQL and in the compiled
+  lanes (`runtime.IsAbsentValueError`). The generated record program's
+  filter dropped a row on ANY evaluation error; it now fails as exec
+  does. A nil expression result (`hour(x)` on a null) was stored as the
+  empty STRING in exec and as the text `<nil>` by record programs — a
+  mixed column that `where -if h eq ''` matched; it is a nil slot now
+  (the field with no value) in both.
+- **`ssql conventions -category data` named two date functions by their
+  pre-release names** (`trunc`, `format`); they are `date_trunc` and
+  `strftime`, as `ssql functions -category date` lists them.
+
 ### Added
 
 - **`to lines FIELD`**, the twin of `from lines`: one record's field as

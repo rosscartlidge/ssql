@@ -105,26 +105,26 @@ func corpusData(t *testing.T) string {
 		}
 		corpusDataDir = dir
 		files := map[string]string{
-			"employees.csv":          corpusEmployeesCSV,
-			"customers.csv":          corpusCustomersCSV,
-			"orders.csv":             corpusOrdersCSV,
-			"sales.csv":              corpusSalesCSV,
-			"employees.tsv":          strings.ReplaceAll(corpusEmployeesCSV, ",", "\t"),
-			"customers.tsv":          strings.ReplaceAll(corpusCustomersCSV, ",", "\t"),
-			"shuffled.csv":           corpusShuffledCSV,
-			"empties.csv":            corpusEmptiesCSV,
-			"int_first.csv":          corpusIntFirstCSV,
-			"int_first.tsv":          strings.ReplaceAll(corpusIntFirstCSV, ",", "\t"),
-			"dated.csv":              corpusDatedCSV,
-			"times.csv":              corpusTimesCSV,
-			"times_sydney.jsonl":     corpusTimesSydneyJSONL,
-			"dmy.csv":                corpusDMYCSV,
-			"dmy_sidecar/dmy.csv":    corpusDMYCSV,
+			"employees.csv":                corpusEmployeesCSV,
+			"customers.csv":                corpusCustomersCSV,
+			"orders.csv":                   corpusOrdersCSV,
+			"sales.csv":                    corpusSalesCSV,
+			"employees.tsv":                strings.ReplaceAll(corpusEmployeesCSV, ",", "\t"),
+			"customers.tsv":                strings.ReplaceAll(corpusCustomersCSV, ",", "\t"),
+			"shuffled.csv":                 corpusShuffledCSV,
+			"empties.csv":                  corpusEmptiesCSV,
+			"int_first.csv":                corpusIntFirstCSV,
+			"int_first.tsv":                strings.ReplaceAll(corpusIntFirstCSV, ",", "\t"),
+			"dated.csv":                    corpusDatedCSV,
+			"times.csv":                    corpusTimesCSV,
+			"times_sydney.jsonl":           corpusTimesSydneyJSONL,
+			"dmy.csv":                      corpusDMYCSV,
+			"dmy_sidecar/dmy.csv":          corpusDMYCSV,
 			"dmy_sidecar/datapackage.json": `{"resources":[{"path":"dmy.csv","schema":{"fields":[{"name":"id","type":"integer"},{"name":"when","type":"date","format":"%d/%m/%Y"},{"name":"n","type":"integer"}]}}]}`,
-			"epochs.csv":             corpusEpochsCSV,
-			"precision.csv":          corpusPrecisionCSV,
-			"epochs_ms.csv":          corpusEpochsMsCSV,
-			"employees.jsonl":        corpusJSONLFromCSV(corpusEmployeesCSV, false),
+			"epochs.csv":                   corpusEpochsCSV,
+			"precision.csv":                corpusPrecisionCSV,
+			"epochs_ms.csv":                corpusEpochsMsCSV,
+			"employees.jsonl":              corpusJSONLFromCSV(corpusEmployeesCSV, false),
 			// Multi-file Parquet (2026-10-11): three files of one schema
 			// read as one stream (a list, a glob), a file of another schema
 			// (refused), and one file under a key=value directory, which
@@ -183,7 +183,7 @@ func corpusData(t *testing.T) string {
 			"inject.csv": "id,note,1st\n1,plain,a\n2,\"'; DROP TABLE t; --\",b\n3,\"x' OR '1'='1\",c\n4,50%_off,d\n5,\"it's\",e\n",
 			// cast: text holding numbers written as ints and floats, booleans
 			// in several spellings, and values that are NOT of the type.
-			"castable.csv":   "id,score,flag\n1,10,yes\n2,2.9,off\n3,-7,1\n4,0.5,TRUE\n",
+			"castable.csv": "id,score,flag\n1,10,yes\n2,2.9,off\n3,-7,1\n4,0.5,TRUE\n",
 			// DFC146: a CSV typed by a Frictionless sidecar (the package
 			// below names only this file). `when` is a date the sample
 			// would leave a string; `code` is text the sample would call a
@@ -194,7 +194,7 @@ func corpusData(t *testing.T) string {
 			"sidecar_sales.csv": "id,amount,when,code\n3,30,2026-01-07,1e3\n1,10,2026-01-05,2.50\n4,5,2026-01-08,3.0\n2,20,2026-01-06,4e0\n",
 			"datapackage.json": `{"resources":[{"name":"sidecar_sales","path":"sidecar_sales.csv","schema":{"fields":[
 {"name":"id","type":"integer"},{"name":"amount","type":"number"},{"name":"when","type":"date"},{"name":"code","type":"string"}]}}]}`,
-			"uncastable.csv": "id,score,flag\n1,10,yes\n2,N/A,maybe\n3,2.9,no\n",
+			"uncastable.csv":     "id,score,flag\n1,10,yes\n2,N/A,maybe\n3,2.9,no\n",
 			"missing_groups.csv": "id,g,v,t,code,e\n1,a,1,Oslo,12,\n2,a,3,,abc,\n3,b,,,007,\n4,b,,,x,\n",
 			// A join key that is a FLOAT column on the left (one 2.5 types
 			// the whole column float) and an INT column on the right
@@ -208,11 +208,12 @@ func corpusData(t *testing.T) string {
 			// values later; an int that widens to float (DFC128 D3).
 			// A JSON ARRAY with NULLs in the first element AND in a later
 			// one: the later null in the int column `n` used to become 0.
-			"null_mixed.json": `[{"id":1,"score":null,"n":5},{"id":2,"score":2.5,"n":null},{"id":3,"score":4,"n":7}]`,
-			"nested.jsonl":      corpusNestedJSONL,
-			"dotted.csv":        "a.b,a,n\nlit1,\"{\"\"b\"\":\"\"path1\"\"}\",1\nlit2,\"{\"\"b\"\":\"\"path2\"\"}\",2\n",
-			"nested_array.json": corpusNestedArrayJSON,
-			"null_first.jsonl": "{\"id\":1,\"note\":null,\"score\":null}\n{\"id\":2,\"note\":\"b\",\"score\":4}\n{\"id\":3,\"note\":\"c\",\"score\":2.5}\n",
+			"null_mixed.json":        `[{"id":1,"score":null,"n":5},{"id":2,"score":2.5,"n":null},{"id":3,"score":4,"n":7}]`,
+			"nested.jsonl":           corpusNestedJSONL,
+			"dotted.csv":             "a.b,a,n\nlit1,\"{\"\"b\"\":\"\"path1\"\"}\",1\nlit2,\"{\"\"b\"\":\"\"path2\"\"}\",2\n",
+			"nested_array.json":      corpusNestedArrayJSON,
+			"null_first.jsonl":       "{\"id\":1,\"note\":null,\"score\":null}\n{\"id\":2,\"note\":\"b\",\"score\":4}\n{\"id\":3,\"note\":\"c\",\"score\":2.5}\n",
+			"nil_time.jsonl":         "{\"id\":1,\"x\":\"2023-05-15T00:13:00Z\"}\n{\"id\":2,\"x\":null}\n{\"id\":3,\"x\":\"2023-05-15T01:47:00Z\"}\n",
 			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
 			"app.log":                corpusAppLog,
 		}

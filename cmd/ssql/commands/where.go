@@ -149,11 +149,13 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Build filter that uses pre-compiled expressions
 			var filterErr error
+			var recordNo int64 // input records seen, for the error
 			validated := false
 			filter := func(r ssql.Record) bool {
 				if filterErr != nil {
 					return false
 				}
+				recordNo++
 				if len(clauses) == 0 {
 					return !invert // no filter matches everything; inverted, nothing
 				}
@@ -195,18 +197,21 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 									filterErr = err // wrong for the run (a collision) or the data (a strict cast), not the row
 									return false
 								}
-								if !errors.Is(err, runtime.ErrAbsent) {
-									fmt.Fprintf(ctx.Stderr(), "Error evaluating expression: %v\n", err)
+								if runtime.IsAbsentValueError(err) {
+									clauseMatches = false // no value on this row (a null operand): not a match
+									break
 								}
-								clauseMatches = false
-								break
+								// Any other failure is the run's, not the row's: it
+								// used to print "Error evaluating expression" and drop
+								// the row, exit 0 — a silent wrong answer.
+								filterErr = fmt.Errorf("evaluating expression: %w", err)
+								return false
 							}
 
 							boolResult, ok := result.(bool)
 							if !ok {
-								fmt.Fprintf(ctx.Stderr(), "Expression must return boolean, got %T\n", result)
-								clauseMatches = false
-								break
+								filterErr = fmt.Errorf("expression must return a boolean, got %T", result)
+								return false
 							}
 
 							if ee.negated {
@@ -245,13 +250,17 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// Apply filter
 			filtered := ssql.Where(filter)(records)
 
+			// The stream ends at the record whose expression failed, and
+			// the error names it (stopOnError, as update).
+			filtered = stopOnError(filtered, &filterErr)
+
 			// Write output as JSONL (preserving schema if present)
 			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), schemaAndRecords.Schema, filtered); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
 			if filterErr != nil {
-				return filterErr
+				return fmt.Errorf("record %d: %w", recordNo, filterErr)
 			}
 
 			return nil

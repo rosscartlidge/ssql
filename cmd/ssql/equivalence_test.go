@@ -966,8 +966,8 @@ var equivCases = []EquivCase{
 		Ordered:          true,
 		ColumnsUnordered: true,
 		Skip: map[string]string{
-			"datafusion":  "DataFusion refuses a JSON array file",
-			"postgres":    "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
+			"datafusion": "DataFusion refuses a JSON array file",
+			"postgres":   "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
 		},
 	},
 	{
@@ -980,8 +980,8 @@ var equivCases = []EquivCase{
 		Ordered:          true,
 		ColumnsUnordered: true,
 		Skip: map[string]string{
-			"datafusion":  "DataFusion refuses a JSON array file",
-			"postgres":    "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
+			"datafusion": "DataFusion refuses a JSON array file",
+			"postgres":   "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
 		},
 	},
 	// The same nested operations over the JSON ARRAY file (typed form via
@@ -1019,7 +1019,7 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
-		Name:             "join_on_path_key_array_file",
+		Name: "join_on_path_key_array_file",
 		// The right side stays typed end to end: a record-only stage inside
 		// a process substitution gets no typed→record boundary yet (TODO).
 		Pipeline:         `{{.bin}} from json {{.data}}/nested_array.json | {{.bin}} join <({{.bin}} from json {{.data}}/nested_array.json | {{.bin}} include name | {{.bin}} rename -as name who | {{.bin}} update -set-expr city 'who == "Alice" ? "NYC" : (who == "Bob" ? "SF" : "none")') -on addr.city city | {{.bin}} include id who | {{.bin}} sort id`,
@@ -1997,6 +1997,35 @@ var equivCases = []EquivCase{
 			{"id": 3, "note": "c", "score": 2.5},
 		},
 		Skip: map[string]string{"go-typed": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)", "go-parallel": "typed reader refuses an absent value in a plain field (typed.RequireValues; DFC124 §3)"},
+	},
+	{
+		// date() of a null is an absent value, not an error: exec stopped
+		// with "invalid date <nil>" on the null row (and the rows after
+		// it passed through WITHOUT the field), the record program wrote
+		// the text "<nil>". DuckDB's CAST(NULL) is the oracle. Typed
+		// cannot hold a null time (DFC124 §3).
+		Name:     "date_of_null_update",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nil_time.jsonl | {{.bin}} update -set-expr t 'date(x)' | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "x": "2023-05-15T00:13:00Z", "t": "2023-05-15T00:13:00Z"},
+			{"id": 2},
+			{"id": 3, "x": "2023-05-15T01:47:00Z", "t": "2023-05-15T01:47:00Z"},
+		},
+		Skip: map[string]string{"go-typed": "typed cannot hold a null time (DFC124 §3)", "go-parallel": "typed cannot hold a null time (DFC124 §3)"},
+	},
+	{
+		// A comparison with a null operand is no match, quietly, in every
+		// lane: exec printed "Error evaluating expression" and dropped the
+		// row (exit 0); the generated filter dropped it on any error.
+		Name:     "date_of_null_where",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/nil_time.jsonl | {{.bin}} where -if-expr 'date(x) > date("2023-01-01")' | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "x": "2023-05-15T00:13:00Z"},
+			{"id": 3, "x": "2023-05-15T01:47:00Z"},
+		},
+		Skip: map[string]string{"go-typed": "typed cannot hold a null time (DFC124 §3)", "go-parallel": "typed cannot hold a null time (DFC124 §3)"},
 	},
 	{
 		// The same rows behind a `_schema` header (a tee'd file): the

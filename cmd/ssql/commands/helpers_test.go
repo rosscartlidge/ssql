@@ -36,10 +36,19 @@ func TestApplyValueToRecord(t *testing.T) {
 		{name: "float32→float64", field: "price", value: float32(99.99), wantType: "float64", wantValue: float64(float32(99.99))},
 
 		// Special cases
-		{name: "nil→empty string", field: "optional", value: nil, wantType: "string", wantValue: ""},
 		// a slice result is a nested value: JSON text (DFC144 Level 1; was fmt's "[1 2 3]")
 		{name: "complex type→json", field: "data", value: []int{1, 2, 3}, wantType: "json", wantValue: ssql.JSONString("[1,2,3]")},
 	}
+
+	// nil is a nil slot: the field is in the schema with no value (a SQL
+	// NULL), not the empty string it was until 2026-10-13 — hour(x) over a
+	// column with nulls was a mixed column of ints and "".
+	t.Run("nil→nil slot", func(t *testing.T) {
+		frozen := applyValueToRecord(ssql.MakeMutableRecord(), "optional", nil).Freeze()
+		if !frozen.Has("optional") || frozen.HasValue("optional") {
+			t.Errorf("nil: Has=%v HasValue=%v, want a field with no value", frozen.Has("optional"), frozen.HasValue("optional"))
+		}
+	})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

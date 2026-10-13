@@ -76,13 +76,22 @@ func CompileExprFilterEnv(expression string) (func(map[string]any) bool, error) 
 	if err != nil {
 		return nil, err
 	}
+	// Same contract as exprFilter (runtime.go): a row with no value for
+	// the expression is no match; any other error, and a non-boolean
+	// result, fails the program as exec does.
 	return func(fields map[string]any) bool {
 		result, err := eval(fields)
 		if err != nil {
-			return false
+			if IsAbsentValueError(err) {
+				return false
+			}
+			panic(fmt.Errorf("where -if-expr: evaluating expression: %w", err))
 		}
 		b, ok := result.(bool)
-		return ok && b
+		if !ok {
+			panic(fmt.Errorf("where -if-expr: expression must return a boolean, got %T", result))
+		}
+		return b
 	}, nil
 }
 

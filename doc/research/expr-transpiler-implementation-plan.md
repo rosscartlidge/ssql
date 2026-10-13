@@ -108,12 +108,20 @@ territory anyway.
 
 ### 2e. Current VM behaviours that are part of the observable contract
 
-- **`where -if-expr`**: `MustCompileExprFilter` returns **false** on any eval
-  error and on non-bool results (runtime.go:51-58). The exec path prints an
-  error to stderr per row and also excludes.
-- **`update -set-expr`**: eval error → field set to `""` (update.go:619-652);
-  result typed via a runtime type-switch (int64/float64/bool/string/int/
-  float32, default → `fmt.Sprintf("%v")`).
+- **`where -if-expr`** (contract since 2026-10-13; before, the compiled
+  filter returned false on ANY eval error and exec printed one and
+  dropped the row, exit 0): a row with no value for the expression — a
+  null operand, or an absent `-param-field` column — is no match,
+  quietly (`runtime.IsAbsentValueError`); any other evaluation error, and
+  a non-boolean result, fails the run, exec and generated alike, and exec
+  ends the stage's output at that record, naming it.
+- **`update -set-expr`** (same date; before, an eval error set the field
+  to `""` and the records after it passed through without the field): a
+  row with no value leaves the field as it is; any other error fails the
+  run at that record; a nil result is a nil slot (the field with no
+  value), never `""` or the text `<nil>`. The result is typed via a
+  runtime type-switch (nil/int64/float64/bool/string/int/float32/
+  time.Time, nested → JSON text).
 - **`runtime.CompileExpr`** validates unknown identifiers on the *first
   record only*, and skips validation entirely if the expression text contains
   `??`, `has(` or `getOr(` (runtime.go:94-96).

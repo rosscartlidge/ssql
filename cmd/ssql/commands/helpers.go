@@ -755,8 +755,11 @@ func applyValueToRecord(mut ssql.MutableRecord, field string, value any) ssql.Mu
 		// expr might return float32 instead of float64
 		return mut.Float(field, float64(v))
 	case nil:
-		// For nil values, set as empty string (or could skip)
-		return mut.String(field, "")
+		// No value (date() or hour() of a null): a nil slot — the field
+		// stays in the schema with no value, as a SQL NULL. It was set to
+		// the empty STRING, so hour(x) over a column with nulls was a
+		// mixed column of ints and "" (found 2026-10-13, DFC148 data).
+		return mut.Null(field)
 	default:
 		// A list or map result (split's []string, filter's []any, a map
 		// literal) is a nested value: JSON text, `json` on the wire
