@@ -1440,7 +1440,9 @@ is a `*CellError`); absent fields stay absent.
 func ReadLines(filename string) (iter.Seq[Record], error)   // one record per text line: line_number (from 1) and line
 func ReadLinesFromReader(r io.Reader) iter.Seq[Record]
 func ReadLinesSafe(filename string) iter.Seq2[Record, error]
-func WriteLines(stream iter.Seq[Record], filename string) error   // one line per record, from the line field
+func WriteLines(records iter.Seq[Record], field, filename string) error   // one line per record: FIELD's text (`to lines FIELD`), the twin of ReadLines
+func WriteLinesToWriter(records iter.Seq[Record], field string, w io.Writer) error
+func FormatValue(value any) string   // the text sinks' rendering: strings as is, JSONString as its JSON, times RFC 3339, nil ""
 ```
 
 ```go

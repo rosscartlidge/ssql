@@ -47,3 +47,33 @@ func ReadLinesFromReader(r io.Reader) iter.Seq[Line] {
 		}
 	}
 }
+
+// WriteLines writes text(row) per row as one line — `ssql to lines
+// FIELD` in typed pipelines, where text renders the field by
+// ssql.FormatValue so the typed lane writes exactly what the record lane
+// does. The twin of ReadLines.
+func WriteLines[T any](seq iter.Seq[T], text func(T) string, filename string) error {
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	if err := WriteLinesToWriter(seq, text, f); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// WriteLinesToWriter is WriteLines to a writer.
+func WriteLinesToWriter[T any](seq iter.Seq[T], text func(T) string, w io.Writer) error {
+	bw := bufio.NewWriter(w)
+	for row := range seq {
+		if _, err := bw.WriteString(text(row)); err != nil {
+			return err
+		}
+		if err := bw.WriteByte('\n'); err != nil {
+			return err
+		}
+	}
+	return bw.Flush()
+}

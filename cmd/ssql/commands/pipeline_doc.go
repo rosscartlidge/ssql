@@ -53,7 +53,12 @@ func parsePipelineDoc(data []byte) ([]docStage, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("pipeline document: %w", err)
 	}
-	if _, err := dec.Token(); err != io.EOF {
+	if tok, err := dec.Token(); err != io.EOF {
+		// Two documents on stdin — a views-table where that matched two
+		// rows (DFC148 §4.4) — must not parse as one with trailing junk.
+		if d, ok := tok.(json.Delim); ok && (d == '[' || d == '{') {
+			return nil, fmt.Errorf("pipeline document: a second document follows the first — run takes one; narrow the selection that produced it")
+		}
 		return nil, fmt.Errorf("pipeline document: trailing content after the pipeline")
 	}
 	// {"pipeline": [...]} is accepted as the object form, for documents

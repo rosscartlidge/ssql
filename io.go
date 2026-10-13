@@ -1376,30 +1376,6 @@ func ReadLinesSafe(filename string) iter.Seq2[Record, error] {
 	}
 }
 
-// WriteLines writes records as text lines (using "line" field)
-func WriteLines(sb iter.Seq[Record], filename string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create file %s: %w", filename, err)
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	defer writer.Flush()
-
-	for record := range sb {
-		line := ""
-		if value, exists := Get[any](record, "line"); exists {
-			line = formatValue(value)
-		}
-		if _, err := writer.WriteString(line + "\n"); err != nil {
-			return fmt.Errorf("failed to write line: %w", err)
-		}
-	}
-
-	return nil
-}
-
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================

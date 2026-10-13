@@ -388,7 +388,7 @@ func TestWriteLines(t *testing.T) {
 
 	records := slices.Values([]Record{r1.Freeze(), r2.Freeze()})
 
-	err := WriteLines(records, filename)
+	err := WriteLines(records, "line", filename)
 	if err != nil {
 		t.Fatalf("WriteLines failed: %v", err)
 	}

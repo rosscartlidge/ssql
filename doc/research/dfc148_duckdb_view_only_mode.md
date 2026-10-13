@@ -239,15 +239,10 @@ The post's whole idea is sharing **one URL**. `ssql run
 https://…/services.json` fails with "open: no such file". The workaround is
 `curl -s URL | ssql run -stdin`.
 
-**Proposal.** `run` fetches `http(s)://` documents itself, using the same
-HTTP client as the Parquet reader.
-
-Two decisions are needed. First, a remote document runs commands on the
-caller's machine, so it needs the same trust model as a local one: it is
-documented as code, not data. `run -print URL` lets the user look before
-running it. Second, a timeout and a size cap.
-
-Effort: small.
+**Resolved with §4.4 (2026-10-13, Ross):** a views file is a table, and
+the URL is read by `from`, which already reads URLs. See §4.4. `run URL`
+stays a possible convenience (small: the Parquet reader's HTTP client, a
+`-print` look-before-run, a timeout and a size cap), no longer a gap.
 
 ### 4.2 Hive partition columns are not derived
 
@@ -348,12 +343,41 @@ glob support can come in a second step of (a), without the SDK.
 One DuckDB file can hold many named views. One run document is one
 pipeline, and `from catalog` is for shards, not views.
 
-The possible shape is a document holding a map from names to pipelines,
-used as `ssql run views.json NAME`, or a `from view NAME` source that
-resolves through a views file. This is a design question about what a
-"catalog of relations" means in ssql. It touches DFC134 (pipeline
-documents) and DFC138 (the document on the wire), and needs a proposal
-before any code.
+**Resolved (2026-10-13, Ross's design):** a views file is a **table** with
+a name column and a pipeline column, and the lookup is `where`. The only
+new piece is a sink that writes one field's text, one record per line —
+`to lines FIELD`, the twin of `from lines`:
+
+```
+name,pipeline
+services,"[[""from"",""parquet"",""https://blobs.duckdb.org/train_services.parquet""]]"
+services_v3,"[[""from"",""parquet"",""https://…""],[""rename"",""-as"",""station_name"",""station""]]"
+```
+
+```bash
+ssql from csv https://host/views.csv | ssql where -if name eq services_v3 \
+  | ssql to lines pipeline | ssql run -stdin \
+  | ssql group-by station -count calls | ssql sort -desc calls | ssql limit 3
+```
+
+Why this rather than a views document or a `from view` source:
+
+- Nothing in ssql has to know what a view is. The post's "database holding
+  only views, shared as one URL" is a CSV at a URL; `describe` lists the
+  views, `update -set-expr` rewrites them, `where` picks a subset.
+- The views table can live anywhere ssql reads from — Parquet, a catalog,
+  Postgres — not only HTTPS. A JSON form (`from json views.json`, the
+  pipeline as a nested array, DFC144's `json` type) avoids CSV
+  quote-doubling: `to lines` writes a `JSONString` as its text.
+- Views over views need nothing more: a row's pipeline can itself be
+  `from csv views.csv | where … | to lines pipeline | run -stdin | …`.
+
+Two rules: `run -stdin` refuses more than one document ("2 documents on
+stdin, expected 1") rather than parsing the concatenation; and if the
+four-stage consumer incantation proves long in practice, a `run -views
+URL NAME` sugar can do those three stages, built on them. Pushdown (§4.6)
+is unchanged. The CSV cell round-trip and `run -stdin` accepting the
+selected row were confirmed with a stand-in sink before building.
 
 ### 4.5 `union` of Parquet sides needs process substitution
 

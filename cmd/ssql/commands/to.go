@@ -10,13 +10,14 @@ import (
 // RegisterTo registers the to subcommand with nested format subcommands
 func RegisterTo(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	toCmd := cmd.Subcommand("to").
-		Description("Write output in various formats (table, csv, tsv, json, jsonl, xlsx, chart, animate, explore, wav)")
+		Description("Write output in various formats (table, csv, tsv, json, jsonl, lines, xlsx, chart, animate, explore, wav)")
 
 	// Register nested subcommands
 	registerToTable(toCmd)
 	registerToMarkdown(toCmd)
 	registerToCSV(toCmd)
 	registerToTSV(toCmd)
+	registerToLines(toCmd)
 	registerToJSON(toCmd)
 	registerToJSONL(toCmd)
 	registerToArrow(toCmd)

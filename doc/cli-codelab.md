@@ -1111,6 +1111,26 @@ ssql generate sql -json /tmp/report.json
 ssql generate ssql -json /tmp/report.json
 ```
 
+**Named views.** Several documents can live in one table — a CSV with a
+name column and a pipeline column, kept anywhere `from` reads (a file, a
+URL, a database) — and `where` is the lookup. `to lines FIELD` writes the
+selected row's pipeline as text, and `run -stdin` runs it:
+
+```bash
+cat > /tmp/views.csv <<'EOF'
+name,pipeline
+engineering,"[[""from"",""csv"",""-arg"",""employees.csv""],[""where"",""-if"",""dept"",""eq"",""Engineering""]]"
+seniors,"[[""from"",""csv"",""-arg"",""employees.csv""],[""where"",""-if"",""age"",""gt"",""40""]]"
+EOF
+ssql from csv /tmp/views.csv | ssql where -if name eq seniors | ssql to lines pipeline \
+  | ssql run -stdin | ssql include name age | ssql to table
+```
+
+A views table is data: `describe` lists the views, `update` rewrites
+them, and a view can select another view the same way. `run` refuses two
+documents on stdin, so a `where` that matches two rows is an error, not
+a surprise.
+
 The reasoning, and the SQL comparison, is in
 [DFC134](research/dfc134_pipelines_as_data.md).
 

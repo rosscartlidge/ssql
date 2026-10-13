@@ -157,6 +157,9 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 			"-arg-min":        {0, 1},
 		},
 		// Nested subcommands use "parent/child" notation
+		"to/lines": {
+			"FIELD": {0}, // the field written as each line
+		},
 		"to/table": {
 			"FIELDS": {0}, // fields to display (variadic)
 		},

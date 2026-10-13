@@ -503,10 +503,14 @@ type Line struct {
 }
 func ReadLines(filename string) iter.Seq[Line]
 func ReadLinesFromReader(r io.Reader) iter.Seq[Line]
+func WriteLines[T any](seq iter.Seq[T], text func(T) string, filename string) error   // `to lines FIELD`: text(row) per row
+func WriteLinesToWriter[T any](seq iter.Seq[T], text func(T) string, w io.Writer) error
 ```
 
 The typed form of `ssql from lines`: one `Line` per text line, numbered
-from 1. Serial (line boundaries are sequential); the planner inserts no
+from 1. `WriteLines` is its twin, behind `to lines FIELD`: the generated
+closure renders the field with `ssql.FormatValue`, so the typed lane
+writes the same text as the record lane. Serial (line boundaries are sequential); the planner inserts no
 parallel form. `extract` in a typed pipeline synthesizes its output struct
 from the kept fields plus one string per named group.
 

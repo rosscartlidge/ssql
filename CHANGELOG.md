@@ -5,6 +5,25 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`to lines FIELD`**, the twin of `from lines`: one record's field as
+  one line of text, rendered as `to csv` would (a string as itself, a
+  `json` value as its JSON text, a time in RFC 3339). Its reason to
+  exist is **named views** (DFC148 §4.4, Ross's design): a table with a
+  name column and a pipeline column — a CSV at a URL, a Parquet file, a
+  database — holds many run documents, `where` selects one, `to lines
+  pipeline` writes it, and `ssql run -stdin` runs it. Every lane: exec,
+  record and typed codegen (`ssql.WriteLines`, `typed.WriteLines`, both
+  with `ToWriter` forms; `ssql.FormatValue` is the shared rendering).
+  `run -stdin` now names a second document on its input ("a second
+  document follows the first") instead of reporting trailing content.
+  Library: the old `ssql.WriteLines(records, filename)`, which wrote a
+  fixed `line` field, now takes the field: `WriteLines(records, field,
+  filename)`.
+
 ## [4.115.0] - 2026-10-12
 
 ### Added
