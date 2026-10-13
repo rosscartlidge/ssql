@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,9 +55,28 @@ func TestCatalogLocalShardsRunThisBinary(t *testing.T) {
 
 	// generated record program: its executable is the program, so the
 	// shards run the ssql on PATH.
-	out, err = runGeneratedPipeline(t, bin, dir, "record", bin+" from catalog shards.csv | "+bin+" count")
+	pipeline := bin + " from catalog shards.csv | " + bin + " count"
+	out, err = runGeneratedPipeline(t, bin, dir, "record", pipeline)
 	if err != nil || strings.TrimSpace(out) != "10" {
 		t.Errorf("generated local catalog: count = %q, err = %v\n%s", strings.TrimSpace(out), err, out)
+	}
+
+	// The same program under the name `generate go -run` gives it,
+	// ssqlgen: SelfBin took that for ssql until 2026-10-13 and the program
+	// ran ITSELF for each shard — a fork bomb. Two guards now: the
+	// program marks itself (ssql.MarkGeneratedProgram) and the name rule
+	// is exact; both would have to regress for this to bomb again.
+	prog := filepath.Join(dir, "prog_record_"+fmt.Sprint(len(pipeline)), "prog")
+	src, err := os.ReadFile(prog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ssqlgen"), src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runIn(dir, "timeout 60s ./ssqlgen")
+	if err != nil || strings.TrimSpace(out) != "10" {
+		t.Errorf("generated program named ssqlgen: count = %q, err = %v\n%s", strings.TrimSpace(out), err, out)
 	}
 }
 

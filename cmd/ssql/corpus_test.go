@@ -134,6 +134,11 @@ func corpusData(t *testing.T) string {
 			"pq/c.parquet":                     corpusParquet(true, pqRow{4, "fay", "east", 15}),
 			"pqbad/other.parquet":              corpusParquet(false, pqRow{8, "gil", "", 1}),
 			"pqhive/region=north/data.parquet": corpusParquet(false, pqRow{6, "hal", "", 9}, pqRow{3, "gus", "", 2.5}),
+			// A second region for `from catalog -hive` (DFC149): the glob
+			// reads both, the derived region column prunes to one; and a
+			// layout whose files already carry a region column (a clash).
+			"pqhive/region=south/data.parquet": corpusParquet(false, pqRow{8, "ivy", "", 4}, pqRow{1, "jon", "", 11.5}),
+			"pqclash/region=west/data.parquet": corpusParquet(true, pqRow{2, "kim", "west", 6}),
 			// DFC133 random differential. `code` is TEXT that sometimes looks
 			// like a number; group b has NO value for v or t; `e` is empty in
 			// every row.

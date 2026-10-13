@@ -1544,6 +1544,36 @@ var equivCases = []EquivCase{
 		Golden:   []map[string]any{{"id": 4, "amount": 15}, {"id": 5, "amount": 40}, {"id": 7, "amount": 12.5}, {"id": 9, "amount": 21.5}},
 	},
 	{
+		// DFC149: a hive layout read as a derived catalog. region comes
+		// from the directory, as a string, on every record; the files are
+		// read in catalog (glob) order, so sort decides. No SQL lane:
+		// from catalog has no SQL equivalent (DFC149 §4.6 is the later
+		// slice); the typed lanes take the catalog's record form.
+		Name:     "catalog_hive_glob",
+		Pipeline: `{{.bin}} from catalog -hive '{{.data}}/pqhive/region=*/data.parquet' | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "name": "jon", "amount": 11.5, "region": "south"},
+			{"id": 3, "name": "gus", "amount": 2.5, "region": "north"},
+			{"id": 6, "name": "hal", "amount": 9, "region": "north"},
+			{"id": 8, "name": "ivy", "amount": 4, "region": "south"},
+		},
+		Skip: map[string]string{"duckdb": "from catalog has no SQL equivalent (DFC149 §4.6)"},
+	},
+	{
+		// A where on the derived column: the same rows in every lane,
+		// whether it prunes files (the optimiser lifts it into -if) or
+		// filters records.
+		Name:     "catalog_hive_where",
+		Pipeline: `{{.bin}} from catalog -hive '{{.data}}/pqhive/region=*/data.parquet' | {{.bin}} where -if region eq north | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 3, "name": "gus", "amount": 2.5, "region": "north"},
+			{"id": 6, "name": "hal", "amount": 9, "region": "north"},
+		},
+		Skip: map[string]string{"duckdb": "from catalog has no SQL equivalent (DFC149 §4.6)"},
+	},
+	{
 		// One file under region=north/: no lane derives a region column
 		// (DuckDB's hive auto-detection added one to its lane alone).
 		Name:     "parquet_hive_dir_single",

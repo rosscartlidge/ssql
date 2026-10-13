@@ -460,7 +460,7 @@ func TestAllCommandsSupportGeneration(t *testing.T) {
 			name:           "from catalog",
 			cmdLine:        `SSQLGO=1 /tmp/ssql_test from catalog test-data/test-catalog.csv`,
 			expectFragment: true,
-			wantSubstring:  `ssql.ReadCatalog`,
+			wantSubstring:  `ssql.LoadCatalog`,
 		},
 	}
 

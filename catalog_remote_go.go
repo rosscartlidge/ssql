@@ -87,7 +87,7 @@ func ProcessCatalogShardsRemoteGo(
 		if opts.Order == "catalog" {
 			runCatalogOrder(ctx, entries, requireVersion, pushdownGroups, mode, shardField, opts.RemoteBin, sem, recordErr, yield)
 			if firstErr != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", firstErr)
+				panic(firstErr) // the program's ssql.Run reports it and exits 1 (it printed and exited 0 until 2026-10-14)
 			}
 			return
 		}
@@ -133,7 +133,10 @@ func ProcessCatalogShardsRemoteGo(
 			}
 		}
 		if firstErr != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", firstErr)
+			// With -keep-going every shard ran, but the output is partial:
+			// still the program's error. ssql.Run in the generated main
+			// turns the panic into "Error: …", exit 1.
+			panic(firstErr)
 		}
 	}
 }
@@ -209,9 +212,16 @@ func runShardStream(
 	}
 	defer stdout.Close()
 
+	checked := false
 	for r := range readShardJSONL(stdout) {
 		if ctx.Err() != nil {
 			break
+		}
+		if !checked {
+			checked = true
+			if err := hiveClash(r, entry); err != nil {
+				return err
+			}
 		}
 		r = enrichCatalogRecord(r, entry, shardField)
 		select {
@@ -241,6 +251,11 @@ func runShardCollect(
 	for r := range readShardJSONL(stdout) {
 		if ctx.Err() != nil {
 			break
+		}
+		if len(out) == 0 {
+			if err := hiveClash(r, entry); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, enrichCatalogRecord(r, entry, shardField))
 	}

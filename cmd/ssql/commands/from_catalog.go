@@ -22,11 +22,17 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 		Example("ssql from catalog shards.csv | ssql to table", "Read all shards in catalog").
 		Example("ssql from catalog shards.csv -if date ge 2025-03-01 | ssql to table", "Partition pruning").
 		Example("ssql from catalog shards.csv -- where -if status eq error", "Push filter to each shard").
+		Example("ssql from catalog -hive 'sales/year=*/region=*/*.parquet' | ssql where -if year eq 2026", "A hive layout: year and region become columns, and the where prunes to the matching files").
 		Flag("FILE").
 		String().
 		CompleterFunc(completeCatalogFile).
 		Global().
-		Help("Catalog CSV file (must have host and path columns)").
+		Help("Catalog CSV file (must have host and path columns); with -hive, also a glob of data files").
+		Done().
+		Flag("-hive").
+		Bool().
+		Global().
+		Help("Derive a column from each key=value directory in a shard's path (day=2023-05-15/ → day), as DuckDB's hive_partitioning; the columns prune like catalog columns").
 		Done().
 		Flag("-if", "-i").
 		Arg("field").
@@ -97,6 +103,7 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 				return err
 			}
 			catalogFile, _ := ctx.GlobalFlags["FILE"].(string)
+			hive, _ := ctx.GlobalFlags["-hive"].(bool)
 			gpu, _ := ctx.GlobalFlags["-gpu"].(bool)
 			shardField, _ := ctx.GlobalFlags["-shard-field"].(string)
 			generate, _ := ctx.GlobalFlags["-generate"].(bool)
@@ -127,13 +134,13 @@ func registerFromCatalog(cmd *cf.SubcommandBuilder) {
 			}
 
 			if schemaMode() {
-				return schemaModeFromCatalog(catalogFile, gpu, filters, shardField, opts, ctx.RemainingArgs)
+				return schemaModeFromCatalog(catalogFile, hive, gpu, filters, shardField, opts, ctx.RemainingArgs)
 			}
 			if shouldGenerate(generate) {
-				return generateFromCatalogCode(catalogFile, gpu, filters, shardField, opts, ctx.RemainingArgs)
+				return generateFromCatalogCode(catalogFile, hive, gpu, filters, shardField, opts, ctx.RemainingArgs)
 			}
 
-			return executeFromCatalog(catalogFile, gpu, filters, shardField, catalogUsed, opts, ctx.RemainingArgs)
+			return executeFromCatalog(catalogFile, hive, gpu, filters, shardField, catalogUsed, opts, ctx.RemainingArgs)
 		}).
 		Done()
 }
@@ -270,15 +277,12 @@ func parseCatalogFilters(ifVal any) []ssql.CatalogFilter {
 // CLI baseline (this function) still uses the v4.27 sequential
 // ProcessCatalogShards. Phase C of the catalog-remote-Go proposal
 // extends per-shard parallelism to this path too.
-func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, catalogUsedFile string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
+func executeFromCatalog(catalogFile string, hive, gpu bool, filters []ssql.CatalogFilter, shardField string, catalogUsedFile string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
 	_ = opts // unused in CLI baseline — Phase C
-	entries, err := ssql.ReadCatalog(catalogFile)
+	entries, err := ssql.LoadCatalog(catalogFile, hive, filters)
 	if err != nil {
 		return err
 	}
-
-	entries = ssql.PruneCatalog(entries, filters)
-	entries = ssql.ExpandCatalogGlobs(entries)
 	if len(entries) == 0 {
 		return nil
 	}
@@ -301,7 +305,10 @@ func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilt
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
 
 	records := ssql.ProcessCatalogShards(entries, remoteBin, shardField, pipelineGroups)
-	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+	// ssql.Run: a shard whose records clash with a derived column panics
+	// in the stream (ProcessCatalogShards has no error return); this
+	// reports it as the command's error.
+	return ssql.Run(func() error { return writeWithInferredSchema(records, writeWithInferredSchemaOptions{}) })
 }
 
 // schemaModeFromCatalog answers SSQL_MODE=schema for a catalog (DFC149
@@ -312,16 +319,15 @@ func executeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilt
 // ProcessCatalogShards adds to every record: -shard-field and the
 // catalog's exact metadata columns, as strings, in header order. No
 // shard left after pruning: the added fields alone.
-func schemaModeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
-	entries, err := ssql.ReadCatalog(catalogFile)
+func schemaModeFromCatalog(catalogFile string, hive, gpu bool, filters []ssql.CatalogFilter, shardField string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
+	entries, err := ssql.LoadCatalog(catalogFile, hive, filters)
 	if err != nil {
 		return err
 	}
-	cols, ranges, err := ssql.CatalogColumns(catalogFile)
+	cols, ranges, err := catalogMetadataColumns(catalogFile, hive, entries)
 	if err != nil {
 		return err
 	}
-	entries = ssql.ExpandCatalogGlobs(ssql.PruneCatalog(entries, filters))
 
 	var names []string
 	types := map[string]string{}
@@ -351,6 +357,23 @@ func schemaModeFromCatalog(catalogFile string, gpu bool, filters []ssql.CatalogF
 		}
 	}
 	return writeSchemaModeOutputTyped(os.Stdout, names, types)
+}
+
+// catalogMetadataColumns: the columns a catalog adds to every record, in
+// order — the catalog CSV's (CatalogColumns; none for a glob FILE) and,
+// under -hive, the keys derived from the paths (the same for every
+// entry, DeriveHiveMetadata's rule), with the range bases.
+func catalogMetadataColumns(catalogFile string, hive bool, entries []ssql.CatalogEntry) (cols []string, ranges map[string]bool, err error) {
+	ranges = map[string]bool{}
+	if !(hive && ssql.IsGlobPath(catalogFile)) {
+		if cols, ranges, err = ssql.CatalogColumns(catalogFile); err != nil {
+			return nil, nil, err
+		}
+	}
+	if hive && len(entries) > 0 {
+		cols = append(cols, entries[0].HiveKeys...)
+	}
+	return cols, ranges, nil
 }
 
 // shardSchema asks one shard for its schema: the same command the shard
@@ -395,7 +418,7 @@ func shardSchema(entry ssql.CatalogEntry, remoteBin string, groups [][]string) (
 // gpu is currently unused in the codegen path — ssql vs ssql_gpu is
 // a runtime choice on the remote (the shipped script always invokes
 // `ssql generate go -script ... -run`).
-func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.CatalogFilter, shardField string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
+func generateFromCatalogCode(catalogFile string, hive, gpu bool, filters []ssql.CatalogFilter, shardField string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
 	_ = gpu
 
 	var params []lib.CodeParam
@@ -460,12 +483,10 @@ func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.Catalo
 		lib.CodeParam{Name: "keep-going", Default: keepGoingDefault, Help: "keep running on shard error", VarName: "flagKeepGoing"},
 	)
 
-	code := fmt.Sprintf(`entries, err := ssql.ReadCatalog(*flagCatalog)
+	code := fmt.Sprintf(`entries, err := ssql.LoadCatalog(*flagCatalog, %t, %s)
 	if err != nil {
 		return fmt.Errorf("%%w", err)
 	}
-	entries = ssql.PruneCatalog(entries, %s)
-	entries = ssql.ExpandCatalogGlobs(entries)
 	shardConcurrency, _ := strconv.Atoi(*flagShardConcurrency)
 	keepGoing, _ := strconv.ParseBool(*flagKeepGoing)
 	records := ssql.ProcessCatalogShardsRemoteGo(
@@ -481,7 +502,7 @@ func generateFromCatalogCode(catalogFile string, gpu bool, filters []ssql.Catalo
 			RemoteBin:   %q,
 		},
 	)`,
-		filterCode, requireVersion, pipelineCode, mode, shardField, opts.RemoteBin,
+		hive, filterCode, requireVersion, pipelineCode, mode, shardField, opts.RemoteBin,
 	)
 
 	imports := []string{"fmt", "os", "strconv"}

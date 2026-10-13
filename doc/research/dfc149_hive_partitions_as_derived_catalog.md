@@ -2,7 +2,7 @@
 
 Reference: DFC149
 Created: 2026-10-13
-Last modified: 2026-10-13
+Last modified: 2026-10-14
 
 [Back to Index](./README.md)
 
@@ -86,6 +86,19 @@ All three gaps are in the catalog, not in `from parquet`:
 ## 4. Design
 
 ### 4.1 `from catalog -hive`
+
+**Built 2026-10-14** with §4.2 and the optimiser's derived columns
+(`ssql.LoadCatalog` is the one loader for exec, schema mode, generated
+programs and the optimiser; `DeriveHiveMetadata`). Gates: equivalence
+`catalog_hive_glob`, `catalog_hive_where` (watched fail with derivation
+disabled), `TestCatalogHive` (pruning via `-catalog-used`, the
+`generate ssql` lift, schema mode, a CSV catalog with both kinds of
+column, the five errors, the file-column clash in a record program).
+Building it found two older bugs: a generated program named `ssqlgen`
+ran itself for each local shard (a fork bomb — `SelfBin`'s name test;
+now `MarkGeneratedProgram` + an exact name rule), and a shard error in a
+generated program exited 0. The list form (several paths) is not built:
+one spelling, the glob.
 
 A boolean flag. After glob expansion, each entry's path is split into
 directory segments (the file name is never one); every segment of the
@@ -220,8 +233,8 @@ own.
 ## 6. Order of work
 
 1. ~~§4.5 schema mode~~ DONE 2026-10-13.
-2. §4.1 derivation + §4.2 glob form + the optimiser's derived columns,
-   exec and `generate ssql`, with the gates. This is the post's step.
+2. ~~§4.1 derivation + §4.2 glob form + the optimiser's derived columns~~
+   DONE 2026-10-14.
 3. §4.4 fast path, Parquet first, with the scale case.
 4. §4.6 typed and SQL lanes.
 

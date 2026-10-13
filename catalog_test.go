@@ -103,3 +103,32 @@ func TestPruneCatalog(t *testing.T) {
 		})
 	}
 }
+
+// selfBinFor: the running executable is ssql only when it is named ssql,
+// ssql_gpu or a test build ssql_*, and never inside a generated program —
+// `generate go -run` names its program ssqlgen, and treating it as ssql
+// made every local shard run the program again (a fork bomb, 2026-10-13).
+func TestSelfBinFor(t *testing.T) {
+	onPath := func(string) (string, error) { return "/usr/local/bin/ssql", nil }
+	noPath := func(string) (string, error) { return "", os.ErrNotExist }
+	for _, tc := range []struct {
+		exe       string
+		generated bool
+		want      string
+	}{
+		{"/home/u/go/bin/ssql", false, "/home/u/go/bin/ssql"},
+		{"/home/u/go/bin/ssql_gpu", false, "/home/u/go/bin/ssql_gpu"},
+		{"/tmp/x/ssql_typed_test", false, "/tmp/x/ssql_typed_test"},
+		{"/tmp/x/ssqlgen", false, "/usr/local/bin/ssql"}, // the -run program: not ssql
+		{"/tmp/x/ssql-report", false, "/usr/local/bin/ssql"},
+		{"/home/u/go/bin/ssql", true, "/usr/local/bin/ssql"}, // marked generated: never itself
+		{"", false, "/usr/local/bin/ssql"},
+	} {
+		if got := selfBinFor(tc.exe, tc.generated, onPath, "ssql"); got != tc.want {
+			t.Errorf("selfBinFor(%q, generated=%v) = %q, want %q", tc.exe, tc.generated, got, tc.want)
+		}
+	}
+	if got := selfBinFor("/tmp/x/ssqlgen", true, noPath, "ssql"); got != "ssql" {
+		t.Errorf("no ssql on PATH: want the fallback name, got %q", got)
+	}
+}

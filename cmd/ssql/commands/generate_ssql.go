@@ -104,6 +104,7 @@ type pipelineCmd struct {
 
 	// Parsed fields for "from catalog"
 	IsCatalog         bool
+	CatalogHive       bool // -hive: columns derived from the shards' key=value directories
 	CatalogFile       string
 	CatalogFilters    []whereCondition // existing -if filters
 	CatalogGPU        bool
@@ -502,6 +503,8 @@ func parseFromCatalogCmd(cmd *pipelineCmd) {
 			}
 		case "-gpu":
 			cmd.CatalogGPU = true
+		case "-hive":
+			cmd.CatalogHive = true
 		case "-shard-field":
 			if i+1 < len(cmd.RawArgs) {
 				cmd.CatalogShardField = cmd.RawArgs[i+1]
@@ -1029,7 +1032,7 @@ func ruleCatalogPredicateExtraction(cmds []*pipelineCmd) []ruleApplication {
 		// the row filter must be KEPT). Before this distinction, range
 		// extraction deleted the row filter and straddling shards LEAKED
 		// non-matching rows (caught on the LXD rig, 2026-08-11).
-		catalogCols, rangeCols, err := readCatalogMetadataColumns(cmds[i].CatalogFile)
+		catalogCols, rangeCols, err := readCatalogMetadataColumns(cmds[i].CatalogFile, cmds[i].CatalogHive)
 		if err != nil {
 			continue // can't read catalog, skip
 		}
@@ -1438,9 +1441,23 @@ func conditionCost(op string) int {
 
 // readCatalogMetadataColumns reads the catalog CSV header and returns the set of
 // metadata column names (collapsing field_from/field_to to field).
-func readCatalogMetadataColumns(filename string) (cols, rangeCols map[string]bool, err error) {
-	names, ranges, err := ssql.CatalogColumns(filename)
-	if err != nil {
+func readCatalogMetadataColumns(filename string, hive bool) (cols, rangeCols map[string]bool, err error) {
+	var names []string
+	var ranges map[string]bool
+	if hive {
+		// The derived columns exist only once the paths are known: load
+		// the catalog as exec would (local globs, or ssh echo). Without
+		// this a where on a derived column stayed a row filter — right,
+		// but every file read.
+		entries, err := ssql.LoadCatalog(filename, true, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		names, ranges, err = catalogMetadataColumns(filename, true, entries)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else if names, ranges, err = ssql.CatalogColumns(filename); err != nil {
 		return nil, nil, err
 	}
 	cols = make(map[string]bool, len(names))
@@ -2388,6 +2405,9 @@ func renderCmd(cmd *pipelineCmd) string {
 		}
 		if cmd.CatalogGPU {
 			parts = append(parts, "-gpu")
+		}
+		if cmd.CatalogHive {
+			parts = append(parts, "-hive")
 		}
 		if cmd.CatalogShardField != "" {
 			parts = append(parts, "-shard-field", cmd.CatalogShardField)

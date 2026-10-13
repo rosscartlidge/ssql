@@ -1037,6 +1037,12 @@ func findString(s, substr string) int {
 // it with "return nil\n}". Shared by the record and typed assemblers.
 func writeMainCallingRun(code *strings.Builder, hasParams bool, zone string) {
 	code.WriteString("func main() {\n")
+	// This program is not ssql: a local catalog shard must run the ssql
+	// on PATH, never the program itself (SelfBin). `generate go -run`
+	// names the program ssqlgen, which the old name test took for ssql —
+	// every local shard ran the whole program again: a fork bomb
+	// (2026-10-13).
+	code.WriteString("\tssql.MarkGeneratedProgram()\n")
 	if zone != "" {
 		// The pipeline's zone, resolved by the source when the program
 		// was generated (DFC147 §5.7): the program answers the same

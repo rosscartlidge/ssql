@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"maps"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -20,6 +23,11 @@ type CatalogEntry struct {
 	Format   string
 	Bin      string // optional absolute path of ssql on this shard's host ("bin" column); "" = resolve there
 	Metadata map[string]string
+	// HiveKeys: the metadata keys derived from the path's key=value
+	// directories (DeriveHiveMetadata), in path order; nil for a row whose
+	// metadata is all from the catalog. A shard column of the same name is
+	// an error when its records arrive.
+	HiveKeys []string
 }
 
 // CatalogFilter represents a partition pruning condition.
@@ -320,12 +328,118 @@ func ExpandCatalogGlobs(entries []CatalogEntry) []CatalogEntry {
 				Host:     entry.Host,
 				Path:     p,
 				Format:   entry.Format,
-				Metadata: entry.Metadata, // shared — metadata applies to all expanded files
+				Bin:      entry.Bin,
+				Metadata: maps.Clone(entry.Metadata), // the row's metadata for every file; a copy, so -hive can add per file
 			}
 			result = append(result, expanded)
 		}
 	}
 	return result
+}
+
+// IsGlobPath reports whether a path has glob characters (*, ?, [).
+func IsGlobPath(path string) bool { return isGlob(path) }
+
+// LoadCatalog is the one way a catalog becomes its shard entries — for
+// exec, schema mode, generated programs and the optimiser alike, so they
+// agree on what a catalog means. file is a catalog CSV, or, under hive, a
+// glob of data files (a synthesised local row; the files' format is
+// inferred by the shard's own `from`). Rows are pruned on the catalog's
+// columns, globs expanded, then under hive each file's key=value
+// directories become its metadata (DeriveHiveMetadata) and the pruning
+// runs again on those (DFC149).
+func LoadCatalog(file string, hive bool, filters []CatalogFilter) ([]CatalogEntry, error) {
+	var entries []CatalogEntry
+	if hive && isGlob(file) {
+		entries = []CatalogEntry{{Host: "local", Path: file, Metadata: map[string]string{}}}
+	} else {
+		var err error
+		if entries, err = ReadCatalog(file); err != nil {
+			if hive {
+				return nil, fmt.Errorf("%w (with -hive, FILE is a catalog CSV or a glob of data files such as 'data/day=*/*.parquet')", err)
+			}
+			return nil, err
+		}
+	}
+	entries = ExpandCatalogGlobs(PruneCatalog(entries, filters))
+	if hive {
+		var err error
+		if entries, err = DeriveHiveMetadata(entries); err != nil {
+			return nil, err
+		}
+		entries = PruneCatalog(entries, filters)
+	}
+	return entries, nil
+}
+
+// DeriveHiveMetadata reads each entry's key=value directory segments
+// (`…/year=2023/region=north/data.parquet` → year, region; the file name
+// is never one; values are percent-decoded, as DuckDB and Spark write
+// them) into that entry's metadata — string columns on every record from
+// the shard, exact-value columns for pruning — the way a catalog row's
+// own columns are. Rules, each an error naming the file: every entry
+// must yield the same keys in the same order (files read together share
+// one layout); a key that is also a catalog column is a disagreement
+// between the author and the layout; a path with no key=value directory
+// has nothing to derive.
+func DeriveHiveMetadata(entries []CatalogEntry) ([]CatalogEntry, error) {
+	var first []string
+	for i := range entries {
+		e := &entries[i]
+		keys, values := hivePathMetadata(e.Path)
+		if len(keys) == 0 {
+			return nil, fmt.Errorf("%s:%s: no key=value directory in the path (-hive derives columns from directories such as day=2023-05-15/)", e.Host, e.Path)
+		}
+		if i == 0 {
+			first = keys
+		} else if !slices.Equal(first, keys) {
+			return nil, fmt.Errorf("%s:%s has partition keys %v where %s:%s has %v — files read together must share one layout", e.Host, e.Path, keys, entries[0].Host, entries[0].Path, first)
+		}
+		md := maps.Clone(e.Metadata)
+		if md == nil {
+			md = map[string]string{}
+		}
+		for j, k := range keys {
+			if _, clash := md[k]; clash {
+				return nil, fmt.Errorf("%s:%s: partition key %q is also a catalog column — drop one of them", e.Host, e.Path, k)
+			}
+			md[k] = values[j]
+		}
+		e.Metadata = md
+		e.HiveKeys = keys
+	}
+	return entries, nil
+}
+
+// hivePathMetadata returns the key=value directory segments of a path,
+// in order. Paths are /-separated on every host ssql reads from.
+func hivePathMetadata(path string) (keys, values []string) {
+	segs := strings.Split(path, "/")
+	for _, seg := range segs[:len(segs)-1] { // the file name is not a segment
+		i := strings.IndexByte(seg, '=')
+		if i <= 0 {
+			continue
+		}
+		v, err := url.PathUnescape(seg[i+1:])
+		if err != nil {
+			v = seg[i+1:]
+		}
+		keys = append(keys, seg[:i])
+		values = append(values, v)
+	}
+	return keys, values
+}
+
+// hiveClash names the first of the entry's derived keys that the shard's
+// own records already carry, or "". Checked on a shard's first record:
+// a layout key that is also a file column would silently shadow it.
+func hiveClash(r Record, entry CatalogEntry) error {
+	for _, k := range entry.HiveKeys {
+		if r.Has(k) {
+			return fmt.Errorf("partition key %q is also a column of the file — rename one of them", k)
+		}
+	}
+	return nil
 }
 
 // WriteCatalog writes catalog entries as CSV.
@@ -435,10 +549,36 @@ func cachedHostname() string {
 // with the same candidate list the remote side uses). The result is an
 // unquoted path; the command builders quote it.
 func SelfBin(fallback string) string {
-	if p, err := os.Executable(); err == nil && strings.HasPrefix(filepath.Base(p), "ssql") {
-		return p
+	exe, err := os.Executable()
+	if err != nil {
+		exe = ""
 	}
-	if p, err := exec.LookPath("ssql"); err == nil {
+	return selfBinFor(exe, generatedProgram, exec.LookPath, fallback)
+}
+
+// generatedProgram is set by MarkGeneratedProgram: the running
+// executable is a program `generate go` wrote, not ssql.
+var generatedProgram bool
+
+// MarkGeneratedProgram is the first statement of every generated
+// program's main: whatever the executable is called, it is not ssql, so
+// a local shard runs the ssql on PATH. Before this (v4.93.0–v4.115.0)
+// SelfBin took any executable named ssql* for ssql, and `generate go
+// -run` names its program ssqlgen — each local shard of a catalog ran
+// the whole program again, which ran its shards, …: a fork bomb.
+func MarkGeneratedProgram() { generatedProgram = true }
+
+// selfBinFor is SelfBin's rule, testable: the executable itself only when
+// the process is ssql — not a generated program, and named ssql,
+// ssql_gpu or a test build ssql_* (never ssqlgen or ssql-report).
+func selfBinFor(exe string, generated bool, lookPath func(string) (string, error), fallback string) string {
+	if !generated && exe != "" {
+		base := filepath.Base(exe)
+		if base == "ssql" || base == "ssql_gpu" || strings.HasPrefix(base, "ssql_") {
+			return exe
+		}
+	}
+	if p, err := lookPath("ssql"); err == nil {
 		return p
 	}
 	return fallback
@@ -525,7 +665,14 @@ func ProcessCatalogShards(entries []CatalogEntry, remoteBin string, shardField s
 
 			records := readCatalogJSONL(stdout)
 			stopped := false
+			checked := false
 			for r := range records {
+				if !checked {
+					checked = true
+					if err := hiveClash(r, entry); err != nil {
+						panic(fmt.Errorf("shard %s:%s: %w", entry.Host, entry.Path, err)) // the caller's ssql.Run reports it
+					}
+				}
 				r = enrichCatalogRecord(r, entry, shardField)
 				if !yield(r) {
 					stopped = true

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A generated program with local catalog shards ran itself for each
+  shard — a fork bomb.** `generate go -run` names its program `ssqlgen`,
+  and the local-shard resolution (v4.93.0) took any executable named
+  `ssql*` for ssql, so each shard ran the whole program, which ran its
+  shards, … Every generated program now marks itself
+  (`ssql.MarkGeneratedProgram()`, the first statement of its main) and
+  the name rule is exact (`ssql`, `ssql_gpu`, a test build `ssql_*`).
+  Found running `from catalog -hive` through `generate go -run`; the
+  test harness names its programs `prog`, which is why no gate saw it.
+- **A generated program printed a shard's error and exited 0.** The
+  catalog runtime wrote `Error: shard …` to stderr and let the program
+  finish with partial output and success; it now fails the program (exit
+  1, through its `ssql.Run`), with `-keep-going` too — every shard ran,
+  but the output is partial.
 - **`date()` of a null was an error, and the error thinned the output
   instead of ending it.** On the DFC148 train data, `update -set-expr
   time 'date(departure_time)'` stopped at the first station with no
@@ -34,6 +48,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`from catalog -hive`: a hive layout is a derived catalog** (DFC149
+  §4.1/§4.2). Each `key=value` directory in a shard's path becomes a
+  string column on the shard's records and an exact column for pruning,
+  as a catalog CSV's own columns are: `ssql from catalog -hive
+  'sales/year=*/region=*/*.parquet' | ssql where -if year eq 2026` opens
+  only the 2026 files, because the optimiser lifts the `where` into
+  `-if` (it already did for catalog columns). FILE is a catalog CSV
+  whose rows' paths are hive layouts, or, as here, a glob of data files
+  (a synthesised local row). `-catalog-used` writes the derived catalog,
+  ready to edit into hosts or ranges. The DuckDB "view-only mode" post's
+  `read_parquet('…/year=*/*.parquet', hive_partitioning=true)` step
+  (DFC148 §4.2) is `[["from","catalog","-hive","rail/services/day=*/*.parquet"]]`,
+  and moving the files to three machines is a CSV with a `host` column.
+  Rules, each an error naming the file: every file must have the same
+  keys in the same order; a key that is also a catalog column, or a
+  column of the file, is a clash; a path with no `key=value` directory
+  has nothing to derive. Values are strings in every lane (DuckDB's own
+  inference is uneven: `n=1.5` stays VARCHAR); `cast -type year int`
+  types one. Every lane but SQL (DFC149 §4.6 is the later slice).
+  Library: `ssql.LoadCatalog` (the one way a catalog becomes entries —
+  exec, schema mode, generated programs and the optimiser share it),
+  `ssql.DeriveHiveMetadata`, `ssql.IsGlobPath`, `CatalogEntry.HiveKeys`;
+  `ExpandCatalogGlobs` gives each expanded file its own metadata map.
 - **`from catalog` and `from ssh` answer schema mode.** `SSQL_MODE=schema`
   printed nothing for either (exit 0, no header), so completion, the
   typed lane and the optimiser were blind to them. A catalog now answers
