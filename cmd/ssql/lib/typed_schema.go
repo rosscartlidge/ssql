@@ -190,7 +190,7 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune, o
 			if i >= len(cols) {
 				continue
 			}
-			cols[i].observe(v)
+			cols[i].observe(strings.TrimSpace(v)) // as the decoder and every other lane do
 		}
 	}
 

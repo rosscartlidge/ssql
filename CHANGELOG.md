@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Padded CSV cells in the typed lane.** Every lane trims a cell
+  before typing it, except that typed inference (`SampleCSVSchema`)
+  and the typed decoder parsed the raw cell: a column holding `  7`
+  became a `string` field, `where -if n gt 7` compared lexically, and
+  the record lane shared the wrong type through the sampled advisory
+  types its expression transpiler trusts. Both trim now. Equivalence
+  cases `padded_numeric_cells_are_numbers` (every lane) and
+  `padded_text_cells_are_trimmed` (DuckDB keeps a text cell's padding
+  and is skipped by design; the codelab's cast paragraph says so).
+
 ## [4.118.0] - 2026-10-15
 
 ### Added

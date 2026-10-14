@@ -1531,6 +1531,28 @@ var equivCases = []EquivCase{
 		Skip:     map[string]string{"datafusion": "DataFusion's CSV reader infers 02134 as Int64 — the defect ssql had until DFC133; DuckDB and Postgres agree with ssql"},
 	},
 	{
+		// A padded numeric column is a number in every lane (DuckDB trims
+		// what it parses as a number too). Until 2026-10-15 the typed lane
+		// inferred and decoded the RAW cell: strconv failed on "  7", the
+		// field became a string, and `gt 7` compared lexically — id 3
+		// alone, where every other lane gave 2, 3, 4 (TODO 153).
+		Name:     "padded_numeric_cells_are_numbers",
+		Pipeline: `{{.bin}} from csv {{.data}}/padded.csv | {{.bin}} where -if n gt 7 | {{.bin}} sort id | {{.bin}} include id n`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 2, "n": 8}, {"id": 3, "n": 9}, {"id": 4, "n": 10}},
+	},
+	{
+		// ssql trims text cells too (" a " is "a"): the reader decision,
+		// kept 2026-10-15 and documented in the codelab's cast paragraph.
+		// DuckDB keeps a text cell's padding, so the SQL lane finds no row
+		// and is skipped by design rather than made to trim() every column.
+		Name:     "padded_text_cells_are_trimmed",
+		Pipeline: `{{.bin}} from csv {{.data}}/padded.csv | {{.bin}} where -if s eq a | {{.bin}} include id s`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "s": "a"}},
+		Skip:     map[string]string{"duckdb": "ssql trims every CSV cell before typing it; DuckDB keeps a text cell's padding (TODO 153, a documented reader difference)"},
+	},
+	{
 		// `from csv -type COL time` in RECORD codegen emitted FieldTypeAuto
 		// (its own copy of the type-name table lacked "time"), so the column
 		// stayed a string and a time comparison matched nothing in that lane

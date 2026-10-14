@@ -159,6 +159,12 @@ func corpusData(t *testing.T) string {
 			// The same with an absent numeric cell (row 5 has no b): typed
 			// structs cannot hold absence (DFC124 §3), so cases on it skip typed.
 			"pairs_absent.csv": "id,a,b\n1,5,7\n2,9,3\n5,6,\n",
+			// Padded cells (TODO 153, 2026-10-15): every lane trims a cell
+			// before typing it, so n is a number and s has no spaces. The
+			// n values are chosen so a lexical compare against 7 diverges
+			// (" 8" and "10" sort below "7"), which is what the typed lane
+			// did while it parsed the raw cell. Shuffled.
+			"padded.csv": "id,s,n\n3,\"  c \",9\n1, a ,  7\n4,d,10\n2, b , 8\n",
 			// Set operations (DFC137 §3). Left: shuffled, one row three
 			// times (3/carol), one twice (1/alice). Right whole-row file has
 			// the SAME columns in a DIFFERENT order (SQL matches set

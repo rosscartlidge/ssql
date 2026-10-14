@@ -42,8 +42,14 @@ func (rs *rowSchema) decode(p unsafe.Pointer, rec []string) error {
 		return fmt.Errorf("row has %d columns, expected %d", len(rec), len(rs.decoders))
 	}
 	for i, dec := range rs.decoders {
-		if err := dec(p, rec[i]); err != nil {
-			return fmt.Errorf("column %q: %q is not %s", rs.header[i], strings.TrimSpace(rec[i]), rs.types[i])
+		// Every lane trims a cell before typing it (csv_infer.go's
+		// parse*Cell; DuckDB for the numeric types it parses), so a
+		// padded "  7" is the int 7 and " a " is "a". Until 2026-10-15
+		// the typed lane parsed the raw cell: the column inferred as a
+		// string and `where -if n gt 7` compared lexically.
+		cell := strings.TrimSpace(rec[i])
+		if err := dec(p, cell); err != nil {
+			return fmt.Errorf("column %q: %q is not %s", rs.header[i], cell, rs.types[i])
 		}
 	}
 	return nil
