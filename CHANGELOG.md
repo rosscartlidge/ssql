@@ -5,6 +5,32 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`from catalog` reads a local Parquet shard in-process** (DFC149
+  §4.4). A shard on this machine, in Parquet, with no `-- stage`
+  pushdown, is read by the Parquet reader instead of a child ssql
+  writing JSONL that the parent parses back — per shard, in exec and in
+  generated programs, so a catalog that mixes hosts still reads its
+  local Parquet shards directly. Seven partition files: 3.0 s → 0.9 s;
+  six 500k-row partitions: 8.9 s → 2.2 s against 1.9 s for the plain
+  glob read. Metadata is attached through one output schema per file,
+  not a mutable copy per record. Scale case
+  `catalog-hive-local-fast-path`. A missing or unreadable local shard
+  is now the command's error (exit 1); the subprocess path printed and
+  went on.
+
+### Fixed
+
+- **A catalog's metadata columns came in a different order on every
+  record**, and `-catalog-used` wrote its columns in a different order
+  on every run: enrichment ranged a map. `CatalogEntry.Columns` now
+  carries the catalog's header order, then the hive keys, and every
+  record and the written catalog follow it (the order schema mode
+  promised).
+
 ## [4.117.0] - 2026-10-14
 
 ### Added

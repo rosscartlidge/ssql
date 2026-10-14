@@ -206,6 +206,17 @@ func runShardStream(
 	mode, shardField, remoteBin string,
 	ch chan<- Record,
 ) error {
+	if catalogLocalParquet(entry, groups) {
+		_, err := readLocalParquetShard(entry, shardField, func(r Record) bool {
+			select {
+			case ch <- r:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		})
+		return err
+	}
 	stdout, wait, err := startShardSSH(ctx, entry, requireVersion, groups, mode, remoteBin)
 	if err != nil {
 		return err
@@ -241,6 +252,14 @@ func runShardCollect(
 	groups [][]string,
 	mode, shardField, remoteBin string,
 ) ([]Record, error) {
+	if catalogLocalParquet(entry, groups) {
+		var out []Record
+		_, err := readLocalParquetShard(entry, shardField, func(r Record) bool {
+			out = append(out, r)
+			return ctx.Err() == nil
+		})
+		return out, err
+	}
 	stdout, wait, err := startShardSSH(ctx, entry, requireVersion, groups, mode, remoteBin)
 	if err != nil {
 		return nil, err

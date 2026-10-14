@@ -28,7 +28,7 @@ import (
 
 // scaleGenVersion keys the cached fixture directory: bump when the
 // generator changes and stale fixtures regenerate.
-const scaleGenVersion = 2
+const scaleGenVersion = 3
 
 const scaleRows = 3_000_000 // ~120MB CSV: clears every known trap threshold
 
@@ -78,6 +78,10 @@ func scaleDir(t *testing.T) string {
 			bin + " from csv big.csv | " + bin + " tee big.jsonl > /dev/null",
 			bin + " from csv big.csv | " + bin + " to json big.json",
 			bin + " from csv big.csv | " + bin + " to parquet big.parquet",
+			// A hive layout of the same rows (DFC149): six partition
+			// files under parts/dept=X/, the key removed from the files
+			// as DuckDB's PARTITION_BY writes them.
+			"for d in eng sales ops legal hr labs; do mkdir -p parts/dept=$d && " + bin + " from parquet big.parquet | " + bin + " where -if dept eq $d | " + bin + " exclude dept | " + bin + " to parquet parts/dept=$d/big.parquet || exit 1; done",
 		} {
 			c := exec.Command("bash", "-c", cmdline)
 			c.Dir = dir
@@ -190,6 +194,16 @@ func TestScaleBudgets(t *testing.T) {
 		repo, _ := filepath.Abs("../..")
 		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
 			bin+" from json big.json | "+bin+" group-by dept -count n | "+bin+" to csv' > /dev/null", 60*time.Second)
+	})
+	t.Run("catalog-hive-local-fast-path", func(t *testing.T) {
+		// DFC149 §4.4: local Parquet shards are read in-process. Measured
+		// 2026-10-14 on the six 500k-row partitions: the glob read 1.9 s,
+		// the fast path 2.2 s, the subprocess-per-shard path (a child
+		// ssql writing JSONL this process parses back) 8.9 s — the
+		// ceiling is what catches that path coming back for local files.
+		budget(t, dir, bin+" from catalog -hive 'parts/dept=*/big.parquet' | "+bin+" count", 6*time.Second)
+		// Pruning opens one file: a sixth of the work.
+		budget(t, dir, bin+" from catalog -hive 'parts/dept=*/big.parquet' -if dept eq hr | "+bin+" count", 2*time.Second)
 	})
 	t.Run("jsonl-scan", func(t *testing.T) {
 		// The legacy per-line-Unmarshal reader class was 4× the csv

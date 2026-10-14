@@ -23,6 +23,12 @@ type CatalogEntry struct {
 	Format   string
 	Bin      string // optional absolute path of ssql on this shard's host ("bin" column); "" = resolve there
 	Metadata map[string]string
+	// Columns: the metadata keys in the order the records carry them —
+	// the catalog's header order, then the hive keys (DeriveHiveMetadata
+	// appends). nil for an entry built by hand: catalogMetaColumns then
+	// sorts the keys. Until 2026-10-14 enrichment ranged the map, so the
+	// column order differed from record to record.
+	Columns []string
 	// HiveKeys: the metadata keys derived from the path's key=value
 	// directories (DeriveHiveMetadata), in path order; nil for a row whose
 	// metadata is all from the catalog. A shard column of the same name is
@@ -106,6 +112,7 @@ func ReadCatalog(filename string) ([]CatalogEntry, error) {
 			if isCatalogReservedColumn(h) {
 				continue
 			}
+			entry.Columns = append(entry.Columns, h)
 			if i < len(row) {
 				entry.Metadata[h] = strings.TrimSpace(row[i])
 			}
@@ -330,6 +337,7 @@ func ExpandCatalogGlobs(entries []CatalogEntry) []CatalogEntry {
 				Format:   entry.Format,
 				Bin:      entry.Bin,
 				Metadata: maps.Clone(entry.Metadata), // the row's metadata for every file; a copy, so -hive can add per file
+				Columns:  slices.Clone(entry.Columns),
 			}
 			result = append(result, expanded)
 		}
@@ -406,9 +414,29 @@ func DeriveHiveMetadata(entries []CatalogEntry) ([]CatalogEntry, error) {
 			md[k] = values[j]
 		}
 		e.Metadata = md
+		e.Columns = append(catalogMetaColumns(*e), keys...)
 		e.HiveKeys = keys
 	}
 	return entries, nil
+}
+
+// catalogMetaColumns is the order an entry's metadata columns take on
+// its records: Columns when the catalog set it, else the keys sorted.
+func catalogMetaColumns(e CatalogEntry) []string {
+	if e.Columns != nil {
+		return e.Columns
+	}
+	return slices.Sorted(maps.Keys(e.Metadata))
+}
+
+// catalogEntryFormat is the format a shard is read as: the catalog's
+// format column, else the path's extension (what a bare `from PATH`
+// infers on the shard).
+func catalogEntryFormat(e CatalogEntry) string {
+	if e.Format != "" {
+		return e.Format
+	}
+	return strings.TrimPrefix(strings.ToLower(filepath.Ext(e.Path)), ".")
 }
 
 // hivePathMetadata returns the key=value directory segments of a path,
@@ -446,16 +474,18 @@ func hiveClash(r Record, entry CatalogEntry) error {
 func WriteCatalog(w io.Writer, entries []CatalogEntry) error {
 	writer := csv.NewWriter(w)
 
-	// Collect all metadata keys
-	metaKeys := make(map[string]bool)
-	for _, e := range entries {
-		for k := range e.Metadata {
-			metaKeys[k] = true
-		}
-	}
+	// The metadata columns, in the order the entries carry them (a
+	// catalog's header order, then hive keys); the map order it was until
+	// 2026-10-14 shuffled -catalog-used's columns from run to run.
+	seen := make(map[string]bool)
 	var sortedKeys []string
-	for k := range metaKeys {
-		sortedKeys = append(sortedKeys, k)
+	for _, e := range entries {
+		for _, k := range catalogMetaColumns(e) {
+			if !seen[k] {
+				seen[k] = true
+				sortedKeys = append(sortedKeys, k)
+			}
+		}
 	}
 
 	anyBin := false
@@ -643,6 +673,19 @@ func RemoteScriptCommand(bin, remotePath, mode string) string {
 func ProcessCatalogShards(entries []CatalogEntry, remoteBin string, shardField string, pipelineArgs [][]string) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
 		for _, entry := range entries {
+			if catalogLocalParquet(entry, pipelineArgs) {
+				// DFC149 §4.4: a local Parquet shard is read in this
+				// process; an error is the shard's, reported by the
+				// caller's ssql.Run.
+				stopped, err := readLocalParquetShard(entry, shardField, yield)
+				if err != nil {
+					panic(fmt.Errorf("shard %s:%s: %w", entry.Host, entry.Path, err))
+				}
+				if stopped {
+					return
+				}
+				continue
+			}
 			remoteCmd := BuildRemoteCommand(shardBin(entry, remoteBin), entry.Path, entry.Format, pipelineArgs)
 
 			var cmd *exec.Cmd
@@ -820,13 +863,15 @@ func enrichCatalogRecord(r Record, entry CatalogEntry, shardField string) Record
 	if shardField != "" {
 		mut = mut.String(shardField, entry.Host+":"+entry.Path)
 	}
-	for k, v := range entry.Metadata {
-		if strings.HasSuffix(k, "_from") || strings.HasSuffix(k, "_to") {
-			continue
-		}
-		if v != "" {
+	for _, k := range catalogMetaColumns(entry) {
+		if v := entry.Metadata[k]; v != "" && !isCatalogRangeColumn(k) {
 			mut = mut.String(k, v)
 		}
 	}
 	return mut.Freeze()
+}
+
+// isCatalogRangeColumn: a _from/_to column prunes and is not a field.
+func isCatalogRangeColumn(k string) bool {
+	return strings.HasSuffix(k, "_from") || strings.HasSuffix(k, "_to")
 }

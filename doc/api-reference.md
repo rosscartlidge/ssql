@@ -1978,14 +1978,15 @@ you are unlikely to want them in an application.
 ### Catalogs and remote execution
 
 ```go
-func ReadCatalog(filename string) ([]CatalogEntry, error)        // host, path, optional format and bin; the rest is metadata
+func ReadCatalog(filename string) ([]CatalogEntry, error)        // host, path, optional format and bin; the rest is metadata (CatalogEntry.Columns keeps its header order; hive keys follow)
 func LoadCatalog(file string, hive bool, filters []CatalogFilter) ([]CatalogEntry, error)   // the one loader: a catalog CSV or (hive) a glob; prune, expand, derive, prune
 func DeriveHiveMetadata(entries []CatalogEntry) ([]CatalogEntry, error)   // key=value directories → per-entry metadata (HiveKeys); one layout for all
 func IsGlobPath(path string) bool
 func MarkGeneratedProgram()   // the first statement of a generated main: this executable is not ssql (SelfBin)
 func CatalogColumns(filename string) (cols []string, ranges map[string]bool, err error)   // the metadata columns in header order; range pairs by base name, also in ranges
 func ShardBin(entry CatalogEntry, remoteBin string) string   // the ssql a shard runs: its bin column, else remoteBin, else SelfBin locally
-func WriteCatalog(w io.Writer, entries []CatalogEntry) error
+func WriteCatalog(w io.Writer, entries []CatalogEntry) error      // columns in the entries' order
+// ProcessCatalogShards and ProcessCatalogShardsRemoteGo read a local Parquet shard in-process when no stages are pushed down (DFC149 §4.4)
 func PruneCatalog(entries []CatalogEntry, filters []CatalogFilter) []CatalogEntry   // range (from/to) and exact-value pruning
 func ExpandCatalogGlobs(entries []CatalogEntry) []CatalogEntry   // local globs and remote `echo` expansion
 func ProcessCatalogShards(entries []CatalogEntry, remoteBin string, shardField string, pipelineArgs [][]string) iter.Seq[Record]

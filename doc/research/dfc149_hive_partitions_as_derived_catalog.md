@@ -153,6 +153,21 @@ two existing flags.
 
 ### 4.4 A local fast path
 
+**Built 2026-10-14** (`catalog_local.go`): per shard, not per catalog —
+a local Parquet shard with no pushdown stages is read in-process by
+`ProcessCatalogShards` (exec) and by both runners of
+`ProcessCatalogShardsRemoteGo` (generated programs), so a catalog that
+mixes hosts still reads its local Parquet shards directly. Metadata is
+attached through one output schema per source schema
+(`catalogEnricher`), not a `ToMutable` per record. Measured on six
+500k-row partitions: glob read 1.9 s, fast path 2.2 s, subprocess path
+8.9 s; on the seven rail files 3.0 s → 0.9 s. Scale case
+`catalog-hive-local-fast-path` (ceiling 6 s; pruned read 2 s). Found
+and fixed on the way: metadata columns ranged a map, so their order
+differed from record to record and `-catalog-used`'s header shuffled
+between runs — `CatalogEntry.Columns` now carries the catalog's header
+order, then the hive keys. The text below is the proposal.
+
 When every pruned entry is local and the same format, and that format
 has an in-process multi-file reader (Parquet today: `ReadParquetFiles`;
 Arrow and CSV lists can follow), `from catalog` reads in-process and
@@ -235,7 +250,7 @@ own.
 1. ~~§4.5 schema mode~~ DONE 2026-10-13.
 2. ~~§4.1 derivation + §4.2 glob form + the optimiser's derived columns~~
    DONE 2026-10-14.
-3. §4.4 fast path, Parquet first, with the scale case.
+3. ~~§4.4 fast path, Parquet first, with the scale case~~ DONE 2026-10-14.
 4. §4.6 typed and SQL lanes.
 
 Effort: 1 is small; 2 is a day; 3 is the larger piece, a day or two
