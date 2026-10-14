@@ -12,7 +12,7 @@ package ssql
 
 // catalogLocalParquet reports whether a shard takes the fast path.
 func catalogLocalParquet(e CatalogEntry, pushdown [][]string) bool {
-	return len(pushdown) == 0 && IsLocalHost(e.Host) && catalogEntryFormat(e) == "parquet"
+	return len(pushdown) == 0 && IsLocalHost(e.Host) && CatalogEntryFormat(e) == "parquet"
 }
 
 // readLocalParquetShard reads one shard in-process, checks the hive
@@ -59,15 +59,10 @@ type enrichPlan struct {
 
 func newCatalogEnricher(entry CatalogEntry, shardField string) *catalogEnricher {
 	e := &catalogEnricher{plans: map[*Schema]enrichPlan{}}
-	if shardField != "" {
-		e.keys = append(e.keys, shardField)
-		e.extra = append(e.extra, entry.Host+":"+entry.Path)
-	}
-	for _, k := range catalogMetaColumns(entry) {
-		if v := entry.Metadata[k]; v != "" && !isCatalogRangeColumn(k) {
-			e.keys = append(e.keys, k)
-			e.extra = append(e.extra, v)
-		}
+	names, values := CatalogRecordMetadata(entry, shardField)
+	for i, k := range names {
+		e.keys = append(e.keys, k)
+		e.extra = append(e.extra, values[i])
 	}
 	return e
 }

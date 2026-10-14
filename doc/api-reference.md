@@ -1986,6 +1986,8 @@ func MarkGeneratedProgram()   // the first statement of a generated main: this e
 func CatalogColumns(filename string) (cols []string, ranges map[string]bool, err error)   // the metadata columns in header order; range pairs by base name, also in ranges
 func ShardBin(entry CatalogEntry, remoteBin string) string   // the ssql a shard runs: its bin column, else remoteBin, else SelfBin locally
 func WriteCatalog(w io.Writer, entries []CatalogEntry) error      // columns in the entries' order
+func CatalogRecordMetadata(e CatalogEntry, shardField string) (names, values []string) // the metadata a shard's records carry, in order: the shard field (host:path), then the columns; range columns and empty values skipped
+func CatalogEntryFormat(e CatalogEntry) string                 // the catalog's format column, else the path's extension
 // ProcessCatalogShards and ProcessCatalogShardsRemoteGo read a local Parquet shard in-process when no stages are pushed down (DFC149 §4.4)
 func PruneCatalog(entries []CatalogEntry, filters []CatalogFilter) []CatalogEntry   // range (from/to) and exact-value pruning
 func ExpandCatalogGlobs(entries []CatalogEntry) []CatalogEntry   // local globs and remote `echo` expansion

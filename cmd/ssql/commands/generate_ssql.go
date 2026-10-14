@@ -2,6 +2,7 @@ package commands
 
 import (
 	"github.com/rosscartlidge/ssql/v4"
+	"regexp"
 	"slices"
 	"encoding/csv"
 	"encoding/json"
@@ -866,6 +867,9 @@ func ruleMergeCatalogPredicatePushdown(cmds []*pipelineCmd) []ruleApplication {
 		if j == -1 || cmds[j].Kind != "where" {
 			continue
 		}
+		if whereReferences(cmds[j].RawArgs, catalogMetaCols(cmds[i].MergeCatalogFile, false, cmds[i].MergeCatalogShardField)) {
+			continue
+		}
 		before := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
 		pushArgs := append([]string{"where"}, cmds[j].RawArgs...)
 		if len(cmds[i].MergeCatalogPushDown) > 0 {
@@ -885,7 +889,7 @@ func ruleMergeCatalogPredicatePushdown(cmds []*pipelineCmd) []ruleApplication {
 	return rules
 }
 
-// ruleMergeCatalogAggregationPushdown moves a group-by after "merge -catalog" (with pushdown) into pushdown.
+// ruleMergeCatalogAggregationPushdown splits a group-by after "merge -catalog" (with pushdown) into a per-shard partial aggregate and the parent's re-aggregation (splitGroupByPushdown).
 func ruleMergeCatalogAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
 	var rules []ruleApplication
 	for i := 0; i < len(cmds); i++ {
@@ -899,12 +903,15 @@ func ruleMergeCatalogAggregationPushdown(cmds []*pipelineCmd) []ruleApplication 
 		if j == -1 || cmds[j].Kind != "group-by" {
 			continue
 		}
+		shard, parent, ok := splitGroupByPushdown(cmds[j].RawArgs, catalogMetaCols(cmds[i].MergeCatalogFile, false, cmds[i].MergeCatalogShardField))
+		if !ok {
+			continue
+		}
 		before := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
-		pushArgs := append([]string{"group-by"}, cmds[j].RawArgs...)
 		cmds[i].MergeCatalogPushDown = append(cmds[i].MergeCatalogPushDown, "+")
-		cmds[i].MergeCatalogPushDown = append(cmds[i].MergeCatalogPushDown, pushArgs...)
-		cmds[j].Removed = true
-		after := renderCmd(cmds[i])
+		cmds[i].MergeCatalogPushDown = append(cmds[i].MergeCatalogPushDown, shard...)
+		cmds[j].RawArgs = parent
+		after := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
 		rules = append(rules, ruleApplication{
 			Rule:   "merge-catalog-aggregation-pushdown",
 			Before: before,
@@ -1115,6 +1122,9 @@ func ruleCatalogPredicatePushdown(cmds []*pipelineCmd) []ruleApplication {
 		if j == -1 || cmds[j].Kind != "where" {
 			continue
 		}
+		if whereReferences(cmds[j].RawArgs, catalogMetaCols(cmds[i].CatalogFile, cmds[i].CatalogHive, cmds[i].CatalogShardField)) {
+			continue // the shard has no such column; the parent's records do
+		}
 		before := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
 		pushArgs := append([]string{"where"}, cmds[j].RawArgs...)
 		if len(cmds[i].CatalogPushDown) > 0 {
@@ -1134,7 +1144,9 @@ func ruleCatalogPredicatePushdown(cmds []*pipelineCmd) []ruleApplication {
 	return rules
 }
 
-// ruleCatalogAggregationPushdown moves a group-by after "from catalog" (with push-down) into push-down.
+// ruleCatalogAggregationPushdown splits a group-by after "from catalog"
+// (with push-down) into a per-shard partial aggregate and the parent's
+// re-aggregation (splitGroupByPushdown).
 func ruleCatalogAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
 	var rules []ruleApplication
 	for i := 0; i < len(cmds); i++ {
@@ -1148,12 +1160,15 @@ func ruleCatalogAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
 		if j == -1 || cmds[j].Kind != "group-by" {
 			continue
 		}
+		shard, parent, ok := splitGroupByPushdown(cmds[j].RawArgs, catalogMetaCols(cmds[i].CatalogFile, cmds[i].CatalogHive, cmds[i].CatalogShardField))
+		if !ok {
+			continue
+		}
 		before := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
-		pushArgs := append([]string{"group-by"}, cmds[j].RawArgs...)
 		cmds[i].CatalogPushDown = append(cmds[i].CatalogPushDown, "+")
-		cmds[i].CatalogPushDown = append(cmds[i].CatalogPushDown, pushArgs...)
-		cmds[j].Removed = true
-		after := renderCmd(cmds[i])
+		cmds[i].CatalogPushDown = append(cmds[i].CatalogPushDown, shard...)
+		cmds[j].RawArgs = parent
+		after := renderCmd(cmds[i]) + " | " + renderCmd(cmds[j])
 		rules = append(rules, ruleApplication{
 			Rule:   "catalog-aggregation-pushdown",
 			Before: before,
@@ -1161,6 +1176,94 @@ func ruleCatalogAggregationPushdown(cmds []*pipelineCmd) []ruleApplication {
 		})
 	}
 	return rules
+}
+
+// catalogMetaCols is the set of columns a catalog's records carry that
+// its shards do not: the catalog's own columns (range pairs excluded —
+// their base name is a column of the file), the hive keys and the shard
+// field. Empty when the catalog cannot be read; the rules that consult it
+// then assume every column is the shard's, as they did before 2026-10-14.
+func catalogMetaCols(file string, hive bool, shardField string) map[string]bool {
+	meta := map[string]bool{}
+	cols, ranges, err := readCatalogMetadataColumns(file, hive)
+	if err == nil {
+		for c := range cols {
+			if !ranges[c] {
+				meta[c] = true
+			}
+		}
+	}
+	if shardField != "" {
+		meta[shardField] = true
+	}
+	return meta
+}
+
+// whereReferences reports whether a where stage may read one of the
+// columns: a structured condition names it, or an expression (whose
+// fields the parser does not enumerate) contains it as a word.
+func whereReferences(args []string, cols map[string]bool) bool {
+	if len(cols) == 0 {
+		return false
+	}
+	fields, opaque := extractWhereFields(args)
+	for _, f := range fields {
+		if cols[f] {
+			return true
+		}
+	}
+	if !opaque {
+		return false
+	}
+	for _, a := range args {
+		for c := range cols {
+			if regexp.MustCompile(`\b` + regexp.QuoteMeta(c) + `\b`).MatchString(a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// splitGroupByPushdown rewrites a group-by for per-shard pushdown. Until
+// 2026-10-14 the rule shipped the group-by to the shards and DELETED it
+// from the parent, so a catalog with several shards emitted one partial
+// row per shard and key with the shard's metadata appended — wrong
+// whenever a key spans shards — and a key that was a metadata column (a
+// hive key) grouped on a column the shard does not have. Now the shard
+// aggregates over the keys it holds (none means one row per shard) and
+// the parent re-aggregates over every key: -count/-sum partials are
+// summed, -min/-max take the extreme (aggDef.merge). Keys that are
+// metadata columns are grouped in the parent only, where the records
+// carry them. An aggregate with no merge form (-avg, -count-distinct,
+// -collect, …), an expression, rollup/cube or any other flag returns
+// ok=false and the group-by stays where it is.
+func splitGroupByPushdown(args []string, metaCols map[string]bool) (shard, parent []string, ok bool) {
+	var keys []string
+	i := 0
+	for i < len(args) && !strings.HasPrefix(args[i], "-") && !strings.HasPrefix(args[i], "+") {
+		keys = append(keys, args[i])
+		i++
+	}
+	shard = append(shard, "group-by")
+	for _, k := range keys {
+		if !metaCols[k] {
+			shard = append(shard, k)
+		}
+	}
+	parent = append(parent, keys...) // RawArgs: the stage name is not among them
+	for i < len(args) {
+		d, found := aggDefByFlag(args[i])
+		if !found || d.merge == "" || i+d.arity() >= len(args) {
+			return nil, nil, false
+		}
+		n := d.arity()
+		result := args[i+n]
+		shard = append(shard, args[i:i+n+1]...)
+		parent = append(parent, d.merge, result, result)
+		i += n + 1
+	}
+	return shard, parent, true
 }
 
 // ruleExprCanonicalize rewrites trivial -if-expr predicates (conjunctions

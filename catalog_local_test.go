@@ -57,6 +57,22 @@ func TestCatalogLocalParquetFastPath(t *testing.T) {
 			t.Errorf("record %d fields %v, want %v", i, r.Schema().Fields(), wantFields)
 		}
 	}
+	// The glob form (no catalog CSV, so no Columns from a header): the
+	// derived key is the only metadata column, listed ONCE — it was
+	// appended to the sorted map keys after joining the map, so every
+	// record carried day twice (2026-10-14).
+	globEntries, err := LoadCatalog(filepath.Join(dir, "pq/day=*/*.parquet"), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(globEntries[0].Columns, []string{"day"}) {
+		t.Errorf("glob form columns %v, want [day]", globEntries[0].Columns)
+	}
+	for i, r := range slices.Collect(ProcessCatalogShards(globEntries, "/nonexistent/ssql", "", nil)) {
+		if want := []string{"id", "name", "day"}; !slices.Equal(r.Schema().Fields(), want) {
+			t.Errorf("glob record %d fields %v, want %v", i, r.Schema().Fields(), want)
+		}
+	}
 	if records[0].Schema() != records[1].Schema() {
 		t.Error("records of one shard must share one output schema")
 	}

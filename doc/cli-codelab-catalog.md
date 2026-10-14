@@ -57,8 +57,12 @@ pushed stages decide how much of the file crosses the network: a
 on each host; a `bin` column names it when it is somewhere unusual.
 
 You rarely write the `--` yourself. The optimiser lifts a `where` on a
-catalog column into `-if`, and `generate ssql -explain` shows the
-rewrite:
+catalog column into `-if`, pushes the rest of the `where` into the
+shards, and splits a `group-by` the way the line above does: the
+partial `-count`, `-sum`, `-min` or `-max` runs on each shard and the
+stage after the merge re-aggregates it (an `-avg` or a `-count-distinct`
+cannot be split, so it stays where it is). `generate ssql -explain`
+shows the rewrites:
 
 ```bash
 (export SSQL_MODE=record; ssql from catalog shards.csv | ssql where -if month eq 2026-02 | ssql group-by status -count n | ssql to table) | ssql generate ssql -explain
@@ -104,6 +108,15 @@ you in `generate ssql`, `generate go` and `run`:
 (export SSQL_MODE=record; ssql from catalog -hive 'orders/month=*/*.parquet' | ssql where -if month eq 2026-02 | ssql count) | ssql generate ssql -explain
 ssql from catalog -hive 'orders/month=*/*.parquet' -if month eq 2026-02 -catalog-used hive.csv | ssql count
 cat hive.csv
+```
+
+When every file is local Parquet, `generate sql` has a form too: ssql
+prunes the catalog as the SQL is written, so the SQL names only the
+files that survive, and DuckDB derives the `month` column from the
+paths as ssql does (as text, never a number):
+
+```bash
+(export SSQL_MODE=record; ssql from catalog -hive 'orders/month=*/*.parquet' -if month eq 2026-02 | ssql group-by month -count n | ssql to table) | ssql generate sql
 ```
 
 Look at `hive.csv`: it is a plain catalog, with the derived column

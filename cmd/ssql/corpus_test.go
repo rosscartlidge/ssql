@@ -233,6 +233,22 @@ func corpusData(t *testing.T) string {
 				return
 			}
 		}
+		// A catalog CSV over the hive files with a metadata column of its
+		// own (DFC149 §4.6): catalog paths are relative to the working
+		// directory, not the catalog, so they are written absolute.
+		pqcat := "host,path,region\nlocal," + filepath.Join(dir, "pqhive/region=north/data.parquet") + ",n\nlocal," + filepath.Join(dir, "pqhive/region=south/data.parquet") + ",s\n"
+		if err := os.WriteFile(filepath.Join(dir, "pqcat.csv"), []byte(pqcat), 0o644); err != nil {
+			corpusDataErr = err
+			return
+		}
+		// Two shards whose region values SPAN the files (north in both),
+		// for the aggregation pushdown: a per-shard partial that the
+		// parent fails to re-aggregate shows as two north rows.
+		pqcat2 := "host,path,src\nlocal," + filepath.Join(dir, "pq/a.parquet") + ",a\nlocal," + filepath.Join(dir, "pq/b.parquet") + ",b\n"
+		if err := os.WriteFile(filepath.Join(dir, "pqcat2.csv"), []byte(pqcat2), 0o644); err != nil {
+			corpusDataErr = err
+			return
+		}
 	})
 	if corpusDataErr != nil {
 		t.Fatal(corpusDataErr)

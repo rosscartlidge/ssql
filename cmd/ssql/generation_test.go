@@ -2443,3 +2443,91 @@ func TestGenerateStageFailureIsLoud(t *testing.T) {
 		t.Errorf("headless chain: err=%v\n%s", err, out)
 	}
 }
+
+// TestCatalogAggregationPushdown pins the split the catalog-aggregation-
+// pushdown rule makes (2026-10-14): the shard runs a partial group-by
+// over the keys it holds, the parent re-aggregates every key with the
+// merge form (-count/-sum → -sum, -min/-max → the same). Until then the
+// rule deleted the parent's group-by, so several shards gave several
+// partial rows per key. The catalog has an exact column (region), a
+// range pair (date) and a shard field.
+func TestCatalogAggregationPushdown(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+	catFile := filepath.Join(t.TempDir(), "catalog.csv")
+	if err := os.WriteFile(catFile, []byte(
+		"host,path,region,date_from,date_to\n"+
+			"n1,/data/s1.csv,east,2026-01-01,2026-02-01\n"+
+			"n2,/data/s2.csv,west,2026-02-15,2026-03-15\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		stages   string
+		wantStrs []string
+		rejects  []string
+	}{
+		{
+			// A file column key: both halves group on it.
+			name:     "file column key",
+			stages:   `| /tmp/ssql_test where -if amount gt 3 | /tmp/ssql_test group-by city -count n -sum amount s -min amount lo -max amount hi`,
+			wantStrs: []string{`-- where -if amount gt 3 + group-by city -count n -sum amount s -min amount lo -max amount hi | ssql group-by city -sum n n -sum s s -min lo lo -max hi hi`},
+		},
+		{
+			// A metadata key: the shard has no such column, so it
+			// aggregates to one row and the parent groups on the key.
+			name:     "metadata key stays in the parent",
+			stages:   `| /tmp/ssql_test where -if amount gt 3 | /tmp/ssql_test group-by region city -count n`,
+			wantStrs: []string{`+ group-by city -count n | ssql group-by region city -sum n n`},
+		},
+		{
+			// A range pair's base name IS a file column.
+			name:     "range base name is the shard's",
+			stages:   `| /tmp/ssql_test where -if amount gt 3 | /tmp/ssql_test group-by date -count n`,
+			wantStrs: []string{`+ group-by date -count n | ssql group-by date -sum n n`},
+		},
+		{
+			name:     "shard field stays in the parent",
+			stages:   `-shard-field shard | /tmp/ssql_test where -if amount gt 3 | /tmp/ssql_test group-by shard -count n`,
+			wantStrs: []string{`+ group-by -count n | ssql group-by shard -sum n n`},
+		},
+		{
+			// No merge form: the where is pushed, the group-by is not.
+			name:     "avg does not split",
+			stages:   `| /tmp/ssql_test where -if amount gt 3 | /tmp/ssql_test group-by city -avg amount a`,
+			wantStrs: []string{`-- where -if amount gt 3 | ssql group-by city -avg amount a`},
+			rejects:  []string{`+ group-by`},
+		},
+		{
+			// A where that reads a metadata column through an expression
+			// the parser cannot enumerate is not pushed: the shard has no
+			// region.
+			name:    "where on a metadata column is not pushed",
+			stages:  `| /tmp/ssql_test where -if-expr 'len(region) > 2'`,
+			rejects: []string{`-- where`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("bash", "-c",
+				`(export SSQL_MODE=record; /tmp/ssql_test from catalog `+catFile+` `+tt.stages+` | /tmp/ssql_test to jsonl) | /tmp/ssql_test generate ssql`)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("generate ssql failed: %v\n%s", err, out)
+			}
+			for _, want := range tt.wantStrs {
+				if !strings.Contains(string(out), want) {
+					t.Errorf("optimised pipeline missing %q:\n%s", want, out)
+				}
+			}
+			for _, reject := range tt.rejects {
+				if strings.Contains(string(out), reject) {
+					t.Errorf("optimised pipeline should not contain %q:\n%s", reject, out)
+				}
+			}
+		})
+	}
+}

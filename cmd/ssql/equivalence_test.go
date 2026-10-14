@@ -133,9 +133,12 @@ func equivCommon(a, b []string) []string {
 
 // equivColumnOrder is the positional union of a lane's JSONL key order
 // (the writers' rule: a key first seen in a later row goes after the key
-// that precedes it there), for comparing column order across lanes.
-func equivColumnOrder(raw string) []string {
-	var fields []string
+// that precedes it there), for comparing column order across lanes. dup
+// is a key one record carries twice: every JSON reader keeps one copy,
+// so no parsing oracle can see it — the hive glob form attached its
+// derived key twice to every record for a day (2026-10-14) and every
+// lane agreed.
+func equivColumnOrder(raw string) (fields []string, dup string) {
 	seen := map[string]bool{}
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
@@ -144,6 +147,7 @@ func equivColumnOrder(raw string) []string {
 		}
 		dec := json.NewDecoder(strings.NewReader(line))
 		depth, prev := 0, ""
+		inLine := map[string]bool{}
 		for {
 			tok, err := dec.Token()
 			if err != nil {
@@ -167,6 +171,10 @@ func equivColumnOrder(raw string) []string {
 				if err := dec.Decode(&val); err != nil {
 					break
 				}
+				if inLine[key] && dup == "" {
+					dup = key
+				}
+				inLine[key] = true
 				if !seen[key] {
 					seen[key] = true
 					placed := false
@@ -187,7 +195,7 @@ func equivColumnOrder(raw string) []string {
 			}
 		}
 	}
-	return fields
+	return fields, dup
 }
 
 // equivLane is one result-producing path.
@@ -600,7 +608,10 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 			continue
 		}
 		results[ln.name] = equivParse(t, ln.name, raw)
-		columns[ln.name] = equivColumnOrder(raw)
+		var dup string
+		if columns[ln.name], dup = equivColumnOrder(raw); dup != "" {
+			t.Errorf("lane %q: a record carries the key %q twice — invisible to a JSON reader, so no other oracle sees it", ln.name, dup)
+		}
 	}
 
 	ref, ok := results["exec"]
@@ -1563,9 +1574,10 @@ var equivCases = []EquivCase{
 	{
 		// DFC149: a hive layout read as a derived catalog. region comes
 		// from the directory, as a string, on every record; the files are
-		// read in catalog (glob) order, so sort decides. No SQL lane:
-		// from catalog has no SQL equivalent (DFC149 §4.6 is the later
-		// slice); the typed lanes take the catalog's record form.
+		// read in catalog (glob) order, so sort decides. The duckdb lane
+		// (§4.6) reads the same files with DuckDB's own partition
+		// derivation, the independent oracle for the key column; the
+		// typed lanes take the catalog's record form.
 		Name:     "catalog_hive_glob",
 		Pipeline: `{{.bin}} from catalog -hive '{{.data}}/pqhive/region=*/data.parquet' | {{.bin}} sort id`,
 		Ordered:  true,
@@ -1575,12 +1587,12 @@ var equivCases = []EquivCase{
 			{"id": 6, "name": "hal", "amount": 9, "region": "north"},
 			{"id": 8, "name": "ivy", "amount": 4, "region": "south"},
 		},
-		Skip: map[string]string{"duckdb": "from catalog has no SQL equivalent (DFC149 §4.6)"},
 	},
 	{
 		// A where on the derived column: the same rows in every lane,
 		// whether it prunes files (the optimiser lifts it into -if) or
-		// filters records.
+		// filters records (the SQL lane sees the pipeline as typed, so
+		// its WHERE compares the VARCHAR key).
 		Name:     "catalog_hive_where",
 		Pipeline: `{{.bin}} from catalog -hive '{{.data}}/pqhive/region=*/data.parquet' | {{.bin}} where -if region eq north | {{.bin}} sort id`,
 		Ordered:  true,
@@ -1588,7 +1600,69 @@ var equivCases = []EquivCase{
 			{"id": 3, "name": "gus", "amount": 2.5, "region": "north"},
 			{"id": 6, "name": "hal", "amount": 9, "region": "north"},
 		},
-		Skip: map[string]string{"duckdb": "from catalog has no SQL equivalent (DFC149 §4.6)"},
+	},
+	{
+		// The -if form the optimiser produces: pruned at generate time,
+		// so the SQL names one file; a where on a file column after it.
+		Name:     "catalog_hive_if_pruned",
+		Pipeline: `{{.bin}} from catalog -hive '{{.data}}/pqhive/region=*/data.parquet' -if region eq south | {{.bin}} where -if amount gt 5 | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "name": "jon", "amount": 11.5, "region": "south"}},
+	},
+	{
+		// A catalog CSV with a metadata column of its own over the same
+		// files (no -hive): the SQL lane carries the column as a literal
+		// per file, after the file's columns, as the records do.
+		Name:     "catalog_csv_parquet_literals",
+		Pipeline: `{{.bin}} from catalog {{.data}}/pqcat.csv | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "name": "jon", "amount": 11.5, "region": "s"},
+			{"id": 3, "name": "gus", "amount": 2.5, "region": "n"},
+			{"id": 6, "name": "hal", "amount": 9, "region": "n"},
+			{"id": 8, "name": "ivy", "amount": 4, "region": "s"},
+		},
+	},
+	{
+		// The aggregation pushdown (catalog-aggregation-pushdown): the
+		// shard aggregates, the parent re-aggregates. north spans both
+		// files, so the old rule — shard group-by, parent deleted — gave
+		// two north rows with a src column (shipped until 2026-10-14).
+		// exec does not optimise; the Go lanes and run do; DuckDB is the
+		// oracle.
+		Name:     "catalog_pushdown_groupby",
+		Pipeline: `{{.bin}} from catalog {{.data}}/pqcat2.csv | {{.bin}} where -if amount gt 3 | {{.bin}} group-by region -count n -sum amount s -min amount lo -max amount hi | {{.bin}} sort region`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"region": "east", "n": 1, "s": 8.75, "lo": 8.75, "hi": 8.75},
+			{"region": "north", "n": 2, "s": 52.5, "lo": 12.5, "hi": 40},
+			{"region": "south", "n": 2, "s": 24.75, "lo": 3.25, "hi": 21.5},
+		},
+	},
+	{
+		// A key that is the derived column: the shard cannot group on it
+		// (the old rule shipped it and the shard's empty region column
+		// then clashed with the key); the parent groups on it alone.
+		Name:     "catalog_hive_pushdown_groupby_key",
+		Pipeline: `{{.bin}} from catalog -hive '{{.data}}/pqhive/region=*/data.parquet' | {{.bin}} where -if amount gt 3 | {{.bin}} group-by region -count n | {{.bin}} sort region`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"region": "north", "n": 1}, {"region": "south", "n": 2}},
+	},
+	{
+		// An aggregate with no merge form: the rule must not fire (an
+		// average of per-shard averages is not the average).
+		Name:     "catalog_pushdown_groupby_avg",
+		Pipeline: `{{.bin}} from catalog {{.data}}/pqcat2.csv | {{.bin}} where -if amount gt 3 | {{.bin}} group-by region -avg amount a | {{.bin}} sort region`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"region": "east", "a": 8.75}, {"region": "north", "a": 26.25}, {"region": "south", "a": 12.375}},
+	},
+	{
+		// -shard-field names the file on every record (host:path, so no
+		// Golden: the path is the fixture's); it goes before the derived
+		// key, in every lane.
+		Name:     "catalog_hive_shard_field",
+		Pipeline: `{{.bin}} from catalog -hive '{{.data}}/pqhive/region=*/data.parquet' -shard-field shard | {{.bin}} include id shard region | {{.bin}} sort id`,
+		Ordered:  true,
 	},
 	{
 		// One file under region=north/: no lane derives a region column

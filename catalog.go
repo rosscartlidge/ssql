@@ -403,6 +403,13 @@ func DeriveHiveMetadata(entries []CatalogEntry) ([]CatalogEntry, error) {
 		} else if !slices.Equal(first, keys) {
 			return nil, fmt.Errorf("%s:%s has partition keys %v where %s:%s has %v — files read together must share one layout", e.Host, e.Path, keys, entries[0].Host, entries[0].Path, first)
 		}
+		// The catalog's own columns come first, read BEFORE the keys join
+		// the map: an entry without Columns (the glob form) orders its
+		// metadata by sorting the map, and with the keys already in it
+		// each key was listed twice, so every record carried the derived
+		// column twice (shipped in the fast path, caught by the SQL lane's
+		// literal form 2026-10-14).
+		cols := append([]string(nil), catalogMetaColumns(*e)...)
 		md := maps.Clone(e.Metadata)
 		if md == nil {
 			md = map[string]string{}
@@ -414,7 +421,7 @@ func DeriveHiveMetadata(entries []CatalogEntry) ([]CatalogEntry, error) {
 			md[k] = values[j]
 		}
 		e.Metadata = md
-		e.Columns = append(catalogMetaColumns(*e), keys...)
+		e.Columns = append(cols, keys...)
 		e.HiveKeys = keys
 	}
 	return entries, nil
@@ -429,10 +436,30 @@ func catalogMetaColumns(e CatalogEntry) []string {
 	return slices.Sorted(maps.Keys(e.Metadata))
 }
 
-// catalogEntryFormat is the format a shard is read as: the catalog's
+// CatalogRecordMetadata is the metadata an entry's records carry, in
+// the order it is attached: the shard field (host:path) when named, then
+// the metadata columns in catalogMetaColumns order, skipping range
+// (_from/_to) columns, which prune and are not fields, and empty values.
+// Every path that attaches metadata (the subprocess shard reader, the
+// in-process fast path, the SQL lane's literals) takes it from here.
+func CatalogRecordMetadata(e CatalogEntry, shardField string) (names, values []string) {
+	if shardField != "" {
+		names = append(names, shardField)
+		values = append(values, e.Host+":"+e.Path)
+	}
+	for _, k := range catalogMetaColumns(e) {
+		if v := e.Metadata[k]; v != "" && !isCatalogRangeColumn(k) {
+			names = append(names, k)
+			values = append(values, v)
+		}
+	}
+	return names, values
+}
+
+// CatalogEntryFormat is the format a shard is read as: the catalog's
 // format column, else the path's extension (what a bare `from PATH`
 // infers on the shard).
-func catalogEntryFormat(e CatalogEntry) string {
+func CatalogEntryFormat(e CatalogEntry) string {
 	if e.Format != "" {
 		return e.Format
 	}
@@ -855,18 +882,13 @@ func readCatalogJSONL(r io.Reader) iter.Seq[Record] {
 }
 
 func enrichCatalogRecord(r Record, entry CatalogEntry, shardField string) Record {
-	if shardField == "" && len(entry.Metadata) == 0 {
+	names, values := CatalogRecordMetadata(entry, shardField)
+	if len(names) == 0 {
 		return r
 	}
-
 	mut := r.ToMutable()
-	if shardField != "" {
-		mut = mut.String(shardField, entry.Host+":"+entry.Path)
-	}
-	for _, k := range catalogMetaColumns(entry) {
-		if v := entry.Metadata[k]; v != "" && !isCatalogRangeColumn(k) {
-			mut = mut.String(k, v)
-		}
+	for i, k := range names {
+		mut = mut.String(k, values[i])
 	}
 	return mut.Freeze()
 }

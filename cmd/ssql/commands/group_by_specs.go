@@ -42,6 +42,13 @@ type aggDef struct {
 	// check validates the extra argument at decode time ("" = none):
 	// -percentile's P must be a number in [0, 1].
 	check func(extra string) error
+	// merge is the flag the parent re-aggregates per-shard partial
+	// results with when the optimiser pushes a group-by into a catalog's
+	// shards (splitGroupByPushdown): -count and -sum partials are summed,
+	// -min/-max take the extreme. "" = not decomposable (-avg needs the
+	// count it threw away, -count-distinct the values); the rule then
+	// leaves the group-by in the parent.
+	merge string
 }
 
 // arity is the number of arguments the flag takes on the command line.
@@ -122,11 +129,11 @@ func wireOfField(fieldType string) string {
 // aggDefs lists the built-in aggregation flags in the order they are
 // declared on the command and decoded from it.
 var aggDefs = []aggDef{
-	{flag: "-count", fn: "count", wireType: wireFixed("int"), typedKind: typedKindCount,
+	{flag: "-count", fn: "count", merge: "-sum", wireType: wireFixed("int"), typedKind: typedKindCount,
 		sql:   func(string, string) string { return "COUNT(*)" },
 		build: func(string, string) ssql.AggregateFunc { return ssql.Count() },
 		code:  func(string, string) string { return "ssql.Count()" }},
-	{flag: "-sum", fn: "sum", hasField: true, sql: sqlSumOrZero, wireType: wireFixed("float"), typedKind: typedKindSum,
+	{flag: "-sum", fn: "sum", merge: "-sum", hasField: true, sql: sqlSumOrZero, wireType: wireFixed("float"), typedKind: typedKindSum,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Sum(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Sum(%q)", f) }},
 	{flag: "-avg", fn: "avg", hasField: true, sql: sqlCall("AVG"), wireType: wireFixed("float"), typedKind: typedKindAvg,
@@ -134,10 +141,10 @@ var aggDefs = []aggDef{
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Avg(%q)", f) }},
 	// min/max keep the field's type: MinOf/MaxOf order numbers, strings
 	// and times (Min[float64] reported 0 for every string group — DFC129 §2).
-	{flag: "-min", fn: "min", hasField: true, sql: sqlCall("MIN"), wireType: wireOfField, typedKind: typedKindExtreme,
+	{flag: "-min", fn: "min", merge: "-min", hasField: true, sql: sqlCall("MIN"), wireType: wireOfField, typedKind: typedKindExtreme,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.MinOf(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.MinOf(%q)", f) }},
-	{flag: "-max", fn: "max", hasField: true, sql: sqlCall("MAX"), wireType: wireOfField, typedKind: typedKindExtreme,
+	{flag: "-max", fn: "max", merge: "-max", hasField: true, sql: sqlCall("MAX"), wireType: wireOfField, typedKind: typedKindExtreme,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.MaxOf(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.MaxOf(%q)", f) }},
 	{flag: "-collect", fn: "collect", hasField: true, sql: func(qf, _ string) string { return sqlAggCollect(qf) }, wireType: wireFixed("json"),

@@ -22,8 +22,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now the command's error (exit 1); the subprocess path printed and
   went on.
 
+- **`generate sql` translates `from catalog`** (DFC149 §4.6, DuckDB
+  dialect) when every pruned shard is a local Parquet file: the
+  catalog is expanded and pruned as the SQL is generated, so the SQL
+  names the surviving files. A `-hive` layout reads as
+  `read_parquet([files], hive_partitioning=true,
+  hive_types_autocast=false)`, DuckDB deriving the key as text; a
+  catalog's own columns and `-shard-field` are literals per file,
+  `UNION ALL`. A shard on another host or in another format, `--`
+  pushdown and `-catalog-used` are refused as before. The hive view
+  over seven partition files answers in 0.04 s under `generate sql
+  -run` against 0.99 s in exec. The DuckDB lane now runs for the hive
+  equivalence cases, the independent oracle for the derived column.
+
 ### Fixed
 
+- **The optimiser's aggregation pushdown gave wrong results over
+  several shards.** `catalog-aggregation-pushdown` (and its `merge
+  -catalog` twin) shipped a `group-by` after a pushed `where` into the
+  shards and deleted it from the parent, so a key that spans shards
+  came out once per shard, with the shard's metadata appended, in every
+  optimising lane (`generate go`, `generate ssql`, and since v4.117.0
+  `run`); a key that was a catalog or hive column failed on the shard.
+  The rule now splits the stage: the shard aggregates over the keys it
+  holds and the parent re-aggregates every key (`-count`/`-sum` partials
+  are summed, `-min`/`-max` take the extreme; metadata keys are grouped
+  in the parent only). An aggregate with no merge form (`-avg`,
+  `-count-distinct`, …), an expression or rollup/cube leaves the
+  `group-by` where it is. A `where` that reads a metadata column is no
+  longer pushed into shards that lack it. Equivalence cases
+  `catalog_pushdown_groupby`, `catalog_hive_pushdown_groupby_key`,
+  `catalog_pushdown_groupby_avg`; `TestCatalogAggregationPushdown` pins
+  the rewrite.
+- **`from catalog -hive GLOB` attached the derived key twice to every
+  record** (`"day":"…","day":"…"`) through the in-process fast path
+  above: the glob form has no header, so its columns were the sorted
+  metadata keys, read after the keys had joined the map. Invisible to
+  JSON readers, found by the SQL lane's literal form. Fixed in
+  `DeriveHiveMetadata`; pinned in `TestCatalogLocalParquetFastPath`.
 - **A catalog's metadata columns came in a different order on every
   record**, and `-catalog-used` wrote its columns in a different order
   on every run: enrichment ranged a map. `CatalogEntry.Columns` now

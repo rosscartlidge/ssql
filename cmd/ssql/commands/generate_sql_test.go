@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
@@ -1100,5 +1101,96 @@ func TestFromCSVTypesSQL(t *testing.T) {
 	json.NewEncoder(&buf).Encode(lib.CodeFragment{Type: "stmt", Command: "ssql from csv " + csv + " -type zip json"})
 	if _, err := assembleSQL(&buf); err == nil || !strings.Contains(err.Error(), "json") {
 		t.Errorf("a json column must be refused, got %v", err)
+	}
+}
+
+// TestTranslateCatalogSQL (DFC149 §4.6): a catalog whose pruned shards are
+// local Parquet files becomes DuckDB's read_parquet over the files ssql
+// chose. A -hive glob whose metadata is the path's keys alone uses
+// DuckDB's partition derivation with autocast off; a catalog's own
+// columns, -shard-field and a metadata column the file also has are
+// literals per file (REPLACE for the file's own column); -if prunes at
+// generate time; remote hosts, other formats, pushdown, -catalog-used
+// and an empty prune are refused.
+func TestTranslateCatalogSQL(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel string, cols []string, row ...any) string {
+		t.Helper()
+		p := dir + "/" + rel
+		os.MkdirAll(p[:strings.LastIndex(p, "/")], 0o755)
+		s := ssql.NewSchema(cols)
+		if err := ssql.WriteParquet(slices.Values([]ssql.Record{ssql.NewRecordFromSchema(s, row)}), p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	north := write("h/region=north/data.parquet", []string{"id", "name"}, int64(1), "a")
+	south := write("h/region=south/data.parquet", []string{"id", "name"}, int64(2), "b")
+	plain := write("p/x.parquet", []string{"id", "region"}, int64(3), "file")
+	os.WriteFile(dir+"/plain.csv", []byte("id\n1\n"), 0o644)
+
+	from := func(args ...string) (string, error) {
+		q := &sqlQuery{}
+		sqlColumnKinds = map[string]string{}
+		err := translateFrom(q, append([]string{"catalog"}, args...))
+		return q.fromClause, err
+	}
+	// The hive form: DuckDB derives the key, as VARCHAR.
+	got, err := from("-hive", dir+"/h/region=*/data.parquet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "read_parquet(['" + north + "', '" + south + "'], hive_partitioning=true, hive_types_autocast=false)"
+	if got != want {
+		t.Errorf("hive glob:\n got %s\nwant %s", got, want)
+	}
+	if sqlColumnKinds["region"] != "string" {
+		t.Errorf("the derived key must be registered as text, got %q", sqlColumnKinds["region"])
+	}
+	// -if prunes before the SQL is written.
+	if got, err = from("-hive", dir+"/h/region=*/data.parquet", "-if", "region", "eq", "south"); err != nil {
+		t.Fatal(err)
+	} else if want = "read_parquet(['" + south + "'], hive_partitioning=true, hive_types_autocast=false)"; got != want {
+		t.Errorf("pruned:\n got %s\nwant %s", got, want)
+	}
+	// -shard-field: literals per file, the shard column first.
+	if got, err = from("-hive", dir+"/h/region=*/data.parquet", "-shard-field", "shard"); err != nil {
+		t.Fatal(err)
+	} else if want = "(SELECT *, 'local:" + north + "' AS shard, 'north' AS region FROM read_parquet('" + north + "', hive_partitioning=false) UNION ALL SELECT *, 'local:" + south + "' AS shard, 'south' AS region FROM read_parquet('" + south + "', hive_partitioning=false))"; got != want {
+		t.Errorf("shard field:\n got %s\nwant %s", got, want)
+	}
+	// A catalog's own column that the file also has replaces it in place.
+	os.WriteFile(dir+"/cat.csv", []byte("host,path,region,note\nlocal,"+plain+",cat,it's\n"), 0o644)
+	if got, err = from(dir + "/cat.csv"); err != nil {
+		t.Fatal(err)
+	} else if want = "(SELECT * REPLACE ('cat' AS region), 'it''s' AS note FROM read_parquet('" + plain + "', hive_partitioning=false))"; got != want {
+		t.Errorf("catalog columns:\n got %s\nwant %s", got, want)
+	}
+	// A hive key the file also has is the shard reader's error here too.
+	os.MkdirAll(dir+"/c/region=x", 0o755)
+	os.Rename(plain, dir+"/c/region=x/x.parquet")
+	if _, err = from("-hive", dir+"/c/region=*/x.parquet"); err == nil || !strings.Contains(err.Error(), "also a column of the file") {
+		t.Errorf("hive clash: want the shard reader's error, got %v", err)
+	}
+	for _, c := range []struct{ args []string; want string }{
+		{[]string{"-hive", dir + "/h/region=*/data.parquet", "--", "where", "-if", "id", "gt", "1"}, "pushdown runs ssql on each shard"},
+		{[]string{"-hive", dir + "/h/region=*/data.parquet", "-catalog-used", dir + "/used.csv"}, "-catalog-used has no SQL equivalent"},
+		{[]string{"-hive", dir + "/h/region=*/data.parquet", "-if", "region", "eq", "west"}, "no shard survives"},
+		{[]string{dir + "/remote.csv"}, "is on another host"},
+		{[]string{dir + "/csv.csv"}, "read as csv"},
+	} {
+		os.WriteFile(dir+"/remote.csv", []byte("host,path\nnode1,/data/x.parquet\n"), 0o644)
+		os.WriteFile(dir+"/csv.csv", []byte("host,path\nlocal,"+dir+"/plain.csv\n"), 0o644)
+		if _, err := from(c.args...); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: want refusal %q, got %v", c.args, c.want, err)
+		}
+	}
+	// Another dialect refuses by design.
+	prev := sqlDialectCur
+	sqlDialectCur = dialectPostgres
+	_, err = from("-hive", dir+"/h/region=*/data.parquet")
+	sqlDialectCur = prev
+	if err == nil || !strings.Contains(err.Error(), "has no postgres translation") {
+		t.Errorf("postgres: want dialect refusal, got %v", err)
 	}
 }

@@ -206,7 +206,7 @@ own.
 | generate ssql | The optimiser's `readCatalogMetadataColumns` must learn derived columns: for a glob FILE, from the pattern's own `key=*` segments; for a CSV with `-hive`, by expanding the catalog as exec would. Otherwise the rule sees no catalog columns and a `where -if day …` stays a row filter — correct but unpruned, a silent performance regression the gate must catch. |
 | go record | The generated program already reads the catalog at run time and calls `ProcessCatalogShardsRemoteGo` (DFC059); it gains the `-hive` option and the fast path. |
 | go typed | Needs §4.5: the struct is the first shard's schema plus the partition keys as `string`. The catalog is re-read at run time, but the key *names* are fixed by the layout, so the struct is stable; a run-time layout change that adds a key is a loud mismatch. |
-| generate sql | For an all-local Parquet catalog only: `read_parquet([the pruned files], hive_partitioning=true, hive_types_autocast=false)` when the paths are hive-shaped, else `read_parquet([...], hive_partitioning=false)` with metadata columns as literals (`SELECT *, 'v' AS day FROM …` per file, `UNION ALL`). Remote and mixed catalogs keep refusing. |
+| generate sql | **Built 2026-10-14** (`translateCatalogSource`, DuckDB only). For a catalog whose pruned shards are all local Parquet: ssql expands and prunes the catalog as the SQL is generated (the `-if` filters the optimiser lifts from a `where`), so the SQL names the surviving files and DuckDB never re-prunes. A `-hive` layout whose metadata is the path's keys alone is `read_parquet([the files], hive_partitioning=true, hive_types_autocast=false)` — DuckDB derives the key, VARCHAR as ssql's is; any other metadata (a catalog's own columns, `-shard-field`) is a literal per file, `SELECT *, 'v' AS region FROM read_parquet(f, hive_partitioning=false) UNION ALL …`, in the order the records carry it, `* REPLACE` for a column the file also has. Metadata columns are registered as text, so a `where` literal on one is quoted (`month = '05'`, not `5`). Refused: a shard on another host or in another format, `--` pushdown, `-catalog-used`, a catalog that prunes to nothing, the other dialects. The rail layout (seven files, 381k rows): the view query 0.04 s under `generate sql -run` against 0.99 s in exec. The unit test's literal form caught a shipped bug in the fast path: the glob form listed the derived key twice (`"day":…,"day":…` on every record), invisible to every JSON reader and to the equivalence gate's column comparison. |
 
 ### 4.7 What this does not do
 
@@ -226,12 +226,19 @@ own.
 - Equivalence: `catalog_hive_glob` — `from catalog -hive
   'pqhive/region=*/data.parquet' | sort id` with `Golden` rows carrying
   `region`, the DuckDB lane as the independent oracle via §4.6's SQL
-  form. Watch it fail by running the typed lane before §4.5.
-- Equivalence: `catalog_hive_where_prunes` — a `where -if region eq
-  north` after the glob form; `-explain`/`generate ssql` must show the
-  extraction (`-if region eq north` on the from stage), and
-  `-catalog-used` must list one file. Watch it fail by leaving
-  `readCatalogMetadataColumns` unaware of derived columns.
+  form (running since 2026-10-14; it was skipped before). Watch it
+  fail by running the typed lane before §4.5.
+- Equivalence: `catalog_hive_where` — a `where -if region eq north`
+  after the glob form, every lane; `catalog_hive_if_pruned` — the `-if`
+  form the optimiser produces, so the SQL names one file, with a `where`
+  on a file column after it; `catalog_csv_parquet_literals` — a catalog
+  CSV with a column of its own over the same files (the literal form);
+  `catalog_hive_shard_field` — the shard column before the derived key.
+  `TestTranslateCatalogSQL` pins the SQL text and the refusals.
+  `-explain`/`generate ssql` must show the extraction (`-if region eq
+  north` on the from stage), and `-catalog-used` must list one file.
+  Watch it fail by leaving `readCatalogMetadataColumns` unaware of
+  derived columns.
 - `parquet_hive_dir_single` stays: without `-hive`, no lane derives a
   column.
 - Error paths in exec and generate mode: a key/CSV-column clash, a
@@ -251,7 +258,9 @@ own.
 2. ~~§4.1 derivation + §4.2 glob form + the optimiser's derived columns~~
    DONE 2026-10-14.
 3. ~~§4.4 fast path, Parquet first, with the scale case~~ DONE 2026-10-14.
-4. §4.6 typed and SQL lanes.
+4. §4.6 ~~SQL lane~~ DONE 2026-10-14; the typed lane remains (a
+   library-mode user's ask: today a catalog source compiles the whole
+   program in record form).
 
 Effort: 1 is small; 2 is a day; 3 is the larger piece, a day or two
 with the typed parallel reader; 4 half a day each.

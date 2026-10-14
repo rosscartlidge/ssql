@@ -646,7 +646,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 	case "ssh":
 		return fmt.Errorf("from ssh has no SQL equivalent — it is an ssql-specific distributed feature")
 	case "catalog":
-		return fmt.Errorf("from catalog has no SQL equivalent — it is an ssql-specific distributed feature")
+		return translateCatalogSource(q, args[1:])
 	default:
 		// Bare Parquet, several files or a pattern: the command reads
 		// them all (from.go routes them to from parquet), so does this.
@@ -2709,6 +2709,133 @@ func translateParquetSource(q *sqlQuery, files, columns []string) error {
 		q.columns = append([]string(nil), columns...)
 	}
 	q.fromClause = src
+	return nil
+}
+
+// translateCatalogSource is the FROM for a catalog whose pruned shards are
+// all local Parquet files (DFC149 §4.6). ssql expands and prunes the
+// catalog as the SQL is generated — the -if filters are what the
+// optimiser lifts out of a where on a metadata column — so the SQL names
+// the surviving files and DuckDB never re-prunes. A -hive layout whose
+// metadata is the path's keys alone uses DuckDB's own partition
+// derivation, with autocast off so the keys are VARCHAR as ssql's are;
+// any other metadata (a catalog's own columns, -shard-field) is a literal
+// per file, UNION ALL, in the order the records carry it. Metadata
+// columns are registered as text so a where literal on one is quoted.
+// Refused: a shard on another host or in another format (the SQL reads
+// local Parquet by name), `--` pushdown (ssql runs on the shard),
+// -catalog-used (a side effect the SQL cannot have), a catalog that
+// prunes to nothing (the SQL would have no columns).
+func translateCatalogSource(q *sqlQuery, args []string) error {
+	var file, shardField string
+	var hive bool
+	var filters []ssql.CatalogFilter
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			return fmt.Errorf("from catalog -- has no SQL equivalent — the pushdown runs ssql on each shard; use generate go")
+		case (a == "-if" || a == "-i" || a == "+if" || a == "+i") && i+3 < len(args):
+			filters = append(filters, ssql.CatalogFilter{Field: args[i+1], Operator: args[i+2], Value: args[i+3], Negated: a[0] == '+'})
+			i += 3
+		case a == "-hive":
+			hive = true
+		case a == "-shard-field" && i+1 < len(args):
+			shardField = args[i+1]
+			i++
+		case a == "-catalog-used":
+			return fmt.Errorf("from catalog -catalog-used has no SQL equivalent — the SQL names the files it reads; drop the flag or use generate go")
+		case a == "-tz" && i+1 < len(args):
+			sqlZone = args[i+1] // the pipeline's zone, materialised by the source (DFC147 §5.7)
+			i++
+		case (a == "-remote-bin" || a == "-shard-order" || a == "-shard-concurrency") && i+1 < len(args):
+			i++ // how the shards would be run; the SQL reads the files
+		case strings.HasPrefix(a, "-") || strings.HasPrefix(a, "+"):
+		case file == "":
+			file = a
+		}
+	}
+	if file == "" {
+		return fmt.Errorf("from catalog requires a catalog file (or, with -hive, a glob)")
+	}
+	if sqlDialectCur != dialectDuckDB {
+		return dialectRefuse("from catalog", "needs DuckDB's read_parquet")
+	}
+	entries, err := ssql.LoadCatalog(file, hive, filters)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("from catalog %s: no shard survives the -if pruning — the SQL would read nothing", file)
+	}
+	keysOnly := hive && shardField == ""
+	var names [][]string
+	var fileCols []map[string]bool
+	for _, e := range entries {
+		if !ssql.IsLocalHost(e.Host) {
+			return fmt.Errorf("from catalog %s: shard %s:%s is on another host — SQL reads local files only; use generate go", file, e.Host, e.Path)
+		}
+		if f := ssql.CatalogEntryFormat(e); f != "parquet" {
+			return fmt.Errorf("from catalog %s: shard %s is read as %s — SQL reads Parquet shards only; use generate go", file, e.Path, f)
+		}
+		// The file's own columns: a hive key among them is the error the
+		// shard reader raises on its first record; a catalog column among
+		// them takes the metadata value in place, as the records do.
+		cols, _, err := ssql.ParquetSchemaFields(e.Path)
+		if err != nil {
+			return fmt.Errorf("from catalog %s: shard %s: %w", file, e.Path, err)
+		}
+		has := make(map[string]bool, len(cols))
+		for _, c := range cols {
+			has[c] = true
+		}
+		for _, k := range e.HiveKeys {
+			if has[k] {
+				return fmt.Errorf("from catalog %s: shard %s: partition key %q is also a column of the file — rename one of them", file, e.Path, k)
+			}
+		}
+		fileCols = append(fileCols, has)
+		n, _ := ssql.CatalogRecordMetadata(e, shardField)
+		names = append(names, n)
+		if !slices.Equal(n, e.HiveKeys) {
+			keysOnly = false
+		}
+		for _, k := range n {
+			sqlColumnKinds[k] = "string"
+		}
+	}
+	if keysOnly {
+		quoted := make([]string, len(entries))
+		for i, e := range entries {
+			quoted[i] = quoteFile(e.Path)
+		}
+		q.fromClause = "read_parquet([" + strings.Join(quoted, ", ") + "], hive_partitioning=true, hive_types_autocast=false)"
+		return nil
+	}
+	parts := make([]string, len(entries))
+	for i, e := range entries {
+		_, values := ssql.CatalogRecordMetadata(e, shardField)
+		var replaced, added []string
+		for j, k := range names[i] {
+			lit := "'" + escapeSQL(values[j]) + "' AS " + quoteIdent(k)
+			if fileCols[i][k] {
+				replaced = append(replaced, lit)
+			} else {
+				added = append(added, lit)
+			}
+		}
+		cols := []string{"*"}
+		if len(replaced) > 0 {
+			cols[0] = "* REPLACE (" + strings.Join(replaced, ", ") + ")"
+		}
+		cols = append(cols, added...)
+		parts[i] = "SELECT " + strings.Join(cols, ", ") + " FROM read_parquet(" + quoteFile(e.Path) + ", hive_partitioning=false)"
+	}
+	if len(parts) == 1 {
+		q.fromClause = "(" + parts[0] + ")"
+		return nil
+	}
+	q.fromClause = "(" + strings.Join(parts, " UNION ALL ") + ")"
 	return nil
 }
 
