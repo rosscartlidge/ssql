@@ -1030,6 +1030,12 @@ your `where` and `group-by` into them for you (`generate ssql` shows
 the rewrite). The same pipeline runs unchanged against any hosts you
 have SSH access to.
 
+A directory tree of `key=value` folders (`orders/month=2026-02/…`, the
+hive layout most lake tools write) is a catalog too: `from catalog
+-hive 'orders/month=*/*.parquet'` makes `month` a column and prunes by
+it. The walk through catalogs, hive layouts and the views of section 9
+is [Catalogs and Views](cli-codelab-catalog.md).
+
 The SSH operator console is the other direction — leave the data where
 it is and log into it: `ssql serve DATA.csv` loads a dataset and answers
 over SSH with this same vocabulary (`from-loaded | where … | to table`).
@@ -1132,7 +1138,9 @@ documents on stdin, so a `where` that matches two rows is an error, not
 a surprise.
 
 The reasoning, and the SQL comparison, is in
-[DFC134](research/dfc134_pipelines_as_data.md).
+[DFC134](research/dfc134_pipelines_as_data.md); a table of views over
+a partitioned dataset is worked through in
+[Catalogs and Views](cli-codelab-catalog.md).
 
 ## 10. Reference
 

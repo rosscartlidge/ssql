@@ -17,6 +17,8 @@ func TestFieldShadowsBuiltin(t *testing.T) {
 		Int("len", 3).
 		String("type", "gadget").
 		Int("amount", 1500).
+		Int("month", 2).
+		Int("year", 2026).
 		Freeze()
 	cases := []struct {
 		expr string
@@ -29,6 +31,12 @@ func TestFieldShadowsBuiltin(t *testing.T) {
 		{`type == "gadget" && type(amount) == "int"`, true},
 		{`max(amount, len) == 1500`, true},
 		{`amount > 1000 && date >= "2026-02-01"`, true},
+		// ssql's own calendar functions shadow the same way (a hive
+		// layout's year=/month=/day= columns): bare is the field, a call
+		// is the function.
+		{`month == 2 && year + 1 == 2027`, true},
+		{`month(date(date)) == month`, true},
+		{`year(date) == year`, true},
 	}
 	for _, c := range cases {
 		eval, err := CompileExpr(c.expr)
@@ -51,6 +59,15 @@ func TestFieldShadowsBuiltin(t *testing.T) {
 	}
 	// A builtin-named field the record does NOT have is still an unknown
 	// field, not a silent nil.
+	for _, src := range []string{`len > 1`, `month > 1`} {
+		evalRec, err := CompileExpr(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := evalRec(ssql.MakeMutableRecord().Int("amount", 1).Freeze()); err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Errorf("%s: a missing function-named field should be reported as unknown: %v", src, err)
+		}
+	}
 	evalRec, err := CompileExpr(`len > 1`)
 	if err != nil {
 		t.Fatal(err)

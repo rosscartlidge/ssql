@@ -1329,6 +1329,23 @@ var equivCases = []EquivCase{
 		Ordered: true,
 	},
 	{
+		// Columns named like ssql's calendar functions (year, month, day:
+		// a hive layout's keys) are the field when bare and the function
+		// when called, in every lane. Until 2026-10-14 the VM compiled a
+		// bare `month` to the function ("mismatched types func(interface
+		// {}) int64 and string"); the shadowing rule covered expr-lang's
+		// builtins (date, len, …) only. Golden by hand.
+		Name: "fields_named_like_time_functions",
+		Pipeline: `{{.bin}} from csv {{.data}}/calendar_named.csv | {{.bin}} where -if-expr 'month == 2 && day > 1' | ` +
+			`{{.bin}} update -set-expr next 'year + 1' -set-expr mm 'month(date("2026-03-15")) + month' | {{.bin}} sort id`,
+		Ordered: true,
+		Golden: []map[string]any{
+			{"id": 3, "year": 2026, "month": 2, "day": 2, "amount": 300, "next": 2027, "mm": 5},
+			{"id": 4, "year": 2025, "month": 2, "day": 10, "amount": 400, "next": 2026, "mm": 5},
+			{"id": 5, "year": 2025, "month": 2, "day": 28, "amount": 500, "next": 2026, "mm": 5},
+		},
+	},
+	{
 		Name: "resample_time_linear",
 		Pipeline: `{{.bin}} from csv {{.data}}/dated.csv | {{.bin}} cast -type date time | ` +
 			`{{.bin}} resample -time date -every 168h -value amount -fill linear`,

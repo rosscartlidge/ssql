@@ -12,10 +12,10 @@
 #     uses the `ssql` on your PATH and, when no doc is given or beside
 #     it, fetches the codelab for that ssql's version from GitHub — so
 #     `./codelab-run.sh` is a self-test of your install.
-# Usage: codelab-run.sh [-v] [DOC.md | cli | signal]   (SSQL_BIN=/path/to/ssql overrides)
-#   `cli` (the default) is doc/cli-codelab.md, `signal` is
-#   doc/cli-signal-processing.md — fetched for the installed version when
-#   not in a checkout.
+# Usage: codelab-run.sh [-v] [DOC.md | cli | catalog | signal]   (SSQL_BIN=/path/to/ssql overrides)
+#   `cli` (the default) is doc/cli-codelab.md, `catalog` is
+#   doc/cli-codelab-catalog.md, `signal` is doc/cli-signal-processing.md
+#   — fetched for the installed version when not in a checkout.
 set -o pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT=""
@@ -27,6 +27,7 @@ for arg in "$@"; do
   case "$arg" in
     -v) VERBOSE=1 ;;
     cli) DOCNAME=cli-codelab.md ;;
+    catalog) DOCNAME=cli-codelab-catalog.md ;;
     signal) DOCNAME=cli-signal-processing.md ;;
     *) DOC="$arg" ;;
   esac

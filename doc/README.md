@@ -5,6 +5,7 @@
 Do these in order; each assumes the one before it.
 
 1. [CLI Codelab](cli-codelab.md) — start here: ten minutes to useful, then the sophisticated features one at a time
+   - [Catalogs and Views](cli-codelab-catalog.md) — many files, hive layouts, pipelines as documents and a table of views (sections 8 and 9 of the codelab, in depth)
    - [SSH Operator Console](cli-codelab-serve.md) — runbook for `ssql serve` when a box holds the data (section 8 of the codelab)
    - [tmux for the ssql Codelab](tmux-for-ssql.md) — the five things you need from tmux: mouse scrolling and copy, named sessions, a second shell, `escape-time` for the Alt keys
 2. [Structured Data](cli-nested-data.md) — optional CLI branch for JSON with lists and objects inside fields: dotted paths, expressions over lists, `explode`, `flatten`, `-collect`

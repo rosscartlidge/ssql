@@ -49,7 +49,8 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `from lines FILE` | raw text: one record per line with `line_number` and `line` | pair with `extract` |
 | `from wav FILE` | audio samples: `sample`, `amplitude` | for the signal commands |
 | `from ssh HOST PATH` | a remote file over SSH | `-- where … + group-by …` pushes stages to the host |
-| `from catalog FILE.csv` | many shards listed in a catalog (host, path) | `-if date ge 2026-01-01` prunes shards by metadata |
+| `from catalog FILE.csv` | many shards listed in a catalog (host, path) | `-if date ge 2026-01-01` prunes shards by metadata; `-shard-field F` tags each record's shard; `-- where … + group-by …` pushes stages into every shard |
+| `from catalog -hive 'dir/year=*/month=*/*.parquet'` | a hive layout: each `key=value` directory is a string column | a `where` on the column prunes to the matching files; `-catalog-used FILE.csv` writes the derived catalog |
 
 ### Transforms
 
@@ -89,6 +90,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `to table` | aligned text table on stdout |
 | `to csv [FILE]` / `to tsv [FILE]` | CSV / TSV to FILE or stdout |
 | `to jsonl [FILE]` | one JSON object per line |
+| `to lines FIELD [FILE]` | one record's field as one line of text (a pipeline document from a views table, for `run -stdin`) |
 | `to json [FILE]` | a pretty-printed JSON array (not lines) |
 | `to markdown` | a GitHub-flavored table |
 | `to parquet FILE` / `to arrow FILE` / `to xlsx FILE` | columnar and spreadsheet files (Parquet needs a FILE) |
@@ -107,7 +109,8 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `generate sql -pipeline 'PIPELINE'` | DuckDB SQL (`-dialect postgres` or `datafusion`) |
 | `generate ssql -pipeline 'PIPELINE'` | the pipeline rewritten with fewer stages; `-explain` says why |
 | `generate json -pipeline 'PIPELINE'` | the pipeline as a JSON document for `ssql run` |
-| `run FILE.json` | run a pipeline document with no shell; `-check` validates commands, flags and field names without running |
+| `run FILE.json` | run a pipeline document with no shell; `-check` validates commands, flags and field names without running; `-stdin` reads the document from stdin (a views table: `from views.csv \| where -if name eq X \| to lines pipeline \| run -stdin`) |
+| `generate ssql -json FILE.json` / `generate sql -json FILE.json` | the optimised pipeline / SQL from a document |
 
 The pipeline string inside `-pipeline '…'` is exactly what you would type at the shell, including its sink.
 

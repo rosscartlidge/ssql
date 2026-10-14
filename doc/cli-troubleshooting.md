@@ -336,6 +336,68 @@ The PATH line matters after the install too: `ssql generate go -build`
 calls `go`, and only a 1.21+ `go` can dispatch to the downloaded 1.26
 toolchain.
 
+---
+
+### Issue 16: "record N: evaluating expression for field …"
+
+**Symptoms:** `update -set-expr` or `where -if-expr` stops with
+`Error: record 7: evaluating expression for field "t": invalid date nope`
+(exit 1). The output ends before that record.
+
+**Cause:** The expression failed on one record — a value the function
+cannot read, a type it cannot combine. A null operand is not a failure:
+`date(x)` of a null is an absent value, a comparison whose operand is
+null on the row is no match, so a sparse column passes through quietly.
+An error means a value is wrong, and the stage ends its output there
+rather than passing the rest of the records through without the field.
+
+**Solution:** Look at the record it names (the count is of the stage's
+input records; the last row here):
+
+```bash
+ssql from data.csv | ssql limit 7 | ssql to table
+```
+
+Guard the expression (`x == "" ? nil : date(x)`), clean the value
+upstream (`where -not -if x eq nope`), or give `date()` the layout the
+value has (`date(x, "02/01/2006")`).
+
+---
+
+### Issue 17: `from catalog -hive`: "partition key … is also a column", "no key=value directory", "must share one layout"
+
+**Symptoms:** `from catalog -hive 'data/day=*/*.parquet'` fails naming a
+file and one of these.
+
+**Cause:** With `-hive`, each `key=value` directory in a file's path
+becomes a column of that file's records, and the rules are strict so a
+layout and its data never disagree silently. A key that is also a column
+of the file, or a column of a catalog CSV given as FILE, is a clash
+(which value would `day` be?). A path with no `key=value` directory has
+nothing to derive. Every file must have the same keys in the same order,
+or the column set would vary per record.
+
+**Solution:** Rename the clashing column in the data or the directory;
+drop `-hive` for a plain file list; for a catalog written by
+`-catalog-used`, read it without `-hive` (the derived column is a catalog
+column there). A plain glob without `-hive` is `from parquet 'dir/*.parquet'`,
+which reads the files and derives nothing.
+
+---
+
+### Issue 18: `run -stdin`: "a second document follows the first — run takes one"
+
+**Symptoms:** `… | ssql to lines pipeline | ssql run -stdin` fails with
+this message.
+
+**Cause:** `run` executes one pipeline document. The `where` that
+selected the row from a views table matched more than one row, so `to
+lines` wrote two documents.
+
+**Solution:** Narrow the selection (`where -if name eq february`) or
+`limit 1`; `ssql from views.csv | ssql where … | ssql to table` shows
+what matched.
+
 ## Getting More Help
 
 ### Built-in help

@@ -42,12 +42,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty STRING in exec and as the text `<nil>` by record programs — a
   mixed column that `where -if h eq ''` matched; it is a nil slot now
   (the field with no value) in both.
+- **A column named like a calendar function (`year`, `month`, `day`,
+  `hour`, …) could not be used bare in an expression:** `month == 2`
+  failed to compile ("mismatched types func(interface {}) int64 and
+  string"). The field-when-bare, function-when-called rule (v4.94.0)
+  covered expr-lang's own builtins (`date`, `len`, `type`, …) but not
+  ssql's compile-time functions — and `year=`/`month=`/`day=` are the
+  usual keys of a hive layout. Now the same rule in every lane
+  (`fields_named_like_time_functions` in the equivalence corpus).
 - **`ssql conventions -category data` named two date functions by their
   pre-release names** (`trunc`, `format`); they are `date_trunc` and
   `strftime`, as `ssql functions -category date` lists them.
 
 ### Added
 
+- **[Catalogs and Views](doc/cli-codelab-catalog.md)**, a codelab: a
+  catalog CSV, pruning, `-catalog-used`, pushdown and the optimiser's
+  lift; a hive layout built with `to parquet` and read with `-hive`;
+  pipeline documents (`generate json`, `run -check`, `-print`, `generate
+  ssql -json`, `generate sql -json`); and a table of views selected with
+  `where`, written with `to lines`, run with `run -stdin`, including a
+  view that selects a view. Every block runs in the L2 doc gate;
+  `./codelab-run.sh catalog` runs it against an install. The main
+  codelab's sections 8 and 9 point to it; the LLM prompt and the
+  troubleshooting guide cover `-hive`, `to lines`, `run -stdin` and the
+  new error messages.
 - **`from catalog -hive`: a hive layout is a derived catalog** (DFC149
   §4.1/§4.2). Each `key=value` directory in a shard's path becomes a
   string column on the shard's records and an exact column for pruning,

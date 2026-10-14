@@ -21,10 +21,12 @@ var exprBuiltinNames = func() map[string]bool {
 }()
 
 // fieldShadowPatcher implements "field when bare, function when called":
-// a bare identifier that shares a builtin's name becomes the environment
-// lookup $env["name"] — the record field — while a call `date(...)` is
-// parsed by expr as a BuiltinNode and is never an IdentifierNode, so it
-// keeps meaning the function. This is the rule the Go transpiler already
+// a bare identifier that shares a builtin's name (or one of ssql's
+// compile-time functions') becomes the environment lookup $env["name"] —
+// the record field — while a call `date(...)` is parsed by expr as a
+// BuiltinNode and is never an IdentifierNode, so it keeps meaning the
+// function; a call to a compile-time function has its callee restored
+// below. This is the rule the Go transpiler already
 // applies (every bare identifier is a struct field; only a call position
 // is a function), so the VM lane now agrees with it.
 type fieldShadowPatcher struct{}
@@ -32,7 +34,12 @@ type fieldShadowPatcher struct{}
 func (fieldShadowPatcher) Visit(node *ast.Node) {
 	switch n := (*node).(type) {
 	case *ast.IdentifierNode:
-		if exprBuiltinNames[n.Value] {
+		// ssql's own compile-time functions (month, year, day, hour, …)
+		// shadow a field the same way: a hive layout's year=/month=/day=
+		// directories are the commonest columns of those names, and a
+		// bare `month` compiled to the function ("mismatched types
+		// func(interface {}) int64 and string") until 2026-10-14.
+		if exprBuiltinNames[n.Value] || ExprCompiledFunctions[n.Value] {
 			ast.Patch(node, &ast.MemberNode{
 				Node:     &ast.IdentifierNode{Value: "$env"},
 				Property: &ast.StringNode{Value: n.Value},

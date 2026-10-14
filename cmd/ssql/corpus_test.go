@@ -116,6 +116,7 @@ func corpusData(t *testing.T) string {
 			"int_first.csv":                corpusIntFirstCSV,
 			"int_first.tsv":                strings.ReplaceAll(corpusIntFirstCSV, ",", "\t"),
 			"dated.csv":                    corpusDatedCSV,
+			"calendar_named.csv":           corpusCalendarNamedCSV,
 			"times.csv":                    corpusTimesCSV,
 			"times_sydney.jsonl":           corpusTimesSydneyJSONL,
 			"dmy.csv":                      corpusDMYCSV,
@@ -823,6 +824,17 @@ const corpusDatedCSV = `id,date,amount
 5,2026-02-28,500
 2,2026-01-20,200
 4,2026-02-10,400
+`
+
+// corpusCalendarNamedCSV has columns named like ssql's calendar functions
+// (year, month, day — a hive layout's usual keys), shuffled, for the
+// field-shadows-function cases.
+const corpusCalendarNamedCSV = `id,year,month,day,amount
+3,2026,2,2,300
+1,2026,1,5,100
+5,2025,2,28,500
+2,2026,1,20,200
+4,2025,2,10,400
 `
 
 // corpusTimesCSV (DFC147): instants in three offsets, a month end, a leap

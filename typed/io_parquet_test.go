@@ -250,8 +250,8 @@ func TestParquetFiles(t *testing.T) {
 		fn()
 	}
 	mustReadError("mismatch", func() {
-		slices.Collect(ReadParquetFiles[pqRow]([]string{filepath.Join(dir, "*.parquet")}))
+		_ = slices.Collect(ReadParquetFiles[pqRow]([]string{filepath.Join(dir, "*.parquet")}))
 	})
-	mustReadError("missing serial", func() { slices.Collect(ReadParquet[pqRow](filepath.Join(dir, "nope.parquet"))) })
+	mustReadError("missing serial", func() { _ = slices.Collect(ReadParquet[pqRow](filepath.Join(dir, "nope.parquet"))) })
 	mustReadError("missing parallel", func() { ReadParquetParallel[pqRow](filepath.Join(dir, "nope.parquet"), 2) })
 }

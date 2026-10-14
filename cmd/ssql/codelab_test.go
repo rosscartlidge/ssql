@@ -30,6 +30,7 @@ func TestCodelabRuns(t *testing.T) {
 		runner string
 	}{
 		{"doc/cli-codelab.md", "doc/codelab-data/codelab-run.sh"},
+		{"doc/cli-codelab-catalog.md", "doc/codelab-data/codelab-run.sh"},
 		{"doc/cli-signal-processing.md", "doc/codelab-data/codelab-run.sh"},
 		// The library-mode worked example (DFC143 §4): a research doc, but
 		// its procedure is a user procedure and stays executable.
