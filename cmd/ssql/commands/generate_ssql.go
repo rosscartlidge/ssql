@@ -177,6 +177,18 @@ type ruleApplication struct {
 }
 
 func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
+	cmds, rules, err := optimizePipelineCmds(input)
+	if err != nil {
+		return "", rules, err
+	}
+	return renderPipeline(cmds), rules, nil
+}
+
+// optimizePipelineCmds reads a fragment stream and returns the commands
+// after every rule has been applied (removed stages marked), for a
+// consumer that renders them itself: generate ssql as shell text, run as
+// a document.
+func optimizePipelineCmds(input io.Reader) ([]*pipelineCmd, []ruleApplication, error) {
 	// Read fragments from stdin
 	var fragments []*lib.CodeFragment
 	decoder := json.NewDecoder(input)
@@ -186,16 +198,16 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 			if err == io.EOF {
 				break
 			}
-			return "", nil, fmt.Errorf("decoding fragment: %w", err)
+			return nil, nil, fmt.Errorf("decoding fragment: %w", err)
 		}
 		if frag.Type == "error" {
-			return "", nil, &lib.UpstreamFailure{Frag: &frag}
+			return nil, nil, &lib.UpstreamFailure{Frag: &frag}
 		}
 		fragments = append(fragments, &frag)
 	}
 
 	if len(fragments) == 0 {
-		return "", nil, fmt.Errorf("no code fragments received")
+		return nil, nil, fmt.Errorf("no code fragments received")
 	}
 
 	// Parse each fragment into a pipelineCmd
@@ -260,7 +272,7 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 	r, empty := rulePredicateSimplification(cmds)
 	rules = append(rules, r...)
 	if empty {
-		return "", rules, errEmptyResult
+		return nil, rules, errEmptyResult
 	}
 	rules = append(rules, rulePredicateReorder(cmds)...)
 
@@ -282,9 +294,7 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 	// Note: limit pushdown past row-preserving commands was benchmarked and found to be
 	// a no-op — Unix pipe backpressure already provides early termination via SIGPIPE.
 
-	// Render the optimized pipeline
-	pipeline := renderPipeline(cmds)
-	return pipeline, rules, nil
+	return cmds, rules, nil
 }
 
 // --- Command parsing ---
@@ -2285,9 +2295,27 @@ func sortedStringSet(m map[string]bool) []string {
 // --- Rendering ---
 
 // renderCmd renders a single pipelineCmd as a shell command string.
-func renderCmd(cmd *pipelineCmd) string {
-	var parts []string
-	parts = append(parts, "ssql", cmd.Kind)
+// stageWord is one element of a rendered stage: an argument string, or
+// an inner pipeline standing where a file argument goes — the shell's
+// <(…), a document's nested list.
+type stageWord struct {
+	Text  string
+	Inner []*pipelineCmd
+}
+
+// cmdWords is a command as the arguments it runs with: "ssql", the
+// command, its arguments, an inner pipeline as one word. renderCmd
+// writes them as shell text; docFromCmds (run) as a pipeline document,
+// so the two forms cannot drift.
+func cmdWords(cmd *pipelineCmd) []stageWord {
+	parts := []string{"ssql", cmd.Kind}
+	text := func(ss []string) []stageWord {
+		out := make([]stageWord, 0, len(ss))
+		for _, s := range ss {
+			out = append(out, stageWord{Text: s})
+		}
+		return out
+	}
 
 	if cmd.IsSSH {
 		parts = append(parts, "ssh")
@@ -2304,51 +2332,46 @@ func renderCmd(cmd *pipelineCmd) string {
 			parts = append(parts, "--")
 			parts = append(parts, cmd.SSHPushDown...)
 		}
-		return shellJoin(parts)
+		return text(parts)
 	}
 
 	if cmd.IsJoin {
 		if len(cmd.JoinRightWhere) > 0 {
-			// Render with process substitution for right-side filtering (plain file join).
-			// The <(...) must NOT be quoted — it's bash syntax, not an argument.
-			rightPipeline := "ssql from " + shellJoin([]string{cmd.JoinFile}) + " | ssql where " + shellJoin(cmd.JoinRightWhere)
-			prefix := shellJoin(parts)
-			suffix := shellJoin(cmd.JoinArgs)
-			return prefix + " <(" + rightPipeline + ") " + suffix
+			// The right side filtered: an inner pipeline over the plain
+			// file (the shell's <(ssql from FILE | ssql where …)).
+			inner := []*pipelineCmd{
+				{Kind: "from", RawArgs: []string{cmd.JoinFile}},
+				{Kind: "where", RawArgs: cmd.JoinRightWhere},
+			}
+			return append(append(text(parts), stageWord{Inner: inner}), text(cmd.JoinArgs)...)
 		}
 		if cmd.JoinIsProcessSub && len(cmd.JoinProcSubCmds) > 0 {
-			// Render modified process substitution with inner pipeline
-			rightPipeline := renderProcSubPipeline(cmd.JoinProcSubCmds)
-			prefix := shellJoin(parts)
-			suffix := shellJoin(cmd.JoinArgs)
-			return prefix + " <(" + rightPipeline + ") " + suffix
+			return append(append(text(parts), stageWord{Inner: cmd.JoinProcSubCmds}), text(cmd.JoinArgs)...)
 		}
 		parts = append(parts, cmd.JoinFile)
 		parts = append(parts, cmd.JoinArgs...)
-		return shellJoin(parts)
+		return text(parts)
 	}
 
 	if consumesFileProcSubs(cmd.Kind) && len(cmd.UnionProcSubs) > 0 {
 		// Reconstruct -file <(inner pipeline) — the fragment's command
 		// string holds the DEAD /dev/fd/N the generation run happened
 		// to get; rendering it verbatim made replays read a stale fd.
-		var sb strings.Builder
-		sb.WriteString("ssql " + cmd.Kind)
+		out := text(parts)
 		idx := 0
-		i := 0
-		for i < len(cmd.RawArgs) {
+		for i := 0; i < len(cmd.RawArgs); {
 			a := cmd.RawArgs[i]
 			if (a == "-file" || a == "-f") && i+1 < len(cmd.RawArgs) &&
 				strings.HasPrefix(cmd.RawArgs[i+1], "/dev/fd/") && idx < len(cmd.UnionProcSubs) {
-				sb.WriteString(" -file <(" + renderProcSubPipeline(cmd.UnionProcSubs[idx]) + ")")
+				out = append(out, stageWord{Text: "-file"}, stageWord{Inner: cmd.UnionProcSubs[idx]})
 				idx++
 				i += 2
 				continue
 			}
-			sb.WriteString(" " + shellJoin([]string{a}))
+			out = append(out, stageWord{Text: a})
 			i++
 		}
-		return sb.String()
+		return out
 	}
 
 	if cmd.IsMergeCatalog {
@@ -2377,7 +2400,7 @@ func renderCmd(cmd *pipelineCmd) string {
 			parts = append(parts, "--")
 			parts = append(parts, cmd.MergeCatalogPushDown...)
 		}
-		return shellJoin(parts)
+		return text(parts)
 	}
 
 	if cmd.IsMultiFile {
@@ -2388,7 +2411,7 @@ func renderCmd(cmd *pipelineCmd) string {
 			parts = append(parts, "--")
 			parts = append(parts, cmd.MultiFilePushDown...)
 		}
-		return shellJoin(parts)
+		return text(parts)
 	}
 
 	if cmd.IsCatalog {
@@ -2416,11 +2439,28 @@ func renderCmd(cmd *pipelineCmd) string {
 			parts = append(parts, "--")
 			parts = append(parts, cmd.CatalogPushDown...)
 		}
-		return shellJoin(parts)
+		return text(parts)
 	}
 
 	parts = append(parts, cmd.RawArgs...)
-	return shellJoin(parts)
+	return text(parts)
+}
+
+// renderCmd writes a command as shell text, every argument quoted, an
+// inner pipeline as a process substitution.
+func renderCmd(cmd *pipelineCmd) string {
+	var sb strings.Builder
+	for i, w := range cmdWords(cmd) {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		if w.Inner != nil {
+			sb.WriteString("<(" + renderProcSubPipeline(w.Inner) + ")")
+			continue
+		}
+		sb.WriteString(shellJoin([]string{w.Text}))
+	}
+	return sb.String()
 }
 
 // renderPipeline renders non-removed commands as a shell pipeline string.

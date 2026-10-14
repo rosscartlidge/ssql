@@ -1083,7 +1083,9 @@ ssql run -check /tmp/report.json && echo valid
 ssql run -print /tmp/report.json
 ```
 
-`-print` renders the shell form, for a human to read or to paste. A
+`-print` renders the shell form, for a human to read or to paste. `run`
+applies the optimiser's rules (section 7) to a document before running
+it; `-explain` names them, `+O` runs the document as written. A
 nested list in an argument's place is a nested pipeline whose output the
 stage reads as a file, the shell's `<(…)` without the shell:
 

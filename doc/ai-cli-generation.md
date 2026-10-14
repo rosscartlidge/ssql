@@ -109,7 +109,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `generate sql -pipeline 'PIPELINE'` | DuckDB SQL (`-dialect postgres` or `datafusion`) |
 | `generate ssql -pipeline 'PIPELINE'` | the pipeline rewritten with fewer stages; `-explain` says why |
 | `generate json -pipeline 'PIPELINE'` | the pipeline as a JSON document for `ssql run` |
-| `run FILE.json` | run a pipeline document with no shell; `-check` validates commands, flags and field names without running; `-stdin` reads the document from stdin (a views table: `from views.csv \| where -if name eq X \| to lines pipeline \| run -stdin`) |
+| `run FILE.json` | run a pipeline document with no shell, after the optimiser's rewrites (`-explain` names them, `+O` runs it as written); `-check` validates commands, flags and field names without running; `-stdin` reads the document from stdin (a views table: `from views.csv \| where -if name eq X \| to lines pipeline \| run -stdin`) |
 | `generate ssql -json FILE.json` / `generate sql -json FILE.json` | the optimised pipeline / SQL from a document |
 
 The pipeline string inside `-pipeline '…'` is exactly what you would type at the shell, including its sink.

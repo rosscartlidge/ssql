@@ -23,6 +23,7 @@ func RegisterRun(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql run pipeline.json", "Run the document; the first stage reads this process's stdin, the last writes its stdout").
 		Example("ssql run -check pipeline.json", "Validate every stage against the command grammar and run nothing").
 		Example("ssql run -print pipeline.json", "Print the pipeline as a shell command line").
+		Example("ssql run -explain pipeline.json", "Run it, naming the optimiser's rewrites and the pipeline that ran").
 		Example("echo '[[\"from\",\"csv\",\"-arg\",\"a.csv\"],[\"to\",\"table\"]]' | ssql run -stdin", "Read the document itself from stdin (the first stage then has no stdin)").
 
 		Flag("FILE").
@@ -47,7 +48,20 @@ func RegisterRun(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Flag("-print").
 			Bool().
 			Global().
-			Help("Print the pipeline in shell form and exit; nothing runs").
+			Help("Print the document in shell form, as written, and exit; nothing runs (-explain shows what the optimiser makes of it)").
+			Done().
+
+		Flag("-optimise", "-O").
+			Bool().
+			Global().
+			Default(true).
+			Help("Apply the pipeline optimiser (the rewrites 'generate ssql' prints: a where on a catalog or hive column into -if on the from stage, sort+limit as top, dead sorts dropped, …) before running — the same answer, less work. ON by default; +O / +optimise runs the document exactly as written. Skipped when SSQL_MODE is set, since the stages are then describing themselves for a generate").
+			Done().
+
+		Flag("-explain", "-e").
+			Bool().
+			Global().
+			Help("Print the optimiser's applied rules and the pipeline that runs to stderr, or why the document ran as written").
 			Done().
 
 		Handler(func(ctx *cf.Context) error {
@@ -93,6 +107,32 @@ func RegisterRun(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			// in this process group anyway, this makes the exit orderly.
 			runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			explain := ctx.GetBool("-explain", false)
+			switch {
+			case !ctx.GetBool("-optimise", true):
+				// as written
+			case modeEnv() != "":
+				if explain {
+					fmt.Fprintf(ctx.Stderr(), "run: not optimised: SSQL_MODE=%s is set (the stages are describing themselves)\n", modeEnv())
+				}
+			default:
+				var rules []ruleApplication
+				var reason string
+				stages, rules, reason = optimisePipelineDoc(runCtx, ctx.Command, self, stages)
+				if explain {
+					switch {
+					case reason != "":
+						fmt.Fprintf(ctx.Stderr(), "run: not optimised: %s\n", reason)
+					case len(rules) == 0:
+						fmt.Fprintln(ctx.Stderr(), "(no optimisation rules applied)")
+					default:
+						for _, r := range rules {
+							fmt.Fprintf(ctx.Stderr(), "[%s] %s → %s\n", r.Rule, r.Before, r.After)
+						}
+						fmt.Fprintf(ctx.Stderr(), "run: %s\n", renderPipelineDoc(stages))
+					}
+				}
+			}
 			var stdin io.Reader
 			if !fromStdin {
 				stdin = ctx.Stdin()

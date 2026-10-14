@@ -77,6 +77,16 @@ func TestCatalogHive(t *testing.T) {
 		t.Errorf("generate ssql must prune by the derived column:\n%s", out)
 	}
 
+	// run applies the same rule to a document (a named view): the where
+	// becomes -if on the from stage and one file is opened.
+	if err := os.WriteFile(filepath.Join(dir, "south.json"), []byte(`[["from","catalog","-hive","pqhive/region=*/data.parquet"],["where","-if","region","eq","south"],["count"]]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = run(bin + " run -explain south.json 2>&1")
+	if err != nil || !strings.Contains(out, "[catalog-predicate-extraction]") || !strings.Contains(out, "run: ssql from catalog 'pqhive/region=*/data.parquet' -if region eq south -hive | ssql count") || !strings.HasSuffix(strings.TrimSpace(out), "\n2") {
+		t.Errorf("run must prune through the derived column: %v\n%s", err, out)
+	}
+
 	// Schema mode: the derived column, as a string, after the file's.
 	out, err = run("export SSQL_MODE=schema; " + bin + " from catalog -hive " + glob + " | head -1")
 	if err != nil || !strings.Contains(out, `"region":"string"`) || !strings.Contains(out, `"fields":["id","name","amount","region"]`) {

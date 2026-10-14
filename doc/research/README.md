@@ -155,7 +155,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC145 | 2026-10-08 | 2026-10-08 | [Nested tables: the one structured value is a relation, and commands scope into it](./dfc145_nested_tables.md) |
 | DFC146 | 2026-10-10 | 2026-10-10 | [CSV schema sidecars: CSVW and Frictionless Table Schema](./dfc146_csv_schema_sidecars.md) |
 | DFC147 | 2026-10-10 | 2026-10-10 | [Date and time: the function set, and where syntax earns its place](./dfc147_date_time_functions.md) |
-| DFC148 | 2026-10-12 | 2026-10-13 | [DuckDB's "view-only mode" post, reproduced in ssql: findings, fixes and gaps](./dfc148_duckdb_view_only_mode.md) |
+| DFC148 | 2026-10-12 | 2026-10-14 | [DuckDB's "view-only mode" post, reproduced in ssql: findings, fixes and gaps](./dfc148_duckdb_view_only_mode.md) |
 | DFC149 | 2026-10-13 | 2026-10-14 | [Hive Partitions Are a Derived Catalog](./dfc149_hive_partitions_as_derived_catalog.md) |
 
 <!-- DFC-INDEX-END -->

@@ -2,7 +2,7 @@
 
 Reference: DFC148
 Created: 2026-10-12
-Last modified: 2026-10-13
+Last modified: 2026-10-14
 
 [Back to Index](./README.md)
 
@@ -392,6 +392,13 @@ The first is small and general. For a same-schema union, multi-file
 `from parquet` (§3.3) already covers most cases.
 
 ### 4.6 Pushdown happens once at generate time, not every time the view is queried
+
+**Resolved for `run`, 2026-10-14:** `run` applies the optimiser's rules
+to the document before executing it (`-explain` names them, `+O` runs
+it as written), so column pruning and catalog predicate extraction are
+re-derived on every run of the view — the DuckDB behaviour this section
+asks for. Generated programs still copy the view in. The text below is
+the state before that.
 
 When DuckDB queries a view, it reads only the columns the query uses, every
 time. ssql can push the needed columns into a run document's read, but only

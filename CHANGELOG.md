@@ -5,6 +5,30 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`run` applies the optimiser's rules before executing a document.**
+  The stages describe themselves once (`SSQL_MODE=record`, no data
+  read), the rewrites `generate ssql` prints are applied — a `where` on
+  a catalog or hive column into `-if` on the `from` stage, Parquet
+  column pruning, sort+limit as `top`, dead sorts dropped — and the
+  result runs as a document again, checked like the one given, with no
+  shell. Measured on seven partition files: a named view
+  `[["from","catalog","-hive",GLOB],["where","-if","day","eq","2023-05-16"]]`
+  opened every file (3.1 s); it now opens one (0.57 s). So a view is
+  pruned every time it runs, not when it was generated (DFC148 §4.6),
+  and `run` reads only the columns the query uses. `-explain` names
+  the rules and the pipeline that ran, or why the document ran as
+  written; `+O` / `+optimise` runs it as written; a codegen `SSQL_MODE`
+  in the environment skips it (the stages are describing themselves
+  for a `generate`). `-print` is unchanged: the document as written.
+  The run-document test's oracle — the optimised run against the
+  as-written shell form — now also checks that the rules preserve
+  results. Internals: `cmdWords` is the one rendering of an optimised
+  stage (shell text and document share it), `optimizePipelineCmds`.
+
 ## [4.116.0] - 2026-10-14
 
 ### Fixed

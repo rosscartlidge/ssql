@@ -82,6 +82,51 @@ func TestRunDocument(t *testing.T) {
 		}
 	})
 
+	t.Run("the optimiser's rules apply before the run", func(t *testing.T) {
+		// run rewrites a document the way `generate ssql` would (sort+limit
+		// → top here; a where on a catalog column → -if in
+		// TestCatalogHive) and runs the rewrite — the same rows, less
+		// work. -print still shows the document as written; -explain
+		// names the rules and what ran; +O runs it as written. The
+		// oracle above (viaShell) compares every optimised run with the
+		// as-written shell form, so a rule that changed a result would
+		// fail there.
+		doc := write("top.json", `[["from","csv","-arg","shuffled.csv"],["sort","-arg","pop","-desc"],["limit","-arg","3"],["include","-arg","city","-arg","pop"],["to","csv"]]`)
+		got, stderr, err := run(t, "", "run", "-explain", doc)
+		if err != nil {
+			t.Fatalf("run -explain: %v\n%s", err, stderr)
+		}
+		if want := viaShell(t, doc, ""); got != want {
+			t.Errorf("optimised run:\n%s\nas written:\n%s", got, want)
+		}
+		if !strings.Contains(stderr, "[sort-limit-to-top]") || !strings.Contains(stderr, "run: ssql from csv -arg shuffled.csv") || !strings.Contains(stderr, "| ssql top ") {
+			t.Errorf("-explain must name the rule and the pipeline that ran:\n%s", stderr)
+		}
+		text, _, _ := run(t, "", "run", "-print", doc)
+		if !strings.Contains(text, "ssql sort ") || strings.Contains(text, "ssql top") {
+			t.Errorf("-print is the document as written:\n%s", text)
+		}
+		_, stderr, err = run(t, "", "run", "+O", "-explain", doc)
+		if err != nil || stderr != "" {
+			t.Errorf("+O: nothing to explain, got %v\n%s", err, stderr)
+		}
+		// Under a codegen SSQL_MODE the stages describe themselves for a
+		// generate; the document must reach it as written.
+		cmd := exec.Command(bin, "run", "-explain", doc)
+		cmd.Dir = data
+		cmd.Env = append(os.Environ(), "TZ=UTC", "SSQL_MODE=record")
+		var out, errb bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &errb
+		if err := cmd.Run(); err != nil || !strings.Contains(out.String(), `"sort"`) || strings.Contains(out.String(), `"top"`) || !strings.Contains(errb.String(), "not optimised: SSQL_MODE=record") {
+			t.Errorf("under SSQL_MODE=record the fragments must be the document as written: %v\n%s\n%s", err, out.String(), errb.String())
+		}
+		// Nothing to rewrite: run says so and runs as written.
+		plain := write("plain.json", `[["from","csv","-arg","shuffled.csv"],["limit","-arg","1"],["to","csv"]]`)
+		if _, stderr, err := run(t, "", "run", "-explain", plain); err != nil || !strings.Contains(stderr, "no optimisation rules applied") {
+			t.Errorf("plain: %v\n%s", err, stderr)
+		}
+	})
+
 	t.Run("the first stage reads the runner's stdin", func(t *testing.T) {
 		doc := write("stdin.json", `[["from", "csv"], ["limit", "-arg", "2"], ["to", "csv"]]`)
 		got, _, err := run(t, "a,b\n1,2\n3,4\n5,6\n", "run", doc)
