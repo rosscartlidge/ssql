@@ -94,8 +94,11 @@ and `month` is a column of every record it holds:
 ssql from catalog -hive 'orders/month=*/*.parquet' | ssql group-by month -count n -sum amount total | ssql sort month | ssql to table
 ```
 
-It prunes as a catalog does — a `where` on `month` is lifted into `-if`
-and only the matching files are opened. `-catalog-used` is the proof:
+It prunes as a catalog does. In a shell pipeline each stage is its own
+process, so `from` cannot see a `where` after it: put the condition on
+`from catalog` as `-if`, and only the matching files are opened
+(`-catalog-used` is the proof). The optimiser does the same rewrite for
+you in `generate ssql` and `generate go`:
 
 ```bash
 (export SSQL_MODE=record; ssql from catalog -hive 'orders/month=*/*.parquet' | ssql where -if month eq 2026-02 | ssql count) | ssql generate ssql -explain
@@ -217,9 +220,11 @@ output is a stream like any other, so the stages that use it follow:
 ssql from views.csv | ssql where -if name eq february | ssql to lines pipeline | ssql run -stdin | ssql group-by status -sum amount total | ssql to table
 ```
 
-A view is pruned every time it runs, not when it was written. `to lines
-FIELD FILE` writes the document to a file, and `generate ssql -json`
-shows what runs: the `where` lifted into `-if`, one file opened:
+`run` executes a document as written — no optimiser between the stages
+— so the `february` view reads both files and then filters. A view that
+should prune carries the condition on its `from` stage (`"-if", "month",
+"eq", "2026-02"`), as `generate ssql -json` shows for this one; `to lines
+FIELD FILE` writes the document to a file for it:
 
 ```bash
 ssql from views.csv | ssql where -if name eq february | ssql to lines pipeline feb.json
