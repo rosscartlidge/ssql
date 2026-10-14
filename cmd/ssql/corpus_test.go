@@ -218,6 +218,7 @@ func corpusData(t *testing.T) string {
 			"nested.jsonl":           corpusNestedJSONL,
 			"dotted.csv":             "a.b,a,n\nlit1,\"{\"\"b\"\":\"\"path1\"\"}\",1\nlit2,\"{\"\"b\"\":\"\"path2\"\"}\",2\n",
 			"nested_array.json":      corpusNestedArrayJSON,
+			"order_array.json":       `[{"id":2,"note":"x","amount":2.5},{"id":1,"note":"y","amount":3}]`, // keys not in sorted order (column order, DFC128 §6c)
 			"null_first.jsonl":       "{\"id\":1,\"note\":null,\"score\":null}\n{\"id\":2,\"note\":\"b\",\"score\":4}\n{\"id\":3,\"note\":\"c\",\"score\":2.5}\n",
 			"nil_time.jsonl":         "{\"id\":1,\"x\":\"2023-05-15T00:13:00Z\"}\n{\"id\":2,\"x\":null}\n{\"id\":3,\"x\":\"2023-05-15T01:47:00Z\"}\n",
 			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
@@ -597,8 +598,11 @@ func TestPipelineCorpus(t *testing.T) {
 			// fill is record-shaped (typed cannot represent missing);
 			// typed/parallel pipelines re-enter record mode via the boundary.
 			Name:     "fill_default_typed_boundary",
-			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} fill -default dept none -default bonus 0 | {{.bin}} include name dept bonus | {{.bin}} to csv`,
-			Contains: []string{"name", "dept", "bonus", "Alice", "Engineering", "0"},
+			// -default names existing columns: exec refuses a -default on a
+			// missing field (DFC133), and since 2026-10-14 so does the
+			// record lane (`bonus` here used to pass silently).
+			Pipeline: `{{.bin}} from {{.data}}/employees.csv | {{.bin}} fill -default dept none -default city none | {{.bin}} include name dept city | {{.bin}} to csv`,
+			Contains: []string{"name", "dept", "city", "Alice", "Engineering"},
 		},
 		{
 			// from lines (typed.Line source) → extract typed template

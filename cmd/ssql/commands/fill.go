@@ -262,8 +262,13 @@ func generateFillCode(cfg ssql.FillConfig, rawDefaults [][2]string) error {
 	for _, d := range cfg.Defaults {
 		defs = append(defs, fmt.Sprintf("{Field: %q, Value: %s}", d.Field, goLiteral(d.Value)))
 	}
-	code := fmt.Sprintf("%s := ssql.FillFilter(ssql.FillConfig{Down: []string{%s}, Defaults: []ssql.FillDefault{%s}})(%s)",
-		outputVar, strings.Join(down, ", "), strings.Join(defs, ", "), inputVar)
+	fillFields := append([]string(nil), cfg.Down...)
+	for _, d := range cfg.Defaults {
+		fillFields = append(fillFields, d.Field)
+	}
+	filter := fmt.Sprintf("ssql.FillFilter(ssql.FillConfig{Down: []string{%s}, Defaults: []ssql.FillDefault{%s}})",
+		strings.Join(down, ", "), strings.Join(defs, ", "))
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "fill", fillFields, filter), inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	if frag.Op != nil {
 		var pairs []any

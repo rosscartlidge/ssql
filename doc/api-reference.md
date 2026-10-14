@@ -1711,6 +1711,8 @@ func IFFTFilter(magnitudeField, phaseField, outputField string) Filter[Record, R
 func ConvolveFilter(field, outputField string, kernel Signal, same bool) Filter[Record, Record]
 func AutoConvolveFilter(field, outputField string, same bool) Filter[Record, Record]
 func CorrelateFilter(fieldA, fieldB, outputField string, same bool) Filter[Record, Record]
+func CorrelationRecords(result Signal, collected []Record, lenB int, outputField string, same bool) iter.Seq[Record] // the records a correlation yields: same-length adds outputField to each input; full is one record per sample with index and lag (zero where the signals align)
+func LagRecords(result Signal, outputField string) iter.Seq[Record]  // an autocorrelation up to a maximum lag: one record per lag from zero
 func AutoCorrelateFilter(field, outputField string, same bool) Filter[Record, Record]
 func AutoCorrelateMaxFilter(field, outputField string, maxLag int) Filter[Record, Record]
 ```
@@ -1901,6 +1903,9 @@ safe := ssql.SelectSafe(func(x int) (int, error) {   // a transformation that ca
 ```go
 func Recover(err *error)                          // defer ssql.Recover(&err) in the function whose loop drives the pipeline
 func Run(fn func() error) (err error)             // fn's error, or the pipeline panic as an error
+func RequireFields(stage string, fields ...string) Filter[Record, Record] // the check exec makes on its first record, for generated record programs: a missing field panics with UnknownFieldsError (ssql.Run reports it); a dotted path is checked by its head; an empty stream passes
+func MissingFields(r Record, fields []string) []string                    // the fields the record's schema lacks, in order, without repeats
+func UnknownFieldsError(stage string, missing, available []string) error  // "<stage> references unknown field(s): a, b (available: …)" — the one wording, shared with exec
 func Safely[T, U any](f Filter[T, U]) FilterWithErrors[T, U]   // a stage failure becomes the stream's last element, (zero, err)
 ```
 

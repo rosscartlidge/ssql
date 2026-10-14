@@ -160,9 +160,10 @@ func generateIncludeCode(fields []string) error {
 	for i, f := range fields {
 		quoted[i] = fmt.Sprintf("%q", f)
 	}
-	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
+	filter := fmt.Sprintf(`ssql.Select(func(r ssql.Record) ssql.Record {
 		return ssql.Project(r, %s)
-	})(%s)`, outputVar, strings.Join(quoted, ", "), inputVar)
+	})`, strings.Join(quoted, ", "))
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "include", fields, filter), inputVar)
 
 	// Create stmt fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())

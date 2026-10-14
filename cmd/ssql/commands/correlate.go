@@ -192,35 +192,15 @@ func RegisterCorrelate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			}
 
 			// Build output records
+			// The records are rendered by the library (CorrelationRecords,
+			// LagRecords), as the filters generated programs call do, so
+			// exec and the Go lanes cannot drift: full mode carries lag.
 			var output []ssql.Record
-			if same {
-				// Same length - add to original records
-				for i, r := range records {
-					mut := r.ToMutable()
-					if i < len(result) {
-						mut = mut.Float(outputField, result[i])
-					}
-					output = append(output, mut.Freeze())
-				}
-			} else if auto && maxLag > 0 {
-				// Max-lag autocorrelation - output lag and value
-				for lag, v := range result {
-					mut := ssql.MakeMutableRecord()
-					mut = mut.Int("lag", int64(lag))
-					mut = mut.Float(outputField, v)
-					output = append(output, mut.Freeze())
-				}
+			if auto && maxLag > 0 {
+				output = slices.Collect(ssql.LagRecords(result, outputField))
 			} else {
-				// Full correlation - create new records with index and value
-				for i, v := range result {
-					mut := ssql.MakeMutableRecord()
-					mut = mut.Int("index", int64(i))
-					mut = mut.Float(outputField, v)
-					output = append(output, mut.Freeze())
-				}
+				output = slices.Collect(ssql.CorrelationRecords(result, records, len(signalB), outputField, same))
 			}
-
-			// Write output as JSONL
 			if err := writeWithInferredSchema(slices.Values(output), writeWithInferredSchemaOptions{w: ctx.Stdout()}); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}

@@ -200,6 +200,16 @@ func needsWrap(q *sqlQuery, cmd string) bool {
 
 // wrapAsSubquery folds everything accumulated so far into a FROM (subquery),
 // so subsequent stages apply to its result — preserving pipeline order.
+// translateCount is the sink `count`: the query so far becomes a
+// subquery and the result is its row count in one column, `count` (exec
+// prints the bare number; a SQL result has a column). Had no translation
+// until 2026-10-14, though it is the first stage a reader types.
+func translateCount(q *sqlQuery) {
+	wrapAsSubquery(q)
+	q.selectExprs = []string{"COUNT(*) AS " + quoteIdent("count")}
+	q.columns = []string{"count"}
+}
+
 func wrapAsSubquery(q *sqlQuery) {
 	sub := renderSelect(q)
 	*q = sqlQuery{
@@ -414,6 +424,8 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 	case "to":
 		// Output commands don't affect SQL
 		return nil
+	case "count":
+		translateCount(q)
 	default:
 		return fmt.Errorf("unsupported command for SQL generation: %s", name)
 	}
@@ -2056,6 +2068,29 @@ func translateWindow(q *sqlQuery, args []string) error {
 		}
 	}
 
+	// The output keeps the window's order: exec materialises each
+	// partition sorted by -order and emits the partitions in turn, so a
+	// limit after the window takes those rows. Carry the last clause's
+	// partition and order into the query's ORDER BY (an earlier sort is
+	// superseded, as it is in exec). Without it DuckDB's LIMIT took
+	// whatever rows came first (seen 2026-09-30; it happened to agree).
+	if last := clauses[len(clauses)-1]; len(last.orderBy) > 0 {
+		var order []string
+		for _, f := range last.partitionBy {
+			order = append(order, quoteIdent(f))
+		}
+		for _, f := range last.orderBy {
+			o := quoteIdent(f)
+			if sqlTimeColumns[f] {
+				o = sqlTimeColumnRef(f)
+			}
+			if last.desc {
+				o += " DESC"
+			}
+			order = append(order, o)
+		}
+		q.orderBy = order
+	}
 	return nil
 }
 

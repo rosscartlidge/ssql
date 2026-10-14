@@ -108,6 +108,14 @@ func percentileP(extra string) (float64, error) {
 // argument — the one place -percentile's P is validated for every lane.
 func validateAggSpecs(specs []aggSpec) error {
 	for _, s := range specs {
+		// An empty name was dropped on the floor until 2026-10-14:
+		// `-sum age ''` silently produced no aggregate.
+		if s.result == "" {
+			return fmt.Errorf("-%s: the result name is empty", s.function)
+		}
+		if d, ok := aggDefByFn(s.function); ok && d.hasField && s.field == "" {
+			return fmt.Errorf("-%s: the field name is empty", s.function)
+		}
 		if d, ok := aggDefByFn(s.function); ok && d.check != nil {
 			if err := d.check(s.extra); err != nil {
 				return err
@@ -362,9 +370,7 @@ func fieldResultAggSpecs(ctx *cf.Context, d aggDef) []aggSpec {
 		if d.extraArg != "" {
 			extra, _ = m[d.extraArg].(string)
 		}
-		if field != "" && result != "" {
-			out = append(out, aggSpec{function: d.fn, field: field, result: result, extra: extra})
-		}
+		out = append(out, aggSpec{function: d.fn, field: field, result: result, extra: extra})
 	}
 	return out
 }

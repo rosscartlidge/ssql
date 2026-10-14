@@ -7,8 +7,8 @@ import (
 	"strconv"
 )
 
-// DescribeConfig selects which fields to profile; empty = every field
-// seen, in first-seen order.
+// DescribeConfig selects which fields to profile, in the order given;
+// empty = every field seen, sorted by name.
 type DescribeConfig struct {
 	Fields []string
 }

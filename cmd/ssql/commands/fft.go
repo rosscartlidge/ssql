@@ -181,8 +181,8 @@ func generateFFTCode(inputFile, field string, sampleRate float64, includePhase b
 	outputVar := "fftRecords"
 
 	// Use the FFTFilter function that works with the code generation system
-	code := fmt.Sprintf(`%s := ssql.FFTFilter(%q, %v, %v)(%s)`,
-		outputVar, field, sampleRate, includePhase, inputVar)
+	filter := fmt.Sprintf(`ssql.FFTFilter(%q, %v, %v)`, field, sampleRate, includePhase)
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "fft", []string{field}, filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)

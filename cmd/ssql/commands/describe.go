@@ -133,8 +133,8 @@ func generateDescribeCode(cfg ssql.DescribeConfig) error {
 	for _, f := range cfg.Fields {
 		quoted = append(quoted, fmt.Sprintf("%q", f))
 	}
-	code := fmt.Sprintf("%s := ssql.DescribeFilter(ssql.DescribeConfig{Fields: []string{%s}})(%s)",
-		outputVar, joinStrings(quoted, ", "), inputVar)
+	filter := fmt.Sprintf("ssql.DescribeFilter(ssql.DescribeConfig{Fields: []string{%s}})", joinStrings(quoted, ", "))
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "describe", cfg.Fields, filter), inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	if frag.Op != nil {
 		frag.Op.Fields = append([]string(nil), cfg.Fields...)

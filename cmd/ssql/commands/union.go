@@ -13,7 +13,7 @@ import (
 // RegisterUnion registers the union subcommand
 func RegisterUnion(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	cmd.Subcommand("union").
-		Description("Combine records from multiple sources (SQL UNION). Additional files must be JSONL.").
+		Description("Combine records from multiple sources (SQL UNION). Additional files: csv, tsv, json, or schema-headed jsonl").
 		ClauseDescription("Each clause specifies additional files to combine.").
 		Example("ssql from 2023.jsonl | ssql union -file 2024.jsonl", "Combine two JSONL files (removes duplicates)").
 		Example("ssql from 2023.csv | ssql union -file 2024.csv", "Combine CSV files directly (format inferred from extension)").

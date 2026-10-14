@@ -535,28 +535,29 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	// from an untranspilable expression, a -set-expr retyping a column)
 	// — Tier R: execution continues into the record path below and the
 	// planner inserts the Serial()+toRecord boundary.
-	if typedMode() && prevSchema != nil {
-		// A dotted path into a nested value in a condition or a -set-field
-		// source has no typed form: record mode resolves it (DFC144 L2).
-		var names []string
-		for _, clause := range ctx.Clauses {
-			if conds, err := parseConditions(clause.Flags["-if"]); err == nil {
-				for _, c := range conds {
-					names = append(names, c.Field)
-				}
-			}
-			if conds, err := parseFieldConditions(clause.Flags["-if-field"]); err == nil {
-				for _, c := range conds {
-					names = append(names, c.Field, c.Value)
-				}
-			}
-			for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
-				names = append(names, sf.source)
+	// Every field update reads — conditions, -if-field pairs, -set-field
+	// sources — for the typed lane's nested-path test and the record
+	// lane's runtime check.
+	var names []string
+	for _, clause := range ctx.Clauses {
+		if conds, err := parseConditions(clause.Flags["-if"]); err == nil {
+			for _, c := range conds {
+				names = append(names, c.Field)
 			}
 		}
-		if nestedPathIn(prevSchema, names...) {
-			prevSchema = nil
+		if conds, err := parseFieldConditions(clause.Flags["-if-field"]); err == nil {
+			for _, c := range conds {
+				names = append(names, c.Field, c.Value)
+			}
 		}
+		for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
+			names = append(names, sf.source)
+		}
+	}
+	// A dotted path into a nested value in a condition or a -set-field
+	// source has no typed form: record mode resolves it (DFC144 L2).
+	if typedMode() && prevSchema != nil && nestedPathIn(prevSchema, names...) {
+		prevSchema = nil
 	}
 	if typedMode() && prevSchema != nil {
 		handled, reason, err := emitTypedUpdate(ctx, inputVar, prevSchema, fragments)
@@ -947,10 +948,11 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 	}
 
 	outputVar := "updated"
-	updateCode := fmt.Sprintf(`%s := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
+	filter := fmt.Sprintf(`ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 %s
 		return mut
-	})(%s)`, outputVar, codeBody.String(), inputVar)
+	})`, codeBody.String())
+	updateCode := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "update", names, filter), inputVar)
 	codeLines = append(codeLines, updateCode)
 	code := strings.Join(codeLines, "\n")
 

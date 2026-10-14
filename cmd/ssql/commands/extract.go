@@ -261,7 +261,7 @@ func generateExtractCode(cfg ssql.ExtractConfig, names []string) error {
 		return lib.WriteCodeFragment(frag)
 	}
 
-	code := fmt.Sprintf("%s := ssql.ExtractFilter(%s)(%s)", outputVar, extractConfigLiteral(cfg), inputVar)
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "extract", []string{cfg.Field}, "ssql.ExtractFilter("+extractConfigLiteral(cfg)+")"), inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	stamp(frag)
 	return lib.WriteCodeFragment(frag)

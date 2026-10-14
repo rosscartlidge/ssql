@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -337,11 +336,15 @@ type colInfer struct {
 	allInt  bool
 	allFlt  bool
 	allBool bool
-	allTime bool
+	// No time inference: an RFC 3339 column stays a string unless -type,
+	// -format or a sidecar declares it, as in exec and the SQL lane (whose
+	// read_csv candidates exclude timestamps). Until 2026-10-14 the typed
+	// lane alone made it a time.Time, so `ts > since` compared in typed
+	// and errored per row in exec.
 }
 
 func newColInfer() colInfer {
-	return colInfer{allInt: true, allFlt: true, allBool: true, allTime: true}
+	return colInfer{allInt: true, allFlt: true, allBool: true}
 }
 
 func (c *colInfer) observe(v string) {
@@ -367,11 +370,6 @@ func (c *colInfer) observe(v string) {
 			c.allBool = false
 		}
 	}
-	if c.allTime {
-		if _, err := time.Parse(time.RFC3339, v); err != nil {
-			c.allTime = false
-		}
-	}
 }
 
 func (c *colInfer) resolve() string {
@@ -384,8 +382,6 @@ func (c *colInfer) resolve() string {
 		return "float64"
 	case c.allBool:
 		return "bool"
-	case c.allTime:
-		return "time.Time"
 	default:
 		return "string"
 	}

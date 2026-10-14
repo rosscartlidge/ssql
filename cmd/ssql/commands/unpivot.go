@@ -263,7 +263,7 @@ func generateUnpivotCode(cfg ssql.UnpivotConfig) error {
 		}
 		// fall through: record-shaped stage (planner inserts the boundary)
 	}
-	code := fmt.Sprintf("%s := ssql.UnpivotFilter(%s)(%s)", outputVar, unpivotConfigLiteral(cfg), inputVar)
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "unpivot", append(append([]string(nil), cfg.IDs...), cfg.Values...), "ssql.UnpivotFilter("+unpivotConfigLiteral(cfg)+")"), inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	stamp(frag)
 	return lib.WriteCodeFragment(frag)

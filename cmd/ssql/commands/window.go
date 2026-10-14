@@ -838,25 +838,26 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 	// with the reason under -explain. -presorted changes nothing here —
 	// the typed runtime materialises the partition either way.
 	var typedFallbackNotes []string
-	if typedMode() && prevSchema != nil {
-		// A dotted path into a nested value (addr.city) in any field
-		// position has no typed form: record mode resolves it through
-		// ssql.Get (DFC144 Level 2).
-		var names []string
-		for _, cfg := range configs {
-			names = append(names, cfg.PartitionBy...)
-			for _, of := range cfg.OrderBy {
-				names = append(names, of.Field)
-			}
-			for _, sp := range cfg.Specs {
-				if f, ok := ssql.WindowFuncField(sp.Function); ok && f != "" {
-					names = append(names, f)
-				}
+	// Every field the window reads: partition, order, function inputs —
+	// for the typed lane's nested-path test and the record lane's
+	// runtime check.
+	var names []string
+	for _, cfg := range configs {
+		names = append(names, cfg.PartitionBy...)
+		for _, of := range cfg.OrderBy {
+			names = append(names, of.Field)
+		}
+		for _, sp := range cfg.Specs {
+			if f, ok := ssql.WindowFuncField(sp.Function); ok && f != "" {
+				names = append(names, f)
 			}
 		}
-		if nestedPathIn(prevSchema, names...) {
-			prevSchema = nil
-		}
+	}
+	// A dotted path into a nested value (addr.city) in any field
+	// position has no typed form: record mode resolves it through
+	// ssql.Get (DFC144 Level 2).
+	if typedMode() && prevSchema != nil && nestedPathIn(prevSchema, names...) {
+		prevSchema = nil
 	}
 	if typedMode() && prevSchema != nil {
 		handled, reason, err := emitTypedWindow(inputVar, prevSchema, configs)
@@ -914,18 +915,16 @@ func generateWindowCode(configs []ssql.WindowConfig, presorted bool) error {
 	}
 
 	if presorted {
-		code := fmt.Sprintf("%s := ssql.MustStreamWindow([]ssql.WindowConfig{\n", outputVar)
-		code += formatConfigs("\t")
-		code += fmt.Sprintf(",\n})(%s)", inputVar)
+		filter := "ssql.MustStreamWindow([]ssql.WindowConfig{\n" + formatConfigs("\t") + ",\n})"
+		code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "window", names, filter), inputVar)
 
 		frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 		frag.PlanNotes = typedFallbackNotes
 		return lib.WriteCodeFragment(frag)
 	}
 
-	code := fmt.Sprintf("%s := ssql.Window([]ssql.WindowConfig{\n", outputVar)
-	code += formatConfigs("\t")
-	code += fmt.Sprintf(",\n})(%s)", inputVar)
+	filter := "ssql.Window([]ssql.WindowConfig{\n" + formatConfigs("\t") + ",\n})"
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "window", names, filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	frag.PlanNotes = typedFallbackNotes

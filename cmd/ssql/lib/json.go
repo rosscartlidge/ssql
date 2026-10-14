@@ -2,12 +2,10 @@ package lib
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"iter"
-	"sort"
 
 	"github.com/rosscartlidge/ssql/v4"
 )
@@ -72,36 +70,20 @@ func readJSONArray(r io.Reader, yield func(ssql.Record) bool) {
 	// and a filter kept or lost rows accordingly (DFC133 row-order sweep).
 	element := 0
 	for decoder.More() {
-		var rec map[string]json.RawMessage
+		var raw json.RawMessage
 		element++
-		if err := decoder.Decode(&rec); err != nil {
+		if err := decoder.Decode(&raw); err != nil {
 			// The decoder cannot resynchronise after a bad element, and the
 			// old `continue` dropped it (and everything the decoder then
 			// misread) silently. An error, like a malformed JSONL line.
 			panic(fmt.Errorf("JSON array input: element %d is not a JSON object: %w", element, err))
 		}
-
-		record := ssql.MakeMutableRecord()
-		// A decoded object is a map: its key order is gone, so the record's
-		// is sorted (deterministic; the source order is the open TODO on
-		// JSON input). A MutableRecord keeps insertion order, so a map walk
-		// here would make the column order random.
-		keys := make([]string, 0, len(rec))
-		for k := range rec {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			raw := bytes.TrimSpace(rec[k])
-			if len(raw) > 0 && (raw[0] == '[' || raw[0] == '{') {
-				record = setValueFromJSON(record, k, json.RawMessage(raw)) // nested: JSON text
-				continue
-			}
-			var v any
-			if err := json.Unmarshal(raw, &v); err != nil {
-				panic(fmt.Errorf("JSON array input: element %d, key %q: %w", element, k, err))
-			}
-			record = setValueFromJSON(record, k, v)
+		// The element goes through the JSON Lines parser, so the record
+		// keeps the object's key order (a map lost it until 2026-10-14 and
+		// the columns came out sorted) and every value keeps its own type.
+		record, err := ssql.ParseJSONLineWithNulls(raw)
+		if err != nil {
+			panic(fmt.Errorf("JSON array input: element %d: %w", element, err))
 		}
 
 		if !yield(record.Freeze()) {

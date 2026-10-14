@@ -2531,3 +2531,65 @@ func TestCatalogAggregationPushdown(t *testing.T) {
 		})
 	}
 }
+
+// TestRecordCodegenUnknownFieldIsLoud: a generated record-mode program
+// stops on a field the records do not have, with exec's message, instead
+// of filtering everything out or grouping on an empty column (fail
+// loudly; the typed lane refuses at generate time). Until 2026-10-14 the
+// record lane checked nothing. Every stage that validates fields in exec
+// has a row; a valid sibling proves the check lets real fields through.
+func TestRecordCodegenUnknownFieldIsLoud(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test")
+	data := corpusData(t)
+	emp := filepath.Join(data, "employees.csv")
+	stages := []struct{ stage, bad, good string }{
+		{"where", "where -if nosuch eq 1", "where -if age gt 30"},
+		{"sort", "sort nosuch", "sort age"},
+		{"top", "top 2 -field nosuch", "top 2 -field age"},
+		{"include", "include nosuch", "include name"},
+		{"exclude", "exclude nosuch", "exclude name"},
+		{"rename", "rename -as nosuch x", "rename -as name n"},
+		{"cast", "cast -type nosuch int", "cast -type age float"},
+		{"window", "window -order nosuch -row-number rn", "window -order age -row-number rn"},
+		{"update", "update -if nosuch eq 1 -set age 0", "update -if age gt 1 -set age 0"},
+		{"group-by", "group-by nosuch -count n", "group-by dept -count n"},
+		{"group-by", "group-by dept -sum nosuch s", "group-by dept -sum age s"},
+		{"group-by", "group-by nosuch", "group-by dept"},
+		{"pivot", "pivot -row nosuch -col dept -val age", "pivot -row city -col dept -val age"},
+		{"fill", "fill -down nosuch", "fill -down city"},
+		{"fill", "fill -default nosuch 0", "fill -default city x"}, // exec refuses a -default on a missing field (DFC133)
+		{"extract", "extract -field nosuch -re '(?P<a>.)'", "extract -field name -re '(?P<a>.)'"},
+		{"unpivot", "unpivot -id dept -value nosuch", "unpivot -id dept -value age"},
+		{"where", "sort age | /tmp/ssql_test where -if nosuch eq 1", "sort age | /tmp/ssql_test where -if age gt 1"},
+		{"fft", "fft -field nosuch", "fft -field salary"},
+		{"spectrogram", "spectrogram -field nosuch -window-size 4 -hop 2", "spectrogram -field salary -window-size 4 -hop 2"},
+		{"describe", "describe nosuch", "describe age"},
+	}
+	for _, s := range stages {
+		for _, c := range []struct {
+			text string
+			bad  bool
+		}{{s.bad, true}, {s.good, false}} {
+			t.Run(c.text, func(t *testing.T) {
+				cmd := exec.Command("bash", "-c",
+					`(export SSQL_MODE=record; /tmp/ssql_test from `+emp+` | /tmp/ssql_test `+c.text+` | /tmp/ssql_test to jsonl) | /tmp/ssql_test generate go -run`)
+				cmd.Env = append(os.Environ(), "SSQL_MODULE_DIR="+mustRepoRoot(t))
+				out, err := cmd.CombinedOutput()
+				want := s.stage + " references unknown field(s): nosuch (available:"
+				if c.bad {
+					if err == nil || !strings.Contains(string(out), want) {
+						t.Errorf("want exit 1 with %q, got err=%v\n%s", want, err, out)
+					}
+					return
+				}
+				if err != nil || strings.TrimSpace(string(out)) == "" || strings.Contains(string(out), "unknown field") {
+					t.Errorf("valid stage must run: err=%v\n%s", err, out)
+				}
+			})
+		}
+	}
+}

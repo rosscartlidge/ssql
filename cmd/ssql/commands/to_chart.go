@@ -299,6 +299,17 @@ func generateToChartCode(xField string, yFields []string, zField, chartType stri
 	} else {
 		inputVar = "records"
 	}
+	// The record lane's runtime check on the axis fields (a final
+	// fragment is not split by the assembler, so the input may be
+	// wrapped inline).
+	axisFields := append([]string{xField}, yFields...)
+	if zField != "" {
+		axisFields = append(axisFields, zField)
+	}
+	if colorField != "" {
+		axisFields = append(axisFields, colorField)
+	}
+	checkedInput := checkedInput(fragments, "to chart", axisFields, inputVar)
 
 	if xField == "" {
 		return fmt.Errorf("X-axis field required (use -x)")
@@ -360,7 +371,7 @@ func generateToChartCode(xField string, yFields []string, zField, chartType stri
 	if err := ssql.HeatmapChart(%s, config, *flagOutput); err != nil {
 		return fmt.Errorf("creating heatmap: %%w", err)
 	}
-	fmt.Printf("Heatmap created: %%s\n", *flagOutput)`, joinStrings(configLines, "\n"), inputVar)
+	fmt.Printf("Heatmap created: %%s\n", *flagOutput)`, joinStrings(configLines, "\n"), checkedInput)
 
 		frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
 		frag.Params = params
@@ -404,7 +415,7 @@ func generateToChartCode(xField string, yFields []string, zField, chartType stri
 	if err := ssql.EnhancedChart(%s, config, *flagOutput); err != nil {
 		return fmt.Errorf("creating chart: %%w", err)
 	}
-	fmt.Printf("Chart created: %%s\n", *flagOutput)`, joinStrings(configLines, "\n"), inputVar)
+	fmt.Printf("Chart created: %%s\n", *flagOutput)`, joinStrings(configLines, "\n"), checkedInput)
 
 	frag := lib.NewFinalFragment(inputVar, code, []string{"fmt"}, getCommandString())
 	frag.Params = params

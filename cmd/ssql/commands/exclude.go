@@ -142,9 +142,10 @@ func generateExcludeCode(fields []string) error {
 
 	// Generate code: ssql.Without, the primitive exec calls
 	outputVar := "excluded"
-	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
+	filter := fmt.Sprintf(`ssql.Select(func(r ssql.Record) ssql.Record {
 		return ssql.Without(r, %s)
-	})(%s)`, outputVar, quotedList(fields), inputVar)
+	})`, quotedList(fields))
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "exclude", fields, filter), inputVar)
 
 	// Create stmt fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())

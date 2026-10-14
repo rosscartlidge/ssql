@@ -55,6 +55,7 @@ TEST_DATA_DIR="$PROJECT_DIR/test-data"
 
 # Detailed failure tracking for fix requests
 declare -a DETAILED_FAILURES=()
+FAILURE_SEP=$'\x1f' # unit separator between the fields of a DETAILED_FAILURES entry
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -327,7 +328,9 @@ record_detailed_failure() {
     fi
 
     # Store as a structured entry (using ||| as field separator)
-    DETAILED_FAILURES+=("${mode}|||${test_id}|||${prompt}|||${failures}|||${output_content}")
+    # One field separator character: IFS is a SET of characters, so the
+    # old "|||" split on every "|" and read empty ids and prompts.
+    DETAILED_FAILURES+=("${mode}${FAILURE_SEP}${test_id}${FAILURE_SEP}${prompt}${FAILURE_SEP}${failures}${FAILURE_SEP}${output_content}")
 }
 
 # Generate a fix request markdown file from collected failures
@@ -364,7 +367,7 @@ EOF
     local count=0
     for entry in "${DETAILED_FAILURES[@]}"; do
         # Parse the entry
-        IFS='|||' read -r entry_mode entry_id entry_prompt entry_failures entry_output <<< "$entry"
+        IFS="$FAILURE_SEP" read -r -d '' entry_mode entry_id entry_prompt entry_failures entry_output < <(printf '%s\0' "$entry")
 
         # Only include failures for the current mode
         if [ "$entry_mode" != "$mode" ]; then

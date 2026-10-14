@@ -160,7 +160,7 @@ func generateFlattenCode(field string, depth int, keep bool) error {
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
 	}
-	code := fmt.Sprintf("flattened := ssql.FlattenField(%q, %d, %v)(%s)", field, depth, keep, inputVar)
+	code := fmt.Sprintf("flattened := %s(%s)", checkedFilter(fragments, "flatten", []string{field}, fmt.Sprintf("ssql.FlattenField(%q, %d, %v)", field, depth, keep)), inputVar)
 	frag := lib.NewStmtFragment("flattened", inputVar, code, nil, getCommandString())
 	if frag.Op != nil {
 		frag.Op.Fields = []string{field}

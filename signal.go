@@ -939,27 +939,57 @@ func CorrelateFilter(fieldA, fieldB, outputField string, same bool) Filter[Recor
 				return
 			}
 
-			if same {
-				// Same length - add to original records
-				for i, r := range collected {
-					mut := r.ToMutable()
-					if i < len(result) {
-						mut = mut.Float(outputField, result[i])
-					}
-					if !yield(mut.Freeze()) {
-						return
-					}
+			for r := range CorrelationRecords(result, collected, len(signalB), outputField, same) {
+				if !yield(r) {
+					return
 				}
-			} else {
-				// Full correlation - create new records with index and value
-				for i, v := range result {
-					mut := MakeMutableRecord()
-					mut = mut.Int("index", int64(i))
-					mut = mut.Float(outputField, v)
-					if !yield(mut.Freeze()) {
-						return
-					}
+			}
+		}
+	}
+}
+
+// CorrelationRecords renders a correlation as records, the one shape for
+// exec and generated programs. Same-length output (same=true) adds
+// outputField to each input record; full output is one record per
+// sample with its index and its lag — index minus lenB-1, zero where
+// the signals align (readers computed it by hand before 2026-10-14, and
+// the signal codelab charted an empty axis).
+func CorrelationRecords(result Signal, collected []Record, lenB int, outputField string, same bool) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		if same {
+			for i, r := range collected {
+				mut := r.ToMutable()
+				if i < len(result) {
+					mut = mut.Float(outputField, result[i])
 				}
+				if !yield(mut.Freeze()) {
+					return
+				}
+			}
+			return
+		}
+		for i, v := range result {
+			mut := MakeMutableRecord()
+			mut = mut.Int("index", int64(i))
+			mut = mut.Int("lag", int64(i-(lenB-1)))
+			mut = mut.Float(outputField, v)
+			if !yield(mut.Freeze()) {
+				return
+			}
+		}
+	}
+}
+
+// LagRecords renders an autocorrelation computed up to a maximum lag:
+// one record per lag from zero.
+func LagRecords(result Signal, outputField string) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		for lag, v := range result {
+			mut := MakeMutableRecord()
+			mut = mut.Int("lag", int64(lag))
+			mut = mut.Float(outputField, v)
+			if !yield(mut.Freeze()) {
+				return
 			}
 		}
 	}
@@ -995,12 +1025,8 @@ func AutoCorrelateMaxFilter(field, outputField string, maxLag int) Filter[Record
 				return
 			}
 
-			// Output records with lag and correlation value
-			for lag, v := range result {
-				mut := MakeMutableRecord()
-				mut = mut.Int("lag", int64(lag))
-				mut = mut.Float(outputField, v)
-				if !yield(mut.Freeze()) {
+			for r := range LagRecords(result, outputField) {
+				if !yield(r) {
 					return
 				}
 			}

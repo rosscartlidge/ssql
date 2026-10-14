@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2570,28 +2569,31 @@ func ReadJSONAuto(filename string) (iter.Seq[Record], error) {
 
 	// Check if it starts with '[' (JSON array)
 	if data[0] == '[' {
-		// Parse as JSON array
-		var records []map[string]any
-		if err := json.Unmarshal(data, &records); err != nil {
+		// Parse as JSON array: one element at a time through the same
+		// fast parser the JSONL readers use, so each record keeps the
+		// object's key order (until 2026-10-14 the array was decoded into
+		// maps and the columns came out sorted: a DuckDB export written
+		// id,note,ts,amount read as amount,id,note,ts).
+		dec := json.NewDecoder(bytes.NewReader(data))
+		if _, err := dec.Token(); err != nil { // the opening [
 			return nil, fmt.Errorf("failed to parse JSON array: %w", err)
 		}
-
+		var elements []json.RawMessage
+		for dec.More() {
+			var raw json.RawMessage
+			if err := dec.Decode(&raw); err != nil {
+				return nil, fmt.Errorf("failed to parse JSON array: %w", err)
+			}
+			elements = append(elements, raw)
+		}
 		return func(yield func(Record) bool) {
-			for _, rec := range records {
-				record := MakeMutableRecord()
-				// A decoded JSON object is a map: its key order is gone, so
-				// the record's is sorted (deterministic; the source order is
-				// the open TODO on JSON input). Without this a MutableRecord,
-				// which keeps insertion order, took the map's random one.
-				keys := make([]string, 0, len(rec))
-				for k := range rec {
-					keys = append(keys, k)
+			var cache schemaCache
+			for _, raw := range elements {
+				m, err := ParseJSONLineWithNulls(raw)
+				if err != nil {
+					continue
 				}
-				sort.Strings(keys)
-				for _, k := range keys {
-					record = addJSONField(record, k, rec[k])
-				}
-				if !yield(record.Freeze()) {
+				if !yield(cache.freeze(m)) {
 					return
 				}
 			}

@@ -35,8 +35,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -run` against 0.99 s in exec. The DuckDB lane now runs for the hive
   equivalence cases, the independent oracle for the derived column.
 
+- **`count` has a SQL translation**: the row count of the query so far,
+  in a column named `count`.
+
 ### Fixed
 
+- **Generated record-mode programs stop on an unknown field.** Exec
+  checks every stage's fields against the first record; the record lane
+  checked nothing, so `where -if nosuch eq 1` filtered everything out,
+  `sort nosuch` passed rows through and `group-by nosuch` grouped on an
+  empty column, all exit 0 (the typed lane refuses at generate time).
+  Every record stage that validates fields in exec now chains
+  `ssql.RequireFields` in front of its filter, and the program stops
+  with exec's message: `where references unknown field(s): nosuch
+  (available: …)`. `TestRecordCodegenUnknownFieldIsLoud` runs a bad and
+  a good invocation of each stage. Library: `ssql.RequireFields`,
+  `ssql.MissingFields`, `ssql.UnknownFieldsError` (the one wording,
+  shared with exec).
+- **`group-by` accepted an empty result or field name** (`-sum age ''`
+  silently produced no aggregate; `-count ''` a column named `""`).
+  Both are errors now.
+- **`generate sql`: a `window -order F` followed by `limit N` carried no
+  ORDER BY**, so DuckDB's LIMIT could take different rows from exec's.
+  The last window clause's partition and order are the query's ORDER
+  BY. Equivalence case `window_order_limit`.
+- **A JSON array file keeps its key order.** `from json` on an array
+  (a DuckDB or Postgres export) decoded each object into a map, so the
+  columns came out sorted: `id,note,ts,amount` read as
+  `amount,id,note,ts`. JSON Lines had kept the order since v4.84; the
+  array readers (exec and generated programs) now go through the same
+  parser. Equivalence case `json_array_column_order`.
+- **The typed lane no longer infers an RFC 3339 CSV column as a time.**
+  Exec and the SQL lane (whose `read_csv` candidates exclude
+  timestamps) keep the string unless `-type F time`, `-format` or a
+  sidecar declares it; typed alone made it a `time.Time`, so `ts >
+  since` compared chronologically in one lane and lexically in the
+  others. One rule now. Equivalence case `csv_iso_time_stays_string`.
+- **`correlate` full mode emits `lag`** beside `index` (lag zero where
+  the signals align; `-x lag` charts directly). Exec renders its records
+  through the library's `CorrelationRecords`/`LagRecords`, which the
+  filters generated programs call also use.
+- `ssql union -help` said extra files must be JSONL; they may be csv,
+  tsv, json or schema-headed jsonl, as the flag help already said.
+- `scripts/test-ai-prompts.sh` wrote fix requests with empty ids and
+  prompts: its field separator was `|||`, which `IFS` reads as "any
+  `|`". One separator character now. Two dead scripts that depended on
+  a `test-output/` directory are removed.
 - **The optimiser's aggregation pushdown gave wrong results over
   several shards.** `catalog-aggregation-pushdown` (and its `merge
   -catalog` twin) shipped a `group-by` after a pushed `where` into the

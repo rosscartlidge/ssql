@@ -229,9 +229,10 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 	}
 
 	outputVar := "casted"
-	castCode := fmt.Sprintf(`%s := ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
+	filter := fmt.Sprintf(`ssql.Update(func(mut ssql.MutableRecord) ssql.MutableRecord {
 %s		return mut
-	})(%s)`, outputVar, codeBody.String(), inputVar)
+	})`, codeBody.String())
+	castCode := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "cast", fields, filter), inputVar)
 	var imports []string
 
 	// Create and write fragment

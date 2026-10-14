@@ -1194,3 +1194,20 @@ func TestTranslateCatalogSQL(t *testing.T) {
 		t.Errorf("postgres: want dialect refusal, got %v", err)
 	}
 }
+
+// TestTranslateCountSQL: the sink `count` becomes the row count of the
+// query so far, in a column named count (no translation before
+// 2026-10-14), and a window's order reaches the query's ORDER BY so a
+// limit after it takes the rows exec takes.
+func TestTranslateCountSQL(t *testing.T) {
+	sql := assembleFromCommands(t, "ssql from csv x.csv", "ssql where -if age gt 30", "ssql count")
+	for _, want := range []string{`SELECT COUNT(*) AS`, `age > 30`} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %q:\n%s", want, sql)
+		}
+	}
+	sql = assembleFromCommands(t, "ssql from csv x.csv", "ssql window -partition dept -order salary -desc -row-number rn", "ssql limit 2")
+	if !strings.Contains(sql, `ORDER BY dept, salary DESC`) || !strings.Contains(sql, "LIMIT 2") {
+		t.Errorf("window order must reach ORDER BY before LIMIT:\n%s", sql)
+	}
+}

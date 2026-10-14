@@ -281,8 +281,8 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 	for _, of := range orderBy {
 		fields = append(fields, fmt.Sprintf(`{Field: %q, Desc: %v}`, of.Field, of.Desc))
 	}
-	code := fmt.Sprintf("%s := ssql.SortRecords([]ssql.OrderField{%s})(%s)",
-		outputVar, strings.Join(fields, ", "), inputVar)
+	filter := fmt.Sprintf("ssql.SortRecords([]ssql.OrderField{%s})", strings.Join(fields, ", "))
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "sort", orderFieldNames(orderBy), filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)
@@ -298,4 +298,13 @@ func isSortableGoType(t string) bool {
 		return true
 	}
 	return false
+}
+
+// orderFieldNames lists the fields of a sort order, for the runtime check.
+func orderFieldNames(orderBy []ssql.OrderField) []string {
+	names := make([]string, len(orderBy))
+	for i, of := range orderBy {
+		names[i] = of.Field
+	}
+	return names
 }

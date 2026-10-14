@@ -2,6 +2,7 @@ package commands
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	cf "github.com/rosscartlidge/autocli/v4"
@@ -82,15 +83,27 @@ func TestParseGroupBySpecs_IncompleteDropped(t *testing.T) {
 	ctx := &cf.Context{
 		GlobalFlags: map[string]any{
 			"-sum": []any{
-				map[string]any{"field": "salary"},                // missing result-name -> dropped
-				map[string]any{"result-name": "total"},           // missing field -> dropped
+				map[string]any{"field": "salary"},                // missing result-name -> kept, refused by validateAggSpecs
+				map[string]any{"result-name": "total"},           // missing field -> kept, refused by validateAggSpecs
 				map[string]any{"field": "x", "result-name": "y"}, // kept
 			},
 		},
 	}
+	// An incomplete spec is KEPT so validation can refuse it: until
+	// 2026-10-14 it was dropped here and `-sum age ''` silently produced
+	// no aggregate.
 	got := parseGroupBySpecs(ctx)
-	want := []aggSpec{{function: "sum", field: "x", result: "y"}}
+	want := []aggSpec{{function: "sum", field: "salary"}, {function: "sum", result: "total"}, {function: "sum", field: "x", result: "y"}}
 	if !reflect.DeepEqual(got.aggs, want) {
 		t.Errorf("aggs:\n got %+v\nwant %+v", got.aggs, want)
+	}
+	if err := validateAggSpecs(got.aggs[:1]); err == nil || !strings.Contains(err.Error(), "result name is empty") {
+		t.Errorf("empty result name: want refusal, got %v", err)
+	}
+	if err := validateAggSpecs(got.aggs[1:2]); err == nil || !strings.Contains(err.Error(), "field name is empty") {
+		t.Errorf("empty field name: want refusal, got %v", err)
+	}
+	if err := validateAggSpecs(got.aggs[2:]); err != nil {
+		t.Errorf("complete spec: %v", err)
 	}
 }

@@ -233,8 +233,8 @@ func generateResampleCode(cfg ssql.ResampleConfig) error {
 	// Record mode: filter-shaped (the assembler composes stmt
 	// fragments via ssql.Chain), one call into the shared
 	// implementation.
-	code := fmt.Sprintf("%s := ssql.ResampleFilter(%s)(%s)",
-		outputVar, resampleConfigLiteral(cfg), inputVar)
+	code := fmt.Sprintf("%s := %s(%s)",
+		outputVar, checkedFilter(fragments, "resample", append([]string{cfg.TimeField}, cfg.Values...), "ssql.ResampleFilter("+resampleConfigLiteral(cfg)+")"), inputVar)
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	stampResampleOp(frag, cfg)
 	return lib.WriteCodeFragment(frag)

@@ -122,11 +122,69 @@ func validateFields(r ssql.Record, fields []string, command string) error {
 	}
 	if len(missing) > 0 {
 		missing = dedupeStrings(missing)
-		return fmt.Errorf("%s references unknown field(s): %s (available: %s)%s",
-			command, strings.Join(missing, ", "), strings.Join(fieldNames(r), ", "),
-			dashlessFlagHint(command, missing))
+		return fmt.Errorf("%w%s", ssql.UnknownFieldsError(command, missing, fieldNames(r)), dashlessFlagHint(command, missing))
 	}
 	return nil
+}
+
+// checkedFilter prefixes a record-mode stage's filter with the check exec
+// makes against the stream's schema (ssql.RequireFields), so a generated
+// program stops on an unknown field with exec's message instead of
+// filtering everything out or grouping on an empty column. The typed
+// lane checks at generate time and does not need it. The check is chained
+// in front of the filter, not wrapped around the input: the assembler
+// finds a stmt's input variable after its last ")(" (lib.extractFilter),
+// so the stmt must keep the shape `out := FILTER(in)`. It is applied only
+// while the stream's field set is still the source's (recordCheckSound):
+// a generated program has no schema header, so after a join or a
+// conditional update a field may be absent from early records that exec's
+// header would declare. Returns the filter itself when nothing applies.
+func checkedFilter(fragments []*lib.CodeFragment, stage string, fields []string, filter string) string {
+	fields = dedupeStrings(fields)
+	if len(fields) == 0 || !recordCheckSound(fragments) {
+		return filter
+	}
+	return fmt.Sprintf("ssql.Chain(ssql.RequireFields(%q, %s), %s)", stage, quotedList(fields), filter)
+}
+
+// checkedInput is checkedFilter for a sink (a final fragment, which the
+// assembler does not split): the input wrapped in the check.
+func checkedInput(fragments []*lib.CodeFragment, stage string, fields []string, inputVar string) string {
+	fields = dedupeStrings(fields)
+	if len(fields) == 0 || !recordCheckSound(fragments) {
+		return inputVar
+	}
+	return fmt.Sprintf("ssql.RequireFields(%q, %s)(%s)", stage, quotedList(fields), inputVar)
+}
+
+// schemaPreservingKinds are the stages whose output carries exactly the
+// input's field set, so the source's schema still describes the stream.
+var schemaPreservingKinds = map[string]bool{
+	"where": true, "sort": true, "top": true, "limit": true, "offset": true,
+	"distinct": true, "sample": true, "cast": true, "fill": true, "tee": true,
+}
+
+// recordCheckSound reports whether a runtime field check on this stage's
+// input is exact: no upstream fragments (stdin, whose records share the
+// header's schema), or a source followed only by schema-preserving
+// stages. A fragment without an Op (a stage's second fragment, an old
+// producer) ends the certainty.
+func recordCheckSound(fragments []*lib.CodeFragment) bool {
+	for i, f := range fragments {
+		if f.Op == nil {
+			return false
+		}
+		if i == 0 {
+			if f.Op.Kind != "from" {
+				return false
+			}
+			continue
+		}
+		if !schemaPreservingKinds[f.Op.Kind] {
+			return false
+		}
+	}
+	return true
 }
 
 // fieldListHasOrPath is HasFieldOrPath over a plain list of field names
@@ -186,12 +244,7 @@ func validateFieldsSchema(schema *lib.Schema, fields []string, command string) e
 	}
 	if len(missing) > 0 {
 		missing = dedupeStrings(missing)
-		available := make([]string, len(schema.Fields))
-		copy(available, schema.Fields)
-		sort.Strings(available)
-		return fmt.Errorf("%s references unknown field(s): %s (available: %s)%s",
-			command, strings.Join(missing, ", "), strings.Join(available, ", "),
-			dashlessFlagHint(command, missing))
+		return fmt.Errorf("%w%s", ssql.UnknownFieldsError(command, missing, schema.Fields), dashlessFlagHint(command, missing))
 	}
 	return nil
 }

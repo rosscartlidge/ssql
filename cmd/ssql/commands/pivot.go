@@ -144,8 +144,8 @@ func generatePivotCode(rowField, colField, valField, aggFunc string) error {
 	}
 
 	outputVar := "pivoted"
-	code := fmt.Sprintf(`%s := ssql.Pivot(%q, %q, %q, %q)(%s)`,
-		outputVar, rowField, colField, valField, aggFunc, inputVar)
+	filter := fmt.Sprintf(`ssql.Pivot(%q, %q, %q, %q)`, rowField, colField, valField, aggFunc)
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "pivot", []string{rowField, colField, valField}, filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)

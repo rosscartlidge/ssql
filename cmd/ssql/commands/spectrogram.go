@@ -217,8 +217,8 @@ func generateSpectrogramCode(inputFile, field string, windowSize, hopSize int, w
 
 	outputVar := "spectrogramRecords"
 
-	code := fmt.Sprintf(`%s := ssql.SpectrogramFilter(%q, %s)(%s)`,
-		outputVar, field, optsCode, inputVar)
+	filter := fmt.Sprintf(`ssql.SpectrogramFilter(%q, %s)`, field, optsCode)
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "spectrogram", []string{field}, filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)

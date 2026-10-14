@@ -127,8 +127,8 @@ func TestSchemaModeTypesAndData(t *testing.T) {
 		want     string
 	}{
 		{"source types", "ssql from csv " + csv, "field,type\nname,string\ndept,string\nsalary,int\nrate,float\nhired,string\n"},
-		{"nested paths from a json array", "ssql from json " + nestedJSON, // an array file's columns come out sorted
-			"field,type\naddr,json\nid,int\ntags,json\naddr.city,string\naddr.geo,json\naddr.geo.lat,float\n"},
+		{"nested paths from a json array", "ssql from json " + nestedJSON, // an array file's columns keep the object's key order (sorted until 2026-10-14)
+			"field,type\nid,int\naddr,json\ntags,json\naddr.city,string\naddr.geo,json\naddr.geo.lat,float\n"},
 		{"nested paths from a headed jsonl", "ssql from jsonl " + nestedJSONL, nestedWant},
 		{"nested paths survive a stage", "ssql from jsonl " + nestedJSONL + " | ssql where -if addr.geo.lat gt 1", nestedWant},
 		{"sidecar types without a sample", "ssql from csv " + sidecarCSV, "field,type\nid,float\namount,string\n"},

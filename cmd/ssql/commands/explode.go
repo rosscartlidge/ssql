@@ -102,7 +102,7 @@ func generateExplodeCode(field string, keepEmpty bool) error {
 	if len(fragments) > 0 {
 		inputVar = fragments[len(fragments)-1].Var
 	}
-	code := fmt.Sprintf("exploded := ssql.Explode(%q, %v)(%s)", field, keepEmpty, inputVar)
+	code := fmt.Sprintf("exploded := %s(%s)", checkedFilter(fragments, "explode", []string{field}, fmt.Sprintf("ssql.Explode(%q, %v)", field, keepEmpty)), inputVar)
 	frag := lib.NewStmtFragment("exploded", inputVar, code, nil, getCommandString())
 	if frag.Op != nil {
 		frag.Op.Fields = []string{field}

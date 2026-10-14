@@ -692,3 +692,28 @@ func BenchmarkSpectrogramLargeCPU(b *testing.B) {
 		}
 	})
 }
+
+// TestCorrelateFilterLag: full cross-correlation records carry index and
+// lag, lag zero where the signals align (index len(b)-1); same-length
+// output has neither.
+func TestCorrelateFilterLag(t *testing.T) {
+	var rows []Record
+	for i, v := range []float64{1, 2, 3} {
+		rows = append(rows, MakeMutableRecord().Int("i", int64(i)).Float("a", v).Float("b", v).Freeze())
+	}
+	out := slices.Collect(CorrelateFilter("a", "b", "c", false)(slices.Values(rows)))
+	if len(out) != 5 {
+		t.Fatalf("full correlation of 3 and 3: got %d records, want 5", len(out))
+	}
+	for i, r := range out {
+		if got := GetOr(r, "lag", int64(99)); got != int64(i-2) {
+			t.Errorf("record %d: lag %d, want %d", i, got, i-2)
+		}
+		if GetOr(r, "index", int64(-1)) != int64(i) {
+			t.Errorf("record %d: index %d", i, GetOr(r, "index", int64(-1)))
+		}
+	}
+	if same := slices.Collect(CorrelateFilter("a", "b", "c", true)(slices.Values(rows))); len(same) != 3 || same[0].Has("lag") {
+		t.Errorf("same-length output: %d records, lag present %v", len(same), same[0].Has("lag"))
+	}
+}

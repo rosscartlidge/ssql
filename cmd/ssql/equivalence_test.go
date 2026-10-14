@@ -1657,6 +1657,36 @@ var equivCases = []EquivCase{
 		Golden:   []map[string]any{{"region": "east", "a": 8.75}, {"region": "north", "a": 26.25}, {"region": "south", "a": 12.375}},
 	},
 	{
+		// A limit after a window takes the window's order: exec emits the
+		// partition sorted by -order, and the SQL must say ORDER BY before
+		// its LIMIT (it did not until 2026-10-14; DuckDB happened to keep
+		// the order). Shuffled input, so a LIMIT in file order diverges.
+		Name:     "window_order_limit",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} window -order pop -desc -row-number rn | {{.bin}} limit 3`,
+		Ordered:  true,
+	},
+	{
+		// A JSON array file keeps the object's key order (id, note,
+		// amount): the readers decoded it into a map until 2026-10-14 and
+		// the columns came out sorted, where DuckDB's read_json keeps the
+		// order (the column-order comparison is the gate).
+		Name:     "json_array_column_order",
+		Pipeline: `{{.bin}} from json {{.data}}/order_array.json | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "note": "y", "amount": 3}, {"id": 2, "note": "x", "amount": 2.5}},
+	},
+	{
+		// An RFC 3339 CSV column is a STRING in every lane unless -type
+		// declares it: the typed lane inferred time.Time until 2026-10-14
+		// (exec and the SQL lane, whose read_csv candidates exclude
+		// timestamps, kept the string), so this comparison was lexical
+		// in two lanes and chronological in one — the +11:00 row is on
+		// different sides of the line under the two readings.
+		Name:     "csv_iso_time_stays_string",
+		Pipeline: `{{.bin}} from csv {{.data}}/times.csv | {{.bin}} where -if ts gt 2026-01-05 | {{.bin}} include id ts | {{.bin}} sort id`,
+		Ordered:  true,
+	},
+	{
 		// -shard-field names the file on every record (host:path, so no
 		// Golden: the path is the fixture's); it goes before the derived
 		// key, in every lane.

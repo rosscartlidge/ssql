@@ -191,11 +191,12 @@ func generateTopCode(n int, field string, asc bool) error {
 	if asc {
 		funcName = "ssql.BottomByFunc"
 	}
-	code := fmt.Sprintf(`%s := %s(*flagTop, func(a, b ssql.Record) int {
+	filter := fmt.Sprintf(`%s(*flagTop, func(a, b ssql.Record) int {
 		av, _ := ssql.Get[any](a, %q)
 		bv, _ := ssql.Get[any](b, %q)
 		return ssql.CompareAny(av, bv)
-	})(%s)`, outputVar, funcName, field, field, inputVar)
+	})`, funcName, field, field)
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "top", []string{field}, filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	frag.Params = params

@@ -167,16 +167,19 @@ func generateRenameCode(renames []struct{ oldField, newField string }) error {
 
 	// Generate rename statements
 	var renameStmts strings.Builder
+	var oldFields []string
 	for _, r := range renames {
 		renameStmts.WriteString(fmt.Sprintf("\n\t\tmut = mut.Rename(%q, %q)", r.oldField, r.newField))
+		oldFields = append(oldFields, r.oldField)
 	}
 
 	// Generate code
 	outputVar := "renamed"
-	code := fmt.Sprintf(`%s := ssql.Select(func(r ssql.Record) ssql.Record {
+	filter := fmt.Sprintf(`ssql.Select(func(r ssql.Record) ssql.Record {
 		mut := r.ToMutable()%s
 		return mut.Freeze()
-	})(%s)`, outputVar, renameStmts.String(), inputVar)
+	})`, renameStmts.String())
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "rename", oldFields, filter), inputVar)
 
 	// Create stmt fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())

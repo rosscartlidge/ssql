@@ -356,7 +356,20 @@ func generateWhereCode(ctx *cf.Context) error {
 	}
 
 	outputVar := "filtered"
-	codeLines = append(codeLines, fmt.Sprintf("%s := ssql.Where(%s)(%s)", outputVar, filterCode, inputVar))
+	var checkFields []string
+	for _, clause := range ctx.Clauses {
+		if conds, err := parseConditions(clause.Flags["-if"]); err == nil {
+			for _, c := range conds {
+				checkFields = append(checkFields, c.Field)
+			}
+		}
+		if conds, err := parseFieldConditions(clause.Flags["-if-field"]); err == nil {
+			for _, c := range conds {
+				checkFields = append(checkFields, c.Field, c.Value)
+			}
+		}
+	}
+	codeLines = append(codeLines, fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "where", checkFields, "ssql.Where("+filterCode+")"), inputVar))
 	code := strings.Join(codeLines, "\n")
 
 	// Create code fragment

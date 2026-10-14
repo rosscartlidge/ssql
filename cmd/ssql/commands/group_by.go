@@ -643,6 +643,11 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	if err := validateAggSpecs(aggSpecs); err != nil {
 		return err
 	}
+	var checkFields []string // the keys and every aggregate's input, for the record lane's runtime check
+	checkFields = append(checkFields, groupByFields...)
+	for _, spec := range aggSpecs {
+		checkFields = append(checkFields, aggInputFields(spec)...)
+	}
 
 	// Typed-mode branch — emits typed.GroupBy (or typed.GroupByParallel
 	// in parallel mode) with a synthesized aggregator and a derived
@@ -797,13 +802,14 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			aggLines.WriteString(fmt.Sprintf("\t\t\t{Name: %q, Fn: ssql.StreamExprAgg(%q, %q, %q)}", spec.result, spec.initExpr, spec.everyExpr, spec.finalExpr))
 		}
 
-		code := fmt.Sprintf(`rollupResult := ssql.Rollup(ssql.RollupConfig{
+		filter := fmt.Sprintf(`ssql.Rollup(ssql.RollupConfig{
 		Fields: []string{%s},
 		Ordered: []ssql.NamedAgg{
 %s,
 		},
 		Mode: %s,
-	})(%s)`, fieldsList.String(), aggLines.String(), modeStr, inputVar)
+	})`, fieldsList.String(), aggLines.String(), modeStr)
+		code := fmt.Sprintf("rollupResult := %s(%s)", checkedFilter(fragments, "group-by", checkFields, filter), inputVar)
 
 		frag := lib.NewStmtFragment("rollupResult", inputVar, code, nil, getCommandString())
 		frag.PlanNotes = typedFallbackNotes
@@ -836,7 +842,11 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			keepCases.WriteString(fmt.Sprintf("\n\t\t\tcase %q:\n\t\t\t\tcontinue", field))
 		}
 
-		code := fmt.Sprintf(`grouped := ssql.Chain(
+		check := "" // the record lane's runtime check, first in the chain
+		if len(checkFields) > 0 {
+			check = "\n\t\tssql.RequireFields(\"group-by\", " + quotedList(dedupeStrings(checkFields)) + "),"
+		}
+		code := fmt.Sprintf(`grouped := ssql.Chain(%s
 		ssql.DistinctBy(func(r ssql.Record) string {
 			return fmt.Sprintf("%s", %s)
 		}),
@@ -850,6 +860,7 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 			return mut.Freeze()
 		}),
 	)(%s)`,
+			check,
 			keyFmt.String(),
 			strings.Join(keyParts, ", "),
 			keepCases.String(),
@@ -881,14 +892,14 @@ func generateGroupByCode(ctx *cf.Context, groupByFields []string) error {
 	if presorted {
 		groupFunc = "ssql.StreamGroupByFields"
 	}
-	var groupCode strings.Builder
-	groupCode.WriteString(fmt.Sprintf("grouped := %s(\"_group\"", groupFunc))
+	groupFilter := fmt.Sprintf("%s(\"_group\"", groupFunc)
 	for _, field := range groupByFields {
-		groupCode.WriteString(fmt.Sprintf(", %q", field))
+		groupFilter += fmt.Sprintf(", %q", field)
 	}
-	groupCode.WriteString(fmt.Sprintf(")(%s)", inputVar))
+	groupFilter += ")"
+	groupCode := fmt.Sprintf("grouped := %s(%s)", checkedFilter(fragments, "group-by", checkFields, groupFilter), inputVar)
 
-	frag1 := lib.NewStmtFragment("grouped", inputVar, groupCode.String(), nil, getCommandString())
+	frag1 := lib.NewStmtFragment("grouped", inputVar, groupCode, nil, getCommandString())
 	frag1.PlanNotes = typedFallbackNotes
 	if err := lib.WriteCodeFragment(frag1); err != nil {
 		return fmt.Errorf("writing GroupByFields fragment: %w", err)

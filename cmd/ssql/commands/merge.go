@@ -434,8 +434,13 @@ func generateMergeCode(orderBy []ssql.OrderField, files []string) error {
 	// A filter-shaped closure, the stmt-fragment contract: the
 	// assembler applies it to the pipeline root.
 	outputVar := "merged"
-	code := fmt.Sprintf("%s := func(input iter.Seq[ssql.Record]) iter.Seq[ssql.Record] {\n\t\treturn ssql.MergeSorted([]ssql.OrderField{%s}, input%s)\n\t}(%s)",
-		outputVar, strings.Join(fields, ", "), strings.Join(append([]string{""}, sourceVars[1:]...), ", "), inputVar)
+	filter := fmt.Sprintf("func(input iter.Seq[ssql.Record]) iter.Seq[ssql.Record] {\n\t\treturn ssql.MergeSorted([]ssql.OrderField{%s}, input%s)\n\t}",
+		strings.Join(fields, ", "), strings.Join(append([]string{""}, sourceVars[1:]...), ", "))
+	var byNames []string
+	for _, of := range orderBy {
+		byNames = append(byNames, of.Field)
+	}
+	code := fmt.Sprintf("%s := %s(%s)", outputVar, checkedFilter(fragments, "merge", byNames, filter), inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, []string{"iter"}, getCommandString())
 	return lib.WriteCodeFragment(frag)
