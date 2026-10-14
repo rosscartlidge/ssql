@@ -8,9 +8,9 @@ Last modified: 2026-10-15
 
 Status: **retrospective, 2026-10-15.** Ross: "could you write a DFC on the
 recently added features and the bugs addressed and what remain." Covers
-2026-10-11 to 2026-10-15: releases v4.115.0, v4.116.0 and v4.117.0, and
-the unreleased tree (the DFC149 §4.4/§4.6 commits plus the TODO bug
-batch, gate green, not yet committed). The design documents for the
+2026-10-11 to 2026-10-15: releases v4.115.0, v4.116.0, v4.117.0 and
+v4.118.0 (the DFC149 §4.4/§4.6 commits plus the TODO bug batch, cut
+the day this was written). The design documents for the
 features are [DFC148](./dfc148_duckdb_view_only_mode.md) and
 [DFC149](./dfc149_hive_partitions_as_derived_catalog.md); this one is
 the ledger, so a release note, John's page and the next TODO triage
@@ -37,8 +37,8 @@ from Ross's "lets look at the bugs in TODO and fix them before we add
 any new features."
 
 Size, from `git diff v4.114.1`: 145 files, about 7,800 lines added;
-19 new equivalence cases; 37 CHANGELOG entries across the three
-releases and the unreleased section.
+19 new equivalence cases; 37 CHANGELOG entries across the four
+releases.
 
 ## 2. Features landed
 
@@ -77,7 +77,7 @@ survive (CLAUDE.md, "If It's Not Tested, It Will Break").
 The tuesday view over the rail layout: 3.0 s as written, 0.57 s
 optimised.
 
-### 2.4 Unreleased (committed 76955c3, 9baac3f; and the bug batch)
+### 2.4 v4.118.0 (2026-10-15: 76955c3, 9baac3f and the bug batch 5bc0aef)
 
 | Feature | Design | Gate |
 |---|---|---|
@@ -124,7 +124,7 @@ looked and wrong in a lane nobody ran.
 | `run` applied no optimiser pass, so a `where` inside a view read every file | `run` | measuring for John's page: 3.1 s vs 0.68 s |
 | The installed binary was stale during a measurement; every `generate sql` printed the old refusal in 0.02 s | — | the numbers were too good; CLAUDE.md's "rebuild first" rule exists for this |
 
-### 3.3 The TODO batch (2026-10-14, unreleased)
+### 3.3 The TODO batch (2026-10-14, in v4.118.0)
 
 Triage of every open TODO item that read as a defect, each reproduced
 against the current build first: nine fixed, two closed as already
@@ -255,11 +255,10 @@ Most of these are in the journal; the ones worth keeping are here.
 
 ### 5.4 Release
 
-The unreleased tree holds the two DFC149 commits and the bug batch
-(full `cmd/ssql` gate green on the exact tree, 988 s; vet and every
-package clean; `make doc-check` 45/45). The batch is not committed. The
-release is v4.118.0: the pre-tag gates (scale, permutation triples,
-`make doc-test`) have not yet run on this tree.
+Released as **v4.118.0 on 2026-10-15** (fix 5bc0aef, release cd4d3e1,
+bake 506c832 at the tag, debs and explore engine b879585), after the
+full `cmd/ssql` package, every other package, vet, scale, permutation
+triples and `make doc-test` were green on the tree as committed.
 
 ## Prior art / related
 
