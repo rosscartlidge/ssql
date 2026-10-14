@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.118.0] - 2026-10-15
+
 ### Added
 
 - **`from catalog` reads a local Parquet shard in-process** (DFC149
