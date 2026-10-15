@@ -158,6 +158,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC148 | 2026-10-12 | 2026-10-14 | [DuckDB's "view-only mode" post, reproduced in ssql: findings, fixes and gaps](./dfc148_duckdb_view_only_mode.md) |
 | DFC149 | 2026-10-13 | 2026-10-14 | [Hive Partitions Are a Derived Catalog](./dfc149_hive_partitions_as_derived_catalog.md) |
 | DFC150 | 2026-10-15 | 2026-10-15 | [The view-only week: what landed, what it broke open, what remains](./dfc150_view_only_week_retrospective.md) |
+| DFC151 | 2026-10-15 | 2026-10-15 | [The slim build: size, composition, uses, and what to cut](./dfc151_slim_build_diet.md) |
 
 <!-- DFC-INDEX-END -->
 
