@@ -874,7 +874,10 @@ The same fragments translate to SQL — by default in
 [DuckDB](https://duckdb.org)'s dialect. Most of what comes out is
 ordinary SQL, and the DuckDB-specific parts are the ones that read files
 directly (`FROM 'employees.csv'`), sampling (`USING SAMPLE`), `UNPIVOT`
-and `EXCLUDE`. If you have DuckDB installed, `-run` hands the SQL to it;
+and `EXCLUDE`. The pipeline goes through the same optimiser as
+`generate go` first (`-explain` names the rules, `+O` translates it as
+typed), so a `where` on a catalog column prunes the files the SQL
+names. If you have DuckDB installed, `-run` hands the SQL to it;
 results are byte-identical to the interpreted pipeline — a gate in the
 test suite checks every lane agrees:
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"maps"
 	"slices"
 	"strconv"
@@ -92,7 +93,10 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 			if err != nil {
 				return fmt.Errorf("reading fragments: %w", err)
 			}
-			if ctx.GetBool("-optimise", true) {
+			// The optimiser is on by default (+O turns it off), and
+			// skipped in the browser build as generate go's is: the
+			// rewritten pipeline is re-executed through bash.
+			if ctx.GetBool("-optimise", true) && runtime.GOOS != "js" {
 				if done, err := optimiseThenSQL(buf, ctx.GetBool("-explain", false), dialect, run, outputFile, ctx.Stdout(), ctx.Stderr()); done || err != nil {
 					return err
 				}
