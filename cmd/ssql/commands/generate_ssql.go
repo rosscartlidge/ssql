@@ -178,7 +178,26 @@ type ruleApplication struct {
 }
 
 func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
-	cmds, rules, err := optimizePipelineCmds(input)
+	return optimizePipelineWith(input, optimiseOptions{})
+}
+
+// optimiseOptions selects the rules for the consumer of the rewritten
+// pipeline. The default (every rule) is what `generate ssql`, `generate
+// go` and `run` want.
+type optimiseOptions struct {
+	// NoShardPushdown skips the rules that move a stage onto each shard
+	// (`from catalog -- …`, `from ssh -- …`, the multi-file and `merge
+	// -catalog` forms). `generate sql` translates one pipeline over the
+	// files it names and refuses `--` by design (translateCatalogSource),
+	// so for it those rewrites would turn a translatable pipeline into a
+	// refused one; the pruning rule (catalog-predicate-extraction) and
+	// the rest still apply.
+	NoShardPushdown bool
+}
+
+// optimizePipelineWith is optimizePipeline under the given options.
+func optimizePipelineWith(input io.Reader, opts optimiseOptions) (string, []ruleApplication, error) {
+	cmds, rules, err := optimizePipelineCmdsWith(input, opts)
 	if err != nil {
 		return "", rules, err
 	}
@@ -190,6 +209,11 @@ func optimizePipeline(input io.Reader) (string, []ruleApplication, error) {
 // consumer that renders them itself: generate ssql as shell text, run as
 // a document.
 func optimizePipelineCmds(input io.Reader) ([]*pipelineCmd, []ruleApplication, error) {
+	return optimizePipelineCmdsWith(input, optimiseOptions{})
+}
+
+// optimizePipelineCmdsWith is optimizePipelineCmds under the given options.
+func optimizePipelineCmdsWith(input io.Reader, opts optimiseOptions) ([]*pipelineCmd, []ruleApplication, error) {
 	// Read fragments from stdin
 	var fragments []*lib.CodeFragment
 	decoder := json.NewDecoder(input)
@@ -259,17 +283,21 @@ func optimizePipelineCmds(input io.Reader) ([]*pipelineCmd, []ruleApplication, e
 
 	// Phase 1 rules
 	rules = append(rules, ruleWhereMerge(cmds)...)
-	rules = append(rules, ruleSSHPredicatePushdown(cmds)...)
-	rules = append(rules, ruleSSHAggregationPushdown(cmds)...)
-	rules = append(rules, ruleMultiFilePredicatePushdown(cmds)...)
-	rules = append(rules, ruleMultiFileAggregationPushdown(cmds)...)
-	rules = append(rules, ruleMergeCatalogPredicatePushdown(cmds)...)
-	rules = append(rules, ruleMergeCatalogAggregationPushdown(cmds)...)
+	if !opts.NoShardPushdown {
+		rules = append(rules, ruleSSHPredicatePushdown(cmds)...)
+		rules = append(rules, ruleSSHAggregationPushdown(cmds)...)
+		rules = append(rules, ruleMultiFilePredicatePushdown(cmds)...)
+		rules = append(rules, ruleMultiFileAggregationPushdown(cmds)...)
+		rules = append(rules, ruleMergeCatalogPredicatePushdown(cmds)...)
+		rules = append(rules, ruleMergeCatalogAggregationPushdown(cmds)...)
+	}
 
 	// Phase 2 rules (before sort rules, since they may modify where commands)
 	rules = append(rules, ruleCatalogPredicateExtraction(cmds)...)
-	rules = append(rules, ruleCatalogPredicatePushdown(cmds)...)
-	rules = append(rules, ruleCatalogAggregationPushdown(cmds)...)
+	if !opts.NoShardPushdown {
+		rules = append(rules, ruleCatalogPredicatePushdown(cmds)...)
+		rules = append(rules, ruleCatalogAggregationPushdown(cmds)...)
+	}
 	r, empty := rulePredicateSimplification(cmds)
 	rules = append(rules, r...)
 	if empty {

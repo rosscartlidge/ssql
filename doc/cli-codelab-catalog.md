@@ -113,7 +113,10 @@ cat hive.csv
 When every file is local Parquet, `generate sql` has a form too: ssql
 prunes the catalog as the SQL is written, so the SQL names only the
 files that survive, and DuckDB derives the `month` column from the
-paths as ssql does (as text, never a number):
+paths as ssql does (as text, never a number). A `where` on the key
+after the `from` is lifted into `-if` first, the same rewrite `generate
+ssql` prints above, so the view form names one file too (`-explain`
+shows the rule; `+O` translates the pipeline as typed):
 
 ```bash
 (export SSQL_MODE=record; ssql from catalog -hive 'orders/month=*/*.parquet' -if month eq 2026-02 | ssql group-by month -count n | ssql to table) | ssql generate sql

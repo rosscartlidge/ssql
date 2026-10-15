@@ -87,6 +87,25 @@ func TestCatalogHive(t *testing.T) {
 		t.Errorf("run must prune through the derived column: %v\n%s", err, out)
 	}
 
+	// generate sql applies it too (default -optimise, 2026-10-15): the SQL
+	// names the one surviving file and the header records the rewrite;
+	// +O translates the pipeline as typed, every file and a WHERE.
+	sqlOf := func(flags string) string {
+		out, err := run("export SSQL_MODE=record; " + bin + " from catalog -hive " + glob + " | " + bin + " where -if region eq north | " + bin + " count | " + bin + " generate sql " + flags + " 2>&1")
+		if err != nil {
+			t.Errorf("generate sql %s: %v\n%s", flags, err, out)
+		}
+		return out
+	}
+	out = sqlOf("-explain")
+	if !strings.Contains(out, "[catalog-predicate-extraction]") || !strings.Contains(out, "-- Optimised by generate sql") || !strings.Contains(out, "region=north/data.parquet") || strings.Contains(out, "region=south") || strings.Contains(out, "WHERE") {
+		t.Errorf("generate sql must prune by the derived column:\n%s", out)
+	}
+	out = sqlOf("+O")
+	if !strings.Contains(out, "region=north/data.parquet") || !strings.Contains(out, "region=south/data.parquet") || !strings.Contains(out, "WHERE") || strings.Contains(out, "Optimised") {
+		t.Errorf("generate sql +O must translate the pipeline as typed:\n%s", out)
+	}
+
 	// Schema mode: the derived column, as a string, after the file's.
 	out, err = run("export SSQL_MODE=schema; " + bin + " from catalog -hive " + glob + " | head -1")
 	if err != nil || !strings.Contains(out, `"region":"string"`) || !strings.Contains(out, `"fields":["id","name","amount","region"]`) {

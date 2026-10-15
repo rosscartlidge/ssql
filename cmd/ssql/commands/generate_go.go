@@ -277,7 +277,7 @@ func runOptimiseThenGo(in io.Reader, run bool, buildOut, outputFile string, expl
 
 	cmd := exec.Command("bash", "-c", inner)
 	env := setEnvVar(os.Environ(), "SSQL_MODE", targetMode)
-	env = setEnvVar(env, optimiseNoteEnv, optimiseHeaderNote(buf, rules))
+	env = setEnvVar(env, optimiseNoteEnv, optimiseHeaderNote(buf, rules, "go"))
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -295,7 +295,7 @@ var ssqlStageRe = regexp.MustCompile(`(^|\| |<\()ssql `)
 // optimiseHeaderNote describes the rewrite for the generated header:
 // the pipeline as typed (from the incoming fragments' Command strings)
 // and the rules that turned it into the one implemented.
-func optimiseHeaderNote(buf []byte, rules []ruleApplication) string {
+func optimiseHeaderNote(buf []byte, rules []ruleApplication, target string) string {
 	var typed []string
 	dec := json.NewDecoder(bytes.NewReader(buf))
 	for {
@@ -308,11 +308,11 @@ func optimiseHeaderNote(buf []byte, rules []ruleApplication) string {
 		}
 	}
 	var sb strings.Builder
-	sb.WriteString("Optimised by generate go (default; +O disables) from the pipeline as typed:\n\n")
+	fmt.Fprintf(&sb, "Optimised by generate %s (default; +O disables) from the pipeline as typed:\n\n", target)
 	for _, c := range typed {
 		sb.WriteString(c + " |\n")
 	}
-	sb.WriteString("ssql generate go\n\nRules applied:\n")
+	sb.WriteString("ssql generate " + target + "\n\nRules applied:\n")
 	for _, r := range rules {
 		fmt.Fprintf(&sb, "  %s: %s → %s\n", r.Rule, r.Before, r.After)
 	}

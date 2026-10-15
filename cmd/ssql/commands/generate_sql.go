@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -42,6 +43,18 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 		Default("duckdb").
 		Completer(&cf.StaticCompleter{Options: sqlDialects}).
 		Help("Target engine: duckdb (default), postgres or datafusion. Same pipeline semantics; engine-specific spellings, and stages with no translation in that engine are refused loudly").
+		Done().
+		Flag("-optimise", "-O").
+		Bool().
+		Global().
+		Default(true).
+		Help("Apply the pipeline optimiser (the same rewrites as 'generate ssql' and 'generate go': a where on a catalog or hive column into -if on the from stage so the SQL names only the surviving files, parquet column pruning, dead sorts dropped, …) before translating. ON by default; +O / +optimise translates the pipeline as typed. The SQL's header comment records both").
+		Done().
+		Flag("-explain", "-e").
+		Bool().
+		Global().
+		Default(false).
+		Help("Print the optimiser's applied rules to stderr").
 		Done()
 	pipelineSourceFlags(sub, "translate", "record").
 		Flag("OUTPUT").
@@ -75,12 +88,21 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 			if err != nil {
 				return err
 			}
+			buf, err := io.ReadAll(fragSrc)
+			if err != nil {
+				return fmt.Errorf("reading fragments: %w", err)
+			}
+			if ctx.GetBool("-optimise", true) {
+				if done, err := optimiseThenSQL(buf, ctx.GetBool("-explain", false), dialect, run, outputFile, ctx.Stdout(), ctx.Stderr()); done || err != nil {
+					return err
+				}
+			}
 			// The dialect stays set through -run so the engine command
 			// and the Postgres load script see it.
 			prevDialect, prevLoads := sqlDialectCur, pgLoads
 			sqlDialectCur, pgLoads = dialect, nil
 			defer func() { sqlDialectCur, pgLoads = prevDialect, prevLoads }()
-			sql, err := assembleSQL(fragSrc)
+			sql, err := assembleSQL(bytes.NewReader(buf))
 			if err != nil {
 				return fmt.Errorf("assembling SQL: %w", err)
 			}
@@ -111,6 +133,56 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 			return nil
 		}).
 		Done()
+}
+
+// optimiseThenSQL is `generate sql -optimise` (the default): the
+// fragment stream is fed to optimizePipeline, the rewriter `generate
+// ssql` prints and `generate go` applies, and when a rule fired the
+// rewritten pipeline is re-executed under SSQL_MODE=record with THIS
+// binary into an inner `generate sql +O` carrying the same output
+// flags. The shard pushdown rules are left out (optimiseOptions): the
+// translator reads whole files, never `--`. Until 2026-10-15 the SQL lane alone translated the pipeline as
+// typed, so `from catalog -hive GLOB | where -if day eq D` named every
+// file where the Go lanes and `run` named one (TODO; DFC149 §4.6).
+// Returns done=false when nothing was rewritten (or the optimiser could
+// not read the stream — the plain translation then reports the error
+// the way it always has), so the caller translates the fragments in
+// hand: no second execution on a pipeline the optimiser cannot improve.
+func optimiseThenSQL(buf []byte, explain bool, dialect sqlDialect, run bool, outputFile string, stdout, stderr io.Writer) (done bool, err error) {
+	pipeline, rules, err := optimizePipelineWith(bytes.NewReader(buf), optimiseOptions{NoShardPushdown: true})
+	if err != nil || len(rules) == 0 {
+		// errEmptyResult (contradictory predicates) included: the SQL
+		// as typed returns no rows, which is the answer.
+		if explain && err == nil {
+			fmt.Fprintln(stderr, "(no optimisation rules applied)")
+		}
+		return false, nil
+	}
+	if explain {
+		for _, r := range rules {
+			fmt.Fprintf(stderr, "[%s] %s → %s\n", r.Rule, r.Before, r.After)
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return true, fmt.Errorf("locating ssql binary: %w", err)
+	}
+	prog := shellQuote(exe)
+	inner := ssqlStageRe.ReplaceAllString(pipeline, "${1}"+prog+" ")
+	inner += " | " + prog + " generate sql +O -dialect " + string(dialect)
+	switch {
+	case run:
+		inner += " -run"
+	case outputFile != "":
+		inner += " " + shellQuote(outputFile)
+	}
+	cmd := exec.Command("bash", "-c", inner)
+	env := setEnvVar(os.Environ(), "SSQL_MODE", "record")
+	env = setEnvVar(env, optimiseNoteEnv, optimiseHeaderNote(buf, rules, "sql"))
+	cmd.Env = env
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return true, cmd.Run()
 }
 
 // sqlQuery accumulates SQL clauses from pipeline fragments.
@@ -2587,6 +2659,14 @@ func renderSQL(q *sqlQuery) string {
 		sb.WriteString("-- Pipeline:\n")
 		for _, c := range q.comments {
 			sb.WriteString("--   " + c + "\n")
+		}
+		// The outer generate sql -optimise passes the pipeline as typed
+		// and the rules that rewrote it (optimiseThenSQL).
+		if note := os.Getenv(optimiseNoteEnv); note != "" {
+			sb.WriteString("--\n")
+			for _, line := range strings.Split(note, "\n") {
+				sb.WriteString(strings.TrimRight("-- "+line, " ") + "\n")
+			}
 		}
 		sb.WriteString("\n")
 	}

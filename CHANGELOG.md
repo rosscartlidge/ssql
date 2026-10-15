@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`generate sql` applies the optimiser** (`-optimise`, on by default;
+  `+O` translates the pipeline as typed; `-explain` prints the rules).
+  `from catalog -hive GLOB | where -if day eq D` now names the one
+  surviving file where it named every file with a `WHERE` (DuckDB
+  pruned by partition, so the answer was the same; a catalog with its
+  own metadata columns was read whole). The rules are those `generate
+  ssql` prints and `generate go` applies, minus the shard pushdowns
+  (`from catalog -- …`), which the translator refuses by design. The
+  SQL's header comment records the pipeline as typed and the rules.
+  DFC149 §4.6.
+
 ### Fixed
 
 - **Padded CSV cells in the typed lane.** Every lane trims a cell
