@@ -15,7 +15,7 @@ Do these in order; each assumes the one before it.
 
 ## Install and set up
 
-- [Installing ssql](install.md) — Homebrew, `go install`, prebuilt binaries, WASI, the GPU build, the Debian packages, the Go library, and the browser playground
+- [Installing ssql](install.md) — Homebrew, `go install`, prebuilt binaries, WASI (local build), the GPU build, the Debian packages, the Go library, and the browser playground
 - [The Shell Experience](cli-shell.md) — `ssql -shell-init`: completion and the Ctrl-O / Alt-h / Alt-g / Alt-r / Ctrl-T bindings
 
 ## Reference

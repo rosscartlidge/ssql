@@ -35,6 +35,9 @@ func TestExpandFilePatterns(t *testing.T) {
 // with -columns in the order given; a schema mismatch is refused naming
 // both files and the column.
 func TestReadParquetFiles(t *testing.T) {
+	if slimBuild {
+		t.Skip("needs the full build (parquet)")
+	}
 	dir := t.TempDir()
 	write := func(name string, ids ...int64) string {
 		p := filepath.Join(dir, name)

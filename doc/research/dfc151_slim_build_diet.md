@@ -258,6 +258,25 @@ Watch the first gate fail by reverting the `!slim` line on
 
 ## 8. Decisions for Ross
 
+Answered 2026-10-15 (plan mode): cut `from URL` from the browser (no
+fetch-only source); drop both the slim archives and the WASI tarball;
+WebVM ships the slim build and the doc stays as written.
+
+**Built 2026-10-15**, same day: §7 steps 1–3 and the doc side of 4.
+`http_source.go` and `serve_http.go` are `!slim` (the URL helpers in
+`http_url.go`, the stage chain in `commands/stage_chain.go`, stubs in
+`http_source_slim.go`); `go/format` behind `lib/gofmt_full.go` /
+`gofmt_slim.go`; `TestSlimBuildDependencies` and
+`scripts/wasm-budget.sh` (ceiling 5 MB) are the gates; goreleaser
+builds the full binaries only. Measured: js/wasm 28.25 → 19.44 MB raw,
+6.47 → 4.52 MB gzipped; linux/386 slim 9.6 MB; WASI 18.9 MB; native
+slim 10.2 MB. Found on the way: `go test -tags slim .` had never
+compiled (`readahead_test.go` reaches the gated Parquet reader), so
+the Arrow, xlsx and three Parquet tests now carry `!slim` or a
+`slimBuild` skip. The WebVM binary itself is rebuilt at the next
+release.
+
+
 - Is `from URL` in the browser a feature anyone wants? The cut assumes
   no (nothing exercises it; a browser has CORS in the way regardless).
   If yes, the alternative is a tiny fetch-only source behind the

@@ -1113,6 +1113,9 @@ func TestFromCSVTypesSQL(t *testing.T) {
 // generate time; remote hosts, other formats, pushdown, -catalog-used
 // and an empty prune are refused.
 func TestTranslateCatalogSQL(t *testing.T) {
+	if slimBuild {
+		t.Skip("needs the full build (parquet)")
+	}
 	dir := t.TempDir()
 	write := func(rel string, cols []string, row ...any) string {
 		t.Helper()

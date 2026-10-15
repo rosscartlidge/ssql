@@ -1,3 +1,5 @@
+//go:build !slim
+
 package ssql
 
 // The readahead NEGATIVE RESULT (2026-08-30, closing DFC112's last

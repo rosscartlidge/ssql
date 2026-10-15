@@ -92,19 +92,12 @@ sudo install ssql /usr/local/bin/
 ssql version
 ```
 
-Each release also ships `ssql-slim_VERSION_OS_ARCH` archives: a smaller
-build without `ssql serve` and the embedded explorer engine
-(`to explore -wasm`), for containers and constrained hosts.
-
 ### Option 4: WASI (run anywhere)
 
-A single `.wasm` binary that runs on any platform with a WASI runtime ([wasmtime](https://wasmtime.dev/), wasmer, Docker+WASM):
+A single `.wasm` binary that runs on any platform with a WASI runtime ([wasmtime](https://wasmtime.dev/), wasmer, Docker+WASM). It is a local build (the slim build: no Parquet, xlsx, `serve` or URL sources):
 
 ```bash
-# Download from GitHub Releases (the archive is versioned: ssql_VERSION_wasi.tar.gz)
-V=$(curl -s https://api.github.com/repos/rosscartlidge/ssql/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
-curl -LO https://github.com/rosscartlidge/ssql/releases/download/v$V/ssql_${V}_wasi.tar.gz
-tar xzf ssql_${V}_wasi.tar.gz
+git clone https://github.com/rosscartlidge/ssql && cd ssql && make wasi
 
 # Run with wasmtime
 wasmtime ssql.wasm version

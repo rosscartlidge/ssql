@@ -164,7 +164,7 @@ After a minor/major release, always do ALL of these:
 
 **Deployments:**
 - [ ] Playground deploys automatically — `.github/workflows/playground.yml` pushes WASM + playground.html to `gh-pages` on push to main. Verify with `gh run list --workflow=playground.yml -L 1` (manual fallback steps in `claude/playground.md`)
-- [ ] Cross-compile for WebVM: `CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -ldflags "..." -o ~/src/ssql-terminal/dockerfiles/ssql ./cmd/ssql`
+- [ ] Cross-compile for WebVM (slim, as `claude/wasm.md` says; releases v4.116.0–v4.119.0 shipped the full build by habit): `CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -tags slim -ldflags "-s -w -X github.com/rosscartlidge/ssql/v4/cmd/ssql/version.Commit=$(git rev-parse --short=8 HEAD)" -o ~/src/ssql-terminal/dockerfiles/ssql ./cmd/ssql`
 - [ ] Push WebVM binary and trigger deploy: `gh workflow run Deploy --ref main -f DOCKERFILE_PATH=dockerfiles/ssql_mini -f IMAGE_SIZE=750M -f DEPLOY_TO_GITHUB_PAGES=true -f GITHUB_RELEASE=false`
 
 **Documentation audit:**
@@ -207,7 +207,7 @@ See `claude/record-api.md` for full API and migration guides.
 
 ## WASM Explore Engine (DFC107)
 
-`to explore -wasm` embeds the SAME slim playground wasm (gzipped ~3.4MB, `cmd/ssql/wasm/ssql-playground.wasm.gz`, `//go:embed` behind `!slim`) — the TinyGo mini-engine (a third, untested semantics implementation) was REMOVED; explore ops run through the real engine via an `ssqlExec` shim. Refresh the artifact with `make explore-wasm` (part of the release checklist); e2e gate: `scripts/explore-test.sh`. Slim builds error loudly on `-wasm` (a wasm can't embed itself).
+`to explore -wasm` embeds the SAME slim playground wasm (gzipped ~4.5MB — DFC151 cut `net/http` out of slim, 6.5 → 4.5; `make explore-wasm` and `make playground` fail over `WASM_BUDGET_MB`, and `TestSlimBuildDependencies` names any forbidden package that drifts back in — `cmd/ssql/wasm/ssql-playground.wasm.gz`, `//go:embed` behind `!slim`) — the TinyGo mini-engine (a third, untested semantics implementation) was REMOVED; explore ops run through the real engine via an `ssqlExec` shim. Refresh the artifact with `make explore-wasm` (part of the release checklist); e2e gate: `scripts/explore-test.sh`. Slim builds error loudly on `-wasm` (a wasm can't embed itself).
 ```bash
 ssql from data.csv | ssql to explore -wasm output.html
 make explore-wasm && go install ./cmd/ssql
@@ -292,7 +292,7 @@ See `claude/wasm.md` for all WASM/WASI knowledge: three build targets (browser, 
 
 See `claude/playground.md` for playground-specific data files, testing workflow, and chart support.
 
-- **Three WASM targets:** browser (`js/wasm`), WebVM (`linux/386`), WASI (`wasip1/wasm`) — all use slim build
+- **Three WASM targets:** browser (`js/wasm`), WebVM (`linux/386`), WASI (`wasip1/wasm`) — all use the slim build: no arrow/parquet/xlsx, no `serve`, no `net/http` (URL sources refuse loudly), no `go/format`, no embedded explore engine (DFC151). Only the browser build is a release artifact; WASI is `make wasi` locally
 - **WASI AOT is near-native** for interactive use (1.2x native). Use `wasmtime compile` to precompile.
 - **Always test playground examples against `cmd/ssql-playground/data/` with real ssql before adding to `playground.html`**
 - **WASM deploy needs /tmp dance** — build on main, copy to /tmp, switch to gh-pages, copy from /tmp (WASM is gitignored on main)

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The slim build drops `net/http`** (DFC151). It was a third of the
+  browser wasm — TLS, x509, `net` and the HTTP client and server —
+  pulled in by the URL source and by `serve`'s protocol file, which
+  was never gated although `serve` is a stub in slim. The playground
+  and the embedded explore engine go from 28.3 MB raw / 6.47 MB
+  gzipped to 19.4 / 4.52; `from https://…` in a slim binary refuses
+  with "URL sources are not in this build". `go/format` is out too
+  (library-mode gofmt, never reached in a browser). The stage chain
+  `run` shares with `serve` moved to its own file.
+
+### Added
+
+- **Two gates on the slim build**: `TestSlimBuildDependencies` runs
+  `go list -deps -tags slim` for every target and names the import
+  chain of any forbidden package; `scripts/wasm-budget.sh` fails
+  `make explore-wasm` and `make playground` over `WASM_BUDGET_MB`
+  (5 MB gzipped, a ceiling, not a baseline).
+
+### Removed
+
+- **The `ssql-slim_*` archives and the WASI tarball** from releases
+  (zero downloads over three releases). `make wasi` builds the WASI
+  binary locally; the browser playground is the slim build that ships.
+
 ## [4.119.0] - 2026-10-15
 
 ### Added

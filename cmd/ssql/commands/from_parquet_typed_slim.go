@@ -15,3 +15,6 @@ func generateFromParquetCodeTyped(args, files []string, columns []string) error 
 	return lib.WriteErrorAndExit(getCommandString(),
 		fmt.Errorf("ssql generate go -typed: 'from parquet' not available in slim build (no Apache Arrow Parquet support)"))
 }
+
+// slimBuild lets a test in a mixed file skip what only the full build has.
+const slimBuild = true

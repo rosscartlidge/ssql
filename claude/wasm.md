@@ -8,9 +8,9 @@ ssql has three distinct WASM builds:
 
 | Target | GOOS/GOARCH | Purpose | Size |
 |--------|-------------|---------|------|
-| Browser playground | `js/wasm` | WASM playground on GitHub Pages | ~13MB (slim) |
-| WebVM | `linux/386` | CheerpX-based full Linux terminal | ~7MB (slim) |
-| WASI | `wasip1/wasm` | Portable binary for wasmtime/wasmer | ~14MB (slim) |
+| Browser playground | `js/wasm` | WASM playground on GitHub Pages; the same wasm is the embedded explore engine | 19.4MB raw, 4.5MB gzipped (slim, DFC151; was 28.3/6.5) |
+| WebVM | `linux/386` | CheerpX-based full Linux terminal | 9.6MB (slim) |
+| WASI | `wasip1/wasm` | Portable binary for wasmtime/wasmer (local `make wasi`; not a release asset since DFC151) | 18.9MB (slim) |
 
 ## Building
 
@@ -20,7 +20,7 @@ make wasi                 # WASI binary (wasip1/wasm, slim)
 # WebVM: CGO_ENABLED=0 GOOS=linux GOARCH=386 go build -tags slim ...
 ```
 
-All use `-tags slim` to exclude arrow/parquet/xlsx (reduces binary from ~54MB to ~14MB).
+All use `-tags slim`, which leaves out arrow/parquet/xlsx, `serve`, the embedded explore engine, `net/http` with TLS (URL sources refuse loudly: "not in this build") and `go/format` (native: ~48MB → ~10MB; DFC151 measured `net/http` alone as a third of the browser wasm). Two gates keep it that way: `TestSlimBuildDependencies` (`cmd/ssql/slim_deps_test.go`) fails on a forbidden package and prints the import chain; `scripts/wasm-budget.sh` fails `make explore-wasm`/`make playground` over `WASM_BUDGET_MB` gzipped.
 
 ## WASI
 
@@ -47,11 +47,12 @@ AOT eliminates JIT startup: 0.018s vs 0.195s for small data (1.2x native vs 13x)
 
 ### What doesn't work in WASI
 - SSH (no network)
+- URL sources (`from https://…`; no `net/http` in slim, DFC151)
 - GPU (no CUDA)
 - Multi-file pushdown (spawns subprocesses internally)
 
 ### goreleaser
-WASI build ships as `ssql_<version>_wasi.tar.gz` on every GitHub Release.
+Not a release asset since DFC151 (zero downloads over three releases): `make wasi` builds it locally.
 
 ## Browser Playground (js/wasm)
 

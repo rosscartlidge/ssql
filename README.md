@@ -32,7 +32,7 @@ curl -LO https://github.com/rosscartlidge/ssql/raw/main/ssql_4.119.0_amd64.deb &
 ```
 
 Then `ssql version`, and `eval "$(ssql -shell-init)"` in `~/.bashrc` for
-completion and the key bindings. Prebuilt binaries, WASI, the GPU build
+completion and the key bindings. Prebuilt binaries, the GPU build
 (`ssql_gpu`) and the Go library: [doc/install.md](doc/install.md). Or try it with no
 install at all in the [browser playground](https://rosscartlidge.github.io/ssql/playground.html).
 

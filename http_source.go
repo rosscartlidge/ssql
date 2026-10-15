@@ -1,3 +1,5 @@
+//go:build !slim
+
 package ssql
 
 // HTTP(S) sources with Range support (DFC112). One mechanism, no
@@ -18,11 +20,8 @@ import (
 	"sync/atomic"
 )
 
-// IsHTTPURL reports whether path is an http(s) URL — the routing test
-// used by `from` and its subcommands.
-func IsHTTPURL(path string) bool {
-	return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://")
-}
+// slimBuild lets a test in a mixed file skip what only the full build has.
+const slimBuild = false
 
 var httpSourceClient = &http.Client{Timeout: 0} // per-request bodies stream; no global deadline
 
@@ -53,9 +52,6 @@ type HTTPFile struct {
 	mu         sync.RWMutex
 	prefetched []prefetchedRange // see Prefetch
 }
-
-// ByteRange is a span of a file: Len bytes from Off.
-type ByteRange struct{ Off, Len int64 }
 
 type prefetchedRange struct {
 	off  int64
@@ -293,20 +289,6 @@ func httpStatusError(url string, code int) error {
 	default:
 		return fmt.Errorf("%s: HTTP %d", url, code)
 	}
-}
-
-// HTTPURLExt returns the lowercase extension of a URL's PATH,
-// ignoring query and fragment — filepath.Ext on a presigned URL
-// ("…/x.csv?X-Amz-Signature=…") would return ".csv?x-amz-…".
-func HTTPURLExt(rawurl string) string {
-	u := rawurl
-	if i := strings.IndexAny(u, "?#"); i >= 0 {
-		u = u[:i]
-	}
-	if i := strings.LastIndexByte(u, '.'); i >= 0 && i > strings.LastIndexByte(u, '/') {
-		return strings.ToLower(u[i:])
-	}
-	return ""
 }
 
 // Retry logic is deliberately absent: v1 has no retry magic — errors

@@ -1,3 +1,5 @@
+//go:build !slim
+
 package ssql
 
 import (
@@ -131,21 +133,6 @@ func TestSampleCSVHTTPIdentity(t *testing.T) {
 	l, r := ids(local), ids(remote)
 	if len(l) != 50 || !slices.Equal(l, r) {
 		t.Fatalf("transport changed selection: local %v… remote %v…", l[:5], r[:5])
-	}
-}
-
-func TestHTTPURLExt(t *testing.T) {
-	cases := map[string]string{
-		"https://h/p/x.csv":                      ".csv",
-		"https://h/p/x.parquet?X-Amz-Sig=a.b.c":  ".parquet",
-		"https://h/p/x.CSV#frag":                 ".csv",
-		"https://h/p/noext":                      "",
-		"https://h/p.dir/noext":                  "",
-	}
-	for u, want := range cases {
-		if got := HTTPURLExt(u); got != want {
-			t.Errorf("HTTPURLExt(%q) = %q, want %q", u, got, want)
-		}
 	}
 }
 

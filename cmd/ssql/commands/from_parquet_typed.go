@@ -189,3 +189,6 @@ func arrowToGoTypeName(t arrow.DataType) (string, error) {
 	}
 	return "", fmt.Errorf("unsupported Arrow column type %v", t)
 }
+
+// slimBuild lets a test in a mixed file skip what only the full build has.
+const slimBuild = false

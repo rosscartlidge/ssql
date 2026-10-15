@@ -17,6 +17,9 @@ import (
 // every record, a metadata column that is also a file column takes the
 // metadata value, a hive clash and a missing file are the shard's error.
 func TestCatalogLocalParquetFastPath(t *testing.T) {
+	if slimBuild {
+		t.Skip("needs the full build (parquet)")
+	}
 	dir := t.TempDir()
 	write := func(rel string, rows ...Record) string {
 		p := filepath.Join(dir, rel)

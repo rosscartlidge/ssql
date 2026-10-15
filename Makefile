@@ -275,6 +275,9 @@ docker-gpu: docker-gpu-extract
 
 # Refresh the embedded explore engine: the SAME slim playground wasm,
 # gzipped for embedding (DFC107 — the TinyGo mini-engine is gone).
+# WASM_BUDGET_MB is the gzipped-size ceiling both wasm targets check
+# (DFC151: a generous absolute number, never a baseline; 4.4 measured).
+WASM_BUDGET_MB := 5
 # DFC126: the CLI codelab from scratch in a fresh LXD container, against
 # the PUBLISHED release (needs lxd + network, ~5 min). -k keeps the box.
 codelab-mint:
@@ -288,11 +291,12 @@ explore-wasm:
 	cp cmd/ssql-playground/fs-polyfill.js cmd/ssql/wasm/fs-polyfill.js
 	cp cmd/ssql-playground/ssql-ui.js cmd/ssql/wasm/ssql-ui.js
 	cp cmd/ssql-playground/ssql-ui-viz.js internal/vizjs/ssql-ui-viz.js
+	@scripts/wasm-budget.sh cmd/ssql/wasm/ssql-playground.wasm.gz $(WASM_BUDGET_MB)
 	@echo "✓ cmd/ssql/wasm/ssql-playground.wasm.gz ($$(du -h cmd/ssql/wasm/ssql-playground.wasm.gz | cut -f1))"
 
 # Build WASM playground (full CLI in browser)
 wasi:
-	@echo "Building WASI binary (slim build)..."
+	@echo "Building WASI binary (slim build; a local build since DFC151 — no longer a release asset)..."
 	GOOS=wasip1 GOARCH=wasm go build -tags slim -ldflags="-s -w $(LDFLAGS)" -o ssql.wasm ./cmd/ssql
 	@echo "✓ Built ssql.wasm ($$(du -h ssql.wasm | cut -f1))"
 	@echo "Run with: wasmtime ssql.wasm version"
@@ -302,6 +306,7 @@ playground:
 	@echo "Building playground WASM (slim build — no arrow/parquet/xlsx)..."
 	GOOS=js GOARCH=wasm go build -tags slim -ldflags="-s -w $(LDFLAGS)" -o cmd/ssql-playground/ssql-playground.wasm ./cmd/ssql-playground
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/ssql-playground/
+	@scripts/wasm-budget.sh cmd/ssql-playground/ssql-playground.wasm $(WASM_BUDGET_MB)
 	@echo "✓ Built cmd/ssql-playground/ssql-playground.wasm ($$(du -h cmd/ssql-playground/ssql-playground.wasm | cut -f1) raw)"
 	@echo "Serve with: cd cmd/ssql-playground && python3 -m http.server 8080"
 
