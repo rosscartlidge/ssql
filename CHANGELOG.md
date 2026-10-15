@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.120.0] - 2026-10-15
+
 ### Changed
 
 - **The slim build drops `net/http`** (DFC151). It was a third of the
