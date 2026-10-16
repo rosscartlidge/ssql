@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.120.2] - 2026-10-16
+
 ### Fixed
 
 - **The explore page's optimise preview reported every pipeline as
