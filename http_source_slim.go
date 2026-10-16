@@ -36,3 +36,4 @@ func (h *HTTPFile) DropPrefetched()                              {}
 func (h *HTTPFile) ReadAt(p []byte, off int64) (int, error)      { return 0, io.EOF }
 func (h *HTTPFile) Read(p []byte) (int, error)                   { return 0, io.EOF }
 func (h *HTTPFile) Seek(offset int64, whence int) (int64, error) { return 0, nil }
+func (h *HTTPFile) Close() error                                  { return nil }

@@ -5,6 +5,8 @@ import (
 	"io"
 	"iter"
 	"os"
+
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // Line is the row type of `ssql from lines` in typed pipelines:
@@ -20,7 +22,7 @@ type Line struct {
 // nothing. Serial: line boundaries are sequential.
 func ReadLines(filename string) iter.Seq[Line] {
 	return func(yield func(Line) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInput(filename)
 		if err != nil {
 			return
 		}

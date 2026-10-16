@@ -10,6 +10,8 @@ import (
 	"iter"
 	"os"
 	"unsafe"
+
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // ReadJSONL streams rows of T from a JSON-Lines file (one JSON object per
@@ -34,7 +36,7 @@ import (
 // leading `_schema` header are skipped.
 func ReadJSONL[T any](filename string, opts ...JSONOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInput(filename)
 		if err != nil {
 			failRead("typed.ReadJSONL", filename, err)
 		}
@@ -117,7 +119,7 @@ func isSchemaHeaderLine(line []byte) bool {
 // ReadJSONLSafe is the error-reporting variant of [ReadJSONL].
 func ReadJSONLSafe[T any](filename string, opts ...JSONOption) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInput(filename)
 		if err != nil {
 			var zero T
 			yield(zero, fmt.Errorf("typed.ReadJSONL: %w", err))

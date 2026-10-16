@@ -6,8 +6,6 @@ import (
 	"iter"
 	"runtime"
 	"unsafe"
-
-	"github.com/rosscartlidge/ssql/v4/internal/mmap"
 )
 
 // ReadJSONLParallel reads a JSON-Lines file as a Stream[T] with n shards
@@ -34,7 +32,7 @@ func ReadJSONLParallel[T any](filename string, n int, opts ...JSONOption) Stream
 		n = runtime.GOMAXPROCS(0)
 	}
 	const op = "typed.ReadJSONLParallel"
-	m, err := mmap.Map(filename)
+	m, err := mapInput(filename)
 	if err != nil {
 		failRead(op, filename, err)
 	}

@@ -4,6 +4,7 @@ package ssql
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -146,5 +147,50 @@ func TestCoalesceRanges(t *testing.T) {
 	// The limit stops a merge; touching ranges past it stay separate.
 	if got := coalesceRanges([]ByteRange{{0, 150}, {150, 100}}, 200); len(got) != 2 {
 		t.Errorf("limit ignored: %v", got)
+	}
+}
+
+// OpenInput, ReadInput and OpenInputAt (2026-10-16) take a file or a
+// URL: the one opener every reader goes through, so what exec reads
+// the generated programs read too. The equivalence cases url_* are the
+// gate across the lanes; this pins the helper itself.
+func TestOpenInputFileOrURL(t *testing.T) {
+	dir := writeHTTPFixture(t, 50)
+	srv := rangeServer(t, dir)
+	local := filepath.Join(dir, "fx.csv")
+	want, err := os.ReadFile(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{local, srv.URL + "/fx.csv"} {
+		rc, err := OpenInput(name)
+		if err != nil {
+			t.Fatalf("OpenInput(%s): %v", name, err)
+		}
+		got, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil || string(got) != string(want) {
+			t.Fatalf("OpenInput(%s): %v, %d bytes, want %d", name, err, len(got), len(want))
+		}
+		if got, err := ReadInput(name); err != nil || string(got) != string(want) {
+			t.Fatalf("ReadInput(%s): %v, %d bytes, want %d", name, err, len(got), len(want))
+		}
+		ra, err := OpenInputAt(name)
+		if err != nil {
+			t.Fatalf("OpenInputAt(%s): %v", name, err)
+		}
+		head := make([]byte, 6)
+		if n, err := ra.ReadAt(head, 0); n != 6 || err != nil || string(head) != "id,val" {
+			t.Fatalf("OpenInputAt(%s).ReadAt: n=%d err=%v head=%q", name, n, err, head)
+		}
+		if err := ra.Close(); err != nil {
+			t.Fatalf("OpenInputAt(%s).Close: %v", name, err)
+		}
+	}
+	if _, err := OpenInput(filepath.Join(dir, "missing.csv")); err == nil {
+		t.Fatal("OpenInput(missing file) succeeded")
+	}
+	if _, err := OpenInput(srv.URL + "/missing.csv"); err == nil {
+		t.Fatal("OpenInput(missing URL) succeeded")
 	}
 }

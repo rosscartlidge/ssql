@@ -208,21 +208,12 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 	if schemaMode() {
 		var r io.Reader = os.Stdin
 		if inputFile != "" {
-			if ssql.IsHTTPURL(inputFile) {
-				body, err := ssql.OpenHTTPStream(inputFile)
-				if err != nil {
-					return err
-				}
-				defer body.Close()
-				r = body
-			} else {
-				f, err := os.Open(inputFile)
-				if err != nil {
-					return fmt.Errorf("reading TSV file: %w", err)
-				}
-				defer f.Close()
-				r = f
+			f, err := ssql.OpenInput(inputFile) // a file or a URL
+			if err != nil {
+				return fmt.Errorf("reading TSV file: %w", err)
 			}
+			defer f.Close()
+			r = f
 		}
 		// Same delimiter auto-detection as the readers and typed
 		// sampling (first non-identifier byte; default tab) — a raw
@@ -259,15 +250,8 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 	var tsvHeaders []string
 	if inputFile == "" {
 		tsvHeaders, in = peekDelimitedHeader(os.Stdin, '\t')
-	} else if ssql.IsHTTPURL(inputFile) {
-		body, err := ssql.OpenHTTPStream(inputFile)
-		if err != nil {
-			return err
-		}
-		defer body.Close()
-		tsvHeaders, in = peekDelimitedHeader(body, '\t')
 	} else {
-		file, err := os.Open(inputFile)
+		file, err := ssql.OpenInput(inputFile) // a file or a URL
 		if err != nil {
 			return fmt.Errorf("reading TSV file: %w", err)
 		}

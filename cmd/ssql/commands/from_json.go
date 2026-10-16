@@ -249,27 +249,18 @@ func executeFromJSON(inputFile string, types typeArgs, generate bool) error {
 	if schemaMode() {
 		var r io.Reader = os.Stdin
 		if inputFile != "" {
-			if ssql.IsHTTPURL(inputFile) {
-				body, err := ssql.OpenHTTPStream(inputFile)
-				if err != nil {
-					return err
-				}
-				defer body.Close()
-				r = body
-			} else {
-				f, err := lib.OpenInputFile(inputFile)
-				if err != nil {
-					return err
-				}
-				defer f.Close()
-				r = f
+			f, err := lib.OpenInputFile(inputFile) // a file or a URL
+			if err != nil {
+				return err
 			}
+			defer f.Close()
+			r = f
 		}
 		return writeSchemaModeJSON(os.Stdout, r)
 	}
 
 	if shouldGenerate(generate) {
-		if typedMode() && inputFile != "" && !ssql.IsHTTPURL(inputFile) {
+		if typedMode() && inputFile != "" {
 			return generateFromJSONLCodeTyped(inputFile, types)
 		}
 		return generateFromJSONCode(inputFile, types)
@@ -278,14 +269,8 @@ func executeFromJSON(inputFile string, types typeArgs, generate bool) error {
 	var records iter.Seq[ssql.Record]
 	if inputFile == "" {
 		records = readJSONSchemaAware(os.Stdin)
-	} else if ssql.IsHTTPURL(inputFile) {
-		body, err := ssql.OpenHTTPStream(inputFile)
-		if err != nil {
-			return err
-		}
-		defer body.Close()
-		records = readJSONSchemaAware(body)
 	} else {
+		// A file or a URL (lib.OpenInputFile → ssql.OpenInput).
 		file, err := lib.OpenInputFile(inputFile)
 		if err != nil {
 			return err

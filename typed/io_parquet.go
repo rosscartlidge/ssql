@@ -73,7 +73,7 @@ func resolveParquetOpts(opts []ParquetOption) parquetOpts {
 func ReadParquet[T any](filename string, opts ...ParquetOption) iter.Seq[T] {
 	o := resolveParquetOpts(opts)
 	return func(yield func(T) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInputAt(filename)
 		if err != nil {
 			failRead("typed.ReadParquet", filename, err)
 		}
@@ -125,7 +125,7 @@ func expandParquetFiles(op string, paths []string) []string {
 // surfaced via the iter.Seq2 second value.
 func ReadParquetSafe[T any](filename string, opts ...ParquetOption) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInputAt(filename)
 		if err != nil {
 			var zero T
 			yield(zero, fmt.Errorf("typed.ReadParquet: open %q: %w", filename, err))
@@ -646,7 +646,7 @@ func readParquetUnitsParallel[T any](op string, files []string, n int, opts []Pa
 	var plan *parquetReadPlan
 	var units []parquetUnit
 	for fi, name := range files {
-		f, err := os.Open(name)
+		f, err := ssql.OpenInputAt(name)
 		if err != nil {
 			failRead(op, name, err)
 		}
@@ -694,7 +694,7 @@ func readParquetUnitsParallel[T any](op string, files []string, n int, opts []Pa
 	for i := 0; i < n; i++ {
 		mine := shardUnits[i]
 		shards[i] = func(yield func(T) bool) {
-			var f *os.File
+			var f ssql.InputAt
 			var pf *file.Reader
 			var reader *pqarrow.FileReader
 			cur := -1
@@ -716,7 +716,7 @@ func readParquetUnitsParallel[T any](op string, files []string, n int, opts []Pa
 					closeCur()
 					name := files[u.file]
 					var err error
-					if f, err = os.Open(name); err != nil {
+					if f, err = ssql.OpenInputAt(name); err != nil {
 						failRead(op, name, err)
 					}
 					if pf, err = file.NewParquetReader(f); err != nil {

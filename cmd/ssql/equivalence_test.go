@@ -32,6 +32,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -235,7 +237,7 @@ func equivLanes() []equivLane {
 		{"go-lib", func(t *testing.T, bin, pipeline string, env []string) string {
 			fixture, reader := equivLibrarySource(pipeline)
 			if fixture == "" {
-				return equivSkipPrefix + "library mode: the source is not a plain delimited file"
+				return equivSkipPrefix + "library mode: the source is not a plain local delimited file"
 			}
 			cmd := exec.Command("bash", "-c", "export SSQLGO=typed && "+pipeline+" | "+bin+" generate go -package lib -func Pipe")
 			cmd.Env = append(os.Environ(), env...)
@@ -568,18 +570,53 @@ func TestPipelineEquivalence(t *testing.T) {
 	}
 	bin := corpusBin(t)
 	data := corpusData(t)
-	repl := strings.NewReplacer("{{.bin}}", bin, "{{.data}}", data)
+	// {{.url}}: the fixture directory served over HTTP, so a case can read
+	// the same file as a URL source. Every lane must read it — exec,
+	// the generated programs (typed readers included) and the engines.
+	// Until 2026-10-16 only exec could: the generated programs handed
+	// the URL to os.Open (fixed by ssql.OpenInput, the one opener).
+	srv := httptest.NewServer(http.FileServer(http.Dir(data)))
+	t.Cleanup(srv.Close)
+	repl := strings.NewReplacer("{{.bin}}", bin, "{{.data}}", data, "{{.url}}", srv.URL)
 	if duckdbBinary() == "" {
 		t.Log("duckdb not found (PATH or ~/.local/bin) — the second-engine SQL lane is skipped")
 	}
+	httpfs := duckdbHasHTTPFS()
 
 	for _, c := range equivCases {
 		c := c
+		if strings.Contains(c.Pipeline, "{{.url}}") && !httpfs {
+			c.Skip = equivSkipPlus(c.Skip, "duckdb", "duckdb reads a URL through its httpfs extension, which is not installed here")
+		}
 		t.Run(c.Name, func(t *testing.T) {
 			t.Parallel()
 			runEquivCase(t, bin, repl.Replace(c.Pipeline), c)
 		})
 	}
+}
+
+// equivSkipPlus is skip with one more lane, leaving the case's own map
+// untouched (cases are package-level values shared by every run).
+func equivSkipPlus(skip map[string]string, lane, reason string) map[string]string {
+	out := make(map[string]string, len(skip)+1)
+	for k, v := range skip {
+		out[k] = v
+	}
+	out[lane] = reason
+	return out
+}
+
+// duckdbHasHTTPFS reports whether the local duckdb has the httpfs
+// extension installed (it autoloads on the first http:// path; without it
+// DuckDB tries to download the extension, which an offline gate cannot).
+func duckdbHasHTTPFS() bool {
+	bin := duckdbBinary()
+	if bin == "" {
+		return false
+	}
+	out, err := exec.Command(bin, "-csv", "-noheader", "-c",
+		"select installed from duckdb_extensions() where extension_name='httpfs'").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 // runEquivCase runs one pipeline through every lane and asserts agreement
@@ -3671,6 +3708,67 @@ var equivCases = []EquivCase{
 			{"dept": "Sales"},
 		},
 	},
+	// URL sources (2026-10-16): the fixture served over HTTP must read the
+	// same in every lane. The generated programs opened the URL with
+	// os.Open until then ("no such file or directory" in the record AND
+	// typed lanes; the typed schema sampler failed one step earlier), so
+	// `from URL` was an exec-only feature that looked tested — the HTTP
+	// tests covered exec alone. One case per reader family: CSV in the
+	// parallel typed form (where keeps the Stream, so typed.ReadCSVParallel
+	// takes the URL), the bare extension-inferred form, TSV (ReadDelim),
+	// JSONL, a JSON array file and Parquet (range reads over HTTP). The
+	// postgres lane copies a local file into a table, so it has no URL
+	// form; datafusion reads the URL itself.
+	{
+		Name:     "url_csv_where",
+		Pipeline: `{{.bin}} from csv {{.url}}/shuffled.csv | {{.bin}} where -if pop gt 10 | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "city": "Oslo", "pop": 31}, {"id": 2, "city": "Delhi", "pop": 29},
+			{"id": 4, "city": "Paris", "pop": 11}, {"id": 5, "city": "Tokyo", "pop": 37},
+			{"id": 7, "city": "Mumbai", "pop": 20}, {"id": 8, "city": "Lagos", "pop": 14},
+			{"id": 11, "city": "Bogota", "pop": 25},
+		},
+		Skip: map[string]string{"postgres": "the Postgres prologue copies a local file into a table; a URL has no copy form"},
+	},
+	{
+		Name:     "url_bare_csv_groupby",
+		Pipeline: `{{.bin}} from {{.url}}/shuffled.csv | {{.bin}} where -if id le 6 | {{.bin}} group-by -sum pop total | {{.bin}} sort total`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"total": 122}},
+		Skip:     map[string]string{"postgres": "the Postgres prologue copies a local file into a table; a URL has no copy form"},
+	},
+	{
+		Name:     "url_tsv_top",
+		Pipeline: `{{.bin}} from tsv {{.url}}/employees.tsv | {{.bin}} top 2 -field salary | {{.bin}} include name salary`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"name": "Carol", "salary": 105000}, {"name": "Alice", "salary": 95000}},
+		Skip:     map[string]string{"postgres": "the Postgres prologue copies a local file into a table; a URL has no copy form"},
+	},
+	{
+		Name:     "url_jsonl_where",
+		Pipeline: `{{.bin}} from jsonl {{.url}}/employees.jsonl | {{.bin}} where -if dept eq Sales | {{.bin}} include name age | {{.bin}} sort age`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"name": "Bob", "age": 28}, {"name": "Frank", "age": 45}},
+		Skip:     map[string]string{"postgres": "the Postgres prologue copies a local file into a table; a URL has no copy form"},
+	},
+	{
+		Name:             "url_json_array_passthrough",
+		Pipeline:         `{{.bin}} from json {{.url}}/nested_array.json | {{.bin}} sort id`,
+		Ordered:          true,
+		ColumnsUnordered: true,
+		Skip: map[string]string{
+			"datafusion": "DataFusion refuses a JSON array file",
+			"postgres":   "the Postgres prologue copies CSV text; nested values have no copy form (DFC144 L0)",
+		},
+	},
+	{
+		Name:     "url_parquet_where",
+		Pipeline: `{{.bin}} from parquet {{.url}}/pq/b.parquet | {{.bin}} where -if amount gt 10 | {{.bin}} include id name | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 5, "name": "bob"}, {"id": 9, "name": "eve"}},
+		Skip:     map[string]string{"postgres": "the Postgres prologue copies a local file into a table; a URL has no copy form"},
+	},
 }
 
 // equivLibrarySource returns the delimited file a pipeline's `from`
@@ -3692,6 +3790,9 @@ func equivLibrarySource(pipeline string) (fixture, reader string) {
 			}
 			path = tokens[next]
 			next++
+		}
+		if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+			return "", "" // the driver opens the fixture itself; a URL is the program's job, not the library's
 		}
 		if next < len(tokens) && tokens[next] != "|" {
 			return "", "" // a source flag: no reader form

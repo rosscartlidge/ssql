@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"unsafe"
+
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // DelimOption configures a delimited-text reader/writer. Pass to
@@ -143,7 +145,7 @@ func bytesAsString(b []byte) string {
 // as errors instead.
 func ReadDelim[T any](filename string, opts ...DelimOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInput(filename)
 		if err != nil {
 			failRead("typed.ReadDelim", filename, err)
 		}
@@ -196,7 +198,7 @@ func readDelimLoud[T any](op, source string, r io.Reader, o delimOpts, yield fun
 // ReadDelimSafe is the error-reporting variant of [ReadDelim].
 func ReadDelimSafe[T any](filename string, opts ...DelimOption) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInput(filename)
 		if err != nil {
 			var zero T
 			yield(zero, err)
@@ -331,7 +333,7 @@ func ReadDelimParallel[T any](filename string, n int, opts ...DelimOption) Strea
 		n = runtime.GOMAXPROCS(0)
 	}
 	const op = "typed.ReadDelimParallel"
-	data, err := os.ReadFile(filename)
+	data, err := ssql.ReadInput(filename)
 	if err != nil {
 		failRead(op, filename, err)
 	}

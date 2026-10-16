@@ -4,13 +4,13 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/memory"
 	"github.com/apache/arrow/go/v18/parquet/file"
 	"github.com/apache/arrow/go/v18/parquet/pqarrow"
+	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
@@ -88,7 +88,7 @@ func generateFromParquetCodeTyped(args, files []string, columns []string) error 
 // the typed runtime understands. If columns is non-empty, the
 // returned schema only contains those columns (in the order given).
 func readParquetTypedSchema(filename string, columns []string) (*lib.TypedSchema, error) {
-	f, err := os.Open(filename)
+	f, err := ssql.OpenInputAt(filename)
 	if err != nil {
 		return nil, fmt.Errorf("opening Parquet file: %w", err)
 	}

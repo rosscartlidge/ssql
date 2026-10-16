@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`from URL` now reads in every lane.** The generated programs
+  (`generate go` in record, typed and parallel mode) handed the URL to
+  `os.Open` and failed with "no such file or directory"; the typed
+  schema sampler failed one step earlier. `from URL` was an exec-only
+  feature that looked tested, because the HTTP tests covered exec
+  alone. Every file reader in the root and typed packages now opens
+  through one helper, `ssql.OpenInput` (a URL streams its body, a file
+  opens as itself; `ReadInput` and `OpenInputAt` are the slurp and
+  random-access forms, the latter what the Parquet readers need). The
+  parallel readers shard a URL's body in memory the way they shard a
+  mapping. Six `url_*` equivalence cases (CSV, bare form, TSV, JSONL, a
+  JSON array file, Parquet) read the fixture directory over an
+  in-test HTTP server in every lane; the DuckDB lane runs when its
+  httpfs extension is installed. The slim build refuses a URL in the
+  generated form with the same "not in this build" message as exec.
+
 ## [4.120.0] - 2026-10-15
 
 ### Changed

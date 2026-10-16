@@ -202,6 +202,14 @@ func (h *HTTPFile) DropPrefetched() {
 	h.mu.Unlock()
 }
 
+// Close releases what Prefetch holds; there is no connection to close
+// (each ReadAt is its own request). It makes an HTTPFile an [InputAt],
+// so a reader closes a URL and a file the same way.
+func (h *HTTPFile) Close() error {
+	h.DropPrefetched()
+	return nil
+}
+
 func (h *HTTPFile) ReadAt(p []byte, off int64) (int, error) {
 	if off >= h.size {
 		return 0, io.EOF

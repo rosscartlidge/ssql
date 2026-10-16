@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/rosscartlidge/ssql/v4"
 )
@@ -40,7 +39,7 @@ func SampleJSONSchema(filename, typeName string, maxRows int, opts ...TypeOption
 	if typeName == "" {
 		typeName = TypeNameFromFilename(filename)
 	}
-	f, err := os.Open(filename)
+	f, err := ssql.OpenInput(filename)
 	if err != nil {
 		return nil, "", false, fmt.Errorf("typed schema sample: %w", err)
 	}

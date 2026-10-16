@@ -12,8 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
-
-	"github.com/rosscartlidge/ssql/v4/internal/mmap"
 )
 
 // Stream is the PoC type for the typed concurrency proposal — a
@@ -494,7 +492,7 @@ func ReadCSVParallel[T any](filename string, n int, opts ...CSVOption) Stream[T]
 	// ReadDelimParallel must NOT do this — its splitLineAlias strings
 	// alias the buffer, which the GC cannot see into a mapping.
 	const op = "typed.ReadCSVParallel"
-	m, err := mmap.Map(filename)
+	m, err := mapInput(filename)
 	if err != nil {
 		failRead(op, filename, err)
 	}

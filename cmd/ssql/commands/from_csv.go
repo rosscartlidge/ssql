@@ -225,21 +225,12 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 	if schemaMode() {
 		var r io.Reader = os.Stdin
 		if inputFile != "" {
-			if ssql.IsHTTPURL(inputFile) {
-				body, err := ssql.OpenHTTPStream(inputFile)
-				if err != nil {
-					return err
-				}
-				defer body.Close()
-				r = body
-			} else {
-				f, err := os.Open(inputFile)
-				if err != nil {
-					return fmt.Errorf("reading file: %w", err)
-				}
-				defer f.Close()
-				r = f
+			f, err := ssql.OpenInput(inputFile) // a file or a URL
+			if err != nil {
+				return fmt.Errorf("reading file: %w", err)
 			}
+			defer f.Close()
+			r = f
 		}
 		csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
 		if err != nil {
@@ -272,26 +263,17 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 		var in io.Reader
 		csvHeaders, in = peekDelimitedHeader(os.Stdin, ',')
 		records = ssql.ReadCSVFromReader(in, csvConfig)
-	} else if ssql.IsHTTPURL(inputFile) {
-		body, ferr := ssql.OpenHTTPStream(inputFile)
-		if ferr != nil {
-			return ferr
-		}
-		defer body.Close()
-		var in io.Reader
-		csvHeaders, in = peekDelimitedHeader(body, ',')
-		records = ssql.ReadCSVFromReader(in, csvConfig)
 	} else {
-		file, ferr := os.Open(inputFile)
+		// A file or a URL, read once: the header is peeked, not
+		// consumed, the way the pipe form above does it.
+		file, ferr := ssql.OpenInput(inputFile)
 		if ferr != nil {
 			return fmt.Errorf("reading file: %w", ferr)
 		}
 		defer file.Close()
-		if _, serr := file.Seek(0, 0); serr == nil {
-			csvHeaders, _ = readCSVHeadersFromReader(file)
-			file.Seek(0, 0)
-		}
-		records = ssql.ReadCSVFromReader(file, csvConfig)
+		var in io.Reader
+		csvHeaders, in = peekDelimitedHeader(file, ',')
+		records = ssql.ReadCSVFromReader(in, csvConfig)
 	}
 
 	if err := checkTypeOverrideColumns(csvHeaders, typeOverrides, "from csv"); err != nil {
@@ -321,16 +303,11 @@ func executeFromCSVSample(inputFile string, typeOverrides map[string]string, def
 	if err != nil {
 		return err
 	}
+	// One read of the header line (a file or a URL) keeps output column
+	// order = file order (without it the reader's internal sorted schema
+	// leaked through as alphabetical columns).
 	var csvHeaders []string
-	if ssql.IsHTTPURL(inputFile) {
-		// One streamed read of the header line keeps output column
-		// order = file order (without it the reader's internal sorted
-		// schema leaked through as alphabetical columns).
-		if body, ferr := ssql.OpenHTTPStream(inputFile); ferr == nil {
-			csvHeaders, _ = readCSVHeadersFromReader(body)
-			body.Close()
-		}
-	} else if f, ferr := os.Open(inputFile); ferr == nil {
+	if f, ferr := ssql.OpenInput(inputFile); ferr == nil {
 		csvHeaders, _ = readCSVHeadersFromReader(f)
 		f.Close()
 	}

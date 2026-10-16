@@ -50,7 +50,7 @@ func WriteJSONLRecord(w io.Writer, record ssql.Record) error {
 
 // OpenInputFile opens a file for input (not stdin - use os.Stdin directly for that)
 func OpenInputFile(filename string) (io.ReadCloser, error) {
-	file, err := os.Open(filename)
+	file, err := ssql.OpenInput(filename)
 	if err != nil {
 		return nil, fmt.Errorf("opening file %s: %w", filename, err)
 	}

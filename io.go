@@ -302,7 +302,7 @@ func WriteCSVToWriter(sb iter.Seq[Record], writer io.Writer, config ...CSVConfig
 //	}
 //	data, err := ssql.ReadCSV("data.tsv", config)
 func ReadCSV(filename string, config ...CSVConfig) (iter.Seq[Record], error) {
-	file, err := os.Open(filename)
+	file, err := OpenInput(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
 	}
@@ -324,7 +324,7 @@ func ReadCSV(filename string, config ...CSVConfig) (iter.Seq[Record], error) {
 // ReadCSVSafe reads CSV with error handling
 func ReadCSVSafe(filename string, config ...CSVConfig) iter.Seq2[Record, error] {
 	return func(yield func(Record, error) bool) {
-		file, err := os.Open(filename)
+		file, err := OpenInput(filename)
 		if err != nil {
 			if !yield(Record{}, fmt.Errorf("failed to open file %s: %w", filename, err)) {
 				return
@@ -660,7 +660,7 @@ func WriteJSONToWriter(sb iter.Seq[Record], writer io.Writer) error {
 //	    fmt.Printf("%s: %s\n", timestamp, eventType)
 //	}
 func ReadJSON(filename string) (iter.Seq[Record], error) {
-	file, err := os.Open(filename)
+	file, err := OpenInput(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
 	}
@@ -687,7 +687,7 @@ func ReadJSON(filename string) (iter.Seq[Record], error) {
 // ReadJSONSafe reads JSON with error handling
 func ReadJSONSafe(filename string) iter.Seq2[Record, error] {
 	return func(yield func(Record, error) bool) {
-		file, err := os.Open(filename)
+		file, err := OpenInput(filename)
 		if err != nil {
 			if !yield(Record{}, fmt.Errorf("failed to open file %s: %w", filename, err)) {
 				return
@@ -1260,7 +1260,7 @@ func ReadJSONFastSafeFromReader(reader io.Reader) iter.Seq2[Record, error] {
 // ReadJSONFast reads JSONL from a file using fast parsing.
 // This is 3-5x faster than ReadJSON for typical workloads.
 func ReadJSONFast(filename string) (iter.Seq[Record], error) {
-	file, err := os.Open(filename)
+	file, err := OpenInput(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
 	}
@@ -1282,7 +1282,7 @@ func ReadJSONFast(filename string) (iter.Seq[Record], error) {
 // ReadJSONFastSafe reads JSONL with error handling using fast parsing.
 func ReadJSONFastSafe(filename string) iter.Seq2[Record, error] {
 	return func(yield func(Record, error) bool) {
-		file, err := os.Open(filename)
+		file, err := OpenInput(filename)
 		if err != nil {
 			if !yield(Record{}, fmt.Errorf("failed to open file %s: %w", filename, err)) {
 				return
@@ -1306,7 +1306,7 @@ func ReadJSONFastSafe(filename string) iter.Seq2[Record, error] {
 // ReadLines reads text lines from a file
 // Returns error if file cannot be opened (Sources always return errors)
 func ReadLines(filename string) (iter.Seq[Record], error) {
-	file, err := os.Open(filename)
+	file, err := OpenInput(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
 	}
@@ -1346,7 +1346,7 @@ func ReadLinesFromReader(r io.Reader) iter.Seq[Record] {
 // ReadLinesSafe reads text lines with error handling
 func ReadLinesSafe(filename string) iter.Seq2[Record, error] {
 	return func(yield func(Record, error) bool) {
-		file, err := os.Open(filename)
+		file, err := OpenInput(filename)
 		if err != nil {
 			if !yield(Record{}, fmt.Errorf("failed to open file %s: %w", filename, err)) {
 				return
@@ -1528,7 +1528,7 @@ func ReadCommandOutput(filename string, config ...CommandConfig) (iter.Seq[Recor
 		cfg = config[0]
 	}
 
-	file, err := os.Open(filename)
+	file, err := OpenInput(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filename, err)
 	}
@@ -1582,7 +1582,7 @@ func ReadCommandOutputSafe(filename string, config ...CommandConfig) iter.Seq2[R
 	}
 
 	return func(yield func(Record, error) bool) {
-		file, err := os.Open(filename)
+		file, err := OpenInput(filename)
 		if err != nil {
 			if !yield(Record{}, fmt.Errorf("failed to open file %s: %w", filename, err)) {
 				return
@@ -2555,7 +2555,7 @@ func FromChannelSafe[T any](itemCh <-chan T, errCh <-chan error) iter.Seq2[T, er
 // ReadJSONAuto reads JSON from a file, auto-detecting JSON array vs JSONL format
 func ReadJSONAuto(filename string) (iter.Seq[Record], error) {
 	// Read all file content to detect format
-	data, err := os.ReadFile(filename)
+	data, err := ReadInput(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file %s: %w", filename, err)
 	}

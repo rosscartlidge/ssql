@@ -1560,6 +1560,10 @@ func ExtractSignalFromArrowReader(r io.Reader, field string) (Signal, error)
 ### HTTP sources
 
 ```go
+func OpenInput(name string) (io.ReadCloser, error)       // a file, or a URL streamed (OpenHTTPStream): what every reader opens through
+func ReadInput(name string) ([]byte, error)              // os.ReadFile for a name OpenInput accepts
+func OpenInputAt(name string) (InputAt, error)           // random access: *os.File, or *HTTPFile over Range requests (Parquet)
+type InputAt interface { io.Reader; io.ReaderAt; io.Seeker; io.Closer }
 func IsHTTPURL(path string) bool
 func OpenHTTPStream(url string) (io.ReadCloser, error)   // a plain GET: the `from https://` read path
 func OpenHTTPFile(url string) (*HTTPFile, error)          // random access over Range requests (parquet footers, sampling)
@@ -1572,6 +1576,7 @@ func (h *HTTPFile) Size() int64
 func (h *HTTPFile) Requests() int64   // Range requests made so far
 func (h *HTTPFile) Prefetch(ranges []ByteRange) error   // fetch ranges concurrently (adjacent ones merged up to 4MB); ReadAt inside one is served from memory
 func (h *HTTPFile) DropPrefetched()                      // release the prefetched bytes
+func (h *HTTPFile) Close() error                         // releases the prefetched bytes; makes an HTTPFile an InputAt
 type ByteRange struct{ Off, Len int64 }
 ```
 

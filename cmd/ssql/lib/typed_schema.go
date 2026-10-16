@@ -4,7 +4,6 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -110,7 +109,7 @@ func SampleTSVSchema(filename, typeName string, maxRows int, opts ...TypeOptions
 // non-identifier byte, defaulting to '\t' when the entire header
 // consists of identifier characters.
 func detectTSVDelim(filename string) (byte, error) {
-	f, err := os.Open(filename)
+	f, err := ssql.OpenInput(filename)
 	if err != nil {
 		return 0, fmt.Errorf("typed schema sample: %w", err)
 	}
@@ -158,7 +157,7 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune, o
 		typeName = TypeNameFromFilename(filename)
 	}
 
-	f, err := os.Open(filename)
+	f, err := ssql.OpenInput(filename)
 	if err != nil {
 		return nil, "", fmt.Errorf("typed schema sample: %w", err)
 	}

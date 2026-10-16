@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"io"
 	"iter"
-	"os"
 	"runtime"
 	"sync"
 	"unsafe"
+
+	"github.com/rosscartlidge/ssql/v4"
 )
 
 // ReadJSON streams rows of T from a JSON ARRAY file (`[ {...}, {...} ]`,
@@ -27,7 +28,7 @@ import (
 // the file is streamed, not loaded; whitespace and layout do not matter.
 func ReadJSON[T any](filename string, opts ...JSONOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInput(filename)
 		if err != nil {
 			failRead("typed.ReadJSON", filename, err)
 		}
@@ -130,7 +131,7 @@ func ReadJSONParallel[T any](filename string, n int, opts ...JSONOption) Stream[
 	var scanner shardGroup
 	scanner.Go(func() {
 		defer close(work)
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInput(filename)
 		if err != nil {
 			failRead(op, filename, err)
 		}

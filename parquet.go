@@ -22,14 +22,6 @@ import (
 
 // ReadParquet reads a Parquet file and returns an iterator of Records.
 func ReadParquet(filename string) (iter.Seq[Record], error) {
-	if IsHTTPURL(filename) {
-		h, err := OpenHTTPFile(filename)
-		if err != nil {
-			return nil, err
-		}
-		return ReadParquetFromReader(h)
-	}
-
 	return ReadParquetColumns(filename, nil)
 }
 
@@ -38,15 +30,8 @@ func ReadParquet(filename string) (iter.Seq[Record], error) {
 // This is the primary optimization lever for wide Parquet files — reading 3 of 50 columns
 // means ~94% less I/O.
 func ReadParquetColumns(filename string, columns []string) (iter.Seq[Record], error) {
-	if IsHTTPURL(filename) {
-		h, err := OpenHTTPFile(filename)
-		if err != nil {
-			return nil, err
-		}
-		return readParquetFromReaderWithColumns(h, columns)
-	}
-
-	f, err := os.Open(filename)
+	// A file or a URL (OpenInputAt: range requests over HTTP).
+	f, err := OpenInputAt(filename)
 	if err != nil {
 		return nil, fmt.Errorf("opening Parquet file: %w", err)
 	}
@@ -117,21 +102,11 @@ func CheckParquetSchemas(files []string) error {
 type parquetColumnType struct{ name, typ string }
 
 func parquetColumnTypes(filename string) ([]parquetColumnType, error) {
-	var r parquet.ReaderAtSeeker
-	if IsHTTPURL(filename) {
-		h, err := OpenHTTPFile(filename)
-		if err != nil {
-			return nil, err
-		}
-		r = h
-	} else {
-		f, err := os.Open(filename)
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		r = f
+	r, err := OpenInputAt(filename)
+	if err != nil {
+		return nil, err
 	}
+	defer r.Close()
 	pf, err := file.NewParquetReader(r)
 	if err != nil {
 		return nil, fmt.Errorf("reading parquet footer: %w", err)
@@ -439,20 +414,7 @@ func writeParquetTable(all []Record, schema *arrow.Schema, w io.Writer, o parque
 // head-throughput display (rows/sec) where line formats need a cached
 // newline count but parquet carries the answer natively.
 func ParquetRowCount(filename string) (int64, error) {
-	if IsHTTPURL(filename) {
-		h, err := OpenHTTPFile(filename)
-		if err != nil {
-			return 0, err
-		}
-		pf, err := file.NewParquetReader(h)
-		if err != nil {
-			return 0, fmt.Errorf("reading parquet footer: %w", err)
-		}
-		defer pf.Close()
-		return pf.NumRows(), nil
-	}
-
-	f, err := os.Open(filename)
+	f, err := OpenInputAt(filename)
 	if err != nil {
 		return 0, err
 	}
@@ -471,15 +433,7 @@ func ParquetRowCount(filename string) (int64, error) {
 // field-name completion) for parquet sources: before this, a schema
 // query decoded the ENTIRE file to answer a metadata question.
 func ParquetSchemaFields(filename string) ([]string, map[string]string, error) {
-	if IsHTTPURL(filename) {
-		h, err := OpenHTTPFile(filename)
-		if err != nil {
-			return nil, nil, err
-		}
-		return parquetSchemaFieldsFromReader(h)
-	}
-
-	f, err := os.Open(filename)
+	f, err := OpenInputAt(filename)
 	if err != nil {
 		return nil, nil, err
 	}

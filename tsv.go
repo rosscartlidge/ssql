@@ -52,7 +52,7 @@ func ReadTSV(filename string) (iter.Seq[Record], error) {
 // (CSVConfig.TypeOverrides / DefaultType / InferRows). A Delimiter of 0
 // means auto-detect from the header, the TSV default.
 func ReadTSVWithConfig(filename string, cfg CSVConfig) (iter.Seq[Record], error) {
-	file, err := os.Open(filename)
+	file, err := OpenInput(filename)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +268,7 @@ func formatTSVValue(v any, timeFormat string) string {
 
 // ExtractFieldsFromTSV reads the header of a TSV file and returns the field names.
 func ExtractFieldsFromTSV(filename string) ([]string, error) {
-	file, err := os.Open(filename)
+	file, err := OpenInput(filename)
 	if err != nil {
 		return nil, err
 	}

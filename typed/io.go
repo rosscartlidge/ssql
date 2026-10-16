@@ -508,7 +508,7 @@ func resolveOpts(opts []CSVOption) csvOpts {
 // Pass [Strict] to reject CSVs whose header doesn't exactly match T.
 func ReadCSV[T any](filename string, opts ...CSVOption) iter.Seq[T] {
 	return func(yield func(T) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInput(filename)
 		if err != nil {
 			failRead("typed.ReadCSV", filename, err)
 		}
@@ -567,7 +567,7 @@ func readCSVLoud[T any](op, source string, r io.Reader, o csvOpts, yield func(T)
 // open failures, header decode failures, and per-row parse failures.
 func ReadCSVSafe[T any](filename string, opts ...CSVOption) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
-		f, err := os.Open(filename)
+		f, err := ssql.OpenInput(filename)
 		if err != nil {
 			var zero T
 			yield(zero, err)
