@@ -452,7 +452,8 @@ function optimizePipeline() {
     if (!pipeline) return;
 
     // Run with -generate flags, pipe to generate ssql -explain
-    const fullPipeline = pipeline + ' | ssql generate ssql -explain';
+    // -as-written: the pipeline in the user's terms (no resolved -tz).
+    const fullPipeline = pipeline + ' | ssql generate ssql -explain -as-written';
     const result = executePipeline(fullPipeline, true);
     showOutput(result, 'Optimized Pipeline', true);
 

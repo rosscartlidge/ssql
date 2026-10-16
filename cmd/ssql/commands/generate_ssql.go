@@ -37,23 +37,33 @@ func registerGenerateSSQL(cmd *cf.SubcommandBuilder) {
 		Global().
 		Default(false).
 		Help("Print applied optimization rules to stderr").
+		Done().
+		Flag("-as-written").
+		Bool().
+		Global().
+		Default(false).
+		Help("Render the result as a rewrite of the pipeline as written: a zone the source resolved itself (TZ, the machine, a header) is left off the from stage, so a preview that compares with what was typed sees only the rules' changes; a -tz you wrote stays").
 		Done()
 	pipelineSourceFlags(sub, "optimize", "record").
 		Handler(func(ctx *cf.Context) error {
 			var run bool
 			var explain bool
+			var asWritten bool
 			if v, ok := ctx.GlobalFlags["-run"]; ok {
 				run = v.(bool)
 			}
 			if v, ok := ctx.GlobalFlags["-explain"]; ok {
 				explain = v.(bool)
 			}
+			if v, ok := ctx.GlobalFlags["-as-written"]; ok {
+				asWritten = v.(bool)
+			}
 
 			fragSrc, err := generateFragmentSource(ctx, "record", "ssql")
 			if err != nil {
 				return err
 			}
-			pipeline, rules, err := optimizePipeline(fragSrc)
+			pipeline, rules, err := optimizePipelineWith(fragSrc, optimiseOptions{AsWritten: asWritten})
 			if err != nil {
 				if err == errEmptyResult {
 					if explain {
@@ -193,6 +203,36 @@ type optimiseOptions struct {
 	// refused one; the pruning rule (catalog-predicate-extraction) and
 	// the rest still apply.
 	NoShardPushdown bool
+
+	// AsWritten drops the zone a source resolved for itself
+	// (CodeFragment.ResolvedZone) from its argv before the rules run, so
+	// the rendering is a rewrite of the pipeline as the user typed it —
+	// what the explore and playground previews compare against. Every
+	// other consumer keeps the pin (a pushed-down shard runs under the
+	// same zone as the head, DFC147).
+	AsWritten bool
+}
+
+// dropResolvedZone takes the `-tz NAME` fromInitFragment appended back
+// off a source fragment (argv and Command), recursively through the
+// side-input bodies of a func fragment. A `-tz` the user typed has no
+// ResolvedZone and stays.
+func dropResolvedZone(frag *lib.CodeFragment) {
+	for _, body := range frag.FuncBody {
+		dropResolvedZone(body)
+	}
+	name := frag.ResolvedZone
+	if name == "" {
+		return
+	}
+	if frag.Op != nil {
+		argv := frag.Op.Argv
+		if n := len(argv); n >= 2 && argv[n-2] == "-tz" && argv[n-1] == name {
+			frag.Op.Argv = argv[:n-2]
+		}
+	}
+	frag.Command = strings.TrimSuffix(frag.Command, " -tz "+ssql.ShellQuote(name))
+	frag.ResolvedZone = ""
 }
 
 // optimizePipelineWith is optimizePipeline under the given options.
@@ -227,6 +267,9 @@ func optimizePipelineCmdsWith(input io.Reader, opts optimiseOptions) ([]*pipelin
 		}
 		if frag.Type == "error" {
 			return nil, nil, &lib.UpstreamFailure{Frag: &frag}
+		}
+		if opts.AsWritten {
+			dropResolvedZone(&frag)
 		}
 		fragments = append(fragments, &frag)
 	}

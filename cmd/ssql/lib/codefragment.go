@@ -97,6 +97,14 @@ type CodeFragment struct {
 	// SSQL_EXPLAIN_PLAN is set. Never part of the generated program.
 	PlanNotes []string `json:"plan_notes,omitempty"`
 
+	// ResolvedZone is the zone a source resolved for itself (TZ, the
+	// machine, a header) and wrote into Op.Argv and Command as `-tz
+	// NAME`, so every generate target pins it (DFC147). Empty when the
+	// user typed `-tz`. `generate ssql -as-written` leaves it off again,
+	// so a preview that compares with the typed pipeline sees only what
+	// the rules changed.
+	ResolvedZone string `json:"resolved_zone,omitempty"`
+
 	// AdvisoryTypes carries RECORD-mode type knowledge (CSV column name →
 	// Go type, e.g. "pop" → "int64") inferred by the source (CSV sampling,
 	// JSONL schema headers). Deliberately distinct from OutputTypedSchema:

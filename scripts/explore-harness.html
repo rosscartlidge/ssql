@@ -372,6 +372,16 @@ async function run() {
         if (applyBtn) { applyBtn.click(); await settle(); }
         rec("tail-optimize-applied",
             ta.value === 'ssql from data.jsonl | ssql top 2 -field salary', ta.value);
+        // A -tz the user TYPED survives Apply (only the resolved one is
+        // left off: generate ssql -as-written).
+        ta.value = 'ssql from data.jsonl -tz UTC | ssql sort salary -desc | ssql limit 2';
+        w.exploreOptimizeTail();
+        await settle();
+        const applyTz = [...doc.getElementById('output').querySelectorAll('button')]
+            .find(b => b.textContent.startsWith('Apply'));
+        if (applyTz) { applyTz.click(); await settle(); }
+        rec("tail-optimize-keeps-typed-tz",
+            ta.value === 'ssql from data.jsonl -tz UTC | ssql top 2 -field salary', ta.value);
         // No-rewrite case is honest, no Apply button offered.
         ta.value = 'ssql from data.jsonl | ssql limit 2';
         w.exploreOptimizeTail();

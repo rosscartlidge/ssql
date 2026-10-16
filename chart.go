@@ -3799,7 +3799,12 @@ const exploreHTMLTemplate = `<!DOCTYPE html>
             const ta = document.getElementById('pipeline');
             const text = ta.value.trim().replace(/[|\s]+$/, '');
             if (!text) return;
-            const res = executePipeline(text + ' | ssql generate ssql -explain', true);
+            // -as-written: the engine renders the rewrite in the user's
+            // terms — the zone the from stage resolved for itself (every
+            // generate target pins it, DFC147) is left off, so the diff
+            // below is the rules' work alone and Apply never writes a
+            // zone the user did not type into the bar.
+            const res = executePipeline(text + ' | ssql generate ssql -explain -as-written', true);
             if (res.exitCode !== 0) { showOutput(res, 'Optimize failed'); return; }
             const rewrites = (res.stderr || '').split('\n').map(l => l.trim()).filter(l => l.startsWith('['));
             showOptimizeResult('pipeline', text, res.stdout.trim(), rewrites,

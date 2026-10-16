@@ -107,7 +107,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `generate go -pipeline 'PIPELINE'` | a standalone Go program for the pipeline; `-run` compiles and runs it; `-build BIN` writes a binary; `-mode typed` (default: struct types, parallel) or `-mode record`; `-explain` shows what the optimiser did |
 | `generate go -package PKG -func NAME -pipeline 'PIPELINE' FILE.go` | an importable Go function instead of a program: rows in (`iter.Seq[Row]`), rows out (`iter.Seq2[Out, error]`), parameters as a struct, the sink dropped, a stage failure returned as the last element; `NAMEFromCSV(io.Reader, params)` for a CSV source |
 | `generate sql -pipeline 'PIPELINE'` | DuckDB SQL (`-dialect postgres` or `datafusion`) |
-| `generate ssql -pipeline 'PIPELINE'` | the pipeline rewritten with fewer stages; `-explain` says why |
+| `generate ssql -pipeline 'PIPELINE'` | the pipeline rewritten with fewer stages; `-explain` says why; `-as-written` leaves off the zone the from stage resolved (a `-tz` you typed stays) |
 | `generate json -pipeline 'PIPELINE'` | the pipeline as a JSON document for `ssql run` |
 | `run FILE.json` | run a pipeline document with no shell, after the optimiser's rewrites (`-explain` names them, `+O` runs it as written); `-check` validates commands, flags and field names without running; `-stdin` reads the document from stdin (a views table: `from views.csv \| where -if name eq X \| to lines pipeline \| run -stdin`) |
 | `generate ssql -json FILE.json` / `generate sql -json FILE.json` | the optimised pipeline / SQL from a document |

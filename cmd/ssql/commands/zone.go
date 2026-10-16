@@ -64,6 +64,7 @@ func fromInitFragment(varName, code string, imports []string) *lib.CodeFragment 
 	if frag.Op != nil && !argvHasFlag(frag.Op.Argv, "-tz") {
 		frag.Op.Argv = append(frag.Op.Argv, "-tz", name)
 		frag.Command += " -tz " + ssql.ShellQuote(name)
+		frag.ResolvedZone = name
 	}
 	// The generated program's zone statement is the assemblers' (they
 	// read `-tz` from the first source's argv — lib.PipelineZone — so

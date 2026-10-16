@@ -146,3 +146,42 @@ func mustRepoRoot(t *testing.T) string {
 	}
 	return root
 }
+
+// `generate ssql -as-written` renders the rewrite in the user's terms:
+// the zone the from stage resolved for itself (pinned as `-tz NAME` for
+// every generate target, DFC147) is left off, a `-tz` the user typed
+// stays. The explore and playground previews compare this with the bar,
+// so without it every pipeline read as rewritten (the from stage always
+// differed by the zone) and Apply wrote the zone into the bar.
+func TestGenerateSSQLAsWritten(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	dir := t.TempDir()
+	data := filepath.Join(dir, "d.jsonl")
+	if err := os.WriteFile(data, []byte("{\"n\":1}\n{\"n\":2}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := append(barePathEnv(), "TZ=Australia/Sydney")
+	run := func(pipe string, flags ...string) string {
+		args := append([]string{"generate", "ssql"}, flags...)
+		args = append(args, "-pipeline", pipe)
+		cmd := exec.Command(bin, args...)
+		cmd.Env = env
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("generate ssql %v: %v", flags, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	// The rendering names the stages `ssql …` whatever binary ran them.
+	noop := bin + " from " + data + " | " + bin + " limit 1"
+	if got := run(noop); !strings.Contains(got, "-tz Australia/Sydney") {
+		t.Errorf("default rendering should pin the resolved zone, got %q", got)
+	}
+	if got, want := run(noop, "-as-written"), "ssql from "+data+" | ssql limit 1"; got != want {
+		t.Errorf("-as-written on a no-op pipeline:\n got %q\nwant %q", got, want)
+	}
+	typed := bin + " from " + data + " -tz UTC | " + bin + " sort -desc n | " + bin + " limit 1"
+	if got, want := run(typed, "-as-written"), "ssql from "+data+" -tz UTC | ssql top 1 -field n"; got != want {
+		t.Errorf("-as-written must keep a typed -tz and still rewrite:\n got %q\nwant %q", got, want)
+	}
+}

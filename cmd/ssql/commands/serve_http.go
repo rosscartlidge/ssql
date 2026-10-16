@@ -872,7 +872,7 @@ func serveOptimize(w http.ResponseWriter, r *http.Request, o serveHTTPOptions) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	stages = append(stages, []string{"generate", "ssql", "-explain"})
+	stages = append(stages, []string{"generate", "ssql", "-explain", "-as-written"})
 	self, err := os.Executable()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})

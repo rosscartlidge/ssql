@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The explore page's optimise preview reported every pipeline as
+  rewritten.** Since v4.114.0 the from stage pins the zone it resolved
+  (`-tz NAME`) into every generate target, so `generate ssql` always
+  differed from the bar by that flag: a no-op pipeline showed a
+  before/after and Apply wrote the zone into the bar. `generate ssql
+  -as-written` renders the rewrite in the user's terms — the resolved
+  zone is left off, a `-tz` you typed stays — and the explore page,
+  the playground and `serve`'s `/api/optimize` ask for it. The explore
+  end-to-end gains a case that a typed `-tz` survives Apply.
+
 ## [4.120.1] - 2026-10-16
 
 ### Fixed
