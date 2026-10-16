@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.120.1] - 2026-10-16
+
 ### Fixed
 
 - **`from URL` now reads in every lane.** The generated programs
