@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.120.3] - 2026-10-18
+
 ### Added
 
 - **`from catalog` in the typed lane** (DFC149 §4.6). A catalog whose
