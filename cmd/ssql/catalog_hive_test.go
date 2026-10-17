@@ -34,6 +34,9 @@ func TestCatalogHive(t *testing.T) {
 		"twokeys.csv": "host,path\nlocal,pqhive/region=north/data.parquet\nlocal,two/year=2023/region=east/d.parquet\n",
 		// A catalog with a row column AND hive keys: both become columns.
 		"both.csv": "host,path,source\nlocal,pqhive/region=*/data.parquet,nl\n",
+		// A shard the typed reader cannot take.
+		"people.csv": "id,name\n1,a\n",
+		"csvcat.csv": "host,path\nlocal,people.csv\n",
 	}
 	for name, body := range files {
 		p := filepath.Join(dir, name)
@@ -136,9 +139,32 @@ func TestCatalogHive(t *testing.T) {
 			t.Errorf("%s: want %q in\n%s", tc.args, tc.want, out)
 		}
 	}
-	// The file-column clash is caught in a generated program too.
-	out, err = runGeneratedPipeline(t, bin, dir, "record", bin+" from catalog -hive 'pqclash/region=*/data.parquet' | "+bin+" count")
-	if err == nil || !strings.Contains(out, `partition key "region" is also a column of the file`) {
-		t.Errorf("record program on a clash: %v\n%s", err, out)
+	// The file-column clash is caught in a generated program too, in
+	// both forms.
+	for _, mode := range []string{"record", "typed"} {
+		out, err = runGeneratedPipeline(t, bin, dir, mode, bin+" from catalog -hive 'pqclash/region=*/data.parquet' | "+bin+" count")
+		if err == nil || !strings.Contains(out, `partition key "region" is also a column of the file`) {
+			t.Errorf("%s program on a clash: %v\n%s", mode, err, out)
+		}
+	}
+
+	// The typed lane (§4.6, 2026-10-17): the program reads the shards
+	// in-process with the typed Parquet reader, the derived key and the
+	// shard field string fields of the row; before, a catalog source
+	// compiled the whole program as records. The equivalence corpus
+	// holds the results in every lane; this is the form.
+	out, err = run("export SSQL_MODE=typed; " + bin + " from catalog -hive " + glob + " -shard-field shard | " + bin + " include id region shard | " + bin + " to csv | " + bin + " generate go")
+	if err != nil || !strings.Contains(out, "typed.ReadParquetSourcesParallel[DataRow](sources, 0)") || !strings.Contains(out, "typed.CatalogParquetSources(entries, \"shard\")") || !strings.Contains(out, "Region") || !strings.Contains(out, "Shard") || strings.Contains(out, "ProcessCatalogShards") {
+		t.Errorf("typed program over a hive catalog: %v\n%s", err, out)
+	}
+	out, err = runGeneratedPipeline(t, bin, dir, "typed", bin+" from catalog -hive "+glob+" -shard-field shard | "+bin+" sort id | "+bin+" include id region shard | "+bin+" to csv")
+	if err != nil || out != "id,region,shard\n1,south,local:pqhive/region=south/data.parquet\n3,north,local:pqhive/region=north/data.parquet\n6,north,local:pqhive/region=north/data.parquet\n8,south,local:pqhive/region=south/data.parquet\n" {
+		t.Errorf("typed program over a hive catalog: %v\n%q", err, out)
+	}
+	// A shard the typed reader cannot take: the record form, said on
+	// stderr — the user asked for typed and must hear what they got.
+	out, err = run("export SSQL_MODE=typed; " + bin + " from catalog csvcat.csv | " + bin + " count | " + bin + " generate go 2>&1")
+	if err != nil || !strings.Contains(out, `shard local:people.csv is not a Parquet file on this host (format "csv"); the program reads the shards as records`) || !strings.Contains(out, "ProcessCatalogShardsRemoteGo") {
+		t.Errorf("typed over a CSV shard: %v\n%s", err, out)
 	}
 }

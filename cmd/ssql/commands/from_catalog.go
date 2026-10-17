@@ -401,6 +401,36 @@ func shardSchema(entry ssql.CatalogEntry, remoteBin string, groups [][]string) (
 	return sch, nil
 }
 
+// catalogFilterParams is the generated program's flags for the catalog
+// and its pruning filters, with the ssql.CatalogFilter literal that
+// reads them: each filter value is a flag of the compiled binary, so a
+// run can prune differently from the generation. Shared by the record
+// and typed forms.
+func catalogFilterParams(catalogFile string, filters []ssql.CatalogFilter) (params []lib.CodeParam, filterCode string) {
+	params = append(params, lib.CodeParam{Name: "catalog", Default: catalogFile, Help: "catalog CSV file", VarName: "flagCatalog"})
+	if len(filters) == 0 {
+		return params, "nil"
+	}
+	var parts []string
+	for _, f := range filters {
+		flagName := f.Field + "-" + f.Operator
+		varName := "flag" + flagVarName(f.Field) + flagVarName(f.Operator)
+		if f.Negated {
+			// Distinct flag identity for the +if form — a -if and +if on
+			// the same field+op must not collide.
+			flagName = "not-" + flagName
+			varName = "flagNot" + flagVarName(f.Field) + flagVarName(f.Operator)
+		}
+		params = append(params, lib.CodeParam{Name: flagName, Default: f.Value, Help: f.Field + " " + f.Operator + " filter", VarName: varName})
+		if f.Negated {
+			parts = append(parts, fmt.Sprintf(`{Field: %q, Operator: %q, Value: *%s, Negated: true}`, f.Field, f.Operator, varName))
+		} else {
+			parts = append(parts, fmt.Sprintf(`{Field: %q, Operator: %q, Value: *%s}`, f.Field, f.Operator, varName))
+		}
+	}
+	return params, fmt.Sprintf("[]ssql.CatalogFilter{%s}", strings.Join(parts, ", "))
+}
+
 // generateFromCatalogCode emits an init fragment that orchestrates
 // ship-and-run across catalog shards. v4.43 codegen-symmetric design
 // (see catalog-remote-go-proposal.md):
@@ -421,34 +451,18 @@ func shardSchema(entry ssql.CatalogEntry, remoteBin string, groups [][]string) (
 func generateFromCatalogCode(catalogFile string, hive, gpu bool, filters []ssql.CatalogFilter, shardField string, opts ssql.CatalogShardOpts, pipelineArgs []string) error {
 	_ = gpu
 
-	var params []lib.CodeParam
-	params = append(params, lib.CodeParam{Name: "catalog", Default: catalogFile, Help: "catalog CSV file", VarName: "flagCatalog"})
-
-	// Filter values become per-flag CodeParams so the compiled
-	// binary can override them at runtime.
-	var filterCode string
-	if len(filters) > 0 {
-		var parts []string
-		for _, f := range filters {
-			flagName := f.Field + "-" + f.Operator
-			varName := "flag" + flagVarName(f.Field) + flagVarName(f.Operator)
-			if f.Negated {
-				// Distinct flag identity for the +if form — a -if and +if on
-				// the same field+op must not collide.
-				flagName = "not-" + flagName
-				varName = "flagNot" + flagVarName(f.Field) + flagVarName(f.Operator)
-			}
-			params = append(params, lib.CodeParam{Name: flagName, Default: f.Value, Help: f.Field + " " + f.Operator + " filter", VarName: varName})
-			if f.Negated {
-				parts = append(parts, fmt.Sprintf(`{Field: %q, Operator: %q, Value: *%s, Negated: true}`, f.Field, f.Operator, varName))
-			} else {
-				parts = append(parts, fmt.Sprintf(`{Field: %q, Operator: %q, Value: *%s}`, f.Field, f.Operator, varName))
-			}
+	if typedMode() {
+		handled, reason, err := generateFromCatalogCodeTyped(catalogFile, hive, filters, shardField, pipelineArgs)
+		if handled {
+			return err
 		}
-		filterCode = fmt.Sprintf("[]ssql.CatalogFilter{%s}", strings.Join(parts, ", "))
-	} else {
-		filterCode = "nil"
+		// Not silent (fail loudly's cousin): the user asked for typed and
+		// the local merge will be records — each shard still runs the
+		// typed pipeline on its host.
+		fmt.Fprintf(os.Stderr, "ssql generate go -typed: from catalog %s: %s; the program reads the shards as records (the ship-and-run form)\n", catalogFile, reason)
 	}
+
+	params, filterCode := catalogFilterParams(catalogFile, filters)
 
 	pipelineGroups := ssql.SplitOnPlus(pipelineArgs)
 	var pipelineCode string

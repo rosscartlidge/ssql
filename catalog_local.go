@@ -10,8 +10,8 @@ package ssql
 // hosts, other formats and `-- stage` pushdown keep the subprocess path,
 // where the shard's own ssql is the authority on its format.
 
-// catalogLocalParquet reports whether a shard takes the fast path.
-func catalogLocalParquet(e CatalogEntry, pushdown [][]string) bool {
+// CatalogLocalParquet reports whether a shard takes the fast path.
+func CatalogLocalParquet(e CatalogEntry, pushdown [][]string) bool {
 	return len(pushdown) == 0 && IsLocalHost(e.Host) && CatalogEntryFormat(e) == "parquet"
 }
 

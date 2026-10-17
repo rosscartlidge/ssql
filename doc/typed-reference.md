@@ -209,6 +209,11 @@ func ReadParquetSafeFromReaderAt[T any](r parquet.ReaderAtSeeker, opts ...Parque
 func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) Stream[T]
 func ReadParquetFiles[T any](paths []string, opts ...ParquetOption) iter.Seq[T]                    // several files or globs, in order; one shared schema
 func ReadParquetFilesParallel[T any](paths []string, n int, opts ...ParquetOption) Stream[T]      // shards share out every file's row groups
+func ReadParquetSources[T any](sources []ParquetSource, opts ...ParquetOption) iter.Seq[T]        // files with per-file constant columns (a catalog's hive keys, its columns, the shard field), set on every row of the file into string fields of T; a constant with no field, or a path-derived one that is also a file column, is a ReadError naming the file
+func ReadParquetSourcesParallel[T any](sources []ParquetSource, n int, opts ...ParquetOption) Stream[T]
+func CatalogParquetSources(entries []ssql.CatalogEntry, shardField string) ([]ParquetSource, error)   // a loaded catalog's local Parquet shards as sources (ssql.CatalogRecordMetadata's columns); a shard elsewhere or in another format is an error
+type ParquetSource struct { Path string; Constants []ParquetConstant }
+type ParquetConstant struct { Name, Value string; FromPath bool }                                  // FromPath: a hive key — a file column of the same name is a clash, not an override
 
 func WriteParquet[T any](seq iter.Seq[T], filename string) error
 func WriteParquetToWriter[T any](seq iter.Seq[T], w io.Writer) error

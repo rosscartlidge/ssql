@@ -204,6 +204,13 @@ func TestScaleBudgets(t *testing.T) {
 		budget(t, dir, bin+" from catalog -hive 'parts/dept=*/big.parquet' | "+bin+" count", 6*time.Second)
 		// Pruning opens one file: a sixth of the work.
 		budget(t, dir, bin+" from catalog -hive 'parts/dept=*/big.parquet' -if dept eq hr | "+bin+" count", 2*time.Second)
+		// The typed program (§4.6, 2026-10-17): the shards through the
+		// typed Parquet reader with the key a string field, the same
+		// ceiling as the typed Parquet cases (compile included). Before,
+		// the catalog source compiled the whole program as records.
+		repo, _ := filepath.Abs("../..")
+		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from catalog -hive \"parts/dept=*/big.parquet\" | "+bin+" group-by dept -count n | "+bin+" to csv' > /dev/null", 60*time.Second)
 	})
 	t.Run("jsonl-scan", func(t *testing.T) {
 		// The legacy per-line-Unmarshal reader class was 4× the csv

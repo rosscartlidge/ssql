@@ -1999,6 +1999,7 @@ func WriteCatalog(w io.Writer, entries []CatalogEntry) error      // columns in 
 func CatalogRecordMetadata(e CatalogEntry, shardField string) (names, values []string) // the metadata a shard's records carry, in order: the shard field (host:path), then the columns; range columns and empty values skipped
 func CatalogEntryFormat(e CatalogEntry) string                 // the catalog's format column, else the path's extension
 // ProcessCatalogShards and ProcessCatalogShardsRemoteGo read a local Parquet shard in-process when no stages are pushed down (DFC149 §4.4)
+func CatalogLocalParquet(e CatalogEntry, pushdown [][]string) bool   // that shard: a Parquet file on this host with nothing pushed down; the typed program reads such a catalog with typed.CatalogParquetSources (DFC149 §4.6)
 func PruneCatalog(entries []CatalogEntry, filters []CatalogFilter) []CatalogEntry   // range (from/to) and exact-value pruning
 func ExpandCatalogGlobs(entries []CatalogEntry) []CatalogEntry   // local globs and remote `echo` expansion
 func ProcessCatalogShards(entries []CatalogEntry, remoteBin string, shardField string, pipelineArgs [][]string) iter.Seq[Record]

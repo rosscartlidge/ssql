@@ -617,7 +617,7 @@ func yieldTableRows[T any](tbl arrow.Table, plan *parquetReadPlan, yield func(T)
 // opened or read panics with a *[ReadError] (until 2026-10-11 it
 // produced an empty stream).
 func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) Stream[T] {
-	return readParquetUnitsParallel[T]("typed.ReadParquetParallel", []string{filename}, n, opts)
+	return readParquetUnitsParallel[T]("typed.ReadParquetParallel", []string{filename}, nil, n, opts)
 }
 
 // ReadParquetFilesParallel is [ReadParquetParallel] over several files:
@@ -625,14 +625,16 @@ func ReadParquetParallel[T any](filename string, n int, opts ...ParquetOption) S
 // patterns ([ssql.ExpandFilePatterns]); the files must share one schema
 // ([ssql.CheckParquetSchemas]).
 func ReadParquetFilesParallel[T any](paths []string, n int, opts ...ParquetOption) Stream[T] {
-	return readParquetUnitsParallel[T]("typed.ReadParquetFilesParallel", expandParquetFiles("typed.ReadParquetFilesParallel", paths), n, opts)
+	return readParquetUnitsParallel[T]("typed.ReadParquetFilesParallel", expandParquetFiles("typed.ReadParquetFilesParallel", paths), nil, n, opts)
 }
 
 // parquetUnit is one row group of one file: the parallel readers'
 // unit of work.
 type parquetUnit struct{ file, rg int }
 
-func readParquetUnitsParallel[T any](op string, files []string, n int, opts []ParquetOption) Stream[T] {
+// consts, when given, holds each file's constant columns
+// ([ParquetSource]), set on its rows after the file's columns decode.
+func readParquetUnitsParallel[T any](op string, files []string, consts [][]ParquetConstant, n int, opts []ParquetOption) Stream[T] {
 	o := resolveParquetOpts(opts)
 	if n <= 0 {
 		n = runtime.GOMAXPROCS(0)
@@ -645,6 +647,7 @@ func readParquetUnitsParallel[T any](op string, files []string, n int, opts []Pa
 	// state for read-coalescing).
 	var plan *parquetReadPlan
 	var units []parquetUnit
+	fileCols := map[string]bool{}
 	for fi, name := range files {
 		f, err := ssql.OpenInputAt(name)
 		if err != nil {
@@ -661,6 +664,9 @@ func readParquetUnitsParallel[T any](op string, files []string, n int, opts []Pa
 				var sch *arrow.Schema
 				if sch, err = reader.Schema(); err == nil {
 					plan, err = buildParquetReadPlan[T](sch, o)
+					for _, f := range sch.Fields() {
+						fileCols[strings.ToLower(f.Name)] = true
+					}
 				}
 			}
 			if err != nil {
@@ -674,6 +680,12 @@ func readParquetUnitsParallel[T any](op string, files []string, n int, opts []Pa
 		}
 		pf.Close()
 		f.Close()
+	}
+	// The files share one schema (checked by the caller), so the first
+	// file's columns stand for every file's in the clash check.
+	setters := make([][]constantSetter, len(files))
+	for fi := range consts {
+		setters[fi] = constantSetters[T](op, files[fi], consts[fi], fileCols)
 	}
 	if len(units) == 0 {
 		return Stream[T]{shards: nil, n: 0}
@@ -732,7 +744,11 @@ func readParquetUnitsParallel[T any](op string, files []string, n int, opts []Pa
 					failRead(op, files[u.file], err)
 				}
 				cont := true
+				apply := setters[u.file]
 				yieldTableRows[T](tbl, plan, func(row T) bool {
+					for _, s := range apply {
+						s.set(unsafe.Pointer(&row))
+					}
 					if !yield(row) {
 						cont = false
 						return false

@@ -206,7 +206,7 @@ func runShardStream(
 	mode, shardField, remoteBin string,
 	ch chan<- Record,
 ) error {
-	if catalogLocalParquet(entry, groups) {
+	if CatalogLocalParquet(entry, groups) {
 		_, err := readLocalParquetShard(entry, shardField, func(r Record) bool {
 			select {
 			case ch <- r:
@@ -252,7 +252,7 @@ func runShardCollect(
 	groups [][]string,
 	mode, shardField, remoteBin string,
 ) ([]Record, error) {
-	if catalogLocalParquet(entry, groups) {
+	if CatalogLocalParquet(entry, groups) {
 		var out []Record
 		_, err := readLocalParquetShard(entry, shardField, func(r Record) bool {
 			out = append(out, r)

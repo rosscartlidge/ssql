@@ -2,7 +2,7 @@
 
 Reference: DFC150
 Created: 2026-10-15
-Last modified: 2026-10-15
+Last modified: 2026-10-17
 
 [Back to Index](./README.md)
 
@@ -196,16 +196,19 @@ Most of these are in the journal; the ones worth keeping are here.
    faster than the shell pipeline and about three times slower than the
    typed program over the same files as a glob, because the catalog
    source compiles the whole program in record form. That is why §5.1
-   leaves the typed lane unbuilt until a library user asks.
+   leaves the typed lane unbuilt until a library user asks. (Built
+   2026-10-17 on Ross's ask, DFC149 §4.6: the gap had widened to ten
+   times once the typed glob reader got faster — 0.57 s record against
+   0.05 s typed on the rail files — and the fallback was silent.)
 
 ## 5. What remains
 
 ### 5.1 DFC149, the catalog arc
 
-- **The typed lane** (§4.6): the struct is the first shard's schema
-  plus the keys as strings; a layout that adds a key at run time is a
-  loud mismatch. Deferred on the measurement in §4.7; the first
-  library-mode request for a fast catalog program reopens it.
+- ~~**The typed lane** (§4.6)~~ built 2026-10-17: the struct is the
+  first shard's Parquet schema plus the keys as strings, set per file
+  by `typed.ReadParquetSourcesParallel`; a layout that adds a key at
+  run time is a loud mismatch; 0.08 s on the rail files.
 - **Ranges from paths** (§4.7): `month=5` vs `month=10` compares as a
   string, as DuckDB does with autocast off. Noted, not solved.
 - **Percent-decoding of values** (§7): one `COPY … PARTITION_BY` probe

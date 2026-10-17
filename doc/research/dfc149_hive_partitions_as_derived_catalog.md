@@ -2,7 +2,7 @@
 
 Reference: DFC149
 Created: 2026-10-13
-Last modified: 2026-10-14
+Last modified: 2026-10-17
 
 [Back to Index](./README.md)
 
@@ -205,7 +205,7 @@ own.
 | exec | §4.1 derivation in `ExpandCatalogGlobs` (per-entry metadata, no longer shared); §4.4 fast path. |
 | generate ssql | The optimiser's `readCatalogMetadataColumns` must learn derived columns: for a glob FILE, from the pattern's own `key=*` segments; for a CSV with `-hive`, by expanding the catalog as exec would. Otherwise the rule sees no catalog columns and a `where -if day …` stays a row filter — correct but unpruned, a silent performance regression the gate must catch. |
 | go record | The generated program already reads the catalog at run time and calls `ProcessCatalogShardsRemoteGo` (DFC059); it gains the `-hive` option and the fast path. |
-| go typed | Needs §4.5: the struct is the first shard's schema plus the partition keys as `string`. The catalog is re-read at run time, but the key *names* are fixed by the layout, so the struct is stable; a run-time layout change that adds a key is a loud mismatch. |
+| go typed | **Built 2026-10-17.** A catalog whose pruned shards are all local Parquet files, with no pushdown, is read in the generated program by the typed Parquet reader over the catalog's files: `typed.ReadParquetSourcesParallel[Row](typed.CatalogParquetSources(entries, shardField), 0)` (serial alternative `ReadParquetSources`), the struct the first shard's Parquet schema plus the columns the catalog adds — `-shard-field` and the metadata columns, as `string` fields, in schema mode's order (§4.5). Each file's constants (its hive keys, the catalog's columns, the shard field) are set on every row of the file after its columns decode: one slice of (field offset, value) per file, no per-row lookup. The program re-reads and prunes the catalog when it runs, the filters its flags as in the record form; a constant the struct has no field for (a layout that grew a key) and a hive key that is also a column of the file (the record lane's clash) are `typed.ReadError`s naming the file; a catalog column that is also a file column takes its place, as in the record lane, and must be a string at generate time. Not in-process — a shard on another host or in another format, `--` pushdown, a catalog pruned to nothing at generate time — keeps the record form (each shard runs the typed pipeline on its host, the merge is records) and says so on stderr: the user asked for typed and must hear what they got. Measured: the seven rail partitions (381k rows, `group-by type -count`) 1.15 s exec, 0.57 s record program, **0.08 s** typed program (the typed glob program 0.05 s); the six 500k-row scale partitions 2.9 s exec, 3.1 s record, **0.17 s** typed. Gates: the catalog cases of `TestPipelineEquivalence` now run the typed lanes in this form (watched fail with the constants not applied: `region` empty in go-typed and go-parallel), `TestParquetSources`, `TestCatalogHive` (the form, the clash in a typed program, the stderr note on a CSV shard), the scale case. |
 | generate sql | **Built 2026-10-14** (`translateCatalogSource`, DuckDB only). For a catalog whose pruned shards are all local Parquet: ssql expands and prunes the catalog as the SQL is generated (the `-if` filters the optimiser lifts from a `where`), so the SQL names the surviving files and DuckDB never re-prunes. A `-hive` layout whose metadata is the path's keys alone is `read_parquet([the files], hive_partitioning=true, hive_types_autocast=false)` — DuckDB derives the key, VARCHAR as ssql's is; any other metadata (a catalog's own columns, `-shard-field`) is a literal per file, `SELECT *, 'v' AS region FROM read_parquet(f, hive_partitioning=false) UNION ALL …`, in the order the records carry it, `* REPLACE` for a column the file also has. Metadata columns are registered as text, so a `where` literal on one is quoted (`month = '05'`, not `5`). Refused: a shard on another host or in another format, `--` pushdown, `-catalog-used`, a catalog that prunes to nothing, the other dialects. The rail layout (seven files, 381k rows): the view query 0.04 s under `generate sql -run` against 0.99 s in exec. The unit test's literal form caught a shipped bug in the fast path: the glob form listed the derived key twice (`"day":…,"day":…` on every record), invisible to every JSON reader and to the equivalence gate's column comparison. |
 
 ### 4.7 What this does not do
@@ -258,9 +258,10 @@ own.
 2. ~~§4.1 derivation + §4.2 glob form + the optimiser's derived columns~~
    DONE 2026-10-14.
 3. ~~§4.4 fast path, Parquet first, with the scale case~~ DONE 2026-10-14.
-4. §4.6 ~~SQL lane~~ DONE 2026-10-14; the typed lane remains (a
-   library-mode user's ask: today a catalog source compiles the whole
-   program in record form).
+4. §4.6 ~~SQL lane~~ DONE 2026-10-14; ~~the typed lane~~ DONE 2026-10-17
+   (built on Ross's ask, not a library user's; the record form had
+   compiled the whole program as records, ten times the typed glob
+   program's time).
 
 Effort: 1 is small; 2 is a day; 3 is the larger piece, a day or two
 with the typed parallel reader; 4 half a day each.
@@ -274,7 +275,10 @@ with the typed parallel reader; 4 half a day each.
   path; the fast path reads files in catalog order already, and the
   typed parallel reader's cross-shard order is the consumer's. Fine
   for group-by and sort; a `limit` without a sort will differ between
-  lanes as it does for every multi-file source today.
+  lanes as it does for every multi-file source today. (The typed
+  program has no `-shard-order`, `-shard-concurrency` or `-keep-going`
+  flags: its reader is the parallel Parquet reader, one shard per row
+  group, and its serial form reads in catalog order.)
 - Percent-decoding of values: confirm what DuckDB writes for a value
   containing `/` or `=` before committing to it (one `COPY … PARTITION_BY`
   probe).

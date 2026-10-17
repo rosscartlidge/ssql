@@ -115,11 +115,11 @@ func TestCatalogLocalParquetFastPath(t *testing.T) {
 		{CatalogEntry{Host: "node1", Path: a}, nil},
 		{CatalogEntry{Host: "local", Path: a}, [][]string{{"where", "-if", "id", "gt", "1"}}},
 	} {
-		if catalogLocalParquet(c.e, c.push) {
+		if CatalogLocalParquet(c.e, c.push) {
 			t.Errorf("%+v push=%v must not take the fast path", c.e, c.push)
 		}
 	}
-	if !catalogLocalParquet(CatalogEntry{Host: "local", Path: a, Format: "parquet"}, nil) || !catalogLocalParquet(CatalogEntry{Host: "localhost", Path: b}, nil) {
+	if !CatalogLocalParquet(CatalogEntry{Host: "local", Path: a, Format: "parquet"}, nil) || !CatalogLocalParquet(CatalogEntry{Host: "localhost", Path: b}, nil) {
 		t.Error("a local parquet shard, by format column or extension, takes the fast path")
 	}
 

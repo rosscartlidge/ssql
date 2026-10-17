@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`from catalog` in the typed lane** (DFC149 §4.6). A catalog whose
+  pruned shards are all Parquet files on this host, with no pushdown,
+  now compiles under `SSQL_MODE=typed` to a typed program: the shards
+  are read in-process by `typed.ReadParquetSourcesParallel` over
+  `typed.CatalogParquetSources(entries, shardField)`, the row type the
+  first shard's Parquet schema plus the columns the catalog adds
+  (`-shard-field`, the hive keys, a catalog CSV's own columns) as
+  string fields set on every row of each file. The program re-reads
+  and prunes the catalog when it runs (the filters are its flags, as in
+  the record form). Before, a catalog source compiled the whole program
+  as records: the seven rail partitions took 0.57 s as a record program
+  and take 0.08 s typed; the six 500k-row scale partitions 3.1 s and
+  0.17 s. A shard on another host or in another format, `--` pushdown,
+  or a catalog pruned to nothing keep the record form, and `generate go`
+  now says so on stderr instead of silently handing back a record
+  program. New typed API: `ParquetSource`, `ParquetConstant`,
+  `ReadParquetSources`, `ReadParquetSourcesParallel`,
+  `CatalogParquetSources`; root `CatalogLocalParquet` is exported.
+
 ## [4.120.2] - 2026-10-16
 
 ### Fixed

@@ -700,7 +700,7 @@ func RemoteScriptCommand(bin, remotePath, mode string) string {
 func ProcessCatalogShards(entries []CatalogEntry, remoteBin string, shardField string, pipelineArgs [][]string) iter.Seq[Record] {
 	return func(yield func(Record) bool) {
 		for _, entry := range entries {
-			if catalogLocalParquet(entry, pipelineArgs) {
+			if CatalogLocalParquet(entry, pipelineArgs) {
 				// DFC149 §4.4: a local Parquet shard is read in this
 				// process; an error is the shard's, reported by the
 				// caller's ssql.Run.
