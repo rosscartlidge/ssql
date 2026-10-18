@@ -81,7 +81,7 @@ func columnName(f reflect.StructField) (name string, skip bool) {
 // When strict is true, the function fails if any header column has
 // no matching struct field, OR if any required (non-pointer) struct
 // field has no matching column.
-func buildReadSchema[T any](header []string, strict bool, timeFormats map[string]string) (*rowSchema, error) {
+func buildReadSchema[T any](header []string, strict bool, timeFormats map[string]string, emptyZero bool) (*rowSchema, error) {
 	var zero T
 	rt := reflect.TypeOf(zero)
 	if rt == nil || rt.Kind() != reflect.Struct {
@@ -125,6 +125,9 @@ func buildReadSchema[T any](header []string, strict bool, timeFormats map[string
 				return nil, fmt.Errorf("field %s: %w", f.Name, err)
 			}
 			dec = decodeTimeLayout(f.Offset, layout)
+		}
+		if emptyZero {
+			dec = zeroOnEmpty(dec, f.Type, f.Offset)
 		}
 		decoders[col] = dec
 		types[col] = f.Type.String()
@@ -345,6 +348,27 @@ func decodeTime(off uintptr) fieldDecoder {
 	}
 }
 
+// zeroOnEmpty wraps a decoder so an empty cell leaves the field at its
+// zero value instead of being errEmptyCell — [EmptyAsZero], the user's
+// explicit `from csv -empty zero`, the same reading the record lane
+// takes under ssql.CSVConfig.EmptyAsZero (0, false; a string field is
+// "" either way, a pointer field nil either way). The field's bytes are
+// cleared because the row buffer may hold the previous row's value.
+func zeroOnEmpty(dec fieldDecoder, t reflect.Type, off uintptr) fieldDecoder {
+	switch t.Kind() {
+	case reflect.String, reflect.Pointer:
+		return dec
+	}
+	size := t.Size()
+	return func(p unsafe.Pointer, s string) error {
+		if s == "" {
+			clear(unsafe.Slice((*byte)(unsafe.Add(p, off)), size))
+			return nil
+		}
+		return dec(p, s)
+	}
+}
+
 // errEmptyCell is what a non-pointer, non-string decoder returns for an
 // empty cell. A typed struct cannot hold absence, and writing the zero
 // value silently (the behaviour until v4.92.0) made the typed lane
@@ -464,7 +488,17 @@ type CSVOption func(*csvOpts)
 type csvOpts struct {
 	strict      bool
 	timeFormats map[string]string // lower-cased column → pattern (TimeFormat)
+	emptyZero   bool              // EmptyAsZero
 }
+
+// EmptyAsZero reads an empty cell of a numeric, boolean or time field
+// as the field's zero value (0, false, the zero time) instead of failing
+// the read — `from csv -empty zero`. The default is the loud ReadError:
+// a struct cannot hold absence, and a silent zero disagreed with the
+// Record lane, where an empty numeric cell is absent (DFC124 §3). With
+// this option the user has said a blank means zero, and every lane
+// reads it so.
+func EmptyAsZero() CSVOption { return func(o *csvOpts) { o.emptyZero = true } }
 
 // TimeFormat reads a time.Time column whose cells follow a pattern
 // (strftime "%d/%m/%Y" or a Go layout) rather than the RFC 3339 and SQL
@@ -538,7 +572,7 @@ func readCSVLoud[T any](op, source string, r io.Reader, o csvOpts, yield func(T)
 		}
 		failRead(op, source, fmt.Errorf("read header: %w", err))
 	}
-	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
+	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats, o.emptyZero)
 	if err != nil {
 		failRead(op, source, err)
 	}
@@ -590,7 +624,7 @@ func ReadCSVSafeFromReader[T any](r io.Reader, opts ...CSVOption) iter.Seq2[T, e
 			yield(zero, fmt.Errorf("typed.ReadCSV: read header: %w", err))
 			return
 		}
-		schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
+		schema, err := buildReadSchema[T](header, o.strict, o.timeFormats, o.emptyZero)
 		if err != nil {
 			var zero T
 			yield(zero, err)

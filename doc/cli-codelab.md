@@ -476,6 +476,15 @@ missing (an empty cell *is* missing — never a phantom zero):
 ssql from sheet.csv | ssql fill -down region -default sales 0 | ssql group-by region -sum sales total -count stores | ssql to table
 ```
 
+When a blank numeric cell *means* zero — nothing sold, nothing to add —
+say so at the source with `-empty zero`, and every lane reads it that
+way, the compiled typed program included (which otherwise refuses a
+blank in a numeric column, since a struct cannot hold a missing value):
+
+```bash
+ssql from csv sheet.csv -empty zero | ssql group-by store -sum sales total | ssql sort -desc total | ssql to table
+```
+
 And text becomes data with `from lines` + `extract`: named regex groups
 become fields, lines that don't match fail loudly unless you `-skip`:
 

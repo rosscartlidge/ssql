@@ -186,3 +186,24 @@ func TestCSVEmptyCellsUnderSampling(t *testing.T) {
 		t.Errorf("all-empty column should be a string column holding \"\", got %T %v", raw, raw)
 	}
 }
+
+// `from csv -empty zero` (CSVConfig.EmptyAsZero): an empty numeric or
+// boolean cell is the type's zero, the user's explicit reading; a text
+// cell is "" as always. The default (absent) is pinned above.
+func TestCSVEmptyAsZero(t *testing.T) {
+	in := "id,n,f,b,s\n1,,,,\n2,7,1.5,true,x\n"
+	cfg := DefaultCSVConfig()
+	cfg.EmptyAsZero = true
+	rows := slices.Collect(ReadCSVFromReader(strings.NewReader(in), cfg))
+	if len(rows) != 2 {
+		t.Fatalf("rows: %d", len(rows))
+	}
+	for field, want := range map[string]any{"n": int64(0), "f": float64(0), "b": false, "s": ""} {
+		if got, _ := Get[any](rows[0], field); got != want {
+			t.Errorf("row 1 %s = %T %v, want %T %v", field, got, got, want, want)
+		}
+	}
+	if got, _ := Get[any](rows[1], "n"); got != int64(7) {
+		t.Errorf("row 2 n = %v", got)
+	}
+}

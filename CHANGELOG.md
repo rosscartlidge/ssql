@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`from csv|tsv -empty zero`: a blank numeric or boolean cell read as
+  0 or false** instead of as a missing value, in every lane. The default
+  stays DFC124's: an empty cell is absent, and a typed program refuses
+  it (`column "sales": "" is not int64`) because a struct cannot hold
+  absence — which left a sheet with blank cells no typed form at all,
+  since `fill` runs after the reader has already failed. The flag is
+  the user's word that a blank means nothing to add: the record reader
+  writes the zero (`CSVConfig.EmptyAsZero`), a typed program reads
+  through `typed.EmptyAsZero()` / `DelimEmptyAsZero()` (the field's
+  bytes cleared on the branch the decoder already took), `generate
+  sql` COALESCEs the numeric and boolean columns over the source. Text
+  columns are `""` either way; time and json columns stay missing.
+  Equivalence cases `empties_zero_*` run every lane unskipped, with
+  DuckDB as the independent oracle (watched failing with the typed
+  option and the SQL projection each disabled).
+
 ## [4.120.3] - 2026-10-18
 
 ### Added

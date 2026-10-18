@@ -24,7 +24,11 @@ type delimOpts struct {
 	strict      bool
 	timeFormats map[string]string
 	timeFormat  string // output pattern for time.Time columns (DelimOutputTimeFormat)
+	emptyZero   bool   // DelimEmptyAsZero
 }
+
+// DelimEmptyAsZero is [EmptyAsZero] for the delimited readers.
+func DelimEmptyAsZero() DelimOption { return func(o *delimOpts) { o.emptyZero = true } }
 
 // DelimOutputTimeFormat is [OutputTimeFormat] for the delimited writers.
 func DelimOutputTimeFormat(pattern string) DelimOption {
@@ -173,7 +177,7 @@ func readDelimLoud[T any](op, source string, r io.Reader, o delimOpts, yield fun
 		return // empty input: zero rows
 	}
 	header := splitLine(scanner.Bytes(), o.delim, nil)
-	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
+	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats, o.emptyZero)
 	if err != nil {
 		failRead(op, source, err)
 	}
@@ -223,7 +227,7 @@ func ReadDelimSafeFromReader[T any](r io.Reader, opts ...DelimOption) iter.Seq2[
 			return
 		}
 		header := splitLine(scanner.Bytes(), o.delim, nil)
-		schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
+		schema, err := buildReadSchema[T](header, o.strict, o.timeFormats, o.emptyZero)
 		if err != nil {
 			var zero T
 			yield(zero, err)
@@ -356,7 +360,7 @@ func ReadDelimParallel[T any](filename string, n int, opts ...DelimOption) Strea
 
 	headerEnd := newlines[0]
 	header := splitLine(data[:headerEnd], o.delim, nil)
-	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
+	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats, o.emptyZero)
 	if err != nil {
 		failRead(op, filename, err)
 	}

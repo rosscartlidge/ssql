@@ -128,6 +128,33 @@ func parseTimeCellPattern(pattern string) cellParser {
 	}
 }
 
+// zeroForEmpty wraps a column's parser so an empty cell is the type's
+// zero value — 0, 0.0, false — instead of missing: `from csv -empty
+// zero`, the user's explicit choice where the data means a blank as
+// nothing-to-add (a sales sheet with blank cells). The default stays
+// DFC124's absent cell. A string column is "" either way; a time or
+// json column keeps the empty cell missing (a zero time is not a
+// value anyone wrote).
+func zeroForEmpty(ft FieldType, p cellParser) cellParser {
+	var zero any
+	switch ft {
+	case FieldTypeInt:
+		zero = int64(0)
+	case FieldTypeFloat:
+		zero = float64(0)
+	case FieldTypeBool:
+		zero = false
+	default:
+		return p
+	}
+	return func(s string) (any, error) {
+		if strings.TrimSpace(s) == "" {
+			return zero, nil
+		}
+		return p(s)
+	}
+}
+
 // parserForType returns the cell parser for a FieldType.
 func parserForType(ft FieldType) cellParser {
 	switch ft {
@@ -364,6 +391,9 @@ func readRows(csvReader rowReader, cfg CSVConfig, yield func(Record, error) bool
 			// (-format COL PATTERN, a sidecar's date format).
 			types[i] = FieldTypeTime
 			parsers[i] = parseTimeCellPattern(pattern)
+		}
+		if cfg.EmptyAsZero {
+			parsers[i] = zeroForEmpty(types[i], parsers[i])
 		}
 	}
 

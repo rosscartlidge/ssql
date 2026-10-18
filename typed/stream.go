@@ -524,7 +524,7 @@ func ReadCSVParallel[T any](filename string, n int, opts ...CSVOption) Stream[T]
 	if err != nil {
 		failRead(op, filename, fmt.Errorf("read header: %w", err))
 	}
-	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats)
+	schema, err := buildReadSchema[T](header, o.strict, o.timeFormats, o.emptyZero)
 	if err != nil {
 		failRead(op, filename, err)
 	}

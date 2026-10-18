@@ -66,7 +66,7 @@ A tag value of `"-"` excludes the field entirely.
 
 `string`, `bool`, `int`, `int32`, `int64`, `uint64`, `float32`, `float64`,
 `time.Time` (RFC3339 in CSV), and **pointer-to-T** for nullable columns.
-An empty CSV/TSV cell is `""` for a `string` field and `nil` for a pointer field (`*int64`, `*string`, …). For any other field type it is a fatal `*typed.ReadError` — `column "Age": "" is not int64` — because a struct cannot hold absence, and a zero would silently disagree with the `Record` API, where an empty numeric or boolean cell is an *absent* field. Remedies: declare the field as a pointer type; in generated code, `-type COL string` on the `from` stage keeps the cell as text; or `fill` the data first. The check is a branch the decoder already took (`if s == ""`), so it costs nothing.
+An empty CSV/TSV cell is `""` for a `string` field and `nil` for a pointer field (`*int64`, `*string`, …). For any other field type it is a fatal `*typed.ReadError` — `column "Age": "" is not int64` — because a struct cannot hold absence, and a zero would silently disagree with the `Record` API, where an empty numeric or boolean cell is an *absent* field. Remedies: declare the field as a pointer type; pass `EmptyAsZero()` (`DelimEmptyAsZero()` for the delimited readers) when a blank means zero — in generated code that is `-empty zero` on the `from` stage, which every lane honours; or `-type COL string` on the `from` stage keeps the cell as text. The check is a branch the decoder already took (`if s == ""`), so it costs nothing, and so does the zero: the same branch clears the field's bytes.
 
 A non-empty value that does not parse as its field's type is **fatal** in the
 lossy readers (`ReadCSV`, `ReadCSVParallel`, `ReadDelim*`, `ReadJSONL*`): they
@@ -95,6 +95,7 @@ func ReadCSVParallel[T any](filename string, n int, opts ...CSVOption) Stream[T]
 
 func Strict() CSVOption                        // header must match T exactly
 func TimeFormat(column, pattern string) CSVOption // a time.Time column read through a pattern (strftime "%d/%m/%Y" or a Go layout) — from csv -format
+func EmptyAsZero() CSVOption                   // an empty numeric, bool or time cell is the zero value, not a ReadError — from csv -empty zero
 ```
 
 By default a CSV column with no matching struct field is dropped and a
@@ -180,6 +181,7 @@ func (s Stream[T]) WriteDelimToWriter(w io.Writer, opts ...DelimOption) error
 func WithDelim(b byte) DelimOption
 func DelimStrict() DelimOption   // mirrors Strict for CSV
 func DelimTimeFormat(column, pattern string) DelimOption // mirrors TimeFormat
+func DelimEmptyAsZero() DelimOption                      // mirrors EmptyAsZero
 func DelimOutputTimeFormat(pattern string) DelimOption   // mirrors OutputTimeFormat (writing)
 ```
 

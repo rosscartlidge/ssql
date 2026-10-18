@@ -23,6 +23,7 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Example("ssql from csv *.csv | ssql to table", "Read multiple CSV files").
 		Example("ssql from csv *.csv -merge-schemas | ssql to table", "Merge files with different headers").
 		Example("ssql from csv data.csv -type zipcode string -type phone string", "Force fields to string").
+		Example("ssql from csv sheet.csv -empty zero | ssql group-by store -sum sales total", "A blank numeric cell is 0, not missing — every lane, the typed program included").
 		Example("ssql from csv sales.csv -sidecar datapackage.json | ssql to table", "Column types from a Frictionless package (found beside the file by default)").
 		Flag("-generate", "-g").
 		Bool().
@@ -87,7 +88,7 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
 		Help("Default type for all fields: auto (default), string, int, float, bool").
 		Done()
-	formatFlag(sidecarFlags(sub), readerFormatHelp).
+	emptyFlag(formatFlag(sidecarFlags(sub), readerFormatHelp)).
 		Flag("FILE").
 		String().
 		Variadic().
@@ -140,6 +141,9 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 			sidecar, noSidecar := sidecarFlagValues(ctx)
 			formats, err := parseFormatFlags(ctx)
 			if err != nil {
+				return err
+			}
+			if err := applyEmptyFlag(ctx); err != nil {
 				return err
 			}
 			if typeOverrides, formats, err = resolveSidecarTypes(files, typeOverrides, sidecar, noSidecar, formats); err != nil {
@@ -568,7 +572,7 @@ func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, 
 	// fragments and either keeps the parallel form (typed.ReadCSVParallel
 	// → Stream[T]) or downgrades to the serial alternative
 	// (typed.ReadCSV → iter.Seq[T]) when no downstream needs Stream.
-	fmtOpts := timeFormatOptionsCode(fromTimeFormats, "TimeFormat")
+	fmtOpts := timeFormatOptionsCode(fromTimeFormats, "TimeFormat") + emptyOptionCode("EmptyAsZero")
 	parallelCode := fmt.Sprintf(`records := typed.ReadCSVParallel[%s](*flagInput, 0%s)`, schema.TypeName, fmtOpts)
 	parallelImports := append([]string{}, imports...)
 	serialCode := fmt.Sprintf(`records := typed.ReadCSV[%s](*flagInput%s)`, schema.TypeName, fmtOpts)
@@ -621,7 +625,7 @@ func generateCSVConfigCode(typeOverrides map[string]string, defaultType string) 
 // for TSV.
 func generateDelimConfigCode(typeOverrides map[string]string, defaultType string, delimLiteral string) string {
 	// No config needed if using defaults
-	if len(typeOverrides) == 0 && (defaultType == "" || defaultType == "auto") && len(fromTimeFormats) == 0 {
+	if len(typeOverrides) == 0 && (defaultType == "" || defaultType == "auto") && len(fromTimeFormats) == 0 && !fromEmptyZero {
 		return ""
 	}
 
@@ -651,6 +655,9 @@ func generateDelimConfigCode(typeOverrides map[string]string, defaultType string
 	}
 	if lit := timeFormatsLiteral(fromTimeFormats); lit != "" {
 		parts = append(parts, lit)
+	}
+	if fromEmptyZero {
+		parts = append(parts, "\t\tEmptyAsZero: true,")
 	}
 
 	parts = append(parts, "\t}")

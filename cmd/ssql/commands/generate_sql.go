@@ -597,7 +597,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// This is a copy of from's grammar (DFC115 legacy exception).
 		flagArity := map[string]int{
 			"-sample": 1, "-sample-seed": 1, "-last": 1, "-type": 2, "-t": 2,
-			"-default-type": 1, "-dt": 1, "-source": 1, "-sidecar": 1, "-tz": 1, "-format": 2, cf.ArgFlag: 1,
+			"-default-type": 1, "-dt": 1, "-source": 1, "-sidecar": 1, "-tz": 1, "-format": 2, "-empty": 1, cf.ArgFlag: 1,
 		}
 		var files []string
 		rest := args[1:]
@@ -708,7 +708,12 @@ func translateFrom(q *sqlQuery, args []string) error {
 				} else if sqlDialectCur == dialectDuckDB {
 					q.fromClause = duckReadCSV([]string{q.csvSource}, q.csvDelim, q.csvTypes)
 				}
+				if emptyZeroFromArgs(rest) {
+					q.fromClause = coalesceEmptyCells(q.fromClause, q.columns)
+				}
 			}
+		} else if emptyZeroFromArgs(rest) {
+			return fmt.Errorf("from %s -empty zero over several files has no SQL translation (the columns to default are not known at generation) — one file, or generate go", args[0])
 		} else if sqlDialectCur == dialectDuckDB {
 			delim := byte(',')
 			if args[0] == "tsv" || strings.HasSuffix(strings.ToLower(files[0]), ".tsv") {
@@ -2991,6 +2996,27 @@ func duckReadCSV(files []string, delim byte, extra string) string {
 		opts += ", " + extra
 	}
 	return fmt.Sprintf("read_csv(%s, %s)", src, opts)
+}
+
+// coalesceEmptyCells is `from -empty zero` in SQL: the engine reads an
+// empty cell as NULL, so each numeric and boolean column (the sampled
+// or declared kinds) is COALESCEd to its zero in a projection over the
+// source. A text column is "" to ssql either way and is left alone. An
+// explicit column list rather than `* REPLACE`, which Postgres lacks.
+func coalesceEmptyCells(src string, columns []string) string {
+	cols := make([]string, 0, len(columns))
+	for _, c := range columns {
+		id := quoteIdent(c)
+		switch sqlColumnKinds[c] {
+		case "int", "float":
+			cols = append(cols, "COALESCE("+id+", 0) AS "+id)
+		case "bool":
+			cols = append(cols, "COALESCE("+id+", FALSE) AS "+id)
+		default:
+			cols = append(cols, id)
+		}
+	}
+	return sqlSubquery("(SELECT " + strings.Join(cols, ", ") + " FROM " + src + ")")
 }
 
 // duckTypesOption renders -type / sidecar overrides as read_csv's

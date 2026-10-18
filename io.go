@@ -46,6 +46,7 @@ type CSVConfig struct {
 	InferRows     int                  // Leading data rows sampled to infer column types (0 = DefaultInferRows)
 	TimeFormats   map[string]string    // Optional: a time column's pattern (strftime "%d/%m/%Y" or a Go layout), when its cells are not RFC 3339 (DFC147 §7.2)
 	TimeFormat    string               // Optional, writing: render every time with this pattern on the pipeline zone's wall clock (to csv -time-format); "" = RFC 3339 Nano
+	EmptyAsZero   bool                 // Optional, reading: an empty numeric or boolean cell is the type's zero (0, false) instead of absent — `from csv -empty zero`
 }
 
 // CSVConfigWithTimeFormat is the default config with an output time

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // catchReadError runs fn and returns the *ReadError it panicked with,
@@ -234,4 +236,59 @@ func TestStreamConsumersPropagateShardPanic(t *testing.T) {
 			t.Errorf("%s: %+v", name, re)
 		}
 	}
+}
+
+// EmptyAsZero / DelimEmptyAsZero (`from csv -empty zero`): an empty
+// cell in a plain numeric, boolean or time field is the zero value
+// instead of the ReadError above; string and pointer fields read as
+// they always did.
+func TestReadCSVEmptyAsZero(t *testing.T) {
+	type row struct {
+		ID int64
+		N  int64
+		F  float64
+		B  bool
+		S  string
+		P  *int64
+		T  time.Time
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "empties.csv")
+	if err := os.WriteFile(p, []byte("id,n,f,b,s,p,t\n1,,,,,,\n2,7,1.5,true,x,3,2024-01-02T03:04:05Z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	re := catchReadError(t, func() {
+		for range ReadCSV[row](p) {
+		}
+	})
+	if !strings.Contains(re.Error(), `column "n": "" is not int64`) {
+		t.Errorf("default: %v", re)
+	}
+	check := func(what string, rows []row) {
+		t.Helper()
+		if len(rows) != 2 {
+			t.Fatalf("%s: %d rows", what, len(rows))
+		}
+		r := rows[0]
+		if r.ID != 1 || r.N != 0 || r.F != 0 || r.B || r.S != "" || r.P != nil || !r.T.IsZero() {
+			t.Errorf("%s: row 1 = %+v, want zeros", what, r)
+		}
+		if r := rows[1]; r.N != 7 || r.F != 1.5 || !r.B || r.S != "x" || r.P == nil || *r.P != 3 || r.T.IsZero() {
+			t.Errorf("%s: row 2 = %+v", what, r)
+		}
+	}
+	check("ReadCSV", slices.Collect(ReadCSV[row](p, EmptyAsZero())))
+	for _, n := range []int{1, 3} {
+		rows := slices.Collect(ReadCSVParallel[row](p, n, EmptyAsZero()).Serial())
+		slices.SortFunc(rows, func(a, b row) int { return int(a.ID - b.ID) })
+		check(fmt.Sprintf("ReadCSVParallel n=%d", n), rows)
+	}
+	tp := filepath.Join(dir, "empties.tsv")
+	if err := os.WriteFile(tp, []byte("id\tn\tf\tb\ts\tp\tt\n1\t\t\t\t\t\t\n2\t7\t1.5\ttrue\tx\t3\t2024-01-02T03:04:05Z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check("ReadDelim", slices.Collect(ReadDelim[row](tp, DelimEmptyAsZero())))
+	rows := slices.Collect(ReadDelimParallel[row](tp, 2, DelimEmptyAsZero()).Serial())
+	slices.SortFunc(rows, func(a, b row) int { return int(a.ID - b.ID) })
+	check("ReadDelimParallel", rows)
 }

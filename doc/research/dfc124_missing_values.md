@@ -2,7 +2,7 @@
 
 Reference: DFC124
 Created: 2026-09-03
-Last modified: 2026-09-07
+Last modified: 2026-10-18
 
 [Back to Index](./README.md)
 
@@ -76,6 +76,20 @@ second missing to keep consistent with the first.
   remedy reaches typed codegen (it was refused) and `from tsv` /
   `from jsonl` grew the flag. Gate: `TestLateMismatchIsLoudInEveryLane`,
   `TestTypeOverrideMakesEveryLaneAgree` (cmd/ssql/readers_loud_test.go).
+  **The opt-in (2026-10-18, Ross: "what about having a flag in `ssql
+  from` that reads an empty field as go zero?"):** `from csv|tsv -empty
+  zero` reads a blank numeric or boolean cell as 0 / false in every
+  lane — `CSVConfig.EmptyAsZero`, `typed.EmptyAsZero()` /
+  `DelimEmptyAsZero()` (the decoder's `if s == ""` branch clears the
+  field's bytes), and a COALESCE projection over the source in
+  `generate sql`. The default is unchanged; the flag is the user's word
+  that a blank means nothing to add, which is what a sales sheet with
+  blank cells needed and what no remedy above could give the typed lane
+  (`fill` runs after the reader has failed; `-type COL string` makes
+  `-sum` refuse). It passes the source-only rule for a `from` flag:
+  only the source can choose the decoder. Equivalence `empties_zero_*`,
+  every lane unskipped, DuckDB the oracle. Pointer inference for
+  partially empty columns is still the right fix for the DEFAULT path.
 - **TSV** (2026-09-07): the TSV reader typed each value independently
   (no column lock), so it never erred — a mixed column instead. It now
   shares `readRows` with CSV: same sample, same `CellError`, same

@@ -1261,6 +1261,7 @@ type CSVConfig struct {
     TypeOverrides map[string]FieldType // per column, instead of inference
     TimeFormats   map[string]string    // reading: a time column's cell pattern (strftime or Go layout) — from csv -format
     TimeFormat    string               // writing: render times with this pattern on the pipeline zone's wall clock — to csv -time-format
+    EmptyAsZero   bool                 // reading: an empty numeric or boolean cell is 0 / false instead of absent — from csv -empty zero
     DefaultType   FieldType            // for every column not overridden (FieldTypeAuto = infer)
     InferRows     int                  // leading data rows sampled to infer types (0 = DefaultInferRows, 1000)
 }
@@ -1270,8 +1271,10 @@ type CSVConfig struct {
 leading data rows (`InferRows`): the narrowest of int → float → bool →
 string that every non-empty sampled value fits (`true`/`false` only for
 bool; `1`/`0` are ints; zero-padded values such as `007` stay text).
-Empty cells are absent, never zero. `TypeOverrides` and `DefaultType` win
-over inference. A later cell that does not fit its column is a
+Empty cells are absent, never zero, unless `EmptyAsZero` says a blank
+numeric or boolean cell is the type's zero (`from csv -empty zero`; text
+is `""` either way, time and json cells stay absent). `TypeOverrides` and
+`DefaultType` win over inference. A later cell that does not fit its column is a
 `*CellError` (row, column, value, and how the type was decided): the plain
 readers panic with it, `ReadCSVSafe` yields it. A column overridden to
 `FieldTypeJSON` reads each cell's JSON array or object as a nested value

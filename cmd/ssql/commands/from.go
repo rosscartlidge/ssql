@@ -56,7 +56,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Default(false).
 		Help("Print only the record count this invocation would produce (cheapest per format: parquet footer, line count for csv/tsv/jsonl) and exit").
 		Done()
-	formatFlag(zoneFlag(sidecarFlags(fromCmd)), readerFormatHelp).
+	emptyFlag(formatFlag(zoneFlag(sidecarFlags(fromCmd)), readerFormatHelp)).
 		Flag("FILE").
 		String().
 		Variadic().
@@ -152,6 +152,9 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				if err != nil {
 					return err
 				}
+				if err := applyEmptyFlag(ctx); err != nil {
+					return err
+				}
 				overrides, formats, err := resolveSidecarTypes([]string{inputFile}, nil, sidecar, noSidecar, formats)
 				if err != nil {
 					return err
@@ -161,7 +164,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					return executeFromCSV(inputFile, overrides, "auto", generate)
 				}
 				types := defaultTypeArgs()
-				if len(overrides) > 0 {
+				if len(overrides) > 0 || fromEmptyZero {
 					cfg, err := buildCSVConfig(overrides, "auto")
 					if err != nil {
 						return err
@@ -571,6 +574,7 @@ func buildCSVConfig(typeOverrides map[string]string, defaultType string) (ssql.C
 	if len(fromTimeFormats) > 0 {
 		config.TimeFormats = fromTimeFormats
 	}
+	config.EmptyAsZero = fromEmptyZero
 
 	// Parse type overrides
 	if len(typeOverrides) > 0 {

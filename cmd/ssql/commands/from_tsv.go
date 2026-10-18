@@ -82,7 +82,7 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Completer(&cf.StaticCompleter{Options: []string{"auto", "string", "int", "float", "bool"}}).
 		Help("Default type for all fields: auto (default), string, int, float, bool").
 		Done()
-	formatFlag(sidecarFlags(sub), readerFormatHelp).
+	emptyFlag(formatFlag(sidecarFlags(sub), readerFormatHelp)).
 		Flag("FILE").
 		String().
 		Variadic().
@@ -105,6 +105,9 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 			sidecar, noSidecar := sidecarFlagValues(ctx)
 			formats, err := parseFormatFlags(ctx)
 			if err != nil {
+				return err
+			}
+			if err := applyEmptyFlag(ctx); err != nil {
 				return err
 			}
 			if typeOverrides, formats, err = resolveSidecarTypes(cfg.files, typeOverrides, sidecar, noSidecar, formats); err != nil {
@@ -357,7 +360,7 @@ func generateFromTSVCodeTyped(filename string, types typeArgs) error {
 	}
 
 	// Always emit BOTH templates; planner picks per pipeline.
-	fmtOpts := timeFormatOptionsCode(fromTimeFormats, "DelimTimeFormat")
+	fmtOpts := timeFormatOptionsCode(fromTimeFormats, "DelimTimeFormat") + emptyOptionCode("DelimEmptyAsZero")
 	parallelCode := fmt.Sprintf(`records := typed.ReadDelimParallel[%s](*flagInput, 0%s%s)`, schema.TypeName, delimArg, fmtOpts)
 	parallelImports := append([]string{}, imports...)
 	serialCode := fmt.Sprintf(`records := typed.ReadDelim[%s](*flagInput%s%s)`, schema.TypeName, delimArg, fmtOpts)

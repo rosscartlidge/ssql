@@ -113,6 +113,7 @@ func corpusData(t *testing.T) string {
 			"customers.tsv":                strings.ReplaceAll(corpusCustomersCSV, ",", "\t"),
 			"shuffled.csv":                 corpusShuffledCSV,
 			"empties.csv":                  corpusEmptiesCSV,
+			"empties.tsv":                  strings.ReplaceAll(corpusEmptiesCSV, ",", "\t"),
 			"int_first.csv":                corpusIntFirstCSV,
 			"int_first.tsv":                strings.ReplaceAll(corpusIntFirstCSV, ",", "\t"),
 			"dated.csv":                    corpusDatedCSV,

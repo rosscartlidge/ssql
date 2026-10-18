@@ -2340,6 +2340,36 @@ var equivCases = []EquivCase{
 		Skip:     map[string]string{"go-typed": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)", "go-parallel": "typed reader refuses an empty cell in a plain field (ReadError since v4.91.0; DFC124 §3)"},
 	},
 	{
+		// `from -empty zero` (2026-10-18): the user's word that a blank
+		// is nothing to add. Row 2's n/f/b read as 0/0/false in EVERY
+		// lane — the typed lanes included, which is the one way a typed
+		// program reads a sheet with blank cells (the default is the
+		// ReadError the cases above skip on). DuckDB lane: COALESCE over
+		// the source. describe sees missing 0 and a mean pulled to zero,
+		// as asked.
+		Name:     "empties_zero_describe",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv -empty zero | {{.bin}} describe | {{.bin}} where -if field ne s`,
+		Ordered:  true,
+	},
+	{
+		Name:     "empties_zero_where_ge",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv -empty zero | {{.bin}} where -if n ge 0 | {{.bin}} include id n`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 1, "n": 10}, {"id": 2, "n": 0}, {"id": 3, "n": 30}, {"id": 4, "n": 40}},
+	},
+	{
+		Name:     "empties_zero_group_sum",
+		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv -empty zero | {{.bin}} group-by b -sum n total -count rows`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"b": true, "total": 50, "rows": 2}, {"b": false, "total": 30, "rows": 2}},
+	},
+	{
+		Name:     "empties_zero_tsv_where_float",
+		Pipeline: `{{.bin}} from tsv {{.data}}/empties.tsv -empty zero | {{.bin}} where -if f lt 1 | {{.bin}} include id f`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"id": 2, "f": 0}},
+	},
+	{
 		Name:     "empties_where_numeric",
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv | {{.bin}} where -if n gt 5 | {{.bin}} include id n`,
 		Ordered:  false,

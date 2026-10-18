@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -1212,5 +1213,36 @@ func TestTranslateCountSQL(t *testing.T) {
 	sql = assembleFromCommands(t, "ssql from csv x.csv", "ssql window -partition dept -order salary -desc -row-number rn", "ssql limit 2")
 	if !strings.Contains(sql, `ORDER BY dept, salary DESC`) || !strings.Contains(sql, "LIMIT 2") {
 		t.Errorf("window order must reach ORDER BY before LIMIT:\n%s", sql)
+	}
+}
+
+// `from -empty zero` in SQL: the engine reads a blank as NULL, so the
+// numeric and boolean columns (sampled kinds) are COALESCEd to their
+// zero in a projection over the source; text is left alone; several
+// files refuse (the columns are not known).
+func TestTranslateFromEmptyZeroSQL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empties.csv")
+	if err := os.WriteFile(path, []byte("id,n,f,b,s\n1,10,1.5,true,x\n2,,,,\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := sqlColumnKinds
+	sqlColumnKinds = map[string]string{}
+	defer func() { sqlColumnKinds = prev }()
+	q := &sqlQuery{}
+	if err := translateFrom(q, []string{"csv", path, "-empty", "zero"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "(SELECT COALESCE(id, 0) AS id, COALESCE(n, 0) AS n, COALESCE(f, 0) AS f, COALESCE(b, FALSE) AS b, s FROM read_csv("
+	if !strings.HasPrefix(q.fromClause, want) {
+		t.Errorf("got %q\nwant prefix %q", q.fromClause, want)
+	}
+	q2 := &sqlQuery{}
+	if err := translateFrom(q2, []string{"csv", path, "-empty", "missing"}); err != nil || strings.Contains(q2.fromClause, "COALESCE") {
+		t.Errorf("-empty missing: %v %q", err, q2.fromClause)
+	}
+	q3 := &sqlQuery{}
+	if err := translateFrom(q3, []string{"csv", path, path, "-empty", "zero"}); err == nil || !strings.Contains(err.Error(), "several files") {
+		t.Errorf("two files: %v", err)
 	}
 }
