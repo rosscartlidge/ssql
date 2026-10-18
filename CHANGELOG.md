@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.120.4] - 2026-10-18
+
 ### Added
 
 - **`from csv|tsv -empty zero`: a blank numeric or boolean cell read as
