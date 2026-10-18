@@ -159,6 +159,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC149 | 2026-10-13 | 2026-10-17 | [Hive Partitions Are a Derived Catalog](./dfc149_hive_partitions_as_derived_catalog.md) |
 | DFC150 | 2026-10-15 | 2026-10-17 | [The view-only week: what landed, what it broke open, what remains](./dfc150_view_only_week_retrospective.md) |
 | DFC151 | 2026-10-15 | 2026-10-15 | [The slim build: size, composition, uses, and what to cut](./dfc151_slim_build_diet.md) |
+| DFC152 | 2026-10-19 | 2026-10-19 | [Expression macros: named expressions with field-completing arguments](./dfc152_expression_macros.md) |
 
 <!-- DFC-INDEX-END -->
 
