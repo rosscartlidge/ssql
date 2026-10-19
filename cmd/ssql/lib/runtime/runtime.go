@@ -142,6 +142,7 @@ func compileExpr(expression string, params *paramBinding) (func(ssql.Record) (an
 		strings.Contains(expression, "has(") ||
 		strings.Contains(expression, "getOr(")
 	identifiers := extractIdentifiers(program.Node())
+	params.markClosed(identifiers)
 
 	// Return a closure that evaluates the compiled program on a record
 	validated := false

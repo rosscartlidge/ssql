@@ -61,6 +61,22 @@ const corpusEmptiesCSV = `id,n,f,s,b
 4,40,4.5,w,true
 `
 
+// corpusMacroRowsCSV and corpusMacros: the macro cases (DFC152). Shuffled
+// ids with distinct values, so a wrong binding order (x↔z) or a wrong
+// cast diverges. cost is an int column that a float parameter views.
+const corpusMacroRowsCSV = `id,a,b,c,price,cost
+3,7,8,9,30.0,10
+1,1,2,3,10.0,8
+4,10,20,30,5.5,6
+2,4,5,6,20.0,19
+`
+
+const corpusMacros = `# equivalence fixture
+add3(x int, y int, z int) = x + y + z
+margin(price float, cost float) = (price - cost) / price
+cheap(price float, cost float) = price < cost * 1.1
+`
+
 // corpusIntFirstCSV: the first data row is all ints, later rows are
 // floats (DFC124 §3). First-row inference typed v as int and truncated
 // every later value to 0; the sample must type it float in every lane.
@@ -587,6 +603,14 @@ func TestPipelineEquivalence(t *testing.T) {
 		c := c
 		if strings.Contains(c.Pipeline, "{{.url}}") && !httpfs {
 			c.Skip = equivSkipPlus(c.Skip, "duckdb", "duckdb reads a URL through its httpfs extension, which is not installed here")
+		}
+		if len(c.Env) > 0 {
+			// {{.data}} in Env too (SSQL_MACROS={{.data}}/macros, DFC152).
+			env := make([]string, len(c.Env))
+			for i, e := range c.Env {
+				env[i] = repl.Replace(e)
+			}
+			c.Env = env
 		}
 		t.Run(c.Name, func(t *testing.T) {
 			t.Parallel()
@@ -2362,6 +2386,49 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/empties.csv -empty zero | {{.bin}} group-by b -sum n total -count rows`,
 		Ordered:  false,
 		Golden:   []map[string]any{{"b": true, "total": 50, "rows": 2}, {"b": false, "total": 30, "rows": 2}},
+	},
+	// Macros (DFC152): the macro flags lower to -set-expr / -if-expr with
+	// -param-field bindings inside the command, so every lane runs the
+	// expansion; SSQL_MACROS points each lane at the fixture file.
+	{
+		Name:     "macro_set_add3",
+		Pipeline: `{{.bin}} from csv {{.data}}/macro_rows.csv | {{.bin}} update -set-macro s3 add3 a b c | {{.bin}} include id s3`,
+		Ordered:  false,
+		Env:      []string{"SSQL_MACROS={{.data}}/macros"},
+		Golden:   []map[string]any{{"id": 3, "s3": 24}, {"id": 1, "s3": 6}, {"id": 4, "s3": 60}, {"id": 2, "s3": 15}},
+	},
+	{
+		// margin's float parameters view price (float) and cost (int).
+		Name:     "macro_set_margin_float_over_int",
+		Pipeline: `{{.bin}} from csv {{.data}}/macro_rows.csv | {{.bin}} update -set-macro m margin price cost | {{.bin}} where -if id lt 3 | {{.bin}} include id m`,
+		Ordered:  false,
+		Env:      []string{"SSQL_MACROS={{.data}}/macros"},
+		Golden:   []map[string]any{{"id": 1, "m": 0.2}, {"id": 2, "m": 0.05}},
+	},
+	{
+		Name:     "macro_where_if_macro",
+		Pipeline: `{{.bin}} from csv {{.data}}/macro_rows.csv | {{.bin}} where -if-macro cheap price cost | {{.bin}} include id`,
+		Ordered:  false,
+		Env:      []string{"SSQL_MACROS={{.data}}/macros"},
+		Golden:   []map[string]any{{"id": 4}, {"id": 2}},
+	},
+	{
+		Name:     "macro_where_negated",
+		Pipeline: `{{.bin}} from csv {{.data}}/macro_rows.csv | {{.bin}} where +if-macro cheap price cost | {{.bin}} include id`,
+		Ordered:  false,
+		Env:      []string{"SSQL_MACROS={{.data}}/macros"},
+		Golden:   []map[string]any{{"id": 3}, {"id": 1}},
+	},
+	{
+		// -if-macro as update's clause condition, with -set-macro in the
+		// same clause: two macros, two parameter sets, one environment.
+		// The target is an existing column (a conditional set on a NEW
+		// column has no SQL translation, by design).
+		Name:     "macro_update_if_macro_set_macro",
+		Pipeline: `{{.bin}} from csv {{.data}}/macro_rows.csv | {{.bin}} update -if-macro cheap price cost -set-macro a add3 a b c | {{.bin}} include id a`,
+		Ordered:  false,
+		Env:      []string{"SSQL_MACROS={{.data}}/macros"},
+		Golden:   []map[string]any{{"id": 3, "a": 7}, {"id": 1, "a": 1}, {"id": 4, "a": 60}, {"id": 2, "a": 15}},
 	},
 	{
 		Name:     "empties_zero_tsv_where_float",

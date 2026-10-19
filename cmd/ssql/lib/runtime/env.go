@@ -35,6 +35,7 @@ func compileExprEnv(expression string, params *paramBinding) (func(map[string]an
 	if err != nil {
 		return nil, fmt.Errorf("compile expression: %w", err)
 	}
+	params.markClosed(extractIdentifiers(program.Node()))
 
 	return func(fields map[string]any) (any, error) {
 		env := make(map[string]any, len(fields)+6)

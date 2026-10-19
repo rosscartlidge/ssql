@@ -127,12 +127,25 @@ func TestCompileExprParamsFields(t *testing.T) {
 	if !errors.As(err, &ce) {
 		t.Errorf("want CastError, got %v", err)
 	}
-	// Collision.
-	eval, _ = CompileExprParamsFields(`n > 0`, nil, FieldParams{"n": {Field: "m", Type: ssql.FieldTypeInt}})
-	_, err = eval(rec(map[string]any{"n": int64(1), "m": int64(2)}))
+	// Collision: the expression names a column (k) as well as the
+	// parameter, so a parameter named like a column is ambiguous.
+	eval, _ = CompileExprParamsFields(`n > k`, nil, FieldParams{"n": {Field: "m", Type: ssql.FieldTypeInt}})
+	_, err = eval(rec(map[string]any{"n": int64(1), "m": int64(2), "k": int64(0)}))
 	var pc *ParamCollisionError
 	if !errors.As(err, &pc) {
 		t.Errorf("want collision, got %v", err)
+	}
+	// A CLOSED expression — every identifier a parameter — has no column
+	// in play, so its parameters may be named like columns: the typed
+	// view of a column itself (DFC152; every macro body is closed).
+	eval, _ = CompileExprParamsFields(`n > 0`, nil, FieldParams{"n": {Field: "m", Type: ssql.FieldTypeInt}})
+	if got, err := eval(rec(map[string]any{"n": int64(-1), "m": int64(2)})); err != nil || got != true {
+		t.Errorf("closed expression over a same-named column: got %v, %v (want true: n views m)", got, err)
+	}
+	eval, _ = CompileExprParamsFields(`price < cost * 1.1`, nil, FieldParams{
+		"price": {Field: "price", Type: ssql.FieldTypeFloat}, "cost": {Field: "cost", Type: ssql.FieldTypeFloat}})
+	if got, err := eval(rec(map[string]any{"price": int64(10), "cost": int64(10)})); err != nil || got != true {
+		t.Errorf("closed expression viewing its own columns: got %v, %v", got, err)
 	}
 	// Env form.
 	f := MustCompileExprFilterEnvParamsFields(`n > lo`, StaticParams(map[string]any{"lo": int64(5)}), FieldParams{"n": {Field: "c", Type: ssql.FieldTypeInt}})

@@ -21,7 +21,7 @@ import (
 // and exits 0 so CI without a usable pty doesn't hard-fail.
 const ptyDriver = `
 import os, pty, time, select, re, sys
-binDir, csv = sys.argv[1], sys.argv[2]
+binDir, csv, macros = sys.argv[1], sys.argv[2], sys.argv[3]
 
 def run(vi):
     pid, fd = pty.fork()
@@ -88,18 +88,51 @@ def run_value(vi):
     line = cand[-1] if cand else ""
     return ("eq x " in line) and ("^O" not in line) and ("\x0f" not in line)
 
+def run_macro():
+    # A macro argument (DFC152): the third value of -set-macro is past the
+    # flag's fixed arity — autocli's repeating Arg — and still a field slot,
+    # so Ctrl-O completes "sa" to "salary" there.
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ.pop("TMUX", None)
+        os.execvp("bash", ["bash", "--norc", "--noprofile", "-i"])
+    def send(s): os.write(fd, s.encode()); time.sleep(0.4)
+    def drain():
+        o = b""
+        while select.select([fd], [], [], 0.3)[0]:
+            try: o += os.read(fd, 4096)
+            except OSError: break
+        return o
+    time.sleep(0.6); drain()
+    send("export PATH=%s:$PATH SSQL_MACROS=%s\n" % (binDir, macros)); drain()
+    send("unset TMUX; export SSQL_POPUP=inline\n"); drain()
+    send("bind 'set keyseq-timeout 1'\n"); drain()
+    send('eval "$(ssql -field-keybinding)"\n'); drain()
+    send("ssql from csv %s | ssql update -set-macro s3 add3 name dept sa" % csv)
+    time.sleep(0.5)
+    os.write(fd, b"\x0f")                                 # Ctrl-O
+    time.sleep(0.9)
+    after = drain().decode(errors="replace")
+    os.write(fd, b"\x03\n"); time.sleep(0.2); os.close(fd)
+    segs = [re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[A-Za-z]', '', s) for s in after.split("\r")]
+    cand = [s for s in segs if "add3 name dept sa" in s]
+    line = cand[-1] if cand else ""
+    return ("salary " in line) and ("^O" not in line) and ("\x0f" not in line)
+
 try:
     ok_e = run(False)
     ok_v = run(True)
     ok_ev = run_value(False)
     ok_vv = run_value(True)
+    ok_m = run_macro()
 except Exception as e:
     print("SKIP:", e); sys.exit(0)
 print("emacs:", "PASS" if ok_e else "FAIL")
 print("vi:", "PASS" if ok_v else "FAIL")
 print("emacs-value:", "PASS" if ok_ev else "FAIL")
 print("vi-value:", "PASS" if ok_vv else "FAIL")
-sys.exit(0 if (ok_e and ok_v and ok_ev and ok_vv) else 1)
+print("macro:", "PASS" if ok_m else "FAIL")
+sys.exit(0 if (ok_e and ok_v and ok_ev and ok_vv and ok_m) else 1)
 `
 
 // TestFieldKeybindingPTY exercises the field-completion keybinding through
@@ -128,13 +161,17 @@ func TestFieldKeybindingPTY(t *testing.T) {
 	if err := os.WriteFile(driver, []byte(ptyDriver), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	macros := filepath.Join(dir, "macros")
+	if err := os.WriteFile(macros, []byte("add3(x int, y int, z int) = x + y + z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	out, err := exec.Command(py, driver, binDir, csv).CombinedOutput()
+	out, err := exec.Command(py, driver, binDir, csv, macros).CombinedOutput()
 	got := string(out)
 	if strings.HasPrefix(strings.TrimSpace(got), "SKIP:") {
 		t.Skipf("pty unavailable: %s", strings.TrimSpace(got))
 	}
-	if err != nil || !strings.Contains(got, "emacs: PASS") || !strings.Contains(got, "vi: PASS") {
+	if err != nil || !strings.Contains(got, "emacs: PASS") || !strings.Contains(got, "vi: PASS") || !strings.Contains(got, "macro: PASS") {
 		t.Fatalf("field keybinding failed in a real pty (err=%v):\n%s", err, got)
 	}
 }

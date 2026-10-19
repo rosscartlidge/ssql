@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Expression macros** ([DFC152](doc/research/dfc152_expression_macros.md)):
+  `~/.config/ssql/macros` (or `$SSQL_MACROS`) holds named expressions with
+  typed parameters, `add3(x int, y int, z int) = x + y + z`, called as
+  `update -set-macro FIELD NAME FIELD...` or `where|update -if-macro NAME
+  FIELD...` (`+if-macro` negates). The name completes on Tab and every
+  argument is a field slot (Ctrl-O), which a quoted expression cannot
+  offer. The command expands a call to `-set-expr`/`-if-expr` plus one
+  `-param-field` per argument before anything reads the clause, so every
+  lane runs the expansion unchanged and generated Go, SQL and ssql carry
+  it (`generate ssql -as-written` keeps the call). Bodies compile at load
+  (`ssql macro check` reports the line); `ssql macro list` shows what is
+  defined. Needs autocli v4.22.0, whose `Arg(...).Repeat(f)` lets the
+  macro definition tell the parser and the completer how many fields
+  follow the name.
+
+### Changed
+
+- **A field parameter may be named like the column it views when the
+  expression is closed** (every identifier a declared parameter):
+  `-if-expr 'price < cost * 1.1' -param-field price float price
+  -param-field cost float cost` no longer reports a collision, since no
+  column is in play. A static `-param` named like a column, or any
+  expression that also names a column, keeps the DFC134 error. Every
+  macro body is closed, which is what makes `margin(price, cost)` on
+  columns `price` and `cost` work.
+
 ## [4.120.4] - 2026-10-18
 
 ### Added

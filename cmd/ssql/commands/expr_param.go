@@ -342,10 +342,10 @@ func exprParamsGoFieldVarsTyped(vars map[string]exprGo, params []ExprParam, sche
 			vars = map[string]exprGo{}
 		}
 		if f.GoType == string(t) {
-			vars[p.Name] = exprGo{Src: recv + "." + f.GoName, Type: t}
+			vars[p.Name] = exprGo{Src: recv + "." + f.GoName, Type: t, field: p.Field}
 			continue
 		}
-		vars[p.Name] = exprGo{Src: fmt.Sprintf("ssql.MustCast[%s](%s.%s, ssql.FieldType%s, %q)", t, recv, f.GoName, exprFieldTypeConst(p.Type), p.Field), Type: t}
+		vars[p.Name] = exprGo{Src: fmt.Sprintf("ssql.MustCast[%s](%s.%s, ssql.FieldType%s, %q)", t, recv, f.GoName, exprFieldTypeConst(p.Type), p.Field), Type: t, field: p.Field}
 	}
 	return vars
 }

@@ -30,6 +30,9 @@ When a flag can appear multiple times (e.g., `-if age gt 30 -if dept eq Sales`)
 ### 4. Provide Completers for Constrained Arguments
 Use `StaticCompleter` for known options, `FileCompleter` with patterns for file paths.
 
+### 4a. A Flag Whose Arity the Command Decides: `.Repeat()` (autocli ≥ v4.22.0)
+When the number of values a flag takes depends on an earlier argument — `-set-macro FIELD NAME ARG...` takes as many fields as the macro NAME has parameters — put `.Repeat(f)` on the LAST `Arg`: `f(prev []string) (int, error)` sees the fixed args typed so far and returns the count (its error is the flag's parse error, e.g. "unknown macro add4; defined: …"). The parser then consumes exactly that many words, stores them as a `[]any` under the Arg's name, and completion reuses the Arg's completer at each position and offers flag names after the last. Never a variadic tail that guesses where the values end, and never one flag per name registered from a config file (a user file must not rewrite a command's grammar). Example: `commands/macro_flags.go` (DFC152).
+
 ### 5. Avoid In-Argument Delimiters
 - BAD: `-rename "old:new"` (requires delimiter parsing)
 - GOOD: `-as old new` (framework separates args)

@@ -98,10 +98,15 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Set field to the source timestamp snapped down to a width: -set-bucket <field> <source> <width> — a duration (1m, 5m, 1h: the same as -set-expr <field> 'bucket(<source>, \"<width>\")') or a calendar unit (day, week, month, quarter, year: date_trunc in the pipeline's zone)").
 		Done()
-	setFieldFlag(ifFieldFlag(exprParamFlag(sub))).
+	setMacroFlag(ifMacroFlag(setFieldFlag(ifFieldFlag(exprParamFlag(sub))))).
 		Handler(func(ctx *cf.Context) error {
 			if schemaMode() {
 				return runSchemaModeTransform(ctx, "update")
+			}
+			// -set-macro / -if-macro become -set-expr / -if-expr with
+			// -param-field bindings before anything reads the clauses (DFC152).
+			if err := expandMacros(ctx); err != nil {
+				return err
 			}
 
 			var generate bool
@@ -968,6 +973,9 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 
 	// Create and write fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
+	if err := applyMacroLowering(frag); err != nil {
+		return err
+	}
 	frag.Params = codeParams
 	frag.PlanNotes = planNotes
 	frag.AdvisoryTypes = newAdvisory

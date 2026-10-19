@@ -30,6 +30,7 @@ var consoleExcluded = map[string]string{
 	"Serve":       "cannot serve from inside a session",
 	"Version":     "meta — not a pipeline stage",
 	"Functions":   "meta — expression function reference (could be added)",
+	"Macro":       "`macro check FILE` reads server-side file paths (as Join); the console's update/where read the server's own macros file (DFC152 §5)",
 	"Conventions": "meta — could be added",
 	"Codelab":     "writes the tutorial fixtures to the local filesystem — a CLI setup step, not an operator action",
 	"Run":         "executes a server-side pipeline document, which can hold any stage (writers included) — the console's readonly guarantees cannot see inside it",

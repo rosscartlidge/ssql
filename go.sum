@@ -43,8 +43,8 @@ github.com/rosscartlidge/autocli/shell v0.5.1 h1:mmQ/1ZpB6aHfTQS5rfzu94lqfs+6MUo
 github.com/rosscartlidge/autocli/shell v0.5.1/go.mod h1:yz7yH8mFwE/RING/8wuzhPXHPh+W1oFJBHKP1OGSzis=
 github.com/rosscartlidge/autocli/ssh v0.1.15 h1:PlJ0+oz0A1lcG96YAuFpAq6ch/9ZiDcO+f9k3JRlcBc=
 github.com/rosscartlidge/autocli/ssh v0.1.15/go.mod h1:mrEzrh8E7kTpX4ymyG7/dFXme3Ya2IM/+lAVG8hCtfg=
-github.com/rosscartlidge/autocli/v4 v4.21.2 h1:Ua+cSO+r60/79guaKObsBZNDtS7XWWNuh6qh6v8kpAI=
-github.com/rosscartlidge/autocli/v4 v4.21.2/go.mod h1:HxyY8xr+3Pv7GHcxo7nWeqptLZvF2/8Vd7oPh1QJZuY=
+github.com/rosscartlidge/autocli/v4 v4.22.0 h1:rq/sQEpvziLbAGxkNNbPGp3PslUSW3DoaWsrlal1vXg=
+github.com/rosscartlidge/autocli/v4 v4.22.0/go.mod h1:HxyY8xr+3Pv7GHcxo7nWeqptLZvF2/8Vd7oPh1QJZuY=
 github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=
 github.com/stretchr/objx v0.5.2/go.mod h1:FRsXN1f5AsAjCGJKqEizvkpNtU+EGNCLh3NxZ/8L+MA=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=

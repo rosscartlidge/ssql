@@ -105,6 +105,13 @@ type CodeFragment struct {
 	// the rules changed.
 	ResolvedZone string `json:"resolved_zone,omitempty"`
 
+	// AsWrittenArgv is the argv as the user typed it when the command
+	// rewrote its own into Op.Argv and Command — a macro call lowered to
+	// its expression (DFC152). `generate ssql -as-written` restores it;
+	// every other target reads the lowered form, so what it generates
+	// does not depend on the macros file.
+	AsWrittenArgv []string `json:"as_written_argv,omitempty"`
+
 	// AdvisoryTypes carries RECORD-mode type knowledge (CSV column name →
 	// Go type, e.g. "pop" → "int64") inferred by the source (CSV sampling,
 	// JSONL schema headers). Deliberately distinct from OutputTypedSchema:

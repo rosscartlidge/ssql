@@ -2,7 +2,7 @@
 
 Reference: DFC152
 Created: 2026-10-19
-Last modified: 2026-10-19
+Last modified: 2026-10-20
 
 [Back to Index](./README.md)
 
@@ -119,13 +119,17 @@ ssql update -if-macro NAME ARG... -set …      # update's clause condition
 - `NAME` completes from the macro file (a completer that loads the
   file and offers the names, with each macro's signature as its
   description where the completer supports one).
-- `ARG...` is a variadic `FieldsFromFlag` slot, so Tab or Ctrl-O
-  offers field names at each position. Arity is checked after
-  parsing against the macro's parameter count: `update -set-macro s3
-  add3: add3 takes 3 fields (x int, y int, z int), got 2`. The
-  alternative, registering one flag per macro at startup so autocli
-  knows the exact arity, lets a user file rewrite a command's grammar
-  and makes `-help` depend on the machine; not taken.
+- `ARG...` is a repeating `FieldsFromFlag` slot whose count the
+  command decides (Ross, 2026-10-20: a variadic tail "means you don't
+  know how many args the macro takes"). autocli v4.22.0 gained
+  `Arg(...).Repeat(f)`: the last Arg takes N values, N returned by `f`
+  from the fixed args before it, and ssql's `f` is the macro's
+  parameter count. The parser consumes exactly N words (`-set-macro s3
+  add3 a b` fails as "requires 3 value(s) for args, got 2", an unknown
+  name fails before any value is read), completion offers a field at
+  positions 1..N and flag names after, help-at marks `→ args...`.
+  Neither a variadic-tail guess (where do the arguments end?) nor one
+  flag per macro (a user file rewriting a command's grammar) was taken.
 - Every ARG is a field. A literal argument (`margin price 0.4`) is
   not supported in this DFC: a slot that is sometimes a field and
   sometimes a literal is the sigil problem DFC135 §1 removed. A
@@ -169,13 +173,26 @@ source writes `-tz NAME` (DFC147). Consequences:
 
 Parameter names stay the macro's own (`x`, `y`, `z`), because a
 `-param-field` name is an identifier of the body and renaming would
-mean rewriting the body's AST. DFC134's rule that a parameter must not
-be a field of the input therefore applies to macro parameters: a
-macro `add3(x …)` used on an input that has a column `x` is an error,
-reported as `update -set-macro s3 add3: parameter x is also a field of
-the input; rename the parameter in the macro`. The alternative, a
-mangled name such as `_add3_x`, would leak into every error message
-and the expanded `generate ssql` text.
+mean rewriting the body's AST (ssql has no expression printer). That
+met DFC134's rule that a parameter must not be a field of the input on
+the first smoke run: `margin(price float, cost float)` applied to
+columns `price` and `cost` — the natural way to write a macro — was a
+collision error in every lane. The rule's reason is that an expression
+could mean either the column or the parameter, and a new upstream
+column must not flip it. A macro body cannot: every identifier in it
+is a parameter by construction (§3.1), so the input's columns are not
+in play. The rule gained that exact exemption (built 2026-10-20): **a
+field parameter in a closed expression — one whose every identifier is
+a declared parameter — may be named like a column.** It is decided
+where the check lives, from the expression's own identifiers: the
+runtime binding on the first record (`paramBinding.closed`, exec and
+the VM tiers), the transpiler env (`exprGoEnv.closed`, record and
+typed codegen); SQL never checked. A static `-param` named like a
+column stays an error (a value is not a view of the column), and so
+does any expression that also names a column. Two macro calls in one
+clause that declare the same parameter name, or a call and the clause's
+own `-param`, are reported by name with "call it in its own clause (+)
+or rename the parameter".
 
 ### 3.4 Completion detail
 
@@ -251,6 +268,10 @@ depends on a catalog path.
 
 ## 7. Open questions for Ross
 
+Answered 2026-10-20 (plan mode): 1 expand by default, `-as-written`
+keeps the call; 2 parameters only; 3 yes, both commands; 4 `list` and
+`check`. Plus the arity decision recorded in §3.2.
+
 1. **`generate ssql` loses the macro name.** The expansion is correct
    and self-contained, but `ssql update -set-expr s3 'x + y + z'
    -param-field x int f1 …` reads worse than `-set-macro s3 add3 f1 f2
@@ -287,7 +308,7 @@ About 550 lines, no lane touched. Order: loader and `macro check`
 first (the file format is the part users will keep), then `-set-macro`
 with its equivalence case, then `-if-macro`, then completion and docs.
 
-## 9. Tests
+## 9. Tests (as planned; §10 has what was built)
 
 - Loader: good lines, each error class (bad name, keyword, duplicate,
   unknown type, body references non-parameter, body syntax error) with
@@ -305,3 +326,22 @@ with its equivalence case, then `-if-macro`, then completion and docs.
   fixture's macro names; the ARG positions are field completers
   (`TestFieldCompletionConfiguration`).
 - Slim build: the loader has no new imports; `go test -tags slim`.
+
+## 10. Built (2026-10-20)
+
+autocli v4.22.0 (`Arg(...).Repeat`, `FlagSpec.ArgRepeat`, `ArityFunc`;
+parser, completion, help/man/help-at/spec-json; `arg_repeat_test.go`).
+ssql: `commands/macros.go` (file, loader, arity callback, name
+completer), `commands/macro_flags.go` (`-set-macro`, `-if-macro`,
+`expandClauseMacros` once per command before the exec/generate branch,
+`lowerMacroArgv` + `applyMacroLowering` at the four fragment emit sites,
+`restoreAsWritten`), `commands/macro_cmd.go` (`ssql macro list|check`),
+`lib.CodeFragment.AsWrittenArgv`, the closed-expression exemption
+(§3.3) in `lib/runtime/params.go` and `commands/expr_go.go`. Gates:
+five `TestPipelineEquivalence` cases (`macro_*`, `SSQL_MACROS` through
+the case `Env`, which now takes `{{.data}}`), watched failing with the
+fragment rewrite disabled (DuckDB lane); `TestGenerateSSQLAsWritten`
+macro pipeline; `TestFieldKeybindingPTY` row for Ctrl-O on the third
+macro argument; loader, lowering and completion-table unit tests.
+Deferred: expanding macros before `BuildRemoteCommand` ships a pipeline
+to a `from ssh` host (TODO).

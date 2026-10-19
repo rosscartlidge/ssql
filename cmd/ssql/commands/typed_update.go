@@ -399,6 +399,9 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 	serialCode := fmt.Sprintf("%s := typed.Select(%s)(%s)", outputVar, closure, inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
+	if err := applyMacroLowering(frag); err != nil {
+		return false, "", err
+	}
 	frag.Params = params
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = derived

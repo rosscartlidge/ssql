@@ -136,7 +136,7 @@ func exprToGoRecordParams(expression string, advisory map[string]string, recv st
 	if err != nil {
 		return exprGo{}, fmt.Errorf("expression %q: %w", expression, err)
 	}
-	env := &exprGoEnv{recv: recv, advisory: make(map[string]lib.TypedSchemaField, len(advisory)), params: params}
+	env := &exprGoEnv{recv: recv, advisory: make(map[string]lib.TypedSchemaField, len(advisory)), params: params, closed: closedOver(expression, params)}
 	for name, goType := range advisory {
 		env.advisory[strings.ToLower(name)] = lib.TypedSchemaField{Name: name, GoType: goType}
 		env.names = append(env.names, name)
@@ -157,6 +157,7 @@ func exprToGoParams(expression string, schema *lib.TypedSchema, recv string, par
 	}
 	env := newExprGoEnv(schema, recv)
 	env.params = params
+	env.closed = closedOver(expression, params)
 	res, err := env.node(tree.Node)
 	if err != nil {
 		return exprGo{}, fmt.Errorf("expression %q: %w", expression, err)
@@ -199,10 +200,32 @@ type exprGoEnv struct {
 
 	// params are -param bindings (DFC134 §5.3), resolved BEFORE fields: a
 	// name that is both is a loud error (silent precedence would let a new
-	// upstream column change an expression's meaning). A parameter whose
-	// type is outside the lattice (time) refuses quietly → the VM tier,
-	// where it is an ordinary env variable.
+	// upstream column change an expression's meaning) — except a FIELD
+	// parameter (field set) in a CLOSED expression, whose every identifier
+	// is a parameter (closed): the columns are not in play and the
+	// parameter may be named like the column it views (a macro body,
+	// DFC152). A parameter whose type is outside the lattice (time)
+	// refuses quietly → the VM tier, where it is an ordinary env variable.
 	params map[string]exprGo
+	closed bool
+}
+
+// closedOver reports whether every identifier of the expression is one of
+// params (the runtime's paramBinding.markClosed, at transpile time).
+func closedOver(expression string, params map[string]exprGo) bool {
+	if len(params) == 0 {
+		return false
+	}
+	ids, err := runtime.ExprIdentifiers(expression)
+	if err != nil || len(ids) == 0 {
+		return false
+	}
+	for _, id := range ids {
+		if _, ok := params[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func newExprGoEnv(schema *lib.TypedSchema, recv string) *exprGoEnv {
@@ -269,7 +292,7 @@ func (e *exprGoEnv) param(name string) (res exprGo, handled bool, err error) {
 	if !isField {
 		_, isField = e.advisory[strings.ToLower(name)]
 	}
-	if isField {
+	if isField && !(e.closed && p.field != "") {
 		return exprGo{}, true, &exprLoudError{err: fmt.Errorf("parameter %s has the same name as a field of the input; rename the parameter", name)}
 	}
 	if p.Type == "" {

@@ -84,12 +84,47 @@ type FieldParams map[string]FieldParam
 // precedence either way would let data (a new upstream column) change what
 // an expression means; the collision is an error naming both. Field
 // parameters are re-bound on every record.
+//
+// A FIELD parameter is exempt in a CLOSED expression — one whose every
+// identifier is a declared parameter (markClosed): the input's columns are
+// then not in play, no column can change what it means, and a field
+// parameter may be named like the column it views (`-param-field price
+// float price`, and every macro body, DFC152, whose identifiers are its
+// parameters by construction). A static -param named like a column stays
+// an error (DFC134: a value is not a view of the column).
 type paramBinding struct {
 	thunk   Params
 	fields  FieldParams
 	once    sync.Once
 	values  map[string]any
 	checked bool
+	idents  []string // the expression's identifiers, for closed()
+}
+
+// markClosed records the expression's identifiers; closed() is decided on
+// the first record, so the thunk is not resolved at compile time.
+func (b *paramBinding) markClosed(identifiers []string) {
+	if b != nil {
+		b.idents = identifiers
+	}
+}
+
+// closed reports whether every identifier of the expression is a
+// declared parameter.
+func (b *paramBinding) closed() bool {
+	if len(b.idents) == 0 {
+		return false
+	}
+	declared := map[string]bool{}
+	for _, n := range b.names() {
+		declared[n] = true
+	}
+	for _, id := range b.idents {
+		if !declared[id] {
+			return false
+		}
+	}
+	return true
 }
 
 // names lists every parameter the binding declares, static and field.
@@ -128,8 +163,12 @@ func (b *paramBinding) apply(env map[string]any, has func(string) bool, get func
 	}
 	if !b.checked {
 		b.checked = true
+		closed := b.closed()
 		var clash []string
 		for _, name := range b.names() {
+			if _, isField := b.fields[name]; isField && closed {
+				continue
+			}
 			if has(name) {
 				clash = append(clash, name)
 			}

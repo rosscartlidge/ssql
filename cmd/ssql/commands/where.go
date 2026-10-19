@@ -66,8 +66,14 @@ func RegisterWhere(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Local().
 		Help("Filter using boolean expression: -if-expr <expr> (use +if-expr to negate)").
 		Done()
-	ifFieldFlag(exprParamFlag(sub)).
+	ifMacroFlag(ifFieldFlag(exprParamFlag(sub))).
 		Handler(func(ctx *cf.Context) error {
+			// -if-macro becomes -if-expr with -param-field bindings before
+			// anything reads the clauses (DFC152).
+			if err := expandMacros(ctx); err != nil {
+				return err
+			}
+
 			var generate bool
 
 			if genVal, ok := ctx.GlobalFlags["-generate"]; ok {
@@ -374,6 +380,9 @@ func generateWhereCode(ctx *cf.Context) error {
 
 	// Create code fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, imports, getCommandString())
+	if err := applyMacroLowering(frag); err != nil {
+		return err
+	}
 	frag.Params = params
 	frag.PlanNotes = planNotes
 	frag.AdvisoryTypes = advisory // where preserves the schema
@@ -528,6 +537,9 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 		outputVar, schema.TypeName, body, inputVar)
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, parallelCode, imports, getCommandString())
+	if err := applyMacroLowering(frag); err != nil {
+		return false, err
+	}
 	frag.Params = params
 	frag.InputTypedSchema = schema
 	frag.OutputTypedSchema = schema

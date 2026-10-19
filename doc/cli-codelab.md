@@ -374,6 +374,19 @@ ssql from employees.csv | ssql update -set-field grade level | ssql include name
 ssql from employees.csv | ssql where -if-expr 'salary / n > 12000' -param-field n float level | ssql include name salary level | ssql to table
 ```
 
+An expression you keep retyping can be a **macro**: a named body with
+typed parameters in `~/.config/ssql/macros` (here a file in the data
+directory, named by `SSQL_MACROS`). A call gives the macro and one field
+per parameter; the name completes on Tab and each argument on Ctrl-O,
+and the pipeline runs as the expanded expression in every mode:
+
+```bash
+printf 'per_level(salary float, level float) = salary / level\nsenior(level int) = level >= 3\n' > macros
+export SSQL_MACROS=$PWD/macros
+ssql macro list
+ssql from employees.csv | ssql update -set-macro ratio per_level salary level | ssql where -if-macro senior level | ssql include name ratio level | ssql to table
+```
+
 Operators for `-if`: `eq ne gt ge lt le contains startswith endswith regex`.
 Everything in the pipe is JSONL, so any stage can follow any other, and
 `to csv`/`to json` swap the output shape at the end:

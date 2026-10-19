@@ -134,6 +134,21 @@ func TestExprToGoParams(t *testing.T) {
 	if !exprIsLoud(err) || !strings.Contains(err.Error(), "same name as a field") {
 		t.Errorf("collision must be loud: %v", err)
 	}
+	// A static parameter named like a column is an error even in a closed
+	// expression (a value is not a view of the column)...
+	if _, err := exprToGoParams(`rate * 2`, schema, "r", vars); !exprIsLoud(err) {
+		t.Errorf("closed expression, static parameter over a same-named column must still be loud: %v", err)
+	}
+	// ...but a FIELD parameter in a closed expression (every identifier a
+	// parameter) may be named like the column it views: no column is in
+	// play (DFC152, the macro-body case).
+	fieldVars := exprParamsGoFieldVarsTyped(nil, []ExprParam{{Name: "rate", Type: ssql.FieldTypeFloat, Field: "rate"}}, schema, "r")
+	if res, err := exprToGoParams(`rate * 2`, schema, "r", fieldVars); err != nil || !strings.Contains(res.Src, "r.Rate") {
+		t.Errorf("closed expression, field parameter viewing its own column: %+v, %v", res, err)
+	}
+	if _, err := exprToGoParams(`rate * price`, schema, "r", fieldVars); !exprIsLoud(err) {
+		t.Errorf("an expression that also names a column keeps the collision loud: %v", err)
+	}
 	_, err = exprToGoParams(`price > since`, schema, "r", vars)
 	if err == nil || exprIsLoud(err) {
 		t.Errorf("time parameter must refuse quietly: %v", err)

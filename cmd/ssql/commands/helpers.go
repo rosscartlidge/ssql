@@ -523,13 +523,13 @@ func getCommandString() string {
 	if len(os.Args) == 0 {
 		return ""
 	}
-	// For the binary name, use just "ssql" instead of full path
-	args := []string{"ssql"}
-	for _, arg := range lib.StripGenerateFlag(os.Args[1:]) {
-		// Quote the argument if it needs quoting for shell safety
-		args = append(args, ssql.ShellQuote(arg))
+	// For the binary name, use just "ssql" instead of full path; every
+	// argument is quoted for shell safety.
+	rest := lib.StripGenerateFlag(os.Args[1:])
+	if len(rest) == 0 {
+		return "ssql"
 	}
-	return strings.Join(args, " ")
+	return commandStringFor(rest[0], rest[1:])
 }
 
 // flagVarName converts a flag name segment to a Go-safe identifier part.

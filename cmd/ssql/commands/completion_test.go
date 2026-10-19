@@ -49,12 +49,15 @@ func TestFieldCompletionConfiguration(t *testing.T) {
 	expectedFieldCompletion := map[string]map[string][]int{
 		"where": {
 			"-if": {0}, // field is arg 0
+			"-if-macro": {1}, // the repeated macro arguments are fields (DFC152)
 		},
 		"update": {
 			"-if":       {0}, // field is arg 0
 			"-set":      {0}, // field is arg 0
 			"-set-expr": {0}, // field is arg 0
 			"-set-bucket": {0, 1}, // new field is arg 0, source timestamp arg 1
+			"-set-macro": {0, 2}, // target is arg 0; the repeated macro arguments are fields (DFC152)
+			"-if-macro":  {1},
 		},
 		"cast": {
 			"-type": {0}, // field is arg 0

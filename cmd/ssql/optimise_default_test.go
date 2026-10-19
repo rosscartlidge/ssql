@@ -160,7 +160,11 @@ func TestGenerateSSQLAsWritten(t *testing.T) {
 	if err := os.WriteFile(data, []byte("{\"n\":1}\n{\"n\":2}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	env := append(barePathEnv(), "TZ=Australia/Sydney")
+	macros := filepath.Join(dir, "macros")
+	if err := os.WriteFile(macros, []byte("add3(x int, y int, z int) = x + y + z\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := append(barePathEnv(), "TZ=Australia/Sydney", "SSQL_MACROS="+macros)
 	run := func(pipe string, flags ...string) string {
 		args := append([]string{"generate", "ssql"}, flags...)
 		args = append(args, "-pipeline", pipe)
@@ -183,5 +187,15 @@ func TestGenerateSSQLAsWritten(t *testing.T) {
 	typed := bin + " from " + data + " -tz UTC | " + bin + " sort -desc n | " + bin + " limit 1"
 	if got, want := run(typed, "-as-written"), "ssql from "+data+" -tz UTC | ssql top 1 -field n"; got != want {
 		t.Errorf("-as-written must keep a typed -tz and still rewrite:\n got %q\nwant %q", got, want)
+	}
+	// A macro call (DFC152): the default rendering carries the expansion,
+	// self-contained without the macros file; -as-written keeps the call.
+	macro := bin + " from " + data + " | " + bin + " update -set-macro s3 add3 n n n"
+	got := run(macro)
+	if !strings.Contains(got, "ssql update -set-expr s3 'x + y + z' -param-field x int n -param-field y int n -param-field z int n") || strings.Contains(got, "-set-macro") {
+		t.Errorf("default rendering should expand the macro, got %q", got)
+	}
+	if got, want := run(macro, "-as-written"), "ssql from "+data+" | ssql update -set-macro s3 add3 n n n"; got != want {
+		t.Errorf("-as-written must keep the macro call:\n got %q\nwant %q", got, want)
 	}
 }

@@ -270,6 +270,7 @@ func optimizePipelineCmdsWith(input io.Reader, opts optimiseOptions) ([]*pipelin
 		}
 		if opts.AsWritten {
 			dropResolvedZone(&frag)
+			restoreAsWritten(&frag)
 		}
 		fragments = append(fragments, &frag)
 	}

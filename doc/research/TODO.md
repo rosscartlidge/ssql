@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-10-18
+Last modified: 2026-10-20
 
 [Back to Index](./README.md)
 
@@ -79,6 +79,7 @@ Tracked issues and feature gaps discovered during development.
 ## Tab Completion
 
 - [x] **`ssql from <tab>` should also complete filenames** — autocli v4.3.7 returns both subcommand names and file completions when a command has both.
+- [x] **Expression macros** — SHIPPED 2026-10-20 ([DFC152](./dfc152_expression_macros.md)): `update -set-macro FIELD NAME FIELD...`, `where|update -if-macro NAME FIELD...` from `~/.config/ssql/macros`; the name completes, every argument is a field slot (autocli v4.22.0 `Arg(...).Repeat`: the macro's parameter count decides the arity). Follow-ups: (a) `from ssh HOST 'pipeline'` ships the pipeline text to HOST, which reads ITS macros file — expand macro calls in `BuildRemoteCommand` before shipping (the same `lowerMacroArgv`), so a remote host needs no file; (b) a `run` document that keeps `-set-macro` depends on the running machine's file by design (DFC152 §5) — `run -check` could warn when a stage names a macro the local file lacks; (c) macros inside expression text (`-set-expr s 'add3(a, b, c)'`, an AST expansion in every lane) if ever wanted — the file format allows it.
 
 ## Merge with Catalog (see merge-catalog.md)
 

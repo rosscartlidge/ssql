@@ -17,6 +17,7 @@ var negatableArgFlags = map[string]bool{
 	"-if":       true,
 	"-if-expr":  true,
 	"-if-field": true,
+	"-if-macro": true,
 }
 
 // ssqlPrefixHandler interprets +flag as negation of -flag.
@@ -63,6 +64,7 @@ func buildRootCommand() *cf.Command {
 	// Register all subcommands
 	cmd = commands.RegisterVersion(cmd)
 	cmd = commands.RegisterCodelab(cmd)
+	cmd = commands.RegisterMacro(cmd)
 	cmd = commands.RegisterFunctions(cmd)
 	cmd = commands.RegisterConventions(cmd)
 	cmd = commands.RegisterFrom(cmd)

@@ -512,7 +512,11 @@ ssql from orders.csv | ssql where  -if-expr 'ts >= since'          -param since 
 - **Errors, not precedence.** A parameter named like a field of the
   input is an error (a new upstream column must not change what an
   expression means), and so is a parameter no expression in the clause
-  uses.
+  uses. One exception: a **field** parameter in a **closed** expression,
+  one whose every identifier is a declared parameter, may be named like
+  the column it views (`-if-expr 'price < cost * 1.1' -param-field price
+  float price -param-field cost float cost`): no column is in play, so
+  nothing upstream can change the meaning. A macro body is always closed.
 - **Every lane.** The interpreter binds the value; `generate go` lifts
   each parameter into a flag of the compiled program, `-param-NAME`, so
   the binary is a prepared statement you re-run with new values
@@ -533,6 +537,54 @@ Rule for programs that build pipelines: **values go in flag slots
 (`-if FIELD OP VALUE`, `-param`), never into expression text; a slot's
 kind is fixed by the flag, never by the value's spelling** (`@name` is
 the text `@name`; two fields compare with `-if-field`).
+
+## Macros: Named Expressions With Field Arguments
+
+An expression you keep retyping can be a **macro**: a named body with
+typed parameters, defined once in `~/.config/ssql/macros` (or the file
+`$SSQL_MACROS` names), one per line:
+
+```
+# ~/.config/ssql/macros
+add3(x int, y int, z int) = x + y + z
+margin(price float, cost float) = (price - cost) / price
+cheap(price float, cost float) = price < cost * 1.1
+```
+
+A call names the macro and one field per parameter, in order. The
+macro name completes on Tab and every argument is a field slot (Ctrl-O
+completes it), which is what a quoted expression can never offer:
+
+```bash
+ssql from sales.csv | ssql update -set-macro s3 add3 f1 f2 f3            # s3 = f1 + f2 + f3
+ssql from sales.csv | ssql update -set-macro m margin price unit_cost   # m = (price - unit_cost) / price
+ssql from sales.csv | ssql where  -if-macro cheap price cost            # keep rows where price < cost * 1.1
+ssql from sales.csv | ssql where  +if-macro cheap price cost            # the others
+ssql from sales.csv | ssql update -if-macro cheap price cost -set tag thin
+```
+
+- **A call is a `-set-expr` / `-if-expr` with `-param-field`s.** The
+  command expands `-set-macro s3 add3 f1 f2 f3` to `-set-expr s3 'x + y
+  + z' -param-field x int f1 -param-field y int f2 -param-field z int
+  f3` before anything else reads it, so the interpreter, `generate go`,
+  `generate sql` and the optimiser all see an ordinary expression. What
+  you generate carries the expansion and does not depend on the file;
+  `generate ssql -as-written` shows the call as you typed it.
+- **Typed parameters, like `-param-field`.** `string int float bool
+  time`; the field is viewed as the declared type (an int column serves
+  a `float` parameter), a value not of the type is loud, an absent field
+  gives no value. A body sees its parameters and nothing else: `ssql
+  macro check` rejects a body that names anything else, an unused
+  parameter, a name that is an expression function, and a duplicate.
+- **Parameter names may match column names.** A macro body is a closed
+  expression, so `margin(price float, cost float)` applied to columns
+  `price` and `cost` is fine (the rule above). Two calls in one clause
+  must not declare the same parameter name; put them in separate
+  clauses (`+`) or rename a parameter.
+- **A keyboard convenience.** The file is read where the command runs:
+  a `run` document or a `serve` workspace that keeps `-set-macro` uses
+  that machine's file, as a shell alias would. `ssql macro list` shows
+  what is defined; `SSQL_MACROS=/dev/null` turns macros off.
 
 ## Common Patterns
 
