@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.121.0] - 2026-10-20
+
 ### Added
 
 - **Expression macros** ([DFC152](doc/research/dfc152_expression_macros.md)):
