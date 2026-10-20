@@ -1870,6 +1870,25 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// The same parameter name in two clauses of one stage: a clause's
+		// parameters are its own (DFC134). Record and typed codegen gave
+		// both clauses one Go variable until 2026-10-20 (the second value
+		// won), so clause 1 read lo = 70000 and kept every row above it.
+		Name:     "where_same_param_two_clauses",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} where -if-expr 'salary > lo' -param lo int 90000 + -if-expr 'salary < lo' -param lo int 70000 | {{.bin}} include name | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"name": "Alice"}, {"name": "Bob"}, {"name": "Carol"}},
+	},
+	{
+		Name:     "update_same_param_two_clauses",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -if-expr 'salary > lo' -param lo int 90000 -set status hi + -if-expr 'salary > lo' -param lo int 70000 -set status mid + -set status lo | {{.bin}} include name status | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "status": "hi"}, {"name": "Bob", "status": "lo"}, {"name": "Carol", "status": "hi"}, {"name": "David", "status": "mid"},
+			{"name": "Eve", "status": "mid"}, {"name": "Frank", "status": "mid"}, {"name": "Grace", "status": "mid"},
+		},
+	},
+	{
 		// The first clause does not set who, so Sales rows (first match)
 		// never get it: absent in exec and record; typed falls back to
 		// record for it; SQL refuses by design.

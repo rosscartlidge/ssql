@@ -415,6 +415,7 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 	var planNotes []string
 	var clauseConds []string
 	var params []lib.CodeParam
+	paramSeq := map[string]int{} // a name declared in several clauses gets a flag per clause
 	for _, clause := range clauses {
 		var ands []string
 
@@ -477,6 +478,7 @@ func generateWhereCodeTyped(clauses []cf.Clause, invert bool, inputVar string, s
 		if err != nil {
 			return true, lib.WriteErrorAndExit(getCommandString(), err)
 		}
+		numberStageParams(paramSeq, exprParams)
 		params = append(params, exprParamsCodeParams(exprParams)...)
 		typedVars := exprParamsGoFieldVarsTyped(exprParamsGoVars(exprParams), exprParams, schema, "r")
 		if exprParamsNeedSSQL(exprParams) {
@@ -679,6 +681,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map
 	flagSeen := make(map[string]int) // field+op occurrences within this fragment
 
 	// Build conditions for each clause (OR logic between clauses)
+	paramSeq := map[string]int{} // a name declared in several clauses gets a flag per clause
 	for _, clause := range clauses {
 		var andConditions []string
 
@@ -739,6 +742,7 @@ func generateWhereCodeFromClauses(clauses []cf.Clause, invert bool, advisory map
 		if err != nil {
 			return "", nil, nil, nil, nil, err
 		}
+		numberStageParams(paramSeq, exprParams)
 		params = append(params, exprParamsCodeParams(exprParams)...)
 		paramVars := exprParamsGoVars(exprParams) // field params take the VM tier, where absence is uniform
 		paramThunk := exprParamsGoThunk(exprParams)

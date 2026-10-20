@@ -2,6 +2,8 @@ package commands
 
 import (
 	"strings"
+
+	"github.com/rosscartlidge/ssql/v4"
 	"testing"
 
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
@@ -108,5 +110,30 @@ func TestParamField(t *testing.T) {
 	vars := exprParamsGoFieldVarsTyped(exprParamsGoVars(ps), ps, schema, "r")
 	if vars["n"].Src != `ssql.MustCast[float64](r.K, ssql.FieldTypeFloat, "k")` || vars["s"].Src != "r.F1st" || vars["lo"].Src != "int64(*flagParamLo)" {
 		t.Errorf("typed bindings: %+v", vars)
+	}
+}
+
+// A name declared in two clauses of one stage gets a flag per clause; a
+// field parameter of the same name is not numbered (it has no flag).
+func TestNumberStageParams(t *testing.T) {
+	seen := map[string]int{}
+	c1 := []ExprParam{{Name: "lo", Type: ssql.FieldTypeInt, Value: int64(90), raw: "90"}}
+	c2 := []ExprParam{{Name: "lo", Type: ssql.FieldTypeInt, Value: int64(70), raw: "70"}, {Name: "hi", Type: ssql.FieldTypeInt, Value: int64(1), raw: "1"}}
+	c3 := []ExprParam{{Name: "lo", Type: ssql.FieldTypeInt, Field: "v"}, {Name: "lo", Type: ssql.FieldTypeInt, Value: int64(5), raw: "5"}}
+	numberStageParams(seen, c1)
+	numberStageParams(seen, c2)
+	numberStageParams(seen, c3)
+	got := []string{c1[0].flagName(), c1[0].varName(), c2[0].flagName(), c2[0].varName(), c2[1].flagName(), c3[0].flagName(), c3[1].flagName()}
+	want := []string{"param-lo", "flagParamLo", "param-lo2", "flagParamLo2", "param-hi", "param-lo", "param-lo3"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%d: got %q want %q", i, got[i], want[i])
+		}
+	}
+	if cp := c2[0].codeParam(); cp.Name != "param-lo2" || cp.VarName != "flagParamLo2" || cp.Default != "70" || !strings.Contains(cp.Help, "clause 2") {
+		t.Errorf("codeParam = %+v", cp)
+	}
+	if v := exprParamsGoVars(c2); v["lo"].Src != "int64(*flagParamLo2)" {
+		t.Errorf("goVars = %+v", v)
 	}
 }

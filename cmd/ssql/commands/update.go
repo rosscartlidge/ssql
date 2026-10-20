@@ -678,9 +678,11 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 		codeBody.WriteString("\t\tfrozen := mut.Freeze()\n\n")
 	}
 
+	paramSeq := map[string]int{} // a name declared in several clauses gets a flag per clause
 	// Generate clause evaluation (first-match-wins)
 	for i, clause := range clauses {
 		indent := "\t\t"
+		numberStageParams(paramSeq, clause.params)
 		codeParams = append(codeParams, exprParamsCodeParams(clause.params)...)
 		paramVars := exprParamsGoVars(clause.params) // field params take the VM tier, where absence is uniform
 		paramThunk := exprParamsGoThunk(clause.params)

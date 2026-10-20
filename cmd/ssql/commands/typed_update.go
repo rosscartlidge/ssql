@@ -59,6 +59,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 	var planNotes []string
 	tierVSets := 0
 
+	paramSeq := map[string]int{} // a name declared in several clauses gets a flag per clause
 	for _, clause := range ctx.Clauses {
 		var uc updateClause
 		if err := updateNotNeedsCondition(clause); err != nil {
@@ -113,6 +114,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		if err != nil {
 			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 		}
+		numberStageParams(paramSeq, exprParams)
 		params = append(params, exprParamsCodeParams(exprParams)...)
 		paramVars := exprParamsGoFieldVarsTyped(exprParamsGoVars(exprParams), exprParams, in, "r")
 		if exprParamsNeedSSQL(exprParams) {

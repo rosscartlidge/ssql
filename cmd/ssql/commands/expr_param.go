@@ -43,6 +43,36 @@ type ExprParam struct {
 	Value any // int64 / float64 / string / bool / time.Time, by Type (static only)
 	raw   string
 	Field string // -param-field: the column viewed; Value and raw are unused
+	seq   int    // 0 for the first clause of the stage declaring Name; 1, 2, … for later ones (numberStageParams)
+}
+
+// numberStageParams gives a parameter name declared in more than one
+// clause of one stage a distinct flag per clause (-param-lo, -param-lo2,
+// …). A clause's parameters are its own (DFC134), but one Go variable per
+// name was emitted until 2026-10-20, and collectParams' cross-fragment
+// rename then rewrote every clause's reference to the last value, so
+// `where -if-expr 'v > lo' -param lo int 90 + -if-expr 'v < lo' -param lo
+// int 70` read 70 in both clauses. seen is the stage's running count per
+// name: call once per clause, in clause order, before the clause's code is
+// emitted. Field parameters bind to a column, not a flag, and are not
+// numbered.
+func numberStageParams(seen map[string]int, params []ExprParam) {
+	for i := range params {
+		if params[i].Field != "" {
+			continue
+		}
+		n := seen[params[i].Name]
+		seen[params[i].Name] = n + 1
+		params[i].seq = n
+	}
+}
+
+// suffix distinguishes the flag of a later clause's parameter.
+func (p ExprParam) suffix() string {
+	if p.seq == 0 {
+		return ""
+	}
+	return strconv.Itoa(p.seq + 1)
 }
 
 var exprParamName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -244,16 +274,22 @@ func exprParamsExpressions(conds []ExprCond, sets []setExpr) []string {
 // with the pipeline's value as its default (the same lifting `where -if`
 // and `limit` do), so the compiled program is re-runnable with new values.
 
-func (p ExprParam) flagName() string { return "param-" + strings.ReplaceAll(p.Name, "_", "-") }
-func (p ExprParam) varName() string  { return "flagParam" + flagVarName(p.Name) }
+func (p ExprParam) flagName() string {
+	return "param-" + strings.ReplaceAll(p.Name, "_", "-") + p.suffix()
+}
+func (p ExprParam) varName() string { return "flagParam" + flagVarName(p.Name) + p.suffix() }
 
 // codeParam is the flag declaration. Time has no flag.Duration-like
 // parser, so it travels as a string and is parsed at first use.
 func (p ExprParam) codeParam() lib.CodeParam {
+	help := fmt.Sprintf("expression parameter %s (%s)", p.Name, p.Type)
+	if p.seq > 0 {
+		help += fmt.Sprintf(", clause %d", p.seq+1)
+	}
 	cp := lib.CodeParam{
 		Name:    p.flagName(),
 		Default: p.raw,
-		Help:    fmt.Sprintf("expression parameter %s (%s)", p.Name, p.Type),
+		Help:    help,
 		VarName: p.varName(),
 	}
 	// The default is the CAST value's canonical spelling, so it is a valid
