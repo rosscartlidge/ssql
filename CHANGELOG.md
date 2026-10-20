@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   macro body is closed, which is what makes `margin(price, cost)` on
   columns `price` and `cost` work.
 
+### Fixed
+- `generate ssql` column pruning (`from parquet … -columns`) no longer drops a column `update` reads through `-set-field`, `-if-field`, `-param-field` or a `+if`/`+if-expr` spelling, and no longer projects a column a stage creates (`update -set x`, a window result, a `rename` new name) as if the file had it (both found 2026-10-20 from the schema-rule gap below)
+- Schema-mode completion (Ctrl-O) downstream of `update` now sees the field a `-set-macro` or `-set-field` creates: the `update` schema rule listed only `-set`, `-set-expr` and `-set-bucket` (found by Ross on the first macro pipeline, 2026-10-20)
+
+
 ## [4.120.4] - 2026-10-18
 
 ### Added

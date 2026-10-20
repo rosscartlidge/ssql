@@ -1786,6 +1786,25 @@ var equivCases = []EquivCase{
 		Golden:   []map[string]any{{"id": 3, "name": "gus", "amount": 2.5}, {"id": 6, "name": "hal", "amount": 9}},
 	},
 	{
+		// The optimiser's parquet column pruning must keep the columns
+		// update reads through -set-field and -if-field (it pruned them
+		// before 2026-10-20: `-columns id -columns who`, then "unknown
+		// field name").
+		Name:     "parquet_prune_keeps_update_reads",
+		Pipeline: `{{.bin}} from parquet {{.data}}/pq/b.parquet | {{.bin}} update -set-field who name -set-field amt amount | {{.bin}} include id who amt | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "who": "dee", "amt": 8.75}, {"id": 5, "who": "bob", "amt": 40}, {"id": 9, "who": "eve", "amt": 21.5}},
+	},
+	{
+		// Names update, rename and window create are satisfied by those
+		// stages, not the file: pruning emitted `-columns tag -columns who`
+		// before 2026-10-20 and the read failed.
+		Name:     "parquet_prune_skips_created_names",
+		Pipeline: `{{.bin}} from parquet {{.data}}/pq/b.parquet | {{.bin}} update -set tag 1 | {{.bin}} rename -as name who | {{.bin}} window -partition tag -order id -sum amount total | {{.bin}} include id who tag total | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "who": "dee", "tag": 1, "total": 8.75}, {"id": 5, "who": "bob", "tag": 1, "total": 48.75}, {"id": 9, "who": "eve", "tag": 1, "total": 70.25}},
+	},
+	{
 		Name:     "time_parts_all_lanes",
 		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr h 'hour(ts)' -set-expr d 'day(ts)' -set-expr w 'week(ts)' -set-expr dw 'dow(ts)' -set-expr q 'quarter(ts)' -set-expr e 'epoch(ts)' | {{.bin}} include id h d w dw q e | {{.bin}} sort id`,
 		Ordered:  true,

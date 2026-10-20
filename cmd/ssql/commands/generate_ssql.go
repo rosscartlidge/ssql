@@ -2121,6 +2121,16 @@ func renderPipelineRange(cmds []*pipelineCmd, start, end int) string {
 // Returns the set of needed fields and whether all fields are needed (due to expressions etc).
 func collectDownstreamFields(cmds []*pipelineCmd, startIdx int) (map[string]bool, bool) {
 	needed := make(map[string]bool)
+	// A name a stage between the source and the reference CREATES (an
+	// update target, a window result, a rename's new name) is satisfied by
+	// that stage, not the source: before 2026-10-20 `from parquet F |
+	// update -set x 1 | include x` was pruned to `-columns x` and failed on
+	// the column the file never had. A conditional update's target is
+	// different: on the rows its condition misses the source's own value
+	// survives, if the source has one, and the walk cannot know, so a later
+	// reference to it leaves the stage opaque.
+	made := map[string]bool{}
+	maybe := map[string]bool{}
 	for j := startIdx + 1; j < len(cmds); j++ {
 		if cmds[j].Removed {
 			continue
@@ -2130,7 +2140,20 @@ func collectDownstreamFields(cmds []*pipelineCmd, startIdx int) (map[string]bool
 			return nil, true
 		}
 		for _, f := range fields {
-			needed[f] = true
+			if maybe[f] {
+				return nil, true
+			}
+			if !made[f] {
+				needed[f] = true
+			}
+		}
+		created, conditional := stageCreatedFields(cmds[j])
+		for _, f := range created {
+			if conditional {
+				maybe[f] = true
+			} else {
+				made[f] = true
+			}
 		}
 		// A schema-redefining command (group-by) replaces the stream
 		// schema with its own output — the group keys plus the aggregation
@@ -2150,6 +2173,32 @@ func collectDownstreamFields(cmds []*pipelineCmd, startIdx int) (map[string]bool
 	// parquet_hive_dir_single equivalence case; exec was right, every
 	// compiled lane and the optimiser wrong).
 	return nil, true
+}
+
+// stageCreatedFields names the fields a stage adds to the stream (the
+// update and window schema rules of schema_ops.go run over an empty input
+// schema, so only what the stage itself produces comes out; rename's new
+// names from its -as pairs), and whether an update makes them under a
+// condition, so that the source's own value may still reach the output.
+func stageCreatedFields(cmd *pipelineCmd) (created []string, conditional bool) {
+	switch cmd.Kind {
+	case "update", "window":
+		created, _ = lookupSchemaOp(cmd.Kind)(nil, []string{}, cmd.RawArgs)
+		if cmd.Kind == "update" {
+			for _, a := range cmd.RawArgs {
+				if strings.HasPrefix(normFlag(a), "-if") {
+					conditional = true
+				}
+			}
+		}
+	case "rename":
+		for i := 0; i+2 < len(cmd.RawArgs); i++ {
+			if a := cmd.RawArgs[i]; a == "-as" || a == "-a" {
+				created = append(created, cmd.RawArgs[i+2])
+			}
+		}
+	}
+	return created, conditional
 }
 
 // redefinesSourceSchema reports whether a command fully replaces the stream
@@ -2322,32 +2371,45 @@ func extractJoinFields(args []string) ([]string, bool) {
 	return fields, false
 }
 
+// extractUpdateFields lists the fields an update stage reads, for column
+// pruning: every flag is stepped over by its arity, `+` spellings included,
+// and the argument positions that name an input field are collected. An
+// expression flag (the fields are inside the text) or a macro call (its
+// arity is in the macros file, and it is an expression; seen only under
+// -as-written) makes the stage opaque: every field is needed. Before
+// 2026-10-20 the walk knew -if, -set and -set-bucket only, so `from parquet
+// F | update -set-field b a | include b` was pruned to `-columns b` and
+// failed on the missing a (the DFC135 flags and the + forms all missed).
 func extractUpdateFields(args []string) ([]string, bool) {
 	var fields []string
-	i := 0
-	for i < len(args) {
-		switch args[i] {
+	for i := 0; i < len(args); {
+		var n int       // tokens the flag takes
+		var reads []int // which of them (1-based) name a field the stage reads
+		switch normFlag(args[i]) {
 		case "-if", "-i":
-			if i+3 < len(args) {
-				fields = append(fields, args[i+1])
-				i += 4
-				continue
-			}
-		case "-if-expr", "-x", "-set-expr", "-e":
-			return nil, true
+			n, reads = 3, []int{1}
+		case "-if-field":
+			n, reads = 3, []int{1, 3}
+		case "-set-field":
+			n, reads = 2, []int{2}
 		case "-set-bucket", "-b":
-			if i+3 < len(args) {
-				fields = append(fields, args[i+2]) // reads the source timestamp
-				i += 4
-				continue
-			}
+			n, reads = 3, []int{2} // reads the source timestamp
+		case "-param-field":
+			n, reads = 3, []int{3}
+		case "-param":
+			n = 3
 		case "-set", "-s":
-			if i+2 < len(args) {
-				i += 3 // -set field value: doesn't read existing field
-				continue
-			}
+			n = 2 // -set field value: doesn't read existing field
+		case "-if-expr", "-x", "-set-expr", "-e", "-set-macro", "-if-macro":
+			return nil, true
 		}
-		i++
+		if i+n >= len(args) {
+			break // a flag short of its args (mid-typing): nothing more to read
+		}
+		for _, k := range reads {
+			fields = append(fields, args[i+k])
+		}
+		i += 1 + n
 	}
 	return fields, false
 }

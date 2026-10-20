@@ -53,6 +53,9 @@ func TestMutatingSchemaOps(t *testing.T) {
 		{"update", []string{"-set-expr", "tax", "salary*0.3"}, []string{"name", "dept", "salary", "tax"}, true},
 		{"update", []string{"-set-bucket", "minute", "salary", "1m"}, []string{"name", "dept", "salary", "minute"}, true},
 		{"update", []string{"-set", "salary", "0"}, []string{"name", "dept", "salary"}, true}, // existing not duplicated
+		{"update", []string{"-set-field", "pay", "salary"}, []string{"name", "dept", "salary", "pay"}, true},
+		{"update", []string{"-set-macro", "s3", "add3", "salary", "salary", "salary", "-set", "k", "1"}, []string{"name", "dept", "salary", "s3", "k"}, true}, // no macros file needed
+		{"update", []string{"-if-macro", "cheap", "salary", "salary", "-set-field", "pay", "salary"}, []string{"name", "dept", "salary", "pay"}, true},
 		{"group-by", []string{"dept"}, []string{"dept"}, true},
 		{"group-by", []string{"dept", "-count", "n", "-sum", "salary", "total"}, []string{"dept", "n", "total"}, true},
 		// rollup/cube ARE determinable from argv: group keys + one
