@@ -1165,6 +1165,45 @@ func TestFromCSVTypesSQL(t *testing.T) {
 // literals per file (REPLACE for the file's own column); -if prunes at
 // generate time; remote hosts, other formats, pushdown, -catalog-used
 // and an empty prune are refused.
+// TestParquetSourceSeedsColumns: a parquet source seeds column tracking
+// from the file's schema (as a CSV header does), so a new column is an
+// added select expression and a conditional set of one is refused — with
+// the schema unknown both became a `* REPLACE` DuckDB rejects (2026-10-20).
+func TestParquetSourceSeedsColumns(t *testing.T) {
+	if slimBuild {
+		t.Skip("needs the full build (parquet)")
+	}
+	p := t.TempDir() + "/b.parquet"
+	s := ssql.NewSchema([]string{"id", "name", "region"})
+	if err := ssql.WriteParquet(slices.Values([]ssql.Record{ssql.NewRecordFromSchema(s, []any{int64(1), "dee", "east"})}), p); err != nil {
+		t.Fatal(err)
+	}
+	assemble := func(update string) (string, error) {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		for _, c := range []string{"ssql from parquet " + p, update} {
+			if err := enc.Encode(lib.CodeFragment{Type: "stmt", Command: c}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return assembleSQL(&buf)
+	}
+	sql, err := assemble("ssql update -set-field who name -set tag 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sql, "SELECT *, name AS who, 1 AS tag") || strings.Contains(sql, "REPLACE") {
+		t.Errorf("new columns on a parquet source: got\n%s", sql)
+	}
+	sql, err = assemble("ssql update -set-field name region")
+	if err != nil || !strings.Contains(sql, "* REPLACE (region AS name)") {
+		t.Errorf("existing column keeps REPLACE: %v\n%s", err, sql)
+	}
+	if _, err := assemble("ssql update -if region eq east -set-field who name"); err == nil || !strings.Contains(err.Error(), "conditional set") {
+		t.Errorf("conditional set of a new column: want the refusal, got %v", err)
+	}
+}
+
 func TestTranslateCatalogSQL(t *testing.T) {
 	if slimBuild {
 		t.Skip("needs the full build (parquet)")

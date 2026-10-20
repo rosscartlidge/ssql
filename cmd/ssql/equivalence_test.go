@@ -1805,6 +1805,36 @@ var equivCases = []EquivCase{
 		Golden:   []map[string]any{{"id": 1, "who": "dee", "tag": 1, "total": 8.75}, {"id": 5, "who": "bob", "tag": 1, "total": 48.75}, {"id": 9, "who": "eve", "tag": 1, "total": 70.25}},
 	},
 	{
+		// A parquet source seeds the SQL assembly's column list from the
+		// file's schema, so a new column is an added select expression,
+		// not a `* REPLACE` DuckDB rejects (found 2026-10-20; the pruning
+		// cases above never saw it because their include pushed -columns
+		// into the from, which seeds the list too). No include here.
+		Name:     "parquet_new_column_set_field",
+		Pipeline: `{{.bin}} from parquet {{.data}}/pq/b.parquet | {{.bin}} update -set-field who name | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": 1, "name": "dee", "region": "east", "amount": 8.75, "who": "dee"},
+			{"id": 5, "name": "bob", "region": "north", "amount": 40, "who": "bob"},
+			{"id": 9, "name": "eve", "region": "south", "amount": 21.5, "who": "eve"},
+		},
+	},
+	{
+		// A conditional set of a NEW column leaves it absent on the rows
+		// the condition misses; SQL columns are rectangular, so generate
+		// sql refuses by design — it used to emit the REPLACE instead when
+		// the source was parquet (unknown schema).
+		Name:     "parquet_conditional_new_column_refused",
+		Pipeline: `{{.bin}} from parquet {{.data}}/pq/b.parquet | {{.bin}} update -if region eq north -set-field who name | {{.bin}} include id who | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1}, {"id": 5, "who": "bob"}, {"id": 9}},
+		Skip: map[string]string{
+			"duckdb":      "a conditional set of a new column has no SQL translation (absent on unmatched rows) — refuses loudly by design",
+			"go-typed":    "typed mode has no missing: a new column set under a condition is the zero value on the other rows (DFC124 §3)",
+			"go-parallel": "typed mode has no missing: a new column set under a condition is the zero value on the other rows (DFC124 §3)",
+		},
+	},
+	{
 		Name:     "time_parts_all_lanes",
 		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr h 'hour(ts)' -set-expr d 'day(ts)' -set-expr w 'week(ts)' -set-expr dw 'dow(ts)' -set-expr q 'quarter(ts)' -set-expr e 'epoch(ts)' | {{.bin}} include id h d w dw q e | {{.bin}} sort id`,
 		Ordered:  true,

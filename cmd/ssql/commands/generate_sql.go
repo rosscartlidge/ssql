@@ -2628,7 +2628,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		if isNew && len(whens) > 0 {
 			// exec leaves the field ABSENT on non-matching rows; SQL columns
 			// are rectangular, so there is no faithful translation.
-			return fmt.Errorf("update: conditional -set on new field %q has no SQL translation (unmatched rows would need a value)", field)
+			return fmt.Errorf("update: a conditional set (-set, -set-field, -set-expr, -set-bucket) of new field %q has no SQL translation (unmatched rows would need a value)", field)
 		}
 		if isNew && elseSQL == quoteIdent(field) {
 			return fmt.Errorf("update: -set on new field %q needs an unconditional value for SQL translation", field)
@@ -2883,6 +2883,23 @@ func translateParquetSource(q *sqlQuery, files, columns []string) error {
 		}
 		src = "(SELECT " + strings.Join(idents, ", ") + " FROM " + src + ")"
 		q.columns = append([]string(nil), columns...)
+	} else {
+		// Seed column tracking from the file's own schema, as a CSV header
+		// does (delimHeader): without it the assembly assumed every column
+		// exists, and `update -set-field who name` on a parquet source
+		// became `* REPLACE (… AS who)`, which DuckDB rejects for a column
+		// the file lacks — and a conditional set of a new column slipped
+		// past the refusal below it (found 2026-10-20). The first literal
+		// local file's schema stands for all: the command checks they agree.
+		for _, f := range files {
+			if strings.ContainsAny(f, "*?[") || ssql.IsHTTPURL(f) {
+				continue
+			}
+			if names, _, err := ssql.ParquetSchemaFields(f); err == nil {
+				q.columns = names
+			}
+			break
+		}
 	}
 	q.fromClause = src
 	return nil
