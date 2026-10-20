@@ -113,12 +113,46 @@ ssql update -set-expr fmt_phone 'replaceRegex(phone, "(\\d{3})(\\d{3})(\\d{4})",
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `round(num)` | Round to nearest integer | `round(3.7)` → `4` |
+| `round(num)` | Round to nearest integer, half away from zero | `round(2.5)` → `3`, `round(-2.5)` → `-3` |
+| `round(num, places)` | Round at `places` decimals | `round(3.14159, 2)` → `3.14` |
 | `floor(num)` | Round down | `floor(3.7)` → `3` |
 | `ceil(num)` | Round up | `ceil(3.2)` → `4` |
+| `trunc(num)` | Drop the fraction, toward zero | `trunc(-3.7)` → `-3` |
 | `abs(num)` | Absolute value | `abs(-5)` → `5` |
+| `sign(num)` | -1, 0 or 1 | `sign(-2.5)` → `-1` |
 | `min(a, b)` | Minimum of two values | `min(10, 20)` → `10` |
 | `max(a, b)` | Maximum of two values | `max(10, 20)` → `20` |
+| `sqrt(x)`, `cbrt(x)` | Square root, cube root | `sqrt(16)` → `4` |
+| `exp(x)` | e to the power x | `exp(1)` → `2.718281828459045` |
+| `ln(x)` | Natural logarithm | `ln(exp(2))` → `2` |
+| `log10(x)`, `log2(x)` | Logarithm base 10, base 2 | `log10(1000)` → `3` |
+| `log(b, x)` | Logarithm of x in base b | `log(3, 81)` → `4` |
+| `pow(x, y)` | x to the power y (also `x ** y`) | `pow(2, 10)` → `1024` |
+| `pi()` | π | `pi()` → `3.141592653589793` |
+| `sin(x)`, `cos(x)`, `tan(x)` | Trigonometry, x in radians | `sin(pi() / 2)` → `1` |
+| `asin(x)`, `acos(x)`, `atan(x)` | Inverse trigonometry, in radians | `acos(1)` → `0` |
+| `atan2(y, x)` | Angle of the point (x, y) | `atan2(1, 1)` → `0.7853981633974483` |
+| `sinh cosh tanh asinh acosh atanh` | Hyperbolic functions and inverses | `tanh(0)` → `0` |
+| `degrees(x)`, `radians(x)` | Between radians and degrees | `degrees(pi())` → `180` |
+| `isnan(x)`, `isinf(x)`, `isfinite(x)` | Tests on a number, inside an expression | `isfinite(1 / 0.0)` → `false` |
+| `gcd(a, b)`, `lcm(a, b)` | Greatest common divisor, least common multiple | `gcd(12, 18)` → `6` |
+| `factorial(n)` | n!, exact to 20! | `factorial(5)` → `120` |
+| `gamma(x)`, `lgamma(x)` | The gamma function, and the log of its absolute value | `gamma(5)` → `24` |
+
+The names are DuckDB's, so a pipeline reads the same in `generate sql`,
+with one deliberate gap: there is **no one-argument `log`**, because it
+is base 10 in DuckDB and Postgres and natural in Go and Python. Say
+`ln(x)`, `log10(x)`, `log2(x)`, or `log(b, x)`; `log(x)` alone says so.
+Results are floats (`sqrt(4)` is `4.0`, written `4`); `sign`, `gcd`,
+`lcm` and `factorial` are integers; an integer argument is promoted.
+
+**A result that is not a number is absent.** The square root of a
+negative, `ln(0)`, `acos(2)`, `exp(1000)` or a division by zero gives
+NaN or an infinity, and the record has no value for that: the field is
+absent on that row, in exec, in generated Go and in `generate sql`
+(where DuckDB and Postgres would otherwise raise an error; the
+translation guards them). `isnan`/`isinf`/`isfinite` see the value only
+inside the same expression (`isfinite(ln(x))`).
 
 **Examples:**
 ```bash

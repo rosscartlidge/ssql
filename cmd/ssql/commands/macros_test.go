@@ -27,7 +27,7 @@ const testMacros = `# comment and blank lines are skipped
 add3(x int, y int, z int) = x + y + z
 margin(price float, cost float) = (price - cost) / price
 cheap(price float, cost float) = price < cost * 1.1
-pi() = 3.14159
+tau() = 6.28318
 `
 
 func TestParseMacroFile(t *testing.T) {
@@ -36,15 +36,15 @@ func TestParseMacroFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := macroNames(set); !reflect.DeepEqual(got, []string{"add3", "cheap", "margin", "pi"}) {
+	if got := macroNames(set); !reflect.DeepEqual(got, []string{"add3", "cheap", "margin", "tau"}) {
 		t.Errorf("names = %v", got)
 	}
 	m := set["add3"]
 	if m.Line != 3 || m.Body != "x + y + z" || m.Signature() != "add3(x int, y int, z int)" {
 		t.Errorf("add3 = %+v", m)
 	}
-	if set["pi"].Params != nil || set["pi"].String() != "pi() = 3.14159" {
-		t.Errorf("pi = %+v", set["pi"])
+	if set["tau"].Params != nil || set["tau"].String() != "tau() = 6.28318" {
+		t.Errorf("tau = %+v", set["tau"])
 	}
 	if s := set["margin"].String(); s != "margin(price float, cost float) = (price - cost) / price" {
 		t.Errorf("margin = %q", s)
@@ -102,14 +102,14 @@ func TestMacroArityAndCompletion(t *testing.T) {
 	if n, err := macroArity([]string{"s3", "add3"}); err != nil || n != 3 {
 		t.Errorf("add3 arity = %d, %v", n, err)
 	}
-	if n, err := macroArity([]string{"pi"}); err != nil || n != 0 {
-		t.Errorf("pi arity = %d, %v", n, err)
+	if n, err := macroArity([]string{"tau"}); err != nil || n != 0 {
+		t.Errorf("tau arity = %d, %v", n, err)
 	}
-	if _, err := macroArity([]string{"s3", "add4"}); err == nil || !strings.Contains(err.Error(), "unknown macro add4; defined: add3, cheap, margin, pi") {
+	if _, err := macroArity([]string{"s3", "add4"}); err == nil || !strings.Contains(err.Error(), "unknown macro add4; defined: add3, cheap, margin, tau") {
 		t.Errorf("unknown: %v", err)
 	}
 	got, _ := completeMacroName(cf.CompletionContext{Partial: ""})
-	if !reflect.DeepEqual(got, []string{"add3", "cheap", "margin", "pi"}) {
+	if !reflect.DeepEqual(got, []string{"add3", "cheap", "margin", "tau"}) {
 		t.Errorf("complete all = %v", got)
 	}
 	got, _ = completeMacroName(cf.CompletionContext{Partial: "m"})

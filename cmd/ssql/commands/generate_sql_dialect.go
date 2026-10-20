@@ -719,6 +719,19 @@ func sqlUnpivotUnion(src string, ids, values []string, col, val string) string {
 // (7 / 2 = 3.5). DuckDB's `/` is too; Postgres and DataFusion truncate
 // integer operands, so the left operand is cast up there.
 func sqlDivide(left, right string) string {
+	// A division by zero is absent in ssql (the writer makes ±Inf null,
+	// DFC133): DuckDB's inf is nulled by sqlFinite; Postgres and
+	// DataFusion, which raise, divide by NULLIF(right, 0) instead
+	// (DFC153 §4.2 — the DuckDB lane printed inf until 2026-10-20).
+	if sqlDialectCur == dialectDuckDB {
+		return sqlFinite("(" + left + " / " + right + ")")
+	}
+	return "(CAST(" + left + " AS " + sqlFloatType() + ") / NULLIF(" + right + ", 0))"
+}
+
+// sqlDividePlain is the division for a divisor known not to be zero (a
+// literal): DuckDB's `/` is already a double division, the others cast.
+func sqlDividePlain(left, right string) string {
 	if sqlDialectCur == dialectDuckDB {
 		return "(" + left + " / " + right + ")"
 	}

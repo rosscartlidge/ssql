@@ -201,6 +201,18 @@ func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 		return "", err
 	}
 	if n.Operator == "/" {
+		// A non-zero literal divisor cannot make a finite dividend
+		// infinite: the plain form, readable SQL for `x / 2`.
+		switch lit := n.Right.(type) {
+		case *ast.IntegerNode:
+			if lit.Value != 0 {
+				return sqlDividePlain(left, right), nil
+			}
+		case *ast.FloatNode:
+			if lit.Value != 0 {
+				return sqlDividePlain(left, right), nil
+			}
+		}
 		return sqlDivide(left, right), nil
 	}
 	if op, ok := exprBinaryOps[n.Operator]; ok {
@@ -258,6 +270,9 @@ func exprCallToSQL(name string, args []ast.Node) (string, error) {
 		return bucketToSQL(args[0], args[1])
 	}
 	if sql, ok, err := timeFuncToSQL(name, args); ok {
+		return sql, err
+	}
+	if sql, ok, err := mathFuncToSQL(name, args); ok { // DFC153
 		return sql, err
 	}
 	if sqlFunc, ok := exprListFuncs[name]; ok {

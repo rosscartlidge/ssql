@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"math"
 	"os"
+	"reflect"
 	"unsafe"
 
 	"github.com/rosscartlidge/ssql/v4"
@@ -176,15 +178,82 @@ func WriteJSONL[T any](seq iter.Seq[T], filename string) error {
 	return WriteJSONLToWriter(seq, f)
 }
 
-// WriteJSONLToWriter is the [io.Writer] variant of [WriteJSONL].
+// WriteJSONLToWriter is the [io.Writer] variant of [WriteJSONL]. A row
+// holding a float that is not a number (NaN, ±Inf — a square root of a
+// negative, a division by zero) is written with that field as null, the
+// rule every ssql writer follows (DFC133: JSON has no NaN; null is no
+// value), where encoding/json would refuse the whole row.
 func WriteJSONLToWriter[T any](seq iter.Seq[T], w io.Writer) error {
 	bw := bufio.NewWriter(w)
 	enc := json.NewEncoder(bw)
 	enc.SetEscapeHTML(false)
 	for v := range seq {
 		if err := enc.Encode(v); err != nil {
-			return err
+			var unsupported *json.UnsupportedValueError
+			if !errors.As(err, &unsupported) {
+				return err
+			}
+			if err := writeRowNonFinite(bw, v); err != nil {
+				return err
+			}
 		}
 	}
 	return bw.Flush()
+}
+
+// writeRowNonFinite writes one struct row field by field, in declaration
+// order under the json tag names, with a non-finite float (plain or
+// pointer) as null and every other field through encoding/json. Only the
+// slow path of a row encoding/json refused.
+func writeRowNonFinite(bw *bufio.Writer, v any) error {
+	rv := reflect.ValueOf(v)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			_, err := bw.WriteString("null\n")
+			return err
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return fmt.Errorf("WriteJSONL: cannot write a %s holding a value that is not a number", rv.Type())
+	}
+	bw.WriteByte('{')
+	first := true
+	for i := 0; i < rv.NumField(); i++ {
+		f := rv.Type().Field(i)
+		name, skip := jsonFieldName(f)
+		if skip || !f.IsExported() {
+			continue
+		}
+		fv := rv.Field(i)
+		var text []byte
+		switch fv.Kind() {
+		case reflect.Float32, reflect.Float64:
+			if x := fv.Float(); math.IsNaN(x) || math.IsInf(x, 0) {
+				text = []byte("null")
+			}
+		case reflect.Pointer:
+			if k := fv.Type().Elem().Kind(); !fv.IsNil() && (k == reflect.Float32 || k == reflect.Float64) {
+				if x := fv.Elem().Float(); math.IsNaN(x) || math.IsInf(x, 0) {
+					text = []byte("null")
+				}
+			}
+		}
+		if text == nil {
+			var err error
+			if text, err = json.Marshal(fv.Interface()); err != nil {
+				return fmt.Errorf("WriteJSONL: field %s: %w", name, err)
+			}
+		}
+		if !first {
+			bw.WriteByte(',')
+		}
+		first = false
+		nameJSON, _ := json.Marshal(name)
+		bw.Write(nameJSON)
+		bw.WriteByte(':')
+		bw.Write(text)
+	}
+	bw.WriteByte('}')
+	return bw.WriteByte('\n')
 }

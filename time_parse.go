@@ -121,6 +121,9 @@ var ExprCompiledFunctions = func() map[string]bool {
 	for _, p := range TimeParts {
 		m[p] = true
 	}
+	for _, n := range ExprMathFunctionNames { // DFC153
+		m[n] = true
+	}
 	return m
 }()
 

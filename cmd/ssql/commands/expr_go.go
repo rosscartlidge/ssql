@@ -778,6 +778,22 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		res := exprGo{Src: "exprfn.Abs(" + arg.Src + ")", Type: arg.Type, Imports: []string{exprfnImport}}
 		return mergeMeta(res, arg), nil
 	case "round", "floor", "ceil":
+		if name == "round" && len(args) == 2 {
+			// round(x, n): half away from zero at n places (DFC153).
+			x, err := e.node(args[0])
+			if err != nil {
+				return exprGo{}, err
+			}
+			n, err := e.node(args[1])
+			if err != nil {
+				return exprGo{}, err
+			}
+			if !x.Type.numeric() || n.Type != exprGoInt {
+				return exprGo{}, fmt.Errorf("round(x, places) needs a number and an integer, got %s and %s", x.Type, n.Type)
+			}
+			res := exprGo{Src: "exprfn.RoundTo(" + asFloat(x) + ", " + n.Src + ")", Type: exprGoFloat, Imports: []string{exprfnImport}}
+			return mergeMeta(res, x, n), nil
+		}
 		arg, err := one()
 		if err != nil {
 			return exprGo{}, err
@@ -788,6 +804,118 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		fn := map[string]string{"round": "math.Round", "floor": "math.Floor", "ceil": "math.Ceil"}[name]
 		res := exprGo{Src: fn + "(" + asFloat(arg) + ")", Type: exprGoFloat, Imports: []string{"math"}}
 		return mergeMeta(res, arg), nil
+	case "sqrt", "cbrt", "exp", "ln", "log10", "log2",
+		"sin", "cos", "tan", "asin", "acos", "atan",
+		"sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+		"trunc", "gamma", "lgamma", "degrees", "radians":
+		// DFC153: a float of a float; an int argument is promoted. A result
+		// that is not a number (sqrt of a negative, ln(0), overflow) is NaN
+		// or ±Inf, which the record writer makes absent, as in exec.
+		arg, err := one()
+		if err != nil {
+			return exprGo{}, err
+		}
+		if !arg.Type.numeric() {
+			return exprGo{}, fmt.Errorf("%s() needs a numeric argument, got %s", name, arg.Type)
+		}
+		fn := map[string]string{
+			"sqrt": "math.Sqrt", "cbrt": "math.Cbrt", "exp": "math.Exp",
+			"ln": "math.Log", "log10": "math.Log10", "log2": "math.Log2",
+			"sin": "math.Sin", "cos": "math.Cos", "tan": "math.Tan",
+			"asin": "math.Asin", "acos": "math.Acos", "atan": "math.Atan",
+			"sinh": "math.Sinh", "cosh": "math.Cosh", "tanh": "math.Tanh",
+			"asinh": "math.Asinh", "acosh": "math.Acosh", "atanh": "math.Atanh",
+			"trunc": "math.Trunc", "gamma": "math.Gamma",
+			"lgamma": "exprfn.Lgamma", "degrees": "exprfn.Degrees", "radians": "exprfn.Radians",
+		}[name]
+		imp := "math"
+		if strings.HasPrefix(fn, "exprfn.") {
+			imp = exprfnImport
+		}
+		res := exprGo{Src: fn + "(" + asFloat(arg) + ")", Type: exprGoFloat, Imports: []string{imp}}
+		return mergeMeta(res, arg), nil
+	case "atan2", "pow", "log":
+		if name == "log" && len(args) == 1 {
+			return exprGo{}, fmt.Errorf("log takes a base and a value, log(b, x); ln(x) is the natural logarithm, log10(x) base ten")
+		}
+		if len(args) != 2 {
+			return exprGo{}, fmt.Errorf("%s() takes exactly two arguments", name)
+		}
+		a, err := e.node(args[0])
+		if err != nil {
+			return exprGo{}, err
+		}
+		b, err := e.node(args[1])
+		if err != nil {
+			return exprGo{}, err
+		}
+		if !a.Type.numeric() || !b.Type.numeric() {
+			return exprGo{}, fmt.Errorf("%s() needs numeric arguments, got %s and %s", name, a.Type, b.Type)
+		}
+		fn, imp := map[string]string{"atan2": "math.Atan2", "pow": "math.Pow", "log": "exprfn.Log"}[name], "math"
+		if name == "log" {
+			imp = exprfnImport
+		}
+		res := exprGo{Src: fn + "(" + asFloat(a) + ", " + asFloat(b) + ")", Type: exprGoFloat, Imports: []string{imp}}
+		return mergeMeta(res, a, b), nil
+	case "pi":
+		if len(args) != 0 {
+			return exprGo{}, fmt.Errorf("pi() takes no argument")
+		}
+		return exprGo{Src: "math.Pi", Type: exprGoFloat, Imports: []string{"math"}}, nil
+	case "sign":
+		arg, err := one()
+		if err != nil {
+			return exprGo{}, err
+		}
+		if !arg.Type.numeric() {
+			return exprGo{}, fmt.Errorf("sign() needs a numeric argument, got %s", arg.Type)
+		}
+		res := exprGo{Src: "exprfn.Sign(" + arg.Src + ")", Type: exprGoInt, Imports: []string{exprfnImport}}
+		return mergeMeta(res, arg), nil
+	case "isnan", "isinf", "isfinite":
+		arg, err := one()
+		if err != nil {
+			return exprGo{}, err
+		}
+		if !arg.Type.numeric() {
+			return exprGo{}, fmt.Errorf("%s() needs a numeric argument, got %s", name, arg.Type)
+		}
+		var src string
+		switch name {
+		case "isnan":
+			src = "math.IsNaN(" + asFloat(arg) + ")"
+		case "isinf":
+			src = "math.IsInf(" + asFloat(arg) + ", 0)"
+		default:
+			src = "(!math.IsNaN(" + asFloat(arg) + ") && !math.IsInf(" + asFloat(arg) + ", 0))"
+		}
+		res := exprGo{Src: src, Type: exprGoBool, Imports: []string{"math"}}
+		return mergeMeta(res, arg), nil
+	case "gcd", "lcm", "factorial":
+		want := 2
+		if name == "factorial" {
+			want = 1
+		}
+		if len(args) != want {
+			return exprGo{}, fmt.Errorf("%s() takes exactly %d argument(s)", name, want)
+		}
+		var parts []string
+		var kids []exprGo
+		for _, a := range args {
+			v, err := e.node(a)
+			if err != nil {
+				return exprGo{}, err
+			}
+			if v.Type != exprGoInt {
+				return exprGo{}, fmt.Errorf("%s() needs integer arguments, got %s", name, v.Type)
+			}
+			parts = append(parts, v.Src)
+			kids = append(kids, v)
+		}
+		fn := map[string]string{"gcd": "exprfn.GCD", "lcm": "exprfn.LCM", "factorial": "exprfn.Factorial"}[name]
+		res := exprGo{Src: fn + "(" + strings.Join(parts, ", ") + ")", Type: exprGoInt, Imports: []string{exprfnImport}}
+		return mergeMeta(res, kids...), nil
 	case "min", "max":
 		if len(args) != 2 {
 			return exprGo{}, fmt.Errorf("%s() takes exactly two arguments", name)

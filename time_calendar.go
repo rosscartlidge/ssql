@@ -470,5 +470,6 @@ func exprFnAlias(name string) string { return ExprFnAliasPrefix + name }
 // passes — field shadowing, ssql's date(), the calendar functions — so
 // exec, generated code and aggregation expressions agree.
 func ExprStandardOptions() []expr.Option {
-	return append([]expr.Option{ExprFieldShadowing(), ExprDate()}, ExprTimeFunctions()...)
+	opts := append([]expr.Option{ExprFieldShadowing(), ExprDate()}, ExprTimeFunctions()...)
+	return append(opts, ExprMathFunctions()...)
 }

@@ -407,6 +407,21 @@ func TestExprToSQL(t *testing.T) {
 		{`tags[0] == "go"`, `(list_extract(tags, 1) = 'go')`},
 		{`tags[-1] == "go"`, `(list_extract(tags, -1) = 'go')`},
 		{`x in ids`, `list_contains(ids, x)`},
+		// DFC153 numeric functions: a domain-error function in TRY, every
+		// float result guarded finite, ints and predicates bare; a division
+		// by a non-zero literal unguarded, by a field guarded.
+		{`sqrt(pop)`, `(CASE WHEN isfinite(TRY(sqrt(pop))) THEN TRY(sqrt(pop)) END)`},
+		{`exp(pop)`, `(CASE WHEN isfinite(exp(pop)) THEN exp(pop) END)`},
+		{`log(2, pop)`, `(CASE WHEN isfinite(TRY(log(2, pop))) THEN TRY(log(2, pop)) END)`},
+		{`sign(pop)`, `sign(pop)`},
+		{`gcd(pop, qty)`, `gcd(pop, qty)`},
+		{`factorial(qty)`, `factorial(CAST(qty AS INTEGER))`},
+		{`round(price, 2)`, `round(price, 2)`},
+		{`round(price)`, `round(price)`},
+		{`pi()`, `pi()`},
+		{`isfinite(price)`, `isfinite(price)`},
+		{`pop / 2`, `(pop / 2)`},
+		{`pop / qty`, `(CASE WHEN isfinite((pop / qty)) THEN (pop / qty) END)`},
 	}
 	for _, c := range cases {
 		got, err := exprToSQL(c.in)
@@ -1350,5 +1365,39 @@ func TestTranslateFromEmptyZeroSQL(t *testing.T) {
 	q3 := &sqlQuery{}
 	if err := translateFrom(q3, []string{"csv", path, path, "-empty", "zero"}); err == nil || !strings.Contains(err.Error(), "several files") {
 		t.Errorf("two files: %v", err)
+	}
+}
+
+// The numeric functions per dialect (DFC153 §3): names that differ,
+// Postgres's NUMERIC round and domain guards, and the refusals.
+func TestMathFuncDialects(t *testing.T) {
+	defer func() { sqlDialectCur = dialectDuckDB }()
+	sqlDialectCur = dialectPostgres
+	for in, want := range map[string]string{
+		"pow(x, 2)":   `(CASE WHEN power("x", 2) IN ('Infinity', '-Infinity', 'NaN') THEN NULL ELSE power("x", 2) END)`,
+		"round(x, 1)": `round(CAST("x" AS NUMERIC), 1)`,
+		"sqrt(x)":     `(CASE WHEN CASE WHEN "x" >= 0 THEN sqrt("x") END IN ('Infinity', '-Infinity', 'NaN') THEN NULL ELSE CASE WHEN "x" >= 0 THEN sqrt("x") END END)`,
+		"x / y":       `(CAST("x" AS DOUBLE PRECISION) / NULLIF("y", 0))`,
+		"sign(x)":     `sign("x")`,
+	} {
+		got, err := exprToSQL(in)
+		if err != nil || got != want {
+			t.Errorf("postgres %s = %s, %v\n   want %s", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"gamma(x)", "factorial(x)", "isnan(x)"} {
+		if _, err := exprToSQL(in); err == nil || !strings.Contains(err.Error(), "has no postgres translation") {
+			t.Errorf("postgres %s: want the refusal, got %v", in, err)
+		}
+	}
+	sqlDialectCur = dialectDataFusion
+	if got, _ := exprToSQL("sign(x)"); got != `signum("x")` {
+		t.Errorf("datafusion sign = %s", got)
+	}
+	if _, err := exprToSQL("lgamma(x)"); err == nil || !strings.Contains(err.Error(), "has no datafusion translation") {
+		t.Errorf("datafusion lgamma: want the refusal, got %v", err)
+	}
+	if _, err := exprToSQL("log(x)"); err == nil || !strings.Contains(err.Error(), "ln(x) is the natural logarithm") {
+		t.Errorf("one-argument log: want the naming message, got %v", err)
 	}
 }

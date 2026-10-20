@@ -2,6 +2,7 @@ package typed
 
 import (
 	"bytes"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -137,5 +138,27 @@ func TestReadJSONLSkipsSchemaHeader(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("safe reader yielded %d rows, want 2", n)
+	}
+}
+
+// A row holding a float that is not a number is written with that field
+// as null (DFC133), in field order, where encoding/json refuses the row.
+func TestWriteJSONLNonFinite(t *testing.T) {
+	type row struct {
+		A float64  `json:"a"`
+		B *float64 `json:"b"`
+		C string   `json:"c"`
+		d int
+	}
+	nan := math.NaN()
+	two := 2.0
+	rows := []row{{A: math.Inf(1), B: &nan, C: "x", d: 1}, {A: 1.5, B: &two, C: "y"}, {A: math.Inf(-1), B: nil, C: "z"}}
+	var buf bytes.Buffer
+	if err := WriteJSONLToWriter(slices.Values(rows), &buf); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\"a\":null,\"b\":null,\"c\":\"x\"}\n{\"a\":1.5,\"b\":2,\"c\":\"y\"}\n{\"a\":null,\"b\":null,\"c\":\"z\"}\n"
+	if buf.String() != want {
+		t.Errorf("got\n%s\nwant\n%s", buf.String(), want)
 	}
 }

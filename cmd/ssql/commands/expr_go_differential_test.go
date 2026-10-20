@@ -44,6 +44,15 @@ func TestExprGoDifferential(t *testing.T) {
 		"price * 2",
 		"pop ** 2",
 		"price ^ 2",
+		// DFC153 numeric functions: the rows hold a negative, a zero and
+		// ±2.5, so domain errors (NaN), overflow and half-away rounding
+		// are compared too.
+		"sqrt(pop)", "sqrt(price)", "cbrt(price)", "exp(pop)", "ln(price)", "log10(pop)", "log2(qty)", "log(2, pop)",
+		"pow(price, qty)", "sin(price)", "cos(pop)", "tan(price)", "asin(price)", "acos(pop)", "atan(price)", "atan2(price, pop)",
+		"sinh(price)", "cosh(pop)", "tanh(price)", "asinh(price)", "acosh(pop)", "atanh(price)",
+		"degrees(price)", "radians(pop)", "pi() * qty", "sign(price)", "sign(pop)", "trunc(price)",
+		"round(price, 1)", "round(pop, 1)", "isnan(sqrt(pop))", "isinf(1.0 / qty)", "isfinite(ln(price))",
+		"gcd(pop, qty)", "lcm(pop, qty)", "factorial(qty)", "gamma(price)", "lgamma(price)",
 		"-pop",
 		`city + "!"`,
 		// §2b comparisons
@@ -233,6 +242,10 @@ func norm(v any) any {
 		return int64(x)
 	case float32:
 		return float64(x)
+	case float64:
+		if math.IsNaN(x) {
+			return "NaN" // NaN != NaN; two NaNs agree (sqrt of a negative, DFC153)
+		}
 	}
 	return v
 }

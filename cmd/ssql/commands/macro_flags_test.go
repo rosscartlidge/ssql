@@ -123,7 +123,7 @@ func TestExpandClauseMacrosErrors(t *testing.T) {
 		flags map[string]any
 		want  string
 	}{
-		{"unknown", map[string]any{"-set-macro": []any{macroEntry("s", "nope", "a")}}, "unknown macro nope; defined: add3, cheap, margin, pi"},
+		{"unknown", map[string]any{"-set-macro": []any{macroEntry("s", "nope", "a")}}, "unknown macro nope; defined: add3, cheap, margin, tau"},
 		{"count", map[string]any{"-set-macro": []any{macroEntry("s", "add3", "a", "b")}}, "-set-macro add3: takes 3 field(s) add3(x int, y int, z int), got 2"},
 		{"empty field", map[string]any{"-if-macro": []any{macroEntry("", "cheap", "price", "")}}, "a field name is required for each parameter"},
 		{"two macros share a parameter", map[string]any{
@@ -158,8 +158,8 @@ func TestLowerMacroArgv(t *testing.T) {
 			[]string{"-if", "k", "eq", "1", "+if-expr", "price < cost * 1.1", "-param-field", "price", "float", "p", "-param-field", "cost", "float", "c"},
 		},
 		{
-			[]string{"-set-macro", "k", "pi"},
-			[]string{"-set-expr", "k", "3.14159"},
+			[]string{"-set-macro", "k", "tau"},
+			[]string{"-set-expr", "k", "6.28318"},
 		},
 		{
 			[]string{"-set", "t", "v"},

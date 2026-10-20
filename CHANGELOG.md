@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Numeric functions** ([DFC153](doc/research/dfc153_numeric_functions.md)): `sqrt cbrt exp ln log10 log2 log(b, x) pow`, `sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh`, `degrees radians pi()`, `sign trunc round(x, places)`, `isnan isinf isfinite`, `gcd lcm factorial`, `gamma lgamma` — DuckDB's set under DuckDB's names, in every lane: the expression VM, native record and typed codegen, and `generate sql` (Postgres and DataFusion refuse the ones they lack by design). No one-argument `log`: it is base 10 in SQL and natural in Go, so `ln`, `log10`, `log2` or `log(b, x)`. A result that is not a number is absent in every lane; the SQL translation wraps the domain errors DuckDB and Postgres would raise (`TRY`, domain guards) and nulls an infinity. `ssql functions -category math` and `doc/EXPRESSIONS.md` list them
+
+### Fixed
+
+- `generate sql`: a division by zero is absent, as in exec and generated Go; the DuckDB lane printed `inf` (DFC153 §4.2)
+- `typed.WriteJSONLToWriter` writes a NaN or infinite float as `null` (DFC133) instead of refusing the row, so a library-mode program that divides by zero still writes its output
+
 ## [4.121.0] - 2026-10-20
 
 ### Added

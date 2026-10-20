@@ -1921,6 +1921,90 @@ var equivCases = []EquivCase{
 			{"name": "Grace", "age": 33, "dept": "Marketing", "salary": 78000, "city": "Chicago", "level": 6, "hire_date": "2017-11-05", "status": "inactive", "pay": 156000, "who": "Grace", "tag": 1},
 		},
 	},
+	// ---- DFC153 numeric functions: Goldens from Python's math module
+	// (half-away rounding to 6 places, so every engine's double agrees).
+	{
+		Name:     "expr_math_roots_logs",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -set-expr s 'round(sqrt(level), 6)' -set-expr c 'round(cbrt(level), 6)' -set-expr e 'round(exp(level), 6)' -set-expr l 'round(ln(level), 6)' -set-expr l10 'round(log10(level), 6)' -set-expr l2 'round(log2(level), 6)' -set-expr lb 'round(log(3, level), 6)' -set-expr p 'round(pow(level, 1.5), 6)' | {{.bin}} include name s c e l l10 l2 lb p | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "s": 2.645751, "c": 1.912931, "e": 1096.633158, "l": 1.94591, "l10": 0.845098, "l2": 2.807355, "lb": 1.771244, "p": 18.520259},
+			{"name": "Bob", "s": 2, "c": 1.587401, "e": 54.59815, "l": 1.386294, "l10": 0.60206, "l2": 2, "lb": 1.26186, "p": 8},
+			{"name": "Carol", "s": 3, "c": 2.080084, "e": 8103.083928, "l": 2.197225, "l10": 0.954243, "l2": 3.169925, "lb": 2, "p": 27},
+			{"name": "David", "s": 2.236068, "c": 1.709976, "e": 148.413159, "l": 1.609438, "l10": 0.69897, "l2": 2.321928, "lb": 1.464974, "p": 11.18034},
+			{"name": "Eve", "s": 2.44949, "c": 1.817121, "e": 403.428793, "l": 1.791759, "l10": 0.778151, "l2": 2.584963, "lb": 1.63093, "p": 14.696938},
+			{"name": "Frank", "s": 2.828427, "c": 2, "e": 2980.957987, "l": 2.079442, "l10": 0.90309, "l2": 3, "lb": 1.892789, "p": 22.627417},
+			{"name": "Grace", "s": 2.44949, "c": 1.817121, "e": 403.428793, "l": 1.791759, "l10": 0.778151, "l2": 2.584963, "lb": 1.63093, "p": 14.696938},
+		},
+	},
+	{
+		Name:     "expr_math_trig",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -set-expr si 'round(sin(level), 6)' -set-expr co 'round(cos(level), 6)' -set-expr ta 'round(tan(level), 6)' -set-expr a2 'round(atan2(level, age), 6)' -set-expr d 'round(degrees(level), 6)' -set-expr r 'round(radians(age), 6)' -set-expr pi 'round(pi(), 6)' -set-expr sh 'round(sinh(level / 10.0), 6)' -set-expr th 'round(tanh(level / 10.0), 6)' -set-expr ash 'round(asinh(level), 6)' | {{.bin}} include name si co ta a2 d r pi sh th ash | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "si": 0.656987, "co": 0.753902, "ta": 0.871448, "a2": 0.197396, "d": 401.070457, "r": 0.610865, "pi": 3.141593, "sh": 0.758584, "th": 0.604368, "ash": 2.644121},
+			{"name": "Bob", "si": -0.756802, "co": -0.653644, "ta": 1.157821, "a2": 0.141897, "d": 229.183118, "r": 0.488692, "pi": 3.141593, "sh": 0.410752, "th": 0.379949, "ash": 2.094713},
+			{"name": "Carol", "si": 0.412118, "co": -0.91113, "ta": -0.452316, "a2": 0.211093, "d": 515.662016, "r": 0.733038, "pi": 3.141593, "sh": 1.026517, "th": 0.716298, "ash": 2.893444},
+			{"name": "David", "si": -0.958924, "co": 0.283662, "ta": -3.380515, "a2": 0.159913, "d": 286.478898, "r": 0.541052, "pi": 3.141593, "sh": 0.521095, "th": 0.462117, "ash": 2.312438},
+			{"name": "Eve", "si": -0.279415, "co": 0.96017, "ta": -0.291006, "a2": 0.204018, "d": 343.774677, "r": 0.506145, "pi": 3.141593, "sh": 0.636654, "th": 0.53705, "ash": 2.49178},
+			{"name": "Frank", "si": 0.989358, "co": -0.1455, "ta": -6.799711, "a2": 0.17594, "d": 458.366236, "r": 0.785398, "pi": 3.141593, "sh": 0.888106, "th": 0.664037, "ash": 2.776472},
+			{"name": "Grace", "si": -0.279415, "co": 0.96017, "ta": -0.291006, "a2": 0.179853, "d": 343.774677, "r": 0.575959, "pi": 3.141593, "sh": 0.636654, "th": 0.53705, "ash": 2.49178},
+		},
+	},
+	{
+		// The integer-valued ones: sign, gcd, lcm, factorial are ints in
+		// every engine; trunc is a float like floor; round(x, 2).
+		Name:     "expr_math_ints",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -set-expr sg 'sign(level - 6)' -set-expr tr 'trunc(age / 10.0)' -set-expr r2 'round(age / 7.0, 2)' -set-expr g 'gcd(level, age)' -set-expr lc 'lcm(level, 4)' -set-expr f 'factorial(level)' | {{.bin}} include name sg tr r2 g lc f | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "sg": 1, "tr": 3, "r2": 5, "g": 7, "lc": 28, "f": 5040},
+			{"name": "Bob", "sg": -1, "tr": 2, "r2": 4, "g": 4, "lc": 4, "f": 24},
+			{"name": "Carol", "sg": 1, "tr": 4, "r2": 6, "g": 3, "lc": 36, "f": 362880},
+			{"name": "David", "sg": -1, "tr": 3, "r2": 4.43, "g": 1, "lc": 20, "f": 120},
+			{"name": "Eve", "sg": 0, "tr": 2, "r2": 4.14, "g": 1, "lc": 12, "f": 720},
+			{"name": "Frank", "sg": 1, "tr": 4, "r2": 6.43, "g": 1, "lc": 8, "f": 40320},
+			{"name": "Grace", "sg": 0, "tr": 3, "r2": 4.71, "g": 3, "lc": 12, "f": 720},
+		},
+		Skip: map[string]string{"postgres": "Postgres has no factorial: generate sql refuses by design (DFC153 §3)"},
+	},
+	{
+		// A result that is not a number is absent in every lane: sqrt of
+		// a negative, ln(0), acos out of range, exp overflow. DuckDB and
+		// Postgres RAISE on the domain errors; the translation wraps them
+		// (TRY / domain guards) and nulls an infinity (DFC153 §4.2).
+		Name:     "expr_math_domain",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -set-expr a 'sqrt(0 - level)' -set-expr b 'ln(level - level)' -set-expr c 'acos(level)' -set-expr d 'exp(level * 1000)' | {{.bin}} include name a b c d | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"name": "Alice"}, {"name": "Bob"}, {"name": "Carol"}, {"name": "David"}, {"name": "Eve"}, {"name": "Frank"}, {"name": "Grace"}},
+	},
+	{
+		// Division by zero is absent too — exec and the Go lanes already
+		// (the JSON writer makes ±Inf null, DFC133; null reads as absent,
+		// DFC124); the DuckDB lane printed `inf` until 2026-10-20.
+		Name:     "expr_div_zero_absent",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -set-expr r 'age / (level - level)' -set-expr q 'age / (level - 5)' | {{.bin}} include name r q | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "q": 17.5}, {"name": "Bob", "q": -28}, {"name": "Carol", "q": 10.5}, {"name": "David"},
+			{"name": "Eve", "q": 29}, {"name": "Frank", "q": 15}, {"name": "Grace", "q": 33},
+		},
+	},
+	{
+		// DuckDB's own: gamma and lgamma; the other dialects refuse by design.
+		Name:     "expr_math_duckdb_only",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -set-expr g 'round(gamma(level / 2.0), 6)' -set-expr lg 'round(lgamma(level), 6)' | {{.bin}} include name g lg | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "g": 3.323351, "lg": 6.579251},
+			{"name": "Bob", "g": 1, "lg": 1.791759},
+			{"name": "Carol", "g": 11.631728, "lg": 10.604603},
+			{"name": "David", "g": 1.32934, "lg": 3.178054},
+			{"name": "Eve", "g": 2, "lg": 4.787492},
+			{"name": "Frank", "g": 6, "lg": 8.525161},
+			{"name": "Grace", "g": 2, "lg": 4.787492},
+		},
+	},
 	{
 		Name:     "time_parts_all_lanes",
 		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr h 'hour(ts)' -set-expr d 'day(ts)' -set-expr w 'week(ts)' -set-expr dw 'dow(ts)' -set-expr q 'quarter(ts)' -set-expr e 'epoch(ts)' | {{.bin}} include id h d w dw q e | {{.bin}} sort id`,

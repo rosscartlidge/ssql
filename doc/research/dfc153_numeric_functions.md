@@ -226,7 +226,32 @@ and differential corpus, then SQL with the `sqlFinite` wrapper and
 the `/` fix, then the equivalence cases, then the docs. Each step
 leaves the tree green.
 
-## 8. Questions for Ross
+## 8. Questions for Ross — answered 2026-10-20
+
+Plan mode, all three as recommended: no one-argument `log`; `gamma`,
+`lgamma`, `factorial` in, with Postgres and DataFusion refusing by
+design; the non-finite guard on `/` as well.
+
+## 9. Built (2026-10-20)
+
+As §5: `expr_math.go` (root, `ExprMathFunctions`, appended to
+`ExprStandardOptions`; the names in `ExprCompiledFunctions` so a call
+is a function and a bare name a field), `exprfn` helpers (`RoundTo`,
+`Sign`, `Log`, `Lgamma`, `Degrees`, `Radians`, `GCD`, `LCM`,
+`Factorial`), transpiler cases in `expr_go.go`, `generate_sql_math.go`
+(`mathFuncToSQL`, `sqlFinite`; `sqlDivide` guarded), the catalog, the
+reference. Gates as §6: `TestExprToGo` rows, the differential corpus
+(two NaNs now agree in its normaliser), six equivalence cases with
+Goldens from Python's math, `TestWriteJSONLNonFinite`. Found on the
+way: the library writer `typed.WriteJSONLToWriter` refused a row with
+±Inf ("json: unsupported value"); it now writes the field as null, the
+DFC133 rule, through a field-by-field fallback on the row encoding/json
+refuses. DuckDB's `factorial` takes INTEGER, so its argument is cast.
+The SQL is verbose where guards nest (`trunc(age / 10.0)` guards the
+division and the result); correct, and the reader has the pipeline in
+the header comment.
+
+Questions as they were asked:
 
 1. **`log`**: no one-argument form, `ln` natural, `log10`/`log2`
    explicit, `log(b, x)` with a base — as above? The alternative is

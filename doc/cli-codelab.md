@@ -521,6 +521,16 @@ ssql from employees.csv | ssql update -set-expr band 'salary > 90000 ? "high" : 
 ssql from employees.csv | ssql rename -as dept department | ssql cast -type level float | ssql include name department level | ssql limit 3 | ssql to table
 ```
 
+Expressions have the numeric functions DuckDB has — `sqrt`, `ln`,
+`log10`, `log(b, x)`, `pow`, the trig set, `round(x, places)`, `gcd`,
+`factorial` and more (`ssql functions -category math`). A result that is
+not a number (`sqrt` of a negative, `ln(0)`, a division by zero) is
+absent on that row rather than an error:
+
+```bash
+ssql from employees.csv | ssql update -set-expr root 'round(sqrt(salary), 2)' -set-expr lg 'round(ln(salary), 3)' -set-expr per_level 'round(salary / level, 1)' | ssql include name root lg per_level | ssql limit 3 | ssql to table
+```
+
 `time` is a type too. A date in a CSV is just text until you say
 otherwise; cast it and `where` compares instants, `sort` is
 chronological whatever form each row was written in, and expressions get
