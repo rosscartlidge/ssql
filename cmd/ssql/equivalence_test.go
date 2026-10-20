@@ -3104,6 +3104,34 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// Without -order a frame unbounded both ways is the whole partition
+		// in every lane, so it has a SQL translation (no ORDER BY, no
+		// frame dependence on arrival order).
+		Name:     "window_no_order_whole_partition",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -preceding -1 -following -1 -sum salary tot -count n | {{.bin}} include name tot n`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Alice", "tot": 288000, "n": 3}, {"name": "Carol", "tot": 288000, "n": 3}, {"name": "Eve", "tot": 288000, "n": 3},
+			{"name": "Bob", "tot": 147000, "n": 2}, {"name": "Frank", "tot": 147000, "n": 2},
+			{"name": "David", "tot": 150000, "n": 2}, {"name": "Grace", "tot": 150000, "n": 2},
+		},
+	},
+	{
+		// Without -order the default frame runs over the rows as they
+		// arrive (file order here). SQL cannot see arrival order: DuckDB
+		// made the whole partition the frame (found 2026-10-20), so
+		// generate sql refuses by design; the go lanes must agree with exec.
+		Name:     "window_no_order_running_arrival",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -sum salary run -row-number rn | {{.bin}} include name run rn`,
+		Ordered:  false,
+		Golden: []map[string]any{
+			{"name": "Alice", "run": 95000, "rn": 1}, {"name": "Bob", "run": 65000, "rn": 1}, {"name": "Carol", "run": 200000, "rn": 2},
+			{"name": "David", "run": 72000, "rn": 1}, {"name": "Eve", "run": 288000, "rn": 3}, {"name": "Frank", "run": 147000, "rn": 2},
+			{"name": "Grace", "run": 150000, "rn": 2},
+		},
+		Skip: map[string]string{"duckdb": "window -sum without -order has no SQL translation (the frame runs in arrival order, which SQL cannot see) — refuses loudly by design"},
+	},
+	{
 		// LAG/LEAD at the partition edge have no value: exec omits the
 		// field, SQL yields NULL — the canonical form must treat them alike.
 		Name:     "window_offset_by_salary",

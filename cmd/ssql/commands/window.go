@@ -49,7 +49,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			FieldsFromFlag("").
 			Accumulate().
 			Local().
-			Help("Order field (repeatable, like SQL ORDER BY)").
+			Help("Order field (repeatable, like SQL ORDER BY). Without it the frame runs over the rows as they arrive (an upstream sort's order, or the file's), which SQL cannot see: generate sql refuses an order-dependent window without -order (a frame unbounded both ways, -preceding -1 -following -1, is the whole partition and needs none)").
 			Done().
 
 		Flag("-desc").

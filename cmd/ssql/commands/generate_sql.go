@@ -1889,6 +1889,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 		rangeF      string
 		funcs       []string // pre-built SQL function expressions like "ROW_NUMBER() AS rn"
 		registryFns []string // registry aggregate names used, for the dialect check once the frame is known
+		orderFns    []string // flags whose value is the row's place in the partition (ranking, offsets, first/last)
+		frameFns    []string // flags that aggregate over the frame
 	}
 
 	clauses := []windowClause{{preceding: -1, following: 0}}
@@ -1905,6 +1907,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 					extra = args[i+2]
 				}
 				cur.registryFns = append(cur.registryFns, d.fn)
+				cur.frameFns = append(cur.frameFns, d.flag)
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s AS %s", d.sql(quoteIdent(args[i+1]), extra), quoteIdent(args[i+n])))
 				i += n + 1
 			} else {
@@ -1975,6 +1978,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 		// Ranking: 1-arg → result
 		case "-row-number":
 			if i+1 < len(args) {
+				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("ROW_NUMBER() AS %s", quoteIdent(args[i+1])))
 				i += 2
 			} else {
@@ -1982,6 +1986,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 		case "-rank":
 			if i+1 < len(args) {
+				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("RANK() AS %s", quoteIdent(args[i+1])))
 				i += 2
 			} else {
@@ -1989,6 +1994,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 		case "-dense-rank":
 			if i+1 < len(args) {
+				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("DENSE_RANK() AS %s", quoteIdent(args[i+1])))
 				i += 2
 			} else {
@@ -1996,6 +2002,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 		case "-percent-rank":
 			if i+1 < len(args) {
+				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("PERCENT_RANK() AS %s", quoteIdent(args[i+1])))
 				i += 2
 			} else {
@@ -2004,6 +2011,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 		// 1-arg result: -count result
 		case "-count":
 			if i+1 < len(args) {
+				cur.frameFns = append(cur.frameFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("COUNT(*) AS %s", quoteIdent(args[i+1])))
 				i += 2
 			} else {
@@ -2011,6 +2019,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 		case "-cume-dist":
 			if i+1 < len(args) {
+				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("CUME_DIST() AS %s", quoteIdent(args[i+1])))
 				i += 2
 			} else {
@@ -2018,6 +2027,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 		case "-count-field":
 			if i+2 < len(args) {
+				cur.frameFns = append(cur.frameFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("COUNT(%s) AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
 				i += 3
 			} else {
@@ -2025,6 +2035,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 		case "-nth-value":
 			if i+3 < len(args) {
+				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("NTH_VALUE(%s, %s) AS %s", quoteIdent(args[i+1]), args[i+2], quoteIdent(args[i+3])))
 				i += 4
 			} else {
@@ -2033,6 +2044,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 		// 4-arg: -lag-default/-lead-default field n default result
 		case "-lag-default", "-lead-default":
 			if i+4 < len(args) {
+				cur.orderFns = append(cur.orderFns, args[i])
 				sqlFunc := strings.ToUpper(strings.TrimSuffix(args[i][1:], "-default"))
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s, %s, %s) AS %s", sqlFunc, quoteIdent(args[i+1]), args[i+2], sqlTypedLiteral(windowDefaultLiteral(args[i+3])), quoteIdent(args[i+4])))
 				i += 5
@@ -2042,6 +2054,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 		// 2-arg: -ntile n result
 		case "-ntile":
 			if i+2 < len(args) {
+				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("NTILE(%s) AS %s", args[i+1], quoteIdent(args[i+2])))
 				i += 3
 			} else {
@@ -2050,6 +2063,11 @@ func translateWindow(q *sqlQuery, args []string) error {
 		// 2-arg: -func field result
 		case "-sum", "-avg", "-min", "-max", "-first", "-last":
 			if i+2 < len(args) {
+				if args[i] == "-first" || args[i] == "-last" {
+					cur.orderFns = append(cur.orderFns, args[i])
+				} else {
+					cur.frameFns = append(cur.frameFns, args[i])
+				}
 				sqlFunc := windowSQLFunc(args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s) AS %s", sqlFunc, quoteIdent(args[i+1]), quoteIdent(args[i+2])))
 				i += 3
@@ -2059,6 +2077,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 		// 3-arg: -lag/-lead field n result
 		case "-lag", "-lead":
 			if i+3 < len(args) {
+				cur.orderFns = append(cur.orderFns, args[i])
 				sqlFunc := strings.ToUpper(args[i][1:])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s, %s) AS %s", sqlFunc, quoteIdent(args[i+1]), args[i+2], quoteIdent(args[i+3])))
 				i += 4
@@ -2083,6 +2102,15 @@ func translateWindow(q *sqlQuery, args []string) error {
 		for _, fn := range c.registryFns {
 			if err := aggDialectRefusal(fn, true, bounded); err != nil {
 				return err
+			}
+		}
+		if len(c.orderBy) == 0 {
+			whole := c.preceding < 0 && c.following < 0 && c.rangeP == "" && c.rangeF == ""
+			switch {
+			case len(c.orderFns) > 0:
+				return windowNeedsOrder(c.orderFns[0], "its value is the row's place among the rows as they arrive")
+			case len(c.frameFns) > 0 && !whole:
+				return windowNeedsOrder(c.frameFns[0], "the frame runs over the rows as they arrive")
 			}
 		}
 		overParts := []string{}
@@ -2119,6 +2147,17 @@ func translateWindow(q *sqlQuery, args []string) error {
 				if c.desc {
 					quoted[j] += " DESC"
 				}
+			}
+			overParts = append(overParts, "ORDER BY "+strings.Join(quoted, ", "))
+		} else if len(c.partitionBy) > 0 {
+			// A whole-partition frame without -order: order by the partition
+			// keys, a no-op (every row of the partition ties) that keeps
+			// DuckDB v1.5.0 off its no-ORDER-BY window path, which fails over
+			// a CSV read ("CSVReaderSerialize not implemented"; parquet is
+			// fine). Valid in every dialect.
+			quoted := make([]string, len(c.partitionBy))
+			for j, f := range c.partitionBy {
+				quoted[j] = quoteIdent(f)
 			}
 			overParts = append(overParts, "ORDER BY "+strings.Join(quoted, ", "))
 		}
@@ -2242,6 +2281,19 @@ func buildRangeFrameSQL(rangeP, rangeF string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("RANGE BETWEEN %s AND %s", start, end), nil
+}
+
+// windowNeedsOrder is the refusal for a window clause whose result depends
+// on row order but has no -order. exec and the go lanes take the rows in
+// arrival order (an upstream sort's, or the file's), which SQL cannot see:
+// DuckDB made the whole partition the frame instead, 70.25 on every row
+// where exec had 40, 48.75, 70.25 (found 2026-10-20 by a pruning case;
+// every window case in the gate had -order). A frame unbounded both ways
+// is the whole partition in both, so it translates without -order. The
+// "has no DIALECT translation" wording is what the dialect lanes of the
+// equivalence gate read as a refusal by design.
+func windowNeedsOrder(flag, why string) error {
+	return fmt.Errorf("window %s without -order has no %s translation (%s, which SQL cannot see): add -order FIELD, or -preceding -1 -following -1 for the whole partition, or use generate go", flag, sqlDialectCur, why)
 }
 
 func buildFrameSQL(preceding, following int) string {

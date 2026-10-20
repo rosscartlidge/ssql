@@ -168,6 +168,58 @@ func TestTranslateUnionSQL(t *testing.T) {
 // TestUpdateNewColumnSQL: with header-seeded column tracking, `update -set`
 // on a field NOT in the source becomes an added select expression
 // (`SELECT *, 3 AS x`) — `* REPLACE` on a missing column is a binder error.
+// TestWindowWithoutOrderSQL: a window whose result depends on row order
+// (a frame that is not the whole partition, or a ranking / offset /
+// first-last function) has no SQL translation without -order — exec runs
+// over the rows as they arrive, DuckDB over the whole partition (found
+// 2026-10-20). A frame unbounded both ways translates without -order.
+func TestWindowWithoutOrderSQL(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := dir + "/data.csv"
+	if err := os.WriteFile(csvPath, []byte("id,dept,salary\n1,a,10\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assemble := func(window string) (string, error) {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		for _, c := range []string{"ssql from csv " + csvPath, window} {
+			if err := enc.Encode(lib.CodeFragment{Type: "stmt", Command: c}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return assembleSQL(&buf)
+	}
+	for _, w := range []string{
+		"ssql window -partition dept -sum salary tot",
+		"ssql window -sum salary tot",
+		"ssql window -partition dept -preceding 2 -following -1 -avg salary a",
+		"ssql window -partition dept -row-number rn",
+		"ssql window -partition dept -preceding -1 -following -1 -first salary lo",
+		"ssql window -partition dept -preceding -1 -following -1 -lag salary 1 prev",
+		"ssql window -partition dept -count n + -order salary -sum salary tot",
+	} {
+		if _, err := assemble(w); err == nil || !strings.Contains(err.Error(), "without -order has no duckdb translation") {
+			t.Errorf("%s: want the -order refusal, got %v", w, err)
+		}
+	}
+	sql, err := assemble("ssql window -partition dept -preceding -1 -following -1 -sum salary tot -count n")
+	if err != nil {
+		t.Fatalf("whole-partition frame without -order: %v", err)
+	}
+	// ORDER BY the partition keys is a no-op that keeps DuckDB v1.5.0 off
+	// its no-ORDER-BY window path (fails over a CSV read).
+	if !strings.Contains(sql, "OVER (PARTITION BY dept ORDER BY dept ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)") {
+		t.Errorf("whole-partition frame: got\n%s", sql)
+	}
+	sql, err = assemble("ssql window -preceding -1 -following -1 -count n")
+	if err != nil || !strings.Contains(sql, "OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)") {
+		t.Errorf("unpartitioned whole frame: %v\n%s", err, sql)
+	}
+	if _, err := assemble("ssql window -partition dept -order salary -sum salary tot -row-number rn"); err != nil {
+		t.Errorf("with -order: %v", err)
+	}
+}
+
 func TestUpdateNewColumnSQL(t *testing.T) {
 	dir := t.TempDir()
 	csvPath := dir + "/data.csv"

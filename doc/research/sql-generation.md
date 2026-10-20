@@ -2,7 +2,7 @@
 
 Reference: DFC067
 Created: 2026-03-20
-Last modified: 2026-03-20
+Last modified: 2026-10-20
 
 [Back to Index](./README.md)
 
@@ -62,14 +62,22 @@ LIMIT 10;
 ssql's window functions were designed with SQL semantics, so they map cleanly:
 
 ```bash
-ssql window -partition dept -sum salary running_total -rank rank_col
+ssql window -partition dept -order hire_date -sum salary running_total -rank rank_col
 ```
 ```sql
 SELECT *,
-  SUM(salary) OVER (PARTITION BY dept) AS running_total,
-  RANK() OVER (PARTITION BY dept) AS rank_col
+  SUM(salary) OVER (PARTITION BY dept ORDER BY hire_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_total,
+  RANK() OVER (PARTITION BY dept ORDER BY hire_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS rank_col
 FROM ...
 ```
+
+The frame is always rendered (SQL's default with an ORDER BY is RANGE,
+which includes peers). `-order` is required for SQL whenever the result
+depends on row order — a running frame, a ranking, an offset, first/last:
+without it exec runs over the rows as they arrive, which SQL cannot see
+(DuckDB makes the whole partition the frame), so `generate sql` refuses
+loudly. A frame unbounded both ways (`-preceding -1 -following -1`) is
+the whole partition in both and translates without `-order`.
 
 With frames:
 ```bash
