@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.121.2] - 2026-10-20
+
 ### Fixed
 
 - `include` refuses a field listed twice (`include a b a`): exec and record codegen kept the first occurrence, `generate sql` emitted the column twice, and typed codegen did not compile ("AKind redeclared"). One loud message in the command, before any lane sees it
