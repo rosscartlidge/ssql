@@ -510,6 +510,15 @@ ssql from lines app.log | ssql extract -field line -re '^(?P<ts>\S+) (?P<lvl>\w+
 ssql from lines app.log | ssql extract -field line -re '^(?P<ts>\S+) (?P<lvl>\w+)' -skip | ssql group-by lvl -count n | ssql sort -desc n | ssql to table
 ```
 
+And when there is no data yet, make some: `from range N` is N rows of
+an int `n` (from 1; `-start`, `-step`, `-field` change what the rows
+hold) and every other column is an expression on it — a fixture, a
+demo or a benchmark source that needs no file, in every lane:
+
+```bash
+ssql from range 5 | ssql update -set-expr sq 'n * n' -set-expr kind 'n % 2' | ssql to table
+```
+
 Derive new columns with `update`; `rename` and `cast` tidy names and
 types:
 
@@ -1191,7 +1200,8 @@ a partitioned dataset is worked through in
 Sources: `from FILE` (csv/tsv/json/jsonl/parquet/arrow/xlsx/wav by
 extension; `.log`/`.txt` as lines) · `from csv|tsv|jsonl|parquet|lines FILE…`
 · `from ssh HOST PATH` · `from catalog FILE` (`-if` prunes on catalog
-columns, `-shard-field` tags origin) — flags `-records`, `-sample N`,
+columns, `-shard-field` tags origin) · `from range N` (N rows of an int
+`n`; `-start`, `-step`, `-field`) — flags `-records`, `-sample N`,
 `-last N`, `-columns` (parquet), `-source`, `--` pushdown.
 
 Filter / shape: `where` (`-if`, `+if`, `+` between clauses, `-not`, `-invert`) · `include` · `exclude` · `rename` · `cast` ·

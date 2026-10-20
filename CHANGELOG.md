@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Row generator `from range N`** ([DFC154](doc/research/dfc154_range_source.md)): N rows of one int column `n` = 1 … N (`-start S`, `-step K`, `-field NAME`), a source that reads nothing — fixtures, demos and benchmarks become pipelines every lane runs and the equivalence gate pins. exec and `generate go` record share `ssql.RangeRecords`; typed gets `typed.Range`/`typed.RangeParallel` (the first shard-aware synthetic source, the row struct rendered inline for `-field`); `generate sql` renders DuckDB's and DataFusion's `range()` and Postgres's `generate_series`; `-records` answers the count; schema mode types `n` as int for Ctrl-O.
+
 ## [4.121.2] - 2026-10-20
 
 ### Fixed

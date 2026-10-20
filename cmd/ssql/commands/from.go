@@ -32,6 +32,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	registerFromCSV(fromCmd)
 	registerFromTSV(fromCmd)
 	registerFromLines(fromCmd)
+	registerFromRange(fromCmd)
 	registerFromJSON(fromCmd)
 	registerFromJSONL(fromCmd)
 	registerFromArrow(fromCmd)

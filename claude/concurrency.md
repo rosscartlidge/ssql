@@ -420,6 +420,27 @@ These are all trivially associative and commutative — exactly the property we 
 
 See [`doc/research/typed-groupby-parallel-proposal.md`](../doc/research/typed-groupby-parallel-proposal.md) for the full design rationale, future-work list, and benchmark methodology.
 
+## 14. Synthetic sources: a shard-aware generator, not a slice (DFC154)
+
+`typed.RangeParallel[T](start, step, count, n, mk)` (`typed/range.go`) is
+the first source whose rows are computed rather than read. The sharding
+is `ParallelFromSlice`'s (round-up chunking, later shards clamped empty,
+`n <= 0` → GOMAXPROCS, `n` capped at the count), but each shard is a
+closure over its own `[lo, hi)` interval that yields `mk(start + j*step)`
+— no slice is built and nothing is shared between shards, so the race
+gate is trivial and memory is constant for any count. The same shape
+fits any generator whose rows derive from their offsets (a seeded
+`hash(n)` fixture, a time spine): give the shard its offset, never a
+materialised slice to feed `ParallelFromSlice`.
+
+It is generic over the row with a constructor, not a fixed struct,
+because `from range -field NAME` names the one column and the typed
+readers and writers take a column's name from the struct tag
+(`typed/io.go`): a fixed `typed.N{N int64 \`ssql:"n"\`}` would write
+`n` whatever the flag said. The generated program renders a one-field
+`RangeRow` inline (`lib.RenderStructDefWithComment`) and passes
+`func(v int64) RangeRow { return RangeRow{I: v} }`.
+
 ## See Also
 
 - [`doc/research/typed-concurrency-proposal.md`](../doc/research/typed-concurrency-proposal.md) — design proposal + measured PoC results in §9a

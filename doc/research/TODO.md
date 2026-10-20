@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-10-20
+Last modified: 2026-10-21
 
 [Back to Index](./README.md)
 
@@ -105,7 +105,8 @@ Tracked issues and feature gaps discovered during development.
 
 ## Next up (refreshed 2026-09-01 — build-ready first, then polish, then parked)
 
-- [ ] **`from range N` — a row generator every lane can make** (proposed 2026-10-20, [DFC154](./dfc154_range_source.md)): N rows of an int `n` (`-start`, `-step`, `-field`), a counting Seq in exec and record, `typed.Range`/`RangeParallel`, `FROM range(…)` in SQL; fixtures become pipelines the equivalence gate can pin. Three questions for Ross in §8; a seeded `hash(n)` function is the follow-up (§6).
+- [x] **`from range N` — a row generator every lane can make** — SHIPPED 2026-10-21 ([DFC154](./dfc154_range_source.md)): N rows of an int `n` (`-start`, `-step`, `-field`), `ssql.RangeRecords` for exec and record, `typed.Range`/`RangeParallel` (generic over the row, since `-field` names the column), `range()`/`generate_series` in SQL, `-records`, schema mode; five equivalence cases with hand Goldens, the first with no fixture file.
+- [ ] **Seeded `hash(n)` integer function in every lane** (2026-10-21, DFC154 §6): fixtures with numeric spread want one hash every lane computes identically — DuckDB's `hash` is its own and Go's `maphash` is seeded per process. Pick FNV-1a or xxhash, implement in `exprfn` (the DFC153 six places), render in SQL as the same arithmetic where an engine can, `dialectRefuse` where it cannot; an equivalence case with a Golden from an independent implementation.
 
 - [x] **Numeric functions — DuckDB's set in every lane** — SHIPPED 2026-10-20 ([DFC153](./dfc153_numeric_functions.md)): 35 functions in the VM (`expr_math.go`), the transpiler, `generate sql` (`generate_sql_math.go`, with `sqlFinite` and `TRY`/domain guards; the guard on `/` too), the catalog and the reference; six equivalence cases with Goldens from Python's math. Found and fixed on the way: `typed.WriteJSONLToWriter` refused a row holding ±Inf (now null, DFC133).
 - [ ] **Typed lane: a constant `0.0 / 0.0` is a Go compile error** (2026-10-20, DFC153 §4.4): the transpiler emits the literal division and Go folds it ("invalid operation: division by zero"); field-based divisions are fine. Emit a constant float division through a helper, or evaluate the constant at transpile time.

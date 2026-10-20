@@ -103,6 +103,9 @@ data, err := ssql.ReadParquetColumns("file.parquet", []string{"dept", "salary"})
 // Text lines: one record per line with line_number (from 1) and line
 lines, err := ssql.ReadLines("app.log")
 
+// A row generator (no input): count records of one int64 field, start, start+step, …
+nums := ssql.RangeRecords(1, 1, 1000, "n")
+
 // WAV audio: records with sample and amplitude in [-1, 1] (stereo mixed to mono), plus metadata
 data, meta, err := ssql.ReadWAV("audio.wav")
 if err != nil {

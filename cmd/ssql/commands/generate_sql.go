@@ -583,6 +583,8 @@ func translateFrom(q *sqlQuery, args []string) error {
 		q.fromClause = fmt.Sprintf("(SELECT row_number() OVER () AS line_number, line FROM read_csv(%s, columns={'line': 'VARCHAR'}, header=false, delim='\\x01', quote='', escape='', parallel=false))", quoteFile(file))
 		q.columns = []string{"line_number", "line"}
 		return nil
+	case "range":
+		return translateRangeSource(q, args[1:])
 	case "parquet":
 		files, columns := parquetSourceArgs(args[1:])
 		return translateParquetSource(q, files, columns)
@@ -790,6 +792,39 @@ func translateFrom(q *sqlQuery, args []string) error {
 		src := duckReadCSV([]string{q.csvSource}, q.csvDelim, extra)
 		q.fromClause = fmt.Sprintf("(SELECT * EXCLUDE (__rn) FROM (SELECT * FROM (SELECT *, row_number() OVER () AS __rn FROM %s) ORDER BY __rn DESC LIMIT %s) ORDER BY __rn)", src, lastN)
 	}
+	return nil
+}
+
+// translateRangeSource renders `from range N [-start S] [-step K]
+// [-field NAME]` (DFC154) as each engine's row generator. N is a row
+// count: DuckDB's and DataFusion's range(start, stop, step) are
+// half-open, so stop = start + N*step for either sign of step;
+// Postgres's generate_series is inclusive, so its end is
+// start + (N-1)*step, and N = 0 needs a WHERE false (with a negative
+// step that end lies past start and would yield rows).
+func translateRangeSource(q *sqlQuery, args []string) error {
+	o, err := parseRangeArgs(args)
+	if err != nil {
+		return err
+	}
+	col := quoteIdent(o.field)
+	switch sqlDialectCur {
+	case dialectPostgres:
+		where := ""
+		if o.count == 0 {
+			where = " WHERE false"
+		}
+		q.fromClause = sqlSubquery(fmt.Sprintf("(SELECT %s FROM generate_series(%d, %d, %d) AS t(%s)%s)",
+			col, o.start, o.start+(o.count-1)*o.step, o.step, col, where))
+	case dialectDataFusion:
+		q.fromClause = fmt.Sprintf("(SELECT value AS %s FROM range(%d, %d, %d))",
+			col, o.start, o.start+o.count*o.step, o.step)
+	default:
+		q.fromClause = fmt.Sprintf("(SELECT %s FROM range(%d, %d, %d) AS t(%s))",
+			col, o.start, o.start+o.count*o.step, o.step, col)
+	}
+	q.columns = []string{o.field}
+	sqlColumnKinds[o.field] = "int"
 	return nil
 }
 

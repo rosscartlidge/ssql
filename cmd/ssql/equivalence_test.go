@@ -2694,6 +2694,45 @@ var equivCases = []EquivCase{
 		Ordered:  true,
 	},
 	{
+		// from range (DFC154): N rows of n = 1 … N, in every lane with
+		// no input file — the first cases with no fixture at all.
+		Name:     "range_identity",
+		Pipeline: `{{.bin}} from range 5`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"n": 1}, {"n": 2}, {"n": 3}, {"n": 4}, {"n": 5}},
+	},
+	{
+		// N is a count; -start/-step say what the rows hold (a negative
+		// step too); -field names the column in every lane (the typed
+		// struct is rendered inline, not a fixed typed.N).
+		Name:     "range_start_step_field",
+		Pipeline: `{{.bin}} from range 4 -start 10 -step -3 -field i | {{.bin}} sort -desc i`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"i": 10}, {"i": 7}, {"i": 4}, {"i": 1}},
+	},
+	{
+		// Every other column is an expression on n: cycling categories
+		// and a shaped series, filtered — the fixture-as-pipeline shape.
+		Name:     "range_expr_shapes",
+		Pipeline: `{{.bin}} from range 6 -start 0 | {{.bin}} update -set-expr k 'n % 3' -set-expr sq 'n * n' | {{.bin}} where -if k ne 1 | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"n": 0, "k": 0, "sq": 0}, {"n": 2, "k": 2, "sq": 4}, {"n": 3, "k": 0, "sq": 9}, {"n": 5, "k": 2, "sq": 25}},
+	},
+	{
+		// N = 0: empty in every lane (Postgres's inclusive
+		// generate_series needs the WHERE false guard).
+		Name:     "range_zero_rows",
+		Pipeline: `{{.bin}} from range 0 | {{.bin}} update -set-expr sq 'n * n'`,
+		Golden:   []map[string]any{},
+	},
+	{
+		// A date spine: the calendar functions compose with the generator.
+		Name:     "range_date_spine",
+		Pipeline: `{{.bin}} from range 3 -start 0 | {{.bin}} update -set-expr day 'date_add(date("2026-01-01"), n, "day")' | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"n": 0, "day": "2026-01-01T00:00:00Z"}, {"n": 1, "day": "2026-01-02T00:00:00Z"}, {"n": 2, "day": "2026-01-03T00:00:00Z"}},
+	},
+	{
 		// extract -skip: named groups → string fields, source field
 		// dropped, non-matching line gone — every lane incl. DuckDB's
 		// regexp_extract + regexp_matches.

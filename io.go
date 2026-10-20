@@ -1325,6 +1325,22 @@ func ReadLines(filename string) (iter.Seq[Record], error) {
 	return seq, nil
 }
 
+// RangeRecords yields count records of one int64 field: start, start+step,
+// … — a row generator for fixtures, demos and benchmarks that needs no
+// input (DFC154). Records share one schema. Backs `ssql from range N`;
+// every other column is an expression on the number (`update -set-expr`).
+// count <= 0 yields nothing; step may be negative.
+func RangeRecords(start, step, count int64, field string) iter.Seq[Record] {
+	return func(yield func(Record) bool) {
+		schema := NewSchema([]string{field})
+		for i := int64(0); i < count; i++ {
+			if !yield(NewRecordFromSchema(schema, []any{start + i*step})) {
+				return
+			}
+		}
+	}
+}
+
 // ReadLinesFromReader yields one record per text line: line_number
 // (1-based, like sed/awk/grep -n) and line. Records share one schema.
 // Backs `ssql from lines`; pair with ExtractRecords to turn text into

@@ -2492,6 +2492,8 @@ func getFromFileAndFormat(cmd *pipelineCmd) (string, string) {
 			return cmd.RawArgs[1], cmd.RawArgs[0]
 		}
 		return "", cmd.RawArgs[0]
+	case "range":
+		return "", "range" // a generator, not a file: no source rule applies
 	default:
 		return cmd.RawArgs[0], ""
 	}

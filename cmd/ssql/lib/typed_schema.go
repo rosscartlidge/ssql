@@ -227,11 +227,21 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune, o
 // RenderStructDef returns Go source for a struct declaration matching
 // the given TypedSchema. Field tags use ssql:"colname".
 func RenderStructDef(s *TypedSchema) string {
+	return RenderStructDefWithComment(s, fmt.Sprintf("%s is the row type inferred from the input's header and a sample of its rows.\n"+
+		"A value that does not fit a field's type is a fatal typed.ReadError naming the\n"+
+		"row: fix the data, or set the column type with `-type COL TYPE` on the from stage\n"+
+		"and regenerate.", s.TypeName))
+}
+
+// RenderStructDefWithComment is RenderStructDef with the struct's doc
+// comment supplied (one or more lines, no `//`): a synthetic source
+// (`from range`) says what its struct is instead of "inferred from the
+// input's header".
+func RenderStructDefWithComment(s *TypedSchema, comment string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "// %s is the row type inferred from the input's header and a sample of its rows.\n", s.TypeName)
-	b.WriteString("// A value that does not fit a field's type is a fatal typed.ReadError naming the\n")
-	b.WriteString("// row: fix the data, or set the column type with `-type COL TYPE` on the from stage\n")
-	b.WriteString("// and regenerate.\n")
+	for _, line := range strings.Split(comment, "\n") {
+		b.WriteString("// " + line + "\n")
+	}
 	fmt.Fprintf(&b, "type %s struct {\n", s.TypeName)
 	maxName := 0
 	maxType := 0

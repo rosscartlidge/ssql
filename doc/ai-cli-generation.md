@@ -47,6 +47,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `from json [FILE]` / `from jsonl [FILE]` | a JSON array / one object per line; stdin when no FILE | `from jsonl -skip-invalid` drops bad lines and reports the count |
 | `from parquet FILE` / `from arrow FILE` / `from xlsx FILE` | columnar and spreadsheet files | `from xlsx -sheet NAME` |
 | `from lines FILE` | raw text: one record per line with `line_number` and `line` | pair with `extract` |
+| `from range N` | no input: N rows of one int column `n` = 1 … N | `-start S`, `-step K` (any non-zero int), `-field NAME`; every other column is an expression on `n` (`update -set-expr`) — a fixture or benchmark source |
 | `from wav FILE` | audio samples: `sample`, `amplitude` | for the signal commands |
 | `from ssh HOST PATH` | a remote file over SSH | `-- where … + group-by …` pushes stages to the host |
 | `from catalog FILE.csv` | many shards listed in a catalog (host, path) | `-if date ge 2026-01-01` prunes shards by metadata; `-shard-field F` tags each record's shard; `-- where … + group-by …` pushes stages into every shard |

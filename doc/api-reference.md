@@ -1438,9 +1438,10 @@ a field set. `CoerceFieldTypes` converts the named fields of every record
 strictly (a fraction into int, a number into bool or an unparsable string
 is a `*CellError`); absent fields stay absent.
 
-### Lines
+### Lines and ranges
 
 ```go
+func RangeRecords(start, step, count int64, field string) iter.Seq[Record]   // count records of one int64 field: start, start+step, … (`from range N`); no input
 func ReadLines(filename string) (iter.Seq[Record], error)   // one record per text line: line_number (from 1) and line
 func ReadLinesFromReader(r io.Reader) iter.Seq[Record]
 func ReadLinesSafe(filename string) iter.Seq2[Record, error]
@@ -1460,6 +1461,9 @@ for r := range lines {
 ```
 
 Pair with [`ExtractRecords`](#extract) to parse the lines.
+`RangeRecords` is the row generator behind `ssql from range N`: a
+fixture or benchmark source that reads nothing — derive every other
+field from the number with `Update`.
 
 ### Command output
 

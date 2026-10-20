@@ -521,6 +521,20 @@ writes the same text as the record lane. Serial (line boundaries are sequential)
 parallel form. `extract` in a typed pipeline synthesizes its output struct
 from the kept fields plus one string per named group.
 
+```go
+func Range[T any](start, step, count int64, mk func(int64) T) iter.Seq[T]
+func RangeParallel[T any](start, step, count int64, n int, mk func(int64) T) Stream[T]   // n <= 0: GOMAXPROCS shards
+```
+
+The typed form of `ssql from range N`: `count` rows built by `mk` from
+the numbers `start, start+step, …`. `mk` makes the row type, so the
+generated program renders a one-field struct named by `-field`
+(`RangeRow{N: v}`) and one runtime serves every column name.
+`RangeParallel` is the first synthetic source in the package: the count
+is split across the shards and each shard counts its own interval — no
+slice is built, nothing is shared — the pattern for any generator whose
+rows derive from their offsets.
+
 ## Aggregation
 
 ```go

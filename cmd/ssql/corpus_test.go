@@ -401,6 +401,16 @@ func TestPipelineCorpus(t *testing.T) {
 			Contains:   []string{"does not match"},
 		},
 		{
+			// from range (DFC154): a source with no input — record mode
+			// calls ssql.RangeRecords; typed and parallel get the dual
+			// template (typed.RangeParallel, typed.Range as the serial
+			// alternative) with the RangeRow struct rendered inline.
+			Name:     "range_source_every_mode",
+			Pipeline: `{{.bin}} from range 6 -start 0 -step 5 -field v | {{.bin}} update -set-expr half 'v / 2' | {{.bin}} where -if v gt 10 | {{.bin}} sort v | {{.bin}} to csv`,
+			Contains: []string{"v,half", "15,7.5", "25,12.5"},
+			Excludes: []string{"10,5"},
+		},
+		{
 			// The typed `to table FIELDS` sink emitted ctx.Stdout(), a name
 			// that does not exist in a generated program (found 2026-10-06).
 			Name:     "to_table_selected_fields",
@@ -606,7 +616,7 @@ func TestPipelineCorpus(t *testing.T) {
 		{
 			// fill is record-shaped (typed cannot represent missing);
 			// typed/parallel pipelines re-enter record mode via the boundary.
-			Name:     "fill_default_typed_boundary",
+			Name: "fill_default_typed_boundary",
 			// -default names existing columns: exec refuses a -default on a
 			// missing field (DFC133), and since 2026-10-14 so does the
 			// record lane (`bonus` here used to pass silently).
