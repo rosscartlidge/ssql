@@ -63,6 +63,13 @@ func RegisterInclude(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			if len(fields) == 0 {
 				return fmt.Errorf("no fields specified")
 			}
+			// A field listed twice is a typo, and the lanes disagreed on
+			// it: exec and record kept the first, DuckDB emitted the column
+			// twice, typed did not compile ("AKind redeclared"; found by
+			// Ross, 2026-10-20). Loud here, before any lane sees it.
+			if dup := firstRepeated(fields); dup != "" {
+				return fmt.Errorf("include: field %q is listed twice", dup)
+			}
 
 			// Check if generation is enabled (flag or env var)
 			if shouldGenerate(generate) {
@@ -168,4 +175,16 @@ func generateIncludeCode(fields []string) error {
 	// Create stmt fragment
 	frag := lib.NewStmtFragment(outputVar, inputVar, code, nil, getCommandString())
 	return lib.WriteCodeFragment(frag)
+}
+
+// firstRepeated is the first name that occurs twice in the list, or "".
+func firstRepeated(names []string) string {
+	seen := map[string]bool{}
+	for _, n := range names {
+		if seen[n] {
+			return n
+		}
+		seen[n] = true
+	}
+	return ""
 }

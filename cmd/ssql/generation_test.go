@@ -1291,6 +1291,25 @@ func TestTableGeneration(t *testing.T) {
 }
 
 // TestIncludeGeneration tests code generation for the include command
+// A field listed twice in include is refused in the command, so every
+// lane sees the same thing: until 2026-10-20 exec and record kept the
+// first, DuckDB emitted the column twice and typed did not compile
+// ("AKind redeclared"; Ross's `include a_kind log_kind a_kind`).
+func TestIncludeDuplicateFieldRefused(t *testing.T) {
+	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test_incdup", ".")
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build ssql: %v", err)
+	}
+	defer os.Remove("/tmp/ssql_test_incdup")
+	for _, mode := range []string{"", "record", "typed"} {
+		cmd := exec.Command("bash", "-c", `printf 'a,b\n1,2\n' | SSQL_MODE=`+mode+` /tmp/ssql_test_incdup from csv /dev/stdin | SSQL_MODE=`+mode+` /tmp/ssql_test_incdup include a b a`)
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), `include: field "a" is listed twice`) {
+			t.Errorf("mode %q: want the duplicate refusal, got err=%v out=%s", mode, err, out)
+		}
+	}
+}
+
 func TestIncludeGeneration(t *testing.T) {
 	buildCmd := exec.Command("go", "build", "-o", "/tmp/ssql_test", ".")
 	if err := buildCmd.Run(); err != nil {
