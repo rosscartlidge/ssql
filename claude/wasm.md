@@ -118,3 +118,10 @@ gh workflow run Deploy --ref main \
   -f DEPLOY_TO_GITHUB_PAGES=true \
   -f GITHUB_RELEASE=false
 ```
+
+The Deploy workflow's build job is pinned to `runs-on: ubuntu-24.04`
+(ssql-terminal 209589a, 2026-10-20): on `ubuntu-latest`, which moved to
+ubuntu-26.04 that day, the i386 docker build's `apt-get update` cannot
+resolve deb.debian.org ("Temporary failure resolving") and the build
+fails before the image is made. Three identical failures, green on the
+pin. Revisit the pin when 26.04's qemu/i386 resolver works.
