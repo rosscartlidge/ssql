@@ -227,6 +227,41 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 		existing[strings.ToLower(f.Name)] = i
 	}
 
+	// A NEW field is on every output row only if an unconditional clause
+	// sets it and every clause before that one sets it too: a row takes
+	// the first clause whose condition it meets, and a row that meets none
+	// gets no set at all. Otherwise exec leaves the field ABSENT on the
+	// other rows (DFC124 §3), which a typed struct cannot hold — the zero
+	// value sat there until 2026-10-20 — so record mode, which can.
+	uncond := -1
+	for i, c := range clauses {
+		if len(c.conds) == 0 && len(c.exprConds) == 0 {
+			uncond = i
+			break
+		}
+	}
+	for _, c := range clauses {
+		for _, s := range c.sets {
+			lower := strings.ToLower(s.field)
+			if _, ok := existing[lower]; ok {
+				continue
+			}
+			everywhere := uncond >= 0
+			for k := 0; everywhere && k <= uncond; k++ {
+				found := false
+				for _, t := range clauses[k].sets {
+					if strings.ToLower(t.field) == lower {
+						found = true
+					}
+				}
+				everywhere = found
+			}
+			if !everywhere {
+				return false, fmt.Sprintf("new field %q is set only under a condition: absent on the rows no clause sets it on, which a typed struct cannot hold (DFC124 §3)", s.field), nil
+			}
+		}
+	}
+
 	// Track new fields added during this update so we don't double-add.
 	newFieldTypes := make(map[string]string) // lowercase CSV name → GoType
 	for _, c := range clauses {

@@ -431,11 +431,22 @@ func (p ExprParam) sqlLiteral() string {
 }
 
 // sqlClauseParams reads the -param triples of a stage's argv, one map per
-// clause (clauses split on sep, the command's separator), for the SQL
-// translators, which walk argv themselves. Values are validated exactly as
-// the interpreter validates them; a clause's expressions are checked for
-// use of every parameter by the interpreter, not here.
-func sqlClauseParams(args []string, sep string) ([]map[string]ExprParam, error) {
+// clause (clauses split on the command's separators: autocli's "+", and
+// the bare "-" older pipelines wrote — update's translator was given "-"
+// alone until 2026-10-20 and read a second "+" clause's -param into the
+// first), for the SQL translators, which walk argv themselves. Values are
+// validated exactly as the interpreter validates them; a clause's
+// expressions are checked for use of every parameter by the interpreter,
+// not here.
+func sqlClauseParams(args []string, seps ...string) ([]map[string]ExprParam, error) {
+	isSep := func(a string) bool {
+		for _, sep := range seps {
+			if a == sep {
+				return true
+			}
+		}
+		return false
+	}
 	var out []map[string]ExprParam
 	var list, fieldList []any
 	flush := func() error {
@@ -468,9 +479,11 @@ func sqlClauseParams(args []string, sep string) ([]map[string]ExprParam, error) 
 			}
 			fieldList = append(fieldList, map[string]any{"name": args[i+1], "type": args[i+2], "field": args[i+3]})
 			i += 3
-		case sep:
-			if err := flush(); err != nil {
-				return nil, err
+		default:
+			if isSep(args[i]) {
+				if err := flush(); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

@@ -1828,11 +1828,59 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from parquet {{.data}}/pq/b.parquet | {{.bin}} update -if region eq north -set-field who name | {{.bin}} include id who | {{.bin}} sort id`,
 		Ordered:  true,
 		Golden:   []map[string]any{{"id": 1}, {"id": 5, "who": "bob"}, {"id": 9}},
-		Skip: map[string]string{
-			"duckdb":      "a conditional set of a new column has no SQL translation (absent on unmatched rows) — refuses loudly by design",
-			"go-typed":    "typed mode has no missing: a new column set under a condition is the zero value on the other rows (DFC124 §3)",
-			"go-parallel": "typed mode has no missing: a new column set under a condition is the zero value on the other rows (DFC124 §3)",
+		// The typed lanes fall back to record mode for this shape (a typed
+		// struct cannot hold the absent value), so they agree with exec.
+		Skip: map[string]string{"duckdb": "a conditional set of a new column has no SQL translation (absent on unmatched rows) — refuses loudly by design"},
+	},
+	{
+		// An unconditional final clause sets the new column too, so every
+		// row has a value: typed stays typed, SQL is an exact CASE.
+		Name:     "update_conditional_new_column_else",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -if dept eq Sales -set-field who name + -set who none | {{.bin}} include name who | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "who": "none"}, {"name": "Bob", "who": "Bob"}, {"name": "Carol", "who": "none"}, {"name": "David", "who": "none"},
+			{"name": "Eve", "who": "none"}, {"name": "Frank", "who": "Frank"}, {"name": "Grace", "who": "none"},
 		},
+	},
+	{
+		// Three clauses on an EXISTING column, first match wins: the SQL
+		// lane folded every clause into the first one's CASE until
+		// 2026-10-20 (it knew only "-" as the separator), so Y never
+		// applied — no multi-clause update case ran in the duckdb lane.
+		Name:     "update_three_clauses_existing_column",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -if dept eq Sales -set status sales + -if dept eq Marketing -set status mkt + -set status other | {{.bin}} include name status | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "status": "other"}, {"name": "Bob", "status": "sales"}, {"name": "Carol", "status": "other"}, {"name": "David", "status": "mkt"},
+			{"name": "Eve", "status": "other"}, {"name": "Frank", "status": "sales"}, {"name": "Grace", "status": "mkt"},
+		},
+	},
+	{
+		// Per-clause -param across "+": the SQL translator split update's
+		// parameters on "-" until 2026-10-20, so the second clause had none
+		// and its expression named an unknown column. Distinct names: the
+		// same name in two clauses is a separate, open Go-lane bug (TODO).
+		Name:     "update_clause_params_sql",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -if-expr 'salary > big' -param big int 90000 -set status hi + -if-expr 'salary > mid' -param mid int 70000 -set status mid + -set status lo | {{.bin}} include name status | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "status": "hi"}, {"name": "Bob", "status": "lo"}, {"name": "Carol", "status": "hi"}, {"name": "David", "status": "mid"},
+			{"name": "Eve", "status": "mid"}, {"name": "Frank", "status": "mid"}, {"name": "Grace", "status": "mid"},
+		},
+	},
+	{
+		// The first clause does not set who, so Sales rows (first match)
+		// never get it: absent in exec and record; typed falls back to
+		// record for it; SQL refuses by design.
+		Name:     "update_conditional_new_column_gap",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -if dept eq Sales -set tag 1 + -if dept eq Marketing -set-field who name + -set who none | {{.bin}} include name who | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "who": "none"}, {"name": "Bob"}, {"name": "Carol", "who": "none"}, {"name": "David", "who": "David"},
+			{"name": "Eve", "who": "none"}, {"name": "Frank"}, {"name": "Grace", "who": "Grace"},
+		},
+		Skip: map[string]string{"duckdb": "a new column set only under a condition (a gap before the else) has no SQL translation — refuses loudly by design"},
 	},
 	{
 		// The new columns of one update clause land in the order the user

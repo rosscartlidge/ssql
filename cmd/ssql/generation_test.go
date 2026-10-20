@@ -783,8 +783,10 @@ func TestNegatedConditionGeneration(t *testing.T) {
 			wantStrs: []string{`return !((r.Age > 25))`},
 		},
 		{
+			// An EXISTING column: a new column set only under a condition
+			// sends typed to the record fallback (absent on the other rows).
 			name:     "typed update +if negates",
-			cmdLine:  `export SSQL_MODE=typed && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update +if age gt 25 -set tag young | /tmp/ssql_test generate go +O`,
+			cmdLine:  `export SSQL_MODE=typed && /tmp/ssql_test from ` + tmpFile + ` | /tmp/ssql_test update +if age gt 25 -set name young | /tmp/ssql_test generate go +O`,
 			wantStrs: []string{`if !((r.Age > 25)) {`},
 		},
 		{

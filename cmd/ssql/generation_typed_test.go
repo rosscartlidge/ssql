@@ -859,3 +859,28 @@ func TestTypedFromJSONL(t *testing.T) {
 		}
 	}
 }
+
+// A new field set only under a condition is absent on the other rows in
+// exec (DFC124 §3); a typed struct cannot hold that, so typed falls back
+// to record mode for the stage, with the reason. An unconditional final
+// clause that sets it too keeps the stage typed.
+func TestTypedUpdateConditionalNewFieldFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "e.csv")
+	if err := os.WriteFile(csvPath, []byte("name,dept\nBob,Sales\nAmy,Eng\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	explain := func(update string) string {
+		return equivShell(t, "explain", "export SSQL_MODE=typed && "+bin+" from csv "+csvPath+" | "+bin+" update "+update+" | "+bin+" to csv | "+bin+" generate go +O -explain 2>&1 || true")
+	}
+	if got := explain("-if dept eq Sales -set-field who name"); !strings.Contains(got, `record fallback (new field "who" is set only under a condition`) {
+		t.Errorf("conditional new field should fall back with a reason; explain:\n%s", got)
+	}
+	if got := explain("-if dept eq Sales -set dept x + -if dept eq Eng -set who x + -set who y"); !strings.Contains(got, `record fallback (new field "who"`) {
+		t.Errorf("a gap before the else should fall back; explain:\n%s", got)
+	}
+	if got := explain("-if dept eq Sales -set-field who name + -set who none"); strings.Contains(got, "record fallback") {
+		t.Errorf("an else that sets the field keeps the stage typed; explain:\n%s", got)
+	}
+}

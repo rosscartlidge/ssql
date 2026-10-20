@@ -812,7 +812,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 		currentNot = false
 	}
 
-	clauseParams, err := sqlClauseParams(args, "+")
+	clauseParams, err := sqlClauseParams(args, "+", "-")
 	if err != nil {
 		return fmt.Errorf("where: %w", err)
 	}
@@ -862,8 +862,9 @@ func translateWhere(q *sqlQuery, args []string) error {
 			}
 			currentAnd = append(currentAnd, cond)
 			i += 2
-		case "+":
-			// OR separator between clauses
+		case "+", "-":
+			// OR separator between clauses (autocli's "+"; a bare "-" from
+			// older pipelines, which update's walk accepts too)
 			closeGroup()
 			clauseIdx++
 			i++
@@ -2455,7 +2456,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		clauseIdx++
 	}
 
-	clauseParams, err := sqlClauseParams(args, "-")
+	clauseParams, err := sqlClauseParams(args, "+", "-") // the separators the clause walk below knows
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
@@ -2563,8 +2564,13 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				valueSQL: valueSQL,
 			})
 			i += 4
-		case "-":
-			// Clause separator: the next clause applies only where this one did not
+		case "+", "-":
+			// Clause separator (autocli's "+"; a bare "-" from older pipelines):
+			// the next clause applies only where this one did not. Until
+			// 2026-10-20 only "-" was known here, so `update -if … -set name X
+			// + -set name Y` folded the else into the first clause's CASE
+			// and DuckDB never applied Y (found by the conditional-new-column
+			// else case; the where translator knew "+" all along).
 			closeClause()
 			i++
 		default:
@@ -2625,13 +2631,14 @@ func translateUpdate(q *sqlQuery, args []string) error {
 				elseSQL = c.valueSQL
 			}
 		}
-		if isNew && len(whens) > 0 {
-			// exec leaves the field ABSENT on non-matching rows; SQL columns
-			// are rectangular, so there is no faithful translation.
-			return fmt.Errorf("update: a conditional set (-set, -set-field, -set-expr, -set-bucket) of new field %q has no SQL translation (unmatched rows would need a value)", field)
-		}
 		if isNew && elseSQL == quoteIdent(field) {
-			return fmt.Errorf("update: -set on new field %q needs an unconditional value for SQL translation", field)
+			// No ELSE: some row gets no value. exec leaves the field ABSENT
+			// there (DFC124 §3); SQL columns are rectangular, so there is no
+			// faithful translation. With an ELSE — an unconditional clause
+			// sets the field and every clause before it does too — every
+			// row has a value and the CASE is exact (until 2026-10-20 any
+			// WHEN arm on a new field was refused, that shape included).
+			return fmt.Errorf("update: new field %q is set only under a condition (absent on the other rows), which has no SQL translation: give it an unconditional value in a final clause (+ -set %s VALUE), or use generate go", field, field)
 		}
 		exprSQL := elseSQL
 		if len(whens) > 0 {

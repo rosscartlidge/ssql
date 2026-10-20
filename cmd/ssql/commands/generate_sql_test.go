@@ -253,6 +253,21 @@ func TestUpdateNewColumnSQL(t *testing.T) {
 	if _, err := assembleSQL(&buf); err == nil {
 		t.Error("conditional -set on new column: expected error, got none")
 	}
+	// With an unconditional else every row has a value: an exact CASE.
+	sql = assembleFromCommands(t, "ssql from csv "+csvPath, "ssql update -if pop gt 5 -set x 3 + -set x 0")
+	if !strings.Contains(sql, "CASE WHEN pop > 5 THEN 3 ELSE 0 END AS x") || strings.Contains(sql, "REPLACE") {
+		t.Errorf("conditional set with else on a new column: got\n%s", sql)
+	}
+	// An earlier clause that does not set it leaves a gap: refused.
+	buf.Reset()
+	for _, c := range []string{"ssql from csv " + csvPath, "ssql update -if pop gt 5 -set city x + -if pop gt 1 -set x 3 + -set x 0"} {
+		if err := enc.Encode(lib.CodeFragment{Type: "stmt", Command: c}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := assembleSQL(&buf); err == nil || !strings.Contains(err.Error(), "set only under a condition") {
+		t.Errorf("gap before the else: want the refusal, got %v", err)
+	}
 
 	// Unknown schema (unreadable source) assumes columns exist — REPLACE.
 	sql = assembleFromCommands(t, "ssql from csv missing-file.csv", "ssql update -set x 3")
@@ -1199,7 +1214,7 @@ func TestParquetSourceSeedsColumns(t *testing.T) {
 	if err != nil || !strings.Contains(sql, "* REPLACE (region AS name)") {
 		t.Errorf("existing column keeps REPLACE: %v\n%s", err, sql)
 	}
-	if _, err := assemble("ssql update -if region eq east -set-field who name"); err == nil || !strings.Contains(err.Error(), "conditional set") {
+	if _, err := assemble("ssql update -if region eq east -set-field who name"); err == nil || !strings.Contains(err.Error(), "set only under a condition") {
 		t.Errorf("conditional set of a new column: want the refusal, got %v", err)
 	}
 }
