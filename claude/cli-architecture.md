@@ -33,6 +33,23 @@ Use `StaticCompleter` for known options, `FileCompleter` with patterns for file 
 ### 4a. A Flag Whose Arity the Command Decides: `.Repeat()` (autocli ≥ v4.22.0)
 When the number of values a flag takes depends on an earlier argument — `-set-macro FIELD NAME ARG...` takes as many fields as the macro NAME has parameters — put `.Repeat(f)` on the LAST `Arg`: `f(prev []string) (int, error)` sees the fixed args typed so far and returns the count (its error is the flag's parse error, e.g. "unknown macro add4; defined: …"). The parser then consumes exactly that many words, stores them as a `[]any` under the Arg's name, and completion reuses the Arg's completer at each position and offers flag names after the last. Never a variadic tail that guesses where the values end, and never one flag per name registered from a config file (a user file must not rewrite a command's grammar). Example: `commands/macro_flags.go` (DFC152).
 
+### 4b. Flags of One Clause Apply in the Order Written: `Clause.Order` (autocli ≥ v4.23.0)
+
+`Clause.Flags` is a map per flag, so a handler that reads `-set`, then
+`-set-expr`, then `-set-field` applies them in whatever order it chose
+— and four backends chose four orders for `update`'s new columns until
+2026-10-20. autocli records each clause's local flag occurrences in
+`Clause.Order` (one canonical name per occurrence, `+` spellings
+included). Read it through ONE shared helper per command — `clauseSets`
+(`commands/update_sets.go`) walks `Order` with a counter per flag into
+that flag's accumulated list and yields the assignments in sequence;
+exec, record and typed each loop over that list. A hand-built clause
+with no `Order` (tests) falls back to list order. A command that lowers
+one flag into another must keep `Order` true: `expandClauseMacros`
+inserts a lowered `-set-macro` at its written position among the
+`-set-expr` entries (`insertFlagEntry`) and rewrites `Order` to match.
+Never re-parse `RawArgs` for the order: that is a second grammar.
+
 ### 5. Avoid In-Argument Delimiters
 - BAD: `-rename "old:new"` (requires delimiter parsing)
 - GOOD: `-as old new` (framework separates args)

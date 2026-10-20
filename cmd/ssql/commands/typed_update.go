@@ -100,29 +100,15 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 			uc.exprConds = append(uc.exprConds, res.Src)
 		}
 
-		// -set-field FIELD SOURCE: a typed read of SOURCE, assigned like a
-		// -set-expr result (retype checks and new-field typing included).
-		for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
-			src, ok := lookupSchemaField(in, sf.source)
-			if !ok {
-				return true, "", lib.WriteErrorAndExit(getCommandString(),
-					fmt.Errorf("ssql generate go -typed: '-set-field' references unknown field %q (schema has %s)", sf.source, fieldNamesList(in)))
-			}
-			operand, ok := typedOperand(src)
-			if !ok {
-				return false, fmt.Sprintf("-set-field %s %s: source type %s has no typed form", sf.target, sf.source, src.GoType), nil
-			}
-			uc.sets = append(uc.sets, setOp{field: sf.target, expr: &operand})
-		}
-
 		// -if-expr / +if-expr: native transpile (Tier N), else VM with a
 		// static env (Tier V) — either way the stage stays typed. -param
 		// bindings (in scope for the -set-expr family too) become flags.
 		exprConds := parseExprConds(clause.Flags["-if-expr"])
-		exprSets, err := clauseSetExprs(clause)
+		sets, err := clauseSets(clause)
 		if err != nil {
 			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
 		}
+		exprSets := setExprsOf(sets)
 		exprParams, err := clauseExprParams(clause, exprConds, exprSets)
 		if err != nil {
 			return true, "", lib.WriteErrorAndExit(getCommandString(), err)
@@ -162,26 +148,32 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 			uc.exprConds = append(uc.exprConds, src)
 		}
 
-		// Parse -set assignments (literal values).
-		if setOpsRaw, ok := clause.Flags["-set"]; ok && setOpsRaw != nil {
-			setList, _ := setOpsRaw.([]any)
-			for _, setRaw := range setList {
-				setMap, _ := setRaw.(map[string]any)
-				field, _ := setMap["field"].(string)
-				value, _ := setMap["value"].(string)
-				if field == "" {
-					continue
+		// The assignments in the order written (clauseSets). A literal is
+		// typed from its text; -set-field is a typed read of SOURCE assigned
+		// like a -set-expr result (retype checks and new-field typing
+		// included); a -set-expr transpiles natively (Tier N), else Tier V
+		// for an EXISTING coercible column (the result gets typed at runtime
+		// by a MustCoerce* helper) — a new field from an untranspilable
+		// expression has no knowable Go type, so record fallback.
+		for _, st := range sets {
+			switch st.kind {
+			case clauseSetLiteral:
+				uc.sets = append(uc.sets, setOp{field: st.field, value: st.value})
+				continue
+			case clauseSetCopy:
+				src, ok := lookupSchemaField(in, st.source)
+				if !ok {
+					return true, "", lib.WriteErrorAndExit(getCommandString(),
+						fmt.Errorf("ssql generate go -typed: '-set-field' references unknown field %q (schema has %s)", st.source, fieldNamesList(in)))
 				}
-				uc.sets = append(uc.sets, setOp{field: field, value: value})
+				operand, ok := typedOperand(src)
+				if !ok {
+					return false, fmt.Sprintf("-set-field %s %s: source type %s has no typed form", st.field, st.source, src.GoType), nil
+				}
+				uc.sets = append(uc.sets, setOp{field: st.field, expr: &operand})
+				continue
 			}
-		}
-
-		// Transpile -set-expr assignments: native (Tier N), else Tier V for
-		// EXISTING coercible columns (the result gets typed at runtime by a
-		// MustCoerce* helper). A new field from an untranspilable expression
-		// has no knowable Go type — record fallback.
-		for _, se := range exprSets {
-			field, expression := se.field, se.expression
+			field, expression := st.field, st.expression
 			{
 				res, err := exprToGoParams(expression, in, "r", paramVars)
 				if err == nil {

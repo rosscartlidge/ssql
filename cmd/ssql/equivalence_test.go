@@ -1835,6 +1835,26 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// The new columns of one update clause land in the order the user
+		// wrote the flags, in every lane. Until 2026-10-20 each backend had
+		// its own kind order (exec -set, -set-field, -set-expr; record -set,
+		// -set-expr, -set-field; typed -set-field, -set, -set-expr; SQL
+		// argv), so this argv order — expr, field, literal — differed from
+		// three of the four. No include, so the stage's own order shows.
+		Name:     "update_new_columns_argv_order",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} update -set-expr pay 'salary * 2' -set-field who name -set tag 1 | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"name": "Alice", "age": 35, "dept": "Engineering", "salary": 95000, "city": "SF", "level": 7, "hire_date": "2018-03-15", "status": "active", "pay": 190000, "who": "Alice", "tag": 1},
+			{"name": "Bob", "age": 28, "dept": "Sales", "salary": 65000, "city": "NYC", "level": 4, "hire_date": "2021-06-01", "status": "active", "pay": 130000, "who": "Bob", "tag": 1},
+			{"name": "Carol", "age": 42, "dept": "Engineering", "salary": 105000, "city": "SF", "level": 9, "hire_date": "2015-01-10", "status": "active", "pay": 210000, "who": "Carol", "tag": 1},
+			{"name": "David", "age": 31, "dept": "Marketing", "salary": 72000, "city": "Chicago", "level": 5, "hire_date": "2020-04-22", "status": "active", "pay": 144000, "who": "David", "tag": 1},
+			{"name": "Eve", "age": 29, "dept": "Engineering", "salary": 88000, "city": "SF", "level": 6, "hire_date": "2019-08-30", "status": "active", "pay": 176000, "who": "Eve", "tag": 1},
+			{"name": "Frank", "age": 45, "dept": "Sales", "salary": 82000, "city": "NYC", "level": 8, "hire_date": "2014-02-18", "status": "active", "pay": 164000, "who": "Frank", "tag": 1},
+			{"name": "Grace", "age": 33, "dept": "Marketing", "salary": 78000, "city": "Chicago", "level": 6, "hire_date": "2017-11-05", "status": "inactive", "pay": 156000, "who": "Grace", "tag": 1},
+		},
+	},
+	{
 		Name:     "time_parts_all_lanes",
 		Pipeline: `{{.bin}} from csv {{.data}}/times.csv -type ts time | {{.bin}} update -set-expr h 'hour(ts)' -set-expr d 'day(ts)' -set-expr w 'week(ts)' -set-expr dw 'dow(ts)' -set-expr q 'quarter(ts)' -set-expr e 'epoch(ts)' | {{.bin}} include id h d w dw q e | {{.bin}} sort id`,
 		Ordered:  true,

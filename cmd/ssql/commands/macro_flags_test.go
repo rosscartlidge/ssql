@@ -59,10 +59,11 @@ func TestExpandClauseMacros(t *testing.T) {
 	}
 	// The lowered clause parses as DFC135 bindings and the readers agree.
 	conds := parseExprConds(clause.Flags["-if-expr"])
-	sets, err := clauseSetExprs(clause)
+	all, err := clauseSets(clause)
 	if err != nil {
 		t.Fatal(err)
 	}
+	sets := setExprsOf(all)
 	params, err := clauseExprParams(clause, conds, sets)
 	if err != nil {
 		t.Fatal(err)
@@ -75,6 +76,43 @@ func TestExpandClauseMacros(t *testing.T) {
 	plain := cf.Clause{Flags: map[string]any{"-set": []any{"x"}}}
 	if err := expandClauseMacros(&plain); err != nil || len(plain.Flags) != 1 {
 		t.Errorf("plain clause: %v %v", plain.Flags, err)
+	}
+}
+
+// A -set-macro written between two -set-expr lowers to the second of
+// three -set-expr entries, and the clause's Order says so, so the sets
+// still apply in the order written.
+func TestExpandClauseMacrosKeepsOrder(t *testing.T) {
+	writeMacros(t, testMacros)
+	clause := cf.Clause{
+		Flags: map[string]any{
+			"-set-expr":  []any{map[string]any{"field": "e1", "expression": "1"}, map[string]any{"field": "e2", "expression": "2"}},
+			"-set-macro": []any{macroEntry("s3", "add3", "a", "b", "c")},
+			"-set":       []any{map[string]any{"field": "tag", "value": "x"}},
+			"-if-macro":  []any{macroEntry("", "cheap", "price", "cost")},
+		},
+		Order: []string{"-set-expr", "-set-macro", "-if-macro", "-set", "-set-expr"},
+	}
+	if err := expandClauseMacros(&clause); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"-set-expr", "-set-expr", "-if-expr", "-set", "-set-expr", "-param-field", "-param-field", "-param-field", "-param-field", "-param-field"}
+	if !reflect.DeepEqual(clause.Order, want) {
+		t.Errorf("Order = %q\n  want %q", clause.Order, want)
+	}
+	sets, err := clauseSets(clause)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields []string
+	for _, s := range sets {
+		fields = append(fields, s.field)
+	}
+	if !reflect.DeepEqual(fields, []string{"e1", "s3", "tag", "e2"}) {
+		t.Errorf("sets in order = %v", fields)
+	}
+	if sets[1].expression != "x + y + z" {
+		t.Errorf("lowered entry = %+v", sets[1])
 	}
 }
 

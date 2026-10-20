@@ -161,10 +161,11 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				// string type-assert silently dropped +if-expr entries),
 				// with the clause's -param bindings in their environment.
 				exprConds := parseExprConds(clause.Flags["-if-expr"])
-				exprSets, err := clauseSetExprs(clause)
+				sets, err := clauseSets(clause)
 				if err != nil {
 					return err
 				}
+				exprSets := setExprsOf(sets)
 				params, err := clauseExprParams(clause, exprConds, exprSets)
 				if err != nil {
 					return err
@@ -179,40 +180,22 @@ func RegisterUpdate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					uc.whereExprEvals = append(uc.whereExprEvals, whereExprEval{eval: eval, negated: ec.Negated})
 				}
 
-				// Parse -set operations (literal values)
-				if setOpsRaw, ok := clause.Flags["-set"]; ok && setOpsRaw != nil {
-					setList, ok := setOpsRaw.([]any)
-					if ok {
-						for _, setRaw := range setList {
-							setMap, ok := setRaw.(map[string]any)
-							if !ok {
-								continue
-							}
-
-							field, _ := setMap["field"].(string)
-							value, _ := setMap["value"].(string)
-
-							if field != "" {
-								uc.updates = append(uc.updates, updateOp{field: field, literal: value, isExpr: false})
-							}
+				// The assignments in the order written (clauseSets): a literal,
+				// a copied field, or an expression compiled ONCE.
+				for _, st := range sets {
+					switch st.kind {
+					case clauseSetLiteral:
+						uc.updates = append(uc.updates, updateOp{field: st.field, literal: st.value})
+					case clauseSetCopy:
+						uc.updates = append(uc.updates, updateOp{field: st.field, source: st.source})
+						readFields = append(readFields, st.source)
+					case clauseSetExpr:
+						eval, err := compileClauseExpr(st.expression, params)
+						if err != nil {
+							return fmt.Errorf("compiling expression %q: %w", st.expression, err)
 						}
+						uc.updates = append(uc.updates, updateOp{field: st.field, exprEval: eval, isExpr: true})
 					}
-				}
-
-				// -set-field FIELD SOURCE: copy a field's value and type.
-				for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
-					uc.updates = append(uc.updates, updateOp{field: sf.target, source: sf.source})
-					readFields = append(readFields, sf.source)
-				}
-
-				// -set-expr, and -set-bucket desugared to bucket(...):
-				// compile each expression ONCE.
-				for _, se := range exprSets {
-					eval, err := compileClauseExpr(se.expression, params)
-					if err != nil {
-						return fmt.Errorf("compiling expression %q: %w", se.expression, err)
-					}
-					uc.updates = append(uc.updates, updateOp{field: se.field, exprEval: eval, isExpr: true})
 				}
 
 				if len(uc.updates) > 0 {
@@ -608,51 +591,26 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 		// handles the negated map form (previously dropped).
 		uc.whereExprs = parseExprConds(clause.Flags["-if-expr"])
 
-		// Parse -set operations (literal values)
-		if setOpsRaw, ok := clause.Flags["-set"]; ok && setOpsRaw != nil {
-			setList, ok := setOpsRaw.([]any)
-			if ok {
-				for _, setRaw := range setList {
-					setMap, ok := setRaw.(map[string]any)
-					if !ok {
-						continue
-					}
-
-					field, _ := setMap["field"].(string)
-					value, _ := setMap["value"].(string)
-
-					if field != "" {
-						uc.updates = append(uc.updates, struct {
-							field  string
-							value  string
-							isExpr bool
-							isCopy bool
-						}{field, value, false, false})
-					}
-				}
-			}
-		}
-
-		// -set-expr, and -set-bucket desugared to bucket(...)
-		exprSets, err := clauseSetExprs(clause)
+		// The assignments in the order written (clauseSets).
+		sets, err := clauseSets(clause)
 		if err != nil {
 			return err
 		}
-		for _, se := range exprSets {
+		exprSets := setExprsOf(sets)
+		for _, st := range sets {
+			value := st.value
+			switch st.kind {
+			case clauseSetExpr:
+				value = st.expression
+			case clauseSetCopy:
+				value = st.source
+			}
 			uc.updates = append(uc.updates, struct {
 				field  string
 				value  string
 				isExpr bool
 				isCopy bool
-			}{se.field, se.expression, true, false})
-		}
-		for _, sf := range parseSetFields(clause.Flags["-set-field"]) {
-			uc.updates = append(uc.updates, struct {
-				field  string
-				value  string
-				isExpr bool
-				isCopy bool
-			}{sf.target, sf.source, false, true})
+			}{st.field, value, st.kind == clauseSetExpr, st.kind == clauseSetCopy})
 		}
 		if uc.params, err = clauseExprParams(clause, uc.whereExprs, exprSets); err != nil {
 			return lib.WriteErrorAndExit(getCommandString(), err)
@@ -1068,42 +1026,6 @@ func getComparisonValue(value string) string {
 // the expression handles the flag, as `where -if` pairs with `-if-expr`.
 type setExpr struct {
 	field, expression string
-}
-
-// clauseSetExprs collects a clause's -set-expr and -set-bucket
-// assignments in flag order. A -set-bucket width must be a positive Go
-// duration; anything else fails here, at parse time, in every mode.
-func clauseSetExprs(clause cf.Clause) ([]setExpr, error) {
-	var out []setExpr
-	if raw, ok := clause.Flags["-set-expr"]; ok && raw != nil {
-		list, _ := raw.([]any)
-		for _, item := range list {
-			m, _ := item.(map[string]any)
-			field, _ := m["field"].(string)
-			expression, _ := m["expression"].(string)
-			if field != "" && expression != "" {
-				out = append(out, setExpr{field, expression})
-			}
-		}
-	}
-	if raw, ok := clause.Flags["-set-bucket"]; ok && raw != nil {
-		list, _ := raw.([]any)
-		for _, item := range list {
-			m, _ := item.(map[string]any)
-			field, _ := m["field"].(string)
-			source, _ := m["source"].(string)
-			width, _ := m["width"].(string)
-			if field == "" || source == "" || width == "" {
-				continue
-			}
-			se, err := bucketSetExpr(field, source, width)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, se)
-		}
-	}
-	return out, nil
 }
 
 // bucketSetExpr is the desugaring of `-set-bucket FIELD SOURCE WIDTH`.

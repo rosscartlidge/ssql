@@ -141,19 +141,57 @@ func expandClauseMacros(clause *cf.Clause) error {
 			owner[p.Name] = "macro " + c.m.Name
 		}
 	}
-	for _, c := range calls {
+	lowered := func(c macroCall) (flag string, entry map[string]any) {
 		switch c.flag {
 		case "-set-macro":
-			appendFlagEntry(clause, "-set-expr", map[string]any{"field": c.field, "expression": c.m.Body})
-		case "-if-macro":
+			return "-set-expr", map[string]any{"field": c.field, "expression": c.m.Body}
+		default:
 			entry := map[string]any{"expression": c.m.Body}
 			if c.negated {
 				entry["_negated"] = true
 			}
-			appendFlagEntry(clause, "-if-expr", entry)
+			return "-if-expr", entry
 		}
+	}
+	if clause.Order == nil {
+		// A clause built by hand (tests): the lowered entries go last.
+		for _, c := range calls {
+			flag, entry := lowered(c)
+			insertFlagEntry(clause, flag, -1, entry)
+		}
+	} else {
+		// The clause's order (autocli Clause.Order) decides where each
+		// lowered entry sits in its list: a -set-macro written between two
+		// -set-expr is the second of three -set-expr afterwards, so the
+		// sets still apply in the order written (clauseSets).
+		byFlag := map[string][]macroCall{}
+		for _, c := range calls {
+			byFlag[c.flag] = append(byFlag[c.flag], c)
+		}
+		nextCall := map[string]int{}
+		seen := map[string]int{} // entries of each flag emitted into the new order so far
+		order := make([]string, 0, len(clause.Order))
+		for _, flag := range clause.Order {
+			if flag == "-set-macro" || flag == "-if-macro" {
+				c := byFlag[flag][nextCall[flag]]
+				nextCall[flag]++
+				flag, entry := lowered(c)
+				insertFlagEntry(clause, flag, seen[flag], entry)
+				order = append(order, flag)
+				seen[flag]++
+				continue
+			}
+			order = append(order, flag)
+			seen[flag]++
+		}
+		clause.Order = order
+	}
+	for _, c := range calls {
 		for _, p := range c.m.exprParams(c.args) {
-			appendFlagEntry(clause, "-param-field", map[string]any{"name": p.Name, "type": p.Type.String(), "field": p.Field})
+			insertFlagEntry(clause, "-param-field", -1, map[string]any{"name": p.Name, "type": p.Type.String(), "field": p.Field})
+			if clause.Order != nil {
+				clause.Order = append(clause.Order, "-param-field")
+			}
 		}
 	}
 	delete(clause.Flags, "-set-macro")
@@ -161,10 +199,16 @@ func expandClauseMacros(clause *cf.Clause) error {
 	return nil
 }
 
-// appendFlagEntry adds one occurrence to an Accumulate flag's list.
-func appendFlagEntry(clause *cf.Clause, flag string, entry any) {
+// insertFlagEntry adds one occurrence to an Accumulate flag's list at
+// index i (-1: at the end).
+func insertFlagEntry(clause *cf.Clause, flag string, i int, entry any) {
 	list, _ := clause.Flags[flag].([]any)
-	clause.Flags[flag] = append(list, entry)
+	if i < 0 || i >= len(list) {
+		clause.Flags[flag] = append(list, entry)
+		return
+	}
+	list = append(list[:i], append([]any{entry}, list[i:]...)...)
+	clause.Flags[flag] = list
 }
 
 // expandMacros lowers every clause of the context (the handler's first
