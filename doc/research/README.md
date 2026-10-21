@@ -162,6 +162,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC152 | 2026-10-19 | 2026-10-20 | [Expression macros: named expressions with field-completing arguments](./dfc152_expression_macros.md) |
 | DFC153 | 2026-10-20 | 2026-10-20 | [Numeric Functions: The DuckDB Set, in Every Lane](./dfc153_numeric_functions.md) |
 | DFC154 | 2026-10-20 | 2026-10-22 | [A Row Generator: `from range`, Numbers Every Lane Can Make](./dfc154_range_source.md) |
+| DFC155 | 2026-10-22 | 2026-10-22 | [Big Numbers: Options for Integers Past 2^63 and Exact Decimals](./dfc155_big_numbers.md) |
 
 <!-- DFC-INDEX-END -->
 
