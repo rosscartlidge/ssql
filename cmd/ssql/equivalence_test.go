@@ -3858,6 +3858,73 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// An int fold stays int64 in every lane — exact to 2^63 — and the
+		// header says int, so the value survives the pipe boundary; the
+		// result is read as a string because the harness (and JSON)
+		// would round it to float64. Until v4.121.2 every numeric result
+		// was coerced to float64: fib(92) came out as 7540113804746346000
+		// (Ross's Fibonacci fold, 2026-10-21).
+		Name:     "groupby_stream_int_exact",
+		Pipeline: `{{.bin}} from range 91 | {{.bin}} group-by -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib | {{.bin}} update -set-expr s 'string(fib)' | {{.bin}} include s`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"s": "7540113804746346429"}},
+		Skip: map[string]string{
+			"duckdb": "-stream-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// window -stream-expr over the default frame is a RUNNING fold: the
+		// state carries from row to row, so a recurrence is one window
+		// stage — Fibonacci per row, where group-by needed a list and
+		// explode (Ross, 2026-10-21). Every lane folds the same way; the
+		// Golden is the sequence itself, int64 in every lane.
+		Name:     "window_stream_expr_running",
+		Pipeline: `{{.bin}} from range 8 | {{.bin}} window -order n -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib -stream-expr '{s:0}' '{s: s + n}' 's' run | {{.bin}} include n fib run`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"n": 1, "fib": 1, "run": 1}, {"n": 2, "fib": 2, "run": 3}, {"n": 3, "fib": 3, "run": 6}, {"n": 4, "fib": 5, "run": 10},
+			{"n": 5, "fib": 8, "run": 15}, {"n": 6, "fib": 13, "run": 21}, {"n": 7, "fib": 21, "run": 28}, {"n": 8, "fib": 34, "run": 36},
+		},
+		Skip: map[string]string{
+			"duckdb": "window -stream-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// A fold over a PARTITIONED, BOUNDED frame restarts at the frame's
+		// first row — and its sum must equal the built-in windowed -sum
+		// over the same frame, an oracle inside the pipeline: `same` is
+		// true on every row or the lane is wrong. The float fold (s/n)
+		// equals -avg the same way; the `-presorted` streaming path is
+		// the next case.
+		Name:     "window_stream_expr_frame_matches_sum",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -preceding 1 -stream-expr '{s:0, n:0}' '{s: s + salary, n: n + 1}' 's' fsum -stream-expr '{s:0, n:0}' '{s: s + salary, n: n + 1}' 's / n' favg -sum salary wsum -avg salary wavg | {{.bin}} update -set-expr same 'fsum == wsum && favg == wavg' | {{.bin}} include name fsum favg same`,
+		Ordered:  false,
+		Skip: map[string]string{
+			"duckdb": "window -stream-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// The streaming path (-presorted): a running fold and a sliding
+		// one (a ring of the frame, re-folded) give the materialised
+		// path's values; the partition boundary resets the state.
+		Name:     "window_stream_expr_presorted",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept salary | {{.bin}} window -presorted -partition dept -order salary -stream-expr '{k:0}' '{k: k + 1}' 'k' pos -preceding 1 -stream-expr '{s:0}' '{s: s + salary}' 's' two | {{.bin}} include name pos two`,
+		Ordered:  true,
+		Skip: map[string]string{
+			"duckdb": "window -stream-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
+		// The same for -expr: an int sum is int64 (2^53 + 3, exact).
+		Name:     "groupby_expr_int_exact",
+		Pipeline: `{{.bin}} from range 2 -start 4503599627370497 | {{.bin}} group-by -expr 'sum(n)' s | {{.bin}} update -set-expr t 'string(s)' | {{.bin}} include t`,
+		Ordered:  false,
+		Golden:   []map[string]any{{"t": "9007199254740995"}},
+		Skip: map[string]string{
+			"duckdb": "-expr has no SQL translation (generate sql fails loudly by design)",
+		},
+	},
+	{
 		// SIMULTANEITY gate: every's object is computed from the OLD state
 		// then replaces it — {a: b, b: a} must SWAP each row. Sequential
 		// assignment (a=b then b=a-already-overwritten) converges to (1,1)

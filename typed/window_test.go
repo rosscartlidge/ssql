@@ -139,3 +139,72 @@ func TestWindow(t *testing.T) {
 		}
 	})
 }
+
+type foldState struct{ a, b, s int64 }
+
+// TestWindowFold: WFold over the running frame carries its state across
+// the partition (Fibonacci in one pass), restarts at a bounded frame's
+// first row (the fold's sum equals WSum over the same frame), and
+// restarts per partition.
+func TestWindowFold(t *testing.T) {
+	rows := []winRow{
+		{"eng", "a", 1, nil}, {"eng", "b", 2, nil}, {"eng", "c", 3, nil}, {"eng", "d", 4, nil}, {"eng", "e", 5, nil},
+		{"ops", "f", 10, nil}, {"ops", "g", 20, nil}, {"ops", "h", 30, nil},
+	}
+	fold := WindowSpec[winRow]{
+		Kind: WFold,
+		Init: func() any { return &foldState{a: 0, b: 1} },
+		Step: func(s any, r winRow) any {
+			st := s.(*foldState)
+			st.a, st.b, st.s = st.b, st.a+st.b, st.s+r.Salary
+			return st
+		},
+		Final: func(s any) any { return s.(*foldState).b },
+	}
+	sumFold := fold
+	sumFold.Final = func(s any) any { return s.(*foldState).s }
+	cmp := func(a, b winRow) int {
+		if a.Salary < b.Salary {
+			return -1
+		}
+		if a.Salary > b.Salary {
+			return 1
+		}
+		return 0
+	}
+	type out struct {
+		Name     string
+		Fib, Sum int64
+		WSum     float64
+	}
+	build := func(r winRow, res []any) out {
+		return out{Name: r.Name, Fib: res[0].(int64), Sum: res[1].(int64), WSum: res[2].(float64)}
+	}
+	for _, fr := range []WindowFrame{{Preceding: -1}, {Preceding: 1}, {Preceding: 1, Following: 1}, {Preceding: -1, Following: -1}} {
+		clause := WindowClause[winRow]{
+			Partition: func(r winRow) string { return r.Dept },
+			HasOrder:  true, Compare: cmp, Frame: fr,
+			Specs: []WindowSpec[winRow]{fold, sumFold, {Kind: WSum, Num: func(r winRow) (float64, bool) { return float64(r.Salary), true }}},
+		}
+		got := slices.Collect(Window(clause.specsClause(), build)(slices.Values(rows)))
+		if len(got) != len(rows) {
+			t.Fatalf("frame %+v: %d rows", fr, len(got))
+		}
+		for _, o := range got {
+			if float64(o.Sum) != o.WSum {
+				t.Errorf("frame %+v %s: fold sum %d != WSum %v", fr, o.Name, o.Sum, o.WSum)
+			}
+		}
+		if fr.Preceding == -1 && fr.Following == 0 {
+			// Running: fib(1..5) in eng, fib(1..3) restarted in ops.
+			want := []int64{1, 2, 3, 5, 8, 1, 2, 3}
+			for i, o := range got {
+				if o.Fib != want[i] {
+					t.Errorf("running fold row %d (%s): fib %d, want %d", i, o.Name, o.Fib, want[i])
+				}
+			}
+		}
+	}
+}
+
+func (c WindowClause[T]) specsClause() []WindowClause[T] { return []WindowClause[T]{c} }

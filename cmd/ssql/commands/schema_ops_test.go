@@ -65,6 +65,7 @@ func TestMutatingSchemaOps(t *testing.T) {
 			[]string{"name", "dept", "n", "name_n", "dept_n", "name_dept_n"}, true},
 		{"window", []string{"-partition", "dept", "-order", "salary", "-row-number", "rn"}, []string{"name", "dept", "salary", "rn"}, true},
 		{"window", []string{"-lag", "salary", "1", "prev"}, []string{"name", "dept", "salary", "prev"}, true},
+		{"window", []string{"-order", "salary", "-stream-expr", "{s:0}", "{s: s + salary}", "s", "run", "-count", "n"}, []string{"name", "dept", "salary", "run", "n"}, true},
 		{"pivot", []string{"dept", "salary"}, nil, false},
 		{"where", []string{"-if", "salary", "gt", "1"}, in, true}, // identity default
 	}

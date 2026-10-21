@@ -96,6 +96,8 @@ See `claude/performance-patterns.md` for full details and examples.
 - **Cache schemas for variable-schema data** (JSONL without schema header) — reuse when fields match.
 - **Pre-allocate buffers outside loops**, reset with `buf = buf[:0]` (keep capacity).
 - **Profile before optimizing**: `go test -cpuprofile cpu.prof -bench BenchmarkName`
+- **A hot closure that grows stops inlining its callees.** Past the compiler's big-function threshold a function inlines only tiny callees: adding the fold's precompute to `Window`'s closure un-inlined `Record.ToMutable` in its emission loop and cost every window function +3 allocations and ~20% time per row, with no new code on that path (BenchmarkWindow vs a HEAD worktree, 2026-10-21). Keep hot closures small — per-clause work lives in a named function (`windowResults`) — and benchmark a change to a hot loop against HEAD even when the diff "cannot" cost anything.
+- **A window function with carried state computes the running frame in one pass.** `computeWindowFunc` / `typed.windowValue` are called per (spec, row) with no state, so a fold (`window -stream-expr`) would restart at the partition's first row for every row — O(n²). `Window` precomputes every fold over the running frame (UNBOUNDED PRECEDING → CURRENT ROW) per partition (`runningFoldValues`, `window_fold.go`; the same split in `typed.Window`); only other frames re-fold per row, which is what their semantics say.
 
 ### Concurrency Patterns (CRITICAL)
 See `claude/concurrency.md` for full details, measurements, and negative results.

@@ -2096,6 +2096,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			} else {
 				i++
 			}
+		case "-stream-expr":
+			return fmt.Errorf("window -stream-expr has no SQL translation (a fold over the frame is ssql-specific; use generate go)")
 		// 2-arg: -func field result
 		case "-sum", "-avg", "-min", "-max", "-first", "-last":
 			if i+2 < len(args) {

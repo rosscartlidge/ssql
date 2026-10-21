@@ -19,8 +19,10 @@ func aggRecords(field string, vals ...any) []Record {
 }
 
 // TestMinOfMaxOf: the CLI's -min/-max keep the field's type — strings
-// order lexically, times chronologically, numbers as float64 — and skip
-// missing values. Until v4.99.0 `-min name` returned 0 for every group.
+// order lexically, times chronologically, numbers compare as float64 and
+// the winner keeps its own width (an int64 stays int64, exact past 2^53;
+// until v4.121.2 every number came back float64) — and skip missing
+// values. Until v4.99.0 `-min name` returned 0 for every group.
 func TestMinOfMaxOf(t *testing.T) {
 	t.Run("strings", func(t *testing.T) {
 		recs := aggRecords("name", "Carol", "Alice", nil, "Bob")
@@ -31,13 +33,16 @@ func TestMinOfMaxOf(t *testing.T) {
 			t.Fatalf("MaxOf strings = %v, want Carol", got)
 		}
 	})
-	t.Run("numbers mixed width come back as float64", func(t *testing.T) {
+	t.Run("numbers mixed width keep the winner's type", func(t *testing.T) {
 		recs := aggRecords("v", int64(7), 2.5, int64(-1))
-		if got := MinOf("v")(recs).GetValue(); got != float64(-1) {
-			t.Fatalf("MinOf numbers = %v (%T), want -1 float64", got, got)
+		if got := MinOf("v")(recs).GetValue(); got != int64(-1) {
+			t.Fatalf("MinOf numbers = %v (%T), want -1 int64", got, got)
 		}
-		if got := MaxOf("v")(recs).GetValue(); got != float64(7) {
-			t.Fatalf("MaxOf numbers = %v (%T), want 7 float64", got, got)
+		if got := MaxOf("v")(recs).GetValue(); got != int64(7) {
+			t.Fatalf("MaxOf numbers = %v (%T), want 7 int64", got, got)
+		}
+		if got := MaxOf("v")(aggRecords("v", int64(1), 2.5)).GetValue(); got != 2.5 {
+			t.Fatalf("MaxOf numbers = %v (%T), want 2.5 float64", got, got)
 		}
 	})
 	t.Run("times", func(t *testing.T) {

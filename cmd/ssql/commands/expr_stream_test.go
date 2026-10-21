@@ -7,8 +7,8 @@ import (
 
 // TestLowerStreamAgg pins the typed lowering of -stream-expr folds:
 // state fields, the every-expressions (all reading OLD state — the
-// emission site joins them into ONE multi-assignment), the float64-coerced
-// final, widening, and the record-shadows-state resolution order.
+// emission site joins them into ONE multi-assignment), the final in its own
+// type, widening, and the record-shadows-state resolution order.
 func TestLowerStreamAgg(t *testing.T) {
 	schema := exprGoTestSchema() // pop/qty int64, price float64, city string, …
 
@@ -25,8 +25,22 @@ func TestLowerStreamAgg(t *testing.T) {
 		if plan.Every[0] != "(a.se0_s + r.Pop)" || plan.Every[1] != "(a.se0_n + 1)" {
 			t.Errorf("every: %v", plan.Every)
 		}
-		if plan.Final != "(float64(a.se0_s) / float64(a.se0_n))" {
+		if plan.Final != "(float64(a.se0_s) / float64(a.se0_n))" || plan.FinalType != exprGoFloat {
 			t.Errorf("final: %s", plan.Final)
+		}
+	})
+
+	t.Run("int fold stays int64", func(t *testing.T) {
+		// Fibonacci: no step widens the state, so the result column is
+		// int64 — exact to 2^63 where a float64 coercion rounded past 2^53.
+		plan, err := lowerStreamAgg(streamExprSpec{
+			initExpr: "{a:0, b:1}", everyExpr: "{a:b, b:a+b}", finalExpr: "b", result: "fib",
+		}, schema, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Final != "a.se0_b" || plan.FinalType != exprGoInt {
+			t.Errorf("final: %s (%s)", plan.Final, plan.FinalType)
 		}
 	})
 

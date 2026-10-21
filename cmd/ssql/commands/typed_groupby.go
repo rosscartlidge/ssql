@@ -130,20 +130,19 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 		})
 	}
 	for _, p := range exprPlans {
-		// Expression-aggregation results are always float64 (mustAggFloat64
-		// parity), like stream folds below.
+		// An expression result keeps its own type (int64 or float64), as
+		// exec's aggResult types the VM's value; so does a stream fold.
 		resultFields = append(resultFields, lib.TypedSchemaField{
 			Name:   p.Spec.result,
 			GoName: lib.GoNameFromColumn(p.Spec.result),
-			GoType: "float64",
+			GoType: string(p.ResultType),
 		})
 	}
 	for _, p := range streamPlans {
-		// Stream-expr results are always float64 (mustAggFloat64 parity).
 		resultFields = append(resultFields, lib.TypedSchemaField{
 			Name:   p.Spec.result,
 			GoName: lib.GoNameFromColumn(p.Spec.result),
-			GoType: "float64",
+			GoType: string(p.FinalType),
 		})
 	}
 	resultSchema := &lib.TypedSchema{TypeName: resultName, Fields: resultFields}
@@ -693,10 +692,10 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		fmt.Fprintf(&d, "\t%-*s %s\n", maxName, gn, aggResultGoTypeForState(s.spec.function, s.fieldGoT))
 	}
 	for _, p := range exprPlans {
-		fmt.Fprintf(&d, "\t%-*s float64\n", maxName, lib.GoNameFromColumn(p.Spec.result))
+		fmt.Fprintf(&d, "\t%-*s %s\n", maxName, lib.GoNameFromColumn(p.Spec.result), p.ResultType)
 	}
 	for _, p := range streamPlans {
-		fmt.Fprintf(&d, "\t%-*s float64\n", maxName, lib.GoNameFromColumn(p.Spec.result))
+		fmt.Fprintf(&d, "\t%-*s %s\n", maxName, lib.GoNameFromColumn(p.Spec.result), p.FinalType)
 	}
 	d.WriteString("}\n")
 

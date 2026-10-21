@@ -59,7 +59,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 |---|---|---|
 | `where` | filter | `-if FIELD OP VALUE`, `-if-expr 'EXPR'`, `-if-field FIELD OP OTHERFIELD`, `-not` (negate the clause), `-param NAME TYPE VALUE` (a variable for `-if-expr`); conditions in a clause AND; `+` separates OR clauses |
 | `update` | set fields | `-set FIELD VALUE`, `-set-expr FIELD 'EXPR'`, `-set-field FIELD SOURCEFIELD` (copy value and type), `-set-bucket FIELD SOURCE WIDTH` (time bucket), with `-if …` conditions; `+` separates if/else-if/else clauses, first match wins |
-| `group-by FIELDS…` | group and aggregate | `-count NAME`, `-sum F NAME`, `-avg F NAME`, `-min F NAME`, `-max F NAME`, `-first F NAME`, `-last F NAME`, `-collect F NAME`, `-count-distinct F NAME`, `-string-agg F SEP NAME`, `-median F NAME`, `-percentile F P NAME`, `-stddev F NAME`, `-variance F NAME`, `-mode F NAME`, `-arg-max F BY NAME`, `-arg-min F BY NAME`, `-expr NAME 'EXPR'`; `-rollup` / `-cube` add parent-level totals; `-presorted` streams input already sorted by the key; `-spill DIR` bounds memory |
+| `group-by FIELDS…` | group and aggregate | `-count NAME`, `-sum F NAME`, `-avg F NAME`, `-min F NAME`, `-max F NAME`, `-first F NAME`, `-last F NAME`, `-collect F NAME`, `-count-distinct F NAME`, `-string-agg F SEP NAME`, `-median F NAME`, `-percentile F P NAME`, `-stddev F NAME`, `-variance F NAME`, `-mode F NAME`, `-arg-max F BY NAME`, `-arg-min F BY NAME`, `-expr NAME 'EXPR'`, `-stream-expr INIT EVERY FINAL NAME` (a fold: `'{s:0, n:0}' '{s: s + x, n: n + 1}' 's / n'`); `-rollup` / `-cube` add parent-level totals; `-presorted` streams input already sorted by the key; `-spill DIR` bounds memory |
 | `sort FIELDS…` | sort | `-desc` (or `-asc`); `sort a -desc + b` sorts by a descending then b; `-spill DIR -memory 2G` sorts inputs larger than RAM |
 | `top N -field F` | the N largest by F (a bounded heap; cheaper than sort + limit) | `-asc` for the smallest |
 | `limit N` / `offset N` | first N / skip N | `limit -last N` keeps the last N |
@@ -72,7 +72,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `except -file FILE` / `intersect -file FILE` | rows of stdin not in / also in FILE (SQL EXCEPT / INTERSECT) | `-using F` or `-on L R` compares by key (anti-join / semi-join); `-all` keeps duplicates |
 | `union -file FILE` | append another file's rows (SQL UNION) | duplicates removed unless `-all`; repeat `-file` |
 | `merge FILE…` | k-way merge of already sorted files | `-by FIELD` |
-| `window` | SQL window functions, one output per input row | `-partition F -order F [-desc]`, frame `-preceding N -following N`; `-row-number NAME`, `-rank NAME`, `-dense-rank NAME`, `-ntile N NAME`, `-lag F N NAME`, `-lead F N NAME`, `-first F NAME`, `-last F NAME`, `-sum F NAME`, `-avg F NAME`, `-count NAME`, `-min F NAME`, `-max F NAME` |
+| `window` | SQL window functions, one output per input row | `-partition F -order F [-desc]`, frame `-preceding N -following N`; `-row-number NAME`, `-rank NAME`, `-dense-rank NAME`, `-ntile N NAME`, `-lag F N NAME`, `-lead F N NAME`, `-first F NAME`, `-last F NAME`, `-sum F NAME`, `-avg F NAME`, `-count NAME`, `-min F NAME`, `-max F NAME`, `-stream-expr INIT EVERY FINAL NAME` (a fold over the frame; over the default frame a running recurrence: `'{a:0, b:1}' '{a:b, b:a+b}' 'b'` is Fibonacci per row) |
 | `pivot -row F -col F -val F -func FUNC` | cross-tab; `-func` is count, sum, avg, min or max | |
 | `unpivot -id F… -value F…` | wide to long (melt) | `-col NAME -val NAME` name the two output columns |
 | `fill` | fill missing values | `-down F` carries the last value forward; `-default F VALUE` |
@@ -193,6 +193,7 @@ ssql from data.csv  | ssql group-by dept -median salary med -percentile salary 0
 ssql from sales.csv | ssql group-by region product -count n -sum revenue total -rollup    # + region_n, region_total, n, total on every row
 ssql from sales.csv | ssql group-by region product -count n -cube                          # rollup plus every combination
 ssql from orders.csv | ssql window -partition customer_id -order order_id -sum total running -row-number seq   # per-row, nothing collapses
+ssql from range 10 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib                              # a fold per row: state, step, result (Fibonacci)
 ssql from sales.csv | ssql pivot -row region -col quarter -val revenue -func sum
 ```
 

@@ -2430,6 +2430,8 @@ func extractWindowFields(args []string) ([]string, bool) {
 			}
 		}
 		switch args[i] {
+		case "-stream-expr":
+			return nil, true // the fold reads whatever its expressions name
 		case "-partition", "-order":
 			if i+1 < len(args) {
 				fields = append(fields, args[i+1])

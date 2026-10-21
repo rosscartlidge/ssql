@@ -16,12 +16,14 @@ import (
 //
 //	state = eval(INIT)                       // must be an object
 //	for each record: state = eval(EVERY, state ∪ record)  // record SHADOWS state
-//	result = mustAggFloat64(eval(FINAL, state))            // state fields only
+//	result = eval(FINAL, state)                            // state fields only
 //
 // The lowering turns the state map into typed accumulator struct fields, the
 // EVERY object into one simultaneous multi-assignment inside Add() (EVERY's
 // values all read the OLD state — {s: n, n: s} must swap), and FINAL into
-// the Result() expression, coerced to float64 for VM parity.
+// the Result() expression in its own type: int64 when the fold stays int
+// (exact to 2^63 — Fibonacci), float64 when any step widened it; the VM's
+// aggResult types the exec result the same way.
 //
 // A refusal (non-nil error, not exprUnknownFieldError) means "this spec
 // can't be held in a typed struct" — the caller falls back to record
@@ -42,8 +44,9 @@ type streamAggPlan struct {
 	Spec    streamExprSpec
 	States  []streamAggState // INIT declaration order
 	Every   []string         // new-state Go exprs, parallel to States (all read OLD state)
-	Final   string           // Go expr over state fields, already float64
-	Imports []string
+	Final     string           // Go expr over state fields, in FinalType
+	FinalType exprGoType       // int64 or float64: the result column's Go type
+	Imports   []string
 	Hoisted []string
 }
 
@@ -136,9 +139,9 @@ func lowerStreamAgg(spec streamExprSpec, schema *lib.TypedSchema, idx int) (stre
 	// field — fine in Go (untyped constants adapt in the struct literal /
 	// zero value); nothing to fix up.
 
-	// FINAL: state fields only (matching the VM: env = stateMap). Result is
-	// coerced to float64 — mustAggFloat64 parity; non-numeric results panic
-	// in exec, so here they are loud at codegen (§6 strictening).
+	// FINAL: state fields only (matching the VM: env = stateMap). The
+	// result keeps its type (int64 or float64, like exec's aggResult);
+	// a non-numeric result is a refusal (record fallback).
 	finalVars := make(map[string]exprGo, len(plan.States))
 	for _, st := range plan.States {
 		finalVars[st.Key] = exprGo{Src: "a." + st.GoName, Type: st.Type}
@@ -148,9 +151,10 @@ func lowerStreamAgg(spec streamExprSpec, schema *lib.TypedSchema, idx int) (stre
 		return plan, fmt.Errorf("final: %w", err)
 	}
 	if !finalRes.Type.numeric() {
-		return plan, fmt.Errorf("final expression is %s — stream aggregation results must be numeric (the VM coerces via mustAggFloat64, which panics on non-numerics)", finalRes.Type)
+		return plan, fmt.Errorf("final expression is %s — typed stream aggregation results must be numeric (record mode carries strings, bools and times)", finalRes.Type)
 	}
-	plan.Final = asFloat(finalRes)
+	plan.Final = finalRes.Src
+	plan.FinalType = finalRes.Type
 	plan.Imports = append(plan.Imports, finalRes.Imports...)
 	plan.Hoisted = append(plan.Hoisted, finalRes.Hoisted...)
 

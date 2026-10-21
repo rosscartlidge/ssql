@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -45,6 +46,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 	}
 	var results []resultField
 	var clauseCode []string
+	var foldDefs, imports, hoisted []string // -stream-expr state structs and what their Go needs
 	needFmt := false
 	resIdx := 0
 
@@ -140,11 +142,35 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 						fmt.Errorf("ssql generate go -typed: 'window' %s reads unknown field %q", d.Kind, d.Field))
 				}
 			}
-			kind, goType, assign, specLit, reason := typedWindowSpec(d, f, in.TypeName, resIdx)
-			if reason != "" {
-				return false, reason, nil
+			var goType, assign, specLit string
+			if d.Kind == "stream_expr" {
+				// A fold: the group-by lowering (expr_stream.go) gives the
+				// state struct, the simultaneous EVERY assignment and FINAL
+				// in its own type; unknown fields are loud, any other
+				// refusal is the record path.
+				plan, err := lowerStreamAgg(streamExprSpec{initExpr: d.Init, everyExpr: d.Every, finalExpr: d.Final, result: spec.ResultName}, in, resIdx)
+				if err != nil {
+					var unknownField *exprUnknownFieldError
+					if errors.As(err, &unknownField) {
+						return true, "", lib.WriteErrorAndExit(getCommandString(),
+							fmt.Errorf("ssql generate go -typed: 'window -stream-expr': %w", err))
+					}
+					return false, fmt.Sprintf("window -stream-expr %s: %v", spec.ResultName, err), nil
+				}
+				stateType := fmt.Sprintf("%sFold%d", outType, resIdx)
+				foldDefs = append(foldDefs, renderWindowFoldState(stateType, plan))
+				imports = append(imports, plan.Imports...)
+				hoisted = append(hoisted, plan.Hoisted...)
+				goType = string(plan.FinalType)
+				assign = fmt.Sprintf("if v, ok := res[%d].(%s); ok { o.GONAME = v }", resIdx, goType)
+				specLit = renderWindowFoldSpec(stateType, in.TypeName, plan)
+			} else {
+				var reason string
+				_, goType, assign, specLit, reason = typedWindowSpec(d, f, in.TypeName, resIdx)
+				if reason != "" {
+					return false, reason, nil
+				}
 			}
-			_ = kind
 			gn := lib.GoNameFromColumn(spec.ResultName)
 			for usedGo[gn] {
 				gn += "_"
@@ -182,14 +208,14 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 	code := fmt.Sprintf("%s := typed.Window([]typed.WindowClause[%s]{\n%s\n\t}, %s)(%s)",
 		outVar, in.TypeName, strings.Join(clauseCode, "\n"), build.String(), inputVar)
 
-	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	imports = append(imports, "github.com/rosscartlidge/ssql/v4/typed")
 	if needFmt {
 		imports = append(imports, "fmt")
 	}
-	frag := lib.NewStmtFragment(outVar, inputVar, code, imports, getCommandString())
+	frag := lib.NewStmtFragment(outVar, inputVar, code, dedupeImports(imports), getCommandString())
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = out
-	frag.StructDefs = []string{structDef}
+	frag.StructDefs = append(append([]string{structDef}, foldDefs...), hoisted...)
 	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
 	return true, "", lib.WriteCodeFragment(frag)
 }
@@ -252,6 +278,40 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 		return d.Kind, "*" + base, fmt.Sprintf("if v, ok := %s.(%s); ok { o.GONAME = &v }", res, base), fmt.Sprintf("{Kind: typed.%s, N: %d, %s}", k, d.N, val), ""
 	}
 	return "", "", "", "", fmt.Sprintf("window: %s has no typed form", d.Kind)
+}
+
+// renderWindowFoldState renders the state struct of one window fold: one
+// field per INIT key, in its unified type.
+func renderWindowFoldState(stateType string, p streamAggPlan) string {
+	var d strings.Builder
+	fmt.Fprintf(&d, "// %s is the state of `window -stream-expr` %q (init / every / final).\n", stateType, p.Spec.result)
+	fmt.Fprintf(&d, "type %s struct {\n", stateType)
+	for _, st := range p.States {
+		fmt.Fprintf(&d, "\t%s %s // state %q\n", st.GoName, st.Type, st.Key)
+	}
+	d.WriteString("}\n")
+	return d.String()
+}
+
+// renderWindowFoldSpec renders the typed.WindowSpec literal of one fold:
+// Init builds the state with its INIT values, Step is ONE simultaneous
+// multi-assignment (every RHS reads the old state, as the VM replaces the
+// whole object — {a: b, b: a} must swap), Final reads the result.
+func renderWindowFoldSpec(stateType, rowType string, p streamAggPlan) string {
+	var inits, lhs, rhs []string
+	for i, st := range p.States {
+		inits = append(inits, fmt.Sprintf("%s: %s", st.GoName, st.Init))
+		lhs = append(lhs, "a."+st.GoName)
+		rhs = append(rhs, p.Every[i])
+	}
+	final := p.Final
+	if strings.Contains(final, "a.") {
+		final = "a := s.(*" + stateType + "); return " + final
+	} else {
+		final = "return " + final // a constant FINAL reads no state
+	}
+	return fmt.Sprintf("{Kind: typed.WFold, Init: func() any { return &%s{%s} }, Step: func(s any, r %s) any { a := s.(*%s); %s = %s; return a }, Final: func(s any) any { %s }}",
+		stateType, strings.Join(inits, ", "), rowType, stateType, strings.Join(lhs, ", "), strings.Join(rhs, ", "), final)
 }
 
 // goLiteralType names the Go type of a CLI literal default.

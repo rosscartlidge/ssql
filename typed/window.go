@@ -50,18 +50,31 @@ const (
 	WCountField
 	WMin
 	WMax
+	WFold
 )
 
 // WindowSpec is one function over a clause's frame. Num reads a numeric
 // field (sum/avg); Val reads any field (lag, lead, first, last, nth,
 // count-field, min, max — min/max compare with ssql.CompareAny, as exec
 // does). A missing value is ok=false / nil.
+//
+// WFold is `window -stream-expr`: Init makes a fresh state, Step folds one
+// row into it and returns the state, Final reads the row's value from it
+// (nil = absent). Over the running frame (UNBOUNDED PRECEDING → CURRENT
+// ROW) the state carries across the partition in one pass; over any other
+// frame the fold restarts at the frame's first row — ssql.WStreamExpr's
+// arithmetic exactly. The generated Step mutates a pointer state and
+// returns it, so a fold allocates once per frame.
 type WindowSpec[T any] struct {
 	Kind    WindowKind
 	N       int // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
 	Default any // LAG/LEAD default (nil = absent)
 	Num     func(T) (float64, bool)
 	Val     func(T) (any, bool)
+
+	Init  func() any
+	Step  func(state any, r T) any
+	Final func(state any) any
 }
 
 // WindowClause mirrors ssql.WindowConfig for one clause.
@@ -121,8 +134,22 @@ func Window[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(it
 						outputOrder = append(outputOrder, idx...)
 					}
 					partLen := len(idx)
+					for s, spec := range c.Specs {
+						// A fold over the running frame: one pass, the state
+						// carried across the partition (O(n), not O(n²)).
+						if spec.Kind == WFold && isRunningFrame(c.Frame) {
+							state := spec.Init()
+							for pos := range idx {
+								state = spec.Step(state, all[idx[pos]])
+								results[idx[pos]][base+s] = spec.Final(state)
+							}
+						}
+					}
 					for pos := range idx {
 						for s, spec := range c.Specs {
+							if spec.Kind == WFold && isRunningFrame(c.Frame) {
+								continue
+							}
 							results[idx[pos]][base+s] = windowValue(spec, c, all, idx, pos, partLen)
 						}
 					}
@@ -254,6 +281,12 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 		return sum.Value() / float64(cnt)
 	case WCount:
 		return int64(fe() - fs() + 1)
+	case WFold:
+		state := spec.Init()
+		for i := fs(); i <= fe(); i++ {
+			state = spec.Step(state, all[idx[i]])
+		}
+		return spec.Final(state)
 	case WCountField:
 		var cnt int64
 		for i := fs(); i <= fe(); i++ {
@@ -281,6 +314,12 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 		return best
 	}
 	return nil
+}
+
+// isRunningFrame is the default ROWS frame, UNBOUNDED PRECEDING → CURRENT
+// ROW — the one frame a fold carries across rows.
+func isRunningFrame(f WindowFrame) bool {
+	return !f.Range && f.Preceding < 0 && f.Following == 0
 }
 
 // rangeBounds resolves a RANGE frame to [start, end] indices — the same

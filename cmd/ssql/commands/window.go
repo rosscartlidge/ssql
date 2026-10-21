@@ -20,6 +20,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		Example("ssql from data.csv | ssql window -row-number rn -order salary -desc", "Number rows by salary descending").
 		Example("ssql from sales.csv | ssql window -sum revenue running_total -partition dept -order date", "Running total per department").
 		Example("ssql from data.csv | ssql window -lag price 1 prev_price -order date", "Previous row's value").
+		Example("ssql from range 10 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib", "A running fold (init, every, final): Fibonacci, one row per step").
 		ClauseDescription("Each clause defines a separate window (partition/order/frame)").
 
 		// Global flags
@@ -316,6 +317,29 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 			Accumulate().
 			Local().
 			Help("Windowed MAX(field) → result field").
+			Done().
+
+		// A fold over the frame: group-by's -stream-expr grammar. Over the
+		// default frame the state carries from row to row — a recurrence.
+		Flag("-stream-expr").
+			Arg("init").
+				Expression().
+				Completer(cf.NoCompleter{Hint: "<init-expr>"}).
+				Done().
+			Arg("every").
+				Expression().
+				Completer(cf.NoCompleter{Hint: "<every-expr>"}).
+				Done().
+			Arg("final").
+				Expression().
+				Completer(cf.NoCompleter{Hint: "<final-expr>"}).
+				Done().
+			Arg("result-name").
+				Completer(&cf.NoCompleter{Hint: "<result-field>"}).
+				Done().
+			Accumulate().
+			Local().
+			Help("Fold INIT EVERY FINAL over the frame → result field: state = INIT, state = EVERY for each row (fields shadow state), FINAL is the row's value; over the default frame a running fold, so '{a:0, b:1}' '{a:b, b:a+b}' 'b' is Fibonacci").
 			Done()
 
 	// Every other registry aggregate over the frame (DFC130 unit 2):
@@ -416,7 +440,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 					}
 				}
 
-				if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outSchema, windowed); err != nil {
+				if err := writeJSONLTypedFromFirstRow(ctx.Stdout(), outSchema, windowFoldResults(configs), windowed); err != nil {
 					return fmt.Errorf("writing output: %w", err)
 				}
 				return nil
@@ -449,7 +473,7 @@ func RegisterWindow(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Write output
 			resultIter := slices.Values(results)
-			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outSchema, resultIter); err != nil {
+			if err := writeJSONLTypedFromFirstRow(ctx.Stdout(), outSchema, windowFoldResults(configs), resultIter); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 
@@ -592,6 +616,11 @@ func parseWindowClauses(clauses []cf.Clause) ([]ssql.WindowConfig, error) {
 
 		// Registry aggregates over the frame (DFC130 unit 2)
 		specs = append(specs, parseWindowRegistrySpecs(clause.Flags)...)
+
+		// Folds over the frame: -stream-expr INIT EVERY FINAL RESULT
+		for _, se := range decodeStreamExprSpecs(clause.Flags["-stream-expr"]) {
+			specs = append(specs, ssql.WindowSpec{Function: ssql.WStreamExpr(se.initExpr, se.everyExpr, se.finalExpr), ResultName: se.result})
+		}
 
 		// Three-arg functions: -ntile n result, -lag field n result, -lead field n result
 		specs = append(specs, parseNtileSpecs(clause.Flags)...)
@@ -809,7 +838,27 @@ func inferWindowResultType(fn ssql.WindowFunc, inputSchema *lib.Schema) string {
 	if field, ok := ssql.WindowFuncField(fn); ok && inputSchema != nil && inputSchema.HasField(field) {
 		return inputSchema.TypeOf(field)
 	}
+	if ssql.DescribeWindowFunc(fn).Kind == "stream_expr" {
+		// The fold's FINAL has its own type, read from the first row
+		// (writeJSONLTypedFromFirstRow); this is the placeholder when
+		// there is no row, as group-by's.
+		return "float"
+	}
 	return "string"
+}
+
+// windowFoldResults names the -stream-expr result columns of configs — the
+// columns whose wire type is read from the first row.
+func windowFoldResults(configs []ssql.WindowConfig) []string {
+	var names []string
+	for _, cfg := range configs {
+		for _, spec := range cfg.Specs {
+			if ssql.DescribeWindowFunc(spec.Function).Kind == "stream_expr" {
+				names = append(names, spec.ResultName)
+			}
+		}
+	}
+	return names
 }
 
 // generateWindowCode generates Go code for the window command.

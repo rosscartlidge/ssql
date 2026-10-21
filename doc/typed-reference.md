@@ -658,6 +658,9 @@ type WindowSpec[T any] struct {
     Default any                      // LAG/LEAD default (nil = absent)
     Num     func(T) (float64, bool)  // the numeric field for sum/avg
     Val     func(T) (any, bool)      // any field for lag, lead, first, last, nth, count, min, max
+    Init    func() any               // WFold (window -stream-expr): a fresh state
+    Step    func(state any, r T) any // folds one row into the state and returns it
+    Final   func(state any) any      // the row's value from the state (nil = absent)
 }
 type WindowFrame struct {
     Preceding, Following           int      // rows; -1 = unbounded
@@ -682,6 +685,7 @@ const (
 	WCountField
 	WMin
 	WMax
+	WFold
 )
 ```
 

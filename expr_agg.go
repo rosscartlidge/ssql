@@ -2,7 +2,6 @@ package ssql
 
 import (
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 
@@ -44,6 +43,8 @@ func ExprAgg(expression string) AggregateFunc {
 //   - everyExpr: updates state for each record, e.g. "{s: s + salary}"
 //   - finalExpr: extracts the final result from state, e.g. "s"
 //
+// The fold compiles once and runs over every group (exprFold,
+// window_fold.go — the same engine as WStreamExpr, the window form).
 // Panics if any expression is invalid or evaluation fails.
 //
 // Example:
@@ -52,8 +53,9 @@ func ExprAgg(expression string) AggregateFunc {
 //	    "total": ssql.StreamExprAgg("{s: 0}", "{s: s + salary}", "s"),
 //	}
 func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc {
+	fold := newExprFold(initExpr, everyExpr, finalExpr)
 	return func(records []Record) AggregateResult {
-		result, err := evalStreamAggExpr(initExpr, everyExpr, finalExpr, records)
+		result, err := fold.run(records)
 		if err != nil {
 			panic(fmt.Errorf("StreamExprAgg: %w", err))
 		}
@@ -61,89 +63,51 @@ func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc {
 	}
 }
 
-// evalStreamAggExpr evaluates a streaming aggregation on a group of records.
-func evalStreamAggExpr(initExpr, everyExpr, finalExpr string, records []Record) (any, error) {
-	if len(records) == 0 {
-		return nil, fmt.Errorf("no records to process")
-	}
-
-	// 1. Initialize state
-	initProgram, err := expr.Compile(initExpr)
-	if err != nil {
-		return nil, fmt.Errorf("compiling init expression: %w", err)
-	}
-	state, err := expr.Run(initProgram, nil)
-	if err != nil {
-		return nil, fmt.Errorf("evaluating init expression: %w", err)
-	}
-	stateMap, ok := state.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("init expression must return object, got %T", state)
-	}
-
-	// 2. Build a sample environment for compiling (state + first record's fields)
-	compileEnv := make(map[string]any)
-	maps.Copy(compileEnv, stateMap)
-	maps.Insert(compileEnv, records[0].All())
-
-	// Compile "every" expression with combined environment
-	everyProgram, err := expr.Compile(everyExpr, append([]expr.Option{expr.Env(compileEnv)}, ExprStandardOptions()...)...)
-	if err != nil {
-		return nil, fmt.Errorf("compiling every expression: %w", err)
-	}
-
-	// 3. Process each record
-	for _, record := range records {
-		env := make(map[string]any)
-		maps.Copy(env, stateMap)
-		maps.Insert(env, record.All())
-
-		newState, err := expr.Run(everyProgram, env)
-		if err != nil {
-			return nil, fmt.Errorf("evaluating every expression: %w", err)
-		}
-		stateMap, ok = newState.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("every expression must return object, got %T", newState)
-		}
-	}
-
-	// 4. Compute final result
-	finalProgram, err := expr.Compile(finalExpr, append([]expr.Option{expr.Env(stateMap)}, ExprStandardOptions()...)...)
-	if err != nil {
-		return nil, fmt.Errorf("compiling final expression: %w", err)
-	}
-	result, err := expr.Run(finalProgram, stateMap)
-	if err != nil {
-		return nil, fmt.Errorf("evaluating final expression: %w", err)
-	}
-
-	return result, nil
-}
-
-// aggResult types an aggregation expression's result: every numeric
-// result is float64 (as it always was), and a string, bool or time.Time
-// result is kept as is — `max(date)` over ISO dates, a `-stream-expr`
-// that carries a name, a latest timestamp. Anything else (a map, a list,
-// nil) is a wrong expression and panics with a clear message; the old
-// silent coercion to 0 turned that into corrupted-looking data, and until
+// aggResult types an aggregation expression's result: an integer result
+// is int64 and a float result float64 — the VM's own type, so an int fold
+// (`{a:0, b:1}` / `{a:b, b:a+b}` / `b`, Fibonacci) is exact to 2^63 where
+// a coercion to float64 rounded it past 2^53 (until v4.121.2 every
+// numeric result became float64); a string, bool or time.Time result is
+// kept as is — `max(date)` over ISO dates, a `-stream-expr` that carries
+// a name, a latest timestamp. Anything else (a map, a list, nil) is a
+// wrong expression and panics with a clear message; the old silent
+// coercion to 0 turned that into corrupted-looking data, and until
 // v4.94.0 a string result panicked too ("need a numeric result").
 func aggResult(context string, v any) AggregateResult {
-	switch x := v.(type) {
-	case float64, float32, int, int64, int32, int16, int8,
-		uint, uint64, uint32, uint16, uint8:
-		return AggResult[float64]{val: toFloat64(v)}
+	switch x := aggValue(context, v).(type) {
+	case int64:
+		return AggResult[int64]{val: x}
+	case float64:
+		return AggResult[float64]{val: x}
 	case string:
 		return AggResult[string]{val: x}
 	case bool:
 		return AggResult[bool]{val: x}
 	case time.Time:
 		return AggResult[time.Time]{val: x}
+	case JSONString:
+		return AggResult[JSONString]{val: x}
+	}
+	panic(fmt.Errorf("%s: unreachable result %T", context, v))
+}
+
+// aggValue is aggResult's typing without the wrapper: the canonical
+// scalar (int64, float64, string, bool, time.Time) or JSONString for a
+// list or map; anything else panics with a clear message. The window fold
+// (WStreamExpr) types its per-row value with it.
+func aggValue(context string, v any) any {
+	switch x := v.(type) {
+	case int, int64, int32, int16, int8, uint, uint64, uint32, uint16, uint8:
+		return toInt64(v)
+	case float64, float32:
+		return toFloat64(v)
+	case string, bool, time.Time:
+		return x
 	}
 	if js, ok := NestedValue(v); ok {
 		// A list or map result is a nested value: JSON text, `json` on
 		// the wire (DFC144 Level 1).
-		return AggResult[JSONString]{val: js}
+		return js
 	}
 	panic(fmt.Errorf("%s: expression returned %T (%v), need a number, string, bool, time, list or map", context, v, v))
 }
@@ -267,6 +231,34 @@ func isNumeric(v any) bool {
 		return true
 	}
 	return false
+}
+
+// toInt64 converts an integer of any width to int64 exactly.
+func toInt64(v any) int64 {
+	switch val := v.(type) {
+	case int:
+		return int64(val)
+	case int64:
+		return val
+	case int32:
+		return int64(val)
+	case int16:
+		return int64(val)
+	case int8:
+		return int64(val)
+	case uint:
+		return int64(val)
+	case uint64:
+		return int64(val)
+	case uint32:
+		return int64(val)
+	case uint16:
+		return int64(val)
+	case uint8:
+		return int64(val)
+	default:
+		return 0
+	}
 }
 
 // toFloat64 converts various numeric types to float64

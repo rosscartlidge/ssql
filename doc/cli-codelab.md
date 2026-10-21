@@ -419,6 +419,16 @@ order, so on a file they are the first and last row of each group:
 ssql from employees.csv | ssql group-by dept -first name first_hired -last name last_hired -count-distinct city cities -string-agg name ", " members | ssql to table
 ```
 
+An aggregate no flag names is a **fold**: `-stream-expr INIT EVERY
+FINAL NAME` keeps a state object, steps it with every row, and reads
+the result at the end ([EXPRESSIONS.md](EXPRESSIONS.md#folds--stream-expr-init-every-final-name)
+has the rules):
+
+```bash
+# A level-weighted average salary per department: the state is (weighted sum, total weight)
+ssql from employees.csv | ssql group-by dept -stream-expr '{s:0, w:0}' '{s: s + salary * level, w: w + level}' 's / w' weighted | ssql to table
+```
+
 ```bash
 # Top 3 earners without sorting everything (a heap, O(3) memory)
 ssql from employees.csv | ssql top 3 -field salary | ssql include name salary | ssql to table
@@ -776,6 +786,15 @@ ssql from sensor.csv | ssql window -order ts -lag temp 1 prev_temp | ssql where 
 
 (Without the guard, `update` stops loudly at row one: `float64 - <nil>`.
 ssql never invents a value for a missing field.)
+
+The fold from section 3 runs per row here, and over the default frame
+(every row up to this one) its state carries from row to row — a
+recurrence in one stage:
+
+```bash
+# Fibonacci: the state is (a, b), every row steps it, the row's value is b
+ssql from range 10 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib | ssql to table
+```
 
 Signal processing is built in. `signal.csv` is a 5 Hz + 20 Hz mix sampled
 at 100 Hz; the FFT finds both:

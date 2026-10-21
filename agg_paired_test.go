@@ -12,7 +12,7 @@ func TestArgMaxArgMin(t *testing.T) {
 	recs := []Record{
 		NewRecord(map[string]any{"name": "Alice", "salary": int64(95000)}),
 		NewRecord(map[string]any{"name": "Carol", "salary": int64(105000)}),
-		NewRecord(map[string]any{"name": "NoPay"}), // no BY: skipped
+		NewRecord(map[string]any{"name": "NoPay"}),         // no BY: skipped
 		NewRecord(map[string]any{"salary": int64(200000)}), // no FIELD: skipped
 		NewRecord(map[string]any{"name": "Eve", "salary": int64(88000)}),
 	}
@@ -35,8 +35,8 @@ func TestArgMaxArgMin(t *testing.T) {
 		NewRecord(map[string]any{"code": "c", "n": int64(3)}),
 		NewRecord(map[string]any{"code": "a", "n": int64(1)}),
 	}
-	if got := ArgMax("n", "code")(byStr).GetValue(); got != float64(3) {
-		t.Fatalf("ArgMax by string = %v (%T), want 3", got, got)
+	if got := ArgMax("n", "code")(byStr).GetValue(); got != int64(3) {
+		t.Fatalf("ArgMax by string = %v (%T), want int64 3", got, got)
 	}
 	if got := ArgMax("name", "salary")(aggRecords("x", nil)).GetValue(); got != nil {
 		t.Fatalf("ArgMax of nothing = %v, want nil (no value)", got)

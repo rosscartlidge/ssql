@@ -399,7 +399,14 @@ func parseExprSpecs(ctx *cf.Context) []exprSpec {
 // parseStreamExprSpecs decodes -stream-expr (init, every, final,
 // result-name) flags.
 func parseStreamExprSpecs(ctx *cf.Context) []streamExprSpec {
-	vals, ok := ctx.GlobalFlags["-stream-expr"].([]any)
+	return decodeStreamExprSpecs(ctx.GlobalFlags["-stream-expr"])
+}
+
+// decodeStreamExprSpecs decodes the accumulated value of a -stream-expr
+// flag (INIT EVERY FINAL RESULT) — group-by's global flag and window's
+// per-clause one share the grammar, so they share the decoder.
+func decodeStreamExprSpecs(raw any) []streamExprSpec {
+	vals, ok := raw.([]any)
 	if !ok {
 		return nil
 	}

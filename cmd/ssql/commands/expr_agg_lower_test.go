@@ -24,7 +24,7 @@ func TestLowerExprAgg(t *testing.T) {
 		if !plan.UsesCount {
 			t.Errorf("count() not detected")
 		}
-		if plan.Result != "(float64(a.ea0_t0) / float64(a.ea0_cnt))" {
+		if plan.Result != "(float64(a.ea0_t0) / float64(a.ea0_cnt))" || plan.ResultType != exprGoFloat {
 			t.Errorf("result: %s", plan.Result)
 		}
 	})
@@ -47,7 +47,7 @@ func TestLowerExprAgg(t *testing.T) {
 		if len(plan.Terms) != 1 {
 			t.Errorf("identical sum terms must share one accumulator: %+v", plan.Terms)
 		}
-		if plan.Result != "float64((a.ea0_t0 + a.ea0_t0))" {
+		if plan.Result != "(a.ea0_t0 + a.ea0_t0)" || plan.ResultType != exprGoInt {
 			t.Errorf("result: %s", plan.Result)
 		}
 	})
@@ -62,7 +62,7 @@ func TestLowerExprAgg(t *testing.T) {
 		if plan.Terms[0].Type != exprGoInt {
 			t.Errorf("int sum must accumulate int64: %+v", plan.Terms[0])
 		}
-		if plan.Result != "float64((a.ea0_t0 % 5))" {
+		if plan.Result != "(a.ea0_t0 % 5)" || plan.ResultType != exprGoInt {
 			t.Errorf("result: %s", plan.Result)
 		}
 	})

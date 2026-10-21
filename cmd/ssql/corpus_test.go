@@ -411,6 +411,15 @@ func TestPipelineCorpus(t *testing.T) {
 			Excludes: []string{"10,5"},
 		},
 		{
+			// window -stream-expr in every mode: record calls
+			// ssql.WStreamExpr; typed lowers the fold to a state struct and
+			// a typed.WFold spec (the group-by lowering reused).
+			Name:     "window_stream_expr_every_mode",
+			Pipeline: `{{.bin}} from range 6 | {{.bin}} window -order n -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib | {{.bin}} where -if fib gt 3 | {{.bin}} to csv`,
+			Contains: []string{"n,fib", "4,5", "6,13"},
+			Excludes: []string{"3,3"},
+		},
+		{
 			// The typed `to table FIELDS` sink emitted ctx.Stdout(), a name
 			// that does not exist in a generated program (found 2026-10-06).
 			Name:     "to_table_selected_fields",

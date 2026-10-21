@@ -390,6 +390,11 @@ that run in every lane, including `generate sql`: `-first`, `-last`,
 FIELD BY NAME`, `-arg-min`, `-min`/`-max` (strings and times too). Prefer the flag when one exists: flags translate to SQL as well;
 `-expr` does not.
 
+A result keeps its own type: an integer result is an int column, exact
+to 2^63 (`sum` of ints, `count()`, a `-stream-expr` fold whose state
+stays int — `'{a:0, b:1}' '{a:b, b:a+b}' 'b'` over `from range 91` is
+fib(92) exactly), a float result is float, a string a string.
+
 The aggregates themselves — `sum`, `count`, `avg`, `min`, `max`,
 `first`, `last` — take a per-row expression and aggregate it over the
 group: `sum(price * qty)`, `max(len(tags))`. Aggregates do not nest, as
@@ -619,6 +624,53 @@ ssql from sales.csv | ssql update -if-macro cheap price cost -set tag thin
   a `run` document or a `serve` workspace that keeps `-set-macro` uses
   that machine's file, as a shell alias would. `ssql macro list` shows
   what is defined; `SSQL_MACROS=/dev/null` turns macros off.
+
+## Folds: `-stream-expr INIT EVERY FINAL NAME`
+
+A fold is an aggregation written as a recurrence: a state, a step, a
+result. `group-by -stream-expr` and `window -stream-expr` take the same
+three expressions:
+
+- `INIT` makes the state, an object literal: `'{s: 0, n: 0}'`
+- `EVERY` makes the *next* state from the current one and the row — an
+  object with the same keys. The row's fields and the state's keys are
+  both in scope; a field shadows a state key of the same name. The whole
+  object is computed from the old state and then replaces it, so
+  `'{a: b, b: a}'` swaps
+- `FINAL` reads the result from the state (state keys only): `'s / n'`
+
+```bash
+# An average as a fold
+ssql from employees.csv | ssql group-by dept -stream-expr '{s:0, n:0}' '{s: s + salary, n: n + 1}' 's / n' avg_salary
+```
+
+The result keeps `FINAL`'s own type: an int fold is an int column, exact
+to 2^63; a float fold a float; a string a string.
+
+In `group-by` the fold runs over each group: one row per group. In
+`window` it runs over each row's *frame*: one value per row — and the
+default frame (every row up to the current one) makes it a **running**
+fold whose state carries from row to row, so a recurrence is one window
+stage:
+
+```bash
+# Fibonacci: the state is (a, b); every row steps it; the row's value is b
+ssql from range 10 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib | ssql to table
+```
+
+A bounded frame (`-preceding N`, `-following N`, a RANGE frame) restarts
+the fold at the frame's first row, so `'{s:0}' '{s: s + x}' 's'` over
+`-preceding 2` is a three-row moving sum. In `window` a `nil` FINAL is
+the absent value — what a fold that carries the previous row has at the
+first one: `'{prev: nil, cur: nil}' '{prev: cur, cur: price}' 'prev'` is
+`-lag price 1`.
+
+Every lane runs a fold: exec and `generate go` record mode share the
+same compiled fold; typed mode lowers the state to a Go struct and the
+step to one simultaneous assignment (a `-stream-expr` makes a group-by
+serial — fold state does not merge across shards). `generate sql` has no
+fold and refuses loudly, so prefer a flag when one exists (`-sum`,
+`-avg`, `-lag`, …): flags translate to SQL.
 
 ## Common Patterns
 

@@ -25,9 +25,10 @@ import (
 //
 // Accumulators keep the element expression's own type (int64 sums stay
 // int64 — expr-lang's sum of ints is an int, and int wrap/`%` semantics
-// must survive into the outer arithmetic); the FINAL result is coerced to
-// float64 like the VM's mustAggFloat64. A non-numeric outer expression is
-// a refusal: record fallback reproduces the VM's loud runtime panic.
+// must survive into the outer arithmetic), and so does the result: an
+// int outer expression is an int64 column, a float one float64, as exec's
+// aggResult types the VM's value. A non-numeric outer expression is a
+// refusal: record fallback carries strings, bools and times.
 
 // exprAggTerm is one distinct sum(_records, elem) accumulator.
 type exprAggTerm struct {
@@ -42,8 +43,9 @@ type exprAggPlan struct {
 	Terms     []exprAggTerm
 	UsesCount bool
 	CountName string // shared counter field, e.g. "ea0_cnt"
-	Result    string // outer Go expression over accumulators, float64-coerced
-	Imports   []string
+	Result     string     // outer Go expression over accumulators, in ResultType
+	ResultType exprGoType // int64 or float64: the result column's Go type
+	Imports    []string
 	Hoisted   []string
 }
 
@@ -129,9 +131,10 @@ func lowerExprAgg(spec exprSpec, schema *lib.TypedSchema, idx int) (exprAggPlan,
 		return plan, fmt.Errorf("aggregation expression: %w", err)
 	}
 	if !outer.Type.numeric() {
-		return plan, fmt.Errorf("aggregation result is %s — the VM coerces via mustAggFloat64, which panics on non-numerics", outer.Type)
+		return plan, fmt.Errorf("aggregation result is %s — typed aggregation results must be numeric (record mode carries strings, bools and times)", outer.Type)
 	}
-	plan.Result = asFloat(outer)
+	plan.Result = outer.Src
+	plan.ResultType = outer.Type
 	plan.Imports = append(plan.Imports, outer.Imports...)
 	plan.Hoisted = append(plan.Hoisted, outer.Hoisted...)
 	return plan, nil

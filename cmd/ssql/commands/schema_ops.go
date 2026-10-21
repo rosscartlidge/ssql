@@ -312,13 +312,13 @@ func init() {
 			"-row-number": 1, "-rank": 1, "-dense-rank": 1, "-percent-rank": 1, "-count": 1, "-cume-dist": 1,
 			"-ntile": 2, "-first": 2, "-last": 2, "-sum": 2, "-avg": 2, "-min": 2, "-max": 2, "-count-field": 2,
 			"-lag": 3, "-lead": 3, "-nth-value": 3,
-			"-lag-default": 4, "-lead-default": 4,
+			"-lag-default": 4, "-lead-default": 4, "-stream-expr": 4,
 		}
 		resultFlag := map[string]bool{
 			"-row-number": true, "-rank": true, "-dense-rank": true, "-percent-rank": true, "-cume-dist": true,
 			"-count": true, "-count-field": true, "-ntile": true, "-first": true, "-last": true,
 			"-sum": true, "-avg": true, "-min": true, "-max": true, "-lag": true, "-lead": true,
-			"-nth-value": true, "-lag-default": true, "-lead-default": true,
+			"-nth-value": true, "-lag-default": true, "-lead-default": true, "-stream-expr": true,
 		}
 		for _, d := range windowRegistryDefs() { // DFC130 unit 2: registry aggregates over the frame
 			arity[d.flag] = d.arity()

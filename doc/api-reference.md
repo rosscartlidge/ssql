@@ -727,8 +727,8 @@ func Percentile(field string, p float64) AggregateFunc   // continuous p-quantil
 func StdDev(field string) AggregateFunc                  // sample
 func Variance(field string) AggregateFunc                // sample (n−1)
 
-func ExprAgg(expression string) AggregateFunc                             // sum(price*qty), count(), avg(x)
-func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc  // a fold with mutable state
+func ExprAgg(expression string) AggregateFunc                             // sum(price*qty), count(), avg(x); an int result is int64, a float float64
+func StreamExprAgg(initExpr, everyExpr, finalExpr string) AggregateFunc  // a fold with mutable state; the result keeps the final expression's type
 ```
 
 ```go
@@ -1077,6 +1077,7 @@ type WindowFrame struct {
 | `WMin(field)` | `MIN(field)` | minimum in the frame |
 | `WMax(field)` | `MAX(field)` | maximum in the frame |
 | `WAggregate(spec)` | any aggregate | a registry aggregate (`StdDev`, `Percentile`, …) over the frame; materialised path only |
+| `WStreamExpr(init, every, final)` | — | a fold over the frame (`StreamExprAgg`'s window form): running over the default frame, restarted at the frame's first row otherwise; a nil final is absent; streams |
 
 ```go
 func WRowNumber() WindowFunc
@@ -1099,6 +1100,7 @@ func WCountField(field string) WindowFunc
 func WMin(field string) WindowFunc
 func WMax(field string) WindowFunc
 func WAggregate(spec WAggSpec) WindowFunc
+func WStreamExpr(initExpr, everyExpr, finalExpr string) WindowFunc  // a fold over the frame; see StreamExprAgg
 type WAggSpec struct {
     Name    string        // registry function name, e.g. "stddev"
     Field   string        // the field the aggregate reads
@@ -1144,7 +1146,9 @@ the partition fields then the order fields, and then runs in O(frame size)
 or O(1) memory with running accumulators, ring buffers and monotonic
 deques; it supports the default frame (`Preceding: -1, Following: 0`) and
 bounded frames with `Following: 0`, and returns an error for `NTILE`,
-`PERCENT_RANK`, `Following > 0` or `WAggregate`. `MustStreamWindow` panics
+`PERCENT_RANK`, `Following > 0` or `WAggregate` (a `WStreamExpr` fold
+streams: a running state, or a ring of the bounded frame re-folded at
+every row). `MustStreamWindow` panics
 instead of returning the error, for configurations known valid in
 advance.
 

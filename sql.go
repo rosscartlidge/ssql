@@ -2098,74 +2098,8 @@ func Window(configs []WindowConfig) Filter[Record, Record] {
 				return
 			}
 
-			n := len(all)
-
-			// results[originalIndex][resultFieldName] = computed value
-			results := make([]map[string]any, n)
-			for i := range results {
-				results[i] = make(map[string]any)
-			}
-
-			// Track output order from first config that has OrderBy
-			var outputOrder []int
-			orderDecided := false
-
-			// 2. Process each config (clause)
-			for _, cfg := range configs {
-				frame := cfg.Frame
-
-				// Partition records
-				// partitions maps group key -> list of original indices
-				partitions := make(map[string][]int)
-				var partOrder []string // preserve first-seen order of partition keys
-
-				for i, r := range all {
-					key := buildGroupKey(r, cfg.PartitionBy)
-					if _, exists := partitions[key]; !exists {
-						partOrder = append(partOrder, key)
-					}
-					partitions[key] = append(partitions[key], i)
-				}
-
-				// Process each partition
-				for _, pkey := range partOrder {
-					indices := partitions[pkey]
-
-					// Sort indices by OrderBy fields
-					if len(cfg.OrderBy) > 0 {
-						sort.SliceStable(indices, func(a, b int) bool {
-							return CompareRecordFields(all[indices[a]], all[indices[b]], cfg.OrderBy) < 0
-						})
-					}
-
-					// Record output order from first config
-					if !orderDecided {
-						outputOrder = append(outputOrder, indices...)
-					}
-
-					partLen := len(indices)
-
-					// For each row in the sorted partition, compute all specs
-					for pos, origIdx := range indices {
-						for _, spec := range cfg.Specs {
-							val := computeWindowFunc(spec.Function, all, indices, pos, partLen, frame, cfg.OrderBy)
-							results[origIdx][spec.ResultName] = val
-						}
-					}
-				}
-
-				if !orderDecided {
-					orderDecided = true
-				}
-			}
-
-			// If no config had OrderBy, use original input order
-			if outputOrder == nil {
-				outputOrder = make([]int, n)
-				for i := range outputOrder {
-					outputOrder[i] = i
-				}
-			}
+			// 2. Compute every clause's results and the output order
+			results, outputOrder := windowResults(configs, all)
 
 			// 3. Emit records in output order with computed fields
 			for _, origIdx := range outputOrder {
@@ -2184,6 +2118,95 @@ func Window(configs []WindowConfig) Filter[Record, Record] {
 			}
 		}
 	}
+}
+
+// windowResults computes every clause over the materialised input:
+// results[originalIndex][resultName] = value, plus the output order (the
+// first clause with an ORDER BY fixes it; else the input order). A named
+// function, not part of Window's closure: with the per-clause work
+// inline the closure crossed the compiler's big-function threshold, under
+// which it stopped inlining ToMutable in the emission loop — 3 more
+// allocations and ~20% more time per row for every window function
+// (found by BenchmarkWindow when the fold was added, 2026-10-21).
+func windowResults(configs []WindowConfig, all []Record) ([]map[string]any, []int) {
+	n := len(all)
+
+	// results[originalIndex][resultFieldName] = computed value
+	results := make([]map[string]any, n)
+	for i := range results {
+		results[i] = make(map[string]any)
+	}
+
+	// Track output order from first config that has OrderBy
+	var outputOrder []int
+	orderDecided := false
+
+	// 2. Process each config (clause)
+	for _, cfg := range configs {
+		frame := cfg.Frame
+
+		// Partition records
+		// partitions maps group key -> list of original indices
+		partitions := make(map[string][]int)
+		var partOrder []string // preserve first-seen order of partition keys
+
+		for i, r := range all {
+			key := buildGroupKey(r, cfg.PartitionBy)
+			if _, exists := partitions[key]; !exists {
+				partOrder = append(partOrder, key)
+			}
+			partitions[key] = append(partitions[key], i)
+		}
+
+		// Process each partition
+		for _, pkey := range partOrder {
+			indices := partitions[pkey]
+
+			// Sort indices by OrderBy fields
+			if len(cfg.OrderBy) > 0 {
+				sort.SliceStable(indices, func(a, b int) bool {
+					return CompareRecordFields(all[indices[a]], all[indices[b]], cfg.OrderBy) < 0
+				})
+			}
+
+			// Record output order from first config
+			if !orderDecided {
+				outputOrder = append(outputOrder, indices...)
+			}
+
+			partLen := len(indices)
+
+			// A -stream-expr fold over the running frame carries its
+			// state across the partition in one pass (window_fold.go);
+			// everything else is computed per row.
+			running := runningFoldValues(cfg, all, indices)
+
+			// For each row in the sorted partition, compute all specs
+			for pos, origIdx := range indices {
+				for si, spec := range cfg.Specs {
+					if vals, ok := running[si]; ok {
+						results[origIdx][spec.ResultName] = vals[pos]
+						continue
+					}
+					val := computeWindowFunc(spec.Function, all, indices, pos, partLen, frame, cfg.OrderBy)
+					results[origIdx][spec.ResultName] = val
+				}
+			}
+		}
+
+		if !orderDecided {
+			orderDecided = true
+		}
+	}
+
+	// If no config had OrderBy, use original input order
+	if outputOrder == nil {
+		outputOrder = make([]int, n)
+		for i := range outputOrder {
+			outputOrder[i] = i
+		}
+	}
+	return results, outputOrder
 }
 
 // computeWindowFunc computes a single window function value for one row.
@@ -2315,6 +2338,11 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 	case wAgg:
 		// A registry aggregate over the frame (DFC130 unit 2).
 		return applyFrameAggregate(f, all, indices, frameStart(pos, partLen, frame), frameEnd(pos, partLen, frame))
+
+	case wStreamExpr:
+		// A fold over the frame, restarted at the frame's first row (the
+		// running frame never reaches here: Window precomputes it).
+		return f.foldFrame(all, indices, frameStart(pos, partLen, frame), frameEnd(pos, partLen, frame))
 
 	case wCountField:
 		start := frameStart(pos, partLen, frame)
@@ -2890,6 +2918,11 @@ func newStreamWindowAgg(fn WindowFunc, frame WindowFrame) (streamWindowAgg, erro
 		return nil, fmt.Errorf("CUME_DIST cannot be streamed (requires partition size)")
 	case wAgg:
 		return nil, fmt.Errorf("%s over a window cannot be streamed yet (the aggregate has no Remove); drop -presorted", f.spec.Name)
+	case wStreamExpr:
+		if bounded {
+			return &swSlidingFold{f: f, ring: make([]Record, frameSize), size: frameSize}, nil
+		}
+		return &swFold{f: f}, nil
 	case wNtile:
 		return nil, fmt.Errorf("NTILE cannot be streamed (requires partition size)")
 	case wPercentRank:

@@ -444,6 +444,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 				// Build output schema
 				var outputSchema *lib.Schema
+				var exprResultNames []string
 				if inputSchema != nil {
 					outputSchema = lib.NewSchema()
 					for _, field := range groupByFields {
@@ -459,12 +460,13 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							outputSchema.AddField(prefix+spec.result, aggWireType(spec, inputSchema))
 						}
 						for _, spec := range exprSpecs {
-							outputSchema.AddField(prefix+spec.result, "float")
+							outputSchema.AddField(prefix+spec.result, "float") // placeholder: typed from the first row below
+							exprResultNames = append(exprResultNames, prefix+spec.result)
 						}
 					}
 				}
 
-				if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, result); err != nil {
+				if err := writeJSONLTypedFromFirstRow(ctx.Stdout(), outputSchema, exprResultNames, result); err != nil {
 					return fmt.Errorf("writing output: %w", err)
 				}
 				return nil
@@ -560,6 +562,7 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 			// Build output schema: group-by fields + aggregation result fields
 			var outputSchema *lib.Schema
+			var exprResultNames []string
 			if inputSchema != nil {
 				outputSchema = lib.NewSchema()
 				// Add group-by fields with their input types
@@ -572,18 +575,20 @@ func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				for _, spec := range aggSpecs {
 					outputSchema.AddField(spec.result, aggWireType(spec, inputSchema))
 				}
-				// Add expression result fields
+				// Expression and streaming results: the type is the
+				// expression's own, read from the first row below.
 				for _, spec := range exprSpecs {
-					outputSchema.AddField(spec.result, "float") // ExprAgg always returns float64
+					outputSchema.AddField(spec.result, "float")
+					exprResultNames = append(exprResultNames, spec.result)
 				}
-				// Add streaming expression result fields
 				for _, spec := range streamExprSpecs {
-					outputSchema.AddField(spec.result, "float") // StreamExprAgg always returns float64
+					outputSchema.AddField(spec.result, "float")
+					exprResultNames = append(exprResultNames, spec.result)
 				}
 			}
 
 			// Write output as JSONL (preserving schema if present)
-			if err := lib.WriteJSONLWithSchema(ctx.Stdout(), outputSchema, aggregated); err != nil {
+			if err := writeJSONLTypedFromFirstRow(ctx.Stdout(), outputSchema, exprResultNames, aggregated); err != nil {
 				return fmt.Errorf("writing output: %w", err)
 			}
 

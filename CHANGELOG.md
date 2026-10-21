@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An aggregation result keeps its type**: `group-by -stream-expr` and `-expr` results, and the carried value of `-min`/`-max`/`-first`/`-last`/`-mode`/`-arg-max`, were coerced to float64 in exec and the typed lane, so an integer fold rounded past 2^53 (Ross's Fibonacci fold gave fib(92) as 7540113804746346000). An int result is now int64 in every lane, exact to 2^63, and the exec header types the column from the first result (`int`, `float`, `string`), so the value survives the pipe boundary; the typed aggregator's result struct takes the fold's own type. Library callers of `ExprAgg`, `StreamExprAgg`, `MinOf`/`MaxOf`, `ArgMax`/`ArgMin`, `First`/`Last` and `Mode` get an `int64` where they got a whole-number `float64`.
+
 ### Added
 
+- **`window -stream-expr INIT EVERY FINAL NAME`**: group-by's fold over a window frame, in every lane. Over the default frame the state carries from row to row — a recurrence in one stage (`ssql from range 10 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib` is Fibonacci per row, where group-by needed `-collect` and `explode`); a bounded or RANGE frame restarts the fold at the frame's first row; a nil FINAL is the absent value. exec and record codegen share `ssql.WStreamExpr` (`-presorted` streams it with a running state or a ring of the frame re-folded), typed lowers it to a state struct and `typed.WFold`, `generate sql` refuses loudly, schema mode sees the result. The fold engine compiles its three expressions once and is shared with `StreamExprAgg`, which recompiled them for every group. `doc/EXPRESSIONS.md` gained a Folds section; the codelab shows the fold in both commands.
 - **Row generator `from range N`** ([DFC154](doc/research/dfc154_range_source.md)): N rows of one int column `n` = 1 … N (`-start S`, `-step K`, `-field NAME`), a source that reads nothing — fixtures, demos and benchmarks become pipelines every lane runs and the equivalence gate pins. exec and `generate go` record share `ssql.RangeRecords`; typed gets `typed.Range`/`typed.RangeParallel` (the first shard-aware synthetic source, the row struct rendered inline for `-field`); `generate sql` renders DuckDB's and DataFusion's `range()` and Postgres's `generate_series`; `-records` answers the count; schema mode types `n` as int for Ctrl-O.
 
 ## [4.121.2] - 2026-10-20

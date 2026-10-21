@@ -70,7 +70,7 @@ func TestStatisticsAggregates(t *testing.T) {
 		if got := Mode("c")(aggRecords("c", "SF", "NYC", "SF", nil, "NYC", "SF")).GetValue(); got != "SF" {
 			t.Fatalf("Mode = %v, want SF", got)
 		}
-		if got := Mode("l")(aggRecords("l", int64(7), int64(9), int64(6))).GetValue(); got != float64(7) {
+		if got := Mode("l")(aggRecords("l", int64(7), int64(9), int64(6))).GetValue(); got != int64(7) {
 			t.Fatalf("Mode tie = %v, want first-seen 7", got)
 		}
 	})

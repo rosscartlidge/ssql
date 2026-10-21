@@ -52,6 +52,8 @@ func WindowFuncCode(fn WindowFunc) string {
 	case wAgg:
 		return fmt.Sprintf("ssql.WAggregate(ssql.WAggSpec{Name: %q, Field: %q, Extra: %q, Kind: %q, MinRows: %d, Agg: %s, Code: %q})",
 			f.spec.Name, f.spec.Field, f.spec.Extra, f.spec.Kind, f.spec.MinRows, f.spec.Code, f.spec.Code)
+	case wStreamExpr:
+		return fmt.Sprintf("ssql.WStreamExpr(%q, %q, %q)", f.Init, f.Every, f.Final)
 	}
 	panic(fmt.Errorf("ssql.WindowFuncCode: unknown window function %T", fn))
 }
@@ -111,7 +113,8 @@ func goLiteral(v any) string {
 // WindowFuncResultKind is the wire type of a window function's result:
 // "int" (row_number, rank, dense_rank, ntile, count), "float"
 // (percent_rank, sum, avg), or "" when the result has the SOURCE FIELD's
-// type (lag, lead, first, last, min, max).
+// type (lag, lead, first, last, min, max) — or, for a -stream-expr fold,
+// the FINAL expression's own type, known only from its first value.
 func WindowFuncResultKind(fn WindowFunc) string {
 	switch f := fn.(type) {
 	case wRowNumber, wRank, wDenseRank, wNtile, wCount, wCountField:
@@ -129,15 +132,19 @@ func WindowFuncResultKind(fn WindowFunc) string {
 // name in lower case ("row_number", "rank", "dense_rank", "ntile",
 // "percent_rank", "cume_dist", "lag", "lead", "first", "last",
 // "nth_value", "sum", "avg", "count", "count_field", "min", "max",
-// "aggregate"); Field the field read (""), N the offset / tile count /
-// nth, Default LAG/LEAD's default (nil = none). For "aggregate" (a
-// registry aggregate over the frame) Agg is its WAggSpec.
+// "aggregate", "stream_expr"); Field the field read (""), N the offset /
+// tile count / nth, Default LAG/LEAD's default (nil = none). For
+// "aggregate" (a registry aggregate over the frame) Agg is its WAggSpec;
+// for "stream_expr" (a fold over the frame) Init, Every and Final are its
+// three expressions.
 type WindowFuncDesc struct {
 	Kind    string
 	Field   string
 	N       int
 	Default any
 	Agg     *WAggSpec
+
+	Init, Every, Final string
 }
 
 // DescribeWindowFunc returns the structural description of fn.
@@ -184,6 +191,8 @@ func DescribeWindowFunc(fn WindowFunc) WindowFuncDesc {
 	case wAgg:
 		spec := f.spec
 		return WindowFuncDesc{Kind: "aggregate", Field: f.spec.Field, Agg: &spec}
+	case wStreamExpr:
+		return WindowFuncDesc{Kind: "stream_expr", Init: f.Init, Every: f.Every, Final: f.Final}
 	}
 	panic(fmt.Errorf("ssql.DescribeWindowFunc: unknown window function %T", fn))
 }

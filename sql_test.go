@@ -800,15 +800,17 @@ func TestExprAggSum(t *testing.T) {
 	exprFn := ExprAgg("sum(value)")
 	result := exprFn(records).getValue()
 
-	if result != float64(60) {
-		t.Errorf("ExprAgg sum should return 60, got %v", result)
+	if result != int64(60) {
+		t.Errorf("ExprAgg sum of ints should return int64 60, got %#v", result)
 	}
 }
 
 // TestExprAggStringResults: aggregation expressions may produce strings
 // (and bools, times) — `max(date)` over ISO dates, a stream fold that
 // carries a name. Until v4.94.0 both panicked ("need a numeric result" /
-// "invalid argument for max (type string)"); numbers stay float64.
+// "invalid argument for max (type string)"); a number keeps its own type
+// (an int result is int64 — exact past 2^53 — a float result float64;
+// until v4.121.2 every number became float64).
 func TestExprAggStringResults(t *testing.T) {
 	records := []Record{
 		NewRecord(map[string]any{"name": "Alice", "date": "2026-01-05", "n": int64(3)}),
@@ -823,12 +825,14 @@ func TestExprAggStringResults(t *testing.T) {
 		{"max(date)", ExprAgg("max(date)"), "2026-02-14"},
 		{"min(date)", ExprAgg("min(date)"), "2026-01-05"},
 		{"max(name)", ExprAgg("max(name)"), "Carol"},
-		{"max(n) stays float64", ExprAgg("max(n)"), 9.0},
-		{"min(n) stays float64", ExprAgg("min(n)"), 3.0},
+		{"max(n) stays int64", ExprAgg("max(n)"), int64(9)},
+		{"min(n) stays int64", ExprAgg("min(n)"), int64(3)},
 		{"first(date)", ExprAgg("first(date)"), "2026-01-05"},
 		{"last(name)", ExprAgg("last(name)"), "Bob"},
-		{"first(n) stays float64", ExprAgg("first(n)"), 3.0},
-		{"max over an expression", ExprAgg("max(n * 2)"), 18.0},
+		{"first(n) stays int64", ExprAgg("first(n)"), int64(3)},
+		{"max over an expression", ExprAgg("max(n * 2)"), int64(18)},
+		{"avg is float", ExprAgg("avg(n)"), 17.0 / 3},
+		{"a float fold is float", StreamExprAgg(`{s: 0}`, `{s: s + n / 2}`, `s`), 8.5},
 		{"last over an expression", ExprAgg(`last(name + "!")`), "Bob!"},
 		{"stream string", StreamExprAgg(`{s: ""}`, `{s: date > s ? date : s}`, `s`), "2026-02-14"},
 		{"stream bool", StreamExprAgg(`{b: false}`, `{b: b || n > 8}`, `b`), true},
@@ -886,16 +890,16 @@ func TestExprAggNested(t *testing.T) {
 		expr string
 		want any
 	}{
-		{"sum(sum(scores))", 71.0},
-		{"max(max(scores))", 30.0},
+		{"sum(sum(scores))", int64(71)},
+		{"max(max(scores))", int64(30)},
 		{"avg(sum(scores))", 71.0 / 3},
-		{"sum(len(tags))", 3.0},
-		{"max(len(tags))", 2.0},
-		{"sum(sum(scores) > 5 ? 1 : 0)", 2.0},
-		{"len(flatten(scores))", 6.0},             // group level: scores is the array of lists
-		{"len(filter(scores, sum(#) > 10))", 1.0}, // sum(#) is the closure's own
-		{"sum(len(scores))", 6.0},                 // row level: each row's list length, summed
-		{"count()", 3.0},                          // the bare dummy still parses
+		{"sum(len(tags))", int64(3)},
+		{"max(len(tags))", int64(2)},
+		{"sum(sum(scores) > 5 ? 1 : 0)", int64(2)},
+		{"len(flatten(scores))", int64(6)},             // group level: scores is the array of lists
+		{"len(filter(scores, sum(#) > 10))", int64(1)}, // sum(#) is the closure's own
+		{"sum(len(scores))", int64(6)},                 // row level: each row's list length, summed
+		{"count()", int64(3)},                          // the bare dummy still parses
 	}
 	for _, c := range cases {
 		got := ExprAgg(c.expr)(records).GetValue()
@@ -915,8 +919,8 @@ func TestExprAggCount(t *testing.T) {
 	exprFn := ExprAgg("count()")
 	result := exprFn(records).getValue()
 
-	if result != float64(3) {
-		t.Errorf("ExprAgg count should return 3, got %v", result)
+	if result != int64(3) {
+		t.Errorf("ExprAgg count should return int64 3, got %#v", result)
 	}
 }
 
@@ -946,8 +950,8 @@ func TestExprAggComplexExpression(t *testing.T) {
 	exprFn := ExprAgg("sum(qty * price)")
 	result := exprFn(records).getValue()
 
-	if result != float64(200) {
-		t.Errorf("ExprAgg sum(qty * price) should return 200, got %v", result)
+	if result != int64(200) {
+		t.Errorf("ExprAgg sum(qty * price) of ints should return int64 200, got %#v", result)
 	}
 }
 
@@ -1012,9 +1016,9 @@ func TestStreamExprAggSum(t *testing.T) {
 
 	agg := StreamExprAgg("{s: 0}", "{s: s + salary}", "s")
 	result := agg(records)
-	val := result.GetValue().(float64)
-	if val != 600 {
-		t.Errorf("expected 600, got %v", val)
+	val, ok := result.GetValue().(int64)
+	if !ok || val != 600 {
+		t.Errorf("expected int64 600, got %#v", result.GetValue())
 	}
 }
 
