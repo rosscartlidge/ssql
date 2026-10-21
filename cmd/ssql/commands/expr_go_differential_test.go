@@ -53,6 +53,7 @@ func TestExprGoDifferential(t *testing.T) {
 		"degrees(price)", "radians(pop)", "pi() * qty", "sign(price)", "sign(pop)", "trunc(price)",
 		"round(price, 1)", "round(pop, 1)", "isnan(sqrt(pop))", "isinf(1.0 / qty)", "isfinite(ln(price))",
 		"gcd(pop, qty)", "lcm(pop, qty)", "factorial(qty)", "gamma(price)", "lgamma(price)",
+		"hash(pop)", "hash(pop, 7)", "hash(qty, pop)", "hash(pop, -3)", "md5(city)", "sha1(city)", "sha256(city)",
 		"-pop",
 		`city + "!"`,
 		// §2b comparisons

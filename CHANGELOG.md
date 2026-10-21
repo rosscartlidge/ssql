@@ -5,6 +5,13 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`hash(n[, seed])`, a reproducible integer mix in every lane** ([DFC154](doc/research/dfc154_range_source.md) §6): a 32-bit mix of an integer (lowbias32 over the folded input, a seed term xored in) that exec, `generate go` and `generate sql` on DuckDB, Postgres and DataFusion all compute identically, so `from range N | update -set-expr key 'hash(n) % 10' -set-expr amount 'hash(n, 1) % 500'` is a fixture with spread and no file. The SQL form uses only `&`, `>>`, `*` and xor with every product below 2^63, so no engine overflows; a literal seed folds to its constant. `ssql functions -category hash` and `doc/EXPRESSIONS.md` document it beside the digests.
+- **`md5`, `sha1` and `sha256` translate to SQL and transpile to typed Go**: they were VM-only (`generate sql` refused them, the typed lane fell back to the interpreter). Now each engine's own function (hex-encoded where it returns bytes); Postgres refuses `sha1` by design (pgcrypto). One implementation in `exprfn` behind the VM helpers and the generated code.
+
 ## [4.121.3] - 2026-10-21
 
 ### Fixed

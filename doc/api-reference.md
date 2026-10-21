@@ -311,7 +311,7 @@ const (
 func ExprFieldShadowing() expr.Option   // expr.Compile option: a field named like a builtin (`date`) is the field when bare
 func ExprDate() expr.Option             // expr.Compile option: ssql's date() in place of expr-lang's
 func ExprTimeFunctions() []expr.Option  // the calendar functions below as expression functions (year(ts) … tz, now)
-func ExprMathFunctions() []expr.Option  // the numeric functions (DFC153): sqrt, ln, log(b, x), the trig set, round(x, n), gcd …; NaN/±Inf results are absent once written
+func ExprMathFunctions() []expr.Option  // the numeric functions (DFC153): sqrt, ln, log(b, x), the trig set, round(x, n), gcd …, and hash(n[, seed]) (exprfn.Hash, the reproducible integer mix every lane shares); NaN/±Inf results are absent once written
 func ExprStandardOptions() []expr.Option // shadowing + date() + the calendar and numeric functions: what every ssql compile site passes
 ```
 

@@ -468,6 +468,38 @@ ssql where -if-expr 'bitand(permissions, 4) != 0'
 ssql update -set-expr masked 'bitand(flags, 0x0F)'
 ```
 
+### Hash Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `hash(n)` | Reproducible 32-bit mix of an integer, in `[0, 2^32)` | `hash(1)` → `3531918615` |
+| `hash(n, seed)` | The same with a seed: an independent stream per seed | `hash(1, 7)` → `558192479` |
+| `md5(str)` | MD5 digest, 32 hex characters | `md5("1")` → `"c4ca4238…"` |
+| `sha1(str)` | SHA-1 digest, 40 hex characters | |
+| `sha256(str)` | SHA-256 digest, 64 hex characters | |
+
+`hash` is for spread, not security: the same value in every lane
+(exec, `generate go`, `generate sql` on DuckDB, Postgres and
+DataFusion) and on every machine, so a fixture, a demo or a benchmark
+needs no file — `from range` makes the rows and `hash` makes them
+look like data. It takes an integer (a float with no fraction is
+accepted) and a column or literal seed; it is not a hash of a string
+(the digests are). The definition is lowbias32 over the input's low
+word xor high word, with `(fold(seed) + 1) * 0x27d4eb2f` xored in
+first; `generate sql` renders it as `&`, `>>`, `*` and xor so no
+engine's 64-bit arithmetic overflows, which makes the SQL long (the
+argument is repeated once per step) — write it over a column. The
+digests translate to each engine's own function; Postgres has `sha1`
+only through pgcrypto, so `generate sql -dialect postgres` refuses it.
+
+```bash
+# A fixture with spread and no file: 10 groups, amounts in [0, 500), a sparse flag
+ssql from range 100000 | ssql update -set-expr key 'hash(n) % 10' -set-expr amount 'hash(n, 1) % 500' -set-expr flag 'hash(n, 2) % 7 == 0' | ssql group-by key -sum amount total -count rows
+
+# A stable id from a string
+ssql update -set-expr id 'sha256(name + ":" + email)'
+```
+
 ## Helper Functions (ssql-specific)
 
 ssql provides additional helper functions for safe field access:

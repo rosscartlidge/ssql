@@ -275,6 +275,9 @@ func exprCallToSQL(name string, args []ast.Node) (string, error) {
 	if sql, ok, err := mathFuncToSQL(name, args); ok { // DFC153
 		return sql, err
 	}
+	if sql, ok, err := hashFuncToSQL(name, args); ok { // hash(), the digests
+		return sql, err
+	}
 	if sqlFunc, ok := exprListFuncs[name]; ok {
 		// List functions over a nested value (DFC144 Level 1): DuckDB's
 		// list_* family; the other dialects have no form for a value whose

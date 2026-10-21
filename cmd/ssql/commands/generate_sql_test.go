@@ -416,6 +416,7 @@ func TestExprToSQL(t *testing.T) {
 		{`sign(pop)`, `sign(pop)`},
 		{`gcd(pop, qty)`, `gcd(pop, qty)`},
 		{`factorial(qty)`, `factorial(CAST(qty AS INTEGER))`},
+		{`md5(city)`, `md5(city)`},
 		{`round(price, 2)`, `round(price, 2)`},
 		{`round(price)`, `round(price)`},
 		{`pi()`, `pi()`},

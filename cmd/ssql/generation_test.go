@@ -835,7 +835,8 @@ func TestNegatedConditionGeneration(t *testing.T) {
 }
 
 // TestTierVKeepsTypedPipeline locks expr-transpiler Phase 1.5: an expression
-// OUTSIDE the native subset (sha256) evaluates via the VM against a generated
+// OUTSIDE the native subset (replaceRegex, the one VM-only helper left —
+// sha256 transpiles since 2026-10-22) evaluates via the VM against a generated
 // static env — and the stage STAYS typed, so downstream stages keep their
 // parallel forms. Before 1.5, one such expression ejected the whole stage to
 // record mode and the planner downgraded everything downstream.
@@ -855,7 +856,7 @@ func TestTierVKeepsTypedPipeline(t *testing.T) {
 	t.Run("where tier V stays parallel through group-by", func(t *testing.T) {
 		cmd := exec.Command("bash", "-c",
 			`export SSQL_MODE=parallel && /tmp/ssql_test from `+tmpFile+
-				` | /tmp/ssql_test where -if-expr 'sha256(city) > "8"'`+
+				` | /tmp/ssql_test where -if-expr 'replaceRegex(city, "a", "b") > "8"'`+
 				` | /tmp/ssql_test group-by pop -count c | /tmp/ssql_test generate go +O`)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -884,7 +885,7 @@ func TestTierVKeepsTypedPipeline(t *testing.T) {
 		cmd := exec.Command("bash", "-c",
 			`export SSQL_MODE=typed && /tmp/ssql_test from `+tmpFile+
 				` | /tmp/ssql_test where -if-expr 'pop > 8'`+
-				` | /tmp/ssql_test update -set-expr city 'sha256(city)'`+
+				` | /tmp/ssql_test update -set-expr city 'replaceRegex(city, "a", "b")'`+
 				` | /tmp/ssql_test generate go +O -explain > /dev/null`)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -893,7 +894,7 @@ func TestTierVKeepsTypedPipeline(t *testing.T) {
 		stderr := string(out)
 		for _, want := range []string{
 			`expr "pop > 8": native`,
-			`expr "sha256(city)": VM with static env`,
+			`expr "replaceRegex(city, \"a\", \"b\")": VM with static env`,
 		} {
 			if !strings.Contains(stderr, want) {
 				t.Errorf("-explain output missing %q:\n%s", want, stderr)
@@ -904,7 +905,7 @@ func TestTierVKeepsTypedPipeline(t *testing.T) {
 	t.Run("untypeable new field falls back with explain note", func(t *testing.T) {
 		cmd := exec.Command("bash", "-c",
 			`export SSQL_MODE=typed && /tmp/ssql_test from `+tmpFile+
-				` | /tmp/ssql_test update -set-expr h 'sha256(city)'`+
+				` | /tmp/ssql_test update -set-expr h 'replaceRegex(city, "a", "b")'`+
 				` | /tmp/ssql_test generate go +O -explain > /dev/null`)
 		out, err := cmd.CombinedOutput()
 		if err != nil {

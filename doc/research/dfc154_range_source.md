@@ -2,7 +2,7 @@
 
 Reference: DFC154
 Created: 2026-10-20
-Last modified: 2026-10-21
+Last modified: 2026-10-22
 
 [Back to Index](./README.md)
 
@@ -117,6 +117,18 @@ it by kind.
   identically (DuckDB's `hash` is its own; Go's `maphash` is seeded
   per process). A small follow-up: pick FNV-1a or xxhash, implement in
   `exprfn`, render in SQL as the same arithmetic or refuse by design.
+  **Shipped 2026-10-22** as `hash(n[, seed])`: not FNV (a byte loop
+  has no SQL form) but lowbias32, a 32-bit mixer of five steps whose
+  SQL is `&`, `>>`, `*` and xor with every product below 2^63, so
+  DuckDB, Postgres and DataFusion compute it without overflow; the
+  64-bit input folds to its low word xor high word first, and the
+  seed contributes `(fold(seed) + 1) * 0x27d4eb2f` xored in (a
+  literal seed folds to its constant in SQL). `exprfn.Hash` is the
+  one implementation behind the VM and transpiled code
+  (`generate_sql_hash.go` renders it); the argument is cast to BIGINT
+  because an INTEGER literal shifted by 32 is 0 on DuckDB (found by
+  the DuckDB lane on `hash(n, -3)`). Equivalence case
+  `hash_every_lane`, Golden from a Python implementation.
 - Cross products (`from range 10 | join <(ssql from range 10)`) already
   work through the join; no `-dims` flag.
 - Strings, times, floats in the source: expressions on `n`.

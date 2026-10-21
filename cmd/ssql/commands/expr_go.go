@@ -916,6 +916,29 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		fn := map[string]string{"gcd": "exprfn.GCD", "lcm": "exprfn.LCM", "factorial": "exprfn.Factorial"}[name]
 		res := exprGo{Src: fn + "(" + strings.Join(parts, ", ") + ")", Type: exprGoInt, Imports: []string{exprfnImport}}
 		return mergeMeta(res, kids...), nil
+	case "hash":
+		// exprfn.Hash (DFC154 §6): an int, with an optional int seed.
+		if len(args) < 1 || len(args) > 2 {
+			return exprGo{}, fmt.Errorf("hash(n) or hash(n, seed)")
+		}
+		var parts []string
+		var kids []exprGo
+		for _, a := range args {
+			v, err := e.node(a)
+			if err != nil {
+				return exprGo{}, err
+			}
+			if v.Type != exprGoInt {
+				return exprGo{}, fmt.Errorf("hash() needs integer arguments, got %s", v.Type)
+			}
+			parts = append(parts, v.Src)
+			kids = append(kids, v)
+		}
+		if len(parts) == 1 {
+			parts = append(parts, "0")
+		}
+		res := exprGo{Src: "exprfn.Hash(" + strings.Join(parts, ", ") + ")", Type: exprGoInt, Imports: []string{exprfnImport}}
+		return mergeMeta(res, kids...), nil
 	case "min", "max":
 		if len(args) != 2 {
 			return exprGo{}, fmt.Errorf("%s() takes exactly two arguments", name)
@@ -990,6 +1013,17 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		}
 		fn := map[string]string{"upper": "strings.ToUpper", "lower": "strings.ToLower", "trim": "strings.TrimSpace"}[name]
 		res := exprGo{Src: fn + "(" + arg.Src + ")", Type: exprGoString, Imports: []string{"strings"}}
+		return mergeMeta(res, arg), nil
+	case "md5", "sha1", "sha256":
+		arg, err := one()
+		if err != nil {
+			return exprGo{}, err
+		}
+		if arg.Type != exprGoString {
+			return exprGo{}, fmt.Errorf("%s() needs a string argument, got %s", name, arg.Type)
+		}
+		fn := map[string]string{"md5": "exprfn.MD5", "sha1": "exprfn.SHA1", "sha256": "exprfn.SHA256"}[name]
+		res := exprGo{Src: fn + "(" + arg.Src + ")", Type: exprGoString, Imports: []string{exprfnImport}}
 		return mergeMeta(res, arg), nil
 	case "hasPrefix", "hasSuffix":
 		if len(args) != 2 {

@@ -122,8 +122,8 @@ Bitwise Functions (8):
   bitand(a, b), bitor(a, b), bitxor(a, b), bitnand(a, b),
   bitnot(a), bitshl(a, n), bitshr(a, n), bitushr(a, n)
 
-Hash Functions (3):
-  sha256(str), sha1(str), md5(str)
+Hash Functions (4):
+  hash(n), hash(n, seed), sha256(str), sha1(str), md5(str)
 
 Helpers (2):
   has(field), getOr(field, default)
@@ -581,6 +581,12 @@ func writeBitwiseFunctions(w io.Writer) {
 func writeHashFunctions(w io.Writer) {
 	fmt.Fprintln(w, "HASH FUNCTIONS:")
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  hash(n)        Reproducible 32-bit mix of an integer: the same value in every lane and on every machine")
+	fmt.Fprintln(w, "    Example: hash(1) → 3531918615")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  hash(n, seed)  The same with a seed, an independent stream per seed")
+	fmt.Fprintln(w, "    Example: hash(1, 7) → 558192479")
+	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  sha256(str)    SHA-256 hash (64 hex characters)")
 	fmt.Fprintln(w, "    Example: sha256(\"hello\") → \"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\"")
 	fmt.Fprintln(w)
@@ -591,11 +597,13 @@ func writeHashFunctions(w io.Writer) {
 	fmt.Fprintln(w, "    Example: md5(\"hello\") → \"5d41402abc4b2a76b9719d911017c592\"")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Common Usage:")
+	fmt.Fprintln(w, "  ssql from range 1000 | ssql update -set-expr key 'hash(n) % 100' -set-expr amount 'hash(n, 1) % 500'")
 	fmt.Fprintln(w, "  ssql update -set-expr email_hash 'sha256(email)'")
 	fmt.Fprintln(w, "  ssql update -set-expr id 'sha256(name + \":\" + email)'")
 	fmt.Fprintln(w, "  ssql update -set-expr checksum 'md5(content)'")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Note: For security-sensitive applications, prefer sha256 over md5/sha1.")
+	fmt.Fprintln(w, "Note: hash() is for spread, not security — a fixture, a demo or a benchmark needs")
+	fmt.Fprintln(w, "      no file when `from range` and hash() make its keys. Prefer sha256 over md5/sha1.")
 }
 
 func writeOperators(w io.Writer) {

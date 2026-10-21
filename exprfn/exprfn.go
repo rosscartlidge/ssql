@@ -6,6 +6,10 @@
 package exprfn
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"math"
 	"regexp"
 	"unicode/utf8"
@@ -154,4 +158,56 @@ func Factorial(n int64) int64 {
 		r *= i
 	}
 	return r
+}
+
+// Hash is the expression language's hash(n[, seed]): a reproducible
+// 32-bit mix of an integer, the same value in every lane and on every
+// machine (DFC154 §6: Go's maphash is seeded per process and each SQL
+// engine's hash() is its own, so neither could be the definition).
+// Its use is spread without a file — `hash(n) % 1000` over `from range`
+// gives a fixture, a demo or a benchmark its group keys and amounts —
+// not security (md5/sha1/sha256 are the digests). The seed selects an
+// independent stream, so two columns from one n do not correlate.
+//
+// The definition, which `generate sql` renders with &, >>, * and xor so
+// that no 64-bit engine overflows (every product has a factor below
+// 2^31): the 64-bit input folds to 32 bits (low word xor high word),
+// xors with (fold(seed) + 1) * 0x27d4eb2f, then lowbias32 (Wellons,
+// 2022: xorshift 16, * 0x21f0aaad, xorshift 15, * 0x735a2d97,
+// xorshift 15). The result is in [0, 2^32).
+func Hash(n, seed int64) int64 {
+	x := fold32(n) ^ SeedTerm(seed)
+	x ^= x >> 16
+	x *= 0x21f0aaad
+	x ^= x >> 15
+	x *= 0x735a2d97
+	x ^= x >> 15
+	return int64(x)
+}
+
+// SeedTerm is the constant a seed contributes before the mix,
+// (fold32(seed) + 1) * 0x27d4eb2f, which generate sql folds for a literal.
+func SeedTerm(seed int64) uint32 { return (fold32(seed) + 1) * 0x27d4eb2f }
+
+func fold32(v int64) uint32 {
+	u := uint64(v)
+	return uint32(u) ^ uint32(u>>32)
+}
+
+// MD5, SHA1 and SHA256 are the expression language's digests of a
+// string, as lower-case hex — the one implementation behind the VM
+// helpers and transpiled code.
+func MD5(s string) string {
+	h := md5.Sum([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+func SHA1(s string) string {
+	h := sha1.Sum([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+func SHA256(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }

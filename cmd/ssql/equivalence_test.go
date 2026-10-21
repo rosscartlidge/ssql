@@ -2733,6 +2733,41 @@ var equivCases = []EquivCase{
 		Golden:   []map[string]any{{"n": 0, "day": "2026-01-01T00:00:00Z"}, {"n": 1, "day": "2026-01-02T00:00:00Z"}, {"n": 2, "day": "2026-01-03T00:00:00Z"}},
 	},
 	{
+		// hash(n[, seed]) (DFC154 §6): one 32-bit mix in every lane — the
+		// Go lanes through exprfn.Hash, SQL through the same arithmetic
+		// with xor per dialect. Golden from an independent Python
+		// implementation; a negative n, a negated literal seed and a
+		// column seed are the shapes the SQL renders differently.
+		Name:     "hash_every_lane",
+		Pipeline: `{{.bin}} from range 5 -start -2 | {{.bin}} update -set-expr h 'hash(n)' -set-expr h7 'hash(n, 7)' -set-expr hm 'hash(n, -3) % 100' -set-expr hn 'hash(n, n)' | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"n": -2, "h": 3531918615, "h7": 558192479, "hm": 63, "hn": 2052500106},
+			{"n": -1, "h": 261369915, "h7": 1190723808, "hm": 52, "hn": 261369915},
+			{"n": 0, "h": 261369915, "h7": 1190723808, "hm": 52, "hn": 261369915},
+			{"n": 1, "h": 3531918615, "h7": 558192479, "hm": 63, "hn": 2052500106},
+			{"n": 2, "h": 2840856084, "h7": 4045084947, "hm": 22, "hn": 3877102822},
+		},
+	},
+	{
+		// The digests: each engine's own md5/sha256, hex where the engine
+		// returns bytes. Golden from Python's hashlib.
+		Name:     "expr_digests",
+		Pipeline: `{{.bin}} from range 2 | {{.bin}} update -set-expr m 'md5(string(n))' -set-expr s 'sha256(string(n))' | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"n": 1, "m": "c4ca4238a0b923820dcc509a6f75849b", "s": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"},
+			{"n": 2, "m": "c81e728d9d4c2f636f067f89cc14862c", "s": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"},
+		},
+	},
+	{
+		Name:     "expr_sha1",
+		Pipeline: `{{.bin}} from range 2 | {{.bin}} update -set-expr s 'sha1(string(n))' | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"n": 1, "s": "356a192b7913b04c54574d18c28d46e6395428ab"}, {"n": 2, "s": "da4b9237bacccdf19c0760cab7aec4a8359010b0"}},
+		Skip:     map[string]string{"postgres": "Postgres has sha1 only through pgcrypto: generate sql refuses by design"},
+	},
+	{
 		// extract -skip: named groups → string fields, source field
 		// dropped, non-matching line gone — every lane incl. DuckDB's
 		// regexp_extract + regexp_matches.

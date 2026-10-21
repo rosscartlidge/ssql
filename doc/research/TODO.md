@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-10-21
+Last modified: 2026-10-22
 
 [Back to Index](./README.md)
 
@@ -108,7 +108,7 @@ Tracked issues and feature gaps discovered during development.
 - [x] **`from range N` — a row generator every lane can make** — SHIPPED 2026-10-21 ([DFC154](./dfc154_range_source.md)): N rows of an int `n` (`-start`, `-step`, `-field`), `ssql.RangeRecords` for exec and record, `typed.Range`/`RangeParallel` (generic over the row, since `-field` names the column), `range()`/`generate_series` in SQL, `-records`, schema mode; five equivalence cases with hand Goldens, the first with no fixture file.
 - [x] **`group-by -stream-expr` results are float64 by design — an int-only fold loses exactness past 2^53** — FIXED 2026-10-21 (Ross's Fibonacci fold): `aggResult` keeps an int result as int64 (every user: `-expr`, `-stream-expr`, `-min`/`-max`/`-first`/`-last`/`-mode`/`-arg-max`), the exec header types an expression result from its first value, the typed lowering carries `FinalType`/`ResultType` into the result structs; `groupby_stream_int_exact` and `groupby_expr_int_exact` pin it through a `string()` cast, since the harness folds numbers to float64.
 - [x] **Document `-stream-expr` as the fold it is** (2026-10-21) — DONE 2026-10-21 with `window -stream-expr`: `doc/EXPRESSIONS.md` "Folds" section (init / every / final, shadowing, the swap rule, result type, group-by vs window frames, lanes), codelab paragraphs (a weighted average in group-by, Fibonacci as a running window fold over `from range`), rows in `doc/ai-cli-generation.md`.
-- [ ] **Seeded `hash(n)` integer function in every lane** (2026-10-21, DFC154 §6): fixtures with numeric spread want one hash every lane computes identically — DuckDB's `hash` is its own and Go's `maphash` is seeded per process. Pick FNV-1a or xxhash, implement in `exprfn` (the DFC153 six places), render in SQL as the same arithmetic where an engine can, `dialectRefuse` where it cannot; an equivalence case with a Golden from an independent implementation.
+- [x] **Seeded `hash(n)` integer function in every lane** — SHIPPED 2026-10-22 (DFC154 §6): `exprfn.Hash`, lowbias32 over the folded 64-bit input with a seed term; rendered in SQL as `&`/`>>`/`*`/xor with every product below 2^63 (no engine refuses); equivalence case `hash_every_lane` with a Golden from an independent Python implementation. The digests `md5`/`sha1`/`sha256` gained SQL and typed-lane forms on the way.
 
 - [x] **Numeric functions — DuckDB's set in every lane** — SHIPPED 2026-10-20 ([DFC153](./dfc153_numeric_functions.md)): 35 functions in the VM (`expr_math.go`), the transpiler, `generate sql` (`generate_sql_math.go`, with `sqlFinite` and `TRY`/domain guards; the guard on `/` too), the catalog and the reference; six equivalence cases with Goldens from Python's math. Found and fixed on the way: `typed.WriteJSONLToWriter` refused a row holding ±Inf (now null, DFC133).
 - [ ] **Typed lane: a constant `0.0 / 0.0` is a Go compile error** (2026-10-20, DFC153 §4.4): the transpiler emits the literal division and Go folds it ("invalid operation: division by zero"); field-based divisions are fine. Emit a constant float division through a helper, or evaluate the constant at transpile time.

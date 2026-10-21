@@ -1,10 +1,6 @@
 package runtime
 
 import (
-	"crypto/md5"
-	"crypto/sha1"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sort"
@@ -13,23 +9,14 @@ import (
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/ast"
 	"github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/exprfn"
 )
 
-// Hash functions for expressions
-func hashSHA256(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])
-}
-
-func hashSHA1(s string) string {
-	h := sha1.Sum([]byte(s))
-	return hex.EncodeToString(h[:])
-}
-
-func hashMD5(s string) string {
-	h := md5.Sum([]byte(s))
-	return hex.EncodeToString(h[:])
-}
+// The digests are exprfn's, so the VM, transpiled code and (by name)
+// generate sql agree on one definition.
+func hashSHA256(s string) string { return exprfn.SHA256(s) }
+func hashSHA1(s string) string   { return exprfn.SHA1(s) }
+func hashMD5(s string) string    { return exprfn.MD5(s) }
 
 // replaceRegex replaces all matches of a regex pattern in a string.
 func replaceRegex(s, pattern, replacement string) string {

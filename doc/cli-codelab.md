@@ -529,6 +529,16 @@ demo or a benchmark source that needs no file, in every lane:
 ssql from range 5 | ssql update -set-expr sq 'n * n' -set-expr kind 'n % 2' | ssql to table
 ```
 
+Columns derived from `n` alone are monotonic or periodic; `hash(n)`
+(and `hash(n, seed)` for a second, independent column) gives them
+spread — a reproducible 32-bit mix that is the same in every lane and
+on every machine, so a fixture with realistic keys and amounts is one
+line and no file:
+
+```bash
+ssql from range 1000 | ssql update -set-expr key 'hash(n) % 10' -set-expr amount 'hash(n, 1) % 500' | ssql group-by key -count rows -sum amount total | ssql sort key | ssql to table
+```
+
 Derive new columns with `update`; `rename` and `cast` tidy names and
 types:
 

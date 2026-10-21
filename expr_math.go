@@ -21,14 +21,18 @@ import (
 // in Go, Python and C, so ssql has ln(x), log10(x), log2(x) and
 // log(b, x) with a base, and log(x) alone says so. round(x) is
 // expr-lang's (half away from zero); round(x, n) adds the places.
-// ExprMathFunctionNames lists the set, for ExprCompiledFunctions (a call
-// is a function, a bare name a field) and the catalog.
+// hash(n[, seed]) is the reproducible integer mix (exprfn.Hash, DFC154
+// §6): an int64 in [0, 2^32), the same in every lane, for spread
+// without a file. ExprMathFunctionNames lists the set, for
+// ExprCompiledFunctions (a call is a function, a bare name a field) and
+// the catalog.
 var ExprMathFunctionNames = []string{
 	"sqrt", "cbrt", "exp", "ln", "log10", "log2", "log", "pow",
 	"sin", "cos", "tan", "asin", "acos", "atan", "atan2",
 	"sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
 	"degrees", "radians", "pi", "sign", "trunc", "round",
 	"isnan", "isinf", "isfinite", "gcd", "lcm", "factorial", "gamma", "lgamma",
+	"hash",
 }
 
 func ExprMathFunctions() []expr.Option {
@@ -179,6 +183,22 @@ func ExprMathFunctions() []expr.Option {
 		}
 		return exprfn.Factorial(n), nil
 	}, new(func(any) int64))
+	bind("hash", func(args ...any) (any, error) {
+		if len(args) < 1 || len(args) > 2 {
+			return nil, fmt.Errorf("hash(n) or hash(n, seed)")
+		}
+		n, err := exprInteger("hash", "argument", args[0])
+		if err != nil {
+			return nil, err
+		}
+		var seed int64
+		if len(args) == 2 {
+			if seed, err = exprInteger("hash", "seed", args[1]); err != nil {
+				return nil, err
+			}
+		}
+		return exprfn.Hash(n, seed), nil
+	}, new(func(any) int64), new(func(any, any) int64))
 	return opts
 }
 

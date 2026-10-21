@@ -18,7 +18,7 @@ func TestFunctionEntry(t *testing.T) {
 	if !ok || !strings.HasPrefix(entry, "  bucket(ts, dur)") || !strings.Contains(entry, "Example:") || strings.Contains(entry, "Common Usage") {
 		t.Errorf("bucket entry wrong: ok=%v\n%s", ok, entry)
 	}
-	for _, name := range []string{"upper", "has", "getOr", "sha256", "date", "len", "round", "bitand"} {
+	for _, name := range []string{"upper", "has", "getOr", "sha256", "hash", "date", "len", "round", "bitand"} {
 		if _, ok := FunctionEntry(name); !ok {
 			t.Errorf("no entry for %s", name)
 		}
