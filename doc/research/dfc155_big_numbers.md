@@ -234,11 +234,41 @@ capacity.
 ### C. 128-bit integers (`int128`), DuckDB's `HUGEINT` twin
 
 A value type `ssql.Int128` (two `uint64`s, `math/bits` arithmetic; or
-`big.Int` behind a fixed-width check) with one promotion rule: an
-int64 result that overflows becomes int128; an int128 that overflows
-is an error. Header type `int128`; written to JSON as a bare number
-(JSON allows it; DuckDB writes the same; browsers lose it past 2^53 —
-the explore page would show it as a string).
+`big.Int` behind a fixed-width check). Header type `int128`; written to
+JSON as a bare number (JSON allows it; DuckDB writes the same; browsers
+lose it past 2^53 — the explore page would show it as a string).
+
+**The widening rule (settled with Ross, 2026-10-22): a column is int128
+because it was declared so, never because a value overflowed.** The
+first draft of this section said "an int64 result that overflows
+becomes int128"; that rule cannot be kept by two lanes. The SQL lane
+cannot match it — DuckDB, Postgres and DataFusion all raise on BIGINT
+overflow, so agreeing would mean computing every integer expression in
+HUGEINT to serve a rare case — and typed codegen cannot either, a
+struct field has one Go type fixed at generation time, so no value can
+change type at row 92. The consistent rule is the one int and float
+already follow: a column's type is decided once, mixing widens, nothing
+changes type mid-stream. A column becomes int128 in three ways, each
+the same in every lane:
+
+1. **A cast**: `cast -type int128 n` before the arithmetic — the
+   explicit lever, and what the Fibonacci fold would use.
+2. **A wide literal in the source**: a value past 2^63 in a CSV or JSON
+   column types the column int128 (today: float). The SQL lane follows
+   because ssql's generated SQL declares CSV column types itself
+   (`generate_sql_dialect.go:267`) rather than trusting DuckDB's
+   sniffer, which made a 30-digit column DOUBLE in §2.
+3. **A sum**: `-sum` over an int64 column accumulates and emits int128,
+   which is exactly DuckDB's `SUM(BIGINT) → HUGEINT`. The one widening
+   that makes the lanes agree rather than diverge.
+
+Once one operand is int128 the whole expression is (int64 beside int128
+widens, as int beside float does), so a cast on one input column is
+enough for `n * n + m` to run wide. A literal inside an expression stays
+int, so `n * 1000000000000` on an int64 column still errors under B's
+rule — DuckDB's answer too. An int128 result that overflows is an error.
+A pipeline with no cast, no wide literal and no sum never touches an
+int128 value, which is why existing pipelines pay only B's check.
 
 - Covers Fibonacci to fib(186), any sum of an int64 column, money in
   cents to 10^38, 128-bit ids (UUIDs as numbers, IPv6).
@@ -380,4 +410,9 @@ does not serve better. Not an option; say so in the docs.
    (→ E), wide ids (→ string, or C), 128-bit arithmetic (→ C)? If
    none, A + B and this DFC is the record of why.
 3. **`-sum` of integers**: int64 (exact, error on overflow) or widen to
-   int128 (DuckDB's behaviour, needs C)?
+   int128 (DuckDB's behaviour, needs C)? *Answered in C's widening rule
+   (2026-10-22): widen, once C exists — a sum is one of the three places
+   the engines themselves widen, so it is the one widening that keeps
+   the lanes in agreement. Until C exists, B's int64 accumulation with a
+   loud overflow is the interim; the DuckDB lane disagrees only past
+   2^63, where ssql stops and DuckDB answers.*
