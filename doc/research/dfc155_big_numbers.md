@@ -346,7 +346,9 @@ cent). Two shapes:
 - **Scaled int64 with the scale in the schema** — `decimal(18, 2)` is
   an int64 of hundredths, the header says `decimal:2`: `+ - compare sum`
   are int64 ops (exact, fast, comparable, no dependency); `*` rescales
-  (18 digits total, overflow by B's rule); `/` rounds half-even to the
+  (18 digits total, overflow by B's rule — in cents that is
+  ±9.2 × 10^16 dollars, 92 quadrillion, about a thousand times world GDP;
+  $100 trillion is 10^16 cents, well inside); `/` rounds half-even to the
   scale, or is a float as DuckDB's is. SQL maps to `DECIMAL(18, s)` on
   every engine; Arrow/Parquet to `Decimal128(18, s)`. This is what
   people already do by hand ("store cents"); the type makes `to table`
