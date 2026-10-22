@@ -130,12 +130,58 @@ integer; `sum(Int64)` stays `Int64` and overflows loudly.
 
 ## 3. The options
 
+Each option ends with two lines added 2026-10-22 at Ross's request:
+**Performance** (what existing pipelines pay) and **Code** (what has to
+be written). The numbers come from a micro-benchmark and a 2M-row
+pipeline, both run on this machine that day:
+
+| measured (3-op expression `a + b * 2 - c`) | ns/op | allocs |
+|---|---|---|
+| Go, plain int64 | 0.85 | 0 |
+| Go, int64 with overflow checks (sign test, `p/b != a`) | 2.3 | 0 |
+| Go, int128 struct (`math/bits` add, mul) | 1.0 | 0 |
+| Go, `math/big` with reused scratch values | 45 | 0 |
+| Go, `math/big` with a fresh `*big.Int` per result (the `Record` shape) | 205 | 5 |
+| expr VM, ssql's compile (`map[string]any` env), VM only | 290 | 5 |
+| expr VM, `+ - *` patched to checked calls, VM only | 350 | 8 |
+| expr VM, plain, with the per-row env map ssql builds | 540 | 9 |
+| expr VM, patched, with the per-row env map | 645 | 12 |
+
+| 2M rows: `from range 2000000`, then `update -set-expr s 'n + n * 2 - 1'`, then `to jsonl` | wall | per row |
+|---|---|---|
+| exec, or record codegen (both run the VM) | 5.3 s (0.6 s without the update) | 2.4 µs for the update step |
+| typed codegen (parallel, `out.S = ((r.N + (r.N * 2)) - 1)`) | 1.7 s | 0.85 µs whole row, of which the arithmetic is 1 ns |
+
+Two facts the probe settled. `expr.Operator` overloading does **not**
+fire on ssql's env: the compiler sees `map[string]any` with
+`AllowUndefinedVariables` (`cmd/ssql/lib/runtime/runtime.go:115`), so
+operand types are unknown and `MaxInt64 + 1` still wraps with the
+overload installed; it fires only on a typed struct env, which ssql
+does not have. An `expr.Patch` visitor that rewrites every `+ - *`
+BinaryNode into a call of a checked function (the `expr_agg.go:376`
+precedent) does fire, errors on overflow, and is the mechanism B, C and
+E all route through, so B's code is the foundation, not a throwaway.
+
+A census of what a new numeric type touches, from grep: 78 `case int64`
+switch arms in 36 non-test files (`core.go` 8, `commands/helpers.go` 6,
+`resample.go`, `cast_value.go`, `sql.go`, `io.go`, `coerce_types.go`,
+`update.go` 4–5 each, the rest 1–3); 26 `strconv.ParseInt` sites in 17
+files, of which the reader fallbacks (`csv_infer.go`, `io.go`,
+`core.go`, `cast_value.go`, `typed/io.go`) are the ones a wider literal
+changes; 31 int-formatting sites in writers; the schema type enum
+(`lib/schema.go:18`, 14 uses in 8 files); the SQL type map
+(`generate_sql_dialect.go:745`); the typed sum emission
+(`typed_groupby.go:462–499`, which casts every summand to `float64`).
+
 ### A. Status quo, documented
 
 int64 exact to 2^63, float beyond, wrap past it. Cost: a paragraph in
 `doc/EXPRESSIONS.md`. Leaves finding 1 — a silent wrong answer in
 three lanes where the fourth stops — which is the thing the Fibonacci
 run actually demonstrated.
+
+- **Performance**: none.
+- **Code**: a paragraph in `doc/EXPRESSIONS.md`; nothing else.
 
 ### B. Integer overflow is an error, in every lane
 
@@ -146,11 +192,12 @@ the message, as DuckDB does. Also: `-sum` and `-avg` over integers
 accumulate in int64 (exact to 2^63, error past it — or widen, see C)
 rather than float64.
 
-- **VM**: an `expr.Operator` overload routing `int64 (+|-|*) int64`
-  through `exprfn.AddInt64` etc. (`math/bits.Add64` carry checks; a
-  nanosecond), or — if the overload cannot replace built-in int
-  arithmetic — a post-hoc check is impossible, so the overload is the
-  design and must be proven first.
+- **VM**: not `expr.Operator` — it needs operand types at compile time
+  and ssql's env is `map[string]any` (probed 2026-10-22: the overflow
+  wrapped with the overload installed). An `expr.Patch` visitor
+  rewrites each `+ - *` BinaryNode into a call of a checked function
+  that handles the int64 pair and hands every other pair to expr's own
+  `vm/runtime` operator; proven on the untyped env, cost in §3's table.
 - **Transpiler**: emit `exprfn.Add(a, b)` for int operands (readable;
   the float path unchanged); `BenchmarkExprGo` says what it costs.
 - **SQL**: nothing — every engine already raises.
@@ -160,6 +207,29 @@ rather than float64.
 
 Half a day to a day. This is the correctness fix; everything below is
 capacity.
+
+- **Performance**: VM lanes (exec and record codegen) pay **+60 ns per
+  three operators** — the patched calls cost 350 ns against 290 ns for
+  the VM alone, and one boxing allocation per operator (the checked
+  function returns `any`); that is +20% of the VM's own time and
+  **+2.5% of the 2.4 µs per-row update step**, invisible against the
+  reader and writer. Typed codegen pays +1.5 ns per three operators on
+  a 0.85 µs row, under 0.2%. Float arithmetic, comparisons, strings,
+  readers, writers, sort, join and group-by are untouched. `-sum` of
+  integers in int64 is slightly *faster* than today (no int→float
+  conversion per row). SQL: nothing.
+- **Code**: ~400 lines plus tests. Root package: three checked functions
+  in `exprfn` (add, sub, mul; 40 lines) and an `expr.Patch` visitor that
+  routes an int64 pair through them and every other operand pair
+  through expr's own `vm/runtime` Add/Subtract/Multiply so no other
+  semantics moves (80 lines, added to `ExprStandardOptions`).
+  Transpiler: `binary()` in `expr_go.go:453–495` emits
+  `exprfn.AddInt(a, b)` when both operand types are int (30 lines; the
+  generated line becomes a call instead of `+`). `-sum`/`-avg` in int64:
+  `sql.go:1676,1699` and the typed emission at
+  `typed_groupby.go:462–499,795–820` (60 lines). Tests: an equivalence
+  case in the `expr_div_zero_absent` shape, transpiler table rows,
+  differential corpus entries, a `TestExprGoDifferential` run.
 
 ### C. 128-bit integers (`int128`), DuckDB's `HUGEINT` twin
 
@@ -187,6 +257,26 @@ the explore page would show it as a string).
   comparison), typed struct fields and their reader/writer, `-sum`,
   the SQL type map, the catalog. A week.
 
+- **Performance**: existing int64 pipelines pay B's check plus one
+  promotion branch per operator; int128 arithmetic itself is 1.0 ns per
+  three operators against 0.85 plain (no allocation; a 16-byte struct
+  boxed into `any` allocates once, as an int64 does). A type switch
+  gaining an arm costs nothing on the arms it does not reach, so
+  readers, writers, sort and join stay at today's speed for int64 data;
+  only rows that actually hold an int128 pay the wider compare and
+  format. The reader fallback runs only when `ParseInt` has already
+  failed (today's path to float), so parsing is unchanged. DuckDB's
+  `HUGEINT` is native, so the SQL lane pays nothing.
+- **Code**: 1,500–2,500 lines plus tests, a week. Every site in the
+  census: a sibling arm beside the 78 `case int64` switches (or a
+  deliberate skip, each one a decision), the five reader fallbacks, the
+  31 formatting sites gaining a case, the schema enum and its 14 uses,
+  `cast -type int128`, the typed struct field type with its reader and
+  writer, Arrow/Parquet `Decimal128(38, 0)`, the SQL type map, the
+  catalog and `doc/EXPRESSIONS.md`. VM and transpiler: the patched call
+  from B grows an int128 arm and the promotion rule (100 lines). The
+  explore page and the playground need a string form past 2^53.
+
 ### D. Arbitrary-precision integers (`math/big`)
 
 Everything in C, with `*big.Int` as the value. Differences: no upper
@@ -197,6 +287,22 @@ there, so the DuckDB lane would have to refuse `*` on a big column, and
 DataFusion has no form at all. The capability is wider than any
 engine's but one; the use beyond Fibonacci is unclear. A week plus a
 performance tax on every value switch.
+
+- **Performance**: the arithmetic is **205 ns and 5 allocations per
+  three operators** in the `Record` shape (every result a fresh
+  `*big.Int` held as `any`), 250× plain int64; 4% of a VM row but 25%
+  of a typed row. The reuse form (45 ns, no allocation) is available
+  only inside a typed fold, never for an immutable record value. No
+  comparability: a big group-by or join key goes through `String()`
+  (100 ns and an allocation per row), a sort compare through `Cmp` on
+  interfaces. int64 rows pay what C pays; only big rows pay the rest,
+  but a pipeline that promotes on overflow promotes every subsequent
+  row of that column.
+- **Code**: everything in C at the same sites, plus the paths that
+  assume a comparable value (group-by, join, `distinct`, typed struct
+  keys, `top`'s heap), plus the DuckDB lane refusing `*`, `/`, `%`, `**`
+  on a big column and DataFusion refusing the type outright. About C
+  plus a fifth, and the harder review.
 
 ### E. Fixed-point decimals (money)
 
@@ -218,11 +324,34 @@ cent). Two shapes:
   Three or four days, and it composes with C (an int128 mantissa gives
   `DECIMAL(38, s)`, DuckDB's exact range).
 
+- **Performance**: the scaled-int64 shape costs **nothing on existing
+  pipelines** (a new type reached only when a column declares it) and,
+  on decimal columns, int64 speed: `+ - compare sum` are one int64
+  operation after a scale alignment that is a table lookup; `*`
+  rescales by one division by a power of ten; parsing `12.34` as
+  hundredths is a `ParseInt` on the digits, cheaper than `ParseFloat`;
+  formatting inserts a point into a `FormatInt`, cheaper than
+  `FormatFloat`. The library shape (`shopspring/decimal`) has D's
+  profile: a `*big.Int` inside, ~200 ns and allocations per operator,
+  and a dependency in every generated program's `go.mod`.
+- **Code**: 1,000–1,500 lines plus tests, three or four days. A
+  comparable value type `ssql.Decimal{Units int64; Scale uint8}`; the
+  switch census of C but a narrower surface (most arms reduce to the
+  int64 arm after alignment); the schema type string `decimal:2`
+  through `lib/schema.go` and every writer's `_schema` header;
+  `cast -type decimal 2`; the typed struct tag (`ssql:"price,decimal=2"`)
+  with its reader and writer; SQL `DECIMAL(18, s)` on every engine;
+  Arrow `Decimal128(18, s)`; the patched call from B grows a decimal
+  arm; the catalog and `doc/EXPRESSIONS.md`.
+
 ### F. Big floats
 
 `big.Float` has no SQL form (DuckDB, Postgres and DataFusion stop at
 `DOUBLE`), no Arrow form, and no use that a decimal or a big integer
 does not serve better. Not an option; say so in the docs.
+
+- **Performance** and **Code**: not costed; a `*big.Float` would have
+  D's allocation profile with nowhere to send the result.
 
 ## 4. Recommendation
 
