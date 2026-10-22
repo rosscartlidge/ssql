@@ -1726,6 +1726,15 @@ func (s *numericSum) result() AggregateResult {
 	return AggResult[int64]{val: s.ints}
 }
 
+// value is the sum as the scalar it is: an int64 while every value was
+// an integer, else a float64 (the window functions' result).
+func (s *numericSum) value() any {
+	if s.isFloat {
+		return s.floats.Value()
+	}
+	return s.ints
+}
+
 // mean is the average, a float64 as SQL's AVG is; ok is false for no values.
 func (s *numericSum) mean() (float64, bool) {
 	if s.n == 0 {
@@ -2422,29 +2431,28 @@ func computeWindowFunc(fn WindowFunc, all []Record, indices []int, pos, partLen 
 	case wSum:
 		start := frameStart(pos, partLen, frame)
 		end := frameEnd(pos, partLen, frame)
-		var sum CompensatedSum // Neumaier, like group-by's -sum (DFC129)
+		var sum numericSum // int64 while the values are integers, else Neumaier, like group-by's -sum (DFC129, DFC155 B)
 		for i := start; i <= end; i++ {
-			if v, ok := Get[float64](all[indices[i]], f.Field); ok {
-				sum.Add(v)
+			if v, ok := Get[any](all[indices[i]], f.Field); ok {
+				sum.add(v)
 			}
 		}
-		return sum.Value()
+		return sum.value()
 
 	case wAvg:
 		start := frameStart(pos, partLen, frame)
 		end := frameEnd(pos, partLen, frame)
-		var sum CompensatedSum
-		var count int
+		var sum numericSum
 		for i := start; i <= end; i++ {
-			if v, ok := Get[float64](all[indices[i]], f.Field); ok {
-				sum.Add(v)
-				count++
+			if v, ok := Get[any](all[indices[i]], f.Field); ok {
+				sum.add(v)
 			}
 		}
-		if count == 0 {
+		mean, ok := sum.mean()
+		if !ok {
 			return float64(0)
 		}
-		return sum.Value() / float64(count)
+		return mean
 
 	case wCount:
 		start := frameStart(pos, partLen, frame)
@@ -2583,34 +2591,33 @@ func (s *swDenseRank) reset() { s.rank = 0 }
 
 type swSum struct {
 	field string
-	sum   CompensatedSum // Neumaier, like the materialised path and group-by's -sum
+	sum   numericSum // int64 while the values are integers, else Neumaier — the materialised path's and group-by's -sum
 }
 
 func (s *swSum) update(record Record, _ int, _ []OrderField, _ *Record) any {
-	if v, ok := Get[float64](record, s.field); ok {
-		s.sum.Add(v)
+	if v, ok := Get[any](record, s.field); ok {
+		s.sum.add(v)
 	}
-	return s.sum.Value()
+	return s.sum.value()
 }
-func (s *swSum) reset() { s.sum = CompensatedSum{} }
+func (s *swSum) reset() { s.sum = numericSum{} }
 
 type swAvg struct {
 	field string
-	sum   CompensatedSum
-	count int64
+	sum   numericSum
 }
 
 func (s *swAvg) update(record Record, _ int, _ []OrderField, _ *Record) any {
-	if v, ok := Get[float64](record, s.field); ok {
-		s.sum.Add(v)
-		s.count++
+	if v, ok := Get[any](record, s.field); ok {
+		s.sum.add(v)
 	}
-	if s.count == 0 {
+	mean, ok := s.sum.mean()
+	if !ok {
 		return float64(0)
 	}
-	return s.sum.Value() / float64(s.count)
+	return mean
 }
-func (s *swAvg) reset() { s.sum = CompensatedSum{}; s.count = 0 }
+func (s *swAvg) reset() { s.sum = numericSum{} }
 
 type swCount struct{ count int64 }
 
@@ -2645,88 +2652,104 @@ func (s *swLast) reset() {}
 
 // --- Sliding window aggregates (bounded frames, ROWS N,0) ---
 
-// swSlidingSum maintains a ring buffer for sliding SUM.
-type swSlidingSum struct {
-	field  string
-	ring   []float64
+// slidingSum is the running total of a ring of values, each added when
+// it enters the frame and removed when it leaves: the integers exactly
+// in int64 (an overflow is an error, DFC155 B), the floats in a float64
+// beside them; the value is an int64 while the frame holds no float.
+type slidingSum struct {
+	ring   []any
 	size   int // frame size = preceding + 1
 	idx    int // write position in ring
-	sum    float64
 	filled int // how many slots filled so far
+	ints   int64
+	floats float64
+	nfloat int // floats in the frame
+	count  int // numeric values in the frame
 }
 
-func (s *swSlidingSum) update(record Record, _ int, _ []OrderField, _ *Record) any {
-	val := float64(0)
-	if v, ok := Get[float64](record, s.field); ok {
-		val = v
+func newSlidingSum(size int) slidingSum { return slidingSum{ring: make([]any, size), size: size} }
+
+// numeric classifies a value as the readers type it: an int64, a float
+// (float64, or anything Get[float64] converted), or not a number.
+func slidingNumeric(v any) (i int64, f float64, isInt, ok bool) {
+	switch x := v.(type) {
+	case int64:
+		return x, 0, true, true
+	case nil:
+		return 0, 0, false, false
 	}
+	f, ok = convertTo[float64](v)
+	return 0, f, false, ok
+}
+
+// push adds a value, evicting the oldest once the ring is full.
+func (s *slidingSum) push(v any) {
 	if s.filled >= s.size {
-		s.sum -= s.ring[s.idx]
-	}
-	s.ring[s.idx] = val
-	s.sum += val
-	s.idx = (s.idx + 1) % s.size
-	if s.filled < s.size {
-		s.filled++
-	}
-	return s.sum
-}
-
-func (s *swSlidingSum) reset() {
-	for i := range s.ring {
-		s.ring[i] = 0
-	}
-	s.idx = 0
-	s.sum = 0
-	s.filled = 0
-}
-
-// swSlidingAvg maintains a ring buffer for sliding AVG.
-type swSlidingAvg struct {
-	field  string
-	ring   []float64
-	has    []bool // tracks which slots have valid values
-	size   int
-	idx    int
-	sum    float64
-	count  int
-	filled int
-}
-
-func (s *swSlidingAvg) update(record Record, _ int, _ []OrderField, _ *Record) any {
-	val, ok := Get[float64](record, s.field)
-	if s.filled >= s.size {
-		// Evict oldest
-		if s.has[s.idx] {
-			s.sum -= s.ring[s.idx]
+		if i, f, isInt, ok := slidingNumeric(s.ring[s.idx]); ok {
+			if isInt {
+				s.ints = exprfn.Sub(s.ints, i)
+			} else {
+				s.floats -= f
+				s.nfloat--
+			}
 			s.count--
 		}
 	}
-	s.ring[s.idx] = val
-	s.has[s.idx] = ok
-	if ok {
-		s.sum += val
+	s.ring[s.idx] = v
+	if i, f, isInt, ok := slidingNumeric(v); ok {
+		if isInt {
+			s.ints = exprfn.Add(s.ints, i)
+		} else {
+			s.floats += f
+			s.nfloat++
+		}
 		s.count++
 	}
 	s.idx = (s.idx + 1) % s.size
 	if s.filled < s.size {
 		s.filled++
 	}
+}
+
+func (s *slidingSum) value() any {
+	if s.nfloat == 0 {
+		return s.ints
+	}
+	return float64(s.ints) + s.floats
+}
+
+func (s *slidingSum) reset() {
+	for i := range s.ring {
+		s.ring[i] = nil
+	}
+	s.idx, s.filled, s.ints, s.floats, s.nfloat, s.count = 0, 0, 0, 0, 0, 0
+}
+
+// swSlidingSum maintains a ring buffer for sliding SUM.
+type swSlidingSum struct {
+	field string
+	slidingSum
+}
+
+func (s *swSlidingSum) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	v, _ := Get[any](record, s.field)
+	s.push(v)
+	return s.value()
+}
+
+// swSlidingAvg maintains a ring buffer for sliding AVG.
+type swSlidingAvg struct {
+	field string
+	slidingSum
+}
+
+func (s *swSlidingAvg) update(record Record, _ int, _ []OrderField, _ *Record) any {
+	v, _ := Get[any](record, s.field)
+	s.push(v)
 	if s.count == 0 {
 		return float64(0)
 	}
-	return s.sum / float64(s.count)
-}
-
-func (s *swSlidingAvg) reset() {
-	for i := range s.ring {
-		s.ring[i] = 0
-		s.has[i] = false
-	}
-	s.idx = 0
-	s.sum = 0
-	s.count = 0
-	s.filled = 0
+	return (float64(s.ints) + s.floats) / float64(s.count)
 }
 
 // swSlidingCount returns min(pos+1, frameSize).
@@ -2914,12 +2937,12 @@ func newStreamWindowAgg(fn WindowFunc, frame WindowFrame) (streamWindowAgg, erro
 		return &swDenseRank{}, nil
 	case wSum:
 		if bounded {
-			return &swSlidingSum{field: f.Field, ring: make([]float64, frameSize), size: frameSize}, nil
+			return &swSlidingSum{field: f.Field, slidingSum: newSlidingSum(frameSize)}, nil
 		}
 		return &swSum{field: f.Field}, nil
 	case wAvg:
 		if bounded {
-			return &swSlidingAvg{field: f.Field, ring: make([]float64, frameSize), has: make([]bool, frameSize), size: frameSize}, nil
+			return &swSlidingAvg{field: f.Field, slidingSum: newSlidingSum(frameSize)}, nil
 		}
 		return &swAvg{field: f.Field}, nil
 	case wCount:

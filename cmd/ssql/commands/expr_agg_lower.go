@@ -78,7 +78,7 @@ func lowerExprAgg(spec exprSpec, schema *lib.TypedSchema, idx int) (exprAggPlan,
 			}
 			switch shape := aggShape(*node); shape {
 			case aggShapeSum:
-				elem := (*node).(*ast.BuiltinNode).Arguments[1].(*ast.PredicateNode).Node
+				elem, _ := ssql.ExprCheckedSumPredicate(*node)
 				res, err := exprNodeToGoWith(elem, schema, "r", nil)
 				if err != nil {
 					walkErr = fmt.Errorf("sum() element: %w", err)
@@ -151,19 +151,14 @@ const (
 // aggShape recognises the two normal-form aggregation shapes PatchAggExpr
 // produces: sum(_records, <predicate>) and len(_records).
 func aggShape(n ast.Node) aggShapeKind {
+	if _, ok := ssql.ExprCheckedSumPredicate(n); ok { // sum(_records, f), in either spelling
+		return aggShapeSum
+	}
 	b, ok := n.(*ast.BuiltinNode)
 	if !ok {
 		return aggShapeNone
 	}
 	switch b.Name {
-	case "sum":
-		if len(b.Arguments) == 2 {
-			if id, ok := b.Arguments[0].(*ast.IdentifierNode); ok && id.Value == "_records" {
-				if _, ok := b.Arguments[1].(*ast.PredicateNode); ok {
-					return aggShapeSum
-				}
-			}
-		}
 	case "len":
 		if len(b.Arguments) == 1 {
 			if id, ok := b.Arguments[0].(*ast.IdentifierNode); ok && id.Value == "_records" {

@@ -226,6 +226,9 @@ type OverflowError struct {
 }
 
 func (e *OverflowError) Error() string {
+	if e.Op == "neg" {
+		return fmt.Sprintf("integer overflow: -(%d) does not fit an int64", e.B)
+	}
 	return fmt.Sprintf("integer overflow: %d %s %d does not fit an int64", e.A, e.Op, e.B)
 }
 
@@ -289,6 +292,24 @@ func Sub(a, b int64) int64 {
 // Mul is the checked a * b; see Add.
 func Mul(a, b int64) int64 {
 	v, err := CheckedMul(a, b)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+// CheckedNeg is -a, or an *OverflowError for the one int64 whose
+// negation does not fit (math.MinInt64).
+func CheckedNeg(a int64) (int64, error) {
+	if a == math.MinInt64 {
+		return 0, &OverflowError{"neg", 0, a}
+	}
+	return -a, nil
+}
+
+// Neg is the checked -a; see Add.
+func Neg(a int64) int64 {
+	v, err := CheckedNeg(a)
 	if err != nil {
 		panic(err)
 	}

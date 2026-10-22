@@ -5,6 +5,13 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The overflow rule reaches every integer sum and negation** (the batch after [DFC155](doc/research/dfc155_big_numbers.md) B): `sum()` inside an aggregation or per-row expression (`group-by -expr 'sum(n)'`, `sum(xs)`, `sum(xs, # * 2)`) is checked in the expression VM, so the exec and record lanes stop where typed already did; unary minus of the one int64 that cannot be negated is an error in every lane; `window -sum` and `-avg` of an integer column accumulate exactly in int64, running and sliding, and the sum is an int on the wire (they were floats, rounded past 2^53). Pinned per lane by `TestIntOverflowEveryLane`.
+- **`generate sql` on a source read from stdin refuses with a message** (`from jsonl: SQL translation needs a file`) instead of panicking with `index out of range`.
+
 ## [4.123.0] - 2026-10-22
 
 ### Changed

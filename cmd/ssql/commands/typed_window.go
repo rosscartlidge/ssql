@@ -232,11 +232,18 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 	}
 	base := strings.TrimPrefix(f.GoType, "*")
 	num := ""
+	isInt := base == "int64"
 	if isNumericGoType(base) {
 		if strings.HasPrefix(f.GoType, "*") {
 			num = fmt.Sprintf("Num: func(r %s) (float64, bool) { if r.%s == nil { return 0, false }; return float64(*r.%s), true }", rowType, f.GoName, f.GoName)
+			if isInt { // the exact reader beside the float one (DFC155 B)
+				num += fmt.Sprintf(", Int: func(r %s) (int64, bool) { if r.%s == nil { return 0, false }; return *r.%s, true }", rowType, f.GoName, f.GoName)
+			}
 		} else {
 			num = fmt.Sprintf("Num: func(r %s) (float64, bool) { return float64(r.%s), true }", rowType, f.GoName)
+			if isInt {
+				num += fmt.Sprintf(", Int: func(r %s) (int64, bool) { return r.%s, true }", rowType, f.GoName)
+			}
 		}
 	}
 	res := fmt.Sprintf("res[%d]", i)
@@ -254,6 +261,9 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 			return "", "", "", "", fmt.Sprintf("window: %s over non-numeric field %q stays on the record path", d.Kind, f.Name)
 		}
 		k := map[string]string{"sum": "WSum", "avg": "WAvg"}[d.Kind]
+		if d.Kind == "sum" && isInt { // an integer column sums to an int64, exactly (DFC155 B)
+			return d.Kind, "int64", fmt.Sprintf("if v, ok := %s.(int64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WSum, %s}", num), ""
+		}
 		return d.Kind, "float64", fmt.Sprintf("if v, ok := %s.(float64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.%s, %s}", k, num), ""
 	case "count_field":
 		return d.Kind, "int64", fmt.Sprintf("if v, ok := %s.(int64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WCountField, %s}", val), ""

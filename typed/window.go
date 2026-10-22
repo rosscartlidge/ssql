@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	ssql "github.com/rosscartlidge/ssql/v4"
+	"github.com/rosscartlidge/ssql/v4/exprfn"
 )
 
 // Window is the typed runtime for `ssql window` (DFC130 unit 4). It
@@ -70,6 +71,7 @@ type WindowSpec[T any] struct {
 	N       int // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
 	Default any // LAG/LEAD default (nil = absent)
 	Num     func(T) (float64, bool)
+	Int     func(T) (int64, bool) // set for an integer field: sum is exact in int64 (an overflow is an error, DFC155 B); avg divides the exact sum
 	Val     func(T) (any, bool)
 
 	Init  func() any
@@ -259,6 +261,15 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 		v, _ := spec.Val(all[idx[i]])
 		return v
 	case WSum:
+		if spec.Int != nil {
+			var sum int64
+			for i := fs(); i <= fe(); i++ {
+				if v, ok := spec.Int(all[idx[i]]); ok {
+					sum = exprfn.Add(sum, v)
+				}
+			}
+			return sum
+		}
 		var sum ssql.CompensatedSum
 		for i := fs(); i <= fe(); i++ {
 			if v, ok := spec.Num(all[idx[i]]); ok {
@@ -267,8 +278,21 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 		}
 		return sum.Value()
 	case WAvg:
-		var sum ssql.CompensatedSum
 		cnt := 0
+		if spec.Int != nil {
+			var sum int64
+			for i := fs(); i <= fe(); i++ {
+				if v, ok := spec.Int(all[idx[i]]); ok {
+					sum = exprfn.Add(sum, v)
+					cnt++
+				}
+			}
+			if cnt == 0 {
+				return float64(0)
+			}
+			return float64(sum) / float64(cnt)
+		}
+		var sum ssql.CompensatedSum
 		for i := fs(); i <= fe(); i++ {
 			if v, ok := spec.Num(all[idx[i]]); ok {
 				sum.Add(v)

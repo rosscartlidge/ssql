@@ -29,6 +29,10 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		"mul":  bin + " from range 3 | " + bin + " update -set-expr big 'n * 4611686018427387904'",
 		"sum":  bin + " from range 2 -start 9223372036854775806 | " + bin + " group-by -sum n t",
 		"fold": bin + " from range 94 | " + bin + " window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib",
+		// the batch after B (2026-10-22): unary minus, sum() in an aggregation expression, window sums
+		"neg":        bin + " from range 1 -start -9223372036854775808 | " + bin + " update -set-expr m '-n'",
+		"expr_sum":   bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t",
+		"window_sum": bin + " from range 2 -start 9223372036854775806 | " + bin + " window -sum n t",
 	}
 	for name, pipeline := range overflow {
 		t.Run("overflow_"+name, func(t *testing.T) {
@@ -48,16 +52,16 @@ func TestIntOverflowEveryLane(t *testing.T) {
 					t.Errorf("%s: want an integer overflow failure, got err=%v\n%s", mode, err, out)
 				}
 			}
-			// DuckDB: its own words for the same stop
-			if duckdb == "" || name == "fold" { // no SQL form of -stream-expr
+			// DuckDB: its own words for the same stop. No SQL form: -stream-expr,
+			// group-by -expr, and a window without -order. DuckDB sums BIGINT
+			// into HUGEINT, so it answers where ssql stops (DFC155 §C, the
+			// documented divergence): the sum cases stop here too.
+			if duckdb == "" || name == "fold" || name == "expr_sum" || name == "window_sum" || name == "sum" {
 				return
 			}
 			sql, err := shell("export SSQL_MODE=record && " + pipeline + " | " + bin + " to jsonl | " + bin + " generate sql")
 			if err != nil {
 				t.Fatalf("generate sql: %v\n%s", err, sql)
-			}
-			if name == "sum" {
-				return // DuckDB sums BIGINT into HUGEINT: it answers where ssql stops (DFC155 §C, the documented divergence)
 			}
 			cmd := exec.Command(duckdb, "-json", "-c", sql)
 			dout, derr := cmd.CombinedOutput()
@@ -67,40 +71,56 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		})
 	}
 
-	t.Run("int_sum_exact_past_2_53", func(t *testing.T) {
-		pipeline := bin + " from range 2 -start 9007199254740993 | " + bin + " group-by -sum n t"
-		const want = "18014398509481987" // odd: no float64 holds it (DuckDB -json quotes its HUGEINT)
-		check := func(lane, out string) {
-			if !strings.Contains(out, want) {
-				t.Errorf("%s: want %s in the raw output, got\n%s", lane, want, out)
+	// An integer sum is exact past 2^53 in every lane, wherever a sum is
+	// made: group-by -sum, -expr sum(), window -sum running and sliding.
+	for name, c := range map[string]struct{ pipeline, want string }{
+		"group_by_sum":       {bin + " from range 2 -start 9007199254740993 | " + bin + " group-by -sum n t", "18014398509481987"},
+		"expr_sum":           {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18014398509481987"},
+		"window_running_sum": {bin + " from range 2 -start 9007199254740993 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18014398509481987"},
+		"window_sliding_sum": {bin + " from range 3 -start 9007199254740993 | " + bin + " window -sum n t -preceding 1 | " + bin + " limit -last 1", "18014398509481989"},
+	} {
+		t.Run("int_sum_exact_past_2_53_"+name, func(t *testing.T) {
+			want := c.want // odd: no float64 holds it (DuckDB -json quotes its HUGEINT)
+			check := func(lane, out string) {
+				if !strings.Contains(out, want) {
+					t.Errorf("%s: want %s in the raw output, got\n%s", lane, want, out)
+				}
 			}
-		}
-		out, err := shell(pipeline + " | " + bin + " to jsonl")
-		if err != nil {
-			t.Fatalf("exec: %v\n%s", err, out)
-		}
-		check("exec", out)
-		for _, mode := range []string{"record", "typed", "parallel"} {
-			src, err := shell("export SSQL_MODE=" + mode + " && " + pipeline + " | " + bin + " to jsonl | " + bin + " generate go")
+			out, err := shell(c.pipeline + " | " + bin + " to jsonl")
 			if err != nil {
-				t.Fatalf("%s: generate failed: %v\n%s", mode, err, src)
+				t.Fatalf("exec: %v\n%s", err, out)
 			}
-			out, err := goRunGeneratedModuleEnv(t, "overflowtest", map[string]string{"main.go": src}, nil)
-			if err != nil {
-				t.Fatalf("%s: %v\n%s", mode, err, out)
+			check("exec", out)
+			for _, mode := range []string{"record", "typed", "parallel"} {
+				src, err := shell("export SSQL_MODE=" + mode + " && " + c.pipeline + " | " + bin + " to jsonl | " + bin + " generate go")
+				if err != nil {
+					t.Fatalf("%s: generate failed: %v\n%s", mode, err, src)
+				}
+				out, err := goRunGeneratedModuleEnv(t, "overflowtest", map[string]string{"main.go": src}, nil)
+				if err != nil {
+					t.Fatalf("%s: %v\n%s", mode, err, out)
+				}
+				check(mode, out)
 			}
-			check(mode, out)
-		}
-		if duckdb != "" {
-			sql, err := shell("export SSQL_MODE=record && " + pipeline + " | " + bin + " to jsonl | " + bin + " generate sql")
-			if err != nil {
-				t.Fatalf("generate sql: %v\n%s", err, sql)
+			if duckdb != "" && name == "group_by_sum" { // the window forms need -order for SQL; the -expr form has no translation
+				sql, err := shell("export SSQL_MODE=record && " + c.pipeline + " | " + bin + " to jsonl | " + bin + " generate sql")
+				if err != nil {
+					t.Fatalf("generate sql: %v\n%s", err, sql)
+				}
+				dout, derr := exec.Command(duckdb, "-json", "-c", sql).CombinedOutput()
+				if derr != nil {
+					t.Fatalf("duckdb: %v\n%s", derr, dout)
+				}
+				check("duckdb", string(dout))
 			}
-			dout, derr := exec.Command(duckdb, "-json", "-c", sql).CombinedOutput()
-			if derr != nil {
-				t.Fatalf("duckdb: %v\n%s", derr, dout)
-			}
-			check("duckdb", string(dout))
+		})
+	}
+
+	t.Run("generate_sql_refuses_a_stdin_source", func(t *testing.T) {
+		// It panicked with "index out of range [0] with length 0" until 2026-10-22.
+		out, err := shell("export SSQL_MODE=record && echo '{\"a\":1}' | " + bin + " from jsonl | " + bin + " to jsonl | " + bin + " generate sql")
+		if err == nil || !strings.Contains(out, "needs a file") || strings.Contains(out, "runtime error") {
+			t.Errorf("want a clear refusal, got err=%v\n%s", err, out)
 		}
 	})
 }

@@ -52,7 +52,9 @@ func TestExprToGo(t *testing.T) {
 		{"int literal adapts in float context", "price * 2", "(r.Price * 2)", exprGoFloat, ""},
 		{"power is math.Pow", "pop ** 2", "math.Pow(float64(r.Pop), 2)", exprGoFloat, "math"},
 		{"caret is power too", "price ^ 2", "math.Pow(r.Price, 2)", exprGoFloat, "math"},
-		{"unary minus preserves type", "-pop", "(-r.Pop)", exprGoInt, ""},
+		{"unary minus preserves type", "-pop", "exprfn.Neg(r.Pop)", exprGoInt, ""}, // checked: -MinInt64 is an error (DFC155 B)
+		{"unary minus of a literal stays a literal", "-5 + pop", "exprfn.Add((-5), r.Pop)", exprGoInt, ""},
+		{"unary minus of a float is bare", "-price", "(-r.Price)", exprGoFloat, ""},
 		{"string concat", `city + "!"`, `(r.City + "!")`, exprGoString, ""},
 
 		// bucket() (DFC121)

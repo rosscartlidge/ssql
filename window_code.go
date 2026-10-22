@@ -119,8 +119,10 @@ func WindowFuncResultKind(fn WindowFunc) string {
 	switch f := fn.(type) {
 	case wRowNumber, wRank, wDenseRank, wNtile, wCount, wCountField:
 		return "int"
-	case wPercentRank, wSum, wAvg, wCumeDist:
+	case wPercentRank, wAvg, wCumeDist:
 		return "float"
+	case wSum:
+		return "" // the field's own kind for an integer column (an exact int64, DFC155 B); the caller makes anything else float
 	case wAgg:
 		return f.spec.Kind
 	}

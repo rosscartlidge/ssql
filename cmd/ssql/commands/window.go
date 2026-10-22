@@ -836,6 +836,9 @@ func inferWindowResultType(fn ssql.WindowFunc, inputSchema *lib.Schema) string {
 		return kind
 	}
 	if field, ok := ssql.WindowFuncField(fn); ok && inputSchema != nil && inputSchema.HasField(field) {
+		if ssql.DescribeWindowFunc(fn).Kind == "sum" {
+			return wireSum(inputSchema.TypeOf(field)) // int for an int column, else float
+		}
 		return inputSchema.TypeOf(field)
 	}
 	if ssql.DescribeWindowFunc(fn).Kind == "stream_expr" {

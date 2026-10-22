@@ -437,10 +437,7 @@ func (e *exprGoEnv) unary(n *ast.UnaryNode) (exprGo, error) {
 		}
 		return mergeMeta(exprGo{Src: "!(" + operand.Src + ")", Type: exprGoBool}, operand), nil
 	case "-":
-		if !operand.Type.numeric() {
-			return exprGo{}, fmt.Errorf("unary minus needs a numeric operand, got %s", operand.Type)
-		}
-		return mergeMeta(exprGo{Src: "(-" + operand.Src + ")", Type: operand.Type, lit: operand.lit}, operand), nil
+		return e.negate(operand)
 	case "+":
 		if !operand.Type.numeric() {
 			return exprGo{}, fmt.Errorf("unary plus needs a numeric operand, got %s", operand.Type)
@@ -448,6 +445,20 @@ func (e *exprGoEnv) unary(n *ast.UnaryNode) (exprGo, error) {
 		return operand, nil
 	}
 	return exprGo{}, fmt.Errorf("operator %q has no native Go emission", n.Operator)
+}
+
+// negate emits unary minus: a literal stays a literal (`(-5)`), a float
+// is bare, an int expression goes through the checked form (the one
+// int64 that cannot be negated is MinInt64, DFC155 B).
+func (e *exprGoEnv) negate(operand exprGo) (exprGo, error) {
+	if !operand.Type.numeric() {
+		return exprGo{}, fmt.Errorf("unary minus needs a numeric operand, got %s", operand.Type)
+	}
+	if operand.Type == exprGoInt && !operand.lit {
+		res := exprGo{Src: "exprfn.Neg(" + operand.Src + ")", Type: exprGoInt, Imports: []string{exprfnImport}}
+		return mergeMeta(res, operand), nil
+	}
+	return mergeMeta(exprGo{Src: "(-" + operand.Src + ")", Type: operand.Type, lit: operand.lit}, operand), nil
 }
 
 func (e *exprGoEnv) binary(n *ast.BinaryNode) (exprGo, error) {
@@ -689,6 +700,13 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 	// The overflow patch's call (ssql.ExprCheckedIntArithmetic) is the
 	// operator it replaced; a compiled program's AST holds it instead of
 	// the BinaryNode.
+	if name == "_ssql_neg" && len(args) == 1 {
+		operand, err := e.node(args[0])
+		if err != nil {
+			return exprGo{}, err
+		}
+		return e.negate(operand)
+	}
 	if ssql.ExprCheckedArithFunction(name) && len(args) == 2 {
 		left, err := e.node(args[0])
 		if err != nil {

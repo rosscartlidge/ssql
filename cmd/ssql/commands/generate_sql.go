@@ -631,6 +631,9 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// table infers and refuses them. (From-stage -type was ignored
 		// here until 2026-10-10.)
 		var typeFile string
+		if len(files) == 0 {
+			return fmt.Errorf("from %s: SQL translation needs a file (stdin has no SQL equivalent)", args[0])
+		}
 		if len(files) == 1 {
 			typeFile = files[0]
 		}

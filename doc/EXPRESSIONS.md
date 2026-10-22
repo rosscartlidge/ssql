@@ -45,7 +45,10 @@ Floats are exact to 2^53 and carry on past it with rounding; `/` is
 always a float. An integer literal wider than int64 in a CSV or JSON
 column is read as a float in every lane, so an id that wide belongs in
 a string column. `group-by -sum` of an integer column is an integer, exact
-to 2^63 (an overflow is the same error); `-avg` is a float.
+to 2^63 (an overflow is the same error); `-avg` is a float. The same rule
+covers `sum()` over a list (`sum(xs)`, `sum(xs, # * 2)`, and the
+`group-by -expr` aggregations built on it), unary minus, and
+`window -sum`.
 
 ### Comparison Operators
 

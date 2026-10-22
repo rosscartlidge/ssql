@@ -28,6 +28,7 @@ func TestExprIntOverflowIsAnError(t *testing.T) {
 	for _, c := range []struct{ src, op string }{
 		{"big + 1", "+"}, {"big + n", "+"}, {"small - 1", "-"}, {"big * two", "*"}, {"small * -1", "*"},
 		{"(big - 1) + two", "+"}, {"n * (big - 1)", "*"},
+		{"-small", "neg"}, {"sum([big, 1])", "+"}, {"sum([big, two], # * 2)", "*"},
 	} {
 		_, err := expr.Run(compileStd(t, c.src), env)
 		var oe *exprfn.OverflowError
@@ -64,6 +65,14 @@ func TestExprCheckedArithmeticKeepsEverySemantics(t *testing.T) {
 		{"n ** 2", 49.0},
 		{"7 - 2 * 3 + 1", int(2)},
 		{"n - ptr", int(4)}, // a pointer operand (a nullable window value) is dereferenced, as expr's own operator does
+		{"-n", int(-7)},
+		{"-f", -1.5},
+		{"-ptr", int(-3)},
+		{"sum([1, 2, 3])", int(6)}, // sum() is expr's: an int 0 start, each element added
+		{"sum([1, 2.5])", 3.5},     // a float among the elements makes it a float
+		{"sum([])", int(0)},
+		{"sum([1, 2], # * 2)", int(6)}, // the mapper form
+		{"sum(map([n, n], # + 1))", int(16)},
 	} {
 		got, err := expr.Run(compileStd(t, c.src), env)
 		if err != nil {
