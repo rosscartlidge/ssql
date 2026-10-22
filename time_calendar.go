@@ -471,5 +471,6 @@ func exprFnAlias(name string) string { return ExprFnAliasPrefix + name }
 // exec, generated code and aggregation expressions agree.
 func ExprStandardOptions() []expr.Option {
 	opts := append([]expr.Option{ExprFieldShadowing(), ExprDate()}, ExprTimeFunctions()...)
-	return append(opts, ExprMathFunctions()...)
+	opts = append(opts, ExprMathFunctions()...)
+	return append(opts, ExprCheckedIntArithmetic()...) // DFC155 B: int64 overflow is an error
 }

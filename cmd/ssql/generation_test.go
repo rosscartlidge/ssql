@@ -949,7 +949,7 @@ func TestStreamExprTypedGeneration(t *testing.T) {
 		for _, want := range []string{
 			"se0_s int64",
 			"se0_n int64",
-			"a.se0_s, a.se0_n = (a.se0_s + r.Salary), (a.se0_n + 1)", // ONE multi-assign
+			"a.se0_s, a.se0_n = exprfn.Add(a.se0_s, r.Salary), exprfn.Add(a.se0_n, 1)", // ONE multi-assign; checked int arithmetic (DFC155 B)
 			"AvgSal: (float64(a.se0_s) / float64(a.se0_n))",
 			"typed.GroupBy(", // serial form — fold state is not mergeable
 		} {
@@ -1014,8 +1014,8 @@ func TestExprAggTypedGeneration(t *testing.T) {
 		for _, want := range []string{
 			"ea0_t0 int64", // element's own type, not blanket float64
 			"ea0_cnt int64",
-			"a.ea0_t0 += (r.Salary * 2)",
-			"a.ea0_t0 += o.ea0_t0", // the Merge — sums add across shards
+			"a.ea0_t0 = exprfn.Add(a.ea0_t0, exprfn.Mul(r.Salary, 2))", // checked (DFC155 B)
+			"a.ea0_t0 = exprfn.Add(a.ea0_t0, o.ea0_t0)", // the Merge — sums add across shards, checked (DFC155 B)
 			"a.ea0_cnt += o.ea0_cnt",
 			"V: (float64(a.ea0_t0) / float64(a.ea0_cnt))",
 			"typed.GroupByParallel", // mergeable → parallel form KEPT
@@ -1092,7 +1092,7 @@ func TestRecordNativeExprGeneration(t *testing.T) {
 			t.Fatalf("generate failed: %v\n%s", err, out)
 		}
 		src := string(out)
-		if !strings.Contains(src, `mut = mut.Int("salary", (ssql.GetOr(frozen, "salary", int64(0)) * 2))`) {
+		if !strings.Contains(src, `mut = mut.Int("salary", exprfn.Mul(ssql.GetOr(frozen, "salary", int64(0)), 2))`) {
 			t.Errorf("missing native typed setter:\n%s", src)
 		}
 		if strings.Contains(src, "MustCompileExpr") {

@@ -5,6 +5,14 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Integer overflow is an error in every lane** ([DFC155](doc/research/dfc155_big_numbers.md) B): an int64 `+`, `-` or `*` whose exact result does not fit stops the pipeline with the operands in the message (`integer overflow: 9223372036854775807 + 1 does not fit an int64`), as DuckDB, Postgres and DataFusion already did, instead of wrapping to a wrong number nobody was told about: the Fibonacci fold gave `-6246583658587674878` at row 92 in exec, record and typed codegen. The expression VM routes `+ - *` through checked functions (an AST patch, since `expr.Operator` cannot see ssql's untyped env), the typed lane emits `exprfn.Add/Sub/Mul`, the SQL lane needed nothing. Measured cost: 60 ns per three operators in the VM lanes (2.5% of a per-row `update` step), under 0.2% of a typed row.
+- **A nested value's integers keep their digits past 2^53**: the parser behind `explode`, `flatten` and a dotted path (`o.n`, `fib[1]`) decoded JSON numbers as float64 and recovered whole numbers only within 2^53, so a list element 9007199254740993 exploded to 9007199254740992 and a larger one came out a float in scientific notation (Ross's Fibonacci list from fib(79) on). Numbers are decoded as text now: an integer literal that fits is the exact int64, anything else a float64. Every Go lane; pinned by `TestWideIntegersThroughNestedValues`.
+- **`group-by -sum` of an integer column is an integer**, accumulated exactly in int64 (an overflow is the same error) and typed `int` on the wire; it was a float, exact only to 2^53 and quietly rounded past it (`-sum` of 9007199254740993 and 9007199254740994 gave 18014398509481988; now 18014398509481987, which is also what DuckDB's HUGEINT sum and the typed lane said). `-avg` of integers is a float of the exact integer sum. Library callers of `ssql.Sum` get an `int64` for an all-integer field where they got a `float64`.
+
 ## [4.122.0] - 2026-10-22
 
 ### Added

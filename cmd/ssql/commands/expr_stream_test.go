@@ -22,7 +22,7 @@ func TestLowerStreamAgg(t *testing.T) {
 		if len(plan.States) != 2 || plan.States[0].GoName != "se0_s" || plan.States[0].Type != exprGoInt {
 			t.Errorf("states: %+v", plan.States)
 		}
-		if plan.Every[0] != "(a.se0_s + r.Pop)" || plan.Every[1] != "(a.se0_n + 1)" {
+		if plan.Every[0] != "exprfn.Add(a.se0_s, r.Pop)" || plan.Every[1] != "exprfn.Add(a.se0_n, 1)" {
 			t.Errorf("every: %v", plan.Every)
 		}
 		if plan.Final != "(float64(a.se0_s) / float64(a.se0_n))" || plan.FinalType != exprGoFloat {
@@ -70,7 +70,7 @@ func TestLowerStreamAgg(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if plan.Every[0] != "(r.Pop + 1)" {
+		if plan.Every[0] != "exprfn.Add(r.Pop, 1)" {
 			t.Errorf("record must shadow state: %v", plan.Every)
 		}
 		// FINAL sees state only — there it IS the state field.

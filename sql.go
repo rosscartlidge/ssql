@@ -6,6 +6,8 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/rosscartlidge/ssql/v4/exprfn"
 )
 
 // OrderedValue represents types that are both orderable and valid Record field values
@@ -1670,15 +1672,69 @@ func Count() AggregateFunc {
 //	}
 func Sum(field string) AggregateFunc {
 	return func(records []Record) AggregateResult {
-		var sum CompensatedSum // Neumaier: a million floats sum to the ulp, not to drift
+		var sum numericSum
 		for _, record := range records {
-			// Use type-safe Get with automatic conversion to float64
-			if value, ok := Get[float64](record, field); ok {
-				sum.Add(value)
+			if value, ok := Get[any](record, field); ok {
+				sum.add(value)
 			}
 		}
-		return AggResult[float64]{val: sum.Value()}
+		return sum.result()
 	}
+}
+
+// numericSum accumulates a field's values the way the engines' SUM does:
+// exactly in int64 while every value is an integer (an overflow is an
+// error, DFC155 B, where DuckDB's HUGEINT would still answer — the
+// documented divergence past 2^63), and as a Neumaier-compensated
+// float64 once a float appears (a million floats sum to the ulp, not to
+// drift). Until v4.123.0 integers were summed as floats: exact only to
+// 2^53, and quietly inexact past it.
+type numericSum struct {
+	ints    int64
+	floats  CompensatedSum
+	isFloat bool
+	n       int64
+}
+
+func (s *numericSum) add(value any) {
+	switch v := value.(type) {
+	case int64:
+		if s.isFloat {
+			s.floats.Add(float64(v))
+		} else {
+			s.ints = exprfn.Add(s.ints, v)
+		}
+	default:
+		f, ok := convertTo[float64](value) // float64, and the smart conversions Get[float64] made
+		if !ok {
+			return
+		}
+		if !s.isFloat {
+			s.isFloat = true
+			s.floats.Add(float64(s.ints))
+		}
+		s.floats.Add(f)
+	}
+	s.n++
+}
+
+// result is the sum as the kind it was accumulated in.
+func (s *numericSum) result() AggregateResult {
+	if s.isFloat {
+		return AggResult[float64]{val: s.floats.Value()}
+	}
+	return AggResult[int64]{val: s.ints}
+}
+
+// mean is the average, a float64 as SQL's AVG is; ok is false for no values.
+func (s *numericSum) mean() (float64, bool) {
+	if s.n == 0 {
+		return 0, false
+	}
+	if s.isFloat {
+		return s.floats.Value() / float64(s.n), true
+	}
+	return float64(s.ints) / float64(s.n), true
 }
 
 // Avg calculates the average of numeric values from a field (SQL AVG(field)).
@@ -1692,19 +1748,17 @@ func Sum(field string) AggregateFunc {
 //	}
 func Avg(field string) AggregateFunc {
 	return func(records []Record) AggregateResult {
-		var sum CompensatedSum
-		var count int64
+		var sum numericSum
 		for _, record := range records {
-			// Use type-safe Get with automatic conversion to float64
-			if value, ok := Get[float64](record, field); ok {
-				sum.Add(value)
-				count++
+			if value, ok := Get[any](record, field); ok {
+				sum.add(value)
 			}
 		}
-		if count == 0 {
+		mean, ok := sum.mean()
+		if !ok {
 			return aggNoValue{} // the average of nothing is not 0
 		}
-		return AggResult[float64]{val: sum.Value() / float64(count)}
+		return AggResult[float64]{val: mean}
 	}
 }
 

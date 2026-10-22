@@ -203,6 +203,11 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	for _, p := range exprPlans {
 		imports = append(imports, p.Imports...)
+		for _, t := range p.Terms {
+			if t.Type == exprGoInt {
+				imports = append(imports, exprfnImport) // the checked accumulation
+			}
+		}
 	}
 	for _, p := range streamPlans {
 		imports = append(imports, p.Imports...)
@@ -461,13 +466,13 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 			if isFloatGoType(s.fieldGoT) {
 				fmt.Fprintf(&d, "\ta.%s.Add(float64(r.%s))\n", s.stateName, s.fieldGo)
 			} else {
-				fmt.Fprintf(&d, "\ta.%s += r.%s\n", s.stateName, s.fieldGo)
+				fmt.Fprintf(&d, "\ta.%s = exprfn.Add(a.%s, r.%s)\n", s.stateName, s.stateName, s.fieldGo)
 			}
 		case "avg":
 			if isFloatGoType(s.fieldGoT) {
 				fmt.Fprintf(&d, "\ta.%s.Add(float64(r.%s))\n", s.stateName, s.fieldGo)
 			} else {
-				fmt.Fprintf(&d, "\ta.%s += r.%s\n", s.stateName, s.fieldGo)
+				fmt.Fprintf(&d, "\ta.%s = exprfn.Add(a.%s, r.%s)\n", s.stateName, s.stateName, s.fieldGo)
 			}
 			fmt.Fprintf(&d, "\ta.%s_n++\n", s.stateName)
 		case "min":
@@ -512,7 +517,11 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 	}
 	for _, p := range exprPlans {
 		for _, t := range p.Terms {
-			fmt.Fprintf(&d, "\ta.%s += %s\n", t.GoName, t.ElemSrc)
+			if t.Type == exprGoInt { // checked, as -sum is (DFC155 B)
+				fmt.Fprintf(&d, "\ta.%s = exprfn.Add(a.%s, %s)\n", t.GoName, t.GoName, t.ElemSrc)
+			} else {
+				fmt.Fprintf(&d, "\ta.%s += %s\n", t.GoName, t.ElemSrc)
+			}
 		}
 		if p.UsesCount {
 			fmt.Fprintf(&d, "\ta.%s++\n", p.CountName)
@@ -600,13 +609,13 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 				if isFloatGoType(s.fieldGoT) {
 					fmt.Fprintf(&d, "\ta.%s.Merge(o.%s)\n", s.stateName, s.stateName)
 				} else {
-					fmt.Fprintf(&d, "\ta.%s += o.%s\n", s.stateName, s.stateName)
+					fmt.Fprintf(&d, "\ta.%s = exprfn.Add(a.%s, o.%s)\n", s.stateName, s.stateName, s.stateName)
 				}
 			case "avg":
 				if isFloatGoType(s.fieldGoT) {
 					fmt.Fprintf(&d, "\ta.%s.Merge(o.%s)\n", s.stateName, s.stateName)
 				} else {
-					fmt.Fprintf(&d, "\ta.%s += o.%s\n", s.stateName, s.stateName)
+					fmt.Fprintf(&d, "\ta.%s = exprfn.Add(a.%s, o.%s)\n", s.stateName, s.stateName, s.stateName)
 				}
 				fmt.Fprintf(&d, "\ta.%s_n += o.%s_n\n", s.stateName, s.stateName)
 			case "min":
@@ -658,7 +667,11 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		// associative, which is exactly why they keep GroupByParallel.
 		for _, p := range exprPlans {
 			for _, t := range p.Terms {
-				fmt.Fprintf(&d, "\ta.%s += o.%s\n", t.GoName, t.GoName)
+				if t.Type == exprGoInt {
+					fmt.Fprintf(&d, "\ta.%s = exprfn.Add(a.%s, o.%s)\n", t.GoName, t.GoName, t.GoName)
+				} else {
+					fmt.Fprintf(&d, "\ta.%s += o.%s\n", t.GoName, t.GoName)
+				}
 			}
 			if p.UsesCount {
 				fmt.Fprintf(&d, "\ta.%s += o.%s\n", p.CountName, p.CountName)
@@ -848,6 +861,8 @@ func typedAggImports(specs []aggSpec, in *lib.TypedSchema) []string {
 		case "sum", "avg":
 			if f, ok := lookupSchemaField(in, s.field); ok && isFloatGoType(f.GoType) {
 				out = append(out, "github.com/rosscartlidge/ssql/v4")
+			} else {
+				out = append(out, exprfnImport) // the checked int64 add (DFC155 B)
 			}
 		case "variance":
 			out = append(out, "github.com/rosscartlidge/ssql/v4")

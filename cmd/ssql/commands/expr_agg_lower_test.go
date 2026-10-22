@@ -18,7 +18,7 @@ func TestLowerExprAgg(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(plan.Terms) != 1 || plan.Terms[0].ElemSrc != "(r.Pop * 2)" || plan.Terms[0].Type != exprGoInt {
+		if len(plan.Terms) != 1 || plan.Terms[0].ElemSrc != "exprfn.Mul(r.Pop, 2)" || plan.Terms[0].Type != exprGoInt {
 			t.Errorf("terms: %+v", plan.Terms)
 		}
 		if !plan.UsesCount {
@@ -47,7 +47,7 @@ func TestLowerExprAgg(t *testing.T) {
 		if len(plan.Terms) != 1 {
 			t.Errorf("identical sum terms must share one accumulator: %+v", plan.Terms)
 		}
-		if plan.Result != "(a.ea0_t0 + a.ea0_t0)" || plan.ResultType != exprGoInt {
+		if plan.Result != "exprfn.Add(a.ea0_t0, a.ea0_t0)" || plan.ResultType != exprGoInt {
 			t.Errorf("result: %s", plan.Result)
 		}
 	})

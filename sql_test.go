@@ -621,8 +621,8 @@ func TestSum(t *testing.T) {
 	sumFn := Sum("value")
 	result := sumFn(records).getValue()
 
-	if result != float64(60) {
-		t.Errorf("Sum should return 60, got %v", result)
+	if result != int64(60) { // integers sum in int64, exactly (DFC155 B)
+		t.Errorf("Sum should return int64 60, got %v (%T)", result, result)
 	}
 }
 
@@ -669,7 +669,7 @@ func TestAvgEmpty(t *testing.T) {
 	if result != nil {
 		t.Errorf("Avg of empty should have no value, got %v", result)
 	}
-	if got := Sum("score")(records).getValue(); got != 0.0 {
+	if got := Sum("score")(records).getValue(); got != int64(0) { // no values: the integer zero
 		t.Errorf("Sum of empty should be 0, got %v", got)
 	}
 }

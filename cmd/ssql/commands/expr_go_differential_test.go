@@ -40,6 +40,7 @@ func TestExprGoDifferential(t *testing.T) {
 		"pop + 1",
 		"pop - qty",
 		"pop * qty",
+		"pop * 2 + 1", "(pop - qty) * 3", "len(city) + pop", "len(city) * 2", // DFC155 B: checked int arithmetic, int kinds mixed
 		"pop + price",
 		"price * 2",
 		"pop ** 2",

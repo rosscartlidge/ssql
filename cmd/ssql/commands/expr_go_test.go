@@ -42,7 +42,12 @@ func TestExprToGo(t *testing.T) {
 		{"literal division is float", "7 / 2", "(float64(7) / 2)", exprGoFloat, ""},
 		{"float division no double wrap", "price / 2", "(price...)", exprGoFloat, ""}, // checked via prefix below
 		{"int modulo stays int", "pop % 3", "(r.Pop % 3)", exprGoInt, ""},
-		{"int add stays int", "pop + 1", "(r.Pop + 1)", exprGoInt, ""},
+		{"int add stays int", "pop + 1", "exprfn.Add(r.Pop, 1)", exprGoInt, ""}, // checked: an overflow is an error (DFC155 B)
+		{"int sub is checked", "pop - qty", "exprfn.Sub(r.Pop, r.Qty)", exprGoInt, ""},
+		{"int mul is checked", "pop * 2", "exprfn.Mul(r.Pop, 2)", exprGoInt, ""},
+		{"float arithmetic is bare", "price * 2", "(r.Price * 2)", exprGoFloat, ""},
+		{"int beside float is float", "pop * price", "(float64(r.Pop) * r.Price)", exprGoFloat, ""},
+		{"nested int arithmetic", "pop * 2 + 1", "exprfn.Add(exprfn.Mul(r.Pop, 2), 1)", exprGoInt, ""},
 		{"mixed add promotes", "pop + price", "(float64(r.Pop) + r.Price)", exprGoFloat, ""},
 		{"int literal adapts in float context", "price * 2", "(r.Price * 2)", exprGoFloat, ""},
 		{"power is math.Pow", "pop ** 2", "math.Pow(float64(r.Pop), 2)", exprGoFloat, "math"},
@@ -186,7 +191,7 @@ func TestExprToGoRecord(t *testing.T) {
 		{"int field compare", "pop > 15", `(ssql.GetOr(r, "pop", int64(0)) > 15)`, exprGoBool},
 		{"string field", `city == "Oslo"`, `(ssql.GetOr(r, "city", "") == "Oslo")`, exprGoBool},
 		{"division is float", "pop / 2", `(float64(ssql.GetOr(r, "pop", int64(0))) / 2)`, exprGoFloat},
-		{"int arithmetic stays int", "pop + 1", `(ssql.GetOr(r, "pop", int64(0)) + 1)`, exprGoInt},
+		{"int arithmetic stays int", "pop + 1", `exprfn.Add(ssql.GetOr(r, "pop", int64(0)), 1)`, exprGoInt},
 		{"mixed promotes", "pop + price", `(float64(ssql.GetOr(r, "pop", int64(0))) + ssql.GetOr(r, "price", float64(0)))`, exprGoFloat},
 		{"bool field", "active", `ssql.GetOr(r, "active", false)`, exprGoBool},
 		{"has folds against advisory", `has("pop") && has("nope")`, "(true && false)", exprGoBool},

@@ -482,13 +482,8 @@ func (e *exprGoEnv) binary(n *ast.BinaryNode) (exprGo, error) {
 	}
 
 	switch n.Operator {
-	case "+":
-		if left.Type == exprGoString && right.Type == exprGoString {
-			return mergeMeta(exprGo{Src: "(" + left.Src + " + " + right.Src + ")", Type: exprGoString}, left, right), nil
-		}
-		return e.arith(n.Operator, left, right)
-	case "-", "*":
-		return e.arith(n.Operator, left, right)
+	case "+", "-", "*":
+		return e.plusMinusTimes(n.Operator, left, right)
 	case "/":
 		// expr-lang division is ALWAYS float64 — 7/2 is 3.5. NEVER emit Go
 		// integer division.
@@ -552,6 +547,17 @@ func (e *exprGoEnv) binary(n *ast.BinaryNode) (exprGo, error) {
 
 // arith handles + - * over numbers: int OP int stays int64 (Go wrap matches
 // the VM), any float operand promotes the result to float64.
+// plusMinusTimes emits `+`, `-` and `*`: string concatenation for two
+// strings, else arithmetic. Reached from a BinaryNode and from the call
+// the overflow patch rewrites one into (ssql.ExprCheckedIntArithmetic),
+// which is what the aggregation lowering sees in a compiled program's AST.
+func (e *exprGoEnv) plusMinusTimes(op string, left, right exprGo) (exprGo, error) {
+	if op == "+" && left.Type == exprGoString && right.Type == exprGoString {
+		return mergeMeta(exprGo{Src: "(" + left.Src + " + " + right.Src + ")", Type: exprGoString}, left, right), nil
+	}
+	return e.arith(op, left, right)
+}
+
 func (e *exprGoEnv) arith(op string, left, right exprGo) (exprGo, error) {
 	if !left.Type.numeric() || !right.Type.numeric() {
 		return exprGo{}, fmt.Errorf("operator %s needs numeric operands, got %s and %s", op, left.Type, right.Type)
@@ -560,7 +566,11 @@ func (e *exprGoEnv) arith(op string, left, right exprGo) (exprGo, error) {
 		res := exprGo{Src: "(" + asFloat(left) + " " + op + " " + asFloat(right) + ")", Type: exprGoFloat}
 		return mergeMeta(res, left, right), nil
 	}
-	return mergeMeta(exprGo{Src: "(" + left.Src + " " + op + " " + right.Src + ")", Type: exprGoInt}, left, right), nil
+	// Both int: the checked form, so an overflow stops the program as it
+	// stops the VM and every SQL engine (DFC155 B) instead of wrapping.
+	fn := map[string]string{"+": "exprfn.Add", "-": "exprfn.Sub", "*": "exprfn.Mul"}[op]
+	res := exprGo{Src: fn + "(" + left.Src + ", " + right.Src + ")", Type: exprGoInt, Imports: []string{exprfnImport}}
+	return mergeMeta(res, left, right), nil
 }
 
 // compare handles < <= > >= == !=. Cross-type comparisons (string vs number,
@@ -676,6 +686,20 @@ func (e *exprGoEnv) conditional(n *ast.ConditionalNode) (exprGo, error) {
 
 // call handles builtins and the has/getOr record helpers.
 func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
+	// The overflow patch's call (ssql.ExprCheckedIntArithmetic) is the
+	// operator it replaced; a compiled program's AST holds it instead of
+	// the BinaryNode.
+	if ssql.ExprCheckedArithFunction(name) && len(args) == 2 {
+		left, err := e.node(args[0])
+		if err != nil {
+			return exprGo{}, err
+		}
+		right, err := e.node(args[1])
+		if err != nil {
+			return exprGo{}, err
+		}
+		return e.plusMinusTimes(map[string]string{"_ssql_add": "+", "_ssql_sub": "-", "_ssql_mul": "*"}[name], left, right)
+	}
 	// has/getOr resolve against the schema at codegen time: typed struct
 	// fields always exist, so has() is a constant and getOr() is the field
 	// itself (or the default, when the field isn't in the schema at all —

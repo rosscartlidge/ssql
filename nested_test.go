@@ -169,3 +169,24 @@ func TestFlattenObjectField(t *testing.T) {
 		}
 	}()
 }
+
+// A list or object element past 2^53 keeps its digits: the nested-value
+// parser decodes numbers as text, not float64 (DFC155 follow-up,
+// 2026-10-22: a Fibonacci list exploded to floats from fib(79) on).
+func TestExprValueKeepsWideIntegers(t *testing.T) {
+	got := ExprValue(JSONString(`[9007199254740993, 9223372036854775807, -9223372036854775808, 10, 2.5, 1e3, 1.0, 99999999999999999999]`))
+	want := []any{int64(9007199254740993), int64(9223372036854775807), int64(-9223372036854775808), int64(10), 2.5, 1000.0, 1.0, 1e20}
+	list, ok := got.([]any)
+	if !ok || len(list) != len(want) {
+		t.Fatalf("got %#v", got)
+	}
+	for i := range want {
+		if list[i] != want[i] {
+			t.Errorf("[%d]: got %v (%T), want %v (%T)", i, list[i], list[i], want[i], want[i])
+		}
+	}
+	obj := ExprValue(JSONString(`{"a": {"n": 9007199254740993}, "l": [[9007199254740995]]}`)).(map[string]any)
+	if obj["a"].(map[string]any)["n"] != int64(9007199254740993) || obj["l"].([]any)[0].([]any)[0] != int64(9007199254740995) {
+		t.Errorf("nested: %#v", obj)
+	}
+}

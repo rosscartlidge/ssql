@@ -36,6 +36,17 @@ ssql from data.csv | ssql update -set-expr email 'lower(trim(email))'
 | `%` | Modulo | `value % 10` |
 | `**` | Power | `base ** exponent` |
 
+**Integers are exact to 2^63, and an overflow is an error.** An int64
+`+`, `-` or `*` whose result does not fit stops the pipeline with the
+operands in the message (`integer overflow: 9223372036854775807 + 1
+does not fit an int64`), in every lane: exec, `generate go` and the SQL
+engines, which raise the same way. It never wraps to a wrong number.
+Floats are exact to 2^53 and carry on past it with rounding; `/` is
+always a float. An integer literal wider than int64 in a CSV or JSON
+column is read as a float in every lane, so an id that wide belongs in
+a string column. `group-by -sum` of an integer column is an integer, exact
+to 2^63 (an overflow is the same error); `-avg` is a float.
+
 ### Comparison Operators
 
 | Operator | Description | Example |

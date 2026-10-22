@@ -228,7 +228,7 @@ func (v *identifierVisitor) Visit(node *ast.Node) {
 	// rewrites builtin-named fields (date, len, …) into — both are field
 	// references to validate against the first record.
 	if call, ok := (*node).(*ast.CallNode); ok {
-		if name, ok := ssql.ExprFieldName(call.Callee); ok && ssql.ExprCompiledFunctions[name] {
+		if name, ok := ssql.ExprFieldName(call.Callee); ok && (ssql.ExprCompiledFunctions[name] || ssql.ExprCheckedArithFunction(name)) {
 			v.calls[name]++
 		}
 	}

@@ -134,6 +134,19 @@ func wireOfField(fieldType string) string {
 	return fieldType
 }
 
+// wireSum: an integer column sums to an integer (exactly, in int64, an
+// overflow being an error — DFC155 B; DuckDB's SUM(BIGINT) is the
+// integer HUGEINT, typed codegen's running sum is the field's type);
+// anything else, or an unknown field, sums to a float. Until v4.123.0
+// the wire type was float for every sum, which coerced an exact int64
+// sum past 2^53 to the nearest float on the way out.
+func wireSum(fieldType string) string {
+	if fieldType == "int" {
+		return "int"
+	}
+	return "float"
+}
+
 // aggDefs lists the built-in aggregation flags in the order they are
 // declared on the command and decoded from it.
 var aggDefs = []aggDef{
@@ -141,7 +154,7 @@ var aggDefs = []aggDef{
 		sql:   func(string, string) string { return "COUNT(*)" },
 		build: func(string, string) ssql.AggregateFunc { return ssql.Count() },
 		code:  func(string, string) string { return "ssql.Count()" }},
-	{flag: "-sum", fn: "sum", merge: "-sum", hasField: true, sql: sqlSumOrZero, wireType: wireFixed("float"), typedKind: typedKindSum,
+	{flag: "-sum", fn: "sum", merge: "-sum", hasField: true, sql: sqlSumOrZero, wireType: wireSum, typedKind: typedKindSum,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Sum(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Sum(%q)", f) }},
 	{flag: "-avg", fn: "avg", hasField: true, sql: sqlCall("AVG"), wireType: wireFixed("float"), typedKind: typedKindAvg,

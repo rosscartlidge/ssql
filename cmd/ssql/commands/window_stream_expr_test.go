@@ -76,7 +76,7 @@ func TestRenderWindowFoldSpec(t *testing.T) {
 	for _, want := range []string{
 		"Kind: typed.WFold",
 		"&RowFold0{se0_a: 0, se0_b: 1}",
-		"a.se0_a, a.se0_b = a.se0_b, (a.se0_a + a.se0_b)",
+		"a.se0_a, a.se0_b = a.se0_b, exprfn.Add(a.se0_a, a.se0_b)",
 		"Final: func(s any) any { a := s.(*RowFold0); return a.se0_b }",
 	} {
 		if !strings.Contains(lit, want) {

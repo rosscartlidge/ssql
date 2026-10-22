@@ -312,7 +312,9 @@ func ExprFieldShadowing() expr.Option   // expr.Compile option: a field named li
 func ExprDate() expr.Option             // expr.Compile option: ssql's date() in place of expr-lang's
 func ExprTimeFunctions() []expr.Option  // the calendar functions below as expression functions (year(ts) … tz, now)
 func ExprMathFunctions() []expr.Option  // the numeric functions (DFC153): sqrt, ln, log(b, x), the trig set, round(x, n), gcd …, and hash(n[, seed]) (exprfn.Hash, the reproducible integer mix every lane shares); NaN/±Inf results are absent once written
-func ExprStandardOptions() []expr.Option // shadowing + date() + the calendar and numeric functions: what every ssql compile site passes
+func ExprCheckedIntArithmetic() []expr.Option // int64 + - * overflow is an error, not a wrap (DFC155 B): an AST patch routes the operators through exprfn.CheckedAdd/Sub/Mul; every other operand pair keeps expr's own semantics
+func ExprCheckedArithFunction(name string) bool // the patch's call names, for walkers that tell a field from a function
+func ExprStandardOptions() []expr.Option // shadowing + date() + the calendar and numeric functions + checked int arithmetic: what every ssql compile site passes
 ```
 
 A time renders as RFC 3339 wherever it becomes text: JSONL, CSV/TSV,
@@ -704,8 +706,8 @@ type AggResult[V Value] struct{ /* private */ }
 func (a AggResult[V]) GetValue() any
 
 func Count() AggregateFunc
-func Sum(field string) AggregateFunc
-func Avg(field string) AggregateFunc
+func Sum(field string) AggregateFunc   // integers sum exactly in int64 (an overflow is an error); a float among the values makes the sum a compensated float64
+func Avg(field string) AggregateFunc   // a float64 mean over the same accumulation
 func Min[T OrderedValue](field string) AggregateFunc
 func Max[T OrderedValue](field string) AggregateFunc
 func First[T Value](field string) AggregateFunc

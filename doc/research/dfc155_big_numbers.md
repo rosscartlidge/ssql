@@ -387,7 +387,7 @@ does not serve better. Not an option; say so in the docs.
 
 ## 4. Recommendation
 
-1. **Do B now.** It is the bug the Fibonacci run showed: three lanes
+1. **Do B now.** *Shipped 2026-10-22, see §6.* It is the bug the Fibonacci run showed: three lanes
    answer wrong where the fourth stops. Loud overflow is the rule in
    every engine ssql translates to, it is the int twin of the
    non-finite rule, and it costs a day. Include `-sum`/`-avg` of
@@ -418,3 +418,55 @@ does not serve better. Not an option; say so in the docs.
    the lanes in agreement. Until C exists, B's int64 accumulation with a
    loud overflow is the interim; the DuckDB lane disagrees only past
    2^63, where ssql stops and DuckDB answers.*
+
+## 6. Built: option B (2026-10-22)
+
+Ross: "ok lets do B" (after "is it better to do B then C or just
+straight to C": B first, because under §C's widening rule B is the
+first part of C — an int64 operator overflow must be loud there too, and
+B's checked call is where C would route arithmetic).
+
+- **`exprfn`**: `CheckedAdd/Sub/Mul` return `(int64, error)`; `Add/Sub/Mul`
+  panic with the `*OverflowError` (DFC142's channel: `ssql.Recover` turns
+  it into the program's error). Multiplication checks the signed 128-bit
+  product's high word against the low word's sign extension (a corrected
+  `bits.Mul64`, no division); tested against `math/big` on 200k random
+  pairs and every edge.
+- **VM** (`expr_checked.go`): `ExprCheckedIntArithmetic` in
+  `ExprStandardOptions`, so every compile site has it (exec, record
+  codegen, window folds, aggregation expressions). The patcher rewrites
+  each `+ - *` BinaryNode into `_ssql_add(a, b)` etc.; the function
+  checks an int64 pair and hands any other pair to expr's own
+  `vm/runtime` operator, so strings, floats, int beside float, durations
+  and expr's own type errors are byte-for-byte what they were. The
+  result kind for an integer pair is **int**, because that is what expr's
+  runtime returns for every integer pair (`int(x) + int(y)`), and the
+  identifier walker in `cmd/ssql/lib/runtime` learned the three call
+  names. The transpiler accepts the patched call too, because the
+  `-expr` aggregation lowering walks a compiled program's AST. One
+  thing expr's operator does that a call does not: dereference a
+  pointer operand (`OpDeref`; a nullable window value is a `*int64`),
+  so the checked function dereferences its operands first.
+- **Typed**: `arith()` emits `exprfn.Add(a, b)` for an int pair
+  (`out.S = exprfn.Add(exprfn.Mul(r.N, 2), 1)`); the group-by running
+  sum, its shard merge and the `-expr` term accumulators go through
+  `exprfn.Add`.
+- **Sums**: `ssql.Sum`/`Avg` accumulate through `numericSum` — int64
+  while every value is an integer, a compensated float64 from the first
+  float on (and for the numeric strings `Get[float64]` accepted). The
+  `-sum` wire type is `int` for an int column (`wireSum`), so the exact
+  value survives the pipe; DuckDB's `SUM(BIGINT)` is HUGEINT and typed
+  codegen already summed in the field's type, so the lanes now agree
+  past 2^53 where exec used to round.
+- **Gate**: `TestIntOverflowEveryLane` (`cmd/ssql/overflow_test.go`):
+  `+`, `-`, `*`, `-sum` and the Fibonacci fold each fail with "integer
+  overflow" in exec, record, typed and parallel, and DuckDB fails with
+  its own "Overflow" for the operators (its sum answers, the documented
+  divergence); the sum of 2^53+1 and 2^53+2 prints `18014398509481987`
+  verbatim in every lane. The equivalence harness could hold neither
+  (its lanes must succeed, and it parses numbers as float64). Root and
+  `exprfn` unit tests cover the VM semantics table and the oracle.
+- **Not covered** (TODO): expr's `sum()` builtin inside a `-expr`
+  aggregation (a builtin, not patchable), unary minus of MinInt64,
+  and the float accumulation of `window -sum`/`resample`.
+

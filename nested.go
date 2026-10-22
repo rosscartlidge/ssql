@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -26,18 +27,39 @@ func ExprValue(v any) any {
 	if js == "" {
 		return nil // a typed program's missing nested field
 	}
-	parsed, err := js.Parse()
-	if err != nil {
+	// Numbers are decoded as their text (UseNumber), not as float64: an
+	// integer literal becomes the exact int64 it is, where encoding/json's
+	// float64 had already lost every digit past 2^53 (until v4.123.0 a
+	// list element 9007199254740993 exploded to 9007199254740992, and
+	// one past 2^53 came out a float in scientific notation).
+	dec := json.NewDecoder(strings.NewReader(string(js)))
+	dec.UseNumber()
+	var parsed any
+	if err := dec.Decode(&parsed); err != nil {
 		return v
 	}
 	return normaliseJSONNumbers(parsed)
 }
 
-// normaliseJSONNumbers turns encoding/json's float64 numbers into int64
-// where the value is whole, recursively, so `scores[0]` on [10,20] is the
-// int 10 the CSV reader would have produced.
+// normaliseJSONNumbers turns the decoder's json.Number values into the
+// scalars the readers type: an integer literal that fits is an int64,
+// anything else a float64, recursively, so `scores[0]` on [10,20] is the
+// int 10 the CSV reader would have produced. A float64 (a value built in
+// Go rather than decoded) that is whole and within 2^53 is an int64 too.
 func normaliseJSONNumbers(v any) any {
 	switch x := v.(type) {
+	case json.Number:
+		text := string(x)
+		if !strings.ContainsAny(text, ".eE") {
+			if i, err := strconv.ParseInt(text, 10, 64); err == nil {
+				return i
+			}
+		}
+		f, err := x.Float64()
+		if err != nil {
+			return text // not a number Go can hold: keep the text
+		}
+		return f
 	case float64:
 		if x == float64(int64(x)) && x >= -9.007199254740992e15 && x <= 9.007199254740992e15 {
 			return int64(x)
