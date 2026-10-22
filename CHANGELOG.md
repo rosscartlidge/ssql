@@ -5,6 +5,12 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A pivot cell keeps the kind of its values**: `pivot -func sum` of an integer column is an exact int64 (an overflow is an error, as everywhere since [DFC155](doc/research/dfc155_big_numbers.md) B), `min`/`max` keep the integer, `avg` is a float of the exact sum, and an empty cell is 0 in the column's kind; a float column sums with Neumaier compensation like every other sum. Every cell was a float64 summed without compensation, so an integer cell rounded past 2^53 (2^53+1 and 2^53+2 summed to 18014398509481984; now 18014398509481987) and a long float column drifted. With this, no sum in ssql rounds silently.
+
 ## [4.123.1] - 2026-10-22
 
 ### Fixed

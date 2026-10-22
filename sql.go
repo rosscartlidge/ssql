@@ -1313,9 +1313,15 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 				}
 			}
 
-			// Group by (rowField, colField) pair
+			// Group by (rowField, colField) pair. A cell keeps its values as
+			// the numbers they are — int64 or float64 (a numeric string as
+			// Get[float64] converted it) — so an integer column sums exactly
+			// in int64 and keeps its kind through min/max (DFC155 B's rule;
+			// until v4.123.2 every cell was a float64, summed without
+			// compensation).
 			type cellKey struct{ row, col string }
-			cells := make(map[cellKey][]float64)
+			cells := make(map[cellKey][]any)
+			colFloat := make(map[string]bool)   // a float seen in the column: its empty cells are float too
 			rowOriginal := make(map[string]any) // preserve original row key values
 			var rowOrder []string
 			rowSeen := make(map[string]bool)
@@ -1327,10 +1333,13 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 
 				ck := cellKey{rvStr, cv}
 				if aggFunc == "count" {
-					cells[ck] = append(cells[ck], 1)
-				} else {
-					if v, ok := Get[float64](r, valField); ok {
-						cells[ck] = append(cells[ck], v)
+					cells[ck] = append(cells[ck], int64(1))
+				} else if v, ok := Get[any](r, valField); ok {
+					if i, isInt := v.(int64); isInt {
+						cells[ck] = append(cells[ck], i)
+					} else if f, ok := convertTo[float64](v); ok {
+						cells[ck] = append(cells[ck], f)
+						colFloat[cv] = true
 					}
 				}
 
@@ -1360,49 +1369,47 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 				for _, cv := range colOrder {
 					ck := cellKey{rvStr, cv}
 					vals := cells[ck]
+					zero := func() MutableRecord { // an empty cell: 0 in the column's kind
+						if colFloat[cv] {
+							return mut.Float(cv, 0)
+						}
+						return mut.Int(cv, 0)
+					}
 					switch aggFunc {
 					case "count":
 						mut = mut.Int(cv, int64(len(vals)))
 					case "sum":
-						var sum float64
+						var sum numericSum
 						for _, v := range vals {
-							sum += v
+							sum.add(v)
 						}
-						mut = mut.Float(cv, sum)
+						if len(vals) == 0 {
+							mut = zero()
+						} else {
+							mut = setScalar(mut, cv, sum.value())
+						}
 					case "avg":
-						var sum float64
+						var sum numericSum
 						for _, v := range vals {
-							sum += v
+							sum.add(v)
 						}
-						if len(vals) > 0 {
-							mut = mut.Float(cv, sum/float64(len(vals)))
+						if mean, ok := sum.mean(); ok {
+							mut = mut.Float(cv, mean)
 						} else {
 							mut = mut.Float(cv, 0)
 						}
-					case "min":
-						if len(vals) > 0 {
-							min := vals[0]
-							for _, v := range vals[1:] {
-								if v < min {
-									min = v
-								}
+					case "min", "max":
+						if len(vals) == 0 {
+							mut = zero()
+							break
+						}
+						best := vals[0]
+						for _, v := range vals[1:] {
+							if (aggFunc == "min") == numericLess(v, best) && v != best {
+								best = v
 							}
-							mut = mut.Float(cv, min)
-						} else {
-							mut = mut.Float(cv, 0)
 						}
-					case "max":
-						if len(vals) > 0 {
-							max := vals[0]
-							for _, v := range vals[1:] {
-								if v > max {
-									max = v
-								}
-							}
-							mut = mut.Float(cv, max)
-						} else {
-							mut = mut.Float(cv, 0)
-						}
+						mut = setScalar(mut, cv, best)
 					}
 				}
 
@@ -1733,6 +1740,19 @@ func (s *numericSum) value() any {
 		return s.floats.Value()
 	}
 	return s.ints
+}
+
+// numericLess orders two cell values: int64 beside int64 exactly, any
+// other pair as float64.
+func numericLess(a, b any) bool {
+	if x, ok := a.(int64); ok {
+		if y, ok := b.(int64); ok {
+			return x < y
+		}
+	}
+	fa, _ := convertTo[float64](a)
+	fb, _ := convertTo[float64](b)
+	return fa < fb
 }
 
 // mean is the average, a float64 as SQL's AVG is; ok is false for no values.

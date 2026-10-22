@@ -78,6 +78,7 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		"expr_sum":           {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18014398509481987"},
 		"window_running_sum": {bin + " from range 2 -start 9007199254740993 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18014398509481987"},
 		"window_sliding_sum": {bin + " from range 3 -start 9007199254740993 | " + bin + " window -sum n t -preceding 1 | " + bin + " limit -last 1", "18014398509481989"},
+		"pivot_sum":          {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr d '\"a\"' -set-expr q '\"x\"' | " + bin + " pivot -row d -col q -val n -func sum", "18014398509481987"},
 	} {
 		t.Run("int_sum_exact_past_2_53_"+name, func(t *testing.T) {
 			want := c.want // odd: no float64 holds it (DuckDB -json quotes its HUGEINT)
