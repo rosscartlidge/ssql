@@ -10,7 +10,8 @@ import "fmt"
 // errors are typed (*CellError, *LineError, *CastError, *CompareError),
 // and the panic surfaces in the goroutine that pulls the pipeline. This
 // file is where a program turns that into an ordinary error: the CLI,
-// every generated program and an embedding service call Recover or Run
+// every generated program, the playground's exec shim
+// (cmd/ssql-playground) and an embedding service call Recover or Run
 // around the loop that drives the pipeline. Safely (core.go) is the
 // same conversion as a FilterWithErrors, for code that wants the
 // failure as a stream element instead.

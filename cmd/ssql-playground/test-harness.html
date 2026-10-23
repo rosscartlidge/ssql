@@ -430,6 +430,36 @@ async function run() {
     record("procsub-join-run", /customer_id|country|amount/.test(doc.getElementById('output').textContent) && !/Error|failed/i.test(doc.getElementById('output').textContent),
         doc.getElementById('output').textContent.slice(0, 200));
 
+    // 11g. A pipeline error mid-stream is shown as an error and leaves
+    //      the engine alive. The library raises a fold/cast/cell failure
+    //      as a panic that the driver recovers (ssql.Run); the shim did
+    //      not, so the Fibonacci fold overflowing at 92 rows exited the
+    //      Go program and every later run failed with "Go program has
+    //      already exited" until a reload (Ross, 2026-10-23).
+    setLine("ssql from range 92 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib | ssql to table");
+    w.runPipeline();
+    const ovOut = doc.getElementById('output').textContent;
+    record("pipeline-error-shown", /integer overflow/.test(ovOut) && !/already exited/.test(ovOut), ovOut.slice(0, 200));
+    setLine("ssql from range 91 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib | ssql to table");
+    w.runPipeline();
+    const aliveOut = doc.getElementById('output').textContent;
+    record("engine-alive-after-error", /7540113804746346429/.test(aliveOut) && !/already exited|Error/.test(aliveOut), aliveOut.slice(-200));
+
+    // 11h. Every example button runs (or optimises) without an error:
+    //      the examples are hand-verified when added and nothing
+    //      re-checked them as commands changed (bare `from` lost
+    //      `-type`, pivot's flag is `-val`).
+    {
+        const nBtn = doc.querySelectorAll('.example-btn[onclick^="loadExample"]').length;
+        const bad = [];
+        for (let i = 0; i < nBtn; i++) {
+            w.loadExample(i);
+            const errEl = doc.getElementById('output').querySelector('.stderr');
+            if (errEl) bad.push(i + ": " + errEl.textContent.slice(0, 80));
+        }
+        record("every-example-runs", nBtn >= 24 && bad.length === 0, "buttons=" + nBtn + " " + bad.join(" | "));
+    }
+
     // 12. Share link (#p=... on the second iframe): pipeline preloaded and
     //    auto-run — output is the group-by result table.
     const w2 = document.getElementById('pgshare').contentWindow;

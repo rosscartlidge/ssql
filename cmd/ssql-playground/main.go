@@ -9,6 +9,7 @@ import (
 	_ "time/tzdata" // IANA zones for -tz/tz() in the browser, which has no zoneinfo (DFC147)
 
 	cf "github.com/rosscartlidge/autocli/v4"
+	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/commands"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"
 )
@@ -163,9 +164,17 @@ func execCommand(args []string, stdinData string) (string, string, int) {
 	os.Stdout = outF
 	os.Stderr = errF
 
-	// Build and execute command
+	// Build and execute the command. The library reports a mid-stream
+	// failure (a fold that overflowed, a cell that does not fit its
+	// column) by panicking with an error value, and the driver of the
+	// pipeline turns it into an error — cmd/ssql/main.go, every generated
+	// program and an embedding service do, through ssql.Run (recover.go).
+	// This shim is a driver too: without the same recovery the panic
+	// unwinds past jsExec, the Go program exits and every later
+	// ssqlExec fails with "Go program has already exited" (the page is
+	// dead until a reload). Ross's Fibonacci fold at 92 rows, 2026-10-23.
 	cmd := buildCommand()
-	execErr := cmd.Execute(args)
+	execErr := ssql.Run(func() error { return cmd.Execute(args) })
 
 	// Close redirected files
 	inF.Close()

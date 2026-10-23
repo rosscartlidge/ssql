@@ -5,6 +5,16 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Six playground examples for what shipped since August**: the Fibonacci window fold over `from range` (no data file; 92 rows shows the overflow guard) and the same fold as a line chart, synthetic data with `hash()` buckets and `sqrt()`, monthly revenue with `month()` on a time column, a product × month `pivot`, and `-collect` lists indexed in an expression.
+
+### Fixed
+
+- **A pipeline error in the browser no longer kills the playground**: the library reports a mid-stream failure (the Fibonacci fold overflowing at 92 rows, a cell that does not fit its column, a cast that cannot convert) as a panic that the pipeline's driver turns into an error, and the CLI and every generated program do, through `ssql.Run`. The playground's exec shim did not, so the first such error exited the wasm program and every later run failed with "Go program has already exited" until a reload. The shim recovers like the CLI now: the error is shown in red and the next run works. Same engine behind `to explore -wasm`. Pinned by the playground e2e harness (`scripts/playground-test.sh`, now a pre-tag gate).
+
 ## [4.123.2] - 2026-10-22
 
 ### Fixed
