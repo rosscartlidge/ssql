@@ -117,6 +117,12 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" onclick="loadExample(15)">Markdown — paste-ready table for READMEs and PRs</button>
     <button class="example-btn" onclick="loadExample(16)">Create a file — CSV summary, download it from the Files bar</button>
     <button class="example-btn" onclick="loadExample(17)">Create a file — Markdown report (engineers.md)</button>
+    <button class="example-btn" onclick="loadExample(18)">Fibonacci — a window fold with no data file (try 92 rows: the overflow guard)</button>
+    <button class="example-btn" onclick="loadExample(19)">Synthetic data — from range, hash() buckets, sqrt() (try Generate SQL)</button>
+    <button class="example-btn" onclick="loadExample(20)">Calendar — monthly revenue with month() on a time column</button>
+    <button class="example-btn" onclick="loadExample(21)">Pivot — product × month revenue grid</button>
+    <button class="example-btn" onclick="loadExample(22)">Nested — collect names per city, then index the list</button>
+    <button class="example-btn" onclick="loadExample(23)">Fibonacci curve — the same fold over 30 rows, as a line chart</button>
 </div>
 
 <div class="datasets">
@@ -134,9 +140,9 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
 
 <!-- ?v= busts the browser cache per deploy: a stale fs-polyfill.js with a
      fresh playground.html made runs die silently (missing new helpers). -->
-<script src="fs-polyfill.js?v=f64b0862"></script>
-<script src="wasm_exec.js?v=f64b0862"></script>
-<script src="ssql-ui.js?v=f64b0862"></script>
+<script src="fs-polyfill.js?v=6a8cd9da"></script>
+<script src="wasm_exec.js?v=6a8cd9da"></script>
+<script src="ssql-ui.js?v=6a8cd9da"></script>
 <script>
 // --- Sample datasets ---
 const SAMPLE_DATASETS = {};
@@ -218,6 +224,32 @@ const EXAMPLES = [
     `ssql from employees.csv
 | ssql where -if dept eq Engineering
 | ssql to markdown -o engineers.md`,
+    `ssql from range 20
+| ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib
+| ssql to table`,
+    `ssql from range 1000
+| ssql update -set-expr bucket 'hash(n, 7) % 5' -set-expr root 'sqrt(n)'
+| ssql group-by bucket -count cnt -avg root avg_root
+| ssql sort bucket
+| ssql to table`,
+    `ssql from csv orders.csv -type order_date time
+| ssql update -set-expr month 'month(order_date)'
+| ssql group-by month -sum amount revenue -count orders
+| ssql sort month
+| ssql to table`,
+    `ssql from csv orders.csv -type order_date time
+| ssql update -set-expr month 'month(order_date)'
+| ssql pivot -row product -col month -val amount -func sum
+| ssql to table`,
+    `ssql from employees.csv
+| ssql group-by city -collect name people
+| ssql update -set-expr n 'len(people)' -set-expr first 'people[0]'
+| ssql sort -desc n
+| ssql include city n first people
+| ssql to table`,
+    `ssql from range 30
+| ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib
+| ssql to chart -x n -y fib -type line`,
 ];
 
 // Examples that should auto-optimize instead of run (by index)
@@ -305,7 +337,7 @@ let wasmReady = false;
 
 async function initWasm() {
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=f64b0862'), go.importObject);
+    const result = await WebAssembly.instantiateStreaming(fetch('ssql-playground.wasm?v=6a8cd9da'), go.importObject);
     go.run(result.instance);
 
     // Wait for ssqlReady
