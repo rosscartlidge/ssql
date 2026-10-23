@@ -5,6 +5,13 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Playground: a Generate JSON button** beside Generate SQL — the pipeline as a document for `ssql run` (`generate json`: a JSON list of stages, each the stage's own argv), the form a program or a config file carries a pipeline in.
+- **Playground example: the nested pipeline as JSON** — the same `-collect` lists, whole, through `to json` (the table truncates a long list cell).
+
 ## [4.124.0] - 2026-10-23
 
 ### Added

@@ -77,6 +77,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button id="btnGenerateGo" onclick="generateGo()" disabled>Generate Go</button>
     <button id="btnGenerateTypedGo" onclick="generateGo('typed')" disabled title="Typed/parallel code generation: derived row structs, planner-selected Stream/parallel forms">Generate Typed Go</button>
     <button id="btnGenerateSQL" onclick="generateSQL()" disabled>Generate SQL</button>
+    <button id="btnGenerateJSON" onclick="generateJSON()" disabled title="The pipeline as a document for ssql run: a JSON list of stages, each the stage's own argv">Generate JSON</button>
     <input type="file" id="fileUpload" accept=".csv,.tsv,.json,.jsonl" style="display:none" onchange="uploadFile(event)">
     <button onclick="document.getElementById('fileUpload').click()">Upload CSV</button>
     <button id="btnShare" onclick="sharePipeline()">Share 🔗</button>
@@ -123,6 +124,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" onclick="loadExample(21)">Pivot — product × month revenue grid</button>
     <button class="example-btn" onclick="loadExample(22)">Nested — collect names per city, then index the list</button>
     <button class="example-btn" onclick="loadExample(23)">Fibonacci curve — the same fold over 30 rows, as a line chart</button>
+    <button class="example-btn" onclick="loadExample(24)">Nested as JSON — the collected lists whole, with to json</button>
 </div>
 
 <div class="datasets">
@@ -250,6 +252,12 @@ const EXAMPLES = [
     `ssql from range 30
 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib
 | ssql to chart -x n -y fib -type line`,
+    `ssql from employees.csv
+| ssql group-by city -collect name people
+| ssql update -set-expr n 'len(people)' -set-expr first 'people[0]'
+| ssql sort -desc n
+| ssql include city n first people
+| ssql to json`,
 ];
 
 // Examples that should auto-optimize instead of run (by index)
@@ -368,6 +376,7 @@ async function initWasm() {
     document.getElementById('btnGenerateGo').disabled = false;
     document.getElementById('btnGenerateTypedGo').disabled = false;
     document.getElementById('btnGenerateSQL').disabled = false;
+    document.getElementById('btnGenerateJSON').disabled = false;
     document.getElementById('btnHelpAt').disabled = false;
 
     // A shared link (#p=...) preloads its pipeline and runs it;
@@ -554,6 +563,18 @@ function generateSQL() {
     showOutput(result, 'Generated SQL (DuckDB)', false, 'sql');
 }
 
+// generateJSON: the pipeline as a document for `ssql run` — a JSON list
+// of stages, each the stage's own argv (no shell; the form a program or
+// a config file carries a pipeline in).
+function generateJSON() {
+    hideUseButton();
+    hideChart();
+    const pipeline = document.getElementById('pipeline').value.trim();
+    if (!pipeline) return;
+    const result = executePipeline(pipeline + ' | ssql generate json', true);
+    showOutput(result, 'Pipeline document (ssql run)', false, 'json');
+}
+
 function viewDataset(name) {
     const content = SAMPLE_DATASETS[name];
     if (!content) return;
@@ -587,5 +608,6 @@ initWasm().catch(err => {
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/prism.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-go.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-sql.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
 </body>
 </html>

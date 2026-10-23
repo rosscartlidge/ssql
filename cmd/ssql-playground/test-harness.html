@@ -214,6 +214,15 @@ async function run() {
         /ssql\.GetOr|ssql\.Where/.test(recSrc) && !/typed\./.test(recSrc),
         recSrc.slice(0, 250));
 
+    // 11a. Generate JSON: the pipeline as an `ssql run` document — a JSON
+    //      list of per-stage argv (Ross, 2026-10-23).
+    setLine("ssql from employees.csv | ssql where -if age gt 30 | ssql to table");
+    w.generateJSON();
+    const jsonDoc = doc.getElementById('output').textContent;
+    record("generate-json-document",
+        /\["from",\s*"employees.csv"/.test(jsonDoc) && /\["where",\s*"-if",\s*"age",\s*"gt",\s*"30"\]/.test(jsonDoc) && /\["to",\s*"table"\]/.test(jsonDoc) && /ssql run/.test(label()),
+        label() + " :: " + jsonDoc.slice(0, 200));
+
     // 11b. Files created by a run get a download bar (write-log driven),
     //      excluding the executor's tmp/procsub plumbing; a run that
     //      creates nothing hides the bar.
@@ -457,7 +466,7 @@ async function run() {
             const errEl = doc.getElementById('output').querySelector('.stderr');
             if (errEl) bad.push(i + ": " + errEl.textContent.slice(0, 80));
         }
-        record("every-example-runs", nBtn >= 24 && bad.length === 0, "buttons=" + nBtn + " " + bad.join(" | "));
+        record("every-example-runs", nBtn >= 25 && bad.length === 0, "buttons=" + nBtn + " " + bad.join(" | "));
     }
 
     // 12. Share link (#p=... on the second iframe): pipeline preloaded and
