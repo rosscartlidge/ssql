@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,6 +86,27 @@ func TestInt128Exec(t *testing.T) {
 		want(t, out, "5,2,5")
 		if strings.Contains(out, "1234567890") {
 			t.Errorf("the wide id has no partner:\n%s", out)
+		}
+	})
+	t.Run("parquet_decimal128_round_trip", func(t *testing.T) {
+		// An int128 column is DECIMAL(38,0) in Parquet: ssql reads its own
+		// file back exactly, the typed lane too, and DuckDB reads the same
+		// digits (as a DECIMAL, which it prints quoted in -json).
+		pq := filepath.Join(dir, "wide.parquet")
+		run(t, bin+" from "+wide+" | "+bin+" to parquet "+pq)
+		out := run(t, bin+" from parquet "+pq+" | "+bin+" sort -desc id -desc v")
+		want(t, out, `"id":"int128"`, `"id":123456789012345678901234567890`, `"id":5`)
+		src := run(t, "export SSQL_MODE=typed && "+bin+" from parquet "+pq+" | "+bin+" group-by -sum id t -count c | "+bin+" to jsonl | "+bin+" generate go")
+		tout, err := goRunGeneratedModuleEnv(t, "int128pq", map[string]string{"main.go": src}, nil)
+		if err != nil {
+			t.Fatalf("typed: %v\n%s", err, tout)
+		}
+		want(t, tout, `"t":123456789012345678901234567895`, `"c":2`) // the two-row fixture of this test
+		if duckdb := duckdbBinary(); duckdb != "" {
+			dout, derr := exec.Command(duckdb, "-json", "-c", "SELECT id FROM '"+pq+"' ORDER BY id DESC LIMIT 1").CombinedOutput()
+			if derr != nil || !strings.Contains(string(dout), "123456789012345678901234567890") {
+				t.Errorf("duckdb: %v\n%s", derr, dout)
+			}
 		}
 	})
 	t.Run("int128_beside_float_is_float", func(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
+	"github.com/apache/arrow/go/v18/arrow/decimal128"
 	"github.com/apache/arrow/go/v18/arrow/memory"
 	"github.com/apache/arrow/go/v18/parquet"
 	"github.com/apache/arrow/go/v18/parquet/compress"
@@ -394,9 +395,23 @@ func parquetDecoderFor(arrowT arrow.DataType, structT reflect.Type) (parquetDeco
 			return nil, fmt.Errorf("Parquet column is timestamp, struct field is %v (must be time.Time)", structT)
 		}
 		return decodeParquetTime, nil
+	case arrow.DECIMAL128:
+		if arrowT.(*arrow.Decimal128Type).Scale != 0 || structT != int128Type {
+			return nil, fmt.Errorf("Parquet column is %v, struct field is %v (a DECIMAL(p,0) column is an ssql.Int128)", arrowT, structT)
+		}
+		return decodeParquetInt128, nil
 	default:
 		return nil, fmt.Errorf("unsupported Arrow column type %v", arrowT)
 	}
+}
+
+var decimal38Max, decimal38Min = ssql.MustParseInt128("99999999999999999999999999999999999999"), ssql.MustParseInt128("-99999999999999999999999999999999999999")
+
+// decodeParquetInt128 reads a DECIMAL(p,0) value into an ssql.Int128
+// field (DFC155 C).
+func decodeParquetInt128(p unsafe.Pointer, arr arrow.Array, idx int) {
+	n := arr.(*array.Decimal128).Value(idx)
+	*(*ssql.Int128)(p) = ssql.Int128FromWords(n.HighBits(), n.LowBits())
 }
 
 // decodeParquetString aliases the Arrow string buffer into the struct
@@ -878,6 +893,18 @@ func parquetEncoderFor(t reflect.Type) (arrow.DataType, func(unsafe.Pointer, arr
 		return &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}, func(p unsafe.Pointer, b array.Builder) {
 			tt := *(*time.Time)(p)
 			b.(*array.TimestampBuilder).Append(arrow.Timestamp(tt.UnixMicro()))
+		}, nil
+	}
+	if t == int128Type {
+		// DECIMAL(38,0), the Parquet form of an int128 (DFC155 C); a value
+		// with 39 digits refuses, as the record writer does.
+		return &arrow.Decimal128Type{Precision: 38, Scale: 0}, func(p unsafe.Pointer, b array.Builder) {
+			v := *(*ssql.Int128)(p)
+			if v.Cmp(decimal38Max) > 0 || v.Cmp(decimal38Min) < 0 {
+				panic(fmt.Errorf("%s does not fit DECIMAL(38,0), the Parquet/Arrow form of an int128 (38 digits; cast the column to string, or to float, before writing)", v))
+			}
+			hi, lo := v.Words()
+			b.(*array.Decimal128Builder).Append(decimal128.New(hi, lo))
 		}, nil
 	}
 	switch t.Kind() {

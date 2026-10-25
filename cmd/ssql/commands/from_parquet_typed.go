@@ -186,6 +186,10 @@ func arrowToGoTypeName(t arrow.DataType) (string, error) {
 		return "float64", nil
 	case arrow.TIMESTAMP, arrow.DATE32, arrow.DATE64:
 		return "time.Time", nil
+	case arrow.DECIMAL128:
+		if t.(*arrow.Decimal128Type).Scale == 0 {
+			return "ssql.Int128", nil // DECIMAL(p,0): the int128 column (DFC155 C)
+		}
 	}
 	return "", fmt.Errorf("unsupported Arrow column type %v", t)
 }

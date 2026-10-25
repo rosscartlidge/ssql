@@ -477,6 +477,11 @@ func wireTypeForArrow(t arrow.DataType) string {
 		return "bool"
 	case arrow.TIMESTAMP, arrow.DATE32, arrow.DATE64:
 		return "time" // the reader yields time.Time for these
+	case arrow.DECIMAL128:
+		if t.(*arrow.Decimal128Type).Scale == 0 {
+			return "int128" // DECIMAL(p,0): an integer past int64 (DFC155 C)
+		}
+		return "string"
 	default:
 		return "string"
 	}

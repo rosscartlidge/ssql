@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"math"
 	"os"
 	"time"
 
 	"github.com/apache/arrow/go/v18/arrow"
 	"github.com/apache/arrow/go/v18/arrow/array"
+	"github.com/apache/arrow/go/v18/arrow/decimal128"
 	"github.com/apache/arrow/go/v18/arrow/ipc"
 	"github.com/apache/arrow/go/v18/arrow/memory"
 )
@@ -153,7 +155,19 @@ func arrowValueToGo(arr arrow.Array, idx int) any {
 	case *array.Uint32:
 		return int64(a.Value(idx))
 	case *array.Uint64:
-		return int64(a.Value(idx))
+		if v := a.Value(idx); v > math.MaxInt64 {
+			return Int128FromWords(0, v) // past int64: exact, not wrapped (DFC155 C)
+		} else {
+			return int64(v)
+		}
+	case *array.Decimal128:
+		// A DECIMAL with no fraction is an int128; one with a scale stays
+		// its text (E will give it a type).
+		if a.DataType().(*arrow.Decimal128Type).Scale == 0 {
+			n := a.Value(idx)
+			return Int128FromWords(n.HighBits(), n.LowBits())
+		}
+		return a.ValueStr(idx)
 	case *array.Float32:
 		return float64(a.Value(idx))
 	case *array.Float64:
@@ -323,6 +337,7 @@ type arrowColumnKind int
 const (
 	arrowKindNull arrowColumnKind = iota
 	arrowKindInt
+	arrowKindInt128 // an int128 column: Arrow Decimal128(38,0) (DFC155 C)
 	arrowKindFloat
 	arrowKindBool
 	arrowKindTime
@@ -334,12 +349,32 @@ const (
 // typed lanes produce the same file.
 var arrowTimestampType = &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}
 
+// arrowDecimal128Type is the Arrow/Parquet type of an int128 column
+// (DFC155 C): DECIMAL(38,0), which DuckDB and Spark read as a number.
+// It holds 38 digits where an int128 holds 39; a value past ±(10^38 − 1)
+// refuses on write (Decimal256 was declined).
+var arrowDecimal128Type = &arrow.Decimal128Type{Precision: 38, Scale: 0}
+
+var decimal38Max, decimal38Min = MustParseInt128("99999999999999999999999999999999999999"), MustParseInt128("-99999999999999999999999999999999999999")
+
+// decimal128Of is an Int128 as an Arrow Decimal128(38,0) value, or a
+// panic naming the value when it has 39 digits.
+func decimal128Of(v Int128) decimal128.Num {
+	if v.Cmp(decimal38Max) > 0 || v.Cmp(decimal38Min) < 0 {
+		panic(fmt.Errorf("%s does not fit DECIMAL(38,0), the Parquet/Arrow form of an int128 (38 digits; cast the column to string, or to float, before writing)", v))
+	}
+	hi, lo := v.Words()
+	return decimal128.New(hi, lo)
+}
+
 func arrowKindOf(v any) arrowColumnKind {
 	switch v.(type) {
 	case nil:
 		return arrowKindNull
 	case int64, int, int32:
 		return arrowKindInt
+	case Int128:
+		return arrowKindInt128
 	case float64, float32:
 		return arrowKindFloat
 	case bool:
@@ -357,6 +392,8 @@ func arrowKindForWireType(t string) arrowColumnKind {
 		return arrowKindNull
 	case "int":
 		return arrowKindInt
+	case "int128":
+		return arrowKindInt128
 	case "float":
 		return arrowKindFloat
 	case "bool":
@@ -374,7 +411,9 @@ func widenArrowKind(a, b arrowColumnKind) arrowColumnKind {
 		return a
 	case a == arrowKindNull:
 		return b
-	case (a == arrowKindInt && b == arrowKindFloat) || (a == arrowKindFloat && b == arrowKindInt):
+	case (a == arrowKindInt && b == arrowKindInt128) || (a == arrowKindInt128 && b == arrowKindInt):
+		return arrowKindInt128 // int beside int128 is int128
+	case (a == arrowKindInt || a == arrowKindInt128) && b == arrowKindFloat, a == arrowKindFloat && (b == arrowKindInt || b == arrowKindInt128):
 		return arrowKindFloat
 	default:
 		return arrowKindString
@@ -385,6 +424,8 @@ func (k arrowColumnKind) arrowType() arrow.DataType {
 	switch k {
 	case arrowKindInt:
 		return arrow.PrimitiveTypes.Int64
+	case arrowKindInt128:
+		return arrowDecimal128Type
 	case arrowKindFloat:
 		return arrow.PrimitiveTypes.Float64
 	case arrowKindBool:
@@ -470,6 +511,19 @@ func appendValueToBuilder(builder array.Builder, val any) {
 			b.Append(float64(v))
 		case int32:
 			b.Append(float64(v))
+		default:
+			b.AppendNull()
+		}
+	case *array.Decimal128Builder:
+		switch v := val.(type) {
+		case Int128:
+			b.Append(decimal128Of(v))
+		case int64:
+			b.Append(decimal128.FromI64(v))
+		case int:
+			b.Append(decimal128.FromI64(int64(v)))
+		case int32:
+			b.Append(decimal128.FromI64(int64(v)))
 		default:
 			b.AppendNull()
 		}
