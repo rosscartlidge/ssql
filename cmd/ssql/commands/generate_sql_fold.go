@@ -93,12 +93,13 @@ func kindGoType(kind string) string {
 }
 
 // foldSchema is the typed lowering's view of the rows a fold reads: the
-// query's known columns, plus every identifier the folds reference that is
-// neither a state key nor a known column (a column the assembler did not
-// track), each typed from sqlColumnKinds. A referenced column with no
-// known kind is a refusal: the state's type would be a guess.
+// columns EVERY references (an identifier that is not a state key), each
+// typed from sqlColumnKinds. Only those: a row's other columns — a
+// `-set-expr` result the assembler could not type, say — are no concern
+// of the fold's. A referenced column with no known kind is a refusal:
+// the state's type would be a guess.
 func foldSchema(q *sqlQuery, specs []streamExprSpec) (*lib.TypedSchema, error) {
-	cols := slices.Clone(q.columns)
+	var cols []string
 	for _, spec := range specs {
 		keys := map[string]bool{}
 		if pairs, err := exprMapPairs(spec.initExpr); err == nil {
@@ -113,10 +114,13 @@ func foldSchema(q *sqlQuery, specs []streamExprSpec) (*lib.TypedSchema, error) {
 		for _, p := range pairs {
 			node := p.value
 			ast.Walk(&node, &identCollector{seen: func(name string) {
-				if !keys[name] && !slices.Contains(cols, name) {
-					if sqlColumnKinds[name] == "" {
-						return
-					}
+				// A name that is both a column and a state key is the
+				// column (the row shadows the state); a state key that is
+				// not a known column is the state.
+				if keys[name] && (q.columns == nil || !slices.Contains(q.columns, name)) {
+					return
+				}
+				if !slices.Contains(cols, name) {
 					cols = append(cols, name)
 				}
 			}})
@@ -126,7 +130,7 @@ func foldSchema(q *sqlQuery, specs []streamExprSpec) (*lib.TypedSchema, error) {
 	for _, c := range cols {
 		kind := sqlColumnKinds[c]
 		if kind == "" {
-			return nil, fmt.Errorf("column %q has no known type here (declare it with -type on the from stage)", c)
+			return nil, fmt.Errorf("column %q has no known type here (cast -type %s TYPE before the fold, or declare it with -type on the from stage)", c, c)
 		}
 		s.Fields = append(s.Fields, lib.TypedSchemaField{Name: c, GoName: lib.GoNameFromColumn(c), GoType: kindGoType(kind)})
 	}

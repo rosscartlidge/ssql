@@ -2204,11 +2204,18 @@ func translateWindow(q *sqlQuery, args []string) error {
 		}
 		if len(c.orderBy) == 0 {
 			whole := c.preceding < 0 && c.following < 0 && c.rangeP == "" && c.rangeF == ""
-			switch {
-			case len(c.orderFns) > 0:
-				return windowNeedsOrder(c.orderFns[0], "its value is the row's place among the rows as they arrive")
-			case len(c.frameFns) > 0 && !whole:
-				return windowNeedsOrder(c.frameFns[0], "the frame runs over the rows as they arrive")
+			needsOrder := len(c.orderFns) > 0 || (len(c.frameFns) > 0 && !whole)
+			if needsOrder && q.rangeColumn != "" && (q.columns == nil || slices.Contains(q.columns, q.rangeColumn)) {
+				// A `from range` source's arrival order IS its column (DFC156):
+				// the one source whose order SQL can name without a sort.
+				c.orderBy = []string{q.rangeColumn}
+			} else {
+				switch {
+				case len(c.orderFns) > 0:
+					return windowNeedsOrder(c.orderFns[0], "its value is the row's place among the rows as they arrive")
+				case len(c.frameFns) > 0 && !whole:
+					return windowNeedsOrder(c.frameFns[0], "the frame runs over the rows as they arrive")
+				}
 			}
 		}
 		overParts := []string{}

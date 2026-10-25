@@ -4056,6 +4056,15 @@ var equivCases = []EquivCase{
 		Skip: equivFoldDuckDBOnly(), // two folds in one clause share one recursive CTE (DFC156)
 	},
 	{
+		// DFC156: on a `from range` source the window's arrival order is the
+		// range column, so a lag or a running sum needs no -order in SQL
+		// either (every other source without -order refuses).
+		Name:     "window_lag_on_range",
+		Pipeline: `{{.bin}} from range 4 | {{.bin}} window -lag-default n 1 0 prev -sum n run | {{.bin}} include n prev run`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"n": 1, "prev": 0, "run": 1}, {"n": 2, "prev": 1, "run": 3}, {"n": 3, "prev": 2, "run": 6}, {"n": 4, "prev": 3, "run": 10}},
+	},
+	{
 		// DFC156: a partitioned window fold is a per-partition recursive
 		// CTE in DuckDB, ordered by -order; its running sum equals -sum's.
 		Name:     "window_fold_partitioned",
