@@ -154,3 +154,53 @@ recurrence per row, no CTE shape without the quadratic join).
 None blocking: the design follows his counter form's insight (no join)
 with the list for a general source. If the Postgres rig lane comes up,
 §3's JSON detour is the way to add it.
+
+## 8. Built (2026-10-26)
+
+`cmd/ssql/commands/generate_sql_fold.go`: `lowerSQLFold` types a fold
+through the typed lowering (`lowerStreamAggAnyFinal` — the typed lane's
+numeric-FINAL rule does not apply, a string FINAL is a column like any
+other in SQL), renders INIT cast to the state's type, EVERY over the
+state columns and `__xs[__i + 1]."col"` (the row shadows the state), and
+FINAL over state columns, through an identifier resolver hook in the
+expression translator (`sqlIdentResolver`, `exprNodeToSQLWith`).
+`buildFoldCTE` is the one shape for both commands: `translateWindowFolds`
+(per row, `unnest(__xs[__i])` expands the row) and
+`translateGroupByFolds` (per partition at `__i = len(__xs)`, the registry
+aggregates computed beside the list and carried). `translateWindow`
+collects the clause's folds and applies the CTE before the clause's OVER
+functions; a bounded frame refuses. `translateGroupBy` collects folds and
+hands the stage to the fold form.
+
+The order a fold sees: `-order` (with `-desc`); a `from range` source's
+column (`sqlQuery.rangeColumn`, set by `translateRangeSource`); for
+group-by, an earlier sort's ORDER BY — which the assembler had already
+materialised into a subquery before the group-by (`needsWrap`), so
+`wrapAsSubquery` now carries it as `wrappedOrder` for the fold to name.
+
+Two things found on the way:
+
+- **The optimiser dropped a `sort` before a `group-by` whose aggregates
+  read the rows' order.** The dead-sort rule (DFC123 §7) treated every
+  group-by as an order reset; `-first`, `-last`, `-any`, `-string-agg`,
+  `-mode`, `-arg-max`/`-arg-min` and a `-stream-expr` fold all read
+  arrival order, so the sort was load-bearing and every lane that applies
+  the optimiser (`generate go`, `generate sql`, `run`) lost it. Those
+  flags now declare group-by an order consumer
+  (`lib.DeclareOrderWhenFlag`, which took one flag per command and now
+  takes several). An exec-semantics bug, not an SQL one.
+- **The harness's quoted-HUGEINT rule** (a canonical integer string from
+  a SQL lane becomes digits) turned a `string(fib)` column into a number
+  too, once the fold translated and the case stopped skipping DuckDB. It
+  now applies only in columns exec holds as numbers.
+
+Gates: `TestWindowFoldSQL` and `TestGroupByFoldSQL` pin the emitted
+text and the refusals (no order, bounded frame, unsorted group-by);
+`cast_int128_fib_184`, `window_stream_expr_running`,
+`groupby_stream_int_exact` and the new `window_fold_partitioned` (a fold
+equals `-sum` per partition) and `groupby_fold_sorted` (count, an
+average fold and a last-name fold beside each other after a sort) run
+the DuckDB lane; the sliding-fold and unsorted-group cases keep their
+skips with the frame or the order named. Measured on this machine:
+fib(184) in HUGEINT through the CTE is instant; the cost table in §2
+stands.

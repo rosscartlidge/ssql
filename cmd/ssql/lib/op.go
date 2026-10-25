@@ -75,27 +75,30 @@ func DeclareOrder(kind, order string) {
 // one of their flags: group-by is OrderReset, but `group-by -presorted`
 // CONSUMES order (it groups contiguous runs, so a sort feeding it is
 // load-bearing — the optimiser dropped that sort and every codegen lane
-// grouped row by row until v4.99.0).
-var orderFlagOverrides = map[string]struct{ flag, order string }{}
+// grouped row by row until v4.99.0), and so does a group-by with an
+// aggregate that reads the rows' arrival order (-first, -last, a
+// -stream-expr fold…; DFC156 found the sort before such a group-by
+// dropped too). Several flags may override one kind.
+var orderFlagOverrides = map[string][]struct{ flag, order string }{}
 
 // DeclareOrderWhenFlag records that KIND behaves as ORDER when FLAG is
 // present on its argv, overriding DeclareOrder's default. Call it from
-// the command's Register function next to DeclareOrder.
+// the command's Register function next to DeclareOrder, once per flag.
 func DeclareOrderWhenFlag(kind, flag, order string) {
 	switch order {
 	case OrderTransparent, OrderReset, OrderConsumes:
 	default:
 		panic(fmt.Errorf("lib.DeclareOrderWhenFlag: unknown order behavior %s for %s", order, kind))
 	}
-	orderFlagOverrides[kind] = struct{ flag, order string }{flag, order}
+	orderFlagOverrides[kind] = append(orderFlagOverrides[kind], struct{ flag, order string }{flag, order})
 }
 
 // OrderForArgv is the order behavior of one invocation: the flag
-// override when its flag is present, else the declared default ("" if
-// undeclared). Backends that must fall back to argv (Op-less
+// override when one of its flags is present, else the declared default
+// ("" if undeclared). Backends that must fall back to argv (Op-less
 // fragments) can call it with the parsed kind and args.
 func OrderForArgv(kind string, argv []string) string {
-	if ov, ok := orderFlagOverrides[kind]; ok {
+	for _, ov := range orderFlagOverrides[kind] {
 		for _, a := range argv {
 			if a == ov.flag {
 				return ov.order

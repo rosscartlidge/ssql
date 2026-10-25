@@ -715,6 +715,21 @@ ssql from employees.csv | ssql group-by dept -stream-expr '{s:0, n:0}' '{s: s + 
 The result keeps `FINAL`'s own type: an int fold is an int column, exact
 to 2^63; a float fold a float; a string a string.
 
+**In SQL a fold is a recursive CTE** ([DFC156](research/dfc156_fold_sql_recursive_cte.md)):
+`generate sql` aggregates each partition once into an ordered list of its
+rows, anchors the recursion at `INIT`, applies `EVERY` to the state and
+the next row at each step, and reads `FINAL` per row (`window`) or at the
+last row (`group-by`). The order is the window's `-order`, a `sort`
+before the `group-by`, or a `from range` column — SQL has no arrival
+order, so a fold without one of those refuses. A fold over a bounded
+frame (`-preceding N`) restarts per row and is not a recurrence: it
+refuses too. DuckDB runs it today (an `int128` state is its HUGEINT);
+Postgres and DataFusion refuse with their reasons. The engine pays
+50–200 µs per step, so this serves correctness and short partitions — a
+few hundred rows per partition is instant, twenty thousand is seconds;
+a long recurrence belongs in ssql, which folds a million rows in a
+second.
+
 In `group-by` the fold runs over each group: one row per group. In
 `window` it runs over each row's *frame*: one value per row — and the
 default frame (every row up to the current one) makes it a **running**

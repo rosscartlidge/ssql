@@ -52,7 +52,22 @@ type streamAggPlan struct {
 
 // lowerStreamAgg lowers spec against the input schema. idx namespaces the
 // accumulator field names when several -stream-expr specs share the struct.
+// A non-numeric FINAL is a refusal here (a typed result column is numeric;
+// record mode carries strings, bools and times); the SQL fold (DFC156)
+// takes any scalar through lowerStreamAggAnyFinal.
 func lowerStreamAgg(spec streamExprSpec, schema *lib.TypedSchema, idx int) (streamAggPlan, error) {
+	plan, err := lowerStreamAggAnyFinal(spec, schema, idx)
+	if err != nil {
+		return plan, err
+	}
+	if !plan.FinalType.numeric() {
+		return plan, fmt.Errorf("final expression is %s — typed stream aggregation results must be numeric (record mode carries strings, bools and times)", plan.FinalType)
+	}
+	return plan, nil
+}
+
+// lowerStreamAggAnyFinal is lowerStreamAgg without the numeric-FINAL rule.
+func lowerStreamAggAnyFinal(spec streamExprSpec, schema *lib.TypedSchema, idx int) (streamAggPlan, error) {
 	plan := streamAggPlan{Spec: spec}
 
 	// INIT: a map literal of literal (or literal-arithmetic) values. Any
@@ -149,9 +164,6 @@ func lowerStreamAgg(spec streamExprSpec, schema *lib.TypedSchema, idx int) (stre
 	finalRes, err := exprToGoWith(spec.finalExpr, nil, "", finalVars)
 	if err != nil {
 		return plan, fmt.Errorf("final: %w", err)
-	}
-	if !finalRes.Type.numeric() {
-		return plan, fmt.Errorf("final expression is %s — typed stream aggregation results must be numeric (record mode carries strings, bools and times)", finalRes.Type)
 	}
 	plan.Final = finalRes.Src
 	plan.FinalType = finalRes.Type

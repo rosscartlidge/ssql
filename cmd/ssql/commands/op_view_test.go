@@ -240,3 +240,30 @@ func TestPresortedGroupByKeepsSort(t *testing.T) {
 		t.Errorf("OrderForArgv without -presorted = %q, want reset", got)
 	}
 }
+
+// DFC156: a group-by whose aggregates read the rows' arrival order
+// (-first, -last, a -stream-expr fold…) consumes the order a sort feeds
+// it, so the dead-sort rule keeps that sort; a -count alone still drops it.
+func TestSortBeforeOrderReadingGroupByStays(t *testing.T) {
+	declareGroupByOrder()
+	for _, c := range []struct {
+		groupBy string
+		removed bool
+	}{
+		{"ssql group-by dept -count n", true},
+		{"ssql group-by dept -first name f", false},
+		{"ssql group-by dept -last name l", false},
+		{"ssql group-by dept -string-agg name , names", false},
+		{"ssql group-by dept -stream-expr {s:0} {s:s+pop} s t", false},
+		{"ssql group-by dept -count n -arg-max pop name top", false},
+	} {
+		cmds := []*pipelineCmd{parsePipelineCmd("ssql sort pop"), parsePipelineCmd(c.groupBy)}
+		for _, cmd := range cmds {
+			cmd.Order = lib.OrderForArgv(cmd.Kind, cmd.RawArgs)
+		}
+		ruleSortElimination(cmds)
+		if cmds[0].Removed != c.removed {
+			t.Errorf("%s: sort removed=%v, want %v", c.groupBy, cmds[0].Removed, c.removed)
+		}
+	}
+}

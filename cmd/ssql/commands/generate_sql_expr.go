@@ -29,6 +29,28 @@ func exprToSQL(expression string) (string, error) {
 // of one exprToSQLParams call; the translator is a tree of plain functions.
 var sqlExprParams map[string]ExprParam
 
+// sqlIdentResolver, when set, is asked first for every identifier: a fold's
+// state columns and list-row references (DFC156). ("", nil) means "not
+// mine"; an error is the translation's.
+var sqlIdentResolver func(name string) (string, error)
+
+// exprToSQLWith translates an expression with an identifier resolver.
+func exprToSQLWith(expression string, resolve func(string) (string, error)) (string, error) {
+	tree, err := parser.Parse(expression)
+	if err != nil {
+		return "", fmt.Errorf("expression %q: %w", expression, err)
+	}
+	return exprNodeToSQLWith(tree.Node, resolve)
+}
+
+// exprNodeToSQLWith translates a parsed node with an identifier resolver.
+func exprNodeToSQLWith(node ast.Node, resolve func(string) (string, error)) (string, error) {
+	prev := sqlIdentResolver
+	sqlIdentResolver = resolve
+	defer func() { sqlIdentResolver = prev }()
+	return exprNodeToSQL(node)
+}
+
 // exprToSQLParams is exprToSQL with a clause's -param bindings.
 func exprToSQLParams(expression string, params map[string]ExprParam) (string, error) {
 	tree, err := parser.Parse(expression)
@@ -81,6 +103,11 @@ func exprNodeToSQL(node ast.Node) (string, error) {
 	case *ast.NilNode:
 		return "NULL", nil
 	case *ast.IdentifierNode:
+		if sqlIdentResolver != nil {
+			if s, err := sqlIdentResolver(n.Value); err != nil || s != "" {
+				return s, err
+			}
+		}
 		if p, ok := sqlExprParams[n.Value]; ok {
 			return p.sqlLiteral(), nil
 		}

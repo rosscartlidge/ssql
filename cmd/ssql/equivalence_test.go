@@ -139,6 +139,13 @@ func equivNoSQL(why string) map[string]string {
 	return map[string]string{"duckdb": why, "datafusion": why, "postgres": why}
 }
 
+// equivFoldDuckDBOnly skips the SQL lanes a fold does not translate to
+// yet (DFC156 §3); the DuckDB lane runs the recursive CTE.
+func equivFoldDuckDBOnly() map[string]string {
+	why := "the fold's recursive CTE is DuckDB's list form for now (DFC156 §3)"
+	return map[string]string{"datafusion": why, "postgres": why}
+}
+
 // equivCommon is a filtered to the names also in b, keeping a's order.
 func equivCommon(a, b []string) []string {
 	in := make(map[string]bool, len(b))
@@ -740,10 +747,14 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 	// In a column where exec has booleans, that is a spelling, not a value.
 	// Per column, so a text column that happens to say "true" stays text.
 	boolCols := map[string]bool{}
+	numCols := map[string]bool{} // columns exec holds as numbers: where a quoted HUGEINT is a number, not text
 	for _, r := range ref {
 		for k, v := range r {
-			if _, isBool := v.(bool); isBool {
+			switch v.(type) {
+			case bool:
 				boolCols[k] = true
+			case json.Number, float64:
+				numCols[k] = true
 			}
 		}
 	}
@@ -757,11 +768,11 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 					r[k] = s == "true"
 				}
 				// duckdb -json renders HUGEINT (e.g. SUM over BIGINT) as a
-				// JSON string. ssql's CSV reader parses canonical integer
-				// strings as numbers anyway, so converting them back — to
-				// the exact digits, as equivParse keeps every lane's — is
-				// normalising a representation difference.
-				if s, isStr := v.(string); isStr && canonicalIntRe.MatchString(s) {
+				// JSON string. In a column exec holds as a number that is a
+				// spelling, so it becomes the exact digits (as equivParse
+				// keeps every lane's); in a text column (a string(fib)) the
+				// digits ARE the value and stay text.
+				if s, isStr := v.(string); isStr && numCols[k] && canonicalIntRe.MatchString(s) {
 					r[k] = json.Number(s)
 				}
 			}
@@ -2738,7 +2749,7 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from range 183 | {{.bin}} window -stream-expr '{a:int128(0), b:int128(1)}' '{a:b, b:a+b}' 'b' fib | {{.bin}} sort -desc n | {{.bin}} limit 1`,
 		Ordered:  true,
 		Golden:   []map[string]any{{"n": 183, "fib": json.Number("127127879743834334146972278486287885163")}},
-		Skip:     equivNoSQL("window -stream-expr has no SQL translation"),
+		Skip:     equivFoldDuckDBOnly(), // DuckDB computes it as a recursive CTE in HUGEINT (DFC156)
 	},
 	{
 		// group-by -sum of int64 past 2^63 is an int128, DuckDB's HUGEINT.
@@ -3999,7 +4010,7 @@ var equivCases = []EquivCase{
 			{"avg_pop": 16.583333333333332},
 		},
 		Skip: map[string]string{
-			"duckdb": "-stream-expr has no SQL translation (generate sql fails loudly by design)",
+			"duckdb": "the fold's row order is the input order, which SQL cannot see without a sort first (DFC156)",
 		},
 	},
 	{
@@ -4013,7 +4024,7 @@ var equivCases = []EquivCase{
 			{"half_sum": 99.5},
 		},
 		Skip: map[string]string{
-			"duckdb": "-stream-expr has no SQL translation (generate sql fails loudly by design)",
+			"duckdb": "the fold's row order is the input order, which SQL cannot see without a sort first (DFC156)",
 		},
 	},
 	{
@@ -4027,9 +4038,7 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from range 91 | {{.bin}} group-by -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib | {{.bin}} update -set-expr s 'string(fib)' | {{.bin}} include s`,
 		Ordered:  false,
 		Golden:   []map[string]any{{"s": "7540113804746346429"}},
-		Skip: map[string]string{
-			"duckdb": "-stream-expr has no SQL translation (generate sql fails loudly by design)",
-		},
+		Skip:     equivFoldDuckDBOnly(), // a range source orders the fold; DuckDB runs it as a recursive CTE (DFC156)
 	},
 	{
 		// window -stream-expr over the default frame is a RUNNING fold: the
@@ -4044,9 +4053,23 @@ var equivCases = []EquivCase{
 			{"n": 1, "fib": 1, "run": 1}, {"n": 2, "fib": 2, "run": 3}, {"n": 3, "fib": 3, "run": 6}, {"n": 4, "fib": 5, "run": 10},
 			{"n": 5, "fib": 8, "run": 15}, {"n": 6, "fib": 13, "run": 21}, {"n": 7, "fib": 21, "run": 28}, {"n": 8, "fib": 34, "run": 36},
 		},
-		Skip: map[string]string{
-			"duckdb": "window -stream-expr has no SQL translation (generate sql fails loudly by design)",
-		},
+		Skip: equivFoldDuckDBOnly(), // two folds in one clause share one recursive CTE (DFC156)
+	},
+	{
+		// DFC156: a partitioned window fold is a per-partition recursive
+		// CTE in DuckDB, ordered by -order; its running sum equals -sum's.
+		Name:     "window_fold_partitioned",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -stream-expr '{s:0}' '{s: s + salary}' 's' run -sum salary wsum | {{.bin}} update -set-expr same 'run == wsum' | {{.bin}} include name run same`,
+		Skip:     equivFoldDuckDBOnly(),
+	},
+	{
+		// DFC156: group-by's fold reads the group's rows in input order,
+		// which SQL sees as an earlier sort's ORDER BY; the registry
+		// aggregates ride beside the fold.
+		Name:     "groupby_fold_sorted",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort name | {{.bin}} group-by dept -count c -stream-expr '{s:0, n:0}' '{s: s + salary, n: n + 1}' 's / n' avg -stream-expr '{last:""}' '{last: name}' 'last' lastname | {{.bin}} sort dept`,
+		Ordered:  true,
+		Skip:     equivFoldDuckDBOnly(),
 	},
 	{
 		// A fold over a PARTITIONED, BOUNDED frame restarts at the frame's
@@ -4059,7 +4082,7 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} window -partition dept -order salary -preceding 1 -stream-expr '{s:0, n:0}' '{s: s + salary, n: n + 1}' 's' fsum -stream-expr '{s:0, n:0}' '{s: s + salary, n: n + 1}' 's / n' favg -sum salary wsum -avg salary wavg | {{.bin}} update -set-expr same 'fsum == wsum && favg == wavg' | {{.bin}} include name fsum favg same`,
 		Ordered:  false,
 		Skip: map[string]string{
-			"duckdb": "window -stream-expr has no SQL translation (generate sql fails loudly by design)",
+			"duckdb": "a fold over a bounded frame restarts per row, not a recurrence: no SQL translation (DFC156 §1)",
 		},
 	},
 	{
@@ -4070,7 +4093,7 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} sort dept salary | {{.bin}} window -presorted -partition dept -order salary -stream-expr '{k:0}' '{k: k + 1}' 'k' pos -preceding 1 -stream-expr '{s:0}' '{s: s + salary}' 's' two | {{.bin}} include name pos two`,
 		Ordered:  true,
 		Skip: map[string]string{
-			"duckdb": "window -stream-expr has no SQL translation (generate sql fails loudly by design)",
+			"duckdb": "a fold over a bounded frame restarts per row, not a recurrence: no SQL translation (DFC156 §1)",
 		},
 	},
 	{

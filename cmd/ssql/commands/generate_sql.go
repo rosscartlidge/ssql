@@ -212,6 +212,17 @@ type sqlQuery struct {
 	// pipeline-aware completion uses). nil = unknown; translation then falls
 	// back to assuming referenced columns exist.
 	columns []string
+
+	// rangeColumn is a `from range` source's column: the one order SQL can
+	// give a fold without -order (DFC156), where every other source's
+	// arrival order is invisible to it.
+	rangeColumn string
+
+	// wrappedOrder is the ORDER BY the last wrapAsSubquery folded into its
+	// subquery: the rows reach the next stage in that order, which a
+	// group-by fold needs to name (DFC156) after the assembler has
+	// materialised a sort behind a projection or a limit.
+	wrappedOrder []string
 }
 
 // hasClauses reports whether anything beyond the bare FROM has accumulated
@@ -289,10 +300,16 @@ func translateCount(q *sqlQuery) {
 
 func wrapAsSubquery(q *sqlQuery) {
 	sub := renderSelect(q)
+	wrapped := q.wrappedOrder
+	if len(q.orderBy) > 0 {
+		wrapped = q.orderBy
+	}
 	*q = sqlQuery{
-		fromClause: sqlSubquery("(\n" + indentLines(sub, "  ") + "\n)"),
-		comments:   q.comments,
-		columns:    q.columns, // wrapping doesn't change the output schema
+		fromClause:   sqlSubquery("(\n" + indentLines(sub, "  ") + "\n)"),
+		comments:     q.comments,
+		columns:      q.columns, // wrapping doesn't change the output schema
+		rangeColumn:  q.rangeColumn,
+		wrappedOrder: wrapped,
 	}
 }
 
@@ -836,6 +853,7 @@ func translateRangeSource(q *sqlQuery, args []string) error {
 			col, o.start, end, o.step, col, where)
 	}
 	q.columns = []string{o.field}
+	q.rangeColumn = o.field
 	sqlColumnKinds[o.field] = "int"
 	return nil
 }
@@ -1036,6 +1054,7 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 
 	// Parse aggregation flags
 	var aggs []sqlAgg
+	var folds []streamExprSpec
 	rollup, cube := false, false
 	for i < len(args) {
 		// Built-in aggregates come from the registry (aggDefs, DFC129 §6):
@@ -1081,7 +1100,12 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 		case "-expr", "-e":
 			return fmt.Errorf("group-by -expr has no SQL translation (expression aggregations are ssql-specific)")
 		case "-stream-expr":
-			return fmt.Errorf("group-by -stream-expr has no SQL translation (expression aggregations are ssql-specific)")
+			if i+4 < len(args) {
+				folds = append(folds, streamExprSpec{initExpr: args[i+1], everyExpr: args[i+2], finalExpr: args[i+3], result: args[i+4]})
+				i += 5
+			} else {
+				i++
+			}
 		case "-spill", "-memory":
 			i += 2 // spilling is the engine's job
 		case "-rollup":
@@ -1107,6 +1131,11 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 			mode = ssql.RollupCube
 		}
 		return translateGroupByRollup(q, fields, aggs, mode)
+	}
+	if len(folds) > 0 {
+		// A fold is a recursive CTE per group (DFC156); the registry
+		// aggregates ride beside it.
+		return translateGroupByFolds(q, fields, aggs, folds)
 	}
 
 	for _, f := range fields {
@@ -1939,6 +1968,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 		registryFns []string // registry aggregate names used, for the dialect check once the frame is known
 		orderFns    []string // flags whose value is the row's place in the partition (ranking, offsets, first/last)
 		frameFns    []string // flags that aggregate over the frame
+		folds       []streamExprSpec // -stream-expr folds: a recursive CTE over the default frame (DFC156)
 	}
 
 	clauses := []windowClause{{preceding: -1, following: 0}}
@@ -2109,7 +2139,12 @@ func translateWindow(q *sqlQuery, args []string) error {
 				i++
 			}
 		case "-stream-expr":
-			return fmt.Errorf("window -stream-expr has no SQL translation (a fold over the frame is ssql-specific; use generate go)")
+			if i+4 < len(args) {
+				cur.folds = append(cur.folds, streamExprSpec{initExpr: args[i+1], everyExpr: args[i+2], finalExpr: args[i+3], result: args[i+4]})
+				i += 5
+			} else {
+				i++
+			}
 		// 2-arg: -func field result
 		case "-sum", "-avg", "-min", "-max", "-first", "-last":
 			if i+2 < len(args) {
@@ -2146,6 +2181,19 @@ func translateWindow(q *sqlQuery, args []string) error {
 
 	// Build SQL OVER clauses
 	for _, c := range clauses {
+		// A fold over the default frame is a recursive CTE that replaces
+		// the query (DFC156); the clause's other functions then apply on
+		// top. Over any other frame the fold restarts per row — not a
+		// recurrence, and not translated.
+		if len(c.folds) > 0 {
+			if c.preceding != -1 || c.following != 0 || c.rangeP != "" || c.rangeF != "" {
+				return fmt.Errorf("window -stream-expr over a bounded frame has no SQL translation (a sliding fold restarts per row, not a recurrence; use generate go)")
+			}
+			if err := translateWindowFolds(q, c.partitionBy, c.orderBy, c.desc, c.folds); err != nil {
+				return err
+			}
+			q.selectExprs = append(q.selectExprs, "*")
+		}
 		// The frame is known only now: a bounded start (N PRECEDING or a
 		// finite RANGE bound) is what some engines cannot slide over.
 		bounded := c.preceding >= 0 || (c.rangeP != "" && c.rangeP != "unbounded")

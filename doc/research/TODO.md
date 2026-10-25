@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-10-25
+Last modified: 2026-10-26
 
 [Back to Index](./README.md)
 
@@ -112,6 +112,7 @@ Tracked issues and feature gaps discovered during development.
 
 - [x] **Numeric functions — DuckDB's set in every lane** — SHIPPED 2026-10-20 ([DFC153](./dfc153_numeric_functions.md)): 35 functions in the VM (`expr_math.go`), the transpiler, `generate sql` (`generate_sql_math.go`, with `sqlFinite` and `TRY`/domain guards; the guard on `/` too), the catalog and the reference; six equivalence cases with Goldens from Python's math. Found and fixed on the way: `typed.WriteJSONLToWriter` refused a row holding ±Inf (now null, DFC133).
 - [x] **DECIDED: big numbers — options B and C shipped** — [DFC155](./dfc155_big_numbers.md) (B 2026-10-22, Ross: "ok lets do B"; C 2026-10-25, Ross: "lets do option C and then E"). Int64 `+ - *` overflow is an error in every lane; `int128` is a column type in every lane (cast, wide literal, every integer sum — never an operator overflow, §C, §7); Parquet/Arrow DECIMAL(38,0). Next: E (scaled-int64 decimals for money, its own plan; C's Int128 is the mantissa it can grow into); big floats never.
+- [ ] **Fold-in-SQL follow-ups** ([DFC156](./dfc156_fold_sql_recursive_cte.md) §6): the Postgres form (`jsonb_agg` with casts, since an anonymous ROW's field cannot be read back) and the DataFusion form (`array_agg(named_struct(...))`, `arr[i]['f']`) once a rig lane runs them; the counter-only recursion for a `from range` fold whose EVERY reads only state and the range column (no list; an optimisation, not a semantics).
 - [ ] **int128 follow-ups** (DFC155 §7): `x in [1, 2]` with an int128 `x` compares by Go equality in the VM (patch `in` when the list is literal); the explore page and the playground round past 2^53 in `JSON.parse` for int64 and int128 alike (a string form for the browser); the DataFusion and Postgres forms (DECIMAL(38,0), NUMERIC(39,0), `generate_series`) are documented, not gated — run the int128 equivalence cases on the rig lanes.
 - [x] **`generate sql` panicked on any source read from stdin** (2026-10-22; it was not explode's doing — `from jsonl` with no file reached `files[0]`): now a refusal, "SQL translation needs a file (stdin has no SQL equivalent)". Shipped after v4.123.0.
 - [x] **Overflow gaps left by DFC155 B — closed** (2026-10-22, Ross: "ok lets do the batch"): `sum()` is rewritten to ssql's checked sum in the VM (`sum(xs)` → `_ssql_sum(xs)`, `sum(xs, f)` → `_ssql_sum(map(xs, f))`; the typed lowering reads either spelling), unary minus is checked, `window -sum`/`-avg` accumulate in int64 running and sliding (exec `numericSum`/`slidingSum`, typed `WindowSpec.Int`). The pivot cells followed the same day (Ross: "ok do it"): int64 cells sum exactly, min/max keep the kind, floats are compensated — no sum in ssql rounds silently now.

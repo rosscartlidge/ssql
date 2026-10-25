@@ -25,13 +25,24 @@ type exprSpec struct {
 }
 
 // RegisterGroupBy registers the group-by subcommand
+// declareGroupByOrder is group-by's order declaration (DFC123 §7): a
+// reset by default; a consumer under -presorted (contiguous runs) and
+// under every aggregate that reads the rows' arrival order — a sort
+// feeding those is load-bearing (the optimiser dropped it until DFC156,
+// and a fold's SQL form needs that ORDER BY to see the order at all).
+func declareGroupByOrder() {
+	lib.DeclareOrder("group-by", lib.OrderReset)
+	for _, flag := range []string{"-presorted", "-stream-expr", "-first", "-last", "-any", "-string-agg", "-mode", "-arg-max", "-arg-min"} {
+		lib.DeclareOrderWhenFlag("group-by", flag, lib.OrderConsumes)
+	}
+}
+
 func RegisterGroupBy(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 	// Order behavior (DFC123 §7): destroys record order without consuming
 	// it — except under -presorted, which groups contiguous runs and so
 	// CONSUMES the order a preceding sort provides (the optimiser used to
 	// drop that sort; found by the DFC129 phase-1 gate).
-	lib.DeclareOrder("group-by", lib.OrderReset)
-	lib.DeclareOrderWhenFlag("group-by", "-presorted", lib.OrderConsumes)
+	declareGroupByOrder()
 
 	cmd.Subcommand("group-by").
 		Description("Group records by fields and apply aggregations").

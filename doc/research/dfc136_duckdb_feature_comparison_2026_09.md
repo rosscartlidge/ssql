@@ -2,7 +2,7 @@
 
 Reference: DFC136
 Created: 2026-09-23
-Last modified: 2026-10-10
+Last modified: 2026-10-26
 
 [Back to Index](./README.md)
 
@@ -83,7 +83,7 @@ Legend: **●** full, **◐** partial (note says what), **○** absent.
 | Sort, limit, offset, distinct | ● | ● | `limit -last` (tail) has no SQL form |
 | Sampling | ● | ● | `sample N`, `-percent`; seeded form has no SQL equivalent |
 | Group-by aggregates | ● (~50 fns) | ● (16) | count, sum, avg, min, max, median, percentile, stddev, variance, mode, count-distinct, string-agg, first, last, any, collect, arg-max/min |
-| Expression aggregates | ● (any expression) | ● | `-expr 'max(price * qty)'`, `-stream-expr` folds; no SQL translation |
+| Expression aggregates | ● (any expression) | ● | `-expr 'max(price * qty)'` (no SQL translation); `-stream-expr` folds translate to a recursive CTE on DuckDB (DFC156) |
 | Rollup / cube | ● | ● | ssql's enriched-detail shape, not grouping-set rows |
 | Window functions | ● (all) | ● (17) | row_number, rank, dense_rank, ntile, percent_rank, cume_dist, lag/lead, first/last/nth_value, running aggregates; ROWS and RANGE frames (DFC130) |
 | Joins | ● (all, incl. ASOF, lateral) | ◐ | inner, left, right, full, ASOF (`join -asof`, DFC137 §2, built 2026-09-27); anti/semi via `except`/`intersect -using`; no general non-equi or lateral |

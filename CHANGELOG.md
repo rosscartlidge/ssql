@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`-stream-expr` folds translate to SQL as a recursive CTE** ([DFC156](doc/research/dfc156_fold_sql_recursive_cte.md); Ross: "duckdb has recursive CTEs - so it can do our fibonacci example"). `window -stream-expr` over the default frame and `group-by -stream-expr` were the two stages `generate sql` refused outright; now each partition is aggregated once into an ordered list of its rows and the recursion indexes it — linear where a join per step was quadratic — with `INIT` as the anchor, `EVERY` the step and `FINAL` read per row or at the last row. The Fibonacci fold runs in all five lanes, in HUGEINT to fib(184) with DuckDB raising the same overflow at fib(185). The order is `-order`, a `sort` before the `group-by` or a `from range` column; a fold without one, or over a bounded frame, refuses with the reason. DuckDB for now; Postgres and DataFusion refuse (§3). Documented cost: 50–200 µs per step in the engine, so short partitions.
 - **Playground example: the golden ratio** — consecutive Fibonacci ratios converging on φ, with the alternating sign of the error and the row where float64 stops seeing a difference; `from range`, a fold, `-lag-default` and `sqrt()` in one pipeline with no file (Ross's, 2026-10-25).
+
+### Fixed
+
+- **The optimiser dropped a `sort` before a `group-by` whose aggregates read the rows' order** (`-first`, `-last`, `-any`, `-string-agg`, `-mode`, `-arg-max`/`-arg-min`, a `-stream-expr` fold): the dead-sort rule saw group-by as an order reset. Those flags now declare the command an order consumer (`lib.DeclareOrderWhenFlag`, which takes several flags per command), so the sort stays in every lane that applies the optimiser (`generate go`, `generate sql`, `run`). Found building DFC156: the fold's SQL needs that ORDER BY to see the order at all.
 
 ## [4.125.0] - 2026-10-25
 
