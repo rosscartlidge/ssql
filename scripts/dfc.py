@@ -222,7 +222,7 @@ def new(topic_words=None):
             try:
                 r = subprocess.run(
                     [str(ROOT / "scripts" / "docsearch.sh")] + args,
-                    capture_output=True, text=True, timeout=90)
+                    capture_output=True, text=True, errors="replace", timeout=90)  # a hit's bytes may not be UTF-8
                 if r.returncode == 0 and r.stdout.strip():
                     hits = r.stdout.strip()
                     break

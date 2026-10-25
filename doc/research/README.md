@@ -163,6 +163,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC153 | 2026-10-20 | 2026-10-20 | [Numeric Functions: The DuckDB Set, in Every Lane](./dfc153_numeric_functions.md) |
 | DFC154 | 2026-10-20 | 2026-10-22 | [A Row Generator: `from range`, Numbers Every Lane Can Make](./dfc154_range_source.md) |
 | DFC155 | 2026-10-22 | 2026-10-25 | [Big Numbers: Options for Integers Past 2^63 and Exact Decimals](./dfc155_big_numbers.md) |
+| DFC156 | 2026-10-26 | 2026-10-26 | [The Fold in SQL: `-stream-expr` as a Recursive CTE](./dfc156_fold_sql_recursive_cte.md) |
 
 <!-- DFC-INDEX-END -->
 
