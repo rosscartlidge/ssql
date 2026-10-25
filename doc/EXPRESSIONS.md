@@ -36,19 +36,40 @@ ssql from data.csv | ssql update -set-expr email 'lower(trim(email))'
 | `%` | Modulo | `value % 10` |
 | `**` | Power | `base ** exponent` |
 
-**Integers are exact to 2^63, and an overflow is an error.** An int64
-`+`, `-` or `*` whose result does not fit stops the pipeline with the
-operands in the message (`integer overflow: 9223372036854775807 + 1
-does not fit an int64`), in every lane: exec, `generate go` and the SQL
-engines, which raise the same way. It never wraps to a wrong number.
-Floats are exact to 2^53 and carry on past it with rounding; `/` is
-always a float. An integer literal wider than int64 in a CSV or JSON
-column is read as a float in every lane, so an id that wide belongs in
-a string column. `group-by -sum` of an integer column is an integer, exact
-to 2^63 (an overflow is the same error); `-avg` is a float. The same rule
-covers `sum()` over a list (`sum(xs)`, `sum(xs, # * 2)`, and the
-`group-by -expr` aggregations built on it), unary minus, and
-`window -sum`.
+**Integers are exact, and an overflow is an error.** An int64 `+`, `-`
+or `*` whose result does not fit stops the pipeline with the operands in
+the message (`integer overflow: 9223372036854775807 + 1 does not fit an
+int64`), in every lane: exec, `generate go` and the SQL engines, which
+raise the same way. It never wraps to a wrong number. Floats are exact
+to 2^53 and carry on past it with rounding; `/` is always a float.
+
+**Past int64 there is `int128`** (DuckDB's HUGEINT): a column is int128
+because it was declared so — `cast -type COL int128`, a CSV or JSON
+integer literal past int64 (which types the whole column), or an
+integer sum — never because a value overflowed. In an expression,
+`int128(x)` widens an integer, a whole float or a digit string:
+`n * int128("100000000000000000000")`. That is also how a literal past
+int64 is written, since the expression compiler refuses one. An int128
+beside an int64 is an int128, beside a float a float; `+ - * %` are
+exact to 2^127 and an int128 overflow is the same error (`… does not
+fit an int128`); `/` and `**` are floats; comparisons between an int64
+and an int128 are exact. `int(x)` of an int128 that does not fit an
+int64 is an error, never a wrap. One gap: `x in [1, 2]` with an int128
+`x` compares by Go equality, so a list of int literals does not match —
+compare with `==`, or `int128()` the literals.
+
+**Every integer sum is an int128.** `group-by -sum` of an integer
+column, `-avg` (a float of the exact sum), `window -sum`/`-avg`,
+`pivot -func sum` and `sum()` over a list (`sum(xs)`, `sum(xs, # * 2)`,
+and the `group-by -expr` aggregations built on it) accumulate exactly
+in an int128 and emit one — DuckDB's `SUM(BIGINT) → HUGEINT` — so a sum
+of int64 values never overflows. Unary minus is checked the same way.
+The Fibonacci fold in int128 state is exact to fib(184), the largest
+Fibonacci number in 128 bits:
+
+```bash
+ssql from range 183 | ssql window -stream-expr '{a:int128(0), b:int128(1)}' '{a:b, b:a+b}' 'b' fib
+```
 
 ### Comparison Operators
 
@@ -286,6 +307,7 @@ workaround was `fromJSON(string(tags))`, which is no longer needed.)
 | Function | Description | Example |
 |----------|-------------|---------|
 | `int(value)` | Convert to integer | `int("123")` → `123` |
+| `int128(value)` | Widen to a 128-bit integer (an integer, a whole float, a digit string past int64) | `int128("123456789012345678901234567890") * 2` → `246913578024691357802469135780` |
 | `float(value)` | Convert to float | `float("3.14")` → `3.14` |
 | `string(value)` | Convert to string | `string(123)` → `"123"` |
 | `type(value)` | Get type name as string | `type(42)` → `"int"` |

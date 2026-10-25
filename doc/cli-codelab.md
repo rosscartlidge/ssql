@@ -806,6 +806,17 @@ recurrence in one stage:
 ssql from range 10 | ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib | ssql to table
 ```
 
+Integers are exact and an overflow is an error, so this fold stops at 92
+rows (`integer overflow: … does not fit an int64`). An `int128` state —
+`int128(x)` widens a value, and a column is int128 by `cast -type COL
+int128` or a literal past int64 — runs to fib(184), the largest
+Fibonacci number in 128 bits; the 184th step is the same error again:
+
+```bash
+# int128 state: exact to fib(184), 39 digits
+ssql from range 183 | ssql window -stream-expr '{a:int128(0), b:int128(1)}' '{a:b, b:a+b}' 'b' fib | ssql sort -desc n | ssql limit 1 | ssql to table
+```
+
 Signal processing is built in. `signal.csv` is a 5 Hz + 20 Hz mix sampled
 at 100 Hz; the FFT finds both:
 

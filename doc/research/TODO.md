@@ -2,7 +2,7 @@
 
 Reference: DFC068
 Created: 2026-03-21
-Last modified: 2026-10-22
+Last modified: 2026-10-25
 
 [Back to Index](./README.md)
 
@@ -111,7 +111,8 @@ Tracked issues and feature gaps discovered during development.
 - [x] **Seeded `hash(n)` integer function in every lane** — SHIPPED 2026-10-22 (DFC154 §6): `exprfn.Hash`, lowbias32 over the folded 64-bit input with a seed term; rendered in SQL as `&`/`>>`/`*`/xor with every product below 2^63 (no engine refuses); equivalence case `hash_every_lane` with a Golden from an independent Python implementation. The digests `md5`/`sha1`/`sha256` gained SQL and typed-lane forms on the way.
 
 - [x] **Numeric functions — DuckDB's set in every lane** — SHIPPED 2026-10-20 ([DFC153](./dfc153_numeric_functions.md)): 35 functions in the VM (`expr_math.go`), the transpiler, `generate sql` (`generate_sql_math.go`, with `sqlFinite` and `TRY`/domain guards; the guard on `/` too), the catalog and the reference; six equivalence cases with Goldens from Python's math. Found and fixed on the way: `typed.WriteJSONLToWriter` refused a row holding ±Inf (now null, DFC133).
-- [x] **DECIDED: big numbers — option B shipped** — [DFC155](./dfc155_big_numbers.md) (2026-10-22, Ross: "ok lets do B"). Int64 `+ - *` overflow is an error in every lane; `group-by -sum` of ints is an exact int64. Parked, for a use that asks: C (int128, DuckDB's HUGEINT; a column is int128 by cast, wide literal or sum — never by an operator overflow, §C) and E (scaled-int64 decimals for money); big floats never.
+- [x] **DECIDED: big numbers — options B and C shipped** — [DFC155](./dfc155_big_numbers.md) (B 2026-10-22, Ross: "ok lets do B"; C 2026-10-25, Ross: "lets do option C and then E"). Int64 `+ - *` overflow is an error in every lane; `int128` is a column type in every lane (cast, wide literal, every integer sum — never an operator overflow, §C, §7); Parquet/Arrow DECIMAL(38,0). Next: E (scaled-int64 decimals for money, its own plan; C's Int128 is the mantissa it can grow into); big floats never.
+- [ ] **int128 follow-ups** (DFC155 §7): `x in [1, 2]` with an int128 `x` compares by Go equality in the VM (patch `in` when the list is literal); the explore page and the playground round past 2^53 in `JSON.parse` for int64 and int128 alike (a string form for the browser); the DataFusion and Postgres forms (DECIMAL(38,0), NUMERIC(39,0), `generate_series`) are documented, not gated — run the int128 equivalence cases on the rig lanes.
 - [x] **`generate sql` panicked on any source read from stdin** (2026-10-22; it was not explode's doing — `from jsonl` with no file reached `files[0]`): now a refusal, "SQL translation needs a file (stdin has no SQL equivalent)". Shipped after v4.123.0.
 - [x] **Overflow gaps left by DFC155 B — closed** (2026-10-22, Ross: "ok lets do the batch"): `sum()` is rewritten to ssql's checked sum in the VM (`sum(xs)` → `_ssql_sum(xs)`, `sum(xs, f)` → `_ssql_sum(map(xs, f))`; the typed lowering reads either spelling), unary minus is checked, `window -sum`/`-avg` accumulate in int64 running and sliding (exec `numericSum`/`slidingSum`, typed `WindowSpec.Int`). The pivot cells followed the same day (Ross: "ok do it"): int64 cells sum exactly, min/max keep the kind, floats are compensated — no sum in ssql rounds silently now.
 - [ ] **Typed lane: a constant `0.0 / 0.0` is a Go compile error** (2026-10-20, DFC153 §4.4): the transpiler emits the literal division and Go folds it ("invalid operation: division by zero"); field-based divisions are fine. Emit a constant float division through a helper, or evaluate the constant at transpile time.

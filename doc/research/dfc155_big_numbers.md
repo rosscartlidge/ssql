@@ -2,7 +2,7 @@
 
 Reference: DFC155
 Created: 2026-10-22
-Last modified: 2026-10-22
+Last modified: 2026-10-25
 
 [Back to Index](./README.md)
 
@@ -78,7 +78,8 @@ Three things stand out:
   Error`. `sum(BIGINT)` returns `HUGEINT`.
 - **`HUGEINT` / `UHUGEINT`** are native 128-bit (`INT128`); `+ - * // %`
   exact, checked (`Overflow in addition of INT128`), cast to and from
-  `DOUBLE`. Fibonacci in `HUGEINT` is exact to fib(186). Written to
+  `DOUBLE`. Fibonacci in `HUGEINT` is exact to fib(184) (this said 186
+  until 2026-10-25; fib(185) is 2.06 × 10^38, past 2^127). Written to
   JSON as a bare number (`{"h":123456789012345678901234567890}`), which
   `read_json` then reads back as `DOUBLE` — DuckDB's own JSON round
   trip loses it.
@@ -270,7 +271,7 @@ rule — DuckDB's answer too. An int128 result that overflows is an error.
 A pipeline with no cast, no wide literal and no sum never touches an
 int128 value, which is why existing pipelines pay only B's check.
 
-- Covers Fibonacci to fib(186), any sum of an int64 column, money in
+- Covers Fibonacci to fib(184), any sum of an int64 column, money in
   cents to 10^38, 128-bit ids (UUIDs as numbers, IPv6).
 - A struct of two words is **comparable**: a group-by key, a sort key,
   a typed struct field with no allocation. This is the property
@@ -470,3 +471,205 @@ B's checked call is where C would route arithmetic).
   aggregation (a builtin, not patchable), unary minus of MinInt64,
   and the float accumulation of `window -sum`/`resample`.
 
+
+## 7. Built: option C (2026-10-25)
+
+Ross: "lets do option C and then E. we dont need it now - but I'm sure
+we will in the future", then "make sure we commit and push the current
+code so that we can easily revert" (built on branch `dfc155-c` from
+cfa1c37, v4.124.0; every stage a commit, every stage green) and "write
+up the implementation for future reference" — this section. Three
+decisions taken in plan mode: integer sums widen to int128 (the
+performance worry answered by measurement, below); a source literal past
+int64 types its column int128 (it was a float); Parquet/Arrow hold an
+int128 as DECIMAL(38,0) both ways. E is its own plan after this ships,
+with `Int128` as the mantissa it can grow into.
+
+### 7.1 The type (`int128.go`)
+
+`ssql.Int128{hi int64; lo uint64}`, two's complement, comparable (a
+group-by key, a join key, a typed struct field, 16 bytes, no
+allocation). `Add/Sub/Mul/Quo/Rem/Neg/Abs` panic with an
+`*Int128OverflowError` (`integer overflow: A op B does not fit an
+int128`; the sibling of `exprfn.OverflowError`) and the `Checked*` forms
+return it; the panic lives in a `//go:noinline` helper so the hot
+methods inline. `Cmp`, `Int64() (int64, bool)`, `Float64()` (correctly
+rounded, ties to even, no allocation — the same value `big.Float`
+gives, pinned against it), `String()` (two `bits.Div64` passes by 10^19
+per 19-digit chunk), `ParseInt128` (a `*strconv.NumError`),
+`MarshalJSON` as a bare number (DuckDB writes a HUGEINT bare),
+`UnmarshalJSON` of a bare number or the quoted form `duckdb -json`
+prints. Oracle: `math/big` on every edge and 200k random pairs
+(`int128_test.go`). Measured: Add+Sub+Cmp 1.2 ns each, String 125 ns.
+
+### 7.2 The rule as shipped
+
+A column is int128 because it was declared so, never because a value
+overflowed. Three doors, each the same in every lane: `cast -type COL
+int128`; a CSV/TSV/JSON/JSONL integer literal past int64 that fits
+int128 (`inferColumnType`: int → int128 → float → bool → string;
+`parseJSONNumber`, `normaliseJSONNumbers`, `jsonRawToValue`); every
+integer sum (`numericSum`, `slidingSum`, the pivot cell, the VM's
+`checkedSum`, the typed accumulators, `wireSum` → `int128`). Int64
+beside int128 is int128; int128 beside float64 is float64 (`Float64()`);
+`/` and `**` are floats as for every integer, `%` is `Rem`. Int64
+operator overflow is still B's error. The accumulate step of an int64
+sum needs no overflow branch (2^64 rows cannot overflow an int128), so
+it is cheaper than the checked int64 add it replaced.
+
+### 7.3 Lane by lane
+
+- **Wire**: `FieldTypeInt128` / `lib.TypeInt128 = "int128"`;
+  `ParseFieldType` takes `int128` and `hugeint`; `widenWireType` int +
+  int128 → int128, int128 + float → float; a `_schema` header saying
+  int128 widens the row's small int64 literals
+  (`ParseJSONLineWithSchemaTypes`), so an int128 column stays one type
+  across a pipe hop. `convertTo` has `convertToInt128` and the
+  int64/float64/bool arms know the type, so `GetOr(r, f, ssql.Int128{})`
+  works and `GetOr(r, f, int64(0))` of a wide value gives the default
+  (never a wrap).
+- **Compare and keys** (the DFC's table, as built): `exactIntCmp` is the
+  one helper — int64 and Int128 pairs compare exactly in `CompareAny`,
+  `compareTyped`, `numericLess`, `aggCompare`, `joinValuesEqual`,
+  `LiteralOp` (a `where -if` literal past int64 parses as int128);
+  `distinctKey` keeps a wide value as itself; `asofOrdOf` goes through
+  `Float64()` as an int64 axis does. `isSimpleValue` has the arm (a
+  group key that fails it is silently skipped). Writers: JSONL bare,
+  CSV/TSV digits, table right-aligned, xlsx as text (sheet numbers are
+  doubles), sidecars `"type":"integer"` plus `"ssqlType":"int128"`
+  (Frictionless integers are unbounded; the reader prefers the key).
+- **VM** (`expr_checked.go`): the B patch grew. `+ - *` have an Int128
+  arm and an Int128-beside-float arm; `/`, `%`, `**` are patched because
+  expr's `runtime.Divide/Modulo/Exponent` panic on a struct; the six
+  comparisons are patched because `runtime.Less` panics on a struct and
+  `runtime.Equal` falls back to `reflect.DeepEqual`, which calls an
+  Int128 unequal to the int literal of the same value (the compiler
+  emits `OpEqualInt` only for statically-int operands, and every ssql
+  field is `any`); the builtins `int/float/abs/min/max` are patched and
+  delegate every non-Int128 call to expr's own `builtin.Builtins` (some
+  carry `Fast` instead of `Func` — `int`, `float`, `abs`). `int128(x)` is
+  bound in `ExprMathFunctions` (so it is a call, not a field).
+  **Measured**: a three-comparison `where` expression 248 → ~335 ns
+  (~30 ns per comparison, three `[]any` allocations); arithmetic
+  unchanged (355 → ~335). Not patched: `in` (an int128 beside a list of
+  int literals is Go-unequal; follow-up).
+- **Transpiler** (`expr_go.go`): `exprGoInt128 = "ssql.Int128"` in the
+  lattice; `asWide` (Int128From for an int64 side), arithmetic through
+  the checked methods, `%` through `Rem`, comparisons through `.Cmp(…)
+  op 0`, `int128("…")` hoisted as `var exprI128… = ssql.MustParseInt128`,
+  `int()` → `ssql.MustInt64` (never a wrap), `float()`, `string()`,
+  `abs`, `min/max` → `ssql.Int128Min/Max`; the patched call names route
+  back to the operators they replaced (a compiled program's AST holds
+  the call; `binaryOperator` is the shared emitter). `exprCoerceFunc` →
+  `exprvm.MustCoerceInt128` for Tier V.
+- **Record codegen**: `recordCondLHS` reads an int128 column with
+  `GetOr(…, ssql.Int128{})` (int64 and float64 columns still go through
+  float64, as before); `condRHS` hoists a literal past int64; the
+  generated `-set-expr` write-back switch has an Int128 arm (without it
+  the digits became text — found by the first equivalence run).
+- **Typed**: `goTypeFor`/`TypedSchemaFromHeader` map int128 →
+  `ssql.Int128`; the CSV and JSONL samplers track "all integer literals
+  fit int128"; `typed/io.go` decodes and encodes the type like
+  `time.Time` (a struct kind before the Kind switch); group-by sum/avg
+  states are `ssql.Int128` for every integer column (`wideOf` renders
+  the add), `-expr` terms accumulate in Int128 (the lowering types the
+  accumulator Int128 so `sum(n) / count()` floats and `sum(n) % 5` is a
+  `Rem`), `aggResultGoType` of an integer sum is `ssql.Int128`; windows
+  read an int128 column through `WindowSpec.Wide` and return an Int128
+  sum; `cast` has the from/to matrix; `where`, `-if-field`, `sort` (a
+  `SortByFunc` comparator — Int128 is not `cmp.Ordered`), `join` (int64
+  beside int128 is an Int128 key, exactly), `update` (`assignExprTo`
+  widens int → Int128 and floats Int128 → float64; Int128 → int64 is a
+  retype, record mode), `resample`, `unpivot`, `from ssh`, `to table`.
+  The typed assembler always imports the root package, so a struct
+  field of `ssql.Int128` needs no import plumbing.
+- **SQL**: `sqlInt128Type()` is HUGEINT / NUMERIC(39,0) / DECIMAL(38,0)
+  by dialect; `cast -type COL int128` and `int128(x)` render a CAST; the
+  CSV sampler (`pgInferColumns`) has a wide kind and the DuckDB
+  `read_csv` declares the column HUGEINT (its sniffer makes a wide
+  column DOUBLE); `from range` renders `generate_series` with an
+  inclusive end in every dialect — the half-open `range()` stop,
+  start + N·step, does not fit a BIGINT when the last row is MaxInt64,
+  which is exactly the widening cases. SUM needs nothing: DuckDB's
+  SUM(BIGINT) and window SUM are HUGEINT (probed), Postgres's
+  `sum(bigint)` is numeric; DataFusion's stays Int64 and its forms are
+  documented, not gated.
+- **Parquet/Arrow**: `arrowKindInt128` → `Decimal128(38,0)`; the readers
+  take `DECIMAL(p,0)` back as int128 (it was text) and a UINT64 past
+  2^63 as int128 (it wrapped); a 39-digit value refuses on write naming
+  itself (Decimal256 declined). DuckDB reads the file as DECIMAL(38,0)
+  with the same digits. Found while probing: DuckDB writes its own
+  HUGEINT to Parquet as DOUBLE, lossy.
+
+### 7.4 Gates
+
+`TestIntOverflowEveryLane` moved the integer sums from the overflow
+table to the exact table (they widen now) and added the int128 bound
+(`n * int128("170141183460469231731687303715884105727")`: "integer
+overflow" in exec/record/typed/parallel, DuckDB's "Overflow in
+multiplication of INT128") and the int128 fold past fib(184).
+`TestPipelineEquivalence` gained thirteen cases with Python goldens
+(`cast_int128_fib_184`, `sum_int64_widens`, `window_sum_widens`,
+`expr_sum_widens`, `pivot_sum_widens`, `int128_avg_exact`,
+`wide_literal_csv_column`, `int128_compare_where`, `int128_groupby_key`,
+`int128_join_key`, `int128_json_nested_path`, `int128_to_float_mix`) and
+the harness now compares integers as exact digits (`equivParse` with
+`UseNumber`; DuckDB's quoted HUGEINT mapped to the same) — watched to
+fail on a one-digit golden change, which the float64 parse could not
+see. `TestInt128Exec` runs the interpreter end to end through the
+binary (the fold to fib(184), the sums, the CSV literal, cast, join,
+Parquet with DuckDB reading the file); three corpus pipelines run the
+generated lanes; `TestExprInt128Semantics` is the VM table.
+
+### 7.5 Numbers (this machine, HEAD vs branch)
+
+| | before | after |
+|---|---|---|
+| `BenchmarkGroupBySum`, 1M rows × 1000 groups | 182–199 ms | 181–191 ms |
+| `BenchmarkNumericSum`, 1M int64 adds | 2.6–2.8 ms | 3.4–3.6 ms |
+| `BenchmarkExprCompare`, three comparisons in the VM | 241–258 ns | 330–361 ns |
+| `BenchmarkExprArith`, `n + n * 2 - 1` in the VM | 344–358 ns | 313–352 ns |
+| `BenchmarkInt128Add` (Add+Add+Cmp+Sub) | — | 4.5 ns |
+| `BenchmarkInt128String`, 39 digits | — | 123 ns |
+
+The group-by pays nothing measurable; the bare accumulator pays ~0.8 ns
+per add for the type switch and the two-word add; the comparison patch
+is the one real cost, ~30 ns per comparison in every expression.
+
+### 7.6 Gotchas, for E and for the next type
+
+- The largest Fibonacci number in 128 bits is fib(184), not fib(186)
+  as §2 said: 183 fold steps, the 184th overflows (the int64 fold
+  reached fib(92) in 91 steps the same way).
+- A default arm that stringifies an unknown type is where a new type
+  disappears: `applyValueToRecord`, `convertRecordValue(ForJSON)`, the
+  generated `-set-expr` switch, `inferJSONType`, `setScalar`,
+  `aggValue`. Each needed an arm; a test that prints digits does not
+  catch it, one that checks the wire type does.
+- A `default: convertTo[float64]` arm turns a new numeric type into a
+  float silently once `convertToFloat64` knows it (`numericSum.add`,
+  `slidingNumeric`): the explicit arm must come first.
+- `isSimpleValue` decides whether a group key is used at all; a type it
+  does not list is skipped without a word.
+- expr-lang's `builtin.Builtins` carry either `Func` or `Fast`.
+- A struct field type that is not `cmp.Ordered` or `Number` cannot use
+  `typed.SortBy`/`Sum`; codegen emits inline `.Cmp`/`.Add` instead.
+- `generate_series` is inclusive in DuckDB, Postgres and DataFusion;
+  `range` is half-open and its stop overflows at the type's edge.
+- `duckdb -json` quotes a HUGEINT and a DECIMAL; the harness maps a
+  canonical integer string back to digits, a decimal stays text (so
+  `HUGEINT + 0.5`, DuckDB's DECIMAL(38,1), is a documented divergence
+  from ssql's float64).
+- The browser (`to explore`, the playground, `JSON.parse`) rounds past
+  2^53 for int64 today and int128 alike; a string form is a follow-up.
+- An exec test's own fixture is not the corpus's: the Parquet subtest
+  expected the three-row sum of `wide.csv` from a two-row file.
+
+### 7.7 What E reuses
+
+The type shape (`Int128` as the mantissa of `DECIMAL(38,s)`), the
+`FieldType`/wire/typed-schema plumbing as the pattern for a `decimal:s`
+type, the VM patch (a decimal arm beside the int128 one), `exactIntCmp`
+as the model for a scale-aligned compare, the Parquet `Decimal128(p,s)`
+writer with a scale, the harness's exact digits, and the census above
+of every `case int64` a new scalar type touches.

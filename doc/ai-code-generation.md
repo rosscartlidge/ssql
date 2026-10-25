@@ -138,6 +138,7 @@ saved := ssql.TeeFile("checkpoint.jsonl")(records)
 **⚠️ CSV Auto-Parsing**: Numeric strings become `int64`/`float64`, not strings!
 - CSV value `"25"` → `int64(25)`
 - Use `GetOr(r, "age", int64(0))` not `GetOr(r, "age", "")`
+- An integer past int64 (a 20-digit id, an integer `-sum`) is an `ssql.Int128`: `GetOr(r, "id", ssql.Int128{})`; `ssql.Sum` of an integer field returns one
 
 ### Core Operations (SQL-style naming)
 

@@ -9,8 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A 128-bit integer type, `int128`** ([DFC155](doc/research/dfc155_big_numbers.md) C, DuckDB's HUGEINT), in every lane — exec, `generate go` record, typed and parallel, and `generate sql`. A column is int128 because it was declared so, never because a value overflowed: `cast -type COL int128`; a CSV or JSON integer literal past int64 (it was read as a float, rounded past 2^53); or an integer sum (below). Int64 beside int128 widens to int128, int128 beside a float is a float; `+ - * %` are exact and an int128 overflow is an error naming the operands (`integer overflow: … does not fit an int128`), as DuckDB raises it; `/` and `**` are floats, as for every integer. In expressions `int128(x)` widens an integer, a whole float or a digit string — the way to write a literal past int64, which the expression compiler refuses. Comparisons between an int64 and an int128 are exact where a float64 detour rounded. `ssql.Int128` in the library (a comparable two-word value: group and join keys, sort keys, typed struct fields with no allocation). The Fibonacci fold in int128 state is exact to fib(184), the largest Fibonacci number in 128 bits: `window -stream-expr '{a:int128(0), b:int128(1)}' '{a:b, b:a+b}' 'b' fib`.
+- **Parquet and Arrow hold an int128 as `DECIMAL(38,0)`**, which DuckDB and Spark read as a number; a `DECIMAL(p,0)` column reads back as an int128 (it was text), and a UINT64 value past 2^63 reads exactly instead of wrapping. A value with 39 digits refuses on write, naming itself. The SQL lane declares a sampled wide CSV column HUGEINT (Postgres `NUMERIC(39,0)`, DataFusion `DECIMAL(38,0)`, documented).
 - **Playground: a Generate JSON button** beside Generate SQL — the pipeline as a document for `ssql run` (`generate json`: a JSON list of stages, each the stage's own argv), the form a program or a config file carries a pipeline in.
 - **Playground example: the nested pipeline as JSON** — the same `-collect` lists, whole, through `to json` (the table truncates a long list cell).
+
+### Changed
+
+- **Every integer sum is an int128**: `group-by -sum`, `-avg` (a float of the exact sum), `window -sum`/`-avg` running and sliding, `pivot -func sum` and `sum()` in an expression accumulate an int64 column in an int128 and emit one — DuckDB's `SUM(BIGINT) → HUGEINT`, the one widening every engine makes — so an integer sum never overflows in practice where v4.123 stopped past 2^63. The wire type of an integer sum is `int128` (was `int`), a typed program's sum field is an `ssql.Int128`, and `ssql.Sum` returns an Int128 for integer data. Printed digits do not change. The accumulate step is cheaper than the checked int64 add it replaces (an int64 sum cannot overflow an int128, so no overflow branch).
+- **`from range` in SQL renders `generate_series` with an inclusive end** in every dialect (the half-open `range()` stop did not fit a BIGINT when the last row was MaxInt64).
+- **The equivalence harness compares integers exactly**: every lane's integer literals keep their digits (DuckDB's quoted HUGEINT too), so a wrong digit past 2^53 is a difference — until now every number was parsed as a float64, which could not see one.
 
 ## [4.124.0] - 2026-10-23
 

@@ -161,6 +161,7 @@ func MakeMutableRecordWithCapacity(capacity int) MutableRecord
 
 func (m MutableRecord) String(field, value string) MutableRecord
 func (m MutableRecord) Int(field string, value int64) MutableRecord
+func (m MutableRecord) Int128(field string, value Int128) MutableRecord   // the int128 column (DFC155 C)
 func (m MutableRecord) Float(field string, value float64) MutableRecord
 func (m MutableRecord) Bool(field string, value bool) MutableRecord
 func (m MutableRecord) Time(field string, value time.Time) MutableRecord
@@ -211,7 +212,7 @@ do. A schema per record is several times slower on large files.
 
 ```go
 type Value interface {
-    ~int64 | ~float64 |
+    ~int64 | ~float64 | Int128 |
     ~bool | string | time.Time |
     JSONString | Record |
     []any |
@@ -223,7 +224,7 @@ type OrderedValue interface { ~int64 | ~float64 | string }
 ```
 
 `Value` is the constraint on what a Record holds and what `Set`, `Field`
-and `SetImmutable` accept: canonical scalars (`int64`, `float64`), the
+and `SetImmutable` accept: canonical scalars (`int64`, `float64`, `Int128`), the
 listed sequence types, `[]any` for `Collect` results and `iter.Seq[any]`
 for `CollectSeq`. `OrderedValue` is the constraint for `Min[T]` /
 `Max[T]`.
@@ -767,7 +768,7 @@ type AggResult[V Value] struct{ /* private */ }
 func (a AggResult[V]) GetValue() any
 
 func Count() AggregateFunc
-func Sum(field string) AggregateFunc   // integers sum exactly in int64 (an overflow is an error); a float among the values makes the sum a compensated float64
+func Sum(field string) AggregateFunc   // integers sum exactly in an Int128 (DuckDB's SUM(BIGINT) → HUGEINT; an int128 overflow is an error); a float among the values makes the sum a compensated float64
 func Avg(field string) AggregateFunc   // a float64 mean over the same accumulation
 func Min[T OrderedValue](field string) AggregateFunc
 func Max[T OrderedValue](field string) AggregateFunc
