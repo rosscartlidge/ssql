@@ -119,3 +119,44 @@ func TestSumAndAvgAccumulateIntegersExactly(t *testing.T) {
 		t.Errorf("overflowing sum: want *OverflowError, got %v", err)
 	}
 }
+
+// benchProgram compiles src the way every ssql site does (compileStd's
+// options) for a benchmark.
+func benchProgram(b *testing.B, src string) *vm.Program {
+	b.Helper()
+	p, err := expr.Compile(src, append([]expr.Option{expr.Env(map[string]any{}), expr.AllowUndefinedVariables()}, ExprStandardOptions()...)...)
+	if err != nil {
+		b.Fatalf("compile %q: %v", src, err)
+	}
+	return p
+}
+
+// BenchmarkExprCompare is the HEAD-vs-branch gate for DFC155 C's
+// comparison patch: a `where`-shaped expression with three comparisons
+// over the untyped env map ssql builds. The arithmetic patch (B) cost
+// ~20 ns per operator; this says what the comparisons cost.
+func BenchmarkExprCompare(b *testing.B) {
+	p := benchProgram(b, `n > 5 && f < 2.5 && s == "ab"`)
+	env := map[string]any{"n": int64(7), "f": 1.5, "s": "ab"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := expr.Run(p, env); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkExprArith is the same gate for the arithmetic patch, which C
+// extends with int128 arms and `/ % **`.
+func BenchmarkExprArith(b *testing.B) {
+	p := benchProgram(b, `n + n * 2 - 1`)
+	env := map[string]any{"n": int64(7)}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := expr.Run(p, env); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
