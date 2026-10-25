@@ -1,6 +1,7 @@
 package typed
 
 import (
+	"iter"
 	"reflect"
 	"slices"
 	"testing"
@@ -110,4 +111,46 @@ func scoresOf(seq func(yield func(tkRow) bool)) []int64 {
 	// The serial and parallel forms both yield best-first; the parallel
 	// merge preserves that, so the score sequences compare directly.
 	return out
+}
+
+// The comparator forms (an ssql.Int128 key is not cmp.Ordered) agree with
+// the Ordered forms on every n, serial and parallel, largest and smallest.
+func TestTopByFuncAgreesWithTopBy(t *testing.T) {
+	type row struct{ K int64 }
+	var rows []row
+	for i := 0; i < 97; i++ {
+		rows = append(rows, row{int64((i * 7919) % 101)}) // shuffled, with ties
+	}
+	cmp := func(a, b row) int {
+		switch {
+		case a.K < b.K:
+			return -1
+		case a.K > b.K:
+			return 1
+		}
+		return 0
+	}
+	keys := func(seq iter.Seq[row]) []int64 {
+		var out []int64
+		for r := range seq {
+			out = append(out, r.K)
+		}
+		return out
+	}
+	for _, n := range []int{0, 1, 3, 10, 97, 200} {
+		want := keys(TopBy(n, func(r row) int64 { return r.K })(slices.Values(rows)))
+		if got := keys(TopByFunc(n, cmp)(slices.Values(rows))); !slices.Equal(got, want) {
+			t.Errorf("TopByFunc(%d): %v, want %v", n, got, want)
+		}
+		if got := keys(TopByFuncParallel(ParallelFromSlice(rows, 4), n, cmp)); !slices.Equal(got, want) {
+			t.Errorf("TopByFuncParallel(%d): %v, want %v", n, got, want)
+		}
+		wantB := keys(BottomBy(n, func(r row) int64 { return r.K })(slices.Values(rows)))
+		if got := keys(BottomByFunc(n, cmp)(slices.Values(rows))); !slices.Equal(got, wantB) {
+			t.Errorf("BottomByFunc(%d): %v, want %v", n, got, wantB)
+		}
+		if got := keys(BottomByFuncParallel(ParallelFromSlice(rows, 4), n, cmp)); !slices.Equal(got, wantB) {
+			t.Errorf("BottomByFuncParallel(%d): %v, want %v", n, got, wantB)
+		}
+	}
 }

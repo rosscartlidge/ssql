@@ -359,6 +359,12 @@ func BottomBy[T any, K Ordered](n int, keyFn func(T) K) func(iter.Seq[T]) iter.S
 // Parallel forms — consume a Stream[T], return the ≤ n winners as iter.Seq[T].
 func TopByParallel[T any, K Ordered](in Stream[T], n int, keyFn func(T) K)    iter.Seq[T]
 func BottomByParallel[T any, K Ordered](in Stream[T], n int, keyFn func(T) K) iter.Seq[T]
+
+// The comparator forms, for a key that is not cmp.Ordered (an ssql.Int128 column): the same heaps under cmp.
+func TopByFunc[T any](n int, cmp func(a, b T) int) func(iter.Seq[T]) iter.Seq[T]
+func BottomByFunc[T any](n int, cmp func(a, b T) int) func(iter.Seq[T]) iter.Seq[T]
+func TopByFuncParallel[T any](in Stream[T], n int, cmp func(a, b T) int) iter.Seq[T]
+func BottomByFuncParallel[T any](in Stream[T], n int, cmp func(a, b T) int) iter.Seq[T]
 ```
 
 `TopBy` / `BottomBy` keep a bounded heap of size `n`: **O(N·log n)** time and

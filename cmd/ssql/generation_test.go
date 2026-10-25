@@ -1012,12 +1012,12 @@ func TestExprAggTypedGeneration(t *testing.T) {
 		}
 		src := string(out)
 		for _, want := range []string{
-			"ea0_t0 int64", // element's own type, not blanket float64
+			"ea0_t0 ssql.Int128", // an integer sum accumulates in an Int128 (DFC155 C), not a blanket float64
 			"ea0_cnt int64",
-			"a.ea0_t0 = exprfn.Add(a.ea0_t0, exprfn.Mul(r.Salary, 2))", // checked (DFC155 B)
-			"a.ea0_t0 = exprfn.Add(a.ea0_t0, o.ea0_t0)", // the Merge — sums add across shards, checked (DFC155 B)
+			"a.ea0_t0 = a.ea0_t0.Add(ssql.Int128From(exprfn.Mul(r.Salary, 2)))", // the element checked (DFC155 B), the sum exact (C)
+			"a.ea0_t0 = a.ea0_t0.Add(o.ea0_t0)", // the Merge — sums add across shards
 			"a.ea0_cnt += o.ea0_cnt",
-			"V: (float64(a.ea0_t0) / float64(a.ea0_cnt))",
+			"V: (a.ea0_t0.Float64() / float64(a.ea0_cnt))",
 			"typed.GroupByParallel", // mergeable → parallel form KEPT
 		} {
 			if !strings.Contains(src, want) {

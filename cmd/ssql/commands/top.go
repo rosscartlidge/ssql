@@ -167,6 +167,15 @@ func generateTopCode(n int, field string, asc bool) error {
 			serialFn, parallelFn = "typed.BottomBy", "typed.BottomByParallel"
 		}
 		keyFn := fmt.Sprintf("func(r %s) %s { return r.%s }", prevSchema.TypeName, f.GoType, f.GoName)
+		if f.GoType == "ssql.Int128" {
+			// An Int128 is not cmp.Ordered: the comparator forms, as sort
+			// uses SortByFunc (DFC155 C).
+			serialFn, parallelFn = "typed.TopByFunc", "typed.TopByFuncParallel"
+			if asc {
+				serialFn, parallelFn = "typed.BottomByFunc", "typed.BottomByFuncParallel"
+			}
+			keyFn = fmt.Sprintf("func(a, b %s) int { return a.%s.Cmp(b.%s) }", prevSchema.TypeName, f.GoName, f.GoName)
+		}
 		parallelCode := fmt.Sprintf("%s := %s(%s, *flagTop, %s)", outputVar, parallelFn, inputVar, keyFn)
 		serialCode := fmt.Sprintf("%s := %s(*flagTop, %s)(%s)", outputVar, serialFn, keyFn, inputVar)
 		imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}

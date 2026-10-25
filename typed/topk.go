@@ -200,3 +200,139 @@ func topkStreamReduce[T any, K Ordered](
 		}
 	})
 }
+
+// topNFunc is topNLargest/topNSmallest for a comparator instead of an
+// Ordered key: the n items that rank highest (largest) or lowest under
+// cmp, in rank order. For a key type that is not cmp.Ordered — an
+// ssql.Int128 column (DFC155 C) — the generated code uses the *Func
+// forms below, as sort uses SortByFunc.
+func topNFunc[T any](n int, cmp func(a, b T) int, largest bool, source func(emit func(T))) []T {
+	// A bounded heap whose root is the WORST survivor: for the n largest
+	// the smallest, for the n smallest the largest.
+	worse := func(a, b T) bool { // a ranks worse than b
+		if largest {
+			return cmp(a, b) < 0
+		}
+		return cmp(a, b) > 0
+	}
+	h := make([]T, 0, n)
+	up := func(i int) {
+		for i > 0 {
+			p := (i - 1) / 2
+			if !worse(h[i], h[p]) {
+				return
+			}
+			h[i], h[p] = h[p], h[i]
+			i = p
+		}
+	}
+	down := func(i int) {
+		for {
+			l, r, m := 2*i+1, 2*i+2, i
+			if l < len(h) && worse(h[l], h[m]) {
+				m = l
+			}
+			if r < len(h) && worse(h[r], h[m]) {
+				m = r
+			}
+			if m == i {
+				return
+			}
+			h[i], h[m] = h[m], h[i]
+			i = m
+		}
+	}
+	source(func(v T) {
+		if len(h) < n {
+			h = append(h, v)
+			up(len(h) - 1)
+		} else if worse(h[0], v) {
+			h[0] = v
+			down(0)
+		}
+	})
+	res := make([]T, len(h))
+	for i := len(res) - 1; i >= 0; i-- {
+		res[i] = h[0]
+		last := len(h) - 1
+		h[0] = h[last]
+		h = h[:last]
+		down(0)
+	}
+	return res
+}
+
+// TopByFunc returns the top n items under cmp (the one that compares
+// greatest first) — [TopBy] for a key type that is not cmp.Ordered.
+func TopByFunc[T any](n int, cmp func(a, b T) int) func(iter.Seq[T]) iter.Seq[T] {
+	return topByFunc(n, cmp, true)
+}
+
+// BottomByFunc returns the bottom n items under cmp (the one that
+// compares least first) — [BottomBy] for a comparator.
+func BottomByFunc[T any](n int, cmp func(a, b T) int) func(iter.Seq[T]) iter.Seq[T] {
+	return topByFunc(n, cmp, false)
+}
+
+func topByFunc[T any](n int, cmp func(a, b T) int, largest bool) func(iter.Seq[T]) iter.Seq[T] {
+	return func(in iter.Seq[T]) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			if n <= 0 {
+				return
+			}
+			for _, v := range topNFunc(n, cmp, largest, func(emit func(T)) {
+				for v := range in {
+					emit(v)
+				}
+			}) {
+				if !yield(v) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// TopByFuncParallel is [TopByParallel] for a comparator: a size-n heap
+// per shard, the survivors merged through one final selection.
+func TopByFuncParallel[T any](in Stream[T], n int, cmp func(a, b T) int) iter.Seq[T] {
+	return topByFuncParallel(in, n, cmp, true)
+}
+
+// BottomByFuncParallel is [BottomByParallel] for a comparator.
+func BottomByFuncParallel[T any](in Stream[T], n int, cmp func(a, b T) int) iter.Seq[T] {
+	return topByFuncParallel(in, n, cmp, false)
+}
+
+func topByFuncParallel[T any](in Stream[T], n int, cmp func(a, b T) int, largest bool) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		nShards := len(in.shards)
+		if n <= 0 || nShards == 0 {
+			return
+		}
+		partials := make([][]T, nShards)
+		var g shardGroup
+		for i, shard := range in.shards {
+			i, shard := i, shard
+			g.Go(func() {
+				partials[i] = topNFunc(n, cmp, largest, func(emit func(T)) {
+					for v := range shard {
+						emit(v)
+					}
+				})
+			})
+		}
+		g.Wait()
+		for _, v := range topNFunc(n, cmp, largest, func(emit func(T)) {
+			for _, p := range partials {
+				for _, v := range p {
+					emit(v)
+				}
+			}
+		}) {
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}

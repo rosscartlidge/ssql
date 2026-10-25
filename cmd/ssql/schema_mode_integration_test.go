@@ -136,7 +136,7 @@ func TestSchemaModeTypesAndData(t *testing.T) {
 		{"-no-sidecar samples", "ssql from csv " + sidecarCSV + " -no-sidecar", "field,type\nid,int\namount,int\n"},
 		{"bare from reads the sidecar", "ssql from " + sidecarCSV, "field,type\nid,float\namount,string\n"},
 		{"-type holds", "ssql from csv " + csv + " -type hired time | ssql include name hired", "field,type\nname,string\nhired,time\n"},
-		{"rename moves the type; aggregates from the registry", "ssql from csv " + csv + " | ssql rename -as salary pay | ssql group-by dept -count n -sum pay total -min pay lo -max rate hi -first name who -expr 'max(pay)' e", "field,type\ndept,string\nn,int\ntotal,int\nlo,int\nhi,float\nwho,string\ne,any\n"}, // -sum of an int column is an int (DFC155 B),
+		{"rename moves the type; aggregates from the registry", "ssql from csv " + csv + " | ssql rename -as salary pay | ssql group-by dept -count n -sum pay total -min pay lo -max rate hi -first name who -expr 'max(pay)' e", "field,type\ndept,string\nn,int\ntotal,int128\nlo,int\nhi,float\nwho,string\ne,any\n"}, // -sum of an int column is an int128 (DFC155 C),
 		{"cast retypes", "ssql from csv " + csv + " | ssql cast -type salary float -type hired time | ssql include salary hired", "field,type\nsalary,float\nhired,time\n"},
 		{"rollup copies carry the base type", "ssql from csv " + csv + " | ssql group-by dept name -count n -rollup", "field,type\ndept,string\nname,string\nn,int\ndept_n,int\ndept_name_n,int\n"},
 		{"through a sink", "ssql from csv " + csv + " | ssql exclude rate | ssql to table", "field,type\nname,string\ndept,string\nsalary,int\nhired,string\n"},
