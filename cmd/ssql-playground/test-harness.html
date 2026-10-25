@@ -466,7 +466,7 @@ async function run() {
             const errEl = doc.getElementById('output').querySelector('.stderr');
             if (errEl) bad.push(i + ": " + errEl.textContent.slice(0, 80));
         }
-        record("every-example-runs", nBtn >= 25 && bad.length === 0, "buttons=" + nBtn + " " + bad.join(" | "));
+        record("every-example-runs", nBtn >= 26 && bad.length === 0, "buttons=" + nBtn + " " + bad.join(" | "));
     }
 
     // 12. Share link (#p=... on the second iframe): pipeline preloaded and

@@ -125,6 +125,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" onclick="loadExample(22)">Nested — collect names per city, then index the list</button>
     <button class="example-btn" onclick="loadExample(23)">Fibonacci curve — the same fold over 30 rows, as a line chart</button>
     <button class="example-btn" onclick="loadExample(24)">Nested as JSON — the collected lists whole, with to json</button>
+    <button class="example-btn" onclick="loadExample(25)">Golden ratio — consecutive Fibonacci ratios converge on φ (lag, sqrt)</button>
 </div>
 
 <div class="datasets">
@@ -258,6 +259,14 @@ const EXAMPLES = [
 | ssql sort -desc n
 | ssql include city n first people
 | ssql to json`,
+    `ssql from range 50
+| ssql update -set-expr phi '(1+sqrt(5))/2'
+| ssql window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib
+| ssql window -lag-default fib 1 1 lfib
+| ssql update -set-expr est_phi 'fib/lfib'
+| ssql update -set-expr diff 'phi-est_phi'
+| ssql exclude lfib
+| ssql to table -sample 0`,
 ];
 
 // Examples that should auto-optimize instead of run (by index)

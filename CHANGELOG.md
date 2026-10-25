@@ -5,6 +5,12 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Playground example: the golden ratio** — consecutive Fibonacci ratios converging on φ, with the alternating sign of the error and the row where float64 stops seeing a difference; `from range`, a fold, `-lag-default` and `sqrt()` in one pipeline with no file (Ross's, 2026-10-25).
+
 ## [4.125.0] - 2026-10-25
 
 ### Added
