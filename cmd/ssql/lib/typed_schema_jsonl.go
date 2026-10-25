@@ -61,7 +61,7 @@ func SampleJSONSchema(filename, typeName string, maxRows int, opts ...TypeOption
 	}
 
 	type colInfer struct {
-		seen, allInt, allNum, allBool, json bool
+		seen, allInt, allWide, allNum, allBool, json bool // allWide: integers of either width (DFC155 C)
 	}
 	var order []string
 	infer := map[string]*colInfer{}
@@ -77,14 +77,14 @@ func SampleJSONSchema(filename, typeName string, maxRows int, opts ...TypeOption
 		rec := mut.Freeze()
 		for _, k := range topLevelJSONKeys(obj) {
 			if _, ok := infer[k]; !ok {
-				infer[k] = &colInfer{allInt: true, allNum: true, allBool: true}
+				infer[k] = &colInfer{allInt: true, allWide: true, allNum: true, allBool: true}
 				order = append(order, k)
 			}
 		}
 		for k, v := range rec.All() {
 			c, ok := infer[k]
 			if !ok {
-				c = &colInfer{allInt: true, allNum: true, allBool: true}
+				c = &colInfer{allInt: true, allWide: true, allNum: true, allBool: true}
 				infer[k] = c
 				order = append(order, k)
 			}
@@ -94,15 +94,17 @@ func SampleJSONSchema(filename, typeName string, maxRows int, opts ...TypeOption
 			c.seen = true
 			switch v.(type) {
 			case int64:
-			case float64:
+			case ssql.Int128:
 				c.allInt = false
+			case float64:
+				c.allInt, c.allWide = false, false
 			case bool:
-				c.allInt, c.allNum = false, false
+				c.allInt, c.allWide, c.allNum = false, false, false
 			case ssql.JSONString:
-				c.allInt, c.allNum, c.allBool = false, false, false
+				c.allInt, c.allWide, c.allNum, c.allBool = false, false, false, false
 				c.json = true
 			default:
-				c.allInt, c.allNum, c.allBool = false, false, false
+				c.allInt, c.allWide, c.allNum, c.allBool = false, false, false, false
 			}
 			if _, isBool := v.(bool); !isBool {
 				c.allBool = false
@@ -174,6 +176,8 @@ func SampleJSONSchema(filename, typeName string, maxRows int, opts ...TypeOption
 			goType = "string"
 		case c.allInt:
 			goType = "int64"
+		case c.allWide:
+			goType = "ssql.Int128"
 		case c.allNum:
 			goType = "float64"
 		case c.allBool:

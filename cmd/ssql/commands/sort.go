@@ -229,7 +229,7 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 		// typed.SortByDesc. Multi-field path: build a comparator
 		// closure and use typed.SortByFunc.
 		var code string
-		if len(fields) == 1 {
+		if len(fields) == 1 && fields[0].f.GoType != "ssql.Int128" { // an Int128 is not cmp.Ordered: the comparator path
 			fn := "typed.SortBy"
 			if fields[0].desc {
 				fn = "typed.SortByDesc"
@@ -255,6 +255,10 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 				}
 				if sf.f.GoType == "time.Time" {
 					cmpBody.WriteString(fmt.Sprintf(`if c := %s.Compare(%s); c != 0 { return c }`, lhs, rhs))
+					continue
+				}
+				if sf.f.GoType == "ssql.Int128" {
+					cmpBody.WriteString(fmt.Sprintf(`if c := %s.Cmp(%s); c != 0 { return c }`, lhs, rhs))
 					continue
 				}
 				cmpBody.WriteString(fmt.Sprintf(`if %s < %s { return -1 }; if %s > %s { return 1 }`, lhs, rhs, lhs, rhs))
@@ -294,7 +298,7 @@ func generateSortCode(orderBy []ssql.OrderField, spill spillSpec) error {
 // SortByFunc that takes a cmp closure.
 func isSortableGoType(t string) bool {
 	switch t {
-	case "string", "int", "int32", "int64", "uint64", "float32", "float64", "time.Time":
+	case "string", "int", "int32", "int64", "uint64", "float32", "float64", "time.Time", "ssql.Int128":
 		return true
 	}
 	return false

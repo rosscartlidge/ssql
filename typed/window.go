@@ -5,7 +5,6 @@ import (
 	"sort"
 
 	ssql "github.com/rosscartlidge/ssql/v4"
-	"github.com/rosscartlidge/ssql/v4/exprfn"
 )
 
 // Window is the typed runtime for `ssql window` (DFC130 unit 4). It
@@ -71,12 +70,23 @@ type WindowSpec[T any] struct {
 	N       int // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
 	Default any // LAG/LEAD default (nil = absent)
 	Num     func(T) (float64, bool)
-	Int     func(T) (int64, bool) // set for an integer field: sum is exact in int64 (an overflow is an error, DFC155 B); avg divides the exact sum
+	Int     func(T) (int64, bool)       // set for an int64 field: the sum is exact, an Int128 (DFC155 C); avg divides the exact sum
+	Wide    func(T) (ssql.Int128, bool) // set for an int128 field, the same way
 	Val     func(T) (any, bool)
 
 	Init  func() any
 	Step  func(state any, r T) any
 	Final func(state any) any
+}
+
+// wide reads an integer field of either width as an Int128, for the
+// exact sum (DFC155 C: every integer sum is an int128).
+func (spec WindowSpec[T]) wide(r T) (ssql.Int128, bool) {
+	if spec.Wide != nil {
+		return spec.Wide(r)
+	}
+	v, ok := spec.Int(r)
+	return ssql.Int128From(v), ok
 }
 
 // WindowClause mirrors ssql.WindowConfig for one clause.
@@ -261,11 +271,11 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 		v, _ := spec.Val(all[idx[i]])
 		return v
 	case WSum:
-		if spec.Int != nil {
-			var sum int64
+		if spec.Int != nil || spec.Wide != nil {
+			var sum ssql.Int128
 			for i := fs(); i <= fe(); i++ {
-				if v, ok := spec.Int(all[idx[i]]); ok {
-					sum = exprfn.Add(sum, v)
+				if v, ok := spec.wide(all[idx[i]]); ok {
+					sum = sum.Add(v)
 				}
 			}
 			return sum
@@ -279,18 +289,18 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 		return sum.Value()
 	case WAvg:
 		cnt := 0
-		if spec.Int != nil {
-			var sum int64
+		if spec.Int != nil || spec.Wide != nil {
+			var sum ssql.Int128
 			for i := fs(); i <= fe(); i++ {
-				if v, ok := spec.Int(all[idx[i]]); ok {
-					sum = exprfn.Add(sum, v)
+				if v, ok := spec.wide(all[idx[i]]); ok {
+					sum = sum.Add(v)
 					cnt++
 				}
 			}
 			if cnt == 0 {
 				return float64(0)
 			}
-			return float64(sum) / float64(cnt)
+			return sum.Float64() / float64(cnt)
 		}
 		var sum ssql.CompensatedSum
 		for i := fs(); i <= fe(); i++ {

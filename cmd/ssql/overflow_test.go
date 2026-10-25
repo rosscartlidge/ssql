@@ -11,11 +11,11 @@ import (
 // TestIntOverflowEveryLane is DFC155 B's gate: an int64 `+`, `-` or `*`
 // that overflows stops every lane — exec, record and typed codegen, and
 // DuckDB — instead of wrapping (until v4.123.0 three lanes answered wrong
-// where DuckDB stopped). The equivalence harness cannot hold this case:
-// its lanes must succeed. The second half pins the sum: an integer
-// column sums exactly in int64 in every lane, past 2^53 where a float
-// accumulator rounds; the harness cannot hold that either, since it
-// parses every number as a float64.
+// where DuckDB stopped), and C's: an int128 operation that overflows
+// stops the same way, while an integer SUM never stops — it widens to an
+// int128, DuckDB's SUM(BIGINT) → HUGEINT. The equivalence harness cannot
+// hold the failures: its lanes must succeed. The second half pins the
+// sums: exact in every lane past 2^53 and past 2^63.
 func TestIntOverflowEveryLane(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs generated programs")
@@ -27,12 +27,12 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		"add":  bin + " from range 3 | " + bin + " update -set-expr big '9223372036854775807 + n'",
 		"sub":  bin + " from range 3 | " + bin + " update -set-expr big '-9223372036854775807 - n'",
 		"mul":  bin + " from range 3 | " + bin + " update -set-expr big 'n * 4611686018427387904'",
-		"sum":  bin + " from range 2 -start 9223372036854775806 | " + bin + " group-by -sum n t",
 		"fold": bin + " from range 94 | " + bin + " window -stream-expr '{a:0, b:1}' '{a:b, b:a+b}' 'b' fib",
-		// the batch after B (2026-10-22): unary minus, sum() in an aggregation expression, window sums
-		"neg":        bin + " from range 1 -start -9223372036854775808 | " + bin + " update -set-expr m '-n'",
-		"expr_sum":   bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t",
-		"window_sum": bin + " from range 2 -start 9223372036854775806 | " + bin + " window -sum n t",
+		// the batch after B (2026-10-22): unary minus
+		"neg": bin + " from range 1 -start -9223372036854775808 | " + bin + " update -set-expr m '-n'",
+		// C (2026-10-25): the int128 bound, and the int128 fold past fib(184)
+		"wide_mul":  bin + " from range 3 | " + bin + " cast -type n int128 | " + bin + " update -set-expr big 'n * int128(\"170141183460469231731687303715884105727\")'",
+		"wide_fold": bin + " from range 184 | " + bin + " window -stream-expr '{a:int128(0), b:int128(1)}' '{a:b, b:a+b}' 'b' fib",
 	}
 	for name, pipeline := range overflow {
 		t.Run("overflow_"+name, func(t *testing.T) {
@@ -52,11 +52,8 @@ func TestIntOverflowEveryLane(t *testing.T) {
 					t.Errorf("%s: want an integer overflow failure, got err=%v\n%s", mode, err, out)
 				}
 			}
-			// DuckDB: its own words for the same stop. No SQL form: -stream-expr,
-			// group-by -expr, and a window without -order. DuckDB sums BIGINT
-			// into HUGEINT, so it answers where ssql stops (DFC155 §C, the
-			// documented divergence): the sum cases stop here too.
-			if duckdb == "" || name == "fold" || name == "expr_sum" || name == "window_sum" || name == "sum" {
+			// DuckDB: its own words for the same stop. No SQL form: -stream-expr.
+			if duckdb == "" || name == "fold" || name == "wide_fold" {
 				return
 			}
 			sql, err := shell("export SSQL_MODE=record && " + pipeline + " | " + bin + " to jsonl | " + bin + " generate sql")
@@ -72,9 +69,13 @@ func TestIntOverflowEveryLane(t *testing.T) {
 	}
 
 	// An integer sum is exact past 2^53 in every lane, wherever a sum is
-	// made: group-by -sum, -expr sum(), window -sum running and sliding.
+	// made: group-by -sum, -expr sum(), window -sum running and sliding —
+	// and past 2^63 it widens to an int128 instead of stopping (DFC155 C).
 	for name, c := range map[string]struct{ pipeline, want string }{
-		"group_by_sum":       {bin + " from range 2 -start 9007199254740993 | " + bin + " group-by -sum n t", "18014398509481987"},
+		"group_by_sum":        {bin + " from range 2 -start 9007199254740993 | " + bin + " group-by -sum n t", "18014398509481987"},
+		"group_by_sum_widens": {bin + " from range 2 -start 9223372036854775806 | " + bin + " group-by -sum n t", "18446744073709551613"},
+		"expr_sum_widens":     {bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18446744073709551613"},
+		"window_sum_widens":   {bin + " from range 2 -start 9223372036854775806 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18446744073709551613"},
 		"expr_sum":           {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18014398509481987"},
 		"window_running_sum": {bin + " from range 2 -start 9007199254740993 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18014398509481987"},
 		"window_sliding_sum": {bin + " from range 3 -start 9007199254740993 | " + bin + " window -sum n t -preceding 1 | " + bin + " limit -last 1", "18014398509481989"},
@@ -103,7 +104,7 @@ func TestIntOverflowEveryLane(t *testing.T) {
 				}
 				check(mode, out)
 			}
-			if duckdb != "" && name == "group_by_sum" { // the window forms need -order for SQL; the -expr form has no translation
+			if duckdb != "" && strings.HasPrefix(name, "group_by_sum") { // the window forms need -order for SQL; the -expr form has no translation
 				sql, err := shell("export SSQL_MODE=record && " + c.pipeline + " | " + bin + " to jsonl | " + bin + " generate sql")
 				if err != nil {
 					t.Fatalf("generate sql: %v\n%s", err, sql)

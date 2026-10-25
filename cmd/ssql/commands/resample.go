@@ -296,7 +296,7 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 				fmt.Errorf("ssql generate go -typed: 'resample' references unknown field %q", v))
 		}
 		switch f.GoType {
-		case "int64", "float64", "int", "int32", "float32":
+		case "int64", "float64", "int", "int32", "float32", "ssql.Int128":
 		default:
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'resample' value field %q has type %s (need a numeric field)", v, f.GoType))
@@ -326,9 +326,12 @@ func generateResampleTyped(cfg ssql.ResampleConfig, fragments []*lib.CodeFragmen
 		fmt.Fprintf(&shimSets, ".Time(%q, r.%s)", cfg.TimeField, tsField.GoName)
 	}
 	for i, f := range valFields {
-		if f.GoType == "float64" {
+		switch f.GoType {
+		case "float64":
 			fmt.Fprintf(&shimSets, ".Float(%q, r.%s)", cfg.Values[i], f.GoName)
-		} else {
+		case "ssql.Int128":
+			fmt.Fprintf(&shimSets, ".Float(%q, r.%s.Float64())", cfg.Values[i], f.GoName)
+		default:
 			fmt.Fprintf(&shimSets, ".Float(%q, float64(r.%s))", cfg.Values[i], f.GoName)
 		}
 	}

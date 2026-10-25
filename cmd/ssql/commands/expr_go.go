@@ -41,6 +41,7 @@ const (
 	exprGoString exprGoType = "string"
 	exprGoBool   exprGoType = "bool"
 	exprGoTime   exprGoType = "time.Time"
+	exprGoInt128 exprGoType = "ssql.Int128" // the int128 column (DFC155 C): int64 beside it widens, a float beside it floats
 )
 
 // ssqlImport is the root package, for the calendar helpers transpiled
@@ -56,7 +57,19 @@ func zoneSrc(v exprGo) string {
 	return "ssql.StreamLocation()"
 }
 
-func (t exprGoType) numeric() bool { return t == exprGoInt || t == exprGoFloat }
+func (t exprGoType) numeric() bool { return t == exprGoInt || t == exprGoFloat || t == exprGoInt128 }
+
+// integer reports an integer type of either width.
+func (t exprGoType) integer() bool { return t == exprGoInt || t == exprGoInt128 }
+
+// asWide renders an integer operand as an ssql.Int128 (an int64 widened
+// through ssql.Int128From; the caller adds ssqlImport).
+func asWide(v exprGo) string {
+	if v.Type == exprGoInt128 {
+		return v.Src
+	}
+	return "ssql.Int128From(" + v.Src + ")"
+}
 
 // exprGo is one transpiled (sub)expression.
 type exprGo struct {
@@ -322,6 +335,8 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, int64(0))", e.recv, f.Name), Type: exprGoInt}, nil
 		case "float64":
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, float64(0))", e.recv, f.Name), Type: exprGoFloat}, nil
+		case "ssql.Int128":
+			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, ssql.Int128{})", e.recv, f.Name), Type: exprGoInt128}, nil
 		case "string":
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, \"\")", e.recv, f.Name), Type: exprGoString}, nil
 		case "bool":
@@ -348,6 +363,8 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 	switch f.GoType {
 	case "int64":
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoInt}, nil
+	case "ssql.Int128":
+		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoInt128}, nil
 	case "float64":
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoFloat}, nil
 	case "string":
@@ -375,6 +392,9 @@ func mergeMeta(parent exprGo, children ...exprGo) exprGo {
 func asFloat(v exprGo) string {
 	if v.Type == exprGoFloat || v.lit {
 		return v.Src
+	}
+	if v.Type == exprGoInt128 {
+		return v.Src + ".Float64()"
 	}
 	return "float64(" + v.Src + ")"
 }
@@ -453,6 +473,9 @@ func (e *exprGoEnv) unary(n *ast.UnaryNode) (exprGo, error) {
 func (e *exprGoEnv) negate(operand exprGo) (exprGo, error) {
 	if !operand.Type.numeric() {
 		return exprGo{}, fmt.Errorf("unary minus needs a numeric operand, got %s", operand.Type)
+	}
+	if operand.Type == exprGoInt128 {
+		return mergeMeta(exprGo{Src: operand.Src + ".Neg()", Type: exprGoInt128}, operand), nil
 	}
 	if operand.Type == exprGoInt && !operand.lit {
 		res := exprGo{Src: "exprfn.Neg(" + operand.Src + ")", Type: exprGoInt, Imports: []string{exprfnImport}}
@@ -554,13 +577,21 @@ func (e *exprGoEnv) binaryOperator(op string, left, right exprGo) (exprGo, error
 			return exprGo{}, fmt.Errorf("operator / needs numeric operands, got %s and %s", left.Type, right.Type)
 		}
 		ls, rs := asFloat(left), asFloat(right)
-		if left.Type != exprGoFloat && right.Type != exprGoFloat {
+		if left.Type == exprGoInt && right.Type == exprGoInt {
 			// Both int: at least one side must be a typed float64 expression
-			// or the emission is Go integer division again.
+			// or the emission is Go integer division again (an int128 side
+			// is already a .Float64() call).
 			ls = "float64(" + left.Src + ")"
 		}
 		return mergeMeta(exprGo{Src: "(" + ls + " / " + rs + ")", Type: exprGoFloat}, left, right), nil
 	case "%":
+		if left.Type == exprGoInt128 || right.Type == exprGoInt128 {
+			if !left.Type.integer() || !right.Type.integer() {
+				return exprGo{}, fmt.Errorf("operator %% needs integer operands, got %s and %s", left.Type, right.Type)
+			}
+			res := exprGo{Src: asWide(left) + ".Rem(" + asWide(right) + ")", Type: exprGoInt128, Imports: []string{ssqlImport}}
+			return mergeMeta(res, left, right), nil
+		}
 		if left.Type != exprGoInt || right.Type != exprGoInt {
 			return exprGo{}, fmt.Errorf("operator %% needs integer operands, got %s and %s", left.Type, right.Type)
 		}
@@ -601,6 +632,13 @@ func (e *exprGoEnv) arith(op string, left, right exprGo) (exprGo, error) {
 		res := exprGo{Src: "(" + asFloat(left) + " " + op + " " + asFloat(right) + ")", Type: exprGoFloat}
 		return mergeMeta(res, left, right), nil
 	}
+	if left.Type == exprGoInt128 || right.Type == exprGoInt128 {
+		// An int128 beside an integer: the checked Int128 method, the
+		// int64 side widened (DFC155 C).
+		m := map[string]string{"+": "Add", "-": "Sub", "*": "Mul"}[op]
+		res := exprGo{Src: asWide(left) + "." + m + "(" + asWide(right) + ")", Type: exprGoInt128, Imports: []string{ssqlImport}}
+		return mergeMeta(res, left, right), nil
+	}
 	// Both int: the checked form, so an overflow stops the program as it
 	// stops the VM and every SQL engine (DFC155 B) instead of wrapping.
 	fn := map[string]string{"+": "exprfn.Add", "-": "exprfn.Sub", "*": "exprfn.Mul"}[op]
@@ -621,6 +659,12 @@ func (e *exprGoEnv) compare(op string, left, right exprGo, equality bool) (exprG
 func exprCompare(op string, left, right exprGo, equality bool) (exprGo, error) {
 	switch {
 	case left.Type.numeric() && right.Type.numeric():
+		if (left.Type == exprGoInt128 || right.Type == exprGoInt128) && left.Type.integer() && right.Type.integer() {
+			// Integers of either width compare exactly through Cmp (a
+			// float64 detour rounds past 2^53; DFC155 C).
+			res := exprGo{Src: "(" + asWide(left) + ".Cmp(" + asWide(right) + ") " + op + " 0)", Type: exprGoBool, Imports: []string{ssqlImport}}
+			return mergeMeta(res, left, right), nil
+		}
 		if left.Type != right.Type {
 			left.Src = asFloat(left)
 			right.Src = asFloat(right)
@@ -844,6 +888,9 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if !arg.Type.numeric() {
 			return exprGo{}, fmt.Errorf("abs() needs a numeric argument, got %s", arg.Type)
 		}
+		if arg.Type == exprGoInt128 {
+			return mergeMeta(exprGo{Src: arg.Src + ".Abs()", Type: exprGoInt128}, arg), nil
+		}
 		res := exprGo{Src: "exprfn.Abs(" + arg.Src + ")", Type: arg.Type, Imports: []string{exprfnImport}}
 		return mergeMeta(res, arg), nil
 	case "round", "floor", "ceil":
@@ -1023,6 +1070,13 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if !a.Type.numeric() || !b.Type.numeric() {
 			return exprGo{}, fmt.Errorf("%s() needs numeric arguments, got %s and %s", name, a.Type, b.Type)
 		}
+		if a.Type == exprGoInt128 || b.Type == exprGoInt128 {
+			if !a.Type.integer() || !b.Type.integer() {
+				return exprGo{}, fmt.Errorf("%s() with mixed int128/float arguments keeps the winner's type — no native Go emission", name)
+			}
+			fn := map[string]string{"min": "ssql.Int128Min", "max": "ssql.Int128Max"}[name]
+			return mergeMeta(exprGo{Src: fn + "(" + asWide(a) + ", " + asWide(b) + ")", Type: exprGoInt128, Imports: []string{ssqlImport}}, a, b), nil
+		}
 		if a.Type != b.Type {
 			// The VM returns the WINNING operand with its own type (probed:
 			// min(-3, -2.5) is int64 -3, not -3.0 — the differential harness
@@ -1031,6 +1085,34 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 			return exprGo{}, fmt.Errorf("%s() with mixed int/float arguments keeps the winner's type — no native Go emission", name)
 		}
 		return mergeMeta(exprGo{Src: name + "(" + a.Src + ", " + b.Src + ")", Type: a.Type}, a, b), nil
+	case "int128":
+		// The widening conversion (DFC155 C): an int64 through Int128From, a
+		// digit-string literal hoisted and parsed once, anything else at
+		// run time through ssql.MustInt128 (a *CastError, never a wrap).
+		if len(args) != 1 {
+			return exprGo{}, fmt.Errorf("int128() takes one argument")
+		}
+		if lit, ok := args[0].(*ast.StringNode); ok {
+			if _, err := ssql.ParseInt128(lit.Value); err != nil {
+				return exprGo{}, fmt.Errorf("int128(%q): not an integer that fits an int128", lit.Value)
+			}
+			varName := "exprI128" + exprGoHash(lit.Value)
+			decl := fmt.Sprintf("var %s = ssql.MustParseInt128(%q)", varName, lit.Value)
+			return exprGo{Src: varName, Type: exprGoInt128, Imports: []string{ssqlImport}, Hoisted: []string{decl}}, nil
+		}
+		arg, err := one()
+		if err != nil {
+			return exprGo{}, err
+		}
+		switch arg.Type {
+		case exprGoInt128:
+			return arg, nil
+		case exprGoInt:
+			return mergeMeta(exprGo{Src: "ssql.Int128From(" + arg.Src + ")", Type: exprGoInt128, Imports: []string{ssqlImport}}, arg), nil
+		case exprGoFloat, exprGoString:
+			return mergeMeta(exprGo{Src: "ssql.MustInt128(" + arg.Src + ")", Type: exprGoInt128, Imports: []string{ssqlImport}}, arg), nil
+		}
+		return exprGo{}, fmt.Errorf("int128() of a %s has no native Go emission", arg.Type)
 	case "int":
 		arg, err := one()
 		if err != nil {
@@ -1042,6 +1124,9 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		case exprGoFloat:
 			// expr-lang int() truncates toward zero — Go conversion matches.
 			return mergeMeta(exprGo{Src: "int64(" + arg.Src + ")", Type: exprGoInt}, arg), nil
+		case exprGoInt128:
+			// Narrowing never wraps: a value past int64 is a *CastError.
+			return mergeMeta(exprGo{Src: "ssql.MustInt64(" + arg.Src + ")", Type: exprGoInt, Imports: []string{ssqlImport}}, arg), nil
 		}
 		return exprGo{}, fmt.Errorf("int() of a %s has no native Go emission", arg.Type)
 	case "float":
@@ -1054,6 +1139,8 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 			return arg, nil
 		case exprGoInt:
 			return mergeMeta(exprGo{Src: "float64(" + arg.Src + ")", Type: exprGoFloat}, arg), nil
+		case exprGoInt128:
+			return mergeMeta(exprGo{Src: arg.Src + ".Float64()", Type: exprGoFloat}, arg), nil
 		}
 		return exprGo{}, fmt.Errorf("float() of a %s has no native Go emission", arg.Type)
 	case "string":
@@ -1067,6 +1154,8 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		case exprGoInt:
 			res := exprGo{Src: "strconv.FormatInt(" + arg.Src + ", 10)", Type: exprGoString, Imports: []string{"strconv"}}
 			return mergeMeta(res, arg), nil
+		case exprGoInt128:
+			return mergeMeta(exprGo{Src: arg.Src + ".String()", Type: exprGoString}, arg), nil
 		case exprGoFloat:
 			res := exprGo{Src: "strconv.FormatFloat(" + arg.Src + ", 'g', -1, 64)", Type: exprGoString, Imports: []string{"strconv"}}
 			return mergeMeta(res, arg), nil
@@ -1418,6 +1507,8 @@ func exprCoerceFunc(f lib.TypedSchemaField) (string, bool) {
 	switch f.GoType {
 	case "int64":
 		return "exprvm.MustCoerceInt64", true
+	case "ssql.Int128":
+		return "exprvm.MustCoerceInt128", true
 	case "float64":
 		return "exprvm.MustCoerceFloat64", true
 	case "string":

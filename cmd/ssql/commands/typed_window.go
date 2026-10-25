@@ -233,16 +233,29 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 	base := strings.TrimPrefix(f.GoType, "*")
 	num := ""
 	isInt := base == "int64"
+	isWide := base == "ssql.Int128"
 	if isNumericGoType(base) {
+		toF := func(src string) string { // the float reader's conversion
+			if isWide {
+				return src + ".Float64()"
+			}
+			return "float64(" + src + ")"
+		}
 		if strings.HasPrefix(f.GoType, "*") {
-			num = fmt.Sprintf("Num: func(r %s) (float64, bool) { if r.%s == nil { return 0, false }; return float64(*r.%s), true }", rowType, f.GoName, f.GoName)
-			if isInt { // the exact reader beside the float one (DFC155 B)
+			num = fmt.Sprintf("Num: func(r %s) (float64, bool) { if r.%s == nil { return 0, false }; return %s, true }", rowType, f.GoName, toF("*r."+f.GoName))
+			if isInt { // the exact reader beside the float one (DFC155 B, C)
 				num += fmt.Sprintf(", Int: func(r %s) (int64, bool) { if r.%s == nil { return 0, false }; return *r.%s, true }", rowType, f.GoName, f.GoName)
 			}
+			if isWide {
+				num += fmt.Sprintf(", Wide: func(r %s) (ssql.Int128, bool) { if r.%s == nil { return ssql.Int128{}, false }; return *r.%s, true }", rowType, f.GoName, f.GoName)
+			}
 		} else {
-			num = fmt.Sprintf("Num: func(r %s) (float64, bool) { return float64(r.%s), true }", rowType, f.GoName)
+			num = fmt.Sprintf("Num: func(r %s) (float64, bool) { return %s, true }", rowType, toF("r."+f.GoName))
 			if isInt {
 				num += fmt.Sprintf(", Int: func(r %s) (int64, bool) { return r.%s, true }", rowType, f.GoName)
+			}
+			if isWide {
+				num += fmt.Sprintf(", Wide: func(r %s) (ssql.Int128, bool) { return r.%s, true }", rowType, f.GoName)
 			}
 		}
 	}
@@ -261,8 +274,8 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 			return "", "", "", "", fmt.Sprintf("window: %s over non-numeric field %q stays on the record path", d.Kind, f.Name)
 		}
 		k := map[string]string{"sum": "WSum", "avg": "WAvg"}[d.Kind]
-		if d.Kind == "sum" && isInt { // an integer column sums to an int64, exactly (DFC155 B)
-			return d.Kind, "int64", fmt.Sprintf("if v, ok := %s.(int64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WSum, %s}", num), ""
+		if d.Kind == "sum" && (isInt || isWide) { // an integer column sums to an int128, exactly (DFC155 C)
+			return d.Kind, "ssql.Int128", fmt.Sprintf("if v, ok := %s.(ssql.Int128); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WSum, %s}", num), ""
 		}
 		return d.Kind, "float64", fmt.Sprintf("if v, ok := %s.(float64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.%s, %s}", k, num), ""
 	case "count_field":
@@ -329,6 +342,8 @@ func goLiteralType(v any) string {
 	switch v.(type) {
 	case int64:
 		return "int64"
+	case ssql.Int128:
+		return "ssql.Int128"
 	case float64:
 		return "float64"
 	case bool:
@@ -346,6 +361,8 @@ func goLiteralOf(v any) string {
 		return fmt.Sprintf("%q", x)
 	case int64:
 		return fmt.Sprintf("int64(%d)", x)
+	case ssql.Int128:
+		return fmt.Sprintf("ssql.MustParseInt128(%q)", x.String())
 	case float64:
 		return fmt.Sprintf("float64(%v)", x)
 	case bool:

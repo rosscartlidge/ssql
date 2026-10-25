@@ -568,6 +568,8 @@ func typedWhereCondition(f lib.TypedSchemaField, op, value string) (exprGo, erro
 	switch f.GoType {
 	case "int64", "int", "int32", "uint64":
 		lhs = exprGo{Src: field, Type: exprGoInt, field: f.Name}
+	case "ssql.Int128":
+		lhs = exprGo{Src: field, Type: exprGoInt128, field: f.Name}
 	case "float64", "float32":
 		lhs = exprGo{Src: field, Type: exprGoFloat, field: f.Name}
 	case "string":
@@ -617,6 +619,11 @@ func typedLiteral(goType, value string) (string, error) {
 			return "", fmt.Errorf("invalid int literal %q", value)
 		}
 		return value, nil
+	case "ssql.Int128":
+		if _, err := ssql.ParseInt128(value); err != nil {
+			return "", fmt.Errorf("invalid int128 literal %q", value)
+		}
+		return fmt.Sprintf("ssql.MustParseInt128(%q)", value), nil
 	case "float32", "float64":
 		if _, err := strconv.ParseFloat(value, 64); err != nil {
 			return "", fmt.Errorf("invalid float literal %q", value)
@@ -876,6 +883,8 @@ func recordCondLHS(recv, field, op, value, goType string) exprGo {
 	switch goType {
 	case "int64", "float64":
 		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, float64(0))", recv, field), Type: exprGoFloat, field: field}
+	case "ssql.Int128":
+		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, ssql.Int128{})", recv, field), Type: exprGoInt128, field: field}
 	case "bool":
 		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, false)", recv, field), Type: exprGoBool, field: field}
 	}

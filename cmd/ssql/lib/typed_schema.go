@@ -66,6 +66,8 @@ func (o TypeOptions) goTypeFor(column string) (string, bool) {
 		return "string", true
 	case "int":
 		return "int64", true
+	case "int128":
+		return "ssql.Int128", true
 	case "float":
 		return "float64", true
 	case "bool":
@@ -343,6 +345,7 @@ func goNameFromColumn(col string) string {
 type colInfer struct {
 	any     bool // saw any non-empty value
 	allInt  bool
+	allI128 bool // every value an integer literal that fits int128 (DFC155 C)
 	allFlt  bool
 	allBool bool
 	// No time inference: an RFC 3339 column stays a string unless -type,
@@ -353,7 +356,7 @@ type colInfer struct {
 }
 
 func newColInfer() colInfer {
-	return colInfer{allInt: true, allFlt: true, allBool: true}
+	return colInfer{allInt: true, allI128: true, allFlt: true, allBool: true}
 }
 
 func (c *colInfer) observe(v string) {
@@ -362,11 +365,16 @@ func (c *colInfer) observe(v string) {
 	}
 	c.any = true
 	if ssql.ZeroPaddedNumber(v) {
-		c.allInt, c.allFlt = false, false // 007 is an identifier, not 7 (DFC133)
+		c.allInt, c.allI128, c.allFlt = false, false, false // 007 is an identifier, not 7 (DFC133)
 	}
 	if c.allInt {
 		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
 			c.allInt = false
+		}
+	}
+	if c.allI128 && !c.allInt {
+		if _, err := ssql.ParseInt128(v); err != nil {
+			c.allI128 = false
 		}
 	}
 	if c.allFlt {
@@ -387,6 +395,8 @@ func (c *colInfer) resolve() string {
 		return "*string" // nullable-by-default for all-empty columns
 	case c.allInt:
 		return "int64"
+	case c.allI128:
+		return "ssql.Int128" // a literal past int64 types the column int128, as exec does
 	case c.allFlt:
 		return "float64"
 	case c.allBool:
@@ -419,6 +429,8 @@ func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, er
 		switch s.Types[name] {
 		case "int":
 			goType = "int64"
+		case "int128":
+			goType = "ssql.Int128" // DFC155 C: a comparable two-word struct field
 		case "float":
 			goType = "float64"
 		case "bool":

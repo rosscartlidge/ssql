@@ -311,7 +311,7 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 			common = "MIXED"
 		}
 		switch f.GoType {
-		case "int64", "float64", "int", "int32", "float32":
+		case "int64", "float64", "int", "int32", "float32", "ssql.Int128":
 		default:
 			allNumeric = false
 		}
@@ -357,7 +357,11 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 	for i, f := range valFields {
 		val := "r." + f.GoName
 		if valType == "float64" && f.GoType != "float64" {
-			val = "float64(" + val + ")"
+			if f.GoType == "ssql.Int128" {
+				val += ".Float64()"
+			} else {
+				val = "float64(" + val + ")"
+			}
 		}
 		fmt.Fprintf(&body, "\t\t\tif !yield(%s{%s%s: %q, %s: %s}) {\n\t\t\t\treturn\n\t\t\t}\n", typeName, idCopy.String(), nameGo, values[i], valueGo, val)
 	}

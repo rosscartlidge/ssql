@@ -156,6 +156,8 @@ func auxTypeString(v any) string {
 	switch v.(type) {
 	case int64, int:
 		return "int"
+	case ssql.Int128:
+		return "int128"
 	case float64:
 		return "float"
 	case bool:

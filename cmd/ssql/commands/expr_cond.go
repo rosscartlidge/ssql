@@ -87,15 +87,16 @@ func condOpToExprGo(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 // type — so must we).
 func condRHS(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 	switch lhs.Type {
-	case exprGoInt, exprGoFloat:
+	case exprGoInt, exprGoFloat, exprGoInt128:
 		// The literal is validated HERE whether or not it lifts to a
 		// runtime flag (the lifted form once emitted ParseFloat64(*flag),
 		// which read "abc" as 0 and filtered `age > 0`); the flag's
 		// runtime value is guarded by MustNumber, which panics with the
 		// same *CompareError exec reports.
 		_, intErr := strconv.ParseInt(value, 10, 64)
+		_, wideErr := ssql.ParseInt128(value)
 		_, floatErr := strconv.ParseFloat(value, 64)
-		if intErr != nil && floatErr != nil {
+		if intErr != nil && wideErr != nil && floatErr != nil {
 			return exprGo{}, &ssql.CompareError{Field: lhs.field, Op: op, Value: value, Kind: "float"}
 		}
 		if rhsParam != "" {
@@ -103,6 +104,12 @@ func condRHS(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 		}
 		if intErr == nil {
 			return exprGo{Src: value, Type: exprGoInt, lit: true}, nil
+		}
+		if wideErr == nil {
+			// A literal past int64: an int128, parsed once (DFC155 C).
+			varName := "exprI128" + exprGoHash(value)
+			decl := fmt.Sprintf("var %s = ssql.MustParseInt128(%q)", varName, value)
+			return exprGo{Src: varName, Type: exprGoInt128, Imports: []string{ssqlImport}, Hoisted: []string{decl}}, nil
 		}
 		return exprGo{Src: value, Type: exprGoFloat, lit: true}, nil
 	case exprGoString:

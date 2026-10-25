@@ -240,6 +240,7 @@ func Int128FromFloat(f float64) (Int128, bool)     // a whole float64 that fits
 func ParseInt128(s string) (Int128, error)         // decimal with optional sign; *strconv.NumError (ErrSyntax/ErrRange)
 func MustParseInt128(s string) Int128              // for a validated literal (generated code); panics otherwise
 func MustInt64(x Int128) int64                     // narrows one known to fit; a *CastError otherwise, never a wrap
+func MustInt128(v any) Int128                      // widens an integer, a whole float64 or a digit string; a *CastError otherwise (typed int128(x))
 func Int128Min(a, b Int128) Int128
 func Int128Max(a, b Int128) Int128
 

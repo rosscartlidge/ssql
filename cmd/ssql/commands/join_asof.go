@@ -224,6 +224,8 @@ func emitTypedAsofJoin(inputVar, funcName string, leftSchema, rightSchema *lib.T
 			switch f.GoType {
 			case "int64":
 				return lib.TypeInt
+			case "ssql.Int128":
+				return lib.TypeInt128
 			case "float64":
 				return lib.TypeFloat
 			case "time.Time":
@@ -261,6 +263,8 @@ func emitTypedAsofJoin(inputVar, funcName string, leftSchema, rightSchema *lib.T
 			return v + "." + f.GoName + ".UnixNano()", "int64"
 		case "int64":
 			return v + "." + f.GoName, "int64"
+		case "ssql.Int128":
+			return v + "." + f.GoName + ".Float64()", "float64" // the axis is a float64, as exec's is
 		default:
 			return v + "." + f.GoName, "float64"
 		}

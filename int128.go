@@ -92,6 +92,17 @@ func MustInt64(x Int128) int64 {
 	return v
 }
 
+// MustInt128 widens a value for typed generated code (the transpiled
+// int128(x)): an integer of either width, a whole float64 that fits, a
+// digit string; anything else panics with a *CastError, never a wrap.
+func MustInt128(v any) Int128 {
+	w, ok := convertToInt128(v)
+	if !ok {
+		panic(&CastError{Value: v, Target: FieldTypeInt128})
+	}
+	return w
+}
+
 // Int128Min and Int128Max are the ordered extremes (min()/max()).
 func Int128Min(a, b Int128) Int128 {
 	if b.Cmp(a) < 0 {

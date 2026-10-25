@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	cf "github.com/rosscartlidge/autocli/v4"
+	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
@@ -456,6 +457,15 @@ func assignExprTo(goType string, e exprGo) (string, bool) {
 	if goType == "float64" && e.Type == exprGoInt {
 		return asFloat(e), true
 	}
+	// An int128 column takes an integer result widened; a float column
+	// takes an int128 result as its nearest float64 (DFC155 C). An int128
+	// into an int64 column is a retype, like a float: record mode.
+	if goType == "ssql.Int128" && e.Type == exprGoInt {
+		return "ssql.Int128From(" + e.Src + ")", true
+	}
+	if goType == "float64" && e.Type == exprGoInt128 {
+		return e.Src + ".Float64()", true
+	}
 	return "", false
 }
 
@@ -503,6 +513,12 @@ func inferLiteralGoType(value string) string {
 		return "bool"
 	}
 	if isAllDigits(value) || (len(value) > 1 && value[0] == '-' && isAllDigits(value[1:])) {
+		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+			if _, werr := ssql.ParseInt128(value); werr == nil {
+				return "ssql.Int128" // a literal past int64 (DFC155 C)
+			}
+			return "float64"
+		}
 		return "int64"
 	}
 	if _, err := parseFloatLoose(value); err == nil {

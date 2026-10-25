@@ -24,7 +24,7 @@ func TestLowerExprAgg(t *testing.T) {
 		if !plan.UsesCount {
 			t.Errorf("count() not detected")
 		}
-		if plan.Result != "(float64(a.ea0_t0) / float64(a.ea0_cnt))" || plan.ResultType != exprGoFloat {
+		if plan.Result != "(a.ea0_t0.Float64() / float64(a.ea0_cnt))" || plan.ResultType != exprGoFloat { // the accumulator is an Int128 (DFC155 C)
 			t.Errorf("result: %s", plan.Result)
 		}
 	})
@@ -47,22 +47,22 @@ func TestLowerExprAgg(t *testing.T) {
 		if len(plan.Terms) != 1 {
 			t.Errorf("identical sum terms must share one accumulator: %+v", plan.Terms)
 		}
-		if plan.Result != "exprfn.Add(a.ea0_t0, a.ea0_t0)" || plan.ResultType != exprGoInt {
+		if plan.Result != "a.ea0_t0.Add(a.ea0_t0)" || plan.ResultType != exprGoInt128 {
 			t.Errorf("result: %s", plan.Result)
 		}
 	})
 
-	t.Run("int accumulator keeps int semantics", func(t *testing.T) {
-		// sum of ints is an int in the VM; `% 5` must stay integer modulo,
-		// which a blanket float64 accumulator would refuse.
+	t.Run("int accumulator keeps integer semantics", func(t *testing.T) {
+		// sum of ints is an int128 (DFC155 C); `% 5` must stay integer
+		// modulo, which a blanket float64 accumulator would refuse.
 		plan, err := lowerExprAgg(exprSpec{expression: "sum(pop) % 5", result: "m"}, schema, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if plan.Terms[0].Type != exprGoInt {
-			t.Errorf("int sum must accumulate int64: %+v", plan.Terms[0])
+			t.Errorf("the element stays int64: %+v", plan.Terms[0])
 		}
-		if plan.Result != "(a.ea0_t0 % 5)" || plan.ResultType != exprGoInt {
+		if plan.Result != "a.ea0_t0.Rem(ssql.Int128From(5))" || plan.ResultType != exprGoInt128 {
 			t.Errorf("result: %s", plan.Result)
 		}
 	})

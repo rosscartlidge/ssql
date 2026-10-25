@@ -81,7 +81,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 		// -invalid missing the typed lane's "missing" is the zero value
 		// (DFC124 §3), which the lenient closures below already produce.
 		if f.GoType == "string" && !invalidMissing {
-			if target, ok := map[string]string{"int64": "ssql.FieldTypeInt", "float64": "ssql.FieldTypeFloat", "bool": "ssql.FieldTypeBool"}[cf.newGoT]; ok {
+			if target, ok := map[string]string{"int64": "ssql.FieldTypeInt", "float64": "ssql.FieldTypeFloat", "bool": "ssql.FieldTypeBool", "ssql.Int128": "ssql.FieldTypeInt128"}[cf.newGoT]; ok {
 				timeImports = append(timeImports, "github.com/rosscartlidge/ssql/v4")
 				assigns = append(assigns, fmt.Sprintf("%s: ssql.MustCast[%s](r.%s, %s, %q)", out.GoName, cf.newGoT, f.GoName, target, f.Name))
 				continue
@@ -106,6 +106,9 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
 	if usedStrconv {
 		imports = append(imports, "strconv")
+	}
+	if strings.Contains(strings.Join(assigns, ""), "ssql.") || schemaUsesInt128(derived) {
+		timeImports = append(timeImports, "github.com/rosscartlidge/ssql/v4") // Int128 conversions and the derived struct's ssql.Int128 fields
 	}
 	if schemaUsesTime(derived) {
 		timeImports = append(timeImports, "time") // the derived struct names time.Time
@@ -149,9 +152,22 @@ func castTargetGoType(t ssql.FieldType) (string, error) {
 		return "bool", nil
 	case ssql.FieldTypeTime:
 		return "time.Time", nil
+	case ssql.FieldTypeInt128:
+		return "ssql.Int128", nil
 	default:
 		return "", fmt.Errorf("typed cast does not support FieldType %v", t)
 	}
+}
+
+// schemaUsesInt128 reports whether any field of the schema is an
+// ssql.Int128, which makes the generated file import the root package.
+func schemaUsesInt128(s *lib.TypedSchema) bool {
+	for _, f := range s.Fields {
+		if strings.TrimPrefix(f.GoType, "*") == "ssql.Int128" {
+			return true
+		}
+	}
+	return false
 }
 
 // castExpression produces the Go expression that converts `expr`
@@ -166,10 +182,30 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		return expr, false, nil
 	}
 	switch to {
+	case "ssql.Int128":
+		// The widening cast (DFC155 C): an integer through Int128From, a
+		// float or a string through MustInt128 (a *CastError, never a wrap;
+		// under -invalid missing the lenient closure gives the zero value).
+		switch from {
+		case "int64":
+			return fmt.Sprintf("ssql.Int128From(%s)", expr), false, nil
+		case "int", "int32":
+			return fmt.Sprintf("ssql.Int128From(int64(%s))", expr), false, nil
+		case "uint64":
+			return fmt.Sprintf("ssql.Int128FromWords(0, %s)", expr), false, nil
+		case "float64", "float32":
+			return fmt.Sprintf("ssql.MustInt128(float64(%s))", expr), false, nil
+		case "bool":
+			return fmt.Sprintf("func() ssql.Int128 { if %s { return ssql.Int128From(1) }; return ssql.Int128{} }()", expr), false, nil
+		case "string":
+			return fmt.Sprintf("func() ssql.Int128 { v, _ := ssql.ParseInt128(%s); return v }()", expr), false, nil
+		}
 	case "string":
 		switch from {
 		case "int64":
 			return fmt.Sprintf("strconv.FormatInt(%s, 10)", expr), true, nil
+		case "ssql.Int128":
+			return fmt.Sprintf("%s.String()", expr), false, nil
 		case "int", "int32":
 			return fmt.Sprintf("strconv.FormatInt(int64(%s), 10)", expr), true, nil
 		case "uint64":
@@ -183,6 +219,8 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		}
 	case "int64":
 		switch from {
+		case "ssql.Int128":
+			return fmt.Sprintf("ssql.MustInt64(%s)", expr), false, nil // narrowing never wraps
 		case "string":
 			return fmt.Sprintf("func() int64 { v, _ := strconv.ParseInt(%s, 10, 64); return v }()", expr), true, nil
 		case "int", "int32":
@@ -196,6 +234,8 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		}
 	case "float64":
 		switch from {
+		case "ssql.Int128":
+			return fmt.Sprintf("%s.Float64()", expr), false, nil
 		case "string":
 			return fmt.Sprintf("func() float64 { v, _ := strconv.ParseFloat(%s, 64); return v }()", expr), true, nil
 		case "int", "int32", "int64", "uint64":
@@ -207,6 +247,8 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		}
 	case "bool":
 		switch from {
+		case "ssql.Int128":
+			return fmt.Sprintf("!%s.IsZero()", expr), false, nil
 		case "string":
 			return fmt.Sprintf("func() bool { v, _ := strconv.ParseBool(%s); return v }()", expr), true, nil
 		case "int", "int32", "int64", "uint64":

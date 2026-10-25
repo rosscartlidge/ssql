@@ -86,6 +86,8 @@ func renderRecordConverter(schema *lib.TypedSchema) string {
 		switch f.GoType {
 		case "int64":
 			def = "int64(0)"
+		case "ssql.Int128":
+			def = "ssql.Int128{}"
 		case "float64":
 			def = "float64(0)"
 		case "bool":

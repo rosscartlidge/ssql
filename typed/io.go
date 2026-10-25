@@ -19,6 +19,9 @@ import (
 // timeType is cached so decoderFor doesn't allocate a reflect.Type per call.
 var timeType = reflect.TypeOf(time.Time{})
 
+// int128Type is the `int128` column's struct field type (DFC155 C).
+var int128Type = reflect.TypeOf(ssql.Int128{})
+
 // fieldDecoder writes one CSV column into a struct field at a known offset.
 // The closure has zero reflection at call time.
 type fieldDecoder func(p unsafe.Pointer, s string) error
@@ -216,6 +219,19 @@ func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	if t == timeType {
 		return decodeTime(off), nil
 	}
+	if t == int128Type {
+		return func(p unsafe.Pointer, s string) error {
+			if s == "" {
+				return errEmptyCell
+			}
+			v, err := ssql.ParseInt128(s)
+			if err != nil {
+				return err
+			}
+			*(*ssql.Int128)(unsafe.Add(p, off)) = v
+			return nil
+		}, nil
+	}
 	if t.Kind() == reflect.Pointer {
 		return decoderForPointer(t, off)
 	}
@@ -412,6 +428,11 @@ func decoderForPointer(t reflect.Type, off uintptr) (fieldDecoder, error) {
 }
 
 func encoderFor(t reflect.Type, off uintptr, timeFormat string) (fieldEncoder, error) {
+	if t == int128Type {
+		return func(p unsafe.Pointer) string {
+			return (*(*ssql.Int128)(unsafe.Add(p, off))).String()
+		}, nil
+	}
 	if t == timeType {
 		return func(p unsafe.Pointer) string {
 			t := *(*time.Time)(unsafe.Add(p, off))

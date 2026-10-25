@@ -195,6 +195,8 @@ func typedOperand(f lib.TypedSchemaField) (exprGo, bool) {
 	switch f.GoType {
 	case "int64", "int", "int32", "uint64":
 		return exprGo{Src: "r." + f.GoName, Type: exprGoInt}, true
+	case "ssql.Int128":
+		return exprGo{Src: "r." + f.GoName, Type: exprGoInt128}, true
 	case "float64", "float32":
 		return exprGo{Src: "r." + f.GoName, Type: exprGoFloat}, true
 	case "string":

@@ -810,6 +810,8 @@ func advisoryToSchemaType(goType string) string {
 	switch goType {
 	case "int64":
 		return lib.TypeInt
+	case "ssql.Int128":
+		return lib.TypeInt128
 	case "float64":
 		return lib.TypeFloat
 	case "time.Time":
@@ -902,13 +904,33 @@ func emitTypedJoin(
 	keyType := leftKeyField.GoType
 	leftKeyExpr, rightKeyExpr := "l."+leftKeyField.GoName, "r."+rightKeyField.GoName
 	if leftKeyField.GoType != rightKeyField.GoType {
-		numeric := func(t string) bool { return t == "int64" || t == "float64" }
+		numeric := func(t string) bool { return t == "int64" || t == "float64" || t == "ssql.Int128" }
 		if !numeric(leftKeyField.GoType) || !numeric(rightKeyField.GoType) {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: join key types differ (left %s: %s, right %s: %s)", leftKeyField.Name, leftKeyField.GoType, rightKeyField.Name, rightKeyField.GoType))
 		}
-		keyType = "float64"
-		leftKeyExpr, rightKeyExpr = "float64("+leftKeyExpr+")", "float64("+rightKeyExpr+")"
+		if leftKeyField.GoType == "float64" || rightKeyField.GoType == "float64" {
+			keyType = "float64"
+			toFloat := func(t, src string) string {
+				switch t {
+				case "float64":
+					return src
+				case "ssql.Int128":
+					return src + ".Float64()"
+				}
+				return "float64(" + src + ")"
+			}
+			leftKeyExpr, rightKeyExpr = toFloat(leftKeyField.GoType, leftKeyExpr), toFloat(rightKeyField.GoType, rightKeyExpr)
+		} else {
+			// int64 beside int128: the key is an Int128, exactly (DFC155 C).
+			keyType = "ssql.Int128"
+			if leftKeyField.GoType == "int64" {
+				leftKeyExpr = "ssql.Int128From(" + leftKeyExpr + ")"
+			}
+			if rightKeyField.GoType == "int64" {
+				rightKeyExpr = "ssql.Int128From(" + rightKeyExpr + ")"
+			}
+		}
 	}
 
 	// Build merge function body.
@@ -953,6 +975,9 @@ func emitTypedJoin(
 	parallelCode := makeJoinCode("typed.HashJoinMultiParallel")
 	serialCode := makeJoinCode("typed.HashJoinMulti")
 	imports := []string{"github.com/rosscartlidge/ssql/v4/typed"}
+	if keyType == "ssql.Int128" {
+		imports = append(imports, "github.com/rosscartlidge/ssql/v4")
+	}
 
 	stmtFrag := lib.NewStmtFragment("joined", inputVar, parallelCode, imports, getCommandString())
 	stmtFrag.InputTypedSchema = leftSchema

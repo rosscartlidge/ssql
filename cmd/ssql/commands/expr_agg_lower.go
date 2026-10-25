@@ -93,7 +93,11 @@ func lowerExprAgg(spec exprSpec, schema *lib.TypedSchema, idx int) (exprAggPlan,
 					name = fmt.Sprintf("__aggterm%d", len(plan.Terms))
 					goName := fmt.Sprintf("ea%d_t%d", idx, len(plan.Terms))
 					plan.Terms = append(plan.Terms, exprAggTerm{GoName: goName, Type: res.Type, ElemSrc: res.Src})
-					vars[name] = exprGo{Src: "a." + goName, Type: res.Type}
+					accType := res.Type
+					if accType.integer() {
+						accType = exprGoInt128 // an integer sum accumulates in an Int128 (DFC155 C)
+					}
+					vars[name] = exprGo{Src: "a." + goName, Type: accType}
 					bySrc[res.Src] = name
 					plan.Imports = append(plan.Imports, res.Imports...)
 					plan.Hoisted = append(plan.Hoisted, res.Hoisted...)

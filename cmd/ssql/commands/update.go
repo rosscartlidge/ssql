@@ -876,6 +876,9 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				case int64:
 					stmt = fmt.Sprintf("%smut = mut.Int(%q, int64(%d))", indent, upd.field, v)
 					noteAssign(upd.field, "int64")
+				case ssql.Int128:
+					stmt = fmt.Sprintf("%smut = mut.Int128(%q, ssql.MustParseInt128(%q))", indent, upd.field, v.String())
+					noteAssign(upd.field, "ssql.Int128")
 				case float64:
 					stmt = fmt.Sprintf("%smut = mut.Float(%q, %f)", indent, upd.field, v)
 					noteAssign(upd.field, "float64")
@@ -973,6 +976,8 @@ func getDefaultValueForComparison(value string) string {
 	switch parsedValue.(type) {
 	case int64, float64:
 		return "float64(0)"
+	case ssql.Int128:
+		return "ssql.Int128{}"
 	case bool:
 		return "false"
 	case time.Time:
@@ -1008,6 +1013,8 @@ func getComparisonValue(value string) string {
 	switch v := parsedValue.(type) {
 	case int64:
 		return fmt.Sprintf("float64(%d)", v)
+	case ssql.Int128:
+		return fmt.Sprintf("ssql.MustParseInt128(%q)", v.String())
 	case float64:
 		return fmt.Sprintf("%f", v)
 	case bool:

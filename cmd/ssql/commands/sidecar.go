@@ -147,6 +147,8 @@ func goFieldType(goType string, isJSON bool) ssql.FieldType {
 	switch strings.TrimPrefix(goType, "*") {
 	case "int64":
 		return ssql.FieldTypeInt
+	case "ssql.Int128":
+		return ssql.FieldTypeInt128
 	case "float64":
 		return ssql.FieldTypeFloat
 	case "bool":
