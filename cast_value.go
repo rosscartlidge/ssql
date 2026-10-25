@@ -2,6 +2,7 @@ package ssql
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,8 @@ func castTypeNoun(t FieldType) string {
 	switch t {
 	case FieldTypeInt:
 		return "an int"
+	case FieldTypeInt128:
+		return "an int128"
 	case FieldTypeFloat:
 		return "a float"
 	case FieldTypeBool:
@@ -82,6 +85,8 @@ func CastValue(v any, target FieldType) (any, bool) {
 			return x, true
 		case int64:
 			return strconv.FormatInt(x, 10), true
+		case Int128:
+			return x.String(), true
 		case float64:
 			return strconv.FormatFloat(x, 'g', -1, 64), true
 		case bool:
@@ -90,10 +95,40 @@ func CastValue(v any, target FieldType) (any, bool) {
 			return x.Format(time.RFC3339Nano), true
 		}
 		return fmt.Sprintf("%v", v), true
+	case FieldTypeInt128:
+		// The widening cast (DFC155 C): an int64 or a whole part of a
+		// float (truncated, as the int cast does) that fits 128 bits, a
+		// bool, a digit string, an int128 as it is.
+		switch x := v.(type) {
+		case Int128:
+			return x, true
+		case int64:
+			return Int128From(x), true
+		case float64:
+			if math.IsNaN(x) || math.IsInf(x, 0) {
+				return nil, false
+			}
+			return Int128FromFloat(math.Trunc(x))
+		case bool:
+			if x {
+				return Int128From(1), true
+			}
+			return Int128{}, true
+		case string:
+			s := strings.TrimSpace(x)
+			if w, err := ParseInt128(s); err == nil {
+				return w, true
+			}
+			if f, err := strconv.ParseFloat(s, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
+				return Int128FromFloat(math.Trunc(f))
+			}
+		}
 	case FieldTypeInt:
 		switch x := v.(type) {
 		case int64:
 			return x, true
+		case Int128:
+			return x.Int64() // only when it fits: narrowing never wraps
 		case float64:
 			return int64(x), true
 		case bool:
@@ -116,6 +151,8 @@ func CastValue(v any, target FieldType) (any, bool) {
 			return x, true
 		case int64:
 			return float64(x), true
+		case Int128:
+			return x.Float64(), true
 		case bool:
 			if x {
 				return float64(1), true
@@ -132,6 +169,8 @@ func CastValue(v any, target FieldType) (any, bool) {
 			return x, true
 		case int64:
 			return x != 0, true
+		case Int128:
+			return !x.IsZero(), true
 		case float64:
 			return x != 0, true
 		case string:
@@ -214,6 +253,8 @@ func CastField(mut MutableRecord, src Record, field string, target FieldType, in
 		return mut.String(field, x)
 	case int64:
 		return mut.Int(field, x)
+	case Int128:
+		return mut.Int128(field, x)
 	case float64:
 		return mut.Float(field, x)
 	case bool:

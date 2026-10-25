@@ -89,7 +89,7 @@ func sameKind(a, b any) bool {
 
 func kindName(v any) string {
 	switch v.(type) {
-	case int64, int, float64:
+	case int64, int, float64, Int128:
 		return "number"
 	case string:
 		return "text"
@@ -145,6 +145,9 @@ func ValueOp(a any, op string, b any) bool {
 // compareTyped orders two values of the same kind; ok=false for mixed
 // kinds (or kinds with no order).
 func compareTyped(a, b any) (int, bool) {
+	if c, ok := exactIntCmp(a, b); ok {
+		return c, true // integers of either width, exactly (DFC155 C)
+	}
 	if af, ok := toFloat(a); ok {
 		bf, ok := toFloat(b)
 		if !ok {
@@ -275,11 +278,29 @@ func LiteralOp(v any, op, literal string) (bool, error) {
 		if n, err := strconv.ParseInt(literal, 10, 64); err == nil {
 			return ValueOp(x, op, n), nil
 		}
+		if w, err := ParseInt128(literal); err == nil {
+			return ValueOp(Int128From(x), op, w), nil // a literal past int64, exactly
+		}
 		f, err := strconv.ParseFloat(literal, 64)
 		if err != nil {
 			return false, &CompareError{Op: op, Value: literal, Kind: "int"}
 		}
 		return ValueOp(float64(x), op, f), nil
+	case Int128:
+		if literal == "" {
+			return false, nil
+		}
+		if isStringOp(op) {
+			return false, &CompareError{Op: op, Value: literal, Kind: "int128"}
+		}
+		if w, err := ParseInt128(literal); err == nil {
+			return ValueOp(x, op, w), nil
+		}
+		f, err := strconv.ParseFloat(literal, 64)
+		if err != nil {
+			return false, &CompareError{Op: op, Value: literal, Kind: "int128"}
+		}
+		return ValueOp(x.Float64(), op, f), nil
 	case float64:
 		if literal == "" {
 			return false, nil

@@ -253,6 +253,8 @@ func xlsxCellValue(val any) any {
 	switch v := val.(type) {
 	case int64:
 		return v
+	case Int128:
+		return v.String() // a sheet's numbers are doubles: the digits stay exact as text
 	case float64:
 		return v
 	case bool:

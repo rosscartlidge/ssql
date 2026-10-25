@@ -54,6 +54,9 @@ func normaliseJSONNumbers(v any) any {
 			if i, err := strconv.ParseInt(text, 10, 64); err == nil {
 				return i
 			}
+			if w, err := ParseInt128(text); err == nil {
+				return w // exact past int64 (DFC155 C)
+			}
 		}
 		f, err := x.Float64()
 		if err != nil {

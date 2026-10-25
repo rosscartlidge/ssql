@@ -32,7 +32,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		FieldsFromFlag("").
 		Done().
 		Arg("type").
-		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "float", "bool", "time", "json"}}).
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "int128", "float", "bool", "time", "json"}}).
 		Done().
 		Accumulate().
 		Global().
@@ -78,7 +78,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							}
 							// Don't allow auto for cast - must be explicit
 							if ft == ssql.FieldTypeAuto {
-								return fmt.Errorf("field %q: cast requires explicit type (string, int, float, bool)", field)
+								return fmt.Errorf("field %q: cast requires explicit type (string, int, int128, float, bool, time, json)", field)
 							}
 							typeConversions[field] = ft
 						}
@@ -254,6 +254,8 @@ func castTargetGoConst(t ssql.FieldType) string {
 		return "ssql.FieldTypeTime"
 	case ssql.FieldTypeJSON:
 		return "ssql.FieldTypeJSON"
+	case ssql.FieldTypeInt128:
+		return "ssql.FieldTypeInt128"
 	}
 	return "ssql.FieldTypeString"
 }
@@ -272,6 +274,8 @@ func castTargetWireType(target ssql.FieldType) string {
 		return lib.TypeBool
 	case ssql.FieldTypeTime:
 		return lib.TypeTime
+	case ssql.FieldTypeInt128:
+		return lib.TypeInt128
 	case ssql.FieldTypeJSON:
 		return lib.TypeJSON
 	}

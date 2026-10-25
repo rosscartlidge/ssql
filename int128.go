@@ -480,6 +480,46 @@ func (x *Int128) UnmarshalText(b []byte) error {
 	return nil
 }
 
+// asInt128 widens an integer of either width (int64, the VM's int, or an
+// Int128); ok is false for anything else.
+func asInt128(v any) (Int128, bool) {
+	switch x := v.(type) {
+	case Int128:
+		return x, true
+	case int64:
+		return Int128From(x), true
+	case int:
+		return Int128From(int64(x)), true
+	}
+	return Int128{}, false
+}
+
+// exactIntCmp compares two integers of either width exactly, where a
+// float64 detour would round past 2^53; ok is false unless both sides
+// are integers. The fast path is the int64 pair every comparison had.
+func exactIntCmp(a, b any) (int, bool) {
+	if x, ok := a.(int64); ok {
+		if y, ok := b.(int64); ok {
+			switch {
+			case x < y:
+				return -1, true
+			case x > y:
+				return 1, true
+			}
+			return 0, true
+		}
+	}
+	x, ok := asInt128(a)
+	if !ok {
+		return 0, false
+	}
+	y, ok := asInt128(b)
+	if !ok {
+		return 0, false
+	}
+	return x.Cmp(y), true
+}
+
 // pow10[n] is 10^n for the chunked parse (n ≤ 19).
 var pow10 = [...]uint64{1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
 	1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19}

@@ -493,37 +493,8 @@ func (e *exprGoEnv) binary(n *ast.BinaryNode) (exprGo, error) {
 	}
 
 	switch n.Operator {
-	case "+", "-", "*":
-		return e.plusMinusTimes(n.Operator, left, right)
-	case "/":
-		// expr-lang division is ALWAYS float64 — 7/2 is 3.5. NEVER emit Go
-		// integer division.
-		if !left.Type.numeric() || !right.Type.numeric() {
-			return exprGo{}, fmt.Errorf("operator / needs numeric operands, got %s and %s", left.Type, right.Type)
-		}
-		ls, rs := asFloat(left), asFloat(right)
-		if left.Type != exprGoFloat && right.Type != exprGoFloat {
-			// Both int: at least one side must be a typed float64 expression
-			// or the emission is Go integer division again.
-			ls = "float64(" + left.Src + ")"
-		}
-		return mergeMeta(exprGo{Src: "(" + ls + " / " + rs + ")", Type: exprGoFloat}, left, right), nil
-	case "%":
-		if left.Type != exprGoInt || right.Type != exprGoInt {
-			return exprGo{}, fmt.Errorf("operator %% needs integer operands, got %s and %s", left.Type, right.Type)
-		}
-		return mergeMeta(exprGo{Src: "(" + left.Src + " % " + right.Src + ")", Type: exprGoInt}, left, right), nil
-	case "**", "^":
-		if !left.Type.numeric() || !right.Type.numeric() {
-			return exprGo{}, fmt.Errorf("power operator needs numeric operands, got %s and %s", left.Type, right.Type)
-		}
-		res := exprGo{Src: "math.Pow(" + asFloat(left) + ", " + asFloat(right) + ")", Type: exprGoFloat,
-			Imports: []string{"math"}}
-		return mergeMeta(res, left, right), nil
-	case "<", "<=", ">", ">=":
-		return e.compare(n.Operator, left, right, false)
-	case "==", "!=":
-		return e.compare(n.Operator, left, right, true)
+	case "+", "-", "*", "/", "%", "**", "^", "<", "<=", ">", ">=", "==", "!=":
+		return e.binaryOperator(n.Operator, left, right)
 	case "and", "&&":
 		return e.logical("&&", left, right)
 	case "or", "||":
@@ -554,6 +525,59 @@ func (e *exprGoEnv) binary(n *ast.BinaryNode) (exprGo, error) {
 		return mergeMeta(res, left), nil
 	}
 	return exprGo{}, fmt.Errorf("operator %q has no native Go emission", n.Operator)
+}
+
+// exprCheckedCallOperator and exprCheckedCallBuiltin map the calls the
+// overflow patch rewrites operators and builtins into
+// (ssql.ExprCheckedIntArithmetic) back to what they replaced: a compiled
+// program's AST holds the call, not the BinaryNode or BuiltinNode.
+var exprCheckedCallOperator = map[string]string{
+	"_ssql_add": "+", "_ssql_sub": "-", "_ssql_mul": "*", "_ssql_div": "/", "_ssql_mod": "%", "_ssql_pow": "**",
+	"_ssql_eq": "==", "_ssql_ne": "!=", "_ssql_lt": "<", "_ssql_le": "<=", "_ssql_gt": ">", "_ssql_ge": ">=",
+}
+
+var exprCheckedCallBuiltin = map[string]string{
+	"_ssql_int": "int", "_ssql_float": "float", "_ssql_abs": "abs", "_ssql_min": "min", "_ssql_max": "max",
+}
+
+// binaryOperator emits an arithmetic or comparison operator over its
+// evaluated operands; reached from a BinaryNode and from the patched call
+// that stands for one.
+func (e *exprGoEnv) binaryOperator(op string, left, right exprGo) (exprGo, error) {
+	switch op {
+	case "+", "-", "*":
+		return e.plusMinusTimes(op, left, right)
+	case "/":
+		// expr-lang division is ALWAYS float64 — 7/2 is 3.5. NEVER emit Go
+		// integer division.
+		if !left.Type.numeric() || !right.Type.numeric() {
+			return exprGo{}, fmt.Errorf("operator / needs numeric operands, got %s and %s", left.Type, right.Type)
+		}
+		ls, rs := asFloat(left), asFloat(right)
+		if left.Type != exprGoFloat && right.Type != exprGoFloat {
+			// Both int: at least one side must be a typed float64 expression
+			// or the emission is Go integer division again.
+			ls = "float64(" + left.Src + ")"
+		}
+		return mergeMeta(exprGo{Src: "(" + ls + " / " + rs + ")", Type: exprGoFloat}, left, right), nil
+	case "%":
+		if left.Type != exprGoInt || right.Type != exprGoInt {
+			return exprGo{}, fmt.Errorf("operator %% needs integer operands, got %s and %s", left.Type, right.Type)
+		}
+		return mergeMeta(exprGo{Src: "(" + left.Src + " % " + right.Src + ")", Type: exprGoInt}, left, right), nil
+	case "**", "^":
+		if !left.Type.numeric() || !right.Type.numeric() {
+			return exprGo{}, fmt.Errorf("power operator needs numeric operands, got %s and %s", left.Type, right.Type)
+		}
+		res := exprGo{Src: "math.Pow(" + asFloat(left) + ", " + asFloat(right) + ")", Type: exprGoFloat,
+			Imports: []string{"math"}}
+		return mergeMeta(res, left, right), nil
+	case "<", "<=", ">", ">=":
+		return e.compare(op, left, right, false)
+	case "==", "!=":
+		return e.compare(op, left, right, true)
+	}
+	return exprGo{}, fmt.Errorf("operator %q has no native Go emission", op)
 }
 
 // arith handles + - * over numbers: int OP int stays int64 (Go wrap matches
@@ -707,7 +731,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		}
 		return e.negate(operand)
 	}
-	if ssql.ExprCheckedArithFunction(name) && len(args) == 2 {
+	if op, ok := exprCheckedCallOperator[name]; ok && len(args) == 2 {
 		left, err := e.node(args[0])
 		if err != nil {
 			return exprGo{}, err
@@ -716,7 +740,10 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if err != nil {
 			return exprGo{}, err
 		}
-		return e.plusMinusTimes(map[string]string{"_ssql_add": "+", "_ssql_sub": "-", "_ssql_mul": "*"}[name], left, right)
+		return e.binaryOperator(op, left, right)
+	}
+	if orig, ok := exprCheckedCallBuiltin[name]; ok {
+		return e.call(orig, args)
 	}
 	// has/getOr resolve against the schema at codegen time: typed struct
 	// fields always exist, so has() is a constant and getOr() is the field

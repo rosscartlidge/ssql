@@ -41,6 +41,8 @@ func asofOrdOf(v any) (asofOrd, bool) {
 		return asofOrd{t: x.UnixNano(), isTime: true}, true
 	case int64:
 		return asofOrd{f: float64(x)}, true
+	case Int128:
+		return asofOrd{f: x.Float64()}, true // the axis is a float64, as an int64 axis is
 	case float64:
 		return asofOrd{f: x}, true
 	case int:

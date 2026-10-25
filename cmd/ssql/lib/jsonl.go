@@ -128,8 +128,8 @@ func convertRecordValue(v any) any {
 			return nil
 		}
 		return val
-	case int64, bool, string, nil:
-		// Canonical types pass through
+	case int64, bool, string, nil, ssql.Int128:
+		// Canonical types pass through (an Int128 marshals as its bare number)
 		return val
 	case time.Time:
 		// RFC 3339, as `to jsonl` writes it (DFC128 D1)

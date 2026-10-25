@@ -354,7 +354,7 @@ func NewJSONString(value any) (JSONString, error) {
 // Hybrid approach: Canonical scalars (int64/float64), flexible sequences (any numeric type)
 type Value interface {
 	// Canonical scalar types only
-	~int64 | ~float64 |
+	~int64 | ~float64 | Int128 |
 
 		// Other basic types
 		~bool | string | time.Time |
@@ -866,11 +866,36 @@ func jsonRawToValue(raw json.RawMessage) (any, error) {
 		}
 		return JSONString(buf.String()), nil
 	}
+	if len(t) > 0 && (t[0] == '-' || (t[0] >= '0' && t[0] <= '9')) {
+		// A number is typed as every reader types it: int64, then Int128,
+		// then float64 — encoding/json's float64 would round a wide
+		// integer before anyone could see it (DFC155 C).
+		return jsonNumberValue(string(t))
+	}
 	var v any
 	if err := json.Unmarshal(t, &v); err != nil {
 		return nil, err
 	}
 	return v, nil
+}
+
+// jsonNumberValue types a JSON number's text the way the readers do: an
+// integer literal is an int64 when it fits, an Int128 when it fits that,
+// else a float64; a literal with a fraction or exponent is a float64.
+func jsonNumberValue(text string) (any, error) {
+	if !strings.ContainsAny(text, ".eE") {
+		if i, err := strconv.ParseInt(text, 10, 64); err == nil {
+			return i, nil
+		}
+		if w, err := ParseInt128(text); err == nil {
+			return w, nil
+		}
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid number %q: %w", text, err)
+	}
+	return f, nil
 }
 
 // MarshalJSON implements json.Marshaler for MutableRecord
@@ -963,6 +988,11 @@ func (m MutableRecord) Int(field string, value int64) MutableRecord {
 
 // Float adds a float field (mutates in place)
 func (m MutableRecord) Float(field string, value float64) MutableRecord {
+	return Set(m, field, value)
+}
+
+// Int128 adds a 128-bit integer field (mutates in place; DFC155 C)
+func (m MutableRecord) Int128(field string, value Int128) MutableRecord {
 	return Set(m, field, value)
 }
 
@@ -1190,10 +1220,39 @@ func convertTo[T any](val any) (T, bool) {
 			return any(converted).(T), true
 		}
 		return zero, false
+	case Int128:
+		if converted, ok := convertToInt128(val); ok {
+			return any(converted).(T), true
+		}
+		return zero, false
 	default:
 		_ = target
 		return zero, false
 	}
+}
+
+// convertToInt128 widens to the 128-bit integer: an int64, a whole
+// float64 that fits, a digit string. Never a truncation.
+func convertToInt128(val any) (Int128, bool) {
+	switch v := val.(type) {
+	case Int128:
+		return v, true
+	case int64:
+		return Int128From(v), true
+	case int:
+		return Int128From(int64(v)), true
+	case float64:
+		return Int128FromFloat(v)
+	case string:
+		w, err := ParseInt128(v)
+		return w, err == nil
+	case bool:
+		if v {
+			return Int128From(1), true
+		}
+		return Int128{}, true
+	}
+	return Int128{}, false
 }
 
 // convertToInt64 only handles conversions TO canonical int64 type
@@ -1203,6 +1262,8 @@ func convertToInt64(val any) (int64, bool) {
 	switch v := val.(type) {
 	case int64:
 		return v, true
+	case Int128:
+		return v.Int64() // only when it fits: an int128 never wraps into an int64
 	case float64:
 		return int64(v), true // Allow float64 -> int64 truncation
 	case string:
@@ -1229,6 +1290,8 @@ func convertToFloat64(val any) (float64, bool) {
 		return v, true
 	case int64:
 		return float64(v), true // Allow int64 -> float64 widening
+	case Int128:
+		return v.Float64(), true // the nearest float64, as an int64 widens
 	case string:
 		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
 			return parsed, true
@@ -1262,6 +1325,8 @@ func convertToBool(val any) (bool, bool) {
 		return v, true
 	case int64:
 		return v != 0, true
+	case Int128:
+		return !v.IsZero(), true
 	case float64:
 		return v != 0, true
 	case string:
@@ -1391,6 +1456,8 @@ func appendJSONValue(buf []byte, v any) []byte {
 		return appendJSONString(buf, val)
 	case int64:
 		return strconv.AppendInt(buf, val, 10)
+	case Int128:
+		return append(buf, val.String()...) // a bare number, as DuckDB writes a HUGEINT
 	case float64:
 		if math.IsNaN(val) || math.IsInf(val, 0) {
 			// JSON has no NaN or Infinity. strconv wrote the bare words,
@@ -1741,6 +1808,13 @@ func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType
 					value = float64(i)
 				}
 			}
+			if idx < len(types) && types[idx] == FieldTypeInt128 {
+				// An int128 column's small values are int64 literals on
+				// the wire; the header keeps the column one type.
+				if i, ok := value.(int64); ok {
+					value = Int128From(i)
+				}
+			}
 			values[idx] = value
 		}
 
@@ -1966,7 +2040,11 @@ func parseJSONNumber(line []byte, pos int) (any, int, error) {
 
 	i, err := strconv.ParseInt(numStr, 10, 64)
 	if err != nil {
-		// Fall back to float for very large integers
+		// An integer past int64 is an Int128 while it fits (DFC155 C: a
+		// wide literal types its column int128); past that, a float.
+		if w, err := ParseInt128(numStr); err == nil {
+			return w, pos, nil
+		}
 		f, err := strconv.ParseFloat(numStr, 64)
 		if err != nil {
 			return nil, pos, fmt.Errorf("invalid number: %w", err)
@@ -2051,7 +2129,7 @@ func ValidateRecord(r Record) error {
 func isValueType(value any) bool {
 	switch value.(type) {
 	// Canonical scalar types only
-	case int64, float64:
+	case int64, float64, Int128:
 		return true
 	// Other basic types
 	case bool, string:
@@ -2365,6 +2443,8 @@ func stableKeyAppend(buf []byte, value any) string {
 		return string(append(buf, "false"...))
 	case int64:
 		return string(strconv.AppendInt(buf, v, 10))
+	case Int128:
+		return string(append(buf, v.String()...))
 	case float64:
 		return string(strconv.AppendFloat(buf, v, 'g', -1, 64))
 	case string:
@@ -2763,7 +2843,7 @@ func isSimpleValue(value any) bool {
 	}
 	switch value.(type) {
 	// Canonical scalar types only
-	case int64, float64:
+	case int64, float64, Int128:
 		return true
 	// Other basic types
 	case bool, string, time.Time:

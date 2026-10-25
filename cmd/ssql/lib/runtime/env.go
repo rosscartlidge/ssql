@@ -133,9 +133,26 @@ func MustCoerceFloat64(v any, expression string) float64 {
 		return float64(x)
 	case int:
 		return float64(x)
+	case ssql.Int128:
+		return x.Float64()
 	}
 	coerceFail(v, "float64", expression)
 	return 0
+}
+
+// MustCoerceInt128 types a result for an int128 column: an Int128 as it
+// is, an integer widened; a float or anything else fails (DFC155 C).
+func MustCoerceInt128(v any, expression string) ssql.Int128 {
+	switch x := v.(type) {
+	case ssql.Int128:
+		return x
+	case int64:
+		return ssql.Int128From(x)
+	case int:
+		return ssql.Int128From(int64(x))
+	}
+	coerceFail(v, "ssql.Int128", expression)
+	return ssql.Int128{}
 }
 
 func MustCoerceString(v any, expression string) string {

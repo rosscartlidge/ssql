@@ -68,6 +68,7 @@ const (
 	FieldTypeBool                    // Parse as bool
 	FieldTypeTime                    // Parse as time.Time (ParseTime's forms); the `time` wire type (DFC128 D1)
 	FieldTypeJSON                    // A nested value (array or object) held as its JSON text, a JSONString; the `json` wire type (DFC144 Level 0)
+	FieldTypeInt128                  // Parse as Int128: the `int128` wire type, DuckDB's HUGEINT (DFC155 C)
 )
 
 // DefaultCSVConfig provides sensible defaults for CSV processing
@@ -103,8 +104,10 @@ func ParseFieldType(s string) (FieldType, error) {
 		return FieldTypeTime, nil
 	case "json":
 		return FieldTypeJSON, nil
+	case "int128", "hugeint":
+		return FieldTypeInt128, nil
 	default:
-		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, float, bool, time, json)", s)
+		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, int128, float, bool, time, json)", s)
 	}
 }
 
@@ -123,6 +126,8 @@ func (ft FieldType) String() string {
 		return "time"
 	case FieldTypeJSON:
 		return "json"
+	case FieldTypeInt128:
+		return "int128"
 	default:
 		return "auto"
 	}
@@ -451,8 +456,10 @@ func ReadJSONFromReader(reader io.Reader) iter.Seq[Record] {
 // inferJSONFieldType determines FieldType from a JSON-parsed value
 func inferJSONFieldType(value any) FieldType {
 	switch value.(type) {
-	case float64:
-		return FieldTypeFloat // JSON numbers are always float64
+	case float64, int64:
+		return FieldTypeFloat // this reader's numbers are floats, as encoding/json's were
+	case Int128:
+		return FieldTypeInt128 // a literal past int64: exact, never a double
 	case bool:
 		return FieldTypeBool
 	case string:
@@ -478,6 +485,10 @@ func coerceToType(value any, targetType FieldType) any {
 		switch v := value.(type) {
 		case float64:
 			return v
+		case int64:
+			return float64(v)
+		case Int128:
+			return v.Float64()
 		case bool:
 			if v {
 				return float64(1)
@@ -491,12 +502,36 @@ func coerceToType(value any, targetType FieldType) any {
 		default:
 			return float64(0)
 		}
+	case FieldTypeInt128:
+		switch v := value.(type) {
+		case Int128:
+			return v
+		case int64:
+			return Int128From(v)
+		case float64:
+			if w, ok := Int128FromFloat(v); ok {
+				return w
+			}
+			return value
+		case string:
+			if w, err := ParseInt128(strings.TrimSpace(v)); err == nil {
+				return w
+			}
+			return value
+		default:
+			return value
+		}
 	case FieldTypeInt:
 		switch v := value.(type) {
 		case float64:
 			return int64(v)
 		case int64:
 			return v
+		case Int128:
+			if i, ok := v.Int64(); ok {
+				return i
+			}
+			return v // too wide for the declared int: keep the value, never wrap
 		case bool:
 			if v {
 				return int64(1)
@@ -532,6 +567,8 @@ func coerceToType(value any, targetType FieldType) any {
 			return v
 		case float64:
 			return strconv.FormatFloat(v, 'g', -1, 64)
+		case int64:
+			return strconv.FormatInt(v, 10)
 		case bool:
 			return strconv.FormatBool(v)
 		default:
@@ -1085,6 +1122,8 @@ func inferJSONType(v any) string {
 	switch v.(type) {
 	case int64, int, int32:
 		return "int"
+	case Int128:
+		return "int128"
 	case float64, float32:
 		return "float"
 	case bool:
@@ -1404,6 +1443,9 @@ func parseValue(s string) any {
 	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return i
 	}
+	if w, err := ParseInt128(s); err == nil {
+		return w // an integer past int64 is exact, not a float (DFC155 C)
+	}
 
 	// Try float
 	if f, err := strconv.ParseFloat(s, 64); err == nil {
@@ -1476,6 +1518,8 @@ func formatValueIn(value any, timeFormat string) string {
 		return strconv.FormatInt(int64(v), 10)
 	case int64:
 		return strconv.FormatInt(v, 10)
+	case Int128:
+		return v.String()
 	case float32:
 		return strconv.FormatFloat(float64(v), 'g', -1, 32)
 	case float64:
@@ -1904,7 +1948,7 @@ func isNumericOrBoolValue(v any) bool {
 	switch v.(type) {
 	case int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
-		float32, float64,
+		float32, float64, Int128,
 		bool:
 		return true
 	}
@@ -2447,6 +2491,9 @@ func parseCommandValue(s string) any {
 	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return i
 	}
+	if w, err := ParseInt128(s); err == nil {
+		return w
+	}
 
 	// Try float
 	if f, err := strconv.ParseFloat(s, 64); err == nil {
@@ -2665,6 +2712,10 @@ func addJSONField(record MutableRecord, key string, value any) MutableRecord {
 			return record.Int(key, int64(val))
 		}
 		return record.Float(key, val)
+	case int64:
+		return record.Int(key, val)
+	case Int128:
+		return record.Int128(key, val)
 	case bool:
 		return record.Bool(key, val)
 	case string:
@@ -2696,7 +2747,7 @@ func convertRecordValueForJSON(v any) any {
 			result[k] = convertRecordValueForJSON(subv)
 		}
 		return result
-	case int64, float64, bool, string, nil:
+	case int64, float64, bool, string, nil, Int128:
 		return val
 	default:
 		return fmt.Sprintf("%v", v)

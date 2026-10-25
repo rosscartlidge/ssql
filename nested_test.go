@@ -174,8 +174,9 @@ func TestFlattenObjectField(t *testing.T) {
 // parser decodes numbers as text, not float64 (DFC155 follow-up,
 // 2026-10-22: a Fibonacci list exploded to floats from fib(79) on).
 func TestExprValueKeepsWideIntegers(t *testing.T) {
-	got := ExprValue(JSONString(`[9007199254740993, 9223372036854775807, -9223372036854775808, 10, 2.5, 1e3, 1.0, 99999999999999999999]`))
-	want := []any{int64(9007199254740993), int64(9223372036854775807), int64(-9223372036854775808), int64(10), 2.5, 1000.0, 1.0, 1e20}
+	got := ExprValue(JSONString(`[9007199254740993, 9223372036854775807, -9223372036854775808, 10, 2.5, 1e3, 1.0, 99999999999999999999, 1000000000000000000000000000000000000000]`))
+	// past int64 an integer is an Int128 (DFC155 C); past int128, a float
+	want := []any{int64(9007199254740993), int64(9223372036854775807), int64(-9223372036854775808), int64(10), 2.5, 1000.0, 1.0, MustParseInt128("99999999999999999999"), 1e39}
 	list, ok := got.([]any)
 	if !ok || len(list) != len(want) {
 		t.Fatalf("got %#v", got)

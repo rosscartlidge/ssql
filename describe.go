@@ -160,6 +160,10 @@ func (s *fieldStats) observe(v any) {
 		s.hasInt = true
 		s.nums = append(s.nums, float64(x))
 		s.distinct["i:"+strconv.FormatInt(x, 10)] = struct{}{}
+	case Int128:
+		s.hasInt = true
+		s.nums = append(s.nums, x.Float64())
+		s.distinct["i:"+x.String()] = struct{}{}
 	case int:
 		s.hasInt = true
 		s.nums = append(s.nums, float64(x))

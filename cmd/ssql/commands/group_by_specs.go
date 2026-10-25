@@ -134,15 +134,15 @@ func wireOfField(fieldType string) string {
 	return fieldType
 }
 
-// wireSum: an integer column sums to an integer (exactly, in int64, an
-// overflow being an error — DFC155 B; DuckDB's SUM(BIGINT) is the
-// integer HUGEINT, typed codegen's running sum is the field's type);
-// anything else, or an unknown field, sums to a float. Until v4.123.0
-// the wire type was float for every sum, which coerced an exact int64
-// sum past 2^53 to the nearest float on the way out.
+// wireSum: an integer column (int or int128) sums to an int128, exactly
+// — DuckDB's SUM(BIGINT) → HUGEINT, the one widening every lane agrees
+// on (DFC155 C; v4.123.x summed in int64 and stopped past 2^63); anything
+// else, or an unknown field, sums to a float. Until v4.123.0 the wire
+// type was float for every sum, which coerced an exact int64 sum past
+// 2^53 to the nearest float on the way out.
 func wireSum(fieldType string) string {
-	if fieldType == "int" {
-		return "int"
+	if fieldType == "int" || fieldType == "int128" {
+		return "int128"
 	}
 	return "float"
 }

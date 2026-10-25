@@ -77,6 +77,8 @@ func aggResult(context string, v any) AggregateResult {
 	switch x := aggValue(context, v).(type) {
 	case int64:
 		return AggResult[int64]{val: x}
+	case Int128:
+		return AggResult[Int128]{val: x}
 	case float64:
 		return AggResult[float64]{val: x}
 	case string:
@@ -99,6 +101,8 @@ func aggValue(context string, v any) any {
 	switch x := v.(type) {
 	case int, int64, int32, int16, int8, uint, uint64, uint32, uint16, uint8:
 		return toInt64(v)
+	case Int128:
+		return x
 	case float64, float32:
 		return toFloat64(v)
 	case string, bool, time.Time:
@@ -214,6 +218,9 @@ func aggCompare(name string, a, b any) (int, error) {
 	if !isNumeric(a) || !isNumeric(b) {
 		return 0, fmt.Errorf("%s: cannot order %T and %T", name, a, b)
 	}
+	if c, ok := exactIntCmp(a, b); ok {
+		return c, nil // integers of either width, exactly (DFC155 C)
+	}
 	fa, fb := toFloat64(a), toFloat64(b)
 	switch {
 	case fa > fb:
@@ -227,7 +234,7 @@ func aggCompare(name string, a, b any) (int, error) {
 func isNumeric(v any) bool {
 	switch v.(type) {
 	case float64, float32, int, int64, int32, int16, int8,
-		uint, uint64, uint32, uint16, uint8:
+		uint, uint64, uint32, uint16, uint8, Int128:
 		return true
 	}
 	return false
@@ -266,6 +273,8 @@ func toFloat64(v any) float64 {
 	switch val := v.(type) {
 	case float64:
 		return val
+	case Int128:
+		return val.Float64()
 	case float32:
 		return float64(val)
 	case int:

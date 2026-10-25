@@ -1081,7 +1081,7 @@ func analyzeFieldType(values []any) (string, bool, bool) {
 // isNumericValue checks if a value can be treated as numeric
 func isNumericValue(value any) bool {
 	switch v := value.(type) {
-	case int, int32, int64, float32, float64:
+	case int, int32, int64, float32, float64, Int128:
 		return true
 	case string:
 		_, err := strconv.ParseFloat(v, 64)
@@ -1183,6 +1183,8 @@ func nanToNullGrid(grid [][]float64) [][]any {
 // getNumericValue safely converts any value to float64
 func getNumericValue(value any) float64 {
 	switch v := value.(type) {
+	case Int128:
+		return v.Float64()
 	case int:
 		return float64(v)
 	case int32:

@@ -32,7 +32,7 @@ var ExprMathFunctionNames = []string{
 	"sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
 	"degrees", "radians", "pi", "sign", "trunc", "round",
 	"isnan", "isinf", "isfinite", "gcd", "lcm", "factorial", "gamma", "lgamma",
-	"hash",
+	"hash", "int128",
 }
 
 func ExprMathFunctions() []expr.Option {
@@ -99,6 +99,36 @@ func ExprMathFunctions() []expr.Option {
 		}
 		return exprfn.Log(b, x), nil
 	}, new(func(any, any) float64), new(func(any) float64)) // the one-argument form compiles, to say which log is meant
+	// int128(x): the widening conversion (DFC155 C) — an integer, a whole
+	// float, a digit string (the way to write a literal past int64, which
+	// expr refuses at compile), or an int128 as it is; nil stays nil.
+	bind("int128", func(args ...any) (any, error) {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("int128() takes one argument")
+		}
+		switch x := exprDeref(args[0]).(type) {
+		case nil:
+			return nil, nil
+		case Int128:
+			return x, nil
+		case int64:
+			return Int128From(x), nil
+		case int:
+			return Int128From(int64(x)), nil
+		case float64:
+			if w, ok := Int128FromFloat(x); ok {
+				return w, nil
+			}
+			return nil, fmt.Errorf("int128(): %v is not a whole number that fits an int128", x)
+		case string:
+			w, err := ParseInt128(x)
+			if err != nil {
+				return nil, fmt.Errorf("int128(): %q is not an integer that fits an int128", x)
+			}
+			return w, nil
+		}
+		return nil, fmt.Errorf("int128() needs a number or a digit string, got %T", args[0])
+	}, new(func(any) any))
 	bind("pi", func(args ...any) (any, error) {
 		if len(args) != 0 {
 			return nil, fmt.Errorf("pi() takes no argument")
@@ -216,6 +246,8 @@ func exprNumber(fn string, v any) (float64, error) {
 		return float64(x), nil
 	case int32:
 		return float64(x), nil
+	case Int128:
+		return x.Float64(), nil
 	}
 	return 0, fmt.Errorf("%s() needs a numeric argument, got %T", fn, v)
 }
@@ -230,6 +262,11 @@ func exprInteger(fn, what string, v any) (int64, error) {
 		return int64(x), nil
 	case int32:
 		return int64(x), nil
+	case Int128:
+		if i, ok := x.Int64(); ok {
+			return i, nil
+		}
+		return 0, fmt.Errorf("%s(): %s %s does not fit an int64", fn, what, x)
 	case float64:
 		if x == math.Trunc(x) && !math.IsInf(x, 0) {
 			return int64(x), nil

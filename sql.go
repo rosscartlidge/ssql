@@ -6,8 +6,6 @@ import (
 	"math"
 	"sort"
 	"strings"
-
-	"github.com/rosscartlidge/ssql/v4/exprfn"
 )
 
 // OrderedValue represents types that are both orderable and valid Record field values
@@ -585,6 +583,9 @@ func joinValuesEqual(a, b any) bool {
 	if a == b {
 		return true
 	}
+	if c, ok := exactIntCmp(a, b); ok {
+		return c == 0 // an int64 key beside an int128 key, exactly (DFC155 C)
+	}
 	af, aok := joinNumber(a)
 	bf, bok := joinNumber(b)
 	if aok && bok {
@@ -604,6 +605,8 @@ func joinNumber(v any) (float64, bool) {
 		return x, true
 	case int:
 		return float64(x), true
+	case Int128:
+		return x.Float64(), true
 	}
 	return 0, false
 }
@@ -1337,6 +1340,8 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 				} else if v, ok := Get[any](r, valField); ok {
 					if i, isInt := v.(int64); isInt {
 						cells[ck] = append(cells[ck], i)
+					} else if w, isWide := v.(Int128); isWide {
+						cells[ck] = append(cells[ck], w)
 					} else if f, ok := convertTo[float64](v); ok {
 						cells[ck] = append(cells[ck], f)
 						colFloat[cv] = true
@@ -1360,6 +1365,8 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 					mut = mut.String(rowField, v)
 				case int64:
 					mut = mut.Int(rowField, v)
+				case Int128:
+					mut = mut.Int128(rowField, v)
 				case float64:
 					mut = mut.Float(rowField, v)
 				default:
@@ -1384,7 +1391,11 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 							sum.add(v)
 						}
 						if len(vals) == 0 {
-							mut = zero()
+							if colFloat[cv] {
+								mut = mut.Float(cv, 0)
+							} else {
+								mut = mut.Int128(cv, Int128{}) // an integer sum is int128 (DFC155 C)
+							}
 						} else {
 							mut = setScalar(mut, cv, sum.value())
 						}
@@ -1690,14 +1701,15 @@ func Sum(field string) AggregateFunc {
 }
 
 // numericSum accumulates a field's values the way the engines' SUM does:
-// exactly in int64 while every value is an integer (an overflow is an
-// error, DFC155 B, where DuckDB's HUGEINT would still answer — the
-// documented divergence past 2^63), and as a Neumaier-compensated
-// float64 once a float appears (a million floats sum to the ulp, not to
-// drift). Until v4.123.0 integers were summed as floats: exact only to
-// 2^53, and quietly inexact past it.
+// exactly in an Int128 while every value is an integer — DuckDB's
+// SUM(BIGINT) → HUGEINT, the one widening every lane agrees on (DFC155 C;
+// a sum of int64 values cannot overflow it, a sum of int128 values that
+// does is an error) — and as a Neumaier-compensated float64 once a float
+// appears (a million floats sum to the ulp, not to drift). Until v4.123.0
+// integers were summed as floats: exact only to 2^53, and quietly inexact
+// past it; v4.123.x summed them in int64 and stopped past 2^63.
 type numericSum struct {
-	ints    int64
+	ints    Int128
 	floats  CompensatedSum
 	isFloat bool
 	n       int64
@@ -1709,7 +1721,13 @@ func (s *numericSum) add(value any) {
 		if s.isFloat {
 			s.floats.Add(float64(v))
 		} else {
-			s.ints = exprfn.Add(s.ints, v)
+			s.ints = s.ints.Add(Int128From(v))
+		}
+	case Int128:
+		if s.isFloat {
+			s.floats.Add(v.Float64())
+		} else {
+			s.ints = s.ints.Add(v)
 		}
 	default:
 		f, ok := convertTo[float64](value) // float64, and the smart conversions Get[float64] made
@@ -1718,7 +1736,7 @@ func (s *numericSum) add(value any) {
 		}
 		if !s.isFloat {
 			s.isFloat = true
-			s.floats.Add(float64(s.ints))
+			s.floats.Add(s.ints.Float64())
 		}
 		s.floats.Add(f)
 	}
@@ -1730,10 +1748,10 @@ func (s *numericSum) result() AggregateResult {
 	if s.isFloat {
 		return AggResult[float64]{val: s.floats.Value()}
 	}
-	return AggResult[int64]{val: s.ints}
+	return AggResult[Int128]{val: s.ints}
 }
 
-// value is the sum as the scalar it is: an int64 while every value was
+// value is the sum as the scalar it is: an Int128 while every value was
 // an integer, else a float64 (the window functions' result).
 func (s *numericSum) value() any {
 	if s.isFloat {
@@ -1742,13 +1760,11 @@ func (s *numericSum) value() any {
 	return s.ints
 }
 
-// numericLess orders two cell values: int64 beside int64 exactly, any
-// other pair as float64.
+// numericLess orders two cell values: integers of either width exactly,
+// any other pair as float64.
 func numericLess(a, b any) bool {
-	if x, ok := a.(int64); ok {
-		if y, ok := b.(int64); ok {
-			return x < y
-		}
+	if c, ok := exactIntCmp(a, b); ok {
+		return c < 0
 	}
 	fa, _ := convertTo[float64](a)
 	fb, _ := convertTo[float64](b)
@@ -1763,7 +1779,7 @@ func (s *numericSum) mean() (float64, bool) {
 	if s.isFloat {
 		return s.floats.Value() / float64(s.n), true
 	}
-	return float64(s.ints) / float64(s.n), true
+	return s.ints.Float64() / float64(s.n), true
 }
 
 // Avg calculates the average of numeric values from a field (SQL AVG(field)).
@@ -2111,7 +2127,11 @@ func CompareAny(a, b any) int {
 		return 1
 	}
 
-	// Try numeric comparison
+	// Two integers of either width compare exactly (a float64 detour
+	// rounds past 2^53; DFC155 C), any other numeric pair as float64.
+	if c, ok := exactIntCmp(a, b); ok {
+		return c
+	}
 	af, aOk := toFloat(a)
 	bf, bOk := toFloat(b)
 	if aOk && bOk {
@@ -2145,6 +2165,8 @@ func toFloat(v any) (float64, bool) {
 		return float64(val), true
 	case int:
 		return float64(val), true
+	case Int128:
+		return val.Float64(), true
 	default:
 		return 0, false
 	}
@@ -2674,14 +2696,14 @@ func (s *swLast) reset() {}
 
 // slidingSum is the running total of a ring of values, each added when
 // it enters the frame and removed when it leaves: the integers exactly
-// in int64 (an overflow is an error, DFC155 B), the floats in a float64
-// beside them; the value is an int64 while the frame holds no float.
+// in an Int128 (DFC155 C, as every integer sum), the floats in a float64
+// beside them; the value is an Int128 while the frame holds no float.
 type slidingSum struct {
 	ring   []any
 	size   int // frame size = preceding + 1
 	idx    int // write position in ring
 	filled int // how many slots filled so far
-	ints   int64
+	ints   Int128
 	floats float64
 	nfloat int // floats in the frame
 	count  int // numeric values in the frame
@@ -2689,17 +2711,20 @@ type slidingSum struct {
 
 func newSlidingSum(size int) slidingSum { return slidingSum{ring: make([]any, size), size: size} }
 
-// numeric classifies a value as the readers type it: an int64, a float
-// (float64, or anything Get[float64] converted), or not a number.
-func slidingNumeric(v any) (i int64, f float64, isInt, ok bool) {
+// numeric classifies a value as the readers type it: an integer (int64
+// or Int128, widened), a float (float64, or anything Get[float64]
+// converted), or not a number.
+func slidingNumeric(v any) (i Int128, f float64, isInt, ok bool) {
 	switch x := v.(type) {
 	case int64:
+		return Int128From(x), 0, true, true
+	case Int128:
 		return x, 0, true, true
 	case nil:
-		return 0, 0, false, false
+		return Int128{}, 0, false, false
 	}
 	f, ok = convertTo[float64](v)
-	return 0, f, false, ok
+	return Int128{}, f, false, ok
 }
 
 // push adds a value, evicting the oldest once the ring is full.
@@ -2707,7 +2732,7 @@ func (s *slidingSum) push(v any) {
 	if s.filled >= s.size {
 		if i, f, isInt, ok := slidingNumeric(s.ring[s.idx]); ok {
 			if isInt {
-				s.ints = exprfn.Sub(s.ints, i)
+				s.ints = s.ints.Sub(i)
 			} else {
 				s.floats -= f
 				s.nfloat--
@@ -2718,7 +2743,7 @@ func (s *slidingSum) push(v any) {
 	s.ring[s.idx] = v
 	if i, f, isInt, ok := slidingNumeric(v); ok {
 		if isInt {
-			s.ints = exprfn.Add(s.ints, i)
+			s.ints = s.ints.Add(i)
 		} else {
 			s.floats += f
 			s.nfloat++
@@ -2735,14 +2760,15 @@ func (s *slidingSum) value() any {
 	if s.nfloat == 0 {
 		return s.ints
 	}
-	return float64(s.ints) + s.floats
+	return s.ints.Float64() + s.floats
 }
 
 func (s *slidingSum) reset() {
 	for i := range s.ring {
 		s.ring[i] = nil
 	}
-	s.idx, s.filled, s.ints, s.floats, s.nfloat, s.count = 0, 0, 0, 0, 0, 0
+	s.idx, s.filled, s.floats, s.nfloat, s.count = 0, 0, 0, 0, 0
+	s.ints = Int128{}
 }
 
 // swSlidingSum maintains a ring buffer for sliding SUM.
@@ -2769,7 +2795,7 @@ func (s *swSlidingAvg) update(record Record, _ int, _ []OrderField, _ *Record) a
 	if s.count == 0 {
 		return float64(0)
 	}
-	return (float64(s.ints) + s.floats) / float64(s.count)
+	return (s.ints.Float64() + s.floats) / float64(s.count)
 }
 
 // swSlidingCount returns min(pos+1, frameSize).

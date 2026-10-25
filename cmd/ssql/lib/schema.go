@@ -19,8 +19,9 @@ const (
 	TypeInt    = "int"
 	TypeFloat  = "float"
 	TypeBool   = "bool"
-	TypeJSON   = "json" // arrays, nested objects
-	TypeTime   = "time" // time.Time, RFC 3339 on the wire (DFC128 D1)
+	TypeJSON   = "json"   // arrays, nested objects
+	TypeTime   = "time"   // time.Time, RFC 3339 on the wire (DFC128 D1)
+	TypeInt128 = "int128" // ssql.Int128, a bare number on the wire; DuckDB's HUGEINT (DFC155 C)
 )
 
 // Schema represents the structure of JSONL records with ordered fields and types.
@@ -311,6 +312,10 @@ func widenWireType(a, b string) string {
 		return a
 	case (a == TypeInt && b == TypeFloat) || (a == TypeFloat && b == TypeInt):
 		return TypeFloat
+	case (a == TypeInt && b == TypeInt128) || (a == TypeInt128 && b == TypeInt):
+		return TypeInt128 // int beside int128 widens to int128 (DFC155 C)
+	case (a == TypeInt128 && b == TypeFloat) || (a == TypeFloat && b == TypeInt128):
+		return TypeFloat
 	}
 	return TypeString
 }
@@ -342,6 +347,8 @@ func InferTypeString(v any) string {
 	switch v.(type) {
 	case int64:
 		return TypeInt
+	case ssql.Int128:
+		return TypeInt128
 	case float64:
 		return TypeFloat
 	case bool:
@@ -372,6 +379,8 @@ func FieldTypeToSchemaType(ft ssql.FieldType) string {
 		return TypeTime
 	case ssql.FieldTypeJSON:
 		return TypeJSON
+	case ssql.FieldTypeInt128:
+		return TypeInt128
 	default:
 		return TypeString
 	}
@@ -392,6 +401,8 @@ func SchemaTypeToFieldType(typ string) ssql.FieldType {
 		return ssql.FieldTypeTime
 	case TypeJSON:
 		return ssql.FieldTypeJSON
+	case TypeInt128:
+		return ssql.FieldTypeInt128
 	default:
 		return ssql.FieldTypeString
 	}

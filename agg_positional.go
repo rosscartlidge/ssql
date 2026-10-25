@@ -78,6 +78,11 @@ func distinctKey(v any) any {
 		return x
 	case time.Time:
 		return x.UnixNano()
+	case Int128:
+		if i, ok := x.Int64(); ok {
+			return float64(i) // one value with the int64 and float forms
+		}
+		return x // past int64: exact, its own key (comparable)
 	}
 	if isNumeric(v) {
 		return toFloat64(v)
@@ -110,6 +115,8 @@ func AggValueString(v any) string {
 		return x
 	case int64:
 		return strconv.FormatInt(x, 10)
+	case Int128:
+		return x.String()
 	case int:
 		return strconv.FormatInt(int64(x), 10)
 	case int32:

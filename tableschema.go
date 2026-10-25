@@ -142,9 +142,10 @@ func ParseTableSchema(data []byte, csvBase, dir string) (*TableSchema, error) {
 // ---- Frictionless -------------------------------------------------------
 
 type frictionlessField struct {
-	Name   string `json:"name"`
-	Type   string `json:"type"`
-	Format string `json:"format"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Format   string `json:"format"`
+	SSQLType string `json:"ssqlType"` // ssql's own type where Frictionless has none (int128 is an "integer")
 }
 
 type frictionlessDialect struct {
@@ -221,7 +222,11 @@ func parseFrictionlessSchema(data []byte) (*TableSchema, error) {
 		if f.Name == "" {
 			return nil, fmt.Errorf("a field has no name")
 		}
-		ft, shape, format, err := sidecarFieldType(f.Name, f.Type, f.Format, false)
+		typeName := f.Type
+		if f.SSQLType != "" {
+			typeName = f.SSQLType
+		}
+		ft, shape, format, err := sidecarFieldType(f.Name, typeName, f.Format, false)
 		if err != nil {
 			return nil, err
 		}
@@ -304,13 +309,17 @@ func parseCSVW(top map[string]json.RawMessage, csvBase, dir string) (*TableSchem
 			if len(c.Datatype) > 0 {
 				if json.Unmarshal(c.Datatype, &base) != nil {
 					var obj struct {
-						Base   string `json:"base"`
-						Format string `json:"format"`
+						Base     string `json:"base"`
+						Format   string `json:"format"`
+						SSQLType string `json:"ssqlType"`
 					}
 					if err := json.Unmarshal(c.Datatype, &obj); err != nil {
 						return nil, fmt.Errorf("column %q datatype: %w", name, err)
 					}
 					base, format = obj.Base, obj.Format
+					if obj.SSQLType != "" {
+						base = obj.SSQLType
+					}
 				}
 			}
 			ft, shape, strf, err := sidecarFieldType(name, base, format, true)
@@ -376,6 +385,8 @@ func sidecarFieldType(name, typeName, format string, uts35 bool) (FieldType, str
 	switch strings.ToLower(typeName) {
 	case "integer", "int", "long", "short", "byte", "year":
 		return FieldTypeInt, "", "", nil
+	case "int128", "hugeint":
+		return FieldTypeInt128, "", "", nil
 	case "number", "decimal", "double", "float":
 		return FieldTypeFloat, "", "", nil
 	case "boolean", "bool":
@@ -409,11 +420,22 @@ func sidecarFieldType(name, typeName, format string, uts35 bool) (FieldType, str
 	return 0, "", "", fmt.Errorf("field %q: unknown type %q", name, typeName)
 }
 
+// sidecarFieldJSON is one field of a written Table Schema: name, the
+// Frictionless type, and ssqlType for a width Frictionless cannot say
+// (int128), which the readers prefer when present.
+func sidecarFieldJSON(f TableField) map[string]any {
+	m := map[string]any{"name": f.Name, "type": TableTypeName(f)}
+	if f.Type == FieldTypeInt128 {
+		m["ssqlType"] = "int128"
+	}
+	return m
+}
+
 // TableTypeName is the Frictionless type name a field is written as.
 func TableTypeName(f TableField) string {
 	switch f.Type {
-	case FieldTypeInt:
-		return "integer"
+	case FieldTypeInt, FieldTypeInt128:
+		return "integer" // a Frictionless integer is unbounded; sidecarExtra keeps the width
 	case FieldTypeFloat:
 		return "number"
 	case FieldTypeBool:
@@ -439,7 +461,7 @@ func TableTypeName(f TableField) string {
 func TableSchemaJSON(fields []TableField) ([]byte, error) {
 	list := make([]any, 0, len(fields))
 	for _, f := range fields {
-		list = append(list, map[string]any{"name": f.Name, "type": TableTypeName(f)})
+		list = append(list, sidecarFieldJSON(f))
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -483,7 +505,7 @@ func WriteDatapackage(csvPath string, fields []TableField) error {
 
 	fieldList := make([]any, 0, len(fields))
 	for _, f := range fields {
-		fieldList = append(fieldList, map[string]any{"name": f.Name, "type": TableTypeName(f)})
+		fieldList = append(fieldList, sidecarFieldJSON(f))
 	}
 	format := "csv"
 	if strings.EqualFold(filepath.Ext(base), ".tsv") {
@@ -555,8 +577,12 @@ func TableFieldsFromRecords(records iter.Seq[Record], known map[string]FieldType
 			if f.Type == FieldTypeAuto {
 				f.Type = FieldTypeInt
 			}
-		case float64:
+		case Int128:
 			if f.Type == FieldTypeAuto || f.Type == FieldTypeInt {
+				f.Type = FieldTypeInt128
+			}
+		case float64:
+			if f.Type == FieldTypeAuto || f.Type == FieldTypeInt || f.Type == FieldTypeInt128 {
 				f.Type = FieldTypeFloat
 			}
 		case bool:

@@ -3,6 +3,7 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"math"
 	"iter"
 	"os"
 	"slices"
@@ -567,6 +568,10 @@ func parseValue(s string) any {
 	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return i
 	}
+	// Past int64, an integer literal is an int128 (DFC155 C), not a float
+	if w, err := ssql.ParseInt128(s); err == nil {
+		return w
+	}
 
 	// Try float64
 	if f, err := strconv.ParseFloat(s, 64); err == nil {
@@ -632,11 +637,26 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 	var coerced bool
 	switch existingValue.(type) {
 	case int64:
+		if w, ok := value.(ssql.Int128); ok {
+			// An int128 result into an int column: the column widens (the
+			// interpreter retypes per row; nothing is wrapped). DFC155 C.
+			if i, fits := w.Int64(); fits {
+				return mut.Int(field, i), false
+			}
+			return mut.Int128(field, w), false
+		}
 		coercedVal, didCoerce := coerceToInt64(value)
 		if didCoerce {
 			coerced = true
 		}
 		return mut.Int(field, coercedVal), coerced
+
+	case ssql.Int128:
+		coercedVal, didCoerce := coerceToInt128(value)
+		if didCoerce {
+			coerced = true
+		}
+		return mut.Int128(field, coercedVal), coerced
 
 	case float64:
 		coercedVal, didCoerce := coerceToFloat64(value)
@@ -667,6 +687,42 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 	default:
 		// Unknown existing type, apply with natural type
 		return applyValueToRecord(mut, field, value), false
+	}
+}
+
+// coerceToInt128 converts a value to an Int128, returning whether coercion
+// occurred: integers widen without one; a whole float, a digit string and
+// a bool are coercions.
+func coerceToInt128(value any) (ssql.Int128, bool) {
+	switch v := value.(type) {
+	case ssql.Int128:
+		return v, false
+	case int64:
+		return ssql.Int128From(v), false
+	case int:
+		return ssql.Int128From(int64(v)), false
+	case float64:
+		if w, ok := ssql.Int128FromFloat(math.Trunc(v)); ok {
+			return w, true
+		}
+		return ssql.Int128{}, true
+	case string:
+		if w, err := ssql.ParseInt128(v); err == nil {
+			return w, true
+		}
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			if w, ok := ssql.Int128FromFloat(math.Trunc(f)); ok {
+				return w, true
+			}
+		}
+		return ssql.Int128{}, true
+	case bool:
+		if v {
+			return ssql.Int128From(1), true
+		}
+		return ssql.Int128{}, true
+	default:
+		return ssql.Int128{}, true
 	}
 }
 
@@ -777,6 +833,8 @@ func applyValueToRecord(mut ssql.MutableRecord, field string, value any) ssql.Mu
 	switch v := value.(type) {
 	case int64:
 		return mut.Int(field, v)
+	case ssql.Int128:
+		return mut.Int128(field, v)
 	case float64:
 		return mut.Float(field, v)
 	case bool:

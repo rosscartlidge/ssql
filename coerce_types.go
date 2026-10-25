@@ -69,6 +69,8 @@ func coerceValue(v any, ft FieldType) (any, error) {
 		switch x := v.(type) {
 		case int64:
 			return strconv.FormatInt(x, 10), nil
+		case Int128:
+			return x.String(), nil
 		case float64:
 			return strconv.FormatFloat(x, 'g', -1, 64), nil
 		case bool:
@@ -79,9 +81,24 @@ func coerceValue(v any, ft FieldType) (any, error) {
 		switch x := v.(type) {
 		case int64:
 			return x, nil
+		case Int128:
+			if i, ok := x.Int64(); ok {
+				return i, nil
+			}
 		case float64:
 			if x == math.Trunc(x) && !math.IsInf(x, 0) {
 				return int64(x), nil
+			}
+		}
+	case FieldTypeInt128:
+		switch x := v.(type) {
+		case Int128:
+			return x, nil
+		case int64:
+			return Int128From(x), nil
+		case float64:
+			if w, ok := Int128FromFloat(x); ok {
+				return w, nil
 			}
 		}
 	case FieldTypeFloat:
@@ -90,6 +107,8 @@ func coerceValue(v any, ft FieldType) (any, error) {
 			return x, nil
 		case int64:
 			return float64(x), nil
+		case Int128:
+			return x.Float64(), nil
 		}
 	case FieldTypeBool:
 		if b, ok := v.(bool); ok {
@@ -113,6 +132,8 @@ func setAny(m MutableRecord, field string, v any) MutableRecord {
 		return m.String(field, x)
 	case int64:
 		return m.Int(field, x)
+	case Int128:
+		return m.Int128(field, x)
 	case float64:
 		return m.Float(field, x)
 	case bool:

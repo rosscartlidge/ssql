@@ -110,8 +110,8 @@ Date Functions (22):
   date_trunc(ts, unit), date_add(ts, n, unit), date_diff(unit, a, b), tz(ts, zone),
   strftime(ts, pattern), strptime(text, pattern), bucket(ts, dur), duration(str), timezone(str)
 
-Type & Encoding (10):
-  int(v), float(v), string(v), type(v),
+Type & Encoding (11):
+  int(v), int128(v), float(v), string(v), type(v),
   toJSON(v), fromJSON(str), toBase64(str), fromBase64(str),
   toPairs(map), fromPairs(arr)
 
@@ -493,6 +493,9 @@ func writeTypeFunctions(w io.Writer) {
 	fmt.Fprintln(w, "Type Conversion:")
 	fmt.Fprintln(w, "  int(value)              Convert to integer")
 	fmt.Fprintln(w, "    Example: int(\"123\") → 123")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  int128(value)           Widen to a 128-bit integer (the int128 column type, DuckDB's HUGEINT): an integer, a whole float, or a digit string — the way to write a literal past int64")
+	fmt.Fprintln(w, "    Example: int128(\"123456789012345678901234567890\") * 2 → 246913578024691357802469135780")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  float(value)            Convert to float")
 	fmt.Fprintln(w, "    Example: float(\"3.14\") → 3.14")

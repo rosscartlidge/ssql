@@ -75,6 +75,19 @@ func parseIntCell(s string) (any, error) {
 	return nil, errCellType
 }
 
+// parseInt128Cell reads an int128 column's cell: any integer literal
+// that fits 128 bits, small ones included (the column is one type).
+func parseInt128Cell(s string) (any, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	if w, err := ParseInt128(s); err == nil {
+		return w, nil
+	}
+	return nil, errCellType
+}
+
 func parseFloatCell(s string) (any, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -140,6 +153,8 @@ func zeroForEmpty(ft FieldType, p cellParser) cellParser {
 	switch ft {
 	case FieldTypeInt:
 		zero = int64(0)
+	case FieldTypeInt128:
+		zero = Int128{}
 	case FieldTypeFloat:
 		zero = float64(0)
 	case FieldTypeBool:
@@ -160,6 +175,8 @@ func parserForType(ft FieldType) cellParser {
 	switch ft {
 	case FieldTypeInt:
 		return parseIntCell
+	case FieldTypeInt128:
+		return parseInt128Cell
 	case FieldTypeFloat:
 		return parseFloatCell
 	case FieldTypeBool:
@@ -204,13 +221,15 @@ func ZeroPaddedNumber(s string) bool {
 }
 
 // inferColumnType picks the narrowest type every non-empty sampled
-// value fits: int → float → bool → string. Empty cells carry no type
-// information (they are missing); a column with no non-empty sample is
-// a string column. Bool is recognised from true/false only — `1`/`0`
-// are ints, and a column mixing `true` with numbers is text.
+// value fits: int → int128 → float → bool → string. Empty cells carry no
+// type information (they are missing); a column with no non-empty sample
+// is a string column. Bool is recognised from true/false only — `1`/`0`
+// are ints, and a column mixing `true` with numbers is text. An integer
+// literal past int64 makes the column int128, exact (DFC155 C; it was a
+// float, rounded past 2^53); past int128 it is a float as before.
 func inferColumnType(values []string) FieldType {
 	seen := false
-	allInt, allFloat, allBool := true, true, true
+	allInt, allInt128, allFloat, allBool := true, true, true, true
 	for _, v := range values {
 		v = strings.TrimSpace(v)
 		if v == "" {
@@ -220,11 +239,15 @@ func inferColumnType(values []string) FieldType {
 		if ZeroPaddedNumber(v) {
 			// 007, 02134: an identifier that happens to be digits. Read as
 			// a number it loses its zeros for good (DFC133).
-			allInt, allFloat = false, false
+			allInt, allInt128, allFloat = false, false, false
 		}
 		if allInt {
 			_, err := strconv.ParseInt(v, 10, 64)
 			allInt = err == nil
+		}
+		if allInt128 && !allInt {
+			_, err := ParseInt128(v)
+			allInt128 = err == nil
 		}
 		if allFloat {
 			_, err := strconv.ParseFloat(v, 64)
@@ -234,7 +257,7 @@ func inferColumnType(values []string) FieldType {
 			l := strings.ToLower(v)
 			allBool = l == "true" || l == "false"
 		}
-		if !allInt && !allFloat && !allBool {
+		if !allInt128 && !allFloat && !allBool {
 			break
 		}
 	}
@@ -243,6 +266,8 @@ func inferColumnType(values []string) FieldType {
 		return FieldTypeString
 	case allInt:
 		return FieldTypeInt
+	case allInt128:
+		return FieldTypeInt128
 	case allFloat:
 		return FieldTypeFloat
 	case allBool:

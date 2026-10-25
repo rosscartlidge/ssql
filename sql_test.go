@@ -621,8 +621,8 @@ func TestSum(t *testing.T) {
 	sumFn := Sum("value")
 	result := sumFn(records).getValue()
 
-	if result != int64(60) { // integers sum in int64, exactly (DFC155 B)
-		t.Errorf("Sum should return int64 60, got %v (%T)", result, result)
+	if result != Int128From(60) { // integers sum exactly, in an Int128 (DFC155 C)
+		t.Errorf("Sum should return Int128 60, got %v (%T)", result, result)
 	}
 }
 
@@ -669,8 +669,8 @@ func TestAvgEmpty(t *testing.T) {
 	if result != nil {
 		t.Errorf("Avg of empty should have no value, got %v", result)
 	}
-	if got := Sum("score")(records).getValue(); got != int64(0) { // no values: the integer zero
-		t.Errorf("Sum of empty should be 0, got %v", got)
+	if got := Sum("score")(records).getValue(); got != (Int128{}) { // no values: the integer zero
+		t.Errorf("Sum of empty should be 0, got %v (%T)", got, got)
 	}
 }
 
@@ -800,8 +800,8 @@ func TestExprAggSum(t *testing.T) {
 	exprFn := ExprAgg("sum(value)")
 	result := exprFn(records).getValue()
 
-	if result != int64(60) {
-		t.Errorf("ExprAgg sum of ints should return int64 60, got %#v", result)
+	if result != Int128From(60) { // an integer sum is an Int128 (DFC155 C)
+		t.Errorf("ExprAgg sum of ints should return Int128 60, got %#v", result)
 	}
 }
 
@@ -890,15 +890,15 @@ func TestExprAggNested(t *testing.T) {
 		expr string
 		want any
 	}{
-		{"sum(sum(scores))", int64(71)},
+		{"sum(sum(scores))", Int128From(71)},
 		{"max(max(scores))", int64(30)},
 		{"avg(sum(scores))", 71.0 / 3},
-		{"sum(len(tags))", int64(3)},
+		{"sum(len(tags))", Int128From(3)}, // an integer sum is an Int128 (DFC155 C)
 		{"max(len(tags))", int64(2)},
-		{"sum(sum(scores) > 5 ? 1 : 0)", int64(2)},
+		{"sum(sum(scores) > 5 ? 1 : 0)", Int128From(2)},
 		{"len(flatten(scores))", int64(6)},             // group level: scores is the array of lists
 		{"len(filter(scores, sum(#) > 10))", int64(1)}, // sum(#) is the closure's own
-		{"sum(len(scores))", int64(6)},                 // row level: each row's list length, summed
+		{"sum(len(scores))", Int128From(6)},            // row level: each row's list length, summed
 		{"count()", int64(3)},                          // the bare dummy still parses
 	}
 	for _, c := range cases {
@@ -950,8 +950,8 @@ func TestExprAggComplexExpression(t *testing.T) {
 	exprFn := ExprAgg("sum(qty * price)")
 	result := exprFn(records).getValue()
 
-	if result != int64(200) {
-		t.Errorf("ExprAgg sum(qty * price) of ints should return int64 200, got %#v", result)
+	if result != Int128From(200) {
+		t.Errorf("ExprAgg sum(qty * price) of ints should return Int128 200, got %#v", result)
 	}
 }
 
