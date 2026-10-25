@@ -228,6 +228,65 @@ listed sequence types, `[]any` for `Collect` results and `iter.Seq[any]`
 for `CollectSeq`. `OrderedValue` is the constraint for `Min[T]` /
 `Max[T]`.
 
+### Int128
+
+```go
+type Int128 struct{ /* hi int64; lo uint64 */ }   // signed 128-bit integer, the `int128` column (DuckDB HUGEINT); comparable, 16 bytes, no allocation
+var MaxInt128, MinInt128 Int128                    // 2^127−1 and −2^127
+
+func Int128From(v int64) Int128
+func Int128FromWords(hi int64, lo uint64) Int128   // two's-complement words (Arrow Decimal128 HighBits/LowBits)
+func Int128FromFloat(f float64) (Int128, bool)     // a whole float64 that fits
+func ParseInt128(s string) (Int128, error)         // decimal with optional sign; *strconv.NumError (ErrSyntax/ErrRange)
+func MustParseInt128(s string) Int128              // for a validated literal (generated code); panics otherwise
+func MustInt64(x Int128) int64                     // narrows one known to fit; a *CastError otherwise, never a wrap
+func Int128Min(a, b Int128) Int128
+func Int128Max(a, b Int128) Int128
+
+func (x Int128) Words() (hi int64, lo uint64)
+func (x Int128) IsZero() bool
+func (x Int128) Sign() int
+func (x Int128) Cmp(y Int128) int
+func (x Int128) IsInt64() bool
+func (x Int128) Int64() (int64, bool)
+func (x Int128) Float64() float64                  // nearest float64, ties to even (what math/big gives), no allocation
+func (x Int128) String() string                    // the decimal digits every engine prints
+
+// Checked arithmetic: the exact result, or an *Int128OverflowError
+// (`integer overflow: A op B does not fit an int128`); x / 0 is
+// `integer divide by zero`. The unchecked forms panic with the same errors
+// — the rule every int64 operation follows (DFC155 B).
+func (x Int128) CheckedAdd(y Int128) (Int128, error)
+func (x Int128) CheckedSub(y Int128) (Int128, error)
+func (x Int128) CheckedMul(y Int128) (Int128, error)
+func (x Int128) CheckedQuo(y Int128) (Int128, error)   // truncated toward zero; MinInt128 / −1 overflows
+func (x Int128) CheckedRem(y Int128) (Int128, error)   // the sign of x
+func (x Int128) CheckedNeg() (Int128, error)
+func (x Int128) CheckedAbs() (Int128, error)
+func (x Int128) Add(y Int128) Int128
+func (x Int128) Sub(y Int128) Int128
+func (x Int128) Mul(y Int128) Int128
+func (x Int128) Quo(y Int128) Int128
+func (x Int128) Rem(y Int128) Int128
+func (x Int128) Neg() Int128
+func (x Int128) Abs() Int128
+
+func (x Int128) MarshalJSON() ([]byte, error)      // the bare number, as DuckDB writes a HUGEINT
+func (x *Int128) UnmarshalJSON(b []byte) error     // a bare number or a quoted digit string (`duckdb -json`)
+func (x Int128) MarshalText() ([]byte, error)
+func (x *Int128) UnmarshalText(b []byte) error
+
+type Int128OverflowError struct{ Op string; A, B Int128 }
+func (e *Int128OverflowError) Error() string
+```
+
+A column is int128 because it was declared so — `cast -type int128`, a
+source literal past int64, an integer sum (`-sum` of an int64 column is
+an Int128, DuckDB's `SUM(BIGINT) → HUGEINT`) — never because a value
+overflowed. Int64 beside Int128 widens to Int128; Int128 beside a float64
+widens to float64 (`Float64()`). See
+[DFC155](research/dfc155_big_numbers.md).
+
 ### JSONString
 
 A string that holds valid JSON, for structured data embedded in a Record.
