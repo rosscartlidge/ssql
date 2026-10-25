@@ -134,6 +134,11 @@ type EquivCase struct {
 	Env []string
 }
 
+// equivNoSQL skips every SQL lane with one reason.
+func equivNoSQL(why string) map[string]string {
+	return map[string]string{"duckdb": why, "datafusion": why, "postgres": why}
+}
+
 // equivCommon is a filtered to the names also in b, keeping a's order.
 func equivCommon(a, b []string) []string {
 	in := make(map[string]bool, len(b))
@@ -503,8 +508,10 @@ func equivShellEnv(t *testing.T, lane, script string, env []string) string {
 }
 
 // equivParse turns raw JSONL into records, skipping blanks and any _schema
-// header. json.Unmarshal makes every number a float64, normalising int-vs-float
-// representation across lanes.
+// header. An integer literal stays its exact digits (a json.Number, which
+// marshals as the same text), so a wrong digit past 2^53 is a difference
+// — until DFC155 C every number became a float64, which could not see one;
+// any other number is a float64, so 3 and 3.0 still compare equal.
 func equivParse(t *testing.T, lane, raw string) []map[string]any {
 	t.Helper()
 	var recs []map[string]any
@@ -514,8 +521,15 @@ func equivParse(t *testing.T, lane, raw string) []map[string]any {
 			continue
 		}
 		var m map[string]any
-		if err := json.Unmarshal([]byte(line), &m); err != nil {
+		dec := json.NewDecoder(strings.NewReader(line))
+		dec.UseNumber()
+		if err := dec.Decode(&m); err != nil {
 			t.Fatalf("lane %q: bad JSONL line %q: %v", lane, line, err)
+		}
+		for k, v := range m {
+			if n, isNum := v.(json.Number); isNum {
+				m[k] = equivNumber(string(n))
+			}
 		}
 		if _, isSchema := m["_schema"]; isSchema {
 			continue
@@ -533,6 +547,19 @@ func equivParse(t *testing.T, lane, raw string) []map[string]any {
 		recs = append(recs, m)
 	}
 	return recs
+}
+
+// equivNumber is a number's canonical value: a canonical integer literal
+// keeps its digits (json.Number), anything else is a float64.
+func equivNumber(text string) any {
+	if canonicalIntRe.MatchString(text) {
+		return json.Number(text)
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return json.Number(text)
+	}
+	return f
 }
 
 // equivNormaliseTimes renders every string that IS a time (in any form
@@ -731,12 +758,11 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 				}
 				// duckdb -json renders HUGEINT (e.g. SUM over BIGINT) as a
 				// JSON string. ssql's CSV reader parses canonical integer
-				// strings as numbers anyway, so converting them back is
+				// strings as numbers anyway, so converting them back — to
+				// the exact digits, as equivParse keeps every lane's — is
 				// normalising a representation difference.
 				if s, isStr := v.(string); isStr && canonicalIntRe.MatchString(s) {
-					if f, err := strconv.ParseFloat(s, 64); err == nil {
-						r[k] = f
-					}
+					r[k] = json.Number(s)
 				}
 			}
 		}
@@ -2700,6 +2726,104 @@ var equivCases = []EquivCase{
 		Pipeline: `{{.bin}} from range 5`,
 		Ordered:  true,
 		Golden:   []map[string]any{{"n": 1}, {"n": 2}, {"n": 3}, {"n": 4}, {"n": 5}},
+	},
+
+	// ---- DFC155 C: int128 in every lane. Goldens are Python ints; a wide
+	// one is a json.Number, the exact digits the harness keeps for every
+	// lane's integers.
+	{
+		// The Fibonacci fold in int128 state, exact to fib(184) (183 steps;
+		// the 184th is the overflow TestIntOverflowEveryLane pins).
+		Name:     "cast_int128_fib_184",
+		Pipeline: `{{.bin}} from range 183 | {{.bin}} window -stream-expr '{a:int128(0), b:int128(1)}' '{a:b, b:a+b}' 'b' fib | {{.bin}} sort -desc n | {{.bin}} limit 1`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"n": 183, "fib": json.Number("127127879743834334146972278486287885163")}},
+		Skip:     equivNoSQL("window -stream-expr has no SQL translation"),
+	},
+	{
+		// group-by -sum of int64 past 2^63 is an int128, DuckDB's HUGEINT.
+		Name:     "sum_int64_widens",
+		Pipeline: `{{.bin}} from range 2 -start 9223372036854775806 | {{.bin}} group-by -sum n t`,
+		Golden:   []map[string]any{{"t": json.Number("18446744073709551613")}},
+	},
+	{
+		Name:     "window_sum_widens",
+		Pipeline: `{{.bin}} from range 2 -start 9223372036854775806 | {{.bin}} window -sum n t -order n | {{.bin}} sort n`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"n": int64(9223372036854775806), "t": json.Number("9223372036854775806")},
+			{"n": int64(9223372036854775807), "t": json.Number("18446744073709551613")},
+		},
+	},
+	{
+		Name:     "expr_sum_widens",
+		Pipeline: `{{.bin}} from range 2 -start 9223372036854775806 | {{.bin}} update -set-expr k 1 | {{.bin}} group-by k -expr 'sum(n)' t`,
+		Golden:   []map[string]any{{"k": 1, "t": json.Number("18446744073709551613")}},
+		Skip:     equivNoSQL("group-by -expr has no SQL translation"),
+	},
+	{
+		Name:     "pivot_sum_widens",
+		Pipeline: `{{.bin}} from range 2 -start 9223372036854775806 | {{.bin}} update -set-expr d '"a"' -set-expr q '"x"' | {{.bin}} pivot -row d -col q -val n -func sum`,
+		Golden:   []map[string]any{{"d": "a", "x": json.Number("18446744073709551613")}},
+		Skip:     equivNoSQL("pivot has no SQL translation"),
+	},
+	{
+		// -avg of integers is a float of the exact int128 sum: 2^62 and
+		// 2^62 + 2^12 average to 2^62 + 2^11, which float64 holds exactly,
+		// so DuckDB's DOUBLE agrees to the digit.
+		Name:     "int128_avg_exact",
+		Pipeline: `{{.bin}} from range 2 -start 4611686018427387904 -step 4096 | {{.bin}} group-by -avg n a`,
+		Golden:   []map[string]any{{"a": 4611686018427389952.0}},
+	},
+	{
+		// A CSV literal past int64 types its column int128 in every lane
+		// (DuckDB's sniffer would have made it DOUBLE: the column is declared).
+		Name:     "wide_literal_csv_column",
+		Pipeline: `{{.bin}} from csv {{.data}}/wide.csv | {{.bin}} where -if id gt 1 | {{.bin}} sort -desc id -desc v`,
+		Ordered:  true,
+		Golden: []map[string]any{
+			{"id": json.Number("123456789012345678901234567890"), "v": 1},
+			{"id": 5, "v": 3},
+			{"id": 5, "v": 2},
+		},
+	},
+	{
+		Name:     "int128_compare_where",
+		Pipeline: `{{.bin}} from csv {{.data}}/wide.csv | {{.bin}} where -if-expr 'id > int128("9223372036854775808")' | {{.bin}} include id`,
+		Golden:   []map[string]any{{"id": json.Number("123456789012345678901234567890")}},
+	},
+	{
+		Name:     "int128_groupby_key",
+		Pipeline: `{{.bin}} from csv {{.data}}/wide.csv | {{.bin}} group-by id -count c | {{.bin}} sort -desc id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": json.Number("123456789012345678901234567890"), "c": 1}, {"id": 5, "c": 2}},
+	},
+	{
+		// An int128 key beside an int64 key joins exactly.
+		Name:     "int128_join_key",
+		Pipeline: `{{.bin}} from csv {{.data}}/wide.csv | {{.bin}} join <({{.bin}} from range 6) -on id n | {{.bin}} sort v`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 5, "v": 2, "n": 5}, {"id": 5, "v": 3, "n": 5}},
+	},
+	{
+		// A list element past int64 is exact through a path and arithmetic.
+		Name:     "int128_json_nested_path",
+		Pipeline: `{{.bin}} from jsonl {{.data}}/wide.jsonl | {{.bin}} update -set-expr x 'xs[1] * 2' | {{.bin}} include id x | {{.bin}} sort id`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"id": 1, "x": json.Number("246913578024691357802")}, {"id": 2, "x": 6}},
+		Skip:     equivNoSQL("DuckDB's JSON reader reads a list element past int64 as DOUBLE"),
+	},
+	{
+		// int128 beside a float is a float64 (DuckDB widens HUGEINT + 0.5 to
+		// DECIMAL(38,1) instead: the documented divergence, DFC155 §7).
+		Name:     "int128_to_float_mix",
+		Pipeline: `{{.bin}} from csv {{.data}}/wide.csv | {{.bin}} update -set-expr f 'id + 0.5' | {{.bin}} include id f | {{.bin}} sort -desc id`,
+		Golden: []map[string]any{
+			{"id": json.Number("123456789012345678901234567890"), "f": 1.2345678901234568e+29},
+			{"id": 5, "f": 5.5},
+			{"id": 5, "f": 5.5},
+		},
+		Skip: equivNoSQL("HUGEINT + 0.5 is a DECIMAL(38,1) in DuckDB, a float64 in ssql"),
 	},
 	{
 		// N is a count; -start/-step say what the rows hold (a negative

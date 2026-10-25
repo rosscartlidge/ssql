@@ -232,6 +232,10 @@ func corpusData(t *testing.T) string {
 			"nil_time.jsonl":         "{\"id\":1,\"x\":\"2023-05-15T00:13:00Z\"}\n{\"id\":2,\"x\":null}\n{\"id\":3,\"x\":\"2023-05-15T01:47:00Z\"}\n",
 			"employees_schema.jsonl": corpusJSONLFromCSV(corpusEmployeesCSV, true),
 			"app.log":                corpusAppLog,
+			// DFC155 C: a literal past int64 types its column int128; two
+			// rows share the small key so a group or join discriminates.
+			"wide.csv":   "id,v\n123456789012345678901234567890,1\n5,2\n5,3\n",
+			"wide.jsonl": "{\"id\":1,\"xs\":[1,123456789012345678901]}\n{\"id\":2,\"xs\":[2,3]}\n",
 		}
 		for name, content := range files {
 			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
@@ -409,6 +413,27 @@ func TestPipelineCorpus(t *testing.T) {
 			Pipeline: `{{.bin}} from range 6 -start 0 -step 5 -field v | {{.bin}} update -set-expr half 'v / 2' | {{.bin}} where -if v gt 10 | {{.bin}} sort v | {{.bin}} to csv`,
 			Contains: []string{"v,half", "15,7.5", "25,12.5"},
 			Excludes: []string{"10,5"},
+		},
+		{
+			// DFC155 C: an int128 column by cast, int128 arithmetic and a
+			// comparison past 2^63 in record, typed and parallel.
+			Name:     "int128_cast_arith_every_mode",
+			Pipeline: `{{.bin}} from range 10 | {{.bin}} cast -type n int128 | {{.bin}} update -set-expr sq 'n * n * int128("10000000000000000000")' | {{.bin}} where -if-expr 'sq > int128("500000000000000000000")' | {{.bin}} sort -desc n | {{.bin}} to csv`,
+			Contains: []string{"n,sq", "10,1000000000000000000000", "8,640000000000000000000"},
+			Excludes: []string{"7,490000000000000000000"},
+		},
+		{
+			// A wide CSV literal types the column int128 in the typed lane's
+			// sampler too, and its sum is exact.
+			Name:     "int128_csv_wide_sum_every_mode",
+			Pipeline: `{{.bin}} from csv {{.data}}/wide.csv | {{.bin}} group-by -sum id t -count c | {{.bin}} to csv`,
+			Contains: []string{"t,c", "123456789012345678901234567900,3"},
+		},
+		{
+			// An int64 window sum widens past 2^63 instead of stopping.
+			Name:     "int128_window_sum_every_mode",
+			Pipeline: `{{.bin}} from range 3 -start 9223372036854775805 | {{.bin}} window -sum n t -order n | {{.bin}} sort n | {{.bin}} to csv`,
+			Contains: []string{"n,t", "9223372036854775807,27670116110564327418"},
 		},
 		{
 			// window -stream-expr in every mode: record calls

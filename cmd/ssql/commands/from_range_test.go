@@ -40,16 +40,16 @@ func TestParseRangeArgs(t *testing.T) {
 	}
 }
 
-// from range renders each engine's generator: half-open range() on
-// DuckDB and DataFusion (stop = start + N*step), inclusive
-// generate_series on Postgres (end = start + (N-1)*step, WHERE false
-// for N = 0), and seeds the one column as an int.
+// from range renders each engine's generator: inclusive generate_series
+// everywhere (end = start + (N-1)*step; the half-open range() stop did
+// not fit a BIGINT when the last row was MaxInt64 — DFC155 C), WHERE
+// false for N = 0, and seeds the one column as an int.
 func TestRangeSourceSQL(t *testing.T) {
 	q := &sqlQuery{}
 	if err := translateFrom(q, []string{"range", "3", "-start", "0", "-step", "2"}); err != nil {
 		t.Fatal(err)
 	}
-	if q.fromClause != "(SELECT n FROM range(0, 6, 2) AS t(n))" || len(q.columns) != 1 || q.columns[0] != "n" {
+	if q.fromClause != "(SELECT n FROM generate_series(0, 4, 2) AS t(n))" || len(q.columns) != 1 || q.columns[0] != "n" {
 		t.Errorf("duckdb: %s / %v", q.fromClause, q.columns)
 	}
 	if sqlColumnKinds["n"] != "int" {
@@ -59,8 +59,15 @@ func TestRangeSourceSQL(t *testing.T) {
 	if err := translateFrom(q, []string{"range", "4", "-start", "10", "-step", "-3", "-field", "i"}); err != nil {
 		t.Fatal(err)
 	}
-	if q.fromClause != "(SELECT i FROM range(10, -2, -3) AS t(i))" {
+	if q.fromClause != "(SELECT i FROM generate_series(10, 1, -3) AS t(i))" {
 		t.Errorf("duckdb negative step: %s", q.fromClause)
+	}
+	q = &sqlQuery{}
+	if err := translateFrom(q, []string{"range", "2", "-start", "9223372036854775806"}); err != nil || q.fromClause != "(SELECT n FROM generate_series(9223372036854775806, 9223372036854775807, 1) AS t(n))" {
+		t.Errorf("last row MaxInt64: %v %s", err, q.fromClause)
+	}
+	if err := translateFrom(&sqlQuery{}, []string{"range", "3", "-start", "9223372036854775806"}); err == nil || !strings.Contains(err.Error(), "does not fit a BIGINT") {
+		t.Errorf("past int64: %v", err)
 	}
 	if err := translateFrom(&sqlQuery{}, []string{"range", "3", "-step", "0"}); err == nil || !strings.Contains(err.Error(), "-step must not be 0") {
 		t.Errorf("step 0: %v", err)
@@ -69,9 +76,9 @@ func TestRangeSourceSQL(t *testing.T) {
 	pg := mustDialect(t, dialectPostgres, "ssql from range 3 -start 0 -step 2", "ssql where -if n gt 1")
 	wantAll(t, pg, `generate_series(0, 4, 2) AS t("n")`, `AS __q`)
 	pg0 := mustDialect(t, dialectPostgres, "ssql from range 0")
-	wantAll(t, pg0, `generate_series(1, 0, 1) AS t("n") WHERE false`)
+	wantAll(t, pg0, `generate_series(1, 1, 1) AS t("n") WHERE false`)
 	df := mustDialect(t, dialectDataFusion, "ssql from range 3", "ssql where -if n gt 1")
-	wantAll(t, df, `(SELECT value AS "n" FROM range(1, 4, 1))`)
+	wantAll(t, df, `(SELECT value AS "n" FROM generate_series(1, 3, 1))`)
 }
 
 // generate ssql's source rules see a generator, not a file.

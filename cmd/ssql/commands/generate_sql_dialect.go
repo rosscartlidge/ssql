@@ -131,6 +131,8 @@ func seedColumnKinds(path string, delim rune) {
 		switch types[i] {
 		case "BIGINT":
 			sqlColumnKinds[c] = "int"
+		case pgInt128Type:
+			sqlColumnKinds[c] = "int128" // a literal past int64 in the sample (DFC155 C)
 		case "DOUBLE PRECISION":
 			sqlColumnKinds[c] = "float"
 		case "BOOLEAN":
@@ -286,12 +288,14 @@ func pgInferColumns(path string, delim rune) ([]string, []string) {
 	}
 	const (
 		kInt = iota
+		kWide // an integer past int64 that fits int128 (DFC155 C)
 		kFloat
 		kBool
 		kDate
 		kText
 		kEmpty
 	)
+	numeric := func(k int) bool { return k == kInt || k == kWide || k == kFloat }
 	kinds := make([]int, len(header))
 	for i := range kinds {
 		kinds[i] = kEmpty
@@ -310,6 +314,8 @@ func pgInferColumns(path string, delim rune) ([]string, []string) {
 			switch {
 			case isIntToken(cell):
 				k = kInt
+			case isWideIntToken(cell):
+				k = kWide
 			case isFloatToken(cell):
 				k = kFloat
 			case strings.EqualFold(cell, "true"), strings.EqualFold(cell, "false"):
@@ -323,7 +329,9 @@ func pgInferColumns(path string, delim rune) ([]string, []string) {
 			case kinds[i] == kEmpty:
 				kinds[i] = k
 			case kinds[i] == k:
-			case (kinds[i] == kInt || kinds[i] == kFloat) && (k == kInt || k == kFloat):
+			case (kinds[i] == kInt || kinds[i] == kWide) && (k == kInt || k == kWide):
+				kinds[i] = kWide // int beside int128 is int128
+			case numeric(kinds[i]) && numeric(k):
 				kinds[i] = kFloat
 			default:
 				kinds[i] = kText
@@ -335,6 +343,8 @@ func pgInferColumns(path string, delim rune) ([]string, []string) {
 		switch k {
 		case kInt:
 			types[i] = "BIGINT"
+		case kWide:
+			types[i] = pgInt128Type
 		case kFloat:
 			types[i] = "DOUBLE PRECISION"
 		case kBool:
@@ -355,6 +365,18 @@ func isIntToken(s string) bool {
 		return false
 	}
 	_, err := strconv.ParseInt(s, 10, 64)
+	return err == nil
+}
+
+// isWideIntToken: an integer literal past int64 that fits int128.
+func isWideIntToken(s string) bool {
+	if ssql.ZeroPaddedNumber(s) {
+		return false
+	}
+	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return false
+	}
+	_, err := ssql.ParseInt128(s)
 	return err == nil
 }
 
@@ -497,6 +519,23 @@ func sqlRegexMatch(field, pattern string) string {
 		return fmt.Sprintf("regexp_like(%s, %s)", field, pattern)
 	}
 	return fmt.Sprintf("regexp_matches(%s, %s)", field, pattern)
+}
+
+// pgInt128Type is the Postgres column type that holds an int128: NUMERIC
+// has no 128-bit form, so 39 digits of it (DFC155 C).
+const pgInt128Type = "NUMERIC(39,0)"
+
+// sqlInt128Type is the 128-bit integer type per dialect: DuckDB's native
+// HUGEINT, Postgres NUMERIC(39,0), DataFusion DECIMAL(38,0) (38 digits,
+// one short of int128's 39; documented, the lane is not gated here).
+func sqlInt128Type() string {
+	switch sqlDialectCur {
+	case dialectPostgres:
+		return pgInt128Type
+	case dialectDataFusion:
+		return "DECIMAL(38,0)"
+	}
+	return "HUGEINT"
 }
 
 // sqlFloatType is the double-precision type name.
@@ -744,6 +783,8 @@ func pgColumnType(typeName, inferred string) string {
 	switch typeName {
 	case "int":
 		return "BIGINT"
+	case "int128":
+		return pgInt128Type
 	case "float":
 		return "DOUBLE PRECISION"
 	case "bool":

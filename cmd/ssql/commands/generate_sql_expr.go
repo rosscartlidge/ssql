@@ -236,6 +236,14 @@ func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 }
 
 func exprCallToSQL(name string, args []ast.Node) (string, error) {
+	if name == "int128" && len(args) == 1 {
+		// The widening conversion (DFC155 C): the dialect's 128-bit type.
+		arg, err := exprNodeToSQL(args[0])
+		if err != nil {
+			return "", err
+		}
+		return "CAST(" + arg + " AS " + sqlInt128Type() + ")", nil
+	}
 	if sqlType, ok := exprCasts[name]; ok && len(args) == 1 {
 		arg, err := exprNodeToSQL(args[0])
 		if err != nil {

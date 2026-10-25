@@ -21,6 +21,7 @@ import (
 	cf "github.com/rosscartlidge/autocli/v4"
 	"github.com/rosscartlidge/ssql/v4"
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
+	"github.com/rosscartlidge/ssql/v4/exprfn"
 )
 
 // registerGenerateSQL registers the "generate sql" subcommand
@@ -682,7 +683,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 			}
 			if q.csvSource != "" {
 				applyTypeOverrideKinds(typeOverrides)
-				q.csvTypes = duckTypesOption(typeOverrides)
+				q.csvTypes = duckTypesOption(withSampledWideColumns(typeOverrides))
 				if len(timeFormats) > 0 {
 					// -format COL PATTERN (DFC147 §7.2): DuckDB's read_csv
 					// takes ONE timestampformat, honoured for naive
@@ -725,7 +726,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 				delim = '\t'
 			}
 			applyTypeOverrideKinds(typeOverrides)
-			q.fromClause = duckReadCSV(files, delim, duckTypesOption(typeOverrides))
+			q.fromClause = duckReadCSV(files, delim, duckTypesOption(withSampledWideColumns(typeOverrides)))
 		} else {
 			// Postgres/DataFusion: one source per file, UNION ALL (the
 			// files must share a header, as ssql's own multi-file read
@@ -800,31 +801,39 @@ func translateFrom(q *sqlQuery, args []string) error {
 
 // translateRangeSource renders `from range N [-start S] [-step K]
 // [-field NAME]` (DFC154) as each engine's row generator. N is a row
-// count: DuckDB's and DataFusion's range(start, stop, step) are
-// half-open, so stop = start + N*step for either sign of step;
-// Postgres's generate_series is inclusive, so its end is
-// start + (N-1)*step, and N = 0 needs a WHERE false (with a negative
-// step that end lies past start and would yield rows).
+// count; generate_series is inclusive in every engine, so the end is
+// start + (N-1)*step — the half-open range() needed start + N*step, which
+// does not fit a BIGINT when the last row is MaxInt64 (DFC155 C's
+// widening cases). N = 0 needs a WHERE false (with a negative step that
+// end lies past start and would yield rows). An end past int64 refuses.
 func translateRangeSource(q *sqlQuery, args []string) error {
 	o, err := parseRangeArgs(args)
 	if err != nil {
 		return err
 	}
 	col := quoteIdent(o.field)
+	span, err := exprfn.CheckedMul(max(o.count-1, 0), o.step)
+	if err != nil {
+		return fmt.Errorf("from range: the last value does not fit a BIGINT")
+	}
+	end, err := exprfn.CheckedAdd(o.start, span)
+	if err != nil {
+		return fmt.Errorf("from range: the last value does not fit a BIGINT")
+	}
+	where := ""
+	if o.count == 0 {
+		where = " WHERE false"
+	}
 	switch sqlDialectCur {
 	case dialectPostgres:
-		where := ""
-		if o.count == 0 {
-			where = " WHERE false"
-		}
 		q.fromClause = sqlSubquery(fmt.Sprintf("(SELECT %s FROM generate_series(%d, %d, %d) AS t(%s)%s)",
-			col, o.start, o.start+(o.count-1)*o.step, o.step, col, where))
+			col, o.start, end, o.step, col, where))
 	case dialectDataFusion:
-		q.fromClause = fmt.Sprintf("(SELECT value AS %s FROM range(%d, %d, %d))",
-			col, o.start, o.start+o.count*o.step, o.step)
+		q.fromClause = fmt.Sprintf("(SELECT value AS %s FROM generate_series(%d, %d, %d)%s)",
+			col, o.start, end, o.step, where)
 	default:
-		q.fromClause = fmt.Sprintf("(SELECT %s FROM range(%d, %d, %d) AS t(%s))",
-			col, o.start, o.start+o.count*o.step, o.step, col)
+		q.fromClause = fmt.Sprintf("(SELECT %s FROM generate_series(%d, %d, %d) AS t(%s)%s)",
+			col, o.start, end, o.step, col, where)
 	}
 	q.columns = []string{o.field}
 	sqlColumnKinds[o.field] = "int"
@@ -2434,7 +2443,7 @@ func translateCast(q *sqlQuery, args []string) error {
 				sqlNeedsZone = true
 				expr = sqlStrptime(quoteIdent(field), pattern)
 			}
-			if ft, err := ssql.ParseFieldType(typeName); err == nil && ft == ssql.FieldTypeInt && kindBefore != "int" {
+			if ft, err := ssql.ParseFieldType(typeName); err == nil && (ft == ssql.FieldTypeInt || ft == ssql.FieldTypeInt128) && kindBefore != "int" && kindBefore != "int128" {
 				// ssql's float → int TRUNCATES (2.9 → 2, as Go and pandas do);
 				// SQL's CAST rounds (DuckDB and Postgres give 3). Truncate
 				// explicitly — except from a column already known to be an
@@ -2715,6 +2724,8 @@ func mapTypeToSQL(typeName string) string {
 	switch strings.ToLower(typeName) {
 	case "int", "integer", "int64":
 		return "BIGINT"
+	case "int128", "hugeint":
+		return sqlInt128Type()
 	case "float", "float64", "double", "number":
 		return sqlFloatType()
 	case "string", "str", "text":
@@ -3135,6 +3146,31 @@ func coalesceEmptyCells(src string, columns []string) string {
 	return sqlSubquery("(SELECT " + strings.Join(cols, ", ") + " FROM " + src + ")")
 }
 
+// withSampledWideColumns adds the source columns the sampler typed int128
+// (a literal past int64; sqlColumnKinds was seeded from this file) to the
+// declared types, so the engine reads them as HUGEINT where its own
+// sniffer would make them DOUBLE (DFC155 C). An explicit -type wins.
+func withSampledWideColumns(overrides map[string]string) map[string]string {
+	var out map[string]string
+	for col, kind := range sqlColumnKinds {
+		if kind != "int128" {
+			continue
+		}
+		if _, declared := overrides[col]; declared {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, len(overrides)+1)
+			maps.Copy(out, overrides)
+		}
+		out[col] = "int128"
+	}
+	if out == nil {
+		return overrides
+	}
+	return out
+}
+
 // duckTypesOption renders -type / sidecar overrides as read_csv's
 // types={'col': 'TYPE', …} option (sorted; "" when none).
 func duckTypesOption(overrides map[string]string) string {
@@ -3155,6 +3191,8 @@ func duckColumnType(typeName string) string {
 	switch typeName {
 	case "int":
 		return "BIGINT"
+	case "int128":
+		return "HUGEINT"
 	case "float":
 		return "DOUBLE"
 	case "bool":
