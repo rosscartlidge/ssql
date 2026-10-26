@@ -135,9 +135,34 @@ func MustCoerceFloat64(v any, expression string) float64 {
 		return float64(x)
 	case ssql.Int128:
 		return x.Float64()
+	case ssql.Decimal:
+		return x.Float64()
 	}
 	coerceFail(v, "float64", expression)
 	return 0
+}
+
+// MustCoerceDecimalAt types a result for a decimal:scale column: a
+// Decimal of that scale as it is, an integer of either width exactly at
+// the scale; a Decimal of another scale, a float or anything else fails —
+// a typed column cannot retype (DFC155 E).
+func MustCoerceDecimalAt(scale int) func(v any, expression string) ssql.Decimal {
+	return func(v any, expression string) ssql.Decimal {
+		switch x := v.(type) {
+		case ssql.Decimal:
+			if x.Scale() == scale {
+				return x
+			}
+		case int64:
+			return ssql.DecimalFromInt64(x, scale)
+		case int:
+			return ssql.DecimalFromInt64(int64(x), scale)
+		case ssql.Int128:
+			return ssql.MustDecimalFromInt128(x, scale)
+		}
+		coerceFail(v, "ssql.Decimal at scale "+fmt.Sprint(scale), expression)
+		return ssql.Decimal{}
+	}
 }
 
 // MustCoerceInt128 types a result for an int128 column: an Int128 as it

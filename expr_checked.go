@@ -59,6 +59,8 @@ const (
 	exprCheckedAbs   = "_ssql_abs"
 	exprCheckedMin   = "_ssql_min"
 	exprCheckedMax   = "_ssql_max"
+	exprCheckedFloor = "_ssql_floor"
+	exprCheckedCeil  = "_ssql_ceil"
 )
 
 // exprCheckedOperators maps a binary operator to its patched call, and
@@ -74,6 +76,7 @@ var exprCheckedOperators = map[string]string{
 var exprCheckedBuiltins = map[string]string{
 	"int": exprCheckedInt, "float": exprCheckedFloat, "abs": exprCheckedAbs,
 	"min": exprCheckedMin, "max": exprCheckedMax,
+	"floor": exprCheckedFloor, "ceil": exprCheckedCeil,
 }
 
 var exprCheckedNames = func() map[string]bool {
@@ -95,9 +98,9 @@ var exprCheckedNames = func() map[string]bool {
 func ExprCheckedIntArithmetic() []expr.Option {
 	boolSig := new(func(any, any) bool)
 	return []expr.Option{
-		expr.Function(exprCheckedAdd, checkedArith(exprfn.CheckedAdd, Int128.CheckedAdd, runtime.Add)),
-		expr.Function(exprCheckedSub, checkedArith(exprfn.CheckedSub, Int128.CheckedSub, runtime.Subtract)),
-		expr.Function(exprCheckedMul, checkedArith(exprfn.CheckedMul, Int128.CheckedMul, runtime.Multiply)),
+		expr.Function(exprCheckedAdd, checkedArith(exprfn.CheckedAdd, Int128.CheckedAdd, Decimal.CheckedAdd, runtime.Add)),
+		expr.Function(exprCheckedSub, checkedArith(exprfn.CheckedSub, Int128.CheckedSub, Decimal.CheckedSub, runtime.Subtract)),
+		expr.Function(exprCheckedMul, checkedArith(exprfn.CheckedMul, Int128.CheckedMul, Decimal.CheckedMul, runtime.Multiply)),
 		expr.Function(exprCheckedNeg, checkedNegate),
 		expr.Function(exprCheckedSum, checkedSum),
 		expr.Function(exprCheckedDiv, checkedDivide),
@@ -114,6 +117,8 @@ func ExprCheckedIntArithmetic() []expr.Option {
 		expr.Function(exprCheckedAbs, wideBuiltin("abs", wideAbs)),
 		expr.Function(exprCheckedMin, wideBuiltin("min", wideExtreme(-1))),
 		expr.Function(exprCheckedMax, wideBuiltin("max", wideExtreme(1))),
+		expr.Function(exprCheckedFloor, wideBuiltin("floor", wideFloorCeil(-1))),
+		expr.Function(exprCheckedCeil, wideBuiltin("ceil", wideFloorCeil(1))),
 		expr.Patch(checkedArithPatcher{}),
 	}
 }
@@ -123,6 +128,9 @@ func ExprCheckedIntArithmetic() []expr.Option {
 // for the rest.
 func checkedNegate(params ...any) (any, error) {
 	a := exprDeref(params[0])
+	if d, ok := a.(Decimal); ok {
+		return d.Neg(), nil // cannot overflow: |units| < 10^38 on both sides of zero
+	}
 	if x, ok := exprIntOperand(a); ok {
 		r, err := exprfn.CheckedNeg(x)
 		if err != nil {
@@ -145,20 +153,43 @@ func checkedNegate(params ...any) (any, error) {
 func checkedSum(params ...any) (any, error) {
 	arr := exprDeref(params[0])
 	var ints Int128
+	var dec Decimal // a decimal element makes the sum a decimal at its scale (DFC155 E)
 	var floats float64
-	isFloat := false
+	isDec, isFloat := false, false
 	add := func(elem any) error {
 		elem = exprDeref(elem)
 		if elem == nil {
 			return nil
 		}
 		if w, ok := asInt128(elem); ok {
-			if isFloat {
-				floats += w.Float64()
-				return nil
-			}
 			var err error
-			ints, err = ints.CheckedAdd(w)
+			switch {
+			case isFloat:
+				floats += w.Float64()
+			case isDec:
+				var d Decimal
+				if d, err = DecimalFromInt128(w, dec.Scale()); err == nil {
+					dec, err = dec.CheckedAdd(d)
+				}
+			default:
+				ints, err = ints.CheckedAdd(w)
+			}
+			return err
+		}
+		if d, ok := elem.(Decimal); ok {
+			var err error
+			switch {
+			case isFloat:
+				floats += d.Float64()
+			case isDec:
+				dec, err = dec.CheckedAdd(d)
+			default:
+				isDec = true
+				var carried Decimal
+				if carried, err = DecimalFromInt128(ints, d.Scale()); err == nil {
+					dec, err = d.CheckedAdd(carried)
+				}
+			}
 			return err
 		}
 		f, ok := elem.(float64)
@@ -167,7 +198,11 @@ func checkedSum(params ...any) (any, error) {
 		}
 		if !isFloat {
 			isFloat = true
-			floats = ints.Float64()
+			if isDec {
+				floats = dec.Float64()
+			} else {
+				floats = ints.Float64()
+			}
 		}
 		floats += f
 		return nil
@@ -209,8 +244,11 @@ func checkedSum(params ...any) (any, error) {
 			}
 		}
 	}
-	if isFloat {
+	switch {
+	case isFloat:
 		return floats, nil
+	case isDec:
+		return dec, nil
 	}
 	return ints, nil
 }
@@ -222,7 +260,11 @@ func checkedSum(params ...any) (any, error) {
 // integer pair — int, whatever the operands were (its runtime computes
 // `int(x) + int(y)` for every integer pair), so nothing downstream of
 // the value can tell the difference.
-func checkedArith(checked func(a, b int64) (int64, error), wide func(a, b Int128) (Int128, error), own func(a, b any) any) func(...any) (any, error) {
+//
+// A Decimal beside an exact number (an integer of either width, another
+// Decimal) is the Decimal form — `+ -` at the larger scale, `*` at the
+// summed scale (DFC155 E); a Decimal beside a float64 is a float.
+func checkedArith(checked func(a, b int64) (int64, error), wide func(a, b Int128) (Int128, error), dec func(a, b Decimal) (Decimal, error), own func(a, b any) any) func(...any) (any, error) {
 	return func(params ...any) (any, error) {
 		a, b := exprDeref(params[0]), exprDeref(params[1])
 		if x, xok := exprIntOperand(a); xok {
@@ -236,6 +278,9 @@ func checkedArith(checked func(a, b int64) (int64, error), wide func(a, b Int128
 		}
 		if x, y, ok := exprWidePair(a, b); ok {
 			return wide(x, y)
+		}
+		if x, y, ok := exprDecimalPair(a, b); ok {
+			return dec(x, y)
 		}
 		if fa, fb, ok := exprWideFloat(a, b); ok {
 			return own(fa, fb), nil
@@ -252,6 +297,9 @@ func checkedDivide(params ...any) (any, error) {
 	if x, y, ok := exprWidePair(a, b); ok {
 		return x.Float64() / y.Float64(), nil
 	}
+	if x, y, ok := exprDecimalPair(a, b); ok {
+		return x.Float64() / y.Float64(), nil // a float, as DuckDB's DECIMAL / is DOUBLE (DFC155 E)
+	}
 	if fa, fb, ok := exprWideFloat(a, b); ok {
 		return runtime.Divide(fa, fb), nil
 	}
@@ -266,6 +314,9 @@ func checkedModulo(params ...any) (any, error) {
 	if x, y, ok := exprWidePair(a, b); ok {
 		return x.CheckedRem(y)
 	}
+	if x, y, ok := exprDecimalPair(a, b); ok {
+		return x.CheckedRem(y) // at the larger scale, the sign of the dividend
+	}
 	return runtime.Modulo(a, b), nil
 }
 
@@ -273,11 +324,11 @@ func checkedModulo(params ...any) (any, error) {
 // nearest float64.
 func checkedPower(params ...any) (any, error) {
 	a, b := exprDeref(params[0]), exprDeref(params[1])
-	if w, ok := a.(Int128); ok {
-		a = w.Float64()
+	if f, ok := exactToFloat(a); ok {
+		a = f
 	}
-	if w, ok := b.(Int128); ok {
-		b = w.Float64()
+	if f, ok := exactToFloat(b); ok {
+		b = f
 	}
 	return runtime.Exponent(a, b), nil
 }
@@ -289,7 +340,7 @@ func checkedPower(params ...any) (any, error) {
 func checkedCompare(op string, own func(a, b any) bool) func(...any) (any, error) {
 	return func(params ...any) (any, error) {
 		a, b := exprDeref(params[0]), exprDeref(params[1])
-		if c, ok := exactIntCmp(a, b); ok {
+		if c, ok := exactNumCmp(a, b); ok {
 			switch op {
 			case "==":
 				return c == 0, nil
@@ -355,15 +406,22 @@ func wideInt(args []any) (any, bool, error) {
 	if len(args) != 1 {
 		return nil, false, nil
 	}
-	w, ok := args[0].(Int128)
-	if !ok {
-		return nil, false, nil
+	switch x := args[0].(type) {
+	case Int128:
+		i, fits := x.Int64()
+		if !fits {
+			return nil, true, fmt.Errorf("int(): %s does not fit an int64 (keep it int128, or cast the column)", x)
+		}
+		return int(i), true, nil
+	case Decimal:
+		// The integer part toward zero, as int() of a float (DFC155 E).
+		i, fits := x.Trunc().Int64()
+		if !fits {
+			return nil, true, fmt.Errorf("int(): %s does not fit an int64", x)
+		}
+		return int(i), true, nil
 	}
-	i, fits := w.Int64()
-	if !fits {
-		return nil, true, fmt.Errorf("int(): %s does not fit an int64 (keep it int128, or cast the column)", w)
-	}
-	return int(i), true, nil
+	return nil, false, nil
 }
 
 // wideFloat is float(x) of an Int128: the nearest float64.
@@ -371,20 +429,56 @@ func wideFloat(args []any) (any, bool, error) {
 	if len(args) != 1 {
 		return nil, false, nil
 	}
-	if w, ok := args[0].(Int128); ok {
-		return w.Float64(), true, nil
+	if f, ok := exactToFloat(args[0]); ok {
+		return f, true, nil
 	}
 	return nil, false, nil
 }
 
-// wideAbs is abs(x) of an Int128 (MinInt128 overflows).
+// exactToFloat is an Int128 or a Decimal as its nearest float64.
+func exactToFloat(v any) (float64, bool) {
+	switch x := v.(type) {
+	case Int128:
+		return x.Float64(), true
+	case Decimal:
+		return x.Float64(), true
+	}
+	return 0, false
+}
+
+// wideFloorCeil is floor (dir −1) or ceil (dir 1) of a Decimal — a
+// decimal at scale 0, as DuckDB's — or of an Int128 (itself).
+func wideFloorCeil(dir int) func(args []any) (any, bool, error) {
+	return func(args []any) (any, bool, error) {
+		if len(args) != 1 {
+			return nil, false, nil
+		}
+		switch x := args[0].(type) {
+		case Int128:
+			return x, true, nil
+		case Decimal:
+			if dir < 0 {
+				v, err := x.Floor()
+				return v, true, err
+			}
+			v, err := x.Ceil()
+			return v, true, err
+		}
+		return nil, false, nil
+	}
+}
+
+// wideAbs is abs(x) of an Int128 (MinInt128 overflows) or a Decimal.
 func wideAbs(args []any) (any, bool, error) {
 	if len(args) != 1 {
 		return nil, false, nil
 	}
-	if w, ok := args[0].(Int128); ok {
-		v, err := w.CheckedAbs()
+	switch x := args[0].(type) {
+	case Int128:
+		v, err := x.CheckedAbs()
 		return v, true, err
+	case Decimal:
+		return x.Abs(), true, nil
 	}
 	return nil, false, nil
 }
@@ -396,22 +490,37 @@ func wideAbs(args []any) (any, bool, error) {
 func wideExtreme(dir int) func(args []any) (any, bool, error) {
 	name := map[int]string{-1: "min", 1: "max"}[dir]
 	return func(args []any) (any, bool, error) {
-		hasWide := false
+		hasWide, hasDec := false, false
 		for _, a := range args {
-			if _, ok := a.(Int128); ok {
+			switch a.(type) {
+			case Int128:
 				hasWide = true
+			case Decimal:
+				hasDec = true
 			}
 		}
-		if !hasWide {
+		if !hasWide && !hasDec {
 			return nil, false, nil
 		}
-		allInt := true
+		allExact := true
 		for _, a := range args {
-			if _, ok := asInt128(a); !ok {
-				allInt = false
+			if _, ok := asDecimal(a); !ok {
+				allExact = false
 			}
 		}
-		if allInt {
+		if allExact && hasDec {
+			// Exact numbers with a decimal among them: the extreme is a
+			// decimal (DuckDB's max(DECIMAL, BIGINT) is DECIMAL).
+			best, _ := asDecimal(args[0])
+			for _, a := range args[1:] {
+				d, _ := asDecimal(a)
+				if d.Cmp(best) == dir {
+					best = d
+				}
+			}
+			return best, true, nil
+		}
+		if allExact {
 			best, _ := asInt128(args[0])
 			for _, a := range args[1:] {
 				w, _ := asInt128(a)
@@ -461,17 +570,38 @@ func exprWidePair(a, b any) (Int128, Int128, bool) {
 // exprWideFloat reports an Int128 beside a float64, the Int128 widened to
 // its nearest float64 (the rule int beside float follows).
 func exprWideFloat(a, b any) (any, any, bool) {
-	if w, ok := a.(Int128); ok {
+	if wf, ok := exactToFloat(a); ok {
 		if f, ok := b.(float64); ok {
-			return w.Float64(), f, true
+			return wf, f, true
 		}
 	}
-	if w, ok := b.(Int128); ok {
+	if wf, ok := exactToFloat(b); ok {
 		if f, ok := a.(float64); ok {
-			return f, w.Float64(), true
+			return f, wf, true
 		}
 	}
 	return a, b, false
+}
+
+// exprDecimalPair reports an exact pair with a Decimal on at least one
+// side — the other a Decimal or an integer of either width (at scale 0);
+// false for any other pair. Tried after exprWidePair, so an Int128 pair
+// never reaches it.
+func exprDecimalPair(a, b any) (Decimal, Decimal, bool) {
+	_, ad := a.(Decimal)
+	_, bd := b.(Decimal)
+	if !ad && !bd {
+		return Decimal{}, Decimal{}, false
+	}
+	x, ok := asDecimal(a)
+	if !ok {
+		return Decimal{}, Decimal{}, false
+	}
+	y, ok := asDecimal(b)
+	if !ok {
+		return Decimal{}, Decimal{}, false
+	}
+	return x, y, true
 }
 
 // exprDeref is what expr's compiler emits (OpDeref) before its own binary
@@ -481,7 +611,7 @@ func exprWideFloat(a, b any) (any, any, bool) {
 // the lag before the first row, reaches an expression as a *int64).
 func exprDeref(v any) any {
 	switch v.(type) {
-	case nil, int64, int, float64, string, bool, Int128:
+	case nil, int64, int, float64, string, bool, Int128, Decimal:
 		return v
 	}
 	rv := reflect.ValueOf(v)

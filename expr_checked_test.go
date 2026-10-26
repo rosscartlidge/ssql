@@ -2,7 +2,9 @@ package ssql
 
 import (
 	"errors"
+	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -73,7 +75,7 @@ func TestExprCheckedArithmeticKeepsEverySemantics(t *testing.T) {
 		{"-f", -1.5},
 		{"-ptr", int(-3)},
 		{"sum([1, 2, 3])", Int128From(6)}, // sum() is expr's: an int 0 start, each element added
-		{"sum([1, 2.5])", 3.5},     // a float among the elements makes it a float
+		{"sum([1, 2.5])", 3.5},            // a float among the elements makes it a float
 		{"sum([])", Int128From(0)},
 		{"sum([1, 2], # * 2)", Int128From(6)}, // the mapper form
 		{"sum(map([n, n], # + 1))", Int128From(16)},
@@ -198,8 +200,8 @@ func TestExprInt128Semantics(t *testing.T) {
 		{"neg < 0", true},
 		{"n == 7", true}, {"n > 5 && f < 2.5 && s == \"ab\"", true}, {"s < \"b\"", true}, // untouched pairs
 		{"sum(xs)", MustParseInt128("123456789012345678901234567891")},
-		{"sum([1, 2, 3])", Int128From(6)},   // an integer sum is an int128
-		{"sum([1, 2.5])", 3.5},               // a float among them: a float
+		{"sum([1, 2, 3])", Int128From(6)}, // an integer sum is an int128
+		{"sum([1, 2.5])", 3.5},            // a float among them: a float
 		{"sum([five, 0.5])", 5.5},
 		{"int128(\"123456789012345678901234567890\")", w},
 		{"int128(n)", Int128From(7)},
@@ -254,5 +256,78 @@ func TestExprInt128Semantics(t *testing.T) {
 	}
 	if _, err := expr.Run(step, state); err == nil || !strings.Contains(err.Error(), "integer overflow") {
 		t.Errorf("fib(185): want overflow, got %v", err)
+	}
+}
+
+// TestExprDecimalSemantics is the VM's decimal arm (DFC155 E): a Decimal
+// beside an exact number is a Decimal — `+ -` at the larger scale, `*`
+// at the summed scale, exact — beside a float a float; `/` a float;
+// comparisons exact across scales; the conversions and builtins by the
+// rules every lane follows. The want values are strings, the oracle the
+// digits DuckDB prints.
+func TestExprDecimalSemantics(t *testing.T) {
+	price := MustParseDecimal("12.34")
+	env := map[string]any{"price": price, "rate": MustParseDecimal("1.0725"), "cents": MustParseDecimal("0.10"), "n": int64(3), "f": 1.5,
+		"w": MustParseInt128("100000000000000000000"), "neg": MustParseDecimal("-2.70"), "xs": []any{MustParseDecimal("0.10"), MustParseDecimal("0.20"), int64(1)}}
+	show := func(v any) string {
+		switch x := v.(type) {
+		case Decimal:
+			return "dec:" + x.String()
+		case Int128:
+			return "i128:" + x.String()
+		case float64:
+			return "f:" + strconv.FormatFloat(x, 'g', -1, 64)
+		case int:
+			return "int:" + strconv.Itoa(x)
+		}
+		return fmt.Sprintf("%T:%v", v, v)
+	}
+	for _, c := range []struct{ src, want string }{
+		{"cents + decimal(\"0.20\")", "dec:0.30"}, // the case the type exists for
+		{"price + 1", "dec:13.34"}, {"1 + price", "dec:13.34"}, {"price - n", "dec:9.34"},
+		{"price + rate", "dec:13.4125"},   // the larger scale
+		{"price * n", "dec:37.02"},        // an int keeps the scale
+		{"price * rate", "dec:13.234650"}, // the scales add: 2 + 4
+		{"decimal(\"1.5\") * decimal(\"2.25\")", "dec:3.375"},
+		{"price * w", "dec:1234000000000000000000.00"},
+		{"price / 4", "f:3.085"}, {"price / price", "f:1"}, // a float, as DuckDB's DECIMAL / is DOUBLE
+		{"price % 5", "dec:2.34"}, {"neg % 2", "dec:-0.70"},
+		{"price ** 2", "f:152.2756"},
+		{"price + f", "f:13.84"}, {"f * price", "f:18.509999999999998"}, // a float beside a decimal is a float
+		{"-neg", "dec:2.70"},
+		{"price > 12", "bool:true"}, {"price > 12.34", "bool:false"}, {"price >= decimal(\"12.340\")", "bool:true"},
+		{"price == decimal(\"12.340\")", "bool:true"}, {"price != 12.34", "bool:false"}, {"neg < 0", "bool:true"}, {"n < price", "bool:true"},
+		{"sum(xs)", "dec:1.30"}, {"sum([cents, 0.5])", "f:0.6"},
+		{"decimal(\"0.10\")", "dec:0.10"}, {"decimal(n)", "dec:3"}, {"decimal(n, 2)", "dec:3.00"}, {"decimal(f, 3)", "dec:1.500"},
+		{"decimal(2.675, 2)", "dec:2.68"}, {"decimal(price, 1)", "dec:12.3"}, {"decimal(\"12.345\", 2)", "dec:12.35"}, {"decimal(w, 2)", "dec:100000000000000000000.00"},
+		{"decimal(price * rate, 2)", "dec:13.23"},
+		{"int(neg)", "int:-2"}, {"int(price)", "int:12"}, {"float(price)", "f:12.34"}, {"string(cents)", "string:0.10"},
+		{"abs(neg)", "dec:2.70"}, {"min(price, n)", "dec:3"}, {"max(price, rate)", "dec:12.34"}, {"min(price, f)", "f:1.5"}, {"max(price, f)", "dec:12.34"},
+		{"round(decimal(\"2.345\"), 2)", "dec:2.35"}, {"round(neg)", "dec:-3"}, {"floor(neg)", "dec:-3"}, {"ceil(neg)", "dec:-2"}, {"trunc(neg)", "dec:-2"},
+		{"floor(2.7)", "f:2"}, {"round(2.5)", "f:3"}, {"trunc(-2.7)", "f:-2"}, // floats unchanged
+		{"price + nil ?? 0", "dec:12.34"},
+	} {
+		got, err := expr.Run(compileStd(t, c.src), env)
+		if err != nil {
+			t.Errorf("%s: %v", c.src, err)
+			continue
+		}
+		if show(got) != c.want {
+			t.Errorf("%s: got %s, want %s", c.src, show(got), c.want)
+		}
+	}
+	for _, c := range []struct{ src, want string }{
+		{"decimal(\"99999999999999999999999999999999999999\") + 1", "decimal overflow"},
+		{"decimal(\"999999999999999999999999999999999999.99\") * 10", "does not fit DECIMAL(38,2)"},
+		{"decimal(\"1.0000000000000000000\") * decimal(\"1.00000000000000000000\")", "needs scale 39"},
+		{"decimal(\"9223372036854775808\") + 0 | int()", "does not fit an int64"},
+		{"price % 0", "divide by zero"},
+		{"decimal(\"abc\")", "is not a decimal"},
+		{"decimal(price, 40)", "outside 0..38"},
+	} {
+		_, err := expr.Run(compileStd(t, c.src), env)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: want error %q, got %v", c.src, c.want, err)
+		}
 	}
 }

@@ -111,7 +111,7 @@ Date Functions (22):
   strftime(ts, pattern), strptime(text, pattern), bucket(ts, dur), duration(str), timezone(str)
 
 Type & Encoding (11):
-  int(v), int128(v), float(v), string(v), type(v),
+  int(v), int128(v), decimal(v), decimal(v, scale), float(v), string(v), type(v),
   toJSON(v), fromJSON(str), toBase64(str), fromBase64(str),
   toPairs(map), fromPairs(arr)
 
@@ -496,6 +496,8 @@ func writeTypeFunctions(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  int128(value)           Widen to a 128-bit integer (the int128 column type, DuckDB's HUGEINT): an integer, a whole float, or a digit string — the way to write a literal past int64")
 	fmt.Fprintln(w, "    Example: int128(\"123456789012345678901234567890\") * 2 → 246913578024691357802469135780")
+	fmt.Fprintln(w, "  decimal(value)          A fixed-point decimal (the decimal:S column type, DECIMAL(38,S)): a decimal string takes its scale from the text, an integer is exact, a float by its shortest decimal form; decimal(value, scale) brings it to the scale, rounding half away from zero")
+	fmt.Fprintln(w, "    Example: decimal(\"0.10\") + decimal(\"0.20\") → 0.30 (a float says 0.30000000000000004); decimal(price * rate, 2)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  float(value)            Convert to float")
 	fmt.Fprintln(w, "    Example: float(\"3.14\") → 3.14")

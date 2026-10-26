@@ -32,7 +32,7 @@ var ExprMathFunctionNames = []string{
 	"sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
 	"degrees", "radians", "pi", "sign", "trunc", "round",
 	"isnan", "isinf", "isfinite", "gcd", "lcm", "factorial", "gamma", "lgamma",
-	"hash", "int128",
+	"hash", "int128", "decimal",
 }
 
 func ExprMathFunctions() []expr.Option {
@@ -63,10 +63,25 @@ func ExprMathFunctions() []expr.Option {
 		"sinh": math.Sinh, "cosh": math.Cosh, "tanh": math.Tanh,
 		"asinh": math.Asinh, "acosh": math.Acosh, "atanh": math.Atanh,
 		"degrees": exprfn.Degrees, "radians": exprfn.Radians,
-		"trunc": math.Trunc, "gamma": math.Gamma, "lgamma": exprfn.Lgamma,
+		"gamma": math.Gamma, "lgamma": exprfn.Lgamma,
 	} {
 		unary(name, f)
 	}
+	// trunc(x): toward zero; a decimal truncates to a decimal at scale 0
+	// (DuckDB's trunc(DECIMAL) is DECIMAL(·,0); DFC155 E), a number to a float.
+	bind("trunc", func(args ...any) (any, error) {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("trunc() takes one argument")
+		}
+		if d, ok := exprDeref(args[0]).(Decimal); ok {
+			return NewDecimal(d.Trunc(), 0)
+		}
+		x, err := exprNumber("trunc", args[0])
+		if err != nil {
+			return nil, err
+		}
+		return math.Trunc(x), nil
+	}, new(func(any) any))
 	binary := func(name string, f func(a, b float64) float64) {
 		bind(name, func(args ...any) (any, error) {
 			if len(args) != 2 {
@@ -129,6 +144,65 @@ func ExprMathFunctions() []expr.Option {
 		}
 		return nil, fmt.Errorf("int128() needs a number or a digit string, got %T", args[0])
 	}, new(func(any) any))
+	// decimal(x) and decimal(x, scale): the fixed-point conversion (DFC155
+	// E) — a decimal string takes its scale from the text (the way to
+	// write 0.10 exactly), an integer is exact at the scale (0 without
+	// one), a float by its shortest decimal form, a decimal is brought to
+	// the scale; every rescale rounds half away from zero. nil stays nil.
+	bind("decimal", func(args ...any) (any, error) {
+		if len(args) < 1 || len(args) > 2 {
+			return nil, fmt.Errorf("decimal(x) or decimal(x, scale)")
+		}
+		scale, hasScale := -1, len(args) == 2
+		if hasScale {
+			n, err := exprInteger("decimal", "scale", exprDeref(args[1]))
+			if err != nil {
+				return nil, err
+			}
+			if n < 0 || n > MaxDecimalScale {
+				return nil, fmt.Errorf("decimal(): scale %d is outside 0..%d", n, MaxDecimalScale)
+			}
+			scale = int(n)
+		}
+		at := func(d Decimal) (any, error) {
+			if !hasScale {
+				return d, nil
+			}
+			return d.Rescale(scale)
+		}
+		switch x := exprDeref(args[0]).(type) {
+		case nil:
+			return nil, nil
+		case Decimal:
+			return at(x)
+		case int64, int, Int128:
+			d, ok := asDecimal(x)
+			if !ok {
+				return nil, fmt.Errorf("decimal(): %v does not fit DECIMAL(38)", x)
+			}
+			return at(d)
+		case float64:
+			if hasScale {
+				d, ok := DecimalFromFloat(x, scale)
+				if !ok {
+					return nil, fmt.Errorf("decimal(): %v is not a decimal of scale %d", x, scale)
+				}
+				return d, nil
+			}
+			d, ok := decimalFromFloatExact(x)
+			if !ok {
+				return nil, fmt.Errorf("decimal(): %v is not a decimal", x)
+			}
+			return d, nil
+		case string:
+			d, err := ParseDecimal(x)
+			if err != nil {
+				return nil, fmt.Errorf("decimal(): %q is not a decimal that fits 38 digits", x)
+			}
+			return at(d)
+		}
+		return nil, fmt.Errorf("decimal() needs a number or a decimal string, got %T", args[0])
+	}, new(func(any) any), new(func(any, any) any))
 	bind("pi", func(args ...any) (any, error) {
 		if len(args) != 0 {
 			return nil, fmt.Errorf("pi() takes no argument")
@@ -152,6 +226,22 @@ func ExprMathFunctions() []expr.Option {
 		if len(args) < 1 || len(args) > 2 {
 			return nil, fmt.Errorf("round(x) or round(x, places)")
 		}
+		if d, ok := exprDeref(args[0]).(Decimal); ok {
+			// A decimal rounds to a decimal of the places, half away from
+			// zero (DuckDB's round(DECIMAL, n) is DECIMAL(·,n); DFC155 E).
+			n := 0
+			if len(args) == 2 {
+				p, err := exprInteger("round", "places", args[1])
+				if err != nil {
+					return nil, err
+				}
+				n = int(p)
+			}
+			if n < 0 || n > MaxDecimalScale {
+				return nil, fmt.Errorf("round(): places %d is outside 0..%d for a decimal", n, MaxDecimalScale)
+			}
+			return d.Round(n)
+		}
 		x, err := exprNumber("round", args[0])
 		if err != nil {
 			return nil, err
@@ -164,7 +254,7 @@ func ExprMathFunctions() []expr.Option {
 			return nil, err
 		}
 		return exprfn.RoundTo(x, n), nil
-	}, new(func(any) float64), new(func(any, any) float64))
+	}, new(func(any) any), new(func(any, any) any))
 	for name, f := range map[string]func(float64) bool{
 		"isnan":    math.IsNaN,
 		"isinf":    func(x float64) bool { return math.IsInf(x, 0) },
@@ -248,6 +338,8 @@ func exprNumber(fn string, v any) (float64, error) {
 		return float64(x), nil
 	case Int128:
 		return x.Float64(), nil
+	case Decimal:
+		return x.Float64(), nil
 	}
 	return 0, fmt.Errorf("%s() needs a numeric argument, got %T", fn, v)
 }
@@ -267,6 +359,10 @@ func exprInteger(fn, what string, v any) (int64, error) {
 			return i, nil
 		}
 		return 0, fmt.Errorf("%s(): %s %s does not fit an int64", fn, what, x)
+	case Decimal:
+		if i, ok := x.Int64(); ok {
+			return i, nil
+		}
 	case float64:
 		if x == math.Trunc(x) && !math.IsInf(x, 0) {
 			return int64(x), nil
