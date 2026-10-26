@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A fixed-point decimal type, `decimal:S`** ([DFC155](doc/research/dfc155_big_numbers.md) E, DECIMAL(38,S); Ross: "cant wait to have decimals"), in every lane — exec, `generate go` record, typed and parallel, `generate sql`. A column is decimal only by declaration (`cast -type price decimal:2`, `from csv f -type price decimal:2`, a `_schema` header, a sidecar `ssqlType`), never inferred from `12.34`; reading text into a scale rounds half away from zero. `+ - %` are exact at the larger scale, `*` at the summed scale, `/` and `-avg` are floats, comparisons exact across scales, sums a decimal at the column's scale; `decimal(x)` and `decimal(x, scale)` in expressions; `round(d, n)`, `floor`, `ceil`, `trunc`, `int()` by the engines' rules; a result past 38 digits is a loud `decimal overflow` naming the operands. Typed structs take `ssql.Decimal` with the scale in the tag (`ssql:"price,decimal:2"`); the root API has `ssql.Decimal` with checked arithmetic, `Cmp`, `Rescale`, `ParseDecimal`, `DecimalType(scale)` on `FieldType`.
 
+### Changed
+
+- **A Parquet or Arrow `DECIMAL(p,s)` column with a scale is now a `decimal:s` column** (it was the value's text); `DECIMAL(p,0)` stays `int128`. A typed `ssql:` tag's name is the part before the first comma, as `encoding/json` reads its tag (the `csv:"x,omitempty"` fallback was read whole before).
+- **A float literal in generated SQL is `CAST(1.5 AS DOUBLE)`**: DuckDB typed a bare `1.5` as `DECIMAL(2,1)`, so `n * 1.5` was a `DECIMAL(21,1)` there and a float in every other lane.
+
 ### Fixed
 
 - **A join kept the right side's value of the key column** where the two sides spell the same key differently (a `decimal:2` `1.00` beside an int `1`): the merge now keeps the left's value when the two are equal, as the typed lane always assigned it. Integer keys never showed it.

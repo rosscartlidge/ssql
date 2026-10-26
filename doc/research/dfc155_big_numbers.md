@@ -2,7 +2,7 @@
 
 Reference: DFC155
 Created: 2026-10-22
-Last modified: 2026-10-25
+Last modified: 2026-10-27
 
 [Back to Index](./README.md)
 
@@ -673,3 +673,191 @@ type, the VM patch (a decimal arm beside the int128 one), `exactIntCmp`
 as the model for a scale-aligned compare, the Parquet `Decimal128(p,s)`
 writer with a scale, the harness's exact digits, and the census above
 of every `case int64` a new scalar type touches.
+
+## 8. Built: option E (2026-10-27)
+
+Ross: "lets pick up E now - cant wait to have decimals :-)". Branch
+`dfc155-e` from v4.126.0, one commit per stage. Three choices settled
+in plan mode: the spelling `decimal:S` everywhere (cast, `-type` on a
+source, the `_schema` header, the typed tag); `/` and an average as
+float64 (DuckDB's DOUBLE, ssql's int rule); `*` adding the scales
+(DuckDB's rule, exact). The rest was measured on DuckDB 1.5.0 and
+followed.
+
+### 8.1 The type (`decimal.go`)
+
+`ssql.Decimal{units Int128; scale uint8}` — units × 10^-scale,
+comparable, no allocation, zero is 0 at scale 0. The precision is 38
+digits as `|units| < 10^38` (every constructor checks), the scale 0..38
+(`pow10Int128`, a table to 10^38; int128.go's uint64 table stops at
+10^19). `+ - %` align to the larger scale (`align`), `*` sums the
+scales; the Checked forms return a `*DecimalOverflowError` naming the
+operands and the scale (`decimal overflow: A op B does not fit
+DECIMAL(38,s)`; a product whose scale would pass 38 says `needs scale
+40, past DECIMAL(38)`), the plain forms panic through a `//go:noinline`
+helper so `Add` inlines; `Neg` and `Abs` cannot overflow. `Rescale` up
+is exact, down rounds half away from zero (`0.125 → 0.13`, `-2.5 →
+-3`); the half-way test compares `|r|` with `p/2`, since `2|r|` passes
+2^127 near 10^38. `Cmp` is exact across scales: a mantissa that
+overflows 128 bits when scaled up is already past 10^38 in the other's
+units, so its sign decides and `Cmp` never errors. `Trunc` (toward
+zero), `Int64` (whole and fits), `Round(n)`, `Floor`/`Ceil` (scale 0,
+infallible), `Float64` (`ParseFloat(String())`, correctly rounded),
+`String` (the scale's digits: `0.10`, `-0.05`), `Normalized` (trailing
+zeros dropped, the hash-key form), `ParseDecimal` (sign, digits, point,
+digits, an exponent; the scale from the text), `ParseDecimalScale`
+(then rescaled), `DecimalFromFloat` (the float's shortest decimal form,
+"what you see": `1.005 → 1.01`), JSON bare or quoted. Oracle:
+`math/big.Rat` on 200k random pairs and the DuckDB-measured rounding
+rows; an operand that does not fit at the common scale (`1 − 1e-38`)
+is an overflow, as DuckDB cannot bind that pair either. Measured:
+`Add` 6.9 ns, `String` 88 ns.
+
+### 8.2 The scale carrier
+
+`FieldType` encodes the scale: `FieldTypeDecimal = 1 << 8` with the
+scale in the low bits (`DecimalType(s)`, `IsDecimal`, `Scale`;
+`ParseFieldType("decimal:2")`, `String()` → `decimal:2`). A scale is
+part of the type's identity (`decimal:2` ≠ `decimal:3` on the wire, in
+SQL, in Parquet), unlike a time pattern, which only parametrises
+parsing — so every `map[string]FieldType` and `[]FieldType` in flight
+(`CSVConfig.TypeOverrides`, cast's conversions, `SchemaWireTypes`)
+carries it unchanged, where a side map would lose it. The cost: a
+scale-encoded value is no `case` label, so every switch that must
+handle a decimal tests `IsDecimal` first; `ParseWireType(s)` splits a
+wire name for the switches that compared it whole (`lib.ParseWireType`,
+`lib.WireDecimal`). Generated code spells the type `ssql.DecimalType(2)`
+(`fieldTypeConst`, `fieldTypeGoExpr`). The transpiler's lattice member
+`exprGoDecimal` is the string `ssql.Decimal` with the scale in
+`exprGo.Scale` (`+ -` the larger, `*` the sum, `round(d, n)` n,
+`floor/ceil` 0); the typed schema field carries `Scale`, rendered into
+the tag (`ssql:"price,decimal:2"`, `lib.FieldTag`); the Arrow column
+kind encodes it the same way (`arrowKindDecimal`); the SQL kind is the
+string `decimal:S`.
+
+### 8.3 The rules as shipped
+
+A column is decimal only by declaration — `cast -type F decimal:S`,
+`-type F decimal:S` on `from csv/tsv/json/jsonl`, a `_schema` header
+(read from the number's own digits, never through a float64), a sidecar
+`ssqlType`, a Parquet/Arrow DECIMAL(p, s>0) column, `decimal(x)` /
+`decimal(x, s)` in an expression — never inferred from `12.34`, which
+stays a float (inference would retype every float column). Reading text
+into a scale rounds half away from zero, as `read_csv` with a DECIMAL
+type does. Decimal beside an integer of either width is a decimal,
+beside a float a float; `/` and `**` are floats, `%` a decimal at the
+larger scale; comparisons are exact across scales; `-sum`, `window
+-sum`, `pivot -func sum`, `sum()` and a `-expr` term over decimals
+accumulate in a Decimal at the column's scale (DuckDB's SUM(DECIMAL(38,s))
+is DECIMAL(38,s)), `-avg` is a float; `min/max/first/last/arg-*` keep
+the scale; `round(d, n)` is decimal:n, `floor`, `ceil` and `trunc`
+decimal:0, `int(d)` and `cast -type int` truncate toward zero (ssql's
+float rule; SQL emits `trunc`), `string(d)` keeps the scale's digits. A
+column holds one scale by construction; exec retypes per value as
+int→float does (`price * rate` into a new column is `decimal:6`), the
+typed lane refuses to retype an existing column (record fallback) and
+takes an integer into a decimal column exactly. Hash keys use the
+normalized form, so `5`, `5.00` and `5.000` key together and the exact
+compare confirms; a decimal:2 key joins an int key.
+
+### 8.4 Lane by lane
+
+- **Exec**: `numericSum` gains a decimal accumulator whose arm comes
+  BEFORE the `default: convertTo[float64]` (§7.6), `slidingSum` a
+  three-way kind, the pivot cell its scale; `exactNumCmp` generalises
+  `exactIntCmp` for `CompareAny`, `compareTyped`, `numericLess`,
+  `aggCompare`, `joinValuesEqual` and the VM; `LiteralOp` parses the
+  literal as a decimal beside a decimal field; `CastValue` has a
+  decimal target arm first and decimal source arms in every other;
+  `applyValueToRecordWithTypeCheck` brings a literal to the column's
+  scale and lets a decimal of another scale retype; `describe` names
+  the type. The join merge keeps the left's value on an equal collision
+  — the right's won before, invisible with integer keys, visible when a
+  decimal key meets an int key.
+- **VM** (`expr_checked.go`): `exprDecimalPair` after `exprWidePair`,
+  before the float step; `checkedArith` takes a third, decimal
+  function; `checkedSum` a decimal accumulator; `exactNumCmp` in the
+  comparisons; `wideInt/Float/Abs/Extreme` decimal arms; `floor` and
+  `ceil` join the patched builtins; `decimal()`, `round`, `trunc` bound
+  in `expr_math.go` with `any` signatures (a decimal result cannot be a
+  float64 signature). `MustCoerceDecimalAt(scale)` types a Tier-V
+  result. ExprCompare/ExprArith benchmarks unchanged (the arm sits
+  after the int and Int128 fast paths).
+- **Transpiler**: `asDec` renders an exact operand as a Decimal (an
+  integer at scale 0; the methods align at run time); `decimal("…")`
+  hoists `var exprDec<hash> = ssql.MustParseDecimal(…)`; a float or a
+  non-literal string needs the scale (static). The differential corpus
+  gained an `Amt ssql.Decimal` row and 40 expressions; `TestExprToGo`
+  15 rows.
+- **Typed**: `columnName` splits the tag at the first comma (the
+  `csv:"x,omitempty"` fallback was wrong before too); `fieldScale` /
+  `decimalFieldScale` read `decimal:S`, which an `ssql.Decimal` field
+  must have; the delimited, fast-JSONL and Parquet readers decode at
+  the tag's scale, `EmptyAsZero` gives `0.00`; the writers print the
+  scale's digits; `WindowSpec.Dec`. Templates: group-by sum/avg states
+  and `-expr` terms (`Add`, also in `Merge`), the result fields' scale
+  (`aggResultScale`, `ResultScale`, `FinalScale`), window sums and the
+  order comparator (`Cmp` — a latent int128 gap), `castExpressionTo`
+  with the scale, `assignExprTo` by field, sort, join keys (normalized),
+  unpivot (one scale or a float), resample/asof as floats or refusals.
+- **SQL**: `sqlDecimalType(s)` — `DECIMAL(38,S)` DuckDB/DataFusion,
+  `NUMERIC(38,S)` Postgres; `read_csv types=` with it (rounds on read);
+  a cast to an integer through `trunc` with no DOUBLE detour; `decimal()`
+  as a CAST (a string literal's scale from its text); `int()` of a
+  decimal column through `trunc`; the fold's states and result with
+  their scale; `COALESCE(x, 0)` for an empty decimal (and int128) cell.
+  A float literal renders `CAST(1.5 AS DOUBLE)`: DuckDB types a bare
+  `1.5` as DECIMAL(2,1) and `price * 1.5` as a DECIMAL where ssql says
+  float — the same cast ends the silent `n * 1.5 → DECIMAL(21,1)` on
+  integers.
+- **Parquet/Arrow**: `Decimal128(38,S)` both ways; the record builder
+  brings every value to the column's scale (`decimal128At`), the reader
+  makes a DECIMAL(p,s>0) a decimal (it was text); DECIMAL(p,0) stays
+  int128. DuckDB writes DECIMAL natively, so the SQL lane needs no cast
+  (unlike HUGEINT, which it writes as DOUBLE).
+- **Harness**: a case names its decimal columns (`Decimals`), compared
+  as exact digits with trailing zeros stripped in every lane — a bare
+  `0.30`, DuckDB's quoted `"0.30"`, a golden `json.Number("0.3")` — and
+  never as float64; threaded per case, since the cases run as parallel
+  subtests (a package-level map was cleared by a sibling's cleanup, the
+  first form tried). Watched fail: a `String()` that drops a digit fails
+  `money_sum_shuffled` against its golden.
+
+### 8.5 Gates
+
+`decimal_test.go` (oracle), `TestExprDecimalSemantics`, `TestExprToGo`
+and the differential corpus, `TestDecimalExec` (ten subtests through
+the binary incl. Parquet and DuckDB), three corpus pipelines in record,
+typed and parallel, eleven equivalence cases with goldens from Python's
+`decimal` (`money_sum_shuffled`, `decimal_sum_past_2_53_cents`,
+`cast_decimal_rounds`, `decimal_mul_scale`, `decimal_div_float_string`,
+`decimal_compare_sort_where`, `decimal_groupby_key`, `decimal_join_key`,
+`window_decimal_sum`, `decimal_round_floor_ceil`,
+`decimal_schema_header_hop`), the overflow gate's `dec_mul` and three
+exact sums past 2^53 cents, the typed Parquet round trip. Benchmarks
+HEAD vs branch: GroupBySum 187–201 → 183–205 ms, NumericSum 3.4–3.7 →
+3.4–3.6 ms, ExprCompare 324–356 → 317–352 ns, ExprArith 334–363 →
+334–338 ns.
+
+### 8.6 Gotchas, for the next type
+
+- A test that compares rows across parallel subtests cannot share a
+  package-level setting; thread it.
+- `0.1 + 0.2` as Go constants folds to exactly 0.3: a rounding test
+  needs variables.
+- `sort -desc a b` descends on every field of the clause.
+- DuckDB's DOUBLE→DECIMAL cast rounds the binary value its own way
+  (`1.005 → 1.00`, `2.675 → 2.68`); ssql rounds the shortest decimal
+  form. Fixtures that test rounding cast from text.
+- An untyped `-set-expr` column is `string` in schema mode for every
+  type (pre-existing; normal mode peeks the first row).
+- The join merge's "right wins on a collision" was invisible until two
+  spellings of one key met.
+- `sum([...])` has no transpiler emission for any type; the VM and the
+  typed aggregation lowering carry it.
+
+### 8.7 Not done, recorded in TODO
+
+The browser past 2^53 units; a float-typed `-param` beside a decimal in
+SQL; the DataFusion and Postgres forms unverified; `in` as for int128;
+Decimal256 for a precision past 38.
