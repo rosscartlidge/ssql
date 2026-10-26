@@ -538,6 +538,16 @@ func sqlInt128Type() string {
 	return "HUGEINT"
 }
 
+// sqlDecimalType is the fixed-point type of the scale per dialect:
+// DECIMAL(38,S) on DuckDB and DataFusion, NUMERIC(38,S) on Postgres
+// (DFC155 E; the Postgres and DataFusion lanes are documented, not gated).
+func sqlDecimalType(scale int) string {
+	if sqlDialectCur == dialectPostgres {
+		return fmt.Sprintf("NUMERIC(38,%d)", scale)
+	}
+	return fmt.Sprintf("DECIMAL(38,%d)", scale)
+}
+
 // sqlFloatType is the double-precision type name.
 func sqlFloatType() string {
 	if sqlDialectCur == dialectPostgres {
@@ -780,6 +790,9 @@ func sqlDividePlain(left, right string) string {
 // pgColumnType is the Postgres column type for a declared ssql type;
 // "auto" keeps the inferred one.
 func pgColumnType(typeName, inferred string) string {
+	if base, scale := ssql.ParseWireType(typeName); base == "decimal" && scale >= 0 {
+		return fmt.Sprintf("NUMERIC(38,%d)", scale)
+	}
 	switch typeName {
 	case "int":
 		return "BIGINT"

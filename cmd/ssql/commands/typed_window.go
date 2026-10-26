@@ -88,9 +88,12 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 				if of.Desc {
 					lhs, rhs = rhs, lhs
 				}
-				if f.GoType == "time.Time" {
+				switch f.GoType {
+				case "time.Time":
 					fmt.Fprintf(&cmp, "if %s.Before(%s) { return -1 }; if %s.After(%s) { return 1 }; ", lhs, rhs, lhs, rhs)
-				} else {
+				case "ssql.Int128", "ssql.Decimal": // not cmp.Ordered: the comparator form (DFC155 C, E)
+					fmt.Fprintf(&cmp, "if c := %s.Cmp(%s); c != 0 { return c }; ", lhs, rhs)
+				default:
 					fmt.Fprintf(&cmp, "if %s < %s { return -1 }; if %s > %s { return 1 }; ", lhs, rhs, lhs, rhs)
 				}
 			}

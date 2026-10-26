@@ -115,7 +115,11 @@ func exprNodeToSQL(node ast.Node) (string, error) {
 	case *ast.IntegerNode:
 		return strconv.Itoa(n.Value), nil
 	case *ast.FloatNode:
-		return strconv.FormatFloat(n.Value, 'g', -1, 64), nil
+		// A float literal is a DOUBLE, as ssql types it: bare, DuckDB
+		// would type 1.5 as DECIMAL(2,1) and `price * 1.5` as a DECIMAL
+		// where ssql says float (DFC155 E; the same cast ends the old
+		// `n * 1.5` → DECIMAL(21,1) divergence on integers).
+		return "CAST(" + strconv.FormatFloat(n.Value, 'g', -1, 64) + " AS " + sqlFloatType() + ")", nil
 	case *ast.BoolNode:
 		if n.Value {
 			return "TRUE", nil
@@ -263,6 +267,50 @@ func exprBinaryToSQL(n *ast.BinaryNode) (string, error) {
 }
 
 func exprCallToSQL(name string, args []ast.Node) (string, error) {
+	if name == "decimal" && (len(args) == 1 || len(args) == 2) {
+		// The fixed-point conversion (DFC155 E): a decimal string takes its
+		// scale from the text, a literal scale wins, an integer is exact at
+		// the scale (0 without one); anything else needs the scale, since
+		// a bare CAST(x AS DECIMAL) is the engine's default DECIMAL(18,3).
+		scale, hasScale := -1, len(args) == 2
+		if hasScale {
+			n, ok := args[1].(*ast.IntegerNode)
+			if !ok || n.Value < 0 || n.Value > ssql.MaxDecimalScale {
+				return "", fmt.Errorf("decimal(x, scale) needs a literal scale in 0..%d for a SQL translation", ssql.MaxDecimalScale)
+			}
+			scale = n.Value
+		}
+		switch a := args[0].(type) {
+		case *ast.StringNode:
+			d, err := ssql.ParseDecimal(a.Value)
+			if err != nil {
+				return "", fmt.Errorf("decimal(%q): not a decimal that fits 38 digits", a.Value)
+			}
+			if !hasScale {
+				scale = d.Scale()
+			}
+			return "CAST('" + escapeSQL(a.Value) + "' AS " + sqlDecimalType(scale) + ")", nil
+		case *ast.IntegerNode:
+			return "CAST(" + strconv.Itoa(a.Value) + " AS " + sqlDecimalType(max(scale, 0)) + ")", nil
+		}
+		if !hasScale {
+			return "", fmt.Errorf("decimal(x) of an expression needs the scale, decimal(x, scale), for a SQL translation")
+		}
+		arg, err := exprNodeToSQL(args[0])
+		if err != nil {
+			return "", err
+		}
+		return "CAST(" + arg + " AS " + sqlDecimalType(scale) + ")", nil
+	}
+	if name == "int" && len(args) == 1 {
+		// int() of a decimal column truncates toward zero (ssql's rule; a
+		// bare CAST rounds in DuckDB); trunc of a DECIMAL is exact.
+		if id, ok := args[0].(*ast.IdentifierNode); ok {
+			if base, _ := ssql.ParseWireType(sqlColumnKinds[id.Value]); base == "decimal" {
+				return "CAST(trunc(" + quoteIdent(id.Value) + ") AS BIGINT)", nil
+			}
+		}
+	}
 	if name == "int128" && len(args) == 1 {
 		// The widening conversion (DFC155 C): the dialect's 128-bit type.
 		arg, err := exprNodeToSQL(args[0])

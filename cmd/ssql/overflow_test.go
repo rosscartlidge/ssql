@@ -16,6 +16,12 @@ import (
 // int128, DuckDB's SUM(BIGINT) → HUGEINT. The equivalence harness cannot
 // hold the failures: its lanes must succeed. The second half pins the
 // sums: exact in every lane past 2^53 and past 2^63.
+// overflowed reports ssql's overflow error in an output: an integer's
+// (DFC155 B, C) or a decimal's (E).
+func overflowed(out string) bool {
+	return strings.Contains(out, "integer overflow") || strings.Contains(out, "decimal overflow")
+}
+
 func TestIntOverflowEveryLane(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs generated programs")
@@ -33,13 +39,15 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		// C (2026-10-25): the int128 bound, and the int128 fold past fib(184)
 		"wide_mul":  bin + " from range 3 | " + bin + " cast -type n int128 | " + bin + " update -set-expr big 'n * int128(\"170141183460469231731687303715884105727\")'",
 		"wide_fold": bin + " from range 184 | " + bin + " window -stream-expr '{a:int128(0), b:int128(1)}' '{a:b, b:a+b}' 'b' fib",
+		// E (2026-10-27): the 38-digit decimal bound
+		"dec_mul": bin + " from range 3 | " + bin + " cast -type n decimal:2 | " + bin + " update -set-expr big 'n * decimal(\"999999999999999999999999999999999999.99\")'",
 	}
 	for name, pipeline := range overflow {
 		t.Run("overflow_"+name, func(t *testing.T) {
 			// exec
 			out, err := shell(pipeline + " | " + bin + " to jsonl")
-			if err == nil || !strings.Contains(out, "integer overflow") {
-				t.Errorf("exec: want an integer overflow failure, got err=%v\n%s", err, out)
+			if err == nil || !overflowed(out) {
+				t.Errorf("exec: want an overflow failure, got err=%v\n%s", err, out)
 			}
 			// generated Go, each mode
 			for _, mode := range []string{"record", "typed", "parallel"} {
@@ -48,8 +56,8 @@ func TestIntOverflowEveryLane(t *testing.T) {
 					t.Fatalf("%s: generate failed: %v\n%s", mode, err, src)
 				}
 				out, err := goRunGeneratedModuleEnv(t, "overflowtest", map[string]string{"main.go": src}, nil)
-				if err == nil || !strings.Contains(out, "integer overflow") {
-					t.Errorf("%s: want an integer overflow failure, got err=%v\n%s", mode, err, out)
+				if err == nil || !overflowed(out) {
+					t.Errorf("%s: want an overflow failure, got err=%v\n%s", mode, err, out)
 				}
 			}
 			// DuckDB: its own words for the same stop. No SQL form: -stream-expr.
@@ -76,10 +84,14 @@ func TestIntOverflowEveryLane(t *testing.T) {
 		"group_by_sum_widens": {bin + " from range 2 -start 9223372036854775806 | " + bin + " group-by -sum n t", "18446744073709551613"},
 		"expr_sum_widens":     {bin + " from range 2 -start 9223372036854775806 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18446744073709551613"},
 		"window_sum_widens":   {bin + " from range 2 -start 9223372036854775806 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18446744073709551613"},
-		"expr_sum":           {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18014398509481987"},
-		"window_running_sum": {bin + " from range 2 -start 9007199254740993 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18014398509481987"},
-		"window_sliding_sum": {bin + " from range 3 -start 9007199254740993 | " + bin + " window -sum n t -preceding 1 | " + bin + " limit -last 1", "18014398509481989"},
-		"pivot_sum":          {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr d '\"a\"' -set-expr q '\"x\"' | " + bin + " pivot -row d -col q -val n -func sum", "18014398509481987"},
+		"expr_sum":            {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "18014398509481987"},
+		"window_running_sum":  {bin + " from range 2 -start 9007199254740993 | " + bin + " window -sum n t | " + bin + " limit -last 1", "18014398509481987"},
+		"window_sliding_sum":  {bin + " from range 3 -start 9007199254740993 | " + bin + " window -sum n t -preceding 1 | " + bin + " limit -last 1", "18014398509481989"},
+		"pivot_sum":           {bin + " from range 2 -start 9007199254740993 | " + bin + " update -set-expr d '\"a\"' -set-expr q '\"x\"' | " + bin + " pivot -row d -col q -val n -func sum", "18014398509481987"},
+		// E: decimal sums past 2^53 cents, exact at the scale
+		"dec_group_by_sum": {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " group-by -sum n t", "27021597764222982.00"},
+		"dec_expr_sum":     {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " update -set-expr k 1 | " + bin + " group-by k -expr 'sum(n)' t", "27021597764222982.00"},
+		"dec_window_sum":   {bin + " from range 3 -start 9007199254740993 | " + bin + " cast -type n decimal:2 | " + bin + " window -sum n t | " + bin + " limit -last 1", "27021597764222982.00"},
 	} {
 		t.Run("int_sum_exact_past_2_53_"+name, func(t *testing.T) {
 			want := c.want // odd: no float64 holds it (DuckDB -json quotes its HUGEINT)

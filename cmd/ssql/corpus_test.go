@@ -241,6 +241,7 @@ func corpusData(t *testing.T) string {
 			// an integer key.
 			"money.csv": "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
 			"dec.csv":   "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
+			"big.csv":   "k,amt\nx,90071992547409.92\nx,0.01\nx,0.01\n",
 			"ids.csv":   "id,n\n1,one\n5,five\n",
 		}
 		for name, content := range files {

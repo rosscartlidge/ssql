@@ -401,7 +401,7 @@ func TestExprToSQL(t *testing.T) {
 		{`not active`, `(NOT active)`},
 		{`active ? "yes" : "no"`, `(CASE WHEN active THEN 'yes' ELSE 'no' END)`},
 		{`min(a, b) < 10`, `(least(a, b) < 10)`},
-		{`abs(actual - expected) < 0.01`, `(abs((actual - expected)) < 0.01)`},
+		{`abs(actual - expected) < 0.01`, `(abs((actual - expected)) < CAST(0.01 AS DOUBLE))`},
 		// nested values (DFC144 Level 1): member access and list membership
 		{`foo.bar > 1`, `(struct_extract(foo, 'bar') > 1)`},
 		{`tags[0] == "go"`, `(list_extract(tags, 1) = 'go')`},

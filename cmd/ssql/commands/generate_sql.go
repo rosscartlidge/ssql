@@ -2498,7 +2498,11 @@ func translateCast(q *sqlQuery, args []string) error {
 				sqlNeedsZone = true
 				expr = sqlStrptime(quoteIdent(field), pattern)
 			}
-			if ft, err := ssql.ParseFieldType(typeName); err == nil && (ft == ssql.FieldTypeInt || ft == ssql.FieldTypeInt128) && kindBefore != "int" && kindBefore != "int128" {
+			if ft, err := ssql.ParseFieldType(typeName); err == nil && (ft == ssql.FieldTypeInt || ft == ssql.FieldTypeInt128) && strings.HasPrefix(kindBefore, "decimal:") {
+				// A decimal to an integer truncates toward zero, as a float
+				// does; trunc of a DECIMAL is exact, no DOUBLE detour (DFC155 E).
+				expr = fmt.Sprintf("%s(trunc(%s) AS %s)", castFn, quoteIdent(field), sqlType)
+			} else if err == nil && (ft == ssql.FieldTypeInt || ft == ssql.FieldTypeInt128) && kindBefore != "int" && kindBefore != "int128" {
 				// ssql's float → int TRUNCATES (2.9 → 2, as Go and pandas do);
 				// SQL's CAST rounds (DuckDB and Postgres give 3). Truncate
 				// explicitly — except from a column already known to be an
@@ -2776,6 +2780,9 @@ func translateUpdate(q *sqlQuery, args []string) error {
 }
 
 func mapTypeToSQL(typeName string) string {
+	if base, scale := ssql.ParseWireType(typeName); base == "decimal" && scale >= 0 {
+		return sqlDecimalType(scale)
+	}
 	switch strings.ToLower(typeName) {
 	case "int", "integer", "int64":
 		return "BIGINT"
@@ -3189,8 +3196,12 @@ func coalesceEmptyCells(src string, columns []string) string {
 	cols := make([]string, 0, len(columns))
 	for _, c := range columns {
 		id := quoteIdent(c)
-		switch sqlColumnKinds[c] {
-		case "int", "float":
+		kind := sqlColumnKinds[c]
+		if base, _ := ssql.ParseWireType(kind); base == "decimal" {
+			kind = "decimal"
+		}
+		switch kind {
+		case "int", "float", "int128", "decimal":
 			cols = append(cols, "COALESCE("+id+", 0) AS "+id)
 		case "bool":
 			cols = append(cols, "COALESCE("+id+", FALSE) AS "+id)
@@ -3243,6 +3254,9 @@ func duckTypesOption(overrides map[string]string) string {
 // duckColumnType is DuckDB's type for an ssql type name (json refused
 // upstream).
 func duckColumnType(typeName string) string {
+	if base, scale := ssql.ParseWireType(typeName); base == "decimal" && scale >= 0 {
+		return fmt.Sprintf("DECIMAL(38,%d)", scale) // read_csv rounds the text to the scale, as ssql does
+	}
 	switch typeName {
 	case "int":
 		return "BIGINT"

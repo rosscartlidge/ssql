@@ -36,6 +36,7 @@ type streamAggState struct {
 	Key    string     // state key as written in INIT (e.g. "s")
 	GoName string     // accumulator struct field (e.g. "se0_s")
 	Type   exprGoType // unified over INIT and EVERY (int64 may widen to float64)
+	Scale  int        // a decimal state's scale, INIT's (DFC155 E)
 	Init   string     // Go initialisation expression (literal / literal arithmetic)
 }
 
@@ -88,6 +89,7 @@ func lowerStreamAggAnyFinal(spec streamExprSpec, schema *lib.TypedSchema, idx in
 			Key:    p.key,
 			GoName: fmt.Sprintf("se%d_%s", idx, p.key),
 			Type:   res.Type,
+			Scale:  res.Scale,
 			Init:   res.Src,
 		})
 		plan.Imports = append(plan.Imports, res.Imports...)

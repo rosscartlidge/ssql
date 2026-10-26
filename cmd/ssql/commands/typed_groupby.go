@@ -687,7 +687,7 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		// associative, which is exactly why they keep GroupByParallel.
 		for _, p := range exprPlans {
 			for _, t := range p.Terms {
-				if t.Type.integer() {
+				if t.Type.integer() || t.Type == exprGoDecimal {
 					fmt.Fprintf(&d, "\ta.%s = a.%s.Add(o.%s)\n", t.GoName, t.GoName, t.GoName)
 				} else {
 					fmt.Fprintf(&d, "\ta.%s += o.%s\n", t.GoName, t.GoName)

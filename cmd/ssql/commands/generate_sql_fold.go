@@ -7,6 +7,8 @@ import (
 
 	"github.com/expr-lang/expr/ast"
 
+	"github.com/rosscartlidge/ssql/v4"
+
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/lib"
 )
 
@@ -44,8 +46,10 @@ type sqlFoldPlan struct {
 }
 
 // foldSQLType is the SQL type of a state the typed lowering typed.
-func foldSQLType(t exprGoType) (string, error) {
+func foldSQLType(t exprGoType, scale int) (string, error) {
 	switch t {
+	case exprGoDecimal:
+		return sqlDecimalType(scale), nil
 	case exprGoInt:
 		return "BIGINT", nil
 	case exprGoFloat:
@@ -61,8 +65,10 @@ func foldSQLType(t exprGoType) (string, error) {
 }
 
 // foldKind is the sqlColumnKinds kind of a fold's result type.
-func foldKind(t exprGoType) string {
+func foldKind(t exprGoType, scale int) string {
 	switch t {
+	case exprGoDecimal:
+		return ssql.DecimalType(scale).String()
 	case exprGoInt:
 		return "int"
 	case exprGoFloat:
@@ -77,6 +83,9 @@ func foldKind(t exprGoType) string {
 
 // kindGoType is the typed-lowering Go type of a sqlColumnKinds kind.
 func kindGoType(kind string) string {
+	if base, _ := ssql.ParseWireType(kind); base == "decimal" {
+		return "ssql.Decimal" // the scale: kindScale
+	}
 	switch kind {
 	case "int":
 		return "int64"
@@ -132,7 +141,8 @@ func foldSchema(q *sqlQuery, specs []streamExprSpec) (*lib.TypedSchema, error) {
 		if kind == "" {
 			return nil, fmt.Errorf("column %q has no known type here (cast -type %s TYPE before the fold, or declare it with -type on the from stage)", c, c)
 		}
-		s.Fields = append(s.Fields, lib.TypedSchemaField{Name: c, GoName: lib.GoNameFromColumn(c), GoType: kindGoType(kind)})
+		_, scale := ssql.ParseWireType(kind)
+		s.Fields = append(s.Fields, lib.TypedSchemaField{Name: c, GoName: lib.GoNameFromColumn(c), GoType: kindGoType(kind), Scale: max(scale, 0)})
 	}
 	return s, nil
 }
@@ -161,7 +171,7 @@ func lowerSQLFold(q *sqlQuery, spec streamExprSpec, idx int) (sqlFoldPlan, error
 	}
 	stateCol := map[string]string{}
 	for _, st := range typed.States {
-		t, err := foldSQLType(st.Type)
+		t, err := foldSQLType(st.Type, st.Scale)
 		if err != nil {
 			return plan, fmt.Errorf("-stream-expr %s: state %q: %w", spec.result, st.Key, err)
 		}
@@ -224,7 +234,7 @@ func lowerSQLFold(q *sqlQuery, spec streamExprSpec, idx int) (sqlFoldPlan, error
 		return plan, fmt.Errorf("-stream-expr %s: %w", spec.result, err)
 	}
 	plan.final = finalSQL
-	plan.kind = foldKind(typed.FinalType)
+	plan.kind = foldKind(typed.FinalType, typed.FinalScale)
 	return plan, nil
 }
 

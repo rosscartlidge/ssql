@@ -132,6 +132,11 @@ type EquivCase struct {
 	// and it reaches exec, the generated programs and the engines alike
 	// (DFC147: the zone must not depend on the machine the gate runs on).
 	Env []string
+
+	// Decimals names the output columns that are decimals (DFC155 E): the
+	// harness compares them as exact digits in every lane (a bare 0.30, a
+	// quoted "0.30", a Golden json.Number("0.3")) and never as float64.
+	Decimals []string
 }
 
 // equivNoSQL skips every SQL lane with one reason.
@@ -478,6 +483,33 @@ var pgCopyRe = regexp.MustCompile(`^--   \\copy ("[^"]+") FROM '((?:[^']|'')*)' 
 
 var canonicalIntRe = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
 
+// canonicalDecRe is a plain decimal literal: digits, a point, digits.
+var canonicalDecRe = regexp.MustCompile(`^-?(0|[1-9][0-9]*)\.[0-9]+$`)
+
+// A case's decimal columns (EquivCase.Decimals) are compared as exact
+// digits with the fraction's trailing zeros dropped — 0.30 (a decimal:2),
+// "0.30" (duckdb -json quotes a DECIMAL) and 0.3 are one value,
+// 0.30000000000000004 (a float detour) is not — so a decimal column never
+// passes through a float64. The set is threaded through, never global:
+// the cases run as parallel subtests.
+
+// equivDecimalNumber is a decimal column's canonical value: the digits
+// with the fraction's trailing zeros (and a bare point) stripped, as a
+// json.Number; text that is not a plain number stays as it is.
+func equivDecimalNumber(text string) any {
+	if !canonicalIntRe.MatchString(text) && !canonicalDecRe.MatchString(text) {
+		return text
+	}
+	if strings.Contains(text, ".") {
+		text = strings.TrimRight(text, "0")
+		text = strings.TrimSuffix(text, ".")
+	}
+	if text == "-0" {
+		text = "0"
+	}
+	return json.Number(text)
+}
+
 // duckdbBinary locates duckdb (PATH, then ~/.local/bin); empty when absent so
 // the DuckDB lane degrades to skipped rather than failing the suite.
 func duckdbBinary() string {
@@ -520,6 +552,11 @@ func equivShellEnv(t *testing.T, lane, script string, env []string) string {
 // — until DFC155 C every number became a float64, which could not see one;
 // any other number is a float64, so 3 and 3.0 still compare equal.
 func equivParse(t *testing.T, lane, raw string) []map[string]any {
+	return equivParseWith(t, lane, raw, nil)
+}
+
+// equivParseWith is equivParse with the case's decimal columns.
+func equivParseWith(t *testing.T, lane, raw string, decCols map[string]bool) []map[string]any {
 	t.Helper()
 	var recs []map[string]any
 	for _, line := range strings.Split(raw, "\n") {
@@ -535,7 +572,11 @@ func equivParse(t *testing.T, lane, raw string) []map[string]any {
 		}
 		for k, v := range m {
 			if n, isNum := v.(json.Number); isNum {
-				m[k] = equivNumber(string(n))
+				if decCols[k] {
+					m[k] = equivDecimalNumber(string(n))
+				} else {
+					m[k] = equivNumber(string(n))
+				}
 			}
 		}
 		if _, isSchema := m["_schema"]; isSchema {
@@ -686,6 +727,11 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 
 	results := make(map[string][]map[string]any)
 	columns := make(map[string][]string)
+	decCols := map[string]bool{}
+	for _, col := range c.Decimals {
+		decCols[col] = true
+	}
+
 	for _, ln := range lanes {
 		reason := c.Skip[ln.name]
 		if reason == "" && ln.name == "go-lib" {
@@ -702,7 +748,7 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 			t.Logf("lane %q skipped (dialect refusal by design): %s", ln.name, strings.TrimPrefix(raw, equivSkipPrefix))
 			continue
 		}
-		results[ln.name] = equivParse(t, ln.name, raw)
+		results[ln.name] = equivParseWith(t, ln.name, raw, decCols)
 		var dup string
 		if columns[ln.name], dup = equivColumnOrder(raw); dup != "" {
 			t.Errorf("lane %q: a record carries the key %q twice — invisible to a JSON reader, so no other oracle sees it", ln.name, dup)
@@ -774,6 +820,11 @@ func runEquivCase(t *testing.T, bin, pipeline string, c EquivCase) {
 				// digits ARE the value and stay text.
 				if s, isStr := v.(string); isStr && numCols[k] && canonicalIntRe.MatchString(s) {
 					r[k] = json.Number(s)
+				}
+				// duckdb -json quotes a DECIMAL too ("0.30"): in a declared
+				// decimal column, the exact digits (DFC155 E).
+				if s, isStr := v.(string); isStr && decCols[k] {
+					r[k] = equivDecimalNumber(s)
 				}
 			}
 		}
@@ -2750,6 +2801,107 @@ var equivCases = []EquivCase{
 		Ordered:  true,
 		Golden:   []map[string]any{{"n": 183, "fib": json.Number("127127879743834334146972278486287885163")}},
 		Skip:     equivFoldDuckDBOnly(), // DuckDB computes it as a recursive CTE in HUGEINT (DFC156)
+	},
+	{
+		// DFC155 E: a declared decimal column sums exactly to the cent
+		// in every lane (the same column as a float drifts), the average
+		// is a float, the extremes keep the scale.
+		Name:     "money_sum_shuffled",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} group-by k -sum amt t -avg amt a -min amt lo -max amt hi | {{.bin}} sort k`,
+		Ordered:  true,
+		Decimals: []string{"t", "lo", "hi"},
+		Golden: []map[string]any{
+			{"k": "a", "t": json.Number("-4.41"), "a": -1.1025, "lo": json.Number("-5.01"), "hi": json.Number("0.3")},
+			{"k": "b", "t": json.Number("12.78"), "a": 3.195, "lo": json.Number("0.1"), "hi": json.Number("12.35")},
+		},
+	},
+	{
+		// A total past 2^53 cents, exact where a float loses the cent.
+		Name:     "decimal_sum_past_2_53_cents",
+		Pipeline: `{{.bin}} from csv {{.data}}/big.csv -type amt decimal:2 | {{.bin}} group-by k -sum amt t`,
+		Decimals: []string{"t"},
+		Golden:   []map[string]any{{"k": "x", "t": json.Number("90071992547409.94")}},
+	},
+	{
+		// Text cast to decimal:2 rounds half away from zero in every lane
+		// (12.345 → 12.35, -5.005 → -5.01, 0.125 → 0.13).
+		Name:     "cast_decimal_rounds",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv | {{.bin}} cast -type amt string | {{.bin}} cast -type amt decimal:2 | {{.bin}} sort amt k`,
+		Ordered:  true,
+		Decimals: []string{"amt"},
+		Golden:   []map[string]any{{"k": "a", "amt": json.Number("-5.01")}, {"k": "a", "amt": json.Number("0.1")}, {"k": "b", "amt": json.Number("0.1")}, {"k": "b", "amt": json.Number("0.13")}, {"k": "a", "amt": json.Number("0.2")}, {"k": "b", "amt": json.Number("0.2")}, {"k": "a", "amt": json.Number("0.3")}, {"k": "b", "amt": json.Number("12.35")}},
+	},
+	{
+		// `*` adds the scales (2 + 3 → 5, exact); round(x, 2) brings cents back.
+		Name:     "decimal_mul_scale",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} update -set-expr x 'amt * decimal("1.075")' -set-expr y 'round(amt * decimal("1.075"), 2)' | {{.bin}} sort amt k | {{.bin}} include k amt x y`,
+		Ordered:  true,
+		Decimals: []string{"amt", "x", "y"},
+		Golden:   []map[string]any{{"k": "a", "amt": json.Number("-5.01"), "x": json.Number("-5.38575"), "y": json.Number("-5.39")}, {"k": "a", "amt": json.Number("0.1"), "x": json.Number("0.1075"), "y": json.Number("0.11")}, {"k": "b", "amt": json.Number("0.1"), "x": json.Number("0.1075"), "y": json.Number("0.11")}, {"k": "b", "amt": json.Number("0.13"), "x": json.Number("0.13975"), "y": json.Number("0.14")}, {"k": "a", "amt": json.Number("0.2"), "x": json.Number("0.215"), "y": json.Number("0.22")}, {"k": "b", "amt": json.Number("0.2"), "x": json.Number("0.215"), "y": json.Number("0.22")}, {"k": "a", "amt": json.Number("0.3"), "x": json.Number("0.3225"), "y": json.Number("0.32")}, {"k": "b", "amt": json.Number("12.35"), "x": json.Number("13.27625"), "y": json.Number("13.28")}},
+	},
+	{
+		// `/` is a float, a float literal beside a decimal makes a float,
+		// string() keeps the scale's digits.
+		Name:     "decimal_div_float_string",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} update -set-expr r 'amt / 4' -set-expr p 'amt + 0.5' -set-expr s 'string(amt)' | {{.bin}} sort amt k | {{.bin}} include k amt r p s`,
+		Ordered:  true,
+		Decimals: []string{"amt"},
+		Golden:   []map[string]any{{"k": "a", "amt": json.Number("-5.01"), "r": -1.2525, "p": -4.51, "s": "-5.01"}, {"k": "a", "amt": json.Number("0.1"), "r": 0.025, "p": 0.6, "s": "0.10"}, {"k": "b", "amt": json.Number("0.1"), "r": 0.025, "p": 0.6, "s": "0.10"}, {"k": "b", "amt": json.Number("0.13"), "r": 0.0325, "p": 0.63, "s": "0.13"}, {"k": "a", "amt": json.Number("0.2"), "r": 0.05, "p": 0.7, "s": "0.20"}, {"k": "b", "amt": json.Number("0.2"), "r": 0.05, "p": 0.7, "s": "0.20"}, {"k": "a", "amt": json.Number("0.3"), "r": 0.075, "p": 0.8, "s": "0.30"}, {"k": "b", "amt": json.Number("12.35"), "r": 3.0875, "p": 12.85, "s": "12.35"}},
+	},
+	{
+		// A flag literal and an expression literal both compare exactly.
+		Name:     "decimal_compare_sort_where",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} where -if amt gt 0.15 | {{.bin}} where -if-expr 'amt < decimal("12")' | {{.bin}} sort -desc amt k`,
+		Ordered:  true,
+		Decimals: []string{"amt"},
+		Golden:   []map[string]any{{"k": "a", "amt": json.Number("0.3")}, {"k": "b", "amt": json.Number("0.2")}, {"k": "a", "amt": json.Number("0.2")}}, // -desc applies to every field of the clause
+	},
+	{
+		// A decimal is a group key (one scale per column).
+		Name:     "decimal_groupby_key",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} group-by amt -count n | {{.bin}} sort amt`,
+		Ordered:  true,
+		Decimals: []string{"amt"},
+		Golden:   []map[string]any{{"amt": json.Number("-5.01"), "n": 1}, {"amt": json.Number("0.1"), "n": 2}, {"amt": json.Number("0.13"), "n": 1}, {"amt": json.Number("0.2"), "n": 2}, {"amt": json.Number("0.3"), "n": 1}, {"amt": json.Number("12.35"), "n": 1}},
+	},
+	{
+		// A decimal:2 key joins an integer key exactly (5.00 is 5); 2.50
+		// matches nothing. The left's spelling of the key is kept.
+		Name:     "decimal_join_key",
+		Pipeline: `{{.bin}} from csv {{.data}}/dec.csv -type id decimal:2 | {{.bin}} join {{.data}}/ids.csv -on id id | {{.bin}} sort id`,
+		Ordered:  true,
+		Decimals: []string{"id"},
+		Golden:   []map[string]any{{"id": json.Number("1"), "amt": "x", "n": "one"}, {"id": json.Number("5"), "amt": "y", "n": "five"}},
+	},
+	{
+		// Running and sliding window sums of a decimal column keep the scale.
+		Name:     "window_decimal_sum",
+		Pipeline: `{{.bin}} from range 5 | {{.bin}} cast -type n decimal:2 | {{.bin}} window -order n -sum n run | {{.bin}} window -order n -sum n s2 -preceding 1 | {{.bin}} sort n`,
+		Ordered:  true,
+		Decimals: []string{"n", "run", "s2"},
+		Golden: []map[string]any{
+			{"n": json.Number("1"), "run": json.Number("1"), "s2": json.Number("1")},
+			{"n": json.Number("2"), "run": json.Number("3"), "s2": json.Number("3")},
+			{"n": json.Number("3"), "run": json.Number("6"), "s2": json.Number("5")},
+			{"n": json.Number("4"), "run": json.Number("10"), "s2": json.Number("7")},
+			{"n": json.Number("5"), "run": json.Number("15"), "s2": json.Number("9")},
+		},
+	},
+	{
+		// round to places, floor, ceil and trunc are decimals (scale n / 0);
+		// int() truncates toward zero in every lane.
+		Name:     "decimal_round_floor_ceil",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} update -set-expr r 'round(amt, 1)' -set-expr f 'floor(amt)' -set-expr c 'ceil(amt)' -set-expr t 'trunc(amt)' -set-expr i 'int(amt)' | {{.bin}} sort amt k | {{.bin}} include k amt r f c t i`,
+		Ordered:  true,
+		Decimals: []string{"amt", "r", "f", "c", "t"},
+		Golden:   []map[string]any{{"k": "a", "amt": json.Number("-5.01"), "r": json.Number("-5"), "f": json.Number("-6"), "c": json.Number("-5"), "t": json.Number("-5"), "i": -5}, {"k": "a", "amt": json.Number("0.1"), "r": json.Number("0.1"), "f": json.Number("0"), "c": json.Number("1"), "t": json.Number("0"), "i": 0}, {"k": "b", "amt": json.Number("0.1"), "r": json.Number("0.1"), "f": json.Number("0"), "c": json.Number("1"), "t": json.Number("0"), "i": 0}, {"k": "b", "amt": json.Number("0.13"), "r": json.Number("0.1"), "f": json.Number("0"), "c": json.Number("1"), "t": json.Number("0"), "i": 0}, {"k": "a", "amt": json.Number("0.2"), "r": json.Number("0.2"), "f": json.Number("0"), "c": json.Number("1"), "t": json.Number("0"), "i": 0}, {"k": "b", "amt": json.Number("0.2"), "r": json.Number("0.2"), "f": json.Number("0"), "c": json.Number("1"), "t": json.Number("0"), "i": 0}, {"k": "a", "amt": json.Number("0.3"), "r": json.Number("0.3"), "f": json.Number("0"), "c": json.Number("1"), "t": json.Number("0"), "i": 0}, {"k": "b", "amt": json.Number("12.35"), "r": json.Number("12.4"), "f": json.Number("12"), "c": json.Number("13"), "t": json.Number("12"), "i": 12}},
+	},
+	{
+		// The scale survives a hop between stages (the header carries it).
+		Name:     "decimal_schema_header_hop",
+		Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} sort amt k | {{.bin}} limit 3 | {{.bin}} group-by -sum amt t`,
+		Decimals: []string{"t"},
+		Golden:   []map[string]any{{"t": json.Number("-4.81")}},
 	},
 	{
 		// group-by -sum of int64 past 2^63 is an int128, DuckDB's HUGEINT.
