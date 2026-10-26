@@ -2154,7 +2154,11 @@ func translateWindow(q *sqlQuery, args []string) error {
 					cur.frameFns = append(cur.frameFns, args[i])
 				}
 				sqlFunc := windowSQLFunc(args[i])
-				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s) AS %s", sqlFunc, quoteIdent(args[i+1]), quoteIdent(args[i+2])))
+				call := fmt.Sprintf("%s(%s)", sqlFunc, quoteIdent(args[i+1]))
+				if args[i] == "-avg" {
+					call = sqlAggAvg(quoteIdent(args[i+1])) // a float in every dialect
+				}
+				cur.funcs = append(cur.funcs, fmt.Sprintf("%s AS %s", call, quoteIdent(args[i+2])))
 				i += 3
 			} else {
 				i++

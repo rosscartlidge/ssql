@@ -160,7 +160,7 @@ var aggDefs = []aggDef{
 	{flag: "-sum", fn: "sum", merge: "-sum", hasField: true, sql: sqlSumOrZero, wireType: wireSum, typedKind: typedKindSum,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Sum(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Sum(%q)", f) }},
-	{flag: "-avg", fn: "avg", hasField: true, sql: sqlCall("AVG"), wireType: wireFixed("float"), typedKind: typedKindAvg,
+	{flag: "-avg", fn: "avg", hasField: true, sql: func(qf, _ string) string { return sqlAggAvg(qf) }, wireType: wireFixed("float"), typedKind: typedKindAvg,
 		build: func(f, _ string) ssql.AggregateFunc { return ssql.Avg(f) },
 		code:  func(f, _ string) string { return fmt.Sprintf("ssql.Avg(%q)", f) }},
 	// min/max keep the field's type: MinOf/MaxOf order numbers, strings

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`-avg` on Postgres (and DataFusion) was an exact NUMERIC** where ssql, the typed lane and DuckDB average as a float: the dialect now casts `AVG` to `DOUBLE PRECISION` for group-by and window averages. Found by running the int128 and decimal cases on the rig's Postgres lane for the first time (the forms shipped in v4.122.0 and v4.125.0 were documented text; the lane confirms them now).
 - **A join kept the right side's value of the key column** where the two sides spell the same key differently (a `decimal:2` `1.00` beside an int `1`): the merge now keeps the left's value when the two are equal, as the typed lane always assigned it. Integer keys never showed it.
 
 ## [4.126.0] - 2026-10-26

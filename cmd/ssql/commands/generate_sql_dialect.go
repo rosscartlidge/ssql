@@ -548,6 +548,17 @@ func sqlDecimalType(scale int) string {
 	return fmt.Sprintf("DECIMAL(38,%d)", scale)
 }
 
+// sqlAggAvg is AVG as a float in every dialect: DuckDB's AVG is a DOUBLE
+// already; Postgres (and DataFusion over a decimal) return an exact
+// NUMERIC, where ssql, the typed lane and DuckDB all average as a float
+// — found running the int128 cases on the rig (2026-10-27).
+func sqlAggAvg(qf string) string {
+	if sqlDialectCur == dialectDuckDB {
+		return "AVG(" + qf + ")"
+	}
+	return "CAST(AVG(" + qf + ") AS " + sqlFloatType() + ")"
+}
+
 // sqlFloatType is the double-precision type name.
 func sqlFloatType() string {
 	if sqlDialectCur == dialectPostgres {
