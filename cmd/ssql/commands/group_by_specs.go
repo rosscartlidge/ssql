@@ -141,6 +141,9 @@ func wireOfField(fieldType string) string {
 // type was float for every sum, which coerced an exact int64 sum past
 // 2^53 to the nearest float on the way out.
 func wireSum(fieldType string) string {
+	if base, _ := ssql.ParseWireType(fieldType); base == "decimal" {
+		return fieldType // a decimal sums at its scale: DuckDB's SUM(DECIMAL(38,s)) → DECIMAL(38,s) (DFC155 E)
+	}
 	if fieldType == "int" || fieldType == "int128" {
 		return "int128"
 	}

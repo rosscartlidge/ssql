@@ -22,7 +22,20 @@ const (
 	TypeJSON   = "json"   // arrays, nested objects
 	TypeTime   = "time"   // time.Time, RFC 3339 on the wire (DFC128 D1)
 	TypeInt128 = "int128" // ssql.Int128, a bare number on the wire; DuckDB's HUGEINT (DFC155 C)
+
+	// TypeDecimal is the BASE of the `decimal:S` wire type — ssql.Decimal,
+	// a bare number with S digits after the point; DECIMAL(38,S) (DFC155
+	// E). The scale is part of the name: build one with WireDecimal, read
+	// one with ParseWireType, never compare the string whole.
+	TypeDecimal = "decimal"
 )
+
+// WireDecimal is the wire type name of a decimal column of the scale.
+func WireDecimal(scale int) string { return ssql.DecimalType(scale).String() }
+
+// ParseWireType splits a wire type name into base and scale:
+// ("decimal", 2) for "decimal:2", (name, 0) otherwise. ssql.ParseWireType.
+func ParseWireType(s string) (base string, scale int) { return ssql.ParseWireType(s) }
 
 // Schema represents the structure of JSONL records with ordered fields and types.
 type Schema struct {
@@ -307,6 +320,11 @@ func InferFromSample(records []ssql.Record) *Schema {
 
 // widenWireType merges two observed wire types for one field.
 func widenWireType(a, b string) string {
+	if ab, as := ParseWireType(a); ab == TypeDecimal {
+		return widenDecimalWire(as, b)
+	} else if bb, bs := ParseWireType(b); bb == TypeDecimal {
+		return widenDecimalWire(bs, a)
+	}
 	switch {
 	case a == b:
 		return a
@@ -315,6 +333,21 @@ func widenWireType(a, b string) string {
 	case (a == TypeInt && b == TypeInt128) || (a == TypeInt128 && b == TypeInt):
 		return TypeInt128 // int beside int128 widens to int128 (DFC155 C)
 	case (a == TypeInt128 && b == TypeFloat) || (a == TypeFloat && b == TypeInt128):
+		return TypeFloat
+	}
+	return TypeString
+}
+
+// widenDecimalWire merges a decimal of the scale with another wire type:
+// another decimal at the larger scale, an integer of either width into
+// the decimal, a float into a float (DFC155 E).
+func widenDecimalWire(scale int, other string) string {
+	switch ob, os := ParseWireType(other); ob {
+	case TypeDecimal:
+		return WireDecimal(max(scale, os))
+	case TypeInt, TypeInt128:
+		return WireDecimal(scale)
+	case TypeFloat:
 		return TypeFloat
 	}
 	return TypeString
@@ -344,11 +377,13 @@ func InferFromRecordOrdered(record ssql.Record, fieldOrder []string) *Schema {
 
 // InferTypeString returns the schema type string for a value.
 func InferTypeString(v any) string {
-	switch v.(type) {
+	switch x := v.(type) {
 	case int64:
 		return TypeInt
 	case ssql.Int128:
 		return TypeInt128
+	case ssql.Decimal:
+		return WireDecimal(x.Scale())
 	case float64:
 		return TypeFloat
 	case bool:
@@ -366,6 +401,9 @@ func InferTypeString(v any) string {
 
 // FieldTypeToSchemaType converts ssql.FieldType to schema type string.
 func FieldTypeToSchemaType(ft ssql.FieldType) string {
+	if ft.IsDecimal() {
+		return ft.String()
+	}
 	switch ft {
 	case ssql.FieldTypeInt:
 		return TypeInt
@@ -388,6 +426,9 @@ func FieldTypeToSchemaType(ft ssql.FieldType) string {
 
 // SchemaTypeToFieldType converts schema type string to ssql.FieldType.
 func SchemaTypeToFieldType(typ string) ssql.FieldType {
+	if base, scale := ParseWireType(typ); base == TypeDecimal && scale >= 0 {
+		return ssql.DecimalType(scale)
+	}
 	switch typ {
 	case TypeInt:
 		return ssql.FieldTypeInt

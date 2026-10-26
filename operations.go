@@ -1588,6 +1588,8 @@ func setScalar(mut MutableRecord, field string, v any) MutableRecord {
 		return mut.Int(field, x)
 	case Int128:
 		return mut.Int128(field, x)
+	case Decimal:
+		return mut.Decimal(field, x)
 	case float64:
 		return mut.Float(field, x)
 	case bool:

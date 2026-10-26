@@ -38,6 +38,9 @@ func formatCastValue(v any) string {
 }
 
 func castTypeNoun(t FieldType) string {
+	if t.IsDecimal() {
+		return "a " + t.String()
+	}
 	switch t {
 	case FieldTypeInt:
 		return "an int"
@@ -63,6 +66,9 @@ func castTypeNoun(t FieldType) string {
 // (as a Go conversion does); a bool is 1 or 0; a number is true when
 // non-zero; a numeric string may be written as a float ("2.5" → int 2).
 func CastValue(v any, target FieldType) (any, bool) {
+	if target.IsDecimal() {
+		return castToDecimal(v, target.Scale())
+	}
 	switch target {
 	case FieldTypeJSON:
 		// A nested value: its JSON text. A JSONString is accepted as it is;
@@ -87,6 +93,8 @@ func CastValue(v any, target FieldType) (any, bool) {
 			return strconv.FormatInt(x, 10), true
 		case Int128:
 			return x.String(), true
+		case Decimal:
+			return x.String(), true
 		case float64:
 			return strconv.FormatFloat(x, 'g', -1, 64), true
 		case bool:
@@ -102,6 +110,8 @@ func CastValue(v any, target FieldType) (any, bool) {
 		switch x := v.(type) {
 		case Int128:
 			return x, true
+		case Decimal:
+			return x.Trunc(), true // the integer part, as the int cast of a float
 		case int64:
 			return Int128From(x), true
 		case float64:
@@ -129,6 +139,8 @@ func CastValue(v any, target FieldType) (any, bool) {
 			return x, true
 		case Int128:
 			return x.Int64() // only when it fits: narrowing never wraps
+		case Decimal:
+			return x.Trunc().Int64() // toward zero, only when it fits
 		case float64:
 			return int64(x), true
 		case bool:
@@ -153,6 +165,8 @@ func CastValue(v any, target FieldType) (any, bool) {
 			return float64(x), true
 		case Int128:
 			return x.Float64(), true
+		case Decimal:
+			return x.Float64(), true
 		case bool:
 			if x {
 				return float64(1), true
@@ -171,6 +185,8 @@ func CastValue(v any, target FieldType) (any, bool) {
 			return x != 0, true
 		case Int128:
 			return !x.IsZero(), true
+		case Decimal:
+			return !x.IsZero(), true
 		case float64:
 			return x != 0, true
 		case string:
@@ -187,6 +203,44 @@ func CastValue(v any, target FieldType) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+// castToDecimal is the cast to `decimal:scale` (DFC155 E): a decimal is
+// brought to the scale (rounding half away from zero), an integer of
+// either width exactly, a float by its shortest decimal form, a bool as
+// 1 or 0, text by ParseDecimal. A value that does not fit 38 digits at
+// the scale is a failure.
+func castToDecimal(v any, scale int) (any, bool) {
+	var d Decimal
+	var err error
+	switch x := v.(type) {
+	case Decimal:
+		d, err = x.Rescale(scale)
+	case int64:
+		d, err = DecimalFromInt128(Int128From(x), scale)
+	case Int128:
+		d, err = DecimalFromInt128(x, scale)
+	case float64:
+		var ok bool
+		d, ok = DecimalFromFloat(x, scale)
+		if !ok {
+			return nil, false
+		}
+	case bool:
+		if x {
+			d = DecimalFromInt64(1, scale)
+		} else {
+			d = MustNewDecimal(Int128{}, scale)
+		}
+	case string:
+		d, err = ParseDecimalScale(strings.TrimSpace(x), scale)
+	default:
+		return nil, false
+	}
+	if err != nil {
+		return nil, false
+	}
+	return d, true
 }
 
 // CastFieldFormat is CastField to a time through a pattern (strftime or a
@@ -255,6 +309,8 @@ func CastField(mut MutableRecord, src Record, field string, target FieldType, in
 		return mut.Int(field, x)
 	case Int128:
 		return mut.Int128(field, x)
+	case Decimal:
+		return mut.Decimal(field, x)
 	case float64:
 		return mut.Float(field, x)
 	case bool:

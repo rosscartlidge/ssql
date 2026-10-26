@@ -88,6 +88,22 @@ func parseInt128Cell(s string) (any, error) {
 	return nil, errCellType
 }
 
+// parseDecimalCell reads a cell of a column declared decimal:scale —
+// the text at that scale, rounding half away from zero as DuckDB's
+// read_csv does with a DECIMAL type; an empty cell is missing.
+func parseDecimalCell(scale int) cellParser {
+	return func(s string) (any, error) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil, nil
+		}
+		if d, err := ParseDecimalScale(s, scale); err == nil {
+			return d, nil
+		}
+		return nil, errCellType
+	}
+}
+
 func parseFloatCell(s string) (any, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -150,6 +166,15 @@ func parseTimeCellPattern(pattern string) cellParser {
 // value anyone wrote).
 func zeroForEmpty(ft FieldType, p cellParser) cellParser {
 	var zero any
+	if ft.IsDecimal() {
+		zero = MustNewDecimal(Int128{}, ft.Scale())
+		return func(s string) (any, error) {
+			if strings.TrimSpace(s) == "" {
+				return zero, nil
+			}
+			return p(s)
+		}
+	}
 	switch ft {
 	case FieldTypeInt:
 		zero = int64(0)
@@ -172,6 +197,9 @@ func zeroForEmpty(ft FieldType, p cellParser) cellParser {
 
 // parserForType returns the cell parser for a FieldType.
 func parserForType(ft FieldType) cellParser {
+	if ft.IsDecimal() {
+		return parseDecimalCell(ft.Scale())
+	}
 	switch ft {
 	case FieldTypeInt:
 		return parseIntCell

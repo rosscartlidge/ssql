@@ -162,6 +162,7 @@ func MakeMutableRecordWithCapacity(capacity int) MutableRecord
 func (m MutableRecord) String(field, value string) MutableRecord
 func (m MutableRecord) Int(field string, value int64) MutableRecord
 func (m MutableRecord) Int128(field string, value Int128) MutableRecord   // the int128 column (DFC155 C)
+func (m MutableRecord) Decimal(field string, value Decimal) MutableRecord // the decimal:S column (DFC155 E)
 func (m MutableRecord) Float(field string, value float64) MutableRecord
 func (m MutableRecord) Bool(field string, value bool) MutableRecord
 func (m MutableRecord) Time(field string, value time.Time) MutableRecord
@@ -320,6 +321,7 @@ func (d Decimal) Round(n int) (Decimal, error)       // at scale n, half away fr
 func (d Decimal) Floor() (Decimal, error)            // at scale 0
 func (d Decimal) Ceil() (Decimal, error)             // at scale 0
 func (d Decimal) Trunc() Int128                      // the integer part toward zero (int()'s rule)
+func (d Decimal) IsWhole() bool                      // no fractional part (5.00 is whole)
 func (d Decimal) Int64() (int64, bool)               // when whole and it fits
 func (d Decimal) Float64() float64                   // the nearest float64 (correctly rounded)
 func (d Decimal) String() string                     // "12.34", "-0.05", "0.10": the scale's digits after the point
@@ -417,6 +419,11 @@ func ParseTime(val any) (time.Time, bool)       // time.Time as is; RFC 3339, "2
                                                  // "2006-01-02"; int64 Unix seconds
 func MustParseTime(val any, field string) time.Time   // panics naming the field: an explicit cast never yields a zero time
 func ParseFieldType(s string) (FieldType, error)      // "int", "float", "bool", "string", "time" ("timestamp", "datetime", "date" are aliases)
+const FieldTypeDecimal FieldType = 1 << 8                 // the flag bit of a `decimal:S` type; the scale rides in the low bits (DFC155 E) — never a case label, test IsDecimal first
+func DecimalType(scale int) FieldType                     // the FieldType of a decimal:scale column
+func (ft FieldType) IsDecimal() bool
+func (ft FieldType) Scale() int                           // a decimal type's scale (0 for any other)
+func ParseWireType(s string) (base string, scale int)     // ("decimal", 2) for "decimal:2", (s, 0) otherwise, ("decimal", -1) for a bare "decimal"
 func (ft FieldType) String() string
 
 type FieldType int

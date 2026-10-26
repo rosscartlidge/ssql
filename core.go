@@ -354,7 +354,7 @@ func NewJSONString(value any) (JSONString, error) {
 // Hybrid approach: Canonical scalars (int64/float64), flexible sequences (any numeric type)
 type Value interface {
 	// Canonical scalar types only
-	~int64 | ~float64 | Int128 |
+	~int64 | ~float64 | Int128 | Decimal |
 
 		// Other basic types
 		~bool | string | time.Time |
@@ -996,6 +996,11 @@ func (m MutableRecord) Int128(field string, value Int128) MutableRecord {
 	return Set(m, field, value)
 }
 
+// Decimal adds a fixed-point field (mutates in place; DFC155 E)
+func (m MutableRecord) Decimal(field string, value Decimal) MutableRecord {
+	return Set(m, field, value)
+}
+
 // Bool adds a boolean field (mutates in place)
 func (m MutableRecord) Bool(field string, value bool) MutableRecord {
 	return Set(m, field, value)
@@ -1205,6 +1210,11 @@ func convertTo[T any](val any) (T, bool) {
 			return any(converted).(T), true
 		}
 		return zero, false
+	case Decimal:
+		if converted, ok := convertToDecimal(val); ok {
+			return any(converted).(T), true
+		}
+		return zero, false
 	case string:
 		if converted, ok := convertToString(val); ok {
 			return any(converted).(T), true
@@ -1233,10 +1243,35 @@ func convertTo[T any](val any) (T, bool) {
 
 // convertToInt128 widens to the 128-bit integer: an int64, a whole
 // float64 that fits, a digit string. Never a truncation.
+// convertToDecimal handles conversions TO a Decimal: one as it is, an
+// integer of either width at scale 0, a float64 by its shortest decimal
+// form, a decimal string by its text (the scale is the text's).
+func convertToDecimal(val any) (Decimal, bool) {
+	switch v := val.(type) {
+	case Decimal:
+		return v, true
+	case int64, int, Int128:
+		return asDecimal(v)
+	case float64:
+		return decimalFromFloatExact(v)
+	case string:
+		d, err := ParseDecimal(strings.TrimSpace(v))
+		return d, err == nil
+	case bool:
+		if v {
+			return DecimalFromInt64(1, 0), true
+		}
+		return Decimal{}, true
+	}
+	return Decimal{}, false
+}
+
 func convertToInt128(val any) (Int128, bool) {
 	switch v := val.(type) {
 	case Int128:
 		return v, true
+	case Decimal:
+		return v.wholeInt128() // only when whole: a decimal never truncates into an integer by accident
 	case int64:
 		return Int128From(v), true
 	case int:
@@ -1264,6 +1299,8 @@ func convertToInt64(val any) (int64, bool) {
 		return v, true
 	case Int128:
 		return v.Int64() // only when it fits: an int128 never wraps into an int64
+	case Decimal:
+		return v.Int64() // only when whole and it fits
 	case float64:
 		return int64(v), true // Allow float64 -> int64 truncation
 	case string:
@@ -1292,6 +1329,8 @@ func convertToFloat64(val any) (float64, bool) {
 		return float64(v), true // Allow int64 -> float64 widening
 	case Int128:
 		return v.Float64(), true // the nearest float64, as an int64 widens
+	case Decimal:
+		return v.Float64(), true
 	case string:
 		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
 			return parsed, true
@@ -1458,6 +1497,8 @@ func appendJSONValue(buf []byte, v any) []byte {
 		return strconv.AppendInt(buf, val, 10)
 	case Int128:
 		return append(buf, val.String()...) // a bare number, as DuckDB writes a HUGEINT
+	case Decimal:
+		return append(buf, val.String()...) // a bare number with the scale's digits, as DuckDB writes a DECIMAL
 	case float64:
 		if math.IsNaN(val) || math.IsInf(val, 0) {
 			// JSON has no NaN or Infinity. strconv wrote the bare words,
@@ -1787,7 +1828,9 @@ func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType
 		}
 
 		// Parse value
+		valueStart := pos
 		value, newPos, err := parseJSONValue(line, pos)
+		valueEnd := newPos
 		if err != nil {
 			return Record{}, err
 		}
@@ -1813,6 +1856,22 @@ func ParseJSONLineWithSchemaTypes(line []byte, schema *Schema, types []FieldType
 				// the wire; the header keeps the column one type.
 				if i, ok := value.(int64); ok {
 					value = Int128From(i)
+				}
+			}
+			if idx < len(types) && types[idx].IsDecimal() {
+				// A decimal column's value is read from the number's own
+				// digits at the declared scale (DFC155 E) — never through
+				// the float64 the JSON syntax would give it; a quoted form
+				// (duckdb -json) the same.
+				switch v := value.(type) {
+				case int64, Int128, float64:
+					if d, err := ParseDecimalScale(string(line[valueStart:valueEnd]), types[idx].Scale()); err == nil {
+						value = d
+					}
+				case string:
+					if d, err := ParseDecimalScale(v, types[idx].Scale()); err == nil {
+						value = d
+					}
 				}
 			}
 			values[idx] = value
@@ -2129,7 +2188,7 @@ func ValidateRecord(r Record) error {
 func isValueType(value any) bool {
 	switch value.(type) {
 	// Canonical scalar types only
-	case int64, float64, Int128:
+	case int64, float64, Int128, Decimal:
 		return true
 	// Other basic types
 	case bool, string:
@@ -2445,6 +2504,8 @@ func stableKeyAppend(buf []byte, value any) string {
 		return string(strconv.AppendInt(buf, v, 10))
 	case Int128:
 		return string(append(buf, v.String()...))
+	case Decimal:
+		return string(append(buf, v.Normalized().String()...)) // 5.00 keys with 5 and 5.000
 	case float64:
 		return string(strconv.AppendFloat(buf, v, 'g', -1, 64))
 	case string:
@@ -2843,7 +2904,7 @@ func isSimpleValue(value any) bool {
 	}
 	switch value.(type) {
 	// Canonical scalar types only
-	case int64, float64, Int128:
+	case int64, float64, Int128, Decimal:
 		return true
 	// Other basic types
 	case bool, string, time.Time:

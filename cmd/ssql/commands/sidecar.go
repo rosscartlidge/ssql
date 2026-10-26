@@ -164,8 +164,12 @@ func goFieldType(goType string, isJSON bool) ssql.FieldType {
 	return ssql.FieldTypeString
 }
 
-// fieldTypeConst is the Go source for a FieldType (generated code).
+// fieldTypeConst is the Go source for a FieldType (generated code): the
+// constant, or ssql.DecimalType(S) for a decimal (no constant has a scale).
 func fieldTypeConst(ft ssql.FieldType) string {
+	if ft.IsDecimal() {
+		return fmt.Sprintf("ssql.DecimalType(%d)", ft.Scale())
+	}
 	return "ssql.FieldType" + capitalizeFieldType(ft.String())
 }
 

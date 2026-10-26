@@ -255,6 +255,8 @@ func xlsxCellValue(val any) any {
 		return v
 	case Int128:
 		return v.String() // a sheet's numbers are doubles: the digits stay exact as text
+	case Decimal:
+		return v.Float64() // a sheet's numbers are doubles (exact to 2^53 units)
 	case float64:
 		return v
 	case bool:

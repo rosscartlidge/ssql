@@ -32,7 +32,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 		FieldsFromFlag("").
 		Done().
 		Arg("type").
-		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "int128", "float", "bool", "time", "json"}}).
+		Completer(&cf.StaticCompleter{Options: []string{"string", "int", "int128", "decimal:2", "float", "bool", "time", "json"}}).
 		Done().
 		Accumulate().
 		Global().
@@ -78,7 +78,7 @@ func RegisterCast(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 							}
 							// Don't allow auto for cast - must be explicit
 							if ft == ssql.FieldTypeAuto {
-								return fmt.Errorf("field %q: cast requires explicit type (string, int, int128, float, bool, time, json)", field)
+								return fmt.Errorf("field %q: cast requires explicit type (string, int, int128, decimal:S, float, bool, time, json)", field)
 							}
 							typeConversions[field] = ft
 						}
@@ -243,6 +243,9 @@ func generateCastCode(ctx *cf.Context, typeConversions map[string]ssql.FieldType
 
 // castTargetGoConst is the ssql.FieldType constant as Go source.
 func castTargetGoConst(t ssql.FieldType) string {
+	if t.IsDecimal() {
+		return fmt.Sprintf("ssql.DecimalType(%d)", t.Scale())
+	}
 	switch t {
 	case ssql.FieldTypeInt:
 		return "ssql.FieldTypeInt"
@@ -263,6 +266,9 @@ func castTargetGoConst(t ssql.FieldType) string {
 // castTargetWireType maps a cast target to the JSONL schema vocabulary
 // ("" when the target has no single wire type).
 func castTargetWireType(target ssql.FieldType) string {
+	if target.IsDecimal() {
+		return target.String()
+	}
 	switch target {
 	case ssql.FieldTypeInt:
 		return lib.TypeInt

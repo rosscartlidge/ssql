@@ -69,7 +69,47 @@ const (
 	FieldTypeTime                    // Parse as time.Time (ParseTime's forms); the `time` wire type (DFC128 D1)
 	FieldTypeJSON                    // A nested value (array or object) held as its JSON text, a JSONString; the `json` wire type (DFC144 Level 0)
 	FieldTypeInt128                  // Parse as Int128: the `int128` wire type, DuckDB's HUGEINT (DFC155 C)
+
+	// FieldTypeDecimal is the flag bit of a `decimal:S` type: the scale
+	// rides in the low bits (DecimalType, Scale), so a FieldType in flight
+	// keeps it — a scale is part of the type's identity, unlike a time
+	// pattern (DFC155 E). Never a case label: test IsDecimal first.
+	FieldTypeDecimal FieldType = 1 << 8
 )
+
+// DecimalType is the FieldType of a `decimal:scale` column.
+func DecimalType(scale int) FieldType { return FieldTypeDecimal | FieldType(scale&0xff) }
+
+// IsDecimal reports whether ft is a decimal type of some scale.
+func (ft FieldType) IsDecimal() bool { return ft&FieldTypeDecimal != 0 }
+
+// Scale is a decimal type's scale (0 for any other type).
+func (ft FieldType) Scale() int {
+	if !ft.IsDecimal() {
+		return 0
+	}
+	return int(ft &^ FieldTypeDecimal)
+}
+
+// ParseWireType splits a wire type name into its base and, for
+// `decimal:S`, its scale: ("decimal", 2) for "decimal:2", (s, 0) for any
+// other name, ("decimal", -1) for a bare "decimal". Every switch on a
+// wire type string consults it first, since a parameterised name is no
+// case label.
+func ParseWireType(s string) (base string, scale int) {
+	t := strings.ToLower(strings.TrimSpace(s))
+	if t == "decimal" {
+		return "decimal", -1
+	}
+	if rest, ok := strings.CutPrefix(t, "decimal:"); ok {
+		n, err := strconv.Atoi(rest)
+		if err != nil || n < 0 {
+			return "decimal", -1
+		}
+		return "decimal", n
+	}
+	return t, 0
+}
 
 // DefaultCSVConfig provides sensible defaults for CSV processing
 func DefaultCSVConfig() CSVConfig {
@@ -87,6 +127,15 @@ func DefaultCSVConfig() CSVConfig {
 // ParseFieldType converts a string type name to FieldType
 // Supported values: "auto", "string", "int", "float", "bool"
 func ParseFieldType(s string) (FieldType, error) {
+	if base, scale := ParseWireType(s); base == "decimal" {
+		switch {
+		case scale < 0:
+			return FieldTypeAuto, fmt.Errorf("field type %q: a decimal needs its scale, the digits after the point: decimal:2", s)
+		case scale > MaxDecimalScale:
+			return FieldTypeAuto, fmt.Errorf("field type %q: the scale is past %d", s, MaxDecimalScale)
+		}
+		return DecimalType(scale), nil
+	}
 	switch strings.ToLower(s) {
 	case "auto":
 		return FieldTypeAuto, nil
@@ -107,12 +156,15 @@ func ParseFieldType(s string) (FieldType, error) {
 	case "int128", "hugeint":
 		return FieldTypeInt128, nil
 	default:
-		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, int128, float, bool, time, json)", s)
+		return FieldTypeAuto, fmt.Errorf("unknown field type: %q (use: auto, string, int, int128, decimal:S, float, bool, time, json)", s)
 	}
 }
 
 // FieldTypeName returns the string name for a FieldType
 func (ft FieldType) String() string {
+	if ft.IsDecimal() {
+		return "decimal:" + strconv.Itoa(ft.Scale())
+	}
 	switch ft {
 	case FieldTypeString:
 		return "string"
@@ -455,11 +507,13 @@ func ReadJSONFromReader(reader io.Reader) iter.Seq[Record] {
 
 // inferJSONFieldType determines FieldType from a JSON-parsed value
 func inferJSONFieldType(value any) FieldType {
-	switch value.(type) {
+	switch x := value.(type) {
 	case float64, int64:
 		return FieldTypeFloat // this reader's numbers are floats, as encoding/json's were
 	case Int128:
 		return FieldTypeInt128 // a literal past int64: exact, never a double
+	case Decimal:
+		return DecimalType(x.Scale())
 	case bool:
 		return FieldTypeBool
 	case string:
@@ -473,6 +527,18 @@ func inferJSONFieldType(value any) FieldType {
 
 // coerceToType converts a value to the target FieldType
 func coerceToType(value any, targetType FieldType) any {
+	if targetType.IsDecimal() {
+		if out, ok := CastValue(value, targetType); ok {
+			return out
+		}
+		return value // unparsable input keeps its value, as a time does
+	}
+	if d, isDec := value.(Decimal); isDec {
+		// A decimal into another declared type: the cast's rules.
+		if out, ok := CastValue(d, targetType); ok {
+			return out
+		}
+	}
 	switch targetType {
 	case FieldTypeTime:
 		// Unparsable input keeps its value: a header that says `time`
@@ -1119,11 +1185,13 @@ func WriteJSONLWithInferredSchemaToWriter(sb iter.Seq[Record], writer io.Writer)
 // Types match the existing CLI _schema header format ("string", "int",
 // "float", "bool", "json"). Unknown types fall back to "string".
 func inferJSONType(v any) string {
-	switch v.(type) {
+	switch x := v.(type) {
 	case int64, int, int32:
 		return "int"
 	case Int128:
 		return "int128"
+	case Decimal:
+		return DecimalType(x.Scale()).String()
 	case float64, float32:
 		return "float"
 	case bool:
@@ -1519,6 +1587,8 @@ func formatValueIn(value any, timeFormat string) string {
 	case int64:
 		return strconv.FormatInt(v, 10)
 	case Int128:
+		return v.String()
+	case Decimal:
 		return v.String()
 	case float32:
 		return strconv.FormatFloat(float64(v), 'g', -1, 32)
@@ -1948,7 +2018,7 @@ func isNumericOrBoolValue(v any) bool {
 	switch v.(type) {
 	case int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
-		float32, float64, Int128,
+		float32, float64, Int128, Decimal,
 		bool:
 		return true
 	}
@@ -2747,7 +2817,7 @@ func convertRecordValueForJSON(v any) any {
 			result[k] = convertRecordValueForJSON(subv)
 		}
 		return result
-	case int64, float64, bool, string, nil, Int128:
+	case int64, float64, bool, string, nil, Int128, Decimal:
 		return val
 	default:
 		return fmt.Sprintf("%v", v)

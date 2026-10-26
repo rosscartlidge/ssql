@@ -253,6 +253,8 @@ func formatTSVValue(v any, timeFormat string) string {
 		return val
 	case int64:
 		return strconv.FormatInt(val, 10)
+	case Decimal:
+		return val.String()
 	case float64:
 		// Use minimal precision that preserves the value
 		return strconv.FormatFloat(val, 'f', -1, 64)

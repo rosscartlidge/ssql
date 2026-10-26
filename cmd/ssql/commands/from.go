@@ -767,6 +767,15 @@ func sampleTypesEvery(sample []ssql.Record, fields []string) bool {
 // the one table of type names; its own copy of that table lacked "time"
 // for a release (DFC128 D1), so `from csv -type ts time` generated
 // FieldTypeAuto and record-mode time comparisons silently matched nothing.
+// fieldTypeGoExpr is the ssql.FieldType a -type name denotes, as Go
+// source: the constant, or ssql.DecimalType(S) for decimal:S (DFC155 E).
+func fieldTypeGoExpr(typeName string) string {
+	if ft, err := ssql.ParseFieldType(typeName); err == nil && ft.IsDecimal() {
+		return fmt.Sprintf("ssql.DecimalType(%d)", ft.Scale())
+	}
+	return "ssql.FieldType" + capitalizeFieldType(typeName)
+}
+
 func capitalizeFieldType(typeName string) string {
 	ft, err := ssql.ParseFieldType(typeName)
 	if err != nil || ft == ssql.FieldTypeAuto {

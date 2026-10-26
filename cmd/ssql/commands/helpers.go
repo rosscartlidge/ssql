@@ -633,6 +633,14 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 		return applyValueToRecord(mut, field, value), false
 	}
 
+	if d, isDec := value.(ssql.Decimal); isDec {
+		if _, colIsDec := existingValue.(ssql.Decimal); !colIsDec {
+			// A decimal result into a column of another type: the column
+			// retypes (the interpreter retypes per row; DFC155 E).
+			return mut.Decimal(field, d), false
+		}
+	}
+
 	// Determine the target type from existing value
 	var coerced bool
 	switch existingValue.(type) {
@@ -657,6 +665,19 @@ func applyValueToRecordWithTypeCheck(mut ssql.MutableRecord, field string, value
 			coerced = true
 		}
 		return mut.Int128(field, coercedVal), coerced
+
+	case ssql.Decimal:
+		// A decimal column: a decimal of another scale retypes the column
+		// (as an expression result does); anything else is brought to the
+		// column's scale by the cast's rules, else kept by its own type.
+		col := existingValue.(ssql.Decimal)
+		if d, isDec := value.(ssql.Decimal); isDec {
+			return mut.Decimal(field, d), false
+		}
+		if out, ok := ssql.CastValue(value, ssql.DecimalType(col.Scale())); ok {
+			return mut.Decimal(field, out.(ssql.Decimal)), true
+		}
+		return applyValueToRecord(mut, field, value), false
 
 	case float64:
 		coercedVal, didCoerce := coerceToFloat64(value)
@@ -835,6 +856,8 @@ func applyValueToRecord(mut ssql.MutableRecord, field string, value any) ssql.Mu
 		return mut.Int(field, v)
 	case ssql.Int128:
 		return mut.Int128(field, v)
+	case ssql.Decimal:
+		return mut.Decimal(field, v)
 	case float64:
 		return mut.Float(field, v)
 	case bool:

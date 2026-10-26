@@ -83,6 +83,11 @@ func distinctKey(v any) any {
 			return float64(i) // one value with the int64 and float forms
 		}
 		return x // past int64: exact, its own key (comparable)
+	case Decimal:
+		if i, ok := x.Int64(); ok {
+			return float64(i) // a whole decimal keys with the int and float forms
+		}
+		return x.Normalized() // exact; 1.50 and 1.5 are one value
 	}
 	if isNumeric(v) {
 		return toFloat64(v)

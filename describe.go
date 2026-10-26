@@ -16,10 +16,11 @@ type DescribeConfig struct {
 // describeType names match the JSONL schema-header vocabulary
 // (cmd/ssql/lib: TypeInt/TypeFloat/TypeString/TypeBool).
 const (
-	describeInt    = "int"
-	describeFloat  = "float"
-	describeString = "string"
-	describeBool   = "bool"
+	describeInt     = "int"
+	describeFloat   = "float"
+	describeDecimal = "decimal"
+	describeString  = "string"
+	describeBool    = "bool"
 )
 
 // fieldStats accumulates one field's profile.
@@ -29,6 +30,7 @@ type fieldStats struct {
 	distinct map[string]struct{}
 	hasInt   bool
 	hasFloat bool
+	hasDec   bool // a decimal column (DFC155 E): numbers for the statistics, its own type name
 	hasStr   bool
 	hasBool  bool
 	nums     []float64 // numeric values, for min/max/mean/median
@@ -129,7 +131,7 @@ func DescribeRecords(records iter.Seq[Record], cfg DescribeConfig) iter.Seq[Reco
 				} else {
 					median = (s.nums[n/2-1] + s.nums[n/2]) / 2
 				}
-				if s.hasFloat {
+				if s.hasFloat || s.hasDec {
 					m = m.Float("min", s.nums[0]).Float("max", s.nums[n-1])
 				} else {
 					m = m.Int("min", int64(s.nums[0])).Int("max", int64(s.nums[n-1]))
@@ -172,6 +174,10 @@ func (s *fieldStats) observe(v any) {
 		s.hasFloat = true
 		s.nums = append(s.nums, x)
 		s.distinct["f:"+strconv.FormatFloat(x, 'g', -1, 64)] = struct{}{}
+	case Decimal:
+		s.hasDec = true
+		s.nums = append(s.nums, x.Float64())
+		s.distinct["d:"+x.Normalized().String()] = struct{}{}
 	case bool:
 		s.hasBool = true
 		if x {
@@ -192,6 +198,8 @@ func (s *fieldStats) typeName() string {
 		return describeString
 	case s.hasFloat:
 		return describeFloat
+	case s.hasDec:
+		return describeDecimal
 	case s.hasInt:
 		return describeInt
 	case s.hasBool:

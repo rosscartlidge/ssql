@@ -382,6 +382,9 @@ var isoTimeFormats = map[string]bool{
 // parse is refused by name (DFC147 §7.2 made the parsable ones honoured;
 // DFC146 refused them all).
 func sidecarFieldType(name, typeName, format string, uts35 bool) (FieldType, string, string, error) {
+	if ft, err := ParseFieldType(typeName); err == nil && ft.IsDecimal() {
+		return ft, "", "", nil // ssqlType "decimal:S" (DFC155 E)
+	}
 	switch strings.ToLower(typeName) {
 	case "integer", "int", "long", "short", "byte", "year":
 		return FieldTypeInt, "", "", nil
@@ -425,14 +428,17 @@ func sidecarFieldType(name, typeName, format string, uts35 bool) (FieldType, str
 // (int128), which the readers prefer when present.
 func sidecarFieldJSON(f TableField) map[string]any {
 	m := map[string]any{"name": f.Name, "type": TableTypeName(f)}
-	if f.Type == FieldTypeInt128 {
-		m["ssqlType"] = "int128"
+	if f.Type == FieldTypeInt128 || f.Type.IsDecimal() {
+		m["ssqlType"] = f.Type.String()
 	}
 	return m
 }
 
 // TableTypeName is the Frictionless type name a field is written as.
 func TableTypeName(f TableField) string {
+	if f.Type.IsDecimal() {
+		return "number" // a Frictionless number; ssqlType keeps the scale
+	}
 	switch f.Type {
 	case FieldTypeInt, FieldTypeInt128:
 		return "integer" // a Frictionless integer is unbounded; sidecarExtra keeps the width

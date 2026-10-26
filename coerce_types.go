@@ -64,6 +64,25 @@ func coerceValue(v any, ft FieldType) (any, error) {
 	if s, ok := v.(string); ok {
 		return parserForType(ft)(s)
 	}
+	if ft.IsDecimal() {
+		if out, ok := CastValue(v, ft); ok {
+			return out, nil
+		}
+		return nil, errCellType
+	}
+	if d, isDec := v.(Decimal); isDec {
+		// A decimal into another declared type: the cast's rules, whole
+		// only into an integer.
+		if ft == FieldTypeInt || ft == FieldTypeInt128 {
+			if !d.IsWhole() {
+				return nil, errCellType
+			}
+		}
+		if out, ok := CastValue(d, ft); ok {
+			return out, nil
+		}
+		return nil, errCellType
+	}
 	switch ft {
 	case FieldTypeString:
 		switch x := v.(type) {

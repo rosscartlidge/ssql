@@ -145,8 +145,8 @@ func ValueOp(a any, op string, b any) bool {
 // compareTyped orders two values of the same kind; ok=false for mixed
 // kinds (or kinds with no order).
 func compareTyped(a, b any) (int, bool) {
-	if c, ok := exactIntCmp(a, b); ok {
-		return c, true // integers of either width, exactly (DFC155 C)
+	if c, ok := exactNumCmp(a, b); ok {
+		return c, true // integers of either width and decimals, exactly (DFC155 C, E)
 	}
 	if af, ok := toFloat(a); ok {
 		bf, ok := toFloat(b)
@@ -301,6 +301,20 @@ func LiteralOp(v any, op, literal string) (bool, error) {
 			return false, &CompareError{Op: op, Value: literal, Kind: "int128"}
 		}
 		return ValueOp(x.Float64(), op, f), nil
+	case Decimal:
+		// A decimal field compares with its literal exactly (DFC155 E):
+		// `-if amt gt 0.15` reads 0.15 as a decimal, never as a float.
+		if literal == "" {
+			return false, nil
+		}
+		if isStringOp(op) {
+			return false, &CompareError{Op: op, Value: literal, Kind: "decimal"}
+		}
+		d, err := ParseDecimal(literal)
+		if err != nil {
+			return false, &CompareError{Op: op, Value: literal, Kind: "decimal"}
+		}
+		return ValueOp(x, op, d), nil
 	case float64:
 		if literal == "" {
 			return false, nil

@@ -1185,6 +1185,8 @@ func getNumericValue(value any) float64 {
 	switch v := value.(type) {
 	case Int128:
 		return v.Float64()
+	case Decimal:
+		return v.Float64()
 	case int:
 		return float64(v)
 	case int32:

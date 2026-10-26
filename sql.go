@@ -562,12 +562,20 @@ func (p *fieldsJoinPredicate) ExtractKey(r Record) (string, bool) {
 		if !exists {
 			return "", false
 		}
-		// Convert value to string for hash key
-		// Use fmt.Sprintf to handle different types consistently
-		parts = append(parts, fmt.Sprintf("%v", val))
+		parts = append(parts, joinKeyString(val))
 	}
 	// Join with separator that's unlikely to appear in data
 	return strings.Join(parts, "\x00"), true
+}
+
+// joinKeyString is a key value's hash-bucket text: %v for most values
+// (so 3 and 3.0 share a bucket, joinValuesEqual confirming), a decimal in
+// its normalized form so 5, 5.00 and 5.000 share one (DFC155 E).
+func joinKeyString(val any) string {
+	if d, ok := val.(Decimal); ok {
+		return d.Normalized().String()
+	}
+	return fmt.Sprintf("%v", val)
 }
 
 // joinValuesEqual is join-key equality, the confirming check behind the
@@ -583,8 +591,8 @@ func joinValuesEqual(a, b any) bool {
 	if a == b {
 		return true
 	}
-	if c, ok := exactIntCmp(a, b); ok {
-		return c == 0 // an int64 key beside an int128 key, exactly (DFC155 C)
+	if c, ok := exactNumCmp(a, b); ok {
+		return c == 0 // an int64 key beside an int128 or a decimal key, exactly (DFC155 C, E)
 	}
 	af, aok := joinNumber(a)
 	bf, bok := joinNumber(b)
@@ -606,6 +614,8 @@ func joinNumber(v any) (float64, bool) {
 	case int:
 		return float64(x), true
 	case Int128:
+		return x.Float64(), true
+	case Decimal:
 		return x.Float64(), true
 	}
 	return 0, false
@@ -664,11 +674,11 @@ func (p *fieldPairJoinPredicate) Match(left, right Record) bool {
 func (p *fieldPairJoinPredicate) ExtractKey(r Record) (string, bool) {
 	// Try left field first (for probe phase)
 	if val, exists := Get[any](r, p.leftField); exists {
-		return fmt.Sprintf("%v", val), true
+		return joinKeyString(val), true
 	}
 	// Fall back to right field (for build phase)
 	if val, exists := Get[any](r, p.rightField); exists {
-		return fmt.Sprintf("%v", val), true
+		return joinKeyString(val), true
 	}
 	return "", false
 }
@@ -1325,6 +1335,7 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 			type cellKey struct{ row, col string }
 			cells := make(map[cellKey][]any)
 			colFloat := make(map[string]bool)   // a float seen in the column: its empty cells are float too
+			colDec := make(map[string]int)      // a decimal seen in the column: its scale, for the empty cells (DFC155 E)
 			rowOriginal := make(map[string]any) // preserve original row key values
 			var rowOrder []string
 			rowSeen := make(map[string]bool)
@@ -1342,6 +1353,9 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 						cells[ck] = append(cells[ck], i)
 					} else if w, isWide := v.(Int128); isWide {
 						cells[ck] = append(cells[ck], w)
+					} else if d, isDec := v.(Decimal); isDec {
+						cells[ck] = append(cells[ck], d)
+						colDec[cv] = d.Scale()
 					} else if f, ok := convertTo[float64](v); ok {
 						cells[ck] = append(cells[ck], f)
 						colFloat[cv] = true
@@ -1393,6 +1407,8 @@ func Pivot(rowField, colField, valField, aggFunc string) Filter[Record, Record] 
 						if len(vals) == 0 {
 							if colFloat[cv] {
 								mut = mut.Float(cv, 0)
+							} else if scale, isDec := colDec[cv]; isDec {
+								mut = mut.Decimal(cv, MustNewDecimal(Int128{}, scale)) // a decimal sum keeps the scale (DFC155 E)
 							} else {
 								mut = mut.Int128(cv, Int128{}) // an integer sum is int128 (DFC155 C)
 							}
@@ -1708,9 +1724,16 @@ func Sum(field string) AggregateFunc {
 // appears (a million floats sum to the ulp, not to drift). Until v4.123.0
 // integers were summed as floats: exact only to 2^53, and quietly inexact
 // past it; v4.123.x summed them in int64 and stopped past 2^63.
+//
+// A decimal value makes the sum a Decimal at its scale (DuckDB's
+// SUM(DECIMAL(38,s)) is DECIMAL(38,s); DFC155 E): integers before and
+// after it widen into it exactly, a float still turns the whole sum into
+// a float.
 type numericSum struct {
 	ints    Int128
+	dec     Decimal
 	floats  CompensatedSum
+	isDec   bool
 	isFloat bool
 	n       int64
 }
@@ -1718,16 +1741,32 @@ type numericSum struct {
 func (s *numericSum) add(value any) {
 	switch v := value.(type) {
 	case int64:
-		if s.isFloat {
+		switch {
+		case s.isFloat:
 			s.floats.Add(float64(v))
-		} else {
+		case s.isDec:
+			s.dec = s.dec.Add(MustDecimalFromInt128(Int128From(v), s.dec.Scale()))
+		default:
 			s.ints = s.ints.Add(Int128From(v))
 		}
 	case Int128:
-		if s.isFloat {
+		switch {
+		case s.isFloat:
 			s.floats.Add(v.Float64())
-		} else {
+		case s.isDec:
+			s.dec = s.dec.Add(MustDecimalFromInt128(v, s.dec.Scale()))
+		default:
 			s.ints = s.ints.Add(v)
+		}
+	case Decimal: // before default: convertTo[float64] would float it silently
+		switch {
+		case s.isFloat:
+			s.floats.Add(v.Float64())
+		case s.isDec:
+			s.dec = s.dec.Add(v)
+		default:
+			s.isDec = true
+			s.dec = v.Add(MustDecimalFromInt128(s.ints, v.Scale()))
 		}
 	default:
 		f, ok := convertTo[float64](value) // float64, and the smart conversions Get[float64] made
@@ -1736,7 +1775,11 @@ func (s *numericSum) add(value any) {
 		}
 		if !s.isFloat {
 			s.isFloat = true
-			s.floats.Add(s.ints.Float64())
+			if s.isDec {
+				s.floats.Add(s.dec.Float64())
+			} else {
+				s.floats.Add(s.ints.Float64())
+			}
 		}
 		s.floats.Add(f)
 	}
@@ -1745,25 +1788,32 @@ func (s *numericSum) add(value any) {
 
 // result is the sum as the kind it was accumulated in.
 func (s *numericSum) result() AggregateResult {
-	if s.isFloat {
+	switch {
+	case s.isFloat:
 		return AggResult[float64]{val: s.floats.Value()}
+	case s.isDec:
+		return AggResult[Decimal]{val: s.dec}
 	}
 	return AggResult[Int128]{val: s.ints}
 }
 
 // value is the sum as the scalar it is: an Int128 while every value was
-// an integer, else a float64 (the window functions' result).
+// an integer, a Decimal once one was, else a float64 (the window
+// functions' result).
 func (s *numericSum) value() any {
-	if s.isFloat {
+	switch {
+	case s.isFloat:
 		return s.floats.Value()
+	case s.isDec:
+		return s.dec
 	}
 	return s.ints
 }
 
-// numericLess orders two cell values: integers of either width exactly,
-// any other pair as float64.
+// numericLess orders two cell values: exact numbers (integers of either
+// width, decimals) exactly, any other pair as float64.
 func numericLess(a, b any) bool {
-	if c, ok := exactIntCmp(a, b); ok {
+	if c, ok := exactNumCmp(a, b); ok {
 		return c < 0
 	}
 	fa, _ := convertTo[float64](a)
@@ -1776,8 +1826,11 @@ func (s *numericSum) mean() (float64, bool) {
 	if s.n == 0 {
 		return 0, false
 	}
-	if s.isFloat {
+	switch {
+	case s.isFloat:
 		return s.floats.Value() / float64(s.n), true
+	case s.isDec:
+		return s.dec.Float64() / float64(s.n), true
 	}
 	return s.ints.Float64() / float64(s.n), true
 }
@@ -2127,9 +2180,10 @@ func CompareAny(a, b any) int {
 		return 1
 	}
 
-	// Two integers of either width compare exactly (a float64 detour
-	// rounds past 2^53; DFC155 C), any other numeric pair as float64.
-	if c, ok := exactIntCmp(a, b); ok {
+	// Two exact numbers — integers of either width, decimals — compare
+	// exactly (a float64 detour rounds past 2^53; DFC155 C, E), any other
+	// numeric pair as float64.
+	if c, ok := exactNumCmp(a, b); ok {
 		return c
 	}
 	af, aOk := toFloat(a)
@@ -2166,6 +2220,8 @@ func toFloat(v any) (float64, bool) {
 	case int:
 		return float64(val), true
 	case Int128:
+		return val.Float64(), true
+	case Decimal:
 		return val.Float64(), true
 	default:
 		return 0, false
@@ -2704,6 +2760,8 @@ type slidingSum struct {
 	idx    int // write position in ring
 	filled int // how many slots filled so far
 	ints   Int128
+	dec    Decimal // the decimals in the frame, exactly (DFC155 E)
+	ndec   int     // decimals in the frame
 	floats float64
 	nfloat int // floats in the frame
 	count  int // numeric values in the frame
@@ -2711,29 +2769,41 @@ type slidingSum struct {
 
 func newSlidingSum(size int) slidingSum { return slidingSum{ring: make([]any, size), size: size} }
 
-// numeric classifies a value as the readers type it: an integer (int64
-// or Int128, widened), a float (float64, or anything Get[float64]
-// converted), or not a number.
-func slidingNumeric(v any) (i Int128, f float64, isInt, ok bool) {
+// slidingKind classifies a frame value as the readers type it.
+type slidingKind uint8
+
+const (
+	slidingInt   slidingKind = iota // int64 or Int128, widened
+	slidingDec                      // a Decimal
+	slidingFloat                    // float64, or anything Get[float64] converted
+)
+
+func slidingNumeric(v any) (i Int128, d Decimal, f float64, kind slidingKind, ok bool) {
 	switch x := v.(type) {
 	case int64:
-		return Int128From(x), 0, true, true
+		return Int128From(x), Decimal{}, 0, slidingInt, true
 	case Int128:
-		return x, 0, true, true
+		return x, Decimal{}, 0, slidingInt, true
+	case Decimal:
+		return Int128{}, x, 0, slidingDec, true
 	case nil:
-		return Int128{}, 0, false, false
+		return Int128{}, Decimal{}, 0, slidingFloat, false
 	}
 	f, ok = convertTo[float64](v)
-	return Int128{}, f, false, ok
+	return Int128{}, Decimal{}, f, slidingFloat, ok
 }
 
 // push adds a value, evicting the oldest once the ring is full.
 func (s *slidingSum) push(v any) {
 	if s.filled >= s.size {
-		if i, f, isInt, ok := slidingNumeric(s.ring[s.idx]); ok {
-			if isInt {
+		if i, d, f, kind, ok := slidingNumeric(s.ring[s.idx]); ok {
+			switch kind {
+			case slidingInt:
 				s.ints = s.ints.Sub(i)
-			} else {
+			case slidingDec:
+				s.dec = s.dec.Sub(d)
+				s.ndec--
+			default:
 				s.floats -= f
 				s.nfloat--
 			}
@@ -2741,10 +2811,14 @@ func (s *slidingSum) push(v any) {
 		}
 	}
 	s.ring[s.idx] = v
-	if i, f, isInt, ok := slidingNumeric(v); ok {
-		if isInt {
+	if i, d, f, kind, ok := slidingNumeric(v); ok {
+		switch kind {
+		case slidingInt:
 			s.ints = s.ints.Add(i)
-		} else {
+		case slidingDec:
+			s.dec = s.dec.Add(d)
+			s.ndec++
+		default:
 			s.floats += f
 			s.nfloat++
 		}
@@ -2757,18 +2831,21 @@ func (s *slidingSum) push(v any) {
 }
 
 func (s *slidingSum) value() any {
-	if s.nfloat == 0 {
-		return s.ints
+	switch {
+	case s.nfloat > 0:
+		return s.ints.Float64() + s.dec.Float64() + s.floats
+	case s.ndec > 0:
+		return s.dec.Add(MustDecimalFromInt128(s.ints, s.dec.Scale()))
 	}
-	return s.ints.Float64() + s.floats
+	return s.ints
 }
 
 func (s *slidingSum) reset() {
 	for i := range s.ring {
 		s.ring[i] = nil
 	}
-	s.idx, s.filled, s.floats, s.nfloat, s.count = 0, 0, 0, 0, 0
-	s.ints = Int128{}
+	s.idx, s.filled, s.floats, s.nfloat, s.count, s.ndec = 0, 0, 0, 0, 0, 0
+	s.ints, s.dec = Int128{}, Decimal{}
 }
 
 // swSlidingSum maintains a ring buffer for sliding SUM.

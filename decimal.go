@@ -374,13 +374,33 @@ func DecimalMax(a, b Decimal) Decimal {
 // rule for a float, kept for a decimal.
 func (d Decimal) Trunc() Int128 { return d.units.Quo(pow10Int128[d.scale]) }
 
+// IsWhole reports whether the value has no fractional part (5.00 is).
+func (d Decimal) IsWhole() bool { return d.units.Rem(pow10Int128[d.scale]).IsZero() }
+
+// wholeInt128 is the value as an Int128 when it is whole.
+func (d Decimal) wholeInt128() (Int128, bool) {
+	if !d.IsWhole() {
+		return Int128{}, false
+	}
+	return d.Trunc(), true
+}
+
 // Int64 is the value as an int64 when it is whole and fits.
 func (d Decimal) Int64() (int64, bool) {
-	t := d.Trunc()
-	if !d.units.Rem(pow10Int128[d.scale]).IsZero() {
+	if !d.IsWhole() {
 		return 0, false
 	}
-	return t.Int64()
+	return d.Trunc().Int64()
+}
+
+// decimalFromFloatExact is f by its shortest decimal form at that form's
+// own scale (0.1 → 0.1, 1234.5 → 1234.5): the decimal a float "is".
+func decimalFromFloatExact(f float64) (Decimal, bool) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return Decimal{}, false
+	}
+	d, err := ParseDecimal(strconv.FormatFloat(f, 'f', -1, 64))
+	return d, err == nil
 }
 
 // Round is the value at scale n, half away from zero (2.345 → 2.35 at
@@ -566,6 +586,24 @@ func (d *Decimal) UnmarshalText(b []byte) error {
 	}
 	*d = v
 	return nil
+}
+
+// exactNumCmp compares two exact numbers — integers of either width, a
+// Decimal — without a float64 detour; ok is false unless both sides are
+// exact. The int64 pair is the fast path every comparison had.
+func exactNumCmp(a, b any) (int, bool) {
+	if c, ok := exactIntCmp(a, b); ok {
+		return c, true
+	}
+	x, ok := asDecimal(a)
+	if !ok {
+		return 0, false
+	}
+	y, ok := asDecimal(b)
+	if !ok {
+		return 0, false
+	}
+	return x.Cmp(y), true
 }
 
 // asDecimal is v as a Decimal when it is one or an integer of either

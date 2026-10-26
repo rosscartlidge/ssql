@@ -394,7 +394,7 @@ func coerceFieldTypesCode(typeOverrides map[string]string) string {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		fmt.Fprintf(&b, "%q: ssql.FieldType%s", f, capitalizeFieldType(typeOverrides[f]))
+		fmt.Fprintf(&b, "%q: %s", f, fieldTypeGoExpr(typeOverrides[f]))
 	}
 	b.WriteString("})")
 	return b.String()
@@ -637,7 +637,7 @@ func generateDelimConfigCode(typeOverrides map[string]string, defaultType string
 
 	// Default type
 	if defaultType != "" && defaultType != "auto" {
-		parts = append(parts, fmt.Sprintf("\t\tDefaultType: ssql.FieldType%s,", capitalizeFieldType(defaultType)))
+		parts = append(parts, fmt.Sprintf("\t\tDefaultType: %s,", fieldTypeGoExpr(defaultType)))
 	}
 
 	// Type overrides
@@ -649,7 +649,7 @@ func generateDelimConfigCode(typeOverrides map[string]string, defaultType string
 		sort.Strings(fields) // stable generated source
 		parts = append(parts, "\t\tTypeOverrides: map[string]ssql.FieldType{")
 		for _, field := range fields {
-			parts = append(parts, fmt.Sprintf("\t\t\t%q: ssql.FieldType%s,", field, capitalizeFieldType(typeOverrides[field])))
+			parts = append(parts, fmt.Sprintf("\t\t\t%q: %s,", field, fieldTypeGoExpr(typeOverrides[field])))
 		}
 		parts = append(parts, "\t\t},")
 	}
