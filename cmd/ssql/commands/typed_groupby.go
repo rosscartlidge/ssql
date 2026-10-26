@@ -127,6 +127,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 			Name:   s.result,
 			GoName: resultGoName,
 			GoType: aggResultGoType(s, in),
+			Scale:  aggResultScale(s, in),
 		})
 	}
 	for _, p := range exprPlans {
@@ -136,6 +137,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 			Name:   p.Spec.result,
 			GoName: lib.GoNameFromColumn(p.Spec.result),
 			GoType: string(p.ResultType),
+			Scale:  p.ResultScale,
 		})
 	}
 	for _, p := range streamPlans {
@@ -143,6 +145,7 @@ func emitTypedGroupBy(inputVar string, in *lib.TypedSchema, groupFields []string
 			Name:   p.Spec.result,
 			GoName: lib.GoNameFromColumn(p.Spec.result),
 			GoType: string(p.FinalType),
+			Scale:  p.FinalScale,
 		})
 	}
 	resultSchema := &lib.TypedSchema{TypeName: resultName, Fields: resultFields}
@@ -381,18 +384,25 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		switch s.function {
 		case "sum":
 			// Integers sum exactly in an Int128 (DFC155 C, DuckDB's
-			// SUM(BIGINT) → HUGEINT); float columns use the library's
-			// compensated accumulator (Neumaier), like exec.
+			// SUM(BIGINT) → HUGEINT), decimals in a Decimal at the column's
+			// scale (DFC155 E); float columns use the library's compensated
+			// accumulator (Neumaier), like exec.
 			st.stateType = "ssql.Int128"
 			if isFloatGoType(f.GoType) {
 				st.stateType = "ssql.CompensatedSum"
 			}
+			if isDecimalGoType(f.GoType) {
+				st.stateType = "ssql.Decimal"
+			}
 		case "avg":
-			// avg uses two states: running sum (exact Int128, or compensated
-			// for floats) plus running count.
+			// avg uses two states: running sum (exact Int128 or Decimal, or
+			// compensated for floats) plus running count.
 			st.stateType = "ssql.Int128"
 			if isFloatGoType(f.GoType) {
 				st.stateType = "ssql.CompensatedSum"
+			}
+			if isDecimalGoType(f.GoType) {
+				st.stateType = "ssql.Decimal"
 			}
 			st.needsN = true
 		case "min", "max":
@@ -464,15 +474,21 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 		case "count":
 			fmt.Fprintf(&d, "\ta.%s++\n", s.stateName)
 		case "sum":
-			if isFloatGoType(s.fieldGoT) {
+			switch {
+			case isFloatGoType(s.fieldGoT):
 				fmt.Fprintf(&d, "\ta.%s.Add(float64(r.%s))\n", s.stateName, s.fieldGo)
-			} else {
+			case isDecimalGoType(s.fieldGoT):
+				fmt.Fprintf(&d, "\ta.%s = a.%s.Add(r.%s)\n", s.stateName, s.stateName, s.fieldGo)
+			default:
 				fmt.Fprintf(&d, "\ta.%s = a.%s.Add(%s)\n", s.stateName, s.stateName, wideOf(s.fieldGoT, "r."+s.fieldGo))
 			}
 		case "avg":
-			if isFloatGoType(s.fieldGoT) {
+			switch {
+			case isFloatGoType(s.fieldGoT):
 				fmt.Fprintf(&d, "\ta.%s.Add(float64(r.%s))\n", s.stateName, s.fieldGo)
-			} else {
+			case isDecimalGoType(s.fieldGoT):
+				fmt.Fprintf(&d, "\ta.%s = a.%s.Add(r.%s)\n", s.stateName, s.stateName, s.fieldGo)
+			default:
 				fmt.Fprintf(&d, "\ta.%s = a.%s.Add(%s)\n", s.stateName, s.stateName, wideOf(s.fieldGoT, "r."+s.fieldGo))
 			}
 			fmt.Fprintf(&d, "\ta.%s_n++\n", s.stateName)
@@ -518,9 +534,12 @@ func buildTypedAggregator(aggTypeName string, in *lib.TypedSchema, specs []aggSp
 	}
 	for _, p := range exprPlans {
 		for _, t := range p.Terms {
-			if t.Type.integer() { // an integer sum is an Int128, exactly (DFC155 C)
+			switch {
+			case t.Type.integer(): // an integer sum is an Int128, exactly (DFC155 C)
 				fmt.Fprintf(&d, "\ta.%s = a.%s.Add(%s)\n", t.GoName, t.GoName, wideOf(string(t.Type), t.ElemSrc))
-			} else {
+			case t.Type == exprGoDecimal: // a decimal sum is a Decimal at its scale (DFC155 E)
+				fmt.Fprintf(&d, "\ta.%s = a.%s.Add(%s)\n", t.GoName, t.GoName, t.ElemSrc)
+			default:
 				fmt.Fprintf(&d, "\ta.%s += %s\n", t.GoName, t.ElemSrc)
 			}
 		}
@@ -790,7 +809,7 @@ func orderedLess(goType, a, b string) string {
 	switch goType {
 	case "time.Time":
 		return fmt.Sprintf("%s.Before(%s)", a, b)
-	case "ssql.Int128":
+	case "ssql.Int128", "ssql.Decimal":
 		return fmt.Sprintf("%s.Cmp(%s) < 0", a, b)
 	}
 	return fmt.Sprintf("%s < %s", a, b)
@@ -802,11 +821,15 @@ func isFloatGoType(t string) bool { return t == "float64" || t == "float32" }
 
 func isNumericGoType(t string) bool {
 	switch t {
-	case "int", "int32", "int64", "uint64", "float32", "float64", "ssql.Int128":
+	case "int", "int32", "int64", "uint64", "float32", "float64", "ssql.Int128", "ssql.Decimal":
 		return true
 	}
 	return false
 }
+
+// isDecimalGoType: the decimal columns, whose sums are a Decimal at the
+// column's scale (DFC155 E).
+func isDecimalGoType(t string) bool { return t == "ssql.Decimal" }
 
 // isIntegerGoType: the integer columns, whose sums are an Int128.
 func isIntegerGoType(t string) bool {
@@ -833,14 +856,14 @@ func floatOf(t, src string) string {
 	switch t {
 	case "float64":
 		return src
-	case "ssql.Int128":
+	case "ssql.Int128", "ssql.Decimal":
 		return src + ".Float64()"
 	}
 	return "float64(" + src + ")"
 }
 
 // termGoType is the accumulator type of a -expr term: an integer element
-// accumulates in an Int128, a float in a float64.
+// accumulates in an Int128, a decimal in a Decimal, a float in a float64.
 func termGoType(t exprGoType) string {
 	if t.integer() {
 		return "ssql.Int128"
@@ -867,6 +890,21 @@ func aggResultGoType(s aggSpec, in *lib.TypedSchema) string {
 		return f.GoType
 	}
 	return "string"
+}
+
+// aggResultScale is the scale of an aggregation's output field: the
+// source field's when the result keeps a decimal column's type (a sum,
+// an extreme, a first/last/any/mode value, an arg-max/min; DFC155 E).
+func aggResultScale(s aggSpec, in *lib.TypedSchema) int {
+	f, ok := lookupSchemaField(in, s.field)
+	if !ok || !isDecimalGoType(f.GoType) {
+		return 0
+	}
+	switch s.function {
+	case "sum", "min", "max", "first", "last", "any", "mode", "arg-max", "arg-min":
+		return f.Scale
+	}
+	return 0
 }
 
 // aggResultGoTypeForState mirrors aggResultGoType for the inner result
@@ -942,7 +980,7 @@ func aggValueStringCode(goType, v string) string {
 		return fmt.Sprintf("strconv.FormatInt(int64(%s), 10)", v)
 	case "uint64":
 		return fmt.Sprintf("strconv.FormatUint(%s, 10)", v)
-	case "ssql.Int128":
+	case "ssql.Int128", "ssql.Decimal":
 		return v + ".String()"
 	case "float64":
 		return fmt.Sprintf("strconv.FormatFloat(%s, 'g', -1, 64)", v)

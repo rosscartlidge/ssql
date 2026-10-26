@@ -817,6 +817,17 @@ Fibonacci number in 128 bits; the 184th step is the same error again:
 ssql from range 183 | ssql window -stream-expr '{a:int128(0), b:int128(1)}' '{a:b, b:a+b}' 'b' fib | ssql sort -desc n | ssql limit 1 | ssql to table
 ```
 
+Money is a `decimal:S` column — fixed-point, exact to the cent, where a
+float column sums `0.10 + 0.20` to `0.30000000000000004`. A column is
+decimal by declaration (`-type price decimal:2` on `from`, or `cast -type
+price decimal:2`), `decimal("0.10")` writes an exact literal, and `*`
+keeps every digit (`round(x, 2)` brings cents back):
+
+```bash
+# three cents of 0.10, summed exactly; a price times a rate keeps its digits
+ssql from range 3 | ssql update -set-expr amt 'decimal("0.10")' -set-expr taxed 'round(decimal("12.34") * decimal("1.0725"), 2)' | ssql group-by -sum amt total -max taxed taxed | ssql to table
+```
+
 Signal processing is built in. `signal.csv` is a 5 Hz + 20 Hz mix sampled
 at 100 Hz; the FFT finds both:
 

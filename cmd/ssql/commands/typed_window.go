@@ -143,6 +143,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 				}
 			}
 			var goType, assign, specLit string
+			scale := 0 // a decimal result's scale (DFC155 E)
 			if d.Kind == "stream_expr" {
 				// A fold: the group-by lowering (expr_stream.go) gives the
 				// state struct, the simultaneous EVERY assignment and FINAL
@@ -162,6 +163,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 				imports = append(imports, plan.Imports...)
 				hoisted = append(hoisted, plan.Hoisted...)
 				goType = string(plan.FinalType)
+				scale = plan.FinalScale
 				assign = fmt.Sprintf("if v, ok := res[%d].(%s); ok { o.GONAME = v }", resIdx, goType)
 				specLit = renderWindowFoldSpec(stateType, in.TypeName, plan)
 			} else {
@@ -170,6 +172,9 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 				if reason != "" {
 					return false, reason, nil
 				}
+				if goType == "ssql.Decimal" {
+					scale = f.Scale
+				}
 			}
 			gn := lib.GoNameFromColumn(spec.ResultName)
 			for usedGo[gn] {
@@ -177,7 +182,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 			}
 			usedGo[gn] = true
 			results = append(results, resultField{goName: gn, goType: goType, assign: strings.ReplaceAll(assign, "GONAME", gn)})
-			out.Fields = append(out.Fields, lib.TypedSchemaField{Name: spec.ResultName, GoName: gn, GoType: goType})
+			out.Fields = append(out.Fields, lib.TypedSchemaField{Name: spec.ResultName, GoName: gn, GoType: goType, Scale: scale})
 			fmt.Fprintf(&b, "\t\t\t\t%s,\n", specLit)
 			resIdx++
 		}
@@ -234,9 +239,10 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 	num := ""
 	isInt := base == "int64"
 	isWide := base == "ssql.Int128"
+	isDec := base == "ssql.Decimal"
 	if isNumericGoType(base) {
 		toF := func(src string) string { // the float reader's conversion
-			if isWide {
+			if isWide || isDec {
 				return src + ".Float64()"
 			}
 			return "float64(" + src + ")"
@@ -249,6 +255,9 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 			if isWide {
 				num += fmt.Sprintf(", Wide: func(r %s) (ssql.Int128, bool) { if r.%s == nil { return ssql.Int128{}, false }; return *r.%s, true }", rowType, f.GoName, f.GoName)
 			}
+			if isDec {
+				num += fmt.Sprintf(", Dec: func(r %s) (ssql.Decimal, bool) { if r.%s == nil { return ssql.Decimal{}, false }; return *r.%s, true }", rowType, f.GoName, f.GoName)
+			}
 		} else {
 			num = fmt.Sprintf("Num: func(r %s) (float64, bool) { return %s, true }", rowType, toF("r."+f.GoName))
 			if isInt {
@@ -256,6 +265,9 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 			}
 			if isWide {
 				num += fmt.Sprintf(", Wide: func(r %s) (ssql.Int128, bool) { return r.%s, true }", rowType, f.GoName)
+			}
+			if isDec {
+				num += fmt.Sprintf(", Dec: func(r %s) (ssql.Decimal, bool) { return r.%s, true }", rowType, f.GoName)
 			}
 		}
 	}
@@ -276,6 +288,9 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 		k := map[string]string{"sum": "WSum", "avg": "WAvg"}[d.Kind]
 		if d.Kind == "sum" && (isInt || isWide) { // an integer column sums to an int128, exactly (DFC155 C)
 			return d.Kind, "ssql.Int128", fmt.Sprintf("if v, ok := %s.(ssql.Int128); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WSum, %s}", num), ""
+		}
+		if d.Kind == "sum" && isDec { // a decimal column sums to a decimal at its scale (DFC155 E)
+			return d.Kind, "ssql.Decimal", fmt.Sprintf("if v, ok := %s.(ssql.Decimal); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.WSum, %s}", num), ""
 		}
 		return d.Kind, "float64", fmt.Sprintf("if v, ok := %s.(float64); ok { o.GONAME = v }", res), fmt.Sprintf("{Kind: typed.%s, %s}", k, num), ""
 	case "count_field":

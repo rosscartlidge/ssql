@@ -318,8 +318,8 @@ func (d Decimal) Cmp(o Decimal) int                 // exact across scales (1.25
 func (d Decimal) Rescale(scale int) (Decimal, error) // up exact; down rounds half away from zero (0.125 → 0.13, −2.5 → −3)
 func (d Decimal) MustRescale(scale int) Decimal
 func (d Decimal) Round(n int) (Decimal, error)       // at scale n, half away from zero
-func (d Decimal) Floor() (Decimal, error)            // at scale 0
-func (d Decimal) Ceil() (Decimal, error)             // at scale 0
+func (d Decimal) Floor() Decimal                     // at scale 0 (always fits)
+func (d Decimal) Ceil() Decimal                      // at scale 0
 func (d Decimal) Trunc() Int128                      // the integer part toward zero (int()'s rule)
 func (d Decimal) IsWhole() bool                      // no fractional part (5.00 is whole)
 func (d Decimal) Int64() (int64, bool)               // when whole and it fits

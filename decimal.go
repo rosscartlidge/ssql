@@ -407,22 +407,23 @@ func decimalFromFloatExact(f float64) (Decimal, bool) {
 // 2, 2.5 → 3 at 0); n larger than the scale is exact.
 func (d Decimal) Round(n int) (Decimal, error) { return d.Rescale(n) }
 
-// Floor is the largest whole value not above d, at scale 0.
-func (d Decimal) Floor() (Decimal, error) {
+// Floor is the largest whole value not above d, at scale 0 (it always
+// fits: |⌊d⌋| ≤ |units|).
+func (d Decimal) Floor() Decimal {
 	q := d.Trunc()
-	if d.units.Sign() < 0 && !d.units.Rem(pow10Int128[d.scale]).IsZero() {
+	if d.units.Sign() < 0 && !d.IsWhole() {
 		q = q.Sub(Int128From(1))
 	}
-	return NewDecimal(q, 0)
+	return Decimal{units: q}
 }
 
 // Ceil is the smallest whole value not below d, at scale 0.
-func (d Decimal) Ceil() (Decimal, error) {
+func (d Decimal) Ceil() Decimal {
 	q := d.Trunc()
-	if d.units.Sign() > 0 && !d.units.Rem(pow10Int128[d.scale]).IsZero() {
+	if d.units.Sign() > 0 && !d.IsWhole() {
 		q = q.Add(Int128From(1))
 	}
-	return NewDecimal(q, 0)
+	return Decimal{units: q}
 }
 
 // Float64 is the nearest float64 (correctly rounded, as strconv

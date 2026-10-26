@@ -153,11 +153,13 @@ func withPeekedSchema(records iter.Seq[ssql.Record], headers []string) (iter.Seq
 }
 
 func auxTypeString(v any) string {
-	switch v.(type) {
+	switch x := v.(type) {
 	case int64, int:
 		return "int"
 	case ssql.Int128:
 		return "int128"
+	case ssql.Decimal:
+		return lib.WireDecimal(x.Scale())
 	case float64:
 		return "float"
 	case bool:

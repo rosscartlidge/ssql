@@ -79,12 +79,19 @@ func innerJoinNested(
 // MutableRecord -> Freeze() copy overhead.
 func mergeRecords(left, right Record) Record {
 	// Left's fields in left's order, then right's new ones in right's
-	// order (a collision keeps its left position with right's value).
+	// order. A collision keeps its left position with right's value —
+	// unless the two are equal, when the left's value stays: a join key
+	// is equal on both sides by definition, and the left's REPRESENTATION
+	// (a decimal:2 1.00 beside an int 1, DFC155 E) is the one the left
+	// schema declares and the typed lane assigns.
 	m := MakeMutableRecordWithCapacity(left.Len() + right.Len())
 	for k, v := range left.All() {
 		m.put(k, v)
 	}
 	for k, v := range right.All() {
+		if existing, ok := m.fields[k]; ok && joinValuesEqual(existing, v) {
+			continue
+		}
 		m.put(k, v)
 	}
 	return m.Freeze()

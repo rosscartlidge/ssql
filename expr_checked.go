@@ -458,11 +458,9 @@ func wideFloorCeil(dir int) func(args []any) (any, bool, error) {
 			return x, true, nil
 		case Decimal:
 			if dir < 0 {
-				v, err := x.Floor()
-				return v, true, err
+				return x.Floor(), true, nil
 			}
-			v, err := x.Ceil()
-			return v, true, err
+			return x.Ceil(), true, nil
 		}
 		return nil, false, nil
 	}

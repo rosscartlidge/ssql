@@ -5,6 +5,16 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A fixed-point decimal type, `decimal:S`** ([DFC155](doc/research/dfc155_big_numbers.md) E, DECIMAL(38,S); Ross: "cant wait to have decimals"), in every lane — exec, `generate go` record, typed and parallel, `generate sql`. A column is decimal only by declaration (`cast -type price decimal:2`, `from csv f -type price decimal:2`, a `_schema` header, a sidecar `ssqlType`), never inferred from `12.34`; reading text into a scale rounds half away from zero. `+ - %` are exact at the larger scale, `*` at the summed scale, `/` and `-avg` are floats, comparisons exact across scales, sums a decimal at the column's scale; `decimal(x)` and `decimal(x, scale)` in expressions; `round(d, n)`, `floor`, `ceil`, `trunc`, `int()` by the engines' rules; a result past 38 digits is a loud `decimal overflow` naming the operands. Typed structs take `ssql.Decimal` with the scale in the tag (`ssql:"price,decimal:2"`); the root API has `ssql.Decimal` with checked arithmetic, `Cmp`, `Rescale`, `ParseDecimal`, `DecimalType(scale)` on `FieldType`.
+
+### Fixed
+
+- **A join kept the right side's value of the key column** where the two sides spell the same key differently (a `decimal:2` `1.00` beside an int `1`): the merge now keeps the left's value when the two are equal, as the typed lane always assigned it. Integer keys never showed it.
+
 ## [4.126.0] - 2026-10-26
 
 ### Added

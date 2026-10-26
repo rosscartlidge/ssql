@@ -236,6 +236,12 @@ func corpusData(t *testing.T) string {
 			// rows share the small key so a group or join discriminates.
 			"wide.csv":   "id,v\n123456789012345678901234567890,1\n5,2\n5,3\n",
 			"wide.jsonl": "{\"id\":1,\"xs\":[1,123456789012345678901]}\n{\"id\":2,\"xs\":[2,3]}\n",
+			// DFC155 E: money, shuffled, with values a float sum gets wrong
+			// and ones a declared scale must round; a decimal key beside
+			// an integer key.
+			"money.csv": "k,amt\nb,0.20\na,0.10\nb,12.345\na,0.30\nb,0.10\na,-5.005\nb,0.125\na,0.20\n",
+			"dec.csv":   "id,amt\n1.00,x\n5.00,y\n2.50,z\n",
+			"ids.csv":   "id,n\n1,one\n5,five\n",
 		}
 		for name, content := range files {
 			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
@@ -428,6 +434,31 @@ func TestPipelineCorpus(t *testing.T) {
 			Name:     "int128_csv_wide_sum_every_mode",
 			Pipeline: `{{.bin}} from csv {{.data}}/wide.csv | {{.bin}} group-by -sum id t -count c | {{.bin}} to csv`,
 			Contains: []string{"t,c", "123456789012345678901234567900,3"},
+		},
+		{
+			// DFC155 E: a declared decimal column sums exactly to the cent
+			// in record, typed and parallel (a float sum of the same
+			// column drifts), and its header carries the scale.
+			Name:     "decimal_sum_every_mode",
+			Pipeline: `{{.bin}} from csv {{.data}}/money.csv -type amt decimal:2 | {{.bin}} group-by k -sum amt t -count c -max amt hi | {{.bin}} sort k | {{.bin}} to csv`,
+			Contains: []string{"k,t,c,hi", "a,-4.41,4,0.30", "b,12.78,4,12.35"},
+		},
+		{
+			// A float column cast to decimal:2 rounds half away from zero;
+			// decimal arithmetic, rounding and a decimal comparison in
+			// every mode.
+			Name:     "decimal_cast_arith_every_mode",
+			Pipeline: `{{.bin}} from csv {{.data}}/money.csv | {{.bin}} cast -type amt decimal:2 | {{.bin}} update -set-expr total 'amt * 3' -set-expr r 'round(amt * decimal("1.5"), 2)' | {{.bin}} where -if-expr 'amt > decimal("0.15")' | {{.bin}} sort -desc amt | {{.bin}} to csv`,
+			Contains: []string{"k,amt,total,r", "b,12.35,37.05,18.53", "a,0.30,0.90,0.45", "b,0.20,0.60,0.30"},
+			Excludes: []string{"0.13", "-5.01"},
+		},
+		{
+			// A decimal:2 key joins an integer key exactly (5.00 is 5),
+			// and 2.50 matches nothing.
+			Name:     "decimal_join_every_mode",
+			Pipeline: `{{.bin}} from csv {{.data}}/dec.csv -type id decimal:2 | {{.bin}} join {{.data}}/ids.csv -on id id | {{.bin}} sort id | {{.bin}} to csv`,
+			Contains: []string{"1.00,x,one", "5.00,y,five"},
+			Excludes: []string{"2.50"},
 		},
 		{
 			// An int64 window sum widens past 2^63 instead of stopping.

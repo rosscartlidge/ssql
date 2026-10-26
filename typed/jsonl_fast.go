@@ -107,7 +107,7 @@ func jsonKindFor(t reflect.Type) (jsonKind, error) {
 	if t == timeType {
 		return jkTime, nil
 	}
-	if t == int128Type {
+	if t == int128Type || t == decimalType {
 		return jkNumber, nil // the bare digits; decoderFor parses them
 	}
 	switch t.Kind() {
@@ -152,6 +152,14 @@ func buildJSONLPlan[T any](opts ...JSONOption) (*jsonlPlan, error) {
 			return nil, err
 		}
 		dec, err := decoderFor(f.Type, f.Offset)
+		if err == nil && f.Type == decimalType {
+			// The tag's scale, as the delimited reader uses (DFC155 E).
+			scale, serr := decimalFieldScale(f)
+			if serr != nil {
+				return nil, serr
+			}
+			dec = decodeDecimal(f.Offset, scale)
+		}
 		if err != nil {
 			return nil, err
 		}

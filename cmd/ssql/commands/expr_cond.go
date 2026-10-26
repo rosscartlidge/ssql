@@ -87,6 +87,20 @@ func condOpToExprGo(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 // type — so must we).
 func condRHS(lhs exprGo, op, value, rhsParam string) (exprGo, error) {
 	switch lhs.Type {
+	case exprGoDecimal:
+		// A decimal field compares with its literal exactly (DFC155 E): the
+		// literal is a decimal parsed once; a lifted flag still compares as
+		// a number at run time.
+		d, err := ssql.ParseDecimal(value)
+		if err != nil {
+			return exprGo{}, &ssql.CompareError{Field: lhs.field, Op: op, Value: value, Kind: "decimal"}
+		}
+		if rhsParam != "" {
+			return exprGo{Src: fmt.Sprintf("ssql.MustNumber(*%s, %q, %q)", rhsParam, lhs.field, op), Type: exprGoFloat}, nil
+		}
+		varName := "exprDec" + exprGoHash(value+"@-1")
+		decl := fmt.Sprintf("var %s = ssql.MustParseDecimal(%q)", varName, value)
+		return exprGo{Src: varName, Type: exprGoDecimal, Scale: d.Scale(), Imports: []string{ssqlImport}, Hoisted: []string{decl}}, nil
 	case exprGoInt, exprGoFloat, exprGoInt128:
 		// The literal is validated HERE whether or not it lifts to a
 		// runtime flag (the lifted form once emitted ParseFloat64(*flag),

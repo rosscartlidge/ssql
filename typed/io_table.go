@@ -77,7 +77,7 @@ func alignRightForType(t reflect.Type) bool {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	if t == int128Type {
+	if t == int128Type || t == decimalType {
 		return true
 	}
 	switch t.Kind() {

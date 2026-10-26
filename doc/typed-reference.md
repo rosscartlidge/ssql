@@ -60,15 +60,21 @@ type Employee struct {
 
 `ssql:"name"` is the preferred form. `csv:"name"` is also accepted as a fallback
 for ecosystem compatibility (e.g. structs already tagged for `encoding/csv`).
-A tag value of `"-"` excludes the field entirely.
+A tag value of `"-"` excludes the field entirely. The name is the part before
+the first comma, as `encoding/json` reads its tag; the options after it carry
+a decimal field's scale (`ssql:"price,decimal:2"`).
 
 ## Supported field types
 
 `string`, `bool`, `int`, `int32`, `int64`, `uint64`, `float32`, `float64`,
 `time.Time` (RFC3339 in CSV), `ssql.Int128` (the `int128` column — a
 comparable two-word value, decimal digits in CSV and JSON, `DECIMAL(38,0)`
-in Parquet; an integer `-sum` is one), and **pointer-to-T** for nullable
-columns.
+in Parquet; an integer `-sum` is one), `ssql.Decimal` (the `decimal:S`
+column — a fixed-point value whose scale is the tag's option,
+`ssql:"price,decimal:2"`, required; `12.34` in CSV and JSON, read at the
+tag's scale rounding half away from zero, `DECIMAL(38,S)` in Parquet; a
+decimal `-sum` is one at the column's scale), and **pointer-to-T** for
+nullable columns.
 An empty CSV/TSV cell is `""` for a `string` field and `nil` for a pointer field (`*int64`, `*string`, …). For any other field type it is a fatal `*typed.ReadError` — `column "Age": "" is not int64` — because a struct cannot hold absence, and a zero would silently disagree with the `Record` API, where an empty numeric or boolean cell is an *absent* field. Remedies: declare the field as a pointer type; pass `EmptyAsZero()` (`DelimEmptyAsZero()` for the delimited readers) when a blank means zero — in generated code that is `-empty zero` on the `from` stage, which every lane honours; or `-type COL string` on the `from` stage keeps the cell as text. The check is a branch the decoder already took (`if s == ""`), so it costs nothing, and so does the zero: the same branch clears the field's bytes.
 
 A non-empty value that does not parse as its field's type is **fatal** in the

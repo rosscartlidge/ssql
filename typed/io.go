@@ -22,6 +22,10 @@ var timeType = reflect.TypeOf(time.Time{})
 // int128Type is the `int128` column's struct field type (DFC155 C).
 var int128Type = reflect.TypeOf(ssql.Int128{})
 
+// decimalType is the `decimal:S` column's struct field type (DFC155 E);
+// the scale is the field tag's option: `ssql:"price,decimal:2"`.
+var decimalType = reflect.TypeOf(ssql.Decimal{})
+
 // fieldDecoder writes one CSV column into a struct field at a known offset.
 // The closure has zero reflection at call time.
 type fieldDecoder func(p unsafe.Pointer, s string) error
@@ -61,20 +65,54 @@ func (rs *rowSchema) decode(p unsafe.Pointer, rec []string) error {
 // columnName returns the CSV column name for a struct field.
 // `ssql:"name"` is preferred; `csv:"name"` is accepted as fallback.
 // Returns ("", true) when the field is excluded (tag value "-").
+//
+// The name is the tag's first comma-separated part, as encoding/json
+// reads its tag; the options after it carry a decimal field's scale
+// (`ssql:"price,decimal:2"`, fieldScale).
 func columnName(f reflect.StructField) (name string, skip bool) {
-	if tag, ok := f.Tag.Lookup("ssql"); ok {
-		if tag == "-" {
-			return "", true
+	for _, key := range []string{"ssql", "csv"} {
+		if tag, ok := f.Tag.Lookup(key); ok {
+			name, _, _ = strings.Cut(tag, ",")
+			if name == "-" {
+				return "", true
+			}
+			return name, false
 		}
-		return tag, false
-	}
-	if tag, ok := f.Tag.Lookup("csv"); ok {
-		if tag == "-" {
-			return "", true
-		}
-		return tag, false
 	}
 	return f.Name, false
+}
+
+// fieldScale is the decimal scale a field's `ssql` tag declares
+// (`decimal:S` among its options); ok is false without one.
+func fieldScale(f reflect.StructField) (scale int, ok bool, err error) {
+	tag, has := f.Tag.Lookup("ssql")
+	if !has {
+		return 0, false, nil
+	}
+	_, opts, _ := strings.Cut(tag, ",")
+	for _, opt := range strings.Split(opts, ",") {
+		if base, s := ssql.ParseWireType(opt); base == "decimal" {
+			if s < 0 || s > ssql.MaxDecimalScale {
+				return 0, false, fmt.Errorf("typed: field %s: tag option %q needs a scale in 0..%d (decimal:2)", f.Name, opt, ssql.MaxDecimalScale)
+			}
+			return s, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
+// decimalFieldScale is the scale an ssql.Decimal struct field reads and
+// writes at: its tag's decimal:S, which it must have — a value of another
+// scale on the wire is brought to it, rounding half away from zero.
+func decimalFieldScale(f reflect.StructField) (int, error) {
+	scale, ok, err := fieldScale(f)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, fmt.Errorf("typed: field %s: an ssql.Decimal needs its scale in the tag: `ssql:\"%s,decimal:2\"`", f.Name, f.Name)
+	}
+	return scale, nil
 }
 
 // buildReadSchema analyzes T against the CSV header and returns one
@@ -121,6 +159,20 @@ func buildReadSchema[T any](header []string, strict bool, timeFormats map[string
 		dec, err := decoderFor(f.Type, f.Offset)
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", f.Name, err)
+		}
+		if f.Type == decimalType {
+			scale, err := decimalFieldScale(f)
+			if err != nil {
+				return nil, err
+			}
+			dec = decodeDecimal(f.Offset, scale)
+			if emptyZero {
+				dec = zeroDecimalOnEmpty(dec, f.Offset, scale)
+			}
+			decoders[col] = dec
+			types[col] = f.Type.String()
+			matched[strings.ToLower(h)] = struct{}{}
+			continue
 		}
 		if pattern, ok := timeFormats[strings.ToLower(h)]; ok && f.Type == timeType {
 			layout, err := ssql.TimeLayout(pattern)
@@ -218,6 +270,21 @@ func noopDecoder(unsafe.Pointer, string) error { return nil }
 func decoderFor(t reflect.Type, off uintptr) (fieldDecoder, error) {
 	if t == timeType {
 		return decodeTime(off), nil
+	}
+	if t == decimalType {
+		// At the text's own scale; a reader that knows the field's tag
+		// scale (buildReadSchema) replaces this with decodeDecimal.
+		return func(p unsafe.Pointer, s string) error {
+			if s == "" {
+				return errEmptyCell
+			}
+			v, err := ssql.ParseDecimal(s)
+			if err != nil {
+				return err
+			}
+			*(*ssql.Decimal)(unsafe.Add(p, off)) = v
+			return nil
+		}, nil
 	}
 	if t == int128Type {
 		return func(p unsafe.Pointer, s string) error {
@@ -370,6 +437,35 @@ func decodeTime(off uintptr) fieldDecoder {
 // takes under ssql.CSVConfig.EmptyAsZero (0, false; a string field is
 // "" either way, a pointer field nil either way). The field's bytes are
 // cleared because the row buffer may hold the previous row's value.
+// decodeDecimal reads a decimal:scale field: the text brought to the
+// scale, rounding half away from zero (DFC155 E).
+func decodeDecimal(off uintptr, scale int) fieldDecoder {
+	return func(p unsafe.Pointer, s string) error {
+		if s == "" {
+			return errEmptyCell
+		}
+		v, err := ssql.ParseDecimalScale(s, scale)
+		if err != nil {
+			return err
+		}
+		*(*ssql.Decimal)(unsafe.Add(p, off)) = v
+		return nil
+	}
+}
+
+// zeroDecimalOnEmpty is zeroOnEmpty for a decimal field: the zero at the
+// field's scale (0.00), not the type's zero value.
+func zeroDecimalOnEmpty(dec fieldDecoder, off uintptr, scale int) fieldDecoder {
+	zero := ssql.MustNewDecimal(ssql.Int128{}, scale)
+	return func(p unsafe.Pointer, s string) error {
+		if s == "" {
+			*(*ssql.Decimal)(unsafe.Add(p, off)) = zero
+			return nil
+		}
+		return dec(p, s)
+	}
+}
+
 func zeroOnEmpty(dec fieldDecoder, t reflect.Type, off uintptr) fieldDecoder {
 	switch t.Kind() {
 	case reflect.String, reflect.Pointer:
@@ -431,6 +527,11 @@ func encoderFor(t reflect.Type, off uintptr, timeFormat string) (fieldEncoder, e
 	if t == int128Type {
 		return func(p unsafe.Pointer) string {
 			return (*(*ssql.Int128)(unsafe.Add(p, off))).String()
+		}, nil
+	}
+	if t == decimalType {
+		return func(p unsafe.Pointer) string {
+			return (*(*ssql.Decimal)(unsafe.Add(p, off))).String()
 		}, nil
 	}
 	if t == timeType {

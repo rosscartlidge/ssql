@@ -16,6 +16,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 	type castField struct {
 		f      lib.TypedSchemaField
 		newGoT string // Go type after the cast (e.g. "int64")
+		scale  int    // a decimal target's scale (DFC155 E)
 	}
 	resolvedCasts := make(map[string]castField, len(casts))
 	for name, target := range casts {
@@ -29,7 +30,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: 'cast' on field %q: %w", name, err))
 		}
-		resolvedCasts[strings.ToLower(name)] = castField{f: f, newGoT: newGoT}
+		resolvedCasts[strings.ToLower(name)] = castField{f: f, newGoT: newGoT, scale: target.Scale()}
 	}
 
 	// Build derived schema: same fields, with cast Go types replaced.
@@ -39,6 +40,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 		out := f
 		if cf, ok := resolvedCasts[strings.ToLower(f.Name)]; ok {
 			out.GoType = cf.newGoT
+			out.Scale = cf.scale
 		}
 		derived.Fields[i] = out
 	}
@@ -58,7 +60,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 		}
 	}
 	for _, f := range derived.Fields {
-		fmt.Fprintf(&sb, "\t%-*s %-*s `ssql:%q json:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name, f.Name)
+		fmt.Fprintf(&sb, "\t%-*s %-*s %s\n", maxName, f.GoName, maxType, f.GoType, lib.FieldTag(f))
 	}
 	sb.WriteString("}\n")
 	structDef := sb.String()
@@ -92,7 +94,7 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 			assigns = append(assigns, fmt.Sprintf("%s: %s", out.GoName, code))
 			continue
 		}
-		expr, needsStrconv, err := castExpression("r."+f.GoName, f.GoType, cf.newGoT)
+		expr, needsStrconv, err := castExpressionTo("r."+f.GoName, f.GoType, cf.newGoT, cf.scale)
 		if err != nil {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: cast %s -> %s: %w", f.GoType, cf.newGoT, err))
@@ -154,16 +156,19 @@ func castTargetGoType(t ssql.FieldType) (string, error) {
 		return "time.Time", nil
 	case ssql.FieldTypeInt128:
 		return "ssql.Int128", nil
-	default:
-		return "", fmt.Errorf("typed cast does not support FieldType %v", t)
 	}
+	if t.IsDecimal() {
+		return "ssql.Decimal", nil // the scale rides on the derived field (DFC155 E)
+	}
+	return "", fmt.Errorf("typed cast does not support FieldType %v", t)
 }
 
 // schemaUsesInt128 reports whether any field of the schema is an
 // ssql.Int128, which makes the generated file import the root package.
 func schemaUsesInt128(s *lib.TypedSchema) bool {
 	for _, f := range s.Fields {
-		if strings.TrimPrefix(f.GoType, "*") == "ssql.Int128" {
+		switch strings.TrimPrefix(f.GoType, "*") {
+		case "ssql.Int128", "ssql.Decimal":
 			return true
 		}
 	}
@@ -180,6 +185,9 @@ func schemaUsesInt128(s *lib.TypedSchema) bool {
 func castExpression(expr, from, to string) (string, bool, error) {
 	if from == to {
 		return expr, false, nil
+	}
+	if to == "ssql.Decimal" {
+		return "", false, fmt.Errorf("a decimal target needs its scale (castExpressionTo)")
 	}
 	switch to {
 	case "ssql.Int128":
@@ -199,12 +207,14 @@ func castExpression(expr, from, to string) (string, bool, error) {
 			return fmt.Sprintf("func() ssql.Int128 { if %s { return ssql.Int128From(1) }; return ssql.Int128{} }()", expr), false, nil
 		case "string":
 			return fmt.Sprintf("func() ssql.Int128 { v, _ := ssql.ParseInt128(%s); return v }()", expr), false, nil
+		case "ssql.Decimal":
+			return fmt.Sprintf("%s.Trunc()", expr), false, nil
 		}
 	case "string":
 		switch from {
 		case "int64":
 			return fmt.Sprintf("strconv.FormatInt(%s, 10)", expr), true, nil
-		case "ssql.Int128":
+		case "ssql.Int128", "ssql.Decimal":
 			return fmt.Sprintf("%s.String()", expr), false, nil
 		case "int", "int32":
 			return fmt.Sprintf("strconv.FormatInt(int64(%s), 10)", expr), true, nil
@@ -221,6 +231,8 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		switch from {
 		case "ssql.Int128":
 			return fmt.Sprintf("ssql.MustInt64(%s)", expr), false, nil // narrowing never wraps
+		case "ssql.Decimal":
+			return fmt.Sprintf("ssql.MustInt64(%s.Trunc())", expr), false, nil // toward zero, as a float casts
 		case "string":
 			return fmt.Sprintf("func() int64 { v, _ := strconv.ParseInt(%s, 10, 64); return v }()", expr), true, nil
 		case "int", "int32":
@@ -234,7 +246,7 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		}
 	case "float64":
 		switch from {
-		case "ssql.Int128":
+		case "ssql.Int128", "ssql.Decimal":
 			return fmt.Sprintf("%s.Float64()", expr), false, nil
 		case "string":
 			return fmt.Sprintf("func() float64 { v, _ := strconv.ParseFloat(%s, 64); return v }()", expr), true, nil
@@ -247,7 +259,7 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		}
 	case "bool":
 		switch from {
-		case "ssql.Int128":
+		case "ssql.Int128", "ssql.Decimal":
 			return fmt.Sprintf("!%s.IsZero()", expr), false, nil
 		case "string":
 			return fmt.Sprintf("func() bool { v, _ := strconv.ParseBool(%s); return v }()", expr), true, nil
@@ -258,6 +270,36 @@ func castExpression(expr, from, to string) (string, bool, error) {
 		}
 	}
 	return "", false, fmt.Errorf("conversion from %s to %s not implemented", from, to)
+}
+
+// castExpressionTo is castExpression with the scale a decimal target
+// needs (DFC155 E): an integer exactly at the scale, a float by its
+// shortest decimal form, a string by ParseDecimalScale (lenient, as the
+// other string casts here are), a decimal brought to the scale; the
+// Must forms panic with the overflow, never wrap.
+func castExpressionTo(expr, from, to string, scale int) (string, bool, error) {
+	if to != "ssql.Decimal" {
+		return castExpression(expr, from, to)
+	}
+	switch from {
+	case "ssql.Decimal":
+		return fmt.Sprintf("%s.MustRescale(%d)", expr, scale), false, nil
+	case "int64":
+		return fmt.Sprintf("ssql.DecimalFromInt64(%s, %d)", expr, scale), false, nil
+	case "int", "int32":
+		return fmt.Sprintf("ssql.DecimalFromInt64(int64(%s), %d)", expr, scale), false, nil
+	case "uint64":
+		return fmt.Sprintf("ssql.MustDecimalFromInt128(ssql.Int128FromWords(0, %s), %d)", expr, scale), false, nil
+	case "ssql.Int128":
+		return fmt.Sprintf("ssql.MustDecimalFromInt128(%s, %d)", expr, scale), false, nil
+	case "float64", "float32":
+		return fmt.Sprintf("ssql.MustDecimalFromFloat(float64(%s), %d)", expr, scale), false, nil
+	case "bool":
+		return fmt.Sprintf("func() ssql.Decimal { if %s { return ssql.DecimalFromInt64(1, %d) }; return ssql.MustNewDecimal(ssql.Int128{}, %d) }()", expr, scale, scale), false, nil
+	case "string":
+		return fmt.Sprintf("func() ssql.Decimal { v, _ := ssql.ParseDecimalScale(%s, %d); return v }()", expr, scale), false, nil
+	}
+	return "", false, fmt.Errorf("conversion from %s to decimal:%d not implemented", from, scale)
 }
 
 // castTimeExpression is castExpression's time.Time leg, kept apart because

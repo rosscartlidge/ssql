@@ -229,7 +229,7 @@ make explore-wasm && go install ./cmd/ssql
 
 ## Canonical Numeric Types
 
-- **Scalars**: Always `int64` and `float64` (never `int`, `int32`, `float32`); `ssql.Int128` for width (the `int128` column: a cast, a literal past int64, or an integer sum — never an operator overflow; DFC155 C)
+- **Scalars**: Always `int64` and `float64` (never `int`, `int32`, `float32`); `ssql.Int128` for width (the `int128` column: a cast, a literal past int64, or an integer sum — never an operator overflow; DFC155 C); `ssql.Decimal` for money (the `decimal:S` column: by declaration only — a cast, `-type` on a source, a header, a Parquet DECIMAL — never inferred from `12.34`; `+ -` at the larger scale, `*` at the summed scale, `/` a float, every rescale half away from zero; DFC155 E)
 - **Sequences**: Flexible (`iter.Seq[int]`, `iter.Seq[float32]`, etc.)
 - CSV auto-parsing produces `int64`/`float64`. Use `int64(0)`/`float64(0)` as defaults with `GetOr()`.
 

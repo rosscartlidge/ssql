@@ -20,6 +20,7 @@ func exprGoTestSchema() *lib.TypedSchema {
 			{Name: "active", GoName: "Active", GoType: "bool"},
 			{Name: "when", GoName: "When", GoType: "time.Time"},
 			{Name: "date", GoName: "Date", GoType: "string"}, // named like the date() builtin
+			{Name: "amt", GoName: "Amt", GoType: "ssql.Decimal", Scale: 2}, // the decimal:2 column (DFC155 E)
 		},
 	}
 }
@@ -52,6 +53,22 @@ func TestExprToGo(t *testing.T) {
 		{"int literal adapts in float context", "price * 2", "(r.Price * 2)", exprGoFloat, ""},
 		{"power is math.Pow", "pop ** 2", "math.Pow(float64(r.Pop), 2)", exprGoFloat, "math"},
 		{"caret is power too", "price ^ 2", "math.Pow(r.Price, 2)", exprGoFloat, "math"},
+		// DFC155 E: a decimal beside an exact number is a decimal through
+		// the checked methods, beside a float a float; `/` is a float.
+		{"decimal plus int keeps scale", "amt + 1", "r.Amt.Add(ssql.DecimalFromInt64(1, 0))", exprGoDecimal, ssqlImport},
+		{"decimal times int", "amt * qty", "r.Amt.Mul(ssql.DecimalFromInt64(r.Qty, 0))", exprGoDecimal, ""},
+		{"decimal beside float is float", "amt + price", "(r.Amt.Float64() + r.Price)", exprGoFloat, ""},
+		{"decimal division is float", "amt / qty", "(r.Amt.Float64() / float64(r.Qty))", exprGoFloat, ""},
+		{"decimal modulo stays decimal", "amt % 2", "r.Amt.Rem(ssql.DecimalFromInt64(2, 0))", exprGoDecimal, ""},
+		{"decimal compares exactly", "amt > 1", "(r.Amt.Cmp(ssql.DecimalFromInt64(1, 0)) > 0)", exprGoBool, ""},
+		{"decimal beside float compares as floats", "amt > price", "(r.Amt.Float64() > r.Price)", exprGoBool, ""},
+		{"decimal rounds to places", "round(amt, 1)", "r.Amt.MustRescale(1)", exprGoDecimal, ""},
+		{"decimal floor is scale 0", "floor(amt)", "r.Amt.Floor()", exprGoDecimal, ""},
+		{"int of decimal truncates", "int(amt)", "ssql.MustInt64(r.Amt.Trunc())", exprGoInt, ""},
+		{"float of decimal", "float(amt)", "r.Amt.Float64()", exprGoFloat, ""},
+		{"decimal of int at scale", "decimal(qty, 2)", "ssql.DecimalFromInt64(r.Qty, 2)", exprGoDecimal, ""},
+		{"decimal of float at scale", "decimal(price, 2)", "ssql.MustDecimalFromFloat(r.Price, 2)", exprGoDecimal, ""},
+		{"negated decimal", "-amt", "r.Amt.Neg()", exprGoDecimal, ""},
 		{"unary minus preserves type", "-pop", "exprfn.Neg(r.Pop)", exprGoInt, ""}, // checked: -MinInt64 is an error (DFC155 B)
 		{"unary minus of a literal stays a literal", "-5 + pop", "exprfn.Add((-5), r.Pop)", exprGoInt, ""},
 		{"unary minus of a float is bare", "-price", "(-r.Price)", exprGoFloat, ""},

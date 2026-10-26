@@ -297,6 +297,7 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 	}
 	var valFields []lib.TypedSchemaField
 	common := ""
+	commonScale := 0 // a decimal value column's scale, when every value field shares it (DFC155 E)
 	allNumeric := true
 	for _, v := range values {
 		f, ok := lookupSchemaField(prev, v)
@@ -307,8 +308,11 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 		valFields = append(valFields, f)
 		if common == "" {
 			common = f.GoType
+			commonScale = f.Scale
 		} else if f.GoType != common {
 			common = "MIXED"
+		} else if f.Scale != commonScale {
+			common = "MIXED" // decimals of two scales: a float, as mixed numbers are
 		}
 		switch f.GoType {
 		case "int64", "float64", "int", "int32", "float32", "ssql.Int128":
@@ -317,6 +321,10 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 		}
 	}
 	valType := common
+	valScale := 0
+	if common == "ssql.Decimal" {
+		valScale = commonScale
+	}
 	if common == "MIXED" {
 		if !allNumeric {
 			return nil, false // heterogeneous → record-shaped stage
@@ -345,7 +353,7 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 		fmt.Fprintf(&def, "\t%s %s `ssql:%q json:%q`\n", f.GoName, f.GoType, f.Name, f.Name)
 	}
 	fmt.Fprintf(&def, "\t%s string `ssql:%q json:%q`\n", nameGo, cfg.NameField, cfg.NameField)
-	fmt.Fprintf(&def, "\t%s %s `ssql:%q json:%q`\n", valueGo, valType, cfg.ValueField, cfg.ValueField)
+	fmt.Fprintf(&def, "\t%s %s %s\n", valueGo, valType, lib.FieldTag(lib.TypedSchemaField{Name: cfg.ValueField, GoType: valType, Scale: valScale}))
 	def.WriteString("}")
 
 	var idCopy strings.Builder
@@ -357,7 +365,7 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 	for i, f := range valFields {
 		val := "r." + f.GoName
 		if valType == "float64" && f.GoType != "float64" {
-			if f.GoType == "ssql.Int128" {
+			if f.GoType == "ssql.Int128" || f.GoType == "ssql.Decimal" {
 				val += ".Float64()"
 			} else {
 				val = "float64(" + val + ")"
@@ -373,7 +381,7 @@ func generateUnpivotTyped(cfg ssql.UnpivotConfig, fragments []*lib.CodeFragment,
 	}
 	outSchema.Fields = append(outSchema.Fields,
 		lib.TypedSchemaField{Name: cfg.NameField, GoName: nameGo, GoType: "string"},
-		lib.TypedSchemaField{Name: cfg.ValueField, GoName: valueGo, GoType: valType})
+		lib.TypedSchemaField{Name: cfg.ValueField, GoName: valueGo, GoType: valType, Scale: valScale})
 
 	frag := lib.NewStmtFragment(outputVar, inputVar, body.String(), nil, getCommandString())
 	frag.StructDefs = []string{def.String()}

@@ -67,7 +67,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | `distinct` | drop duplicate rows (whole row) | no flags |
 | `include F…` / `exclude F…` | keep / drop columns | positional field names |
 | `rename -as OLD NEW` | rename columns | repeat `-as` |
-| `cast -type FIELD TYPE` | convert types (`string`, `int`, `int128`, `float`, `bool`, `time`) | `-invalid missing` leaves unconvertible values empty instead of failing |
+| `cast -type FIELD TYPE` | convert types (`string`, `int`, `int128`, `decimal:S` — fixed-point with S digits after the point, exact money — `float`, `bool`, `time`) | `-invalid missing` leaves unconvertible values empty instead of failing |
 | `join FILE` | join with a file or `<(pipeline)` | `-using F` (same name both sides), `-on LEFT RIGHT`, `-as RIGHTFIELD NEWNAME`, `-type inner|left|right|full`, `-suffix _r` (for colliding names), `-exclude-left` / `-exclude-right`; `-asof TIMEFIELD [-tolerance 5m] [-after] [-strict]` for as-of joins; `-` separates several lookups from the same file |
 | `except -file FILE` / `intersect -file FILE` | rows of stdin not in / also in FILE (SQL EXCEPT / INTERSECT) | `-using F` or `-on L R` compares by key (anti-join / semi-join); `-all` keeps duplicates |
 | `union -file FILE` | append another file's rows (SQL UNION) | duplicates removed unless `-all`; repeat `-file` |

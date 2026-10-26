@@ -344,10 +344,10 @@ func TestDecimalConversions(t *testing.T) {
 		if got := d.Trunc().String(); got != c.trunc {
 			t.Errorf("%s.Trunc() = %s", c.in, got)
 		}
-		if fl, _ := d.Floor(); fl.String() != c.floor {
+		if fl := d.Floor(); fl.String() != c.floor {
 			t.Errorf("%s.Floor() = %s", c.in, fl)
 		}
-		if ce, _ := d.Ceil(); ce.String() != c.ceil {
+		if ce := d.Ceil(); ce.String() != c.ceil {
 			t.Errorf("%s.Ceil() = %s", c.in, ce)
 		}
 		if _, ok := d.Int64(); ok != c.whole {

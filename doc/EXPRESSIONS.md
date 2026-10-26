@@ -58,6 +58,38 @@ int64 is an error, never a wrap. One gap: `x in [1, 2]` with an int128
 `x` compares by Go equality, so a list of int literals does not match —
 compare with `==`, or `int128()` the literals.
 
+**Money is `decimal:S`** (DECIMAL(38,S) in every engine, Arrow and
+Parquet): a fixed-point number with S digits after the point, exact to 38
+digits, so a column of prices sums to the cent where a float says
+`0.30000000000000004`. A column is decimal only because it was declared
+so — `cast -type price decimal:2`, `-type price decimal:2` on the `from`
+stage, a `_schema` header, a sidecar's `ssqlType`, a Parquet DECIMAL
+column — never inferred from `12.34`, which stays a float. Reading text
+into a declared scale rounds half away from zero (`12.345` → `12.35`,
+`-2.5` → `-3` at scale 0), as DuckDB's `read_csv` does. In an
+expression `decimal("0.10")` takes its scale from the text (the way to
+write an exact literal), `decimal(x, 2)` brings any number to the scale.
+The rules, DuckDB's: a decimal beside an integer of either width is a
+decimal — `+ -` at the larger scale, `*` at the sum of the scales
+(`price * rate` of `decimal:2` and `decimal:4` is `decimal:6`, exact;
+`round(x, 2)` brings cents back), `%` at the larger — beside a float it
+is a float; `/` and an average are floats; comparisons are exact across
+scales (`1.25 == 1.250`); `round(d, n)` is a decimal of n places,
+`floor`, `ceil` and `trunc` decimals of scale 0; `int(d)` truncates
+toward zero as `int()` of a float does; `string(d)` keeps the scale's
+digits (`"1.10"`); `-sum`, `window -sum`, `pivot -func sum` and `sum()`
+of decimals are a decimal at the column's scale. A result past 38
+digits, or a product whose scale would pass 38, is an error naming the
+operands (`decimal overflow: … does not fit DECIMAL(38,2)`). A float
+brought to a decimal rounds its shortest decimal form (`1.005` → `1.01`);
+an engine casting a DOUBLE rounds the binary value its own way, so cast
+from text where the digits matter. The `in` gap int128 has applies.
+
+```bash
+# exact to the cent: a declared decimal column, where the float column drifts
+ssql from range 3 | ssql update -set-expr amt 'decimal("0.10")' | ssql group-by -sum amt total | ssql to table
+```
+
 **Every integer sum is an int128.** `group-by -sum` of an integer
 column, `-avg` (a float of the exact sum), `window -sum`/`-avg`,
 `pivot -func sum` and `sum()` over a list (`sum(xs)`, `sum(xs, # * 2)`,

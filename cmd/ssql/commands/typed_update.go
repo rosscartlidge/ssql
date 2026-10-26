@@ -274,8 +274,10 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				continue // Tier V is existing-field-only by construction
 			}
 			goType := ""
+			scale := 0
 			if s.expr != nil {
 				goType = string(s.expr.Type)
+				scale = s.expr.Scale
 			} else {
 				goType = inferLiteralGoType(s.value)
 			}
@@ -294,6 +296,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 				Name:   s.field,
 				GoName: lib.GoNameFromColumn(s.field),
 				GoType: goType,
+				Scale:  scale,
 			})
 			newFieldTypes[lower] = goType
 		}
@@ -378,7 +381,7 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 			var rhs string
 			if s.expr != nil {
 				var ok bool
-				rhs, ok = assignExprTo(f.GoType, *s.expr)
+				rhs, ok = assignExprTo(f, *s.expr)
 				if !ok {
 					// A -set-expr result that would RETYPE an existing column
 					// (e.g. a float result into an int64 column — exec makes
@@ -450,9 +453,27 @@ func emitTypedUpdate(ctx *cf.Context, inputVar string, in *lib.TypedSchema, frag
 // widening; a float result into an int64 column is NOT a coercion — exec
 // RETYPES the field per row (pop/2 makes pop 3.5), and int64(…) truncation
 // would silently diverge — so it returns ok=false and record mode handles it.
-func assignExprTo(goType string, e exprGo) (string, bool) {
+func assignExprTo(f lib.TypedSchemaField, e exprGo) (string, bool) {
+	goType := f.GoType
 	if string(e.Type) == goType {
+		if e.Type == exprGoDecimal && e.Scale != f.Scale {
+			// A decimal of another scale RETYPES the column in exec
+			// (price * rate into a decimal:2 column makes it decimal:6);
+			// a typed struct cannot: record mode (DFC155 E).
+			return "", false
+		}
 		return e.Src, true
+	}
+	// A decimal column takes an integer result exactly at its scale; a
+	// float column takes a decimal as its nearest float64 (DFC155 E).
+	if goType == "ssql.Decimal" && e.Type == exprGoInt {
+		return fmt.Sprintf("ssql.DecimalFromInt64(%s, %d)", e.Src, f.Scale), true
+	}
+	if goType == "ssql.Decimal" && e.Type == exprGoInt128 {
+		return fmt.Sprintf("ssql.MustDecimalFromInt128(%s, %d)", e.Src, f.Scale), true
+	}
+	if goType == "float64" && e.Type == exprGoDecimal {
+		return e.Src + ".Float64()", true
 	}
 	if goType == "float64" && e.Type == exprGoInt {
 		return asFloat(e), true

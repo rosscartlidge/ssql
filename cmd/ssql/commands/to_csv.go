@@ -115,7 +115,7 @@ func sidecarFieldsLiteral(schema *lib.TypedSchema) string {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		fmt.Fprintf(&b, "{Name: %q, Type: %s}", f.Name, fieldTypeConst(goFieldType(f.GoType, f.JSON)))
+		fmt.Fprintf(&b, "{Name: %q, Type: %s}", f.Name, fieldTypeConst(goFieldType(f.GoType, f.JSON, f.Scale)))
 	}
 	b.WriteString("}")
 	return b.String()

@@ -162,6 +162,11 @@ func schemaTypeOf(s *lib.Schema, field string) string {
 // known, otherwise int → float → bool → string inference (the CSV
 // reader's own order).
 func fillLiteral(s, schemaType string) any {
+	if base, scale := lib.ParseWireType(schemaType); base == lib.TypeDecimal && scale >= 0 {
+		if d, err := ssql.ParseDecimalScale(s, scale); err == nil {
+			return d
+		}
+	}
 	switch schemaType {
 	case lib.TypeString:
 		return s

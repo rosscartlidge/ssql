@@ -570,6 +570,8 @@ func typedWhereCondition(f lib.TypedSchemaField, op, value string) (exprGo, erro
 		lhs = exprGo{Src: field, Type: exprGoInt, field: f.Name}
 	case "ssql.Int128":
 		lhs = exprGo{Src: field, Type: exprGoInt128, field: f.Name}
+	case "ssql.Decimal":
+		lhs = exprGo{Src: field, Type: exprGoDecimal, Scale: f.Scale, field: f.Name}
 	case "float64", "float32":
 		lhs = exprGo{Src: field, Type: exprGoFloat, field: f.Name}
 	case "string":
@@ -885,6 +887,8 @@ func recordCondLHS(recv, field, op, value, goType string) exprGo {
 		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, float64(0))", recv, field), Type: exprGoFloat, field: field}
 	case "ssql.Int128":
 		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, ssql.Int128{})", recv, field), Type: exprGoInt128, field: field}
+	case "ssql.Decimal":
+		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, ssql.Decimal{})", recv, field), Type: exprGoDecimal, field: field}
 	case "bool":
 		return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, false)", recv, field), Type: exprGoBool, field: field}
 	}

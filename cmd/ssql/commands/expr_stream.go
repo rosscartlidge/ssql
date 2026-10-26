@@ -44,8 +44,9 @@ type streamAggPlan struct {
 	Spec    streamExprSpec
 	States  []streamAggState // INIT declaration order
 	Every   []string         // new-state Go exprs, parallel to States (all read OLD state)
-	Final     string           // Go expr over state fields, in FinalType
-	FinalType exprGoType       // int64 or float64: the result column's Go type
+	Final      string           // Go expr over state fields, in FinalType
+	FinalType  exprGoType       // int64, float64, ssql.Int128 or ssql.Decimal: the result column's Go type
+	FinalScale int              // a decimal result's scale (DFC155 E)
 	Imports   []string
 	Hoisted []string
 }
@@ -167,6 +168,7 @@ func lowerStreamAggAnyFinal(spec streamExprSpec, schema *lib.TypedSchema, idx in
 	}
 	plan.Final = finalRes.Src
 	plan.FinalType = finalRes.Type
+	plan.FinalScale = finalRes.Scale
 	plan.Imports = append(plan.Imports, finalRes.Imports...)
 	plan.Hoisted = append(plan.Hoisted, finalRes.Hoisted...)
 

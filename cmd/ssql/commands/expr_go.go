@@ -42,6 +42,10 @@ const (
 	exprGoBool   exprGoType = "bool"
 	exprGoTime   exprGoType = "time.Time"
 	exprGoInt128 exprGoType = "ssql.Int128" // the int128 column (DFC155 C): int64 beside it widens, a float beside it floats
+	// exprGoDecimal is the decimal:S column (DFC155 E): an exact number
+	// beside it is a decimal, a float beside it a float; the scale rides
+	// in exprGo.Scale, since a Go type name cannot hold one.
+	exprGoDecimal exprGoType = "ssql.Decimal"
 )
 
 // ssqlImport is the root package, for the calendar helpers transpiled
@@ -57,10 +61,28 @@ func zoneSrc(v exprGo) string {
 	return "ssql.StreamLocation()"
 }
 
-func (t exprGoType) numeric() bool { return t == exprGoInt || t == exprGoFloat || t == exprGoInt128 }
+func (t exprGoType) numeric() bool {
+	return t == exprGoInt || t == exprGoFloat || t == exprGoInt128 || t == exprGoDecimal
+}
 
 // integer reports an integer type of either width.
 func (t exprGoType) integer() bool { return t == exprGoInt || t == exprGoInt128 }
+
+// exact reports a type whose arithmetic is exact: an integer of either
+// width or a decimal.
+func (t exprGoType) exact() bool { return t.integer() || t == exprGoDecimal }
+
+// asDec renders an exact operand as an ssql.Decimal (an integer at scale
+// 0; the methods align scales at run time). The caller adds ssqlImport.
+func asDec(v exprGo) string {
+	switch v.Type {
+	case exprGoDecimal:
+		return v.Src
+	case exprGoInt128:
+		return "ssql.MustDecimalFromInt128(" + v.Src + ", 0)"
+	}
+	return "ssql.DecimalFromInt64(" + v.Src + ", 0)"
+}
 
 // asWide renders an integer operand as an ssql.Int128 (an int64 widened
 // through ssql.Int128From; the caller adds ssqlImport).
@@ -77,6 +99,11 @@ type exprGo struct {
 	Type    exprGoType // result type per the §2 semantics tables
 	Imports []string   // e.g. "strings", "math", ".../exprfn"
 	Hoisted []string   // package-level decls (regexp vars), deduped by the assembler
+
+	// Scale is a decimal value's scale (Type == exprGoDecimal): a column's
+	// from its schema field, an intermediate's from the rule that made it
+	// (`+ -` the larger, `*` the sum, round(d, n) n, floor/ceil 0).
+	Scale int
 
 	// lit marks an integer/float literal: as a Go untyped constant it adapts
 	// to a float64 context without an explicit float64(...) wrap, which keeps
@@ -337,6 +364,8 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, float64(0))", e.recv, f.Name), Type: exprGoFloat}, nil
 		case "ssql.Int128":
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, ssql.Int128{})", e.recv, f.Name), Type: exprGoInt128}, nil
+		case "ssql.Decimal":
+			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, ssql.Decimal{})", e.recv, f.Name), Type: exprGoDecimal, Scale: f.Scale}, nil
 		case "string":
 			return exprGo{Src: fmt.Sprintf("ssql.GetOr(%s, %q, \"\")", e.recv, f.Name), Type: exprGoString}, nil
 		case "bool":
@@ -365,6 +394,8 @@ func (e *exprGoEnv) field(name string) (exprGo, error) {
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoInt}, nil
 	case "ssql.Int128":
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoInt128}, nil
+	case "ssql.Decimal":
+		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoDecimal, Scale: f.Scale}, nil
 	case "float64":
 		return exprGo{Src: e.recv + "." + f.GoName, Type: exprGoFloat}, nil
 	case "string":
@@ -393,7 +424,7 @@ func asFloat(v exprGo) string {
 	if v.Type == exprGoFloat || v.lit {
 		return v.Src
 	}
-	if v.Type == exprGoInt128 {
+	if v.Type == exprGoInt128 || v.Type == exprGoDecimal {
 		return v.Src + ".Float64()"
 	}
 	return "float64(" + v.Src + ")"
@@ -476,6 +507,9 @@ func (e *exprGoEnv) negate(operand exprGo) (exprGo, error) {
 	}
 	if operand.Type == exprGoInt128 {
 		return mergeMeta(exprGo{Src: operand.Src + ".Neg()", Type: exprGoInt128}, operand), nil
+	}
+	if operand.Type == exprGoDecimal {
+		return mergeMeta(exprGo{Src: operand.Src + ".Neg()", Type: exprGoDecimal, Scale: operand.Scale}, operand), nil
 	}
 	if operand.Type == exprGoInt && !operand.lit {
 		res := exprGo{Src: "exprfn.Neg(" + operand.Src + ")", Type: exprGoInt, Imports: []string{exprfnImport}}
@@ -585,6 +619,13 @@ func (e *exprGoEnv) binaryOperator(op string, left, right exprGo) (exprGo, error
 		}
 		return mergeMeta(exprGo{Src: "(" + ls + " / " + rs + ")", Type: exprGoFloat}, left, right), nil
 	case "%":
+		if left.Type == exprGoDecimal || right.Type == exprGoDecimal {
+			if !left.Type.exact() || !right.Type.exact() {
+				return exprGo{}, fmt.Errorf("operator %% needs exact operands, got %s and %s", left.Type, right.Type)
+			}
+			res := exprGo{Src: asDec(left) + ".Rem(" + asDec(right) + ")", Type: exprGoDecimal, Scale: max(left.Scale, right.Scale), Imports: []string{ssqlImport}}
+			return mergeMeta(res, left, right), nil
+		}
 		if left.Type == exprGoInt128 || right.Type == exprGoInt128 {
 			if !left.Type.integer() || !right.Type.integer() {
 				return exprGo{}, fmt.Errorf("operator %% needs integer operands, got %s and %s", left.Type, right.Type)
@@ -632,6 +673,17 @@ func (e *exprGoEnv) arith(op string, left, right exprGo) (exprGo, error) {
 		res := exprGo{Src: "(" + asFloat(left) + " " + op + " " + asFloat(right) + ")", Type: exprGoFloat}
 		return mergeMeta(res, left, right), nil
 	}
+	if left.Type == exprGoDecimal || right.Type == exprGoDecimal {
+		// A decimal beside an exact number: the checked Decimal method —
+		// `+ -` at the larger scale, `*` at the summed scale (DFC155 E).
+		m := map[string]string{"+": "Add", "-": "Sub", "*": "Mul"}[op]
+		scale := max(left.Scale, right.Scale)
+		if op == "*" {
+			scale = left.Scale + right.Scale
+		}
+		res := exprGo{Src: asDec(left) + "." + m + "(" + asDec(right) + ")", Type: exprGoDecimal, Scale: scale, Imports: []string{ssqlImport}}
+		return mergeMeta(res, left, right), nil
+	}
 	if left.Type == exprGoInt128 || right.Type == exprGoInt128 {
 		// An int128 beside an integer: the checked Int128 method, the
 		// int64 side widened (DFC155 C).
@@ -659,6 +711,12 @@ func (e *exprGoEnv) compare(op string, left, right exprGo, equality bool) (exprG
 func exprCompare(op string, left, right exprGo, equality bool) (exprGo, error) {
 	switch {
 	case left.Type.numeric() && right.Type.numeric():
+		if (left.Type == exprGoDecimal || right.Type == exprGoDecimal) && left.Type.exact() && right.Type.exact() {
+			// A decimal beside an exact number compares exactly across
+			// scales through Cmp (DFC155 E).
+			res := exprGo{Src: "(" + asDec(left) + ".Cmp(" + asDec(right) + ") " + op + " 0)", Type: exprGoBool, Imports: []string{ssqlImport}}
+			return mergeMeta(res, left, right), nil
+		}
 		if (left.Type == exprGoInt128 || right.Type == exprGoInt128) && left.Type.integer() && right.Type.integer() {
 			// Integers of either width compare exactly through Cmp (a
 			// float64 detour rounds past 2^53; DFC155 C).
@@ -891,6 +949,9 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if arg.Type == exprGoInt128 {
 			return mergeMeta(exprGo{Src: arg.Src + ".Abs()", Type: exprGoInt128}, arg), nil
 		}
+		if arg.Type == exprGoDecimal {
+			return mergeMeta(exprGo{Src: arg.Src + ".Abs()", Type: exprGoDecimal, Scale: arg.Scale}, arg), nil
+		}
 		res := exprGo{Src: "exprfn.Abs(" + arg.Src + ")", Type: arg.Type, Imports: []string{exprfnImport}}
 		return mergeMeta(res, arg), nil
 	case "round", "floor", "ceil":
@@ -907,6 +968,16 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 			if !x.Type.numeric() || n.Type != exprGoInt {
 				return exprGo{}, fmt.Errorf("round(x, places) needs a number and an integer, got %s and %s", x.Type, n.Type)
 			}
+			if x.Type == exprGoDecimal {
+				// A decimal rounds to a decimal of the places (DFC155 E);
+				// the places must be a literal, since the scale is static.
+				places, perr := strconv.Atoi(n.Src)
+				if !n.lit || perr != nil || places < 0 || places > ssql.MaxDecimalScale {
+					return exprGo{}, fmt.Errorf("round(decimal, places) needs a literal places in 0..%d for a native Go emission", ssql.MaxDecimalScale)
+				}
+				res := exprGo{Src: x.Src + ".MustRescale(" + n.Src + ")", Type: exprGoDecimal, Scale: places}
+				return mergeMeta(res, x, n), nil
+			}
 			res := exprGo{Src: "exprfn.RoundTo(" + asFloat(x) + ", " + n.Src + ")", Type: exprGoFloat, Imports: []string{exprfnImport}}
 			return mergeMeta(res, x, n), nil
 		}
@@ -916,6 +987,11 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		}
 		if !arg.Type.numeric() {
 			return exprGo{}, fmt.Errorf("%s() needs a numeric argument, got %s", name, arg.Type)
+		}
+		if arg.Type == exprGoDecimal {
+			// A decimal at scale 0 (DuckDB's rule; DFC155 E).
+			m := map[string]string{"round": ".MustRescale(0)", "floor": ".Floor()", "ceil": ".Ceil()"}[name]
+			return mergeMeta(exprGo{Src: arg.Src + m, Type: exprGoDecimal, Scale: 0}, arg), nil
 		}
 		fn := map[string]string{"round": "math.Round", "floor": "math.Floor", "ceil": "math.Ceil"}[name]
 		res := exprGo{Src: fn + "(" + asFloat(arg) + ")", Type: exprGoFloat, Imports: []string{"math"}}
@@ -933,6 +1009,11 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		}
 		if !arg.Type.numeric() {
 			return exprGo{}, fmt.Errorf("%s() needs a numeric argument, got %s", name, arg.Type)
+		}
+		if name == "trunc" && arg.Type == exprGoDecimal {
+			// The integer part as a decimal at scale 0 (DuckDB's rule; DFC155 E).
+			res := exprGo{Src: "ssql.MustNewDecimal(" + arg.Src + ".Trunc(), 0)", Type: exprGoDecimal, Scale: 0, Imports: []string{ssqlImport}}
+			return mergeMeta(res, arg), nil
 		}
 		fn := map[string]string{
 			"sqrt": "math.Sqrt", "cbrt": "math.Cbrt", "exp": "math.Exp",
@@ -1070,6 +1151,13 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		if !a.Type.numeric() || !b.Type.numeric() {
 			return exprGo{}, fmt.Errorf("%s() needs numeric arguments, got %s and %s", name, a.Type, b.Type)
 		}
+		if a.Type == exprGoDecimal || b.Type == exprGoDecimal {
+			if !a.Type.exact() || !b.Type.exact() {
+				return exprGo{}, fmt.Errorf("%s() with mixed decimal/float arguments keeps the winner's type — no native Go emission", name)
+			}
+			fn := map[string]string{"min": "ssql.DecimalMin", "max": "ssql.DecimalMax"}[name]
+			return mergeMeta(exprGo{Src: fn + "(" + asDec(a) + ", " + asDec(b) + ")", Type: exprGoDecimal, Scale: max(a.Scale, b.Scale), Imports: []string{ssqlImport}}, a, b), nil
+		}
 		if a.Type == exprGoInt128 || b.Type == exprGoInt128 {
 			if !a.Type.integer() || !b.Type.integer() {
 				return exprGo{}, fmt.Errorf("%s() with mixed int128/float arguments keeps the winner's type — no native Go emission", name)
@@ -1113,6 +1201,65 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 			return mergeMeta(exprGo{Src: "ssql.MustInt128(" + arg.Src + ")", Type: exprGoInt128, Imports: []string{ssqlImport}}, arg), nil
 		}
 		return exprGo{}, fmt.Errorf("int128() of a %s has no native Go emission", arg.Type)
+	case "decimal":
+		// The fixed-point conversion (DFC155 E): decimal("12.34") hoists a
+		// parsed literal (its scale from the text, or the literal scale);
+		// an integer is exact at the scale; a decimal rescales; a float or
+		// a string needs the scale, since the result's scale is static.
+		if len(args) < 1 || len(args) > 2 {
+			return exprGo{}, fmt.Errorf("decimal(x) or decimal(x, scale)")
+		}
+		scale, hasScale := -1, len(args) == 2
+		if hasScale {
+			n, ok := args[1].(*ast.IntegerNode)
+			if !ok || n.Value < 0 || n.Value > ssql.MaxDecimalScale {
+				return exprGo{}, fmt.Errorf("decimal(x, scale) needs a literal scale in 0..%d for a native Go emission", ssql.MaxDecimalScale)
+			}
+			scale = n.Value
+		}
+		if lit, ok := args[0].(*ast.StringNode); ok {
+			d, err := ssql.ParseDecimal(lit.Value)
+			if err != nil {
+				return exprGo{}, fmt.Errorf("decimal(%q): not a decimal that fits 38 digits", lit.Value)
+			}
+			varName := "exprDec" + exprGoHash(lit.Value+"@"+strconv.Itoa(scale))
+			decl := fmt.Sprintf("var %s = ssql.MustParseDecimal(%q)", varName, lit.Value)
+			if hasScale {
+				if _, err := d.Rescale(scale); err != nil {
+					return exprGo{}, fmt.Errorf("decimal(%q, %d): %v", lit.Value, scale, err)
+				}
+				decl = fmt.Sprintf("var %s = ssql.MustParseDecimalScale(%q, %d)", varName, lit.Value, scale)
+				d = d.MustRescale(scale)
+			}
+			return exprGo{Src: varName, Type: exprGoDecimal, Scale: d.Scale(), Imports: []string{ssqlImport}, Hoisted: []string{decl}}, nil
+		}
+		arg, err := e.node(args[0])
+		if err != nil {
+			return exprGo{}, err
+		}
+		at := max(scale, 0)
+		switch arg.Type {
+		case exprGoDecimal:
+			if !hasScale {
+				return arg, nil
+			}
+			return mergeMeta(exprGo{Src: arg.Src + ".MustRescale(" + strconv.Itoa(scale) + ")", Type: exprGoDecimal, Scale: scale}, arg), nil
+		case exprGoInt:
+			return mergeMeta(exprGo{Src: "ssql.DecimalFromInt64(" + arg.Src + ", " + strconv.Itoa(at) + ")", Type: exprGoDecimal, Scale: at, Imports: []string{ssqlImport}}, arg), nil
+		case exprGoInt128:
+			return mergeMeta(exprGo{Src: "ssql.MustDecimalFromInt128(" + arg.Src + ", " + strconv.Itoa(at) + ")", Type: exprGoDecimal, Scale: at, Imports: []string{ssqlImport}}, arg), nil
+		case exprGoFloat:
+			if !hasScale {
+				return exprGo{}, fmt.Errorf("decimal() of a float needs the scale, decimal(x, scale), for a native Go emission")
+			}
+			return mergeMeta(exprGo{Src: "ssql.MustDecimalFromFloat(" + asFloat(arg) + ", " + strconv.Itoa(scale) + ")", Type: exprGoDecimal, Scale: scale, Imports: []string{ssqlImport}}, arg), nil
+		case exprGoString:
+			if !hasScale {
+				return exprGo{}, fmt.Errorf("decimal() of a string needs the scale, decimal(x, scale), for a native Go emission")
+			}
+			return mergeMeta(exprGo{Src: "ssql.MustParseDecimalScale(" + arg.Src + ", " + strconv.Itoa(scale) + ")", Type: exprGoDecimal, Scale: scale, Imports: []string{ssqlImport}}, arg), nil
+		}
+		return exprGo{}, fmt.Errorf("decimal() of a %s has no native Go emission", arg.Type)
 	case "int":
 		arg, err := one()
 		if err != nil {
@@ -1127,6 +1274,9 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		case exprGoInt128:
 			// Narrowing never wraps: a value past int64 is a *CastError.
 			return mergeMeta(exprGo{Src: "ssql.MustInt64(" + arg.Src + ")", Type: exprGoInt, Imports: []string{ssqlImport}}, arg), nil
+		case exprGoDecimal:
+			// The integer part toward zero, as int() of a float (DFC155 E).
+			return mergeMeta(exprGo{Src: "ssql.MustInt64(" + arg.Src + ".Trunc())", Type: exprGoInt, Imports: []string{ssqlImport}}, arg), nil
 		}
 		return exprGo{}, fmt.Errorf("int() of a %s has no native Go emission", arg.Type)
 	case "float":
@@ -1139,7 +1289,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 			return arg, nil
 		case exprGoInt:
 			return mergeMeta(exprGo{Src: "float64(" + arg.Src + ")", Type: exprGoFloat}, arg), nil
-		case exprGoInt128:
+		case exprGoInt128, exprGoDecimal:
 			return mergeMeta(exprGo{Src: arg.Src + ".Float64()", Type: exprGoFloat}, arg), nil
 		}
 		return exprGo{}, fmt.Errorf("float() of a %s has no native Go emission", arg.Type)
@@ -1154,7 +1304,7 @@ func (e *exprGoEnv) call(name string, args []ast.Node) (exprGo, error) {
 		case exprGoInt:
 			res := exprGo{Src: "strconv.FormatInt(" + arg.Src + ", 10)", Type: exprGoString, Imports: []string{"strconv"}}
 			return mergeMeta(res, arg), nil
-		case exprGoInt128:
+		case exprGoInt128, exprGoDecimal:
 			return mergeMeta(exprGo{Src: arg.Src + ".String()", Type: exprGoString}, arg), nil
 		case exprGoFloat:
 			res := exprGo{Src: "strconv.FormatFloat(" + arg.Src + ", 'g', -1, 64)", Type: exprGoString, Imports: []string{"strconv"}}
@@ -1509,6 +1659,8 @@ func exprCoerceFunc(f lib.TypedSchemaField) (string, bool) {
 		return "exprvm.MustCoerceInt64", true
 	case "ssql.Int128":
 		return "exprvm.MustCoerceInt128", true
+	case "ssql.Decimal":
+		return fmt.Sprintf("exprvm.MustCoerceDecimalAt(%d)", f.Scale), true
 	case "float64":
 		return "exprvm.MustCoerceFloat64", true
 	case "string":

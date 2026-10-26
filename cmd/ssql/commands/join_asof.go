@@ -226,6 +226,8 @@ func emitTypedAsofJoin(inputVar, funcName string, leftSchema, rightSchema *lib.T
 				return lib.TypeInt
 			case "ssql.Int128":
 				return lib.TypeInt128
+			case "ssql.Decimal":
+				return lib.WireDecimal(f.Scale)
 			case "float64":
 				return lib.TypeFloat
 			case "time.Time":

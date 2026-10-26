@@ -61,6 +61,9 @@ func (o TypeOptions) goTypeFor(column string) (string, bool) {
 	if !ok {
 		name = o.Default
 	}
+	if base, scale := ParseWireType(name); base == TypeDecimal && scale >= 0 {
+		return "ssql.Decimal", true // the scale: scaleFor (DFC155 E)
+	}
 	switch strings.ToLower(name) {
 	case "string":
 		return "string", true
@@ -81,6 +84,18 @@ func (o TypeOptions) goTypeFor(column string) (string, bool) {
 		return "string", true
 	}
 	return "", false
+}
+
+// scaleFor is the scale of a column overridden to decimal:S (0 otherwise).
+func (o TypeOptions) scaleFor(column string) int {
+	name, ok := o.Fields[column]
+	if !ok {
+		name = o.Default
+	}
+	if base, scale := ParseWireType(name); base == TypeDecimal && scale >= 0 {
+		return scale
+	}
+	return 0
 }
 
 // isJSON reports whether column is overridden to json.
@@ -207,9 +222,11 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune, o
 		}
 		goType := cols[i].resolve()
 		var isJSON bool
+		var scale int
 		if t, ok := opts.goTypeFor(name); ok {
 			goType = t
 			isJSON = t == "string" && opts.isJSON(name)
+			scale = opts.scaleFor(name)
 		}
 		if _, formatted := opts.Formats[name]; formatted {
 			goType = "time.Time" // a pattern declares the column a time
@@ -219,6 +236,7 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune, o
 			GoName: gn,
 			GoType: goType,
 			JSON:   isJSON,
+			Scale:  scale,
 		}
 	}
 
@@ -259,10 +277,21 @@ func RenderStructDefWithComment(s *TypedSchema, comment string) string {
 		// Both tags: `ssql` for the CSV/typed runtime, `json` so
 		// encoding/json (typed.ReadJSONL / WriteJSONL) maps the same
 		// column names — one struct serves every reader and writer.
-		fmt.Fprintf(&b, "\t%-*s %-*s `ssql:%q json:%q`\n", maxName, f.GoName, maxType, f.GoType, f.Name, f.Name)
+		fmt.Fprintf(&b, "\t%-*s %-*s %s\n", maxName, f.GoName, maxType, f.GoType, FieldTag(f))
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// FieldTag is a typed struct field's tag: `ssql` for the CSV/typed
+// runtime — with the decimal scale as an option, `ssql:"price,decimal:2"`
+// (DFC155 E) — and `json` so encoding/json maps the same column names.
+func FieldTag(f TypedSchemaField) string {
+	ssqlTag := f.Name
+	if strings.TrimPrefix(f.GoType, "*") == "ssql.Decimal" {
+		ssqlTag += "," + WireDecimal(f.Scale)
+	}
+	return fmt.Sprintf("`ssql:%q json:%q`", ssqlTag, f.Name)
 }
 
 // TypeNameFromFilename derives a Go type identifier from a CSV
@@ -426,7 +455,14 @@ func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, er
 	for i, name := range s.Fields {
 		var goType string
 		var isJSON bool
-		switch s.Types[name] {
+		var scale int
+		base, sc := ParseWireType(s.Types[name])
+		if base == TypeDecimal && sc >= 0 {
+			base, scale = TypeDecimal, sc
+		}
+		switch base {
+		case TypeDecimal:
+			goType = "ssql.Decimal" // DFC155 E: the scale rides on the field
 		case "int":
 			goType = "int64"
 		case "int128":
@@ -457,7 +493,7 @@ func TypedSchemaFromHeader(s *Schema, typeName string) (*TypedSchema, string, er
 		} else {
 			usedNames[gn] = 1
 		}
-		fields[i] = TypedSchemaField{Name: name, GoName: gn, GoType: goType, JSON: isJSON}
+		fields[i] = TypedSchemaField{Name: name, GoName: gn, GoType: goType, JSON: isJSON, Scale: scale}
 	}
 	schema := &TypedSchema{TypeName: typeName, Fields: fields}
 	return schema, RenderStructDef(schema), nil

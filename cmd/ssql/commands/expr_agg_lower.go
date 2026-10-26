@@ -43,8 +43,9 @@ type exprAggPlan struct {
 	Terms     []exprAggTerm
 	UsesCount bool
 	CountName string // shared counter field, e.g. "ea0_cnt"
-	Result     string     // outer Go expression over accumulators, in ResultType
-	ResultType exprGoType // int64 or float64: the result column's Go type
+	Result      string     // outer Go expression over accumulators, in ResultType
+	ResultType  exprGoType // int64, float64, ssql.Int128 or ssql.Decimal: the result column's Go type
+	ResultScale int        // a decimal result's scale (DFC155 E)
 	Imports    []string
 	Hoisted   []string
 }
@@ -97,7 +98,7 @@ func lowerExprAgg(spec exprSpec, schema *lib.TypedSchema, idx int) (exprAggPlan,
 					if accType.integer() {
 						accType = exprGoInt128 // an integer sum accumulates in an Int128 (DFC155 C)
 					}
-					vars[name] = exprGo{Src: "a." + goName, Type: accType}
+					vars[name] = exprGo{Src: "a." + goName, Type: accType, Scale: res.Scale}
 					bySrc[res.Src] = name
 					plan.Imports = append(plan.Imports, res.Imports...)
 					plan.Hoisted = append(plan.Hoisted, res.Hoisted...)
@@ -139,6 +140,7 @@ func lowerExprAgg(spec exprSpec, schema *lib.TypedSchema, idx int) (exprAggPlan,
 	}
 	plan.Result = outer.Src
 	plan.ResultType = outer.Type
+	plan.ResultScale = outer.Scale
 	plan.Imports = append(plan.Imports, outer.Imports...)
 	plan.Hoisted = append(plan.Hoisted, outer.Hoisted...)
 	return plan, nil

@@ -234,10 +234,11 @@ type TypedSchema struct {
 
 // TypedSchemaField is one column in a typed schema.
 type TypedSchemaField struct {
-	Name   string `json:"name"`           // CSV column name (e.g., "dept_id")
-	GoName string `json:"go_name"`        // Go field name (e.g., "DeptID")
-	GoType string `json:"go_type"`        // "string", "int64", "float64", "time.Time", "*int64", etc.
-	JSON   bool   `json:"json,omitempty"` // the wire type is `json`: the string field holds a nested value's text, re-wrapped as ssql.JSONString at the typed→Record boundary (DFC144 Level 0)
+	Name   string `json:"name"`            // CSV column name (e.g., "dept_id")
+	GoName string `json:"go_name"`         // Go field name (e.g., "DeptID")
+	GoType string `json:"go_type"`         // "string", "int64", "float64", "time.Time", "*int64", etc.
+	JSON   bool   `json:"json,omitempty"`  // the wire type is `json`: the string field holds a nested value's text, re-wrapped as ssql.JSONString at the typed→Record boundary (DFC144 Level 0)
+	Scale  int    `json:"scale,omitempty"` // an ssql.Decimal field's scale: the `decimal:S` wire type's S, rendered into the struct tag (DFC155 E)
 }
 
 // NewErrorFragment creates an error fragment that signals code generation failure

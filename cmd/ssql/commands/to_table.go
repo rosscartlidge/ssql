@@ -284,7 +284,7 @@ func isNumericOrBoolGoType(t string) bool {
 	switch t {
 	case "int", "int8", "int16", "int32", "int64",
 		"uint", "uint8", "uint16", "uint32", "uint64",
-		"float32", "float64", "ssql.Int128",
+		"float32", "float64", "ssql.Int128", "ssql.Decimal",
 		"bool":
 		return true
 	}

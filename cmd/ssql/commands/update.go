@@ -840,6 +840,8 @@ func generateUpdateCode(ctx *cf.Context, planNotes ...string) error {
 				// below would store its digits as text.
 				stmtBuilder.WriteString(indent + "\t\tcase ssql.Int128:\n")
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Int128(%q, v)\n", indent, upd.field))
+				stmtBuilder.WriteString(indent + "\t\tcase ssql.Decimal:\n")
+				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Decimal(%q, v)\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t\tcase float64:\n")
 				stmtBuilder.WriteString(fmt.Sprintf("%s\t\t\tmut = mut.Float(%q, v)\n", indent, upd.field))
 				stmtBuilder.WriteString(indent + "\t\tcase bool:\n")

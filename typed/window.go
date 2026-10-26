@@ -70,8 +70,9 @@ type WindowSpec[T any] struct {
 	N       int // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
 	Default any // LAG/LEAD default (nil = absent)
 	Num     func(T) (float64, bool)
-	Int     func(T) (int64, bool)       // set for an int64 field: the sum is exact, an Int128 (DFC155 C); avg divides the exact sum
-	Wide    func(T) (ssql.Int128, bool) // set for an int128 field, the same way
+	Int     func(T) (int64, bool)        // set for an int64 field: the sum is exact, an Int128 (DFC155 C); avg divides the exact sum
+	Wide    func(T) (ssql.Int128, bool)  // set for an int128 field, the same way
+	Dec     func(T) (ssql.Decimal, bool) // set for a decimal field: the sum is a decimal at its scale (DFC155 E)
 	Val     func(T) (any, bool)
 
 	Init  func() any
@@ -271,6 +272,19 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 		v, _ := spec.Val(all[idx[i]])
 		return v
 	case WSum:
+		if spec.Dec != nil {
+			sum, have := ssql.Decimal{}, false
+			for i := fs(); i <= fe(); i++ {
+				if v, ok := spec.Dec(all[idx[i]]); ok {
+					if !have {
+						sum, have = v, true
+					} else {
+						sum = sum.Add(v)
+					}
+				}
+			}
+			return sum
+		}
 		if spec.Int != nil || spec.Wide != nil {
 			var sum ssql.Int128
 			for i := fs(); i <= fe(); i++ {
@@ -289,6 +303,19 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 		return sum.Value()
 	case WAvg:
 		cnt := 0
+		if spec.Dec != nil {
+			var sum ssql.Decimal
+			for i := fs(); i <= fe(); i++ {
+				if v, ok := spec.Dec(all[idx[i]]); ok {
+					sum = sum.Add(v)
+					cnt++
+				}
+			}
+			if cnt == 0 {
+				return nil
+			}
+			return sum.Float64() / float64(cnt)
+		}
 		if spec.Int != nil || spec.Wide != nil {
 			var sum ssql.Int128
 			for i := fs(); i <= fe(); i++ {

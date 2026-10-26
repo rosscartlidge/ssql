@@ -812,6 +812,8 @@ func advisoryToSchemaType(goType string) string {
 		return lib.TypeInt
 	case "ssql.Int128":
 		return lib.TypeInt128
+	case "ssql.Decimal":
+		return lib.WireDecimal(0) // an advisory type has no scale; the asof check only asks the kind, and refuses a decimal axis
 	case "float64":
 		return lib.TypeFloat
 	case "time.Time":
@@ -904,7 +906,9 @@ func emitTypedJoin(
 	keyType := leftKeyField.GoType
 	leftKeyExpr, rightKeyExpr := "l."+leftKeyField.GoName, "r."+rightKeyField.GoName
 	if leftKeyField.GoType != rightKeyField.GoType {
-		numeric := func(t string) bool { return t == "int64" || t == "float64" || t == "ssql.Int128" }
+		numeric := func(t string) bool {
+			return t == "int64" || t == "float64" || t == "ssql.Int128" || t == "ssql.Decimal"
+		}
 		if !numeric(leftKeyField.GoType) || !numeric(rightKeyField.GoType) {
 			return lib.WriteErrorAndExit(getCommandString(),
 				fmt.Errorf("ssql generate go -typed: join key types differ (left %s: %s, right %s: %s)", leftKeyField.Name, leftKeyField.GoType, rightKeyField.Name, rightKeyField.GoType))
@@ -915,12 +919,26 @@ func emitTypedJoin(
 				switch t {
 				case "float64":
 					return src
-				case "ssql.Int128":
+				case "ssql.Int128", "ssql.Decimal":
 					return src + ".Float64()"
 				}
 				return "float64(" + src + ")"
 			}
 			leftKeyExpr, rightKeyExpr = toFloat(leftKeyField.GoType, leftKeyExpr), toFloat(rightKeyField.GoType, rightKeyExpr)
+		} else if leftKeyField.GoType == "ssql.Decimal" || rightKeyField.GoType == "ssql.Decimal" {
+			// A decimal beside an exact key: both as normalized decimals,
+			// so 5, 5.00 and 5.000 are one key (DFC155 E).
+			keyType = "ssql.Decimal"
+			toDec := func(t, src string) string {
+				switch t {
+				case "ssql.Decimal":
+					return src + ".Normalized()"
+				case "ssql.Int128":
+					return "ssql.MustDecimalFromInt128(" + src + ", 0)"
+				}
+				return "ssql.DecimalFromInt64(" + src + ", 0)"
+			}
+			leftKeyExpr, rightKeyExpr = toDec(leftKeyField.GoType, leftKeyExpr), toDec(rightKeyField.GoType, rightKeyExpr)
 		} else {
 			// int64 beside int128: the key is an Int128, exactly (DFC155 C).
 			keyType = "ssql.Int128"
