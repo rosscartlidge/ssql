@@ -289,6 +289,66 @@ overflowed. Int64 beside Int128 widens to Int128; Int128 beside a float64
 widens to float64 (`Float64()`). See
 [DFC155](research/dfc155_big_numbers.md).
 
+### Decimal
+
+```go
+type Decimal struct{ /* units Int128; scale uint8 */ }   // fixed-point units × 10^-scale, the `decimal:S` column (DECIMAL(38,S)); comparable, no allocation; zero is 0 at scale 0 (DFC155 E)
+const MaxDecimalScale = 38                               // the precision: 38 digits, scale 0..38
+
+func NewDecimal(units Int128, scale int) (Decimal, error)      // |units| < 10^38, scale 0..38
+func MustNewDecimal(units Int128, scale int) Decimal           // for generated code; panics otherwise
+func DecimalFromInt64(v int64, scale int) Decimal              // v exactly at the scale (5 at 2 is 5.00); panics only past 38 digits
+func DecimalFromInt128(w Int128, scale int) (Decimal, error)
+func MustDecimalFromInt128(w Int128, scale int) Decimal
+func DecimalFromFloat(f float64, scale int) (Decimal, bool)    // from the float's shortest decimal form, half away from zero (1.005 → 1.01); false for NaN/Inf or past 38 digits
+func MustDecimalFromFloat(f float64, scale int) Decimal
+func ParseDecimal(s string) (Decimal, error)                   // [-]digits[.digits][e±n]; the scale is the text's; *strconv.NumError (ErrSyntax/ErrRange)
+func ParseDecimalScale(s string, scale int) (Decimal, error)   // ParseDecimal brought to the scale, rounding ("12.345" at 2 is 12.35)
+func MustParseDecimal(s string) Decimal                        // for a validated literal (generated code)
+func MustParseDecimalScale(s string, scale int) Decimal
+func DecimalMin(a, b Decimal) Decimal
+func DecimalMax(a, b Decimal) Decimal
+
+func (d Decimal) Units() Int128
+func (d Decimal) Scale() int
+func (d Decimal) IsZero() bool
+func (d Decimal) Sign() int
+func (d Decimal) Cmp(o Decimal) int                 // exact across scales (1.25 and 1.250 are equal)
+func (d Decimal) Rescale(scale int) (Decimal, error) // up exact; down rounds half away from zero (0.125 → 0.13, −2.5 → −3)
+func (d Decimal) MustRescale(scale int) Decimal
+func (d Decimal) Round(n int) (Decimal, error)       // at scale n, half away from zero
+func (d Decimal) Floor() (Decimal, error)            // at scale 0
+func (d Decimal) Ceil() (Decimal, error)             // at scale 0
+func (d Decimal) Trunc() Int128                      // the integer part toward zero (int()'s rule)
+func (d Decimal) Int64() (int64, bool)               // when whole and it fits
+func (d Decimal) Float64() float64                   // the nearest float64 (correctly rounded)
+func (d Decimal) String() string                     // "12.34", "-0.05", "0.10": the scale's digits after the point
+func (d Decimal) Normalized() Decimal                // trailing zeros of the fraction dropped (5.00 → 5): the hash-key form
+
+// Checked arithmetic: the exact result, or a *DecimalOverflowError naming the operands
+// (past 38 digits, or a product whose scale passes 38). `+ - %` align to the larger
+// scale; `*` adds the scales. Neg and Abs cannot overflow.
+func (d Decimal) CheckedAdd(o Decimal) (Decimal, error)
+func (d Decimal) CheckedSub(o Decimal) (Decimal, error)
+func (d Decimal) CheckedMul(o Decimal) (Decimal, error)
+func (d Decimal) CheckedRem(o Decimal) (Decimal, error)   // the sign of d; a zero divisor is an error
+func (d Decimal) Add(o Decimal) Decimal                   // the panicking forms, for generated code
+func (d Decimal) Sub(o Decimal) Decimal
+func (d Decimal) Mul(o Decimal) Decimal
+func (d Decimal) Rem(o Decimal) Decimal
+func (d Decimal) Neg() Decimal
+func (d Decimal) Abs() Decimal
+
+func (d Decimal) MarshalJSON() ([]byte, error)      // the bare number with the scale's digits (0.10), as DuckDB writes a DECIMAL
+func (d *Decimal) UnmarshalJSON(b []byte) error     // a bare number or the quoted form (`duckdb -json`)
+func (d Decimal) MarshalText() ([]byte, error)
+func (d *Decimal) UnmarshalText(b []byte) error
+
+type DecimalOverflowError struct{ Op string; A, B Decimal; Scale int }   // "decimal overflow: A op B does not fit DECIMAL(38,s)"
+func (e *DecimalOverflowError) Error() string
+```
+
+
 ### JSONString
 
 A string that holds valid JSON, for structured data embedded in a Record.
