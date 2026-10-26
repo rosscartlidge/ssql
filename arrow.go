@@ -161,11 +161,16 @@ func arrowValueToGo(arr arrow.Array, idx int) any {
 			return int64(v)
 		}
 	case *array.Decimal128:
-		// A DECIMAL with no fraction is an int128; one with a scale stays
-		// its text (E will give it a type).
-		if a.DataType().(*arrow.Decimal128Type).Scale == 0 {
-			n := a.Value(idx)
+		// A DECIMAL with no fraction is an int128 (DFC155 C); one with a
+		// scale is a decimal of that scale (E). A precision past 38 (none
+		// a Decimal128 holds) would stay its text.
+		n := a.Value(idx)
+		scale := int(a.DataType().(*arrow.Decimal128Type).Scale)
+		if scale == 0 {
 			return Int128FromWords(n.HighBits(), n.LowBits())
+		}
+		if d, err := NewDecimal(Int128FromWords(n.HighBits(), n.LowBits()), scale); err == nil {
+			return d
 		}
 		return a.ValueStr(idx)
 	case *array.Float32:
@@ -342,7 +347,18 @@ const (
 	arrowKindBool
 	arrowKindTime
 	arrowKindString
+
+	// arrowKindDecimal is the flag bit of a decimal column's kind, the
+	// scale in the low bits (arrowDecimalKind, scale): Decimal128(38,S)
+	// (DFC155 E). Never a case label; test isDecimal first.
+	arrowKindDecimal arrowColumnKind = 1 << 8
 )
+
+func arrowDecimalKind(scale int) arrowColumnKind {
+	return arrowKindDecimal | arrowColumnKind(scale&0xff)
+}
+func (k arrowColumnKind) isDecimal() bool { return k&arrowKindDecimal != 0 }
+func (k arrowColumnKind) scale() int      { return int(k &^ arrowKindDecimal) }
 
 // arrowTimestampType is how a time is written: microseconds, adjusted
 // to UTC — the same type typed.WriteParquet writes, so the record and
@@ -367,14 +383,44 @@ func decimal128Of(v Int128) decimal128.Num {
 	return decimal128.New(hi, lo)
 }
 
+// decimal128At is a value as the units of an Arrow Decimal128(38,scale):
+// a Decimal brought to the scale (rounding half away from zero), an
+// integer of either width exactly; a value past 38 digits at the scale
+// panics naming it (DFC155 E).
+func decimal128At(v any, scale int) (decimal128.Num, bool) {
+	var d Decimal
+	var err error
+	switch x := v.(type) {
+	case Decimal:
+		d, err = x.Rescale(scale)
+	case Int128:
+		d, err = DecimalFromInt128(x, scale)
+	case int64:
+		d, err = DecimalFromInt128(Int128From(x), scale)
+	case int:
+		d, err = DecimalFromInt128(Int128From(int64(x)), scale)
+	case int32:
+		d, err = DecimalFromInt128(Int128From(int64(x)), scale)
+	default:
+		return decimal128.Num{}, false
+	}
+	if err != nil {
+		panic(fmt.Errorf("%v does not fit DECIMAL(38,%d), the Parquet/Arrow form of the column (cast the column to string, or to float, before writing)", v, scale))
+	}
+	hi, lo := d.Units().Words()
+	return decimal128.New(hi, lo), true
+}
+
 func arrowKindOf(v any) arrowColumnKind {
-	switch v.(type) {
+	switch x := v.(type) {
 	case nil:
 		return arrowKindNull
 	case int64, int, int32:
 		return arrowKindInt
 	case Int128:
 		return arrowKindInt128
+	case Decimal:
+		return arrowDecimalKind(x.Scale())
 	case float64, float32:
 		return arrowKindFloat
 	case bool:
@@ -387,6 +433,9 @@ func arrowKindOf(v any) arrowColumnKind {
 }
 
 func arrowKindForWireType(t string) arrowColumnKind {
+	if base, scale := ParseWireType(t); base == "decimal" && scale >= 0 {
+		return arrowDecimalKind(scale)
+	}
 	switch t {
 	case "":
 		return arrowKindNull
@@ -411,6 +460,20 @@ func widenArrowKind(a, b arrowColumnKind) arrowColumnKind {
 		return a
 	case a == arrowKindNull:
 		return b
+	case a.isDecimal() || b.isDecimal():
+		// A decimal beside a decimal: the larger scale; beside an integer
+		// of either width: the decimal; beside a float: a float (DFC155 E).
+		switch {
+		case a.isDecimal() && b.isDecimal():
+			return arrowDecimalKind(max(a.scale(), b.scale()))
+		case a.isDecimal() && (b == arrowKindInt || b == arrowKindInt128):
+			return a
+		case b.isDecimal() && (a == arrowKindInt || a == arrowKindInt128):
+			return b
+		case a == arrowKindFloat || b == arrowKindFloat:
+			return arrowKindFloat
+		}
+		return arrowKindString
 	case (a == arrowKindInt && b == arrowKindInt128) || (a == arrowKindInt128 && b == arrowKindInt):
 		return arrowKindInt128 // int beside int128 is int128
 	case (a == arrowKindInt || a == arrowKindInt128) && b == arrowKindFloat, a == arrowKindFloat && (b == arrowKindInt || b == arrowKindInt128):
@@ -421,6 +484,9 @@ func widenArrowKind(a, b arrowColumnKind) arrowColumnKind {
 }
 
 func (k arrowColumnKind) arrowType() arrow.DataType {
+	if k.isDecimal() {
+		return &arrow.Decimal128Type{Precision: 38, Scale: int32(k.scale())}
+	}
 	switch k {
 	case arrowKindInt:
 		return arrow.PrimitiveTypes.Int64
@@ -515,9 +581,20 @@ func appendValueToBuilder(builder array.Builder, val any) {
 			b.AppendNull()
 		}
 	case *array.Decimal128Builder:
+		if scale := int(b.Type().(*arrow.Decimal128Type).Scale); scale > 0 {
+			// A decimal column: every value at the column's scale (DFC155 E).
+			if n, ok := decimal128At(val, scale); ok {
+				b.Append(n)
+			} else {
+				b.AppendNull()
+			}
+			break
+		}
 		switch v := val.(type) {
 		case Int128:
 			b.Append(decimal128Of(v))
+		case Decimal:
+			b.Append(decimal128Of(v.MustRescale(0).Units())) // a decimal into an int128 column: whole, half away from zero
 		case int64:
 			b.Append(decimal128.FromI64(v))
 		case int:

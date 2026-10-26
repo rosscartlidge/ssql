@@ -142,10 +142,15 @@ func readParquetTypedSchema(filename string, columns []string) (*lib.TypedSchema
 		if err != nil {
 			return nil, fmt.Errorf("column %q: %w", af.Name, err)
 		}
+		scale := 0
+		if dt, ok := af.Type.(*arrow.Decimal128Type); ok && gt == "ssql.Decimal" {
+			scale = int(dt.Scale)
+		}
 		fields = append(fields, lib.TypedSchemaField{
 			Name:   af.Name,
 			GoName: gn,
 			GoType: gt,
+			Scale:  scale,
 		})
 	}
 
@@ -190,6 +195,7 @@ func arrowToGoTypeName(t arrow.DataType) (string, error) {
 		if t.(*arrow.Decimal128Type).Scale == 0 {
 			return "ssql.Int128", nil // DECIMAL(p,0): the int128 column (DFC155 C)
 		}
+		return "ssql.Decimal", nil // DECIMAL(p,s): the decimal column, its scale on the field (DFC155 E)
 	}
 	return "", fmt.Errorf("unsupported Arrow column type %v", t)
 }

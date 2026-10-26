@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,6 +115,27 @@ func TestDecimalExec(t *testing.T) {
 		out, err := shell(bin + " from csv " + huge + " -type amt decimal:0 | " + bin + " group-by -sum amt t")
 		if err == nil || !strings.Contains(out, "decimal overflow") || !strings.Contains(out, "does not fit DECIMAL(38,0)") {
 			t.Errorf("want the decimal overflow error, got err=%v\n%s", err, out)
+		}
+	})
+	t.Run("parquet_decimal128_round_trip", func(t *testing.T) {
+		// A decimal column is DECIMAL(38,S) in Parquet: ssql reads its own
+		// file back at the scale, the typed lane too, and DuckDB reads the
+		// same digits (a DECIMAL, quoted in -json).
+		pq := filepath.Join(dir, "money.parquet")
+		run(t, bin+" from csv "+money+" -type amt decimal:2 | "+bin+" to parquet "+pq)
+		out := run(t, bin+" from parquet "+pq+" | "+bin+" group-by k -sum amt t | "+bin+" sort k")
+		want(t, out, `"t":"decimal:2"`, `{"k":"a","t":-4.41}`, `{"k":"b","t":12.78}`)
+		src := run(t, "export SSQL_MODE=typed && "+bin+" from parquet "+pq+" | "+bin+" group-by k -sum amt t | "+bin+" sort k | "+bin+" to jsonl | "+bin+" generate go")
+		tout, err := goRunGeneratedModuleEnv(t, "decimalpq", map[string]string{"main.go": src}, nil)
+		if err != nil {
+			t.Fatalf("typed: %v\n%s", err, tout)
+		}
+		want(t, tout, `{"k":"a","t":-4.41}`, `{"k":"b","t":12.78}`)
+		if duckdb := duckdbBinary(); duckdb != "" {
+			dout, derr := exec.Command(duckdb, "-json", "-c", "SELECT typeof(amt) ty, sum(amt) t FROM '"+pq+"' GROUP BY ty").CombinedOutput()
+			if derr != nil || !strings.Contains(string(dout), "DECIMAL(38,2)") || !strings.Contains(string(dout), `"8.37"`) {
+				t.Errorf("duckdb: %v\n%s", derr, dout)
+			}
 		}
 	})
 	t.Run("describe_names_the_type", func(t *testing.T) {

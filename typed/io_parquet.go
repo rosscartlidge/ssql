@@ -300,6 +300,13 @@ func buildParquetReadPlan[T any](sch *arrow.Schema, o parquetOpts) (*parquetRead
 		if err != nil {
 			return nil, fmt.Errorf("typed.ReadParquet: field %q: %w", name, err)
 		}
+		if f.Type == decimalType {
+			scale, err := decimalFieldScale(f)
+			if err != nil {
+				return nil, err
+			}
+			dfn = decodeParquetDecimal(int(sch.Field(idx).Type.(*arrow.Decimal128Type).Scale), scale)
+		}
 		pendings = append(pendings, pending{
 			fieldName: name,
 			colIdx:    idx,
@@ -396,8 +403,14 @@ func parquetDecoderFor(arrowT arrow.DataType, structT reflect.Type) (parquetDeco
 		}
 		return decodeParquetTime, nil
 	case arrow.DECIMAL128:
-		if arrowT.(*arrow.Decimal128Type).Scale != 0 || structT != int128Type {
-			return nil, fmt.Errorf("Parquet column is %v, struct field is %v (a DECIMAL(p,0) column is an ssql.Int128)", arrowT, structT)
+		fileScale := int(arrowT.(*arrow.Decimal128Type).Scale)
+		if structT == decimalType {
+			// At the file's scale; the reader replaces this with the tag's
+			// scale (decodeParquetDecimal) once it has the field.
+			return decodeParquetDecimal(fileScale, fileScale), nil
+		}
+		if fileScale != 0 || structT != int128Type {
+			return nil, fmt.Errorf("Parquet column is %v, struct field is %v (a DECIMAL(p,0) column is an ssql.Int128, a DECIMAL(p,s) an ssql.Decimal)", arrowT, structT)
 		}
 		return decodeParquetInt128, nil
 	default:
@@ -406,6 +419,17 @@ func parquetDecoderFor(arrowT arrow.DataType, structT reflect.Type) (parquetDeco
 }
 
 var decimal38Max, decimal38Min = ssql.MustParseInt128("99999999999999999999999999999999999999"), ssql.MustParseInt128("-99999999999999999999999999999999999999")
+
+// decodeParquetDecimal reads a DECIMAL(p,fileScale) value into an
+// ssql.Decimal field at the tag's scale, rounding half away from zero
+// when the file holds more places (DFC155 E).
+func decodeParquetDecimal(fileScale, tagScale int) parquetDecodeFn {
+	return func(p unsafe.Pointer, arr arrow.Array, idx int) {
+		n := arr.(*array.Decimal128).Value(idx)
+		d := ssql.MustNewDecimal(ssql.Int128FromWords(n.HighBits(), n.LowBits()), fileScale)
+		*(*ssql.Decimal)(p) = d.MustRescale(tagScale)
+	}
+}
 
 // decodeParquetInt128 reads a DECIMAL(p,0) value into an ssql.Int128
 // field (DFC155 C).
@@ -870,7 +894,18 @@ func buildParquetWriteSchema[T any]() (*parquetWritePlan, error) {
 		if skip {
 			continue
 		}
-		ft, enc, err := parquetEncoderFor(f.Type)
+		var ft arrow.DataType
+		var enc func(unsafe.Pointer, array.Builder)
+		var err error
+		if f.Type == decimalType {
+			scale, serr := decimalFieldScale(f)
+			if serr != nil {
+				return nil, serr
+			}
+			ft, enc = parquetDecimalEncoder(scale)
+		} else {
+			ft, enc, err = parquetEncoderFor(f.Type)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("typed.WriteParquet: field %q: %w", name, err)
 		}
@@ -881,6 +916,17 @@ func buildParquetWriteSchema[T any]() (*parquetWritePlan, error) {
 		schema:   arrow.NewSchema(fields, nil),
 		encoders: encoders,
 	}, nil
+}
+
+// parquetDecimalEncoder is the encoder of an ssql.Decimal field at its
+// tag's scale: DECIMAL(38,scale) (DFC155 E); a value of another scale
+// is brought to it, rounding half away from zero.
+func parquetDecimalEncoder(scale int) (arrow.DataType, func(unsafe.Pointer, array.Builder)) {
+	return &arrow.Decimal128Type{Precision: 38, Scale: int32(scale)}, func(p unsafe.Pointer, b array.Builder) {
+		d := (*(*ssql.Decimal)(p)).MustRescale(scale)
+		hi, lo := d.Units().Words()
+		b.(*array.Decimal128Builder).Append(decimal128.New(hi, lo))
+	}
 }
 
 // parquetEncoderFor returns (Arrow type, encoder closure) for a Go
