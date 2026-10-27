@@ -70,6 +70,14 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 		Global().
 		Help("Don't preserve file order in pushdown (faster, lower memory)").
 		Done().
+		Flag("-columns", "-c").
+		Arg("column").
+		FieldsFromFlag("FILE").
+		Done().
+		Accumulate().
+		Global().
+		Help("Column to read (repeat for multiple), in the order given. Omit for all columns. The typed program decodes only these; the optimiser adds it for you.").
+		Done().
 		Flag("-type", "-t").
 		Arg("field").
 		Completer(cf.NoCompleter{Hint: "<field-name>"}).
@@ -150,6 +158,18 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 				return err
 			}
 			typeOverrides = applyTimeFormats(typeOverrides, formats)
+			columns := flagStringList(ctx.GlobalFlags["-columns"])
+			if len(columns) > 0 {
+				if dup := firstRepeated(columns); dup != "" {
+					return fmt.Errorf("from csv: -columns lists %q twice", dup)
+				}
+				if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
+					return fmt.Errorf("from csv -records does not take -columns (the count is the same)")
+				}
+				if len(ctx.RemainingArgs) > 0 {
+					return fmt.Errorf("from csv -columns cannot combine with pushdown (--) — include the columns in the pushed-down stages instead")
+				}
+			}
 
 			var unordered bool
 			if uVal, ok := ctx.GlobalFlags["-unordered"]; ok {
@@ -175,7 +195,7 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 				if len(ctx.RemainingArgs) > 0 {
 					return fmt.Errorf("from csv -sample cannot combine with pushdown (--) — sample in the pushed-down stages instead")
 				}
-				return executeFromCSVSample(files[0], typeOverrides, defaultType,
+				return executeFromCSVSample(files[0], typeOverrides, defaultType, columns,
 					sampleN, int64(sampleSeed), flagWasProvided(ctx, "-sample-seed"), generate)
 			}
 			lastN, _ := ctx.GlobalFlags["-last"].(int)
@@ -189,7 +209,7 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 				if len(ctx.RemainingArgs) > 0 {
 					return fmt.Errorf("from csv -last cannot combine with pushdown (--)")
 				}
-				return executeFromCSVLast(files[0], typeOverrides, defaultType, lastN, generate)
+				return executeFromCSVLast(files[0], typeOverrides, defaultType, columns, lastN, generate)
 			}
 			if lastN < 0 {
 				return fmt.Errorf("from csv -last must be positive, got %d", lastN)
@@ -212,16 +232,16 @@ func registerFromCSV(cmd *cf.SubcommandBuilder) {
 				if len(files) == 1 {
 					inputFile = files[0]
 				}
-				return executeFromCSV(inputFile, typeOverrides, defaultType, generate)
+				return executeFromCSV(inputFile, typeOverrides, defaultType, columns, generate)
 			}
 
-			return executeFromMultiCSV(files, typeOverrides, defaultType, mergeSchemas, sourceField, generate)
+			return executeFromMultiCSV(files, typeOverrides, defaultType, columns, mergeSchemas, sourceField, generate)
 		}).
 		Done()
 }
 
 // executeFromCSV handles CSV reading for both the subcommand and bare form.
-func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultType string, generate bool) (err error) {
+func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultType string, columns []string, generate bool) (err error) {
 	defer recoverCellError(&err)
 	// SSQL_MODE=schema: emit just the header as a schema, no data. Covers
 	// both `from csv FILE` and the bare `from FILE` form (both route
@@ -244,11 +264,14 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 		if err := checkTypeOverrideColumns(headers, typeOverrides, "from csv"); err != nil {
 			return err
 		}
-		return writeSchemaModeDelimited(os.Stdout, headers, typeOverrides, ssql.ReadCSVFromReader(in, csvConfig))
+		if err := checkSourceColumns(headers, columns, "from csv"); err != nil {
+			return err
+		}
+		return writeSchemaModeDelimited(os.Stdout, sourceColumnsOrder(headers, columns), typeOverrides, projectSourceColumns(ssql.ReadCSVFromReader(in, csvConfig), columns))
 	}
 
 	if shouldGenerate(generate) {
-		return generateFromCSVCode(inputFile, typeOverrides, defaultType)
+		return generateFromCSVCode(inputFile, typeOverrides, defaultType, columns)
 	}
 
 	csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
@@ -283,8 +306,7 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 	if err := checkTypeOverrideColumns(csvHeaders, typeOverrides, "from csv"); err != nil {
 		return err
 	}
-	records = wrapWithFieldCaching(records, inputFile)
-	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: csvHeaders})
+	return writeDelimitedSource(records, csvHeaders, columns, inputFile, "from csv")
 }
 
 // executeFromCSVSample is the -sample path: byte-offset sampling via
@@ -292,7 +314,7 @@ func executeFromCSV(inputFile string, typeOverrides map[string]string, defaultTy
 // read — 14ms vs 21s for 1000 rows of a 1.2GB file). Schema mode
 // needs no special case: sampling doesn't change the header, and the
 // schemaMode() branch above runs before we get here.
-func executeFromCSVSample(inputFile string, typeOverrides map[string]string, defaultType string, n int, seed int64, seedGiven bool, generate bool) (err error) {
+func executeFromCSVSample(inputFile string, typeOverrides map[string]string, defaultType string, columns []string, n int, seed int64, seedGiven bool, generate bool) (err error) {
 	defer recoverCellError(&err)
 	csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
 	if err != nil {
@@ -300,8 +322,11 @@ func executeFromCSVSample(inputFile string, typeOverrides map[string]string, def
 	}
 	resolvedSeed := resolveSampleSeed(seed, seedGiven, "-sample-seed")
 	if shouldGenerate(generate) {
+		if err := checkSourceColumnsForCodegen(inputFile, "csv", columns, "from csv"); err != nil {
+			return err
+		}
 		return generateFromFileSampleCode("ssql.SampleCSVFile", "input CSV file", inputFile, n, resolvedSeed,
-			sourceCodegenExtras{configCode: generateCSVConfigCode(typeOverrides, defaultType)})
+			sourceCodegenExtras{configCode: generateCSVConfigCode(typeOverrides, defaultType), postCode: projectSourceColumnsCode(columns)})
 	}
 	records, err := ssql.SampleCSVFile(inputFile, n, resolvedSeed, csvConfig)
 	if err != nil {
@@ -315,8 +340,7 @@ func executeFromCSVSample(inputFile string, typeOverrides map[string]string, def
 		csvHeaders, _ = readCSVHeadersFromReader(f)
 		f.Close()
 	}
-	records = wrapWithFieldCaching(records, inputFile)
-	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: csvHeaders})
+	return writeDelimitedSource(records, csvHeaders, columns, inputFile, "from csv")
 }
 
 // sourceCodegenExtras carries a source stage's `-type` handling into
@@ -401,7 +425,7 @@ func coerceFieldTypesCode(typeOverrides map[string]string) string {
 }
 
 // executeFromMultiCSV reads multiple CSV files and outputs merged JSONL.
-func executeFromMultiCSV(files []string, typeOverrides map[string]string, defaultType string, mergeSchemas bool, sourceField string, generate bool) error {
+func executeFromMultiCSV(files []string, typeOverrides map[string]string, defaultType string, columns []string, mergeSchemas bool, sourceField string, generate bool) error {
 	csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
 	if err != nil {
 		return err
@@ -412,6 +436,7 @@ func executeFromMultiCSV(files []string, typeOverrides map[string]string, defaul
 		mergeSchemas: mergeSchemas,
 		sourceField:  sourceField,
 		generate:     generate,
+		columns:      columns,
 	}
 
 	readFile := func(file *os.File) iter.Seq[ssql.Record] {
@@ -474,9 +499,14 @@ func mergeCSVHeaders(allHeaders [][]string, files []string, merge bool) ([]strin
 }
 
 // generateFromCSVCode generates Go code for reading CSV.
-func generateFromCSVCode(filename string, typeOverrides map[string]string, defaultType string) error {
+func generateFromCSVCode(filename string, typeOverrides map[string]string, defaultType string, columns []string) error {
 	if typedMode() {
-		return generateFromCSVCodeTyped(filename, typeOverrides, defaultType)
+		return generateFromCSVCodeTyped(filename, typeOverrides, defaultType, columns)
+	}
+	if filename != "" {
+		if err := checkSourceColumnsForCodegen(filename, "csv", columns, "from csv"); err != nil {
+			return err
+		}
 	}
 
 	var code string
@@ -510,6 +540,9 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 		}
 		imports = []string{"fmt", "os"}
 	}
+	if len(columns) > 0 {
+		code += "\n\t" + projectSourceColumnsCode(columns) // -columns: the named columns, in the order named
+	}
 
 	frag := fromInitFragment("records", code, imports)
 	frag.Params = params
@@ -519,7 +552,7 @@ func generateFromCSVCode(filename string, typeOverrides map[string]string, defau
 	// Failure to sample is not an error — downstream just uses the VM.
 	if filename != "" && len(typeOverrides) == 0 && (defaultType == "" || defaultType == "auto") {
 		if schema, _, err := lib.SampleCSVSchema(filename, "", 0); err == nil {
-			frag.AdvisoryTypes = advisoryFromSchema(schema)
+			frag.AdvisoryTypes = keepColumns(advisoryFromSchema(schema), columns)
 		}
 	}
 	return lib.WriteCodeFragment(frag)
@@ -543,7 +576,7 @@ func advisoryFromSchema(schema *lib.TypedSchema) map[string]string {
 // Samples the CSV header + 1000 rows to infer per-column Go types,
 // emits the corresponding struct definition, and produces a
 // typed.ReadCSV[GeneratedType] call.
-func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, defaultType string) error {
+func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, defaultType string, columns []string) error {
 	if filename == "" {
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: 'from' from stdin not supported in typed mode (need a file to sample for schema inference)"))
@@ -551,7 +584,13 @@ func generateFromCSVCodeTyped(filename string, typeOverrides map[string]string, 
 	// `-type COL TYPE` / `-default-type` fix a column's Go type; the
 	// sample decides the rest. (Typed codegen refused overrides until
 	// v4.91.0 — the remedy the exec error names had no typed form.)
-	schema, structDef, err := lib.SampleCSVSchema(filename, "", 0, typeOptionsFrom(typeOverrides, defaultType))
+	// -columns: the struct holds only those columns, in that order, so
+	// the reader decodes and clones only those (DFC158 §4: the full
+	// seven-column struct of a 14.6 M-row file read in 1.05 s, the one
+	// column the pipeline used in 0.39 s).
+	opts := typeOptionsFrom(typeOverrides, defaultType)
+	opts.Columns = columns
+	schema, structDef, err := lib.SampleCSVSchema(filename, "", 0, opts)
 	if err != nil {
 		return lib.WriteErrorAndExit(getCommandString(),
 			fmt.Errorf("ssql generate go -typed: %w", err))
@@ -726,18 +765,21 @@ func readCSVHeadersFromReader(r io.Reader) ([]string, error) {
 // executeFromCSVLast: `from csv FILE -last N` — the seek-based tail
 // (ssql.TailCSVFile). Same result as `| limit -last N`; O(N) instead of
 // a full read. Schema mode and codegen follow -sample's shape.
-func executeFromCSVLast(inputFile string, typeOverrides map[string]string, defaultType string, n int, generate bool) (err error) {
+func executeFromCSVLast(inputFile string, typeOverrides map[string]string, defaultType string, columns []string, n int, generate bool) (err error) {
 	defer recoverCellError(&err)
 	if schemaMode() {
-		return executeFromCSV(inputFile, typeOverrides, defaultType, generate)
+		return executeFromCSV(inputFile, typeOverrides, defaultType, columns, generate)
 	}
 	csvConfig, err := buildCSVConfig(typeOverrides, defaultType)
 	if err != nil {
 		return err
 	}
 	if shouldGenerate(generate) {
+		if err := checkSourceColumnsForCodegen(inputFile, "csv", columns, "from csv"); err != nil {
+			return err
+		}
 		return generateFromFileLastCode("ssql.TailCSVFile", "input CSV file", inputFile, n,
-			sourceCodegenExtras{configCode: generateCSVConfigCode(typeOverrides, defaultType)})
+			sourceCodegenExtras{configCode: generateCSVConfigCode(typeOverrides, defaultType), postCode: projectSourceColumnsCode(columns)})
 	}
 	records, err := ssql.TailCSVFile(inputFile, n, csvConfig)
 	if err != nil {
@@ -748,8 +790,7 @@ func executeFromCSVLast(inputFile string, typeOverrides map[string]string, defau
 		csvHeaders, _ = readCSVHeadersFromReader(f)
 		f.Close()
 	}
-	records = wrapWithFieldCaching(records, inputFile)
-	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: csvHeaders})
+	return writeDelimitedSource(records, csvHeaders, columns, inputFile, "from csv")
 }
 
 // generateFromFileLastCode emits the record-mode init fragment for a

@@ -713,8 +713,13 @@ func translateFrom(q *sqlQuery, args []string) error {
 	// probability-proportional-to-storage; a given seed is refused like
 	// the sample stage's (no cross-engine deterministic equivalent).
 	var sampleN, lastN string
+	var columns []string // -columns: the projection, applied last (a CSV/TSV source; parquet's is its own)
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "-columns", "-c":
+			if i+1 < len(args) {
+				columns = append(columns, args[i+1])
+			}
 		case "-sample-seed":
 			return fmt.Errorf("from -sample-seed has no SQL equivalent — DuckDB cannot reproduce ssql's seeded byte-offset selection; drop -sample-seed or use generate go")
 		case "-sample":
@@ -763,10 +768,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// '5' as a second file; `-type date time` read 'time' as one until
 		// 2026-09-22, because this table said -type takes one argument).
 		// This is a copy of from's grammar (DFC115 legacy exception).
-		flagArity := map[string]int{
-			"-sample": 1, "-sample-seed": 1, "-last": 1, "-type": 2, "-t": 2,
-			"-default-type": 1, "-dt": 1, "-source": 1, "-sidecar": 1, "-tz": 1, "-format": 2, "-empty": 1, cf.ArgFlag: 1,
-		}
+		flagArity := fromFlagArity
 		var files []string
 		rest := args[1:]
 		// The pipeline's zone, materialised by the source (DFC147 §5.7).
@@ -972,7 +974,35 @@ func translateFrom(q *sqlQuery, args []string) error {
 		src := duckReadCSV([]string{q.csvSource}, q.csvDelim, extra)
 		q.fromClause = fmt.Sprintf("(SELECT * EXCLUDE (__rn) FROM (SELECT * FROM (SELECT *, row_number() OVER () AS __rn FROM %s) ORDER BY __rn DESC LIMIT %s) ORDER BY __rn)", src, lastN)
 	}
+	if len(columns) > 0 {
+		// -columns on a CSV/TSV source: the SELECT list, in the order given
+		// — the same projection the typed struct and the record Project
+		// make. Checked against the header when it is known here; the
+		// engine reports an unknown name otherwise.
+		if q.columns != nil {
+			for _, c := range columns {
+				if !slices.Contains(q.columns, c) {
+					return fmt.Errorf("from %s: -columns names %q, which is not in the header (available: %s)", args[0], c, strings.Join(q.columns, ", "))
+				}
+			}
+		}
+		if err := translateInclude(q, columns); err != nil {
+			return err
+		}
+		q.columns = append([]string(nil), columns...)
+	}
 	return nil
+}
+
+// fromFlagArity is how many arguments each of from's value flags takes,
+// for walking a from stage's argv for its files (a bare `-sample 5` used
+// to read '5' as a second file; `-type date time` read 'time' as one
+// until 2026-09-22). A copy of from's grammar (DFC115 legacy exception),
+// shared by the SQL translation and the optimiser's column pruning.
+var fromFlagArity = map[string]int{
+	"-sample": 1, "-sample-seed": 1, "-last": 1, "-type": 2, "-t": 2,
+	"-default-type": 1, "-dt": 1, "-source": 1, "-sidecar": 1, "-tz": 1, "-format": 2, "-empty": 1,
+	"-columns": 1, "-c": 1, cf.ArgFlag: 1,
 }
 
 // translateRangeSource renders `from range N [-start S] [-step K]

@@ -72,7 +72,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC062 | 2026-03-20 | 2026-03-20 | [Research: Parallel Processing Opportunities in ssql](./parallel-processing.md) |
 | DFC063 | 2026-03-20 | 2026-03-20 | [Parameterized Code Generation](./parameterized-codegen.md) |
 | DFC064 | 2026-03-20 | 2026-04-07 | [ssql Performance Improvement Plan](./performance-improvement-plan.md) |
-| DFC065 | 2026-03-20 | 2026-03-20 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
+| DFC065 | 2026-03-20 | 2026-10-28 | [Design: `generate ssql` Pipeline Optimizer](./pipeline-optimizer.md) |
 | DFC066 | 2026-03-20 | 2026-03-20 | [Post-Italy: v4.17 → v4.28](./retrospective-v4.17-v4.28.md) |
 | DFC067 | 2026-03-20 | 2026-10-20 | [Research: SQL Generation from ssql Pipelines](./sql-generation.md) |
 | DFC068 | 2026-03-21 | 2026-10-28 | [TODO](./TODO.md) |

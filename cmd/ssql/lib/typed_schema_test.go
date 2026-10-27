@@ -87,6 +87,33 @@ func TestSampleCSVSchema(t *testing.T) {
 	}
 }
 
+// TestSampleCSVSchemaColumns: -columns keeps the named columns in the
+// order named (the struct the typed program reads into), and an unknown
+// name is an error listing the header.
+func TestSampleCSVSchemaColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "people.csv")
+	if err := os.WriteFile(path, []byte("name,age,salary\nAlice,30,95000.5\nBob,25,65000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	schema, def, err := SampleCSVSchema(path, "", 0, TypeOptions{Columns: []string{"salary", "name"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schema.Fields) != 2 || schema.Fields[0].Name != "salary" || schema.Fields[0].GoType != "float64" || schema.Fields[1].Name != "name" {
+		t.Errorf("fields %+v, want salary float64 then name", schema.Fields)
+	}
+	if schema.TypeName != "PeopleRowOfSalaryName" {
+		t.Errorf("TypeName %q: a projected struct is named by its columns, so it cannot clash with the file's full row type", schema.TypeName)
+	}
+	if strings.Contains(def, `ssql:"age"`) {
+		t.Errorf("the struct still has the dropped column:\n%s", def)
+	}
+	_, _, err = SampleCSVSchema(path, "", 0, TypeOptions{Columns: []string{"nope"}})
+	if err == nil || !strings.Contains(err.Error(), `"nope"`) || !strings.Contains(err.Error(), "name, age, salary") {
+		t.Errorf("unknown column: want an error naming it and the header, got %v", err)
+	}
+}
+
 func TestSampleCSVSchemaMissingFile(t *testing.T) {
 	_, _, err := SampleCSVSchema("/nonexistent/whatever.csv", "", 100)
 	if err == nil {

@@ -860,11 +860,16 @@ ssql from csv employees.csv -last 3 | ssql include name hire_date | ssql to tabl
 # A fast approximate sample via byte-offset seeks, and only the columns you need
 ssql from csv employees.csv -sample 3 -sample-seed 7 | ssql include name | ssql to table
 ssql from parquet employees.parquet -columns name -columns salary | ssql limit 3 | ssql to table
+ssql from csv employees.csv -columns name -columns salary | ssql limit 3 | ssql to table
 ```
 
 The rule behind these flags: a flag lives on `from` only when the
 *source* can do something the pipe stage cannot (seek, read a footer,
 prune a column). `limit` is already lazy, so there is no `-limit`.
+`-columns` is the one you rarely type: `generate go` adds it for you,
+for Parquet and CSV alike, from the columns the rest of the pipeline
+uses, and the compiled program then decodes only those (a 14.6 M-row
+CSV group-by: 1.05 s with every column, 0.39 s with the one it needs).
 
 Everything streams except the barriers, `sort` and `group-by`, which
 hold their input. For an input larger than memory, `-spill DIR` bounds
@@ -1255,7 +1260,7 @@ extension; `.log`/`.txt` as lines) · `from csv|tsv|jsonl|parquet|lines FILE…`
 · `from ssh HOST PATH` · `from catalog FILE` (`-if` prunes on catalog
 columns, `-shard-field` tags origin) · `from range N` (N rows of an int
 `n`; `-start`, `-step`, `-field`) — flags `-records`, `-sample N`,
-`-last N`, `-columns` (parquet), `-source`, `--` pushdown.
+`-last N`, `-columns` (csv/tsv/parquet), `-source`, `--` pushdown.
 
 Filter / shape: `where` (`-if`, `+if`, `+` between clauses, `-not`, `-invert`) · `include` · `exclude` · `rename` · `cast` ·
 `update` (`-set`, `-set-expr`, `-set-bucket FIELD TS WIDTH`) · `distinct` ·

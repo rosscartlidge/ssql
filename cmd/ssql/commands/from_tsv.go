@@ -64,6 +64,14 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 		Default(0).
 		Help("Fast tail: the last N rows via a seek to the end of the file (identical to `| limit -last N`, without reading the middle). 0 = read everything").
 		Done().
+		Flag("-columns", "-c").
+		Arg("column").
+		FieldsFromFlag("FILE").
+		Done().
+		Accumulate().
+		Global().
+		Help("Column to read (repeat for multiple), in the order given. Omit for all columns. The typed program decodes only these; the optimiser adds it for you.").
+		Done().
 		Flag("-type", "-t").
 		Arg("field").
 		Completer(cf.NoCompleter{Hint: "<field-name>"}).
@@ -120,7 +128,18 @@ func registerFromTSV(cmd *cf.SubcommandBuilder) {
 				return err
 			}
 			csvConfig.Delimiter = 0 // auto-detect from the header
-			types := typeArgs{overrides: typeOverrides, defaultType: defaultType, cfg: csvConfig}
+			types := typeArgs{overrides: typeOverrides, defaultType: defaultType, cfg: csvConfig, columns: cfg.columns}
+			if len(cfg.columns) > 0 {
+				if dup := firstRepeated(cfg.columns); dup != "" {
+					return fmt.Errorf("from tsv: -columns lists %q twice", dup)
+				}
+				if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
+					return fmt.Errorf("from tsv -records does not take -columns (the count is the same)")
+				}
+				if len(ctx.RemainingArgs) > 0 {
+					return fmt.Errorf("from tsv -columns cannot combine with pushdown (--) — include the columns in the pushed-down stages instead")
+				}
+			}
 
 			if rv, _ := ctx.GlobalFlags["-records"].(bool); rv {
 				sn := int64(-1)
@@ -198,9 +217,14 @@ type typeArgs struct {
 	overrides   map[string]string
 	defaultType string
 	cfg         ssql.CSVConfig
+	columns     []string // -columns: the projection, in the order given
 }
 
-func (t typeArgs) options() lib.TypeOptions { return typeOptionsFrom(t.overrides, t.defaultType) }
+func (t typeArgs) options() lib.TypeOptions {
+	o := typeOptionsFrom(t.overrides, t.defaultType)
+	o.Columns = t.columns
+	return o
+}
 
 // defaultTypeArgs is "no overrides": sampled column types, delimiter
 // auto-detected.
@@ -236,10 +260,13 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 			return err
 		}
 		// hand the header line back so the reader sees the whole file
+		if err := checkSourceColumns(headers, types.columns, "from tsv"); err != nil {
+			return err
+		}
 		cfg := types.cfg
 		cfg.Delimiter = rune(delim)
 		in := io.MultiReader(strings.NewReader(line+"\n"), br)
-		return writeSchemaModeDelimited(os.Stdout, headers, types.overrides, ssql.ReadTSVFromReaderWithConfig(in, cfg))
+		return writeSchemaModeDelimited(os.Stdout, sourceColumnsOrder(headers, types.columns), types.overrides, projectSourceColumns(ssql.ReadTSVFromReaderWithConfig(in, cfg), types.columns))
 	}
 
 	if shouldGenerate(generate) {
@@ -262,15 +289,18 @@ func executeFromTSV(inputFile string, types typeArgs, generate bool) error {
 		tsvHeaders, in = peekDelimitedHeader(file, '\t')
 	}
 	records = ssql.ReadTSVFromReaderWithConfig(in, types.cfg)
-
-	records = wrapWithFieldCaching(records, inputFile)
-	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: tsvHeaders})
+	return writeDelimitedSource(records, tsvHeaders, types.columns, inputFile, "from tsv")
 }
 
 // generateFromTSVCode generates Go code for reading TSV.
 func generateFromTSVCode(filename string, types typeArgs) error {
 	if typedMode() {
 		return generateFromTSVCodeTyped(filename, types)
+	}
+	if filename != "" {
+		if err := checkSourceColumnsForCodegen(filename, "tsv", types.columns, "from tsv"); err != nil {
+			return err
+		}
 	}
 
 	var code string
@@ -300,6 +330,9 @@ func generateFromTSVCode(filename string, types typeArgs) error {
 	}`
 		}
 		imports = []string{"fmt", "os"}
+	}
+	if len(types.columns) > 0 {
+		code += "\n\t" + projectSourceColumnsCode(types.columns) // -columns: the named columns, in the order named
 	}
 
 	frag := fromInitFragment("records", code, imports)
@@ -393,15 +426,17 @@ func readTSVHeaders(r io.Reader) ([]string, error) {
 func executeFromTSVSample(inputFile string, types typeArgs, n int, seed int64, seedGiven bool, generate bool) error {
 	resolvedSeed := resolveSampleSeed(seed, seedGiven, "-sample-seed")
 	if shouldGenerate(generate) {
+		if err := checkSourceColumnsForCodegen(inputFile, "tsv", types.columns, "from tsv"); err != nil {
+			return err
+		}
 		return generateFromFileSampleCode("ssql.SampleTSVFile", "input TSV file", inputFile, n, resolvedSeed,
-			sourceCodegenExtras{configCode: generateDelimConfigCode(types.overrides, types.defaultType, "0 /* auto-detect */")})
+			sourceCodegenExtras{configCode: generateDelimConfigCode(types.overrides, types.defaultType, "0 /* auto-detect */"), postCode: projectSourceColumnsCode(types.columns)})
 	}
 	records, err := ssql.SampleTSVFile(inputFile, n, resolvedSeed, types.cfg)
 	if err != nil {
 		return err
 	}
-	records = wrapWithFieldCaching(records, inputFile)
-	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{})
+	return writeDelimitedSource(records, nil, types.columns, inputFile, "from tsv")
 }
 
 
@@ -411,8 +446,11 @@ func executeFromTSVLast(inputFile string, types typeArgs, n int, generate bool) 
 		return executeFromTSV(inputFile, types, generate)
 	}
 	if shouldGenerate(generate) {
+		if err := checkSourceColumnsForCodegen(inputFile, "tsv", types.columns, "from tsv"); err != nil {
+			return err
+		}
 		return generateFromFileLastCode("ssql.TailTSVFile", "input TSV file", inputFile, n,
-			sourceCodegenExtras{configCode: generateDelimConfigCode(types.overrides, types.defaultType, "0 /* auto-detect */")})
+			sourceCodegenExtras{configCode: generateDelimConfigCode(types.overrides, types.defaultType, "0 /* auto-detect */"), postCode: projectSourceColumnsCode(types.columns)})
 	}
 	records, err := ssql.TailTSVFile(inputFile, n, types.cfg)
 	if err != nil {
@@ -423,6 +461,5 @@ func executeFromTSVLast(inputFile string, types typeArgs, n int, generate bool) 
 		headers, _ = readTSVHeaders(f)
 		f.Close()
 	}
-	records = wrapWithFieldCaching(records, inputFile)
-	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: headers})
+	return writeDelimitedSource(records, headers, types.columns, inputFile, "from tsv")
 }

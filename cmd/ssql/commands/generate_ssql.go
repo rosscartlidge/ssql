@@ -360,7 +360,7 @@ func optimizePipelineCmdsWith(input io.Reader, opts optimiseOptions) ([]*pipelin
 	rules = append(rules, joinRules...)
 
 	// Phase 3 rules
-	rules = append(rules, ruleParquetColumnPruning(cmds)...)
+	rules = append(rules, ruleSourceColumnPruning(cmds)...)
 	// Note: mid-pipeline column dropping (inserting include after from csv) was benchmarked
 	// and found to be counterproductive — the extra pipeline process overhead outweighs
 	// serialization savings from fewer columns (even with 20→2 cols and 5+ stages).
@@ -1934,36 +1934,132 @@ func readJSONLFieldNames(filename string) ([]string, error) {
 
 // --- Phase 3 optimization rules ---
 
-// ruleParquetColumnPruning adds -columns to "from parquet" based on downstream field usage.
-func ruleParquetColumnPruning(cmds []*pipelineCmd) []ruleApplication {
+// ruleSourceColumnPruning adds -columns to a source based on downstream
+// field usage: `from parquet` (parquet-column-pruning, since the rule was
+// written) and a single local CSV/TSV file (csv-column-pruning,
+// 2026-10-28, DFC158 §4). The Parquet reader then reads only those column
+// chunks; the typed CSV struct holds only those columns, so the zero-copy
+// scanner decodes and clones only those — the full seven-column struct of
+// a 14.6 M-row file read in 1.05 s, the one column the pipeline used in
+// 0.39 s. A CSV source is pruned only when every needed column is in its
+// header and the header has more; a bare `from FILE.csv` becomes
+// `from csv FILE.csv`, where the flag lives.
+func ruleSourceColumnPruning(cmds []*pipelineCmd) []ruleApplication {
 	var rules []ruleApplication
 	for i := 0; i < len(cmds); i++ {
-		if cmds[i].Removed || cmds[i].Kind != "from" {
+		if cmds[i].Removed || cmds[i].Kind != "from" || hasColumnsFlag(cmds[i]) {
 			continue
 		}
-		if !isParquetFrom(cmds[i]) || hasColumnsFlag(cmds[i]) {
-			continue
+		rule := "parquet-column-pruning"
+		var explicitFormat string
+		if !isParquetFrom(cmds[i]) {
+			file, format, explicit, ok := delimitedPruneTarget(cmds[i])
+			if !ok {
+				continue
+			}
+			rule = "csv-column-pruning"
+			header, err := readFileHeader(file, format)
+			if err != nil {
+				continue
+			}
+			needed, allNeeded := collectDownstreamFields(cmds, i)
+			if allNeeded || len(needed) == 0 || len(needed) >= len(header) {
+				continue
+			}
+			missing := false
+			for f := range needed {
+				if !slices.Contains(header, f) {
+					missing = true
+				}
+			}
+			if missing {
+				continue
+			}
+			if !explicit {
+				explicitFormat = format
+			}
 		}
 
 		needed, allNeeded := collectDownstreamFields(cmds, i)
 		if allNeeded || len(needed) == 0 {
 			continue
 		}
+		// A name beginning with - or + cannot be a flag's value (autocli's
+		// -arg escape covers positionals, not flag arguments: `-columns
+		// -arg -desc` is "unknown flag -desc"), so a column called "-desc"
+		// (DFC134 §5.2's hostile fixtures) leaves the source unpruned.
+		hostile := false
+		for f := range needed {
+			if strings.HasPrefix(f, "-") || strings.HasPrefix(f, "+") {
+				hostile = true
+			}
+		}
+		if hostile {
+			continue
+		}
 
 		before := renderCmd(cmds[i])
+		if explicitFormat != "" {
+			cmds[i].RawArgs = append([]string{explicitFormat}, cmds[i].RawArgs...)
+		}
 		for _, f := range sortedStringSet(needed) {
 			cmds[i].RawArgs = append(cmds[i].RawArgs, "-columns", f)
 		}
 		after := renderCmd(cmds[i])
 		if before != after {
 			rules = append(rules, ruleApplication{
-				Rule:   "parquet-column-pruning",
+				Rule:   rule,
 				Before: before,
 				After:  after,
 			})
 		}
 	}
 	return rules
+}
+
+// delimitedPruneTarget reports whether a from stage reads ONE local
+// CSV/TSV file by name — `from csv F`, `from tsv F` or a bare `from
+// F.csv`/`F.tsv` — with no pushdown and no -records, so the column
+// pruning rule can add -columns to it. It returns the file, the format
+// word (csv or tsv) and whether the stage already names it.
+func delimitedPruneTarget(cmd *pipelineCmd) (file, format string, explicit, ok bool) {
+	if cmd.IsSSH || cmd.IsCatalog {
+		return "", "", false, false
+	}
+	rest := cmd.RawArgs
+	if len(rest) > 0 && (rest[0] == "csv" || rest[0] == "tsv") {
+		format, explicit, rest = rest[0], true, rest[1:]
+	}
+	var files []string
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
+		switch {
+		case a == "--", a == "-records":
+			return "", "", false, false
+		case a == cf.ArgFlag && i+1 < len(rest):
+			files = append(files, rest[i+1])
+			i++
+		case strings.HasPrefix(a, "-"):
+			i += fromFlagArity[a]
+		default:
+			files = append(files, a)
+		}
+	}
+	if len(files) != 1 || ssql.IsHTTPURL(files[0]) || strings.ContainsAny(files[0], "*?[") {
+		return "", "", false, false
+	}
+	file = files[0]
+	if !explicit {
+		switch lower := strings.ToLower(file); {
+		case strings.HasSuffix(lower, ".csv"):
+			format = "csv"
+		case strings.HasSuffix(lower, ".tsv"):
+			format = "tsv"
+		default:
+			return "", "", false, false
+		}
+	}
+	return file, format, explicit, true
 }
 
 // ruleMidPipelineColumnDrop inserts an include command after CSV/TSV from to drop
@@ -2135,6 +2231,14 @@ func collectDownstreamFields(cmds []*pipelineCmd, startIdx int) (map[string]bool
 		if cmds[j].Removed {
 			continue
 		}
+		// A name given as `-arg -x` (DFC134 §5.2) is one no -columns can
+		// carry (a flag's value has no -arg escape), and the per-command
+		// extractors read argv by leading dash and would drop it — the
+		// sort key "-desc" was pruned away and the program failed on it
+		// (2026-10-28). Such a pipeline leaves its source unpruned.
+		if hasHostileArg(cmds[j].RawArgs) {
+			return nil, true
+		}
 		fields, allNeeded := extractReferencedFields(cmds[j])
 		if allNeeded {
 			return nil, true
@@ -2303,12 +2407,28 @@ func extractGroupByFields(args []string) ([]string, bool) {
 
 func extractPositionalFields(args []string) []string {
 	var fields []string
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == cf.ArgFlag && i+1 < len(args) { // -arg VALUE: a field whatever it looks like
+			i++
+			fields = append(fields, args[i])
+			continue
+		}
 		if !strings.HasPrefix(arg, "-") {
 			fields = append(fields, arg)
 		}
 	}
 	return fields
+}
+
+// hasHostileArg reports an `-arg VALUE` whose value begins with - or +.
+func hasHostileArg(args []string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == cf.ArgFlag && (strings.HasPrefix(args[i+1], "-") || strings.HasPrefix(args[i+1], "+")) {
+			return true
+		}
+	}
+	return false
 }
 
 func extractTopFields(args []string) []string {

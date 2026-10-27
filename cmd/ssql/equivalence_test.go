@@ -1421,6 +1421,27 @@ var equivCases = []EquivCase{
 		},
 	},
 	{
+		// -columns on a CSV source (2026-10-28, DFC158 §4): the named
+		// columns in the order named, in every lane — exec and record
+		// Project, the typed struct holds only these (the scanner decodes
+		// only these), the SQL lanes SELECT the list, the Rust lowering
+		// select_columns. A non-file order, so a lane that kept the
+		// header's would diverge.
+		Name:     "csv_list_columns",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv -columns salary -columns name | {{.bin}} where -if salary gt 80000 | {{.bin}} sort name`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"salary": 95000, "name": "Alice"}, {"salary": 105000, "name": "Carol"}, {"salary": 88000, "name": "Eve"}, {"salary": 82000, "name": "Frank"}},
+	},
+	{
+		// The optimiser's csv-column-pruning: the optimised lanes read
+		// `from csv … -columns dept -columns salary`, exec reads every
+		// column; the answer is the same.
+		Name:     "csv_prune_group_by",
+		Pipeline: `{{.bin}} from csv {{.data}}/employees.csv | {{.bin}} group-by dept -sum salary total | {{.bin}} sort dept`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"dept": "Engineering", "total": 288000}, {"dept": "Marketing", "total": 150000}, {"dept": "Sales", "total": 147000}},
+	},
+	{
 		// DFC110: a SEEDED sample must select the identical row set in
 		// every Go lane — selection is a pure function of (seed, row
 		// index) via the spec-stable RNG in the ssql package. The

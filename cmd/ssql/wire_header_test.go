@@ -374,11 +374,16 @@ func TestCastIsStrict(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
-	for target, want := range map[string]string{
-		"-type score int":   `field "score" value "N/A" is not an int`,
-		"-type score float": `field "score" value "N/A" is not a float`,
-		"-type flag bool":   `field "flag" value "maybe" is not a bool`,
-		"-type when time":   `field "when" value "soon" is not a time`,
+	// Rows 2 and 3 are both bad for score and when ("N/A" / "soon", then
+	// empty). Exec and the record program meet row 2 first; the typed
+	// program casts per shard since 2026-10-28 (DFC158 §3.3) and names
+	// whichever bad value its shard meets first, so either is the right
+	// answer — the field and the type are what the message must name.
+	for target, want := range map[string][2]string{
+		"-type score int":   {`field "score" value "`, `" is not an int`},
+		"-type score float": {`field "score" value "`, `" is not a float`},
+		"-type flag bool":   {`field "flag" value "maybe" is not a bool`, ""},
+		"-type when time":   {`field "when" value "`, `" is not a time`},
 	} {
 		for _, script := range []string{
 			bin + " from " + f + " | " + bin + " cast " + target + " | " + bin + " to csv",
@@ -386,8 +391,8 @@ func TestCastIsStrict(t *testing.T) {
 			bin + " generate go -run -mode typed -pipeline '" + bin + " from " + f + " | " + bin + " cast " + target + " | " + bin + " to csv'",
 		} {
 			out, err := run(script)
-			if err == nil || !strings.Contains(out, want) || !strings.Contains(out, "-invalid missing") {
-				t.Errorf("%s\n must fail with %q and name the way out; got err=%v\n%s", script, want, err, out)
+			if err == nil || !strings.Contains(out, want[0]) || !strings.Contains(out, want[1]) || !strings.Contains(out, "-invalid missing") {
+				t.Errorf("%s\n must fail with %q…%q and name the way out; got err=%v\n%s", script, want[0], want[1], err, out)
 			}
 			if strings.Contains(out, "goroutine ") || strings.Contains(out, "panic:") {
 				t.Errorf("%s printed a Go stack trace instead of one Error line:\n%s", script, out)

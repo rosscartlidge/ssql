@@ -6,6 +6,7 @@ import (
 	"io"
 	"path/filepath"
 	"strconv"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -45,6 +46,7 @@ type TypeOptions struct {
 	Fields  map[string]string // column → type name
 	Default string            // type for every column without an override ("" / "auto" = infer)
 	Formats map[string]string // column → time pattern (-format COL PATTERN): the column is a time read with it
+	Columns []string          // the columns to keep, in this order (-columns); nil = every header column
 }
 
 func firstTypeOptions(opts []TypeOptions) TypeOptions {
@@ -240,8 +242,50 @@ func sampleDelimitedSchema(filename, typeName string, maxRows int, delim rune, o
 		}
 	}
 
+	if len(opts.Columns) > 0 {
+		if fields, err = selectSchemaFields(fields, opts.Columns, header); err != nil {
+			return nil, "", err
+		}
+		typeName = ProjectedTypeName(typeName, fields)
+	}
+
 	schema := &TypedSchema{TypeName: typeName, Fields: fields}
 	return schema, RenderStructDef(schema), nil
+}
+
+// selectSchemaFields keeps the named columns, in the order named: the
+// struct holds only these, so the reader decodes (and clones) only these
+// — `from csv -columns`, the projection the optimiser pushes into a CSV
+// source as it does into a Parquet one. An unknown name is an error
+// listing the header, as the Parquet reader's is.
+func selectSchemaFields(fields []TypedSchemaField, columns, header []string) ([]TypedSchemaField, error) {
+	out := make([]TypedSchemaField, 0, len(columns))
+	for _, c := range columns {
+		i := slices.Index(header, c)
+		if i < 0 {
+			return nil, fmt.Errorf("typed schema sample: -columns names %q, which is not in the header (available: %s)", c, strings.Join(header, ", "))
+		}
+		out = append(out, fields[i])
+	}
+	return out, nil
+}
+
+// ProjectedTypeName names the struct of a source read with -columns:
+// the file's type name plus the columns it holds (EmployeesRowOfDept),
+// so it cannot clash with the full row type of the same file elsewhere
+// in the program — a process substitution's inner pipeline is not
+// optimised, so `from F | include dept | union -file <(from F | include
+// dept)` has the pruned EmployeesRow beside the unpruned one, and two
+// structs of one name and different bodies do not compile (found by the
+// corpus the day the CSV pruning rule landed, 2026-10-28).
+func ProjectedTypeName(base string, fields []TypedSchemaField) string {
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteString("Of")
+	for _, f := range fields {
+		b.WriteString(f.GoName)
+	}
+	return b.String()
 }
 
 // RenderStructDef returns Go source for a struct declaration matching

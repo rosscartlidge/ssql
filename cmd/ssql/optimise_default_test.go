@@ -92,6 +92,46 @@ func TestGenerateGoPlusOTurnsOptimiserOff(t *testing.T) {
 
 // A pipeline no rule can improve must produce byte-identical source
 // with and without the optimiser — the default costs nothing there and
+// TestGenerateGoPrunesCSVColumns: the pruning rule reaches a CSV source
+// (2026-10-28, DFC158 §4): `from csv F | group-by dept` reads `-columns
+// dept`, the typed struct holds only that column (the scanner decodes
+// only that), record mode projects to it, and a bare `from F.csv` is
+// rewritten to `from csv F.csv`, where the flag lives. The one-column
+// struct read the 14.6 M-row benchmark file in 0.39 s where the full
+// struct took 1.05 s.
+func TestGenerateGoPrunesCSVColumns(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	csvPath, err := filepath.Abs("../../doc/codelab-data/employees.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, form := range []string{"from csv " + csvPath, "from " + csvPath} {
+		pipe := bin + " " + form + " | " + bin + " group-by dept -count n | " + bin + " to csv"
+		for _, mode := range []string{"typed", "record"} {
+			out, err := exec.Command(bin, "generate", "go", "-mode", mode, "-pipeline", pipe).CombinedOutput()
+			if err != nil {
+				t.Fatalf("[%s %s] generate go: %v\n%s", mode, form, err, out)
+			}
+			src := string(out)
+			for _, want := range []string{"csv-column-pruning:", "from csv " + csvPath, "-columns dept |"} {
+				if !strings.Contains(src, want) {
+					t.Errorf("[%s %s] optimised source lacks %q:\n%s", mode, form, want, src[:min(len(src), 1500)])
+				}
+			}
+			switch mode {
+			case "typed":
+				if !strings.Contains(src, "ssql:\"dept\"") || strings.Contains(src, "ssql:\"name\"") || strings.Contains(src, "ssql:\"salary\"") {
+					t.Errorf("[typed %s] the source struct is not pruned to dept:\n%s", form, src)
+				}
+			case "record":
+				if !strings.Contains(src, `ssql.Project(r, "dept")`) {
+					t.Errorf("[record %s] the read is not projected to dept:\n%s", form, src)
+				}
+			}
+		}
+	}
+}
+
 // adds no note.
 func TestGenerateGoOptimiserFastPath(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)

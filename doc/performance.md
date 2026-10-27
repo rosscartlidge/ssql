@@ -61,7 +61,7 @@ output to `/dev/null`:
 |---|---:|---:|---:|
 | the three-key cube above | **0.19 s** | 0.32 s | 0.36 s |
 | `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
-| the same rows as 1.2 GB CSV | **0.24 s** | 1.05 s (1.63 before the scanner; 0.39 s reading the one column) | 0.71 s |
+| the same rows as 1.2 GB CSV | **0.24 s** | 0.39 s (1.63 before the scanner; 1.05 with every column in the struct, before the optimiser pruned CSV reads) | 0.71 s |
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 0.23 s (1.29 s while `cast` serialised the pipeline, see below) | 0.06 s |
@@ -83,7 +83,10 @@ row was a planner gap, not arithmetic: the typed `cast` template
 declared itself serial-only, so the planner read the file and grouped
 on one core; a cast is a per-row map and now keeps the parallel forms
 on both sides ([DFC158](research/dfc158_performance_measured_fixed_next.md)
-§2.3). The Rust
+§2.3). The CSV row is the optimiser's column pruning reaching CSV
+sources (2026-10-28): the typed struct holds only the columns the
+pipeline uses, so the scanner decodes and clones only those, the way
+the Parquet read has been pruned since the rule was written. The Rust
 program is the same `generate go` pipeline with `rust` in place of
 `go`; the first `cargo` build compiles DataFusion (minutes, once).
 

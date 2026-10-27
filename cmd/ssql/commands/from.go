@@ -162,7 +162,7 @@ func RegisterFrom(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 				}
 				overrides = applyTimeFormats(overrides, formats)
 				if fi.Name == "csv" {
-					return executeFromCSV(inputFile, overrides, "auto", generate)
+					return executeFromCSV(inputFile, overrides, "auto", nil, generate)
 				}
 				types := defaultTypeArgs()
 				if len(overrides) > 0 || fromEmptyZero {
@@ -203,6 +203,7 @@ type multiFileConfig struct {
 	sourceField  string
 	generate     bool
 	unordered    bool
+	columns      []string // -columns: the projection, in the order given
 }
 
 // extractMultiFileConfig extracts multi-file flags from autocli context.
@@ -237,7 +238,127 @@ func extractMultiFileConfig(ctx *cf.Context) multiFileConfig {
 	if uVal, ok := ctx.GlobalFlags["-unordered"]; ok {
 		cfg.unordered = uVal.(bool)
 	}
+	cfg.columns = flagStringList(ctx.GlobalFlags["-columns"])
 	return cfg
+}
+
+// flagStringList is an accumulated string flag's values ([]string, []any
+// or one string), nil when unset.
+func flagStringList(v any) []string {
+	switch v := v.(type) {
+	case []string:
+		return v
+	case []any:
+		var out []string
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if v != "" {
+			return []string{v}
+		}
+	}
+	return nil
+}
+
+// checkSourceColumns validates a source's -columns: a name listed twice
+// is a typo the lanes would trip on differently (the typed struct would
+// not compile), and an unknown name is an error listing the header, as
+// the Parquet reader's is. A nil header (a pipe not yet read) skips the
+// second check; the projection then yields absent values, as include's
+// would.
+func checkSourceColumns(headers, columns []string, cmd string) error {
+	if dup := firstRepeated(columns); dup != "" {
+		return fmt.Errorf("%s: -columns lists %q twice", cmd, dup)
+	}
+	if headers == nil {
+		return nil
+	}
+	for _, c := range columns {
+		if !slices.Contains(headers, c) {
+			return fmt.Errorf("%s: -columns names %q, which is not in the header (available: %s)", cmd, c, strings.Join(headers, ", "))
+		}
+	}
+	return nil
+}
+
+// sourceColumnsOrder is the output column order of a source: its -columns
+// in the order given, else the header.
+func sourceColumnsOrder(headers, columns []string) []string {
+	if len(columns) > 0 {
+		return columns
+	}
+	return headers
+}
+
+// projectSourceColumns is the exec form of a source's -columns: the named
+// columns, in the order named (ssql.Project, the primitive include calls).
+func projectSourceColumns(records iter.Seq[ssql.Record], columns []string) iter.Seq[ssql.Record] {
+	if len(columns) == 0 {
+		return records
+	}
+	return ssql.Select(func(r ssql.Record) ssql.Record { return ssql.Project(r, columns...) })(records)
+}
+
+// projectSourceColumnsCode is the record-mode code of that projection,
+// following a source's read in its init fragment ("" without -columns).
+func projectSourceColumnsCode(columns []string) string {
+	if len(columns) == 0 {
+		return ""
+	}
+	quoted := make([]string, len(columns))
+	for i, c := range columns {
+		quoted[i] = fmt.Sprintf("%q", c)
+	}
+	return fmt.Sprintf(`records = ssql.Select(func(r ssql.Record) ssql.Record {
+		return ssql.Project(r, %s)
+	})(records)`, strings.Join(quoted, ", "))
+}
+
+// writeDelimitedSource is the exec tail every CSV/TSV source path shares:
+// the -columns check and projection, field-value caching for completion,
+// and the write with the header's (or the projection's) column order.
+func writeDelimitedSource(records iter.Seq[ssql.Record], headers, columns []string, inputFile, cmd string) error {
+	if err := checkSourceColumns(headers, columns, cmd); err != nil {
+		return err
+	}
+	records = wrapWithFieldCaching(projectSourceColumns(records, columns), inputFile)
+	return writeWithInferredSchema(records, writeWithInferredSchemaOptions{fieldOrder: sourceColumnsOrder(headers, columns)})
+}
+
+// checkSourceColumnsForCodegen is the -columns check at generation time,
+// against the file's header when the file is readable here (a URL is
+// checked when the program runs); the error is a fragment, as every
+// generation-time error is.
+func checkSourceColumnsForCodegen(filename, format string, columns []string, cmd string) error {
+	if len(columns) == 0 {
+		return nil
+	}
+	headers, err := readFileHeader(filename, format)
+	if err != nil {
+		headers = nil
+	}
+	if err := checkSourceColumns(headers, columns, cmd); err != nil {
+		return lib.WriteErrorAndExit(getCommandString(), err)
+	}
+	return nil
+}
+
+// keepColumns restricts an advisory type map to the projected columns.
+func keepColumns(types map[string]string, columns []string) map[string]string {
+	if len(columns) == 0 || types == nil {
+		return types
+	}
+	out := make(map[string]string, len(columns))
+	for _, c := range columns {
+		if t, ok := types[c]; ok {
+			out[c] = t
+		}
+	}
+	return out
 }
 
 // fileReaderFunc opens a file and returns a record iterator.
@@ -324,9 +445,12 @@ func executeFromMultiFile(cfg multiFileConfig, format string, readFile fileReade
 		}
 	}
 
+	if err := checkSourceColumns(mergedHeaders, cfg.columns, "from "+strings.ToLower(format)); err != nil {
+		return err
+	}
 	schema := lib.NewSchema()
 	if hasFirst {
-		for _, h := range mergedHeaders {
+		for _, h := range sourceColumnsOrder(mergedHeaders, cfg.columns) {
 			if v, exists := ssql.Get[any](firstRecord, h); exists {
 				schema.AddField(h, lib.InferTypeString(v))
 			} else {
@@ -346,7 +470,7 @@ func executeFromMultiFile(cfg multiFileConfig, format string, readFile fileReade
 				fmt.Fprintf(os.Stderr, "Error opening %s: %v\n", f, err)
 				return
 			}
-			for r := range readFile(file) {
+			for r := range projectSourceColumns(readFile(file), cfg.columns) {
 				if cfg.sourceField != "" {
 					r = r.ToMutable().String(cfg.sourceField, cfg.files[i]).Freeze()
 				}

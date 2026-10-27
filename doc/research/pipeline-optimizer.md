@@ -2,7 +2,7 @@
 
 Reference: DFC065
 Created: 2026-03-20
-Last modified: 2026-03-20
+Last modified: 2026-10-28
 
 [Back to Index](./README.md)
 
@@ -612,7 +612,7 @@ ssql where -if status eq active -if name regex '^[a-z]+'  # was: regex first, eq
 Added to `cmd/ssql/commands/generate_ssql.go`.
 
 **Rules implemented (1 active, 2 rejected after benchmarking; 11 active cumulative):**
-1. **Parquet column pruning** (Rule 5) — analyzes all downstream commands to collect referenced field names, adds `-columns` to `from parquet`. Bails out if any command uses expressions (`-if-expr`, `-set-expr`, `-expr`) or `distinct` (which reference arbitrary fields). Skips if `-columns` already present. **Benchmarked: 4.9x–14.9x faster.**
+1. **Parquet column pruning** (Rule 5) — analyzes all downstream commands to collect referenced field names, adds `-columns` to `from parquet`. Bails out if any command uses expressions (`-if-expr`, `-set-expr`, `-expr`) or `distinct` (which reference arbitrary fields). Skips if `-columns` already present. **Benchmarked: 4.9x–14.9x faster.** Extended to a single local CSV/TSV file on 2026-10-28 (`csv-column-pruning`, the same `ruleSourceColumnPruning`; a bare `from F.csv` is rewritten to `from csv F.csv -columns …`): the typed struct then holds only those columns, so the zero-copy scanner decodes and clones only those — 1.05 s → 0.39 s on the 14.6 M-row benchmark ([DFC158](./dfc158_performance_measured_fixed_next.md) §3.4). The mid-pipeline `include` form below was the wrong place for the same idea: the projection belongs in the reader, not in a stage after it.
 
 **Rejected after benchmarking:**
 - **Mid-pipeline column dropping** (Rule 14) — inserts `include` after `from csv` to drop unneeded columns. Benchmarked at **1.4x–1.5x SLOWER** because the extra pipeline process (JSONL encode/decode + process spawn) costs more than the serialization savings from fewer columns. Even with 20→2 columns and 5+ downstream stages, the overhead dominates. Code retained but disabled.

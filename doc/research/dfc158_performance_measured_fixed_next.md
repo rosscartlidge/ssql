@@ -6,9 +6,10 @@ Last modified: 2026-10-28
 
 [Back to Index](./README.md)
 
-**Status:** write-up of the 2026-10-27 measurements and the three fixes
-that followed them (two on the 27th, one found by writing this on the
-28th), with a ranked list of what to do next. Ross
+**Status:** write-up of the 2026-10-27 measurements and the four fixes
+that followed them (two on the 27th; the `cast` downgrade found by
+writing this on the 28th, and the CSV column projection the same day),
+with a ranked list of what to do next. Ross
 (2026-10-28): "could you write up a DFC on what we discovered about
 performance, what we have fixed and what we can do". The measurements
 are DFC157 §4's; the fixes are commits 3bd4919 (window), 436c8b0
@@ -34,7 +35,7 @@ changed it, the number after.
 |---|---:|---:|---:|
 | `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.19 s** | 0.32 s | 0.36 s |
 | `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
-| `group-by relationship -count`, CSV | **0.24 s** | 1.63 → 1.05 s (0.39 s on a one-column struct) | 0.71 s |
+| `group-by relationship -count`, CSV | **0.24 s** | 1.63 → 1.05 → 0.39 s | 0.71 s |
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 → 0.23 s | 0.06 s |
@@ -257,7 +258,41 @@ considered and not added: at the gate's 3 M rows a serial plan still
 fits any honest budget, so a wall-time ceiling would not discriminate;
 the plan assertion is the gate.
 
-All three fixes are on main, gated (vet, slim build, race packages,
+### 3.4 The optimiser prunes CSV reads (2026-10-28)
+
+`from csv` and `from tsv` take `-columns`, with Parquet's semantics:
+the named columns in the order named, an unknown or repeated name a
+loud error listing the header. Every lane honours it — exec and record
+mode `Project`, the typed struct holds only those columns
+(`lib.TypeOptions.Columns`; the zero-copy scanner then decodes and
+clones only those), the SQL assembler makes it the SELECT list
+(`translateInclude`, so the Rust lowering emits `select_columns`), and
+`SSQL_MODE=schema` answers with the projection. The pruning rule
+(`ruleSourceColumnPruning`, the renamed Parquet rule) adds it to a
+single local CSV/TSV file when every column the pipeline uses is in the
+header and the header has more, rewriting a bare `from F.csv` to
+`from csv F.csv`, where the flag lives. Pushdown (`--`) and `-records`
+are refused with it. A projected struct is named by its columns
+(`EmployeesRowOfDept`, Parquet too), so the unpruned row type of the
+same file in a process substitution's inner pipeline (which bash runs
+unoptimised) cannot clash with it; and a source whose pipeline names a
+column with `-arg` (a name beginning with `-` or `+`) is left unpruned,
+because a flag's value has no `-arg` escape — the full `cmd/ssql` run
+found both on the day.
+
+| Program | Wall (three runs) |
+|---|---:|
+| full seven-column struct (after the scanner) | 1.60–1.68 s |
+| the optimiser's `-columns relationship` | **0.38–0.41 s** |
+
+Proof: `csv_list_columns` (a non-file order with a Golden, every lane)
+and `csv_prune_group_by` (the rule's output against exec) in the
+equivalence suite; `TestGenerateGoPrunesCSVColumns` (typed struct pruned
+to the one column, record mode projected, bare form rewritten);
+`TestTranslateFromCSVColumns` (the value is a column, not a second
+file); the sampler and helper unit tests.
+
+All four fixes are on main, gated (vet, slim build, race packages,
 full `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
 Unreleased section.
 
@@ -274,17 +309,11 @@ could change, an equivalence case; none of them changes a result.
    `StreamSelect`; `cast` was the only one left, and the `SerialOnly`
    declarations that remain are each justified at the declaration.
 
-2. **CSV column projection in the optimiser** (TODO, 2026-10-27). The
-   Parquet rule prunes a `from parquet` read to the columns downstream
-   uses; CSV has no such rule, so the typed struct holds every header
-   column and the scanner clones every string column per row. Measured
-   1.05 s for the full struct against 0.39 s for the one column the
-   pipeline uses. Needs `from csv/tsv -columns` honoured by the typed
-   template (a struct of those columns; the reader already skips
-   columns the struct lacks), the exec, record and SQL forms projecting
-   the same, the optimiser rule extended from Parquet to CSV, and an
-   equivalence case. Expected: the CSV group-by at 0.4 s, between
-   DataFusion and DuckDB.
+2. **CSV column projection in the optimiser.** **Done 2026-10-28,
+   §3.4**: `from csv/tsv -columns` in every lane and the pruning rule
+   extended from Parquet to a single local CSV/TSV file; the CSV
+   group-by runs in 0.39 s through the optimiser, between DataFusion
+   and DuckDB.
 
 3. **The typed window's 35 s** (TODO, 2026-10-27). Linear now, but
    `typed.Window` materialises every row, sorts each partition with

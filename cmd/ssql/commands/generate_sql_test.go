@@ -658,6 +658,34 @@ func TestTranslateSampleSQL(t *testing.T) {
 	}
 }
 
+// TestTranslateFromCSVColumns: `from csv F -columns b -columns a` is the
+// SELECT list in that order (the value is a column, not a second file),
+// seeds the column tracking with the projection, and an unknown name is
+// refused against the header.
+func TestTranslateFromCSVColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "k.csv")
+	if err := os.WriteFile(path, []byte("a,b,c\n1,2,3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	q := &sqlQuery{}
+	if err := translateFrom(q, []string{"csv", path, "-columns", "b", "-columns", "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(q.fromClause, "read_csv('"+path+"'") || strings.Contains(q.fromClause, "'b'") {
+		t.Errorf("fromClause %q: the -columns value was read as a file", q.fromClause)
+	}
+	if got := strings.Join(q.selectExprs, ", "); got != "b, a" {
+		t.Errorf("select list %q, want b, a", got)
+	}
+	if got := strings.Join(q.columns, ","); got != "b,a" || strings.Join(q.includeCols, ",") != "b,a" {
+		t.Errorf("columns %v includeCols %v, want b,a", q.columns, q.includeCols)
+	}
+	q2 := &sqlQuery{}
+	if err := translateFrom(q2, []string{"csv", path, "-columns", "z"}); err == nil || !strings.Contains(err.Error(), `"z"`) || !strings.Contains(err.Error(), "a, b, c") {
+		t.Errorf("unknown column: want an error naming it and the header, got %v", err)
+	}
+}
+
 func TestTranslateFromSampleSQL(t *testing.T) {
 	// from -sample N → USING SAMPLE on the FROM clause; the N value
 	// must NOT be mistaken for a file (regression: read_csv_auto

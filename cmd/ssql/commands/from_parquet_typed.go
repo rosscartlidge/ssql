@@ -154,8 +154,12 @@ func readParquetTypedSchema(filename string, columns []string) (*lib.TypedSchema
 		})
 	}
 
+	typeName := lib.TypeNameFromFilename(filename)
+	if len(columns) > 0 {
+		typeName = lib.ProjectedTypeName(typeName, fields) // the pruned row type, distinct from the file's full one
+	}
 	return &lib.TypedSchema{
-		TypeName: lib.TypeNameFromFilename(filename),
+		TypeName: typeName,
 		Fields:   fields,
 	}, nil
 }

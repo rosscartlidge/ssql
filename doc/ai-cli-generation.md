@@ -43,7 +43,7 @@ ssql from data.csv | ssql where -if age gt 25 | ssql to table
 | Command | Reads | Notes |
 |---|---|---|
 | `from FILE` | CSV, TSV, JSON, JSONL, Parquet, Arrow, XLSX by extension | the everyday form |
-| `from csv [FILE]` / `from tsv [FILE]` | delimited text; stdin when no FILE | `-type FIELD TYPE` overrides an inferred type; `-sample N` reads a random N rows; `-last N` the last N; `-records` prints only the row count |
+| `from csv [FILE]` / `from tsv [FILE]` | delimited text; stdin when no FILE | `-type FIELD TYPE` overrides an inferred type; `-columns C` (repeat) reads only those columns, in that order; `-sample N` reads a random N rows; `-last N` the last N; `-records` prints only the row count |
 | `from json [FILE]` / `from jsonl [FILE]` | a JSON array / one object per line; stdin when no FILE | `from jsonl -skip-invalid` drops bad lines and reports the count |
 | `from parquet FILE` / `from arrow FILE` / `from xlsx FILE` | columnar and spreadsheet files | `from xlsx -sheet NAME` |
 | `from lines FILE` | raw text: one record per line with `line_number` and `line` | pair with `extract` |
