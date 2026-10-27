@@ -997,53 +997,55 @@ SQL on all three engines when they are available
 ssql generate sql -dialect postgres -pipeline 'ssql from employees.csv | ssql group-by dept -median salary median_salary -first name first_hired | ssql to table'
 ```
 
-The DataFusion dialect is how an ssql pipeline gets into a Rust program:
-DataFusion is a Rust library, and its SQL front end builds the same
-logical plan the DataFrame API would. Write the SQL to a file, then the
-whole Rust side is this — there is no `generate rust`, because the
-program would contain nothing but this string
-([DFC132 §4b](research/dfc132_rust_target_datafusion.md)):
+### The pipeline as a Rust program
+
+`generate rust` writes the pipeline as a Rust program on Apache
+DataFusion's DataFrame API — one call per stage, so it reads as the
+pipeline does and can be extended in Rust
+([DFC157](research/dfc157_generate_rust.md)):
 
 ```bash
-ssql generate sql -dialect datafusion -pipeline 'ssql from employees.csv | ssql where -if status eq active | ssql group-by dept -avg salary avg_salary | ssql to table' pipeline.sql
-```
-
-```toml
-# Cargo.toml
-[dependencies]
-datafusion = "54"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+ssql generate rust -pipeline 'ssql from employees.csv | ssql where -if status eq active | ssql update -set-expr bonus "salary * 0.1" | ssql group-by dept -avg salary avg_salary -sum bonus bonus | ssql sort -desc avg_salary | ssql limit 10 | ssql to table' pipeline.rs
 ```
 
 ```rust
-// src/main.rs
-use datafusion::error::Result;
-use datafusion::prelude::*;
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    // The two settings ssql's own DataFusion test lane uses: CSV files
-    // have a header row, and a quoted path in FROM ('employees.csv') is
-    // a table. Paths resolve against the working directory.
-    let config = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
-    let ctx = SessionContext::new_with_config(config).enable_url_table();
-
-    // What `ssql generate sql -dialect datafusion … pipeline.sql` wrote.
-    // The `--` header comments are fine; sql() takes one statement, so
-    // only the trailing semicolon has to go.
-    let sql = std::fs::read_to_string("pipeline.sql")?;
-    let df = ctx.sql(sql.trim().trim_end_matches(';')).await?;
-
-    df.show().await?; // or df.collect().await? for Arrow RecordBatches,
-                      // df.write_parquet(...) / df.write_csv(...) to write
-    Ok(())
+pub async fn pipeline(ctx: &SessionContext) -> Result<DataFrame> {
+    let df = ctx.read_csv("employees.csv", CsvReadOptions::new().has_header(true)).await?;
+    let df = df.filter(col("status").eq(lit("active")))?;
+    let e1 = df.parse_sql_expr(r#"("salary" * CAST(0.1 AS DOUBLE))"#)?;
+    let df = df.with_column("bonus", e1)?;
+    let df = df.aggregate(vec![col("dept")], vec![cast(agg::avg(col("salary")), DataType::Float64).alias("avg_salary"), coalesce(vec![agg::sum(col("bonus")), lit(0i64)]).alias("bonus")])?;
+    let df = df.sort(vec![col("avg_salary").sort(false, true)])?;
+    let df = df.limit(0, Some(10))?;
+    Ok(df)
 }
 ```
 
-The first `cargo build` compiles DataFusion itself (minutes, a large
-`target/`); after that the program starts in well under a second and
-runs the 14.6 M-row cube from [Performance, Measured](performance.md)
-in about 0.2 s.
+Everything that came from a flag is a DataFusion builder: the filter,
+the aggregates, the sort. The one expression-language stage, `-set-expr`,
+hands DataFusion the SQL expression the datafusion dialect renders —
+`parse_sql_expr` is DataFusion's own parser, so the expression has one
+translation, the one the oracle lane checks, not a second one in Rust.
+A stage with no DataFrame form yet (`-cube`, a keyed `except`, `unpivot`,
+`sample`, `from range`) runs as one `ctx.sql(…)` step over the DataFrame
+so far, named in the program's header; what `-dialect datafusion`
+refuses, `generate rust` refuses the same way. The program's `main`
+builds the session, runs the function and writes by the pipeline's sink
+(`to table` shows it, `to csv` and `to jsonl` stream it to stdout, `to
+parquet FILE` writes the file).
+
+`-run` compiles it with cargo and runs it; `-build PATH` keeps the
+binary (about 170 MB, DataFusion statically linked). The crate lives
+under `~/.cache/ssql/rust`: the first build compiles DataFusion itself —
+several minutes and about 1.3 GB, announced on stderr — and later builds
+relink in seconds. On the 14.6 M-row file from [Performance,
+Measured](performance.md) the program runs the three-key cube in 0.19 s
+against the typed Go program's 0.32 s; the table there has the rest.
+
+```bash
+# codelab: skip — needs cargo (rustup.rs); the first build takes minutes
+ssql generate rust -run -time -pipeline 'ssql from employees.csv | ssql where -if status eq active | ssql group-by dept -avg salary avg_salary | ssql to table'
+```
 
 And ssql can rewrite your pipeline into a better one — merging filters,
 turning sort+limit into `top`, removing a sort that a later sort makes

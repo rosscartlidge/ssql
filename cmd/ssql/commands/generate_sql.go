@@ -154,6 +154,13 @@ func registerGenerateSQL(cmd *cf.SubcommandBuilder) {
 // the way it always has), so the caller translates the fragments in
 // hand: no second execution on a pipeline the optimiser cannot improve.
 func optimiseThenSQL(buf []byte, explain bool, dialect sqlDialect, run bool, outputFile string, stdout, stderr io.Writer) (done bool, err error) {
+	return optimiseThenRegen(buf, explain, "sql", "generate sql +O -dialect "+string(dialect), run, outputFile, stdout, stderr)
+}
+
+// optimiseThenRegen is optimiseThenSQL's body for any text target that
+// re-executes the optimised pipeline into an inner generate (sql, rust):
+// target labels the header note, innerCmd is the inner command text.
+func optimiseThenRegen(buf []byte, explain bool, target, innerCmd string, run bool, outputFile string, stdout, stderr io.Writer) (done bool, err error) {
 	pipeline, rules, err := optimizePipelineWith(bytes.NewReader(buf), optimiseOptions{NoShardPushdown: true})
 	if err != nil || len(rules) == 0 {
 		// errEmptyResult (contradictory predicates) included: the SQL
@@ -174,7 +181,7 @@ func optimiseThenSQL(buf []byte, explain bool, dialect sqlDialect, run bool, out
 	}
 	prog := shellQuote(exe)
 	inner := ssqlStageRe.ReplaceAllString(pipeline, "${1}"+prog+" ")
-	inner += " | " + prog + " generate sql +O -dialect " + string(dialect)
+	inner += " | " + prog + " " + innerCmd
 	switch {
 	case run:
 		inner += " -run"
@@ -183,7 +190,7 @@ func optimiseThenSQL(buf []byte, explain bool, dialect sqlDialect, run bool, out
 	}
 	cmd := exec.Command("bash", "-c", inner)
 	env := setEnvVar(os.Environ(), "SSQL_MODE", "record")
-	env = setEnvVar(env, optimiseNoteEnv, optimiseHeaderNote(buf, rules, "sql"))
+	env = setEnvVar(env, optimiseNoteEnv, optimiseHeaderNote(buf, rules, target))
 	cmd.Env = env
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -243,6 +250,7 @@ type sqlQuery struct {
 	assigns      []sqlAssign // `expr AS name` additions after the star (update's new columns)
 	joinNodes    []sqlJoin   // one per joins entry
 	setOp        *sqlSetOp   // a union / except / intersect layer
+	sink         []string    // the `to` stage's arguments (table, csv, parquet FILE, …); nil: none seen
 }
 
 // sqlFromPlaceholder stands, in a sqlOnly layer's fromTemplate, for the
@@ -277,7 +285,8 @@ type sqlCond struct {
 // op, other field: isField), or an -if-expr (text only).
 type sqlAtom struct {
 	field, op, value string
-	isField          bool // value names a column (-if-field)
+	lit              string // the value as the SQL literal the text uses (quoted: a string)
+	isField          bool   // value names a column (-if-field)
 	neg              bool // the +if form
 	text             string
 }
@@ -290,8 +299,9 @@ type sqlWin struct {
 	partition []string
 	order     []string
 	desc      bool
-	frame     string // the frame clause text ("" = default)
-	fn        string // the function text before OVER
+	frame      string   // the frame clause text ("" = default)
+	orderTerms []string // the OVER clause's ORDER BY terms as rendered (a cast for a time column), DESC included
+	fn         string   // the function text before OVER
 	text      string // the whole `fn OVER (…) AS alias` select expression
 }
 
@@ -450,6 +460,16 @@ func indentLines(s, prefix string) string {
 }
 
 func assembleSQL(input io.Reader) (string, error) {
+	q, err := assembleQuery(input)
+	if err != nil {
+		return "", err
+	}
+	return renderSQL(q), nil
+}
+
+// assembleQuery translates the fragment stream into the query tree the
+// SQL renderer prints and the Rust renderer walks (DFC157).
+func assembleQuery(input io.Reader) (*sqlQuery, error) {
 	var fragments []*lib.CodeFragment
 	decoder := json.NewDecoder(input)
 
@@ -459,16 +479,16 @@ func assembleSQL(input io.Reader) (string, error) {
 			if err == io.EOF {
 				break
 			}
-			return "", fmt.Errorf("decoding fragment: %w", err)
+			return nil, fmt.Errorf("decoding fragment: %w", err)
 		}
 		if frag.Type == "error" {
-			return "", &lib.UpstreamFailure{Frag: &frag}
+			return nil, &lib.UpstreamFailure{Frag: &frag}
 		}
 		fragments = append(fragments, &frag)
 	}
 
 	if len(fragments) == 0 {
-		return "", fmt.Errorf("no code fragments received")
+		return nil, fmt.Errorf("no code fragments received")
 	}
 
 	q := &sqlQuery{}
@@ -491,7 +511,7 @@ func assembleSQL(input io.Reader) (string, error) {
 			// heading the chain, and the query had no FROM.
 			if a := stageArgs(frag); len(a) >= 2 {
 				if a[1] != "from" {
-					return "", fmt.Errorf("the pipeline has no source: it begins at `%s`, not a `from` stage — "+
+					return nil, fmt.Errorf("the pipeline has no source: it begins at `%s`, not a `from` stage — "+
 						"if an earlier stage failed its error is above; generate sql needs the whole pipeline", frag.Command)
 				}
 				sourced = true
@@ -517,7 +537,7 @@ func assembleSQL(input io.Reader) (string, error) {
 			q.comments = append(q.comments, cmd)
 		}
 		if err := translateFragment(q, frag, funcFrags); err != nil {
-			return "", err
+			return nil, err
 		}
 		// A stage's side sources are the func fragments emitted since the
 		// previous stage (each emits its own just before itself). Kept
@@ -530,7 +550,7 @@ func assembleSQL(input io.Reader) (string, error) {
 		}
 	}
 
-	return renderSQL(q), nil
+	return q, nil
 }
 
 // stageArgs returns the stage's ["ssql", kind, argv...] view,
@@ -642,7 +662,9 @@ func translateFragment(q *sqlQuery, frag *lib.CodeFragment, funcFrags []*lib.Cod
 	case "exclude":
 		err = translateExclude(q, args[2:])
 	case "to":
-		// Output commands don't affect SQL
+		// Output commands don't affect SQL; the Rust renderer's main
+		// writes by the sink.
+		q.sink = args[2:]
 		return nil
 	case "count":
 		translateCount(q)
@@ -1058,7 +1080,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 				cond = sqlNot(cond)
 			}
 			currentAnd = append(currentAnd, cond)
-			curAtoms = append(curAtoms, sqlAtom{field: field, op: op, value: value, neg: args[i][0] == '+', text: cond})
+			curAtoms = append(curAtoms, sqlAtom{field: field, op: op, value: value, lit: sqlLiteralFor(field, value), neg: args[i][0] == '+', text: cond})
 			i += 4
 		case "-if-expr", "-x", "+if-expr", "+x":
 			if i+1 >= len(args) {
@@ -2444,6 +2466,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 		}
 		overParts := []string{}
+		var overOrder []string
 
 		if len(c.partitionBy) > 0 {
 			quoted := make([]string, len(c.partitionBy))
@@ -2478,6 +2501,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 					quoted[j] += " DESC"
 				}
 			}
+			overOrder = quoted
 			overParts = append(overParts, "ORDER BY "+strings.Join(quoted, ", "))
 		} else if len(c.partitionBy) > 0 {
 			// A whole-partition frame without -order: order by the partition
@@ -2489,6 +2513,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 			for j, f := range c.partitionBy {
 				quoted[j] = quoteIdent(f)
 			}
+			overOrder = quoted
 			overParts = append(overParts, "ORDER BY "+strings.Join(quoted, ", "))
 		}
 
@@ -2521,7 +2546,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 				expr = "CAST(" + expr + " AS " + sqlFloatType() + ")"
 			}
 			q.selectExprs = append(q.selectExprs, expr+alias)
-			w := sqlWin{flag: c.flags[fi], args: c.fargs[fi], partition: c.partitionBy, order: c.orderBy, desc: c.desc, frame: frameSQL, fn: funcExpr, text: expr + alias}
+			w := sqlWin{flag: c.flags[fi], args: c.fargs[fi], partition: c.partitionBy, order: c.orderBy, desc: c.desc, frame: frameSQL, orderTerms: overOrder, fn: funcExpr, text: expr + alias}
 			if n := len(w.args); n > 0 {
 				w.alias = w.args[n-1]
 			}

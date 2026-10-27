@@ -5,6 +5,14 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`ssql generate rust`: the pipeline as a Rust program on Apache DataFusion's DataFrame API** ([DFC157](doc/research/dfc157_generate_rust.md), revisiting DFC132's "no Rust backend" now that the DataFusion oracle lane is green over the whole suite). One DataFrame call per stage — `read_csv`, `filter(col("status").eq(lit("active")))`, `aggregate(vec![col("dept")], vec![agg::avg(col("salary")).alias(…)])`, `sort`, `limit`, `join`, `union` — with the flag stages rendered as builders and the expression-language stages (`-if-expr`, `-set-expr`, `-expr`) handed to DataFusion's own expression parser as the SQL text the datafusion dialect renders, so the expression language keeps its one translation. A stage with no DataFrame form yet (the rollup/cube emulation, a keyed except/intersect, unpivot, sample, `from range`) runs as one `ctx.sql` step over the DataFrame so far; what `-dialect datafusion` refuses, this refuses the same way. `-run` and `-build PATH` compile with cargo through a cache crate under `~/.cache/ssql/rust` (the first build compiles DataFusion: minutes, once; the binary is about 170 MB); `-func NAME` emits the function alone; `-optimise` (default) applies the pipeline optimiser as `generate go` and `generate sql` do; the sink picks `main`'s output (`to table` shows, `to csv`/`to jsonl` stream to stdout, `to parquet FILE` writes). Measured on the 14.6 M-row file: DataFusion runs every workload faster than the typed Go program — the cube in 0.19 s against 0.32 s, a CSV group-by in 0.24 s against 1.63 s, a 10 M-row triple join in 0.26 s against 0.89 s (`doc/performance.md` §1a).
+- **The `rust` lane of the equivalence gate** (`SSQL_RUST_LANE=1`, cargo present): every case's program built into one crate and one binary, run by case name, held to the exec oracle like every lane and to the datafusion lane in particular (same engine). `make lanes` runs it with the Postgres and DataFusion lanes.
+- **`TestSQLSnapshot`** (`SSQL_SQL_SNAPSHOT=write|check DIR`): pins the SQL every equivalence case renders in every dialect, the gate that proved the assembler refactor behind `generate rust` (the layer tree kept beside the rendered text) changed no byte of `generate sql` output.
+
 ## [4.127.1] - 2026-10-27
 
 ### Fixed

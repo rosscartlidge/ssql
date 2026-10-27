@@ -50,6 +50,33 @@ parent levels are merged from the detail groups' state rather than by
 re-reading rows. The generated program's header records both the
 pipeline you typed and the one it implements.
 
+### 1a. The same pipelines as a Rust program on DataFusion (machine A, 2026-10-27)
+
+`generate rust` writes the pipeline as a Rust program on Apache
+DataFusion's DataFrame API ([DFC157](research/dfc157_generate_rust.md)).
+The same plan, three engines, best of three runs, whole-process wall,
+output to `/dev/null`:
+
+| Pipeline (14.6 M rows unless noted) | DataFusion (generated Rust) | ssql `generate go` (typed) | DuckDB 1.5 |
+|---|---:|---:|---:|
+| the three-key cube above | **0.19 s** | 0.32 s | 0.36 s |
+| `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
+| the same rows as 1.2 GB CSV | **0.24 s** | 1.63 s | 0.71 s |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
+| 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
+| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 s | 0.06 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | > 1800 s (capped) | 14.0 s |
+
+DataFusion is faster than the typed Go program on every workload here,
+by 1.7× on the cube and 2–7× elsewhere, and matches DuckDB on the
+scan-and-aggregate shapes: a vectorised, morsel-parallel executor over
+Arrow batches beats a row-at-a-time streaming program with struct
+types, CSV reading included. The streaming write is the one shape it
+does not win, and the typed window row is a bug (super-linear in the
+partition size; TODO), not a measurement of the design. The Rust
+program is the same `generate go` pipeline with `rust` in place of
+`go`; the first `cargo` build compiles DataFusion (minutes, once).
+
 Honest framing: this is a scan-and-aggregate query, where a pruned
 parallel read wins. On the join-heavy benchmark in §3 DuckDB is still
 ahead. Postgres is in the table for scale, not as a target: it has to

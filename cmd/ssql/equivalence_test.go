@@ -381,6 +381,12 @@ func equivLanes() []equivLane {
 			return stdout.String()
 		}})
 	}
+	// The rust lane (DFC157): generate rust's program, built once for every
+	// case and run by name (equivalence_rust_test.go). Same engine as the
+	// datafusion lane, so it inherits that lane's skips.
+	if rustLaneEnabled() {
+		lanes = append(lanes, equivLane{"rust", rustLaneRun})
+	}
 	if host := os.Getenv("SSQL_TEST_PG_HOST"); host != "" {
 		lanes = append(lanes, equivLane{"postgres", func(t *testing.T, bin, pipeline string, env []string) string {
 			sql, skip := equivDialectSQL(t, "postgres", bin, pipeline, env)
@@ -409,7 +415,7 @@ const equivSkipPrefix = "\x00skip: "
 // equivSQLLanes are the lanes that run `generate sql` output; a case's
 // duckdb skip reason (a stage with no SQL translation at all) applies to
 // every one of them.
-var equivSQLLanes = map[string]bool{"duckdb": true, "datafusion": true, "postgres": true}
+var equivSQLLanes = map[string]bool{"duckdb": true, "datafusion": true, "postgres": true, "rust": true}
 
 // equivDialectSQL translates the pipeline for a dialect. A by-design
 // refusal (dialectRefuse's "has no <dialect> translation") returns a skip
@@ -679,11 +685,19 @@ func TestPipelineEquivalence(t *testing.T) {
 		t.Log("duckdb not found (PATH or ~/.local/bin) — the second-engine SQL lane is skipped")
 	}
 	httpfs := duckdbHasHTTPFS()
+	if rustLaneEnabled() {
+		rustLanePrepare(t, bin, repl)
+	}
 
 	for _, c := range equivCases {
 		c := c
 		if strings.Contains(c.Pipeline, "{{.url}}") && !httpfs {
 			c.Skip = equivSkipPlus(c.Skip, "duckdb", "duckdb reads a URL through its httpfs extension, which is not installed here")
+		}
+		if reason, ok := c.Skip["datafusion"]; ok {
+			if _, has := c.Skip["rust"]; !has {
+				c.Skip = equivSkipPlus(c.Skip, "rust", reason) // same engine
+			}
 		}
 		if len(c.Env) > 0 {
 			// {{.data}} in Env too (SSQL_MACROS={{.data}}/macros, DFC152).

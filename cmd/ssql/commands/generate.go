@@ -15,6 +15,7 @@ func RegisterGenerate(cmd *cf.CommandBuilder) *cf.CommandBuilder {
 
 	registerGenerateGo(genCmd)
 	registerGenerateSQL(genCmd)
+	registerGenerateRust(genCmd)
 	registerGenerateSSQL(genCmd)
 	registerGenerateSchema(genCmd)
 	registerGenerateJSON(genCmd)

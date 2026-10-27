@@ -96,9 +96,10 @@ doc-check:
 PG_HOST ?= ssql-node1
 DF_PYTHON ?= $(HOME)/.venvs/df/bin/python
 lanes:
-	@echo "Postgres lane ($(PG_HOST)) and DataFusion lane ($(DF_PYTHON))"
+	@echo "Postgres lane ($(PG_HOST)), DataFusion lane ($(DF_PYTHON)) and the rust lane (cargo; DFC157)"
+	@test -x "$(HOME)/.cargo/bin/cargo" || command -v cargo >/dev/null || echo "WARNING: cargo missing — the rust lane skips itself; install with https://rustup.rs"
 	@test -x "$(DF_PYTHON)" || echo "WARNING: $(DF_PYTHON) missing — python3 -m venv ~/.venvs/df && ~/.venvs/df/bin/pip install datafusion"
-	SSQL_TEST_PG_HOST=$(PG_HOST) SSQL_DATAFUSION_PYTHON=$(DF_PYTHON) go test ./cmd/ssql -run 'TestPipelineEquivalence|TestInterchange|TestIntOverflowEveryLane' -count=1 -timeout 60m
+	SSQL_TEST_PG_HOST=$(PG_HOST) SSQL_DATAFUSION_PYTHON=$(DF_PYTHON) SSQL_RUST_LANE=1 PATH="$(PATH):$(HOME)/.cargo/bin" go test ./cmd/ssql -run 'TestPipelineEquivalence|TestInterchange|TestIntOverflowEveryLane' -count=1 -timeout 60m
 
 doc-test:
 	@echo "Level 2: Documentation Testing"
