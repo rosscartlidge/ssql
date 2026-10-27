@@ -289,7 +289,13 @@ docker-gpu: docker-gpu-extract
 # gzipped for embedding (DFC107 — the TinyGo mini-engine is gone).
 # WASM_BUDGET_MB is the gzipped-size ceiling both wasm targets check
 # (DFC151: a generous absolute number, never a baseline; 4.4 measured).
-WASM_BUDGET_MB := 5
+# 5 → 6 on 2026-10-27: generate rust and the assembler's layer tree
+# (DFC157) added ~50 KB; the local slim build read 4.84 MB but CI's
+# toolchain emits ~4 % larger wasm (5.02 MB) and failed the playground
+# deploy of v4.128.0. The local number is not the CI number — leave
+# headroom (the script takes a whole number). TestSlimBuildDependencies is the gate against a forbidden
+# package drifting in; this ceiling is the backstop.
+WASM_BUDGET_MB := 6
 # DFC126: the CLI codelab from scratch in a fresh LXD container, against
 # the PUBLISHED release (needs lxd + network, ~5 min). -k keeps the box.
 codelab-mint:
