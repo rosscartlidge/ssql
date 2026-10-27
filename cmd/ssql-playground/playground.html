@@ -127,7 +127,7 @@ code[class*="language-"], pre[class*="language-"] { background: none; font-famil
     <button class="example-btn" onclick="loadExample(24)">Nested as JSON — the collected lists whole, with to json</button>
     <button class="example-btn" onclick="loadExample(25)">Golden ratio — consecutive Fibonacci ratios converge on φ (lag, sqrt)</button>
     <button class="example-btn" onclick="loadExample(26)">int128 — a sum past 2^63 and squares of 39 digits, exact (cast -type n int128)</button>
-    <button class="example-btn" onclick="loadExample(27)">decimal — money summed to the cent (-type amount decimal:2) beside the same column as a float</button>
+    <button class="example-btn" onclick="loadExample(27)">decimal — 7% tax per order to the cent (-type amount decimal:2), summed exactly beside the float's drift</button>
 </div>
 
 <div class="datasets">
@@ -275,8 +275,9 @@ const EXAMPLES = [
 | ssql group-by -sum n total -max sq biggest -count rows
 | ssql to table`,
     `ssql from csv orders.csv -type amount decimal:2
-| ssql update -set-expr as_float 'float(amount)'
-| ssql group-by customer_id -sum amount exact -sum as_float float_sum -count orders
+| ssql update -set-expr tax 'round(amount * decimal("0.07"), 2)'
+| ssql update -set-expr tax_float 'float(amount) * 0.07'
+| ssql group-by customer_id -sum tax exact -sum tax_float as_float -count orders
 | ssql sort -desc exact
 | ssql to table`,
 ];
