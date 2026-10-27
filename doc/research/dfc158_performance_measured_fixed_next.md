@@ -1,0 +1,346 @@
+# Performance against the engines: what we found, what we fixed, what is left
+
+Reference: DFC158
+Created: 2026-10-28
+Last modified: 2026-10-28
+
+[Back to Index](./README.md)
+
+**Status:** write-up of the 2026-10-27 measurements and the two fixes
+that followed them, with a ranked list of what to do next. Ross
+(2026-10-28): "could you write up a DFC on what we discovered about
+performance, what we have fixed and what we can do". The measurements
+are DFC157 §4's; the fixes are commits 3bd4919 (window) and 436c8b0
+(CSV scanner), unreleased on main as of this writing. Related:
+[DFC084](./typed-performance-notes.md) (the typed runtime's
+performance notes, 2026-04), [DFC113](./dfc113_scale_gate.md) (the
+scale gate), [DFC114](./dfc114_performance_journey.md) (642 k to 98 M
+rows per second), [DFC132](./dfc132_rust_target_datafusion.md) and
+[DFC157](./dfc157_generate_rust.md) (`generate rust`).
+
+## 1. The measurement that started it
+
+`generate rust` (DFC157) put a third engine under the same pipelines
+and, for the first time, the typed Go program had a vectorised
+competitor on every shape rather than DuckDB on a cube. Machine A (24
+cores, 62 GB), the 14.6 M-row file (660 MB Parquet, 1.23 GB CSV),
+best of three, whole-process wall, output to `/dev/null`. The typed
+column shows the number before the day's fixes and, where one
+changed it, the number after.
+
+| Pipeline | DataFusion | typed Go before → after | DuckDB |
+|---|---:|---:|---:|
+| `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.19 s** | 0.32 s | 0.36 s |
+| `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
+| `group-by relationship -count`, CSV | **0.24 s** | 1.63 → 1.05 s (0.39 s on a one-column struct) | 0.71 s |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
+| 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
+| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 s | 0.06 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | > 1800 s → 35 s | 14.0 s |
+
+Peak RSS: cube 185 MB / 940 MB / 437 MB; CSV group-by 88 MB / 1.5 GB /
+760 MB; filtered write 1.9 GB / 8.1 GB / 1.4 GB; window 1.7 GB / 3.8 GB
+/ 3.0 GB (DataFusion / typed Go / DuckDB).
+
+Two of the seven rows were pathologies, not engine differences, and
+both are fixed (§3). The other five are the honest gap between a
+row-at-a-time program over Go structs and a vectorised executor over
+Arrow batches: 1.7× on the cube, 2–5× on the scans and the join, and
+the one row where the Go program is within 2× of the winner is the
+streaming write, which is bounded by formatting. One of the five has a
+cause that is not the row model at all (§2.3).
+
+## 2. What we discovered
+
+### 2.1 The window was quadratic in both lanes, since it was written
+
+`computeWindowFunc` (sql.go) and `typed.windowValue` computed one row's
+value by scanning that row's frame, and over the default frame
+(UNBOUNDED PRECEDING → CURRENT ROW) the frame always starts at the
+partition's first row: n²/2 steps per partition for every sum,
+average, count, extreme and rank. Measured before the cause was read:
+exec 52.8 s at 50 k rows and 210.7 s at 100 k, typed 9.0 s and 29.8 s;
+doubling the rows quadrupled the time. The 14.6 M-row benchmark (26
+partitions of about 560 k rows) was still running at a 30-minute cap
+on one core.
+
+Only the `-presorted` streaming path was linear: it had had one-pass
+accumulators since it was written and ring-buffer sliding ones since
+DFC130; the DFC156 fold had a one-pass precompute
+(`runningFoldValues`) for the same frame. The materialising path,
+which is what every pipeline without `-presorted` runs, never got the
+same treatment, and no fixture was large enough to notice: the
+equivalence cases hold tens of rows, and the scale gate (DFC113) had
+no window case. This is exactly the failure the "a fixture that fits
+in a pipe buffer tests nothing about scale" rule describes, and the
+rule was two months old when the quadratic was found by a benchmark
+run for a different reason.
+
+### 2.2 The CSV reader's cost was the splitter, not the decoding
+
+A profile of the generated one-column group-by over the 1.23 GB file
+(the program, not `Stream.Serial()`, whose per-row channel dominates
+any profile): `encoding/csv` 64 % of CPU, a third of all CPU in the
+collector. `encoding/csv` builds one record buffer per row and slices
+every field out of it: 14.6 M allocations, about 1.2 GB of garbage,
+and the write barriers and span scans that come with it. Pruning the
+struct to one column had moved the time only from 1.9 s to 1.55 s,
+which said the same thing: the decoding was cheap, the splitting was
+not.
+
+DFC084 §1 had recorded a byte-level reader TRIED in April and deleted,
+17 % slower than `encoding/csv`, with the note that the remaining real
+win was a SIMD delimiter scan. The difference in October: the parallel
+reader holds the whole file as one mapped `[]byte`, so a scanner over
+it IS that scan (`bytes.IndexByte` is assembly on amd64) and fields can
+be views of the mapping rather than copies. The April result was about
+the serial path's access pattern, not about byte-level readers.
+
+### 2.3 The decimal row is a planner downgrade, not decimal arithmetic
+
+Found while writing this DFC. `generate go -explain` on the decimal
+pipeline:
+
+```
+[plan]   source: parallel (Stream[T]) — at least one downstream accepts ShapeStream
+[plan]   ssql cast -type relationship decimal:2: accepts=iter.Seq[T], produces=iter.Seq[T], SerialOnly=true
+[plan] downgraded ssql group-by a_kind -sum relationship total to serial alternative (upstream is iter.Seq[T])
+[plan] downgraded ssql from parquet … to serial alternative
+```
+
+`cast`'s typed template (`commands/typed_cast.go`) declares
+`SerialOnly`, so the planner reads the Parquet file serially, maps
+serially and groups serially: the 1.29 s is the plain Parquet group-by
+(0.15 s parallel) run on one core with a per-row struct rebuild in
+between. `ssql.Decimal` is an `Int128` plus a scale and its `Add` on a
+common scale is one checked add and one bound check (`decimal.go`);
+the arithmetic is not the cost. A cast is a per-row map with no
+cross-shard state, the most parallel stage there is; it is serial only
+because `Stream[T]` has `Where` and no `Select` (`typed/stream.go`),
+and the template was written against what the stream offered. The
+other `SerialOnly` typed templates are justified: `group-by -presorted`
+and `-stream-expr` (contiguous keys, unmergeable fold state), `window`
+and `union` (barriers).
+
+### 2.4 The streaming write is formatting-bound, and the sink buffers everything
+
+The filtered write is the one row where DuckDB beats DataFusion and
+typed Go is within 2× of the winner: 2.7 M rows of output, each
+formatted once, bounds every engine. Typed Go's 8.1 GB peak RSS is the
+documented trade of the parallel CSV sink (claude/concurrency.md §12:
+each shard formats into its own buffer, dumped in shard order, 4.4×
+faster than a `Serial()` fan-in). That trade was measured on a 7.25 M-
+row write; on a 14.6 M-row input it is 2× the output size plus the
+mapped input, and it is the largest RSS in the table by 4×.
+
+### 2.5 The Parquet scan and the join: unprofiled, probably the row model
+
+The Parquet group-by (0.15 s against 0.03 s) and the three-way join
+(0.89 s against 0.26 s) have not been profiled. Both read Parquet
+through `pqarrow` into Go structs one row at a time and hash on Go
+values; DataFusion keeps the Arrow batches and hashes on columns. The
+2.4× on the cube says what a vectorised engine buys on a shape where
+the Go program is already parallel and column-pruned, and the join
+gap is the same size. Nothing here suggests a pathology, and nothing
+here should be touched without a profile of the generated program
+first (DFC084's lesson held three times in one evening, see §3.2).
+
+### 2.6 Method
+
+- **Profile before assuming**, and profile the generated program. The
+  first CSV cut was built on a plausible story (plain lines are the
+  common case, send quoted ones to `encoding/csv`) and was 2× slower;
+  the profile said half the file's lines quote a name with a comma and
+  every fallback built a 4 KB reader.
+- **A benchmark run with a gate competing for the machine lies.** The
+  one-column CSV program measured 2.35 s under a full `cmd/ssql` run and
+  1.55 s alone. Benchmarks run on an idle machine, best of three.
+- **The scale gate is the only fixture that sees complexity.** The
+  window quadratic, the CSV reader's newline index (a 117 MB slice built
+  serially before any shard ran, half a second of the 0.85 s that was
+  left) and the planner downgrade are all invisible at a thousand rows.
+- **`-explain` is a performance tool.** The decimal row's cause was
+  three lines of planner output; a profile would have said "serial"
+  too, but the plan says why.
+
+## 3. What we fixed (2026-10-27)
+
+### 3.1 The window: one pass over the running frame
+
+`runningWindowValues` (root `window_running.go`) and `runningSpecValues`
+(`typed/window_running.go`) carry sum, average, count, count-field, min,
+max, rank, dense rank, percent rank and cume dist across the sorted
+partition in one pass over the running frame, with the same operations
+in the same order as the scan it replaces, so a compensated float sum
+carried forward IS the sum the scan from row 0 would compute and every
+value is byte-identical; the whole-partition frame (no `-order`, no
+bounds) computes each aggregate once and broadcasts it. Bounded ROWS
+frames (O(n·k)), RANGE frames, lag and lead stay per row, which is what
+their semantics say. Typed keeps a `done` mask per spec so the per-row
+loop skips what the pass filled.
+
+Proof: `TestWindowRunningMatchesPerRow` (400 records with ties, missing
+values and int/float/string mixes; ten functions; both frames;
+`reflect.DeepEqual` against `computeWindowFunc` at every position), the
+equivalence window cases in every lane, and two new scale cases
+(`window-running-frame-exec` 11.6 s and `-typed` 4.3 s over six
+partitions of 500 k rows, against 60 s and 90 s budgets).
+
+| Rows | exec before → after | typed before → after |
+|---:|---:|---:|
+| 50 k | 52.8 s → 0.15 s | 9.0 s → 0.02 s |
+| 1 M | — → 2.3 s | — → 0.25 s |
+| 14.6 M (the benchmark) | > 1800 s → 219 s, 28 GB | > 1800 s → 35 s, 3.8 GB |
+
+CLAUDE.md's performance rules now say every window aggregate over the
+running frame is carried in one pass and a new window function gets a
+carried form or a note saying why not.
+
+### 3.2 The CSV reader: a zero-copy scanner
+
+`typed/csv_scan.go` with `typed/stream.go` and `typed/io.go`: byte-range
+shards cut at a newline (no global newline index; each shard finds its
+own lines with `IndexByte`); each line split by `bytes.IndexByte` into
+`unsafe.String` views of the mapping; quoted fields handled in the
+scanner (RFC 4180 within a line, a doubled quote unescaped into a
+per-shard scratch); one `strings.Clone` per kept string column
+(`rowSchema.copyCols`); decode visits only the columns the struct has
+(`rowSchema.active`); `encoding/csv` only for a malformed line, for its
+error. Three steps, each from a profile of the one-column program:
+
+| Step | One-column wall |
+|---|---:|
+| before | 1.55 s |
+| scanner for plain lines, `encoding/csv` for any line with a quote | 4.2 s (2× slower) |
+| quoting in the scanner | 0.90 s |
+| decode visits only active columns | 0.85 s |
+| byte-range shards, no newline index | **0.39 s** |
+
+The full seven-column struct went 1.63 s → 1.05 s, the two name
+columns cloned 14.6 M times each being the remainder. Proof:
+`TestReadCSVParallelMatchesSerial` (quoted commas and doubled quotes,
+CRLF, blank lines, padded cells, empty optional and required cells, a
+column the struct lacks; five shard counts against the serial
+`encoding/csv` reader), strings survive the mapping (the file is
+removed after the read), field-count and bare-quote errors as
+`encoding/csv` names them, the typed race suite, the full equivalence
+suite, the scale gate.
+
+Both fixes are on main (3bd4919, 436c8b0), gated (vet, slim build, race
+packages, full `cmd/ssql`, doc-test, equivalence, scale), and in
+CHANGELOG's Unreleased section.
+
+## 4. What we can do, ranked
+
+Expected win first, cost second. Each item that changes a
+perf-sensitive path adds a scale case (DFC113) and, where results
+could change, an equivalence case; none of them changes a result.
+
+1. **`cast` keeps the pipeline parallel** (§2.3). Add
+   `Stream[T].Select(fn func(T) U) Stream[U]` as a per-shard map (no
+   channel, the `Where` pattern), and give `typed_cast.go` dual
+   templates (`Stream.Select` with `AltCodeIfSeq` = the present
+   `typed.Select`). Expected: the decimal row from 1.29 s to about the
+   Parquet group-by's 0.15–0.2 s, a 6–8× win for ~60 lines, and every
+   pipeline with a `cast` before a parallel stage gets it. Audit the
+   other per-row map templates (`update`, `include`, `rename`,
+   `exclude`) for the same downgrade while there: `-explain` on a
+   pipeline with each of them before a `group-by` says in one line
+   whether the source stays parallel. A scale case:
+   `cast | group-by` over the 120 MB fixture with a budget that the
+   serial plan cannot meet.
+
+2. **CSV column projection in the optimiser** (TODO, 2026-10-27). The
+   Parquet rule prunes a `from parquet` read to the columns downstream
+   uses; CSV has no such rule, so the typed struct holds every header
+   column and the scanner clones every string column per row. Measured
+   1.05 s for the full struct against 0.39 s for the one column the
+   pipeline uses. Needs `from csv/tsv -columns` honoured by the typed
+   template (a struct of those columns; the reader already skips
+   columns the struct lacks), the exec, record and SQL forms projecting
+   the same, the optimiser rule extended from Parquet to CSV, and an
+   equivalence case. Expected: the CSV group-by at 0.4 s, between
+   DataFusion and DuckDB.
+
+3. **The typed window's 35 s** (TODO, 2026-10-27). Linear now, but
+   `typed.Window` materialises every row, sorts each partition with
+   `sort.SliceStable` over a closure comparing struct fields, and boxes
+   one `[]any` of results per row (3.8 GB RSS). A typed sort key
+   (extract the order columns once into a parallel slice, sort an index
+   by it) and an unboxed result column per spec (`[]int64` or
+   `[]float64` chosen by the spec's reader) would cut most of the
+   allocation; partitions are independent, so sorting them in parallel
+   is the other half. DataFusion's 5.7 s is a global sort of 14.6 M
+   rows by a string column; under 10 s is a reasonable target. The
+   scale cases already exist; tighten their budgets when it lands.
+
+4. **The parallel CSV sink's memory.** 8.1 GB on the filtered write is
+   2× the output plus the mapped input. The buffer-per-shard dump is
+   4.4× faster than a `Serial()` fan-in, but a bounded alternative
+   exists: each shard formats into chunks of a fixed size and a single
+   writer drains the chunks in shard order as they complete (the first
+   shard's chunks stream out while later shards are still formatting;
+   peak is shards × chunk size, not the output). Measure against the
+   dump on the 7.25 M-row write it was tuned on before changing the
+   default; the time should hold and the RSS should fall by 4×.
+
+5. **The Parquet scan and the join: profile first** (§2.5). A batch
+   decode (`pqarrow` record batches into column slices, structs built
+   per batch rather than per row) is the plausible lever for the scan;
+   the join's hash build is the plausible lever there. Neither has a
+   number behind it; both get a profile of the generated program before
+   a line changes, and a note here either way.
+
+6. **The exec path on big windows is documented as the wrong tool**, not
+   a target. 219 s and 28 GB for 14.6 M records as maps is the record
+   model's price; the fix is the typed program or `generate rust`, and
+   `doc/performance.md` says so. No work planned.
+
+7. **A benchmark driver in the repo.** The 2026-10-27 table was produced
+   by scripts in a session scratchpad (`bench/run.sh`, `run2.sh`) that
+   will not survive the session. A `scripts/bench-engines.sh` taking a
+   Parquet file and running the seven pipelines through typed Go,
+   DuckDB and `generate rust -build` (cargo present) on an idle machine,
+   best of three, printing the table in `doc/performance.md` §1a's
+   format, makes the comparison repeatable at each release instead of a
+   one-off. It is not a gate; the scale gate is the gate.
+
+What is NOT on the list: a columnar or vectorised runtime for typed Go.
+DFC132's reasoning stands: a third runtime would own the semantics a
+third time, and the engine that already does this well is one
+`generate rust` away. The typed program's floor is the row model, and
+the remaining 2–3× on scan-and-aggregate shapes is the price of that
+model; the items above are the pathologies and the planner gaps on top
+of it, which are worth 3–8× each where they apply.
+
+## 5. What this says about the rules
+
+- The scale gate's coverage, not its budgets, is what finds complexity
+  bugs. Every perf-sensitive path gets a case when it is written, and a
+  quarterly pass over the commands with none (today: `cast`, `join`,
+  the sinks) is cheaper than a 30-minute benchmark timeout.
+- A template's `SerialOnly` is a performance claim and should be
+  justified in a comment at the declaration, as `group-by`'s is. `cast`'s
+  was not, and it serialised every pipeline it appeared in.
+- Measure against the engines on every release, from a script in the
+  repo. The 2026-10-27 table found two pathologies and a planner gap in
+  an afternoon; the previous engine comparison was 2026-09-15 and
+  measured one pipeline.
+
+## 6. References
+
+- [DFC157 §4](./dfc157_generate_rust.md) — the measurement; §7 the
+  window fix note.
+- [DFC084 §1](./typed-performance-notes.md) — the April byte-level reader
+  and its "Revisited 2026-10-27" paragraph.
+- [DFC113](./dfc113_scale_gate.md) — the scale gate and the fixture rule.
+- [DFC114](./dfc114_performance_journey.md) — the 642 k → 98 M rows/s
+  ladder the typed program climbed.
+- [DFC132](./dfc132_rust_target_datafusion.md) — why no Rust runtime;
+  revisited by DFC157 as a lowering.
+- `doc/performance.md` §1a — the published table; `doc/research/TODO.md`
+  — items 2 and 3 above as recorded on 2026-10-27.
+- Journal `journal/2026-W44.md`, entries "the window was quadratic; now
+  one pass" and "the typed CSV reader: 1.55 s → 0.39 s".
+- Code: `window_running.go`, `typed/window_running.go`,
+  `typed/csv_scan.go`, `commands/typed_cast.go`, `typed/stream.go`.
