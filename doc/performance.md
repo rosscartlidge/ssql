@@ -61,7 +61,7 @@ output to `/dev/null`:
 |---|---:|---:|---:|
 | the three-key cube above | **0.19 s** | 0.32 s | 0.36 s |
 | `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
-| the same rows as 1.2 GB CSV | **0.24 s** | 1.63 s | 0.71 s |
+| the same rows as 1.2 GB CSV | **0.24 s** | 1.05 s (1.63 before the scanner; 0.39 s reading the one column) | 0.71 s |
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 s | 0.06 s |

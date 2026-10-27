@@ -2,7 +2,7 @@
 
 Reference: DFC084
 Created: 2026-04-26
-Last modified: 2026-09-06
+Last modified: 2026-10-27
 
 [Back to Index](./README.md)
 
@@ -62,6 +62,29 @@ delimiter scan (intrinsics or assembly) — but Go's stdlib doesn't
 expose these, and pulling in a third-party library would conflict with
 the "zero native dependency" pitch. We will likely have to live with
 the current ~280 ms / 1M-row CSV overhead.
+
+**Revisited 2026-10-27 — it paid off on the PARALLEL reader.** The
+DFC157 measurement put the typed CSV group-by (14.6 M rows, 1.23 GB)
+at 1.63 s against DataFusion's 0.24 s, and a profile of the generated
+program showed `encoding/csv` at 64 % of CPU with a third of all CPU in
+the collector (14.6 M row buffers, ~1.2 GB of garbage). The difference
+from the April attempt: `ReadCSVParallel` holds the whole file as one
+mapped `[]byte`, so a scanner over it IS the SIMD delimiter scan
+(`bytes.IndexByte` is assembly on amd64), and the fields can be
+`unsafe.String` views of the mapping — no per-row buffer at all, one
+`strings.Clone` per kept string column, nothing for columns the struct
+lacks, `encoding/csv` only for a malformed line (`typed/csv_scan.go`).
+Three steps, each measured on the generated one-column group-by: the
+scanner with quoted lines sent to encoding/csv — **4.2 s, 2× slower**
+(half the file's lines quote a name holding a comma, each fallback
+built a 4 KB reader); quoting handled in the scanner — 0.90 s; decode
+visiting only the active columns — 0.85 s; the serial newline index
+(117 MB, one pass over the file before any shard ran) replaced by
+byte-range shard boundaries — **0.39 s**, between DataFusion and
+DuckDB. The full seven-column struct is 1.05 s: the two name columns'
+clones; CSV column projection in the optimiser (the Parquet rule, for
+CSV) is the next step. The lesson the April note drew still holds —
+profile first — and the profile is what found each of the three.
 
 ### 2. Time parsing without `time.Parse`
 

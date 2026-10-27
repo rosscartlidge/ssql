@@ -39,6 +39,15 @@ type rowSchema struct {
 	header   []string
 	types    []string // Go type of the field each column decodes into ("" = no field)
 	encoders []fieldEncoder
+	// copyCols are the columns whose decoder KEEPS the cell's string (a
+	// string, *string or JSON field): a reader that hands decode views
+	// into a buffer it will reuse or unmap (ReadCSVParallel's scanner)
+	// copies these first. Every other decoder parses and lets go.
+	copyCols []int
+	// active are the columns that decode into a field: decode visits
+	// only these (a no-op column cost a TrimSpace and an indirect call
+	// per row until 2026-10-27 — 44 % of a one-column read's CPU).
+	active []int
 }
 
 // decode fills the struct at p from one row. The error names the
@@ -48,7 +57,8 @@ func (rs *rowSchema) decode(p unsafe.Pointer, rec []string) error {
 	if len(rec) < len(rs.decoders) {
 		return fmt.Errorf("row has %d columns, expected %d", len(rec), len(rs.decoders))
 	}
-	for i, dec := range rs.decoders {
+	for _, i := range rs.active {
+		dec := rs.decoders[i]
 		// Every lane trims a cell before typing it (csv_infer.go's
 		// parse*Cell; DuckDB for the numeric types it parses), so a
 		// padded "  7" is the int 7 and " a " is "a". Until 2026-10-15
@@ -207,10 +217,22 @@ func buildReadSchema[T any](header []string, strict bool, timeFormats map[string
 		}
 	}
 
+	var copyCols, active []int
+	for col, t := range types {
+		if t == "" {
+			continue
+		}
+		active = append(active, col)
+		if lt := strings.ToLower(t); strings.Contains(lt, "string") || strings.Contains(lt, "json") {
+			copyCols = append(copyCols, col)
+		}
+	}
 	return &rowSchema{
 		decoders: decoders,
 		header:   append([]string(nil), header...),
 		types:    types,
+		copyCols: copyCols,
+		active:   active,
 	}, nil
 }
 

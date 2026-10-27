@@ -3,12 +3,12 @@ package typed
 import (
 	"bytes"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -501,24 +501,19 @@ func ReadCSVParallel[T any](filename string, n int, opts ...CSVOption) Stream[T]
 		return Stream[T]{shards: nil, n: 0}
 	}
 
-	// Find every newline byte offset using bytes.IndexByte (SIMD on
-	// amd64). The first newline ends the header; subsequent newlines
-	// end data rows.
-	newlines := make([]int, 0, len(data)/64) // rough size hint
-	for off := 0; off < len(data); {
-		idx := bytes.IndexByte(data[off:], '\n')
-		if idx < 0 {
-			break
-		}
-		newlines = append(newlines, off+idx)
-		off += idx + 1
+	// The header ends at the first newline; the shards are byte ranges
+	// of the rest, each cut at a newline, and each shard finds its own
+	// lines with bytes.IndexByte (SIMD on amd64). Until 2026-10-27 the
+	// reader indexed every newline of the file first — one serial pass
+	// over the whole file into a 117 MB slice for 14.6 M rows, half the
+	// wall time of a one-column read once the scan itself was parallel
+	// and allocation-free (csv_scan.go). The boundary search is n
+	// IndexByte calls; a shard's row number, needed only for an error,
+	// is counted when the error happens (rowAt).
+	headerEnd := bytes.IndexByte(data, '\n')
+	if headerEnd < 0 {
+		headerEnd = len(data) // a header with no rows
 	}
-	if len(newlines) == 0 {
-		return Stream[T]{shards: nil, n: 0}
-	}
-
-	// Parse the header once and build the shared decode schema.
-	headerEnd := newlines[0]
 	hr := csv.NewReader(bytes.NewReader(data[:headerEnd]))
 	header, err := hr.Read()
 	if err != nil {
@@ -528,71 +523,94 @@ func ReadCSVParallel[T any](filename string, n int, opts ...CSVOption) Stream[T]
 	if err != nil {
 		failRead(op, filename, err)
 	}
-
-	// Determine number of data lines. Lines are bounded by newlines;
-	// an unterminated last line counts as a data line too.
-	numDataLines := len(newlines) - 1 // each non-last newline ends a data line
-	if data[len(data)-1] != '\n' {
-		numDataLines++ // unterminated last line is also data
-	}
-	if numDataLines == 0 {
+	body := headerEnd + 1
+	if body >= len(data) {
 		return Stream[T]{shards: nil, n: 0}
 	}
-	if n > numDataLines {
-		n = numDataLines
+	// Split points: every n-th of the body, moved forward to just past
+	// the next newline so no line straddles two shards. A tiny file
+	// leaves later shards empty.
+	bounds := make([]int, n+1)
+	bounds[0] = body
+	for i := 1; i < n; i++ {
+		p := body + (len(data)-body)*i/n
+		if p <= bounds[i-1] {
+			bounds[i] = bounds[i-1]
+			continue
+		}
+		if nl := bytes.IndexByte(data[p:], '\n'); nl >= 0 {
+			bounds[i] = p + nl + 1
+		} else {
+			bounds[i] = len(data)
+		}
 	}
-
-	// Partition data lines across n shards. Each shard owns a
-	// contiguous byte range starting just after one newline and
-	// ending just after another (or at EOF).
-	linesPerShard := (numDataLines + n - 1) / n // round up
+	bounds[n] = len(data)
+	// rowAt is the 1-based data row that starts at byte lineStart: the
+	// newlines before it, less the header's.
+	rowAt := func(lineStart int) int64 {
+		return int64(bytes.Count(data[:lineStart], []byte{'\n'}))
+	}
 
 	shards := make([]iter.Seq[T], n)
 	for i := 0; i < n; i++ {
-		// Lines [startLine, endLine) belong to this shard.
-		// Line indices are 0-based against data lines (0 = first
-		// row after header); newlines[0] ends the header, so line k
-		// starts at newlines[k]+1 and ends at newlines[k+1] (inclusive
-		// of the trailing \n) or at len(data) for an unterminated last.
-		startLine := i * linesPerShard
-		endLine := startLine + linesPerShard
-		if endLine > numDataLines {
-			endLine = numDataLines
-		}
-		if startLine >= endLine {
+		chunk := data[bounds[i]:bounds[i+1]]
+		chunkStart := bounds[i]
+		if len(chunk) == 0 {
 			shards[i] = func(yield func(T) bool) {}
 			continue
 		}
-
-		startByte := newlines[startLine] + 1
-		var endByte int
-		if endLine <= len(newlines)-1 {
-			endByte = newlines[endLine] + 1
-		} else {
-			endByte = len(data)
-		}
-		chunk := data[startByte:endByte]
-
-		firstRow := int64(startLine) + 1 // 1-based data row of this shard's first line
 		shards[i] = func(yield func(T) bool) {
-			// chunk points into mmap'd memory the GC cannot trace — the
+			// The lines point into mmap'd memory the GC cannot trace — the
 			// KeepAlive pins the mapping until this shard finishes.
 			defer runtime.KeepAlive(m)
-			cr := csv.NewReader(bytes.NewReader(chunk))
-			cr.ReuseRecord = true
-			rowN := firstRow - 1
-			for {
-				rec, err := cr.Read()
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						return
-					}
-					failRow(op, filename, rowN+1, err)
+			// The zero-copy scanner (csv_scan.go): the line is split into
+			// views of the mapping (quoted fields included), the kept
+			// string columns copied; a malformed line goes through
+			// encoding/csv for its error. The field count is fixed by the
+			// shard's first line, as encoding/csv fixes it by the first
+			// record it reads.
+			fields := make([]string, 0, len(schema.decoders)+4)
+			var scratch []byte
+			want := -1
+			for pos := 0; pos < len(chunk); {
+				lineStart := pos
+				var line []byte
+				if nl := bytes.IndexByte(chunk[pos:], '\n'); nl >= 0 {
+					line = chunk[pos : pos+nl]
+					pos += nl + 1
+				} else {
+					line = chunk[pos:]
+					pos = len(chunk)
 				}
-				rowN++
+				if n := len(line); n > 0 && line[n-1] == '\r' {
+					line = line[:n-1]
+				}
+				if len(line) == 0 {
+					continue // encoding/csv skips a blank line
+				}
+				rec, ok := splitCSVLine(line, fields, &scratch)
+				if ok {
+					for _, ci := range schema.copyCols {
+						if ci < len(rec) {
+							rec[ci] = strings.Clone(rec[ci])
+						}
+					}
+				} else {
+					cr := csv.NewReader(bytes.NewReader(line))
+					r, err := cr.Read()
+					if err != nil {
+						failRow(op, filename, rowAt(chunkStart+lineStart), err)
+					}
+					rec = r
+				}
+				if want < 0 {
+					want = len(rec)
+				} else if len(rec) != want {
+					failRow(op, filename, rowAt(chunkStart+lineStart), csv.ErrFieldCount)
+				}
 				var row T
 				if err := schema.decode(unsafe.Pointer(&row), rec); err != nil {
-					failRow(op, filename, rowN, err)
+					failRow(op, filename, rowAt(chunkStart+lineStart), err)
 				}
 				if !yield(row) {
 					return
