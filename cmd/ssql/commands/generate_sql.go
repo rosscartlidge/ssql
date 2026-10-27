@@ -223,6 +223,101 @@ type sqlQuery struct {
 	// group-by fold needs to name (DFC156) after the assembler has
 	// materialised a sort behind a projection or a limit.
 	wrappedOrder []string
+
+	// The layer tree (DFC157). Every field below is kept BESIDE the
+	// rendered strings above, which the SQL renderer alone reads; the
+	// Rust renderer (generate rust) walks the tree and reads the
+	// structured twins. Nothing on the SQL path reads them, so the SQL
+	// text is byte-for-byte what it was before they existed
+	// (TestSQLSnapshot).
+	inner        *sqlQuery   // the layer whose rendering is this layer's fromClause (nil: a leaf)
+	source       *sqlSource  // a leaf's file source
+	sqlOnly      string      // non-empty: the layer runs as SQL text over its inner layer (the reason names the stage)
+	fromTemplate string      // sqlOnly: fromClause with the inner layer's rendering replaced by sqlFromPlaceholder
+	star         *sqlStar    // the `* …` modifier selectExprs begins with
+	includeCols  []string    // an explicit column list projection (include)
+	groupFields  []string    // group-by keys, in order
+	aggs         []sqlAgg    // group-by aggregates (count: a sink count), in flag order
+	conds        []sqlCond   // one per whereClauses entry
+	wins         []sqlWin    // window functions this layer adds, in order
+	assigns      []sqlAssign // `expr AS name` additions after the star (update's new columns)
+	joinNodes    []sqlJoin   // one per joins entry
+	setOp        *sqlSetOp   // a union / except / intersect layer
+}
+
+// sqlFromPlaceholder stands, in a sqlOnly layer's fromTemplate, for the
+// inner layer's rendered SELECT; the Rust renderer substitutes a SELECT
+// over the view it registered for that layer.
+const sqlFromPlaceholder = "__SSQL_FROM__"
+
+// sqlSource is a leaf layer's file source.
+type sqlSource struct {
+	format  string   // csv, tsv, json, jsonl, parquet, "" (bare: by extension)
+	files   []string // one or several (several: UNION ALL of the files)
+	columns []string // a parquet -columns projection
+}
+
+// sqlStar is a `* EXCLUDE / REPLACE / RENAME` projection, structured.
+type sqlStar struct {
+	exclude []string
+	replace []sqlPair // column, SQL expression
+	rename  []sqlPair // old, new
+}
+
+// sqlCond is one where stage: OR groups of AND-ed atoms, each atom a
+// flag condition (field op value) or an expression's SQL text.
+type sqlCond struct {
+	text   string      // the whereClauses entry
+	groups [][]sqlAtom // OR of AND groups
+	notGrp []bool      // per group: -not
+	invert bool        // -invert
+}
+
+// sqlAtom is one condition: a -if (field, op, value), a -if-field (field,
+// op, other field: isField), or an -if-expr (text only).
+type sqlAtom struct {
+	field, op, value string
+	isField          bool // value names a column (-if-field)
+	neg              bool // the +if form
+	text             string
+}
+
+// sqlWin is one window function the layer adds.
+type sqlWin struct {
+	flag      string   // -rank, -sum, -lag, a registry flag …
+	args      []string // the flag's arguments as typed (field, n, default), the result name last
+	alias     string   // the result column
+	partition []string
+	order     []string
+	desc      bool
+	frame     string // the frame clause text ("" = default)
+	fn        string // the function text before OVER
+	text      string // the whole `fn OVER (…) AS alias` select expression
+}
+
+// sqlAssign is an added column: `text AS name`.
+type sqlAssign struct {
+	name string
+	text string
+}
+
+// sqlJoin is one joins entry.
+type sqlJoin struct {
+	kind       string // JOIN, LEFT JOIN, RIGHT JOIN, FULL JOIN
+	leftKey    string
+	rightKey   string
+	using      bool      // USING (one key column in the result)
+	aliased    bool      // the __l / __r form
+	rightFile  string    // a file right side
+	rightQuery *sqlQuery // a <(…) right side
+}
+
+// sqlSetOp is a union / except / intersect layer over its sides.
+type sqlSetOp struct {
+	op          string // UNION, EXCEPT, INTERSECT
+	all         bool
+	sides       []*sqlQuery // the accumulated query first
+	projectCols []string    // the columns the sides are projected to (nil: as is)
 }
 
 // hasClauses reports whether anything beyond the bare FROM has accumulated
@@ -295,6 +390,7 @@ func needsWrap(q *sqlQuery, cmd string) bool {
 func translateCount(q *sqlQuery) {
 	wrapAsSubquery(q)
 	q.selectExprs = []string{"COUNT(*) AS " + quoteIdent("count")}
+	q.aggs = []sqlAgg{{expr: "COUNT(*)", name: "count", fn: "count"}}
 	q.columns = []string{"count"}
 }
 
@@ -304,12 +400,42 @@ func wrapAsSubquery(q *sqlQuery) {
 	if len(q.orderBy) > 0 {
 		wrapped = q.orderBy
 	}
+	prev := *q
 	*q = sqlQuery{
 		fromClause:   sqlSubquery("(\n" + indentLines(sub, "  ") + "\n)"),
 		comments:     q.comments,
 		columns:      q.columns, // wrapping doesn't change the output schema
 		rangeColumn:  q.rangeColumn,
 		wrappedOrder: wrapped,
+		inner:        &prev,
+	}
+}
+
+// wrapAsSQLOnly rebuilds q's fromClause around the layer accumulated so
+// far and marks q a layer the Rust renderer runs as SQL text over that
+// inner layer: fromClause is built by build over the real source text
+// exactly as before, and once more over the placeholder for the
+// template. Every other field of q is left as it was; a caller that
+// used to reset the query does so after, keeping inner, sqlOnly and
+// fromTemplate. stage names the reason.
+func wrapAsSQLOnly(q *sqlQuery, stage string, build func(src string) string) {
+	prev := *q
+	q.fromClause = build(prev.fromClause)
+	q.fromTemplate = build("(" + sqlFromPlaceholder + ")")
+	q.inner = &prev
+	q.sqlOnly = stage
+}
+
+// sqlOnlyReset is the `*q = sqlQuery{fromClause: …, comments: …}` reset
+// a rebuilding translator does, keeping the tree fields wrapAsSQLOnly set.
+func sqlOnlyReset(q *sqlQuery, columns []string) {
+	*q = sqlQuery{
+		fromClause:   q.fromClause,
+		comments:     q.comments,
+		columns:      columns,
+		inner:        q.inner,
+		sqlOnly:      q.sqlOnly,
+		fromTemplate: q.fromTemplate,
 	}
 }
 
@@ -672,6 +798,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 				return err
 			}
 			q.fromClause = src
+			q.source = &sqlSource{format: args[0], files: files}
 			// Seed column tracking from the header (generation runs where
 			// the file lives). Non-delimited formats stay unknown.
 			switch {
@@ -739,7 +866,8 @@ func translateFrom(q *sqlQuery, args []string) error {
 					q.fromClause = duckReadCSV([]string{q.csvSource}, q.csvDelim, q.csvTypes)
 				}
 				if emptyZeroFromArgs(rest) {
-					q.fromClause = coalesceEmptyCells(q.fromClause, q.columns)
+					cols := q.columns
+					wrapAsSQLOnly(q, "from -empty zero", func(src string) string { return coalesceEmptyCells(src, cols) })
 				}
 			}
 		} else if emptyZeroFromArgs(rest) {
@@ -765,6 +893,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 				parts = append(parts, "SELECT * FROM "+src)
 			}
 			q.fromClause = sqlSubquery("(" + strings.Join(parts, " UNION ALL ") + ")")
+			q.source = &sqlSource{format: args[0], files: files}
 		}
 	case "ssh":
 		return fmt.Errorf("from ssh has no SQL equivalent — it is an ssql-specific distributed feature")
@@ -785,6 +914,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 			return err
 		}
 		q.fromClause = src
+		q.source = &sqlSource{files: []string{args[0]}}
 		switch lower := strings.ToLower(args[0]); {
 		case strings.HasSuffix(lower, ".csv"):
 			q.columns = delimHeader(args[0], ',')
@@ -798,7 +928,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 		// reservoir, not system: DuckDB's system sampling is
 		// percentage-only. Both sides are unseeded statistical samples
 		// of N rows; the duckdb equivalence lane asserts cardinality.
-		q.fromClause = sqlSampleRows(q.fromClause, sampleN)
+		wrapAsSQLOnly(q, "from -sample", func(src string) string { return sqlSampleRows(src, sampleN) })
 		q.sampled = true
 	}
 	if lastN != "" && lastN != "0" {
@@ -861,6 +991,7 @@ func translateRangeSource(q *sqlQuery, args []string) error {
 	}
 	q.columns = []string{o.field}
 	q.rangeColumn = o.field
+	q.sqlOnly = "from range" // a leaf the Rust renderer runs as SQL text
 	sqlColumnKinds[o.field] = "int"
 	return nil
 }
@@ -871,6 +1002,9 @@ func translateWhere(q *sqlQuery, args []string) error {
 	var orGroups []string
 	var currentAnd []string
 	currentNot, invert := false, false
+	var groups [][]sqlAtom // the tree's twin of orGroups
+	var curAtoms []sqlAtom
+	var notGrps []bool
 	closeGroup := func() {
 		if len(currentAnd) == 0 {
 			return
@@ -880,6 +1014,9 @@ func translateWhere(q *sqlQuery, args []string) error {
 			group = sqlNot(group)
 		}
 		orGroups = append(orGroups, group)
+		groups = append(groups, curAtoms)
+		notGrps = append(notGrps, currentNot)
+		curAtoms = nil
 		currentAnd = nil
 		currentNot = false
 	}
@@ -909,6 +1046,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 				cond = sqlNot(cond)
 			}
 			currentAnd = append(currentAnd, cond)
+			curAtoms = append(curAtoms, sqlAtom{field: args[i+1], op: args[i+2], value: args[i+3], isField: true, neg: args[i][0] == '+', text: cond})
 			i += 4
 		case "-if", "-i", "+if", "+i":
 			if i+3 >= len(args) {
@@ -920,6 +1058,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 				cond = sqlNot(cond)
 			}
 			currentAnd = append(currentAnd, cond)
+			curAtoms = append(curAtoms, sqlAtom{field: field, op: op, value: value, neg: args[i][0] == '+', text: cond})
 			i += 4
 		case "-if-expr", "-x", "+if-expr", "+x":
 			if i+1 >= len(args) {
@@ -933,6 +1072,7 @@ func translateWhere(q *sqlQuery, args []string) error {
 				cond = sqlNot(cond)
 			}
 			currentAnd = append(currentAnd, cond)
+			curAtoms = append(curAtoms, sqlAtom{text: cond})
 			i += 2
 		case "+", "-":
 			// OR separator between clauses (autocli's "+"; a bare "-" from
@@ -946,24 +1086,21 @@ func translateWhere(q *sqlQuery, args []string) error {
 	}
 	closeGroup()
 
-	if invert {
+	entry := ""
+	switch {
+	case invert && len(orGroups) == 0:
 		// -invert/-v: the complement of the whole filter (grep -v). No
 		// clauses = match everything, so the complement matches nothing.
-		if len(orGroups) == 0 {
-			q.whereClauses = append(q.whereClauses, "FALSE")
-			return nil
-		}
+		entry = "FALSE"
+	case invert:
 		wrapped := make([]string, len(orGroups))
 		for k, g := range orGroups {
 			wrapped[k] = "(" + g + ")"
 		}
-		q.whereClauses = append(q.whereClauses, sqlNot(strings.Join(wrapped, " OR ")))
-		return nil
-	}
-
-	if len(orGroups) == 1 {
-		q.whereClauses = append(q.whereClauses, orGroups[0])
-	} else if len(orGroups) > 1 {
+		entry = sqlNot(strings.Join(wrapped, " OR "))
+	case len(orGroups) == 1:
+		entry = orGroups[0]
+	case len(orGroups) > 1:
 		wrapped := make([]string, len(orGroups))
 		for i, g := range orGroups {
 			wrapped[i] = "(" + g + ")"
@@ -971,9 +1108,12 @@ func translateWhere(q *sqlQuery, args []string) error {
 		// whereClauses are ANDed at render time (one entry per where
 		// stage), so an OR of clauses must be one parenthesised term:
 		// `where A + B | where C` is (A OR B) AND C, not A OR (B AND C).
-		q.whereClauses = append(q.whereClauses, "("+strings.Join(wrapped, " OR ")+")")
+		entry = "(" + strings.Join(wrapped, " OR ") + ")"
 	}
-
+	if entry != "" {
+		q.whereClauses = append(q.whereClauses, entry)
+		q.conds = append(q.conds, sqlCond{text: entry, groups: groups, notGrp: notGrps, invert: invert})
+	}
 	return nil
 }
 
@@ -1042,10 +1182,15 @@ func sqlLiteral(value string) string {
 }
 
 // sqlAgg is one group-by aggregation: the SQL expression over the raw
-// rows and the ssql result name.
+// rows and the ssql result name; fn, field and extra are the registry
+// aggregate and its arguments as typed (DFC157: the Rust renderer builds
+// from them, and falls back to expr's text).
 type sqlAgg struct {
-	expr string // e.g. COUNT(*), SUM("amount")
-	name string // unquoted ssql field name
+	expr  string // e.g. COUNT(*), SUM("amount")
+	name  string // unquoted ssql field name
+	fn    string // registry aggregate name: count, sum, …
+	field string // the input field ("" for count)
+	extra string // the extra argument ("" when none)
 }
 
 func translateGroupBy(q *sqlQuery, args []string) error {
@@ -1080,7 +1225,7 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 				if d.extraArg != "" {
 					extra = args[i+2]
 				}
-				aggs = append(aggs, sqlAgg{d.sql(qf, extra), args[i+n]})
+				aggs = append(aggs, sqlAgg{expr: d.sql(qf, extra), name: args[i+n], fn: d.fn, field: strings.Trim(qf, `"`), extra: extra})
 				// The result column's kind, from the registry's own wire-type
 				// rule (an extreme of a text column is text; a count is an
 				// int) — so a later literal against it is typed by the column
@@ -1152,6 +1297,8 @@ func translateGroupBy(q *sqlQuery, args []string) error {
 	for _, a := range aggs {
 		q.selectExprs = append(q.selectExprs, fmt.Sprintf("%s AS %s", a.expr, quoteIdent(a.name)))
 	}
+	q.groupFields = append([]string(nil), fields...)
+	q.aggs = aggs
 	return nil
 }
 
@@ -1183,11 +1330,18 @@ func translateGroupByRollup(q *sqlQuery, fields []string, aggs []sqlAgg, mode ss
 	if q.hasClauses() {
 		wrapAsSubquery(q)
 	}
-	src := q.fromClause
-	if src == "" {
+	if q.fromClause == "" {
 		return fmt.Errorf("group-by -rollup/-cube: no source to translate")
 	}
+	wrapAsSQLOnly(q, "group-by -rollup/-cube", func(src string) string {
+		return sqlSubquery(rollupBody(src, fields, aggs, mode))
+	})
+	sqlOnlyReset(q, nil)
+	return nil
+}
 
+// rollupBody renders the rollup/cube enrichment over src (translateGroupByRollup).
+func rollupBody(src string, fields []string, aggs []sqlAgg, mode ssql.RollupMode) string {
 	sets := ssql.RollupGroupingSets(fields, mode)
 	detail := len(sets) - 1 // the full field set is always last
 	alias := func(i int) string {
@@ -1250,9 +1404,7 @@ func translateGroupByRollup(q *sqlQuery, fields []string, aggs []sqlAgg, mode ss
 		sb.WriteString("  JOIN (" + setSelect(set) + ") AS " + alias(i) + " ON " + on + "\n")
 	}
 	sb.WriteString(")")
-
-	*q = sqlQuery{fromClause: sqlSubquery(sb.String()), comments: q.comments}
-	return nil
+	return sb.String()
 }
 
 func translateSort(q *sqlQuery, args []string) error {
@@ -1386,9 +1538,9 @@ func translateSample(q *sqlQuery, args []string) error {
 	// reaches here; `sample 0` is a real stage: USING SAMPLE 0 ROWS.
 	switch {
 	case percent != "":
-		q.fromClause = sqlSamplePercent(q.fromClause, percent)
+		wrapAsSQLOnly(q, "sample -percent", func(src string) string { return sqlSamplePercent(src, percent) })
 	case n != "":
-		q.fromClause = sqlSampleRows(q.fromClause, n)
+		wrapAsSQLOnly(q, "sample", func(src string) string { return sqlSampleRows(src, n) })
 	default:
 		return fmt.Errorf("sample: need N or -percent")
 	}
@@ -1514,10 +1666,12 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 		}
 	}
 	if aliased {
+		prev := *q
 		*q = sqlQuery{
 			fromClause: "(\n" + indentLines(renderSelect(q), "  ") + "\n) AS __l",
 			comments:   q.comments,
 			columns:    q.columns,
+			inner:      &prev,
 		}
 	}
 	rightAlias := func(src string) string {
@@ -1526,17 +1680,23 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 		}
 		return src
 	}
+	node := sqlJoin{kind: joinKind, using: strings.HasPrefix(joinCond, "USING"), aliased: aliased}
+	if len(leftKey) > 0 {
+		node.leftKey, node.rightKey = leftKey[0], rightKey[0]
+	}
 
 	// Check if the join file is a process substitution — build a SQL subquery
 	// from the func fragment's body commands
 	if strings.HasPrefix(filePath, "/dev/fd/") && len(funcFrags) > 0 {
-		subquery := buildJoinSubquery(funcFrags[len(funcFrags)-1])
-		if subquery != "" {
-			src := "(" + subquery + ")"
+		side := buildJoinQuery(funcFrags[len(funcFrags)-1])
+		if side != nil {
+			src := "(" + renderSelect(side) + ")"
 			if !aliased {
 				src = sqlSubquery(src)
 			}
 			q.joins = append(q.joins, fmt.Sprintf("%s %s %s", joinKind, rightAlias(src), joinCond))
+			node.rightQuery = side
+			q.joinNodes = append(q.joinNodes, node)
 			return nil
 		}
 	}
@@ -1546,6 +1706,8 @@ func translateJoin(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) er
 		return err
 	}
 	q.joins = append(q.joins, fmt.Sprintf("%s %s %s", joinKind, rightAlias(src), joinCond))
+	node.rightFile = filePath
+	q.joinNodes = append(q.joinNodes, node)
 	return nil
 }
 
@@ -1733,7 +1895,9 @@ func translateUnion(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) e
 	if len(q.orderBy) > 0 || q.limit != "" || q.offset != "" {
 		wrapAsSubquery(q) // `… LIMIT n UNION …` is a syntax error
 	}
+	left := *q
 	parts := []string{renderSelect(q)}
+	sides := []*sqlQuery{&left}
 	pi := 0
 	for _, f := range files {
 		if !strings.HasPrefix(f, "/dev/fd/") {
@@ -1742,18 +1906,20 @@ func translateUnion(q *sqlQuery, args []string, funcFrags []*lib.CodeFragment) e
 		if pi >= len(procs) {
 			return fmt.Errorf("union: missing source fragment for %s", f)
 		}
-		sub := buildJoinSubquery(procs[pi])
+		side := buildJoinQuery(procs[pi])
 		pi++
-		if sub == "" {
+		if side == nil {
 			return fmt.Errorf("union: source pipeline is too complex to translate (only from/where are supported inside <(…)>)")
 		}
-		parts = append(parts, projectByName(sub, q.columns))
+		parts = append(parts, projectByName(renderSelect(side), q.columns))
+		sides = append(sides, side)
 	}
 
 	*q = sqlQuery{
 		fromClause: sqlSubquery("(\n" + indentLines(strings.Join(parts, "\n"+op+"\n"), "  ") + "\n)"),
 		comments:   q.comments,
 		columns:    q.columns,
+		setOp:      &sqlSetOp{op: "UNION", all: unionAll, sides: sides, projectCols: q.columns},
 	}
 	return nil
 }
@@ -1822,25 +1988,26 @@ func translateSetOp(q *sqlQuery, name string, args []string, funcFrags []*lib.Co
 			procs = append(procs, f)
 		}
 	}
-	// source renders one -file as a SELECT over it.
+	// source renders one -file as a SELECT over it (and returns the side's
+	// layer for the tree: a file side is a source leaf).
 	pi := 0
-	source := func(f string) (string, error) {
+	source := func(f string) (string, *sqlQuery, error) {
 		if strings.HasPrefix(f, "/dev/fd/") {
 			if pi >= len(procs) {
-				return "", fmt.Errorf("%s: missing source fragment for %s", name, f)
+				return "", nil, fmt.Errorf("%s: missing source fragment for %s", name, f)
 			}
-			sub := buildJoinSubquery(procs[pi])
+			side := buildJoinQuery(procs[pi])
 			pi++
-			if sub == "" {
-				return "", fmt.Errorf("%s: source pipeline is too complex to translate (only from/where are supported inside <(…)>)", name)
+			if side == nil {
+				return "", nil, fmt.Errorf("%s: source pipeline is too complex to translate (only from/where are supported inside <(…)>)", name)
 			}
-			return sub, nil
+			return renderSelect(side), side, nil
 		}
 		src, err := dialectSource(f)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
-		return "SELECT *\nFROM " + src, nil
+		return "SELECT *\nFROM " + src, &sqlQuery{fromClause: src, source: &sqlSource{files: []string{f}}}, nil
 	}
 	op := strings.ToUpper(name)
 	if all {
@@ -1863,35 +2030,44 @@ func translateSetOp(q *sqlQuery, name string, args []string, funcFrags []*lib.Co
 		if len(q.orderBy) > 0 || q.limit != "" || q.offset != "" {
 			wrapAsSubquery(q)
 		}
+		left := *q
 		parts := []string{renderSelect(q)}
+		sides := []*sqlQuery{&left}
 		for _, f := range files {
-			sub, err := source(f)
+			sub, side, err := source(f)
 			if err != nil {
 				return err
 			}
 			parts = append(parts, projectByName(sub, q.columns))
+			sides = append(sides, side)
 		}
 		*q = sqlQuery{
 			fromClause: sqlSubquery("(\n" + indentLines(strings.Join(parts, "\n"+op+"\n"), "  ") + "\n)"),
 			comments:   q.comments,
 			columns:    q.columns,
+			setOp:      &sqlSetOp{op: strings.ToUpper(name), all: all, sides: sides, projectCols: q.columns},
 		}
 		return nil
 	}
 
 	// Keyed: the current query becomes __l; each source a correlated
-	// EXISTS test in WHERE.
+	// EXISTS test in WHERE. The Rust renderer runs this layer as SQL
+	// text over the inner layer (the template keeps the alias).
+	prev := *q
 	*q = sqlQuery{
-		fromClause: "(\n" + indentLines(renderSelect(q), "  ") + "\n) AS __l",
-		comments:   q.comments,
-		columns:    q.columns,
+		fromClause:   "(\n" + indentLines(renderSelect(q), "  ") + "\n) AS __l",
+		fromTemplate: "(\n" + indentLines(sqlFromPlaceholder, "  ") + "\n) AS __l",
+		comments:     q.comments,
+		columns:      q.columns,
+		inner:        &prev,
+		sqlOnly:      name + " -using/-on",
 	}
 	exists := "EXISTS"
 	if name == "except" {
 		exists = "NOT EXISTS"
 	}
 	for _, f := range files {
-		sub, err := source(f)
+		sub, _, err := source(f)
 		if err != nil {
 			return err
 		}
@@ -1925,8 +2101,17 @@ func delimHeader(path string, comma rune) []string {
 
 // buildJoinSubquery builds a SQL subquery from a func fragment's body.
 func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
+	if sub := buildJoinQuery(funcFrag); sub != nil {
+		return renderSelect(sub)
+	}
+	return ""
+}
+
+// buildJoinQuery is buildJoinSubquery's layer: the side pipeline's query
+// (nil when it cannot be translated), for the tree and the rendering.
+func buildJoinQuery(funcFrag *lib.CodeFragment) *sqlQuery {
 	if funcFrag == nil {
-		return ""
+		return nil
 	}
 
 	// Build the side's query from the func body's commands with the SAME
@@ -1942,7 +2127,7 @@ func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
 			continue
 		}
 		if err := translateFragment(sub, bodyFrag, nil); err != nil {
-			return ""
+			return nil
 		}
 	}
 
@@ -1955,9 +2140,9 @@ func buildJoinSubquery(funcFrag *lib.CodeFragment) string {
 	}
 
 	if sub.fromClause == "" {
-		return ""
+		return nil
 	}
-	return renderSelect(sub)
+	return sub
 }
 
 func translateWindow(q *sqlQuery, args []string) error {
@@ -1972,6 +2157,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 		rangeP      string // RANGE frame bounds as typed (DFC130 unit 3); "" = ROWS frame
 		rangeF      string
 		funcs       []string // pre-built SQL function expressions like "ROW_NUMBER() AS rn"
+		flags       []string   // parallel to funcs: the flag that produced each
+		fargs       [][]string // parallel to funcs: the flag's arguments as typed (result name last)
 		registryFns []string // registry aggregate names used, for the dialect check once the frame is known
 		orderFns    []string // flags whose value is the row's place in the partition (ranking, offsets, first/last)
 		frameFns    []string // flags that aggregate over the frame
@@ -1994,6 +2181,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 				cur.registryFns = append(cur.registryFns, d.fn)
 				cur.frameFns = append(cur.frameFns, d.flag)
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s AS %s", d.sql(quoteIdent(args[i+1]), extra), quoteIdent(args[i+n])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+n + 1])
 				i += n + 1
 			} else {
 				i++
@@ -2065,6 +2254,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+1 < len(args) {
 				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("ROW_NUMBER() AS %s", quoteIdent(args[i+1])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+2])
 				i += 2
 			} else {
 				i++
@@ -2073,6 +2264,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+1 < len(args) {
 				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("RANK() AS %s", quoteIdent(args[i+1])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+2])
 				i += 2
 			} else {
 				i++
@@ -2081,6 +2274,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+1 < len(args) {
 				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("DENSE_RANK() AS %s", quoteIdent(args[i+1])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+2])
 				i += 2
 			} else {
 				i++
@@ -2089,6 +2284,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+1 < len(args) {
 				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("PERCENT_RANK() AS %s", quoteIdent(args[i+1])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+2])
 				i += 2
 			} else {
 				i++
@@ -2098,6 +2295,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+1 < len(args) {
 				cur.frameFns = append(cur.frameFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("COUNT(*) AS %s", quoteIdent(args[i+1])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+2])
 				i += 2
 			} else {
 				i++
@@ -2106,6 +2305,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+1 < len(args) {
 				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("CUME_DIST() AS %s", quoteIdent(args[i+1])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+2])
 				i += 2
 			} else {
 				i++
@@ -2114,6 +2315,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+2 < len(args) {
 				cur.frameFns = append(cur.frameFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("COUNT(%s) AS %s", quoteIdent(args[i+1]), quoteIdent(args[i+2])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+3])
 				i += 3
 			} else {
 				i++
@@ -2122,6 +2325,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+3 < len(args) {
 				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("NTH_VALUE(%s, %s) AS %s", quoteIdent(args[i+1]), args[i+2], quoteIdent(args[i+3])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+4])
 				i += 4
 			} else {
 				i++
@@ -2132,6 +2337,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 				cur.orderFns = append(cur.orderFns, args[i])
 				sqlFunc := strings.ToUpper(strings.TrimSuffix(args[i][1:], "-default"))
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s, %s, %s) AS %s", sqlFunc, quoteIdent(args[i+1]), args[i+2], sqlTypedLiteral(windowDefaultLiteral(args[i+3])), quoteIdent(args[i+4])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+5])
 				i += 5
 			} else {
 				i++
@@ -2141,6 +2348,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 			if i+2 < len(args) {
 				cur.orderFns = append(cur.orderFns, args[i])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("NTILE(%s) AS %s", args[i+1], quoteIdent(args[i+2])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+3])
 				i += 3
 			} else {
 				i++
@@ -2166,6 +2375,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 					arg = sqlSumArg(arg)
 				}
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s) AS %s", sqlFunc, arg, quoteIdent(args[i+2])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+3])
 				i += 3
 			} else {
 				i++
@@ -2176,6 +2387,8 @@ func translateWindow(q *sqlQuery, args []string) error {
 				cur.orderFns = append(cur.orderFns, args[i])
 				sqlFunc := strings.ToUpper(args[i][1:])
 				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s, %s) AS %s", sqlFunc, quoteIdent(args[i+1]), args[i+2], quoteIdent(args[i+3])))
+				cur.flags = append(cur.flags, args[i])
+				cur.fargs = append(cur.fargs, args[i+1:i+4])
 				i += 4
 			} else {
 				i++
@@ -2188,6 +2401,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 	// Window adds new columns — ensure existing columns are preserved
 	if len(q.selectExprs) == 0 {
 		q.selectExprs = append(q.selectExprs, "*")
+		q.star = &sqlStar{}
 	}
 
 	// Build SQL OVER clauses
@@ -2292,7 +2506,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 
 		over := strings.Join(overParts, " ")
 
-		for _, f := range c.funcs {
+		for fi, f := range c.funcs {
 			// f is like "ROW_NUMBER() AS rn" — insert OVER before AS
 			asIdx := strings.LastIndex(f, " AS ")
 			if asIdx < 0 {
@@ -2307,6 +2521,11 @@ func translateWindow(q *sqlQuery, args []string) error {
 				expr = "CAST(" + expr + " AS " + sqlFloatType() + ")"
 			}
 			q.selectExprs = append(q.selectExprs, expr+alias)
+			w := sqlWin{flag: c.flags[fi], args: c.fargs[fi], partition: c.partitionBy, order: c.orderBy, desc: c.desc, frame: frameSQL, fn: funcExpr, text: expr + alias}
+			if n := len(w.args); n > 0 {
+				w.alias = w.args[n-1]
+			}
+			q.wins = append(q.wins, w)
 		}
 	}
 
@@ -2462,6 +2681,7 @@ func translateRename(q *sqlQuery, args []string) error {
 			return err
 		}
 		q.selectExprs = append(q.selectExprs, sel)
+		q.star = &sqlStar{rename: renames}
 	}
 	return nil
 }
@@ -2537,6 +2757,7 @@ func translateCast(q *sqlQuery, args []string) error {
 			return err
 		}
 		q.selectExprs = append(q.selectExprs, sel)
+		q.star = &sqlStar{replace: replacements}
 	}
 	return nil
 }
@@ -2777,6 +2998,7 @@ func translateUpdate(q *sqlQuery, args []string) error {
 		}
 		if isNew {
 			additions = append(additions, fmt.Sprintf("%s AS %s", exprSQL, quoteIdent(field)))
+			q.assigns = append(q.assigns, sqlAssign{name: field, text: exprSQL})
 		} else {
 			replacements = append(replacements, sqlPair{field, exprSQL})
 		}
@@ -2789,8 +3011,10 @@ func translateUpdate(q *sqlQuery, args []string) error {
 			return err
 		}
 		q.selectExprs = append(q.selectExprs, sel)
+		q.star = &sqlStar{replace: replacements}
 	case len(additions) > 0:
 		q.selectExprs = append(q.selectExprs, "*")
+		q.star = &sqlStar{}
 	}
 	q.selectExprs = append(q.selectExprs, additions...)
 	return nil
@@ -2824,6 +3048,7 @@ func translateInclude(q *sqlQuery, args []string) error {
 	for _, arg := range args {
 		if !strings.HasPrefix(arg, "-") {
 			q.selectExprs = append(q.selectExprs, quoteIdent(arg))
+			q.includeCols = append(q.includeCols, arg)
 		}
 	}
 	return nil
@@ -2844,6 +3069,7 @@ func translateExclude(q *sqlQuery, args []string) error {
 			return err
 		}
 		q.selectExprs = append(q.selectExprs, sel)
+		q.star = &sqlStar{exclude: cols}
 	}
 	return nil
 }
@@ -3039,6 +3265,7 @@ func translateParquetSource(q *sqlQuery, files, columns []string) error {
 		}
 	}
 	q.fromClause = src
+	q.source = &sqlSource{format: "parquet", files: files, columns: columns}
 	return nil
 }
 
@@ -3745,7 +3972,6 @@ func translateUnpivot(q *sqlQuery, op *lib.Op, args []string) error {
 	if q.hasClauses() {
 		wrapAsSubquery(q)
 	}
-	src := q.fromClause
 
 	var on []string
 	for _, v := range values {
@@ -3756,16 +3982,15 @@ func translateUnpivot(q *sqlQuery, op *lib.Op, args []string) error {
 		proj = append(proj, quoteIdent(id))
 	}
 	proj = append(proj, quoteIdent(col), quoteIdent(val))
-	body := fmt.Sprintf("(\n  SELECT %s FROM (\n    UNPIVOT %s ON %s INTO NAME %s VALUE %s\n  )\n)",
-		strings.Join(proj, ", "), src, strings.Join(on, ", "), quoteIdent(col), quoteIdent(val))
-	if sqlDialectCur != dialectDuckDB {
-		body = sqlUnpivotUnion(src, ids, values, col, val)
-	}
-	*q = sqlQuery{
-		fromClause: sqlSubquery(body),
-		comments:   q.comments,
-		columns:    append(append([]string(nil), ids...), col, val),
-	}
+	wrapAsSQLOnly(q, "unpivot", func(src string) string {
+		body := fmt.Sprintf("(\n  SELECT %s FROM (\n    UNPIVOT %s ON %s INTO NAME %s VALUE %s\n  )\n)",
+			strings.Join(proj, ", "), src, strings.Join(on, ", "), quoteIdent(col), quoteIdent(val))
+		if sqlDialectCur != dialectDuckDB {
+			body = sqlUnpivotUnion(src, ids, values, col, val)
+		}
+		return sqlSubquery(body)
+	})
+	sqlOnlyReset(q, append(append([]string(nil), ids...), col, val))
 	return nil
 }
 

@@ -2,12 +2,15 @@
 
 Reference: DFC132
 Created: 2026-09-17
-Last modified: 2026-09-17
+Last modified: 2026-10-27
 
 [Back to Index](./README.md)
 
-Status: **decision recorded; `-dialect` and the two oracle lanes built
-the same day (§4a).** Ross, 2026-09-17: "I have also been getting questions about
+Status: **revisited by [DFC157](./dfc157_generate_rust.md) (2026-10-27):
+`generate rust` as a DataFrame-API lowering onto DataFusion, once the
+DataFusion oracle lane was green over the whole suite. The findings
+below stand; §4's "no Rust backend" does not.** Before that: decision
+recorded; `-dialect` and the two oracle lanes built the same day (§4a). Ross, 2026-09-17: "I have also been getting questions about
 generating rust code. I know we talked about this with the IR codegen.
 Do you think it's a good idea (I am unconvinced)" — then "if we did
 should we use an existing runtime or build one in Rust of the same shape

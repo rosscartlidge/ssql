@@ -139,7 +139,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC129 | 2026-09-15 | 2026-09-15 | [Group-by Aggregates: What Is Missing, and Flags versus Expressions](./dfc129_groupby_aggregates.md) |
 | DFC130 | 2026-09-15 | 2026-09-16 | [Window Analytics: Gaps Against the SQL Set](./dfc130_window_analytics_gaps.md) |
 | DFC131 | 2026-09-16 | 2026-09-16 | [A Read-Only Codelab Workspace on the Tailnet, as a systemd Service](./dfc131_serve_systemd_tailnet_codelab.md) |
-| DFC132 | 2026-09-17 | 2026-09-17 | [Generating Rust: Decision, and What the DataFusion Check Found](./dfc132_rust_target_datafusion.md) |
+| DFC132 | 2026-09-17 | 2026-10-27 | [Generating Rust: Decision, and What the DataFusion Check Found](./dfc132_rust_target_datafusion.md) |
 | DFC133 | 2026-09-20 | 2026-09-20 | [Finding the Bugs We Do Not Know About](./dfc133_finding_unknown_bugs.md) |
 | DFC134 | 2026-09-20 | 2026-09-22 | [Pipelines as Data: Safe Programmatic Construction, and Why SQL Cannot Have It](./dfc134_pipelines_as_data.md) |
 | DFC135 | 2026-09-22 | 2026-09-23 | [Field References in Value Slots: `-if-field`, `-set-field`, `-param-field`](./dfc135_field_references_in_value_slots.md) |
@@ -164,6 +164,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC154 | 2026-10-20 | 2026-10-22 | [A Row Generator: `from range`, Numbers Every Lane Can Make](./dfc154_range_source.md) |
 | DFC155 | 2026-10-22 | 2026-10-27 | [Big Numbers: Options for Integers Past 2^63 and Exact Decimals](./dfc155_big_numbers.md) |
 | DFC156 | 2026-10-26 | 2026-10-26 | [The Fold in SQL: `-stream-expr` as a Recursive CTE](./dfc156_fold_sql_recursive_cte.md) |
+| DFC157 | 2026-10-27 | 2026-10-27 | [`generate rust`: the Pipeline as a Rust Program on DataFusion](./dfc157_generate_rust.md) |
 
 <!-- DFC-INDEX-END -->
 

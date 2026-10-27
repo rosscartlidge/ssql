@@ -4610,3 +4610,69 @@ func equivLibrarySource(pipeline string) (fixture, reader string) {
 	}
 	return "", ""
 }
+
+// TestSQLSnapshot pins the SQL the assembler renders for every equivalence
+// case in every dialect, so a refactor of the assembler's internals (DFC157
+// phase 2: the layer tree kept beside the rendered text) can prove it
+// changed no byte of output. Opt-in: SSQL_SQL_SNAPSHOT=write DIR records
+// one file per case and dialect (a refusal records its message);
+// SSQL_SQL_SNAPSHOT=check DIR compares and names every difference. The
+// fixture server's URL varies per run and is folded back to {{.url}}.
+func TestSQLSnapshot(t *testing.T) {
+	spec := os.Getenv("SSQL_SQL_SNAPSHOT")
+	if spec == "" {
+		t.Skip("set SSQL_SQL_SNAPSHOT='write DIR' or 'check DIR'")
+	}
+	mode, dir, ok := strings.Cut(spec, " ")
+	if !ok || (mode != "write" && mode != "check") {
+		t.Fatalf("SSQL_SQL_SNAPSHOT=%q: want 'write DIR' or 'check DIR'", spec)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := corpusBin(t)
+	data := corpusData(t)
+	srv := httptest.NewServer(http.FileServer(http.Dir(data)))
+	t.Cleanup(srv.Close)
+	repl := strings.NewReplacer("{{.bin}}", bin, "{{.data}}", data, "{{.url}}", srv.URL)
+	unrepl := strings.NewReplacer(srv.URL, "{{.url}}", data, "{{.data}}", bin, "{{.bin}}")
+	for _, c := range equivCases {
+		c := c
+		t.Run(c.Name, func(t *testing.T) {
+			t.Parallel()
+			var env []string
+			for _, e := range c.Env {
+				env = append(env, repl.Replace(e))
+			}
+			pipeline := repl.Replace(c.Pipeline)
+			for _, dialect := range []string{"duckdb", "datafusion", "postgres"} {
+				cmd := exec.Command("bash", "-c", "export SSQL_MODE=record && "+pipeline+" | "+bin+" to jsonl | "+bin+" generate sql -dialect "+dialect)
+				cmd.Env = append(os.Environ(), env...)
+				var stdout, stderr bytes.Buffer
+				cmd.Stdout, cmd.Stderr = &stdout, &stderr
+				text := stdout.String()
+				if err := cmd.Run(); err != nil {
+					text = "REFUSED: " + strings.TrimSpace(stderr.String()) + "\n"
+				} else {
+					text = stdout.String()
+				}
+				text = unrepl.Replace(text)
+				path := filepath.Join(dir, c.Name+"."+dialect+".sql")
+				if mode == "write" {
+					if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
+				want, err := os.ReadFile(path)
+				if err != nil {
+					t.Errorf("%s: no snapshot (%v)", dialect, err)
+					continue
+				}
+				if string(want) != text {
+					t.Errorf("%s: rendered SQL differs from the snapshot\n--- want\n%s\n--- got\n%s", dialect, want, text)
+				}
+			}
+		})
+	}
+}
