@@ -700,6 +700,13 @@ func translateFrom(q *sqlQuery, args []string) error {
 			}
 			if q.csvSource != "" {
 				applyTypeOverrideKinds(typeOverrides)
+				if sqlDialectCur == dialectDataFusion && len(withSampledWideColumns(typeOverrides)) > len(typeOverrides) {
+					// A sampled column holds an integer literal past int64
+					// (DFC155 C): DuckDB reads it as HUGEINT through types=,
+					// but DataFusion's file table infers Int64 and the cast
+					// fails on the row — refuse, as -type is refused there.
+					return dialectRefuse("from "+files[0], "a column with an integer literal past int64 needs a declared DECIMAL(38,0), which DataFusion's file table cannot take")
+				}
 				q.csvTypes = duckTypesOption(withSampledWideColumns(typeOverrides))
 				if len(timeFormats) > 0 {
 					// -format COL PATTERN (DFC147 §7.2): DuckDB's read_csv
@@ -2154,7 +2161,11 @@ func translateWindow(q *sqlQuery, args []string) error {
 					cur.frameFns = append(cur.frameFns, args[i])
 				}
 				sqlFunc := windowSQLFunc(args[i])
-				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s) AS %s", sqlFunc, quoteIdent(args[i+1]), quoteIdent(args[i+2])))
+				arg := quoteIdent(args[i+1])
+				if args[i] == "-sum" {
+					arg = sqlSumArg(arg)
+				}
+				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s) AS %s", sqlFunc, arg, quoteIdent(args[i+2])))
 				i += 3
 			} else {
 				i++

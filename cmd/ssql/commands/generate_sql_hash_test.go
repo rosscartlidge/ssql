@@ -57,12 +57,15 @@ func TestHashSQL(t *testing.T) {
 
 	sqlDialectCur = dialectDataFusion
 	got, _ = exprToSQL("hash(n)")
-	if !strings.Contains(got, ` # `) || strings.Contains(got, "xor(") {
-		t.Errorf("datafusion hash(n):\n%s", got)
+	if !strings.Contains(got, ` ^ `) || strings.Contains(got, "xor(") || strings.Contains(got, " # ") {
+		t.Errorf("datafusion hash(n):\n%s", got) // its parser has no #; ^ is BIT_XOR there
 	}
-	for in, want := range map[string]string{"md5(s)": `md5("s")`, "sha1(s)": `encode(sha1("s"), 'hex')`, "sha256(s)": `encode(sha256("s"), 'hex')`} {
+	for in, want := range map[string]string{"md5(s)": `md5("s")`, "sha256(s)": `encode(sha256("s"), 'hex')`} {
 		if got, err := exprToSQL(in); err != nil || got != want {
 			t.Errorf("datafusion %s = %s, %v", in, got, err)
 		}
+	}
+	if _, err := exprToSQL("sha1(s)"); err == nil || !strings.Contains(err.Error(), "has no datafusion translation") {
+		t.Errorf("datafusion sha1: want the refusal, got %v", err)
 	}
 }

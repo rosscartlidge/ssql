@@ -199,6 +199,9 @@ func dialectSourceTyped(file string, overrides map[string]string) (string, error
 	if sqlDialectCur == dialectDataFusion && len(overrides) > 0 {
 		return "", dialectRefuse("from -type / schema sidecar", "DataFusion's file table infers its column types")
 	}
+	if sqlDialectCur == dialectDataFusion && (strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")) {
+		return "", dialectRefuse("from "+file, "DataFusion's file table reads local paths; an http source needs a registered object store, which the Python bindings' url table does not resolve (55.0)")
+	}
 	if sqlDialectCur == dialectDataFusion && (strings.HasSuffix(lower, ".tsv") || strings.HasSuffix(lower, ".jsonl")) {
 		return "", dialectRefuse("from "+file, "DataFusion's file table reads .csv, .json and .parquet by extension")
 	}

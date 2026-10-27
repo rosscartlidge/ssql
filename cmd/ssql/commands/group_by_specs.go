@@ -67,7 +67,21 @@ func wireFixed(t string) func(string) string { return func(string) string { retu
 
 // sqlSumOrZero: the empty sum is 0 in ssql (a group whose every value is
 // missing sums to 0); SQL's SUM answers NULL there.
-func sqlSumOrZero(qf, _ string) string { return "COALESCE(SUM(" + qf + "), 0)" }
+func sqlSumOrZero(qf, _ string) string { return "COALESCE(SUM(" + sqlSumArg(qf) + "), 0)" }
+
+// sqlSumArg is a summed column as the engine must see it: on DataFusion
+// an integer column as DECIMAL(38,0), since its SUM over Int64 stays
+// Int64 and WRAPS past 2^63 (18446744073709551613 came back as -3 on the
+// lane, 2026-10-27) where an integer sum is an int128 in every lane
+// (DFC155 C). Group-by and window sums both go through it.
+func sqlSumArg(qf string) string {
+	if sqlDialectCur == dialectDataFusion {
+		if kind := sqlColumnKinds[strings.Trim(qf, `"`)]; kind == "int" || kind == "int128" {
+			return "CAST(" + qf + " AS DECIMAL(38,0))"
+		}
+	}
+	return qf
+}
 
 // sqlCall renders FN("field") for the plain one-field aggregates.
 func sqlCall(fn string) func(string, string) string {

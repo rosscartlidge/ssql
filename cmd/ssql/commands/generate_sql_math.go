@@ -135,6 +135,14 @@ func mathFuncToSQL(name string, args []ast.Node) (string, bool, error) {
 			call = "TRY(" + call + ")"
 		case dialectPostgres:
 			call = "CASE WHEN " + strings.ReplaceAll(guard, "%s", last) + " THEN " + call + " END"
+		case dialectDataFusion:
+			// A CASE around the call does not short-circuit a vectorised
+			// function (sqrt of a negative raised for the whole column, on
+			// the lane 2026-10-27): the guard goes on the ARGUMENT, and a
+			// NULL argument is a NULL result.
+			guarded := append([]string(nil), parts...)
+			guarded[len(guarded)-1] = "CASE WHEN " + strings.ReplaceAll(guard, "%s", last) + " THEN " + last + " END"
+			call = sqlName + "(" + strings.Join(guarded, ", ") + ")"
 		}
 	}
 	if guard, overflows := mathOverflow[name]; overflows && sqlDialectCur == dialectPostgres && len(parts) == 1 {

@@ -2,7 +2,7 @@
 
 .PHONY: help test build clean doc-check doc-test doc-verify doc-update fmt vet all ci install-hooks
 .PHONY: gpu build-gpu install-gpu install-local docker-gpu docker-gpu-image docker-gpu-extract deb
-.PHONY: ai-test ai-test-go ai-test-cli codelab-mint
+.PHONY: ai-test ai-test-go ai-test-cli codelab-mint lanes
 .PHONY: wasm wasm-go
 
 VERSION := $(shell cat cmd/ssql/version/version.txt | tr -d '[:space:]')
@@ -89,6 +89,17 @@ doc-check:
 	@./scripts/validate-docs.sh
 
 # Level 2: Medium documentation testing
+# The two oracle lanes a `generate sql` dialect is verified by (a pre-tag
+# gate): Postgres on the LXD rig and DataFusion through its Python bindings.
+# Each skips itself when its environment is missing, so check the output
+# says both ran. Both sat idle v4.101–v4.126 and drifted (2026-10-27).
+PG_HOST ?= ssql-node1
+DF_PYTHON ?= $(HOME)/.venvs/df/bin/python
+lanes:
+	@echo "Postgres lane ($(PG_HOST)) and DataFusion lane ($(DF_PYTHON))"
+	@test -x "$(DF_PYTHON)" || echo "WARNING: $(DF_PYTHON) missing — python3 -m venv ~/.venvs/df && ~/.venvs/df/bin/pip install datafusion"
+	SSQL_TEST_PG_HOST=$(PG_HOST) SSQL_DATAFUSION_PYTHON=$(DF_PYTHON) go test ./cmd/ssql -run 'TestPipelineEquivalence|TestInterchange|TestIntOverflowEveryLane' -count=1 -timeout 60m
+
 doc-test:
 	@echo "Level 2: Documentation Testing"
 	@echo "==============================="

@@ -1693,6 +1693,7 @@ var equivCases = []EquivCase{
 		// alone, where every other lane gave 2, 3, 4 (TODO 153).
 		Name:     "padded_numeric_cells_are_numbers",
 		Pipeline: `{{.bin}} from csv {{.data}}/padded.csv | {{.bin}} where -if n gt 7 | {{.bin}} sort id | {{.bin}} include id n`,
+		Skip:     map[string]string{"datafusion": "DataFusion's CSV reader keeps a padded cell as text where ssql trims it"},
 		Ordered:  true,
 		Golden:   []map[string]any{{"id": 2, "n": 8}, {"id": 3, "n": 9}, {"id": 4, "n": 10}},
 	},
@@ -1861,6 +1862,7 @@ var equivCases = []EquivCase{
 		// different sides of the line under the two readings.
 		Name:     "csv_iso_time_stays_string",
 		Pipeline: `{{.bin}} from csv {{.data}}/times.csv | {{.bin}} where -if ts gt 2026-01-05 | {{.bin}} include id ts | {{.bin}} sort id`,
+		Skip:     map[string]string{"datafusion": "DataFusion's CSV reader infers an ISO-timestamp column as a timestamp where ssql keeps the text"},
 		Ordered:  true,
 	},
 	{
@@ -2508,6 +2510,7 @@ var equivCases = []EquivCase{
 		// the pinned UTC session it agrees (DFC147).
 		Name:     "cast_time_mixed_forms_sort",
 		Pipeline: `{{.bin}} from csv {{.data}}/mixed_times.csv | {{.bin}} cast -type ts time | {{.bin}} sort ts | {{.bin}} include id`,
+		Skip:     map[string]string{"datafusion": "DataFusion's CSV reader infers a timestamp from the first rows and nulls the forms it cannot read"},
 		Ordered:  true,
 		Golden:   []map[string]any{{"id": 2}, {"id": 4}, {"id": 3}, {"id": 1}},
 	},

@@ -26,8 +26,11 @@ import (
 const hashMask32 = "4294967295"
 
 func sqlXor(a, b string) string {
-	if sqlDialectCur == dialectDuckDB {
+	switch sqlDialectCur {
+	case dialectDuckDB:
 		return "xor(" + a + ", " + b + ")"
+	case dialectDataFusion:
+		return "(" + a + " ^ " + b + ")" // its parser has no #; ^ is BIT_XOR there (verified on 55.0)
 	}
 	return "(" + a + " # " + b + ")"
 }
@@ -112,6 +115,9 @@ func hashFuncToSQL(name string, args []ast.Node) (string, bool, error) {
 			}
 			return "encode(sha256(convert_to(" + s + ", 'UTF8')), 'hex')", true, nil
 		case dialectDataFusion:
+			if name == "sha1" {
+				return "", true, dialectRefuse("sha1()", "DataFusion has md5, sha224, sha256, sha384 and sha512, not sha1")
+			}
 			if name == "md5" {
 				return "md5(" + s + ")", true, nil
 			}
