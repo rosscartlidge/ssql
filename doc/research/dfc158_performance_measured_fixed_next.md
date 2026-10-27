@@ -6,12 +6,14 @@ Last modified: 2026-10-28
 
 [Back to Index](./README.md)
 
-**Status:** write-up of the 2026-10-27 measurements and the two fixes
-that followed them, with a ranked list of what to do next. Ross
+**Status:** write-up of the 2026-10-27 measurements and the three fixes
+that followed them (two on the 27th, one found by writing this on the
+28th), with a ranked list of what to do next. Ross
 (2026-10-28): "could you write up a DFC on what we discovered about
 performance, what we have fixed and what we can do". The measurements
-are DFC157 §4's; the fixes are commits 3bd4919 (window) and 436c8b0
-(CSV scanner), unreleased on main as of this writing. Related:
+are DFC157 §4's; the fixes are commits 3bd4919 (window), 436c8b0
+(CSV scanner) and the `cast` template (§3.3), unreleased on main as of
+this writing. Related:
 [DFC084](./typed-performance-notes.md) (the typed runtime's
 performance notes, 2026-04), [DFC113](./dfc113_scale_gate.md) (the
 scale gate), [DFC114](./dfc114_performance_journey.md) (642 k to 98 M
@@ -35,20 +37,20 @@ changed it, the number after.
 | `group-by relationship -count`, CSV | **0.24 s** | 1.63 → 1.05 s (0.39 s on a one-column struct) | 0.71 s |
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
-| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 s | 0.06 s |
+| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 → 0.23 s | 0.06 s |
 | `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | > 1800 s → 35 s | 14.0 s |
 
 Peak RSS: cube 185 MB / 940 MB / 437 MB; CSV group-by 88 MB / 1.5 GB /
 760 MB; filtered write 1.9 GB / 8.1 GB / 1.4 GB; window 1.7 GB / 3.8 GB
 / 3.0 GB (DataFusion / typed Go / DuckDB).
 
-Two of the seven rows were pathologies, not engine differences, and
-both are fixed (§3). The other five are the honest gap between a
-row-at-a-time program over Go structs and a vectorised executor over
-Arrow batches: 1.7× on the cube, 2–5× on the scans and the join, and
-the one row where the Go program is within 2× of the winner is the
-streaming write, which is bounded by formatting. One of the five has a
-cause that is not the row model at all (§2.3).
+Three of the seven rows were pathologies, not engine differences, and
+all three are fixed (§3): two were found on the 27th and the third,
+the decimal row, while writing §2 of this document. The other four are
+the honest gap between a row-at-a-time program over Go structs and a
+vectorised executor over Arrow batches: 1.7× on the cube, 2–5× on the
+scans and the join, and the one row where the Go program is within 2×
+of the winner is the streaming write, which is bounded by formatting.
 
 ## 2. What we discovered
 
@@ -115,12 +117,16 @@ serially and groups serially: the 1.29 s is the plain Parquet group-by
 between. `ssql.Decimal` is an `Int128` plus a scale and its `Add` on a
 common scale is one checked add and one bound check (`decimal.go`);
 the arithmetic is not the cost. A cast is a per-row map with no
-cross-shard state, the most parallel stage there is; it is serial only
-because `Stream[T]` has `Where` and no `Select` (`typed/stream.go`),
-and the template was written against what the stream offered. The
-other `SerialOnly` typed templates are justified: `group-by -presorted`
-and `-stream-expr` (contiguous keys, unmergeable fold state), `window`
-and `union` (barriers).
+cross-shard state, the most parallel stage there is, and the per-shard
+map it needs has existed since the parallel PoC: `typed.StreamSelect`,
+which `update`, `include`, `rename` and `exclude` all emit with the
+serial `typed.Select` as the planner's alternative (`update`'s template
+carries a comment recording the same downgrade, fixed there earlier).
+The cast template predated the dual-template convention and was never
+revisited; nothing failed, because every fixture was small. The other
+`SerialOnly` typed templates are justified: `group-by -presorted` and
+`-stream-expr` (contiguous keys, unmergeable fold state), `window` and
+`union` (barriers). Fixed the same day, §3.3.
 
 ### 2.4 The streaming write is formatting-bound, and the sink buffers everything
 
@@ -226,9 +232,34 @@ removed after the read), field-count and bare-quote errors as
 `encoding/csv` names them, the typed race suite, the full equivalence
 suite, the scale gate.
 
-Both fixes are on main (3bd4919, 436c8b0), gated (vet, slim build, race
-packages, full `cmd/ssql`, doc-test, equivalence, scale), and in
-CHANGELOG's Unreleased section.
+### 3.3 `cast` keeps the pipeline parallel (2026-10-28)
+
+`commands/typed_cast.go` emits both templates, as `update` does:
+`typed.StreamSelect` over the stream with `typed.Select` as the
+`AltCodeIfSeq`, and `Accepts`/`Produces` `ShapeStream`. `-explain` on
+the decimal pipeline now shows no downgrade: the Parquet read stays
+parallel, the cast maps per shard, the group-by stays
+`GroupByParallel`. The generated program's output is byte-identical to
+the serial one (the same closure, per shard).
+
+| Program | Wall (three runs) | Peak RSS |
+|---|---:|---:|
+| before: serial read, map and group-by | 1.27–1.41 s | 585 MB |
+| after: parallel on both sides of the cast | **0.22–0.26 s** | 470–640 MB |
+
+Proof: `TestTypedCastKeepsPipelineParallel` (`cmd/ssql/generation_typed_test.go`)
+generates `from csv | cast | group-by` in typed mode and asserts the
+source holds `ReadCSVParallel`, `StreamSelect` and `GroupByParallel`
+and not the serial `typed.Select`, then runs it; with the old template
+stashed back in it fails on all three markers (watched). The
+equivalence cast cases pin the values in every lane. A scale case was
+considered and not added: at the gate's 3 M rows a serial plan still
+fits any honest budget, so a wall-time ceiling would not discriminate;
+the plan assertion is the gate.
+
+All three fixes are on main, gated (vet, slim build, race packages,
+full `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
+Unreleased section.
 
 ## 4. What we can do, ranked
 
@@ -236,19 +267,12 @@ Expected win first, cost second. Each item that changes a
 perf-sensitive path adds a scale case (DFC113) and, where results
 could change, an equivalence case; none of them changes a result.
 
-1. **`cast` keeps the pipeline parallel** (§2.3). Add
-   `Stream[T].Select(fn func(T) U) Stream[U]` as a per-shard map (no
-   channel, the `Where` pattern), and give `typed_cast.go` dual
-   templates (`Stream.Select` with `AltCodeIfSeq` = the present
-   `typed.Select`). Expected: the decimal row from 1.29 s to about the
-   Parquet group-by's 0.15–0.2 s, a 6–8× win for ~60 lines, and every
-   pipeline with a `cast` before a parallel stage gets it. Audit the
-   other per-row map templates (`update`, `include`, `rename`,
-   `exclude`) for the same downgrade while there: `-explain` on a
-   pipeline with each of them before a `group-by` says in one line
-   whether the source stays parallel. A scale case:
-   `cast | group-by` over the 120 MB fixture with a budget that the
-   serial plan cannot meet.
+1. **`cast` keeps the pipeline parallel** (§2.3). **Done 2026-10-28,
+   §3.3**: dual templates on `typed.StreamSelect`, 1.29 s → 0.23 s,
+   about 20 lines. The audit of the other per-row map templates
+   (`update`, `include`, `rename`, `exclude`) found them already on
+   `StreamSelect`; `cast` was the only one left, and the `SerialOnly`
+   declarations that remain are each justified at the declaration.
 
 2. **CSV column projection in the optimiser** (TODO, 2026-10-27). The
    Parquet rule prunes a `from parquet` read to the columns downstream
@@ -321,7 +345,10 @@ of it, which are worth 3–8× each where they apply.
   the sinks) is cheaper than a 30-minute benchmark timeout.
 - A template's `SerialOnly` is a performance claim and should be
   justified in a comment at the declaration, as `group-by`'s is. `cast`'s
-  was not, and it serialised every pipeline it appeared in.
+  was not, and it serialised every pipeline it appeared in; a
+  convention that was adopted for `update` had never been applied to
+  its sibling, which is the "bug fixed in one path is still live in the
+  others" rule at the planner level.
 - Measure against the engines on every release, from a script in the
   repo. The 2026-10-27 table found two pathologies and a planner gap in
   an afternoon; the previous engine comparison was 2026-09-15 and

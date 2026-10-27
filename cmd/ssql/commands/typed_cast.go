@@ -121,22 +121,35 @@ func emitTypedCast(inputVar string, in *lib.TypedSchema, casts map[string]ssql.F
 		}
 	}
 
-	code := fmt.Sprintf(`casted := typed.Select(func(r %s) %s {
+	// Both templates. A cast is a pure per-row map with no cross-shard
+	// state, so the parallel form is typed.StreamSelect (per-shard
+	// projection) as update/include/rename/exclude emit; typed.Select is
+	// the iter.Seq alternative. A single SerialOnly template here
+	// serialised the WHOLE pipeline until 2026-10-28 (DFC158 §2.3): the
+	// planner downgraded the source read and the group-by after it, and
+	// `cast -type x decimal:2 | group-by` ran 1.29 s where the parallel
+	// group-by alone ran 0.15 s.
+	closure := fmt.Sprintf(`func(r %s) %s {
 		return %s{
 			%s,
 		}
-	})(%s)`,
+	}`,
 		in.TypeName, derived.TypeName,
 		derived.TypeName,
 		strings.Join(assigns, ",\n\t\t\t"),
-		inputVar,
 	)
+	parallelCode := fmt.Sprintf("casted := typed.StreamSelect(%s, %s)", inputVar, closure)
+	serialCode := fmt.Sprintf("casted := typed.Select(%s)(%s)", closure, inputVar)
 
-	frag := lib.NewStmtFragment("casted", inputVar, code, imports, getCommandString())
+	frag := lib.NewStmtFragment("casted", inputVar, parallelCode, imports, getCommandString())
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = derived
 	frag.StructDefs = []string{structDef}
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
+	frag.IsStream = true
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
+	frag.AltCodeIfSeq = serialCode
+	frag.AltImportsIfSeq = imports
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 	return lib.WriteCodeFragment(frag)
 }
 

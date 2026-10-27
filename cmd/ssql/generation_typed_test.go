@@ -666,6 +666,38 @@ func TestTypedCastFloat(t *testing.T) {
 	}
 }
 
+// TestTypedCastKeepsPipelineParallel pins the planner's choice around a
+// cast: a cast is a per-row map, so the stage speaks Stream[T] and the
+// source read and the group-by after it keep their parallel forms. Until
+// 2026-10-28 the cast template was SerialOnly and the planner downgraded
+// BOTH neighbours: `from parquet | cast -type x decimal:2 | group-by` ran
+// 1.29 s on 14.6 M rows where the parallel group-by alone ran 0.15 s
+// (DFC158 §2.3). The serial alternative (typed.Select) must not appear.
+func TestTypedCastKeepsPipelineParallel(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("name,years\nAlice,8\nBob,3\nAlice,2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" cast -type years float | "+bin+" group-by name -sum years total | "+bin+" to csv")
+	for _, want := range []string{"typed.ReadCSVParallel", "typed.StreamSelect(", "typed.GroupByParallel"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("cast serialised the pipeline: generated source lacks %q\n%s", want, src)
+		}
+	}
+	if strings.Contains(src, "typed.Select(") {
+		t.Errorf("cast took its serial alternative\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	for _, want := range []string{"Alice,10", "Bob,3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output\n%s", want, out)
+		}
+	}
+}
+
 func TestTypedUpdateSetLiteral(t *testing.T) {
 	dir := t.TempDir()
 	emp := filepath.Join(dir, "people.csv")
