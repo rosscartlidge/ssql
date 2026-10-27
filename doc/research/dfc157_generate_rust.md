@@ -217,7 +217,7 @@ dialect. All write their output to `/dev/null`; wall is the whole process.
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 s | 0.06 s |
-| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | > 1800 s (capped) | 14.0 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | 35 s (fixed; was > 1800 s) | 14.0 s |
 
 Peak RSS, for the record: the cube 185 MB / 940 MB / 437 MB; the CSV
 group-by 88 MB / 1.5 GB / 760 MB; the filtered write 1.9 GB / 8.1 GB /
@@ -244,8 +244,11 @@ What the table says:
    a global sort of 14.6 M rows by a string column. Something in the
    typed window path is super-linear in the partition size, and the scale
    gate (DFC113) has no window case, which is exactly the gap the
-   "fixture that fits in a pipe buffer" rule names. Recorded in TODO as
-   its own item; not chased inside this project.
+   "fixture that fits in a pipe buffer" rule names. Fixed the same
+   evening (window_running.go, typed/window_running.go: the running
+   frame carried in one pass, the whole frame once; 50 k rows 53 s →
+   0.15 s in exec, 9 s → 0.02 s typed; the 14.6 M-row pipeline 35 s
+   typed, 219 s exec); the scale gate has its first window cases.
 
 Method: `scratchpad/bench/run.sh` and `run2.sh` (this session), three
 runs each, best wall; DataFusion's "plan" time (SQL → logical plan) was

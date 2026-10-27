@@ -2345,9 +2345,17 @@ func windowResults(configs []WindowConfig, all []Record) ([]map[string]any, []in
 			partLen := len(indices)
 
 			// A -stream-expr fold over the running frame carries its
-			// state across the partition in one pass (window_fold.go);
-			// everything else is computed per row.
+			// state across the partition in one pass (window_fold.go), and
+			// so do the aggregates and ranks (window_running.go: the
+			// per-row scan was O(n²) on the default frame); everything
+			// else is computed per row.
 			running := runningFoldValues(cfg, all, indices)
+			for si, vals := range runningWindowValues(cfg, all, indices) {
+				if running == nil {
+					running = make(map[int][]any)
+				}
+				running[si] = vals
+			}
 
 			// For each row in the sorted partition, compute all specs
 			for pos, origIdx := range indices {

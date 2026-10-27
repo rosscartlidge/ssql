@@ -5,6 +5,12 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A window over the default frame was quadratic in the partition size, in exec and in the typed program.** `computeWindowFunc` and `typed.windowValue` computed each row's value by scanning that row's frame, and over UNBOUNDED PRECEDING → CURRENT ROW the frame always starts at the partition's first row: 50 k rows took 53 s in exec and 9 s typed, doubling the rows quadrupled the time, and the 14.6 M-row running sum of DFC157 §4 was still running at a 30-minute cap. The sums, averages, counts, extremes and the ranks (rank, dense rank, percent rank, cume dist) over the running frame are now carried across the sorted partition in one pass — the same operations in the same order as the scan, so every value is byte-identical (`TestWindowRunningMatchesPerRow` pins the two paths against each other; the equivalence window cases pin the lanes) — and the whole-partition frame is computed once. 50 k rows: 0.15 s exec, 0.02 s typed; a million rows: 2.3 s and 0.25 s. The fold had this since DFC156; the scale gate (DFC113) gains its first window cases, exec and typed.
+
 ## [4.128.0] - 2026-10-27
 
 ### Added

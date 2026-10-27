@@ -65,15 +65,20 @@ output to `/dev/null`:
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 s | 0.06 s |
-| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | > 1800 s (capped) | 14.0 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | 35 s (was > 1800 s, see below) | 14.0 s |
 
 DataFusion is faster than the typed Go program on every workload here,
 by 1.7× on the cube and 2–7× elsewhere, and matches DuckDB on the
 scan-and-aggregate shapes: a vectorised, morsel-parallel executor over
 Arrow batches beats a row-at-a-time streaming program with struct
 types, CSV reading included. The streaming write is the one shape it
-does not win, and the typed window row is a bug (super-linear in the
-partition size; TODO), not a measurement of the design. The Rust
+does not win. The typed window row was measured twice: the first run
+was still going at a 30-minute cap, because both the exec and the typed
+window scanned each row's frame from the partition's first row (n²/2 per
+partition — fixed the same day, `window_running.go`: the running frame is
+carried in one pass); the 35 s that remain are the materialisation, the
+per-partition sort of 14.6 M rows by a string column and a boxed result
+per row, linear now, and the next thing to shave (TODO). The Rust
 program is the same `generate go` pipeline with `rust` in place of
 `go`; the first `cargo` build compiles DataFusion (minutes, once).
 

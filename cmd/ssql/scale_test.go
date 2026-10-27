@@ -177,6 +177,21 @@ func TestScaleBudgets(t *testing.T) {
 		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
 			bin+" from parquet big.parquet | "+bin+" group-by dept -count n | "+bin+" to csv' > /dev/null", 90*time.Second)
 	})
+	t.Run("window-running-frame-exec", func(t *testing.T) {
+		// A running sum and a dense rank over six partitions of 500 k rows.
+		// Before 2026-10-27 the per-row frame scan was O(n²) per partition:
+		// 50 k rows took 53 s and doubling quadrupled it (the 14.6 M-row
+		// benchmark of DFC157 §4 was still running at a 30-minute cap).
+		// One pass now; the budget covers the materialisation and sort.
+		budget(t, dir, bin+" from csv big.csv | "+bin+" window -partition dept -order id -sum score run -dense-rank dr | "+bin+" count", 60*time.Second)
+	})
+	t.Run("window-running-frame-typed", func(t *testing.T) {
+		// The typed window had the same scan (typed/window.go); same
+		// pipeline through generate go -run, budget covers the build.
+		repo, _ := filepath.Abs("../..")
+		budget(t, dir, "SSQL_MODULE_DIR="+repo+" "+bin+" generate go -run -mode typed -pipeline '"+
+			bin+" from csv big.csv | "+bin+" window -partition dept -order id -sum score run -dense-rank dr | "+bin+" count' > /dev/null", 90*time.Second)
+	})
 	t.Run("generate-go-run-jsonl-typed", func(t *testing.T) {
 		// `from jsonl` in typed mode keeps the pipeline typed (roadmap
 		// item 9). Before: record-mode fallback, 14.8 s / 3.9 GB on this

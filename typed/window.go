@@ -147,6 +147,7 @@ func Window[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(it
 						outputOrder = append(outputOrder, idx...)
 					}
 					partLen := len(idx)
+					done := make([]bool, len(c.Specs))
 					for s, spec := range c.Specs {
 						// A fold over the running frame: one pass, the state
 						// carried across the partition (O(n), not O(n²)).
@@ -156,11 +157,22 @@ func Window[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(it
 								state = spec.Step(state, all[idx[pos]])
 								results[idx[pos]][base+s] = spec.Final(state)
 							}
+							done[s] = true
+							continue
+						}
+						// The aggregates and ranks over the running frame,
+						// carried the same way; the whole-partition frame,
+						// computed once (window_running.go).
+						if vals := runningSpecValues(spec, c, all, idx); vals != nil {
+							for pos := range idx {
+								results[idx[pos]][base+s] = vals[pos]
+							}
+							done[s] = true
 						}
 					}
 					for pos := range idx {
 						for s, spec := range c.Specs {
-							if spec.Kind == WFold && isRunningFrame(c.Frame) {
+							if done[s] {
 								continue
 							}
 							results[idx[pos]][base+s] = windowValue(spec, c, all, idx, pos, partLen)
