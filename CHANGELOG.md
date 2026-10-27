@@ -5,6 +5,12 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The Postgres oracle lane runs the whole equivalence suite again** (Ross: "lets fix the postgres cases"). Its first full run since v4.101 had 24 cases Postgres rejected, four causes: the harness enclosed the `SET timezone` statement inside its `row_to_json` wrapper (nineteen time cases never reached the engine); a window `-avg`'s float cast enclosed the function instead of the whole `OVER` expression; `exp`, `sinh` and `cosh` raise `value out of range: overflow` on Postgres where DuckDB returns Infinity — the argument is guarded and the result is the same absent value; `log2` and two-argument `log` do not exist over doubles there — both are ratios of natural logarithms. No lane disagreed on a value; every case now runs.
+
 ## [4.127.0] - 2026-10-27
 
 ### Added

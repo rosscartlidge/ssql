@@ -469,6 +469,12 @@ func pgOracleScript(t *testing.T, sql string) string {
 			}
 			script.WriteString("\\.\n")
 		case strings.HasPrefix(ln, "--"), strings.TrimSpace(ln) == "":
+		case strings.HasPrefix(ln, "SET ") && strings.HasSuffix(strings.TrimSpace(ln), ";"):
+			// A session setting (SET timezone TO 'UTC'; DFC147) is its own
+			// statement, before the query the wrapper below encloses — inside
+			// the wrapper it was a syntax error, which hid every time case
+			// from the lane until 2026-10-27.
+			script.WriteString(ln + "\n")
 		default:
 			stmt.WriteString(ln + "\n")
 		}

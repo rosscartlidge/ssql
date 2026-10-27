@@ -2154,11 +2154,7 @@ func translateWindow(q *sqlQuery, args []string) error {
 					cur.frameFns = append(cur.frameFns, args[i])
 				}
 				sqlFunc := windowSQLFunc(args[i])
-				call := fmt.Sprintf("%s(%s)", sqlFunc, quoteIdent(args[i+1]))
-				if args[i] == "-avg" {
-					call = sqlAggAvg(quoteIdent(args[i+1])) // a float in every dialect
-				}
-				cur.funcs = append(cur.funcs, fmt.Sprintf("%s AS %s", call, quoteIdent(args[i+2])))
+				cur.funcs = append(cur.funcs, fmt.Sprintf("%s(%s) AS %s", sqlFunc, quoteIdent(args[i+1]), quoteIdent(args[i+2])))
 				i += 3
 			} else {
 				i++
@@ -2293,7 +2289,13 @@ func translateWindow(q *sqlQuery, args []string) error {
 			}
 			funcExpr := f[:asIdx]
 			alias := f[asIdx:]
-			q.selectExprs = append(q.selectExprs, funcExpr+" OVER ("+over+")"+alias)
+			expr := funcExpr + " OVER (" + over + ")"
+			if strings.HasPrefix(funcExpr, "AVG(") && sqlDialectCur != dialectDuckDB {
+				// A window average is a float in every dialect (sqlAggAvg's
+				// rule); the cast encloses the whole window expression.
+				expr = "CAST(" + expr + " AS " + sqlFloatType() + ")"
+			}
+			q.selectExprs = append(q.selectExprs, expr+alias)
 		}
 	}
 

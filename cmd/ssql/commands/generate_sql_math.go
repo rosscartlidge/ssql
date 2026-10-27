@@ -52,6 +52,14 @@ var mathDomain = map[string]string{
 	"asin": "%s BETWEEN -1 AND 1", "acos": "%s BETWEEN -1 AND 1", "acosh": "%s >= 1", "atanh": "%s > -1 AND %s < 1",
 }
 
+// mathOverflow is the Postgres overflow guard per function: where DuckDB
+// returns Infinity (which sqlFinite makes NULL), Postgres raises `value
+// out of range: overflow` and aborts the statement, so the argument is
+// tested first and the result is NULL past it — the same absent value.
+var mathOverflow = map[string]string{
+	"exp": "%s < 709.782712893384", "sinh": "abs(%s) < 710.4758600739439", "cosh": "abs(%s) < 710.4758600739439",
+}
+
 // mathFuncToSQL translates a DFC153 call; ok=false for any other name
 // (round with one argument stays expr-lang's, in exprFuncs).
 func mathFuncToSQL(name string, args []ast.Node) (string, bool, error) {
@@ -107,6 +115,16 @@ func mathFuncToSQL(name string, args []ast.Node) (string, bool, error) {
 		parts[0] = "CAST(" + parts[0] + " AS INTEGER)" // DuckDB's factorial takes INTEGER, not BIGINT
 	}
 	call := sqlName + "(" + strings.Join(parts, ", ") + ")"
+	if sqlDialectCur == dialectPostgres {
+		// Postgres has no log2, and its two-argument log takes NUMERICs:
+		// both as a ratio of natural logarithms over doubles.
+		switch name {
+		case "log2":
+			call = "(ln(" + parts[0] + ") / ln(2.0))"
+		case "log":
+			call = "(ln(" + parts[1] + ") / ln(" + parts[0] + "))"
+		}
+	}
 	if mathIntResult[name] {
 		return call, true, nil
 	}
@@ -118,6 +136,9 @@ func mathFuncToSQL(name string, args []ast.Node) (string, bool, error) {
 		case dialectPostgres:
 			call = "CASE WHEN " + strings.ReplaceAll(guard, "%s", last) + " THEN " + call + " END"
 		}
+	}
+	if guard, overflows := mathOverflow[name]; overflows && sqlDialectCur == dialectPostgres && len(parts) == 1 {
+		call = "CASE WHEN " + strings.ReplaceAll(guard, "%s", parts[0]) + " THEN " + call + " END"
 	}
 	return sqlFinite(call), true, nil
 }
