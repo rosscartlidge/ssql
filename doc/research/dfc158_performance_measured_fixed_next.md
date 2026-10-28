@@ -396,9 +396,10 @@ three things on the way:
 
 Two more readings of the table: the typed join (0.51 s, was 0.89 s on
 the 27th) is the zero-copy CSV scanner reaching the join corpus, which
-is CSV; and `count | to csv` does not compile in typed mode (`count`'s
-template prints and declares no output), which is why the join row
-ends in `count` — TODO.
+is CSV; and a first cut of the driver wrongly ended the join row in
+`count | to csv` — `count` is a sink, nothing can follow it, and exec
+says so; the generated code merely fails to compile instead, which is
+a missing message, not a missing feature (TODO).
 
 All five fixes are on main, gated (vet, slim build, race packages,
 full `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's

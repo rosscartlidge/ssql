@@ -216,8 +216,8 @@ done
   done
   # Output row counts that disagree between engines are worth a look (every
   # sink is `to csv` with a header, DuckDB's -csv included; the join row ends
-  # in `count`, whose one number each engine prints its own way, so it is
-  # not compared — `count | to csv` does not compile in typed mode yet, TODO).
+  # in `count`, a sink whose one number each engine prints its own way, so
+  # it is not compared).
   for entry in "${PIPES[@]}"; do
     name=${entry%%@@*}
     [ "$name" = join3 ] && continue
