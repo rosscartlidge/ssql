@@ -39,8 +39,9 @@ func BenchmarkWindowRunningSumString(b *testing.B) {
 			}
 			return 0
 		},
-		Frame: WindowFrame{Preceding: -1, Following: 0},
-		Specs: []WindowSpec[benchWinRow]{{Kind: WSum, Int: func(r benchWinRow) (int64, bool) { return r.V, true }}},
+		KeyString: func(r benchWinRow) string { return r.Name }, // as the template emits beside Compare
+		Frame:     WindowFrame{Preceding: -1, Following: 0},
+		Specs:     []WindowSpec[benchWinRow]{{Kind: WSum, Int: func(r benchWinRow) (int64, bool) { return r.V, true }}},
 	}}
 	w := Window(clauses, func(r benchWinRow, res []any) benchWinOut {
 		v, _ := res[0].(interface{ Int64() int64 })

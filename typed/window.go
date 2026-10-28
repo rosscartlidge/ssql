@@ -5,6 +5,7 @@ import (
 	"iter"
 	"runtime"
 	"slices"
+	"strings"
 
 	ssql "github.com/rosscartlidge/ssql/v4"
 )
@@ -93,12 +94,25 @@ func (spec WindowSpec[T]) wide(r T) (ssql.Int128, bool) {
 }
 
 // WindowClause mirrors ssql.WindowConfig for one clause.
+//
+// KeyString, KeyInt and KeyFloat are the single order field read as its
+// own type, when the clause orders by one string, int64 or float64
+// column (the generated code sets one of them beside Compare). A
+// partition is then sorted as (key, index) pairs that move together —
+// the sort's reads are sequential, the row is touched once to take its
+// key — instead of comparing rows through Compare, which read two rows
+// and two string bodies at random per comparison: 15 s of CPU in the
+// 14.6 M-row benchmark window (DFC158 §3.9). Compare still decides
+// peers, and sorts a clause with several order fields or another type.
 type WindowClause[T any] struct {
 	Partition func(T) string // partition key ("" for the whole input)
 	HasOrder  bool
 	Compare   func(a, b T) int // order comparator (0 = peers); nil when !HasOrder
 	Desc      bool             // the single order field is descending (RANGE direction)
 	RangeKey  func(T) float64  // the single order field as a number / Unix seconds, for RANGE frames
+	KeyString func(T) string   // the single order field, when it is a string
+	KeyInt    func(T) int64    // … an int64
+	KeyFloat  func(T) float64  // … a float64
 	Frame     WindowFrame
 	Specs     []WindowSpec[T]
 }
@@ -236,13 +250,23 @@ func windowPartition[T any](c WindowClause[T], all []T, idx []int, results [][]a
 		// peers keep input order exactly as sort.SliceStable kept it, with
 		// O(n log n) comparisons and far fewer moves than its symmerge
 		// (which was 21 s of the 35 s benchmark window, DFC158 §4.3) and
-		// no reflection swapper.
-		sortIdx(idx, func(a, b int) int {
-			if r := c.Compare(all[a], all[b]); r != 0 {
-				return r
-			}
-			return cmp.Compare(a, b)
-		})
+		// no reflection swapper. A typed key sorts (key, index) pairs; the
+		// comparator sorts the index by the rows.
+		switch {
+		case c.KeyString != nil:
+			sortIdxByString(all, idx, c.KeyString, c.Desc)
+		case c.KeyInt != nil:
+			sortIdxByKey(all, idx, c.KeyInt, c.Desc, cmp.Compare[int64])
+		case c.KeyFloat != nil:
+			sortIdxByKey(all, idx, c.KeyFloat, c.Desc, compareFloatLikeGenerated)
+		default:
+			sortIdx(idx, func(a, b int) int {
+				if r := c.Compare(all[a], all[b]); r != 0 {
+					return r
+				}
+				return cmp.Compare(a, b)
+			})
+		}
 	}
 	partLen := len(idx)
 	done := make([]bool, len(c.Specs))
@@ -278,34 +302,133 @@ func windowPartition[T any](c WindowClause[T], all []T, idx []int, results [][]a
 	}
 }
 
-// sortChunkMin is the partition size below which sortIdx sorts inline.
+// sortChunkMin is the partition size below which sortChunked sorts inline.
 const sortChunkMin = 1 << 16
 
 // sortIdx sorts a partition's index slice by cmp, which is strict (the
-// index is its tiebreak), so the result is the one stable order. A large
-// partition is sorted as chunks on parallel goroutines and merged pairwise
-// through a scratch buffer: a third of the benchmark file sat in ONE
-// partition (4.7 M of 14.6 M rows), so sorting partitions concurrently
-// still left that partition's single-threaded sort as the critical path
-// (DFC158 §4.3).
-func sortIdx(idx []int, cmp func(a, b int) int) {
+// index is its tiebreak), so the result is the one stable order.
+func sortIdx(idx []int, cmp func(a, b int) int) { sortChunked(idx, cmp) }
+
+// keyed is one row of a partition sorted by a typed key: the key and the
+// row's index travel together, so the sort reads the slice it is
+// sorting, sequentially, and the row only once (to take the key).
+type keyed[K any] struct {
+	k K
+	i int32
+}
+
+// sortIdxByKey sorts idx by key(row), descending when desc, ties by the
+// row's index — the order Compare on the same field gives — through
+// (key, index) pairs.
+func sortIdxByKey[T, K any](all []T, idx []int, key func(T) K, desc bool, cmpKey func(a, b K) int) {
+	pairs := make([]keyed[K], len(idx))
+	for p, i := range idx {
+		pairs[p] = keyed[K]{key(all[i]), int32(i)}
+	}
+	sortChunked(pairs, func(a, b keyed[K]) int {
+		r := cmpKey(a.k, b.k)
+		if desc {
+			r = -r
+		}
+		if r != 0 {
+			return r
+		}
+		return cmp.Compare(a.i, b.i)
+	})
+	for p := range pairs {
+		idx[p] = int(pairs[p].i)
+	}
+}
+
+// keyedStr is a string key with its first eight bytes as one big-endian
+// integer beside it: two keys whose prefixes differ compare without
+// reading either string's bytes, which sit at random across the heap —
+// the benchmark window's remaining 11 s of CPU after the keyed sort
+// (DFC158 §3.9). A shorter key is padded with zeros, which orders it
+// before a longer key with the same bytes, as the full comparison does;
+// equal prefixes fall to strings.Compare.
+type keyedStr struct {
+	pre uint64
+	k   string
+	i   int32
+}
+
+// strPrefix is s's first eight bytes as a big-endian integer.
+func strPrefix(s string) uint64 {
+	var p uint64
+	for j := 0; j < 8 && j < len(s); j++ {
+		p |= uint64(s[j]) << (56 - 8*j)
+	}
+	return p
+}
+
+// sortIdxByString is sortIdxByKey for a string key, through keyedStr.
+func sortIdxByString[T any](all []T, idx []int, key func(T) string, desc bool) {
+	pairs := make([]keyedStr, len(idx))
+	for p, i := range idx {
+		k := key(all[i])
+		pairs[p] = keyedStr{strPrefix(k), k, int32(i)}
+	}
+	sortChunked(pairs, func(a, b keyedStr) int {
+		var r int
+		switch {
+		case a.pre < b.pre:
+			r = -1
+		case a.pre > b.pre:
+			r = 1
+		default:
+			r = strings.Compare(a.k, b.k)
+		}
+		if desc {
+			r = -r
+		}
+		if r != 0 {
+			return r
+		}
+		return cmp.Compare(a.i, b.i)
+	})
+	for p := range pairs {
+		idx[p] = int(pairs[p].i)
+	}
+}
+
+// compareFloatLikeGenerated is the three-way comparison the generated
+// comparator makes on a float field (`<` then `>`): a NaN compares equal
+// to everything, so a typed key sorts exactly as Compare did.
+func compareFloatLikeGenerated(a, b float64) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+// sortChunked sorts items by cmp, which must be strict (no two items
+// compare equal), so the result is the one order. A large slice is sorted
+// as chunks on parallel goroutines and merged pairwise through a scratch
+// buffer: a third of the benchmark file sat in ONE partition (4.7 M of
+// 14.6 M rows), so sorting partitions concurrently still left that
+// partition's single-threaded sort as the critical path (DFC158 §4.3).
+func sortChunked[E any](items []E, cmp func(a, b E) int) {
 	p := runtime.GOMAXPROCS(0)
-	if len(idx) < 2*sortChunkMin || p < 2 {
-		slices.SortFunc(idx, cmp)
+	if len(items) < 2*sortChunkMin || p < 2 {
+		slices.SortFunc(items, cmp)
 		return
 	}
-	chunks := min(p, len(idx)/sortChunkMin)
-	size := (len(idx) + chunks - 1) / chunks
+	chunks := min(p, len(items)/sortChunkMin)
+	size := (len(items) + chunks - 1) / chunks
 	var bounds []int
 	var g shardGroup
-	for lo := 0; lo < len(idx); lo += size {
-		hi := min(lo+size, len(idx))
+	for lo := 0; lo < len(items); lo += size {
+		hi := min(lo+size, len(items))
 		bounds = append(bounds, lo)
-		g.Go(func() { slices.SortFunc(idx[lo:hi], cmp) })
+		g.Go(func() { slices.SortFunc(items[lo:hi], cmp) })
 	}
-	bounds = append(bounds, len(idx))
+	bounds = append(bounds, len(items))
 	g.Wait()
-	src, dst := idx, make([]int, len(idx))
+	src, dst := items, make([]E, len(items))
 	for len(bounds) > 2 {
 		var g shardGroup
 		next := make([]int, 0, len(bounds)/2+2)
@@ -316,20 +439,20 @@ func sortIdx(idx []int, cmp func(a, b int) int) {
 				hi = bounds[i+2]
 			}
 			next = append(next, lo)
-			g.Go(func() { mergeIdx(dst[lo:hi], src[lo:mid], src[mid:hi], cmp) })
+			g.Go(func() { mergeSorted(dst[lo:hi], src[lo:mid], src[mid:hi], cmp) })
 		}
-		next = append(next, len(idx))
+		next = append(next, len(items))
 		g.Wait()
 		bounds = next
 		src, dst = dst, src
 	}
-	if &src[0] != &idx[0] {
-		copy(idx, src)
+	if &src[0] != &items[0] {
+		copy(items, src)
 	}
 }
 
-// mergeIdx merges two sorted runs into out (len(out) == len(a)+len(b)).
-func mergeIdx(out, a, b []int, cmp func(a, b int) int) {
+// mergeSorted merges two sorted runs into out (len(out) == len(a)+len(b)).
+func mergeSorted[E any](out, a, b []E, cmp func(a, b E) int) {
 	i, j, k := 0, 0, 0
 	for i < len(a) && j < len(b) {
 		if cmp(a[i], b[j]) <= 0 {

@@ -1,9 +1,13 @@
 package typed
 
 import (
+	"fmt"
+	"math"
+	"math/rand"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -83,6 +87,101 @@ func TestReadParquetParallelShardsAreInFileOrder(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, rows) {
 			t.Errorf("n=%d: shard order is not file order: %v", n, got)
+		}
+	}
+}
+
+// TestWindowKeySortMatchesCompare: a clause sorted through its typed key
+// (string, int64, float64; ascending and descending) yields exactly what
+// the same clause sorted through Compare yields — ties in input order,
+// a NaN compared equal to everything as the generated comparator does,
+// partitions above and below the chunked-sort threshold.
+func TestWindowKeySortMatchesCompare(t *testing.T) {
+	type row struct {
+		Part int64
+		S    string
+		I    int64
+		F    float64
+		V    float64
+	}
+	rng := rand.New(rand.NewSource(11))
+	n := 3*sortChunkMin + 777
+	rows := make([]row, n)
+	for i := range rows {
+		rows[i] = row{Part: int64(rng.Intn(2)), S: fmt.Sprintf("s%04d", rng.Intn(3000)), I: int64(rng.Intn(500)) - 250, F: float64(rng.Intn(400)) / 8, V: float64(i)}
+		if i%97 == 0 {
+			rows[i].F = math.NaN()
+		}
+	}
+	specs := []WindowSpec[row]{
+		{Kind: WRowNumber},
+		{Kind: WRank},
+		{Kind: WSum, Num: func(r row) (float64, bool) { return r.V, true }},
+	}
+	build := func(r row, res []any) [4]any { return [4]any{r.V, res[0], res[1], res[2]} }
+	run := func(c WindowClause[row]) [][4]any {
+		var out [][4]any
+		for o := range Window([]WindowClause[row]{c}, build)(slices.Values(rows)) {
+			out = append(out, o)
+		}
+		return out
+	}
+	for _, desc := range []bool{false, true} {
+		cases := []struct {
+			name string
+			cmp  func(a, b row) int
+			key  func(c *WindowClause[row])
+		}{
+			{"string", func(a, b row) int {
+				if a.S < b.S {
+					return -1
+				}
+				if a.S > b.S {
+					return 1
+				}
+				return 0
+			}, func(c *WindowClause[row]) { c.KeyString = func(r row) string { return r.S } }},
+			{"int", func(a, b row) int {
+				if a.I < b.I {
+					return -1
+				}
+				if a.I > b.I {
+					return 1
+				}
+				return 0
+			}, func(c *WindowClause[row]) { c.KeyInt = func(r row) int64 { return r.I } }},
+			{"float with NaN", func(a, b row) int {
+				if a.F < b.F {
+					return -1
+				}
+				if a.F > b.F {
+					return 1
+				}
+				return 0
+			}, func(c *WindowClause[row]) { c.KeyFloat = func(r row) float64 { return r.F } }},
+		}
+		for _, c := range cases {
+			cmpFn := c.cmp
+			if desc {
+				cmpFn = func(a, b row) int { return c.cmp(b, a) }
+			}
+			base := WindowClause[row]{
+				Partition: func(r row) string { return strconv.FormatInt(r.Part, 10) },
+				HasOrder:  true, Compare: cmpFn, Desc: desc,
+				Frame: WindowFrame{Preceding: -1, Following: 0}, Specs: specs,
+			}
+			want := run(base)
+			keyed := base
+			c.key(&keyed)
+			got := run(keyed)
+			if !reflect.DeepEqual(got, want) {
+				for i := range want {
+					if i < len(got) && !reflect.DeepEqual(got[i], want[i]) {
+						t.Fatalf("%s desc=%v: row %d differs: key %v, compare %v", c.name, desc, i, got[i], want[i])
+					}
+				}
+				t.Fatalf("%s desc=%v: %d rows, want %d", c.name, desc, len(got), len(want))
+			}
 		}
 	}
 }

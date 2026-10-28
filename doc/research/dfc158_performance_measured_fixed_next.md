@@ -464,6 +464,49 @@ batches per row group on a small file and compares serial and parallel
 reads to the rows written; the Parquet equivalence and scale cases and
 the typed race suite pin the rest.
 
+### 3.9 The typed window's sort key, and where the rest of its time is (2026-10-28)
+
+The window clause takes the single order field as its own type
+(`KeyString`, `KeyInt`, `KeyFloat`, emitted by the template beside
+`Compare` for a string, int64 or float64 column), and a partition is
+sorted as (key, index) pairs that move together — the sort reads the
+slice it is sorting, sequentially, and the row once — instead of
+comparing rows through `Compare`. A string key carries its first eight
+bytes as one integer beside it, compared first; only equal prefixes
+read the bodies (the benchmark's names are device and port strings,
+distinct within eight bytes for all but a few groups). `Compare` still
+decides peers and sorts the other shapes. `TestWindowKeySortMatchesCompare`
+holds the two paths to the same rows, ties in input order, a NaN equal
+to everything as the generated comparator has it, partitions on both
+sides of the chunk threshold, ascending and descending.
+
+The program: 9.0 → 8.5 s. The small benchmark (25 k-row partitions,
+in cache) 47 → 51 ms: the pair extraction is overhead where the rows
+were already cached. A profile said the key had done its job (the
+compares no longer touch rows) and timing the phases said why the wall
+hardly moved — with 24 cores the sort was already off the critical path
+once it was parallel:
+
+| Phase | Wall |
+|---|---:|
+| materialise the shards (parallel) | 0.71 s |
+| concatenate them into one slice (serial copy, first-touch faults) | 0.76 s |
+| partition map (serial: a key string and a map lookup per row) | 1.08 s |
+| sort and the one-pass specs (parallel over partitions) | 2.33 s |
+| emit (rows read at random in sorted order, the boxed results, the group-by after) | 3.68 s |
+
+Three of those are serial and parallelisable without changing a
+result: the concatenation (each shard copies into its own range of the
+slice), the partition map (a map per range of rows, lists concatenated
+in range order — the same first-seen order and ascending indices), and
+the random row reads of the emit (each partition gathers its sorted
+rows and results into contiguous output while it still has the
+indices, so the emit walks memory in order). Together they are about
+2.5 s of the 8.5; that is the next unit, recorded in TODO. DataFusion's
+5.8 s is a global sort of 14.6 M rows and a sorted-mode aggregate on
+24 partitions; the typed window is one process doing the same work
+row by row, and 6 s is a fair floor for it.
+
 All fixes are on main, gated (vet, slim build, race packages, full
 `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
 Unreleased section.
@@ -487,11 +530,12 @@ could change, an equivalence case; none of them changes a result.
    group-by runs in 0.39 s through the optimiser, between DataFusion
    and DuckDB.
 
-3. **The typed window's 35 s.** **Done 2026-10-28, §3.5**: 9.2 s. The
-   guess here was half right — the sort was the cost, but its algorithm
-   and its serial source, not the boxing; the profile said so before a
-   line changed. What is left (a typed sort key, an unboxed result
-   column) is in TODO with the numbers.
+3. **The typed window's 35 s.** **Done 2026-10-28, §3.5 and §3.9**:
+   9.2 s, then 8.5 s with the typed sort key. The guess here was half
+   right — the sort was the cost, but its algorithm and its serial
+   source, not the boxing; and once parallel, the sort left the
+   critical path, so the key bought little. The phases say what is
+   left: three serial phases worth about 2.5 s, in TODO.
 
 4. **The filtered write's memory.** **Done 2026-10-28, §3.8**, and
    not where this item said: the sink holds 238 MB; the typed Parquet

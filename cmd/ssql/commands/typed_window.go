@@ -118,6 +118,15 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 			if cfg.OrderBy[0].Desc {
 				b.WriteString("\t\t\tDesc: true,\n")
 			}
+			// One order field of a plain type: its typed key beside the
+			// comparator, so the runtime sorts (key, index) pairs instead
+			// of rows (DFC158 §3.9). Compare still decides peers.
+			if len(cfg.OrderBy) == 1 {
+				f, _ := lookupSchemaField(in, cfg.OrderBy[0].Field)
+				if key, ok := map[string]string{"string": "KeyString", "int64": "KeyInt", "float64": "KeyFloat"}[f.GoType]; ok {
+					fmt.Fprintf(&b, "\t\t\t%s: func(r %s) %s { return r.%s },\n", key, in.TypeName, f.GoType, f.GoName)
+				}
+			}
 		}
 
 		// Frame.
