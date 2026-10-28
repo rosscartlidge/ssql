@@ -265,9 +265,9 @@ the named columns in the order named, an unknown or repeated name a
 loud error listing the header. Every lane honours it — exec and record
 mode `Project`, the typed struct holds only those columns
 (`lib.TypeOptions.Columns`; the zero-copy scanner then decodes and
-clones only those), the SQL assembler makes it the SELECT list
-(`translateInclude`, so the Rust lowering emits `select_columns`), and
-`SSQL_MODE=schema` answers with the projection. The pruning rule
+clones only those), the SQL assembler wraps the projection around the
+source, as the Parquet one is (the Rust lowering emits `select_columns`
+on the leaf), and `SSQL_MODE=schema` answers with the projection. The pruning rule
 (`ruleSourceColumnPruning`, the renamed Parquet rule) adds it to a
 single local CSV/TSV file when every column the pipeline uses is in the
 header and the header has more, rewriting a bare `from F.csv` to
@@ -278,7 +278,17 @@ same file in a process substitution's inner pipeline (which bash runs
 unoptimised) cannot clash with it; and a source whose pipeline names a
 column with `-arg` (a name beginning with `-` or `+`) is left unpruned,
 because a flag's value has no `-arg` escape — the full `cmd/ssql` run
-found both on the day.
+found both on the day. The release's `make lanes` found a third: the
+first cut put the projection in the layer's select list, so a later
+`include` wrapped the layer as a subquery with the sort's ORDER BY
+inside it; DuckDB honours a subquery's order by accident, DataFusion
+returned the file's first three rows. The projection now wraps the
+source (`csv_prune_sort_include_limit` pins it; the local lanes alone
+could not have, which is what the oracle lanes are for). The rust lane
+then found that with `-empty zero` the projection must go INSIDE the
+coalesce wrapper, since the Rust lowering projects the leaf before
+running that wrapper's SQL over it; it does, and the wrapper names only
+the projected columns.
 
 | Program | Wall (three runs) |
 |---|---:|

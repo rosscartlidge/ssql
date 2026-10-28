@@ -713,7 +713,41 @@ func translateFrom(q *sqlQuery, args []string) error {
 	// probability-proportional-to-storage; a given seed is refused like
 	// the sample stage's (no cross-engine deterministic equivalent).
 	var sampleN, lastN string
-	var columns []string // -columns: the projection, applied last (a CSV/TSV source; parquet's is its own)
+	var columns []string // -columns: the projection (a CSV/TSV source; parquet's is its own)
+	columnsApplied := false
+	// applyColumns wraps the projection, in the order given, around the
+	// SOURCE (as the Parquet one is) and not into the layer's select list
+	// — a select list there made the next include wrap the layer as a
+	// subquery with the sort's ORDER BY trapped inside it, which DuckDB
+	// happens to honour and DataFusion does not (the lanes caught it on
+	// 2026-10-28). It runs before a `-empty zero` wrapper, so that wrapper
+	// names only the projected columns — the Rust lowering projects the
+	// leaf first and runs the wrapper's SQL over it (the rust lane caught
+	// that the same day) — and otherwise last. Checked against the header
+	// when it is known here; the engine reports an unknown name otherwise.
+	applyColumns := func() error {
+		if len(columns) == 0 || columnsApplied {
+			return nil
+		}
+		columnsApplied = true
+		if q.columns != nil {
+			for _, c := range columns {
+				if !slices.Contains(q.columns, c) {
+					return fmt.Errorf("from %s: -columns names %q, which is not in the header (available: %s)", args[0], c, strings.Join(q.columns, ", "))
+				}
+			}
+		}
+		idents := make([]string, len(columns))
+		for i, c := range columns {
+			idents[i] = quoteIdent(c)
+		}
+		q.fromClause = sqlSubquery("(SELECT " + strings.Join(idents, ", ") + " FROM " + q.fromClause + ")")
+		q.columns = append([]string(nil), columns...)
+		if q.source != nil {
+			q.source.columns = append([]string(nil), columns...) // the Rust lowering's select_columns on the leaf
+		}
+		return nil
+	}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-columns", "-c":
@@ -890,6 +924,9 @@ func translateFrom(q *sqlQuery, args []string) error {
 					q.fromClause = duckReadCSV([]string{q.csvSource}, q.csvDelim, q.csvTypes)
 				}
 				if emptyZeroFromArgs(rest) {
+					if err := applyColumns(); err != nil {
+						return err
+					}
 					cols := q.columns
 					wrapAsSQLOnly(q, "from -empty zero", func(src string) string { return coalesceEmptyCells(src, cols) })
 				}
@@ -974,24 +1011,7 @@ func translateFrom(q *sqlQuery, args []string) error {
 		src := duckReadCSV([]string{q.csvSource}, q.csvDelim, extra)
 		q.fromClause = fmt.Sprintf("(SELECT * EXCLUDE (__rn) FROM (SELECT * FROM (SELECT *, row_number() OVER () AS __rn FROM %s) ORDER BY __rn DESC LIMIT %s) ORDER BY __rn)", src, lastN)
 	}
-	if len(columns) > 0 {
-		// -columns on a CSV/TSV source: the SELECT list, in the order given
-		// — the same projection the typed struct and the record Project
-		// make. Checked against the header when it is known here; the
-		// engine reports an unknown name otherwise.
-		if q.columns != nil {
-			for _, c := range columns {
-				if !slices.Contains(q.columns, c) {
-					return fmt.Errorf("from %s: -columns names %q, which is not in the header (available: %s)", args[0], c, strings.Join(q.columns, ", "))
-				}
-			}
-		}
-		if err := translateInclude(q, columns); err != nil {
-			return err
-		}
-		q.columns = append([]string(nil), columns...)
-	}
-	return nil
+	return applyColumns()
 }
 
 // fromFlagArity is how many arguments each of from's value flags takes,

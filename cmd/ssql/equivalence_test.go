@@ -1433,6 +1433,18 @@ var equivCases = []EquivCase{
 		Golden:   []map[string]any{{"salary": 95000, "name": "Alice"}, {"salary": 105000, "name": "Carol"}, {"salary": 88000, "name": "Eve"}, {"salary": 82000, "name": "Frank"}},
 	},
 	{
+		// Pruned source, then sort, include and limit: the ORDER BY must
+		// stay at the top level of one SELECT. The first cut put the
+		// source's -columns in the layer's select list, so include wrapped
+		// the layer and the ORDER BY sat inside a subquery — DuckDB kept
+		// that order by accident and DataFusion returned the file's first
+		// three rows (make lanes, 2026-10-28).
+		Name:     "csv_prune_sort_include_limit",
+		Pipeline: `{{.bin}} from csv {{.data}}/shuffled.csv | {{.bin}} sort -desc pop | {{.bin}} include city pop | {{.bin}} limit 3`,
+		Ordered:  true,
+		Golden:   []map[string]any{{"city": "Tokyo", "pop": 37}, {"city": "Oslo", "pop": 31}, {"city": "Delhi", "pop": 29}},
+	},
+	{
 		// The optimiser's csv-column-pruning: the optimised lanes read
 		// `from csv … -columns dept -columns salary`, exec reads every
 		// column; the answer is the same.

@@ -671,18 +671,37 @@ func TestTranslateFromCSVColumns(t *testing.T) {
 	if err := translateFrom(q, []string{"csv", path, "-columns", "b", "-columns", "a"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(q.fromClause, "read_csv('"+path+"'") || strings.Contains(q.fromClause, "'b'") {
-		t.Errorf("fromClause %q: the -columns value was read as a file", q.fromClause)
+	// The projection wraps the source and leaves the layer's select list
+	// empty, so a later sort + include + limit stays one SELECT with the
+	// ORDER BY at the top level (a select list here made include wrap the
+	// layer, trapping the ORDER BY in a subquery DataFusion did not honour).
+	if !strings.HasPrefix(q.fromClause, "(SELECT b, a FROM read_csv('"+path+"'") || !strings.HasSuffix(q.fromClause, "))") || strings.Contains(q.fromClause, "'b'") {
+		t.Errorf("fromClause %q: want the projection wrapped around the source, and the -columns value not read as a file", q.fromClause)
 	}
-	if got := strings.Join(q.selectExprs, ", "); got != "b, a" {
-		t.Errorf("select list %q, want b, a", got)
+	if len(q.selectExprs) != 0 || len(q.includeCols) != 0 {
+		t.Errorf("select list %v includeCols %v: the source projection must not occupy the layer's select list", q.selectExprs, q.includeCols)
 	}
-	if got := strings.Join(q.columns, ","); got != "b,a" || strings.Join(q.includeCols, ",") != "b,a" {
-		t.Errorf("columns %v includeCols %v, want b,a", q.columns, q.includeCols)
+	if got := strings.Join(q.columns, ","); got != "b,a" || q.source == nil || strings.Join(q.source.columns, ",") != "b,a" {
+		t.Errorf("columns %v source %+v, want b,a in both", q.columns, q.source)
 	}
 	q2 := &sqlQuery{}
 	if err := translateFrom(q2, []string{"csv", path, "-columns", "z"}); err == nil || !strings.Contains(err.Error(), `"z"`) || !strings.Contains(err.Error(), "a, b, c") {
 		t.Errorf("unknown column: want an error naming it and the header, got %v", err)
+	}
+	// With -empty zero the projection goes INSIDE the coalesce wrapper,
+	// which then names only the projected columns: the Rust lowering
+	// projects the leaf first and runs the wrapper's SQL over it (the rust
+	// lane failed on "column 'id' not found" when the wrapper named every
+	// header column).
+	q3 := &sqlQuery{}
+	if err := translateFrom(q3, []string{"csv", path, "-empty", "zero", "-columns", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(q3.fromClause, "COALESCE(") != 1 || !strings.Contains(q3.fromClause, "(SELECT b FROM read_csv(") || strings.Contains(q3.fromClause, "COALESCE(a") {
+		t.Errorf("-empty zero with -columns: want the coalesce over the projected column only, got %q", q3.fromClause)
+	}
+	if q3.source == nil || strings.Join(q3.source.columns, ",") != "b" {
+		t.Errorf("source columns %+v, want b", q3.source)
 	}
 }
 
