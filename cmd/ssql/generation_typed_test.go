@@ -972,3 +972,39 @@ func TestTypedUpdateConditionalNewFieldFallsBack(t *testing.T) {
 		t.Errorf("an else that sets the field keeps the stage typed; explain:\n%s", got)
 	}
 }
+
+// TestStageAfterSinkIsRefused: a sink (count, to csv, …) consumes the
+// records, so a stage after it is a mistake; every generate format
+// says so at generation time, naming the sink, instead of emitting code
+// that does not compile (record and typed `generate go` both did, until
+// 2026-10-29; found by a wrong pipeline in scripts/bench-engines.sh).
+func TestStageAfterSinkIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("name,years\nAlice,8\nBob,3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	cases := []struct{ mode, pipeline, want string }{
+		{"typed", bin + " from " + emp + " | " + bin + " count | " + bin + " to csv | " + bin + " generate go", "ssql count is a sink"},
+		{"record", bin + " from " + emp + " | " + bin + " count | " + bin + " to csv | " + bin + " generate go", "ssql count is a sink"},
+		{"typed", bin + " from " + emp + " | " + bin + " to csv | " + bin + " where -if years gt 5 | " + bin + " generate go", "ssql to csv is a sink"},
+		{"record", bin + " from " + emp + " | " + bin + " count | " + bin + " to csv | " + bin + " generate sql", "ssql count is a sink"},
+		{"record", bin + " from " + emp + " | " + bin + " count | " + bin + " to csv | " + bin + " generate ssql", "ssql count is a sink"},
+	}
+	for _, c := range cases {
+		out, err := exec.Command("bash", "-c", "export SSQL_MODE="+c.mode+" && "+c.pipeline).CombinedOutput()
+		if err == nil {
+			t.Errorf("%s: %s\nexpected a refusal, got exit 0:\n%s", c.mode, c.pipeline, out)
+			continue
+		}
+		if !strings.Contains(string(out), c.want) {
+			t.Errorf("%s: %s\nwant %q in:\n%s", c.mode, c.pipeline, c.want, out)
+		}
+	}
+	// The sink last is the normal pipeline: still generates and runs.
+	src := runTypedPipeline(t, bin, bin+" from "+emp+" | "+bin+" count")
+	if out := goRunGenerated(t, src); strings.TrimSpace(out) != "2" {
+		t.Errorf("count alone: got %q, want 2", out)
+	}
+}

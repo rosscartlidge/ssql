@@ -270,10 +270,37 @@ func WriteErrorAndExit(command string, err error) error {
 	return err
 }
 
-// ReadAllCodeFragments reads all code fragments from stdin
-// Returns empty slice if stdin is empty (EOF immediately)
+// ReadAllCodeFragments reads the fragments of the stages before this
+// one from stdin — the reader a STAGE uses when it generates (the
+// assembler reads the whole stream through ReadCodeFragmentsFromReader).
+// Returns an empty slice if stdin is empty (EOF immediately), and a
+// SinkFollowed error when the last fragment is a sink's: a sink (count,
+// to csv, to chart, …) consumes the records and writes something else,
+// so no stage can follow it. Exec says so when the next stage reads the
+// sink's output as JSONL; generation emitted code that did not compile
+// (`WriteCSVToWriter(, …)` — the sink declares no output variable) in
+// every lane until 2026-10-29.
 func ReadAllCodeFragments() ([]*CodeFragment, error) {
-	return ReadCodeFragmentsFromReader(os.Stdin)
+	fragments, err := ReadCodeFragmentsFromReader(os.Stdin)
+	if err != nil {
+		return nil, err
+	}
+	if n := len(fragments); n > 0 && fragments[n-1].Type == "final" {
+		return nil, &SinkFollowed{Sink: fragments[n-1]}
+	}
+	return fragments, nil
+}
+
+// SinkFollowed is the error a stage gets from ReadAllCodeFragments when
+// the stage before it is a sink.
+type SinkFollowed struct{ Sink *CodeFragment }
+
+func (e *SinkFollowed) Error() string {
+	name := e.Sink.Command
+	if name == "" {
+		name = "the previous stage"
+	}
+	return fmt.Sprintf("%s is a sink — it consumes the records and writes its result, so no stage can follow it", name)
 }
 
 // ReadCodeFragmentsFromReader reads code fragments from any io.Reader

@@ -601,12 +601,26 @@ could change, an equivalence case; none of them changes a result.
    cube got faster. The sink's chunked drain stays unbuilt: it would
    save 200 MB.
 
-5. **The Parquet scan and the join: profile first** (§2.5). A batch
-   decode (`pqarrow` record batches into column slices, structs built
-   per batch rather than per row) is the plausible lever for the scan;
-   the join's hash build is the plausible lever there. Neither has a
-   number behind it; both get a profile of the generated program before
-   a line changes, and a note here either way.
+5. **The Parquet scan and the join: profile first** (§2.5).
+   **Measured 2026-10-29, neither built.** The filtered write (1.3 s
+   wall, 11 s CPU over the file's 15 row groups): snappy decompression
+   28% — and the same 3.1 s with klauspost's decoder registered through
+   `compress.RegisterCodec`, a negative result; Arrow's byte-array
+   record reader appending every string value into a doubling builder
+   20%; the where, select and CSV write downstream 14%; GC and malloc
+   11%; ssql's decoders about 5%. The guess that the typed decoder
+   copies each string cell was wrong: it aliases Arrow's values buffer,
+   which is why a selective filter pins every batch (the 4 GB). The one
+   lever is reading byte-array columns through the column chunk reader
+   with the values aliasing the page, worth about 20% of CPU for a
+   second string decode path — in TODO, not worth it against
+   DataFusion's 0.68 s. The join (0.47 s wall, 7.7 s CPU on 24 shards):
+   the CSV parse 35% (`ParseFloat` 8%, `TrimSpace` 5%, the line split
+   11%), the three string-keyed probes 31% (`mapaccess1_faststr` 15%),
+   GC and allocation 15%; the three build sides are too small to appear.
+   No serial phase, no single lever above a few percent: the row
+   model's price, spread evenly. Typed Go stays second on both rows and
+   the table says why.
 
 6. **The exec path on big windows is documented as the wrong tool**, not
    a target. 219 s and 28 GB for 14.6 M records as maps is the record
