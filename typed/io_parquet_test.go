@@ -3,6 +3,7 @@
 package typed
 
 import (
+	"reflect"
 	"bytes"
 	"fmt"
 	"path/filepath"
@@ -254,4 +255,52 @@ func TestParquetFiles(t *testing.T) {
 	})
 	mustReadError("missing serial", func() { _ = slices.Collect(ReadParquet[pqRow](filepath.Join(dir, "nope.parquet"))) })
 	mustReadError("missing parallel", func() { ReadParquetParallel[pqRow](filepath.Join(dir, "nope.parquet"), 2) })
+}
+
+// TestReadParquetBatchesAreInvisible: the readers decode a row group in
+// batches (parquetBatchRows), and a batch boundary inside a row group
+// changes nothing — serial and parallel reads of a file whose row groups
+// hold several batches each equal the rows written, in order.
+func TestReadParquetBatchesAreInvisible(t *testing.T) {
+	type row struct {
+		ID   int64   `ssql:"id"`
+		Name string  `ssql:"name"`
+		V    float64 `ssql:"v"`
+	}
+	var rows []row
+	for i := int64(0); i < 53; i++ {
+		rows = append(rows, row{ID: i, Name: fmt.Sprintf("n%03d", i), V: float64(i) / 4})
+	}
+	path := filepath.Join(t.TempDir(), "b.parquet")
+	if err := WriteParquet(slices.Values(rows), path, WithRowGroupSize(11)); err != nil {
+		t.Fatal(err)
+	}
+	saved := parquetBatchRows
+	parquetBatchRows = 4 // several batches per row group, the last one short
+	defer func() { parquetBatchRows = saved }()
+	var serial []row
+	for r := range ReadParquet[row](path) {
+		serial = append(serial, r)
+	}
+	if !reflect.DeepEqual(serial, rows) {
+		t.Fatalf("serial read differs:\n%v", serial)
+	}
+	for _, n := range []int{1, 2, 5} {
+		var par []row
+		for _, shard := range ReadParquetParallel[row](path, n).shards {
+			for r := range shard {
+				par = append(par, r)
+			}
+		}
+		if !reflect.DeepEqual(par, rows) {
+			t.Fatalf("parallel read n=%d differs:\n%v", n, par)
+		}
+	}
+	// Stopping early releases cleanly (no panic from a released batch).
+	n := 0
+	for range ReadParquet[row](path) {
+		if n++; n == 6 {
+			break
+		}
+	}
 }

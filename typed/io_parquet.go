@@ -170,7 +170,7 @@ func readParquet[T any](r parquet.ReaderAtSeeker, o parquetOpts, rowYield func(T
 	ctx := context.Background()
 	mem := memory.DefaultAllocator
 
-	pf, err := file.NewParquetReader(r)
+	pf, err := file.NewParquetReader(r, file.WithReadProps(parquetFileProps(mem)))
 	if err != nil {
 		if errYield != nil {
 			errYield(fmt.Errorf("typed.ReadParquet: open: %w", err))
@@ -179,7 +179,7 @@ func readParquet[T any](r parquet.ReaderAtSeeker, o parquetOpts, rowYield func(T
 	}
 	defer pf.Close()
 
-	reader, err := pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{}, mem)
+	reader, err := pqarrow.NewFileReader(pf, parquetReadProps(), mem)
 	if err != nil {
 		if errYield != nil {
 			errYield(fmt.Errorf("typed.ReadParquet: arrow reader: %w", err))
@@ -204,23 +204,94 @@ func readParquet[T any](r parquet.ReaderAtSeeker, o parquetOpts, rowYield func(T
 		return
 	}
 
-	// Read all (selected) row groups into one Arrow table — same
-	// as the Record-mode path for simplicity. Parallel reading is
-	// in [ReadParquetParallel].
+	// Every (selected) row group, decoded a batch at a time (see
+	// yieldParquetBatches); this read the whole file into one Arrow
+	// table until 2026-10-28. Parallel reading is in [ReadParquetParallel].
 	rowGroups := make([]int, pf.NumRowGroups())
 	for i := range rowGroups {
 		rowGroups[i] = i
 	}
-	tbl, err := reader.ReadRowGroups(ctx, plan.colIndices, rowGroups)
-	if err != nil {
+	if err := yieldParquetBatches[T](ctx, reader, plan, rowGroups, rowYield); err != nil {
 		if errYield != nil {
 			errYield(fmt.Errorf("typed.ReadParquet: read row groups: %w", err))
 		}
-		return
 	}
-	defer tbl.Release()
+}
 
-	yieldTableRows[T](tbl, plan, rowYield, errYield)
+// parquetBatchRows is how many rows a reader decodes at a time: the
+// memory a shard holds is one batch's Arrow arrays, not a row group's.
+// A var so a test can force several batches on a small file.
+var parquetBatchRows = 64 << 10
+
+// parquetReadProps is the Arrow reader configuration every typed
+// Parquet reader opens with: the batch size above.
+func parquetReadProps() pqarrow.ArrowReadProperties {
+	return pqarrow.ArrowReadProperties{BatchSize: int64(parquetBatchRows)}
+}
+
+// parquetStreamBuffer is the read-ahead of a column chunk's stream.
+const parquetStreamBuffer = 4 << 20
+
+// parquetFileProps is the parquet-level configuration: a column chunk is
+// streamed through a 4 MB buffer rather than read whole into memory —
+// with every shard holding every selected column's chunk of a 1 M-row
+// row group, that was 1.2 GB of the live heap after batching alone
+// brought it from 5.3 GB to 1.8 GB (DFC158 §3.8).
+func parquetFileProps(mem memory.Allocator) *parquet.ReaderProperties {
+	props := parquet.NewReaderProperties(mem)
+	props.BufferedStreamEnabled = true
+	props.BufferSize = parquetStreamBuffer
+	return props
+}
+
+// yieldParquetBatches decodes the row groups through a record reader,
+// one batch of parquetBatchRows at a time, releasing each batch before
+// the next. Until 2026-10-28 both readers called ReadRowGroups (and walked
+// the table with a yieldTableRows, now gone), which
+// materialises every row of the groups as one Arrow table: a shard held
+// a whole 1 M-row row group's string columns, and the 14.6 M-row
+// filtered write peaked at 7.6 GB resident with 5.3 GB live (DFC158
+// §3.8) where DataFusion, reading 8 k-row batches, used 1.7 GB. The
+// decoders copy what they keep, so a released batch is never referenced.
+func yieldParquetBatches[T any](ctx context.Context, reader *pqarrow.FileReader, plan *parquetReadPlan, rowGroups []int, yield func(T) bool) error {
+	rr, err := reader.GetRecordReader(ctx, plan.colIndices, rowGroups)
+	if err != nil {
+		return err
+	}
+	defer rr.Release()
+	for rr.Next() {
+		if !yieldRecordRows[T](rr.Record(), plan, yield) {
+			return nil
+		}
+	}
+	if err := rr.Err(); err != nil && err != io.EOF { // the reader ends with io.EOF (arrio.Reader)
+		return err
+	}
+	return nil
+}
+
+// yieldRecordRows walks one record batch row by row, yielding decoded T
+// values; false when the consumer stopped.
+func yieldRecordRows[T any](rec arrow.Record, plan *parquetReadPlan, yield func(T) bool) bool {
+	nRows := int(rec.NumRows())
+	cols := make([]arrow.Array, len(plan.decoders))
+	for i := range plan.decoders {
+		cols[i] = rec.Column(i)
+	}
+	for row := 0; row < nRows; row++ {
+		var v T
+		p := unsafe.Pointer(&v)
+		for ci, dec := range plan.decoders {
+			if cols[ci].IsNull(row) {
+				continue // the zero value (pointer fields are not read from Parquet)
+			}
+			dec.fn(unsafe.Add(p, dec.off), cols[ci], row)
+		}
+		if !yield(v) {
+			return false
+		}
+	}
+	return true
 }
 
 // parquetReadPlan is the precomputed I/O plan: one decoder per
@@ -583,65 +654,6 @@ func makeFloatDecoder[A interface{ ~float32 | ~float64 }](structT reflect.Type) 
 	}, nil
 }
 
-// yieldTableRows walks an arrow.Table row by row, yielding decoded
-// T values. Used by both the serial reader and (per row group) the
-// parallel reader.
-func yieldTableRows[T any](tbl arrow.Table, plan *parquetReadPlan, yield func(T) bool, errYield func(error) bool) {
-	nRows := int(tbl.NumRows())
-	if nRows == 0 {
-		return
-	}
-	// For each column, collect the chunks ahead of time. Most parquet
-	// row groups produce a single chunk per column, but the API
-	// allows splits.
-	type chunkSpan struct {
-		arr    arrow.Array
-		offset int // start row index of this chunk in the column
-	}
-	type colChunks struct {
-		spans []chunkSpan
-	}
-
-	cols := make([]colChunks, len(plan.decoders))
-	for i := range plan.decoders {
-		chunked := tbl.Column(i)
-		offset := 0
-		for _, ch := range chunked.Data().Chunks() {
-			cols[i].spans = append(cols[i].spans, chunkSpan{arr: ch, offset: offset})
-			offset += ch.Len()
-		}
-	}
-
-	// Iterate rows. To handle multi-chunk columns correctly we track
-	// the current chunk per column and advance as we cross chunk
-	// boundaries.
-	chunkPos := make([]int, len(plan.decoders)) // current chunk index per column
-	for row := 0; row < nRows; row++ {
-		var v T
-		p := unsafe.Pointer(&v)
-		for ci, dec := range plan.decoders {
-			// Advance chunk if row exceeds current chunk's range.
-			for chunkPos[ci]+1 < len(cols[ci].spans) &&
-				row >= cols[ci].spans[chunkPos[ci]+1].offset {
-				chunkPos[ci]++
-			}
-			span := cols[ci].spans[chunkPos[ci]]
-			localIdx := row - span.offset
-			if span.arr.IsNull(localIdx) {
-				// Leave field at zero value. (For pointer fields we'd
-				// set nil here, but we don't support pointer fields
-				// in v1.)
-				continue
-			}
-			dec.fn(unsafe.Add(p, dec.off), span.arr, localIdx)
-		}
-		if !yield(v) {
-			return
-		}
-	}
-	_ = errYield
-}
-
 // ReadParquetParallel reads a Parquet file using one shard per row
 // group (capped at n). Each shard owns its own pqarrow FileReader
 // and decodes its row groups independently into struct values.
@@ -779,21 +791,19 @@ func readParquetUnitsParallel[T any](op string, files []string, consts [][]Parqu
 					if f, err = ssql.OpenInputAt(name); err != nil {
 						failRead(op, name, err)
 					}
-					if pf, err = file.NewParquetReader(f); err != nil {
+					if pf, err = file.NewParquetReader(f, file.WithReadProps(parquetFileProps(memory.DefaultAllocator))); err != nil {
 						failRead(op, name, err)
 					}
-					if reader, err = pqarrow.NewFileReader(pf, pqarrow.ArrowReadProperties{}, memory.DefaultAllocator); err != nil {
+					if reader, err = pqarrow.NewFileReader(pf, parquetReadProps(), memory.DefaultAllocator); err != nil {
 						failRead(op, name, err)
 					}
 					cur = u.file
 				}
-				tbl, err := reader.ReadRowGroups(ctx, plan.colIndices, []int{u.rg})
-				if err != nil {
-					failRead(op, files[u.file], err)
-				}
+				// One row group, a batch at a time (yieldParquetBatches):
+				// the shard holds one batch's arrays, not the row group's.
 				cont := true
 				apply := setters[u.file]
-				yieldTableRows[T](tbl, plan, func(row T) bool {
+				err := yieldParquetBatches[T](ctx, reader, plan, []int{u.rg}, func(row T) bool {
 					for _, s := range apply {
 						s.set(unsafe.Pointer(&row))
 					}
@@ -802,8 +812,10 @@ func readParquetUnitsParallel[T any](op string, files []string, consts [][]Parqu
 						return false
 					}
 					return true
-				}, nil)
-				tbl.Release()
+				})
+				if err != nil {
+					failRead(op, files[u.file], err)
+				}
 				if !cont {
 					return
 				}

@@ -350,6 +350,7 @@ func (s Stream[T]) WriteCSVToWriter(w io.Writer) error {
 **Why it works.** `Serial()` reunifies shards through a channel that costs ~100 ns/row in scheduling and synchronisation. On a 7.25 M-row write that's ~700 ms of pure overhead — comparable to the *entire* 1.3 s parallel runtime, and more than enough to flip the result negative. Per-shard buffers move all the row-level work into the shard goroutines (where it parallelises) and reduce the serial finalize phase to a few `Buffer.Bytes()` writes (a handful of large memcpy / write-syscall pairs, IO-bound).
 
 **Trade-offs and constraints.**
+- **Measure before blaming this trade.** The 14.6 M-row filtered write's 7.9 GB (2026-10-27) was written up as this sink's buffering; the output was 238 MB and the same pipeline ending in `count` peaked at 7.4 GB — the parallel Parquet reader decoding whole row groups (DFC158 §3.8). Swap the sink for `count` and read `GODEBUG=gctrace=1` before designing a bounded sink.
 - **Peak memory ~2× output size.** Each shard's buffer holds its slice of the output until the final dump; for an output that doesn't fit in RAM (~free RAM / 2), fall back to typed-serial (still streaming).
 - **Order is shard-concatenation, not input.** Within a shard, input order is preserved. Across shards, rows from shard 0 come before shard 1, etc. This matches what `Serial()` (the unordered fan-in) already gives, so no regression.
 - **Won't help streaming sinks** that need per-row backpressure (network sockets, gRPC streaming). The pattern is fundamentally "buffer then dump."

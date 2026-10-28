@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`scripts/bench-engines.sh FILE.parquet`** — the engine table of `doc/performance.md` §1a, repeatable: the seven pipelines through the typed Go program, DuckDB and the generated Rust program, best of N, whole-process wall and peak RSS, output to /dev/null, printed in the table's format with the output row counts checked across engines ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §4 item 7). Column names are options; the CSV twin is written once into the cache.
 
+### Changed
+
+- **The typed Parquet readers decode in batches and stream column chunks** (`typed/io_parquet.go`; [DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §3.8). Both readers read whole row groups into one Arrow table — the serial one the whole file — so a parallel scan of the 14.6 M-row benchmark file held 5.3 GB live and 7.4 GB resident (the memory the first table charged to the CSV sink; the sink holds 238 MB). They now take a record reader over the same row groups, 64 K rows a batch, released before the next, and the parquet layer streams a column chunk through a 4 MB buffer instead of reading it whole: the scan runs at about 4 GB resident, 2.3 GB live, same output and same time, and the README cube is faster (0.30 → 0.25 s, 700 → 500 MB). `TestReadParquetBatchesAreInvisible`.
+
 ### Fixed
 
 - **`generate rust` left a dead sort in the program** ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §3.7): a stage's output order rendered as a `.sort()` before an aggregate that never reads it — the DataFrame API keeps a sort it is given, a global merge-sort of every row, where the SQL engines drop the same ORDER BY inside a subquery. The renderer now leaves out a layer's sort when the layer has no limit of its own and its consumer is an aggregate with no arrival-order function (first, last, collect, string-agg; mode, arg-max and arg-min for their ties). The benchmark window: 14.4 s → 5.8 s, same output. `TestGenerateRustDeadSort`.

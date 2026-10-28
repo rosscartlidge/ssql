@@ -130,19 +130,19 @@ revisited; nothing failed, because every fixture was small. The other
 `-stream-expr` (contiguous keys, unmergeable fold state), `window` and
 `union` (barriers). Fixed the same day, §3.3.
 
-### 2.4 The streaming write is formatting-bound, and the sink buffers everything
+### 2.4 The streaming write is formatting-bound; the 7.9 GB was the reader's (corrected §3.8)
 
 The filtered write was reported as the one row where DuckDB beat
 DataFusion; it was not (§3.6: DuckDB's 0.41 s was its `duckbox` display
 of 40 rows; writing the 2.7 M rows as CSV takes 2.9 s). DataFusion
 0.70 s, typed Go 1.51 s, DuckDB 2.9 s: 2.7 M rows of output, each
 formatted once, bounds every engine, and the Go program's row-wise
-writer is the second fastest of the three. Typed Go's 8.1 GB peak RSS is the
-documented trade of the parallel CSV sink (claude/concurrency.md §12:
-each shard formats into its own buffer, dumped in shard order, 4.4×
-faster than a `Serial()` fan-in). That trade was measured on a 7.25 M-
-row write; on a 14.6 M-row input it is 2× the output size plus the
-mapped input, and it is the largest RSS in the table by 4×.
+writer is the second fastest of the three. Typed Go's 8.1 GB peak RSS
+was written up here as the parallel CSV sink's buffer-per-shard trade
+(claude/concurrency.md §12). It was not: the output is 238 MB, the
+same pipeline ending in `count` peaked at 7.4 GB, and the holder was the
+parallel Parquet reader decoding whole row groups (§3.8). The sink's
+trade is real and small.
 
 ### 2.5 The Parquet scan and the join: unprofiled, probably the row model
 
@@ -353,23 +353,24 @@ window case at 2.4 s (was 4.3).
 `scripts/bench-engines.sh FILE.parquet` (§4 item 7) runs the seven
 pipelines through the typed Go program, DuckDB in CSV mode and the
 generated Rust program, best of N, whole-process wall and peak RSS,
-output to /dev/null, and prints this table. Its first run on the
-released v4.129.0, machine A, idle:
+output to /dev/null, and prints this table. Its run on main after §3.7 and §3.8 (the first run, on the released
+v4.129.0, read 14.4 s in the window's Rust cell and 7.9 GB in the
+filtered write's typed one), machine A, idle:
 
 | Pipeline (14.6 M rows; the join 10 M) | DataFusion (generated Rust) | ssql `generate go` (typed) | DuckDB 1.5.0 |
 |---|---:|---:|---:|
-| `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.18 s** | 0.33 s | 0.36 s |
-| `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
-| `group-by relationship -count`, the same rows as CSV | **0.24 s** | 0.32 s | 0.78 s |
-| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` | **0.69 s** | 1.64 s | 2.98 s |
-| 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.51 s | 0.33 s |
-| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 0.22 s | 0.06 s |
-| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.8 s** (14.4 s before §3.7) | 8.9 s | 13.6 s |
+| `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.18 s** | 0.26 s | 0.35 s |
+| `group-by relationship -count`, Parquet | **0.02 s** | 0.14 s | 0.03 s |
+| `group-by relationship -count`, the same rows as CSV | **0.24 s** | 0.32 s | 0.75 s |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` | **0.68 s** | 1.46 s | 2.97 s |
+| 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.25 s** | 0.51 s | 0.35 s |
+| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.05 s** | 0.26 s | 0.06 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.8 s** (14.4 s before §3.7) | 9.6 s (8.9–9.6 across runs) | 13.2 s |
 
-Peak RSS, same order: cube 184 MB / 821 MB / 423 MB; Parquet group-by
-69 MB / 316 MB / 37 MB; CSV group-by 78 MB / 1.2 GB / 652 MB; filtered
-write 1.7 GB / 7.9 GB / 1.3 GB; join 302 MB / 401 MB / 348 MB; decimal
-99 MB / 464 MB / 52 MB; window 1.8 GB / 3.4 GB / 2.8 GB.
+Peak RSS, same order: cube 184 MB / 506 MB / 427 MB; Parquet group-by
+68 MB / 199 MB / 37 MB; CSV group-by 77 MB / 1.2 GB / 666 MB; filtered
+write 1.7 GB / 4.0 GB / 1.3 GB; join 310 MB / 405 MB / 353 MB; decimal
+98 MB / 320 MB / 52 MB; window 1.7 GB / 4.2 GB / 2.9 GB.
 
 The run is the whole table of §1 after the five fixes, and it found
 three things on the way:
@@ -425,6 +426,44 @@ Same output. `TestGenerateRustDeadSort` pins nine shapes; the rust lane
 runs every equivalence case through the renderer. The table in §3.6 is
 updated.
 
+### 3.8 The Parquet reader decodes in batches (2026-10-28)
+
+The measurement before the design: the filtered write ending in `count`
+instead of `to csv` still peaked at 7.4 GB, a hard memory limit of
+1.5 GiB left 4.8 GB resident, the collector's trace put the live heap
+at 5.3 GB, and the allocation profile put 4.3 of the 7.7 GB allocated
+in Arrow's string builders inside `ReadRowGroups`. Both typed readers
+called it: the serial one for every row group of the file as one
+table, the parallel one for a whole row group per shard — the
+reader's own comment said peak memory was shards × row-group size,
+and with 1 M-row row groups and two string columns that was the
+number. DataFusion reads batches of a few thousand rows and never
+holds a row group: 1.7 GB.
+
+Two changes in `typed/io_parquet.go`. The readers take a record reader
+over the same row groups (`GetRecordReader`, 64 K rows a batch) and
+decode and release one batch at a time (`yieldParquetBatches`,
+`yieldRecordRows`; the whole-table walker is gone): live heap 5.3 →
+1.8 GB mid-run, with 1.2 GB of what remained the parquet layer reading
+each selected column's chunk whole into a buffer, per shard. The
+reader properties now stream a column chunk through a 4 MB buffer
+(`BufferedStreamEnabled`): the shards' read-ahead is 240 MB in the
+profile and the live heap peaks at 2.3 GB.
+
+| Program (14.6 M rows) | Resident before → after | Wall |
+|---|---:|---:|
+| `where … \| include … \| count` (the scan without a sink) | 7.4 GB → 3.9–5.0 GB | 1.1 s (same) |
+| the README cube | 700 MB → 500 MB | 0.30 → 0.25 s |
+
+Same output in both. What the resident size still carries is the
+collector's headroom over a live set that is now mostly batches and
+read-ahead; the allocation RATE (a Go string per string cell, 14.6 M
+rows) is what is left to cut, and that is the reader's decoders, not
+its buffers. `TestReadParquetBatchesAreInvisible` forces several
+batches per row group on a small file and compares serial and parallel
+reads to the rows written; the Parquet equivalence and scale cases and
+the typed race suite pin the rest.
+
 All fixes are on main, gated (vet, slim build, race packages, full
 `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
 Unreleased section.
@@ -454,15 +493,12 @@ could change, an equivalence case; none of them changes a result.
    line changed. What is left (a typed sort key, an unboxed result
    column) is in TODO with the numbers.
 
-4. **The parallel CSV sink's memory.** 8.1 GB on the filtered write is
-   2× the output plus the mapped input. The buffer-per-shard dump is
-   4.4× faster than a `Serial()` fan-in, but a bounded alternative
-   exists: each shard formats into chunks of a fixed size and a single
-   writer drains the chunks in shard order as they complete (the first
-   shard's chunks stream out while later shards are still formatting;
-   peak is shards × chunk size, not the output). Measure against the
-   dump on the 7.25 M-row write it was tuned on before changing the
-   default; the time should hold and the RSS should fall by 4×.
+4. **The filtered write's memory.** **Done 2026-10-28, §3.8**, and
+   not where this item said: the sink holds 238 MB; the typed Parquet
+   reader held whole row groups. Batched, streamed decoding took the
+   scan from 7.4 GB resident to about 4, live 5.3 → 2.3 GB, and the
+   cube got faster. The sink's chunked drain stays unbuilt: it would
+   save 200 MB.
 
 5. **The Parquet scan and the join: profile first** (§2.5). A batch
    decode (`pqarrow` record batches into column slices, structs built
