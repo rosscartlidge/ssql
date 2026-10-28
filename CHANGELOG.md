@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`generate rust` left a dead sort in the program** ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §3.7): a stage's output order rendered as a `.sort()` before an aggregate that never reads it — the DataFrame API keeps a sort it is given, a global merge-sort of every row, where the SQL engines drop the same ORDER BY inside a subquery. The renderer now leaves out a layer's sort when the layer has no limit of its own and its consumer is an aggregate with no arrival-order function (first, last, collect, string-agg; mode, arg-max and arg-min for their ties). The benchmark window: 14.4 s → 5.8 s, same output. `TestGenerateRustDeadSort`.
 - **`generate rust -build PATH` built nothing on a pipeline the optimiser rewrites.** The re-execution that applies the rewrite carried `-run`, `-func` and `-time` but not `-build`, so a pruned Parquet read printed the program to stdout and exited 0 with no binary (since 4.128.0; the benchmark driver found it). `TestGenerateRustBuildSurvivesOptimiser`.
 
 ## [4.129.0] - 2026-10-28

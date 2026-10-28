@@ -364,7 +364,7 @@ released v4.129.0, machine A, idle:
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` | **0.69 s** | 1.64 s | 2.98 s |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.51 s | 0.33 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 0.22 s | 0.06 s |
-| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | 14.4 s (5.9 s as SQL, see below) | **8.9 s** | 13.6 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.8 s** (14.4 s before §3.7) | 8.9 s | 13.6 s |
 
 Peak RSS, same order: cube 184 MB / 821 MB / 423 MB; Parquet group-by
 69 MB / 316 MB / 37 MB; CSV group-by 78 MB / 1.2 GB / 652 MB; filtered
@@ -390,9 +390,7 @@ three things on the way:
    `generate sql -dialect datafusion`. The DataFrame lowering keeps the
    window stage's output order as a `sort` of 14.6 M rows that the
    aggregate after it never needs; the SQL optimiser drops the same
-   ORDER BY inside a subquery. TODO has it as a `generate rust`
-   follow-up. Until then the Rust column of that row is the lowering's
-   number, not the engine's.
+   ORDER BY inside a subquery. Fixed the same day, §3.7.
 
 Two more readings of the table: the typed join (0.51 s, was 0.89 s on
 the 27th) is the zero-copy CSV scanner reaching the join corpus, which
@@ -401,8 +399,34 @@ is CSV; and a first cut of the driver wrongly ended the join row in
 says so; the generated code merely fails to compile instead, which is
 a missing message, not a missing feature (TODO).
 
-All five fixes are on main, gated (vet, slim build, race packages,
-full `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
+### 3.7 The Rust lowering leaves out a dead sort (2026-10-28)
+
+DataFusion's plan for the SQL had no sort below the aggregate at all:
+the subquery's ORDER BY is gone from the logical plan, the only
+`SortExec` is the window's own requirement, run per hash partition in
+parallel, and the aggregate runs in sorted mode on those partitions.
+The DataFrame program said `.sort(a_kind, a_name)` after the window —
+the window stage's output order, which ssql's own lanes keep — and the
+API keeps a sort it is given: a global merge-sort of 14.6 M rows and a
+single-partition aggregate after it. `sortIsDead` in the renderer
+leaves a layer's sort out when the layer selects no rows by it (no
+LIMIT/OFFSET of its own) and its consumer is an aggregate none of
+whose functions reads arrival order (first, last, collect, string-agg
+read it; mode, arg-max and arg-min break ties by it; the rest do not).
+A sort feeding a limit, an arrival-order aggregate, a set operation, an
+escape hatch or the output stays.
+
+| Program | Wall (three runs) |
+|---|---:|
+| with the sort | 14.4 s |
+| without | **5.8 s** |
+
+Same output. `TestGenerateRustDeadSort` pins nine shapes; the rust lane
+runs every equivalence case through the renderer. The table in §3.6 is
+updated.
+
+All fixes are on main, gated (vet, slim build, race packages, full
+`cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
 Unreleased section.
 
 ## 4. What we can do, ranked

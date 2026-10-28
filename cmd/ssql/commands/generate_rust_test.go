@@ -178,6 +178,39 @@ func TestGenerateRustLayers(t *testing.T) {
 	}
 }
 
+// TestGenerateRustDeadSort pins which sorts the program keeps. A sort
+// whose only consumer is an order-free aggregate is left out, as the SQL
+// engines leave out the same ORDER BY inside a subquery (the DataFrame
+// API keeps a sort it is given: the benchmark window ran 14.4 s with it
+// and 5.7 s without, DFC158 §3.6); a sort feeding an arrival-order
+// aggregate, a limit, or the output stays.
+func TestGenerateRustDeadSort(t *testing.T) {
+	csv := rustTestCSV(t)
+	cases := []struct {
+		name string
+		cmds []string
+		sort bool // the program contains a .sort(
+	}{
+		{"sort before count: dead", []string{"ssql from " + csv, "ssql sort age", "ssql group-by dept -count n"}, false},
+		{"sort before sum and avg: dead", []string{"ssql from " + csv, "ssql sort -desc salary", "ssql group-by dept -sum salary s -avg salary a"}, false},
+		{"window's output order before max: dead", []string{"ssql from " + csv, "ssql window -partition dept -order name -sum salary running", "ssql group-by dept -max running m"}, false},
+		{"sort before first: kept", []string{"ssql from " + csv, "ssql sort age", "ssql group-by dept -first name f"}, true},
+		{"sort before collect: kept", []string{"ssql from " + csv, "ssql sort age", "ssql group-by dept -collect name ns"}, true},
+		{"sort before string-agg: kept", []string{"ssql from " + csv, "ssql sort age", "ssql group-by dept -string-agg name , ns"}, true},
+		{"sort with a limit before count: kept", []string{"ssql from " + csv, "ssql sort age", "ssql limit 2", "ssql group-by dept -count n"}, true},
+		{"sort at the output: kept", []string{"ssql from " + csv, "ssql group-by dept -count n", "ssql sort -desc n"}, true},
+		{"sort after the aggregate, then include: kept", []string{"ssql from " + csv, "ssql group-by dept -count n", "ssql sort n", "ssql include dept"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			code := rustFromCommands(t, "", c.cmds...)
+			if got := strings.Contains(code, ".sort(vec!["); got != c.sort {
+				t.Errorf("sort present = %v, want %v:\n%s", got, c.sort, code)
+			}
+		})
+	}
+}
+
 // rustTestCSV writes a small CSV the translator can read the header of
 // (a star projection on DataFusion needs the columns known).
 func rustTestCSV(t *testing.T) string {

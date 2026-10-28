@@ -99,9 +99,9 @@ program is the same `generate go` pipeline with `rust` in place of
 `go`; the first `cargo` build compiles DataFusion (minutes, once).
 
 **As of v4.129.0**, the same table from `scripts/bench-engines.sh` (one
-command, see Reproducing; the window's Rust cell is the DataFrame
-lowering's number — it keeps a sort the engine's SQL optimiser drops,
-5.9 s as SQL, a `generate rust` follow-up in TODO):
+command, see Reproducing; the window's Rust cell is from the lowering
+after 4.129.0, which leaves out a sort the engine's SQL optimiser drops
+— it read 14.4 s with it):
 
 | Pipeline (14.6 M rows; the join 10 M) | DataFusion (generated Rust) | ssql `generate go` (typed) | DuckDB 1.5.0 |
 |---|---:|---:|---:|
@@ -111,7 +111,7 @@ lowering's number — it keeps a sort the engine's SQL optimiser drops,
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` | **0.69 s** | 1.64 s | 2.98 s |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.51 s | 0.33 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 0.22 s | 0.06 s |
-| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | 14.4 s (5.9 s as SQL, see below) | **8.9 s** | 13.6 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.8 s** | 8.9 s | 13.6 s |
 
 Peak RSS, same order: cube 184 MB / 821 MB / 423 MB; Parquet group-by
 69 MB / 316 MB / 37 MB; CSV group-by 78 MB / 1.2 GB / 652 MB; filtered
