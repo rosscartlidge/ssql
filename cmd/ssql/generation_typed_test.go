@@ -698,6 +698,38 @@ func TestTypedCastKeepsPipelineParallel(t *testing.T) {
 	}
 }
 
+// TestTypedWindowKeepsSourceParallel: the window is a barrier whose
+// output is an iter.Seq, but its INPUT is the source's Stream
+// (typed.WindowParallel materialises the shards concurrently, in shard
+// order); until 2026-10-28 the template was SerialOnly and the planner
+// read the source serially — 2.4 s of the 14.6 M-row benchmark window
+// (DFC158 §4.3). The serial typed.Window must not appear.
+func TestTypedWindowKeepsSourceParallel(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("name,dept,years\nAlice,eng,8\nBob,ops,3\nCarol,eng,2\nDan,ops,5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" window -partition dept -order years -sum years total | "+bin+" to csv")
+	for _, want := range []string{"typed.ReadCSVParallel", "typed.WindowParallel("} {
+		if !strings.Contains(src, want) {
+			t.Errorf("window serialised its source: generated source lacks %q\n%s", want, src)
+		}
+	}
+	if strings.Contains(src, "typed.Window(") {
+		t.Errorf("window took its serial alternative\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	// Partitions in first-seen order (eng, then ops), each by years.
+	for _, want := range []string{"name,dept,years,total\nCarol,eng,2,2\nAlice,eng,8,10\nBob,ops,3,3\nDan,ops,5,8\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output\n%s", want, out)
+		}
+	}
+}
+
 func TestTypedUpdateSetLiteral(t *testing.T) {
 	dir := t.TempDir()
 	emp := filepath.Join(dir, "people.csv")

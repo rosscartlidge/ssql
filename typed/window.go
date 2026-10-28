@@ -1,8 +1,10 @@
 package typed
 
 import (
+	"cmp"
 	"iter"
-	"sort"
+	"runtime"
+	"slices"
 
 	ssql "github.com/rosscartlidge/ssql/v4"
 )
@@ -110,93 +112,237 @@ func Window[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(it
 			for r := range in {
 				all = append(all, r)
 			}
-			n := len(all)
-			if n == 0 {
-				return
-			}
-			total := 0
-			for _, c := range clauses {
-				total += len(c.Specs)
-			}
-			results := make([][]any, n)
-			for i := range results {
-				results[i] = make([]any, total)
-			}
-			var outputOrder []int
-			orderDecided := false // the first clause with an ORDER BY fixes the output order
-			base := 0
-			for _, c := range clauses {
-				partitions := make(map[string][]int)
-				var partOrder []string
-				for i, r := range all {
-					k := ""
-					if c.Partition != nil {
-						k = c.Partition(r)
-					}
-					if _, seen := partitions[k]; !seen {
-						partOrder = append(partOrder, k)
-					}
-					partitions[k] = append(partitions[k], i)
-				}
-				for _, k := range partOrder {
-					idx := partitions[k]
-					if c.HasOrder && c.Compare != nil {
-						sort.SliceStable(idx, func(a, b int) bool { return c.Compare(all[idx[a]], all[idx[b]]) < 0 })
-					}
-					if !orderDecided && c.HasOrder {
-						outputOrder = append(outputOrder, idx...)
-					}
-					partLen := len(idx)
-					done := make([]bool, len(c.Specs))
-					for s, spec := range c.Specs {
-						// A fold over the running frame: one pass, the state
-						// carried across the partition (O(n), not O(n²)).
-						if spec.Kind == WFold && isRunningFrame(c.Frame) {
-							state := spec.Init()
-							for pos := range idx {
-								state = spec.Step(state, all[idx[pos]])
-								results[idx[pos]][base+s] = spec.Final(state)
-							}
-							done[s] = true
-							continue
-						}
-						// The aggregates and ranks over the running frame,
-						// carried the same way; the whole-partition frame,
-						// computed once (window_running.go).
-						if vals := runningSpecValues(spec, c, all, idx); vals != nil {
-							for pos := range idx {
-								results[idx[pos]][base+s] = vals[pos]
-							}
-							done[s] = true
-						}
-					}
-					for pos := range idx {
-						for s, spec := range c.Specs {
-							if done[s] {
-								continue
-							}
-							results[idx[pos]][base+s] = windowValue(spec, c, all, idx, pos, partLen)
-						}
-					}
-				}
-				if c.HasOrder {
-					orderDecided = true
-				}
-				base += len(c.Specs)
-			}
-			if outputOrder == nil {
-				outputOrder = make([]int, n)
-				for i := range outputOrder {
-					outputOrder[i] = i
-				}
-			}
-			for _, i := range outputOrder {
-				if !yield(build(all[i], results[i])) {
-					return
-				}
-			}
+			windowRows(all, clauses, build, yield)
 		}
 	}
+}
+
+// WindowParallel is Window over a Stream: the shards are materialised
+// concurrently, each into its own slice, and concatenated in shard order
+// — which is the input order, since every parallel source's shards are
+// contiguous runs of it (ReadCSVParallel's byte ranges, the Parquet
+// reader's row groups) — so the partitions' first-seen order and the
+// output order are exactly Window's over the same rows. The window itself
+// is a barrier (every row is held until its partition is known), so the
+// output is an iter.Seq, as GroupByParallel's is. Before this form the
+// window accepted only an iter.Seq and the planner read the source
+// serially: 2.4 s of the 14.6 M-row benchmark window plus the growth of
+// one slice by appends (DFC158 §4.3).
+func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(Stream[T]) iter.Seq[O] {
+	return func(in Stream[T]) iter.Seq[O] {
+		return func(yield func(O) bool) {
+			parts := make([][]T, len(in.shards))
+			var g shardGroup
+			for i, shard := range in.shards {
+				g.Go(func() {
+					var rows []T
+					for r := range shard {
+						rows = append(rows, r)
+					}
+					parts[i] = rows
+				})
+			}
+			g.Wait()
+			n := 0
+			for _, p := range parts {
+				n += len(p)
+			}
+			all := make([]T, 0, n)
+			for _, p := range parts {
+				all = append(all, p...)
+			}
+			windowRows(all, clauses, build, yield)
+		}
+	}
+}
+
+// windowRows is the window over the materialised rows, in input order.
+func windowRows[T, O any](all []T, clauses []WindowClause[T], build func(T, []any) O, yield func(O) bool) {
+	n := len(all)
+	if n == 0 {
+		return
+	}
+	total := 0
+	for _, c := range clauses {
+		total += len(c.Specs)
+	}
+	// One allocation for every row's results, not one per row.
+	flat := make([]any, n*total)
+	results := make([][]any, n)
+	for i := range results {
+		results[i] = flat[i*total : (i+1)*total : (i+1)*total]
+	}
+	var outputOrder []int
+	orderDecided := false // the first clause with an ORDER BY fixes the output order
+	base := 0
+	for _, c := range clauses {
+		partitions := make(map[string][]int)
+		var partOrder []string
+		for i, r := range all {
+			k := ""
+			if c.Partition != nil {
+				k = c.Partition(r)
+			}
+			if _, seen := partitions[k]; !seen {
+				partOrder = append(partOrder, k)
+			}
+			partitions[k] = append(partitions[k], i)
+		}
+		// Partitions are independent — each sorts its own index
+		// slice and writes its own rows of results — so they run
+		// concurrently, one goroutine per core; a panic in a row's
+		// closure is re-raised here, as the readers' shards do it.
+		// The output order is assembled afterwards, in first-seen
+		// partition order.
+		var g shardGroup
+		sem := make(chan struct{}, runtime.GOMAXPROCS(0))
+		for _, k := range partOrder {
+			idx := partitions[k]
+			sem <- struct{}{}
+			g.Go(func() {
+				defer func() { <-sem }()
+				windowPartition(c, all, idx, results, base)
+			})
+		}
+		g.Wait()
+		if !orderDecided && c.HasOrder {
+			for _, k := range partOrder {
+				outputOrder = append(outputOrder, partitions[k]...)
+			}
+		}
+		if c.HasOrder {
+			orderDecided = true
+		}
+		base += len(c.Specs)
+	}
+	if outputOrder == nil {
+		outputOrder = make([]int, n)
+		for i := range outputOrder {
+			outputOrder[i] = i
+		}
+	}
+	for _, i := range outputOrder {
+		if !yield(build(all[i], results[i])) {
+			return
+		}
+	}
+}
+
+// windowPartition sorts one partition's index slice and fills its rows
+// of results for every spec of the clause.
+func windowPartition[T any](c WindowClause[T], all []T, idx []int, results [][]any, base int) {
+	if c.HasOrder && c.Compare != nil {
+		// A stable sort by pdqsort: the row's index is the tiebreak, so
+		// peers keep input order exactly as sort.SliceStable kept it, with
+		// O(n log n) comparisons and far fewer moves than its symmerge
+		// (which was 21 s of the 35 s benchmark window, DFC158 §4.3) and
+		// no reflection swapper.
+		sortIdx(idx, func(a, b int) int {
+			if r := c.Compare(all[a], all[b]); r != 0 {
+				return r
+			}
+			return cmp.Compare(a, b)
+		})
+	}
+	partLen := len(idx)
+	done := make([]bool, len(c.Specs))
+	for s, spec := range c.Specs {
+		// A fold over the running frame: one pass, the state
+		// carried across the partition (O(n), not O(n²)).
+		if spec.Kind == WFold && isRunningFrame(c.Frame) {
+			state := spec.Init()
+			for pos := range idx {
+				state = spec.Step(state, all[idx[pos]])
+				results[idx[pos]][base+s] = spec.Final(state)
+			}
+			done[s] = true
+			continue
+		}
+		// The aggregates and ranks over the running frame,
+		// carried the same way; the whole-partition frame,
+		// computed once (window_running.go).
+		if vals := runningSpecValues(spec, c, all, idx); vals != nil {
+			for pos := range idx {
+				results[idx[pos]][base+s] = vals[pos]
+			}
+			done[s] = true
+		}
+	}
+	for pos := range idx {
+		for s, spec := range c.Specs {
+			if done[s] {
+				continue
+			}
+			results[idx[pos]][base+s] = windowValue(spec, c, all, idx, pos, partLen)
+		}
+	}
+}
+
+// sortChunkMin is the partition size below which sortIdx sorts inline.
+const sortChunkMin = 1 << 16
+
+// sortIdx sorts a partition's index slice by cmp, which is strict (the
+// index is its tiebreak), so the result is the one stable order. A large
+// partition is sorted as chunks on parallel goroutines and merged pairwise
+// through a scratch buffer: a third of the benchmark file sat in ONE
+// partition (4.7 M of 14.6 M rows), so sorting partitions concurrently
+// still left that partition's single-threaded sort as the critical path
+// (DFC158 §4.3).
+func sortIdx(idx []int, cmp func(a, b int) int) {
+	p := runtime.GOMAXPROCS(0)
+	if len(idx) < 2*sortChunkMin || p < 2 {
+		slices.SortFunc(idx, cmp)
+		return
+	}
+	chunks := min(p, len(idx)/sortChunkMin)
+	size := (len(idx) + chunks - 1) / chunks
+	var bounds []int
+	var g shardGroup
+	for lo := 0; lo < len(idx); lo += size {
+		hi := min(lo+size, len(idx))
+		bounds = append(bounds, lo)
+		g.Go(func() { slices.SortFunc(idx[lo:hi], cmp) })
+	}
+	bounds = append(bounds, len(idx))
+	g.Wait()
+	src, dst := idx, make([]int, len(idx))
+	for len(bounds) > 2 {
+		var g shardGroup
+		next := make([]int, 0, len(bounds)/2+2)
+		for i := 0; i+1 < len(bounds); i += 2 {
+			lo, mid := bounds[i], bounds[i+1]
+			hi := mid
+			if i+2 < len(bounds) {
+				hi = bounds[i+2]
+			}
+			next = append(next, lo)
+			g.Go(func() { mergeIdx(dst[lo:hi], src[lo:mid], src[mid:hi], cmp) })
+		}
+		next = append(next, len(idx))
+		g.Wait()
+		bounds = next
+		src, dst = dst, src
+	}
+	if &src[0] != &idx[0] {
+		copy(idx, src)
+	}
+}
+
+// mergeIdx merges two sorted runs into out (len(out) == len(a)+len(b)).
+func mergeIdx(out, a, b []int, cmp func(a, b int) int) {
+	i, j, k := 0, 0, 0
+	for i < len(a) && j < len(b) {
+		if cmp(a[i], b[j]) <= 0 {
+			out[k] = a[i]
+			i++
+		} else {
+			out[k] = b[j]
+			j++
+		}
+		k++
+	}
+	k += copy(out[k:], a[i:])
+	copy(out[k:], b[j:])
 }
 
 // windowValue computes one spec for the row at pos of the sorted

@@ -48,6 +48,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 	var clauseCode []string
 	var foldDefs, imports, hoisted []string // -stream-expr state structs and what their Go needs
 	needFmt := false
+	needStrconv, needStrings := false, false
 	resIdx := 0
 
 	for ci, cfg := range configs {
@@ -66,9 +67,20 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 				if strings.HasPrefix(f.GoType, "*") {
 					return false, fmt.Sprintf("window: nullable partition field %q has no typed key yet", p), nil
 				}
-				parts = append(parts, "fmt.Sprint(r."+f.GoName+")")
+				// The key text fmt.Sprint would make, without fmt: a string
+				// as is, an int through strconv (fmt.Sprint was 1.1 s of
+				// the 14.6 M-row benchmark window).
+				switch f.GoType {
+				case "string":
+					parts = append(parts, "r."+f.GoName)
+				case "int64":
+					parts = append(parts, "strconv.FormatInt(r."+f.GoName+", 10)")
+					needStrconv = true
+				default:
+					parts = append(parts, "fmt.Sprint(r."+f.GoName+")")
+					needFmt = true
+				}
 			}
-			needFmt = true
 			fmt.Fprintf(&b, "\t\t\tPartition: func(r %s) string { return %s },\n", in.TypeName, strings.Join(parts, ` + "\x1f" + `))
 		}
 
@@ -93,6 +105,11 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 					fmt.Fprintf(&cmp, "if %s.Before(%s) { return -1 }; if %s.After(%s) { return 1 }; ", lhs, rhs, lhs, rhs)
 				case "ssql.Int128", "ssql.Decimal": // not cmp.Ordered: the comparator form (DFC155 C, E)
 					fmt.Fprintf(&cmp, "if c := %s.Cmp(%s); c != 0 { return c }; ", lhs, rhs)
+				case "string":
+					// One byte comparison per call: `<` then `>` compared
+					// twice on every "greater" (10 s of the benchmark's sort).
+					fmt.Fprintf(&cmp, "if c := strings.Compare(%s, %s); c != 0 { return c }; ", lhs, rhs)
+					needStrings = true
 				default:
 					fmt.Fprintf(&cmp, "if %s < %s { return -1 }; if %s > %s { return 1 }; ", lhs, rhs, lhs, rhs)
 				}
@@ -213,18 +230,35 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 	}
 	build.WriteString("\t\treturn o\n\t}")
 
-	code := fmt.Sprintf("%s := typed.Window([]typed.WindowClause[%s]{\n%s\n\t}, %s)(%s)",
-		outVar, in.TypeName, strings.Join(clauseCode, "\n"), build.String(), inputVar)
+	// Both templates: typed.WindowParallel takes the source's Stream (the
+	// shards materialised concurrently, in shard order = input order) and
+	// typed.Window the iter.Seq alternative. The window is a barrier either
+	// way — its output is an iter.Seq, as group-by's — but a SerialOnly
+	// template here made the planner read the SOURCE serially too
+	// (DFC158 §4.3, 2026-10-28).
+	clauses := fmt.Sprintf("[]typed.WindowClause[%s]{\n%s\n\t}, %s", in.TypeName, strings.Join(clauseCode, "\n"), build.String())
+	code := fmt.Sprintf("%s := typed.WindowParallel(%s)(%s)", outVar, clauses, inputVar)
+	serialCode := fmt.Sprintf("%s := typed.Window(%s)(%s)", outVar, clauses, inputVar)
 
 	imports = append(imports, "github.com/rosscartlidge/ssql/v4/typed")
 	if needFmt {
 		imports = append(imports, "fmt")
 	}
-	frag := lib.NewStmtFragment(outVar, inputVar, code, dedupeImports(imports), getCommandString())
+	if needStrconv {
+		imports = append(imports, "strconv")
+	}
+	if needStrings {
+		imports = append(imports, "strings")
+	}
+	imports = dedupeImports(imports)
+	frag := lib.NewStmtFragment(outVar, inputVar, code, imports, getCommandString())
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = out
 	frag.StructDefs = append(append([]string{structDef}, foldDefs...), hoisted...)
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped, SerialOnly: true}
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped}
+	frag.AltCodeIfSeq = serialCode
+	frag.AltImportsIfSeq = imports
+	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}
 	return true, "", lib.WriteCodeFragment(frag)
 }
 

@@ -733,12 +733,21 @@ func readParquetUnitsParallel[T any](op string, files []string, consts [][]Parqu
 		n = len(units)
 	}
 
-	// Partition units across shards round-robin so a long row group at
-	// the end doesn't leave one worker idle. Contiguous would also
-	// work; round-robin balances variance.
+	// Each shard takes a contiguous run of row groups, in file order, so
+	// the shards concatenated in shard order ARE the file order — the
+	// property every parallel source has (a CSV shard is a byte range,
+	// a range shard an interval) and that an order-keeping consumer
+	// relies on: the parallel sinks dump in shard order, and
+	// WindowParallel materialises shard by shard and keeps the
+	// partitions' first-seen order (2026-10-28). Round-robin, which this
+	// was until then, balanced a long last row group but scattered the
+	// order; row groups are written equal-sized (WithRowGroupSize), so
+	// the balance is the same.
 	shardUnits := make([][]parquetUnit, n)
-	for i, u := range units {
-		shardUnits[i%n] = append(shardUnits[i%n], u)
+	per := (len(units) + n - 1) / n
+	for i := range shardUnits {
+		lo := min(i*per, len(units))
+		shardUnits[i] = units[lo:min(lo+per, len(units))]
 	}
 
 	shards := make([]iter.Seq[T], n)

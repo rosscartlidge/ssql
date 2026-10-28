@@ -6,10 +6,10 @@ Last modified: 2026-10-28
 
 [Back to Index](./README.md)
 
-**Status:** write-up of the 2026-10-27 measurements and the four fixes
+**Status:** write-up of the 2026-10-27 measurements and the five fixes
 that followed them (two on the 27th; the `cast` downgrade found by
-writing this on the 28th, and the CSV column projection the same day),
-with a ranked list of what to do next. Ross
+writing this on the 28th, the CSV column projection and the typed
+window's sort the same day), with a ranked list of what to do next. Ross
 (2026-10-28): "could you write up a DFC on what we discovered about
 performance, what we have fixed and what we can do". The measurements
 are DFC157 §4's; the fixes are commits 3bd4919 (window), 436c8b0
@@ -39,7 +39,7 @@ changed it, the number after.
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 → 0.23 s | 0.06 s |
-| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | > 1800 s → 35 s | 14.0 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | > 1800 s → 35 → 9.2 s | 14.0 s |
 
 Peak RSS: cube 185 MB / 940 MB / 437 MB; CSV group-by 88 MB / 1.5 GB /
 760 MB; filtered write 1.9 GB / 8.1 GB / 1.4 GB; window 1.7 GB / 3.8 GB
@@ -292,7 +292,49 @@ to the one column, record mode projected, bare form rewritten);
 `TestTranslateFromCSVColumns` (the value is a column, not a second
 file); the sampler and helper unit tests.
 
-All four fixes are on main, gated (vet, slim build, race packages,
+### 3.5 The typed window: 35 s → 9 s (2026-10-28)
+
+The profile of the generated program, not the guess in §4 item 3: the
+sort was 21 s of the 35 — `sort.SliceStable`'s symmerge (O(n log² n)
+moves through a reflection swapper) with the string comparator doing
+`<` then `>` (two byte comparisons on every "greater"); the partition
+key through `fmt.Sprint` 1.1 s; the boxed results and GC small. Four
+steps, each measured on the program:
+
+| Step | Wall |
+|---|---:|
+| before | 35.4 s |
+| pdqsort with the row index as the tiebreak (the one stable order, far fewer moves, no reflection); partitions sorted and evaluated concurrently; one flat results slice; `strconv`/`strings.Compare` in the template | 14.5 s |
+| the sort inside a large partition chunked across cores and merged pairwise (a third of the file sits in ONE partition of 4.7 M rows, so the per-partition parallelism left its sort as the critical path) | 13.2 s |
+| `typed.WindowParallel`: the window takes the source's Stream, materialising the shards concurrently in shard order, instead of the planner reading the source serially (2.4 s) into one slice grown by appends (1.9 s) | **9.2 s** |
+
+Shard order is input order for every parallel source — a CSV shard is a
+byte range, a range shard an interval — and from today the Parquet
+reader's shards are contiguous runs of row groups too (they were
+round-robin), so the window's first-seen partition order and the
+parallel sinks' output order are the file's. The small benchmark
+(`BenchmarkWindowRunningSumString`, 200 k rows, string key): 200 ms →
+47 ms, two allocations per row → one.
+
+What remains is memory-bound: 15 s of CPU in `cmpbody` across the
+sorting goroutines, each comparison chasing two row structs and two
+string bodies at random across 600 MB, and the emit loop reading rows in
+sorted order from file-ordered storage (2 s). DataFusion's 5.7 s is 1.6×
+away. A typed sort key (the order column copied once into a contiguous
+slice beside the index) would make the compares sequential and is the
+next shave if one is wanted; the boxed result per row (one allocation,
+14.6 M of them) is the other.
+
+Proof: `TestWindowParallelMatchesWindow` (shards interleaving the
+partitions, ordered and unordered clauses, ties: the same rows in the
+same order), `TestSortIdxMatchesStable` (the chunked sort against
+`sort.SliceStable` on heavy ties, both sides of the chunk threshold, one
+core and many), `TestReadParquetParallelShardsAreInFileOrder`,
+`TestTypedWindowKeepsSourceParallel` (the plan), the 35 window
+equivalence cases, the typed race suite, and the scale gate's typed
+window case at 2.4 s (was 4.3).
+
+All five fixes are on main, gated (vet, slim build, race packages,
 full `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
 Unreleased section.
 
@@ -315,17 +357,11 @@ could change, an equivalence case; none of them changes a result.
    group-by runs in 0.39 s through the optimiser, between DataFusion
    and DuckDB.
 
-3. **The typed window's 35 s** (TODO, 2026-10-27). Linear now, but
-   `typed.Window` materialises every row, sorts each partition with
-   `sort.SliceStable` over a closure comparing struct fields, and boxes
-   one `[]any` of results per row (3.8 GB RSS). A typed sort key
-   (extract the order columns once into a parallel slice, sort an index
-   by it) and an unboxed result column per spec (`[]int64` or
-   `[]float64` chosen by the spec's reader) would cut most of the
-   allocation; partitions are independent, so sorting them in parallel
-   is the other half. DataFusion's 5.7 s is a global sort of 14.6 M
-   rows by a string column; under 10 s is a reasonable target. The
-   scale cases already exist; tighten their budgets when it lands.
+3. **The typed window's 35 s.** **Done 2026-10-28, §3.5**: 9.2 s. The
+   guess here was half right — the sort was the cost, but its algorithm
+   and its serial source, not the boxing; the profile said so before a
+   line changed. What is left (a typed sort key, an unboxed result
+   column) is in TODO with the numbers.
 
 4. **The parallel CSV sink's memory.** 8.1 GB on the filtered write is
    2× the output plus the mapped input. The buffer-per-shard dump is

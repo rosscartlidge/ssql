@@ -65,7 +65,7 @@ output to `/dev/null`:
 | `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 0.23 s (1.29 s while `cast` serialised the pipeline, see below) | 0.06 s |
-| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | 35 s (was > 1800 s, see below) | 14.0 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | 9.2 s (was > 1800 s, then 35 s; see below) | 14.0 s |
 
 DataFusion is faster than the typed Go program on every workload here,
 by 1.7× on the cube and 2–7× elsewhere, and matches DuckDB on the
@@ -76,9 +76,15 @@ does not win. The typed window row was measured twice: the first run
 was still going at a 30-minute cap, because both the exec and the typed
 window scanned each row's frame from the partition's first row (n²/2 per
 partition — fixed the same day, `window_running.go`: the running frame is
-carried in one pass); the 35 s that remain are the materialisation, the
-per-partition sort of 14.6 M rows by a string column and a boxed result
-per row, linear now, and the next thing to shave (TODO). The decimal
+carried in one pass); the 35 s that remained were mostly the sort —
+`sort.SliceStable`'s symmerge over a string key, one partition at a
+time, after a serial read of the source — and are 9.2 s since the same
+week: pdqsort with the row index as the tiebreak, partitions sorted
+concurrently and a large one chunked across cores, and the window
+reading the source's parallel shards in order
+([DFC158](research/dfc158_performance_measured_fixed_next.md) §3.5).
+What remains is memory-bound string comparison; a typed sort key is the
+next shave (TODO). The decimal
 row was a planner gap, not arithmetic: the typed `cast` template
 declared itself serial-only, so the planner read the file and grouped
 on one core; a cast is a per-row map and now keeps the parallel forms
