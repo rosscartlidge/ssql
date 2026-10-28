@@ -2,7 +2,7 @@
 
 Reference: DFC158
 Created: 2026-10-28
-Last modified: 2026-10-28
+Last modified: 2026-10-29
 
 [Back to Index](./README.md)
 
@@ -502,10 +502,65 @@ in range order — the same first-seen order and ascending indices), and
 the random row reads of the emit (each partition gathers its sorted
 rows and results into contiguous output while it still has the
 indices, so the emit walks memory in order). Together they are about
-2.5 s of the 8.5; that is the next unit, recorded in TODO. DataFusion's
+2.5 s of the 8.5; that is §3.10. DataFusion's
 5.8 s is a global sort of 14.6 M rows and a sorted-mode aggregate on
 24 partitions; the typed window is one process doing the same work
 row by row, and 6 s is a fair floor for it.
+
+### 3.10 The typed window's serial phases (2026-10-29)
+
+The three serial phases of §3.9 now run on every core, and the
+estimate was low: the program went 8.0 → 5.1 s (best of three on the
+same idle machine; the 8.5 of §3.9 was a busier run), under
+DataFusion's 5.8. None of it changes a result.
+
+- **The concatenation.** `WindowParallel` sizes the slice from the
+  shards' counts and each shard copies into its own range
+  concurrently; the appends ran on one core, every page first-touched
+  by it. 0.76 → 0.03 s.
+- **The partition index.** `partitionIndex` keys the rows as ranges on
+  every core, each range keeping its own map and first-seen order; the
+  ranges merge in order, so a partition's first range is the first row
+  that bears it and its indices concatenate ascending — the one map a
+  single pass built. Each partition's slice is allocated at its exact
+  length from the ranges' totals and the ranges copy into it
+  concurrently, which also halved the allocations of the small
+  benchmark (the single map grew every partition's slice by appends).
+  1.08 → 0.20 s.
+- **The gather.** After the clauses, the rows and their result slices
+  are gathered into output order as ranges on every core (0.41 s of
+  parallel cache misses), and the emit walks two slices in order:
+  3.68 → 1.63 s, the rest being the `build` closure, the boxed
+  result's read and the serial group-by after it. The copy is another
+  slice of rows (820 MB for the three-column benchmark row); the
+  materialised shards are garbage by then, and the resident size did
+  not move (4.8–5.4 GB either way).
+
+The phases of the 5.1 s program: materialise 0.74, concatenate 0.03,
+partition index 0.20, sort and specs 2.19, gather 0.41, emit 1.63.
+What is left is parallel (the sort and specs: the 4.75 M-row partition
+dominates, and its sort is already chunked across cores) or is the
+price of the row model (the emit's build and the group-by). Two things
+could still shave it, both in TODO: an unboxed result column per spec
+(one allocation per row and the type assertion in `build` go), and the
+window producing a `Stream` whose shards are the sorted partitions'
+output, so the group-by after it runs its parallel form — a planner
+change that alters shard order, so it needs its own look.
+
+The tests are the two that an independent oracle allows:
+`TestPartitionIndexRangesMatchOnePass` holds the index built over 2, 7
+and 24 ranges to the one built in one pass (a key a few rows share,
+one most rows have to themselves, one that first appears in the last
+range, no key), and `TestWindowParallelLargeMatchesReference` holds the
+whole parallel window, past the range threshold, to a reference
+written with `sort.SliceStable` over the rows alone. Both failed when
+the range merge ran backwards.
+
+The lesson of §3.9 held up: the phases named the three serial steps,
+each a few dozen lines, worth 2.9 s between them; the profile had
+named the sort, which was worth 0.5. On a many-core machine a serial
+phase between parallel ones IS the critical path while it shows a few
+percent of the CPU profile.
 
 All fixes are on main, gated (vet, slim build, race packages, full
 `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
@@ -530,12 +585,14 @@ could change, an equivalence case; none of them changes a result.
    group-by runs in 0.39 s through the optimiser, between DataFusion
    and DuckDB.
 
-3. **The typed window's 35 s.** **Done 2026-10-28, §3.5 and §3.9**:
-   9.2 s, then 8.5 s with the typed sort key. The guess here was half
-   right — the sort was the cost, but its algorithm and its serial
-   source, not the boxing; and once parallel, the sort left the
-   critical path, so the key bought little. The phases say what is
-   left: three serial phases worth about 2.5 s, in TODO.
+3. **The typed window's 35 s.** **Done 2026-10-28/29, §3.5, §3.9 and
+   §3.10**: 9.2 s, 8.5 s with the typed sort key, 5.1 s with the
+   serial phases parallelised — under DataFusion's 5.8. The guess here
+   was half right — the sort was the cost, but its algorithm and its
+   serial source, not the boxing; and once parallel, the sort left the
+   critical path, so the key bought little and the three serial phases
+   the phase timing named bought 2.9 s. The unboxed result column and
+   a `Stream` output for the group-by after it stay in TODO.
 
 4. **The filtered write's memory.** **Done 2026-10-28, §3.8**, and
    not where this item said: the sink holds 238 MB; the typed Parquet

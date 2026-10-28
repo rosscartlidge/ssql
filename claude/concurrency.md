@@ -442,6 +442,47 @@ readers and writers take a column's name from the struct tag
 `RangeRow` inline (`lib.RenderStructDefWithComment`) and passes
 `func(v int64) RangeRow { return RangeRow{I: v} }`.
 
+## 15. Serial phases between parallel ones: time the phases, not the profile (DFC158 §3.10)
+
+The typed window after its sort went parallel (2026-10-28) ran 8 s
+on 24 cores for 14.6 M rows. The CPU profile apportioned the CPU:
+the sort and its compares were most of it, the three serial loops
+were a few percent each. Timing the phases apportioned the wall:
+
+| Phase | Before | After |
+|---|---:|---:|
+| materialise the shards (parallel) | 0.71 | 0.74 |
+| concatenate the shards' slices | 0.76 | 0.03 |
+| partition map / index | 1.08 | 0.20 |
+| sort and the one-pass specs (parallel) | 2.33 | 2.19 |
+| gather into output order | — | 0.41 |
+| emit (build, the group-by after) | 3.68 | 1.63 |
+
+Three serial passes over every row — an append loop, a map, an emit
+reading rows at random — were the critical path at 5.5 s while the
+parallel sort, the profile's target, was worth 0.5. The fixes are the
+shape to reuse (`typed/window.go`):
+
+- **A preallocated slice and per-shard `copy` into disjoint ranges**
+  instead of appending shard after shard (`WindowParallel`). The
+  appends also first-touched every page from one core.
+- **A map per range, merged in order** (`partitionIndex`): each range
+  keeps its own map and first-seen order; the merge walks the ranges
+  in order, so first-seen order and ascending indices are those of the
+  one-pass map by construction; totals from the merge give each key's
+  slice its exact length, and the ranges copy into it concurrently.
+  `partitionIndexRanges(c, all, r)` takes the range count so a test
+  can hold r=1 to r=24.
+- **A parallel gather before a sequential emit** (`parallelRanges`
+  over the output order): the random reads happen on every core with
+  the memory system's parallelism; the emit walks two slices in
+  order. Costs one more slice of rows; the shards' slices are garbage
+  by then.
+
+Rule of thumb: before parallelising a hot loop a profile names, time
+the phases of the whole program; a serial pass over every row between
+parallel phases goes first, whatever the profile says.
+
 ## See Also
 
 - [`doc/research/typed-concurrency-proposal.md`](../doc/research/typed-concurrency-proposal.md) — design proposal + measured PoC results in §9a

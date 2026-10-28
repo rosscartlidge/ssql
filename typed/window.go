@@ -157,14 +157,22 @@ func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, []any) O)
 				})
 			}
 			g.Wait()
-			n := 0
-			for _, p := range parts {
-				n += len(p)
+			// The shards copy into their own ranges of one slice
+			// concurrently: appending them one after another ran
+			// 0.76 s of the benchmark window on one core (DFC158 §3.10).
+			offs := make([]int, len(parts)+1)
+			for i, p := range parts {
+				offs[i+1] = offs[i] + len(p)
 			}
-			all := make([]T, 0, n)
-			for _, p := range parts {
-				all = append(all, p...)
+			all := make([]T, offs[len(parts)])
+			var c shardGroup
+			for i, p := range parts {
+				c.Go(func() {
+					copy(all[offs[i]:], p)
+					parts[i] = nil
+				})
 			}
+			c.Wait()
 			windowRows(all, clauses, build, yield)
 		}
 	}
@@ -190,18 +198,7 @@ func windowRows[T, O any](all []T, clauses []WindowClause[T], build func(T, []an
 	orderDecided := false // the first clause with an ORDER BY fixes the output order
 	base := 0
 	for _, c := range clauses {
-		partitions := make(map[string][]int)
-		var partOrder []string
-		for i, r := range all {
-			k := ""
-			if c.Partition != nil {
-				k = c.Partition(r)
-			}
-			if _, seen := partitions[k]; !seen {
-				partOrder = append(partOrder, k)
-			}
-			partitions[k] = append(partitions[k], i)
-		}
+		partitions, partOrder := partitionIndex(c, all)
 		// Partitions are independent — each sorts its own index
 		// slice and writes its own rows of results — so they run
 		// concurrently, one goroutine per core; a panic in a row's
@@ -235,11 +232,129 @@ func windowRows[T, O any](all []T, clauses []WindowClause[T], build func(T, []an
 			outputOrder[i] = i
 		}
 	}
-	for _, i := range outputOrder {
-		if !yield(build(all[i], results[i])) {
+	// The rows and their results, gathered into output order on every
+	// core before one sequential emit: read at random from a slice of
+	// millions of rows, each row was a cache miss, and the emit loop
+	// took 3.7 s of the benchmark window on one core (DFC158 §3.10).
+	ordered, orderedResults := all, results
+	if outputOrder != nil {
+		ordered = make([]T, n)
+		orderedResults = make([][]any, n)
+		parallelRanges(n, func(lo, hi int) {
+			for p := lo; p < hi; p++ {
+				i := outputOrder[p]
+				ordered[p] = all[i]
+				orderedResults[p] = results[i]
+			}
+		})
+	}
+	for p := range n {
+		if !yield(build(ordered[p], orderedResults[p])) {
 			return
 		}
 	}
+}
+
+// rangeMin is the row count below which a parallel pass over the rows
+// runs inline, and the fewest rows a range of one gets.
+const rangeMin = 1 << 16
+
+// parallelRanges runs fn over [0, n) as contiguous ranges, one goroutine
+// per core, inline when n is small.
+func parallelRanges(n int, fn func(lo, hi int)) {
+	r := min(runtime.GOMAXPROCS(0), n/rangeMin)
+	if r < 2 {
+		fn(0, n)
+		return
+	}
+	var g shardGroup
+	for i := range r {
+		g.Go(func() { fn(i*n/r, (i+1)*n/r) })
+	}
+	g.Wait()
+}
+
+// partitionIndex is the clause's partition map — each partition's row
+// indices, ascending — and the partitions in first-seen order. The rows
+// are keyed as ranges on every core, each range keeping its own map and
+// first-seen order; the ranges merge in order, so a partition's first
+// range is the first row that bears it, and its indices concatenate
+// ascending — the one map a single pass builds, which ran 1.08 s of the
+// benchmark window on one core (DFC158 §3.10). Each partition's slice is
+// allocated at its exact length, and the ranges copy into it
+// concurrently.
+func partitionIndex[T any](c WindowClause[T], all []T) (map[string][]int, []string) {
+	return partitionIndexRanges(c, all, min(runtime.GOMAXPROCS(0), len(all)/rangeMin))
+}
+
+// partitionIndexRanges is partitionIndex over r ranges (r < 2: one pass).
+func partitionIndexRanges[T any](c WindowClause[T], all []T, r int) (map[string][]int, []string) {
+	n := len(all)
+	key := func(r T) string {
+		if c.Partition == nil {
+			return ""
+		}
+		return c.Partition(r)
+	}
+	if r < 2 {
+		partitions := make(map[string][]int)
+		var partOrder []string
+		for i, row := range all {
+			k := key(row)
+			if _, seen := partitions[k]; !seen {
+				partOrder = append(partOrder, k)
+			}
+			partitions[k] = append(partitions[k], i)
+		}
+		return partitions, partOrder
+	}
+	type rangeIndex struct {
+		parts map[string][]int
+		order []string
+		start map[string]int // the partition's offset this range copies to
+	}
+	ranges := make([]rangeIndex, r)
+	var g shardGroup
+	for i := range r {
+		g.Go(func() {
+			lo, hi := i*n/r, (i+1)*n/r
+			ri := rangeIndex{parts: make(map[string][]int), start: make(map[string]int)}
+			for j := lo; j < hi; j++ {
+				k := key(all[j])
+				if _, seen := ri.parts[k]; !seen {
+					ri.order = append(ri.order, k)
+				}
+				ri.parts[k] = append(ri.parts[k], j)
+			}
+			ranges[i] = ri
+		})
+	}
+	g.Wait()
+	total := make(map[string]int)
+	var partOrder []string
+	for _, ri := range ranges {
+		for _, k := range ri.order {
+			if _, seen := total[k]; !seen {
+				partOrder = append(partOrder, k)
+			}
+			ri.start[k] = total[k]
+			total[k] += len(ri.parts[k])
+		}
+	}
+	partitions := make(map[string][]int, len(partOrder))
+	for _, k := range partOrder {
+		partitions[k] = make([]int, total[k])
+	}
+	var cp shardGroup
+	for _, ri := range ranges {
+		cp.Go(func() {
+			for k, idx := range ri.parts {
+				copy(partitions[k][ri.start[k]:], idx)
+			}
+		})
+	}
+	cp.Wait()
+	return partitions, partOrder
 }
 
 // windowPartition sorts one partition's index slice and fills its rows
