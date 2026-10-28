@@ -5,6 +5,16 @@ All notable changes to ssql will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`scripts/bench-engines.sh FILE.parquet`** — the engine table of `doc/performance.md` §1a, repeatable: the seven pipelines through the typed Go program, DuckDB and the generated Rust program, best of N, whole-process wall and peak RSS, output to /dev/null, printed in the table's format with the output row counts checked across engines ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §4 item 7). Column names are options; the CSV twin is written once into the cache.
+
+### Fixed
+
+- **`generate rust -build PATH` built nothing on a pipeline the optimiser rewrites.** The re-execution that applies the rewrite carried `-run`, `-func` and `-time` but not `-build`, so a pruned Parquet read printed the program to stdout and exited 0 with no binary (since 4.128.0; the benchmark driver found it). `TestGenerateRustBuildSurvivesOptimiser`.
+
 ## [4.129.0] - 2026-10-28
 
 ### Added

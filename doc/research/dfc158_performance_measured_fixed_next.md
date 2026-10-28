@@ -36,7 +36,7 @@ changed it, the number after.
 | `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.19 s** | 0.32 s | 0.36 s |
 | `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
 | `group-by relationship -count`, CSV | **0.24 s** | 1.63 → 1.05 → 0.39 s | 0.71 s |
-| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | **0.70 s** | 1.51 s | 2.9 s (0.41 s in the first table was the display mode, §3.6) |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 → 0.23 s | 0.06 s |
 | `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | > 1800 s → 35 → 9.2 s | 14.0 s |
@@ -51,7 +51,8 @@ the decimal row, while writing §2 of this document. The other four are
 the honest gap between a row-at-a-time program over Go structs and a
 vectorised executor over Arrow batches: 1.7× on the cube, 2–5× on the
 scans and the join, and the one row where the Go program is within 2×
-of the winner is the streaming write, which is bounded by formatting.
+of the winner is the streaming write, which is bounded by formatting
+(and where it beats DuckDB, §3.6).
 
 ## 2. What we discovered
 
@@ -131,9 +132,12 @@ revisited; nothing failed, because every fixture was small. The other
 
 ### 2.4 The streaming write is formatting-bound, and the sink buffers everything
 
-The filtered write is the one row where DuckDB beats DataFusion and
-typed Go is within 2× of the winner: 2.7 M rows of output, each
-formatted once, bounds every engine. Typed Go's 8.1 GB peak RSS is the
+The filtered write was reported as the one row where DuckDB beat
+DataFusion; it was not (§3.6: DuckDB's 0.41 s was its `duckbox` display
+of 40 rows; writing the 2.7 M rows as CSV takes 2.9 s). DataFusion
+0.70 s, typed Go 1.51 s, DuckDB 2.9 s: 2.7 M rows of output, each
+formatted once, bounds every engine, and the Go program's row-wise
+writer is the second fastest of the three. Typed Go's 8.1 GB peak RSS is the
 documented trade of the parallel CSV sink (claude/concurrency.md §12:
 each shard formats into its own buffer, dumped in shard order, 4.4×
 faster than a `Serial()` fan-in). That trade was measured on a 7.25 M-
@@ -344,6 +348,58 @@ core and many), `TestReadParquetParallelShardsAreInFileOrder`,
 equivalence cases, the typed race suite, and the scale gate's typed
 window case at 2.4 s (was 4.3).
 
+### 3.6 The driver, and what its first run found (2026-10-28)
+
+`scripts/bench-engines.sh FILE.parquet` (§4 item 7) runs the seven
+pipelines through the typed Go program, DuckDB in CSV mode and the
+generated Rust program, best of N, whole-process wall and peak RSS,
+output to /dev/null, and prints this table. Its first run on the
+released v4.129.0, machine A, idle:
+
+| Pipeline (14.6 M rows; the join 10 M) | DataFusion (generated Rust) | ssql `generate go` (typed) | DuckDB 1.5.0 |
+|---|---:|---:|---:|
+| `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.18 s** | 0.33 s | 0.36 s |
+| `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
+| `group-by relationship -count`, the same rows as CSV | **0.24 s** | 0.32 s | 0.78 s |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` | **0.69 s** | 1.64 s | 2.98 s |
+| 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.51 s | 0.33 s |
+| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 0.22 s | 0.06 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | 14.4 s (5.9 s as SQL, see below) | **8.9 s** | 13.6 s |
+
+Peak RSS, same order: cube 184 MB / 821 MB / 423 MB; Parquet group-by
+69 MB / 316 MB / 37 MB; CSV group-by 78 MB / 1.2 GB / 652 MB; filtered
+write 1.7 GB / 7.9 GB / 1.3 GB; join 302 MB / 401 MB / 348 MB; decimal
+99 MB / 464 MB / 52 MB; window 1.8 GB / 3.4 GB / 2.8 GB.
+
+The run is the whole table of §1 after the five fixes, and it found
+three things on the way:
+
+1. **The DuckDB filtered-write number in §1 was wrong.** 0.41 s was
+   DuckDB's default `duckbox` display, which prints 40 of the 2.7 M rows
+   and a summary; writing them as CSV takes 2.9 s. The claim that the
+   streaming write was the one shape DataFusion did not win is
+   withdrawn (§2.4 corrected; DFC157 §4 carries the same note). The
+   driver runs DuckDB with `-csv`, so the mistake cannot recur.
+2. **`generate rust -build` built nothing on a pipeline the optimiser
+   rewrites** (since 4.128.0): the re-execution that applies the rewrite
+   carried `-run`, `-func` and `-time` but not `-build`, so the program
+   went to stdout and the command exited 0. Fixed;
+   `TestGenerateRustBuildSurvivesOptimiser` fails on the old code.
+3. **The generated Rust window is slower than DataFusion's own SQL
+   plan**: 14.4 s against 5.9 s for the same pipeline through
+   `generate sql -dialect datafusion`. The DataFrame lowering keeps the
+   window stage's output order as a `sort` of 14.6 M rows that the
+   aggregate after it never needs; the SQL optimiser drops the same
+   ORDER BY inside a subquery. TODO has it as a `generate rust`
+   follow-up. Until then the Rust column of that row is the lowering's
+   number, not the engine's.
+
+Two more readings of the table: the typed join (0.51 s, was 0.89 s on
+the 27th) is the zero-copy CSV scanner reaching the join corpus, which
+is CSV; and `count | to csv` does not compile in typed mode (`count`'s
+template prints and declares no output), which is why the join row
+ends in `count` — TODO.
+
 All five fixes are on main, gated (vet, slim build, race packages,
 full `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
 Unreleased section.
@@ -395,14 +451,18 @@ could change, an equivalence case; none of them changes a result.
    model's price; the fix is the typed program or `generate rust`, and
    `doc/performance.md` says so. No work planned.
 
-7. **A benchmark driver in the repo.** The 2026-10-27 table was produced
-   by scripts in a session scratchpad (`bench/run.sh`, `run2.sh`) that
-   will not survive the session. A `scripts/bench-engines.sh` taking a
-   Parquet file and running the seven pipelines through typed Go,
-   DuckDB and `generate rust -build` (cargo present) on an idle machine,
-   best of three, printing the table in `doc/performance.md` §1a's
-   format, makes the comparison repeatable at each release instead of a
-   one-off. It is not a gate; the scale gate is the gate.
+7. **A benchmark driver in the repo.** **Done 2026-10-28**:
+   `scripts/bench-engines.sh FILE.parquet` runs the seven pipelines
+   through the typed Go program, DuckDB and the generated Rust program
+   (cargo present), best of N, whole-process wall and peak RSS, output
+   to /dev/null, and prints the table in `doc/performance.md` §1a's
+   format with the output row counts checked across engines. The column
+   names are options (`-k -s -v -k2 -s2 -eq`), the CSV twin is written
+   once into the cache, the join row runs when the 10 M-row corpus is
+   present. The 2026-10-27 table was produced by scratchpad scripts; this
+   is the same method, so a change is measured in one command and a
+   release note's numbers are reproducible. It is not a gate; the scale
+   gate is the gate.
 
 What is NOT on the list: a columnar or vectorised runtime for typed Go.
 DFC132's reasoning stands: a third runtime would own the semantics a

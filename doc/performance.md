@@ -62,7 +62,7 @@ output to `/dev/null`:
 | the three-key cube above | **0.19 s** | 0.32 s | 0.36 s |
 | `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
 | the same rows as 1.2 GB CSV | **0.24 s** | 0.39 s (1.63 before the scanner; 1.05 with every column in the struct, before the optimiser pruned CSV reads) | 0.71 s |
-| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | **0.70 s** | 1.51 s | 2.9 s |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 0.23 s (1.29 s while `cast` serialised the pipeline, see below) | 0.06 s |
 | `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | 9.2 s (was > 1800 s, then 35 s; see below) | 14.0 s |
@@ -71,8 +71,10 @@ DataFusion is faster than the typed Go program on every workload here,
 by 1.7× on the cube and 2–7× elsewhere, and matches DuckDB on the
 scan-and-aggregate shapes: a vectorised, morsel-parallel executor over
 Arrow batches beats a row-at-a-time streaming program with struct
-types, CSV reading included. The streaming write is the one shape it
-does not win. The typed window row was measured twice: the first run
+types, CSV reading included. (The streaming write was first reported as
+DuckDB's: 0.41 s was its `duckbox` display of 40 rows, not the CSV
+write, which is 2.9 s — corrected 2026-10-28.) The typed window row was
+measured twice: the first run
 was still going at a 30-minute cap, because both the exec and the typed
 window scanned each row's frame from the partition's first row (n²/2 per
 partition — fixed the same day, `window_running.go`: the running frame is
@@ -95,6 +97,26 @@ pipeline uses, so the scanner decodes and clones only those, the way
 the Parquet read has been pruned since the rule was written. The Rust
 program is the same `generate go` pipeline with `rust` in place of
 `go`; the first `cargo` build compiles DataFusion (minutes, once).
+
+**As of v4.129.0**, the same table from `scripts/bench-engines.sh` (one
+command, see Reproducing; the window's Rust cell is the DataFrame
+lowering's number — it keeps a sort the engine's SQL optimiser drops,
+5.9 s as SQL, a `generate rust` follow-up in TODO):
+
+| Pipeline (14.6 M rows; the join 10 M) | DataFusion (generated Rust) | ssql `generate go` (typed) | DuckDB 1.5.0 |
+|---|---:|---:|---:|
+| `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.18 s** | 0.33 s | 0.36 s |
+| `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
+| `group-by relationship -count`, the same rows as CSV | **0.24 s** | 0.32 s | 0.78 s |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` | **0.69 s** | 1.64 s | 2.98 s |
+| 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.51 s | 0.33 s |
+| `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 0.22 s | 0.06 s |
+| `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | 14.4 s (5.9 s as SQL, see below) | **8.9 s** | 13.6 s |
+
+Peak RSS, same order: cube 184 MB / 821 MB / 423 MB; Parquet group-by
+69 MB / 316 MB / 37 MB; CSV group-by 78 MB / 1.2 GB / 652 MB; filtered
+write 1.7 GB / 7.9 GB / 1.3 GB; join 302 MB / 401 MB / 348 MB; decimal
+99 MB / 464 MB / 52 MB; window 1.8 GB / 3.4 GB / 2.8 GB.
 
 Honest framing: this is a scan-and-aggregate query, where a pruned
 parallel read wins. On the join-heavy benchmark in §3 DuckDB is still
@@ -233,6 +255,11 @@ go -explain` says which form each stage of your pipeline got.
 ## Reproducing
 
 ```bash
+# §1a: the engine table — the typed Go program, DuckDB and the generated Rust
+# program over one Parquet file, best of three, printed in the table's format
+# (column names are options; see the script's header; measure on an idle machine)
+scripts/bench-engines.sh FILE.parquet
+
 # §1, §2: any parquet/CSV file you have; -build then time the binary
 ssql generate go -pipeline 'ssql from parquet FILE | ssql group-by a b c -count n -cube | ssql to csv' -build ./cube
 time ./cube > /dev/null

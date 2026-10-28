@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -727,6 +728,29 @@ func TestTypedWindowKeepsSourceParallel(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected %q in output\n%s", want, out)
 		}
+	}
+}
+
+// TestGenerateRustBuildSurvivesOptimiser: `generate rust -build PATH` on
+// a pipeline the optimiser rewrites (a pruned Parquet read) re-executes
+// through bash, and the inner command must carry -build. Until 2026-10-28
+// it did not: the program went to stdout and nothing was built, exit 0
+// (scripts/bench-engines.sh found it). With cargo present the binary
+// exists afterwards; without it the error names cargo. Either way the
+// program must not appear on stdout.
+func TestGenerateRustBuildSurvivesOptimiser(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	pq := codelabParquet(t)
+	out := filepath.Join(t.TempDir(), "prog")
+	cmd := exec.Command(bin, "generate", "rust", "-build", out, "-pipeline", bin+" from parquet "+pq+" | "+bin+" group-by dept -count n | "+bin+" to csv")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if strings.Contains(stdout.String(), "async fn pipeline") {
+		t.Fatalf("-build was dropped by the optimiser re-execution: the program went to stdout\n%s", stdout.String()[:min(stdout.Len(), 600)])
+	}
+	if _, statErr := os.Stat(out); statErr != nil && !(err != nil && strings.Contains(stderr.String(), "cargo")) {
+		t.Fatalf("no binary at %s and no cargo error: err=%v\nstderr: %s", out, err, stderr.String())
 	}
 }
 

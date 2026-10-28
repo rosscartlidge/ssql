@@ -128,6 +128,13 @@ func registerGenerateRust(cmd *cf.SubcommandBuilder) {
 				if timeRun {
 					inner += " -time"
 				}
+				if buildOut != "" {
+					// -build rides on the inner command (as -func and -time do;
+					// -run and OUTPUT are optimiseThenRegen's): without it a
+					// pruned pipeline printed the program and built nothing,
+					// exit 0 (found by scripts/bench-engines.sh, 2026-10-28).
+					inner += " -build " + shellQuote(buildOut)
+				}
 				if done, err := optimiseThenRegen(buf, ctx.GetBool("-explain", false), "rust", inner, run, outputFile, ctx.Stdout(), ctx.Stderr()); done || err != nil {
 					return err
 				}

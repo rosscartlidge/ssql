@@ -180,6 +180,7 @@ After a minor/major release, always do ALL of these:
 - [ ] Check doc/api-reference.md — new/changed functions documented
 - [ ] Check doc/ai-code-generation.md — new features have examples
 - [ ] Update doc/research/TODO.md to reflect current state
+- [ ] `scripts/bench-engines.sh ~/csvs/shuffled.parquet` on an idle machine — the engine table of `doc/performance.md` §1a (typed Go, DuckDB, generated Rust; best of three) — and update the table when a row moved. A measurement, not a gate: the 2026-10-27 table found two pathologies and a planner gap in an afternoon (DFC158)
 
 ## Project History
 See `claude/project-history.md` for version history and migration details.

@@ -2,7 +2,7 @@
 
 Reference: DFC157
 Created: 2026-10-27
-Last modified: 2026-10-27
+Last modified: 2026-10-28
 Revisits: [DFC132](./dfc132_rust_target_datafusion.md) §4
 
 [Back to Index](./README.md)
@@ -214,7 +214,7 @@ dialect. All write their output to `/dev/null`; wall is the whole process.
 | `group-by a_kind relationship z_kind -count -cube` (the README cube) | **0.19 s** | 0.32 s | 0.36 s |
 | `group-by relationship -count`, Parquet | **0.03 s** | 0.15 s | 0.03 s |
 | `group-by relationship -count`, the same rows as 1.2 GB CSV | **0.24 s** | 1.63 s | 0.71 s |
-| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | 0.70 s | 1.51 s | **0.41 s** |
+| `where -if relationship eq 7 \| include a_kind a_name z_name \| to csv` (2.7 M rows out) | **0.70 s** | 1.51 s | 0.41 s — WRONG, see below; 2.9 s |
 | 10 M rows, `where age gt 30`, three chained `join -using`, `count` | **0.26 s** | 0.89 s | 0.29 s |
 | `cast -type relationship decimal:2 \| group-by a_kind -sum` | **0.04 s** | 1.29 s | 0.06 s |
 | `window -partition a_kind -order a_name -sum relationship` then `group-by a_kind -max` | **5.7 s** | 35 s (fixed; was > 1800 s) | 14.0 s |
@@ -235,9 +235,14 @@ What the table says:
    including on CSV, where DataFusion's reader is 7× faster than
    `ReadCSVParallel`. The pitch for `generate rust` can be speed as well
    as ecosystem.
-2. **The one shape DataFusion does not win is the streaming write**, where
-   DuckDB is faster and typed Go is within 2×: a filter and a projection
-   with 2.7 M rows of output is bounded by formatting, not by the plan.
+2. ~~The one shape DataFusion does not win is the streaming write, where
+   DuckDB is faster~~ — **corrected 2026-10-28 (DFC158 §3.6):** the
+   0.41 s was DuckDB's default `duckbox` display, which prints 40 of the
+   2.7 M rows and a summary line; writing them as CSV (`duckdb -csv`)
+   takes 2.9 s. DataFusion wins this row too (0.70 s), typed Go is
+   second (1.51 s), and the write is bounded by formatting in every
+   engine. The repeatable driver (`scripts/bench-engines.sh`) runs DuckDB
+   in CSV mode, so the mistake cannot recur.
 3. **The typed Go window is pathological.** One core at 100 %, 3.8 GB,
    still running at the 30-minute cap (an earlier run was killed at twelve) on a running sum over 26 partitions of
    about 560 k rows; DataFusion's 5.7 s and DuckDB's 14 s are themselves
