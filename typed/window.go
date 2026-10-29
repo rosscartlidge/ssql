@@ -55,6 +55,25 @@ const (
 	WMin
 	WMax
 	WFold
+	WAgg // a registry statistic over the frame: median, percentile, stddev, variance, mode (Agg says which)
+)
+
+// WindowAgg is the statistic a WAgg spec computes over its frame, the
+// typed twin of the record path's registry aggregates over a window
+// (ssql.WAggregate): the same arithmetic — ssql.QuantileCont over the
+// frame's sorted values, Welford's sample variance, the most frequent
+// value with ties to the first seen — so the lanes agree to the digit.
+// The frame is scanned per row (a bounded frame is O(k) a row; the
+// running frame O(n²), as on the record path, since none of these has
+// a Remove); the whole-partition frame is computed once.
+type WindowAgg int
+
+const (
+	WAggNone     WindowAgg = iota
+	WAggQuantile           // the continuous P-quantile of Num over the frame (median: P = 0.5)
+	WAggVariance           // the sample variance of Num; absent below two rows (SQL's NULL)
+	WAggStdDev             // its square root
+	WAggMode               // the most frequent Val; ties to the value seen first in the frame
 )
 
 // WindowSpec is one function over a clause's frame. Num reads a numeric
@@ -71,8 +90,10 @@ const (
 // returns it, so a fold allocates once per frame.
 type WindowSpec[T any] struct {
 	Kind    WindowKind
-	N       int // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
-	Default any // LAG/LEAD default (nil = absent)
+	N       int       // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
+	Default any       // LAG/LEAD default (nil = absent)
+	Agg     WindowAgg // WAgg: the statistic
+	P       float64   // WAggQuantile: the quantile (0.5 = median)
 	Num     func(T) (float64, bool)
 	Int     func(T) (int64, bool)        // set for an int64 field: the sum is exact, an Int128 (DFC155 C); avg divides the exact sum
 	Wide    func(T) (ssql.Int128, bool)  // set for an int128 field, the same way
@@ -838,6 +859,8 @@ func windowValue[T any](spec WindowSpec[T], c WindowClause[T], all []T, idx []in
 			state = spec.Step(state, all[idx[i]])
 		}
 		return spec.Final(state)
+	case WAgg:
+		return frameAggregate(spec, all, idx, fs(), fe())
 	case WCountField:
 		var cnt int64
 		for i := fs(); i <= fe(); i++ {

@@ -767,6 +767,34 @@ func TestTypedWindowFeedsParallelGroupBy(t *testing.T) {
 	}
 }
 
+// TestTypedWindowFrameStatistics: median, percentile, stddev, variance
+// and mode over a window frame have a typed form (typed.WAgg), so a
+// pipeline like Ross's `window -presorted -preceding 5 -following 5
+// -median n running` runs typed instead of falling to the record path —
+// where `-presorted` streams and the streaming window refuses a frame
+// with rows after the current one (2026-10-29). The typed window ignores
+// -presorted and materialises either way.
+func TestTypedWindowFrameStatistics(t *testing.T) {
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from range 20 | "+bin+" window -presorted -preceding 2 -following 2 -median n med -stddev n sd -mode n mo -order n -count c | "+bin+" where -if c eq 5 | "+bin+" limit 2 | "+bin+" to csv")
+	for _, want := range []string{"typed.WAgg", "typed.WAggQuantile", "typed.WAggStdDev", "typed.WAggMode"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("the frame statistics took the record path: generated source lacks %q\n%s", want, src)
+		}
+	}
+	if strings.Contains(src, "ssql.WAggregate(") {
+		t.Errorf("window took the record path\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	// Rows 3 and 4 are the first with a full five-row frame: the median is
+	// the row, the sample stddev of five consecutive integers is sqrt(2.5),
+	// the mode of five distinct values is the first seen (the lowest).
+	if want := "n,c,sd,med,mo\n3,5,1.5811388300841898,3,1\n4,5,1.5811388300841898,4,2\n"; !strings.Contains(out, want) {
+		t.Errorf("expected %q in output\n%s", want, out)
+	}
+}
+
 // TestGenerateRustBuildSurvivesOptimiser: `generate rust -build PATH` on
 // a pipeline the optimiser rewrites (a pruned Parquet read) re-executes
 // through bash, and the inner command must carry -build. Until 2026-10-28

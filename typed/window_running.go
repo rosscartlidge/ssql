@@ -25,7 +25,7 @@ func runningSpecValues[T any](spec WindowSpec[T], c WindowClause[T], all []T, id
 	switch {
 	case isWholeFrame(c.Frame):
 		switch spec.Kind {
-		case WSum, WAvg, WCount, WCountField, WMin, WMax, WFold, WFirst, WLast, WNth:
+		case WSum, WAvg, WCount, WCountField, WMin, WMax, WFold, WFirst, WLast, WNth, WAgg:
 			v := windowValue(spec, c, all, idx, 0, partLen)
 			for pos := range idx {
 				col.set(at(pos), v)

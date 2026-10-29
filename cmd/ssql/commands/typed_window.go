@@ -156,8 +156,8 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 		b.WriteString("\t\t\tSpecs: []typed.WindowSpec[" + in.TypeName + "]{\n")
 		for _, spec := range cfg.Specs {
 			d := ssql.DescribeWindowFunc(spec.Function)
-			if d.Kind == "aggregate" {
-				return false, fmt.Sprintf("window: %s over a frame has no typed form yet (registry aggregates run on the record path)", d.Agg.Name), nil
+			if d.Kind == "aggregate" && !typedWindowAggs[d.Agg.Name] {
+				return false, fmt.Sprintf("window: %s over a frame has no typed form yet (it runs on the record path)", d.Agg.Name), nil
 			}
 			if inNames[strings.ToLower(spec.ResultName)] {
 				return false, fmt.Sprintf("window: result %q overwrites an input field; typed output keeps both, so this stays on the record path", spec.ResultName), nil
@@ -299,6 +299,10 @@ func windowResultAssign(i int, goType string, ptr bool) string {
 	return fmt.Sprintf("if v, ok := %s; ok { o.GONAME = v }", read)
 }
 
+// typedWindowAggs are the registry aggregates over a frame that have a
+// typed form (typed.WAgg); the rest take the record path.
+var typedWindowAggs = map[string]bool{"median": true, "percentile": true, "stddev": true, "variance": true, "mode": true}
+
 // typedWindowSpec renders one typed.WindowSpec literal and decides the
 // result's Go type and the assignment from res[i]. Results that can be
 // absent (lag/lead without a default, nth_value) are pointer-typed —
@@ -378,6 +382,32 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 			return d.Kind, f.GoType, readPtr(base), fmt.Sprintf("{Kind: typed.%s, %s}", k, val), ""
 		}
 		return d.Kind, f.GoType, read(f.GoType), fmt.Sprintf("{Kind: typed.%s, %s}", k, val), ""
+	case "aggregate":
+		// The registry statistics over the frame (DFC130 unit 2): the
+		// typed WAgg kinds compute the same arithmetic as the record
+		// path's aggregates. Absent below two rows (variance, stddev) or
+		// with no present value, so the result is nullable, as the record
+		// lane's missing field.
+		switch d.Agg.Name {
+		case "median", "percentile":
+			if num == "" {
+				return "", "", "", "", fmt.Sprintf("window: %s over non-numeric field %q stays on the record path", d.Agg.Name, f.Name)
+			}
+			p := 0.5
+			if d.Agg.Name == "percentile" {
+				p, _ = percentileP(d.Agg.Extra)
+			}
+			return d.Agg.Name, "*float64", readPtr("float64"), fmt.Sprintf("{Kind: typed.WAgg, Agg: typed.WAggQuantile, P: %v, %s}", p, num), ""
+		case "stddev", "variance":
+			if num == "" {
+				return "", "", "", "", fmt.Sprintf("window: %s over non-numeric field %q stays on the record path", d.Agg.Name, f.Name)
+			}
+			k := map[string]string{"stddev": "WAggStdDev", "variance": "WAggVariance"}[d.Agg.Name]
+			return d.Agg.Name, "*float64", readPtr("float64"), fmt.Sprintf("{Kind: typed.WAgg, Agg: typed.%s, %s}", k, num), ""
+		case "mode":
+			return d.Agg.Name, "*" + base, readPtr(base), fmt.Sprintf("{Kind: typed.WAgg, Agg: typed.WAggMode, %s}", val), ""
+		}
+		return "", "", "", "", fmt.Sprintf("window: %s over a frame has no typed form yet (it runs on the record path)", d.Agg.Name)
 	case "lag", "lead", "nth_value":
 		k := map[string]string{"lag": "WLag", "lead": "WLead", "nth_value": "WNth"}[d.Kind]
 		if d.Default != nil {

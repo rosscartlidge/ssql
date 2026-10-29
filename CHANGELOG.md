@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Median, percentile, stddev, variance and mode over a window frame run typed.** `typed.WAgg` (`typed/window_agg.go`) is the typed form of the registry statistics over a frame, with the record path's arithmetic (`ssql.QuantileCont`, Welford, ties to the first seen); until now they fell to the record path, where `-presorted` streams and the streaming window refuses a frame with rows after the current one, so `window -presorted -preceding 5 -following 5 -median n m` failed with "streaming window does not yet support Following > 0" in typed mode. Count-distinct, string-agg, first/last/any, collect and arg-max/min still take the record path. `TestWindowFrameAggregates`, `TestTypedWindowFrameStatistics`, the `window_rolling_stats_bounded` equivalence case.
+
 ### Changed
 
 - **The typed window's results are typed columns in output order.** One column per window function (`[]int64`, `[]float64`, `[]ssql.Int128` or `[]any` by the function), written at the row's output position by the partition that decides the order — no boxed value per row, no scatter by input row, no gather of the results. The `build` function of `typed.Window` and `typed.WindowParallel` takes a `typed.WindowRow` (`Int`, `Float`, `Wide`, `Value`, `Values`) instead of a `[]any`; generated programs use the reader matching each result's type. The benchmark window 4.07 → 3.24 s ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §3.12).

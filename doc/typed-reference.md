@@ -680,7 +680,9 @@ type WindowSpec[T any] struct {
     Kind    WindowKind
     N       int                      // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
     Default any                      // LAG/LEAD default (nil = absent)
-    Num     func(T) (float64, bool)  // the numeric field for sum/avg
+    Agg     WindowAgg                // WAgg: the statistic over the frame
+    P       float64                  // WAggQuantile: the quantile (0.5 = median)
+    Num     func(T) (float64, bool)  // the numeric field for sum/avg and the statistics
     Val     func(T) (any, bool)      // any field for lag, lead, first, last, nth, count, min, max
     Init    func() any               // WFold (window -stream-expr): a fresh state
     Step    func(state any, r T) any // folds one row into the state and returns it
@@ -710,6 +712,16 @@ const (
 	WMin
 	WMax
 	WFold
+	WAgg        // a statistic over the frame, by Agg
+)
+
+type WindowAgg int
+const (
+	WAggNone WindowAgg = iota
+	WAggQuantile  // the continuous P-quantile of Num over the frame's values (median: P = 0.5)
+	WAggVariance  // the sample variance of Num; absent below two rows (SQL's NULL)
+	WAggStdDev    // its square root
+	WAggMode      // the most frequent Val; ties to the value seen first in the frame
 )
 ```
 
@@ -717,7 +729,16 @@ The typed form of the `window` command: one clause per `PARTITION BY /
 ORDER BY / frame`, any number of functions per clause, one output row per
 input row. `build` receives the results in clause order then spec order
 and assembles the output struct, which a generated program synthesises
-from the input fields plus one per function; the results are one typed
+from the input fields plus one per function. `WAgg` is the typed form of
+the registry statistics over a frame (`-median`, `-percentile`,
+`-stddev`, `-variance`, `-mode`): the same arithmetic as the record
+path's aggregates (`ssql.QuantileCont` over the frame's sorted values,
+Welford's sample variance, the mode with ties to the first seen),
+scanned per row — O(k) a row over a bounded frame, O(n²) over the
+running frame, as on the record path, since none of them has a Remove
+— and once over the whole-partition frame; the result is nullable
+(absent below two rows for the sample statistics, or with no present
+value). The results are one typed
 column per function in the window's output order, and `build` reads
 them through `WindowRow` — `Int`, `Float` and `Wide` without boxing (the
 generated program uses the reader matching the result's Go type; each

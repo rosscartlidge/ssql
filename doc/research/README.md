@@ -137,7 +137,7 @@ Internal design docs, proposals, retrospectives, and research notes. These captu
 | DFC127 | 2026-09-12 | 2026-09-14 | [A Terminal UI for ssql? (Bubble Tea)](./dfc127_terminal_ui_bubbletea.md) |
 | DFC128 | 2026-09-14 | 2026-09-20 | [JSON Interchange with DuckDB and Postgres, and the Time Type Question](./dfc128_json_interchange_and_time_type.md) |
 | DFC129 | 2026-09-15 | 2026-09-15 | [Group-by Aggregates: What Is Missing, and Flags versus Expressions](./dfc129_groupby_aggregates.md) |
-| DFC130 | 2026-09-15 | 2026-09-16 | [Window Analytics: Gaps Against the SQL Set](./dfc130_window_analytics_gaps.md) |
+| DFC130 | 2026-09-15 | 2026-10-29 | [Window Analytics: Gaps Against the SQL Set](./dfc130_window_analytics_gaps.md) |
 | DFC131 | 2026-09-16 | 2026-09-16 | [A Read-Only Codelab Workspace on the Tailnet, as a systemd Service](./dfc131_serve_systemd_tailnet_codelab.md) |
 | DFC132 | 2026-09-17 | 2026-10-27 | [Generating Rust: Decision, and What the DataFusion Check Found](./dfc132_rust_target_datafusion.md) |
 | DFC133 | 2026-09-20 | 2026-09-20 | [Finding the Bugs We Do Not Know About](./dfc133_finding_unknown_bugs.md) |
