@@ -4,11 +4,11 @@ import "testing"
 
 func TestFillGoldenHandComputed(t *testing.T) {
 	in := recsOf(
-		[]kv{{"id", int64(1)}, {"region", ""}, {"score", int64(5)}},   // leading gap → default
+		[]kv{{"id", int64(1)}, {"region", ""}, {"score", int64(5)}}, // leading gap → default
 		[]kv{{"id", int64(2)}, {"region", "west"}, {"score", int64(7)}},
-		[]kv{{"id", int64(3)}, {"region", ""}},                        // region carried, score absent → default
+		[]kv{{"id", int64(3)}, {"region", ""}}, // region carried, score absent → default
 		[]kv{{"id", int64(4)}, {"region", "east"}, {"score", int64(9)}},
-		[]kv{{"id", int64(5)}},                                        // both carried/defaulted
+		[]kv{{"id", int64(5)}}, // both carried/defaulted
 	)
 	cfg := FillConfig{
 		Down:     []string{"region"},

@@ -1015,7 +1015,7 @@ func TestExprAggTypedGeneration(t *testing.T) {
 			"ea0_t0 ssql.Int128", // an integer sum accumulates in an Int128 (DFC155 C), not a blanket float64
 			"ea0_cnt int64",
 			"a.ea0_t0 = a.ea0_t0.Add(ssql.Int128From(exprfn.Mul(r.Salary, 2)))", // the element checked (DFC155 B), the sum exact (C)
-			"a.ea0_t0 = a.ea0_t0.Add(o.ea0_t0)", // the Merge — sums add across shards
+			"a.ea0_t0 = a.ea0_t0.Add(o.ea0_t0)",                                 // the Merge — sums add across shards
 			"a.ea0_cnt += o.ea0_cnt",
 			"V: (a.ea0_t0.Float64() / float64(a.ea0_cnt))",
 			"typed.GroupByParallel", // mergeable → parallel form KEPT
@@ -2250,12 +2250,12 @@ func TestBareLimitSkipsGeneration(t *testing.T) {
 
 	for _, mode := range []string{"record", "typed"} {
 		for _, gen := range []struct{ format, reject string }{
-			{"go", "Limit"},   // no ssql.Limit / typed.Limit / flagLimit
-			{"go", "Offset"},  // no ssql.Offset / typed.Skip flagOffset
-			{"go", "Sample"},  // no ssql.SampleN / typed.SampleN
-			{"sql", "LIMIT"},  // no LIMIT clause
-			{"sql", "OFFSET"}, // no OFFSET clause
-			{"sql", "SAMPLE"}, // no USING SAMPLE clause
+			{"go", "Limit"},        // no ssql.Limit / typed.Limit / flagLimit
+			{"go", "Offset"},       // no ssql.Offset / typed.Skip flagOffset
+			{"go", "Sample"},       // no ssql.SampleN / typed.SampleN
+			{"sql", "LIMIT"},       // no LIMIT clause
+			{"sql", "OFFSET"},      // no OFFSET clause
+			{"sql", "SAMPLE"},      // no USING SAMPLE clause
 			{"ssql", "ssql limit"}, // stage gone from regenerated pipeline
 			{"ssql", "ssql offset"},
 			{"ssql", "ssql sample"},
@@ -2345,9 +2345,9 @@ func TestFromRecords(t *testing.T) {
 		args, want string
 	}{
 		{"from csv d.csv -records", "3"},
-		{"from d.csv -records", "3"},                       // bare, by extension
-		{"from csv d.csv e.csv -records", "4"},             // multi-file sum
-		{"from jsonl d.jsonl -records", "2"},               // _schema header excluded
+		{"from d.csv -records", "3"},           // bare, by extension
+		{"from csv d.csv e.csv -records", "4"}, // multi-file sum
+		{"from jsonl d.jsonl -records", "2"},   // _schema header excluded
 		{"from csv d.csv -sample 2 -sample-seed 1 -records", "2"},
 		{"from csv d.csv -sample 99 -sample-seed 1 -records", "3"}, // sample > rows
 	}

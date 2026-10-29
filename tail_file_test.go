@@ -2,8 +2,8 @@ package ssql
 
 import (
 	"os"
-	"strconv"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )

@@ -53,12 +53,12 @@ type benchJoined struct {
 }
 
 var (
-	benchSetupOnce sync.Once
-	benchDir       string
-	benchDataFile  string
+	benchSetupOnce  sync.Once
+	benchDir        string
+	benchDataFile   string
 	benchLookupFile string
 
-	preloadOnce  sync.Once
+	preloadOnce           sync.Once
 	preloadedRecordRows   []ssql.Record
 	preloadedRecordLookup []ssql.Record
 	preloadedTypedRows    []benchData
@@ -191,7 +191,7 @@ func BenchmarkTypedEnd2End(b *testing.B) {
 		lookup := ReadCSV[benchLookup](benchLookupFile)
 		filtered := Where(func(r benchData) bool { return r.Age > 30 })(data)
 		joined := HashJoin(filtered, lookup,
-			func(l benchData) string   { return l.DeptID },
+			func(l benchData) string { return l.DeptID },
 			func(r benchLookup) string { return r.DeptID },
 			func(l benchData, r benchLookup) benchJoined {
 				return benchJoined{
@@ -246,7 +246,7 @@ func BenchmarkTypedCompute(b *testing.B) {
 		lookup := slices.Values(preloadedTypedLookup)
 		filtered := Where(func(r benchData) bool { return r.Age > 30 })(data)
 		joined := HashJoin(filtered, lookup,
-			func(l benchData) string   { return l.DeptID },
+			func(l benchData) string { return l.DeptID },
 			func(r benchLookup) string { return r.DeptID },
 			func(l benchData, r benchLookup) benchJoined {
 				return benchJoined{

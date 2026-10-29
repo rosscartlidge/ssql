@@ -38,13 +38,13 @@ func TestMixedKindComparisonsAreLoud(t *testing.T) {
 	}
 
 	loud := map[string]string{
-		"where -if age gt abc":             `"abc" is not`,
-		"where +if age gt abc":             `"abc" is not`,
-		"where -if age gt 3O":              `"3O" is not`,
-		"where -if ok eq maybe":            `"maybe" is not`,
-		"where -if age contains 3":         "needs a text field",
-		"update -if age lt x -set name z":  `"x" is not`,
-		"where -if-field age gt name":      "cannot be compared",
+		"where -if age gt abc":              `"abc" is not`,
+		"where +if age gt abc":              `"abc" is not`,
+		"where -if age gt 3O":               `"3O" is not`,
+		"where -if ok eq maybe":             `"maybe" is not`,
+		"where -if age contains 3":          "needs a text field",
+		"update -if age lt x -set name z":   `"x" is not`,
+		"where -if-field age gt name":       "cannot be compared",
 		"where -if-field age contains name": "needs two text fields",
 	}
 	for stage, want := range loud {
@@ -57,9 +57,9 @@ func TestMixedKindComparisonsAreLoud(t *testing.T) {
 	}
 
 	valid := map[string]string{
-		"where -if age gt 29.5":     "id,age,name,code,ok\n1,30,bob,007,true\n3,41,cal,x9,true\n",
-		"where -if code gt 10":      "id,age,name,code,ok\n2,5,amy,12,false\n3,41,cal,x9,true\n", // text: "12" > "10", "x9" > "10", "007" < "10"
-		"where -if name gt 5":       "id,age,name,code,ok\n1,30,bob,007,true\n2,5,amy,12,false\n3,41,cal,x9,true\n",
+		"where -if age gt 29.5":       "id,age,name,code,ok\n1,30,bob,007,true\n3,41,cal,x9,true\n",
+		"where -if code gt 10":        "id,age,name,code,ok\n2,5,amy,12,false\n3,41,cal,x9,true\n", // text: "12" > "10", "x9" > "10", "007" < "10"
+		"where -if name gt 5":         "id,age,name,code,ok\n1,30,bob,007,true\n2,5,amy,12,false\n3,41,cal,x9,true\n",
 		"where -if code startswith 0": "id,age,name,code,ok\n1,30,bob,007,true\n",
 	}
 	for stage, want := range valid {

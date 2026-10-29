@@ -1,8 +1,8 @@
 package typed
 
 import (
-	"strings"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -243,9 +243,9 @@ func TestFullJoin(t *testing.T) {
 	left := []T{{K: "a", V: "L1"}, {K: "b", V: "L2"}}
 	right := []T{{K: "a", V: "R1"}, {K: "c", V: "R3"}}
 	type O struct {
-		L, R       string
-		LFound     bool
-		RFound     bool
+		L, R   string
+		LFound bool
+		RFound bool
 	}
 	got := slices.Collect(FullJoin(slices.Values(left), slices.Values(right),
 		func(l T) string { return l.K },
@@ -347,8 +347,8 @@ func TestSortByEarlyTermination(t *testing.T) {
 
 func TestSortByStable(t *testing.T) {
 	type row struct {
-		Key  int
-		Tag  string
+		Key int
+		Tag string
 	}
 	in := []row{{1, "a"}, {2, "b"}, {1, "c"}, {2, "d"}}
 	got := slices.Collect(SortByStable(func(r row) int { return r.Key })(slices.Values(in)))

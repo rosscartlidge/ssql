@@ -7,7 +7,8 @@
 // $TMPDIR/ssql-typed-scale (run BenchmarkScale* once first).
 //
 // Run:
-//   go test -bench=DuckDB -benchtime=1x -run=^$ -timeout=30m ./typed/...
+//
+//	go test -bench=DuckDB -benchtime=1x -run=^$ -timeout=30m ./typed/...
 package typed
 
 import (

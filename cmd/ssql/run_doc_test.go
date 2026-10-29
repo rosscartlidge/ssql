@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"

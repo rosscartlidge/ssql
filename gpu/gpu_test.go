@@ -747,11 +747,11 @@ func BenchmarkBatchedFFTMagnitudeGPU(b *testing.B) {
 		windowSize int
 		numFrames  int
 	}{
-		{256, 172},    // ~1s @ 44.1kHz, hop=256
-		{1024, 172},   // ~1s @ 44.1kHz, hop=256
-		{1024, 1718},  // ~10s @ 44.1kHz, hop=256
-		{4096, 172},   // ~1s @ 44.1kHz, hop=256
-		{4096, 1718},  // ~10s @ 44.1kHz, hop=256
+		{256, 172},   // ~1s @ 44.1kHz, hop=256
+		{1024, 172},  // ~1s @ 44.1kHz, hop=256
+		{1024, 1718}, // ~10s @ 44.1kHz, hop=256
+		{4096, 172},  // ~1s @ 44.1kHz, hop=256
+		{4096, 1718}, // ~10s @ 44.1kHz, hop=256
 	}
 
 	for _, c := range cases {

@@ -3,10 +3,10 @@
 package typed
 
 import (
-	"reflect"
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 	"time"

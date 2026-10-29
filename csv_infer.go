@@ -1,7 +1,6 @@
 package ssql
 
 import (
-	"time"
 	"bufio"
 	"encoding/csv"
 	"encoding/json"
@@ -11,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DefaultInferRows is how many leading data rows the CSV reader examines

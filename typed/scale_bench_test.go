@@ -303,7 +303,7 @@ func BenchmarkScaleTyped3Join(b *testing.B) {
 			})
 
 		j2 := HashJoin(j1, regs,
-			func(l scaleJoin1) string  { return l.RegionID },
+			func(l scaleJoin1) string { return l.RegionID },
 			func(r scaleRegion) string { return r.RegionID },
 			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
 				return scaleJoin2{
@@ -315,7 +315,7 @@ func BenchmarkScaleTyped3Join(b *testing.B) {
 
 		j3 := HashJoin(j2, cities,
 			func(l scaleJoin2) string { return l.CityID },
-			func(r scaleCity) string  { return r.CityID },
+			func(r scaleCity) string { return r.CityID },
 			func(l scaleJoin2, r scaleCity) scaleJoin3 {
 				return scaleJoin3{
 					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,

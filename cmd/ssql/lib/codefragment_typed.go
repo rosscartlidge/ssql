@@ -1,10 +1,10 @@
 package lib
 
 import (
-	"slices"
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/rosscartlidge/ssql/v4/cmd/ssql/version"

@@ -51,7 +51,7 @@ func BenchmarkScaleTypedParallel3Join(b *testing.B) {
 			})
 
 		j2 := HashJoinParallel(j1, regs,
-			func(l scaleJoin1) string  { return l.RegionID },
+			func(l scaleJoin1) string { return l.RegionID },
 			func(r scaleRegion) string { return r.RegionID },
 			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
 				return scaleJoin2{
@@ -63,7 +63,7 @@ func BenchmarkScaleTypedParallel3Join(b *testing.B) {
 
 		j3 := HashJoinParallel(j2, cities,
 			func(l scaleJoin2) string { return l.CityID },
-			func(r scaleCity) string  { return r.CityID },
+			func(r scaleCity) string { return r.CityID },
 			func(l scaleJoin2, r scaleCity) scaleJoin3 {
 				return scaleJoin3{
 					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
@@ -118,7 +118,7 @@ func BenchmarkScaleTypedBatchedParallel3Join(b *testing.B) {
 			})
 
 		j2 := HashJoinParallel(j1, regs,
-			func(l scaleJoin1) string  { return l.RegionID },
+			func(l scaleJoin1) string { return l.RegionID },
 			func(r scaleRegion) string { return r.RegionID },
 			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
 				return scaleJoin2{
@@ -130,7 +130,7 @@ func BenchmarkScaleTypedBatchedParallel3Join(b *testing.B) {
 
 		j3 := HashJoinParallel(j2, cities,
 			func(l scaleJoin2) string { return l.CityID },
-			func(r scaleCity) string  { return r.CityID },
+			func(r scaleCity) string { return r.CityID },
 			func(l scaleJoin2, r scaleCity) scaleJoin3 {
 				return scaleJoin3{
 					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
@@ -194,7 +194,7 @@ func BenchmarkScaleTypedBatchedInMemory3Join(b *testing.B) {
 			})
 
 		j2 := HashJoinParallel(j1, regs,
-			func(l scaleJoin1) string  { return l.RegionID },
+			func(l scaleJoin1) string { return l.RegionID },
 			func(r scaleRegion) string { return r.RegionID },
 			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
 				return scaleJoin2{
@@ -206,7 +206,7 @@ func BenchmarkScaleTypedBatchedInMemory3Join(b *testing.B) {
 
 		j3 := HashJoinParallel(j2, cities,
 			func(l scaleJoin2) string { return l.CityID },
-			func(r scaleCity) string  { return r.CityID },
+			func(r scaleCity) string { return r.CityID },
 			func(l scaleJoin2, r scaleCity) scaleJoin3 {
 				return scaleJoin3{
 					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
@@ -232,7 +232,6 @@ func BenchmarkScaleTypedBatchedInMemory3Join(b *testing.B) {
 //
 // Compare this against BenchmarkScaleTypedCompute (single-threaded
 // preloaded) for an apples-to-apples speedup figure.
-
 
 // BenchmarkScaleTypedPerRowInMemory3Join is the per-row channel
 // distributor on the same in-memory input — the reference negative result
@@ -271,7 +270,7 @@ func BenchmarkScaleTypedPerRowInMemory3Join(b *testing.B) {
 			})
 
 		j2 := HashJoinParallel(j1, regs,
-			func(l scaleJoin1) string  { return l.RegionID },
+			func(l scaleJoin1) string { return l.RegionID },
 			func(r scaleRegion) string { return r.RegionID },
 			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
 				return scaleJoin2{
@@ -283,7 +282,7 @@ func BenchmarkScaleTypedPerRowInMemory3Join(b *testing.B) {
 
 		j3 := HashJoinParallel(j2, cities,
 			func(l scaleJoin2) string { return l.CityID },
-			func(r scaleCity) string  { return r.CityID },
+			func(r scaleCity) string { return r.CityID },
 			func(l scaleJoin2, r scaleCity) scaleJoin3 {
 				return scaleJoin3{
 					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
@@ -309,7 +308,6 @@ func BenchmarkScaleTypedPerRowInMemory3Join(b *testing.B) {
 //
 // Compare this against BenchmarkScaleTypedCompute (single-threaded
 // preloaded) for an apples-to-apples speedup figure.
-
 
 // BenchmarkScaleTypedSliceParallel3Join uses ParallelFromSlice (no
 // channels on the input side) and SerialCount (no channels on the
@@ -360,7 +358,7 @@ func BenchmarkScaleTypedSliceParallel3Join(b *testing.B) {
 			})
 
 		j2 := HashJoinParallel(j1, slicesValues(regs),
-			func(l scaleJoin1) string  { return l.RegionID },
+			func(l scaleJoin1) string { return l.RegionID },
 			func(r scaleRegion) string { return r.RegionID },
 			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
 				return scaleJoin2{
@@ -372,7 +370,7 @@ func BenchmarkScaleTypedSliceParallel3Join(b *testing.B) {
 
 		j3 := HashJoinParallel(j2, slicesValues(cities),
 			func(l scaleJoin2) string { return l.CityID },
-			func(r scaleCity) string  { return r.CityID },
+			func(r scaleCity) string { return r.CityID },
 			func(l scaleJoin2, r scaleCity) scaleJoin3 {
 				return scaleJoin3{
 					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
@@ -443,7 +441,7 @@ func BenchmarkScaleTypedSerialCompute3Join(b *testing.B) {
 			})
 
 		j2 := HashJoin(j1, slicesValues(regs),
-			func(l scaleJoin1) string  { return l.RegionID },
+			func(l scaleJoin1) string { return l.RegionID },
 			func(r scaleRegion) string { return r.RegionID },
 			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
 				return scaleJoin2{
@@ -455,7 +453,7 @@ func BenchmarkScaleTypedSerialCompute3Join(b *testing.B) {
 
 		j3 := HashJoin(j2, slicesValues(cities),
 			func(l scaleJoin2) string { return l.CityID },
-			func(r scaleCity) string  { return r.CityID },
+			func(r scaleCity) string { return r.CityID },
 			func(l scaleJoin2, r scaleCity) scaleJoin3 {
 				return scaleJoin3{
 					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,
@@ -511,7 +509,7 @@ func BenchmarkScaleTypedReadCSVParallel3Join(b *testing.B) {
 			})
 
 		j2 := HashJoinParallel(j1, regs,
-			func(l scaleJoin1) string  { return l.RegionID },
+			func(l scaleJoin1) string { return l.RegionID },
 			func(r scaleRegion) string { return r.RegionID },
 			func(l scaleJoin1, r scaleRegion) scaleJoin2 {
 				return scaleJoin2{
@@ -523,7 +521,7 @@ func BenchmarkScaleTypedReadCSVParallel3Join(b *testing.B) {
 
 		j3 := HashJoinParallel(j2, cities,
 			func(l scaleJoin2) string { return l.CityID },
-			func(r scaleCity) string  { return r.CityID },
+			func(r scaleCity) string { return r.CityID },
 			func(l scaleJoin2, r scaleCity) scaleJoin3 {
 				return scaleJoin3{
 					ID: l.ID, Name: l.Name, DeptID: l.DeptID, Age: l.Age, Salary: l.Salary,

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/rosscartlidge/ssql/v4"
 	"fmt"
+	"github.com/rosscartlidge/ssql/v4"
 	"os"
 	"path/filepath"
 

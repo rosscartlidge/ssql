@@ -68,7 +68,7 @@ func TestSampleCSVSchema(t *testing.T) {
 		"Age":      "int64",
 		"Salary":   "float64",
 		"Active":   "bool",
-		"Joined":   "string", // RFC 3339 is not inferred as a time (exec and SQL keep a string; -type declares one)
+		"Joined":   "string",  // RFC 3339 is not inferred as a time (exec and SQL keep a string; -type declares one)
 		"Nickname": "*string", // entirely empty in samples
 	}
 	for _, f := range schema.Fields {

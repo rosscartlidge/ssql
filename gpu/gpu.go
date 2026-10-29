@@ -40,7 +40,7 @@ import (
 )
 
 var (
-	gpuInitOnce sync.Once
+	gpuInitOnce  sync.Once
 	gpuAvailable bool
 )
 

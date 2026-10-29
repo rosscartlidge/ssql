@@ -9,10 +9,10 @@ import (
 
 func TestReplaceRegex(t *testing.T) {
 	tests := []struct {
-		name        string
-		expression  string
-		record      ssql.Record
-		expected    string
+		name       string
+		expression string
+		record     ssql.Record
+		expected   string
 	}{
 		{
 			name:       "simple replacement",
@@ -159,13 +159,13 @@ func TestCompileExprOpensNestedValues(t *testing.T) {
 		JSONString("scores", ssql.JSONString(`[10,20,30]`)).
 		Freeze()
 	cases := map[string]any{
-		`len(tags)`:               2,
-		`tags[0]`:                 "go",
-		`addr.city`:               "NYC",
-		`"go" in tags`:            true,
-		`sort(scores)[-1]`:        int64(30),
-		`len(getOr("tags", []))`:  2,
-		`len(name)`:               5,
+		`len(tags)`:              2,
+		`tags[0]`:                "go",
+		`addr.city`:              "NYC",
+		`"go" in tags`:           true,
+		`sort(scores)[-1]`:       int64(30),
+		`len(getOr("tags", []))`: 2,
+		`len(name)`:              5,
 	}
 	for expr, want := range cases {
 		eval, err := CompileExpr(expr)
