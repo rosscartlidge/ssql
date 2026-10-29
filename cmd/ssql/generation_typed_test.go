@@ -781,8 +781,8 @@ func TestTypedWindowFeedsParallelGroupBy(t *testing.T) {
 func TestTypedWindowFrameStatistics(t *testing.T) {
 	bin := buildSSQLForTypedTest(t)
 	src := runTypedPipeline(t, bin,
-		bin+" from range 20 | "+bin+" window -presorted -preceding 2 -following 2 -median n med -stddev n sd -mode n mo -count-distinct n cd -string-agg n , sa -order n -count c | "+bin+" where -if c eq 5 | "+bin+" limit 2 | "+bin+" to csv")
-	for _, want := range []string{"typed.MedianOf(", "typed.StdDevOf(", "typed.ModeOf(", "typed.CountDistinctOf(", `typed.StringAggOf(func(r RangeRow) int64 { return r.N }, ",")`} {
+		bin+" from range 20 | "+bin+" window -presorted -preceding 2 -following 2 -median n med -stddev n sd -mode n mo -count-distinct n cd -string-agg n , sa -arg-min n n lo -order n -count c | "+bin+" where -if c eq 5 | "+bin+" limit 2 | "+bin+" to csv")
+	for _, want := range []string{"typed.MedianOf(", "typed.StdDevOf(", "typed.ModeOf(", "typed.CountDistinctOf(", `typed.StringAggOf(func(r RangeRow) int64 { return r.N }, ",")`, "typed.ArgMinOf(func(r RangeRow) int64 { return r.N }, func(r RangeRow) int64 { return r.N })"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("the frame statistics took the record path: generated source lacks %q\n%s", want, src)
 		}
@@ -794,7 +794,7 @@ func TestTypedWindowFrameStatistics(t *testing.T) {
 	// Rows 3 and 4 are the first with a full five-row frame: the median is
 	// the row, the sample stddev of five consecutive integers is sqrt(2.5),
 	// the mode of five distinct values is the first seen (the lowest).
-	if want := "n,c,sd,med,cd,sa,mo\n3,5,1.5811388300841898,3,5,\"1,2,3,4,5\",1\n4,5,1.5811388300841898,4,5,\"2,3,4,5,6\",2\n"; !strings.Contains(out, want) {
+	if want := "3,5,1.5811388300841898,3,5,\"1,2,3,4,5\",1,1\n4,5,1.5811388300841898,4,5,\"2,3,4,5,6\",2,2\n"; !strings.Contains(out, want) {
 		t.Errorf("expected %q in output\n%s", want, out)
 	}
 }

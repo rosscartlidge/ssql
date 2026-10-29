@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Arg-max and arg-min over a window frame run typed.** `typed.ArgMaxOf(get, by)` / `ArgMinOf` (and Ptr forms): the field at the row with the extreme BY, ties to the first in frame order, absent when no row has both — the last registry aggregates `window` exposes that ran on the record path in a typed program (first, last, any and collect are group-by flags only).
 - **Count-distinct and string-agg over a window frame run typed.** `typed.CountDistinctOf` and `typed.StringAggOf` (and their Ptr forms) join the frame statistics in the typed lane, counting under the same key as the record path (`ssql.DistinctKey`, now exported) and formatting values as `ssql.AggValueString`; the registry aggregates still on the record path over a frame are first, last, any, collect, arg-max and arg-min.
 
 ### Fixed

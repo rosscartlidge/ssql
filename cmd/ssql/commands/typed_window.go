@@ -204,7 +204,7 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 				specLit = renderWindowFoldSpec(stateType, in.TypeName, plan)
 			} else {
 				var reason string
-				_, goType, assign, specLit, reason = typedWindowSpec(d, f, in.TypeName, resIdx)
+				_, goType, assign, specLit, reason = typedWindowSpec(d, f, in, resIdx)
 				if reason != "" {
 					return false, reason, nil
 				}
@@ -338,14 +338,15 @@ func windowClausesShareOrder(configs []ssql.WindowConfig) bool {
 
 // typedWindowAggs are the registry aggregates over a frame that have a
 // typed form (typed.WAgg); the rest take the record path.
-var typedWindowAggs = map[string]bool{"median": true, "percentile": true, "stddev": true, "variance": true, "mode": true, "count-distinct": true, "string-agg": true}
+var typedWindowAggs = map[string]bool{"median": true, "percentile": true, "stddev": true, "variance": true, "mode": true, "count-distinct": true, "string-agg": true, "arg-max": true, "arg-min": true}
 
 // typedWindowSpec renders one typed.WindowSpec literal and decides the
 // result's Go type and the assignment from res[i]. Results that can be
 // absent (lag/lead without a default, nth_value) are pointer-typed —
 // nullable, JSON null, CSV empty — so the lanes agree with exec's
 // missing field. A reason (non-empty) means "record path".
-func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType string, i int) (kind, goType, assign, lit, reason string) {
+func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, in *lib.TypedSchema, i int) (kind, goType, assign, lit, reason string) {
+	rowType := in.TypeName
 	// The field's getter: the package builds the readers from it
 	// (typed.SumOf and the rest, window_spec.go); a nullable field takes
 	// the Ptr form of the constructor.
@@ -423,6 +424,16 @@ func typedWindowSpec(d ssql.WindowFuncDesc, f lib.TypedSchemaField, rowType stri
 			return d.Agg.Name, "int64", read("int64"), of("CountDistinct"), ""
 		case "string-agg":
 			return d.Agg.Name, "*string", readPtr("string"), of("StringAgg", fmt.Sprintf("%q", d.Agg.Extra)), ""
+		case "arg-max", "arg-min":
+			// FIELD at the extreme BY: the BY field's getter is the second
+			// argument; a nullable BY stays on the record path.
+			bf, ok := lookupSchemaField(in, d.Agg.Extra)
+			if !ok || strings.HasPrefix(bf.GoType, "*") {
+				return "", "", "", "", fmt.Sprintf("window: %s by %q stays on the record path (the field is nullable or unknown)", d.Agg.Name, d.Agg.Extra)
+			}
+			k := map[string]string{"arg-max": "ArgMax", "arg-min": "ArgMin"}[d.Agg.Name]
+			by := fmt.Sprintf("func(r %s) %s { return r.%s }", rowType, bf.GoType, bf.GoName)
+			return d.Agg.Name, "*" + base, readPtr(base), of(k, by), ""
 		}
 		return "", "", "", "", fmt.Sprintf("window: %s over a frame has no typed form yet (it runs on the record path)", d.Agg.Name)
 	case "lag", "lead", "nth_value":

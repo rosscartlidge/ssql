@@ -686,6 +686,7 @@ type WindowSpec[T any] struct {
     Agg     WindowAgg                // WAgg: the statistic over the frame
     P       float64                  // WAggQuantile: the quantile (0.5 = median)
     Sep     string                   // WAggStringAgg: the separator
+    By      func(T) (any, bool)      // WAggArgMax / WAggArgMin: the field the extreme is taken over
     Num     func(T) (float64, bool)  // the numeric field for sum/avg and the statistics
     Val     func(T) (any, bool)      // any field for lag, lead, first, last, nth, count, min, max
     Init    func() any               // WFold (window -stream-expr): a fresh state
@@ -728,6 +729,8 @@ const (
 	WAggMode      // the most frequent Val; ties to the value seen first in the frame
 	WAggCountDistinct  // the distinct present values of Val (ssql.DistinctKey)
 	WAggStringAgg      // the present values of Val in frame order, as ssql.AggValueString, joined by Sep
+	WAggArgMax         // Val at the row with the largest By; ties keep the first in frame order
+	WAggArgMin         // Val at the row with the smallest By
 )
 
 // The spec constructors: one line per window function, the readers built
@@ -776,6 +779,10 @@ func CountDistinctOf[T any, V any](get func(T) V) WindowSpec[T]             // t
 func CountDistinctOfPtr[T any, V any](get func(T) *V) WindowSpec[T]
 func StringAggOf[T any, V any](get func(T) V, sep string) WindowSpec[T]     // the present values in frame order, joined; absent when none
 func StringAggOfPtr[T any, V any](get func(T) *V, sep string) WindowSpec[T]
+func ArgMaxOf[T any, V any, B any](get func(T) V, by func(T) B) WindowSpec[T]   // the field at the row with the largest by; ties keep the first
+func ArgMaxOfPtr[T any, V any, B any](get func(T) *V, by func(T) B) WindowSpec[T]
+func ArgMinOf[T any, V any, B any](get func(T) V, by func(T) B) WindowSpec[T]
+func ArgMinOfPtr[T any, V any, B any](get func(T) *V, by func(T) B) WindowSpec[T]
 ```
 
 A clause that names its order by one typed key (`KeyInt`, `KeyString` or
@@ -788,7 +795,8 @@ input row. `build` receives the results in clause order then spec order
 and assembles the output struct, which a generated program synthesises
 from the input fields plus one per function. `WAgg` is the typed form of
 the registry aggregates over a frame (`-median`, `-percentile`,
-`-stddev`, `-variance`, `-mode`, `-count-distinct`, `-string-agg`): the same arithmetic as the record
+`-stddev`, `-variance`, `-mode`, `-count-distinct`, `-string-agg`,
+`-arg-max`, `-arg-min`): the same arithmetic as the record
 path's aggregates (`ssql.QuantileCont` over the frame's sorted values,
 Welford's sample variance, the mode with ties to the first seen),
 scanned per row — O(k) a row over a bounded frame, O(n²) over the

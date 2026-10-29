@@ -46,7 +46,7 @@ func columnKind[T any](spec WindowSpec[T]) colKind {
 		return colFloat
 	case WAgg:
 		switch spec.Agg {
-		case WAggMode, WAggStringAgg:
+		case WAggMode, WAggStringAgg, WAggArgMax, WAggArgMin:
 			return colAny
 		case WAggCountDistinct:
 			return colInt

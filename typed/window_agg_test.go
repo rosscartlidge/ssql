@@ -170,3 +170,29 @@ func TestWindowFrameSetAndList(t *testing.T) {
 		}
 	}
 }
+
+// TestWindowFrameArgExtremes: arg-max / arg-min over a frame in the
+// typed lane — FIELD at the extreme BY, a strictly better BY replacing
+// so ties keep the first in frame order, absent when no row has both.
+func TestWindowFrameArgExtremes(t *testing.T) {
+	rows := []winRow{{Name: "a", Salary: 10}, {Name: "b", Salary: 30}, {Name: "c", Salary: 30}, {Name: "", Salary: 50}, {Name: "e", Salary: 20}}
+	seq := func(r winRow) int64 { return r.Salary }
+	c := WindowClause[winRow]{
+		HasOrder: true, KeyInt: func(r winRow) int64 { return int64(len(r.Name)) }, // keep the input order: all names are one letter or empty
+		Frame: WindowFrame{Preceding: 1, Following: 1},
+		Specs: []WindowSpec[winRow]{
+			ArgMaxOf(func(r winRow) string { return r.Name }, seq),
+			ArgMinOf(func(r winRow) string { return r.Name }, seq),
+		},
+	}
+	var got [][2]any
+	for o := range Window([]WindowClause[winRow]{c}, func(r winRow, res WindowRow) [2]any { return [2]any{res.Value(0), res.Value(1)} })(slices.Values(rows)) {
+		got = append(got, o)
+	}
+	// Sorted by name length: "" (50) first, then a,b,c,e in input order.
+	// Frames of three around: ["",a] ["",a,b] [a,b,c] [b,c,e] [c,e].
+	want := [][2]any{{"a", "a"}, {"b", "a"}, {"b", "a"}, {"b", "e"}, {"c", "e"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}

@@ -77,6 +77,8 @@ const (
 	WAggMode                    // the most frequent Val; ties to the value seen first in the frame
 	WAggCountDistinct           // the distinct present values of Val (ssql.DistinctKey)
 	WAggStringAgg               // the present values of Val in frame order, as ssql.AggValueString, joined by Sep
+	WAggArgMax                  // Val at the row with the largest By; ties keep the first in frame order
+	WAggArgMin                  // Val at the row with the smallest By
 )
 
 // WindowSpec is one function over a clause's frame. Num reads a numeric
@@ -93,11 +95,12 @@ const (
 // returns it, so a fold allocates once per frame.
 type WindowSpec[T any] struct {
 	Kind    WindowKind
-	N       int       // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
-	Default any       // LAG/LEAD default (nil = absent)
-	Agg     WindowAgg // WAgg: the statistic
-	P       float64   // WAggQuantile: the quantile (0.5 = median)
-	Sep     string    // WAggStringAgg: the separator
+	N       int                 // NTILE's n, LAG/LEAD's offset, NTH_VALUE's n
+	Default any                 // LAG/LEAD default (nil = absent)
+	Agg     WindowAgg           // WAgg: the statistic
+	P       float64             // WAggQuantile: the quantile (0.5 = median)
+	Sep     string              // WAggStringAgg: the separator
+	By      func(T) (any, bool) // WAggArgMax / WAggArgMin: the field the extreme is taken over
 	Num     func(T) (float64, bool)
 	Int     func(T) (int64, bool)        // set for an int64 field: the sum is exact, an Int128 (DFC155 C); avg divides the exact sum
 	Wide    func(T) (ssql.Int128, bool)  // set for an int128 field, the same way

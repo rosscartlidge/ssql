@@ -200,6 +200,29 @@ func ModeOfPtr[T any, V any](get func(T) *V) WindowSpec[T] {
 
 func (WindowAgg) kind() WindowKind { return WAgg }
 
+// ArgMaxOf is the field at the row with the largest by in the frame,
+// ArgMinOf at the smallest; ties keep the first in frame order; absent
+// when no row has both. The Ptr forms read a nullable field.
+func ArgMaxOf[T any, V any, B any](get func(T) V, by func(T) B) WindowSpec[T] {
+	return argSpec(WAggArgMax, present(get), by)
+}
+func ArgMaxOfPtr[T any, V any, B any](get func(T) *V, by func(T) B) WindowSpec[T] {
+	return argSpec(WAggArgMax, deref(get), by)
+}
+func ArgMinOf[T any, V any, B any](get func(T) V, by func(T) B) WindowSpec[T] {
+	return argSpec(WAggArgMin, present(get), by)
+}
+func ArgMinOfPtr[T any, V any, B any](get func(T) *V, by func(T) B) WindowSpec[T] {
+	return argSpec(WAggArgMin, deref(get), by)
+}
+
+func argSpec[T any, V any, B any](agg WindowAgg, get func(T) (V, bool), by func(T) B) WindowSpec[T] {
+	s := valSpec(WAgg, get)
+	s.Agg = agg
+	s.By = func(r T) (any, bool) { return by(r), true }
+	return s
+}
+
 // CountDistinctOf counts the distinct present values in the frame;
 // StringAggOf joins the present values in frame order with sep (absent
 // when there is none).

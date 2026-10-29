@@ -74,6 +74,32 @@ func frameAggregate[T any](spec WindowSpec[T], all []T, idx []int, start, end in
 			return nil // the record path's "" marker: absent
 		}
 		return strings.Join(parts, spec.Sep)
+	case WAggArgMax, WAggArgMin:
+		// FIELD at the extreme BY: a strictly better BY replaces, so ties
+		// keep the first in frame order; a row missing either is skipped.
+		sign := 1
+		if spec.Agg == WAggArgMin {
+			sign = -1
+		}
+		var bestBy, carried any
+		found := false
+		for i := start; i <= end; i++ {
+			b, ok := spec.By(all[idx[i]])
+			if !ok || aggMissing(b) {
+				continue
+			}
+			v, ok := spec.Val(all[idx[i]])
+			if !ok || aggMissing(v) {
+				continue
+			}
+			if !found || ssql.CompareAny(b, bestBy)*sign > 0 {
+				bestBy, carried, found = b, v, true
+			}
+		}
+		if !found {
+			return nil
+		}
+		return carried
 	case WAggMode:
 		type entry struct {
 			value any
