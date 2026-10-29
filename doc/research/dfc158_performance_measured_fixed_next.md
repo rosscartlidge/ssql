@@ -566,6 +566,55 @@ All fixes are on main, gated (vet, slim build, race packages, full
 `cmd/ssql`, doc-test, equivalence, scale), and in CHANGELOG's
 Unreleased section.
 
+### 3.11 The window's output is a Stream (2026-10-29)
+
+The emit of §3.10 — 1.63 s on one core: the `build` closure per row
+and the serial group-by after it — was the last serial phase, and it
+was serial because the window's output was an `iter.Seq`: the planner
+had to run every consumer's serial form after it. `WindowParallel` now
+produces an ordered `Stream` whose shards are contiguous ranges of the
+window's output order, one per core, built on the first shard consumed
+(a `sync.Once` around the materialise–index–sort–gather; a panic there
+is captured and re-raised by every shard). The group-by after the
+window runs `GroupByParallel` — its first-seen key order is unchanged,
+because the ranges concatenate to the output and the merge walks the
+shards in order — and a per-shard sink dumps the ranges in order.
+
+The planner needed one new notion: `Stream` carries an `ordered` flag,
+and `Serial()` on an ordered stream walks the shards one after another
+in the caller's goroutine instead of fanning in through a channel, so
+a `sort`, a `limit` or a `to table` after the window sees the window's
+defined order at no channel cost (the per-shard operators — `Where`,
+`StreamSelect`, the joins — keep the flag). The template declares
+`Produces: ShapeStream` and `IsStream`, which is what the sinks read
+to pick their per-shard form; nothing else in the planner changed.
+
+The benchmark window: **5.0 → 4.07 s** (`scripts/bench-engines.sh`,
+best of three, idle machine), peak RSS 4.7 → 4.1 GB; the other six
+rows unchanged. The phases of the 4.1 s program: materialise 0.78,
+partition index 0.35, sort and specs 2.33, gather 0.28, then the
+parallel emit and group-by in the remaining ~0.7 (process start and
+the read's tail included). Inside the sort-and-specs phase the 4.75
+M-row partition's sort finishes at 1.56 s and its running-sum pass
+runs a further 0.77 s on one core: a prefix sum written as a boxed
+`any` per row, scattered into the results by input row index
+(`results[idx[pos]]`, a cache miss per row), then gathered back into
+output order. That pass, not the boxing alone, is what the unboxed
+result column of §3.10 would have to address — writing the
+order-deciding clause's results at their OUTPUT positions (sequential,
+and the gather becomes the rows' alone) and in a typed column, perhaps
+0.4–0.5 s of the 4.07; the sort's final merges are the rest of the
+partition's serial time. Not built in this round; TODO carries the
+measurement.
+
+Tests: `TestWindowParallelLargeMatchesReference` now also walks the
+output shards independently and holds their concatenation to the
+reference (and `Serial()` to the same order — it failed with the
+ordered flag off: the fan-in scrambled the rows); `TestTypedWindow
+FeedsParallelGroupBy` holds the generated program to
+`GroupByParallel` after the window with the serial `GroupBy` absent,
+and a `limit 3` after the window to the window's order.
+
 ## 4. What we can do, ranked
 
 Expected win first, cost second. Each item that changes a
@@ -591,8 +640,10 @@ could change, an equivalence case; none of them changes a result.
    was half right — the sort was the cost, but its algorithm and its
    serial source, not the boxing; and once parallel, the sort left the
    critical path, so the key bought little and the three serial phases
-   the phase timing named bought 2.9 s. The unboxed result column and
-   a `Stream` output for the group-by after it stay in TODO.
+   the phase timing named bought 2.9 s. **§3.11 (2026-10-29)**: the
+   output is a `Stream`, 4.07 s. The unboxed result column stays in
+   TODO with the measurement that reshapes it (§3.11: the scatter, not
+   the box, is the cost).
 
 4. **The filtered write's memory.** **Done 2026-10-28, §3.8**, and
    not where this item said: the sink holds 238 MB; the typed Parquet

@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	ssql "github.com/rosscartlidge/ssql/v4"
 )
@@ -126,7 +127,12 @@ func Window[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(it
 			for r := range in {
 				all = append(all, r)
 			}
-			windowRows(all, clauses, build, yield)
+			rows, results := windowRows(all, clauses)
+			for p := range rows {
+				if !yield(build(rows[p], results[p])) {
+					return
+				}
+			}
 		}
 	}
 }
@@ -137,52 +143,101 @@ func Window[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(it
 // contiguous runs of it (ReadCSVParallel's byte ranges, the Parquet
 // reader's row groups) — so the partitions' first-seen order and the
 // output order are exactly Window's over the same rows. The window itself
-// is a barrier (every row is held until its partition is known), so the
-// output is an iter.Seq, as GroupByParallel's is. Before this form the
-// window accepted only an iter.Seq and the planner read the source
-// serially: 2.4 s of the 14.6 M-row benchmark window plus the growth of
-// one slice by appends (DFC158 §4.3).
-func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(Stream[T]) iter.Seq[O] {
-	return func(in Stream[T]) iter.Seq[O] {
-		return func(yield func(O) bool) {
-			parts := make([][]T, len(in.shards))
-			var g shardGroup
-			for i, shard := range in.shards {
-				g.Go(func() {
-					var rows []T
-					for r := range shard {
-						rows = append(rows, r)
+// is a barrier (every row is held until its partition is known), and
+// before 2026-10-29 its output was an iter.Seq: one core built every
+// output row and fed a serial consumer — 1.6 s of the benchmark window,
+// and the group-by after it ran its serial form. The output is now an
+// ordered Stream whose shards are contiguous ranges of the window's
+// output order, one per core: each shard builds its own rows, a
+// group-by after the window runs its parallel form (its first-seen key
+// order is unchanged, since the ranges concatenate to the output), a
+// per-shard sink dumps the ranges in order, and Serial walks them in
+// sequence for a serial consumer. The window runs once, on the first
+// shard consumed. Before this form the window accepted only an iter.Seq
+// and the planner read the source serially: 2.4 s of the benchmark
+// window plus the growth of one slice by appends (DFC158 §4.3).
+func WindowParallel[T, O any](clauses []WindowClause[T], build func(T, []any) O) func(Stream[T]) Stream[O] {
+	return func(in Stream[T]) Stream[O] {
+		var (
+			once    sync.Once
+			rows    []T
+			results [][]any
+			failure any
+		)
+		prepare := func() {
+			once.Do(func() {
+				// A panic here (a row closure's) is captured so that every
+				// shard re-raises it; sync.Once would otherwise hand the
+				// later shards empty output.
+				defer func() {
+					if r := recover(); r != nil {
+						failure = r
 					}
-					parts[i] = rows
-				})
+				}()
+				rows, results = windowRows(materialise(in), clauses)
+			})
+			if failure != nil {
+				panic(failure)
 			}
-			g.Wait()
-			// The shards copy into their own ranges of one slice
-			// concurrently: appending them one after another ran
-			// 0.76 s of the benchmark window on one core (DFC158 §3.10).
-			offs := make([]int, len(parts)+1)
-			for i, p := range parts {
-				offs[i+1] = offs[i] + len(p)
-			}
-			all := make([]T, offs[len(parts)])
-			var c shardGroup
-			for i, p := range parts {
-				c.Go(func() {
-					copy(all[offs[i]:], p)
-					parts[i] = nil
-				})
-			}
-			c.Wait()
-			windowRows(all, clauses, build, yield)
 		}
+		r := runtime.GOMAXPROCS(0)
+		shards := make([]iter.Seq[O], r)
+		for i := range r {
+			shards[i] = func(yield func(O) bool) {
+				prepare()
+				n := len(rows)
+				for p := i * n / r; p < (i+1)*n/r; p++ {
+					if !yield(build(rows[p], results[p])) {
+						return
+					}
+				}
+			}
+		}
+		return Stream[O]{shards: shards, n: r, ordered: true}
 	}
 }
 
-// windowRows is the window over the materialised rows, in input order.
-func windowRows[T, O any](all []T, clauses []WindowClause[T], build func(T, []any) O, yield func(O) bool) {
+// materialise is the Stream's rows in shard order: each shard into its
+// own slice concurrently, then copied into one.
+func materialise[T any](in Stream[T]) []T {
+	parts := make([][]T, len(in.shards))
+	var g shardGroup
+	for i, shard := range in.shards {
+		g.Go(func() {
+			var rows []T
+			for r := range shard {
+				rows = append(rows, r)
+			}
+			parts[i] = rows
+		})
+	}
+	g.Wait()
+	// The shards copy into their own ranges of one slice
+	// concurrently: appending them one after another ran
+	// 0.76 s of the benchmark window on one core (DFC158 §3.10).
+	offs := make([]int, len(parts)+1)
+	for i, p := range parts {
+		offs[i+1] = offs[i] + len(p)
+	}
+	all := make([]T, offs[len(parts)])
+	var c shardGroup
+	for i, p := range parts {
+		c.Go(func() {
+			copy(all[offs[i]:], p)
+			parts[i] = nil
+		})
+	}
+	c.Wait()
+	return all
+}
+
+// windowRows is the window over the materialised rows: the rows in the
+// window's output order and, parallel to them, each row's results in
+// clause order then spec order.
+func windowRows[T any](all []T, clauses []WindowClause[T]) ([]T, [][]any) {
 	n := len(all)
 	if n == 0 {
-		return
+		return nil, nil
 	}
 	total := 0
 	for _, c := range clauses {
@@ -233,26 +288,19 @@ func windowRows[T, O any](all []T, clauses []WindowClause[T], build func(T, []an
 		}
 	}
 	// The rows and their results, gathered into output order on every
-	// core before one sequential emit: read at random from a slice of
-	// millions of rows, each row was a cache miss, and the emit loop
-	// took 3.7 s of the benchmark window on one core (DFC158 §3.10).
-	ordered, orderedResults := all, results
-	if outputOrder != nil {
-		ordered = make([]T, n)
-		orderedResults = make([][]any, n)
-		parallelRanges(n, func(lo, hi int) {
-			for p := lo; p < hi; p++ {
-				i := outputOrder[p]
-				ordered[p] = all[i]
-				orderedResults[p] = results[i]
-			}
-		})
-	}
-	for p := range n {
-		if !yield(build(ordered[p], orderedResults[p])) {
-			return
+	// core before the emit: read at random from a slice of millions of
+	// rows, each row was a cache miss, and the emit loop took 3.7 s of
+	// the benchmark window on one core (DFC158 §3.10).
+	ordered := make([]T, n)
+	orderedResults := make([][]any, n)
+	parallelRanges(n, func(lo, hi int) {
+		for p := lo; p < hi; p++ {
+			i := outputOrder[p]
+			ordered[p] = all[i]
+			orderedResults[p] = results[i]
 		}
-	}
+	})
+	return ordered, orderedResults
 }
 
 // rangeMin is the row count below which a parallel pass over the rows

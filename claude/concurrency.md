@@ -483,6 +483,35 @@ Rule of thumb: before parallelising a hot loop a profile names, time
 the phases of the whole program; a serial pass over every row between
 parallel phases goes first, whatever the profile says.
 
+## 16. A barrier's output is an ordered Stream, not an iter.Seq (DFC158 §3.11)
+
+The window after §15 still emitted 1.63 s on one core: its output was
+an `iter.Seq`, so the planner ran the serial form of every consumer —
+the `build` closure per row and `typed.GroupBy` after it. A barrier
+holds every row anyway; once its output order is known, that output
+is a slice, and a slice's ranges are shards.
+
+`WindowParallel` returns `Stream[O]` whose shards are contiguous
+ranges of the output order, one per core, built on the first shard
+consumed (a `sync.Once` around the whole window; a panic inside it is
+captured and re-raised by every shard, since `sync.Once` would hand
+the later shards empty output). Consumers need nothing new:
+`GroupByParallel` merges shards in order, so its first-seen key order
+equals the serial one; the per-shard sinks dump ranges in order.
+
+What a serial consumer needs is the order, and `Serial()` is a
+channel fan-in that scrambles it — so `Stream` carries an `ordered`
+flag and `Serial()` on an ordered stream walks the shards one after
+another in the caller's goroutine, no channel. `Where`, `StreamSelect`
+and the joins keep the flag (they map shards in place); the readers
+do not set it (their `Serial()` concurrency is the point, and a sort
+after a read does not care). The template declares `Produces:
+ShapeStream` and `IsStream` (what the sinks read to pick their
+per-shard form). 5.0 → 4.07 s on the benchmark window, 4.7 → 4.1 GB.
+`TestWindowParallelLargeMatchesReference` walks the shards
+independently; with the flag off, the fan-in scrambled the rows and
+the test said so.
+
 ## See Also
 
 - [`doc/research/typed-concurrency-proposal.md`](../doc/research/typed-concurrency-proposal.md) — design proposal + measured PoC results in §9a

@@ -241,10 +241,13 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 
 	// Both templates: typed.WindowParallel takes the source's Stream (the
 	// shards materialised concurrently, in shard order = input order) and
-	// typed.Window the iter.Seq alternative. The window is a barrier either
-	// way — its output is an iter.Seq, as group-by's — but a SerialOnly
-	// template here made the planner read the SOURCE serially too
-	// (DFC158 §4.3, 2026-10-28).
+	// produces an ordered Stream whose shards are ranges of the window's
+	// output order, so a group-by or a per-shard sink after it runs
+	// parallel and a serial consumer gets the order through Serial();
+	// typed.Window is the iter.Seq alternative. The window is a barrier
+	// either way, but a SerialOnly template here made the planner read
+	// the SOURCE serially too (DFC158 §4.3, 2026-10-28), and an iter.Seq
+	// output made every consumer serial (DFC158 §3.11, 2026-10-29).
 	clauses := fmt.Sprintf("[]typed.WindowClause[%s]{\n%s\n\t}, %s", in.TypeName, strings.Join(clauseCode, "\n"), build.String())
 	code := fmt.Sprintf("%s := typed.WindowParallel(%s)(%s)", outVar, clauses, inputVar)
 	serialCode := fmt.Sprintf("%s := typed.Window(%s)(%s)", outVar, clauses, inputVar)
@@ -264,7 +267,8 @@ func emitTypedWindow(inputVar string, in *lib.TypedSchema, configs []ssql.Window
 	frag.InputTypedSchema = in
 	frag.OutputTypedSchema = out
 	frag.StructDefs = append(append([]string{structDef}, foldDefs...), hoisted...)
-	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeSeqTyped}
+	frag.IsStream = true
+	frag.Capabilities = &lib.Capabilities{Accepts: lib.ShapeStream, Produces: lib.ShapeStream}
 	frag.AltCodeIfSeq = serialCode
 	frag.AltImportsIfSeq = imports
 	frag.AltCapabilitiesIfSeq = &lib.Capabilities{Accepts: lib.ShapeSeqTyped, Produces: lib.ShapeSeqTyped}

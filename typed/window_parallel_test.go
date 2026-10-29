@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -56,7 +57,7 @@ func TestWindowParallelMatchesWindow(t *testing.T) {
 		}
 		for _, n := range []int{1, 2, 4, 9} {
 			parallel = nil
-			for o := range WindowParallel([]WindowClause[winRow]{clause}, build)(ParallelFromSlice(rows, n)) {
+			for o := range WindowParallel([]WindowClause[winRow]{clause}, build)(ParallelFromSlice(rows, n)).Serial() {
 				parallel = append(parallel, o)
 			}
 			if !reflect.DeepEqual(serial, parallel) {
@@ -285,8 +286,9 @@ func TestWindowParallelLargeMatchesReference(t *testing.T) {
 		return ref{r.Dept, r.Name, sum}
 	}
 	for _, shards := range []int{1, 5, 24} {
+		out := WindowParallel([]WindowClause[winRow]{clause}, build)(ParallelFromSlice(rows, shards))
 		got := make([]ref, 0, n)
-		for o := range WindowParallel([]WindowClause[winRow]{clause}, build)(ParallelFromSlice(rows, shards)) {
+		for o := range out.Serial() {
 			got = append(got, o)
 		}
 		if len(got) != n {
@@ -296,6 +298,26 @@ func TestWindowParallelLargeMatchesReference(t *testing.T) {
 			if got[p] != want[p] {
 				t.Fatalf("shards=%d: row %d: got %v, want %v", shards, p, got[p], want[p])
 			}
+		}
+		// The output Stream's shards are contiguous ranges of that order
+		// — a group-by or a per-shard sink after the window reads them
+		// concurrently, and concatenated in shard order they are the
+		// window's output — and Serial walks them in order (above).
+		if out.Shards() != runtime.GOMAXPROCS(0) {
+			t.Fatalf("shards=%d: output has %d shards, want one per core", shards, out.Shards())
+		}
+		var byShard []ref
+		for _, shard := range out.shards {
+			lo := len(byShard)
+			for o := range shard {
+				byShard = append(byShard, o)
+			}
+			if hi := len(byShard); hi-lo > n/out.Shards()+1 {
+				t.Fatalf("shards=%d: a shard holds %d rows of %d", shards, hi-lo, n)
+			}
+		}
+		if !reflect.DeepEqual(byShard, want) {
+			t.Fatalf("shards=%d: the output shards concatenated are not the window's output", shards)
 		}
 	}
 }

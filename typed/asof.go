@@ -137,5 +137,5 @@ func AsofJoinParallel[L, R, O any, K comparable, T int64 | float64](
 			}
 		}
 	}
-	return Stream[O]{shards: out, n: left.n}
+	return Stream[O]{shards: out, n: left.n, ordered: left.ordered}
 }

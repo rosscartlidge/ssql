@@ -14,24 +14,30 @@ import (
 	"unsafe"
 )
 
-// Stream is the PoC type for the typed concurrency proposal — a
-// parallel pipeline of T partitioned across n worker shards. Each
-// shard is an `iter.Seq[T]` that, when consumed, pulls values from a
-// shared work channel populated by the upstream source.
+// Stream is a parallel pipeline of T partitioned across n worker
+// shards. Each shard is an `iter.Seq[T]`; a parallel source's shards
+// are contiguous runs of its input (a CSV reader's byte ranges, the
+// Parquet reader's row groups), so the shards concatenated in shard
+// order ARE the input, and the per-shard sinks dump in that order.
 //
 // Stream is deliberately a separate type from `iter.Seq[T]` because
-// its execution model is different: there is no guaranteed
-// input-order = output-order, and concurrent operations require a
-// goroutine pool that the shape of `iter.Seq[T]` doesn't naturally
-// express.
+// its execution model is different: the shards run concurrently, and
+// Serial's fan-in delivers values in whatever order the workers
+// produce them — unless the stream is ordered (below).
 //
-// **Status:** PoC. The Phase-1 parallel surface is intentionally
-// minimal — Parallel, Serial (unordered), Stream.Where, HashJoinParallel.
-// More operators will be added if the PoC's measured speedup justifies
-// expanding the package.
+// An ordered Stream is one whose shard order is a DEFINED output order
+// — the window's (WindowParallel): its shards are ranges of the sorted
+// output. Serial walks such a stream's shards one after another in the
+// caller's goroutine, so a serial consumer (a sort boundary, a limit,
+// a table) sees the order the stage defines, at no channel cost; the
+// parallel consumers (a group-by, a per-shard sink) need nothing —
+// the ranges are contiguous. The per-shard operators (Where,
+// StreamSelect, the joins) keep the flag: they map each shard in
+// place.
 type Stream[T any] struct {
-	shards []iter.Seq[T]
-	n      int
+	shards  []iter.Seq[T]
+	n       int
+	ordered bool
 }
 
 // Shards returns the number of parallel shards in the stream.
@@ -84,12 +90,21 @@ func Parallel[T any](in iter.Seq[T], n int) Stream[T] {
 // Serial collects a Stream back into a single iter.Seq[T]. By default
 // the output is unordered: each shard runs in its own goroutine and
 // values arrive on a fan-in channel in whatever order the workers
-// produce them.
-//
-// SerialOrdered (not yet in the PoC) would preserve input-order at the
-// cost of round-robin merging across shards, which forces head-of-line
-// blocking on the slowest shard.
+// produce them. An ordered Stream (a window's output) is walked shard
+// by shard in the caller's goroutine instead, in shard order — the
+// stage's defined order, with no channel transit.
 func (s Stream[T]) Serial() iter.Seq[T] {
+	if s.ordered {
+		return func(yield func(T) bool) {
+			for _, shard := range s.shards {
+				for v := range shard {
+					if !yield(v) {
+						return
+					}
+				}
+			}
+		}
+	}
 	return func(yield func(T) bool) {
 		out := make(chan T, s.n*64)
 		var g shardGroup
@@ -131,7 +146,7 @@ func (s Stream[T]) Where(pred func(T) bool) Stream[T] {
 		shard := shard
 		out[i] = Where(pred)(shard)
 	}
-	return Stream[T]{shards: out, n: s.n}
+	return Stream[T]{shards: out, n: s.n, ordered: s.ordered}
 }
 
 // StreamSelect projects each shard's items to a different output type.
@@ -143,7 +158,7 @@ func StreamSelect[T, U any](s Stream[T], fn func(T) U) Stream[U] {
 		shard := shard
 		out[i] = Select[T, U](fn)(shard)
 	}
-	return Stream[U]{shards: out, n: s.n}
+	return Stream[U]{shards: out, n: s.n, ordered: s.ordered}
 }
 
 // ParallelFromSlice partitions a materialized slice into n shards
@@ -422,7 +437,7 @@ func HashJoinParallel[L, R, O any, K comparable](
 			}
 		}
 	}
-	return Stream[O]{shards: out, n: left.n}
+	return Stream[O]{shards: out, n: left.n, ordered: left.ordered}
 }
 
 // HashJoinMultiParallel is [HashJoinParallel] with [HashJoinMulti]'s
@@ -456,7 +471,7 @@ func HashJoinMultiParallel[L, R, O any, K comparable](
 			}
 		}
 	}
-	return Stream[O]{shards: out, n: left.n}
+	return Stream[O]{shards: out, n: left.n, ordered: left.ordered}
 }
 
 // ReadCSVParallel reads a CSV file using n worker goroutines. The

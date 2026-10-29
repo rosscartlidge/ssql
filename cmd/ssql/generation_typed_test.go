@@ -731,6 +731,42 @@ func TestTypedWindowKeepsSourceParallel(t *testing.T) {
 	}
 }
 
+// TestTypedWindowFeedsParallelGroupBy: the window's output is an ordered
+// Stream whose shards are ranges of its output order, so the group-by
+// after it runs its parallel form (and a serial consumer still sees the
+// window's order through Serial()). Until 2026-10-29 the output was an
+// iter.Seq and the group-by after the benchmark window ran serially —
+// 1.6 s of the 5.0 (DFC158 §3.11).
+func TestTypedWindowFeedsParallelGroupBy(t *testing.T) {
+	dir := t.TempDir()
+	emp := filepath.Join(dir, "people.csv")
+	if err := os.WriteFile(emp, []byte("name,dept,years\nAlice,eng,8\nBob,ops,3\nCarol,eng,2\nDan,ops,5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := buildSSQLForTypedTest(t)
+	src := runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" window -partition dept -order years -sum years total | "+bin+" group-by dept -max total top | "+bin+" to csv")
+	for _, want := range []string{"typed.ReadCSVParallel", "typed.WindowParallel(", "typed.GroupByParallel"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("the window serialised its consumer: generated source lacks %q\n%s", want, src)
+		}
+	}
+	if strings.Contains(src, "typed.GroupBy(") {
+		t.Errorf("group-by took its serial alternative after the window\n%s", src)
+	}
+	out := goRunGenerated(t, src)
+	if want := "dept,top\neng,10\nops,8\n"; !strings.Contains(out, want) {
+		t.Errorf("expected %q in output\n%s", want, out)
+	}
+	// A serial consumer after the window sees the window's order.
+	src = runTypedPipeline(t, bin,
+		bin+" from "+emp+" | "+bin+" window -partition dept -order years -sum years total | "+bin+" limit 3 | "+bin+" to csv")
+	out = goRunGenerated(t, src)
+	if want := "name,dept,years,total\nCarol,eng,2,2\nAlice,eng,8,10\nBob,ops,3,3\n"; !strings.Contains(out, want) {
+		t.Errorf("expected %q in output\n%s", want, out)
+	}
+}
+
 // TestGenerateRustBuildSurvivesOptimiser: `generate rust -build PATH` on
 // a pipeline the optimiser rewrites (a pruned Parquet read) re-executes
 // through bash, and the inner command must carry -build. Until 2026-10-28

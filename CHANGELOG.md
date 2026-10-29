@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The typed window's output is a parallel Stream.** `typed.WindowParallel` produces an ordered `Stream` whose shards are contiguous ranges of the window's output order, one per core, so a group-by or a per-shard sink after a `window` runs in parallel and a `sort`, `limit` or `to table` after it still sees the window's order (`Serial()` on an ordered Stream walks the shards in sequence, no channel). The benchmark window (14.6 M rows, `window … -sum | group-by -max`) 5.0 → 4.07 s, peak RSS 4.7 → 4.1 GB ([DFC158](doc/research/dfc158_performance_measured_fixed_next.md) §3.11). `WindowParallel`'s return type changed from `iter.Seq[O]` to `Stream[O]`; `typed.Window` is unchanged.
+
 ### Fixed
 
 - **A stage after a sink is refused at generation time.** `count`, `to csv` and the other sinks consume the records and write their result, so nothing can follow them; exec said so, but `generate go` in record and typed mode emitted code that did not compile and the SQL and Rust formats assembled nonsense. The reader every stage uses now reports "ssql count is a sink — it consumes the records and writes its result, so no stage can follow it" from the stage that followed, in every generate format. `TestStageAfterSinkIsRefused`.
